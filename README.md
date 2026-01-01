@@ -117,6 +117,51 @@ results = did.fit(
 )
 ```
 
+### Fixed Effects
+
+Use `fixed_effects` for low-dimensional categorical controls (creates dummy variables):
+
+```python
+# State and industry fixed effects
+results = did.fit(
+    data,
+    outcome='sales',
+    treatment='treated',
+    time='post',
+    fixed_effects=['state', 'industry']
+)
+
+# Access fixed effect coefficients
+state_coefs = {k: v for k, v in results.coefficients.items() if k.startswith('state_')}
+```
+
+Use `absorb` for high-dimensional fixed effects (more efficient, uses within-transformation):
+
+```python
+# Absorb firm-level fixed effects (efficient for many firms)
+results = did.fit(
+    data,
+    outcome='sales',
+    treatment='treated',
+    time='post',
+    absorb=['firm_id']
+)
+```
+
+Combine covariates with fixed effects:
+
+```python
+results = did.fit(
+    data,
+    outcome='sales',
+    treatment='treated',
+    time='post',
+    covariates=['size', 'age'],           # Linear controls
+    fixed_effects=['industry'],            # Low-dimensional FE (dummies)
+    absorb=['firm_id']                     # High-dimensional FE (absorbed)
+)
+```
+
 ### Cluster-Robust Standard Errors
 
 ```python
@@ -222,11 +267,24 @@ DifferenceInDifferences(
 
 | Method | Description |
 |--------|-------------|
-| `fit(data, outcome, treatment, time, formula, covariates)` | Fit the DiD model |
+| `fit(data, outcome, treatment, time, ...)` | Fit the DiD model |
 | `summary()` | Get formatted summary string |
 | `print_summary()` | Print summary to stdout |
 | `get_params()` | Get estimator parameters (sklearn-compatible) |
 | `set_params(**params)` | Set estimator parameters (sklearn-compatible) |
+
+**fit() Parameters:**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `data` | DataFrame | Input data |
+| `outcome` | str | Outcome variable column name |
+| `treatment` | str | Treatment indicator column (0/1) |
+| `time` | str | Post-treatment indicator column (0/1) |
+| `formula` | str | R-style formula (alternative to column names) |
+| `covariates` | list | Linear control variables |
+| `fixed_effects` | list | Categorical FE columns (creates dummies) |
+| `absorb` | list | High-dimensional FE (within-transformation) |
 
 ### DiDResults
 

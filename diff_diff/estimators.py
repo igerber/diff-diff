@@ -105,7 +105,9 @@ class DifferenceInDifferences:
         treatment: str = None,
         time: str = None,
         formula: str = None,
-        covariates: list = None
+        covariates: list = None,
+        fixed_effects: list = None,
+        absorb: list = None
     ) -> DiDResults:
         """
         Fit the Difference-in-Differences model.
@@ -124,7 +126,15 @@ class DifferenceInDifferences:
             R-style formula (e.g., "outcome ~ treated * post").
             If provided, overrides outcome, treatment, and time parameters.
         covariates : list, optional
-            List of covariate column names to include in the regression.
+            List of covariate column names to include as linear controls.
+        fixed_effects : list, optional
+            List of categorical column names to include as fixed effects.
+            Creates dummy variables for each category (drops first level).
+            Use for low-dimensional fixed effects (e.g., industry, region).
+        absorb : list, optional
+            List of categorical column names for high-dimensional fixed effects.
+            Uses within-transformation (demeaning) instead of dummy variables.
+            More efficient for large numbers of categories (e.g., firm, individual).
 
         Returns
         -------
@@ -135,6 +145,18 @@ class DifferenceInDifferences:
         ------
         ValueError
             If required parameters are missing or data validation fails.
+
+        Examples
+        --------
+        Using fixed effects (dummy variables):
+
+        >>> did.fit(data, outcome='sales', treatment='treated', time='post',
+        ...         fixed_effects=['state', 'industry'])
+
+        Using absorbed fixed effects (within-transformation):
+
+        >>> did.fit(data, outcome='sales', treatment='treated', time='post',
+        ...         absorb=['firm_id'])
         """
         # Parse formula if provided
         if formula is not None:
@@ -147,10 +169,35 @@ class DifferenceInDifferences:
         # Validate inputs
         self._validate_data(data, outcome, treatment, time, covariates)
 
+        # Validate fixed effects and absorb columns
+        if fixed_effects:
+            for fe in fixed_effects:
+                if fe not in data.columns:
+                    raise ValueError(f"Fixed effect column '{fe}' not found in data")
+        if absorb:
+            for ab in absorb:
+                if ab not in data.columns:
+                    raise ValueError(f"Absorb column '{ab}' not found in data")
+
+        # Handle absorbed fixed effects (within-transformation)
+        working_data = data.copy()
+        absorbed_vars = []
+        n_absorbed_effects = 0
+
+        if absorb:
+            # Apply within-transformation for each absorbed variable
+            vars_to_demean = [outcome] + (covariates or [])
+            for ab_var in absorb:
+                n_absorbed_effects += working_data[ab_var].nunique() - 1
+                for var in vars_to_demean:
+                    group_means = working_data.groupby(ab_var)[var].transform("mean")
+                    working_data[var] = working_data[var] - group_means
+                absorbed_vars.append(ab_var)
+
         # Extract variables
-        y = data[outcome].values.astype(float)
-        d = data[treatment].values.astype(float)
-        t = data[time].values.astype(float)
+        y = working_data[outcome].values.astype(float)
+        d = working_data[treatment].values.astype(float)
+        t = working_data[time].values.astype(float)
 
         # Validate binary variables
         validate_binary(d, "treatment")
@@ -166,8 +213,17 @@ class DifferenceInDifferences:
         # Add covariates if provided
         if covariates:
             for cov in covariates:
-                X = np.column_stack([X, data[cov].values.astype(float)])
+                X = np.column_stack([X, working_data[cov].values.astype(float)])
                 var_names.append(cov)
+
+        # Add fixed effects as dummy variables
+        if fixed_effects:
+            for fe in fixed_effects:
+                # Create dummies, drop first category to avoid multicollinearity
+                dummies = pd.get_dummies(data[fe], prefix=fe, drop_first=True)
+                for col in dummies.columns:
+                    X = np.column_stack([X, dummies[col].values.astype(float)])
+                    var_names.append(col)
 
         # Fit OLS
         coefficients, residuals, fitted, r_squared = self._fit_ols(X, y)
@@ -190,8 +246,8 @@ class DifferenceInDifferences:
         att = coefficients[att_idx]
         se = np.sqrt(vcov[att_idx, att_idx])
 
-        # Compute test statistics
-        df = len(y) - X.shape[1]
+        # Compute test statistics (adjust df for absorbed fixed effects)
+        df = len(y) - X.shape[1] - n_absorbed_effects
         t_stat = att / se
         p_value = compute_p_value(t_stat, df=df)
         conf_int = compute_confidence_interval(att, se, self.alpha, df=df)

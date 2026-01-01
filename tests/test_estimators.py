@@ -276,3 +276,179 @@ class TestDiDResults:
         assert isinstance(results.is_significant, bool)
         # With true effect, should be significant
         assert results.is_significant
+
+
+class TestFixedEffects:
+    """Tests for fixed effects functionality."""
+
+    @pytest.fixture
+    def panel_data_with_fe(self):
+        """Create panel data with fixed effects."""
+        np.random.seed(42)
+        n_units = 50
+        n_periods = 4
+        n_states = 5
+
+        data = []
+        for unit in range(n_units):
+            state = unit % n_states
+            is_treated = unit < n_units // 2
+            # State-level effect
+            state_effect = state * 2.0
+
+            for period in range(n_periods):
+                post = 1 if period >= 2 else 0
+
+                y = 10.0 + state_effect + period * 0.5
+                if is_treated and post:
+                    y += 3.0  # True ATT
+
+                y += np.random.normal(0, 0.5)
+
+                data.append({
+                    "unit": unit,
+                    "state": f"state_{state}",
+                    "period": period,
+                    "treated": int(is_treated),
+                    "post": post,
+                    "outcome": y,
+                })
+
+        return pd.DataFrame(data)
+
+    def test_fixed_effects_dummy(self, panel_data_with_fe):
+        """Test fixed effects using dummy variables."""
+        did = DifferenceInDifferences()
+        results = did.fit(
+            panel_data_with_fe,
+            outcome="outcome",
+            treatment="treated",
+            time="post",
+            fixed_effects=["state"]
+        )
+
+        assert results is not None
+        assert did.is_fitted_
+        # ATT should still be close to 3.0
+        assert abs(results.att - 3.0) < 1.0
+
+    def test_fixed_effects_coefficients_include_dummies(self, panel_data_with_fe):
+        """Test that dummy coefficients are included in results."""
+        did = DifferenceInDifferences()
+        results = did.fit(
+            panel_data_with_fe,
+            outcome="outcome",
+            treatment="treated",
+            time="post",
+            fixed_effects=["state"]
+        )
+
+        # Should have state dummy coefficients
+        state_coefs = [k for k in results.coefficients.keys() if k.startswith("state_")]
+        assert len(state_coefs) == 4  # 5 states - 1 (dropped first)
+
+    def test_absorb_fixed_effects(self, panel_data_with_fe):
+        """Test absorbed (within-transformed) fixed effects."""
+        did = DifferenceInDifferences()
+        results = did.fit(
+            panel_data_with_fe,
+            outcome="outcome",
+            treatment="treated",
+            time="post",
+            absorb=["unit"]
+        )
+
+        assert results is not None
+        assert did.is_fitted_
+        # ATT should still be close to 3.0
+        assert abs(results.att - 3.0) < 1.0
+
+    def test_fixed_effects_vs_no_fe(self, panel_data_with_fe):
+        """Test that FE produces different (usually better) estimates."""
+        did_no_fe = DifferenceInDifferences()
+        did_with_fe = DifferenceInDifferences()
+
+        results_no_fe = did_no_fe.fit(
+            panel_data_with_fe,
+            outcome="outcome",
+            treatment="treated",
+            time="post"
+        )
+
+        results_with_fe = did_with_fe.fit(
+            panel_data_with_fe,
+            outcome="outcome",
+            treatment="treated",
+            time="post",
+            fixed_effects=["state"]
+        )
+
+        # Both should estimate positive ATT
+        assert results_no_fe.att > 0
+        assert results_with_fe.att > 0
+
+        # FE model should have higher R-squared (explains more variance)
+        assert results_with_fe.r_squared >= results_no_fe.r_squared
+
+    def test_invalid_fixed_effects_column(self, panel_data_with_fe):
+        """Test error when fixed effects column doesn't exist."""
+        did = DifferenceInDifferences()
+        with pytest.raises(ValueError, match="not found"):
+            did.fit(
+                panel_data_with_fe,
+                outcome="outcome",
+                treatment="treated",
+                time="post",
+                fixed_effects=["nonexistent_column"]
+            )
+
+    def test_invalid_absorb_column(self, panel_data_with_fe):
+        """Test error when absorb column doesn't exist."""
+        did = DifferenceInDifferences()
+        with pytest.raises(ValueError, match="not found"):
+            did.fit(
+                panel_data_with_fe,
+                outcome="outcome",
+                treatment="treated",
+                time="post",
+                absorb=["nonexistent_column"]
+            )
+
+    def test_multiple_fixed_effects(self, panel_data_with_fe):
+        """Test multiple fixed effects."""
+        # Add another categorical variable
+        panel_data_with_fe["industry"] = panel_data_with_fe["unit"] % 3
+
+        did = DifferenceInDifferences()
+        results = did.fit(
+            panel_data_with_fe,
+            outcome="outcome",
+            treatment="treated",
+            time="post",
+            fixed_effects=["state", "industry"]
+        )
+
+        assert results is not None
+        # Should have both state and industry dummies
+        state_coefs = [k for k in results.coefficients.keys() if k.startswith("state_")]
+        industry_coefs = [k for k in results.coefficients.keys() if k.startswith("industry_")]
+        assert len(state_coefs) > 0
+        assert len(industry_coefs) > 0
+
+    def test_covariates_with_fixed_effects(self, panel_data_with_fe):
+        """Test combining covariates with fixed effects."""
+        # Add a continuous covariate
+        panel_data_with_fe["size"] = np.random.normal(100, 10, len(panel_data_with_fe))
+
+        did = DifferenceInDifferences()
+        results = did.fit(
+            panel_data_with_fe,
+            outcome="outcome",
+            treatment="treated",
+            time="post",
+            covariates=["size"],
+            fixed_effects=["state"]
+        )
+
+        assert results is not None
+        assert "size" in results.coefficients
