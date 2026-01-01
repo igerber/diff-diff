@@ -235,6 +235,8 @@ results.r_squared
 
 ### Parallel Trends
 
+**Simple slope-based test:**
+
 ```python
 from diff_diff.utils import check_parallel_trends
 
@@ -248,7 +250,51 @@ trends = check_parallel_trends(
 print(f"Treated trend: {trends['treated_trend']:.4f}")
 print(f"Control trend: {trends['control_trend']:.4f}")
 print(f"Difference p-value: {trends['p_value']:.4f}")
-print(f"Parallel trends plausible: {trends['parallel_trends_plausible']}")
+```
+
+**Robust distributional test (Wasserstein distance):**
+
+```python
+from diff_diff.utils import check_parallel_trends_robust
+
+results = check_parallel_trends_robust(
+    data,
+    outcome='outcome',
+    time='period',
+    treatment_group='treated',
+    unit='firm_id',              # Unit identifier for panel data
+    pre_periods=[2018, 2019],    # Pre-treatment periods
+    n_permutations=1000          # Permutations for p-value
+)
+
+print(f"Wasserstein distance: {results['wasserstein_distance']:.4f}")
+print(f"Wasserstein p-value: {results['wasserstein_p_value']:.4f}")
+print(f"KS test p-value: {results['ks_p_value']:.4f}")
+print(f"Parallel trends plausible: {results['parallel_trends_plausible']}")
+```
+
+The Wasserstein (Earth Mover's) distance compares the full distribution of outcome changes, not just means. This is more robust to:
+- Non-normal distributions
+- Heterogeneous effects across units
+- Outliers
+
+**Equivalence testing (TOST):**
+
+```python
+from diff_diff.utils import equivalence_test_trends
+
+results = equivalence_test_trends(
+    data,
+    outcome='outcome',
+    time='period',
+    treatment_group='treated',
+    unit='firm_id',
+    equivalence_margin=0.5       # Define "practically equivalent"
+)
+
+print(f"Mean difference: {results['mean_difference']:.4f}")
+print(f"TOST p-value: {results['tost_p_value']:.4f}")
+print(f"Trends equivalent: {results['equivalent']}")
 ```
 
 ## API Reference

@@ -452,3 +452,239 @@ class TestFixedEffects:
 
         assert results is not None
         assert "size" in results.coefficients
+
+
+class TestParallelTrendsRobust:
+    """Tests for robust parallel trends checking."""
+
+    @pytest.fixture
+    def parallel_trends_data(self):
+        """Create panel data where parallel trends holds."""
+        np.random.seed(42)
+        n_units = 100
+        n_periods = 6  # 3 pre, 3 post
+
+        data = []
+        for unit in range(n_units):
+            is_treated = unit < n_units // 2
+            unit_effect = np.random.normal(0, 2)
+
+            for period in range(n_periods):
+                # Common trend for both groups
+                time_effect = period * 1.5
+
+                y = 10.0 + unit_effect + time_effect
+
+                # Treatment effect only in post period (period >= 3)
+                if is_treated and period >= 3:
+                    y += 5.0
+
+                y += np.random.normal(0, 0.5)
+
+                data.append({
+                    "unit": unit,
+                    "period": period,
+                    "treated": int(is_treated),
+                    "outcome": y,
+                })
+
+        return pd.DataFrame(data)
+
+    @pytest.fixture
+    def non_parallel_trends_data(self):
+        """Create panel data where parallel trends is violated."""
+        np.random.seed(42)
+        n_units = 100
+        n_periods = 6
+
+        data = []
+        for unit in range(n_units):
+            is_treated = unit < n_units // 2
+            unit_effect = np.random.normal(0, 2)
+
+            for period in range(n_periods):
+                # Different trends for treated vs control
+                if is_treated:
+                    time_effect = period * 3.0  # Steeper trend
+                else:
+                    time_effect = period * 1.0  # Flatter trend
+
+                y = 10.0 + unit_effect + time_effect
+
+                # Treatment effect in post period
+                if is_treated and period >= 3:
+                    y += 5.0
+
+                y += np.random.normal(0, 0.5)
+
+                data.append({
+                    "unit": unit,
+                    "period": period,
+                    "treated": int(is_treated),
+                    "outcome": y,
+                })
+
+        return pd.DataFrame(data)
+
+    def test_wasserstein_parallel_trends_valid(self, parallel_trends_data):
+        """Test Wasserstein check when parallel trends holds."""
+        from diff_diff.utils import check_parallel_trends_robust
+
+        results = check_parallel_trends_robust(
+            parallel_trends_data,
+            outcome="outcome",
+            time="period",
+            treatment_group="treated",
+            unit="unit",
+            pre_periods=[0, 1, 2],
+            seed=42
+        )
+
+        assert "wasserstein_distance" in results
+        assert "wasserstein_p_value" in results
+        assert "ks_statistic" in results
+        # When trends are parallel, p-value should be high
+        assert results["wasserstein_p_value"] > 0.05
+        assert results["parallel_trends_plausible"] is True
+
+    def test_wasserstein_parallel_trends_violated(self, non_parallel_trends_data):
+        """Test Wasserstein check when parallel trends is violated."""
+        from diff_diff.utils import check_parallel_trends_robust
+
+        results = check_parallel_trends_robust(
+            non_parallel_trends_data,
+            outcome="outcome",
+            time="period",
+            treatment_group="treated",
+            unit="unit",
+            pre_periods=[0, 1, 2],
+            seed=42
+        )
+
+        # When trends are not parallel, should detect it
+        # Either low p-value or high normalized Wasserstein
+        assert results["wasserstein_distance"] > 0
+        # The test should flag this as problematic
+        assert results["parallel_trends_plausible"] is False
+
+    def test_wasserstein_returns_changes(self, parallel_trends_data):
+        """Test that changes arrays are returned."""
+        from diff_diff.utils import check_parallel_trends_robust
+
+        results = check_parallel_trends_robust(
+            parallel_trends_data,
+            outcome="outcome",
+            time="period",
+            treatment_group="treated",
+            unit="unit",
+            pre_periods=[0, 1, 2],
+            seed=42
+        )
+
+        assert "treated_changes" in results
+        assert "control_changes" in results
+        assert len(results["treated_changes"]) > 0
+        assert len(results["control_changes"]) > 0
+
+    def test_wasserstein_without_unit(self, parallel_trends_data):
+        """Test Wasserstein check without unit specification."""
+        from diff_diff.utils import check_parallel_trends_robust
+
+        results = check_parallel_trends_robust(
+            parallel_trends_data,
+            outcome="outcome",
+            time="period",
+            treatment_group="treated",
+            pre_periods=[0, 1, 2],
+            seed=42
+        )
+
+        assert "wasserstein_distance" in results
+        assert not np.isnan(results["wasserstein_distance"])
+
+    def test_equivalence_test_parallel(self, parallel_trends_data):
+        """Test equivalence testing when trends are parallel."""
+        from diff_diff.utils import equivalence_test_trends
+
+        results = equivalence_test_trends(
+            parallel_trends_data,
+            outcome="outcome",
+            time="period",
+            treatment_group="treated",
+            unit="unit",
+            pre_periods=[0, 1, 2]
+        )
+
+        assert "tost_p_value" in results
+        assert "equivalent" in results
+        assert "equivalence_margin" in results
+        # When trends are parallel, should be equivalent
+        assert results["equivalent"] is True
+
+    def test_equivalence_test_non_parallel(self, non_parallel_trends_data):
+        """Test equivalence testing when trends are not parallel."""
+        from diff_diff.utils import equivalence_test_trends
+
+        results = equivalence_test_trends(
+            non_parallel_trends_data,
+            outcome="outcome",
+            time="period",
+            treatment_group="treated",
+            unit="unit",
+            pre_periods=[0, 1, 2]
+        )
+
+        # When trends are not parallel, should not be equivalent
+        assert results["equivalent"] is False
+
+    def test_equivalence_test_custom_margin(self, parallel_trends_data):
+        """Test equivalence testing with custom margin."""
+        from diff_diff.utils import equivalence_test_trends
+
+        results = equivalence_test_trends(
+            parallel_trends_data,
+            outcome="outcome",
+            time="period",
+            treatment_group="treated",
+            unit="unit",
+            pre_periods=[0, 1, 2],
+            equivalence_margin=0.1  # Very tight margin
+        )
+
+        assert results["equivalence_margin"] == 0.1
+
+    def test_ks_test_included(self, parallel_trends_data):
+        """Test that KS test results are included."""
+        from diff_diff.utils import check_parallel_trends_robust
+
+        results = check_parallel_trends_robust(
+            parallel_trends_data,
+            outcome="outcome",
+            time="period",
+            treatment_group="treated",
+            unit="unit",
+            pre_periods=[0, 1, 2],
+            seed=42
+        )
+
+        assert "ks_statistic" in results
+        assert "ks_p_value" in results
+        assert 0 <= results["ks_statistic"] <= 1
+        assert 0 <= results["ks_p_value"] <= 1
+
+    def test_variance_ratio(self, parallel_trends_data):
+        """Test that variance ratio is computed."""
+        from diff_diff.utils import check_parallel_trends_robust
+
+        results = check_parallel_trends_robust(
+            parallel_trends_data,
+            outcome="outcome",
+            time="period",
+            treatment_group="treated",
+            unit="unit",
+            pre_periods=[0, 1, 2],
+            seed=42
+        )
+
+        assert "variance_ratio" in results
+        assert results["variance_ratio"] > 0
