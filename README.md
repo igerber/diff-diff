@@ -1,3 +1,282 @@
 # diff-diff
 
-A library for computing difference in differences (diff-in-diff or DiD), a quasi-experimental method of statistical analysis.
+A Python library for Difference-in-Differences (DiD) causal inference analysis with an sklearn-like API and statsmodels-style outputs.
+
+## Installation
+
+```bash
+pip install diff-diff
+```
+
+Or install from source:
+
+```bash
+git clone https://github.com/igerber/diff-diff.git
+cd diff-diff
+pip install -e .
+```
+
+## Quick Start
+
+```python
+import pandas as pd
+from diff_diff import DifferenceInDifferences
+
+# Create sample data
+data = pd.DataFrame({
+    'outcome': [10, 11, 15, 18, 9, 10, 12, 13],
+    'treated': [1, 1, 1, 1, 0, 0, 0, 0],
+    'post': [0, 0, 1, 1, 0, 0, 1, 1]
+})
+
+# Fit the model
+did = DifferenceInDifferences()
+results = did.fit(data, outcome='outcome', treatment='treated', time='post')
+
+# View results
+print(results)  # DiDResults(ATT=3.5000*, SE=1.2583, p=0.0367)
+results.print_summary()
+```
+
+Output:
+```
+======================================================================
+          Difference-in-Differences Estimation Results
+======================================================================
+
+Observations:                        8
+Treated units:                       4
+Control units:                       4
+R-squared:                      0.9123
+
+----------------------------------------------------------------------
+Parameter         Estimate     Std. Err.     t-stat      P>|t|
+----------------------------------------------------------------------
+ATT                 3.5000       1.2583      2.782      0.0367
+----------------------------------------------------------------------
+
+95% Confidence Interval: [0.3912, 6.6088]
+
+Signif. codes: '***' 0.001, '**' 0.01, '*' 0.05, '.' 0.1
+======================================================================
+```
+
+## Features
+
+- **sklearn-like API**: Familiar `fit()` interface with `get_params()` and `set_params()`
+- **Pythonic results**: Easy access to coefficients, standard errors, and confidence intervals
+- **Multiple interfaces**: Column names or R-style formulas
+- **Robust inference**: Heteroskedasticity-robust (HC1) and cluster-robust standard errors
+- **Panel data support**: Two-way fixed effects estimator for panel designs
+
+## Usage
+
+### Basic DiD with Column Names
+
+```python
+from diff_diff import DifferenceInDifferences
+
+did = DifferenceInDifferences(robust=True, alpha=0.05)
+results = did.fit(
+    data,
+    outcome='sales',
+    treatment='treated',
+    time='post_policy'
+)
+
+# Access results
+print(f"ATT: {results.att:.4f}")
+print(f"Standard Error: {results.se:.4f}")
+print(f"P-value: {results.p_value:.4f}")
+print(f"95% CI: {results.conf_int}")
+print(f"Significant: {results.is_significant}")
+```
+
+### Using Formula Interface
+
+```python
+# R-style formula syntax
+results = did.fit(data, formula='outcome ~ treated * post')
+
+# Explicit interaction syntax
+results = did.fit(data, formula='outcome ~ treated + post + treated:post')
+
+# With covariates
+results = did.fit(data, formula='outcome ~ treated * post + age + income')
+```
+
+### Including Covariates
+
+```python
+results = did.fit(
+    data,
+    outcome='outcome',
+    treatment='treated',
+    time='post',
+    covariates=['age', 'income', 'education']
+)
+```
+
+### Cluster-Robust Standard Errors
+
+```python
+did = DifferenceInDifferences(cluster='state')
+results = did.fit(
+    data,
+    outcome='outcome',
+    treatment='treated',
+    time='post'
+)
+```
+
+### Two-Way Fixed Effects (Panel Data)
+
+```python
+from diff_diff.estimators import TwoWayFixedEffects
+
+twfe = TwoWayFixedEffects()
+results = twfe.fit(
+    panel_data,
+    outcome='outcome',
+    treatment='treated',
+    time='year',
+    unit='firm_id'
+)
+```
+
+## Working with Results
+
+### Export Results
+
+```python
+# As dictionary
+results.to_dict()
+# {'att': 3.5, 'se': 1.26, 'p_value': 0.037, ...}
+
+# As DataFrame
+df = results.to_dataframe()
+```
+
+### Check Significance
+
+```python
+if results.is_significant:
+    print(f"Effect is significant at {did.alpha} level")
+
+# Get significance stars
+print(f"ATT: {results.att}{results.significance_stars}")
+# ATT: 3.5000*
+```
+
+### Access Full Regression Output
+
+```python
+# All coefficients
+results.coefficients
+# {'const': 9.5, 'treated': 1.0, 'post': 2.5, 'treated:post': 3.5}
+
+# Variance-covariance matrix
+results.vcov
+
+# Residuals and fitted values
+results.residuals
+results.fitted_values
+
+# R-squared
+results.r_squared
+```
+
+## Checking Assumptions
+
+### Parallel Trends
+
+```python
+from diff_diff.utils import check_parallel_trends
+
+trends = check_parallel_trends(
+    data,
+    outcome='outcome',
+    time='period',
+    treatment_group='treated'
+)
+
+print(f"Treated trend: {trends['treated_trend']:.4f}")
+print(f"Control trend: {trends['control_trend']:.4f}")
+print(f"Difference p-value: {trends['p_value']:.4f}")
+print(f"Parallel trends plausible: {trends['parallel_trends_plausible']}")
+```
+
+## API Reference
+
+### DifferenceInDifferences
+
+```python
+DifferenceInDifferences(
+    robust=True,      # Use HC1 robust standard errors
+    cluster=None,     # Column for cluster-robust SEs
+    alpha=0.05        # Significance level for CIs
+)
+```
+
+**Methods:**
+
+| Method | Description |
+|--------|-------------|
+| `fit(data, outcome, treatment, time, formula, covariates)` | Fit the DiD model |
+| `summary()` | Get formatted summary string |
+| `print_summary()` | Print summary to stdout |
+| `get_params()` | Get estimator parameters (sklearn-compatible) |
+| `set_params(**params)` | Set estimator parameters (sklearn-compatible) |
+
+### DiDResults
+
+**Attributes:**
+
+| Attribute | Description |
+|-----------|-------------|
+| `att` | Average Treatment effect on the Treated |
+| `se` | Standard error of ATT |
+| `t_stat` | T-statistic |
+| `p_value` | P-value for H0: ATT = 0 |
+| `conf_int` | Tuple of (lower, upper) confidence bounds |
+| `n_obs` | Number of observations |
+| `n_treated` | Number of treated units |
+| `n_control` | Number of control units |
+| `r_squared` | R-squared of regression |
+| `coefficients` | Dictionary of all coefficients |
+| `is_significant` | Boolean for significance at alpha |
+| `significance_stars` | String of significance stars |
+
+**Methods:**
+
+| Method | Description |
+|--------|-------------|
+| `summary(alpha)` | Get formatted summary string |
+| `print_summary(alpha)` | Print summary to stdout |
+| `to_dict()` | Convert to dictionary |
+| `to_dataframe()` | Convert to pandas DataFrame |
+
+## Requirements
+
+- Python >= 3.9
+- numpy >= 1.20
+- pandas >= 1.3
+- scipy >= 1.7
+
+## Development
+
+```bash
+# Install with dev dependencies
+pip install -e ".[dev]"
+
+# Run tests
+pytest
+
+# Format code
+black diff_diff tests
+ruff check diff_diff tests
+```
+
+## License
+
+MIT License
