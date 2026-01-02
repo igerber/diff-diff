@@ -69,6 +69,7 @@ Signif. codes: '***' 0.001, '**' 0.01, '*' 0.05, '.' 0.1
 - **Robust inference**: Heteroskedasticity-robust (HC1) and cluster-robust standard errors
 - **Panel data support**: Two-way fixed effects estimator for panel designs
 - **Multi-period analysis**: Event-study style DiD with period-specific treatment effects
+- **Synthetic DiD**: Combined DiD with synthetic control for improved robustness
 
 ## Usage
 
@@ -248,6 +249,130 @@ Period            Effect     Std. Err.     t-stat      P>|t|
 
 Signif. codes: '***' 0.001, '**' 0.01, '*' 0.05, '.' 0.1
 ================================================================================
+```
+
+### Synthetic Difference-in-Differences
+
+Synthetic DiD combines the strengths of Difference-in-Differences and Synthetic Control methods by re-weighting control units to better match treated units' pre-treatment outcomes.
+
+```python
+from diff_diff import SyntheticDiD
+
+# Fit Synthetic DiD model
+sdid = SyntheticDiD()
+results = sdid.fit(
+    panel_data,
+    outcome='gdp_growth',
+    treatment='treated',
+    unit='state',
+    time='year',
+    post_periods=[2015, 2016, 2017, 2018]
+)
+
+# View results
+results.print_summary()
+print(f"ATT: {results.att:.3f} (SE: {results.se:.3f})")
+
+# Examine unit weights (which control units matter most)
+weights_df = results.get_unit_weights_df()
+print(weights_df.head(10))
+
+# Examine time weights
+time_weights_df = results.get_time_weights_df()
+print(time_weights_df)
+```
+
+Output:
+```
+===========================================================================
+         Synthetic Difference-in-Differences Estimation Results
+===========================================================================
+
+Observations:                      500
+Treated units:                       1
+Control units:                      49
+Pre-treatment periods:               6
+Post-treatment periods:              4
+Regularization (lambda):        0.0000
+Pre-treatment fit (RMSE):       0.1234
+
+---------------------------------------------------------------------------
+Parameter         Estimate     Std. Err.     t-stat      P>|t|
+---------------------------------------------------------------------------
+ATT                 2.5000       0.4521      5.530      0.0000
+---------------------------------------------------------------------------
+
+95% Confidence Interval: [1.6139, 3.3861]
+
+---------------------------------------------------------------------------
+                   Top Unit Weights (Synthetic Control)
+---------------------------------------------------------------------------
+  Unit state_12: 0.3521
+  Unit state_5: 0.2156
+  Unit state_23: 0.1834
+  Unit state_8: 0.1245
+  Unit state_31: 0.0892
+  (8 units with weight > 0.001)
+
+Signif. codes: '***' 0.001, '**' 0.01, '*' 0.05, '.' 0.1
+===========================================================================
+```
+
+#### When to Use Synthetic DiD Over Vanilla DiD
+
+Use Synthetic DiD instead of standard DiD when:
+
+1. **Few treated units**: When you have only one or a small number of treated units (e.g., a single state passed a policy), standard DiD averages across all controls equally. Synthetic DiD finds the optimal weighted combination of controls.
+
+   ```python
+   # Example: California passed a policy, want to estimate its effect
+   # Standard DiD would compare CA to the average of all other states
+   # Synthetic DiD finds states that together best match CA's pre-treatment trend
+   ```
+
+2. **Parallel trends is questionable**: When treated and control groups have different pre-treatment levels or trends, Synthetic DiD can construct a better counterfactual by matching the pre-treatment trajectory.
+
+   ```python
+   # Example: A tech hub city vs rural areas
+   # Rural areas may not be a good comparison on average
+   # Synthetic DiD can weight urban/suburban controls more heavily
+   ```
+
+3. **Heterogeneous control units**: When control units are very different from each other, equal weighting (as in standard DiD) is suboptimal.
+
+   ```python
+   # Example: Comparing a treated developing country to other countries
+   # Some control countries may be much more similar economically
+   # Synthetic DiD upweights the most comparable controls
+   ```
+
+4. **You want transparency**: Synthetic DiD provides explicit unit weights showing which controls contribute most to the comparison.
+
+   ```python
+   # See exactly which units are driving the counterfactual
+   print(results.get_unit_weights_df())
+   ```
+
+**Key differences from standard DiD:**
+
+| Aspect | Standard DiD | Synthetic DiD |
+|--------|--------------|---------------|
+| Control weighting | Equal (1/N) | Optimized to match pre-treatment |
+| Time weighting | Equal across periods | Can emphasize informative periods |
+| N treated required | Can be many | Works with 1 treated unit |
+| Parallel trends | Assumed | Partially relaxed via matching |
+| Interpretability | Simple average | Explicit weights |
+
+**Parameters:**
+
+```python
+SyntheticDiD(
+    lambda_reg=0.0,     # Regularization toward uniform weights (0 = no reg)
+    zeta=1.0,           # Time weight regularization (higher = more uniform)
+    alpha=0.05,         # Significance level
+    n_bootstrap=200,    # Bootstrap iterations for SE (0 = placebo-based)
+    seed=None           # Random seed for reproducibility
+)
 ```
 
 ## Working with Results
@@ -486,6 +611,62 @@ MultiPeriodDiD(
 | `is_significant` | Boolean for significance at 0.05 |
 | `significance_stars` | String of significance stars |
 
+### SyntheticDiD
+
+```python
+SyntheticDiD(
+    lambda_reg=0.0,     # L2 regularization for unit weights
+    zeta=1.0,           # Regularization for time weights
+    alpha=0.05,         # Significance level for CIs
+    n_bootstrap=200,    # Bootstrap iterations for SE
+    seed=None           # Random seed for reproducibility
+)
+```
+
+**fit() Parameters:**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `data` | DataFrame | Panel data |
+| `outcome` | str | Outcome variable column name |
+| `treatment` | str | Treatment indicator column (0/1) |
+| `unit` | str | Unit identifier column |
+| `time` | str | Time period column |
+| `post_periods` | list | List of post-treatment period values |
+| `covariates` | list | Covariates to residualize out |
+
+### SyntheticDiDResults
+
+**Attributes:**
+
+| Attribute | Description |
+|-----------|-------------|
+| `att` | Average Treatment effect on the Treated |
+| `se` | Standard error (bootstrap or placebo-based) |
+| `t_stat` | T-statistic |
+| `p_value` | P-value |
+| `conf_int` | Confidence interval |
+| `n_obs` | Number of observations |
+| `n_treated` | Number of treated units |
+| `n_control` | Number of control units |
+| `unit_weights` | Dict mapping control unit IDs to weights |
+| `time_weights` | Dict mapping pre-treatment periods to weights |
+| `pre_periods` | List of pre-treatment periods |
+| `post_periods` | List of post-treatment periods |
+| `pre_treatment_fit` | RMSE of synthetic vs treated in pre-period |
+| `placebo_effects` | Array of placebo effect estimates |
+
+**Methods:**
+
+| Method | Description |
+|--------|-------------|
+| `summary(alpha)` | Get formatted summary string |
+| `print_summary(alpha)` | Print summary to stdout |
+| `to_dict()` | Convert to dictionary |
+| `to_dataframe()` | Convert to pandas DataFrame |
+| `get_unit_weights_df()` | Get unit weights as DataFrame |
+| `get_time_weights_df()` | Get time weights as DataFrame |
+
 ## Requirements
 
 - Python >= 3.9
@@ -506,6 +687,64 @@ pytest
 black diff_diff tests
 ruff check diff_diff tests
 ```
+
+## References
+
+This library implements methods from the following scholarly works:
+
+### Difference-in-Differences
+
+- **Ashenfelter, O., & Card, D. (1985).** "Using the Longitudinal Structure of Earnings to Estimate the Effect of Training Programs." *The Review of Economics and Statistics*, 67(4), 648-660. [https://doi.org/10.2307/1924810](https://doi.org/10.2307/1924810)
+
+- **Card, D., & Krueger, A. B. (1994).** "Minimum Wages and Employment: A Case Study of the Fast-Food Industry in New Jersey and Pennsylvania." *The American Economic Review*, 84(4), 772-793. [https://www.jstor.org/stable/2118030](https://www.jstor.org/stable/2118030)
+
+- **Angrist, J. D., & Pischke, J.-S. (2009).** *Mostly Harmless Econometrics: An Empiricist's Companion*. Princeton University Press. Chapter 5: Differences-in-Differences.
+
+### Two-Way Fixed Effects
+
+- **Wooldridge, J. M. (2010).** *Econometric Analysis of Cross Section and Panel Data* (2nd ed.). MIT Press.
+
+- **Imai, K., & Kim, I. S. (2021).** "On the Use of Two-Way Fixed Effects Regression Models for Causal Inference with Panel Data." *Political Analysis*, 29(3), 405-415. [https://doi.org/10.1017/pan.2020.33](https://doi.org/10.1017/pan.2020.33)
+
+### Robust Standard Errors
+
+- **White, H. (1980).** "A Heteroskedasticity-Consistent Covariance Matrix Estimator and a Direct Test for Heteroskedasticity." *Econometrica*, 48(4), 817-838. [https://doi.org/10.2307/1912934](https://doi.org/10.2307/1912934)
+
+- **MacKinnon, J. G., & White, H. (1985).** "Some Heteroskedasticity-Consistent Covariance Matrix Estimators with Improved Finite Sample Properties." *Journal of Econometrics*, 29(3), 305-325. [https://doi.org/10.1016/0304-4076(85)90158-7](https://doi.org/10.1016/0304-4076(85)90158-7)
+
+- **Cameron, A. C., Gelbach, J. B., & Miller, D. L. (2011).** "Robust Inference With Multiway Clustering." *Journal of Business & Economic Statistics*, 29(2), 238-249. [https://doi.org/10.1198/jbes.2010.07136](https://doi.org/10.1198/jbes.2010.07136)
+
+### Synthetic Control Method
+
+- **Abadie, A., & Gardeazabal, J. (2003).** "The Economic Costs of Conflict: A Case Study of the Basque Country." *The American Economic Review*, 93(1), 113-132. [https://doi.org/10.1257/000282803321455188](https://doi.org/10.1257/000282803321455188)
+
+- **Abadie, A., Diamond, A., & Hainmueller, J. (2010).** "Synthetic Control Methods for Comparative Case Studies: Estimating the Effect of California's Tobacco Control Program." *Journal of the American Statistical Association*, 105(490), 493-505. [https://doi.org/10.1198/jasa.2009.ap08746](https://doi.org/10.1198/jasa.2009.ap08746)
+
+- **Abadie, A., Diamond, A., & Hainmueller, J. (2015).** "Comparative Politics and the Synthetic Control Method." *American Journal of Political Science*, 59(2), 495-510. [https://doi.org/10.1111/ajps.12116](https://doi.org/10.1111/ajps.12116)
+
+### Synthetic Difference-in-Differences
+
+- **Arkhangelsky, D., Athey, S., Hirshberg, D. A., Imbens, G. W., & Wager, S. (2021).** "Synthetic Difference-in-Differences." *American Economic Review*, 111(12), 4088-4118. [https://doi.org/10.1257/aer.20190159](https://doi.org/10.1257/aer.20190159)
+
+### Parallel Trends and Pre-Trend Testing
+
+- **Roth, J. (2022).** "Pretest with Caution: Event-Study Estimates after Testing for Parallel Trends." *American Economic Review: Insights*, 4(3), 305-322. [https://doi.org/10.1257/aeri.20210236](https://doi.org/10.1257/aeri.20210236)
+
+- **Rambachan, A., & Roth, J. (2023).** "A More Credible Approach to Parallel Trends." *The Review of Economic Studies*, 90(5), 2555-2591. [https://doi.org/10.1093/restud/rdad018](https://doi.org/10.1093/restud/rdad018)
+
+### Multi-Period and Staggered Adoption
+
+- **Callaway, B., & Sant'Anna, P. H. C. (2021).** "Difference-in-Differences with Multiple Time Periods." *Journal of Econometrics*, 225(2), 200-230. [https://doi.org/10.1016/j.jeconom.2020.12.001](https://doi.org/10.1016/j.jeconom.2020.12.001)
+
+- **Sun, L., & Abraham, S. (2021).** "Estimating Dynamic Treatment Effects in Event Studies with Heterogeneous Treatment Effects." *Journal of Econometrics*, 225(2), 175-199. [https://doi.org/10.1016/j.jeconom.2020.09.006](https://doi.org/10.1016/j.jeconom.2020.09.006)
+
+- **de Chaisemartin, C., & D'Haultfœuille, X. (2020).** "Two-Way Fixed Effects Estimators with Heterogeneous Treatment Effects." *American Economic Review*, 110(9), 2964-2996. [https://doi.org/10.1257/aer.20181169](https://doi.org/10.1257/aer.20181169)
+
+### General Causal Inference
+
+- **Imbens, G. W., & Rubin, D. B. (2015).** *Causal Inference for Statistics, Social, and Biomedical Sciences: An Introduction*. Cambridge University Press.
+
+- **Cunningham, S. (2021).** *Causal Inference: The Mixtape*. Yale University Press. [https://mixtape.scunning.com/](https://mixtape.scunning.com/)
 
 ## License
 

@@ -10,6 +10,8 @@ from diff_diff import (
     MultiPeriodDiD,
     MultiPeriodDiDResults,
     PeriodEffect,
+    SyntheticDiD,
+    SyntheticDiDResults,
 )
 
 
@@ -1561,3 +1563,614 @@ class TestMultiPeriodDiD:
         assert any("period_" in k for k in results.coefficients)
         # Treatment interactions
         assert any("treated:period_" in k for k in results.coefficients)
+
+
+class TestSyntheticDiD:
+    """Tests for SyntheticDiD estimator."""
+
+    @pytest.fixture
+    def sdid_panel_data(self):
+        """Create panel data suitable for Synthetic DiD with known ATT."""
+        np.random.seed(42)
+        n_units = 30
+        n_periods = 8  # 4 pre, 4 post
+        n_treated = 5  # Few treated units (good use case for SDID)
+
+        data = []
+        for unit in range(n_units):
+            is_treated = unit < n_treated
+            # Unit-specific intercept (varies across units)
+            unit_effect = np.random.normal(0, 3)
+
+            for period in range(n_periods):
+                # Common time trend
+                time_effect = period * 0.5
+
+                y = 10.0 + unit_effect + time_effect
+
+                # Treatment effect in post-periods (periods 4-7)
+                if is_treated and period >= 4:
+                    y += 5.0  # True ATT = 5.0
+
+                y += np.random.normal(0, 0.5)
+
+                data.append({
+                    "unit": unit,
+                    "period": period,
+                    "treated": int(is_treated),
+                    "outcome": y,
+                })
+
+        return pd.DataFrame(data)
+
+    @pytest.fixture
+    def single_treated_unit_data(self):
+        """Create data with a single treated unit (classic SC case)."""
+        np.random.seed(42)
+        n_controls = 20
+        n_periods = 10  # 5 pre, 5 post
+
+        data = []
+
+        # Single treated unit with distinct pattern
+        for period in range(n_periods):
+            y = 50.0 + period * 2.0  # Steeper trend
+            if period >= 5:
+                y += 10.0  # True ATT = 10
+            y += np.random.normal(0, 1)
+            data.append({
+                "unit": 0,
+                "period": period,
+                "treated": 1,
+                "outcome": y,
+            })
+
+        # Control units with various patterns
+        for unit in range(1, n_controls + 1):
+            unit_intercept = np.random.uniform(30, 70)
+            unit_slope = np.random.uniform(0.5, 3.5)  # Various slopes
+            for period in range(n_periods):
+                y = unit_intercept + period * unit_slope
+                y += np.random.normal(0, 1)
+                data.append({
+                    "unit": unit,
+                    "period": period,
+                    "treated": 0,
+                    "outcome": y,
+                })
+
+        return pd.DataFrame(data)
+
+    def test_basic_fit(self, sdid_panel_data):
+        """Test basic SDID model fitting."""
+        sdid = SyntheticDiD(n_bootstrap=50, seed=42)
+        results = sdid.fit(
+            sdid_panel_data,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="period",
+            post_periods=[4, 5, 6, 7]
+        )
+
+        assert isinstance(results, SyntheticDiDResults)
+        assert sdid.is_fitted_
+        assert results.n_obs == 240  # 30 units * 8 periods
+        assert results.n_treated == 5
+        assert results.n_control == 25
+
+    def test_att_direction(self, sdid_panel_data):
+        """Test that ATT is estimated in correct direction."""
+        sdid = SyntheticDiD(n_bootstrap=50, seed=42)
+        results = sdid.fit(
+            sdid_panel_data,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="period",
+            post_periods=[4, 5, 6, 7]
+        )
+
+        # True ATT is 5.0
+        assert results.att > 0
+        assert abs(results.att - 5.0) < 2.0
+
+    def test_unit_weights_sum_to_one(self, sdid_panel_data):
+        """Test that unit weights sum to 1."""
+        sdid = SyntheticDiD(n_bootstrap=0, seed=42)  # Use placebo instead
+        results = sdid.fit(
+            sdid_panel_data,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="period",
+            post_periods=[4, 5, 6, 7]
+        )
+
+        weight_sum = sum(results.unit_weights.values())
+        assert abs(weight_sum - 1.0) < 1e-6
+
+    def test_time_weights_sum_to_one(self, sdid_panel_data):
+        """Test that time weights sum to 1."""
+        sdid = SyntheticDiD(n_bootstrap=0, seed=42)
+        results = sdid.fit(
+            sdid_panel_data,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="period",
+            post_periods=[4, 5, 6, 7]
+        )
+
+        weight_sum = sum(results.time_weights.values())
+        assert abs(weight_sum - 1.0) < 1e-6
+
+    def test_unit_weights_nonnegative(self, sdid_panel_data):
+        """Test that unit weights are non-negative."""
+        sdid = SyntheticDiD(n_bootstrap=0, seed=42)
+        results = sdid.fit(
+            sdid_panel_data,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="period",
+            post_periods=[4, 5, 6, 7]
+        )
+
+        for w in results.unit_weights.values():
+            assert w >= 0
+
+    def test_single_treated_unit(self, single_treated_unit_data):
+        """Test SDID with a single treated unit (classic SC scenario)."""
+        sdid = SyntheticDiD(n_bootstrap=50, seed=42)
+        results = sdid.fit(
+            single_treated_unit_data,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="period",
+            post_periods=[5, 6, 7, 8, 9]
+        )
+
+        assert results.n_treated == 1
+        # True ATT is 10.0
+        assert results.att > 0
+        # With good controls, should be reasonably close
+        assert abs(results.att - 10.0) < 5.0
+
+    def test_regularization_effect(self, sdid_panel_data):
+        """Test that regularization affects weight dispersion."""
+        sdid_no_reg = SyntheticDiD(lambda_reg=0.0, n_bootstrap=0, seed=42)
+        sdid_high_reg = SyntheticDiD(lambda_reg=10.0, n_bootstrap=0, seed=42)
+
+        results_no_reg = sdid_no_reg.fit(
+            sdid_panel_data,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="period",
+            post_periods=[4, 5, 6, 7]
+        )
+
+        results_high_reg = sdid_high_reg.fit(
+            sdid_panel_data,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="period",
+            post_periods=[4, 5, 6, 7]
+        )
+
+        # High regularization should give more uniform weights
+        weights_no_reg = np.array(list(results_no_reg.unit_weights.values()))
+        weights_high_reg = np.array(list(results_high_reg.unit_weights.values()))
+
+        # Variance of weights should be lower with more regularization
+        assert np.var(weights_high_reg) <= np.var(weights_no_reg) + 0.01
+
+    def test_placebo_inference(self, sdid_panel_data):
+        """Test placebo-based inference (n_bootstrap=0)."""
+        sdid = SyntheticDiD(n_bootstrap=0, seed=42)
+        results = sdid.fit(
+            sdid_panel_data,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="period",
+            post_periods=[4, 5, 6, 7]
+        )
+
+        assert results.placebo_effects is not None
+        assert len(results.placebo_effects) > 0
+        assert results.se > 0
+
+    def test_bootstrap_inference(self, sdid_panel_data):
+        """Test bootstrap-based inference."""
+        sdid = SyntheticDiD(n_bootstrap=100, seed=42)
+        results = sdid.fit(
+            sdid_panel_data,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="period",
+            post_periods=[4, 5, 6, 7]
+        )
+
+        assert results.se > 0
+        assert results.conf_int[0] < results.att < results.conf_int[1]
+
+    def test_get_unit_weights_df(self, sdid_panel_data):
+        """Test getting unit weights as DataFrame."""
+        sdid = SyntheticDiD(n_bootstrap=0, seed=42)
+        results = sdid.fit(
+            sdid_panel_data,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="period",
+            post_periods=[4, 5, 6, 7]
+        )
+
+        weights_df = results.get_unit_weights_df()
+        assert isinstance(weights_df, pd.DataFrame)
+        assert "unit" in weights_df.columns
+        assert "weight" in weights_df.columns
+        assert len(weights_df) == 25  # Number of control units
+
+    def test_get_time_weights_df(self, sdid_panel_data):
+        """Test getting time weights as DataFrame."""
+        sdid = SyntheticDiD(n_bootstrap=0, seed=42)
+        results = sdid.fit(
+            sdid_panel_data,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="period",
+            post_periods=[4, 5, 6, 7]
+        )
+
+        weights_df = results.get_time_weights_df()
+        assert isinstance(weights_df, pd.DataFrame)
+        assert "period" in weights_df.columns
+        assert "weight" in weights_df.columns
+        assert len(weights_df) == 4  # Number of pre-periods
+
+    def test_pre_treatment_fit(self, sdid_panel_data):
+        """Test that pre-treatment fit is computed."""
+        sdid = SyntheticDiD(n_bootstrap=0, seed=42)
+        results = sdid.fit(
+            sdid_panel_data,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="period",
+            post_periods=[4, 5, 6, 7]
+        )
+
+        assert results.pre_treatment_fit is not None
+        assert results.pre_treatment_fit >= 0
+
+    def test_summary_output(self, sdid_panel_data):
+        """Test that summary produces string output."""
+        sdid = SyntheticDiD(n_bootstrap=50, seed=42)
+        results = sdid.fit(
+            sdid_panel_data,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="period",
+            post_periods=[4, 5, 6, 7]
+        )
+
+        summary = results.summary()
+        assert isinstance(summary, str)
+        assert "Synthetic Difference-in-Differences" in summary
+        assert "ATT" in summary
+        assert "Unit Weights" in summary
+
+    def test_to_dict(self, sdid_panel_data):
+        """Test conversion to dictionary."""
+        sdid = SyntheticDiD(n_bootstrap=50, seed=42)
+        results = sdid.fit(
+            sdid_panel_data,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="period",
+            post_periods=[4, 5, 6, 7]
+        )
+
+        result_dict = results.to_dict()
+        assert "att" in result_dict
+        assert "se" in result_dict
+        assert "n_pre_periods" in result_dict
+        assert "n_post_periods" in result_dict
+        assert "pre_treatment_fit" in result_dict
+
+    def test_to_dataframe(self, sdid_panel_data):
+        """Test conversion to DataFrame."""
+        sdid = SyntheticDiD(n_bootstrap=50, seed=42)
+        results = sdid.fit(
+            sdid_panel_data,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="period",
+            post_periods=[4, 5, 6, 7]
+        )
+
+        df = results.to_dataframe()
+        assert isinstance(df, pd.DataFrame)
+        assert len(df) == 1
+        assert "att" in df.columns
+
+    def test_repr(self, sdid_panel_data):
+        """Test string representation."""
+        sdid = SyntheticDiD(n_bootstrap=50, seed=42)
+        results = sdid.fit(
+            sdid_panel_data,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="period",
+            post_periods=[4, 5, 6, 7]
+        )
+
+        repr_str = repr(results)
+        assert "SyntheticDiDResults" in repr_str
+        assert "ATT=" in repr_str
+
+    def test_is_significant_property(self, sdid_panel_data):
+        """Test is_significant property."""
+        sdid = SyntheticDiD(n_bootstrap=100, seed=42)
+        results = sdid.fit(
+            sdid_panel_data,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="period",
+            post_periods=[4, 5, 6, 7]
+        )
+
+        assert isinstance(results.is_significant, bool)
+
+    def test_get_set_params(self):
+        """Test get_params and set_params."""
+        sdid = SyntheticDiD(lambda_reg=1.0, zeta=0.5, alpha=0.10)
+
+        params = sdid.get_params()
+        assert params["lambda_reg"] == 1.0
+        assert params["zeta"] == 0.5
+        assert params["alpha"] == 0.10
+
+        sdid.set_params(lambda_reg=2.0)
+        assert sdid.lambda_reg == 2.0
+
+    def test_missing_unit_column(self, sdid_panel_data):
+        """Test error when unit column is missing."""
+        sdid = SyntheticDiD()
+        with pytest.raises(ValueError, match="Missing columns"):
+            sdid.fit(
+                sdid_panel_data,
+                outcome="outcome",
+                treatment="treated",
+                unit="nonexistent",
+                time="period",
+                post_periods=[4, 5, 6, 7]
+            )
+
+    def test_missing_time_column(self, sdid_panel_data):
+        """Test error when time column is missing."""
+        sdid = SyntheticDiD()
+        with pytest.raises(ValueError, match="Missing columns"):
+            sdid.fit(
+                sdid_panel_data,
+                outcome="outcome",
+                treatment="treated",
+                unit="unit",
+                time="nonexistent",
+                post_periods=[4, 5, 6, 7]
+            )
+
+    def test_no_treated_units_error(self):
+        """Test error when no treated units."""
+        data = pd.DataFrame({
+            "unit": [1, 1, 2, 2],
+            "period": [0, 1, 0, 1],
+            "treated": [0, 0, 0, 0],
+            "outcome": [10, 11, 12, 13],
+        })
+
+        sdid = SyntheticDiD()
+        with pytest.raises(ValueError, match="No treated units"):
+            sdid.fit(
+                data,
+                outcome="outcome",
+                treatment="treated",
+                unit="unit",
+                time="period",
+                post_periods=[1]
+            )
+
+    def test_no_control_units_error(self):
+        """Test error when no control units."""
+        data = pd.DataFrame({
+            "unit": [1, 1, 2, 2],
+            "period": [0, 1, 0, 1],
+            "treated": [1, 1, 1, 1],
+            "outcome": [10, 11, 12, 13],
+        })
+
+        sdid = SyntheticDiD()
+        with pytest.raises(ValueError, match="No control units"):
+            sdid.fit(
+                data,
+                outcome="outcome",
+                treatment="treated",
+                unit="unit",
+                time="period",
+                post_periods=[1]
+            )
+
+    def test_auto_infer_post_periods(self, sdid_panel_data):
+        """Test automatic inference of post-periods."""
+        sdid = SyntheticDiD(n_bootstrap=0, seed=42)
+        results = sdid.fit(
+            sdid_panel_data,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="period"
+            # post_periods not specified
+        )
+
+        # With 8 periods, should infer last 4 as post
+        assert results.pre_periods == [0, 1, 2, 3]
+        assert results.post_periods == [4, 5, 6, 7]
+
+    def test_with_covariates(self, sdid_panel_data):
+        """Test SDID with covariates."""
+        # Add a covariate
+        sdid_panel_data["size"] = np.random.normal(100, 10, len(sdid_panel_data))
+
+        sdid = SyntheticDiD(n_bootstrap=50, seed=42)
+        results = sdid.fit(
+            sdid_panel_data,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="period",
+            post_periods=[4, 5, 6, 7],
+            covariates=["size"]
+        )
+
+        assert results is not None
+        assert sdid.is_fitted_
+
+    def test_confidence_interval_contains_estimate(self, sdid_panel_data):
+        """Test that confidence interval contains the estimate."""
+        sdid = SyntheticDiD(n_bootstrap=100, seed=42)
+        results = sdid.fit(
+            sdid_panel_data,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="period",
+            post_periods=[4, 5, 6, 7]
+        )
+
+        lower, upper = results.conf_int
+        assert lower < results.att < upper
+
+    def test_reproducibility_with_seed(self, sdid_panel_data):
+        """Test that results are reproducible with the same seed."""
+        results1 = SyntheticDiD(n_bootstrap=50, seed=42).fit(
+            sdid_panel_data,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="period",
+            post_periods=[4, 5, 6, 7]
+        )
+
+        results2 = SyntheticDiD(n_bootstrap=50, seed=42).fit(
+            sdid_panel_data,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="period",
+            post_periods=[4, 5, 6, 7]
+        )
+
+        assert results1.att == results2.att
+        assert results1.se == results2.se
+
+
+class TestSyntheticWeightsUtils:
+    """Tests for synthetic weight utility functions."""
+
+    def test_project_simplex(self):
+        """Test simplex projection."""
+        from diff_diff.utils import _project_simplex
+
+        # Already on simplex
+        v = np.array([0.3, 0.3, 0.4])
+        projected = _project_simplex(v)
+        assert abs(np.sum(projected) - 1.0) < 1e-6
+        assert np.all(projected >= 0)
+
+        # Negative values
+        v = np.array([-0.5, 0.5, 1.0])
+        projected = _project_simplex(v)
+        assert abs(np.sum(projected) - 1.0) < 1e-6
+        assert np.all(projected >= 0)
+
+        # Values summing to more than 1
+        v = np.array([0.5, 0.5, 0.5])
+        projected = _project_simplex(v)
+        assert abs(np.sum(projected) - 1.0) < 1e-6
+        assert np.all(projected >= 0)
+
+    def test_compute_synthetic_weights(self):
+        """Test synthetic weight computation."""
+        from diff_diff.utils import compute_synthetic_weights
+
+        np.random.seed(42)
+        n_pre = 5
+        n_control = 10
+
+        Y_control = np.random.randn(n_pre, n_control)
+        Y_treated = np.random.randn(n_pre)
+
+        weights = compute_synthetic_weights(Y_control, Y_treated)
+
+        # Weights should sum to 1
+        assert abs(np.sum(weights) - 1.0) < 1e-6
+        # Weights should be non-negative
+        assert np.all(weights >= 0)
+        # Should have correct length
+        assert len(weights) == n_control
+
+    def test_compute_time_weights(self):
+        """Test time weight computation."""
+        from diff_diff.utils import compute_time_weights
+
+        np.random.seed(42)
+        n_pre = 5
+        n_control = 10
+
+        Y_control = np.random.randn(n_pre, n_control)
+        Y_treated = np.random.randn(n_pre)
+
+        weights = compute_time_weights(Y_control, Y_treated)
+
+        # Weights should sum to 1
+        assert abs(np.sum(weights) - 1.0) < 1e-6
+        # Weights should be non-negative
+        assert np.all(weights >= 0)
+        # Should have correct length
+        assert len(weights) == n_pre
+
+    def test_compute_sdid_estimator(self):
+        """Test SDID estimator computation."""
+        from diff_diff.utils import compute_sdid_estimator
+
+        # Simple case with known answer
+        Y_pre_control = np.array([[10.0], [10.0]])
+        Y_post_control = np.array([[12.0], [12.0]])
+        Y_pre_treated = np.array([10.0, 10.0])
+        Y_post_treated = np.array([15.0, 15.0])
+
+        unit_weights = np.array([1.0])
+        time_weights = np.array([0.5, 0.5])
+
+        tau = compute_sdid_estimator(
+            Y_pre_control, Y_post_control,
+            Y_pre_treated, Y_post_treated,
+            unit_weights, time_weights
+        )
+
+        # Treated: 15 - 10 = 5
+        # Control: 12 - 10 = 2
+        # SDID: 5 - 2 = 3
+        assert abs(tau - 3.0) < 1e-6
