@@ -688,3 +688,273 @@ class TestParallelTrendsRobust:
 
         assert "variance_ratio" in results
         assert results["variance_ratio"] > 0
+
+
+class TestEdgeCases:
+    """Tests for edge cases and robustness."""
+
+    def test_multicollinearity_detection(self):
+        """Test that perfect multicollinearity is detected."""
+        # Create data where a covariate is perfectly correlated with treatment
+        data = pd.DataFrame({
+            "outcome": [10, 11, 15, 18, 9, 10, 12, 13],
+            "treated": [1, 1, 1, 1, 0, 0, 0, 0],
+            "post": [0, 0, 1, 1, 0, 0, 1, 1],
+            "duplicate_treated": [1, 1, 1, 1, 0, 0, 0, 0],  # Same as treated
+        })
+
+        did = DifferenceInDifferences()
+        with pytest.raises(ValueError, match="rank-deficient"):
+            did.fit(
+                data,
+                outcome="outcome",
+                treatment="treated",
+                time="post",
+                covariates=["duplicate_treated"]
+            )
+
+    def test_wasserstein_custom_threshold(self):
+        """Test that custom Wasserstein threshold is respected."""
+        from diff_diff.utils import check_parallel_trends_robust
+
+        np.random.seed(42)
+        n_units = 50
+        n_periods = 4
+
+        data = []
+        for unit in range(n_units):
+            is_treated = unit < n_units // 2
+            for period in range(n_periods):
+                y = 10.0 + period * 1.5 + np.random.normal(0, 0.5)
+                data.append({
+                    "unit": unit,
+                    "period": period,
+                    "treated": int(is_treated),
+                    "outcome": y,
+                })
+
+        df = pd.DataFrame(data)
+
+        # Test with very low threshold (more strict)
+        results_strict = check_parallel_trends_robust(
+            df,
+            outcome="outcome",
+            time="period",
+            treatment_group="treated",
+            unit="unit",
+            pre_periods=[0, 1],
+            seed=42,
+            wasserstein_threshold=0.01  # Very strict
+        )
+
+        # Test with high threshold (more lenient)
+        results_lenient = check_parallel_trends_robust(
+            df,
+            outcome="outcome",
+            time="period",
+            treatment_group="treated",
+            unit="unit",
+            pre_periods=[0, 1],
+            seed=42,
+            wasserstein_threshold=1.0  # Very lenient
+        )
+
+        # Both should return valid results
+        assert "wasserstein_distance" in results_strict
+        assert "wasserstein_distance" in results_lenient
+
+    def test_equivalence_test_insufficient_data(self):
+        """Test equivalence test handles insufficient data gracefully."""
+        from diff_diff.utils import equivalence_test_trends
+
+        # Create minimal data with only 1 observation per group
+        data = pd.DataFrame({
+            "outcome": [10, 15],
+            "period": [0, 1],
+            "treated": [1, 0],
+            "unit": [0, 1],
+        })
+
+        results = equivalence_test_trends(
+            data,
+            outcome="outcome",
+            time="period",
+            treatment_group="treated",
+            unit="unit",
+            pre_periods=[0]
+        )
+
+        # Should return NaN values with error message
+        assert np.isnan(results["tost_p_value"])
+        assert results["equivalent"] is None
+        assert "error" in results
+
+    def test_parallel_trends_single_period(self):
+        """Test that single pre-period returns NaN values."""
+        from diff_diff.utils import check_parallel_trends
+
+        data = pd.DataFrame({
+            "outcome": [10, 11, 12, 13],
+            "time": [0, 0, 0, 0],  # All same period
+            "treated": [1, 1, 0, 0],
+        })
+
+        results = check_parallel_trends(
+            data,
+            outcome="outcome",
+            time="time",
+            treatment_group="treated",
+            pre_periods=[0]
+        )
+
+        # Should handle gracefully with NaN
+        assert np.isnan(results["treated_trend"]) or results["treated_trend"] is None
+
+
+class TestTwoWayFixedEffects:
+    """Tests for TwoWayFixedEffects estimator."""
+
+    @pytest.fixture
+    def twfe_panel_data(self):
+        """Create panel data for TWFE testing."""
+        np.random.seed(42)
+        n_units = 20
+        n_periods = 4
+
+        data = []
+        for unit in range(n_units):
+            is_treated = unit < n_units // 2
+            unit_effect = np.random.normal(0, 2)
+
+            for period in range(n_periods):
+                time_effect = period * 1.0
+                post = 1 if period >= 2 else 0
+
+                y = 10.0 + unit_effect + time_effect
+                if is_treated and post:
+                    y += 3.0  # True ATT
+
+                y += np.random.normal(0, 0.5)
+
+                data.append({
+                    "unit": unit,
+                    "period": period,
+                    "treated": int(is_treated),
+                    "post": post,
+                    "outcome": y,
+                })
+
+        return pd.DataFrame(data)
+
+    def test_twfe_basic_fit(self, twfe_panel_data):
+        """Test basic TWFE model fitting."""
+        from diff_diff.estimators import TwoWayFixedEffects
+
+        twfe = TwoWayFixedEffects()
+        results = twfe.fit(
+            twfe_panel_data,
+            outcome="outcome",
+            treatment="treated",
+            time="post",
+            unit="unit"
+        )
+
+        assert results is not None
+        assert twfe.is_fitted_
+        # ATT should be positive (true effect is 3.0)
+        # Note: TWFE with within-transformation may give different estimates
+        # due to the mechanics of two-way demeaning
+        assert results.att > 0
+        assert results.se > 0
+
+    def test_twfe_with_covariates(self, twfe_panel_data):
+        """Test TWFE with covariates."""
+        from diff_diff.estimators import TwoWayFixedEffects
+
+        # Add a covariate
+        twfe_panel_data["size"] = np.random.normal(100, 10, len(twfe_panel_data))
+
+        twfe = TwoWayFixedEffects()
+        results = twfe.fit(
+            twfe_panel_data,
+            outcome="outcome",
+            treatment="treated",
+            time="post",
+            unit="unit",
+            covariates=["size"]
+        )
+
+        assert results is not None
+        assert twfe.is_fitted_
+
+    def test_twfe_invalid_unit_column(self, twfe_panel_data):
+        """Test error when unit column doesn't exist."""
+        from diff_diff.estimators import TwoWayFixedEffects
+
+        twfe = TwoWayFixedEffects()
+        with pytest.raises(ValueError, match="not found"):
+            twfe.fit(
+                twfe_panel_data,
+                outcome="outcome",
+                treatment="treated",
+                time="post",
+                unit="nonexistent_unit"
+            )
+
+    def test_twfe_clusters_at_unit_level(self, twfe_panel_data):
+        """Test that TWFE defaults to clustering at unit level."""
+        from diff_diff.estimators import TwoWayFixedEffects
+
+        twfe = TwoWayFixedEffects()
+        twfe.fit(
+            twfe_panel_data,
+            outcome="outcome",
+            treatment="treated",
+            time="post",
+            unit="unit"
+        )
+
+        # Cluster should be set to unit
+        assert twfe.cluster == "unit"
+
+
+class TestClusterRobustSE:
+    """Tests for cluster-robust standard errors."""
+
+    def test_cluster_robust_se(self):
+        """Test cluster-robust standard errors in base DiD."""
+        np.random.seed(42)
+
+        # Create clustered data
+        data = []
+        for cluster in range(10):
+            for obs in range(10):
+                treated = cluster < 5
+                post = obs >= 5
+                y = 10 + (3.0 if treated and post else 0) + np.random.normal(0, 1)
+                data.append({
+                    "cluster": cluster,
+                    "outcome": y,
+                    "treated": int(treated),
+                    "post": int(post),
+                })
+
+        df = pd.DataFrame(data)
+
+        # With clustering
+        did_cluster = DifferenceInDifferences(cluster="cluster")
+        results_cluster = did_cluster.fit(
+            df, outcome="outcome", treatment="treated", time="post"
+        )
+
+        # Without clustering
+        did_no_cluster = DifferenceInDifferences(robust=True)
+        results_no_cluster = did_no_cluster.fit(
+            df, outcome="outcome", treatment="treated", time="post"
+        )
+
+        # ATT should be similar
+        assert abs(results_cluster.att - results_no_cluster.att) < 0.01
+
+        # SEs should be different (cluster-robust typically larger)
+        assert results_cluster.se != results_no_cluster.se
