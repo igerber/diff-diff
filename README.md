@@ -68,6 +68,7 @@ Signif. codes: '***' 0.001, '**' 0.01, '*' 0.05, '.' 0.1
 - **Multiple interfaces**: Column names or R-style formulas
 - **Robust inference**: Heteroskedasticity-robust (HC1) and cluster-robust standard errors
 - **Panel data support**: Two-way fixed effects estimator for panel designs
+- **Multi-period analysis**: Event-study style DiD with period-specific treatment effects
 
 ## Usage
 
@@ -187,6 +188,66 @@ results = twfe.fit(
     time='year',
     unit='firm_id'
 )
+```
+
+### Multi-Period DiD (Event Study)
+
+For settings with multiple pre- and post-treatment periods:
+
+```python
+from diff_diff import MultiPeriodDiD
+
+# Fit with multiple time periods
+did = MultiPeriodDiD()
+results = did.fit(
+    panel_data,
+    outcome='sales',
+    treatment='treated',
+    time='period',
+    post_periods=[3, 4, 5],      # Periods 3-5 are post-treatment
+    reference_period=0           # Reference period for comparison
+)
+
+# View period-specific treatment effects
+for period, effect in results.period_effects.items():
+    print(f"Period {period}: {effect.effect:.3f} (SE: {effect.se:.3f})")
+
+# View average treatment effect across post-periods
+print(f"Average ATT: {results.avg_att:.3f}")
+print(f"Average SE: {results.avg_se:.3f}")
+
+# Full summary with all period effects
+results.print_summary()
+```
+
+Output:
+```
+================================================================================
+            Multi-Period Difference-in-Differences Estimation Results
+================================================================================
+
+Observations:                      600
+Pre-treatment periods:             3
+Post-treatment periods:            3
+
+--------------------------------------------------------------------------------
+Average Treatment Effect
+--------------------------------------------------------------------------------
+Average ATT       5.2000       0.8234      6.315      0.0000
+--------------------------------------------------------------------------------
+95% Confidence Interval: [3.5862, 6.8138]
+
+Period-Specific Effects:
+--------------------------------------------------------------------------------
+Period            Effect     Std. Err.     t-stat      P>|t|
+--------------------------------------------------------------------------------
+3                 4.5000       0.9512      4.731      0.0000***
+4                 5.2000       0.8876      5.858      0.0000***
+5                 5.9000       0.9123      6.468      0.0000***
+--------------------------------------------------------------------------------
+
+Signif. codes: '***' 0.001, '**' 0.01, '*' 0.05, '.' 0.1
+================================================================================
 ```
 
 ## Working with Results
@@ -359,6 +420,71 @@ DifferenceInDifferences(
 | `print_summary(alpha)` | Print summary to stdout |
 | `to_dict()` | Convert to dictionary |
 | `to_dataframe()` | Convert to pandas DataFrame |
+
+### MultiPeriodDiD
+
+```python
+MultiPeriodDiD(
+    robust=True,      # Use HC1 robust standard errors
+    cluster=None,     # Column for cluster-robust SEs
+    alpha=0.05        # Significance level for CIs
+)
+```
+
+**fit() Parameters:**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `data` | DataFrame | Input data |
+| `outcome` | str | Outcome variable column name |
+| `treatment` | str | Treatment indicator column (0/1) |
+| `time` | str | Time period column (multiple values) |
+| `post_periods` | list | List of post-treatment period values |
+| `covariates` | list | Linear control variables |
+| `fixed_effects` | list | Categorical FE columns (creates dummies) |
+| `absorb` | list | High-dimensional FE (within-transformation) |
+| `reference_period` | any | Omitted period for time dummies |
+
+### MultiPeriodDiDResults
+
+**Attributes:**
+
+| Attribute | Description |
+|-----------|-------------|
+| `period_effects` | Dict mapping periods to PeriodEffect objects |
+| `avg_att` | Average ATT across post-treatment periods |
+| `avg_se` | Standard error of average ATT |
+| `avg_t_stat` | T-statistic for average ATT |
+| `avg_p_value` | P-value for average ATT |
+| `avg_conf_int` | Confidence interval for average ATT |
+| `n_obs` | Number of observations |
+| `pre_periods` | List of pre-treatment periods |
+| `post_periods` | List of post-treatment periods |
+
+**Methods:**
+
+| Method | Description |
+|--------|-------------|
+| `get_effect(period)` | Get PeriodEffect for specific period |
+| `summary(alpha)` | Get formatted summary string |
+| `print_summary(alpha)` | Print summary to stdout |
+| `to_dict()` | Convert to dictionary |
+| `to_dataframe()` | Convert to pandas DataFrame |
+
+### PeriodEffect
+
+**Attributes:**
+
+| Attribute | Description |
+|-----------|-------------|
+| `period` | Time period identifier |
+| `effect` | Treatment effect estimate |
+| `se` | Standard error |
+| `t_stat` | T-statistic |
+| `p_value` | P-value |
+| `conf_int` | Confidence interval |
+| `is_significant` | Boolean for significance at 0.05 |
+| `significance_stars` | String of significance stars |
 
 ## Requirements
 
