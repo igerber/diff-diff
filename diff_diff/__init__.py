@@ -8,7 +8,7 @@ using the difference-in-differences methodology.
 from diff_diff.estimators import DifferenceInDifferences, MultiPeriodDiD
 from diff_diff.results import DiDResults, MultiPeriodDiDResults, PeriodEffect
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 __all__ = [
     "DifferenceInDifferences",
     "MultiPeriodDiD",
