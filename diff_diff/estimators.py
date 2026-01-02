@@ -169,6 +169,10 @@ class DifferenceInDifferences:
         # Validate inputs
         self._validate_data(data, outcome, treatment, time, covariates)
 
+        # Validate binary variables BEFORE any transformations
+        validate_binary(data[treatment].values, "treatment")
+        validate_binary(data[time].values, "time")
+
         # Validate fixed effects and absorb columns
         if fixed_effects:
             for fe in fixed_effects:
@@ -186,6 +190,9 @@ class DifferenceInDifferences:
 
         if absorb:
             # Apply within-transformation for each absorbed variable
+            # Only demean outcome and covariates, NOT treatment/time indicators
+            # Treatment is typically time-invariant (within unit), and time is
+            # unit-invariant, so demeaning them would create multicollinearity
             vars_to_demean = [outcome] + (covariates or [])
             for ab_var in absorb:
                 n_absorbed_effects += working_data[ab_var].nunique() - 1
@@ -194,14 +201,10 @@ class DifferenceInDifferences:
                     working_data[var] = working_data[var] - group_means
                 absorbed_vars.append(ab_var)
 
-        # Extract variables
+        # Extract variables (may be demeaned if absorb was used)
         y = working_data[outcome].values.astype(float)
         d = working_data[treatment].values.astype(float)
         t = working_data[time].values.astype(float)
-
-        # Validate binary variables
-        validate_binary(d, "treatment")
-        validate_binary(t, "time")
 
         # Create interaction term
         dt = d * t
@@ -220,7 +223,8 @@ class DifferenceInDifferences:
         if fixed_effects:
             for fe in fixed_effects:
                 # Create dummies, drop first category to avoid multicollinearity
-                dummies = pd.get_dummies(data[fe], prefix=fe, drop_first=True)
+                # Use working_data to be consistent with absorbed FE if both are used
+                dummies = pd.get_dummies(working_data[fe], prefix=fe, drop_first=True)
                 for col in dummies.columns:
                     X = np.column_stack([X, dummies[col].values.astype(float)])
                     var_names.append(col)
@@ -298,7 +302,21 @@ class DifferenceInDifferences:
         -------
         tuple
             (coefficients, residuals, fitted_values, r_squared)
+
+        Raises
+        ------
+        ValueError
+            If design matrix is rank-deficient (perfect multicollinearity).
         """
+        # Check for rank deficiency (perfect multicollinearity)
+        rank = np.linalg.matrix_rank(X)
+        if rank < X.shape[1]:
+            raise ValueError(
+                f"Design matrix is rank-deficient (rank {rank} < {X.shape[1]} columns). "
+                "This indicates perfect multicollinearity. Check your fixed effects "
+                "and covariates for linear dependencies."
+            )
+
         # Solve normal equations: β = (X'X)^(-1) X'y
         coefficients = np.linalg.lstsq(X, y, rcond=None)[0]
 
