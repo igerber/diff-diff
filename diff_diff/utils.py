@@ -633,3 +633,335 @@ def equivalence_test_trends(
         "degrees_of_freedom": df,
         "equivalent": bool(tost_p < 0.05),
     }
+
+
+def compute_synthetic_weights(
+    Y_control: np.ndarray,
+    Y_treated: np.ndarray,
+    lambda_reg: float = 0.0,
+    min_weight: float = 1e-6
+) -> np.ndarray:
+    """
+    Compute synthetic control unit weights using constrained optimization.
+
+    Finds weights ω that minimize the squared difference between the
+    weighted average of control unit outcomes and the treated unit outcomes
+    during pre-treatment periods.
+
+    Parameters
+    ----------
+    Y_control : np.ndarray
+        Control unit outcomes matrix of shape (n_pre_periods, n_control_units).
+        Each column is a control unit, each row is a pre-treatment period.
+    Y_treated : np.ndarray
+        Treated unit mean outcomes of shape (n_pre_periods,).
+        Average across treated units for each pre-treatment period.
+    lambda_reg : float, default=0.0
+        L2 regularization parameter. Larger values shrink weights toward
+        uniform (1/n_control). Helps prevent overfitting when n_pre < n_control.
+    min_weight : float, default=1e-6
+        Minimum weight threshold. Weights below this are set to zero.
+
+    Returns
+    -------
+    np.ndarray
+        Unit weights of shape (n_control_units,) that sum to 1.
+
+    Notes
+    -----
+    Solves the quadratic program:
+
+        min_ω ||Y_treated - Y_control @ ω||² + λ||ω - 1/n||²
+        s.t. ω >= 0, sum(ω) = 1
+
+    Uses a simplified coordinate descent approach with projection onto simplex.
+    """
+    n_pre, n_control = Y_control.shape
+
+    if n_control == 0:
+        return np.array([])
+
+    if n_control == 1:
+        return np.array([1.0])
+
+    # Initialize with uniform weights
+    weights = np.ones(n_control) / n_control
+
+    # Precompute matrices for optimization
+    # Objective: ||Y_treated - Y_control @ w||^2 + lambda * ||w - w_uniform||^2
+    # = w' @ (Y_control' @ Y_control + lambda * I) @ w - 2 * (Y_control' @ Y_treated + lambda * w_uniform)' @ w + const
+    YtY = Y_control.T @ Y_control
+    YtT = Y_control.T @ Y_treated
+    w_uniform = np.ones(n_control) / n_control
+
+    # Add regularization
+    H = YtY + lambda_reg * np.eye(n_control)
+    f = YtT + lambda_reg * w_uniform
+
+    # Solve with projected gradient descent
+    # Project onto probability simplex
+    max_iter = 1000
+    tol = 1e-8
+    step_size = 1.0 / (np.linalg.norm(H, 2) + 1e-10)
+
+    for _ in range(max_iter):
+        weights_old = weights.copy()
+
+        # Gradient step: minimize ||Y - Y_control @ w||^2
+        grad = H @ weights - f
+        weights = weights - step_size * grad
+
+        # Project onto simplex (sum to 1, non-negative)
+        weights = _project_simplex(weights)
+
+        # Check convergence
+        if np.linalg.norm(weights - weights_old) < tol:
+            break
+
+    # Set small weights to zero for interpretability
+    weights[weights < min_weight] = 0
+    if np.sum(weights) > 0:
+        weights = weights / np.sum(weights)
+    else:
+        # Fallback to uniform if all weights are zeroed
+        weights = np.ones(n_control) / n_control
+
+    return weights
+
+
+def _project_simplex(v: np.ndarray) -> np.ndarray:
+    """
+    Project vector onto probability simplex (sum to 1, non-negative).
+
+    Uses the algorithm from Duchi et al. (2008).
+
+    Parameters
+    ----------
+    v : np.ndarray
+        Vector to project.
+
+    Returns
+    -------
+    np.ndarray
+        Projected vector on the simplex.
+    """
+    n = len(v)
+    if n == 0:
+        return v
+
+    # Sort in descending order
+    u = np.sort(v)[::-1]
+
+    # Find the threshold
+    cssv = np.cumsum(u)
+    rho = np.where(u > (cssv - 1) / np.arange(1, n + 1))[0]
+
+    if len(rho) == 0:
+        # All elements are negative or zero
+        rho_val = 0
+    else:
+        rho_val = rho[-1]
+
+    theta = (cssv[rho_val] - 1) / (rho_val + 1)
+
+    return np.maximum(v - theta, 0)
+
+
+def compute_time_weights(
+    Y_control: np.ndarray,
+    Y_treated: np.ndarray,
+    zeta: float = 1.0
+) -> np.ndarray:
+    """
+    Compute time weights for synthetic DiD.
+
+    Time weights emphasize pre-treatment periods where the outcome
+    is more informative for constructing the synthetic control.
+    Based on the SDID approach from Arkhangelsky et al. (2021).
+
+    Parameters
+    ----------
+    Y_control : np.ndarray
+        Control unit outcomes of shape (n_pre_periods, n_control_units).
+    Y_treated : np.ndarray
+        Treated unit mean outcomes of shape (n_pre_periods,).
+    zeta : float, default=1.0
+        Regularization parameter for time weights. Higher values
+        give more uniform weights.
+
+    Returns
+    -------
+    np.ndarray
+        Time weights of shape (n_pre_periods,) that sum to 1.
+
+    Notes
+    -----
+    The time weights help interpolate between DiD (uniform weights)
+    and synthetic control (weights concentrated on similar periods).
+    """
+    n_pre = len(Y_treated)
+
+    if n_pre <= 1:
+        return np.ones(n_pre)
+
+    # Compute mean control outcomes per period
+    control_means = np.mean(Y_control, axis=1)
+
+    # Compute differences from treated
+    diffs = np.abs(Y_treated - control_means)
+
+    # Inverse weighting: periods with smaller differences get higher weight
+    # Add regularization to prevent extreme weights
+    inv_diffs = 1.0 / (diffs + zeta * np.std(diffs) + 1e-10)
+
+    # Normalize to sum to 1
+    weights = inv_diffs / np.sum(inv_diffs)
+
+    return weights
+
+
+def compute_sdid_estimator(
+    Y_pre_control: np.ndarray,
+    Y_post_control: np.ndarray,
+    Y_pre_treated: np.ndarray,
+    Y_post_treated: np.ndarray,
+    unit_weights: np.ndarray,
+    time_weights: np.ndarray
+) -> float:
+    """
+    Compute the Synthetic DiD estimator.
+
+    Parameters
+    ----------
+    Y_pre_control : np.ndarray
+        Control outcomes in pre-treatment periods, shape (n_pre, n_control).
+    Y_post_control : np.ndarray
+        Control outcomes in post-treatment periods, shape (n_post, n_control).
+    Y_pre_treated : np.ndarray
+        Treated unit outcomes in pre-treatment periods, shape (n_pre,).
+    Y_post_treated : np.ndarray
+        Treated unit outcomes in post-treatment periods, shape (n_post,).
+    unit_weights : np.ndarray
+        Weights for control units, shape (n_control,).
+    time_weights : np.ndarray
+        Weights for pre-treatment periods, shape (n_pre,).
+
+    Returns
+    -------
+    float
+        The synthetic DiD treatment effect estimate.
+
+    Notes
+    -----
+    The SDID estimator is:
+
+        τ̂ = (Ȳ_treated,post - Σ_t λ_t * Y_treated,t)
+            - Σ_j ω_j * (Ȳ_j,post - Σ_t λ_t * Y_j,t)
+
+    Where:
+    - ω_j are unit weights
+    - λ_t are time weights
+    - Ȳ denotes average over post periods
+    """
+    # Weighted pre-treatment averages
+    weighted_pre_control = time_weights @ Y_pre_control  # shape: (n_control,)
+    weighted_pre_treated = time_weights @ Y_pre_treated  # scalar
+
+    # Post-treatment averages
+    mean_post_control = np.mean(Y_post_control, axis=0)  # shape: (n_control,)
+    mean_post_treated = np.mean(Y_post_treated)  # scalar
+
+    # DiD for treated: post - weighted pre
+    did_treated = mean_post_treated - weighted_pre_treated
+
+    # Weighted DiD for controls: sum over j of omega_j * (post_j - weighted_pre_j)
+    did_control = unit_weights @ (mean_post_control - weighted_pre_control)
+
+    # SDID estimator
+    tau = did_treated - did_control
+
+    return tau
+
+
+def compute_placebo_effects(
+    Y_pre_control: np.ndarray,
+    Y_post_control: np.ndarray,
+    Y_pre_treated: np.ndarray,
+    unit_weights: np.ndarray,
+    time_weights: np.ndarray,
+    control_unit_ids: list,
+    n_placebo: int = None
+) -> np.ndarray:
+    """
+    Compute placebo treatment effects by treating each control as treated.
+
+    Used for inference in synthetic DiD when bootstrap is not appropriate.
+
+    Parameters
+    ----------
+    Y_pre_control : np.ndarray
+        Control outcomes in pre-treatment periods, shape (n_pre, n_control).
+    Y_post_control : np.ndarray
+        Control outcomes in post-treatment periods, shape (n_post, n_control).
+    Y_pre_treated : np.ndarray
+        Treated outcomes in pre-treatment periods, shape (n_pre,).
+    unit_weights : np.ndarray
+        Unit weights, shape (n_control,).
+    time_weights : np.ndarray
+        Time weights, shape (n_pre,).
+    control_unit_ids : list
+        List of control unit identifiers.
+    n_placebo : int, optional
+        Number of placebo tests. If None, uses all control units.
+
+    Returns
+    -------
+    np.ndarray
+        Array of placebo treatment effects.
+
+    Notes
+    -----
+    For each control unit j, we pretend it was treated and compute
+    the SDID estimate using the remaining controls. The distribution
+    of these placebo effects provides a reference for inference.
+    """
+    n_pre, n_control = Y_pre_control.shape
+
+    if n_placebo is None:
+        n_placebo = n_control
+
+    placebo_effects = []
+
+    for j in range(min(n_placebo, n_control)):
+        # Treat unit j as the "treated" unit
+        Y_pre_placebo_treated = Y_pre_control[:, j]
+        Y_post_placebo_treated = Y_post_control[:, j]
+
+        # Use remaining units as controls
+        remaining_idx = [i for i in range(n_control) if i != j]
+
+        if len(remaining_idx) == 0:
+            continue
+
+        Y_pre_remaining = Y_pre_control[:, remaining_idx]
+        Y_post_remaining = Y_post_control[:, remaining_idx]
+
+        # Recompute weights for remaining controls
+        remaining_weights = compute_synthetic_weights(
+            Y_pre_remaining,
+            Y_pre_placebo_treated
+        )
+
+        # Compute placebo effect
+        placebo_tau = compute_sdid_estimator(
+            Y_pre_remaining,
+            Y_post_remaining,
+            Y_pre_placebo_treated,
+            Y_post_placebo_treated,
+            remaining_weights,
+            time_weights
+        )
+
+        placebo_effects.append(placebo_tau)
+
+    return np.array(placebo_effects)

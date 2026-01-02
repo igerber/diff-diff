@@ -69,6 +69,7 @@ Signif. codes: '***' 0.001, '**' 0.01, '*' 0.05, '.' 0.1
 - **Robust inference**: Heteroskedasticity-robust (HC1) and cluster-robust standard errors
 - **Panel data support**: Two-way fixed effects estimator for panel designs
 - **Multi-period analysis**: Event-study style DiD with period-specific treatment effects
+- **Synthetic DiD**: Combined DiD with synthetic control for improved robustness
 
 ## Usage
 
@@ -248,6 +249,130 @@ Period            Effect     Std. Err.     t-stat      P>|t|
 
 Signif. codes: '***' 0.001, '**' 0.01, '*' 0.05, '.' 0.1
 ================================================================================
+```
+
+### Synthetic Difference-in-Differences
+
+Synthetic DiD combines the strengths of Difference-in-Differences and Synthetic Control methods by re-weighting control units to better match treated units' pre-treatment outcomes.
+
+```python
+from diff_diff import SyntheticDiD
+
+# Fit Synthetic DiD model
+sdid = SyntheticDiD()
+results = sdid.fit(
+    panel_data,
+    outcome='gdp_growth',
+    treatment='treated',
+    unit='state',
+    time='year',
+    post_periods=[2015, 2016, 2017, 2018]
+)
+
+# View results
+results.print_summary()
+print(f"ATT: {results.att:.3f} (SE: {results.se:.3f})")
+
+# Examine unit weights (which control units matter most)
+weights_df = results.get_unit_weights_df()
+print(weights_df.head(10))
+
+# Examine time weights
+time_weights_df = results.get_time_weights_df()
+print(time_weights_df)
+```
+
+Output:
+```
+===========================================================================
+         Synthetic Difference-in-Differences Estimation Results
+===========================================================================
+
+Observations:                      500
+Treated units:                       1
+Control units:                      49
+Pre-treatment periods:               6
+Post-treatment periods:              4
+Regularization (lambda):        0.0000
+Pre-treatment fit (RMSE):       0.1234
+
+---------------------------------------------------------------------------
+Parameter         Estimate     Std. Err.     t-stat      P>|t|
+---------------------------------------------------------------------------
+ATT                 2.5000       0.4521      5.530      0.0000
+---------------------------------------------------------------------------
+
+95% Confidence Interval: [1.6139, 3.3861]
+
+---------------------------------------------------------------------------
+                   Top Unit Weights (Synthetic Control)
+---------------------------------------------------------------------------
+  Unit state_12: 0.3521
+  Unit state_5: 0.2156
+  Unit state_23: 0.1834
+  Unit state_8: 0.1245
+  Unit state_31: 0.0892
+  (8 units with weight > 0.001)
+
+Signif. codes: '***' 0.001, '**' 0.01, '*' 0.05, '.' 0.1
+===========================================================================
+```
+
+#### When to Use Synthetic DiD Over Vanilla DiD
+
+Use Synthetic DiD instead of standard DiD when:
+
+1. **Few treated units**: When you have only one or a small number of treated units (e.g., a single state passed a policy), standard DiD averages across all controls equally. Synthetic DiD finds the optimal weighted combination of controls.
+
+   ```python
+   # Example: California passed a policy, want to estimate its effect
+   # Standard DiD would compare CA to the average of all other states
+   # Synthetic DiD finds states that together best match CA's pre-treatment trend
+   ```
+
+2. **Parallel trends is questionable**: When treated and control groups have different pre-treatment levels or trends, Synthetic DiD can construct a better counterfactual by matching the pre-treatment trajectory.
+
+   ```python
+   # Example: A tech hub city vs rural areas
+   # Rural areas may not be a good comparison on average
+   # Synthetic DiD can weight urban/suburban controls more heavily
+   ```
+
+3. **Heterogeneous control units**: When control units are very different from each other, equal weighting (as in standard DiD) is suboptimal.
+
+   ```python
+   # Example: Comparing a treated developing country to other countries
+   # Some control countries may be much more similar economically
+   # Synthetic DiD upweights the most comparable controls
+   ```
+
+4. **You want transparency**: Synthetic DiD provides explicit unit weights showing which controls contribute most to the comparison.
+
+   ```python
+   # See exactly which units are driving the counterfactual
+   print(results.get_unit_weights_df())
+   ```
+
+**Key differences from standard DiD:**
+
+| Aspect | Standard DiD | Synthetic DiD |
+|--------|--------------|---------------|
+| Control weighting | Equal (1/N) | Optimized to match pre-treatment |
+| Time weighting | Equal across periods | Can emphasize informative periods |
+| N treated required | Can be many | Works with 1 treated unit |
+| Parallel trends | Assumed | Partially relaxed via matching |
+| Interpretability | Simple average | Explicit weights |
+
+**Parameters:**
+
+```python
+SyntheticDiD(
+    lambda_reg=0.0,     # Regularization toward uniform weights (0 = no reg)
+    zeta=1.0,           # Time weight regularization (higher = more uniform)
+    alpha=0.05,         # Significance level
+    n_bootstrap=200,    # Bootstrap iterations for SE (0 = placebo-based)
+    seed=None           # Random seed for reproducibility
+)
 ```
 
 ## Working with Results
@@ -485,6 +610,62 @@ MultiPeriodDiD(
 | `conf_int` | Confidence interval |
 | `is_significant` | Boolean for significance at 0.05 |
 | `significance_stars` | String of significance stars |
+
+### SyntheticDiD
+
+```python
+SyntheticDiD(
+    lambda_reg=0.0,     # L2 regularization for unit weights
+    zeta=1.0,           # Regularization for time weights
+    alpha=0.05,         # Significance level for CIs
+    n_bootstrap=200,    # Bootstrap iterations for SE
+    seed=None           # Random seed for reproducibility
+)
+```
+
+**fit() Parameters:**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `data` | DataFrame | Panel data |
+| `outcome` | str | Outcome variable column name |
+| `treatment` | str | Treatment indicator column (0/1) |
+| `unit` | str | Unit identifier column |
+| `time` | str | Time period column |
+| `post_periods` | list | List of post-treatment period values |
+| `covariates` | list | Covariates to residualize out |
+
+### SyntheticDiDResults
+
+**Attributes:**
+
+| Attribute | Description |
+|-----------|-------------|
+| `att` | Average Treatment effect on the Treated |
+| `se` | Standard error (bootstrap or placebo-based) |
+| `t_stat` | T-statistic |
+| `p_value` | P-value |
+| `conf_int` | Confidence interval |
+| `n_obs` | Number of observations |
+| `n_treated` | Number of treated units |
+| `n_control` | Number of control units |
+| `unit_weights` | Dict mapping control unit IDs to weights |
+| `time_weights` | Dict mapping pre-treatment periods to weights |
+| `pre_periods` | List of pre-treatment periods |
+| `post_periods` | List of post-treatment periods |
+| `pre_treatment_fit` | RMSE of synthetic vs treated in pre-period |
+| `placebo_effects` | Array of placebo effect estimates |
+
+**Methods:**
+
+| Method | Description |
+|--------|-------------|
+| `summary(alpha)` | Get formatted summary string |
+| `print_summary(alpha)` | Print summary to stdout |
+| `to_dict()` | Convert to dictionary |
+| `to_dataframe()` | Convert to pandas DataFrame |
+| `get_unit_weights_df()` | Get unit weights as DataFrame |
+| `get_time_weights_df()` | Get time weights as DataFrame |
 
 ## Requirements
 
