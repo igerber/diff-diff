@@ -7,7 +7,7 @@ name = "diff-diff"
 version = "0.1.0"
 description = "A library for Difference-in-Differences causal inference analysis"
 readme = "README.md"
-license = "MIT"
+license = {text = "MIT"}
 requires-python = ">=3.9"
 authors = [
     {name = "diff-diff contributors"}
