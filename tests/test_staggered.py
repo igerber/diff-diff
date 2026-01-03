@@ -652,3 +652,96 @@ class TestCallawaySantAnnaCovariates:
         # Note: we use a generous bound due to finite sample variance
         assert results.overall_att > 0, "ATT should be positive"
         assert abs(results.overall_att - 3.0) < 2.0, f"ATT={results.overall_att} too far from 3.0"
+
+    def test_extreme_propensity_scores(self):
+        """Test that propensity score clipping handles near-perfect separation."""
+        np.random.seed(42)
+
+        # Create data where treatment is almost perfectly predicted by covariate
+        n_units = 100
+        n_periods = 10
+
+        units = np.repeat(np.arange(n_units), n_periods)
+        times = np.tile(np.arange(n_periods), n_units)
+
+        # Covariate that almost perfectly predicts treatment
+        x_extreme = np.zeros(n_units)
+        x_extreme[:30] = -10  # never treated, very negative
+        x_extreme[30:] = 10   # treated, very positive
+
+        first_treat = np.zeros(n_units)
+        first_treat[30:] = 5  # treated from period 5
+
+        x_extreme_expanded = np.repeat(x_extreme, n_periods)
+        first_treat_expanded = np.repeat(first_treat, n_periods)
+
+        post = (times >= first_treat_expanded) & (first_treat_expanded > 0)
+        outcomes = 1.0 + 2.0 * post + np.random.randn(len(units)) * 0.5
+
+        df = pd.DataFrame({
+            'unit': units,
+            'time': times,
+            'outcome': outcomes,
+            'first_treat': first_treat_expanded.astype(int),
+            'x_extreme': x_extreme_expanded,
+        })
+
+        # Should not raise errors despite extreme propensity scores
+        cs = CallawaySantAnna(estimation_method='ipw')
+        results = cs.fit(
+            df,
+            outcome='outcome',
+            unit='unit',
+            time='time',
+            first_treat='first_treat',
+            covariates=['x_extreme']
+        )
+
+        assert results.overall_att is not None
+        assert np.isfinite(results.overall_att)
+        assert results.overall_se > 0
+
+    def test_near_collinear_covariates(self):
+        """Test that near-collinear covariates are handled gracefully."""
+        data = generate_staggered_data_with_covariates(seed=42)
+
+        # Add a near-collinear covariate (x1 + small noise)
+        data['x1_copy'] = data['x1'] + np.random.randn(len(data)) * 1e-8
+
+        cs = CallawaySantAnna(estimation_method='reg')
+        results = cs.fit(
+            data,
+            outcome='outcome',
+            unit='unit',
+            time='time',
+            first_treat='first_treat',
+            covariates=['x1', 'x1_copy']  # Nearly collinear
+        )
+
+        # Should still produce valid results (lstsq handles this)
+        assert results.overall_att is not None
+        assert np.isfinite(results.overall_att)
+
+    def test_missing_values_in_covariates_warning(self):
+        """Test that missing values trigger fallback warning."""
+        data = generate_staggered_data_with_covariates(seed=42)
+
+        # Introduce NaN in covariate
+        data.loc[data['time'] == 2, 'x1'] = np.nan
+
+        cs = CallawaySantAnna()
+
+        # Should warn about missing values and fall back to unconditional
+        with pytest.warns(UserWarning, match="Missing values in covariates"):
+            results = cs.fit(
+                data,
+                outcome='outcome',
+                unit='unit',
+                time='time',
+                first_treat='first_treat',
+                covariates=['x1', 'x2']
+            )
+
+        # Should still produce valid results (using unconditional estimation)
+        assert results.overall_att is not None
+        assert results.overall_se > 0
