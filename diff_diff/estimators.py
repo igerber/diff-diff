@@ -2,7 +2,7 @@
 Difference-in-Differences estimators with sklearn-like API.
 """
 
-from typing import Optional, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd
@@ -105,13 +105,13 @@ class DifferenceInDifferences:
     def fit(
         self,
         data: pd.DataFrame,
-        outcome: str = None,
-        treatment: str = None,
-        time: str = None,
-        formula: str = None,
-        covariates: list = None,
-        fixed_effects: list = None,
-        absorb: list = None
+        outcome: Optional[str] = None,
+        treatment: Optional[str] = None,
+        time: Optional[str] = None,
+        formula: Optional[str] = None,
+        covariates: Optional[List[str]] = None,
+        fixed_effects: Optional[List[str]] = None,
+        absorb: Optional[List[str]] = None
     ) -> DiDResults:
         """
         Fit the Difference-in-Differences model.
@@ -247,7 +247,8 @@ class DifferenceInDifferences:
             n = len(y)
             k = X.shape[1]
             mse = np.sum(residuals ** 2) / (n - k)
-            vcov = mse * np.linalg.inv(X.T @ X)
+            # Use solve() instead of inv() for numerical stability
+            vcov = np.linalg.solve(X.T @ X, mse * np.eye(k))
 
         # Extract ATT (coefficient on interaction term)
         att_idx = 3  # Index of interaction term
@@ -291,7 +292,7 @@ class DifferenceInDifferences:
 
         return self.results_
 
-    def _fit_ols(self, X: np.ndarray, y: np.ndarray) -> tuple:
+    def _fit_ols(self, X: np.ndarray, y: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray, float]:
         """
         Fit OLS regression.
 
@@ -337,7 +338,7 @@ class DifferenceInDifferences:
 
     def _parse_formula(
         self, formula: str, data: pd.DataFrame
-    ) -> tuple:
+    ) -> Tuple[str, str, str, Optional[List[str]]]:
         """
         Parse R-style formula.
 
@@ -434,7 +435,7 @@ class DifferenceInDifferences:
         outcome: str,
         treatment: str,
         time: str,
-        covariates: list = None
+        covariates: Optional[List[str]] = None
     ) -> None:
         """Validate input data."""
         # Check DataFrame
@@ -485,13 +486,13 @@ class DifferenceInDifferences:
             "Use results_.fitted_values for training data predictions."
         )
 
-    def get_params(self) -> dict:
+    def get_params(self) -> Dict[str, Any]:
         """
         Get estimator parameters (sklearn-compatible).
 
         Returns
         -------
-        dict
+        Dict[str, Any]
             Estimator parameters.
         """
         return {
@@ -576,7 +577,7 @@ class TwoWayFixedEffects(DifferenceInDifferences):
         treatment: str,
         time: str,
         unit: str,
-        covariates: list = None
+        covariates: Optional[List[str]] = None
     ) -> DiDResults:
         """
         Fit Two-Way Fixed Effects model.
@@ -605,9 +606,8 @@ class TwoWayFixedEffects(DifferenceInDifferences):
         if unit not in data.columns:
             raise ValueError(f"Unit column '{unit}' not found in data")
 
-        # Set cluster to unit level if not specified
-        if self.cluster is None:
-            self.cluster = unit
+        # Use unit-level clustering if not specified (use local variable to avoid mutation)
+        cluster_var = self.cluster if self.cluster is not None else unit
 
         # Demean data (within transformation for fixed effects)
         data_demeaned = self._within_transform(data, outcome, unit, time, covariates)
@@ -636,7 +636,7 @@ class TwoWayFixedEffects(DifferenceInDifferences):
         att = coefficients[1]
 
         # Compute cluster-robust standard errors
-        cluster_ids = data[self.cluster].values
+        cluster_ids = data[cluster_var].values
         vcov = compute_robust_se(X, residuals, cluster_ids)
         se = np.sqrt(vcov[1, 1])
 
@@ -680,7 +680,7 @@ class TwoWayFixedEffects(DifferenceInDifferences):
         outcome: str,
         unit: str,
         time: str,
-        covariates: list = None
+        covariates: Optional[List[str]] = None
     ) -> pd.DataFrame:
         """
         Apply within transformation to remove unit and time fixed effects.
@@ -796,11 +796,11 @@ class MultiPeriodDiD(DifferenceInDifferences):
         outcome: str,
         treatment: str,
         time: str,
-        post_periods: list = None,
-        covariates: list = None,
-        fixed_effects: list = None,
-        absorb: list = None,
-        reference_period: any = None
+        post_periods: Optional[List[Any]] = None,
+        covariates: Optional[List[str]] = None,
+        fixed_effects: Optional[List[str]] = None,
+        absorb: Optional[List[str]] = None,
+        reference_period: Any = None
     ) -> MultiPeriodDiDResults:
         """
         Fit the Multi-Period Difference-in-Differences model.
@@ -962,7 +962,8 @@ class MultiPeriodDiD(DifferenceInDifferences):
             n = len(y)
             k = X.shape[1]
             mse = np.sum(residuals ** 2) / (n - k)
-            vcov = mse * np.linalg.inv(X.T @ X)
+            # Use solve() instead of inv() for numerical stability
+            vcov = np.linalg.solve(X.T @ X, mse * np.eye(k))
 
         # Degrees of freedom
         df = len(y) - X.shape[1] - n_absorbed_effects
@@ -1157,7 +1158,7 @@ class SyntheticDiD(DifferenceInDifferences):
         zeta: float = 1.0,
         alpha: float = 0.05,
         n_bootstrap: int = 200,
-        seed: int = None
+        seed: Optional[int] = None
     ):
         super().__init__(robust=True, cluster=None, alpha=alpha)
         self.lambda_reg = lambda_reg
@@ -1175,8 +1176,8 @@ class SyntheticDiD(DifferenceInDifferences):
         treatment: str,
         unit: str,
         time: str,
-        post_periods: list = None,
-        covariates: list = None
+        post_periods: Optional[List[Any]] = None,
+        covariates: Optional[List[str]] = None
     ) -> SyntheticDiDResults:
         """
         Fit the Synthetic Difference-in-Differences model.
@@ -1391,11 +1392,11 @@ class SyntheticDiD(DifferenceInDifferences):
         outcome: str,
         unit: str,
         time: str,
-        pre_periods: list,
-        post_periods: list,
-        treated_units: list,
-        control_units: list
-    ) -> tuple:
+        pre_periods: List[Any],
+        post_periods: List[Any],
+        treated_units: List[Any],
+        control_units: List[Any]
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """
         Create outcome matrices for SDID estimation.
 
@@ -1425,7 +1426,7 @@ class SyntheticDiD(DifferenceInDifferences):
         self,
         data: pd.DataFrame,
         outcome: str,
-        covariates: list,
+        covariates: List[str],
         unit: str,
         time: str
     ) -> pd.DataFrame:
@@ -1467,11 +1468,11 @@ class SyntheticDiD(DifferenceInDifferences):
         outcome: str,
         unit: str,
         time: str,
-        pre_periods: list,
-        post_periods: list,
-        treated_units: list,
-        control_units: list
-    ) -> tuple:
+        pre_periods: List[Any],
+        post_periods: List[Any],
+        treated_units: List[Any],
+        control_units: List[Any]
+    ) -> Tuple[float, np.ndarray]:
         """
         Compute bootstrap standard error.
 
@@ -1527,8 +1528,9 @@ class SyntheticDiD(DifferenceInDifferences):
                 )
                 bootstrap_estimates.append(tau)
 
-            except Exception:
-                # Skip failed bootstrap iterations
+            except (ValueError, np.linalg.LinAlgError, KeyError):
+                # Skip failed bootstrap iterations (e.g., singular matrices,
+                # missing data in resampled units, or invalid weight computations)
                 continue
 
         bootstrap_estimates = np.array(bootstrap_estimates)
@@ -1536,7 +1538,7 @@ class SyntheticDiD(DifferenceInDifferences):
 
         return se, bootstrap_estimates
 
-    def get_params(self) -> dict:
+    def get_params(self) -> Dict[str, Any]:
         """Get estimator parameters."""
         return {
             "lambda_reg": self.lambda_reg,

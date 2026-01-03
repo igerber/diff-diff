@@ -2,11 +2,16 @@
 Utility functions for difference-in-differences estimation.
 """
 
-from typing import Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd
 from scipy import stats
+
+# Numerical constants for optimization algorithms
+_OPTIMIZATION_MAX_ITER = 1000  # Maximum iterations for weight optimization
+_OPTIMIZATION_TOL = 1e-8  # Convergence tolerance for optimization
+_NUMERICAL_EPS = 1e-10  # Small constant to prevent division by zero
 
 
 def validate_binary(arr: np.ndarray, name: str) -> None:
@@ -56,9 +61,7 @@ def compute_robust_se(
         Variance-covariance matrix of shape (k, k).
     """
     n, k = X.shape
-
-    # Compute (X'X)^(-1)
-    XtX_inv = np.linalg.inv(X.T @ X)
+    XtX = X.T @ X
 
     if cluster_ids is None:
         # HC1 robust standard errors
@@ -71,7 +74,11 @@ def compute_robust_se(
         # Meat of the sandwich: X' * diag(u^2) * X
         meat = X.T @ (X * u_squared[:, np.newaxis])
 
-        vcov = adjustment * XtX_inv @ meat @ XtX_inv
+        # Compute XtX^{-1} @ meat @ XtX^{-1} using solve() for numerical stability
+        # First solve XtX @ temp = meat to get temp = XtX^{-1} @ meat
+        temp = np.linalg.solve(XtX, meat)
+        # Then solve XtX @ vcov = temp.T and transpose to get XtX^{-1} @ meat @ XtX^{-1}
+        vcov = adjustment * np.linalg.solve(XtX, temp.T).T
     else:
         # Cluster-robust standard errors
         unique_clusters = np.unique(cluster_ids)
@@ -89,7 +96,9 @@ def compute_robust_se(
             score_c = X_c.T @ u_c
             meat += np.outer(score_c, score_c)
 
-        vcov = adjustment * XtX_inv @ meat @ XtX_inv
+        # Compute XtX^{-1} @ meat @ XtX^{-1} using solve() for numerical stability
+        temp = np.linalg.solve(XtX, meat)
+        vcov = adjustment * np.linalg.solve(XtX, temp.T).T
 
     return vcov
 
@@ -164,8 +173,8 @@ def check_parallel_trends(
     outcome: str,
     time: str,
     treatment_group: str,
-    pre_periods: list = None
-) -> dict:
+    pre_periods: Optional[List[Any]] = None
+) -> Dict[str, Any]:
     """
     Perform a simple check for parallel trends assumption.
 
@@ -260,12 +269,12 @@ def check_parallel_trends_robust(
     outcome: str,
     time: str,
     treatment_group: str,
-    unit: str = None,
-    pre_periods: list = None,
+    unit: Optional[str] = None,
+    pre_periods: Optional[List[Any]] = None,
     n_permutations: int = 1000,
-    seed: int = None,
+    seed: Optional[int] = None,
     wasserstein_threshold: float = 0.2
-) -> dict:
+) -> Dict[str, Any]:
     """
     Perform robust parallel trends testing using distributional comparisons.
 
@@ -419,8 +428,8 @@ def _compute_outcome_changes(
     outcome: str,
     time: str,
     treatment_group: str,
-    unit: str = None
-) -> tuple:
+    unit: Optional[str] = None
+) -> Tuple[np.ndarray, np.ndarray]:
     """
     Compute period-to-period outcome changes for treated and control groups.
 
@@ -480,10 +489,10 @@ def equivalence_test_trends(
     outcome: str,
     time: str,
     treatment_group: str,
-    unit: str = None,
-    pre_periods: list = None,
-    equivalence_margin: float = None
-) -> dict:
+    unit: Optional[str] = None,
+    pre_periods: Optional[List[Any]] = None,
+    equivalence_margin: Optional[float] = None
+) -> Dict[str, Any]:
     """
     Perform equivalence testing (TOST) for parallel trends.
 
@@ -700,11 +709,9 @@ def compute_synthetic_weights(
 
     # Solve with projected gradient descent
     # Project onto probability simplex
-    max_iter = 1000
-    tol = 1e-8
-    step_size = 1.0 / (np.linalg.norm(H, 2) + 1e-10)
+    step_size = 1.0 / (np.linalg.norm(H, 2) + _NUMERICAL_EPS)
 
-    for _ in range(max_iter):
+    for _ in range(_OPTIMIZATION_MAX_ITER):
         weights_old = weights.copy()
 
         # Gradient step: minimize ||Y - Y_control @ w||^2
@@ -715,7 +722,7 @@ def compute_synthetic_weights(
         weights = _project_simplex(weights)
 
         # Check convergence
-        if np.linalg.norm(weights - weights_old) < tol:
+        if np.linalg.norm(weights - weights_old) < _OPTIMIZATION_TOL:
             break
 
     # Set small weights to zero for interpretability
@@ -812,7 +819,7 @@ def compute_time_weights(
 
     # Inverse weighting: periods with smaller differences get higher weight
     # Add regularization to prevent extreme weights
-    inv_diffs = 1.0 / (diffs + zeta * np.std(diffs) + 1e-10)
+    inv_diffs = 1.0 / (diffs + zeta * np.std(diffs) + _NUMERICAL_EPS)
 
     # Normalize to sum to 1
     weights = inv_diffs / np.sum(inv_diffs)
@@ -889,8 +896,8 @@ def compute_placebo_effects(
     Y_pre_treated: np.ndarray,
     unit_weights: np.ndarray,
     time_weights: np.ndarray,
-    control_unit_ids: list,
-    n_placebo: int = None
+    control_unit_ids: List[Any],
+    n_placebo: Optional[int] = None
 ) -> np.ndarray:
     """
     Compute placebo treatment effects by treating each control as treated.

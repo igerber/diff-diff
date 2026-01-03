@@ -5,7 +5,7 @@ Provides statsmodels-style output with a more Pythonic interface.
 """
 
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -43,12 +43,12 @@ class DiDResults:
     se: float
     t_stat: float
     p_value: float
-    conf_int: tuple
+    conf_int: Tuple[float, float]
     n_obs: int
     n_treated: int
     n_control: int
     alpha: float = 0.05
-    coefficients: Optional[dict] = field(default=None)
+    coefficients: Optional[Dict[str, float]] = field(default=None)
     vcov: Optional[np.ndarray] = field(default=None)
     residuals: Optional[np.ndarray] = field(default=None)
     fitted_values: Optional[np.ndarray] = field(default=None)
@@ -118,13 +118,13 @@ class DiDResults:
         """Print the summary to stdout."""
         print(self.summary(alpha))
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> Dict[str, Any]:
         """
         Convert results to a dictionary.
 
         Returns
         -------
-        dict
+        Dict[str, Any]
             Dictionary containing all estimation results.
         """
         return {
@@ -159,15 +159,7 @@ class DiDResults:
     @property
     def significance_stars(self) -> str:
         """Return significance stars based on p-value."""
-        if self.p_value < 0.001:
-            return "***"
-        elif self.p_value < 0.01:
-            return "**"
-        elif self.p_value < 0.05:
-            return "*"
-        elif self.p_value < 0.1:
-            return "."
-        return ""
+        return _get_significance_stars(self.p_value)
 
 
 def _get_significance_stars(p_value: float) -> str:
@@ -204,12 +196,12 @@ class PeriodEffect:
         Confidence interval for the effect.
     """
 
-    period: any
+    period: Any
     effect: float
     se: float
     t_stat: float
     p_value: float
-    conf_int: tuple
+    conf_int: Tuple[float, float]
 
     def __repr__(self) -> str:
         """Concise string representation."""
@@ -264,19 +256,19 @@ class MultiPeriodDiDResults:
         List of post-treatment period identifiers.
     """
 
-    period_effects: dict
+    period_effects: Dict[Any, PeriodEffect]
     avg_att: float
     avg_se: float
     avg_t_stat: float
     avg_p_value: float
-    avg_conf_int: tuple
+    avg_conf_int: Tuple[float, float]
     n_obs: int
     n_treated: int
     n_control: int
-    pre_periods: list
-    post_periods: list
+    pre_periods: List[Any]
+    post_periods: List[Any]
     alpha: float = 0.05
-    coefficients: Optional[dict] = field(default=None)
+    coefficients: Optional[Dict[str, float]] = field(default=None)
     vcov: Optional[np.ndarray] = field(default=None)
     residuals: Optional[np.ndarray] = field(default=None)
     fitted_values: Optional[np.ndarray] = field(default=None)
@@ -397,16 +389,16 @@ class MultiPeriodDiDResults:
             )
         return self.period_effects[period]
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> Dict[str, Any]:
         """
         Convert results to a dictionary.
 
         Returns
         -------
-        dict
+        Dict[str, Any]
             Dictionary containing all estimation results.
         """
-        result = {
+        result: Dict[str, Any] = {
             "avg_att": self.avg_att,
             "avg_se": self.avg_se,
             "avg_t_stat": self.avg_t_stat,
@@ -503,18 +495,18 @@ class SyntheticDiDResults:
     se: float
     t_stat: float
     p_value: float
-    conf_int: tuple
+    conf_int: Tuple[float, float]
     n_obs: int
     n_treated: int
     n_control: int
-    unit_weights: dict
-    time_weights: dict
-    pre_periods: list
-    post_periods: list
+    unit_weights: Dict[Any, float]
+    time_weights: Dict[Any, float]
+    pre_periods: List[Any]
+    post_periods: List[Any]
     alpha: float = 0.05
-    lambda_reg: float = field(default=None)
-    pre_treatment_fit: float = field(default=None)
-    placebo_effects: np.ndarray = field(default=None)
+    lambda_reg: Optional[float] = field(default=None)
+    pre_treatment_fit: Optional[float] = field(default=None)
+    placebo_effects: Optional[np.ndarray] = field(default=None)
 
     def __repr__(self) -> str:
         """Concise string representation."""
@@ -605,13 +597,13 @@ class SyntheticDiDResults:
         """Print the summary to stdout."""
         print(self.summary(alpha))
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> Dict[str, Any]:
         """
         Convert results to a dictionary.
 
         Returns
         -------
-        dict
+        Dict[str, Any]
             Dictionary containing all estimation results.
         """
         return {
