@@ -914,7 +914,7 @@ class TestTwoWayFixedEffects:
         from diff_diff.estimators import TwoWayFixedEffects
 
         twfe = TwoWayFixedEffects()
-        twfe.fit(
+        results = twfe.fit(
             twfe_panel_data,
             outcome="outcome",
             treatment="treated",
@@ -922,8 +922,11 @@ class TestTwoWayFixedEffects:
             unit="unit"
         )
 
-        # Cluster should be set to unit
-        assert twfe.cluster == "unit"
+        # Cluster should NOT be mutated (remains None) - clustering is handled internally
+        # This ensures the estimator config is immutable as per sklearn convention
+        assert twfe.cluster is None
+        # But the results should still reflect cluster-robust SEs were computed correctly
+        assert results.se > 0
 
 
 class TestClusterRobustSE:
