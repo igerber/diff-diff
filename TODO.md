@@ -1,169 +1,267 @@
 # diff-diff Library Roadmap
 
-This document tracks planned features and improvements for the diff-diff library.
+This document tracks the path from the current version to a solid 1.0 release, prioritized by practitioner value and academic credibility.
 
-## Priority 2: Advanced Methods
+## What Makes a Credible 1.0?
+
+A production-ready DiD library needs:
+1. ✅ **Core estimators** - Basic DiD, TWFE, MultiPeriod, Staggered (Callaway-Sant'Anna), Synthetic DiD
+2. ✅ **Valid inference** - Robust SEs, cluster SEs, wild bootstrap for few clusters
+3. ✅ **Assumption diagnostics** - Parallel trends tests, placebo tests
+4. ⚠️ **Sensitivity analysis** - What if parallel trends is violated? (Rambachan-Roth)
+5. ⚠️ **Conditional parallel trends** - Covariate adjustment for staggered DiD
+6. ⚠️ **Documentation** - API reference site for discoverability
+
+---
+
+## Quick Overview
+
+| Feature | Status | Priority | Why It Matters |
+|---------|--------|----------|----------------|
+| **Honest DiD (Rambachan-Roth)** | Not Started | 1.0 Blocker | Reviewers expect sensitivity analysis |
+| **CallawaySantAnna Covariates** | Not Implemented | 1.0 Blocker | Conditional PT often required in practice |
+| **API Documentation Site** | Not Started | 1.0 Blocker | Credibility and discoverability |
+| Goodman-Bacon Decomposition | Not Started | 1.0 Target | Explains when TWFE fails |
+| Power Analysis | Not Started | 1.0 Target | Study design tool |
+| CallawaySantAnna Bootstrap | Not Implemented | 1.0 Target | Better inference with few clusters |
+| Sun-Abraham Estimator | Not Started | Post-1.0 | Alternative to CS, some prefer it |
+| Borusyak-Jaravel-Spiess | Not Started | Post-1.0 | More efficient under homogeneous effects |
+| Double/Debiased ML | Not Started | Post-1.0 | High-dimensional covariates |
+
+---
+
+## 1.0 Blockers
+
+These features are essential for a credible 1.0 release. Without them, the library has significant gaps compared to R alternatives.
 
 ### Honest DiD / Sensitivity Analysis (Rambachan-Roth)
 **Status**: Not Started
 **Effort**: High
-**Impact**: High
+**Practitioner Value**: ⭐⭐⭐⭐⭐
 
-Pre-trends testing has low power and can exacerbate bias. Sensitivity analysis asks: "How robust are results to violations of parallel trends?"
+**Why this matters**: Pre-trends tests have low power and can exacerbate bias. Increasingly, journal reviewers and seminar audiences expect sensitivity analysis showing "how robust are results to violations of parallel trends?" This is becoming as standard as reporting robust SEs.
 
-**Features**:
-- Compute bounds under restrictions on trend deviations
+**Features needed**:
+- Compute bounds under restrictions on trend deviations (relative magnitudes)
 - Confidence intervals valid under partial identification
-- Breakdown analysis visualization
+- Breakdown analysis: "How much violation would nullify the result?"
+- Visualization of sensitivity curves
 
 **References**:
-- Rambachan, A., & Roth, J. (2023). A More Credible Approach to Parallel Trends. Review of Economic Studies.
+- Rambachan, A., & Roth, J. (2023). A More Credible Approach to Parallel Trends. *Review of Economic Studies*.
 - R package: `HonestDiD`
 
-### Borusyak-Jaravel-Spiess Imputation Estimator
-**Status**: Not Started
+### CallawaySantAnna Covariate Adjustment
+**Status**: Not Implemented (parameter accepted but unused)
 **Effort**: High
-**Impact**: Medium
+**Practitioner Value**: ⭐⭐⭐⭐⭐
 
-Alternative to Callaway-Sant'Anna that's more efficient when parallel trends hold across all periods.
+**Why this matters**: In most applied settings, parallel trends only holds *conditional on covariates*. Without covariate adjustment, users must assume unconditional parallel trends, which is often implausible. The R `did` package supports this; we should too.
+
+**Current state**:
+- `covariates` parameter is accepted but silently ignored
+- All three methods (dr, ipw, reg) currently reduce to difference-in-means
+- Reference: `staggered.py:494-501`
 
 **Implementation Notes**:
-- Impute Y(0) for treated observations using control outcomes
-- Support both regression and matrix completion approaches
-- Reference: Borusyak, Jaravel, and Spiess (2024)
+- Implement propensity score estimation for IPW
+- Implement outcome regression for covariate adjustment
+- Implement true doubly-robust estimation combining both
+- Consider using cross-fitting for DR estimator
 
-### Sun-Abraham Estimator
+### API Documentation Site
 **Status**: Not Started
 **Effort**: Medium
-**Impact**: Medium
+**Practitioner Value**: ⭐⭐⭐⭐
 
-Interaction-weighted estimator for staggered DiD. Focuses on "cohort-specific average treatment effects on the treated" (CATT).
+**Why this matters**: For a 1.0 release, users should be able to find comprehensive API documentation online. Currently only docstrings and README exist.
 
-**Reference**: Sun, L., & Abraham, S. (2021). Estimating dynamic treatment effects in event studies with heterogeneous treatment effects. Journal of Econometrics.
+**Options**:
+- Sphinx + ReadTheDocs (traditional, well-supported)
+- mkdocs-material (modern, clean look)
+- pdoc (simple, auto-generates from docstrings)
 
----
-
-## Priority 3: Machine Learning Extensions
-
-### Double/Debiased ML for DiD
-**Status**: Not Started
-**Effort**: High
-**Impact**: Medium
-
-For high-dimensional settings with many covariates. Uses machine learning for nuisance parameter estimation.
-
-**Implementation Notes**:
-- Integrate with scikit-learn estimators
-- Support cross-fitting
-- Implement DR-DiD with ML components
-- Reference: Chernozhukov et al. (2018), Chang (2020)
-
-### Parallel Trends Forest
-**Status**: Not Started
-**Effort**: High
-**Impact**: Medium
-
-Uses machine learning to construct optimal control samples when using DiD in relatively long panels with little randomization.
-
-**Reference**: Shahn et al. (2023)
+**Should include**:
+- Full API reference
+- "When to use which estimator" decision guide
+- Comparison with R packages (`did`, `HonestDiD`, `synthdid`)
 
 ---
 
-## Priority 4: Usability Enhancements
+## 1.0 Target Features
+
+These would strengthen the 1.0 release but aren't strictly blocking.
+
+### Goodman-Bacon Decomposition
+**Status**: Not Started
+**Effort**: Medium
+**Practitioner Value**: ⭐⭐⭐⭐
+
+**Why this matters**: Helps users understand *why* TWFE can be biased with staggered adoption. Shows the weights on "forbidden comparisons" (already-treated as controls). Essential diagnostic before deciding whether to use Callaway-Sant'Anna.
+
+**Implementation**:
+- Decompose TWFE into 2x2 comparisons
+- Show weights by comparison type (clean vs. forbidden)
+- Visualization of decomposition
+- Reference: Goodman-Bacon (2021)
 
 ### Power Analysis Tools
 **Status**: Not Started
 **Effort**: Medium
-**Impact**: Medium
+**Practitioner Value**: ⭐⭐⭐⭐
 
-Help practitioners determine sample size requirements:
+**Why this matters**: Practitioners need to know "how many units/periods do I need to detect an effect of size X?" Currently no Python tool does this well for DiD.
+
+**Features**:
 - Minimum detectable effect given sample size
 - Required sample size for target power
+- Simulation-based power for staggered designs
 - Visualization of power curves
+
+### CallawaySantAnna Bootstrap Inference
+**Status**: Not Implemented (raises NotImplementedError)
+**Effort**: Medium
+**Practitioner Value**: ⭐⭐⭐
+
+**Why this matters**: With few clusters or groups, analytical SEs may be unreliable. Bootstrap provides valid inference. The R `did` package uses multiplier bootstrap.
+
+**Current state**:
+- `n_bootstrap` parameter exists but raises NotImplementedError
+- Reference: `staggered.py:488-492`
+
+**Implementation Notes**:
+- Implement multiplier/weighted bootstrap at unit level
+- Aggregate bootstrap samples for overall ATT and event study
+- Handle covariance between group-time effects
 
 ### Enhanced Visualization
 **Status**: Partial
-**Effort**: Low
-**Impact**: Medium
+**Effort**: Low-Medium
+**Practitioner Value**: ⭐⭐⭐
 
-Current: Basic event study plots implemented.
+**Current**: `plot_event_study()` and `plot_group_effects()` work well.
 
-**Additions needed**:
-- Pre-trends shading with significance markers
+**Additions for 1.0**:
+- Synthetic control weight visualization (bar chart of unit weights)
+- Bacon decomposition visualization
+- Treatment adoption "staircase" plot
+
+**Post-1.0**:
+- Interactive Plotly support
 - Comparison plots across specifications
-- Synthetic control weight visualization
-- Interactive plots (optional Plotly support)
-
-### Improved Formula Interface
-**Status**: Not Started
-**Effort**: Low
-**Impact**: Low
-
-Current formula support is basic. Enhancements:
-- Support for multiple interactions
-- Polynomial terms
-- Factor notation (C() for categorical)
-- Formula objects like patsy/formulaic
 
 ---
 
-## Code Quality
+## Post-1.0 Features
 
-### Implement `predict()` Method
+These are valuable but can wait for future versions.
+
+### Sun-Abraham Estimator
 **Status**: Not Started
-**Effort**: Low
-**Impact**: Low
-
-`DifferenceInDifferences.predict()` currently raises `NotImplementedError`. Implementation requires storing column names during fit.
-
----
-
-## Documentation
-
-### API Reference
-**Status**: Partial
 **Effort**: Medium
-**Impact**: Medium
 
-Docstrings exist but no built API documentation site. Consider:
-- Sphinx/ReadTheDocs setup
-- mkdocs-material
+Alternative to Callaway-Sant'Anna using interaction-weighted approach. Some practitioners prefer it; provides a robustness check.
+
+**Reference**: Sun & Abraham (2021). *Journal of Econometrics*.
+
+### Borusyak-Jaravel-Spiess Imputation Estimator
+**Status**: Not Started
+**Effort**: High
+
+More efficient than Callaway-Sant'Anna when parallel trends holds across all periods. Uses imputation approach.
+
+**Reference**: Borusyak, Jaravel, and Spiess (2024).
+
+### Double/Debiased ML for DiD
+**Status**: Not Started
+**Effort**: High
+
+For high-dimensional settings with many covariates. Uses ML for nuisance parameter estimation with cross-fitting.
+
+**Reference**: Chernozhukov et al. (2018), Chang (2020).
+
+### Alternative Inference Methods
+**Status**: Research
+**Effort**: High
+
+- Randomization inference for small samples
+- Bayesian DiD with prior on parallel trends
+- Conformal inference for prediction intervals
 
 ---
 
-## Completed Features (v0.5.1)
+## Technical Debt & Code Quality
 
-- [x] Comprehensive test coverage for `utils.py` module (72 new tests)
-  - `validate_binary`, `compute_robust_se`, `compute_confidence_interval`, `compute_p_value`
-  - `check_parallel_trends`, `check_parallel_trends_robust`, `equivalence_test_trends`
-  - `compute_synthetic_weights`, `compute_time_weights`, `compute_placebo_effects`
-  - `compute_sdid_estimator`, `_project_simplex`
+Items to address as part of ongoing maintenance.
+
+### Known Limitations in Current Code
+
+| Issue | Location | Priority |
+|-------|----------|----------|
+| MultiPeriodDiD wild bootstrap not supported | `estimators.py:944-951` | Low (edge case) |
+| `predict()` raises NotImplementedError | `estimators.py:532-554` | Low (rarely needed) |
+| SyntheticDiD bootstrap can fail silently | `estimators.py:1580-1654` | Medium |
+| Diagnostics module error handling | `diagnostics.py:782-885` | Medium |
+
+### Standard Error Consistency Audit
+**Status**: Review Needed
+
+Different estimators compute SEs differently:
+- DifferenceInDifferences: HC1 or cluster-robust
+- TwoWayFixedEffects: Always cluster-robust (unit level default)
+- CallawaySantAnna: Simple difference-in-means SE (no clustering)
+- SyntheticDiD: Bootstrap or placebo-based
+
+Consider unified interface for SE type selection.
+
+### Test Coverage for Edge Cases
+
+Some edge cases to add tests for:
+- Very few clusters (< 5) with wild bootstrap
+- Unbalanced panels with missing periods
+- Single treated unit scenarios
+- Perfect collinearity detection
+
+---
+
+## Documentation Improvements
+
+Beyond the API site:
+- Troubleshooting section for common errors
+- "Which estimator should I use?" decision tree
+- Comparison of estimator outputs on same data
+- Real-world data examples (currently synthetic only)
+
+---
+
+## Completed Features
+
+### v0.5.1
+- [x] Comprehensive test coverage for `utils.py` module (72 tests)
 - [x] Tutorial notebooks in `docs/tutorials/`
-  - `01_basic_did.ipynb` - Basic DiD, formula interface, covariates, fixed effects, wild bootstrap
-  - `02_staggered_did.ipynb` - Staggered adoption with Callaway-Sant'Anna
-  - `03_synthetic_did.ipynb` - Synthetic DiD with unit/time weights
-  - `04_parallel_trends.ipynb` - Parallel trends testing and diagnostics
+  - Basic DiD, formula interface, covariates, fixed effects, wild bootstrap
+  - Staggered adoption with Callaway-Sant'Anna
+  - Synthetic DiD with unit/time weights
+  - Parallel trends testing and diagnostics
 
-## Completed Features (v0.5.0)
+### v0.5.0
+- [x] Wild cluster bootstrap (Rademacher, Webb, Mammen weights)
+- [x] Placebo tests module (fake timing, fake group, permutation, leave-one-out)
 
-- [x] Wild cluster bootstrap for valid inference with few clusters (<50)
-  - Rademacher, Webb (6-point), and Mammen weight types
-  - Integration with DifferenceInDifferences and TwoWayFixedEffects via `inference='wild_bootstrap'`
-  - Reference: Cameron, Gelbach, and Miller (2008)
-- [x] Placebo tests module (`diff_diff/diagnostics.py`)
-  - Fake timing test (`placebo_timing_test`)
-  - Fake group test (`placebo_group_test`)
-  - Permutation-based inference (`permutation_test`)
-  - Leave-one-out sensitivity (`leave_one_out_test`)
-  - Comprehensive suite (`run_all_placebo_tests`)
-  - Reference: Bertrand, Duflo, and Mullainathan (2004)
-
-## Completed Features (v0.4.0)
-
+### v0.4.0
 - [x] Callaway-Sant'Anna estimator for staggered DiD
-- [x] Event study visualization (`plot_event_study`)
-- [x] Group effects visualization (`plot_group_effects`)
-- [x] Export TwoWayFixedEffects in public API
-- [x] Export parallel trends testing utilities
-- [x] CallawaySantAnnaResults with event study and group aggregation
-- [x] Comprehensive test coverage for new estimator (17 tests)
+- [x] Event study visualization
+- [x] Group effects visualization
+- [x] Parallel trends testing utilities
+
+---
+
+## Suggested 1.0 Milestone Plan
+
+1. **CallawaySantAnna Covariates** - Makes the staggered estimator production-ready
+2. **Honest DiD (Rambachan-Roth)** - Addresses the key credibility gap
+3. **API Documentation Site** - Professional presentation
+4. **Goodman-Bacon Decomposition** - Key diagnostic for TWFE users
+5. **Power Analysis** - Study design tool practitioners need
+
+With these five additions, diff-diff would be competitive with R's `did` + `HonestDiD` ecosystem.
