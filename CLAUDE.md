@@ -41,9 +41,19 @@ mypy diff_diff
   - `MultiPeriodDiD` - Event-study style DiD with period-specific treatment effects
   - `SyntheticDiD` - Synthetic control combined with DiD (Arkhangelsky et al. 2021)
 
+- **`diff_diff/staggered.py`** - Staggered adoption DiD estimators:
+  - `CallawaySantAnna` - Callaway & Sant'Anna (2021) estimator for heterogeneous treatment timing
+  - `CallawaySantAnnaResults` - Results with group-time ATT(g,t) and aggregations
+  - `GroupTimeEffect` - Container for individual group-time effects
+
 - **`diff_diff/results.py`** - Dataclass containers for estimation results:
   - `DiDResults`, `MultiPeriodDiDResults`, `SyntheticDiDResults`, `PeriodEffect`
   - Each provides `summary()`, `to_dict()`, `to_dataframe()` methods
+
+- **`diff_diff/visualization.py`** - Plotting functions:
+  - `plot_event_study` - Publication-ready event study coefficient plots
+  - `plot_group_effects` - Treatment effects by cohort visualization
+  - Works with MultiPeriodDiD, CallawaySantAnna, or DataFrames
 
 - **`diff_diff/utils.py`** - Statistical utilities:
   - Robust/cluster standard errors (`compute_robust_se`)

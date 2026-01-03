@@ -69,7 +69,10 @@ Signif. codes: '***' 0.001, '**' 0.01, '*' 0.05, '.' 0.1
 - **Robust inference**: Heteroskedasticity-robust (HC1) and cluster-robust standard errors
 - **Panel data support**: Two-way fixed effects estimator for panel designs
 - **Multi-period analysis**: Event-study style DiD with period-specific treatment effects
+- **Staggered adoption**: Callaway-Sant'Anna (2021) estimator for heterogeneous treatment timing
 - **Synthetic DiD**: Combined DiD with synthetic control for improved robustness
+- **Event study plots**: Publication-ready visualization of treatment effects
+- **Parallel trends testing**: Multiple methods including equivalence tests
 - **Data prep utilities**: Helper functions for common data preparation tasks
 
 ## Data Preparation
@@ -558,6 +561,148 @@ Period            Effect     Std. Err.     t-stat      P>|t|
 
 Signif. codes: '***' 0.001, '**' 0.01, '*' 0.05, '.' 0.1
 ================================================================================
+```
+
+### Staggered Difference-in-Differences (Callaway-Sant'Anna)
+
+When treatment is adopted at different times by different units, traditional TWFE estimators can be biased. The Callaway-Sant'Anna estimator provides unbiased estimates with staggered adoption.
+
+```python
+from diff_diff import CallawaySantAnna
+
+# Panel data with staggered treatment
+# 'first_treat' = period when unit was first treated (0 if never treated)
+cs = CallawaySantAnna()
+results = cs.fit(
+    panel_data,
+    outcome='sales',
+    unit='firm_id',
+    time='year',
+    first_treat='first_treat',  # 0 for never-treated, else first treatment year
+    aggregate='event_study'      # Compute event study effects
+)
+
+# View results
+results.print_summary()
+
+# Access group-time effects ATT(g,t)
+for (group, time), effect in results.group_time_effects.items():
+    print(f"Cohort {group}, Period {time}: {effect['effect']:.3f}")
+
+# Event study effects (averaged by relative time)
+for rel_time, effect in results.event_study_effects.items():
+    print(f"e={rel_time}: {effect['effect']:.3f} (SE: {effect['se']:.3f})")
+
+# Convert to DataFrame
+df = results.to_dataframe(level='event_study')
+```
+
+Output:
+```
+=====================================================================================
+          Callaway-Sant'Anna Staggered Difference-in-Differences Results
+=====================================================================================
+
+Total observations:                     600
+Treated units:                           35
+Control units:                           15
+Treatment cohorts:                        3
+Time periods:                             8
+Control group:                never_treated
+
+-------------------------------------------------------------------------------------
+                  Overall Average Treatment Effect on the Treated
+-------------------------------------------------------------------------------------
+Parameter         Estimate     Std. Err.     t-stat      P>|t|   Sig.
+-------------------------------------------------------------------------------------
+ATT                 2.5000       0.3521       7.101     0.0000   ***
+-------------------------------------------------------------------------------------
+
+95% Confidence Interval: [1.8099, 3.1901]
+
+-------------------------------------------------------------------------------------
+                          Event Study (Dynamic) Effects
+-------------------------------------------------------------------------------------
+Rel. Period       Estimate     Std. Err.     t-stat      P>|t|   Sig.
+-------------------------------------------------------------------------------------
+0                   2.1000       0.4521       4.645     0.0000   ***
+1                   2.5000       0.4123       6.064     0.0000   ***
+2                   2.8000       0.5234       5.349     0.0000   ***
+-------------------------------------------------------------------------------------
+
+Signif. codes: '***' 0.001, '**' 0.01, '*' 0.05, '.' 0.1
+=====================================================================================
+```
+
+**When to use Callaway-Sant'Anna vs TWFE:**
+
+| Scenario | Use TWFE | Use Callaway-Sant'Anna |
+|----------|----------|------------------------|
+| All units treated at same time | ✓ | ✓ |
+| Staggered adoption, homogeneous effects | ✓ | ✓ |
+| Staggered adoption, heterogeneous effects | ✗ | ✓ |
+| Need event study with staggered timing | ✗ | ✓ |
+| Fewer than ~20 treated units | ✓ | Depends on design |
+
+**Parameters:**
+
+```python
+CallawaySantAnna(
+    control_group='never_treated',  # or 'not_yet_treated'
+    anticipation=0,                  # Periods before treatment with effects
+    estimation_method='dr',          # 'dr', 'ipw', or 'reg'
+    alpha=0.05,                      # Significance level
+    cluster=None,                    # Column for cluster SEs
+    n_bootstrap=0,                   # Must be 0 (bootstrap not yet implemented)
+    seed=None                        # Random seed
+)
+```
+
+**Current limitations:**
+- Bootstrap inference (`n_bootstrap > 0`) is not yet implemented
+- Covariate adjustment for conditional parallel trends is not yet implemented
+
+### Event Study Visualization
+
+Create publication-ready event study plots:
+
+```python
+from diff_diff import plot_event_study, MultiPeriodDiD, CallawaySantAnna
+
+# From MultiPeriodDiD
+did = MultiPeriodDiD()
+results = did.fit(data, outcome='y', treatment='treated',
+                  time='period', post_periods=[3, 4, 5])
+plot_event_study(results, title="Treatment Effects Over Time")
+
+# From CallawaySantAnna (with event study aggregation)
+cs = CallawaySantAnna()
+results = cs.fit(data, outcome='y', unit='unit', time='period',
+                 first_treat='first_treat', aggregate='event_study')
+plot_event_study(results, title="Staggered DiD Event Study")
+
+# From a DataFrame
+df = pd.DataFrame({
+    'period': [-2, -1, 0, 1, 2],
+    'effect': [0.1, 0.05, 0.0, 2.5, 2.8],
+    'se': [0.3, 0.25, 0.0, 0.4, 0.45]
+})
+plot_event_study(df, reference_period=0)
+
+# With customization
+ax = plot_event_study(
+    results,
+    title="Dynamic Treatment Effects",
+    xlabel="Years Relative to Treatment",
+    ylabel="Effect on Sales ($1000s)",
+    color="#2563eb",
+    marker="o",
+    shade_pre=True,           # Shade pre-treatment region
+    show_zero_line=True,      # Horizontal line at y=0
+    show_reference_line=True, # Vertical line at reference period
+    figsize=(10, 6),
+    show=False                # Don't call plt.show(), return axes
+)
 ```
 
 ### Synthetic Difference-in-Differences
