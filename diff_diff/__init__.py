@@ -17,6 +17,7 @@ from diff_diff.prep import (
     generate_did_data,
     create_event_time,
     aggregate_to_cohorts,
+    rank_control_units,
 )
 
 __version__ = "0.3.0"
@@ -40,4 +41,5 @@ __all__ = [
     "generate_did_data",
     "create_event_time",
     "aggregate_to_cohorts",
+    "rank_control_units",
 ]

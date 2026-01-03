@@ -868,3 +868,447 @@ def aggregate_to_cohorts(
     })
 
     return cohort_data
+
+
+def rank_control_units(
+    data: pd.DataFrame,
+    unit_column: str,
+    time_column: str,
+    outcome_column: str,
+    treatment_column: Optional[str] = None,
+    treated_units: Optional[List[Any]] = None,
+    pre_periods: Optional[List[Any]] = None,
+    covariates: Optional[List[str]] = None,
+    outcome_weight: float = 0.7,
+    covariate_weight: float = 0.3,
+    exclude_units: Optional[List[Any]] = None,
+    require_units: Optional[List[Any]] = None,
+    n_top: Optional[int] = None,
+    suggest_treatment_candidates: bool = False,
+    n_treatment_candidates: int = 5,
+    lambda_reg: float = 0.0,
+) -> pd.DataFrame:
+    """
+    Rank potential control units by their suitability for DiD analysis.
+
+    Evaluates control units based on pre-treatment outcome trend similarity
+    and optional covariate matching to treated units. Returns a ranked list
+    with quality scores.
+
+    Parameters
+    ----------
+    data : pd.DataFrame
+        Panel data in long format.
+    unit_column : str
+        Column name for unit identifier.
+    time_column : str
+        Column name for time periods.
+    outcome_column : str
+        Column name for outcome variable.
+    treatment_column : str, optional
+        Column with binary treatment indicator (0/1). Used to identify
+        treated units from data.
+    treated_units : list, optional
+        Explicit list of treated unit IDs. Alternative to treatment_column.
+    pre_periods : list, optional
+        Pre-treatment periods for comparison. If None, uses first half of periods.
+    covariates : list of str, optional
+        Covariate columns for matching. Similarity is based on pre-treatment means.
+    outcome_weight : float, default=0.7
+        Weight for pre-treatment outcome trend similarity (0-1).
+    covariate_weight : float, default=0.3
+        Weight for covariate distance (0-1). Ignored if no covariates.
+    exclude_units : list, optional
+        Units that cannot be in control group.
+    require_units : list, optional
+        Units that must be in control group (will always appear in output).
+    n_top : int, optional
+        Return only top N control units. If None, return all.
+    suggest_treatment_candidates : bool, default=False
+        If True and no treated units specified, identify potential treatment
+        candidates instead of ranking controls.
+    n_treatment_candidates : int, default=5
+        Number of treatment candidates to suggest.
+    lambda_reg : float, default=0.0
+        Regularization for synthetic weights. Higher values give more uniform
+        weights across controls.
+
+    Returns
+    -------
+    pd.DataFrame
+        Ranked control units with columns:
+        - unit: Unit identifier
+        - quality_score: Combined quality score (0-1, higher is better)
+        - outcome_trend_score: Pre-treatment outcome trend similarity
+        - covariate_score: Covariate match score (NaN if no covariates)
+        - synthetic_weight: Weight from synthetic control optimization
+        - pre_trend_rmse: RMSE of pre-treatment outcome vs treated mean
+        - is_required: Whether unit was in require_units
+
+        If suggest_treatment_candidates=True (and no treated units):
+        - unit: Unit identifier
+        - treatment_candidate_score: Suitability as treatment unit
+        - avg_outcome_level: Pre-treatment outcome mean
+        - outcome_trend: Pre-treatment trend slope
+        - n_similar_controls: Count of similar potential controls
+
+    Examples
+    --------
+    Rank controls against treated units:
+
+    >>> data = generate_did_data(n_units=30, n_periods=6, seed=42)
+    >>> ranking = rank_control_units(
+    ...     data,
+    ...     unit_column='unit',
+    ...     time_column='period',
+    ...     outcome_column='outcome',
+    ...     treatment_column='treated',
+    ...     n_top=10
+    ... )
+    >>> ranking['quality_score'].is_monotonic_decreasing
+    True
+
+    With covariates:
+
+    >>> data['size'] = np.random.randn(len(data))
+    >>> ranking = rank_control_units(
+    ...     data,
+    ...     unit_column='unit',
+    ...     time_column='period',
+    ...     outcome_column='outcome',
+    ...     treatment_column='treated',
+    ...     covariates=['size']
+    ... )
+
+    Filter data for SyntheticDiD:
+
+    >>> top_controls = ranking['unit'].tolist()
+    >>> filtered = data[(data['treated'] == 1) | (data['unit'].isin(top_controls))]
+    """
+    # Import compute_synthetic_weights from utils
+    from diff_diff.utils import compute_synthetic_weights
+
+    # -------------------------------------------------------------------------
+    # Input validation
+    # -------------------------------------------------------------------------
+    for col in [unit_column, time_column, outcome_column]:
+        if col not in data.columns:
+            raise ValueError(f"Column '{col}' not found in DataFrame.")
+
+    if treatment_column is not None and treatment_column not in data.columns:
+        raise ValueError(f"Treatment column '{treatment_column}' not found in DataFrame.")
+
+    if covariates:
+        for cov in covariates:
+            if cov not in data.columns:
+                raise ValueError(f"Covariate column '{cov}' not found in DataFrame.")
+
+    if not 0 <= outcome_weight <= 1:
+        raise ValueError("outcome_weight must be between 0 and 1")
+    if not 0 <= covariate_weight <= 1:
+        raise ValueError("covariate_weight must be between 0 and 1")
+
+    if treated_units is not None and treatment_column is not None:
+        raise ValueError("Specify either 'treated_units' or 'treatment_column', not both.")
+
+    if require_units and exclude_units:
+        invalid_required = [u for u in require_units if u in exclude_units]
+        if invalid_required:
+            raise ValueError(f"Units cannot be both required and excluded: {invalid_required}")
+
+    # -------------------------------------------------------------------------
+    # Determine pre-treatment periods
+    # -------------------------------------------------------------------------
+    all_periods = sorted(data[time_column].unique())
+    if pre_periods is None:
+        mid_point = len(all_periods) // 2
+        pre_periods = all_periods[:mid_point]
+    else:
+        pre_periods = list(pre_periods)
+
+    if len(pre_periods) == 0:
+        raise ValueError("No pre-treatment periods specified or inferred.")
+
+    # -------------------------------------------------------------------------
+    # Identify treated and control units
+    # -------------------------------------------------------------------------
+    all_units = list(data[unit_column].unique())
+
+    if treated_units is not None:
+        treated_set = set(treated_units)
+    elif treatment_column is not None:
+        unit_treatment = data.groupby(unit_column)[treatment_column].first()
+        treated_set = set(unit_treatment[unit_treatment == 1].index)
+    elif suggest_treatment_candidates:
+        # Treatment candidate discovery mode - no treated units
+        treated_set = set()
+    else:
+        raise ValueError(
+            "Must specify treated_units, treatment_column, or set "
+            "suggest_treatment_candidates=True"
+        )
+
+    # -------------------------------------------------------------------------
+    # Treatment candidate discovery mode
+    # -------------------------------------------------------------------------
+    if suggest_treatment_candidates and len(treated_set) == 0:
+        return _suggest_treatment_candidates(
+            data, unit_column, time_column, outcome_column,
+            pre_periods, n_treatment_candidates
+        )
+
+    if len(treated_set) == 0:
+        raise ValueError("No treated units found.")
+
+    # Determine control candidates
+    control_candidates = [u for u in all_units if u not in treated_set]
+
+    if exclude_units:
+        control_candidates = [u for u in control_candidates if u not in exclude_units]
+
+    if len(control_candidates) == 0:
+        raise ValueError("No control units available after exclusions.")
+
+    # -------------------------------------------------------------------------
+    # Create outcome matrices (pre-treatment)
+    # -------------------------------------------------------------------------
+    pre_data = data[data[time_column].isin(pre_periods)]
+    pivot = pre_data.pivot(index=time_column, columns=unit_column, values=outcome_column)
+
+    # Filter to pre_periods that exist in data
+    valid_pre_periods = [p for p in pre_periods if p in pivot.index]
+    if len(valid_pre_periods) == 0:
+        raise ValueError("No data found for specified pre-treatment periods.")
+
+    # Control outcomes: shape (n_pre_periods, n_control_candidates)
+    Y_control = pivot.loc[valid_pre_periods, control_candidates].values.astype(float)
+
+    # Treated outcomes mean: shape (n_pre_periods,)
+    treated_list = [u for u in treated_set if u in pivot.columns]
+    if len(treated_list) == 0:
+        raise ValueError("Treated units not found in pre-treatment data.")
+    Y_treated_mean = pivot.loc[valid_pre_periods, treated_list].mean(axis=1).values.astype(float)
+
+    # -------------------------------------------------------------------------
+    # Compute outcome trend scores
+    # -------------------------------------------------------------------------
+    # Synthetic weights (higher = better match)
+    synthetic_weights = compute_synthetic_weights(
+        Y_control, Y_treated_mean, lambda_reg=lambda_reg
+    )
+
+    # RMSE for each control vs treated mean
+    rmse_scores = []
+    for j in range(len(control_candidates)):
+        y_c = Y_control[:, j]
+        rmse = np.sqrt(np.mean((y_c - Y_treated_mean) ** 2))
+        rmse_scores.append(rmse)
+
+    # Convert RMSE to similarity score (lower RMSE = higher score)
+    max_rmse = max(rmse_scores) if rmse_scores else 1.0
+    outcome_trend_scores = [
+        1 - (rmse / (max_rmse + 1e-10)) for rmse in rmse_scores
+    ]
+
+    # -------------------------------------------------------------------------
+    # Compute covariate scores (if covariates provided)
+    # -------------------------------------------------------------------------
+    if covariates and len(covariates) > 0:
+        # Get unit-level covariate values (pre-treatment mean)
+        cov_data = pre_data.groupby(unit_column)[covariates].mean()
+
+        # Treated covariate profile (mean across treated units)
+        treated_cov = cov_data.loc[list(treated_set)].mean()
+
+        # Standardize covariates
+        cov_mean = cov_data.mean()
+        cov_std = cov_data.std().replace(0, 1)  # Avoid division by zero
+        cov_standardized = (cov_data - cov_mean) / cov_std
+        treated_cov_std = (treated_cov - cov_mean) / cov_std
+
+        # Euclidean distance in standardized space
+        covariate_distances = []
+        for control_unit in control_candidates:
+            control_cov_std = cov_standardized.loc[control_unit]
+            dist = np.sqrt(np.sum((control_cov_std - treated_cov_std) ** 2))
+            covariate_distances.append(dist)
+
+        # Convert distance to similarity score
+        max_dist = max(covariate_distances) if covariate_distances else 1.0
+        covariate_scores = [
+            1 - (d / (max_dist + 1e-10)) for d in covariate_distances
+        ]
+    else:
+        covariate_scores = [np.nan] * len(control_candidates)
+
+    # -------------------------------------------------------------------------
+    # Compute combined quality score
+    # -------------------------------------------------------------------------
+    # Normalize weights
+    total_weight = outcome_weight + covariate_weight
+    if total_weight > 0:
+        norm_outcome_weight = outcome_weight / total_weight
+        norm_covariate_weight = covariate_weight / total_weight
+    else:
+        norm_outcome_weight = 1.0
+        norm_covariate_weight = 0.0
+
+    quality_scores = []
+    for i in range(len(control_candidates)):
+        outcome_score = outcome_trend_scores[i]
+        cov_score = covariate_scores[i]
+
+        if np.isnan(cov_score):
+            # No covariates - use only outcome score
+            combined = outcome_score
+        else:
+            combined = norm_outcome_weight * outcome_score + norm_covariate_weight * cov_score
+
+        quality_scores.append(combined)
+
+    # -------------------------------------------------------------------------
+    # Build result DataFrame
+    # -------------------------------------------------------------------------
+    require_set = set(require_units) if require_units else set()
+
+    result = pd.DataFrame({
+        'unit': control_candidates,
+        'quality_score': quality_scores,
+        'outcome_trend_score': outcome_trend_scores,
+        'covariate_score': covariate_scores,
+        'synthetic_weight': synthetic_weights,
+        'pre_trend_rmse': rmse_scores,
+        'is_required': [u in require_set for u in control_candidates]
+    })
+
+    # Sort by quality score (descending)
+    result = result.sort_values('quality_score', ascending=False)
+
+    # Apply n_top limit if specified
+    if n_top is not None and n_top < len(result):
+        # Always include required units
+        required_df = result[result['is_required']]
+        non_required_df = result[~result['is_required']]
+
+        # Take top from non-required to fill remaining slots
+        remaining_slots = max(0, n_top - len(required_df))
+        top_non_required = non_required_df.head(remaining_slots)
+
+        result = pd.concat([required_df, top_non_required])
+        result = result.sort_values('quality_score', ascending=False)
+
+    return result.reset_index(drop=True)
+
+
+def _suggest_treatment_candidates(
+    data: pd.DataFrame,
+    unit_column: str,
+    time_column: str,
+    outcome_column: str,
+    pre_periods: List[Any],
+    n_candidates: int
+) -> pd.DataFrame:
+    """
+    Identify units that would make good treatment candidates.
+
+    A good treatment candidate:
+    1. Has many similar control units available (for matching)
+    2. Has stable pre-treatment trends (predictable counterfactual)
+    3. Is not an extreme outlier
+
+    Parameters
+    ----------
+    data : pd.DataFrame
+        Panel data.
+    unit_column : str
+        Unit identifier column.
+    time_column : str
+        Time period column.
+    outcome_column : str
+        Outcome variable column.
+    pre_periods : list
+        Pre-treatment periods.
+    n_candidates : int
+        Number of candidates to return.
+
+    Returns
+    -------
+    pd.DataFrame
+        Treatment candidates with scores.
+    """
+    all_units = list(data[unit_column].unique())
+    pre_data = data[data[time_column].isin(pre_periods)]
+
+    candidate_info = []
+
+    for unit in all_units:
+        unit_data = pre_data[pre_data[unit_column] == unit]
+
+        if len(unit_data) == 0:
+            continue
+
+        # Average outcome level
+        avg_outcome = unit_data[outcome_column].mean()
+
+        # Trend (simple linear regression slope)
+        times = unit_data[time_column].values
+        outcomes = unit_data[outcome_column].values
+        if len(times) > 1:
+            times_norm = np.arange(len(times))
+            try:
+                slope = np.polyfit(times_norm, outcomes, 1)[0]
+            except (np.linalg.LinAlgError, ValueError):
+                slope = 0.0
+        else:
+            slope = 0.0
+
+        # Count similar potential controls
+        other_units = [u for u in all_units if u != unit]
+        other_means = pre_data[
+            pre_data[unit_column].isin(other_units)
+        ].groupby(unit_column)[outcome_column].mean()
+
+        if len(other_means) > 0:
+            sd = other_means.std()
+            if sd > 0:
+                n_similar = int(np.sum(np.abs(other_means - avg_outcome) < 0.5 * sd))
+            else:
+                n_similar = len(other_means)
+        else:
+            n_similar = 0
+
+        candidate_info.append({
+            'unit': unit,
+            'avg_outcome_level': avg_outcome,
+            'outcome_trend': slope,
+            'n_similar_controls': n_similar
+        })
+
+    if len(candidate_info) == 0:
+        return pd.DataFrame(columns=[
+            'unit', 'treatment_candidate_score', 'avg_outcome_level',
+            'outcome_trend', 'n_similar_controls'
+        ])
+
+    result = pd.DataFrame(candidate_info)
+
+    # Score: prefer units with many similar controls and moderate outcome levels
+    max_similar = result['n_similar_controls'].max()
+    if max_similar > 0:
+        similarity_score = result['n_similar_controls'] / max_similar
+    else:
+        similarity_score = pd.Series([0.0] * len(result))
+
+    # Penalty for outliers in outcome level
+    outcome_mean = result['avg_outcome_level'].mean()
+    outcome_std = result['avg_outcome_level'].std()
+    if outcome_std > 0:
+        outcome_z = np.abs((result['avg_outcome_level'] - outcome_mean) / outcome_std)
+    else:
+        outcome_z = pd.Series([0.0] * len(result))
+
+    result['treatment_candidate_score'] = (similarity_score - 0.3 * outcome_z).clip(0, 1)
+
+    # Return top candidates
+    result = result.nlargest(n_candidates, 'treatment_candidate_score')
+    return result.reset_index(drop=True)

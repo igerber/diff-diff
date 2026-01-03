@@ -463,3 +463,274 @@ class TestAggregateToCohorts:
         })
         result = aggregate_to_cohorts(df, "unit", "period", "treated", "y", covariates=["x"])
         assert "x" in result.columns
+
+
+class TestRankControlUnits:
+    """Tests for rank_control_units function."""
+
+    def test_basic_ranking(self):
+        """Test basic control unit ranking."""
+        from diff_diff.prep import rank_control_units
+
+        data = generate_did_data(n_units=20, n_periods=6, seed=42)
+        result = rank_control_units(
+            data,
+            unit_column="unit",
+            time_column="period",
+            outcome_column="outcome",
+            treatment_column="treated"
+        )
+        assert "quality_score" in result.columns
+        assert "outcome_trend_score" in result.columns
+        assert "synthetic_weight" in result.columns
+        assert len(result) > 0
+        # Check sorted descending
+        assert result["quality_score"].is_monotonic_decreasing
+
+    def test_with_covariates(self):
+        """Test ranking with covariate matching."""
+        from diff_diff.prep import rank_control_units
+
+        data = generate_did_data(n_units=20, n_periods=6, seed=42)
+        # Add covariate
+        np.random.seed(42)
+        data["x1"] = np.random.randn(len(data))
+
+        result = rank_control_units(
+            data,
+            unit_column="unit",
+            time_column="period",
+            outcome_column="outcome",
+            treatment_column="treated",
+            covariates=["x1"]
+        )
+        assert not result["covariate_score"].isna().all()
+
+    def test_explicit_treated_units(self):
+        """Test with explicitly specified treated units."""
+        from diff_diff.prep import rank_control_units
+
+        data = generate_did_data(n_units=20, n_periods=6, seed=42)
+
+        result = rank_control_units(
+            data,
+            unit_column="unit",
+            time_column="period",
+            outcome_column="outcome",
+            treated_units=[0, 1, 2]
+        )
+        # Should not include treated units in ranking
+        assert 0 not in result["unit"].values
+        assert 1 not in result["unit"].values
+        assert 2 not in result["unit"].values
+
+    def test_exclude_units(self):
+        """Test unit exclusion."""
+        from diff_diff.prep import rank_control_units
+
+        data = generate_did_data(n_units=20, n_periods=6, seed=42)
+
+        result = rank_control_units(
+            data,
+            unit_column="unit",
+            time_column="period",
+            outcome_column="outcome",
+            treatment_column="treated",
+            exclude_units=[15, 16, 17]
+        )
+        assert 15 not in result["unit"].values
+        assert 16 not in result["unit"].values
+        assert 17 not in result["unit"].values
+
+    def test_require_units(self):
+        """Test required units are always included."""
+        from diff_diff.prep import rank_control_units
+
+        data = generate_did_data(n_units=30, n_periods=6, seed=42)
+
+        # Get control units (not treated)
+        control_units = data[data["treated"] == 0]["unit"].unique()
+        require = [control_units[-1], control_units[-2]]  # Pick last two controls
+
+        result = rank_control_units(
+            data,
+            unit_column="unit",
+            time_column="period",
+            outcome_column="outcome",
+            treatment_column="treated",
+            require_units=require,
+            n_top=5
+        )
+        # Required units should be present
+        for u in require:
+            assert u in result["unit"].values
+        # is_required flag should be set
+        assert result[result["unit"].isin(require)]["is_required"].all()
+
+    def test_n_top_limit(self):
+        """Test limiting to top N controls."""
+        from diff_diff.prep import rank_control_units
+
+        data = generate_did_data(n_units=30, n_periods=6, seed=42)
+
+        result = rank_control_units(
+            data,
+            unit_column="unit",
+            time_column="period",
+            outcome_column="outcome",
+            treatment_column="treated",
+            n_top=10
+        )
+        assert len(result) == 10
+
+    def test_suggest_treatment_candidates(self):
+        """Test treatment candidate suggestion mode."""
+        from diff_diff.prep import rank_control_units
+
+        data = generate_did_data(n_units=20, n_periods=6, seed=42)
+        # Remove treatment column to simulate unknown treatment
+        data = data.drop(columns=["treated"])
+
+        result = rank_control_units(
+            data,
+            unit_column="unit",
+            time_column="period",
+            outcome_column="outcome",
+            suggest_treatment_candidates=True,
+            n_treatment_candidates=5
+        )
+        assert "treatment_candidate_score" in result.columns
+        assert len(result) == 5
+
+    def test_original_unchanged(self):
+        """Test that original DataFrame is not modified."""
+        from diff_diff.prep import rank_control_units
+
+        data = generate_did_data(n_units=20, n_periods=6, seed=42)
+        original_cols = data.columns.tolist()
+
+        rank_control_units(
+            data,
+            unit_column="unit",
+            time_column="period",
+            outcome_column="outcome",
+            treatment_column="treated"
+        )
+        assert data.columns.tolist() == original_cols
+
+    def test_error_missing_column(self):
+        """Test error when column doesn't exist."""
+        from diff_diff.prep import rank_control_units
+
+        data = generate_did_data(n_units=10, n_periods=4, seed=42)
+
+        with pytest.raises(ValueError, match="not found"):
+            rank_control_units(
+                data,
+                unit_column="missing_col",
+                time_column="period",
+                outcome_column="outcome"
+            )
+
+    def test_error_both_treatment_specs(self):
+        """Test error when both treatment specifications provided."""
+        from diff_diff.prep import rank_control_units
+
+        data = generate_did_data(n_units=10, n_periods=4, seed=42)
+
+        with pytest.raises(ValueError, match="Specify either"):
+            rank_control_units(
+                data,
+                unit_column="unit",
+                time_column="period",
+                outcome_column="outcome",
+                treatment_column="treated",
+                treated_units=[0, 1]
+            )
+
+    def test_error_require_and_exclude_same_unit(self):
+        """Test error when same unit is required and excluded."""
+        from diff_diff.prep import rank_control_units
+
+        data = generate_did_data(n_units=10, n_periods=4, seed=42)
+
+        with pytest.raises(ValueError, match="both required and excluded"):
+            rank_control_units(
+                data,
+                unit_column="unit",
+                time_column="period",
+                outcome_column="outcome",
+                treatment_column="treated",
+                require_units=[5],
+                exclude_units=[5]
+            )
+
+    def test_synthetic_weight_sum(self):
+        """Test that synthetic weights sum to approximately 1."""
+        from diff_diff.prep import rank_control_units
+
+        data = generate_did_data(n_units=20, n_periods=6, seed=42)
+
+        result = rank_control_units(
+            data,
+            unit_column="unit",
+            time_column="period",
+            outcome_column="outcome",
+            treatment_column="treated"
+        )
+
+        # Synthetic weights should sum to approximately 1
+        assert abs(result["synthetic_weight"].sum() - 1.0) < 0.01
+
+    def test_pre_periods_explicit(self):
+        """Test with explicitly specified pre-periods."""
+        from diff_diff.prep import rank_control_units
+
+        data = generate_did_data(n_units=20, n_periods=6, seed=42)
+
+        result = rank_control_units(
+            data,
+            unit_column="unit",
+            time_column="period",
+            outcome_column="outcome",
+            treatment_column="treated",
+            pre_periods=[0, 1]  # Only use first two periods
+        )
+        assert len(result) > 0
+
+    def test_weight_parameters(self):
+        """Test different outcome/covariate weight settings."""
+        from diff_diff.prep import rank_control_units
+
+        data = generate_did_data(n_units=20, n_periods=6, seed=42)
+        np.random.seed(42)
+        data["x1"] = np.random.randn(len(data))
+
+        # All weight on outcome
+        result1 = rank_control_units(
+            data,
+            unit_column="unit",
+            time_column="period",
+            outcome_column="outcome",
+            treatment_column="treated",
+            covariates=["x1"],
+            outcome_weight=1.0,
+            covariate_weight=0.0
+        )
+
+        # All weight on covariates
+        result2 = rank_control_units(
+            data,
+            unit_column="unit",
+            time_column="period",
+            outcome_column="outcome",
+            treatment_column="treated",
+            covariates=["x1"],
+            outcome_weight=0.0,
+            covariate_weight=1.0
+        )
+
+        # Rankings should differ
+        # (just check both work, exact comparison is data-dependent)
+        assert len(result1) > 0
+        assert len(result2) > 0
