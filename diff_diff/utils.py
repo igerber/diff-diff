@@ -2,9 +2,9 @@
 Utility functions for difference-in-differences estimation.
 """
 
-from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple, Union
 import warnings
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -380,7 +380,8 @@ def wild_bootstrap_se(
     alpha : float, default=0.05
         Significance level for confidence interval.
     seed : int, optional
-        Random seed for reproducibility.
+        Random seed for reproducibility. If None (default), results
+        will vary between runs.
     return_distribution : bool, default=False
         If True, include full bootstrap distribution in results.
 
@@ -457,8 +458,7 @@ def wild_bootstrap_se(
     }
     generate_weights = weight_generators[weight_type]
 
-    n, k = X.shape
-    XtX = X.T @ X
+    n = X.shape[0]
 
     # Step 1: Compute original coefficient and cluster-robust SE
     beta_hat = np.linalg.lstsq(X, y, rcond=None)[0]
@@ -846,8 +846,6 @@ def _compute_outcome_changes(
         ]["_outcome_change"].values
     else:
         # Aggregate changes: compute mean change per period per group
-        periods = sorted(data[time].unique())
-
         treated_data = data[data[treatment_group] == 1]
         control_data = data[data[treatment_group] == 0]
 

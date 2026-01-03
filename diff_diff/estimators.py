@@ -2,25 +2,23 @@
 Difference-in-Differences estimators with sklearn-like API.
 """
 
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
-from numpy.linalg import LinAlgError
 import pandas as pd
-from scipy import stats
+from numpy.linalg import LinAlgError
 
 from diff_diff.results import DiDResults, MultiPeriodDiDResults, PeriodEffect, SyntheticDiDResults
 from diff_diff.utils import (
-    validate_binary,
-    compute_robust_se,
     compute_confidence_interval,
     compute_p_value,
+    compute_placebo_effects,
+    compute_robust_se,
+    compute_sdid_estimator,
     compute_synthetic_weights,
     compute_time_weights,
-    compute_sdid_estimator,
-    compute_placebo_effects,
+    validate_binary,
     wild_bootstrap_se,
-    WildBootstrapResults,
 )
 
 
@@ -53,6 +51,7 @@ class DifferenceInDifferences:
         (recommended for <10 clusters), or "mammen" (skewness correction).
     seed : int, optional
         Random seed for reproducibility when using bootstrap inference.
+        If None (default), results will vary between runs.
 
     Attributes
     ----------
@@ -261,6 +260,11 @@ class DifferenceInDifferences:
 
         # Extract ATT (coefficient on interaction term)
         att_idx = 3  # Index of interaction term
+        att_var_name = f"{treatment}:{time}"
+        assert var_names[att_idx] == att_var_name, (
+            f"ATT index mismatch: expected '{att_var_name}' at index {att_idx}, "
+            f"but found '{var_names[att_idx]}'"
+        )
         att = coefficients[att_idx]
 
         # Compute degrees of freedom (used for analytical inference)
@@ -936,6 +940,15 @@ class MultiPeriodDiD(DifferenceInDifferences):
         ValueError
             If required parameters are missing or data validation fails.
         """
+        # Warn if wild bootstrap is requested but not supported
+        if self.inference == "wild_bootstrap":
+            import warnings
+            warnings.warn(
+                "Wild bootstrap inference is not yet supported for MultiPeriodDiD. "
+                "Using analytical inference instead.",
+                UserWarning
+            )
+
         # Validate basic inputs
         if outcome is None or treatment is None or time is None:
             raise ValueError(
@@ -1184,7 +1197,8 @@ class SyntheticDiD(DifferenceInDifferences):
         Number of bootstrap replications for standard error estimation.
         Set to 0 to use placebo-based inference instead.
     seed : int, optional
-        Random seed for reproducibility.
+        Random seed for reproducibility. If None (default), results
+        will vary between runs.
 
     Attributes
     ----------

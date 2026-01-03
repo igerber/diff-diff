@@ -319,6 +319,8 @@ def run_placebo_test(
     elif test_type == "fake_group":
         if unit is None:
             raise ValueError("unit is required for fake_group test")
+        if fake_treatment_group is None or len(fake_treatment_group) == 0:
+            raise ValueError("fake_treatment_group is required for fake_group test")
         return placebo_group_test(
             data=data,
             outcome=outcome,
@@ -789,12 +791,13 @@ def run_all_placebo_tests(
     alpha: float = 0.05,
     seed: Optional[int] = None,
     **estimator_kwargs
-) -> Dict[str, PlaceboTestResults]:
+) -> Dict[str, Union[PlaceboTestResults, Dict[str, str]]]:
     """
     Run a comprehensive suite of placebo tests.
 
     Runs fake timing tests for each pre-period, a permutation test, and
-    a leave-one-out sensitivity analysis.
+    a leave-one-out sensitivity analysis. If a test fails, the result
+    will be a dict with an "error" key containing the error message.
 
     Parameters
     ----------
