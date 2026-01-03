@@ -34,28 +34,28 @@ did = DifferenceInDifferences()
 results = did.fit(data, outcome='outcome', treatment='treated', time='post')
 
 # View results
-print(results)  # DiDResults(ATT=3.5000*, SE=1.2583, p=0.0367)
+print(results)  # DiDResults(ATT=3.0000, SE=1.7321, p=0.1583)
 results.print_summary()
 ```
 
 Output:
 ```
 ======================================================================
-          Difference-in-Differences Estimation Results
+             Difference-in-Differences Estimation Results
 ======================================================================
 
-Observations:                        8
-Treated units:                       4
-Control units:                       4
-R-squared:                      0.9123
+Observations:                      8
+Treated units:                     4
+Control units:                     4
+R-squared:                    0.9055
 
 ----------------------------------------------------------------------
-Parameter         Estimate     Std. Err.     t-stat      P>|t|
+Parameter           Estimate    Std. Err.     t-stat      P>|t|
 ----------------------------------------------------------------------
-ATT                 3.5000       1.2583      2.782      0.0367
+ATT                   3.0000       1.7321      1.732     0.1583
 ----------------------------------------------------------------------
 
-95% Confidence Interval: [0.3912, 6.6088]
+95% Confidence Interval: [-1.8089, 7.8089]
 
 Signif. codes: '***' 0.001, '**' 0.01, '*' 0.05, '.' 0.1
 ======================================================================
