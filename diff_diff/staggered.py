@@ -593,9 +593,6 @@ class CallawaySantAnna:
                 "Use n_bootstrap=0 for analytical standard errors."
             )
 
-        # Store covariates for use in estimation
-        self._covariates = covariates
-
         # Create working copy
         df = data.copy()
 
@@ -970,7 +967,10 @@ class CallawaySantAnna:
             # Adjusted variance for IPW
             se = np.sqrt(var_t / n_t + var_c * (1 - p_treat) / (n_c * p_treat)) if (n_t > 0 and n_c > 0 and p_treat > 0) else 0.0
 
-            inf_func = np.array([])  # Placeholder
+            # Influence function (for aggregation)
+            inf_treated = (treated_change - np.mean(treated_change)) / n_t
+            inf_control = (control_change - np.mean(control_change)) / n_c
+            inf_func = np.concatenate([inf_treated, -inf_control])
 
         return att, se, inf_func
 
