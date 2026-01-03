@@ -53,6 +53,11 @@ class DiDResults:
     residuals: Optional[np.ndarray] = field(default=None)
     fitted_values: Optional[np.ndarray] = field(default=None)
     r_squared: Optional[float] = field(default=None)
+    # Bootstrap inference fields
+    inference_method: str = field(default="analytical")
+    n_bootstrap: Optional[int] = field(default=None)
+    n_clusters: Optional[int] = field(default=None)
+    bootstrap_distribution: Optional[np.ndarray] = field(default=None, repr=False)
 
     def __repr__(self) -> str:
         """Concise string representation."""
@@ -93,6 +98,14 @@ class DiDResults:
         if self.r_squared is not None:
             lines.append(f"{'R-squared:':<25} {self.r_squared:>10.4f}")
 
+        # Add inference method info
+        if self.inference_method != "analytical":
+            lines.append(f"{'Inference method:':<25} {self.inference_method:>10}")
+            if self.n_bootstrap is not None:
+                lines.append(f"{'Bootstrap replications:':<25} {self.n_bootstrap:>10}")
+            if self.n_clusters is not None:
+                lines.append(f"{'Number of clusters:':<25} {self.n_clusters:>10}")
+
         lines.extend([
             "",
             "-" * 70,
@@ -126,7 +139,7 @@ class DiDResults:
         Dict[str, Any]
             Dictionary containing all estimation results.
         """
-        return {
+        result = {
             "att": self.att,
             "se": self.se,
             "t_stat": self.t_stat,
@@ -137,7 +150,13 @@ class DiDResults:
             "n_treated": self.n_treated,
             "n_control": self.n_control,
             "r_squared": self.r_squared,
+            "inference_method": self.inference_method,
         }
+        if self.n_bootstrap is not None:
+            result["n_bootstrap"] = self.n_bootstrap
+        if self.n_clusters is not None:
+            result["n_clusters"] = self.n_clusters
+        return result
 
     def to_dataframe(self) -> pd.DataFrame:
         """

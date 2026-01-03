@@ -42,9 +42,20 @@ from diff_diff.utils import (
     check_parallel_trends,
     check_parallel_trends_robust,
     equivalence_test_trends,
+    WildBootstrapResults,
+    wild_bootstrap_se,
+)
+from diff_diff.diagnostics import (
+    PlaceboTestResults,
+    run_placebo_test,
+    placebo_timing_test,
+    placebo_group_test,
+    permutation_test,
+    leave_one_out_test,
+    run_all_placebo_tests,
 )
 
-__version__ = "0.4.0"
+__version__ = "0.5.0"
 __all__ = [
     # Estimators
     "DifferenceInDifferences",
@@ -66,6 +77,17 @@ __all__ = [
     "check_parallel_trends",
     "check_parallel_trends_robust",
     "equivalence_test_trends",
+    # Wild cluster bootstrap
+    "WildBootstrapResults",
+    "wild_bootstrap_se",
+    # Placebo tests / diagnostics
+    "PlaceboTestResults",
+    "run_placebo_test",
+    "placebo_timing_test",
+    "placebo_group_test",
+    "permutation_test",
+    "leave_one_out_test",
+    "run_all_placebo_tests",
     # Data preparation utilities
     "make_treatment_indicator",
     "make_post_indicator",
