@@ -476,14 +476,6 @@ class CallawaySantAnna:
     >>> from diff_diff import plot_event_study
     >>> plot_event_study(results)
 
-    With covariate adjustment (conditional parallel trends):
-
-    >>> # When parallel trends only holds conditional on covariates
-    >>> cs = CallawaySantAnna(estimation_method='dr')  # doubly robust
-    >>> results = cs.fit(data, outcome='outcome', unit='unit',
-    ...                  time='time', first_treat='first_treat',
-    ...                  covariates=['age', 'income'])  # adjust for confounders
-
     Notes
     -----
     The key innovation of Callaway & Sant'Anna (2021) is the disaggregated
@@ -844,12 +836,6 @@ class CallawaySantAnna:
 
         Without covariates:
         Simple difference in means.
-
-        Note
-        ----
-        The standard error calculation with covariates uses an approximation
-        that ignores estimation error in the regression coefficients. For a
-        full sandwich variance estimator, see Sant'Anna & Zhao (2020).
         """
         n_t = len(treated_change)
         n_c = len(control_change)
