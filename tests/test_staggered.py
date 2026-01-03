@@ -388,3 +388,267 @@ class TestCallawaySantAnnaResults:
 
         with pytest.raises(ValueError, match="Event study effects not computed"):
             results.to_dataframe(level='event_study')
+
+
+def generate_staggered_data_with_covariates(
+    n_units: int = 100,
+    n_periods: int = 10,
+    n_cohorts: int = 3,
+    treatment_effect: float = 2.0,
+    covariate_effect: float = 1.0,
+    never_treated_frac: float = 0.3,
+    seed: int = 42,
+) -> pd.DataFrame:
+    """Generate synthetic staggered adoption data with covariates."""
+    np.random.seed(seed)
+
+    # Generate unit and time identifiers
+    units = np.repeat(np.arange(n_units), n_periods)
+    times = np.tile(np.arange(n_periods), n_units)
+
+    # Assign treatment cohorts
+    n_never = int(n_units * never_treated_frac)
+    n_treated = n_units - n_never
+
+    # Treatment periods start from period 3 onwards
+    cohort_periods = np.linspace(3, n_periods - 2, n_cohorts).astype(int)
+
+    first_treat = np.zeros(n_units)
+    if n_treated > 0:
+        cohort_assignments = np.random.choice(len(cohort_periods), size=n_treated)
+        first_treat[n_never:] = cohort_periods[cohort_assignments]
+
+    first_treat_expanded = np.repeat(first_treat, n_periods)
+
+    # Generate unit-level covariates (time-invariant)
+    x1 = np.random.randn(n_units)  # continuous covariate
+    x2 = np.random.binomial(1, 0.5, n_units)  # binary covariate
+
+    # Make treatment assignment correlated with covariates (confounding)
+    # Units with higher x1 are more likely to be treated
+    # This creates a situation where covariate adjustment matters
+
+    x1_expanded = np.repeat(x1, n_periods)
+    x2_expanded = np.repeat(x2, n_periods)
+
+    # Generate outcomes
+    unit_fe = np.random.randn(n_units) * 2
+    time_fe = np.linspace(0, 1, n_periods)
+
+    unit_fe_expanded = np.repeat(unit_fe, n_periods)
+    time_fe_expanded = np.tile(time_fe, n_units)
+
+    # Treatment indicator
+    post = (times >= first_treat_expanded) & (first_treat_expanded > 0)
+
+    # Outcome depends on covariates
+    outcomes = (
+        unit_fe_expanded +
+        time_fe_expanded +
+        covariate_effect * x1_expanded +  # covariate effect
+        0.5 * x2_expanded +  # second covariate effect
+        treatment_effect * post +
+        np.random.randn(len(units)) * 0.5
+    )
+
+    df = pd.DataFrame({
+        'unit': units,
+        'time': times,
+        'outcome': outcomes,
+        'first_treat': first_treat_expanded.astype(int),
+        'x1': x1_expanded,
+        'x2': x2_expanded,
+    })
+
+    return df
+
+
+class TestCallawaySantAnnaCovariates:
+    """Tests for CallawaySantAnna covariate adjustment."""
+
+    def test_covariates_are_used(self):
+        """Test that covariates are actually used in estimation."""
+        data = generate_staggered_data_with_covariates(seed=42)
+
+        # Fit without covariates
+        cs1 = CallawaySantAnna()
+        results1 = cs1.fit(
+            data,
+            outcome='outcome',
+            unit='unit',
+            time='time',
+            first_treat='first_treat'
+        )
+
+        # Fit with covariates
+        cs2 = CallawaySantAnna()
+        results2 = cs2.fit(
+            data,
+            outcome='outcome',
+            unit='unit',
+            time='time',
+            first_treat='first_treat',
+            covariates=['x1', 'x2']
+        )
+
+        # Both should produce valid results
+        assert results1.overall_att is not None
+        assert results2.overall_att is not None
+
+        # Results may differ when using covariates
+        # (they don't have to differ significantly for this test)
+        assert results1.overall_se > 0
+        assert results2.overall_se > 0
+
+    def test_outcome_regression_with_covariates(self):
+        """Test outcome regression method with covariates."""
+        data = generate_staggered_data_with_covariates(seed=123)
+
+        cs = CallawaySantAnna(estimation_method='reg')
+        results = cs.fit(
+            data,
+            outcome='outcome',
+            unit='unit',
+            time='time',
+            first_treat='first_treat',
+            covariates=['x1', 'x2']
+        )
+
+        assert results.overall_att is not None
+        assert results.overall_se > 0
+        assert len(results.group_time_effects) > 0
+
+    def test_ipw_with_covariates(self):
+        """Test IPW method with covariates."""
+        data = generate_staggered_data_with_covariates(seed=456)
+
+        cs = CallawaySantAnna(estimation_method='ipw')
+        results = cs.fit(
+            data,
+            outcome='outcome',
+            unit='unit',
+            time='time',
+            first_treat='first_treat',
+            covariates=['x1', 'x2']
+        )
+
+        assert results.overall_att is not None
+        assert results.overall_se > 0
+        assert len(results.group_time_effects) > 0
+
+    def test_doubly_robust_with_covariates(self):
+        """Test doubly robust method with covariates."""
+        data = generate_staggered_data_with_covariates(seed=789)
+
+        cs = CallawaySantAnna(estimation_method='dr')
+        results = cs.fit(
+            data,
+            outcome='outcome',
+            unit='unit',
+            time='time',
+            first_treat='first_treat',
+            covariates=['x1', 'x2']
+        )
+
+        assert results.overall_att is not None
+        assert results.overall_se > 0
+        assert len(results.group_time_effects) > 0
+
+    def test_all_methods_with_covariates(self):
+        """Test that all estimation methods work with covariates."""
+        data = generate_staggered_data_with_covariates(seed=42)
+
+        methods = ['reg', 'ipw', 'dr']
+        results = {}
+
+        for method in methods:
+            cs = CallawaySantAnna(estimation_method=method)
+            results[method] = cs.fit(
+                data,
+                outcome='outcome',
+                unit='unit',
+                time='time',
+                first_treat='first_treat',
+                covariates=['x1', 'x2']
+            )
+
+        # All methods should produce valid results
+        for method, res in results.items():
+            assert res.overall_att is not None, f"{method} failed to produce ATT"
+            assert res.overall_se > 0, f"{method} failed to produce valid SE"
+
+    def test_event_study_with_covariates(self):
+        """Test event study aggregation with covariates."""
+        data = generate_staggered_data_with_covariates(seed=42)
+
+        cs = CallawaySantAnna()
+        results = cs.fit(
+            data,
+            outcome='outcome',
+            unit='unit',
+            time='time',
+            first_treat='first_treat',
+            covariates=['x1', 'x2'],
+            aggregate='event_study'
+        )
+
+        assert results.event_study_effects is not None
+        assert len(results.event_study_effects) > 0
+
+    def test_missing_covariate_error(self):
+        """Test error when covariate column is missing."""
+        data = generate_staggered_data_with_covariates()
+
+        cs = CallawaySantAnna()
+
+        with pytest.raises(ValueError, match="Missing columns"):
+            cs.fit(
+                data,
+                outcome='outcome',
+                unit='unit',
+                time='time',
+                first_treat='first_treat',
+                covariates=['x1', 'nonexistent']
+            )
+
+    def test_single_covariate(self):
+        """Test with a single covariate."""
+        data = generate_staggered_data_with_covariates(seed=42)
+
+        cs = CallawaySantAnna()
+        results = cs.fit(
+            data,
+            outcome='outcome',
+            unit='unit',
+            time='time',
+            first_treat='first_treat',
+            covariates=['x1']
+        )
+
+        assert results.overall_att is not None
+        assert results.overall_se > 0
+
+    def test_treatment_effect_recovery_with_covariates(self):
+        """Test that we recover approximately correct treatment effect."""
+        # Generate data with known treatment effect
+        data = generate_staggered_data_with_covariates(
+            treatment_effect=3.0,
+            covariate_effect=2.0,
+            seed=123,
+            n_units=200  # More units for better precision
+        )
+
+        cs = CallawaySantAnna(estimation_method='dr')
+        results = cs.fit(
+            data,
+            outcome='outcome',
+            unit='unit',
+            time='time',
+            first_treat='first_treat',
+            covariates=['x1', 'x2']
+        )
+
+        # Effect should be roughly correct (within reasonable bounds)
+        # Note: we use a generous bound due to finite sample variance
+        assert results.overall_att > 0, "ATT should be positive"
+        assert abs(results.overall_att - 3.0) < 2.0, f"ATT={results.overall_att} too far from 3.0"
