@@ -979,6 +979,8 @@ Placebo tests help validate the parallel trends assumption by checking whether e
 from diff_diff import run_placebo_test
 
 # Test: Is there an effect before treatment actually occurred?
+# Actual treatment is at period 3 (post_periods=[3, 4, 5])
+# We test if a "fake" treatment at period 1 shows an effect
 results = run_placebo_test(
     data,
     outcome='outcome',
@@ -986,7 +988,7 @@ results = run_placebo_test(
     time='period',
     test_type='fake_timing',
     fake_treatment_period=1,  # Pretend treatment was in period 1
-    post_periods=[1, 2]       # Actual treatment was in period 3
+    post_periods=[3, 4, 5]    # Actual post-treatment periods
 )
 
 print(results.summary())
@@ -999,13 +1001,17 @@ print(f"Is significant (bad): {results.is_significant}")
 
 ```python
 # Test: Is there an effect among never-treated units?
+# Get some control unit IDs to use as "fake treated"
+control_units = data[data['treated'] == 0]['firm_id'].unique()[:5]
+
 results = run_placebo_test(
     data,
     outcome='outcome',
     treatment='treated',
     time='period',
+    unit='firm_id',
     test_type='fake_group',
-    fake_treatment_group='industry == "tech"',  # Fake treatment within controls
+    fake_treatment_group=list(control_units),  # List of control unit IDs
     post_periods=[3, 4, 5]
 )
 ```
@@ -1014,11 +1020,13 @@ results = run_placebo_test(
 
 ```python
 # Randomly reassign treatment and compute distribution of effects
+# Note: requires binary post indicator (use 'post' column, not 'period')
 results = run_placebo_test(
     data,
     outcome='outcome',
     treatment='treated',
-    time='period',
+    time='post',           # Binary post-treatment indicator
+    unit='firm_id',
     test_type='permutation',
     n_permutations=1000,
     seed=42
@@ -1033,11 +1041,12 @@ print(f"Permutation p-value: {results.p_value:.4f}")
 
 ```python
 # Test sensitivity to individual treated units
+# Note: requires binary post indicator (use 'post' column, not 'period')
 results = run_placebo_test(
     data,
     outcome='outcome',
     treatment='treated',
-    time='period',
+    time='post',           # Binary post-treatment indicator
     unit='firm_id',
     test_type='leave_one_out'
 )
@@ -1052,6 +1061,9 @@ print(results.leave_one_out_effects)  # Effect when each unit is dropped
 from diff_diff import run_all_placebo_tests
 
 # Comprehensive diagnostic suite
+# Note: This function runs fake_timing tests on pre-treatment periods.
+# The permutation and leave_one_out tests require a binary post indicator,
+# so they may return errors if the data uses multi-period time column.
 all_results = run_all_placebo_tests(
     data,
     outcome='outcome',
@@ -1065,7 +1077,10 @@ all_results = run_all_placebo_tests(
 )
 
 for test_name, result in all_results.items():
-    print(f"{test_name}: p={result.p_value:.3f}, significant={result.is_significant}")
+    if hasattr(result, 'p_value'):
+        print(f"{test_name}: p={result.p_value:.3f}, significant={result.is_significant}")
+    elif isinstance(result, dict) and 'error' in result:
+        print(f"{test_name}: Error - {result['error']}")
 ```
 
 ## API Reference
