@@ -652,3 +652,56 @@ class TestCallawaySantAnnaCovariates:
         # Note: we use a generous bound due to finite sample variance
         assert results.overall_att > 0, "ATT should be positive"
         assert abs(results.overall_att - 3.0) < 2.0, f"ATT={results.overall_att} too far from 3.0"
+
+    def test_extreme_propensity_scores(self):
+        """Test handling of covariates that strongly predict treatment.
+
+        When covariates nearly perfectly separate treated/control units,
+        propensity scores approach 0 or 1. The estimator should handle
+        this gracefully via propensity score clipping.
+        """
+        np.random.seed(42)
+        n_units = 100
+        n_periods = 8
+
+        # Generate unit and time identifiers
+        units = np.repeat(np.arange(n_units), n_periods)
+        times = np.tile(np.arange(n_periods), n_units)
+
+        # Create a covariate that strongly predicts treatment
+        # High values -> treated, low values -> never-treated
+        x_strong = np.random.randn(n_units)
+        x_strong_expanded = np.repeat(x_strong, n_periods)
+
+        # Assign treatment based on covariate (top 50% treated at period 4)
+        first_treat = np.zeros(n_units)
+        first_treat[x_strong > np.median(x_strong)] = 4
+        first_treat_expanded = np.repeat(first_treat, n_periods)
+
+        # Generate outcomes
+        post = (times >= first_treat_expanded) & (first_treat_expanded > 0)
+        outcomes = 1.0 + 0.5 * x_strong_expanded + 2.0 * post + np.random.randn(len(units)) * 0.3
+
+        data = pd.DataFrame({
+            'unit': units,
+            'time': times,
+            'outcome': outcomes,
+            'first_treat': first_treat_expanded.astype(int),
+            'x_strong': x_strong_expanded,
+        })
+
+        # IPW should handle extreme propensity scores via clipping
+        cs = CallawaySantAnna(estimation_method='ipw')
+        results = cs.fit(
+            data,
+            outcome='outcome',
+            unit='unit',
+            time='time',
+            first_treat='first_treat',
+            covariates=['x_strong']
+        )
+
+        # Should produce valid results (not NaN or inf)
+        assert np.isfinite(results.overall_att), "ATT should be finite"
+        assert np.isfinite(results.overall_se), "SE should be finite"
+        assert results.overall_se > 0, "SE should be positive"
