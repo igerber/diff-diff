@@ -5,20 +5,18 @@ Implements modern methods for DiD with variation in treatment timing,
 including the Callaway-Sant'Anna (2021) estimator.
 """
 
+import warnings
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
-from scipy import stats
 
+from diff_diff.results import _get_significance_stars
 from diff_diff.utils import (
-    validate_binary,
-    compute_robust_se,
     compute_confidence_interval,
     compute_p_value,
 )
-from diff_diff.results import _get_significance_stars
 
 
 @dataclass
@@ -486,6 +484,22 @@ class CallawaySantAnna:
         if missing:
             raise ValueError(f"Missing columns: {missing}")
 
+        # Check for unimplemented features
+        if self.n_bootstrap > 0:
+            raise NotImplementedError(
+                "Bootstrap inference is not yet implemented. "
+                "Use n_bootstrap=0 for analytical standard errors."
+            )
+
+        if covariates:
+            warnings.warn(
+                "Covariates are accepted but not yet used in estimation. "
+                "The current implementation uses unconditional parallel trends. "
+                "Covariate-adjusted estimation will be added in a future version.",
+                UserWarning,
+                stacklevel=2,
+            )
+
         # Create working copy
         df = data.copy()
 
@@ -913,7 +927,6 @@ class CallawaySantAnna:
 
             effs = np.array([x[0] for x in g_effects])
             ses = np.array([x[1] for x in g_effects])
-            ns = np.array([x[2] for x in g_effects], dtype=float)
 
             # Equal weight across time periods for a group
             weights = np.ones(len(effs)) / len(effs)

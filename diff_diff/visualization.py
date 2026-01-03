@@ -4,10 +4,14 @@ Visualization functions for difference-in-differences analysis.
 Provides event study plots and other diagnostic visualizations.
 """
 
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd
+
+if TYPE_CHECKING:
+    from diff_diff.results import MultiPeriodDiDResults
+    from diff_diff.staggered import CallawaySantAnnaResults
 
 # Type alias for results that can be plotted
 PlottableResults = Union[
