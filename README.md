@@ -307,6 +307,79 @@ cohort_data = aggregate_to_cohorts(
 # Result: mean outcome by treatment group and period
 ```
 
+### Rank Control Units
+
+Select the best control units for DiD or Synthetic DiD analysis by ranking them based on pre-treatment outcome similarity:
+
+```python
+from diff_diff import rank_control_units, generate_did_data
+
+# Generate sample data
+data = generate_did_data(n_units=50, n_periods=6, seed=42)
+
+# Rank control units by their similarity to treated units
+ranking = rank_control_units(
+    data,
+    unit_column='unit',
+    time_column='period',
+    outcome_column='outcome',
+    treatment_column='treated',
+    n_top=10  # Return top 10 controls
+)
+
+print(ranking[['unit', 'quality_score', 'pre_trend_rmse']])
+```
+
+Output:
+```
+   unit  quality_score  pre_trend_rmse
+0    35         1.0000          0.4521
+1    42         0.9234          0.5123
+2    28         0.8876          0.5892
+...
+```
+
+With covariates for matching:
+
+```python
+# Add covariate-based matching
+ranking = rank_control_units(
+    data,
+    unit_column='unit',
+    time_column='period',
+    outcome_column='outcome',
+    treatment_column='treated',
+    covariates=['size', 'age'],  # Match on these too
+    outcome_weight=0.7,          # 70% weight on outcome trends
+    covariate_weight=0.3         # 30% weight on covariate similarity
+)
+```
+
+Filter data for SyntheticDiD using top controls:
+
+```python
+from diff_diff import SyntheticDiD
+
+# Get top control units
+top_controls = ranking['unit'].tolist()
+
+# Filter data to treated + top controls
+filtered_data = data[
+    (data['treated'] == 1) | (data['unit'].isin(top_controls))
+]
+
+# Fit SyntheticDiD with selected controls
+sdid = SyntheticDiD()
+results = sdid.fit(
+    filtered_data,
+    outcome='outcome',
+    treatment='treated',
+    unit='unit',
+    time='period',
+    post_periods=[3, 4, 5]
+)
+```
+
 ## Usage
 
 ### Basic DiD with Column Names
@@ -1025,6 +1098,31 @@ aggregate_to_cohorts(
     covariates=None        # Additional columns to aggregate
 )
 ```
+
+#### rank_control_units
+
+```python
+rank_control_units(
+    data,                          # Panel data in long format
+    unit_column,                   # Unit identifier column
+    time_column,                   # Time period column
+    outcome_column,                # Outcome variable column
+    treatment_column=None,         # Treatment indicator column (0/1)
+    treated_units=None,            # Explicit list of treated unit IDs
+    pre_periods=None,              # Pre-treatment periods (default: first half)
+    covariates=None,               # Covariate columns for matching
+    outcome_weight=0.7,            # Weight for outcome trend similarity (0-1)
+    covariate_weight=0.3,          # Weight for covariate distance (0-1)
+    exclude_units=None,            # Units to exclude from control pool
+    require_units=None,            # Units that must appear in output
+    n_top=None,                    # Return only top N controls
+    suggest_treatment_candidates=False,  # Identify treatment candidates
+    n_treatment_candidates=5,      # Number of treatment candidates
+    lambda_reg=0.0                 # Regularization for synthetic weights
+)
+```
+
+Returns DataFrame with columns: `unit`, `quality_score`, `outcome_trend_score`, `covariate_score`, `synthetic_weight`, `pre_trend_rmse`, `is_required`.
 
 ## Requirements
 

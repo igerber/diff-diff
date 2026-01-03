@@ -55,6 +55,9 @@ mypy diff_diff
   - `make_treatment_indicator`, `make_post_indicator` - Create binary indicators
   - `wide_to_long`, `balance_panel` - Panel data reshaping
   - `validate_did_data`, `summarize_did_data` - Data validation and summary
+  - `create_event_time` - Create event-time column for staggered adoption designs
+  - `aggregate_to_cohorts` - Aggregate unit-level data to cohort means
+  - `rank_control_units` - Rank control units by suitability for DiD/Synthetic control
 
 ### Key Design Patterns
 
