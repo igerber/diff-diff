@@ -19,6 +19,8 @@ from diff_diff.utils import (
     compute_time_weights,
     compute_sdid_estimator,
     compute_placebo_effects,
+    wild_bootstrap_se,
+    WildBootstrapResults,
 )
 
 
@@ -40,6 +42,17 @@ class DifferenceInDifferences:
         Column name for cluster-robust standard errors.
     alpha : float, default=0.05
         Significance level for confidence intervals.
+    inference : str, default="analytical"
+        Inference method: "analytical" for standard asymptotic inference,
+        or "wild_bootstrap" for wild cluster bootstrap (recommended when
+        number of clusters is small, <50).
+    n_bootstrap : int, default=999
+        Number of bootstrap replications when inference="wild_bootstrap".
+    bootstrap_weights : str, default="rademacher"
+        Type of bootstrap weights: "rademacher" (standard), "webb"
+        (recommended for <10 clusters), or "mammen" (skewness correction).
+    seed : int, optional
+        Random seed for reproducibility when using bootstrap inference.
 
     Attributes
     ----------
@@ -92,16 +105,25 @@ class DifferenceInDifferences:
         self,
         robust: bool = True,
         cluster: Optional[str] = None,
-        alpha: float = 0.05
+        alpha: float = 0.05,
+        inference: str = "analytical",
+        n_bootstrap: int = 999,
+        bootstrap_weights: str = "rademacher",
+        seed: Optional[int] = None
     ):
         self.robust = robust
         self.cluster = cluster
         self.alpha = alpha
+        self.inference = inference
+        self.n_bootstrap = n_bootstrap
+        self.bootstrap_weights = bootstrap_weights
+        self.seed = seed
 
         self.is_fitted_ = False
         self.results_ = None
         self._coefficients = None
         self._vcov = None
+        self._bootstrap_results = None  # Store WildBootstrapResults if used
 
     def fit(
         self,
@@ -237,12 +259,46 @@ class DifferenceInDifferences:
         # Fit OLS
         coefficients, residuals, fitted, r_squared = self._fit_ols(X, y)
 
-        # Compute standard errors
-        if self.cluster is not None:
+        # Extract ATT (coefficient on interaction term)
+        att_idx = 3  # Index of interaction term
+        att = coefficients[att_idx]
+
+        # Compute degrees of freedom (used for analytical inference)
+        df = len(y) - X.shape[1] - n_absorbed_effects
+
+        # Compute standard errors and inference
+        if self.inference == "wild_bootstrap" and self.cluster is not None:
+            # Wild cluster bootstrap for few-cluster inference
+            cluster_ids = data[self.cluster].values
+            bootstrap_results = wild_bootstrap_se(
+                X, y, residuals, cluster_ids,
+                coefficient_index=att_idx,
+                n_bootstrap=self.n_bootstrap,
+                weight_type=self.bootstrap_weights,
+                alpha=self.alpha,
+                seed=self.seed,
+                return_distribution=False
+            )
+            self._bootstrap_results = bootstrap_results
+            se = bootstrap_results.se
+            p_value = bootstrap_results.p_value
+            conf_int = (bootstrap_results.ci_lower, bootstrap_results.ci_upper)
+            t_stat = bootstrap_results.t_stat_original
+            # Also compute vcov for storage (using cluster-robust for consistency)
+            vcov = compute_robust_se(X, residuals, cluster_ids)
+        elif self.cluster is not None:
             cluster_ids = data[self.cluster].values
             vcov = compute_robust_se(X, residuals, cluster_ids)
+            se = np.sqrt(vcov[att_idx, att_idx])
+            t_stat = att / se
+            p_value = compute_p_value(t_stat, df=df)
+            conf_int = compute_confidence_interval(att, se, self.alpha, df=df)
         elif self.robust:
             vcov = compute_robust_se(X, residuals)
+            se = np.sqrt(vcov[att_idx, att_idx])
+            t_stat = att / se
+            p_value = compute_p_value(t_stat, df=df)
+            conf_int = compute_confidence_interval(att, se, self.alpha, df=df)
         else:
             # Classical OLS standard errors
             n = len(y)
@@ -251,17 +307,10 @@ class DifferenceInDifferences:
             # Use solve() instead of inv() for numerical stability
             # solve(A, B) computes X where AX=B, so this yields (X'X)^{-1} * mse
             vcov = np.linalg.solve(X.T @ X, mse * np.eye(k))
-
-        # Extract ATT (coefficient on interaction term)
-        att_idx = 3  # Index of interaction term
-        att = coefficients[att_idx]
-        se = np.sqrt(vcov[att_idx, att_idx])
-
-        # Compute test statistics (adjust df for absorbed fixed effects)
-        df = len(y) - X.shape[1] - n_absorbed_effects
-        t_stat = att / se
-        p_value = compute_p_value(t_stat, df=df)
-        conf_int = compute_confidence_interval(att, se, self.alpha, df=df)
+            se = np.sqrt(vcov[att_idx, att_idx])
+            t_stat = att / se
+            p_value = compute_p_value(t_stat, df=df)
+            conf_int = compute_confidence_interval(att, se, self.alpha, df=df)
 
         # Count observations
         n_treated = int(np.sum(d))
@@ -269,6 +318,15 @@ class DifferenceInDifferences:
 
         # Create coefficient dictionary
         coef_dict = {name: coef for name, coef in zip(var_names, coefficients)}
+
+        # Determine inference method and bootstrap info
+        inference_method = "analytical"
+        n_bootstrap_used = None
+        n_clusters_used = None
+        if self._bootstrap_results is not None:
+            inference_method = "wild_bootstrap"
+            n_bootstrap_used = self._bootstrap_results.n_bootstrap
+            n_clusters_used = self._bootstrap_results.n_clusters
 
         # Store results
         self.results_ = DiDResults(
@@ -286,6 +344,9 @@ class DifferenceInDifferences:
             residuals=residuals,
             fitted_values=fitted,
             r_squared=r_squared,
+            inference_method=inference_method,
+            n_bootstrap=n_bootstrap_used,
+            n_clusters=n_clusters_used,
         )
 
         self._coefficients = coefficients
@@ -501,6 +562,10 @@ class DifferenceInDifferences:
             "robust": self.robust,
             "cluster": self.cluster,
             "alpha": self.alpha,
+            "inference": self.inference,
+            "n_bootstrap": self.n_bootstrap,
+            "bootstrap_weights": self.bootstrap_weights,
+            "seed": self.seed,
         }
 
     def set_params(self, **params) -> "DifferenceInDifferences":
@@ -635,26 +700,54 @@ class TwoWayFixedEffects(DifferenceInDifferences):
         coefficients, residuals, fitted, r_squared = self._fit_ols(X, y)
 
         # ATT is the coefficient on treatment_post (index 1)
-        att = coefficients[1]
-
-        # Compute cluster-robust standard errors
-        cluster_ids = data[cluster_var].values
-        vcov = compute_robust_se(X, residuals, cluster_ids)
-        se = np.sqrt(vcov[1, 1])
+        att_idx = 1
+        att = coefficients[att_idx]
 
         # Degrees of freedom adjustment for fixed effects
         n_units = data[unit].nunique()
         n_times = data[time].nunique()
         df = len(y) - X.shape[1] - n_units - n_times + 2
 
-        t_stat = att / se
-        p_value = compute_p_value(t_stat, df=df)
-        conf_int = compute_confidence_interval(att, se, self.alpha, df=df)
+        # Compute standard errors and inference
+        cluster_ids = data[cluster_var].values
+        if self.inference == "wild_bootstrap":
+            # Wild cluster bootstrap for few-cluster inference
+            bootstrap_results = wild_bootstrap_se(
+                X, y, residuals, cluster_ids,
+                coefficient_index=att_idx,
+                n_bootstrap=self.n_bootstrap,
+                weight_type=self.bootstrap_weights,
+                alpha=self.alpha,
+                seed=self.seed,
+                return_distribution=False
+            )
+            self._bootstrap_results = bootstrap_results
+            se = bootstrap_results.se
+            p_value = bootstrap_results.p_value
+            conf_int = (bootstrap_results.ci_lower, bootstrap_results.ci_upper)
+            t_stat = bootstrap_results.t_stat_original
+            vcov = compute_robust_se(X, residuals, cluster_ids)
+        else:
+            # Standard cluster-robust SE
+            vcov = compute_robust_se(X, residuals, cluster_ids)
+            se = np.sqrt(vcov[att_idx, att_idx])
+            t_stat = att / se
+            p_value = compute_p_value(t_stat, df=df)
+            conf_int = compute_confidence_interval(att, se, self.alpha, df=df)
 
         # Count observations
         treated_units = data[data[treatment] == 1][unit].unique()
         n_treated = len(treated_units)
         n_control = n_units - n_treated
+
+        # Determine inference method and bootstrap info
+        inference_method = "analytical"
+        n_bootstrap_used = None
+        n_clusters_used = None
+        if self._bootstrap_results is not None:
+            inference_method = "wild_bootstrap"
+            n_bootstrap_used = self._bootstrap_results.n_bootstrap
+            n_clusters_used = self._bootstrap_results.n_clusters
 
         self.results_ = DiDResults(
             att=att,
@@ -671,6 +764,9 @@ class TwoWayFixedEffects(DifferenceInDifferences):
             residuals=residuals,
             fitted_values=fitted,
             r_squared=r_squared,
+            inference_method=inference_method,
+            n_bootstrap=n_bootstrap_used,
+            n_clusters=n_clusters_used,
         )
 
         self.is_fitted_ = True
@@ -954,7 +1050,12 @@ class MultiPeriodDiD(DifferenceInDifferences):
         # Fit OLS
         coefficients, residuals, fitted, r_squared = self._fit_ols(X, y)
 
+        # Degrees of freedom
+        df = len(y) - X.shape[1] - n_absorbed_effects
+
         # Compute standard errors
+        # Note: Wild bootstrap for multi-period effects is complex (multiple coefficients)
+        # For now, we use analytical inference even if inference="wild_bootstrap"
         if self.cluster is not None:
             cluster_ids = data[self.cluster].values
             vcov = compute_robust_se(X, residuals, cluster_ids)
@@ -967,9 +1068,6 @@ class MultiPeriodDiD(DifferenceInDifferences):
             # Use solve() instead of inv() for numerical stability
             # solve(A, B) computes X where AX=B, so this yields (X'X)^{-1} * mse
             vcov = np.linalg.solve(X.T @ X, mse * np.eye(k))
-
-        # Degrees of freedom
-        df = len(y) - X.shape[1] - n_absorbed_effects
 
         # Extract period-specific treatment effects
         period_effects = {}

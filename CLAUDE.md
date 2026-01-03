@@ -59,6 +59,16 @@ mypy diff_diff
   - Robust/cluster standard errors (`compute_robust_se`)
   - Parallel trends tests (`check_parallel_trends`, `check_parallel_trends_robust`, `equivalence_test_trends`)
   - Synthetic control weight computation (`compute_synthetic_weights`, `compute_time_weights`)
+  - Wild cluster bootstrap (`wild_bootstrap_se`, `WildBootstrapResults`)
+
+- **`diff_diff/diagnostics.py`** - Placebo tests and DiD diagnostics:
+  - `run_placebo_test()` - Main dispatcher for different placebo test types
+  - `placebo_timing_test()` - Fake treatment timing test
+  - `placebo_group_test()` - Fake treatment group test (DiD on never-treated)
+  - `permutation_test()` - Permutation-based inference
+  - `leave_one_out_test()` - Sensitivity to individual treated units
+  - `run_all_placebo_tests()` - Comprehensive suite of diagnostics
+  - `PlaceboTestResults` - Dataclass for test results
 
 - **`diff_diff/prep.py`** - Data preparation utilities:
   - `generate_did_data` - Create synthetic data with known treatment effect

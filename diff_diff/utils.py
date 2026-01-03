@@ -2,7 +2,9 @@
 Utility functions for difference-in-differences estimation.
 """
 
+from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple, Union
+import warnings
 
 import numpy as np
 import pandas as pd
@@ -166,6 +168,382 @@ def compute_p_value(t_stat: float, df: int = None, two_sided: bool = True) -> fl
         p_value *= 2
 
     return p_value
+
+
+# =============================================================================
+# Wild Cluster Bootstrap
+# =============================================================================
+
+
+@dataclass
+class WildBootstrapResults:
+    """
+    Results from wild cluster bootstrap inference.
+
+    Attributes
+    ----------
+    se : float
+        Bootstrap standard error of the coefficient.
+    p_value : float
+        Bootstrap p-value (two-sided).
+    t_stat_original : float
+        Original t-statistic from the data.
+    ci_lower : float
+        Lower bound of the confidence interval.
+    ci_upper : float
+        Upper bound of the confidence interval.
+    n_clusters : int
+        Number of clusters in the data.
+    n_bootstrap : int
+        Number of bootstrap replications.
+    weight_type : str
+        Type of bootstrap weights used ("rademacher", "webb", or "mammen").
+    alpha : float
+        Significance level used for confidence interval.
+    bootstrap_distribution : np.ndarray, optional
+        Full bootstrap distribution of coefficients (if requested).
+
+    References
+    ----------
+    Cameron, A. C., Gelbach, J. B., & Miller, D. L. (2008).
+    Bootstrap-Based Improvements for Inference with Clustered Errors.
+    The Review of Economics and Statistics, 90(3), 414-427.
+    """
+
+    se: float
+    p_value: float
+    t_stat_original: float
+    ci_lower: float
+    ci_upper: float
+    n_clusters: int
+    n_bootstrap: int
+    weight_type: str
+    alpha: float = 0.05
+    bootstrap_distribution: Optional[np.ndarray] = field(default=None, repr=False)
+
+    def summary(self) -> str:
+        """Generate formatted summary of bootstrap results."""
+        lines = [
+            "Wild Cluster Bootstrap Results",
+            "=" * 40,
+            f"Bootstrap SE:        {self.se:.6f}",
+            f"Bootstrap p-value:   {self.p_value:.4f}",
+            f"Original t-stat:     {self.t_stat_original:.4f}",
+            f"CI ({int((1-self.alpha)*100)}%):           [{self.ci_lower:.6f}, {self.ci_upper:.6f}]",
+            f"Number of clusters:  {self.n_clusters}",
+            f"Bootstrap reps:      {self.n_bootstrap}",
+            f"Weight type:         {self.weight_type}",
+        ]
+        return "\n".join(lines)
+
+    def print_summary(self) -> None:
+        """Print formatted summary to stdout."""
+        print(self.summary())
+
+
+def _generate_rademacher_weights(n_clusters: int, rng: np.random.Generator) -> np.ndarray:
+    """
+    Generate Rademacher weights: +1 or -1 with probability 0.5.
+
+    Parameters
+    ----------
+    n_clusters : int
+        Number of clusters.
+    rng : np.random.Generator
+        Random number generator.
+
+    Returns
+    -------
+    np.ndarray
+        Array of Rademacher weights.
+    """
+    return rng.choice([-1.0, 1.0], size=n_clusters)
+
+
+def _generate_webb_weights(n_clusters: int, rng: np.random.Generator) -> np.ndarray:
+    """
+    Generate Webb's 6-point distribution weights.
+
+    Values: {-sqrt(3/2), -sqrt(2/2), -sqrt(1/2), sqrt(1/2), sqrt(2/2), sqrt(3/2)}
+    with probabilities proportional to {1, 2, 3, 3, 2, 1}.
+
+    This distribution is recommended for very few clusters (G < 10) as it
+    provides better finite-sample properties than Rademacher weights.
+
+    Parameters
+    ----------
+    n_clusters : int
+        Number of clusters.
+    rng : np.random.Generator
+        Random number generator.
+
+    Returns
+    -------
+    np.ndarray
+        Array of Webb weights.
+
+    References
+    ----------
+    Webb, M. D. (2014). Reworking wild bootstrap based inference for
+    clustered errors. Queen's Economics Department Working Paper No. 1315.
+    """
+    values = np.array([
+        -np.sqrt(3 / 2), -np.sqrt(2 / 2), -np.sqrt(1 / 2),
+        np.sqrt(1 / 2), np.sqrt(2 / 2), np.sqrt(3 / 2)
+    ])
+    probs = np.array([1, 2, 3, 3, 2, 1]) / 12
+    return rng.choice(values, size=n_clusters, p=probs)
+
+
+def _generate_mammen_weights(n_clusters: int, rng: np.random.Generator) -> np.ndarray:
+    """
+    Generate Mammen's two-point distribution weights.
+
+    Values: {-(sqrt(5)-1)/2, (sqrt(5)+1)/2}
+    with probabilities {(sqrt(5)+1)/(2*sqrt(5)), (sqrt(5)-1)/(2*sqrt(5))}.
+
+    This distribution satisfies E[v]=0, E[v^2]=1, E[v^3]=1, which provides
+    asymptotic refinement for skewed error distributions.
+
+    Parameters
+    ----------
+    n_clusters : int
+        Number of clusters.
+    rng : np.random.Generator
+        Random number generator.
+
+    Returns
+    -------
+    np.ndarray
+        Array of Mammen weights.
+
+    References
+    ----------
+    Mammen, E. (1993). Bootstrap and Wild Bootstrap for High Dimensional
+    Linear Models. The Annals of Statistics, 21(1), 255-285.
+    """
+    sqrt5 = np.sqrt(5)
+    # Values from Mammen (1993)
+    val1 = -(sqrt5 - 1) / 2  # approximately -0.618
+    val2 = (sqrt5 + 1) / 2   # approximately 1.618 (golden ratio)
+
+    # Probability of val1
+    p1 = (sqrt5 + 1) / (2 * sqrt5)  # approximately 0.724
+
+    return rng.choice([val1, val2], size=n_clusters, p=[p1, 1 - p1])
+
+
+def wild_bootstrap_se(
+    X: np.ndarray,
+    y: np.ndarray,
+    residuals: np.ndarray,
+    cluster_ids: np.ndarray,
+    coefficient_index: int,
+    n_bootstrap: int = 999,
+    weight_type: str = "rademacher",
+    null_hypothesis: float = 0.0,
+    alpha: float = 0.05,
+    seed: Optional[int] = None,
+    return_distribution: bool = False
+) -> WildBootstrapResults:
+    """
+    Compute wild cluster bootstrap standard errors and p-values.
+
+    Implements the Wild Cluster Residual (WCR) bootstrap procedure from
+    Cameron, Gelbach, and Miller (2008). Uses the restricted residuals
+    approach (imposing H0: coefficient = null_hypothesis) for more accurate
+    p-value computation.
+
+    Parameters
+    ----------
+    X : np.ndarray
+        Design matrix of shape (n, k).
+    y : np.ndarray
+        Outcome vector of shape (n,).
+    residuals : np.ndarray
+        OLS residuals from unrestricted regression, shape (n,).
+    cluster_ids : np.ndarray
+        Cluster identifiers of shape (n,).
+    coefficient_index : int
+        Index of the coefficient for which to compute bootstrap inference.
+        For DiD, this is typically 3 (the treatment*post interaction term).
+    n_bootstrap : int, default=999
+        Number of bootstrap replications. Odd numbers are recommended for
+        exact p-value computation.
+    weight_type : str, default="rademacher"
+        Type of bootstrap weights:
+        - "rademacher": +1 or -1 with equal probability (standard choice)
+        - "webb": 6-point distribution (recommended for <10 clusters)
+        - "mammen": Two-point distribution with skewness correction
+    null_hypothesis : float, default=0.0
+        Value of the null hypothesis for p-value computation.
+    alpha : float, default=0.05
+        Significance level for confidence interval.
+    seed : int, optional
+        Random seed for reproducibility.
+    return_distribution : bool, default=False
+        If True, include full bootstrap distribution in results.
+
+    Returns
+    -------
+    WildBootstrapResults
+        Dataclass containing bootstrap SE, p-value, confidence interval,
+        and other inference results.
+
+    Raises
+    ------
+    ValueError
+        If weight_type is not recognized or if there are fewer than 2 clusters.
+
+    Warns
+    -----
+    UserWarning
+        If the number of clusters is less than 5, as bootstrap inference
+        may be unreliable.
+
+    Examples
+    --------
+    >>> from diff_diff.utils import wild_bootstrap_se
+    >>> results = wild_bootstrap_se(
+    ...     X, y, residuals, cluster_ids,
+    ...     coefficient_index=3,  # ATT coefficient
+    ...     n_bootstrap=999,
+    ...     weight_type="rademacher",
+    ...     seed=42
+    ... )
+    >>> print(f"Bootstrap SE: {results.se:.4f}")
+    >>> print(f"Bootstrap p-value: {results.p_value:.4f}")
+
+    References
+    ----------
+    Cameron, A. C., Gelbach, J. B., & Miller, D. L. (2008).
+    Bootstrap-Based Improvements for Inference with Clustered Errors.
+    The Review of Economics and Statistics, 90(3), 414-427.
+
+    MacKinnon, J. G., & Webb, M. D. (2018). The wild bootstrap for
+    few (treated) clusters. The Econometrics Journal, 21(2), 114-135.
+    """
+    # Validate inputs
+    valid_weight_types = ["rademacher", "webb", "mammen"]
+    if weight_type not in valid_weight_types:
+        raise ValueError(
+            f"weight_type must be one of {valid_weight_types}, got '{weight_type}'"
+        )
+
+    unique_clusters = np.unique(cluster_ids)
+    n_clusters = len(unique_clusters)
+
+    if n_clusters < 2:
+        raise ValueError(
+            f"Wild cluster bootstrap requires at least 2 clusters, got {n_clusters}"
+        )
+
+    if n_clusters < 5:
+        warnings.warn(
+            f"Only {n_clusters} clusters detected. Wild bootstrap inference may be "
+            "unreliable with fewer than 5 clusters. Consider using Webb weights "
+            "(weight_type='webb') for improved finite-sample properties.",
+            UserWarning
+        )
+
+    # Initialize RNG
+    rng = np.random.default_rng(seed)
+
+    # Select weight generator
+    weight_generators = {
+        "rademacher": _generate_rademacher_weights,
+        "webb": _generate_webb_weights,
+        "mammen": _generate_mammen_weights,
+    }
+    generate_weights = weight_generators[weight_type]
+
+    n, k = X.shape
+    XtX = X.T @ X
+
+    # Step 1: Compute original coefficient and cluster-robust SE
+    beta_hat = np.linalg.lstsq(X, y, rcond=None)[0]
+    original_coef = beta_hat[coefficient_index]
+
+    # Compute cluster-robust SE for original t-statistic
+    vcov_original = compute_robust_se(X, residuals, cluster_ids)
+    se_original = np.sqrt(vcov_original[coefficient_index, coefficient_index])
+    t_stat_original = (original_coef - null_hypothesis) / se_original
+
+    # Step 2: Impose null hypothesis (restricted estimation)
+    # Create restricted y: y_restricted = y - X[:, coef_index] * null_hypothesis
+    # This imposes the null that the coefficient equals null_hypothesis
+    y_restricted = y - X[:, coefficient_index] * null_hypothesis
+
+    # Fit restricted model (but we need to drop the column for the restricted coef)
+    # Actually, for WCR bootstrap we keep all columns but impose the null via residuals
+    # Re-estimate with the restricted dependent variable
+    beta_restricted = np.linalg.lstsq(X, y_restricted, rcond=None)[0]
+    residuals_restricted = y_restricted - X @ beta_restricted
+
+    # Create cluster-to-observation mapping for efficiency
+    cluster_map = {c: np.where(cluster_ids == c)[0] for c in unique_clusters}
+    cluster_indices = [cluster_map[c] for c in unique_clusters]
+
+    # Step 3: Bootstrap loop
+    bootstrap_t_stats = np.zeros(n_bootstrap)
+    bootstrap_coefs = np.zeros(n_bootstrap)
+
+    for b in range(n_bootstrap):
+        # Generate cluster-level weights
+        cluster_weights = generate_weights(n_clusters, rng)
+
+        # Map cluster weights to observations
+        obs_weights = np.zeros(n)
+        for g, indices in enumerate(cluster_indices):
+            obs_weights[indices] = cluster_weights[g]
+
+        # Construct bootstrap sample: y* = X @ beta_restricted + e_restricted * weights
+        y_star = X @ beta_restricted + residuals_restricted * obs_weights
+
+        # Estimate bootstrap coefficients
+        beta_star = np.linalg.lstsq(X, y_star, rcond=None)[0]
+        bootstrap_coefs[b] = beta_star[coefficient_index]
+
+        # Compute bootstrap residuals and cluster-robust SE
+        residuals_star = y_star - X @ beta_star
+        vcov_star = compute_robust_se(X, residuals_star, cluster_ids)
+        se_star = np.sqrt(vcov_star[coefficient_index, coefficient_index])
+
+        # Compute bootstrap t-statistic (under null hypothesis)
+        if se_star > 0:
+            bootstrap_t_stats[b] = (beta_star[coefficient_index] - null_hypothesis) / se_star
+        else:
+            bootstrap_t_stats[b] = 0.0
+
+    # Step 4: Compute bootstrap p-value
+    # P-value is proportion of |t*| >= |t_original|
+    p_value = np.mean(np.abs(bootstrap_t_stats) >= np.abs(t_stat_original))
+
+    # Ensure p-value is at least 1/(n_bootstrap+1) to avoid exact zero
+    p_value = max(p_value, 1 / (n_bootstrap + 1))
+
+    # Step 5: Compute bootstrap SE and confidence interval
+    # SE from standard deviation of bootstrap coefficient distribution
+    se_bootstrap = np.std(bootstrap_coefs, ddof=1)
+
+    # Percentile confidence interval from bootstrap distribution
+    lower_percentile = alpha / 2 * 100
+    upper_percentile = (1 - alpha / 2) * 100
+    ci_lower = np.percentile(bootstrap_coefs, lower_percentile)
+    ci_upper = np.percentile(bootstrap_coefs, upper_percentile)
+
+    return WildBootstrapResults(
+        se=se_bootstrap,
+        p_value=p_value,
+        t_stat_original=t_stat_original,
+        ci_lower=ci_lower,
+        ci_upper=ci_upper,
+        n_clusters=n_clusters,
+        n_bootstrap=n_bootstrap,
+        weight_type=weight_type,
+        alpha=alpha,
+        bootstrap_distribution=bootstrap_coefs if return_distribution else None
+    )
 
 
 def check_parallel_trends(

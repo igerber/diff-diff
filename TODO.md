@@ -2,38 +2,6 @@
 
 This document tracks planned features and improvements for the diff-diff library.
 
-## Priority 1: Critical Improvements
-
-### Wild Cluster Bootstrap
-**Status**: Not Started
-**Effort**: Medium
-**Impact**: High
-
-Standard cluster-robust standard errors are biased with few clusters (<50). Wild bootstrap provides valid inference even with 5-10 clusters.
-
-**Implementation Notes**:
-- Add `wild_bootstrap_se()` function in `utils.py`
-- Support Rademacher and Webb weights
-- Integrate with existing estimators via parameter
-- Reference: Cameron, Gelbach, and Miller (2008)
-
-### Placebo Tests Module
-**Status**: Not Started
-**Effort**: Medium
-**Impact**: Medium
-
-Implement standard diagnostic tools for DiD:
-- Fake treatment timing tests (assign treatment before it actually occurred)
-- Fake treatment group tests (run DiD on never-treated units)
-- Permutation-based inference
-
-**Implementation Notes**:
-- Create `diff_diff/diagnostics.py` module
-- Add `run_placebo_test()` function
-- Support multiple placebo specifications
-
----
-
 ## Priority 2: Advanced Methods
 
 ### Honest DiD / Sensitivity Analysis (Rambachan-Roth)
@@ -185,6 +153,20 @@ Docstrings exist but no built API documentation site. Consider:
 - mkdocs-material
 
 ---
+
+## Completed Features (v0.5.0)
+
+- [x] Wild cluster bootstrap for valid inference with few clusters (<50)
+  - Rademacher, Webb (6-point), and Mammen weight types
+  - Integration with DifferenceInDifferences and TwoWayFixedEffects via `inference='wild_bootstrap'`
+  - Reference: Cameron, Gelbach, and Miller (2008)
+- [x] Placebo tests module (`diff_diff/diagnostics.py`)
+  - Fake timing test (`placebo_timing_test`)
+  - Fake group test (`placebo_group_test`)
+  - Permutation-based inference (`permutation_test`)
+  - Leave-one-out sensitivity (`leave_one_out_test`)
+  - Comprehensive suite (`run_all_placebo_tests`)
+  - Reference: Bertrand, Duflo, and Mullainathan (2004)
 
 ## Completed Features (v0.4.0)
 

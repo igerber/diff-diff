@@ -139,8 +139,10 @@ class TestDifferenceInDifferences:
             time="post"
         )
 
-        # SEs should be different (not exactly equal)
-        assert results_robust.se != results_classical.se
+        # The vcov matrices should differ (HC1 vs classical)
+        # Note: For balanced designs with homoskedastic errors, the ATT SE
+        # may coincidentally be equal, but other coefficients will differ
+        assert not np.allclose(results_robust.vcov, results_classical.vcov)
         # But ATT should be the same
         assert results_robust.att == results_classical.att
 

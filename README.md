@@ -67,12 +67,14 @@ Signif. codes: '***' 0.001, '**' 0.01, '*' 0.05, '.' 0.1
 - **Pythonic results**: Easy access to coefficients, standard errors, and confidence intervals
 - **Multiple interfaces**: Column names or R-style formulas
 - **Robust inference**: Heteroskedasticity-robust (HC1) and cluster-robust standard errors
+- **Wild cluster bootstrap**: Valid inference with few clusters (<50) using Rademacher, Webb, or Mammen weights
 - **Panel data support**: Two-way fixed effects estimator for panel designs
 - **Multi-period analysis**: Event-study style DiD with period-specific treatment effects
 - **Staggered adoption**: Callaway-Sant'Anna (2021) estimator for heterogeneous treatment timing
 - **Synthetic DiD**: Combined DiD with synthetic control for improved robustness
 - **Event study plots**: Publication-ready visualization of treatment effects
 - **Parallel trends testing**: Multiple methods including equivalence tests
+- **Placebo tests**: Comprehensive diagnostics including fake timing, fake group, permutation, and leave-one-out tests
 - **Data prep utilities**: Helper functions for common data preparation tasks
 
 ## Data Preparation
@@ -487,6 +489,36 @@ results = did.fit(
     time='post'
 )
 ```
+
+### Wild Cluster Bootstrap
+
+When you have few clusters (<50), standard cluster-robust SEs are biased. Wild cluster bootstrap provides valid inference even with 5-10 clusters.
+
+```python
+# Use wild bootstrap for inference
+did = DifferenceInDifferences(
+    cluster='state',
+    inference='wild_bootstrap',
+    n_bootstrap=999,
+    bootstrap_weights='rademacher',  # or 'webb' for <10 clusters, 'mammen'
+    seed=42
+)
+results = did.fit(data, outcome='y', treatment='treated', time='post')
+
+# Results include bootstrap-based SE and p-value
+print(f"ATT: {results.att:.3f} (SE: {results.se:.3f})")
+print(f"P-value: {results.p_value:.4f}")
+print(f"95% CI: {results.conf_int}")
+print(f"Inference method: {results.inference_method}")
+print(f"Number of clusters: {results.n_clusters}")
+```
+
+**Weight types:**
+- `'rademacher'` - Default, ±1 with p=0.5, good for most cases
+- `'webb'` - 6-point distribution, recommended for <10 clusters
+- `'mammen'` - Two-point distribution, alternative to Rademacher
+
+Works with `DifferenceInDifferences` and `TwoWayFixedEffects` estimators.
 
 ### Two-Way Fixed Effects (Panel Data)
 
@@ -937,6 +969,105 @@ print(f"TOST p-value: {results['tost_p_value']:.4f}")
 print(f"Trends equivalent: {results['equivalent']}")
 ```
 
+### Placebo Tests
+
+Placebo tests help validate the parallel trends assumption by checking whether effects appear where they shouldn't (before treatment or in untreated groups).
+
+**Fake timing test:**
+
+```python
+from diff_diff import run_placebo_test
+
+# Test: Is there an effect before treatment actually occurred?
+results = run_placebo_test(
+    data,
+    outcome='outcome',
+    treatment='treated',
+    time='period',
+    test_type='fake_timing',
+    fake_treatment_period=1,  # Pretend treatment was in period 1
+    post_periods=[1, 2]       # Actual treatment was in period 3
+)
+
+print(results.summary())
+# If parallel trends hold, placebo_effect should be ~0 and not significant
+print(f"Placebo effect: {results.placebo_effect:.3f} (p={results.p_value:.3f})")
+print(f"Is significant (bad): {results.is_significant}")
+```
+
+**Fake group test:**
+
+```python
+# Test: Is there an effect among never-treated units?
+results = run_placebo_test(
+    data,
+    outcome='outcome',
+    treatment='treated',
+    time='period',
+    test_type='fake_group',
+    fake_treatment_group='industry == "tech"',  # Fake treatment within controls
+    post_periods=[3, 4, 5]
+)
+```
+
+**Permutation test:**
+
+```python
+# Randomly reassign treatment and compute distribution of effects
+results = run_placebo_test(
+    data,
+    outcome='outcome',
+    treatment='treated',
+    time='period',
+    test_type='permutation',
+    n_permutations=1000,
+    seed=42
+)
+
+print(f"Original effect: {results.original_effect:.3f}")
+print(f"Permutation p-value: {results.p_value:.4f}")
+# Low p-value indicates the effect is unlikely to be due to chance
+```
+
+**Leave-one-out sensitivity:**
+
+```python
+# Test sensitivity to individual treated units
+results = run_placebo_test(
+    data,
+    outcome='outcome',
+    treatment='treated',
+    time='period',
+    unit='firm_id',
+    test_type='leave_one_out'
+)
+
+# Check if any single unit drives the result
+print(results.leave_one_out_effects)  # Effect when each unit is dropped
+```
+
+**Run all placebo tests:**
+
+```python
+from diff_diff import run_all_placebo_tests
+
+# Comprehensive diagnostic suite
+all_results = run_all_placebo_tests(
+    data,
+    outcome='outcome',
+    treatment='treated',
+    time='period',
+    unit='firm_id',
+    pre_periods=[0, 1, 2],
+    post_periods=[3, 4, 5],
+    n_permutations=500,
+    seed=42
+)
+
+for test_name, result in all_results.items():
+    print(f"{test_name}: p={result.p_value:.3f}, significant={result.is_significant}")
+```
+
 ## API Reference
 
 ### DifferenceInDifferences
@@ -1315,6 +1446,18 @@ This library implements methods from the following scholarly works:
 - **MacKinnon, J. G., & White, H. (1985).** "Some Heteroskedasticity-Consistent Covariance Matrix Estimators with Improved Finite Sample Properties." *Journal of Econometrics*, 29(3), 305-325. [https://doi.org/10.1016/0304-4076(85)90158-7](https://doi.org/10.1016/0304-4076(85)90158-7)
 
 - **Cameron, A. C., Gelbach, J. B., & Miller, D. L. (2011).** "Robust Inference With Multiway Clustering." *Journal of Business & Economic Statistics*, 29(2), 238-249. [https://doi.org/10.1198/jbes.2010.07136](https://doi.org/10.1198/jbes.2010.07136)
+
+### Wild Cluster Bootstrap
+
+- **Cameron, A. C., Gelbach, J. B., & Miller, D. L. (2008).** "Bootstrap-Based Improvements for Inference with Clustered Errors." *The Review of Economics and Statistics*, 90(3), 414-427. [https://doi.org/10.1162/rest.90.3.414](https://doi.org/10.1162/rest.90.3.414)
+
+- **Webb, M. D. (2014).** "Reworking Wild Bootstrap Based Inference for Clustered Errors." Queen's Economics Department Working Paper No. 1315. [https://www.econ.queensu.ca/sites/econ.queensu.ca/files/qed_wp_1315.pdf](https://www.econ.queensu.ca/sites/econ.queensu.ca/files/qed_wp_1315.pdf)
+
+- **MacKinnon, J. G., & Webb, M. D. (2018).** "The Wild Bootstrap for Few (Treated) Clusters." *The Econometrics Journal*, 21(2), 114-135. [https://doi.org/10.1111/ectj.12107](https://doi.org/10.1111/ectj.12107)
+
+### Placebo Tests and DiD Diagnostics
+
+- **Bertrand, M., Duflo, E., & Mullainathan, S. (2004).** "How Much Should We Trust Differences-in-Differences Estimates?" *The Quarterly Journal of Economics*, 119(1), 249-275. [https://doi.org/10.1162/003355304772839588](https://doi.org/10.1162/003355304772839588)
 
 ### Synthetic Control Method
 
