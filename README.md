@@ -70,6 +70,242 @@ Signif. codes: '***' 0.001, '**' 0.01, '*' 0.05, '.' 0.1
 - **Panel data support**: Two-way fixed effects estimator for panel designs
 - **Multi-period analysis**: Event-study style DiD with period-specific treatment effects
 - **Synthetic DiD**: Combined DiD with synthetic control for improved robustness
+- **Data prep utilities**: Helper functions for common data preparation tasks
+
+## Data Preparation
+
+diff-diff provides utility functions to help prepare your data for DiD analysis. These functions handle common data transformation tasks like creating treatment indicators, reshaping panel data, and validating data formats.
+
+### Generate Sample Data
+
+Create synthetic data with a known treatment effect for testing and learning:
+
+```python
+from diff_diff import generate_did_data, DifferenceInDifferences
+
+# Generate panel data with 100 units, 4 periods, and a treatment effect of 5
+data = generate_did_data(
+    n_units=100,
+    n_periods=4,
+    treatment_effect=5.0,
+    treatment_fraction=0.5,  # 50% of units are treated
+    treatment_period=2,       # Treatment starts at period 2
+    seed=42
+)
+
+# Verify the estimator recovers the treatment effect
+did = DifferenceInDifferences()
+results = did.fit(data, outcome='outcome', treatment='treated', time='post')
+print(f"Estimated ATT: {results.att:.2f} (true: 5.0)")
+```
+
+### Create Treatment Indicators
+
+Convert categorical variables or numeric thresholds to binary treatment indicators:
+
+```python
+from diff_diff import make_treatment_indicator
+
+# From categorical variable
+df = make_treatment_indicator(
+    data,
+    column='state',
+    treated_values=['CA', 'NY', 'TX']  # These states are treated
+)
+
+# From numeric threshold (e.g., firms above median size)
+df = make_treatment_indicator(
+    data,
+    column='firm_size',
+    threshold=data['firm_size'].median()
+)
+
+# Treat units below threshold
+df = make_treatment_indicator(
+    data,
+    column='income',
+    threshold=50000,
+    above_threshold=False  # Units with income <= 50000 are treated
+)
+```
+
+### Create Post-Treatment Indicators
+
+Convert time/date columns to binary post-treatment indicators:
+
+```python
+from diff_diff import make_post_indicator
+
+# From specific post-treatment periods
+df = make_post_indicator(
+    data,
+    time_column='year',
+    post_periods=[2020, 2021, 2022]
+)
+
+# From treatment start date
+df = make_post_indicator(
+    data,
+    time_column='year',
+    treatment_start=2020  # All years >= 2020 are post-treatment
+)
+
+# Works with datetime columns
+df = make_post_indicator(
+    data,
+    time_column='date',
+    treatment_start='2020-01-01'
+)
+```
+
+### Reshape Wide to Long Format
+
+Convert wide-format data (one row per unit, multiple time columns) to long format:
+
+```python
+from diff_diff import wide_to_long
+
+# Wide format: columns like sales_2019, sales_2020, sales_2021
+wide_df = pd.DataFrame({
+    'firm_id': [1, 2, 3],
+    'industry': ['tech', 'retail', 'tech'],
+    'sales_2019': [100, 150, 200],
+    'sales_2020': [110, 160, 210],
+    'sales_2021': [120, 170, 220]
+})
+
+# Convert to long format for DiD
+long_df = wide_to_long(
+    wide_df,
+    value_columns=['sales_2019', 'sales_2020', 'sales_2021'],
+    id_column='firm_id',
+    time_name='year',
+    value_name='sales',
+    time_values=[2019, 2020, 2021]
+)
+# Result: 9 rows (3 firms × 3 years), columns: firm_id, year, sales, industry
+```
+
+### Balance Panel Data
+
+Ensure all units have observations for all time periods:
+
+```python
+from diff_diff import balance_panel
+
+# Keep only units with complete data (drop incomplete units)
+balanced = balance_panel(
+    data,
+    unit_column='firm_id',
+    time_column='year',
+    method='inner'
+)
+
+# Include all unit-period combinations (creates NaN for missing)
+balanced = balance_panel(
+    data,
+    unit_column='firm_id',
+    time_column='year',
+    method='outer'
+)
+
+# Fill missing values
+balanced = balance_panel(
+    data,
+    unit_column='firm_id',
+    time_column='year',
+    method='fill',
+    fill_value=0  # Or None for forward/backward fill
+)
+```
+
+### Validate Data
+
+Check that your data meets DiD requirements before fitting:
+
+```python
+from diff_diff import validate_did_data
+
+# Validate and get informative error messages
+result = validate_did_data(
+    data,
+    outcome='sales',
+    treatment='treated',
+    time='post',
+    unit='firm_id',      # Optional: for panel-specific validation
+    raise_on_error=False  # Return dict instead of raising
+)
+
+if result['valid']:
+    print("Data is ready for DiD analysis!")
+    print(f"Summary: {result['summary']}")
+else:
+    print("Issues found:")
+    for error in result['errors']:
+        print(f"  - {error}")
+
+for warning in result['warnings']:
+    print(f"Warning: {warning}")
+```
+
+### Summarize Data by Groups
+
+Get summary statistics for each treatment-time cell:
+
+```python
+from diff_diff import summarize_did_data
+
+summary = summarize_did_data(
+    data,
+    outcome='sales',
+    treatment='treated',
+    time='post'
+)
+print(summary)
+```
+
+Output:
+```
+                        n      mean       std       min       max
+Control - Pre        250  100.5000   15.2340   65.0000  145.0000
+Control - Post       250  105.2000   16.1230   68.0000  152.0000
+Treated - Pre        250  101.2000   14.8900   67.0000  143.0000
+Treated - Post       250  115.8000   17.5600   72.0000  165.0000
+DiD Estimate           -    9.9000         -         -         -
+```
+
+### Create Event Time for Staggered Designs
+
+For designs where treatment occurs at different times:
+
+```python
+from diff_diff import create_event_time
+
+# Add event-time column relative to treatment timing
+df = create_event_time(
+    data,
+    time_column='year',
+    treatment_time_column='treatment_year'
+)
+# Result: event_time = -2, -1, 0, 1, 2 relative to treatment
+```
+
+### Aggregate to Cohort Means
+
+Aggregate unit-level data for visualization:
+
+```python
+from diff_diff import aggregate_to_cohorts
+
+cohort_data = aggregate_to_cohorts(
+    data,
+    unit_column='firm_id',
+    time_column='year',
+    treatment_column='treated',
+    outcome='sales'
+)
+# Result: mean outcome by treatment group and period
+```
 
 ## Usage
 
@@ -666,6 +902,129 @@ SyntheticDiD(
 | `to_dataframe()` | Convert to pandas DataFrame |
 | `get_unit_weights_df()` | Get unit weights as DataFrame |
 | `get_time_weights_df()` | Get time weights as DataFrame |
+
+### Data Preparation Functions
+
+#### generate_did_data
+
+```python
+generate_did_data(
+    n_units=100,          # Number of units
+    n_periods=4,          # Number of time periods
+    treatment_effect=5.0, # True ATT
+    treatment_fraction=0.5,  # Fraction treated
+    treatment_period=2,   # First post-treatment period
+    unit_fe_sd=2.0,       # Unit fixed effect std dev
+    time_trend=0.5,       # Linear time trend
+    noise_sd=1.0,         # Idiosyncratic noise std dev
+    seed=None             # Random seed
+)
+```
+
+Returns DataFrame with columns: `unit`, `period`, `treated`, `post`, `outcome`, `true_effect`.
+
+#### make_treatment_indicator
+
+```python
+make_treatment_indicator(
+    data,                 # Input DataFrame
+    column,               # Column to create treatment from
+    treated_values=None,  # Value(s) indicating treatment
+    threshold=None,       # Numeric threshold for treatment
+    above_threshold=True, # If True, >= threshold is treated
+    new_column='treated'  # Output column name
+)
+```
+
+#### make_post_indicator
+
+```python
+make_post_indicator(
+    data,                  # Input DataFrame
+    time_column,           # Time/period column
+    post_periods=None,     # Specific post-treatment period(s)
+    treatment_start=None,  # First post-treatment period
+    new_column='post'      # Output column name
+)
+```
+
+#### wide_to_long
+
+```python
+wide_to_long(
+    data,                  # Wide-format DataFrame
+    value_columns,         # List of time-varying columns
+    id_column,             # Unit identifier column
+    time_name='period',    # Name for time column
+    value_name='value',    # Name for value column
+    time_values=None       # Values for time periods
+)
+```
+
+#### balance_panel
+
+```python
+balance_panel(
+    data,                  # Panel DataFrame
+    unit_column,           # Unit identifier column
+    time_column,           # Time period column
+    method='inner',        # 'inner', 'outer', or 'fill'
+    fill_value=None        # Value for filling (if method='fill')
+)
+```
+
+#### validate_did_data
+
+```python
+validate_did_data(
+    data,                  # DataFrame to validate
+    outcome,               # Outcome column name
+    treatment,             # Treatment column name
+    time,                  # Time/post column name
+    unit=None,             # Unit column (for panel validation)
+    raise_on_error=True    # Raise ValueError or return dict
+)
+```
+
+Returns dict with `valid`, `errors`, `warnings`, and `summary` keys.
+
+#### summarize_did_data
+
+```python
+summarize_did_data(
+    data,                  # Input DataFrame
+    outcome,               # Outcome column name
+    treatment,             # Treatment column name
+    time,                  # Time/post column name
+    unit=None              # Unit column (optional)
+)
+```
+
+Returns DataFrame with summary statistics by treatment-time cell.
+
+#### create_event_time
+
+```python
+create_event_time(
+    data,                  # Panel DataFrame
+    time_column,           # Calendar time column
+    treatment_time_column, # Column with treatment timing
+    new_column='event_time' # Output column name
+)
+```
+
+#### aggregate_to_cohorts
+
+```python
+aggregate_to_cohorts(
+    data,                  # Unit-level panel data
+    unit_column,           # Unit identifier column
+    time_column,           # Time period column
+    treatment_column,      # Treatment indicator column
+    outcome,               # Outcome variable column
+    covariates=None        # Additional columns to aggregate
+)
+```
 
 ## Requirements
 
