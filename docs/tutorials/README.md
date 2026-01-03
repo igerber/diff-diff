@@ -1,6 +1,6 @@
-# diff-diff Examples
+# diff-diff Tutorials
 
-This directory contains Jupyter notebooks demonstrating the features of the `diff-diff` library.
+This directory contains Jupyter notebook tutorials demonstrating the features of the `diff-diff` library.
 
 ## Notebooks
 
