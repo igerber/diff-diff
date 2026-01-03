@@ -229,6 +229,20 @@ class TestBalancePanel:
         missing_row = result[(result["unit"] == 2) & (result["period"] == 2)]
         assert missing_row["y"].values[0] == 0.0
 
+    def test_fill_forward_backward(self):
+        """Test fill method with forward/backward fill."""
+        df = pd.DataFrame({
+            "unit": [1, 1, 1, 2, 2],
+            "period": [1, 2, 3, 1, 3],  # Unit 2 missing period 2
+            "y": [10.0, 11.0, 12.0, 20.0, 22.0]
+        })
+        result = balance_panel(df, "unit", "period", method="fill", fill_value=None)
+        assert len(result) == 6
+        # Check that unit 2, period 2 was filled
+        filled_row = result[(result["unit"] == 2) & (result["period"] == 2)]
+        assert len(filled_row) == 1
+        assert filled_row["y"].values[0] == 20.0  # Forward filled from period 1
+
     def test_error_invalid_method(self):
         """Test error with invalid method."""
         df = pd.DataFrame({"unit": [1], "period": [1], "y": [10]})
