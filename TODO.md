@@ -109,17 +109,6 @@ Current formula support is basic. Enhancements:
 
 ## Code Quality
 
-### Add Test Coverage for Utils
-**Status**: Not Started
-**Effort**: Low
-**Impact**: Medium
-
-The `utils.py` module has no dedicated tests. Need coverage for:
-- `check_parallel_trends()`
-- `check_parallel_trends_robust()`
-- `equivalence_test_trends()`
-- Synthetic control weight functions
-
 ### Implement `predict()` Method
 **Status**: Not Started
 **Effort**: Low
@@ -131,18 +120,6 @@ The `utils.py` module has no dedicated tests. Need coverage for:
 
 ## Documentation
 
-### Example Notebooks
-**Status**: Not Started
-**Effort**: Medium
-**Impact**: High
-
-Create Jupyter notebooks demonstrating:
-1. Basic 2x2 DiD with real-world data
-2. Staggered adoption with CallawaySantAnna
-3. Synthetic DiD walkthrough
-4. Parallel trends testing and diagnostics
-5. Visualization and reporting
-
 ### API Reference
 **Status**: Partial
 **Effort**: Medium
@@ -153,6 +130,19 @@ Docstrings exist but no built API documentation site. Consider:
 - mkdocs-material
 
 ---
+
+## Completed Features (v0.5.1)
+
+- [x] Comprehensive test coverage for `utils.py` module (72 new tests)
+  - `validate_binary`, `compute_robust_se`, `compute_confidence_interval`, `compute_p_value`
+  - `check_parallel_trends`, `check_parallel_trends_robust`, `equivalence_test_trends`
+  - `compute_synthetic_weights`, `compute_time_weights`, `compute_placebo_effects`
+  - `compute_sdid_estimator`, `_project_simplex`
+- [x] Tutorial notebooks in `docs/tutorials/`
+  - `01_basic_did.ipynb` - Basic DiD, formula interface, covariates, fixed effects, wild bootstrap
+  - `02_staggered_did.ipynb` - Staggered adoption with Callaway-Sant'Anna
+  - `03_synthetic_did.ipynb` - Synthetic DiD with unit/time weights
+  - `04_parallel_trends.ipynb` - Parallel trends testing and diagnostics
 
 ## Completed Features (v0.5.0)
 

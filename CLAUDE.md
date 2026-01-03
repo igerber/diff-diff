@@ -88,6 +88,25 @@ mypy diff_diff
    - `absorb` parameter uses within-transformation (for high-dimensional FE)
 4. **Results objects**: Rich dataclass objects with statistical properties (`is_significant`, `significance_stars`)
 
+### Documentation
+
+- **`docs/tutorials/`** - Jupyter notebook tutorials:
+  - `01_basic_did.ipynb` - Basic 2x2 DiD, covariates, fixed effects, wild bootstrap
+  - `02_staggered_did.ipynb` - Staggered adoption with Callaway-Sant'Anna
+  - `03_synthetic_did.ipynb` - Synthetic DiD with unit/time weights
+  - `04_parallel_trends.ipynb` - Parallel trends testing and diagnostics
+
+### Test Structure
+
+Tests mirror the source modules:
+- `tests/test_estimators.py` - Tests for DifferenceInDifferences, TWFE, MultiPeriodDiD, SyntheticDiD
+- `tests/test_staggered.py` - Tests for CallawaySantAnna
+- `tests/test_utils.py` - Tests for parallel trends, robust SE, synthetic weights
+- `tests/test_diagnostics.py` - Tests for placebo tests
+- `tests/test_wild_bootstrap.py` - Tests for wild cluster bootstrap
+- `tests/test_prep.py` - Tests for data preparation utilities
+- `tests/test_visualization.py` - Tests for plotting functions
+
 ### Dependencies
 
 Core dependencies are numpy, pandas, and scipy only (no statsmodels). The library implements its own OLS, robust standard errors, and inference.

@@ -77,6 +77,17 @@ Signif. codes: '***' 0.001, '**' 0.01, '*' 0.05, '.' 0.1
 - **Placebo tests**: Comprehensive diagnostics including fake timing, fake group, permutation, and leave-one-out tests
 - **Data prep utilities**: Helper functions for common data preparation tasks
 
+## Tutorials
+
+We provide Jupyter notebook tutorials in `docs/tutorials/`:
+
+| Notebook | Description |
+|----------|-------------|
+| `01_basic_did.ipynb` | Basic 2x2 DiD, formula interface, covariates, fixed effects, cluster-robust SE, wild bootstrap |
+| `02_staggered_did.ipynb` | Staggered adoption with Callaway-Sant'Anna, group-time effects, aggregation methods |
+| `03_synthetic_did.ipynb` | Synthetic DiD, unit/time weights, inference methods, regularization |
+| `04_parallel_trends.ipynb` | Testing parallel trends, equivalence tests, placebo tests, diagnostics |
+
 ## Data Preparation
 
 diff-diff provides utility functions to help prepare your data for DiD analysis. These functions handle common data transformation tasks like creating treatment indicators, reshaping panel data, and validating data formats.
