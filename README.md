@@ -653,10 +653,14 @@ CallawaySantAnna(
     estimation_method='dr',          # 'dr', 'ipw', or 'reg'
     alpha=0.05,                      # Significance level
     cluster=None,                    # Column for cluster SEs
-    n_bootstrap=0,                   # Bootstrap iterations (0 = analytical)
+    n_bootstrap=0,                   # Must be 0 (bootstrap not yet implemented)
     seed=None                        # Random seed
 )
 ```
+
+**Current limitations:**
+- Bootstrap inference (`n_bootstrap > 0`) is not yet implemented
+- Covariate adjustment for conditional parallel trends is not yet implemented
 
 ### Event Study Visualization
 
