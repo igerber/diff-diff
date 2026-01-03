@@ -734,3 +734,61 @@ class TestRankControlUnits:
         # (just check both work, exact comparison is data-dependent)
         assert len(result1) > 0
         assert len(result2) > 0
+
+    def test_unbalanced_panel(self):
+        """Test handling of unbalanced panels with missing data."""
+        from diff_diff.prep import rank_control_units
+
+        data = generate_did_data(n_units=20, n_periods=6, seed=42)
+
+        # Remove some observations to create unbalanced panel
+        # Remove all pre-period data for one control unit
+        control_units = data[data["treated"] == 0]["unit"].unique()
+        unit_to_partially_remove = control_units[0]
+        mask = ~(
+            (data["unit"] == unit_to_partially_remove) &
+            (data["period"] < 3)
+        )
+        unbalanced_data = data[mask].copy()
+
+        result = rank_control_units(
+            unbalanced_data,
+            unit_column="unit",
+            time_column="period",
+            outcome_column="outcome",
+            treatment_column="treated"
+        )
+
+        # Should still work and exclude the unit with no pre-treatment data
+        assert len(result) > 0
+        # The unit with missing pre-treatment data should not be in results
+        assert unit_to_partially_remove not in result["unit"].values
+
+    def test_single_control_unit(self):
+        """Test edge case with only one control unit."""
+        from diff_diff.prep import rank_control_units
+
+        data = generate_did_data(n_units=10, n_periods=6, seed=42)
+
+        # Keep only one control unit
+        treated_units = data[data["treated"] == 1]["unit"].unique()
+        control_units = data[data["treated"] == 0]["unit"].unique()
+        single_control = control_units[0]
+
+        filtered_data = data[
+            (data["unit"].isin(treated_units)) |
+            (data["unit"] == single_control)
+        ].copy()
+
+        result = rank_control_units(
+            filtered_data,
+            unit_column="unit",
+            time_column="period",
+            outcome_column="outcome",
+            treatment_column="treated"
+        )
+
+        assert len(result) == 1
+        assert result["unit"].iloc[0] == single_control
+        # Single control should get score of 1.0 (best possible)
+        assert result["quality_score"].iloc[0] == 1.0
