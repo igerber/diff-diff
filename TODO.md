@@ -19,7 +19,7 @@ A production-ready DiD library needs:
 | Feature | Status | Priority | Why It Matters |
 |---------|--------|----------|----------------|
 | **Honest DiD (Rambachan-Roth)** | Not Started | 1.0 Blocker | Reviewers expect sensitivity analysis |
-| **CallawaySantAnna Covariates** | Not Implemented | 1.0 Blocker | Conditional PT often required in practice |
+| **CallawaySantAnna Covariates** | ✅ Implemented | 1.0 Blocker | Conditional PT often required in practice |
 | **API Documentation Site** | Not Started | 1.0 Blocker | Credibility and discoverability |
 | Goodman-Bacon Decomposition | Not Started | 1.0 Target | Explains when TWFE fails |
 | Power Analysis | Not Started | 1.0 Target | Study design tool |
@@ -52,22 +52,31 @@ These features are essential for a credible 1.0 release. Without them, the libra
 - R package: `HonestDiD`
 
 ### CallawaySantAnna Covariate Adjustment
-**Status**: Not Implemented (parameter accepted but unused)
+**Status**: ✅ Implemented
 **Effort**: High
 **Practitioner Value**: ⭐⭐⭐⭐⭐
 
-**Why this matters**: In most applied settings, parallel trends only holds *conditional on covariates*. Without covariate adjustment, users must assume unconditional parallel trends, which is often implausible. The R `did` package supports this; we should too.
+**Why this matters**: In most applied settings, parallel trends only holds *conditional on covariates*. Without covariate adjustment, users must assume unconditional parallel trends, which is often implausible. The R `did` package supports this; we now do too.
 
-**Current state**:
-- `covariates` parameter is accepted but silently ignored
-- All three methods (dr, ipw, reg) currently reduce to difference-in-means
-- Reference: `staggered.py:494-501`
+**Implementation**:
+- ✅ Outcome regression: Regresses outcome changes on covariates for control, predicts counterfactual for treated
+- ✅ IPW: Estimates propensity scores via logistic regression, reweights controls to match treated covariate distribution
+- ✅ Doubly robust: Combines outcome regression and IPW for double robustness (consistent if either model is correct)
+- Covariates are extracted from base period for each group-time ATT(g,t) estimation
+- Graceful fallback to unconditional estimation if covariate extraction fails
 
-**Implementation Notes**:
-- Implement propensity score estimation for IPW
-- Implement outcome regression for covariate adjustment
-- Implement true doubly-robust estimation combining both
-- Consider using cross-fitting for DR estimator
+**Usage**:
+```python
+cs = CallawaySantAnna(estimation_method='dr')  # 'dr', 'ipw', or 'reg'
+results = cs.fit(
+    data,
+    outcome='outcome',
+    unit='unit',
+    time='time',
+    first_treat='first_treat',
+    covariates=['x1', 'x2']  # Now fully functional!
+)
+```
 
 ### API Documentation Site
 **Status**: Not Started

@@ -11,12 +11,114 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
+from scipy import optimize
 
 from diff_diff.results import _get_significance_stars
 from diff_diff.utils import (
     compute_confidence_interval,
     compute_p_value,
 )
+
+
+def _logistic_regression(
+    X: np.ndarray,
+    y: np.ndarray,
+    max_iter: int = 100,
+    tol: float = 1e-6,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Fit logistic regression using scipy optimize.
+
+    Parameters
+    ----------
+    X : np.ndarray
+        Feature matrix (n_samples, n_features). Intercept added automatically.
+    y : np.ndarray
+        Binary outcome (0/1).
+    max_iter : int
+        Maximum iterations.
+    tol : float
+        Convergence tolerance.
+
+    Returns
+    -------
+    beta : np.ndarray
+        Fitted coefficients (including intercept).
+    probs : np.ndarray
+        Predicted probabilities.
+    """
+    n, p = X.shape
+    # Add intercept
+    X_with_intercept = np.column_stack([np.ones(n), X])
+
+    def neg_log_likelihood(beta):
+        z = X_with_intercept @ beta
+        # Clip to prevent overflow
+        z = np.clip(z, -500, 500)
+        log_lik = np.sum(y * z - np.log(1 + np.exp(z)))
+        return -log_lik
+
+    def gradient(beta):
+        z = X_with_intercept @ beta
+        z = np.clip(z, -500, 500)
+        probs = 1 / (1 + np.exp(-z))
+        return -X_with_intercept.T @ (y - probs)
+
+    # Initialize with zeros
+    beta_init = np.zeros(p + 1)
+
+    result = optimize.minimize(
+        neg_log_likelihood,
+        beta_init,
+        method='BFGS',
+        jac=gradient,
+        options={'maxiter': max_iter, 'gtol': tol}
+    )
+
+    beta = result.x
+    z = X_with_intercept @ beta
+    z = np.clip(z, -500, 500)
+    probs = 1 / (1 + np.exp(-z))
+
+    return beta, probs
+
+
+def _linear_regression(
+    X: np.ndarray,
+    y: np.ndarray,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Fit OLS regression.
+
+    Parameters
+    ----------
+    X : np.ndarray
+        Feature matrix (n_samples, n_features). Intercept added automatically.
+    y : np.ndarray
+        Outcome variable.
+
+    Returns
+    -------
+    beta : np.ndarray
+        Fitted coefficients (including intercept).
+    residuals : np.ndarray
+        Residuals from the fit.
+    """
+    n = X.shape[0]
+    # Add intercept
+    X_with_intercept = np.column_stack([np.ones(n), X])
+
+    # OLS: beta = (X'X)^{-1} X'y
+    try:
+        beta = np.linalg.lstsq(X_with_intercept, y, rcond=None)[0]
+    except np.linalg.LinAlgError:
+        # Fallback: use pseudo-inverse
+        beta = np.linalg.pinv(X_with_intercept) @ y
+
+    fitted = X_with_intercept @ beta
+    residuals = y - fitted
+
+    return beta, residuals
 
 
 @dataclass
@@ -491,14 +593,8 @@ class CallawaySantAnna:
                 "Use n_bootstrap=0 for analytical standard errors."
             )
 
-        if covariates:
-            warnings.warn(
-                "Covariates are accepted but not yet used in estimation. "
-                "The current implementation uses unconditional parallel trends. "
-                "Covariate-adjusted estimation will be added in a future version.",
-                UserWarning,
-                stacklevel=2,
-            )
+        # Store covariates for use in estimation
+        self._covariates = covariates
 
         # Create working copy
         df = data.copy()
@@ -681,19 +777,47 @@ class CallawaySantAnna:
             control_base.loc[control_common].values
         )
 
+        # Get covariates if specified (use base period values for conditioning)
+        X_treated = None
+        X_control = None
+        if covariates:
+            try:
+                X_treated = df_base.loc[treated_common, covariates].values
+                X_control = df_base.loc[control_common, covariates].values
+                # Check for missing values and handle them
+                if np.any(np.isnan(X_treated)) or np.any(np.isnan(X_control)):
+                    warnings.warn(
+                        f"Missing values in covariates for group {g}, time {t}. "
+                        "Falling back to unconditional estimation.",
+                        UserWarning,
+                        stacklevel=3,
+                    )
+                    X_treated = None
+                    X_control = None
+            except KeyError:
+                warnings.warn(
+                    f"Could not extract covariates for group {g}, time {t}. "
+                    "Falling back to unconditional estimation.",
+                    UserWarning,
+                    stacklevel=3,
+                )
+                X_treated = None
+                X_control = None
+
         # Estimation method
         if self.estimation_method == "reg":
             att_gt, se_gt, inf_func = self._outcome_regression(
-                treated_change, control_change
+                treated_change, control_change, X_treated, X_control
             )
         elif self.estimation_method == "ipw":
             att_gt, se_gt, inf_func = self._ipw_estimation(
                 treated_change, control_change,
-                len(treated_common), len(control_common)
+                len(treated_common), len(control_common),
+                X_treated, X_control
             )
         else:  # doubly robust
             att_gt, se_gt, inf_func = self._doubly_robust(
-                treated_change, control_change
+                treated_change, control_change, X_treated, X_control
             )
 
         return att_gt, se_gt, len(treated_common), len(control_common), inf_func
@@ -702,26 +826,63 @@ class CallawaySantAnna:
         self,
         treated_change: np.ndarray,
         control_change: np.ndarray,
+        X_treated: Optional[np.ndarray] = None,
+        X_control: Optional[np.ndarray] = None,
     ) -> Tuple[float, float, np.ndarray]:
         """
-        Estimate ATT using outcome regression (difference in means).
-        """
-        # Simple difference in means
-        att = np.mean(treated_change) - np.mean(control_change)
+        Estimate ATT using outcome regression.
 
-        # Standard error
+        With covariates:
+        1. Regress outcome changes on covariates for control group
+        2. Predict counterfactual for treated using their covariates
+        3. ATT = mean(treated_change) - mean(predicted_counterfactual)
+
+        Without covariates:
+        Simple difference in means.
+        """
         n_t = len(treated_change)
         n_c = len(control_change)
 
-        var_t = np.var(treated_change, ddof=1) if n_t > 1 else 0.0
-        var_c = np.var(control_change, ddof=1) if n_c > 1 else 0.0
+        if X_treated is not None and X_control is not None and X_treated.shape[1] > 0:
+            # Covariate-adjusted outcome regression
+            # Fit regression on control units: E[Delta Y | X, D=0]
+            beta, residuals = _linear_regression(X_control, control_change)
 
-        se = np.sqrt(var_t / n_t + var_c / n_c) if (n_t > 0 and n_c > 0) else 0.0
+            # Predict counterfactual for treated units
+            X_treated_with_intercept = np.column_stack([np.ones(n_t), X_treated])
+            predicted_control = X_treated_with_intercept @ beta
 
-        # Influence function (for aggregation)
-        inf_treated = treated_change - np.mean(treated_change)
-        inf_control = control_change - np.mean(control_change)
-        inf_func = np.concatenate([inf_treated / n_t, -inf_control / n_c])
+            # ATT = mean(observed treated change - predicted counterfactual)
+            att = np.mean(treated_change - predicted_control)
+
+            # Standard error using sandwich estimator
+            # Variance from treated: Var(Y_1 - m(X))
+            treated_residuals = treated_change - predicted_control
+            var_t = np.var(treated_residuals, ddof=1) if n_t > 1 else 0.0
+
+            # Variance from control regression (residual variance)
+            var_c = np.var(residuals, ddof=1) if n_c > 1 else 0.0
+
+            # Approximate SE (ignoring estimation error in beta for simplicity)
+            se = np.sqrt(var_t / n_t + var_c / n_c) if (n_t > 0 and n_c > 0) else 0.0
+
+            # Influence function
+            inf_treated = (treated_residuals - np.mean(treated_residuals)) / n_t
+            inf_control = -residuals / n_c
+            inf_func = np.concatenate([inf_treated, inf_control])
+        else:
+            # Simple difference in means (no covariates)
+            att = np.mean(treated_change) - np.mean(control_change)
+
+            var_t = np.var(treated_change, ddof=1) if n_t > 1 else 0.0
+            var_c = np.var(control_change, ddof=1) if n_c > 1 else 0.0
+
+            se = np.sqrt(var_t / n_t + var_c / n_c) if (n_t > 0 and n_c > 0) else 0.0
+
+            # Influence function (for aggregation)
+            inf_treated = treated_change - np.mean(treated_change)
+            inf_control = control_change - np.mean(control_change)
+            inf_func = np.concatenate([inf_treated / n_t, -inf_control / n_c])
 
         return att, se, inf_func
 
@@ -731,29 +892,85 @@ class CallawaySantAnna:
         control_change: np.ndarray,
         n_treated: int,
         n_control: int,
+        X_treated: Optional[np.ndarray] = None,
+        X_control: Optional[np.ndarray] = None,
     ) -> Tuple[float, float, np.ndarray]:
         """
         Estimate ATT using inverse probability weighting.
+
+        With covariates:
+        1. Estimate propensity score P(D=1|X) using logistic regression
+        2. Reweight control units to match treated covariate distribution
+        3. ATT = mean(treated) - weighted_mean(control)
+
+        Without covariates:
+        Simple difference in means with unconditional propensity weighting.
         """
-        # Without covariates, this reduces to difference in means
-        # but with different weighting
-        n_total = n_treated + n_control
-        p_treat = n_treated / n_total  # propensity score (unconditional)
-
-        # ATT = mean(Y_treated) - weighted mean(Y_control)
-        att = np.mean(treated_change) - np.mean(control_change)
-
-        # SE with IPW adjustment
         n_t = len(treated_change)
         n_c = len(control_change)
+        n_total = n_treated + n_control
 
-        var_t = np.var(treated_change, ddof=1) if n_t > 1 else 0.0
-        var_c = np.var(control_change, ddof=1) if n_c > 1 else 0.0
+        if X_treated is not None and X_control is not None and X_treated.shape[1] > 0:
+            # Covariate-adjusted IPW estimation
+            # Stack covariates and create treatment indicator
+            X_all = np.vstack([X_treated, X_control])
+            D = np.concatenate([np.ones(n_t), np.zeros(n_c)])
 
-        # Adjusted variance for IPW
-        se = np.sqrt(var_t / n_t + var_c * (1 - p_treat) / (n_c * p_treat)) if (n_t > 0 and n_c > 0) else 0.0
+            # Estimate propensity scores using logistic regression
+            try:
+                _, pscore = _logistic_regression(X_all, D)
+            except (np.linalg.LinAlgError, ValueError):
+                # Fallback to unconditional if logistic regression fails
+                warnings.warn(
+                    "Propensity score estimation failed. "
+                    "Falling back to unconditional estimation.",
+                    UserWarning,
+                    stacklevel=4,
+                )
+                pscore = np.full(len(D), n_t / (n_t + n_c))
 
-        inf_func = np.array([])  # Placeholder
+            # Propensity scores for treated and control
+            pscore_treated = pscore[:n_t]
+            pscore_control = pscore[n_t:]
+
+            # Clip propensity scores to avoid extreme weights
+            pscore_control = np.clip(pscore_control, 0.01, 0.99)
+            pscore_treated = np.clip(pscore_treated, 0.01, 0.99)
+
+            # IPW weights for control units: p(X) / (1 - p(X))
+            # This reweights controls to have same covariate distribution as treated
+            weights_control = pscore_control / (1 - pscore_control)
+            weights_control = weights_control / np.sum(weights_control)  # normalize
+
+            # ATT = mean(treated) - weighted_mean(control)
+            att = np.mean(treated_change) - np.sum(weights_control * control_change)
+
+            # Compute standard error
+            # Variance of treated mean
+            var_t = np.var(treated_change, ddof=1) if n_t > 1 else 0.0
+
+            # Variance of weighted control mean
+            weighted_var_c = np.sum(weights_control * (control_change - np.sum(weights_control * control_change)) ** 2)
+
+            se = np.sqrt(var_t / n_t + weighted_var_c) if (n_t > 0 and n_c > 0) else 0.0
+
+            # Influence function
+            inf_treated = (treated_change - np.mean(treated_change)) / n_t
+            inf_control = -weights_control * (control_change - np.sum(weights_control * control_change))
+            inf_func = np.concatenate([inf_treated, inf_control])
+        else:
+            # Unconditional IPW (reduces to difference in means)
+            p_treat = n_treated / n_total  # unconditional propensity score
+
+            att = np.mean(treated_change) - np.mean(control_change)
+
+            var_t = np.var(treated_change, ddof=1) if n_t > 1 else 0.0
+            var_c = np.var(control_change, ddof=1) if n_c > 1 else 0.0
+
+            # Adjusted variance for IPW
+            se = np.sqrt(var_t / n_t + var_c * (1 - p_treat) / (n_c * p_treat)) if (n_t > 0 and n_c > 0 and p_treat > 0) else 0.0
+
+            inf_func = np.array([])  # Placeholder
 
         return att, se, inf_func
 
@@ -761,31 +978,91 @@ class CallawaySantAnna:
         self,
         treated_change: np.ndarray,
         control_change: np.ndarray,
+        X_treated: Optional[np.ndarray] = None,
+        X_control: Optional[np.ndarray] = None,
     ) -> Tuple[float, float, np.ndarray]:
         """
         Estimate ATT using doubly robust estimation.
 
-        Without covariates, this is equivalent to the outcome regression
-        estimator but provides consistent estimates even if one of the
-        two models (outcome or propensity) is misspecified.
-        """
-        # Without covariates, DR simplifies to difference in means
-        # The "doubly robust" property requires covariates
-        att = np.mean(treated_change) - np.mean(control_change)
+        With covariates:
+        Combines outcome regression and IPW for double robustness.
+        The estimator is consistent if either the outcome model OR
+        the propensity model is correctly specified.
 
-        # Standard error
+        ATT_DR = (1/n_t) * sum_i[D_i * (Y_i - m(X_i))]
+               + (1/n_t) * sum_i[(1-D_i) * w_i * (m(X_i) - Y_i)]
+
+        where m(X) is the outcome model and w_i are IPW weights.
+
+        Without covariates:
+        Reduces to simple difference in means.
+        """
         n_t = len(treated_change)
         n_c = len(control_change)
 
-        var_t = np.var(treated_change, ddof=1) if n_t > 1 else 0.0
-        var_c = np.var(control_change, ddof=1) if n_c > 1 else 0.0
+        if X_treated is not None and X_control is not None and X_treated.shape[1] > 0:
+            # Doubly robust estimation with covariates
+            # Step 1: Outcome regression - fit E[Delta Y | X] on control
+            beta, _ = _linear_regression(X_control, control_change)
 
-        se = np.sqrt(var_t / n_t + var_c / n_c) if (n_t > 0 and n_c > 0) else 0.0
+            # Predict counterfactual for both treated and control
+            X_treated_with_intercept = np.column_stack([np.ones(n_t), X_treated])
+            X_control_with_intercept = np.column_stack([np.ones(n_c), X_control])
+            m_treated = X_treated_with_intercept @ beta
+            m_control = X_control_with_intercept @ beta
 
-        # Influence function for DR estimator
-        inf_treated = (treated_change - np.mean(treated_change)) / n_t
-        inf_control = (control_change - np.mean(control_change)) / n_c
-        inf_func = np.concatenate([inf_treated, -inf_control])
+            # Step 2: Propensity score estimation
+            X_all = np.vstack([X_treated, X_control])
+            D = np.concatenate([np.ones(n_t), np.zeros(n_c)])
+
+            try:
+                _, pscore = _logistic_regression(X_all, D)
+            except (np.linalg.LinAlgError, ValueError):
+                # Fallback to unconditional if logistic regression fails
+                pscore = np.full(len(D), n_t / (n_t + n_c))
+
+            pscore_control = pscore[n_t:]
+
+            # Clip propensity scores
+            pscore_control = np.clip(pscore_control, 0.01, 0.99)
+
+            # IPW weights for control: p(X) / (1 - p(X))
+            weights_control = pscore_control / (1 - pscore_control)
+
+            # Step 3: Doubly robust ATT
+            # ATT = mean(treated - m(X_treated))
+            #     + weighted_mean_control((m(X) - Y) * weight)
+            att_treated_part = np.mean(treated_change - m_treated)
+
+            # Augmentation term from control
+            augmentation = np.sum(weights_control * (m_control - control_change)) / n_t
+
+            att = att_treated_part + augmentation
+
+            # Step 4: Standard error using influence function
+            # Influence function for DR estimator
+            psi_treated = (treated_change - m_treated - att) / n_t
+            psi_control = (weights_control * (m_control - control_change)) / n_t
+
+            # Variance is sum of squared influence functions
+            var_psi = np.sum(psi_treated ** 2) + np.sum(psi_control ** 2)
+            se = np.sqrt(var_psi) if var_psi > 0 else 0.0
+
+            # Full influence function
+            inf_func = np.concatenate([psi_treated, psi_control])
+        else:
+            # Without covariates, DR simplifies to difference in means
+            att = np.mean(treated_change) - np.mean(control_change)
+
+            var_t = np.var(treated_change, ddof=1) if n_t > 1 else 0.0
+            var_c = np.var(control_change, ddof=1) if n_c > 1 else 0.0
+
+            se = np.sqrt(var_t / n_t + var_c / n_c) if (n_t > 0 and n_c > 0) else 0.0
+
+            # Influence function for DR estimator
+            inf_treated = (treated_change - np.mean(treated_change)) / n_t
+            inf_control = (control_change - np.mean(control_change)) / n_c
+            inf_func = np.concatenate([inf_treated, -inf_control])
 
         return att, se, inf_func
 
