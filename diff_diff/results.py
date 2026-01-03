@@ -56,9 +56,8 @@ class DiDResults:
 
     def __repr__(self) -> str:
         """Concise string representation."""
-        sig = "***" if self.p_value < 0.001 else "**" if self.p_value < 0.01 else "*" if self.p_value < 0.05 else ""
         return (
-            f"DiDResults(ATT={self.att:.4f}{sig}, "
+            f"DiDResults(ATT={self.att:.4f}{self.significance_stars}, "
             f"SE={self.se:.4f}, "
             f"p={self.p_value:.4f})"
         )

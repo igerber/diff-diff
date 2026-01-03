@@ -5,6 +5,7 @@ Difference-in-Differences estimators with sklearn-like API.
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
+from numpy.linalg import LinAlgError
 import pandas as pd
 from scipy import stats
 
@@ -90,7 +91,7 @@ class DifferenceInDifferences:
     def __init__(
         self,
         robust: bool = True,
-        cluster: str = None,
+        cluster: Optional[str] = None,
         alpha: float = 0.05
     ):
         self.robust = robust
@@ -248,6 +249,7 @@ class DifferenceInDifferences:
             k = X.shape[1]
             mse = np.sum(residuals ** 2) / (n - k)
             # Use solve() instead of inv() for numerical stability
+            # solve(A, B) computes X where AX=B, so this yields (X'X)^{-1} * mse
             vcov = np.linalg.solve(X.T @ X, mse * np.eye(k))
 
         # Extract ATT (coefficient on interaction term)
@@ -963,6 +965,7 @@ class MultiPeriodDiD(DifferenceInDifferences):
             k = X.shape[1]
             mse = np.sum(residuals ** 2) / (n - k)
             # Use solve() instead of inv() for numerical stability
+            # solve(A, B) computes X where AX=B, so this yields (X'X)^{-1} * mse
             vcov = np.linalg.solve(X.T @ X, mse * np.eye(k))
 
         # Degrees of freedom
@@ -1528,7 +1531,7 @@ class SyntheticDiD(DifferenceInDifferences):
                 )
                 bootstrap_estimates.append(tau)
 
-            except (ValueError, np.linalg.LinAlgError, KeyError):
+            except (ValueError, LinAlgError, KeyError):
                 # Skip failed bootstrap iterations (e.g., singular matrices,
                 # missing data in resampled units, or invalid weight computations)
                 continue
