@@ -43,7 +43,7 @@ def validate_binary(arr: np.ndarray, name: str) -> None:
 def compute_robust_se(
     X: np.ndarray,
     residuals: np.ndarray,
-    cluster_ids: np.ndarray = None
+    cluster_ids: Optional[np.ndarray] = None
 ) -> np.ndarray:
     """
     Compute heteroskedasticity-robust (HC1) or cluster-robust standard errors.
@@ -102,15 +102,15 @@ def compute_robust_se(
         temp = np.linalg.solve(XtX, meat)
         vcov = adjustment * np.linalg.solve(XtX, temp.T).T
 
-    return vcov
+    return np.asarray(vcov)
 
 
 def compute_confidence_interval(
     estimate: float,
     se: float,
     alpha: float = 0.05,
-    df: int = None
-) -> tuple:
+    df: Optional[int] = None
+) -> Tuple[float, float]:
     """
     Compute confidence interval for an estimate.
 
@@ -141,7 +141,7 @@ def compute_confidence_interval(
     return (lower, upper)
 
 
-def compute_p_value(t_stat: float, df: int = None, two_sided: bool = True) -> float:
+def compute_p_value(t_stat: float, df: Optional[int] = None, two_sided: bool = True) -> float:
     """
     Compute p-value for a t-statistic.
 
@@ -167,7 +167,7 @@ def compute_p_value(t_stat: float, df: int = None, two_sided: bool = True) -> fl
     if two_sided:
         p_value *= 2
 
-    return p_value
+    return float(p_value)
 
 
 # =============================================================================
@@ -257,7 +257,7 @@ def _generate_rademacher_weights(n_clusters: int, rng: np.random.Generator) -> n
     np.ndarray
         Array of Rademacher weights.
     """
-    return rng.choice([-1.0, 1.0], size=n_clusters)
+    return np.asarray(rng.choice([-1.0, 1.0], size=n_clusters))
 
 
 def _generate_webb_weights(n_clusters: int, rng: np.random.Generator) -> np.ndarray:
@@ -292,7 +292,7 @@ def _generate_webb_weights(n_clusters: int, rng: np.random.Generator) -> np.ndar
         np.sqrt(1 / 2), np.sqrt(2 / 2), np.sqrt(3 / 2)
     ])
     probs = np.array([1, 2, 3, 3, 2, 1]) / 12
-    return rng.choice(values, size=n_clusters, p=probs)
+    return np.asarray(rng.choice(values, size=n_clusters, p=probs))
 
 
 def _generate_mammen_weights(n_clusters: int, rng: np.random.Generator) -> np.ndarray:
@@ -330,7 +330,7 @@ def _generate_mammen_weights(n_clusters: int, rng: np.random.Generator) -> np.nd
     # Probability of val1
     p1 = (sqrt5 + 1) / (2 * sqrt5)  # approximately 0.724
 
-    return rng.choice([val1, val2], size=n_clusters, p=[p1, 1 - p1])
+    return np.asarray(rng.choice([val1, val2], size=n_clusters, p=[p1, 1 - p1]))
 
 
 def wild_bootstrap_se(
@@ -520,17 +520,17 @@ def wild_bootstrap_se(
     p_value = np.mean(np.abs(bootstrap_t_stats) >= np.abs(t_stat_original))
 
     # Ensure p-value is at least 1/(n_bootstrap+1) to avoid exact zero
-    p_value = max(p_value, 1 / (n_bootstrap + 1))
+    p_value = float(max(float(p_value), 1 / (n_bootstrap + 1)))
 
     # Step 5: Compute bootstrap SE and confidence interval
     # SE from standard deviation of bootstrap coefficient distribution
-    se_bootstrap = np.std(bootstrap_coefs, ddof=1)
+    se_bootstrap = float(np.std(bootstrap_coefs, ddof=1))
 
     # Percentile confidence interval from bootstrap distribution
     lower_percentile = alpha / 2 * 100
     upper_percentile = (1 - alpha / 2) * 100
-    ci_lower = np.percentile(bootstrap_coefs, lower_percentile)
-    ci_upper = np.percentile(bootstrap_coefs, upper_percentile)
+    ci_lower = float(np.percentile(bootstrap_coefs, lower_percentile))
+    ci_upper = float(np.percentile(bootstrap_coefs, upper_percentile))
 
     return WildBootstrapResults(
         se=se_bootstrap,
@@ -1064,10 +1064,10 @@ def compute_synthetic_weights(
     n_pre, n_control = Y_control.shape
 
     if n_control == 0:
-        return np.array([])
+        return np.asarray([])
 
     if n_control == 1:
-        return np.array([1.0])
+        return np.asarray([1.0])
 
     # Initialize with uniform weights
     weights = np.ones(n_control) / n_control
@@ -1109,7 +1109,7 @@ def compute_synthetic_weights(
         # Fallback to uniform if all weights are zeroed
         weights = np.ones(n_control) / n_control
 
-    return weights
+    return np.asarray(weights)
 
 
 def _project_simplex(v: np.ndarray) -> np.ndarray:
@@ -1147,7 +1147,7 @@ def _project_simplex(v: np.ndarray) -> np.ndarray:
 
     theta = (cssv[rho_val] - 1) / (rho_val + 1)
 
-    return np.maximum(v - theta, 0)
+    return np.asarray(np.maximum(v - theta, 0))
 
 
 def compute_time_weights(
@@ -1185,7 +1185,7 @@ def compute_time_weights(
     n_pre = len(Y_treated)
 
     if n_pre <= 1:
-        return np.ones(n_pre)
+        return np.asarray(np.ones(n_pre))
 
     # Compute mean control outcomes per period
     control_means = np.mean(Y_control, axis=1)
@@ -1200,7 +1200,7 @@ def compute_time_weights(
     # Normalize to sum to 1
     weights = inv_diffs / np.sum(inv_diffs)
 
-    return weights
+    return np.asarray(weights)
 
 
 def compute_sdid_estimator(
@@ -1263,7 +1263,7 @@ def compute_sdid_estimator(
     # SDID estimator
     tau = did_treated - did_control
 
-    return tau
+    return float(tau)
 
 
 def compute_placebo_effects(
@@ -1347,4 +1347,4 @@ def compute_placebo_effects(
 
         placebo_effects.append(placebo_tau)
 
-    return np.array(placebo_effects)
+    return np.asarray(placebo_effects)

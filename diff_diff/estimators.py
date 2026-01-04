@@ -603,6 +603,7 @@ class DifferenceInDifferences:
         """
         if not self.is_fitted_:
             raise RuntimeError("Model must be fitted before calling summary()")
+        assert self.results_ is not None
         return self.results_.summary()
 
     def print_summary(self) -> None:
@@ -641,7 +642,7 @@ class TwoWayFixedEffects(DifferenceInDifferences):
     staggered designs.
     """
 
-    def fit(
+    def fit(  # type: ignore[override]
         self,
         data: pd.DataFrame,
         outcome: str,
@@ -763,7 +764,7 @@ class TwoWayFixedEffects(DifferenceInDifferences):
             n_treated=n_treated,
             n_control=n_control,
             alpha=self.alpha,
-            coefficients={"ATT": att},
+            coefficients={"ATT": float(att)},
             vcov=vcov,
             residuals=residuals,
             fitted_values=fitted,
@@ -892,7 +893,7 @@ class MultiPeriodDiD(DifferenceInDifferences):
     The average ATT is computed as the mean of the δ_t coefficients.
     """
 
-    def fit(
+    def fit(  # type: ignore[override]
         self,
         data: pd.DataFrame,
         outcome: str,
@@ -1166,6 +1167,7 @@ class MultiPeriodDiD(DifferenceInDifferences):
         """
         if not self.is_fitted_:
             raise RuntimeError("Model must be fitted before calling summary()")
+        assert self.results_ is not None
         return self.results_.summary()
 
 
@@ -1284,7 +1286,7 @@ class SyntheticDiD(DifferenceInDifferences):
         self._unit_weights = None
         self._time_weights = None
 
-    def fit(
+    def fit(  # type: ignore[override]
         self,
         data: pd.DataFrame,
         outcome: str,

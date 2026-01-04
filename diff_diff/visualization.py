@@ -10,9 +10,9 @@ import numpy as np
 import pandas as pd
 
 if TYPE_CHECKING:
+    from diff_diff.honest_did import HonestDiDResults, SensitivityResults
     from diff_diff.results import MultiPeriodDiDResults
     from diff_diff.staggered import CallawaySantAnnaResults
-    from diff_diff.honest_did import HonestDiDResults, SensitivityResults
 
 # Type alias for results that can be plotted
 PlottableResults = Union[
@@ -333,7 +333,7 @@ def _extract_plot_data(
         return effects, se, periods, pre_periods, post_periods, reference_period
 
     # Handle CallawaySantAnnaResults (event study aggregation)
-    if hasattr(results, 'event_study_effects'):
+    if hasattr(results, 'event_study_effects') and results.event_study_effects is not None:
         effects = {}
         se = {}
 
@@ -748,7 +748,6 @@ def plot_honest_event_study(
     z = scipy_stats.norm.ppf(1 - alpha / 2)
 
     x_vals = list(range(len(periods)))
-    period_to_x = {p: i for i, p in enumerate(periods)}
 
     effects = [effects_dict[p] for p in periods]
     original_ci_lower = [effects_dict[p] - z * se_dict[p] for p in periods]
@@ -774,7 +773,7 @@ def plot_honest_event_study(
 
     # Plot original CIs (thinner, background)
     yerr_orig = [
-        [e - l for e, l in zip(effects, original_ci_lower)],
+        [e - lower for e, lower in zip(effects, original_ci_lower)],
         [u - e for e, u in zip(effects, original_ci_upper)]
     ]
     ax.errorbar(
@@ -785,7 +784,7 @@ def plot_honest_event_study(
 
     # Plot honest CIs (thicker, foreground)
     yerr_honest = [
-        [e - l for e, l in zip(effects, honest_ci_lower)],
+        [e - lower for e, lower in zip(effects, honest_ci_lower)],
         [u - e for e, u in zip(effects, honest_ci_upper)]
     ]
     ax.errorbar(

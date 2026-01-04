@@ -7,8 +7,8 @@ import pandas as pd
 import pytest
 
 from diff_diff import (
-    MultiPeriodDiD,
     CallawaySantAnna,
+    MultiPeriodDiD,
     plot_event_study,
 )
 

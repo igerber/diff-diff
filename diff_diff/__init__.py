@@ -5,16 +5,42 @@ This library provides sklearn-like estimators for causal inference
 using the difference-in-differences methodology.
 """
 
+from diff_diff.diagnostics import (
+    PlaceboTestResults,
+    leave_one_out_test,
+    permutation_test,
+    placebo_group_test,
+    placebo_timing_test,
+    run_all_placebo_tests,
+    run_placebo_test,
+)
 from diff_diff.estimators import (
     DifferenceInDifferences,
-    TwoWayFixedEffects,
     MultiPeriodDiD,
     SyntheticDiD,
+    TwoWayFixedEffects,
 )
-from diff_diff.staggered import (
-    CallawaySantAnna,
-    CallawaySantAnnaResults,
-    GroupTimeEffect,
+from diff_diff.honest_did import (
+    DeltaRM,
+    DeltaSD,
+    DeltaSDRM,
+    HonestDiD,
+    HonestDiDResults,
+    SensitivityResults,
+    compute_honest_did,
+    sensitivity_plot,
+)
+from diff_diff.prep import (
+    aggregate_to_cohorts,
+    balance_panel,
+    create_event_time,
+    generate_did_data,
+    make_post_indicator,
+    make_treatment_indicator,
+    rank_control_units,
+    summarize_did_data,
+    validate_did_data,
+    wide_to_long,
 )
 from diff_diff.results import (
     DiDResults,
@@ -22,52 +48,26 @@ from diff_diff.results import (
     PeriodEffect,
     SyntheticDiDResults,
 )
-from diff_diff.visualization import (
-    plot_event_study,
-    plot_group_effects,
-    plot_sensitivity,
-    plot_honest_event_study,
-)
-from diff_diff.prep import (
-    make_treatment_indicator,
-    make_post_indicator,
-    wide_to_long,
-    balance_panel,
-    validate_did_data,
-    summarize_did_data,
-    generate_did_data,
-    create_event_time,
-    aggregate_to_cohorts,
-    rank_control_units,
+from diff_diff.staggered import (
+    CallawaySantAnna,
+    CallawaySantAnnaResults,
+    GroupTimeEffect,
 )
 from diff_diff.utils import (
+    WildBootstrapResults,
     check_parallel_trends,
     check_parallel_trends_robust,
     equivalence_test_trends,
-    WildBootstrapResults,
     wild_bootstrap_se,
 )
-from diff_diff.diagnostics import (
-    PlaceboTestResults,
-    run_placebo_test,
-    placebo_timing_test,
-    placebo_group_test,
-    permutation_test,
-    leave_one_out_test,
-    run_all_placebo_tests,
-)
-from diff_diff.honest_did import (
-    HonestDiD,
-    HonestDiDResults,
-    SensitivityResults,
-    DeltaSD,
-    DeltaRM,
-    DeltaSDRM,
-    compute_honest_did,
-    sensitivity_plot,
+from diff_diff.visualization import (
+    plot_event_study,
+    plot_group_effects,
+    plot_honest_event_study,
+    plot_sensitivity,
 )
 
-__version__ = "0.5.0"
+__version__ = "0.6.0"
 __all__ = [
     # Estimators
     "DifferenceInDifferences",

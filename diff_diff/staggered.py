@@ -1263,6 +1263,7 @@ class CallawaySantAnna:
         """Get summary of estimation results."""
         if not self.is_fitted_:
             raise RuntimeError("Model must be fitted before calling summary()")
+        assert self.results_ is not None
         return self.results_.summary()
 
     def print_summary(self) -> None:

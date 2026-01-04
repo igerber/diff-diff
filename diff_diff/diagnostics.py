@@ -360,6 +360,9 @@ def run_placebo_test(
             **estimator_kwargs
         )
 
+    # This should never be reached due to validation above
+    raise ValueError(f"Unknown test type: {test_type}")
+
 
 def placebo_timing_test(
     data: pd.DataFrame,

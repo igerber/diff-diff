@@ -10,14 +10,13 @@ import pytest
 
 from diff_diff.diagnostics import (
     PlaceboTestResults,
-    run_placebo_test,
-    placebo_timing_test,
-    placebo_group_test,
-    permutation_test,
     leave_one_out_test,
+    permutation_test,
+    placebo_group_test,
+    placebo_timing_test,
     run_all_placebo_tests,
+    run_placebo_test,
 )
-
 
 # =============================================================================
 # Fixtures
@@ -31,9 +30,7 @@ def panel_data_parallel_trends():
 
     n_units = 50
     n_treated = 25
-    n_periods = 6
-    pre_periods = [0, 1, 2]
-    post_periods = [3, 4, 5]
+    n_periods = 6  # Periods 0-2 are pre-treatment, 3-5 are post-treatment
 
     data = []
     for unit in range(n_units):
