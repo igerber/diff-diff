@@ -476,6 +476,17 @@ class CallawaySantAnna:
     >>> from diff_diff import plot_event_study
     >>> plot_event_study(results)
 
+    With covariate adjustment (conditional parallel trends):
+
+    >>> # When parallel trends only holds conditional on covariates
+    >>> cs = CallawaySantAnna(estimation_method='dr')  # doubly robust
+    >>> results = cs.fit(data, outcome='outcome', unit='unit',
+    ...                  time='time', first_treat='first_treat',
+    ...                  covariates=['age', 'income'])
+    >>>
+    >>> # DR is recommended: consistent if either outcome model
+    >>> # or propensity model is correctly specified
+
     Notes
     -----
     The key innovation of Callaway & Sant'Anna (2021) is the disaggregated
