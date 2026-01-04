@@ -18,6 +18,7 @@ Introduction to Difference-in-Differences with `diff-diff`:
 Handling staggered treatment adoption with the Callaway-Sant'Anna estimator:
 - Understanding staggered adoption
 - Problems with TWFE in staggered settings
+- **Goodman-Bacon decomposition**: Diagnosing *why* TWFE fails
 - Group-time effects ATT(g,t)
 - Aggregation methods (simple, group, event-study)
 - Control group specifications
