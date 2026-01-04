@@ -53,7 +53,9 @@ mypy diff_diff
 - **`diff_diff/visualization.py`** - Plotting functions:
   - `plot_event_study` - Publication-ready event study coefficient plots
   - `plot_group_effects` - Treatment effects by cohort visualization
-  - Works with MultiPeriodDiD, CallawaySantAnna, or DataFrames
+  - `plot_sensitivity` - Honest DiD sensitivity analysis plots (bounds vs M)
+  - `plot_honest_event_study` - Event study with honest confidence intervals
+  - Works with MultiPeriodDiD, CallawaySantAnna, HonestDiD, or DataFrames
 
 - **`diff_diff/utils.py`** - Statistical utilities:
   - Robust/cluster standard errors (`compute_robust_se`)
@@ -69,6 +71,14 @@ mypy diff_diff
   - `leave_one_out_test()` - Sensitivity to individual treated units
   - `run_all_placebo_tests()` - Comprehensive suite of diagnostics
   - `PlaceboTestResults` - Dataclass for test results
+
+- **`diff_diff/honest_did.py`** - Honest DiD sensitivity analysis (Rambachan & Roth 2023):
+  - `HonestDiD` - Main class for computing bounds under parallel trends violations
+  - `DeltaSD`, `DeltaRM`, `DeltaSDRM` - Restriction classes for smoothness and relative magnitudes
+  - `HonestDiDResults` - Results with identified set bounds and robust CIs
+  - `SensitivityResults` - Results from sensitivity analysis over M grid
+  - `compute_honest_did()` - Convenience function for quick bounds computation
+  - `sensitivity_plot()` - Convenience function for plotting sensitivity analysis
 
 - **`diff_diff/prep.py`** - Data preparation utilities:
   - `generate_did_data` - Create synthetic data with known treatment effect
@@ -95,6 +105,7 @@ mypy diff_diff
   - `02_staggered_did.ipynb` - Staggered adoption with Callaway-Sant'Anna
   - `03_synthetic_did.ipynb` - Synthetic DiD with unit/time weights
   - `04_parallel_trends.ipynb` - Parallel trends testing and diagnostics
+  - `05_honest_did.ipynb` - Honest DiD sensitivity analysis for parallel trends violations
 
 ### Test Structure
 
@@ -106,6 +117,7 @@ Tests mirror the source modules:
 - `tests/test_wild_bootstrap.py` - Tests for wild cluster bootstrap
 - `tests/test_prep.py` - Tests for data preparation utilities
 - `tests/test_visualization.py` - Tests for plotting functions
+- `tests/test_honest_did.py` - Tests for Honest DiD sensitivity analysis
 
 ### Dependencies
 

@@ -25,6 +25,8 @@ from diff_diff.results import (
 from diff_diff.visualization import (
     plot_event_study,
     plot_group_effects,
+    plot_sensitivity,
+    plot_honest_event_study,
 )
 from diff_diff.prep import (
     make_treatment_indicator,
@@ -54,6 +56,16 @@ from diff_diff.diagnostics import (
     leave_one_out_test,
     run_all_placebo_tests,
 )
+from diff_diff.honest_did import (
+    HonestDiD,
+    HonestDiDResults,
+    SensitivityResults,
+    DeltaSD,
+    DeltaRM,
+    DeltaSDRM,
+    compute_honest_did,
+    sensitivity_plot,
+)
 
 __version__ = "0.5.0"
 __all__ = [
@@ -73,6 +85,8 @@ __all__ = [
     # Visualization
     "plot_event_study",
     "plot_group_effects",
+    "plot_sensitivity",
+    "plot_honest_event_study",
     # Parallel trends testing
     "check_parallel_trends",
     "check_parallel_trends_robust",
@@ -99,4 +113,13 @@ __all__ = [
     "create_event_time",
     "aggregate_to_cohorts",
     "rank_control_units",
+    # Honest DiD sensitivity analysis
+    "HonestDiD",
+    "HonestDiDResults",
+    "SensitivityResults",
+    "DeltaSD",
+    "DeltaRM",
+    "DeltaSDRM",
+    "compute_honest_did",
+    "sensitivity_plot",
 ]
