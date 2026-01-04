@@ -315,6 +315,11 @@ Feature Comparison Table
      - ✅
      - ❌
      - ❌
+   * - Bacon decomposition
+     - ✅
+     - ❌
+     - ❌
+     - ❌
 
 Migration Tips
 --------------

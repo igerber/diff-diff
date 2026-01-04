@@ -24,7 +24,7 @@ A production-ready DiD library needs:
 | Honest DiD (Rambachan-Roth) | ✅ Done | — | Reviewers expect sensitivity analysis |
 | CallawaySantAnna Covariates | ✅ Done | — | Conditional PT often required in practice |
 | API Documentation Site | ✅ Done | — | Credibility and discoverability |
-| Goodman-Bacon Decomposition | Not Started | 1.0 Target | Explains when TWFE fails |
+| Goodman-Bacon Decomposition | ✅ Done | — | Explains when TWFE fails |
 | Power Analysis | Not Started | 1.0 Target | Study design tool |
 | CallawaySantAnna Bootstrap | Not Started | 1.0 Target | Better inference with few clusters |
 | Sun-Abraham Estimator | Not Started | Post-1.0 | Alternative to CS, some prefer it |
@@ -39,13 +39,15 @@ A production-ready DiD library needs:
 
 These would strengthen the 1.0 release but aren't strictly blocking.
 
-### Goodman-Bacon Decomposition
+### ✅ Goodman-Bacon Decomposition (Done)
 
 Helps users understand *why* TWFE can be biased with staggered adoption. Shows weights on "forbidden comparisons" (already-treated as controls). Essential diagnostic before deciding whether to use Callaway-Sant'Anna.
 
-- Decompose TWFE into 2x2 comparisons
-- Show weights by comparison type (clean vs. forbidden)
-- Visualization of decomposition
+- ✅ Decompose TWFE into 2x2 comparisons
+- ✅ Show weights by comparison type (clean vs. forbidden)
+- ✅ Visualization of decomposition (scatter and bar charts)
+- ✅ Integration with `TwoWayFixedEffects.decompose()` method
+- ✅ Automatic warning when TWFE detects staggered treatment timing
 
 **Reference**: Goodman-Bacon (2021). *Journal of Econometrics*.
 
@@ -69,7 +71,7 @@ With few clusters or groups, analytical SEs may be unreliable. Bootstrap provide
 ### Enhanced Visualization
 
 - Synthetic control weight visualization (bar chart of unit weights)
-- Bacon decomposition visualization
+- ✅ Bacon decomposition visualization (scatter and bar charts)
 - Treatment adoption "staircase" plot
 
 ---
@@ -118,7 +120,14 @@ For high-dimensional settings with many covariates. Uses ML for nuisance paramet
 
 ## Release History
 
-### v0.6.0 (Current)
+### v0.7.0 (Current)
+
+- ✅ Goodman-Bacon decomposition for TWFE diagnostics
+- ✅ `plot_bacon()` visualization (scatter and bar charts)
+- ✅ `TwoWayFixedEffects.decompose()` integration
+- ✅ Automatic staggered treatment warning in TWFE
+
+### v0.6.0
 
 - ✅ **All 1.0 Blockers Complete**
 - ✅ Honest DiD sensitivity analysis (Rambachan & Roth 2023)

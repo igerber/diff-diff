@@ -46,6 +46,13 @@ mypy diff_diff
   - `CallawaySantAnnaResults` - Results with group-time ATT(g,t) and aggregations
   - `GroupTimeEffect` - Container for individual group-time effects
 
+- **`diff_diff/bacon.py`** - Goodman-Bacon decomposition for TWFE diagnostics:
+  - `BaconDecomposition` - Decompose TWFE into weighted 2x2 comparisons (Goodman-Bacon 2021)
+  - `BaconDecompositionResults` - Results with comparison weights and estimates by type
+  - `Comparison2x2` - Individual 2x2 comparison (treated_vs_never, earlier_vs_later, later_vs_earlier)
+  - `bacon_decompose()` - Convenience function for quick decomposition
+  - Integrated with `TwoWayFixedEffects.decompose()` method
+
 - **`diff_diff/results.py`** - Dataclass containers for estimation results:
   - `DiDResults`, `MultiPeriodDiDResults`, `SyntheticDiDResults`, `PeriodEffect`
   - Each provides `summary()`, `to_dict()`, `to_dataframe()` methods
@@ -55,7 +62,8 @@ mypy diff_diff
   - `plot_group_effects` - Treatment effects by cohort visualization
   - `plot_sensitivity` - Honest DiD sensitivity analysis plots (bounds vs M)
   - `plot_honest_event_study` - Event study with honest confidence intervals
-  - Works with MultiPeriodDiD, CallawaySantAnna, HonestDiD, or DataFrames
+  - `plot_bacon` - Bacon decomposition scatter/bar plots (weights vs estimates by comparison type)
+  - Works with MultiPeriodDiD, CallawaySantAnna, HonestDiD, BaconDecomposition, or DataFrames
 
 - **`diff_diff/utils.py`** - Statistical utilities:
   - Robust/cluster standard errors (`compute_robust_se`)
@@ -112,6 +120,7 @@ mypy diff_diff
 Tests mirror the source modules:
 - `tests/test_estimators.py` - Tests for DifferenceInDifferences, TWFE, MultiPeriodDiD, SyntheticDiD
 - `tests/test_staggered.py` - Tests for CallawaySantAnna
+- `tests/test_bacon.py` - Tests for Goodman-Bacon decomposition
 - `tests/test_utils.py` - Tests for parallel trends, robust SE, synthetic weights
 - `tests/test_diagnostics.py` - Tests for placebo tests
 - `tests/test_wild_bootstrap.py` - Tests for wild cluster bootstrap
