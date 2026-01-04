@@ -36,6 +36,15 @@ from diff_diff.honest_did import (
     compute_honest_did,
     sensitivity_plot,
 )
+from diff_diff.power import (
+    PowerAnalysis,
+    PowerResults,
+    SimulationPowerResults,
+    compute_mde,
+    compute_power,
+    compute_sample_size,
+    simulate_power,
+)
 from diff_diff.prep import (
     aggregate_to_cohorts,
     balance_panel,
@@ -71,10 +80,11 @@ from diff_diff.visualization import (
     plot_event_study,
     plot_group_effects,
     plot_honest_event_study,
+    plot_power_curve,
     plot_sensitivity,
 )
 
-__version__ = "0.7.0"
+__version__ = "0.8.0"
 __all__ = [
     # Estimators
     "DifferenceInDifferences",
@@ -135,4 +145,13 @@ __all__ = [
     "DeltaSDRM",
     "compute_honest_did",
     "sensitivity_plot",
+    # Power analysis
+    "PowerAnalysis",
+    "PowerResults",
+    "SimulationPowerResults",
+    "compute_mde",
+    "compute_power",
+    "compute_sample_size",
+    "simulate_power",
+    "plot_power_curve",
 ]
