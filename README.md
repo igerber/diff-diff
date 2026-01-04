@@ -75,6 +75,7 @@ Signif. codes: '***' 0.001, '**' 0.01, '*' 0.05, '.' 0.1
 - **Event study plots**: Publication-ready visualization of treatment effects
 - **Parallel trends testing**: Multiple methods including equivalence tests
 - **Placebo tests**: Comprehensive diagnostics including fake timing, fake group, permutation, and leave-one-out tests
+- **Honest DiD sensitivity analysis**: Rambachan-Roth (2023) bounds and breakdown analysis for parallel trends violations
 - **Data prep utilities**: Helper functions for common data preparation tasks
 
 ## Tutorials
@@ -87,6 +88,7 @@ We provide Jupyter notebook tutorials in `docs/tutorials/`:
 | `02_staggered_did.ipynb` | Staggered adoption with Callaway-Sant'Anna, group-time effects, aggregation methods |
 | `03_synthetic_did.ipynb` | Synthetic DiD, unit/time weights, inference methods, regularization |
 | `04_parallel_trends.ipynb` | Testing parallel trends, equivalence tests, placebo tests, diagnostics |
+| `05_honest_did.ipynb` | Honest DiD sensitivity analysis, bounds, breakdown values, visualization |
 
 ## Data Preparation
 
@@ -980,6 +982,81 @@ print(f"TOST p-value: {results['tost_p_value']:.4f}")
 print(f"Trends equivalent: {results['equivalent']}")
 ```
 
+### Honest DiD Sensitivity Analysis (Rambachan-Roth)
+
+Pre-trends tests have low power and can exacerbate bias. **Honest DiD** (Rambachan & Roth 2023) provides sensitivity analysis showing how robust your results are to violations of parallel trends.
+
+```python
+from diff_diff import HonestDiD, MultiPeriodDiD
+
+# First, fit a standard event study
+did = MultiPeriodDiD()
+event_results = did.fit(
+    data,
+    outcome='outcome',
+    treatment='treated',
+    time='period',
+    post_periods=[5, 6, 7, 8, 9]
+)
+
+# Compute honest bounds with relative magnitudes restriction
+# M=1 means post-treatment violations can be up to 1x the worst pre-treatment violation
+honest = HonestDiD(method='relative_magnitude', M=1.0)
+honest_results = honest.fit(event_results)
+
+print(honest_results.summary())
+print(f"Original estimate: {honest_results.original_estimate:.4f}")
+print(f"Robust 95% CI: [{honest_results.ci_lb:.4f}, {honest_results.ci_ub:.4f}]")
+print(f"Effect robust to violations: {honest_results.is_significant}")
+```
+
+**Sensitivity analysis over M values:**
+
+```python
+# How do results change as we allow larger violations?
+sensitivity = honest.sensitivity_analysis(
+    event_results,
+    M_grid=[0, 0.5, 1.0, 1.5, 2.0]
+)
+
+print(sensitivity.summary())
+print(f"Breakdown value: M = {sensitivity.breakdown_M}")
+# Breakdown = smallest M where the robust CI includes zero
+```
+
+**Breakdown value:**
+
+The breakdown value tells you how robust your conclusion is:
+
+```python
+breakdown = honest.breakdown_value(event_results)
+if breakdown >= 1.0:
+    print("Result holds even if post-treatment violations are as bad as pre-treatment")
+else:
+    print(f"Result requires violations smaller than {breakdown:.1f}x pre-treatment")
+```
+
+**Smoothness restriction (alternative approach):**
+
+```python
+# Bounds second differences of trend violations
+# M=0 means linear extrapolation of pre-trends
+honest_smooth = HonestDiD(method='smoothness', M=0.5)
+smooth_results = honest_smooth.fit(event_results)
+```
+
+**Visualization:**
+
+```python
+from diff_diff import plot_sensitivity, plot_honest_event_study
+
+# Plot sensitivity analysis
+plot_sensitivity(sensitivity, title="Sensitivity to Parallel Trends Violations")
+
+# Event study with honest confidence intervals
+plot_honest_event_study(event_results, honest_results)
+```
+
 ### Placebo Tests
 
 Placebo tests help validate the parallel trends assumption by checking whether effects appear where they shouldn't (before treatment or in untreated groups).
@@ -1277,6 +1354,75 @@ SyntheticDiD(
 | `to_dataframe()` | Convert to pandas DataFrame |
 | `get_unit_weights_df()` | Get unit weights as DataFrame |
 | `get_time_weights_df()` | Get time weights as DataFrame |
+
+### HonestDiD
+
+```python
+HonestDiD(
+    method='relative_magnitude',  # 'relative_magnitude' or 'smoothness'
+    M=None,               # Restriction parameter (default: 1.0 for RM, 0.0 for SD)
+    alpha=0.05,           # Significance level for CIs
+    l_vec=None            # Linear combination vector for target parameter
+)
+```
+
+**fit() Parameters:**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `results` | MultiPeriodDiDResults | Results from MultiPeriodDiD.fit() |
+| `M` | float | Restriction parameter (overrides constructor value) |
+
+**Methods:**
+
+| Method | Description |
+|--------|-------------|
+| `fit(results, M)` | Compute bounds for given event study results |
+| `sensitivity_analysis(results, M_grid)` | Compute bounds over grid of M values |
+| `breakdown_value(results, tol)` | Find smallest M where CI includes zero |
+
+### HonestDiDResults
+
+**Attributes:**
+
+| Attribute | Description |
+|-----------|-------------|
+| `original_estimate` | Point estimate under parallel trends |
+| `lb` | Lower bound of identified set |
+| `ub` | Upper bound of identified set |
+| `ci_lb` | Lower bound of robust confidence interval |
+| `ci_ub` | Upper bound of robust confidence interval |
+| `ci_width` | Width of robust CI |
+| `M` | Restriction parameter used |
+| `method` | Restriction method ('relative_magnitude' or 'smoothness') |
+| `alpha` | Significance level |
+| `is_significant` | True if robust CI excludes zero |
+
+**Methods:**
+
+| Method | Description |
+|--------|-------------|
+| `summary()` | Get formatted summary string |
+| `to_dict()` | Convert to dictionary |
+| `to_dataframe()` | Convert to pandas DataFrame |
+
+### SensitivityResults
+
+**Attributes:**
+
+| Attribute | Description |
+|-----------|-------------|
+| `M_grid` | Array of M values analyzed |
+| `results` | List of HonestDiDResults for each M |
+| `breakdown_M` | Smallest M where CI includes zero (None if always significant) |
+
+**Methods:**
+
+| Method | Description |
+|--------|-------------|
+| `summary()` | Get formatted summary string |
+| `plot(ax)` | Plot sensitivity analysis |
+| `to_dataframe()` | Convert to pandas DataFrame |
 
 ### Data Preparation Functions
 
