@@ -89,7 +89,7 @@ Current line counts (target: < 1000 lines per module):
 | `bacon.py` | 1027 | OK |
 
 **Completed splits:**
-- ~~`estimators.py` → `twfe.py`, `synthetic_did.py` (keep base classes in estimators.py)~~ - Done in 1.0.1
+- ~~`estimators.py` → `twfe.py`, `synthetic_did.py` (keep base classes in estimators.py)~~ - Done in 1.0.2
 
 **Potential splits:**
 - `staggered.py` → `staggered_bootstrap.py` (move bootstrap logic)
