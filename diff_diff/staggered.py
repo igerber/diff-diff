@@ -19,7 +19,6 @@ from diff_diff.utils import (
     compute_p_value,
 )
 
-
 # =============================================================================
 # Bootstrap Weight Generators
 # =============================================================================
@@ -554,11 +553,14 @@ class CallawaySantAnna:
         Number of bootstrap iterations for inference.
         If 0, uses analytical standard errors.
         Recommended: 999 or more for reliable inference.
-    bootstrap_weight_type : str, default="rademacher"
+    bootstrap_weights : str, default="rademacher"
         Type of weights for multiplier bootstrap:
         - "rademacher": +1/-1 with equal probability (standard choice)
         - "mammen": Two-point distribution (asymptotically valid, matches skewness)
         - "webb": Six-point distribution (recommended when n_clusters < 20)
+    bootstrap_weight_type : str, optional
+        .. deprecated:: 1.0.1
+            Use ``bootstrap_weights`` instead. Will be removed in v2.0.
     seed : int, optional
         Random seed for reproducibility.
 
@@ -640,9 +642,12 @@ class CallawaySantAnna:
         alpha: float = 0.05,
         cluster: Optional[str] = None,
         n_bootstrap: int = 0,
-        bootstrap_weight_type: str = "rademacher",
+        bootstrap_weights: Optional[str] = None,
+        bootstrap_weight_type: Optional[str] = None,
         seed: Optional[int] = None,
     ):
+        import warnings
+
         if control_group not in ["never_treated", "not_yet_treated"]:
             raise ValueError(
                 f"control_group must be 'never_treated' or 'not_yet_treated', "
@@ -653,10 +658,26 @@ class CallawaySantAnna:
                 f"estimation_method must be 'dr', 'ipw', or 'reg', "
                 f"got '{estimation_method}'"
             )
-        if bootstrap_weight_type not in ["rademacher", "mammen", "webb"]:
+
+        # Handle bootstrap_weight_type deprecation
+        if bootstrap_weight_type is not None:
+            warnings.warn(
+                "bootstrap_weight_type is deprecated and will be removed in v2.0. "
+                "Use bootstrap_weights instead.",
+                DeprecationWarning,
+                stacklevel=2
+            )
+            if bootstrap_weights is None:
+                bootstrap_weights = bootstrap_weight_type
+
+        # Default to rademacher if neither specified
+        if bootstrap_weights is None:
+            bootstrap_weights = "rademacher"
+
+        if bootstrap_weights not in ["rademacher", "mammen", "webb"]:
             raise ValueError(
-                f"bootstrap_weight_type must be 'rademacher', 'mammen', or 'webb', "
-                f"got '{bootstrap_weight_type}'"
+                f"bootstrap_weights must be 'rademacher', 'mammen', or 'webb', "
+                f"got '{bootstrap_weights}'"
             )
 
         self.control_group = control_group
@@ -665,7 +686,9 @@ class CallawaySantAnna:
         self.alpha = alpha
         self.cluster = cluster
         self.n_bootstrap = n_bootstrap
-        self.bootstrap_weight_type = bootstrap_weight_type
+        self.bootstrap_weights = bootstrap_weights
+        # Keep bootstrap_weight_type for backward compatibility
+        self.bootstrap_weight_type = bootstrap_weights
         self.seed = seed
 
         self.is_fitted_ = False
@@ -838,31 +861,37 @@ class CallawaySantAnna:
                     group_time_effects[gt]['se'] = bootstrap_results.group_time_ses[gt]
                     group_time_effects[gt]['conf_int'] = bootstrap_results.group_time_cis[gt]
                     group_time_effects[gt]['p_value'] = bootstrap_results.group_time_p_values[gt]
-                    effect = group_time_effects[gt]['effect']
-                    se = group_time_effects[gt]['se']
+                    effect = float(group_time_effects[gt]['effect'])
+                    se = float(group_time_effects[gt]['se'])
                     group_time_effects[gt]['t_stat'] = effect / se if se > 0 else 0.0
 
             # Update event study effects with bootstrap SEs
-            if event_study_effects is not None and bootstrap_results.event_study_ses is not None:
+            if (event_study_effects is not None
+                and bootstrap_results.event_study_ses is not None
+                and bootstrap_results.event_study_cis is not None
+                and bootstrap_results.event_study_p_values is not None):
                 for e in event_study_effects:
                     if e in bootstrap_results.event_study_ses:
                         event_study_effects[e]['se'] = bootstrap_results.event_study_ses[e]
                         event_study_effects[e]['conf_int'] = bootstrap_results.event_study_cis[e]
                         p_val = bootstrap_results.event_study_p_values[e]
                         event_study_effects[e]['p_value'] = p_val
-                        effect = event_study_effects[e]['effect']
-                        se = event_study_effects[e]['se']
+                        effect = float(event_study_effects[e]['effect'])
+                        se = float(event_study_effects[e]['se'])
                         event_study_effects[e]['t_stat'] = effect / se if se > 0 else 0.0
 
             # Update group effects with bootstrap SEs
-            if group_effects is not None and bootstrap_results.group_effect_ses is not None:
+            if (group_effects is not None
+                and bootstrap_results.group_effect_ses is not None
+                and bootstrap_results.group_effect_cis is not None
+                and bootstrap_results.group_effect_p_values is not None):
                 for g in group_effects:
                     if g in bootstrap_results.group_effect_ses:
                         group_effects[g]['se'] = bootstrap_results.group_effect_ses[g]
                         group_effects[g]['conf_int'] = bootstrap_results.group_effect_cis[g]
                         group_effects[g]['p_value'] = bootstrap_results.group_effect_p_values[g]
-                        effect = group_effects[g]['effect']
-                        se = group_effects[g]['se']
+                        effect = float(group_effects[g]['effect'])
+                        se = float(group_effects[g]['se'])
                         group_effects[g]['t_stat'] = effect / se if se > 0 else 0.0
 
         # Store results
@@ -1557,7 +1586,7 @@ class CallawaySantAnna:
             bootstrap_overall[b] = np.sum(overall_weights * bootstrap_atts_gt[b, :])
 
             # Compute bootstrap event study effects
-            if bootstrap_event_study is not None:
+            if bootstrap_event_study is not None and event_study_info is not None:
                 for e, agg_info in event_study_info.items():
                     gt_indices = agg_info['gt_indices']
                     weights = agg_info['weights']
@@ -1566,7 +1595,7 @@ class CallawaySantAnna:
                     )
 
             # Compute bootstrap group effects
-            if bootstrap_group is not None:
+            if bootstrap_group is not None and group_agg_info is not None:
                 for g, agg_info in group_agg_info.items():
                     gt_indices = agg_info['gt_indices']
                     weights = agg_info['weights']
@@ -1602,7 +1631,7 @@ class CallawaySantAnna:
         event_study_cis = None
         event_study_p_values = None
 
-        if bootstrap_event_study is not None:
+        if bootstrap_event_study is not None and event_study_info is not None:
             event_study_ses = {}
             event_study_cis = {}
             event_study_p_values = {}
@@ -1622,7 +1651,7 @@ class CallawaySantAnna:
         group_effect_cis = None
         group_effect_p_values = None
 
-        if bootstrap_group is not None:
+        if bootstrap_group is not None and group_agg_info is not None:
             group_effect_ses = {}
             group_effect_cis = {}
             group_effect_p_values = {}
@@ -1797,6 +1826,8 @@ class CallawaySantAnna:
             "alpha": self.alpha,
             "cluster": self.cluster,
             "n_bootstrap": self.n_bootstrap,
+            "bootstrap_weights": self.bootstrap_weights,
+            # Deprecated but kept for backward compatibility
             "bootstrap_weight_type": self.bootstrap_weight_type,
             "seed": self.seed,
         }

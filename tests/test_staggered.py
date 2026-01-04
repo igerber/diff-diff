@@ -1022,19 +1022,25 @@ class TestCallawaySantAnnaBootstrap:
 
     def test_bootstrap_invalid_weight_type(self):
         """Test that invalid weight type raises error."""
-        with pytest.raises(ValueError, match="bootstrap_weight_type"):
+        # Test with new parameter name
+        with pytest.raises(ValueError, match="bootstrap_weights"):
+            CallawaySantAnna(bootstrap_weights="invalid")
+        # Test deprecated parameter still validates
+        with pytest.raises(ValueError, match="bootstrap_weights"):
             CallawaySantAnna(bootstrap_weight_type="invalid")
 
     def test_bootstrap_get_params(self):
-        """Test that get_params includes bootstrap_weight_type."""
+        """Test that get_params includes bootstrap_weights."""
         cs = CallawaySantAnna(
             n_bootstrap=99,
-            bootstrap_weight_type="mammen",
+            bootstrap_weights="mammen",
             seed=42
         )
         params = cs.get_params()
 
         assert params['n_bootstrap'] == 99
+        assert params['bootstrap_weights'] == "mammen"
+        # Deprecated attribute still accessible for backward compat
         assert params['bootstrap_weight_type'] == "mammen"
         assert params['seed'] == 42
 

@@ -8,19 +8,19 @@ For the public feature roadmap, see [ROADMAP.md](ROADMAP.md).
 
 ## Priority Items for 1.0.1
 
-### Linter/Type Errors (Blocking)
+### Linter/Type Errors (Blocking) - COMPLETED
 
-| Issue | Location | Severity |
-|-------|----------|----------|
-| Unused import `Union` | `power.py:25` | ruff F401 |
-| Unsorted imports | `staggered.py:8` | ruff I001 |
-| 10 mypy errors - Optional type handling | `staggered.py:843-1631` | mypy operator/index |
+| Issue | Location | Status |
+|-------|----------|--------|
+| ~~Unused import `Union`~~ | `power.py:25` | Fixed |
+| ~~Unsorted imports~~ | `staggered.py:8` | Fixed |
+| ~~10 mypy errors - Optional type handling~~ | `staggered.py:843-1631` | Fixed |
 
-### Quick Wins
+### Quick Wins - COMPLETED
 
-- [ ] Fix ruff errors (2 auto-fixable)
-- [ ] Fix mypy errors in staggered.py (Optional dict access needs guards)
-- [ ] Remove duplicate `_get_significance_stars()` from `diagnostics.py:24-34` (already in `results.py:183-193`)
+- [x] Fix ruff errors (2 auto-fixable)
+- [x] Fix mypy errors in staggered.py (Optional dict access needs guards)
+- [x] Remove duplicate `_get_significance_stars()` from `diagnostics.py` (now imports from `results.py`)
 
 ---
 
@@ -37,38 +37,37 @@ For the public feature roadmap, see [ROADMAP.md](ROADMAP.md).
 
 ## Code Quality Issues
 
-### Bare Exception Handling
+### Bare Exception Handling - COMPLETED
 
-Replace broad `except Exception` with specific exceptions:
+~~Replace broad `except Exception` with specific exceptions:~~
 
-| Location | Recommendation |
-|----------|----------------|
-| `diagnostics.py:636` | Catch `ValueError`, `LinAlgError` |
-| `diagnostics.py:747` | Catch `ValueError`, `LinAlgError` |
-| `honest_did.py:807` | Catch specific optimization errors |
-| `honest_did.py:821` | Catch specific optimization errors |
+| Location | Status |
+|----------|--------|
+| ~~`diagnostics.py:624`~~ | Fixed - catches `ValueError`, `KeyError`, `LinAlgError` |
+| ~~`diagnostics.py:735`~~ | Fixed - catches `ValueError`, `KeyError`, `LinAlgError` |
+| ~~`honest_did.py:807`~~ | Fixed - catches `ValueError`, `TypeError` |
+| ~~`honest_did.py:822`~~ | Fixed - catches `ValueError`, `TypeError` |
 
 ### Code Duplication
 
-| Duplicate Code | Locations | Action |
+| Duplicate Code | Locations | Status |
 |---------------|-----------|--------|
-| `_get_significance_stars()` | `results.py:183`, `diagnostics.py:24` | Remove from diagnostics.py |
-| Wild bootstrap inference block | `estimators.py:278-296`, `estimators.py:725-748` | Extract to shared method |
-| Within-transformation logic | `estimators.py:217-232`, `estimators.py:787-833`, `bacon.py:567-642` | Extract to utils.py |
-| Linear regression helper | `staggered.py:205-240`, `estimators.py:366-408` | Consider consolidation |
+| ~~`_get_significance_stars()`~~ | `results.py:183`, ~~`diagnostics.py`~~ | Fixed in 1.0.1 |
+| Wild bootstrap inference block | `estimators.py:278-296`, `estimators.py:725-748` | Future: extract to shared method |
+| Within-transformation logic | `estimators.py:217-232`, `estimators.py:787-833`, `bacon.py:567-642` | Future: extract to utils.py |
+| Linear regression helper | `staggered.py:205-240`, `estimators.py:366-408` | Future: consider consolidation |
 
-### API Inconsistencies
+### API Inconsistencies - PARTIALLY ADDRESSED
 
 **Bootstrap parameter naming:**
-| Estimator | Parameter | Should be |
-|-----------|-----------|-----------|
-| DifferenceInDifferences | `bootstrap_weights` | Keep |
-| CallawaySantAnna | `bootstrap_weight_type` | Rename to `bootstrap_weights` |
-| TwoWayFixedEffects | `bootstrap_weights` | Keep |
+| Estimator | Parameter | Status |
+|-----------|-----------|--------|
+| DifferenceInDifferences | `bootstrap_weights` | OK |
+| CallawaySantAnna | `bootstrap_weights` | Fixed in 1.0.1 (deprecated `bootstrap_weight_type`) |
+| TwoWayFixedEffects | `bootstrap_weights` | OK |
 
 **Cluster variable defaults:**
-- `TwoWayFixedEffects` silently defaults cluster to `unit` at runtime (`estimators.py:689`)
-- Behavior should be documented in docstring or made explicit in `__init__`
+- ~~`TwoWayFixedEffects` silently defaults cluster to `unit` at runtime~~ - Documented in 1.0.1
 
 ---
 
