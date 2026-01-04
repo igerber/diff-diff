@@ -1,0 +1,81 @@
+name: Claude Code PR Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  claude-code-review:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run Claude Code Review
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          model: claude-opus-4-5-20251101
+          prompt: |
+            Perform a comprehensive code review of the changes in this PR. Provide actionable feedback with specific line references.
+
+            ## Review Criteria
+
+            ### 1. Methodology & Best Practices
+            - Statistical/econometric correctness for DiD estimators
+            - Proper implementation of causal inference methods
+            - Correct standard error calculations and inference
+            - Appropriate handling of panel data structures
+            - Valid assumptions and edge case handling
+
+            ### 2. Code Quality
+            - Adherence to the sklearn-like API pattern (fit/transform methods)
+            - Consistent with existing codebase patterns
+            - Clear, readable code with appropriate naming
+            - Proper type hints where used in the codebase
+            - Adequate error handling and input validation
+
+            ### 3. Technical Debt Minimization
+            - No duplicated logic that should be extracted
+            - Appropriate abstractions (not over/under-engineered)
+            - Clean separation of concerns
+            - No hardcoded values that should be configurable
+            - No commented-out code or debug statements
+
+            ### 4. Testing & Documentation
+            - Adequate test coverage for new functionality
+            - Edge cases and error conditions tested
+            - Tests follow existing patterns in tests/
+            - Docstrings for public APIs
+            - Updates to relevant documentation if needed
+
+            ### 5. Security & Performance
+            - No potential security vulnerabilities
+            - Efficient algorithms for large datasets
+            - Memory-conscious implementations
+            - No unnecessary dependencies
+
+            ## Output Format
+
+            Provide your review in this structure:
+
+            **Overall Recommendation**: [APPROVE / REQUEST CHANGES / COMMENT]
+
+            **Summary**: Brief overview of the changes and overall assessment.
+
+            **Detailed Findings**:
+            For each issue found, provide:
+            - File and line number
+            - Severity: 🔴 Critical / 🟡 Suggestion / 🟢 Nitpick
+            - Description of the issue
+            - Recommended fix
+
+            **Positive Observations**: Note any particularly well-implemented aspects.
