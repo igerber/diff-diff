@@ -539,7 +539,7 @@ Works with `DifferenceInDifferences` and `TwoWayFixedEffects` estimators.
 ### Two-Way Fixed Effects (Panel Data)
 
 ```python
-from diff_diff.estimators import TwoWayFixedEffects
+from diff_diff import TwoWayFixedEffects
 
 twfe = TwoWayFixedEffects()
 results = twfe.fit(
