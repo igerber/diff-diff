@@ -20,6 +20,125 @@ from diff_diff.utils import (
 )
 
 
+# =============================================================================
+# Bootstrap Weight Generators
+# =============================================================================
+
+
+def _generate_bootstrap_weights(
+    n_units: int,
+    weight_type: str,
+    rng: np.random.Generator,
+) -> np.ndarray:
+    """
+    Generate bootstrap weights for multiplier bootstrap.
+
+    Parameters
+    ----------
+    n_units : int
+        Number of units (clusters) to generate weights for.
+    weight_type : str
+        Type of weights: "rademacher", "mammen", or "webb".
+    rng : np.random.Generator
+        Random number generator.
+
+    Returns
+    -------
+    np.ndarray
+        Array of bootstrap weights with shape (n_units,).
+    """
+    if weight_type == "rademacher":
+        # Rademacher: +1 or -1 with equal probability
+        return rng.choice([-1.0, 1.0], size=n_units)
+
+    elif weight_type == "mammen":
+        # Mammen's two-point distribution
+        # E[v] = 0, E[v^2] = 1, E[v^3] = 1
+        sqrt5 = np.sqrt(5)
+        val1 = -(sqrt5 - 1) / 2  # ≈ -0.618
+        val2 = (sqrt5 + 1) / 2   # ≈ 1.618 (golden ratio)
+        p1 = (sqrt5 + 1) / (2 * sqrt5)  # ≈ 0.724
+        return rng.choice([val1, val2], size=n_units, p=[p1, 1 - p1])
+
+    elif weight_type == "webb":
+        # Webb's 6-point distribution (recommended for few clusters)
+        values = np.array([
+            -np.sqrt(3 / 2), -np.sqrt(2 / 2), -np.sqrt(1 / 2),
+            np.sqrt(1 / 2), np.sqrt(2 / 2), np.sqrt(3 / 2)
+        ])
+        probs = np.array([1, 2, 3, 3, 2, 1]) / 12
+        return rng.choice(values, size=n_units, p=probs)
+
+    else:
+        raise ValueError(
+            f"weight_type must be 'rademacher', 'mammen', or 'webb', "
+            f"got '{weight_type}'"
+        )
+
+
+# =============================================================================
+# Bootstrap Results Container
+# =============================================================================
+
+
+@dataclass
+class CSBootstrapResults:
+    """
+    Results from Callaway-Sant'Anna multiplier bootstrap inference.
+
+    Attributes
+    ----------
+    n_bootstrap : int
+        Number of bootstrap iterations.
+    weight_type : str
+        Type of bootstrap weights used.
+    alpha : float
+        Significance level used for confidence intervals.
+    overall_att_se : float
+        Bootstrap standard error for overall ATT.
+    overall_att_ci : Tuple[float, float]
+        Bootstrap confidence interval for overall ATT.
+    overall_att_p_value : float
+        Bootstrap p-value for overall ATT.
+    group_time_ses : Dict[Tuple[Any, Any], float]
+        Bootstrap SEs for each ATT(g,t).
+    group_time_cis : Dict[Tuple[Any, Any], Tuple[float, float]]
+        Bootstrap CIs for each ATT(g,t).
+    group_time_p_values : Dict[Tuple[Any, Any], float]
+        Bootstrap p-values for each ATT(g,t).
+    event_study_ses : Optional[Dict[int, float]]
+        Bootstrap SEs for event study effects.
+    event_study_cis : Optional[Dict[int, Tuple[float, float]]]
+        Bootstrap CIs for event study effects.
+    event_study_p_values : Optional[Dict[int, float]]
+        Bootstrap p-values for event study effects.
+    group_effect_ses : Optional[Dict[Any, float]]
+        Bootstrap SEs for group effects.
+    group_effect_cis : Optional[Dict[Any, Tuple[float, float]]]
+        Bootstrap CIs for group effects.
+    group_effect_p_values : Optional[Dict[Any, float]]
+        Bootstrap p-values for group effects.
+    bootstrap_distribution : Optional[np.ndarray]
+        Full bootstrap distribution of overall ATT (if requested).
+    """
+    n_bootstrap: int
+    weight_type: str
+    alpha: float
+    overall_att_se: float
+    overall_att_ci: Tuple[float, float]
+    overall_att_p_value: float
+    group_time_ses: Dict[Tuple[Any, Any], float]
+    group_time_cis: Dict[Tuple[Any, Any], Tuple[float, float]]
+    group_time_p_values: Dict[Tuple[Any, Any], float]
+    event_study_ses: Optional[Dict[int, float]] = None
+    event_study_cis: Optional[Dict[int, Tuple[float, float]]] = None
+    event_study_p_values: Optional[Dict[int, float]] = None
+    group_effect_ses: Optional[Dict[Any, float]] = None
+    group_effect_cis: Optional[Dict[Any, Tuple[float, float]]] = None
+    group_effect_p_values: Optional[Dict[Any, float]] = None
+    bootstrap_distribution: Optional[np.ndarray] = field(default=None, repr=False)
+
+
 def _logistic_regression(
     X: np.ndarray,
     y: np.ndarray,
@@ -213,6 +332,7 @@ class CallawaySantAnnaResults:
     event_study_effects: Optional[Dict[int, Dict[str, Any]]] = field(default=None)
     group_effects: Optional[Dict[Any, Dict[str, Any]]] = field(default=None)
     influence_functions: Optional[np.ndarray] = field(default=None, repr=False)
+    bootstrap_results: Optional[CSBootstrapResults] = field(default=None, repr=False)
 
     def __repr__(self) -> str:
         """Concise string representation."""
@@ -514,6 +634,7 @@ class CallawaySantAnna:
         alpha: float = 0.05,
         cluster: Optional[str] = None,
         n_bootstrap: int = 0,
+        bootstrap_weight_type: str = "rademacher",
         seed: Optional[int] = None,
     ):
         if control_group not in ["never_treated", "not_yet_treated"]:
@@ -526,6 +647,11 @@ class CallawaySantAnna:
                 f"estimation_method must be 'dr', 'ipw', or 'reg', "
                 f"got '{estimation_method}'"
             )
+        if bootstrap_weight_type not in ["rademacher", "mammen", "webb"]:
+            raise ValueError(
+                f"bootstrap_weight_type must be 'rademacher', 'mammen', or 'webb', "
+                f"got '{bootstrap_weight_type}'"
+            )
 
         self.control_group = control_group
         self.anticipation = anticipation
@@ -533,6 +659,7 @@ class CallawaySantAnna:
         self.alpha = alpha
         self.cluster = cluster
         self.n_bootstrap = n_bootstrap
+        self.bootstrap_weight_type = bootstrap_weight_type
         self.seed = seed
 
         self.is_fitted_ = False
@@ -597,13 +724,6 @@ class CallawaySantAnna:
         if missing:
             raise ValueError(f"Missing columns: {missing}")
 
-        # Check for unimplemented features
-        if self.n_bootstrap > 0:
-            raise NotImplementedError(
-                "Bootstrap inference is not yet implemented. "
-                "Use n_bootstrap=0 for analytical standard errors."
-            )
-
         # Create working copy
         df = data.copy()
 
@@ -632,14 +752,14 @@ class CallawaySantAnna:
 
         # Compute ATT(g,t) for each group-time combination
         group_time_effects = {}
-        influence_funcs = []
+        influence_func_info = {}  # Store influence functions for bootstrap
 
         for g in treatment_groups:
             # Periods for which we compute effects (t >= g - anticipation)
             valid_periods = [t for t in time_periods if t >= g - self.anticipation]
 
             for t in valid_periods:
-                att_gt, se_gt, n_treat, n_ctrl, inf_func = self._compute_att_gt(
+                att_gt, se_gt, n_treat, n_ctrl, inf_info = self._compute_att_gt(
                     df, outcome, unit, time, first_treat, g, t,
                     covariates, time_periods
                 )
@@ -659,8 +779,8 @@ class CallawaySantAnna:
                         'n_control': n_ctrl,
                     }
 
-                    if inf_func is not None:
-                        influence_funcs.append(inf_func)
+                    if inf_info is not None:
+                        influence_func_info[(g, t)] = inf_info
 
         if not group_time_effects:
             raise ValueError(
@@ -688,6 +808,57 @@ class CallawaySantAnna:
                 group_time_effects, treatment_groups
             )
 
+        # Run bootstrap inference if requested
+        bootstrap_results = None
+        if self.n_bootstrap > 0 and influence_func_info:
+            bootstrap_results = self._run_multiplier_bootstrap(
+                group_time_effects=group_time_effects,
+                influence_func_info=influence_func_info,
+                aggregate=aggregate,
+                balance_e=balance_e,
+                treatment_groups=treatment_groups,
+                time_periods=time_periods,
+            )
+
+            # Update estimates with bootstrap inference
+            overall_se = bootstrap_results.overall_att_se
+            overall_t = overall_att / overall_se if overall_se > 0 else 0.0
+            overall_p = bootstrap_results.overall_att_p_value
+            overall_ci = bootstrap_results.overall_att_ci
+
+            # Update group-time effects with bootstrap SEs
+            for gt in group_time_effects:
+                if gt in bootstrap_results.group_time_ses:
+                    group_time_effects[gt]['se'] = bootstrap_results.group_time_ses[gt]
+                    group_time_effects[gt]['conf_int'] = bootstrap_results.group_time_cis[gt]
+                    group_time_effects[gt]['p_value'] = bootstrap_results.group_time_p_values[gt]
+                    effect = group_time_effects[gt]['effect']
+                    se = group_time_effects[gt]['se']
+                    group_time_effects[gt]['t_stat'] = effect / se if se > 0 else 0.0
+
+            # Update event study effects with bootstrap SEs
+            if event_study_effects is not None and bootstrap_results.event_study_ses is not None:
+                for e in event_study_effects:
+                    if e in bootstrap_results.event_study_ses:
+                        event_study_effects[e]['se'] = bootstrap_results.event_study_ses[e]
+                        event_study_effects[e]['conf_int'] = bootstrap_results.event_study_cis[e]
+                        p_val = bootstrap_results.event_study_p_values[e]
+                        event_study_effects[e]['p_value'] = p_val
+                        effect = event_study_effects[e]['effect']
+                        se = event_study_effects[e]['se']
+                        event_study_effects[e]['t_stat'] = effect / se if se > 0 else 0.0
+
+            # Update group effects with bootstrap SEs
+            if group_effects is not None and bootstrap_results.group_effect_ses is not None:
+                for g in group_effects:
+                    if g in bootstrap_results.group_effect_ses:
+                        group_effects[g]['se'] = bootstrap_results.group_effect_ses[g]
+                        group_effects[g]['conf_int'] = bootstrap_results.group_effect_cis[g]
+                        group_effects[g]['p_value'] = bootstrap_results.group_effect_p_values[g]
+                        effect = group_effects[g]['effect']
+                        se = group_effects[g]['se']
+                        group_effects[g]['t_stat'] = effect / se if se > 0 else 0.0
+
         # Store results
         self.results_ = CallawaySantAnnaResults(
             group_time_effects=group_time_effects,
@@ -705,6 +876,7 @@ class CallawaySantAnna:
             control_group=self.control_group,
             event_study_effects=event_study_effects,
             group_effects=group_effects,
+            bootstrap_results=bootstrap_results,
         )
 
         self.is_fitted_ = True
@@ -721,7 +893,7 @@ class CallawaySantAnna:
         t: Any,
         covariates: Optional[List[str]],
         all_periods: List[Any],
-    ) -> Tuple[Optional[float], float, int, int, Optional[np.ndarray]]:
+    ) -> Tuple[Optional[float], float, int, int, Optional[Dict[str, Any]]]:
         """
         Compute ATT(g,t) for a specific group-time combination.
 
@@ -828,7 +1000,16 @@ class CallawaySantAnna:
                 treated_change, control_change, X_treated, X_control
             )
 
-        return att_gt, se_gt, len(treated_common), len(control_common), inf_func
+        # Package influence function info with unit IDs for bootstrap
+        n_t = len(treated_common)
+        inf_func_info = {
+            'treated_units': list(treated_common),
+            'control_units': list(control_common),
+            'treated_inf': inf_func[:n_t],
+            'control_inf': inf_func[n_t:],
+        }
+
+        return att_gt, se_gt, len(treated_common), len(control_common), inf_func_info
 
     def _outcome_regression(
         self,
@@ -1238,6 +1419,359 @@ class CallawaySantAnna:
 
         return group_effects
 
+    def _run_multiplier_bootstrap(
+        self,
+        group_time_effects: Dict[Tuple[Any, Any], Dict[str, Any]],
+        influence_func_info: Dict[Tuple[Any, Any], Dict[str, Any]],
+        aggregate: Optional[str],
+        balance_e: Optional[int],
+        treatment_groups: List[Any],
+        time_periods: List[Any],
+    ) -> CSBootstrapResults:
+        """
+        Run multiplier bootstrap for inference on all parameters.
+
+        This implements the multiplier bootstrap procedure from Callaway & Sant'Anna (2021).
+        The key idea is to perturb the influence function contributions with random
+        weights at the cluster (unit) level, then recompute aggregations.
+
+        Parameters
+        ----------
+        group_time_effects : dict
+            Dictionary of ATT(g,t) effects with analytical SEs.
+        influence_func_info : dict
+            Dictionary mapping (g,t) to influence function information.
+        aggregate : str, optional
+            Type of aggregation requested.
+        balance_e : int, optional
+            Balance parameter for event study.
+        treatment_groups : list
+            List of treatment cohorts.
+        time_periods : list
+            List of time periods.
+
+        Returns
+        -------
+        CSBootstrapResults
+            Bootstrap inference results.
+        """
+        rng = np.random.default_rng(self.seed)
+
+        # Collect all unique units across all (g,t) combinations
+        all_units = set()
+        for (g, t), info in influence_func_info.items():
+            all_units.update(info['treated_units'])
+            all_units.update(info['control_units'])
+        all_units = sorted(all_units)
+        n_units = len(all_units)
+        unit_to_idx = {u: i for i, u in enumerate(all_units)}
+
+        # Get list of (g,t) pairs
+        gt_pairs = list(group_time_effects.keys())
+        n_gt = len(gt_pairs)
+
+        # Compute aggregation weights for overall ATT
+        overall_weights = np.array([
+            group_time_effects[gt]['n_treated'] for gt in gt_pairs
+        ], dtype=float)
+        overall_weights = overall_weights / np.sum(overall_weights)
+
+        # Original point estimates
+        original_atts = np.array([group_time_effects[gt]['effect'] for gt in gt_pairs])
+        original_overall = np.sum(overall_weights * original_atts)
+
+        # Prepare event study and group aggregation info if needed
+        event_study_info = None
+        group_agg_info = None
+
+        if aggregate in ["event_study", "all"]:
+            event_study_info = self._prepare_event_study_aggregation(
+                gt_pairs, group_time_effects, balance_e
+            )
+
+        if aggregate in ["group", "all"]:
+            group_agg_info = self._prepare_group_aggregation(
+                gt_pairs, group_time_effects, treatment_groups
+            )
+
+        # Bootstrap arrays to store results
+        bootstrap_atts_gt = np.zeros((self.n_bootstrap, n_gt))
+        bootstrap_overall = np.zeros(self.n_bootstrap)
+
+        if event_study_info is not None:
+            rel_periods = sorted(event_study_info.keys())
+            bootstrap_event_study = {e: np.zeros(self.n_bootstrap) for e in rel_periods}
+        else:
+            bootstrap_event_study = None
+
+        if group_agg_info is not None:
+            groups = sorted(group_agg_info.keys())
+            bootstrap_group = {g: np.zeros(self.n_bootstrap) for g in groups}
+        else:
+            bootstrap_group = None
+
+        # Run bootstrap iterations
+        for b in range(self.n_bootstrap):
+            # Generate unit-level weights
+            unit_weights = _generate_bootstrap_weights(
+                n_units, self.bootstrap_weight_type, rng
+            )
+
+            # Compute bootstrap ATT(g,t) for each group-time pair
+            for j, gt in enumerate(gt_pairs):
+                info = influence_func_info[gt]
+
+                # Get weights for treated and control units
+                treated_indices = [unit_to_idx[u] for u in info['treated_units']]
+                control_indices = [unit_to_idx[u] for u in info['control_units']]
+
+                treated_weights = unit_weights[treated_indices]
+                control_weights = unit_weights[control_indices]
+
+                # Influence function perturbation
+                # Bootstrap ATT* = ATT + sum(weights * influence)
+                perturbation = (
+                    np.sum(treated_weights * info['treated_inf']) +
+                    np.sum(control_weights * info['control_inf'])
+                )
+
+                bootstrap_atts_gt[b, j] = original_atts[j] + perturbation
+
+            # Compute bootstrap overall ATT
+            bootstrap_overall[b] = np.sum(overall_weights * bootstrap_atts_gt[b, :])
+
+            # Compute bootstrap event study effects
+            if bootstrap_event_study is not None:
+                for e, agg_info in event_study_info.items():
+                    gt_indices = agg_info['gt_indices']
+                    weights = agg_info['weights']
+                    bootstrap_event_study[e][b] = np.sum(
+                        weights * bootstrap_atts_gt[b, gt_indices]
+                    )
+
+            # Compute bootstrap group effects
+            if bootstrap_group is not None:
+                for g, agg_info in group_agg_info.items():
+                    gt_indices = agg_info['gt_indices']
+                    weights = agg_info['weights']
+                    bootstrap_group[g][b] = np.sum(
+                        weights * bootstrap_atts_gt[b, gt_indices]
+                    )
+
+        # Compute bootstrap statistics
+        # ATT(g,t) statistics
+        gt_ses = {}
+        gt_cis = {}
+        gt_p_values = {}
+
+        for j, gt in enumerate(gt_pairs):
+            original_effect = original_atts[j]
+            boot_dist = bootstrap_atts_gt[:, j]
+
+            se = float(np.std(boot_dist, ddof=1))
+            ci = self._compute_percentile_ci(boot_dist, self.alpha)
+            p_value = self._compute_bootstrap_pvalue(original_effect, boot_dist)
+
+            gt_ses[gt] = se
+            gt_cis[gt] = ci
+            gt_p_values[gt] = p_value
+
+        # Overall ATT statistics
+        overall_se = float(np.std(bootstrap_overall, ddof=1))
+        overall_ci = self._compute_percentile_ci(bootstrap_overall, self.alpha)
+        overall_p_value = self._compute_bootstrap_pvalue(original_overall, bootstrap_overall)
+
+        # Event study statistics
+        event_study_ses = None
+        event_study_cis = None
+        event_study_p_values = None
+
+        if bootstrap_event_study is not None:
+            event_study_ses = {}
+            event_study_cis = {}
+            event_study_p_values = {}
+
+            for e in rel_periods:
+                original_effect = event_study_info[e]['effect']
+                boot_dist = bootstrap_event_study[e]
+
+                event_study_ses[e] = float(np.std(boot_dist, ddof=1))
+                event_study_cis[e] = self._compute_percentile_ci(boot_dist, self.alpha)
+                event_study_p_values[e] = self._compute_bootstrap_pvalue(
+                    original_effect, boot_dist
+                )
+
+        # Group effect statistics
+        group_effect_ses = None
+        group_effect_cis = None
+        group_effect_p_values = None
+
+        if bootstrap_group is not None:
+            group_effect_ses = {}
+            group_effect_cis = {}
+            group_effect_p_values = {}
+
+            for g in groups:
+                original_effect = group_agg_info[g]['effect']
+                boot_dist = bootstrap_group[g]
+
+                group_effect_ses[g] = float(np.std(boot_dist, ddof=1))
+                group_effect_cis[g] = self._compute_percentile_ci(boot_dist, self.alpha)
+                group_effect_p_values[g] = self._compute_bootstrap_pvalue(
+                    original_effect, boot_dist
+                )
+
+        return CSBootstrapResults(
+            n_bootstrap=self.n_bootstrap,
+            weight_type=self.bootstrap_weight_type,
+            alpha=self.alpha,
+            overall_att_se=overall_se,
+            overall_att_ci=overall_ci,
+            overall_att_p_value=overall_p_value,
+            group_time_ses=gt_ses,
+            group_time_cis=gt_cis,
+            group_time_p_values=gt_p_values,
+            event_study_ses=event_study_ses,
+            event_study_cis=event_study_cis,
+            event_study_p_values=event_study_p_values,
+            group_effect_ses=group_effect_ses,
+            group_effect_cis=group_effect_cis,
+            group_effect_p_values=group_effect_p_values,
+            bootstrap_distribution=bootstrap_overall,
+        )
+
+    def _prepare_event_study_aggregation(
+        self,
+        gt_pairs: List[Tuple[Any, Any]],
+        group_time_effects: Dict,
+        balance_e: Optional[int],
+    ) -> Dict[int, Dict[str, Any]]:
+        """Prepare aggregation info for event study bootstrap."""
+        # Organize by relative time
+        effects_by_e: Dict[int, List[Tuple[int, float, float]]] = {}
+
+        for j, (g, t) in enumerate(gt_pairs):
+            e = t - g
+            if e not in effects_by_e:
+                effects_by_e[e] = []
+            effects_by_e[e].append((
+                j,  # index in gt_pairs
+                group_time_effects[(g, t)]['effect'],
+                group_time_effects[(g, t)]['n_treated']
+            ))
+
+        # Balance if requested
+        if balance_e is not None:
+            groups_at_e = set()
+            for j, (g, t) in enumerate(gt_pairs):
+                if t - g == balance_e:
+                    groups_at_e.add(g)
+
+            balanced_effects: Dict[int, List[Tuple[int, float, float]]] = {}
+            for j, (g, t) in enumerate(gt_pairs):
+                if g in groups_at_e:
+                    e = t - g
+                    if e not in balanced_effects:
+                        balanced_effects[e] = []
+                    balanced_effects[e].append((
+                        j,
+                        group_time_effects[(g, t)]['effect'],
+                        group_time_effects[(g, t)]['n_treated']
+                    ))
+            effects_by_e = balanced_effects
+
+        # Compute aggregation weights
+        result = {}
+        for e, effect_list in effects_by_e.items():
+            indices = np.array([x[0] for x in effect_list])
+            effects = np.array([x[1] for x in effect_list])
+            n_treated = np.array([x[2] for x in effect_list], dtype=float)
+
+            weights = n_treated / np.sum(n_treated)
+            agg_effect = np.sum(weights * effects)
+
+            result[e] = {
+                'gt_indices': indices,
+                'weights': weights,
+                'effect': agg_effect,
+            }
+
+        return result
+
+    def _prepare_group_aggregation(
+        self,
+        gt_pairs: List[Tuple[Any, Any]],
+        group_time_effects: Dict,
+        treatment_groups: List[Any],
+    ) -> Dict[Any, Dict[str, Any]]:
+        """Prepare aggregation info for group-level bootstrap."""
+        result = {}
+
+        for g in treatment_groups:
+            # Get all effects for this group (post-treatment only: t >= g)
+            group_data = []
+            for j, (gg, t) in enumerate(gt_pairs):
+                if gg == g and t >= g:
+                    group_data.append((
+                        j,
+                        group_time_effects[(gg, t)]['effect'],
+                    ))
+
+            if not group_data:
+                continue
+
+            indices = np.array([x[0] for x in group_data])
+            effects = np.array([x[1] for x in group_data])
+
+            # Equal weights across time periods
+            weights = np.ones(len(effects)) / len(effects)
+            agg_effect = np.sum(weights * effects)
+
+            result[g] = {
+                'gt_indices': indices,
+                'weights': weights,
+                'effect': agg_effect,
+            }
+
+        return result
+
+    def _compute_percentile_ci(
+        self,
+        boot_dist: np.ndarray,
+        alpha: float,
+    ) -> Tuple[float, float]:
+        """Compute percentile confidence interval from bootstrap distribution."""
+        lower = float(np.percentile(boot_dist, alpha / 2 * 100))
+        upper = float(np.percentile(boot_dist, (1 - alpha / 2) * 100))
+        return (lower, upper)
+
+    def _compute_bootstrap_pvalue(
+        self,
+        original_effect: float,
+        boot_dist: np.ndarray,
+    ) -> float:
+        """
+        Compute two-sided bootstrap p-value.
+
+        Uses the percentile method: p-value is the proportion of bootstrap
+        estimates on the opposite side of zero from the original estimate,
+        doubled for two-sided test.
+        """
+        if original_effect >= 0:
+            # Proportion of bootstrap estimates <= 0
+            p_one_sided = np.mean(boot_dist <= 0)
+        else:
+            # Proportion of bootstrap estimates >= 0
+            p_one_sided = np.mean(boot_dist >= 0)
+
+        # Two-sided p-value
+        p_value = min(2 * p_one_sided, 1.0)
+
+        # Ensure minimum p-value
+        p_value = max(p_value, 1 / (self.n_bootstrap + 1))
+
+        return float(p_value)
+
     def get_params(self) -> Dict[str, Any]:
         """Get estimator parameters (sklearn-compatible)."""
         return {
@@ -1247,6 +1781,7 @@ class CallawaySantAnna:
             "alpha": self.alpha,
             "cluster": self.cluster,
             "n_bootstrap": self.n_bootstrap,
+            "bootstrap_weight_type": self.bootstrap_weight_type,
             "seed": self.seed,
         }
 

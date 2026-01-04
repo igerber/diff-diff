@@ -750,3 +750,333 @@ class TestCallawaySantAnnaCovariates:
         # Should still produce valid results (using unconditional estimation)
         assert results.overall_att is not None
         assert results.overall_se > 0
+
+
+class TestCallawaySantAnnaBootstrap:
+    """Tests for Callaway-Sant'Anna multiplier bootstrap inference."""
+
+    def test_bootstrap_basic(self):
+        """Test basic bootstrap functionality."""
+        data = generate_staggered_data(n_units=50, seed=42)
+
+        cs = CallawaySantAnna(n_bootstrap=99, seed=42)
+        results = cs.fit(
+            data,
+            outcome='outcome',
+            unit='unit',
+            time='time',
+            first_treat='first_treat'
+        )
+
+        assert results.bootstrap_results is not None
+        assert results.bootstrap_results.n_bootstrap == 99
+        assert results.bootstrap_results.weight_type == "rademacher"
+        assert results.overall_se > 0
+        assert results.overall_conf_int[0] < results.overall_att < results.overall_conf_int[1]
+
+    def test_bootstrap_weight_types(self):
+        """Test different bootstrap weight types."""
+        data = generate_staggered_data(n_units=50, seed=42)
+
+        weight_types = ["rademacher", "mammen", "webb"]
+
+        for wt in weight_types:
+            cs = CallawaySantAnna(
+                n_bootstrap=49,
+                bootstrap_weight_type=wt,
+                seed=42
+            )
+            results = cs.fit(
+                data,
+                outcome='outcome',
+                unit='unit',
+                time='time',
+                first_treat='first_treat'
+            )
+
+            assert results.bootstrap_results is not None
+            assert results.bootstrap_results.weight_type == wt
+            assert results.overall_se > 0
+
+    def test_bootstrap_event_study(self):
+        """Test bootstrap with event study aggregation."""
+        data = generate_staggered_data(n_units=50, seed=42)
+
+        cs = CallawaySantAnna(n_bootstrap=99, seed=42)
+        results = cs.fit(
+            data,
+            outcome='outcome',
+            unit='unit',
+            time='time',
+            first_treat='first_treat',
+            aggregate='event_study'
+        )
+
+        assert results.bootstrap_results is not None
+        assert results.bootstrap_results.event_study_ses is not None
+        assert results.bootstrap_results.event_study_cis is not None
+        assert results.bootstrap_results.event_study_p_values is not None
+
+        # Check event study effects have bootstrap SEs
+        for e, effect in results.event_study_effects.items():
+            assert effect['se'] > 0
+            assert effect['conf_int'][0] < effect['conf_int'][1]
+
+    def test_bootstrap_group_aggregation(self):
+        """Test bootstrap with group aggregation."""
+        data = generate_staggered_data(n_units=50, seed=42)
+
+        cs = CallawaySantAnna(n_bootstrap=99, seed=42)
+        results = cs.fit(
+            data,
+            outcome='outcome',
+            unit='unit',
+            time='time',
+            first_treat='first_treat',
+            aggregate='group'
+        )
+
+        assert results.bootstrap_results is not None
+        assert results.bootstrap_results.group_effect_ses is not None
+        assert results.bootstrap_results.group_effect_cis is not None
+        assert results.bootstrap_results.group_effect_p_values is not None
+
+        # Check group effects have bootstrap SEs
+        for g, effect in results.group_effects.items():
+            assert effect['se'] > 0
+            assert effect['conf_int'][0] < effect['conf_int'][1]
+
+    def test_bootstrap_all_aggregations(self):
+        """Test bootstrap with all aggregations."""
+        data = generate_staggered_data(n_units=50, seed=42)
+
+        cs = CallawaySantAnna(n_bootstrap=99, seed=42)
+        results = cs.fit(
+            data,
+            outcome='outcome',
+            unit='unit',
+            time='time',
+            first_treat='first_treat',
+            aggregate='all'
+        )
+
+        assert results.bootstrap_results is not None
+        assert results.bootstrap_results.event_study_ses is not None
+        assert results.bootstrap_results.group_effect_ses is not None
+
+    def test_bootstrap_reproducibility(self):
+        """Test that bootstrap is reproducible with same seed."""
+        data = generate_staggered_data(n_units=50, seed=42)
+
+        cs1 = CallawaySantAnna(n_bootstrap=99, seed=123)
+        results1 = cs1.fit(
+            data,
+            outcome='outcome',
+            unit='unit',
+            time='time',
+            first_treat='first_treat'
+        )
+
+        cs2 = CallawaySantAnna(n_bootstrap=99, seed=123)
+        results2 = cs2.fit(
+            data,
+            outcome='outcome',
+            unit='unit',
+            time='time',
+            first_treat='first_treat'
+        )
+
+        # Results should be identical with same seed
+        assert results1.overall_se == results2.overall_se
+        assert results1.overall_conf_int == results2.overall_conf_int
+
+    def test_bootstrap_different_seeds(self):
+        """Test that different seeds give different results."""
+        data = generate_staggered_data(n_units=50, seed=42)
+
+        cs1 = CallawaySantAnna(n_bootstrap=99, seed=123)
+        results1 = cs1.fit(
+            data,
+            outcome='outcome',
+            unit='unit',
+            time='time',
+            first_treat='first_treat'
+        )
+
+        cs2 = CallawaySantAnna(n_bootstrap=99, seed=456)
+        results2 = cs2.fit(
+            data,
+            outcome='outcome',
+            unit='unit',
+            time='time',
+            first_treat='first_treat'
+        )
+
+        # Results should differ with different seeds
+        assert results1.overall_se != results2.overall_se
+
+    def test_bootstrap_p_value_significance(self):
+        """Test that strong effect has significant p-value with bootstrap."""
+        data = generate_staggered_data(
+            n_units=100,
+            treatment_effect=5.0,
+            seed=42
+        )
+
+        cs = CallawaySantAnna(n_bootstrap=199, seed=42)
+        results = cs.fit(
+            data,
+            outcome='outcome',
+            unit='unit',
+            time='time',
+            first_treat='first_treat'
+        )
+
+        # Strong effect should be significant
+        assert results.overall_p_value < 0.05
+        assert results.is_significant
+
+    def test_bootstrap_zero_effect_not_significant(self):
+        """Test that zero effect is not significant with bootstrap."""
+        data = generate_staggered_data(
+            n_units=50,
+            treatment_effect=0.0,
+            seed=42
+        )
+
+        cs = CallawaySantAnna(n_bootstrap=199, seed=42)
+        results = cs.fit(
+            data,
+            outcome='outcome',
+            unit='unit',
+            time='time',
+            first_treat='first_treat'
+        )
+
+        # Zero effect should not be significant at 0.01 level
+        # (using 0.01 to be more conservative with finite sample)
+        assert results.overall_p_value > 0.01 or abs(results.overall_att) < 2 * results.overall_se
+
+    def test_bootstrap_distribution_stored(self):
+        """Test that bootstrap distribution is stored in results."""
+        data = generate_staggered_data(n_units=50, seed=42)
+
+        cs = CallawaySantAnna(n_bootstrap=99, seed=42)
+        results = cs.fit(
+            data,
+            outcome='outcome',
+            unit='unit',
+            time='time',
+            first_treat='first_treat'
+        )
+
+        assert results.bootstrap_results.bootstrap_distribution is not None
+        assert len(results.bootstrap_results.bootstrap_distribution) == 99
+
+    def test_bootstrap_with_covariates(self):
+        """Test bootstrap with covariate adjustment."""
+        data = generate_staggered_data_with_covariates(n_units=50, seed=42)
+
+        cs = CallawaySantAnna(n_bootstrap=99, seed=42)
+        results = cs.fit(
+            data,
+            outcome='outcome',
+            unit='unit',
+            time='time',
+            first_treat='first_treat',
+            covariates=['x1', 'x2']
+        )
+
+        assert results.bootstrap_results is not None
+        assert results.overall_se > 0
+
+    def test_bootstrap_group_time_effects(self):
+        """Test that bootstrap updates group-time effect SEs."""
+        data = generate_staggered_data(n_units=50, seed=42)
+
+        # Without bootstrap
+        cs1 = CallawaySantAnna(n_bootstrap=0)
+        results1 = cs1.fit(
+            data,
+            outcome='outcome',
+            unit='unit',
+            time='time',
+            first_treat='first_treat'
+        )
+
+        # With bootstrap
+        cs2 = CallawaySantAnna(n_bootstrap=99, seed=42)
+        results2 = cs2.fit(
+            data,
+            outcome='outcome',
+            unit='unit',
+            time='time',
+            first_treat='first_treat'
+        )
+
+        # Group-time effects should have same point estimates
+        for gt in results1.group_time_effects:
+            assert results1.group_time_effects[gt]['effect'] == results2.group_time_effects[gt]['effect']
+            # But SEs may differ (bootstrap vs analytical)
+            assert results2.group_time_effects[gt]['se'] > 0
+
+    def test_bootstrap_invalid_weight_type(self):
+        """Test that invalid weight type raises error."""
+        with pytest.raises(ValueError, match="bootstrap_weight_type"):
+            CallawaySantAnna(bootstrap_weight_type="invalid")
+
+    def test_bootstrap_get_params(self):
+        """Test that get_params includes bootstrap_weight_type."""
+        cs = CallawaySantAnna(
+            n_bootstrap=99,
+            bootstrap_weight_type="mammen",
+            seed=42
+        )
+        params = cs.get_params()
+
+        assert params['n_bootstrap'] == 99
+        assert params['bootstrap_weight_type'] == "mammen"
+        assert params['seed'] == 42
+
+    def test_bootstrap_with_not_yet_treated(self):
+        """Test bootstrap with not_yet_treated control group."""
+        data = generate_staggered_data(n_units=50, seed=42)
+
+        cs = CallawaySantAnna(
+            control_group="not_yet_treated",
+            n_bootstrap=99,
+            seed=42
+        )
+        results = cs.fit(
+            data,
+            outcome='outcome',
+            unit='unit',
+            time='time',
+            first_treat='first_treat'
+        )
+
+        assert results.bootstrap_results is not None
+        assert results.overall_se > 0
+
+    def test_bootstrap_estimation_methods(self):
+        """Test bootstrap with different estimation methods."""
+        data = generate_staggered_data(n_units=50, seed=42)
+
+        methods = ["reg", "ipw", "dr"]
+
+        for method in methods:
+            cs = CallawaySantAnna(
+                estimation_method=method,
+                n_bootstrap=49,
+                seed=42
+            )
+            results = cs.fit(
+                data,
+                outcome='outcome',
+                unit='unit',
+                time='time',
+                first_treat='first_treat'
+            )
+
+            assert results.bootstrap_results is not None
+            assert results.overall_se > 0, f"Failed for method {method}"
