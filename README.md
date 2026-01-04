@@ -698,14 +698,31 @@ CallawaySantAnna(
     estimation_method='dr',          # 'dr', 'ipw', or 'reg'
     alpha=0.05,                      # Significance level
     cluster=None,                    # Column for cluster SEs
-    n_bootstrap=0,                   # Must be 0 (bootstrap not yet implemented)
+    n_bootstrap=0,                   # Bootstrap iterations (0 = analytical SEs)
     seed=None                        # Random seed
 )
 ```
 
+**Covariate adjustment for conditional parallel trends:**
+
+When parallel trends only holds conditional on covariates, use the `covariates` parameter:
+
+```python
+# Doubly robust estimation with covariates
+cs = CallawaySantAnna(estimation_method='dr')  # 'dr', 'ipw', or 'reg'
+results = cs.fit(
+    data,
+    outcome='sales',
+    unit='firm_id',
+    time='year',
+    first_treat='first_treat',
+    covariates=['size', 'age', 'industry'],  # Covariates for conditional PT
+    aggregate='event_study'
+)
+```
+
 **Current limitations:**
-- Bootstrap inference (`n_bootstrap > 0`) is not yet implemented
-- Covariate adjustment for conditional parallel trends is not yet implemented
+- Bootstrap inference (`n_bootstrap > 0`) is not yet fully implemented
 
 ### Event Study Visualization
 
