@@ -25,6 +25,8 @@ A production-ready DiD library needs:
 | Power Analysis | Not Started | 1.0 Target | Study design tool |
 | CallawaySantAnna Bootstrap | Not Implemented | 1.0 Target | Better inference with few clusters |
 | Sun-Abraham Estimator | Not Started | Post-1.0 | Alternative to CS, some prefer it |
+| Gardner's did2s | Not Started | Post-1.0 | Two-stage approach, available in pyfixest |
+| Local Projections DiD | Not Started | Post-1.0 | Dynamic effects (Dube et al. 2023) |
 | Borusyak-Jaravel-Spiess | Not Started | Post-1.0 | More efficient under homogeneous effects |
 | Double/Debiased ML | Not Started | Post-1.0 | High-dimensional covariates |
 
@@ -194,6 +196,28 @@ These are valuable but can wait for future versions.
 Alternative to Callaway-Sant'Anna using interaction-weighted approach. Some practitioners prefer it; provides a robustness check.
 
 **Reference**: Sun & Abraham (2021). *Journal of Econometrics*.
+
+### Gardner's Two-Stage DiD (did2s)
+**Status**: Not Started
+**Effort**: Medium
+**Practitioner Value**: ⭐⭐⭐
+
+Two-stage approach to staggered DiD that first residualizes outcomes using untreated observations, then estimates treatment effects. Popular alternative to CS that some find more intuitive.
+
+**Why it matters**: Available in pyfixest (Python) and did2s (R). Provides another robustness check for staggered designs. Some practitioners prefer its simplicity.
+
+**Reference**: Gardner (2022). *Two-stage differences in differences*.
+
+### Local Projections DiD
+**Status**: Not Started
+**Effort**: Medium
+**Practitioner Value**: ⭐⭐⭐
+
+Implements local projections for dynamic treatment effects following Dube et al. (2023). Flexible approach that doesn't require specifying the full dynamic structure.
+
+**Why it matters**: Gaining traction in applied work. Available in pyfixest. Useful for long treatment effect horizons.
+
+**Reference**: Dube, Girardi, Jordà, and Taylor (2023).
 
 ### Borusyak-Jaravel-Spiess Imputation Estimator
 **Status**: Not Started
