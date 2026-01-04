@@ -705,3 +705,48 @@ class TestCallawaySantAnnaCovariates:
         assert np.isfinite(results.overall_att), "ATT should be finite"
         assert np.isfinite(results.overall_se), "SE should be finite"
         assert results.overall_se > 0, "SE should be positive"
+
+    def test_near_collinear_covariates(self):
+        """Test that near-collinear covariates are handled gracefully."""
+        data = generate_staggered_data_with_covariates(seed=42)
+
+        # Add a near-collinear covariate (x1 + small noise)
+        data['x1_copy'] = data['x1'] + np.random.randn(len(data)) * 1e-8
+
+        cs = CallawaySantAnna(estimation_method='reg')
+        results = cs.fit(
+            data,
+            outcome='outcome',
+            unit='unit',
+            time='time',
+            first_treat='first_treat',
+            covariates=['x1', 'x1_copy']  # Nearly collinear
+        )
+
+        # Should still produce valid results (lstsq handles this)
+        assert results.overall_att is not None
+        assert np.isfinite(results.overall_att)
+
+    def test_missing_values_in_covariates_warning(self):
+        """Test that missing values trigger fallback warning."""
+        data = generate_staggered_data_with_covariates(seed=42)
+
+        # Introduce NaN in covariate
+        data.loc[data['time'] == 2, 'x1'] = np.nan
+
+        cs = CallawaySantAnna()
+
+        # Should warn about missing values and fall back to unconditional
+        with pytest.warns(UserWarning, match="Missing values in covariates"):
+            results = cs.fit(
+                data,
+                outcome='outcome',
+                unit='unit',
+                time='time',
+                first_treat='first_treat',
+                covariates=['x1', 'x2']
+            )
+
+        # Should still produce valid results (using unconditional estimation)
+        assert results.overall_att is not None
+        assert results.overall_se > 0
