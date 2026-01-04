@@ -804,7 +804,8 @@ def _solve_bounds_lp(
             min_val = result_min.fun
         else:
             min_val = -np.inf
-    except Exception:
+    except (ValueError, TypeError):
+        # Optimization failed - return unbounded
         min_val = -np.inf
 
     # Solve for upper bound of -l'@delta (which gives lower bound of theta)
@@ -818,7 +819,8 @@ def _solve_bounds_lp(
             max_val = -result_max.fun
         else:
             max_val = np.inf
-    except Exception:
+    except (ValueError, TypeError):
+        # Optimization failed - return unbounded
         max_val = np.inf
 
     theta_base = np.dot(l_vec, beta_post)

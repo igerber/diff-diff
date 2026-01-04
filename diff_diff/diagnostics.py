@@ -18,20 +18,8 @@ import numpy as np
 import pandas as pd
 
 from diff_diff.estimators import DifferenceInDifferences
+from diff_diff.results import _get_significance_stars
 from diff_diff.utils import compute_confidence_interval, compute_p_value
-
-
-def _get_significance_stars(p_value: float) -> str:
-    """Return significance stars based on p-value."""
-    if p_value < 0.001:
-        return "***"
-    elif p_value < 0.01:
-        return "**"
-    elif p_value < 0.05:
-        return "*"
-    elif p_value < 0.1:
-        return "."
-    return ""
 
 
 @dataclass
@@ -633,7 +621,7 @@ def permutation_test(
                 time=time
             )
             permuted_effects[i] = perm_results.att
-        except Exception:
+        except (ValueError, KeyError, np.linalg.LinAlgError):
             # Handle edge cases where fitting fails
             permuted_effects[i] = np.nan
 
@@ -744,7 +732,7 @@ def leave_one_out_test(
                 time=time
             )
             loo_effects[u] = loo_results.att
-        except Exception:
+        except (ValueError, KeyError, np.linalg.LinAlgError):
             # Skip units that cause fitting issues
             loo_effects[u] = np.nan
 

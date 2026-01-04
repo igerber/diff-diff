@@ -628,7 +628,9 @@ class TwoWayFixedEffects(DifferenceInDifferences):
         Whether to use heteroskedasticity-robust standard errors.
     cluster : str, optional
         Column name for cluster-robust standard errors.
-        Defaults to clustering at the unit level.
+        If None, automatically clusters at the unit level (the `unit`
+        parameter passed to `fit()`). This differs from
+        DifferenceInDifferences where cluster=None means no clustering.
     alpha : float, default=0.05
         Significance level for confidence intervals.
 
