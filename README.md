@@ -74,6 +74,7 @@ Signif. codes: '***' 0.001, '**' 0.01, '*' 0.05, '.' 0.1
 - **Synthetic DiD**: Combined DiD with synthetic control for improved robustness
 - **Event study plots**: Publication-ready visualization of treatment effects
 - **Parallel trends testing**: Multiple methods including equivalence tests
+- **Goodman-Bacon decomposition**: Diagnose TWFE bias by decomposing into 2x2 comparisons
 - **Placebo tests**: Comprehensive diagnostics including fake timing, fake group, permutation, and leave-one-out tests
 - **Honest DiD sensitivity analysis**: Rambachan-Roth (2023) bounds and breakdown analysis for parallel trends violations
 - **Data prep utilities**: Helper functions for common data preparation tasks
@@ -85,7 +86,7 @@ We provide Jupyter notebook tutorials in `docs/tutorials/`:
 | Notebook | Description |
 |----------|-------------|
 | `01_basic_did.ipynb` | Basic 2x2 DiD, formula interface, covariates, fixed effects, cluster-robust SE, wild bootstrap |
-| `02_staggered_did.ipynb` | Staggered adoption with Callaway-Sant'Anna, group-time effects, aggregation methods |
+| `02_staggered_did.ipynb` | Staggered adoption with Callaway-Sant'Anna, group-time effects, aggregation methods, Bacon decomposition |
 | `03_synthetic_did.ipynb` | Synthetic DiD, unit/time weights, inference methods, regularization |
 | `04_parallel_trends.ipynb` | Testing parallel trends, equivalence tests, placebo tests, diagnostics |
 | `05_honest_did.ipynb` | Honest DiD sensitivity analysis, bounds, breakdown values, visualization |
