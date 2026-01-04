@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.6.0] - 2025-01-04
+## [0.6.0]
 
 ### Added
 - **CallawaySantAnna covariate adjustment** for conditional parallel trends
@@ -41,7 +41,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed 94 mypy type checking issues (Optional types, numpy type casts, assertions)
 - Added missing return statement in `run_placebo_test()`
 
-## [0.5.0] - 2024-12-01
+## [0.5.0]
 
 ### Added
 - **Wild cluster bootstrap** for valid inference with few clusters
@@ -66,7 +66,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `04_parallel_trends.ipynb` - Parallel trends testing and diagnostics
 - Comprehensive test coverage (380+ tests)
 
-## [0.4.0] - 2024-11-01
+## [0.4.0]
 
 ### Added
 - **Callaway-Sant'Anna estimator** for staggered difference-in-differences
@@ -84,7 +84,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `check_parallel_trends_robust()` - Wasserstein distance test
   - `equivalence_test_trends()` - TOST equivalence test
 
-## [0.3.0] - 2024-10-01
+## [0.3.0]
 
 ### Added
 - **Synthetic Difference-in-Differences** (`SyntheticDiD`)
@@ -108,7 +108,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `aggregate_to_cohorts()` - aggregate to cohort means
   - `rank_control_units()` - rank controls by similarity
 
-## [0.2.0] - 2024-09-01
+## [0.2.0]
 
 ### Added
 - **Two-Way Fixed Effects** (`TwoWayFixedEffects`)
@@ -123,7 +123,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - R-style formulas like `"outcome ~ treated * post"`
   - Support for covariates in formulas
 
-## [0.1.0] - 2024-08-01
+## [0.1.0]
 
 ### Added
 - Initial release

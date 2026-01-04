@@ -11,7 +11,7 @@ sys.path.insert(0, os.path.abspath(".."))
 
 # -- Project information -----------------------------------------------------
 project = "diff-diff"
-copyright = "2024, diff-diff contributors"
+copyright = "2026, diff-diff contributors"
 author = "diff-diff contributors"
 release = "0.6.0"
 

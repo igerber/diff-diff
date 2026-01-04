@@ -43,7 +43,7 @@ Example
 check_parallel_trends_robust
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Robust parallel trends test with heteroskedasticity-consistent standard errors.
+Robust parallel trends test using Wasserstein distance with permutation-based inference.
 
 .. autofunction:: diff_diff.check_parallel_trends_robust
 
