@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "diff-diff"
-version = "0.6.0"
+version = "1.0.0"
 description = "A library for Difference-in-Differences causal inference analysis"
 readme = "README.md"
 license = "MIT"
@@ -20,7 +20,7 @@ keywords = [
     "treatment-effects",
 ]
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 5 - Production/Stable",
     "Intended Audience :: Science/Research",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
