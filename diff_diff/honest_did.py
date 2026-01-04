@@ -63,7 +63,7 @@ class DeltaSD:
 
     def __post_init__(self):
         if self.M < 0:
-            raise ValueError("M must be non-negative")
+            raise ValueError(f"M must be non-negative, got M={self.M}")
 
     def __repr__(self) -> str:
         return f"DeltaSD(M={self.M})"
@@ -98,7 +98,7 @@ class DeltaRM:
 
     def __post_init__(self):
         if self.Mbar < 0:
-            raise ValueError("Mbar must be non-negative")
+            raise ValueError(f"Mbar must be non-negative, got Mbar={self.Mbar}")
 
     def __repr__(self) -> str:
         return f"DeltaRM(Mbar={self.Mbar})"
@@ -132,9 +132,9 @@ class DeltaSDRM:
 
     def __post_init__(self):
         if self.M < 0:
-            raise ValueError("M must be non-negative")
+            raise ValueError(f"M must be non-negative, got M={self.M}")
         if self.Mbar < 0:
-            raise ValueError("Mbar must be non-negative")
+            raise ValueError(f"Mbar must be non-negative, got Mbar={self.Mbar}")
 
     def __repr__(self) -> str:
         return f"DeltaSDRM(M={self.M}, Mbar={self.Mbar})"
@@ -213,11 +213,15 @@ class HonestDiDResults:
 
     @property
     def significance_stars(self) -> str:
-        """Return significance stars if CI excludes zero."""
-        if self.is_significant:
-            # Use p-value approximation based on CI
-            return "*"
-        return ""
+        """
+        Return significance indicator if robust CI excludes zero.
+
+        Note: Unlike point estimation, partial identification does not yield
+        a single p-value. This returns "*" if the robust CI excludes zero
+        at the specified alpha level, indicating the effect is robust to
+        the assumed violations of parallel trends.
+        """
+        return "*" if self.is_significant else ""
 
     @property
     def identified_set_width(self) -> float:
@@ -576,8 +580,9 @@ def _extract_event_study_params(
             if isinstance(results, CallawaySantAnnaResults):
                 if results.event_study_effects is None:
                     raise ValueError(
-                        "CallawaySantAnnaResults must have event_study_effects. "
-                        "Re-run with compute_event_study=True."
+                        "CallawaySantAnnaResults must have event_study_effects for HonestDiD. "
+                        "Re-run CallawaySantAnna.fit() with aggregate='event_study' to compute "
+                        "event study effects."
                     )
 
                 # Extract event study effects by relative time
@@ -734,13 +739,18 @@ def _solve_bounds_lp(
     l_vec: np.ndarray,
     A_ineq: np.ndarray,
     b_ineq: np.ndarray,
-    num_pre_periods: int
+    num_pre_periods: int,
+    lp_method: str = 'highs'
 ) -> Tuple[float, float]:
     """
     Solve for identified set bounds using linear programming.
 
     The parameter of interest is theta = l' @ (beta_post - delta_post).
     We find min and max over delta in the constraint set.
+
+    Note: The optimization is over delta for ALL periods (pre + post), but
+    only the post-period components contribute to the objective function.
+    This correctly handles smoothness constraints that link pre and post periods.
 
     Parameters
     ----------
@@ -754,6 +764,9 @@ def _solve_bounds_lp(
         Inequality constraint vector.
     num_pre_periods : int
         Number of pre-periods (for indexing).
+    lp_method : str
+        LP solver method for scipy.optimize.linprog. Default 'highs' requires
+        scipy >= 1.6.0. Alternatives: 'interior-point', 'revised simplex'.
 
     Returns
     -------
@@ -787,7 +800,7 @@ def _solve_bounds_lp(
         result_min = optimize.linprog(
             c, A_ub=A_ineq, b_ub=b_ineq,
             bounds=(None, None),
-            method='highs'
+            method=lp_method
         )
         if result_min.success:
             min_val = result_min.fun
@@ -801,7 +814,7 @@ def _solve_bounds_lp(
         result_max = optimize.linprog(
             -c, A_ub=A_ineq, b_ub=b_ineq,
             bounds=(None, None),
-            method='highs'
+            method=lp_method
         )
         if result_max.success:
             max_val = -result_max.fun
@@ -846,7 +859,17 @@ def _compute_flci(
         Lower bound of confidence interval.
     ci_ub : float
         Upper bound of confidence interval.
+
+    Raises
+    ------
+    ValueError
+        If se <= 0 or alpha is not in (0, 1).
     """
+    if se <= 0:
+        raise ValueError(f"Standard error must be positive, got se={se}")
+    if not (0 < alpha < 1):
+        raise ValueError(f"alpha must be between 0 and 1, got alpha={alpha}")
+
     z = stats.norm.ppf(1 - alpha / 2)
     ci_lb = lb - z * se
     ci_ub = ub + z * se
@@ -989,12 +1012,12 @@ class HonestDiD:
         if self.method not in ["smoothness", "relative_magnitude", "combined"]:
             raise ValueError(
                 f"method must be 'smoothness', 'relative_magnitude', or 'combined', "
-                f"got '{self.method}'"
+                f"got method='{self.method}'"
             )
         if self.M < 0:
-            raise ValueError("M must be non-negative")
+            raise ValueError(f"M must be non-negative, got M={self.M}")
         if not 0 < self.alpha < 1:
-            raise ValueError("alpha must be between 0 and 1")
+            raise ValueError(f"alpha must be between 0 and 1, got alpha={self.alpha}")
 
     def get_params(self) -> Dict[str, Any]:
         """Get parameters for this estimator."""
