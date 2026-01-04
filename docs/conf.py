@@ -13,7 +13,7 @@ sys.path.insert(0, os.path.abspath(".."))
 project = "diff-diff"
 copyright = "2024, diff-diff contributors"
 author = "diff-diff contributors"
-release = "0.5.0"
+release = "0.6.0"
 
 # -- General configuration ---------------------------------------------------
 extensions = [

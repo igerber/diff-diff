@@ -267,7 +267,16 @@ Beyond the API site:
 
 ## Completed Features
 
-### v0.5.2
+### v0.6.0
+- [x] **All 1.0 Blockers Complete** - Library is now production-ready for core DiD analysis
+- [x] **API Documentation Site** (Sphinx + ReadTheDocs theme)
+  - Full API reference auto-generated from docstrings
+  - "Which estimator should I use?" decision guide
+  - Comparison with R packages
+  - Getting started / quickstart guide
+- [x] **CallawaySantAnna Covariate Adjustment**
+  - Outcome regression, IPW, and doubly robust methods
+  - Conditional parallel trends support
 - [x] **Honest DiD sensitivity analysis** (Rambachan & Roth 2023)
   - Relative magnitudes (ΔRM) and smoothness (ΔSD) restrictions
   - Combined restrictions (ΔSDRM)
@@ -276,21 +285,17 @@ Beyond the API site:
   - Sensitivity analysis over M grid
   - `plot_sensitivity()` and `plot_honest_event_study()` visualization
   - HonestDiD, HonestDiDResults, SensitivityResults classes
-  - DeltaSD, DeltaRM, DeltaSDRM restriction classes
   - Tutorial notebook: `05_honest_did.ipynb`
-  - 49 comprehensive tests
 
-### v0.5.1
-- [x] Comprehensive test coverage for `utils.py` module (72 tests)
+### v0.5.0
+- [x] Wild cluster bootstrap (Rademacher, Webb, Mammen weights)
+- [x] Placebo tests module (fake timing, fake group, permutation, leave-one-out)
+- [x] Comprehensive test coverage (380+ tests)
 - [x] Tutorial notebooks in `docs/tutorials/`
   - Basic DiD, formula interface, covariates, fixed effects, wild bootstrap
   - Staggered adoption with Callaway-Sant'Anna
   - Synthetic DiD with unit/time weights
   - Parallel trends testing and diagnostics
-
-### v0.5.0
-- [x] Wild cluster bootstrap (Rademacher, Webb, Mammen weights)
-- [x] Placebo tests module (fake timing, fake group, permutation, leave-one-out)
 
 ### v0.4.0
 - [x] Callaway-Sant'Anna estimator for staggered DiD
@@ -308,4 +313,4 @@ Beyond the API site:
 4. **Goodman-Bacon Decomposition** - Key diagnostic for TWFE users
 5. **Power Analysis** - Study design tool practitioners need
 
-With items 1-2 complete, diff-diff now has feature parity with R's `did` + `HonestDiD` ecosystem for core sensitivity analysis. The remaining items (3-5) will complete the 1.0 release.
+All 1.0 blockers (items 1-3) are now complete. diff-diff has feature parity with R's `did` + `HonestDiD` ecosystem for core DiD analysis. Items 4-5 would strengthen the 1.0 release but are not strictly required.
