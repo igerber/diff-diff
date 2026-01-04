@@ -74,7 +74,7 @@ from diff_diff.visualization import (
     plot_sensitivity,
 )
 
-__version__ = "0.6.0"
+__version__ = "0.7.0"
 __all__ = [
     # Estimators
     "DifferenceInDifferences",

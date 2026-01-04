@@ -158,7 +158,8 @@ diff-diff fills critical gaps in the Python DiD ecosystem:
 
 3. **Built-in diagnostics**
 
-   Placebo tests, parallel trends tests, and sensitivity analysis out of the box.
+   Placebo tests, parallel trends tests, Goodman-Bacon decomposition, and
+   sensitivity analysis out of the box.
 
 4. **sklearn-style API**
 
@@ -292,6 +293,12 @@ Feature Comparison Table
      - ❌
      - ❌
    * - Parallel trends tests
+     - ✅
+     - ❌
+     - ❌
+     - ❌
+     - ❌
+   * - Bacon decomposition
      - ✅
      - ❌
      - ❌
