@@ -26,7 +26,7 @@ A production-ready DiD library needs:
 | API Documentation Site | ✅ Done | — | Credibility and discoverability |
 | Goodman-Bacon Decomposition | ✅ Done | — | Explains when TWFE fails |
 | Power Analysis | ✅ Done | — | Study design tool |
-| CallawaySantAnna Bootstrap | Not Started | 1.0 Target | Better inference with few clusters |
+| CallawaySantAnna Bootstrap | ✅ Done | — | Valid inference with few clusters |
 | Sun-Abraham Estimator | Not Started | Post-1.0 | Alternative to CS, some prefer it |
 | Gardner's did2s | Not Started | Post-1.0 | Two-stage approach, available in pyfixest |
 | Local Projections DiD | Not Started | Post-1.0 | Dynamic effects (Dube et al. 2023) |
@@ -63,13 +63,16 @@ Practitioners need to know "how many units/periods do I need to detect an effect
 
 **References**: Bloom (1995); Burlig, Preonas, & Woerman (2020).
 
-### CallawaySantAnna Bootstrap Inference
+### ✅ CallawaySantAnna Bootstrap Inference (Done)
 
-With few clusters or groups, analytical SEs may be unreliable. Bootstrap provides valid inference. The R `did` package uses multiplier bootstrap.
+With few clusters or groups, analytical SEs may be unreliable. Multiplier bootstrap provides valid inference following the R `did` package approach.
 
-- Multiplier/weighted bootstrap at unit level
-- Aggregate bootstrap samples for overall ATT and event study
-- Handle covariance between group-time effects
+- ✅ Multiplier bootstrap at unit level with influence function perturbation
+- ✅ Aggregate bootstrap samples for overall ATT, event study, and group effects
+- ✅ Rademacher, Mammen, and Webb weight distributions
+- ✅ Percentile confidence intervals and bootstrap p-values
+
+**Reference**: Callaway & Sant'Anna (2021). *Journal of Econometrics*.
 
 ### Enhanced Visualization
 
@@ -123,7 +126,14 @@ For high-dimensional settings with many covariates. Uses ML for nuisance paramet
 
 ## Release History
 
-### v0.8.0 (Current)
+### v0.9.0 (Current)
+
+- ✅ Callaway-Sant'Anna multiplier bootstrap inference
+- ✅ Rademacher, Mammen, and Webb weight distributions
+- ✅ Bootstrap SEs, CIs, and p-values for all aggregations (overall ATT, event study, group effects)
+- ✅ `CSBootstrapResults` dataclass for bootstrap results
+
+### v0.8.0
 
 - ✅ Power analysis tools (`PowerAnalysis`, `simulate_power`)
 - ✅ MDE, sample size, and power calculations
