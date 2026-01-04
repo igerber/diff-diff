@@ -8,8 +8,8 @@ A production-ready DiD library needs:
 1. ✅ **Core estimators** - Basic DiD, TWFE, MultiPeriod, Staggered (Callaway-Sant'Anna), Synthetic DiD
 2. ✅ **Valid inference** - Robust SEs, cluster SEs, wild bootstrap for few clusters
 3. ✅ **Assumption diagnostics** - Parallel trends tests, placebo tests
-4. ⚠️ **Sensitivity analysis** - What if parallel trends is violated? (Rambachan-Roth)
-5. ⚠️ **Conditional parallel trends** - Covariate adjustment for staggered DiD
+4. ✅ **Sensitivity analysis** - What if parallel trends is violated? (Rambachan-Roth)
+5. ✅ **Conditional parallel trends** - Covariate adjustment for staggered DiD
 6. ✅ **Documentation** - API reference site for discoverability
 
 ---
