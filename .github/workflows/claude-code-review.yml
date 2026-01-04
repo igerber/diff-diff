@@ -24,7 +24,8 @@ jobs:
         uses: anthropics/claude-code-action@v1
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
-          model: claude-opus-4-5-20251101
+          claude_args: "--model claude-opus-4-5-20251101"
+          use_sticky_comment: true
           prompt: |
             Perform a comprehensive code review of the changes in this PR. Provide actionable feedback with specific line references.
 
