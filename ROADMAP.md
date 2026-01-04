@@ -25,7 +25,7 @@ A production-ready DiD library needs:
 | CallawaySantAnna Covariates | ✅ Done | — | Conditional PT often required in practice |
 | API Documentation Site | ✅ Done | — | Credibility and discoverability |
 | Goodman-Bacon Decomposition | ✅ Done | — | Explains when TWFE fails |
-| Power Analysis | Not Started | 1.0 Target | Study design tool |
+| Power Analysis | ✅ Done | — | Study design tool |
 | CallawaySantAnna Bootstrap | Not Started | 1.0 Target | Better inference with few clusters |
 | Sun-Abraham Estimator | Not Started | Post-1.0 | Alternative to CS, some prefer it |
 | Gardner's did2s | Not Started | Post-1.0 | Two-stage approach, available in pyfixest |
@@ -51,14 +51,17 @@ Helps users understand *why* TWFE can be biased with staggered adoption. Shows w
 
 **Reference**: Goodman-Bacon (2021). *Journal of Econometrics*.
 
-### Power Analysis Tools
+### ✅ Power Analysis Tools (Done)
 
-Practitioners need to know "how many units/periods do I need to detect an effect of size X?" Currently no Python tool does this well for DiD.
+Practitioners need to know "how many units/periods do I need to detect an effect of size X?" Now available in diff-diff.
 
-- Minimum detectable effect given sample size
-- Required sample size for target power
-- Simulation-based power for staggered designs
-- Visualization of power curves
+- ✅ Minimum detectable effect given sample size
+- ✅ Required sample size for target power
+- ✅ Simulation-based power for any estimator (including staggered designs)
+- ✅ Visualization of power curves
+- ✅ Panel data considerations (ICC, multiple periods)
+
+**References**: Bloom (1995); Burlig, Preonas, & Woerman (2020).
 
 ### CallawaySantAnna Bootstrap Inference
 
@@ -120,7 +123,15 @@ For high-dimensional settings with many covariates. Uses ML for nuisance paramet
 
 ## Release History
 
-### v0.7.0 (Current)
+### v0.8.0 (Current)
+
+- ✅ Power analysis tools (`PowerAnalysis`, `simulate_power`)
+- ✅ MDE, sample size, and power calculations
+- ✅ Simulation-based power for any DiD estimator
+- ✅ Power curve visualization (`plot_power_curve`)
+- ✅ Panel data support with ICC adjustment
+
+### v0.7.0
 
 - ✅ Goodman-Bacon decomposition for TWFE diagnostics
 - ✅ `plot_bacon()` visualization (scatter and bar charts)

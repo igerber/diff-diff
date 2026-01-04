@@ -63,7 +63,8 @@ mypy diff_diff
   - `plot_sensitivity` - Honest DiD sensitivity analysis plots (bounds vs M)
   - `plot_honest_event_study` - Event study with honest confidence intervals
   - `plot_bacon` - Bacon decomposition scatter/bar plots (weights vs estimates by comparison type)
-  - Works with MultiPeriodDiD, CallawaySantAnna, HonestDiD, BaconDecomposition, or DataFrames
+  - `plot_power_curve` - Power curve visualization (power vs effect size or sample size)
+  - Works with MultiPeriodDiD, CallawaySantAnna, HonestDiD, BaconDecomposition, PowerAnalysis, or DataFrames
 
 - **`diff_diff/utils.py`** - Statistical utilities:
   - Robust/cluster standard errors (`compute_robust_se`)
@@ -87,6 +88,13 @@ mypy diff_diff
   - `SensitivityResults` - Results from sensitivity analysis over M grid
   - `compute_honest_did()` - Convenience function for quick bounds computation
   - `sensitivity_plot()` - Convenience function for plotting sensitivity analysis
+
+- **`diff_diff/power.py`** - Power analysis for study design:
+  - `PowerAnalysis` - Main class for analytical power calculations
+  - `PowerResults` - Results with MDE, power, sample size
+  - `SimulationPowerResults` - Results from Monte Carlo power simulation
+  - `simulate_power()` - Simulation-based power for any DiD estimator
+  - `compute_mde()`, `compute_power()`, `compute_sample_size()` - Convenience functions
 
 - **`diff_diff/prep.py`** - Data preparation utilities:
   - `generate_did_data` - Create synthetic data with known treatment effect
@@ -114,6 +122,7 @@ mypy diff_diff
   - `03_synthetic_did.ipynb` - Synthetic DiD with unit/time weights
   - `04_parallel_trends.ipynb` - Parallel trends testing and diagnostics
   - `05_honest_did.ipynb` - Honest DiD sensitivity analysis for parallel trends violations
+  - `06_power_analysis.ipynb` - Power analysis for study design, MDE, simulation-based power
 
 ### Test Structure
 
@@ -127,6 +136,7 @@ Tests mirror the source modules:
 - `tests/test_prep.py` - Tests for data preparation utilities
 - `tests/test_visualization.py` - Tests for plotting functions
 - `tests/test_honest_did.py` - Tests for Honest DiD sensitivity analysis
+- `tests/test_power.py` - Tests for power analysis
 
 ### Dependencies
 

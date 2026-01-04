@@ -77,6 +77,7 @@ Signif. codes: '***' 0.001, '**' 0.01, '*' 0.05, '.' 0.1
 - **Goodman-Bacon decomposition**: Diagnose TWFE bias by decomposing into 2x2 comparisons
 - **Placebo tests**: Comprehensive diagnostics including fake timing, fake group, permutation, and leave-one-out tests
 - **Honest DiD sensitivity analysis**: Rambachan-Roth (2023) bounds and breakdown analysis for parallel trends violations
+- **Power analysis**: MDE, sample size, and power calculations for study design; simulation-based power for any estimator
 - **Data prep utilities**: Helper functions for common data preparation tasks
 
 ## Tutorials
@@ -90,6 +91,7 @@ We provide Jupyter notebook tutorials in `docs/tutorials/`:
 | `03_synthetic_did.ipynb` | Synthetic DiD, unit/time weights, inference methods, regularization |
 | `04_parallel_trends.ipynb` | Testing parallel trends, equivalence tests, placebo tests, diagnostics |
 | `05_honest_did.ipynb` | Honest DiD sensitivity analysis, bounds, breakdown values, visualization |
+| `06_power_analysis.ipynb` | Power analysis, MDE, sample size calculations, simulation-based power |
 
 ## Data Preparation
 
@@ -1694,6 +1696,16 @@ The `HonestDiD` module implements sensitivity analysis methods for relaxing the 
 - **de Chaisemartin, C., & D'Haultfœuille, X. (2020).** "Two-Way Fixed Effects Estimators with Heterogeneous Treatment Effects." *American Economic Review*, 110(9), 2964-2996. [https://doi.org/10.1257/aer.20181169](https://doi.org/10.1257/aer.20181169)
 
 - **Goodman-Bacon, A. (2021).** "Difference-in-Differences with Variation in Treatment Timing." *Journal of Econometrics*, 225(2), 254-277. [https://doi.org/10.1016/j.jeconom.2021.03.014](https://doi.org/10.1016/j.jeconom.2021.03.014)
+
+### Power Analysis
+
+- **Bloom, H. S. (1995).** "Minimum Detectable Effects: A Simple Way to Report the Statistical Power of Experimental Designs." *Evaluation Review*, 19(5), 547-556. [https://doi.org/10.1177/0193841X9501900504](https://doi.org/10.1177/0193841X9501900504)
+
+- **Burlig, F., Preonas, L., & Woerman, M. (2020).** "Panel Data and Experimental Design." *Journal of Development Economics*, 144, 102458. [https://doi.org/10.1016/j.jdeveco.2020.102458](https://doi.org/10.1016/j.jdeveco.2020.102458)
+
+  Essential reference for power analysis in panel DiD designs. Discusses how serial correlation (ICC) affects power and provides formulas for panel data settings.
+
+- **Djimeu, E. W., & Houndolo, D.-G. (2016).** "Power Calculation for Causal Inference in Social Science: Sample Size and Minimum Detectable Effect Determination." *Journal of Development Effectiveness*, 8(4), 508-527. [https://doi.org/10.1080/19439342.2016.1244555](https://doi.org/10.1080/19439342.2016.1244555)
 
 ### General Causal Inference
 
