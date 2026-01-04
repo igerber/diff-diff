@@ -2,11 +2,15 @@
 Difference-in-Differences estimators with sklearn-like API.
 """
 
-from typing import Any, Dict, List, Optional, Tuple
+import warnings
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
 from numpy.linalg import LinAlgError
+
+if TYPE_CHECKING:
+    from diff_diff.bacon import BaconDecompositionResults
 
 from diff_diff.results import DiDResults, MultiPeriodDiDResults, PeriodEffect, SyntheticDiDResults
 from diff_diff.utils import (
@@ -678,6 +682,9 @@ class TwoWayFixedEffects(DifferenceInDifferences):
         if unit not in data.columns:
             raise ValueError(f"Unit column '{unit}' not found in data")
 
+        # Check for staggered treatment timing and warn if detected
+        self._check_staggered_treatment(data, treatment, time, unit)
+
         # Use unit-level clustering if not specified (use local variable to avoid mutation)
         cluster_var = self.cluster if self.cluster is not None else unit
 
@@ -824,6 +831,115 @@ class TwoWayFixedEffects(DifferenceInDifferences):
             data[f"{var}_demeaned"] = data[var] - unit_means - time_means + grand_mean
 
         return data
+
+    def _check_staggered_treatment(
+        self,
+        data: pd.DataFrame,
+        treatment: str,
+        time: str,
+        unit: str,
+    ) -> None:
+        """
+        Check for staggered treatment timing and warn if detected.
+
+        Identifies if different units start treatment at different times,
+        which can bias TWFE estimates when treatment effects are heterogeneous.
+        """
+        # Find first treatment time for each unit
+        treated_obs = data[data[treatment] == 1]
+        if len(treated_obs) == 0:
+            return  # No treated observations
+
+        # Get first treatment time per unit
+        first_treat_times = treated_obs.groupby(unit)[time].min()
+        unique_treat_times = first_treat_times.unique()
+
+        if len(unique_treat_times) > 1:
+            n_groups = len(unique_treat_times)
+            warnings.warn(
+                f"Staggered treatment timing detected: {n_groups} treatment cohorts "
+                f"start treatment at different times. TWFE can be biased when treatment "
+                f"effects are heterogeneous across time. Consider using:\n"
+                f"  - CallawaySantAnna estimator for robust estimates\n"
+                f"  - TwoWayFixedEffects.decompose() to diagnose the decomposition\n"
+                f"  - bacon_decompose() to see weight on 'forbidden' comparisons",
+                UserWarning,
+                stacklevel=3,
+            )
+
+    def decompose(
+        self,
+        data: pd.DataFrame,
+        outcome: str,
+        unit: str,
+        time: str,
+        first_treat: str,
+    ) -> "BaconDecompositionResults":
+        """
+        Perform Goodman-Bacon decomposition of TWFE estimate.
+
+        Decomposes the TWFE estimate into a weighted average of all possible
+        2x2 DiD comparisons, revealing which comparisons drive the estimate
+        and whether problematic "forbidden comparisons" are involved.
+
+        Parameters
+        ----------
+        data : pd.DataFrame
+            Panel data with unit and time identifiers.
+        outcome : str
+            Name of outcome variable column.
+        unit : str
+            Name of unit identifier column.
+        time : str
+            Name of time period column.
+        first_treat : str
+            Name of column indicating when each unit was first treated.
+            Use 0 (or np.inf) for never-treated units.
+
+        Returns
+        -------
+        BaconDecompositionResults
+            Decomposition results showing:
+            - TWFE estimate and its weighted-average breakdown
+            - List of all 2x2 comparisons with estimates and weights
+            - Total weight by comparison type (clean vs forbidden)
+
+        Examples
+        --------
+        >>> twfe = TwoWayFixedEffects()
+        >>> decomp = twfe.decompose(
+        ...     data, outcome='y', unit='id', time='t', first_treat='treat_year'
+        ... )
+        >>> decomp.print_summary()
+        >>> # Check weight on forbidden comparisons
+        >>> if decomp.total_weight_later_vs_earlier > 0.2:
+        ...     print("Warning: significant forbidden comparison weight")
+
+        Notes
+        -----
+        This decomposition is essential for understanding potential TWFE bias
+        in staggered adoption designs. The three comparison types are:
+
+        1. **Treated vs Never-treated**: Clean comparisons using never-treated
+           units as controls. These are always valid.
+
+        2. **Earlier vs Later treated**: Uses later-treated units as controls
+           before they receive treatment. These are valid.
+
+        3. **Later vs Earlier treated**: Uses already-treated units as controls.
+           These "forbidden comparisons" can introduce bias when treatment
+           effects are dynamic (changing over time since treatment).
+
+        See Also
+        --------
+        bacon_decompose : Standalone decomposition function
+        BaconDecomposition : Class-based decomposition interface
+        CallawaySantAnna : Robust estimator that avoids forbidden comparisons
+        """
+        from diff_diff.bacon import BaconDecomposition
+
+        decomp = BaconDecomposition()
+        return decomp.fit(data, outcome, unit, time, first_treat)
 
 
 class MultiPeriodDiD(DifferenceInDifferences):

@@ -5,6 +5,12 @@ This library provides sklearn-like estimators for causal inference
 using the difference-in-differences methodology.
 """
 
+from diff_diff.bacon import (
+    BaconDecomposition,
+    BaconDecompositionResults,
+    Comparison2x2,
+    bacon_decompose,
+)
 from diff_diff.diagnostics import (
     PlaceboTestResults,
     leave_one_out_test,
@@ -61,6 +67,7 @@ from diff_diff.utils import (
     wild_bootstrap_se,
 )
 from diff_diff.visualization import (
+    plot_bacon,
     plot_event_study,
     plot_group_effects,
     plot_honest_event_study,
@@ -75,6 +82,12 @@ __all__ = [
     "MultiPeriodDiD",
     "SyntheticDiD",
     "CallawaySantAnna",
+    # Bacon Decomposition
+    "BaconDecomposition",
+    "BaconDecompositionResults",
+    "Comparison2x2",
+    "bacon_decompose",
+    "plot_bacon",
     # Results
     "DiDResults",
     "MultiPeriodDiDResults",

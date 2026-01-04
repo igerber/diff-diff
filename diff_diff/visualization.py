@@ -10,6 +10,7 @@ import numpy as np
 import pandas as pd
 
 if TYPE_CHECKING:
+    from diff_diff.bacon import BaconDecompositionResults
     from diff_diff.honest_did import HonestDiDResults, SensitivityResults
     from diff_diff.results import MultiPeriodDiDResults
     from diff_diff.staggered import CallawaySantAnnaResults
@@ -818,3 +819,323 @@ def plot_honest_event_study(
         plt.show()
 
     return ax
+
+
+def plot_bacon(
+    results: "BaconDecompositionResults",
+    *,
+    plot_type: str = "scatter",
+    figsize: Tuple[float, float] = (10, 6),
+    title: Optional[str] = None,
+    xlabel: str = "2x2 DiD Estimate",
+    ylabel: str = "Weight",
+    colors: Optional[Dict[str, str]] = None,
+    marker: str = "o",
+    markersize: int = 80,
+    alpha: float = 0.7,
+    show_weighted_avg: bool = True,
+    show_twfe_line: bool = True,
+    ax: Optional[Any] = None,
+    show: bool = True,
+) -> Any:
+    """
+    Visualize Goodman-Bacon decomposition results.
+
+    Creates either a scatter plot showing the weight and estimate for each
+    2x2 comparison, or a stacked bar chart showing total weight by comparison
+    type.
+
+    Parameters
+    ----------
+    results : BaconDecompositionResults
+        Results from BaconDecomposition.fit() or bacon_decompose().
+    plot_type : str, default="scatter"
+        Type of plot to create:
+        - "scatter": Scatter plot with estimates on x-axis, weights on y-axis
+        - "bar": Stacked bar chart of weights by comparison type
+    figsize : tuple, default=(10, 6)
+        Figure size (width, height) in inches.
+    title : str, optional
+        Plot title. If None, uses a default based on plot_type.
+    xlabel : str, default="2x2 DiD Estimate"
+        X-axis label (scatter plot only).
+    ylabel : str, default="Weight"
+        Y-axis label.
+    colors : dict, optional
+        Dictionary mapping comparison types to colors. Keys are:
+        "treated_vs_never", "earlier_vs_later", "later_vs_earlier".
+        If None, uses default colors.
+    marker : str, default="o"
+        Marker style for scatter plot.
+    markersize : int, default=80
+        Marker size for scatter plot.
+    alpha : float, default=0.7
+        Transparency for markers/bars.
+    show_weighted_avg : bool, default=True
+        Whether to show weighted average lines for each comparison type
+        (scatter plot only).
+    show_twfe_line : bool, default=True
+        Whether to show a vertical line at the TWFE estimate (scatter plot only).
+    ax : matplotlib.axes.Axes, optional
+        Axes to plot on. If None, creates new figure.
+    show : bool, default=True
+        Whether to call plt.show() at the end.
+
+    Returns
+    -------
+    matplotlib.axes.Axes
+        The axes object containing the plot.
+
+    Examples
+    --------
+    Scatter plot (default):
+
+    >>> from diff_diff import bacon_decompose, plot_bacon
+    >>> results = bacon_decompose(data, outcome='y', unit='id',
+    ...                           time='t', first_treat='first_treat')
+    >>> plot_bacon(results)
+
+    Bar chart of weights by type:
+
+    >>> plot_bacon(results, plot_type='bar')
+
+    Customized scatter plot:
+
+    >>> plot_bacon(results,
+    ...            colors={'treated_vs_never': 'green',
+    ...                    'earlier_vs_later': 'blue',
+    ...                    'later_vs_earlier': 'red'},
+    ...            title='My Bacon Decomposition')
+
+    Notes
+    -----
+    The scatter plot is particularly useful for understanding:
+
+    1. **Distribution of estimates**: Are 2x2 estimates clustered or spread?
+       Wide spread suggests heterogeneous treatment effects.
+
+    2. **Weight concentration**: Do a few comparisons dominate the TWFE?
+       Points with high weights have more influence.
+
+    3. **Forbidden comparison problem**: Red points (later_vs_earlier) show
+       comparisons using already-treated units as controls. If these have
+       different estimates than clean comparisons, TWFE may be biased.
+
+    The bar chart provides a quick summary of how much weight falls on
+    each comparison type, which is useful for assessing the severity
+    of potential TWFE bias.
+
+    See Also
+    --------
+    bacon_decompose : Perform the decomposition
+    BaconDecomposition : Class-based interface
+    """
+    try:
+        import matplotlib.pyplot as plt
+    except ImportError:
+        raise ImportError(
+            "matplotlib is required for plotting. "
+            "Install it with: pip install matplotlib"
+        )
+
+    # Default colors
+    if colors is None:
+        colors = {
+            "treated_vs_never": "#22c55e",    # Green - clean comparison
+            "earlier_vs_later": "#3b82f6",    # Blue - valid comparison
+            "later_vs_earlier": "#ef4444",    # Red - forbidden comparison
+        }
+
+    # Default titles
+    if title is None:
+        if plot_type == "scatter":
+            title = "Goodman-Bacon Decomposition"
+        else:
+            title = "TWFE Weight by Comparison Type"
+
+    # Create figure if needed
+    if ax is None:
+        fig, ax = plt.subplots(figsize=figsize)
+    else:
+        fig = ax.get_figure()
+
+    if plot_type == "scatter":
+        _plot_bacon_scatter(
+            ax, results, colors, marker, markersize, alpha,
+            show_weighted_avg, show_twfe_line, xlabel, ylabel, title
+        )
+    elif plot_type == "bar":
+        _plot_bacon_bar(ax, results, colors, alpha, ylabel, title)
+    else:
+        raise ValueError(f"Unknown plot_type: {plot_type}. Use 'scatter' or 'bar'.")
+
+    fig.tight_layout()
+
+    if show:
+        plt.show()
+
+    return ax
+
+
+def _plot_bacon_scatter(
+    ax: Any,
+    results: "BaconDecompositionResults",
+    colors: Dict[str, str],
+    marker: str,
+    markersize: int,
+    alpha: float,
+    show_weighted_avg: bool,
+    show_twfe_line: bool,
+    xlabel: str,
+    ylabel: str,
+    title: str,
+) -> None:
+    """Create scatter plot of Bacon decomposition."""
+    # Separate comparisons by type
+    by_type: Dict[str, List[Tuple[float, float]]] = {
+        "treated_vs_never": [],
+        "earlier_vs_later": [],
+        "later_vs_earlier": [],
+    }
+
+    for comp in results.comparisons:
+        by_type[comp.comparison_type].append((comp.estimate, comp.weight))
+
+    # Plot each type
+    labels = {
+        "treated_vs_never": "Treated vs Never-treated",
+        "earlier_vs_later": "Earlier vs Later treated",
+        "later_vs_earlier": "Later vs Earlier (forbidden)",
+    }
+
+    for ctype, points in by_type.items():
+        if not points:
+            continue
+        estimates = [p[0] for p in points]
+        weights = [p[1] for p in points]
+        ax.scatter(
+            estimates, weights,
+            c=colors[ctype],
+            label=labels[ctype],
+            marker=marker,
+            s=markersize,
+            alpha=alpha,
+            edgecolors='white',
+            linewidths=0.5,
+        )
+
+    # Show weighted average lines
+    if show_weighted_avg:
+        effect_by_type = results.effect_by_type()
+        for ctype, avg_effect in effect_by_type.items():
+            if avg_effect is not None and by_type[ctype]:
+                ax.axvline(
+                    x=avg_effect,
+                    color=colors[ctype],
+                    linestyle='--',
+                    alpha=0.5,
+                    linewidth=1.5,
+                )
+
+    # Show TWFE estimate line
+    if show_twfe_line:
+        ax.axvline(
+            x=results.twfe_estimate,
+            color='black',
+            linestyle='-',
+            linewidth=2,
+            label=f'TWFE = {results.twfe_estimate:.4f}',
+        )
+
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel(ylabel)
+    ax.set_title(title)
+    ax.legend(loc='best')
+    ax.grid(True, alpha=0.3)
+
+    # Add zero line
+    ax.axvline(x=0, color='gray', linestyle=':', alpha=0.5)
+
+
+def _plot_bacon_bar(
+    ax: Any,
+    results: "BaconDecompositionResults",
+    colors: Dict[str, str],
+    alpha: float,
+    ylabel: str,
+    title: str,
+) -> None:
+    """Create stacked bar chart of weights by comparison type."""
+    # Get weights
+    weights = results.weight_by_type()
+
+    # Labels and colors
+    type_order = ["treated_vs_never", "earlier_vs_later", "later_vs_earlier"]
+    labels = {
+        "treated_vs_never": "Treated vs Never-treated",
+        "earlier_vs_later": "Earlier vs Later",
+        "later_vs_earlier": "Later vs Earlier\n(forbidden)",
+    }
+
+    # Create bar data
+    bar_labels = [labels[t] for t in type_order]
+    bar_weights = [weights[t] for t in type_order]
+    bar_colors = [colors[t] for t in type_order]
+
+    # Create bars
+    bars = ax.bar(
+        bar_labels,
+        bar_weights,
+        color=bar_colors,
+        alpha=alpha,
+        edgecolor='white',
+        linewidth=1,
+    )
+
+    # Add percentage labels on bars
+    for bar, weight in zip(bars, bar_weights):
+        if weight > 0.01:  # Only label if > 1%
+            height = bar.get_height()
+            ax.annotate(
+                f'{weight:.1%}',
+                xy=(bar.get_x() + bar.get_width() / 2, height),
+                xytext=(0, 3),
+                textcoords="offset points",
+                ha='center',
+                va='bottom',
+                fontsize=10,
+                fontweight='bold',
+            )
+
+    # Add weighted average effect annotations
+    effects = results.effect_by_type()
+    for bar, ctype in zip(bars, type_order):
+        effect = effects[ctype]
+        if effect is not None and weights[ctype] > 0.01:
+            ax.annotate(
+                f'β = {effect:.3f}',
+                xy=(bar.get_x() + bar.get_width() / 2, bar.get_height() / 2),
+                ha='center',
+                va='center',
+                fontsize=9,
+                color='white',
+                fontweight='bold',
+            )
+
+    ax.set_ylabel(ylabel)
+    ax.set_title(title)
+    ax.set_ylim(0, 1.1)
+
+    # Add horizontal line at total weight = 1
+    ax.axhline(y=1.0, color='gray', linestyle='--', alpha=0.5)
+
+    # Add TWFE estimate as text
+    ax.text(
+        0.98, 0.98,
+        f'TWFE = {results.twfe_estimate:.4f}',
+        transform=ax.transAxes,
+        ha='right',
+        va='top',
+        fontsize=10,
+        bbox=dict(boxstyle='round', facecolor='white', alpha=0.8),
+    )
