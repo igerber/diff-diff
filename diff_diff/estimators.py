@@ -874,6 +874,7 @@ class TwoWayFixedEffects(DifferenceInDifferences):
         unit: str,
         time: str,
         first_treat: str,
+        weights: str = "approximate",
     ) -> "BaconDecompositionResults":
         """
         Perform Goodman-Bacon decomposition of TWFE estimate.
@@ -895,6 +896,12 @@ class TwoWayFixedEffects(DifferenceInDifferences):
         first_treat : str
             Name of column indicating when each unit was first treated.
             Use 0 (or np.inf) for never-treated units.
+        weights : str, default="approximate"
+            Weight calculation method:
+            - "approximate": Fast simplified formula (default). Good for
+              diagnostic purposes where relative weights are sufficient.
+            - "exact": Variance-based weights from Goodman-Bacon (2021)
+              Theorem 1. Use for publication-quality decompositions.
 
         Returns
         -------
@@ -938,7 +945,7 @@ class TwoWayFixedEffects(DifferenceInDifferences):
         """
         from diff_diff.bacon import BaconDecomposition
 
-        decomp = BaconDecomposition()
+        decomp = BaconDecomposition(weights=weights)
         return decomp.fit(data, outcome, unit, time, first_treat)
 
 

@@ -10,6 +10,7 @@ Reference:
     in treatment timing. Journal of Econometrics, 225(2), 254-277.
 """
 
+import warnings
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -39,7 +40,7 @@ class Comparison2x2:
         Number of treated observations in this comparison.
     n_control : int
         Number of control observations in this comparison.
-    time_window : Tuple[Any, Any]
+    time_window : Tuple[float, float]
         The (start, end) time period for this comparison.
     """
 
@@ -50,7 +51,7 @@ class Comparison2x2:
     weight: float
     n_treated: int
     n_control: int
-    time_window: Tuple[Any, Any]
+    time_window: Tuple[float, float]
 
     def __repr__(self) -> str:
         return (
@@ -306,10 +307,19 @@ class BaconDecomposition:
 
     Parameters
     ----------
-    None
+    weights : str, default="approximate"
+        Weight calculation method:
+        - "approximate": Fast simplified formula using group shares and
+          treatment variance. Good for diagnostic purposes where relative
+          weights are sufficient to identify problematic comparisons.
+        - "exact": Variance-based weights from Goodman-Bacon (2021) Theorem 1.
+          Use for publication-quality decompositions where the weighted sum
+          must closely match the TWFE estimate.
 
     Attributes
     ----------
+    weights : str
+        The weight calculation method.
     results_ : BaconDecompositionResults
         Decomposition results after calling fit().
     is_fitted_ : bool
@@ -368,7 +378,22 @@ class BaconDecomposition:
     TwoWayFixedEffects : The TWFE estimator being decomposed
     """
 
-    def __init__(self):
+    def __init__(self, weights: str = "approximate"):
+        """
+        Initialize BaconDecomposition.
+
+        Parameters
+        ----------
+        weights : str, default="approximate"
+            Weight calculation method:
+            - "approximate": Fast simplified formula (default)
+            - "exact": Variance-based weights from Goodman-Bacon (2021)
+        """
+        if weights not in ("approximate", "exact"):
+            raise ValueError(
+                f"weights must be 'approximate' or 'exact', got '{weights}'"
+            )
+        self.weights = weights
         self.results_: Optional[BaconDecompositionResults] = None
         self.is_fitted_: bool = False
 
@@ -420,6 +445,16 @@ class BaconDecomposition:
         df[time] = pd.to_numeric(df[time])
         df[first_treat] = pd.to_numeric(df[first_treat])
 
+        # Check for balanced panel
+        periods_per_unit = df.groupby(unit)[time].count()
+        if periods_per_unit.nunique() > 1:
+            warnings.warn(
+                "Unbalanced panel detected. Bacon decomposition assumes "
+                "balanced panels. Results may be inaccurate.",
+                UserWarning,
+                stacklevel=2,
+            )
+
         # Get unique time periods and timing groups
         time_periods = sorted(df[time].unique())
 
@@ -436,10 +471,12 @@ class BaconDecomposition:
         ).sum()
 
         # Create treatment indicator (D_it = 1 if treated at time t)
-        df['_treated'] = (~never_treated_mask) & (df[time] >= df[first_treat])
+        # Use unique internal name to avoid conflicts with user data
+        _TREAT_COL = '__bacon_treated_internal__'
+        df[_TREAT_COL] = (~never_treated_mask) & (df[time] >= df[first_treat])
 
         # First, compute TWFE estimate for reference
-        twfe_estimate = self._compute_twfe(df, outcome, unit, time)
+        twfe_estimate = self._compute_twfe(df, outcome, unit, time, _TREAT_COL)
 
         # Perform decomposition
         comparisons = []
@@ -471,6 +508,12 @@ class BaconDecomposition:
                 )
                 if comp_late is not None:
                     comparisons.append(comp_late)
+
+        # Recompute exact weights if requested
+        if self.weights == "exact":
+            self._recompute_exact_weights(
+                comparisons, df, outcome, unit, time, first_treat, time_periods
+            )
 
         # Normalize weights to sum to 1
         total_weight = sum(c.weight for c in comparisons)
@@ -527,11 +570,12 @@ class BaconDecomposition:
         outcome: str,
         unit: str,
         time: str,
+        treat_col: str = '__bacon_treated_internal__',
     ) -> float:
         """Compute TWFE estimate using within-transformation."""
         # Demean by unit and time
         y = df[outcome].values
-        d = df['_treated'].astype(float).values
+        d = df[treat_col].astype(float).values
 
         # Create unit and time dummies for demeaning
         units = df[unit].values
@@ -596,6 +640,104 @@ class BaconDecomposition:
             beta = 0.0
 
         return beta
+
+    def _recompute_exact_weights(
+        self,
+        comparisons: List[Comparison2x2],
+        df: pd.DataFrame,
+        outcome: str,
+        unit: str,
+        time: str,
+        first_treat: str,
+        time_periods: List[Any],
+    ) -> None:
+        """
+        Recompute weights using exact variance-based formula from Theorem 1.
+
+        This modifies comparison weights in-place to use the exact formula
+        from Goodman-Bacon (2021) which accounts for within-group variance
+        of the treatment indicator in each 2x2 comparison window.
+        """
+        n_total_obs = len(df)
+        n_total_units = df[unit].nunique()
+
+        for comp in comparisons:
+            # Get data for this specific comparison
+            if comp.comparison_type == "treated_vs_never":
+                pre_periods = [t for t in time_periods if t < comp.treated_group]
+                post_periods = [t for t in time_periods if t >= comp.treated_group]
+                # Get units in each group
+                units_treated = df[df[first_treat] == comp.treated_group][unit].unique()
+                units_control = df[
+                    (df[first_treat] == 0) | (df[first_treat] == np.inf)
+                ][unit].unique()
+            elif comp.comparison_type == "earlier_vs_later":
+                g_early = comp.treated_group
+                g_late = comp.control_group
+                pre_periods = [t for t in time_periods if t < g_early]
+                post_periods = [t for t in time_periods if g_early <= t < g_late]
+                units_treated = df[df[first_treat] == g_early][unit].unique()
+                units_control = df[df[first_treat] == g_late][unit].unique()
+            else:  # later_vs_earlier
+                g_late = comp.treated_group
+                g_early = comp.control_group
+                pre_periods = [t for t in time_periods if g_early <= t < g_late]
+                post_periods = [t for t in time_periods if t >= g_late]
+                units_treated = df[df[first_treat] == g_late][unit].unique()
+                units_control = df[df[first_treat] == g_early][unit].unique()
+
+            if not pre_periods or not post_periods:
+                comp.weight = 0.0
+                continue
+
+            # Subset to the 2x2 comparison sample
+            relevant_periods = set(pre_periods) | set(post_periods)
+            all_units = set(units_treated) | set(units_control)
+
+            df_22 = df[
+                (df[unit].isin(all_units)) &
+                (df[time].isin(relevant_periods))
+            ]
+
+            if len(df_22) == 0:
+                comp.weight = 0.0
+                continue
+
+            # Count units in this comparison
+            n_k = len(units_treated)
+            n_l = len(units_control)
+
+            if n_k == 0 or n_l == 0:
+                comp.weight = 0.0
+                continue
+
+            # Number of observations in this 2x2 sample
+            n_22 = len(df_22)
+
+            # Sample share of this comparison
+            sample_share = n_22 / n_total_obs
+
+            # Group shares within the 2x2
+            n_k_share = n_k / (n_k + n_l)
+
+            # Create treatment indicator for the 2x2
+            T_pre = len(pre_periods)
+            T_post = len(post_periods)
+            T_window = T_pre + T_post
+
+            # Variance of D within the 2x2 for treated group
+            # D = 0 in pre, D = 1 in post for treated units
+            # D = 0 for all periods for control units in this window
+            D_k = T_post / T_window  # proportion treated for treated group
+
+            # Within-comparison variance of treatment
+            # Var(D) = n_k/(n_k+n_l) * D_k * (1-D_k) for the 2x2
+            var_D_22 = n_k_share * D_k * (1 - D_k)
+
+            # Exact weight: proportional to sample share * variance
+            # Scale by (n_k + n_l) / n_total_units to account for subsample
+            unit_share = (n_k + n_l) / n_total_units
+            comp.weight = sample_share * var_D_22 * unit_share
 
     def _compute_treated_vs_never(
         self,
@@ -774,10 +916,17 @@ class BaconDecomposition:
 
     def get_params(self) -> Dict[str, Any]:
         """Get estimator parameters (sklearn-compatible)."""
-        return {}
+        return {"weights": self.weights}
 
     def set_params(self, **params) -> "BaconDecomposition":
         """Set estimator parameters (sklearn-compatible)."""
+        if "weights" in params:
+            if params["weights"] not in ("approximate", "exact"):
+                raise ValueError(
+                    f"weights must be 'approximate' or 'exact', "
+                    f"got '{params['weights']}'"
+                )
+            self.weights = params["weights"]
         return self
 
     def summary(self) -> str:
@@ -798,6 +947,7 @@ def bacon_decompose(
     unit: str,
     time: str,
     first_treat: str,
+    weights: str = "approximate",
 ) -> BaconDecompositionResults:
     """
     Convenience function for Goodman-Bacon decomposition.
@@ -819,6 +969,12 @@ def bacon_decompose(
     first_treat : str
         Name of column indicating when unit was first treated.
         Use 0 (or np.inf) for never-treated units.
+    weights : str, default="approximate"
+        Weight calculation method:
+        - "approximate": Fast simplified formula (default). Good for
+          diagnostic purposes where relative weights are sufficient.
+        - "exact": Variance-based weights from Goodman-Bacon (2021)
+          Theorem 1. Use for publication-quality decompositions.
 
     Returns
     -------
@@ -833,12 +989,23 @@ def bacon_decompose(
     --------
     >>> from diff_diff import bacon_decompose
     >>>
+    >>> # Quick diagnostic (default)
     >>> results = bacon_decompose(
     ...     data=panel_df,
     ...     outcome='earnings',
     ...     unit='state',
     ...     time='year',
     ...     first_treat='treatment_year'
+    ... )
+    >>>
+    >>> # Publication-quality exact decomposition
+    >>> results = bacon_decompose(
+    ...     data=panel_df,
+    ...     outcome='earnings',
+    ...     unit='state',
+    ...     time='year',
+    ...     first_treat='treatment_year',
+    ...     weights='exact'
     ... )
     >>>
     >>> # View summary
@@ -856,5 +1023,5 @@ def bacon_decompose(
     plot_bacon : Visualize the decomposition
     CallawaySantAnna : Robust estimator that avoids forbidden comparisons
     """
-    decomp = BaconDecomposition()
+    decomp = BaconDecomposition(weights=weights)
     return decomp.fit(data, outcome, unit, time, first_treat)

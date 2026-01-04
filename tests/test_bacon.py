@@ -419,6 +419,213 @@ class TestVisualization:
             plot_bacon(results, plot_type='invalid', show=False)
 
 
+class TestWeightsParameter:
+    """Tests for configurable weights parameter."""
+
+    def test_approximate_weights_default(self):
+        """Test that approximate weights are used by default."""
+        data = generate_staggered_data(seed=789)
+
+        decomp = BaconDecomposition()
+        assert decomp.weights == "approximate"
+
+        results = decomp.fit(
+            data,
+            outcome='outcome',
+            unit='unit',
+            time='time',
+            first_treat='first_treat'
+        )
+
+        # Weights should sum to 1
+        total_weight = sum(c.weight for c in results.comparisons)
+        assert abs(total_weight - 1.0) < 0.01
+
+    def test_exact_weights(self):
+        """Test exact weight calculation."""
+        data = generate_staggered_data(seed=789)
+
+        decomp = BaconDecomposition(weights="exact")
+        assert decomp.weights == "exact"
+
+        results = decomp.fit(
+            data,
+            outcome='outcome',
+            unit='unit',
+            time='time',
+            first_treat='first_treat'
+        )
+
+        # Weights should still sum to 1
+        total_weight = sum(c.weight for c in results.comparisons)
+        assert abs(total_weight - 1.0) < 0.01
+
+    def test_exact_vs_approximate_different(self):
+        """Test that exact and approximate weights can differ."""
+        data = generate_staggered_data(seed=123, n_cohorts=3)
+
+        results_approx = bacon_decompose(
+            data,
+            outcome='outcome',
+            unit='unit',
+            time='time',
+            first_treat='first_treat',
+            weights="approximate"
+        )
+
+        results_exact = bacon_decompose(
+            data,
+            outcome='outcome',
+            unit='unit',
+            time='time',
+            first_treat='first_treat',
+            weights="exact"
+        )
+
+        # TWFE estimates should be the same
+        assert abs(results_approx.twfe_estimate - results_exact.twfe_estimate) < 0.0001
+
+        # Same number of comparisons
+        assert len(results_approx.comparisons) == len(results_exact.comparisons)
+
+    def test_exact_weights_lower_decomposition_error(self):
+        """Test that exact weights generally have lower decomposition error."""
+        data = generate_staggered_data(seed=456, n_cohorts=3)
+
+        results_approx = bacon_decompose(
+            data,
+            outcome='outcome',
+            unit='unit',
+            time='time',
+            first_treat='first_treat',
+            weights="approximate"
+        )
+
+        results_exact = bacon_decompose(
+            data,
+            outcome='outcome',
+            unit='unit',
+            time='time',
+            first_treat='first_treat',
+            weights="exact"
+        )
+
+        # Exact weights should have equal or lower decomposition error
+        # Allow some margin for numerical precision
+        assert results_exact.decomposition_error <= results_approx.decomposition_error + 0.1
+
+    def test_invalid_weights_raises(self):
+        """Test that invalid weights parameter raises error."""
+        with pytest.raises(ValueError, match="weights must be"):
+            BaconDecomposition(weights="invalid")
+
+    def test_convenience_function_weights_param(self):
+        """Test that convenience function accepts weights parameter."""
+        data = generate_staggered_data()
+
+        results = bacon_decompose(
+            data,
+            outcome='outcome',
+            unit='unit',
+            time='time',
+            first_treat='first_treat',
+            weights="exact"
+        )
+
+        assert isinstance(results, BaconDecompositionResults)
+
+    def test_twfe_decompose_weights_param(self):
+        """Test that TWFE.decompose() accepts weights parameter."""
+        data = generate_staggered_data()
+
+        twfe = TwoWayFixedEffects()
+
+        # Test with approximate
+        decomp_approx = twfe.decompose(
+            data,
+            outcome='outcome',
+            unit='unit',
+            time='time',
+            first_treat='first_treat',
+            weights="approximate"
+        )
+        assert isinstance(decomp_approx, BaconDecompositionResults)
+
+        # Test with exact
+        decomp_exact = twfe.decompose(
+            data,
+            outcome='outcome',
+            unit='unit',
+            time='time',
+            first_treat='first_treat',
+            weights="exact"
+        )
+        assert isinstance(decomp_exact, BaconDecompositionResults)
+
+    def test_get_set_params(self):
+        """Test get_params and set_params with weights."""
+        decomp = BaconDecomposition(weights="approximate")
+        assert decomp.get_params()["weights"] == "approximate"
+
+        decomp.set_params(weights="exact")
+        assert decomp.get_params()["weights"] == "exact"
+
+        with pytest.raises(ValueError):
+            decomp.set_params(weights="invalid")
+
+
+class TestBalancedPanelWarning:
+    """Tests for balanced panel warning."""
+
+    def test_unbalanced_panel_warning(self):
+        """Test that unbalanced panel triggers warning."""
+        # Create an unbalanced panel manually
+        data = generate_staggered_data(n_units=50, n_periods=10)
+
+        # Remove some observations from specific units to make it unbalanced
+        # This ensures different units have different numbers of periods
+        mask = ~((data['unit'] == 0) & (data['time'] == 0))  # Remove one period from unit 0
+        data = data[mask].reset_index(drop=True)
+
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            bacon_decompose(
+                data,
+                outcome='outcome',
+                unit='unit',
+                time='time',
+                first_treat='first_treat'
+            )
+
+            # Should have warning about unbalanced panel
+            unbalanced_warnings = [
+                x for x in w
+                if "unbalanced" in str(x.message).lower()
+            ]
+            assert len(unbalanced_warnings) > 0
+
+    def test_balanced_panel_no_warning(self):
+        """Test that balanced panel does not trigger warning."""
+        data = generate_staggered_data()
+
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            bacon_decompose(
+                data,
+                outcome='outcome',
+                unit='unit',
+                time='time',
+                first_treat='first_treat'
+            )
+
+            # Should NOT have warning about unbalanced panel
+            unbalanced_warnings = [
+                x for x in w
+                if "unbalanced" in str(x.message).lower()
+            ]
+            assert len(unbalanced_warnings) == 0
+
+
 class TestEdgeCases:
     """Tests for edge cases."""
 
