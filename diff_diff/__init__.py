@@ -66,6 +66,7 @@ from diff_diff.results import (
 from diff_diff.staggered import (
     CallawaySantAnna,
     CallawaySantAnnaResults,
+    CSBootstrapResults,
     GroupTimeEffect,
 )
 from diff_diff.utils import (
@@ -84,7 +85,7 @@ from diff_diff.visualization import (
     plot_sensitivity,
 )
 
-__version__ = "0.8.0"
+__version__ = "0.9.0"
 __all__ = [
     # Estimators
     "DifferenceInDifferences",
@@ -104,6 +105,7 @@ __all__ = [
     "SyntheticDiDResults",
     "PeriodEffect",
     "CallawaySantAnnaResults",
+    "CSBootstrapResults",
     "GroupTimeEffect",
     # Visualization
     "plot_event_study",

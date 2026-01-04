@@ -44,7 +44,9 @@ mypy diff_diff
 - **`diff_diff/staggered.py`** - Staggered adoption DiD estimators:
   - `CallawaySantAnna` - Callaway & Sant'Anna (2021) estimator for heterogeneous treatment timing
   - `CallawaySantAnnaResults` - Results with group-time ATT(g,t) and aggregations
+  - `CSBootstrapResults` - Bootstrap inference results (SEs, CIs, p-values for all aggregations)
   - `GroupTimeEffect` - Container for individual group-time effects
+  - Multiplier bootstrap with Rademacher, Mammen, or Webb weights
 
 - **`diff_diff/bacon.py`** - Goodman-Bacon decomposition for TWFE diagnostics:
   - `BaconDecomposition` - Decompose TWFE into weighted 2x2 comparisons (Goodman-Bacon 2021)
@@ -118,7 +120,7 @@ mypy diff_diff
 
 - **`docs/tutorials/`** - Jupyter notebook tutorials:
   - `01_basic_did.ipynb` - Basic 2x2 DiD, covariates, fixed effects, wild bootstrap
-  - `02_staggered_did.ipynb` - Staggered adoption with Callaway-Sant'Anna
+  - `02_staggered_did.ipynb` - Staggered adoption with Callaway-Sant'Anna, bootstrap inference
   - `03_synthetic_did.ipynb` - Synthetic DiD with unit/time weights
   - `04_parallel_trends.ipynb` - Parallel trends testing and diagnostics
   - `05_honest_did.ipynb` - Honest DiD sensitivity analysis for parallel trends violations

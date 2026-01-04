@@ -14,7 +14,6 @@ For the public feature roadmap, see [ROADMAP.md](ROADMAP.md).
 | `predict()` raises NotImplementedError | `estimators.py:532-554` | Low | Rarely needed |
 | SyntheticDiD bootstrap can fail silently | `estimators.py:1580-1654` | Medium | Needs error handling |
 | Diagnostics module error handling | `diagnostics.py:782-885` | Medium | Improve robustness |
-| CallawaySantAnna bootstrap raises NotImplementedError | `staggered.py:488-492` | Medium | Planned for 1.0 |
 
 ---
 
@@ -71,6 +70,15 @@ Edge cases needing tests:
 
 - Core: numpy, pandas, scipy only (no statsmodels) - keep it this way
 - Optional: matplotlib for visualization
+
+---
+
+## CallawaySantAnna Bootstrap Improvements
+
+Deferred improvements from code review (PR #32):
+
+- [ ] Refactor `_run_multiplier_bootstrap` into smaller helper methods for maintainability
+- [ ] Consider aligning p-value computation with R `did` package (symmetric percentile method)
 
 ---
 

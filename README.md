@@ -702,9 +702,47 @@ CallawaySantAnna(
     alpha=0.05,                      # Significance level
     cluster=None,                    # Column for cluster SEs
     n_bootstrap=0,                   # Bootstrap iterations (0 = analytical SEs)
+    bootstrap_weight_type='rademacher',  # 'rademacher', 'mammen', or 'webb'
     seed=None                        # Random seed
 )
 ```
+
+**Multiplier bootstrap for inference:**
+
+With few clusters or when analytical standard errors may be unreliable, use the multiplier bootstrap for valid inference. This implements the approach from Callaway & Sant'Anna (2021).
+
+```python
+# Bootstrap inference with 999 iterations
+cs = CallawaySantAnna(
+    n_bootstrap=999,
+    bootstrap_weight_type='rademacher',  # or 'mammen', 'webb'
+    seed=42
+)
+results = cs.fit(
+    data,
+    outcome='sales',
+    unit='firm_id',
+    time='year',
+    first_treat='first_treat',
+    aggregate='event_study'
+)
+
+# Access bootstrap results
+print(f"Overall ATT: {results.overall_att:.3f}")
+print(f"Bootstrap SE: {results.bootstrap_results.overall_att_se:.3f}")
+print(f"Bootstrap 95% CI: {results.bootstrap_results.overall_att_ci}")
+print(f"Bootstrap p-value: {results.bootstrap_results.overall_att_p_value:.4f}")
+
+# Event study bootstrap inference
+for rel_time, se in results.bootstrap_results.event_study_ses.items():
+    ci = results.bootstrap_results.event_study_cis[rel_time]
+    print(f"e={rel_time}: SE={se:.3f}, 95% CI=[{ci[0]:.3f}, {ci[1]:.3f}]")
+```
+
+**Bootstrap weight types:**
+- `'rademacher'` - Default, ±1 with p=0.5, good for most cases
+- `'mammen'` - Two-point distribution matching first 3 moments
+- `'webb'` - Six-point distribution, recommended for very few clusters (<10)
 
 **Covariate adjustment for conditional parallel trends:**
 
@@ -723,9 +761,6 @@ results = cs.fit(
     aggregate='event_study'
 )
 ```
-
-**Current limitations:**
-- Bootstrap inference (`n_bootstrap > 0`) is not yet fully implemented
 
 ### Event Study Visualization
 
