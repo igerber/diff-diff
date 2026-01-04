@@ -78,7 +78,9 @@ Current line counts (target: < 1000 lines per module):
 | File | Lines | Status |
 |------|-------|--------|
 | `staggered.py` | 1822 | Consider splitting |
-| `estimators.py` | 1812 | Consider splitting |
+| `estimators.py` | ~975 | OK (refactored) |
+| `twfe.py` | ~355 | OK (new) |
+| `synthetic_did.py` | ~540 | OK (new) |
 | `honest_did.py` | 1491 | Acceptable |
 | `utils.py` | 1350 | Acceptable |
 | `power.py` | 1350 | Acceptable |
@@ -86,8 +88,10 @@ Current line counts (target: < 1000 lines per module):
 | `visualization.py` | 1388 | Acceptable |
 | `bacon.py` | 1027 | OK |
 
+**Completed splits:**
+- ~~`estimators.py` → `twfe.py`, `synthetic_did.py` (keep base classes in estimators.py)~~ - Done in 1.0.1
+
 **Potential splits:**
-- `estimators.py` → `twfe.py`, `synthetic_did.py` (keep base classes in estimators.py)
 - `staggered.py` → `staggered_bootstrap.py` (move bootstrap logic)
 
 ---
