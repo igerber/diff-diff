@@ -1774,6 +1774,20 @@ class SyntheticDiD(DifferenceInDifferences):
                 continue
 
         bootstrap_estimates = np.array(bootstrap_estimates)
+
+        # Warn if too many bootstrap iterations failed
+        n_successful = len(bootstrap_estimates)
+        failure_rate = 1 - (n_successful / self.n_bootstrap)
+        if failure_rate > 0.05:
+            warnings.warn(
+                f"Only {n_successful}/{self.n_bootstrap} bootstrap iterations succeeded "
+                f"({failure_rate:.1%} failure rate). Standard errors may be unreliable. "
+                f"This can occur with small samples, near-singular weight matrices, "
+                f"or insufficient pre-treatment periods.",
+                UserWarning,
+                stacklevel=2,
+            )
+
         se = np.std(bootstrap_estimates, ddof=1) if len(bootstrap_estimates) > 1 else 0.0
 
         return se, bootstrap_estimates

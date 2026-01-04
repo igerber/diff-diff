@@ -205,6 +205,57 @@ Common Pitfalls
 
    *Solution*: Always specify ``cluster_col`` for panel data.
 
+Standard Error Methods
+----------------------
+
+Different estimators compute standard errors differently. Understanding these
+differences helps interpret results and choose appropriate inference.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 20 25 55
+
+   * - Estimator
+     - Default SE Method
+     - Details
+   * - ``DifferenceInDifferences``
+     - HC1 (heteroskedasticity-robust)
+     - Uses White's robust SEs by default. Specify ``cluster_col`` for cluster-robust SEs. Use ``inference='wild_bootstrap'`` for few clusters (<30).
+   * - ``TwoWayFixedEffects``
+     - Cluster-robust (unit level)
+     - Always clusters at unit level after within-transformation. Specify ``cluster_col`` to override. Use ``inference='wild_bootstrap'`` for few clusters.
+   * - ``MultiPeriodDiD``
+     - HC1 (heteroskedasticity-robust)
+     - Same as basic DiD. Cluster-robust available via ``cluster_col``. Wild bootstrap not yet supported for multi-coefficient inference.
+   * - ``CallawaySantAnna``
+     - Analytical (simple difference)
+     - Uses simple variance of group-time means. Use ``bootstrap()`` method for multiplier bootstrap inference with proper SEs, CIs, and p-values.
+   * - ``SyntheticDiD``
+     - Bootstrap or placebo-based
+     - Default uses bootstrap resampling. Set ``n_bootstrap=0`` for placebo-based inference using pre-treatment residuals.
+
+**Recommendations by sample size:**
+
+- **Large samples (N > 1000, clusters > 50)**: Default analytical SEs are reliable
+- **Medium samples (clusters 30-50)**: Cluster-robust SEs recommended
+- **Small samples (clusters < 30)**: Use wild cluster bootstrap (``inference='wild_bootstrap'``)
+- **Very few clusters (< 10)**: Use Webb 6-point distribution (``weight_type='webb'``)
+
+**Common pitfall:** Forgetting to cluster when units are observed multiple times.
+For panel data, always cluster at the unit level unless you have a strong reason not to.
+
+.. code-block:: python
+
+   # Good: Cluster at unit level for panel data
+   did = DifferenceInDifferences()
+   results = did.fit(data, outcome='y', treated='treated',
+                     post='post', cluster_col='unit_id')
+
+   # Better for few clusters: Wild bootstrap
+   did = DifferenceInDifferences(inference='wild_bootstrap')
+   results = did.fit(data, outcome='y', treated='treated',
+                     post='post', cluster_col='state')
+
 When in Doubt
 -------------
 

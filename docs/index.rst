@@ -40,6 +40,7 @@ Quick Links
 
 - :doc:`quickstart` - Get started with basic examples
 - :doc:`choosing_estimator` - Which estimator should I use?
+- :doc:`troubleshooting` - Common issues and solutions
 - :doc:`r_comparison` - Comparison with R packages
 - :doc:`python_comparison` - Comparison with Python packages
 - :doc:`api/index` - Full API reference
@@ -51,6 +52,7 @@ Quick Links
 
    quickstart
    choosing_estimator
+   troubleshooting
    r_comparison
    python_comparison
 

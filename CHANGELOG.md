@@ -5,6 +5,37 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.0] - 2026-01-04
+
+### Added
+- **Goodman-Bacon decomposition** for TWFE diagnostics
+  - `BaconDecomposition` class for decomposing TWFE into weighted 2x2 comparisons
+  - `Comparison2x2` dataclass for individual comparisons (treated_vs_never, earlier_vs_later, later_vs_earlier)
+  - `BaconDecompositionResults` with weights and estimates by comparison type
+  - `bacon_decompose()` convenience function
+  - `plot_bacon()` visualization for decomposition results
+  - Integration via `TwoWayFixedEffects.decompose()` method
+- **Power analysis** for study design
+  - `PowerAnalysis` class for analytical power calculations
+  - `PowerResults` and `SimulationPowerResults` dataclasses
+  - `compute_mde()`, `compute_power()`, `compute_sample_size()` convenience functions
+  - `simulate_power()` for Monte Carlo simulation-based power analysis
+  - `plot_power_curve()` visualization for power analysis
+  - Tutorial notebook: `docs/tutorials/06_power_analysis.ipynb`
+- **Callaway-Sant'Anna multiplier bootstrap** for inference
+  - `CSBootstrapResults` with standard errors, confidence intervals, p-values
+  - Rademacher, Mammen, and Webb weight distributions
+  - Bootstrap inference for all aggregation methods
+- **Troubleshooting guide** in documentation
+- **Standard error computation guide** explaining SE differences across estimators
+
+### Changed
+- Updated package status to Production/Stable (was Alpha)
+- SyntheticDiD bootstrap now warns when >5% of iterations fail
+
+### Fixed
+- Silent bootstrap failures in SyntheticDiD now produce warnings
+
 ## [0.6.0]
 
 ### Added
@@ -136,6 +167,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `to_dict()` and `to_dataframe()` export methods
   - `is_significant` and `significance_stars` properties
 
+[1.0.0]: https://github.com/igerber/diff-diff/compare/v0.6.0...v1.0.0
 [0.6.0]: https://github.com/igerber/diff-diff/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/igerber/diff-diff/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/igerber/diff-diff/compare/v0.3.0...v0.4.0
