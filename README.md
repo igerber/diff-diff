@@ -1647,9 +1647,23 @@ This library implements methods from the following scholarly works:
 
 - **Roth, J. (2022).** "Pretest with Caution: Event-Study Estimates after Testing for Parallel Trends." *American Economic Review: Insights*, 4(3), 305-322. [https://doi.org/10.1257/aeri.20210236](https://doi.org/10.1257/aeri.20210236)
 
+- **Lakens, D. (2017).** "Equivalence Tests: A Practical Primer for t Tests, Correlations, and Meta-Analyses." *Social Psychological and Personality Science*, 8(4), 355-362. [https://doi.org/10.1177/1948550617697177](https://doi.org/10.1177/1948550617697177)
+
+### Honest DiD / Sensitivity Analysis
+
+The `HonestDiD` module implements sensitivity analysis methods for relaxing the parallel trends assumption:
+
 - **Rambachan, A., & Roth, J. (2023).** "A More Credible Approach to Parallel Trends." *The Review of Economic Studies*, 90(5), 2555-2591. [https://doi.org/10.1093/restud/rdad018](https://doi.org/10.1093/restud/rdad018)
 
-- **Lakens, D. (2017).** "Equivalence Tests: A Practical Primer for t Tests, Correlations, and Meta-Analyses." *Social Psychological and Personality Science*, 8(4), 355-362. [https://doi.org/10.1177/1948550617697177](https://doi.org/10.1177/1948550617697177)
+  This paper introduces the "Honest DiD" framework implemented in our `HonestDiD` class:
+  - **Relative Magnitudes (ΔRM)**: Bounds post-treatment violations by a multiple of observed pre-treatment violations
+  - **Smoothness (ΔSD)**: Bounds on second differences of trend violations, allowing for linear extrapolation of pre-trends
+  - **Breakdown Analysis**: Finding the smallest violation magnitude that would overturn conclusions
+  - **Robust Confidence Intervals**: Valid inference under partial identification
+
+- **Roth, J., & Sant'Anna, P. H. C. (2023).** "When Is Parallel Trends Sensitive to Functional Form?" *Econometrica*, 91(2), 737-747. [https://doi.org/10.3982/ECTA19402](https://doi.org/10.3982/ECTA19402)
+
+  Discusses functional form sensitivity in parallel trends assumptions, relevant to understanding when smoothness restrictions are appropriate.
 
 ### Multi-Period and Staggered Adoption
 
