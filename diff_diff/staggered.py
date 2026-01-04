@@ -553,6 +553,12 @@ class CallawaySantAnna:
     n_bootstrap : int, default=0
         Number of bootstrap iterations for inference.
         If 0, uses analytical standard errors.
+        Recommended: 999 or more for reliable inference.
+    bootstrap_weight_type : str, default="rademacher"
+        Type of weights for multiplier bootstrap:
+        - "rademacher": +1/-1 with equal probability (standard choice)
+        - "mammen": Two-point distribution (asymptotically valid, matches skewness)
+        - "webb": Six-point distribution (recommended when n_clusters < 20)
     seed : int, optional
         Random seed for reproducibility.
 
@@ -1455,6 +1461,16 @@ class CallawaySantAnna:
         CSBootstrapResults
             Bootstrap inference results.
         """
+        # Warn about low bootstrap iterations
+        if self.n_bootstrap < 50:
+            warnings.warn(
+                f"n_bootstrap={self.n_bootstrap} is low. Consider n_bootstrap >= 199 "
+                "for reliable inference. Percentile confidence intervals and p-values "
+                "may be unreliable with few iterations.",
+                UserWarning,
+                stacklevel=3,
+            )
+
         rng = np.random.default_rng(self.seed)
 
         # Collect all unique units across all (g,t) combinations

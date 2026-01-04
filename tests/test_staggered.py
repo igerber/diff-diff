@@ -1080,3 +1080,42 @@ class TestCallawaySantAnnaBootstrap:
 
             assert results.bootstrap_results is not None
             assert results.overall_se > 0, f"Failed for method {method}"
+
+    def test_bootstrap_with_balanced_event_study(self):
+        """Test bootstrap with balanced event study aggregation."""
+        data = generate_staggered_data(n_units=100, n_periods=12, seed=42)
+
+        cs = CallawaySantAnna(n_bootstrap=99, seed=42)
+        results = cs.fit(
+            data,
+            outcome='outcome',
+            unit='unit',
+            time='time',
+            first_treat='first_treat',
+            aggregate='event_study',
+            balance_e=0  # Balance at treatment time
+        )
+
+        assert results.bootstrap_results is not None
+        assert results.bootstrap_results.event_study_ses is not None
+        assert results.event_study_effects is not None
+
+        # Check that event study effects have valid bootstrap SEs
+        for e, effect in results.event_study_effects.items():
+            assert effect['se'] > 0
+            assert effect['conf_int'][0] < effect['conf_int'][1]
+
+    def test_bootstrap_low_iterations_warning(self):
+        """Test that low n_bootstrap triggers a warning."""
+        data = generate_staggered_data(n_units=50, seed=42)
+
+        cs = CallawaySantAnna(n_bootstrap=30, seed=42)
+
+        with pytest.warns(UserWarning, match="n_bootstrap=30 is low"):
+            cs.fit(
+                data,
+                outcome='outcome',
+                unit='unit',
+                time='time',
+                first_treat='first_treat'
+            )
