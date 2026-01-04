@@ -18,7 +18,7 @@ A production-ready DiD library needs:
 
 | Feature | Status | Priority | Why It Matters |
 |---------|--------|----------|----------------|
-| **Honest DiD (Rambachan-Roth)** | Not Started | 1.0 Blocker | Reviewers expect sensitivity analysis |
+| **Honest DiD (Rambachan-Roth)** | ✅ Implemented | 1.0 Blocker | Reviewers expect sensitivity analysis |
 | **CallawaySantAnna Covariates** | ✅ Implemented | 1.0 Blocker | Conditional PT often required in practice |
 | **API Documentation Site** | Not Started | 1.0 Blocker | Credibility and discoverability |
 | Goodman-Bacon Decomposition | Not Started | 1.0 Target | Explains when TWFE fails |
@@ -35,17 +35,30 @@ A production-ready DiD library needs:
 These features are essential for a credible 1.0 release. Without them, the library has significant gaps compared to R alternatives.
 
 ### Honest DiD / Sensitivity Analysis (Rambachan-Roth)
-**Status**: Not Started
+**Status**: ✅ Implemented
 **Effort**: High
 **Practitioner Value**: ⭐⭐⭐⭐⭐
 
 **Why this matters**: Pre-trends tests have low power and can exacerbate bias. Increasingly, journal reviewers and seminar audiences expect sensitivity analysis showing "how robust are results to violations of parallel trends?" This is becoming as standard as reporting robust SEs.
 
-**Features needed**:
-- Compute bounds under restrictions on trend deviations (relative magnitudes)
-- Confidence intervals valid under partial identification
-- Breakdown analysis: "How much violation would nullify the result?"
-- Visualization of sensitivity curves
+**Implemented features**:
+- ✅ Relative magnitudes (ΔRM): Bounds post-treatment violations by M̄ × max pre-period violation
+- ✅ Smoothness (ΔSD): Bounds on second differences of trend violations
+- ✅ Combined restrictions (ΔSDRM): Both smoothness and relative magnitude bounds
+- ✅ FLCI (Fixed Length Confidence Interval) for smoothness restrictions
+- ✅ C-LF (Conditional Least Favorable) for relative magnitudes
+- ✅ Breakdown analysis: Find smallest M where robust CI includes zero
+- ✅ Sensitivity analysis over grid of M values
+- ✅ Visualization: `plot_sensitivity()` and `plot_honest_event_study()`
+- ✅ Comprehensive test suite (49 tests)
+- ✅ Tutorial notebook: `docs/tutorials/05_honest_did.ipynb`
+
+**Future extensions** (post-1.0):
+- Improved C-LF implementation with direct optimization instead of grid search
+- Support for CallawaySantAnnaResults (currently only MultiPeriodDiDResults)
+- Event-study-specific bounds for each post-period
+- Hybrid inference methods
+- Simulation-based power analysis for honest bounds
 
 **References**:
 - Rambachan, A., & Roth, J. (2023). A More Credible Approach to Parallel Trends. *Review of Economic Studies*.
@@ -245,6 +258,19 @@ Beyond the API site:
 
 ## Completed Features
 
+### v0.5.2
+- [x] **Honest DiD sensitivity analysis** (Rambachan & Roth 2023)
+  - Relative magnitudes (ΔRM) and smoothness (ΔSD) restrictions
+  - Combined restrictions (ΔSDRM)
+  - FLCI and C-LF confidence interval methods
+  - Breakdown value computation
+  - Sensitivity analysis over M grid
+  - `plot_sensitivity()` and `plot_honest_event_study()` visualization
+  - HonestDiD, HonestDiDResults, SensitivityResults classes
+  - DeltaSD, DeltaRM, DeltaSDRM restriction classes
+  - Tutorial notebook: `05_honest_did.ipynb`
+  - 49 comprehensive tests
+
 ### v0.5.1
 - [x] Comprehensive test coverage for `utils.py` module (72 tests)
 - [x] Tutorial notebooks in `docs/tutorials/`
@@ -267,10 +293,10 @@ Beyond the API site:
 
 ## Suggested 1.0 Milestone Plan
 
-1. **CallawaySantAnna Covariates** - Makes the staggered estimator production-ready
-2. **Honest DiD (Rambachan-Roth)** - Addresses the key credibility gap
+1. ✅ **CallawaySantAnna Covariates** - Makes the staggered estimator production-ready
+2. ✅ **Honest DiD (Rambachan-Roth)** - Addresses the key credibility gap
 3. **API Documentation Site** - Professional presentation
 4. **Goodman-Bacon Decomposition** - Key diagnostic for TWFE users
 5. **Power Analysis** - Study design tool practitioners need
 
-With these five additions, diff-diff would be competitive with R's `did` + `HonestDiD` ecosystem.
+With items 1-2 complete, diff-diff now has feature parity with R's `did` + `HonestDiD` ecosystem for core sensitivity analysis. The remaining items (3-5) will complete the 1.0 release.

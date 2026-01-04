@@ -12,6 +12,7 @@ import pandas as pd
 if TYPE_CHECKING:
     from diff_diff.results import MultiPeriodDiDResults
     from diff_diff.staggered import CallawaySantAnnaResults
+    from diff_diff.honest_did import HonestDiDResults, SensitivityResults
 
 # Type alias for results that can be plotted
 PlottableResults = Union[
@@ -460,6 +461,355 @@ def plot_group_effects(
     ax.set_xlabel(xlabel)
     ax.set_ylabel(ylabel)
     ax.set_title(title)
+    ax.legend(loc='best')
+    ax.grid(True, alpha=0.3, axis='y')
+
+    fig.tight_layout()
+
+    if show:
+        plt.show()
+
+    return ax
+
+
+def plot_sensitivity(
+    sensitivity_results: "SensitivityResults",
+    *,
+    show_bounds: bool = True,
+    show_ci: bool = True,
+    breakdown_line: bool = True,
+    figsize: Tuple[float, float] = (10, 6),
+    title: str = "Honest DiD Sensitivity Analysis",
+    xlabel: str = "M (restriction parameter)",
+    ylabel: str = "Treatment Effect",
+    bounds_color: str = "#2563eb",
+    bounds_alpha: float = 0.3,
+    ci_color: str = "#2563eb",
+    ci_linewidth: float = 1.5,
+    breakdown_color: str = "#dc2626",
+    original_color: str = "#1f2937",
+    ax: Optional[Any] = None,
+    show: bool = True,
+) -> Any:
+    """
+    Plot sensitivity analysis results from Honest DiD.
+
+    Shows how treatment effect bounds and confidence intervals
+    change as the restriction parameter M varies.
+
+    Parameters
+    ----------
+    sensitivity_results : SensitivityResults
+        Results from HonestDiD.sensitivity_analysis().
+    show_bounds : bool, default=True
+        Whether to show the identified set bounds as shaded region.
+    show_ci : bool, default=True
+        Whether to show robust confidence interval lines.
+    breakdown_line : bool, default=True
+        Whether to show vertical line at breakdown value.
+    figsize : tuple, default=(10, 6)
+        Figure size (width, height) in inches.
+    title : str
+        Plot title.
+    xlabel : str
+        X-axis label.
+    ylabel : str
+        Y-axis label.
+    bounds_color : str
+        Color for identified set shading.
+    bounds_alpha : float
+        Transparency for identified set shading.
+    ci_color : str
+        Color for confidence interval lines.
+    ci_linewidth : float
+        Line width for CI lines.
+    breakdown_color : str
+        Color for breakdown value line.
+    original_color : str
+        Color for original estimate line.
+    ax : matplotlib.axes.Axes, optional
+        Axes to plot on. If None, creates new figure.
+    show : bool, default=True
+        Whether to call plt.show().
+
+    Returns
+    -------
+    matplotlib.axes.Axes
+        The axes object containing the plot.
+
+    Examples
+    --------
+    >>> from diff_diff import MultiPeriodDiD
+    >>> from diff_diff.honest_did import HonestDiD
+    >>> from diff_diff.visualization import plot_sensitivity
+    >>>
+    >>> # Fit event study and run sensitivity analysis
+    >>> results = MultiPeriodDiD().fit(data, ...)
+    >>> honest = HonestDiD(method='relative_magnitude')
+    >>> sensitivity = honest.sensitivity_analysis(results)
+    >>>
+    >>> # Create sensitivity plot
+    >>> plot_sensitivity(sensitivity)
+    """
+    try:
+        import matplotlib.pyplot as plt
+    except ImportError:
+        raise ImportError(
+            "matplotlib is required for plotting. "
+            "Install it with: pip install matplotlib"
+        )
+
+    # Create figure if needed
+    if ax is None:
+        fig, ax = plt.subplots(figsize=figsize)
+    else:
+        fig = ax.get_figure()
+
+    M = sensitivity_results.M_values
+    bounds_arr = np.array(sensitivity_results.bounds)
+    ci_arr = np.array(sensitivity_results.robust_cis)
+
+    # Plot original estimate
+    ax.axhline(
+        y=sensitivity_results.original_estimate,
+        color=original_color,
+        linestyle='-',
+        linewidth=1.5,
+        label='Original estimate',
+        alpha=0.7
+    )
+
+    # Plot zero line
+    ax.axhline(y=0, color='gray', linestyle='--', linewidth=1, alpha=0.5)
+
+    # Plot identified set bounds
+    if show_bounds:
+        ax.fill_between(
+            M, bounds_arr[:, 0], bounds_arr[:, 1],
+            alpha=bounds_alpha,
+            color=bounds_color,
+            label='Identified set'
+        )
+
+    # Plot confidence intervals
+    if show_ci:
+        ax.plot(
+            M, ci_arr[:, 0],
+            color=ci_color,
+            linewidth=ci_linewidth,
+            label='Robust CI'
+        )
+        ax.plot(
+            M, ci_arr[:, 1],
+            color=ci_color,
+            linewidth=ci_linewidth
+        )
+
+    # Plot breakdown line
+    if breakdown_line and sensitivity_results.breakdown_M is not None:
+        ax.axvline(
+            x=sensitivity_results.breakdown_M,
+            color=breakdown_color,
+            linestyle=':',
+            linewidth=2,
+            label=f'Breakdown (M={sensitivity_results.breakdown_M:.2f})'
+        )
+
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel(ylabel)
+    ax.set_title(title)
+    ax.legend(loc='best')
+    ax.grid(True, alpha=0.3)
+
+    fig.tight_layout()
+
+    if show:
+        plt.show()
+
+    return ax
+
+
+def plot_honest_event_study(
+    honest_results: "HonestDiDResults",
+    *,
+    periods: Optional[List[Any]] = None,
+    reference_period: Optional[Any] = None,
+    figsize: Tuple[float, float] = (10, 6),
+    title: str = "Event Study with Honest Confidence Intervals",
+    xlabel: str = "Period Relative to Treatment",
+    ylabel: str = "Treatment Effect",
+    original_color: str = "#6b7280",
+    honest_color: str = "#2563eb",
+    marker: str = "o",
+    markersize: int = 8,
+    capsize: int = 4,
+    ax: Optional[Any] = None,
+    show: bool = True,
+) -> Any:
+    """
+    Create event study plot with Honest DiD confidence intervals.
+
+    Shows both the original confidence intervals (assuming parallel trends)
+    and the robust confidence intervals that allow for bounded violations.
+
+    Parameters
+    ----------
+    honest_results : HonestDiDResults
+        Results from HonestDiD.fit() that include event_study_bounds.
+    periods : list, optional
+        Periods to plot. If None, uses all available periods.
+    reference_period : any, optional
+        Reference period to show as hollow marker.
+    figsize : tuple, default=(10, 6)
+        Figure size.
+    title : str
+        Plot title.
+    xlabel : str
+        X-axis label.
+    ylabel : str
+        Y-axis label.
+    original_color : str
+        Color for original (standard) confidence intervals.
+    honest_color : str
+        Color for honest (robust) confidence intervals.
+    marker : str
+        Marker style.
+    markersize : int
+        Marker size.
+    capsize : int
+        Error bar cap size.
+    ax : matplotlib.axes.Axes, optional
+        Axes to plot on.
+    show : bool, default=True
+        Whether to call plt.show().
+
+    Returns
+    -------
+    matplotlib.axes.Axes
+        The axes object.
+
+    Notes
+    -----
+    This function requires the HonestDiDResults to have been computed
+    with event_study_bounds. If only a scalar bound was computed,
+    use plot_sensitivity() instead.
+    """
+    try:
+        import matplotlib.pyplot as plt
+    except ImportError:
+        raise ImportError(
+            "matplotlib is required for plotting. "
+            "Install it with: pip install matplotlib"
+        )
+
+    from scipy import stats as scipy_stats
+
+    # Get original results for standard CIs
+    original_results = honest_results.original_results
+    if original_results is None:
+        raise ValueError(
+            "HonestDiDResults must have original_results to plot event study"
+        )
+
+    # Extract data from original results
+    if hasattr(original_results, 'period_effects'):
+        # MultiPeriodDiDResults
+        effects_dict = {
+            p: pe.effect for p, pe in original_results.period_effects.items()
+        }
+        se_dict = {
+            p: pe.se for p, pe in original_results.period_effects.items()
+        }
+        if periods is None:
+            periods = list(original_results.period_effects.keys())
+    elif hasattr(original_results, 'event_study_effects'):
+        # CallawaySantAnnaResults
+        effects_dict = {
+            t: data['effect']
+            for t, data in original_results.event_study_effects.items()
+        }
+        se_dict = {
+            t: data['se']
+            for t, data in original_results.event_study_effects.items()
+        }
+        if periods is None:
+            periods = sorted(original_results.event_study_effects.keys())
+    else:
+        raise TypeError("Cannot extract event study data from original_results")
+
+    # Create figure
+    if ax is None:
+        fig, ax = plt.subplots(figsize=figsize)
+    else:
+        fig = ax.get_figure()
+
+    # Compute CIs
+    alpha = honest_results.alpha
+    z = scipy_stats.norm.ppf(1 - alpha / 2)
+
+    x_vals = list(range(len(periods)))
+    period_to_x = {p: i for i, p in enumerate(periods)}
+
+    effects = [effects_dict[p] for p in periods]
+    original_ci_lower = [effects_dict[p] - z * se_dict[p] for p in periods]
+    original_ci_upper = [effects_dict[p] + z * se_dict[p] for p in periods]
+
+    # Get honest bounds if available for each period
+    if honest_results.event_study_bounds:
+        honest_ci_lower = [
+            honest_results.event_study_bounds[p]['ci_lb']
+            for p in periods
+        ]
+        honest_ci_upper = [
+            honest_results.event_study_bounds[p]['ci_ub']
+            for p in periods
+        ]
+    else:
+        # Use scalar bounds applied to all periods
+        honest_ci_lower = [honest_results.ci_lb] * len(periods)
+        honest_ci_upper = [honest_results.ci_ub] * len(periods)
+
+    # Zero line
+    ax.axhline(y=0, color='gray', linestyle='--', linewidth=1, alpha=0.5)
+
+    # Plot original CIs (thinner, background)
+    yerr_orig = [
+        [e - l for e, l in zip(effects, original_ci_lower)],
+        [u - e for e, u in zip(effects, original_ci_upper)]
+    ]
+    ax.errorbar(
+        x_vals, effects, yerr=yerr_orig,
+        fmt='none', color=original_color, capsize=capsize - 1,
+        linewidth=1, alpha=0.6, label='Standard CI'
+    )
+
+    # Plot honest CIs (thicker, foreground)
+    yerr_honest = [
+        [e - l for e, l in zip(effects, honest_ci_lower)],
+        [u - e for e, u in zip(effects, honest_ci_upper)]
+    ]
+    ax.errorbar(
+        x_vals, effects, yerr=yerr_honest,
+        fmt='none', color=honest_color, capsize=capsize,
+        linewidth=2, label=f'Honest CI (M={honest_results.M:.2f})'
+    )
+
+    # Plot point estimates
+    for i, (x, effect, period) in enumerate(zip(x_vals, effects, periods)):
+        is_ref = period == reference_period
+        if is_ref:
+            ax.plot(x, effect, marker=marker, markersize=markersize,
+                    markerfacecolor='white', markeredgecolor=honest_color,
+                    markeredgewidth=2, zorder=3)
+        else:
+            ax.plot(x, effect, marker=marker, markersize=markersize,
+                    color=honest_color, zorder=3)
+
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel(ylabel)
+    ax.set_title(title)
+    ax.set_xticks(x_vals)
+    ax.set_xticklabels([str(p) for p in periods])
     ax.legend(loc='best')
     ax.grid(True, alpha=0.3, axis='y')
 
