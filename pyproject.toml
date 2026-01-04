@@ -51,7 +51,7 @@ docs = [
 
 [project.urls]
 Homepage = "https://github.com/igerber/diff-diff"
-Documentation = "https://github.com/igerber/diff-diff#readme"
+Documentation = "https://diff-diff.readthedocs.io"
 Repository = "https://github.com/igerber/diff-diff"
 Issues = "https://github.com/igerber/diff-diff/issues"
 

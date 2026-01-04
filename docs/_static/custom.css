@@ -1,0 +1,37 @@
+/* Custom CSS for diff-diff documentation */
+
+/* Improve code block readability */
+.highlight {
+    background: #f8f8f8 !important;
+}
+
+/* Better table styling */
+table.docutils {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+table.docutils td, table.docutils th {
+    padding: 8px 12px;
+    border: 1px solid #e1e4e5;
+}
+
+/* Improve admonition styling */
+.admonition {
+    margin: 1em 0;
+    padding: 12px;
+}
+
+.admonition-title {
+    font-weight: bold;
+}
+
+/* Method/function signature styling */
+.sig-name {
+    font-weight: bold;
+}
+
+/* Better parameter list styling */
+.field-list {
+    margin-top: 1em;
+}

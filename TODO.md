@@ -10,7 +10,7 @@ A production-ready DiD library needs:
 3. ✅ **Assumption diagnostics** - Parallel trends tests, placebo tests
 4. ⚠️ **Sensitivity analysis** - What if parallel trends is violated? (Rambachan-Roth)
 5. ⚠️ **Conditional parallel trends** - Covariate adjustment for staggered DiD
-6. ⚠️ **Documentation** - API reference site for discoverability
+6. ✅ **Documentation** - API reference site for discoverability
 
 ---
 
@@ -20,7 +20,7 @@ A production-ready DiD library needs:
 |---------|--------|----------|----------------|
 | **Honest DiD (Rambachan-Roth)** | ✅ Implemented | 1.0 Blocker | Reviewers expect sensitivity analysis |
 | **CallawaySantAnna Covariates** | ✅ Implemented | 1.0 Blocker | Conditional PT often required in practice |
-| **API Documentation Site** | Not Started | 1.0 Blocker | Credibility and discoverability |
+| **API Documentation Site** | ✅ Implemented | 1.0 Blocker | Credibility and discoverability |
 | Goodman-Bacon Decomposition | Not Started | 1.0 Target | Explains when TWFE fails |
 | Power Analysis | Not Started | 1.0 Target | Study design tool |
 | CallawaySantAnna Bootstrap | Not Implemented | 1.0 Target | Better inference with few clusters |
@@ -92,21 +92,30 @@ results = cs.fit(
 ```
 
 ### API Documentation Site
-**Status**: Not Started
+**Status**: ✅ Implemented
 **Effort**: Medium
 **Practitioner Value**: ⭐⭐⭐⭐
 
-**Why this matters**: For a 1.0 release, users should be able to find comprehensive API documentation online. Currently only docstrings and README exist.
+**Why this matters**: For a 1.0 release, users should be able to find comprehensive API documentation online.
 
-**Options**:
-- Sphinx + ReadTheDocs (traditional, well-supported)
-- mkdocs-material (modern, clean look)
-- pdoc (simple, auto-generates from docstrings)
+**Implementation**:
+- ✅ Sphinx + ReadTheDocs theme with autodoc and napoleon extensions
+- ✅ Full API reference auto-generated from docstrings
+- ✅ "Which estimator should I use?" decision guide with flowchart
+- ✅ Comparison with R packages (`did`, `HonestDiD`, `synthdid`)
+- ✅ Getting started / quickstart guide
+- ✅ ReadTheDocs configuration for automated builds
+- ✅ Module-by-module API documentation:
+  - Estimators (DifferenceInDifferences, TWFE, MultiPeriodDiD, SyntheticDiD)
+  - Staggered (CallawaySantAnna, CallawaySantAnnaResults, GroupTimeEffect)
+  - Results (DiDResults, MultiPeriodDiDResults, SyntheticDiDResults, PeriodEffect)
+  - Visualization (plot_event_study, plot_group_effects, plot_sensitivity, plot_honest_event_study)
+  - Diagnostics (placebo tests, permutation tests, leave-one-out)
+  - Honest DiD (HonestDiD, DeltaSD, DeltaRM, DeltaSDRM)
+  - Utils (parallel trends testing, wild bootstrap)
+  - Data Prep (generate_did_data, balance_panel, etc.)
 
-**Should include**:
-- Full API reference
-- "When to use which estimator" decision guide
-- Comparison with R packages (`did`, `HonestDiD`, `synthdid`)
+**Build locally**: `cd docs && make html`
 
 ---
 
@@ -295,7 +304,7 @@ Beyond the API site:
 
 1. ✅ **CallawaySantAnna Covariates** - Makes the staggered estimator production-ready
 2. ✅ **Honest DiD (Rambachan-Roth)** - Addresses the key credibility gap
-3. **API Documentation Site** - Professional presentation
+3. ✅ **API Documentation Site** - Professional presentation
 4. **Goodman-Bacon Decomposition** - Key diagnostic for TWFE users
 5. **Power Analysis** - Study design tool practitioners need
 
