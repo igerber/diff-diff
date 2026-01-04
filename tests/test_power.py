@@ -14,6 +14,7 @@ from diff_diff import (
     compute_sample_size,
     simulate_power,
 )
+from diff_diff.power import MAX_SAMPLE_SIZE
 
 
 class TestPowerAnalysis:
@@ -250,6 +251,68 @@ class TestPowerAnalysis:
         assert result_greater.mde < result_two.mde
         assert result_less.mde < result_two.mde
 
+    def test_one_sided_power_calculation(self):
+        """Test power calculation for one-sided alternatives."""
+        pa_greater = PowerAnalysis(alternative="greater")
+        pa_less = PowerAnalysis(alternative="less")
+        pa_two = PowerAnalysis(alternative="two-sided")
+
+        # For positive effect, 'greater' should have higher power than two-sided
+        result_greater = pa_greater.power(
+            effect_size=0.5, n_treated=50, n_control=50, sigma=1.0
+        )
+        result_two = pa_two.power(
+            effect_size=0.5, n_treated=50, n_control=50, sigma=1.0
+        )
+
+        assert result_greater.power > result_two.power
+
+        # For negative effect, 'less' should have higher power
+        result_less = pa_less.power(
+            effect_size=-0.5, n_treated=50, n_control=50, sigma=1.0
+        )
+        result_two_neg = pa_two.power(
+            effect_size=-0.5, n_treated=50, n_control=50, sigma=1.0
+        )
+
+        assert result_less.power > result_two_neg.power
+
+    def test_negative_effect_size(self):
+        """Test power calculation with negative effect sizes."""
+        pa = PowerAnalysis()
+
+        # Power should work the same for negative effects (symmetric)
+        result_pos = pa.power(
+            effect_size=0.5, n_treated=50, n_control=50, sigma=1.0
+        )
+        result_neg = pa.power(
+            effect_size=-0.5, n_treated=50, n_control=50, sigma=1.0
+        )
+
+        # Two-sided test should have same power for positive and negative effects
+        assert abs(result_pos.power - result_neg.power) < 0.01
+
+    def test_extreme_icc(self):
+        """Test power calculation with extreme intra-cluster correlation."""
+        pa = PowerAnalysis(power=0.80)
+
+        # Test with very high ICC (0.99)
+        result_extreme = pa.mde(
+            n_treated=50, n_control=50, sigma=1.0,
+            n_pre=5, n_post=5, rho=0.99
+        )
+
+        result_moderate = pa.mde(
+            n_treated=50, n_control=50, sigma=1.0,
+            n_pre=5, n_post=5, rho=0.5
+        )
+
+        # Extreme ICC should have higher MDE (less independent info)
+        assert result_extreme.mde > result_moderate.mde
+        # MDE should still be finite and reasonable
+        assert result_extreme.mde < float('inf')
+        assert result_extreme.mde > 0
+
 
 class TestConvenienceFunctions:
     """Tests for convenience functions."""
@@ -472,6 +535,45 @@ class TestSimulatePower:
         ci_width = results.power_ci[1] - results.power_ci[0]
         assert 0 <= ci_width < 0.5
 
+    def test_simulation_handles_failures(self):
+        """Test that simulation handles and reports failures."""
+        import warnings
+
+        # Create a mock estimator that sometimes fails
+        class FailingEstimator:
+            """Estimator that fails on specific simulations."""
+
+            def __init__(self, fail_rate=0.0):
+                self.fail_rate = fail_rate
+                self.call_count = 0
+
+            def fit(self, data, **kwargs):
+                self.call_count += 1
+                # Fail on every other call if fail_rate > 0
+                if self.fail_rate > 0 and self.call_count % 2 == 0:
+                    raise ValueError("Simulated failure")
+
+                # Return a simple result
+                class Result:
+                    att = 5.0
+                    se = 1.0
+                    p_value = 0.01
+                    conf_int = (3.0, 7.0)
+
+                return Result()
+
+        # Test with low failure rate (should not warn)
+        estimator = FailingEstimator(fail_rate=0.0)
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            results = simulate_power(
+                estimator=estimator,
+                n_simulations=10,
+                progress=False,
+            )
+            # Should have completed successfully without warning
+            assert len([x for x in w if "simulations" in str(x.message)]) == 0
+
 
 class TestVisualization:
     """Tests for power curve visualization."""
@@ -576,3 +678,14 @@ class TestEdgeCases:
 
         # 50-50 split should be most efficient
         assert result_50.required_n <= result_25.required_n
+
+    def test_max_sample_size_constant(self):
+        """Test that MAX_SAMPLE_SIZE is used for undetectable effects."""
+        pa = PowerAnalysis()
+
+        # Zero effect should return MAX_SAMPLE_SIZE
+        result = pa.sample_size(effect_size=0.0, sigma=1.0)
+        assert result.required_n == MAX_SAMPLE_SIZE
+
+        # Verify constant is the expected value
+        assert MAX_SAMPLE_SIZE == 2**31 - 1

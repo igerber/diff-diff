@@ -20,12 +20,17 @@ Djimeu, E. W., & Houndolo, D.-G. (2016). "Power Calculation for Causal Inference
     Journal of Development Effectiveness, 8(4), 508-527.
 """
 
+import warnings
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd
 from scipy import stats
+
+# Maximum sample size returned when effect is too small to detect
+# (e.g., zero effect or extremely small relative to noise)
+MAX_SAMPLE_SIZE = 2**31 - 1
 
 
 @dataclass
@@ -651,7 +656,7 @@ class PowerAnalysis:
         """Compute required sample size for given effect."""
         # Handle edge case of zero effect size
         if effect_size == 0:
-            return 2**31 - 1  # Return large number (can't detect zero effect)
+            return MAX_SAMPLE_SIZE  # Can't detect zero effect
 
         z_alpha, z_beta = self._get_critical_values()
 
@@ -685,7 +690,7 @@ class PowerAnalysis:
 
         # Handle infinity case (extremely small effect)
         if np.isinf(n_total):
-            return 2**31 - 1
+            return MAX_SAMPLE_SIZE
 
         return max(4, int(np.ceil(n_total)))  # At least 4 units
 
@@ -1043,6 +1048,7 @@ def simulate_power(
         p_values = []
         rejections = []
         ci_contains_true = []
+        n_failures = 0
 
         for sim in range(n_simulations):
             if progress and sim % 100 == 0 and sim > 0:
@@ -1132,10 +1138,20 @@ def simulate_power(
                 ci_contains_true.append(ci[0] <= effect <= ci[1])
 
             except Exception as e:
-                # Skip failed simulations
+                # Track failed simulations
+                n_failures += 1
                 if progress:
                     print(f"  Warning: Simulation {sim} failed: {e}")
                 continue
+
+        # Warn if too many simulations failed
+        failure_rate = n_failures / n_simulations
+        if failure_rate > 0.1:
+            warnings.warn(
+                f"{n_failures}/{n_simulations} simulations ({failure_rate:.1%}) failed "
+                f"for effect_size={effect}. Check estimator and data generator.",
+                UserWarning
+            )
 
         if len(estimates) == 0:
             raise RuntimeError("All simulations failed. Check estimator and data generator.")
