@@ -26,9 +26,7 @@ from scipy import optimize, stats
 
 from diff_diff.results import (
     MultiPeriodDiDResults,
-    _get_significance_stars,
 )
-
 
 # =============================================================================
 # Delta Restriction Classes

@@ -4,20 +4,19 @@ Tests for Wild Cluster Bootstrap functionality.
 Tests the wild_bootstrap_se() function and its integration with DiD estimators.
 """
 
+
 import numpy as np
 import pandas as pd
 import pytest
-import warnings
 
 from diff_diff import DifferenceInDifferences, TwoWayFixedEffects
 from diff_diff.utils import (
-    wild_bootstrap_se,
     WildBootstrapResults,
+    _generate_mammen_weights,
     _generate_rademacher_weights,
     _generate_webb_weights,
-    _generate_mammen_weights,
+    wild_bootstrap_se,
 )
-
 
 # =============================================================================
 # Fixtures

@@ -12,21 +12,20 @@ import pytest
 
 from diff_diff import MultiPeriodDiD
 from diff_diff.honest_did import (
-    DeltaSD,
     DeltaRM,
+    DeltaSD,
     DeltaSDRM,
     HonestDiD,
     HonestDiDResults,
     SensitivityResults,
-    compute_honest_did,
-    _construct_A_sd,
-    _construct_constraints_sd,
-    _construct_constraints_rm,
     _compute_flci,
+    _construct_A_sd,
+    _construct_constraints_rm,
+    _construct_constraints_sd,
     _extract_event_study_params,
+    compute_honest_did,
 )
 from diff_diff.results import MultiPeriodDiDResults, PeriodEffect
-
 
 # =============================================================================
 # Fixtures
@@ -442,8 +441,9 @@ class TestBreakdownValue:
             assert result_before.is_significant
 
             # At/after breakdown, should not be significant
-            result_after = honest.fit(mock_multiperiod_results, M=breakdown * 1.1)
-            # This might not hold precisely due to the binary search tolerance
+            # We call fit but don't assert on significance since
+            # the binary search tolerance may not match exactly
+            honest.fit(mock_multiperiod_results, M=breakdown * 1.1)
 
 
 # =============================================================================

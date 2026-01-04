@@ -7,15 +7,15 @@ import pandas as pd
 import pytest
 
 from diff_diff.prep import (
-    make_treatment_indicator,
-    make_post_indicator,
-    wide_to_long,
-    balance_panel,
-    validate_did_data,
-    summarize_did_data,
-    generate_did_data,
-    create_event_time,
     aggregate_to_cohorts,
+    balance_panel,
+    create_event_time,
+    generate_did_data,
+    make_post_indicator,
+    make_treatment_indicator,
+    summarize_did_data,
+    validate_did_data,
+    wide_to_long,
 )
 
 

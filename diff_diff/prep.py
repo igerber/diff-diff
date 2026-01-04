@@ -6,7 +6,7 @@ including creating treatment indicators, reshaping panel data, and
 generating synthetic datasets for testing.
 """
 
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Union
 
 import numpy as np
 import pandas as pd

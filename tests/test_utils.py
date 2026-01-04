@@ -17,21 +17,20 @@ import pytest
 from scipy import stats
 
 from diff_diff.utils import (
-    validate_binary,
-    compute_robust_se,
-    compute_confidence_interval,
-    compute_p_value,
+    _compute_outcome_changes,
+    _project_simplex,
     check_parallel_trends,
     check_parallel_trends_robust,
-    equivalence_test_trends,
-    _compute_outcome_changes,
+    compute_confidence_interval,
+    compute_p_value,
+    compute_placebo_effects,
+    compute_robust_se,
+    compute_sdid_estimator,
     compute_synthetic_weights,
     compute_time_weights,
-    compute_placebo_effects,
-    compute_sdid_estimator,
-    _project_simplex,
+    equivalence_test_trends,
+    validate_binary,
 )
-
 
 # =============================================================================
 # Fixtures
@@ -564,7 +563,7 @@ class TestCheckParallelTrends:
 
         # Should not reject parallel trends
         assert results["p_value"] > 0.05
-        assert results["parallel_trends_plausible"] == True
+        assert results["parallel_trends_plausible"]
 
     def test_non_parallel_trends_detected(self, non_parallel_trends_data):
         """Test that non-parallel trends are detected."""
@@ -578,7 +577,7 @@ class TestCheckParallelTrends:
 
         # Should reject parallel trends (different slopes)
         assert results["p_value"] < 0.05
-        assert results["parallel_trends_plausible"] == False
+        assert not results["parallel_trends_plausible"]
 
     def test_trend_difference_sign(self, non_parallel_trends_data):
         """Test that trend difference has correct sign."""

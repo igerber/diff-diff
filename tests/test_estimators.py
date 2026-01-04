@@ -5,8 +5,8 @@ import pandas as pd
 import pytest
 
 from diff_diff import (
-    DifferenceInDifferences,
     DiDResults,
+    DifferenceInDifferences,
     MultiPeriodDiD,
     MultiPeriodDiDResults,
     PeriodEffect,
