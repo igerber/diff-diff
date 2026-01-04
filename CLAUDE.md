@@ -37,8 +37,13 @@ mypy diff_diff
 
 - **`diff_diff/estimators.py`** - Core estimator classes implementing DiD methods:
   - `DifferenceInDifferences` - Basic 2x2 DiD with formula or column-name interface
-  - `TwoWayFixedEffects` - Panel DiD with unit and time fixed effects (within-transformation)
   - `MultiPeriodDiD` - Event-study style DiD with period-specific treatment effects
+  - Re-exports `TwoWayFixedEffects` and `SyntheticDiD` for backward compatibility
+
+- **`diff_diff/twfe.py`** - Two-Way Fixed Effects estimator:
+  - `TwoWayFixedEffects` - Panel DiD with unit and time fixed effects (within-transformation)
+
+- **`diff_diff/synthetic_did.py`** - Synthetic DiD estimator:
   - `SyntheticDiD` - Synthetic control combined with DiD (Arkhangelsky et al. 2021)
 
 - **`diff_diff/staggered.py`** - Staggered adoption DiD estimators:
