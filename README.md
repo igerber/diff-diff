@@ -70,7 +70,7 @@ Signif. codes: '***' 0.001, '**' 0.01, '*' 0.05, '.' 0.1
 - **Wild cluster bootstrap**: Valid inference with few clusters (<50) using Rademacher, Webb, or Mammen weights
 - **Panel data support**: Two-way fixed effects estimator for panel designs
 - **Multi-period analysis**: Event-study style DiD with period-specific treatment effects
-- **Staggered adoption**: Callaway-Sant'Anna (2021) estimator for heterogeneous treatment timing
+- **Staggered adoption**: Callaway-Sant'Anna (2021) and Sun-Abraham (2021) estimators for heterogeneous treatment timing
 - **Synthetic DiD**: Combined DiD with synthetic control for improved robustness
 - **Event study plots**: Publication-ready visualization of treatment effects
 - **Parallel trends testing**: Multiple methods including equivalence tests
@@ -87,7 +87,7 @@ We provide Jupyter notebook tutorials in `docs/tutorials/`:
 | Notebook | Description |
 |----------|-------------|
 | `01_basic_did.ipynb` | Basic 2x2 DiD, formula interface, covariates, fixed effects, cluster-robust SE, wild bootstrap |
-| `02_staggered_did.ipynb` | Staggered adoption with Callaway-Sant'Anna, group-time effects, aggregation methods, Bacon decomposition |
+| `02_staggered_did.ipynb` | Staggered adoption with Callaway-Sant'Anna and Sun-Abraham, group-time effects, aggregation methods, Bacon decomposition |
 | `03_synthetic_did.ipynb` | Synthetic DiD, unit/time weights, inference methods, regularization |
 | `04_parallel_trends.ipynb` | Testing parallel trends, equivalence tests, placebo tests, diagnostics |
 | `05_honest_did.ipynb` | Honest DiD sensitivity analysis, bounds, breakdown values, visualization |
@@ -762,12 +762,115 @@ results = cs.fit(
 )
 ```
 
+### Sun-Abraham Interaction-Weighted Estimator
+
+The Sun-Abraham (2021) estimator provides an alternative to Callaway-Sant'Anna using an interaction-weighted (IW) regression approach. Running both estimators serves as a useful robustness check—when they agree, results are more credible.
+
+```python
+from diff_diff import SunAbraham
+
+# Basic usage
+sa = SunAbraham()
+results = sa.fit(
+    panel_data,
+    outcome='sales',
+    unit='firm_id',
+    time='year',
+    first_treat='first_treat'  # 0 for never-treated, else first treatment year
+)
+
+# View results
+results.print_summary()
+
+# Event study effects (by relative time to treatment)
+for rel_time, effect in results.event_study_effects.items():
+    print(f"e={rel_time}: {effect['effect']:.3f} (SE: {effect['se']:.3f})")
+
+# Overall ATT
+print(f"Overall ATT: {results.overall_att:.3f} (SE: {results.overall_se:.3f})")
+
+# Cohort weights (how each cohort contributes to each event-time estimate)
+for rel_time, weights in results.cohort_weights.items():
+    print(f"e={rel_time}: {weights}")
+```
+
+**Parameters:**
+
+```python
+SunAbraham(
+    control_group='never_treated',  # or 'not_yet_treated'
+    anticipation=0,                  # Periods before treatment with effects
+    alpha=0.05,                      # Significance level
+    cluster=None,                    # Column for cluster SEs
+    n_bootstrap=0,                   # Bootstrap iterations (0 = analytical SEs)
+    bootstrap_weights='rademacher',  # 'rademacher', 'mammen', or 'webb'
+    seed=None                        # Random seed
+)
+```
+
+**Bootstrap inference:**
+
+```python
+# Bootstrap inference with 999 iterations
+sa = SunAbraham(
+    n_bootstrap=999,
+    bootstrap_weights='rademacher',
+    seed=42
+)
+results = sa.fit(
+    data,
+    outcome='sales',
+    unit='firm_id',
+    time='year',
+    first_treat='first_treat'
+)
+
+# Access bootstrap results
+print(f"Overall ATT: {results.overall_att:.3f}")
+print(f"Bootstrap SE: {results.bootstrap_results.overall_att_se:.3f}")
+print(f"Bootstrap 95% CI: {results.bootstrap_results.overall_att_ci}")
+print(f"Bootstrap p-value: {results.bootstrap_results.overall_att_p_value:.4f}")
+```
+
+**When to use Sun-Abraham vs Callaway-Sant'Anna:**
+
+| Aspect | Sun-Abraham | Callaway-Sant'Anna |
+|--------|-------------|-------------------|
+| Approach | Interaction-weighted regression | 2x2 DiD aggregation |
+| Efficiency | More efficient under homogeneous effects | More robust to heterogeneity |
+| Weighting | Weights by cohort share at each relative time | Weights by sample size |
+| Use case | Robustness check, regression-based inference | Primary staggered DiD estimator |
+
+**Both estimators should give similar results when:**
+- Treatment effects are relatively homogeneous across cohorts
+- Parallel trends holds
+
+**Running both as robustness check:**
+
+```python
+from diff_diff import CallawaySantAnna, SunAbraham
+
+# Callaway-Sant'Anna
+cs = CallawaySantAnna()
+cs_results = cs.fit(data, outcome='y', unit='unit', time='time', first_treat='first_treat')
+
+# Sun-Abraham
+sa = SunAbraham()
+sa_results = sa.fit(data, outcome='y', unit='unit', time='time', first_treat='first_treat')
+
+# Compare
+print(f"Callaway-Sant'Anna ATT: {cs_results.overall_att:.3f}")
+print(f"Sun-Abraham ATT: {sa_results.overall_att:.3f}")
+
+# If results differ substantially, investigate heterogeneity
+```
+
 ### Event Study Visualization
 
 Create publication-ready event study plots:
 
 ```python
-from diff_diff import plot_event_study, MultiPeriodDiD, CallawaySantAnna
+from diff_diff import plot_event_study, MultiPeriodDiD, CallawaySantAnna, SunAbraham
 
 # From MultiPeriodDiD
 did = MultiPeriodDiD()
@@ -779,7 +882,13 @@ plot_event_study(results, title="Treatment Effects Over Time")
 cs = CallawaySantAnna()
 results = cs.fit(data, outcome='y', unit='unit', time='period',
                  first_treat='first_treat', aggregate='event_study')
-plot_event_study(results, title="Staggered DiD Event Study")
+plot_event_study(results, title="Staggered DiD Event Study (CS)")
+
+# From SunAbraham
+sa = SunAbraham()
+results = sa.fit(data, outcome='y', unit='unit', time='period',
+                 first_treat='first_treat')
+plot_event_study(results, title="Staggered DiD Event Study (SA)")
 
 # From a DataFrame
 df = pd.DataFrame({
@@ -1409,6 +1518,63 @@ SyntheticDiD(
 | `to_dataframe()` | Convert to pandas DataFrame |
 | `get_unit_weights_df()` | Get unit weights as DataFrame |
 | `get_time_weights_df()` | Get time weights as DataFrame |
+
+### SunAbraham
+
+```python
+SunAbraham(
+    control_group='never_treated',  # or 'not_yet_treated'
+    anticipation=0,           # Periods of anticipation effects
+    alpha=0.05,               # Significance level for CIs
+    cluster=None,             # Column for cluster-robust SEs
+    n_bootstrap=0,            # Bootstrap iterations (0 = analytical SEs)
+    bootstrap_weights='rademacher',  # 'rademacher', 'mammen', or 'webb'
+    seed=None                 # Random seed
+)
+```
+
+**fit() Parameters:**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `data` | DataFrame | Panel data |
+| `outcome` | str | Outcome variable column name |
+| `unit` | str | Unit identifier column |
+| `time` | str | Time period column |
+| `first_treat` | str | Column with first treatment period (0 for never-treated) |
+| `covariates` | list | Covariate column names |
+| `min_pre_periods` | int | Minimum pre-treatment periods to include |
+| `min_post_periods` | int | Minimum post-treatment periods to include |
+
+### SunAbrahamResults
+
+**Attributes:**
+
+| Attribute | Description |
+|-----------|-------------|
+| `event_study_effects` | Dict mapping relative time to effect info |
+| `overall_att` | Overall average treatment effect |
+| `overall_se` | Standard error of overall ATT |
+| `overall_t_stat` | T-statistic for overall ATT |
+| `overall_p_value` | P-value for overall ATT |
+| `overall_conf_int` | Confidence interval for overall ATT |
+| `cohort_weights` | Dict mapping relative time to cohort weights |
+| `groups` | List of treatment cohorts |
+| `time_periods` | List of all time periods |
+| `n_obs` | Total number of observations |
+| `n_treated_units` | Number of ever-treated units |
+| `n_control_units` | Number of never-treated units |
+| `is_significant` | Boolean for significance at alpha |
+| `significance_stars` | String of significance stars |
+| `bootstrap_results` | SABootstrapResults (if bootstrap enabled) |
+
+**Methods:**
+
+| Method | Description |
+|--------|-------------|
+| `summary(alpha)` | Get formatted summary string |
+| `print_summary(alpha)` | Print summary to stdout |
+| `to_dataframe(level)` | Convert to DataFrame ('event_study' or 'cohort') |
 
 ### HonestDiD
 
