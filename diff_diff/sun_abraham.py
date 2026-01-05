@@ -5,23 +5,22 @@ Implements the estimator from Sun & Abraham (2021), "Estimating dynamic
 treatment effects in event studies with heterogeneous treatment effects",
 Journal of Econometrics.
 
-This provides an alternative to Callaway-Sant'Anna using an interaction-weighted
-(IW) regression approach rather than aggregating 2x2 DiD comparisons.
+This provides an alternative to Callaway-Sant'Anna using a saturated
+regression with cohort × relative-time interactions.
 """
 
 import warnings
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
-from scipy import stats as scipy_stats
 
 from diff_diff.results import _get_significance_stars
-from diff_diff.staggered import _generate_bootstrap_weights
 from diff_diff.utils import (
     compute_confidence_interval,
     compute_p_value,
+    compute_robust_se,
 )
 
 
@@ -247,14 +246,14 @@ class SunAbrahamResults:
 @dataclass
 class SABootstrapResults:
     """
-    Results from Sun-Abraham multiplier bootstrap inference.
+    Results from Sun-Abraham bootstrap inference.
 
     Attributes
     ----------
     n_bootstrap : int
         Number of bootstrap iterations.
     weight_type : str
-        Type of bootstrap weights used.
+        Type of bootstrap used (always "pairs" for pairs bootstrap).
     alpha : float
         Significance level used for confidence intervals.
     overall_att_se : float
@@ -290,13 +289,13 @@ class SunAbraham:
     Sun-Abraham (2021) interaction-weighted estimator for staggered DiD.
 
     This estimator provides event-study coefficients using a saturated
-    regression with cohort-by-relative-time interactions. It's an alternative
-    to Callaway-Sant'Anna that uses different weighting.
+    TWFE regression with cohort × relative-time interactions, following
+    the methodology in Sun & Abraham (2021).
 
-    The key innovation is the interaction-weighting approach:
-    1. Run a regression with cohort × relative_time indicators
-    2. Weight cohort-specific effects by the share of each cohort in
-       the treated population at each relative time
+    The estimation procedure follows three steps:
+    1. Run a saturated TWFE regression with cohort × relative-time dummies
+    2. Compute cohort shares (weights) at each relative time
+    3. Aggregate cohort-specific effects using interaction weights
 
     This avoids the negative weighting problem of standard TWFE and provides
     consistent event-study estimates under treatment effect heterogeneity.
@@ -305,7 +304,7 @@ class SunAbraham:
     ----------
     control_group : str, default="never_treated"
         Which units to use as controls:
-        - "never_treated": Use only never-treated units
+        - "never_treated": Use only never-treated units (recommended)
         - "not_yet_treated": Use never-treated and not-yet-treated units
     anticipation : int, default=0
         Number of periods before treatment where effects may occur.
@@ -313,11 +312,10 @@ class SunAbraham:
         Significance level for confidence intervals.
     cluster : str, optional
         Column name for cluster-robust standard errors.
+        If None, clusters at the unit level by default.
     n_bootstrap : int, default=0
         Number of bootstrap iterations for inference.
-        If 0, uses analytical standard errors.
-    bootstrap_weights : str, default="rademacher"
-        Type of weights for multiplier bootstrap.
+        If 0, uses analytical cluster-robust standard errors.
     seed : int, optional
         Random seed for reproducibility.
 
@@ -359,20 +357,25 @@ class SunAbraham:
     -----
     The Sun-Abraham estimator uses a saturated regression approach:
 
-    Y_it = α_i + λ_t + Σ_g Σ_e [β_{g,e} × 1(G_i=g) × 1(t-G_i=e)] + ε_it
+    Y_it = α_i + λ_t + Σ_g Σ_e [δ_{g,e} × 1(G_i=g) × D_{it}^e] + X'γ + ε_it
 
-    where G_i is unit i's treatment cohort and e is relative time.
+    where:
+    - α_i = unit fixed effects
+    - λ_t = time fixed effects
+    - G_i = unit i's treatment cohort (first treatment period)
+    - D_{it}^e = indicator for being e periods from treatment
+    - δ_{g,e} = cohort-specific effect (CATT) at relative time e
 
     The event-study coefficients are then computed as:
 
-    β_e = Σ_g w_{g,e} × β_{g,e}
+    β_e = Σ_g w_{g,e} × δ_{g,e}
 
     where w_{g,e} is the share of cohort g in the treated population at
-    relative time e.
+    relative time e (interaction weights).
 
     Compared to Callaway-Sant'Anna:
-    - SA uses regression-based estimation; CS uses 2x2 DiD
-    - SA can be more efficient when effects are homogeneous
+    - SA uses saturated regression; CS uses 2x2 DiD comparisons
+    - SA can be more efficient when model is correctly specified
     - Both are consistent under heterogeneous treatment effects
     - Running both provides a useful robustness check
 
@@ -390,7 +393,6 @@ class SunAbraham:
         alpha: float = 0.05,
         cluster: Optional[str] = None,
         n_bootstrap: int = 0,
-        bootstrap_weights: str = "rademacher",
         seed: Optional[int] = None,
     ):
         if control_group not in ["never_treated", "not_yet_treated"]:
@@ -399,22 +401,16 @@ class SunAbraham:
                 f"got '{control_group}'"
             )
 
-        if bootstrap_weights not in ["rademacher", "mammen", "webb"]:
-            raise ValueError(
-                f"bootstrap_weights must be 'rademacher', 'mammen', or 'webb', "
-                f"got '{bootstrap_weights}'"
-            )
-
         self.control_group = control_group
         self.anticipation = anticipation
         self.alpha = alpha
         self.cluster = cluster
         self.n_bootstrap = n_bootstrap
-        self.bootstrap_weights = bootstrap_weights
         self.seed = seed
 
         self.is_fitted_ = False
         self.results_: Optional[SunAbrahamResults] = None
+        self._reference_period = -1  # Will be set during fit
 
     def fit(
         self,
@@ -428,7 +424,7 @@ class SunAbraham:
         min_post_periods: int = 1,
     ) -> SunAbrahamResults:
         """
-        Fit the Sun-Abraham estimator.
+        Fit the Sun-Abraham estimator using saturated regression.
 
         Parameters
         ----------
@@ -444,7 +440,7 @@ class SunAbraham:
             Name of column indicating when unit was first treated.
             Use 0 (or np.inf) for never-treated units.
         covariates : list, optional
-            List of covariate column names.
+            List of covariate column names to include in regression.
         min_pre_periods : int, default=1
             Minimum number of pre-treatment periods to include in event study.
         min_post_periods : int, default=1
@@ -503,24 +499,20 @@ class SunAbraham:
                 "No treated units found. Check 'first_treat' column."
             )
 
-        # Compute relative time for each observation
-        df["_rel_time"] = df.apply(
-            lambda row: (
-                row[time] - row[first_treat]
-                if row[first_treat] > 0
-                else np.nan
-            ),
-            axis=1,
+        # Compute relative time for each observation (vectorized)
+        df["_rel_time"] = np.where(
+            df[first_treat] > 0,
+            df[time] - df[first_treat],
+            np.nan
         )
 
         # Identify the range of relative time periods to estimate
-        # We need at least one cohort observed at each relative time
         rel_times_by_cohort = {}
         for g in treatment_groups:
             g_times = df[df[first_treat] == g][time].unique()
             rel_times_by_cohort[g] = sorted([t - g for t in g_times])
 
-        # Find common relative time range
+        # Find all relative time values
         all_rel_times: set = set()
         for g, rel_times in rel_times_by_cohort.items():
             all_rel_times.update(rel_times)
@@ -529,30 +521,45 @@ class SunAbraham:
 
         # Filter to reasonable range
         min_rel = max(min(all_rel_times_sorted), -20)  # cap at -20
-        max_rel = min(max(all_rel_times_sorted), 20)  # cap at +20
+        max_rel = min(max(all_rel_times_sorted), 20)   # cap at +20
 
         # Reference period: last pre-treatment period (typically -1)
-        reference_period = -1 - self.anticipation
+        self._reference_period = -1 - self.anticipation
 
         # Get relative periods to estimate (excluding reference)
         rel_periods_to_estimate = [
             e
             for e in all_rel_times_sorted
-            if min_rel <= e <= max_rel and e != reference_period
+            if min_rel <= e <= max_rel and e != self._reference_period
         ]
 
-        # Compute cohort-specific effects using the IW approach
-        cohort_effects, cohort_residuals = self._compute_cohort_effects(
-            df,
+        # Determine cluster variable
+        cluster_var = self.cluster if self.cluster is not None else unit
+
+        # Filter data based on control_group setting
+        if self.control_group == "never_treated":
+            # Only keep never-treated as controls
+            df_reg = df[df["_never_treated"] | (df[first_treat] > 0)].copy()
+        else:
+            # Keep all units (not_yet_treated will be handled by the regression)
+            df_reg = df.copy()
+
+        # Fit saturated regression
+        (
+            cohort_effects,
+            cohort_ses,
+            vcov_cohort,
+            coef_index_map,
+        ) = self._fit_saturated_regression(
+            df_reg,
             outcome,
             unit,
             time,
             first_treat,
             treatment_groups,
-            time_periods,
             rel_periods_to_estimate,
-            reference_period,
             covariates,
+            cluster_var,
         )
 
         # Compute interaction-weighted event study effects
@@ -563,41 +570,21 @@ class SunAbraham:
             treatment_groups,
             rel_periods_to_estimate,
             cohort_effects,
+            cohort_ses,
+            vcov_cohort,
+            coef_index_map,
         )
 
         # Compute overall ATT (average of post-treatment effects)
-        post_effects = [
-            (e, eff)
-            for e, eff in event_study_effects.items()
-            if e >= 0
-        ]
-
-        if post_effects:
-            # Weight by number of treated observations at each relative time
-            post_weights = []
-            post_estimates = []
-            post_variances = []
-
-            for e, eff in post_effects:
-                # Count treated observations at relative time e
-                n_treated_at_e = len(
-                    df[(df["_rel_time"] == e) & (df[first_treat] > 0)]
-                )
-                post_weights.append(n_treated_at_e)
-                post_estimates.append(eff["effect"])
-                post_variances.append(eff["se"] ** 2)
-
-            post_weights = np.array(post_weights, dtype=float)
-            post_weights = post_weights / post_weights.sum()
-
-            overall_att = float(np.sum(post_weights * np.array(post_estimates)))
-            overall_var = float(
-                np.sum((post_weights**2) * np.array(post_variances))
-            )
-            overall_se = np.sqrt(overall_var)
-        else:
-            overall_att = 0.0
-            overall_se = 0.0
+        overall_att, overall_se = self._compute_overall_att(
+            df,
+            first_treat,
+            event_study_effects,
+            cohort_effects,
+            cohort_weights,
+            vcov_cohort,
+            coef_index_map,
+        )
 
         overall_t = overall_att / overall_se if overall_se > 0 else 0.0
         overall_p = compute_p_value(overall_t)
@@ -607,16 +594,15 @@ class SunAbraham:
         bootstrap_results = None
         if self.n_bootstrap > 0:
             bootstrap_results = self._run_bootstrap(
-                df=df,
+                df=df_reg,
                 outcome=outcome,
                 unit=unit,
                 time=time,
                 first_treat=first_treat,
                 treatment_groups=treatment_groups,
-                time_periods=time_periods,
                 rel_periods_to_estimate=rel_periods_to_estimate,
-                reference_period=reference_period,
                 covariates=covariates,
+                cluster_var=cluster_var,
                 original_event_study=event_study_effects,
                 original_overall_att=overall_att,
             )
@@ -643,6 +629,17 @@ class SunAbraham:
                         eff_val / se_val if se_val > 0 else 0.0
                     )
 
+        # Convert cohort effects to storage format
+        cohort_effects_storage: Dict[Tuple[Any, int], Dict[str, Any]] = {}
+        for (g, e), effect in cohort_effects.items():
+            weight = cohort_weights.get(e, {}).get(g, 0.0)
+            se = cohort_ses.get((g, e), 0.0)
+            cohort_effects_storage[(g, e)] = {
+                "effect": effect,
+                "se": se,
+                "weight": weight,
+            }
+
         # Store results
         self.results_ = SunAbrahamResults(
             event_study_effects=event_study_effects,
@@ -660,13 +657,13 @@ class SunAbraham:
             alpha=self.alpha,
             control_group=self.control_group,
             bootstrap_results=bootstrap_results,
-            cohort_effects=cohort_effects,
+            cohort_effects=cohort_effects_storage,
         )
 
         self.is_fitted_ = True
         return self.results_
 
-    def _compute_cohort_effects(
+    def _fit_saturated_regression(
         self,
         df: pd.DataFrame,
         outcome: str,
@@ -674,175 +671,146 @@ class SunAbraham:
         time: str,
         first_treat: str,
         treatment_groups: List[Any],
-        time_periods: List[Any],
         rel_periods: List[int],
-        reference_period: int,
         covariates: Optional[List[str]],
-    ) -> Tuple[Dict[Tuple[Any, int], Dict[str, Any]], Dict[str, np.ndarray]]:
+        cluster_var: str,
+    ) -> Tuple[
+        Dict[Tuple[Any, int], float],
+        Dict[Tuple[Any, int], float],
+        np.ndarray,
+        Dict[Tuple[Any, int], int],
+    ]:
         """
-        Compute cohort-specific treatment effects using 2x2 DiD.
+        Fit saturated TWFE regression with cohort × relative-time interactions.
 
-        For each cohort g and relative period e, estimate ATT(g,e) using
-        never-treated or not-yet-treated as controls.
+        Y_it = α_i + λ_t + Σ_g Σ_e [δ_{g,e} × D_{g,e,it}] + X'γ + ε
+
+        Uses within-transformation for unit fixed effects and time dummies.
 
         Returns
         -------
         cohort_effects : dict
-            Dictionary mapping (cohort, rel_period) to effect info.
-        residuals : dict
-            Residuals for bootstrap (keyed by unit).
+            Mapping (cohort, rel_period) -> effect estimate δ_{g,e}
+        cohort_ses : dict
+            Mapping (cohort, rel_period) -> standard error
+        vcov : np.ndarray
+            Variance-covariance matrix for cohort effects
+        coef_index_map : dict
+            Mapping (cohort, rel_period) -> index in coefficient vector
         """
-        cohort_effects: Dict[Tuple[Any, int], Dict[str, Any]] = {}
-        residuals: Dict[str, np.ndarray] = {}
+        df = df.copy()
+
+        # Create cohort × relative-time interaction dummies
+        # Exclude reference period
+        # Build all columns at once to avoid fragmentation
+        interaction_data = {}
+        coef_index_map: Dict[Tuple[Any, int], int] = {}
+        idx = 0
 
         for g in treatment_groups:
-            # Get units in this cohort
-            cohort_units = df[df[first_treat] == g][unit].unique()
-            n_cohort = len(cohort_units)
-
-            if n_cohort == 0:
-                continue
-
-            # Base period for this cohort
-            base_period = g - 1 - self.anticipation
-            if base_period not in time_periods:
-                # Find closest earlier period
-                earlier = [t for t in time_periods if t < g - self.anticipation]
-                if not earlier:
-                    continue
-                base_period = max(earlier)
-
             for e in rel_periods:
-                # Calendar time for this relative period
-                t = g + e
+                col_name = f"_D_{g}_{e}"
+                # Indicator: unit is in cohort g AND at relative time e
+                indicator = (
+                    (df[first_treat] == g) &
+                    (df["_rel_time"] == e)
+                ).astype(float)
 
-                if t not in time_periods:
-                    continue
+                # Only include if there are observations
+                if indicator.sum() > 0:
+                    interaction_data[col_name] = indicator.values
+                    coef_index_map[(g, e)] = idx
+                    idx += 1
 
-                # Skip if this is before treatment (we handle pre-treatment
-                # by comparing to base period)
-                if e < -self.anticipation - 1:
-                    t_compare = t
-                else:
-                    t_compare = t
+        # Add all interaction columns at once
+        interaction_cols = list(interaction_data.keys())
+        if interaction_data:
+            interaction_df = pd.DataFrame(interaction_data, index=df.index)
+            df = pd.concat([df, interaction_df], axis=1)
 
-                # Get control units
-                if self.control_group == "never_treated":
-                    control_mask = df["_never_treated"]
-                else:
-                    # Not yet treated at time t
-                    control_mask = (df["_never_treated"]) | (df[first_treat] > t)
+        if len(interaction_cols) == 0:
+            raise ValueError(
+                "No valid cohort × relative-time interactions found. "
+                "Check your data structure."
+            )
 
-                control_units = df[control_mask][unit].unique()
+        # Apply within-transformation for unit and time fixed effects
+        variables_to_demean = [outcome] + interaction_cols
+        if covariates:
+            variables_to_demean.extend(covariates)
 
-                if len(control_units) == 0:
-                    continue
+        df_demeaned = self._within_transform(df, variables_to_demean, unit, time)
 
-                # Compute 2x2 DiD: compare cohort g vs controls, from base to t
-                try:
-                    att_ge, se_ge, inf_func = self._compute_2x2_did(
-                        df,
-                        outcome,
-                        unit,
-                        time,
-                        cohort_units,
-                        control_units,
-                        base_period,
-                        t,
-                        covariates,
-                    )
+        # Build design matrix
+        X_cols = [f"{col}_dm" for col in interaction_cols]
+        if covariates:
+            X_cols.extend([f"{cov}_dm" for cov in covariates])
 
-                    if att_ge is not None:
-                        t_stat = att_ge / se_ge if se_ge > 0 else 0.0
-                        p_val = compute_p_value(t_stat)
-                        ci = compute_confidence_interval(att_ge, se_ge, self.alpha)
+        X = df_demeaned[X_cols].values
+        y = df_demeaned[f"{outcome}_dm"].values
 
-                        cohort_effects[(g, e)] = {
-                            "effect": att_ge,
-                            "se": se_ge,
-                            "t_stat": t_stat,
-                            "p_value": p_val,
-                            "conf_int": ci,
-                            "n_cohort": n_cohort,
-                            "inf_func": inf_func,
-                        }
-                except Exception:
-                    # Skip this cohort-period if estimation fails
-                    continue
+        # Fit OLS
+        try:
+            XtX_inv = np.linalg.inv(X.T @ X)
+        except np.linalg.LinAlgError:
+            # Use pseudo-inverse for singular matrices
+            XtX_inv = np.linalg.pinv(X.T @ X)
 
-        return cohort_effects, residuals
+        coefficients = XtX_inv @ (X.T @ y)
+        residuals = y - X @ coefficients
 
-    def _compute_2x2_did(
+        # Compute cluster-robust standard errors
+        cluster_ids = df_demeaned[cluster_var].values
+        vcov = compute_robust_se(X, residuals, cluster_ids)
+
+        # Extract cohort effects and standard errors
+        cohort_effects: Dict[Tuple[Any, int], float] = {}
+        cohort_ses: Dict[Tuple[Any, int], float] = {}
+
+        n_interactions = len(interaction_cols)
+        for (g, e), coef_idx in coef_index_map.items():
+            cohort_effects[(g, e)] = float(coefficients[coef_idx])
+            cohort_ses[(g, e)] = float(np.sqrt(vcov[coef_idx, coef_idx]))
+
+        # Extract just the vcov for cohort effects (excluding covariates)
+        vcov_cohort = vcov[:n_interactions, :n_interactions]
+
+        return cohort_effects, cohort_ses, vcov_cohort, coef_index_map
+
+    def _within_transform(
         self,
         df: pd.DataFrame,
-        outcome: str,
+        variables: List[str],
         unit: str,
         time: str,
-        treated_units: np.ndarray,
-        control_units: np.ndarray,
-        base_period: Any,
-        post_period: Any,
-        covariates: Optional[List[str]],
-    ) -> Tuple[Optional[float], float, np.ndarray]:
+    ) -> pd.DataFrame:
         """
-        Compute a 2x2 DiD estimate.
+        Apply two-way within transformation to remove unit and time fixed effects.
 
-        Returns
-        -------
-        att : float or None
-            Treatment effect estimate.
-        se : float
-            Standard error.
-        inf_func : np.ndarray
-            Influence function values.
+        y_it - y_i. - y_.t + y_..
         """
-        # Get data for the two periods
-        df_base = df[df[time] == base_period].set_index(unit)
-        df_post = df[df[time] == post_period].set_index(unit)
+        df = df.copy()
 
-        # Compute outcome changes for treated
-        treated_base = df_base.loc[df_base.index.isin(treated_units), outcome]
-        treated_post = df_post.loc[df_post.index.isin(treated_units), outcome]
-        treated_common = treated_base.index.intersection(treated_post.index)
+        # Build all demeaned columns at once to avoid fragmentation
+        demeaned_data = {}
+        for var in variables:
+            # Unit means
+            unit_means = df.groupby(unit)[var].transform("mean")
+            # Time means
+            time_means = df.groupby(time)[var].transform("mean")
+            # Grand mean
+            grand_mean = df[var].mean()
 
-        if len(treated_common) == 0:
-            return None, 0.0, np.array([])
+            # Within transformation
+            demeaned_data[f"{var}_dm"] = (
+                df[var] - unit_means - time_means + grand_mean
+            ).values
 
-        treated_change = (
-            treated_post.loc[treated_common].values
-            - treated_base.loc[treated_common].values
-        )
+        # Add all demeaned columns at once
+        demeaned_df = pd.DataFrame(demeaned_data, index=df.index)
+        df = pd.concat([df, demeaned_df], axis=1)
 
-        # Compute outcome changes for control
-        control_base = df_base.loc[df_base.index.isin(control_units), outcome]
-        control_post = df_post.loc[df_post.index.isin(control_units), outcome]
-        control_common = control_base.index.intersection(control_post.index)
-
-        if len(control_common) == 0:
-            return None, 0.0, np.array([])
-
-        control_change = (
-            control_post.loc[control_common].values
-            - control_base.loc[control_common].values
-        )
-
-        n_t = len(treated_change)
-        n_c = len(control_change)
-
-        # Simple difference in means (could add covariate adjustment here)
-        att = float(np.mean(treated_change) - np.mean(control_change))
-
-        var_t = float(np.var(treated_change, ddof=1)) if n_t > 1 else 0.0
-        var_c = float(np.var(control_change, ddof=1)) if n_c > 1 else 0.0
-
-        se = np.sqrt(var_t / n_t + var_c / n_c) if (n_t > 0 and n_c > 0) else 0.0
-
-        # Influence function
-        inf_treated = (treated_change - np.mean(treated_change)) / n_t
-        inf_control = (control_change - np.mean(control_change)) / n_c
-        inf_func = np.concatenate([inf_treated, -inf_control])
-
-        return att, se, inf_func
+        return df
 
     def _compute_iw_effects(
         self,
@@ -851,14 +819,17 @@ class SunAbraham:
         first_treat: str,
         treatment_groups: List[Any],
         rel_periods: List[int],
-        cohort_effects: Dict[Tuple[Any, int], Dict[str, Any]],
+        cohort_effects: Dict[Tuple[Any, int], float],
+        cohort_ses: Dict[Tuple[Any, int], float],
+        vcov_cohort: np.ndarray,
+        coef_index_map: Dict[Tuple[Any, int], int],
     ) -> Tuple[Dict[int, Dict[str, Any]], Dict[int, Dict[Any, float]]]:
         """
         Compute interaction-weighted event study effects.
 
-        The IW estimator aggregates cohort-specific effects using weights
-        that represent each cohort's share of treated observations at each
-        relative time.
+        β_e = Σ_g w_{g,e} × δ_{g,e}
+
+        where w_{g,e} is the share of cohort g among treated units at relative time e.
 
         Returns
         -------
@@ -870,46 +841,51 @@ class SunAbraham:
         event_study_effects: Dict[int, Dict[str, Any]] = {}
         cohort_weights: Dict[int, Dict[Any, float]] = {}
 
+        # Get cohort sizes
+        unit_cohorts = df.groupby(unit)[first_treat].first()
+        cohort_sizes = unit_cohorts[unit_cohorts > 0].value_counts().to_dict()
+
         for e in rel_periods:
-            # Get all cohort effects for this relative period
-            effects_at_e = [
-                (g, data)
-                for (g, rel_e), data in cohort_effects.items()
-                if rel_e == e
+            # Get cohorts that have observations at this relative time
+            cohorts_at_e = [
+                g for g in treatment_groups
+                if (g, e) in cohort_effects
             ]
 
-            if not effects_at_e:
+            if not cohorts_at_e:
                 continue
 
-            # Compute IW weights: share of each cohort in treated population at e
-            # Weight = n_g / Σ_g' n_g' where n_g is cohort g's size
+            # Compute IW weights: share of each cohort among those observed at e
             weights = {}
-            total_treated = 0
-
-            for g, data in effects_at_e:
-                n_g = data["n_cohort"]
+            total_size = 0
+            for g in cohorts_at_e:
+                n_g = cohort_sizes.get(g, 0)
                 weights[g] = n_g
-                total_treated += n_g
+                total_size += n_g
 
-            if total_treated == 0:
+            if total_size == 0:
                 continue
 
             # Normalize weights
             for g in weights:
-                weights[g] = weights[g] / total_treated
+                weights[g] = weights[g] / total_size
 
             cohort_weights[e] = weights
 
             # Compute weighted average effect
             agg_effect = 0.0
-            agg_var = 0.0
-
-            for g, data in effects_at_e:
+            for g in cohorts_at_e:
                 w = weights[g]
-                agg_effect += w * data["effect"]
-                agg_var += (w**2) * (data["se"] ** 2)
+                agg_effect += w * cohort_effects[(g, e)]
 
-            agg_se = np.sqrt(agg_var)
+            # Compute SE using delta method with vcov
+            # Var(β_e) = w' Σ w where w is weight vector and Σ is vcov submatrix
+            indices = [coef_index_map[(g, e)] for g in cohorts_at_e]
+            weight_vec = np.array([weights[g] for g in cohorts_at_e])
+            vcov_subset = vcov_cohort[np.ix_(indices, indices)]
+            agg_var = float(weight_vec @ vcov_subset @ weight_vec)
+            agg_se = np.sqrt(max(agg_var, 0))
+
             t_stat = agg_effect / agg_se if agg_se > 0 else 0.0
             p_val = compute_p_value(t_stat)
             ci = compute_confidence_interval(agg_effect, agg_se, self.alpha)
@@ -920,10 +896,80 @@ class SunAbraham:
                 "t_stat": t_stat,
                 "p_value": p_val,
                 "conf_int": ci,
-                "n_groups": len(effects_at_e),
+                "n_groups": len(cohorts_at_e),
             }
 
         return event_study_effects, cohort_weights
+
+    def _compute_overall_att(
+        self,
+        df: pd.DataFrame,
+        first_treat: str,
+        event_study_effects: Dict[int, Dict[str, Any]],
+        cohort_effects: Dict[Tuple[Any, int], float],
+        cohort_weights: Dict[int, Dict[Any, float]],
+        vcov_cohort: np.ndarray,
+        coef_index_map: Dict[Tuple[Any, int], int],
+    ) -> Tuple[float, float]:
+        """
+        Compute overall ATT as weighted average of post-treatment effects.
+
+        Returns (att, se) tuple.
+        """
+        post_effects = [
+            (e, eff)
+            for e, eff in event_study_effects.items()
+            if e >= 0
+        ]
+
+        if not post_effects:
+            return 0.0, 0.0
+
+        # Weight by number of treated observations at each relative time
+        post_weights = []
+        post_estimates = []
+
+        for e, eff in post_effects:
+            n_at_e = len(df[(df["_rel_time"] == e) & (df[first_treat] > 0)])
+            post_weights.append(max(n_at_e, 1))
+            post_estimates.append(eff["effect"])
+
+        post_weights = np.array(post_weights, dtype=float)
+        post_weights = post_weights / post_weights.sum()
+
+        overall_att = float(np.sum(post_weights * np.array(post_estimates)))
+
+        # Compute SE using delta method
+        # Need to trace back through the full weighting scheme
+        # ATT = Σ_e w_e × β_e = Σ_e w_e × Σ_g w_{g,e} × δ_{g,e}
+        # Collect all (g, e) pairs and their overall weights
+        overall_weights_by_coef: Dict[Tuple[Any, int], float] = {}
+
+        for i, (e, _) in enumerate(post_effects):
+            period_weight = post_weights[i]
+            if e in cohort_weights:
+                for g, cw in cohort_weights[e].items():
+                    key = (g, e)
+                    if key in coef_index_map:
+                        if key not in overall_weights_by_coef:
+                            overall_weights_by_coef[key] = 0.0
+                        overall_weights_by_coef[key] += period_weight * cw
+
+        if not overall_weights_by_coef:
+            # Fallback to simple variance calculation
+            overall_var = float(
+                np.sum((post_weights ** 2) * np.array([eff["se"] ** 2 for _, eff in post_effects]))
+            )
+            return overall_att, np.sqrt(overall_var)
+
+        # Build full weight vector and compute variance
+        indices = [coef_index_map[key] for key in overall_weights_by_coef.keys()]
+        weight_vec = np.array(list(overall_weights_by_coef.values()))
+        vcov_subset = vcov_cohort[np.ix_(indices, indices)]
+        overall_var = float(weight_vec @ vcov_subset @ weight_vec)
+        overall_se = np.sqrt(max(overall_var, 0))
+
+        return overall_att, overall_se
 
     def _run_bootstrap(
         self,
@@ -933,18 +979,16 @@ class SunAbraham:
         time: str,
         first_treat: str,
         treatment_groups: List[Any],
-        time_periods: List[Any],
         rel_periods_to_estimate: List[int],
-        reference_period: int,
         covariates: Optional[List[str]],
+        cluster_var: str,
         original_event_study: Dict[int, Dict[str, Any]],
         original_overall_att: float,
     ) -> SABootstrapResults:
         """
-        Run multiplier bootstrap for inference.
+        Run pairs bootstrap for inference.
 
-        Uses the pairs bootstrap (resampling units with replacement) rather
-        than multiplier bootstrap to get valid inference.
+        Resamples units with replacement and re-estimates the full model.
         """
         if self.n_bootstrap < 50:
             warnings.warn(
@@ -969,50 +1013,64 @@ class SunAbraham:
             # Resample units with replacement (pairs bootstrap)
             boot_units = rng.choice(all_units, size=n_units, replace=True)
 
-            # Create bootstrap sample
-            boot_dfs = []
-            for i, u in enumerate(boot_units):
-                unit_data = df[df[unit] == u].copy()
-                # Rename unit to make unique in bootstrap sample
-                unit_data[unit] = i
-                boot_dfs.append(unit_data)
+            # Create bootstrap sample efficiently
+            # Build index array for all selected units
+            boot_indices = np.concatenate([
+                df.index[df[unit] == u].values for u in boot_units
+            ])
+            df_b = df.iloc[boot_indices].copy()
 
-            df_b = pd.concat(boot_dfs, ignore_index=True)
-            df_b["_rel_time"] = df_b.apply(
-                lambda row: (
-                    row[time] - row[first_treat]
-                    if row[first_treat] > 0
-                    else np.nan
-                ),
-                axis=1,
+            # Reassign unique unit IDs for bootstrap sample
+            # Each resampled unit gets a unique ID
+            new_unit_ids = []
+            current_id = 0
+            for u in boot_units:
+                unit_rows = df[df[unit] == u]
+                for _ in range(len(unit_rows)):
+                    new_unit_ids.append(current_id)
+                current_id += 1
+            df_b[unit] = new_unit_ids[:len(df_b)]
+
+            # Recompute relative time (vectorized)
+            df_b["_rel_time"] = np.where(
+                df_b[first_treat] > 0,
+                df_b[time] - df_b[first_treat],
+                np.nan
             )
             df_b["_never_treated"] = (
                 (df_b[first_treat] == 0) | (df_b[first_treat] == np.inf)
             )
 
-            # Re-estimate cohort effects
             try:
-                cohort_effects_b, _ = self._compute_cohort_effects(
+                # Re-estimate saturated regression
+                (
+                    cohort_effects_b,
+                    cohort_ses_b,
+                    vcov_b,
+                    coef_map_b,
+                ) = self._fit_saturated_regression(
                     df_b,
                     outcome,
                     unit,
                     time,
                     first_treat,
                     treatment_groups,
-                    time_periods,
                     rel_periods_to_estimate,
-                    reference_period,
                     covariates,
+                    cluster_var,
                 )
 
-                # Re-compute IW effects
-                event_study_b, _ = self._compute_iw_effects(
+                # Compute IW effects for this bootstrap sample
+                event_study_b, cohort_weights_b = self._compute_iw_effects(
                     df_b,
                     unit,
                     first_treat,
                     treatment_groups,
                     rel_periods_to_estimate,
                     cohort_effects_b,
+                    cohort_ses_b,
+                    vcov_b,
+                    coef_map_b,
                 )
 
                 # Store bootstrap estimates
@@ -1023,32 +1081,24 @@ class SunAbraham:
                         bootstrap_effects[e][b] = original_event_study[e]["effect"]
 
                 # Compute overall ATT for this bootstrap sample
-                post_effects_b = [
-                    (e, eff) for e, eff in event_study_b.items() if e >= 0
-                ]
-                if post_effects_b:
-                    post_weights = []
-                    post_estimates = []
-                    for e, eff in post_effects_b:
-                        n_at_e = len(
-                            df_b[(df_b["_rel_time"] == e) & (df_b[first_treat] > 0)]
-                        )
-                        post_weights.append(max(n_at_e, 1))
-                        post_estimates.append(eff["effect"])
+                overall_b, _ = self._compute_overall_att(
+                    df_b,
+                    first_treat,
+                    event_study_b,
+                    cohort_effects_b,
+                    cohort_weights_b,
+                    vcov_b,
+                    coef_map_b,
+                )
+                bootstrap_overall[b] = overall_b
 
-                    post_weights = np.array(post_weights, dtype=float)
-                    if post_weights.sum() > 0:
-                        post_weights = post_weights / post_weights.sum()
-                        bootstrap_overall[b] = np.sum(
-                            post_weights * np.array(post_estimates)
-                        )
-                    else:
-                        bootstrap_overall[b] = original_overall_att
-                else:
-                    bootstrap_overall[b] = original_overall_att
-
-            except Exception:
+            except (ValueError, np.linalg.LinAlgError) as exc:
                 # If bootstrap iteration fails, use original
+                warnings.warn(
+                    f"Bootstrap iteration {b} failed: {exc}. Using original estimate.",
+                    UserWarning,
+                    stacklevel=2,
+                )
                 for e in rel_periods:
                     bootstrap_effects[e][b] = original_event_study[e]["effect"]
                 bootstrap_overall[b] = original_overall_att
@@ -1079,7 +1129,7 @@ class SunAbraham:
 
         return SABootstrapResults(
             n_bootstrap=self.n_bootstrap,
-            weight_type=self.bootstrap_weights,
+            weight_type="pairs",
             alpha=self.alpha,
             overall_att_se=overall_se,
             overall_att_ci=overall_ci,
@@ -1124,7 +1174,6 @@ class SunAbraham:
             "alpha": self.alpha,
             "cluster": self.cluster,
             "n_bootstrap": self.n_bootstrap,
-            "bootstrap_weights": self.bootstrap_weights,
             "seed": self.seed,
         }
 

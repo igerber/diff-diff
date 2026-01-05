@@ -356,33 +356,13 @@ class TestSunAbrahamBootstrap:
 
         assert results.bootstrap_results is not None
         assert results.bootstrap_results.n_bootstrap == 99
-        assert results.bootstrap_results.weight_type == "rademacher"
+        assert results.bootstrap_results.weight_type == "pairs"
         assert results.overall_se > 0
         assert (
             results.overall_conf_int[0]
             < results.overall_att
             < results.overall_conf_int[1]
         )
-
-    def test_bootstrap_weight_types(self):
-        """Test different bootstrap weight types."""
-        data = generate_staggered_data(n_units=50, seed=42)
-
-        weight_types = ["rademacher", "mammen", "webb"]
-
-        for wt in weight_types:
-            sa = SunAbraham(n_bootstrap=49, bootstrap_weights=wt, seed=42)
-            results = sa.fit(
-                data,
-                outcome="outcome",
-                unit="unit",
-                time="time",
-                first_treat="first_treat",
-            )
-
-            assert results.bootstrap_results is not None
-            assert results.bootstrap_results.weight_type == wt
-            assert results.overall_se > 0
 
     def test_bootstrap_reproducibility(self):
         """Test that bootstrap is reproducible with same seed."""
@@ -490,11 +470,6 @@ class TestSunAbrahamBootstrap:
         for e, effect in results.event_study_effects.items():
             assert effect["se"] > 0
             assert effect["conf_int"][0] < effect["conf_int"][1]
-
-    def test_bootstrap_invalid_weight_type(self):
-        """Test that invalid weight type raises error."""
-        with pytest.raises(ValueError, match="bootstrap_weights"):
-            SunAbraham(bootstrap_weights="invalid")
 
     def test_bootstrap_low_iterations_warning(self):
         """Test that low n_bootstrap triggers a warning."""
@@ -713,3 +688,45 @@ class TestSunAbrahamEdgeCases:
 
         assert results.overall_att is not None
         assert sa.anticipation == 1
+
+    def test_with_covariates(self):
+        """Test that covariates are properly handled in the regression."""
+        data = generate_staggered_data(seed=42)
+
+        # Add some covariates
+        np.random.seed(42)
+        data["covariate1"] = np.random.randn(len(data))
+        data["covariate2"] = np.random.randn(len(data))
+
+        sa = SunAbraham()
+        results = sa.fit(
+            data,
+            outcome="outcome",
+            unit="unit",
+            time="time",
+            first_treat="first_treat",
+            covariates=["covariate1", "covariate2"],
+        )
+
+        assert results.overall_att is not None
+        assert results.overall_se > 0
+
+    def test_cohort_level_dataframe(self):
+        """Test cohort-level DataFrame output."""
+        data = generate_staggered_data(seed=42)
+
+        sa = SunAbraham()
+        results = sa.fit(
+            data,
+            outcome="outcome",
+            unit="unit",
+            time="time",
+            first_treat="first_treat",
+        )
+
+        # Cohort effects should be available
+        df_cohort = results.to_dataframe(level="cohort")
+        assert "cohort" in df_cohort.columns
+        assert "relative_period" in df_cohort.columns
+        assert "effect" in df_cohort.columns
+        assert "weight" in df_cohort.columns
