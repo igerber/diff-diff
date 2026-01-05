@@ -17,6 +17,7 @@ Core estimator classes for DiD analysis:
    diff_diff.MultiPeriodDiD
    diff_diff.SyntheticDiD
    diff_diff.CallawaySantAnna
+   diff_diff.SunAbraham
 
 Results Classes
 ---------------
@@ -32,7 +33,10 @@ Result containers returned by estimators:
    diff_diff.SyntheticDiDResults
    diff_diff.PeriodEffect
    diff_diff.CallawaySantAnnaResults
+   diff_diff.CSBootstrapResults
    diff_diff.GroupTimeEffect
+   diff_diff.SunAbrahamResults
+   diff_diff.SABootstrapResults
 
 Visualization
 -------------
@@ -47,6 +51,8 @@ Plotting functions for results:
    diff_diff.plot_group_effects
    diff_diff.plot_sensitivity
    diff_diff.plot_honest_event_study
+   diff_diff.plot_bacon
+   diff_diff.plot_power_curve
 
 Diagnostics
 -----------
