@@ -6,11 +6,11 @@ For past changes and release history, see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
-## Current Status (v1.0.2)
+## Current Status (v1.1.0)
 
 diff-diff is a **production-ready** DiD library with feature parity with R's `did` + `HonestDiD` ecosystem for core DiD analysis:
 
-- **Core estimators**: Basic DiD, TWFE, MultiPeriod, Callaway-Sant'Anna, Synthetic DiD
+- **Core estimators**: Basic DiD, TWFE, MultiPeriod, Callaway-Sant'Anna, Sun-Abraham, Synthetic DiD
 - **Valid inference**: Robust SEs, cluster SEs, wild bootstrap, multiplier bootstrap
 - **Assumption diagnostics**: Parallel trends tests, placebo tests, Goodman-Bacon decomposition
 - **Sensitivity analysis**: Honest DiD (Rambachan-Roth)
@@ -18,19 +18,9 @@ diff-diff is a **production-ready** DiD library with feature parity with R's `di
 
 ---
 
-## Near-Term Enhancements (v1.1–v1.2)
+## Near-Term Enhancements (v1.2)
 
 High-value additions building on our existing foundation.
-
-### Sun-Abraham Estimator
-
-Interaction-weighted estimator providing an alternative to Callaway-Sant'Anna. Many practitioners run both as a robustness check.
-
-- Event-study coefficients via saturated regression with cohort-time interactions
-- Different weighting scheme than CS; can give different results under heterogeneous effects
-- Useful robustness check when CS and SA agree
-
-**Reference**: Sun & Abraham (2021). *Journal of Econometrics*.
 
 ### Borusyak-Jaravel-Spiess Imputation Estimator
 
