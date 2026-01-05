@@ -52,6 +52,27 @@ Two-stage approach gaining traction in applied work. First residualizes outcomes
 
 **Reference**: Gardner (2022). *Working Paper*.
 
+### Triple Difference (DDD) Estimators
+
+Extends DiD to settings requiring a third differencing dimension. Common DDD implementations are invalid when covariates are needed for identification.
+
+- Regression adjustment, IPW, and doubly robust DDD estimators
+- Staggered adoption support with multiple comparison groups
+- Proper covariate integration (naive "two DiD difference" approaches fail)
+- Bias reduction and precision gains over standard approaches
+
+**Reference**: [Ortiz-Villavicencio & Sant'Anna (2025)](https://arxiv.org/abs/2505.09942). *Working Paper*. R package: `triplediff`.
+
+### Pre-Trends Power Analysis
+
+Assess whether pre-trends tests have adequate power to detect meaningful parallel trends violations. Complements our Honest DiD implementation.
+
+- Minimum detectable violation size for pre-trends tests
+- Visualization of power against various violation magnitudes
+- Integration with existing parallel trends diagnostics
+
+**Reference**: [Roth (2022)](https://www.aeaweb.org/articles?id=10.1257/aeri.20210236). *AER: Insights*. R package: `pretrends`.
+
 ### Enhanced Visualization
 
 - Synthetic control weight visualization (bar chart of unit weights)
@@ -109,6 +130,28 @@ For outcomes where linear models are inappropriate (binary, count, bounded).
 - Proper handling of incidence rate ratios and odds ratios
 
 **Reference**: [Wooldridge (2023)](https://academic.oup.com/ectj/article/26/3/C31/7250479). *The Econometrics Journal*.
+
+### Doubly Robust DiD + Synthetic Control
+
+Unified framework combining DiD and synthetic control with doubly robust identification—valid under *either* parallel trends or synthetic control assumptions.
+
+- ATT identified under parallel trends OR group-level SC condition
+- Semiparametric estimation framework
+- Multiplier bootstrap for valid inference under either assumption
+- Strengthens credibility by avoiding the DiD vs. SC trade-off
+
+**Reference**: [Sun, Xie & Zhang (2025)](https://arxiv.org/abs/2503.11375). *Working Paper*.
+
+### Causal Duration Analysis with DiD
+
+Extends DiD to duration/survival outcomes where standard methods fail (hazard rates, time-to-event).
+
+- Duration analogue of parallel trends on hazard rates
+- Avoids distributional assumptions and hazard function specification
+- Visual and formal pre-trends assessment for duration data
+- Handles absorbing states approaching probability bounds
+
+**Reference**: [Deaner & Ku (2025)](https://www.aeaweb.org/conference/2025/program/paper/k77Kh8iS). *AEA Conference Paper*.
 
 ---
 
