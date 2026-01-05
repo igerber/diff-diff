@@ -156,3 +156,55 @@ Tests mirror the source modules:
 ### Dependencies
 
 Core dependencies are numpy, pandas, and scipy only (no statsmodels). The library implements its own OLS, robust standard errors, and inference.
+
+## Documentation Requirements
+
+When implementing new functionality, **always include accompanying documentation updates**:
+
+### For New Estimators or Major Features
+
+1. **README.md** - Add:
+   - Feature mention in the features list
+   - Full usage section with code examples
+   - Parameter documentation table
+   - API reference section (constructor params, fit() params, results attributes/methods)
+   - Scholarly references if applicable
+
+2. **docs/api/*.rst** - Add:
+   - RST documentation with `autoclass` directives
+   - Method summaries
+   - References to academic papers
+
+3. **docs/tutorials/*.ipynb** - Update relevant tutorial or create new one:
+   - Working code examples
+   - Explanation of when/why to use the feature
+   - Comparison with related functionality
+
+4. **CLAUDE.md** - Update:
+   - Module structure section
+   - Test structure section
+   - Any relevant design patterns
+
+5. **ROADMAP.md** - Update:
+   - Move implemented features from planned to current status
+   - Update version numbers
+
+### For Bug Fixes or Minor Enhancements
+
+- Update relevant docstrings
+- Add/update tests
+- Update CHANGELOG.md (if exists)
+
+### Scholarly References
+
+For methods based on academic papers, always include:
+- Full citation in README.md references section
+- Reference in RST docs with paper details
+- Citation in tutorial summary
+
+Example format:
+```
+Sun, L., & Abraham, S. (2021). Estimating dynamic treatment effects in
+event studies with heterogeneous treatment effects. *Journal of Econometrics*,
+225(2), 175-199.
+```
