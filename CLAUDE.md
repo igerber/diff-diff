@@ -53,6 +53,13 @@ mypy diff_diff
   - `GroupTimeEffect` - Container for individual group-time effects
   - Multiplier bootstrap with Rademacher, Mammen, or Webb weights
 
+- **`diff_diff/sun_abraham.py`** - Sun-Abraham interaction-weighted estimator:
+  - `SunAbraham` - Sun & Abraham (2021) estimator using saturated regression
+  - `SunAbrahamResults` - Results with event study effects and cohort weights
+  - `SABootstrapResults` - Bootstrap inference results
+  - Alternative to Callaway-Sant'Anna with different weighting scheme
+  - Useful robustness check when both estimators agree
+
 - **`diff_diff/bacon.py`** - Goodman-Bacon decomposition for TWFE diagnostics:
   - `BaconDecomposition` - Decompose TWFE into weighted 2x2 comparisons (Goodman-Bacon 2021)
   - `BaconDecompositionResults` - Results with comparison weights and estimates by type
@@ -71,7 +78,7 @@ mypy diff_diff
   - `plot_honest_event_study` - Event study with honest confidence intervals
   - `plot_bacon` - Bacon decomposition scatter/bar plots (weights vs estimates by comparison type)
   - `plot_power_curve` - Power curve visualization (power vs effect size or sample size)
-  - Works with MultiPeriodDiD, CallawaySantAnna, HonestDiD, BaconDecomposition, PowerAnalysis, or DataFrames
+  - Works with MultiPeriodDiD, CallawaySantAnna, SunAbraham, HonestDiD, BaconDecomposition, PowerAnalysis, or DataFrames
 
 - **`diff_diff/utils.py`** - Statistical utilities:
   - Robust/cluster standard errors (`compute_robust_se`)
@@ -136,6 +143,7 @@ mypy diff_diff
 Tests mirror the source modules:
 - `tests/test_estimators.py` - Tests for DifferenceInDifferences, TWFE, MultiPeriodDiD, SyntheticDiD
 - `tests/test_staggered.py` - Tests for CallawaySantAnna
+- `tests/test_sun_abraham.py` - Tests for SunAbraham interaction-weighted estimator
 - `tests/test_bacon.py` - Tests for Goodman-Bacon decomposition
 - `tests/test_utils.py` - Tests for parallel trends, robust SE, synthetic weights
 - `tests/test_diagnostics.py` - Tests for placebo tests

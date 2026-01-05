@@ -69,6 +69,11 @@ from diff_diff.staggered import (
     CSBootstrapResults,
     GroupTimeEffect,
 )
+from diff_diff.sun_abraham import (
+    SABootstrapResults,
+    SunAbraham,
+    SunAbrahamResults,
+)
 from diff_diff.utils import (
     WildBootstrapResults,
     check_parallel_trends,
@@ -85,7 +90,7 @@ from diff_diff.visualization import (
     plot_sensitivity,
 )
 
-__version__ = "1.0.2"
+__version__ = "1.1.0"
 __all__ = [
     # Estimators
     "DifferenceInDifferences",
@@ -93,6 +98,7 @@ __all__ = [
     "MultiPeriodDiD",
     "SyntheticDiD",
     "CallawaySantAnna",
+    "SunAbraham",
     # Bacon Decomposition
     "BaconDecomposition",
     "BaconDecompositionResults",
@@ -107,6 +113,8 @@ __all__ = [
     "CallawaySantAnnaResults",
     "CSBootstrapResults",
     "GroupTimeEffect",
+    "SunAbrahamResults",
+    "SABootstrapResults",
     # Visualization
     "plot_event_study",
     "plot_group_effects",
