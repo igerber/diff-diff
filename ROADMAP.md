@@ -2,190 +2,235 @@
 
 This document outlines the feature roadmap for diff-diff, prioritized by practitioner value and academic credibility.
 
-## What Makes a Credible 1.0?
-
-A production-ready DiD library needs:
-
-1. ✅ **Core estimators** - Basic DiD, TWFE, MultiPeriod, Staggered (Callaway-Sant'Anna), Synthetic DiD
-2. ✅ **Valid inference** - Robust SEs, cluster SEs, wild bootstrap for few clusters
-3. ✅ **Assumption diagnostics** - Parallel trends tests, placebo tests
-4. ✅ **Sensitivity analysis** - What if parallel trends is violated? (Rambachan-Roth)
-5. ✅ **Conditional parallel trends** - Covariate adjustment for staggered DiD
-6. ✅ **Documentation** - API reference site for discoverability
-
-**All 1.0 blockers are complete.** diff-diff has feature parity with R's `did` + `HonestDiD` ecosystem for core DiD analysis.
+For past changes and release history, see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
-## Status Overview
+## Current Status (v1.0.2)
 
-| Feature | Status | Priority | Why It Matters |
-|---------|--------|----------|----------------|
-| Honest DiD (Rambachan-Roth) | ✅ Done | — | Reviewers expect sensitivity analysis |
-| CallawaySantAnna Covariates | ✅ Done | — | Conditional PT often required in practice |
-| API Documentation Site | ✅ Done | — | Credibility and discoverability |
-| Goodman-Bacon Decomposition | ✅ Done | — | Explains when TWFE fails |
-| Power Analysis | ✅ Done | — | Study design tool |
-| CallawaySantAnna Bootstrap | ✅ Done | — | Valid inference with few clusters |
-| Sun-Abraham Estimator | Not Started | Post-1.0 | Alternative to CS, some prefer it |
-| Gardner's did2s | Not Started | Post-1.0 | Two-stage approach, available in pyfixest |
-| Local Projections DiD | Not Started | Post-1.0 | Dynamic effects (Dube et al. 2023) |
-| Borusyak-Jaravel-Spiess | Not Started | Post-1.0 | More efficient under homogeneous effects |
-| Double/Debiased ML | Not Started | Post-1.0 | High-dimensional covariates |
+diff-diff is a **production-ready** DiD library with feature parity with R's `did` + `HonestDiD` ecosystem for core DiD analysis:
+
+- **Core estimators**: Basic DiD, TWFE, MultiPeriod, Callaway-Sant'Anna, Synthetic DiD
+- **Valid inference**: Robust SEs, cluster SEs, wild bootstrap, multiplier bootstrap
+- **Assumption diagnostics**: Parallel trends tests, placebo tests, Goodman-Bacon decomposition
+- **Sensitivity analysis**: Honest DiD (Rambachan-Roth)
+- **Study design**: Power analysis tools
 
 ---
 
-## 1.0 Target Features
+## Near-Term Enhancements (v1.1–v1.2)
 
-These would strengthen the 1.0 release but aren't strictly blocking.
+High-value additions building on our existing foundation.
 
-### ✅ Goodman-Bacon Decomposition (Done)
+### Sun-Abraham Estimator
 
-Helps users understand *why* TWFE can be biased with staggered adoption. Shows weights on "forbidden comparisons" (already-treated as controls). Essential diagnostic before deciding whether to use Callaway-Sant'Anna.
+Interaction-weighted estimator providing an alternative to Callaway-Sant'Anna. Many practitioners run both as a robustness check.
 
-- ✅ Decompose TWFE into 2x2 comparisons
-- ✅ Show weights by comparison type (clean vs. forbidden)
-- ✅ Visualization of decomposition (scatter and bar charts)
-- ✅ Integration with `TwoWayFixedEffects.decompose()` method
-- ✅ Automatic warning when TWFE detects staggered treatment timing
+- Event-study coefficients via saturated regression with cohort-time interactions
+- Different weighting scheme than CS; can give different results under heterogeneous effects
+- Useful robustness check when CS and SA agree
 
-**Reference**: Goodman-Bacon (2021). *Journal of Econometrics*.
+**Reference**: Sun & Abraham (2021). *Journal of Econometrics*.
 
-### ✅ Power Analysis Tools (Done)
+### Borusyak-Jaravel-Spiess Imputation Estimator
 
-Practitioners need to know "how many units/periods do I need to detect an effect of size X?" Now available in diff-diff.
+More efficient than Callaway-Sant'Anna when treatment effects are homogeneous across groups/time. Uses imputation rather than aggregation.
 
-- ✅ Minimum detectable effect given sample size
-- ✅ Required sample size for target power
-- ✅ Simulation-based power for any estimator (including staggered designs)
-- ✅ Visualization of power curves
-- ✅ Panel data considerations (ICC, multiple periods)
+- Imputes untreated potential outcomes using pre-treatment data
+- More efficient under homogeneous effects assumption
+- Can handle unbalanced panels more naturally
 
-**References**: Bloom (1995); Burlig, Preonas, & Woerman (2020).
+**Reference**: Borusyak, Jaravel, and Spiess (2024). *Review of Economic Studies*.
 
-### ✅ CallawaySantAnna Bootstrap Inference (Done)
+### Gardner's Two-Stage DiD (did2s)
 
-With few clusters or groups, analytical SEs may be unreliable. Multiplier bootstrap provides valid inference following the R `did` package approach.
+Two-stage approach gaining traction in applied work. First residualizes outcomes, then estimates effects.
 
-- ✅ Multiplier bootstrap at unit level with influence function perturbation
-- ✅ Aggregate bootstrap samples for overall ATT, event study, and group effects
-- ✅ Rademacher, Mammen, and Webb weight distributions
-- ✅ Percentile confidence intervals and bootstrap p-values
+- Stage 1: Estimate unit and time FEs using only untreated observations
+- Stage 2: Regress residualized outcomes on treatment indicators
+- Clean separation of identification and estimation
 
-**Reference**: Callaway & Sant'Anna (2021). *Journal of Econometrics*.
+**Reference**: Gardner (2022). *Working Paper*.
+
+### Triple Difference (DDD) Estimators
+
+Extends DiD to settings requiring a third differencing dimension. Common DDD implementations are invalid when covariates are needed for identification.
+
+- Regression adjustment, IPW, and doubly robust DDD estimators
+- Staggered adoption support with multiple comparison groups
+- Proper covariate integration (naive "two DiD difference" approaches fail)
+- Bias reduction and precision gains over standard approaches
+
+**Reference**: [Ortiz-Villavicencio & Sant'Anna (2025)](https://arxiv.org/abs/2505.09942). *Working Paper*. R package: `triplediff`.
+
+### Pre-Trends Power Analysis
+
+Assess whether pre-trends tests have adequate power to detect meaningful parallel trends violations. Complements our Honest DiD implementation.
+
+- Minimum detectable violation size for pre-trends tests
+- Visualization of power against various violation magnitudes
+- Integration with existing parallel trends diagnostics
+
+**Reference**: [Roth (2022)](https://www.aeaweb.org/articles?id=10.1257/aeri.20210236). *AER: Insights*. R package: `pretrends`.
 
 ### Enhanced Visualization
 
 - Synthetic control weight visualization (bar chart of unit weights)
-- ✅ Bacon decomposition visualization (scatter and bar charts)
-- Treatment adoption "staircase" plot
+- Treatment adoption "staircase" plot for staggered designs
+- Interactive plots with plotly backend option
 
 ---
 
-## Post-1.0 Features
+## Medium-Term Enhancements (v1.3+)
 
-These are valuable but can wait for future versions.
+Extending diff-diff to handle more complex settings.
 
-### Sun-Abraham Estimator
+### Continuous Treatment DiD
 
-Alternative to Callaway-Sant'Anna using interaction-weighted approach. Some practitioners prefer it; provides a robustness check.
+Many treatments have dose/intensity rather than binary on/off. Active research area with recent breakthroughs.
 
-**Reference**: Sun & Abraham (2021). *Journal of Econometrics*.
+- Treatment effect on treated (ATT) parameters under generalized parallel trends
+- Dose-response curves and marginal effects
+- Handle settings where "dose" varies across units and time
+- Event studies with continuous treatments
 
-### Gardner's Two-Stage DiD (did2s)
+**References**:
+- [Callaway, Goodman-Bacon & Sant'Anna (2024)](https://arxiv.org/abs/2107.02637). *NBER Working Paper*.
+- [de Chaisemartin, D'Haultfœuille & Vazquez-Bare (2024)](https://arxiv.org/abs/2402.05432). *AEA Papers and Proceedings*.
 
-Two-stage approach to staggered DiD that first residualizes outcomes using untreated observations, then estimates treatment effects. Available in pyfixest (Python) and did2s (R).
+### de Chaisemartin-D'Haultfœuille Estimator
 
-**Reference**: Gardner (2022). *Two-stage differences in differences*.
+Handles treatment that switches on and off (reversible treatments), unlike most other methods.
+
+- Allows units to move into and out of treatment
+- Time-varying, heterogeneous treatment effects
+- Comparison with never-switchers or flexible control groups
+- Different assumptions than CS/SA—useful for different settings
+
+**Reference**: [de Chaisemartin & D'Haultfœuille (2020, 2024)](https://papers.ssrn.com/sol3/papers.cfm?abstract_id=3980758). *American Economic Review*.
 
 ### Local Projections DiD
 
-Implements local projections for dynamic treatment effects. Flexible approach that doesn't require specifying the full dynamic structure. Gaining traction in applied work.
+Implements local projections for dynamic treatment effects. Doesn't require specifying full dynamic structure.
+
+- Flexible impulse response estimation
+- Robust to misspecification of dynamics
+- Natural handling of anticipation effects
+- Growing use in macroeconomics and policy evaluation
 
 **Reference**: Dube, Girardi, Jordà, and Taylor (2023).
 
-### Borusyak-Jaravel-Spiess Imputation Estimator
+### Nonlinear DiD
 
-More efficient than Callaway-Sant'Anna when parallel trends holds across all periods. Uses imputation approach.
+For outcomes where linear models are inappropriate (binary, count, bounded).
 
-**Reference**: Borusyak, Jaravel, and Spiess (2024).
+- Logit/probit DiD for binary outcomes
+- Poisson DiD for count outcomes
+- Flexible strategies for staggered designs with nonlinear models
+- Proper handling of incidence rate ratios and odds ratios
 
-### Double/Debiased ML for DiD
+**Reference**: [Wooldridge (2023)](https://academic.oup.com/ectj/article/26/3/C31/7250479). *The Econometrics Journal*.
 
-For high-dimensional settings with many covariates. Uses ML for nuisance parameter estimation with cross-fitting.
+### Doubly Robust DiD + Synthetic Control
 
-**Reference**: Chernozhukov et al. (2018), Chang (2020).
+Unified framework combining DiD and synthetic control with doubly robust identification—valid under *either* parallel trends or synthetic control assumptions.
 
-### Alternative Inference Methods
+- ATT identified under parallel trends OR group-level SC condition
+- Semiparametric estimation framework
+- Multiplier bootstrap for valid inference under either assumption
+- Strengthens credibility by avoiding the DiD vs. SC trade-off
 
-- Randomization inference for small samples
-- Bayesian DiD with prior on parallel trends
-- Conformal inference for prediction intervals
+**Reference**: [Sun, Xie & Zhang (2025)](https://arxiv.org/abs/2503.11375). *Working Paper*.
+
+### Causal Duration Analysis with DiD
+
+Extends DiD to duration/survival outcomes where standard methods fail (hazard rates, time-to-event).
+
+- Duration analogue of parallel trends on hazard rates
+- Avoids distributional assumptions and hazard function specification
+- Visual and formal pre-trends assessment for duration data
+- Handles absorbing states approaching probability bounds
+
+**Reference**: [Deaner & Ku (2025)](https://www.aeaweb.org/conference/2025/program/paper/k77Kh8iS). *AEA Conference Paper*.
 
 ---
 
-## Release History
+## Long-Term Research Directions (v2.0+)
 
-### v0.9.0 (Current)
+Frontier methods requiring more research investment.
 
-- ✅ Callaway-Sant'Anna multiplier bootstrap inference
-- ✅ Rademacher, Mammen, and Webb weight distributions
-- ✅ Bootstrap SEs, CIs, and p-values for all aggregations (overall ATT, event study, group effects)
-- ✅ `CSBootstrapResults` dataclass for bootstrap results
+### Matrix Completion Methods
 
-### v0.8.0
+Unified framework encompassing synthetic control and regression approaches. Moves seamlessly between cross-sectional and time-series patterns.
 
-- ✅ Power analysis tools (`PowerAnalysis`, `simulate_power`)
-- ✅ MDE, sample size, and power calculations
-- ✅ Simulation-based power for any DiD estimator
-- ✅ Power curve visualization (`plot_power_curve`)
-- ✅ Panel data support with ICC adjustment
+- Nuclear norm regularization for low-rank structure
+- Handles missing data patterns common in panel settings
+- Bridges synthetic control (few units, many periods) and regression (many units, few periods)
+- Confidence intervals via debiasing
 
-### v0.7.0
+**Reference**: [Athey et al. (2021)](https://arxiv.org/abs/1710.10251). *Journal of the American Statistical Association*.
 
-- ✅ Goodman-Bacon decomposition for TWFE diagnostics
-- ✅ `plot_bacon()` visualization (scatter and bar charts)
-- ✅ `TwoWayFixedEffects.decompose()` integration
-- ✅ Automatic staggered treatment warning in TWFE
+### Causal Forests for DiD
 
-### v0.6.0
+Machine learning methods for discovering heterogeneous treatment effects in DiD settings.
 
-- ✅ **All 1.0 Blockers Complete**
-- ✅ Honest DiD sensitivity analysis (Rambachan & Roth 2023)
-- ✅ CallawaySantAnna covariate adjustment (DR, IPW, Reg)
-- ✅ API documentation site with Sphinx
+- Estimate treatment effect heterogeneity across covariates
+- Data-driven subgroup discovery
+- Combine with DiD identification for observational data
+- Honest confidence intervals for discovered heterogeneity
 
-### v0.5.0
+**References**:
+- [Kattenberg, Scheer & Thiel (2023)](https://ideas.repec.org/p/cpb/discus/452.html). *CPB Discussion Paper*.
+- Athey & Wager (2019). *Annals of Statistics*.
 
-- Wild cluster bootstrap (Rademacher, Webb, Mammen weights)
-- Placebo tests module
-- Tutorial notebooks
+### Double/Debiased ML for DiD
 
-### v0.4.0
+For high-dimensional settings with many potential confounders.
 
-- Callaway-Sant'Anna estimator for staggered DiD
-- Event study and group effects visualization
-- Parallel trends testing utilities
+- ML for nuisance parameter estimation (propensity, outcome models)
+- Cross-fitting for valid inference
+- Handles many covariates without overfitting concerns
+- Doubly-robust estimation with ML flexibility
 
-### v0.3.0
+**Reference**: Chernozhukov et al. (2018). *The Econometrics Journal*.
 
-- Synthetic Difference-in-Differences
-- Multi-period DiD with event study
-- Data preparation utilities
+### Alternative Inference Methods
 
-### v0.2.0
+- **Randomization inference**: Exact p-values for small samples
+- **Bayesian DiD**: Priors on parallel trends violations
+- **Conformal inference**: Prediction intervals with finite-sample guarantees
 
-- Two-Way Fixed Effects estimator
-- Fixed effects support (absorb parameter)
-- Cluster-robust standard errors
-- Formula interface
+---
 
-### v0.1.0
+## Infrastructure Improvements
 
-- Initial release with basic DiD estimator
+Ongoing maintenance and developer experience.
+
+### Performance
+
+- JIT compilation for bootstrap loops (numba)
+- Parallel bootstrap iterations
+- Sparse matrix handling for large fixed effects
+- Memory-efficient estimation for large panels
+
+### Code Quality
+
+- Extract shared within-transformation logic to utils
+- Consolidate linear regression helpers
+- Consider splitting `staggered.py` (1800+ lines)
+
+### Documentation
+
+- Real-world data examples (beyond synthetic)
+- Performance benchmarks vs. R packages
+- Video tutorials and worked examples
 
 ---
 
 ## Contributing
 
-Interested in contributing? See the [GitHub repository](https://github.com/igerber/diff-diff) for open issues. Features marked "Not Started" are good candidates for contributions.
+Interested in contributing? Features in the "Near-Term" and "Medium-Term" sections are good candidates. See the [GitHub repository](https://github.com/igerber/diff-diff) for open issues.
+
+Key references for implementation:
+- [Roth et al. (2023)](https://www.sciencedirect.com/science/article/abs/pii/S0304407623001318). "What's Trending in Difference-in-Differences?" *Journal of Econometrics*.
+- [Baker et al. (2025)](https://arxiv.org/pdf/2503.13323). "Difference-in-Differences Designs: A Practitioner's Guide."
