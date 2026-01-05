@@ -5,6 +5,39 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] - 2026-01-05
+
+### Added
+- **Sun-Abraham (2021) interaction-weighted estimator** for staggered DiD
+  - `SunAbraham` class implementing saturated regression approach
+  - `SunAbrahamResults` with event study effects, cohort weights, and overall ATT
+  - `SABootstrapResults` for bootstrap inference (SEs, CIs, p-values)
+  - Support for `never_treated` and `not_yet_treated` control groups
+  - Analytical and cluster-robust standard errors
+  - Multiplier bootstrap with Rademacher, Mammen, or Webb weights
+  - Integration with `plot_event_study()` visualization
+  - Useful robustness check alongside Callaway-Sant'Anna
+
+**Reference**: Sun, L., & Abraham, S. (2021). "Estimating Dynamic Treatment Effects in Event Studies with Heterogeneous Treatment Effects." *Journal of Econometrics*, 225(2), 175-199.
+
+## [1.0.2] - 2026-01-04
+
+### Changed
+- Refactored `estimators.py` to reduce module size
+  - Moved `TwoWayFixedEffects` to `diff_diff/twfe.py`
+  - Moved `SyntheticDiD` to `diff_diff/synthetic_did.py`
+  - Backward compatible re-exports maintained in `estimators.py`
+
+### Fixed
+- Fixed ReadTheDocs version display by importing from package `__version__`
+
+## [1.0.1] - 2026-01-04
+
+### Fixed
+- Tech debt cleanup (Tier 1 + Tier 2)
+  - Improved code organization and documentation
+  - Fixed minor issues identified in tech debt review
+
 ## [1.0.0] - 2026-01-04
 
 ### Added
@@ -167,6 +200,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `to_dict()` and `to_dataframe()` export methods
   - `is_significant` and `significance_stars` properties
 
+[1.1.0]: https://github.com/igerber/diff-diff/compare/v1.0.2...v1.1.0
+[1.0.2]: https://github.com/igerber/diff-diff/compare/v1.0.1...v1.0.2
+[1.0.1]: https://github.com/igerber/diff-diff/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/igerber/diff-diff/compare/v0.6.0...v1.0.0
 [0.6.0]: https://github.com/igerber/diff-diff/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/igerber/diff-diff/compare/v0.4.0...v0.5.0
