@@ -9,11 +9,13 @@ import sys
 # Add the project root to the path for autodoc
 sys.path.insert(0, os.path.abspath(".."))
 
+import diff_diff
+
 # -- Project information -----------------------------------------------------
 project = "diff-diff"
 copyright = "2026, diff-diff contributors"
 author = "diff-diff contributors"
-release = "0.6.0"
+release = diff_diff.__version__
 
 # -- General configuration ---------------------------------------------------
 extensions = [
