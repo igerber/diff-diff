@@ -625,11 +625,30 @@ def permutation_test(
             # Handle edge cases where fitting fails
             permuted_effects[i] = np.nan
 
-    # Remove any NaN values
+    # Remove any NaN values and track failure rate
     valid_effects = permuted_effects[~np.isnan(permuted_effects)]
+    n_failed = n_permutations - len(valid_effects)
 
     if len(valid_effects) == 0:
-        raise RuntimeError("All permutations failed - check your data")
+        raise RuntimeError(
+            f"All {n_permutations} permutations failed. This typically occurs when:\n"
+            f"  - Treatment/control groups are too small for valid permutation\n"
+            f"  - Data contains collinearity or singular matrices after permutation\n"
+            f"  - There are too few observations per time period\n"
+            f"Consider checking data quality with validate_did_data() from diff_diff.prep."
+        )
+
+    # Warn if significant number of permutations failed
+    if n_failed > 0:
+        failure_rate = n_failed / n_permutations
+        if failure_rate > 0.1:
+            import warnings
+            warnings.warn(
+                f"{n_failed}/{n_permutations} permutations failed ({failure_rate:.1%}). "
+                f"Results based on {len(valid_effects)} successful permutations.",
+                UserWarning,
+                stacklevel=2
+            )
 
     # Compute p-value: proportion of |permuted| >= |original|
     p_value = np.mean(np.abs(valid_effects) >= np.abs(original_att))
@@ -736,11 +755,30 @@ def leave_one_out_test(
             # Skip units that cause fitting issues
             loo_effects[u] = np.nan
 
-    # Remove NaN values for statistics
+    # Remove NaN values for statistics and track failures
     valid_effects = [v for v in loo_effects.values() if not np.isnan(v)]
+    n_total = len(loo_effects)
+    n_failed = n_total - len(valid_effects)
 
     if len(valid_effects) == 0:
-        raise RuntimeError("All leave-one-out estimates failed")
+        raise RuntimeError(
+            f"All {n_total} leave-one-out estimates failed. This typically occurs when:\n"
+            f"  - Removing any single treated unit causes model fitting to fail\n"
+            f"  - Very few treated units (need at least 2 for LOO)\n"
+            f"  - Data has collinearity issues that manifest when units are removed\n"
+            f"Consider checking data quality and ensuring sufficient treated units."
+        )
+
+    # Warn if significant number of LOO iterations failed
+    if n_failed > 0:
+        import warnings
+        failed_units = [u for u, v in loo_effects.items() if np.isnan(v)]
+        warnings.warn(
+            f"{n_failed}/{n_total} leave-one-out estimates failed for units: {failed_units}. "
+            f"Results based on {len(valid_effects)} successful iterations.",
+            UserWarning,
+            stacklevel=2
+        )
 
     # Statistics of LOO distribution
     mean_effect = np.mean(valid_effects)
@@ -838,8 +876,13 @@ def run_all_placebo_tests(
             )
             results[f"fake_timing_{period}"] = test_result
         except Exception as e:
-            # Store error info
-            results[f"fake_timing_{period}"] = {"error": str(e)}
+            # Store structured error info for debugging
+            results[f"fake_timing_{period}"] = {
+                "error": str(e),
+                "error_type": type(e).__name__,
+                "test_type": "fake_timing",
+                "period": period
+            }
 
     # Permutation test
     try:
@@ -856,7 +899,11 @@ def run_all_placebo_tests(
         )
         results["permutation"] = perm_result
     except Exception as e:
-        results["permutation"] = {"error": str(e)}
+        results["permutation"] = {
+            "error": str(e),
+            "error_type": type(e).__name__,
+            "test_type": "permutation"
+        }
 
     # Leave-one-out test
     try:
@@ -871,6 +918,10 @@ def run_all_placebo_tests(
         )
         results["leave_one_out"] = loo_result
     except Exception as e:
-        results["leave_one_out"] = {"error": str(e)}
+        results["leave_one_out"] = {
+            "error": str(e),
+            "error_type": type(e).__name__,
+            "test_type": "leave_one_out"
+        }
 
     return results

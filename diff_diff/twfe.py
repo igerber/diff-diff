@@ -17,7 +17,6 @@ from diff_diff.utils import (
     compute_confidence_interval,
     compute_p_value,
     compute_robust_se,
-    wild_bootstrap_se,
 )
 
 
@@ -132,21 +131,9 @@ class TwoWayFixedEffects(DifferenceInDifferences):
         cluster_ids = data[cluster_var].values
         if self.inference == "wild_bootstrap":
             # Wild cluster bootstrap for few-cluster inference
-            bootstrap_results = wild_bootstrap_se(
-                X, y, residuals, cluster_ids,
-                coefficient_index=att_idx,
-                n_bootstrap=self.n_bootstrap,
-                weight_type=self.bootstrap_weights,
-                alpha=self.alpha,
-                seed=self.seed,
-                return_distribution=False
+            se, p_value, conf_int, t_stat, vcov, _ = self._run_wild_bootstrap_inference(
+                X, y, residuals, cluster_ids, att_idx
             )
-            self._bootstrap_results = bootstrap_results
-            se = bootstrap_results.se
-            p_value = bootstrap_results.p_value
-            conf_int = (bootstrap_results.ci_lower, bootstrap_results.ci_upper)
-            t_stat = bootstrap_results.t_stat_original
-            vcov = compute_robust_se(X, residuals, cluster_ids)
         else:
             # Standard cluster-robust SE
             vcov = compute_robust_se(X, residuals, cluster_ids)

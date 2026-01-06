@@ -169,14 +169,14 @@ def _logistic_regression(
     # Add intercept
     X_with_intercept = np.column_stack([np.ones(n), X])
 
-    def neg_log_likelihood(beta):
+    def neg_log_likelihood(beta: np.ndarray) -> float:
         z = X_with_intercept @ beta
         # Clip to prevent overflow
         z = np.clip(z, -500, 500)
         log_lik = np.sum(y * z - np.log(1 + np.exp(z)))
         return -log_lik
 
-    def gradient(beta):
+    def gradient(beta: np.ndarray) -> np.ndarray:
         z = X_with_intercept @ beta
         z = np.clip(z, -500, 500)
         probs = 1 / (1 + np.exp(-z))

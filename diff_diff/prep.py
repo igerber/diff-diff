@@ -601,7 +601,7 @@ def summarize_did_data(
     if len(time_vals) == 2:
         pre_val, post_val = time_vals[0], time_vals[1]
 
-        def format_label(x):
+        def format_label(x: tuple) -> str:
             treatment_label = 'Treated' if x[0] == 1 else 'Control'
             time_label = 'Post' if x[1] == post_val else 'Pre'
             return f"{treatment_label} - {time_label}"

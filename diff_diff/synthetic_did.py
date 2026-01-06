@@ -503,10 +503,33 @@ class SyntheticDiD(DifferenceInDifferences):
 
         bootstrap_estimates = np.array(bootstrap_estimates)
 
-        # Warn if too many bootstrap iterations failed
+        # Check bootstrap success rate and handle failures appropriately
         n_successful = len(bootstrap_estimates)
         failure_rate = 1 - (n_successful / self.n_bootstrap)
-        if failure_rate > 0.05:
+
+        if n_successful == 0:
+            raise ValueError(
+                f"All {self.n_bootstrap} bootstrap iterations failed. "
+                f"This typically occurs when:\n"
+                f"  - Sample size is too small for reliable resampling\n"
+                f"  - Weight matrices are singular or near-singular\n"
+                f"  - Insufficient pre-treatment periods for weight estimation\n"
+                f"  - Too few control units relative to treated units\n"
+                f"Consider using n_bootstrap=0 to disable bootstrap inference "
+                f"and rely on placebo-based standard errors, or increase "
+                f"the regularization parameters (lambda_reg, zeta)."
+            )
+        elif n_successful == 1:
+            warnings.warn(
+                f"Only 1/{self.n_bootstrap} bootstrap iteration succeeded. "
+                f"Standard error cannot be computed reliably (requires at least 2). "
+                f"Returning SE=0.0. Consider the suggestions above for improving "
+                f"bootstrap convergence.",
+                UserWarning,
+                stacklevel=2,
+            )
+            se = 0.0
+        elif failure_rate > 0.05:
             warnings.warn(
                 f"Only {n_successful}/{self.n_bootstrap} bootstrap iterations succeeded "
                 f"({failure_rate:.1%} failure rate). Standard errors may be unreliable. "
@@ -515,8 +538,9 @@ class SyntheticDiD(DifferenceInDifferences):
                 UserWarning,
                 stacklevel=2,
             )
-
-        se = np.std(bootstrap_estimates, ddof=1) if len(bootstrap_estimates) > 1 else 0.0
+            se = np.std(bootstrap_estimates, ddof=1)
+        else:
+            se = np.std(bootstrap_estimates, ddof=1)
 
         return se, bootstrap_estimates
 

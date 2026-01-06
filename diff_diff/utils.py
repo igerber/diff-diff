@@ -590,7 +590,7 @@ def check_parallel_trends(
     control_data = pre_data[pre_data[treatment_group] == 0]
 
     # Simple linear regression for trends
-    def compute_trend(group_data):
+    def compute_trend(group_data: pd.DataFrame) -> Tuple[float, float]:
         time_values = group_data[time].values
         outcome_values = group_data[outcome].values
 
