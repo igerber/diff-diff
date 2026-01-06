@@ -14,8 +14,6 @@ Current limitations that may affect users:
 |-------|----------|----------|-------|
 | MultiPeriodDiD wild bootstrap not supported | `estimators.py:1068-1074` | Low | Edge case |
 | `predict()` raises NotImplementedError | `estimators.py:532-554` | Low | Rarely needed |
-| SyntheticDiD bootstrap can fail silently | `estimators.py:1580-1654` | Medium | Needs better error handling |
-| Diagnostics module error handling | `diagnostics.py:782-885` | Medium | Improve robustness |
 
 ---
 
@@ -27,7 +25,6 @@ Consolidation opportunities for cleaner maintenance:
 
 | Duplicate Code | Locations | Notes |
 |---------------|-----------|-------|
-| Wild bootstrap inference block | `estimators.py:278-296`, `estimators.py:725-748` | Extract to shared method |
 | Within-transformation logic | `estimators.py:217-232`, `estimators.py:787-833`, `bacon.py:567-642` | Extract to utils.py |
 | Linear regression helper | `staggered.py:205-240`, `estimators.py:366-408` | Consider consolidation |
 
@@ -117,8 +114,4 @@ No major performance issues identified. Potential future optimizations:
 
 ## Type Hints
 
-Missing type hints in internal functions:
-
-- `utils.py:593` - `compute_trend()` nested function
-- `staggered.py:173, 180` - Nested functions in `_logistic_regression()`
-- `prep.py:604` - `format_label()` nested function
+All previously identified missing type hints have been addressed in v1.1.1.

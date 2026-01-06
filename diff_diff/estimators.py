@@ -19,6 +19,7 @@ import pandas as pd
 
 from diff_diff.results import DiDResults, MultiPeriodDiDResults, PeriodEffect
 from diff_diff.utils import (
+    WildBootstrapResults,
     compute_confidence_interval,
     compute_p_value,
     compute_robust_se,
@@ -279,22 +280,9 @@ class DifferenceInDifferences:
         if self.inference == "wild_bootstrap" and self.cluster is not None:
             # Wild cluster bootstrap for few-cluster inference
             cluster_ids = data[self.cluster].values
-            bootstrap_results = wild_bootstrap_se(
-                X, y, residuals, cluster_ids,
-                coefficient_index=att_idx,
-                n_bootstrap=self.n_bootstrap,
-                weight_type=self.bootstrap_weights,
-                alpha=self.alpha,
-                seed=self.seed,
-                return_distribution=False
+            se, p_value, conf_int, t_stat, vcov, _ = self._run_wild_bootstrap_inference(
+                X, y, residuals, cluster_ids, att_idx
             )
-            self._bootstrap_results = bootstrap_results
-            se = bootstrap_results.se
-            p_value = bootstrap_results.p_value
-            conf_int = (bootstrap_results.ci_lower, bootstrap_results.ci_upper)
-            t_stat = bootstrap_results.t_stat_original
-            # Also compute vcov for storage (using cluster-robust for consistency)
-            vcov = compute_robust_se(X, residuals, cluster_ids)
         elif self.cluster is not None:
             cluster_ids = data[self.cluster].values
             vcov = compute_robust_se(X, residuals, cluster_ids)
@@ -407,6 +395,56 @@ class DifferenceInDifferences:
         r_squared = 1 - (ss_res / ss_tot) if ss_tot > 0 else 0.0
 
         return coefficients, residuals, fitted, r_squared
+
+    def _run_wild_bootstrap_inference(
+        self,
+        X: np.ndarray,
+        y: np.ndarray,
+        residuals: np.ndarray,
+        cluster_ids: np.ndarray,
+        coefficient_index: int,
+    ) -> Tuple[float, float, Tuple[float, float], float, np.ndarray, WildBootstrapResults]:
+        """
+        Run wild cluster bootstrap inference.
+
+        Parameters
+        ----------
+        X : np.ndarray
+            Design matrix.
+        y : np.ndarray
+            Outcome vector.
+        residuals : np.ndarray
+            OLS residuals.
+        cluster_ids : np.ndarray
+            Cluster identifiers for each observation.
+        coefficient_index : int
+            Index of the coefficient to compute inference for.
+
+        Returns
+        -------
+        tuple
+            (se, p_value, conf_int, t_stat, vcov, bootstrap_results)
+        """
+        bootstrap_results = wild_bootstrap_se(
+            X, y, residuals, cluster_ids,
+            coefficient_index=coefficient_index,
+            n_bootstrap=self.n_bootstrap,
+            weight_type=self.bootstrap_weights,
+            alpha=self.alpha,
+            seed=self.seed,
+            return_distribution=False
+        )
+        self._bootstrap_results = bootstrap_results
+
+        se = bootstrap_results.se
+        p_value = bootstrap_results.p_value
+        conf_int = (bootstrap_results.ci_lower, bootstrap_results.ci_upper)
+        t_stat = bootstrap_results.t_stat_original
+
+        # Also compute vcov for storage (using cluster-robust for consistency)
+        vcov = compute_robust_se(X, residuals, cluster_ids)
+
+        return se, p_value, conf_int, t_stat, vcov, bootstrap_results
 
     def _parse_formula(
         self, formula: str, data: pd.DataFrame
