@@ -488,44 +488,89 @@ class PreTrendsPower:
         """
         if isinstance(results, MultiPeriodDiDResults):
             # Get pre-period information
-            pre_periods = results.pre_periods
-            n_pre = len(pre_periods)
+            all_pre_periods = results.pre_periods
 
-            if n_pre == 0:
+            if len(all_pre_periods) == 0:
                 raise ValueError(
                     "No pre-treatment periods found in results. "
                     "Pre-trends power analysis requires pre-period coefficients."
                 )
 
-            # Check if pre-period coefficients are available
+            # Only include periods with actual estimated coefficients
+            # (excludes the reference period which is omitted from estimation)
             if hasattr(results, 'coefficients') and results.coefficients:
-                effects = []
+                # Find which pre-periods have estimated coefficients
+                estimated_pre_periods = [
+                    p for p in all_pre_periods
+                    if f"treated:period_{p}" in results.coefficients
+                ]
+
+                if len(estimated_pre_periods) == 0:
+                    raise ValueError(
+                        "No estimated pre-period coefficients found. "
+                        "The pre-trends test requires at least one estimated "
+                        "pre-period coefficient (excluding the reference period)."
+                    )
+
+                n_pre = len(estimated_pre_periods)
+
+                # Extract effects for estimated periods only
+                effects = np.array([
+                    results.coefficients[f"treated:period_{p}"]
+                    for p in estimated_pre_periods
+                ])
+
+                # Extract SEs - try period_effects first, fall back to avg_se
                 ses = []
-                for period in pre_periods:
-                    # Look for pre-period interaction terms
-                    key = f"treated:period_{period}"
-                    if key in results.coefficients:
-                        effects.append(results.coefficients[key])
-                        # Estimate SE from vcov if available, else use avg_se
-                        ses.append(results.avg_se)
+                for p in estimated_pre_periods:
+                    if p in results.period_effects:
+                        ses.append(results.period_effects[p].se)
                     else:
-                        # Pre-period effects are typically 0 (reference)
-                        effects.append(0.0)
                         ses.append(results.avg_se)
-
-                effects = np.array(effects)
                 ses = np.array(ses)
-            else:
-                # No coefficients available - use zeros for effects
-                effects = np.zeros(n_pre)
-                ses = np.full(n_pre, results.avg_se)
 
-            # Construct vcov - use diagonal if not available
-            if results.vcov is not None and results.vcov.shape[0] >= n_pre:
-                # Assume first n_pre elements are pre-period effects
-                vcov = results.vcov[:n_pre, :n_pre]
+                # Extract vcov for estimated pre-periods
+                # Build mapping from period to vcov index
+                if results.vcov is not None:
+                    # Get ordered list of all coefficient keys
+                    coef_keys = list(results.coefficients.keys())
+                    pre_indices = [
+                        coef_keys.index(f"treated:period_{p}")
+                        for p in estimated_pre_periods
+                        if f"treated:period_{p}" in coef_keys
+                    ]
+                    if len(pre_indices) == n_pre and results.vcov.shape[0] > max(pre_indices):
+                        vcov = results.vcov[np.ix_(pre_indices, pre_indices)]
+                    else:
+                        # Fall back to diagonal
+                        vcov = np.diag(ses ** 2)
+                else:
+                    vcov = np.diag(ses ** 2)
             else:
-                # Use diagonal vcov based on SE
+                # No coefficients available - try period_effects for pre-periods
+                # Exclude reference period (the one with effect=0 and se=0 or missing)
+                estimated_pre_periods = [
+                    p for p in all_pre_periods
+                    if p in results.period_effects
+                    and results.period_effects[p].se > 0
+                ]
+
+                if len(estimated_pre_periods) == 0:
+                    raise ValueError(
+                        "No estimated pre-period effects found. "
+                        "The pre-trends test requires at least one estimated "
+                        "pre-period effect (excluding the reference period)."
+                    )
+
+                n_pre = len(estimated_pre_periods)
+                effects = np.array([
+                    results.period_effects[p].effect
+                    for p in estimated_pre_periods
+                ])
+                ses = np.array([
+                    results.period_effects[p].se
+                    for p in estimated_pre_periods
+                ])
                 vcov = np.diag(ses ** 2)
 
             return effects, ses, vcov, n_pre

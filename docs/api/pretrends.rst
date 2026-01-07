@@ -57,7 +57,7 @@ Example
    pt_results = pt.fit(results)
 
    print(f"MDV: {pt_results.mdv:.3f}")
-   print(f"Power at M=1: {pt_results.power_at_m:.2%}")
+   print(f"Power: {pt_results.power:.2%}")
 
 PreTrendsPowerResults
 ---------------------
@@ -140,7 +140,7 @@ Complete Example
 
    # Power curve analysis
    pt = PreTrendsPower(alpha=0.05, violation_type='linear')
-   curve = pt.power_curve(results, violation_range=(0, 5), n_points=50)
+   curve = pt.power_curve(results, n_points=50)
 
    # Plot power curve
    fig = plot_pretrends_power(curve, show_mdv=True, target_power=0.80)

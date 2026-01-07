@@ -76,8 +76,32 @@ def multiperiod_results(simple_panel_data):
 
 @pytest.fixture
 def mock_multiperiod_results():
-    """Create mock MultiPeriodDiDResults for unit testing."""
+    """Create mock MultiPeriodDiDResults for unit testing.
+
+    This fixture simulates event study results with:
+    - Pre-periods: 0, 1, 2, 3 (period 3 is reference, omitted from estimation)
+    - Post-periods: 4, 5, 6, 7
+    - Estimated coefficients for periods 0, 1, 2 (pre) and 4, 5, 6, 7 (post)
+    """
+    # Pre-period effects (excluding reference period 3)
     period_effects = {
+        0: PeriodEffect(
+            period=0, effect=0.1, se=0.5,
+            t_stat=0.2, p_value=0.84,
+            conf_int=(-0.88, 1.08)
+        ),
+        1: PeriodEffect(
+            period=1, effect=-0.05, se=0.5,
+            t_stat=-0.1, p_value=0.92,
+            conf_int=(-1.03, 0.93)
+        ),
+        2: PeriodEffect(
+            period=2, effect=0.08, se=0.5,
+            t_stat=0.16, p_value=0.87,
+            conf_int=(-0.90, 1.06)
+        ),
+        # Period 3 is reference - not in period_effects
+        # Post-period effects
         4: PeriodEffect(
             period=4, effect=5.0, se=0.5,
             t_stat=10.0, p_value=0.0001,
@@ -100,8 +124,20 @@ def mock_multiperiod_results():
         ),
     }
 
+    # Coefficients for estimated periods (excludes reference period 3)
+    coefficients = {
+        'treated:period_0': 0.1,
+        'treated:period_1': -0.05,
+        'treated:period_2': 0.08,
+        'treated:period_4': 5.0,
+        'treated:period_5': 5.2,
+        'treated:period_6': 4.8,
+        'treated:period_7': 5.0,
+    }
+
     # Create vcov matrix (diagonal for simplicity)
-    vcov = np.diag([0.25] * 4)
+    # 7 coefficients: 3 pre + 4 post
+    vcov = np.diag([0.25] * 7)
 
     return MultiPeriodDiDResults(
         period_effects=period_effects,
@@ -113,9 +149,10 @@ def mock_multiperiod_results():
         n_obs=800,
         n_treated=400,
         n_control=400,
-        pre_periods=[0, 1, 2, 3],
+        pre_periods=[0, 1, 2, 3],  # 4 pre-periods, but period 3 is reference
         post_periods=[4, 5, 6, 7],
         vcov=vcov,
+        coefficients=coefficients,
     )
 
 
@@ -370,11 +407,18 @@ class TestPreTrendsPowerFit:
         assert hasattr(results, 'noncentrality')
 
     def test_results_n_pre_periods(self, mock_multiperiod_results):
-        """Test that n_pre_periods matches input."""
+        """Test that n_pre_periods matches estimated pre-periods (excluding reference)."""
         pt = PreTrendsPower()
         results = pt.fit(mock_multiperiod_results)
 
-        assert results.n_pre_periods == len(mock_multiperiod_results.pre_periods)
+        # n_pre_periods should be the number of estimated coefficients (3)
+        # not the total number of pre-periods (4), since period 3 is the reference
+        expected_n_pre = len([
+            p for p in mock_multiperiod_results.pre_periods
+            if f"treated:period_{p}" in mock_multiperiod_results.coefficients
+        ])
+        assert results.n_pre_periods == expected_n_pre
+        assert results.n_pre_periods == 3  # 4 pre-periods minus 1 reference
 
 
 # =============================================================================
@@ -548,61 +592,39 @@ class TestGetSetParams:
 
 
 class TestIntegration:
-    """Integration tests with real estimators."""
+    """Integration tests with event study results.
 
-    def test_with_multiperiod_did(self, simple_panel_data):
-        """Test full pipeline with MultiPeriodDiD."""
-        # Fit event study
-        mp_did = MultiPeriodDiD()
-        event_results = mp_did.fit(
-            simple_panel_data,
-            outcome='outcome',
-            treatment='treated',
-            time='period',
-            post_periods=[4, 5, 6, 7]
-        )
+    Note: These tests use mock results with pre-period coefficients.
+    MultiPeriodDiD by default only estimates post-period treatment effects,
+    so we use a fixture that simulates full event study results with
+    pre-period coefficients (excluding the reference period).
+    """
 
+    def test_with_multiperiod_results(self, mock_multiperiod_results):
+        """Test full pipeline with MultiPeriodDiDResults."""
         # Run pre-trends power analysis
         pt = PreTrendsPower()
-        power_results = pt.fit(event_results)
+        power_results = pt.fit(mock_multiperiod_results)
 
         # Check results are reasonable
         assert power_results.power >= 0
         assert power_results.power <= 1
         assert power_results.mdv > 0 or np.isinf(power_results.mdv)
 
-    def test_power_curve_with_real_data(self, simple_panel_data):
-        """Test power curve with real data."""
-        mp_did = MultiPeriodDiD()
-        event_results = mp_did.fit(
-            simple_panel_data,
-            outcome='outcome',
-            treatment='treated',
-            time='period',
-            post_periods=[4, 5, 6, 7]
-        )
-
+    def test_power_curve_with_results(self, mock_multiperiod_results):
+        """Test power curve with event study results."""
         pt = PreTrendsPower()
-        curve = pt.power_curve(event_results, n_points=10)
+        curve = pt.power_curve(mock_multiperiod_results, n_points=10)
 
         # Check curve properties
         assert len(curve.M_values) == 10
         assert len(curve.powers) == 10
         assert np.all((curve.powers >= 0) & (curve.powers <= 1))
 
-    def test_sensitivity_to_honest_did(self, simple_panel_data):
+    def test_sensitivity_to_honest_did(self, mock_multiperiod_results):
         """Test sensitivity_to_honest_did method."""
-        mp_did = MultiPeriodDiD()
-        event_results = mp_did.fit(
-            simple_panel_data,
-            outcome='outcome',
-            treatment='treated',
-            time='period',
-            post_periods=[4, 5, 6, 7]
-        )
-
         pt = PreTrendsPower()
-        sensitivity = pt.sensitivity_to_honest_did(event_results)
+        sensitivity = pt.sensitivity_to_honest_did(mock_multiperiod_results)
 
         assert 'mdv' in sensitivity
         assert 'interpretation' in sensitivity
@@ -638,25 +660,15 @@ class TestViolationTypes:
 
         assert results.violation_type == 'last_period'
 
-    def test_different_types_give_different_results(self, simple_panel_data):
+    def test_different_types_give_different_results(self, mock_multiperiod_results):
         """Test that different violation types can give different MDV."""
-        # Use real data with non-diagonal vcov for more realistic test
-        mp_did = MultiPeriodDiD()
-        results = mp_did.fit(
-            simple_panel_data,
-            outcome='outcome',
-            treatment='treated',
-            time='period',
-            post_periods=[4, 5, 6, 7]
-        )
-
         pt_linear = PreTrendsPower(violation_type='linear')
         pt_constant = PreTrendsPower(violation_type='constant')
         pt_last = PreTrendsPower(violation_type='last_period')
 
-        mdv_linear = pt_linear.fit(results).mdv
-        mdv_constant = pt_constant.fit(results).mdv
-        mdv_last = pt_last.fit(results).mdv
+        mdv_linear = pt_linear.fit(mock_multiperiod_results).mdv
+        mdv_constant = pt_constant.fit(mock_multiperiod_results).mdv
+        mdv_last = pt_last.fit(mock_multiperiod_results).mdv
 
         # All MDVs should be positive (or inf for degenerate cases)
         assert mdv_linear > 0 or np.isinf(mdv_linear)
@@ -676,8 +688,19 @@ class TestEdgeCases:
     """Tests for edge cases."""
 
     def test_single_pre_period(self):
-        """Test with single pre-period."""
+        """Test with single pre-period (excluding reference).
+
+        This tests the case where there's only one estimated pre-period
+        coefficient. We have pre_periods=[2, 3] where period 3 is the
+        reference (excluded), leaving only period 2 as estimated.
+        """
         period_effects = {
+            2: PeriodEffect(
+                period=2, effect=0.1, se=0.5,
+                t_stat=0.2, p_value=0.84,
+                conf_int=(-0.88, 1.08)
+            ),
+            # Period 3 is reference - not estimated
             4: PeriodEffect(
                 period=4, effect=5.0, se=0.5,
                 t_stat=10.0, p_value=0.0001,
@@ -685,36 +708,9 @@ class TestEdgeCases:
             ),
         }
 
-        results = MultiPeriodDiDResults(
-            period_effects=period_effects,
-            avg_att=5.0,
-            avg_se=0.5,
-            avg_t_stat=10.0,
-            avg_p_value=0.0001,
-            avg_conf_int=(4.02, 5.98),
-            n_obs=200,
-            n_treated=100,
-            n_control=100,
-            pre_periods=[3],
-            post_periods=[4],
-            vcov=np.array([[0.25]]),
-        )
-
-        pt = PreTrendsPower()
-        power_results = pt.fit(results)
-
-        assert power_results.n_pre_periods == 1
-
-    def test_many_pre_periods(self):
-        """Test with many pre-periods."""
-        n_pre = 10
-        period_effects = {
-            i + n_pre: PeriodEffect(
-                period=i + n_pre, effect=5.0, se=0.5,
-                t_stat=10.0, p_value=0.0001,
-                conf_int=(4.02, 5.98)
-            )
-            for i in range(4)
+        coefficients = {
+            'treated:period_2': 0.1,
+            'treated:period_4': 5.0,
         }
 
         results = MultiPeriodDiDResults(
@@ -727,15 +723,70 @@ class TestEdgeCases:
             n_obs=200,
             n_treated=100,
             n_control=100,
-            pre_periods=list(range(n_pre)),
-            post_periods=list(range(n_pre, n_pre + 4)),
-            vcov=np.diag([0.25] * 4),
+            pre_periods=[2, 3],  # Period 3 is reference
+            post_periods=[4],
+            vcov=np.array([[0.25, 0], [0, 0.25]]),
+            coefficients=coefficients,
         )
 
         pt = PreTrendsPower()
         power_results = pt.fit(results)
 
-        assert power_results.n_pre_periods == n_pre
+        assert power_results.n_pre_periods == 1  # Only period 2 is estimated
+
+    def test_many_pre_periods(self):
+        """Test with many pre-periods.
+
+        This tests the case with 10 pre-periods where period 9 is the
+        reference (excluded), leaving 9 estimated pre-period coefficients.
+        """
+        n_pre_total = 10
+        n_pre_estimated = 9  # Excluding reference period
+
+        # Pre-period effects (excluding reference period 9)
+        period_effects = {}
+        for i in range(n_pre_estimated):
+            period_effects[i] = PeriodEffect(
+                period=i, effect=0.05 * (i - 4), se=0.5,
+                t_stat=0.1 * (i - 4), p_value=0.92,
+                conf_int=(-0.88, 1.08)
+            )
+
+        # Post-period effects
+        for i in range(4):
+            period_effects[n_pre_total + i] = PeriodEffect(
+                period=n_pre_total + i, effect=5.0, se=0.5,
+                t_stat=10.0, p_value=0.0001,
+                conf_int=(4.02, 5.98)
+            )
+
+        # Coefficients (excluding reference period 9)
+        coefficients = {}
+        for i in range(n_pre_estimated):
+            coefficients[f'treated:period_{i}'] = 0.05 * (i - 4)
+        for i in range(4):
+            coefficients[f'treated:period_{n_pre_total + i}'] = 5.0
+
+        results = MultiPeriodDiDResults(
+            period_effects=period_effects,
+            avg_att=5.0,
+            avg_se=0.5,
+            avg_t_stat=10.0,
+            avg_p_value=0.0001,
+            avg_conf_int=(4.02, 5.98),
+            n_obs=200,
+            n_treated=100,
+            n_control=100,
+            pre_periods=list(range(n_pre_total)),  # Includes reference period 9
+            post_periods=list(range(n_pre_total, n_pre_total + 4)),
+            vcov=np.diag([0.25] * (n_pre_estimated + 4)),
+            coefficients=coefficients,
+        )
+
+        pt = PreTrendsPower()
+        power_results = pt.fit(results)
+
+        assert power_results.n_pre_periods == n_pre_estimated
 
     def test_unsupported_results_type_raises(self):
         """Test that unsupported results type raises TypeError."""
