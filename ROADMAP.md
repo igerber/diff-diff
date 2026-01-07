@@ -6,19 +6,19 @@ For past changes and release history, see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
-## Current Status (v1.1.0)
+## Current Status (v1.2.0)
 
 diff-diff is a **production-ready** DiD library with feature parity with R's `did` + `HonestDiD` ecosystem for core DiD analysis:
 
 - **Core estimators**: Basic DiD, TWFE, MultiPeriod, Callaway-Sant'Anna, Sun-Abraham, Synthetic DiD
 - **Valid inference**: Robust SEs, cluster SEs, wild bootstrap, multiplier bootstrap
 - **Assumption diagnostics**: Parallel trends tests, placebo tests, Goodman-Bacon decomposition
-- **Sensitivity analysis**: Honest DiD (Rambachan-Roth)
+- **Sensitivity analysis**: Honest DiD (Rambachan-Roth), Pre-trends power analysis (Roth 2022)
 - **Study design**: Power analysis tools
 
 ---
 
-## Near-Term Enhancements (v1.2)
+## Near-Term Enhancements (v1.3)
 
 High-value additions building on our existing foundation.
 
@@ -53,16 +53,6 @@ Extends DiD to settings requiring a third differencing dimension. Common DDD imp
 
 **Reference**: [Ortiz-Villavicencio & Sant'Anna (2025)](https://arxiv.org/abs/2505.09942). *Working Paper*. R package: `triplediff`.
 
-### Pre-Trends Power Analysis
-
-Assess whether pre-trends tests have adequate power to detect meaningful parallel trends violations. Complements our Honest DiD implementation.
-
-- Minimum detectable violation size for pre-trends tests
-- Visualization of power against various violation magnitudes
-- Integration with existing parallel trends diagnostics
-
-**Reference**: [Roth (2022)](https://www.aeaweb.org/articles?id=10.1257/aeri.20210236). *AER: Insights*. R package: `pretrends`.
-
 ### Enhanced Visualization
 
 - Synthetic control weight visualization (bar chart of unit weights)
@@ -71,7 +61,7 @@ Assess whether pre-trends tests have adequate power to detect meaningful paralle
 
 ---
 
-## Medium-Term Enhancements (v1.3+)
+## Medium-Term Enhancements (v1.4+)
 
 Extending diff-diff to handle more complex settings.
 

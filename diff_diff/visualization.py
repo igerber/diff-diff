@@ -13,6 +13,7 @@ if TYPE_CHECKING:
     from diff_diff.bacon import BaconDecompositionResults
     from diff_diff.honest_did import HonestDiDResults, SensitivityResults
     from diff_diff.power import PowerResults, SimulationPowerResults
+    from diff_diff.pretrends import PreTrendsPowerCurve, PreTrendsPowerResults
     from diff_diff.results import MultiPeriodDiDResults
     from diff_diff.staggered import CallawaySantAnnaResults
     from diff_diff.sun_abraham import SunAbrahamResults
@@ -1366,6 +1367,241 @@ def plot_power_curve(
                 s=50,
                 zorder=5
             )
+
+    # Configure axes
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel(ylabel)
+    ax.set_title(title)
+
+    # Y-axis from 0 to 1
+    ax.set_ylim(0, 1.05)
+
+    # Format y-axis as percentage
+    ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda y, _: f'{y:.0%}'))
+
+    if show_grid:
+        ax.grid(True, alpha=0.3)
+
+    ax.legend(loc="lower right")
+
+    fig.tight_layout()
+
+    if show:
+        plt.show()
+
+    return ax
+
+
+def plot_pretrends_power(
+    results: Optional[Union["PreTrendsPowerResults", "PreTrendsPowerCurve", pd.DataFrame]] = None,
+    *,
+    M_values: Optional[List[float]] = None,
+    powers: Optional[List[float]] = None,
+    mdv: Optional[float] = None,
+    target_power: float = 0.80,
+    figsize: Tuple[float, float] = (10, 6),
+    title: str = "Pre-Trends Test Power Curve",
+    xlabel: str = "Violation Magnitude (M)",
+    ylabel: str = "Power",
+    color: str = "#2563eb",
+    mdv_color: str = "#dc2626",
+    target_color: str = "#22c55e",
+    linewidth: float = 2.0,
+    show_mdv_line: bool = True,
+    show_target_line: bool = True,
+    show_grid: bool = True,
+    ax: Optional[Any] = None,
+    show: bool = True,
+) -> Any:
+    """
+    Plot pre-trends test power curve.
+
+    Visualizes how the power to detect parallel trends violations changes
+    with the violation magnitude (M). This helps understand what violations
+    your pre-trends test is capable of detecting.
+
+    Parameters
+    ----------
+    results : PreTrendsPowerResults, PreTrendsPowerCurve, or DataFrame, optional
+        Results from PreTrendsPower.fit() or power_curve(), or a DataFrame
+        with columns 'M' and 'power'. If None, must provide M_values and powers.
+    M_values : list of float, optional
+        Violation magnitudes (x-axis). Required if results is None.
+    powers : list of float, optional
+        Power values (y-axis). Required if results is None.
+    mdv : float, optional
+        Minimum detectable violation to mark on the plot.
+    target_power : float, default=0.80
+        Target power level to show as horizontal line.
+    figsize : tuple, default=(10, 6)
+        Figure size (width, height) in inches.
+    title : str
+        Plot title.
+    xlabel : str
+        X-axis label.
+    ylabel : str
+        Y-axis label.
+    color : str, default="#2563eb"
+        Color for the power curve line.
+    mdv_color : str, default="#dc2626"
+        Color for the MDV vertical line.
+    target_color : str, default="#22c55e"
+        Color for the target power horizontal line.
+    linewidth : float, default=2.0
+        Line width for the power curve.
+    show_mdv_line : bool, default=True
+        Whether to show vertical line at MDV.
+    show_target_line : bool, default=True
+        Whether to show horizontal line at target power.
+    show_grid : bool, default=True
+        Whether to show grid lines.
+    ax : matplotlib.axes.Axes, optional
+        Axes to plot on. If None, creates new figure.
+    show : bool, default=True
+        Whether to call plt.show() at the end.
+
+    Returns
+    -------
+    matplotlib.axes.Axes
+        The axes object containing the plot.
+
+    Examples
+    --------
+    From PreTrendsPower results:
+
+    >>> from diff_diff import MultiPeriodDiD
+    >>> from diff_diff.pretrends import PreTrendsPower
+    >>> from diff_diff.visualization import plot_pretrends_power
+    >>>
+    >>> mp_did = MultiPeriodDiD()
+    >>> event_results = mp_did.fit(data, outcome='y', treatment='treated',
+    ...                            time='period', post_periods=[4, 5, 6, 7])
+    >>>
+    >>> pt = PreTrendsPower()
+    >>> curve = pt.power_curve(event_results)
+    >>> plot_pretrends_power(curve)
+
+    From manual data:
+
+    >>> plot_pretrends_power(
+    ...     M_values=[0, 0.5, 1, 1.5, 2],
+    ...     powers=[0.05, 0.3, 0.6, 0.85, 0.95],
+    ...     mdv=1.2,
+    ...     target_power=0.80
+    ... )
+
+    Notes
+    -----
+    The power curve shows how likely you are to reject the null hypothesis
+    of parallel trends given a true violation of magnitude M. Key points:
+
+    1. **At M=0**: Power equals alpha (size of the test).
+    2. **At MDV**: Power equals target power (default 80%).
+    3. **Beyond MDV**: Power increases toward 100%.
+
+    A steep power curve indicates a sensitive pre-trends test. A flat curve
+    indicates the test has limited ability to detect violations, suggesting
+    you should use HonestDiD sensitivity analysis for robust inference.
+
+    See Also
+    --------
+    PreTrendsPower : Main class for pre-trends power analysis
+    plot_sensitivity : Plot HonestDiD sensitivity analysis
+    """
+    try:
+        import matplotlib.pyplot as plt
+    except ImportError:
+        raise ImportError(
+            "matplotlib is required for plotting. "
+            "Install it with: pip install matplotlib"
+        )
+
+    # Extract data from results if provided
+    if results is not None:
+        if isinstance(results, pd.DataFrame):
+            if "M" not in results.columns or "power" not in results.columns:
+                raise ValueError("DataFrame must have 'M' and 'power' columns")
+            M_values = results["M"].tolist()
+            powers = results["power"].tolist()
+        elif hasattr(results, "M_values") and hasattr(results, "powers"):
+            # PreTrendsPowerCurve
+            M_values = results.M_values.tolist()
+            powers = results.powers.tolist()
+            if mdv is None:
+                mdv = results.mdv
+            if target_power is None:
+                target_power = results.target_power
+        elif hasattr(results, "mdv") and hasattr(results, "power"):
+            # Single PreTrendsPowerResults - create a simple plot
+            if mdv is None:
+                mdv = results.mdv
+            # Create minimal curve around MDV
+            if np.isfinite(mdv):
+                M_values = [0, mdv * 0.5, mdv, mdv * 1.5, mdv * 2]
+            else:
+                M_values = [0, 1, 2, 3, 4]
+            # We don't have the actual powers, so we need to create a placeholder
+            # Just show MDV marker
+            powers = None
+        else:
+            raise TypeError(
+                f"Cannot extract power curve data from {type(results).__name__}"
+            )
+    elif M_values is None or powers is None:
+        raise ValueError(
+            "Must provide either 'results' or both 'M_values' and 'powers'"
+        )
+
+    # Create figure if needed
+    if ax is None:
+        fig, ax = plt.subplots(figsize=figsize)
+    else:
+        fig = ax.get_figure()
+
+    # Plot power curve if we have powers
+    if powers is not None:
+        ax.plot(
+            M_values, powers,
+            color=color,
+            linewidth=linewidth,
+            label="Power"
+        )
+
+    # Add target power line
+    if show_target_line:
+        ax.axhline(
+            y=target_power,
+            color=target_color,
+            linestyle="--",
+            linewidth=1.5,
+            alpha=0.7,
+            label=f"Target power ({target_power:.0%})"
+        )
+
+    # Add MDV line
+    if show_mdv_line and mdv is not None and np.isfinite(mdv):
+        ax.axvline(
+            x=mdv,
+            color=mdv_color,
+            linestyle=":",
+            linewidth=1.5,
+            alpha=0.7,
+            label=f"MDV = {mdv:.3f}"
+        )
+
+        # Mark intersection point if we have powers
+        if powers is not None:
+            # Find power at MDV (interpolate)
+            M_arr = np.array(M_values)
+            power_arr = np.array(powers)
+            if M_arr.min() <= mdv <= M_arr.max():
+                power_at_mdv = np.interp(mdv, M_arr, power_arr)
+                ax.scatter(
+                    [mdv], [power_at_mdv],
+                    color=mdv_color,
+                    s=50,
+                    zorder=5
+                )
 
     # Configure axes
     ax.set_xlabel(xlabel)

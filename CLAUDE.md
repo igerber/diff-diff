@@ -78,7 +78,8 @@ mypy diff_diff
   - `plot_honest_event_study` - Event study with honest confidence intervals
   - `plot_bacon` - Bacon decomposition scatter/bar plots (weights vs estimates by comparison type)
   - `plot_power_curve` - Power curve visualization (power vs effect size or sample size)
-  - Works with MultiPeriodDiD, CallawaySantAnna, SunAbraham, HonestDiD, BaconDecomposition, PowerAnalysis, or DataFrames
+  - `plot_pretrends_power` - Pre-trends test power curve (power vs violation magnitude)
+  - Works with MultiPeriodDiD, CallawaySantAnna, SunAbraham, HonestDiD, BaconDecomposition, PowerAnalysis, PreTrendsPower, or DataFrames
 
 - **`diff_diff/utils.py`** - Statistical utilities:
   - Robust/cluster standard errors (`compute_robust_se`)
@@ -110,6 +111,15 @@ mypy diff_diff
   - `simulate_power()` - Simulation-based power for any DiD estimator
   - `compute_mde()`, `compute_power()`, `compute_sample_size()` - Convenience functions
 
+- **`diff_diff/pretrends.py`** - Pre-trends power analysis (Roth 2022):
+  - `PreTrendsPower` - Main class for assessing informativeness of pre-trends tests
+  - `PreTrendsPowerResults` - Results with power and minimum detectable violation (MDV)
+  - `PreTrendsPowerCurve` - Power curve across violation magnitudes with plot method
+  - `compute_pretrends_power()` - Convenience function for quick power computation
+  - `compute_mdv()` - Convenience function for minimum detectable violation
+  - Violation types: 'linear', 'constant', 'last_period', 'custom'
+  - Integrates with HonestDiD for comprehensive sensitivity analysis
+
 - **`diff_diff/prep.py`** - Data preparation utilities:
   - `generate_did_data` - Create synthetic data with known treatment effect
   - `make_treatment_indicator`, `make_post_indicator` - Create binary indicators
@@ -137,6 +147,7 @@ mypy diff_diff
   - `04_parallel_trends.ipynb` - Parallel trends testing and diagnostics
   - `05_honest_did.ipynb` - Honest DiD sensitivity analysis for parallel trends violations
   - `06_power_analysis.ipynb` - Power analysis for study design, MDE, simulation-based power
+  - `07_pretrends_power.ipynb` - Pre-trends power analysis (Roth 2022), MDV, power curves
 
 ### Test Structure
 
@@ -152,6 +163,7 @@ Tests mirror the source modules:
 - `tests/test_visualization.py` - Tests for plotting functions
 - `tests/test_honest_did.py` - Tests for Honest DiD sensitivity analysis
 - `tests/test_power.py` - Tests for power analysis
+- `tests/test_pretrends.py` - Tests for pre-trends power analysis
 
 ### Dependencies
 

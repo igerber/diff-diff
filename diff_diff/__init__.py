@@ -45,6 +45,13 @@ from diff_diff.power import (
     compute_sample_size,
     simulate_power,
 )
+from diff_diff.pretrends import (
+    PreTrendsPower,
+    PreTrendsPowerCurve,
+    PreTrendsPowerResults,
+    compute_mdv,
+    compute_pretrends_power,
+)
 from diff_diff.prep import (
     aggregate_to_cohorts,
     balance_panel,
@@ -87,10 +94,11 @@ from diff_diff.visualization import (
     plot_group_effects,
     plot_honest_event_study,
     plot_power_curve,
+    plot_pretrends_power,
     plot_sensitivity,
 )
 
-__version__ = "1.1.1"
+__version__ = "1.2.0"
 __all__ = [
     # Estimators
     "DifferenceInDifferences",
@@ -164,4 +172,11 @@ __all__ = [
     "compute_sample_size",
     "simulate_power",
     "plot_power_curve",
+    # Pre-trends power analysis
+    "PreTrendsPower",
+    "PreTrendsPowerResults",
+    "PreTrendsPowerCurve",
+    "compute_pretrends_power",
+    "compute_mdv",
+    "plot_pretrends_power",
 ]
