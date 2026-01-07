@@ -68,6 +68,8 @@ Quick Links
    api/visualization
    api/diagnostics
    api/honest_did
+   api/power
+   api/pretrends
    api/utils
    api/prep
 

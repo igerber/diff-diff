@@ -53,6 +53,7 @@ Plotting functions for results:
    diff_diff.plot_honest_event_study
    diff_diff.plot_bacon
    diff_diff.plot_power_curve
+   diff_diff.plot_pretrends_power
 
 Diagnostics
 -----------
@@ -114,6 +115,38 @@ Wild cluster bootstrap for valid inference:
    diff_diff.wild_bootstrap_se
    diff_diff.WildBootstrapResults
 
+Power Analysis
+--------------
+
+Power analysis for study design:
+
+.. autosummary::
+   :toctree: _autosummary
+   :nosignatures:
+
+   diff_diff.PowerAnalysis
+   diff_diff.PowerResults
+   diff_diff.SimulationPowerResults
+   diff_diff.compute_power
+   diff_diff.compute_mde
+   diff_diff.compute_sample_size
+   diff_diff.simulate_power
+
+Pre-Trends Power Analysis
+-------------------------
+
+Power analysis for pre-trends tests (Roth 2022):
+
+.. autosummary::
+   :toctree: _autosummary
+   :nosignatures:
+
+   diff_diff.PreTrendsPower
+   diff_diff.PreTrendsPowerResults
+   diff_diff.PreTrendsPowerCurve
+   diff_diff.compute_pretrends_power
+   diff_diff.compute_mdv
+
 Data Preparation
 ----------------
 
@@ -148,5 +181,7 @@ Detailed documentation by module:
    visualization
    diagnostics
    honest_did
+   power
+   pretrends
    utils
    prep
