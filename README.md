@@ -77,6 +77,7 @@ Signif. codes: '***' 0.001, '**' 0.01, '*' 0.05, '.' 0.1
 - **Goodman-Bacon decomposition**: Diagnose TWFE bias by decomposing into 2x2 comparisons
 - **Placebo tests**: Comprehensive diagnostics including fake timing, fake group, permutation, and leave-one-out tests
 - **Honest DiD sensitivity analysis**: Rambachan-Roth (2023) bounds and breakdown analysis for parallel trends violations
+- **Pre-trends power analysis**: Roth (2022) minimum detectable violation (MDV) and power curves for pre-trends tests
 - **Power analysis**: MDE, sample size, and power calculations for study design; simulation-based power for any estimator
 - **Data prep utilities**: Helper functions for common data preparation tasks
 
@@ -1221,6 +1222,90 @@ plot_sensitivity(sensitivity, title="Sensitivity to Parallel Trends Violations")
 plot_honest_event_study(event_results, honest_results)
 ```
 
+### Pre-Trends Power Analysis (Roth 2022)
+
+A passing pre-trends test doesn't mean parallel trends holds—it may just mean the test has low power. **Pre-Trends Power Analysis** (Roth 2022) answers: "What violations could my pre-trends test have detected?"
+
+```python
+from diff_diff import PreTrendsPower, MultiPeriodDiD
+
+# First, fit an event study
+did = MultiPeriodDiD()
+event_results = did.fit(
+    data,
+    outcome='outcome',
+    treatment='treated',
+    time='period',
+    post_periods=[5, 6, 7, 8, 9]
+)
+
+# Analyze pre-trends test power
+pt = PreTrendsPower(alpha=0.05, power=0.80)
+power_results = pt.fit(event_results)
+
+print(power_results.summary())
+print(f"Minimum Detectable Violation (MDV): {power_results.mdv:.4f}")
+print(f"Power to detect violations of size MDV: {power_results.power:.1%}")
+```
+
+**Key concepts:**
+
+- **Minimum Detectable Violation (MDV)**: Smallest violation magnitude that would be detected with your target power (e.g., 80%). Passing the pre-trends test does NOT rule out violations up to this size.
+- **Power**: Probability of detecting a violation of given size if it exists.
+- **Violation types**: Linear trend, constant violation, last-period only, or custom patterns.
+
+**Power curve visualization:**
+
+```python
+from diff_diff import plot_pretrends_power
+
+# Generate power curve across violation magnitudes
+curve = pt.power_curve(event_results)
+
+# Plot the power curve
+plot_pretrends_power(curve, title="Pre-Trends Test Power Curve")
+
+# Or from the curve object directly
+curve.plot()
+```
+
+**Different violation patterns:**
+
+```python
+# Linear trend violations (default) - most common assumption
+pt_linear = PreTrendsPower(violation_type='linear')
+
+# Constant violation in all pre-periods
+pt_constant = PreTrendsPower(violation_type='constant')
+
+# Violation only in the last pre-period (sharp break)
+pt_last = PreTrendsPower(violation_type='last_period')
+
+# Custom violation pattern
+custom_weights = np.array([0.1, 0.3, 0.6])  # Increasing violations
+pt_custom = PreTrendsPower(violation_type='custom', violation_weights=custom_weights)
+```
+
+**Combining with HonestDiD:**
+
+Pre-trends power analysis and HonestDiD are complementary:
+1. **Pre-trends power** tells you what the test could have detected
+2. **HonestDiD** tells you how robust your results are to violations
+
+```python
+from diff_diff import HonestDiD, PreTrendsPower
+
+# If MDV is large relative to your estimated effect, be cautious
+pt = PreTrendsPower()
+power_results = pt.fit(event_results)
+sensitivity = pt.sensitivity_to_honest_did(event_results)
+print(sensitivity['interpretation'])
+
+# Use HonestDiD for robust inference
+honest = HonestDiD(method='relative_magnitude', M=1.0)
+honest_results = honest.fit(event_results)
+```
+
 ### Placebo Tests
 
 Placebo tests help validate the parallel trends assumption by checking whether effects appear where they shouldn't (before treatment or in untreated groups).
@@ -1644,6 +1729,81 @@ HonestDiD(
 | `summary()` | Get formatted summary string |
 | `plot(ax)` | Plot sensitivity analysis |
 | `to_dataframe()` | Convert to pandas DataFrame |
+
+### PreTrendsPower
+
+```python
+PreTrendsPower(
+    alpha=0.05,           # Significance level for pre-trends test
+    power=0.80,           # Target power for MDV calculation
+    violation_type='linear',  # 'linear', 'constant', 'last_period', 'custom'
+    violation_weights=None    # Custom weights (required if violation_type='custom')
+)
+```
+
+**fit() Parameters:**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `results` | MultiPeriodDiDResults | Results from event study |
+| `M` | float | Specific violation magnitude to evaluate |
+
+**Methods:**
+
+| Method | Description |
+|--------|-------------|
+| `fit(results, M)` | Compute power analysis for given event study |
+| `power_at(results, M)` | Compute power for specific violation magnitude |
+| `power_curve(results, M_grid, n_points)` | Compute power across range of M values |
+| `sensitivity_to_honest_did(results)` | Compare with HonestDiD analysis |
+
+### PreTrendsPowerResults
+
+**Attributes:**
+
+| Attribute | Description |
+|-----------|-------------|
+| `power` | Power to detect the specified violation |
+| `mdv` | Minimum detectable violation at target power |
+| `violation_magnitude` | Violation magnitude (M) tested |
+| `violation_type` | Type of violation pattern |
+| `alpha` | Significance level |
+| `target_power` | Target power level |
+| `n_pre_periods` | Number of pre-treatment periods |
+| `test_statistic` | Expected test statistic under violation |
+| `critical_value` | Critical value for pre-trends test |
+| `noncentrality` | Non-centrality parameter |
+| `is_informative` | Heuristic check if test is informative |
+| `power_adequate` | Whether power meets target |
+
+**Methods:**
+
+| Method | Description |
+|--------|-------------|
+| `summary()` | Get formatted summary string |
+| `print_summary()` | Print summary to stdout |
+| `to_dict()` | Convert to dictionary |
+| `to_dataframe()` | Convert to pandas DataFrame |
+
+### PreTrendsPowerCurve
+
+**Attributes:**
+
+| Attribute | Description |
+|-----------|-------------|
+| `M_values` | Array of violation magnitudes |
+| `powers` | Array of power values |
+| `mdv` | Minimum detectable violation |
+| `alpha` | Significance level |
+| `target_power` | Target power level |
+| `violation_type` | Type of violation pattern |
+
+**Methods:**
+
+| Method | Description |
+|--------|-------------|
+| `plot(ax, show_mdv, show_target)` | Plot power curve |
+| `to_dataframe()` | Convert to DataFrame with M and power columns |
 
 ### Data Preparation Functions
 
