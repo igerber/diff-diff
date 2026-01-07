@@ -147,6 +147,7 @@ mypy diff_diff
   - `04_parallel_trends.ipynb` - Parallel trends testing and diagnostics
   - `05_honest_did.ipynb` - Honest DiD sensitivity analysis for parallel trends violations
   - `06_power_analysis.ipynb` - Power analysis for study design, MDE, simulation-based power
+  - `07_pretrends_power.ipynb` - Pre-trends power analysis (Roth 2022), MDV, power curves
 
 ### Test Structure
 
