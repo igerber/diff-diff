@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] - 2026-01-07
+
+### Added
+- **Pre-Trends Power Analysis** (Roth 2022) for assessing informativeness of pre-trends tests
+  - `PreTrendsPower` class for computing power and minimum detectable violation (MDV)
+  - `PreTrendsPowerResults` dataclass with power, MDV, and test statistics
+  - `PreTrendsPowerCurve` for power curves across violation magnitudes
+  - `compute_pretrends_power()` and `compute_mdv()` convenience functions
+  - Multiple violation types: `linear`, `constant`, `last_period`, `custom`
+  - Integration with Honest DiD via `sensitivity_to_honest_did()` method
+  - `plot_pretrends_power()` visualization for power curves
+  - Tutorial notebook: `docs/tutorials/07_pretrends_power.ipynb`
+  - Full API documentation: `docs/api/pretrends.rst`
+
+**Reference**: Roth, J. (2022). "Pretest with Caution: Event-Study Estimates after Testing for Parallel Trends." *American Economic Review: Insights*, 4(3), 305-322.
+
+### Fixed
+- **Reference period handling in pre-trends analysis**: Fixed bug where reference period was incorrectly assigned `avg_se` instead of being excluded from power calculations. Now properly excludes the omitted reference period from the joint Wald test.
+
 ## [1.1.1] - 2026-01-06
 
 ### Fixed
@@ -215,6 +234,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `to_dict()` and `to_dataframe()` export methods
   - `is_significant` and `significance_stars` properties
 
+[1.2.0]: https://github.com/igerber/diff-diff/compare/v1.1.1...v1.2.0
+[1.1.1]: https://github.com/igerber/diff-diff/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/igerber/diff-diff/compare/v1.0.2...v1.1.0
 [1.0.2]: https://github.com/igerber/diff-diff/compare/v1.0.1...v1.0.2
 [1.0.1]: https://github.com/igerber/diff-diff/compare/v1.0.0...v1.0.1
