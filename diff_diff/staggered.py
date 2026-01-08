@@ -1603,30 +1603,25 @@ class CallawaySantAnna:
                         weights * bootstrap_atts_gt[b, gt_indices]
                     )
 
-        # Compute bootstrap statistics
-        # ATT(g,t) statistics
+        # Compute bootstrap statistics for ATT(g,t)
         gt_ses = {}
         gt_cis = {}
         gt_p_values = {}
 
         for j, gt in enumerate(gt_pairs):
-            original_effect = original_atts[j]
-            boot_dist = bootstrap_atts_gt[:, j]
-
-            se = float(np.std(boot_dist, ddof=1))
-            ci = self._compute_percentile_ci(boot_dist, self.alpha)
-            p_value = self._compute_bootstrap_pvalue(original_effect, boot_dist)
-
+            se, ci, p_value = self._compute_effect_bootstrap_stats(
+                original_atts[j], bootstrap_atts_gt[:, j]
+            )
             gt_ses[gt] = se
             gt_cis[gt] = ci
             gt_p_values[gt] = p_value
 
-        # Overall ATT statistics
-        overall_se = float(np.std(bootstrap_overall, ddof=1))
-        overall_ci = self._compute_percentile_ci(bootstrap_overall, self.alpha)
-        overall_p_value = self._compute_bootstrap_pvalue(original_overall, bootstrap_overall)
+        # Compute bootstrap statistics for overall ATT
+        overall_se, overall_ci, overall_p_value = self._compute_effect_bootstrap_stats(
+            original_overall, bootstrap_overall
+        )
 
-        # Event study statistics
+        # Compute bootstrap statistics for event study effects
         event_study_ses = None
         event_study_cis = None
         event_study_p_values = None
@@ -1637,16 +1632,14 @@ class CallawaySantAnna:
             event_study_p_values = {}
 
             for e in rel_periods:
-                original_effect = event_study_info[e]['effect']
-                boot_dist = bootstrap_event_study[e]
-
-                event_study_ses[e] = float(np.std(boot_dist, ddof=1))
-                event_study_cis[e] = self._compute_percentile_ci(boot_dist, self.alpha)
-                event_study_p_values[e] = self._compute_bootstrap_pvalue(
-                    original_effect, boot_dist
+                se, ci, p_value = self._compute_effect_bootstrap_stats(
+                    event_study_info[e]['effect'], bootstrap_event_study[e]
                 )
+                event_study_ses[e] = se
+                event_study_cis[e] = ci
+                event_study_p_values[e] = p_value
 
-        # Group effect statistics
+        # Compute bootstrap statistics for group effects
         group_effect_ses = None
         group_effect_cis = None
         group_effect_p_values = None
@@ -1657,14 +1650,12 @@ class CallawaySantAnna:
             group_effect_p_values = {}
 
             for g in groups:
-                original_effect = group_agg_info[g]['effect']
-                boot_dist = bootstrap_group[g]
-
-                group_effect_ses[g] = float(np.std(boot_dist, ddof=1))
-                group_effect_cis[g] = self._compute_percentile_ci(boot_dist, self.alpha)
-                group_effect_p_values[g] = self._compute_bootstrap_pvalue(
-                    original_effect, boot_dist
+                se, ci, p_value = self._compute_effect_bootstrap_stats(
+                    group_agg_info[g]['effect'], bootstrap_group[g]
                 )
+                group_effect_ses[g] = se
+                group_effect_cis[g] = ci
+                group_effect_p_values[g] = p_value
 
         return CSBootstrapResults(
             n_bootstrap=self.n_bootstrap,
@@ -1816,6 +1807,35 @@ class CallawaySantAnna:
         p_value = max(p_value, 1 / (self.n_bootstrap + 1))
 
         return float(p_value)
+
+    def _compute_effect_bootstrap_stats(
+        self,
+        original_effect: float,
+        boot_dist: np.ndarray,
+    ) -> Tuple[float, Tuple[float, float], float]:
+        """
+        Compute bootstrap statistics for a single effect.
+
+        Parameters
+        ----------
+        original_effect : float
+            Original point estimate.
+        boot_dist : np.ndarray
+            Bootstrap distribution of the effect.
+
+        Returns
+        -------
+        se : float
+            Bootstrap standard error.
+        ci : Tuple[float, float]
+            Percentile confidence interval.
+        p_value : float
+            Bootstrap p-value.
+        """
+        se = float(np.std(boot_dist, ddof=1))
+        ci = self._compute_percentile_ci(boot_dist, self.alpha)
+        p_value = self._compute_bootstrap_pvalue(original_effect, boot_dist)
+        return se, ci, p_value
 
     def get_params(self) -> Dict[str, Any]:
         """Get estimator parameters (sklearn-compatible)."""

@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.1] - 2026-01-08
+
+### Added
+- **Expanded test coverage** for edge cases:
+  - Wild bootstrap with very few clusters (< 5), including 2-3 cluster scenarios
+  - Unbalanced panels with missing periods across units
+  - Single treated unit scenarios for DiD and Synthetic DiD
+  - Perfect collinearity detection (validates clear error messages)
+  - CallawaySantAnna with single treatment cohort
+  - SyntheticDiD with insufficient pre-treatment periods
+
+### Changed
+- **Refactored CallawaySantAnna bootstrap**: Extracted `_compute_effect_bootstrap_stats()` helper method for cleaner code and reduced duplication in bootstrap statistics computation.
+
 ## [1.2.0] - 2026-01-07
 
 ### Added
@@ -234,6 +248,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `to_dict()` and `to_dataframe()` export methods
   - `is_significant` and `significance_stars` properties
 
+[1.2.1]: https://github.com/igerber/diff-diff/compare/v1.2.0...v1.2.1
 [1.2.0]: https://github.com/igerber/diff-diff/compare/v1.1.1...v1.2.0
 [1.1.1]: https://github.com/igerber/diff-diff/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/igerber/diff-diff/compare/v1.0.2...v1.1.0

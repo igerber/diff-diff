@@ -1125,3 +1125,234 @@ class TestCallawaySantAnnaBootstrap:
                 time='time',
                 first_treat='first_treat'
             )
+
+
+# =============================================================================
+# Edge Case Tests: Single Cohort
+# =============================================================================
+
+
+class TestCallawaySantAnnaSingleCohort:
+    """Tests for CallawaySantAnna with a single treatment cohort."""
+
+    def test_single_cohort_basic(self):
+        """Test CS estimator with single treatment cohort."""
+        np.random.seed(42)
+
+        n_units = 60
+        n_periods = 8
+        treatment_period = 4
+
+        # Generate data with single cohort
+        data = []
+        for unit in range(n_units):
+            # 40% never-treated, 60% treated at period 4
+            if unit < int(n_units * 0.4):
+                first_treat = 0  # Never treated
+            else:
+                first_treat = treatment_period  # Single cohort
+
+            unit_fe = np.random.normal(0, 2)
+
+            for t in range(n_periods):
+                time_fe = t * 0.3
+                y = 10.0 + unit_fe + time_fe
+
+                # Treatment effect for treated units after treatment
+                if first_treat > 0 and t >= first_treat:
+                    y += 2.5
+
+                y += np.random.normal(0, 0.5)
+
+                data.append({
+                    'unit': unit,
+                    'time': t,
+                    'outcome': y,
+                    'first_treat': first_treat,
+                })
+
+        df = pd.DataFrame(data)
+
+        cs = CallawaySantAnna()
+        results = cs.fit(
+            df,
+            outcome='outcome',
+            unit='unit',
+            time='time',
+            first_treat='first_treat'
+        )
+
+        # Should produce valid results
+        assert results.overall_att is not None
+        assert np.isfinite(results.overall_att)
+        assert results.overall_se > 0
+
+        # Should have effects for single group only
+        groups = set(g for g, t in results.group_time_effects.keys())
+        assert len(groups) == 1
+        assert treatment_period in groups
+
+        # ATT should be roughly correct
+        assert abs(results.overall_att - 2.5) < 1.5
+
+    def test_single_cohort_event_study(self):
+        """Test event study aggregation with single cohort."""
+        np.random.seed(42)
+
+        n_units = 80
+        n_periods = 12
+        treatment_period = 6  # Start later to have both pre and post periods
+
+        data = []
+        for unit in range(n_units):
+            if unit < int(n_units * 0.3):
+                first_treat = 0
+            else:
+                first_treat = treatment_period
+
+            unit_fe = np.random.normal(0, 1)
+
+            for t in range(n_periods):
+                y = 10.0 + unit_fe + t * 0.2
+
+                if first_treat > 0 and t >= first_treat:
+                    # Dynamic effect: grows over time
+                    periods_since = t - first_treat
+                    y += 2.0 + 0.3 * periods_since
+
+                y += np.random.normal(0, 0.4)
+
+                data.append({
+                    'unit': unit,
+                    'time': t,
+                    'outcome': y,
+                    'first_treat': first_treat,
+                })
+
+        df = pd.DataFrame(data)
+
+        cs = CallawaySantAnna()
+        results = cs.fit(
+            df,
+            outcome='outcome',
+            unit='unit',
+            time='time',
+            first_treat='first_treat',
+            aggregate='event_study'
+        )
+
+        assert results.event_study_effects is not None
+        assert len(results.event_study_effects) > 0
+
+        # Event study should have multiple relative periods
+        rel_periods = sorted(results.event_study_effects.keys())
+        assert len(rel_periods) >= 2, f"Expected multiple periods, got {rel_periods}"
+
+        # With single cohort, all effects are for the same group
+        # Post-treatment effects (e >= 0) should show positive effect
+        post_periods = [e for e in rel_periods if e >= 0]
+        if post_periods:
+            # At least some post-periods should show positive effect
+            post_effects = [results.event_study_effects[e]['effect'] for e in post_periods]
+            assert any(e > 0.5 for e in post_effects), f"Expected positive post-period effects, got {post_effects}"
+
+    def test_single_cohort_with_bootstrap(self):
+        """Test bootstrap inference with single cohort."""
+        np.random.seed(42)
+
+        n_units = 50
+        n_periods = 6
+        treatment_period = 3
+
+        data = []
+        for unit in range(n_units):
+            if unit < int(n_units * 0.4):
+                first_treat = 0
+            else:
+                first_treat = treatment_period
+
+            for t in range(n_periods):
+                y = 10.0 + np.random.normal(0, 1)
+                if first_treat > 0 and t >= first_treat:
+                    y += 3.0
+
+                data.append({
+                    'unit': unit,
+                    'time': t,
+                    'outcome': y,
+                    'first_treat': first_treat,
+                })
+
+        df = pd.DataFrame(data)
+
+        cs = CallawaySantAnna(n_bootstrap=99, seed=42)
+        results = cs.fit(
+            df,
+            outcome='outcome',
+            unit='unit',
+            time='time',
+            first_treat='first_treat'
+        )
+
+        assert results.bootstrap_results is not None
+        assert results.bootstrap_results.overall_att_se > 0
+        assert results.bootstrap_results.overall_att_ci[0] < results.bootstrap_results.overall_att_ci[1]
+
+    def test_single_cohort_not_yet_treated_control(self):
+        """Test single cohort with not_yet_treated control group.
+
+        With a single cohort, not_yet_treated should behave same as
+        never_treated after the treatment period.
+        """
+        np.random.seed(42)
+
+        n_units = 60
+        n_periods = 8
+        treatment_period = 4
+
+        data = []
+        for unit in range(n_units):
+            if unit < int(n_units * 0.4):
+                first_treat = 0
+            else:
+                first_treat = treatment_period
+
+            for t in range(n_periods):
+                y = 10.0 + np.random.normal(0, 0.5)
+                if first_treat > 0 and t >= first_treat:
+                    y += 2.0
+
+                data.append({
+                    'unit': unit,
+                    'time': t,
+                    'outcome': y,
+                    'first_treat': first_treat,
+                })
+
+        df = pd.DataFrame(data)
+
+        cs_never = CallawaySantAnna(control_group='never_treated')
+        results_never = cs_never.fit(
+            df,
+            outcome='outcome',
+            unit='unit',
+            time='time',
+            first_treat='first_treat'
+        )
+
+        cs_not_yet = CallawaySantAnna(control_group='not_yet_treated')
+        results_not_yet = cs_not_yet.fit(
+            df,
+            outcome='outcome',
+            unit='unit',
+            time='time',
+            first_treat='first_treat'
+        )
+
+        # Both should produce valid results
+        assert np.isfinite(results_never.overall_att)
+        assert np.isfinite(results_not_yet.overall_att)
+
+        # Results may differ slightly due to different comparison groups
+        # but should be in similar range
+        assert abs(results_never.overall_att - results_not_yet.overall_att) < 1.0
