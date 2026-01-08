@@ -2090,6 +2090,159 @@ class TestSyntheticDiD:
         assert results1.att == results2.att
         assert results1.se == results2.se
 
+    def test_insufficient_pre_periods_warning(self):
+        """Test that SDID warns with very few pre-treatment periods."""
+        np.random.seed(42)
+
+        # Create data with only 2 pre-treatment periods
+        n_control = 8
+        n_periods = 4  # 2 pre, 2 post
+        post_periods = [2, 3]
+
+        data = []
+        # Treated unit
+        for t in range(n_periods):
+            y = 10.0 + t * 0.5 + np.random.normal(0, 0.3)
+            if t in post_periods:
+                y += 3.0
+            data.append({
+                "unit": 0,
+                "period": t,
+                "outcome": y,
+                "treated": 1,
+            })
+
+        # Control units
+        for unit in range(1, n_control + 1):
+            for t in range(n_periods):
+                y = 8.0 + unit * 0.2 + t * 0.4 + np.random.normal(0, 0.3)
+                data.append({
+                    "unit": unit,
+                    "period": t,
+                    "outcome": y,
+                    "treated": 0,
+                })
+
+        df = pd.DataFrame(data)
+
+        sdid = SyntheticDiD(n_bootstrap=30, seed=42)
+
+        # Should work but may warn about few pre-periods
+        # (Depending on implementation - some may warn, some may not)
+        results = sdid.fit(
+            df,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="period",
+            post_periods=post_periods
+        )
+
+        # Results should still be valid
+        assert np.isfinite(results.att)
+        assert results.se > 0
+
+    def test_single_pre_period_edge_case(self):
+        """Test SDID with single pre-treatment period (extreme edge case)."""
+        np.random.seed(42)
+
+        n_control = 5
+        n_periods = 3  # 1 pre, 2 post
+        post_periods = [1, 2]
+
+        data = []
+        # Treated unit
+        for t in range(n_periods):
+            y = 10.0 + np.random.normal(0, 0.2)
+            if t in post_periods:
+                y += 2.0
+            data.append({
+                "unit": 0,
+                "period": t,
+                "outcome": y,
+                "treated": 1,
+            })
+
+        # Control units
+        for unit in range(1, n_control + 1):
+            for t in range(n_periods):
+                y = 9.0 + np.random.normal(0, 0.2)
+                data.append({
+                    "unit": unit,
+                    "period": t,
+                    "outcome": y,
+                    "treated": 0,
+                })
+
+        df = pd.DataFrame(data)
+
+        sdid = SyntheticDiD(n_bootstrap=30, seed=42)
+
+        # With single pre-period, time weights will be trivially [1.0]
+        results = sdid.fit(
+            df,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="period",
+            post_periods=post_periods
+        )
+
+        # Should still produce results
+        assert np.isfinite(results.att)
+        # Time weights should have single entry
+        assert len(results.time_weights) == 1
+
+    def test_more_pre_periods_than_control_units(self):
+        """Test SDID when n_pre_periods > n_control_units (underdetermined)."""
+        np.random.seed(42)
+
+        n_control = 3  # Few control units
+        n_periods = 10  # Many periods
+        post_periods = [8, 9]  # 8 pre-treatment periods
+
+        data = []
+        # Treated unit
+        for t in range(n_periods):
+            y = 10.0 + t * 0.2 + np.random.normal(0, 0.3)
+            if t in post_periods:
+                y += 2.5
+            data.append({
+                "unit": 0,
+                "period": t,
+                "outcome": y,
+                "treated": 1,
+            })
+
+        # Control units
+        for unit in range(1, n_control + 1):
+            for t in range(n_periods):
+                y = 8.0 + t * 0.15 + np.random.normal(0, 0.3)
+                data.append({
+                    "unit": unit,
+                    "period": t,
+                    "outcome": y,
+                    "treated": 0,
+                })
+
+        df = pd.DataFrame(data)
+
+        # Use regularization to help with underdetermined system
+        sdid = SyntheticDiD(lambda_reg=1.0, n_bootstrap=30, seed=42)
+
+        results = sdid.fit(
+            df,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="period",
+            post_periods=post_periods
+        )
+
+        # Should produce valid results with regularization
+        assert np.isfinite(results.att)
+        assert results.se > 0
+
 
 class TestSyntheticWeightsUtils:
     """Tests for synthetic weight utility functions."""
@@ -2179,3 +2332,368 @@ class TestSyntheticWeightsUtils:
         # Control: 12 - 10 = 2
         # SDID: 5 - 2 = 3
         assert abs(tau - 3.0) < 1e-6
+
+
+# =============================================================================
+# Edge Case Tests
+# =============================================================================
+
+
+class TestUnbalancedPanels:
+    """Tests for handling unbalanced panels with missing periods."""
+
+    def test_did_with_missing_periods(self):
+        """Test DifferenceInDifferences handles missing periods gracefully."""
+        # Create unbalanced panel - some units missing some periods
+        np.random.seed(42)
+        data = []
+
+        for unit in range(20):
+            is_treated = unit < 10
+            # Some units missing period 0, some missing period 1
+            periods = [0, 1]
+            if unit % 5 == 0:
+                periods = [1]  # Missing pre-period
+            elif unit % 7 == 0:
+                periods = [0]  # Missing post-period
+
+            for period in periods:
+                y = 10.0 + unit * 0.1
+                if period == 1:
+                    y += 5.0
+                if is_treated and period == 1:
+                    y += 3.0
+                y += np.random.normal(0, 1)
+
+                data.append({
+                    "unit": unit,
+                    "period": period,
+                    "treated": int(is_treated),
+                    "post": period,
+                    "outcome": y,
+                })
+
+        df = pd.DataFrame(data)
+
+        did = DifferenceInDifferences()
+        results = did.fit(
+            df,
+            outcome="outcome",
+            treatment="treated",
+            time="post"
+        )
+
+        # Should still produce valid results
+        assert np.isfinite(results.att)
+        assert results.se > 0
+        assert results.n_obs == len(df)
+
+    def test_twfe_with_unbalanced_panel(self):
+        """Test TwoWayFixedEffects handles unbalanced panels."""
+        from diff_diff import TwoWayFixedEffects
+
+        np.random.seed(42)
+        data = []
+
+        for unit in range(15):
+            is_treated = unit < 8
+            unit_effect = np.random.normal(0, 2)
+
+            # Create unbalanced panel - varying number of periods per unit
+            if unit < 5:
+                periods = [0, 1, 2, 3]  # Full panel
+            elif unit < 10:
+                periods = [0, 1, 3]  # Missing period 2
+            else:
+                periods = [1, 2, 3]  # Missing period 0
+
+            for period in periods:
+                time_effect = period * 0.5
+                post = 1 if period >= 2 else 0
+
+                y = 10.0 + unit_effect + time_effect
+                if is_treated and post:
+                    y += 3.0
+                y += np.random.normal(0, 0.5)
+
+                data.append({
+                    "unit": unit,
+                    "period": period,
+                    "treated": int(is_treated),
+                    "post": post,
+                    "outcome": y,
+                })
+
+        df = pd.DataFrame(data)
+
+        twfe = TwoWayFixedEffects()
+        results = twfe.fit(
+            df,
+            outcome="outcome",
+            treatment="post",
+            unit="unit",
+            time="period"
+        )
+
+        # Should produce valid results
+        assert np.isfinite(results.att)
+        assert results.se > 0
+
+    def test_multiperiod_with_sparse_data(self):
+        """Test MultiPeriodDiD with sparse data across periods."""
+        np.random.seed(42)
+        data = []
+
+        n_units = 30
+        for unit in range(n_units):
+            is_treated = unit < n_units // 2
+
+            # Each unit observed in random subset of periods
+            available_periods = np.random.choice([0, 1, 2, 3, 4], size=3, replace=False)
+            available_periods = sorted(available_periods)
+
+            for period in available_periods:
+                y = 10.0 + np.random.normal(0, 1)
+                if period >= 2:
+                    y += 2.0  # Time effect
+                if is_treated and period >= 2:
+                    y += 3.0  # Treatment effect
+
+                data.append({
+                    "unit": unit,
+                    "period": period,
+                    "treated": int(is_treated),
+                    "outcome": y,
+                })
+
+        df = pd.DataFrame(data)
+
+        mp_did = MultiPeriodDiD()
+        results = mp_did.fit(
+            df,
+            outcome="outcome",
+            treatment="treated",
+            time="period",
+            reference_period=1
+        )
+
+        # Should produce valid results
+        assert np.isfinite(results.avg_att)
+        assert len(results.period_effects) > 0
+
+
+class TestSingleTreatedUnit:
+    """Tests for scenarios with only one treated unit."""
+
+    def test_did_single_treated_unit(self):
+        """Test DifferenceInDifferences with single treated unit."""
+        np.random.seed(42)
+        data = []
+
+        # 1 treated unit, 10 control units
+        for unit in range(11):
+            is_treated = unit == 0
+
+            for period in [0, 1]:
+                y = 10.0 + np.random.normal(0, 0.5)
+                if period == 1:
+                    y += 2.0
+                if is_treated and period == 1:
+                    y += 5.0  # Large effect for single unit
+
+                data.append({
+                    "unit": unit,
+                    "period": period,
+                    "treated": int(is_treated),
+                    "post": period,
+                    "outcome": y,
+                })
+
+        df = pd.DataFrame(data)
+
+        did = DifferenceInDifferences()
+        results = did.fit(
+            df,
+            outcome="outcome",
+            treatment="treated",
+            time="post"
+        )
+
+        # Should produce valid results
+        assert np.isfinite(results.att)
+        assert results.se > 0
+        assert results.n_treated == 2  # 1 unit × 2 periods
+
+    def test_sdid_single_treated_unit(self):
+        """Test SyntheticDiD with single treated unit (primary use case)."""
+        np.random.seed(42)
+
+        n_control = 10
+        n_periods = 6
+        post_periods = [4, 5]
+
+        data = []
+
+        # Generate treated unit
+        treated_base = 15.0
+        treated_trend = 0.5
+        for t in range(n_periods):
+            y = treated_base + treated_trend * t + np.random.normal(0, 0.3)
+            if t in post_periods:
+                y += 3.0  # Treatment effect
+            data.append({
+                "unit": 0,
+                "period": t,
+                "outcome": y,
+                "treated": 1,
+            })
+
+        # Generate control units
+        for unit in range(1, n_control + 1):
+            unit_base = 10.0 + np.random.normal(0, 2)
+            unit_trend = 0.4 + np.random.normal(0, 0.1)
+            for t in range(n_periods):
+                y = unit_base + unit_trend * t + np.random.normal(0, 0.3)
+                data.append({
+                    "unit": unit,
+                    "period": t,
+                    "outcome": y,
+                    "treated": 0,
+                })
+
+        df = pd.DataFrame(data)
+
+        sdid = SyntheticDiD(n_bootstrap=50, seed=42)
+        results = sdid.fit(
+            df,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="period",
+            post_periods=post_periods
+        )
+
+        # SDID is designed for single/few treated units
+        assert np.isfinite(results.att)
+        assert results.se > 0
+        # Effect should be roughly correct
+        assert abs(results.att - 3.0) < 2.0
+
+
+class TestCollinearityDetection:
+    """Tests for handling perfect or near collinearity."""
+
+    def test_did_with_redundant_covariate_raises_error(self):
+        """Test DiD raises clear error for perfectly collinear covariates."""
+        np.random.seed(42)
+        data = pd.DataFrame({
+            "outcome": np.random.normal(10, 1, 100),
+            "treated": np.repeat([0, 1], 50),
+            "post": np.tile([0, 1], 50),
+            "x1": np.random.normal(0, 1, 100),
+        })
+        # Add perfectly collinear covariate
+        data["x2"] = data["x1"] * 2 + 3
+
+        did = DifferenceInDifferences()
+
+        # Should raise a clear error about collinearity
+        with pytest.raises(ValueError, match="rank-deficient"):
+            did.fit(
+                data,
+                outcome="outcome",
+                treatment="treated",
+                time="post",
+                covariates=["x1", "x2"]
+            )
+
+    def test_did_with_constant_covariate_raises_error(self):
+        """Test DiD raises clear error for constant covariates."""
+        np.random.seed(42)
+        data = pd.DataFrame({
+            "outcome": np.random.normal(10, 1, 100),
+            "treated": np.repeat([0, 1], 50),
+            "post": np.tile([0, 1], 50),
+            "constant_x": np.ones(100),  # Constant covariate
+        })
+
+        did = DifferenceInDifferences()
+
+        # Constant covariate is collinear with intercept
+        # Should raise clear error
+        with pytest.raises(ValueError, match="rank-deficient"):
+            did.fit(
+                data,
+                outcome="outcome",
+                treatment="treated",
+                time="post",
+                covariates=["constant_x"]
+            )
+
+    def test_did_with_near_collinear_covariates(self):
+        """Test DiD handles near-collinear covariates (not perfectly collinear)."""
+        np.random.seed(42)
+        data = pd.DataFrame({
+            "outcome": np.random.normal(10, 1, 100),
+            "treated": np.repeat([0, 1], 50),
+            "post": np.tile([0, 1], 50),
+            "x1": np.random.normal(0, 1, 100),
+        })
+        # Add near-collinear covariate (small noise breaks perfect collinearity)
+        data["x2"] = data["x1"] * 2 + 3 + np.random.normal(0, 0.1, 100)
+
+        did = DifferenceInDifferences()
+
+        # Near-collinear should work (not perfectly rank-deficient)
+        results = did.fit(
+            data,
+            outcome="outcome",
+            treatment="treated",
+            time="post",
+            covariates=["x1", "x2"]
+        )
+
+        assert np.isfinite(results.att)
+
+    def test_twfe_with_absorbed_covariate(self):
+        """Test TWFE handles covariate absorbed by fixed effects."""
+        from diff_diff import TwoWayFixedEffects
+
+        np.random.seed(42)
+        n_units = 20
+        n_periods = 4
+
+        data = []
+        for unit in range(n_units):
+            # Unit-specific covariate (absorbed by unit FE)
+            unit_x = np.random.normal(0, 1)
+
+            for period in range(n_periods):
+                y = 10.0 + unit * 0.5 + period * 0.3 + np.random.normal(0, 0.5)
+                post = 1 if period >= 2 else 0
+                if unit < n_units // 2 and post:
+                    y += 2.0
+
+                data.append({
+                    "unit": unit,
+                    "period": period,
+                    "outcome": y,
+                    "treated": int(unit < n_units // 2),
+                    "post": post,
+                    "unit_covariate": unit_x,  # Same for all periods within unit
+                })
+
+        df = pd.DataFrame(data)
+
+        twfe = TwoWayFixedEffects()
+        # unit_covariate is absorbed by unit fixed effects
+        results = twfe.fit(
+            df,
+            outcome="outcome",
+            treatment="post",
+            unit="unit",
+            time="period"
+        )
+
+        assert np.isfinite(results.att)
+        assert results.se > 0

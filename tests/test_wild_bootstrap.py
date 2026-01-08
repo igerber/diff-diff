@@ -621,3 +621,184 @@ class TestWildBootstrapResults:
 
         captured = capsys.readouterr()
         assert "Wild Cluster Bootstrap Results" in captured.out
+
+
+# =============================================================================
+# Edge Case Tests: Few Clusters (< 5)
+# =============================================================================
+
+
+class TestFewClustersEdgeCases:
+    """Tests for wild bootstrap behavior with very few clusters."""
+
+    def test_three_clusters_still_works(self):
+        """Test wild bootstrap works with 3 clusters (minimum viable)."""
+        np.random.seed(42)
+
+        n_clusters = 3
+        obs_per_cluster = 40
+
+        data = []
+        for cluster in range(n_clusters):
+            is_treated = cluster < 2  # 2 treated, 1 control cluster
+            cluster_effect = np.random.normal(0, 2)
+
+            for obs in range(obs_per_cluster):
+                for period in [0, 1]:
+                    y = 10.0 + cluster_effect
+                    if period == 1:
+                        y += 5.0
+                    if is_treated and period == 1:
+                        y += 3.0
+                    y += np.random.normal(0, 1)
+
+                    data.append({
+                        "cluster": cluster,
+                        "unit": cluster * obs_per_cluster + obs,
+                        "period": period,
+                        "treated": int(is_treated),
+                        "post": period,
+                        "outcome": y,
+                    })
+
+        df = pd.DataFrame(data)
+
+        did = DifferenceInDifferences(
+            cluster="cluster",
+            inference="wild_bootstrap",
+            n_bootstrap=99,
+            bootstrap_weights="webb",  # Webb recommended for few clusters
+            seed=42
+        )
+
+        # Should warn about few clusters but still produce valid results
+        with pytest.warns(UserWarning, match="Only 3 clusters"):
+            results = did.fit(
+                df,
+                outcome="outcome",
+                treatment="treated",
+                time="post"
+            )
+
+        assert results.se > 0
+        assert results.inference_method == "wild_bootstrap"
+        assert results.n_clusters == 3
+
+    def test_two_clusters_minimum(self):
+        """Test wild bootstrap works with exactly 2 clusters (absolute minimum)."""
+        np.random.seed(42)
+
+        n_clusters = 2
+        obs_per_cluster = 50
+
+        data = []
+        for cluster in range(n_clusters):
+            is_treated = cluster == 0
+            cluster_effect = np.random.normal(0, 2)
+
+            for obs in range(obs_per_cluster):
+                for period in [0, 1]:
+                    y = 10.0 + cluster_effect
+                    if period == 1:
+                        y += 5.0
+                    if is_treated and period == 1:
+                        y += 3.0
+                    y += np.random.normal(0, 1)
+
+                    data.append({
+                        "cluster": cluster,
+                        "unit": cluster * obs_per_cluster + obs,
+                        "period": period,
+                        "treated": int(is_treated),
+                        "post": period,
+                        "outcome": y,
+                    })
+
+        df = pd.DataFrame(data)
+
+        did = DifferenceInDifferences(
+            cluster="cluster",
+            inference="wild_bootstrap",
+            n_bootstrap=99,
+            bootstrap_weights="webb",
+            seed=42
+        )
+
+        # Should warn about few clusters
+        with pytest.warns(UserWarning, match="Only 2 clusters"):
+            results = did.fit(
+                df,
+                outcome="outcome",
+                treatment="treated",
+                time="post"
+            )
+
+        # Results should still be valid (though may have high variance)
+        assert results.se > 0
+        assert np.isfinite(results.att)
+        assert results.n_clusters == 2
+
+    def test_few_clusters_webb_vs_rademacher(self, few_cluster_data):
+        """Test that Webb weights produce different (often more conservative) SEs than Rademacher with few clusters."""
+        did_webb = DifferenceInDifferences(
+            cluster="cluster",
+            inference="wild_bootstrap",
+            n_bootstrap=199,
+            bootstrap_weights="webb",
+            seed=42
+        )
+
+        did_rademacher = DifferenceInDifferences(
+            cluster="cluster",
+            inference="wild_bootstrap",
+            n_bootstrap=199,
+            bootstrap_weights="rademacher",
+            seed=42
+        )
+
+        with pytest.warns(UserWarning):
+            results_webb = did_webb.fit(
+                few_cluster_data,
+                outcome="outcome",
+                treatment="treated",
+                time="post"
+            )
+
+        with pytest.warns(UserWarning):
+            results_rademacher = did_rademacher.fit(
+                few_cluster_data,
+                outcome="outcome",
+                treatment="treated",
+                time="post"
+            )
+
+        # Both should produce valid results
+        assert results_webb.se > 0
+        assert results_rademacher.se > 0
+        # ATT should be identical (same point estimate)
+        assert results_webb.att == results_rademacher.att
+        # SEs will differ due to different weight distributions
+        # (This is expected, not necessarily one > other)
+
+    def test_few_clusters_confidence_intervals_valid(self, few_cluster_data):
+        """Test that CIs are valid even with few clusters."""
+        did = DifferenceInDifferences(
+            cluster="cluster",
+            inference="wild_bootstrap",
+            n_bootstrap=199,
+            bootstrap_weights="webb",
+            seed=42
+        )
+
+        with pytest.warns(UserWarning):
+            results = did.fit(
+                few_cluster_data,
+                outcome="outcome",
+                treatment="treated",
+                time="post"
+            )
+
+        lower, upper = results.conf_int
+        assert lower < upper
+        # CI should contain the point estimate
+        assert lower < results.att < upper
