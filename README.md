@@ -71,6 +71,7 @@ Signif. codes: '***' 0.001, '**' 0.01, '*' 0.05, '.' 0.1
 - **Panel data support**: Two-way fixed effects estimator for panel designs
 - **Multi-period analysis**: Event-study style DiD with period-specific treatment effects
 - **Staggered adoption**: Callaway-Sant'Anna (2021) and Sun-Abraham (2021) estimators for heterogeneous treatment timing
+- **Triple Difference (DDD)**: Ortiz-Villavicencio & Sant'Anna (2025) estimators with proper covariate handling
 - **Synthetic DiD**: Combined DiD with synthetic control for improved robustness
 - **Event study plots**: Publication-ready visualization of treatment effects
 - **Parallel trends testing**: Multiple methods including equivalence tests
@@ -93,6 +94,8 @@ We provide Jupyter notebook tutorials in `docs/tutorials/`:
 | `04_parallel_trends.ipynb` | Testing parallel trends, equivalence tests, placebo tests, diagnostics |
 | `05_honest_did.ipynb` | Honest DiD sensitivity analysis, bounds, breakdown values, visualization |
 | `06_power_analysis.ipynb` | Power analysis, MDE, sample size calculations, simulation-based power |
+| `07_pretrends_power.ipynb` | Pre-trends power analysis (Roth 2022), MDV, power curves |
+| `08_triple_diff.ipynb` | Triple Difference (DDD) estimation with proper covariate handling |
 
 ## Data Preparation
 
@@ -865,6 +868,77 @@ print(f"Sun-Abraham ATT: {sa_results.overall_att:.3f}")
 
 # If results differ substantially, investigate heterogeneity
 ```
+
+### Triple Difference (DDD)
+
+Triple Difference (DDD) is used when treatment requires satisfying two criteria: belonging to a treated **group** AND being in an eligible **partition**. The `TripleDifference` class implements the methodology from Ortiz-Villavicencio & Sant'Anna (2025), which correctly handles covariate adjustment (unlike naive implementations).
+
+```python
+from diff_diff import TripleDifference, triple_difference
+
+# Basic usage
+ddd = TripleDifference(estimation_method='dr')  # doubly robust (recommended)
+results = ddd.fit(
+    data,
+    outcome='wages',
+    group='policy_state',       # 1=state enacted policy, 0=control state
+    partition='female',         # 1=women (affected by policy), 0=men
+    time='post'                 # 1=post-policy, 0=pre-policy
+)
+
+# View results
+results.print_summary()
+print(f"ATT: {results.att:.3f} (SE: {results.se:.3f})")
+
+# With covariates (properly incorporated, unlike naive DDD)
+results = ddd.fit(
+    data,
+    outcome='wages',
+    group='policy_state',
+    partition='female',
+    time='post',
+    covariates=['age', 'education', 'experience']
+)
+```
+
+**Estimation methods:**
+
+| Method | Description | When to use |
+|--------|-------------|-------------|
+| `"dr"` | Doubly robust | Recommended. Consistent if either outcome or propensity model is correct |
+| `"reg"` | Regression adjustment | Simple outcome regression with full interactions |
+| `"ipw"` | Inverse probability weighting | When propensity score model is well-specified |
+
+```python
+# Compare estimation methods
+for method in ['reg', 'ipw', 'dr']:
+    est = TripleDifference(estimation_method=method)
+    res = est.fit(data, outcome='y', group='g', partition='p', time='t')
+    print(f"{method}: ATT={res.att:.3f} (SE={res.se:.3f})")
+```
+
+**Convenience function:**
+
+```python
+# One-liner estimation
+results = triple_difference(
+    data,
+    outcome='wages',
+    group='policy_state',
+    partition='female',
+    time='post',
+    covariates=['age', 'education'],
+    estimation_method='dr'
+)
+```
+
+**Why use DDD instead of DiD?**
+
+DDD allows for violations of parallel trends that are:
+- Group-specific (e.g., economic shocks in treatment states)
+- Partition-specific (e.g., trends affecting women everywhere)
+
+As long as these biases are additive, DDD differences them out. The key assumption is that the *differential* trend between eligible and ineligible units would be the same across groups.
 
 ### Event Study Visualization
 
@@ -1661,6 +1735,60 @@ SunAbraham(
 | `print_summary(alpha)` | Print summary to stdout |
 | `to_dataframe(level)` | Convert to DataFrame ('event_study' or 'cohort') |
 
+### TripleDifference
+
+```python
+TripleDifference(
+    estimation_method='dr',   # 'dr' (doubly robust), 'reg', or 'ipw'
+    robust=True,              # Use HC1 robust standard errors
+    cluster=None,             # Column for cluster-robust SEs
+    alpha=0.05,               # Significance level for CIs
+    pscore_trim=0.01          # Propensity score trimming threshold
+)
+```
+
+**fit() Parameters:**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `data` | DataFrame | Input data |
+| `outcome` | str | Outcome variable column name |
+| `group` | str | Group indicator column (0/1): 1=treated group |
+| `partition` | str | Partition/eligibility indicator column (0/1): 1=eligible |
+| `time` | str | Time indicator column (0/1): 1=post-treatment |
+| `covariates` | list | Covariate column names for adjustment |
+
+### TripleDifferenceResults
+
+**Attributes:**
+
+| Attribute | Description |
+|-----------|-------------|
+| `att` | Average Treatment effect on the Treated |
+| `se` | Standard error of ATT |
+| `t_stat` | T-statistic |
+| `p_value` | P-value for H0: ATT = 0 |
+| `conf_int` | Tuple of (lower, upper) confidence bounds |
+| `n_obs` | Total number of observations |
+| `n_treated_eligible` | Obs in treated group & eligible partition |
+| `n_treated_ineligible` | Obs in treated group & ineligible partition |
+| `n_control_eligible` | Obs in control group & eligible partition |
+| `n_control_ineligible` | Obs in control group & ineligible partition |
+| `estimation_method` | Method used ('dr', 'reg', or 'ipw') |
+| `group_means` | Dict of cell means for diagnostics |
+| `pscore_stats` | Propensity score statistics (IPW/DR only) |
+| `is_significant` | Boolean for significance at alpha |
+| `significance_stars` | String of significance stars |
+
+**Methods:**
+
+| Method | Description |
+|--------|-------------|
+| `summary(alpha)` | Get formatted summary string |
+| `print_summary(alpha)` | Print summary to stdout |
+| `to_dict()` | Convert to dictionary |
+| `to_dataframe()` | Convert to pandas DataFrame |
+
 ### HonestDiD
 
 ```python
@@ -2023,6 +2151,18 @@ This library implements methods from the following scholarly works:
 ### Synthetic Difference-in-Differences
 
 - **Arkhangelsky, D., Athey, S., Hirshberg, D. A., Imbens, G. W., & Wager, S. (2021).** "Synthetic Difference-in-Differences." *American Economic Review*, 111(12), 4088-4118. [https://doi.org/10.1257/aer.20190159](https://doi.org/10.1257/aer.20190159)
+
+### Triple Difference (DDD)
+
+- **Ortiz-Villavicencio, M., & Sant'Anna, P. H. C. (2025).** "Better Understanding Triple Differences Estimators." *Working Paper*. [https://arxiv.org/abs/2505.09942](https://arxiv.org/abs/2505.09942)
+
+  This paper shows that common DDD implementations (taking the difference between two DiDs, or applying three-way fixed effects regressions) are generally invalid when identification requires conditioning on covariates. The `TripleDifference` class implements their regression adjustment, inverse probability weighting, and doubly robust estimators.
+
+- **Gruber, J. (1994).** "The Incidence of Mandated Maternity Benefits." *American Economic Review*, 84(3), 622-641. [https://www.jstor.org/stable/2118071](https://www.jstor.org/stable/2118071)
+
+  Classic paper introducing the Triple Difference design for policy evaluation.
+
+- **Olden, A., & Møen, J. (2022).** "The Triple Difference Estimator." *The Econometrics Journal*, 25(3), 531-553. [https://doi.org/10.1093/ectj/utac010](https://doi.org/10.1093/ectj/utac010)
 
 ### Parallel Trends and Pre-Trend Testing
 

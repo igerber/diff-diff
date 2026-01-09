@@ -81,6 +81,11 @@ from diff_diff.sun_abraham import (
     SunAbraham,
     SunAbrahamResults,
 )
+from diff_diff.triple_diff import (
+    TripleDifference,
+    TripleDifferenceResults,
+    triple_difference,
+)
 from diff_diff.utils import (
     WildBootstrapResults,
     check_parallel_trends,
@@ -107,6 +112,7 @@ __all__ = [
     "SyntheticDiD",
     "CallawaySantAnna",
     "SunAbraham",
+    "TripleDifference",
     # Bacon Decomposition
     "BaconDecomposition",
     "BaconDecompositionResults",
@@ -123,6 +129,8 @@ __all__ = [
     "GroupTimeEffect",
     "SunAbrahamResults",
     "SABootstrapResults",
+    "TripleDifferenceResults",
+    "triple_difference",
     # Visualization
     "plot_event_study",
     "plot_group_effects",

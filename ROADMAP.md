@@ -6,11 +6,11 @@ For past changes and release history, see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
-## Current Status (v1.2.0)
+## Current Status (v1.3.0)
 
 diff-diff is a **production-ready** DiD library with feature parity with R's `did` + `HonestDiD` ecosystem for core DiD analysis:
 
-- **Core estimators**: Basic DiD, TWFE, MultiPeriod, Callaway-Sant'Anna, Sun-Abraham, Synthetic DiD
+- **Core estimators**: Basic DiD, TWFE, MultiPeriod, Callaway-Sant'Anna, Sun-Abraham, Synthetic DiD, Triple Difference (DDD)
 - **Valid inference**: Robust SEs, cluster SEs, wild bootstrap, multiplier bootstrap
 - **Assumption diagnostics**: Parallel trends tests, placebo tests, Goodman-Bacon decomposition
 - **Sensitivity analysis**: Honest DiD (Rambachan-Roth), Pre-trends power analysis (Roth 2022)
@@ -18,7 +18,7 @@ diff-diff is a **production-ready** DiD library with feature parity with R's `di
 
 ---
 
-## Near-Term Enhancements (v1.3)
+## Near-Term Enhancements (v1.4)
 
 High-value additions building on our existing foundation.
 
@@ -42,14 +42,27 @@ Two-stage approach gaining traction in applied work. First residualizes outcomes
 
 **Reference**: Gardner (2022). *Working Paper*.
 
-### Triple Difference (DDD) Estimators
+### Staggered Triple Difference (DDD)
 
-Extends DiD to settings requiring a third differencing dimension. Common DDD implementations are invalid when covariates are needed for identification.
+Extend the existing `TripleDifference` estimator to handle staggered adoption settings. The current implementation handles 2-period DDD; this extends to multi-period designs.
 
-- Regression adjustment, IPW, and doubly robust DDD estimators
-- Staggered adoption support with multiple comparison groups
-- Proper covariate integration (naive "two DiD difference" approaches fail)
-- Bias reduction and precision gains over standard approaches
+**Multi-period/Staggered Support:**
+- Group-time ATT(g,t) for DDD designs with variation in treatment timing
+- Handle settings where groups adopt at different times
+- Multiple comparison groups (never-treated, not-yet-treated in either dimension)
+- `StaggeredTripleDifference` class or extended `TripleDifference` with `first_treat` parameter
+
+**Event Study Aggregation:**
+- Dynamic treatment effects over time (event study coefficients)
+- Pre-treatment placebo effects for parallel trends assessment
+- `aggregate='event_study'` parameter like `CallawaySantAnna`
+- Integration with `plot_event_study()` visualization
+
+**Multiplier Bootstrap Inference:**
+- Multiplier bootstrap for valid inference in staggered settings
+- Rademacher, Mammen, and Webb weight options (matching existing estimators)
+- `n_bootstrap` parameter and `DDDBootstrapResults` class
+- Clustered bootstrap for panel data
 
 **Reference**: [Ortiz-Villavicencio & Sant'Anna (2025)](https://arxiv.org/abs/2505.09942). *Working Paper*. R package: `triplediff`.
 
@@ -61,7 +74,7 @@ Extends DiD to settings requiring a third differencing dimension. Common DDD imp
 
 ---
 
-## Medium-Term Enhancements (v1.4+)
+## Medium-Term Enhancements (v1.5+)
 
 Extending diff-diff to handle more complex settings.
 
