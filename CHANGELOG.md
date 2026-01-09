@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.0] - 2026-01-09
+
+### Added
+- **Triple Difference (DDD) estimator** implementing Ortiz-Villavicencio & Sant'Anna (2025)
+  - `TripleDifference` class for DDD designs where treatment requires two criteria (group AND partition)
+  - `TripleDifferenceResults` dataclass with ATT, SEs, cell means, and diagnostics
+  - `triple_difference()` convenience function for quick estimation
+  - Three estimation methods: regression adjustment (`reg`), inverse probability weighting (`ipw`), and doubly robust (`dr`)
+  - Proper covariate handling (unlike naive DDD implementations that difference two DiDs)
+  - Propensity score trimming for IPW/DR methods
+  - Cluster-robust standard errors support
+  - Tutorial notebook: `docs/tutorials/08_triple_diff.ipynb`
+
+**Reference**: Ortiz-Villavicencio, M., & Sant'Anna, P. H. C. (2025). "Better Understanding Triple Differences Estimators." *Working Paper*. [arXiv:2505.09942](https://arxiv.org/abs/2505.09942)
+
 ## [1.2.1] - 2026-01-08
 
 ### Added
@@ -248,6 +263,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `to_dict()` and `to_dataframe()` export methods
   - `is_significant` and `significance_stars` properties
 
+[1.3.0]: https://github.com/igerber/diff-diff/compare/v1.2.1...v1.3.0
 [1.2.1]: https://github.com/igerber/diff-diff/compare/v1.2.0...v1.2.1
 [1.2.0]: https://github.com/igerber/diff-diff/compare/v1.1.1...v1.2.0
 [1.1.1]: https://github.com/igerber/diff-diff/compare/v1.1.0...v1.1.1

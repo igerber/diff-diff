@@ -18,6 +18,7 @@ Core estimator classes for DiD analysis:
    diff_diff.SyntheticDiD
    diff_diff.CallawaySantAnna
    diff_diff.SunAbraham
+   diff_diff.TripleDifference
 
 Results Classes
 ---------------
@@ -37,6 +38,7 @@ Result containers returned by estimators:
    diff_diff.GroupTimeEffect
    diff_diff.SunAbrahamResults
    diff_diff.SABootstrapResults
+   diff_diff.TripleDifferenceResults
 
 Visualization
 -------------
@@ -177,6 +179,7 @@ Detailed documentation by module:
 
    estimators
    staggered
+   triple_diff
    results
    visualization
    diagnostics
