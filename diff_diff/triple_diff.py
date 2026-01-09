@@ -44,7 +44,6 @@ from diff_diff.utils import (
     compute_robust_se,
 )
 
-
 # =============================================================================
 # Results Classes
 # =============================================================================
@@ -853,9 +852,6 @@ class TripleDifference:
         p_cell_3 = np.clip(p_cell_3, self.pscore_trim, 1 - self.pscore_trim)
         p_cell_4 = np.clip(p_cell_4, self.pscore_trim, 1 - self.pscore_trim)
 
-        # Reference probability: P(G=1, P=1)
-        p_ref = np.mean(cell_1)
-
         # IPW estimator for DDD
         # The DDD-IPW estimator reweights each cell to have the same
         # covariate distribution as the effectively treated (G=1, P=1)
@@ -1022,29 +1018,22 @@ class TripleDifference:
         inf_11 += mu_fitted * cell_1.astype(float) / p_ref
 
         # Cell 2 (G=1, P=0)
-        inf_10 = np.zeros(n)
         w_10 = cell_2.astype(float) * (p_cell_1 / p_cell_2)
         inf_10 = w_10 * (y - mu_fitted) / p_ref
-        # Add outcome model contribution for cell 2
-        for i in range(n):
-            if cell_2[i]:
-                inf_10[i] += mu_fitted[i] * (p_cell_1[i] / p_cell_2[i]) / p_ref
+        # Add outcome model contribution for cell 2 (vectorized)
+        inf_10[cell_2] += mu_fitted[cell_2] * (p_cell_1[cell_2] / p_cell_2[cell_2]) / p_ref
 
         # Cell 3 (G=0, P=1)
-        inf_01 = np.zeros(n)
         w_01 = cell_3.astype(float) * (p_cell_1 / p_cell_3)
         inf_01 = w_01 * (y - mu_fitted) / p_ref
-        for i in range(n):
-            if cell_3[i]:
-                inf_01[i] += mu_fitted[i] * (p_cell_1[i] / p_cell_3[i]) / p_ref
+        # Add outcome model contribution for cell 3 (vectorized)
+        inf_01[cell_3] += mu_fitted[cell_3] * (p_cell_1[cell_3] / p_cell_3[cell_3]) / p_ref
 
         # Cell 4 (G=0, P=0)
-        inf_00 = np.zeros(n)
         w_00 = cell_4.astype(float) * (p_cell_1 / p_cell_4)
         inf_00 = w_00 * (y - mu_fitted) / p_ref
-        for i in range(n):
-            if cell_4[i]:
-                inf_00[i] += mu_fitted[i] * (p_cell_1[i] / p_cell_4[i]) / p_ref
+        # Add outcome model contribution for cell 4 (vectorized)
+        inf_00[cell_4] += mu_fitted[cell_4] * (p_cell_1[cell_4] / p_cell_4[cell_4]) / p_ref
 
         # Compute cell-time means using DR formula
         def dr_mean(inf_vals, t_mask):
@@ -1070,9 +1059,6 @@ class TripleDifference:
         # Standard error computation
         # Use the simpler variance formula for the DDD estimator
         # Var(DDD) ≈ sum of variances of cell means / cell_sizes
-
-        n_pre = np.sum(pre_mask)
-        n_post = np.sum(post_mask)
 
         # Compute variances within each cell-time combination
         def cell_var(cell_mask, t_mask, y_vals):
@@ -1143,32 +1129,31 @@ class TripleDifference:
     ) -> float:
         """Compute standard error for IPW estimator using influence function."""
         n = len(y)
-        pre_mask = T == 0
         post_mask = T == 1
 
-        # Influence function for IPW estimator
+        # Influence function for IPW estimator (vectorized)
         inf_func = np.zeros(n)
 
         n_ref = np.sum(cell_1)
         p_ref = n_ref / n
 
-        for i in range(n):
-            if post_mask[i]:
-                sign = 1.0
-            else:
-                sign = -1.0
+        # Sign: +1 for post, -1 for pre
+        sign = np.where(post_mask, 1.0, -1.0)
 
-            if cell_1[i]:
-                inf_func[i] = sign * (y[i] - att) / p_ref
-            elif cell_2[i]:
-                w = p_cell_1[i] / p_cell_2[i]
-                inf_func[i] = -sign * y[i] * w / p_ref
-            elif cell_3[i]:
-                w = p_cell_1[i] / p_cell_3[i]
-                inf_func[i] = -sign * y[i] * w / p_ref
-            elif cell_4[i]:
-                w = p_cell_1[i] / p_cell_4[i]
-                inf_func[i] = sign * y[i] * w / p_ref
+        # Cell 1 (G=1, P=1): sign * (y - att) / p_ref
+        inf_func[cell_1] = sign[cell_1] * (y[cell_1] - att) / p_ref
+
+        # Cell 2 (G=1, P=0): -sign * y * (p_cell_1 / p_cell_2) / p_ref
+        w_2 = p_cell_1[cell_2] / p_cell_2[cell_2]
+        inf_func[cell_2] = -sign[cell_2] * y[cell_2] * w_2 / p_ref
+
+        # Cell 3 (G=0, P=1): -sign * y * (p_cell_1 / p_cell_3) / p_ref
+        w_3 = p_cell_1[cell_3] / p_cell_3[cell_3]
+        inf_func[cell_3] = -sign[cell_3] * y[cell_3] * w_3 / p_ref
+
+        # Cell 4 (G=0, P=0): sign * y * (p_cell_1 / p_cell_4) / p_ref
+        w_4 = p_cell_1[cell_4] / p_cell_4[cell_4]
+        inf_func[cell_4] = sign[cell_4] * y[cell_4] * w_4 / p_ref
 
         var_inf = np.var(inf_func, ddof=1)
         se = np.sqrt(var_inf / n)
