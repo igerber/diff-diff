@@ -44,12 +44,25 @@ Two-stage approach gaining traction in applied work. First residualizes outcomes
 
 ### Staggered Triple Difference (DDD)
 
-Extend the existing `TripleDifference` estimator to handle staggered adoption settings.
+Extend the existing `TripleDifference` estimator to handle staggered adoption settings. The current implementation handles 2-period DDD; this extends to multi-period designs.
 
+**Multi-period/Staggered Support:**
 - Group-time ATT(g,t) for DDD designs with variation in treatment timing
-- Event study aggregation for dynamic treatment effects
+- Handle settings where groups adopt at different times
 - Multiple comparison groups (never-treated, not-yet-treated in either dimension)
-- Bootstrap inference for staggered DDD
+- `StaggeredTripleDifference` class or extended `TripleDifference` with `first_treat` parameter
+
+**Event Study Aggregation:**
+- Dynamic treatment effects over time (event study coefficients)
+- Pre-treatment placebo effects for parallel trends assessment
+- `aggregate='event_study'` parameter like `CallawaySantAnna`
+- Integration with `plot_event_study()` visualization
+
+**Multiplier Bootstrap Inference:**
+- Multiplier bootstrap for valid inference in staggered settings
+- Rademacher, Mammen, and Webb weight options (matching existing estimators)
+- `n_bootstrap` parameter and `DDDBootstrapResults` class
+- Clustered bootstrap for panel data
 
 **Reference**: [Ortiz-Villavicencio & Sant'Anna (2025)](https://arxiv.org/abs/2505.09942). *Working Paper*. R package: `triplediff`.
 

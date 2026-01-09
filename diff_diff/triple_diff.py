@@ -11,6 +11,18 @@ This module provides regression adjustment, inverse probability weighting,
 and doubly robust estimators that correctly handle covariate adjustment,
 unlike naive implementations.
 
+Current Implementation (v1.3):
+    - 2-period DDD (pre/post binary time indicator)
+    - Regression adjustment, IPW, and doubly robust estimation
+    - Analytical standard errors with robust/cluster options
+    - Proper covariate handling
+
+Planned for v1.4 (see ROADMAP.md):
+    - Staggered adoption support (multiple treatment timing)
+    - Event study aggregation for dynamic treatment effects
+    - Multiplier bootstrap inference
+    - Integration with plot_event_study() visualization
+
 Reference:
     Ortiz-Villavicencio, M., & Sant'Anna, P. H. C. (2025).
     Better Understanding Triple Differences Estimators.
