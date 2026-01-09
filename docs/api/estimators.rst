@@ -74,3 +74,39 @@ Synthetic control combined with DiD (Arkhangelsky et al. 2021).
    :undoc-members:
    :show-inheritance:
    :inherited-members:
+
+TripleDifference
+----------------
+
+Triple Difference (DDD) estimator for settings where treatment requires two criteria
+(Ortiz-Villavicencio & Sant'Anna, 2025).
+
+.. module:: diff_diff.triple_diff
+
+.. autoclass:: diff_diff.TripleDifference
+   :members:
+   :undoc-members:
+   :show-inheritance:
+   :inherited-members:
+
+   .. rubric:: Methods
+
+   .. autosummary::
+
+      ~TripleDifference.fit
+      ~TripleDifference.get_params
+      ~TripleDifference.set_params
+
+TripleDifferenceResults
+~~~~~~~~~~~~~~~~~~~~~~~
+
+Results container for Triple Difference estimation.
+
+.. autoclass:: diff_diff.triple_diff.TripleDifferenceResults
+   :members:
+   :undoc-members:
+
+Convenience Function
+~~~~~~~~~~~~~~~~~~~~
+
+.. autofunction:: diff_diff.triple_difference

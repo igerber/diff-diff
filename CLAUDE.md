@@ -60,6 +60,13 @@ mypy diff_diff
   - Alternative to Callaway-Sant'Anna with different weighting scheme
   - Useful robustness check when both estimators agree
 
+- **`diff_diff/triple_diff.py`** - Triple Difference (DDD) estimator:
+  - `TripleDifference` - Ortiz-Villavicencio & Sant'Anna (2025) estimator for DDD designs
+  - `TripleDifferenceResults` - Results with ATT, SEs, cell means, diagnostics
+  - `triple_difference()` - Convenience function for quick estimation
+  - Regression adjustment, IPW, and doubly robust estimation methods
+  - Proper covariate handling (unlike naive DDD implementations)
+
 - **`diff_diff/bacon.py`** - Goodman-Bacon decomposition for TWFE diagnostics:
   - `BaconDecomposition` - Decompose TWFE into weighted 2x2 comparisons (Goodman-Bacon 2021)
   - `BaconDecompositionResults` - Results with comparison weights and estimates by type
@@ -148,6 +155,7 @@ mypy diff_diff
   - `05_honest_did.ipynb` - Honest DiD sensitivity analysis for parallel trends violations
   - `06_power_analysis.ipynb` - Power analysis for study design, MDE, simulation-based power
   - `07_pretrends_power.ipynb` - Pre-trends power analysis (Roth 2022), MDV, power curves
+  - `08_triple_diff.ipynb` - Triple Difference (DDD) estimation with proper covariate handling
 
 ### Test Structure
 
@@ -155,6 +163,7 @@ Tests mirror the source modules:
 - `tests/test_estimators.py` - Tests for DifferenceInDifferences, TWFE, MultiPeriodDiD, SyntheticDiD
 - `tests/test_staggered.py` - Tests for CallawaySantAnna
 - `tests/test_sun_abraham.py` - Tests for SunAbraham interaction-weighted estimator
+- `tests/test_triple_diff.py` - Tests for Triple Difference (DDD) estimator
 - `tests/test_bacon.py` - Tests for Goodman-Bacon decomposition
 - `tests/test_utils.py` - Tests for parallel trends, robust SE, synthetic weights
 - `tests/test_diagnostics.py` - Tests for placebo tests
