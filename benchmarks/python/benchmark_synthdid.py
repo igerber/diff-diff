@@ -28,6 +28,11 @@ def parse_args():
     parser.add_argument(
         "--n-bootstrap", type=int, default=200, help="Number of bootstrap iterations"
     )
+    parser.add_argument(
+        "--variance-method", type=str, default="placebo",
+        choices=["bootstrap", "placebo"],
+        help="Variance estimation method (default: placebo to match R)"
+    )
     return parser.parse_args()
 
 
@@ -44,7 +49,11 @@ def main():
 
     # Run benchmark
     print("Running Synthetic DiD estimation...")
-    sdid = SyntheticDiD(n_bootstrap=args.n_bootstrap, seed=42)
+    sdid = SyntheticDiD(
+        n_bootstrap=args.n_bootstrap,
+        variance_method=args.variance_method,
+        seed=42
+    )
 
     with Timer() as timer:
         results = sdid.fit(
@@ -83,6 +92,7 @@ def main():
             "n_pre_periods": len(data[data["post"] == 0]["time"].unique()),
             "n_post_periods": len(post_periods),
             "n_bootstrap": args.n_bootstrap,
+            "variance_method": args.variance_method,
         },
     }
 
