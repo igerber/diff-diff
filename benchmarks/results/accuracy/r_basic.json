@@ -1,0 +1,33 @@
+{
+  "estimator": "fixest::feols",
+  "type": "twfe",
+  "cluster": "unit",
+  "att": 5.1121212398,
+  "se": 0.18320490966,
+  "pvalue": 1.0438311031e-48,
+  "ci_lower": [
+    [4.7486029525]
+  ],
+  "ci_upper": [
+    [5.4756395272]
+  ],
+  "coef_name": "treated:post",
+  "coefficients": {},
+  "model_stats": {
+    "r_squared": {},
+    "adj_r_squared": {},
+    "n_obs": 400,
+    "n_clusters": {}
+  },
+  "timing": {
+    "estimation_seconds": 0.039420127869,
+    "total_seconds": 0.039420127869
+  },
+  "metadata": {
+    "r_version": "R version 4.5.2 (2025-10-31)",
+    "fixest_version": "0.13.2",
+    "n_units": 100,
+    "n_periods": 4,
+    "n_obs": 400
+  }
+}

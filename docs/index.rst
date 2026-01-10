@@ -43,6 +43,7 @@ Quick Links
 - :doc:`troubleshooting` - Common issues and solutions
 - :doc:`r_comparison` - Comparison with R packages
 - :doc:`python_comparison` - Comparison with Python packages
+- :doc:`benchmarks` - Performance benchmarks vs R packages
 - :doc:`api/index` - Full API reference
 
 .. toctree::
@@ -55,6 +56,7 @@ Quick Links
    troubleshooting
    r_comparison
    python_comparison
+   benchmarks
 
 .. toctree::
    :maxdepth: 2
