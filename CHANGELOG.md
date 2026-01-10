@@ -10,11 +10,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - **SyntheticDiD placebo-based variance estimation** matching R's `synthdid` package methodology
   - New `variance_method` parameter with options `"bootstrap"` (default) and `"placebo"`
-  - Placebo method implements jackknife-style variance estimator from Arkhangelsky et al. (2021)
-  - Uses formula: `Var = ((N0 - 1) / N0) * sum((tau_i - tau_bar)^2)`
+  - Placebo method implements Algorithm 4 from Arkhangelsky et al. (2021):
+    1. Randomly permutes control unit indices
+    2. Designates N₁ controls as pseudo-treated (matching actual treated count)
+    3. Renormalizes original unit weights for remaining pseudo-controls
+    4. Computes SDID estimate with renormalized weights
+    5. Repeats for `n_bootstrap` replications
+    6. SE = sqrt((r-1)/r) × sd(estimates)
   - Provides methodological parity with R's `synthdid::vcov(method = "placebo")`
+  - `n_bootstrap` parameter now used for both bootstrap and placebo replications
   - `SyntheticDiDResults` now tracks `variance_method` and `n_bootstrap` attributes
-  - Results summary displays variance method and bootstrap replications (if applicable)
+  - Results summary displays variance method and replications count
 
 **Reference**: Arkhangelsky, D., Athey, S., Hirshberg, D. A., Imbens, G. W., & Wager, S. (2021). Synthetic Difference-in-Differences. *American Economic Review*, 111(12), 4088-4118.
 
