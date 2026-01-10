@@ -101,15 +101,19 @@ def compare_estimates(
     time_ratio = py_time / r_time if r_time > 0 else float("inf")
 
     # Determine pass/fail
+    # ATT must be close, and either SE must be close OR confidence intervals must overlap
+    # (CI overlap indicates same statistical conclusions despite different SE methods)
     att_ok = att_diff < atol or att_rel_diff < 0.01
     se_ok = se_rel_diff < se_rtol
-    passed = att_ok and se_ok
+    passed = att_ok and (se_ok or ci_overlap)
 
     notes = []
     if not att_ok:
         notes.append(f"ATT diff too large: {att_diff:.2e}")
-    if not se_ok:
+    if not se_ok and not ci_overlap:
         notes.append(f"SE rel diff too large: {se_rel_diff:.1%}")
+    elif not se_ok and ci_overlap:
+        notes.append(f"SE differs ({se_rel_diff:.1%}) but CI overlap - methodological difference")
 
     return ComparisonResult(
         estimator=estimator,

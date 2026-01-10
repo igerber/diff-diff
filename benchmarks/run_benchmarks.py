@@ -7,8 +7,8 @@ datasets, runs both implementations, and compares results.
 
 Usage:
     python run_benchmarks.py --all
-    python run_benchmarks.py --estimator callaway --dataset synthetic
-    python run_benchmarks.py --performance-only
+    python run_benchmarks.py --estimator callaway
+    python run_benchmarks.py --estimator synthdid
     python run_benchmarks.py --generate-data-only
 """
 
@@ -368,7 +368,7 @@ def main():
     )
     parser.add_argument(
         "--estimator",
-        choices=["callaway", "synthdid", "basic", "honest"],
+        choices=["callaway", "synthdid", "basic"],
         help="Run specific estimator benchmark",
     )
     parser.add_argument(

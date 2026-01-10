@@ -17,7 +17,7 @@ import pandas as pd
 # Add parent to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from diff_diff import DifferenceInDifferences, TwoWayFixedEffects
+from diff_diff import DifferenceInDifferences
 from benchmarks.python.utils import Timer
 
 
@@ -25,12 +25,6 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Benchmark basic DiD estimator")
     parser.add_argument("--data", required=True, help="Path to input CSV data")
     parser.add_argument("--output", required=True, help="Path to output JSON results")
-    parser.add_argument(
-        "--type",
-        default="twfe",
-        choices=["basic", "twfe"],
-        help="Estimation type: basic (2x2) or twfe (two-way FE)",
-    )
     parser.add_argument(
         "--cluster", default="unit", help="Column to cluster standard errors on"
     )
@@ -45,10 +39,9 @@ def main():
     data = pd.read_csv(args.data)
 
     # Run benchmark
-    print(f"Running {args.type.upper()} DiD estimation...")
+    print("Running DiD estimation...")
 
-    # For basic DiD data (2x2 structure), use DifferenceInDifferences with formula
-    # This matches R's fixest::feols("outcome ~ treated * post") or with FE
+    # Use DifferenceInDifferences with formula to match R's fixest::feols
     did = DifferenceInDifferences(robust=True, cluster=args.cluster)
 
     with Timer() as timer:
@@ -66,8 +59,7 @@ def main():
 
     # Build output
     output = {
-        "estimator": f"diff_diff.{'DifferenceInDifferences' if args.type == 'basic' else 'TwoWayFixedEffects'}",
-        "type": args.type,
+        "estimator": "diff_diff.DifferenceInDifferences",
         "cluster": args.cluster,
         # Treatment effect
         "att": float(att),

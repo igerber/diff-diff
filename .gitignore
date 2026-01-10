@@ -52,3 +52,7 @@ docs/_build/
 # OS
 .DS_Store
 Thumbs.db
+
+# Benchmarks - generated data and results (can be regenerated)
+benchmarks/data/synthetic/*.csv
+benchmarks/results/

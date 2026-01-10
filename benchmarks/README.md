@@ -5,15 +5,18 @@ This directory contains benchmarks comparing diff-diff against equivalent R pack
 ## Quick Start
 
 ```bash
+# Generate synthetic data (required before first run)
+python run_benchmarks.py --generate-data-only
+
 # Run all benchmarks
 python run_benchmarks.py --all
 
 # Run specific estimator
 python run_benchmarks.py --estimator callaway
-
-# Generate synthetic data only
-python run_benchmarks.py --generate-data-only
 ```
+
+Note: Synthetic data files and results are not committed to the repository.
+Run `--generate-data-only` first to create the test datasets.
 
 ## Requirements
 
@@ -69,13 +72,14 @@ benchmarks/
 
 ## Estimator Comparisons
 
-| diff-diff | R Package | Reference |
-|-----------|-----------|-----------|
-| `CallawaySantAnna` | `did::att_gt` | Callaway & Sant'Anna (2021) |
-| `SyntheticDiD` | `synthdid::synthdid_estimate` | Arkhangelsky et al. (2021) |
-| `HonestDiD` | `HonestDiD::createSensitivityResults` | Rambachan & Roth (2023) |
-| `DifferenceInDifferences` | `fixest::feols` | Standard DiD |
-| `TwoWayFixedEffects` | `fixest::feols` | Two-way FE |
+| diff-diff | R Package | Reference | Status |
+|-----------|-----------|-----------|--------|
+| `CallawaySantAnna` | `did::att_gt` | Callaway & Sant'Anna (2021) | ✓ Integrated |
+| `SyntheticDiD` | `synthdid::synthdid_estimate` | Arkhangelsky et al. (2021) | ✓ Integrated |
+| `DifferenceInDifferences` | `fixest::feols` | Standard DiD | ✓ Integrated |
+| `HonestDiD` | `HonestDiD::createSensitivityResults` | Rambachan & Roth (2023) | Planned |
+
+Note: HonestDiD benchmark scripts exist but are not yet integrated into the main runner.
 
 ## Validation Criteria
 
