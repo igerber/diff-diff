@@ -77,7 +77,7 @@ Edge cases needing tests:
 - [x] Troubleshooting section for common errors (added in v1.0.0)
 - [ ] Comparison of estimator outputs on same data
 - [ ] Real-world data examples (currently synthetic only)
-- [ ] Performance benchmarks vs. R packages
+- [x] Performance benchmarks vs. R packages
 
 ---
 

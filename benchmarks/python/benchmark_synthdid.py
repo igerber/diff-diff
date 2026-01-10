@@ -1,0 +1,101 @@
+#!/usr/bin/env python3
+"""
+Benchmark: Synthetic DiD (diff-diff SyntheticDiD).
+
+Usage:
+    python benchmark_synthdid.py --data path/to/data.csv --output path/to/results.json
+"""
+
+import argparse
+import json
+import sys
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+
+# Add parent to path for imports
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+
+from diff_diff import SyntheticDiD
+from benchmarks.python.utils import Timer
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Benchmark Synthetic DiD estimator")
+    parser.add_argument("--data", required=True, help="Path to input CSV data")
+    parser.add_argument("--output", required=True, help="Path to output JSON results")
+    parser.add_argument(
+        "--n-bootstrap", type=int, default=200, help="Number of bootstrap iterations"
+    )
+    return parser.parse_args()
+
+
+def main():
+    args = parse_args()
+
+    # Load data
+    print(f"Loading data from: {args.data}")
+    data = pd.read_csv(args.data)
+
+    # Determine post periods from data
+    # Assumes 'post' column exists with 0/1 indicators
+    post_periods = sorted(data[data["post"] == 1]["time"].unique().tolist())
+
+    # Run benchmark
+    print("Running Synthetic DiD estimation...")
+    sdid = SyntheticDiD(n_bootstrap=args.n_bootstrap, seed=42)
+
+    with Timer() as timer:
+        results = sdid.fit(
+            data,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="time",
+            post_periods=post_periods,
+        )
+
+    total_time = timer.elapsed
+
+    # Get weights
+    unit_weights_df = results.get_unit_weights_df()
+    time_weights_df = results.get_time_weights_df()
+
+    # Build output
+    output = {
+        "estimator": "diff_diff.SyntheticDiD",
+        # Point estimate and SE
+        "att": float(results.att),
+        "se": float(results.se),
+        # Weights
+        "unit_weights": unit_weights_df["weight"].tolist(),
+        "time_weights": time_weights_df["weight"].tolist(),
+        # Timing
+        "timing": {
+            "estimation_seconds": total_time,
+            "total_seconds": total_time,
+        },
+        # Metadata
+        "metadata": {
+            "n_control": len(data[data["treated"] == 0]["unit"].unique()),
+            "n_treated": len(data[data["treated"] == 1]["unit"].unique()),
+            "n_pre_periods": len(data[data["post"] == 0]["time"].unique()),
+            "n_post_periods": len(post_periods),
+            "n_bootstrap": args.n_bootstrap,
+        },
+    }
+
+    # Write output
+    print(f"Writing results to: {args.output}")
+    output_path = Path(args.output)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(output_path, "w") as f:
+        json.dump(output, f, indent=2)
+
+    print(f"Completed in {total_time:.3f} seconds")
+    return output
+
+
+if __name__ == "__main__":
+    main()
