@@ -157,6 +157,30 @@ mypy diff_diff
   - `07_pretrends_power.ipynb` - Pre-trends power analysis (Roth 2022), MDV, power curves
   - `08_triple_diff.ipynb` - Triple Difference (DDD) estimation with proper covariate handling
 
+### Benchmarks
+
+- **`benchmarks/`** - Validation benchmarks against R packages:
+  - `run_benchmarks.py` - Main orchestrator for running all benchmarks
+  - `compare_results.py` - Result comparison utilities
+  - `R/` - R benchmark scripts (did, synthdid, fixest, HonestDiD)
+  - `python/` - Python benchmark scripts mirroring R scripts
+  - `data/synthetic/` - Generated test data (not committed, use `--generate-data-only`)
+  - `results/` - JSON output files (not committed)
+
+Run benchmarks:
+```bash
+# Generate synthetic data first
+python benchmarks/run_benchmarks.py --generate-data-only
+
+# Run all benchmarks
+python benchmarks/run_benchmarks.py --all
+
+# Run specific estimator
+python benchmarks/run_benchmarks.py --estimator callaway
+```
+
+See `docs/benchmarks.rst` for full methodology and validation results.
+
 ### Test Structure
 
 Tests mirror the source modules:

@@ -81,6 +81,7 @@ Signif. codes: '***' 0.001, '**' 0.01, '*' 0.05, '.' 0.1
 - **Pre-trends power analysis**: Roth (2022) minimum detectable violation (MDV) and power curves for pre-trends tests
 - **Power analysis**: MDE, sample size, and power calculations for study design; simulation-based power for any estimator
 - **Data prep utilities**: Helper functions for common data preparation tasks
+- **Validated against R**: Benchmarked against `did`, `synthdid`, and `fixest` packages (see [benchmarks](docs/benchmarks.rst))
 
 ## Tutorials
 
