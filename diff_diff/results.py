@@ -507,6 +507,8 @@ class SyntheticDiDResults:
         List of pre-treatment period identifiers.
     post_periods : list
         List of post-treatment period identifiers.
+    variance_method : str
+        Method used for variance estimation: "bootstrap" or "placebo".
     """
 
     att: float
@@ -522,9 +524,11 @@ class SyntheticDiDResults:
     pre_periods: List[Any]
     post_periods: List[Any]
     alpha: float = 0.05
+    variance_method: str = field(default="bootstrap")
     lambda_reg: Optional[float] = field(default=None)
     pre_treatment_fit: Optional[float] = field(default=None)
     placebo_effects: Optional[np.ndarray] = field(default=None)
+    n_bootstrap: Optional[int] = field(default=None)
 
     def __repr__(self) -> str:
         """Concise string representation."""
@@ -570,6 +574,11 @@ class SyntheticDiDResults:
 
         if self.pre_treatment_fit is not None:
             lines.append(f"{'Pre-treatment fit (RMSE):':<25} {self.pre_treatment_fit:>10.4f}")
+
+        # Variance method info
+        lines.append(f"{'Variance method:':<25} {self.variance_method:>10}")
+        if self.variance_method == "bootstrap" and self.n_bootstrap is not None:
+            lines.append(f"{'Bootstrap replications:':<25} {self.n_bootstrap:>10}")
 
         lines.extend([
             "",
@@ -624,7 +633,7 @@ class SyntheticDiDResults:
         Dict[str, Any]
             Dictionary containing all estimation results.
         """
-        return {
+        result = {
             "att": self.att,
             "se": self.se,
             "t_stat": self.t_stat,
@@ -636,9 +645,13 @@ class SyntheticDiDResults:
             "n_control": self.n_control,
             "n_pre_periods": len(self.pre_periods),
             "n_post_periods": len(self.post_periods),
+            "variance_method": self.variance_method,
             "lambda_reg": self.lambda_reg,
             "pre_treatment_fit": self.pre_treatment_fit,
         }
+        if self.n_bootstrap is not None:
+            result["n_bootstrap"] = self.n_bootstrap
+        return result
 
     def to_dataframe(self) -> pd.DataFrame:
         """

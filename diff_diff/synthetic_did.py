@@ -14,7 +14,6 @@ from diff_diff.results import SyntheticDiDResults
 from diff_diff.utils import (
     compute_confidence_interval,
     compute_p_value,
-    compute_placebo_effects,
     compute_sdid_estimator,
     compute_synthetic_weights,
     compute_time_weights,
@@ -46,9 +45,17 @@ class SyntheticDiD(DifferenceInDifferences):
         time weights (closer to standard DiD).
     alpha : float, default=0.05
         Significance level for confidence intervals.
+    variance_method : str, default="bootstrap"
+        Method for variance estimation:
+        - "bootstrap": Block bootstrap at unit level (default)
+        - "placebo": Placebo-based variance matching R's synthdid::vcov(method="placebo").
+          Implements Algorithm 4 from Arkhangelsky et al. (2021): randomly permutes
+          control units, designates N₁ as pseudo-treated, renormalizes original
+          weights for remaining pseudo-controls, and computes SDID estimate.
     n_bootstrap : int, default=200
-        Number of bootstrap replications for standard error estimation.
-        Set to 0 to use placebo-based inference instead.
+        Number of replications for variance estimation. Used for both:
+        - Bootstrap: Number of bootstrap samples
+        - Placebo: Number of random permutations (matches R's `replications` argument)
     seed : int, optional
         Random seed for reproducibility. If None (default), results
         will vary between runs.
@@ -125,14 +132,24 @@ class SyntheticDiD(DifferenceInDifferences):
         lambda_reg: float = 0.0,
         zeta: float = 1.0,
         alpha: float = 0.05,
+        variance_method: str = "bootstrap",
         n_bootstrap: int = 200,
         seed: Optional[int] = None
     ):
         super().__init__(robust=True, cluster=None, alpha=alpha)
         self.lambda_reg = lambda_reg
         self.zeta = zeta
+        self.variance_method = variance_method
         self.n_bootstrap = n_bootstrap
         self.seed = seed
+
+        # Validate variance_method
+        valid_methods = ("bootstrap", "placebo")
+        if variance_method not in valid_methods:
+            raise ValueError(
+                f"variance_method must be one of {valid_methods}, "
+                f"got '{variance_method}'"
+            )
 
         self._unit_weights = None
         self._time_weights = None
@@ -285,23 +302,27 @@ class SyntheticDiD(DifferenceInDifferences):
         synthetic_pre = Y_pre_control @ unit_weights
         pre_fit_rmse = np.sqrt(np.mean((Y_pre_treated_mean - synthetic_pre) ** 2))
 
-        # Compute standard errors
-        if self.n_bootstrap > 0:
-            se, placebo_effects = self._bootstrap_se(
+        # Compute standard errors based on variance_method
+        if self.variance_method == "bootstrap":
+            se, bootstrap_estimates = self._bootstrap_se(
                 working_data, outcome, unit, time,
                 pre_periods, post_periods, treated_units, control_units
             )
+            placebo_effects = bootstrap_estimates
+            inference_method = "bootstrap"
         else:
-            # Use placebo-based inference
-            placebo_effects = compute_placebo_effects(
+            # Use placebo-based variance (R's synthdid Algorithm 4)
+            se, placebo_effects = self._placebo_variance_se(
                 Y_pre_control,
                 Y_post_control,
                 Y_pre_treated_mean,
+                Y_post_treated_mean,
                 unit_weights,
                 time_weights,
-                control_units
+                n_treated=len(treated_units),
+                replications=self.n_bootstrap  # Reuse n_bootstrap for replications
             )
-            se = np.std(placebo_effects, ddof=1) if len(placebo_effects) > 1 else 0.0
+            inference_method = "placebo"
 
         # Compute test statistics
         if se > 0:
@@ -343,9 +364,11 @@ class SyntheticDiD(DifferenceInDifferences):
             pre_periods=pre_periods,
             post_periods=post_periods,
             alpha=self.alpha,
+            variance_method=inference_method,
             lambda_reg=self.lambda_reg,
             pre_treatment_fit=pre_fit_rmse,
-            placebo_effects=placebo_effects if len(placebo_effects) > 0 else None
+            placebo_effects=placebo_effects if len(placebo_effects) > 0 else None,
+            n_bootstrap=self.n_bootstrap if inference_method == "bootstrap" else None
         )
 
         self._unit_weights = unit_weights
@@ -544,12 +567,163 @@ class SyntheticDiD(DifferenceInDifferences):
 
         return se, bootstrap_estimates
 
+    def _placebo_variance_se(
+        self,
+        Y_pre_control: np.ndarray,
+        Y_post_control: np.ndarray,
+        Y_pre_treated_mean: np.ndarray,
+        Y_post_treated_mean: np.ndarray,
+        unit_weights: np.ndarray,
+        time_weights: np.ndarray,
+        n_treated: int,
+        replications: int = 200
+    ) -> Tuple[float, np.ndarray]:
+        """
+        Compute placebo-based variance matching R's synthdid methodology.
+
+        This implements Algorithm 4 from Arkhangelsky et al. (2021),
+        matching R's synthdid::vcov(method = "placebo"):
+
+        1. Randomly sample N₀ control indices (permutation)
+        2. Designate last N₁ as pseudo-treated, first (N₀-N₁) as pseudo-controls
+        3. Renormalize original unit weights for pseudo-controls
+        4. Compute SDID estimate using renormalized weights
+        5. Repeat `replications` times
+        6. SE = sqrt((r-1)/r) * sd(estimates)
+
+        Parameters
+        ----------
+        Y_pre_control : np.ndarray
+            Control outcomes in pre-treatment periods, shape (n_pre, n_control).
+        Y_post_control : np.ndarray
+            Control outcomes in post-treatment periods, shape (n_post, n_control).
+        Y_pre_treated_mean : np.ndarray
+            Mean treated outcomes in pre-treatment periods, shape (n_pre,).
+        Y_post_treated_mean : np.ndarray
+            Mean treated outcomes in post-treatment periods, shape (n_post,).
+        unit_weights : np.ndarray
+            Original unit weights from main estimation, shape (n_control,).
+        time_weights : np.ndarray
+            Time weights from main estimation, shape (n_pre,).
+        n_treated : int
+            Number of treated units in the original estimation.
+        replications : int, default=200
+            Number of placebo replications.
+
+        Returns
+        -------
+        tuple
+            (se, placebo_effects) where se is the standard error and
+            placebo_effects is the array of placebo treatment effects.
+
+        References
+        ----------
+        Arkhangelsky, D., Athey, S., Hirshberg, D. A., Imbens, G. W., & Wager, S.
+        (2021). Synthetic Difference-in-Differences. American Economic Review,
+        111(12), 4088-4118. Algorithm 4.
+        """
+        rng = np.random.default_rng(self.seed)
+        n_pre, n_control = Y_pre_control.shape
+
+        # Ensure we have enough controls for the split
+        n_pseudo_control = n_control - n_treated
+        if n_pseudo_control < 1:
+            warnings.warn(
+                f"Not enough control units ({n_control}) for placebo variance "
+                f"estimation with {n_treated} treated units. "
+                f"Consider using variance_method='bootstrap'.",
+                UserWarning,
+                stacklevel=3,
+            )
+            return 0.0, np.array([])
+
+        placebo_estimates = []
+
+        for _ in range(replications):
+            try:
+                # Random permutation of control indices (Algorithm 4, step 1)
+                perm = rng.permutation(n_control)
+
+                # Split into pseudo-controls and pseudo-treated (step 2)
+                pseudo_control_idx = perm[:n_pseudo_control]
+                pseudo_treated_idx = perm[n_pseudo_control:]
+
+                # Renormalize original weights for pseudo-controls (step 3)
+                # This keeps the relative importance from the main estimation
+                pseudo_weights = unit_weights[pseudo_control_idx]
+                weight_sum = pseudo_weights.sum()
+                if weight_sum > 0:
+                    pseudo_weights = pseudo_weights / weight_sum
+                else:
+                    # Fallback to uniform if weights sum to zero
+                    pseudo_weights = np.ones(n_pseudo_control) / n_pseudo_control
+
+                # Get pseudo-treated outcomes (mean across pseudo-treated units)
+                Y_pre_pseudo_treated = np.mean(
+                    Y_pre_control[:, pseudo_treated_idx], axis=1
+                )
+                Y_post_pseudo_treated = np.mean(
+                    Y_post_control[:, pseudo_treated_idx], axis=1
+                )
+
+                # Get pseudo-control outcomes
+                Y_pre_pseudo_control = Y_pre_control[:, pseudo_control_idx]
+                Y_post_pseudo_control = Y_post_control[:, pseudo_control_idx]
+
+                # Compute placebo SDID estimate (step 4)
+                tau = compute_sdid_estimator(
+                    Y_pre_pseudo_control,
+                    Y_post_pseudo_control,
+                    Y_pre_pseudo_treated,
+                    Y_post_pseudo_treated,
+                    pseudo_weights,
+                    time_weights
+                )
+                placebo_estimates.append(tau)
+
+            except (ValueError, LinAlgError, ZeroDivisionError):
+                # Skip failed iterations
+                continue
+
+        placebo_estimates = np.array(placebo_estimates)
+        n_successful = len(placebo_estimates)
+
+        if n_successful < 2:
+            warnings.warn(
+                f"Only {n_successful} placebo replications completed successfully. "
+                f"Standard error cannot be estimated reliably. "
+                f"Consider using variance_method='bootstrap' or increasing "
+                f"the number of control units.",
+                UserWarning,
+                stacklevel=3,
+            )
+            return 0.0, placebo_estimates
+
+        # Warn if many replications failed
+        failure_rate = 1 - (n_successful / replications)
+        if failure_rate > 0.05:
+            warnings.warn(
+                f"Only {n_successful}/{replications} placebo replications succeeded "
+                f"({failure_rate:.1%} failure rate). Standard errors may be unreliable.",
+                UserWarning,
+                stacklevel=3,
+            )
+
+        # Compute SE using R's formula: sqrt((r-1)/r) * sd(estimates)
+        # This matches synthdid::vcov.R exactly
+        se = np.sqrt((n_successful - 1) / n_successful) * np.std(
+            placebo_estimates, ddof=1
+        )
+
+        return se, placebo_estimates
+
     def get_params(self) -> Dict[str, Any]:
         """Get estimator parameters."""
         return {
             "lambda_reg": self.lambda_reg,
             "zeta": self.zeta,
             "alpha": self.alpha,
+            "variance_method": self.variance_method,
             "n_bootstrap": self.n_bootstrap,
             "seed": self.seed,
         }

@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.1] - 2026-01-10
+
+### Added
+- **SyntheticDiD placebo-based variance estimation** matching R's `synthdid` package methodology
+  - New `variance_method` parameter with options `"bootstrap"` (default) and `"placebo"`
+  - Placebo method implements Algorithm 4 from Arkhangelsky et al. (2021):
+    1. Randomly permutes control unit indices
+    2. Designates N₁ controls as pseudo-treated (matching actual treated count)
+    3. Renormalizes original unit weights for remaining pseudo-controls
+    4. Computes SDID estimate with renormalized weights
+    5. Repeats for `n_bootstrap` replications
+    6. SE = sqrt((r-1)/r) × sd(estimates)
+  - Provides methodological parity with R's `synthdid::vcov(method = "placebo")`
+  - `n_bootstrap` parameter now used for both bootstrap and placebo replications
+  - `SyntheticDiDResults` now tracks `variance_method` and `n_bootstrap` attributes
+  - Results summary displays variance method and replications count
+
+**Reference**: Arkhangelsky, D., Athey, S., Hirshberg, D. A., Imbens, G. W., & Wager, S. (2021). Synthetic Difference-in-Differences. *American Economic Review*, 111(12), 4088-4118.
+
 ## [1.3.0] - 2026-01-09
 
 ### Added
@@ -263,6 +282,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `to_dict()` and `to_dataframe()` export methods
   - `is_significant` and `significance_stars` properties
 
+[1.3.1]: https://github.com/igerber/diff-diff/compare/v1.3.0...v1.3.1
 [1.3.0]: https://github.com/igerber/diff-diff/compare/v1.2.1...v1.3.0
 [1.2.1]: https://github.com/igerber/diff-diff/compare/v1.2.0...v1.2.1
 [1.2.0]: https://github.com/igerber/diff-diff/compare/v1.1.1...v1.2.0
