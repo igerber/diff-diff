@@ -76,11 +76,9 @@ Summary Table
      - **PASS**
    * - SyntheticDiD
      - 0.011
-     - 26%
+     - 3.1%
      - Yes
-     - PASS*
-
-\* SE difference due to different variance estimation methods (bootstrap vs placebo)
+     - **PASS**
 
 Basic DiD Results
 ~~~~~~~~~~~~~~~~~
@@ -126,22 +124,24 @@ Synthetic DiD Results
      - 3.840
      - 0.011 (0.3%)
    * - SE
-     - 0.074
-     - 0.096
-     - 23%
+     - 0.106
+     - 0.103
+     - 3.1%
    * - Time (s)
-     - 0.87
-     - 7.14
-     - **8.2x faster**
+     - 0.017
+     - 7.49
+     - **433x faster**
 
-**Validation**: PASS - ATT estimates match closely. SE difference is expected due to
-different variance estimation methods:
+**Validation**: PASS - Both ATT and SE estimates match closely. Both implementations
+use placebo-based variance estimation (R's Algorithm 4 from Arkhangelsky et al. 2021).
 
-- diff-diff uses bootstrap variance estimation
-- R synthdid uses placebo-based variance estimation
+The small SE difference (3.1%) is due to different unit/time weight optimization
+algorithms:
 
-The confidence intervals overlap, indicating both would lead to the same
-statistical conclusions.
+- diff-diff uses projected gradient descent
+- R synthdid uses Frank-Wolfe optimization with adaptive regularization
+
+This leads to slightly different weights, which propagate to the placebo estimates.
 
 Callaway-Sant'Anna Results
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -205,9 +205,9 @@ All diff-diff estimators are significantly faster than their R equivalents:
      - 0.068
      - **1.6x**
    * - SyntheticDiD
-     - 0.88
-     - 6.88
-     - **7.8x**
+     - 0.017
+     - 7.49
+     - **433x** ± 12x
 
 Key Observations
 ~~~~~~~~~~~~~~~~
@@ -219,9 +219,11 @@ Key Observations
    Individual ATT(g,t) effects match perfectly. SE matches within 5.6% when
    using multiplier bootstrap (default analytical SEs use different formulas).
 
-3. **SyntheticDiD**: diff-diff is 7.8x faster while producing equivalent
-   point estimates (0.3% difference). The SE difference (26%) reflects
-   methodological choices in variance estimation (bootstrap vs placebo).
+3. **SyntheticDiD**: diff-diff is **433x faster** (measured over 5 runs:
+   mean 433x, std 12x) while producing equivalent estimates. R spends ~7.5s
+   on placebo variance estimation alone, while diff-diff completes the entire
+   estimation in 0.017s. SE now matches within 3.1% since both use placebo
+   variance estimation.
 
 Why is diff-diff Faster?
 ~~~~~~~~~~~~~~~~~~~~~~~~
@@ -230,6 +232,10 @@ Why is diff-diff Faster?
 2. **Optimized algorithms**: Vectorized operations throughout
 3. **Minimal dependencies**: No heavy statistical frameworks
 4. **Efficient memory**: Direct array operations without copying
+5. **Efficient placebo variance**: For SyntheticDiD, the placebo SE computation
+   permutes indices and renormalizes weights using vectorized operations, rather
+   than re-running the full optimization for each replication. This accounts for
+   the 433x speedup - R's placebo method takes ~7.5s while diff-diff takes ~0.017s.
 
 Reproducing Benchmarks
 ----------------------
@@ -288,8 +294,9 @@ When to Trust Results
 
 - **BasicDiD/TWFE**: Results are identical to R. Use with confidence.
 
-- **SyntheticDiD**: Point estimates match R closely. SE differences are
-  methodological, not errors. Both lead to same statistical conclusions.
+- **SyntheticDiD**: Both point estimates (0.3% diff) and standard errors (3.1% diff)
+  match R closely. Use ``variance_method="placebo"`` (default) to match R's
+  inference. Results are fully validated.
 
 - **CallawaySantAnna**: Group-time effects (ATT(g,t)) are reliable. Overall
   ATT aggregation may differ from R due to weighting choices. When comparing
@@ -305,8 +312,9 @@ Known Differences
 2. **Aggregation Weights**: Overall ATT is a weighted average of ATT(g,t).
    Weighting schemes may differ between implementations.
 
-3. **Variance Estimation**: SyntheticDiD uses different variance estimators
-   (bootstrap vs placebo). Both are valid but produce different SE estimates.
+3. **Weight Optimization**: SyntheticDiD uses different optimization algorithms
+   for unit/time weights (projected gradient descent vs Frank-Wolfe). This leads
+   to slightly different weights but equivalent ATT estimates.
 
 References
 ----------
