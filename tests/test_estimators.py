@@ -1682,7 +1682,7 @@ class TestSyntheticDiD:
 
     def test_unit_weights_sum_to_one(self, sdid_panel_data):
         """Test that unit weights sum to 1."""
-        sdid = SyntheticDiD(n_bootstrap=0, seed=42)  # Use placebo instead
+        sdid = SyntheticDiD(variance_method="placebo", seed=42)
         results = sdid.fit(
             sdid_panel_data,
             outcome="outcome",
@@ -1697,7 +1697,7 @@ class TestSyntheticDiD:
 
     def test_time_weights_sum_to_one(self, sdid_panel_data):
         """Test that time weights sum to 1."""
-        sdid = SyntheticDiD(n_bootstrap=0, seed=42)
+        sdid = SyntheticDiD(variance_method="placebo", seed=42)
         results = sdid.fit(
             sdid_panel_data,
             outcome="outcome",
@@ -1712,7 +1712,7 @@ class TestSyntheticDiD:
 
     def test_unit_weights_nonnegative(self, sdid_panel_data):
         """Test that unit weights are non-negative."""
-        sdid = SyntheticDiD(n_bootstrap=0, seed=42)
+        sdid = SyntheticDiD(variance_method="placebo", seed=42)
         results = sdid.fit(
             sdid_panel_data,
             outcome="outcome",
@@ -1745,8 +1745,8 @@ class TestSyntheticDiD:
 
     def test_regularization_effect(self, sdid_panel_data):
         """Test that regularization affects weight dispersion."""
-        sdid_no_reg = SyntheticDiD(lambda_reg=0.0, n_bootstrap=0, seed=42)
-        sdid_high_reg = SyntheticDiD(lambda_reg=10.0, n_bootstrap=0, seed=42)
+        sdid_no_reg = SyntheticDiD(lambda_reg=0.0, variance_method="placebo", seed=42)
+        sdid_high_reg = SyntheticDiD(lambda_reg=10.0, variance_method="placebo", seed=42)
 
         results_no_reg = sdid_no_reg.fit(
             sdid_panel_data,
@@ -1774,8 +1774,8 @@ class TestSyntheticDiD:
         assert np.var(weights_high_reg) <= np.var(weights_no_reg) + 0.01
 
     def test_placebo_inference(self, sdid_panel_data):
-        """Test placebo-based inference (n_bootstrap=0)."""
-        sdid = SyntheticDiD(n_bootstrap=0, seed=42)
+        """Test placebo-based variance estimation (variance_method='placebo')."""
+        sdid = SyntheticDiD(variance_method="placebo", seed=42)
         results = sdid.fit(
             sdid_panel_data,
             outcome="outcome",
@@ -1785,13 +1785,14 @@ class TestSyntheticDiD:
             post_periods=[4, 5, 6, 7]
         )
 
+        assert results.variance_method == "placebo"
         assert results.placebo_effects is not None
         assert len(results.placebo_effects) > 0
         assert results.se > 0
 
     def test_bootstrap_inference(self, sdid_panel_data):
         """Test bootstrap-based inference."""
-        sdid = SyntheticDiD(n_bootstrap=100, seed=42)
+        sdid = SyntheticDiD(variance_method="bootstrap", n_bootstrap=100, seed=42)
         results = sdid.fit(
             sdid_panel_data,
             outcome="outcome",
@@ -1801,12 +1802,19 @@ class TestSyntheticDiD:
             post_periods=[4, 5, 6, 7]
         )
 
+        assert results.variance_method == "bootstrap"
+        assert results.n_bootstrap == 100
         assert results.se > 0
         assert results.conf_int[0] < results.att < results.conf_int[1]
 
+    def test_invalid_variance_method(self):
+        """Test that invalid variance_method raises ValueError."""
+        with pytest.raises(ValueError, match="variance_method must be one of"):
+            SyntheticDiD(variance_method="invalid")
+
     def test_get_unit_weights_df(self, sdid_panel_data):
         """Test getting unit weights as DataFrame."""
-        sdid = SyntheticDiD(n_bootstrap=0, seed=42)
+        sdid = SyntheticDiD(variance_method="placebo", seed=42)
         results = sdid.fit(
             sdid_panel_data,
             outcome="outcome",
@@ -1824,7 +1832,7 @@ class TestSyntheticDiD:
 
     def test_get_time_weights_df(self, sdid_panel_data):
         """Test getting time weights as DataFrame."""
-        sdid = SyntheticDiD(n_bootstrap=0, seed=42)
+        sdid = SyntheticDiD(variance_method="placebo", seed=42)
         results = sdid.fit(
             sdid_panel_data,
             outcome="outcome",
@@ -1842,7 +1850,7 @@ class TestSyntheticDiD:
 
     def test_pre_treatment_fit(self, sdid_panel_data):
         """Test that pre-treatment fit is computed."""
-        sdid = SyntheticDiD(n_bootstrap=0, seed=42)
+        sdid = SyntheticDiD(variance_method="placebo", seed=42)
         results = sdid.fit(
             sdid_panel_data,
             outcome="outcome",
@@ -1941,15 +1949,19 @@ class TestSyntheticDiD:
 
     def test_get_set_params(self):
         """Test get_params and set_params."""
-        sdid = SyntheticDiD(lambda_reg=1.0, zeta=0.5, alpha=0.10)
+        sdid = SyntheticDiD(lambda_reg=1.0, zeta=0.5, alpha=0.10, variance_method="placebo")
 
         params = sdid.get_params()
         assert params["lambda_reg"] == 1.0
         assert params["zeta"] == 0.5
         assert params["alpha"] == 0.10
+        assert params["variance_method"] == "placebo"
 
         sdid.set_params(lambda_reg=2.0)
         assert sdid.lambda_reg == 2.0
+
+        sdid.set_params(variance_method="bootstrap")
+        assert sdid.variance_method == "bootstrap"
 
     def test_missing_unit_column(self, sdid_panel_data):
         """Test error when unit column is missing."""
@@ -2019,7 +2031,7 @@ class TestSyntheticDiD:
 
     def test_auto_infer_post_periods(self, sdid_panel_data):
         """Test automatic inference of post-periods."""
-        sdid = SyntheticDiD(n_bootstrap=0, seed=42)
+        sdid = SyntheticDiD(variance_method="placebo", seed=42)
         results = sdid.fit(
             sdid_panel_data,
             outcome="outcome",

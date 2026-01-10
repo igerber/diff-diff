@@ -14,7 +14,6 @@ from diff_diff.results import SyntheticDiDResults
 from diff_diff.utils import (
     compute_confidence_interval,
     compute_p_value,
-    compute_placebo_effects,
     compute_sdid_estimator,
     compute_synthetic_weights,
     compute_time_weights,
@@ -46,9 +45,14 @@ class SyntheticDiD(DifferenceInDifferences):
         time weights (closer to standard DiD).
     alpha : float, default=0.05
         Significance level for confidence intervals.
+    variance_method : str, default="bootstrap"
+        Method for variance estimation:
+        - "bootstrap": Block bootstrap at unit level (default)
+        - "placebo": Placebo-based variance using jackknife formula,
+          matching R's synthdid package methodology (Arkhangelsky et al. 2021)
     n_bootstrap : int, default=200
-        Number of bootstrap replications for standard error estimation.
-        Set to 0 to use placebo-based inference instead.
+        Number of bootstrap replications when variance_method="bootstrap".
+        Ignored when variance_method="placebo".
     seed : int, optional
         Random seed for reproducibility. If None (default), results
         will vary between runs.
@@ -125,14 +129,24 @@ class SyntheticDiD(DifferenceInDifferences):
         lambda_reg: float = 0.0,
         zeta: float = 1.0,
         alpha: float = 0.05,
+        variance_method: str = "bootstrap",
         n_bootstrap: int = 200,
         seed: Optional[int] = None
     ):
         super().__init__(robust=True, cluster=None, alpha=alpha)
         self.lambda_reg = lambda_reg
         self.zeta = zeta
+        self.variance_method = variance_method
         self.n_bootstrap = n_bootstrap
         self.seed = seed
+
+        # Validate variance_method
+        valid_methods = ("bootstrap", "placebo")
+        if variance_method not in valid_methods:
+            raise ValueError(
+                f"variance_method must be one of {valid_methods}, "
+                f"got '{variance_method}'"
+            )
 
         self._unit_weights = None
         self._time_weights = None
@@ -285,23 +299,24 @@ class SyntheticDiD(DifferenceInDifferences):
         synthetic_pre = Y_pre_control @ unit_weights
         pre_fit_rmse = np.sqrt(np.mean((Y_pre_treated_mean - synthetic_pre) ** 2))
 
-        # Compute standard errors
-        if self.n_bootstrap > 0:
-            se, placebo_effects = self._bootstrap_se(
+        # Compute standard errors based on variance_method
+        if self.variance_method == "bootstrap":
+            se, bootstrap_estimates = self._bootstrap_se(
                 working_data, outcome, unit, time,
                 pre_periods, post_periods, treated_units, control_units
             )
+            placebo_effects = bootstrap_estimates
+            inference_method = "bootstrap"
         else:
-            # Use placebo-based inference
-            placebo_effects = compute_placebo_effects(
+            # Use placebo-based variance (R's synthdid methodology)
+            se, placebo_effects = self._placebo_variance_se(
                 Y_pre_control,
                 Y_post_control,
                 Y_pre_treated_mean,
-                unit_weights,
                 time_weights,
                 control_units
             )
-            se = np.std(placebo_effects, ddof=1) if len(placebo_effects) > 1 else 0.0
+            inference_method = "placebo"
 
         # Compute test statistics
         if se > 0:
@@ -343,9 +358,11 @@ class SyntheticDiD(DifferenceInDifferences):
             pre_periods=pre_periods,
             post_periods=post_periods,
             alpha=self.alpha,
+            variance_method=inference_method,
             lambda_reg=self.lambda_reg,
             pre_treatment_fit=pre_fit_rmse,
-            placebo_effects=placebo_effects if len(placebo_effects) > 0 else None
+            placebo_effects=placebo_effects if len(placebo_effects) > 0 else None,
+            n_bootstrap=self.n_bootstrap if inference_method == "bootstrap" else None
         )
 
         self._unit_weights = unit_weights
@@ -544,12 +561,117 @@ class SyntheticDiD(DifferenceInDifferences):
 
         return se, bootstrap_estimates
 
+    def _placebo_variance_se(
+        self,
+        Y_pre_control: np.ndarray,
+        Y_post_control: np.ndarray,
+        Y_pre_treated_mean: np.ndarray,
+        time_weights: np.ndarray,
+        control_units: List[Any]
+    ) -> Tuple[float, np.ndarray]:
+        """
+        Compute placebo-based variance using R's synthdid methodology.
+
+        This implements the jackknife-style variance estimator from
+        Arkhangelsky et al. (2021), matching R's synthdid package.
+
+        For each control unit i, we pretend it was treated and compute
+        the SDID estimate using the remaining controls. The variance is:
+
+            Var(tau) = ((N0 - 1) / N0) * sum((tau_i - tau_bar)^2)
+
+        Parameters
+        ----------
+        Y_pre_control : np.ndarray
+            Control outcomes in pre-treatment periods, shape (n_pre, n_control).
+        Y_post_control : np.ndarray
+            Control outcomes in post-treatment periods, shape (n_post, n_control).
+        Y_pre_treated_mean : np.ndarray
+            Mean treated outcomes in pre-treatment periods, shape (n_pre,).
+        time_weights : np.ndarray
+            Time weights from main estimation, shape (n_pre,).
+        control_units : list
+            List of control unit identifiers.
+
+        Returns
+        -------
+        tuple
+            (se, placebo_effects) where se is the standard error and
+            placebo_effects is the array of placebo treatment effects.
+        """
+        n_pre, n_control = Y_pre_control.shape
+
+        placebo_effects = []
+
+        for j in range(n_control):
+            # Treat unit j as the "treated" unit
+            Y_pre_placebo_treated = Y_pre_control[:, j]
+            Y_post_placebo_treated = Y_post_control[:, j]
+
+            # Use remaining units as controls
+            remaining_idx = [i for i in range(n_control) if i != j]
+
+            if len(remaining_idx) == 0:
+                continue
+
+            Y_pre_remaining = Y_pre_control[:, remaining_idx]
+            Y_post_remaining = Y_post_control[:, remaining_idx]
+
+            try:
+                # Recompute weights for remaining controls
+                remaining_weights = compute_synthetic_weights(
+                    Y_pre_remaining,
+                    Y_pre_placebo_treated,
+                    lambda_reg=self.lambda_reg
+                )
+
+                # Compute placebo effect using the SDID formula
+                placebo_tau = compute_sdid_estimator(
+                    Y_pre_remaining,
+                    Y_post_remaining,
+                    Y_pre_placebo_treated,
+                    Y_post_placebo_treated,
+                    remaining_weights,
+                    time_weights
+                )
+
+                placebo_effects.append(placebo_tau)
+
+            except (ValueError, LinAlgError):
+                # Skip failed placebo computations
+                continue
+
+        placebo_effects = np.array(placebo_effects)
+
+        if len(placebo_effects) < 2:
+            warnings.warn(
+                f"Only {len(placebo_effects)} placebo effects computed successfully. "
+                f"Standard error cannot be estimated reliably. "
+                f"Consider using variance_method='bootstrap' or increasing "
+                f"the number of control units.",
+                UserWarning,
+                stacklevel=3,
+            )
+            return 0.0, placebo_effects
+
+        # Compute variance using R's synthdid jackknife formula:
+        # Var = ((N0 - 1) / N0) * sum((tau_i - tau_bar)^2)
+        n_placebo = len(placebo_effects)
+        placebo_mean = np.mean(placebo_effects)
+        variance = ((n_placebo - 1) / n_placebo) * np.sum(
+            (placebo_effects - placebo_mean) ** 2
+        )
+        se = np.sqrt(variance)
+
+        return se, placebo_effects
+
     def get_params(self) -> Dict[str, Any]:
         """Get estimator parameters."""
         return {
             "lambda_reg": self.lambda_reg,
             "zeta": self.zeta,
             "alpha": self.alpha,
+            "variance_method": self.variance_method,
             "n_bootstrap": self.n_bootstrap,
             "seed": self.seed,
         }

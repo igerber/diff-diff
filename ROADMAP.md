@@ -6,12 +6,12 @@ For past changes and release history, see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
-## Current Status (v1.3.0)
+## Current Status (v1.3.1)
 
-diff-diff is a **production-ready** DiD library with feature parity with R's `did` + `HonestDiD` ecosystem for core DiD analysis:
+diff-diff is a **production-ready** DiD library with feature parity with R's `did` + `HonestDiD` + `synthdid` ecosystem for core DiD analysis:
 
 - **Core estimators**: Basic DiD, TWFE, MultiPeriod, Callaway-Sant'Anna, Sun-Abraham, Synthetic DiD, Triple Difference (DDD)
-- **Valid inference**: Robust SEs, cluster SEs, wild bootstrap, multiplier bootstrap
+- **Valid inference**: Robust SEs, cluster SEs, wild bootstrap, multiplier bootstrap, placebo-based variance
 - **Assumption diagnostics**: Parallel trends tests, placebo tests, Goodman-Bacon decomposition
 - **Sensitivity analysis**: Honest DiD (Rambachan-Roth), Pre-trends power analysis (Roth 2022)
 - **Study design**: Power analysis tools
@@ -65,20 +65,6 @@ Extend the existing `TripleDifference` estimator to handle staggered adoption se
 - Clustered bootstrap for panel data
 
 **Reference**: [Ortiz-Villavicencio & Sant'Anna (2025)](https://arxiv.org/abs/2505.09942). *Working Paper*. R package: `triplediff`.
-
-### SyntheticDiD Placebo-Based Variance Estimation
-
-Add placebo-based variance estimation as an alternative to bootstrap for SyntheticDiD, matching R's `synthdid` package methodology.
-
-Currently diff-diff uses bootstrap variance estimation, while R's `synthdid` uses placebo-based estimation (Arkhangelsky et al. 2021). Both are valid but produce different SE estimates (~26% difference in benchmarks). Adding placebo-based variance would:
-
-- Provide methodological parity with R `synthdid` package
-- Allow users to choose between bootstrap and placebo methods
-- Enable direct comparison of results with R implementations
-
-**Implementation**: Add `variance_method` parameter to `SyntheticDiD` with options `"bootstrap"` (default) and `"placebo"`.
-
-**Reference**: Arkhangelsky, D., Athey, S., Hirshberg, D. A., Imbens, G. W., & Wager, S. (2021). Synthetic Difference-in-Differences. *American Economic Review*, 111(12), 4088-4118.
 
 ### Enhanced Visualization
 
