@@ -31,18 +31,33 @@ class ComparisonResult:
     ci_overlap: bool
     passed: bool
     notes: str = ""
+    # Optional timing stats for multi-replication benchmarks
+    python_time_std: float = 0.0
+    r_time_std: float = 0.0
+    n_replications: int = 1
+    scale: str = "small"
 
     def __str__(self) -> str:
         status = "PASS" if self.passed else "FAIL"
+
+        # Format time string with optional std
+        if self.n_replications > 1:
+            py_time_str = f"{self.python_time:.3f}s ± {self.python_time_std:.3f}s"
+            r_time_str = f"{self.r_time:.3f}s ± {self.r_time_std:.3f}s"
+        else:
+            py_time_str = f"{self.python_time:.3f}s"
+            r_time_str = f"{self.r_time:.3f}s"
+
         return (
-            f"{self.estimator}: [{status}]\n"
+            f"{self.estimator} ({self.scale}): [{status}]\n"
             f"  ATT:  Python={self.python_att:.6f}, R={self.r_att:.6f}, "
             f"diff={self.att_diff:.2e}\n"
             f"  SE:   Python={self.python_se:.6f}, R={self.r_se:.6f}, "
             f"rel_diff={self.se_rel_diff:.1%}\n"
-            f"  Time: Python={self.python_time:.3f}s, R={self.r_time:.3f}s, "
-            f"ratio={self.time_ratio:.2f}x\n"
+            f"  Time: Python={py_time_str}, R={r_time_str}, "
+            f"speedup={1/self.time_ratio:.1f}x\n"
             f"  CI overlap: {self.ci_overlap}"
+            + (f" (n={self.n_replications})" if self.n_replications > 1 else "")
         )
 
 
@@ -52,6 +67,7 @@ def compare_estimates(
     estimator: str,
     atol: float = 1e-4,
     se_rtol: float = 0.10,
+    scale: str = "small",
 ) -> ComparisonResult:
     """
     Compare Python and R estimates for numerical equivalence.
@@ -68,6 +84,8 @@ def compare_estimates(
         Absolute tolerance for ATT comparison.
     se_rtol : float
         Relative tolerance for SE comparison (default 10%).
+    scale : str
+        Dataset scale used for this comparison.
 
     Returns
     -------
@@ -81,11 +99,24 @@ def compare_estimates(
     py_se = python_results.get("overall_se", python_results.get("se", 0))
     r_se = r_results.get("overall_se", r_results.get("se", 0))
 
-    # Extract timing
+    # Extract timing - handle both old format (total_seconds) and new format (stats.mean)
     py_timing = python_results.get("timing", {})
     r_timing = r_results.get("timing", {})
-    py_time = py_timing.get("total_seconds", 0)
-    r_time = r_timing.get("total_seconds", 0)
+
+    # New format with stats
+    py_stats = py_timing.get("stats", {})
+    r_stats = r_timing.get("stats", {})
+
+    # Get mean timing (fall back to total_seconds for backward compatibility)
+    py_time = py_stats.get("mean", py_timing.get("total_seconds", 0))
+    r_time = r_stats.get("mean", r_timing.get("total_seconds", 0))
+
+    # Get std (0 if not available)
+    py_time_std = py_stats.get("std", 0)
+    r_time_std = r_stats.get("std", 0)
+
+    # Get number of replications
+    n_reps = py_timing.get("n_reps", 1)
 
     # Compute differences
     att_diff = abs(py_att - r_att)
@@ -130,6 +161,10 @@ def compare_estimates(
         ci_overlap=ci_overlap,
         passed=passed,
         notes="; ".join(notes),
+        python_time_std=py_time_std,
+        r_time_std=r_time_std,
+        n_replications=n_reps,
+        scale=scale,
     )
 
 
@@ -252,15 +287,35 @@ def generate_comparison_report(
     lines.append("PERFORMANCE SUMMARY")
     lines.append("=" * 70)
     lines.append("")
-    lines.append(f"{'Estimator':<25} {'Python (s)':<12} {'R (s)':<12} {'Ratio':<10}")
-    lines.append("-" * 60)
-    for comp in comparisons:
-        faster = "Python" if comp.time_ratio < 1 else "R"
-        factor = 1 / comp.time_ratio if comp.time_ratio < 1 else comp.time_ratio
-        lines.append(
-            f"{comp.estimator:<25} {comp.python_time:<12.3f} {comp.r_time:<12.3f} "
-            f"{factor:.1f}x ({faster} faster)"
-        )
+
+    # Check if we have multi-replication data
+    has_std = any(comp.n_replications > 1 for comp in comparisons)
+
+    if has_std:
+        lines.append(f"{'Estimator':<20} {'Scale':<8} {'Python (s)':<18} {'R (s)':<18} {'Speedup':<10}")
+        lines.append("-" * 80)
+        for comp in comparisons:
+            factor = 1 / comp.time_ratio if comp.time_ratio > 0 else float('inf')
+            if comp.n_replications > 1:
+                py_str = f"{comp.python_time:.3f} ± {comp.python_time_std:.3f}"
+                r_str = f"{comp.r_time:.3f} ± {comp.r_time_std:.3f}"
+            else:
+                py_str = f"{comp.python_time:.3f}"
+                r_str = f"{comp.r_time:.3f}"
+            lines.append(
+                f"{comp.estimator:<20} {comp.scale:<8} {py_str:<18} {r_str:<18} "
+                f"{factor:.1f}x"
+            )
+    else:
+        lines.append(f"{'Estimator':<25} {'Python (s)':<12} {'R (s)':<12} {'Ratio':<10}")
+        lines.append("-" * 60)
+        for comp in comparisons:
+            faster = "Python" if comp.time_ratio < 1 else "R"
+            factor = 1 / comp.time_ratio if comp.time_ratio < 1 else comp.time_ratio
+            lines.append(
+                f"{comp.estimator:<25} {comp.python_time:<12.3f} {comp.r_time:<12.3f} "
+                f"{factor:.1f}x ({faster} faster)"
+            )
 
     report = "\n".join(lines)
 

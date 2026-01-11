@@ -6,10 +6,65 @@ import json
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
+
+
+def compute_timing_stats(
+    timings: List[float],
+    exclude_first: bool = True,
+) -> Dict[str, Any]:
+    """
+    Compute timing statistics from a list of timing measurements.
+
+    Parameters
+    ----------
+    timings : list of float
+        List of timing measurements in seconds.
+    exclude_first : bool
+        Whether to exclude the first measurement from statistics
+        (may be affected by warm-up effects).
+
+    Returns
+    -------
+    dict
+        Dictionary containing:
+        - raw_timings: All raw timing values
+        - n_reps: Number of replications (after exclusion)
+        - first_run_excluded: Whether first run was excluded
+        - first_run_seconds: The first timing value
+        - stats: Dictionary with mean, std, median, min, max
+    """
+    if not timings:
+        return {
+            "raw_timings": [],
+            "n_reps": 0,
+            "first_run_excluded": False,
+            "first_run_seconds": None,
+            "stats": {},
+        }
+
+    first_run = timings[0]
+    analysis_timings = timings[1:] if exclude_first and len(timings) > 1 else timings
+
+    if len(analysis_timings) == 0:
+        analysis_timings = timings  # Fall back if only one measurement
+
+    return {
+        "raw_timings": timings,
+        "n_reps": len(analysis_timings),
+        "first_run_excluded": exclude_first and len(timings) > 1,
+        "first_run_seconds": first_run,
+        "stats": {
+            "mean": float(np.mean(analysis_timings)),
+            "std": float(np.std(analysis_timings, ddof=1)) if len(analysis_timings) > 1 else 0.0,
+            "median": float(np.median(analysis_timings)),
+            "min": float(np.min(analysis_timings)),
+            "max": float(np.max(analysis_timings)),
+        },
+    }
 
 
 @dataclass
