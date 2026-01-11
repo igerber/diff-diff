@@ -113,34 +113,80 @@ changes = {(t0, t1): outcome_wide[t1] - outcome_wide[t0] for ...}
 
 **Expected speedup:** 3-5x for CallawaySantAnna
 
-### Phase 2: Rust Backend (PyO3)
+### Phase 2: Compiled Backend
 
-Implement performance-critical components in Rust for maximum speed.
+Implement performance-critical components in a compiled language for maximum speed.
 
-#### Why Rust over C++
+#### Backend Options: Rust vs C++
 
-- **Memory safety** - No segfaults or buffer overflows
-- **Modern tooling** - Cargo + maturin for easy wheel building
-- **Zero-copy NumPy interop** - rust-numpy crate
-- **Parallelism** - rayon makes parallel iteration trivial
-- **Proven approach** - Used by polars, pyfixest, cryptography, orjson
+We have two viable options for a compiled backend. Both can achieve near-identical performance; the choice depends on team expertise and maintenance considerations.
 
-#### Architecture
+##### Option A: Rust with PyO3
 
-```
-diff_diff/
-├── estimators.py          # Python API (unchanged interface)
-├── _rust_backend/         # Optional Rust acceleration
-│   └── ...                # Compiled .so/.pyd
-└── _fallback.py           # Pure Python fallback
+**Pros:**
+- **Memory safety by design** - No segfaults, buffer overflows, or data races; compiler catches these at build time
+- **Modern tooling** - Cargo package manager + maturin makes wheel building straightforward
+- **Zero-copy NumPy interop** - rust-numpy crate provides direct array access without copying
+- **Easy parallelism** - rayon crate makes parallel iteration trivial (`.par_iter()`)
+- **Growing ecosystem** - Used by polars, pyfixest, cryptography, orjson, ruff
+- **Low per-call overhead** - Research shows PyO3 has ~0.14ms overhead vs NumPy's ~3.5ms for simple operations
+- **Single toolchain** - `cargo build` works the same on all platforms
 
-src/                       # Rust source (Cargo workspace)
-├── lib.rs
-├── ols.rs                 # Fast OLS with cluster SE
-├── demeaning.rs           # Alternating projections
-├── bootstrap.rs           # Parallel bootstrap
-└── staggered.rs           # ATT(g,t) computation
-```
+**Cons:**
+- **Learning curve** - Rust's ownership model takes time to learn
+- **Smaller scientific ecosystem** - Fewer numerical libraries than C++ (though ndarray and faer are mature)
+- **Slower compilation** - Rust compiles slower than C++
+- **Newer language** - Less institutional knowledge, fewer Stack Overflow answers
+
+**Key dependencies:** `pyo3`, `rust-numpy`, `ndarray`, `faer` (linear algebra), `rayon` (parallelism)
+
+##### Option B: C++ with pybind11
+
+**Pros:**
+- **Mature ecosystem** - Eigen, Armadillo, Intel MKL, OpenBLAS all native C++
+- **Familiar to more developers** - Larger pool of contributors
+- **Proven in scientific Python** - NumPy, SciPy, scikit-learn, pandas all use C/C++ extensions
+- **Excellent Eigen integration** - pybind11 has built-in support for Eigen matrices
+- **Faster compilation** - C++ compiles faster than Rust
+- **More optimization resources** - Decades of C++ performance tuning knowledge
+
+**Cons:**
+- **Memory safety risks** - Segfaults, buffer overflows, use-after-free possible; harder to debug
+- **Manual memory management** - Must carefully manage lifetimes, especially with Python GC interaction
+- **Complex build systems** - CMake configuration, compiler flags, platform-specific issues
+- **Copy overhead by default** - pybind11 copies arrays unless carefully configured with `py::array_t`
+- **Manual GIL management** - Easy to deadlock or corrupt state if GIL not handled correctly
+- **Platform differences** - MSVC vs GCC vs Clang have different behaviors and flags
+
+**Key dependencies:** `pybind11`, `Eigen` (linear algebra), `OpenMP` or `TBB` (parallelism)
+
+##### Comparison Summary
+
+| Factor | Rust (PyO3) | C++ (pybind11) |
+|--------|-------------|----------------|
+| Memory safety | Compile-time guarantees | Runtime risks |
+| Build tooling | Cargo + maturin (simple) | CMake + scikit-build (complex) |
+| NumPy interop | Zero-copy via rust-numpy | Zero-copy possible but tricky |
+| Parallelism | rayon (trivial) | OpenMP/TBB (more boilerplate) |
+| Linear algebra | faer, ndarray-linalg | Eigen, MKL, OpenBLAS |
+| Ecosystem maturity | Growing | Established |
+| Learning curve | Steeper (ownership) | Moderate (but footguns) |
+| Wheel building | maturin-action (simple) | cibuildwheel (more config) |
+| Debug experience | Good (cargo, clippy) | Variable (platform-dependent) |
+
+##### Recommendation
+
+**Rust with PyO3** is the recommended approach because:
+
+1. **pyfixest validates this for our exact domain** - They use Rust/PyO3 for fixed effects econometrics
+2. **Memory safety prevents production bugs** - No risk of segfaults in user code
+3. **maturin simplifies distribution** - Single command builds wheels for all platforms
+4. **rayon makes parallelization trivial** - Critical for bootstrap and cluster SE
+
+However, **C++ is a viable alternative** if:
+- Team has stronger C++ expertise
+- Need to integrate with existing C++ econometrics code
+- Want to leverage Eigen's mature linear algebra
 
 #### Graceful Degradation
 
@@ -169,22 +215,86 @@ def _fit_ols(self, X, y, cluster_ids=None):
 | Bootstrap resampling | Sequential iterations | Embarrassingly parallel |
 | ATT(g,t) computation | Repeated DataFrame indexing | Pre-indexed sparse structures |
 
-#### Key Rust Dependencies
+#### Architecture by Backend
 
-- `pyo3` - Python bindings
-- `rust-numpy` - Zero-copy NumPy array access
-- `ndarray` - N-dimensional arrays
-- `faer` - Pure Rust linear algebra (competitive with Intel MKL)
-- `rayon` - Data parallelism
+##### Rust Layout
+
+```
+diff_diff/
+├── estimators.py          # Python API (unchanged)
+├── _rust_backend/         # Compiled Rust module
+│   └── ...
+└── _fallback.py           # Pure Python fallback
+
+src/                       # Rust source (Cargo workspace)
+├── Cargo.toml
+├── lib.rs
+├── ols.rs                 # OLS with cluster SE
+├── demeaning.rs           # Alternating projections
+├── bootstrap.rs           # Parallel bootstrap
+└── staggered.rs           # ATT(g,t) computation
+
+pyproject.toml             # maturin build config
+```
+
+##### C++ Layout
+
+```
+diff_diff/
+├── estimators.py          # Python API (unchanged)
+├── _cpp_backend/          # Compiled C++ module
+│   └── ...
+└── _fallback.py           # Pure Python fallback
+
+cpp/                       # C++ source
+├── CMakeLists.txt
+├── src/
+│   ├── module.cpp         # pybind11 bindings
+│   ├── ols.cpp            # OLS with cluster SE
+│   ├── ols.hpp
+│   ├── demeaning.cpp      # Within transformation
+│   ├── demeaning.hpp
+│   ├── bootstrap.cpp      # Parallel bootstrap
+│   └── bootstrap.hpp
+└── extern/
+    └── eigen/             # Eigen submodule (or system install)
+
+pyproject.toml             # scikit-build-core config
+```
 
 #### Distribution
 
-Using maturin + GitHub Actions to build wheels for:
+##### Rust (maturin)
+
+```yaml
+# .github/workflows/wheels.yml
+- uses: PyO3/maturin-action@v1
+  with:
+    command: build
+    args: --release --out dist
+```
+
+- Simple single-action CI configuration
+- Use abi3 stable ABI for Python version-independent wheels
+- Cross-compilation via `--target` flag
+
+##### C++ (cibuildwheel)
+
+```yaml
+# .github/workflows/wheels.yml
+- uses: pypa/cibuildwheel@v2
+  env:
+    CIBW_BUILD: "cp39-* cp310-* cp311-* cp312-*"
+```
+
+- More configuration required for CMake integration
+- Need to handle OpenMP linking per-platform
+- Consider vcpkg or conan for dependency management
+
+Both approaches build wheels for:
 - Linux (manylinux2014, x86_64 and aarch64)
 - macOS (x86_64 and ARM64)
 - Windows (x86_64)
-
-Use abi3 stable ABI for Python version-independent wheels.
 
 ## Implementation Roadmap
 
@@ -216,10 +326,25 @@ Use abi3 stable ABI for Python version-independent wheels.
 
 ## References
 
-- [PyO3 User Guide](https://pyo3.rs/)
-- [rust-numpy](https://github.com/PyO3/rust-numpy)
-- [maturin](https://github.com/PyO3/maturin)
-- [faer - Fast linear algebra in Rust](https://github.com/sarah-ek/faer-rs)
-- [Polars architecture](https://github.com/pola-rs/polars) - Example of Rust/Python hybrid
-- [pyfixest](https://github.com/py-econometrics/pyfixest) - Similar approach for econometrics
-- [fixest demeaning algorithm](https://rdrr.io/cran/fixest/man/demeaning_algo.html)
+### Rust Backend
+
+- [PyO3 User Guide](https://pyo3.rs/) - Rust bindings for Python
+- [rust-numpy](https://github.com/PyO3/rust-numpy) - Zero-copy NumPy interop
+- [maturin](https://github.com/PyO3/maturin) - Build and publish Rust Python packages
+- [faer](https://github.com/sarah-ek/faer-rs) - Pure Rust linear algebra (competitive with MKL)
+- [Polars](https://github.com/pola-rs/polars) - Example of Rust/Python hybrid architecture
+- [pyfixest](https://github.com/py-econometrics/pyfixest) - Rust backend for fixed effects econometrics
+
+### C++ Backend
+
+- [pybind11 documentation](https://pybind11.readthedocs.io/) - C++ bindings for Python
+- [pybind11 Eigen integration](https://pybind11.readthedocs.io/en/stable/advanced/cast/eigen.html) - Zero-copy with Eigen
+- [Eigen](https://eigen.tuxfamily.org/) - C++ linear algebra library
+- [scikit-build-core](https://scikit-build-core.readthedocs.io/) - CMake integration for Python packages
+- [cibuildwheel](https://cibuildwheel.readthedocs.io/) - Build wheels for all platforms
+
+### General
+
+- [fixest demeaning algorithm](https://rdrr.io/cran/fixest/man/demeaning_algo.html) - Reference implementation
+- [PyO3 vs C performance comparison](https://www.alphaxiv.org/overview/2507.00264v1) - Academic benchmark
+- [Making Python 100x faster with Rust](https://ohadravid.github.io/posts/2023-03-rusty-python/) - Practical tutorial
