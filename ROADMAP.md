@@ -18,6 +18,31 @@ diff-diff is a **production-ready** DiD library with feature parity with R's `di
 
 ---
 
+## Priority: Performance Improvements
+
+**Status:** Planning complete, implementation pending
+
+Benchmarks show diff-diff is 3-17x slower than R's fixest for BasicDiD/TWFE at large scales (10K+ units). This is our top priority for v1.4.
+
+### Summary
+
+| Estimator | Current (10K scale) | Target | Approach |
+|-----------|---------------------|--------|----------|
+| BasicDiD/TWFE | 0.835s (R: 0.049s) | Match R | Rust backend |
+| CallawaySantAnna | 2.234s (R: 0.816s) | Match R | Vectorization + Rust |
+| SyntheticDiD | Already 37-1600x faster than R | Maintain | N/A |
+
+### Approach
+
+1. **Phase 1:** Pure Python optimizations (vectorized cluster SE, scipy lstsq, cached groupby)
+2. **Phase 2:** Rust backend via PyO3 for performance-critical paths (cluster SE, demeaning, bootstrap)
+
+The Rust backend will be optional with graceful fallback to pure Python.
+
+**Full details:** [docs/performance-plan.md](docs/performance-plan.md)
+
+---
+
 ## Near-Term Enhancements (v1.4)
 
 High-value additions building on our existing foundation.
@@ -201,10 +226,7 @@ Ongoing maintenance and developer experience.
 
 ### Performance
 
-- JIT compilation for bootstrap loops (numba)
-- Parallel bootstrap iterations
-- Sparse matrix handling for large fixed effects
-- Memory-efficient estimation for large panels
+See [Priority: Performance Improvements](#priority-performance-improvements) and [docs/performance-plan.md](docs/performance-plan.md).
 
 ### Code Quality
 
