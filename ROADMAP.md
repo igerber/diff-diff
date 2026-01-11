@@ -102,36 +102,25 @@ Extend the existing `TripleDifference` estimator to handle staggered adoption se
 
 ### CallawaySantAnna Analytical SE Parity with R
 
-**Status:** Future work needed
+**Status:** ✅ Complete (v1.5.0)
 
-The analytical standard error for the overall ATT in `CallawaySantAnna` differs from R's `did` package by ~19% due to different variance formulas.
+The analytical standard error for the overall ATT in `CallawaySantAnna` now matches R's `did` package by using influence function aggregation.
 
-**Current diff-diff formula** (assumes independence):
-```
-Var(Σ wᵢθᵢ) = Σ wᵢ² Var(θᵢ)
-```
+**Implementation:**
+- Modified `_aggregate_simple`, `_aggregate_event_study`, and `_aggregate_by_group` in `staggered.py`
+- Added `_compute_aggregated_se` helper that aggregates unit-level influence functions:
+  ```
+  ψ_i(overall) = Σ_{(g,t)} w_(g,t) × ψ_i(g,t)
+  Var(overall) = Σᵢ [ψ_i]²
+  ```
+- This accounts for covariances across (g,t) pairs due to shared control units
 
-**R `did` package formula** (accounts for covariance via influence functions):
-```
-Var(θ̄) = (1/n) Σᵢ (ψᵢ - ψ̄)²
-```
+**Validation (MPDTA dataset):**
+- diff-diff analytical SE: 0.0117
+- R `did` analytical SE: 0.0118
+- Difference: **< 1%** (was 19%)
 
-Where ψᵢ is the influence function contribution from unit i to the overall ATT.
-
-**Why this matters:** The ATT(g,t) estimates share control units across calculations, creating positive covariance. Ignoring this **underestimates** the variance:
-- diff-diff analytical SE: 0.0095 (on MPDTA)
-- R `did` analytical SE: 0.0118 (on MPDTA)
-
-**Workaround:** Use `n_bootstrap > 0` for bootstrap inference, which correctly captures covariance.
-
-**Fix needed:** Aggregate influence functions across units when computing overall SE, accounting for covariance terms:
-```
-Var(Σ wᵢθᵢ) = Σᵢ Σⱼ wᵢwⱼ Cov(θᵢ, θⱼ)
-```
-
-This requires storing and properly aggregating the per-unit influence function contributions when computing the overall ATT standard error.
-
-**Note:** Point estimates match R exactly; only analytical SEs differ.
+Point estimates continue to match R exactly.
 
 ---
 
