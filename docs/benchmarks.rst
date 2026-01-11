@@ -207,11 +207,12 @@ implementations:
 .. note::
 
    **v2.0.0 Rust Backend**: diff-diff v2.0.0 introduces an optional Rust backend
-   for accelerated computation. In practice, the pure Python implementation
-   (using NumPy/SciPy with optimized BLAS/LAPACK) already achieves massive
-   speedups over R (up to 2000x for SyntheticDiD). The Rust backend shows
-   minimal additional speedup in these benchmarks, meaning users can achieve
-   excellent performance without needing to compile Rust code.
+   for accelerated computation. The Rust backend provides significant speedups
+   for **SyntheticDiD** (4-8x faster than pure Python), which uses custom Rust
+   implementations for synthetic weight computation and simplex projection.
+   For **BasicDiD** and **CallawaySantAnna**, the Rust backend provides minimal
+   additional speedup since these estimators primarily use OLS and variance
+   computations that are already highly optimized in NumPy/SciPy via BLAS/LAPACK.
 
 Three-Way Performance Summary
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -229,35 +230,35 @@ Three-Way Performance Summary
      - Rust/R
      - Rust/Pure
    * - small
-     - 0.041
-     - 0.002
-     - 0.002
-     - **22.1x**
-     - 1.0x
-   * - 1k
      - 0.035
+     - 0.002
+     - 0.002
+     - **18x**
+     - 1.1x
+   * - 1k
+     - 0.037
      - 0.003
      - 0.003
-     - **12.9x**
-     - 1.0x
+     - **14x**
+     - 1.1x
    * - 5k
-     - 0.039
+     - 0.038
+     - 0.008
      - 0.006
-     - 0.006
-     - **6.7x**
-     - 1.0x
+     - **7x**
+     - 1.4x
    * - 10k
      - 0.041
+     - 0.010
      - 0.011
-     - 0.011
-     - **3.8x**
-     - 1.0x
+     - **4x**
+     - 0.9x
    * - 20k
      - 0.050
+     - 0.026
      - 0.025
-     - 0.025
-     - **2.0x**
-     - 1.0x
+     - **2x**
+     - 1.1x
 
 **CallawaySantAnna Results:**
 
@@ -315,37 +316,39 @@ Three-Way Performance Summary
      - Rust/R
      - Rust/Pure
    * - small
-     - 7.46
+     - 8.18
+     - 0.015
      - 0.004
-     - 0.004
-     - **2015x**
-     - 1.0x
+     - **2234x**
+     - **4.0x**
    * - 1k
-     - 108.2
+     - 110.4
+     - 0.068
      - 0.100
-     - 0.100
-     - **1082x**
-     - 1.0x
+     - **1104x**
+     - 0.7x
    * - 5k
-     - 505.2
-     - 0.691
-     - 0.697
-     - **725x**
-     - 1.0x
+     - 511.1
+     - 3.017
+     - 0.688
+     - **743x**
+     - **4.4x**
    * - 10k
-     - 1105.8
-     - 2.576
-     - 2.577
-     - **429x**
-     - 1.0x
+     - 1462.7
+     - 19.56
+     - 2.59
+     - **565x**
+     - **7.6x**
 
 .. note::
 
-   **SyntheticDiD Performance**: diff-diff achieves **429x to 2015x speedup** over
-   R's synthdid package. At 10k scale, R takes ~18 minutes while Python completes
-   in 2.6 seconds. The ATT estimates differ slightly due to different weight
-   optimization algorithms (projected gradient descent vs Frank-Wolfe), but
-   confidence intervals overlap.
+   **SyntheticDiD Performance**: diff-diff achieves **565x to 2234x speedup** over
+   R's synthdid package. At 10k scale, R takes ~24 minutes while Python Rust
+   completes in 2.6 seconds. The Rust backend provides **4-8x additional speedup**
+   over pure Python for SyntheticDiD due to optimized simplex projection and
+   synthetic weight computation. ATT estimates differ slightly due to different
+   weight optimization algorithms (projected gradient descent vs Frank-Wolfe),
+   but confidence intervals overlap.
 
 Dataset Sizes
 ~~~~~~~~~~~~~
@@ -390,28 +393,31 @@ Key Observations
 
 1. **diff-diff is dramatically faster than R**:
 
-   - **BasicDiD/TWFE**: 2-22x faster than R
+   - **BasicDiD/TWFE**: 2-18x faster than R
    - **CallawaySantAnna**: 4-14x faster than R
-   - **SyntheticDiD**: 429-2015x faster than R (R takes 18 minutes at 10k scale!)
+   - **SyntheticDiD**: 565-2234x faster than R (R takes 24 minutes at 10k scale!)
 
-2. **Rust backend shows minimal speedup for these benchmarks**: For analytical
-   standard errors and placebo variance estimation, pure Python (NumPy/SciPy)
-   is already highly optimized via BLAS/LAPACK. The Rust backend provides no
-   significant additional benefit in these specific benchmarks.
+2. **Rust backend benefit depends on the estimator**:
 
-3. **When Rust may help**: The Rust backend is designed for:
+   - **SyntheticDiD**: Rust provides **4-8x speedup** over pure Python due to
+     optimized simplex projection and synthetic weight computation
+   - **BasicDiD/CallawaySantAnna**: Rust provides minimal benefit (~1x) since
+     these estimators use OLS/variance computations already optimized in NumPy/SciPy
 
-   - **Bootstrap inference**: Parallelized bootstrap iterations
-   - **Very large datasets**: Better memory layout and cache efficiency
-   - **Custom algorithms**: Operations not covered by NumPy/SciPy
+3. **When to use Rust backend**:
+
+   - **SyntheticDiD**: Recommended - provides significant speedup (4-8x)
+   - **Bootstrap inference**: May help with parallelized iterations
+   - **BasicDiD/CallawaySantAnna**: Optional - pure Python is equally fast
 
 4. **Scaling behavior**: Both Python implementations show excellent scaling.
-   At 10K scale (500K observations for SyntheticDiD), estimation completes
-   in ~2.6 seconds vs ~18 minutes for R.
+   At 10K scale (500K observations for SyntheticDiD), Rust completes in
+   ~2.6 seconds vs ~20 seconds for pure Python vs ~24 minutes for R.
 
-5. **No Rust required**: Users without Rust/maturin can install diff-diff and
-   get full functionality with excellent performance using the pure Python backend.
-   The massive speedups demonstrated here are achieved with pure Python.
+5. **No Rust required for most use cases**: Users without Rust/maturin can
+   install diff-diff and get full functionality with excellent performance.
+   For BasicDiD and CallawaySantAnna, pure Python achieves the same speed as Rust.
+   Only SyntheticDiD benefits significantly from the Rust backend.
 
 Performance Optimization Details
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

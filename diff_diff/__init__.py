@@ -5,6 +5,12 @@ This library provides sklearn-like estimators for causal inference
 using the difference-in-differences methodology.
 """
 
+import os
+
+# Check for backend override via environment variable
+# DIFF_DIFF_BACKEND can be: 'auto' (default), 'python', or 'rust'
+_backend_env = os.environ.get('DIFF_DIFF_BACKEND', 'auto').lower()
+
 # Try to import Rust backend for accelerated operations
 try:
     from diff_diff._rust_backend import (
@@ -14,15 +20,35 @@ try:
         solve_ols as _rust_solve_ols,
         compute_robust_vcov as _rust_compute_robust_vcov,
     )
-
-    HAS_RUST_BACKEND = True
+    _rust_available = True
 except ImportError:
+    _rust_available = False
+    _rust_bootstrap_weights = None
+    _rust_synthetic_weights = None
+    _rust_project_simplex = None
+    _rust_solve_ols = None
+    _rust_compute_robust_vcov = None
+
+# Determine final backend based on environment variable and availability
+if _backend_env == 'python':
+    # Force pure Python mode - disable Rust even if available
     HAS_RUST_BACKEND = False
     _rust_bootstrap_weights = None
     _rust_synthetic_weights = None
     _rust_project_simplex = None
     _rust_solve_ols = None
     _rust_compute_robust_vcov = None
+elif _backend_env == 'rust':
+    # Force Rust mode - fail if not available
+    if not _rust_available:
+        raise ImportError(
+            "DIFF_DIFF_BACKEND=rust but Rust backend is not available. "
+            "Install with: pip install diff-diff[rust]"
+        )
+    HAS_RUST_BACKEND = True
+else:
+    # Auto mode - use Rust if available
+    HAS_RUST_BACKEND = _rust_available
 
 from diff_diff.bacon import (
     BaconDecomposition,
