@@ -1,6 +1,6 @@
 [build-system]
-requires = ["setuptools>=61.0", "wheel"]
-build-backend = "setuptools.build_meta"
+requires = ["maturin>=1.4,<2.0"]
+build-backend = "maturin"
 
 [project]
 name = "diff-diff"
@@ -55,8 +55,17 @@ Documentation = "https://diff-diff.readthedocs.io"
 Repository = "https://github.com/igerber/diff-diff"
 Issues = "https://github.com/igerber/diff-diff/issues"
 
-[tool.setuptools.packages.find]
-include = ["diff_diff*"]
+[tool.maturin]
+# Build the Rust extension module
+features = ["pyo3/extension-module"]
+# Python source is in the root directory
+python-source = "."
+# Module name for the compiled extension
+module-name = "diff_diff._rust_backend"
+# Path to Rust Cargo.toml
+manifest-path = "rust/Cargo.toml"
+# Include Python packages
+python-packages = ["diff_diff"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

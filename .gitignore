@@ -56,3 +56,13 @@ Thumbs.db
 # Benchmarks - generated data and results (can be regenerated)
 benchmarks/data/synthetic/*.csv
 benchmarks/results/
+
+# Rust build artifacts
+rust/target/
+Cargo.lock
+*.so
+*.pyd
+*.dylib
+
+# Maturin build artifacts
+target/

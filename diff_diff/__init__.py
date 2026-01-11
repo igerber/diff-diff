@@ -5,6 +5,25 @@ This library provides sklearn-like estimators for causal inference
 using the difference-in-differences methodology.
 """
 
+# Try to import Rust backend for accelerated operations
+try:
+    from diff_diff._rust_backend import (
+        generate_bootstrap_weights_batch as _rust_bootstrap_weights,
+        compute_synthetic_weights as _rust_synthetic_weights,
+        project_simplex as _rust_project_simplex,
+        solve_ols as _rust_solve_ols,
+        compute_robust_vcov as _rust_compute_robust_vcov,
+    )
+
+    HAS_RUST_BACKEND = True
+except ImportError:
+    HAS_RUST_BACKEND = False
+    _rust_bootstrap_weights = None
+    _rust_synthetic_weights = None
+    _rust_project_simplex = None
+    _rust_solve_ols = None
+    _rust_compute_robust_vcov = None
+
 from diff_diff.bacon import (
     BaconDecomposition,
     BaconDecompositionResults,
@@ -187,4 +206,6 @@ __all__ = [
     "compute_pretrends_power",
     "compute_mdv",
     "plot_pretrends_power",
+    # Rust backend
+    "HAS_RUST_BACKEND",
 ]

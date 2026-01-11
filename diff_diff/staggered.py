@@ -20,6 +20,9 @@ from diff_diff.utils import (
     compute_p_value,
 )
 
+# Import Rust backend if available
+from diff_diff import HAS_RUST_BACKEND, _rust_bootstrap_weights
+
 # Type alias for pre-computed structures
 PrecomputedData = Dict[str, Any]
 
@@ -104,6 +107,23 @@ def _generate_bootstrap_weights_batch(
     np.ndarray
         Array of bootstrap weights with shape (n_bootstrap, n_units).
     """
+    # Use Rust backend if available (parallel + fast RNG)
+    if HAS_RUST_BACKEND:
+        # Get seed from the NumPy RNG for reproducibility
+        seed = rng.integers(0, 2**63 - 1)
+        return _rust_bootstrap_weights(n_bootstrap, n_units, weight_type, seed)
+
+    # Fallback to NumPy implementation
+    return _generate_bootstrap_weights_batch_numpy(n_bootstrap, n_units, weight_type, rng)
+
+
+def _generate_bootstrap_weights_batch_numpy(
+    n_bootstrap: int,
+    n_units: int,
+    weight_type: str,
+    rng: np.random.Generator,
+) -> np.ndarray:
+    """NumPy fallback implementation of _generate_bootstrap_weights_batch."""
     if weight_type == "rademacher":
         # Rademacher: +1 or -1 with equal probability
         return rng.choice([-1.0, 1.0], size=(n_bootstrap, n_units))

@@ -1,15 +1,17 @@
 """
 Unified linear algebra backend for diff-diff.
 
-This module provides optimized OLS and variance estimation that can be
-swapped to a compiled backend (Rust/C++) for maximum performance.
+This module provides optimized OLS and variance estimation with an optional
+Rust backend for maximum performance.
 
 The key optimizations are:
 1. scipy.linalg.lstsq with 'gelsy' driver (QR-based, faster than SVD)
 2. Vectorized cluster-robust SE via groupby (eliminates O(n*clusters) loop)
 3. Single interface for all estimators (reduces code duplication)
+4. Optional Rust backend for additional speedup (when available)
 
-Future: This module can be extended with a Rust backend for additional speedup.
+The Rust backend is automatically used when available, with transparent
+fallback to NumPy/SciPy implementations.
 """
 
 from typing import Optional, Tuple, Union
@@ -17,6 +19,13 @@ from typing import Optional, Tuple, Union
 import numpy as np
 import pandas as pd
 from scipy.linalg import lstsq as scipy_lstsq
+
+# Import Rust backend if available
+from diff_diff import (
+    HAS_RUST_BACKEND,
+    _rust_compute_robust_vcov,
+    _rust_solve_ols,
+)
 
 
 def solve_ols(
@@ -119,6 +128,58 @@ def solve_ols(
                 "Clean your data or set check_finite=False to skip this check."
             )
 
+    # Use Rust backend if available
+    # Note: Fall back to NumPy if check_finite=False since Rust's LAPACK
+    # doesn't support non-finite values
+    if HAS_RUST_BACKEND and check_finite:
+        # Ensure contiguous arrays for Rust
+        X = np.ascontiguousarray(X, dtype=np.float64)
+        y = np.ascontiguousarray(y, dtype=np.float64)
+
+        # Convert cluster_ids to int64 for Rust (if provided)
+        cluster_ids_int = None
+        if cluster_ids is not None:
+            cluster_ids_int = pd.factorize(cluster_ids)[0].astype(np.int64)
+
+        try:
+            coefficients, residuals, vcov = _rust_solve_ols(
+                X, y, cluster_ids_int, return_vcov
+            )
+        except ValueError as e:
+            # Translate Rust LAPACK errors to consistent Python error messages
+            error_msg = str(e)
+            if "Matrix inversion failed" in error_msg or "Least squares failed" in error_msg:
+                raise ValueError(
+                    "Design matrix is rank-deficient (singular X'X matrix). "
+                    "This indicates perfect multicollinearity. Check your fixed effects "
+                    "and covariates for linear dependencies."
+                ) from e
+            raise
+
+        if return_fitted:
+            fitted = X @ coefficients
+            return coefficients, residuals, fitted, vcov
+        else:
+            return coefficients, residuals, vcov
+
+    # Fallback to NumPy/SciPy implementation
+    return _solve_ols_numpy(
+        X, y, cluster_ids=cluster_ids, return_vcov=return_vcov, return_fitted=return_fitted
+    )
+
+
+def _solve_ols_numpy(
+    X: np.ndarray,
+    y: np.ndarray,
+    *,
+    cluster_ids: Optional[np.ndarray] = None,
+    return_vcov: bool = True,
+    return_fitted: bool = False,
+) -> Union[
+    Tuple[np.ndarray, np.ndarray, Optional[np.ndarray]],
+    Tuple[np.ndarray, np.ndarray, np.ndarray, Optional[np.ndarray]],
+]:
+    """NumPy/SciPy fallback implementation of solve_ols."""
     # Solve OLS using scipy's optimized solver
     # 'gelsy' uses QR with column pivoting, faster than default 'gelsd' (SVD)
     # Note: gelsy doesn't reliably report rank, so we don't check for deficiency
@@ -131,7 +192,7 @@ def solve_ols(
     # Compute variance-covariance matrix if requested
     vcov = None
     if return_vcov:
-        vcov = compute_robust_vcov(X, residuals, cluster_ids)
+        vcov = _compute_robust_vcov_numpy(X, residuals, cluster_ids)
 
     if return_fitted:
         return coefficients, residuals, fitted, vcov
@@ -176,6 +237,38 @@ def compute_robust_vcov(
     The cluster-robust computation is vectorized using pandas groupby,
     which is much faster than a Python loop over clusters.
     """
+    # Use Rust backend if available
+    if HAS_RUST_BACKEND:
+        X = np.ascontiguousarray(X, dtype=np.float64)
+        residuals = np.ascontiguousarray(residuals, dtype=np.float64)
+
+        cluster_ids_int = None
+        if cluster_ids is not None:
+            cluster_ids_int = pd.factorize(cluster_ids)[0].astype(np.int64)
+
+        try:
+            return _rust_compute_robust_vcov(X, residuals, cluster_ids_int)
+        except ValueError as e:
+            # Translate Rust LAPACK errors to consistent Python error messages
+            error_msg = str(e)
+            if "Matrix inversion failed" in error_msg:
+                raise ValueError(
+                    "Design matrix is rank-deficient (singular X'X matrix). "
+                    "This indicates perfect multicollinearity. Check your fixed effects "
+                    "and covariates for linear dependencies."
+                ) from e
+            raise
+
+    # Fallback to NumPy implementation
+    return _compute_robust_vcov_numpy(X, residuals, cluster_ids)
+
+
+def _compute_robust_vcov_numpy(
+    X: np.ndarray,
+    residuals: np.ndarray,
+    cluster_ids: Optional[np.ndarray] = None,
+) -> np.ndarray:
+    """NumPy fallback implementation of compute_robust_vcov."""
     n, k = X.shape
     XtX = X.T @ X
 
