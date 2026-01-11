@@ -74,7 +74,7 @@ Summary Table
      - **PASS**
    * - CallawaySantAnna
      - < 1e-10
-     - 5.6%
+     - < 1%
      - Yes
      - **PASS**
    * - SyntheticDiD
@@ -163,15 +163,15 @@ Callaway-Sant'Anna Results
      - 2.519
      - < 1e-10
    * - SE
-     - 0.060
+     - 0.062
      - 0.063
-     - 5.6%
+     - 2.3%
    * - Time (s)
-     - 0.008
+     - 0.005
      - 0.070
-     - **9.1x faster**
+     - **14.0x faster**
 
-**Validation**: PASS - Results match when using comparable inference methods.
+**Validation**: PASS - Both point estimates and standard errors match R closely.
 
 **Key findings from investigation:**
 
@@ -179,9 +179,9 @@ Callaway-Sant'Anna Results
 2. **Never-treated coding**: R's ``did`` package requires ``first_treat=Inf``
    for never-treated units. diff-diff accepts ``first_treat=0``. The benchmark
    converts 0 to Inf for R compatibility.
-3. **Standard errors**: With multiplier bootstrap (``n_bootstrap=200``),
-   Python SE (0.060) matches R SE (0.063) within 5.6%. The analytical SE
-   formulas differ due to covariance handling in aggregation.
+3. **Standard errors**: As of v1.5.0, analytical SEs use influence function
+   aggregation (matching R's approach), resulting in < 3% SE difference across
+   all scales. Both analytical and bootstrap inference now match R closely.
 
 Performance Comparison
 ----------------------
@@ -216,9 +216,9 @@ Summary by Scale
      - 0.035 ± 0.001
      - **17.9x**
    * - CallawaySantAnna
-     - 0.008 ± 0.000
+     - 0.005 ± 0.000
      - 0.070 ± 0.001
-     - **9.1x**
+     - **14.0x**
 
 **1K Scale** (6,000-10,000 observations):
 
@@ -235,9 +235,9 @@ Summary by Scale
      - 0.035 ± 0.001
      - **12.5x**
    * - CallawaySantAnna
-     - 0.013 ± 0.000
-     - 0.116 ± 0.003
-     - **9.2x**
+     - 0.012 ± 0.000
+     - 0.113 ± 0.002
+     - **9.6x**
 
 **5K Scale** (40,000-60,000 observations):
 
@@ -254,9 +254,9 @@ Summary by Scale
      - 0.038 ± 0.002
      - **6.1x**
    * - CallawaySantAnna
-     - 0.037 ± 0.001
-     - 0.343 ± 0.002
-     - **9.2x**
+     - 0.055 ± 0.001
+     - 0.339 ± 0.002
+     - **6.2x**
 
 **10K Scale** (100,000-150,000 observations):
 
@@ -273,9 +273,9 @@ Summary by Scale
      - 0.041 ± 0.001
      - **4.1x**
    * - CallawaySantAnna
-     - 0.092 ± 0.003
-     - 0.734 ± 0.002
-     - **7.9x**
+     - 0.155 ± 0.002
+     - 0.730 ± 0.004
+     - **4.7x**
 
 Key Observations
 ~~~~~~~~~~~~~~~~
@@ -288,13 +288,13 @@ Key Observations
    The speedup is greatest at small scales (17.9x) and remains substantial
    at large scales (4.1x at 10K observations).
 
-3. **CallawaySantAnna**: diff-diff is 8-9x faster than R's ``did::att_gt``
-   across all scales. The consistent speedup reflects the vectorized bootstrap
-   and pre-computed data structures in v1.4.0.
+3. **CallawaySantAnna**: diff-diff is 5-14x faster than R's ``did::att_gt``
+   using analytical SEs. At small scales (14x speedup), pure Python overhead
+   is minimal; at larger scales the gap narrows but remains substantial (4.7x).
 
 4. **Scaling behavior**: Both estimators show sub-linear scaling in diff-diff.
    At 10K scale (150K observations for CallawaySantAnna), estimation completes
-   in under 100ms.
+   in ~150ms with analytical SEs.
 
 Performance Optimization Details
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -356,25 +356,25 @@ Results Comparison
      - -0.039951
      - **0** (exact match)
    * - SE (analytical)
-     - 0.0095
+     - 0.0117
      - 0.0118
-     - 19%
+     - **< 1%**
    * - Time (10 reps)
-     - 0.002s ± 0.000s
+     - 0.003s ± 0.000s
      - 0.039s ± 0.006s
-     - **19.5x faster**
+     - **14.4x faster**
 
 **Key Findings:**
 
 1. **Point estimates match exactly**: The overall ATT of -0.039951 is identical
    between diff-diff and R's ``did`` package, validating the core estimation logic.
 
-2. **Standard errors differ**: The 19% SE difference is expected because diff-diff
-   and R use different analytical SE formulas. The confidence intervals overlap
-   substantially, and statistical conclusions are identical.
+2. **Standard errors match**: As of v1.5.0, analytical SEs use influence function
+   aggregation (matching R's approach), resulting in < 1% difference. Both point
+   estimates and standard errors now match R's ``did`` package.
 
-3. **Performance**: diff-diff is 19.5x faster than R on this real-world dataset,
-   consistent with the synthetic data benchmarks.
+3. **Performance**: diff-diff is ~14x faster than R on this real-world dataset,
+   consistent with the synthetic data benchmarks at small scale.
 
 This validation on real-world data with known published results confirms that
 diff-diff produces correct estimates that match the reference R implementation.

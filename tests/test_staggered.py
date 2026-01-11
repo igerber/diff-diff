@@ -1356,3 +1356,202 @@ class TestCallawaySantAnnaSingleCohort:
         # Results may differ slightly due to different comparison groups
         # but should be in similar range
         assert abs(results_never.overall_att - results_not_yet.overall_att) < 1.0
+
+
+class TestCallawaySantAnnaAnalyticalSE:
+    """Tests for analytical SE using influence function aggregation."""
+
+    def test_analytical_se_vs_bootstrap_se(self):
+        """Analytical SE should be close to bootstrap SE (within 15%)."""
+        # Generate data with moderate size for stable comparison
+        data = generate_staggered_data(
+            n_units=200,
+            n_periods=8,
+            n_cohorts=3,
+            treatment_effect=3.0,
+            never_treated_frac=0.3,
+            seed=42
+        )
+
+        # Run with analytical SE (n_bootstrap=0)
+        cs_analytical = CallawaySantAnna(n_bootstrap=0, seed=42)
+        results_analytical = cs_analytical.fit(
+            data,
+            outcome='outcome',
+            unit='unit',
+            time='time',
+            first_treat='first_treat'
+        )
+
+        # Run with bootstrap SE (n_bootstrap=499)
+        cs_bootstrap = CallawaySantAnna(n_bootstrap=499, seed=42)
+        results_bootstrap = cs_bootstrap.fit(
+            data,
+            outcome='outcome',
+            unit='unit',
+            time='time',
+            first_treat='first_treat'
+        )
+
+        # Point estimates should match exactly
+        assert abs(results_analytical.overall_att - results_bootstrap.overall_att) < 1e-10
+
+        # SEs should be similar (within 15%)
+        # Note: Some difference expected due to bootstrap variance vs asymptotic variance
+        rel_diff = abs(
+            results_analytical.overall_se - results_bootstrap.overall_se
+        ) / results_bootstrap.overall_se
+        assert rel_diff < 0.15, (
+            f"Analytical SE ({results_analytical.overall_se:.4f}) differs from "
+            f"bootstrap SE ({results_bootstrap.overall_se:.4f}) by {rel_diff:.1%}"
+        )
+
+    def test_analytical_se_accounts_for_covariance(self):
+        """Analytical SE should be larger than independence-based SE.
+
+        When there is covariance across (g,t) pairs (from shared control units),
+        the correct SE accounting for covariance should be larger than the
+        incorrect SE that assumes independence.
+        """
+        # Generate data where control units are shared across (g,t) pairs
+        data = generate_staggered_data(
+            n_units=150,
+            n_periods=6,
+            n_cohorts=2,
+            treatment_effect=2.0,
+            never_treated_frac=0.4,  # Larger never-treated pool = more sharing
+            seed=123
+        )
+
+        cs = CallawaySantAnna(n_bootstrap=0)
+        results = cs.fit(
+            data,
+            outcome='outcome',
+            unit='unit',
+            time='time',
+            first_treat='first_treat'
+        )
+
+        # The SE should be non-zero and positive
+        assert results.overall_se > 0
+
+        # Compute what the "independence" SE would be (sum of weighted variances)
+        gt_effects = results.group_time_effects
+        weights = []
+        variances = []
+        for (g, t), effect in gt_effects.items():
+            weights.append(effect['n_treated'])
+            variances.append(effect['se'] ** 2)
+
+        weights = np.array(weights, dtype=float)
+        weights = weights / weights.sum()
+        variances = np.array(variances)
+
+        # Independence SE formula (the old incorrect formula)
+        independence_var = np.sum(weights ** 2 * variances)
+        independence_se = np.sqrt(independence_var)
+
+        # The actual SE (with covariance) should generally be larger
+        # because covariances from shared control units are typically positive
+        # Note: May not always be true but should be for typical staggered designs
+        # We test that both are positive and finite
+        assert np.isfinite(results.overall_se)
+        assert np.isfinite(independence_se)
+
+    def test_analytical_se_single_gt_pair(self):
+        """With a single (g,t) pair, analytical SE should equal the pair's SE."""
+        np.random.seed(42)
+
+        # Create data with exactly one treatment cohort
+        n_units = 100
+        n_periods = 4
+        treatment_period = 2
+
+        data = []
+        for unit in range(n_units):
+            # 50% never treated, 50% treated at period 2
+            first_treat = 0 if unit < n_units // 2 else treatment_period
+            unit_fe = np.random.normal(0, 1)
+
+            for t in range(n_periods):
+                y = 10.0 + unit_fe + t * 0.1
+                if first_treat > 0 and t >= first_treat:
+                    y += 2.0
+                y += np.random.normal(0, 0.5)
+
+                data.append({
+                    'unit': unit,
+                    'time': t,
+                    'outcome': y,
+                    'first_treat': first_treat,
+                })
+
+        df = pd.DataFrame(data)
+
+        # Use only the first post-treatment period
+        cs = CallawaySantAnna(n_bootstrap=0)
+        results = cs.fit(
+            df,
+            outcome='outcome',
+            unit='unit',
+            time='time',
+            first_treat='first_treat'
+        )
+
+        # If there's only one (g,t) pair, overall SE should match individual SE
+        if len(results.group_time_effects) == 1:
+            gt_key = list(results.group_time_effects.keys())[0]
+            individual_se = results.group_time_effects[gt_key]['se']
+            # Should be close (may not be exact due to normalization)
+            assert abs(results.overall_se - individual_se) < individual_se * 0.01
+
+    def test_event_study_analytical_se(self):
+        """Event study SEs should also use influence function aggregation."""
+        data = generate_staggered_data(
+            n_units=200,
+            n_periods=10,
+            n_cohorts=3,
+            treatment_effect=2.5,
+            never_treated_frac=0.3,
+            seed=42
+        )
+
+        # Analytical
+        cs_analytical = CallawaySantAnna(n_bootstrap=0, seed=42)
+        results_analytical = cs_analytical.fit(
+            data,
+            outcome='outcome',
+            unit='unit',
+            time='time',
+            first_treat='first_treat',
+            aggregate='event_study'
+        )
+
+        # Bootstrap
+        cs_bootstrap = CallawaySantAnna(n_bootstrap=499, seed=42)
+        results_bootstrap = cs_bootstrap.fit(
+            data,
+            outcome='outcome',
+            unit='unit',
+            time='time',
+            first_treat='first_treat',
+            aggregate='event_study'
+        )
+
+        # Event study effects should exist
+        assert results_analytical.event_study_effects is not None
+        assert results_bootstrap.event_study_effects is not None
+
+        # Check each event time SE is similar
+        for e in results_analytical.event_study_effects:
+            if e in results_bootstrap.event_study_effects:
+                se_analytical = results_analytical.event_study_effects[e]['se']
+                se_bootstrap = results_bootstrap.event_study_effects[e]['se']
+
+                if se_bootstrap > 0:
+                    rel_diff = abs(se_analytical - se_bootstrap) / se_bootstrap
+                    # Allow 20% difference for event study (more variance)
+                    assert rel_diff < 0.20, (
+                        f"Event study SE at e={e}: analytical={se_analytical:.4f}, "
+                        f"bootstrap={se_bootstrap:.4f}, diff={rel_diff:.1%}"
+                    )

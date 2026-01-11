@@ -1074,7 +1074,9 @@ class CallawaySantAnna:
             )
 
         # Compute overall ATT (simple aggregation)
-        overall_att, overall_se = self._aggregate_simple(group_time_effects, df, unit)
+        overall_att, overall_se = self._aggregate_simple(
+            group_time_effects, influence_func_info, df, unit
+        )
         overall_t = overall_att / overall_se if overall_se > 0 else 0.0
         overall_p = compute_p_value(overall_t)
         overall_ci = compute_confidence_interval(overall_att, overall_se, self.alpha)
@@ -1085,12 +1087,13 @@ class CallawaySantAnna:
 
         if aggregate in ["event_study", "all"]:
             event_study_effects = self._aggregate_event_study(
-                group_time_effects, treatment_groups, time_periods, balance_e
+                group_time_effects, influence_func_info,
+                treatment_groups, time_periods, balance_e
             )
 
         if aggregate in ["group", "all"]:
             group_effects = self._aggregate_by_group(
-                group_time_effects, treatment_groups
+                group_time_effects, influence_func_info, treatment_groups
             )
 
         # Run bootstrap inference if requested
@@ -1423,6 +1426,7 @@ class CallawaySantAnna:
     def _aggregate_simple(
         self,
         group_time_effects: Dict,
+        influence_func_info: Dict,
         df: pd.DataFrame,
         unit: str,
     ) -> Tuple[float, float]:
@@ -1430,19 +1434,22 @@ class CallawaySantAnna:
         Compute simple weighted average of ATT(g,t).
 
         Weights by group size (number of treated units).
+
+        Standard errors are computed using influence function aggregation,
+        which properly accounts for covariances across (g,t) pairs due to
+        shared control units. This matches R's `did` package approach.
         """
         effects = []
-        weights = []
-        variances = []
+        weights_list = []
+        gt_pairs = []
 
         for (g, t), data in group_time_effects.items():
             effects.append(data['effect'])
-            weights.append(data['n_treated'])
-            variances.append(data['se'] ** 2)
+            weights_list.append(data['n_treated'])
+            gt_pairs.append((g, t))
 
         effects = np.array(effects)
-        weights = np.array(weights, dtype=float)
-        variances = np.array(variances)
+        weights = np.array(weights_list, dtype=float)
 
         # Normalize weights
         weights = weights / np.sum(weights)
@@ -1450,15 +1457,77 @@ class CallawaySantAnna:
         # Weighted average
         overall_att = np.sum(weights * effects)
 
-        # Standard error (assuming independence across g,t)
-        overall_var = np.sum((weights ** 2) * variances)
-        overall_se = np.sqrt(overall_var)
+        # Compute SE using influence function aggregation
+        overall_se = self._compute_aggregated_se(
+            gt_pairs, weights, influence_func_info
+        )
 
         return overall_att, overall_se
+
+    def _compute_aggregated_se(
+        self,
+        gt_pairs: List[Tuple[Any, Any]],
+        weights: np.ndarray,
+        influence_func_info: Dict,
+    ) -> float:
+        """
+        Compute standard error using influence function aggregation.
+
+        This properly accounts for covariances across (g,t) pairs by
+        aggregating unit-level influence functions:
+
+            ψ_i(overall) = Σ_{(g,t)} w_(g,t) × ψ_i(g,t)
+            Var(overall) = (1/n) Σ_i [ψ_i]²
+
+        This matches R's `did` package analytical SE formula.
+        """
+        if not influence_func_info:
+            # Fallback if no influence functions available
+            return 0.0
+
+        # Build unit index mapping from all (g,t) pairs
+        all_units = set()
+        for (g, t) in gt_pairs:
+            if (g, t) in influence_func_info:
+                info = influence_func_info[(g, t)]
+                all_units.update(info['treated_units'])
+                all_units.update(info['control_units'])
+
+        if not all_units:
+            return 0.0
+
+        all_units = sorted(all_units)
+        n_units = len(all_units)
+        unit_to_idx = {u: i for i, u in enumerate(all_units)}
+
+        # Aggregate influence functions across (g,t) pairs
+        psi_overall = np.zeros(n_units)
+
+        for j, (g, t) in enumerate(gt_pairs):
+            if (g, t) not in influence_func_info:
+                continue
+
+            info = influence_func_info[(g, t)]
+            w = weights[j]
+
+            # Treated unit contributions
+            for i, unit_id in enumerate(info['treated_units']):
+                idx = unit_to_idx[unit_id]
+                psi_overall[idx] += w * info['treated_inf'][i]
+
+            # Control unit contributions
+            for i, unit_id in enumerate(info['control_units']):
+                idx = unit_to_idx[unit_id]
+                psi_overall[idx] += w * info['control_inf'][i]
+
+        # Compute variance: Var(θ̄) = (1/n) Σᵢ ψᵢ²
+        variance = np.sum(psi_overall ** 2)
+        return np.sqrt(variance)
 
     def _aggregate_event_study(
         self,
         group_time_effects: Dict,
+        influence_func_info: Dict,
         groups: List[Any],
         time_periods: List[Any],
         balance_e: Optional[int] = None,
@@ -1467,17 +1536,20 @@ class CallawaySantAnna:
         Aggregate effects by relative time (event study).
 
         Computes average effect at each event time e = t - g.
+
+        Standard errors use influence function aggregation to account for
+        covariances across (g,t) pairs.
         """
-        # Organize effects by relative time
-        effects_by_e: Dict[int, List[Tuple[float, float, int]]] = {}
+        # Organize effects by relative time, keeping track of (g,t) pairs
+        effects_by_e: Dict[int, List[Tuple[Tuple[Any, Any], float, int]]] = {}
 
         for (g, t), data in group_time_effects.items():
             e = t - g  # Relative time
             if e not in effects_by_e:
                 effects_by_e[e] = []
             effects_by_e[e].append((
+                (g, t),  # Keep track of the (g,t) pair
                 data['effect'],
-                data['se'],
                 data['n_treated']
             ))
 
@@ -1490,15 +1562,15 @@ class CallawaySantAnna:
                     groups_at_e.add(g)
 
             # Filter effects to only include balanced groups
-            balanced_effects: Dict[int, List[Tuple[float, float, int]]] = {}
+            balanced_effects: Dict[int, List[Tuple[Tuple[Any, Any], float, int]]] = {}
             for (g, t), data in group_time_effects.items():
                 if g in groups_at_e:
                     e = t - g
                     if e not in balanced_effects:
                         balanced_effects[e] = []
                     balanced_effects[e].append((
+                        (g, t),
                         data['effect'],
-                        data['se'],
                         data['n_treated']
                     ))
             effects_by_e = balanced_effects
@@ -1507,16 +1579,19 @@ class CallawaySantAnna:
         event_study_effects = {}
 
         for e, effect_list in sorted(effects_by_e.items()):
-            effs = np.array([x[0] for x in effect_list])
-            ses = np.array([x[1] for x in effect_list])
+            gt_pairs = [x[0] for x in effect_list]
+            effs = np.array([x[1] for x in effect_list])
             ns = np.array([x[2] for x in effect_list], dtype=float)
 
             # Weight by group size
             weights = ns / np.sum(ns)
 
             agg_effect = np.sum(weights * effs)
-            agg_var = np.sum((weights ** 2) * (ses ** 2))
-            agg_se = np.sqrt(agg_var)
+
+            # Compute SE using influence function aggregation
+            agg_se = self._compute_aggregated_se(
+                gt_pairs, weights, influence_func_info
+            )
 
             t_stat = agg_effect / agg_se if agg_se > 0 else 0.0
             p_val = compute_p_value(t_stat)
@@ -1536,19 +1611,24 @@ class CallawaySantAnna:
     def _aggregate_by_group(
         self,
         group_time_effects: Dict,
+        influence_func_info: Dict,
         groups: List[Any],
     ) -> Dict[Any, Dict[str, Any]]:
         """
         Aggregate effects by treatment cohort.
 
         Computes average effect for each cohort across all post-treatment periods.
+
+        Standard errors use influence function aggregation to account for
+        covariances across time periods within a cohort.
         """
         group_effects = {}
 
         for g in groups:
             # Get all effects for this group (post-treatment only: t >= g)
+            # Keep track of (g, t) pairs for influence function aggregation
             g_effects = [
-                (data['effect'], data['se'], data['n_treated'])
+                ((g, t), data['effect'])
                 for (gg, t), data in group_time_effects.items()
                 if gg == g and t >= g
             ]
@@ -1556,15 +1636,18 @@ class CallawaySantAnna:
             if not g_effects:
                 continue
 
-            effs = np.array([x[0] for x in g_effects])
-            ses = np.array([x[1] for x in g_effects])
+            gt_pairs = [x[0] for x in g_effects]
+            effs = np.array([x[1] for x in g_effects])
 
             # Equal weight across time periods for a group
             weights = np.ones(len(effs)) / len(effs)
 
             agg_effect = np.sum(weights * effs)
-            agg_var = np.sum((weights ** 2) * (ses ** 2))
-            agg_se = np.sqrt(agg_var)
+
+            # Compute SE using influence function aggregation
+            agg_se = self._compute_aggregated_se(
+                gt_pairs, weights, influence_func_info
+            )
 
             t_stat = agg_effect / agg_se if agg_se > 0 else 0.0
             p_val = compute_p_value(t_stat)

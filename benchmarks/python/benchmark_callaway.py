@@ -51,11 +51,12 @@ def main():
 
     # Run benchmark
     print("Running Callaway-Sant'Anna estimation...")
-    # Use multiplier bootstrap for SE to match R's did package
+    # Use analytical SE (n_bootstrap=0) - matches R's did package after
+    # influence function aggregation fix (accounts for covariance)
     cs = CallawaySantAnna(
         estimation_method=args.method,
         control_group=args.control_group,
-        n_bootstrap=200,  # Multiplier bootstrap for proper SE comparison
+        n_bootstrap=0,  # Analytical SE now correct with influence functions
         seed=42,
     )
 
