@@ -10,6 +10,9 @@ import numpy as np
 import pandas as pd
 from scipy import stats
 
+from diff_diff.linalg import compute_robust_vcov as _compute_robust_vcov_linalg
+from diff_diff.linalg import solve_ols as _solve_ols_linalg
+
 # Numerical constants for optimization algorithms
 _OPTIMIZATION_MAX_ITER = 1000  # Maximum iterations for weight optimization
 _OPTIMIZATION_TOL = 1e-8  # Convergence tolerance for optimization
@@ -48,6 +51,9 @@ def compute_robust_se(
     """
     Compute heteroskedasticity-robust (HC1) or cluster-robust standard errors.
 
+    This function is a thin wrapper around the optimized implementation in
+    diff_diff.linalg for backwards compatibility.
+
     Parameters
     ----------
     X : np.ndarray
@@ -62,47 +68,7 @@ def compute_robust_se(
     np.ndarray
         Variance-covariance matrix of shape (k, k).
     """
-    n, k = X.shape
-    XtX = X.T @ X
-
-    if cluster_ids is None:
-        # HC1 robust standard errors
-        # HC1 adjustment factor: n / (n - k)
-        adjustment = n / (n - k)
-
-        # Create diagonal matrix with squared residuals
-        u_squared = residuals ** 2
-
-        # Meat of the sandwich: X' * diag(u^2) * X
-        meat = X.T @ (X * u_squared[:, np.newaxis])
-
-        # Compute XtX^{-1} @ meat @ XtX^{-1} using solve() for numerical stability
-        # First solve XtX @ temp = meat to get temp = XtX^{-1} @ meat
-        temp = np.linalg.solve(XtX, meat)
-        # Then solve XtX @ vcov = temp.T and transpose to get XtX^{-1} @ meat @ XtX^{-1}
-        vcov = adjustment * np.linalg.solve(XtX, temp.T).T
-    else:
-        # Cluster-robust standard errors
-        unique_clusters = np.unique(cluster_ids)
-        n_clusters = len(unique_clusters)
-
-        # Adjustment factor for cluster-robust SEs
-        adjustment = (n_clusters / (n_clusters - 1)) * ((n - 1) / (n - k))
-
-        # Compute the meat of the sandwich
-        meat = np.zeros((k, k))
-        for cluster in unique_clusters:
-            mask = cluster_ids == cluster
-            X_c = X[mask]
-            u_c = residuals[mask]
-            score_c = X_c.T @ u_c
-            meat += np.outer(score_c, score_c)
-
-        # Compute XtX^{-1} @ meat @ XtX^{-1} using solve() for numerical stability
-        temp = np.linalg.solve(XtX, meat)
-        vcov = adjustment * np.linalg.solve(XtX, temp.T).T
-
-    return np.asarray(vcov)
+    return _compute_robust_vcov_linalg(X, residuals, cluster_ids)
 
 
 def compute_confidence_interval(
@@ -461,11 +427,10 @@ def wild_bootstrap_se(
     n = X.shape[0]
 
     # Step 1: Compute original coefficient and cluster-robust SE
-    beta_hat = np.linalg.lstsq(X, y, rcond=None)[0]
+    beta_hat, _, vcov_original = _solve_ols_linalg(
+        X, y, cluster_ids=cluster_ids, return_vcov=True
+    )
     original_coef = beta_hat[coefficient_index]
-
-    # Compute cluster-robust SE for original t-statistic
-    vcov_original = compute_robust_se(X, residuals, cluster_ids)
     se_original = np.sqrt(vcov_original[coefficient_index, coefficient_index])
     t_stat_original = (original_coef - null_hypothesis) / se_original
 
@@ -477,8 +442,9 @@ def wild_bootstrap_se(
     # Fit restricted model (but we need to drop the column for the restricted coef)
     # Actually, for WCR bootstrap we keep all columns but impose the null via residuals
     # Re-estimate with the restricted dependent variable
-    beta_restricted = np.linalg.lstsq(X, y_restricted, rcond=None)[0]
-    residuals_restricted = y_restricted - X @ beta_restricted
+    beta_restricted, residuals_restricted, _ = _solve_ols_linalg(
+        X, y_restricted, return_vcov=False
+    )
 
     # Create cluster-to-observation mapping for efficiency
     cluster_map = {c: np.where(cluster_ids == c)[0] for c in unique_clusters}
@@ -500,13 +466,11 @@ def wild_bootstrap_se(
         # Construct bootstrap sample: y* = X @ beta_restricted + e_restricted * weights
         y_star = X @ beta_restricted + residuals_restricted * obs_weights
 
-        # Estimate bootstrap coefficients
-        beta_star = np.linalg.lstsq(X, y_star, rcond=None)[0]
+        # Estimate bootstrap coefficients with cluster-robust SE
+        beta_star, residuals_star, vcov_star = _solve_ols_linalg(
+            X, y_star, cluster_ids=cluster_ids, return_vcov=True
+        )
         bootstrap_coefs[b] = beta_star[coefficient_index]
-
-        # Compute bootstrap residuals and cluster-robust SE
-        residuals_star = y_star - X @ beta_star
-        vcov_star = compute_robust_se(X, residuals_star, cluster_ids)
         se_star = np.sqrt(vcov_star[coefficient_index, coefficient_index])
 
         # Compute bootstrap t-statistic (under null hypothesis)

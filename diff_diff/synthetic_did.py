@@ -10,6 +10,7 @@ import pandas as pd
 from numpy.linalg import LinAlgError
 
 from diff_diff.estimators import DifferenceInDifferences
+from diff_diff.linalg import solve_ols
 from diff_diff.results import SyntheticDiDResults
 from diff_diff.utils import (
     compute_confidence_interval,
@@ -444,9 +445,8 @@ class SyntheticDiD(DifferenceInDifferences):
 
         y = data[outcome].values.astype(float)
 
-        # Fit and get residuals
-        coeffs = np.linalg.lstsq(X_full, y, rcond=None)[0]
-        residuals = y - X_full @ coeffs
+        # Fit and get residuals using unified backend
+        coeffs, residuals, _ = solve_ols(X_full, y, return_vcov=False)
 
         # Add back the mean for interpretability
         data[outcome] = residuals + np.mean(y)

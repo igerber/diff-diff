@@ -37,11 +37,11 @@ import numpy as np
 import pandas as pd
 from scipy import optimize
 
+from diff_diff.linalg import compute_robust_vcov, solve_ols
 from diff_diff.results import _get_significance_stars
 from diff_diff.utils import (
     compute_confidence_interval,
     compute_p_value,
-    compute_robust_se,
 )
 
 # =============================================================================
@@ -353,15 +353,13 @@ def _linear_regression(
     n = X.shape[0]
     X_with_intercept = np.column_stack([np.ones(n), X])
 
-    try:
-        beta = np.linalg.lstsq(X_with_intercept, y, rcond=None)[0]
-    except np.linalg.LinAlgError:
-        beta = np.linalg.pinv(X_with_intercept) @ y
+    # Use unified OLS backend
+    beta, residuals, fitted, _ = solve_ols(
+        X_with_intercept, y, return_fitted=True, return_vcov=False
+    )
 
-    fitted = X_with_intercept @ beta
-    residuals = y - fitted
-
-    ss_res = np.sum(residuals ** 2)
+    # Compute R-squared
+    ss_res = np.sum(residuals**2)
     ss_tot = np.sum((y - np.mean(y)) ** 2)
     r_squared = 1 - (ss_res / ss_tot) if ss_tot > 0 else 0.0
 
@@ -741,17 +739,13 @@ class TripleDifference:
 
         design_matrix = np.column_stack(design_cols)
 
-        # Fit OLS
-        try:
-            coefficients = np.linalg.lstsq(design_matrix, y, rcond=None)[0]
-        except np.linalg.LinAlgError:
-            coefficients = np.linalg.pinv(design_matrix) @ y
-
-        fitted = design_matrix @ coefficients
-        residuals = y - fitted
+        # Fit OLS using unified backend
+        coefficients, residuals, fitted, _ = solve_ols(
+            design_matrix, y, return_fitted=True, return_vcov=False
+        )
 
         # R-squared
-        ss_res = np.sum(residuals ** 2)
+        ss_res = np.sum(residuals**2)
         ss_tot = np.sum((y - np.mean(y)) ** 2)
         r_squared = 1 - (ss_res / ss_tot) if ss_tot > 0 else 0.0
 
@@ -1100,10 +1094,10 @@ class TripleDifference:
 
         if self.robust:
             # HC1 robust standard errors
-            vcov = compute_robust_se(X, residuals, cluster_ids=None)
+            vcov = compute_robust_vcov(X, residuals, cluster_ids=None)
         else:
             # Classical OLS standard errors
-            mse = np.sum(residuals ** 2) / (n - k)
+            mse = np.sum(residuals**2) / (n - k)
             try:
                 vcov = np.linalg.solve(X.T @ X, mse * np.eye(k))
             except np.linalg.LinAlgError:

@@ -13,11 +13,15 @@ import numpy as np
 import pandas as pd
 from scipy import optimize
 
+from diff_diff.linalg import solve_ols
 from diff_diff.results import _get_significance_stars
 from diff_diff.utils import (
     compute_confidence_interval,
     compute_p_value,
 )
+
+# Type alias for pre-computed structures
+PrecomputedData = Dict[str, Any]
 
 # =============================================================================
 # Bootstrap Weight Generators
@@ -67,6 +71,59 @@ def _generate_bootstrap_weights(
         ])
         probs = np.array([1, 2, 3, 3, 2, 1]) / 12
         return rng.choice(values, size=n_units, p=probs)
+
+    else:
+        raise ValueError(
+            f"weight_type must be 'rademacher', 'mammen', or 'webb', "
+            f"got '{weight_type}'"
+        )
+
+
+def _generate_bootstrap_weights_batch(
+    n_bootstrap: int,
+    n_units: int,
+    weight_type: str,
+    rng: np.random.Generator,
+) -> np.ndarray:
+    """
+    Generate all bootstrap weights at once (vectorized).
+
+    Parameters
+    ----------
+    n_bootstrap : int
+        Number of bootstrap iterations.
+    n_units : int
+        Number of units (clusters) to generate weights for.
+    weight_type : str
+        Type of weights: "rademacher", "mammen", or "webb".
+    rng : np.random.Generator
+        Random number generator.
+
+    Returns
+    -------
+    np.ndarray
+        Array of bootstrap weights with shape (n_bootstrap, n_units).
+    """
+    if weight_type == "rademacher":
+        # Rademacher: +1 or -1 with equal probability
+        return rng.choice([-1.0, 1.0], size=(n_bootstrap, n_units))
+
+    elif weight_type == "mammen":
+        # Mammen's two-point distribution
+        sqrt5 = np.sqrt(5)
+        val1 = -(sqrt5 - 1) / 2
+        val2 = (sqrt5 + 1) / 2
+        p1 = (sqrt5 + 1) / (2 * sqrt5)
+        return rng.choice([val1, val2], size=(n_bootstrap, n_units), p=[p1, 1 - p1])
+
+    elif weight_type == "webb":
+        # Webb's 6-point distribution
+        values = np.array([
+            -np.sqrt(3 / 2), -np.sqrt(2 / 2), -np.sqrt(1 / 2),
+            np.sqrt(1 / 2), np.sqrt(2 / 2), np.sqrt(3 / 2)
+        ])
+        probs = np.array([1, 2, 3, 3, 2, 1]) / 12
+        return rng.choice(values, size=(n_bootstrap, n_units), p=probs)
 
     else:
         raise ValueError(
@@ -226,15 +283,8 @@ def _linear_regression(
     # Add intercept
     X_with_intercept = np.column_stack([np.ones(n), X])
 
-    # OLS: beta = (X'X)^{-1} X'y
-    try:
-        beta = np.linalg.lstsq(X_with_intercept, y, rcond=None)[0]
-    except np.linalg.LinAlgError:
-        # Fallback: use pseudo-inverse
-        beta = np.linalg.pinv(X_with_intercept) @ y
-
-    fitted = X_with_intercept @ beta
-    residuals = y - fitted
+    # Use unified OLS backend (no vcov needed)
+    beta, residuals, _ = solve_ols(X_with_intercept, y, return_vcov=False)
 
     return beta, residuals
 
@@ -694,6 +744,199 @@ class CallawaySantAnna:
         self.is_fitted_ = False
         self.results_ = None
 
+    def _precompute_structures(
+        self,
+        df: pd.DataFrame,
+        outcome: str,
+        unit: str,
+        time: str,
+        first_treat: str,
+        covariates: Optional[List[str]],
+        time_periods: List[Any],
+        treatment_groups: List[Any],
+    ) -> PrecomputedData:
+        """
+        Pre-compute data structures for efficient ATT(g,t) computation.
+
+        This pivots data to wide format and pre-computes:
+        - Outcome matrix (units x time periods)
+        - Covariate matrix (units x covariates) from base period
+        - Unit cohort membership masks
+        - Control unit masks
+
+        Returns
+        -------
+        PrecomputedData
+            Dictionary with pre-computed structures.
+        """
+        # Get unique units and their cohort assignments
+        unit_info = df.groupby(unit)[first_treat].first()
+        all_units = unit_info.index.values
+        unit_cohorts = unit_info.values
+        n_units = len(all_units)
+
+        # Create unit index mapping for fast lookups
+        unit_to_idx = {u: i for i, u in enumerate(all_units)}
+
+        # Pivot outcome to wide format: rows = units, columns = time periods
+        outcome_wide = df.pivot(index=unit, columns=time, values=outcome)
+        # Reindex to ensure all units are present (handles unbalanced panels)
+        outcome_wide = outcome_wide.reindex(all_units)
+        outcome_matrix = outcome_wide.values  # Shape: (n_units, n_periods)
+        period_to_col = {t: i for i, t in enumerate(outcome_wide.columns)}
+
+        # Pre-compute cohort masks (boolean arrays)
+        cohort_masks = {}
+        for g in treatment_groups:
+            cohort_masks[g] = (unit_cohorts == g)
+
+        # Never-treated mask
+        never_treated_mask = (unit_cohorts == 0) | (unit_cohorts == np.inf)
+
+        # Pre-compute covariate matrices by time period if needed
+        # (covariates are retrieved from the base period of each comparison)
+        covariate_by_period = None
+        if covariates:
+            covariate_by_period = {}
+            for t in time_periods:
+                period_data = df[df[time] == t].set_index(unit)
+                period_cov = period_data.reindex(all_units)[covariates]
+                covariate_by_period[t] = period_cov.values  # Shape: (n_units, n_covariates)
+
+        return {
+            'all_units': all_units,
+            'unit_to_idx': unit_to_idx,
+            'unit_cohorts': unit_cohorts,
+            'outcome_matrix': outcome_matrix,
+            'period_to_col': period_to_col,
+            'cohort_masks': cohort_masks,
+            'never_treated_mask': never_treated_mask,
+            'covariate_by_period': covariate_by_period,
+            'time_periods': time_periods,
+        }
+
+    def _compute_att_gt_fast(
+        self,
+        precomputed: PrecomputedData,
+        g: Any,
+        t: Any,
+        covariates: Optional[List[str]],
+    ) -> Tuple[Optional[float], float, int, int, Optional[Dict[str, Any]]]:
+        """
+        Compute ATT(g,t) using pre-computed data structures (fast version).
+
+        Uses vectorized numpy operations on pre-pivoted outcome matrix
+        instead of repeated pandas filtering.
+        """
+        time_periods = precomputed['time_periods']
+        period_to_col = precomputed['period_to_col']
+        outcome_matrix = precomputed['outcome_matrix']
+        cohort_masks = precomputed['cohort_masks']
+        never_treated_mask = precomputed['never_treated_mask']
+        unit_cohorts = precomputed['unit_cohorts']
+        all_units = precomputed['all_units']
+        covariate_by_period = precomputed['covariate_by_period']
+
+        # Base period for comparison
+        base_period = g - 1 - self.anticipation
+        if base_period not in period_to_col:
+            # Find closest earlier period
+            earlier = [p for p in time_periods if p < g - self.anticipation]
+            if not earlier:
+                return None, 0.0, 0, 0, None
+            base_period = max(earlier)
+
+        # Check if periods exist in the data
+        if base_period not in period_to_col or t not in period_to_col:
+            return None, 0.0, 0, 0, None
+
+        base_col = period_to_col[base_period]
+        post_col = period_to_col[t]
+
+        # Get treated units mask (cohort g)
+        treated_mask = cohort_masks[g]
+
+        # Get control units mask
+        if self.control_group == "never_treated":
+            control_mask = never_treated_mask
+        else:  # not_yet_treated
+            # Not yet treated at time t: never-treated OR first_treat > t
+            control_mask = never_treated_mask | (unit_cohorts > t)
+
+        # Extract outcomes for base and post periods
+        y_base = outcome_matrix[:, base_col]
+        y_post = outcome_matrix[:, post_col]
+
+        # Compute outcome changes (vectorized)
+        outcome_change = y_post - y_base
+
+        # Filter to units with valid data (no NaN in either period)
+        valid_mask = ~(np.isnan(y_base) | np.isnan(y_post))
+
+        # Get treated and control with valid data
+        treated_valid = treated_mask & valid_mask
+        control_valid = control_mask & valid_mask
+
+        n_treated = np.sum(treated_valid)
+        n_control = np.sum(control_valid)
+
+        if n_treated == 0 or n_control == 0:
+            return None, 0.0, 0, 0, None
+
+        # Extract outcome changes for treated and control
+        treated_change = outcome_change[treated_valid]
+        control_change = outcome_change[control_valid]
+
+        # Get unit IDs for influence function
+        treated_units = all_units[treated_valid]
+        control_units = all_units[control_valid]
+
+        # Get covariates if specified (from the base period)
+        X_treated = None
+        X_control = None
+        if covariates and covariate_by_period is not None:
+            cov_matrix = covariate_by_period[base_period]
+            X_treated = cov_matrix[treated_valid]
+            X_control = cov_matrix[control_valid]
+
+            # Check for missing values
+            if np.any(np.isnan(X_treated)) or np.any(np.isnan(X_control)):
+                warnings.warn(
+                    f"Missing values in covariates for group {g}, time {t}. "
+                    "Falling back to unconditional estimation.",
+                    UserWarning,
+                    stacklevel=3,
+                )
+                X_treated = None
+                X_control = None
+
+        # Estimation method
+        if self.estimation_method == "reg":
+            att_gt, se_gt, inf_func = self._outcome_regression(
+                treated_change, control_change, X_treated, X_control
+            )
+        elif self.estimation_method == "ipw":
+            att_gt, se_gt, inf_func = self._ipw_estimation(
+                treated_change, control_change,
+                int(n_treated), int(n_control),
+                X_treated, X_control
+            )
+        else:  # doubly robust
+            att_gt, se_gt, inf_func = self._doubly_robust(
+                treated_change, control_change, X_treated, X_control
+            )
+
+        # Package influence function info with unit IDs for bootstrap
+        n_t = int(n_treated)
+        inf_func_info = {
+            'treated_units': list(treated_units),
+            'control_units': list(control_units),
+            'treated_inf': inf_func[:n_t],
+            'control_inf': inf_func[n_t:],
+        }
+
+        return att_gt, se_gt, int(n_treated), int(n_control), inf_func_info
+
     def fit(
         self,
         data: pd.DataFrame,
@@ -779,6 +1022,12 @@ class CallawaySantAnna:
         if n_control_units == 0:
             raise ValueError("No never-treated units found. Check 'first_treat' column.")
 
+        # Pre-compute data structures for efficient ATT(g,t) computation
+        precomputed = self._precompute_structures(
+            df, outcome, unit, time, first_treat,
+            covariates, time_periods, treatment_groups
+        )
+
         # Compute ATT(g,t) for each group-time combination
         group_time_effects = {}
         influence_func_info = {}  # Store influence functions for bootstrap
@@ -788,9 +1037,8 @@ class CallawaySantAnna:
             valid_periods = [t for t in time_periods if t >= g - self.anticipation]
 
             for t in valid_periods:
-                att_gt, se_gt, n_treat, n_ctrl, inf_info = self._compute_att_gt(
-                    df, outcome, unit, time, first_treat, g, t,
-                    covariates, time_periods
+                att_gt, se_gt, n_treat, n_ctrl, inf_info = self._compute_att_gt_fast(
+                    precomputed, g, t, covariates
                 )
 
                 if att_gt is not None:
@@ -916,135 +1164,6 @@ class CallawaySantAnna:
 
         self.is_fitted_ = True
         return self.results_
-
-    def _compute_att_gt(
-        self,
-        df: pd.DataFrame,
-        outcome: str,
-        unit: str,
-        time: str,
-        first_treat: str,
-        g: Any,
-        t: Any,
-        covariates: Optional[List[str]],
-        all_periods: List[Any],
-    ) -> Tuple[Optional[float], float, int, int, Optional[Dict[str, Any]]]:
-        """
-        Compute ATT(g,t) for a specific group-time combination.
-
-        Uses 2x2 DiD comparing:
-        - Treated: Units in cohort g
-        - Control: Never-treated units (or not-yet-treated if specified)
-        - Pre-period: g - 1 (or earlier if anticipation > 0)
-        - Post-period: t
-        """
-        # Base period for comparison
-        base_period = g - 1 - self.anticipation
-        if base_period not in all_periods:
-            # Find closest earlier period
-            earlier = [p for p in all_periods if p < g - self.anticipation]
-            if not earlier:
-                return None, 0.0, 0, 0, None
-            base_period = max(earlier)
-
-        # Treated group: units first treated in period g
-        treated_units = df[df[first_treat] == g][unit].unique()
-
-        # Control group
-        if self.control_group == "never_treated":
-            control_mask = df['_never_treated']
-        else:  # not_yet_treated
-            # Not yet treated at time t
-            control_mask = (df['_never_treated']) | (df[first_treat] > t)
-
-        control_units = df[control_mask][unit].unique()
-
-        if len(treated_units) == 0 or len(control_units) == 0:
-            return None, 0.0, 0, 0, None
-
-        # Get data for the two periods
-        df_base = df[df[time] == base_period].set_index(unit)
-        df_post = df[df[time] == t].set_index(unit)
-
-        # Compute outcome changes for treated
-        treated_base = df_base.loc[df_base.index.isin(treated_units), outcome]
-        treated_post = df_post.loc[df_post.index.isin(treated_units), outcome]
-        treated_common = treated_base.index.intersection(treated_post.index)
-
-        if len(treated_common) == 0:
-            return None, 0.0, 0, 0, None
-
-        treated_change = (
-            treated_post.loc[treated_common].values -
-            treated_base.loc[treated_common].values
-        )
-
-        # Compute outcome changes for control
-        control_base = df_base.loc[df_base.index.isin(control_units), outcome]
-        control_post = df_post.loc[df_post.index.isin(control_units), outcome]
-        control_common = control_base.index.intersection(control_post.index)
-
-        if len(control_common) == 0:
-            return None, 0.0, 0, 0, None
-
-        control_change = (
-            control_post.loc[control_common].values -
-            control_base.loc[control_common].values
-        )
-
-        # Get covariates if specified (use base period values for conditioning)
-        X_treated = None
-        X_control = None
-        if covariates:
-            try:
-                X_treated = df_base.loc[treated_common, covariates].values
-                X_control = df_base.loc[control_common, covariates].values
-                # Check for missing values and handle them
-                if np.any(np.isnan(X_treated)) or np.any(np.isnan(X_control)):
-                    warnings.warn(
-                        f"Missing values in covariates for group {g}, time {t}. "
-                        "Falling back to unconditional estimation.",
-                        UserWarning,
-                        stacklevel=3,
-                    )
-                    X_treated = None
-                    X_control = None
-            except KeyError:
-                warnings.warn(
-                    f"Could not extract covariates for group {g}, time {t}. "
-                    "Falling back to unconditional estimation.",
-                    UserWarning,
-                    stacklevel=3,
-                )
-                X_treated = None
-                X_control = None
-
-        # Estimation method
-        if self.estimation_method == "reg":
-            att_gt, se_gt, inf_func = self._outcome_regression(
-                treated_change, control_change, X_treated, X_control
-            )
-        elif self.estimation_method == "ipw":
-            att_gt, se_gt, inf_func = self._ipw_estimation(
-                treated_change, control_change,
-                len(treated_common), len(control_common),
-                X_treated, X_control
-            )
-        else:  # doubly robust
-            att_gt, se_gt, inf_func = self._doubly_robust(
-                treated_change, control_change, X_treated, X_control
-            )
-
-        # Package influence function info with unit IDs for bootstrap
-        n_t = len(treated_common)
-        inf_func_info = {
-            'treated_units': list(treated_common),
-            'control_units': list(control_common),
-            'treated_inf': inf_func[:n_t],
-            'control_inf': inf_func[n_t:],
-        }
-
-        return att_gt, se_gt, len(treated_common), len(control_common), inf_func_info
 
     def _outcome_regression(
         self,
@@ -1539,69 +1658,79 @@ class CallawaySantAnna:
                 gt_pairs, group_time_effects, treatment_groups
             )
 
-        # Bootstrap arrays to store results
-        bootstrap_atts_gt = np.zeros((self.n_bootstrap, n_gt))
-        bootstrap_overall = np.zeros(self.n_bootstrap)
+        # Pre-compute unit index arrays for each (g,t) pair (done once, not per iteration)
+        gt_treated_indices = []
+        gt_control_indices = []
+        gt_treated_inf = []
+        gt_control_inf = []
 
+        for j, gt in enumerate(gt_pairs):
+            info = influence_func_info[gt]
+            treated_idx = np.array([unit_to_idx[u] for u in info['treated_units']])
+            control_idx = np.array([unit_to_idx[u] for u in info['control_units']])
+            gt_treated_indices.append(treated_idx)
+            gt_control_indices.append(control_idx)
+            gt_treated_inf.append(np.asarray(info['treated_inf']))
+            gt_control_inf.append(np.asarray(info['control_inf']))
+
+        # Generate ALL bootstrap weights upfront: shape (n_bootstrap, n_units)
+        # This is much faster than generating one at a time
+        all_bootstrap_weights = _generate_bootstrap_weights_batch(
+            self.n_bootstrap, n_units, self.bootstrap_weight_type, rng
+        )
+
+        # Vectorized bootstrap ATT(g,t) computation
+        # Compute all bootstrap ATTs for all (g,t) pairs using matrix operations
+        bootstrap_atts_gt = np.zeros((self.n_bootstrap, n_gt))
+
+        for j in range(n_gt):
+            treated_idx = gt_treated_indices[j]
+            control_idx = gt_control_indices[j]
+            treated_inf = gt_treated_inf[j]
+            control_inf = gt_control_inf[j]
+
+            # Extract weights for this (g,t)'s units across all bootstrap iterations
+            # Shape: (n_bootstrap, n_treated) and (n_bootstrap, n_control)
+            treated_weights = all_bootstrap_weights[:, treated_idx]
+            control_weights = all_bootstrap_weights[:, control_idx]
+
+            # Vectorized perturbation: matrix-vector multiply
+            # Shape: (n_bootstrap,)
+            perturbations = (
+                treated_weights @ treated_inf +
+                control_weights @ control_inf
+            )
+
+            bootstrap_atts_gt[:, j] = original_atts[j] + perturbations
+
+        # Vectorized overall ATT: matrix-vector multiply
+        # Shape: (n_bootstrap,)
+        bootstrap_overall = bootstrap_atts_gt @ overall_weights
+
+        # Vectorized event study aggregation
         if event_study_info is not None:
             rel_periods = sorted(event_study_info.keys())
-            bootstrap_event_study = {e: np.zeros(self.n_bootstrap) for e in rel_periods}
+            bootstrap_event_study = {}
+            for e in rel_periods:
+                agg_info = event_study_info[e]
+                gt_indices = agg_info['gt_indices']
+                weights = agg_info['weights']
+                # Vectorized: select columns and multiply by weights
+                bootstrap_event_study[e] = bootstrap_atts_gt[:, gt_indices] @ weights
         else:
             bootstrap_event_study = None
 
+        # Vectorized group aggregation
         if group_agg_info is not None:
             groups = sorted(group_agg_info.keys())
-            bootstrap_group = {g: np.zeros(self.n_bootstrap) for g in groups}
+            bootstrap_group = {}
+            for g in groups:
+                agg_info = group_agg_info[g]
+                gt_indices = agg_info['gt_indices']
+                weights = agg_info['weights']
+                bootstrap_group[g] = bootstrap_atts_gt[:, gt_indices] @ weights
         else:
             bootstrap_group = None
-
-        # Run bootstrap iterations
-        for b in range(self.n_bootstrap):
-            # Generate unit-level weights
-            unit_weights = _generate_bootstrap_weights(
-                n_units, self.bootstrap_weight_type, rng
-            )
-
-            # Compute bootstrap ATT(g,t) for each group-time pair
-            for j, gt in enumerate(gt_pairs):
-                info = influence_func_info[gt]
-
-                # Get weights for treated and control units
-                treated_indices = [unit_to_idx[u] for u in info['treated_units']]
-                control_indices = [unit_to_idx[u] for u in info['control_units']]
-
-                treated_weights = unit_weights[treated_indices]
-                control_weights = unit_weights[control_indices]
-
-                # Influence function perturbation
-                # Bootstrap ATT* = ATT + sum(weights * influence)
-                perturbation = (
-                    np.sum(treated_weights * info['treated_inf']) +
-                    np.sum(control_weights * info['control_inf'])
-                )
-
-                bootstrap_atts_gt[b, j] = original_atts[j] + perturbation
-
-            # Compute bootstrap overall ATT
-            bootstrap_overall[b] = np.sum(overall_weights * bootstrap_atts_gt[b, :])
-
-            # Compute bootstrap event study effects
-            if bootstrap_event_study is not None and event_study_info is not None:
-                for e, agg_info in event_study_info.items():
-                    gt_indices = agg_info['gt_indices']
-                    weights = agg_info['weights']
-                    bootstrap_event_study[e][b] = np.sum(
-                        weights * bootstrap_atts_gt[b, gt_indices]
-                    )
-
-            # Compute bootstrap group effects
-            if bootstrap_group is not None and group_agg_info is not None:
-                for g, agg_info in group_agg_info.items():
-                    gt_indices = agg_info['gt_indices']
-                    weights = agg_info['weights']
-                    bootstrap_group[g][b] = np.sum(
-                        weights * bootstrap_atts_gt[b, gt_indices]
-                    )
 
         # Compute bootstrap statistics for ATT(g,t)
         gt_ses = {}
