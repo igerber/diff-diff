@@ -20,8 +20,8 @@ import numpy as np
 import pandas as pd
 from scipy.linalg import lstsq as scipy_lstsq
 
-# Import Rust backend if available
-from diff_diff import (
+# Import Rust backend if available (from _backend to avoid circular imports)
+from diff_diff._backend import (
     HAS_RUST_BACKEND,
     _rust_compute_robust_vcov,
     _rust_solve_ols,
@@ -179,7 +179,36 @@ def _solve_ols_numpy(
     Tuple[np.ndarray, np.ndarray, Optional[np.ndarray]],
     Tuple[np.ndarray, np.ndarray, np.ndarray, Optional[np.ndarray]],
 ]:
-    """NumPy/SciPy fallback implementation of solve_ols."""
+    """
+    NumPy/SciPy fallback implementation of solve_ols.
+
+    Uses scipy.linalg.lstsq with 'gelsy' driver (QR with column pivoting)
+    for fast and stable least squares solving.
+
+    Parameters
+    ----------
+    X : np.ndarray
+        Design matrix of shape (n, k).
+    y : np.ndarray
+        Response vector of shape (n,).
+    cluster_ids : np.ndarray, optional
+        Cluster identifiers for cluster-robust SEs.
+    return_vcov : bool
+        Whether to compute variance-covariance matrix.
+    return_fitted : bool
+        Whether to return fitted values.
+
+    Returns
+    -------
+    coefficients : np.ndarray
+        OLS coefficients of shape (k,).
+    residuals : np.ndarray
+        Residuals of shape (n,).
+    fitted : np.ndarray, optional
+        Fitted values if return_fitted=True.
+    vcov : np.ndarray, optional
+        Variance-covariance matrix if return_vcov=True.
+    """
     # Solve OLS using scipy's optimized solver
     # 'gelsy' uses QR with column pivoting, faster than default 'gelsd' (SVD)
     # Note: gelsy doesn't reliably report rank, so we don't check for deficiency
@@ -268,7 +297,32 @@ def _compute_robust_vcov_numpy(
     residuals: np.ndarray,
     cluster_ids: Optional[np.ndarray] = None,
 ) -> np.ndarray:
-    """NumPy fallback implementation of compute_robust_vcov."""
+    """
+    NumPy fallback implementation of compute_robust_vcov.
+
+    Computes HC1 (heteroskedasticity-robust) or cluster-robust variance-covariance
+    matrix using the sandwich estimator.
+
+    Parameters
+    ----------
+    X : np.ndarray
+        Design matrix of shape (n, k).
+    residuals : np.ndarray
+        OLS residuals of shape (n,).
+    cluster_ids : np.ndarray, optional
+        Cluster identifiers. If None, uses HC1. If provided, uses
+        cluster-robust with G/(G-1) small-sample adjustment.
+
+    Returns
+    -------
+    vcov : np.ndarray
+        Variance-covariance matrix of shape (k, k).
+
+    Notes
+    -----
+    Uses vectorized groupby aggregation for cluster-robust SEs to avoid
+    the O(n * G) loop that would be required with explicit iteration.
+    """
     n, k = X.shape
     XtX = X.T @ X
 

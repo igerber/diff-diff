@@ -1,0 +1,112 @@
+name: Rust Backend Tests
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'rust/**'
+      - 'diff_diff/**'
+      - 'tests/**'
+      - 'pyproject.toml'
+      - '.github/workflows/rust-test.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'rust/**'
+      - 'diff_diff/**'
+      - 'tests/**'
+      - 'pyproject.toml'
+      - '.github/workflows/rust-test.yml'
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # Run Rust unit tests
+  rust-tests:
+    name: Rust Unit Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-action@stable
+
+      - name: Install OpenBLAS
+        run: sudo apt-get update && sudo apt-get install -y libopenblas-dev
+
+      - name: Run Rust tests
+        working-directory: rust
+        run: cargo test --verbose
+
+  # Build and test with Python on multiple platforms
+  python-tests:
+    name: Python Tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        # Windows excluded due to Intel MKL build complexity
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install OpenBLAS (Ubuntu)
+        if: matrix.os == 'ubuntu-latest'
+        run: sudo apt-get update && sudo apt-get install -y libopenblas-dev
+
+      - name: Install OpenBLAS (macOS)
+        if: matrix.os == 'macos-latest'
+        run: brew install openblas
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-action@stable
+
+      - name: Build with maturin
+        uses: PyO3/maturin-action@v1
+        with:
+          command: develop
+          args: --release
+
+      - name: Install test dependencies
+        run: pip install pytest numpy pandas scipy
+
+      - name: Verify Rust backend is available
+        run: |
+          python -c "from diff_diff import HAS_RUST_BACKEND; assert HAS_RUST_BACKEND, 'Rust backend not available'"
+
+      - name: Run Rust backend tests
+        run: pytest tests/test_rust_backend.py -v
+
+      - name: Run tests with Rust backend
+        run: DIFF_DIFF_BACKEND=rust pytest tests/ -x -q
+
+  # Test pure Python fallback
+  python-fallback:
+    name: Pure Python Fallback
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install without Rust
+        run: |
+          pip install numpy pandas scipy pytest
+          pip install -e . --no-build-isolation
+
+      - name: Verify pure Python mode
+        run: |
+          python -c "from diff_diff import HAS_RUST_BACKEND; print(f'HAS_RUST_BACKEND: {HAS_RUST_BACKEND}')"
+
+      - name: Run tests in pure Python mode
+        run: DIFF_DIFF_BACKEND=python pytest tests/ -x -q --ignore=tests/test_rust_backend.py

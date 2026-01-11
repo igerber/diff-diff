@@ -11,8 +11,8 @@ use pyo3::prelude::*;
 /// Maximum number of optimization iterations.
 const MAX_ITER: usize = 1000;
 
-/// Default convergence tolerance.
-const DEFAULT_TOL: f64 = 1e-6;
+/// Default convergence tolerance (matches Python's _OPTIMIZATION_TOL).
+const DEFAULT_TOL: f64 = 1e-8;
 
 /// Default step size for gradient descent.
 const DEFAULT_STEP_SIZE: f64 = 0.1;

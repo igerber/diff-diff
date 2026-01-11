@@ -256,10 +256,161 @@ class TestRustBackend:
 
 @pytest.mark.skipif(not HAS_RUST_BACKEND, reason="Rust backend not available")
 class TestRustVsNumpy:
-    """Tests comparing Rust and NumPy implementations."""
+    """Tests comparing Rust and NumPy implementations for numerical equivalence."""
+
+    # =========================================================================
+    # OLS Solver Equivalence
+    # =========================================================================
+
+    def test_solve_ols_coefficients_match(self):
+        """Test Rust and NumPy OLS coefficients match."""
+        from diff_diff._rust_backend import solve_ols as rust_fn
+        from diff_diff.linalg import _solve_ols_numpy as numpy_fn
+
+        np.random.seed(42)
+        n, k = 100, 5
+        X = np.random.randn(n, k)
+        y = np.random.randn(n)
+
+        rust_coeffs, rust_resid, rust_vcov = rust_fn(X, y, None, True)
+        numpy_coeffs, numpy_resid, numpy_vcov = numpy_fn(X, y, cluster_ids=None)
+
+        np.testing.assert_array_almost_equal(
+            rust_coeffs, numpy_coeffs, decimal=8,
+            err_msg="OLS coefficients should match"
+        )
+        np.testing.assert_array_almost_equal(
+            rust_resid, numpy_resid, decimal=8,
+            err_msg="OLS residuals should match"
+        )
+
+    def test_solve_ols_with_clusters_match(self):
+        """Test Rust and NumPy OLS with cluster SEs match."""
+        from diff_diff._rust_backend import solve_ols as rust_fn
+        from diff_diff.linalg import _solve_ols_numpy as numpy_fn
+
+        np.random.seed(42)
+        n, k = 100, 5
+        n_clusters = 10
+        X = np.random.randn(n, k)
+        y = np.random.randn(n)
+        cluster_ids = np.repeat(np.arange(n_clusters), n // n_clusters)
+
+        rust_coeffs, _, rust_vcov = rust_fn(X, y, cluster_ids, True)
+        numpy_coeffs, _, numpy_vcov = numpy_fn(X, y, cluster_ids=cluster_ids)
+
+        np.testing.assert_array_almost_equal(
+            rust_coeffs, numpy_coeffs, decimal=8,
+            err_msg="Clustered OLS coefficients should match"
+        )
+        # VCoV may differ slightly due to implementation details
+        np.testing.assert_array_almost_equal(
+            rust_vcov, numpy_vcov, decimal=5,
+            err_msg="Clustered OLS VCoV should match"
+        )
+
+    # =========================================================================
+    # Robust VCoV Equivalence
+    # =========================================================================
+
+    def test_robust_vcov_hc1_match(self):
+        """Test Rust and NumPy HC1 robust VCoV match."""
+        from diff_diff._rust_backend import compute_robust_vcov as rust_fn
+        from diff_diff.linalg import _compute_robust_vcov_numpy as numpy_fn
+
+        np.random.seed(42)
+        n, k = 100, 5
+        X = np.random.randn(n, k)
+        residuals = np.random.randn(n)
+
+        rust_vcov = rust_fn(X, residuals, None)
+        numpy_vcov = numpy_fn(X, residuals, None)
+
+        np.testing.assert_array_almost_equal(
+            rust_vcov, numpy_vcov, decimal=8,
+            err_msg="HC1 robust VCoV should match"
+        )
+
+    def test_robust_vcov_clustered_match(self):
+        """Test Rust and NumPy cluster-robust VCoV match."""
+        from diff_diff._rust_backend import compute_robust_vcov as rust_fn
+        from diff_diff.linalg import _compute_robust_vcov_numpy as numpy_fn
+
+        np.random.seed(42)
+        n, k = 100, 5
+        n_clusters = 10
+        X = np.random.randn(n, k)
+        residuals = np.random.randn(n)
+        cluster_ids = np.repeat(np.arange(n_clusters), n // n_clusters)
+
+        rust_vcov = rust_fn(X, residuals, cluster_ids)
+        numpy_vcov = numpy_fn(X, residuals, cluster_ids)
+
+        np.testing.assert_array_almost_equal(
+            rust_vcov, numpy_vcov, decimal=6,
+            err_msg="Cluster-robust VCoV should match"
+        )
+
+    # =========================================================================
+    # Bootstrap Weights Equivalence (Statistical Properties)
+    # =========================================================================
+
+    def test_bootstrap_weights_rademacher_properties(self):
+        """Test Rust Rademacher weights have correct statistical properties."""
+        from diff_diff._rust_backend import generate_bootstrap_weights_batch as rust_fn
+
+        # Generate large sample for statistical tests
+        n_bootstrap, n_units = 10000, 100
+        weights = rust_fn(n_bootstrap, n_units, "rademacher", 42)
+
+        # Rademacher: values are +-1, mean ~0, variance ~1
+        unique_vals = np.unique(weights)
+        assert set(unique_vals) == {-1.0, 1.0}, "Rademacher weights should be +-1"
+
+        mean = weights.mean()
+        assert abs(mean) < 0.02, f"Rademacher mean should be ~0, got {mean}"
+
+        var = weights.var()
+        assert abs(var - 1.0) < 0.02, f"Rademacher variance should be ~1, got {var}"
+
+    def test_bootstrap_weights_mammen_properties(self):
+        """Test Rust Mammen weights have correct statistical properties."""
+        from diff_diff._rust_backend import generate_bootstrap_weights_batch as rust_fn
+
+        n_bootstrap, n_units = 10000, 100
+        weights = rust_fn(n_bootstrap, n_units, "mammen", 42)
+
+        # Mammen: E[w] = 0, E[w^2] = 1, E[w^3] = 1
+        mean = weights.mean()
+        assert abs(mean) < 0.02, f"Mammen mean should be ~0, got {mean}"
+
+        second_moment = (weights ** 2).mean()
+        assert abs(second_moment - 1.0) < 0.02, f"Mammen E[w^2] should be ~1, got {second_moment}"
+
+        third_moment = (weights ** 3).mean()
+        assert abs(third_moment - 1.0) < 0.1, f"Mammen E[w^3] should be ~1, got {third_moment}"
+
+    def test_bootstrap_weights_webb_properties(self):
+        """Test Rust Webb weights have correct statistical properties."""
+        from diff_diff._rust_backend import generate_bootstrap_weights_batch as rust_fn
+
+        n_bootstrap, n_units = 10000, 100
+        weights = rust_fn(n_bootstrap, n_units, "webb", 42)
+
+        # Webb: 6-point distribution with E[w] = 0
+        mean = weights.mean()
+        assert abs(mean) < 0.1, f"Webb mean should be ~0, got {mean}"
+
+        # Should have 6 unique values
+        unique_vals = np.unique(weights.flatten())
+        assert len(unique_vals) == 6, f"Webb should have 6 unique values, got {len(unique_vals)}"
+
+    # =========================================================================
+    # Synthetic Weights Equivalence
+    # =========================================================================
 
     def test_synthetic_weights_match(self):
-        """Test Rust and NumPy synthetic weights match."""
+        """Test Rust and NumPy synthetic weights produce similar results."""
         from diff_diff._rust_backend import compute_synthetic_weights as rust_fn
         from diff_diff.utils import _compute_synthetic_weights_numpy as numpy_fn
 
@@ -270,20 +421,63 @@ class TestRustVsNumpy:
         rust_weights = rust_fn(Y_control, Y_treated, 0.0, 1000, 1e-8)
         numpy_weights = numpy_fn(Y_control, Y_treated, 0.0)
 
-        # They should be close but may differ due to optimization algorithm differences
-        assert abs(rust_weights.sum() - numpy_weights.sum()) < 0.01
+        # Both should be valid simplex weights
+        assert abs(rust_weights.sum() - 1.0) < 1e-6, "Rust weights should sum to 1"
+        assert abs(numpy_weights.sum() - 1.0) < 1e-6, "NumPy weights should sum to 1"
+        assert np.all(rust_weights >= -1e-6), "Rust weights should be non-negative"
+        assert np.all(numpy_weights >= -1e-6), "NumPy weights should be non-negative"
+
+        # Reconstruction error should be similar
+        rust_error = np.linalg.norm(Y_treated - Y_control @ rust_weights)
+        numpy_error = np.linalg.norm(Y_treated - Y_control @ numpy_weights)
+        assert abs(rust_error - numpy_error) < 0.5, \
+            f"Reconstruction errors should be similar: rust={rust_error:.4f}, numpy={numpy_error:.4f}"
+
+    def test_synthetic_weights_with_regularization(self):
+        """Test Rust synthetic weights with L2 regularization."""
+        from diff_diff._rust_backend import compute_synthetic_weights as rust_fn
+        from diff_diff.utils import _compute_synthetic_weights_numpy as numpy_fn
+
+        np.random.seed(42)
+        Y_control = np.random.randn(15, 8)
+        Y_treated = np.random.randn(15)
+        lambda_reg = 0.1
+
+        rust_weights = rust_fn(Y_control, Y_treated, lambda_reg, 1000, 1e-8)
+        numpy_weights = numpy_fn(Y_control, Y_treated, lambda_reg)
+
+        # Both should be valid simplex weights
+        assert abs(rust_weights.sum() - 1.0) < 1e-6
+        assert abs(numpy_weights.sum() - 1.0) < 1e-6
+
+        # With regularization, weights should be more spread out (higher entropy)
+        rust_entropy = -np.sum(rust_weights * np.log(rust_weights + 1e-10))
+        numpy_entropy = -np.sum(numpy_weights * np.log(numpy_weights + 1e-10))
+        assert rust_entropy > 0.5, "Regularized weights should have positive entropy"
+        assert numpy_entropy > 0.5, "Regularized weights should have positive entropy"
 
     def test_simplex_projection_match(self):
-        """Test Rust and NumPy simplex projection match."""
+        """Test Rust and NumPy simplex projection match exactly."""
         from diff_diff._rust_backend import project_simplex as rust_fn
         from diff_diff.utils import _project_simplex as numpy_fn
 
-        v = np.array([0.5, -0.3, 1.2, 0.4, -0.1])
+        # Test various input vectors
+        test_vectors = [
+            np.array([0.5, -0.3, 1.2, 0.4, -0.1]),
+            np.array([1.0, 1.0, 1.0, 1.0]),  # uniform
+            np.array([0.25, 0.25, 0.25, 0.25]),  # already on simplex
+            np.array([-1.0, -2.0, 5.0]),  # one dominant
+            np.array([0.1, 0.2, 0.3, 0.4]),  # near simplex
+        ]
 
-        rust_proj = rust_fn(v)
-        numpy_proj = numpy_fn(v)
+        for v in test_vectors:
+            rust_proj = rust_fn(v)
+            numpy_proj = numpy_fn(v)
 
-        np.testing.assert_array_almost_equal(rust_proj, numpy_proj, decimal=10)
+            np.testing.assert_array_almost_equal(
+                rust_proj, numpy_proj, decimal=10,
+                err_msg=f"Simplex projection mismatch for input {v}"
+            )
 
 
 class TestFallbackWhenNoRust:

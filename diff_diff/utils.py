@@ -13,8 +13,8 @@ from scipy import stats
 from diff_diff.linalg import compute_robust_vcov as _compute_robust_vcov_linalg
 from diff_diff.linalg import solve_ols as _solve_ols_linalg
 
-# Import Rust backend if available
-from diff_diff import (
+# Import Rust backend if available (from _backend to avoid circular imports)
+from diff_diff._backend import (
     HAS_RUST_BACKEND,
     _rust_project_simplex,
     _rust_synthetic_weights,

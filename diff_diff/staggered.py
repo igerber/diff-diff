@@ -20,8 +20,8 @@ from diff_diff.utils import (
     compute_p_value,
 )
 
-# Import Rust backend if available
-from diff_diff import HAS_RUST_BACKEND, _rust_bootstrap_weights
+# Import Rust backend if available (from _backend to avoid circular imports)
+from diff_diff._backend import HAS_RUST_BACKEND, _rust_bootstrap_weights
 
 # Type alias for pre-computed structures
 PrecomputedData = Dict[str, Any]
@@ -123,7 +123,29 @@ def _generate_bootstrap_weights_batch_numpy(
     weight_type: str,
     rng: np.random.Generator,
 ) -> np.ndarray:
-    """NumPy fallback implementation of _generate_bootstrap_weights_batch."""
+    """
+    NumPy fallback implementation of _generate_bootstrap_weights_batch.
+
+    Generates multiplier bootstrap weights for wild cluster bootstrap.
+    All weight distributions satisfy E[w] = 0, E[w^2] = 1.
+
+    Parameters
+    ----------
+    n_bootstrap : int
+        Number of bootstrap iterations.
+    n_units : int
+        Number of units (clusters) to generate weights for.
+    weight_type : str
+        Type of weights: "rademacher" (+-1), "mammen" (2-point),
+        or "webb" (6-point).
+    rng : np.random.Generator
+        Random number generator for reproducibility.
+
+    Returns
+    -------
+    np.ndarray
+        Array of bootstrap weights with shape (n_bootstrap, n_units).
+    """
     if weight_type == "rademacher":
         # Rademacher: +1 or -1 with equal probability
         return rng.choice([-1.0, 1.0], size=(n_bootstrap, n_units))

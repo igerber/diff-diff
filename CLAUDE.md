@@ -31,6 +31,28 @@ ruff check diff_diff tests
 mypy diff_diff
 ```
 
+### Rust Backend Commands
+
+```bash
+# Build Rust backend for development (requires Rust toolchain)
+maturin develop
+
+# Build with release optimizations
+maturin develop --release
+
+# Run Rust unit tests
+cd rust && cargo test
+
+# Force pure Python mode (disable Rust backend)
+DIFF_DIFF_BACKEND=python pytest
+
+# Force Rust mode (fail if Rust not available)
+DIFF_DIFF_BACKEND=rust pytest
+
+# Run Rust backend equivalence tests
+pytest tests/test_rust_backend.py -v
+```
+
 ## Architecture
 
 ### Module Structure
@@ -80,6 +102,20 @@ mypy diff_diff
   - `compute_r_squared()` - R-squared and adjusted R-squared computation
   - Single optimization point for all estimators (reduces code duplication)
   - Cluster-robust SEs use pandas groupby instead of O(n × clusters) loop
+
+- **`diff_diff/_backend.py`** - Backend detection and configuration (v2.0.0):
+  - Detects optional Rust backend availability
+  - Handles `DIFF_DIFF_BACKEND` environment variable ('auto', 'python', 'rust')
+  - Exports `HAS_RUST_BACKEND` flag and Rust function references
+  - Other modules import from here to avoid circular imports with `__init__.py`
+
+- **`rust/`** - Optional Rust backend for accelerated computation (v2.0.0):
+  - **`rust/src/lib.rs`** - PyO3 module definition, exports Python bindings
+  - **`rust/src/bootstrap.rs`** - Parallel bootstrap weight generation (Rademacher, Mammen, Webb)
+  - **`rust/src/linalg.rs`** - OLS solver and cluster-robust variance estimation
+  - **`rust/src/weights.rs`** - Synthetic control weights and simplex projection
+  - Uses ndarray-linalg with OpenBLAS (Linux/macOS) or Intel MKL (Windows)
+  - Provides 4-8x speedup for SyntheticDiD, minimal benefit for other estimators
 
 - **`diff_diff/results.py`** - Dataclass containers for estimation results:
   - `DiDResults`, `MultiPeriodDiDResults`, `SyntheticDiDResults`, `PeriodEffect`
