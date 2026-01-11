@@ -74,6 +74,13 @@ mypy diff_diff
   - `bacon_decompose()` - Convenience function for quick decomposition
   - Integrated with `TwoWayFixedEffects.decompose()` method
 
+- **`diff_diff/linalg.py`** - Unified linear algebra backend (v1.4.0):
+  - `solve_ols()` - OLS solver using scipy's gelsy LAPACK driver (QR-based, faster than SVD)
+  - `compute_robust_vcov()` - Vectorized HC1 and cluster-robust variance-covariance estimation
+  - `compute_r_squared()` - R-squared and adjusted R-squared computation
+  - Single optimization point for all estimators (reduces code duplication)
+  - Cluster-robust SEs use pandas groupby instead of O(n × clusters) loop
+
 - **`diff_diff/results.py`** - Dataclass containers for estimation results:
   - `DiDResults`, `MultiPeriodDiDResults`, `SyntheticDiDResults`, `PeriodEffect`
   - Each provides `summary()`, `to_dict()`, `to_dataframe()` methods
@@ -144,6 +151,44 @@ mypy diff_diff
    - `fixed_effects` parameter creates dummy variables (for low-dimensional FE)
    - `absorb` parameter uses within-transformation (for high-dimensional FE)
 4. **Results objects**: Rich dataclass objects with statistical properties (`is_significant`, `significance_stars`)
+5. **Unified linear algebra backend**: All estimators use `linalg.py` for OLS and variance estimation
+
+### Performance Architecture (v1.4.0)
+
+diff-diff achieved significant performance improvements in v1.4.0, now **faster than R** at all scales. Key optimizations:
+
+#### Unified `linalg.py` Backend
+
+All estimators use a single optimized OLS/SE implementation:
+
+- **scipy.linalg.lstsq with 'gelsy' driver**: QR-based solving, faster than NumPy's default SVD-based solver
+- **Vectorized cluster-robust SE**: Uses pandas groupby aggregation instead of O(n × clusters) Python loop
+- **Single optimization point**: Changes to `linalg.py` benefit all estimators
+
+```python
+# All estimators import from linalg.py
+from diff_diff.linalg import solve_ols, compute_robust_vcov
+
+# Example usage
+coefficients, residuals, vcov = solve_ols(X, y, cluster_ids=cluster_ids)
+```
+
+#### CallawaySantAnna Optimizations (`staggered.py`)
+
+- **Pre-computed data structures**: `_precompute_structures()` creates wide-format outcome matrix and cohort masks once
+- **Vectorized ATT(g,t)**: `_compute_att_gt_fast()` uses numpy operations (23x faster than loop-based)
+- **Batch bootstrap weights**: `_generate_bootstrap_weights_batch()` generates all weights at once
+- **Matrix-based bootstrap**: Bootstrap iterations use matrix operations instead of nested loops (26x faster)
+
+#### Performance Results
+
+| Estimator | v1.3 (10K scale) | v1.4 (10K scale) | vs R |
+|-----------|------------------|------------------|------|
+| BasicDiD/TWFE | 0.835s | 0.011s | **4x faster than R** |
+| CallawaySantAnna | 2.234s | 0.109s | **8x faster than R** |
+| SyntheticDiD | Already optimized | N/A | **37x faster than R** |
+
+See `docs/performance-plan.md` for full optimization details and `docs/benchmarks.rst` for validation results.
 
 ### Documentation
 
@@ -189,6 +234,7 @@ Tests mirror the source modules:
 - `tests/test_sun_abraham.py` - Tests for SunAbraham interaction-weighted estimator
 - `tests/test_triple_diff.py` - Tests for Triple Difference (DDD) estimator
 - `tests/test_bacon.py` - Tests for Goodman-Bacon decomposition
+- `tests/test_linalg.py` - Tests for unified OLS backend and robust variance estimation
 - `tests/test_utils.py` - Tests for parallel trends, robust SE, synthetic weights
 - `tests/test_diagnostics.py` - Tests for placebo tests
 - `tests/test_wild_bootstrap.py` - Tests for wild cluster bootstrap
