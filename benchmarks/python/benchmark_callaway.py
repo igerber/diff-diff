@@ -39,11 +39,40 @@ def parse_args():
         choices=["never_treated", "not_yet_treated"],
         help="Control group definition",
     )
+    parser.add_argument(
+        "--backend", default="auto", choices=["auto", "python", "rust"],
+        help="Backend to use: auto (default), python (pure Python), rust (Rust backend)"
+    )
     return parser.parse_args()
+
+
+def configure_backend(backend: str) -> str:
+    """Configure the backend and return the actual backend being used."""
+    import diff_diff
+
+    if backend == "python":
+        # Force pure Python by disabling Rust backend
+        diff_diff.HAS_RUST_BACKEND = False
+        diff_diff._rust_solve_ols = None
+        diff_diff._rust_compute_robust_vcov = None
+        diff_diff._rust_bootstrap_weights = None
+        diff_diff._rust_synthetic_weights = None
+        diff_diff._rust_project_simplex = None
+        return "python"
+    elif backend == "rust":
+        if not diff_diff.HAS_RUST_BACKEND:
+            raise RuntimeError("Rust backend requested but not available")
+        return "rust"
+    else:  # auto
+        return "rust" if diff_diff.HAS_RUST_BACKEND else "python"
 
 
 def main():
     args = parse_args()
+
+    # Configure backend before running estimation
+    actual_backend = configure_backend(args.backend)
+    print(f"Using backend: {actual_backend}")
 
     # Load data
     print(f"Loading data from: {args.data}")
@@ -113,6 +142,7 @@ def main():
     # Build output
     output = {
         "estimator": "diff_diff.CallawaySantAnna",
+        "backend": actual_backend,
         "method": args.method,
         "control_group": args.control_group,
         # Overall ATT

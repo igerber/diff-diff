@@ -36,6 +36,11 @@ class ComparisonResult:
     r_time_std: float = 0.0
     n_replications: int = 1
     scale: str = "small"
+    # Optional three-way comparison fields
+    python_pure_time: Optional[float] = None
+    python_rust_time: Optional[float] = None
+    python_pure_time_std: float = 0.0
+    python_rust_time_std: float = 0.0
 
     def __str__(self) -> str:
         status = "PASS" if self.passed else "FAIL"
@@ -68,6 +73,8 @@ def compare_estimates(
     atol: float = 1e-4,
     se_rtol: float = 0.10,
     scale: str = "small",
+    python_pure_results: Optional[Dict[str, Any]] = None,
+    python_rust_results: Optional[Dict[str, Any]] = None,
 ) -> ComparisonResult:
     """
     Compare Python and R estimates for numerical equivalence.
@@ -146,6 +153,24 @@ def compare_estimates(
     elif not se_ok and ci_overlap:
         notes.append(f"SE differs ({se_rel_diff:.1%}) but CI overlap - methodological difference")
 
+    # Extract three-way timing data if provided
+    python_pure_time = None
+    python_rust_time = None
+    python_pure_time_std = 0.0
+    python_rust_time_std = 0.0
+
+    if python_pure_results:
+        pure_timing = python_pure_results.get("timing", {})
+        pure_stats = pure_timing.get("stats", {})
+        python_pure_time = pure_stats.get("mean", pure_timing.get("total_seconds", 0))
+        python_pure_time_std = pure_stats.get("std", 0)
+
+    if python_rust_results:
+        rust_timing = python_rust_results.get("timing", {})
+        rust_stats = rust_timing.get("stats", {})
+        python_rust_time = rust_stats.get("mean", rust_timing.get("total_seconds", 0))
+        python_rust_time_std = rust_stats.get("std", 0)
+
     return ComparisonResult(
         estimator=estimator,
         python_att=py_att,
@@ -165,6 +190,10 @@ def compare_estimates(
         r_time_std=r_time_std,
         n_replications=n_reps,
         scale=scale,
+        python_pure_time=python_pure_time,
+        python_rust_time=python_rust_time,
+        python_pure_time_std=python_pure_time_std,
+        python_rust_time_std=python_rust_time_std,
     )
 
 
@@ -288,10 +317,41 @@ def generate_comparison_report(
     lines.append("=" * 70)
     lines.append("")
 
-    # Check if we have multi-replication data
+    # Check if we have three-way comparison data
+    has_three_way = any(comp.python_pure_time is not None for comp in comparisons)
     has_std = any(comp.n_replications > 1 for comp in comparisons)
 
-    if has_std:
+    if has_three_way:
+        # Three-way comparison table: R vs Python (pure) vs Python (rust)
+        lines.append("Three-Way Performance Comparison")
+        lines.append("")
+        lines.append(f"{'Estimator':<18} {'Scale':<6} {'R (s)':<10} {'Py-Pure (s)':<12} {'Py-Rust (s)':<12} {'Rust/R':<10} {'Rust/Pure':<10}")
+        lines.append("-" * 90)
+        for comp in comparisons:
+            r_time = comp.r_time
+            pure_time = comp.python_pure_time if comp.python_pure_time else "-"
+            rust_time = comp.python_rust_time if comp.python_rust_time else comp.python_time
+
+            # Format times
+            r_str = f"{r_time:.3f}" if r_time else "-"
+            pure_str = f"{pure_time:.3f}" if isinstance(pure_time, (int, float)) else pure_time
+            rust_str = f"{rust_time:.3f}" if rust_time else "-"
+
+            # Calculate speedups
+            if rust_time and r_time and r_time > 0:
+                rust_vs_r = f"{r_time/rust_time:.1f}x"
+            else:
+                rust_vs_r = "-"
+
+            if rust_time and comp.python_pure_time and comp.python_pure_time > 0:
+                rust_vs_pure = f"{comp.python_pure_time/rust_time:.1f}x"
+            else:
+                rust_vs_pure = "-"
+
+            lines.append(
+                f"{comp.estimator:<18} {comp.scale:<6} {r_str:<10} {pure_str:<12} {rust_str:<12} {rust_vs_r:<10} {rust_vs_pure:<10}"
+            )
+    elif has_std:
         lines.append(f"{'Estimator':<20} {'Scale':<8} {'Python (s)':<18} {'R (s)':<18} {'Speedup':<10}")
         lines.append("-" * 80)
         for comp in comparisons:
