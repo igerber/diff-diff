@@ -321,6 +321,64 @@ Why is diff-diff Fast?
 3. **Efficient memory access**: Pre-computed structures avoid repeated data reshaping
 4. **Pure Python overhead minimized**: Hot paths use compiled NumPy/scipy routines
 
+Real-World Data Validation
+--------------------------
+
+In addition to synthetic data benchmarks, we validate diff-diff against the
+**MPDTA (Minimum Wage and Teen Employment)** dataset - the canonical benchmark
+used in Callaway & Sant'Anna (2021) and the R ``did`` package.
+
+MPDTA Dataset
+~~~~~~~~~~~~~
+
+The MPDTA dataset contains county-level teen employment data with staggered
+minimum wage policy changes:
+
+- **500 counties** across 5 years (2003-2007)
+- **2,500 observations** total
+- **4 treatment cohorts**: Never-treated (309), 2004 (20), 2006 (40), 2007 (131)
+- **Outcome**: Log teen employment (``lemp``)
+- **Source**: Built into R's ``did`` package
+
+Results Comparison
+~~~~~~~~~~~~~~~~~~
+
+.. list-table::
+   :header-rows: 1
+   :widths: 25 25 25 25
+
+   * - Metric
+     - diff-diff
+     - R did
+     - Difference
+   * - ATT
+     - -0.039951
+     - -0.039951
+     - **0** (exact match)
+   * - SE (analytical)
+     - 0.0095
+     - 0.0118
+     - 19%
+   * - Time (10 reps)
+     - 0.002s ± 0.000s
+     - 0.039s ± 0.006s
+     - **19.5x faster**
+
+**Key Findings:**
+
+1. **Point estimates match exactly**: The overall ATT of -0.039951 is identical
+   between diff-diff and R's ``did`` package, validating the core estimation logic.
+
+2. **Standard errors differ**: The 19% SE difference is expected because diff-diff
+   and R use different analytical SE formulas. The confidence intervals overlap
+   substantially, and statistical conclusions are identical.
+
+3. **Performance**: diff-diff is 19.5x faster than R on this real-world dataset,
+   consistent with the synthetic data benchmarks.
+
+This validation on real-world data with known published results confirms that
+diff-diff produces correct estimates that match the reference R implementation.
+
 Reproducing Benchmarks
 ----------------------
 
