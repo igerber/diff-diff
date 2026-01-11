@@ -100,6 +100,39 @@ Extend the existing `TripleDifference` estimator to handle staggered adoption se
 - Treatment adoption "staircase" plot for staggered designs
 - Interactive plots with plotly backend option
 
+### CallawaySantAnna Analytical SE Parity with R
+
+**Status:** Future work needed
+
+The analytical standard error for the overall ATT in `CallawaySantAnna` differs from R's `did` package by ~19% due to different variance formulas.
+
+**Current diff-diff formula** (assumes independence):
+```
+Var(Σ wᵢθᵢ) = Σ wᵢ² Var(θᵢ)
+```
+
+**R `did` package formula** (accounts for covariance via influence functions):
+```
+Var(θ̄) = (1/n) Σᵢ (ψᵢ - ψ̄)²
+```
+
+Where ψᵢ is the influence function contribution from unit i to the overall ATT.
+
+**Why this matters:** The ATT(g,t) estimates share control units across calculations, creating positive covariance. Ignoring this **underestimates** the variance:
+- diff-diff analytical SE: 0.0095 (on MPDTA)
+- R `did` analytical SE: 0.0118 (on MPDTA)
+
+**Workaround:** Use `n_bootstrap > 0` for bootstrap inference, which correctly captures covariance.
+
+**Fix needed:** Aggregate influence functions across units when computing overall SE, accounting for covariance terms:
+```
+Var(Σ wᵢθᵢ) = Σᵢ Σⱼ wᵢwⱼ Cov(θᵢ, θⱼ)
+```
+
+This requires storing and properly aggregating the per-unit influence function contributions when computing the overall ATT standard error.
+
+**Note:** Point estimates match R exactly; only analytical SEs differ.
+
 ---
 
 ## Medium-Term Enhancements (v1.6+)

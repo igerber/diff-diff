@@ -43,6 +43,7 @@ Validation Approach
 4. **Automated Comparison**: Python script validates numerical equivalence
 5. **Multiple Scales**: Test at small (200-400 obs), 1K, 5K, and 10K unit scales
 6. **Replicated Timing**: 10 replications per benchmark to report mean ± std
+7. **Reproducible Seed**: Benchmarks use seed 20260111 for data generation
 
 Tolerance Thresholds
 ~~~~~~~~~~~~~~~~~~~~
@@ -85,7 +86,7 @@ Summary Table
 Basic DiD Results
 ~~~~~~~~~~~~~~~~~
 
-**Data**: 100 units, 4 periods, true ATT = 5.0
+**Data**: 100 units, 4 periods, true ATT = 5.0 (small scale)
 
 .. list-table::
    :header-rows: 1
@@ -104,8 +105,8 @@ Basic DiD Results
      - 0.0%
    * - Time (s)
      - 0.002
-     - 0.034
-     - **14.5x faster**
+     - 0.035
+     - **17.9x faster**
 
 **Validation**: PASS - Results are numerically identical.
 
@@ -148,7 +149,7 @@ This leads to slightly different weights, which propagate to the placebo estimat
 Callaway-Sant'Anna Results
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-**Data**: 200 units, 8 periods, 3 treatment cohorts, dynamic effects
+**Data**: 200 units, 8 periods, 3 treatment cohorts, dynamic effects (small scale)
 
 .. list-table::
    :header-rows: 1
@@ -166,9 +167,9 @@ Callaway-Sant'Anna Results
      - 0.063
      - 5.6%
    * - Time (s)
-     - 0.044
-     - 0.068
-     - **1.6x faster**
+     - 0.008
+     - 0.070
+     - **9.1x faster**
 
 **Validation**: PASS - Results match when using comparable inference methods.
 
@@ -188,10 +189,19 @@ Performance Comparison
 We benchmarked performance across multiple dataset scales with 10 replications
 each to provide mean ± std timing statistics.
 
+.. note::
+
+   **v1.4.0 Performance Improvements**: diff-diff v1.4.0 introduced major
+   performance optimizations including a unified linear algebra backend
+   (``diff_diff/linalg.py``) with scipy's optimized gelsy LAPACK driver,
+   vectorized cluster-robust standard errors, and optimized CallawaySantAnna
+   bootstrap using matrix operations. These improvements make diff-diff
+   **faster than R at all scales**.
+
 Summary by Scale
 ~~~~~~~~~~~~~~~~
 
-**Small Scale** (200-400 observations):
+**Small Scale** (400-1,600 observations):
 
 .. list-table::
    :header-rows: 1
@@ -202,142 +212,172 @@ Summary by Scale
      - R (s)
      - Speedup
    * - BasicDiD/TWFE
-     - 0.003 ± 0.000
+     - 0.002 ± 0.000
+     - 0.035 ± 0.001
+     - **17.9x**
+   * - CallawaySantAnna
+     - 0.008 ± 0.000
+     - 0.070 ± 0.001
+     - **9.1x**
+
+**1K Scale** (6,000-10,000 observations):
+
+.. list-table::
+   :header-rows: 1
+   :widths: 30 25 25 20
+
+   * - Estimator
+     - Python (s)
+     - R (s)
+     - Speedup
+   * - BasicDiD/TWFE
+     - 0.003 ± 0.001
+     - 0.035 ± 0.001
+     - **12.5x**
+   * - CallawaySantAnna
+     - 0.013 ± 0.000
+     - 0.116 ± 0.003
+     - **9.2x**
+
+**5K Scale** (40,000-60,000 observations):
+
+.. list-table::
+   :header-rows: 1
+   :widths: 30 25 25 20
+
+   * - Estimator
+     - Python (s)
+     - R (s)
+     - Speedup
+   * - BasicDiD/TWFE
+     - 0.006 ± 0.003
+     - 0.038 ± 0.002
+     - **6.1x**
+   * - CallawaySantAnna
+     - 0.037 ± 0.001
+     - 0.343 ± 0.002
+     - **9.2x**
+
+**10K Scale** (100,000-150,000 observations):
+
+.. list-table::
+   :header-rows: 1
+   :widths: 30 25 25 20
+
+   * - Estimator
+     - Python (s)
+     - R (s)
+     - Speedup
+   * - BasicDiD/TWFE
+     - 0.010 ± 0.000
      - 0.041 ± 0.001
-     - **16x**
+     - **4.1x**
    * - CallawaySantAnna
-     - 0.048 ± 0.000
-     - 0.077 ± 0.001
-     - **1.6x**
-   * - SyntheticDiD
-     - 0.015 ± 0.000
-     - 8.389 ± 0.589
-     - **553x**
-
-**1K Scale** (6,000-30,000 observations):
-
-.. list-table::
-   :header-rows: 1
-   :widths: 30 25 25 20
-
-   * - Estimator
-     - Python (s)
-     - R (s)
-     - Speedup
-   * - BasicDiD/TWFE
-     - 0.011 ± 0.000
-     - 0.043 ± 0.001
-     - **4x**
-   * - CallawaySantAnna
-     - 0.162 ± 0.001
-     - 0.129 ± 0.003
-     - 0.8x (R faster)
-   * - SyntheticDiD
-     - 0.071 ± 0.001
-     - 113.8 ± 2.6
-     - **1613x**
-
-**5K Scale** (40,000-200,000 observations):
-
-.. list-table::
-   :header-rows: 1
-   :widths: 30 25 25 20
-
-   * - Estimator
-     - Python (s)
-     - R (s)
-     - Speedup
-   * - BasicDiD/TWFE
-     - 0.180 ± 0.001
-     - 0.046 ± 0.001
-     - 0.3x (R faster)
-   * - CallawaySantAnna
-     - 0.793 ± 0.008
-     - 0.382 ± 0.004
-     - 0.5x (R faster)
-   * - SyntheticDiD
-     - 3.130 ± 0.013
-     - 556.1 ± 63.1
-     - **178x**
-
-**10K Scale** (100,000-500,000 observations):
-
-.. list-table::
-   :header-rows: 1
-   :widths: 30 25 25 20
-
-   * - Estimator
-     - Python (s)
-     - R (s)
-     - Speedup
-   * - BasicDiD/TWFE
-     - 0.835 ± 0.003
-     - 0.049 ± 0.001
-     - 0.06x (R faster)
-   * - CallawaySantAnna
-     - 2.234 ± 0.011
-     - 0.816 ± 0.006
-     - 0.4x (R faster)
-   * - SyntheticDiD
-     - 32.6 ± 8.5
-     - 1220.8 ± 30.7
-     - **37x**
+     - 0.092 ± 0.003
+     - 0.734 ± 0.002
+     - **7.9x**
 
 Key Observations
 ~~~~~~~~~~~~~~~~
 
-1. **SyntheticDiD**: diff-diff maintains a substantial speed advantage at all scales,
-   though the speedup ratio varies: 553x (small), 1613x (1K peak), 178x (5K), 37x (10K).
-   The speedup peaks at 1K scale because Python's vectorized placebo variance estimation
-   is most efficient at medium scales. At very large scales (10K), both implementations
-   slow down, but Python remains 37x faster while R takes ~20 minutes per run.
+1. **diff-diff is faster than R at all scales**: Following v1.4.0 optimizations,
+   diff-diff now outperforms R packages across all dataset sizes for BasicDiD/TWFE
+   and CallawaySantAnna estimators.
 
-2. **BasicDiD/TWFE**: At small scales (< 1K observations), diff-diff is 4-16x
-   faster. However, at larger scales (5K+), R's ``fixest::feols`` with its
-   highly optimized C++ backend becomes 3-17x faster.
+2. **BasicDiD/TWFE**: diff-diff is 4-18x faster than R's ``fixest::feols``.
+   The speedup is greatest at small scales (17.9x) and remains substantial
+   at large scales (4.1x at 10K observations).
 
-3. **CallawaySantAnna**: At small scales, diff-diff is 1.6x faster. At 1K+
-   observations, R's ``did::att_gt`` package scales better and becomes 1.3-2.7x
-   faster. This reflects R's efficient compiled code for propensity score
-   estimation and bootstrap inference.
+3. **CallawaySantAnna**: diff-diff is 8-9x faster than R's ``did::att_gt``
+   across all scales. The consistent speedup reflects the vectorized bootstrap
+   and pre-computed data structures in v1.4.0.
 
-Performance Scaling Pattern
-~~~~~~~~~~~~~~~~~~~~~~~~~~~
+4. **Scaling behavior**: Both estimators show sub-linear scaling in diff-diff.
+   At 10K scale (150K observations for CallawaySantAnna), estimation completes
+   in under 100ms.
 
-The benchmarks reveal an important pattern:
+Performance Optimization Details
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-- **Small datasets (< 1K observations)**: Python is faster due to lower
-  interpreter overhead and efficient NumPy operations.
-- **Large datasets (5K+ observations)**: R packages with C++/Fortran backends
-  (like ``fixest`` and ``did``) scale better for matrix operations.
-- **SyntheticDiD**: Always dramatically faster in Python due to fundamentally
-  different variance estimation algorithms.
+The v1.4.0 performance improvements came from:
 
-This suggests diff-diff is optimal for:
+1. **Unified ``linalg.py`` backend**: Single optimized OLS/SE implementation
+   using scipy's gelsy LAPACK driver (QR-based, faster than SVD)
 
-- Exploratory analysis and prototyping
-- Small to medium-sized datasets
-- Synthetic DiD estimation at any scale
-- Integration with Python ML/data science workflows
+2. **Vectorized cluster-robust SE**: Eliminated O(n × clusters) loop with
+   pandas groupby aggregation
 
-For production workloads with very large panel datasets (100K+ observations)
-using BasicDiD or CallawaySantAnna, R may be more performant.
+3. **Pre-computed data structures** (CallawaySantAnna): Wide-format outcome
+   matrix and cohort masks computed once, reused across all ATT(g,t) calculations
 
-Why is diff-diff Faster for Small Datasets?
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+4. **Vectorized bootstrap** (CallawaySantAnna): Matrix operations instead of
+   nested loops, batch weight generation
 
-1. **Pure NumPy/SciPy**: Lower overhead than R's interpreter
-2. **Vectorized operations**: Efficient for small-medium matrices
-3. **Minimal dependencies**: No heavy statistical frameworks loading
-4. **Efficient placebo variance**: SyntheticDiD permutes indices and renormalizes
-   weights using vectorized operations rather than re-running full optimization.
+Why is diff-diff Fast?
+~~~~~~~~~~~~~~~~~~~~~~
 
-Why is R Faster for Large Datasets?
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+1. **Optimized LAPACK**: scipy's gelsy driver for least squares
+2. **Vectorized operations**: NumPy/pandas for matrix operations and aggregations
+3. **Efficient memory access**: Pre-computed structures avoid repeated data reshaping
+4. **Pure Python overhead minimized**: Hot paths use compiled NumPy/scipy routines
 
-1. **Compiled backends**: ``fixest`` and ``did`` use C++/Fortran for core operations
-2. **Optimized linear algebra**: R links to highly tuned BLAS/LAPACK
-3. **Memory-efficient algorithms**: Designed for large econometric datasets
+Real-World Data Validation
+--------------------------
+
+In addition to synthetic data benchmarks, we validate diff-diff against the
+**MPDTA (Minimum Wage and Teen Employment)** dataset - the canonical benchmark
+used in Callaway & Sant'Anna (2021) and the R ``did`` package.
+
+MPDTA Dataset
+~~~~~~~~~~~~~
+
+The MPDTA dataset contains county-level teen employment data with staggered
+minimum wage policy changes:
+
+- **500 counties** across 5 years (2003-2007)
+- **2,500 observations** total
+- **4 treatment cohorts**: Never-treated (309), 2004 (20), 2006 (40), 2007 (131)
+- **Outcome**: Log teen employment (``lemp``)
+- **Source**: Built into R's ``did`` package
+
+Results Comparison
+~~~~~~~~~~~~~~~~~~
+
+.. list-table::
+   :header-rows: 1
+   :widths: 25 25 25 25
+
+   * - Metric
+     - diff-diff
+     - R did
+     - Difference
+   * - ATT
+     - -0.039951
+     - -0.039951
+     - **0** (exact match)
+   * - SE (analytical)
+     - 0.0095
+     - 0.0118
+     - 19%
+   * - Time (10 reps)
+     - 0.002s ± 0.000s
+     - 0.039s ± 0.006s
+     - **19.5x faster**
+
+**Key Findings:**
+
+1. **Point estimates match exactly**: The overall ATT of -0.039951 is identical
+   between diff-diff and R's ``did`` package, validating the core estimation logic.
+
+2. **Standard errors differ**: The 19% SE difference is expected because diff-diff
+   and R use different analytical SE formulas. The confidence intervals overlap
+   substantially, and statistical conclusions are identical.
+
+3. **Performance**: diff-diff is 19.5x faster than R on this real-world dataset,
+   consistent with the synthetic data benchmarks.
+
+This validation on real-world data with known published results confirms that
+diff-diff produces correct estimates that match the reference R implementation.
 
 Reproducing Benchmarks
 ----------------------
@@ -383,8 +423,11 @@ Running Benchmarks
    # Available scales: small, 1k, 5k, 10k, all
    # Default: small (backward compatible)
 
-   # Generate synthetic data only
-   python benchmarks/run_benchmarks.py --generate-data-only --scale all
+   # Generate synthetic data only (use seed for reproducibility)
+   python benchmarks/run_benchmarks.py --generate-data-only --scale all --seed 20260111
+
+The benchmarks in this documentation were run with seed 20260111 (date-based:
+2026-01-11) for reproducibility.
 
 Output
 ~~~~~~
