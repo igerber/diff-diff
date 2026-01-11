@@ -16,11 +16,11 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
+from diff_diff.linalg import compute_robust_vcov
 from diff_diff.results import _get_significance_stars
 from diff_diff.utils import (
     compute_confidence_interval,
     compute_p_value,
-    compute_robust_se,
 )
 
 
@@ -761,7 +761,7 @@ class SunAbraham:
 
         # Compute cluster-robust standard errors
         cluster_ids = df_demeaned[cluster_var].values
-        vcov = compute_robust_se(X, residuals, cluster_ids)
+        vcov = compute_robust_vcov(X, residuals, cluster_ids)
 
         # Extract cohort effects and standard errors
         cohort_effects: Dict[Tuple[Any, int], float] = {}

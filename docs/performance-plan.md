@@ -2,9 +2,42 @@
 
 This document outlines the strategy for improving diff-diff's performance on large datasets, particularly for BasicDiD/TWFE and CallawaySantAnna estimators.
 
-## Problem Statement
+---
 
-Benchmark comparisons show that while diff-diff is competitive or faster than R for small datasets, performance degrades significantly at scale:
+## Results Achieved (v1.4.0)
+
+**Phase 1 is complete.** Pure Python optimizations exceeded all targets:
+
+| Estimator | v1.3 (10K scale) | v1.4 (10K scale) | Speedup | vs R |
+|-----------|------------------|------------------|---------|------|
+| BasicDiD/TWFE | 0.835s | **0.011s** | **76x** | **4.2x faster than R** |
+| CallawaySantAnna | 2.234s | **0.109s** | **20x** | **7.2x faster than R** |
+| SyntheticDiD | 32.6s | N/A | N/A | 37x faster than R |
+
+### What Was Implemented
+
+1. **Unified `linalg.py` backend** (`diff_diff/linalg.py`)
+   - `solve_ols()` - scipy lstsq with gelsy LAPACK driver
+   - `compute_robust_vcov()` - Vectorized cluster-robust SE via pandas groupby
+   - Single optimization point for all estimators
+
+2. **CallawaySantAnna optimizations** (`staggered.py`)
+   - `_precompute_structures()` - Pre-computed wide-format outcome matrix, cohort masks
+   - `_compute_att_gt_fast()` - Vectorized ATT(g,t) using numpy (23x faster)
+   - `_generate_bootstrap_weights_batch()` - Batch weight generation
+   - Vectorized bootstrap using matrix operations (26x faster)
+
+3. **TWFE optimization** (`twfe.py`)
+   - Cached groupby indexes for within-transformation
+
+4. **All estimators migrated** to unified backend
+   - `estimators.py`, `twfe.py`, `staggered.py`, `triple_diff.py`, `synthetic_did.py`, `sun_abraham.py`, `utils.py`
+
+---
+
+## Original Problem Statement
+
+Benchmark comparisons showed that while diff-diff was competitive or faster than R for small datasets, performance degraded significantly at scale:
 
 | Scale | BasicDiD Python | R (fixest) | Ratio |
 |-------|-----------------|------------|-------|
@@ -311,18 +344,22 @@ Both approaches build wheels for:
 | 2.5 | Rust staggered ATT | 2-3 weeks | 5-10x (CS) |
 | 2.6 | CI/CD wheel building | 1 week | N/A |
 
-## Expected Outcomes
+## Outcomes
 
-### After Phase 1 (Pure Python)
+### Phase 1 Results (v1.4.0) ✅
 
-- BasicDiD @ 10K: 0.835s -> ~0.3-0.4s (2-3x improvement)
-- CallawaySantAnna @ 10K: 2.2s -> ~0.6-0.8s (3x improvement)
+**Exceeded all targets:**
 
-### After Phase 2 (Rust Backend)
+- BasicDiD @ 10K: 0.835s → **0.011s** (76x improvement, 4.2x faster than R)
+- CallawaySantAnna @ 10K: 2.2s → **0.109s** (20x improvement, 7.2x faster than R)
+- Bootstrap inference: 26x faster via vectorization
 
-- BasicDiD @ 10K: Match or beat R's 0.049s
-- CallawaySantAnna @ 10K: Match R's 0.816s
-- Bootstrap inference: 10-20x faster
+### Phase 2 (Rust Backend) - Optional Future Work
+
+No longer required for R parity. May be pursued for:
+- Further optimization at extreme scales (100K+ units)
+- Parallel bootstrap across CPU cores
+- Memory efficiency for very large datasets
 
 ## References
 

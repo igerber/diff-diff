@@ -5,6 +5,39 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.0] - 2026-01-11
+
+### Added
+- **Unified linear algebra backend** (`diff_diff/linalg.py`)
+  - `solve_ols()` - Optimized OLS solver using scipy's gelsy LAPACK driver
+  - `compute_robust_vcov()` - Vectorized (clustered) robust variance-covariance
+  - Single optimization point for all estimators; prepares for future Rust backend
+  - New `tests/test_linalg.py` with comprehensive tests
+
+### Changed
+- **Major performance improvements** - All estimators now significantly faster
+  - BasicDiD/TWFE @ 10K: 0.835s → 0.011s (76x faster, now 4.2x faster than R)
+  - CallawaySantAnna @ 10K: 2.234s → 0.109s (20x faster, now 7.2x faster than R)
+  - All results numerically identical to previous versions
+- **CallawaySantAnna optimizations** (`staggered.py`)
+  - Pre-computed wide-format outcome matrix and cohort masks
+  - Vectorized ATT(g,t) computation using numpy operations (23x faster)
+  - Batch bootstrap weight generation
+  - Vectorized multiplier bootstrap using matrix operations (26x faster)
+- **TWFE optimization** (`twfe.py`)
+  - Cached groupby indexes for within-transformation
+- **All estimators migrated** to unified `linalg.py` backend
+  - `estimators.py`, `twfe.py`, `staggered.py`, `triple_diff.py`,
+    `synthetic_did.py`, `sun_abraham.py`, `utils.py`
+
+### Behavioral Changes
+- **Rank-deficient design matrices**: The new `gelsy` LAPACK driver handles
+  rank-deficient matrices gracefully (returning a least-norm solution) rather
+  than raising an explicit error. Previously, `DifferenceInDifferences` would
+  raise `ValueError("Design matrix is rank-deficient")`. Users relying on this
+  error for collinearity detection should validate their design matrices
+  separately. Results remain numerically correct for well-specified models.
+
 ## [1.3.1] - 2026-01-10
 
 ### Added
@@ -282,6 +315,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `to_dict()` and `to_dataframe()` export methods
   - `is_significant` and `significance_stars` properties
 
+[1.4.0]: https://github.com/igerber/diff-diff/compare/v1.3.1...v1.4.0
 [1.3.1]: https://github.com/igerber/diff-diff/compare/v1.3.0...v1.3.1
 [1.3.0]: https://github.com/igerber/diff-diff/compare/v1.2.1...v1.3.0
 [1.2.1]: https://github.com/igerber/diff-diff/compare/v1.2.0...v1.2.1

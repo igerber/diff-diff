@@ -6,7 +6,7 @@ For past changes and release history, see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
-## Current Status (v1.3.1)
+## Current Status (v1.4.0)
 
 diff-diff is a **production-ready** DiD library with feature parity with R's `did` + `HonestDiD` + `synthdid` ecosystem for core DiD analysis:
 
@@ -15,35 +15,38 @@ diff-diff is a **production-ready** DiD library with feature parity with R's `di
 - **Assumption diagnostics**: Parallel trends tests, placebo tests, Goodman-Bacon decomposition
 - **Sensitivity analysis**: Honest DiD (Rambachan-Roth), Pre-trends power analysis (Roth 2022)
 - **Study design**: Power analysis tools
+- **Performance**: Now faster than R at scale (see below)
 
 ---
 
 ## Priority: Performance Improvements
 
-**Status:** Planning complete, implementation pending
+**Status:** ✅ Phase 1 Complete (v1.4.0)
 
-Benchmarks show diff-diff is 3-17x slower than R's fixest for BasicDiD/TWFE at large scales (10K+ units). This is our top priority for v1.4.
+Phase 1 pure Python optimizations exceeded targets. diff-diff now **beats R** at scale:
 
-### Summary
+| Estimator | v1.3 (10K scale) | v1.4 (10K scale) | vs R |
+|-----------|------------------|------------------|------|
+| BasicDiD/TWFE | 0.835s | **0.011s** | **4.2x faster than R** |
+| CallawaySantAnna | 2.234s | **0.109s** | **7.2x faster than R** |
+| SyntheticDiD | Already 37x faster | N/A | **37x faster than R** |
 
-| Estimator | Current (10K scale) | Target | Approach |
-|-----------|---------------------|--------|----------|
-| BasicDiD/TWFE | 0.835s (R: 0.049s) | Match R | Rust backend |
-| CallawaySantAnna | 2.234s (R: 0.816s) | Match R | Vectorization + Rust |
-| SyntheticDiD | Already 37-1600x faster than R | Maintain | N/A |
+### What Was Done (v1.4.0)
 
-### Approach
+1. **Unified `linalg.py` backend** - Single OLS/SE implementation for all estimators
+2. **Vectorized cluster-robust SE** - Eliminated O(n × clusters) loop
+3. **Pre-computed data structures** - Wide-format outcome matrix, cohort masks
+4. **Vectorized bootstrap** - Matrix operations instead of nested loops
 
-1. **Phase 1:** Pure Python optimizations (vectorized cluster SE, scipy lstsq, cached groupby)
-2. **Phase 2:** Rust backend via PyO3 for performance-critical paths (cluster SE, demeaning, bootstrap)
+### Phase 2 (Future)
 
-The Rust backend will be optional with graceful fallback to pure Python.
+Rust backend remains available if further optimization needed, but pure Python now exceeds R performance.
 
 **Full details:** [docs/performance-plan.md](docs/performance-plan.md)
 
 ---
 
-## Near-Term Enhancements (v1.4)
+## Near-Term Enhancements (v1.5)
 
 High-value additions building on our existing foundation.
 
@@ -99,7 +102,7 @@ Extend the existing `TripleDifference` estimator to handle staggered adoption se
 
 ---
 
-## Medium-Term Enhancements (v1.5+)
+## Medium-Term Enhancements (v1.6+)
 
 Extending diff-diff to handle more complex settings.
 

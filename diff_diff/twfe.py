@@ -12,11 +12,11 @@ if TYPE_CHECKING:
     from diff_diff.bacon import BaconDecompositionResults
 
 from diff_diff.estimators import DifferenceInDifferences
+from diff_diff.linalg import compute_robust_vcov
 from diff_diff.results import DiDResults
 from diff_diff.utils import (
     compute_confidence_interval,
     compute_p_value,
-    compute_robust_se,
 )
 
 
@@ -136,7 +136,7 @@ class TwoWayFixedEffects(DifferenceInDifferences):
             )
         else:
             # Standard cluster-robust SE
-            vcov = compute_robust_se(X, residuals, cluster_ids)
+            vcov = compute_robust_vcov(X, residuals, cluster_ids)
             se = np.sqrt(vcov[att_idx, att_idx])
             t_stat = att / se
             p_value = compute_p_value(t_stat, df=df)
@@ -214,11 +214,15 @@ class TwoWayFixedEffects(DifferenceInDifferences):
         data = data.copy()
         variables = [outcome] + (covariates or [])
 
+        # Cache groupby objects for efficiency (avoids re-computing group indexes)
+        unit_grouper = data.groupby(unit, sort=False)
+        time_grouper = data.groupby(time, sort=False)
+
         for var in variables:
-            # Unit means
-            unit_means = data.groupby(unit)[var].transform("mean")
-            # Time means
-            time_means = data.groupby(time)[var].transform("mean")
+            # Unit means (using cached grouper)
+            unit_means = unit_grouper[var].transform("mean")
+            # Time means (using cached grouper)
+            time_means = time_grouper[var].transform("mean")
             # Grand mean
             grand_mean = data[var].mean()
 

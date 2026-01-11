@@ -17,12 +17,12 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
+from diff_diff.linalg import compute_r_squared, compute_robust_vcov, solve_ols
 from diff_diff.results import DiDResults, MultiPeriodDiDResults, PeriodEffect
 from diff_diff.utils import (
     WildBootstrapResults,
     compute_confidence_interval,
     compute_p_value,
-    compute_robust_se,
     validate_binary,
     wild_bootstrap_se,
 )
@@ -261,8 +261,11 @@ class DifferenceInDifferences:
                     X = np.column_stack([X, dummies[col].values.astype(float)])
                     var_names.append(col)
 
-        # Fit OLS
-        coefficients, residuals, fitted, r_squared = self._fit_ols(X, y)
+        # Fit OLS using unified backend
+        coefficients, residuals, fitted, vcov = solve_ols(
+            X, y, return_fitted=True, return_vcov=False
+        )
+        r_squared = compute_r_squared(y, residuals)
 
         # Extract ATT (coefficient on interaction term)
         att_idx = 3  # Index of interaction term
@@ -285,13 +288,13 @@ class DifferenceInDifferences:
             )
         elif self.cluster is not None:
             cluster_ids = data[self.cluster].values
-            vcov = compute_robust_se(X, residuals, cluster_ids)
+            vcov = compute_robust_vcov(X, residuals, cluster_ids)
             se = np.sqrt(vcov[att_idx, att_idx])
             t_stat = att / se
             p_value = compute_p_value(t_stat, df=df)
             conf_int = compute_confidence_interval(att, se, self.alpha, df=df)
         elif self.robust:
-            vcov = compute_robust_se(X, residuals)
+            vcov = compute_robust_vcov(X, residuals)
             se = np.sqrt(vcov[att_idx, att_idx])
             t_stat = att / se
             p_value = compute_p_value(t_stat, df=df)
@@ -300,7 +303,7 @@ class DifferenceInDifferences:
             # Classical OLS standard errors
             n = len(y)
             k = X.shape[1]
-            mse = np.sum(residuals ** 2) / (n - k)
+            mse = np.sum(residuals**2) / (n - k)
             # Use solve() instead of inv() for numerical stability
             # solve(A, B) computes X where AX=B, so this yields (X'X)^{-1} * mse
             vcov = np.linalg.solve(X.T @ X, mse * np.eye(k))
@@ -352,9 +355,14 @@ class DifferenceInDifferences:
 
         return self.results_
 
-    def _fit_ols(self, X: np.ndarray, y: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray, float]:
+    def _fit_ols(
+        self, X: np.ndarray, y: np.ndarray
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, float]:
         """
         Fit OLS regression.
+
+        This method is kept for backwards compatibility. Internally uses the
+        unified solve_ols from diff_diff.linalg for optimized computation.
 
         Parameters
         ----------
@@ -367,32 +375,12 @@ class DifferenceInDifferences:
         -------
         tuple
             (coefficients, residuals, fitted_values, r_squared)
-
-        Raises
-        ------
-        ValueError
-            If design matrix is rank-deficient (perfect multicollinearity).
         """
-        # Check for rank deficiency (perfect multicollinearity)
-        rank = np.linalg.matrix_rank(X)
-        if rank < X.shape[1]:
-            raise ValueError(
-                f"Design matrix is rank-deficient (rank {rank} < {X.shape[1]} columns). "
-                "This indicates perfect multicollinearity. Check your fixed effects "
-                "and covariates for linear dependencies."
-            )
-
-        # Solve normal equations: β = (X'X)^(-1) X'y
-        coefficients = np.linalg.lstsq(X, y, rcond=None)[0]
-
-        # Compute fitted values and residuals
-        fitted = X @ coefficients
-        residuals = y - fitted
-
-        # Compute R-squared
-        ss_res = np.sum(residuals ** 2)
-        ss_tot = np.sum((y - np.mean(y)) ** 2)
-        r_squared = 1 - (ss_res / ss_tot) if ss_tot > 0 else 0.0
+        # Use unified OLS backend
+        coefficients, residuals, fitted, _ = solve_ols(
+            X, y, return_fitted=True, return_vcov=False
+        )
+        r_squared = compute_r_squared(y, residuals)
 
         return coefficients, residuals, fitted, r_squared
 
@@ -442,7 +430,7 @@ class DifferenceInDifferences:
         t_stat = bootstrap_results.t_stat_original
 
         # Also compute vcov for storage (using cluster-robust for consistency)
-        vcov = compute_robust_se(X, residuals, cluster_ids)
+        vcov = compute_robust_vcov(X, residuals, cluster_ids)
 
         return se, p_value, conf_int, t_stat, vcov, bootstrap_results
 
@@ -889,8 +877,11 @@ class MultiPeriodDiD(DifferenceInDifferences):
                     X = np.column_stack([X, dummies[col].values.astype(float)])
                     var_names.append(col)
 
-        # Fit OLS
-        coefficients, residuals, fitted, r_squared = self._fit_ols(X, y)
+        # Fit OLS using unified backend
+        coefficients, residuals, fitted, _ = solve_ols(
+            X, y, return_fitted=True, return_vcov=False
+        )
+        r_squared = compute_r_squared(y, residuals)
 
         # Degrees of freedom
         df = len(y) - X.shape[1] - n_absorbed_effects
@@ -900,13 +891,13 @@ class MultiPeriodDiD(DifferenceInDifferences):
         # For now, we use analytical inference even if inference="wild_bootstrap"
         if self.cluster is not None:
             cluster_ids = data[self.cluster].values
-            vcov = compute_robust_se(X, residuals, cluster_ids)
+            vcov = compute_robust_vcov(X, residuals, cluster_ids)
         elif self.robust:
-            vcov = compute_robust_se(X, residuals)
+            vcov = compute_robust_vcov(X, residuals)
         else:
             n = len(y)
             k = X.shape[1]
-            mse = np.sum(residuals ** 2) / (n - k)
+            mse = np.sum(residuals**2) / (n - k)
             # Use solve() instead of inv() for numerical stability
             # solve(A, B) computes X where AX=B, so this yields (X'X)^{-1} * mse
             vcov = np.linalg.solve(X.T @ X, mse * np.eye(k))
