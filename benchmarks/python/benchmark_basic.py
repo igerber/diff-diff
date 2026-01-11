@@ -28,6 +28,10 @@ def parse_args():
     parser.add_argument(
         "--cluster", default="unit", help="Column to cluster standard errors on"
     )
+    parser.add_argument(
+        "--type", default="twfe", choices=["basic", "twfe"],
+        help="Estimator type (basic or twfe, default: twfe)"
+    )
     return parser.parse_args()
 
 
