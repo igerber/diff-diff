@@ -26,6 +26,7 @@ def solve_ols(
     cluster_ids: Optional[np.ndarray] = None,
     return_vcov: bool = True,
     return_fitted: bool = False,
+    check_finite: bool = True,
 ) -> Union[
     Tuple[np.ndarray, np.ndarray, Optional[np.ndarray]],
     Tuple[np.ndarray, np.ndarray, np.ndarray, Optional[np.ndarray]],
@@ -50,6 +51,9 @@ def solve_ols(
         Set to False for faster computation when SEs are not needed.
     return_fitted : bool, default False
         Whether to return fitted values in addition to residuals.
+    check_finite : bool, default True
+        Whether to check that X and y contain only finite values (no NaN/Inf).
+        Set to False for faster computation if you are certain your data is clean.
 
     Returns
     -------
@@ -102,9 +106,21 @@ def solve_ols(
             "Cannot solve underdetermined system."
         )
 
+    # Check for NaN/Inf values if requested
+    if check_finite:
+        if not np.isfinite(X).all():
+            raise ValueError(
+                "X contains NaN or Inf values. "
+                "Clean your data or set check_finite=False to skip this check."
+            )
+        if not np.isfinite(y).all():
+            raise ValueError(
+                "y contains NaN or Inf values. "
+                "Clean your data or set check_finite=False to skip this check."
+            )
+
     # Solve OLS using scipy's optimized solver
     # 'gelsy' uses QR with column pivoting, faster than default 'gelsd' (SVD)
-    # check_finite=False skips NaN/Inf checks for speed (caller should validate)
     # Note: gelsy doesn't reliably report rank, so we don't check for deficiency
     coefficients = scipy_lstsq(X, y, lapack_driver="gelsy", check_finite=False)[0]
 

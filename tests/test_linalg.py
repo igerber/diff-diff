@@ -152,6 +152,44 @@ class TestSolveOLS:
         with pytest.raises(ValueError, match="Fewer observations"):
             solve_ols(X, y)
 
+    def test_nan_in_x_raises_error(self):
+        """Test that NaN in X raises error by default."""
+        X = np.random.randn(100, 2)
+        X[50, 0] = np.nan
+        y = np.random.randn(100)
+
+        with pytest.raises(ValueError, match="X contains NaN or Inf"):
+            solve_ols(X, y)
+
+    def test_nan_in_y_raises_error(self):
+        """Test that NaN in y raises error by default."""
+        X = np.random.randn(100, 2)
+        y = np.random.randn(100)
+        y[50] = np.nan
+
+        with pytest.raises(ValueError, match="y contains NaN or Inf"):
+            solve_ols(X, y)
+
+    def test_inf_in_x_raises_error(self):
+        """Test that Inf in X raises error by default."""
+        X = np.random.randn(100, 2)
+        X[50, 0] = np.inf
+        y = np.random.randn(100)
+
+        with pytest.raises(ValueError, match="X contains NaN or Inf"):
+            solve_ols(X, y)
+
+    def test_check_finite_false_skips_validation(self):
+        """Test that check_finite=False skips NaN/Inf validation."""
+        X = np.random.randn(100, 2)
+        X[50, 0] = np.nan
+        y = np.random.randn(100)
+
+        # Should not raise, but will return garbage results
+        coef, resid, vcov = solve_ols(X, y, check_finite=False)
+        # Coefficients will contain NaN due to bad input
+        assert np.isnan(coef).any() or np.isinf(coef).any()
+
     def test_rank_deficient_still_solves(self):
         """Test that rank-deficient matrix still returns a solution.
 

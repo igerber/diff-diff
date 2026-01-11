@@ -30,6 +30,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `estimators.py`, `twfe.py`, `staggered.py`, `triple_diff.py`,
     `synthetic_did.py`, `sun_abraham.py`, `utils.py`
 
+### Behavioral Changes
+- **Rank-deficient design matrices**: The new `gelsy` LAPACK driver handles
+  rank-deficient matrices gracefully (returning a least-norm solution) rather
+  than raising an explicit error. Previously, `DifferenceInDifferences` would
+  raise `ValueError("Design matrix is rank-deficient")`. Users relying on this
+  error for collinearity detection should validate their design matrices
+  separately. Results remain numerically correct for well-specified models.
+
 ## [1.3.1] - 2026-01-10
 
 ### Added

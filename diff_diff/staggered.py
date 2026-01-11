@@ -603,6 +603,14 @@ class CallawaySantAnna:
         Number of bootstrap iterations for inference.
         If 0, uses analytical standard errors.
         Recommended: 999 or more for reliable inference.
+
+        .. note:: Memory Usage
+            The bootstrap stores all weights in memory as a (n_bootstrap, n_units)
+            float64 array. For large datasets, this can be significant:
+            - 1K bootstrap × 10K units = ~80 MB
+            - 10K bootstrap × 100K units = ~8 GB
+            Consider reducing n_bootstrap if memory is constrained.
+
     bootstrap_weights : str, default="rademacher"
         Type of weights for multiplier bootstrap:
         - "rademacher": +1/-1 with equal probability (standard choice)
