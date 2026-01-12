@@ -93,13 +93,16 @@ jobs:
           python -c "import diff_diff; print('Location:', diff_diff.__file__)"
           python -c "from diff_diff import HAS_RUST_BACKEND; print('HAS_RUST_BACKEND:', HAS_RUST_BACKEND); assert HAS_RUST_BACKEND, 'Rust backend not available'"
 
+      - name: Copy tests to isolated location
+        run: cp -r tests /tmp/tests
+
       - name: Run Rust backend tests
         working-directory: /tmp
-        run: pytest $GITHUB_WORKSPACE/tests/test_rust_backend.py -v
+        run: pytest tests/test_rust_backend.py -v
 
       - name: Run tests with Rust backend
         working-directory: /tmp
-        run: DIFF_DIFF_BACKEND=rust pytest $GITHUB_WORKSPACE/tests/ -x -q
+        run: DIFF_DIFF_BACKEND=rust pytest tests/ -x -q
 
   # Test pure Python fallback (without Rust extension)
   python-fallback:
