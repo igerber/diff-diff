@@ -35,43 +35,8 @@ jobs:
           name: wheels-linux-x86_64
           path: dist/*.whl
 
-  # Build wheels on macOS x86_64 (native build)
-  build-macos-x86:
-    name: Build macOS x86_64 wheels
-    runs-on: macos-12
-    strategy:
-      matrix:
-        python-version: ['3.9', '3.10', '3.11', '3.12']
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: ${{ matrix.python-version }}
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Install OpenBLAS
-        run: brew install openblas
-
-      - name: Install maturin
-        run: pip install maturin
-
-      - name: Build wheel
-        run: |
-          export OPENBLAS_DIR=$(brew --prefix openblas)
-          export PKG_CONFIG_PATH=$(brew --prefix openblas)/lib/pkgconfig
-          maturin build --release --out dist --features extension-module
-
-      - name: Upload wheels
-        uses: actions/upload-artifact@v4
-        with:
-          name: wheels-macos-x86_64-py${{ matrix.python-version }}
-          path: dist/*.whl
-
   # Build wheels on macOS ARM64 (native build)
+  # Note: macOS x86_64 skipped - Intel runners retired, users can install from sdist
   build-macos-arm:
     name: Build macOS ARM64 wheels
     runs-on: macos-14
@@ -132,10 +97,10 @@ jobs:
           path: dist/*.tar.gz
 
   # Publish to PyPI
-  # Windows users install from sdist and get pure Python fallback
+  # Windows and macOS x86_64 users install from sdist and get pure Python fallback
   publish:
     name: Publish to PyPI
-    needs: [build-linux, build-macos-x86, build-macos-arm, build-sdist]
+    needs: [build-linux, build-macos-arm, build-sdist]
     runs-on: ubuntu-latest
     environment: pypi
     permissions:
