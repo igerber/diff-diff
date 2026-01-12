@@ -5,21 +5,30 @@ on:
     types: [published]
 
 jobs:
-  # Build wheels on Linux using manylinux
+  # Build wheels on Linux using manylinux container
   build-linux:
     name: Build Linux wheels
     runs-on: ubuntu-latest
+    container: quay.io/pypa/manylinux_2_28_x86_64
     steps:
       - uses: actions/checkout@v4
 
+      - name: Install dependencies
+        run: |
+          dnf install -y openblas-devel perl-IPC-Cmd
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+          source $HOME/.cargo/env
+          pip3.12 install maturin
+
       - name: Build wheels
-        uses: PyO3/maturin-action@v1
-        with:
-          target: x86_64
-          args: --release --out dist -i python3.9 -i python3.10 -i python3.11 -i python3.12
-          manylinux: 2_28
-          before-script-linux: |
-            dnf install -y openblas-devel openssl-devel
+        run: |
+          source $HOME/.cargo/env
+          for pyver in 3.9 3.10 3.11 3.12; do
+            pybin="/opt/python/cp${pyver/./}-cp${pyver/./}/bin/python"
+            if [ -f "$pybin" ]; then
+              maturin build --release --out dist -i "$pybin" --features extension-module
+            fi
+          done
 
       - name: Upload wheels
         uses: actions/upload-artifact@v4
@@ -27,7 +36,7 @@ jobs:
           name: wheels-linux-x86_64
           path: dist/*.whl
 
-  # Build wheels on macOS (x86_64)
+  # Build wheels on macOS x86_64 (native build)
   build-macos-x86:
     name: Build macOS x86_64 wheels
     runs-on: macos-13
@@ -37,26 +46,25 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Python ${{ matrix.python-version }}
+      - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
 
-      - name: Get Python path
-        id: python
-        run: echo "path=$(which python)" >> $GITHUB_OUTPUT
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
 
       - name: Install OpenBLAS
         run: brew install openblas
 
-      - name: Build wheels
-        uses: PyO3/maturin-action@v1
-        with:
-          target: x86_64-apple-darwin
-          args: --release --out dist -i ${{ steps.python.outputs.path }}
-        env:
-          OPENBLAS_DIR: /usr/local/opt/openblas
-          PKG_CONFIG_PATH: /usr/local/opt/openblas/lib/pkgconfig
+      - name: Install maturin
+        run: pip install maturin
+
+      - name: Build wheel
+        run: |
+          export OPENBLAS_DIR=$(brew --prefix openblas)
+          export PKG_CONFIG_PATH=$(brew --prefix openblas)/lib/pkgconfig
+          maturin build --release --out dist --features extension-module
 
       - name: Upload wheels
         uses: actions/upload-artifact@v4
@@ -64,7 +72,7 @@ jobs:
           name: wheels-macos-x86_64-py${{ matrix.python-version }}
           path: dist/*.whl
 
-  # Build wheels on macOS (ARM64)
+  # Build wheels on macOS ARM64 (native build)
   build-macos-arm:
     name: Build macOS ARM64 wheels
     runs-on: macos-14
@@ -74,26 +82,25 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Python ${{ matrix.python-version }}
+      - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
 
-      - name: Get Python path
-        id: python
-        run: echo "path=$(which python)" >> $GITHUB_OUTPUT
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
 
       - name: Install OpenBLAS
         run: brew install openblas
 
-      - name: Build wheels
-        uses: PyO3/maturin-action@v1
-        with:
-          target: aarch64-apple-darwin
-          args: --release --out dist -i ${{ steps.python.outputs.path }}
-        env:
-          OPENBLAS_DIR: /opt/homebrew/opt/openblas
-          PKG_CONFIG_PATH: /opt/homebrew/opt/openblas/lib/pkgconfig
+      - name: Install maturin
+        run: pip install maturin
+
+      - name: Build wheel
+        run: |
+          export OPENBLAS_DIR=$(brew --prefix openblas)
+          export PKG_CONFIG_PATH=$(brew --prefix openblas)/lib/pkgconfig
+          maturin build --release --out dist --features extension-module
 
       - name: Upload wheels
         uses: actions/upload-artifact@v4
@@ -108,11 +115,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build sdist
-        uses: PyO3/maturin-action@v1
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
-          command: sdist
-          args: --out dist
+          python-version: '3.11'
+
+      - name: Install maturin
+        run: pip install maturin
+
+      - name: Build sdist
+        run: maturin sdist --out dist
 
       - name: Upload sdist
         uses: actions/upload-artifact@v4
@@ -120,7 +132,8 @@ jobs:
           name: sdist
           path: dist/*.tar.gz
 
-  # Publish all artifacts to PyPI
+  # Publish to PyPI
+  # Windows users install from sdist and get pure Python fallback
   publish:
     name: Publish to PyPI
     needs: [build-linux, build-macos-x86, build-macos-arm, build-sdist]
