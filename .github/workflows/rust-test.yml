@@ -80,9 +80,9 @@ jobs:
       - name: Build and install with maturin
         run: |
           pip install maturin
-          maturin build --release
+          maturin build --release -o dist
           # --no-index ensures we install from local wheel, not PyPI
-          pip install --no-index --find-links=target/wheels diff-diff
+          pip install --no-index --find-links=dist diff-diff
 
       - name: Verify Rust backend is available
         run: |
