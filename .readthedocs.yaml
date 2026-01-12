@@ -13,11 +13,8 @@ build:
 sphinx:
   configuration: docs/conf.py
 
-# Optionally, but recommended: declare the Python requirements
-# required to build your documentation
+# Install from PyPI (has pre-built wheels with Rust backend)
+# instead of building from source (which requires OpenBLAS)
 python:
   install:
-    - method: pip
-      path: .
-      extra_requirements:
-        - docs
+    - requirements: docs/requirements.txt

@@ -1,0 +1,4 @@
+# Documentation build requirements
+diff-diff>=2.0.0
+sphinx>=6.0
+sphinx-rtd-theme>=1.0
