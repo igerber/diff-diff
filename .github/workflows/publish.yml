@@ -12,7 +12,6 @@ jobs:
     strategy:
       matrix:
         target: [x86_64]
-        # Note: aarch64 cross-compilation with BLAS is complex, skip for now
     steps:
       - uses: actions/checkout@v4
 
@@ -22,9 +21,9 @@ jobs:
           target: ${{ matrix.target }}
           args: --release --out dist -i python3.9 -i python3.10 -i python3.11 -i python3.12
           manylinux: auto
-          # Install OpenBLAS in manylinux container
           before-script-linux: |
-            yum install -y openblas-devel || apt-get update && apt-get install -y libopenblas-dev
+            # Install OpenBLAS and OpenSSL
+            yum install -y openblas-devel openssl-devel || apt-get update && apt-get install -y libopenblas-dev libssl-dev
 
       - name: Upload wheels
         uses: actions/upload-artifact@v4
@@ -35,7 +34,7 @@ jobs:
   # Build wheels on macOS (x86_64)
   build-macos-x86:
     name: Build macOS x86_64 wheels
-    runs-on: macos-13  # x86_64 runner
+    runs-on: macos-13
     strategy:
       matrix:
         python-version: ['3.9', '3.10', '3.11', '3.12']
@@ -59,7 +58,7 @@ jobs:
         uses: PyO3/maturin-action@v1
         with:
           target: x86_64-apple-darwin
-          args: --release --out dist
+          args: --release --out dist -i ${{ env.pythonLocation }}/bin/python
 
       - name: Upload wheels
         uses: actions/upload-artifact@v4
@@ -70,7 +69,7 @@ jobs:
   # Build wheels on macOS (ARM64)
   build-macos-arm:
     name: Build macOS ARM64 wheels
-    runs-on: macos-latest  # ARM64 runner
+    runs-on: macos-latest
     strategy:
       matrix:
         python-version: ['3.9', '3.10', '3.11', '3.12']
@@ -94,7 +93,7 @@ jobs:
         uses: PyO3/maturin-action@v1
         with:
           target: aarch64-apple-darwin
-          args: --release --out dist
+          args: --release --out dist -i ${{ env.pythonLocation }}/bin/python
 
       - name: Upload wheels
         uses: actions/upload-artifact@v4
@@ -102,45 +101,7 @@ jobs:
           name: wheels-macos-arm64-py${{ matrix.python-version }}
           path: dist/*.whl
 
-  # Build wheels on Windows
-  build-windows:
-    name: Build Windows wheels
-    runs-on: windows-latest
-    strategy:
-      matrix:
-        python-version: ['3.9', '3.10', '3.11', '3.12']
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v5
-        with:
-          python-version: ${{ matrix.python-version }}
-
-      # Windows uses Intel MKL which is more complex to set up
-      # For now, skip Windows Rust backend - users get pure Python fallback
-      - name: Build wheels
-        uses: PyO3/maturin-action@v1
-        with:
-          target: x64
-          args: --release --out dist
-        continue-on-error: true
-
-      # If Rust build fails, build pure Python wheel
-      - name: Build pure Python wheel if Rust failed
-        if: failure()
-        run: |
-          pip install build
-          python -m build --wheel
-
-      - name: Upload wheels
-        uses: actions/upload-artifact@v4
-        with:
-          name: wheels-windows-py${{ matrix.python-version }}
-          path: dist/*.whl
-        if: always()
-
-  # Build source distribution
+  # Build source distribution (no Rust needed)
   build-sdist:
     name: Build source distribution
     runs-on: ubuntu-latest
@@ -160,13 +121,15 @@ jobs:
           path: dist/*.tar.gz
 
   # Publish all artifacts to PyPI
+  # Note: Windows builds skipped due to Intel MKL complexity
+  # Windows users get pure Python fallback via sdist
   publish:
     name: Publish to PyPI
-    needs: [build-linux, build-macos-x86, build-macos-arm, build-windows, build-sdist]
+    needs: [build-linux, build-macos-x86, build-macos-arm, build-sdist]
     runs-on: ubuntu-latest
     environment: pypi
     permissions:
-      id-token: write  # Required for trusted publishing
+      id-token: write
 
     steps:
       - name: Download all artifacts
