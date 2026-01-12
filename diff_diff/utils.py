@@ -13,6 +13,13 @@ from scipy import stats
 from diff_diff.linalg import compute_robust_vcov as _compute_robust_vcov_linalg
 from diff_diff.linalg import solve_ols as _solve_ols_linalg
 
+# Import Rust backend if available (from _backend to avoid circular imports)
+from diff_diff._backend import (
+    HAS_RUST_BACKEND,
+    _rust_project_simplex,
+    _rust_synthetic_weights,
+)
+
 # Numerical constants for optimization algorithms
 _OPTIMIZATION_MAX_ITER = 1000  # Maximum iterations for weight optimization
 _OPTIMIZATION_TOL = 1e-8  # Convergence tolerance for optimization
@@ -1033,6 +1040,37 @@ def compute_synthetic_weights(
     if n_control == 1:
         return np.asarray([1.0])
 
+    # Use Rust backend if available
+    if HAS_RUST_BACKEND:
+        Y_control = np.ascontiguousarray(Y_control, dtype=np.float64)
+        Y_treated = np.ascontiguousarray(Y_treated, dtype=np.float64)
+        weights = _rust_synthetic_weights(
+            Y_control, Y_treated, lambda_reg,
+            _OPTIMIZATION_MAX_ITER, _OPTIMIZATION_TOL
+        )
+    else:
+        # Fallback to NumPy implementation
+        weights = _compute_synthetic_weights_numpy(Y_control, Y_treated, lambda_reg)
+
+    # Set small weights to zero for interpretability
+    weights[weights < min_weight] = 0
+    if np.sum(weights) > 0:
+        weights = weights / np.sum(weights)
+    else:
+        # Fallback to uniform if all weights are zeroed
+        weights = np.ones(n_control) / n_control
+
+    return np.asarray(weights)
+
+
+def _compute_synthetic_weights_numpy(
+    Y_control: np.ndarray,
+    Y_treated: np.ndarray,
+    lambda_reg: float = 0.0,
+) -> np.ndarray:
+    """NumPy fallback implementation of compute_synthetic_weights."""
+    n_pre, n_control = Y_control.shape
+
     # Initialize with uniform weights
     weights = np.ones(n_control) / n_control
 
@@ -1065,15 +1103,7 @@ def compute_synthetic_weights(
         if np.linalg.norm(weights - weights_old) < _OPTIMIZATION_TOL:
             break
 
-    # Set small weights to zero for interpretability
-    weights[weights < min_weight] = 0
-    if np.sum(weights) > 0:
-        weights = weights / np.sum(weights)
-    else:
-        # Fallback to uniform if all weights are zeroed
-        weights = np.ones(n_control) / n_control
-
-    return np.asarray(weights)
+    return weights
 
 
 def _project_simplex(v: np.ndarray) -> np.ndarray:

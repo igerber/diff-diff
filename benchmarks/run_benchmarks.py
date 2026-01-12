@@ -64,6 +64,11 @@ SCALE_CONFIGS = {
         "basic": {"n_units": 10000, "n_periods": 10},
         "sdid": {"n_control": 8000, "n_treated": 2000, "n_pre": 30, "n_post": 20},
     },
+    "20k": {
+        "staggered": {"n_units": 20000, "n_periods": 18, "n_cohorts": 7},
+        "basic": {"n_units": 20000, "n_periods": 12},
+        "sdid": {"n_control": 16000, "n_treated": 4000, "n_pre": 35, "n_post": 25},
+    },
 }
 
 # Timeout configurations (seconds) by scale
@@ -72,6 +77,7 @@ TIMEOUT_CONFIGS = {
     "1k": {"python": 300, "r": 1800},
     "5k": {"python": 600, "r": 3600},
     "10k": {"python": 1200, "r": 7200},
+    "20k": {"python": 2400, "r": 14400},
 }
 
 
@@ -150,6 +156,7 @@ def run_python_benchmark(
     output_path: Path,
     extra_args: Optional[List[str]] = None,
     timeout: Optional[int] = None,
+    backend: str = "auto",
 ) -> Dict[str, Any]:
     """
     Execute Python benchmark script and return results.
@@ -166,6 +173,8 @@ def run_python_benchmark(
         Additional command line arguments.
     timeout : int, optional
         Timeout in seconds.
+    backend : str
+        Backend to use: 'auto', 'python', or 'rust'.
 
     Returns
     -------
@@ -179,6 +188,7 @@ def run_python_benchmark(
         str(py_script),
         "--data", str(data_path),
         "--output", str(output_path),
+        "--backend", backend,
     ]
     if extra_args:
         cmd.extend(extra_args)
@@ -290,48 +300,63 @@ def run_callaway_benchmark(
     name: str = "callaway",
     scale: str = "small",
     n_replications: int = 1,
+    backends: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     """Run Callaway-Sant'Anna benchmarks (Python and R) with replications."""
     print(f"\n{'='*60}")
     print(f"CALLAWAY-SANT'ANNA BENCHMARK ({scale})")
     print(f"{'='*60}")
 
+    if backends is None:
+        backends = ["python", "rust"]
+
     timeouts = TIMEOUT_CONFIGS.get(scale, TIMEOUT_CONFIGS["small"])
     results = {
         "name": name,
         "scale": scale,
         "n_replications": n_replications,
-        "python": None,
+        "python_pure": None,
+        "python_rust": None,
         "r": None,
         "comparison": None,
     }
 
-    # Python benchmark with replications
-    print(f"\nRunning Python (diff_diff.CallawaySantAnna) - {n_replications} replications...")
-    py_output = RESULTS_DIR / "accuracy" / f"python_{name}_{scale}.json"
-    py_output.parent.mkdir(parents=True, exist_ok=True)
+    # Run Python benchmark for each backend
+    for backend in backends:
+        # Map backend name to label (python -> pure, rust -> rust)
+        backend_label = f"python_{'pure' if backend == 'python' else backend}"
+        print(f"\nRunning Python (diff_diff.CallawaySantAnna, backend={backend}) - {n_replications} replications...")
+        py_output = RESULTS_DIR / "accuracy" / f"{backend_label}_{name}_{scale}.json"
+        py_output.parent.mkdir(parents=True, exist_ok=True)
 
-    py_timings = []
-    py_result = None
-    for rep in range(n_replications):
-        try:
-            py_result = run_python_benchmark(
-                "benchmark_callaway.py", data_path, py_output,
-                timeout=timeouts["python"]
-            )
-            py_timings.append(py_result["timing"]["total_seconds"])
-            if rep == 0:
-                print(f"  ATT: {py_result['overall_att']:.4f}")
-                print(f"  SE:  {py_result['overall_se']:.4f}")
-            print(f"  Rep {rep+1}/{n_replications}: {py_timings[-1]:.3f}s")
-        except Exception as e:
-            print(f"  Rep {rep+1} failed: {e}")
+        py_timings = []
+        py_result = None
+        for rep in range(n_replications):
+            try:
+                py_result = run_python_benchmark(
+                    "benchmark_callaway.py", data_path, py_output,
+                    timeout=timeouts["python"],
+                    backend=backend,
+                )
+                py_timings.append(py_result["timing"]["total_seconds"])
+                if rep == 0:
+                    print(f"  ATT: {py_result['overall_att']:.4f}")
+                    print(f"  SE:  {py_result['overall_se']:.4f}")
+                print(f"  Rep {rep+1}/{n_replications}: {py_timings[-1]:.3f}s")
+            except Exception as e:
+                print(f"  Rep {rep+1} failed: {e}")
 
-    if py_result and py_timings:
-        timing_stats = compute_timing_stats(py_timings)
-        py_result["timing"] = timing_stats
-        results["python"] = py_result
-        print(f"  Mean time: {timing_stats['stats']['mean']:.3f}s ± {timing_stats['stats']['std']:.3f}s")
+        if py_result and py_timings:
+            timing_stats = compute_timing_stats(py_timings)
+            py_result["timing"] = timing_stats
+            results[backend_label] = py_result
+            print(f"  Mean time: {timing_stats['stats']['mean']:.3f}s ± {timing_stats['stats']['std']:.3f}s")
+
+    # For backward compatibility, also store as "python" (use rust if available)
+    if results.get("python_rust"):
+        results["python"] = results["python_rust"]
+    elif results.get("python_pure"):
+        results["python"] = results["python_pure"]
 
     # R benchmark with replications
     print(f"\nRunning R (did::att_gt) - {n_replications} replications...")
@@ -361,20 +386,35 @@ def run_callaway_benchmark(
 
     # Compare results
     if results["python"] and results["r"]:
-        print("\nComparison:")
+        print("\nComparison (Python vs R):")
         comparison = compare_estimates(
-            results["python"], results["r"], "CallawaySantAnna", scale=scale
+            results["python"], results["r"], "CallawaySantAnna", scale=scale,
+            python_pure_results=results.get("python_pure"),
+            python_rust_results=results.get("python_rust"),
         )
         results["comparison"] = comparison
         print(f"  ATT diff: {comparison.att_diff:.2e}")
         print(f"  SE rel diff: {comparison.se_rel_diff:.1%}")
         print(f"  Status: {'PASS' if comparison.passed else 'FAIL'}")
 
-        # Compute speedup from timing stats
-        py_mean = results["python"]["timing"]["stats"]["mean"]
-        r_mean = results["r"]["timing"]["stats"]["mean"]
-        speedup = r_mean / py_mean if py_mean > 0 else float('inf')
-        print(f"  Speed: Python is {speedup:.1f}x faster")
+    # Print timing comparison table
+    print("\nTiming Comparison:")
+    print(f"  {'Backend':<15} {'Time (s)':<12} {'vs R':<12} {'vs Pure Python':<15}")
+    print(f"  {'-'*54}")
+
+    r_mean = results["r"]["timing"]["stats"]["mean"] if results["r"] else None
+    pure_mean = results["python_pure"]["timing"]["stats"]["mean"] if results.get("python_pure") else None
+    rust_mean = results["python_rust"]["timing"]["stats"]["mean"] if results.get("python_rust") else None
+
+    if r_mean:
+        print(f"  {'R':<15} {r_mean:<12.3f} {'1.00x':<12} {'-':<15}")
+    if pure_mean:
+        r_speedup = f"{r_mean/pure_mean:.2f}x" if r_mean else "-"
+        print(f"  {'Python (pure)':<15} {pure_mean:<12.3f} {r_speedup:<12} {'1.00x':<15}")
+    if rust_mean:
+        r_speedup = f"{r_mean/rust_mean:.2f}x" if r_mean else "-"
+        pure_speedup = f"{pure_mean/rust_mean:.2f}x" if pure_mean else "-"
+        print(f"  {'Python (rust)':<15} {rust_mean:<12.3f} {r_speedup:<12} {pure_speedup:<15}")
 
     return results
 
@@ -384,51 +424,66 @@ def run_synthdid_benchmark(
     name: str = "synthdid",
     scale: str = "small",
     n_replications: int = 1,
+    backends: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     """Run Synthetic DiD benchmarks (Python and R) with replications."""
     print(f"\n{'='*60}")
     print(f"SYNTHETIC DID BENCHMARK ({scale})")
     print(f"{'='*60}")
 
+    if backends is None:
+        backends = ["python", "rust"]
+
     timeouts = TIMEOUT_CONFIGS.get(scale, TIMEOUT_CONFIGS["small"])
     results = {
         "name": name,
         "scale": scale,
         "n_replications": n_replications,
-        "python": None,
+        "python_pure": None,
+        "python_rust": None,
         "r": None,
         "comparison": None,
     }
 
-    # Python benchmark with replications
-    print(f"\nRunning Python (diff_diff.SyntheticDiD) - {n_replications} replications...")
-    py_output = RESULTS_DIR / "accuracy" / f"python_{name}_{scale}.json"
-    py_output.parent.mkdir(parents=True, exist_ok=True)
+    # Run Python benchmark for each backend
+    for backend in backends:
+        # Map backend name to label (python -> pure, rust -> rust)
+        backend_label = f"python_{'pure' if backend == 'python' else backend}"
+        print(f"\nRunning Python (diff_diff.SyntheticDiD, backend={backend}) - {n_replications} replications...")
+        py_output = RESULTS_DIR / "accuracy" / f"{backend_label}_{name}_{scale}.json"
+        py_output.parent.mkdir(parents=True, exist_ok=True)
 
-    py_timings = []
-    py_result = None
-    for rep in range(n_replications):
-        try:
-            py_result = run_python_benchmark(
-                "benchmark_synthdid.py",
-                data_path,
-                py_output,
-                extra_args=["--n-bootstrap", "50"],
-                timeout=timeouts["python"]
-            )
-            py_timings.append(py_result["timing"]["total_seconds"])
-            if rep == 0:
-                print(f"  ATT: {py_result['att']:.4f}")
-                print(f"  SE:  {py_result['se']:.4f}")
-            print(f"  Rep {rep+1}/{n_replications}: {py_timings[-1]:.3f}s")
-        except Exception as e:
-            print(f"  Rep {rep+1} failed: {e}")
+        py_timings = []
+        py_result = None
+        for rep in range(n_replications):
+            try:
+                py_result = run_python_benchmark(
+                    "benchmark_synthdid.py",
+                    data_path,
+                    py_output,
+                    extra_args=["--n-bootstrap", "50"],
+                    timeout=timeouts["python"],
+                    backend=backend,
+                )
+                py_timings.append(py_result["timing"]["total_seconds"])
+                if rep == 0:
+                    print(f"  ATT: {py_result['att']:.4f}")
+                    print(f"  SE:  {py_result['se']:.4f}")
+                print(f"  Rep {rep+1}/{n_replications}: {py_timings[-1]:.3f}s")
+            except Exception as e:
+                print(f"  Rep {rep+1} failed: {e}")
 
-    if py_result and py_timings:
-        timing_stats = compute_timing_stats(py_timings)
-        py_result["timing"] = timing_stats
-        results["python"] = py_result
-        print(f"  Mean time: {timing_stats['stats']['mean']:.3f}s ± {timing_stats['stats']['std']:.3f}s")
+        if py_result and py_timings:
+            timing_stats = compute_timing_stats(py_timings)
+            py_result["timing"] = timing_stats
+            results[backend_label] = py_result
+            print(f"  Mean time: {timing_stats['stats']['mean']:.3f}s ± {timing_stats['stats']['std']:.3f}s")
+
+    # For backward compatibility, also store as "python" (use rust if available)
+    if results.get("python_rust"):
+        results["python"] = results["python_rust"]
+    elif results.get("python_pure"):
+        results["python"] = results["python_pure"]
 
     # R benchmark with replications
     print(f"\nRunning R (synthdid::synthdid_estimate) - {n_replications} replications...")
@@ -458,18 +513,35 @@ def run_synthdid_benchmark(
 
     # Compare results
     if results["python"] and results["r"]:
-        print("\nComparison:")
-        comparison = compare_estimates(results["python"], results["r"], "SyntheticDiD", scale=scale)
+        print("\nComparison (Python vs R):")
+        comparison = compare_estimates(
+            results["python"], results["r"], "SyntheticDiD", scale=scale,
+            python_pure_results=results.get("python_pure"),
+            python_rust_results=results.get("python_rust"),
+        )
         results["comparison"] = comparison
         print(f"  ATT diff: {comparison.att_diff:.2e}")
         print(f"  SE rel diff: {comparison.se_rel_diff:.1%}")
         print(f"  Status: {'PASS' if comparison.passed else 'FAIL'}")
 
-        # Compute speedup from timing stats
-        py_mean = results["python"]["timing"]["stats"]["mean"]
-        r_mean = results["r"]["timing"]["stats"]["mean"]
-        speedup = r_mean / py_mean if py_mean > 0 else float('inf')
-        print(f"  Speed: Python is {speedup:.1f}x faster")
+    # Print timing comparison table
+    print("\nTiming Comparison:")
+    print(f"  {'Backend':<15} {'Time (s)':<12} {'vs R':<12} {'vs Pure Python':<15}")
+    print(f"  {'-'*54}")
+
+    r_mean = results["r"]["timing"]["stats"]["mean"] if results["r"] else None
+    pure_mean = results["python_pure"]["timing"]["stats"]["mean"] if results.get("python_pure") else None
+    rust_mean = results["python_rust"]["timing"]["stats"]["mean"] if results.get("python_rust") else None
+
+    if r_mean:
+        print(f"  {'R':<15} {r_mean:<12.3f} {'1.00x':<12} {'-':<15}")
+    if pure_mean:
+        r_speedup = f"{r_mean/pure_mean:.2f}x" if r_mean else "-"
+        print(f"  {'Python (pure)':<15} {pure_mean:<12.3f} {r_speedup:<12} {'1.00x':<15}")
+    if rust_mean:
+        r_speedup = f"{r_mean/rust_mean:.2f}x" if r_mean else "-"
+        pure_speedup = f"{pure_mean/rust_mean:.2f}x" if pure_mean else "-"
+        print(f"  {'Python (rust)':<15} {rust_mean:<12.3f} {r_speedup:<12} {pure_speedup:<15}")
 
     return results
 
@@ -479,49 +551,64 @@ def run_basic_did_benchmark(
     name: str = "basic",
     scale: str = "small",
     n_replications: int = 1,
+    backends: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     """Run basic DiD / TWFE benchmarks (Python and R) with replications."""
     print(f"\n{'='*60}")
     print(f"BASIC DID / TWFE BENCHMARK ({scale})")
     print(f"{'='*60}")
 
+    if backends is None:
+        backends = ["python", "rust"]
+
     timeouts = TIMEOUT_CONFIGS.get(scale, TIMEOUT_CONFIGS["small"])
     results = {
         "name": name,
         "scale": scale,
         "n_replications": n_replications,
-        "python": None,
+        "python_pure": None,
+        "python_rust": None,
         "r": None,
         "comparison": None,
     }
 
-    # Python benchmark with replications
-    print(f"\nRunning Python (diff_diff.TwoWayFixedEffects) - {n_replications} replications...")
-    py_output = RESULTS_DIR / "accuracy" / f"python_{name}_{scale}.json"
-    py_output.parent.mkdir(parents=True, exist_ok=True)
+    # Run Python benchmark for each backend
+    for backend in backends:
+        # Map backend name to label (python -> pure, rust -> rust)
+        backend_label = f"python_{'pure' if backend == 'python' else backend}"
+        print(f"\nRunning Python (diff_diff.DifferenceInDifferences, backend={backend}) - {n_replications} replications...")
+        py_output = RESULTS_DIR / "accuracy" / f"{backend_label}_{name}_{scale}.json"
+        py_output.parent.mkdir(parents=True, exist_ok=True)
 
-    py_timings = []
-    py_result = None
-    for rep in range(n_replications):
-        try:
-            py_result = run_python_benchmark(
-                "benchmark_basic.py", data_path, py_output,
-                extra_args=["--type", "twfe"],
-                timeout=timeouts["python"]
-            )
-            py_timings.append(py_result["timing"]["total_seconds"])
-            if rep == 0:
-                print(f"  ATT: {py_result['att']:.4f}")
-                print(f"  SE:  {py_result['se']:.4f}")
-            print(f"  Rep {rep+1}/{n_replications}: {py_timings[-1]:.3f}s")
-        except Exception as e:
-            print(f"  Rep {rep+1} failed: {e}")
+        py_timings = []
+        py_result = None
+        for rep in range(n_replications):
+            try:
+                py_result = run_python_benchmark(
+                    "benchmark_basic.py", data_path, py_output,
+                    extra_args=["--type", "twfe"],
+                    timeout=timeouts["python"],
+                    backend=backend,
+                )
+                py_timings.append(py_result["timing"]["total_seconds"])
+                if rep == 0:
+                    print(f"  ATT: {py_result['att']:.4f}")
+                    print(f"  SE:  {py_result['se']:.4f}")
+                print(f"  Rep {rep+1}/{n_replications}: {py_timings[-1]:.3f}s")
+            except Exception as e:
+                print(f"  Rep {rep+1} failed: {e}")
 
-    if py_result and py_timings:
-        timing_stats = compute_timing_stats(py_timings)
-        py_result["timing"] = timing_stats
-        results["python"] = py_result
-        print(f"  Mean time: {timing_stats['stats']['mean']:.3f}s ± {timing_stats['stats']['std']:.3f}s")
+        if py_result and py_timings:
+            timing_stats = compute_timing_stats(py_timings)
+            py_result["timing"] = timing_stats
+            results[backend_label] = py_result
+            print(f"  Mean time: {timing_stats['stats']['mean']:.3f}s ± {timing_stats['stats']['std']:.3f}s")
+
+    # For backward compatibility, also store as "python" (use rust if available)
+    if results.get("python_rust"):
+        results["python"] = results["python_rust"]
+    elif results.get("python_pure"):
+        results["python"] = results["python_pure"]
 
     # R benchmark with replications
     print(f"\nRunning R (fixest::feols) - {n_replications} replications...")
@@ -552,18 +639,35 @@ def run_basic_did_benchmark(
 
     # Compare results
     if results["python"] and results["r"]:
-        print("\nComparison:")
-        comparison = compare_estimates(results["python"], results["r"], "BasicDiD/TWFE", scale=scale)
+        print("\nComparison (Python vs R):")
+        comparison = compare_estimates(
+            results["python"], results["r"], "BasicDiD/TWFE", scale=scale,
+            python_pure_results=results.get("python_pure"),
+            python_rust_results=results.get("python_rust"),
+        )
         results["comparison"] = comparison
         print(f"  ATT diff: {comparison.att_diff:.2e}")
         print(f"  SE rel diff: {comparison.se_rel_diff:.1%}")
         print(f"  Status: {'PASS' if comparison.passed else 'FAIL'}")
 
-        # Compute speedup from timing stats
-        py_mean = results["python"]["timing"]["stats"]["mean"]
-        r_mean = results["r"]["timing"]["stats"]["mean"]
-        speedup = r_mean / py_mean if py_mean > 0 else float('inf')
-        print(f"  Speed: Python is {speedup:.1f}x faster")
+    # Print timing comparison table
+    print("\nTiming Comparison:")
+    print(f"  {'Backend':<15} {'Time (s)':<12} {'vs R':<12} {'vs Pure Python':<15}")
+    print(f"  {'-'*54}")
+
+    r_mean = results["r"]["timing"]["stats"]["mean"] if results["r"] else None
+    pure_mean = results["python_pure"]["timing"]["stats"]["mean"] if results.get("python_pure") else None
+    rust_mean = results["python_rust"]["timing"]["stats"]["mean"] if results.get("python_rust") else None
+
+    if r_mean:
+        print(f"  {'R':<15} {r_mean:<12.3f} {'1.00x':<12} {'-':<15}")
+    if pure_mean:
+        r_speedup = f"{r_mean/pure_mean:.2f}x" if r_mean else "-"
+        print(f"  {'Python (pure)':<15} {pure_mean:<12.3f} {r_speedup:<12} {'1.00x':<15}")
+    if rust_mean:
+        r_speedup = f"{r_mean/rust_mean:.2f}x" if r_mean else "-"
+        pure_speedup = f"{pure_mean/rust_mean:.2f}x" if pure_mean else "-"
+        print(f"  {'Python (rust)':<15} {rust_mean:<12.3f} {r_speedup:<12} {pure_speedup:<15}")
 
     return results
 
@@ -601,7 +705,7 @@ def main():
     )
     parser.add_argument(
         "--scale",
-        choices=["small", "1k", "5k", "10k", "all"],
+        choices=["small", "1k", "5k", "10k", "20k", "all"],
         default="small",
         help="Dataset scale to use (default: small). Use 'all' for all scales.",
     )
@@ -609,7 +713,7 @@ def main():
 
     # Determine which scales to run
     if args.scale == "all":
-        scales = ["small", "1k", "5k", "10k"]
+        scales = ["small", "1k", "5k", "10k", "20k"]
     else:
         scales = [args.scale]
 

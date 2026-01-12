@@ -1,0 +1,36 @@
+[package]
+name = "diff_diff_rust"
+version = "2.0.0"
+edition = "2021"
+description = "Rust backend for diff-diff DiD library"
+license = "MIT"
+
+[lib]
+name = "diff_diff_rust"
+# cdylib for Python extension, rlib for running tests
+crate-type = ["cdylib", "rlib"]
+
+[features]
+default = []
+# extension-module is only needed for cdylib builds, not for cargo test
+extension-module = ["pyo3/extension-module"]
+
+[dependencies]
+pyo3 = "0.20"
+numpy = "0.20"
+ndarray = { version = "0.15", features = ["rayon"] }
+rand = "0.8"
+rand_xoshiro = "0.6"
+rayon = "1.8"
+
+# Platform-specific BLAS backends for linear algebra
+[target.'cfg(not(target_os = "windows"))'.dependencies]
+ndarray-linalg = { version = "0.16", features = ["openblas-system"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+ndarray-linalg = { version = "0.16", features = ["intel-mkl-system"] }
+
+[profile.release]
+lto = true
+codegen-units = 1
+opt-level = 3

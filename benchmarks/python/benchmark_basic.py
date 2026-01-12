@@ -8,16 +8,31 @@ Usage:
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
+# IMPORTANT: Parse --backend and set environment variable BEFORE importing diff_diff
+# This ensures the backend configuration is respected by all modules
+def _get_backend_from_args():
+    """Parse --backend argument without importing diff_diff."""
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument("--backend", default="auto", choices=["auto", "python", "rust"])
+    args, _ = parser.parse_known_args()
+    return args.backend
+
+_requested_backend = _get_backend_from_args()
+if _requested_backend in ("python", "rust"):
+    os.environ["DIFF_DIFF_BACKEND"] = _requested_backend
+
+# NOW import diff_diff and other dependencies (will see the env var)
 import numpy as np
 import pandas as pd
 
 # Add parent to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from diff_diff import DifferenceInDifferences
+from diff_diff import DifferenceInDifferences, HAS_RUST_BACKEND
 from benchmarks.python.utils import Timer
 
 
@@ -32,11 +47,24 @@ def parse_args():
         "--type", default="twfe", choices=["basic", "twfe"],
         help="Estimator type (basic or twfe, default: twfe)"
     )
+    parser.add_argument(
+        "--backend", default="auto", choices=["auto", "python", "rust"],
+        help="Backend to use: auto (default), python (pure Python), rust (Rust backend)"
+    )
     return parser.parse_args()
+
+
+def get_actual_backend() -> str:
+    """Return the actual backend being used based on HAS_RUST_BACKEND."""
+    return "rust" if HAS_RUST_BACKEND else "python"
 
 
 def main():
     args = parse_args()
+
+    # Get actual backend (already configured via env var before imports)
+    actual_backend = get_actual_backend()
+    print(f"Using backend: {actual_backend}")
 
     # Load data
     print(f"Loading data from: {args.data}")
@@ -64,6 +92,7 @@ def main():
     # Build output
     output = {
         "estimator": "diff_diff.DifferenceInDifferences",
+        "backend": actual_backend,
         "cluster": args.cluster,
         # Treatment effect
         "att": float(att),
