@@ -15,18 +15,17 @@ jobs:
 
       - name: Install dependencies
         run: |
-          dnf install -y openblas-devel perl-IPC-Cmd
-          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-          source $HOME/.cargo/env
-          pip3.12 install maturin
+          dnf install -y openblas-devel
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --no-modify-path
+          /opt/python/cp312-cp312/bin/pip install maturin
 
       - name: Build wheels
         run: |
-          source $HOME/.cargo/env
-          for pyver in 3.9 3.10 3.11 3.12; do
-            pybin="/opt/python/cp${pyver/./}-cp${pyver/./}/bin/python"
+          export PATH="$HOME/.cargo/bin:$PATH"
+          for pyver in 39 310 311 312; do
+            pybin="/opt/python/cp${pyver}-cp${pyver}/bin/python"
             if [ -f "$pybin" ]; then
-              maturin build --release --out dist -i "$pybin" --features extension-module
+              /opt/python/cp312-cp312/bin/maturin build --release --out dist -i "$pybin" --features extension-module
             fi
           done
 
