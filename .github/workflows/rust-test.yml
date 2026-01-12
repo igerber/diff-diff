@@ -81,12 +81,21 @@ jobs:
         run: |
           pip install maturin
           maturin build --release -o dist
+          echo "=== Built wheels ==="
+          ls -la dist/
           # --no-index ensures we install from local wheel, not PyPI
           pip install --no-index --find-links=dist diff-diff
 
       - name: Verify Rust backend is available
         run: |
-          python -c "from diff_diff import HAS_RUST_BACKEND; assert HAS_RUST_BACKEND, 'Rust backend not available'"
+          echo "=== Installed package location ==="
+          python -c "import diff_diff; print(diff_diff.__file__)"
+          echo "=== Package contents ==="
+          python -c "import diff_diff, os; print(os.listdir(os.path.dirname(diff_diff.__file__)))"
+          echo "=== Try importing rust backend directly ==="
+          python -c "from diff_diff import _rust_backend; print('Success:', _rust_backend)" || echo "Direct import failed"
+          echo "=== Check HAS_RUST_BACKEND ==="
+          python -c "from diff_diff import HAS_RUST_BACKEND; print('HAS_RUST_BACKEND:', HAS_RUST_BACKEND); assert HAS_RUST_BACKEND, 'Rust backend not available'"
 
       - name: Run Rust backend tests
         run: pytest tests/test_rust_backend.py -v
