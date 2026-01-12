@@ -15,7 +15,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          dnf install -y openblas-devel
+          dnf install -y openblas-devel openssl-devel perl-IPC-Cmd
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --no-modify-path
           /opt/python/cp312-cp312/bin/pip install maturin
 
