@@ -87,21 +87,19 @@ jobs:
           pip install --no-index --find-links=dist diff-diff
 
       - name: Verify Rust backend is available
+        # Run from /tmp to avoid source directory shadowing installed package
+        working-directory: /tmp
         run: |
-          echo "=== Installed package location ==="
-          python -c "import diff_diff; print(diff_diff.__file__)"
-          echo "=== Package contents ==="
-          python -c "import diff_diff, os; print(os.listdir(os.path.dirname(diff_diff.__file__)))"
-          echo "=== Try importing rust backend directly ==="
-          python -c "from diff_diff import _rust_backend; print('Success:', _rust_backend)" || echo "Direct import failed"
-          echo "=== Check HAS_RUST_BACKEND ==="
+          python -c "import diff_diff; print('Location:', diff_diff.__file__)"
           python -c "from diff_diff import HAS_RUST_BACKEND; print('HAS_RUST_BACKEND:', HAS_RUST_BACKEND); assert HAS_RUST_BACKEND, 'Rust backend not available'"
 
       - name: Run Rust backend tests
-        run: pytest tests/test_rust_backend.py -v
+        working-directory: /tmp
+        run: pytest $GITHUB_WORKSPACE/tests/test_rust_backend.py -v
 
       - name: Run tests with Rust backend
-        run: DIFF_DIFF_BACKEND=rust pytest tests/ -x -q
+        working-directory: /tmp
+        run: DIFF_DIFF_BACKEND=rust pytest $GITHUB_WORKSPACE/tests/ -x -q
 
   # Test pure Python fallback (without Rust extension)
   python-fallback:
