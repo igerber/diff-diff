@@ -30,7 +30,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-action@stable
+        uses: dtolnay/rust-toolchain@stable
 
       - name: Install OpenBLAS
         run: sudo apt-get update && sudo apt-get install -y libopenblas-dev
@@ -66,7 +66,7 @@ jobs:
         run: brew install openblas
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-action@stable
+        uses: dtolnay/rust-toolchain@stable
 
       - name: Build with maturin
         uses: PyO3/maturin-action@v1
@@ -99,10 +99,11 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install without Rust
+      - name: Install dependencies and package
         run: |
-          pip install numpy pandas scipy pytest
-          pip install -e . --no-build-isolation
+          pip install numpy pandas scipy pytest maturin
+          # Install in editable mode - Rust build will be skipped if no Rust toolchain
+          pip install -e . --no-build-isolation || pip install -e .
 
       - name: Verify pure Python mode
         run: |
