@@ -5,30 +5,26 @@ on:
     types: [published]
 
 jobs:
-  # Build wheels on Linux
+  # Build wheels on Linux using manylinux
   build-linux:
     name: Build Linux wheels
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        target: [x86_64]
     steps:
       - uses: actions/checkout@v4
 
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         with:
-          target: ${{ matrix.target }}
+          target: x86_64
           args: --release --out dist -i python3.9 -i python3.10 -i python3.11 -i python3.12
-          manylinux: auto
+          manylinux: 2_28
           before-script-linux: |
-            # Install OpenBLAS and OpenSSL
-            yum install -y openblas-devel openssl-devel || apt-get update && apt-get install -y libopenblas-dev libssl-dev
+            dnf install -y openblas-devel openssl-devel
 
       - name: Upload wheels
         uses: actions/upload-artifact@v4
         with:
-          name: wheels-linux-${{ matrix.target }}
+          name: wheels-linux-x86_64
           path: dist/*.whl
 
   # Build wheels on macOS (x86_64)
@@ -46,19 +42,21 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
+      - name: Get Python path
+        id: python
+        run: echo "path=$(which python)" >> $GITHUB_OUTPUT
+
       - name: Install OpenBLAS
         run: brew install openblas
-
-      - name: Set OpenBLAS paths
-        run: |
-          echo "OPENBLAS_DIR=$(brew --prefix openblas)" >> $GITHUB_ENV
-          echo "PKG_CONFIG_PATH=$(brew --prefix openblas)/lib/pkgconfig" >> $GITHUB_ENV
 
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         with:
           target: x86_64-apple-darwin
-          args: --release --out dist -i ${{ env.pythonLocation }}/bin/python
+          args: --release --out dist -i ${{ steps.python.outputs.path }}
+        env:
+          OPENBLAS_DIR: /usr/local/opt/openblas
+          PKG_CONFIG_PATH: /usr/local/opt/openblas/lib/pkgconfig
 
       - name: Upload wheels
         uses: actions/upload-artifact@v4
@@ -69,7 +67,7 @@ jobs:
   # Build wheels on macOS (ARM64)
   build-macos-arm:
     name: Build macOS ARM64 wheels
-    runs-on: macos-latest
+    runs-on: macos-14
     strategy:
       matrix:
         python-version: ['3.9', '3.10', '3.11', '3.12']
@@ -81,19 +79,21 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
+      - name: Get Python path
+        id: python
+        run: echo "path=$(which python)" >> $GITHUB_OUTPUT
+
       - name: Install OpenBLAS
         run: brew install openblas
-
-      - name: Set OpenBLAS paths
-        run: |
-          echo "OPENBLAS_DIR=$(brew --prefix openblas)" >> $GITHUB_ENV
-          echo "PKG_CONFIG_PATH=$(brew --prefix openblas)/lib/pkgconfig" >> $GITHUB_ENV
 
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         with:
           target: aarch64-apple-darwin
-          args: --release --out dist -i ${{ env.pythonLocation }}/bin/python
+          args: --release --out dist -i ${{ steps.python.outputs.path }}
+        env:
+          OPENBLAS_DIR: /opt/homebrew/opt/openblas
+          PKG_CONFIG_PATH: /opt/homebrew/opt/openblas/lib/pkgconfig
 
       - name: Upload wheels
         uses: actions/upload-artifact@v4
@@ -101,7 +101,7 @@ jobs:
           name: wheels-macos-arm64-py${{ matrix.python-version }}
           path: dist/*.whl
 
-  # Build source distribution (no Rust needed)
+  # Build source distribution
   build-sdist:
     name: Build source distribution
     runs-on: ubuntu-latest
@@ -121,8 +121,6 @@ jobs:
           path: dist/*.tar.gz
 
   # Publish all artifacts to PyPI
-  # Note: Windows builds skipped due to Intel MKL complexity
-  # Windows users get pure Python fallback via sdist
   publish:
     name: Publish to PyPI
     needs: [build-linux, build-macos-x86, build-macos-arm, build-sdist]
