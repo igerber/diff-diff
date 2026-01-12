@@ -20,7 +20,7 @@ jobs:
         uses: PyO3/maturin-action@v1
         with:
           target: ${{ matrix.target }}
-          args: --release --out dist
+          args: --release --out dist -i python3.9 -i python3.10 -i python3.11 -i python3.12 -i python3.13
           manylinux: auto
           # Install OpenBLAS in manylinux container
           before-script-linux: |
@@ -36,8 +36,16 @@ jobs:
   build-macos-x86:
     name: Build macOS x86_64 wheels
     runs-on: macos-13  # x86_64 runner
+    strategy:
+      matrix:
+        python-version: ['3.9', '3.10', '3.11', '3.12', '3.13']
     steps:
       - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
 
       - name: Install OpenBLAS
         run: brew install openblas
@@ -56,15 +64,23 @@ jobs:
       - name: Upload wheels
         uses: actions/upload-artifact@v4
         with:
-          name: wheels-macos-x86_64
+          name: wheels-macos-x86_64-py${{ matrix.python-version }}
           path: dist/*.whl
 
   # Build wheels on macOS (ARM64)
   build-macos-arm:
     name: Build macOS ARM64 wheels
     runs-on: macos-latest  # ARM64 runner
+    strategy:
+      matrix:
+        python-version: ['3.9', '3.10', '3.11', '3.12', '3.13']
     steps:
       - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
 
       - name: Install OpenBLAS
         run: brew install openblas
@@ -83,15 +99,23 @@ jobs:
       - name: Upload wheels
         uses: actions/upload-artifact@v4
         with:
-          name: wheels-macos-arm64
+          name: wheels-macos-arm64-py${{ matrix.python-version }}
           path: dist/*.whl
 
   # Build wheels on Windows
   build-windows:
     name: Build Windows wheels
     runs-on: windows-latest
+    strategy:
+      matrix:
+        python-version: ['3.9', '3.10', '3.11', '3.12', '3.13']
     steps:
       - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
 
       # Windows uses Intel MKL which is more complex to set up
       # For now, skip Windows Rust backend - users get pure Python fallback
@@ -112,7 +136,7 @@ jobs:
       - name: Upload wheels
         uses: actions/upload-artifact@v4
         with:
-          name: wheels-windows
+          name: wheels-windows-py${{ matrix.python-version }}
           path: dist/*.whl
         if: always()
 

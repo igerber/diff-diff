@@ -16,8 +16,8 @@ default = []
 extension-module = ["pyo3/extension-module"]
 
 [dependencies]
-pyo3 = "0.20"
-numpy = "0.20"
+pyo3 = "0.22"
+numpy = "0.22"
 ndarray = { version = "0.15", features = ["rayon"] }
 rand = "0.8"
 rand_xoshiro = "0.6"
