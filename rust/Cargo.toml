@@ -10,8 +10,13 @@ name = "diff_diff_rust"
 # cdylib for Python extension, rlib for running tests
 crate-type = ["cdylib", "rlib"]
 
+[features]
+default = []
+# extension-module is only needed for cdylib builds, not for cargo test
+extension-module = ["pyo3/extension-module"]
+
 [dependencies]
-pyo3 = { version = "0.20", features = ["extension-module"] }
+pyo3 = "0.20"
 numpy = "0.20"
 ndarray = { version = "0.15", features = ["rayon"] }
 rand = "0.8"

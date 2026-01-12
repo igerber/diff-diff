@@ -81,7 +81,7 @@ jobs:
         run: |
           pip install maturin
           maturin build --release
-          pip install target/wheels/*.whl
+          pip install --find-links=target/wheels diff-diff
 
       - name: Verify Rust backend is available
         run: |

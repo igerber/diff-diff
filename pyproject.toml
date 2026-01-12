@@ -57,7 +57,7 @@ Issues = "https://github.com/igerber/diff-diff/issues"
 
 [tool.maturin]
 # Build the Rust extension module
-features = ["pyo3/extension-module"]
+features = ["extension-module"]
 # Python source is in the root directory
 python-source = "."
 # Module name for the compiled extension
