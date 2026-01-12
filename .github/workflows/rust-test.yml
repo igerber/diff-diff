@@ -74,14 +74,14 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Build with maturin
-        uses: PyO3/maturin-action@v1
-        with:
-          command: develop
-          args: --release
-
       - name: Install test dependencies
         run: pip install pytest numpy pandas scipy
+
+      - name: Build and install with maturin
+        run: |
+          pip install maturin
+          maturin build --release
+          pip install target/wheels/*.whl
 
       - name: Verify Rust backend is available
         run: |

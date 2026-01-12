@@ -7,7 +7,8 @@ license = "MIT"
 
 [lib]
 name = "diff_diff_rust"
-crate-type = ["cdylib"]
+# cdylib for Python extension, rlib for running tests
+crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 pyo3 = { version = "0.20", features = ["extension-module"] }
