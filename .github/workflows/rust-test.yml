@@ -65,6 +65,12 @@ jobs:
         if: matrix.os == 'macos-latest'
         run: brew install openblas
 
+      - name: Set OpenBLAS paths (macOS)
+        if: matrix.os == 'macos-latest'
+        run: |
+          echo "OPENBLAS_DIR=$(brew --prefix openblas)" >> $GITHUB_ENV
+          echo "PKG_CONFIG_PATH=$(brew --prefix openblas)/lib/pkgconfig" >> $GITHUB_ENV
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
@@ -87,7 +93,7 @@ jobs:
       - name: Run tests with Rust backend
         run: DIFF_DIFF_BACKEND=rust pytest tests/ -x -q
 
-  # Test pure Python fallback
+  # Test pure Python fallback (without Rust extension)
   python-fallback:
     name: Pure Python Fallback
     runs-on: ubuntu-latest
@@ -99,15 +105,13 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install dependencies and package
-        run: |
-          pip install numpy pandas scipy pytest maturin
-          # Install in editable mode - Rust build will be skipped if no Rust toolchain
-          pip install -e . --no-build-isolation || pip install -e .
+      - name: Install dependencies
+        run: pip install numpy pandas scipy pytest
 
       - name: Verify pure Python mode
         run: |
-          python -c "from diff_diff import HAS_RUST_BACKEND; print(f'HAS_RUST_BACKEND: {HAS_RUST_BACKEND}')"
+          # Use PYTHONPATH to import directly (skips maturin build)
+          PYTHONPATH=. python -c "from diff_diff import HAS_RUST_BACKEND; print(f'HAS_RUST_BACKEND: {HAS_RUST_BACKEND}'); assert not HAS_RUST_BACKEND"
 
       - name: Run tests in pure Python mode
-        run: DIFF_DIFF_BACKEND=python pytest tests/ -x -q --ignore=tests/test_rust_backend.py
+        run: PYTHONPATH=. DIFF_DIFF_BACKEND=python pytest tests/ -x -q --ignore=tests/test_rust_backend.py
