@@ -38,7 +38,7 @@ jobs:
   # Build wheels on macOS x86_64 (native build)
   build-macos-x86:
     name: Build macOS x86_64 wheels
-    runs-on: macos-13
+    runs-on: macos-12
     strategy:
       matrix:
         python-version: ['3.9', '3.10', '3.11', '3.12']
