@@ -81,7 +81,8 @@ jobs:
         run: |
           pip install maturin
           maturin build --release
-          pip install --find-links=target/wheels diff-diff
+          # --no-index ensures we install from local wheel, not PyPI
+          pip install --no-index --find-links=target/wheels diff-diff
 
       - name: Verify Rust backend is available
         run: |
