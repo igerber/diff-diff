@@ -17,6 +17,7 @@ from diff_diff.results import DiDResults
 from diff_diff.utils import (
     compute_confidence_interval,
     compute_p_value,
+    within_transform as _within_transform_util,
 )
 
 
@@ -211,25 +212,8 @@ class TwoWayFixedEffects(DifferenceInDifferences):
         pd.DataFrame
             Data with demeaned variables.
         """
-        data = data.copy()
         variables = [outcome] + (covariates or [])
-
-        # Cache groupby objects for efficiency (avoids re-computing group indexes)
-        unit_grouper = data.groupby(unit, sort=False)
-        time_grouper = data.groupby(time, sort=False)
-
-        for var in variables:
-            # Unit means (using cached grouper)
-            unit_means = unit_grouper[var].transform("mean")
-            # Time means (using cached grouper)
-            time_means = time_grouper[var].transform("mean")
-            # Grand mean
-            grand_mean = data[var].mean()
-
-            # Within transformation
-            data[f"{var}_demeaned"] = data[var] - unit_means - time_means + grand_mean
-
-        return data
+        return _within_transform_util(data, variables, unit, time, suffix="_demeaned")
 
     def _check_staggered_treatment(
         self,

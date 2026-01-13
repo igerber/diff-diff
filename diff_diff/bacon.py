@@ -17,6 +17,8 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
+from diff_diff.utils import within_transform as _within_transform_util
+
 
 @dataclass
 class Comparison2x2:
@@ -573,66 +575,16 @@ class BaconDecomposition:
         treat_col: str = '__bacon_treated_internal__',
     ) -> float:
         """Compute TWFE estimate using within-transformation."""
-        # Demean by unit and time
-        y = df[outcome].values
-        d = df[treat_col].astype(float).values
+        # Apply two-way within transformation
+        df_dm = _within_transform_util(
+            df, [outcome, treat_col], unit, time, suffix="_within"
+        )
 
-        # Create unit and time dummies for demeaning
-        units = df[unit].values
-        times = df[time].values
+        # Extract within-transformed values
+        y_within = df_dm[f"{outcome}_within"].values
+        d_within = df_dm[f"{treat_col}_within"].values
 
-        # Unit means
-        unit_map = {u: i for i, u in enumerate(df[unit].unique())}
-        unit_idx = np.array([unit_map[u] for u in units])
-        n_units = len(unit_map)
-
-        # Time means
-        time_map = {t: i for i, t in enumerate(df[time].unique())}
-        time_idx = np.array([time_map[t] for t in times])
-        n_times = len(time_map)
-
-        # Compute means
-        y_unit_mean = np.zeros(n_units)
-        d_unit_mean = np.zeros(n_units)
-        unit_counts = np.zeros(n_units)
-
-        for i in range(len(y)):
-            u = unit_idx[i]
-            y_unit_mean[u] += y[i]
-            d_unit_mean[u] += d[i]
-            unit_counts[u] += 1
-
-        y_unit_mean /= np.maximum(unit_counts, 1)
-        d_unit_mean /= np.maximum(unit_counts, 1)
-
-        y_time_mean = np.zeros(n_times)
-        d_time_mean = np.zeros(n_times)
-        time_counts = np.zeros(n_times)
-
-        for i in range(len(y)):
-            t = time_idx[i]
-            y_time_mean[t] += y[i]
-            d_time_mean[t] += d[i]
-            time_counts[t] += 1
-
-        y_time_mean /= np.maximum(time_counts, 1)
-        d_time_mean /= np.maximum(time_counts, 1)
-
-        # Overall mean
-        y_mean = np.mean(y)
-        d_mean = np.mean(d)
-
-        # Within transformation: y_it - y_i - y_t + y
-        y_within = np.zeros(len(y))
-        d_within = np.zeros(len(d))
-
-        for i in range(len(y)):
-            u = unit_idx[i]
-            t = time_idx[i]
-            y_within[i] = y[i] - y_unit_mean[u] - y_time_mean[t] + y_mean
-            d_within[i] = d[i] - d_unit_mean[u] - d_time_mean[t] + d_mean
-
-        # OLS on demeaned data
+        # OLS on demeaned data: beta = sum(d * y) / sum(d^2)
         d_var = np.sum(d_within ** 2)
         if d_var > 0:
             beta = np.sum(d_within * y_within) / d_var

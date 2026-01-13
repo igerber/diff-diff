@@ -1342,3 +1342,140 @@ def compute_placebo_effects(
         placebo_effects.append(placebo_tau)
 
     return np.asarray(placebo_effects)
+
+
+def demean_by_group(
+    data: pd.DataFrame,
+    variables: List[str],
+    group_var: str,
+    inplace: bool = False,
+    suffix: str = "",
+) -> Tuple[pd.DataFrame, int]:
+    """
+    Demean variables by a grouping variable (one-way within transformation).
+
+    For each variable, computes: x_ig - mean(x_g) where g is the group.
+
+    Parameters
+    ----------
+    data : pd.DataFrame
+        DataFrame containing the variables to demean.
+    variables : list of str
+        Column names to demean.
+    group_var : str
+        Column name for the grouping variable.
+    inplace : bool, default False
+        If True, modifies the original columns. If False, leaves original
+        columns unchanged (demeaning is still applied to return value).
+    suffix : str, default ""
+        Suffix to add to demeaned column names (only used when inplace=False
+        and you want to keep both original and demeaned columns).
+
+    Returns
+    -------
+    data : pd.DataFrame
+        DataFrame with demeaned variables.
+    n_effects : int
+        Number of absorbed fixed effects (nunique - 1).
+
+    Examples
+    --------
+    >>> df, n_fe = demean_by_group(df, ['y', 'x1', 'x2'], 'unit')
+    >>> # df['y'], df['x1'], df['x2'] are now demeaned by unit
+    """
+    if not inplace:
+        data = data.copy()
+
+    # Count fixed effects (categories - 1 for identification)
+    n_effects = data[group_var].nunique() - 1
+
+    # Cache the groupby object for efficiency
+    grouper = data.groupby(group_var, sort=False)
+
+    for var in variables:
+        col_name = var if not suffix else f"{var}{suffix}"
+        group_means = grouper[var].transform("mean")
+        data[col_name] = data[var] - group_means
+
+    return data, n_effects
+
+
+def within_transform(
+    data: pd.DataFrame,
+    variables: List[str],
+    unit: str,
+    time: str,
+    inplace: bool = False,
+    suffix: str = "_demeaned",
+) -> pd.DataFrame:
+    """
+    Apply two-way within transformation to remove unit and time fixed effects.
+
+    Computes: y_it - y_i. - y_.t + y_.. for each variable.
+
+    This is the standard fixed effects transformation for panel data that
+    removes both unit-specific and time-specific effects.
+
+    Parameters
+    ----------
+    data : pd.DataFrame
+        Panel data containing the variables to transform.
+    variables : list of str
+        Column names to transform.
+    unit : str
+        Column name for unit identifier.
+    time : str
+        Column name for time period identifier.
+    inplace : bool, default False
+        If True, modifies the original columns. If False, creates new columns
+        with the specified suffix.
+    suffix : str, default "_demeaned"
+        Suffix for new column names when inplace=False.
+
+    Returns
+    -------
+    pd.DataFrame
+        DataFrame with within-transformed variables.
+
+    Notes
+    -----
+    The within transformation removes variation that is constant within units
+    (unit fixed effects) and constant within time periods (time fixed effects).
+    The resulting estimates are equivalent to including unit and time dummies
+    but is computationally more efficient for large panels.
+
+    Examples
+    --------
+    >>> df = within_transform(df, ['y', 'x'], 'unit_id', 'year')
+    >>> # df now has 'y_demeaned' and 'x_demeaned' columns
+    """
+    if not inplace:
+        data = data.copy()
+
+    # Cache groupby objects for efficiency
+    unit_grouper = data.groupby(unit, sort=False)
+    time_grouper = data.groupby(time, sort=False)
+
+    if inplace:
+        # Modify columns in place
+        for var in variables:
+            unit_means = unit_grouper[var].transform("mean")
+            time_means = time_grouper[var].transform("mean")
+            grand_mean = data[var].mean()
+            data[var] = data[var] - unit_means - time_means + grand_mean
+    else:
+        # Build all demeaned columns at once to avoid DataFrame fragmentation
+        demeaned_data = {}
+        for var in variables:
+            unit_means = unit_grouper[var].transform("mean")
+            time_means = time_grouper[var].transform("mean")
+            grand_mean = data[var].mean()
+            demeaned_data[f"{var}{suffix}"] = (
+                data[var] - unit_means - time_means + grand_mean
+            ).values
+
+        # Add all columns at once
+        demeaned_df = pd.DataFrame(demeaned_data, index=data.index)
+        data = pd.concat([data, demeaned_df], axis=1)
+
+    return data

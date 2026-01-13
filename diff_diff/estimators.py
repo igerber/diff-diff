@@ -23,6 +23,7 @@ from diff_diff.utils import (
     WildBootstrapResults,
     compute_confidence_interval,
     compute_p_value,
+    demean_by_group,
     validate_binary,
     wild_bootstrap_se,
 )
@@ -227,10 +228,10 @@ class DifferenceInDifferences:
             # unit-invariant, so demeaning them would create multicollinearity
             vars_to_demean = [outcome] + (covariates or [])
             for ab_var in absorb:
-                n_absorbed_effects += working_data[ab_var].nunique() - 1
-                for var in vars_to_demean:
-                    group_means = working_data.groupby(ab_var)[var].transform("mean")
-                    working_data[var] = working_data[var] - group_means
+                working_data, n_fe = demean_by_group(
+                    working_data, vars_to_demean, ab_var, inplace=True
+                )
+                n_absorbed_effects += n_fe
                 absorbed_vars.append(ab_var)
 
         # Extract variables (may be demeaned if absorb was used)
@@ -828,10 +829,10 @@ class MultiPeriodDiD(DifferenceInDifferences):
         if absorb:
             vars_to_demean = [outcome] + (covariates or [])
             for ab_var in absorb:
-                n_absorbed_effects += working_data[ab_var].nunique() - 1
-                for var in vars_to_demean:
-                    group_means = working_data.groupby(ab_var)[var].transform("mean")
-                    working_data[var] = working_data[var] - group_means
+                working_data, n_fe = demean_by_group(
+                    working_data, vars_to_demean, ab_var, inplace=True
+                )
+                n_absorbed_effects += n_fe
 
         # Extract outcome and treatment
         y = working_data[outcome].values.astype(float)

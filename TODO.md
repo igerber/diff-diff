@@ -25,7 +25,7 @@ Consolidation opportunities for cleaner maintenance:
 
 | Duplicate Code | Locations | Notes |
 |---------------|-----------|-------|
-| Within-transformation logic | `estimators.py:217-232`, `estimators.py:787-833`, `bacon.py:567-642` | Extract to utils.py |
+| ~~Within-transformation logic~~ | ~~Multiple files~~ | ✅ Extracted to `utils.py` as `demean_by_group()` and `within_transform()` (v2.0.1) |
 | Linear regression helper | `staggered.py:205-240`, `estimators.py:366-408` | Consider consolidation |
 
 ### Large Module Files
@@ -92,8 +92,8 @@ Enhancements for `honest_did.py`:
 
 Deferred from PR #58 code review (can be done post-merge):
 
-- [ ] **Matrix inversion efficiency** (`rust/src/linalg.rs:180-194`): Use Cholesky factorization for symmetric positive-definite matrices instead of column-by-column solve
-- [ ] **Reduce bootstrap allocations** (`rust/src/bootstrap.rs`): Currently uses `Vec<Vec<f64>>` → flatten → `Array2` which allocates twice. Should allocate directly into ndarray.
+- [x] **Matrix inversion efficiency** (`rust/src/linalg.rs`): ~~Use Cholesky factorization for symmetric positive-definite matrices instead of column-by-column solve~~ (completed in v2.0.1)
+- [x] **Reduce bootstrap allocations** (`rust/src/bootstrap.rs`): ~~Currently uses `Vec<Vec<f64>>` → flatten → `Array2` which allocates twice.~~ Now allocates directly into pre-allocated buffer. (completed in v2.0.1)
 - [ ] **Consider static BLAS linking** (`rust/Cargo.toml`): Currently requires system BLAS libraries. Consider `openblas-static` or `intel-mkl-static` features for easier distribution.
 
 ---
