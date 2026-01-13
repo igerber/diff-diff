@@ -6,43 +6,16 @@ For past changes and release history, see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
-## Current Status (v1.4.0)
+## Current Status
 
-diff-diff is a **production-ready** DiD library with feature parity with R's `did` + `HonestDiD` + `synthdid` ecosystem for core DiD analysis:
+diff-diff v1.4.0 is a **production-ready** DiD library with feature parity with R's `did` + `HonestDiD` + `synthdid` ecosystem for core DiD analysis:
 
 - **Core estimators**: Basic DiD, TWFE, MultiPeriod, Callaway-Sant'Anna, Sun-Abraham, Synthetic DiD, Triple Difference (DDD)
 - **Valid inference**: Robust SEs, cluster SEs, wild bootstrap, multiplier bootstrap, placebo-based variance
 - **Assumption diagnostics**: Parallel trends tests, placebo tests, Goodman-Bacon decomposition
 - **Sensitivity analysis**: Honest DiD (Rambachan-Roth), Pre-trends power analysis (Roth 2022)
 - **Study design**: Power analysis tools
-- **Performance**: Now faster than R at scale (see below)
-
----
-
-## Priority: Performance Improvements
-
-**Status:** ✅ Phase 1 Complete (v1.4.0)
-
-Phase 1 pure Python optimizations exceeded targets. diff-diff now **beats R** at scale:
-
-| Estimator | v1.3 (10K scale) | v1.4 (10K scale) | vs R |
-|-----------|------------------|------------------|------|
-| BasicDiD/TWFE | 0.835s | **0.011s** | **4.2x faster than R** |
-| CallawaySantAnna | 2.234s | **0.109s** | **7.2x faster than R** |
-| SyntheticDiD | Already 37x faster | N/A | **37x faster than R** |
-
-### What Was Done (v1.4.0)
-
-1. **Unified `linalg.py` backend** - Single OLS/SE implementation for all estimators
-2. **Vectorized cluster-robust SE** - Eliminated O(n × clusters) loop
-3. **Pre-computed data structures** - Wide-format outcome matrix, cohort masks
-4. **Vectorized bootstrap** - Matrix operations instead of nested loops
-
-### Phase 2 (Future)
-
-Rust backend remains available if further optimization needed, but pure Python now exceeds R performance.
-
-**Full details:** [docs/performance-plan.md](docs/performance-plan.md)
+- **Performance**: Faster than R at scale (see [CHANGELOG.md](CHANGELOG.md) for benchmarks)
 
 ---
 
@@ -99,28 +72,6 @@ Extend the existing `TripleDifference` estimator to handle staggered adoption se
 - Synthetic control weight visualization (bar chart of unit weights)
 - Treatment adoption "staircase" plot for staggered designs
 - Interactive plots with plotly backend option
-
-### CallawaySantAnna Analytical SE Parity with R
-
-**Status:** ✅ Complete (v1.5.0)
-
-The analytical standard error for the overall ATT in `CallawaySantAnna` now matches R's `did` package by using influence function aggregation.
-
-**Implementation:**
-- Modified `_aggregate_simple`, `_aggregate_event_study`, and `_aggregate_by_group` in `staggered.py`
-- Added `_compute_aggregated_se` helper that aggregates unit-level influence functions:
-  ```
-  ψ_i(overall) = Σ_{(g,t)} w_(g,t) × ψ_i(g,t)
-  Var(overall) = Σᵢ [ψ_i]²
-  ```
-- This accounts for covariances across (g,t) pairs due to shared control units
-
-**Validation (MPDTA dataset):**
-- diff-diff analytical SE: 0.0117
-- R `did` analytical SE: 0.0118
-- Difference: **< 1%** (was 19%)
-
-Point estimates continue to match R exactly.
 
 ---
 
@@ -249,10 +200,6 @@ For high-dimensional settings with many potential confounders.
 
 Ongoing maintenance and developer experience.
 
-### Performance
-
-See [Priority: Performance Improvements](#priority-performance-improvements) and [docs/performance-plan.md](docs/performance-plan.md).
-
 ### Code Quality
 
 - Extract shared within-transformation logic to utils
@@ -262,7 +209,6 @@ See [Priority: Performance Improvements](#priority-performance-improvements) and
 ### Documentation
 
 - Real-world data examples (beyond synthetic)
-- Performance benchmarks vs. R packages
 - Video tutorials and worked examples
 
 ---
