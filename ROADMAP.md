@@ -149,6 +149,27 @@ Extends DiD to duration/survival outcomes where standard methods fail (hazard ra
 
 ---
 
+## Triply Robust Panel Estimator (v2.3)
+
+### TROP Estimator
+
+The Triply Robust Panel (TROP) estimator from Athey, Imbens, Qu & Viviano (2025) combines three components for robust causal effect estimation in panel data:
+
+1. **Flexible outcome model**: Low-rank factor structure on top of two-way fixed effects
+2. **Unit weights**: Upweight control units similar to treated units (like synthetic control)
+3. **Time weights**: Upweight time periods close to treatment (like SDID)
+
+**Triple robustness property**: The estimator is asymptotically unbiased if *any one* of the three components removes the underlying bias. The bias depends on the *product* of unit-level imbalance, time-level imbalance, and regression adjustment error—a tighter bound than TWFE, SC, or SDID alone.
+
+**Key advantages:**
+- Outperforms TWFE/DiD, synthetic control, matrix completion, and SDID in simulations matched to real datasets
+- More robust than existing methods across a wide range of empirically relevant settings
+- Combines the strengths of regression adjustment, synthetic control weighting, and SDID time weighting
+
+**Reference**: [Athey, S., Imbens, G., Qu, Z., & Viviano, D. (2025)](https://arxiv.org/abs/2508.21536). "Triply Robust Panel Estimators." *Working Paper*. Presented at the Journal of Applied Econometrics lecture, ASSA meetings, January 2025.
+
+---
+
 ## Long-Term Research Directions (v3.0+)
 
 Frontier methods requiring more research investment.
