@@ -21,6 +21,7 @@ from diff_diff.results import _get_significance_stars
 from diff_diff.utils import (
     compute_confidence_interval,
     compute_p_value,
+    within_transform as _within_transform_util,
 )
 
 
@@ -789,28 +790,7 @@ class SunAbraham:
 
         y_it - y_i. - y_.t + y_..
         """
-        df = df.copy()
-
-        # Build all demeaned columns at once to avoid fragmentation
-        demeaned_data = {}
-        for var in variables:
-            # Unit means
-            unit_means = df.groupby(unit)[var].transform("mean")
-            # Time means
-            time_means = df.groupby(time)[var].transform("mean")
-            # Grand mean
-            grand_mean = df[var].mean()
-
-            # Within transformation
-            demeaned_data[f"{var}_dm"] = (
-                df[var] - unit_means - time_means + grand_mean
-            ).values
-
-        # Add all demeaned columns at once
-        demeaned_df = pd.DataFrame(demeaned_data, index=df.index)
-        df = pd.concat([df, demeaned_df], axis=1)
-
-        return df
+        return _within_transform_util(df, variables, unit, time, suffix="_dm")
 
     def _compute_iw_effects(
         self,

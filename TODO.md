@@ -25,7 +25,7 @@ Consolidation opportunities for cleaner maintenance:
 
 | Duplicate Code | Locations | Notes |
 |---------------|-----------|-------|
-| Within-transformation logic | `estimators.py:217-232`, `estimators.py:787-833`, `bacon.py:567-642` | Extract to utils.py |
+| ~~Within-transformation logic~~ | ~~Multiple files~~ | ✅ Extracted to `utils.py` as `demean_by_group()` and `within_transform()` (v2.0.1) |
 | Linear regression helper | `staggered.py:205-240`, `estimators.py:366-408` | Consider consolidation |
 
 ### Large Module Files
