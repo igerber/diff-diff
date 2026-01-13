@@ -92,8 +92,8 @@ Enhancements for `honest_did.py`:
 
 Deferred from PR #58 code review (can be done post-merge):
 
-- [x] **Matrix inversion efficiency** (`rust/src/linalg.rs`): ~~Use Cholesky factorization for symmetric positive-definite matrices instead of column-by-column solve~~ (completed in v2.0.1)
-- [x] **Reduce bootstrap allocations** (`rust/src/bootstrap.rs`): ~~Currently uses `Vec<Vec<f64>>` → flatten → `Array2` which allocates twice.~~ Now allocates directly into pre-allocated buffer. (completed in v2.0.1)
+- [ ] **Matrix inversion efficiency** (`rust/src/linalg.rs:180-194`): Use Cholesky factorization for symmetric positive-definite matrices instead of column-by-column solve
+- [ ] **Reduce bootstrap allocations** (`rust/src/bootstrap.rs`): Currently uses `Vec<Vec<f64>>` → flatten → `Array2` which allocates twice. Should allocate directly into ndarray.
 - [ ] **Consider static BLAS linking** (`rust/Cargo.toml`): Currently requires system BLAS libraries. Consider `openblas-static` or `intel-mkl-static` features for easier distribution.
 
 ---

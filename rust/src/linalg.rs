@@ -6,7 +6,7 @@
 //! - Cluster-robust variance-covariance estimation
 
 use ndarray::{Array1, Array2, ArrayView1, ArrayView2};
-use ndarray_linalg::{Cholesky, LeastSquaresSvd, Solve, UPLO};
+use ndarray_linalg::{LeastSquaresSvd, Solve};
 use numpy::{IntoPyArray, PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2};
 use pyo3::prelude::*;
 use std::collections::HashMap;
@@ -190,30 +190,18 @@ fn compute_robust_vcov_internal(
     }
 }
 
-/// Invert a symmetric positive-definite matrix using Cholesky factorization.
-///
-/// For symmetric positive-definite matrices like X'X, Cholesky factorization
-/// (A = L L') is more efficient than general LU decomposition, requiring
-/// approximately half the operations.
+/// Invert a symmetric positive-definite matrix.
 fn invert_symmetric(a: &Array2<f64>) -> PyResult<Array2<f64>> {
     let n = a.nrows();
-
-    // Compute Cholesky factorization: A = L L' where L is lower triangular
-    let factorized = a.cholesky(UPLO::Lower)
-        .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            format!("Cholesky factorization failed (matrix may not be positive-definite): {}", e)
-        ))?;
-
-    // Solve A * A^{-1} = I by solving for each column of the identity
     let mut result = Array2::<f64>::zeros((n, n));
+
+    // Solve A * x_i = e_i for each column of the identity matrix
     for i in 0..n {
         let mut e_i = Array1::<f64>::zeros(n);
         e_i[i] = 1.0;
 
-        let col = factorized.solve(&e_i)
-            .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                format!("Matrix inversion failed: {}", e)
-            ))?;
+        let col = a.solve(&e_i)
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Matrix inversion failed: {}", e)))?;
 
         result.column_mut(i).assign(&col);
     }

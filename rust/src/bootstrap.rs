@@ -51,20 +51,19 @@ pub fn generate_bootstrap_weights_batch<'py>(
 ///
 /// E[w] = 0, Var[w] = 1
 fn generate_rademacher_batch(n_bootstrap: usize, n_units: usize, seed: u64) -> Array2<f64> {
-    // Pre-allocate flat array directly (single allocation instead of Vec<Vec<f64>> + flatten)
-    let total_size = n_bootstrap * n_units;
-    let mut flat = vec![0.0_f64; total_size];
-
-    // Generate weights in parallel, writing directly to pre-allocated buffer
-    flat.par_chunks_mut(n_units)
-        .enumerate()
-        .for_each(|(i, row)| {
+    // Generate weights in parallel using rayon
+    let rows: Vec<Vec<f64>> = (0..n_bootstrap)
+        .into_par_iter()
+        .map(|i| {
             let mut rng = Xoshiro256PlusPlus::seed_from_u64(seed.wrapping_add(i as u64));
-            for val in row.iter_mut() {
-                *val = if rng.gen::<bool>() { 1.0 } else { -1.0 };
-            }
-        });
+            (0..n_units)
+                .map(|_| if rng.gen::<bool>() { 1.0 } else { -1.0 })
+                .collect()
+        })
+        .collect();
 
+    // Convert to ndarray
+    let flat: Vec<f64> = rows.into_iter().flatten().collect();
     Array2::from_shape_vec((n_bootstrap, n_units), flat).unwrap()
 }
 
@@ -84,24 +83,23 @@ fn generate_mammen_batch(n_bootstrap: usize, n_units: usize, seed: u64) -> Array
     // Probability of negative value
     let prob_neg = (sqrt5 + 1.0) / (2.0 * sqrt5); // ≈ 0.724
 
-    // Pre-allocate flat array directly (single allocation)
-    let total_size = n_bootstrap * n_units;
-    let mut flat = vec![0.0_f64; total_size];
-
-    // Generate weights in parallel, writing directly to pre-allocated buffer
-    flat.par_chunks_mut(n_units)
-        .enumerate()
-        .for_each(|(i, row)| {
+    let rows: Vec<Vec<f64>> = (0..n_bootstrap)
+        .into_par_iter()
+        .map(|i| {
             let mut rng = Xoshiro256PlusPlus::seed_from_u64(seed.wrapping_add(i as u64));
-            for val in row.iter_mut() {
-                *val = if rng.gen::<f64>() < prob_neg {
-                    val_neg
-                } else {
-                    val_pos
-                };
-            }
-        });
+            (0..n_units)
+                .map(|_| {
+                    if rng.gen::<f64>() < prob_neg {
+                        val_neg
+                    } else {
+                        val_pos
+                    }
+                })
+                .collect()
+        })
+        .collect();
 
+    let flat: Vec<f64> = rows.into_iter().flatten().collect();
     Array2::from_shape_vec((n_bootstrap, n_units), flat).unwrap()
 }
 
@@ -120,33 +118,32 @@ fn generate_webb_batch(n_bootstrap: usize, n_units: usize, seed: u64) -> Array2<
     // Equal probability for each of 6 values: 1/6 each
     let prob = 1.0 / 6.0;
 
-    // Pre-allocate flat array directly (single allocation)
-    let total_size = n_bootstrap * n_units;
-    let mut flat = vec![0.0_f64; total_size];
-
-    // Generate weights in parallel, writing directly to pre-allocated buffer
-    flat.par_chunks_mut(n_units)
-        .enumerate()
-        .for_each(|(i, row)| {
+    let rows: Vec<Vec<f64>> = (0..n_bootstrap)
+        .into_par_iter()
+        .map(|i| {
             let mut rng = Xoshiro256PlusPlus::seed_from_u64(seed.wrapping_add(i as u64));
-            for val in row.iter_mut() {
-                let u = rng.gen::<f64>();
-                *val = if u < prob {
-                    -val1
-                } else if u < 2.0 * prob {
-                    -val2
-                } else if u < 3.0 * prob {
-                    -val3
-                } else if u < 4.0 * prob {
-                    val3
-                } else if u < 5.0 * prob {
-                    val2
-                } else {
-                    val1
-                };
-            }
-        });
+            (0..n_units)
+                .map(|_| {
+                    let u = rng.gen::<f64>();
+                    if u < prob {
+                        -val1
+                    } else if u < 2.0 * prob {
+                        -val2
+                    } else if u < 3.0 * prob {
+                        -val3
+                    } else if u < 4.0 * prob {
+                        val3
+                    } else if u < 5.0 * prob {
+                        val2
+                    } else {
+                        val1
+                    }
+                })
+                .collect()
+        })
+        .collect();
 
+    let flat: Vec<f64> = rows.into_iter().flatten().collect();
     Array2::from_shape_vec((n_bootstrap, n_units), flat).unwrap()
 }
 
