@@ -8,18 +8,18 @@ For past changes and release history, see [CHANGELOG.md](CHANGELOG.md).
 
 ## Current Status
 
-diff-diff v1.4.0 is a **production-ready** DiD library with feature parity with R's `did` + `HonestDiD` + `synthdid` ecosystem for core DiD analysis:
+diff-diff v2.0.0 is a **production-ready** DiD library with feature parity with R's `did` + `HonestDiD` + `synthdid` ecosystem for core DiD analysis:
 
 - **Core estimators**: Basic DiD, TWFE, MultiPeriod, Callaway-Sant'Anna, Sun-Abraham, Synthetic DiD, Triple Difference (DDD)
 - **Valid inference**: Robust SEs, cluster SEs, wild bootstrap, multiplier bootstrap, placebo-based variance
 - **Assumption diagnostics**: Parallel trends tests, placebo tests, Goodman-Bacon decomposition
 - **Sensitivity analysis**: Honest DiD (Rambachan-Roth), Pre-trends power analysis (Roth 2022)
 - **Study design**: Power analysis tools
-- **Performance**: Faster than R at scale (see [CHANGELOG.md](CHANGELOG.md) for benchmarks)
+- **Performance**: Optional Rust backend for accelerated computation; faster than R at scale (see [CHANGELOG.md](CHANGELOG.md) for benchmarks)
 
 ---
 
-## Near-Term Enhancements (v1.5)
+## Near-Term Enhancements (v2.1)
 
 High-value additions building on our existing foundation.
 
@@ -75,7 +75,7 @@ Extend the existing `TripleDifference` estimator to handle staggered adoption se
 
 ---
 
-## Medium-Term Enhancements (v1.6+)
+## Medium-Term Enhancements (v2.2+)
 
 Extending diff-diff to handle more complex settings.
 
@@ -149,7 +149,7 @@ Extends DiD to duration/survival outcomes where standard methods fail (hazard ra
 
 ---
 
-## Long-Term Research Directions (v2.0+)
+## Long-Term Research Directions (v3.0+)
 
 Frontier methods requiring more research investment.
 
