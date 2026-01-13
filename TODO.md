@@ -57,16 +57,7 @@ Different estimators compute SEs differently. Consider unified interface.
 
 ---
 
-## Test Coverage Gaps
-
-Edge cases needing tests:
-
-- [x] Very few clusters (< 5) with wild bootstrap (added in v1.2.1)
-- [x] Unbalanced panels with missing periods (added in v1.2.1)
-- [x] Single treated unit scenarios (added in v1.2.1)
-- [x] Perfect collinearity detection (added in v1.2.1)
-- [x] CallawaySantAnna with single cohort (added in v1.2.1)
-- [x] SyntheticDiD with insufficient pre-periods (added in v1.2.1)
+## Test Coverage
 
 **Note**: 21 visualization tests are skipped when matplotlib unavailable—this is expected.
 
@@ -74,10 +65,8 @@ Edge cases needing tests:
 
 ## Documentation Improvements
 
-- [x] Troubleshooting section for common errors (added in v1.0.0)
 - [ ] Comparison of estimator outputs on same data
 - [ ] Real-world data examples (currently synthetic only)
-- [x] Performance benchmarks vs. R packages
 
 ---
 
@@ -95,9 +84,6 @@ Enhancements for `honest_did.py`:
 
 ## CallawaySantAnna Bootstrap Improvements
 
-From code review (PR #32):
-
-- [x] Refactor `_run_multiplier_bootstrap` into smaller helper methods (extracted `_compute_effect_bootstrap_stats()` in v1.2.1)
 - [ ] Consider aligning p-value computation with R `did` package (symmetric percentile method)
 
 ---
@@ -120,8 +106,3 @@ Potential future optimizations:
 - [ ] Parallel bootstrap iterations
 - [ ] Sparse matrix handling for large fixed effects
 
----
-
-## Type Hints
-
-All previously identified missing type hints have been addressed in v1.1.1.
