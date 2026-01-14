@@ -1479,29 +1479,36 @@ class CallawaySantAnna:
 
         Standard errors are computed using influence function aggregation,
         which properly accounts for covariances across (g,t) pairs due to
-        shared control units. This matches R's `did` package approach.
+        shared control units. This includes the wif (weight influence function)
+        adjustment from R's `did` package that accounts for uncertainty in
+        estimating the group-size weights.
         """
         effects = []
         weights_list = []
         gt_pairs = []
+        groups_for_gt = []
 
         for (g, t), data in group_time_effects.items():
             effects.append(data['effect'])
             weights_list.append(data['n_treated'])
             gt_pairs.append((g, t))
+            groups_for_gt.append(g)
 
         effects = np.array(effects)
         weights = np.array(weights_list, dtype=float)
+        groups_for_gt = np.array(groups_for_gt)
 
         # Normalize weights
-        weights = weights / np.sum(weights)
+        total_weight = np.sum(weights)
+        weights_norm = weights / total_weight
 
         # Weighted average
-        overall_att = np.sum(weights * effects)
+        overall_att = np.sum(weights_norm * effects)
 
-        # Compute SE using influence function aggregation
-        overall_se = self._compute_aggregated_se(
-            gt_pairs, weights, influence_func_info
+        # Compute SE using influence function aggregation with wif adjustment
+        overall_se = self._compute_aggregated_se_with_wif(
+            gt_pairs, weights_norm, effects, groups_for_gt,
+            influence_func_info, df, unit
         )
 
         return overall_att, overall_se
@@ -1564,6 +1571,162 @@ class CallawaySantAnna:
 
         # Compute variance: Var(θ̄) = (1/n) Σᵢ ψᵢ²
         variance = np.sum(psi_overall ** 2)
+        return np.sqrt(variance)
+
+    def _compute_aggregated_se_with_wif(
+        self,
+        gt_pairs: List[Tuple[Any, Any]],
+        weights: np.ndarray,
+        effects: np.ndarray,
+        groups_for_gt: np.ndarray,
+        influence_func_info: Dict,
+        df: pd.DataFrame,
+        unit: str,
+    ) -> float:
+        """
+        Compute SE with weight influence function (wif) adjustment.
+
+        This matches R's `did` package approach for "simple" aggregation,
+        which accounts for uncertainty in estimating group-size weights.
+
+        The wif adjustment adds variance due to the fact that aggregation
+        weights w_g = n_g / N depend on estimated group sizes.
+
+        Formula:
+            agg_inf_i = Σ_gt w_gt × inf_i_gt + wif_i × ATT_gt
+            se = sqrt(Σ_i (agg_inf_i)²)
+
+        where wif_i captures how unit i influences the weight estimation.
+        """
+        if not influence_func_info:
+            return 0.0
+
+        # Build unit index mapping
+        all_units = set()
+        for (g, t) in gt_pairs:
+            if (g, t) in influence_func_info:
+                info = influence_func_info[(g, t)]
+                all_units.update(info['treated_units'])
+                all_units.update(info['control_units'])
+
+        if not all_units:
+            return 0.0
+
+        all_units = sorted(all_units)
+        n_units = len(all_units)
+        unit_to_idx = {u: i for i, u in enumerate(all_units)}
+
+        # Get unique groups and their information
+        unique_groups = sorted(set(groups_for_gt))
+        n_groups = len(unique_groups)
+        group_to_idx = {g: i for i, g in enumerate(unique_groups)}
+
+        # Compute group-level probabilities (proportion of treated in each group)
+        # pg[g] = n_g / N where N = total treated across all groups
+        group_sizes = {}
+        for g in unique_groups:
+            # Count unique treated units in this group
+            treated_in_g = df[df['first_treat'] == g][unit].nunique()
+            group_sizes[g] = treated_in_g
+
+        total_treated = sum(group_sizes.values())
+        pg = np.array([group_sizes[g] / total_treated for g in unique_groups])
+
+        # Standard aggregated influence (without wif)
+        psi_standard = np.zeros(n_units)
+
+        for j, (g, t) in enumerate(gt_pairs):
+            if (g, t) not in influence_func_info:
+                continue
+
+            info = influence_func_info[(g, t)]
+            w = weights[j]
+
+            for i, uid in enumerate(info['treated_units']):
+                idx = unit_to_idx[uid]
+                psi_standard[idx] += w * info['treated_inf'][i]
+
+            for i, uid in enumerate(info['control_units']):
+                idx = unit_to_idx[uid]
+                psi_standard[idx] += w * info['control_inf'][i]
+
+        # Compute wif adjustment
+        # wif captures the influence of each unit on the weight estimation
+        # For simple aggregation with group-size weights:
+        # wif_i = [I(G_i = g) - pg[g]] / sum(pg) for numerator effect
+        #       - adjustment for denominator effect
+        #
+        # R's formula (computed at GROUP level, not (g,t) level):
+        #   if1 = (1*(G == g) - pg) / sum(pg)
+        #   if2 = rowSums(1*(G == g) - pg) * (pg / sum(pg)^2)
+        #   wif = if1 - if2
+        #
+        # The wif matrix is then multiplied by group-level aggregated ATT
+
+        # Build unit-group membership indicator
+        unit_groups = {}
+        for uid in all_units:
+            unit_first_treat = df[df[unit] == uid]['first_treat'].iloc[0]
+            if unit_first_treat in unique_groups:
+                unit_groups[uid] = unit_first_treat
+            else:
+                unit_groups[uid] = None  # Never-treated or other
+
+        # Compute group-level aggregated ATT (average ATT for each group)
+        # This matches R's approach where wif is multiplied by group-level ATT
+        group_att = {}
+        group_weight_sum = {}
+        for j, (g, t) in enumerate(gt_pairs):
+            if g not in group_att:
+                group_att[g] = 0.0
+                group_weight_sum[g] = 0.0
+            # Weight within group is equal (simple average over time periods)
+            group_att[g] += effects[j]
+            group_weight_sum[g] += 1
+
+        for g in unique_groups:
+            if g in group_att and group_weight_sum[g] > 0:
+                group_att[g] /= group_weight_sum[g]
+            else:
+                group_att[g] = 0.0
+
+        # Compute wif contribution for each unit (at GROUP level)
+        psi_wif = np.zeros(n_units)
+
+        # For each GROUP (not each (g,t) pair)
+        for g in unique_groups:
+            g_idx = group_to_idx[g]
+            att_g = group_att[g]
+
+            for uid in all_units:
+                i = unit_to_idx[uid]
+                unit_g = unit_groups[uid]
+
+                # Indicator: 1 if unit belongs to group g, 0 otherwise
+                indicator = 1.0 if unit_g == g else 0.0
+
+                # wif_i for this group
+                # Formula: (indicator - pg[g]) - Σ_g' (indicator_g' - pg_g') × pg_g
+                wif_i = (indicator - pg[g_idx])
+
+                # Denominator adjustment
+                denom_adj = 0.0
+                for g_prime in unique_groups:
+                    g_prime_idx = group_to_idx[g_prime]
+                    ind_prime = 1.0 if unit_g == g_prime else 0.0
+                    denom_adj += (ind_prime - pg[g_prime_idx]) * pg[g_idx]
+
+                wif_i = wif_i - denom_adj
+
+                # Scale by group ATT and add to wif contribution
+                # Scale by 1/n_units to match R's getSE formula: sqrt(mean(IF^2)/n)
+                psi_wif[i] += wif_i * att_g / n_units
+
+        # Combine standard and wif terms
+        psi_total = psi_standard + psi_wif
+
+        # Compute variance
+        variance = np.sum(psi_total ** 2)
         return np.sqrt(variance)
 
     def _aggregate_event_study(
