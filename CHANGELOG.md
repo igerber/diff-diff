@@ -5,6 +5,49 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.1] - 2026-01-13
+
+### Added
+- **Shared within-transformation utilities** in `utils.py`
+  - `demean_by_group()` - One-way fixed effects demeaning
+  - `within_transform()` - Two-way (unit + time) FE transformation
+  - Reduces code duplication across `estimators.py`, `twfe.py`, `sun_abraham.py`, `bacon.py`
+
+### Fixed
+- **DataFrame fragmentation warning** - Build columns in batch instead of iteratively
+
+### Changed
+- Reverted untested Rust backend optimizations (Cholesky factorization, reduced allocations) - these will be re-added when proper testing infrastructure is available
+
+## [2.0.0] - 2026-01-12
+
+### Added
+- **Optional Rust backend** for accelerated computation
+  - 4-8x speedup for SyntheticDiD and bootstrap operations
+  - Parallel bootstrap weight generation (Rademacher, Mammen, Webb)
+  - Accelerated OLS solver using OpenBLAS/MKL
+  - Cluster-robust variance estimation
+  - Synthetic control weight optimization with simplex projection
+  - Pre-built wheels for Linux x86_64 and macOS ARM64
+  - Pure Python fallback for all other platforms
+- **`diff_diff/_backend.py`** - Backend detection and configuration module
+  - `HAS_RUST_BACKEND` flag exported in main package
+  - `DIFF_DIFF_BACKEND` environment variable for backend control:
+    - `'auto'` (default) - Use Rust if available, fall back to Python
+    - `'python'` - Force pure Python mode
+    - `'rust'` - Force Rust mode (fails if unavailable)
+- **Rust source code** in `rust/` directory
+  - `rust/src/lib.rs` - PyO3 module definition
+  - `rust/src/bootstrap.rs` - Parallel bootstrap weight generation
+  - `rust/src/linalg.rs` - OLS solver and robust variance estimation
+  - `rust/src/weights.rs` - Synthetic control weights and simplex projection
+- **Rust backend test suite** - `tests/test_rust_backend.py` for equivalence testing
+
+### Changed
+- Package version bumped from 1.4.0 to 2.0.0 (major version for new backend)
+- CI/CD updated to build Rust extensions with maturin
+- ReadTheDocs now installs from PyPI (pre-built wheels with Rust backend)
+
 ## [1.4.0] - 2026-01-11
 
 ### Added
@@ -315,6 +358,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `to_dict()` and `to_dataframe()` export methods
   - `is_significant` and `significance_stars` properties
 
+[2.0.1]: https://github.com/igerber/diff-diff/compare/v2.0.0...v2.0.1
+[2.0.0]: https://github.com/igerber/diff-diff/compare/v1.4.0...v2.0.0
 [1.4.0]: https://github.com/igerber/diff-diff/compare/v1.3.1...v1.4.0
 [1.3.1]: https://github.com/igerber/diff-diff/compare/v1.3.0...v1.3.1
 [1.3.0]: https://github.com/igerber/diff-diff/compare/v1.2.1...v1.3.0
