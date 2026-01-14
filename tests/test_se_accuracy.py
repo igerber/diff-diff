@@ -212,21 +212,33 @@ class TestCallawaySantAnnaSEAccuracy:
 
     def test_se_vs_r_benchmark(self):
         """
-        Test SE matches R benchmark within 2% threshold.
+        Test SE matches R benchmark exactly.
 
-        Uses the standard benchmark data with known R values.
+        Uses benchmark data with known R values computed from
+        R's did::att_gt and did::aggte functions.
+
+        This test requires the benchmark data file which is generated
+        locally via `python benchmarks/run_benchmarks.py --generate-data-only`.
+        Skipped in CI if the file doesn't exist.
         """
-        import pandas as pd
+        import os
 
-        # Load benchmark data
-        df = pd.read_csv('benchmarks/data/synthetic/staggered_small.csv')
+        benchmark_path = 'benchmarks/data/synthetic/staggered_small.csv'
+        if not os.path.exists(benchmark_path):
+            pytest.skip(
+                f"Benchmark data not found at {benchmark_path}. "
+                "Run 'python benchmarks/run_benchmarks.py --generate-data-only' to generate."
+            )
+
+        df = pd.read_csv(benchmark_path)
 
         cs = CallawaySantAnna(n_bootstrap=0, seed=42)
         results = cs.fit(
             df, outcome='outcome', unit='unit', time='time', first_treat='first_treat'
         )
 
-        # Known R values from benchmark
+        # Known R values from did::aggte(type="simple") on this exact data
+        # Generated with: R's did package v2.3.0, method="dr", control="nevertreated"
         r_overall_att = 2.518800604
         r_overall_se = 0.063460396019
 
