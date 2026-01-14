@@ -1592,11 +1592,14 @@ class CallawaySantAnna:
         The wif adjustment adds variance due to the fact that aggregation
         weights w_g = n_g / N depend on estimated group sizes.
 
-        Formula:
-            agg_inf_i = Σ_gt w_gt × inf_i_gt + wif_i × ATT_gt
-            se = sqrt(Σ_i (agg_inf_i)²)
+        Formula (matching R's did::aggte):
+            agg_inf_i = Σ_k w_k × inf_i_k + wif_i × ATT_k
+            se = sqrt(mean(agg_inf^2) / n)
 
-        where wif_i captures how unit i influences the weight estimation.
+        where:
+        - k indexes "keepers" (post-treatment (g,t) pairs)
+        - w_k = pg[k] / sum(pg[keepers]) where pg = n_g / n_all
+        - wif captures how unit i influences the weight estimation
         """
         if not influence_func_info:
             return 0.0
@@ -1618,19 +1621,23 @@ class CallawaySantAnna:
 
         # Get unique groups and their information
         unique_groups = sorted(set(groups_for_gt))
-        n_groups = len(unique_groups)
         group_to_idx = {g: i for i, g in enumerate(unique_groups)}
 
-        # Compute group-level probabilities (proportion of treated in each group)
-        # pg[g] = n_g / N where N = total treated across all groups
+        # Compute group-level probabilities matching R's formula:
+        # pg[g] = n_g / n_all (fraction of ALL units in group g)
+        # This differs from our old formula which used n_g / total_treated
         group_sizes = {}
         for g in unique_groups:
-            # Count unique treated units in this group
             treated_in_g = df[df['first_treat'] == g][unit].nunique()
             group_sizes[g] = treated_in_g
 
-        total_treated = sum(group_sizes.values())
-        pg = np.array([group_sizes[g] / total_treated for g in unique_groups])
+        # pg indexed by group
+        pg_by_group = np.array([group_sizes[g] / n_units for g in unique_groups])
+
+        # pg indexed by keeper (each (g,t) pair gets its group's pg)
+        # This matches R's: pg <- pgg[match(group, originalglist)]
+        pg_keepers = np.array([pg_by_group[group_to_idx[g]] for g in groups_for_gt])
+        sum_pg_keepers = np.sum(pg_keepers)
 
         # Standard aggregated influence (without wif)
         psi_standard = np.zeros(n_units)
@@ -1650,19 +1657,6 @@ class CallawaySantAnna:
                 idx = unit_to_idx[uid]
                 psi_standard[idx] += w * info['control_inf'][i]
 
-        # Compute wif adjustment
-        # wif captures the influence of each unit on the weight estimation
-        # For simple aggregation with group-size weights:
-        # wif_i = [I(G_i = g) - pg[g]] / sum(pg) for numerator effect
-        #       - adjustment for denominator effect
-        #
-        # R's formula (computed at GROUP level, not (g,t) level):
-        #   if1 = (1*(G == g) - pg) / sum(pg)
-        #   if2 = rowSums(1*(G == g) - pg) * (pg / sum(pg)^2)
-        #   wif = if1 - if2
-        #
-        # The wif matrix is then multiplied by group-level aggregated ATT
-
         # Build unit-group membership indicator
         unit_groups = {}
         for uid in all_units:
@@ -1672,60 +1666,54 @@ class CallawaySantAnna:
             else:
                 unit_groups[uid] = None  # Never-treated or other
 
-        # Compute group-level aggregated ATT (average ATT for each group)
-        # This matches R's approach where wif is multiplied by group-level ATT
-        group_att = {}
-        group_weight_sum = {}
+        # Compute wif using R's exact formula (iterate over keepers, not groups)
+        # R's wif function:
+        #   if1[i,k] = (indicator(G_i == group_k) - pg[k]) / sum(pg[keepers])
+        #   if2[i,k] = indicator_sum[i] * pg[k] / sum(pg[keepers])^2
+        #   wif[i,k] = if1[i,k] - if2[i,k]
+        #
+        # Then: wif_contrib[i] = sum_k(wif[i,k] * att[k])
+
+        n_keepers = len(gt_pairs)
+        wif_contrib = np.zeros(n_units)
+
+        # Pre-compute indicator_sum for each unit
+        # indicator_sum[i] = sum_k(indicator(G_i == group_k) - pg[k])
+        indicator_sum = np.zeros(n_units)
+        for j, g in enumerate(groups_for_gt):
+            pg_k = pg_keepers[j]
+            for uid in all_units:
+                i = unit_to_idx[uid]
+                unit_g = unit_groups[uid]
+                indicator = 1.0 if unit_g == g else 0.0
+                indicator_sum[i] += (indicator - pg_k)
+
+        # Compute wif contribution for each keeper
         for j, (g, t) in enumerate(gt_pairs):
-            if g not in group_att:
-                group_att[g] = 0.0
-                group_weight_sum[g] = 0.0
-            # Weight within group is equal (simple average over time periods)
-            group_att[g] += effects[j]
-            group_weight_sum[g] += 1
-
-        for g in unique_groups:
-            if g in group_att and group_weight_sum[g] > 0:
-                group_att[g] /= group_weight_sum[g]
-            else:
-                group_att[g] = 0.0
-
-        # Compute wif contribution for each unit (at GROUP level)
-        psi_wif = np.zeros(n_units)
-
-        # For each GROUP (not each (g,t) pair)
-        for g in unique_groups:
-            g_idx = group_to_idx[g]
-            att_g = group_att[g]
+            pg_k = pg_keepers[j]
+            att_k = effects[j]
 
             for uid in all_units:
                 i = unit_to_idx[uid]
                 unit_g = unit_groups[uid]
-
-                # Indicator: 1 if unit belongs to group g, 0 otherwise
                 indicator = 1.0 if unit_g == g else 0.0
 
-                # wif_i for this group
-                # Formula: (indicator - pg[g]) - Σ_g' (indicator_g' - pg_g') × pg_g
-                wif_i = (indicator - pg[g_idx])
+                # R's formula for wif
+                if1_ik = (indicator - pg_k) / sum_pg_keepers
+                if2_ik = indicator_sum[i] * pg_k / (sum_pg_keepers ** 2)
+                wif_ik = if1_ik - if2_ik
 
-                # Denominator adjustment
-                denom_adj = 0.0
-                for g_prime in unique_groups:
-                    g_prime_idx = group_to_idx[g_prime]
-                    ind_prime = 1.0 if unit_g == g_prime else 0.0
-                    denom_adj += (ind_prime - pg[g_prime_idx]) * pg[g_idx]
+                # Add contribution: wif[i,k] * att[k]
+                wif_contrib[i] += wif_ik * att_k
 
-                wif_i = wif_i - denom_adj
-
-                # Scale by group ATT and add to wif contribution
-                # Scale by 1/n_units to match R's getSE formula: sqrt(mean(IF^2)/n)
-                psi_wif[i] += wif_i * att_g / n_units
+        # Scale by 1/n_units to match R's getSE formula: sqrt(mean(IF^2)/n)
+        psi_wif = wif_contrib / n_units
 
         # Combine standard and wif terms
         psi_total = psi_standard + psi_wif
 
-        # Compute variance
+        # Compute variance and SE
+        # R's formula: sqrt(mean(IF^2) / n) = sqrt(sum(IF^2) / n^2)
         variance = np.sum(psi_total ** 2)
         return np.sqrt(variance)
 

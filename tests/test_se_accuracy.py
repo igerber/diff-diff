@@ -235,10 +235,10 @@ class TestCallawaySantAnnaSEAccuracy:
         assert att_diff < 1e-8, \
             f"ATT differs from R: {results.overall_att} vs {r_overall_att}"
 
-        # SE should be within 2% of R (target after wif adjustment)
+        # SE should match R exactly (< 0.01% after wif fix)
         se_diff_pct = abs(results.overall_se - r_overall_se) / r_overall_se * 100
-        assert se_diff_pct < 2.0, \
-            f"SE differs from R by {se_diff_pct:.2f}%, expected <2%"
+        assert se_diff_pct < 0.01, \
+            f"SE differs from R by {se_diff_pct:.4f}%, expected <0.01%"
 
     def test_timing_performance(self, cs_results):
         """
