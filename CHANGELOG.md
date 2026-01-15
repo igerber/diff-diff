@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.2] - 2026-01-15
+
+### Fixed
+- **CallawaySantAnna SE computation** now exactly matches R's `did` package
+  - Fixed weight influence function (wif) formula for "simple" aggregation
+  - Corrected `pg` computation: uses `n_g / n_all` (matching R) instead of `n_g / total_treated`
+  - Fixed wif iteration: iterates over keepers (post-treatment pairs) with individual ATT(g,t) values
+  - SE difference reduced from ~2.5% to <0.01% vs R's `did` package (essentially exact match)
+  - Point estimates unchanged; all existing tests pass
+
 ## [2.0.1] - 2026-01-13
 
 ### Added
@@ -358,6 +368,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `to_dict()` and `to_dataframe()` export methods
   - `is_significant` and `significance_stars` properties
 
+[2.0.2]: https://github.com/igerber/diff-diff/compare/v2.0.1...v2.0.2
 [2.0.1]: https://github.com/igerber/diff-diff/compare/v2.0.0...v2.0.1
 [2.0.0]: https://github.com/igerber/diff-diff/compare/v1.4.0...v2.0.0
 [1.4.0]: https://github.com/igerber/diff-diff/compare/v1.3.1...v1.4.0
