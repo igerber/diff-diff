@@ -76,7 +76,7 @@ Summary Table
      - **PASS**
    * - CallawaySantAnna
      - < 1e-10
-     - < 1%
+     - 0.0%
      - Yes
      - **PASS**
    * - SyntheticDiD
@@ -171,17 +171,17 @@ Callaway-Sant'Anna Results
      - 2.519
      - < 1e-10
    * - SE
-     - 0.062
-     - 0.062
      - 0.063
-     - 2.3%
+     - 0.063
+     - 0.063
+     - 0.0%
    * - Time (s)
-     - 0.005
-     - 0.005
-     - 0.071
-     - **14x faster**
+     - 0.007 ± 0.000
+     - 0.007 ± 0.000
+     - 0.070 ± 0.001
+     - **10x faster**
 
-**Validation**: PASS - Both point estimates and standard errors match R closely.
+**Validation**: PASS - Both point estimates and standard errors match R exactly.
 
 **Key findings from investigation:**
 
@@ -189,9 +189,10 @@ Callaway-Sant'Anna Results
 2. **Never-treated coding**: R's ``did`` package requires ``first_treat=Inf``
    for never-treated units. diff-diff accepts ``first_treat=0``. The benchmark
    converts 0 to Inf for R compatibility.
-3. **Standard errors**: As of v1.5.0, analytical SEs use influence function
-   aggregation (matching R's approach), resulting in < 3% SE difference across
-   all scales. Both analytical and bootstrap inference now match R closely.
+3. **Standard errors**: As of v2.0.2, analytical SEs match R's ``did`` package
+   exactly (0.0% difference). The weight influence function (wif) formula was
+   corrected to match R's implementation, achieving numerical equivalence across
+   all dataset scales.
 
 Performance Comparison
 ----------------------
@@ -270,37 +271,37 @@ Three-Way Performance Summary
      - R (s)
      - Python Pure (s)
      - Python Rust (s)
-     - Rust/R
+     - Pure/R
      - Rust/Pure
    * - small
-     - 0.071
-     - 0.005
-     - 0.005
-     - **14.1x**
+     - 0.070
+     - 0.007
+     - 0.007
+     - **10x**
      - 1.0x
    * - 1k
      - 0.114
-     - 0.012
-     - 0.012
-     - **9.4x**
+     - 0.013
+     - 0.013
+     - **9x**
      - 1.0x
    * - 5k
-     - 0.341
-     - 0.055
-     - 0.056
-     - **6.1x**
+     - 0.345
+     - 0.053
+     - 0.051
+     - **7x**
      - 1.0x
    * - 10k
-     - 0.726
-     - 0.156
-     - 0.155
-     - **4.7x**
+     - 0.727
+     - 0.134
+     - 0.138
+     - **5x**
      - 1.0x
    * - 20k
-     - 1.464
-     - 0.404
-     - 0.411
-     - **3.6x**
+     - 1.490
+     - 0.352
+     - 0.358
+     - **4x**
      - 1.0x
 
 **SyntheticDiD Results:**
@@ -391,10 +392,10 @@ Dataset Sizes
 Key Observations
 ~~~~~~~~~~~~~~~~
 
-1. **diff-diff is dramatically faster than R**:
+1. **Performance varies by estimator and scale**:
 
-   - **BasicDiD/TWFE**: 2-18x faster than R
-   - **CallawaySantAnna**: 4-14x faster than R
+   - **BasicDiD/TWFE**: 2-18x faster than R at all scales
+   - **CallawaySantAnna**: 4-10x faster than R at all scales (vectorized WIF computation)
    - **SyntheticDiD**: 565-2234x faster than R (R takes 24 minutes at 10k scale!)
 
 2. **Rust backend benefit depends on the estimator**:
@@ -410,14 +411,19 @@ Key Observations
    - **Bootstrap inference**: May help with parallelized iterations
    - **BasicDiD/CallawaySantAnna**: Optional - pure Python is equally fast
 
-4. **Scaling behavior**: Both Python implementations show excellent scaling.
-   At 10K scale (500K observations for SyntheticDiD), Rust completes in
-   ~2.6 seconds vs ~20 seconds for pure Python vs ~24 minutes for R.
+4. **Scaling behavior**: Python implementations show excellent scaling behavior
+   across all estimators. SyntheticDiD is 565x faster than R at 10k scale.
+   CallawaySantAnna achieves **exact SE accuracy** (0.0% difference) while
+   being 4-10x faster than R through vectorized NumPy operations.
 
 5. **No Rust required for most use cases**: Users without Rust/maturin can
    install diff-diff and get full functionality with excellent performance.
-   For BasicDiD and CallawaySantAnna, pure Python achieves the same speed as Rust.
    Only SyntheticDiD benefits significantly from the Rust backend.
+
+6. **CallawaySantAnna accuracy and speed**: As of v2.0.3, CallawaySantAnna
+   achieves both exact numerical accuracy (0.0% SE difference from R) AND
+   superior performance (4-10x faster than R) through vectorized weight
+   influence function (WIF) computation using NumPy matrix operations.
 
 Performance Optimization Details
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -436,7 +442,12 @@ The performance improvements come from:
 4. **Vectorized bootstrap** (CallawaySantAnna): Matrix operations instead of
    nested loops, batch weight generation
 
-5. **Optional Rust backend** (v2.0.0): PyO3-based Rust extension for compute-intensive
+5. **Vectorized WIF computation** (CallawaySantAnna, v2.0.3): Weight influence
+   function computation uses NumPy matrix operations instead of O(n_units × n_keepers)
+   nested loops. The indicator matrix, if1/if2 matrices, and wif contribution are
+   computed using broadcasting and matrix multiplication: ``wif_contrib = wif_matrix @ effects``
+
+6. **Optional Rust backend** (v2.0.0): PyO3-based Rust extension for compute-intensive
    operations (OLS, robust variance, bootstrap weights, simplex projection)
 
 Why is diff-diff Fast?
@@ -496,12 +507,13 @@ Results Comparison
 1. **Point estimates match exactly**: The overall ATT of -0.039951 is identical
    between diff-diff and R's ``did`` package, validating the core estimation logic.
 
-2. **Standard errors match**: As of v1.5.0, analytical SEs use influence function
-   aggregation (matching R's approach), resulting in < 1% difference. Both point
-   estimates and standard errors now match R's ``did`` package.
+2. **Standard errors match exactly**: As of v2.0.2, analytical SEs use the corrected
+   weight influence function formula, achieving 0.0% difference from R's ``did``
+   package. Both point estimates and standard errors are numerically equivalent.
 
-3. **Performance**: diff-diff is ~14x faster than R on this real-world dataset,
-   consistent with the synthetic data benchmarks at small scale.
+3. **Performance**: diff-diff is ~14x faster than R on this real-world dataset
+   at small scale. Performance scales differently at larger sizes (see performance
+   tables above).
 
 This validation on real-world data with known published results confirms that
 diff-diff produces correct estimates that match the reference R implementation.
@@ -576,9 +588,9 @@ When to Trust Results
   match R closely. Use ``variance_method="placebo"`` (default) to match R's
   inference. Results are fully validated.
 
-- **CallawaySantAnna**: Group-time effects (ATT(g,t)) are reliable. Overall
-  ATT aggregation may differ from R due to weighting choices. When comparing
-  to R ``did`` package, verify aggregation settings match.
+- **CallawaySantAnna**: Both group-time effects (ATT(g,t)) and overall ATT
+  aggregation match R exactly. Standard errors are numerically equivalent
+  (0.0% difference) as of v2.0.2.
 
 Known Differences
 ~~~~~~~~~~~~~~~~~

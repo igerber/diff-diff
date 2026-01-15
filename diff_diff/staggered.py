@@ -7,7 +7,7 @@ including the Callaway-Sant'Anna (2021) estimator.
 
 import warnings
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 import numpy as np
 import pandas as pd
@@ -1117,7 +1117,7 @@ class CallawaySantAnna:
 
         # Compute overall ATT (simple aggregation)
         overall_att, overall_se = self._aggregate_simple(
-            group_time_effects, influence_func_info, df, unit
+            group_time_effects, influence_func_info, df, unit, precomputed
         )
         overall_t = overall_att / overall_se if overall_se > 0 else 0.0
         overall_p = compute_p_value(overall_t)
@@ -1471,6 +1471,7 @@ class CallawaySantAnna:
         influence_func_info: Dict,
         df: pd.DataFrame,
         unit: str,
+        precomputed: Optional[PrecomputedData] = None,
     ) -> Tuple[float, float]:
         """
         Compute simple weighted average of ATT(g,t).
@@ -1508,7 +1509,7 @@ class CallawaySantAnna:
         # Compute SE using influence function aggregation with wif adjustment
         overall_se = self._compute_aggregated_se_with_wif(
             gt_pairs, weights_norm, effects, groups_for_gt,
-            influence_func_info, df, unit
+            influence_func_info, df, unit, precomputed
         )
 
         return overall_att, overall_se
@@ -1582,6 +1583,7 @@ class CallawaySantAnna:
         influence_func_info: Dict,
         df: pd.DataFrame,
         unit: str,
+        precomputed: Optional[PrecomputedData] = None,
     ) -> float:
         """
         Compute SE with weight influence function (wif) adjustment.
@@ -1605,22 +1607,23 @@ class CallawaySantAnna:
             return 0.0
 
         # Build unit index mapping
-        all_units = set()
+        all_units_set: Set[Any] = set()
         for (g, t) in gt_pairs:
             if (g, t) in influence_func_info:
                 info = influence_func_info[(g, t)]
-                all_units.update(info['treated_units'])
-                all_units.update(info['control_units'])
+                all_units_set.update(info['treated_units'])
+                all_units_set.update(info['control_units'])
 
-        if not all_units:
+        if not all_units_set:
             return 0.0
 
-        all_units = sorted(all_units)
+        all_units = sorted(all_units_set)
         n_units = len(all_units)
         unit_to_idx = {u: i for i, u in enumerate(all_units)}
 
         # Get unique groups and their information
         unique_groups = sorted(set(groups_for_gt))
+        unique_groups_set = set(unique_groups)
         group_to_idx = {g: i for i, g in enumerate(unique_groups)}
 
         # Compute group-level probabilities matching R's formula:
@@ -1639,6 +1642,10 @@ class CallawaySantAnna:
         pg_keepers = np.array([pg_by_group[group_to_idx[g]] for g in groups_for_gt])
         sum_pg_keepers = np.sum(pg_keepers)
 
+        # Guard against zero weights (no keepers = no variance)
+        if sum_pg_keepers == 0:
+            return 0.0
+
         # Standard aggregated influence (without wif)
         psi_standard = np.zeros(n_units)
 
@@ -1649,62 +1656,66 @@ class CallawaySantAnna:
             info = influence_func_info[(g, t)]
             w = weights[j]
 
-            for i, uid in enumerate(info['treated_units']):
-                idx = unit_to_idx[uid]
-                psi_standard[idx] += w * info['treated_inf'][i]
+            # Vectorized influence function aggregation for treated units
+            treated_indices = np.array([unit_to_idx[uid] for uid in info['treated_units']])
+            if len(treated_indices) > 0:
+                np.add.at(psi_standard, treated_indices, w * info['treated_inf'])
 
-            for i, uid in enumerate(info['control_units']):
-                idx = unit_to_idx[uid]
-                psi_standard[idx] += w * info['control_inf'][i]
+            # Vectorized influence function aggregation for control units
+            control_indices = np.array([unit_to_idx[uid] for uid in info['control_units']])
+            if len(control_indices) > 0:
+                np.add.at(psi_standard, control_indices, w * info['control_inf'])
 
-        # Build unit-group membership indicator
-        unit_groups = {}
-        for uid in all_units:
-            unit_first_treat = df[df[unit] == uid]['first_treat'].iloc[0]
-            if unit_first_treat in unique_groups:
-                unit_groups[uid] = unit_first_treat
-            else:
-                unit_groups[uid] = None  # Never-treated or other
+        # Build unit-group array using precomputed data if available
+        # This is O(n_units) instead of O(n_units × n_obs) DataFrame lookups
+        if precomputed is not None:
+            # Use precomputed cohort mapping
+            precomputed_units = precomputed['all_units']
+            precomputed_cohorts = precomputed['unit_cohorts']
+            precomputed_unit_to_idx = precomputed['unit_to_idx']
 
-        # Compute wif using R's exact formula (iterate over keepers, not groups)
-        # R's wif function:
+            # Build unit_groups_array for the units in this SE computation
+            # A value of -1 indicates never-treated or other (not in unique_groups)
+            unit_groups_array = np.full(n_units, -1, dtype=np.float64)
+            for i, uid in enumerate(all_units):
+                if uid in precomputed_unit_to_idx:
+                    cohort = precomputed_cohorts[precomputed_unit_to_idx[uid]]
+                    if cohort in unique_groups_set:
+                        unit_groups_array[i] = cohort
+        else:
+            # Fallback: build from DataFrame (slow path for backward compatibility)
+            unit_groups_array = np.full(n_units, -1, dtype=np.float64)
+            for i, uid in enumerate(all_units):
+                unit_first_treat = df[df[unit] == uid]['first_treat'].iloc[0]
+                if unit_first_treat in unique_groups_set:
+                    unit_groups_array[i] = unit_first_treat
+
+        # Vectorized WIF computation
+        # R's wif formula:
         #   if1[i,k] = (indicator(G_i == group_k) - pg[k]) / sum(pg[keepers])
         #   if2[i,k] = indicator_sum[i] * pg[k] / sum(pg[keepers])^2
         #   wif[i,k] = if1[i,k] - if2[i,k]
-        #
-        # Then: wif_contrib[i] = sum_k(wif[i,k] * att[k])
+        #   wif_contrib[i] = sum_k(wif[i,k] * att[k])
 
-        n_keepers = len(gt_pairs)
-        wif_contrib = np.zeros(n_units)
+        # Build indicator matrix: (n_units, n_keepers)
+        # indicator_matrix[i, k] = 1.0 if unit i belongs to group for keeper k
+        groups_for_gt_array = np.array(groups_for_gt)
+        indicator_matrix = (unit_groups_array[:, np.newaxis] == groups_for_gt_array[np.newaxis, :]).astype(np.float64)
 
-        # Pre-compute indicator_sum for each unit
+        # Vectorized indicator_sum: sum over keepers
         # indicator_sum[i] = sum_k(indicator(G_i == group_k) - pg[k])
-        indicator_sum = np.zeros(n_units)
-        for j, g in enumerate(groups_for_gt):
-            pg_k = pg_keepers[j]
-            for uid in all_units:
-                i = unit_to_idx[uid]
-                unit_g = unit_groups[uid]
-                indicator = 1.0 if unit_g == g else 0.0
-                indicator_sum[i] += (indicator - pg_k)
+        indicator_sum = np.sum(indicator_matrix - pg_keepers, axis=1)
 
-        # Compute wif contribution for each keeper
-        for j, (g, t) in enumerate(gt_pairs):
-            pg_k = pg_keepers[j]
-            att_k = effects[j]
+        # Vectorized wif matrix computation
+        # if1_matrix[i,k] = (indicator[i,k] - pg[k]) / sum_pg
+        if1_matrix = (indicator_matrix - pg_keepers) / sum_pg_keepers
+        # if2_matrix[i,k] = indicator_sum[i] * pg[k] / sum_pg^2
+        if2_matrix = np.outer(indicator_sum, pg_keepers) / (sum_pg_keepers ** 2)
+        wif_matrix = if1_matrix - if2_matrix
 
-            for uid in all_units:
-                i = unit_to_idx[uid]
-                unit_g = unit_groups[uid]
-                indicator = 1.0 if unit_g == g else 0.0
-
-                # R's formula for wif
-                if1_ik = (indicator - pg_k) / sum_pg_keepers
-                if2_ik = indicator_sum[i] * pg_k / (sum_pg_keepers ** 2)
-                wif_ik = if1_ik - if2_ik
-
-                # Add contribution: wif[i,k] * att[k]
-                wif_contrib[i] += wif_ik * att_k
+        # Single matrix-vector multiply for all contributions
+        # wif_contrib[i] = sum_k(wif[i,k] * att[k])
+        wif_contrib = wif_matrix @ effects
 
         # Scale by 1/n_units to match R's getSE formula: sqrt(mean(IF^2)/n)
         psi_wif = wif_contrib / n_units
