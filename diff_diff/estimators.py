@@ -17,7 +17,12 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
-from diff_diff.linalg import compute_r_squared, compute_robust_vcov, solve_ols
+from diff_diff.linalg import (
+    LinearRegression,
+    compute_r_squared,
+    compute_robust_vcov,
+    solve_ols,
+)
 from diff_diff.results import DiDResults, MultiPeriodDiDResults, PeriodEffect
 from diff_diff.utils import (
     WildBootstrapResults,
@@ -262,56 +267,45 @@ class DifferenceInDifferences:
                     X = np.column_stack([X, dummies[col].values.astype(float)])
                     var_names.append(col)
 
-        # Fit OLS using unified backend
-        coefficients, residuals, fitted, vcov = solve_ols(
-            X, y, return_fitted=True, return_vcov=False
-        )
-        r_squared = compute_r_squared(y, residuals)
-
-        # Extract ATT (coefficient on interaction term)
+        # Extract ATT index (coefficient on interaction term)
         att_idx = 3  # Index of interaction term
         att_var_name = f"{treatment}:{time}"
         assert var_names[att_idx] == att_var_name, (
             f"ATT index mismatch: expected '{att_var_name}' at index {att_idx}, "
             f"but found '{var_names[att_idx]}'"
         )
+
+        # Always use LinearRegression for initial fit (unified code path)
+        # For wild bootstrap, we don't need cluster SEs from the initial fit
+        cluster_ids = data[self.cluster].values if self.cluster is not None else None
+        reg = LinearRegression(
+            include_intercept=False,  # Intercept already in X
+            robust=self.robust,
+            cluster_ids=cluster_ids if self.inference != "wild_bootstrap" else None,
+            alpha=self.alpha,
+        ).fit(X, y, df_adjustment=n_absorbed_effects)
+
+        coefficients = reg.coefficients_
+        residuals = reg.residuals_
+        fitted = reg.fitted_values_
         att = coefficients[att_idx]
 
-        # Compute degrees of freedom (used for analytical inference)
-        df = len(y) - X.shape[1] - n_absorbed_effects
-
-        # Compute standard errors and inference
+        # Get inference - either from bootstrap or analytical
         if self.inference == "wild_bootstrap" and self.cluster is not None:
-            # Wild cluster bootstrap for few-cluster inference
-            cluster_ids = data[self.cluster].values
+            # Override with wild cluster bootstrap inference
             se, p_value, conf_int, t_stat, vcov, _ = self._run_wild_bootstrap_inference(
                 X, y, residuals, cluster_ids, att_idx
             )
-        elif self.cluster is not None:
-            cluster_ids = data[self.cluster].values
-            vcov = compute_robust_vcov(X, residuals, cluster_ids)
-            se = np.sqrt(vcov[att_idx, att_idx])
-            t_stat = att / se
-            p_value = compute_p_value(t_stat, df=df)
-            conf_int = compute_confidence_interval(att, se, self.alpha, df=df)
-        elif self.robust:
-            vcov = compute_robust_vcov(X, residuals)
-            se = np.sqrt(vcov[att_idx, att_idx])
-            t_stat = att / se
-            p_value = compute_p_value(t_stat, df=df)
-            conf_int = compute_confidence_interval(att, se, self.alpha, df=df)
         else:
-            # Classical OLS standard errors
-            n = len(y)
-            k = X.shape[1]
-            mse = np.sum(residuals**2) / (n - k)
-            # Use solve() instead of inv() for numerical stability
-            # solve(A, B) computes X where AX=B, so this yields (X'X)^{-1} * mse
-            vcov = np.linalg.solve(X.T @ X, mse * np.eye(k))
-            se = np.sqrt(vcov[att_idx, att_idx])
-            t_stat = att / se
-            p_value = compute_p_value(t_stat, df=df)
-            conf_int = compute_confidence_interval(att, se, self.alpha, df=df)
+            # Use analytical inference from LinearRegression
+            vcov = reg.vcov_
+            inference = reg.get_inference(att_idx)
+            se = inference.se
+            t_stat = inference.t_stat
+            p_value = inference.p_value
+            conf_int = inference.conf_int
+
+        r_squared = compute_r_squared(y, residuals)
 
         # Count observations
         n_treated = int(np.sum(d))

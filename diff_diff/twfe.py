@@ -12,7 +12,7 @@ if TYPE_CHECKING:
     from diff_diff.bacon import BaconDecompositionResults
 
 from diff_diff.estimators import DifferenceInDifferences
-from diff_diff.linalg import compute_robust_vcov
+from diff_diff.linalg import LinearRegression
 from diff_diff.results import DiDResults
 from diff_diff.utils import (
     compute_confidence_interval,
@@ -116,32 +116,44 @@ class TwoWayFixedEffects(DifferenceInDifferences):
 
         X = np.column_stack([np.ones(len(y))] + X_list)
 
-        # Fit OLS on demeaned data
-        coefficients, residuals, fitted, r_squared = self._fit_ols(X, y)
-
         # ATT is the coefficient on treatment_post (index 1)
         att_idx = 1
-        att = coefficients[att_idx]
 
         # Degrees of freedom adjustment for fixed effects
         n_units = data[unit].nunique()
         n_times = data[time].nunique()
-        df = len(y) - X.shape[1] - n_units - n_times + 2
+        df_adjustment = n_units + n_times - 2
 
-        # Compute standard errors and inference
+        # Always use LinearRegression for initial fit (unified code path)
+        # For wild bootstrap, we don't need cluster SEs from the initial fit
         cluster_ids = data[cluster_var].values
+        reg = LinearRegression(
+            include_intercept=False,  # Intercept already in X
+            robust=True,  # TWFE always uses robust/cluster SEs
+            cluster_ids=cluster_ids if self.inference != "wild_bootstrap" else None,
+            alpha=self.alpha,
+        ).fit(X, y, df_adjustment=df_adjustment)
+
+        coefficients = reg.coefficients_
+        residuals = reg.residuals_
+        fitted = reg.fitted_values_
+        r_squared = reg.r_squared()
+        att = coefficients[att_idx]
+
+        # Get inference - either from bootstrap or analytical
         if self.inference == "wild_bootstrap":
-            # Wild cluster bootstrap for few-cluster inference
+            # Override with wild cluster bootstrap inference
             se, p_value, conf_int, t_stat, vcov, _ = self._run_wild_bootstrap_inference(
                 X, y, residuals, cluster_ids, att_idx
             )
         else:
-            # Standard cluster-robust SE
-            vcov = compute_robust_vcov(X, residuals, cluster_ids)
-            se = np.sqrt(vcov[att_idx, att_idx])
-            t_stat = att / se
-            p_value = compute_p_value(t_stat, df=df)
-            conf_int = compute_confidence_interval(att, se, self.alpha, df=df)
+            # Use analytical inference from LinearRegression
+            vcov = reg.vcov_
+            inference = reg.get_inference(att_idx)
+            se = inference.se
+            t_stat = inference.t_stat
+            p_value = inference.p_value
+            conf_int = inference.conf_int
 
         # Count observations
         treated_units = data[data[treatment] == 1][unit].unique()

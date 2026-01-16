@@ -30,6 +30,10 @@ from diff_diff.diagnostics import (
     run_all_placebo_tests,
     run_placebo_test,
 )
+from diff_diff.linalg import (
+    InferenceResult,
+    LinearRegression,
+)
 from diff_diff.estimators import (
     DifferenceInDifferences,
     MultiPeriodDiD,
@@ -199,4 +203,7 @@ __all__ = [
     "plot_pretrends_power",
     # Rust backend
     "HAS_RUST_BACKEND",
+    # Linear algebra helpers
+    "LinearRegression",
+    "InferenceResult",
 ]

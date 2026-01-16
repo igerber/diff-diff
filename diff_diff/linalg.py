@@ -14,10 +14,12 @@ The Rust backend is automatically used when available, with transparent
 fallback to NumPy/SciPy implementations.
 """
 
-from typing import Optional, Tuple, Union
+from dataclasses import dataclass
+from typing import Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd
+from scipy import stats
 from scipy.linalg import lstsq as scipy_lstsq
 
 # Import Rust backend if available (from _backend to avoid circular imports)
@@ -183,7 +185,10 @@ def _solve_ols_numpy(
     NumPy/SciPy fallback implementation of solve_ols.
 
     Uses scipy.linalg.lstsq with 'gelsy' driver (QR with column pivoting)
-    for fast and stable least squares solving.
+    for numerically stable least squares solving. QR decomposition is preferred
+    over normal equations because it doesn't square the condition number of X,
+    making it more robust for ill-conditioned matrices common in DiD designs
+    (e.g., many unit/time fixed effects).
 
     Parameters
     ----------
@@ -209,9 +214,10 @@ def _solve_ols_numpy(
     vcov : np.ndarray, optional
         Variance-covariance matrix if return_vcov=True.
     """
-    # Solve OLS using scipy's optimized solver
-    # 'gelsy' uses QR with column pivoting, faster than default 'gelsd' (SVD)
-    # Note: gelsy doesn't reliably report rank, so we don't check for deficiency
+    # Solve OLS using QR decomposition via scipy's optimized LAPACK routines
+    # 'gelsy' uses QR with column pivoting, which is numerically stable even
+    # for ill-conditioned matrices (doesn't square the condition number like
+    # normal equations would)
     coefficients = scipy_lstsq(X, y, lapack_driver="gelsy", check_finite=False)[0]
 
     # Compute residuals and fitted values
@@ -416,3 +422,559 @@ def compute_r_squared(
         r_squared = 1 - (1 - r_squared) * (n - 1) / (n - n_params)
 
     return r_squared
+
+
+# =============================================================================
+# LinearRegression Helper Class
+# =============================================================================
+
+
+@dataclass
+class InferenceResult:
+    """
+    Container for inference results on a single coefficient.
+
+    This dataclass provides a unified way to access coefficient estimates
+    and their associated inference statistics.
+
+    Attributes
+    ----------
+    coefficient : float
+        The point estimate of the coefficient.
+    se : float
+        Standard error of the coefficient.
+    t_stat : float
+        T-statistic (coefficient / se).
+    p_value : float
+        Two-sided p-value for the t-statistic.
+    conf_int : tuple of (float, float)
+        Confidence interval (lower, upper).
+    df : int or None
+        Degrees of freedom used for inference. None if using normal distribution.
+    alpha : float
+        Significance level used for confidence interval.
+
+    Examples
+    --------
+    >>> result = InferenceResult(
+    ...     coefficient=2.5, se=0.5, t_stat=5.0, p_value=0.001,
+    ...     conf_int=(1.52, 3.48), df=100, alpha=0.05
+    ... )
+    >>> result.is_significant()
+    True
+    >>> result.significance_stars()
+    '***'
+    """
+
+    coefficient: float
+    se: float
+    t_stat: float
+    p_value: float
+    conf_int: Tuple[float, float]
+    df: Optional[int] = None
+    alpha: float = 0.05
+
+    def is_significant(self, alpha: Optional[float] = None) -> bool:
+        """Check if the coefficient is statistically significant."""
+        threshold = alpha if alpha is not None else self.alpha
+        return self.p_value < threshold
+
+    def significance_stars(self) -> str:
+        """Return significance stars based on p-value."""
+        if self.p_value < 0.001:
+            return "***"
+        elif self.p_value < 0.01:
+            return "**"
+        elif self.p_value < 0.05:
+            return "*"
+        elif self.p_value < 0.1:
+            return "."
+        return ""
+
+    def to_dict(self) -> Dict[str, Union[float, Tuple[float, float], int, None]]:
+        """Convert to dictionary representation."""
+        return {
+            "coefficient": self.coefficient,
+            "se": self.se,
+            "t_stat": self.t_stat,
+            "p_value": self.p_value,
+            "conf_int": self.conf_int,
+            "df": self.df,
+            "alpha": self.alpha,
+        }
+
+
+class LinearRegression:
+    """
+    OLS regression helper with unified coefficient extraction and inference.
+
+    This class wraps the low-level `solve_ols` function and provides a clean
+    interface for fitting regressions and extracting coefficient-level inference.
+    It eliminates code duplication across estimators by centralizing the common
+    pattern of: fit OLS -> extract coefficient -> compute SE -> compute t-stat
+    -> compute p-value -> compute CI.
+
+    Parameters
+    ----------
+    include_intercept : bool, default True
+        Whether to automatically add an intercept column to the design matrix.
+    robust : bool, default True
+        Whether to use heteroskedasticity-robust (HC1) standard errors.
+        If False and cluster_ids is None, uses classical OLS standard errors.
+    cluster_ids : array-like, optional
+        Cluster identifiers for cluster-robust standard errors.
+        Overrides the `robust` parameter if provided.
+    alpha : float, default 0.05
+        Significance level for confidence intervals.
+
+    Attributes
+    ----------
+    coefficients_ : ndarray
+        Fitted coefficient values (available after fit).
+    vcov_ : ndarray
+        Variance-covariance matrix (available after fit).
+    residuals_ : ndarray
+        Residuals from the fit (available after fit).
+    fitted_values_ : ndarray
+        Fitted values from the fit (available after fit).
+    n_obs_ : int
+        Number of observations (available after fit).
+    n_params_ : int
+        Number of parameters including intercept (available after fit).
+    df_ : int
+        Degrees of freedom (n - k) (available after fit).
+
+    Examples
+    --------
+    Basic usage with automatic intercept:
+
+    >>> import numpy as np
+    >>> from diff_diff.linalg import LinearRegression
+    >>> X = np.random.randn(100, 2)
+    >>> y = 1 + 2 * X[:, 0] + 3 * X[:, 1] + np.random.randn(100)
+    >>> reg = LinearRegression().fit(X, y)
+    >>> print(f"Intercept: {reg.coefficients_[0]:.2f}")
+    >>> inference = reg.get_inference(1)  # inference for first predictor
+    >>> print(f"Coef: {inference.coefficient:.2f}, SE: {inference.se:.2f}")
+
+    Using with cluster-robust standard errors:
+
+    >>> cluster_ids = np.repeat(np.arange(20), 5)  # 20 clusters of 5
+    >>> reg = LinearRegression(cluster_ids=cluster_ids).fit(X, y)
+    >>> inference = reg.get_inference(1)
+    >>> print(f"Cluster-robust SE: {inference.se:.2f}")
+
+    Extracting multiple coefficients at once:
+
+    >>> results = reg.get_inference_batch([1, 2])
+    >>> for idx, inf in results.items():
+    ...     print(f"Coef {idx}: {inf.coefficient:.2f} ({inf.significance_stars()})")
+    """
+
+    def __init__(
+        self,
+        include_intercept: bool = True,
+        robust: bool = True,
+        cluster_ids: Optional[np.ndarray] = None,
+        alpha: float = 0.05,
+    ):
+        self.include_intercept = include_intercept
+        self.robust = robust
+        self.cluster_ids = cluster_ids
+        self.alpha = alpha
+
+        # Fitted attributes (set by fit())
+        self.coefficients_: Optional[np.ndarray] = None
+        self.vcov_: Optional[np.ndarray] = None
+        self.residuals_: Optional[np.ndarray] = None
+        self.fitted_values_: Optional[np.ndarray] = None
+        self._y: Optional[np.ndarray] = None
+        self._X: Optional[np.ndarray] = None
+        self.n_obs_: Optional[int] = None
+        self.n_params_: Optional[int] = None
+        self.df_: Optional[int] = None
+
+    def fit(
+        self,
+        X: np.ndarray,
+        y: np.ndarray,
+        *,
+        cluster_ids: Optional[np.ndarray] = None,
+        df_adjustment: int = 0,
+    ) -> "LinearRegression":
+        """
+        Fit OLS regression.
+
+        Parameters
+        ----------
+        X : ndarray of shape (n, k)
+            Design matrix. An intercept column will be added if include_intercept=True.
+        y : ndarray of shape (n,)
+            Response vector.
+        cluster_ids : ndarray, optional
+            Cluster identifiers for this fit. Overrides the instance-level
+            cluster_ids if provided.
+        df_adjustment : int, default 0
+            Additional degrees of freedom adjustment (e.g., for absorbed fixed effects).
+            The effective df will be n - k - df_adjustment.
+
+        Returns
+        -------
+        self : LinearRegression
+            Fitted estimator.
+        """
+        X = np.asarray(X, dtype=np.float64)
+        y = np.asarray(y, dtype=np.float64)
+
+        # Add intercept if requested
+        if self.include_intercept:
+            X = np.column_stack([np.ones(X.shape[0]), X])
+
+        # Use provided cluster_ids or fall back to instance-level
+        effective_cluster_ids = cluster_ids if cluster_ids is not None else self.cluster_ids
+
+        # Determine if we need robust/cluster vcov
+        compute_vcov = True
+
+        if self.robust or effective_cluster_ids is not None:
+            # Use solve_ols with robust/cluster SEs
+            coefficients, residuals, fitted, vcov = solve_ols(
+                X, y,
+                cluster_ids=effective_cluster_ids,
+                return_fitted=True,
+                return_vcov=compute_vcov,
+            )
+        else:
+            # Classical OLS - compute vcov separately
+            coefficients, residuals, fitted, _ = solve_ols(
+                X, y,
+                return_fitted=True,
+                return_vcov=False,
+            )
+            # Compute classical OLS variance-covariance matrix
+            n, k = X.shape
+            mse = np.sum(residuals**2) / (n - k)
+            try:
+                vcov = np.linalg.solve(X.T @ X, mse * np.eye(k))
+            except np.linalg.LinAlgError:
+                # Fall back to pseudo-inverse for singular matrices
+                vcov = np.linalg.pinv(X.T @ X) * mse
+
+        # Store fitted attributes
+        self.coefficients_ = coefficients
+        self.vcov_ = vcov
+        self.residuals_ = residuals
+        self.fitted_values_ = fitted
+        self._y = y
+        self._X = X
+        self.n_obs_ = X.shape[0]
+        self.n_params_ = X.shape[1]
+        self.df_ = self.n_obs_ - self.n_params_ - df_adjustment
+
+        return self
+
+    def _check_fitted(self) -> None:
+        """Raise error if model has not been fitted."""
+        if self.coefficients_ is None:
+            raise ValueError("Model has not been fitted. Call fit() first.")
+
+    def get_coefficient(self, index: int) -> float:
+        """
+        Get the coefficient value at a specific index.
+
+        Parameters
+        ----------
+        index : int
+            Index of the coefficient in the coefficient array.
+
+        Returns
+        -------
+        float
+            Coefficient value.
+        """
+        self._check_fitted()
+        return float(self.coefficients_[index])
+
+    def get_se(self, index: int) -> float:
+        """
+        Get the standard error for a coefficient.
+
+        Parameters
+        ----------
+        index : int
+            Index of the coefficient.
+
+        Returns
+        -------
+        float
+            Standard error.
+        """
+        self._check_fitted()
+        return float(np.sqrt(self.vcov_[index, index]))
+
+    def get_inference(
+        self,
+        index: int,
+        alpha: Optional[float] = None,
+        df: Optional[int] = None,
+    ) -> InferenceResult:
+        """
+        Get full inference results for a coefficient.
+
+        This is the primary method for extracting coefficient-level inference,
+        returning all statistics in a single call.
+
+        Parameters
+        ----------
+        index : int
+            Index of the coefficient in the coefficient array.
+        alpha : float, optional
+            Significance level for CI. Defaults to instance-level alpha.
+        df : int, optional
+            Degrees of freedom. Defaults to fitted df (n - k - df_adjustment).
+            Set to None explicitly to use normal distribution instead of t.
+
+        Returns
+        -------
+        InferenceResult
+            Dataclass containing coefficient, se, t_stat, p_value, conf_int.
+
+        Examples
+        --------
+        >>> reg = LinearRegression().fit(X, y)
+        >>> result = reg.get_inference(1)
+        >>> print(f"Effect: {result.coefficient:.3f} (SE: {result.se:.3f})")
+        >>> print(f"95% CI: [{result.conf_int[0]:.3f}, {result.conf_int[1]:.3f}]")
+        >>> if result.is_significant():
+        ...     print("Statistically significant!")
+        """
+        self._check_fitted()
+
+        coef = float(self.coefficients_[index])
+        se = float(np.sqrt(self.vcov_[index, index]))
+
+        # Handle zero or negative SE (indicates perfect fit or numerical issues)
+        if se <= 0:
+            import warnings
+            warnings.warn(
+                f"Standard error is zero or negative (se={se}) for coefficient at index {index}. "
+                "This may indicate perfect multicollinearity or numerical issues.",
+                UserWarning,
+            )
+            # Use inf for t-stat when SE is zero (perfect fit scenario)
+            if coef > 0:
+                t_stat = np.inf
+            elif coef < 0:
+                t_stat = -np.inf
+            else:
+                t_stat = 0.0
+        else:
+            t_stat = coef / se
+
+        # Use instance alpha if not provided
+        effective_alpha = alpha if alpha is not None else self.alpha
+
+        # Use fitted df if not explicitly provided
+        # Note: df=None means use normal distribution
+        effective_df = df if df is not None else self.df_
+
+        # Warn if df is non-positive and fall back to normal distribution
+        if effective_df is not None and effective_df <= 0:
+            import warnings
+            warnings.warn(
+                f"Degrees of freedom is non-positive (df={effective_df}). "
+                "Using normal distribution instead of t-distribution for inference.",
+                UserWarning,
+            )
+            effective_df = None
+
+        # Compute p-value
+        p_value = _compute_p_value(t_stat, df=effective_df)
+
+        # Compute confidence interval
+        conf_int = _compute_confidence_interval(coef, se, effective_alpha, df=effective_df)
+
+        return InferenceResult(
+            coefficient=coef,
+            se=se,
+            t_stat=t_stat,
+            p_value=p_value,
+            conf_int=conf_int,
+            df=effective_df,
+            alpha=effective_alpha,
+        )
+
+    def get_inference_batch(
+        self,
+        indices: List[int],
+        alpha: Optional[float] = None,
+        df: Optional[int] = None,
+    ) -> Dict[int, InferenceResult]:
+        """
+        Get inference results for multiple coefficients.
+
+        Parameters
+        ----------
+        indices : list of int
+            Indices of coefficients to extract.
+        alpha : float, optional
+            Significance level for CIs. Defaults to instance-level alpha.
+        df : int, optional
+            Degrees of freedom. Defaults to fitted df.
+
+        Returns
+        -------
+        dict
+            Dictionary mapping index -> InferenceResult.
+
+        Examples
+        --------
+        >>> reg = LinearRegression().fit(X, y)
+        >>> results = reg.get_inference_batch([1, 2, 3])
+        >>> for idx, inf in results.items():
+        ...     print(f"Coef {idx}: {inf.coefficient:.3f} {inf.significance_stars()}")
+        """
+        self._check_fitted()
+        return {idx: self.get_inference(idx, alpha=alpha, df=df) for idx in indices}
+
+    def get_all_inference(
+        self,
+        alpha: Optional[float] = None,
+        df: Optional[int] = None,
+    ) -> List[InferenceResult]:
+        """
+        Get inference results for all coefficients.
+
+        Parameters
+        ----------
+        alpha : float, optional
+            Significance level for CIs. Defaults to instance-level alpha.
+        df : int, optional
+            Degrees of freedom. Defaults to fitted df.
+
+        Returns
+        -------
+        list of InferenceResult
+            Inference results for each coefficient in order.
+        """
+        self._check_fitted()
+        return [
+            self.get_inference(i, alpha=alpha, df=df)
+            for i in range(len(self.coefficients_))
+        ]
+
+    def r_squared(self, adjusted: bool = False) -> float:
+        """
+        Compute R-squared or adjusted R-squared.
+
+        Parameters
+        ----------
+        adjusted : bool, default False
+            If True, return adjusted R-squared.
+
+        Returns
+        -------
+        float
+            R-squared value.
+        """
+        self._check_fitted()
+        return compute_r_squared(
+            self._y, self.residuals_, adjusted=adjusted, n_params=self.n_params_
+        )
+
+    def predict(self, X: np.ndarray) -> np.ndarray:
+        """
+        Predict using the fitted model.
+
+        Parameters
+        ----------
+        X : ndarray of shape (n, k)
+            Design matrix for prediction. Should have same number of columns
+            as the original X (excluding intercept if include_intercept=True).
+
+        Returns
+        -------
+        ndarray
+            Predicted values.
+        """
+        self._check_fitted()
+        X = np.asarray(X, dtype=np.float64)
+
+        if self.include_intercept:
+            X = np.column_stack([np.ones(X.shape[0]), X])
+
+        return X @ self.coefficients_
+
+
+# =============================================================================
+# Internal helpers for inference (used by LinearRegression)
+# =============================================================================
+
+
+def _compute_p_value(
+    t_stat: float,
+    df: Optional[int] = None,
+    two_sided: bool = True,
+) -> float:
+    """
+    Compute p-value for a t-statistic.
+
+    Parameters
+    ----------
+    t_stat : float
+        T-statistic.
+    df : int, optional
+        Degrees of freedom. If None, uses normal distribution.
+    two_sided : bool, default True
+        Whether to compute two-sided p-value.
+
+    Returns
+    -------
+    float
+        P-value.
+    """
+    if df is not None and df > 0:
+        p_value = stats.t.sf(np.abs(t_stat), df)
+    else:
+        p_value = stats.norm.sf(np.abs(t_stat))
+
+    if two_sided:
+        p_value *= 2
+
+    return float(p_value)
+
+
+def _compute_confidence_interval(
+    estimate: float,
+    se: float,
+    alpha: float = 0.05,
+    df: Optional[int] = None,
+) -> Tuple[float, float]:
+    """
+    Compute confidence interval for an estimate.
+
+    Parameters
+    ----------
+    estimate : float
+        Point estimate.
+    se : float
+        Standard error.
+    alpha : float, default 0.05
+        Significance level (0.05 for 95% CI).
+    df : int, optional
+        Degrees of freedom. If None, uses normal distribution.
+
+    Returns
+    -------
+    tuple of (float, float)
+        (lower_bound, upper_bound) of confidence interval.
+    """
+    if df is not None and df > 0:
+        critical_value = stats.t.ppf(1 - alpha / 2, df)
+    else:
+        critical_value = stats.norm.ppf(1 - alpha / 2)
+
+    lower = estimate - critical_value * se
+    upper = estimate + critical_value * se
+
+    return (lower, upper)
