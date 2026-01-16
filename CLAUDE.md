@@ -96,10 +96,12 @@ pytest tests/test_rust_backend.py -v
   - `bacon_decompose()` - Convenience function for quick decomposition
   - Integrated with `TwoWayFixedEffects.decompose()` method
 
-- **`diff_diff/linalg.py`** - Unified linear algebra backend (v1.4.0):
+- **`diff_diff/linalg.py`** - Unified linear algebra backend (v1.4.0+):
   - `solve_ols()` - OLS solver using scipy's gelsy LAPACK driver (QR-based, faster than SVD)
   - `compute_robust_vcov()` - Vectorized HC1 and cluster-robust variance-covariance estimation
   - `compute_r_squared()` - R-squared and adjusted R-squared computation
+  - `LinearRegression` - High-level OLS helper class with unified coefficient extraction and inference
+  - `InferenceResult` - Dataclass container for coefficient-level inference (SE, t-stat, p-value, CI)
   - Single optimization point for all estimators (reduces code duplication)
   - Cluster-robust SEs use pandas groupby instead of O(n × clusters) loop
 
@@ -270,7 +272,7 @@ Tests mirror the source modules:
 - `tests/test_sun_abraham.py` - Tests for SunAbraham interaction-weighted estimator
 - `tests/test_triple_diff.py` - Tests for Triple Difference (DDD) estimator
 - `tests/test_bacon.py` - Tests for Goodman-Bacon decomposition
-- `tests/test_linalg.py` - Tests for unified OLS backend and robust variance estimation
+- `tests/test_linalg.py` - Tests for unified OLS backend, robust variance estimation, LinearRegression helper, and InferenceResult
 - `tests/test_utils.py` - Tests for parallel trends, robust SE, synthetic weights
 - `tests/test_diagnostics.py` - Tests for placebo tests
 - `tests/test_wild_bootstrap.py` - Tests for wild cluster bootstrap

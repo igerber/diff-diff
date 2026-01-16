@@ -4,7 +4,13 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from diff_diff.linalg import compute_r_squared, compute_robust_vcov, solve_ols
+from diff_diff.linalg import (
+    InferenceResult,
+    LinearRegression,
+    compute_r_squared,
+    compute_robust_vcov,
+    solve_ols,
+)
 
 
 class TestSolveOLS:
@@ -420,3 +426,400 @@ class TestPerformance:
         coef, resid, vcov = solve_ols(X, y, cluster_ids=cluster_ids)
 
         assert vcov.shape == (k, k)
+
+
+class TestInferenceResult:
+    """Tests for the InferenceResult dataclass."""
+
+    def test_basic_creation(self):
+        """Test basic InferenceResult creation."""
+        result = InferenceResult(
+            coefficient=2.5,
+            se=0.5,
+            t_stat=5.0,
+            p_value=0.001,
+            conf_int=(1.52, 3.48),
+            df=100,
+            alpha=0.05,
+        )
+
+        assert result.coefficient == 2.5
+        assert result.se == 0.5
+        assert result.t_stat == 5.0
+        assert result.p_value == 0.001
+        assert result.conf_int == (1.52, 3.48)
+        assert result.df == 100
+        assert result.alpha == 0.05
+
+    def test_is_significant_default_alpha(self):
+        """Test is_significant with default alpha."""
+        # Significant at 0.05
+        result = InferenceResult(
+            coefficient=2.0, se=0.5, t_stat=4.0, p_value=0.001,
+            conf_int=(1.0, 3.0), alpha=0.05
+        )
+        assert result.is_significant() is True
+
+        # Not significant at 0.05
+        result2 = InferenceResult(
+            coefficient=0.5, se=0.5, t_stat=1.0, p_value=0.3,
+            conf_int=(-0.5, 1.5), alpha=0.05
+        )
+        assert result2.is_significant() is False
+
+    def test_is_significant_custom_alpha(self):
+        """Test is_significant with custom alpha override."""
+        result = InferenceResult(
+            coefficient=2.0, se=0.5, t_stat=4.0, p_value=0.02,
+            conf_int=(1.0, 3.0), alpha=0.05
+        )
+
+        # Significant at 0.05 (default)
+        assert result.is_significant() is True
+
+        # Not significant at 0.01
+        assert result.is_significant(alpha=0.01) is False
+
+    def test_significance_stars(self):
+        """Test significance_stars returns correct stars."""
+        # p < 0.001 -> ***
+        result = InferenceResult(
+            coefficient=1.0, se=0.1, t_stat=10.0, p_value=0.0001,
+            conf_int=(0.8, 1.2)
+        )
+        assert result.significance_stars() == "***"
+
+        # p < 0.01 -> **
+        result2 = InferenceResult(
+            coefficient=1.0, se=0.2, t_stat=5.0, p_value=0.005,
+            conf_int=(0.6, 1.4)
+        )
+        assert result2.significance_stars() == "**"
+
+        # p < 0.05 -> *
+        result3 = InferenceResult(
+            coefficient=1.0, se=0.3, t_stat=3.0, p_value=0.03,
+            conf_int=(0.4, 1.6)
+        )
+        assert result3.significance_stars() == "*"
+
+        # p < 0.1 -> .
+        result4 = InferenceResult(
+            coefficient=1.0, se=0.4, t_stat=2.5, p_value=0.08,
+            conf_int=(0.2, 1.8)
+        )
+        assert result4.significance_stars() == "."
+
+        # p >= 0.1 -> ""
+        result5 = InferenceResult(
+            coefficient=1.0, se=0.5, t_stat=2.0, p_value=0.15,
+            conf_int=(0.0, 2.0)
+        )
+        assert result5.significance_stars() == ""
+
+    def test_to_dict(self):
+        """Test to_dict returns all fields."""
+        result = InferenceResult(
+            coefficient=2.5, se=0.5, t_stat=5.0, p_value=0.001,
+            conf_int=(1.52, 3.48), df=100, alpha=0.05
+        )
+        d = result.to_dict()
+
+        assert d["coefficient"] == 2.5
+        assert d["se"] == 0.5
+        assert d["t_stat"] == 5.0
+        assert d["p_value"] == 0.001
+        assert d["conf_int"] == (1.52, 3.48)
+        assert d["df"] == 100
+        assert d["alpha"] == 0.05
+
+
+class TestLinearRegression:
+    """Tests for the LinearRegression helper class."""
+
+    @pytest.fixture
+    def simple_data(self):
+        """Create simple regression data with known coefficients."""
+        np.random.seed(42)
+        n = 200
+        # X without intercept (LinearRegression adds it by default)
+        X = np.random.randn(n, 2)
+        beta_true = np.array([5.0, 2.0, -1.0])  # intercept, x1, x2
+        X_with_intercept = np.column_stack([np.ones(n), X])
+        y = X_with_intercept @ beta_true + np.random.randn(n) * 0.5
+        return X, y, beta_true
+
+    @pytest.fixture
+    def clustered_data(self):
+        """Create clustered regression data."""
+        np.random.seed(42)
+        n_clusters = 20
+        obs_per_cluster = 10
+        n = n_clusters * obs_per_cluster
+
+        cluster_ids = np.repeat(np.arange(n_clusters), obs_per_cluster)
+        cluster_effects = np.random.randn(n_clusters)
+
+        X = np.random.randn(n, 1)
+        beta_true = np.array([3.0, 1.5])  # intercept, x1
+        X_with_intercept = np.column_stack([np.ones(n), X])
+        errors = cluster_effects[cluster_ids] + np.random.randn(n) * 0.3
+        y = X_with_intercept @ beta_true + errors
+
+        return X, y, cluster_ids, beta_true
+
+    def test_basic_fit(self, simple_data):
+        """Test basic LinearRegression fit."""
+        X, y, beta_true = simple_data
+        reg = LinearRegression().fit(X, y)
+
+        # Check coefficients are close to true values
+        np.testing.assert_allclose(reg.coefficients_, beta_true, atol=0.3)
+
+        # Check fitted attributes exist
+        assert reg.coefficients_ is not None
+        assert reg.vcov_ is not None
+        assert reg.residuals_ is not None
+        assert reg.fitted_values_ is not None
+        assert reg.n_obs_ == X.shape[0]
+        assert reg.n_params_ == X.shape[1] + 1  # +1 for intercept
+        assert reg.df_ == reg.n_obs_ - reg.n_params_
+
+    def test_fit_without_intercept(self, simple_data):
+        """Test fit without automatic intercept."""
+        X, y, _ = simple_data
+        n = X.shape[0]
+
+        # Add intercept manually
+        X_full = np.column_stack([np.ones(n), X])
+
+        reg = LinearRegression(include_intercept=False).fit(X_full, y)
+
+        # Should have same number of params as columns in X_full
+        assert reg.n_params_ == X_full.shape[1]
+
+    def test_fit_not_called_error(self):
+        """Test that methods raise error if fit() not called."""
+        reg = LinearRegression()
+
+        with pytest.raises(ValueError, match="not been fitted"):
+            reg.get_coefficient(0)
+
+        with pytest.raises(ValueError, match="not been fitted"):
+            reg.get_se(0)
+
+        with pytest.raises(ValueError, match="not been fitted"):
+            reg.get_inference(0)
+
+    def test_get_coefficient(self, simple_data):
+        """Test get_coefficient returns correct value."""
+        X, y, beta_true = simple_data
+        reg = LinearRegression().fit(X, y)
+
+        for i, expected in enumerate(beta_true):
+            actual = reg.get_coefficient(i)
+            np.testing.assert_allclose(actual, expected, atol=0.3)
+
+    def test_get_se(self, simple_data):
+        """Test get_se returns positive standard errors."""
+        X, y, _ = simple_data
+        reg = LinearRegression().fit(X, y)
+
+        for i in range(reg.n_params_):
+            se = reg.get_se(i)
+            assert se > 0
+
+    def test_get_inference(self, simple_data):
+        """Test get_inference returns InferenceResult with correct values."""
+        X, y, beta_true = simple_data
+        reg = LinearRegression().fit(X, y)
+
+        result = reg.get_inference(1)  # First predictor (index 1 after intercept)
+
+        # Check it's an InferenceResult
+        assert isinstance(result, InferenceResult)
+
+        # Check coefficient is close to true value
+        np.testing.assert_allclose(result.coefficient, beta_true[1], atol=0.3)
+
+        # Check SE is positive
+        assert result.se > 0
+
+        # Check t-stat computation
+        np.testing.assert_allclose(result.t_stat, result.coefficient / result.se)
+
+        # Check p-value is in valid range
+        assert 0 <= result.p_value <= 1
+
+        # Check confidence interval contains point estimate
+        assert result.conf_int[0] < result.coefficient < result.conf_int[1]
+
+        # Check df is set
+        assert result.df == reg.df_
+
+    def test_get_inference_significant_coefficient(self, simple_data):
+        """Test inference for a truly significant coefficient."""
+        X, y, _ = simple_data
+        reg = LinearRegression().fit(X, y)
+
+        # First predictor should be significant (true coef = 2.0)
+        result = reg.get_inference(1)
+
+        # With true effect of 2.0 and n=200, should be highly significant
+        assert result.p_value < 0.001
+        assert result.is_significant()
+        assert result.significance_stars() == "***"
+
+    def test_get_inference_batch(self, simple_data):
+        """Test get_inference_batch returns dict of results."""
+        X, y, _ = simple_data
+        reg = LinearRegression().fit(X, y)
+
+        results = reg.get_inference_batch([0, 1, 2])
+
+        assert isinstance(results, dict)
+        assert len(results) == 3
+        assert all(isinstance(v, InferenceResult) for v in results.values())
+        assert all(idx in results for idx in [0, 1, 2])
+
+    def test_get_all_inference(self, simple_data):
+        """Test get_all_inference returns results for all coefficients."""
+        X, y, _ = simple_data
+        reg = LinearRegression().fit(X, y)
+
+        results = reg.get_all_inference()
+
+        assert isinstance(results, list)
+        assert len(results) == reg.n_params_
+        assert all(isinstance(r, InferenceResult) for r in results)
+
+    def test_custom_alpha(self, simple_data):
+        """Test that custom alpha affects confidence intervals."""
+        X, y, _ = simple_data
+        reg = LinearRegression(alpha=0.10).fit(X, y)
+
+        result = reg.get_inference(1)
+        assert result.alpha == 0.10
+
+        # 90% CI should be narrower than 95% CI
+        result_99 = reg.get_inference(1, alpha=0.01)
+        ci_width_90 = result.conf_int[1] - result.conf_int[0]
+        ci_width_99 = result_99.conf_int[1] - result_99.conf_int[0]
+        assert ci_width_90 < ci_width_99
+
+    def test_r_squared(self, simple_data):
+        """Test R-squared computation."""
+        X, y, _ = simple_data
+        reg = LinearRegression().fit(X, y)
+
+        r2 = reg.r_squared()
+        r2_adj = reg.r_squared(adjusted=True)
+
+        # Should be high for well-specified model
+        assert 0.8 < r2 <= 1.0
+
+        # Adjusted should be smaller
+        assert r2_adj < r2
+
+    def test_predict(self, simple_data):
+        """Test prediction on new data."""
+        X, y, beta_true = simple_data
+        reg = LinearRegression().fit(X, y)
+
+        # Predict on same data
+        y_pred = reg.predict(X)
+
+        # Should match fitted values
+        np.testing.assert_allclose(y_pred, reg.fitted_values_, rtol=1e-10)
+
+        # Predict on new data
+        X_new = np.random.randn(10, 2)
+        y_pred_new = reg.predict(X_new)
+        assert y_pred_new.shape == (10,)
+
+    def test_robust_standard_errors(self, simple_data):
+        """Test that robust=True computes HC1 standard errors."""
+        X, y, _ = simple_data
+        reg_robust = LinearRegression(robust=True).fit(X, y)
+        reg_classical = LinearRegression(robust=False).fit(X, y)
+
+        # SEs should differ
+        se_robust = reg_robust.get_se(1)
+        se_classical = reg_classical.get_se(1)
+
+        assert se_robust != se_classical
+
+    def test_cluster_standard_errors(self, clustered_data):
+        """Test cluster-robust standard errors."""
+        X, y, cluster_ids, _ = clustered_data
+
+        reg_hc1 = LinearRegression(robust=True).fit(X, y)
+        reg_cluster = LinearRegression(cluster_ids=cluster_ids).fit(X, y)
+
+        # Cluster SE should typically be larger with correlated errors
+        se_hc1 = reg_hc1.get_se(1)
+        se_cluster = reg_cluster.get_se(1)
+
+        # They should differ (cluster SE usually larger with cluster correlation)
+        assert se_hc1 != se_cluster
+
+    def test_cluster_ids_in_fit(self, clustered_data):
+        """Test passing cluster_ids to fit() method."""
+        X, y, cluster_ids, _ = clustered_data
+
+        # Pass cluster_ids in constructor
+        reg1 = LinearRegression(cluster_ids=cluster_ids).fit(X, y)
+
+        # Pass cluster_ids in fit()
+        reg2 = LinearRegression().fit(X, y, cluster_ids=cluster_ids)
+
+        # Should give same results
+        np.testing.assert_allclose(reg1.get_se(1), reg2.get_se(1), rtol=1e-10)
+
+    def test_df_adjustment(self, simple_data):
+        """Test degrees of freedom adjustment parameter."""
+        X, y, _ = simple_data
+        reg = LinearRegression().fit(X, y)
+        reg_adj = LinearRegression().fit(X, y, df_adjustment=10)
+
+        # Adjusted df should be 10 less
+        assert reg_adj.df_ == reg.df_ - 10
+
+        # This affects inference
+        result = reg.get_inference(1)
+        result_adj = reg_adj.get_inference(1)
+
+        # Same coefficient and SE
+        assert result.coefficient == result_adj.coefficient
+        assert result.se == result_adj.se
+
+        # Different df affects p-value and CI (though often slightly)
+        assert result.df != result_adj.df
+
+    def test_returns_self(self, simple_data):
+        """Test that fit() returns self for chaining."""
+        X, y, _ = simple_data
+        reg = LinearRegression()
+        result = reg.fit(X, y)
+
+        assert result is reg
+
+    def test_matches_solve_ols(self, simple_data):
+        """Test that LinearRegression matches low-level solve_ols."""
+        X, y, _ = simple_data
+        n = X.shape[0]
+        X_with_intercept = np.column_stack([np.ones(n), X])
+
+        # Use low-level function
+        coef, resid, fitted, vcov = solve_ols(
+            X_with_intercept, y, return_fitted=True, return_vcov=True
+        )
+
+        # Use LinearRegression
+        reg = LinearRegression(robust=True).fit(X, y)
+
+        # Should match
+        np.testing.assert_allclose(reg.coefficients_, coef, rtol=1e-10)
+        np.testing.assert_allclose(reg.residuals_, resid, rtol=1e-10)
+        np.testing.assert_allclose(reg.fitted_values_, fitted, rtol=1e-10)
+        np.testing.assert_allclose(reg.vcov_, vcov, rtol=1e-10)
