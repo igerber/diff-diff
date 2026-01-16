@@ -224,7 +224,7 @@ Ongoing maintenance and developer experience.
 ### Code Quality
 
 - Extract shared within-transformation logic to utils
-- Consolidate linear regression helpers
+- ~~Consolidate linear regression helpers~~ ✓ Done (v2.1): Added `LinearRegression` helper class and `InferenceResult` dataclass in `linalg.py`. All major estimators (DifferenceInDifferences, TwoWayFixedEffects, SunAbraham, TripleDifference) now use the unified helper for coefficient extraction and inference.
 - Consider splitting `staggered.py` (1800+ lines)
 
 ### Documentation

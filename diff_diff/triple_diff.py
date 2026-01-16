@@ -37,7 +37,7 @@ import numpy as np
 import pandas as pd
 from scipy import optimize
 
-from diff_diff.linalg import compute_robust_vcov, solve_ols
+from diff_diff.linalg import LinearRegression, compute_robust_vcov, solve_ols
 from diff_diff.results import _get_significance_stars
 from diff_diff.utils import (
     compute_confidence_interval,
@@ -739,21 +739,18 @@ class TripleDifference:
 
         design_matrix = np.column_stack(design_cols)
 
-        # Fit OLS using unified backend
-        coefficients, residuals, fitted, _ = solve_ols(
-            design_matrix, y, return_fitted=True, return_vcov=False
-        )
-
-        # R-squared
-        ss_res = np.sum(residuals**2)
-        ss_tot = np.sum((y - np.mean(y)) ** 2)
-        r_squared = 1 - (ss_res / ss_tot) if ss_tot > 0 else 0.0
+        # Fit OLS using LinearRegression helper
+        reg = LinearRegression(
+            include_intercept=False,  # Intercept already in design_matrix
+            robust=self.robust,
+            alpha=self.alpha,
+        ).fit(design_matrix, y)
 
         # ATT is the coefficient on G*P*T (index 7)
-        att = coefficients[7]
-
-        # Compute standard error
-        se = self._compute_se(design_matrix, residuals, 7)
+        inference = reg.get_inference(7)
+        att = inference.coefficient
+        se = inference.se
+        r_squared = reg.r_squared()
 
         return att, se, r_squared, None
 

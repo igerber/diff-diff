@@ -16,7 +16,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
-from diff_diff.linalg import compute_robust_vcov
+from diff_diff.linalg import LinearRegression, compute_robust_vcov
 from diff_diff.results import _get_significance_stars
 from diff_diff.utils import (
     compute_confidence_interval,
@@ -750,28 +750,26 @@ class SunAbraham:
         X = df_demeaned[X_cols].values
         y = df_demeaned[f"{outcome}_dm"].values
 
-        # Fit OLS
-        try:
-            XtX_inv = np.linalg.inv(X.T @ X)
-        except np.linalg.LinAlgError:
-            # Use pseudo-inverse for singular matrices
-            XtX_inv = np.linalg.pinv(X.T @ X)
-
-        coefficients = XtX_inv @ (X.T @ y)
-        residuals = y - X @ coefficients
-
-        # Compute cluster-robust standard errors
+        # Fit OLS using LinearRegression helper (more stable than manual X'X inverse)
         cluster_ids = df_demeaned[cluster_var].values
-        vcov = compute_robust_vcov(X, residuals, cluster_ids)
+        reg = LinearRegression(
+            include_intercept=False,  # Already demeaned, no intercept needed
+            robust=True,
+            cluster_ids=cluster_ids,
+        ).fit(X, y)
 
-        # Extract cohort effects and standard errors
+        coefficients = reg.coefficients_
+        vcov = reg.vcov_
+
+        # Extract cohort effects and standard errors using get_inference
         cohort_effects: Dict[Tuple[Any, int], float] = {}
         cohort_ses: Dict[Tuple[Any, int], float] = {}
 
         n_interactions = len(interaction_cols)
         for (g, e), coef_idx in coef_index_map.items():
-            cohort_effects[(g, e)] = float(coefficients[coef_idx])
-            cohort_ses[(g, e)] = float(np.sqrt(vcov[coef_idx, coef_idx]))
+            inference = reg.get_inference(coef_idx)
+            cohort_effects[(g, e)] = inference.coefficient
+            cohort_ses[(g, e)] = inference.se
 
         # Extract just the vcov for cohort effects (excluding covariates)
         vcov_cohort = vcov[:n_interactions, :n_interactions]
