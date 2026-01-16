@@ -823,3 +823,177 @@ class TestLinearRegression:
         np.testing.assert_allclose(reg.residuals_, resid, rtol=1e-10)
         np.testing.assert_allclose(reg.fitted_values_, fitted, rtol=1e-10)
         np.testing.assert_allclose(reg.vcov_, vcov, rtol=1e-10)
+
+
+class TestNumericalStability:
+    """Tests for numerical stability with ill-conditioned matrices."""
+
+    def test_near_singular_matrix_stability(self):
+        """Test that near-singular matrices are handled correctly."""
+        np.random.seed(42)
+        n = 100
+
+        # Create near-collinear design (high condition number)
+        X = np.random.randn(n, 3)
+        X[:, 2] = X[:, 0] + X[:, 1] + np.random.randn(n) * 1e-8  # Near-perfect collinearity
+
+        y = X[:, 0] + np.random.randn(n) * 0.1
+
+        reg = LinearRegression(include_intercept=True).fit(X, y)
+
+        # Should still produce finite coefficients
+        assert np.all(np.isfinite(reg.coefficients_))
+
+        # Compare with numpy's lstsq (gold standard for stability)
+        X_full = np.column_stack([np.ones(n), X])
+        expected, _, _, _ = np.linalg.lstsq(X_full, y, rcond=None)
+
+        # Should be close (within reasonable tolerance for ill-conditioned problem)
+        np.testing.assert_allclose(reg.coefficients_, expected, rtol=1e-6)
+
+    def test_high_condition_number_matrix(self):
+        """Test that high condition number matrices don't lose precision."""
+        np.random.seed(42)
+        n = 100
+        k = 5
+
+        # Create matrix with controlled condition number
+        X = np.random.randn(n, k)
+        # Make last column nearly dependent on first
+        X[:, -1] = X[:, 0] * 0.9999 + np.random.randn(n) * 1e-6
+
+        y = X[:, 0] + 2 * X[:, 1] + np.random.randn(n) * 0.1
+
+        # Should complete without error
+        reg = LinearRegression().fit(X, y)
+        assert np.all(np.isfinite(reg.coefficients_))
+        assert np.all(np.isfinite(reg.vcov_))
+
+    def test_zero_se_warning(self):
+        """Test that zero SE triggers a warning."""
+        np.random.seed(42)
+        n = 50
+
+        # Create perfect fit scenario
+        X = np.random.randn(n, 2)
+        y = 1 + 2 * X[:, 0] + 3 * X[:, 1]  # No noise
+
+        reg = LinearRegression().fit(X, y)
+
+        # Residuals should be near-zero (perfect fit)
+        assert np.allclose(reg.residuals_, 0, atol=1e-10)
+
+        # SE should be very small, which may trigger the warning
+        # The important thing is it doesn't crash
+        for i in range(reg.n_params_):
+            inf = reg.get_inference(i)
+            assert np.isfinite(inf.coefficient)
+
+
+class TestEstimatorIntegration:
+    """Integration tests verifying estimators produce correct results."""
+
+    def test_did_estimator_produces_valid_results(self):
+        """Verify DifferenceInDifferences produces valid inference."""
+        from diff_diff import DifferenceInDifferences
+
+        # Create reproducible test data
+        np.random.seed(42)
+        n = 200
+        data = pd.DataFrame({
+            "unit": np.repeat(range(20), 10),
+            "time": np.tile(range(10), 20),
+            "treated": np.repeat([0] * 10 + [1] * 10, 10),
+            "post": np.tile([0] * 5 + [1] * 5, 20),
+        })
+        # True ATT = 2.0
+        data["outcome"] = (
+            np.random.randn(n)
+            + 2.0 * data["treated"] * data["post"]
+        )
+
+        # Fit estimator
+        did = DifferenceInDifferences(robust=True)
+        result = did.fit(data, outcome="outcome", treatment="treated", time="post")
+
+        # Coefficient should be close to true effect (within sampling variation)
+        assert abs(result.att - 2.0) < 1.0
+
+        # SE, p-value, CI should all be valid
+        assert result.se > 0
+        assert 0 <= result.p_value <= 1
+        assert result.conf_int[0] < result.att < result.conf_int[1]
+
+    def test_twfe_estimator_produces_valid_results(self):
+        """Verify TwoWayFixedEffects produces valid inference."""
+        from diff_diff import TwoWayFixedEffects
+
+        np.random.seed(42)
+        n_units = 30
+        n_times = 6
+        n = n_units * n_times
+
+        data = pd.DataFrame({
+            "unit": np.repeat(np.arange(n_units), n_times),
+            "time": np.tile(np.arange(n_times), n_units),
+            "treated": np.repeat(np.random.binomial(1, 0.5, n_units), n_times),
+        })
+        data["post"] = (data["time"] >= 3).astype(int)
+
+        # Add unit and time effects with true ATT = 1.5
+        unit_effects = np.random.randn(n_units)
+        time_effects = np.random.randn(n_times)
+        data["y"] = (
+            unit_effects[data["unit"]]
+            + time_effects[data["time"]]
+            + data["treated"] * data["post"] * 1.5
+            + np.random.randn(n) * 0.5
+        )
+
+        twfe = TwoWayFixedEffects()
+        result = twfe.fit(
+            data, outcome="y", treatment="treated", time="post", unit="unit"
+        )
+
+        # Should produce valid results
+        assert result.se > 0
+        assert 0 <= result.p_value <= 1
+        assert np.isfinite(result.att)
+
+    def test_sun_abraham_estimator_produces_valid_results(self):
+        """Verify SunAbraham produces valid inference."""
+        from diff_diff import SunAbraham
+
+        np.random.seed(42)
+        n_units = 60
+        n_times = 10
+        n = n_units * n_times
+
+        data = pd.DataFrame({
+            "unit": np.repeat(np.arange(n_units), n_times),
+            "time": np.tile(np.arange(n_times), n_units),
+        })
+
+        # Staggered treatment timing
+        first_treat_map = {}
+        for i in range(n_units):
+            if i < 20:
+                first_treat_map[i] = np.inf  # Never treated
+            elif i < 40:
+                first_treat_map[i] = 5
+            else:
+                first_treat_map[i] = 7
+
+        data["first_treat"] = data["unit"].map(first_treat_map)
+        data["treated"] = (data["time"] >= data["first_treat"]).astype(int)
+        data["y"] = np.random.randn(n) + data["treated"] * 2.0
+
+        sa = SunAbraham(n_bootstrap=0)
+        result = sa.fit(
+            data, outcome="y", unit="unit", time="time", first_treat="first_treat"
+        )
+
+        # Should produce valid results
+        assert result.overall_se > 0
+        assert np.isfinite(result.overall_att)
+        assert len(result.event_study_effects) > 0

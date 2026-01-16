@@ -275,38 +275,30 @@ class DifferenceInDifferences:
             f"but found '{var_names[att_idx]}'"
         )
 
-        # Compute degrees of freedom (used for analytical inference)
-        df = len(y) - X.shape[1] - n_absorbed_effects
+        # Always use LinearRegression for initial fit (unified code path)
+        # For wild bootstrap, we don't need cluster SEs from the initial fit
+        cluster_ids = data[self.cluster].values if self.cluster is not None else None
+        reg = LinearRegression(
+            include_intercept=False,  # Intercept already in X
+            robust=self.robust,
+            cluster_ids=cluster_ids if self.inference != "wild_bootstrap" else None,
+            alpha=self.alpha,
+        ).fit(X, y, df_adjustment=n_absorbed_effects)
 
-        # Compute standard errors and inference
+        coefficients = reg.coefficients_
+        residuals = reg.residuals_
+        fitted = reg.fitted_values_
+        att = coefficients[att_idx]
+
+        # Get inference - either from bootstrap or analytical
         if self.inference == "wild_bootstrap" and self.cluster is not None:
-            # Wild cluster bootstrap for few-cluster inference
-            # Need to fit OLS first, then run bootstrap
-            coefficients, residuals, fitted, _ = solve_ols(
-                X, y, return_fitted=True, return_vcov=False
-            )
-            cluster_ids = data[self.cluster].values
-            att = coefficients[att_idx]
+            # Override with wild cluster bootstrap inference
             se, p_value, conf_int, t_stat, vcov, _ = self._run_wild_bootstrap_inference(
                 X, y, residuals, cluster_ids, att_idx
             )
         else:
-            # Use LinearRegression helper for unified inference
-            cluster_ids = data[self.cluster].values if self.cluster is not None else None
-            reg = LinearRegression(
-                include_intercept=False,  # Intercept already in X
-                robust=self.robust,
-                cluster_ids=cluster_ids,
-                alpha=self.alpha,
-            ).fit(X, y, df_adjustment=n_absorbed_effects)
-
-            coefficients = reg.coefficients_
-            residuals = reg.residuals_
-            fitted = reg.fitted_values_
+            # Use analytical inference from LinearRegression
             vcov = reg.vcov_
-            att = coefficients[att_idx]
-
-            # Get inference for ATT coefficient
             inference = reg.get_inference(att_idx)
             se = inference.se
             t_stat = inference.t_stat

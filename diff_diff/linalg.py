@@ -184,8 +184,11 @@ def _solve_ols_numpy(
     """
     NumPy/SciPy fallback implementation of solve_ols.
 
-    Uses normal equations (X'X)^{-1} X'y solved via np.linalg.solve for speed,
-    with fallback to scipy.lstsq (QR) for rank-deficient matrices.
+    Uses scipy.linalg.lstsq with 'gelsy' driver (QR with column pivoting)
+    for numerically stable least squares solving. QR decomposition is preferred
+    over normal equations because it doesn't square the condition number of X,
+    making it more robust for ill-conditioned matrices common in DiD designs
+    (e.g., many unit/time fixed effects).
 
     Parameters
     ----------
@@ -211,18 +214,11 @@ def _solve_ols_numpy(
     vcov : np.ndarray, optional
         Variance-covariance matrix if return_vcov=True.
     """
-    # Solve OLS using normal equations: (X'X) beta = X'y
-    # This is ~14x faster than QR-based lstsq for typical DiD problems
-    # np.linalg.solve uses LAPACK's gesv (LU factorization with pivoting)
-    XtX = X.T @ X
-    Xty = X.T @ y
-
-    try:
-        coefficients = np.linalg.solve(XtX, Xty)
-    except np.linalg.LinAlgError:
-        # Fall back to QR-based solver for rank-deficient matrices
-        # This is slower but handles singular/near-singular cases
-        coefficients = scipy_lstsq(X, y, lapack_driver="gelsy", check_finite=False)[0]
+    # Solve OLS using QR decomposition via scipy's optimized LAPACK routines
+    # 'gelsy' uses QR with column pivoting, which is numerically stable even
+    # for ill-conditioned matrices (doesn't square the condition number like
+    # normal equations would)
+    coefficients = scipy_lstsq(X, y, lapack_driver="gelsy", check_finite=False)[0]
 
     # Compute residuals and fitted values
     fitted = X @ coefficients
@@ -756,7 +752,24 @@ class LinearRegression:
 
         coef = float(self.coefficients_[index])
         se = float(np.sqrt(self.vcov_[index, index]))
-        t_stat = coef / se if se > 0 else 0.0
+
+        # Handle zero or negative SE (indicates perfect fit or numerical issues)
+        if se <= 0:
+            import warnings
+            warnings.warn(
+                f"Standard error is zero or negative (se={se}) for coefficient at index {index}. "
+                "This may indicate perfect multicollinearity or numerical issues.",
+                UserWarning,
+            )
+            # Use inf for t-stat when SE is zero (perfect fit scenario)
+            if coef > 0:
+                t_stat = np.inf
+            elif coef < 0:
+                t_stat = -np.inf
+            else:
+                t_stat = 0.0
+        else:
+            t_stat = coef / se
 
         # Use instance alpha if not provided
         effective_alpha = alpha if alpha is not None else self.alpha
@@ -764,6 +777,16 @@ class LinearRegression:
         # Use fitted df if not explicitly provided
         # Note: df=None means use normal distribution
         effective_df = df if df is not None else self.df_
+
+        # Warn if df is non-positive and fall back to normal distribution
+        if effective_df is not None and effective_df <= 0:
+            import warnings
+            warnings.warn(
+                f"Degrees of freedom is non-positive (df={effective_df}). "
+                "Using normal distribution instead of t-distribution for inference.",
+                UserWarning,
+            )
+            effective_df = None
 
         # Compute p-value
         p_value = _compute_p_value(t_stat, df=effective_df)
