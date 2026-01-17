@@ -26,7 +26,7 @@ Consolidation opportunities for cleaner maintenance:
 | Duplicate Code | Locations | Notes |
 |---------------|-----------|-------|
 | ~~Within-transformation logic~~ | ~~Multiple files~~ | ✅ Extracted to `utils.py` as `demean_by_group()` and `within_transform()` (v2.0.1) |
-| ~~Linear regression helper~~ | ~~Multiple files~~ | ✅ Added `LinearRegression` class in `linalg.py` (v2.1). Used by DifferenceInDifferences, TwoWayFixedEffects, SunAbraham, TripleDifference. |
+| ~~Linear regression helper~~ | ~~Multiple files~~ | ✅ Added `LinearRegression` class in `linalg.py` (v2.0.3). Used by DifferenceInDifferences, TwoWayFixedEffects, SunAbraham, TripleDifference. |
 
 ### Large Module Files
 
