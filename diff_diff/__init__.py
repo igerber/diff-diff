@@ -116,6 +116,15 @@ from diff_diff.visualization import (
     plot_pretrends_power,
     plot_sensitivity,
 )
+from diff_diff.datasets import (
+    clear_cache,
+    list_datasets,
+    load_card_krueger,
+    load_castle_doctrine,
+    load_dataset,
+    load_divorce_laws,
+    load_mpdta,
+)
 
 __version__ = "2.0.3"
 __all__ = [
@@ -206,4 +215,12 @@ __all__ = [
     # Linear algebra helpers
     "LinearRegression",
     "InferenceResult",
+    # Datasets
+    "load_card_krueger",
+    "load_castle_doctrine",
+    "load_divorce_laws",
+    "load_mpdta",
+    "load_dataset",
+    "list_datasets",
+    "clear_cache",
 ]
