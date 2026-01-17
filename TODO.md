@@ -26,7 +26,7 @@ Consolidation opportunities for cleaner maintenance:
 | Duplicate Code | Locations | Notes |
 |---------------|-----------|-------|
 | ~~Within-transformation logic~~ | ~~Multiple files~~ | ✅ Extracted to `utils.py` as `demean_by_group()` and `within_transform()` (v2.0.1) |
-| Linear regression helper | `staggered.py:205-240`, `estimators.py:366-408` | Consider consolidation |
+| ~~Linear regression helper~~ | ~~Multiple files~~ | ✅ Added `LinearRegression` class in `linalg.py` (v2.1). Used by DifferenceInDifferences, TwoWayFixedEffects, SunAbraham, TripleDifference. |
 
 ### Large Module Files
 
@@ -65,7 +65,7 @@ Different estimators compute SEs differently. Consider unified interface.
 
 ## Documentation Improvements
 
-- [ ] Comparison of estimator outputs on same data
+- [x] ~~Comparison of estimator outputs on same data~~ ✅ Done in `02_staggered_did.ipynb` (Section 13: Comparing CS and SA)
 - [ ] Real-world data examples (currently synthetic only)
 
 ---
@@ -90,11 +90,12 @@ Enhancements for `honest_did.py`:
 
 ## Rust Backend Optimizations
 
-Deferred from PR #58 code review (can be done post-merge):
+Deferred from PR #58 code review (completed in v2.0.3):
 
-- [ ] **Matrix inversion efficiency** (`rust/src/linalg.rs:180-194`): Use Cholesky factorization for symmetric positive-definite matrices instead of column-by-column solve
-- [ ] **Reduce bootstrap allocations** (`rust/src/bootstrap.rs`): Currently uses `Vec<Vec<f64>>` → flatten → `Array2` which allocates twice. Should allocate directly into ndarray.
-- [ ] **Consider static BLAS linking** (`rust/Cargo.toml`): Currently requires system BLAS libraries. Consider `openblas-static` or `intel-mkl-static` features for easier distribution.
+- [x] **Matrix inversion efficiency** (`rust/src/linalg.rs`): ✅ Uses Cholesky factorization for symmetric positive-definite matrices with LU fallback for near-singular cases
+- [x] **Reduce bootstrap allocations** (`rust/src/bootstrap.rs`): ✅ Direct Array2 allocation eliminates Vec<Vec<f64>> intermediate. Also added Rayon chunk size tuning and Webb lookup table optimization.
+- [x] **Static BLAS linking options** (`rust/Cargo.toml`): ✅ Added `openblas-static` and `intel-mkl-static` features for easier distribution
+- [x] **Vectorized variance computation** (`rust/src/linalg.rs`): ✅ HC1 meat and score computation now use BLAS-accelerated matrix operations instead of scalar loops
 
 ---
 
@@ -103,6 +104,6 @@ Deferred from PR #58 code review (can be done post-merge):
 Potential future optimizations:
 
 - [ ] JIT compilation for bootstrap loops (numba)
-- [ ] Parallel bootstrap iterations
+- [x] ~~Parallel bootstrap iterations~~ ✅ Done via Rust backend (rayon) in v2.0
 - [ ] Sparse matrix handling for large fixed effects
 
