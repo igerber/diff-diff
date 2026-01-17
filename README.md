@@ -73,6 +73,7 @@ Signif. codes: '***' 0.001, '**' 0.01, '*' 0.05, '.' 0.1
 - **Staggered adoption**: Callaway-Sant'Anna (2021) and Sun-Abraham (2021) estimators for heterogeneous treatment timing
 - **Triple Difference (DDD)**: Ortiz-Villavicencio & Sant'Anna (2025) estimators with proper covariate handling
 - **Synthetic DiD**: Combined DiD with synthetic control for improved robustness
+- **Triply Robust Panel (TROP)**: Factor-adjusted DiD with synthetic weights (Athey et al. 2025)
 - **Event study plots**: Publication-ready visualization of treatment effects
 - **Parallel trends testing**: Multiple methods including equivalence tests
 - **Goodman-Bacon decomposition**: Diagnose TWFE bias by decomposing into 2x2 comparisons
@@ -98,6 +99,7 @@ We provide Jupyter notebook tutorials in `docs/tutorials/`:
 | `07_pretrends_power.ipynb` | Pre-trends power analysis (Roth 2022), MDV, power curves |
 | `08_triple_diff.ipynb` | Triple Difference (DDD) estimation with proper covariate handling |
 | `09_real_world_examples.ipynb` | Real-world data examples (Card-Krueger, Castle Doctrine, Divorce Laws) |
+| `10_trop.ipynb` | Triply Robust Panel (TROP) estimation with factor model adjustment |
 
 ## Data Preparation
 
@@ -1115,6 +1117,179 @@ SyntheticDiD(
 )
 ```
 
+### Triply Robust Panel (TROP)
+
+TROP (Athey, Imbens, Qu & Viviano 2025) extends Synthetic DiD by adding interactive fixed effects (factor model) adjustment. It's particularly useful when there are unobserved time-varying confounders with a factor structure that could bias standard DiD or SDID estimates.
+
+TROP combines three robustness components:
+1. **Nuclear norm regularized factor model**: Estimates interactive fixed effects L_it via soft-thresholding
+2. **Exponential distance-based unit weights**: ω_j = exp(-λ_unit × distance(j,i))
+3. **Exponential time decay weights**: θ_s = exp(-λ_time × |s-t|)
+
+Tuning parameters are selected via leave-one-out cross-validation (LOOCV).
+
+```python
+from diff_diff import TROP, trop
+
+# Fit TROP model with automatic tuning via LOOCV
+trop_est = TROP(
+    lambda_time_grid=[0.0, 0.5, 1.0, 2.0],  # Time decay grid
+    lambda_unit_grid=[0.0, 0.5, 1.0, 2.0],  # Unit distance grid
+    lambda_nn_grid=[0.0, 0.1, 1.0],          # Nuclear norm grid
+    n_bootstrap=200
+)
+results = trop_est.fit(
+    panel_data,
+    outcome='gdp_growth',
+    treatment='treated',
+    unit='state',
+    time='year',
+    post_periods=[2015, 2016, 2017, 2018]
+)
+
+# View results
+results.print_summary()
+print(f"ATT: {results.att:.3f} (SE: {results.se:.3f})")
+print(f"Effective rank: {results.effective_rank:.2f}")
+
+# Selected tuning parameters
+print(f"λ_time: {results.lambda_time:.2f}")
+print(f"λ_unit: {results.lambda_unit:.2f}")
+print(f"λ_nn: {results.lambda_nn:.2f}")
+
+# Examine unit effects
+unit_effects = results.get_unit_effects_df()
+print(unit_effects.head(10))
+```
+
+Output:
+```
+===========================================================================
+         Triply Robust Panel (TROP) Estimation Results
+               Athey, Imbens, Qu & Viviano (2025)
+===========================================================================
+
+Observations:                      500
+Treated units:                       1
+Control units:                      49
+Treated observations:                4
+Pre-treatment periods:               6
+Post-treatment periods:              4
+
+---------------------------------------------------------------------------
+             Tuning Parameters (selected via LOOCV)
+---------------------------------------------------------------------------
+Lambda (time decay):               1.0000
+Lambda (unit distance):            0.5000
+Lambda (nuclear norm):             0.1000
+Effective rank:                      2.35
+LOOCV score:                     0.012345
+Variance method:                bootstrap
+Bootstrap replications:              200
+
+---------------------------------------------------------------------------
+Parameter         Estimate     Std. Err.     t-stat      P>|t|
+---------------------------------------------------------------------------
+ATT                 2.5000       0.3892      6.424      0.0000   ***
+---------------------------------------------------------------------------
+
+95% Confidence Interval: [1.7372, 3.2628]
+
+Signif. codes: '***' 0.001, '**' 0.01, '*' 0.05, '.' 0.1
+===========================================================================
+```
+
+#### When to Use TROP Over Synthetic DiD
+
+Use TROP when you suspect **factor structure** in the data—unobserved confounders that affect outcomes differently across units and time:
+
+| Scenario | Use SDID | Use TROP |
+|----------|----------|----------|
+| Simple parallel trends | ✓ | ✓ |
+| Unobserved factors (e.g., economic cycles) | May be biased | ✓ |
+| Strong unit-time interactions | May be biased | ✓ |
+| Low-dimensional confounding | ✓ | ✓ |
+
+**Example scenarios where TROP excels:**
+- Regional economic shocks that affect states differently based on industry composition
+- Global trends that impact countries differently based on their economic structure
+- Common factors in financial data (market risk, interest rates, etc.)
+
+**How TROP works:**
+
+1. **Factor estimation**: Estimates interactive fixed effects L_it using nuclear norm regularization (encourages low-rank structure)
+2. **Unit weights**: Exponential distance-based weighting ω_j = exp(-λ_unit × d(j,i)) where d(j,i) is the RMSE of outcome differences
+3. **Time weights**: Exponential decay weighting θ_s = exp(-λ_time × |s-t|) based on proximity to treatment
+4. **ATT computation**: τ = Y_it - α_i - β_t - L_it for treated observations
+
+```python
+# Compare TROP vs SDID under factor confounding
+from diff_diff import SyntheticDiD
+
+# Synthetic DiD (may be biased with factors)
+sdid = SyntheticDiD()
+sdid_results = sdid.fit(data, outcome='y', treatment='treated',
+                        unit='unit', time='time', post_periods=[5,6,7])
+
+# TROP (accounts for factors)
+trop_est = TROP()  # Uses default grids with LOOCV selection
+trop_results = trop_est.fit(data, outcome='y', treatment='treated',
+                            unit='unit', time='time', post_periods=[5,6,7])
+
+print(f"SDID estimate: {sdid_results.att:.3f}")
+print(f"TROP estimate: {trop_results.att:.3f}")
+print(f"Effective rank: {trop_results.effective_rank:.2f}")
+```
+
+**Tuning parameter grids:**
+
+```python
+# Custom tuning grids (searched via LOOCV)
+trop = TROP(
+    lambda_time_grid=[0.0, 0.1, 0.5, 1.0, 2.0, 5.0],  # Time decay
+    lambda_unit_grid=[0.0, 0.1, 0.5, 1.0, 2.0, 5.0],  # Unit distance
+    lambda_nn_grid=[0.0, 0.01, 0.1, 1.0, 10.0]        # Nuclear norm
+)
+
+# Fixed tuning parameters (skip LOOCV search)
+trop = TROP(
+    lambda_time_grid=[1.0],   # Single value = fixed
+    lambda_unit_grid=[1.0],   # Single value = fixed
+    lambda_nn_grid=[0.1]      # Single value = fixed
+)
+```
+
+**Parameters:**
+
+```python
+TROP(
+    lambda_time_grid=None,      # Time decay grid (default: [0, 0.1, 0.5, 1, 2, 5])
+    lambda_unit_grid=None,      # Unit distance grid (default: [0, 0.1, 0.5, 1, 2, 5])
+    lambda_nn_grid=None,        # Nuclear norm grid (default: [0, 0.01, 0.1, 1, 10])
+    max_iter=100,               # Max iterations for factor estimation
+    tol=1e-6,                   # Convergence tolerance
+    alpha=0.05,                 # Significance level
+    variance_method='bootstrap', # 'bootstrap' or 'jackknife'
+    n_bootstrap=200,            # Bootstrap replications
+    seed=None                   # Random seed
+)
+```
+
+**Convenience function:**
+
+```python
+# One-liner estimation with default tuning grids
+results = trop(
+    data,
+    outcome='y',
+    treatment='treated',
+    unit='unit',
+    time='time',
+    post_periods=[5, 6, 7],
+    n_bootstrap=200
+)
+```
+
 ## Working with Results
 
 ### Export Results
@@ -1680,6 +1855,74 @@ SyntheticDiD(
 | `get_unit_weights_df()` | Get unit weights as DataFrame |
 | `get_time_weights_df()` | Get time weights as DataFrame |
 
+### TROP
+
+```python
+TROP(
+    lambda_time_grid=None,     # Time decay grid (default: [0, 0.1, 0.5, 1, 2, 5])
+    lambda_unit_grid=None,     # Unit distance grid (default: [0, 0.1, 0.5, 1, 2, 5])
+    lambda_nn_grid=None,       # Nuclear norm grid (default: [0, 0.01, 0.1, 1, 10])
+    max_iter=100,              # Max iterations for factor estimation
+    tol=1e-6,                  # Convergence tolerance
+    alpha=0.05,                # Significance level for CIs
+    variance_method='bootstrap',  # 'bootstrap' or 'jackknife'
+    n_bootstrap=200,           # Bootstrap/jackknife iterations
+    seed=None                  # Random seed
+)
+```
+
+**fit() Parameters:**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `data` | DataFrame | Panel data |
+| `outcome` | str | Outcome variable column name |
+| `treatment` | str | Treatment indicator column (0/1) |
+| `unit` | str | Unit identifier column |
+| `time` | str | Time period column |
+| `post_periods` | list | List of post-treatment period values |
+
+### TROPResults
+
+**Attributes:**
+
+| Attribute | Description |
+|-----------|-------------|
+| `att` | Average Treatment effect on the Treated |
+| `se` | Standard error (bootstrap or jackknife) |
+| `t_stat` | T-statistic |
+| `p_value` | P-value |
+| `conf_int` | Confidence interval |
+| `n_obs` | Number of observations |
+| `n_treated` | Number of treated units |
+| `n_control` | Number of control units |
+| `n_treated_obs` | Number of treated unit-time observations |
+| `unit_effects` | Dict mapping unit IDs to fixed effects |
+| `time_effects` | Dict mapping periods to fixed effects |
+| `treatment_effects` | Dict mapping (unit, time) to individual effects |
+| `lambda_time` | Selected time decay parameter |
+| `lambda_unit` | Selected unit distance parameter |
+| `lambda_nn` | Selected nuclear norm parameter |
+| `factor_matrix` | Low-rank factor matrix L (n_periods x n_units) |
+| `effective_rank` | Effective rank of factor matrix |
+| `loocv_score` | LOOCV score for selected parameters |
+| `pre_periods` | List of pre-treatment periods |
+| `post_periods` | List of post-treatment periods |
+| `variance_method` | Variance estimation method |
+| `bootstrap_distribution` | Bootstrap distribution (if bootstrap) |
+
+**Methods:**
+
+| Method | Description |
+|--------|-------------|
+| `summary(alpha)` | Get formatted summary string |
+| `print_summary(alpha)` | Print summary to stdout |
+| `to_dict()` | Convert to dictionary |
+| `to_dataframe()` | Convert to pandas DataFrame |
+| `get_unit_effects_df()` | Get unit fixed effects as DataFrame |
+| `get_time_effects_df()` | Get time fixed effects as DataFrame |
+| `get_treatment_effects_df()` | Get individual treatment effects as DataFrame |
+
 ### SunAbraham
 
 ```python
@@ -2153,6 +2396,17 @@ This library implements methods from the following scholarly works:
 ### Synthetic Difference-in-Differences
 
 - **Arkhangelsky, D., Athey, S., Hirshberg, D. A., Imbens, G. W., & Wager, S. (2021).** "Synthetic Difference-in-Differences." *American Economic Review*, 111(12), 4088-4118. [https://doi.org/10.1257/aer.20190159](https://doi.org/10.1257/aer.20190159)
+
+### Triply Robust Panel (TROP)
+
+- **Athey, S., Imbens, G. W., Qu, Z., & Viviano, D. (2025).** "Triply Robust Panel Estimators." *Working Paper*. [https://arxiv.org/abs/2508.21536](https://arxiv.org/abs/2508.21536)
+
+  This paper introduces the TROP estimator which combines three robustness components:
+  - **Factor model adjustment**: Low-rank factor structure via SVD removes unobserved confounders
+  - **Unit weights**: Synthetic control style weighting for optimal comparison
+  - **Time weights**: SDID style time weighting for informative pre-periods
+
+  TROP is particularly useful when there are unobserved time-varying confounders with a factor structure that affect different units differently over time.
 
 ### Triple Difference (DDD)
 

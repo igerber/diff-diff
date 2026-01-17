@@ -100,6 +100,11 @@ from diff_diff.triple_diff import (
     TripleDifferenceResults,
     triple_difference,
 )
+from diff_diff.trop import (
+    TROP,
+    TROPResults,
+    trop,
+)
 from diff_diff.utils import (
     WildBootstrapResults,
     check_parallel_trends,
@@ -126,7 +131,7 @@ from diff_diff.datasets import (
     load_mpdta,
 )
 
-__version__ = "2.0.4"
+__version__ = "2.1.0"
 __all__ = [
     # Estimators
     "DifferenceInDifferences",
@@ -136,6 +141,7 @@ __all__ = [
     "CallawaySantAnna",
     "SunAbraham",
     "TripleDifference",
+    "TROP",
     # Bacon Decomposition
     "BaconDecomposition",
     "BaconDecompositionResults",
@@ -154,6 +160,8 @@ __all__ = [
     "SABootstrapResults",
     "TripleDifferenceResults",
     "triple_difference",
+    "TROPResults",
+    "trop",
     # Visualization
     "plot_event_study",
     "plot_group_effects",
