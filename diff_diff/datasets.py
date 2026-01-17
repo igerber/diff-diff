@@ -8,11 +8,9 @@ All datasets are downloaded from public sources and cached locally
 for subsequent use.
 """
 
-import hashlib
-import os
 from io import StringIO
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict
 from urllib.error import HTTPError, URLError
 from urllib.request import urlopen
 
@@ -162,7 +160,7 @@ def _construct_card_krueger_data() -> pd.DataFrame:
     Uses aggregated data that preserves the key DiD estimates.
     """
     # Representative sample based on published summary statistics
-    np.random.seed(1994)  # Year of publication
+    np.random.seed(1994)  # Card-Krueger publication year, for reproducibility
 
     stores = []
     store_id = 1
@@ -307,7 +305,7 @@ def _construct_castle_doctrine_data() -> pd.DataFrame:
 
     This is a fallback when the online source is unavailable.
     """
-    np.random.seed(2013)  # Year of Cheng-Hoekstra publication
+    np.random.seed(2013)  # Cheng-Hoekstra publication year, for reproducibility
 
     # States and their Castle Doctrine adoption years
     # 0 = never adopted during the study period
@@ -456,7 +454,7 @@ def _construct_divorce_laws_data() -> pd.DataFrame:
 
     This is a fallback when the online source is unavailable.
     """
-    np.random.seed(2006)  # Year of Stevenson-Wolfers
+    np.random.seed(2006)  # Stevenson-Wolfers publication year, for reproducibility
 
     # State adoption years for unilateral divorce (from Wolfers 2006)
     # 0 = never adopted or adopted before 1968
@@ -603,7 +601,7 @@ def _construct_mpdta_data() -> pd.DataFrame:
 
     This replicates the simulated dataset used in Callaway-Sant'Anna tutorials.
     """
-    np.random.seed(2021)  # Year of CS publication
+    np.random.seed(2021)  # Callaway-Sant'Anna publication year, for reproducibility
 
     n_counties = 500
     years = [2003, 2004, 2005, 2006, 2007]
