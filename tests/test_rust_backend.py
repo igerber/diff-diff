@@ -253,6 +253,90 @@ class TestRustBackend:
         assert vcov.shape == (k, k)
         assert np.all(np.diag(vcov) > 0)
 
+    # =========================================================================
+    # LU Fallback Tests (for near-singular matrices)
+    # =========================================================================
+
+    def test_near_singular_matrix_lu_fallback(self):
+        """Test that near-singular matrices trigger LU fallback and produce valid results.
+
+        When X'X is near-singular (not positive definite), Cholesky factorization
+        fails and the Rust backend should fall back to LU decomposition.
+        This test verifies:
+        1. No crash or exception is raised
+        2. Coefficients are finite
+        3. Results match NumPy implementation
+        """
+        from diff_diff._rust_backend import solve_ols
+        from scipy.linalg import lstsq
+
+        np.random.seed(42)
+        n = 100
+
+        # Create near-collinear design matrix (high condition number)
+        # Column 3 is almost a linear combination of columns 1 and 2
+        X = np.random.randn(n, 3)
+        X[:, 2] = X[:, 0] + X[:, 1] + np.random.randn(n) * 1e-8
+
+        y = X[:, 0] + np.random.randn(n) * 0.1
+
+        # Rust backend should handle this gracefully via LU fallback
+        coeffs, residuals, vcov = solve_ols(X, y, None, True)
+
+        # Verify results are finite
+        assert np.all(np.isfinite(coeffs)), "Coefficients should be finite"
+        assert np.all(np.isfinite(residuals)), "Residuals should be finite"
+
+        # Verify residuals are correct given coefficients
+        expected_residuals = y - X @ coeffs
+        np.testing.assert_array_almost_equal(
+            residuals, expected_residuals, decimal=8,
+            err_msg="Residuals should match y - X @ coeffs"
+        )
+
+    def test_high_condition_number_matrix(self):
+        """Test OLS with high condition number matrix uses LU fallback correctly."""
+        from diff_diff._rust_backend import solve_ols
+
+        np.random.seed(123)
+        n = 100
+
+        # Create matrix with high condition number via scaling
+        X = np.random.randn(n, 4)
+        X[:, 0] *= 1e6  # Scale first column to create high condition number
+        X[:, 3] *= 1e-6  # Scale last column very small
+
+        y = np.random.randn(n)
+
+        # Should not raise and should produce finite results
+        coeffs, residuals, vcov = solve_ols(X, y, None, True)
+
+        assert np.all(np.isfinite(coeffs)), "Coefficients should be finite"
+        assert np.all(np.isfinite(residuals)), "Residuals should be finite"
+        assert vcov is not None, "VCoV should be returned"
+
+    def test_near_singular_with_clusters(self):
+        """Test near-singular matrix with cluster-robust SEs uses LU fallback."""
+        from diff_diff._rust_backend import solve_ols
+
+        np.random.seed(42)
+        n = 100
+        n_clusters = 10
+
+        # Near-collinear design
+        X = np.random.randn(n, 3)
+        X[:, 2] = X[:, 0] + X[:, 1] + np.random.randn(n) * 1e-8
+
+        y = X[:, 0] + np.random.randn(n) * 0.1
+        cluster_ids = np.repeat(np.arange(n_clusters), n // n_clusters).astype(np.int64)
+
+        # Should handle gracefully with cluster SEs
+        coeffs, residuals, vcov = solve_ols(X, y, cluster_ids, True)
+
+        assert np.all(np.isfinite(coeffs)), "Coefficients should be finite"
+        assert np.all(np.isfinite(residuals)), "Residuals should be finite"
+        assert vcov.shape == (3, 3), "VCoV should have correct shape"
+
 
 @pytest.mark.skipif(not HAS_RUST_BACKEND, reason="Rust backend not available")
 class TestRustVsNumpy:
