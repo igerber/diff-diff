@@ -97,6 +97,7 @@ We provide Jupyter notebook tutorials in `docs/tutorials/`:
 | `06_power_analysis.ipynb` | Power analysis, MDE, sample size calculations, simulation-based power |
 | `07_pretrends_power.ipynb` | Pre-trends power analysis (Roth 2022), MDV, power curves |
 | `08_triple_diff.ipynb` | Triple Difference (DDD) estimation with proper covariate handling |
+| `09_real_world_examples.ipynb` | Real-world data examples (Card-Krueger, Castle Doctrine, Divorce Laws) |
 
 ## Data Preparation
 
