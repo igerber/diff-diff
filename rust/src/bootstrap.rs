@@ -3,12 +3,16 @@
 //! This module provides efficient generation of bootstrap weights
 //! using various distributions (Rademacher, Mammen, Webb).
 
-use ndarray::Array2;
+use ndarray::{Array2, Axis};
 use numpy::{IntoPyArray, PyArray2};
 use pyo3::prelude::*;
 use rand::prelude::*;
 use rand_xoshiro::Xoshiro256PlusPlus;
 use rayon::prelude::*;
+
+/// Minimum number of bootstrap iterations per parallel task.
+/// This reduces scheduling overhead for large n_bootstrap values.
+const MIN_CHUNK_SIZE: usize = 64;
 
 /// Generate a batch of bootstrap weights.
 ///
@@ -51,20 +55,23 @@ pub fn generate_bootstrap_weights_batch<'py>(
 ///
 /// E[w] = 0, Var[w] = 1
 fn generate_rademacher_batch(n_bootstrap: usize, n_units: usize, seed: u64) -> Array2<f64> {
-    // Generate weights in parallel using rayon
-    let rows: Vec<Vec<f64>> = (0..n_bootstrap)
-        .into_par_iter()
-        .map(|i| {
-            let mut rng = Xoshiro256PlusPlus::seed_from_u64(seed.wrapping_add(i as u64));
-            (0..n_units)
-                .map(|_| if rng.gen::<bool>() { 1.0 } else { -1.0 })
-                .collect()
-        })
-        .collect();
+    // Pre-allocate output array - eliminates double allocation from Vec<Vec<f64>>
+    let mut weights = Array2::<f64>::zeros((n_bootstrap, n_units));
 
-    // Convert to ndarray
-    let flat: Vec<f64> = rows.into_iter().flatten().collect();
-    Array2::from_shape_vec((n_bootstrap, n_units), flat).unwrap()
+    // Fill rows in parallel using rayon with chunk size tuning
+    weights
+        .axis_iter_mut(Axis(0))
+        .into_par_iter()
+        .with_min_len(MIN_CHUNK_SIZE)
+        .enumerate()
+        .for_each(|(i, mut row)| {
+            let mut rng = Xoshiro256PlusPlus::seed_from_u64(seed.wrapping_add(i as u64));
+            for elem in row.iter_mut() {
+                *elem = if rng.gen::<bool>() { 1.0 } else { -1.0 };
+            }
+        });
+
+    weights
 }
 
 /// Generate Mammen weights with two-point distribution.
@@ -83,24 +90,27 @@ fn generate_mammen_batch(n_bootstrap: usize, n_units: usize, seed: u64) -> Array
     // Probability of negative value
     let prob_neg = (sqrt5 + 1.0) / (2.0 * sqrt5); // ≈ 0.724
 
-    let rows: Vec<Vec<f64>> = (0..n_bootstrap)
-        .into_par_iter()
-        .map(|i| {
-            let mut rng = Xoshiro256PlusPlus::seed_from_u64(seed.wrapping_add(i as u64));
-            (0..n_units)
-                .map(|_| {
-                    if rng.gen::<f64>() < prob_neg {
-                        val_neg
-                    } else {
-                        val_pos
-                    }
-                })
-                .collect()
-        })
-        .collect();
+    // Pre-allocate output array - eliminates double allocation
+    let mut weights = Array2::<f64>::zeros((n_bootstrap, n_units));
 
-    let flat: Vec<f64> = rows.into_iter().flatten().collect();
-    Array2::from_shape_vec((n_bootstrap, n_units), flat).unwrap()
+    // Fill rows in parallel with chunk size tuning
+    weights
+        .axis_iter_mut(Axis(0))
+        .into_par_iter()
+        .with_min_len(MIN_CHUNK_SIZE)
+        .enumerate()
+        .for_each(|(i, mut row)| {
+            let mut rng = Xoshiro256PlusPlus::seed_from_u64(seed.wrapping_add(i as u64));
+            for elem in row.iter_mut() {
+                *elem = if rng.gen::<f64>() < prob_neg {
+                    val_neg
+                } else {
+                    val_pos
+                };
+            }
+        });
+
+    weights
 }
 
 /// Generate Webb 6-point distribution weights.
@@ -110,41 +120,36 @@ fn generate_mammen_batch(n_bootstrap: usize, n_units: usize, seed: u64) -> Array
 ///
 /// Values: ±√(3/2), ±√(1/2), ±√(1/6) with specific probabilities
 fn generate_webb_batch(n_bootstrap: usize, n_units: usize, seed: u64) -> Array2<f64> {
-    // Webb 6-point values and cumulative probabilities
+    // Webb 6-point values
     let val1 = (3.0_f64 / 2.0).sqrt(); // √(3/2) ≈ 1.225
     let val2 = (1.0_f64 / 2.0).sqrt(); // √(1/2) ≈ 0.707
     let val3 = (1.0_f64 / 6.0).sqrt(); // √(1/6) ≈ 0.408
 
-    // Equal probability for each of 6 values: 1/6 each
-    let prob = 1.0 / 6.0;
+    // Lookup table for direct index computation (replaces 6-way if-else)
+    // Equal probability: u in [0, 1/6) -> -val1, [1/6, 2/6) -> -val2, etc.
+    let weights_table = [-val1, -val2, -val3, val3, val2, val1];
 
-    let rows: Vec<Vec<f64>> = (0..n_bootstrap)
+    // Pre-allocate output array - eliminates double allocation
+    let mut weights = Array2::<f64>::zeros((n_bootstrap, n_units));
+
+    // Fill rows in parallel with chunk size tuning
+    weights
+        .axis_iter_mut(Axis(0))
         .into_par_iter()
-        .map(|i| {
+        .with_min_len(MIN_CHUNK_SIZE)
+        .enumerate()
+        .for_each(|(i, mut row)| {
             let mut rng = Xoshiro256PlusPlus::seed_from_u64(seed.wrapping_add(i as u64));
-            (0..n_units)
-                .map(|_| {
-                    let u = rng.gen::<f64>();
-                    if u < prob {
-                        -val1
-                    } else if u < 2.0 * prob {
-                        -val2
-                    } else if u < 3.0 * prob {
-                        -val3
-                    } else if u < 4.0 * prob {
-                        val3
-                    } else if u < 5.0 * prob {
-                        val2
-                    } else {
-                        val1
-                    }
-                })
-                .collect()
-        })
-        .collect();
+            for elem in row.iter_mut() {
+                let u = rng.gen::<f64>();
+                // Direct bucket computation: multiply by 6 and floor to get index 0-5
+                // Clamp to 5 to handle edge case where u == 1.0
+                let bucket = ((u * 6.0).floor() as usize).min(5);
+                *elem = weights_table[bucket];
+            }
+        });
 
-    let flat: Vec<f64> = rows.into_iter().flatten().collect();
-    Array2::from_shape_vec((n_bootstrap, n_units), flat).unwrap()
+    weights
 }
 
 #[cfg(test)]

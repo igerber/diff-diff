@@ -5,8 +5,8 @@
 //! - HC1 (heteroskedasticity-consistent) variance-covariance estimation
 //! - Cluster-robust variance-covariance estimation
 
-use ndarray::{Array1, Array2, ArrayView1, ArrayView2};
-use ndarray_linalg::{LeastSquaresSvd, Solve};
+use ndarray::{Array1, Array2, ArrayView1, ArrayView2, Axis};
+use ndarray_linalg::{FactorizeC, LeastSquaresSvd, Solve, SolveC, UPLO};
 use numpy::{IntoPyArray, PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2};
 use pyo3::prelude::*;
 use std::collections::HashMap;
@@ -112,18 +112,12 @@ fn compute_robust_vcov_internal(
             // HC1 variance: (X'X)^{-1} X' diag(e²) X (X'X)^{-1} × n/(n-k)
             let u_squared: Array1<f64> = residuals.mapv(|r| r * r);
 
-            // Compute X' diag(e²) X efficiently
-            // meat = Σᵢ eᵢ² xᵢ xᵢ'
-            let mut meat = Array2::<f64>::zeros((k, k));
-            for i in 0..n {
-                let xi = x.row(i);
-                let e2 = u_squared[i];
-                for j in 0..k {
-                    for l in 0..k {
-                        meat[[j, l]] += e2 * xi[j] * xi[l];
-                    }
-                }
-            }
+            // Compute meat = X' diag(e²) X using vectorized BLAS operations
+            // This is equivalent to X' @ (X * e²) where e² is broadcast across columns
+            // Much faster than O(n*k²) scalar loop - uses optimized BLAS dgemm
+            let u_squared_col = u_squared.insert_axis(Axis(1)); // (n, 1)
+            let x_weighted = x * &u_squared_col; // (n, k) - broadcasts e² across columns
+            let meat = x.t().dot(&x_weighted); // (k, k)
 
             // HC1 adjustment factor
             let adjustment = n as f64 / (n - k) as f64;
@@ -139,14 +133,10 @@ fn compute_robust_vcov_internal(
             // Group observations by cluster and sum scores within clusters
             let n_obs = n;
 
-            // Compute scores: X * e (element-wise, each row multiplied by residual)
-            let mut scores = Array2::<f64>::zeros((n, k));
-            for i in 0..n {
-                let e = residuals[i];
-                for j in 0..k {
-                    scores[[i, j]] = x[[i, j]] * e;
-                }
-            }
+            // Compute scores using vectorized operation: scores = X * residuals[:, np.newaxis]
+            // Each row of X is multiplied by its corresponding residual
+            let residuals_col = residuals.insert_axis(Axis(1)); // (n, 1)
+            let scores = x * &residuals_col; // (n, k) - broadcasts residuals across columns
 
             // Aggregate scores by cluster using HashMap
             let mut cluster_sums: HashMap<i64, Array1<f64>> = HashMap::new();
@@ -191,17 +181,53 @@ fn compute_robust_vcov_internal(
 }
 
 /// Invert a symmetric positive-definite matrix.
+///
+/// Tries Cholesky factorization first (faster for well-conditioned SPD matrices),
+/// falls back to LU decomposition for near-singular or indefinite matrices.
+///
+/// Cholesky (when applicable):
+/// - ~2x faster than LU decomposition
+/// - More numerically stable for positive-definite matrices
+/// - Reuses the factorization across all column solves
 fn invert_symmetric(a: &Array2<f64>) -> PyResult<Array2<f64>> {
     let n = a.nrows();
-    let mut result = Array2::<f64>::zeros((n, n));
 
-    // Solve A * x_i = e_i for each column of the identity matrix
+    // Try Cholesky factorization first (faster for well-conditioned SPD matrices)
+    if let Ok(factorized) = a.factorizec(UPLO::Lower) {
+        // Solve A X = I for each column using Cholesky
+        let mut result = Array2::<f64>::zeros((n, n));
+        let mut cholesky_failed = false;
+
+        for i in 0..n {
+            let mut e_i = Array1::<f64>::zeros(n);
+            e_i[i] = 1.0;
+
+            match factorized.solvec(&e_i) {
+                Ok(col) => result.column_mut(i).assign(&col),
+                Err(_) => {
+                    cholesky_failed = true;
+                    break;
+                }
+            }
+        }
+
+        if !cholesky_failed {
+            return Ok(result);
+        }
+    }
+
+    // Fallback to LU decomposition for near-singular or indefinite matrices
+    let mut result = Array2::<f64>::zeros((n, n));
     for i in 0..n {
         let mut e_i = Array1::<f64>::zeros(n);
         e_i[i] = 1.0;
 
-        let col = a.solve(&e_i)
-            .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Matrix inversion failed: {}", e)))?;
+        let col = a.solve(&e_i).map_err(|e| {
+            PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                "Matrix inversion failed: {}",
+                e
+            ))
+        })?;
 
         result.column_mut(i).assign(&col);
     }

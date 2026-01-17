@@ -14,6 +14,10 @@ crate-type = ["cdylib", "rlib"]
 default = []
 # extension-module is only needed for cdylib builds, not for cargo test
 extension-module = ["pyo3/extension-module"]
+# Static BLAS linking for standalone distribution (adds ~20-50MB to binary)
+# Eliminates runtime BLAS dependency at cost of larger binary size
+openblas-static = ["ndarray-linalg/openblas-static"]
+intel-mkl-static = ["ndarray-linalg/intel-mkl-static"]
 
 [dependencies]
 # PyO3 0.20 supports Python 3.7-3.12
