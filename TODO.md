@@ -90,7 +90,7 @@ Enhancements for `honest_did.py`:
 
 ## Rust Backend Optimizations
 
-Deferred from PR #58 code review (completed in v2.1):
+Deferred from PR #58 code review (completed in v2.0.3):
 
 - [x] **Matrix inversion efficiency** (`rust/src/linalg.rs`): ✅ Uses Cholesky factorization for symmetric positive-definite matrices with LU fallback for near-singular cases
 - [x] **Reduce bootstrap allocations** (`rust/src/bootstrap.rs`): ✅ Direct Array2 allocation eliminates Vec<Vec<f64>> intermediate. Also added Rayon chunk size tuning and Webb lookup table optimization.

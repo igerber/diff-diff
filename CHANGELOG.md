@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.3] - 2026-01-17
+
+### Changed
+- **Rust backend performance optimizations** delivering up to 32x speedup for bootstrap operations
+  - Bootstrap weight generation now 16x faster on average (up to 32x for Webb distribution)
+  - Direct `Array2` allocation eliminates intermediate `Vec<Vec<f64>>` (~50% memory reduction)
+  - Rayon chunk size tuning (`min_len=64`) reduces parallel scheduling overhead
+  - Webb distribution uses lookup table instead of 6-way if-else chain
+
+### Added
+- **Cholesky factorization** for symmetric positive-definite matrix inversion in Rust backend
+  - ~2x faster than LU decomposition for well-conditioned matrices
+  - Automatic fallback to LU for near-singular or indefinite matrices
+- **Vectorized variance computation** in Rust backend
+  - HC1 meat computation: `X' @ (X * e²)` via BLAS instead of O(n×k²) loop
+  - Score computation: broadcast multiplication instead of O(n×k) loop
+- **Static BLAS linking options** in `rust/Cargo.toml`
+  - `openblas-static` and `intel-mkl-static` features for standalone distribution
+  - Eliminates runtime BLAS dependency at cost of larger binary size
+
 ## [2.0.2] - 2026-01-15
 
 ### Fixed
@@ -368,6 +388,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `to_dict()` and `to_dataframe()` export methods
   - `is_significant` and `significance_stars` properties
 
+[2.0.3]: https://github.com/igerber/diff-diff/compare/v2.0.2...v2.0.3
 [2.0.2]: https://github.com/igerber/diff-diff/compare/v2.0.1...v2.0.2
 [2.0.1]: https://github.com/igerber/diff-diff/compare/v2.0.0...v2.0.1
 [2.0.0]: https://github.com/igerber/diff-diff/compare/v1.4.0...v2.0.0
