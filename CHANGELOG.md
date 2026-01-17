@@ -15,6 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Webb distribution uses lookup table instead of 6-way if-else chain
 
 ### Added
+- **LinearRegression helper class** in `linalg.py` for code deduplication
+  - High-level OLS wrapper with unified coefficient extraction and inference
+  - Used by DifferenceInDifferences, TwoWayFixedEffects, SunAbraham, TripleDifference
+  - Provides `InferenceResult` dataclass for coefficient-level statistics
 - **Cholesky factorization** for symmetric positive-definite matrix inversion in Rust backend
   - ~2x faster than LU decomposition for well-conditioned matrices
   - Automatic fallback to LU for near-singular or indefinite matrices

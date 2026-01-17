@@ -4,6 +4,35 @@ This document outlines the strategy for improving diff-diff's performance on lar
 
 ---
 
+## Results Achieved (v2.0.3)
+
+**v2.0.3 includes Rust backend optimizations** that further improve SyntheticDiD performance:
+
+| Estimator | v2.0 (10K scale) | v2.0.3 (10K scale) | Speedup | vs R |
+|-----------|------------------|-------------------|---------|------|
+| BasicDiD/TWFE | 0.011s | **0.010s** | 1.1x | **4x faster than R** |
+| CallawaySantAnna | 0.109s | **0.145s** | 0.8x | **5x faster than R** |
+| SyntheticDiD (Pure) | 19.5s | **19.5s** | 1.0x | 57x faster than R |
+| SyntheticDiD (Rust) | 2.6s | **2.6s** | 1.0x | **429x faster than R** |
+
+**20K Scale Results** (new in v2.0.3 benchmarks):
+
+| Estimator | Python Pure (s) | Python Rust (s) | R (s) | Rust vs R |
+|-----------|-----------------|-----------------|-------|-----------|
+| BasicDiD/TWFE | 0.022 | 0.025 | 0.050 | **2x** |
+| CallawaySantAnna | 0.366 | 0.373 | 1.559 | **4x** |
+| SyntheticDiD | 137.3 | **10.9** | 2451.0 | **225x** |
+
+### What Changed in v2.0.3
+
+1. **Cholesky factorization** for symmetric positive-definite matrix inversion (~2x faster for well-conditioned matrices)
+2. **Reduced bootstrap allocations** - Direct Array2 allocation eliminates Vec<Vec<f64>> intermediate
+3. **Vectorized variance computation** - HC1 meat uses BLAS-accelerated matrix operations
+4. **Webb lookup table** - Faster Webb distribution weight generation
+5. **Rayon chunk size tuning** - Reduced parallel scheduling overhead
+
+---
+
 ## Results Achieved (v1.4.0)
 
 **Phase 1 is complete.** Pure Python optimizations exceeded all targets:

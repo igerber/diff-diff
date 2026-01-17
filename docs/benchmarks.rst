@@ -231,35 +231,35 @@ Three-Way Performance Summary
      - Rust/R
      - Rust/Pure
    * - small
-     - 0.035
+     - 0.034
      - 0.002
      - 0.002
-     - **18x**
+     - **17x**
      - 1.1x
    * - 1k
-     - 0.037
+     - 0.036
      - 0.003
      - 0.003
-     - **14x**
-     - 1.1x
+     - **13x**
+     - 1.0x
    * - 5k
-     - 0.038
-     - 0.008
+     - 0.042
+     - 0.005
      - 0.006
      - **7x**
-     - 1.4x
+     - 0.8x
    * - 10k
-     - 0.041
+     - 0.043
      - 0.010
-     - 0.011
+     - 0.012
      - **4x**
-     - 0.9x
+     - 0.8x
    * - 20k
      - 0.050
-     - 0.026
+     - 0.022
      - 0.025
      - **2x**
-     - 1.1x
+     - 0.9x
 
 **CallawaySantAnna Results:**
 
@@ -274,33 +274,33 @@ Three-Way Performance Summary
      - Pure/R
      - Rust/Pure
    * - small
-     - 0.070
+     - 0.069
+     - 0.006
      - 0.007
-     - 0.007
-     - **10x**
+     - **11x**
      - 1.0x
    * - 1k
-     - 0.114
-     - 0.013
+     - 0.119
+     - 0.014
      - 0.013
      - **9x**
      - 1.0x
    * - 5k
-     - 0.345
-     - 0.053
-     - 0.051
+     - 0.363
+     - 0.055
+     - 0.055
      - **7x**
      - 1.0x
    * - 10k
-     - 0.727
-     - 0.134
-     - 0.138
+     - 0.771
+     - 0.146
+     - 0.145
      - **5x**
      - 1.0x
    * - 20k
-     - 1.490
-     - 0.352
-     - 0.358
+     - 1.559
+     - 0.366
+     - 0.373
      - **4x**
      - 1.0x
 
@@ -317,35 +317,42 @@ Three-Way Performance Summary
      - Rust/R
      - Rust/Pure
    * - small
-     - 8.18
-     - 0.015
+     - 7.73
+     - 0.016
      - 0.004
-     - **2234x**
-     - **4.0x**
+     - **2147x**
+     - **4.4x**
    * - 1k
-     - 110.4
+     - 108.1
      - 0.068
-     - 0.100
-     - **1104x**
+     - 0.101
+     - **1070x**
      - 0.7x
    * - 5k
-     - 511.1
-     - 3.017
-     - 0.688
-     - **743x**
-     - **4.4x**
+     - 504.5
+     - 2.97
+     - 0.69
+     - **734x**
+     - **4.3x**
    * - 10k
-     - 1462.7
-     - 19.56
-     - 2.59
-     - **565x**
+     - 1107.2
+     - 19.54
+     - 2.58
+     - **429x**
      - **7.6x**
+   * - 20k
+     - 2451.0
+     - 137.3
+     - 10.9
+     - **225x**
+     - **12.6x**
 
 .. note::
 
-   **SyntheticDiD Performance**: diff-diff achieves **565x to 2234x speedup** over
-   R's synthdid package. At 10k scale, R takes ~24 minutes while Python Rust
-   completes in 2.6 seconds. The Rust backend provides **4-8x additional speedup**
+   **SyntheticDiD Performance**: diff-diff achieves **225x to 2147x speedup** over
+   R's synthdid package. At 10k scale, R takes ~18 minutes while Python Rust
+   completes in 2.6 seconds. At 20k scale, R takes ~41 minutes while Python Rust
+   completes in 11 seconds. The Rust backend provides **4-13x additional speedup**
    over pure Python for SyntheticDiD due to optimized simplex projection and
    synthetic weight computation. ATT estimates differ slightly due to different
    weight optimization algorithms (projected gradient descent vs Frank-Wolfe),
@@ -386,35 +393,35 @@ Dataset Sizes
    * - 20k
      - 20,000 × 12
      - 20,000 × 18
-     - N/A
-     - 240,000 - 360,000
+     - 20,000 × 60
+     - 240,000 - 1,200,000
 
 Key Observations
 ~~~~~~~~~~~~~~~~
 
 1. **Performance varies by estimator and scale**:
 
-   - **BasicDiD/TWFE**: 2-18x faster than R at all scales
-   - **CallawaySantAnna**: 4-10x faster than R at all scales (vectorized WIF computation)
-   - **SyntheticDiD**: 565-2234x faster than R (R takes 24 minutes at 10k scale!)
+   - **BasicDiD/TWFE**: 2-17x faster than R at all scales
+   - **CallawaySantAnna**: 4-11x faster than R at all scales (vectorized WIF computation)
+   - **SyntheticDiD**: 225-2147x faster than R (R takes 41 minutes at 20k scale!)
 
 2. **Rust backend benefit depends on the estimator**:
 
-   - **SyntheticDiD**: Rust provides **4-8x speedup** over pure Python due to
+   - **SyntheticDiD**: Rust provides **4-13x speedup** over pure Python due to
      optimized simplex projection and synthetic weight computation
    - **BasicDiD/CallawaySantAnna**: Rust provides minimal benefit (~1x) since
      these estimators use OLS/variance computations already optimized in NumPy/SciPy
 
 3. **When to use Rust backend**:
 
-   - **SyntheticDiD**: Recommended - provides significant speedup (4-8x)
+   - **SyntheticDiD**: Recommended - provides significant speedup (4-13x)
    - **Bootstrap inference**: May help with parallelized iterations
    - **BasicDiD/CallawaySantAnna**: Optional - pure Python is equally fast
 
 4. **Scaling behavior**: Python implementations show excellent scaling behavior
-   across all estimators. SyntheticDiD is 565x faster than R at 10k scale.
+   across all estimators. SyntheticDiD is 225x faster than R at 20k scale.
    CallawaySantAnna achieves **exact SE accuracy** (0.0% difference) while
-   being 4-10x faster than R through vectorized NumPy operations.
+   being 4-11x faster than R through vectorized NumPy operations.
 
 5. **No Rust required for most use cases**: Users without Rust/maturin can
    install diff-diff and get full functionality with excellent performance.
