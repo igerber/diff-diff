@@ -148,6 +148,16 @@ pytest tests/test_rust_backend.py -v
   - `run_all_placebo_tests()` - Comprehensive suite of diagnostics
   - `PlaceboTestResults` - Dataclass for test results
 
+- **`diff_diff/datasets.py`** - Real-world datasets for teaching and examples:
+  - `load_card_krueger()` - Card & Krueger (1994) minimum wage dataset (classic 2x2 DiD)
+  - `load_castle_doctrine()` - Castle Doctrine / Stand Your Ground laws (staggered adoption)
+  - `load_divorce_laws()` - Unilateral divorce laws (staggered adoption, Stevenson-Wolfers)
+  - `load_mpdta()` - Minimum wage panel data from R `did` package (Callaway-Sant'Anna example)
+  - `list_datasets()` - List available datasets with descriptions
+  - `load_dataset(name)` - Load dataset by name
+  - `clear_cache()` - Clear locally cached datasets
+  - Datasets are downloaded from public sources and cached locally
+
 - **`diff_diff/honest_did.py`** - Honest DiD sensitivity analysis (Rambachan & Roth 2023):
   - `HonestDiD` - Main class for computing bounds under parallel trends violations
   - `DeltaSD`, `DeltaRM`, `DeltaSDRM` - Restriction classes for smoothness and relative magnitudes
@@ -239,6 +249,7 @@ See `docs/performance-plan.md` for full optimization details and `docs/benchmark
   - `06_power_analysis.ipynb` - Power analysis for study design, MDE, simulation-based power
   - `07_pretrends_power.ipynb` - Pre-trends power analysis (Roth 2022), MDV, power curves
   - `08_triple_diff.ipynb` - Triple Difference (DDD) estimation with proper covariate handling
+  - `09_real_world_examples.ipynb` - Real-world data examples (Card-Krueger, Castle Doctrine, Divorce Laws)
 
 ### Benchmarks
 
@@ -281,6 +292,7 @@ Tests mirror the source modules:
 - `tests/test_honest_did.py` - Tests for Honest DiD sensitivity analysis
 - `tests/test_power.py` - Tests for power analysis
 - `tests/test_pretrends.py` - Tests for pre-trends power analysis
+- `tests/test_datasets.py` - Tests for dataset loading functions
 
 ### Dependencies
 

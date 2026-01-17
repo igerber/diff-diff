@@ -66,7 +66,7 @@ Different estimators compute SEs differently. Consider unified interface.
 ## Documentation Improvements
 
 - [x] ~~Comparison of estimator outputs on same data~~ ✅ Done in `02_staggered_did.ipynb` (Section 13: Comparing CS and SA)
-- [ ] Real-world data examples (currently synthetic only)
+- [x] ~~Real-world data examples (currently synthetic only)~~ ✅ Added `datasets.py` module and `09_real_world_examples.ipynb` with Card-Krueger, Castle Doctrine, and Divorce Laws datasets
 
 ---
 
