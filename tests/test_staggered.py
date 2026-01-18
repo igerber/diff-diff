@@ -1555,3 +1555,248 @@ class TestCallawaySantAnnaAnalyticalSE:
                         f"Event study SE at e={e}: analytical={se_analytical:.4f}, "
                         f"bootstrap={se_bootstrap:.4f}, diff={rel_diff:.1%}"
                     )
+
+
+class TestCallawaySantAnnaNonStandardColumnNames:
+    """Tests for CallawaySantAnna with non-standard column names.
+
+    These tests verify that the estimator works correctly when column names
+    differ from the default names (outcome, unit, time, first_treat).
+    """
+
+    def generate_data_with_custom_names(
+        self,
+        outcome_name: str = 'y',
+        unit_name: str = 'id',
+        time_name: str = 'period',
+        first_treat_name: str = 'treatment_start',
+        n_units: int = 100,
+        n_periods: int = 10,
+        seed: int = 42,
+    ) -> pd.DataFrame:
+        """Generate staggered data with custom column names."""
+        np.random.seed(seed)
+
+        # Generate standard data
+        units = np.repeat(np.arange(n_units), n_periods)
+        times = np.tile(np.arange(n_periods), n_units)
+
+        # 30% never-treated, rest treated at period 4 or 6
+        n_never = int(n_units * 0.3)
+        first_treat = np.zeros(n_units)
+        first_treat[n_never:n_never + (n_units - n_never) // 2] = 4
+        first_treat[n_never + (n_units - n_never) // 2:] = 6
+        first_treat_expanded = np.repeat(first_treat, n_periods)
+
+        # Generate outcomes
+        unit_fe = np.repeat(np.random.randn(n_units) * 2, n_periods)
+        time_fe = np.tile(np.linspace(0, 1, n_periods), n_units)
+        post = (times >= first_treat_expanded) & (first_treat_expanded > 0)
+        outcomes = unit_fe + time_fe + 2.5 * post + np.random.randn(len(units)) * 0.5
+
+        return pd.DataFrame({
+            outcome_name: outcomes,
+            unit_name: units,
+            time_name: times,
+            first_treat_name: first_treat_expanded.astype(int),
+        })
+
+    def test_non_standard_first_treat_name(self):
+        """Test with non-standard first_treat column name."""
+        data = self.generate_data_with_custom_names(
+            first_treat_name='treatment_cohort'
+        )
+
+        cs = CallawaySantAnna()
+        results = cs.fit(
+            data,
+            outcome='y',
+            unit='id',
+            time='period',
+            first_treat='treatment_cohort'
+        )
+
+        assert results.overall_att is not None
+        assert np.isfinite(results.overall_att)
+        assert results.overall_se > 0
+        # Treatment effect should be approximately 2.5
+        assert abs(results.overall_att - 2.5) < 1.5
+
+    def test_non_standard_all_column_names(self):
+        """Test with all non-standard column names."""
+        data = self.generate_data_with_custom_names(
+            outcome_name='response_var',
+            unit_name='entity_id',
+            time_name='time_period',
+            first_treat_name='treatment_timing',
+        )
+
+        cs = CallawaySantAnna()
+        results = cs.fit(
+            data,
+            outcome='response_var',
+            unit='entity_id',
+            time='time_period',
+            first_treat='treatment_timing'
+        )
+
+        assert results.overall_att is not None
+        assert np.isfinite(results.overall_att)
+        assert results.overall_se > 0
+
+    def test_non_standard_names_with_bootstrap(self):
+        """Test non-standard column names with bootstrap inference."""
+        data = self.generate_data_with_custom_names(
+            first_treat_name='g',  # Short name like R's `did` package uses
+            n_units=50
+        )
+
+        cs = CallawaySantAnna(n_bootstrap=99, seed=42)
+        results = cs.fit(
+            data,
+            outcome='y',
+            unit='id',
+            time='period',
+            first_treat='g'
+        )
+
+        assert results.bootstrap_results is not None
+        assert results.overall_se > 0
+        assert results.overall_conf_int[0] < results.overall_att < results.overall_conf_int[1]
+
+    def test_non_standard_names_with_event_study(self):
+        """Test non-standard column names with event study aggregation."""
+        data = self.generate_data_with_custom_names(
+            first_treat_name='cohort',
+            n_periods=12
+        )
+
+        cs = CallawaySantAnna()
+        results = cs.fit(
+            data,
+            outcome='y',
+            unit='id',
+            time='period',
+            first_treat='cohort',
+            aggregate='event_study'
+        )
+
+        assert results.event_study_effects is not None
+        assert len(results.event_study_effects) > 0
+
+    def test_non_standard_names_with_covariates(self):
+        """Test non-standard column names with covariate adjustment."""
+        # Generate data with covariates
+        data = self.generate_data_with_custom_names(
+            first_treat_name='treatment_time'
+        )
+        # Add covariates with custom names
+        data['covariate_x'] = np.random.randn(len(data))
+        data['covariate_z'] = np.random.binomial(1, 0.5, len(data))
+
+        cs = CallawaySantAnna(estimation_method='dr')
+        results = cs.fit(
+            data,
+            outcome='y',
+            unit='id',
+            time='period',
+            first_treat='treatment_time',
+            covariates=['covariate_x', 'covariate_z']
+        )
+
+        assert results.overall_att is not None
+        assert results.overall_se > 0
+
+    def test_non_standard_names_with_not_yet_treated(self):
+        """Test non-standard column names with not_yet_treated control group."""
+        data = self.generate_data_with_custom_names(
+            first_treat_name='adoption_period'
+        )
+
+        cs = CallawaySantAnna(control_group='not_yet_treated')
+        results = cs.fit(
+            data,
+            outcome='y',
+            unit='id',
+            time='period',
+            first_treat='adoption_period'
+        )
+
+        assert results.overall_att is not None
+        assert results.control_group == 'not_yet_treated'
+
+    def test_non_standard_names_matches_standard_names(self):
+        """Verify results are identical regardless of column naming."""
+        np.random.seed(42)
+
+        # Generate identical data with different column names
+        data_standard = generate_staggered_data(n_units=80, seed=42)
+
+        data_custom = data_standard.rename(columns={
+            'outcome': 'y',
+            'unit': 'entity',
+            'time': 't',
+            'first_treat': 'g',
+        })
+
+        # Fit with standard names
+        cs1 = CallawaySantAnna(seed=123)
+        results1 = cs1.fit(
+            data_standard,
+            outcome='outcome',
+            unit='unit',
+            time='time',
+            first_treat='first_treat'
+        )
+
+        # Fit with custom names
+        cs2 = CallawaySantAnna(seed=123)
+        results2 = cs2.fit(
+            data_custom,
+            outcome='y',
+            unit='entity',
+            time='t',
+            first_treat='g'
+        )
+
+        # Results should be identical
+        assert abs(results1.overall_att - results2.overall_att) < 1e-10
+        assert abs(results1.overall_se - results2.overall_se) < 1e-10
+
+    def test_column_name_with_spaces(self):
+        """Test column names containing spaces."""
+        data = self.generate_data_with_custom_names()
+        data = data.rename(columns={
+            'y': 'outcome variable',
+            'treatment_start': 'treatment period',
+        })
+
+        cs = CallawaySantAnna()
+        results = cs.fit(
+            data,
+            outcome='outcome variable',
+            unit='id',
+            time='period',
+            first_treat='treatment period'
+        )
+
+        assert results.overall_att is not None
+        assert results.overall_se > 0
+
+    def test_column_name_with_special_characters(self):
+        """Test column names with underscores and numbers."""
+        data = self.generate_data_with_custom_names()
+        data = data.rename(columns={
+            'treatment_start': 'first_treat_2024',
+        })
+
+        cs = CallawaySantAnna()
+        results = cs.fit(
+            data,
+            outcome='y',
+            unit='id',
+            time='period',
+            first_treat='first_treat_2024'
+        )
+
+        assert results.overall_att is not None

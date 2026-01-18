@@ -811,3 +811,218 @@ class TestVisualization:
 
         assert hasattr(curve, 'plot')
         assert callable(curve.plot)
+
+
+# =============================================================================
+# Tests for PreTrendsPowerResults.power_at() method
+# =============================================================================
+
+
+class TestPreTrendsPowerResultsPowerAt:
+    """Tests for the power_at method on PreTrendsPowerResults."""
+
+    def test_power_at_basic(self, mock_multiperiod_results):
+        """Test basic power_at functionality."""
+        pt = PreTrendsPower()
+        results = pt.fit(mock_multiperiod_results)
+
+        # Compute power at different M values
+        power_1 = results.power_at(1.0)
+        power_2 = results.power_at(2.0)
+        power_5 = results.power_at(5.0)
+
+        # Power should increase with M
+        assert power_1 < power_2 < power_5
+
+        # Power should be between 0 and 1
+        assert 0 <= power_1 <= 1
+        assert 0 <= power_2 <= 1
+        assert 0 <= power_5 <= 1
+
+    def test_power_at_zero(self, mock_multiperiod_results):
+        """Test power_at with M=0 (should equal alpha)."""
+        pt = PreTrendsPower(alpha=0.05)
+        results = pt.fit(mock_multiperiod_results)
+
+        power_0 = results.power_at(0.0)
+
+        # At M=0, power should equal size (alpha)
+        assert np.isclose(power_0, 0.05, atol=0.01)
+
+    def test_power_at_matches_fit(self, mock_multiperiod_results):
+        """Test that power_at gives same result as fitting with that M."""
+        pt = PreTrendsPower()
+
+        # Get results from fit
+        results1 = pt.fit(mock_multiperiod_results, M=2.0)
+
+        # Get power from power_at method
+        results_base = pt.fit(mock_multiperiod_results)
+        power_from_method = results_base.power_at(2.0)
+
+        # Should be the same (or very close)
+        assert np.isclose(results1.power, power_from_method, rtol=0.01)
+
+    def test_power_at_linear_weights(self, mock_multiperiod_results):
+        """Test power_at uses correct linear weights."""
+        pt = PreTrendsPower(violation_type="linear")
+        results = pt.fit(mock_multiperiod_results)
+
+        # Power_at should work without error
+        power = results.power_at(1.0)
+        assert 0 <= power <= 1
+
+    def test_power_at_constant_weights(self, mock_multiperiod_results):
+        """Test power_at uses correct constant weights."""
+        pt = PreTrendsPower(violation_type="constant")
+        results = pt.fit(mock_multiperiod_results)
+
+        power = results.power_at(1.0)
+        assert 0 <= power <= 1
+
+    def test_power_at_last_period_weights(self, mock_multiperiod_results):
+        """Test power_at uses correct last_period weights."""
+        pt = PreTrendsPower(violation_type="last_period")
+        results = pt.fit(mock_multiperiod_results)
+
+        power = results.power_at(1.0)
+        assert 0 <= power <= 1
+
+
+# =============================================================================
+# Tests for pre_periods parameter
+# =============================================================================
+
+
+class TestPrePeriodsParameter:
+    """Tests for the pre_periods parameter in fit and related methods."""
+
+    @pytest.fixture
+    def event_study_all_periods_results(self):
+        """Create results simulating all periods estimated as post_periods.
+
+        This mimics the event study workflow where we estimate coefficients
+        for ALL periods (pre and post) to get pre-period placebo effects.
+        """
+        # Periods 0-3 are pre-treatment, 4-7 are post
+        # But we estimate ALL periods as "post" to get coefficients
+        period_effects = {}
+        coefficients = {}
+
+        # Pre-periods (0, 1, 2) - period 3 would be reference
+        for p in [0, 1, 2]:
+            period_effects[p] = PeriodEffect(
+                period=p, effect=np.random.normal(0, 0.1), se=0.5,
+                t_stat=0.2, p_value=0.84, conf_int=(-0.88, 1.08)
+            )
+            coefficients[f'treated:period_{p}'] = period_effects[p].effect
+
+        # Post-periods (4, 5, 6, 7)
+        for p in [4, 5, 6, 7]:
+            period_effects[p] = PeriodEffect(
+                period=p, effect=5.0 + np.random.normal(0, 0.1), se=0.5,
+                t_stat=10.0, p_value=0.0001, conf_int=(4.02, 5.98)
+            )
+            coefficients[f'treated:period_{p}'] = period_effects[p].effect
+
+        # In this scenario, pre_periods=[3] (only reference), post_periods=[0,1,2,4,5,6,7]
+        vcov = np.diag([0.25] * 7)
+
+        return MultiPeriodDiDResults(
+            period_effects=period_effects,
+            avg_att=5.0,
+            avg_se=0.25,
+            avg_t_stat=20.0,
+            avg_p_value=0.0001,
+            avg_conf_int=(4.51, 5.49),
+            n_obs=800,
+            n_treated=400,
+            n_control=400,
+            pre_periods=[3],  # Only reference period
+            post_periods=[0, 1, 2, 4, 5, 6, 7],  # All estimated periods
+            vcov=vcov,
+            coefficients=coefficients,
+        )
+
+    def test_fit_with_explicit_pre_periods(self, event_study_all_periods_results):
+        """Test fit() with explicit pre_periods parameter."""
+        pt = PreTrendsPower()
+
+        # Without pre_periods, would fail because results.pre_periods=[3]
+        # and period 3 has no coefficient (it's the reference)
+        # With explicit pre_periods=[0,1,2], should work
+        results = pt.fit(
+            event_study_all_periods_results,
+            pre_periods=[0, 1, 2]
+        )
+
+        assert results.n_pre_periods == 3
+        assert results.power >= 0
+        assert results.mdv > 0
+
+    def test_pre_periods_overrides_results(self, event_study_all_periods_results):
+        """Test that pre_periods parameter overrides results.pre_periods."""
+        pt = PreTrendsPower()
+
+        # Explicitly set pre_periods to [0, 1]
+        results = pt.fit(
+            event_study_all_periods_results,
+            pre_periods=[0, 1]
+        )
+
+        # Should use 2 pre-periods, not what's in results
+        assert results.n_pre_periods == 2
+
+    def test_power_at_with_pre_periods(self, event_study_all_periods_results):
+        """Test power_at() method with pre_periods parameter."""
+        pt = PreTrendsPower()
+
+        power = pt.power_at(
+            event_study_all_periods_results,
+            M=1.0,
+            pre_periods=[0, 1, 2]
+        )
+
+        assert 0 <= power <= 1
+
+    def test_power_curve_with_pre_periods(self, event_study_all_periods_results):
+        """Test power_curve() with pre_periods parameter."""
+        pt = PreTrendsPower()
+
+        curve = pt.power_curve(
+            event_study_all_periods_results,
+            n_points=10,
+            pre_periods=[0, 1, 2]
+        )
+
+        assert len(curve.M_values) == 10
+        assert len(curve.powers) == 10
+
+    def test_sensitivity_to_honest_did_with_pre_periods(self, event_study_all_periods_results):
+        """Test sensitivity_to_honest_did() with pre_periods parameter."""
+        pt = PreTrendsPower()
+
+        sensitivity = pt.sensitivity_to_honest_did(
+            event_study_all_periods_results,
+            pre_periods=[0, 1, 2]
+        )
+
+        assert 'mdv' in sensitivity
+        assert sensitivity['mdv'] > 0
+
+    def test_convenience_functions_with_pre_periods(self, event_study_all_periods_results):
+        """Test convenience functions with pre_periods parameter."""
+        # compute_mdv
+        mdv = compute_mdv(
+            event_study_all_periods_results,
+            pre_periods=[0, 1, 2]
+        )
+        assert mdv > 0
+
+        # compute_pretrends_power
+        results = compute_pretrends_power(
+            event_study_all_periods_results,
+            M=1.0,
+            pre_periods=[0, 1, 2]
+        )
+        assert results.n_pre_periods == 3

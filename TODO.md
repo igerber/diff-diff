@@ -85,6 +85,10 @@ Enhancements for `honest_did.py`:
 ## CallawaySantAnna Bootstrap Improvements
 
 - [ ] Consider aligning p-value computation with R `did` package (symmetric percentile method)
+- [ ] Investigate RuntimeWarnings in influence function aggregation (`staggered.py:1722`, `staggered.py:1999-2018`)
+  - Warnings: "divide by zero", "overflow", "invalid value" in matmul operations
+  - Occurs during bootstrap SE computation with small sample sizes or edge cases
+  - Does not affect correctness (results are still valid), but should be suppressed or handled gracefully
 
 ---
 
