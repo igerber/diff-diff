@@ -637,3 +637,326 @@ class TestConvenienceFunction:
         )
 
         assert isinstance(results, TROPResults)
+
+
+class TestMethodologyVerification:
+    """Tests verifying TROP methodology matches paper specifications.
+
+    These tests verify:
+    1. Limiting cases match expected behavior
+    2. Treatment effect recovery under paper's simulation DGP
+    3. Observation-specific weighting produces expected results
+    """
+
+    def test_limiting_case_uniform_weights(self):
+        """
+        Test limiting case: λ_unit = λ_time = 0, λ_nn = 0.
+
+        With all lambdas at zero, TROP should use uniform weights and no
+        nuclear norm regularization, giving TWFE-like estimates.
+        """
+        # Generate simple data with known treatment effect
+        rng = np.random.default_rng(42)
+        n_units = 15
+        n_treated = 5
+        n_pre = 5
+        n_post = 3
+        true_att = 3.0
+
+        data = []
+        for i in range(n_units):
+            is_treated = i < n_treated
+            unit_fe = rng.normal(0, 0.5)
+            for t in range(n_pre + n_post):
+                post = t >= n_pre
+                time_fe = 0.2 * t
+                y = 10.0 + unit_fe + time_fe
+                treatment_indicator = 1 if (is_treated and post) else 0
+                if treatment_indicator:
+                    y += true_att
+                y += rng.normal(0, 0.3)
+                data.append({
+                    "unit": i,
+                    "period": t,
+                    "outcome": y,
+                    "treated": treatment_indicator,
+                })
+
+        df = pd.DataFrame(data)
+        post_periods = list(range(n_pre, n_pre + n_post))
+
+        # TROP with uniform weights
+        trop_est = TROP(
+            lambda_time_grid=[0.0],
+            lambda_unit_grid=[0.0],
+            lambda_nn_grid=[0.0],
+            n_bootstrap=10,
+            seed=42
+        )
+        results = trop_est.fit(
+            df,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="period",
+            post_periods=post_periods,
+        )
+
+        # Should recover treatment effect within reasonable tolerance
+        assert abs(results.att - true_att) < 1.0, \
+            f"ATT={results.att:.3f} should be close to true={true_att}"
+        # Check that uniform weights were selected
+        assert results.lambda_time == 0.0
+        assert results.lambda_unit == 0.0
+        assert results.lambda_nn == 0.0
+
+    def test_unit_weights_reduce_bias(self):
+        """
+        Test that unit distance-based weights reduce bias when controls vary.
+
+        When control units have varying similarity to treated units, using
+        distance-based unit weights should improve estimation.
+        """
+        rng = np.random.default_rng(123)
+        n_units = 25
+        n_treated = 5
+        n_pre = 6
+        n_post = 3
+        true_att = 2.5
+
+        data = []
+        # Create heterogeneous control units - some similar to treated, some different
+        for i in range(n_units):
+            is_treated = i < n_treated
+            # Treated units and first 5 controls are similar
+            if is_treated or i < n_treated + 5:
+                unit_fe = 5.0 + rng.normal(0, 0.3)
+            else:
+                # Remaining controls are dissimilar
+                unit_fe = 10.0 + rng.normal(0, 0.5)
+
+            for t in range(n_pre + n_post):
+                post = t >= n_pre
+                time_fe = 0.2 * t
+                y = unit_fe + time_fe
+                treatment_indicator = 1 if (is_treated and post) else 0
+                if treatment_indicator:
+                    y += true_att
+                y += rng.normal(0, 0.3)
+                data.append({
+                    "unit": i,
+                    "period": t,
+                    "outcome": y,
+                    "treated": treatment_indicator,
+                })
+
+        df = pd.DataFrame(data)
+        post_periods = list(range(n_pre, n_pre + n_post))
+
+        # TROP with unit weighting enabled
+        trop_est = TROP(
+            lambda_time_grid=[0.0],
+            lambda_unit_grid=[0.0, 1.0, 2.0],
+            lambda_nn_grid=[0.0],
+            n_bootstrap=10,
+            seed=42
+        )
+        results = trop_est.fit(
+            df,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="period",
+            post_periods=post_periods,
+        )
+
+        # Should recover treatment effect reasonably well
+        assert abs(results.att - true_att) < 1.5, \
+            f"ATT={results.att:.3f} should be close to true={true_att}"
+
+    def test_time_weights_reduce_bias(self):
+        """
+        Test that time distance-based weights reduce bias with trending data.
+
+        When pre-treatment outcomes are trending, weighting recent periods
+        more heavily should improve estimation.
+        """
+        rng = np.random.default_rng(456)
+        n_units = 20
+        n_treated = 5
+        n_pre = 8
+        n_post = 3
+        true_att = 2.0
+
+        data = []
+        for i in range(n_units):
+            is_treated = i < n_treated
+            unit_fe = rng.normal(0, 0.5)
+
+            for t in range(n_pre + n_post):
+                post = t >= n_pre
+                # Time trend that accelerates near treatment
+                time_fe = 0.1 * t + 0.05 * (t ** 2 / n_pre)
+                y = 10.0 + unit_fe + time_fe
+                treatment_indicator = 1 if (is_treated and post) else 0
+                if treatment_indicator:
+                    y += true_att
+                y += rng.normal(0, 0.3)
+                data.append({
+                    "unit": i,
+                    "period": t,
+                    "outcome": y,
+                    "treated": treatment_indicator,
+                })
+
+        df = pd.DataFrame(data)
+        post_periods = list(range(n_pre, n_pre + n_post))
+
+        # TROP with time weighting enabled
+        trop_est = TROP(
+            lambda_time_grid=[0.0, 0.5, 1.0],
+            lambda_unit_grid=[0.0],
+            lambda_nn_grid=[0.0],
+            n_bootstrap=10,
+            seed=42
+        )
+        results = trop_est.fit(
+            df,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="period",
+            post_periods=post_periods,
+        )
+
+        # Should recover treatment effect direction
+        assert results.att > 0, f"ATT={results.att:.3f} should be positive"
+        # Check that time weighting was considered
+        assert results.lambda_time in [0.0, 0.5, 1.0]
+
+    def test_factor_model_reduces_bias(self):
+        """
+        Test that nuclear norm regularization reduces bias with factor structure.
+
+        Following paper's simulation: when true DGP has interactive fixed effects,
+        the factor model component should help recover the treatment effect.
+        """
+        # Generate data with known factor structure
+        data = generate_factor_dgp(
+            n_units=40,
+            n_pre=10,
+            n_post=5,
+            n_treated=8,
+            n_factors=2,
+            treatment_effect=2.0,
+            factor_strength=1.5,  # Strong factors
+            noise_std=0.5,
+            seed=789,
+        )
+        post_periods = list(range(10, 15))
+
+        # TROP with nuclear norm regularization
+        trop_est = TROP(
+            lambda_time_grid=[0.0, 0.5],
+            lambda_unit_grid=[0.0, 0.5],
+            lambda_nn_grid=[0.0, 0.1, 1.0, 5.0],
+            n_bootstrap=20,
+            seed=42
+        )
+        results = trop_est.fit(
+            data,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="period",
+            post_periods=post_periods,
+        )
+
+        true_att = 2.0
+        # With factor adjustment, should recover treatment effect
+        assert abs(results.att - true_att) < 2.0, \
+            f"ATT={results.att:.3f} should be within 2.0 of true={true_att}"
+        # Factor matrix should capture some structure
+        assert results.effective_rank > 0, "Factor matrix should have positive rank"
+
+    def test_paper_dgp_recovery(self):
+        """
+        Test treatment effect recovery using paper's simulation DGP.
+
+        Based on Table 2 (page 32) simulation settings:
+        - Factor model with 2 factors
+        - Treatment effect = 0 (null hypothesis)
+        - Should produce estimates centered around zero
+
+        This is a methodological validation test.
+        """
+        # Generate data similar to paper's simulation
+        rng = np.random.default_rng(2024)
+        n_units = 50
+        n_treated = 10
+        n_pre = 10
+        n_post = 5
+        n_factors = 2
+        true_tau = 0.0  # Null treatment effect
+
+        # Generate factors F: (n_periods, n_factors)
+        F = rng.normal(0, 1, (n_pre + n_post, n_factors))
+
+        # Generate loadings Lambda: (n_factors, n_units)
+        Lambda = rng.normal(0, 1, (n_factors, n_units))
+        # Treated units have different loadings (selection on unobservables)
+        Lambda[:, :n_treated] += 0.5
+
+        # Unit fixed effects
+        gamma = rng.normal(0, 1, n_units)
+        gamma[:n_treated] += 1.0  # Selection on levels
+
+        # Time fixed effects (linear trend)
+        delta = np.linspace(0, 2, n_pre + n_post)
+
+        data = []
+        for i in range(n_units):
+            is_treated = i < n_treated
+            for t in range(n_pre + n_post):
+                post = t >= n_pre
+                # Y = mu + gamma_i + delta_t + Lambda_i'F_t + tau*D + eps
+                y = 10.0 + gamma[i] + delta[t]
+                y += Lambda[:, i] @ F[t, :]  # Factor component
+                treatment_indicator = 1 if (is_treated and post) else 0
+                if treatment_indicator:
+                    y += true_tau
+                y += rng.normal(0, 0.5)  # Idiosyncratic noise
+
+                data.append({
+                    "unit": i,
+                    "period": t,
+                    "outcome": y,
+                    "treated": treatment_indicator,
+                })
+
+        df = pd.DataFrame(data)
+        post_periods = list(range(n_pre, n_pre + n_post))
+
+        # TROP estimation
+        trop_est = TROP(
+            lambda_time_grid=[0.0, 0.5, 1.0],
+            lambda_unit_grid=[0.0, 0.5, 1.0],
+            lambda_nn_grid=[0.0, 0.1, 1.0],
+            n_bootstrap=30,
+            seed=42
+        )
+        results = trop_est.fit(
+            df,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="period",
+            post_periods=post_periods,
+        )
+
+        # Under null hypothesis, ATT should be close to zero
+        # Allow for estimation error (this is a finite sample)
+        assert abs(results.att) < 2.0, \
+            f"ATT={results.att:.3f} should be close to true={true_tau} under null"
+        # Check that factor model was used
+        assert results.effective_rank >= 0

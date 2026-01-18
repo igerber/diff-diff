@@ -506,16 +506,11 @@ class TROP:
 
         for lambda_time in self.lambda_time_grid:
             for lambda_unit in self.lambda_unit_grid:
-                # Compute global weight matrix for this (lambda_time, lambda_unit)
-                weight_matrix = self._compute_global_weights(
-                    Y, treated_unit_idx, pre_period_idx, n_treated_periods,
-                    lambda_time, lambda_unit, n_units, n_periods
-                )
-
                 for lambda_nn in self.lambda_nn_grid:
                     try:
-                        score = self._loocv_score(
-                            Y, control_mask, weight_matrix, lambda_nn,
+                        score = self._loocv_score_obs_specific(
+                            Y, D, control_mask, control_unit_idx,
+                            lambda_time, lambda_unit, lambda_nn,
                             n_units, n_periods
                         )
                         if score < best_score:
@@ -535,32 +530,51 @@ class TROP:
         self._optimal_lambda = best_lambda
         lambda_time, lambda_unit, lambda_nn = best_lambda
 
-        # Compute final weight matrix with optimal parameters
-        weight_matrix = self._compute_global_weights(
-            Y, treated_unit_idx, pre_period_idx, n_treated_periods,
-            lambda_time, lambda_unit, n_units, n_periods
-        )
-
-        # Step 2: Final estimation with optimal parameters
-        alpha_hat, beta_hat, L_hat = self._estimate_model(
-            Y, control_mask, weight_matrix, lambda_nn,
-            n_units, n_periods
-        )
-
-        # Step 3: Compute treatment effects for each treated observation
+        # Step 2: Final estimation - per-observation model fitting following Algorithm 2
+        # For each treated (i,t): compute observation-specific weights, fit model, compute τ̂_{it}
         treatment_effects = {}
         tau_values = []
+        alpha_estimates = []
+        beta_estimates = []
+        L_estimates = []
 
-        for t in range(n_periods):
-            for i in range(n_units):
-                if D[t, i] == 1:
-                    tau_it = Y[t, i] - alpha_hat[i] - beta_hat[t] - L_hat[t, i]
-                    unit_id = idx_to_unit[i]
-                    time_id = idx_to_period[t]
-                    treatment_effects[(unit_id, time_id)] = tau_it
-                    tau_values.append(tau_it)
+        # Get list of treated observations
+        treated_observations = [(t, i) for t in range(n_periods) for i in range(n_units)
+                                if D[t, i] == 1]
 
+        for t, i in treated_observations:
+            # Compute observation-specific weights for this (i, t)
+            weight_matrix = self._compute_observation_weights(
+                Y, D, i, t, lambda_time, lambda_unit, control_unit_idx,
+                n_units, n_periods
+            )
+
+            # Fit model with these weights
+            alpha_hat, beta_hat, L_hat = self._estimate_model(
+                Y, control_mask, weight_matrix, lambda_nn,
+                n_units, n_periods
+            )
+
+            # Compute treatment effect: τ̂_{it} = Y_{it} - α̂_i - β̂_t - L̂_{it}
+            tau_it = Y[t, i] - alpha_hat[i] - beta_hat[t] - L_hat[t, i]
+
+            unit_id = idx_to_unit[i]
+            time_id = idx_to_period[t]
+            treatment_effects[(unit_id, time_id)] = tau_it
+            tau_values.append(tau_it)
+
+            # Store for averaging
+            alpha_estimates.append(alpha_hat)
+            beta_estimates.append(beta_hat)
+            L_estimates.append(L_hat)
+
+        # Average ATT
         att = np.mean(tau_values)
+
+        # Average parameter estimates for output (representative)
+        alpha_hat = np.mean(alpha_estimates, axis=0) if alpha_estimates else np.zeros(n_units)
+        beta_hat = np.mean(beta_estimates, axis=0) if beta_estimates else np.zeros(n_periods)
+        L_hat = np.mean(L_estimates, axis=0) if L_estimates else np.zeros((n_periods, n_units))
 
         # Compute effective rank
         _, s, _ = np.linalg.svd(L_hat, full_matrices=False)
@@ -577,7 +591,7 @@ class TROP:
             )
         else:
             se, bootstrap_dist = self._jackknife_variance(
-                Y, D, control_mask, weight_matrix, best_lambda,
+                Y, D, control_mask, control_unit_idx, best_lambda,
                 n_units, n_periods
             )
 
@@ -626,89 +640,99 @@ class TROP:
         self.is_fitted_ = True
         return self.results_
 
-    def _compute_unit_distances(
+    def _compute_unit_distance_pairwise(
         self,
         Y: np.ndarray,
-        treated_unit_idx: np.ndarray,
-        pre_period_idx: List[int],
-        n_units: int,
-    ) -> np.ndarray:
+        D: np.ndarray,
+        j: int,
+        i: int,
+        target_period: int,
+    ) -> float:
         """
-        Compute distances from each unit to the treated average.
+        Compute pairwise distance from control unit j to treated unit i.
 
-        Following the reference implementation:
-        dist_unit(j) = sqrt(mean((Y_j - Y_treated_avg)^2)) over pre-treatment periods
+        Following the paper's Equation 3 (page 7):
+        dist_unit_{-t}(j, i) = sqrt(
+            Σ_u 1{u≠t}(1-W_{iu})(1-W_{ju})(Y_{iu} - Y_{ju})²
+            / Σ_u 1{u≠t}(1-W_{iu})(1-W_{ju})
+        )
+
+        This computes the RMSE between units j and i over periods where
+        both are untreated, excluding the target period t.
 
         Parameters
         ----------
         Y : np.ndarray
             Outcome matrix (n_periods x n_units).
-        treated_unit_idx : np.ndarray
-            Indices of treated units.
-        pre_period_idx : list
-            Indices of pre-treatment periods.
-        n_units : int
-            Number of units.
+        D : np.ndarray
+            Treatment indicator matrix (n_periods x n_units).
+        j : int
+            Index of control unit.
+        i : int
+            Index of treated unit.
+        target_period : int
+            Target treatment period t (excluded from distance computation).
 
         Returns
         -------
-        np.ndarray
-            Distance from each unit j to the treated average.
+        float
+            Pairwise RMSE distance between units j and i.
         """
-        # Compute average of treated units across all periods (but use pre-treatment for distances)
-        # Reference: average_treated = np.mean(Y[treated_units,:], axis=0)
-        # This gives the average outcome for each time period across treated units
-        Y_treated_avg = np.nanmean(Y[:, treated_unit_idx], axis=1)  # (n_periods,)
+        n_periods = Y.shape[0]
 
-        distances = np.zeros(n_units)
+        sq_diffs = []
+        for u in range(n_periods):
+            # Exclude target period and periods where either unit is treated
+            if u == target_period:
+                continue
+            # (1 - W_{iu})(1 - W_{ju}) means both must be untreated
+            if D[u, i] == 1 or D[u, j] == 1:
+                continue
+            if np.isnan(Y[u, i]) or np.isnan(Y[u, j]):
+                continue
 
-        for j in range(n_units):
-            # Compute RMSE over pre-treatment periods only
-            sq_diffs = []
-            for t in pre_period_idx:
-                if not np.isnan(Y[t, j]) and not np.isnan(Y_treated_avg[t]):
-                    sq_diffs.append((Y[t, j] - Y_treated_avg[t]) ** 2)
+            sq_diffs.append((Y[u, i] - Y[u, j]) ** 2)
 
-            if len(sq_diffs) > 0:
-                distances[j] = np.sqrt(np.mean(sq_diffs))
-            else:
-                distances[j] = np.inf
+        if len(sq_diffs) > 0:
+            return np.sqrt(np.mean(sq_diffs))
+        else:
+            return np.inf
 
-        return distances
-
-    def _compute_global_weights(
+    def _compute_observation_weights(
         self,
         Y: np.ndarray,
-        treated_unit_idx: np.ndarray,
-        pre_period_idx: List[int],
-        n_treated_periods: int,
+        D: np.ndarray,
+        i: int,
+        t: int,
         lambda_time: float,
         lambda_unit: float,
+        control_unit_idx: np.ndarray,
         n_units: int,
         n_periods: int,
     ) -> np.ndarray:
         """
-        Compute global weight matrix for the optimization.
+        Compute observation-specific weight matrix for treated observation (i, t).
 
-        Following the reference implementation:
-        - dist_time[s] = |s - (T - T_treat/2)|  (distance from treatment midpoint)
-        - dist_unit[j] = RMSE from treated average over pre-treatment
-        - delta = outer(exp(-λ_unit * dist_unit), exp(-λ_time * dist_time))
+        Following the paper's Algorithm 2 (page 27):
+        - Time weights θ_s^{i,t} = exp(-λ_time × |t - s|)
+        - Unit weights ω_j^{i,t} = exp(-λ_unit × dist_unit_{-t}(j, i))
 
         Parameters
         ----------
         Y : np.ndarray
             Outcome matrix (n_periods x n_units).
-        treated_unit_idx : np.ndarray
-            Indices of treated units.
-        pre_period_idx : list
-            Indices of pre-treatment periods.
-        n_treated_periods : int
-            Number of post-treatment (treated) periods.
+        D : np.ndarray
+            Treatment indicator matrix (n_periods x n_units).
+        i : int
+            Treated unit index.
+        t : int
+            Treatment period index.
         lambda_time : float
             Time weight decay parameter.
         lambda_unit : float
             Unit weight decay parameter.
+        control_unit_idx : np.ndarray
+            Indices of control units.
         n_units : int
             Number of units.
         n_periods : int
@@ -717,28 +741,32 @@ class TROP:
         Returns
         -------
         np.ndarray
-            Weight matrix (n_periods x n_units).
+            Weight matrix (n_periods x n_units) for observation (i, t).
         """
-        # Time distance: |s - (T - T_treat/2)|
-        # This centers weights around the midpoint of the treatment period
-        treatment_center = n_periods - n_treated_periods / 2
-        dist_time = np.array([abs(s - treatment_center) for s in range(n_periods)])
+        # Time distance: |t - s| following paper's Equation 3 (page 7)
+        dist_time = np.array([abs(t - s) for s in range(n_periods)])
         time_weights = np.exp(-lambda_time * dist_time)
 
-        # Unit distance: RMSE from treated average
-        if lambda_unit == 0:
-            unit_weights = np.ones(n_units)
-        else:
-            dist_unit = self._compute_unit_distances(
-                Y, treated_unit_idx, pre_period_idx, n_units
-            )
-            unit_weights = np.exp(-lambda_unit * dist_unit)
-            # Handle infinite distances
-            unit_weights[np.isinf(dist_unit)] = 0.0
+        # Unit distance: pairwise RMSE from each control j to treated i
+        unit_weights = np.zeros(n_units)
 
-        # Global weight matrix: outer product
-        # Note: reference uses (N x T) shape, we use (T x N)
-        W = np.outer(time_weights, unit_weights)  # (n_periods, n_units)
+        if lambda_unit == 0:
+            # Uniform weights when lambda_unit = 0
+            unit_weights[:] = 1.0
+        else:
+            for j in control_unit_idx:
+                dist = self._compute_unit_distance_pairwise(Y, D, j, i, t)
+                if np.isinf(dist):
+                    unit_weights[j] = 0.0
+                else:
+                    unit_weights[j] = np.exp(-lambda_unit * dist)
+
+        # Treated unit i gets weight 1 (or could be omitted since we fit on controls)
+        # We include treated unit's own observation for model fitting
+        unit_weights[i] = 1.0
+
+        # Weight matrix: outer product (n_periods x n_units)
+        W = np.outer(time_weights, unit_weights)
 
         return W
 
@@ -872,7 +900,13 @@ class TROP:
                 mask_i = valid_mask[:, i]
                 if np.any(mask_i):
                     weights_i = W[mask_i, i]
-                    alpha[i] = np.average(R[mask_i, i] - beta[mask_i], weights=weights_i)
+                    # Handle case where weights sum to zero (unit not in weight computation)
+                    weight_sum = np.sum(weights_i)
+                    if weight_sum > 0:
+                        alpha[i] = np.average(R[mask_i, i] - beta[mask_i], weights=weights_i)
+                    else:
+                        # Use unweighted mean for units with zero total weight
+                        alpha[i] = np.mean(R[mask_i, i] - beta[mask_i])
                 else:
                     alpha[i] = 0.0
 
@@ -881,7 +915,13 @@ class TROP:
                 mask_t = valid_mask[t, :]
                 if np.any(mask_t):
                     weights_t = W[t, mask_t]
-                    beta[t] = np.average(R[t, mask_t] - alpha[mask_t], weights=weights_t)
+                    # Handle case where weights sum to zero
+                    weight_sum = np.sum(weights_t)
+                    if weight_sum > 0:
+                        beta[t] = np.average(R[t, mask_t] - alpha[mask_t], weights=weights_t)
+                    else:
+                        # Use unweighted mean for periods with zero total weight
+                        beta[t] = np.mean(R[t, mask_t] - alpha[mask_t])
                 else:
                     beta[t] = 0.0
 
@@ -908,31 +948,42 @@ class TROP:
 
         return alpha, beta, L
 
-    def _loocv_score(
+    def _loocv_score_obs_specific(
         self,
         Y: np.ndarray,
+        D: np.ndarray,
         control_mask: np.ndarray,
-        weight_matrix: np.ndarray,
+        control_unit_idx: np.ndarray,
+        lambda_time: float,
+        lambda_unit: float,
         lambda_nn: float,
         n_units: int,
         n_periods: int,
     ) -> float:
         """
-        Compute leave-one-out cross-validation score.
+        Compute leave-one-out cross-validation score with observation-specific weights.
+
+        Following the paper's Equation 5 (page 8):
+        Q(λ) = Σ_{j,s: D_js=0} [τ̂_js^loocv(λ)]²
 
         For each control observation (j, s), treat it as pseudo-treated,
-        estimate treatment effect, and sum squared effects.
-
-        Q(λ) = Σ_{j,s: D_js=0} [τ̂_js^loocv(λ)]²
+        compute observation-specific weights, fit model excluding (j, s),
+        and sum squared pseudo-treatment effects.
 
         Parameters
         ----------
         Y : np.ndarray
-            Outcome matrix.
+            Outcome matrix (n_periods x n_units).
+        D : np.ndarray
+            Treatment indicator matrix (n_periods x n_units).
         control_mask : np.ndarray
             Boolean mask for control observations.
-        weight_matrix : np.ndarray
-            Pre-computed global weight matrix.
+        control_unit_idx : np.ndarray
+            Indices of control units.
+        lambda_time : float
+            Time weight decay parameter.
+        lambda_unit : float
+            Unit weight decay parameter.
         lambda_nn : float
             Nuclear norm regularization parameter.
         n_units : int
@@ -945,27 +996,28 @@ class TROP:
         float
             LOOCV score (lower is better).
         """
-        # For efficiency, subsample control observations
+        # Get all control observations
         control_obs = [(t, i) for t in range(n_periods) for i in range(n_units)
                        if control_mask[t, i] and not np.isnan(Y[t, i])]
 
-        # Limit to reasonable number for computational tractability
+        # Subsample for computational tractability (as noted in paper's footnote)
         rng = np.random.default_rng(self.seed)
         max_loocv = min(100, len(control_obs))
         if len(control_obs) > max_loocv:
-            control_obs = list(rng.choice(
-                len(control_obs), size=max_loocv, replace=False
-            ))
-            control_obs = [(t, i) for idx, (t, i) in enumerate(
-                [(t, i) for t in range(n_periods) for i in range(n_units)
-                 if control_mask[t, i] and not np.isnan(Y[t, i])]
-            ) if idx in set(control_obs)]
+            indices = rng.choice(len(control_obs), size=max_loocv, replace=False)
+            control_obs = [control_obs[idx] for idx in indices]
 
         tau_squared_sum = 0.0
         n_valid = 0
 
         for t, i in control_obs:
             try:
+                # Compute observation-specific weights for pseudo-treated (i, t)
+                weight_matrix = self._compute_observation_weights(
+                    Y, D, i, t, lambda_time, lambda_unit, control_unit_idx,
+                    n_units, n_periods
+                )
+
                 # Estimate model excluding observation (t, i)
                 alpha, beta, L = self._estimate_model(
                     Y, control_mask, weight_matrix, lambda_nn,
@@ -1065,13 +1117,15 @@ class TROP:
         Y: np.ndarray,
         D: np.ndarray,
         control_mask: np.ndarray,
-        weight_matrix: np.ndarray,
+        control_unit_idx: np.ndarray,
         optimal_lambda: Tuple[float, float, float],
         n_units: int,
         n_periods: int,
     ) -> Tuple[float, np.ndarray]:
         """
         Compute jackknife standard error (leave-one-unit-out).
+
+        Uses observation-specific weights following Algorithm 2.
 
         Parameters
         ----------
@@ -1081,8 +1135,8 @@ class TROP:
             Treatment matrix.
         control_mask : np.ndarray
             Control observation mask.
-        weight_matrix : np.ndarray
-            Pre-computed global weight matrix.
+        control_unit_idx : np.ndarray
+            Indices of control units.
         optimal_lambda : tuple
             Optimal tuning parameters.
         n_units : int
@@ -1110,22 +1164,32 @@ class TROP:
 
             control_mask_jack = D_jack == 0
 
-            if not np.any(D_jack == 1):
+            # Get remaining treated observations
+            treated_obs_jack = [(t, i) for t in range(n_periods) for i in range(n_units)
+                                if D_jack[t, i] == 1]
+
+            if not treated_obs_jack:
                 continue
 
             try:
-                alpha, beta, L = self._estimate_model(
-                    Y_jack, control_mask_jack, weight_matrix, lambda_nn,
-                    n_units, n_periods
-                )
-
-                # Compute ATT for remaining treated
+                # Compute ATT using observation-specific weights (Algorithm 2)
                 tau_values = []
-                for t in range(n_periods):
-                    for i in range(n_units):
-                        if D_jack[t, i] == 1:
-                            tau = Y_jack[t, i] - alpha[i] - beta[t] - L[t, i]
-                            tau_values.append(tau)
+                for t, i in treated_obs_jack:
+                    # Compute observation-specific weights for this (i, t)
+                    weight_matrix = self._compute_observation_weights(
+                        Y_jack, D_jack, i, t, lambda_time, lambda_unit,
+                        control_unit_idx, n_units, n_periods
+                    )
+
+                    # Fit model with these weights
+                    alpha, beta, L = self._estimate_model(
+                        Y_jack, control_mask_jack, weight_matrix, lambda_nn,
+                        n_units, n_periods
+                    )
+
+                    # Compute treatment effect
+                    tau = Y_jack[t, i] - alpha[i] - beta[t] - L[t, i]
+                    tau_values.append(tau)
 
                 if tau_values:
                     jackknife_estimates.append(np.mean(tau_values))
@@ -1158,6 +1222,7 @@ class TROP:
         """
         Fit model with fixed tuning parameters (for bootstrap).
 
+        Uses observation-specific weights following Algorithm 2.
         Returns only the ATT estimate.
         """
         lambda_time, lambda_unit, lambda_nn = fixed_lambda
@@ -1183,36 +1248,35 @@ class TROP:
 
         control_mask = D == 0
 
-        # Determine pre/post periods
-        post_period_idx = [period_to_idx[p] for p in post_periods if p in period_to_idx]
-        pre_period_idx = [i for i in range(n_periods) if i not in post_period_idx]
-        n_treated_periods = len(post_period_idx)
+        # Get control unit indices
+        unit_ever_treated = np.any(D == 1, axis=0)
+        control_unit_idx = np.where(~unit_ever_treated)[0]
 
-        # Get treated unit indices
-        treated_unit_idx = np.where(np.any(D == 1, axis=0))[0]
+        # Get list of treated observations
+        treated_observations = [(t, i) for t in range(n_periods) for i in range(n_units)
+                                if D[t, i] == 1]
 
-        # Compute global weight matrix
-        weight_matrix = self._compute_global_weights(
-            Y, treated_unit_idx, pre_period_idx, n_treated_periods,
-            lambda_time, lambda_unit, n_units, n_periods
-        )
-
-        # Estimate model
-        alpha, beta, L = self._estimate_model(
-            Y, control_mask, weight_matrix, lambda_nn,
-            n_units, n_periods
-        )
-
-        # Compute ATT
-        tau_values = []
-        for t in range(n_periods):
-            for i in range(n_units):
-                if D[t, i] == 1:
-                    tau = Y[t, i] - alpha[i] - beta[t] - L[t, i]
-                    tau_values.append(tau)
-
-        if not tau_values:
+        if not treated_observations:
             raise ValueError("No treated observations")
+
+        # Compute ATT using observation-specific weights (Algorithm 2)
+        tau_values = []
+        for t, i in treated_observations:
+            # Compute observation-specific weights for this (i, t)
+            weight_matrix = self._compute_observation_weights(
+                Y, D, i, t, lambda_time, lambda_unit, control_unit_idx,
+                n_units, n_periods
+            )
+
+            # Fit model with these weights
+            alpha, beta, L = self._estimate_model(
+                Y, control_mask, weight_matrix, lambda_nn,
+                n_units, n_periods
+            )
+
+            # Compute treatment effect: τ̂_{it} = Y_{it} - α̂_i - β̂_t - L̂_{it}
+            tau = Y[t, i] - alpha[i] - beta[t] - L[t, i]
+            tau_values.append(tau)
 
         return np.mean(tau_values)
 
