@@ -495,6 +495,7 @@ class TROP:
 
         pre_periods_list = [idx_to_period[i] for i in pre_period_idx]
         post_periods_list = [idx_to_period[i] for i in post_period_idx]
+        n_treated_periods = len(post_period_idx)
 
         # Step 1: Grid search with LOOCV for tuning parameters
         best_lambda = None
@@ -505,12 +506,17 @@ class TROP:
 
         for lambda_time in self.lambda_time_grid:
             for lambda_unit in self.lambda_unit_grid:
+                # Compute global weight matrix for this (lambda_time, lambda_unit)
+                weight_matrix = self._compute_global_weights(
+                    Y, treated_unit_idx, pre_period_idx, n_treated_periods,
+                    lambda_time, lambda_unit, n_units, n_periods
+                )
+
                 for lambda_nn in self.lambda_nn_grid:
                     try:
                         score = self._loocv_score(
-                            Y, D, control_mask, treated_mask,
-                            lambda_time, lambda_unit, lambda_nn,
-                            pre_period_idx, n_units, n_periods
+                            Y, control_mask, weight_matrix, lambda_nn,
+                            n_units, n_periods
                         )
                         if score < best_score:
                             best_score = score
@@ -529,9 +535,15 @@ class TROP:
         self._optimal_lambda = best_lambda
         lambda_time, lambda_unit, lambda_nn = best_lambda
 
+        # Compute final weight matrix with optimal parameters
+        weight_matrix = self._compute_global_weights(
+            Y, treated_unit_idx, pre_period_idx, n_treated_periods,
+            lambda_time, lambda_unit, n_units, n_periods
+        )
+
         # Step 2: Final estimation with optimal parameters
         alpha_hat, beta_hat, L_hat = self._estimate_model(
-            Y, D, control_mask, lambda_time, lambda_unit, lambda_nn,
+            Y, control_mask, weight_matrix, lambda_nn,
             n_units, n_periods
         )
 
@@ -565,9 +577,8 @@ class TROP:
             )
         else:
             se, bootstrap_dist = self._jackknife_variance(
-                Y, D, control_mask, treated_mask, best_lambda,
-                n_units, n_periods, unit_to_idx, period_to_idx,
-                idx_to_unit, idx_to_period
+                Y, D, control_mask, weight_matrix, best_lambda,
+                n_units, n_periods
             )
 
         # Compute test statistics
@@ -618,52 +629,45 @@ class TROP:
     def _compute_unit_distances(
         self,
         Y: np.ndarray,
-        D: np.ndarray,
-        i: int,
-        t: int,
+        treated_unit_idx: np.ndarray,
+        pre_period_idx: List[int],
         n_units: int,
-        n_periods: int,
     ) -> np.ndarray:
         """
-        Compute distances between unit i and all other units.
+        Compute distances from each unit to the treated average.
 
-        distance(j, i) = sqrt(mean((Y_ju - Y_iu)^2)) for u != t where both observed
+        Following the reference implementation:
+        dist_unit(j) = sqrt(mean((Y_j - Y_treated_avg)^2)) over pre-treatment periods
 
         Parameters
         ----------
         Y : np.ndarray
             Outcome matrix (n_periods x n_units).
-        D : np.ndarray
-            Treatment matrix (n_periods x n_units).
-        i : int
-            Target unit index.
-        t : int
-            Target time index (excluded from distance computation).
+        treated_unit_idx : np.ndarray
+            Indices of treated units.
+        pre_period_idx : list
+            Indices of pre-treatment periods.
         n_units : int
             Number of units.
-        n_periods : int
-            Number of periods.
 
         Returns
         -------
         np.ndarray
-            Distance from each unit j to unit i.
+            Distance from each unit j to the treated average.
         """
+        # Compute average of treated units across all periods (but use pre-treatment for distances)
+        # Reference: average_treated = np.mean(Y[treated_units,:], axis=0)
+        # This gives the average outcome for each time period across treated units
+        Y_treated_avg = np.nanmean(Y[:, treated_unit_idx], axis=1)  # (n_periods,)
+
         distances = np.zeros(n_units)
 
         for j in range(n_units):
-            if j == i:
-                distances[j] = 0.0
-                continue
-
-            # Compute distance using periods u != t where both are control
+            # Compute RMSE over pre-treatment periods only
             sq_diffs = []
-            for u in range(n_periods):
-                if u == t:
-                    continue
-                if D[u, i] == 0 and D[u, j] == 0:
-                    if not np.isnan(Y[u, i]) and not np.isnan(Y[u, j]):
-                        sq_diffs.append((Y[u, i] - Y[u, j]) ** 2)
+            for t in pre_period_idx:
+                if not np.isnan(Y[t, j]) and not np.isnan(Y_treated_avg[t]):
+                    sq_diffs.append((Y[t, j] - Y_treated_avg[t]) ** 2)
 
             if len(sq_diffs) > 0:
                 distances[j] = np.sqrt(np.mean(sq_diffs))
@@ -672,33 +676,35 @@ class TROP:
 
         return distances
 
-    def _compute_weights(
+    def _compute_global_weights(
         self,
         Y: np.ndarray,
-        D: np.ndarray,
-        i: int,
-        t: int,
+        treated_unit_idx: np.ndarray,
+        pre_period_idx: List[int],
+        n_treated_periods: int,
         lambda_time: float,
         lambda_unit: float,
         n_units: int,
         n_periods: int,
-    ) -> Tuple[np.ndarray, np.ndarray]:
+    ) -> np.ndarray:
         """
-        Compute unit and time weights for observation (i, t).
+        Compute global weight matrix for the optimization.
 
-        Unit weights: ω_j = exp(-λ_unit × distance(j, i))
-        Time weights: θ_s = exp(-λ_time × |s - t|)
+        Following the reference implementation:
+        - dist_time[s] = |s - (T - T_treat/2)|  (distance from treatment midpoint)
+        - dist_unit[j] = RMSE from treated average over pre-treatment
+        - delta = outer(exp(-λ_unit * dist_unit), exp(-λ_time * dist_time))
 
         Parameters
         ----------
         Y : np.ndarray
-            Outcome matrix.
-        D : np.ndarray
-            Treatment matrix.
-        i : int
-            Target unit index.
-        t : int
-            Target time index.
+            Outcome matrix (n_periods x n_units).
+        treated_unit_idx : np.ndarray
+            Indices of treated units.
+        pre_period_idx : list
+            Indices of pre-treatment periods.
+        n_treated_periods : int
+            Number of post-treatment (treated) periods.
         lambda_time : float
             Time weight decay parameter.
         lambda_unit : float
@@ -710,24 +716,31 @@ class TROP:
 
         Returns
         -------
-        tuple
-            (unit_weights, time_weights) arrays.
+        np.ndarray
+            Weight matrix (n_periods x n_units).
         """
-        # Time weights: θ_s = exp(-λ_time × |s - t|)
-        time_weights = np.array([
-            np.exp(-lambda_time * abs(s - t)) for s in range(n_periods)
-        ])
+        # Time distance: |s - (T - T_treat/2)|
+        # This centers weights around the midpoint of the treatment period
+        treatment_center = n_periods - n_treated_periods / 2
+        dist_time = np.array([abs(s - treatment_center) for s in range(n_periods)])
+        time_weights = np.exp(-lambda_time * dist_time)
 
-        # Unit weights: ω_j = exp(-λ_unit × distance(j, i))
+        # Unit distance: RMSE from treated average
         if lambda_unit == 0:
             unit_weights = np.ones(n_units)
         else:
-            distances = self._compute_unit_distances(Y, D, i, t, n_units, n_periods)
-            unit_weights = np.exp(-lambda_unit * distances)
+            dist_unit = self._compute_unit_distances(
+                Y, treated_unit_idx, pre_period_idx, n_units
+            )
+            unit_weights = np.exp(-lambda_unit * dist_unit)
             # Handle infinite distances
-            unit_weights[np.isinf(distances)] = 0.0
+            unit_weights[np.isinf(dist_unit)] = 0.0
 
-        return unit_weights, time_weights
+        # Global weight matrix: outer product
+        # Note: reference uses (N x T) shape, we use (T x N)
+        W = np.outer(time_weights, unit_weights)  # (n_periods, n_units)
+
+        return W
 
     def _soft_threshold_svd(
         self,
@@ -752,17 +765,49 @@ class TROP:
         if threshold <= 0:
             return M
 
-        U, s, Vt = np.linalg.svd(M, full_matrices=False)
+        # Handle NaN/Inf values in input
+        if not np.isfinite(M).all():
+            M = np.nan_to_num(M, nan=0.0, posinf=0.0, neginf=0.0)
+
+        try:
+            U, s, Vt = np.linalg.svd(M, full_matrices=False)
+        except np.linalg.LinAlgError:
+            # SVD failed, return zero matrix
+            return np.zeros_like(M)
+
+        # Check for numerical issues in SVD output
+        if not (np.isfinite(U).all() and np.isfinite(s).all() and np.isfinite(Vt).all()):
+            # SVD produced non-finite values, return zero matrix
+            return np.zeros_like(M)
+
         s_thresh = np.maximum(s - threshold, 0)
-        return U @ np.diag(s_thresh) @ Vt
+
+        # Use truncated reconstruction with only non-zero singular values
+        nonzero_mask = s_thresh > 1e-10
+        if not np.any(nonzero_mask):
+            return np.zeros_like(M)
+
+        # Truncate to non-zero components for numerical stability
+        U_trunc = U[:, nonzero_mask]
+        s_trunc = s_thresh[nonzero_mask]
+        Vt_trunc = Vt[nonzero_mask, :]
+
+        # Compute result, suppressing expected numerical warnings from
+        # ill-conditioned matrices during alternating minimization
+        with np.errstate(divide='ignore', over='ignore', invalid='ignore'):
+            result = (U_trunc * s_trunc) @ Vt_trunc
+
+        # Replace any NaN/Inf in result with zeros
+        if not np.isfinite(result).all():
+            result = np.nan_to_num(result, nan=0.0, posinf=0.0, neginf=0.0)
+
+        return result
 
     def _estimate_model(
         self,
         Y: np.ndarray,
-        D: np.ndarray,
         control_mask: np.ndarray,
-        lambda_time: float,
-        lambda_unit: float,
+        weight_matrix: np.ndarray,
         lambda_nn: float,
         n_units: int,
         n_periods: int,
@@ -779,14 +824,10 @@ class TROP:
         ----------
         Y : np.ndarray
             Outcome matrix (n_periods x n_units).
-        D : np.ndarray
-            Treatment matrix (n_periods x n_units).
         control_mask : np.ndarray
             Boolean mask for control observations.
-        lambda_time : float
-            Time weight decay parameter.
-        lambda_unit : float
-            Unit weight decay parameter.
+        weight_matrix : np.ndarray
+            Pre-computed global weight matrix (n_periods x n_units).
         lambda_nn : float
             Nuclear norm regularization parameter.
         n_units : int
@@ -801,21 +842,7 @@ class TROP:
         tuple
             (alpha, beta, L) estimated parameters.
         """
-        # Create weight matrix (average weights across observations)
-        W = np.ones((n_periods, n_units))
-
-        # For a representative weighting, use center of data
-        center_t = n_periods // 2
-        center_i = n_units // 2
-
-        unit_w, time_w = self._compute_weights(
-            Y, D, center_i, center_t, lambda_time, lambda_unit, n_units, n_periods
-        )
-
-        # Outer product for weight matrix
-        for t in range(n_periods):
-            for i in range(n_units):
-                W[t, i] = time_w[t] * unit_w[i]
+        W = weight_matrix
 
         # Mask for estimation (control obs only, excluding LOOCV obs if specified)
         est_mask = control_mask.copy()
@@ -884,13 +911,9 @@ class TROP:
     def _loocv_score(
         self,
         Y: np.ndarray,
-        D: np.ndarray,
         control_mask: np.ndarray,
-        treated_mask: np.ndarray,
-        lambda_time: float,
-        lambda_unit: float,
+        weight_matrix: np.ndarray,
         lambda_nn: float,
-        pre_period_idx: List[int],
         n_units: int,
         n_periods: int,
     ) -> float:
@@ -906,20 +929,12 @@ class TROP:
         ----------
         Y : np.ndarray
             Outcome matrix.
-        D : np.ndarray
-            Treatment matrix.
         control_mask : np.ndarray
             Boolean mask for control observations.
-        treated_mask : np.ndarray
-            Boolean mask for treated observations.
-        lambda_time : float
-            Time weight decay parameter.
-        lambda_unit : float
-            Unit weight decay parameter.
+        weight_matrix : np.ndarray
+            Pre-computed global weight matrix.
         lambda_nn : float
             Nuclear norm regularization parameter.
-        pre_period_idx : list
-            Indices of pre-treatment periods.
         n_units : int
             Number of units.
         n_periods : int
@@ -953,7 +968,7 @@ class TROP:
             try:
                 # Estimate model excluding observation (t, i)
                 alpha, beta, L = self._estimate_model(
-                    Y, D, control_mask, lambda_time, lambda_unit, lambda_nn,
+                    Y, control_mask, weight_matrix, lambda_nn,
                     n_units, n_periods, exclude_obs=(t, i)
                 )
 
@@ -1050,14 +1065,10 @@ class TROP:
         Y: np.ndarray,
         D: np.ndarray,
         control_mask: np.ndarray,
-        treated_mask: np.ndarray,
+        weight_matrix: np.ndarray,
         optimal_lambda: Tuple[float, float, float],
         n_units: int,
         n_periods: int,
-        unit_to_idx: Dict,
-        period_to_idx: Dict,
-        idx_to_unit: Dict,
-        idx_to_period: Dict,
     ) -> Tuple[float, np.ndarray]:
         """
         Compute jackknife standard error (leave-one-unit-out).
@@ -1070,16 +1081,14 @@ class TROP:
             Treatment matrix.
         control_mask : np.ndarray
             Control observation mask.
-        treated_mask : np.ndarray
-            Treated observation mask.
+        weight_matrix : np.ndarray
+            Pre-computed global weight matrix.
         optimal_lambda : tuple
             Optimal tuning parameters.
         n_units : int
             Number of units.
         n_periods : int
             Number of periods.
-        unit_to_idx, period_to_idx, idx_to_unit, idx_to_period : dict
-            Index mappings.
 
         Returns
         -------
@@ -1100,15 +1109,13 @@ class TROP:
             D_jack[:, leave_out] = 0
 
             control_mask_jack = D_jack == 0
-            treated_mask_jack = D_jack == 1
 
-            if not np.any(treated_mask_jack):
+            if not np.any(D_jack == 1):
                 continue
 
             try:
                 alpha, beta, L = self._estimate_model(
-                    Y_jack, D_jack, control_mask_jack,
-                    lambda_time, lambda_unit, lambda_nn,
+                    Y_jack, control_mask_jack, weight_matrix, lambda_nn,
                     n_units, n_periods
                 )
 
@@ -1176,9 +1183,23 @@ class TROP:
 
         control_mask = D == 0
 
+        # Determine pre/post periods
+        post_period_idx = [period_to_idx[p] for p in post_periods if p in period_to_idx]
+        pre_period_idx = [i for i in range(n_periods) if i not in post_period_idx]
+        n_treated_periods = len(post_period_idx)
+
+        # Get treated unit indices
+        treated_unit_idx = np.where(np.any(D == 1, axis=0))[0]
+
+        # Compute global weight matrix
+        weight_matrix = self._compute_global_weights(
+            Y, treated_unit_idx, pre_period_idx, n_treated_periods,
+            lambda_time, lambda_unit, n_units, n_periods
+        )
+
         # Estimate model
         alpha, beta, L = self._estimate_model(
-            Y, D, control_mask, lambda_time, lambda_unit, lambda_nn,
+            Y, control_mask, weight_matrix, lambda_nn,
             n_units, n_periods
         )
 
