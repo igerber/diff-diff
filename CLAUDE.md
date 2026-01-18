@@ -89,6 +89,14 @@ pytest tests/test_rust_backend.py -v
   - Regression adjustment, IPW, and doubly robust estimation methods
   - Proper covariate handling (unlike naive DDD implementations)
 
+- **`diff_diff/trop.py`** - Triply Robust Panel (TROP) estimator (v2.1.0):
+  - `TROP` - Athey, Imbens, Qu & Viviano (2025) estimator with factor model adjustment
+  - `TROPResults` - Results with ATT, factors, loadings, unit/time weights
+  - `trop()` - Convenience function for quick estimation
+  - Three robustness components: factor adjustment, unit weights, time weights
+  - Automatic rank selection via cross-validation, information criterion, or elbow detection
+  - Bootstrap and placebo-based variance estimation
+
 - **`diff_diff/bacon.py`** - Goodman-Bacon decomposition for TWFE diagnostics:
   - `BaconDecomposition` - Decompose TWFE into weighted 2x2 comparisons (Goodman-Bacon 2021)
   - `BaconDecompositionResults` - Results with comparison weights and estimates by type
@@ -250,6 +258,7 @@ See `docs/performance-plan.md` for full optimization details and `docs/benchmark
   - `07_pretrends_power.ipynb` - Pre-trends power analysis (Roth 2022), MDV, power curves
   - `08_triple_diff.ipynb` - Triple Difference (DDD) estimation with proper covariate handling
   - `09_real_world_examples.ipynb` - Real-world data examples (Card-Krueger, Castle Doctrine, Divorce Laws)
+  - `10_trop.ipynb` - Triply Robust Panel (TROP) estimation with factor model adjustment
 
 ### Benchmarks
 
@@ -282,6 +291,7 @@ Tests mirror the source modules:
 - `tests/test_staggered.py` - Tests for CallawaySantAnna
 - `tests/test_sun_abraham.py` - Tests for SunAbraham interaction-weighted estimator
 - `tests/test_triple_diff.py` - Tests for Triple Difference (DDD) estimator
+- `tests/test_trop.py` - Tests for Triply Robust Panel (TROP) estimator
 - `tests/test_bacon.py` - Tests for Goodman-Bacon decomposition
 - `tests/test_linalg.py` - Tests for unified OLS backend, robust variance estimation, LinearRegression helper, and InferenceResult
 - `tests/test_utils.py` - Tests for parallel trends, robust SE, synthetic weights

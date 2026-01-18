@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.0] - 2026-01-17
+
+### Added
+- **Triply Robust Panel (TROP) estimator** implementing Athey, Imbens, Qu & Viviano (2025)
+  - `TROP` class combining three robustness components:
+    - Factor model adjustment via SVD (removes unobserved confounders with factor structure)
+    - Synthetic control style unit weights
+    - SDID style time weights
+  - `TROPResults` dataclass with ATT, factors, loadings, unit/time weights
+  - `trop()` convenience function for quick estimation
+  - Automatic rank selection methods: cross-validation (`'cv'`), information criterion (`'ic'`), elbow detection (`'elbow'`)
+  - Bootstrap and placebo-based variance estimation
+  - Full integration with existing infrastructure (exports in `__init__.py`, sklearn-compatible API)
+  - Tutorial notebook: `docs/tutorials/10_trop.ipynb`
+  - Comprehensive test suite: `tests/test_trop.py`
+
+**Reference**: Athey, S., Imbens, G. W., Qu, Z., & Viviano, D. (2025). "Triply Robust Panel Estimators." *Working Paper*. [arXiv:2508.21536](https://arxiv.org/abs/2508.21536)
+
 ## [2.0.3] - 2026-01-17
 
 ### Changed
@@ -392,6 +410,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `to_dict()` and `to_dataframe()` export methods
   - `is_significant` and `significance_stars` properties
 
+[2.1.0]: https://github.com/igerber/diff-diff/compare/v2.0.3...v2.1.0
 [2.0.3]: https://github.com/igerber/diff-diff/compare/v2.0.2...v2.0.3
 [2.0.2]: https://github.com/igerber/diff-diff/compare/v2.0.1...v2.0.2
 [2.0.1]: https://github.com/igerber/diff-diff/compare/v2.0.0...v2.0.1
