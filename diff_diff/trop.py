@@ -25,8 +25,40 @@ import numpy as np
 import pandas as pd
 from scipy import stats
 
+try:
+    from typing import TypedDict
+except ImportError:
+    from typing_extensions import TypedDict
+
 from diff_diff.results import _get_significance_stars
 from diff_diff.utils import compute_confidence_interval, compute_p_value
+
+
+class _PrecomputedStructures(TypedDict):
+    """Type definition for pre-computed structures used across LOOCV iterations.
+
+    These structures are computed once in `_precompute_structures()` and reused
+    to avoid redundant computation during LOOCV and final estimation.
+    """
+
+    unit_dist_matrix: np.ndarray
+    """Pairwise unit distance matrix (n_units x n_units)."""
+    time_dist_matrix: np.ndarray
+    """Time distance matrix where [t, s] = |t - s| (n_periods x n_periods)."""
+    control_mask: np.ndarray
+    """Boolean mask for control observations (D == 0)."""
+    treated_mask: np.ndarray
+    """Boolean mask for treated observations (D == 1)."""
+    treated_observations: List[Tuple[int, int]]
+    """List of (t, i) tuples for treated observations."""
+    control_obs: List[Tuple[int, int]]
+    """List of (t, i) tuples for valid control observations."""
+    control_unit_idx: np.ndarray
+    """Array of control unit indices."""
+    n_units: int
+    """Number of units."""
+    n_periods: int
+    """Number of time periods."""
 
 
 @dataclass
@@ -327,6 +359,11 @@ class TROP:
         Method for variance estimation: 'bootstrap' or 'jackknife'.
     n_bootstrap : int, default=200
         Number of replications for variance estimation.
+    max_loocv_samples : int, default=100
+        Maximum control observations to use in LOOCV for tuning parameter
+        selection. Subsampling is used for computational tractability as
+        noted in the paper. Increase for more precise tuning at the cost
+        of computational time.
     seed : int, optional
         Random seed for reproducibility.
 
@@ -357,6 +394,23 @@ class TROP:
     Panel Estimators. *Working Paper*. https://arxiv.org/abs/2508.21536
     """
 
+    # Class constants
+    DEFAULT_LOOCV_MAX_SAMPLES: int = 100
+    """Maximum control observations to use in LOOCV (for computational tractability).
+
+    As noted in the paper's footnote, LOOCV is subsampled for computational
+    tractability. This constant controls the maximum number of control observations
+    used in each LOOCV evaluation. Increase for more precise tuning at the cost
+    of computational time.
+    """
+
+    CONVERGENCE_TOL_SVD: float = 1e-10
+    """Tolerance for singular value truncation in soft-thresholding.
+
+    Singular values below this threshold after soft-thresholding are treated
+    as zero to improve numerical stability.
+    """
+
     def __init__(
         self,
         lambda_time_grid: Optional[List[float]] = None,
@@ -367,6 +421,7 @@ class TROP:
         alpha: float = 0.05,
         variance_method: str = 'bootstrap',
         n_bootstrap: int = 200,
+        max_loocv_samples: int = 100,
         seed: Optional[int] = None,
     ):
         # Default grids from paper
@@ -379,6 +434,7 @@ class TROP:
         self.alpha = alpha
         self.variance_method = variance_method
         self.n_bootstrap = n_bootstrap
+        self.max_loocv_samples = max_loocv_samples
         self.seed = seed
 
         # Validate parameters
@@ -395,7 +451,7 @@ class TROP:
         self._optimal_lambda: Optional[Tuple[float, float, float]] = None
 
         # Pre-computed structures (set during fit)
-        self._precomputed: Optional[Dict[str, Any]] = None
+        self._precomputed: Optional[_PrecomputedStructures] = None
 
     def _precompute_structures(
         self,
@@ -404,7 +460,7 @@ class TROP:
         control_unit_idx: np.ndarray,
         n_units: int,
         n_periods: int,
-    ) -> Dict[str, Any]:
+    ) -> _PrecomputedStructures:
         """
         Pre-compute data structures that are reused across LOOCV and estimation.
 
@@ -428,7 +484,7 @@ class TROP:
 
         Returns
         -------
-        dict
+        _PrecomputedStructures
             Pre-computed structures for efficient reuse.
         """
         # Compute pairwise unit distances (for all observation-specific weights)
@@ -481,6 +537,9 @@ class TROP:
         observations, which provides a good approximation. The exact per-observation
         distances are refined when needed.
 
+        Uses vectorized numpy operations with masked arrays for O(n²) complexity
+        but with highly optimized inner loops via numpy/BLAS.
+
         Parameters
         ----------
         Y : np.ndarray
@@ -500,27 +559,36 @@ class TROP:
         # Mask for valid observations: control periods only (D=0), non-NaN
         valid_mask = (D == 0) & ~np.isnan(Y)
 
-        # Initialize distance matrix
-        dist_matrix = np.full((n_units, n_units), np.inf)
+        # Replace invalid values with NaN for masked computation
+        Y_masked = np.where(valid_mask, Y, np.nan)
 
-        # Compute pairwise distances using vectorized operations
-        # Y has shape (n_periods, n_units)
-        # We want sqrt(mean((Y[:, i] - Y[:, j])^2)) for valid periods
+        # Transpose to (n_units, n_periods) for easier broadcasting
+        Y_T = Y_masked.T  # (n_units, n_periods)
 
-        # For each pair of units, find periods where both are valid
-        for i in range(n_units):
-            valid_i = valid_mask[:, i]
-            for j in range(i, n_units):
-                valid_j = valid_mask[:, j]
-                both_valid = valid_i & valid_j
+        # Compute pairwise squared differences using broadcasting
+        # Y_T[:, np.newaxis, :] has shape (n_units, 1, n_periods)
+        # Y_T[np.newaxis, :, :] has shape (1, n_units, n_periods)
+        # diff has shape (n_units, n_units, n_periods)
+        diff = Y_T[:, np.newaxis, :] - Y_T[np.newaxis, :, :]
+        sq_diff = diff ** 2
 
-                if np.any(both_valid):
-                    sq_diff = (Y[both_valid, i] - Y[both_valid, j]) ** 2
-                    dist = np.sqrt(np.mean(sq_diff))
-                    dist_matrix[i, j] = dist
-                    dist_matrix[j, i] = dist
+        # Count valid (non-NaN) observations per pair
+        # A difference is valid only if both units have valid observations
+        valid_diff = ~np.isnan(sq_diff)
+        n_valid = np.sum(valid_diff, axis=2)  # (n_units, n_units)
 
-        # Set diagonal to 0
+        # Compute sum of squared differences (treating NaN as 0)
+        sq_diff_sum = np.nansum(sq_diff, axis=2)  # (n_units, n_units)
+
+        # Compute RMSE distance: sqrt(sum / n_valid)
+        # Avoid division by zero
+        with np.errstate(divide='ignore', invalid='ignore'):
+            dist_matrix = np.sqrt(sq_diff_sum / n_valid)
+
+        # Set pairs with no valid observations to inf
+        dist_matrix = np.where(n_valid > 0, dist_matrix, np.inf)
+
+        # Ensure diagonal is 0 (same unit distance)
         np.fill_diagonal(dist_matrix, 0.0)
 
         return dist_matrix
@@ -970,7 +1038,7 @@ class TROP:
         s_thresh = np.maximum(s - threshold, 0)
 
         # Use truncated reconstruction with only non-zero singular values
-        nonzero_mask = s_thresh > 1e-10
+        nonzero_mask = s_thresh > self.CONVERGENCE_TOL_SVD
         if not np.any(nonzero_mask):
             return np.zeros_like(M)
 
@@ -1065,35 +1133,39 @@ class TROP:
         # Replace NaN in Y with 0 for computation (mask handles exclusion)
         Y_safe = np.where(np.isnan(Y), 0.0, Y)
 
-        # Alternating minimization
+        # Alternating minimization following Algorithm 1 (page 9)
+        # Minimize: Σ W_{ti}(Y_{ti} - α_i - β_t - L_{ti})² + λ_nn||L||_*
         for _ in range(self.max_iter):
             alpha_old = alpha.copy()
             beta_old = beta.copy()
             L_old = L.copy()
 
-            # Step 1: Update α and β (weighted means) - VECTORIZED
+            # Step 1: Update α and β (weighted least squares)
+            # Following Equation 2 (page 7), fix L and solve for α, β
             # R = Y - L (residual without fixed effects)
             R = Y_safe - L
 
-            # Alpha update: α_i = Σ_t W_{ti} (R_{ti} - β_t) / Σ_t W_{ti}
-            # Compute weighted sum of (R - β) per unit
+            # Alpha update (unit fixed effects):
+            # α_i = argmin_α Σ_t W_{ti}(R_{ti} - α - β_t)²
+            # Solution: α_i = Σ_t W_{ti}(R_{ti} - β_t) / Σ_t W_{ti}
             R_minus_beta = R - beta[:, np.newaxis]  # (n_periods, n_units)
             weighted_R_minus_beta = W_masked * R_minus_beta
             alpha_numerator = np.sum(weighted_R_minus_beta, axis=0)  # (n_units,)
             alpha = np.where(unit_has_obs, alpha_numerator / safe_unit_denom, 0.0)
 
-            # Beta update: β_t = Σ_i W_{ti} (R_{ti} - α_i) / Σ_i W_{ti}
-            # Compute weighted sum of (R - α) per period
+            # Beta update (time fixed effects):
+            # β_t = argmin_β Σ_i W_{ti}(R_{ti} - α_i - β)²
+            # Solution: β_t = Σ_i W_{ti}(R_{ti} - α_i) / Σ_i W_{ti}
             R_minus_alpha = R - alpha[np.newaxis, :]  # (n_periods, n_units)
             weighted_R_minus_alpha = W_masked * R_minus_alpha
             beta_numerator = np.sum(weighted_R_minus_alpha, axis=1)  # (n_periods,)
             beta = np.where(time_has_obs, beta_numerator / safe_time_denom, 0.0)
 
-            # Step 2: Update L with nuclear norm penalty - VECTORIZED
-            # R_for_L = Y - α - β where valid, else L (impute missing)
-            # Vectorized: broadcast alpha and beta
+            # Step 2: Update L with nuclear norm penalty
+            # Following Equation 2 (page 7): L = prox_{λ_nn||·||_*}(Y - α - β)
+            # The proximal operator for nuclear norm is soft-thresholding of SVD
             R_for_L = Y_safe - alpha[np.newaxis, :] - beta[:, np.newaxis]
-            # Impute invalid observations with current L
+            # Impute invalid observations with current L for stable SVD
             R_for_L = np.where(valid_mask, R_for_L, L)
 
             L = self._soft_threshold_svd(R_for_L, lambda_nn)
@@ -1168,7 +1240,7 @@ class TROP:
 
         # Subsample for computational tractability (as noted in paper's footnote)
         rng = np.random.default_rng(self.seed)
-        max_loocv = min(100, len(control_obs))
+        max_loocv = min(self.max_loocv_samples, len(control_obs))
         if len(control_obs) > max_loocv:
             indices = rng.choice(len(control_obs), size=max_loocv, replace=False)
             control_obs = [control_obs[idx] for idx in indices]
@@ -1463,6 +1535,7 @@ class TROP:
             "alpha": self.alpha,
             "variance_method": self.variance_method,
             "n_bootstrap": self.n_bootstrap,
+            "max_loocv_samples": self.max_loocv_samples,
             "seed": self.seed,
         }
 
