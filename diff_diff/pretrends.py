@@ -224,18 +224,22 @@ class PreTrendsPowerResults:
         n_pre = self.n_pre_periods
 
         # Reconstruct violation weights based on violation type
+        # Must match PreTrendsPower._get_violation_weights() exactly
         if self.violation_type == "linear":
-            weights = np.arange(1, n_pre + 1).astype(float)
+            # Linear trend: weights decrease toward treatment
+            # [n-1, n-2, ..., 1, 0] for n pre-periods
+            weights = np.arange(-n_pre + 1, 1, dtype=float)
+            weights = -weights  # Now [n-1, n-2, ..., 1, 0]
         elif self.violation_type == "constant":
             weights = np.ones(n_pre)
         elif self.violation_type == "last_period":
             weights = np.zeros(n_pre)
             weights[-1] = 1.0
         else:
-            # For custom, we can't reconstruct - use equal weights
+            # For custom, we can't reconstruct - use equal weights as fallback
             weights = np.ones(n_pre)
 
-        # Normalize weights
+        # Normalize weights to unit L2 norm
         norm = np.linalg.norm(weights)
         if norm > 0:
             weights = weights / norm
@@ -1121,7 +1125,7 @@ def compute_pretrends_power(
 def compute_mdv(
     results: Union[MultiPeriodDiDResults, Any],
     alpha: float = 0.05,
-    power: float = 0.80,
+    target_power: float = 0.80,
     violation_type: str = "linear",
     pre_periods: Optional[List[int]] = None,
 ) -> float:
@@ -1134,8 +1138,8 @@ def compute_mdv(
         Event study results.
     alpha : float, default=0.05
         Significance level.
-    power : float, default=0.80
-        Target power.
+    target_power : float, default=0.80
+        Target power for MDV calculation.
     violation_type : str, default='linear'
         Type of violation pattern.
     pre_periods : list of int, optional
@@ -1149,7 +1153,7 @@ def compute_mdv(
     """
     pt = PreTrendsPower(
         alpha=alpha,
-        power=power,
+        power=target_power,
         violation_type=violation_type,
     )
     result = pt.fit(results, pre_periods=pre_periods)
