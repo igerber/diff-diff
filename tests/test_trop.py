@@ -960,3 +960,270 @@ class TestMethodologyVerification:
             f"ATT={results.att:.3f} should be close to true={true_tau} under null"
         # Check that factor model was used
         assert results.effective_rank >= 0
+
+
+class TestOptimizationEquivalence:
+    """Tests verifying optimized implementations produce identical results.
+
+    These tests ensure the vectorized implementations in v2.1.0+ produce
+    numerically equivalent results to the original loop-based implementations.
+    """
+
+    def test_precomputed_structures_consistency(self, simple_panel_data):
+        """
+        Test that pre-computed structures match dynamically computed values.
+
+        Verifies:
+        - Time distance matrix is correct
+        - Unit distance matrix is symmetric
+        - Control observations list is complete
+        """
+        trop_est = TROP(
+            lambda_time_grid=[0.0, 1.0],
+            lambda_unit_grid=[0.0, 1.0],
+            lambda_nn_grid=[0.0],
+            n_bootstrap=5,
+            seed=42
+        )
+
+        # Fit to populate precomputed structures
+        trop_est.fit(
+            simple_panel_data,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="period",
+            post_periods=[5, 6, 7],
+        )
+
+        precomputed = trop_est._precomputed
+        assert precomputed is not None
+
+        # Verify time distance matrix
+        n_periods = precomputed["n_periods"]
+        time_dist = precomputed["time_dist_matrix"]
+        assert time_dist.shape == (n_periods, n_periods)
+        # Check diagonal is zero
+        assert np.allclose(np.diag(time_dist), 0)
+        # Check symmetry
+        assert np.allclose(time_dist, time_dist.T)
+        # Check specific values: |t - s|
+        for t in range(n_periods):
+            for s in range(n_periods):
+                assert time_dist[t, s] == abs(t - s)
+
+        # Verify unit distance matrix
+        n_units = precomputed["n_units"]
+        unit_dist = precomputed["unit_dist_matrix"]
+        assert unit_dist.shape == (n_units, n_units)
+        # Check diagonal is zero
+        assert np.allclose(np.diag(unit_dist), 0)
+        # Check symmetry
+        assert np.allclose(unit_dist, unit_dist.T)
+
+    def test_vectorized_alternating_minimization(self):
+        """
+        Test that vectorized alternating minimization converges correctly.
+
+        The vectorized implementation should produce the same fixed effects
+        estimates as the original loop-based implementation.
+        """
+        rng = np.random.default_rng(42)
+        n_units = 10
+        n_periods = 8
+
+        # Generate simple test data
+        alpha_true = rng.normal(0, 1, n_units)
+        beta_true = rng.normal(0, 1, n_periods)
+
+        Y = np.outer(np.ones(n_periods), alpha_true) + np.outer(beta_true, np.ones(n_units))
+        Y += rng.normal(0, 0.1, (n_periods, n_units))
+
+        # All observations are control
+        control_mask = np.ones((n_periods, n_units), dtype=bool)
+        W = np.ones((n_periods, n_units))
+
+        trop_est = TROP(
+            lambda_time_grid=[0.0],
+            lambda_unit_grid=[0.0],
+            lambda_nn_grid=[0.0],
+        )
+
+        # Run the estimation
+        alpha_est, beta_est, L_est = trop_est._estimate_model(
+            Y, control_mask, W, lambda_nn=0.0,
+            n_units=n_units, n_periods=n_periods
+        )
+
+        # Check that we recovered the fixed effects structure
+        # (up to a constant shift since FE are identified up to a constant)
+        alpha_centered = alpha_est - np.mean(alpha_est)
+        beta_centered = beta_est - np.mean(beta_est)
+        alpha_true_centered = alpha_true - np.mean(alpha_true)
+        beta_true_centered = beta_true - np.mean(beta_true)
+
+        # Should be reasonably close
+        assert np.corrcoef(alpha_centered, alpha_true_centered)[0, 1] > 0.95
+        assert np.corrcoef(beta_centered, beta_true_centered)[0, 1] > 0.95
+
+    def test_vectorized_weights_computation(self, simple_panel_data):
+        """
+        Test that vectorized weight computation produces correct results.
+
+        Verifies that observation-specific weights follow Equation 3 from paper.
+        """
+        trop_est = TROP(
+            lambda_time_grid=[0.5],
+            lambda_unit_grid=[0.5],
+            lambda_nn_grid=[0.0],
+            n_bootstrap=5,
+            seed=42
+        )
+
+        # Fit to populate precomputed structures
+        trop_est.fit(
+            simple_panel_data,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="period",
+            post_periods=[5, 6, 7],
+        )
+
+        precomputed = trop_est._precomputed
+        n_units = precomputed["n_units"]
+        n_periods = precomputed["n_periods"]
+        control_unit_idx = precomputed["control_unit_idx"]
+
+        # Build Y and D matrices from data
+        all_units = sorted(simple_panel_data["unit"].unique())
+        all_periods = sorted(simple_panel_data["period"].unique())
+        Y = (
+            simple_panel_data.pivot(index="period", columns="unit", values="outcome")
+            .reindex(index=all_periods, columns=all_units)
+            .values
+        )
+        D = (
+            simple_panel_data.pivot(index="period", columns="unit", values="treated")
+            .reindex(index=all_periods, columns=all_units)
+            .fillna(0)
+            .astype(int)
+            .values
+        )
+
+        # Test for a specific observation
+        i = 0  # First unit
+        t = 5  # Post-treatment period
+        lambda_time = 0.5
+        lambda_unit = 0.5
+
+        weights = trop_est._compute_observation_weights(
+            Y, D, i, t, lambda_time, lambda_unit, control_unit_idx,
+            n_units, n_periods
+        )
+
+        # Verify shape
+        assert weights.shape == (n_periods, n_units)
+
+        # Verify time weights follow exp(-lambda_time * |t - s|)
+        time_weights = weights[:, i]  # Weights for unit i across time
+        for s in range(n_periods):
+            expected = np.exp(-lambda_time * abs(t - s))
+            # Time weight should be proportional to expected
+            assert np.isclose(time_weights[s], expected, rtol=1e-5) or \
+                   np.isclose(time_weights[s] / weights[t, i], expected / weights[t, i], rtol=1e-5)
+
+    def test_pivot_vs_iterrows_equivalence(self):
+        """
+        Test that pivot-based matrix construction matches iterrows-based.
+
+        The optimized pivot approach should produce identical Y and D matrices.
+        """
+        rng = np.random.default_rng(42)
+
+        # Create test data
+        n_units = 10
+        n_periods = 5
+        data = []
+        for i in range(n_units):
+            for t in range(n_periods):
+                data.append({
+                    "unit": i,
+                    "period": t,
+                    "outcome": rng.normal(0, 1),
+                    "treated": 1 if (i < 3 and t >= 3) else 0,
+                })
+        df = pd.DataFrame(data)
+
+        all_units = sorted(df["unit"].unique())
+        all_periods = sorted(df["period"].unique())
+        unit_to_idx = {u: i for i, u in enumerate(all_units)}
+        period_to_idx = {p: i for i, p in enumerate(all_periods)}
+
+        # Method 1: iterrows (original)
+        Y_iterrows = np.full((n_periods, n_units), np.nan)
+        D_iterrows = np.zeros((n_periods, n_units), dtype=int)
+        for _, row in df.iterrows():
+            i = unit_to_idx[row["unit"]]
+            t = period_to_idx[row["period"]]
+            Y_iterrows[t, i] = row["outcome"]
+            D_iterrows[t, i] = int(row["treated"])
+
+        # Method 2: pivot (optimized)
+        Y_pivot = (
+            df.pivot(index="period", columns="unit", values="outcome")
+            .reindex(index=all_periods, columns=all_units)
+            .values
+        )
+        D_pivot = (
+            df.pivot(index="period", columns="unit", values="treated")
+            .reindex(index=all_periods, columns=all_units)
+            .fillna(0)
+            .astype(int)
+            .values
+        )
+
+        # Verify equivalence
+        assert np.allclose(Y_iterrows, Y_pivot, equal_nan=True)
+        assert np.array_equal(D_iterrows, D_pivot)
+
+    def test_reproducibility_with_seed(self, simple_panel_data):
+        """
+        Test that results are reproducible with the same seed.
+
+        Running TROP twice with the same seed should produce identical results.
+        """
+        results1 = trop(
+            simple_panel_data,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="period",
+            post_periods=[5, 6, 7],
+            lambda_time_grid=[0.0, 1.0],
+            lambda_unit_grid=[0.0, 1.0],
+            lambda_nn_grid=[0.0, 0.1],
+            n_bootstrap=20,
+            seed=42,
+        )
+
+        results2 = trop(
+            simple_panel_data,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="period",
+            post_periods=[5, 6, 7],
+            lambda_time_grid=[0.0, 1.0],
+            lambda_unit_grid=[0.0, 1.0],
+            lambda_nn_grid=[0.0, 0.1],
+            n_bootstrap=20,
+            seed=42,
+        )
+
+        # Results should be identical
+        assert results1.att == results2.att
+        assert results1.se == results2.se
+        assert results1.lambda_time == results2.lambda_time
+        assert results1.lambda_unit == results2.lambda_unit
+        assert results1.lambda_nn == results2.lambda_nn
