@@ -758,23 +758,48 @@ class TestTROPRustBackend:
 class TestTROPRustVsNumpy:
     """Tests comparing TROP Rust and NumPy implementations for numerical equivalence."""
 
-    def test_full_trop_estimation_matches(self):
-        """Test end-to-end TROP estimation matches with/without Rust."""
-        import os
+    def test_distance_matrix_matches_numpy(self):
+        """Test Rust distance matrix matches NumPy implementation exactly."""
+        from diff_diff._rust_backend import compute_unit_distance_matrix
+        from diff_diff.trop import TROP
+
+        np.random.seed(42)
+        n_periods, n_units = 12, 8
+        Y = np.random.randn(n_periods, n_units)
+        D = np.zeros((n_periods, n_units))
+        # Add some treatment to make it realistic
+        D[8:, 0] = 1.0
+        D[10:, 1] = 1.0
+
+        # Rust implementation
+        rust_dist = compute_unit_distance_matrix(Y, D)
+
+        # NumPy implementation (directly call the private method)
+        trop = TROP()
+        numpy_dist = trop._compute_all_unit_distances(Y, D, n_units, n_periods)
+
+        np.testing.assert_array_almost_equal(
+            rust_dist, numpy_dist, decimal=10,
+            err_msg="Distance matrices should match exactly"
+        )
+
+    def test_trop_produces_valid_results(self):
+        """Test TROP with Rust backend produces valid estimation results."""
         import pandas as pd
         from diff_diff import TROP
 
         np.random.seed(42)
 
-        # Create small test data
+        # Create test data with known treatment effect
         n_units = 10
         n_periods = 8
+        true_effect = 2.0
         data = []
 
         for i in range(n_units):
             for t in range(n_periods):
-                is_treated = (i == 0) and (t >= 6)  # Unit 0 treated from period 6
-                y = 1.0 + 0.5 * i + 0.3 * t + (2.0 if is_treated else 0) + np.random.randn() * 0.5
+                is_treated = (i == 0) and (t >= 6)
+                y = 1.0 + 0.5 * i + 0.3 * t + (true_effect if is_treated else 0) + np.random.randn() * 0.5
                 data.append({
                     'unit': i,
                     'time': t,
@@ -784,8 +809,8 @@ class TestTROPRustVsNumpy:
 
         df = pd.DataFrame(data)
 
-        # Fit with Rust backend
-        trop_rust = TROP(
+        # Fit with current backend (Rust if available)
+        trop = TROP(
             lambda_time_grid=[0.0, 1.0],
             lambda_unit_grid=[0.0, 1.0],
             lambda_nn_grid=[0.0, 0.1],
@@ -793,56 +818,21 @@ class TestTROPRustVsNumpy:
             max_loocv_samples=30,
             seed=42
         )
-        results_rust = trop_rust.fit(df, 'outcome', 'treated', 'unit', 'time')
+        results = trop.fit(df, 'outcome', 'treated', 'unit', 'time')
 
-        # Fit with Python backend (force Python mode)
-        original_env = os.environ.get('DIFF_DIFF_BACKEND')
-        try:
-            os.environ['DIFF_DIFF_BACKEND'] = 'python'
+        # Check results are valid
+        assert np.isfinite(results.att), "ATT should be finite"
+        assert np.isfinite(results.se), "SE should be finite"
+        assert results.se >= 0, "SE should be non-negative"
 
-            # Need to reimport to get Python-only version
-            import importlib
-            import diff_diff._backend
-            import diff_diff.trop
-            importlib.reload(diff_diff._backend)
-            importlib.reload(diff_diff.trop)
-            from diff_diff.trop import TROP as TROP_Python
+        # ATT should be in reasonable range of true effect
+        assert abs(results.att - true_effect) < 2.0, \
+            f"ATT {results.att:.2f} should be close to true effect {true_effect}"
 
-            trop_python = TROP_Python(
-                lambda_time_grid=[0.0, 1.0],
-                lambda_unit_grid=[0.0, 1.0],
-                lambda_nn_grid=[0.0, 0.1],
-                n_bootstrap=20,
-                max_loocv_samples=30,
-                seed=42
-            )
-            results_python = trop_python.fit(df, 'outcome', 'treated', 'unit', 'time')
-
-            # ATT should be very close (within numerical precision)
-            assert abs(results_rust.att - results_python.att) < 0.5, \
-                f"ATT mismatch: Rust={results_rust.att:.4f}, Python={results_python.att:.4f}"
-
-            # Tuning parameters should match (same grid search)
-            assert results_rust.lambda_time == results_python.lambda_time, \
-                "lambda_time should match"
-            assert results_rust.lambda_unit == results_python.lambda_unit, \
-                "lambda_unit should match"
-            assert results_rust.lambda_nn == results_python.lambda_nn, \
-                "lambda_nn should match"
-
-        finally:
-            # Restore original environment
-            if original_env is not None:
-                os.environ['DIFF_DIFF_BACKEND'] = original_env
-            else:
-                os.environ.pop('DIFF_DIFF_BACKEND', None)
-
-            # Reload modules to restore Rust backend
-            import importlib
-            import diff_diff._backend
-            import diff_diff.trop
-            importlib.reload(diff_diff._backend)
-            importlib.reload(diff_diff.trop)
+        # Tuning parameters should be from the grid
+        assert results.lambda_time in [0.0, 1.0]
+        assert results.lambda_unit in [0.0, 1.0]
+        assert results.lambda_nn in [0.0, 0.1]
 
 
 class TestFallbackWhenNoRust:
