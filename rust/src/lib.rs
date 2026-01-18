@@ -7,6 +7,7 @@ use pyo3::prelude::*;
 
 mod bootstrap;
 mod linalg;
+mod trop;
 mod weights;
 
 /// A Python module implemented in Rust for diff-diff acceleration.
@@ -25,6 +26,11 @@ fn _rust_backend(_py: Python, m: &PyModule) -> PyResult<()> {
     // Linear algebra operations
     m.add_function(wrap_pyfunction!(linalg::solve_ols, m)?)?;
     m.add_function(wrap_pyfunction!(linalg::compute_robust_vcov, m)?)?;
+
+    // TROP estimator acceleration
+    m.add_function(wrap_pyfunction!(trop::compute_unit_distance_matrix, m)?)?;
+    m.add_function(wrap_pyfunction!(trop::loocv_grid_search, m)?)?;
+    m.add_function(wrap_pyfunction!(trop::bootstrap_trop_variance, m)?)?;
 
     // Version info
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;

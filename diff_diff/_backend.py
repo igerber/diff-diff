@@ -23,6 +23,10 @@ try:
         project_simplex as _rust_project_simplex,
         solve_ols as _rust_solve_ols,
         compute_robust_vcov as _rust_compute_robust_vcov,
+        # TROP estimator acceleration
+        compute_unit_distance_matrix as _rust_unit_distance_matrix,
+        loocv_grid_search as _rust_loocv_grid_search,
+        bootstrap_trop_variance as _rust_bootstrap_trop_variance,
     )
     _rust_available = True
 except ImportError:
@@ -32,6 +36,10 @@ except ImportError:
     _rust_project_simplex = None
     _rust_solve_ols = None
     _rust_compute_robust_vcov = None
+    # TROP estimator acceleration
+    _rust_unit_distance_matrix = None
+    _rust_loocv_grid_search = None
+    _rust_bootstrap_trop_variance = None
 
 # Determine final backend based on environment variable and availability
 if _backend_env == 'python':
@@ -42,6 +50,10 @@ if _backend_env == 'python':
     _rust_project_simplex = None
     _rust_solve_ols = None
     _rust_compute_robust_vcov = None
+    # TROP estimator acceleration
+    _rust_unit_distance_matrix = None
+    _rust_loocv_grid_search = None
+    _rust_bootstrap_trop_variance = None
 elif _backend_env == 'rust':
     # Force Rust mode - fail if not available
     if not _rust_available:
@@ -61,4 +73,8 @@ __all__ = [
     '_rust_project_simplex',
     '_rust_solve_ols',
     '_rust_compute_robust_vcov',
+    # TROP estimator acceleration
+    '_rust_unit_distance_matrix',
+    '_rust_loocv_grid_search',
+    '_rust_bootstrap_trop_variance',
 ]
