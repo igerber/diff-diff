@@ -202,6 +202,59 @@ class PreTrendsPowerResults:
         """Convert results to DataFrame."""
         return pd.DataFrame([self.to_dict()])
 
+    def power_at(self, M: float) -> float:
+        """
+        Compute power to detect a specific violation magnitude.
+
+        This method allows computing power at different M values without
+        re-fitting the model, using the stored variance-covariance matrix.
+
+        Parameters
+        ----------
+        M : float
+            Violation magnitude to evaluate.
+
+        Returns
+        -------
+        float
+            Power to detect violation of magnitude M.
+        """
+        from scipy import stats
+
+        n_pre = self.n_pre_periods
+
+        # Reconstruct violation weights based on violation type
+        if self.violation_type == "linear":
+            weights = np.arange(1, n_pre + 1).astype(float)
+        elif self.violation_type == "constant":
+            weights = np.ones(n_pre)
+        elif self.violation_type == "last_period":
+            weights = np.zeros(n_pre)
+            weights[-1] = 1.0
+        else:
+            # For custom, we can't reconstruct - use equal weights
+            weights = np.ones(n_pre)
+
+        # Normalize weights
+        norm = np.linalg.norm(weights)
+        if norm > 0:
+            weights = weights / norm
+
+        # Compute non-centrality parameter
+        try:
+            vcov_inv = np.linalg.inv(self.vcov)
+        except np.linalg.LinAlgError:
+            vcov_inv = np.linalg.pinv(self.vcov)
+
+        # delta = M * weights
+        # nc = delta' * V^{-1} * delta
+        noncentrality = M**2 * (weights @ vcov_inv @ weights)
+
+        # Compute power using non-central chi-squared
+        power = 1 - stats.ncx2.cdf(self.critical_value, df=n_pre, nc=noncentrality)
+
+        return float(power)
+
 
 @dataclass
 class PreTrendsPowerCurve:
@@ -471,9 +524,17 @@ class PreTrendsPower:
     def _extract_pre_period_params(
         self,
         results: Union[MultiPeriodDiDResults, Any],
+        pre_periods: Optional[List[int]] = None,
     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, int]:
         """
         Extract pre-period parameters from results.
+
+        Parameters
+        ----------
+        results : MultiPeriodDiDResults or similar
+            Results object from event study estimation.
+        pre_periods : list of int, optional
+            Explicit list of pre-treatment periods. If None, uses results.pre_periods.
 
         Returns
         -------
@@ -487,13 +548,18 @@ class PreTrendsPower:
             Number of pre-periods.
         """
         if isinstance(results, MultiPeriodDiDResults):
-            # Get pre-period information
-            all_pre_periods = results.pre_periods
+            # Get pre-period information - use explicit pre_periods if provided
+            if pre_periods is not None:
+                all_pre_periods = list(pre_periods)
+            else:
+                all_pre_periods = results.pre_periods
 
             if len(all_pre_periods) == 0:
                 raise ValueError(
                     "No pre-treatment periods found in results. "
-                    "Pre-trends power analysis requires pre-period coefficients."
+                    "Pre-trends power analysis requires pre-period coefficients. "
+                    "If you estimated all periods as post_periods, use the pre_periods "
+                    "parameter to specify which are actually pre-treatment."
                 )
 
             # Only include periods with actual estimated coefficients
@@ -775,6 +841,7 @@ class PreTrendsPower:
         self,
         results: Union[MultiPeriodDiDResults, Any],
         M: Optional[float] = None,
+        pre_periods: Optional[List[int]] = None,
     ) -> PreTrendsPowerResults:
         """
         Compute pre-trends power analysis.
@@ -786,6 +853,11 @@ class PreTrendsPower:
         M : float, optional
             Specific violation magnitude to evaluate. If None, evaluates at
             a default magnitude based on the data.
+        pre_periods : list of int, optional
+            Explicit list of pre-treatment periods to use for power analysis.
+            If None, attempts to infer from results.pre_periods. Use this when
+            you've estimated an event study with all periods in post_periods
+            and need to specify which are actually pre-treatment.
 
         Returns
         -------
@@ -793,7 +865,7 @@ class PreTrendsPower:
             Power analysis results including power and MDV.
         """
         # Extract pre-period parameters
-        effects, ses, vcov, n_pre = self._extract_pre_period_params(results)
+        effects, ses, vcov, n_pre = self._extract_pre_period_params(results, pre_periods)
 
         # Get violation weights
         weights = self._get_violation_weights(n_pre)
@@ -831,6 +903,7 @@ class PreTrendsPower:
         self,
         results: Union[MultiPeriodDiDResults, Any],
         M: float,
+        pre_periods: Optional[List[int]] = None,
     ) -> float:
         """
         Compute power to detect a specific violation magnitude.
@@ -841,13 +914,15 @@ class PreTrendsPower:
             Event study results.
         M : float
             Violation magnitude.
+        pre_periods : list of int, optional
+            Explicit list of pre-treatment periods. See fit() for details.
 
         Returns
         -------
         float
             Power to detect violation of magnitude M.
         """
-        result = self.fit(results, M=M)
+        result = self.fit(results, M=M, pre_periods=pre_periods)
         return result.power
 
     def power_curve(
@@ -855,6 +930,7 @@ class PreTrendsPower:
         results: Union[MultiPeriodDiDResults, Any],
         M_grid: Optional[List[float]] = None,
         n_points: int = 50,
+        pre_periods: Optional[List[int]] = None,
     ) -> PreTrendsPowerCurve:
         """
         Compute power across a range of violation magnitudes.
@@ -868,6 +944,8 @@ class PreTrendsPower:
             automatic grid from 0 to 2.5 * MDV.
         n_points : int, default=50
             Number of points in automatic grid.
+        pre_periods : list of int, optional
+            Explicit list of pre-treatment periods. See fit() for details.
 
         Returns
         -------
@@ -875,7 +953,7 @@ class PreTrendsPower:
             Power curve data with plot method.
         """
         # Extract parameters
-        effects, ses, vcov, n_pre = self._extract_pre_period_params(results)
+        _, ses, vcov, n_pre = self._extract_pre_period_params(results, pre_periods)
         weights = self._get_violation_weights(n_pre)
 
         # Compute MDV
@@ -906,6 +984,7 @@ class PreTrendsPower:
     def sensitivity_to_honest_did(
         self,
         results: Union[MultiPeriodDiDResults, Any],
+        pre_periods: Optional[List[int]] = None,
     ) -> Dict[str, Any]:
         """
         Compare pre-trends power analysis with HonestDiD sensitivity.
@@ -917,6 +996,8 @@ class PreTrendsPower:
         ----------
         results : results object
             Event study results.
+        pre_periods : list of int, optional
+            Explicit list of pre-treatment periods. See fit() for details.
 
         Returns
         -------
@@ -926,7 +1007,7 @@ class PreTrendsPower:
             - honest_M_at_mdv: Corresponding M value for HonestDiD
             - interpretation: Text explaining the relationship
         """
-        pt_results = self.fit(results)
+        pt_results = self.fit(results, pre_periods=pre_periods)
         mdv = pt_results.mdv
 
         # The MDV represents the size of violation the test could detect
@@ -993,6 +1074,7 @@ def compute_pretrends_power(
     alpha: float = 0.05,
     target_power: float = 0.80,
     violation_type: str = "linear",
+    pre_periods: Optional[List[int]] = None,
 ) -> PreTrendsPowerResults:
     """
     Convenience function for pre-trends power analysis.
@@ -1009,6 +1091,9 @@ def compute_pretrends_power(
         Target power for MDV calculation.
     violation_type : str, default='linear'
         Type of violation pattern.
+    pre_periods : list of int, optional
+        Explicit list of pre-treatment periods. If None, attempts to infer
+        from results. Use when you've estimated all periods as post_periods.
 
     Returns
     -------
@@ -1021,7 +1106,7 @@ def compute_pretrends_power(
     >>> from diff_diff.pretrends import compute_pretrends_power
     >>>
     >>> results = MultiPeriodDiD().fit(data, ...)
-    >>> power_results = compute_pretrends_power(results)
+    >>> power_results = compute_pretrends_power(results, pre_periods=[0, 1, 2, 3])
     >>> print(f"MDV: {power_results.mdv:.3f}")
     >>> print(f"Power: {power_results.power:.1%}")
     """
@@ -1030,14 +1115,15 @@ def compute_pretrends_power(
         power=target_power,
         violation_type=violation_type,
     )
-    return pt.fit(results, M=M)
+    return pt.fit(results, M=M, pre_periods=pre_periods)
 
 
 def compute_mdv(
     results: Union[MultiPeriodDiDResults, Any],
     alpha: float = 0.05,
-    target_power: float = 0.80,
+    power: float = 0.80,
     violation_type: str = "linear",
+    pre_periods: Optional[List[int]] = None,
 ) -> float:
     """
     Compute minimum detectable violation.
@@ -1048,10 +1134,13 @@ def compute_mdv(
         Event study results.
     alpha : float, default=0.05
         Significance level.
-    target_power : float, default=0.80
+    power : float, default=0.80
         Target power.
     violation_type : str, default='linear'
         Type of violation pattern.
+    pre_periods : list of int, optional
+        Explicit list of pre-treatment periods. If None, attempts to infer
+        from results. Use when you've estimated all periods as post_periods.
 
     Returns
     -------
@@ -1060,8 +1149,8 @@ def compute_mdv(
     """
     pt = PreTrendsPower(
         alpha=alpha,
-        power=target_power,
+        power=power,
         violation_type=violation_type,
     )
-    result = pt.fit(results)
+    result = pt.fit(results, pre_periods=pre_periods)
     return result.mdv

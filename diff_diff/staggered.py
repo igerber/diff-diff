@@ -1053,6 +1053,10 @@ class CallawaySantAnna:
         df[time] = pd.to_numeric(df[time])
         df[first_treat] = pd.to_numeric(df[first_treat])
 
+        # Standardize the first_treat column name for internal use
+        # This avoids hardcoding column names in internal methods
+        df['first_treat'] = df[first_treat]
+
         # Identify groups and time periods
         time_periods = sorted(df[time].unique())
         treatment_groups = sorted([g for g in df[first_treat].unique() if g > 0])
