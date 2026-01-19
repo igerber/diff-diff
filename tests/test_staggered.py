@@ -7,6 +7,7 @@ import pandas as pd
 import pytest
 
 from diff_diff import CallawaySantAnna, CallawaySantAnnaResults
+from diff_diff.prep import generate_staggered_data as _generate_staggered_data
 
 
 def generate_staggered_data(
@@ -17,58 +18,32 @@ def generate_staggered_data(
     never_treated_frac: float = 0.3,
     seed: int = 42,
 ) -> pd.DataFrame:
-    """Generate synthetic staggered adoption data."""
-    np.random.seed(seed)
+    """
+    Generate synthetic staggered adoption data for tests.
 
-    # Generate unit and time identifiers
-    units = np.repeat(np.arange(n_units), n_periods)
-    times = np.tile(np.arange(n_periods), n_units)
+    Wrapper around the library function to maintain backward compatibility
+    with test signatures (uses 'time' column instead of 'period').
+    """
+    # Compute cohort periods based on n_cohorts
+    cohort_periods = np.linspace(3, n_periods - 2, n_cohorts).astype(int).tolist()
 
-    # Assign treatment cohorts
-    # Some units never treated, others treated in different periods
-    n_never = int(n_units * never_treated_frac)
-    n_treated = n_units - n_never
-
-    # Treatment periods start from period 3 onwards
-    cohort_periods = np.linspace(3, n_periods - 2, n_cohorts).astype(int)
-
-    first_treat = np.zeros(n_units)
-    if n_treated > 0:
-        cohort_assignments = np.random.choice(len(cohort_periods), size=n_treated)
-        first_treat[n_never:] = cohort_periods[cohort_assignments]
-
-    first_treat_expanded = np.repeat(first_treat, n_periods)
-
-    # Generate outcomes
-    # Y = unit_fe + time_fe + treatment_effect * post + noise
-    unit_fe = np.random.randn(n_units) * 2
-    time_fe = np.linspace(0, 1, n_periods)
-
-    unit_fe_expanded = np.repeat(unit_fe, n_periods)
-    time_fe_expanded = np.tile(time_fe, n_units)
-
-    # Treatment indicator
-    post = (times >= first_treat_expanded) & (first_treat_expanded > 0)
-
-    # Dynamic treatment effects (effect grows over time)
-    relative_time = times - first_treat_expanded
-    dynamic_effect = treatment_effect * (1 + 0.1 * np.maximum(relative_time, 0))
-
-    outcomes = (
-        unit_fe_expanded +
-        time_fe_expanded +
-        dynamic_effect * post +
-        np.random.randn(len(units)) * 0.5
+    data = _generate_staggered_data(
+        n_units=n_units,
+        n_periods=n_periods,
+        cohort_periods=cohort_periods,
+        never_treated_frac=never_treated_frac,
+        treatment_effect=treatment_effect,
+        dynamic_effects=True,
+        effect_growth=0.1,
+        unit_fe_sd=2.0,
+        noise_sd=0.5,
+        seed=seed,
     )
 
-    df = pd.DataFrame({
-        'unit': units,
-        'time': times,
-        'outcome': outcomes,
-        'first_treat': first_treat_expanded.astype(int),
-    })
+    # Rename 'period' to 'time' for backward compatibility with existing tests
+    data = data.rename(columns={"period": "time"})
 
-    return df
+    return data
 
 
 class TestCallawaySantAnna:

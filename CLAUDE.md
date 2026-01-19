@@ -195,7 +195,12 @@ pytest tests/test_rust_backend.py -v
   - Integrates with HonestDiD for comprehensive sensitivity analysis
 
 - **`diff_diff/prep.py`** - Data preparation utilities:
-  - `generate_did_data` - Create synthetic data with known treatment effect
+  - `generate_did_data` - Create synthetic data with known treatment effect (basic 2x2 DiD)
+  - `generate_staggered_data` - Staggered adoption data for CallawaySantAnna/SunAbraham
+  - `generate_factor_data` - Factor model data for TROP/SyntheticDiD
+  - `generate_ddd_data` - Triple Difference (DDD) design data
+  - `generate_panel_data` - Panel data with optional parallel trends violations
+  - `generate_event_study_data` - Event study data with simultaneous treatment
   - `make_treatment_indicator`, `make_post_indicator` - Create binary indicators
   - `wide_to_long`, `balance_panel` - Panel data reshaping
   - `validate_did_data`, `summarize_did_data` - Data validation and summary

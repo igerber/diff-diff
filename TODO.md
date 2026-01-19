@@ -92,6 +92,21 @@ Enhancements for `honest_did.py`:
 
 ---
 
+## RuntimeWarnings in Linear Algebra Operations
+
+Pre-existing RuntimeWarnings in matrix operations that should be investigated:
+
+- [ ] `linalg.py:162` - "divide by zero", "overflow", "invalid value" in fitted value computation
+  - Occurs during `X @ coefficients` when coefficients contain extreme values
+  - Seen in test_prep.py during treatment effect recovery tests
+- [ ] `triple_diff.py:307,323` - Similar warnings in propensity score computation
+  - Occurs in IPW and DR estimation methods with covariates
+  - Related to logistic regression overflow in edge cases
+
+**Note**: These warnings do not affect correctness of results but should be handled gracefully (e.g., with `np.errstate` context managers or input validation).
+
+---
+
 ## Rust Backend Optimizations
 
 Deferred from PR #58 code review (completed in v2.0.3):

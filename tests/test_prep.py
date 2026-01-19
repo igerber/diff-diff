@@ -792,3 +792,382 @@ class TestRankControlUnits:
         assert result["unit"].iloc[0] == single_control
         # Single control should get score of 1.0 (best possible)
         assert result["quality_score"].iloc[0] == 1.0
+
+
+class TestGenerateStaggeredData:
+    """Tests for generate_staggered_data function."""
+
+    def test_basic_generation(self):
+        """Test basic staggered data generation."""
+        from diff_diff.prep import generate_staggered_data
+
+        data = generate_staggered_data(n_units=50, n_periods=8, seed=42)
+        assert len(data) == 400  # 50 units x 8 periods
+        assert set(data.columns) == {
+            "unit", "period", "outcome", "first_treat", "treated", "treat", "true_effect"
+        }
+
+    def test_never_treated_fraction(self):
+        """Test that never_treated_frac is respected."""
+        from diff_diff.prep import generate_staggered_data
+
+        data = generate_staggered_data(n_units=100, never_treated_frac=0.3, seed=42)
+        n_never = (data.groupby("unit")["first_treat"].first() == 0).sum()
+        assert n_never == 30
+
+    def test_cohort_periods(self):
+        """Test custom cohort periods."""
+        from diff_diff.prep import generate_staggered_data
+
+        data = generate_staggered_data(
+            n_units=100, n_periods=10, cohort_periods=[4, 6], seed=42
+        )
+        cohorts = data.groupby("unit")["first_treat"].first().unique()
+        assert set(cohorts) == {0, 4, 6}
+
+    def test_treatment_effect_direction(self):
+        """Test that treatment effect is positive."""
+        from diff_diff.prep import generate_staggered_data
+
+        data = generate_staggered_data(
+            n_units=100, treatment_effect=3.0, noise_sd=0.1, seed=42
+        )
+        # Treated observations should have positive true_effect
+        treated_effects = data[data["treated"] == 1]["true_effect"]
+        assert (treated_effects > 0).all()
+
+    def test_dynamic_effects(self):
+        """Test dynamic treatment effects."""
+        from diff_diff.prep import generate_staggered_data
+
+        data = generate_staggered_data(
+            n_units=50, n_periods=10, treatment_effect=2.0,
+            dynamic_effects=True, effect_growth=0.1, seed=42
+        )
+        # Effects should grow over time since treatment
+        # Check a treated unit
+        treated_units = data[data["treat"] == 1]["unit"].unique()
+        unit_data = data[data["unit"] == treated_units[0]].sort_values("period")
+        first_treat = unit_data["first_treat"].iloc[0]
+        effects = unit_data[unit_data["period"] >= first_treat]["true_effect"].values
+        # Effects should be increasing (with dynamic effects)
+        assert all(effects[i] <= effects[i + 1] for i in range(len(effects) - 1))
+
+    def test_reproducibility(self):
+        """Test seed produces reproducible data."""
+        from diff_diff.prep import generate_staggered_data
+
+        data1 = generate_staggered_data(seed=123)
+        data2 = generate_staggered_data(seed=123)
+        pd.testing.assert_frame_equal(data1, data2)
+
+    def test_invalid_cohort_period(self):
+        """Test error on invalid cohort period."""
+        from diff_diff.prep import generate_staggered_data
+
+        with pytest.raises(ValueError, match="must be between"):
+            generate_staggered_data(n_periods=10, cohort_periods=[0, 5])  # 0 invalid
+
+        with pytest.raises(ValueError, match="must be between"):
+            generate_staggered_data(n_periods=10, cohort_periods=[5, 10])  # 10 invalid
+
+
+class TestGenerateFactorData:
+    """Tests for generate_factor_data function."""
+
+    def test_basic_generation(self):
+        """Test basic factor data generation."""
+        from diff_diff.prep import generate_factor_data
+
+        data = generate_factor_data(n_units=30, n_pre=8, n_post=4, n_treated=5, seed=42)
+        assert len(data) == 360  # 30 units x 12 periods
+        assert set(data.columns) == {
+            "unit", "period", "outcome", "treated", "treat", "true_effect"
+        }
+
+    def test_treated_units_count(self):
+        """Test that n_treated is respected."""
+        from diff_diff.prep import generate_factor_data
+
+        data = generate_factor_data(n_units=50, n_treated=10, seed=42)
+        n_treated = data.groupby("unit")["treat"].first().sum()
+        assert n_treated == 10
+
+    def test_treatment_in_post_only(self):
+        """Test that treatment indicator is 1 only in post-treatment."""
+        from diff_diff.prep import generate_factor_data
+
+        data = generate_factor_data(n_pre=10, n_post=5, n_treated=10, seed=42)
+        # Pre-treatment observations should have treated=0
+        pre_data = data[data["period"] < 10]
+        assert (pre_data["treated"] == 0).all()
+
+    def test_treatment_effect_recovery(self):
+        """Test that treatment effect can be roughly recovered."""
+        from diff_diff.prep import generate_factor_data
+
+        true_effect = 3.0
+        data = generate_factor_data(
+            n_units=100, n_pre=10, n_post=5, n_treated=30,
+            treatment_effect=true_effect, noise_sd=0.1, factor_strength=0.1,
+            seed=42
+        )
+        # Simple DiD on treated vs control, post vs pre
+        treated_post = data[(data["treat"] == 1) & (data["period"] >= 10)]["outcome"].mean()
+        treated_pre = data[(data["treat"] == 1) & (data["period"] < 10)]["outcome"].mean()
+        control_post = data[(data["treat"] == 0) & (data["period"] >= 10)]["outcome"].mean()
+        control_pre = data[(data["treat"] == 0) & (data["period"] < 10)]["outcome"].mean()
+        did_estimate = (treated_post - treated_pre) - (control_post - control_pre)
+        # With low noise and factor strength, should be reasonably close
+        assert abs(did_estimate - true_effect) < 2.0
+
+    def test_reproducibility(self):
+        """Test seed produces reproducible data."""
+        from diff_diff.prep import generate_factor_data
+
+        data1 = generate_factor_data(seed=123)
+        data2 = generate_factor_data(seed=123)
+        pd.testing.assert_frame_equal(data1, data2)
+
+    def test_invalid_n_treated(self):
+        """Test error on invalid n_treated."""
+        from diff_diff.prep import generate_factor_data
+
+        with pytest.raises(ValueError, match="cannot exceed"):
+            generate_factor_data(n_units=10, n_treated=20)
+
+        with pytest.raises(ValueError, match="at least 1"):
+            generate_factor_data(n_units=10, n_treated=0)
+
+
+class TestGenerateDddData:
+    """Tests for generate_ddd_data function."""
+
+    def test_basic_generation(self):
+        """Test basic DDD data generation."""
+        from diff_diff.prep import generate_ddd_data
+
+        data = generate_ddd_data(n_per_cell=50, seed=42)
+        assert len(data) == 400  # 50 x 8 cells
+        expected_cols = {"outcome", "group", "partition", "time", "unit_id", "true_effect"}
+        assert expected_cols.issubset(set(data.columns))
+
+    def test_cell_structure(self):
+        """Test that all 8 cells have correct counts."""
+        from diff_diff.prep import generate_ddd_data
+
+        data = generate_ddd_data(n_per_cell=100, seed=42)
+        cell_counts = data.groupby(["group", "partition", "time"]).size()
+        assert len(cell_counts) == 8
+        assert (cell_counts == 100).all()
+
+    def test_treatment_effect_location(self):
+        """Test that true_effect is only non-zero for G=1, P=1, T=1."""
+        from diff_diff.prep import generate_ddd_data
+
+        data = generate_ddd_data(n_per_cell=50, treatment_effect=5.0, seed=42)
+        # Only G=1, P=1, T=1 should have non-zero true_effect
+        treated = data[(data["group"] == 1) & (data["partition"] == 1) & (data["time"] == 1)]
+        not_treated = data[~((data["group"] == 1) & (data["partition"] == 1) & (data["time"] == 1))]
+
+        assert (treated["true_effect"] == 5.0).all()
+        assert (not_treated["true_effect"] == 0.0).all()
+
+    def test_with_covariates(self):
+        """Test data generation with covariates."""
+        from diff_diff.prep import generate_ddd_data
+
+        data = generate_ddd_data(n_per_cell=50, add_covariates=True, seed=42)
+        assert "age" in data.columns
+        assert "education" in data.columns
+
+    def test_without_covariates(self):
+        """Test data generation without covariates."""
+        from diff_diff.prep import generate_ddd_data
+
+        data = generate_ddd_data(n_per_cell=50, add_covariates=False, seed=42)
+        assert "age" not in data.columns
+        assert "education" not in data.columns
+
+    def test_treatment_effect_recovery(self):
+        """Test that treatment effect can be recovered with DDD."""
+        from diff_diff.prep import generate_ddd_data
+
+        true_effect = 3.0
+        data = generate_ddd_data(n_per_cell=200, treatment_effect=true_effect, noise_sd=0.5, seed=42)
+
+        # Manual DDD calculation
+        y_111 = data[(data["group"] == 1) & (data["partition"] == 1) & (data["time"] == 1)]["outcome"].mean()
+        y_110 = data[(data["group"] == 1) & (data["partition"] == 1) & (data["time"] == 0)]["outcome"].mean()
+        y_101 = data[(data["group"] == 1) & (data["partition"] == 0) & (data["time"] == 1)]["outcome"].mean()
+        y_100 = data[(data["group"] == 1) & (data["partition"] == 0) & (data["time"] == 0)]["outcome"].mean()
+        y_011 = data[(data["group"] == 0) & (data["partition"] == 1) & (data["time"] == 1)]["outcome"].mean()
+        y_010 = data[(data["group"] == 0) & (data["partition"] == 1) & (data["time"] == 0)]["outcome"].mean()
+        y_001 = data[(data["group"] == 0) & (data["partition"] == 0) & (data["time"] == 1)]["outcome"].mean()
+        y_000 = data[(data["group"] == 0) & (data["partition"] == 0) & (data["time"] == 0)]["outcome"].mean()
+
+        manual_ddd = (y_111 - y_110) - (y_101 - y_100) - (y_011 - y_010) + (y_001 - y_000)
+        assert abs(manual_ddd - true_effect) < 0.5
+
+    def test_reproducibility(self):
+        """Test seed produces reproducible data."""
+        from diff_diff.prep import generate_ddd_data
+
+        data1 = generate_ddd_data(seed=123)
+        data2 = generate_ddd_data(seed=123)
+        pd.testing.assert_frame_equal(data1, data2)
+
+
+class TestGeneratePanelData:
+    """Tests for generate_panel_data function."""
+
+    def test_basic_generation(self):
+        """Test basic panel data generation."""
+        from diff_diff.prep import generate_panel_data
+
+        data = generate_panel_data(n_units=50, n_periods=6, seed=42)
+        assert len(data) == 300  # 50 units x 6 periods
+        assert set(data.columns) == {
+            "unit", "period", "treated", "post", "outcome", "true_effect"
+        }
+
+    def test_treatment_fraction(self):
+        """Test that treatment_fraction is respected."""
+        from diff_diff.prep import generate_panel_data
+
+        data = generate_panel_data(n_units=100, treatment_fraction=0.4, seed=42)
+        n_treated_units = data.groupby("unit")["treated"].first().sum()
+        assert n_treated_units == 40
+
+    def test_treatment_period(self):
+        """Test that treatment_period is respected."""
+        from diff_diff.prep import generate_panel_data
+
+        data = generate_panel_data(n_periods=10, treatment_period=5, seed=42)
+        # Post should be 1 for periods >= 5
+        assert (data[data["period"] < 5]["post"] == 0).all()
+        assert (data[data["period"] >= 5]["post"] == 1).all()
+
+    def test_parallel_trends(self):
+        """Test data generation with parallel trends."""
+        from diff_diff.prep import generate_panel_data
+
+        data = generate_panel_data(
+            n_units=200, n_periods=8, parallel_trends=True, noise_sd=0.1, seed=42
+        )
+        # Calculate pre-treatment trends
+        pre_data = data[data["post"] == 0]
+        treated_trend = pre_data[pre_data["treated"] == 1].groupby("period")["outcome"].mean()
+        control_trend = pre_data[pre_data["treated"] == 0].groupby("period")["outcome"].mean()
+
+        # Calculate slopes
+        treated_slope = np.polyfit(treated_trend.index, treated_trend.values, 1)[0]
+        control_slope = np.polyfit(control_trend.index, control_trend.values, 1)[0]
+
+        # Slopes should be similar (parallel trends)
+        assert abs(treated_slope - control_slope) < 0.5
+
+    def test_non_parallel_trends(self):
+        """Test data generation with trend violation."""
+        from diff_diff.prep import generate_panel_data
+
+        data = generate_panel_data(
+            n_units=200, n_periods=8, parallel_trends=False,
+            trend_violation=1.0, noise_sd=0.1, seed=42
+        )
+        # Calculate pre-treatment trends
+        pre_data = data[data["post"] == 0]
+        treated_trend = pre_data[pre_data["treated"] == 1].groupby("period")["outcome"].mean()
+        control_trend = pre_data[pre_data["treated"] == 0].groupby("period")["outcome"].mean()
+
+        # Calculate slopes
+        treated_slope = np.polyfit(treated_trend.index, treated_trend.values, 1)[0]
+        control_slope = np.polyfit(control_trend.index, control_trend.values, 1)[0]
+
+        # Treated slope should be steeper (trend violation)
+        assert treated_slope > control_slope + 0.5
+
+    def test_reproducibility(self):
+        """Test seed produces reproducible data."""
+        from diff_diff.prep import generate_panel_data
+
+        data1 = generate_panel_data(seed=123)
+        data2 = generate_panel_data(seed=123)
+        pd.testing.assert_frame_equal(data1, data2)
+
+    def test_invalid_treatment_period(self):
+        """Test error on invalid treatment_period."""
+        from diff_diff.prep import generate_panel_data
+
+        with pytest.raises(ValueError, match="at least 1"):
+            generate_panel_data(n_periods=10, treatment_period=0)
+
+        with pytest.raises(ValueError, match="less than n_periods"):
+            generate_panel_data(n_periods=10, treatment_period=10)
+
+
+class TestGenerateEventStudyData:
+    """Tests for generate_event_study_data function."""
+
+    def test_basic_generation(self):
+        """Test basic event study data generation."""
+        from diff_diff.prep import generate_event_study_data
+
+        data = generate_event_study_data(n_units=100, n_pre=5, n_post=5, seed=42)
+        assert len(data) == 1000  # 100 units x 10 periods
+        assert set(data.columns) == {
+            "unit", "period", "treated", "post", "outcome", "event_time", "true_effect"
+        }
+
+    def test_event_time(self):
+        """Test that event_time is correctly calculated."""
+        from diff_diff.prep import generate_event_study_data
+
+        data = generate_event_study_data(n_pre=5, n_post=5, seed=42)
+        # Event time should range from -5 to 4
+        assert data["event_time"].min() == -5
+        assert data["event_time"].max() == 4
+
+    def test_treatment_at_correct_period(self):
+        """Test that treatment starts at period n_pre."""
+        from diff_diff.prep import generate_event_study_data
+
+        data = generate_event_study_data(n_pre=4, n_post=3, seed=42)
+        # Post should be 1 for periods >= 4
+        assert (data[data["period"] < 4]["post"] == 0).all()
+        assert (data[data["period"] >= 4]["post"] == 1).all()
+
+    def test_treatment_effect_recovery(self):
+        """Test that treatment effect can be recovered."""
+        from diff_diff.prep import generate_event_study_data
+
+        true_effect = 4.0
+        data = generate_event_study_data(
+            n_units=500, n_pre=5, n_post=5, treatment_effect=true_effect,
+            noise_sd=0.5, seed=42
+        )
+
+        # Simple DiD
+        treated_post = data[(data["treated"] == 1) & (data["post"] == 1)]["outcome"].mean()
+        treated_pre = data[(data["treated"] == 1) & (data["post"] == 0)]["outcome"].mean()
+        control_post = data[(data["treated"] == 0) & (data["post"] == 1)]["outcome"].mean()
+        control_pre = data[(data["treated"] == 0) & (data["post"] == 0)]["outcome"].mean()
+        did_estimate = (treated_post - treated_pre) - (control_post - control_pre)
+
+        assert abs(did_estimate - true_effect) < 1.0
+
+    def test_reproducibility(self):
+        """Test seed produces reproducible data."""
+        from diff_diff.prep import generate_event_study_data
+
+        data1 = generate_event_study_data(seed=123)
+        data2 = generate_event_study_data(seed=123)
+        pd.testing.assert_frame_equal(data1, data2)
+
+    def test_treatment_fraction(self):
+        """Test that treatment_fraction is respected."""
+        from diff_diff.prep import generate_event_study_data
+
+        data = generate_event_study_data(n_units=100, treatment_fraction=0.4, seed=42)
+        n_treated_units = data.groupby("unit")["treated"].first().sum()
+        assert n_treated_units == 40

@@ -6,6 +6,7 @@ import pytest
 
 from diff_diff import SyntheticDiD
 from diff_diff.trop import TROP, TROPResults, trop
+from diff_diff.prep import generate_factor_data
 
 
 def generate_factor_dgp(
@@ -22,54 +23,24 @@ def generate_factor_dgp(
     """
     Generate panel data with known factor structure.
 
-    DGP: Y_it = mu + gamma_i + delta_t + Lambda_i'F_t + tau*D_it + eps_it
+    Wrapper around the library function for backward compatibility with tests.
     """
-    rng = np.random.default_rng(seed)
+    data = generate_factor_data(
+        n_units=n_units,
+        n_pre=n_pre,
+        n_post=n_post,
+        n_treated=n_treated,
+        n_factors=n_factors,
+        treatment_effect=treatment_effect,
+        factor_strength=factor_strength,
+        treated_loading_shift=0.5,
+        unit_fe_sd=1.0,
+        noise_sd=noise_std,
+        seed=seed,
+    )
 
-    n_control = n_units - n_treated
-    n_periods = n_pre + n_post
-
-    # Generate factors F: (n_periods, n_factors)
-    F = rng.normal(0, 1, (n_periods, n_factors))
-
-    # Generate loadings Lambda: (n_factors, n_units)
-    Lambda = rng.normal(0, 1, (n_factors, n_units))
-    Lambda[:, :n_treated] += 0.5
-
-    # Unit fixed effects
-    gamma = rng.normal(0, 1, n_units)
-    gamma[:n_treated] += 1.0
-
-    # Time fixed effects
-    delta = np.linspace(0, 2, n_periods)
-
-    # Generate outcomes
-    data = []
-    for i in range(n_units):
-        is_treated = i < n_treated
-
-        for t in range(n_periods):
-            period = t
-            post = t >= n_pre
-
-            y = 10.0 + gamma[i] + delta[t]
-            y += factor_strength * (Lambda[:, i] @ F[t, :])
-
-            # Treatment effect only for treated units in post period
-            treatment_indicator = 1 if (is_treated and post) else 0
-            if treatment_indicator:
-                y += treatment_effect
-
-            y += rng.normal(0, noise_std)
-
-            data.append({
-                "unit": i,
-                "period": period,
-                "outcome": y,
-                "treated": treatment_indicator,
-            })
-
-    return pd.DataFrame(data)
+    # Return only the columns the tests expect
+    return data[["unit", "period", "outcome", "treated"]]
 
 
 @pytest.fixture

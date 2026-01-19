@@ -19,6 +19,9 @@ from diff_diff.triple_diff import (
     triple_difference,
 )
 
+# Note: The library exports generate_ddd_data in diff_diff.prep, but tests use
+# a local implementation with test-specific parameter names and covariate handling.
+
 
 # =============================================================================
 # Fixtures for test data generation
@@ -36,25 +39,8 @@ def generate_ddd_data(
     """
     Generate synthetic DDD data with known treatment effect.
 
-    Parameters
-    ----------
-    n_per_cell : int
-        Number of observations per cell (8 cells total).
-    true_att : float
-        True average treatment effect on the treated.
-    noise_sd : float
-        Standard deviation of outcome noise.
-    seed : int
-        Random seed for reproducibility.
-    add_covariates : bool
-        Whether to add covariates that affect the outcome.
-    covariate_effect : float
-        Effect size of covariates on outcome.
-
-    Returns
-    -------
-    pd.DataFrame
-        Synthetic DDD data with known ATT.
+    This is a test-specific implementation that maintains backward compatibility
+    with existing tests. For general use, prefer diff_diff.prep.generate_ddd_data.
     """
     rng = np.random.default_rng(seed)
 
