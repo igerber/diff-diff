@@ -657,11 +657,8 @@ class TestTROPRustBackend:
         D[6:, 0] = 1.0
 
         control_mask = (D == 0).astype(np.uint8)
-        control_unit_idx = np.array([1, 2, 3, 4, 5], dtype=np.int64)
 
-        # Compute distance matrices
-        from diff_diff._rust_backend import compute_unit_distance_matrix
-        unit_dist = compute_unit_distance_matrix(Y, D)
+        # Compute time distance matrix
         time_dist = np.abs(
             np.arange(n_periods)[:, np.newaxis] - np.arange(n_periods)[np.newaxis, :]
         ).astype(np.int64)
@@ -671,8 +668,7 @@ class TestTROPRustBackend:
         lambda_nn = np.array([0.0, 0.1], dtype=np.float64)
 
         best_lt, best_lu, best_ln, score = loocv_grid_search(
-            Y, D, control_mask, control_unit_idx,
-            unit_dist, time_dist,
+            Y, D, control_mask, time_dist,
             lambda_time, lambda_unit, lambda_nn,
             50, 100, 1e-6, 42
         )
@@ -685,7 +681,7 @@ class TestTROPRustBackend:
 
     def test_bootstrap_variance_shape(self):
         """Test bootstrap returns correct shapes."""
-        from diff_diff._rust_backend import bootstrap_trop_variance, compute_unit_distance_matrix
+        from diff_diff._rust_backend import bootstrap_trop_variance
 
         np.random.seed(42)
         n_periods, n_units = 8, 6
@@ -694,20 +690,15 @@ class TestTROPRustBackend:
         D[6:, 0] = 1.0  # Treat unit 0 in last 2 periods
 
         control_mask = (D == 0).astype(np.uint8)
-        control_unit_idx = np.array([1, 2, 3, 4, 5], dtype=np.int64)
-        treated_t = np.array([6, 7], dtype=np.int64)
-        treated_i = np.array([0, 0], dtype=np.int64)
 
-        unit_dist = compute_unit_distance_matrix(Y, D)
+        # Compute time distance matrix
         time_dist = np.abs(
             np.arange(n_periods)[:, np.newaxis] - np.arange(n_periods)[np.newaxis, :]
         ).astype(np.int64)
 
         n_bootstrap = 20
         estimates, se = bootstrap_trop_variance(
-            Y, D, control_mask, control_unit_idx,
-            treated_t, treated_i,
-            unit_dist, time_dist,
+            Y, D, control_mask, time_dist,
             1.0, 1.0, 0.1,  # lambda values
             n_bootstrap, 100, 1e-6, 42
         )
@@ -718,7 +709,7 @@ class TestTROPRustBackend:
 
     def test_bootstrap_reproducibility(self):
         """Test bootstrap is reproducible with same seed."""
-        from diff_diff._rust_backend import bootstrap_trop_variance, compute_unit_distance_matrix
+        from diff_diff._rust_backend import bootstrap_trop_variance
 
         np.random.seed(42)
         n_periods, n_units = 8, 6
@@ -727,26 +718,19 @@ class TestTROPRustBackend:
         D[6:, 0] = 1.0
 
         control_mask = (D == 0).astype(np.uint8)
-        control_unit_idx = np.array([1, 2, 3, 4, 5], dtype=np.int64)
-        treated_t = np.array([6, 7], dtype=np.int64)
-        treated_i = np.array([0, 0], dtype=np.int64)
 
-        unit_dist = compute_unit_distance_matrix(Y, D)
+        # Compute time distance matrix
         time_dist = np.abs(
             np.arange(n_periods)[:, np.newaxis] - np.arange(n_periods)[np.newaxis, :]
         ).astype(np.int64)
 
         # Run twice with same seed
         est1, se1 = bootstrap_trop_variance(
-            Y, D, control_mask, control_unit_idx,
-            treated_t, treated_i,
-            unit_dist, time_dist,
+            Y, D, control_mask, time_dist,
             1.0, 1.0, 0.1, 20, 100, 1e-6, 42
         )
         est2, se2 = bootstrap_trop_variance(
-            Y, D, control_mask, control_unit_idx,
-            treated_t, treated_i,
-            unit_dist, time_dist,
+            Y, D, control_mask, time_dist,
             1.0, 1.0, 0.1, 20, 100, 1e-6, 42
         )
 

@@ -172,15 +172,13 @@ fn compute_pair_distance(
 /// # Returns
 /// (best_lambda_time, best_lambda_unit, best_lambda_nn, best_score)
 #[pyfunction]
-#[pyo3(signature = (y, d, control_mask, control_unit_idx, unit_dist_matrix, time_dist_matrix, lambda_time_grid, lambda_unit_grid, lambda_nn_grid, max_loocv_samples, max_iter, tol, seed))]
+#[pyo3(signature = (y, d, control_mask, time_dist_matrix, lambda_time_grid, lambda_unit_grid, lambda_nn_grid, max_loocv_samples, max_iter, tol, seed))]
 #[allow(clippy::too_many_arguments)]
 pub fn loocv_grid_search<'py>(
     _py: Python<'py>,
     y: PyReadonlyArray2<'py, f64>,
     d: PyReadonlyArray2<'py, f64>,
     control_mask: PyReadonlyArray2<'py, u8>,
-    control_unit_idx: PyReadonlyArray1<'py, i64>,
-    unit_dist_matrix: PyReadonlyArray2<'py, f64>,
     time_dist_matrix: PyReadonlyArray2<'py, i64>,
     lambda_time_grid: PyReadonlyArray1<'py, f64>,
     lambda_unit_grid: PyReadonlyArray1<'py, f64>,
@@ -193,18 +191,10 @@ pub fn loocv_grid_search<'py>(
     let y_arr = y.as_array();
     let d_arr = d.as_array();
     let control_mask_arr = control_mask.as_array();
-    let control_unit_idx_arr = control_unit_idx.as_array();
-    let unit_dist_arr = unit_dist_matrix.as_array();
     let time_dist_arr = time_dist_matrix.as_array();
     let lambda_time_vec: Vec<f64> = lambda_time_grid.as_array().to_vec();
     let lambda_unit_vec: Vec<f64> = lambda_unit_grid.as_array().to_vec();
     let lambda_nn_vec: Vec<f64> = lambda_nn_grid.as_array().to_vec();
-
-    // Convert control_unit_idx to Vec<usize>
-    let control_units: Vec<usize> = control_unit_idx_arr
-        .iter()
-        .map(|&idx| idx as usize)
-        .collect();
 
     // Get control observations for LOOCV
     let control_obs = get_control_observations(
@@ -232,8 +222,6 @@ pub fn loocv_grid_search<'py>(
                 &y_arr,
                 &d_arr,
                 &control_mask_arr,
-                &control_units,
-                &unit_dist_arr,
                 &time_dist_arr,
                 &control_obs,
                 lambda_time,
@@ -291,10 +279,8 @@ fn get_control_observations(
 /// Compute LOOCV score for a specific parameter combination.
 fn loocv_score_for_params(
     y: &ArrayView2<f64>,
-    _d: &ArrayView2<f64>,
+    d: &ArrayView2<f64>,
     control_mask: &ArrayView2<u8>,
-    control_units: &[usize],
-    unit_dist: &ArrayView2<f64>,
     time_dist: &ArrayView2<i64>,
     control_obs: &[(usize, usize)],
     lambda_time: f64,
@@ -312,14 +298,14 @@ fn loocv_score_for_params(
     for &(t, i) in control_obs {
         // Compute observation-specific weight matrix
         let weight_matrix = compute_weight_matrix(
+            y,
+            d,
             n_periods,
             n_units,
             i,
             t,
             lambda_time,
             lambda_unit,
-            control_units,
-            unit_dist,
             time_dist,
         );
 
@@ -352,46 +338,107 @@ fn loocv_score_for_params(
     }
 }
 
+/// Compute observation-specific distance from unit j to unit i, excluding target period.
+///
+/// Issue B fix: Follows Equation 3 (page 7) which specifies 1{u ≠ t} to exclude target period.
+fn compute_unit_distance_for_obs(
+    y: &ArrayView2<f64>,
+    d: &ArrayView2<f64>,
+    j: usize,
+    i: usize,
+    target_period: usize,
+) -> f64 {
+    let n_periods = y.nrows();
+    let mut sum_sq = 0.0;
+    let mut n_valid = 0usize;
+
+    for t in 0..n_periods {
+        // Exclude target period (Issue B fix)
+        if t == target_period {
+            continue;
+        }
+        // Both units must be control at this period and have valid values
+        if d[[t, i]] == 0.0 && d[[t, j]] == 0.0
+            && y[[t, i]].is_finite() && y[[t, j]].is_finite()
+        {
+            let diff = y[[t, i]] - y[[t, j]];
+            sum_sq += diff * diff;
+            n_valid += 1;
+        }
+    }
+
+    if n_valid > 0 {
+        (sum_sq / n_valid as f64).sqrt()
+    } else {
+        f64::INFINITY
+    }
+}
+
 /// Compute observation-specific weight matrix for TROP.
 ///
 /// Time weights: θ_s = exp(-λ_time × |t - s|)
 /// Unit weights: ω_j = exp(-λ_unit × dist(j, i))
+///
+/// Paper alignment notes:
+/// - ALL units get weights (not just those untreated at target period)
+/// - The (1 - D_js) masking in the loss naturally excludes treated cells
+/// - Weights are normalized to sum to 1 (probability weights)
+/// - Distance excludes target period t per Equation 3
 fn compute_weight_matrix(
+    y: &ArrayView2<f64>,
+    d: &ArrayView2<f64>,
     n_periods: usize,
     n_units: usize,
     target_unit: usize,
     target_period: usize,
     lambda_time: f64,
     lambda_unit: f64,
-    control_units: &[usize],
-    unit_dist: &ArrayView2<f64>,
     time_dist: &ArrayView2<i64>,
 ) -> Array2<f64> {
-    // Time weights for this target period
-    let time_weights: Array1<f64> = Array1::from_shape_fn(n_periods, |s| {
+    // Time weights for this target period: θ_s = exp(-λ_time × |t - s|)
+    let mut time_weights: Array1<f64> = Array1::from_shape_fn(n_periods, |s| {
         let dist = time_dist[[target_period, s]] as f64;
         (-lambda_time * dist).exp()
     });
 
-    // Unit weights
+    // Normalize time weights to sum to 1
+    let time_sum: f64 = time_weights.sum();
+    if time_sum > 0.0 {
+        time_weights /= time_sum;
+    }
+
+    // Unit weights: ω_j = exp(-λ_unit × dist(j, i))
+    // Paper alignment: compute for ALL units, let control masking handle exclusion
     let mut unit_weights = Array1::<f64>::zeros(n_units);
 
     if lambda_unit == 0.0 {
         // Uniform weights when lambda_unit = 0
+        // All units get weight 1 (control masking will handle exclusion)
         unit_weights.fill(1.0);
     } else {
-        for &j in control_units {
-            let dist = unit_dist[[j, target_unit]];
-            if dist.is_finite() {
-                unit_weights[j] = (-lambda_unit * dist).exp();
+        // Compute per-observation distance for all units (excluding target unit itself)
+        for j in 0..n_units {
+            if j != target_unit {
+                let dist = compute_unit_distance_for_obs(y, d, j, target_unit, target_period);
+                if dist.is_finite() {
+                    unit_weights[j] = (-lambda_unit * dist).exp();
+                }
+                // Units with infinite distance (no valid comparison periods) get weight 0
             }
         }
     }
 
-    // Target unit gets weight 1
+    // Target unit gets weight 1 (will be masked out in estimation anyway)
     unit_weights[target_unit] = 1.0;
 
+    // Normalize unit weights to sum to 1
+    let unit_sum: f64 = unit_weights.sum();
+    if unit_sum > 0.0 {
+        unit_weights /= unit_sum;
+    }
+
     // Outer product: W[t, i] = time_weights[t] * unit_weights[i]
+    // Result is normalized since both components sum to 1
     let mut weight_matrix = Array2::<f64>::zeros((n_periods, n_units));
     for t in 0..n_periods {
         for i in 0..n_units {
@@ -405,6 +452,10 @@ fn compute_weight_matrix(
 /// Estimate TROP model using alternating minimization.
 ///
 /// Minimizes: Σ W_{ti}(Y_{ti} - α_i - β_t - L_{ti})² + λ_nn||L||_*
+///
+/// Paper alignment: Uses weighted proximal gradient for L update:
+///   L ← prox_{η·λ_nn·||·||_*}(L + η·(W ⊙ (R - L)))
+/// where η ≤ 1/max(W) for convergence.
 ///
 /// Returns None if estimation fails due to numerical issues.
 fn estimate_model(
@@ -432,7 +483,7 @@ fn estimate_model(
         y[[t, i]].is_finite() && est_mask[[t, i]]
     });
 
-    // Masked weights
+    // Masked weights: W=0 for invalid/treated observations
     let w_masked = Array2::from_shape_fn((n_periods, n_units), |(t, i)| {
         if valid_mask[[t, i]] {
             weight_matrix[[t, i]]
@@ -440,6 +491,10 @@ fn estimate_model(
             0.0
         }
     });
+
+    // Compute step size for proximal gradient: η ≤ 1/max(W)
+    let w_max = w_masked.iter().cloned().fold(0.0_f64, f64::max);
+    let eta = if w_max > 0.0 { 1.0 / w_max } else { 1.0 };
 
     // Weight sums per unit and time
     let weight_sum_per_unit: Array1<f64> = w_masked.sum_axis(Axis(0));
@@ -472,7 +527,7 @@ fn estimate_model(
         let beta_old = beta.clone();
         let l_old = l.clone();
 
-        // Step 1: Update α and β
+        // Step 1: Update α and β (weighted least squares)
         // R = Y - L
         let r = &y_safe - &l;
 
@@ -498,25 +553,31 @@ fn estimate_model(
             }
         }
 
-        // Step 2: Update L with nuclear norm penalty
-        // R_for_L = Y - α - β
-        let mut r_for_l = Array2::<f64>::zeros((n_periods, n_units));
+        // Step 2: Update L with WEIGHTED nuclear norm penalty
+        // Paper alignment: Use proximal gradient instead of direct soft-thresholding
+        // L ← prox_{η·λ_nn·||·||_*}(L + η·(W ⊙ (R - L)))
+        // where R = Y - α - β
+
+        // Compute target residual R = Y - α - β
+        let mut r_target = Array2::<f64>::zeros((n_periods, n_units));
         for t in 0..n_periods {
             for i in 0..n_units {
-                r_for_l[[t, i]] = y_safe[[t, i]] - alpha[i] - beta[t];
+                r_target[[t, i]] = y_safe[[t, i]] - alpha[i] - beta[t];
             }
         }
 
-        // Impute invalid observations with current L
+        // Weighted proximal gradient step:
+        // gradient_step = L + η * W ⊙ (R - L)
+        // For W=0 cells (treated obs), this keeps L unchanged
+        let mut gradient_step = Array2::<f64>::zeros((n_periods, n_units));
         for t in 0..n_periods {
             for i in 0..n_units {
-                if !valid_mask[[t, i]] {
-                    r_for_l[[t, i]] = l[[t, i]];
-                }
+                gradient_step[[t, i]] = l[[t, i]] + eta * w_masked[[t, i]] * (r_target[[t, i]] - l[[t, i]]);
             }
         }
 
-        l = soft_threshold_svd(&r_for_l, lambda_nn)?;
+        // Proximal step: soft-threshold singular values with scaled lambda
+        l = soft_threshold_svd(&gradient_step, eta * lambda_nn)?;
 
         // Check convergence
         let alpha_diff = max_abs_diff(&alpha, &alpha_old);
@@ -627,17 +688,13 @@ fn max_abs_diff_2d(a: &Array2<f64>, b: &Array2<f64>) -> f64 {
 /// # Returns
 /// (bootstrap_estimates, standard_error)
 #[pyfunction]
-#[pyo3(signature = (y, d, control_mask, control_unit_idx, treated_obs_t, treated_obs_i, unit_dist_matrix, time_dist_matrix, lambda_time, lambda_unit, lambda_nn, n_bootstrap, max_iter, tol, seed))]
+#[pyo3(signature = (y, d, control_mask, time_dist_matrix, lambda_time, lambda_unit, lambda_nn, n_bootstrap, max_iter, tol, seed))]
 #[allow(clippy::too_many_arguments)]
 pub fn bootstrap_trop_variance<'py>(
     py: Python<'py>,
     y: PyReadonlyArray2<'py, f64>,
     d: PyReadonlyArray2<'py, f64>,
     control_mask: PyReadonlyArray2<'py, u8>,
-    control_unit_idx: PyReadonlyArray1<'py, i64>,
-    treated_obs_t: PyReadonlyArray1<'py, i64>,
-    treated_obs_i: PyReadonlyArray1<'py, i64>,
-    unit_dist_matrix: PyReadonlyArray2<'py, f64>,
     time_dist_matrix: PyReadonlyArray2<'py, i64>,
     lambda_time: f64,
     lambda_unit: f64,
@@ -650,16 +707,25 @@ pub fn bootstrap_trop_variance<'py>(
     let y_arr = y.as_array().to_owned();
     let d_arr = d.as_array().to_owned();
     let control_mask_arr = control_mask.as_array().to_owned();
-    let unit_dist_arr = unit_dist_matrix.as_array().to_owned();
     let time_dist_arr = time_dist_matrix.as_array().to_owned();
 
     let n_units = y_arr.ncols();
     let n_periods = y_arr.nrows();
 
-    // Note: control_unit_idx, treated_obs_t, treated_obs_i are passed for API
-    // compatibility but not used directly - each bootstrap iteration recomputes
-    // control units and treated observations from the resampled data.
-    let _ = (control_unit_idx, treated_obs_t, treated_obs_i);
+    // Issue D fix: Identify treated and control units for stratified sampling
+    // Following paper's Algorithm 3 (page 27): sample N_0 control and N_1 treated separately
+    let mut original_treated_units: Vec<usize> = Vec::new();
+    let mut original_control_units: Vec<usize> = Vec::new();
+    for i in 0..n_units {
+        let is_ever_treated = (0..n_periods).any(|t| d_arr[[t, i]] == 1.0);
+        if is_ever_treated {
+            original_treated_units.push(i);
+        } else {
+            original_control_units.push(i);
+        }
+    }
+    let n_treated_units = original_treated_units.len();
+    let n_control_units = original_control_units.len();
 
     // Run bootstrap iterations in parallel
     let bootstrap_estimates: Vec<f64> = (0..n_bootstrap)
@@ -670,26 +736,31 @@ pub fn bootstrap_trop_variance<'py>(
 
             let mut rng = Xoshiro256PlusPlus::seed_from_u64(seed.wrapping_add(b as u64));
 
-            // Sample units with replacement
-            let sampled_units: Vec<usize> = (0..n_units)
-                .map(|_| rng.gen_range(0..n_units))
-                .collect();
+            // Issue D fix: Stratified sampling - sample control and treated units separately
+            let mut sampled_units: Vec<usize> = Vec::with_capacity(n_units);
+
+            // Sample control units with replacement
+            for _ in 0..n_control_units {
+                let idx = rng.gen_range(0..n_control_units);
+                sampled_units.push(original_control_units[idx]);
+            }
+
+            // Sample treated units with replacement
+            for _ in 0..n_treated_units {
+                let idx = rng.gen_range(0..n_treated_units);
+                sampled_units.push(original_treated_units[idx]);
+            }
 
             // Create bootstrap matrices by selecting columns
             let mut y_boot = Array2::<f64>::zeros((n_periods, n_units));
             let mut d_boot = Array2::<f64>::zeros((n_periods, n_units));
             let mut control_mask_boot = Array2::<u8>::zeros((n_periods, n_units));
-            let mut unit_dist_boot = Array2::<f64>::zeros((n_units, n_units));
 
             for (new_idx, &old_idx) in sampled_units.iter().enumerate() {
                 for t in 0..n_periods {
                     y_boot[[t, new_idx]] = y_arr[[t, old_idx]];
                     d_boot[[t, new_idx]] = d_arr[[t, old_idx]];
                     control_mask_boot[[t, new_idx]] = control_mask_arr[[t, old_idx]];
-                }
-
-                for (new_j, &old_j) in sampled_units.iter().enumerate() {
-                    unit_dist_boot[[new_idx, new_j]] = unit_dist_arr[[old_idx, old_j]];
                 }
             }
 
@@ -725,14 +796,14 @@ pub fn bootstrap_trop_variance<'py>(
 
             for (t, i) in boot_treated {
                 let weight_matrix = compute_weight_matrix(
+                    &y_boot.view(),
+                    &d_boot.view(),
                     n_periods,
                     n_units,
                     i,
                     t,
                     lambda_time,
                     lambda_unit,
-                    &boot_control_units,
-                    &unit_dist_boot.view(),
                     &time_dist_arr.view(),
                 );
 
