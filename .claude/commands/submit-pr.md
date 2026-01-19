@@ -48,10 +48,22 @@ Parse `$ARGUMENTS` to extract:
 
 ### 3. Check for Changes
 
-Run `git status` to check for uncommitted changes:
-- If there are staged or unstaged changes, proceed to step 4
-- If there are no changes and HEAD is not ahead of origin/<base-branch>, inform user and exit
-- If there are no local changes but commits exist that haven't been pushed, skip to step 6
+1. **Check for uncommitted changes**:
+   ```bash
+   git status --porcelain
+   ```
+   - If output is non-empty, there are staged or unstaged changes → proceed to step 4
+
+2. **Check for unpushed commits** (if no uncommitted changes):
+   ```bash
+   git rev-list --count origin/<base-branch>..HEAD
+   ```
+   - If count > 0, there are unpushed commits → skip to step 6
+   - If count == 0, inform user and exit:
+     ```
+     No changes detected. Your working directory is clean and up-to-date with origin/<base-branch>.
+     Nothing to submit.
+     ```
 
 ### 4. Resolve Branch Name (BEFORE any commits)
 
@@ -79,24 +91,43 @@ Run `git status` to check for uncommitted changes:
 
 ### 5. Stage and Commit Changes
 
-1. **Secret scanning check**:
-   - Run `git diff` and scan for potential secrets:
-     - Files matching: `.env*`, `*credentials*`, `*secret*`, `*.pem`, `*.key`
-     - Content patterns: `API_KEY=`, `SECRET=`, `PASSWORD=`, `ghp_`, `sk-`, AWS keys, etc.
-   - If potential secrets detected, warn user and use AskUserQuestion to confirm:
+1. **Stage all changes first**:
+   ```bash
+   git add -A
+   ```
+
+2. **Secret scanning check** (AFTER staging to catch all files):
+   - Scan staged files:
+     ```bash
+     git diff --cached --name-only
+     git diff --cached
      ```
-     Warning: Potential secrets detected in staged files:
+   - Also check for untracked files that were just staged:
+     ```bash
+     git ls-files --others --exclude-standard
+     ```
+   - Look for potential secrets:
+     - Files matching: `.env*`, `*credentials*`, `*secret*`, `*.pem`, `*.key`
+     - Content patterns: `API_KEY=`, `SECRET=`, `PASSWORD=`, `ghp_`, `sk-`, `AKIA`, AWS keys, etc.
+   - If potential secrets detected, **unstage and warn**:
+     ```bash
+     git reset HEAD  # Unstage all files
+     ```
+     Then use AskUserQuestion:
+     ```
+     Warning: Potential secrets detected in files:
      - .env.local (contains API_KEY=)
      - config.json (contains "password":)
 
+     Files have been unstaged for safety.
+
      Options:
-     1. Abort - do not commit these files
-     2. Continue - I confirm these are not real secrets
+     1. Abort - review and remove secrets before retrying
+     2. Continue anyway - I confirm these are not real secrets (will re-stage)
      ```
+   - If user chooses to continue, re-stage with `git add -A`
 
-2. **Stage all changes**: `git add -A`
-
-3. **Generate commit message** (if changes exist):
+3. **Generate commit message**:
    - Run `git diff --cached --stat` to see what's being committed
    - Analyze the changes and generate a descriptive commit message
    - Use imperative mood ("Add", "Fix", "Update", "Refactor")
@@ -112,14 +143,28 @@ Run `git status` to check for uncommitted changes:
 
 ### 6. Push Branch to Remote
 
-1. **Ensure branch name is resolved**:
-   - If branch name was not resolved in step 4 (e.g., skipped due to no local changes):
-     ```bash
-     git branch --show-current
-     ```
-   - Use this as the branch name for push and PR creation
+1. **Resolve and validate branch name**:
+   ```bash
+   git branch --show-current
+   ```
 
-2. **Push to remote**:
+2. **Guard: Prevent pushing from base branch**:
+   - If current branch equals `<base-branch>` (e.g., `main`):
+     - This can happen when step 3 skipped to step 6 due to unpushed commits on base
+     - **Must create a new branch before proceeding**:
+       - Generate branch name from unpushed commits (analyze `git log origin/<base-branch>..HEAD`)
+       - Use provided `--branch` name if available
+       - Create and switch:
+         ```bash
+         git checkout -b <branch-name>
+         ```
+     - If branch creation fails or is declined, abort with error:
+       ```
+       Error: Cannot create PR from base branch to itself.
+       Please create a feature branch first or provide --branch <name>.
+       ```
+
+3. **Push to remote**:
    ```bash
    git push -u origin <branch-name>
    ```
