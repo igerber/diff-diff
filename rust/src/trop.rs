@@ -396,8 +396,11 @@ fn compute_unit_distance_for_obs(
 /// Time weights: θ_s = exp(-λ_time × |t - s|)
 /// Unit weights: ω_j = exp(-λ_unit × dist(j, i))
 ///
-/// Issue A fix: Uses ALL units where D[t, j] == 0 at target period, not just never-treated.
-/// Issue B fix: Uses observation-specific distances with target period excluded.
+/// Paper alignment notes:
+/// - ALL units get weights (not just those untreated at target period)
+/// - The (1 - D_js) masking in the loss naturally excludes treated cells
+/// - Weights are normalized to sum to 1 (probability weights)
+/// - Distance excludes target period t per Equation 3
 fn compute_weight_matrix(
     y: &ArrayView2<f64>,
     d: &ArrayView2<f64>,
@@ -411,39 +414,50 @@ fn compute_weight_matrix(
     _unit_dist: &ArrayView2<f64>,  // Not used - we compute per-observation distances
     time_dist: &ArrayView2<i64>,
 ) -> Array2<f64> {
-    // Time weights for this target period
-    let time_weights: Array1<f64> = Array1::from_shape_fn(n_periods, |s| {
+    // Time weights for this target period: θ_s = exp(-λ_time × |t - s|)
+    let mut time_weights: Array1<f64> = Array1::from_shape_fn(n_periods, |s| {
         let dist = time_dist[[target_period, s]] as f64;
         (-lambda_time * dist).exp()
     });
 
-    // Unit weights - Issue A fix: use D[t, j] == 0 for valid controls at target period
+    // Normalize time weights to sum to 1
+    let time_sum: f64 = time_weights.sum();
+    if time_sum > 0.0 {
+        time_weights /= time_sum;
+    }
+
+    // Unit weights: ω_j = exp(-λ_unit × dist(j, i))
+    // Paper alignment: compute for ALL units, let control masking handle exclusion
     let mut unit_weights = Array1::<f64>::zeros(n_units);
 
     if lambda_unit == 0.0 {
         // Uniform weights when lambda_unit = 0
-        // All units not treated at target period get weight 1
-        for j in 0..n_units {
-            if d[[target_period, j]] == 0.0 {
-                unit_weights[j] = 1.0;
-            }
-        }
+        // All units get weight 1 (control masking will handle exclusion)
+        unit_weights.fill(1.0);
     } else {
-        // Issue A + B fix: compute per-observation distance for all valid controls
+        // Compute per-observation distance for all units (excluding target unit itself)
         for j in 0..n_units {
-            if j != target_unit && d[[target_period, j]] == 0.0 {
+            if j != target_unit {
                 let dist = compute_unit_distance_for_obs(y, d, j, target_unit, target_period);
                 if dist.is_finite() {
                     unit_weights[j] = (-lambda_unit * dist).exp();
                 }
+                // Units with infinite distance (no valid comparison periods) get weight 0
             }
         }
     }
 
-    // Target unit gets weight 1
+    // Target unit gets weight 1 (will be masked out in estimation anyway)
     unit_weights[target_unit] = 1.0;
 
+    // Normalize unit weights to sum to 1
+    let unit_sum: f64 = unit_weights.sum();
+    if unit_sum > 0.0 {
+        unit_weights /= unit_sum;
+    }
+
     // Outer product: W[t, i] = time_weights[t] * unit_weights[i]
+    // Result is normalized since both components sum to 1
     let mut weight_matrix = Array2::<f64>::zeros((n_periods, n_units));
     for t in 0..n_periods {
         for i in 0..n_units {
@@ -457,6 +471,10 @@ fn compute_weight_matrix(
 /// Estimate TROP model using alternating minimization.
 ///
 /// Minimizes: Σ W_{ti}(Y_{ti} - α_i - β_t - L_{ti})² + λ_nn||L||_*
+///
+/// Paper alignment: Uses weighted proximal gradient for L update:
+///   L ← prox_{η·λ_nn·||·||_*}(L + η·(W ⊙ (R - L)))
+/// where η ≤ 1/max(W) for convergence.
 ///
 /// Returns None if estimation fails due to numerical issues.
 fn estimate_model(
@@ -484,7 +502,7 @@ fn estimate_model(
         y[[t, i]].is_finite() && est_mask[[t, i]]
     });
 
-    // Masked weights
+    // Masked weights: W=0 for invalid/treated observations
     let w_masked = Array2::from_shape_fn((n_periods, n_units), |(t, i)| {
         if valid_mask[[t, i]] {
             weight_matrix[[t, i]]
@@ -492,6 +510,10 @@ fn estimate_model(
             0.0
         }
     });
+
+    // Compute step size for proximal gradient: η ≤ 1/max(W)
+    let w_max = w_masked.iter().cloned().fold(0.0_f64, f64::max);
+    let eta = if w_max > 0.0 { 1.0 / w_max } else { 1.0 };
 
     // Weight sums per unit and time
     let weight_sum_per_unit: Array1<f64> = w_masked.sum_axis(Axis(0));
@@ -524,7 +546,7 @@ fn estimate_model(
         let beta_old = beta.clone();
         let l_old = l.clone();
 
-        // Step 1: Update α and β
+        // Step 1: Update α and β (weighted least squares)
         // R = Y - L
         let r = &y_safe - &l;
 
@@ -550,25 +572,31 @@ fn estimate_model(
             }
         }
 
-        // Step 2: Update L with nuclear norm penalty
-        // R_for_L = Y - α - β
-        let mut r_for_l = Array2::<f64>::zeros((n_periods, n_units));
+        // Step 2: Update L with WEIGHTED nuclear norm penalty
+        // Paper alignment: Use proximal gradient instead of direct soft-thresholding
+        // L ← prox_{η·λ_nn·||·||_*}(L + η·(W ⊙ (R - L)))
+        // where R = Y - α - β
+
+        // Compute target residual R = Y - α - β
+        let mut r_target = Array2::<f64>::zeros((n_periods, n_units));
         for t in 0..n_periods {
             for i in 0..n_units {
-                r_for_l[[t, i]] = y_safe[[t, i]] - alpha[i] - beta[t];
+                r_target[[t, i]] = y_safe[[t, i]] - alpha[i] - beta[t];
             }
         }
 
-        // Impute invalid observations with current L
+        // Weighted proximal gradient step:
+        // gradient_step = L + η * W ⊙ (R - L)
+        // For W=0 cells (treated obs), this keeps L unchanged
+        let mut gradient_step = Array2::<f64>::zeros((n_periods, n_units));
         for t in 0..n_periods {
             for i in 0..n_units {
-                if !valid_mask[[t, i]] {
-                    r_for_l[[t, i]] = l[[t, i]];
-                }
+                gradient_step[[t, i]] = l[[t, i]] + eta * w_masked[[t, i]] * (r_target[[t, i]] - l[[t, i]]);
             }
         }
 
-        l = soft_threshold_svd(&r_for_l, lambda_nn)?;
+        // Proximal step: soft-threshold singular values with scaled lambda
+        l = soft_threshold_svd(&gradient_step, eta * lambda_nn)?;
 
         // Check convergence
         let alpha_diff = max_abs_diff(&alpha, &alpha_old);
