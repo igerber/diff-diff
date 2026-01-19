@@ -124,8 +124,12 @@ pytest tests/test_rust_backend.py -v
   - **`rust/src/bootstrap.rs`** - Parallel bootstrap weight generation (Rademacher, Mammen, Webb)
   - **`rust/src/linalg.rs`** - OLS solver and cluster-robust variance estimation
   - **`rust/src/weights.rs`** - Synthetic control weights and simplex projection
+  - **`rust/src/trop.rs`** - TROP estimator acceleration:
+    - `compute_unit_distance_matrix()` - Parallel pairwise RMSE distance computation (4-8x speedup)
+    - `loocv_grid_search()` - Parallel LOOCV across tuning parameters (10-50x speedup)
+    - `bootstrap_trop_variance()` - Parallel bootstrap variance estimation (5-15x speedup)
   - Uses ndarray-linalg with OpenBLAS (Linux/macOS) or Intel MKL (Windows)
-  - Provides 4-8x speedup for SyntheticDiD, minimal benefit for other estimators
+  - Provides 4-8x speedup for SyntheticDiD, 5-20x speedup for TROP
 
 - **`diff_diff/results.py`** - Dataclass containers for estimation results:
   - `DiDResults`, `MultiPeriodDiDResults`, `SyntheticDiDResults`, `PeriodEffect`

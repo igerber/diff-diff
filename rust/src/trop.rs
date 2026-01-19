@@ -650,30 +650,16 @@ pub fn bootstrap_trop_variance<'py>(
     let y_arr = y.as_array().to_owned();
     let d_arr = d.as_array().to_owned();
     let control_mask_arr = control_mask.as_array().to_owned();
-    let control_unit_idx_arr = control_unit_idx.as_array().to_owned();
-    let treated_t: Vec<usize> = treated_obs_t.as_array().iter().map(|&t| t as usize).collect();
-    let treated_i: Vec<usize> = treated_obs_i.as_array().iter().map(|&i| i as usize).collect();
     let unit_dist_arr = unit_dist_matrix.as_array().to_owned();
     let time_dist_arr = time_dist_matrix.as_array().to_owned();
 
     let n_units = y_arr.ncols();
     let n_periods = y_arr.nrows();
 
-    // Convert control_unit_idx to Vec<usize>
-    // Note: We don't use the original control_units in bootstrap iterations
-    // because each resampled dataset may have different control/treated assignments
-    let _control_units: Vec<usize> = control_unit_idx_arr
-        .iter()
-        .map(|&idx| idx as usize)
-        .collect();
-
-    // Original treated observations - used only for validation
-    // Each bootstrap sample recomputes its own treated observations
-    let _treated_obs: Vec<(usize, usize)> = treated_t
-        .iter()
-        .zip(treated_i.iter())
-        .map(|(&t, &i)| (t, i))
-        .collect();
+    // Note: control_unit_idx, treated_obs_t, treated_obs_i are passed for API
+    // compatibility but not used directly - each bootstrap iteration recomputes
+    // control units and treated observations from the resampled data.
+    let _ = (control_unit_idx, treated_obs_t, treated_obs_i);
 
     // Run bootstrap iterations in parallel
     let bootstrap_estimates: Vec<f64> = (0..n_bootstrap)

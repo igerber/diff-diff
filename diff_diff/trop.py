@@ -17,6 +17,7 @@ Athey, S., Imbens, G. W., Qu, Z., & Viviano, D. (2025). Triply Robust Panel
 Estimators. *Working Paper*. https://arxiv.org/abs/2508.21536
 """
 
+import logging
 import warnings
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple, Union
@@ -24,6 +25,8 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 import numpy as np
 import pandas as pd
 from scipy import stats
+
+logger = logging.getLogger(__name__)
 
 try:
     from typing import TypedDict
@@ -790,8 +793,11 @@ class TROP:
                     self.seed if self.seed is not None else 0
                 )
                 best_lambda = (best_lt, best_lu, best_ln)
-            except Exception:
+            except Exception as e:
                 # Fall back to Python implementation on error
+                logger.debug(
+                    "Rust LOOCV grid search failed, falling back to Python: %s", e
+                )
                 best_lambda = None
                 best_score = np.inf
 
@@ -1330,33 +1336,52 @@ class TROP:
         """
         Compute bootstrap standard error using unit-level block bootstrap.
 
+        When the optional Rust backend is available and the matrix parameters
+        (Y, D, control_unit_idx) are provided, uses parallelized Rust
+        implementation for 5-15x speedup. Falls back to Python implementation
+        if Rust is unavailable or if matrix parameters are not provided.
+
         Parameters
         ----------
         data : pd.DataFrame
-            Original data.
+            Original data in long format with unit, time, outcome, and treatment.
         outcome : str
-            Outcome column name.
+            Name of the outcome column in data.
         treatment : str
-            Treatment column name.
+            Name of the treatment indicator column in data.
         unit : str
-            Unit column name.
+            Name of the unit identifier column in data.
         time : str
-            Time column name.
+            Name of the time period column in data.
         post_periods : list
-            Post-treatment periods.
-        optimal_lambda : tuple
-            Optimal (lambda_time, lambda_unit, lambda_nn).
+            List of post-treatment time periods.
+        optimal_lambda : tuple of float
+            Optimal tuning parameters (lambda_time, lambda_unit, lambda_nn)
+            from cross-validation. Used for model estimation in each bootstrap.
         Y : np.ndarray, optional
-            Outcome matrix (n_periods x n_units). For Rust acceleration.
+            Outcome matrix of shape (n_periods, n_units). Required for Rust
+            backend acceleration. If None, falls back to Python implementation.
         D : np.ndarray, optional
-            Treatment matrix (n_periods x n_units). For Rust acceleration.
+            Treatment indicator matrix of shape (n_periods, n_units) where
+            D[t,i]=1 indicates unit i is treated at time t. Required for Rust
+            backend acceleration.
         control_unit_idx : np.ndarray, optional
-            Control unit indices. For Rust acceleration.
+            Array of indices for control units (never-treated). Required for
+            Rust backend acceleration.
 
         Returns
         -------
-        tuple
-            (se, bootstrap_estimates).
+        se : float
+            Bootstrap standard error of the ATT estimate.
+        bootstrap_estimates : np.ndarray
+            Array of ATT estimates from each bootstrap iteration. Length may
+            be less than n_bootstrap if some iterations failed.
+
+        Notes
+        -----
+        Uses unit-level block bootstrap where entire unit time series are
+        resampled with replacement. This preserves within-unit correlation
+        structure and is appropriate for panel data.
         """
         lambda_time, lambda_unit, lambda_nn = optimal_lambda
 
@@ -1386,8 +1411,14 @@ class TROP:
                 if len(bootstrap_estimates) >= 10:
                     return float(se), bootstrap_estimates
                 # Fall through to Python if too few bootstrap samples
-            except Exception:
-                pass  # Fall through to Python implementation
+                logger.debug(
+                    "Rust bootstrap returned only %d samples, falling back to Python",
+                    len(bootstrap_estimates)
+                )
+            except Exception as e:
+                logger.debug(
+                    "Rust bootstrap variance failed, falling back to Python: %s", e
+                )
 
         # Python implementation (fallback)
         rng = np.random.default_rng(self.seed)

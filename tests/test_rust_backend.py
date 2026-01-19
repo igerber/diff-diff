@@ -825,7 +825,13 @@ class TestTROPRustVsNumpy:
         assert np.isfinite(results.se), "SE should be finite"
         assert results.se >= 0, "SE should be non-negative"
 
-        # ATT should be in reasonable range of true effect
+        # ATT should be in reasonable range of true effect.
+        # Tolerance of 2.0 accounts for:
+        # - Small sample size (only 2 treated observations: unit 0, periods 6-7)
+        # - Noise in data generation (std=0.5)
+        # - LOOCV-selected tuning parameters may not be optimal for small samples
+        # This is a validity test, not a precision test - we're checking the
+        # estimation produces sensible results, not exact recovery.
         assert abs(results.att - true_effect) < 2.0, \
             f"ATT {results.att:.2f} should be close to true effect {true_effect}"
 
