@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.2] - 2026-01-19
+
+### Added
+- **Consolidated DGP functions** in `prep.py` for all supported DiD designs
+  - `generate_did_data()` - Basic 2x2 DiD data generation
+  - `generate_staggered_data()` - Staggered adoption data for Callaway-Sant'Anna/Sun-Abraham
+  - `generate_factor_data()` - Factor model data for TROP/SyntheticDiD
+  - `generate_ddd_data()` - Triple Difference (DDD) design data
+  - `generate_panel_data()` - Panel data with optional parallel trends violations
+  - `generate_event_study_data()` - Event study data with simultaneous treatment
+
+### Changed
+- **Clean up development tracking files** for v2.1.1 release
+  - Removed completed items from TODO.md (now tracked in CHANGELOG)
+  - Updated ROADMAP.md version numbers and removed shipped TROP section
+  - Updated `prep.py` line count in Large Module Files table (1338 → 1993)
+
 ## [2.1.1] - 2026-01-19
 
 ### Added
@@ -436,6 +453,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `to_dict()` and `to_dataframe()` export methods
   - `is_significant` and `significance_stars` properties
 
+[2.1.2]: https://github.com/igerber/diff-diff/compare/v2.1.1...v2.1.2
 [2.1.1]: https://github.com/igerber/diff-diff/compare/v2.1.0...v2.1.1
 [2.1.0]: https://github.com/igerber/diff-diff/compare/v2.0.3...v2.1.0
 [2.0.3]: https://github.com/igerber/diff-diff/compare/v2.0.2...v2.0.3
