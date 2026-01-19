@@ -68,12 +68,26 @@ pytest tests/test_rust_backend.py -v
 - **`diff_diff/synthetic_did.py`** - Synthetic DiD estimator:
   - `SyntheticDiD` - Synthetic control combined with DiD (Arkhangelsky et al. 2021)
 
-- **`diff_diff/staggered.py`** - Staggered adoption DiD estimators:
+- **`diff_diff/staggered.py`** - Staggered adoption DiD main module:
   - `CallawaySantAnna` - Callaway & Sant'Anna (2021) estimator for heterogeneous treatment timing
-  - `CallawaySantAnnaResults` - Results with group-time ATT(g,t) and aggregations
-  - `CSBootstrapResults` - Bootstrap inference results (SEs, CIs, p-values for all aggregations)
+  - Core estimation methods: `_precompute_structures()`, `_compute_att_gt_fast()`, `fit()`
+  - Estimation approaches: `_outcome_regression()`, `_ipw_estimation()`, `_doubly_robust()`
+  - Re-exports result and bootstrap classes for backward compatibility
+
+- **`diff_diff/staggered_results.py`** - Result container classes:
   - `GroupTimeEffect` - Container for individual group-time effects
+  - `CallawaySantAnnaResults` - Results with group-time ATT(g,t), `summary()`, `to_dataframe()`
+
+- **`diff_diff/staggered_bootstrap.py`** - Bootstrap inference:
+  - `CSBootstrapResults` - Bootstrap inference results (SEs, CIs, p-values for all aggregations)
+  - `CallawaySantAnnaBootstrapMixin` - Mixin with bootstrap methods
+  - `_generate_bootstrap_weights_batch()` - Vectorized weight generation
   - Multiplier bootstrap with Rademacher, Mammen, or Webb weights
+
+- **`diff_diff/staggered_aggregation.py`** - Aggregation methods:
+  - `CallawaySantAnnaAggregationMixin` - Mixin with aggregation methods
+  - `_aggregate_simple()`, `_aggregate_event_study()`, `_aggregate_by_group()`
+  - `_compute_aggregated_se_with_wif()` - SE with weight influence function adjustment
 
 - **`diff_diff/sun_abraham.py`** - Sun-Abraham interaction-weighted estimator:
   - `SunAbraham` - Sun & Abraham (2021) estimator using saturated regression
