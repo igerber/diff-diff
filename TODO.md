@@ -25,12 +25,16 @@ Target: < 1000 lines per module for maintainability.
 
 | File | Lines | Action |
 |------|-------|--------|
+| `staggered.py` | 2301 | Consider splitting to `staggered_bootstrap.py` |
 | `prep.py` | 1993 | Grew with DGP functions; consider splitting |
-| `staggered.py` | 1822 | Consider splitting to `staggered_bootstrap.py` |
-| `honest_did.py` | 1491 | Acceptable |
-| `visualization.py` | 1388 | Acceptable |
-| `utils.py` | 1350 | Acceptable |
+| `trop.py` | 1703 | Monitor size |
+| `visualization.py` | 1627 | Acceptable but growing |
+| `honest_did.py` | 1493 | Acceptable |
+| `utils.py` | 1481 | Acceptable |
 | `power.py` | 1350 | Acceptable |
+| `triple_diff.py` | 1291 | Acceptable |
+| `sun_abraham.py` | 1176 | Acceptable |
+| `pretrends.py` | 1160 | Acceptable |
 | `bacon.py` | 1027 | OK |
 
 ### Standard Error Consistency
@@ -45,6 +49,47 @@ Different estimators compute SEs differently. Consider unified interface.
 | SyntheticDiD | Bootstrap or placebo-based |
 
 **Action**: Consider adding `se_type` parameter for consistency across estimators.
+
+### Type Annotations
+
+Pyright reports 282 type errors. Most are false positives from numpy/pandas type stubs.
+
+| Category | Count | Notes |
+|----------|-------|-------|
+| reportArgumentType | 94 | numpy/pandas stub mismatches |
+| reportAttributeAccessIssue | 89 | Union types (results classes) |
+| reportReturnType | 21 | Return type mismatches |
+| reportOperatorIssue | 16 | Operators on incompatible types |
+| Others | 62 | Various minor issues |
+
+**Genuine issues to fix (low priority):**
+- [ ] Optional handling in `estimators.py:291,297,308` - None checks needed
+- [ ] Union type narrowing in `visualization.py:325-345` - results classes
+- [ ] numpy floating conversion in `diagnostics.py:669-673`
+
+**Note:** Most errors are false positives from imprecise type stubs. Mypy config in pyproject.toml already handles these via `disable_error_code`.
+
+### Rust Code Quality
+
+Clippy reports 6 warnings (no errors):
+
+- [ ] `rust/src/linalg.rs:32` - Define type alias for complex return type
+- [ ] `rust/src/trop.rs` - Refactor 3 functions with >7 arguments to use param structs
+  - `loocv_score_for_params` (12 args)
+  - `compute_weight_matrix` (9 args)
+  - `estimate_model` (9 args)
+
+---
+
+## Deprecated Code
+
+Deprecated parameters still present for backward compatibility:
+
+- [ ] `bootstrap_weight_type` in `CallawaySantAnna` (`staggered.py:746,763-771`)
+  - Deprecated in favor of `bootstrap_weights` parameter
+  - Warning text says "removed in v2.0" - update to "v3.0" when ready
+  - Also used in: README.md (2x), tutorial 02, test_staggered.py
+  - Remove in next major version (v3.0)
 
 ---
 
