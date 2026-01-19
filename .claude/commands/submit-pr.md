@@ -97,14 +97,14 @@ Parse `$ARGUMENTS` to extract:
    ```
 
 2. **Secret scanning check** (AFTER staging to catch all files):
-   - Scan staged files:
+   - Scan all staged changes:
      ```bash
      git diff --cached --name-only
      git diff --cached
      ```
-   - Also check for untracked files that were just staged:
+   - Pay special attention to newly added files (previously untracked):
      ```bash
-     git ls-files --others --exclude-standard
+     git diff --cached --name-only --diff-filter=A
      ```
    - Look for potential secrets:
      - Files matching: `.env*`, `*credentials*`, `*secret*`, `*.pem`, `*.key`
@@ -182,7 +182,7 @@ Parse `$ARGUMENTS` to extract:
    ```
 
 3. Categorize changes for the template:
-   - **Estimator/math changes**: files in `diff_diff/`, `rust/src/`, or changes to `docs/methodology/REGISTRY.md`
+   - **Estimator/math changes**: files in `diff_diff/`, `rust/src/`, or `docs/methodology/`
    - Test changes: files in `tests/`
    - Documentation: files in `docs/`, `*.md`, `*.rst`
 
