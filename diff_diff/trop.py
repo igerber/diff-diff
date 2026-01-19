@@ -63,7 +63,11 @@ class _PrecomputedStructures(TypedDict):
     control_obs: List[Tuple[int, int]]
     """List of (t, i) tuples for valid control observations."""
     control_unit_idx: np.ndarray
-    """Array of control unit indices."""
+    """Array of never-treated unit indices (for backward compatibility)."""
+    D: np.ndarray
+    """Treatment indicator matrix (n_periods x n_units) for dynamic control sets."""
+    Y: np.ndarray
+    """Outcome matrix (n_periods x n_units)."""
     n_units: int
     """Number of units."""
     n_periods: int
@@ -529,6 +533,8 @@ class TROP:
             "treated_observations": treated_observations,
             "control_obs": control_obs,
             "control_unit_idx": control_unit_idx,
+            "D": D,
+            "Y": Y,
             "n_units": n_units,
             "n_periods": n_periods,
         }
@@ -953,9 +959,15 @@ class TROP:
         """
         Compute observation-specific weight matrix for treated observation (i, t).
 
-        Following the paper's Algorithm 2 (page 27):
+        Following the paper's Algorithm 2 (page 27) and Equation 2 (page 7):
         - Time weights θ_s^{i,t} = exp(-λ_time × |t - s|)
         - Unit weights ω_j^{i,t} = exp(-λ_unit × dist_unit_{-t}(j, i))
+
+        IMPORTANT (Issue A fix): The paper's objective sums over ALL observations
+        where (1 - W_js) is non-zero, which includes pre-treatment observations of
+        eventually-treated units since W_js = 0 for those. This method computes
+        weights for ALL units where D[t, j] = 0 at the target period, not just
+        never-treated units.
 
         Uses pre-computed structures when available for efficiency.
 
@@ -974,7 +986,8 @@ class TROP:
         lambda_unit : float
             Unit weight decay parameter.
         control_unit_idx : np.ndarray
-            Indices of control units.
+            Indices of never-treated units (for backward compatibility, but not
+            used for weight computation - we use D matrix directly).
         n_units : int
             Number of units.
         n_periods : int
@@ -991,21 +1004,30 @@ class TROP:
             # time_dist_matrix[t, s] = |t - s|
             time_weights = np.exp(-lambda_time * self._precomputed["time_dist_matrix"][t, :])
 
-            # Unit weights from pre-computed unit distance matrix
+            # Unit weights - computed for ALL units where D[t, j] = 0
+            # (Issue A fix: includes pre-treatment obs of eventually-treated units)
             unit_weights = np.zeros(n_units)
+            D_stored = self._precomputed["D"]
+            Y_stored = self._precomputed["Y"]
+
+            # Valid control units at time t: D[t, j] == 0
+            valid_control_at_t = D_stored[t, :] == 0
 
             if lambda_unit == 0:
                 # Uniform weights when lambda_unit = 0
-                unit_weights[:] = 1.0
+                # All units not treated at time t get weight 1
+                unit_weights[valid_control_at_t] = 1.0
             else:
-                # Use pre-computed distances: unit_dist_matrix[j, i] = dist(j, i)
-                dist_matrix = self._precomputed["unit_dist_matrix"]
-                for j in control_unit_idx:
-                    dist = dist_matrix[j, i]
-                    if np.isinf(dist):
-                        unit_weights[j] = 0.0
-                    else:
-                        unit_weights[j] = np.exp(-lambda_unit * dist)
+                # Use observation-specific distances with target period excluded
+                # (Issue B fix: compute exact per-observation distance)
+                for j in range(n_units):
+                    if valid_control_at_t[j] and j != i:
+                        # Compute distance excluding target period t
+                        dist = self._compute_unit_distance_for_obs(Y_stored, D_stored, j, i, t)
+                        if np.isinf(dist):
+                            unit_weights[j] = 0.0
+                        else:
+                            unit_weights[j] = np.exp(-lambda_unit * dist)
 
             # Treated unit i gets weight 1
             unit_weights[i] = 1.0
@@ -1018,19 +1040,25 @@ class TROP:
         dist_time = np.abs(np.arange(n_periods) - t)
         time_weights = np.exp(-lambda_time * dist_time)
 
-        # Unit distance: pairwise RMSE from each control j to treated i
+        # Unit weights - computed for ALL units where D[t, j] = 0
+        # (Issue A fix: includes pre-treatment obs of eventually-treated units)
         unit_weights = np.zeros(n_units)
+
+        # Valid control units at time t: D[t, j] == 0
+        valid_control_at_t = D[t, :] == 0
 
         if lambda_unit == 0:
             # Uniform weights when lambda_unit = 0
-            unit_weights[:] = 1.0
+            unit_weights[valid_control_at_t] = 1.0
         else:
-            for j in control_unit_idx:
-                dist = self._compute_unit_distance_for_obs(Y, D, j, i, t)
-                if np.isinf(dist):
-                    unit_weights[j] = 0.0
-                else:
-                    unit_weights[j] = np.exp(-lambda_unit * dist)
+            for j in range(n_units):
+                if valid_control_at_t[j] and j != i:
+                    # Compute distance excluding target period t (Issue B fix)
+                    dist = self._compute_unit_distance_for_obs(Y, D, j, i, t)
+                    if np.isinf(dist):
+                        unit_weights[j] = 0.0
+                    else:
+                        unit_weights[j] = np.exp(-lambda_unit * dist)
 
         # Treated unit i gets weight 1 (or could be omitted since we fit on controls)
         # We include treated unit's own observation for model fitting
@@ -1101,6 +1129,101 @@ class TROP:
             result = np.nan_to_num(result, nan=0.0, posinf=0.0, neginf=0.0)
 
         return result
+
+    def _weighted_nuclear_norm_solve(
+        self,
+        Y: np.ndarray,
+        W: np.ndarray,
+        L_init: np.ndarray,
+        alpha: np.ndarray,
+        beta: np.ndarray,
+        lambda_nn: float,
+        max_inner_iter: int = 20,
+    ) -> np.ndarray:
+        """
+        Solve weighted nuclear norm problem using iterative weighted soft-impute.
+
+        Issue C fix: Implements the weighted nuclear norm optimization from the
+        paper's Equation 2 (page 7). The full objective is:
+            min_L Σ W_{ti}(R_{ti} - L_{ti})² + λ_nn||L||_*
+
+        This uses a proximal gradient / soft-impute approach (Mazumder et al. 2010):
+            L_{k+1} = prox_{λ||·||_*}(L_k + W ⊙ (R - L_k))
+
+        where W ⊙ denotes element-wise multiplication with normalized weights.
+
+        IMPORTANT: For observations with W=0 (treated observations), we keep
+        L values from the previous iteration rather than setting L = R, which
+        would absorb the treatment effect.
+
+        Parameters
+        ----------
+        Y : np.ndarray
+            Outcome matrix (n_periods x n_units).
+        W : np.ndarray
+            Weight matrix (n_periods x n_units), non-negative. W=0 indicates
+            observations that should not be used for fitting (treated obs).
+        L_init : np.ndarray
+            Initial estimate of L matrix.
+        alpha : np.ndarray
+            Current unit fixed effects estimate.
+        beta : np.ndarray
+            Current time fixed effects estimate.
+        lambda_nn : float
+            Nuclear norm regularization parameter.
+        max_inner_iter : int, default=20
+            Maximum inner iterations for the proximal algorithm.
+
+        Returns
+        -------
+        np.ndarray
+            Updated L matrix estimate.
+        """
+        # Compute target residual R = Y - α - β
+        R = Y - alpha[np.newaxis, :] - beta[:, np.newaxis]
+
+        # Handle invalid values
+        R = np.nan_to_num(R, nan=0.0, posinf=0.0, neginf=0.0)
+
+        # For observations with W=0 (treated obs), keep L_init instead of R
+        # This prevents L from absorbing the treatment effect
+        valid_obs_mask = W > 0
+        R_masked = np.where(valid_obs_mask, R, L_init)
+
+        if lambda_nn <= 0:
+            # No regularization - just return masked residual
+            # Use soft-thresholding with threshold=0 which returns the input
+            return R_masked
+
+        # Normalize weights so max is 1 (for step size stability)
+        W_max = np.max(W)
+        if W_max > 0:
+            W_norm = W / W_max
+        else:
+            W_norm = W
+
+        # Initialize L
+        L = L_init.copy()
+
+        # Proximal gradient iteration with weighted soft-impute
+        # This solves: min_L ||W^{1/2} ⊙ (R - L)||_F^2 + λ||L||_*
+        # Using: L_{k+1} = prox_{λ/η}(L_k + W ⊙ (R - L_k))
+        # where η is the step size (we use η = 1 with normalized weights)
+        for _ in range(max_inner_iter):
+            L_old = L.copy()
+
+            # Gradient step: L_k + W ⊙ (R - L_k)
+            # For W=0 observations, this keeps L_k unchanged
+            gradient_step = L + W_norm * (R_masked - L)
+
+            # Proximal step: soft-threshold singular values
+            L = self._soft_threshold_svd(gradient_step, lambda_nn)
+
+            # Check convergence
+            if np.max(np.abs(L - L_old)) < self.tol:
+                break
+
+        return L
 
     def _estimate_model(
         self,
@@ -1205,14 +1328,13 @@ class TROP:
             beta_numerator = np.sum(weighted_R_minus_alpha, axis=1)  # (n_periods,)
             beta = np.where(time_has_obs, beta_numerator / safe_time_denom, 0.0)
 
-            # Step 2: Update L with nuclear norm penalty
-            # Following Equation 2 (page 7): L = prox_{λ_nn||·||_*}(Y - α - β)
-            # The proximal operator for nuclear norm is soft-thresholding of SVD
-            R_for_L = Y_safe - alpha[np.newaxis, :] - beta[:, np.newaxis]
-            # Impute invalid observations with current L for stable SVD
-            R_for_L = np.where(valid_mask, R_for_L, L)
-
-            L = self._soft_threshold_svd(R_for_L, lambda_nn)
+            # Step 2: Update L with weighted nuclear norm penalty
+            # Issue C fix: Use weighted soft-impute to properly account for
+            # observation weights in the nuclear norm optimization.
+            # Following Equation 2 (page 7): min_L Σ W_{ti}(Y - α - β - L)² + λ||L||_*
+            L = self._weighted_nuclear_norm_solve(
+                Y_safe, W_masked, L, alpha, beta, lambda_nn, max_inner_iter=10
+            )
 
             # Check convergence
             alpha_diff = np.max(np.abs(alpha - alpha_old))
@@ -1422,14 +1544,38 @@ class TROP:
 
         # Python implementation (fallback)
         rng = np.random.default_rng(self.seed)
-        all_units = data[unit].unique()
-        n_units_data = len(all_units)
+
+        # Issue D fix: Stratified bootstrap sampling
+        # Paper's Algorithm 3 (page 27) specifies sampling N_0 control rows
+        # and N_1 treated rows separately to preserve treatment ratio
+        unit_ever_treated = data.groupby(unit)[treatment].max()
+        treated_units = np.array(unit_ever_treated[unit_ever_treated == 1].index)
+        control_units = np.array(unit_ever_treated[unit_ever_treated == 0].index)
+
+        n_treated_units = len(treated_units)
+        n_control_units = len(control_units)
 
         bootstrap_estimates_list = []
 
         for _ in range(self.n_bootstrap):
-            # Sample units with replacement
-            sampled_units = rng.choice(all_units, size=n_units_data, replace=True)
+            # Stratified sampling: sample control and treated units separately
+            # This preserves the treatment ratio in each bootstrap sample
+            if n_control_units > 0:
+                sampled_control = rng.choice(
+                    control_units, size=n_control_units, replace=True
+                )
+            else:
+                sampled_control = np.array([], dtype=control_units.dtype)
+
+            if n_treated_units > 0:
+                sampled_treated = rng.choice(
+                    treated_units, size=n_treated_units, replace=True
+                )
+            else:
+                sampled_treated = np.array([], dtype=treated_units.dtype)
+
+            # Combine stratified samples
+            sampled_units = np.concatenate([sampled_control, sampled_treated])
 
             # Create bootstrap sample with unique unit IDs
             boot_data = pd.concat([

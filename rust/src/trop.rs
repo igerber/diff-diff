@@ -291,7 +291,7 @@ fn get_control_observations(
 /// Compute LOOCV score for a specific parameter combination.
 fn loocv_score_for_params(
     y: &ArrayView2<f64>,
-    _d: &ArrayView2<f64>,
+    d: &ArrayView2<f64>,
     control_mask: &ArrayView2<u8>,
     control_units: &[usize],
     unit_dist: &ArrayView2<f64>,
@@ -311,7 +311,10 @@ fn loocv_score_for_params(
 
     for &(t, i) in control_obs {
         // Compute observation-specific weight matrix
+        // Issue A+B fix: pass y and d for dynamic control sets and per-obs distances
         let weight_matrix = compute_weight_matrix(
+            y,
+            d,
             n_periods,
             n_units,
             i,
@@ -352,19 +355,60 @@ fn loocv_score_for_params(
     }
 }
 
+/// Compute observation-specific distance from unit j to unit i, excluding target period.
+///
+/// Issue B fix: Follows Equation 3 (page 7) which specifies 1{u ≠ t} to exclude target period.
+fn compute_unit_distance_for_obs(
+    y: &ArrayView2<f64>,
+    d: &ArrayView2<f64>,
+    j: usize,
+    i: usize,
+    target_period: usize,
+) -> f64 {
+    let n_periods = y.nrows();
+    let mut sum_sq = 0.0;
+    let mut n_valid = 0usize;
+
+    for t in 0..n_periods {
+        // Exclude target period (Issue B fix)
+        if t == target_period {
+            continue;
+        }
+        // Both units must be control at this period and have valid values
+        if d[[t, i]] == 0.0 && d[[t, j]] == 0.0
+            && y[[t, i]].is_finite() && y[[t, j]].is_finite()
+        {
+            let diff = y[[t, i]] - y[[t, j]];
+            sum_sq += diff * diff;
+            n_valid += 1;
+        }
+    }
+
+    if n_valid > 0 {
+        (sum_sq / n_valid as f64).sqrt()
+    } else {
+        f64::INFINITY
+    }
+}
+
 /// Compute observation-specific weight matrix for TROP.
 ///
 /// Time weights: θ_s = exp(-λ_time × |t - s|)
 /// Unit weights: ω_j = exp(-λ_unit × dist(j, i))
+///
+/// Issue A fix: Uses ALL units where D[t, j] == 0 at target period, not just never-treated.
+/// Issue B fix: Uses observation-specific distances with target period excluded.
 fn compute_weight_matrix(
+    y: &ArrayView2<f64>,
+    d: &ArrayView2<f64>,
     n_periods: usize,
     n_units: usize,
     target_unit: usize,
     target_period: usize,
     lambda_time: f64,
     lambda_unit: f64,
-    control_units: &[usize],
-    unit_dist: &ArrayView2<f64>,
+    _control_units: &[usize],  // Kept for API compatibility but not used
+    _unit_dist: &ArrayView2<f64>,  // Not used - we compute per-observation distances
     time_dist: &ArrayView2<i64>,
 ) -> Array2<f64> {
     // Time weights for this target period
@@ -373,17 +417,25 @@ fn compute_weight_matrix(
         (-lambda_time * dist).exp()
     });
 
-    // Unit weights
+    // Unit weights - Issue A fix: use D[t, j] == 0 for valid controls at target period
     let mut unit_weights = Array1::<f64>::zeros(n_units);
 
     if lambda_unit == 0.0 {
         // Uniform weights when lambda_unit = 0
-        unit_weights.fill(1.0);
+        // All units not treated at target period get weight 1
+        for j in 0..n_units {
+            if d[[target_period, j]] == 0.0 {
+                unit_weights[j] = 1.0;
+            }
+        }
     } else {
-        for &j in control_units {
-            let dist = unit_dist[[j, target_unit]];
-            if dist.is_finite() {
-                unit_weights[j] = (-lambda_unit * dist).exp();
+        // Issue A + B fix: compute per-observation distance for all valid controls
+        for j in 0..n_units {
+            if j != target_unit && d[[target_period, j]] == 0.0 {
+                let dist = compute_unit_distance_for_obs(y, d, j, target_unit, target_period);
+                if dist.is_finite() {
+                    unit_weights[j] = (-lambda_unit * dist).exp();
+                }
             }
         }
     }
@@ -661,6 +713,21 @@ pub fn bootstrap_trop_variance<'py>(
     // control units and treated observations from the resampled data.
     let _ = (control_unit_idx, treated_obs_t, treated_obs_i);
 
+    // Issue D fix: Identify treated and control units for stratified sampling
+    // Following paper's Algorithm 3 (page 27): sample N_0 control and N_1 treated separately
+    let mut original_treated_units: Vec<usize> = Vec::new();
+    let mut original_control_units: Vec<usize> = Vec::new();
+    for i in 0..n_units {
+        let is_ever_treated = (0..n_periods).any(|t| d_arr[[t, i]] == 1.0);
+        if is_ever_treated {
+            original_treated_units.push(i);
+        } else {
+            original_control_units.push(i);
+        }
+    }
+    let n_treated_units = original_treated_units.len();
+    let n_control_units = original_control_units.len();
+
     // Run bootstrap iterations in parallel
     let bootstrap_estimates: Vec<f64> = (0..n_bootstrap)
         .into_par_iter()
@@ -670,10 +737,20 @@ pub fn bootstrap_trop_variance<'py>(
 
             let mut rng = Xoshiro256PlusPlus::seed_from_u64(seed.wrapping_add(b as u64));
 
-            // Sample units with replacement
-            let sampled_units: Vec<usize> = (0..n_units)
-                .map(|_| rng.gen_range(0..n_units))
-                .collect();
+            // Issue D fix: Stratified sampling - sample control and treated units separately
+            let mut sampled_units: Vec<usize> = Vec::with_capacity(n_units);
+
+            // Sample control units with replacement
+            for _ in 0..n_control_units {
+                let idx = rng.gen_range(0..n_control_units);
+                sampled_units.push(original_control_units[idx]);
+            }
+
+            // Sample treated units with replacement
+            for _ in 0..n_treated_units {
+                let idx = rng.gen_range(0..n_treated_units);
+                sampled_units.push(original_treated_units[idx]);
+            }
 
             // Create bootstrap matrices by selecting columns
             let mut y_boot = Array2::<f64>::zeros((n_periods, n_units));
@@ -724,7 +801,10 @@ pub fn bootstrap_trop_variance<'py>(
             let mut tau_values = Vec::with_capacity(boot_treated.len());
 
             for (t, i) in boot_treated {
+                // Issue A+B fix: pass y and d for dynamic control sets and per-obs distances
                 let weight_matrix = compute_weight_matrix(
+                    &y_boot.view(),
+                    &d_boot.view(),
                     n_periods,
                     n_units,
                     i,

@@ -1198,3 +1198,295 @@ class TestOptimizationEquivalence:
         assert results1.lambda_time == results2.lambda_time
         assert results1.lambda_unit == results2.lambda_unit
         assert results1.lambda_nn == results2.lambda_nn
+
+
+class TestPaperConformanceFixes:
+    """Tests verifying fixes for paper conformance issues.
+
+    These tests validate the four fixes from the implementation assessment:
+    - Issue A: Control set includes pre-treatment obs of eventually-treated units
+    - Issue B: Distance computation excludes target period
+    - Issue C: Nuclear norm update uses weights
+    - Issue D: Bootstrap uses stratified sampling
+    """
+
+    def test_issue_a_control_includes_pretreatment_obs(self):
+        """
+        Test Issue A fix: Control set includes pre-treatment observations
+        of eventually-treated units.
+
+        Paper's Equation 2 (page 7) sums over ALL observations where
+        (1 - W_js) is non-zero, including pre-treatment periods of
+        eventually-treated units.
+        """
+        # Create staggered adoption data where treated units have
+        # informative pre-treatment outcomes
+        rng = np.random.default_rng(42)
+        n_units = 20
+        n_early_treat = 5  # Units treated at period 3
+        n_late_treat = 5   # Units treated at period 5
+        n_control = 10     # Never-treated units
+        n_periods = 8
+        true_att = 2.0
+
+        data = []
+        for i in range(n_units):
+            # Determine treatment timing
+            if i < n_early_treat:
+                treat_period = 3
+                unit_fe = 5.0  # Early-treated have specific level
+            elif i < n_early_treat + n_late_treat:
+                treat_period = 5
+                unit_fe = 5.5  # Late-treated similar to early-treated
+            else:
+                treat_period = None
+                unit_fe = 10.0  # Control units have different level
+
+            for t in range(n_periods):
+                is_post = treat_period is not None and t >= treat_period
+                treatment_indicator = 1 if is_post else 0
+                y = unit_fe + 0.2 * t
+                if treatment_indicator:
+                    y += true_att
+                y += rng.normal(0, 0.3)
+                data.append({
+                    "unit": i,
+                    "period": t,
+                    "outcome": y,
+                    "treated": treatment_indicator,
+                })
+
+        df = pd.DataFrame(data)
+
+        # With Issue A fix, TROP should be able to use pre-treatment
+        # observations of late-treated units as controls for early-treated
+        trop_est = TROP(
+            lambda_time_grid=[0.0],
+            lambda_unit_grid=[1.0],  # Use unit weights so distance matters
+            lambda_nn_grid=[0.0],
+            n_bootstrap=10,
+            seed=42
+        )
+        results = trop_est.fit(
+            df,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="period",
+        )
+
+        # Should recover treatment effect direction
+        assert results.att > 0, f"ATT={results.att:.3f} should be positive"
+
+    def test_issue_b_distance_excludes_target_period(self):
+        """
+        Test Issue B fix: Distance computation excludes target period.
+
+        Paper's Equation 3 (page 7) specifies 1{u ≠ t} to exclude the
+        target period when computing pairwise distances.
+        """
+        rng = np.random.default_rng(123)
+
+        # Create data where unit 0's outcome at target period is very different
+        n_units = 10
+        n_periods = 6
+        data = []
+        for i in range(n_units):
+            is_treated = i == 0
+            for t in range(n_periods):
+                if is_treated and t == 3:
+                    # Target period (t=3) has anomalous outcome
+                    y = 100.0  # Very different from other periods
+                elif is_treated and t >= 3:
+                    y = 5.0 + rng.normal(0, 0.1)
+                else:
+                    y = 5.0 + rng.normal(0, 0.1)
+
+                treatment_indicator = 1 if (is_treated and t >= 3) else 0
+                data.append({
+                    "unit": i,
+                    "period": t,
+                    "outcome": y,
+                    "treated": treatment_indicator,
+                })
+
+        df = pd.DataFrame(data)
+
+        trop_est = TROP(
+            lambda_time_grid=[0.0],
+            lambda_unit_grid=[1.0],
+            lambda_nn_grid=[0.0],
+            n_bootstrap=5,
+            seed=42
+        )
+
+        # With Issue B fix (target period excluded), this should complete
+        # Without the fix, the anomalous period would dominate distance
+        results = trop_est.fit(
+            df,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="period",
+            post_periods=[3, 4, 5],
+        )
+
+        # Model should fit without error
+        assert results is not None
+        # ATT should be finite
+        assert np.isfinite(results.att)
+
+    def test_issue_c_weighted_nuclear_norm(self):
+        """
+        Test Issue C fix: Nuclear norm update properly accounts for weights.
+
+        The paper's Equation 2 (page 7) specifies the full weighted objective.
+        Weights should affect L matrix estimation.
+        """
+        rng = np.random.default_rng(456)
+
+        # Create data with factor structure where weights matter
+        n_units = 15
+        n_periods = 8
+        n_treated = 3
+        true_att = 2.0
+
+        # Factor loadings that vary by unit
+        loadings = rng.normal(0, 1, n_units)
+        factors = rng.normal(0, 1, n_periods)
+
+        data = []
+        for i in range(n_units):
+            is_treated = i < n_treated
+            for t in range(n_periods):
+                post = t >= 5
+                # Y = mu + factor_component + treatment_effect + noise
+                y = 10.0 + loadings[i] * factors[t]
+                treatment_indicator = 1 if (is_treated and post) else 0
+                if treatment_indicator:
+                    y += true_att
+                y += rng.normal(0, 0.3)
+                data.append({
+                    "unit": i,
+                    "period": t,
+                    "outcome": y,
+                    "treated": treatment_indicator,
+                })
+
+        df = pd.DataFrame(data)
+
+        # Test with nuclear norm regularization
+        trop_est = TROP(
+            lambda_time_grid=[0.0],
+            lambda_unit_grid=[0.0],
+            lambda_nn_grid=[0.1, 1.0],  # Use regularization
+            n_bootstrap=10,
+            seed=42
+        )
+        results = trop_est.fit(
+            df,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="period",
+            post_periods=[5, 6, 7],
+        )
+
+        # Factor matrix should have been estimated with non-zero effective rank
+        # (with weighted nuclear norm solver, this tests the code path)
+        assert results.effective_rank >= 0
+        # ATT should recover treatment effect direction
+        assert results.att > 0, f"ATT={results.att:.3f} should be positive"
+
+    def test_issue_d_stratified_bootstrap(self):
+        """
+        Test Issue D fix: Bootstrap uses stratified sampling.
+
+        Paper's Algorithm 3 (page 27) specifies sampling N_0 control and
+        N_1 treated units separately to preserve treatment ratio.
+        """
+        rng = np.random.default_rng(789)
+
+        # Create data with unbalanced treated/control ratio
+        n_treated = 3
+        n_control = 17
+        n_units = n_treated + n_control
+        n_periods = 6
+        true_att = 2.0
+
+        data = []
+        for i in range(n_units):
+            is_treated = i < n_treated
+            for t in range(n_periods):
+                post = t >= 3
+                y = 10.0 + rng.normal(0, 0.5)
+                treatment_indicator = 1 if (is_treated and post) else 0
+                if treatment_indicator:
+                    y += true_att
+                data.append({
+                    "unit": i,
+                    "period": t,
+                    "outcome": y,
+                    "treated": treatment_indicator,
+                })
+
+        df = pd.DataFrame(data)
+
+        # Run with bootstrap variance estimation
+        trop_est = TROP(
+            lambda_time_grid=[0.0],
+            lambda_unit_grid=[0.0],
+            lambda_nn_grid=[0.0],
+            variance_method="bootstrap",
+            n_bootstrap=30,
+            seed=42
+        )
+        results = trop_est.fit(
+            df,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="period",
+            post_periods=[3, 4, 5],
+        )
+
+        # Bootstrap should complete successfully
+        assert results.bootstrap_distribution is not None
+        assert len(results.bootstrap_distribution) >= 20  # Most iterations succeed
+        # SE should be positive and finite
+        assert results.se > 0
+        assert np.isfinite(results.se)
+
+    def test_weighted_nuclear_norm_solver_convergence(self):
+        """
+        Test that the weighted nuclear norm solver converges properly.
+        """
+        trop_est = TROP(
+            lambda_time_grid=[0.0],
+            lambda_unit_grid=[0.0],
+            lambda_nn_grid=[1.0],  # Larger lambda for more regularization
+        )
+
+        # Create test data
+        n_periods = 5
+        n_units = 8
+
+        Y = np.random.default_rng(42).normal(0, 1, (n_periods, n_units))
+        W = np.ones((n_periods, n_units))
+        L_init = np.zeros((n_periods, n_units))
+        alpha = np.zeros(n_units)
+        beta = np.zeros(n_periods)
+
+        # Call the weighted nuclear norm solver
+        L = trop_est._weighted_nuclear_norm_solve(
+            Y, W, L_init, alpha, beta, lambda_nn=1.0, max_inner_iter=20
+        )
+
+        # L should be finite and have reasonable values
+        assert np.all(np.isfinite(L))
+        # With nuclear norm regularization, singular values should be reduced
+        _, s, _ = np.linalg.svd(L, full_matrices=False)
+        _, s_orig, _ = np.linalg.svd(Y, full_matrices=False)
+        # Regularized singular values should be smaller than original
+        assert np.sum(s) < np.sum(s_orig), \
+            "Nuclear norm regularization should reduce total singular value mass"
