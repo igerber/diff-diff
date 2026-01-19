@@ -8,18 +8,19 @@ For past changes and release history, see [CHANGELOG.md](CHANGELOG.md).
 
 ## Current Status
 
-diff-diff v2.0.0 is a **production-ready** DiD library with feature parity with R's `did` + `HonestDiD` + `synthdid` ecosystem for core DiD analysis:
+diff-diff v2.1.1 is a **production-ready** DiD library with feature parity with R's `did` + `HonestDiD` + `synthdid` ecosystem for core DiD analysis:
 
-- **Core estimators**: Basic DiD, TWFE, MultiPeriod, Callaway-Sant'Anna, Sun-Abraham, Synthetic DiD, Triple Difference (DDD)
+- **Core estimators**: Basic DiD, TWFE, MultiPeriod, Callaway-Sant'Anna, Sun-Abraham, Synthetic DiD, Triple Difference (DDD), TROP
 - **Valid inference**: Robust SEs, cluster SEs, wild bootstrap, multiplier bootstrap, placebo-based variance
 - **Assumption diagnostics**: Parallel trends tests, placebo tests, Goodman-Bacon decomposition
 - **Sensitivity analysis**: Honest DiD (Rambachan-Roth), Pre-trends power analysis (Roth 2022)
 - **Study design**: Power analysis tools
+- **Data utilities**: Real-world datasets (Card-Krueger, Castle Doctrine, Divorce Laws, MPDTA), DGP functions for all supported designs
 - **Performance**: Optional Rust backend for accelerated computation; faster than R at scale (see [CHANGELOG.md](CHANGELOG.md) for benchmarks)
 
 ---
 
-## Near-Term Enhancements (v2.1)
+## Near-Term Enhancements (v2.2)
 
 High-value additions building on our existing foundation.
 
@@ -75,7 +76,7 @@ Extend the existing `TripleDifference` estimator to handle staggered adoption se
 
 ---
 
-## Medium-Term Enhancements (v2.2+)
+## Medium-Term Enhancements (v2.3+)
 
 Extending diff-diff to handle more complex settings.
 
@@ -149,27 +150,6 @@ Extends DiD to duration/survival outcomes where standard methods fail (hazard ra
 
 ---
 
-## Triply Robust Panel Estimator (v2.3)
-
-### TROP Estimator
-
-The Triply Robust Panel (TROP) estimator from Athey, Imbens, Qu & Viviano (2025) combines three components for robust causal effect estimation in panel data:
-
-1. **Flexible outcome model**: Low-rank factor structure on top of two-way fixed effects
-2. **Unit weights**: Upweight control units similar to treated units (like synthetic control)
-3. **Time weights**: Upweight time periods close to treatment (like SDID)
-
-**Triple robustness property**: The estimator is asymptotically unbiased if *any one* of the three components removes the underlying bias. The bias depends on the *product* of unit-level imbalance, time-level imbalance, and regression adjustment error—a tighter bound than TWFE, SC, or SDID alone.
-
-**Key advantages:**
-- Outperforms TWFE/DiD, synthetic control, matrix completion, and SDID in simulations matched to real datasets
-- More robust than existing methods across a wide range of empirically relevant settings
-- Combines the strengths of regression adjustment, synthetic control weighting, and SDID time weighting
-
-**Reference**: [Athey, S., Imbens, G., Qu, Z., & Viviano, D. (2025)](https://arxiv.org/abs/2508.21536). "Triply Robust Panel Estimators." *Working Paper*. Presented at the Journal of Applied Econometrics lecture, ASSA meetings, January 2025.
-
----
-
 ## Long-Term Research Directions (v3.0+)
 
 Frontier methods requiring more research investment.
@@ -223,13 +203,11 @@ Ongoing maintenance and developer experience.
 
 ### Code Quality
 
-- Extract shared within-transformation logic to utils
-- ~~Consolidate linear regression helpers~~ ✓ Done (v2.1): Added `LinearRegression` helper class and `InferenceResult` dataclass in `linalg.py`. All major estimators (DifferenceInDifferences, TwoWayFixedEffects, SunAbraham, TripleDifference) now use the unified helper for coefficient extraction and inference.
 - Consider splitting `staggered.py` (1800+ lines)
+- Consider splitting `prep.py` (now 2000+ lines with DGP functions)
 
 ### Documentation
 
-- Real-world data examples (beyond synthetic)
 - Video tutorials and worked examples
 
 ---
