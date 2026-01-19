@@ -103,8 +103,19 @@ Determine if this is a fork-based workflow:
        git diff --cached --stat     # Staged changes
        git status --porcelain       # All changes summary
        ```
-     - Slugify the PR title (if provided) or generate from changes: lowercase, replace spaces with hyphens
+     - **Sanitize the branch name** (from title or generated):
+       1. Lowercase the string
+       2. Replace spaces with hyphens
+       3. Remove invalid git ref characters: `:`, `?`, `*`, `[`, `]`, `^`, `~`, `\`, `@{`, `..`
+       4. Replace consecutive hyphens/underscores with single hyphen
+       5. Trim leading/trailing hyphens
+       6. Truncate to reasonable length (50 chars max for branch name portion)
      - Prefix based on change type: `feature/`, `fix/`, `refactor/`, `docs/`
+     - **Validate with git**:
+       ```bash
+       git check-ref-format --branch "<branch-name>"
+       ```
+       - If validation fails, prompt user for a valid branch name
      - If no diff output and no title provided, prompt user for branch name
    - **Create and switch to the new branch BEFORE staging**:
      ```bash
@@ -123,13 +134,18 @@ Determine if this is a fork-based workflow:
    ```
 
 2. **Secret scanning check** (AFTER staging to catch all files):
-   - **Run deterministic pattern check**:
+   - **Run deterministic pattern check** (case-insensitive with expanded patterns):
      ```bash
-     git diff --cached | grep -E "(AKIA[A-Z0-9]{16}|ghp_[a-zA-Z0-9]{36}|sk-[a-zA-Z0-9]{48}|API_KEY=|SECRET=|PASSWORD=|PRIVATE_KEY)" || true
+     git diff --cached | grep -iE "(AKIA[A-Z0-9]{16}|ghp_[a-zA-Z0-9]{36}|sk-[a-zA-Z0-9]{48}|gho_[a-zA-Z0-9]{36}|api[_-]?key\s*[=:]|secret[_-]?key\s*[=:]|password\s*[=:]|private[_-]?key|bearer\s+[a-zA-Z0-9_-]+|token\s*[=:])" || true
      ```
-   - **Check for sensitive file names**:
+   - **Check for sensitive file names** (case-insensitive):
      ```bash
-     git diff --cached --name-only | grep -E "(\.env|credentials|secret|\.pem|\.key)$" || true
+     git diff --cached --name-only | grep -iE "(\.env|credentials|secret|\.pem|\.key|\.p12|\.pfx|id_rsa|id_ed25519)$" || true
+     ```
+   - **Optional**: For more thorough scanning, use dedicated tools if available:
+     ```bash
+     # gitleaks detect --staged --no-git  # If gitleaks installed
+     # trufflehog git file://. --only-verified --fail  # If trufflehog installed
      ```
    - Pay special attention to newly added files:
      ```bash
