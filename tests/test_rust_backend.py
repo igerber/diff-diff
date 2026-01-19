@@ -564,6 +564,283 @@ class TestRustVsNumpy:
             )
 
 
+@pytest.mark.skipif(not HAS_RUST_BACKEND, reason="Rust backend not available")
+class TestTROPRustBackend:
+    """Test suite for TROP Rust backend functions."""
+
+    def test_unit_distance_matrix_shape(self):
+        """Test unit distance matrix has correct shape."""
+        from diff_diff._rust_backend import compute_unit_distance_matrix
+
+        np.random.seed(42)
+        n_periods, n_units = 10, 5
+        Y = np.random.randn(n_periods, n_units)
+        D = np.zeros((n_periods, n_units))  # All control
+
+        dist_matrix = compute_unit_distance_matrix(Y, D)
+        assert dist_matrix.shape == (n_units, n_units)
+
+    def test_unit_distance_matrix_diagonal_zero(self):
+        """Test unit distance matrix has zero diagonal."""
+        from diff_diff._rust_backend import compute_unit_distance_matrix
+
+        np.random.seed(42)
+        n_periods, n_units = 10, 5
+        Y = np.random.randn(n_periods, n_units)
+        D = np.zeros((n_periods, n_units))
+
+        dist_matrix = compute_unit_distance_matrix(Y, D)
+
+        for i in range(n_units):
+            assert dist_matrix[i, i] == 0.0, f"Diagonal [{i}, {i}] should be 0"
+
+    def test_unit_distance_matrix_symmetric(self):
+        """Test unit distance matrix is symmetric."""
+        from diff_diff._rust_backend import compute_unit_distance_matrix
+
+        np.random.seed(42)
+        n_periods, n_units = 10, 5
+        Y = np.random.randn(n_periods, n_units)
+        D = np.zeros((n_periods, n_units))
+
+        dist_matrix = compute_unit_distance_matrix(Y, D)
+        np.testing.assert_array_almost_equal(dist_matrix, dist_matrix.T)
+
+    def test_unit_distance_matrix_matches_numpy(self):
+        """Test Rust distance matrix matches NumPy implementation."""
+        from diff_diff._rust_backend import compute_unit_distance_matrix
+        from diff_diff.trop import TROP
+
+        np.random.seed(42)
+        n_periods, n_units = 8, 4
+        Y = np.random.randn(n_periods, n_units)
+        D = np.zeros((n_periods, n_units))
+
+        # Rust implementation
+        rust_dist = compute_unit_distance_matrix(Y, D)
+
+        # NumPy implementation
+        trop = TROP()
+        numpy_dist = trop._compute_all_unit_distances(Y, D, n_units, n_periods)
+
+        np.testing.assert_array_almost_equal(
+            rust_dist, numpy_dist, decimal=10,
+            err_msg="Distance matrices should match"
+        )
+
+    def test_unit_distance_excludes_treated(self):
+        """Test distance matrix excludes treated observations."""
+        from diff_diff._rust_backend import compute_unit_distance_matrix
+
+        np.random.seed(42)
+        n_periods, n_units = 10, 5
+        Y = np.random.randn(n_periods, n_units)
+        D = np.zeros((n_periods, n_units))
+        # Mark some periods as treated for unit 0
+        D[5:, 0] = 1.0
+
+        dist_matrix = compute_unit_distance_matrix(Y, D)
+
+        # Should still produce valid distances
+        assert np.all(np.isfinite(dist_matrix) | (dist_matrix == np.inf))
+        assert dist_matrix[0, 0] == 0.0
+
+    def test_loocv_grid_search_returns_valid_params(self):
+        """Test LOOCV grid search returns valid parameter tuple."""
+        from diff_diff._rust_backend import loocv_grid_search
+
+        np.random.seed(42)
+        n_periods, n_units = 8, 6
+        Y = np.random.randn(n_periods, n_units)
+        D = np.zeros((n_periods, n_units))
+        # Mark last 2 periods for unit 0 as treated
+        D[6:, 0] = 1.0
+
+        control_mask = (D == 0).astype(np.uint8)
+        control_unit_idx = np.array([1, 2, 3, 4, 5], dtype=np.int64)
+
+        # Compute distance matrices
+        from diff_diff._rust_backend import compute_unit_distance_matrix
+        unit_dist = compute_unit_distance_matrix(Y, D)
+        time_dist = np.abs(
+            np.arange(n_periods)[:, np.newaxis] - np.arange(n_periods)[np.newaxis, :]
+        ).astype(np.int64)
+
+        lambda_time = np.array([0.0, 1.0], dtype=np.float64)
+        lambda_unit = np.array([0.0, 1.0], dtype=np.float64)
+        lambda_nn = np.array([0.0, 0.1], dtype=np.float64)
+
+        best_lt, best_lu, best_ln, score = loocv_grid_search(
+            Y, D, control_mask, control_unit_idx,
+            unit_dist, time_dist,
+            lambda_time, lambda_unit, lambda_nn,
+            50, 100, 1e-6, 42
+        )
+
+        # Check returned parameters are from the grid
+        assert best_lt in lambda_time
+        assert best_lu in lambda_unit
+        assert best_ln in lambda_nn
+        assert np.isfinite(score) or score == np.inf
+
+    def test_bootstrap_variance_shape(self):
+        """Test bootstrap returns correct shapes."""
+        from diff_diff._rust_backend import bootstrap_trop_variance, compute_unit_distance_matrix
+
+        np.random.seed(42)
+        n_periods, n_units = 8, 6
+        Y = np.random.randn(n_periods, n_units)
+        D = np.zeros((n_periods, n_units))
+        D[6:, 0] = 1.0  # Treat unit 0 in last 2 periods
+
+        control_mask = (D == 0).astype(np.uint8)
+        control_unit_idx = np.array([1, 2, 3, 4, 5], dtype=np.int64)
+        treated_t = np.array([6, 7], dtype=np.int64)
+        treated_i = np.array([0, 0], dtype=np.int64)
+
+        unit_dist = compute_unit_distance_matrix(Y, D)
+        time_dist = np.abs(
+            np.arange(n_periods)[:, np.newaxis] - np.arange(n_periods)[np.newaxis, :]
+        ).astype(np.int64)
+
+        n_bootstrap = 20
+        estimates, se = bootstrap_trop_variance(
+            Y, D, control_mask, control_unit_idx,
+            treated_t, treated_i,
+            unit_dist, time_dist,
+            1.0, 1.0, 0.1,  # lambda values
+            n_bootstrap, 100, 1e-6, 42
+        )
+
+        # Should return array of bootstrap estimates and SE
+        assert len(estimates) <= n_bootstrap  # Some may fail
+        assert se >= 0.0  # SE should be non-negative
+
+    def test_bootstrap_reproducibility(self):
+        """Test bootstrap is reproducible with same seed."""
+        from diff_diff._rust_backend import bootstrap_trop_variance, compute_unit_distance_matrix
+
+        np.random.seed(42)
+        n_periods, n_units = 8, 6
+        Y = np.random.randn(n_periods, n_units)
+        D = np.zeros((n_periods, n_units))
+        D[6:, 0] = 1.0
+
+        control_mask = (D == 0).astype(np.uint8)
+        control_unit_idx = np.array([1, 2, 3, 4, 5], dtype=np.int64)
+        treated_t = np.array([6, 7], dtype=np.int64)
+        treated_i = np.array([0, 0], dtype=np.int64)
+
+        unit_dist = compute_unit_distance_matrix(Y, D)
+        time_dist = np.abs(
+            np.arange(n_periods)[:, np.newaxis] - np.arange(n_periods)[np.newaxis, :]
+        ).astype(np.int64)
+
+        # Run twice with same seed
+        est1, se1 = bootstrap_trop_variance(
+            Y, D, control_mask, control_unit_idx,
+            treated_t, treated_i,
+            unit_dist, time_dist,
+            1.0, 1.0, 0.1, 20, 100, 1e-6, 42
+        )
+        est2, se2 = bootstrap_trop_variance(
+            Y, D, control_mask, control_unit_idx,
+            treated_t, treated_i,
+            unit_dist, time_dist,
+            1.0, 1.0, 0.1, 20, 100, 1e-6, 42
+        )
+
+        np.testing.assert_array_almost_equal(est1, est2)
+        assert abs(se1 - se2) < 1e-10
+
+
+@pytest.mark.skipif(not HAS_RUST_BACKEND, reason="Rust backend not available")
+class TestTROPRustVsNumpy:
+    """Tests comparing TROP Rust and NumPy implementations for numerical equivalence."""
+
+    def test_distance_matrix_matches_numpy(self):
+        """Test Rust distance matrix matches NumPy implementation exactly."""
+        from diff_diff._rust_backend import compute_unit_distance_matrix
+        from diff_diff.trop import TROP
+
+        np.random.seed(42)
+        n_periods, n_units = 12, 8
+        Y = np.random.randn(n_periods, n_units)
+        D = np.zeros((n_periods, n_units))
+        # Add some treatment to make it realistic
+        D[8:, 0] = 1.0
+        D[10:, 1] = 1.0
+
+        # Rust implementation
+        rust_dist = compute_unit_distance_matrix(Y, D)
+
+        # NumPy implementation (directly call the private method)
+        trop = TROP()
+        numpy_dist = trop._compute_all_unit_distances(Y, D, n_units, n_periods)
+
+        np.testing.assert_array_almost_equal(
+            rust_dist, numpy_dist, decimal=10,
+            err_msg="Distance matrices should match exactly"
+        )
+
+    def test_trop_produces_valid_results(self):
+        """Test TROP with Rust backend produces valid estimation results."""
+        import pandas as pd
+        from diff_diff import TROP
+
+        np.random.seed(42)
+
+        # Create test data with known treatment effect
+        n_units = 10
+        n_periods = 8
+        true_effect = 2.0
+        data = []
+
+        for i in range(n_units):
+            for t in range(n_periods):
+                is_treated = (i == 0) and (t >= 6)
+                y = 1.0 + 0.5 * i + 0.3 * t + (true_effect if is_treated else 0) + np.random.randn() * 0.5
+                data.append({
+                    'unit': i,
+                    'time': t,
+                    'outcome': y,
+                    'treated': 1 if is_treated else 0
+                })
+
+        df = pd.DataFrame(data)
+
+        # Fit with current backend (Rust if available)
+        trop = TROP(
+            lambda_time_grid=[0.0, 1.0],
+            lambda_unit_grid=[0.0, 1.0],
+            lambda_nn_grid=[0.0, 0.1],
+            n_bootstrap=20,
+            max_loocv_samples=30,
+            seed=42
+        )
+        results = trop.fit(df, 'outcome', 'treated', 'unit', 'time')
+
+        # Check results are valid
+        assert np.isfinite(results.att), "ATT should be finite"
+        assert np.isfinite(results.se), "SE should be finite"
+        assert results.se >= 0, "SE should be non-negative"
+
+        # ATT should be in reasonable range of true effect.
+        # Tolerance of 2.0 accounts for:
+        # - Small sample size (only 2 treated observations: unit 0, periods 6-7)
+        # - Noise in data generation (std=0.5)
+        # - LOOCV-selected tuning parameters may not be optimal for small samples
+        # This is a validity test, not a precision test - we're checking the
+        # estimation produces sensible results, not exact recovery.
+        assert abs(results.att - true_effect) < 2.0, \
+            f"ATT {results.att:.2f} should be close to true effect {true_effect}"
+
+        # Tuning parameters should be from the grid
+        assert results.lambda_time in [0.0, 1.0]
+        assert results.lambda_unit in [0.0, 1.0]
+        assert results.lambda_nn in [0.0, 0.1]
+
+
 class TestFallbackWhenNoRust:
     """Test that pure Python fallback works when Rust is unavailable."""
 
