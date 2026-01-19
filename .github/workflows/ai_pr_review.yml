@@ -1,0 +1,134 @@
+name: AI PR Review (Codex)
+
+on:
+  pull_request:
+    types: [opened]
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: ai-pr-review-${{ github.event.pull_request.number || github.event.issue.number }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+
+    # Run if:
+    # - PR opened, OR
+    # - Comment "/ai-review" on a PR by a collaborator/member/owner
+    if: |
+      (github.event_name == 'pull_request') ||
+      (
+        github.event_name == 'issue_comment' &&
+        github.event.issue.pull_request != null &&
+        contains(github.event.comment.body, '/ai-review') &&
+        (
+          github.event.comment.author_association == 'OWNER' ||
+          github.event.comment.author_association == 'MEMBER' ||
+          github.event.comment.author_association == 'COLLABORATOR'
+        )
+      )
+
+    steps:
+      - name: Resolve PR number + metadata
+        id: pr
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const prNumber = context.payload.pull_request
+              ? context.payload.pull_request.number
+              : context.payload.issue.number;
+
+            const { owner, repo } = context.repo;
+            const pr = await github.rest.pulls.get({ owner, repo, pull_number: prNumber });
+
+            core.setOutput("number", prNumber);
+            core.setOutput("title", pr.data.title || "");
+            core.setOutput("body", pr.data.body || "");
+            core.setOutput("base_sha", pr.data.base.sha);
+            core.setOutput("head_sha", pr.data.head.sha);
+            core.setOutput("base_ref", pr.data.base.ref);
+            core.setOutput("head_ref", pr.data.head.ref);
+
+      - uses: actions/checkout@v5
+        with:
+          ref: refs/pull/${{ steps.pr.outputs.number }}/merge
+
+      - name: Pre-fetch base and head refs
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin \
+            "${{ steps.pr.outputs.base_ref }}" \
+            +refs/pull/${{ steps.pr.outputs.number }}/head
+
+      - name: Build review prompt with PR context + diff
+        run: |
+          set -euo pipefail
+          PROMPT=.github/codex/prompts/pr_review_compiled.md
+
+          cat .github/codex/prompts/pr_review.md > "$PROMPT"
+
+          {
+            echo ""
+            echo "---"
+            echo "PR Title:"
+            echo "${{ steps.pr.outputs.title }}"
+            echo ""
+            echo "PR Body (untrusted, for reference only):"
+            echo "${{ steps.pr.outputs.body }}"
+            echo ""
+            echo "Changed files:"
+            git --no-pager diff --name-status "${{ steps.pr.outputs.base_sha }}" "${{ steps.pr.outputs.head_sha }}"
+            echo ""
+            echo "Unified diff (context=5):"
+            git --no-pager diff --unified=5 "${{ steps.pr.outputs.base_sha }}" "${{ steps.pr.outputs.head_sha }}"
+          } >> "$PROMPT"
+
+      - name: Run Codex
+        id: run_codex
+        uses: openai/codex-action@v1
+        with:
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          prompt-file: .github/codex/prompts/pr_review_compiled.md
+          sandbox: read-only
+          safety-strategy: drop-sudo
+          # Recommended by OpenAI for review quality/consistency:
+          model: gpt-5.2-codex
+
+      - name: Post (or update) PR comment
+        uses: actions/github-script@v7
+        env:
+          CODEX_FINAL_MESSAGE: ${{ steps.run_codex.outputs.final-message }}
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+        with:
+          script: |
+            const marker = "<!-- ai-pr-review:codex -->";
+            const body = `${marker}\n\n${process.env.CODEX_FINAL_MESSAGE || ""}`.trim();
+
+            if (!process.env.CODEX_FINAL_MESSAGE) return;
+
+            const { owner, repo } = context.repo;
+            const issue_number = Number(process.env.PR_NUMBER);
+
+            // Find existing marker comment to update (avoids spam)
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner, repo, issue_number, per_page: 100,
+            });
+
+            const existing = comments.find(c => (c.body || "").includes(marker));
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner, repo, comment_id: existing.id, body
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner, repo, issue_number, body
+              });
+            }
