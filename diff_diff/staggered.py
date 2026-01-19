@@ -26,7 +26,6 @@ from diff_diff.staggered_results import (
 from diff_diff.staggered_bootstrap import (
     CSBootstrapResults,
     CallawaySantAnnaBootstrapMixin,
-    _generate_bootstrap_weights_batch,
 )
 from diff_diff.staggered_aggregation import (
     CallawaySantAnnaAggregationMixin,

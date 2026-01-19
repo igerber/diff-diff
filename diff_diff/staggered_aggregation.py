@@ -5,7 +5,7 @@ This module provides the mixin class containing methods for aggregating
 group-time average treatment effects into summary measures.
 """
 
-from typing import Any, Dict, List, Optional, Set, Tuple, TYPE_CHECKING
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 import numpy as np
 import pandas as pd
@@ -15,9 +15,8 @@ from diff_diff.utils import (
     compute_p_value,
 )
 
-if TYPE_CHECKING:
-    # PrecomputedData is a Dict[str, Any], but we define the alias here for clarity
-    PrecomputedData = Dict[str, Any]
+# Type alias for pre-computed structures (defined at module scope for runtime access)
+PrecomputedData = Dict[str, Any]
 
 
 class CallawaySantAnnaAggregationMixin:
