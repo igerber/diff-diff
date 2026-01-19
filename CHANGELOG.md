@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.3] - 2026-01-19
+
+### Fixed
+- TROP estimator paper conformance issues (Athey et al. 2025)
+  - Control set now includes pre-treatment observations of eventually-treated units (Issue A)
+  - Unit distance computation excludes target period per Equation 3 (Issue B)
+  - Nuclear norm update uses weighted proximal gradient instead of unweighted soft-thresholding (Issue C)
+  - Bootstrap sampling now stratifies by treatment status per Algorithm 3 (Issue D)
+- TROP Rust backend alignment with paper specification
+  - Weight normalization to sum to 1 (probability weights)
+  - Weighted proximal gradient for L update with step size η ≤ 1/max(W)
+
+### Changed
+- Cleaned up unused parameters from TROP Rust API
+  - Removed `control_unit_idx` and `unit_dist_matrix` from public functions
+  - Per-observation distances now computed dynamically (more accurate, slightly slower)
+
 ## [2.1.2] - 2026-01-19
 
 ### Added
@@ -453,6 +470,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `to_dict()` and `to_dataframe()` export methods
   - `is_significant` and `significance_stars` properties
 
+[2.1.3]: https://github.com/igerber/diff-diff/compare/v2.1.2...v2.1.3
 [2.1.2]: https://github.com/igerber/diff-diff/compare/v2.1.1...v2.1.2
 [2.1.1]: https://github.com/igerber/diff-diff/compare/v2.1.0...v2.1.1
 [2.1.0]: https://github.com/igerber/diff-diff/compare/v2.0.3...v2.1.0
