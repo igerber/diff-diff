@@ -5,6 +5,32 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.1] - 2026-01-19
+
+### Added
+- **Rust backend acceleration for TROP estimator** delivering 5-20x overall speedup
+  - `compute_unit_distance_matrix` - Parallel pairwise RMSE computation for donor matching
+  - `loocv_grid_search` - Parallel leave-one-out cross-validation across 180 parameter combinations
+  - `bootstrap_trop_variance` - Parallel bootstrap variance estimation
+  - Automatic fallback to Python when Rust backend unavailable
+  - Logging for Rust fallback events to aid debugging
+- **`/bump-version` skill** for release management
+  - Updates version in `__init__.py`, `pyproject.toml`, and `rust/Cargo.toml`
+  - Generates CHANGELOG entries from git commits
+  - Adds comparison links automatically
+- **`/review-pr` skill** for code review workflow
+
+### Changed
+- **TROP estimator performance optimizations** (Python backend)
+  - Vectorized distance matrix computation using NumPy broadcasting
+  - Extracted tuning constants to module-level for clarity
+  - Added `TROPTuningParams` TypedDict for parameter documentation
+
+### Fixed
+- Tutorial notebook validation errors in `10_trop.ipynb`
+- Pre-existing RuntimeWarnings in CallawaySantAnna bootstrap (documented)
+- TROP `pre_periods` parameter handling for edge cases
+
 ## [2.1.0] - 2026-01-17
 
 ### Added
@@ -410,6 +436,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `to_dict()` and `to_dataframe()` export methods
   - `is_significant` and `significance_stars` properties
 
+[2.1.1]: https://github.com/igerber/diff-diff/compare/v2.1.0...v2.1.1
 [2.1.0]: https://github.com/igerber/diff-diff/compare/v2.0.3...v2.1.0
 [2.0.3]: https://github.com/igerber/diff-diff/compare/v2.0.2...v2.0.3
 [2.0.2]: https://github.com/igerber/diff-diff/compare/v2.0.1...v2.0.2
