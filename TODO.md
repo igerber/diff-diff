@@ -19,27 +19,18 @@ Current limitations that may affect users:
 
 ## Code Quality
 
-### Code Duplication
-
-Consolidation opportunities for cleaner maintenance:
-
-| Duplicate Code | Locations | Notes |
-|---------------|-----------|-------|
-| ~~Within-transformation logic~~ | ~~Multiple files~~ | ✅ Extracted to `utils.py` as `demean_by_group()` and `within_transform()` (v2.0.1) |
-| ~~Linear regression helper~~ | ~~Multiple files~~ | ✅ Added `LinearRegression` class in `linalg.py` (v2.0.3). Used by DifferenceInDifferences, TwoWayFixedEffects, SunAbraham, TripleDifference. |
-
 ### Large Module Files
 
 Target: < 1000 lines per module for maintainability.
 
 | File | Lines | Action |
 |------|-------|--------|
+| `prep.py` | 1993 | Grew with DGP functions; consider splitting |
 | `staggered.py` | 1822 | Consider splitting to `staggered_bootstrap.py` |
 | `honest_did.py` | 1491 | Acceptable |
 | `visualization.py` | 1388 | Acceptable |
 | `utils.py` | 1350 | Acceptable |
 | `power.py` | 1350 | Acceptable |
-| `prep.py` | 1338 | Acceptable |
 | `bacon.py` | 1027 | OK |
 
 ### Standard Error Consistency
@@ -60,13 +51,6 @@ Different estimators compute SEs differently. Consider unified interface.
 ## Test Coverage
 
 **Note**: 21 visualization tests are skipped when matplotlib unavailable—this is expected.
-
----
-
-## Documentation Improvements
-
-- [x] ~~Comparison of estimator outputs on same data~~ ✅ Done in `02_staggered_did.ipynb` (Section 13: Comparing CS and SA)
-- [x] ~~Real-world data examples (currently synthetic only)~~ ✅ Added `datasets.py` module and `09_real_world_examples.ipynb` with Card-Krueger, Castle Doctrine, and Divorce Laws datasets
 
 ---
 
@@ -107,22 +91,10 @@ Pre-existing RuntimeWarnings in matrix operations that should be investigated:
 
 ---
 
-## Rust Backend Optimizations
-
-Deferred from PR #58 code review (completed in v2.0.3):
-
-- [x] **Matrix inversion efficiency** (`rust/src/linalg.rs`): ✅ Uses Cholesky factorization for symmetric positive-definite matrices with LU fallback for near-singular cases
-- [x] **Reduce bootstrap allocations** (`rust/src/bootstrap.rs`): ✅ Direct Array2 allocation eliminates Vec<Vec<f64>> intermediate. Also added Rayon chunk size tuning and Webb lookup table optimization.
-- [x] **Static BLAS linking options** (`rust/Cargo.toml`): ✅ Added `openblas-static` and `intel-mkl-static` features for easier distribution
-- [x] **Vectorized variance computation** (`rust/src/linalg.rs`): ✅ HC1 meat and score computation now use BLAS-accelerated matrix operations instead of scalar loops
-
----
-
 ## Performance Optimizations
 
 Potential future optimizations:
 
 - [ ] JIT compilation for bootstrap loops (numba)
-- [x] ~~Parallel bootstrap iterations~~ ✅ Done via Rust backend (rayon) in v2.0
 - [ ] Sparse matrix handling for large fixed effects
 
