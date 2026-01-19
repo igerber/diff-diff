@@ -67,5 +67,12 @@ Cargo.lock
 # Maturin build artifacts
 target/
 
-# Claude Code - local settings (user-specific permissions)
+# Claude Code - local settings and generated files
 .claude/settings.local.json
+.claude/reviews/
+
+# MCP configuration (may contain tokens)
+.mcp.json
+
+# Local scripts (not part of package)
+scripts/
