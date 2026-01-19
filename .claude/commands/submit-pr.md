@@ -49,15 +49,54 @@ Parse `$ARGUMENTS` to extract:
 ### 3. Check for Changes
 
 Run `git status` to check for uncommitted changes:
-- If there are staged or unstaged changes, proceed to commit them
-- If there are no changes and HEAD is not ahead of base branch, inform user and exit
+- If there are staged or unstaged changes, proceed to step 4
+- If there are no changes and HEAD is not ahead of origin/<base-branch>, inform user and exit
 - If there are no local changes but commits exist that haven't been pushed, skip to step 6
 
-### 4. Stage and Commit Changes
+### 4. Resolve Branch Name (BEFORE any commits)
 
-1. **Stage all changes**: `git add -A`
+**IMPORTANT**: Always resolve the branch name before staging or committing to avoid commits on the base branch.
 
-2. **Generate commit message** (if changes exist):
+1. **Check current branch**:
+   ```bash
+   git branch --show-current
+   ```
+
+2. **If on base branch (e.g., `main`)**:
+   - Generate or use provided branch name
+   - **Generate branch name** (if not provided via `--branch`):
+     - Analyze unstaged changes with `git diff --stat` to understand the change type
+     - Slugify the PR title (if provided) or generate from changes: lowercase, replace spaces with hyphens
+     - Prefix based on change type: `feature/`, `fix/`, `refactor/`, `docs/`
+   - **Create and switch to the new branch BEFORE staging**:
+     ```bash
+     git checkout -b <branch-name>
+     ```
+
+3. **If already on a feature branch**:
+   - Use the current branch name
+   - No need to create a new branch
+
+### 5. Stage and Commit Changes
+
+1. **Secret scanning check**:
+   - Run `git diff` and scan for potential secrets:
+     - Files matching: `.env*`, `*credentials*`, `*secret*`, `*.pem`, `*.key`
+     - Content patterns: `API_KEY=`, `SECRET=`, `PASSWORD=`, `ghp_`, `sk-`, AWS keys, etc.
+   - If potential secrets detected, warn user and use AskUserQuestion to confirm:
+     ```
+     Warning: Potential secrets detected in staged files:
+     - .env.local (contains API_KEY=)
+     - config.json (contains "password":)
+
+     Options:
+     1. Abort - do not commit these files
+     2. Continue - I confirm these are not real secrets
+     ```
+
+2. **Stage all changes**: `git add -A`
+
+3. **Generate commit message** (if changes exist):
    - Run `git diff --cached --stat` to see what's being committed
    - Analyze the changes and generate a descriptive commit message
    - Use imperative mood ("Add", "Fix", "Update", "Refactor")
@@ -71,37 +110,34 @@ Run `git status` to check for uncommitted changes:
      )"
      ```
 
-### 5. Create and Switch to New Branch
-
-1. **Generate branch name** (if not provided):
-   - Slugify the PR title: lowercase, replace spaces with hyphens
-   - Prefix based on change type: `feature/`, `fix/`, `refactor/`, `docs/`
-
-2. **Create and checkout branch**:
-   ```bash
-   git checkout -b <branch-name>
-   ```
-
 ### 6. Push Branch to Remote
 
-```bash
-git push -u origin <branch-name>
-```
+1. **Ensure branch name is resolved**:
+   - If branch name was not resolved in step 4 (e.g., skipped due to no local changes):
+     ```bash
+     git branch --show-current
+     ```
+   - Use this as the branch name for push and PR creation
+
+2. **Push to remote**:
+   ```bash
+   git push -u origin <branch-name>
+   ```
 
 ### 7. Extract Commit Information for PR Body
 
-1. Get commits on this branch:
+1. Get commits on this branch (compare against remote to avoid stale data):
    ```bash
-   git log <base-branch>..HEAD --oneline
+   git log origin/<base-branch>..HEAD --oneline
    ```
 
 2. Get changed files:
    ```bash
-   git diff <base-branch>..HEAD --stat
+   git diff origin/<base-branch>..HEAD --stat
    ```
 
 3. Categorize changes for the template:
-   - Estimator/math changes: files in `diff_diff/` with statistical content
+   - **Estimator/math changes**: files in `diff_diff/`, `rust/src/`, or changes to `docs/methodology/REGISTRY.md`
    - Test changes: files in `tests/`
    - Documentation: files in `docs/`, `*.md`, `*.rst`
 
@@ -130,7 +166,7 @@ Generated with Claude Code
 ```
 
 **Template logic:**
-- **Methodology**: Mark "N/A" if no files in `diff_diff/` with estimator/algorithm changes
+- **Methodology**: Mark "N/A" only if NO files changed in `diff_diff/`, `rust/src/`, or `docs/methodology/`. If methodology files changed, consult `docs/methodology/REGISTRY.md` for proper citations.
 - **Validation**: List `test_*.py` files changed, note tutorial updates
 - **Security**: Default "Yes", but warn if `.env`, credentials, or API key patterns detected
 
@@ -162,7 +198,7 @@ Pull request created successfully!
 
 Branch: <branch-name>
 PR: #<number> - <title>
-URL: https://github/<owner>/<repo>/pull/<number>
+URL: https://github.com/<owner>/<repo>/pull/<number>
 
 Changes included:
 <list of changed files>
