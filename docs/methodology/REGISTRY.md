@@ -5,9 +5,9 @@ This document provides the academic foundations and key implementation requireme
 ## Table of Contents
 
 1. [Core DiD Estimators](#core-did-estimators)
-   - [DifferenceInDifferences](#differenceinferences)
+   - [DifferenceInDifferences](#differenceinifferences)
    - [MultiPeriodDiD](#multiperioddid)
-   - [TwoWayFixedEffects](#twowwayfixedeffects)
+   - [TwoWayFixedEffects](#twowayfixedeffects)
 2. [Modern Staggered Estimators](#modern-staggered-estimators)
    - [CallawaySantAnna](#callawaysantanna)
    - [SunAbraham](#sunabraham)
