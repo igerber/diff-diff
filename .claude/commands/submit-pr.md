@@ -25,47 +25,67 @@ Parse `$ARGUMENTS` to extract:
 - **--base**: Base branch (default: `main`)
 - **--draft**: Boolean flag
 
-### 2. Sync with Remote
+### 2. Detect Remote Configuration
 
-1. **Fetch latest from remote**:
+Determine if this is a fork-based workflow:
+
+1. **Check for upstream remote**:
    ```bash
-   git fetch origin
+   git remote get-url upstream 2>/dev/null
    ```
 
-2. **Check if behind base branch**:
+2. **Set remote variables**:
+   - If `upstream` exists → **fork workflow**:
+     - `<base-remote>` = `upstream` (for base comparisons, PR target)
+     - `<push-remote>` = `origin` (for pushing branches)
+     - Extract `<upstream-owner>/<upstream-repo>` from upstream URL
+     - Extract `<fork-owner>` from origin URL
+   - If `upstream` does not exist → **direct workflow**:
+     - `<base-remote>` = `origin`
+     - `<push-remote>` = `origin`
+     - Extract `<owner>/<repo>` from origin URL
+
+3. **Fetch from base remote**:
    ```bash
-   git rev-list --count HEAD..origin/<base-branch>
+   git fetch <base-remote>
+   ```
+
+### 3. Sync with Remote
+
+1. **Check if behind base branch**:
+   ```bash
+   git rev-list --count HEAD..<base-remote>/<base-branch>
    ```
    - If count > 0, we're behind. Warn user and offer options:
      ```
-     Your branch is X commits behind origin/<base-branch>.
+     Your branch is X commits behind <base-remote>/<base-branch>.
 
      Options:
-     1. Rebase first: git pull --rebase origin <base-branch>
+     1. Rebase first: git pull --rebase <base-remote> <base-branch>
      2. Continue anyway (may have merge conflicts in PR)
      ```
    - Use AskUserQuestion to let user choose whether to continue or abort
 
-### 3. Check for Changes
+### 4. Check for Changes
 
 1. **Check for uncommitted changes**:
    ```bash
    git status --porcelain
    ```
-   - If output is non-empty, there are staged or unstaged changes → proceed to step 4
+   - If output is non-empty, there are staged or unstaged changes → proceed to step 5
 
 2. **Check for unpushed commits** (if no uncommitted changes):
    ```bash
-   git rev-list --count origin/<base-branch>..HEAD
+   git rev-list --count <base-remote>/<base-branch>..HEAD
    ```
-   - If count > 0, there are unpushed commits → skip to step 6
+   - If count > 0, there are unpushed commits → skip to step 7
    - If count == 0, inform user and exit:
      ```
-     No changes detected. Your working directory is clean and up-to-date with origin/<base-branch>.
+     No changes detected. Your working directory is clean and up-to-date with <base-remote>/<base-branch>.
      Nothing to submit.
      ```
 
-### 4. Resolve Branch Name (BEFORE any commits)
+### 5. Resolve Branch Name (BEFORE any commits)
 
 **IMPORTANT**: Always resolve the branch name before staging or committing to avoid commits on the base branch.
 
@@ -77,9 +97,15 @@ Parse `$ARGUMENTS` to extract:
 2. **If on base branch (e.g., `main`)**:
    - Generate or use provided branch name
    - **Generate branch name** (if not provided via `--branch`):
-     - Analyze unstaged changes with `git diff --stat` to understand the change type
+     - Analyze changes to understand the change type:
+       ```bash
+       git diff --stat              # Unstaged changes
+       git diff --cached --stat     # Staged changes
+       git status --porcelain       # All changes summary
+       ```
      - Slugify the PR title (if provided) or generate from changes: lowercase, replace spaces with hyphens
      - Prefix based on change type: `feature/`, `fix/`, `refactor/`, `docs/`
+     - If no diff output and no title provided, prompt user for branch name
    - **Create and switch to the new branch BEFORE staging**:
      ```bash
      git checkout -b <branch-name>
@@ -89,7 +115,7 @@ Parse `$ARGUMENTS` to extract:
    - Use the current branch name
    - No need to create a new branch
 
-### 5. Stage and Commit Changes
+### 6. Stage and Commit Changes
 
 1. **Stage all changes first**:
    ```bash
@@ -97,19 +123,19 @@ Parse `$ARGUMENTS` to extract:
    ```
 
 2. **Secret scanning check** (AFTER staging to catch all files):
-   - Scan all staged changes:
+   - **Run deterministic pattern check**:
      ```bash
-     git diff --cached --name-only
-     git diff --cached
+     git diff --cached | grep -E "(AKIA[A-Z0-9]{16}|ghp_[a-zA-Z0-9]{36}|sk-[a-zA-Z0-9]{48}|API_KEY=|SECRET=|PASSWORD=|PRIVATE_KEY)" || true
      ```
-   - Pay special attention to newly added files (previously untracked):
+   - **Check for sensitive file names**:
+     ```bash
+     git diff --cached --name-only | grep -E "(\.env|credentials|secret|\.pem|\.key)$" || true
+     ```
+   - Pay special attention to newly added files:
      ```bash
      git diff --cached --name-only --diff-filter=A
      ```
-   - Look for potential secrets:
-     - Files matching: `.env*`, `*credentials*`, `*secret*`, `*.pem`, `*.key`
-     - Content patterns: `API_KEY=`, `SECRET=`, `PASSWORD=`, `ghp_`, `sk-`, `AKIA`, AWS keys, etc.
-   - If potential secrets detected, **unstage and warn**:
+   - If pattern check returns matches or sensitive files detected, **unstage and warn**:
      ```bash
      git reset HEAD  # Unstage all files
      ```
@@ -141,7 +167,7 @@ Parse `$ARGUMENTS` to extract:
      )"
      ```
 
-### 6. Push Branch to Remote
+### 7. Push Branch to Remote
 
 1. **Resolve and validate branch name**:
    ```bash
@@ -150,9 +176,9 @@ Parse `$ARGUMENTS` to extract:
 
 2. **Guard: Prevent pushing from base branch**:
    - If current branch equals `<base-branch>` (e.g., `main`):
-     - This can happen when step 3 skipped to step 6 due to unpushed commits on base
+     - This can happen when step 4 skipped to step 7 due to unpushed commits on base
      - **Must create a new branch before proceeding**:
-       - Generate branch name from unpushed commits (analyze `git log origin/<base-branch>..HEAD`)
+       - Generate branch name from unpushed commits (analyze `git log <base-remote>/<base-branch>..HEAD`)
        - Use provided `--branch` name if available
        - Create and switch:
          ```bash
@@ -164,21 +190,21 @@ Parse `$ARGUMENTS` to extract:
        Please create a feature branch first or provide --branch <name>.
        ```
 
-3. **Push to remote**:
+3. **Push to push-remote** (always `origin`, even in fork workflows):
    ```bash
-   git push -u origin <branch-name>
+   git push -u <push-remote> <branch-name>
    ```
 
-### 7. Extract Commit Information for PR Body
+### 8. Extract Commit Information for PR Body
 
-1. Get commits on this branch (compare against remote to avoid stale data):
+1. Get commits on this branch (compare against base-remote to avoid stale data):
    ```bash
-   git log origin/<base-branch>..HEAD --oneline
+   git log <base-remote>/<base-branch>..HEAD --oneline
    ```
 
 2. Get changed files:
    ```bash
-   git diff origin/<base-branch>..HEAD --stat
+   git diff <base-remote>/<base-branch>..HEAD --stat
    ```
 
 3. Categorize changes for the template:
@@ -186,7 +212,7 @@ Parse `$ARGUMENTS` to extract:
    - Test changes: files in `tests/`
    - Documentation: files in `docs/`, `*.md`, `*.rst`
 
-### 8. Generate PR Body
+### 9. Generate PR Body
 
 Fill in the template:
 
@@ -215,35 +241,44 @@ Generated with Claude Code
 - **Validation**: List `test_*.py` files changed, note tutorial updates
 - **Security**: Default "Yes", but warn if `.env`, credentials, or API key patterns detected
 
-### 9. Create Pull Request
+### 10. Create Pull Request
 
 Use the MCP GitHub tool to create the PR:
 
 ```
 mcp__github__create_pull_request with parameters:
-  - owner: <extracted from git remote>
-  - repo: <extracted from git remote>
+  - owner: <target-owner>      # upstream-owner (fork) or owner (direct)
+  - repo: <target-repo>        # upstream-repo (fork) or repo (direct)
   - title: <PR title>
-  - head: <branch-name>
+  - head: <head-ref>           # See below for fork vs direct
   - base: <base-branch>
   - body: <generated PR body>
   - draft: <true if --draft flag provided>
 ```
 
-To extract owner/repo from git remote:
+**Head reference format**:
+- **Direct workflow**: `head: <branch-name>`
+- **Fork workflow**: `head: <fork-owner>:<branch-name>`
+
+**Extract remote info**:
 ```bash
-git remote get-url origin
+# For target (where PR is created)
+git remote get-url <base-remote>
 # Parse: git@github.com:owner/repo.git or https://github.com/owner/repo.git
+
+# For fork owner (if fork workflow)
+git remote get-url origin
+# Extract owner from URL
 ```
 
-### 10. Report Results
+### 11. Report Results
 
 ```
 Pull request created successfully!
 
 Branch: <branch-name>
 PR: #<number> - <title>
-URL: https://github.com/<owner>/<repo>/pull/<number>
+URL: https://github.com/<target-owner>/<target-repo>/pull/<number>
 
 Changes included:
 <list of changed files>
@@ -295,3 +330,4 @@ Show the error and provide manual fallback commands.
 - Branch names auto-prefixed: feature/, fix/, refactor/, docs/
 - Uses MCP GitHub server for PR creation (requires PAT with repo access)
 - Git push uses SSH or HTTPS based on remote URL configuration
+- **Fork workflows supported**: If `upstream` remote exists, PRs target upstream with `<fork-owner>:<branch>` head reference
