@@ -172,15 +172,13 @@ fn compute_pair_distance(
 /// # Returns
 /// (best_lambda_time, best_lambda_unit, best_lambda_nn, best_score)
 #[pyfunction]
-#[pyo3(signature = (y, d, control_mask, control_unit_idx, unit_dist_matrix, time_dist_matrix, lambda_time_grid, lambda_unit_grid, lambda_nn_grid, max_loocv_samples, max_iter, tol, seed))]
+#[pyo3(signature = (y, d, control_mask, time_dist_matrix, lambda_time_grid, lambda_unit_grid, lambda_nn_grid, max_loocv_samples, max_iter, tol, seed))]
 #[allow(clippy::too_many_arguments)]
 pub fn loocv_grid_search<'py>(
     _py: Python<'py>,
     y: PyReadonlyArray2<'py, f64>,
     d: PyReadonlyArray2<'py, f64>,
     control_mask: PyReadonlyArray2<'py, u8>,
-    control_unit_idx: PyReadonlyArray1<'py, i64>,
-    unit_dist_matrix: PyReadonlyArray2<'py, f64>,
     time_dist_matrix: PyReadonlyArray2<'py, i64>,
     lambda_time_grid: PyReadonlyArray1<'py, f64>,
     lambda_unit_grid: PyReadonlyArray1<'py, f64>,
@@ -193,18 +191,10 @@ pub fn loocv_grid_search<'py>(
     let y_arr = y.as_array();
     let d_arr = d.as_array();
     let control_mask_arr = control_mask.as_array();
-    let control_unit_idx_arr = control_unit_idx.as_array();
-    let unit_dist_arr = unit_dist_matrix.as_array();
     let time_dist_arr = time_dist_matrix.as_array();
     let lambda_time_vec: Vec<f64> = lambda_time_grid.as_array().to_vec();
     let lambda_unit_vec: Vec<f64> = lambda_unit_grid.as_array().to_vec();
     let lambda_nn_vec: Vec<f64> = lambda_nn_grid.as_array().to_vec();
-
-    // Convert control_unit_idx to Vec<usize>
-    let control_units: Vec<usize> = control_unit_idx_arr
-        .iter()
-        .map(|&idx| idx as usize)
-        .collect();
 
     // Get control observations for LOOCV
     let control_obs = get_control_observations(
@@ -232,8 +222,6 @@ pub fn loocv_grid_search<'py>(
                 &y_arr,
                 &d_arr,
                 &control_mask_arr,
-                &control_units,
-                &unit_dist_arr,
                 &time_dist_arr,
                 &control_obs,
                 lambda_time,
@@ -293,8 +281,6 @@ fn loocv_score_for_params(
     y: &ArrayView2<f64>,
     d: &ArrayView2<f64>,
     control_mask: &ArrayView2<u8>,
-    control_units: &[usize],
-    unit_dist: &ArrayView2<f64>,
     time_dist: &ArrayView2<i64>,
     control_obs: &[(usize, usize)],
     lambda_time: f64,
@@ -311,7 +297,6 @@ fn loocv_score_for_params(
 
     for &(t, i) in control_obs {
         // Compute observation-specific weight matrix
-        // Issue A+B fix: pass y and d for dynamic control sets and per-obs distances
         let weight_matrix = compute_weight_matrix(
             y,
             d,
@@ -321,8 +306,6 @@ fn loocv_score_for_params(
             t,
             lambda_time,
             lambda_unit,
-            control_units,
-            unit_dist,
             time_dist,
         );
 
@@ -410,8 +393,6 @@ fn compute_weight_matrix(
     target_period: usize,
     lambda_time: f64,
     lambda_unit: f64,
-    _control_units: &[usize],  // Kept for API compatibility but not used
-    _unit_dist: &ArrayView2<f64>,  // Not used - we compute per-observation distances
     time_dist: &ArrayView2<i64>,
 ) -> Array2<f64> {
     // Time weights for this target period: θ_s = exp(-λ_time × |t - s|)
@@ -707,17 +688,13 @@ fn max_abs_diff_2d(a: &Array2<f64>, b: &Array2<f64>) -> f64 {
 /// # Returns
 /// (bootstrap_estimates, standard_error)
 #[pyfunction]
-#[pyo3(signature = (y, d, control_mask, control_unit_idx, treated_obs_t, treated_obs_i, unit_dist_matrix, time_dist_matrix, lambda_time, lambda_unit, lambda_nn, n_bootstrap, max_iter, tol, seed))]
+#[pyo3(signature = (y, d, control_mask, time_dist_matrix, lambda_time, lambda_unit, lambda_nn, n_bootstrap, max_iter, tol, seed))]
 #[allow(clippy::too_many_arguments)]
 pub fn bootstrap_trop_variance<'py>(
     py: Python<'py>,
     y: PyReadonlyArray2<'py, f64>,
     d: PyReadonlyArray2<'py, f64>,
     control_mask: PyReadonlyArray2<'py, u8>,
-    control_unit_idx: PyReadonlyArray1<'py, i64>,
-    treated_obs_t: PyReadonlyArray1<'py, i64>,
-    treated_obs_i: PyReadonlyArray1<'py, i64>,
-    unit_dist_matrix: PyReadonlyArray2<'py, f64>,
     time_dist_matrix: PyReadonlyArray2<'py, i64>,
     lambda_time: f64,
     lambda_unit: f64,
@@ -730,16 +707,10 @@ pub fn bootstrap_trop_variance<'py>(
     let y_arr = y.as_array().to_owned();
     let d_arr = d.as_array().to_owned();
     let control_mask_arr = control_mask.as_array().to_owned();
-    let unit_dist_arr = unit_dist_matrix.as_array().to_owned();
     let time_dist_arr = time_dist_matrix.as_array().to_owned();
 
     let n_units = y_arr.ncols();
     let n_periods = y_arr.nrows();
-
-    // Note: control_unit_idx, treated_obs_t, treated_obs_i are passed for API
-    // compatibility but not used directly - each bootstrap iteration recomputes
-    // control units and treated observations from the resampled data.
-    let _ = (control_unit_idx, treated_obs_t, treated_obs_i);
 
     // Issue D fix: Identify treated and control units for stratified sampling
     // Following paper's Algorithm 3 (page 27): sample N_0 control and N_1 treated separately
@@ -784,17 +755,12 @@ pub fn bootstrap_trop_variance<'py>(
             let mut y_boot = Array2::<f64>::zeros((n_periods, n_units));
             let mut d_boot = Array2::<f64>::zeros((n_periods, n_units));
             let mut control_mask_boot = Array2::<u8>::zeros((n_periods, n_units));
-            let mut unit_dist_boot = Array2::<f64>::zeros((n_units, n_units));
 
             for (new_idx, &old_idx) in sampled_units.iter().enumerate() {
                 for t in 0..n_periods {
                     y_boot[[t, new_idx]] = y_arr[[t, old_idx]];
                     d_boot[[t, new_idx]] = d_arr[[t, old_idx]];
                     control_mask_boot[[t, new_idx]] = control_mask_arr[[t, old_idx]];
-                }
-
-                for (new_j, &old_j) in sampled_units.iter().enumerate() {
-                    unit_dist_boot[[new_idx, new_j]] = unit_dist_arr[[old_idx, old_j]];
                 }
             }
 
@@ -829,7 +795,6 @@ pub fn bootstrap_trop_variance<'py>(
             let mut tau_values = Vec::with_capacity(boot_treated.len());
 
             for (t, i) in boot_treated {
-                // Issue A+B fix: pass y and d for dynamic control sets and per-obs distances
                 let weight_matrix = compute_weight_matrix(
                     &y_boot.view(),
                     &d_boot.view(),
@@ -839,8 +804,6 @@ pub fn bootstrap_trop_variance<'py>(
                     t,
                     lambda_time,
                     lambda_unit,
-                    &boot_control_units,
-                    &unit_dist_boot.view(),
                     &time_dist_arr.view(),
                 );
 

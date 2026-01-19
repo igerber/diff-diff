@@ -784,16 +784,14 @@ class TROP:
                 # Prepare inputs for Rust function
                 control_mask_u8 = control_mask.astype(np.uint8)
                 time_dist_matrix = self._precomputed["time_dist_matrix"].astype(np.int64)
-                unit_dist_matrix = self._precomputed["unit_dist_matrix"]
-                control_unit_idx_i64 = control_unit_idx.astype(np.int64)
 
                 lambda_time_arr = np.array(self.lambda_time_grid, dtype=np.float64)
                 lambda_unit_arr = np.array(self.lambda_unit_grid, dtype=np.float64)
                 lambda_nn_arr = np.array(self.lambda_nn_grid, dtype=np.float64)
 
                 best_lt, best_lu, best_ln, best_score = _rust_loocv_grid_search(
-                    Y, D.astype(np.float64), control_mask_u8, control_unit_idx_i64,
-                    unit_dist_matrix, time_dist_matrix,
+                    Y, D.astype(np.float64), control_mask_u8,
+                    time_dist_matrix,
                     lambda_time_arr, lambda_unit_arr, lambda_nn_arr,
                     self.max_loocv_samples, self.max_iter, self.tol,
                     self.seed if self.seed is not None else 0
@@ -1510,21 +1508,15 @@ class TROP:
         # Try Rust backend for parallel bootstrap (5-15x speedup)
         if (HAS_RUST_BACKEND and _rust_bootstrap_trop_variance is not None
                 and self._precomputed is not None and Y is not None
-                and D is not None and control_unit_idx is not None):
+                and D is not None):
             try:
-                # Prepare inputs
-                treated_observations = self._precomputed["treated_observations"]
-                treated_t = np.array([t for t, i in treated_observations], dtype=np.int64)
-                treated_i = np.array([i for t, i in treated_observations], dtype=np.int64)
                 control_mask = self._precomputed["control_mask"]
+                time_dist_matrix = self._precomputed["time_dist_matrix"].astype(np.int64)
 
                 bootstrap_estimates, se = _rust_bootstrap_trop_variance(
                     Y, D.astype(np.float64),
                     control_mask.astype(np.uint8),
-                    control_unit_idx.astype(np.int64),
-                    treated_t, treated_i,
-                    self._precomputed["unit_dist_matrix"],
-                    self._precomputed["time_dist_matrix"].astype(np.int64),
+                    time_dist_matrix,
                     lambda_time, lambda_unit, lambda_nn,
                     self.n_bootstrap, self.max_iter, self.tol,
                     self.seed if self.seed is not None else 0
