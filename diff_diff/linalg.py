@@ -515,11 +515,22 @@ def solve_ols(
         if return_vcov and vcov is not None and np.any(np.isnan(vcov)):
             warnings.warn(
                 "Rust backend detected ill-conditioned matrix (NaN in variance-covariance). "
-                "Falling back to Python for R-style rank handling.",
+                "Re-running with Python backend for proper rank detection.",
                 UserWarning,
                 stacklevel=2,
             )
-            # Fall through to Python backend (don't return here)
+            # Force fresh rank detection - don't pass cached info since QR
+            # and SVD disagreed about rank. Python's QR will re-detect and
+            # apply R-style NaN handling for dropped columns.
+            return _solve_ols_numpy(
+                X, y,
+                cluster_ids=cluster_ids,
+                return_vcov=return_vcov,
+                return_fitted=return_fitted,
+                rank_deficient_action=rank_deficient_action,
+                column_names=column_names,
+                _precomputed_rank_info=None,  # Force re-detection
+            )
         else:
             return result
 

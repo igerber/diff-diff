@@ -790,6 +790,11 @@ class TestRustVsNumpy:
         different numerical properties), the vcov matrix may contain NaN values.
         The high-level solve_ols should detect this and fall back to Python's
         R-style handling, ensuring the user never receives silent NaN SEs.
+
+        The key behavior being tested:
+        1. When Rust returns NaN vcov, we emit a warning and re-run Python
+        2. The Python re-run does fresh rank detection (not using cached info)
+        3. R-style handling is applied: NaN coefficients for dropped columns
         """
         import warnings
         from diff_diff.linalg import solve_ols
@@ -813,6 +818,12 @@ class TestRustVsNumpy:
             warnings.simplefilter("always")
             coeffs, residuals, vcov = solve_ols(X, y)
 
+        # Check if fallback warning was emitted
+        fallback_warning_emitted = any(
+            "Re-running with Python backend" in str(warning.message)
+            for warning in w
+        )
+
         # Key invariants that must hold regardless of which backend is used:
         # 1. Coefficients must be finite (either via Rust SVD or Python R-style)
         finite_coeffs = coeffs[np.isfinite(coeffs)]
@@ -834,17 +845,26 @@ class TestRustVsNumpy:
         # 3. Residuals must always be finite
         assert np.all(np.isfinite(residuals)), "Residuals should be finite"
 
-        # 4. If NaN vcov fallback occurred, there should be a warning
-        # (This is the specific behavior we added)
-        if vcov is not None and np.any(np.isnan(vcov)):
-            # Either Python R-style handling set NaN (for dropped columns)
-            # or we should have seen a fallback warning
-            nan_coef_indices = np.where(np.isnan(coeffs))[0]
-            nan_vcov_diag_indices = np.where(np.isnan(np.diag(vcov)))[0]
+        # 4. R-style consistency: NaN coefficients must have NaN vcov diagonal
+        if vcov is not None:
+            nan_coef_indices = set(np.where(np.isnan(coeffs))[0])
+            nan_vcov_diag_indices = set(np.where(np.isnan(np.diag(vcov)))[0])
 
-            # NaN in vcov diagonal should correspond to NaN coefficients (dropped columns)
-            assert set(nan_vcov_diag_indices).issubset(set(nan_coef_indices)), \
-                "NaN vcov diagonal should only be for dropped columns"
+            # NaN in vcov diagonal should correspond exactly to NaN coefficients
+            assert nan_vcov_diag_indices == nan_coef_indices, \
+                f"NaN vcov diagonal {nan_vcov_diag_indices} should match " \
+                f"NaN coefficients {nan_coef_indices}"
+
+        # 5. If fallback warning was emitted, R-style handling MUST have occurred
+        # This verifies that the fallback actually applies R-style NaN handling
+        # (not minimum-norm solution which would have all finite coefficients)
+        if fallback_warning_emitted:
+            assert np.any(np.isnan(coeffs)), \
+                "Fallback warning emitted but no NaN coefficients - " \
+                "R-style handling was not applied"
+            assert vcov is not None and np.any(np.isnan(vcov)), \
+                "Fallback warning emitted but vcov has no NaN - " \
+                "R-style handling was not applied"
 
 
 @pytest.mark.skipif(not HAS_RUST_BACKEND, reason="Rust backend not available")

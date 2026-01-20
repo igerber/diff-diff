@@ -604,6 +604,7 @@ class DifferenceInDifferences:
             "n_bootstrap": self.n_bootstrap,
             "bootstrap_weights": self.bootstrap_weights,
             "seed": self.seed,
+            "rank_deficient_action": self.rank_deficient_action,
         }
 
     def set_params(self, **params) -> "DifferenceInDifferences":
