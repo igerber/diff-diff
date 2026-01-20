@@ -238,6 +238,22 @@ pytest tests/test_rust_backend.py -v
    - `absorb` parameter uses within-transformation (for high-dimensional FE)
 4. **Results objects**: Rich dataclass objects with statistical properties (`is_significant`, `significance_stars`)
 5. **Unified linear algebra backend**: All estimators use `linalg.py` for OLS and variance estimation
+6. **Estimator inheritance**: Understanding inheritance prevents consistency bugs
+   ```
+   DifferenceInDifferences (base class)
+   ├── TwoWayFixedEffects (inherits get_params/set_params)
+   └── MultiPeriodDiD (inherits get_params/set_params)
+
+   Standalone estimators (each has own get_params/set_params):
+   ├── CallawaySantAnna
+   ├── SunAbraham
+   ├── TripleDifference
+   ├── TROP
+   ├── SyntheticDiD
+   └── BaconDecomposition
+   ```
+   When adding params to `DifferenceInDifferences.get_params()`, subclasses inherit automatically.
+   Standalone estimators must be updated individually.
 
 ### Performance Architecture (v1.4.0)
 
@@ -343,6 +359,24 @@ Tests mirror the source modules:
 - `tests/test_pretrends.py` - Tests for pre-trends power analysis
 - `tests/test_datasets.py` - Tests for dataset loading functions
 
+### Test Writing Guidelines
+
+**For fallback/error handling paths:**
+- Don't just test that code runs without exception
+- Assert the expected behavior actually occurred
+- Bad: `result = func(bad_input)` (only tests no crash)
+- Good: `result = func(bad_input); assert np.isnan(result.coef)` (tests behavior)
+
+**For new parameters:**
+- Test parameter appears in `get_params()` output
+- Test `set_params()` modifies the attribute
+- Test parameter actually affects behavior (not just stored)
+
+**For warnings:**
+- Capture warnings with `warnings.catch_warnings(record=True)`
+- Assert warning message was emitted
+- Assert the warned-about behavior occurred
+
 ### Dependencies
 
 Core dependencies are numpy, pandas, and scipy only (no statsmodels). The library implements its own OLS, robust standard errors, and inference.
@@ -398,3 +432,40 @@ Sun, L., & Abraham, S. (2021). Estimating dynamic treatment effects in
 event studies with heterogeneous treatment effects. *Journal of Econometrics*,
 225(2), 175-199.
 ```
+
+## Development Checklists
+
+### Adding a New Parameter to Estimators
+
+When adding a new `__init__` parameter that should be available across estimators:
+
+1. **Implementation** (for each affected estimator):
+   - [ ] Add to `__init__` signature with default value
+   - [ ] Store as `self.param_name`
+   - [ ] Add to `get_params()` return dict
+   - [ ] Handle in `set_params()` (usually automatic via `hasattr`)
+
+2. **Consistency** - apply to all applicable estimators per the **Estimator inheritance** map above
+
+3. **Testing**:
+   - [ ] Test `get_params()` includes new param
+   - [ ] Test parameter affects estimator behavior
+   - [ ] Test with non-default value
+
+4. **Documentation**:
+   - [ ] Update docstring in all affected classes
+   - [ ] Update CLAUDE.md if it's a key design pattern
+
+### Adding Warning/Error/Fallback Handling
+
+When adding code that emits warnings or handles errors:
+
+1. **Verify behavior matches message**:
+   - [ ] Manually trace the code path after warning/error
+   - [ ] Confirm the stated behavior actually occurs
+
+2. **Write behavioral tests**:
+   - [ ] Don't just test "no exception raised"
+   - [ ] Assert the expected outcome occurred
+   - [ ] For fallbacks: verify fallback behavior was applied
+   - [ ] Example: If warning says "setting NaN", assert `np.any(np.isnan(result))`
