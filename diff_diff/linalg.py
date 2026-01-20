@@ -1323,10 +1323,18 @@ class LinearRegression:
         -------
         float
             R-squared value.
+
+        Notes
+        -----
+        For rank-deficient fits, adjusted R² uses the effective number of
+        parameters (excluding dropped columns) for consistency with the
+        corrected degrees of freedom.
         """
         self._check_fitted()
+        # Use effective params for adjusted R² to match df correction
+        n_params = self.n_params_effective_ if adjusted else self.n_params_
         return compute_r_squared(
-            self._y, self.residuals_, adjusted=adjusted, n_params=self.n_params_
+            self._y, self.residuals_, adjusted=adjusted, n_params=n_params
         )
 
     def predict(self, X: np.ndarray) -> np.ndarray:
@@ -1343,6 +1351,12 @@ class LinearRegression:
         -------
         ndarray
             Predicted values.
+
+        Notes
+        -----
+        For rank-deficient fits where some coefficients are NaN, predictions
+        use only the identified (non-NaN) coefficients. This is equivalent to
+        treating dropped columns as having zero coefficients.
         """
         self._check_fitted()
         X = np.asarray(X, dtype=np.float64)
@@ -1350,7 +1364,12 @@ class LinearRegression:
         if self.include_intercept:
             X = np.column_stack([np.ones(X.shape[0]), X])
 
-        return X @ self.coefficients_
+        # Handle rank-deficient case: use only identified coefficients
+        # Replace NaN with 0 so they don't contribute to prediction
+        coef = self.coefficients_.copy()
+        coef[np.isnan(coef)] = 0.0
+
+        return X @ coef
 
 
 # =============================================================================

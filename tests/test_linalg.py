@@ -1087,6 +1087,82 @@ class TestLinearRegression:
         assert np.isnan(result.conf_int[0])
         assert np.isnan(result.conf_int[1])
 
+    def test_rank_deficient_predict_uses_identified_coefficients(self):
+        """Test that predict() works correctly with rank-deficient fits.
+
+        Predictions should use only identified coefficients (treating dropped
+        coefficients as zero), not produce all-NaN predictions.
+        """
+        import warnings
+
+        np.random.seed(42)
+        n = 100
+        # Create rank-deficient matrix
+        X = np.random.randn(n, 3)
+        X = np.column_stack([X, X[:, 0] + X[:, 1]])  # Column 3 is collinear
+
+        # True model uses only first 3 columns
+        y = 2 * X[:, 0] + 3 * X[:, 1] - 1 * X[:, 2] + np.random.randn(n) * 0.5
+
+        with warnings.catch_warnings(record=True):
+            warnings.simplefilter("always")
+            reg = LinearRegression(include_intercept=False).fit(X, y)
+
+        # Verify one coefficient is NaN
+        assert np.sum(np.isnan(reg.coefficients_)) == 1
+
+        # Predictions should NOT be all NaN
+        X_new = np.random.randn(10, 4)
+        y_pred = reg.predict(X_new)
+
+        assert y_pred.shape == (10,)
+        assert np.all(np.isfinite(y_pred)), "Predictions should be finite, not NaN"
+
+        # Verify predictions match fitted values on training data
+        y_fitted = reg.predict(X)
+        np.testing.assert_allclose(y_fitted, reg.fitted_values_, rtol=1e-10)
+
+    def test_rank_deficient_adjusted_r_squared_uses_effective_params(self):
+        """Test that adjusted R² uses effective params, not total params.
+
+        For rank-deficient fits, adjusted R² should use n_params_effective_
+        for consistency with the corrected degrees of freedom.
+        """
+        import warnings
+
+        np.random.seed(42)
+        n = 100
+        # Create rank-deficient matrix: 4 columns but rank 3
+        X = np.random.randn(n, 3)
+        X = np.column_stack([X, X[:, 0] + X[:, 1]])  # Column 3 = Column 0 + Column 1
+
+        y = 2 * X[:, 0] + np.random.randn(n) * 0.5
+
+        with warnings.catch_warnings(record=True):
+            warnings.simplefilter("always")
+            reg = LinearRegression(include_intercept=False).fit(X, y)
+
+        # Verify setup
+        assert reg.n_params_ == 4
+        assert reg.n_params_effective_ == 3
+
+        # Get R² values
+        r2 = reg.r_squared()
+        r2_adj = reg.r_squared(adjusted=True)
+
+        # Both should be valid numbers
+        assert 0 <= r2 <= 1
+        assert r2_adj < r2  # Adjusted should be smaller
+
+        # Manually compute adjusted R² using effective params
+        # r²_adj = 1 - (1 - r²) * (n - 1) / (n - k_effective)
+        r2_adj_expected = 1 - (1 - r2) * (n - 1) / (n - 3)
+        np.testing.assert_allclose(r2_adj, r2_adj_expected, rtol=1e-10)
+
+        # Verify it's NOT using total params (which would give different result)
+        r2_adj_wrong = 1 - (1 - r2) * (n - 1) / (n - 4)
+        assert r2_adj != r2_adj_wrong, "Should use effective params, not total params"
+
 
 class TestNumericalStability:
     """Tests for numerical stability with ill-conditioned matrices."""
