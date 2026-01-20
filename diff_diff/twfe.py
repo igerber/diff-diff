@@ -140,17 +140,38 @@ class TwoWayFixedEffects(DifferenceInDifferences):
         r_squared = reg.r_squared()
         att = coefficients[att_idx]
 
-        # Check if treatment coefficient is identifiable
-        # If NaN, treatment is perfectly collinear with fixed effects
-        if np.isnan(att):
-            raise ValueError(
-                "Treatment is perfectly collinear with unit/time fixed effects. "
-                "This means the treatment effect cannot be identified from the data. "
-                "This can happen when: (1) all treated units are treated in all periods, "
-                "(2) treatment timing is constant within units, or (3) the panel structure "
-                "doesn't allow separating treatment from fixed effects. "
-                "Check your data structure and ensure treatment varies within units over time."
-            )
+        # Check for unidentified coefficients (collinearity)
+        # Build column names for informative error messages
+        column_names = ["intercept", "treatment×post"]
+        if covariates:
+            column_names.extend(covariates)
+
+        nan_mask = np.isnan(coefficients)
+        if np.any(nan_mask):
+            dropped_indices = np.where(nan_mask)[0]
+            dropped_names = [column_names[i] if i < len(column_names)
+                            else f"column {i}" for i in dropped_indices]
+
+            # Determine the source of collinearity for better error message
+            if att_idx in dropped_indices:
+                # Treatment coefficient is unidentified
+                raise ValueError(
+                    f"Treatment effect cannot be identified due to collinearity. "
+                    f"Dropped columns: {', '.join(dropped_names)}. "
+                    "This can happen when: (1) treatment is perfectly collinear with "
+                    "unit/time fixed effects, (2) all treated units are treated in all "
+                    "periods, or (3) a covariate is collinear with the treatment indicator. "
+                    "Check your data structure and model specification."
+                )
+            else:
+                # Only covariates are dropped - this is a warning, not an error
+                # The ATT can still be estimated
+                warnings.warn(
+                    f"Some covariates are collinear and were dropped: "
+                    f"{', '.join(dropped_names)}. The treatment effect is still identified.",
+                    UserWarning,
+                    stacklevel=2,
+                )
 
         # Get inference - either from bootstrap or analytical
         if self.inference == "wild_bootstrap":

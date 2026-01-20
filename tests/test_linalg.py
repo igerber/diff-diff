@@ -983,6 +983,110 @@ class TestLinearRegression:
         np.testing.assert_allclose(reg.fitted_values_, fitted, rtol=1e-10)
         np.testing.assert_allclose(reg.vcov_, vcov, rtol=1e-10)
 
+    def test_rank_deficient_degrees_of_freedom(self):
+        """Test that degrees of freedom are computed correctly when columns are dropped.
+
+        When a design matrix is rank-deficient, the effective number of parameters
+        is the rank, not the number of columns. The df should be n - rank.
+        """
+        import warnings
+
+        np.random.seed(42)
+        n = 100
+        # Create rank-deficient matrix: 4 columns but rank 3
+        X = np.random.randn(n, 3)
+        X = np.column_stack([X, X[:, 0] + X[:, 1]])  # Column 3 = Column 0 + Column 1
+
+        y = np.random.randn(n)
+
+        with warnings.catch_warnings(record=True):
+            warnings.simplefilter("always")
+            reg = LinearRegression(include_intercept=False).fit(X, y)
+
+        # n_params_ should be total columns (4)
+        assert reg.n_params_ == 4
+
+        # n_params_effective_ should be the rank (3)
+        assert reg.n_params_effective_ == 3
+
+        # df_ should be n - effective_params = 100 - 3 = 97
+        assert reg.df_ == n - 3
+
+        # Verify one coefficient is NaN (the dropped one)
+        assert np.sum(np.isnan(reg.coefficients_)) == 1
+
+    def test_rank_deficient_inference_uses_correct_df(self):
+        """Test that p-values and CIs use the correct df for rank-deficient matrices."""
+        import warnings
+        from scipy import stats
+
+        np.random.seed(42)
+        n = 100
+        # Create rank-deficient matrix
+        X = np.random.randn(n, 3)
+        X = np.column_stack([X, X[:, 0] + X[:, 1]])  # Perfect collinearity
+
+        # True coefficients for the first 3 columns only
+        y = 2 * X[:, 0] + 3 * X[:, 1] + np.random.randn(n) * 0.5
+
+        with warnings.catch_warnings(record=True):
+            warnings.simplefilter("always")
+            reg = LinearRegression(include_intercept=False).fit(X, y)
+
+        # Get inference for an identified coefficient
+        nan_mask = np.isnan(reg.coefficients_)
+        kept_idx = np.where(~nan_mask)[0][0]  # First non-NaN coefficient
+        result = reg.get_inference(kept_idx)
+
+        # Check that df is correct (should be n - rank = 97)
+        assert result.df == n - 3, f"Expected df={n-3}, got {result.df}"
+
+        # Manually compute expected values using correct df
+        coef = result.coefficient
+        se = result.se
+        t_stat_expected = coef / se
+        p_value_expected = 2 * (1 - stats.t.cdf(abs(t_stat_expected), df=n - 3))
+
+        # Verify t-stat
+        np.testing.assert_allclose(result.t_stat, t_stat_expected, rtol=1e-10)
+
+        # Verify p-value uses correct df (use atol for very small p-values)
+        np.testing.assert_allclose(result.p_value, p_value_expected, atol=1e-10)
+
+        # Verify CI uses correct df
+        t_crit = stats.t.ppf(1 - 0.05 / 2, df=n - 3)
+        ci_expected = (coef - t_crit * se, coef + t_crit * se)
+        np.testing.assert_allclose(result.conf_int, ci_expected, rtol=1e-6)
+
+    def test_rank_deficient_inference_nan_for_dropped_coef(self):
+        """Test that inference for dropped coefficients returns NaN values."""
+        import warnings
+
+        np.random.seed(42)
+        n = 100
+        X = np.random.randn(n, 3)
+        X = np.column_stack([X, X[:, 0] + X[:, 1]])  # Column 3 is dropped
+        y = np.random.randn(n)
+
+        with warnings.catch_warnings(record=True):
+            warnings.simplefilter("always")
+            reg = LinearRegression(include_intercept=False).fit(X, y)
+
+        # Find the dropped coefficient index
+        nan_mask = np.isnan(reg.coefficients_)
+        dropped_idx = np.where(nan_mask)[0][0]
+
+        # Get inference for dropped coefficient
+        result = reg.get_inference(dropped_idx)
+
+        # All inference values should be NaN
+        assert np.isnan(result.coefficient)
+        assert np.isnan(result.se)
+        assert np.isnan(result.t_stat)
+        assert np.isnan(result.p_value)
+        assert np.isnan(result.conf_int[0])
+        assert np.isnan(result.conf_int[1])
+
 
 class TestNumericalStability:
     """Tests for numerical stability with ill-conditioned matrices."""

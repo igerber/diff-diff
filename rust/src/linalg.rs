@@ -265,7 +265,9 @@ fn invert_symmetric(a: &Array2<f64>) -> PyResult<Array2<f64>> {
 
         let col = a.solve(&e_i).map_err(|e| {
             PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
-                "Matrix inversion failed: {}",
+                "Matrix inversion failed (likely rank-deficient X'X): {}. \
+                 If the design matrix is rank-deficient, use solve_ols without \
+                 skip_rank_check=True to enable R-style handling.",
                 e
             ))
         })?;

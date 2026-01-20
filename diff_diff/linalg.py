@@ -958,8 +958,11 @@ class LinearRegression:
         Number of observations (available after fit).
     n_params_ : int
         Number of parameters including intercept (available after fit).
+    n_params_effective_ : int
+        Effective number of parameters after dropping linearly dependent columns.
+        Equals n_params_ for full-rank matrices (available after fit).
     df_ : int
-        Degrees of freedom (n - k) (available after fit).
+        Degrees of freedom (n - n_params_effective) (available after fit).
 
     Examples
     --------
@@ -1009,6 +1012,7 @@ class LinearRegression:
         self._X: Optional[np.ndarray] = None
         self.n_obs_: Optional[int] = None
         self.n_params_: Optional[int] = None
+        self.n_params_effective_: Optional[int] = None
         self.df_: Optional[int] = None
 
     def fit(
@@ -1107,7 +1111,12 @@ class LinearRegression:
         self._X = X
         self.n_obs_ = X.shape[0]
         self.n_params_ = X.shape[1]
-        self.df_ = self.n_obs_ - self.n_params_ - df_adjustment
+
+        # Compute effective number of parameters (excluding dropped columns)
+        # This is needed for correct degrees of freedom in inference
+        nan_mask = np.isnan(coefficients)
+        self.n_params_effective_ = int(self.n_params_ - np.sum(nan_mask))
+        self.df_ = self.n_obs_ - self.n_params_effective_ - df_adjustment
 
         return self
 
