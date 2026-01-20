@@ -59,6 +59,8 @@ where τ is the ATT.
 - Empty cells (e.g., no treated-pre observations) raise ValueError
 - Singleton groups in clustering are dropped with warning
 - Rank-deficient design matrix (collinearity): warns and sets NA for dropped coefficients (R-style, matches `lm()`)
+  - Tolerance: `1e-07` (matches R's `qr()` default), relative to largest diagonal element of R in QR decomposition
+  - Controllable via `rank_deficient_action` parameter: "warn" (default), "error", or "silent"
 
 **Reference implementation(s):**
 - R: `fixest::feols()` with interaction term

@@ -72,9 +72,10 @@ pub fn solve_ols<'py>(
         PyErr::new::<pyo3::exceptions::PyValueError, _>("SVD did not return V^T matrix")
     })?;
 
-    // Compute rcond threshold (matches numpy/scipy default)
-    // rcond = max(n, k) * machine_epsilon
-    let rcond = (n.max(k) as f64) * f64::EPSILON;
+    // Compute rcond threshold to match R's lm() behavior
+    // R's qr() uses tol = 1e-07 by default, which is sqrt(eps) ≈ 1.49e-08
+    // We use 1e-07 for consistency with Python backend and R
+    let rcond = 1e-07_f64;
     let s_max = s.iter().cloned().fold(0.0_f64, f64::max);
     let threshold = s_max * rcond;
 

@@ -118,9 +118,11 @@ def _detect_rank_deficiency(
     # P is a permutation matrix, represented as pivot indices
     Q, R, pivot = qr(X, mode='economic', pivoting=True)
 
-    # Determine rank tolerance (matches numpy/scipy default)
+    # Determine rank tolerance
+    # R's qr() uses tol = 1e-07 by default, which is sqrt(eps) ≈ 1.49e-08
+    # We use 1e-07 to match R's lm() behavior for consistency
     if rcond is None:
-        rcond = max(n, k) * np.finfo(X.dtype).eps
+        rcond = 1e-07
 
     # The diagonal of R contains information about linear independence
     # After pivoting, |R[i,i]| is decreasing
