@@ -685,8 +685,12 @@ class TestCallawaySantAnnaCovariates:
         """Test that near-collinear covariates are handled gracefully."""
         data = generate_staggered_data_with_covariates(seed=42)
 
-        # Add a near-collinear covariate (x1 + small noise)
-        data['x1_copy'] = data['x1'] + np.random.randn(len(data)) * 1e-8
+        # Add a near-collinear covariate (x1 + noise above rank detection tolerance)
+        # The rank detection tolerance is 1e-07 (matching R's qr()), so we use noise
+        # of 1e-5 which is above the tolerance but still creates high collinearity.
+        # With noise < 1e-07, the column would be considered linearly dependent.
+        np.random.seed(42)
+        data['x1_copy'] = data['x1'] + np.random.randn(len(data)) * 1e-5
 
         cs = CallawaySantAnna(estimation_method='reg')
         results = cs.fit(
@@ -698,7 +702,7 @@ class TestCallawaySantAnnaCovariates:
             covariates=['x1', 'x1_copy']  # Nearly collinear
         )
 
-        # Should still produce valid results (lstsq handles this)
+        # Should still produce valid results (noise is above tolerance)
         assert results.overall_att is not None
         assert np.isfinite(results.overall_att)
 
