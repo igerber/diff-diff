@@ -98,6 +98,7 @@ where E_i is treatment time for unit i, and δ_e are event-study coefficients.
 - Unbalanced panels: only uses observations where event-time is defined
 - Never-treated units: event-time indicators are all zero
 - Endpoint binning: distant event times can be binned
+- Rank-deficient design matrix (collinearity): warns and sets NA for dropped coefficients (R-style, matches `lm()`)
 
 **Reference implementation(s):**
 - R: `fixest::feols()` with `i(event_time, ref=-1)`
@@ -139,7 +140,9 @@ where tildes denote demeaned variables.
 
 *Edge cases:*
 - Singleton units/periods are automatically dropped
-- Treatment perfectly collinear with FE raises error
+- Treatment perfectly collinear with FE raises error with informative message listing dropped columns
+- Covariate collinearity emits warning but estimation continues (ATT still identified)
+- Rank-deficient design matrix: warns and sets NA for dropped coefficients (R-style, matches `lm()`)
 - Unbalanced panels handled via proper demeaning
 
 **Reference implementation(s):**

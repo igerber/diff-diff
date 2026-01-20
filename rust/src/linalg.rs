@@ -22,6 +22,11 @@ use std::collections::HashMap;
 /// design matrices that can occur in DiD estimation (e.g., MultiPeriodDiD
 /// with redundant period dummies + treatment interactions).
 ///
+/// For rank-deficient matrices (rank < k), the vcov matrix is filled with NaN
+/// since the sandwich estimator requires inverting the singular X'X matrix.
+/// The Python wrapper should use the full R-style handling with QR pivoting
+/// for proper rank-deficiency support.
+///
 /// # Arguments
 /// * `x` - Design matrix (n, k)
 /// * `y` - Response vector (n,)
@@ -29,7 +34,8 @@ use std::collections::HashMap;
 /// * `return_vcov` - Whether to compute and return variance-covariance matrix
 ///
 /// # Returns
-/// Tuple of (coefficients, residuals, vcov) where vcov is None if return_vcov=False
+/// Tuple of (coefficients, residuals, vcov) where vcov is None if return_vcov=False,
+/// or NaN-filled matrix if rank-deficient
 #[pyfunction]
 #[pyo3(signature = (x, y, cluster_ids=None, return_vcov=true))]
 pub fn solve_ols<'py>(
@@ -76,11 +82,13 @@ pub fn solve_ols<'py>(
     // Singular values below threshold are treated as zero (truncated)
     let uty = u.t().dot(&y_owned); // (min(n,k),)
 
-    // Build S^{-1} with truncation
+    // Build S^{-1} with truncation and count effective rank
     let mut s_inv_uty = Array1::<f64>::zeros(k);
+    let mut rank = 0usize;
     for i in 0..s.len().min(k) {
         if s[i] > threshold {
             s_inv_uty[i] = uty[i] / s[i];
+            rank += 1;
         }
         // else: leave as 0 (truncate this singular value)
     }
@@ -93,10 +101,19 @@ pub fn solve_ols<'py>(
     let residuals = &y_arr - &fitted;
 
     // Compute variance-covariance if requested
+    // For rank-deficient matrices, return NaN vcov since X'X is singular
     let vcov = if return_vcov {
-        let cluster_arr = cluster_ids.as_ref().map(|c| c.as_array().to_owned());
-        let vcov_arr = compute_robust_vcov_internal(&x_arr, &residuals.view(), cluster_arr.as_ref())?;
-        Some(vcov_arr.into_pyarray(py))
+        if rank < k {
+            // Rank-deficient: cannot compute valid vcov, return NaN matrix
+            let mut nan_vcov = Array2::<f64>::zeros((k, k));
+            nan_vcov.fill(f64::NAN);
+            Some(nan_vcov.into_pyarray(py))
+        } else {
+            // Full rank: compute robust vcov normally
+            let cluster_arr = cluster_ids.as_ref().map(|c| c.as_array().to_owned());
+            let vcov_arr = compute_robust_vcov_internal(&x_arr, &residuals.view(), cluster_arr.as_ref())?;
+            Some(vcov_arr.into_pyarray(py))
+        }
     } else {
         None
     };
