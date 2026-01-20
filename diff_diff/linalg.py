@@ -99,8 +99,8 @@ def _detect_rank_deficiency(
         Design matrix.
     rcond : float, optional
         Relative condition number threshold for determining rank.
-        Singular values smaller than rcond * max(singular value) are treated
-        as zero. If None, uses max(n, k) * machine_epsilon.
+        Diagonal elements of R smaller than rcond * max(|R_ii|) are treated
+        as zero. If None, uses 1e-07 to match R's qr() default tolerance.
 
     Returns
     -------

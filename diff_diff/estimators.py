@@ -935,19 +935,47 @@ class MultiPeriodDiD(DifferenceInDifferences):
             effect_indices.append(idx)
 
         # Compute average treatment effect
-        # Average ATT = mean of period-specific effects
-        avg_att = np.mean(effect_values)
+        # Only average over identified (non-NaN) period effects
+        effect_arr = np.array(effect_values)
+        identified_effects = effect_arr[~np.isnan(effect_arr)]
 
-        # Standard error of average: need to account for covariance
-        # Var(avg) = (1/n^2) * sum of all elements in the sub-covariance matrix
-        n_post = len(post_periods)
-        sub_vcov = vcov[np.ix_(effect_indices, effect_indices)]
-        avg_var = np.sum(sub_vcov) / (n_post ** 2)
-        avg_se = np.sqrt(avg_var)
+        if len(identified_effects) == 0:
+            # All period effects are NaN - cannot compute average
+            avg_att = np.nan
+            avg_se = np.nan
+            avg_t_stat = np.nan
+            avg_p_value = np.nan
+            avg_conf_int = (np.nan, np.nan)
+        else:
+            # Average ATT = mean of identified period-specific effects
+            avg_att = float(np.mean(identified_effects))
 
-        avg_t_stat = avg_att / avg_se if avg_se > 0 else 0.0
-        avg_p_value = compute_p_value(avg_t_stat, df=df)
-        avg_conf_int = compute_confidence_interval(avg_att, avg_se, self.alpha, df=df)
+            # Standard error of average: need to account for covariance
+            # Only use identified effects in the variance calculation
+            identified_mask = ~np.isnan(effect_arr)
+            identified_indices = [idx for idx, m in zip(effect_indices, identified_mask) if m]
+            n_identified = len(identified_indices)
+
+            sub_vcov = vcov[np.ix_(identified_indices, identified_indices)]
+            avg_var = np.sum(sub_vcov) / (n_identified ** 2)
+
+            if np.isnan(avg_var) or avg_var < 0:
+                # Vcov has NaN (dropped columns) - propagate NaN
+                avg_se = np.nan
+                avg_t_stat = np.nan
+                avg_p_value = np.nan
+                avg_conf_int = (np.nan, np.nan)
+            else:
+                avg_se = float(np.sqrt(avg_var))
+                if avg_se > 0:
+                    avg_t_stat = avg_att / avg_se
+                    avg_p_value = compute_p_value(avg_t_stat, df=df)
+                    avg_conf_int = compute_confidence_interval(avg_att, avg_se, self.alpha, df=df)
+                else:
+                    # Zero SE (degenerate case)
+                    avg_t_stat = np.nan
+                    avg_p_value = np.nan
+                    avg_conf_int = (np.nan, np.nan)
 
         # Count observations
         n_treated = int(np.sum(d))
