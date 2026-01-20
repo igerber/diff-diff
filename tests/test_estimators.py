@@ -1667,6 +1667,46 @@ class TestMultiPeriodDiD:
         assert results.vcov is not None
         assert np.any(np.isnan(results.vcov)), "Vcov should have NaN for dropped column"
 
+        # avg_att should still be computed because all period effects are identified
+        assert not np.isnan(results.avg_att), "avg_att should be valid when all period effects are identified"
+
+    def test_avg_att_nan_when_period_effect_nan(self, multi_period_data):
+        """Test that avg_att is NaN if any period effect is NaN (R-style NA propagation)."""
+        import warnings
+
+        # Remove all treated observations in period 3 to make that interaction
+        # unidentified (column of zeros)
+        data_no_treated_period3 = multi_period_data[
+            ~((multi_period_data["treated"] == 1) & (multi_period_data["period"] == 3))
+        ].copy()
+
+        did = MultiPeriodDiD()
+
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            results = did.fit(
+                data_no_treated_period3,
+                outcome="outcome",
+                treatment="treated",
+                time="period",
+                post_periods=[3, 4, 5]
+            )
+
+        # Should have warning about rank deficiency (treated:period_3 is all zeros)
+        rank_warnings = [x for x in w if "Rank-deficient" in str(x.message)
+                        or "collinear" in str(x.message).lower()]
+        assert len(rank_warnings) > 0, "Expected warning about rank deficiency"
+
+        # The treated×period_3 interaction should have NaN coefficient (unidentified)
+        pe_3 = results.period_effects[3]
+        assert np.isnan(pe_3.effect), "Period 3 effect should be NaN (unidentified)"
+
+        # avg_att should be NaN because one period effect is NaN (R-style NA propagation)
+        assert np.isnan(results.avg_att), "avg_att should be NaN when any period effect is NaN"
+        assert np.isnan(results.avg_se), "avg_se should be NaN when avg_att is NaN"
+        assert np.isnan(results.avg_t_stat), "avg_t_stat should be NaN when avg_att is NaN"
+        assert np.isnan(results.avg_p_value), "avg_p_value should be NaN when avg_att is NaN"
+
 
 class TestSyntheticDiD:
     """Tests for SyntheticDiD estimator."""

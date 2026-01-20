@@ -935,29 +935,25 @@ class MultiPeriodDiD(DifferenceInDifferences):
             effect_indices.append(idx)
 
         # Compute average treatment effect
-        # Only average over identified (non-NaN) period effects
+        # R-style NA propagation: if ANY period effect is NaN, average is undefined
         effect_arr = np.array(effect_values)
-        identified_effects = effect_arr[~np.isnan(effect_arr)]
 
-        if len(identified_effects) == 0:
-            # All period effects are NaN - cannot compute average
+        if np.any(np.isnan(effect_arr)):
+            # Some period effects are NaN (unidentified) - cannot compute valid average
+            # This follows R's default behavior where mean(c(1, 2, NA)) returns NA
             avg_att = np.nan
             avg_se = np.nan
             avg_t_stat = np.nan
             avg_p_value = np.nan
             avg_conf_int = (np.nan, np.nan)
         else:
-            # Average ATT = mean of identified period-specific effects
-            avg_att = float(np.mean(identified_effects))
+            # All effects identified - compute average normally
+            avg_att = float(np.mean(effect_arr))
 
             # Standard error of average: need to account for covariance
-            # Only use identified effects in the variance calculation
-            identified_mask = ~np.isnan(effect_arr)
-            identified_indices = [idx for idx, m in zip(effect_indices, identified_mask) if m]
-            n_identified = len(identified_indices)
-
-            sub_vcov = vcov[np.ix_(identified_indices, identified_indices)]
-            avg_var = np.sum(sub_vcov) / (n_identified ** 2)
+            n_post = len(post_periods)
+            sub_vcov = vcov[np.ix_(effect_indices, effect_indices)]
+            avg_var = np.sum(sub_vcov) / (n_post ** 2)
 
             if np.isnan(avg_var) or avg_var < 0:
                 # Vcov has NaN (dropped columns) - propagate NaN

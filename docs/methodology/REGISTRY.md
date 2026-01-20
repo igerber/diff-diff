@@ -101,6 +101,7 @@ where E_i is treatment time for unit i, and δ_e are event-study coefficients.
 - Never-treated units: event-time indicators are all zero
 - Endpoint binning: distant event times can be binned
 - Rank-deficient design matrix (collinearity): warns and sets NA for dropped coefficients (R-style, matches `lm()`)
+- Average ATT (`avg_att`) is NA if any post-period effect is unidentified (R-style NA propagation)
 
 **Reference implementation(s):**
 - R: `fixest::feols()` with `i(event_time, ref=-1)`

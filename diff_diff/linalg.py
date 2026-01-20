@@ -619,8 +619,9 @@ def _solve_ols_numpy(
         X_reduced = X[:, kept_cols]
 
         # Solve the reduced system (now full-rank)
+        # Use cond=1e-07 for consistency with Rust backend and QR rank tolerance
         coefficients_reduced = scipy_lstsq(
-            X_reduced, y, lapack_driver="gelsd", check_finite=False
+            X_reduced, y, lapack_driver="gelsd", check_finite=False, cond=1e-07
         )[0]
 
         # Expand coefficients to full size with NaN for dropped columns
@@ -638,7 +639,8 @@ def _solve_ols_numpy(
             vcov = _expand_vcov_with_nan(vcov_reduced, k, kept_cols)
     else:
         # Full-rank case: proceed normally
-        coefficients = scipy_lstsq(X, y, lapack_driver="gelsd", check_finite=False)[0]
+        # Use cond=1e-07 for consistency with Rust backend and QR rank tolerance
+        coefficients = scipy_lstsq(X, y, lapack_driver="gelsd", check_finite=False, cond=1e-07)[0]
 
         # Compute residuals and fitted values
         fitted = X @ coefficients
