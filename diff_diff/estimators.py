@@ -64,6 +64,11 @@ class DifferenceInDifferences:
     seed : int, optional
         Random seed for reproducibility when using bootstrap inference.
         If None (default), results will vary between runs.
+    rank_deficient_action : str, default "warn"
+        Action when design matrix is rank-deficient (linearly dependent columns):
+        - "warn": Issue warning and drop linearly dependent columns (default)
+        - "error": Raise ValueError
+        - "silent": Drop columns silently without warning
 
     Attributes
     ----------
@@ -120,7 +125,8 @@ class DifferenceInDifferences:
         inference: str = "analytical",
         n_bootstrap: int = 999,
         bootstrap_weights: str = "rademacher",
-        seed: Optional[int] = None
+        seed: Optional[int] = None,
+        rank_deficient_action: str = "warn",
     ):
         self.robust = robust
         self.cluster = cluster
@@ -129,6 +135,7 @@ class DifferenceInDifferences:
         self.n_bootstrap = n_bootstrap
         self.bootstrap_weights = bootstrap_weights
         self.seed = seed
+        self.rank_deficient_action = rank_deficient_action
 
         self.is_fitted_ = False
         self.results_ = None
@@ -283,6 +290,7 @@ class DifferenceInDifferences:
             robust=self.robust,
             cluster_ids=cluster_ids if self.inference != "wild_bootstrap" else None,
             alpha=self.alpha,
+            rank_deficient_action=self.rank_deficient_action,
         ).fit(X, y, df_adjustment=n_absorbed_effects)
 
         coefficients = reg.coefficients_
@@ -885,6 +893,7 @@ class MultiPeriodDiD(DifferenceInDifferences):
             return_vcov=True,
             cluster_ids=cluster_ids,
             column_names=var_names,
+            rank_deficient_action=self.rank_deficient_action,
         )
         r_squared = compute_r_squared(y, residuals)
 

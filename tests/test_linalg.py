@@ -1200,6 +1200,59 @@ class TestLinearRegression:
         r2_adj_wrong = 1 - (1 - r2) * (n - 1) / (n - 4)
         assert r2_adj != r2_adj_wrong, "Should use effective params, not total params"
 
+    def test_rank_deficient_action_error_raises(self):
+        """Test that LinearRegression with rank_deficient_action='error' raises on collinear data."""
+        np.random.seed(42)
+        n = 100
+        X = np.random.randn(n, 3)
+        X = np.column_stack([X, X[:, 0] + X[:, 1]])  # Perfect collinearity
+        y = np.random.randn(n)
+
+        reg = LinearRegression(include_intercept=False, rank_deficient_action="error")
+        with pytest.raises(ValueError, match="rank-deficient"):
+            reg.fit(X, y)
+
+    def test_rank_deficient_action_silent_no_warning(self):
+        """Test that LinearRegression with rank_deficient_action='silent' produces no warning."""
+        import warnings
+
+        np.random.seed(42)
+        n = 100
+        X = np.random.randn(n, 3)
+        X = np.column_stack([X, X[:, 0] + X[:, 1]])  # Perfect collinearity
+        y = np.random.randn(n)
+
+        reg = LinearRegression(include_intercept=False, rank_deficient_action="silent")
+
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            reg.fit(X, y)
+            # No warnings should be emitted
+            assert len(w) == 0, f"Expected no warnings, got {len(w)}: {[str(x.message) for x in w]}"
+
+        # Should still produce NaN for dropped column
+        assert np.sum(np.isnan(reg.coefficients_)) == 1
+
+    def test_rank_deficient_action_warn_default(self):
+        """Test that LinearRegression with rank_deficient_action='warn' (default) emits warning."""
+        import warnings
+
+        np.random.seed(42)
+        n = 100
+        X = np.random.randn(n, 3)
+        X = np.column_stack([X, X[:, 0] + X[:, 1]])  # Perfect collinearity
+        y = np.random.randn(n)
+
+        reg = LinearRegression(include_intercept=False)  # Default is "warn"
+
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            reg.fit(X, y)
+            # Should have a warning about rank deficiency
+            assert len(w) > 0, "Expected warning about rank deficiency"
+            assert any("Rank-deficient" in str(x.message) or "rank-deficient" in str(x.message).lower()
+                      for x in w), f"Expected rank-deficient warning, got: {[str(x.message) for x in w]}"
+
 
 class TestNumericalStability:
     """Tests for numerical stability with ill-conditioned matrices."""

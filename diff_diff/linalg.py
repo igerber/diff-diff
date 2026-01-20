@@ -958,6 +958,11 @@ class LinearRegression:
         Overrides the `robust` parameter if provided.
     alpha : float, default 0.05
         Significance level for confidence intervals.
+    rank_deficient_action : str, default "warn"
+        Action when design matrix is rank-deficient (linearly dependent columns):
+        - "warn": Issue warning and drop linearly dependent columns (default)
+        - "error": Raise ValueError
+        - "silent": Drop columns silently without warning
 
     Attributes
     ----------
@@ -1012,11 +1017,13 @@ class LinearRegression:
         robust: bool = True,
         cluster_ids: Optional[np.ndarray] = None,
         alpha: float = 0.05,
+        rank_deficient_action: str = "warn",
     ):
         self.include_intercept = include_intercept
         self.robust = robust
         self.cluster_ids = cluster_ids
         self.alpha = alpha
+        self.rank_deficient_action = rank_deficient_action
 
         # Fitted attributes (set by fit())
         self.coefficients_: Optional[np.ndarray] = None
@@ -1079,6 +1086,7 @@ class LinearRegression:
                 cluster_ids=effective_cluster_ids,
                 return_fitted=True,
                 return_vcov=compute_vcov,
+                rank_deficient_action=self.rank_deficient_action,
             )
         else:
             # Classical OLS - compute vcov separately
@@ -1086,6 +1094,7 @@ class LinearRegression:
                 X, y,
                 return_fitted=True,
                 return_vcov=False,
+                rank_deficient_action=self.rank_deficient_action,
             )
             # Compute classical OLS variance-covariance matrix
             # Handle rank-deficient case: use effective rank for df

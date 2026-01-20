@@ -261,6 +261,11 @@ coefficients, residuals, vcov = solve_ols(X, y, cluster_ids=cluster_ids)
 # Suppress warning or raise error:
 coefficients, residuals, vcov = solve_ols(X, y, rank_deficient_action="silent")  # no warning
 coefficients, residuals, vcov = solve_ols(X, y, rank_deficient_action="error")   # raises ValueError
+
+# At estimator level (DifferenceInDifferences, MultiPeriodDiD):
+from diff_diff import DifferenceInDifferences
+did = DifferenceInDifferences(rank_deficient_action="error")   # raises on collinear data
+did = DifferenceInDifferences(rank_deficient_action="silent")  # no warning
 ```
 
 #### CallawaySantAnna Optimizations (`staggered.py`)
