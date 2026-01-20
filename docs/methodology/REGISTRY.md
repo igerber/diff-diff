@@ -200,6 +200,10 @@ Aggregations:
 - Groups with single observation: included but may have high variance
 - Missing group-time cells: ATT(g,t) set to NaN
 - Anticipation: `anticipation` parameter shifts reference period
+- Rank-deficient design matrix (covariate collinearity):
+  - Detection: Pivoted QR decomposition with tolerance `1e-07` (R's `qr()` default)
+  - Handling: Warns and drops linearly dependent columns, sets NA for dropped coefficients (R-style, matches `lm()`)
+  - Parameter: `rank_deficient_action` controls behavior: "warn" (default), "error", or "silent"
 
 **Reference implementation(s):**
 - R: `did::att_gt()` (Callaway & Sant'Anna's official package)
@@ -248,6 +252,10 @@ where weights ŵ_{g,e} = n_{g,e} / Σ_g n_{g,e} (sample share of cohort g at eve
 - Single cohort: reduces to standard event study
 - Cohorts with no observations at some event-times: weighted appropriately
 - Extrapolation beyond observed event-times: not estimated
+- Rank-deficient design matrix (covariate collinearity):
+  - Detection: Pivoted QR decomposition with tolerance `1e-07` (R's `qr()` default)
+  - Handling: Warns and drops linearly dependent columns, sets NA for dropped coefficients (R-style, matches `lm()`)
+  - Parameter: `rank_deficient_action` controls behavior: "warn" (default), "error", or "silent"
 
 **Reference implementation(s):**
 - R: `fixest::sunab()` (Laurent Bergé's implementation)

@@ -501,12 +501,27 @@ def solve_ols(
     # - Rank-deficient → Python backend (proper NA handling, valid SEs)
     # - No Rust → Python backend (works for all cases)
     if HAS_RUST_BACKEND and _rust_solve_ols is not None and not is_rank_deficient:
-        return _solve_ols_rust(
+        result = _solve_ols_rust(
             X, y,
             cluster_ids=cluster_ids,
             return_vcov=return_vcov,
             return_fitted=return_fitted,
         )
+
+        # Check for NaN vcov: Rust SVD may detect rank-deficiency that QR missed
+        # for ill-conditioned matrices (QR and SVD have different numerical properties).
+        # When this happens, fall back to Python's R-style handling.
+        vcov = result[-1]  # vcov is always the last element
+        if return_vcov and vcov is not None and np.any(np.isnan(vcov)):
+            warnings.warn(
+                "Rust backend detected ill-conditioned matrix (NaN in variance-covariance). "
+                "Falling back to Python for R-style rank handling.",
+                UserWarning,
+                stacklevel=2,
+            )
+            # Fall through to Python backend (don't return here)
+        else:
+            return result
 
     # Use NumPy implementation for rank-deficient cases (R-style NA handling)
     # or when Rust backend is not available

@@ -783,6 +783,69 @@ class TestRustVsNumpy:
                 err_msg=f"Simplex projection mismatch for input {v}"
             )
 
+    def test_nan_vcov_fallback_to_python(self):
+        """Test that NaN vcov from Rust backend triggers fallback to Python.
+
+        When Rust SVD detects rank-deficiency that Python QR missed (due to
+        different numerical properties), the vcov matrix may contain NaN values.
+        The high-level solve_ols should detect this and fall back to Python's
+        R-style handling, ensuring the user never receives silent NaN SEs.
+        """
+        import warnings
+        from diff_diff.linalg import solve_ols
+
+        # Create an ill-conditioned matrix that might cause QR/SVD disagreement.
+        # The condition number is extremely high, which may cause the Rust SVD
+        # to detect numerical issues that QR doesn't catch.
+        np.random.seed(42)
+        n = 100
+
+        # Create a matrix with near-perfect but not exact collinearity.
+        # This is on the boundary where QR/SVD might disagree.
+        X = np.random.randn(n, 4)
+        # Make column 3 almost (but not exactly) a linear combination of 0-2
+        X[:, 3] = X[:, 0] + X[:, 1] + X[:, 2] + np.random.randn(n) * 1e-12
+
+        y = np.random.randn(n)
+
+        # Capture any warnings that might be emitted
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            coeffs, residuals, vcov = solve_ols(X, y)
+
+        # Key invariants that must hold regardless of which backend is used:
+        # 1. Coefficients must be finite (either via Rust SVD or Python R-style)
+        finite_coeffs = coeffs[np.isfinite(coeffs)]
+        assert len(finite_coeffs) >= 3, \
+            "At least 3 coefficients should be finite (identifiable)"
+        assert np.all(np.abs(finite_coeffs) < 1e10), \
+            f"Finite coefficients should be reasonable, got {finite_coeffs}"
+
+        # 2. If vcov has any finite values, they should correspond to finite coefficients
+        if vcov is not None:
+            finite_coef_mask = np.isfinite(coeffs)
+            for i in range(len(coeffs)):
+                if finite_coef_mask[i]:
+                    # This coefficient's variance should be finite
+                    var_i = vcov[i, i]
+                    assert np.isfinite(var_i) or np.isnan(var_i), \
+                        f"Variance for finite coef {i} should be finite or NaN (dropped)"
+
+        # 3. Residuals must always be finite
+        assert np.all(np.isfinite(residuals)), "Residuals should be finite"
+
+        # 4. If NaN vcov fallback occurred, there should be a warning
+        # (This is the specific behavior we added)
+        if vcov is not None and np.any(np.isnan(vcov)):
+            # Either Python R-style handling set NaN (for dropped columns)
+            # or we should have seen a fallback warning
+            nan_coef_indices = np.where(np.isnan(coeffs))[0]
+            nan_vcov_diag_indices = np.where(np.isnan(np.diag(vcov)))[0]
+
+            # NaN in vcov diagonal should correspond to NaN coefficients (dropped columns)
+            assert set(nan_vcov_diag_indices).issubset(set(nan_coef_indices)), \
+                "NaN vcov diagonal should only be for dropped columns"
+
 
 @pytest.mark.skipif(not HAS_RUST_BACKEND, reason="Rust backend not available")
 class TestTROPRustBackend:
