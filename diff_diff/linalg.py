@@ -51,6 +51,33 @@ from diff_diff._backend import (
 
 
 # =============================================================================
+# Utility Functions
+# =============================================================================
+
+
+def _factorize_cluster_ids(cluster_ids: np.ndarray) -> np.ndarray:
+    """
+    Convert cluster IDs to contiguous integer codes for Rust backend.
+
+    Handles string, categorical, or non-contiguous integer cluster IDs by
+    mapping them to contiguous integers starting from 0.
+
+    Parameters
+    ----------
+    cluster_ids : np.ndarray
+        Cluster identifiers (can be strings, integers, or categorical).
+
+    Returns
+    -------
+    np.ndarray
+        Integer cluster codes (dtype int64) suitable for Rust backend.
+    """
+    # Use pandas factorize for efficient conversion of any dtype
+    codes, _ = pd.factorize(cluster_ids)
+    return codes.astype(np.int64)
+
+
+# =============================================================================
 # Rank Deficiency Detection and Handling
 # =============================================================================
 
@@ -268,9 +295,9 @@ def _solve_ols_rust(
     vcov : np.ndarray, optional
         Variance-covariance matrix if return_vcov=True.
     """
-    # Convert cluster_ids to int64 for Rust
+    # Convert cluster_ids to int64 for Rust (handles string/categorical IDs)
     if cluster_ids is not None:
-        cluster_ids = np.asarray(cluster_ids, dtype=np.int64)
+        cluster_ids = _factorize_cluster_ids(cluster_ids)
 
     # Call Rust backend
     coefficients, residuals, vcov = _rust_solve_ols(
@@ -301,6 +328,7 @@ def solve_ols(
     check_finite: bool = True,
     rank_deficient_action: str = "warn",
     column_names: Optional[List[str]] = None,
+    skip_rank_check: bool = False,
 ) -> Union[
     Tuple[np.ndarray, np.ndarray, Optional[np.ndarray]],
     Tuple[np.ndarray, np.ndarray, np.ndarray, Optional[np.ndarray]],
@@ -336,6 +364,12 @@ def solve_ols(
     column_names : list of str, optional
         Names for the columns (used in warning/error messages).
         If None, columns are referred to by their indices.
+    skip_rank_check : bool, default False
+        If True, skip the pivoted QR rank check and use Rust backend directly
+        (when available). This saves O(nk²) computation but will not detect
+        rank-deficient matrices. Use only when you know the design matrix is
+        full rank. If the matrix is actually rank-deficient, results may be
+        incorrect (minimum-norm solution instead of R-style NA handling).
 
     Returns
     -------
@@ -343,9 +377,12 @@ def solve_ols(
         OLS coefficient estimates. For rank-deficient matrices, coefficients
         of linearly dependent columns are set to NaN.
     residuals : ndarray of shape (n,)
-        Residuals (y - X @ coefficients). Uses only identified coefficients.
+        Residuals (y - fitted). For rank-deficient matrices, uses only
+        identified coefficients to compute fitted values.
     fitted : ndarray of shape (n,), optional
-        Fitted values (X @ coefficients). Only returned if return_fitted=True.
+        Fitted values. For full-rank matrices, this is X @ coefficients.
+        For rank-deficient matrices, uses only identified coefficients
+        (X_reduced @ coefficients_reduced). Only returned if return_fitted=True.
     vcov : ndarray of shape (k, k) or None
         Variance-covariance matrix (HC1 or cluster-robust).
         For rank-deficient matrices, rows/columns for dropped coefficients
@@ -425,6 +462,26 @@ def solve_ols(
                 "Clean your data or set check_finite=False to skip this check."
             )
 
+    # Fast path: skip rank check and use Rust directly when requested
+    # This saves O(nk²) QR overhead but won't detect rank-deficient matrices
+    if skip_rank_check:
+        if HAS_RUST_BACKEND and _rust_solve_ols is not None:
+            return _solve_ols_rust(
+                X, y,
+                cluster_ids=cluster_ids,
+                return_vcov=return_vcov,
+                return_fitted=return_fitted,
+            )
+        # Fall through to Python without rank info
+        return _solve_ols_numpy(
+            X, y,
+            cluster_ids=cluster_ids,
+            return_vcov=return_vcov,
+            return_fitted=return_fitted,
+            rank_deficient_action=rank_deficient_action,
+            column_names=column_names,
+        )
+
     # Check for rank deficiency using fast pivoted QR decomposition.
     # This adds O(nk²) overhead but is necessary for:
     # 1. Detecting which columns to drop (R-style NA handling)
@@ -432,7 +489,7 @@ def solve_ols(
     #
     # Trade-off: ~2x compute cost for full-rank matrices in exchange for proper
     # rank deficiency handling. For maximum performance on known full-rank data,
-    # users can call _solve_ols_rust directly (not recommended for general use).
+    # set skip_rank_check=True.
     rank, dropped_cols, pivot = _detect_rank_deficiency(X)
     is_rank_deficient = len(dropped_cols) > 0
 
@@ -1012,13 +1069,34 @@ class LinearRegression:
                 return_vcov=False,
             )
             # Compute classical OLS variance-covariance matrix
+            # Handle rank-deficient case: use effective rank for df
             n, k = X.shape
-            mse = np.sum(residuals**2) / (n - k)
-            try:
-                vcov = np.linalg.solve(X.T @ X, mse * np.eye(k))
-            except np.linalg.LinAlgError:
-                # Fall back to pseudo-inverse for singular matrices
-                vcov = np.linalg.pinv(X.T @ X) * mse
+            nan_mask = np.isnan(coefficients)
+            k_effective = k - np.sum(nan_mask)  # Number of identified coefficients
+
+            if k_effective == 0:
+                # All coefficients dropped - no valid inference
+                vcov = np.full((k, k), np.nan)
+            elif np.any(nan_mask):
+                # Rank-deficient: compute vcov for identified coefficients only
+                kept_cols = np.where(~nan_mask)[0]
+                X_reduced = X[:, kept_cols]
+                mse = np.sum(residuals**2) / (n - k_effective)
+                try:
+                    vcov_reduced = np.linalg.solve(
+                        X_reduced.T @ X_reduced, mse * np.eye(k_effective)
+                    )
+                except np.linalg.LinAlgError:
+                    vcov_reduced = np.linalg.pinv(X_reduced.T @ X_reduced) * mse
+                # Expand to full size with NaN for dropped columns
+                vcov = _expand_vcov_with_nan(vcov_reduced, k, kept_cols)
+            else:
+                # Full rank: standard computation
+                mse = np.sum(residuals**2) / (n - k)
+                try:
+                    vcov = np.linalg.solve(X.T @ X, mse * np.eye(k))
+                except np.linalg.LinAlgError:
+                    vcov = np.linalg.pinv(X.T @ X) * mse
 
         # Store fitted attributes
         self.coefficients_ = coefficients

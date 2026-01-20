@@ -140,6 +140,18 @@ class TwoWayFixedEffects(DifferenceInDifferences):
         r_squared = reg.r_squared()
         att = coefficients[att_idx]
 
+        # Check if treatment coefficient is identifiable
+        # If NaN, treatment is perfectly collinear with fixed effects
+        if np.isnan(att):
+            raise ValueError(
+                "Treatment is perfectly collinear with unit/time fixed effects. "
+                "This means the treatment effect cannot be identified from the data. "
+                "This can happen when: (1) all treated units are treated in all periods, "
+                "(2) treatment timing is constant within units, or (3) the panel structure "
+                "doesn't allow separating treatment from fixed effects. "
+                "Check your data structure and ensure treatment varies within units over time."
+            )
+
         # Get inference - either from bootstrap or analytical
         if self.inference == "wild_bootstrap":
             # Override with wild cluster bootstrap inference
