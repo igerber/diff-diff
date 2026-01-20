@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.4] - 2026-01-20
+
+### Added
+- **Development checklists and workflow improvements** in `CLAUDE.md`
+  - Estimator inheritance map showing class hierarchy for `get_params`/`set_params`
+  - Test writing guidelines for fallback paths, parameters, and warnings
+  - Checklists for adding parameters and warning/error handling
+- **R-style rank deficiency handling** across all estimators
+  - `rank_deficient_action` parameter: "warn" (default), "error", or "silent"
+  - Dropped columns have NaN coefficients (like R's `lm()`)
+  - VCoV matrix has NaN for rows/cols of dropped coefficients
+  - Propagated to all estimators: DifferenceInDifferences, MultiPeriodDiD, TwoWayFixedEffects, CallawaySantAnna, SunAbraham, TripleDifference, TROP, SyntheticDiD
+
+### Fixed
+- `get_params()` now includes `rank_deficient_action` parameter (fixes sklearn cloning)
+- NaN vcov fallback in Rust backend for rank-deficient matrices
+- MultiPeriodDiD vcov/df computation for rank-deficient designs
+- Average ATT inference for rank-deficient designs
+
+### Changed
+- Rank tolerance aligned with R's `lm()` default for consistent behavior
+
 ## [2.1.3] - 2026-01-19
 
 ### Fixed
@@ -470,6 +492,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `to_dict()` and `to_dataframe()` export methods
   - `is_significant` and `significance_stars` properties
 
+[2.1.4]: https://github.com/igerber/diff-diff/compare/v2.1.3...v2.1.4
 [2.1.3]: https://github.com/igerber/diff-diff/compare/v2.1.2...v2.1.3
 [2.1.2]: https://github.com/igerber/diff-diff/compare/v2.1.1...v2.1.2
 [2.1.1]: https://github.com/igerber/diff-diff/compare/v2.1.0...v2.1.1
