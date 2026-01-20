@@ -158,3 +158,23 @@ Potential future optimizations:
 - [ ] JIT compilation for bootstrap loops (numba)
 - [ ] Sparse matrix handling for large fixed effects
 
+### QR+SVD Redundancy in Rank Detection
+
+**Background**: The current `solve_ols()` implementation performs both QR (for rank detection) and SVD (for solving) decompositions on rank-deficient matrices. This is technically redundant since SVD can determine rank directly.
+
+**Current approach** (R-style, chosen for robustness):
+1. QR with pivoting for rank detection (`_detect_rank_deficiency()`)
+2. scipy's `lstsq` with 'gelsd' driver (SVD-based) for solving
+
+**Why we use QR for rank detection**:
+- QR with pivoting provides the canonical ordering of linearly dependent columns
+- R's `lm()` uses this approach for consistent dropped-column reporting
+- Ensures consistent column dropping across runs (SVD column selection can vary)
+
+**Potential optimization** (future work):
+- Skip QR when `rank_deficient_action="silent"` since we don't need column names
+- Use SVD rank directly in the Rust backend (already implemented)
+- Add `skip_rank_check` parameter for hot paths where matrix is known to be full-rank (implemented in v2.2.0)
+
+**Priority**: Low - the QR overhead is minimal compared to SVD solve, and correctness is more important than micro-optimization.
+

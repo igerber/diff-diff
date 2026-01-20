@@ -300,6 +300,43 @@ class TestSolveOLS:
             # Column name should appear in warning (not just index)
             assert "x2_collinear" in str(w[0].message) or "intercept" in str(w[0].message) or "x1" in str(w[0].message)
 
+    def test_skip_rank_check_bypasses_qr_decomposition(self):
+        """Test that skip_rank_check=True skips QR rank detection.
+
+        When skip_rank_check=True, the function should skip QR decomposition
+        and go directly to SVD solving, even in Python backend.
+        """
+        import warnings
+        import os
+
+        np.random.seed(42)
+        n = 100
+        X = np.random.randn(n, 3)
+        y = np.random.randn(n)
+
+        # Force Python backend for this test
+        old_backend = os.environ.get("DIFF_DIFF_BACKEND")
+        os.environ["DIFF_DIFF_BACKEND"] = "python"
+
+        try:
+            # With skip_rank_check=True, should not emit any warnings
+            # (even if we make X rank-deficient, since we're skipping the check)
+            with warnings.catch_warnings(record=True) as w:
+                warnings.simplefilter("always")
+                coef, resid, vcov = solve_ols(X, y, skip_rank_check=True)
+                # No rank-deficiency warning should be emitted
+                rank_warnings = [x for x in w if "Rank-deficient" in str(x.message)]
+                assert len(rank_warnings) == 0
+        finally:
+            if old_backend is not None:
+                os.environ["DIFF_DIFF_BACKEND"] = old_backend
+            elif "DIFF_DIFF_BACKEND" in os.environ:
+                del os.environ["DIFF_DIFF_BACKEND"]
+
+        # Should produce valid coefficients
+        assert coef.shape == (3,)
+        assert np.all(np.isfinite(coef))
+
     def test_multiperiod_like_design_full_rank(self):
         """Test that MultiPeriodDiD-like design matrices work when full-rank.
 

@@ -472,7 +472,7 @@ def solve_ols(
                 return_vcov=return_vcov,
                 return_fitted=return_fitted,
             )
-        # Fall through to Python without rank info
+        # Fall through to Python without rank check (user guarantees full rank)
         return _solve_ols_numpy(
             X, y,
             cluster_ids=cluster_ids,
@@ -480,6 +480,7 @@ def solve_ols(
             return_fitted=return_fitted,
             rank_deficient_action=rank_deficient_action,
             column_names=column_names,
+            _skip_rank_check=True,
         )
 
     # Check for rank deficiency using fast pivoted QR decomposition.
@@ -529,6 +530,7 @@ def _solve_ols_numpy(
     rank_deficient_action: str = "warn",
     column_names: Optional[List[str]] = None,
     _precomputed_rank_info: Optional[Tuple[int, np.ndarray, np.ndarray]] = None,
+    _skip_rank_check: bool = False,
 ) -> Union[
     Tuple[np.ndarray, np.ndarray, Optional[np.ndarray]],
     Tuple[np.ndarray, np.ndarray, np.ndarray, Optional[np.ndarray]],
@@ -559,6 +561,9 @@ def _solve_ols_numpy(
     _precomputed_rank_info : tuple, optional
         Pre-computed (rank, dropped_cols, pivot) from _detect_rank_deficiency.
         Used internally to avoid redundant computation when called from solve_ols.
+    _skip_rank_check : bool, default False
+        If True, skip rank detection entirely and assume full rank.
+        Used when caller has already determined matrix is full rank.
 
     Returns
     -------
@@ -573,13 +578,19 @@ def _solve_ols_numpy(
     """
     n, k = X.shape
 
-    # Use pre-computed rank info if provided, otherwise compute
-    if _precomputed_rank_info is not None:
+    # Determine rank deficiency status
+    if _skip_rank_check:
+        # Caller guarantees full rank - skip expensive QR decomposition
+        is_rank_deficient = False
+        dropped_cols = np.array([], dtype=int)
+    elif _precomputed_rank_info is not None:
+        # Use pre-computed rank info
         rank, dropped_cols, pivot = _precomputed_rank_info
+        is_rank_deficient = len(dropped_cols) > 0
     else:
+        # Compute rank via pivoted QR
         rank, dropped_cols, pivot = _detect_rank_deficiency(X)
-
-    is_rank_deficient = len(dropped_cols) > 0
+        is_rank_deficient = len(dropped_cols) > 0
 
     if is_rank_deficient:
         # Format dropped column information for messages

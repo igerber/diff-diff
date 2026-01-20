@@ -127,12 +127,17 @@ class TwoWayFixedEffects(DifferenceInDifferences):
         # Always use LinearRegression for initial fit (unified code path)
         # For wild bootstrap, we don't need cluster SEs from the initial fit
         cluster_ids = data[cluster_var].values
-        reg = LinearRegression(
-            include_intercept=False,  # Intercept already in X
-            robust=True,  # TWFE always uses robust/cluster SEs
-            cluster_ids=cluster_ids if self.inference != "wild_bootstrap" else None,
-            alpha=self.alpha,
-        ).fit(X, y, df_adjustment=df_adjustment)
+
+        # Suppress rank-deficiency warning from solve_ols - TWFE handles its own messaging
+        # with more context-specific error/warning messages
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", message="Rank-deficient design matrix")
+            reg = LinearRegression(
+                include_intercept=False,  # Intercept already in X
+                robust=True,  # TWFE always uses robust/cluster SEs
+                cluster_ids=cluster_ids if self.inference != "wild_bootstrap" else None,
+                alpha=self.alpha,
+            ).fit(X, y, df_adjustment=df_adjustment)
 
         coefficients = reg.coefficients_
         residuals = reg.residuals_
