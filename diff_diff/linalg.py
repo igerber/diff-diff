@@ -5,7 +5,7 @@ This module provides optimized OLS and variance estimation with an optional
 Rust backend for maximum performance.
 
 The key optimizations are:
-1. scipy.linalg.lstsq with 'gelsy' driver (QR-based, faster than SVD)
+1. scipy.linalg.lstsq with 'gelsd' driver (SVD-based, handles rank-deficient matrices)
 2. Vectorized cluster-robust SE via groupby (eliminates O(n*clusters) loop)
 3. Single interface for all estimators (reduces code duplication)
 4. Optional Rust backend for additional speedup (when available)
@@ -80,9 +80,9 @@ def solve_ols(
 
     Notes
     -----
-    This function uses scipy.linalg.lstsq with the 'gelsy' driver, which is
-    QR-based and typically faster than NumPy's default SVD-based solver for
-    well-conditioned matrices.
+    This function uses scipy.linalg.lstsq with the 'gelsd' driver, which is
+    SVD-based and handles rank-deficient matrices correctly by truncating
+    small singular values.
 
     The cluster-robust standard errors use the sandwich estimator with the
     standard small-sample adjustment: (G/(G-1)) * ((n-1)/(n-k)).
@@ -184,11 +184,11 @@ def _solve_ols_numpy(
     """
     NumPy/SciPy fallback implementation of solve_ols.
 
-    Uses scipy.linalg.lstsq with 'gelsy' driver (QR with column pivoting)
-    for numerically stable least squares solving. QR decomposition is preferred
-    over normal equations because it doesn't square the condition number of X,
-    making it more robust for ill-conditioned matrices common in DiD designs
-    (e.g., many unit/time fixed effects).
+    Uses scipy.linalg.lstsq with 'gelsd' driver (SVD-based with divide-and-conquer)
+    for numerically stable least squares solving. SVD decomposition properly handles
+    rank-deficient matrices by truncating small singular values, which is critical
+    for DiD designs that may have redundant columns (e.g., period dummies + treatment
+    interactions in MultiPeriodDiD).
 
     Parameters
     ----------
@@ -214,11 +214,11 @@ def _solve_ols_numpy(
     vcov : np.ndarray, optional
         Variance-covariance matrix if return_vcov=True.
     """
-    # Solve OLS using QR decomposition via scipy's optimized LAPACK routines
-    # 'gelsy' uses QR with column pivoting, which is numerically stable even
-    # for ill-conditioned matrices (doesn't square the condition number like
-    # normal equations would)
-    coefficients = scipy_lstsq(X, y, lapack_driver="gelsy", check_finite=False)[0]
+    # Solve OLS using SVD via scipy's optimized LAPACK routines
+    # 'gelsd' uses divide-and-conquer SVD, which properly handles rank-deficient
+    # matrices by truncating small singular values (unlike 'gelsy' which can
+    # produce garbage coefficients for nearly rank-deficient matrices)
+    coefficients = scipy_lstsq(X, y, lapack_driver="gelsd", check_finite=False)[0]
 
     # Compute residuals and fitted values
     fitted = X @ coefficients

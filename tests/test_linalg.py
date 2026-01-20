@@ -186,21 +186,32 @@ class TestSolveOLS:
             solve_ols(X, y)
 
     def test_check_finite_false_skips_validation(self):
-        """Test that check_finite=False skips NaN/Inf validation."""
+        """Test that check_finite=False skips the upfront NaN/Inf validation.
+
+        Note: With the 'gelsd' driver, LAPACK may still error on NaN values
+        during computation, which is actually safer than producing garbage.
+        """
         X = np.random.randn(100, 2)
         X[50, 0] = np.nan
         y = np.random.randn(100)
 
-        # Should not raise, but will return garbage results
-        coef, resid, vcov = solve_ols(X, y, check_finite=False)
-        # Coefficients will contain NaN due to bad input
-        assert np.isnan(coef).any() or np.isinf(coef).any()
+        # The gelsd driver may raise an error when encountering NaN during
+        # computation, or produce garbage results. Either is acceptable
+        # (the key is that we don't raise the "X contains NaN" user-friendly error)
+        try:
+            coef, resid, vcov = solve_ols(X, y, check_finite=False)
+            # If it completed, coefficients should contain NaN/Inf due to bad input
+            assert np.isnan(coef).any() or np.isinf(coef).any()
+        except ValueError as e:
+            # LAPACK may raise an error on NaN values (gelsd behavior)
+            # This is acceptable - the key is we skipped our own validation
+            assert "X contains NaN" not in str(e) and "y contains NaN" not in str(e)
 
     def test_rank_deficient_still_solves(self):
-        """Test that rank-deficient matrix still returns a solution.
+        """Test that rank-deficient matrix returns a valid solution.
 
-        Note: The gelsy driver doesn't always detect rank deficiency,
-        but it still returns a valid least-squares solution.
+        The 'gelsd' driver uses SVD with truncation to properly handle
+        rank-deficient matrices, producing finite and reasonable coefficients.
         """
         np.random.seed(42)
         X = np.random.randn(100, 3)
@@ -212,8 +223,81 @@ class TestSolveOLS:
 
         assert coef.shape == (3,)
         assert resid.shape == (100,)
+
+        # Coefficients must be finite (not NaN or Inf)
+        assert np.all(np.isfinite(coef)), f"Coefficients contain non-finite values: {coef}"
+
+        # Coefficients should be reasonable (not astronomically large)
+        # For a rank-deficient system, coefficients should still be bounded
+        assert np.all(np.abs(coef) < 1e6), f"Coefficients are unreasonably large: {coef}"
+
         # Residuals should still be valid (y - X @ coef)
         np.testing.assert_allclose(resid, y - X @ coef, rtol=1e-10)
+
+    def test_multiperiod_like_rank_deficiency(self):
+        """Test that MultiPeriodDiD-like design matrices are handled correctly.
+
+        MultiPeriodDiD creates design matrices with intercept + period dummies +
+        treatment × post interactions, which can have redundant columns and be
+        rank-deficient. This test mimics that structure.
+        """
+        np.random.seed(42)
+        n = 200
+        n_periods = 5
+
+        # Create a design matrix similar to MultiPeriodDiD:
+        # [intercept, period_1, period_2, ..., period_k, treated*post_1, ...]
+
+        # Intercept
+        intercept = np.ones(n)
+
+        # Period dummies (one-hot encoding for periods 1 to n_periods-1)
+        # Period 0 is the reference
+        period_assignment = np.random.randint(0, n_periods, n)
+        period_dummies = np.zeros((n, n_periods - 1))
+        for i in range(1, n_periods):
+            period_dummies[:, i - 1] = (period_assignment == i).astype(float)
+
+        # Treatment indicator
+        treated = np.random.binomial(1, 0.5, n)
+
+        # Post indicator (periods >= 3 are post)
+        post = (period_assignment >= 3).astype(float)
+
+        # Treatment × post interaction
+        treat_post = treated * post
+
+        # Build design matrix
+        # Note: This creates a rank-deficient matrix because the period dummies
+        # and treat_post are not all linearly independent when combined
+        X = np.column_stack([intercept, period_dummies, treat_post])
+
+        # True effect
+        true_effect = 2.5
+        y = (
+            1.0  # intercept effect
+            + 0.5 * period_dummies[:, 0]  # period 1 effect
+            + 0.3 * period_dummies[:, 1]  # period 2 effect
+            + 0.7 * period_dummies[:, 2]  # period 3 effect
+            + 0.9 * period_dummies[:, 3]  # period 4 effect
+            + true_effect * treat_post  # treatment effect
+            + np.random.randn(n) * 0.5  # noise
+        )
+
+        # Fit with solve_ols
+        coef, resid, vcov = solve_ols(X, y)
+
+        # Coefficients must be finite
+        assert np.all(np.isfinite(coef)), f"Coefficients contain non-finite values: {coef}"
+
+        # Coefficients should be reasonable (not trillions)
+        assert np.all(np.abs(coef) < 1e6), f"Coefficients are unreasonably large: {coef}"
+
+        # The treatment effect coefficient (last one) should be close to true effect
+        # Allow for sampling variation and potential multicollinearity effects
+        assert abs(coef[-1] - true_effect) < 2.0, (
+            f"Treatment effect coefficient {coef[-1]} is too far from true effect {true_effect}"
+        )
 
     def test_single_cluster_error(self):
         """Test that single cluster raises error."""

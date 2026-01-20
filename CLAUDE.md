@@ -119,7 +119,7 @@ pytest tests/test_rust_backend.py -v
   - Integrated with `TwoWayFixedEffects.decompose()` method
 
 - **`diff_diff/linalg.py`** - Unified linear algebra backend (v1.4.0+):
-  - `solve_ols()` - OLS solver using scipy's gelsy LAPACK driver (QR-based, faster than SVD)
+  - `solve_ols()` - OLS solver using scipy's gelsd LAPACK driver (SVD-based, handles rank-deficient matrices)
   - `compute_robust_vcov()` - Vectorized HC1 and cluster-robust variance-covariance estimation
   - `compute_r_squared()` - R-squared and adjusted R-squared computation
   - `LinearRegression` - High-level OLS helper class with unified coefficient extraction and inference
@@ -240,7 +240,7 @@ diff-diff achieved significant performance improvements in v1.4.0, now **faster 
 
 All estimators use a single optimized OLS/SE implementation:
 
-- **scipy.linalg.lstsq with 'gelsy' driver**: QR-based solving, faster than NumPy's default SVD-based solver
+- **scipy.linalg.lstsq with 'gelsd' driver**: SVD-based solving that properly handles rank-deficient matrices (critical for MultiPeriodDiD and other estimators with potentially redundant columns)
 - **Vectorized cluster-robust SE**: Uses pandas groupby aggregation instead of O(n × clusters) Python loop
 - **Single optimization point**: Changes to `linalg.py` benefit all estimators
 

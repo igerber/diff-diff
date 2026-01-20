@@ -337,6 +337,108 @@ class TestRustBackend:
         assert np.all(np.isfinite(residuals)), "Residuals should be finite"
         assert vcov.shape == (3, 3), "VCoV should have correct shape"
 
+    # =========================================================================
+    # Rank-Deficient Matrix Tests (Critical for MultiPeriodDiD)
+    # =========================================================================
+
+    def test_rank_deficient_matrix_produces_valid_coefficients(self):
+        """Test that rank-deficient matrices produce finite, reasonable coefficients.
+
+        This test verifies the fix for the MultiPeriodDiD bug where rank-deficient
+        design matrices (with redundant columns) produced astronomically wrong
+        estimates (trillions instead of single digits).
+
+        The SVD-based solver should truncate small singular values and produce
+        a valid minimum-norm solution.
+        """
+        from diff_diff._rust_backend import solve_ols
+
+        np.random.seed(42)
+        n = 100
+
+        # Create perfectly collinear design matrix (rank-deficient)
+        # This mimics what can happen in MultiPeriodDiD with period dummies
+        X = np.random.randn(n, 3)
+        X[:, 2] = X[:, 0] + X[:, 1]  # Column 3 = Column 1 + Column 2
+
+        y = X[:, 0] + np.random.randn(n) * 0.1
+
+        # Rust backend should handle this gracefully via SVD truncation
+        coeffs, residuals, vcov = solve_ols(X, y, None, True)
+
+        # Coefficients must be finite (not NaN or Inf)
+        assert np.all(np.isfinite(coeffs)), f"Coefficients should be finite, got {coeffs}"
+
+        # Coefficients should be reasonable (not astronomically large like 1e12)
+        assert np.all(np.abs(coeffs) < 1e6), f"Coefficients are unreasonably large: {coeffs}"
+
+        # Residuals should be correct given coefficients
+        expected_residuals = y - X @ coeffs
+        np.testing.assert_array_almost_equal(
+            residuals, expected_residuals, decimal=8,
+            err_msg="Residuals should match y - X @ coeffs"
+        )
+
+    def test_multiperiod_did_like_design_matrix(self):
+        """Test design matrix structure similar to MultiPeriodDiD.
+
+        MultiPeriodDiD creates design matrices with:
+        - Intercept
+        - Period dummies (one-hot encoded)
+        - Treatment × post interaction terms
+
+        These can create rank-deficient matrices when period dummies and
+        interaction terms are not all linearly independent.
+        """
+        from diff_diff._rust_backend import solve_ols
+
+        np.random.seed(42)
+        n = 200
+        n_periods = 5
+
+        # Create MultiPeriodDiD-like design matrix
+        intercept = np.ones(n)
+
+        # Period dummies (periods 1-4, period 0 is reference)
+        period_assignment = np.random.randint(0, n_periods, n)
+        period_dummies = np.zeros((n, n_periods - 1))
+        for i in range(1, n_periods):
+            period_dummies[:, i - 1] = (period_assignment == i).astype(float)
+
+        # Treatment indicator and post indicator
+        treated = np.random.binomial(1, 0.5, n)
+        post = (period_assignment >= 3).astype(float)
+        treat_post = treated * post
+
+        # Build design matrix (potentially rank-deficient)
+        X = np.column_stack([intercept, period_dummies, treat_post])
+
+        # True effect
+        true_effect = 2.5
+        y = (
+            1.0
+            + 0.5 * period_dummies[:, 0]
+            + 0.3 * period_dummies[:, 1]
+            + 0.7 * period_dummies[:, 2]
+            + 0.9 * period_dummies[:, 3]
+            + true_effect * treat_post
+            + np.random.randn(n) * 0.5
+        )
+
+        # Fit with Rust backend
+        coeffs, residuals, vcov = solve_ols(X, y, None, True)
+
+        # Coefficients must be finite
+        assert np.all(np.isfinite(coeffs)), f"Coefficients should be finite, got {coeffs}"
+
+        # Coefficients should be reasonable (not trillions)
+        assert np.all(np.abs(coeffs) < 1e6), f"Coefficients are unreasonably large: {coeffs}"
+
+        # Treatment effect (last coefficient) should be close to true effect
+        assert abs(coeffs[-1] - true_effect) < 2.0, (
+            f"Treatment effect {coeffs[-1]} is too far from true effect {true_effect}"
+        )
+
 
 @pytest.mark.skipif(not HAS_RUST_BACKEND, reason="Rust backend not available")
 class TestRustVsNumpy:
@@ -391,6 +493,101 @@ class TestRustVsNumpy:
         np.testing.assert_array_almost_equal(
             rust_vcov, numpy_vcov, decimal=5,
             err_msg="Clustered OLS VCoV should match"
+        )
+
+    def test_rank_deficient_ols_match(self):
+        """Test Rust and NumPy produce consistent results for rank-deficient matrices.
+
+        This is critical for ensuring the MultiPeriodDiD fix works in both backends.
+        Both should use SVD-based solving with truncation for small singular values.
+        """
+        from diff_diff._rust_backend import solve_ols as rust_fn
+        from diff_diff.linalg import _solve_ols_numpy as numpy_fn
+
+        np.random.seed(42)
+        n = 100
+
+        # Create rank-deficient design matrix (perfect collinearity)
+        X = np.random.randn(n, 3)
+        X[:, 2] = X[:, 0] + X[:, 1]  # Column 3 = Column 1 + Column 2
+
+        y = X[:, 0] + 2 * X[:, 1] + np.random.randn(n) * 0.1
+
+        rust_coeffs, rust_resid, _ = rust_fn(X, y, None, True)
+        numpy_coeffs, numpy_resid, _ = numpy_fn(X, y, cluster_ids=None)
+
+        # Both should produce finite coefficients
+        assert np.all(np.isfinite(rust_coeffs)), "Rust coefficients should be finite"
+        assert np.all(np.isfinite(numpy_coeffs)), "NumPy coefficients should be finite"
+
+        # Both should produce reasonable coefficients (not astronomically large)
+        assert np.all(np.abs(rust_coeffs) < 1e6), "Rust coefficients should be reasonable"
+        assert np.all(np.abs(numpy_coeffs) < 1e6), "NumPy coefficients should be reasonable"
+
+        # Residuals should be very close (this is the key equivalence check)
+        # Note: Coefficients may differ for rank-deficient systems (many valid solutions)
+        # but residuals should be the same since both find minimum-norm solutions
+        np.testing.assert_array_almost_equal(
+            rust_resid, numpy_resid, decimal=6,
+            err_msg="Residuals should match for rank-deficient matrices"
+        )
+
+    def test_multiperiod_did_design_equivalence(self):
+        """Test both backends handle MultiPeriodDiD-like design matrices consistently."""
+        from diff_diff._rust_backend import solve_ols as rust_fn
+        from diff_diff.linalg import _solve_ols_numpy as numpy_fn
+
+        np.random.seed(42)
+        n = 200
+        n_periods = 5
+
+        # Create MultiPeriodDiD-like design matrix
+        intercept = np.ones(n)
+        period_assignment = np.random.randint(0, n_periods, n)
+        period_dummies = np.zeros((n, n_periods - 1))
+        for i in range(1, n_periods):
+            period_dummies[:, i - 1] = (period_assignment == i).astype(float)
+
+        treated = np.random.binomial(1, 0.5, n)
+        post = (period_assignment >= 3).astype(float)
+        treat_post = treated * post
+
+        X = np.column_stack([intercept, period_dummies, treat_post])
+
+        true_effect = 2.5
+        y = (
+            1.0
+            + 0.5 * period_dummies[:, 0]
+            + 0.3 * period_dummies[:, 1]
+            + 0.7 * period_dummies[:, 2]
+            + 0.9 * period_dummies[:, 3]
+            + true_effect * treat_post
+            + np.random.randn(n) * 0.5
+        )
+
+        rust_coeffs, rust_resid, _ = rust_fn(X, y, None, True)
+        numpy_coeffs, numpy_resid, _ = numpy_fn(X, y, cluster_ids=None)
+
+        # Both should recover similar treatment effects
+        rust_effect = rust_coeffs[-1]
+        numpy_effect = numpy_coeffs[-1]
+
+        assert abs(rust_effect - true_effect) < 2.0, (
+            f"Rust treatment effect {rust_effect} too far from true {true_effect}"
+        )
+        assert abs(numpy_effect - true_effect) < 2.0, (
+            f"NumPy treatment effect {numpy_effect} too far from true {true_effect}"
+        )
+
+        # Effects should be close to each other
+        assert abs(rust_effect - numpy_effect) < 0.5, (
+            f"Rust ({rust_effect}) and NumPy ({numpy_effect}) effects should match"
+        )
+
+        # Residuals should be very close
+        np.testing.assert_array_almost_equal(
+            rust_resid, numpy_resid, decimal=5,
+            err_msg="Residuals should match for MultiPeriodDiD-like design"
         )
 
     # =========================================================================

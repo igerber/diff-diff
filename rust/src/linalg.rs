@@ -6,12 +6,21 @@
 //! - Cluster-robust variance-covariance estimation
 
 use ndarray::{Array1, Array2, ArrayView1, ArrayView2, Axis};
-use ndarray_linalg::{FactorizeC, LeastSquaresSvd, Solve, SolveC, UPLO};
+use ndarray_linalg::{FactorizeC, Solve, SolveC, SVD, UPLO};
 use numpy::{IntoPyArray, PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2};
 use pyo3::prelude::*;
 use std::collections::HashMap;
 
 /// Solve OLS regression: β = (X'X)^{-1} X'y
+///
+/// Uses SVD with truncation for rank-deficient matrices:
+/// - Computes SVD: X = U * S * V^T
+/// - Truncates singular values below rcond * max(S)
+/// - Computes solution: β = V * S^{-1}_truncated * U^T * y
+///
+/// This matches scipy's 'gelsd' driver behavior for handling rank-deficient
+/// design matrices that can occur in DiD estimation (e.g., MultiPeriodDiD
+/// with redundant period dummies + treatment interactions).
 ///
 /// # Arguments
 /// * `x` - Design matrix (n, k)
@@ -37,15 +46,47 @@ pub fn solve_ols<'py>(
     let x_arr = x.as_array();
     let y_arr = y.as_array();
 
-    // Solve least squares using SVD (more stable than normal equations)
+    let n = x_arr.nrows();
+    let k = x_arr.ncols();
+
+    // Solve using SVD with truncation for rank-deficient matrices
+    // This matches scipy's 'gelsd' behavior
     let x_owned = x_arr.to_owned();
     let y_owned = y_arr.to_owned();
 
-    let result = x_owned
-        .least_squares(&y_owned)
-        .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Least squares failed: {}", e)))?;
+    // Compute SVD: X = U * S * V^T
+    let (u_opt, s, vt_opt) = x_owned
+        .svd(true, true)
+        .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("SVD failed: {}", e)))?;
 
-    let coefficients = result.solution;
+    let u = u_opt.ok_or_else(|| {
+        PyErr::new::<pyo3::exceptions::PyValueError, _>("SVD did not return U matrix")
+    })?;
+    let vt = vt_opt.ok_or_else(|| {
+        PyErr::new::<pyo3::exceptions::PyValueError, _>("SVD did not return V^T matrix")
+    })?;
+
+    // Compute rcond threshold (matches numpy/scipy default)
+    // rcond = max(n, k) * machine_epsilon
+    let rcond = (n.max(k) as f64) * f64::EPSILON;
+    let s_max = s.iter().cloned().fold(0.0_f64, f64::max);
+    let threshold = s_max * rcond;
+
+    // Compute truncated pseudoinverse solution: β = V * S^{-1} * U^T * y
+    // Singular values below threshold are treated as zero (truncated)
+    let uty = u.t().dot(&y_owned); // (min(n,k),)
+
+    // Build S^{-1} with truncation
+    let mut s_inv_uty = Array1::<f64>::zeros(k);
+    for i in 0..s.len().min(k) {
+        if s[i] > threshold {
+            s_inv_uty[i] = uty[i] / s[i];
+        }
+        // else: leave as 0 (truncate this singular value)
+    }
+
+    // Compute coefficients: β = V * (S^{-1} * U^T * y)
+    let coefficients = vt.t().dot(&s_inv_uty);
 
     // Compute fitted values and residuals
     let fitted = x_arr.dot(&coefficients);
