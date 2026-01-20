@@ -236,6 +236,14 @@ def _solve_ols_rust(
     For rank-deficient matrices, the Python backend is used instead to
     properly handle R-style NA coefficients for dropped columns.
 
+    Why the backends differ (by design):
+    - Rust uses SVD-based solve (minimum-norm solution for rank-deficient)
+    - Python uses pivoted QR to identify and drop linearly dependent columns
+    - ndarray-linalg doesn't support QR with pivoting, so Rust can't identify
+      which specific columns to drop
+    - For full-rank matrices, both approaches give identical results
+    - For rank-deficient matrices, only Python can provide R-style NA handling
+
     Parameters
     ----------
     X : np.ndarray
@@ -417,15 +425,21 @@ def solve_ols(
                 "Clean your data or set check_finite=False to skip this check."
             )
 
-    # Check for rank deficiency first using fast pivoted QR
-    # This determines whether we can use the fast Rust backend or need
-    # the Python backend with full R-style NA handling
+    # Check for rank deficiency using fast pivoted QR decomposition.
+    # This adds O(nk²) overhead but is necessary for:
+    # 1. Detecting which columns to drop (R-style NA handling)
+    # 2. Routing rank-deficient cases to Python (Rust doesn't support pivoted QR)
+    #
+    # Trade-off: ~2x compute cost for full-rank matrices in exchange for proper
+    # rank deficiency handling. For maximum performance on known full-rank data,
+    # users can call _solve_ols_rust directly (not recommended for general use).
     rank, dropped_cols, pivot = _detect_rank_deficiency(X)
     is_rank_deficient = len(dropped_cols) > 0
 
-    # Use Rust backend for full-rank cases when available
-    # Rank-deficient cases require Python for proper NA coefficient handling
-    # since ndarray-linalg doesn't support QR with pivoting
+    # Routing strategy:
+    # - Full-rank + Rust available → fast Rust backend (SVD-based solve)
+    # - Rank-deficient → Python backend (proper NA handling, valid SEs)
+    # - No Rust → Python backend (works for all cases)
     if HAS_RUST_BACKEND and _rust_solve_ols is not None and not is_rank_deficient:
         return _solve_ols_rust(
             X, y,

@@ -12,23 +12,23 @@ Current limitations that may affect users:
 
 | Issue | Location | Priority | Notes |
 |-------|----------|----------|-------|
-| NaN standard errors for rank-deficient matrices | `linalg.py:330-345` | Medium | See details below |
 | MultiPeriodDiD wild bootstrap not supported | `estimators.py:1068-1074` | Low | Edge case |
 | `predict()` raises NotImplementedError | `estimators.py:532-554` | Low | Rarely needed |
 
-### NaN Standard Errors for Rank-Deficient Matrices
+### ~~NaN Standard Errors for Rank-Deficient Matrices~~ (RESOLVED)
 
-**Problem**: When the design matrix is rank-deficient (e.g., MultiPeriodDiD with redundant period dummies + treatment interactions), the coefficients are now computed correctly via SVD truncation, but the variance-covariance matrix computation produces NaN values.
+**Status**: Resolved in v2.2.0 with R-style rank deficiency handling.
 
-**Root cause**: The vcov computation in `compute_robust_vcov()` computes `(X'X)^{-1}` which doesn't exist for rank-deficient matrices. The current implementation uses Cholesky factorization which fails silently, producing NaN values.
+**Solution**: The OLS solver now detects rank-deficient design matrices using pivoted QR decomposition and handles them following R's `lm()` approach:
+- Warns users about dropped columns
+- Sets NaN for coefficients of linearly dependent columns
+- Computes valid SEs for identified (non-dropped) coefficients only
+- Expands vcov matrix with NaN for dropped rows/columns
 
-**Affected estimators**:
-- `MultiPeriodDiD` - when design matrix has redundant columns
-- Any estimator using `solve_ols()` with rank-deficient X
-
-**Potential fix**: Use the Moore-Penrose pseudoinverse `(X'X)^+` instead of `(X'X)^{-1}` for the bread matrix in the sandwich estimator. This would provide valid (though potentially conservative) standard errors for the identifiable parameters.
-
-**Workaround**: Users can use bootstrap inference which doesn't rely on the analytical vcov.
+This is controlled by the `rank_deficient_action` parameter in `solve_ols()`:
+- `"warn"` (default): Emit warning, set NA for dropped coefficients
+- `"error"`: Raise ValueError
+- `"silent"`: No warning, but still set NA for dropped coefficients
 
 ---
 

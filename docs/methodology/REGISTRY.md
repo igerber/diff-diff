@@ -58,7 +58,7 @@ where τ is the ATT.
 *Edge cases:*
 - Empty cells (e.g., no treated-pre observations) raise ValueError
 - Singleton groups in clustering are dropped with warning
-- Perfect collinearity in covariates raises LinAlgError
+- Rank-deficient design matrix (collinearity): warns and sets NA for dropped coefficients (R-style, matches `lm()`)
 
 **Reference implementation(s):**
 - R: `fixest::feols()` with interaction term
