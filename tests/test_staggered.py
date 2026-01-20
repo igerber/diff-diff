@@ -730,6 +730,61 @@ class TestCallawaySantAnnaCovariates:
         assert results.overall_att is not None
         assert results.overall_se > 0
 
+    def test_rank_deficient_action_error_raises(self):
+        """Test that rank_deficient_action='error' raises ValueError on collinear data."""
+        data = generate_staggered_data_with_covariates(seed=42)
+
+        # Add a covariate that is perfectly collinear with x1
+        data["x1_dup"] = data["x1"].copy()
+
+        cs = CallawaySantAnna(
+            estimation_method="reg",  # Use regression method to test OLS path
+            rank_deficient_action="error"
+        )
+        with pytest.raises(ValueError, match="rank-deficient"):
+            cs.fit(
+                data,
+                outcome='outcome',
+                unit='unit',
+                time='time',
+                first_treat='first_treat',
+                covariates=['x1', 'x1_dup']
+            )
+
+    def test_rank_deficient_action_silent_no_warning(self):
+        """Test that rank_deficient_action='silent' produces no warning."""
+        import warnings
+
+        data = generate_staggered_data_with_covariates(seed=42)
+
+        # Add a covariate that is perfectly collinear with x1
+        data["x1_dup"] = data["x1"].copy()
+
+        cs = CallawaySantAnna(
+            estimation_method="reg",  # Use regression method to test OLS path
+            rank_deficient_action="silent"
+        )
+
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            results = cs.fit(
+                data,
+                outcome='outcome',
+                unit='unit',
+                time='time',
+                first_treat='first_treat',
+                covariates=['x1', 'x1_dup']
+            )
+
+            # No warnings about rank deficiency should be emitted
+            rank_warnings = [x for x in w if "Rank-deficient" in str(x.message)
+                           or "rank-deficient" in str(x.message).lower()]
+            assert len(rank_warnings) == 0, f"Expected no rank warnings, got {rank_warnings}"
+
+        # Should still get valid results
+        assert results is not None
+        assert results.overall_att is not None
+
 
 class TestCallawaySantAnnaBootstrap:
     """Tests for Callaway-Sant'Anna multiplier bootstrap inference."""

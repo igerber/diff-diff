@@ -109,6 +109,7 @@ def _logistic_regression(
 def _linear_regression(
     X: np.ndarray,
     y: np.ndarray,
+    rank_deficient_action: str = "warn",
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
     Fit OLS regression.
@@ -119,6 +120,11 @@ def _linear_regression(
         Feature matrix (n_samples, n_features). Intercept added automatically.
     y : np.ndarray
         Outcome variable.
+    rank_deficient_action : str, default "warn"
+        Action when design matrix is rank-deficient:
+        - "warn": Issue warning and drop linearly dependent columns (default)
+        - "error": Raise ValueError
+        - "silent": Drop columns silently without warning
 
     Returns
     -------
@@ -132,7 +138,10 @@ def _linear_regression(
     X_with_intercept = np.column_stack([np.ones(n), X])
 
     # Use unified OLS backend (no vcov needed)
-    beta, residuals, _ = solve_ols(X_with_intercept, y, return_vcov=False)
+    beta, residuals, _ = solve_ols(
+        X_with_intercept, y, return_vcov=False,
+        rank_deficient_action=rank_deficient_action,
+    )
 
     return beta, residuals
 
@@ -195,6 +204,11 @@ class CallawaySantAnna(
             Use ``bootstrap_weights`` instead. Will be removed in v2.0.
     seed : int, optional
         Random seed for reproducibility.
+    rank_deficient_action : str, default="warn"
+        Action when design matrix is rank-deficient (linearly dependent columns):
+        - "warn": Issue warning and drop linearly dependent columns (default)
+        - "error": Raise ValueError
+        - "silent": Drop columns silently without warning
 
     Attributes
     ----------
@@ -277,6 +291,7 @@ class CallawaySantAnna(
         bootstrap_weights: Optional[str] = None,
         bootstrap_weight_type: Optional[str] = None,
         seed: Optional[int] = None,
+        rank_deficient_action: str = "warn",
     ):
         import warnings
 
@@ -312,6 +327,12 @@ class CallawaySantAnna(
                 f"got '{bootstrap_weights}'"
             )
 
+        if rank_deficient_action not in ["warn", "error", "silent"]:
+            raise ValueError(
+                f"rank_deficient_action must be 'warn', 'error', or 'silent', "
+                f"got '{rank_deficient_action}'"
+            )
+
         self.control_group = control_group
         self.anticipation = anticipation
         self.estimation_method = estimation_method
@@ -322,6 +343,7 @@ class CallawaySantAnna(
         # Keep bootstrap_weight_type for backward compatibility
         self.bootstrap_weight_type = bootstrap_weights
         self.seed = seed
+        self.rank_deficient_action = rank_deficient_action
 
         self.is_fitted_ = False
         self.results_: Optional[CallawaySantAnnaResults] = None
@@ -778,7 +800,10 @@ class CallawaySantAnna(
         if X_treated is not None and X_control is not None and X_treated.shape[1] > 0:
             # Covariate-adjusted outcome regression
             # Fit regression on control units: E[Delta Y | X, D=0]
-            beta, residuals = _linear_regression(X_control, control_change)
+            beta, residuals = _linear_regression(
+                X_control, control_change,
+                rank_deficient_action=self.rank_deficient_action,
+            )
 
             # Predict counterfactual for treated units
             X_treated_with_intercept = np.column_stack([np.ones(n_t), X_treated])
@@ -938,7 +963,10 @@ class CallawaySantAnna(
         if X_treated is not None and X_control is not None and X_treated.shape[1] > 0:
             # Doubly robust estimation with covariates
             # Step 1: Outcome regression - fit E[Delta Y | X] on control
-            beta, _ = _linear_regression(X_control, control_change)
+            beta, _ = _linear_regression(
+                X_control, control_change,
+                rank_deficient_action=self.rank_deficient_action,
+            )
 
             # Predict counterfactual for both treated and control
             X_treated_with_intercept = np.column_stack([np.ones(n_t), X_treated])
@@ -1014,6 +1042,7 @@ class CallawaySantAnna(
             # Deprecated but kept for backward compatibility
             "bootstrap_weight_type": self.bootstrap_weight_type,
             "seed": self.seed,
+            "rank_deficient_action": self.rank_deficient_action,
         }
 
     def set_params(self, **params) -> "CallawaySantAnna":

@@ -853,3 +853,108 @@ class TestRegression:
         # Should not raise
         repr_str = repr(results)
         assert "TripleDifferenceResults" in repr_str
+
+
+# =============================================================================
+# Rank Deficiency Tests
+# =============================================================================
+
+
+class TestRankDeficientAction:
+    """Tests for rank_deficient_action parameter handling."""
+
+    @pytest.fixture
+    def ddd_data_with_covariates(self):
+        """Create DDD data with covariates for testing."""
+        np.random.seed(42)
+        n = 400
+        data = pd.DataFrame({
+            "group": np.repeat([0, 1], n // 2),
+            "partition": np.tile(np.repeat([0, 1], n // 4), 2),
+            "time": np.tile([0, 1], n // 2),
+            "x1": np.random.randn(n),
+        })
+
+        # Generate outcome with effect
+        data["outcome"] = (
+            1.0
+            + 0.5 * data["x1"]
+            + 0.5 * data["group"]
+            + 0.3 * data["partition"]
+            + 0.2 * data["time"]
+            + 2.0 * data["group"] * data["partition"] * data["time"]
+            + np.random.randn(n) * 0.5
+        )
+
+        return data
+
+    def test_rank_deficient_action_error_raises(self, ddd_data_with_covariates):
+        """Test that rank_deficient_action='error' raises ValueError on collinear data."""
+        # Add a covariate that is perfectly collinear with x1
+        ddd_data_with_covariates["x1_dup"] = ddd_data_with_covariates["x1"].copy()
+
+        ddd = TripleDifference(
+            estimation_method="reg",  # Use regression method to test OLS path
+            rank_deficient_action="error"
+        )
+        with pytest.raises(ValueError, match="rank-deficient"):
+            ddd.fit(
+                ddd_data_with_covariates,
+                outcome="outcome",
+                group="group",
+                partition="partition",
+                time="time",
+                covariates=["x1", "x1_dup"]
+            )
+
+    def test_rank_deficient_action_silent_no_warning(self, ddd_data_with_covariates):
+        """Test that rank_deficient_action='silent' produces no warning."""
+        import warnings
+
+        # Add a covariate that is perfectly collinear with x1
+        ddd_data_with_covariates["x1_dup"] = ddd_data_with_covariates["x1"].copy()
+
+        ddd = TripleDifference(
+            estimation_method="reg",  # Use regression method to test OLS path
+            rank_deficient_action="silent"
+        )
+
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            results = ddd.fit(
+                ddd_data_with_covariates,
+                outcome="outcome",
+                group="group",
+                partition="partition",
+                time="time",
+                covariates=["x1", "x1_dup"]
+            )
+
+            # No warnings about rank deficiency should be emitted
+            rank_warnings = [x for x in w if "Rank-deficient" in str(x.message)
+                           or "rank-deficient" in str(x.message).lower()]
+            assert len(rank_warnings) == 0, f"Expected no rank warnings, got {rank_warnings}"
+
+        # Should still get valid results
+        assert results is not None
+        assert results.att is not None
+
+    def test_convenience_function_passes_rank_deficient_action(self, ddd_data_with_covariates):
+        """Test that triple_difference() convenience function passes rank_deficient_action."""
+        from diff_diff import triple_difference
+
+        # Add a covariate that is perfectly collinear with x1
+        ddd_data_with_covariates["x1_dup"] = ddd_data_with_covariates["x1"].copy()
+
+        # Should raise with "error" action
+        with pytest.raises(ValueError, match="rank-deficient"):
+            triple_difference(
+                ddd_data_with_covariates,
+                outcome="outcome",
+                group="group",
+                partition="partition",
+                time="time",
+                estimation_method="reg",
+                covariates=["x1", "x1_dup"],
+                rank_deficient_action="error"
+            )

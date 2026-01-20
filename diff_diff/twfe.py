@@ -128,16 +128,29 @@ class TwoWayFixedEffects(DifferenceInDifferences):
         # For wild bootstrap, we don't need cluster SEs from the initial fit
         cluster_ids = data[cluster_var].values
 
-        # Suppress rank-deficiency warning from solve_ols - TWFE handles its own messaging
-        # with more context-specific error/warning messages
-        with warnings.catch_warnings():
-            warnings.filterwarnings("ignore", message="Rank-deficient design matrix")
+        # Pass rank_deficient_action to LinearRegression
+        # If "error", let LinearRegression raise immediately
+        # If "warn" or "silent", suppress generic warning and use TWFE's context-specific
+        # error/warning messages (more informative for panel data)
+        if self.rank_deficient_action == "error":
             reg = LinearRegression(
-                include_intercept=False,  # Intercept already in X
-                robust=True,  # TWFE always uses robust/cluster SEs
+                include_intercept=False,
+                robust=True,
                 cluster_ids=cluster_ids if self.inference != "wild_bootstrap" else None,
                 alpha=self.alpha,
+                rank_deficient_action="error",
             ).fit(X, y, df_adjustment=df_adjustment)
+        else:
+            # Suppress generic warning, TWFE provides context-specific messages below
+            with warnings.catch_warnings():
+                warnings.filterwarnings("ignore", message="Rank-deficient design matrix")
+                reg = LinearRegression(
+                    include_intercept=False,
+                    robust=True,
+                    cluster_ids=cluster_ids if self.inference != "wild_bootstrap" else None,
+                    alpha=self.alpha,
+                    rank_deficient_action="silent",
+                ).fit(X, y, df_adjustment=df_adjustment)
 
         coefficients = reg.coefficients_
         residuals = reg.residuals_
@@ -171,12 +184,14 @@ class TwoWayFixedEffects(DifferenceInDifferences):
             else:
                 # Only covariates are dropped - this is a warning, not an error
                 # The ATT can still be estimated
-                warnings.warn(
-                    f"Some covariates are collinear and were dropped: "
-                    f"{', '.join(dropped_names)}. The treatment effect is still identified.",
-                    UserWarning,
-                    stacklevel=2,
-                )
+                # Respect rank_deficient_action setting for warning
+                if self.rank_deficient_action == "warn":
+                    warnings.warn(
+                        f"Some covariates are collinear and were dropped: "
+                        f"{', '.join(dropped_names)}. The treatment effect is still identified.",
+                        UserWarning,
+                        stacklevel=2,
+                    )
 
         # Get inference - either from bootstrap or analytical
         if self.inference == "wild_bootstrap":

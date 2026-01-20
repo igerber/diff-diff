@@ -1058,6 +1058,58 @@ class TestTwoWayFixedEffects:
             # If treatment column is dropped, should get informative error
             assert "collinear" in str(e).lower() or "Treatment effect cannot be identified" in str(e)
 
+    def test_rank_deficient_action_error_raises(self, twfe_panel_data):
+        """Test that rank_deficient_action='error' raises ValueError on collinear data."""
+        from diff_diff.estimators import TwoWayFixedEffects
+
+        # Add a covariate that is perfectly collinear with post
+        twfe_panel_data = twfe_panel_data.copy()
+        twfe_panel_data["collinear_cov"] = twfe_panel_data["post"].copy()
+
+        twfe = TwoWayFixedEffects(rank_deficient_action="error")
+        with pytest.raises(ValueError, match="rank-deficient"):
+            twfe.fit(
+                twfe_panel_data,
+                outcome="outcome",
+                treatment="treated",
+                time="post",
+                unit="unit",
+                covariates=["collinear_cov"]
+            )
+
+    def test_rank_deficient_action_silent_no_warning(self, twfe_panel_data):
+        """Test that rank_deficient_action='silent' produces no warning."""
+        import warnings
+        from diff_diff.estimators import TwoWayFixedEffects
+
+        # Add a covariate that is perfectly collinear with another
+        twfe_panel_data = twfe_panel_data.copy()
+        twfe_panel_data["size"] = np.random.normal(100, 10, len(twfe_panel_data))
+        twfe_panel_data["size_dup"] = twfe_panel_data["size"].copy()  # Perfect collinearity
+
+        twfe = TwoWayFixedEffects(rank_deficient_action="silent")
+
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            results = twfe.fit(
+                twfe_panel_data,
+                outcome="outcome",
+                treatment="treated",
+                time="post",
+                unit="unit",
+                covariates=["size", "size_dup"]
+            )
+
+            # No warnings about rank deficiency or collinearity should be emitted
+            rank_warnings = [x for x in w if "Rank-deficient" in str(x.message)
+                           or "rank-deficient" in str(x.message).lower()
+                           or "collinear" in str(x.message).lower()]
+            assert len(rank_warnings) == 0, f"Expected no rank warnings, got {rank_warnings}"
+
+        # Should still get valid results
+        assert results is not None
+        assert twfe.is_fitted_
+
 
 class TestClusterRobustSE:
     """Tests for cluster-robust standard errors."""

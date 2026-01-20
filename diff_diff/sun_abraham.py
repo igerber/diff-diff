@@ -319,6 +319,11 @@ class SunAbraham:
         If 0, uses analytical cluster-robust standard errors.
     seed : int, optional
         Random seed for reproducibility.
+    rank_deficient_action : str, default="warn"
+        Action when design matrix is rank-deficient (linearly dependent columns):
+        - "warn": Issue warning and drop linearly dependent columns (default)
+        - "error": Raise ValueError
+        - "silent": Drop columns silently without warning
 
     Attributes
     ----------
@@ -395,11 +400,18 @@ class SunAbraham:
         cluster: Optional[str] = None,
         n_bootstrap: int = 0,
         seed: Optional[int] = None,
+        rank_deficient_action: str = "warn",
     ):
         if control_group not in ["never_treated", "not_yet_treated"]:
             raise ValueError(
                 f"control_group must be 'never_treated' or 'not_yet_treated', "
                 f"got '{control_group}'"
+            )
+
+        if rank_deficient_action not in ["warn", "error", "silent"]:
+            raise ValueError(
+                f"rank_deficient_action must be 'warn', 'error', or 'silent', "
+                f"got '{rank_deficient_action}'"
             )
 
         self.control_group = control_group
@@ -408,6 +420,7 @@ class SunAbraham:
         self.cluster = cluster
         self.n_bootstrap = n_bootstrap
         self.seed = seed
+        self.rank_deficient_action = rank_deficient_action
 
         self.is_fitted_ = False
         self.results_: Optional[SunAbrahamResults] = None
@@ -756,6 +769,7 @@ class SunAbraham:
             include_intercept=False,  # Already demeaned, no intercept needed
             robust=True,
             cluster_ids=cluster_ids,
+            rank_deficient_action=self.rank_deficient_action,
         ).fit(X, y)
 
         coefficients = reg.coefficients_
@@ -1153,6 +1167,7 @@ class SunAbraham:
             "cluster": self.cluster,
             "n_bootstrap": self.n_bootstrap,
             "seed": self.seed,
+            "rank_deficient_action": self.rank_deficient_action,
         }
 
     def set_params(self, **params) -> "SunAbraham":
