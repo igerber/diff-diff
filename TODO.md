@@ -178,3 +178,17 @@ Potential future optimizations:
 
 **Priority**: Low - the QR overhead is minimal compared to SVD solve, and correctness is more important than micro-optimization.
 
+### Incomplete `check_finite` Bypass
+
+**Background**: The `solve_ols()` function accepts a `check_finite=False` parameter intended to skip NaN/Inf validation for performance in hot paths where data is known to be clean.
+
+**Current limitation**: When `check_finite=False`, our explicit validation is skipped, but scipy's internal QR decomposition in `_detect_rank_deficiency()` still validates finite values. This means callers cannot fully bypass all finite checks.
+
+**Impact**: Minimal - the scipy check is fast and only affects edge cases where users explicitly pass `check_finite=False` with non-finite data (which would be a bug in their code anyway).
+
+**Potential fix** (future work):
+- Pass `check_finite=False` through to scipy's QR call (requires scipy >= 1.9.0)
+- Or skip `_detect_rank_deficiency()` entirely when `check_finite=False` and `_skip_rank_check=True`
+
+**Priority**: Low - this is an edge case optimization that doesn't affect correctness.
+
