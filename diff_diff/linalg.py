@@ -9,11 +9,30 @@ The key optimizations are:
 2. Vectorized cluster-robust SE via groupby (eliminates O(n*clusters) loop)
 3. Single interface for all estimators (reduces code duplication)
 4. Optional Rust backend for additional speedup (when available)
+5. R-style rank deficiency handling: detect, warn, and set NA for dropped columns
 
 The Rust backend is automatically used when available, with transparent
 fallback to NumPy/SciPy implementations.
+
+Rank Deficiency Handling
+------------------------
+When a design matrix is rank-deficient (has linearly dependent columns), the OLS
+solution is not unique. This module follows R's `lm()` approach:
+
+1. Detect rank deficiency using pivoted QR decomposition
+2. Identify which columns are linearly dependent
+3. Drop redundant columns from the solve
+4. Set NA (NaN) for coefficients of dropped columns
+5. Warn with clear message listing dropped columns
+6. Compute valid SEs for remaining (identified) coefficients
+
+This is controlled by the `rank_deficient_action` parameter:
+- "warn" (default): Emit warning, set NA for dropped coefficients
+- "error": Raise ValueError with dropped column information
+- "silent": No warning, but still set NA for dropped coefficients
 """
 
+import warnings
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple, Union
 
@@ -21,6 +40,7 @@ import numpy as np
 import pandas as pd
 from scipy import stats
 from scipy.linalg import lstsq as scipy_lstsq
+from scipy.linalg import qr
 
 # Import Rust backend if available (from _backend to avoid circular imports)
 from diff_diff._backend import (
@@ -28,6 +48,239 @@ from diff_diff._backend import (
     _rust_compute_robust_vcov,
     _rust_solve_ols,
 )
+
+
+# =============================================================================
+# Rank Deficiency Detection and Handling
+# =============================================================================
+
+
+def _detect_rank_deficiency(
+    X: np.ndarray,
+    rcond: Optional[float] = None,
+) -> Tuple[int, np.ndarray, np.ndarray]:
+    """
+    Detect rank deficiency using pivoted QR decomposition.
+
+    This follows R's lm() approach of using pivoted QR to detect which columns
+    are linearly dependent. The pivoting ensures we drop the "least important"
+    columns (those with smallest contribution to the column space).
+
+    Parameters
+    ----------
+    X : ndarray of shape (n, k)
+        Design matrix.
+    rcond : float, optional
+        Relative condition number threshold for determining rank.
+        Singular values smaller than rcond * max(singular value) are treated
+        as zero. If None, uses max(n, k) * machine_epsilon.
+
+    Returns
+    -------
+    rank : int
+        Numerical rank of the matrix.
+    dropped_cols : ndarray of int
+        Indices of columns that are linearly dependent (should be dropped).
+        Empty if matrix is full rank.
+    pivot : ndarray of int
+        Column permutation from QR decomposition.
+    """
+    n, k = X.shape
+
+    # Compute pivoted QR decomposition: X @ P = Q @ R
+    # P is a permutation matrix, represented as pivot indices
+    Q, R, pivot = qr(X, mode='economic', pivoting=True)
+
+    # Determine rank tolerance (matches numpy/scipy default)
+    if rcond is None:
+        rcond = max(n, k) * np.finfo(X.dtype).eps
+
+    # The diagonal of R contains information about linear independence
+    # After pivoting, |R[i,i]| is decreasing
+    r_diag = np.abs(np.diag(R))
+
+    # Find numerical rank: count singular values above threshold
+    # The threshold is relative to the largest diagonal element
+    if r_diag[0] == 0:
+        rank = 0
+    else:
+        tol = rcond * r_diag[0]
+        rank = int(np.sum(r_diag > tol))
+
+    # Columns after rank position (in pivot order) are linearly dependent
+    # We need to map back to original column indices
+    if rank < k:
+        dropped_cols = np.sort(pivot[rank:])
+    else:
+        dropped_cols = np.array([], dtype=int)
+
+    return rank, dropped_cols, pivot
+
+
+def _format_dropped_columns(
+    dropped_cols: np.ndarray,
+    column_names: Optional[List[str]] = None,
+) -> str:
+    """
+    Format dropped column information for error/warning messages.
+
+    Parameters
+    ----------
+    dropped_cols : ndarray of int
+        Indices of dropped columns.
+    column_names : list of str, optional
+        Names for the columns. If None, uses indices.
+
+    Returns
+    -------
+    str
+        Formatted string describing dropped columns.
+    """
+    if len(dropped_cols) == 0:
+        return ""
+
+    if column_names is not None:
+        names = [column_names[i] if i < len(column_names) else f"column {i}"
+                 for i in dropped_cols]
+        if len(names) == 1:
+            return f"'{names[0]}'"
+        elif len(names) <= 5:
+            return ", ".join(f"'{n}'" for n in names)
+        else:
+            shown = ", ".join(f"'{n}'" for n in names[:5])
+            return f"{shown}, ... and {len(names) - 5} more"
+    else:
+        if len(dropped_cols) == 1:
+            return f"column {dropped_cols[0]}"
+        elif len(dropped_cols) <= 5:
+            return ", ".join(f"column {i}" for i in dropped_cols)
+        else:
+            shown = ", ".join(f"column {i}" for i in dropped_cols[:5])
+            return f"{shown}, ... and {len(dropped_cols) - 5} more"
+
+
+def _expand_coefficients_with_nan(
+    coef_reduced: np.ndarray,
+    k_full: int,
+    kept_cols: np.ndarray,
+) -> np.ndarray:
+    """
+    Expand reduced coefficients to full size, filling dropped columns with NaN.
+
+    Parameters
+    ----------
+    coef_reduced : ndarray of shape (rank,)
+        Coefficients for kept columns only.
+    k_full : int
+        Total number of columns in original design matrix.
+    kept_cols : ndarray of int
+        Indices of columns that were kept.
+
+    Returns
+    -------
+    ndarray of shape (k_full,)
+        Full coefficient vector with NaN for dropped columns.
+    """
+    coef_full = np.full(k_full, np.nan)
+    coef_full[kept_cols] = coef_reduced
+    return coef_full
+
+
+def _expand_vcov_with_nan(
+    vcov_reduced: np.ndarray,
+    k_full: int,
+    kept_cols: np.ndarray,
+) -> np.ndarray:
+    """
+    Expand reduced vcov matrix to full size, filling dropped entries with NaN.
+
+    Parameters
+    ----------
+    vcov_reduced : ndarray of shape (rank, rank)
+        Variance-covariance matrix for kept columns only.
+    k_full : int
+        Total number of columns in original design matrix.
+    kept_cols : ndarray of int
+        Indices of columns that were kept.
+
+    Returns
+    -------
+    ndarray of shape (k_full, k_full)
+        Full vcov matrix with NaN for dropped rows/columns.
+    """
+    vcov_full = np.full((k_full, k_full), np.nan)
+    # Use advanced indexing to fill in the kept entries
+    ix = np.ix_(kept_cols, kept_cols)
+    vcov_full[ix] = vcov_reduced
+    return vcov_full
+
+
+def _solve_ols_rust(
+    X: np.ndarray,
+    y: np.ndarray,
+    *,
+    cluster_ids: Optional[np.ndarray] = None,
+    return_vcov: bool = True,
+    return_fitted: bool = False,
+) -> Union[
+    Tuple[np.ndarray, np.ndarray, Optional[np.ndarray]],
+    Tuple[np.ndarray, np.ndarray, np.ndarray, Optional[np.ndarray]],
+]:
+    """
+    Rust backend implementation of solve_ols for full-rank matrices.
+
+    This is only called when:
+    1. The Rust backend is available
+    2. The design matrix is full rank (no rank deficiency handling needed)
+
+    For rank-deficient matrices, the Python backend is used instead to
+    properly handle R-style NA coefficients for dropped columns.
+
+    Parameters
+    ----------
+    X : np.ndarray
+        Design matrix of shape (n, k), must be full rank.
+    y : np.ndarray
+        Response vector of shape (n,).
+    cluster_ids : np.ndarray, optional
+        Cluster identifiers for cluster-robust SEs.
+    return_vcov : bool
+        Whether to compute variance-covariance matrix.
+    return_fitted : bool
+        Whether to return fitted values.
+
+    Returns
+    -------
+    coefficients : np.ndarray
+        OLS coefficients of shape (k,).
+    residuals : np.ndarray
+        Residuals of shape (n,).
+    fitted : np.ndarray, optional
+        Fitted values if return_fitted=True.
+    vcov : np.ndarray, optional
+        Variance-covariance matrix if return_vcov=True.
+    """
+    # Convert cluster_ids to int64 for Rust
+    if cluster_ids is not None:
+        cluster_ids = np.asarray(cluster_ids, dtype=np.int64)
+
+    # Call Rust backend
+    coefficients, residuals, vcov = _rust_solve_ols(
+        X, y, cluster_ids=cluster_ids, return_vcov=return_vcov
+    )
+
+    # Convert to numpy arrays
+    coefficients = np.asarray(coefficients)
+    residuals = np.asarray(residuals)
+    if vcov is not None:
+        vcov = np.asarray(vcov)
+
+    # Return with optional fitted values
+    if return_fitted:
+        fitted = X @ coefficients
+        return coefficients, residuals, fitted, vcov
+    else:
+        return coefficients, residuals, vcov
 
 
 def solve_ols(
@@ -38,6 +291,8 @@ def solve_ols(
     return_vcov: bool = True,
     return_fitted: bool = False,
     check_finite: bool = True,
+    rank_deficient_action: str = "warn",
+    column_names: Optional[List[str]] = None,
 ) -> Union[
     Tuple[np.ndarray, np.ndarray, Optional[np.ndarray]],
     Tuple[np.ndarray, np.ndarray, np.ndarray, Optional[np.ndarray]],
@@ -65,24 +320,39 @@ def solve_ols(
     check_finite : bool, default True
         Whether to check that X and y contain only finite values (no NaN/Inf).
         Set to False for faster computation if you are certain your data is clean.
+    rank_deficient_action : str, default "warn"
+        How to handle rank-deficient design matrices:
+        - "warn": Emit warning and set NaN for dropped coefficients (R-style)
+        - "error": Raise ValueError with dropped column information
+        - "silent": No warning, but still set NaN for dropped coefficients
+    column_names : list of str, optional
+        Names for the columns (used in warning/error messages).
+        If None, columns are referred to by their indices.
 
     Returns
     -------
     coefficients : ndarray of shape (k,)
-        OLS coefficient estimates.
+        OLS coefficient estimates. For rank-deficient matrices, coefficients
+        of linearly dependent columns are set to NaN.
     residuals : ndarray of shape (n,)
-        Residuals (y - X @ coefficients).
+        Residuals (y - X @ coefficients). Uses only identified coefficients.
     fitted : ndarray of shape (n,), optional
         Fitted values (X @ coefficients). Only returned if return_fitted=True.
     vcov : ndarray of shape (k, k) or None
         Variance-covariance matrix (HC1 or cluster-robust).
-        None if return_vcov=False.
+        For rank-deficient matrices, rows/columns for dropped coefficients
+        are filled with NaN. None if return_vcov=False.
 
     Notes
     -----
-    This function uses scipy.linalg.lstsq with the 'gelsd' driver, which is
-    SVD-based and handles rank-deficient matrices correctly by truncating
-    small singular values.
+    This function detects rank-deficient matrices using pivoted QR decomposition
+    and handles them following R's lm() approach:
+
+    1. Detect linearly dependent columns via pivoted QR
+    2. Drop redundant columns and solve the reduced system
+    3. Set NaN for coefficients of dropped columns
+    4. Compute valid SEs for identified coefficients only
+    5. Expand vcov matrix with NaN for dropped rows/columns
 
     The cluster-robust standard errors use the sandwich estimator with the
     standard small-sample adjustment: (G/(G-1)) * ((n-1)/(n-k)).
@@ -95,6 +365,15 @@ def solve_ols(
     >>> y = 2 + 3 * X[:, 1] + np.random.randn(100)
     >>> coef, resid, vcov = solve_ols(X, y)
     >>> print(f"Intercept: {coef[0]:.2f}, Slope: {coef[1]:.2f}")
+
+    For rank-deficient matrices with collinear columns:
+
+    >>> X = np.random.randn(100, 3)
+    >>> X[:, 2] = X[:, 0] + X[:, 1]  # Perfect collinearity
+    >>> y = np.random.randn(100)
+    >>> coef, resid, vcov = solve_ols(X, y)  # Emits warning
+    >>> print(np.isnan(coef[2]))  # Dropped column has NaN coefficient
+    True
     """
     # Validate inputs
     X = np.asarray(X, dtype=np.float64)
@@ -117,6 +396,14 @@ def solve_ols(
             "Cannot solve underdetermined system."
         )
 
+    # Validate rank_deficient_action
+    valid_actions = {"warn", "error", "silent"}
+    if rank_deficient_action not in valid_actions:
+        raise ValueError(
+            f"rank_deficient_action must be one of {valid_actions}, "
+            f"got '{rank_deficient_action}'"
+        )
+
     # Check for NaN/Inf values if requested
     if check_finite:
         if not np.isfinite(X).all():
@@ -130,43 +417,34 @@ def solve_ols(
                 "Clean your data or set check_finite=False to skip this check."
             )
 
-    # Use Rust backend if available
-    # Note: Fall back to NumPy if check_finite=False since Rust's LAPACK
-    # doesn't support non-finite values
-    if HAS_RUST_BACKEND and check_finite:
-        # Ensure contiguous arrays for Rust
-        X = np.ascontiguousarray(X, dtype=np.float64)
-        y = np.ascontiguousarray(y, dtype=np.float64)
+    # Check for rank deficiency first using fast pivoted QR
+    # This determines whether we can use the fast Rust backend or need
+    # the Python backend with full R-style NA handling
+    rank, dropped_cols, pivot = _detect_rank_deficiency(X)
+    is_rank_deficient = len(dropped_cols) > 0
 
-        # Convert cluster_ids to int64 for Rust (if provided)
-        cluster_ids_int = None
-        if cluster_ids is not None:
-            cluster_ids_int = pd.factorize(cluster_ids)[0].astype(np.int64)
+    # Use Rust backend for full-rank cases when available
+    # Rank-deficient cases require Python for proper NA coefficient handling
+    # since ndarray-linalg doesn't support QR with pivoting
+    if HAS_RUST_BACKEND and _rust_solve_ols is not None and not is_rank_deficient:
+        return _solve_ols_rust(
+            X, y,
+            cluster_ids=cluster_ids,
+            return_vcov=return_vcov,
+            return_fitted=return_fitted,
+        )
 
-        try:
-            coefficients, residuals, vcov = _rust_solve_ols(
-                X, y, cluster_ids_int, return_vcov
-            )
-        except ValueError as e:
-            # Translate Rust LAPACK errors to consistent Python error messages
-            error_msg = str(e)
-            if "Matrix inversion failed" in error_msg or "Least squares failed" in error_msg:
-                raise ValueError(
-                    "Design matrix is rank-deficient (singular X'X matrix). "
-                    "This indicates perfect multicollinearity. Check your fixed effects "
-                    "and covariates for linear dependencies."
-                ) from e
-            raise
-
-        if return_fitted:
-            fitted = X @ coefficients
-            return coefficients, residuals, fitted, vcov
-        else:
-            return coefficients, residuals, vcov
-
-    # Fallback to NumPy/SciPy implementation
+    # Use NumPy implementation for rank-deficient cases (R-style NA handling)
+    # or when Rust backend is not available
     return _solve_ols_numpy(
-        X, y, cluster_ids=cluster_ids, return_vcov=return_vcov, return_fitted=return_fitted
+        X, y,
+        cluster_ids=cluster_ids,
+        return_vcov=return_vcov,
+        return_fitted=return_fitted,
+        rank_deficient_action=rank_deficient_action,
+        column_names=column_names,
+        # Pass pre-computed rank info to avoid redundant computation
+        _precomputed_rank_info=(rank, dropped_cols, pivot),
     )
 
 
@@ -177,18 +455,19 @@ def _solve_ols_numpy(
     cluster_ids: Optional[np.ndarray] = None,
     return_vcov: bool = True,
     return_fitted: bool = False,
+    rank_deficient_action: str = "warn",
+    column_names: Optional[List[str]] = None,
+    _precomputed_rank_info: Optional[Tuple[int, np.ndarray, np.ndarray]] = None,
 ) -> Union[
     Tuple[np.ndarray, np.ndarray, Optional[np.ndarray]],
     Tuple[np.ndarray, np.ndarray, np.ndarray, Optional[np.ndarray]],
 ]:
     """
-    NumPy/SciPy fallback implementation of solve_ols.
+    NumPy/SciPy implementation of solve_ols with R-style rank deficiency handling.
 
-    Uses scipy.linalg.lstsq with 'gelsd' driver (SVD-based with divide-and-conquer)
-    for numerically stable least squares solving. SVD decomposition properly handles
-    rank-deficient matrices by truncating small singular values, which is critical
-    for DiD designs that may have redundant columns (e.g., period dummies + treatment
-    interactions in MultiPeriodDiD).
+    Detects rank-deficient matrices using pivoted QR decomposition and handles
+    them following R's lm() approach: drop redundant columns, set NA (NaN) for
+    their coefficients, and compute valid SEs for identified coefficients only.
 
     Parameters
     ----------
@@ -202,32 +481,89 @@ def _solve_ols_numpy(
         Whether to compute variance-covariance matrix.
     return_fitted : bool
         Whether to return fitted values.
+    rank_deficient_action : str
+        How to handle rank deficiency: "warn", "error", or "silent".
+    column_names : list of str, optional
+        Names for the columns (used in warning/error messages).
+    _precomputed_rank_info : tuple, optional
+        Pre-computed (rank, dropped_cols, pivot) from _detect_rank_deficiency.
+        Used internally to avoid redundant computation when called from solve_ols.
 
     Returns
     -------
     coefficients : np.ndarray
-        OLS coefficients of shape (k,).
+        OLS coefficients of shape (k,). NaN for dropped columns.
     residuals : np.ndarray
         Residuals of shape (n,).
     fitted : np.ndarray, optional
         Fitted values if return_fitted=True.
     vcov : np.ndarray, optional
-        Variance-covariance matrix if return_vcov=True.
+        Variance-covariance matrix if return_vcov=True. NaN for dropped rows/cols.
     """
-    # Solve OLS using SVD via scipy's optimized LAPACK routines
-    # 'gelsd' uses divide-and-conquer SVD, which properly handles rank-deficient
-    # matrices by truncating small singular values (unlike 'gelsy' which can
-    # produce garbage coefficients for nearly rank-deficient matrices)
-    coefficients = scipy_lstsq(X, y, lapack_driver="gelsd", check_finite=False)[0]
+    n, k = X.shape
 
-    # Compute residuals and fitted values
-    fitted = X @ coefficients
-    residuals = y - fitted
+    # Use pre-computed rank info if provided, otherwise compute
+    if _precomputed_rank_info is not None:
+        rank, dropped_cols, pivot = _precomputed_rank_info
+    else:
+        rank, dropped_cols, pivot = _detect_rank_deficiency(X)
 
-    # Compute variance-covariance matrix if requested
-    vcov = None
-    if return_vcov:
-        vcov = _compute_robust_vcov_numpy(X, residuals, cluster_ids)
+    is_rank_deficient = len(dropped_cols) > 0
+
+    if is_rank_deficient:
+        # Format dropped column information for messages
+        dropped_str = _format_dropped_columns(dropped_cols, column_names)
+
+        if rank_deficient_action == "error":
+            raise ValueError(
+                f"Design matrix is rank-deficient. {k - rank} of {k} columns are "
+                f"linearly dependent and cannot be uniquely estimated: {dropped_str}. "
+                "This indicates multicollinearity in your model specification."
+            )
+        elif rank_deficient_action == "warn":
+            warnings.warn(
+                f"Rank-deficient design matrix: dropping {k - rank} of {k} columns "
+                f"({dropped_str}). Coefficients for these columns are set to NA. "
+                "This may indicate multicollinearity in your model specification.",
+                UserWarning,
+                stacklevel=3,  # Point to user code that called solve_ols
+            )
+        # else: "silent" - no warning
+
+        # Extract kept columns for the reduced solve
+        kept_cols = np.array([i for i in range(k) if i not in dropped_cols])
+        X_reduced = X[:, kept_cols]
+
+        # Solve the reduced system (now full-rank)
+        coefficients_reduced = scipy_lstsq(
+            X_reduced, y, lapack_driver="gelsd", check_finite=False
+        )[0]
+
+        # Expand coefficients to full size with NaN for dropped columns
+        coefficients = _expand_coefficients_with_nan(coefficients_reduced, k, kept_cols)
+
+        # Compute residuals using only the identified coefficients
+        # Note: Dropped coefficients are NaN, so we use the reduced form
+        fitted = X_reduced @ coefficients_reduced
+        residuals = y - fitted
+
+        # Compute variance-covariance matrix for reduced system, then expand
+        vcov = None
+        if return_vcov:
+            vcov_reduced = _compute_robust_vcov_numpy(X_reduced, residuals, cluster_ids)
+            vcov = _expand_vcov_with_nan(vcov_reduced, k, kept_cols)
+    else:
+        # Full-rank case: proceed normally
+        coefficients = scipy_lstsq(X, y, lapack_driver="gelsd", check_finite=False)[0]
+
+        # Compute residuals and fitted values
+        fitted = X @ coefficients
+        residuals = y - fitted
+
+        # Compute variance-covariance matrix if requested
+        vcov = None
+        if return_vcov:
+            vcov = _compute_robust_vcov_numpy(X, residuals, cluster_ids)
 
     if return_fitted:
         return coefficients, residuals, fitted, vcov
@@ -475,12 +811,22 @@ class InferenceResult:
     alpha: float = 0.05
 
     def is_significant(self, alpha: Optional[float] = None) -> bool:
-        """Check if the coefficient is statistically significant."""
+        """Check if the coefficient is statistically significant.
+
+        Returns False for NaN p-values (unidentified coefficients).
+        """
+        if np.isnan(self.p_value):
+            return False
         threshold = alpha if alpha is not None else self.alpha
         return self.p_value < threshold
 
     def significance_stars(self) -> str:
-        """Return significance stars based on p-value."""
+        """Return significance stars based on p-value.
+
+        Returns empty string for NaN p-values (unidentified coefficients).
+        """
+        if np.isnan(self.p_value):
+            return ""
         if self.p_value < 0.001:
             return "***"
         elif self.p_value < 0.01:

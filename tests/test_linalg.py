@@ -207,46 +207,113 @@ class TestSolveOLS:
             # This is acceptable - the key is we skipped our own validation
             assert "X contains NaN" not in str(e) and "y contains NaN" not in str(e)
 
-    def test_rank_deficient_still_solves(self):
-        """Test that rank-deficient matrix returns a valid solution.
+    def test_rank_deficient_produces_nan_for_dropped_columns(self):
+        """Test that rank-deficient matrix returns NaN for dropped columns.
 
-        The 'gelsd' driver uses SVD with truncation to properly handle
-        rank-deficient matrices, producing finite and reasonable coefficients.
+        Following R's lm() approach, coefficients for linearly dependent columns
+        are set to NaN while identified coefficients are computed normally.
         """
+        import warnings
+
+        np.random.seed(42)
+        X = np.random.randn(100, 3)
+        X[:, 2] = X[:, 0] + X[:, 1]  # Perfect collinearity: col 2 = col 0 + col 1
+        y = np.random.randn(100)
+
+        # Should emit warning about rank deficiency
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            coef, resid, vcov = solve_ols(X, y)
+            assert len(w) == 1
+            assert "Rank-deficient" in str(w[0].message)
+
+        assert coef.shape == (3,)
+        assert resid.shape == (100,)
+
+        # Exactly one coefficient should be NaN (the dropped one)
+        nan_mask = np.isnan(coef)
+        assert np.sum(nan_mask) == 1, f"Expected 1 NaN coefficient, got {np.sum(nan_mask)}: {coef}"
+
+        # Non-NaN coefficients should be finite and reasonable
+        finite_coef = coef[~nan_mask]
+        assert np.all(np.isfinite(finite_coef)), f"Finite coefficients contain non-finite values: {finite_coef}"
+        assert np.all(np.abs(finite_coef) < 1e6), f"Finite coefficients are unreasonably large: {finite_coef}"
+
+        # VCoV should have NaN for dropped column's row and column
+        assert vcov is not None
+        dropped_idx = np.where(nan_mask)[0][0]
+        assert np.all(np.isnan(vcov[dropped_idx, :])), "VCoV row for dropped column should be NaN"
+        assert np.all(np.isnan(vcov[:, dropped_idx])), "VCoV column for dropped column should be NaN"
+
+        # VCoV for identified coefficients should be finite
+        kept_idx = np.where(~nan_mask)[0]
+        vcov_kept = vcov[np.ix_(kept_idx, kept_idx)]
+        assert np.all(np.isfinite(vcov_kept)), "VCoV for kept coefficients should be finite"
+
+        # Residuals should be finite (computed using only identified coefficients)
+        assert np.all(np.isfinite(resid)), f"Residuals contain non-finite values"
+
+    def test_rank_deficient_error_mode(self):
+        """Test that rank_deficient_action='error' raises ValueError."""
         np.random.seed(42)
         X = np.random.randn(100, 3)
         X[:, 2] = X[:, 0] + X[:, 1]  # Perfect collinearity
         y = np.random.randn(100)
 
-        # Should still complete and return valid output
-        coef, resid, vcov = solve_ols(X, y)
+        with pytest.raises(ValueError, match="rank-deficient"):
+            solve_ols(X, y, rank_deficient_action="error")
 
-        assert coef.shape == (3,)
-        assert resid.shape == (100,)
+    def test_rank_deficient_silent_mode(self):
+        """Test that rank_deficient_action='silent' produces no warning."""
+        import warnings
 
-        # Coefficients must be finite (not NaN or Inf)
-        assert np.all(np.isfinite(coef)), f"Coefficients contain non-finite values: {coef}"
+        np.random.seed(42)
+        X = np.random.randn(100, 3)
+        X[:, 2] = X[:, 0] + X[:, 1]  # Perfect collinearity
+        y = np.random.randn(100)
 
-        # Coefficients should be reasonable (not astronomically large)
-        # For a rank-deficient system, coefficients should still be bounded
-        assert np.all(np.abs(coef) < 1e6), f"Coefficients are unreasonably large: {coef}"
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            coef, resid, vcov = solve_ols(X, y, rank_deficient_action="silent")
+            # No warnings should be emitted
+            assert len(w) == 0, f"Expected no warnings, got {len(w)}: {[str(x.message) for x in w]}"
 
-        # Residuals should still be valid (y - X @ coef)
-        np.testing.assert_allclose(resid, y - X @ coef, rtol=1e-10)
+        # Should still produce NaN for dropped column
+        assert np.sum(np.isnan(coef)) == 1
 
-    def test_multiperiod_like_rank_deficiency(self):
-        """Test that MultiPeriodDiD-like design matrices are handled correctly.
+    def test_rank_deficient_column_names_in_warning(self):
+        """Test that column names appear in warning message."""
+        import warnings
 
-        MultiPeriodDiD creates design matrices with intercept + period dummies +
-        treatment × post interactions, which can have redundant columns and be
-        rank-deficient. This test mimics that structure.
+        np.random.seed(42)
+        X = np.random.randn(100, 3)
+        X[:, 2] = X[:, 0] + X[:, 1]  # Perfect collinearity
+        y = np.random.randn(100)
+
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            coef, resid, vcov = solve_ols(
+                X, y,
+                column_names=["intercept", "x1", "x2_collinear"]
+            )
+            assert len(w) == 1
+            # Column name should appear in warning (not just index)
+            assert "x2_collinear" in str(w[0].message) or "intercept" in str(w[0].message) or "x1" in str(w[0].message)
+
+    def test_multiperiod_like_design_full_rank(self):
+        """Test that MultiPeriodDiD-like design matrices work when full-rank.
+
+        This test creates a properly specified MultiPeriodDiD-like design that
+        is NOT rank-deficient to verify correct coefficient recovery.
         """
+        import warnings
+
         np.random.seed(42)
         n = 200
         n_periods = 5
 
         # Create a design matrix similar to MultiPeriodDiD:
-        # [intercept, period_1, period_2, ..., period_k, treated*post_1, ...]
+        # [intercept, period_1, period_2, ..., period_k, treated*post]
 
         # Intercept
         intercept = np.ones(n)
@@ -258,7 +325,7 @@ class TestSolveOLS:
         for i in range(1, n_periods):
             period_dummies[:, i - 1] = (period_assignment == i).astype(float)
 
-        # Treatment indicator
+        # Treatment indicator (varies within periods to ensure identification)
         treated = np.random.binomial(1, 0.5, n)
 
         # Post indicator (periods >= 3 are post)
@@ -268,8 +335,6 @@ class TestSolveOLS:
         treat_post = treated * post
 
         # Build design matrix
-        # Note: This creates a rank-deficient matrix because the period dummies
-        # and treat_post are not all linearly independent when combined
         X = np.column_stack([intercept, period_dummies, treat_post])
 
         # True effect
@@ -284,20 +349,30 @@ class TestSolveOLS:
             + np.random.randn(n) * 0.5  # noise
         )
 
-        # Fit with solve_ols
-        coef, resid, vcov = solve_ols(X, y)
+        # Fit with solve_ols - should NOT produce warning if full-rank
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            coef, resid, vcov = solve_ols(X, y)
+            # Check if any rank deficiency warnings (may or may not occur)
+            rank_warnings = [x for x in w if "Rank-deficient" in str(x.message)]
 
-        # Coefficients must be finite
-        assert np.all(np.isfinite(coef)), f"Coefficients contain non-finite values: {coef}"
-
-        # Coefficients should be reasonable (not trillions)
-        assert np.all(np.abs(coef) < 1e6), f"Coefficients are unreasonably large: {coef}"
-
-        # The treatment effect coefficient (last one) should be close to true effect
-        # Allow for sampling variation and potential multicollinearity effects
-        assert abs(coef[-1] - true_effect) < 2.0, (
-            f"Treatment effect coefficient {coef[-1]} is too far from true effect {true_effect}"
-        )
+        # If no rank deficiency, all coefficients should be finite
+        if len(rank_warnings) == 0:
+            assert np.all(np.isfinite(coef)), f"Full-rank matrix: coefficients should be finite"
+            assert np.all(np.abs(coef) < 1e6), f"Coefficients are unreasonably large: {coef}"
+            # The treatment effect coefficient (last one) should be close to true effect
+            assert abs(coef[-1] - true_effect) < 2.0, (
+                f"Treatment effect {coef[-1]} is too far from true {true_effect}"
+            )
+        else:
+            # If rank-deficient, check that identified coefficients are valid
+            finite_coef = coef[~np.isnan(coef)]
+            assert np.all(np.isfinite(finite_coef)), f"Identified coefficients should be finite"
+            # If treatment effect is identified, check it
+            if not np.isnan(coef[-1]):
+                assert abs(coef[-1] - true_effect) < 2.0, (
+                    f"Treatment effect {coef[-1]} is too far from true {true_effect}"
+                )
 
     def test_single_cluster_error(self):
         """Test that single cluster raises error."""

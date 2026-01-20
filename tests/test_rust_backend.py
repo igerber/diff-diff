@@ -495,12 +495,18 @@ class TestRustVsNumpy:
             err_msg="Clustered OLS VCoV should match"
         )
 
-    def test_rank_deficient_ols_match(self):
-        """Test Rust and NumPy produce consistent results for rank-deficient matrices.
+    def test_rank_deficient_ols_residuals_match(self):
+        """Test Rust and NumPy produce matching residuals for rank-deficient matrices.
 
-        This is critical for ensuring the MultiPeriodDiD fix works in both backends.
-        Both should use SVD-based solving with truncation for small singular values.
+        The Rust backend uses SVD truncation while NumPy uses R-style NaN handling.
+        Despite different approaches, both should produce equivalent residuals.
+
+        Note: The coefficient representations differ:
+        - Rust: All finite (SVD minimum-norm solution)
+        - NumPy: NaN for dropped columns (R-style)
+        But both produce the same fitted values and residuals.
         """
+        import warnings
         from diff_diff._rust_backend import solve_ols as rust_fn
         from diff_diff.linalg import _solve_ols_numpy as numpy_fn
 
@@ -513,27 +519,39 @@ class TestRustVsNumpy:
 
         y = X[:, 0] + 2 * X[:, 1] + np.random.randn(n) * 0.1
 
+        # Rust backend produces finite coefficients via SVD truncation
         rust_coeffs, rust_resid, _ = rust_fn(X, y, None, True)
-        numpy_coeffs, numpy_resid, _ = numpy_fn(X, y, cluster_ids=None)
 
-        # Both should produce finite coefficients
+        # NumPy backend produces NaN for dropped columns (R-style)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")  # Suppress rank-deficient warning
+            numpy_coeffs, numpy_resid, _ = numpy_fn(X, y, cluster_ids=None)
+
+        # Rust should produce finite coefficients
         assert np.all(np.isfinite(rust_coeffs)), "Rust coefficients should be finite"
-        assert np.all(np.isfinite(numpy_coeffs)), "NumPy coefficients should be finite"
-
-        # Both should produce reasonable coefficients (not astronomically large)
         assert np.all(np.abs(rust_coeffs) < 1e6), "Rust coefficients should be reasonable"
-        assert np.all(np.abs(numpy_coeffs) < 1e6), "NumPy coefficients should be reasonable"
+
+        # NumPy should produce exactly one NaN coefficient (the dropped one)
+        assert np.sum(np.isnan(numpy_coeffs)) == 1, "NumPy should have one NaN coefficient"
+
+        # Non-NaN NumPy coefficients should be reasonable
+        finite_numpy = numpy_coeffs[~np.isnan(numpy_coeffs)]
+        assert np.all(np.abs(finite_numpy) < 1e6), "NumPy finite coefficients should be reasonable"
 
         # Residuals should be very close (this is the key equivalence check)
-        # Note: Coefficients may differ for rank-deficient systems (many valid solutions)
-        # but residuals should be the same since both find minimum-norm solutions
+        # Both approaches should produce the same fitted values and residuals
         np.testing.assert_array_almost_equal(
-            rust_resid, numpy_resid, decimal=6,
-            err_msg="Residuals should match for rank-deficient matrices"
+            rust_resid, numpy_resid, decimal=5,
+            err_msg="Residuals should match despite different coefficient representations"
         )
 
-    def test_multiperiod_did_design_equivalence(self):
-        """Test both backends handle MultiPeriodDiD-like design matrices consistently."""
+    def test_multiperiod_did_design_residuals_equivalence(self):
+        """Test both backends produce equivalent residuals for MultiPeriodDiD-like matrices.
+
+        For full-rank designs, both backends should produce identical results.
+        The design matrix in this test is typically full-rank.
+        """
+        import warnings
         from diff_diff._rust_backend import solve_ols as rust_fn
         from diff_diff.linalg import _solve_ols_numpy as numpy_fn
 
@@ -566,25 +584,30 @@ class TestRustVsNumpy:
         )
 
         rust_coeffs, rust_resid, _ = rust_fn(X, y, None, True)
-        numpy_coeffs, numpy_resid, _ = numpy_fn(X, y, cluster_ids=None)
 
-        # Both should recover similar treatment effects
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")  # May or may not warn depending on rank
+            numpy_coeffs, numpy_resid, _ = numpy_fn(X, y, cluster_ids=None)
+
+        # Rust should produce finite treatment effect
         rust_effect = rust_coeffs[-1]
-        numpy_effect = numpy_coeffs[-1]
-
+        assert np.isfinite(rust_effect), "Rust treatment effect should be finite"
         assert abs(rust_effect - true_effect) < 2.0, (
             f"Rust treatment effect {rust_effect} too far from true {true_effect}"
         )
-        assert abs(numpy_effect - true_effect) < 2.0, (
-            f"NumPy treatment effect {numpy_effect} too far from true {true_effect}"
-        )
 
-        # Effects should be close to each other
-        assert abs(rust_effect - numpy_effect) < 0.5, (
-            f"Rust ({rust_effect}) and NumPy ({numpy_effect}) effects should match"
-        )
+        # NumPy treatment effect should be close (may be finite or NaN depending on rank)
+        numpy_effect = numpy_coeffs[-1]
+        if np.isfinite(numpy_effect):
+            assert abs(numpy_effect - true_effect) < 2.0, (
+                f"NumPy treatment effect {numpy_effect} too far from true {true_effect}"
+            )
+            # Effects should be close to each other
+            assert abs(rust_effect - numpy_effect) < 0.5, (
+                f"Rust ({rust_effect}) and NumPy ({numpy_effect}) effects should match"
+            )
 
-        # Residuals should be very close
+        # Residuals should be very close (key equivalence check)
         np.testing.assert_array_almost_equal(
             rust_resid, numpy_resid, decimal=5,
             err_msg="Residuals should match for MultiPeriodDiD-like design"

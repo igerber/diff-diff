@@ -704,7 +704,9 @@ class TestEdgeCases:
     """Tests for edge cases and robustness."""
 
     def test_multicollinearity_detection(self):
-        """Test that perfect multicollinearity is detected."""
+        """Test that perfect multicollinearity is detected and warning is emitted."""
+        import warnings
+
         # Create data where a covariate is perfectly correlated with treatment
         data = pd.DataFrame({
             "outcome": [10, 11, 15, 18, 9, 10, 12, 13],
@@ -714,14 +716,23 @@ class TestEdgeCases:
         })
 
         did = DifferenceInDifferences()
-        with pytest.raises(ValueError, match="rank-deficient"):
-            did.fit(
+
+        # With R-style rank deficiency handling, a warning is emitted
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            result = did.fit(
                 data,
                 outcome="outcome",
                 treatment="treated",
                 time="post",
                 covariates=["duplicate_treated"]
             )
+            # Should emit a warning about rank deficiency
+            rank_warnings = [x for x in w if "Rank-deficient" in str(x.message)]
+            assert len(rank_warnings) > 0, "Expected warning about rank deficiency"
+
+        # ATT should still be finite
+        assert np.isfinite(result.att)
 
     def test_wasserstein_custom_threshold(self):
         """Test that custom Wasserstein threshold is respected."""
@@ -2595,14 +2606,15 @@ class TestSingleTreatedUnit:
 class TestCollinearityDetection:
     """Tests for handling perfect or near collinearity."""
 
-    def test_did_with_redundant_covariate_handles_gracefully(self):
-        """Test DiD handles perfectly collinear covariates gracefully.
+    def test_did_with_redundant_covariate_emits_warning(self):
+        """Test DiD emits warning for perfectly collinear covariates.
 
-        Note: scipy's gelsy solver handles rank-deficiency gracefully via
-        QR with column pivoting. Results may be numerically unstable but
-        the computation completes. This is acceptable for performance reasons
-        as the alternative (upfront rank check) adds O(k^3) overhead.
+        Following R's lm() approach, rank-deficient matrices emit a warning
+        and set NaN for coefficients of dropped columns. The ATT should still
+        be identified if the treatment interaction is not in the dropped set.
         """
+        import warnings
+
         np.random.seed(42)
         data = pd.DataFrame({
             "outcome": np.random.normal(10, 1, 100),
@@ -2615,20 +2627,32 @@ class TestCollinearityDetection:
 
         did = DifferenceInDifferences()
 
-        # With scipy's gelsy solver, collinear covariates are handled gracefully
-        # (may produce numerically unstable but finite results)
-        result = did.fit(
-            data,
-            outcome="outcome",
-            treatment="treated",
-            time="post",
-            covariates=["x1", "x2"]
-        )
-        # Result should be finite (even if numerically unstable)
+        # With R-style rank deficiency handling, a warning is emitted
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            result = did.fit(
+                data,
+                outcome="outcome",
+                treatment="treated",
+                time="post",
+                covariates=["x1", "x2"]
+            )
+            # Should emit a warning about rank deficiency
+            rank_warnings = [x for x in w if "Rank-deficient" in str(x.message)]
+            assert len(rank_warnings) > 0, "Expected warning about rank deficiency"
+
+        # ATT should still be finite (the interaction term is identified)
         assert np.isfinite(result.att)
 
-    def test_did_with_constant_covariate_raises_error(self):
-        """Test DiD raises clear error for constant covariates."""
+    def test_did_with_constant_covariate_emits_warning(self):
+        """Test DiD emits warning for constant covariates.
+
+        Constant covariates are collinear with the intercept and are dropped.
+        Following R's lm() approach, a warning is emitted and the coefficient
+        for the constant covariate is set to NaN.
+        """
+        import warnings
+
         np.random.seed(42)
         data = pd.DataFrame({
             "outcome": np.random.normal(10, 1, 100),
@@ -2640,15 +2664,22 @@ class TestCollinearityDetection:
         did = DifferenceInDifferences()
 
         # Constant covariate is collinear with intercept
-        # Should raise clear error
-        with pytest.raises(ValueError, match="rank-deficient"):
-            did.fit(
+        # Should emit warning about rank deficiency
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            result = did.fit(
                 data,
                 outcome="outcome",
                 treatment="treated",
                 time="post",
                 covariates=["constant_x"]
             )
+            # Should emit a warning about rank deficiency
+            rank_warnings = [x for x in w if "Rank-deficient" in str(x.message)]
+            assert len(rank_warnings) > 0, "Expected warning about rank deficiency"
+
+        # ATT should still be finite
+        assert np.isfinite(result.att)
 
     def test_did_with_near_collinear_covariates(self):
         """Test DiD handles near-collinear covariates (not perfectly collinear)."""
