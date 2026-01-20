@@ -730,3 +730,56 @@ class TestSunAbrahamEdgeCases:
         assert "relative_period" in df_cohort.columns
         assert "effect" in df_cohort.columns
         assert "weight" in df_cohort.columns
+
+    def test_rank_deficient_action_error_raises(self):
+        """Test that rank_deficient_action='error' raises ValueError on collinear data."""
+        data = generate_staggered_data(seed=42)
+
+        # Add covariates that are perfectly collinear
+        np.random.seed(42)
+        data["cov1"] = np.random.randn(len(data))
+        data["cov1_dup"] = data["cov1"].copy()
+
+        sa = SunAbraham(rank_deficient_action="error")
+        with pytest.raises(ValueError, match="rank-deficient"):
+            sa.fit(
+                data,
+                outcome="outcome",
+                unit="unit",
+                time="time",
+                first_treat="first_treat",
+                covariates=["cov1", "cov1_dup"]
+            )
+
+    def test_rank_deficient_action_silent_no_warning(self):
+        """Test that rank_deficient_action='silent' produces no warning."""
+        import warnings
+
+        data = generate_staggered_data(seed=42)
+
+        # Add covariates that are perfectly collinear
+        np.random.seed(42)
+        data["cov1"] = np.random.randn(len(data))
+        data["cov1_dup"] = data["cov1"].copy()
+
+        sa = SunAbraham(rank_deficient_action="silent")
+
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            results = sa.fit(
+                data,
+                outcome="outcome",
+                unit="unit",
+                time="time",
+                first_treat="first_treat",
+                covariates=["cov1", "cov1_dup"]
+            )
+
+            # No warnings about rank deficiency should be emitted
+            rank_warnings = [x for x in w if "Rank-deficient" in str(x.message)
+                           or "rank-deficient" in str(x.message).lower()]
+            assert len(rank_warnings) == 0, f"Expected no rank warnings, got {rank_warnings}"
+
+        # Should still get valid results
+        assert results is not None
+        assert results.overall_att is not None

@@ -64,6 +64,11 @@ class DifferenceInDifferences:
     seed : int, optional
         Random seed for reproducibility when using bootstrap inference.
         If None (default), results will vary between runs.
+    rank_deficient_action : str, default "warn"
+        Action when design matrix is rank-deficient (linearly dependent columns):
+        - "warn": Issue warning and drop linearly dependent columns (default)
+        - "error": Raise ValueError
+        - "silent": Drop columns silently without warning
 
     Attributes
     ----------
@@ -120,7 +125,8 @@ class DifferenceInDifferences:
         inference: str = "analytical",
         n_bootstrap: int = 999,
         bootstrap_weights: str = "rademacher",
-        seed: Optional[int] = None
+        seed: Optional[int] = None,
+        rank_deficient_action: str = "warn",
     ):
         self.robust = robust
         self.cluster = cluster
@@ -129,6 +135,7 @@ class DifferenceInDifferences:
         self.n_bootstrap = n_bootstrap
         self.bootstrap_weights = bootstrap_weights
         self.seed = seed
+        self.rank_deficient_action = rank_deficient_action
 
         self.is_fitted_ = False
         self.results_ = None
@@ -283,6 +290,7 @@ class DifferenceInDifferences:
             robust=self.robust,
             cluster_ids=cluster_ids if self.inference != "wild_bootstrap" else None,
             alpha=self.alpha,
+            rank_deficient_action=self.rank_deficient_action,
         ).fit(X, y, df_adjustment=n_absorbed_effects)
 
         coefficients = reg.coefficients_
@@ -596,6 +604,7 @@ class DifferenceInDifferences:
             "n_bootstrap": self.n_bootstrap,
             "bootstrap_weights": self.bootstrap_weights,
             "seed": self.seed,
+            "rank_deficient_action": self.rank_deficient_action,
         }
 
     def set_params(self, **params) -> "DifferenceInDifferences":
@@ -873,29 +882,43 @@ class MultiPeriodDiD(DifferenceInDifferences):
                     var_names.append(col)
 
         # Fit OLS using unified backend
-        coefficients, residuals, fitted, _ = solve_ols(
-            X, y, return_fitted=True, return_vcov=False
+        # Pass cluster_ids to solve_ols for proper vcov computation
+        # This handles rank-deficient matrices by returning NaN for dropped columns
+        cluster_ids = data[self.cluster].values if self.cluster is not None else None
+
+        # Note: Wild bootstrap for multi-period effects is complex (multiple coefficients)
+        # For now, we use analytical inference even if inference="wild_bootstrap"
+        coefficients, residuals, fitted, vcov = solve_ols(
+            X, y,
+            return_fitted=True,
+            return_vcov=True,
+            cluster_ids=cluster_ids,
+            column_names=var_names,
+            rank_deficient_action=self.rank_deficient_action,
         )
         r_squared = compute_r_squared(y, residuals)
 
-        # Degrees of freedom
-        df = len(y) - X.shape[1] - n_absorbed_effects
+        # Degrees of freedom using effective rank (non-NaN coefficients)
+        k_effective = int(np.sum(~np.isnan(coefficients)))
+        df = len(y) - k_effective - n_absorbed_effects
 
-        # Compute standard errors
-        # Note: Wild bootstrap for multi-period effects is complex (multiple coefficients)
-        # For now, we use analytical inference even if inference="wild_bootstrap"
-        if self.cluster is not None:
-            cluster_ids = data[self.cluster].values
-            vcov = compute_robust_vcov(X, residuals, cluster_ids)
-        elif self.robust:
-            vcov = compute_robust_vcov(X, residuals)
-        else:
+        # For non-robust, non-clustered case, we need homoskedastic vcov
+        # solve_ols returns HC1 by default, so compute homoskedastic if needed
+        if not self.robust and self.cluster is None:
             n = len(y)
-            k = X.shape[1]
-            mse = np.sum(residuals**2) / (n - k)
+            mse = np.sum(residuals**2) / (n - k_effective)
             # Use solve() instead of inv() for numerical stability
-            # solve(A, B) computes X where AX=B, so this yields (X'X)^{-1} * mse
-            vcov = np.linalg.solve(X.T @ X, mse * np.eye(k))
+            # Only compute for identified columns (non-NaN coefficients)
+            identified_mask = ~np.isnan(coefficients)
+            if np.all(identified_mask):
+                vcov = np.linalg.solve(X.T @ X, mse * np.eye(X.shape[1]))
+            else:
+                # For rank-deficient case, compute vcov on reduced matrix then expand
+                X_reduced = X[:, identified_mask]
+                vcov_reduced = np.linalg.solve(X_reduced.T @ X_reduced, mse * np.eye(X_reduced.shape[1]))
+                # Expand to full size with NaN for dropped columns
+                vcov = np.full((X.shape[1], X.shape[1]), np.nan)
+                vcov[np.ix_(identified_mask, identified_mask)] = vcov_reduced
 
         # Extract period-specific treatment effects
         period_effects = {}
@@ -922,19 +945,43 @@ class MultiPeriodDiD(DifferenceInDifferences):
             effect_indices.append(idx)
 
         # Compute average treatment effect
-        # Average ATT = mean of period-specific effects
-        avg_att = np.mean(effect_values)
+        # R-style NA propagation: if ANY period effect is NaN, average is undefined
+        effect_arr = np.array(effect_values)
 
-        # Standard error of average: need to account for covariance
-        # Var(avg) = (1/n^2) * sum of all elements in the sub-covariance matrix
-        n_post = len(post_periods)
-        sub_vcov = vcov[np.ix_(effect_indices, effect_indices)]
-        avg_var = np.sum(sub_vcov) / (n_post ** 2)
-        avg_se = np.sqrt(avg_var)
+        if np.any(np.isnan(effect_arr)):
+            # Some period effects are NaN (unidentified) - cannot compute valid average
+            # This follows R's default behavior where mean(c(1, 2, NA)) returns NA
+            avg_att = np.nan
+            avg_se = np.nan
+            avg_t_stat = np.nan
+            avg_p_value = np.nan
+            avg_conf_int = (np.nan, np.nan)
+        else:
+            # All effects identified - compute average normally
+            avg_att = float(np.mean(effect_arr))
 
-        avg_t_stat = avg_att / avg_se if avg_se > 0 else 0.0
-        avg_p_value = compute_p_value(avg_t_stat, df=df)
-        avg_conf_int = compute_confidence_interval(avg_att, avg_se, self.alpha, df=df)
+            # Standard error of average: need to account for covariance
+            n_post = len(post_periods)
+            sub_vcov = vcov[np.ix_(effect_indices, effect_indices)]
+            avg_var = np.sum(sub_vcov) / (n_post ** 2)
+
+            if np.isnan(avg_var) or avg_var < 0:
+                # Vcov has NaN (dropped columns) - propagate NaN
+                avg_se = np.nan
+                avg_t_stat = np.nan
+                avg_p_value = np.nan
+                avg_conf_int = (np.nan, np.nan)
+            else:
+                avg_se = float(np.sqrt(avg_var))
+                if avg_se > 0:
+                    avg_t_stat = avg_att / avg_se
+                    avg_p_value = compute_p_value(avg_t_stat, df=df)
+                    avg_conf_int = compute_confidence_interval(avg_att, avg_se, self.alpha, df=df)
+                else:
+                    # Zero SE (degenerate case)
+                    avg_t_stat = np.nan
+                    avg_p_value = np.nan
+                    avg_conf_int = (np.nan, np.nan)
 
         # Count observations
         n_treated = int(np.sum(d))

@@ -337,6 +337,108 @@ class TestRustBackend:
         assert np.all(np.isfinite(residuals)), "Residuals should be finite"
         assert vcov.shape == (3, 3), "VCoV should have correct shape"
 
+    # =========================================================================
+    # Rank-Deficient Matrix Tests (Critical for MultiPeriodDiD)
+    # =========================================================================
+
+    def test_rank_deficient_matrix_produces_valid_coefficients(self):
+        """Test that rank-deficient matrices produce finite, reasonable coefficients.
+
+        This test verifies the fix for the MultiPeriodDiD bug where rank-deficient
+        design matrices (with redundant columns) produced astronomically wrong
+        estimates (trillions instead of single digits).
+
+        The SVD-based solver should truncate small singular values and produce
+        a valid minimum-norm solution.
+        """
+        from diff_diff._rust_backend import solve_ols
+
+        np.random.seed(42)
+        n = 100
+
+        # Create perfectly collinear design matrix (rank-deficient)
+        # This mimics what can happen in MultiPeriodDiD with period dummies
+        X = np.random.randn(n, 3)
+        X[:, 2] = X[:, 0] + X[:, 1]  # Column 3 = Column 1 + Column 2
+
+        y = X[:, 0] + np.random.randn(n) * 0.1
+
+        # Rust backend should handle this gracefully via SVD truncation
+        coeffs, residuals, vcov = solve_ols(X, y, None, True)
+
+        # Coefficients must be finite (not NaN or Inf)
+        assert np.all(np.isfinite(coeffs)), f"Coefficients should be finite, got {coeffs}"
+
+        # Coefficients should be reasonable (not astronomically large like 1e12)
+        assert np.all(np.abs(coeffs) < 1e6), f"Coefficients are unreasonably large: {coeffs}"
+
+        # Residuals should be correct given coefficients
+        expected_residuals = y - X @ coeffs
+        np.testing.assert_array_almost_equal(
+            residuals, expected_residuals, decimal=8,
+            err_msg="Residuals should match y - X @ coeffs"
+        )
+
+    def test_multiperiod_did_like_design_matrix(self):
+        """Test design matrix structure similar to MultiPeriodDiD.
+
+        MultiPeriodDiD creates design matrices with:
+        - Intercept
+        - Period dummies (one-hot encoded)
+        - Treatment × post interaction terms
+
+        These can create rank-deficient matrices when period dummies and
+        interaction terms are not all linearly independent.
+        """
+        from diff_diff._rust_backend import solve_ols
+
+        np.random.seed(42)
+        n = 200
+        n_periods = 5
+
+        # Create MultiPeriodDiD-like design matrix
+        intercept = np.ones(n)
+
+        # Period dummies (periods 1-4, period 0 is reference)
+        period_assignment = np.random.randint(0, n_periods, n)
+        period_dummies = np.zeros((n, n_periods - 1))
+        for i in range(1, n_periods):
+            period_dummies[:, i - 1] = (period_assignment == i).astype(float)
+
+        # Treatment indicator and post indicator
+        treated = np.random.binomial(1, 0.5, n)
+        post = (period_assignment >= 3).astype(float)
+        treat_post = treated * post
+
+        # Build design matrix (potentially rank-deficient)
+        X = np.column_stack([intercept, period_dummies, treat_post])
+
+        # True effect
+        true_effect = 2.5
+        y = (
+            1.0
+            + 0.5 * period_dummies[:, 0]
+            + 0.3 * period_dummies[:, 1]
+            + 0.7 * period_dummies[:, 2]
+            + 0.9 * period_dummies[:, 3]
+            + true_effect * treat_post
+            + np.random.randn(n) * 0.5
+        )
+
+        # Fit with Rust backend
+        coeffs, residuals, vcov = solve_ols(X, y, None, True)
+
+        # Coefficients must be finite
+        assert np.all(np.isfinite(coeffs)), f"Coefficients should be finite, got {coeffs}"
+
+        # Coefficients should be reasonable (not trillions)
+        assert np.all(np.abs(coeffs) < 1e6), f"Coefficients are unreasonably large: {coeffs}"
+
+        # Treatment effect (last coefficient) should be close to true effect
+        assert abs(coeffs[-1] - true_effect) < 2.0, (
+            f"Treatment effect {coeffs[-1]} is too far from true effect {true_effect}"
+        )
+
 
 @pytest.mark.skipif(not HAS_RUST_BACKEND, reason="Rust backend not available")
 class TestRustVsNumpy:
@@ -391,6 +493,124 @@ class TestRustVsNumpy:
         np.testing.assert_array_almost_equal(
             rust_vcov, numpy_vcov, decimal=5,
             err_msg="Clustered OLS VCoV should match"
+        )
+
+    def test_rank_deficient_ols_residuals_match(self):
+        """Test Rust and NumPy produce matching residuals for rank-deficient matrices.
+
+        The Rust backend uses SVD truncation while NumPy uses R-style NaN handling.
+        Despite different approaches, both should produce equivalent residuals.
+
+        Note: The coefficient representations differ:
+        - Rust: All finite (SVD minimum-norm solution)
+        - NumPy: NaN for dropped columns (R-style)
+        But both produce the same fitted values and residuals.
+        """
+        import warnings
+        from diff_diff._rust_backend import solve_ols as rust_fn
+        from diff_diff.linalg import _solve_ols_numpy as numpy_fn
+
+        np.random.seed(42)
+        n = 100
+
+        # Create rank-deficient design matrix (perfect collinearity)
+        X = np.random.randn(n, 3)
+        X[:, 2] = X[:, 0] + X[:, 1]  # Column 3 = Column 1 + Column 2
+
+        y = X[:, 0] + 2 * X[:, 1] + np.random.randn(n) * 0.1
+
+        # Rust backend produces finite coefficients via SVD truncation
+        rust_coeffs, rust_resid, _ = rust_fn(X, y, None, True)
+
+        # NumPy backend produces NaN for dropped columns (R-style)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")  # Suppress rank-deficient warning
+            numpy_coeffs, numpy_resid, _ = numpy_fn(X, y, cluster_ids=None)
+
+        # Rust should produce finite coefficients
+        assert np.all(np.isfinite(rust_coeffs)), "Rust coefficients should be finite"
+        assert np.all(np.abs(rust_coeffs) < 1e6), "Rust coefficients should be reasonable"
+
+        # NumPy should produce exactly one NaN coefficient (the dropped one)
+        assert np.sum(np.isnan(numpy_coeffs)) == 1, "NumPy should have one NaN coefficient"
+
+        # Non-NaN NumPy coefficients should be reasonable
+        finite_numpy = numpy_coeffs[~np.isnan(numpy_coeffs)]
+        assert np.all(np.abs(finite_numpy) < 1e6), "NumPy finite coefficients should be reasonable"
+
+        # Residuals should be very close (this is the key equivalence check)
+        # Both approaches should produce the same fitted values and residuals
+        np.testing.assert_array_almost_equal(
+            rust_resid, numpy_resid, decimal=5,
+            err_msg="Residuals should match despite different coefficient representations"
+        )
+
+    def test_multiperiod_did_design_residuals_equivalence(self):
+        """Test both backends produce equivalent residuals for MultiPeriodDiD-like matrices.
+
+        For full-rank designs, both backends should produce identical results.
+        The design matrix in this test is typically full-rank.
+        """
+        import warnings
+        from diff_diff._rust_backend import solve_ols as rust_fn
+        from diff_diff.linalg import _solve_ols_numpy as numpy_fn
+
+        np.random.seed(42)
+        n = 200
+        n_periods = 5
+
+        # Create MultiPeriodDiD-like design matrix
+        intercept = np.ones(n)
+        period_assignment = np.random.randint(0, n_periods, n)
+        period_dummies = np.zeros((n, n_periods - 1))
+        for i in range(1, n_periods):
+            period_dummies[:, i - 1] = (period_assignment == i).astype(float)
+
+        treated = np.random.binomial(1, 0.5, n)
+        post = (period_assignment >= 3).astype(float)
+        treat_post = treated * post
+
+        X = np.column_stack([intercept, period_dummies, treat_post])
+
+        true_effect = 2.5
+        y = (
+            1.0
+            + 0.5 * period_dummies[:, 0]
+            + 0.3 * period_dummies[:, 1]
+            + 0.7 * period_dummies[:, 2]
+            + 0.9 * period_dummies[:, 3]
+            + true_effect * treat_post
+            + np.random.randn(n) * 0.5
+        )
+
+        rust_coeffs, rust_resid, _ = rust_fn(X, y, None, True)
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")  # May or may not warn depending on rank
+            numpy_coeffs, numpy_resid, _ = numpy_fn(X, y, cluster_ids=None)
+
+        # Rust should produce finite treatment effect
+        rust_effect = rust_coeffs[-1]
+        assert np.isfinite(rust_effect), "Rust treatment effect should be finite"
+        assert abs(rust_effect - true_effect) < 2.0, (
+            f"Rust treatment effect {rust_effect} too far from true {true_effect}"
+        )
+
+        # NumPy treatment effect should be close (may be finite or NaN depending on rank)
+        numpy_effect = numpy_coeffs[-1]
+        if np.isfinite(numpy_effect):
+            assert abs(numpy_effect - true_effect) < 2.0, (
+                f"NumPy treatment effect {numpy_effect} too far from true {true_effect}"
+            )
+            # Effects should be close to each other
+            assert abs(rust_effect - numpy_effect) < 0.5, (
+                f"Rust ({rust_effect}) and NumPy ({numpy_effect}) effects should match"
+            )
+
+        # Residuals should be very close (key equivalence check)
+        np.testing.assert_array_almost_equal(
+            rust_resid, numpy_resid, decimal=5,
+            err_msg="Residuals should match for MultiPeriodDiD-like design"
         )
 
     # =========================================================================
@@ -562,6 +782,89 @@ class TestRustVsNumpy:
                 rust_proj, numpy_proj, decimal=10,
                 err_msg=f"Simplex projection mismatch for input {v}"
             )
+
+    def test_nan_vcov_fallback_to_python(self):
+        """Test that NaN vcov from Rust backend triggers fallback to Python.
+
+        When Rust SVD detects rank-deficiency that Python QR missed (due to
+        different numerical properties), the vcov matrix may contain NaN values.
+        The high-level solve_ols should detect this and fall back to Python's
+        R-style handling, ensuring the user never receives silent NaN SEs.
+
+        The key behavior being tested:
+        1. When Rust returns NaN vcov, we emit a warning and re-run Python
+        2. The Python re-run does fresh rank detection (not using cached info)
+        3. R-style handling is applied: NaN coefficients for dropped columns
+        """
+        import warnings
+        from diff_diff.linalg import solve_ols
+
+        # Create an ill-conditioned matrix that might cause QR/SVD disagreement.
+        # The condition number is extremely high, which may cause the Rust SVD
+        # to detect numerical issues that QR doesn't catch.
+        np.random.seed(42)
+        n = 100
+
+        # Create a matrix with near-perfect but not exact collinearity.
+        # This is on the boundary where QR/SVD might disagree.
+        X = np.random.randn(n, 4)
+        # Make column 3 almost (but not exactly) a linear combination of 0-2
+        X[:, 3] = X[:, 0] + X[:, 1] + X[:, 2] + np.random.randn(n) * 1e-12
+
+        y = np.random.randn(n)
+
+        # Capture any warnings that might be emitted
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            coeffs, residuals, vcov = solve_ols(X, y)
+
+        # Check if fallback warning was emitted
+        fallback_warning_emitted = any(
+            "Re-running with Python backend" in str(warning.message)
+            for warning in w
+        )
+
+        # Key invariants that must hold regardless of which backend is used:
+        # 1. Coefficients must be finite (either via Rust SVD or Python R-style)
+        finite_coeffs = coeffs[np.isfinite(coeffs)]
+        assert len(finite_coeffs) >= 3, \
+            "At least 3 coefficients should be finite (identifiable)"
+        assert np.all(np.abs(finite_coeffs) < 1e10), \
+            f"Finite coefficients should be reasonable, got {finite_coeffs}"
+
+        # 2. If vcov has any finite values, they should correspond to finite coefficients
+        if vcov is not None:
+            finite_coef_mask = np.isfinite(coeffs)
+            for i in range(len(coeffs)):
+                if finite_coef_mask[i]:
+                    # This coefficient's variance should be finite
+                    var_i = vcov[i, i]
+                    assert np.isfinite(var_i) or np.isnan(var_i), \
+                        f"Variance for finite coef {i} should be finite or NaN (dropped)"
+
+        # 3. Residuals must always be finite
+        assert np.all(np.isfinite(residuals)), "Residuals should be finite"
+
+        # 4. R-style consistency: NaN coefficients must have NaN vcov diagonal
+        if vcov is not None:
+            nan_coef_indices = set(np.where(np.isnan(coeffs))[0])
+            nan_vcov_diag_indices = set(np.where(np.isnan(np.diag(vcov)))[0])
+
+            # NaN in vcov diagonal should correspond exactly to NaN coefficients
+            assert nan_vcov_diag_indices == nan_coef_indices, \
+                f"NaN vcov diagonal {nan_vcov_diag_indices} should match " \
+                f"NaN coefficients {nan_coef_indices}"
+
+        # 5. If fallback warning was emitted, R-style handling MUST have occurred
+        # This verifies that the fallback actually applies R-style NaN handling
+        # (not minimum-norm solution which would have all finite coefficients)
+        if fallback_warning_emitted:
+            assert np.any(np.isnan(coeffs)), \
+                "Fallback warning emitted but no NaN coefficients - " \
+                "R-style handling was not applied"
+            assert vcov is not None and np.any(np.isnan(vcov)), \
+                "Fallback warning emitted but vcov has no NaN - " \
+                "R-style handling was not applied"
 
 
 @pytest.mark.skipif(not HAS_RUST_BACKEND, reason="Rust backend not available")

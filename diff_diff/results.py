@@ -181,7 +181,14 @@ class DiDResults:
 
 
 def _get_significance_stars(p_value: float) -> str:
-    """Return significance stars based on p-value."""
+    """Return significance stars based on p-value.
+
+    Returns empty string for NaN p-values (unidentified coefficients from
+    rank-deficient matrices).
+    """
+    import numpy as np
+    if np.isnan(p_value):
+        return ""
     if p_value < 0.001:
         return "***"
     elif p_value < 0.01:

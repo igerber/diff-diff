@@ -685,8 +685,12 @@ class TestCallawaySantAnnaCovariates:
         """Test that near-collinear covariates are handled gracefully."""
         data = generate_staggered_data_with_covariates(seed=42)
 
-        # Add a near-collinear covariate (x1 + small noise)
-        data['x1_copy'] = data['x1'] + np.random.randn(len(data)) * 1e-8
+        # Add a near-collinear covariate (x1 + noise above rank detection tolerance)
+        # The rank detection tolerance is 1e-07 (matching R's qr()), so we use noise
+        # of 1e-5 which is above the tolerance but still creates high collinearity.
+        # With noise < 1e-07, the column would be considered linearly dependent.
+        np.random.seed(42)
+        data['x1_copy'] = data['x1'] + np.random.randn(len(data)) * 1e-5
 
         cs = CallawaySantAnna(estimation_method='reg')
         results = cs.fit(
@@ -698,7 +702,7 @@ class TestCallawaySantAnnaCovariates:
             covariates=['x1', 'x1_copy']  # Nearly collinear
         )
 
-        # Should still produce valid results (lstsq handles this)
+        # Should still produce valid results (noise is above tolerance)
         assert results.overall_att is not None
         assert np.isfinite(results.overall_att)
 
@@ -725,6 +729,61 @@ class TestCallawaySantAnnaCovariates:
         # Should still produce valid results (using unconditional estimation)
         assert results.overall_att is not None
         assert results.overall_se > 0
+
+    def test_rank_deficient_action_error_raises(self):
+        """Test that rank_deficient_action='error' raises ValueError on collinear data."""
+        data = generate_staggered_data_with_covariates(seed=42)
+
+        # Add a covariate that is perfectly collinear with x1
+        data["x1_dup"] = data["x1"].copy()
+
+        cs = CallawaySantAnna(
+            estimation_method="reg",  # Use regression method to test OLS path
+            rank_deficient_action="error"
+        )
+        with pytest.raises(ValueError, match="rank-deficient"):
+            cs.fit(
+                data,
+                outcome='outcome',
+                unit='unit',
+                time='time',
+                first_treat='first_treat',
+                covariates=['x1', 'x1_dup']
+            )
+
+    def test_rank_deficient_action_silent_no_warning(self):
+        """Test that rank_deficient_action='silent' produces no warning."""
+        import warnings
+
+        data = generate_staggered_data_with_covariates(seed=42)
+
+        # Add a covariate that is perfectly collinear with x1
+        data["x1_dup"] = data["x1"].copy()
+
+        cs = CallawaySantAnna(
+            estimation_method="reg",  # Use regression method to test OLS path
+            rank_deficient_action="silent"
+        )
+
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            results = cs.fit(
+                data,
+                outcome='outcome',
+                unit='unit',
+                time='time',
+                first_treat='first_treat',
+                covariates=['x1', 'x1_dup']
+            )
+
+            # No warnings about rank deficiency should be emitted
+            rank_warnings = [x for x in w if "Rank-deficient" in str(x.message)
+                           or "rank-deficient" in str(x.message).lower()]
+            assert len(rank_warnings) == 0, f"Expected no rank warnings, got {rank_warnings}"
+
+        # Should still get valid results
+        assert results is not None
+        assert results.overall_att is not None
 
 
 class TestCallawaySantAnnaBootstrap:

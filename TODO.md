@@ -15,6 +15,21 @@ Current limitations that may affect users:
 | MultiPeriodDiD wild bootstrap not supported | `estimators.py:1068-1074` | Low | Edge case |
 | `predict()` raises NotImplementedError | `estimators.py:532-554` | Low | Rarely needed |
 
+### ~~NaN Standard Errors for Rank-Deficient Matrices~~ (RESOLVED)
+
+**Status**: Resolved in v2.2.0 with R-style rank deficiency handling.
+
+**Solution**: The OLS solver now detects rank-deficient design matrices using pivoted QR decomposition and handles them following R's `lm()` approach:
+- Warns users about dropped columns
+- Sets NaN for coefficients of linearly dependent columns
+- Computes valid SEs for identified (non-dropped) coefficients only
+- Expands vcov matrix with NaN for dropped rows/columns
+
+This is controlled by the `rank_deficient_action` parameter in `solve_ols()`:
+- `"warn"` (default): Emit warning, set NA for dropped coefficients
+- `"error"`: Raise ValueError
+- `"silent"`: No warning, but still set NA for dropped coefficients
+
 ---
 
 ## Code Quality
@@ -142,4 +157,38 @@ Potential future optimizations:
 
 - [ ] JIT compilation for bootstrap loops (numba)
 - [ ] Sparse matrix handling for large fixed effects
+
+### QR+SVD Redundancy in Rank Detection
+
+**Background**: The current `solve_ols()` implementation performs both QR (for rank detection) and SVD (for solving) decompositions on rank-deficient matrices. This is technically redundant since SVD can determine rank directly.
+
+**Current approach** (R-style, chosen for robustness):
+1. QR with pivoting for rank detection (`_detect_rank_deficiency()`)
+2. scipy's `lstsq` with 'gelsd' driver (SVD-based) for solving
+
+**Why we use QR for rank detection**:
+- QR with pivoting provides the canonical ordering of linearly dependent columns
+- R's `lm()` uses this approach for consistent dropped-column reporting
+- Ensures consistent column dropping across runs (SVD column selection can vary)
+
+**Potential optimization** (future work):
+- Skip QR when `rank_deficient_action="silent"` since we don't need column names
+- Use SVD rank directly in the Rust backend (already implemented)
+- Add `skip_rank_check` parameter for hot paths where matrix is known to be full-rank (implemented in v2.2.0)
+
+**Priority**: Low - the QR overhead is minimal compared to SVD solve, and correctness is more important than micro-optimization.
+
+### Incomplete `check_finite` Bypass
+
+**Background**: The `solve_ols()` function accepts a `check_finite=False` parameter intended to skip NaN/Inf validation for performance in hot paths where data is known to be clean.
+
+**Current limitation**: When `check_finite=False`, our explicit validation is skipped, but scipy's internal QR decomposition in `_detect_rank_deficiency()` still validates finite values. This means callers cannot fully bypass all finite checks.
+
+**Impact**: Minimal - the scipy check is fast and only affects edge cases where users explicitly pass `check_finite=False` with non-finite data (which would be a bug in their code anyway).
+
+**Potential fix** (future work):
+- Pass `check_finite=False` through to scipy's QR call (requires scipy >= 1.9.0)
+- Or skip `_detect_rank_deficiency()` entirely when `check_finite=False` and `_skip_rank_check=True`
+
+**Priority**: Low - this is an edge case optimization that doesn't affect correctness.
 

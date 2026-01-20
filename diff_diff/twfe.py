@@ -127,18 +127,71 @@ class TwoWayFixedEffects(DifferenceInDifferences):
         # Always use LinearRegression for initial fit (unified code path)
         # For wild bootstrap, we don't need cluster SEs from the initial fit
         cluster_ids = data[cluster_var].values
-        reg = LinearRegression(
-            include_intercept=False,  # Intercept already in X
-            robust=True,  # TWFE always uses robust/cluster SEs
-            cluster_ids=cluster_ids if self.inference != "wild_bootstrap" else None,
-            alpha=self.alpha,
-        ).fit(X, y, df_adjustment=df_adjustment)
+
+        # Pass rank_deficient_action to LinearRegression
+        # If "error", let LinearRegression raise immediately
+        # If "warn" or "silent", suppress generic warning and use TWFE's context-specific
+        # error/warning messages (more informative for panel data)
+        if self.rank_deficient_action == "error":
+            reg = LinearRegression(
+                include_intercept=False,
+                robust=True,
+                cluster_ids=cluster_ids if self.inference != "wild_bootstrap" else None,
+                alpha=self.alpha,
+                rank_deficient_action="error",
+            ).fit(X, y, df_adjustment=df_adjustment)
+        else:
+            # Suppress generic warning, TWFE provides context-specific messages below
+            with warnings.catch_warnings():
+                warnings.filterwarnings("ignore", message="Rank-deficient design matrix")
+                reg = LinearRegression(
+                    include_intercept=False,
+                    robust=True,
+                    cluster_ids=cluster_ids if self.inference != "wild_bootstrap" else None,
+                    alpha=self.alpha,
+                    rank_deficient_action="silent",
+                ).fit(X, y, df_adjustment=df_adjustment)
 
         coefficients = reg.coefficients_
         residuals = reg.residuals_
         fitted = reg.fitted_values_
         r_squared = reg.r_squared()
         att = coefficients[att_idx]
+
+        # Check for unidentified coefficients (collinearity)
+        # Build column names for informative error messages
+        column_names = ["intercept", "treatment×post"]
+        if covariates:
+            column_names.extend(covariates)
+
+        nan_mask = np.isnan(coefficients)
+        if np.any(nan_mask):
+            dropped_indices = np.where(nan_mask)[0]
+            dropped_names = [column_names[i] if i < len(column_names)
+                            else f"column {i}" for i in dropped_indices]
+
+            # Determine the source of collinearity for better error message
+            if att_idx in dropped_indices:
+                # Treatment coefficient is unidentified
+                raise ValueError(
+                    f"Treatment effect cannot be identified due to collinearity. "
+                    f"Dropped columns: {', '.join(dropped_names)}. "
+                    "This can happen when: (1) treatment is perfectly collinear with "
+                    "unit/time fixed effects, (2) all treated units are treated in all "
+                    "periods, or (3) a covariate is collinear with the treatment indicator. "
+                    "Check your data structure and model specification."
+                )
+            else:
+                # Only covariates are dropped - this is a warning, not an error
+                # The ATT can still be estimated
+                # Respect rank_deficient_action setting for warning
+                if self.rank_deficient_action == "warn":
+                    warnings.warn(
+                        f"Some covariates are collinear and were dropped: "
+                        f"{', '.join(dropped_names)}. The treatment effect is still identified.",
+                        UserWarning,
+                        stacklevel=2,
+                    )
 
         # Get inference - either from bootstrap or analytical
         if self.inference == "wild_bootstrap":

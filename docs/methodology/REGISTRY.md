@@ -58,7 +58,9 @@ where τ is the ATT.
 *Edge cases:*
 - Empty cells (e.g., no treated-pre observations) raise ValueError
 - Singleton groups in clustering are dropped with warning
-- Perfect collinearity in covariates raises LinAlgError
+- Rank-deficient design matrix (collinearity): warns and sets NA for dropped coefficients (R-style, matches `lm()`)
+  - Tolerance: `1e-07` (matches R's `qr()` default), relative to largest diagonal element of R in QR decomposition
+  - Controllable via `rank_deficient_action` parameter: "warn" (default), "error", or "silent"
 
 **Reference implementation(s):**
 - R: `fixest::feols()` with interaction term
@@ -98,6 +100,8 @@ where E_i is treatment time for unit i, and δ_e are event-study coefficients.
 - Unbalanced panels: only uses observations where event-time is defined
 - Never-treated units: event-time indicators are all zero
 - Endpoint binning: distant event times can be binned
+- Rank-deficient design matrix (collinearity): warns and sets NA for dropped coefficients (R-style, matches `lm()`)
+- Average ATT (`avg_att`) is NA if any post-period effect is unidentified (R-style NA propagation)
 
 **Reference implementation(s):**
 - R: `fixest::feols()` with `i(event_time, ref=-1)`
@@ -139,7 +143,9 @@ where tildes denote demeaned variables.
 
 *Edge cases:*
 - Singleton units/periods are automatically dropped
-- Treatment perfectly collinear with FE raises error
+- Treatment perfectly collinear with FE raises error with informative message listing dropped columns
+- Covariate collinearity emits warning but estimation continues (ATT still identified)
+- Rank-deficient design matrix: warns and sets NA for dropped coefficients (R-style, matches `lm()`)
 - Unbalanced panels handled via proper demeaning
 
 **Reference implementation(s):**
@@ -194,6 +200,10 @@ Aggregations:
 - Groups with single observation: included but may have high variance
 - Missing group-time cells: ATT(g,t) set to NaN
 - Anticipation: `anticipation` parameter shifts reference period
+- Rank-deficient design matrix (covariate collinearity):
+  - Detection: Pivoted QR decomposition with tolerance `1e-07` (R's `qr()` default)
+  - Handling: Warns and drops linearly dependent columns, sets NA for dropped coefficients (R-style, matches `lm()`)
+  - Parameter: `rank_deficient_action` controls behavior: "warn" (default), "error", or "silent"
 
 **Reference implementation(s):**
 - R: `did::att_gt()` (Callaway & Sant'Anna's official package)
@@ -242,6 +252,10 @@ where weights ŵ_{g,e} = n_{g,e} / Σ_g n_{g,e} (sample share of cohort g at eve
 - Single cohort: reduces to standard event study
 - Cohorts with no observations at some event-times: weighted appropriately
 - Extrapolation beyond observed event-times: not estimated
+- Rank-deficient design matrix (covariate collinearity):
+  - Detection: Pivoted QR decomposition with tolerance `1e-07` (R's `qr()` default)
+  - Handling: Warns and drops linearly dependent columns, sets NA for dropped coefficients (R-style, matches `lm()`)
+  - Parameter: `rank_deficient_action` controls behavior: "warn" (default), "error", or "silent"
 
 **Reference implementation(s):**
 - R: `fixest::sunab()` (Laurent Bergé's implementation)

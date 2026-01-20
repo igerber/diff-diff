@@ -119,13 +119,20 @@ pytest tests/test_rust_backend.py -v
   - Integrated with `TwoWayFixedEffects.decompose()` method
 
 - **`diff_diff/linalg.py`** - Unified linear algebra backend (v1.4.0+):
-  - `solve_ols()` - OLS solver using scipy's gelsy LAPACK driver (QR-based, faster than SVD)
+  - `solve_ols()` - OLS solver with R-style rank deficiency handling
+  - `_detect_rank_deficiency()` - Detect linearly dependent columns via pivoted QR
   - `compute_robust_vcov()` - Vectorized HC1 and cluster-robust variance-covariance estimation
   - `compute_r_squared()` - R-squared and adjusted R-squared computation
   - `LinearRegression` - High-level OLS helper class with unified coefficient extraction and inference
   - `InferenceResult` - Dataclass container for coefficient-level inference (SE, t-stat, p-value, CI)
   - Single optimization point for all estimators (reduces code duplication)
   - Cluster-robust SEs use pandas groupby instead of O(n × clusters) loop
+  - **Rank deficiency handling** (R-style):
+    - Detects rank-deficient matrices using pivoted QR decomposition
+    - `rank_deficient_action` parameter: "warn" (default), "error", or "silent"
+    - Dropped columns have NaN coefficients (like R's `lm()`)
+    - VCoV matrix has NaN for rows/cols of dropped coefficients
+    - Warnings include column names when provided
 
 - **`diff_diff/_backend.py`** - Backend detection and configuration (v2.0.0):
   - Detects optional Rust backend availability
@@ -240,7 +247,7 @@ diff-diff achieved significant performance improvements in v1.4.0, now **faster 
 
 All estimators use a single optimized OLS/SE implementation:
 
-- **scipy.linalg.lstsq with 'gelsy' driver**: QR-based solving, faster than NumPy's default SVD-based solver
+- **R-style rank deficiency handling**: Uses pivoted QR to detect linearly dependent columns, drops them, sets NaN for their coefficients, and emits informative warnings (following R's `lm()` approach)
 - **Vectorized cluster-robust SE**: Uses pandas groupby aggregation instead of O(n × clusters) Python loop
 - **Single optimization point**: Changes to `linalg.py` benefit all estimators
 
@@ -248,8 +255,17 @@ All estimators use a single optimized OLS/SE implementation:
 # All estimators import from linalg.py
 from diff_diff.linalg import solve_ols, compute_robust_vcov
 
-# Example usage
+# Example usage (warns on rank deficiency, sets NaN for dropped coefficients)
 coefficients, residuals, vcov = solve_ols(X, y, cluster_ids=cluster_ids)
+
+# Suppress warning or raise error:
+coefficients, residuals, vcov = solve_ols(X, y, rank_deficient_action="silent")  # no warning
+coefficients, residuals, vcov = solve_ols(X, y, rank_deficient_action="error")   # raises ValueError
+
+# At estimator level (DifferenceInDifferences, MultiPeriodDiD):
+from diff_diff import DifferenceInDifferences
+did = DifferenceInDifferences(rank_deficient_action="error")   # raises on collinear data
+did = DifferenceInDifferences(rank_deficient_action="silent")  # no warning
 ```
 
 #### CallawaySantAnna Optimizations (`staggered.py`)

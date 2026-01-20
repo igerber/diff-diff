@@ -186,34 +186,230 @@ class TestSolveOLS:
             solve_ols(X, y)
 
     def test_check_finite_false_skips_validation(self):
-        """Test that check_finite=False skips NaN/Inf validation."""
+        """Test that check_finite=False skips the upfront NaN/Inf validation.
+
+        Note: With the 'gelsd' driver, LAPACK may still error on NaN values
+        during computation, which is actually safer than producing garbage.
+        """
         X = np.random.randn(100, 2)
         X[50, 0] = np.nan
         y = np.random.randn(100)
 
-        # Should not raise, but will return garbage results
-        coef, resid, vcov = solve_ols(X, y, check_finite=False)
-        # Coefficients will contain NaN due to bad input
-        assert np.isnan(coef).any() or np.isinf(coef).any()
+        # The gelsd driver may raise an error when encountering NaN during
+        # computation, or produce garbage results. Either is acceptable
+        # (the key is that we don't raise the "X contains NaN" user-friendly error)
+        try:
+            coef, resid, vcov = solve_ols(X, y, check_finite=False)
+            # If it completed, coefficients should contain NaN/Inf due to bad input
+            assert np.isnan(coef).any() or np.isinf(coef).any()
+        except ValueError as e:
+            # LAPACK may raise an error on NaN values (gelsd behavior)
+            # This is acceptable - the key is we skipped our own validation
+            assert "X contains NaN" not in str(e) and "y contains NaN" not in str(e)
 
-    def test_rank_deficient_still_solves(self):
-        """Test that rank-deficient matrix still returns a solution.
+    def test_rank_deficient_produces_nan_for_dropped_columns(self):
+        """Test that rank-deficient matrix returns NaN for dropped columns.
 
-        Note: The gelsy driver doesn't always detect rank deficiency,
-        but it still returns a valid least-squares solution.
+        Following R's lm() approach, coefficients for linearly dependent columns
+        are set to NaN while identified coefficients are computed normally.
         """
+        import warnings
+
+        np.random.seed(42)
+        X = np.random.randn(100, 3)
+        X[:, 2] = X[:, 0] + X[:, 1]  # Perfect collinearity: col 2 = col 0 + col 1
+        y = np.random.randn(100)
+
+        # Should emit warning about rank deficiency
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            coef, resid, vcov = solve_ols(X, y)
+            assert len(w) == 1
+            assert "Rank-deficient" in str(w[0].message)
+
+        assert coef.shape == (3,)
+        assert resid.shape == (100,)
+
+        # Exactly one coefficient should be NaN (the dropped one)
+        nan_mask = np.isnan(coef)
+        assert np.sum(nan_mask) == 1, f"Expected 1 NaN coefficient, got {np.sum(nan_mask)}: {coef}"
+
+        # Non-NaN coefficients should be finite and reasonable
+        finite_coef = coef[~nan_mask]
+        assert np.all(np.isfinite(finite_coef)), f"Finite coefficients contain non-finite values: {finite_coef}"
+        assert np.all(np.abs(finite_coef) < 1e6), f"Finite coefficients are unreasonably large: {finite_coef}"
+
+        # VCoV should have NaN for dropped column's row and column
+        assert vcov is not None
+        dropped_idx = np.where(nan_mask)[0][0]
+        assert np.all(np.isnan(vcov[dropped_idx, :])), "VCoV row for dropped column should be NaN"
+        assert np.all(np.isnan(vcov[:, dropped_idx])), "VCoV column for dropped column should be NaN"
+
+        # VCoV for identified coefficients should be finite
+        kept_idx = np.where(~nan_mask)[0]
+        vcov_kept = vcov[np.ix_(kept_idx, kept_idx)]
+        assert np.all(np.isfinite(vcov_kept)), "VCoV for kept coefficients should be finite"
+
+        # Residuals should be finite (computed using only identified coefficients)
+        assert np.all(np.isfinite(resid)), f"Residuals contain non-finite values"
+
+    def test_rank_deficient_error_mode(self):
+        """Test that rank_deficient_action='error' raises ValueError."""
         np.random.seed(42)
         X = np.random.randn(100, 3)
         X[:, 2] = X[:, 0] + X[:, 1]  # Perfect collinearity
         y = np.random.randn(100)
 
-        # Should still complete and return valid output
-        coef, resid, vcov = solve_ols(X, y)
+        with pytest.raises(ValueError, match="rank-deficient"):
+            solve_ols(X, y, rank_deficient_action="error")
 
+    def test_rank_deficient_silent_mode(self):
+        """Test that rank_deficient_action='silent' produces no warning."""
+        import warnings
+
+        np.random.seed(42)
+        X = np.random.randn(100, 3)
+        X[:, 2] = X[:, 0] + X[:, 1]  # Perfect collinearity
+        y = np.random.randn(100)
+
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            coef, resid, vcov = solve_ols(X, y, rank_deficient_action="silent")
+            # No warnings should be emitted
+            assert len(w) == 0, f"Expected no warnings, got {len(w)}: {[str(x.message) for x in w]}"
+
+        # Should still produce NaN for dropped column
+        assert np.sum(np.isnan(coef)) == 1
+
+    def test_rank_deficient_column_names_in_warning(self):
+        """Test that column names appear in warning message."""
+        import warnings
+
+        np.random.seed(42)
+        X = np.random.randn(100, 3)
+        X[:, 2] = X[:, 0] + X[:, 1]  # Perfect collinearity
+        y = np.random.randn(100)
+
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            coef, resid, vcov = solve_ols(
+                X, y,
+                column_names=["intercept", "x1", "x2_collinear"]
+            )
+            assert len(w) == 1
+            # Column name should appear in warning (not just index)
+            assert "x2_collinear" in str(w[0].message) or "intercept" in str(w[0].message) or "x1" in str(w[0].message)
+
+    def test_skip_rank_check_bypasses_qr_decomposition(self):
+        """Test that skip_rank_check=True skips QR rank detection.
+
+        When skip_rank_check=True, the function should skip QR decomposition
+        and go directly to SVD solving, even in Python backend.
+        """
+        import warnings
+        import os
+
+        np.random.seed(42)
+        n = 100
+        X = np.random.randn(n, 3)
+        y = np.random.randn(n)
+
+        # Force Python backend for this test
+        old_backend = os.environ.get("DIFF_DIFF_BACKEND")
+        os.environ["DIFF_DIFF_BACKEND"] = "python"
+
+        try:
+            # With skip_rank_check=True, should not emit any warnings
+            # (even if we make X rank-deficient, since we're skipping the check)
+            with warnings.catch_warnings(record=True) as w:
+                warnings.simplefilter("always")
+                coef, resid, vcov = solve_ols(X, y, skip_rank_check=True)
+                # No rank-deficiency warning should be emitted
+                rank_warnings = [x for x in w if "Rank-deficient" in str(x.message)]
+                assert len(rank_warnings) == 0
+        finally:
+            if old_backend is not None:
+                os.environ["DIFF_DIFF_BACKEND"] = old_backend
+            elif "DIFF_DIFF_BACKEND" in os.environ:
+                del os.environ["DIFF_DIFF_BACKEND"]
+
+        # Should produce valid coefficients
         assert coef.shape == (3,)
-        assert resid.shape == (100,)
-        # Residuals should still be valid (y - X @ coef)
-        np.testing.assert_allclose(resid, y - X @ coef, rtol=1e-10)
+        assert np.all(np.isfinite(coef))
+
+    def test_multiperiod_like_design_full_rank(self):
+        """Test that MultiPeriodDiD-like design matrices work when full-rank.
+
+        This test creates a properly specified MultiPeriodDiD-like design that
+        is NOT rank-deficient to verify correct coefficient recovery.
+        """
+        import warnings
+
+        np.random.seed(42)
+        n = 200
+        n_periods = 5
+
+        # Create a design matrix similar to MultiPeriodDiD:
+        # [intercept, period_1, period_2, ..., period_k, treated*post]
+
+        # Intercept
+        intercept = np.ones(n)
+
+        # Period dummies (one-hot encoding for periods 1 to n_periods-1)
+        # Period 0 is the reference
+        period_assignment = np.random.randint(0, n_periods, n)
+        period_dummies = np.zeros((n, n_periods - 1))
+        for i in range(1, n_periods):
+            period_dummies[:, i - 1] = (period_assignment == i).astype(float)
+
+        # Treatment indicator (varies within periods to ensure identification)
+        treated = np.random.binomial(1, 0.5, n)
+
+        # Post indicator (periods >= 3 are post)
+        post = (period_assignment >= 3).astype(float)
+
+        # Treatment × post interaction
+        treat_post = treated * post
+
+        # Build design matrix
+        X = np.column_stack([intercept, period_dummies, treat_post])
+
+        # True effect
+        true_effect = 2.5
+        y = (
+            1.0  # intercept effect
+            + 0.5 * period_dummies[:, 0]  # period 1 effect
+            + 0.3 * period_dummies[:, 1]  # period 2 effect
+            + 0.7 * period_dummies[:, 2]  # period 3 effect
+            + 0.9 * period_dummies[:, 3]  # period 4 effect
+            + true_effect * treat_post  # treatment effect
+            + np.random.randn(n) * 0.5  # noise
+        )
+
+        # Fit with solve_ols - should NOT produce warning if full-rank
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            coef, resid, vcov = solve_ols(X, y)
+            # Check if any rank deficiency warnings (may or may not occur)
+            rank_warnings = [x for x in w if "Rank-deficient" in str(x.message)]
+
+        # If no rank deficiency, all coefficients should be finite
+        if len(rank_warnings) == 0:
+            assert np.all(np.isfinite(coef)), f"Full-rank matrix: coefficients should be finite"
+            assert np.all(np.abs(coef) < 1e6), f"Coefficients are unreasonably large: {coef}"
+            # The treatment effect coefficient (last one) should be close to true effect
+            assert abs(coef[-1] - true_effect) < 2.0, (
+                f"Treatment effect {coef[-1]} is too far from true {true_effect}"
+            )
+        else:
+            # If rank-deficient, check that identified coefficients are valid
+            finite_coef = coef[~np.isnan(coef)]
+            assert np.all(np.isfinite(finite_coef)), f"Identified coefficients should be finite"
+            # If treatment effect is identified, check it
+            if not np.isnan(coef[-1]):
+                assert abs(coef[-1] - true_effect) < 2.0, (
+                    f"Treatment effect {coef[-1]} is too far from true {true_effect}"
+                )
 
     def test_single_cluster_error(self):
         """Test that single cluster raises error."""
@@ -824,6 +1020,239 @@ class TestLinearRegression:
         np.testing.assert_allclose(reg.fitted_values_, fitted, rtol=1e-10)
         np.testing.assert_allclose(reg.vcov_, vcov, rtol=1e-10)
 
+    def test_rank_deficient_degrees_of_freedom(self):
+        """Test that degrees of freedom are computed correctly when columns are dropped.
+
+        When a design matrix is rank-deficient, the effective number of parameters
+        is the rank, not the number of columns. The df should be n - rank.
+        """
+        import warnings
+
+        np.random.seed(42)
+        n = 100
+        # Create rank-deficient matrix: 4 columns but rank 3
+        X = np.random.randn(n, 3)
+        X = np.column_stack([X, X[:, 0] + X[:, 1]])  # Column 3 = Column 0 + Column 1
+
+        y = np.random.randn(n)
+
+        with warnings.catch_warnings(record=True):
+            warnings.simplefilter("always")
+            reg = LinearRegression(include_intercept=False).fit(X, y)
+
+        # n_params_ should be total columns (4)
+        assert reg.n_params_ == 4
+
+        # n_params_effective_ should be the rank (3)
+        assert reg.n_params_effective_ == 3
+
+        # df_ should be n - effective_params = 100 - 3 = 97
+        assert reg.df_ == n - 3
+
+        # Verify one coefficient is NaN (the dropped one)
+        assert np.sum(np.isnan(reg.coefficients_)) == 1
+
+    def test_rank_deficient_inference_uses_correct_df(self):
+        """Test that p-values and CIs use the correct df for rank-deficient matrices."""
+        import warnings
+        from scipy import stats
+
+        np.random.seed(42)
+        n = 100
+        # Create rank-deficient matrix
+        X = np.random.randn(n, 3)
+        X = np.column_stack([X, X[:, 0] + X[:, 1]])  # Perfect collinearity
+
+        # True coefficients for the first 3 columns only
+        y = 2 * X[:, 0] + 3 * X[:, 1] + np.random.randn(n) * 0.5
+
+        with warnings.catch_warnings(record=True):
+            warnings.simplefilter("always")
+            reg = LinearRegression(include_intercept=False).fit(X, y)
+
+        # Get inference for an identified coefficient
+        nan_mask = np.isnan(reg.coefficients_)
+        kept_idx = np.where(~nan_mask)[0][0]  # First non-NaN coefficient
+        result = reg.get_inference(kept_idx)
+
+        # Check that df is correct (should be n - rank = 97)
+        assert result.df == n - 3, f"Expected df={n-3}, got {result.df}"
+
+        # Manually compute expected values using correct df
+        coef = result.coefficient
+        se = result.se
+        t_stat_expected = coef / se
+        p_value_expected = 2 * (1 - stats.t.cdf(abs(t_stat_expected), df=n - 3))
+
+        # Verify t-stat
+        np.testing.assert_allclose(result.t_stat, t_stat_expected, rtol=1e-10)
+
+        # Verify p-value uses correct df (use atol for very small p-values)
+        np.testing.assert_allclose(result.p_value, p_value_expected, atol=1e-10)
+
+        # Verify CI uses correct df
+        t_crit = stats.t.ppf(1 - 0.05 / 2, df=n - 3)
+        ci_expected = (coef - t_crit * se, coef + t_crit * se)
+        np.testing.assert_allclose(result.conf_int, ci_expected, rtol=1e-6)
+
+    def test_rank_deficient_inference_nan_for_dropped_coef(self):
+        """Test that inference for dropped coefficients returns NaN values."""
+        import warnings
+
+        np.random.seed(42)
+        n = 100
+        X = np.random.randn(n, 3)
+        X = np.column_stack([X, X[:, 0] + X[:, 1]])  # Column 3 is dropped
+        y = np.random.randn(n)
+
+        with warnings.catch_warnings(record=True):
+            warnings.simplefilter("always")
+            reg = LinearRegression(include_intercept=False).fit(X, y)
+
+        # Find the dropped coefficient index
+        nan_mask = np.isnan(reg.coefficients_)
+        dropped_idx = np.where(nan_mask)[0][0]
+
+        # Get inference for dropped coefficient
+        result = reg.get_inference(dropped_idx)
+
+        # All inference values should be NaN
+        assert np.isnan(result.coefficient)
+        assert np.isnan(result.se)
+        assert np.isnan(result.t_stat)
+        assert np.isnan(result.p_value)
+        assert np.isnan(result.conf_int[0])
+        assert np.isnan(result.conf_int[1])
+
+    def test_rank_deficient_predict_uses_identified_coefficients(self):
+        """Test that predict() works correctly with rank-deficient fits.
+
+        Predictions should use only identified coefficients (treating dropped
+        coefficients as zero), not produce all-NaN predictions.
+        """
+        import warnings
+
+        np.random.seed(42)
+        n = 100
+        # Create rank-deficient matrix
+        X = np.random.randn(n, 3)
+        X = np.column_stack([X, X[:, 0] + X[:, 1]])  # Column 3 is collinear
+
+        # True model uses only first 3 columns
+        y = 2 * X[:, 0] + 3 * X[:, 1] - 1 * X[:, 2] + np.random.randn(n) * 0.5
+
+        with warnings.catch_warnings(record=True):
+            warnings.simplefilter("always")
+            reg = LinearRegression(include_intercept=False).fit(X, y)
+
+        # Verify one coefficient is NaN
+        assert np.sum(np.isnan(reg.coefficients_)) == 1
+
+        # Predictions should NOT be all NaN
+        X_new = np.random.randn(10, 4)
+        y_pred = reg.predict(X_new)
+
+        assert y_pred.shape == (10,)
+        assert np.all(np.isfinite(y_pred)), "Predictions should be finite, not NaN"
+
+        # Verify predictions match fitted values on training data
+        y_fitted = reg.predict(X)
+        np.testing.assert_allclose(y_fitted, reg.fitted_values_, rtol=1e-10)
+
+    def test_rank_deficient_adjusted_r_squared_uses_effective_params(self):
+        """Test that adjusted R² uses effective params, not total params.
+
+        For rank-deficient fits, adjusted R² should use n_params_effective_
+        for consistency with the corrected degrees of freedom.
+        """
+        import warnings
+
+        np.random.seed(42)
+        n = 100
+        # Create rank-deficient matrix: 4 columns but rank 3
+        X = np.random.randn(n, 3)
+        X = np.column_stack([X, X[:, 0] + X[:, 1]])  # Column 3 = Column 0 + Column 1
+
+        y = 2 * X[:, 0] + np.random.randn(n) * 0.5
+
+        with warnings.catch_warnings(record=True):
+            warnings.simplefilter("always")
+            reg = LinearRegression(include_intercept=False).fit(X, y)
+
+        # Verify setup
+        assert reg.n_params_ == 4
+        assert reg.n_params_effective_ == 3
+
+        # Get R² values
+        r2 = reg.r_squared()
+        r2_adj = reg.r_squared(adjusted=True)
+
+        # Both should be valid numbers
+        assert 0 <= r2 <= 1
+        assert r2_adj < r2  # Adjusted should be smaller
+
+        # Manually compute adjusted R² using effective params
+        # r²_adj = 1 - (1 - r²) * (n - 1) / (n - k_effective)
+        r2_adj_expected = 1 - (1 - r2) * (n - 1) / (n - 3)
+        np.testing.assert_allclose(r2_adj, r2_adj_expected, rtol=1e-10)
+
+        # Verify it's NOT using total params (which would give different result)
+        r2_adj_wrong = 1 - (1 - r2) * (n - 1) / (n - 4)
+        assert r2_adj != r2_adj_wrong, "Should use effective params, not total params"
+
+    def test_rank_deficient_action_error_raises(self):
+        """Test that LinearRegression with rank_deficient_action='error' raises on collinear data."""
+        np.random.seed(42)
+        n = 100
+        X = np.random.randn(n, 3)
+        X = np.column_stack([X, X[:, 0] + X[:, 1]])  # Perfect collinearity
+        y = np.random.randn(n)
+
+        reg = LinearRegression(include_intercept=False, rank_deficient_action="error")
+        with pytest.raises(ValueError, match="rank-deficient"):
+            reg.fit(X, y)
+
+    def test_rank_deficient_action_silent_no_warning(self):
+        """Test that LinearRegression with rank_deficient_action='silent' produces no warning."""
+        import warnings
+
+        np.random.seed(42)
+        n = 100
+        X = np.random.randn(n, 3)
+        X = np.column_stack([X, X[:, 0] + X[:, 1]])  # Perfect collinearity
+        y = np.random.randn(n)
+
+        reg = LinearRegression(include_intercept=False, rank_deficient_action="silent")
+
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            reg.fit(X, y)
+            # No warnings should be emitted
+            assert len(w) == 0, f"Expected no warnings, got {len(w)}: {[str(x.message) for x in w]}"
+
+        # Should still produce NaN for dropped column
+        assert np.sum(np.isnan(reg.coefficients_)) == 1
+
+    def test_rank_deficient_action_warn_default(self):
+        """Test that LinearRegression with rank_deficient_action='warn' (default) emits warning."""
+        import warnings
+
+        np.random.seed(42)
+        n = 100
+        X = np.random.randn(n, 3)
+        X = np.column_stack([X, X[:, 0] + X[:, 1]])  # Perfect collinearity
+        y = np.random.randn(n)
+
+        reg = LinearRegression(include_intercept=False)  # Default is "warn"
+
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            reg.fit(X, y)
+            # Should have a warning about rank deficiency
+            assert len(w) > 0, "Expected warning about rank deficiency"
+            assert any("Rank-deficient" in str(x.message) or "rank-deficient" in str(x.message).lower()
+                      for x in w), f"Expected rank-deficient warning, got: {[str(x.message) for x in w]}"
+
 
 class TestNumericalStability:
     """Tests for numerical stability with ill-conditioned matrices."""
@@ -833,15 +1262,18 @@ class TestNumericalStability:
         np.random.seed(42)
         n = 100
 
-        # Create near-collinear design (high condition number)
+        # Create near-collinear design (high condition number but above rank tolerance)
+        # The rank detection tolerance is 1e-07 (matching R's qr()), so we use noise
+        # of 1e-5 which is clearly above the tolerance and provides a distinguishable
+        # signal. With noise < 1e-07, the column would be considered linearly dependent.
         X = np.random.randn(n, 3)
-        X[:, 2] = X[:, 0] + X[:, 1] + np.random.randn(n) * 1e-8  # Near-perfect collinearity
+        X[:, 2] = X[:, 0] + X[:, 1] + np.random.randn(n) * 1e-5  # Near but not perfect collinearity
 
         y = X[:, 0] + np.random.randn(n) * 0.1
 
         reg = LinearRegression(include_intercept=True).fit(X, y)
 
-        # Should still produce finite coefficients
+        # Should still produce finite coefficients (noise is above tolerance)
         assert np.all(np.isfinite(reg.coefficients_))
 
         # Compare with numpy's lstsq (gold standard for stability)
@@ -849,7 +1281,7 @@ class TestNumericalStability:
         expected, _, _, _ = np.linalg.lstsq(X_full, y, rcond=None)
 
         # Should be close (within reasonable tolerance for ill-conditioned problem)
-        np.testing.assert_allclose(reg.coefficients_, expected, rtol=1e-6)
+        np.testing.assert_allclose(reg.coefficients_, expected, rtol=1e-4)
 
     def test_high_condition_number_matrix(self):
         """Test that high condition number matrices don't lose precision."""

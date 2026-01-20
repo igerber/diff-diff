@@ -6,12 +6,26 @@
 //! - Cluster-robust variance-covariance estimation
 
 use ndarray::{Array1, Array2, ArrayView1, ArrayView2, Axis};
-use ndarray_linalg::{FactorizeC, LeastSquaresSvd, Solve, SolveC, UPLO};
+use ndarray_linalg::{FactorizeC, Solve, SolveC, SVD, UPLO};
 use numpy::{IntoPyArray, PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2};
 use pyo3::prelude::*;
 use std::collections::HashMap;
 
 /// Solve OLS regression: β = (X'X)^{-1} X'y
+///
+/// Uses SVD with truncation for rank-deficient matrices:
+/// - Computes SVD: X = U * S * V^T
+/// - Truncates singular values below rcond * max(S)
+/// - Computes solution: β = V * S^{-1}_truncated * U^T * y
+///
+/// This matches scipy's 'gelsd' driver behavior for handling rank-deficient
+/// design matrices that can occur in DiD estimation (e.g., MultiPeriodDiD
+/// with redundant period dummies + treatment interactions).
+///
+/// For rank-deficient matrices (rank < k), the vcov matrix is filled with NaN
+/// since the sandwich estimator requires inverting the singular X'X matrix.
+/// The Python wrapper should use the full R-style handling with QR pivoting
+/// for proper rank-deficiency support.
 ///
 /// # Arguments
 /// * `x` - Design matrix (n, k)
@@ -20,7 +34,8 @@ use std::collections::HashMap;
 /// * `return_vcov` - Whether to compute and return variance-covariance matrix
 ///
 /// # Returns
-/// Tuple of (coefficients, residuals, vcov) where vcov is None if return_vcov=False
+/// Tuple of (coefficients, residuals, vcov) where vcov is None if return_vcov=False,
+/// or NaN-filled matrix if rank-deficient
 #[pyfunction]
 #[pyo3(signature = (x, y, cluster_ids=None, return_vcov=true))]
 pub fn solve_ols<'py>(
@@ -37,25 +52,69 @@ pub fn solve_ols<'py>(
     let x_arr = x.as_array();
     let y_arr = y.as_array();
 
-    // Solve least squares using SVD (more stable than normal equations)
+    let n = x_arr.nrows();
+    let k = x_arr.ncols();
+
+    // Solve using SVD with truncation for rank-deficient matrices
+    // This matches scipy's 'gelsd' behavior
     let x_owned = x_arr.to_owned();
     let y_owned = y_arr.to_owned();
 
-    let result = x_owned
-        .least_squares(&y_owned)
-        .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Least squares failed: {}", e)))?;
+    // Compute SVD: X = U * S * V^T
+    let (u_opt, s, vt_opt) = x_owned
+        .svd(true, true)
+        .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("SVD failed: {}", e)))?;
 
-    let coefficients = result.solution;
+    let u = u_opt.ok_or_else(|| {
+        PyErr::new::<pyo3::exceptions::PyValueError, _>("SVD did not return U matrix")
+    })?;
+    let vt = vt_opt.ok_or_else(|| {
+        PyErr::new::<pyo3::exceptions::PyValueError, _>("SVD did not return V^T matrix")
+    })?;
+
+    // Compute rcond threshold to match R's lm() behavior
+    // R's qr() uses tol = 1e-07 by default, which is sqrt(eps) ≈ 1.49e-08
+    // We use 1e-07 for consistency with Python backend and R
+    let rcond = 1e-07_f64;
+    let s_max = s.iter().cloned().fold(0.0_f64, f64::max);
+    let threshold = s_max * rcond;
+
+    // Compute truncated pseudoinverse solution: β = V * S^{-1} * U^T * y
+    // Singular values below threshold are treated as zero (truncated)
+    let uty = u.t().dot(&y_owned); // (min(n,k),)
+
+    // Build S^{-1} with truncation and count effective rank
+    let mut s_inv_uty = Array1::<f64>::zeros(k);
+    let mut rank = 0usize;
+    for i in 0..s.len().min(k) {
+        if s[i] > threshold {
+            s_inv_uty[i] = uty[i] / s[i];
+            rank += 1;
+        }
+        // else: leave as 0 (truncate this singular value)
+    }
+
+    // Compute coefficients: β = V * (S^{-1} * U^T * y)
+    let coefficients = vt.t().dot(&s_inv_uty);
 
     // Compute fitted values and residuals
     let fitted = x_arr.dot(&coefficients);
     let residuals = &y_arr - &fitted;
 
     // Compute variance-covariance if requested
+    // For rank-deficient matrices, return NaN vcov since X'X is singular
     let vcov = if return_vcov {
-        let cluster_arr = cluster_ids.as_ref().map(|c| c.as_array().to_owned());
-        let vcov_arr = compute_robust_vcov_internal(&x_arr, &residuals.view(), cluster_arr.as_ref())?;
-        Some(vcov_arr.into_pyarray(py))
+        if rank < k {
+            // Rank-deficient: cannot compute valid vcov, return NaN matrix
+            let mut nan_vcov = Array2::<f64>::zeros((k, k));
+            nan_vcov.fill(f64::NAN);
+            Some(nan_vcov.into_pyarray(py))
+        } else {
+            // Full rank: compute robust vcov normally
+            let cluster_arr = cluster_ids.as_ref().map(|c| c.as_array().to_owned());
+            let vcov_arr = compute_robust_vcov_internal(&x_arr, &residuals.view(), cluster_arr.as_ref())?;
+            Some(vcov_arr.into_pyarray(py))
+        }
     } else {
         None
     };
@@ -224,7 +283,9 @@ fn invert_symmetric(a: &Array2<f64>) -> PyResult<Array2<f64>> {
 
         let col = a.solve(&e_i).map_err(|e| {
             PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
-                "Matrix inversion failed: {}",
+                "Matrix inversion failed (likely rank-deficient X'X): {}. \
+                 If the design matrix is rank-deficient, use solve_ols without \
+                 skip_rank_check=True to enable R-style handling.",
                 e
             ))
         })?;

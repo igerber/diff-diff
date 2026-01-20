@@ -211,6 +211,79 @@ class TestDifferenceInDifferences:
         with pytest.raises(RuntimeError, match="fitted"):
             did.summary()
 
+    def test_rank_deficient_action_error_raises(self, simple_2x2_data):
+        """Test that rank_deficient_action='error' raises ValueError on collinear data."""
+        # Add a covariate that is perfectly collinear with treatment
+        data = simple_2x2_data.copy()
+        data["collinear_cov"] = data["treated"].copy()
+
+        did = DifferenceInDifferences(rank_deficient_action="error")
+        with pytest.raises(ValueError, match="rank-deficient"):
+            did.fit(
+                data,
+                outcome="outcome",
+                treatment="treated",
+                time="post",
+                covariates=["collinear_cov"]
+            )
+
+    def test_rank_deficient_action_silent_no_warning(self, simple_2x2_data):
+        """Test that rank_deficient_action='silent' produces no warning."""
+        import warnings
+
+        # Add a covariate that is perfectly collinear with treatment
+        data = simple_2x2_data.copy()
+        data["collinear_cov"] = data["treated"].copy()
+
+        did = DifferenceInDifferences(rank_deficient_action="silent")
+
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            results = did.fit(
+                data,
+                outcome="outcome",
+                treatment="treated",
+                time="post",
+                covariates=["collinear_cov"]
+            )
+
+            # No warnings about rank deficiency should be emitted
+            rank_warnings = [x for x in w if "Rank-deficient" in str(x.message)
+                           or "rank-deficient" in str(x.message).lower()]
+            assert len(rank_warnings) == 0, f"Expected no rank warnings, got {rank_warnings}"
+
+        # Should still have NaN for dropped coefficient
+        assert "collinear_cov" in results.coefficients
+        # Either collinear_cov or treated will be NaN
+        has_nan = (np.isnan(results.coefficients.get("collinear_cov", 0)) or
+                   np.isnan(results.coefficients.get("treated", 0)))
+        assert has_nan, "Expected NaN for one of the collinear coefficients"
+
+    def test_rank_deficient_action_warn_default(self, simple_2x2_data):
+        """Test that rank_deficient_action='warn' (default) emits warning."""
+        import warnings
+
+        # Add a covariate that is perfectly collinear with treatment
+        data = simple_2x2_data.copy()
+        data["collinear_cov"] = data["treated"].copy()
+
+        did = DifferenceInDifferences()  # Default is "warn"
+
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            results = did.fit(
+                data,
+                outcome="outcome",
+                treatment="treated",
+                time="post",
+                covariates=["collinear_cov"]
+            )
+
+            # Should have a warning about rank deficiency
+            rank_warnings = [x for x in w if "Rank-deficient" in str(x.message)
+                           or "rank-deficient" in str(x.message).lower()]
+            assert len(rank_warnings) > 0, "Expected warning about rank deficiency"
+
 
 class TestDiDResults:
     """Tests for DiDResults class."""
@@ -704,7 +777,9 @@ class TestEdgeCases:
     """Tests for edge cases and robustness."""
 
     def test_multicollinearity_detection(self):
-        """Test that perfect multicollinearity is detected."""
+        """Test that perfect multicollinearity is detected and warning is emitted."""
+        import warnings
+
         # Create data where a covariate is perfectly correlated with treatment
         data = pd.DataFrame({
             "outcome": [10, 11, 15, 18, 9, 10, 12, 13],
@@ -714,14 +789,23 @@ class TestEdgeCases:
         })
 
         did = DifferenceInDifferences()
-        with pytest.raises(ValueError, match="rank-deficient"):
-            did.fit(
+
+        # With R-style rank deficiency handling, a warning is emitted
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            result = did.fit(
                 data,
                 outcome="outcome",
                 treatment="treated",
                 time="post",
                 covariates=["duplicate_treated"]
             )
+            # Should emit a warning about rank deficiency
+            rank_warnings = [x for x in w if "Rank-deficient" in str(x.message)]
+            assert len(rank_warnings) > 0, "Expected warning about rank deficiency"
+
+        # ATT should still be finite
+        assert np.isfinite(result.att)
 
     def test_wasserstein_custom_threshold(self):
         """Test that custom Wasserstein threshold is respected."""
@@ -929,6 +1013,102 @@ class TestTwoWayFixedEffects:
         assert twfe.cluster is None
         # But the results should still reflect cluster-robust SEs were computed correctly
         assert results.se > 0
+
+    def test_twfe_treatment_collinearity_raises_error(self):
+        """Test that TWFE raises informative error when treatment is collinear."""
+        from diff_diff.estimators import TwoWayFixedEffects
+
+        # Create data where treatment is perfectly collinear with fixed effects
+        # (all treated units are treated in all periods)
+        data = []
+        for unit in range(10):
+            is_treated = unit < 5
+            for period in range(4):
+                data.append({
+                    "unit": unit,
+                    "period": period,
+                    "treated": int(is_treated),  # Same for all periods
+                    "post": 1 if period >= 2 else 0,
+                    "outcome": 10.0 + unit * 0.5 + period * 0.3 + np.random.normal(0, 0.1),
+                })
+        df = pd.DataFrame(data)
+
+        # Make treatment_post constant for treated units (collinear)
+        # by making treatment only occur in post periods
+        df_collinear = df.copy()
+        # This creates perfect collinearity: treatment is perfectly predicted by unit FE
+        # since treated units always have treated=1 and control units always have treated=0
+
+        twfe = TwoWayFixedEffects()
+
+        # Should raise or warn about collinearity - depends on what columns get dropped
+        # The key is that it should NOT silently produce misleading results
+        try:
+            results = twfe.fit(
+                df_collinear,
+                outcome="outcome",
+                treatment="treated",
+                time="post",
+                unit="unit"
+            )
+            # If we get here without error, the ATT should still be computed
+            # (this means only covariates were dropped, not the treatment)
+            assert results is not None
+        except ValueError as e:
+            # If treatment column is dropped, should get informative error
+            assert "collinear" in str(e).lower() or "Treatment effect cannot be identified" in str(e)
+
+    def test_rank_deficient_action_error_raises(self, twfe_panel_data):
+        """Test that rank_deficient_action='error' raises ValueError on collinear data."""
+        from diff_diff.estimators import TwoWayFixedEffects
+
+        # Add a covariate that is perfectly collinear with post
+        twfe_panel_data = twfe_panel_data.copy()
+        twfe_panel_data["collinear_cov"] = twfe_panel_data["post"].copy()
+
+        twfe = TwoWayFixedEffects(rank_deficient_action="error")
+        with pytest.raises(ValueError, match="rank-deficient"):
+            twfe.fit(
+                twfe_panel_data,
+                outcome="outcome",
+                treatment="treated",
+                time="post",
+                unit="unit",
+                covariates=["collinear_cov"]
+            )
+
+    def test_rank_deficient_action_silent_no_warning(self, twfe_panel_data):
+        """Test that rank_deficient_action='silent' produces no warning."""
+        import warnings
+        from diff_diff.estimators import TwoWayFixedEffects
+
+        # Add a covariate that is perfectly collinear with another
+        twfe_panel_data = twfe_panel_data.copy()
+        twfe_panel_data["size"] = np.random.normal(100, 10, len(twfe_panel_data))
+        twfe_panel_data["size_dup"] = twfe_panel_data["size"].copy()  # Perfect collinearity
+
+        twfe = TwoWayFixedEffects(rank_deficient_action="silent")
+
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            results = twfe.fit(
+                twfe_panel_data,
+                outcome="outcome",
+                treatment="treated",
+                time="post",
+                unit="unit",
+                covariates=["size", "size_dup"]
+            )
+
+            # No warnings about rank deficiency or collinearity should be emitted
+            rank_warnings = [x for x in w if "Rank-deficient" in str(x.message)
+                           or "rank-deficient" in str(x.message).lower()
+                           or "collinear" in str(x.message).lower()]
+            assert len(rank_warnings) == 0, f"Expected no rank warnings, got {rank_warnings}"
+
+        # Should still get valid results
+        assert results is not None
+        assert twfe.is_fitted_
 
 
 class TestClusterRobustSE:
@@ -1568,6 +1748,137 @@ class TestMultiPeriodDiD:
         assert any("period_" in k for k in results.coefficients)
         # Treatment interactions
         assert any("treated:period_" in k for k in results.coefficients)
+
+    def test_rank_deficient_design_warns_and_sets_nan(self, multi_period_data):
+        """Test that rank-deficient design matrix warns and sets NaN for dropped columns."""
+        import warnings
+
+        # Add a covariate that is perfectly collinear with an existing column
+        # Use exact duplicate to ensure perfect collinearity is detected
+        multi_period_data = multi_period_data.copy()
+        multi_period_data["collinear_cov"] = multi_period_data["treated"].copy()
+
+        did = MultiPeriodDiD()
+
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            results = did.fit(
+                multi_period_data,
+                outcome="outcome",
+                treatment="treated",
+                time="period",
+                post_periods=[3, 4, 5],
+                covariates=["collinear_cov"]
+            )
+
+        # Should have warning about rank deficiency
+        rank_warnings = [x for x in w if "Rank-deficient" in str(x.message)
+                        or "collinear" in str(x.message).lower()]
+        assert len(rank_warnings) > 0, "Expected warning about rank deficiency"
+
+        # The collinear covariate should have NaN coefficient
+        assert "collinear_cov" in results.coefficients
+        assert np.isnan(results.coefficients["collinear_cov"]), \
+            "Collinear covariate coefficient should be NaN"
+
+        # Treatment effects should still be identified (not NaN)
+        for period in [3, 4, 5]:
+            pe = results.period_effects[period]
+            assert not np.isnan(pe.effect), f"Period {period} effect should be identified"
+            assert not np.isnan(pe.se), f"Period {period} SE should be valid"
+            assert pe.se > 0, f"Period {period} SE should be positive"
+
+        # Vcov should have NaN for the collinear column
+        assert results.vcov is not None
+        assert np.any(np.isnan(results.vcov)), "Vcov should have NaN for dropped column"
+
+        # avg_att should still be computed because all period effects are identified
+        assert not np.isnan(results.avg_att), "avg_att should be valid when all period effects are identified"
+
+    def test_avg_att_nan_when_period_effect_nan(self, multi_period_data):
+        """Test that avg_att is NaN if any period effect is NaN (R-style NA propagation)."""
+        import warnings
+
+        # Remove all treated observations in period 3 to make that interaction
+        # unidentified (column of zeros)
+        data_no_treated_period3 = multi_period_data[
+            ~((multi_period_data["treated"] == 1) & (multi_period_data["period"] == 3))
+        ].copy()
+
+        did = MultiPeriodDiD()
+
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            results = did.fit(
+                data_no_treated_period3,
+                outcome="outcome",
+                treatment="treated",
+                time="period",
+                post_periods=[3, 4, 5]
+            )
+
+        # Should have warning about rank deficiency (treated:period_3 is all zeros)
+        rank_warnings = [x for x in w if "Rank-deficient" in str(x.message)
+                        or "collinear" in str(x.message).lower()]
+        assert len(rank_warnings) > 0, "Expected warning about rank deficiency"
+
+        # The treated×period_3 interaction should have NaN coefficient (unidentified)
+        pe_3 = results.period_effects[3]
+        assert np.isnan(pe_3.effect), "Period 3 effect should be NaN (unidentified)"
+
+        # avg_att should be NaN because one period effect is NaN (R-style NA propagation)
+        assert np.isnan(results.avg_att), "avg_att should be NaN when any period effect is NaN"
+        assert np.isnan(results.avg_se), "avg_se should be NaN when avg_att is NaN"
+        assert np.isnan(results.avg_t_stat), "avg_t_stat should be NaN when avg_att is NaN"
+        assert np.isnan(results.avg_p_value), "avg_p_value should be NaN when avg_att is NaN"
+
+    def test_rank_deficient_action_error_raises(self, multi_period_data):
+        """Test that rank_deficient_action='error' raises ValueError on collinear data."""
+        # Add a covariate that is perfectly collinear with treatment
+        multi_period_data = multi_period_data.copy()
+        multi_period_data["collinear_cov"] = multi_period_data["treated"].copy()
+
+        did = MultiPeriodDiD(rank_deficient_action="error")
+        with pytest.raises(ValueError, match="rank-deficient"):
+            did.fit(
+                multi_period_data,
+                outcome="outcome",
+                treatment="treated",
+                time="period",
+                post_periods=[3, 4, 5],
+                covariates=["collinear_cov"]
+            )
+
+    def test_rank_deficient_action_silent_no_warning(self, multi_period_data):
+        """Test that rank_deficient_action='silent' produces no warning."""
+        import warnings
+
+        # Add a covariate that is perfectly collinear with treatment
+        multi_period_data = multi_period_data.copy()
+        multi_period_data["collinear_cov"] = multi_period_data["treated"].copy()
+
+        did = MultiPeriodDiD(rank_deficient_action="silent")
+
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            results = did.fit(
+                multi_period_data,
+                outcome="outcome",
+                treatment="treated",
+                time="period",
+                post_periods=[3, 4, 5],
+                covariates=["collinear_cov"]
+            )
+
+            # No warnings about rank deficiency should be emitted
+            rank_warnings = [x for x in w if "Rank-deficient" in str(x.message)
+                           or "rank-deficient" in str(x.message).lower()]
+            assert len(rank_warnings) == 0, f"Expected no rank warnings, got {rank_warnings}"
+
+        # Should still have NaN for dropped coefficient
+        assert "collinear_cov" in results.coefficients
+        assert np.isnan(results.coefficients["collinear_cov"]), \
+            "Collinear covariate coefficient should be NaN"
 
 
 class TestSyntheticDiD:
@@ -2595,14 +2906,15 @@ class TestSingleTreatedUnit:
 class TestCollinearityDetection:
     """Tests for handling perfect or near collinearity."""
 
-    def test_did_with_redundant_covariate_handles_gracefully(self):
-        """Test DiD handles perfectly collinear covariates gracefully.
+    def test_did_with_redundant_covariate_emits_warning(self):
+        """Test DiD emits warning for perfectly collinear covariates.
 
-        Note: scipy's gelsy solver handles rank-deficiency gracefully via
-        QR with column pivoting. Results may be numerically unstable but
-        the computation completes. This is acceptable for performance reasons
-        as the alternative (upfront rank check) adds O(k^3) overhead.
+        Following R's lm() approach, rank-deficient matrices emit a warning
+        and set NaN for coefficients of dropped columns. The ATT should still
+        be identified if the treatment interaction is not in the dropped set.
         """
+        import warnings
+
         np.random.seed(42)
         data = pd.DataFrame({
             "outcome": np.random.normal(10, 1, 100),
@@ -2615,20 +2927,32 @@ class TestCollinearityDetection:
 
         did = DifferenceInDifferences()
 
-        # With scipy's gelsy solver, collinear covariates are handled gracefully
-        # (may produce numerically unstable but finite results)
-        result = did.fit(
-            data,
-            outcome="outcome",
-            treatment="treated",
-            time="post",
-            covariates=["x1", "x2"]
-        )
-        # Result should be finite (even if numerically unstable)
+        # With R-style rank deficiency handling, a warning is emitted
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            result = did.fit(
+                data,
+                outcome="outcome",
+                treatment="treated",
+                time="post",
+                covariates=["x1", "x2"]
+            )
+            # Should emit a warning about rank deficiency
+            rank_warnings = [x for x in w if "Rank-deficient" in str(x.message)]
+            assert len(rank_warnings) > 0, "Expected warning about rank deficiency"
+
+        # ATT should still be finite (the interaction term is identified)
         assert np.isfinite(result.att)
 
-    def test_did_with_constant_covariate_raises_error(self):
-        """Test DiD raises clear error for constant covariates."""
+    def test_did_with_constant_covariate_emits_warning(self):
+        """Test DiD emits warning for constant covariates.
+
+        Constant covariates are collinear with the intercept and are dropped.
+        Following R's lm() approach, a warning is emitted and the coefficient
+        for the constant covariate is set to NaN.
+        """
+        import warnings
+
         np.random.seed(42)
         data = pd.DataFrame({
             "outcome": np.random.normal(10, 1, 100),
@@ -2640,15 +2964,22 @@ class TestCollinearityDetection:
         did = DifferenceInDifferences()
 
         # Constant covariate is collinear with intercept
-        # Should raise clear error
-        with pytest.raises(ValueError, match="rank-deficient"):
-            did.fit(
+        # Should emit warning about rank deficiency
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            result = did.fit(
                 data,
                 outcome="outcome",
                 treatment="treated",
                 time="post",
                 covariates=["constant_x"]
             )
+            # Should emit a warning about rank deficiency
+            rank_warnings = [x for x in w if "Rank-deficient" in str(x.message)]
+            assert len(rank_warnings) > 0, "Expected warning about rank deficiency"
+
+        # ATT should still be finite
+        assert np.isfinite(result.att)
 
     def test_did_with_near_collinear_covariates(self):
         """Test DiD handles near-collinear covariates (not perfectly collinear)."""

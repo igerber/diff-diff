@@ -330,6 +330,7 @@ def _logistic_regression(
 def _linear_regression(
     X: np.ndarray,
     y: np.ndarray,
+    rank_deficient_action: str = "warn",
 ) -> Tuple[np.ndarray, np.ndarray, float]:
     """
     Fit OLS regression.
@@ -340,6 +341,11 @@ def _linear_regression(
         Feature matrix (n_samples, n_features). Intercept added automatically.
     y : np.ndarray
         Outcome variable.
+    rank_deficient_action : str, default "warn"
+        Action when design matrix is rank-deficient:
+        - "warn": Issue warning and drop linearly dependent columns (default)
+        - "error": Raise ValueError
+        - "silent": Drop columns silently without warning
 
     Returns
     -------
@@ -355,7 +361,8 @@ def _linear_regression(
 
     # Use unified OLS backend
     beta, residuals, fitted, _ = solve_ols(
-        X_with_intercept, y, return_fitted=True, return_vcov=False
+        X_with_intercept, y, return_fitted=True, return_vcov=False,
+        rank_deficient_action=rank_deficient_action,
     )
 
     # Compute R-squared
@@ -400,6 +407,11 @@ class TripleDifference:
     pscore_trim : float, default=0.01
         Trimming threshold for propensity scores. Scores below this value
         or above (1 - pscore_trim) are clipped to avoid extreme weights.
+    rank_deficient_action : str, default="warn"
+        Action when design matrix is rank-deficient (linearly dependent columns):
+        - "warn": Issue warning and drop linearly dependent columns (default)
+        - "error": Raise ValueError
+        - "silent": Drop columns silently without warning
 
     Attributes
     ----------
@@ -478,17 +490,24 @@ class TripleDifference:
         cluster: Optional[str] = None,
         alpha: float = 0.05,
         pscore_trim: float = 0.01,
+        rank_deficient_action: str = "warn",
     ):
         if estimation_method not in ("dr", "reg", "ipw"):
             raise ValueError(
                 f"estimation_method must be 'dr', 'reg', or 'ipw', "
                 f"got '{estimation_method}'"
             )
+        if rank_deficient_action not in ["warn", "error", "silent"]:
+            raise ValueError(
+                f"rank_deficient_action must be 'warn', 'error', or 'silent', "
+                f"got '{rank_deficient_action}'"
+            )
         self.estimation_method = estimation_method
         self.robust = robust
         self.cluster = cluster
         self.alpha = alpha
         self.pscore_trim = pscore_trim
+        self.rank_deficient_action = rank_deficient_action
 
         self.is_fitted_ = False
         self.results_: Optional[TripleDifferenceResults] = None
@@ -744,6 +763,7 @@ class TripleDifference:
             include_intercept=False,  # Intercept already in design_matrix
             robust=self.robust,
             alpha=self.alpha,
+            rank_deficient_action=self.rank_deficient_action,
         ).fit(design_matrix, y)
 
         # ATT is the coefficient on G*P*T (index 7)
@@ -937,7 +957,10 @@ class TripleDifference:
                     if np.sum(mask) > 1:
                         X_cell = np.column_stack([X[mask], T[mask]])
                         try:
-                            _, fitted, _ = _linear_regression(X_cell, y[mask])
+                            _, fitted, _ = _linear_regression(
+                                X_cell, y[mask],
+                                rank_deficient_action=self.rank_deficient_action,
+                            )
                             mu_fitted[mask] = fitted
                         except Exception:
                             mu_fitted[mask] = np.mean(y[mask])
@@ -1166,6 +1189,7 @@ class TripleDifference:
             "cluster": self.cluster,
             "alpha": self.alpha,
             "pscore_trim": self.pscore_trim,
+            "rank_deficient_action": self.rank_deficient_action,
         }
 
     def set_params(self, **params) -> "TripleDifference":
@@ -1223,6 +1247,7 @@ def triple_difference(
     robust: bool = True,
     cluster: Optional[str] = None,
     alpha: float = 0.05,
+    rank_deficient_action: str = "warn",
 ) -> TripleDifferenceResults:
     """
     Estimate Triple Difference (DDD) treatment effect.
@@ -1256,6 +1281,11 @@ def triple_difference(
         Column name for cluster-robust standard errors.
     alpha : float, default=0.05
         Significance level for confidence intervals.
+    rank_deficient_action : str, default="warn"
+        Action when design matrix is rank-deficient:
+        - "warn": Issue warning and drop linearly dependent columns (default)
+        - "error": Raise ValueError
+        - "silent": Drop columns silently without warning
 
     Returns
     -------
@@ -1280,6 +1310,7 @@ def triple_difference(
         robust=robust,
         cluster=cluster,
         alpha=alpha,
+        rank_deficient_action=rank_deficient_action,
     )
     return estimator.fit(
         data=data,
