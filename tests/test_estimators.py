@@ -1624,6 +1624,49 @@ class TestMultiPeriodDiD:
         # Treatment interactions
         assert any("treated:period_" in k for k in results.coefficients)
 
+    def test_rank_deficient_design_warns_and_sets_nan(self, multi_period_data):
+        """Test that rank-deficient design matrix warns and sets NaN for dropped columns."""
+        import warnings
+
+        # Add a covariate that is perfectly collinear with an existing column
+        # Use exact duplicate to ensure perfect collinearity is detected
+        multi_period_data = multi_period_data.copy()
+        multi_period_data["collinear_cov"] = multi_period_data["treated"].copy()
+
+        did = MultiPeriodDiD()
+
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            results = did.fit(
+                multi_period_data,
+                outcome="outcome",
+                treatment="treated",
+                time="period",
+                post_periods=[3, 4, 5],
+                covariates=["collinear_cov"]
+            )
+
+        # Should have warning about rank deficiency
+        rank_warnings = [x for x in w if "Rank-deficient" in str(x.message)
+                        or "collinear" in str(x.message).lower()]
+        assert len(rank_warnings) > 0, "Expected warning about rank deficiency"
+
+        # The collinear covariate should have NaN coefficient
+        assert "collinear_cov" in results.coefficients
+        assert np.isnan(results.coefficients["collinear_cov"]), \
+            "Collinear covariate coefficient should be NaN"
+
+        # Treatment effects should still be identified (not NaN)
+        for period in [3, 4, 5]:
+            pe = results.period_effects[period]
+            assert not np.isnan(pe.effect), f"Period {period} effect should be identified"
+            assert not np.isnan(pe.se), f"Period {period} SE should be valid"
+            assert pe.se > 0, f"Period {period} SE should be positive"
+
+        # Vcov should have NaN for the collinear column
+        assert results.vcov is not None
+        assert np.any(np.isnan(results.vcov)), "Vcov should have NaN for dropped column"
+
 
 class TestSyntheticDiD:
     """Tests for SyntheticDiD estimator."""

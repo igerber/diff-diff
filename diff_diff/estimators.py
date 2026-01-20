@@ -873,29 +873,42 @@ class MultiPeriodDiD(DifferenceInDifferences):
                     var_names.append(col)
 
         # Fit OLS using unified backend
-        coefficients, residuals, fitted, _ = solve_ols(
-            X, y, return_fitted=True, return_vcov=False
+        # Pass cluster_ids to solve_ols for proper vcov computation
+        # This handles rank-deficient matrices by returning NaN for dropped columns
+        cluster_ids = data[self.cluster].values if self.cluster is not None else None
+
+        # Note: Wild bootstrap for multi-period effects is complex (multiple coefficients)
+        # For now, we use analytical inference even if inference="wild_bootstrap"
+        coefficients, residuals, fitted, vcov = solve_ols(
+            X, y,
+            return_fitted=True,
+            return_vcov=True,
+            cluster_ids=cluster_ids,
+            column_names=var_names,
         )
         r_squared = compute_r_squared(y, residuals)
 
-        # Degrees of freedom
-        df = len(y) - X.shape[1] - n_absorbed_effects
+        # Degrees of freedom using effective rank (non-NaN coefficients)
+        k_effective = int(np.sum(~np.isnan(coefficients)))
+        df = len(y) - k_effective - n_absorbed_effects
 
-        # Compute standard errors
-        # Note: Wild bootstrap for multi-period effects is complex (multiple coefficients)
-        # For now, we use analytical inference even if inference="wild_bootstrap"
-        if self.cluster is not None:
-            cluster_ids = data[self.cluster].values
-            vcov = compute_robust_vcov(X, residuals, cluster_ids)
-        elif self.robust:
-            vcov = compute_robust_vcov(X, residuals)
-        else:
+        # For non-robust, non-clustered case, we need homoskedastic vcov
+        # solve_ols returns HC1 by default, so compute homoskedastic if needed
+        if not self.robust and self.cluster is None:
             n = len(y)
-            k = X.shape[1]
-            mse = np.sum(residuals**2) / (n - k)
+            mse = np.sum(residuals**2) / (n - k_effective)
             # Use solve() instead of inv() for numerical stability
-            # solve(A, B) computes X where AX=B, so this yields (X'X)^{-1} * mse
-            vcov = np.linalg.solve(X.T @ X, mse * np.eye(k))
+            # Only compute for identified columns (non-NaN coefficients)
+            identified_mask = ~np.isnan(coefficients)
+            if np.all(identified_mask):
+                vcov = np.linalg.solve(X.T @ X, mse * np.eye(X.shape[1]))
+            else:
+                # For rank-deficient case, compute vcov on reduced matrix then expand
+                X_reduced = X[:, identified_mask]
+                vcov_reduced = np.linalg.solve(X_reduced.T @ X_reduced, mse * np.eye(X_reduced.shape[1]))
+                # Expand to full size with NaN for dropped columns
+                vcov = np.full((X.shape[1], X.shape[1]), np.nan)
+                vcov[np.ix_(identified_mask, identified_mask)] = vcov_reduced
 
         # Extract period-specific treatment effects
         period_effects = {}
