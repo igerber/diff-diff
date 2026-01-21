@@ -38,6 +38,7 @@ use std::collections::HashMap;
 /// or NaN-filled matrix if rank-deficient
 #[pyfunction]
 #[pyo3(signature = (x, y, cluster_ids=None, return_vcov=true))]
+#[allow(clippy::type_complexity)]
 pub fn solve_ols<'py>(
     py: Python<'py>,
     x: PyReadonlyArray2<'py, f64>,
@@ -52,7 +53,7 @@ pub fn solve_ols<'py>(
     let x_arr = x.as_array();
     let y_arr = y.as_array();
 
-    let n = x_arr.nrows();
+    let _n = x_arr.nrows();
     let k = x_arr.ncols();
 
     // Solve using SVD with truncation for rank-deficient matrices

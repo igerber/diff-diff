@@ -372,16 +372,20 @@ class CallawaySantAnnaBootstrapMixin:
 
             # Vectorized perturbation: matrix-vector multiply
             # Shape: (n_bootstrap,)
-            perturbations = (
-                treated_weights @ treated_inf +
-                control_weights @ control_inf
-            )
+            # Suppress RuntimeWarnings for edge cases (small samples, extreme weights)
+            with np.errstate(divide='ignore', invalid='ignore', over='ignore'):
+                perturbations = (
+                    treated_weights @ treated_inf +
+                    control_weights @ control_inf
+                )
 
             bootstrap_atts_gt[:, j] = original_atts[j] + perturbations
 
         # Vectorized overall ATT: matrix-vector multiply
         # Shape: (n_bootstrap,)
-        bootstrap_overall = bootstrap_atts_gt @ overall_weights
+        # Suppress RuntimeWarnings for edge cases
+        with np.errstate(divide='ignore', invalid='ignore', over='ignore'):
+            bootstrap_overall = bootstrap_atts_gt @ overall_weights
 
         # Vectorized event study aggregation
         rel_periods: List[int] = []
@@ -394,7 +398,9 @@ class CallawaySantAnnaBootstrapMixin:
                 gt_indices = agg_info['gt_indices']
                 weights = agg_info['weights']
                 # Vectorized: select columns and multiply by weights
-                bootstrap_event_study[e] = bootstrap_atts_gt[:, gt_indices] @ weights
+                # Suppress RuntimeWarnings for edge cases
+                with np.errstate(divide='ignore', invalid='ignore', over='ignore'):
+                    bootstrap_event_study[e] = bootstrap_atts_gt[:, gt_indices] @ weights
 
         # Vectorized group aggregation
         group_list: List[Any] = []
@@ -406,7 +412,9 @@ class CallawaySantAnnaBootstrapMixin:
                 agg_info = group_agg_info[g]
                 gt_indices = agg_info['gt_indices']
                 weights = agg_info['weights']
-                bootstrap_group[g] = bootstrap_atts_gt[:, gt_indices] @ weights
+                # Suppress RuntimeWarnings for edge cases
+                with np.errstate(divide='ignore', invalid='ignore', over='ignore'):
+                    bootstrap_group[g] = bootstrap_atts_gt[:, gt_indices] @ weights
 
         # Compute bootstrap statistics for ATT(g,t)
         gt_ses = {}

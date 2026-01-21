@@ -201,7 +201,7 @@ class CallawaySantAnna(
         - "webb": Six-point distribution (recommended when n_clusters < 20)
     bootstrap_weight_type : str, optional
         .. deprecated:: 1.0.1
-            Use ``bootstrap_weights`` instead. Will be removed in v2.0.
+            Use ``bootstrap_weights`` instead. Will be removed in v3.0.
     seed : int, optional
         Random seed for reproducibility.
     rank_deficient_action : str, default="warn"
@@ -309,7 +309,7 @@ class CallawaySantAnna(
         # Handle bootstrap_weight_type deprecation
         if bootstrap_weight_type is not None:
             warnings.warn(
-                "bootstrap_weight_type is deprecated and will be removed in v2.0. "
+                "bootstrap_weight_type is deprecated and will be removed in v3.0. "
                 "Use bootstrap_weights instead.",
                 DeprecationWarning,
                 stacklevel=2

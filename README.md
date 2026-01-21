@@ -710,7 +710,7 @@ CallawaySantAnna(
     alpha=0.05,                      # Significance level
     cluster=None,                    # Column for cluster SEs
     n_bootstrap=0,                   # Bootstrap iterations (0 = analytical SEs)
-    bootstrap_weight_type='rademacher',  # 'rademacher', 'mammen', or 'webb'
+    bootstrap_weights='rademacher',  # 'rademacher', 'mammen', or 'webb'
     seed=None                        # Random seed
 )
 ```
@@ -723,7 +723,7 @@ With few clusters or when analytical standard errors may be unreliable, use the 
 # Bootstrap inference with 999 iterations
 cs = CallawaySantAnna(
     n_bootstrap=999,
-    bootstrap_weight_type='rademacher',  # or 'mammen', 'webb'
+    bootstrap_weights='rademacher',  # or 'mammen', 'webb'
     seed=42
 )
 results = cs.fit(

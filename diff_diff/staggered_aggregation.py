@@ -281,7 +281,9 @@ class CallawaySantAnnaAggregationMixin:
 
         # Single matrix-vector multiply for all contributions
         # wif_contrib[i] = sum_k(wif[i,k] * att[k])
-        wif_contrib = wif_matrix @ effects
+        # Suppress RuntimeWarnings for edge cases (small samples, extreme weights)
+        with np.errstate(divide='ignore', invalid='ignore', over='ignore'):
+            wif_contrib = wif_matrix @ effects
 
         # Scale by 1/n_units to match R's getSE formula: sqrt(mean(IF^2)/n)
         psi_wif = wif_contrib / n_units

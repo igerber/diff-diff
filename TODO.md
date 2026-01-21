@@ -40,8 +40,8 @@ Target: < 1000 lines per module for maintainability.
 
 | File | Lines | Action |
 |------|-------|--------|
-| `staggered.py` | 2301 | Consider splitting to `staggered_bootstrap.py` |
-| `prep.py` | 1993 | Grew with DGP functions; consider splitting |
+| ~~`staggered.py`~~ | ~~2301~~ 1066 | ✅ Split into staggered.py, staggered_bootstrap.py, staggered_aggregation.py, staggered_results.py |
+| ~~`prep.py`~~ | ~~1993~~ 1241 | ✅ Split: DGP functions moved to `prep_dgp.py` (777 lines) |
 | `trop.py` | 1703 | Monitor size |
 | `visualization.py` | 1627 | Acceptable but growing |
 | `honest_did.py` | 1493 | Acceptable |
@@ -84,15 +84,13 @@ Pyright reports 282 type errors. Most are false positives from numpy/pandas type
 
 **Note:** Most errors are false positives from imprecise type stubs. Mypy config in pyproject.toml already handles these via `disable_error_code`.
 
-### Rust Code Quality
+### ~~Rust Code Quality~~ (RESOLVED)
 
-Clippy reports 6 warnings (no errors):
+**Status**: Resolved in v2.1.5. All Clippy warnings addressed:
 
-- [ ] `rust/src/linalg.rs:32` - Define type alias for complex return type
-- [ ] `rust/src/trop.rs` - Refactor 3 functions with >7 arguments to use param structs
-  - `loocv_score_for_params` (12 args)
-  - `compute_weight_matrix` (9 args)
-  - `estimate_model` (9 args)
+- [x] `rust/src/linalg.rs` - Added `#[allow(clippy::type_complexity)]` for complex return type, prefixed unused `n` with `_`
+- [x] `rust/src/trop.rs` - Added `#[allow(clippy::too_many_arguments)]` to internal functions
+- [x] `rust/src/weights.rs` - Replaced needless range loop with iterator
 
 ---
 
@@ -100,10 +98,10 @@ Clippy reports 6 warnings (no errors):
 
 Deprecated parameters still present for backward compatibility:
 
-- [ ] `bootstrap_weight_type` in `CallawaySantAnna` (`staggered.py:746,763-771`)
+- [x] `bootstrap_weight_type` in `CallawaySantAnna` (`staggered.py`)
   - Deprecated in favor of `bootstrap_weights` parameter
-  - Warning text says "removed in v2.0" - update to "v3.0" when ready
-  - Also used in: README.md (2x), tutorial 02, test_staggered.py
+  - ✅ Deprecation warning updated to say "removed in v3.0"
+  - ✅ README.md and tutorial 02 updated to use `bootstrap_weights`
   - Remove in next major version (v3.0)
 
 ---
@@ -129,10 +127,8 @@ Enhancements for `honest_did.py`:
 ## CallawaySantAnna Bootstrap Improvements
 
 - [ ] Consider aligning p-value computation with R `did` package (symmetric percentile method)
-- [ ] Investigate RuntimeWarnings in influence function aggregation (`staggered.py:1722`, `staggered.py:1999-2018`)
-  - Warnings: "divide by zero", "overflow", "invalid value" in matmul operations
-  - Occurs during bootstrap SE computation with small sample sizes or edge cases
-  - Does not affect correctness (results are still valid), but should be suppressed or handled gracefully
+- [x] ~~Investigate RuntimeWarnings in influence function aggregation~~
+  - ✅ Added `np.errstate` context manager in `staggered_aggregation.py` to suppress warnings during weight influence function computation
 
 ---
 
