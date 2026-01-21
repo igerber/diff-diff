@@ -379,6 +379,9 @@ class CallawaySantAnnaBootstrapMixin:
                     control_weights @ control_inf
                 )
 
+            perturbations = self._check_and_fix_nonfinite(
+                perturbations, f"bootstrap perturbations for ATT(g,t) {gt_pairs[j]}"
+            )
             bootstrap_atts_gt[:, j] = original_atts[j] + perturbations
 
         # Vectorized overall ATT: matrix-vector multiply
@@ -386,6 +389,10 @@ class CallawaySantAnnaBootstrapMixin:
         # Suppress RuntimeWarnings for edge cases
         with np.errstate(divide='ignore', invalid='ignore', over='ignore'):
             bootstrap_overall = bootstrap_atts_gt @ overall_weights
+
+        bootstrap_overall = self._check_and_fix_nonfinite(
+            bootstrap_overall, "bootstrap overall ATT aggregation"
+        )
 
         # Vectorized event study aggregation
         rel_periods: List[int] = []
@@ -402,6 +409,10 @@ class CallawaySantAnnaBootstrapMixin:
                 with np.errstate(divide='ignore', invalid='ignore', over='ignore'):
                     bootstrap_event_study[e] = bootstrap_atts_gt[:, gt_indices] @ weights
 
+                bootstrap_event_study[e] = self._check_and_fix_nonfinite(
+                    bootstrap_event_study[e], f"bootstrap event study aggregation (e={e})"
+                )
+
         # Vectorized group aggregation
         group_list: List[Any] = []
         bootstrap_group: Optional[Dict[Any, np.ndarray]] = None
@@ -415,6 +426,10 @@ class CallawaySantAnnaBootstrapMixin:
                 # Suppress RuntimeWarnings for edge cases
                 with np.errstate(divide='ignore', invalid='ignore', over='ignore'):
                     bootstrap_group[g] = bootstrap_atts_gt[:, gt_indices] @ weights
+
+                bootstrap_group[g] = self._check_and_fix_nonfinite(
+                    bootstrap_group[g], f"bootstrap group aggregation (g={g})"
+                )
 
         # Compute bootstrap statistics for ATT(g,t)
         gt_ses = {}
@@ -649,3 +664,31 @@ class CallawaySantAnnaBootstrapMixin:
         ci = self._compute_percentile_ci(boot_dist, self.alpha)
         p_value = self._compute_bootstrap_pvalue(original_effect, boot_dist)
         return se, ci, p_value
+
+    def _check_and_fix_nonfinite(self, arr: np.ndarray, context: str) -> np.ndarray:
+        """Check for non-finite values and warn if found.
+
+        Parameters
+        ----------
+        arr : np.ndarray
+            Array to check.
+        context : str
+            Description of where this check is happening (for warning message).
+
+        Returns
+        -------
+        np.ndarray
+            Array with non-finite values replaced by 0.0.
+        """
+        if not np.all(np.isfinite(arr)):
+            import warnings
+            n_nonfinite = np.sum(~np.isfinite(arr))
+            warnings.warn(
+                f"Non-finite values ({n_nonfinite}/{arr.size}) in {context}. "
+                "This may occur with very small samples or extreme weights. "
+                "Bootstrap estimates may be unreliable.",
+                RuntimeWarning,
+                stacklevel=3
+            )
+            return np.where(np.isfinite(arr), arr, 0.0)
+        return arr

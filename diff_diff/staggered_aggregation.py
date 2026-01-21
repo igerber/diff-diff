@@ -285,6 +285,19 @@ class CallawaySantAnnaAggregationMixin:
         with np.errstate(divide='ignore', invalid='ignore', over='ignore'):
             wif_contrib = wif_matrix @ effects
 
+        # Check for non-finite values from edge cases
+        if not np.all(np.isfinite(wif_contrib)):
+            import warnings
+            n_nonfinite = np.sum(~np.isfinite(wif_contrib))
+            warnings.warn(
+                f"Non-finite values ({n_nonfinite}/{len(wif_contrib)}) in weight influence "
+                "function computation. This may occur with very small samples or extreme "
+                "weights. SE estimates may be unreliable.",
+                RuntimeWarning,
+                stacklevel=2
+            )
+            wif_contrib = np.where(np.isfinite(wif_contrib), wif_contrib, 0.0)
+
         # Scale by 1/n_units to match R's getSE formula: sqrt(mean(IF^2)/n)
         psi_wif = wif_contrib / n_units
 

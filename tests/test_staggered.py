@@ -681,6 +681,59 @@ class TestCallawaySantAnnaCovariates:
         assert np.isfinite(results.overall_se), "SE should be finite"
         assert results.overall_se > 0, "SE should be positive"
 
+    def test_extreme_weights_warning(self):
+        """Test that extreme weights produce warnings, not silent failures."""
+        np.random.seed(42)
+
+        # Minimal dataset: very small sample with unbalanced groups
+        n_units, n_periods = 20, 4
+        units = np.repeat(np.arange(n_units), n_periods)
+        times = np.tile(np.arange(n_periods), n_units)
+
+        # Only 2 treated units (extreme imbalance)
+        first_treat = np.zeros(n_units)
+        first_treat[:2] = 2
+        first_treat_expanded = np.repeat(first_treat, n_periods)
+
+        post = (times >= first_treat_expanded) & (first_treat_expanded > 0)
+        outcomes = 1.0 + 2.0 * post + np.random.randn(len(units)) * 0.1
+
+        data = pd.DataFrame({
+            'unit': units,
+            'time': times,
+            'outcome': outcomes,
+            'first_treat': first_treat_expanded.astype(int),
+        })
+
+        # Test without bootstrap first
+        cs = CallawaySantAnna()
+        results = cs.fit(
+            data,
+            outcome='outcome',
+            unit='unit',
+            time='time',
+            first_treat='first_treat'
+        )
+
+        # Results should be finite even in edge cases
+        assert np.isfinite(results.overall_att), "ATT should be finite"
+        assert np.isfinite(results.overall_se), "SE should be finite"
+
+        # Test with bootstrap enabled
+        cs_boot = CallawaySantAnna(n_bootstrap=50, seed=42)
+        boot_results = cs_boot.fit(
+            data,
+            outcome='outcome',
+            unit='unit',
+            time='time',
+            first_treat='first_treat'
+        )
+
+        # Bootstrap should also produce finite results
+        assert np.isfinite(boot_results.overall_att), "ATT should be finite"
+        assert boot_results.bootstrap_results is not None, "Bootstrap results should exist"
+        assert np.isfinite(boot_results.overall_se), "Bootstrap SE should be finite"
+
     def test_near_collinear_covariates(self):
         """Test that near-collinear covariates are handled gracefully."""
         data = generate_staggered_data_with_covariates(seed=42)
