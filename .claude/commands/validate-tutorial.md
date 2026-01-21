@@ -55,12 +55,12 @@ The user may provide an optional argument: `$ARGUMENTS`
    - Success: "01_basic_did.ipynb - PASSED"
    - Failure: Show the error message and which cell failed
 
-4. **Clear outputs** after validation completes (regardless of pass/fail):
+4. **Clear outputs and metadata** after validation completes (regardless of pass/fail):
    ```bash
-   jupyter nbconvert --ClearOutputPreprocessor.enabled=True --inplace "docs/tutorials/NOTEBOOK.ipynb"
+   jupyter nbconvert --ClearOutputPreprocessor.enabled=True --ClearMetadataPreprocessor.enabled=True --inplace "docs/tutorials/NOTEBOOK.ipynb"
    ```
 
-   This ensures notebook outputs are not committed to git.
+   This ensures notebook outputs and execution metadata (timestamps, execution counts) are not committed to git.
 
 5. **Summary**: After all notebooks complete, show a summary like:
    ```
@@ -72,7 +72,7 @@ The user may provide an optional argument: `$ARGUMENTS`
 
 ## Notes
 
-- Notebooks are executed to validate they work, then outputs are cleared
+- Notebooks are executed to validate they work, then outputs and metadata are cleared
 - If a notebook fails, continue to the next one (don't stop early)
 - The working directory should be the project root
 - Some notebooks may take a while to run (especially those with bootstrap)
