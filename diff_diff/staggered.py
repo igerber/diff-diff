@@ -713,8 +713,13 @@ class CallawaySantAnna(
         overall_att, overall_se = self._aggregate_simple(
             group_time_effects, influence_func_info, df, unit, precomputed
         )
-        overall_t = overall_att / overall_se if overall_se > 0 else 0.0
-        overall_p = compute_p_value(overall_t)
+        # Use NaN for t-stat and p-value when SE is undefined (NaN or non-positive)
+        if np.isfinite(overall_se) and overall_se > 0:
+            overall_t = overall_att / overall_se
+            overall_p = compute_p_value(overall_t)
+        else:
+            overall_t = np.nan
+            overall_p = np.nan
         overall_ci = compute_confidence_interval(overall_att, overall_se, self.alpha)
 
         # Compute additional aggregations if requested
@@ -746,7 +751,11 @@ class CallawaySantAnna(
 
             # Update estimates with bootstrap inference
             overall_se = bootstrap_results.overall_att_se
-            overall_t = overall_att / overall_se if overall_se > 0 else 0.0
+            # Use NaN for t-stat when SE is undefined; p-value comes from bootstrap
+            if np.isfinite(overall_se) and overall_se > 0:
+                overall_t = overall_att / overall_se
+            else:
+                overall_t = np.nan
             overall_p = bootstrap_results.overall_att_p_value
             overall_ci = bootstrap_results.overall_att_ci
 

@@ -209,6 +209,13 @@ Aggregations:
   - Bootstrap: Drops non-finite samples, warns, and adjusts p-value floor accordingly
   - Threshold: Returns NaN if <50% of bootstrap samples are valid
   - **Note**: This is a defensive enhancement over reference implementations (R's `did::att_gt`, Stata's `csdid`) which may error or produce unhandled inf/nan in edge cases without informative warnings
+- No post-treatment effects (all treatment occurs after data ends):
+  - Overall ATT set to NaN (no post-treatment periods to aggregate)
+  - All inference fields (SE, t-stat, p-value, CI) also set to NaN
+  - Bootstrap returns early with NaN for overall statistics
+  - Warning emitted: "No post-treatment effects for aggregation"
+  - Individual pre-treatment ATT(g,t) may still be computed (for parallel trends assessment)
+  - **Principle**: NaN propagates consistently through all inference fields; avoids misleading defaults (e.g., t=0, p=1)
 - Base period selection (`base_period` parameter):
   - "varying" (default): Pre-treatment uses t-1 as base (consecutive comparisons)
   - "universal": All comparisons use g-anticipation-1 as base

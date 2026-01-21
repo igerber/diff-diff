@@ -2291,3 +2291,68 @@ class TestCallawaySantAnnaPreTreatment:
             f"Expected NaN for overall_att when no post-treatment effects exist, "
             f"got {results.overall_att}"
         )
+        # All inference fields should also be NaN
+        assert np.isnan(results.overall_se), (
+            f"Expected NaN for overall_se, got {results.overall_se}"
+        )
+        assert np.isnan(results.overall_t_stat), (
+            f"Expected NaN for overall_t_stat, got {results.overall_t_stat}"
+        )
+        assert np.isnan(results.overall_p_value), (
+            f"Expected NaN for overall_p_value, got {results.overall_p_value}"
+        )
+
+    def test_no_post_treatment_effects_bootstrap_returns_nan(self):
+        """Bootstrap returns NaN inference when no post-treatment effects exist."""
+        import warnings
+
+        # Create data where treatment happens after the data ends
+        n_units = 50
+        n_periods = 5
+        np.random.seed(42)
+
+        data = []
+        for unit in range(n_units):
+            for t in range(1, n_periods + 1):
+                first_treat = n_periods + 1 if unit < n_units // 2 else 0
+                outcome = np.random.randn()
+                data.append({
+                    'unit': unit,
+                    'time': t,
+                    'outcome': outcome,
+                    'first_treat': first_treat
+                })
+
+        df = pd.DataFrame(data)
+
+        cs = CallawaySantAnna(base_period="varying", n_bootstrap=99, seed=42)
+
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            results = cs.fit(
+                df,
+                outcome='outcome',
+                unit='unit',
+                time='time',
+                first_treat='first_treat'
+            )
+
+            # Should have warning about no post-treatment effects
+            warning_messages = [str(warning.message) for warning in w]
+            has_warning = any(
+                "No post-treatment effects" in msg for msg in warning_messages
+            )
+            assert has_warning, f"Expected warning, got: {warning_messages}"
+
+        # All overall inference fields should be NaN
+        assert np.isnan(results.overall_att), "overall_att should be NaN"
+        assert np.isnan(results.overall_se), "overall_se should be NaN"
+        assert np.isnan(results.overall_t_stat), "overall_t_stat should be NaN"
+        assert np.isnan(results.overall_p_value), "overall_p_value should be NaN"
+        assert np.isnan(results.overall_conf_int[0]), "CI lower should be NaN"
+        assert np.isnan(results.overall_conf_int[1]), "CI upper should be NaN"
+
+        # Bootstrap results should also have NaN
+        assert results.bootstrap_results is not None
+        assert np.isnan(results.bootstrap_results.overall_att_se)
+        assert np.isnan(results.bootstrap_results.overall_att_p_value)
