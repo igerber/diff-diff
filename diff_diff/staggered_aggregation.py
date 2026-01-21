@@ -273,16 +273,17 @@ class CallawaySantAnnaAggregationMixin:
         indicator_sum = np.sum(indicator_matrix - pg_keepers, axis=1)
 
         # Vectorized wif matrix computation
-        # if1_matrix[i,k] = (indicator[i,k] - pg[k]) / sum_pg
-        if1_matrix = (indicator_matrix - pg_keepers) / sum_pg_keepers
-        # if2_matrix[i,k] = indicator_sum[i] * pg[k] / sum_pg^2
-        if2_matrix = np.outer(indicator_sum, pg_keepers) / (sum_pg_keepers ** 2)
-        wif_matrix = if1_matrix - if2_matrix
-
-        # Single matrix-vector multiply for all contributions
-        # wif_contrib[i] = sum_k(wif[i,k] * att[k])
         # Suppress RuntimeWarnings for edge cases (small samples, extreme weights)
+        # in division operations and matrix multiplication
         with np.errstate(divide='ignore', invalid='ignore', over='ignore'):
+            # if1_matrix[i,k] = (indicator[i,k] - pg[k]) / sum_pg
+            if1_matrix = (indicator_matrix - pg_keepers) / sum_pg_keepers
+            # if2_matrix[i,k] = indicator_sum[i] * pg[k] / sum_pg^2
+            if2_matrix = np.outer(indicator_sum, pg_keepers) / (sum_pg_keepers ** 2)
+            wif_matrix = if1_matrix - if2_matrix
+
+            # Single matrix-vector multiply for all contributions
+            # wif_contrib[i] = sum_k(wif[i,k] * att[k])
             wif_contrib = wif_matrix @ effects
 
         # Check for non-finite values from edge cases

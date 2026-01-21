@@ -605,6 +605,7 @@ class CallawaySantAnnaBootstrapMixin:
         self,
         original_effect: float,
         boot_dist: np.ndarray,
+        n_valid: Optional[int] = None,
     ) -> float:
         """
         Compute two-sided bootstrap p-value.
@@ -612,6 +613,22 @@ class CallawaySantAnnaBootstrapMixin:
         Uses the percentile method: p-value is the proportion of bootstrap
         estimates on the opposite side of zero from the original estimate,
         doubled for two-sided test.
+
+        Parameters
+        ----------
+        original_effect : float
+            Original point estimate.
+        boot_dist : np.ndarray
+            Bootstrap distribution of the effect.
+        n_valid : int, optional
+            Number of valid bootstrap samples. If None, uses self.n_bootstrap.
+            Use this when boot_dist has already been filtered for non-finite values
+            to ensure the p-value floor is based on the actual valid sample count.
+
+        Returns
+        -------
+        float
+            Two-sided bootstrap p-value.
         """
         if original_effect >= 0:
             # Proportion of bootstrap estimates <= 0
@@ -623,8 +640,9 @@ class CallawaySantAnnaBootstrapMixin:
         # Two-sided p-value
         p_value = min(2 * p_one_sided, 1.0)
 
-        # Ensure minimum p-value
-        p_value = max(p_value, 1 / (self.n_bootstrap + 1))
+        # Ensure minimum p-value using n_valid if provided, otherwise n_bootstrap
+        n_for_floor = n_valid if n_valid is not None else self.n_bootstrap
+        p_value = max(p_value, 1 / (n_for_floor + 1))
 
         return float(p_value)
 
@@ -693,12 +711,7 @@ class CallawaySantAnnaBootstrapMixin:
         se = float(np.std(valid_dist, ddof=1))
         ci = self._compute_percentile_ci(valid_dist, self.alpha)
 
-        # Compute p-value inline with correct floor based on valid sample count
-        if original_effect >= 0:
-            p_one_sided = np.mean(valid_dist <= 0)
-        else:
-            p_one_sided = np.mean(valid_dist >= 0)
-        p_value = min(2 * p_one_sided, 1.0)
-        p_value = max(p_value, 1 / (n_valid_bootstrap + 1))  # Floor uses valid count
+        # Compute p-value using shared method with correct floor based on valid sample count
+        p_value = self._compute_bootstrap_pvalue(original_effect, valid_dist, n_valid=n_valid_bootstrap)
 
-        return se, ci, float(p_value)
+        return se, ci, p_value
