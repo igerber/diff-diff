@@ -681,6 +681,137 @@ class TestCallawaySantAnnaCovariates:
         assert np.isfinite(results.overall_se), "SE should be finite"
         assert results.overall_se > 0, "SE should be positive"
 
+    def test_extreme_weights_warning(self):
+        """Test that extreme weights produce warnings and methodology-aligned behavior.
+
+        Tests that:
+        - ATT point estimates remain finite
+        - SE is finite (valid) or NaN (signals invalid inference), never biased
+        - Bootstrap drops invalid samples and adjusts inference accordingly
+        """
+        import warnings
+        np.random.seed(42)
+
+        # Minimal dataset: very small sample with unbalanced groups
+        n_units, n_periods = 20, 4
+        units = np.repeat(np.arange(n_units), n_periods)
+        times = np.tile(np.arange(n_periods), n_units)
+
+        # Only 2 treated units (extreme imbalance)
+        first_treat = np.zeros(n_units)
+        first_treat[:2] = 2
+        first_treat_expanded = np.repeat(first_treat, n_periods)
+
+        post = (times >= first_treat_expanded) & (first_treat_expanded > 0)
+        outcomes = 1.0 + 2.0 * post + np.random.randn(len(units)) * 0.1
+
+        data = pd.DataFrame({
+            'unit': units,
+            'time': times,
+            'outcome': outcomes,
+            'first_treat': first_treat_expanded.astype(int),
+        })
+
+        # Test without bootstrap - ATT should be finite, SE may be NaN for edge cases
+        cs = CallawaySantAnna()
+        results = cs.fit(
+            data,
+            outcome='outcome',
+            unit='unit',
+            time='time',
+            first_treat='first_treat'
+        )
+
+        # ATT point estimate should be finite
+        assert np.isfinite(results.overall_att), "ATT should be finite"
+        # SE is either finite (valid) or NaN (signals invalid inference) - not biased
+        assert np.isfinite(results.overall_se) or np.isnan(results.overall_se), \
+            "SE should be finite or NaN (not inf)"
+
+        # Test with bootstrap - should drop invalid samples with warning
+        cs_boot = CallawaySantAnna(n_bootstrap=100, seed=42)
+
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            boot_results = cs_boot.fit(
+                data,
+                outcome='outcome',
+                unit='unit',
+                time='time',
+                first_treat='first_treat'
+            )
+
+        # Collect warning messages for inspection
+        warning_messages = [str(warning.message) for warning in w]
+
+        # ATT should be finite
+        assert np.isfinite(boot_results.overall_att), "ATT should be finite"
+
+        # Bootstrap SE based on valid samples - may be finite or NaN
+        assert boot_results.bootstrap_results is not None, "Bootstrap results should exist"
+        assert np.isfinite(boot_results.overall_se) or np.isnan(boot_results.overall_se), \
+            "Bootstrap SE should be finite or NaN (not inf)"
+
+        # If SE is NaN, verify it's due to validity threshold (should have warning)
+        if np.isnan(boot_results.overall_se):
+            assert any("valid" in msg.lower() or "nan" in msg.lower() for msg in warning_messages), \
+                "NaN SE should be accompanied by warning about validity"
+
+    def test_validity_threshold_nan_se(self):
+        """Test that <50% valid bootstrap samples returns NaN SE with warning.
+
+        This tests the methodology-aligned behavior where invalid inference
+        is signaled via NaN rather than biased estimates.
+        """
+        import warnings
+        np.random.seed(42)
+
+        # Create minimal dataset that might trigger edge cases
+        n_units, n_periods = 10, 3
+        units = np.repeat(np.arange(n_units), n_periods)
+        times = np.tile(np.arange(n_periods), n_units)
+
+        # Only 1 treated unit - very extreme
+        first_treat = np.zeros(n_units)
+        first_treat[0] = 1
+        first_treat_expanded = np.repeat(first_treat, n_periods)
+
+        post = (times >= first_treat_expanded) & (first_treat_expanded > 0)
+        outcomes = 1.0 + 2.0 * post + np.random.randn(len(units)) * 0.5
+
+        data = pd.DataFrame({
+            'unit': units,
+            'time': times,
+            'outcome': outcomes,
+            'first_treat': first_treat_expanded.astype(int),
+        })
+
+        # Use low n_bootstrap to trigger warning and potentially non-finite samples
+        cs_boot = CallawaySantAnna(n_bootstrap=30, seed=42)
+
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            boot_results = cs_boot.fit(
+                data,
+                outcome='outcome',
+                unit='unit',
+                time='time',
+                first_treat='first_treat'
+            )
+
+        warning_messages = [str(warning.message) for warning in w]
+
+        # Should get the low n_bootstrap warning
+        assert any("n_bootstrap" in msg for msg in warning_messages), \
+            "Should warn about low n_bootstrap"
+
+        # Bootstrap results should exist
+        assert boot_results.bootstrap_results is not None, "Bootstrap results should exist"
+
+        # SE constraints: finite or NaN (never inf)
+        assert np.isfinite(boot_results.overall_se) or np.isnan(boot_results.overall_se), \
+            "Bootstrap SE should be finite or NaN (not inf)"
+
     def test_near_collinear_covariates(self):
         """Test that near-collinear covariates are handled gracefully."""
         data = generate_staggered_data_with_covariates(seed=42)

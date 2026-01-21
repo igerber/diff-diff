@@ -277,6 +277,7 @@ fn get_control_observations(
 }
 
 /// Compute LOOCV score for a specific parameter combination.
+#[allow(clippy::too_many_arguments)]
 fn loocv_score_for_params(
     y: &ArrayView2<f64>,
     d: &ArrayView2<f64>,
@@ -384,6 +385,7 @@ fn compute_unit_distance_for_obs(
 /// - The (1 - D_js) masking in the loss naturally excludes treated cells
 /// - Weights are normalized to sum to 1 (probability weights)
 /// - Distance excludes target period t per Equation 3
+#[allow(clippy::too_many_arguments)]
 fn compute_weight_matrix(
     y: &ArrayView2<f64>,
     d: &ArrayView2<f64>,
@@ -458,6 +460,7 @@ fn compute_weight_matrix(
 /// where η ≤ 1/max(W) for convergence.
 ///
 /// Returns None if estimation fails due to numerical issues.
+#[allow(clippy::too_many_arguments)]
 fn estimate_model(
     y: &ArrayView2<f64>,
     control_mask: &ArrayView2<u8>,

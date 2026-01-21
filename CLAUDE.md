@@ -215,19 +215,22 @@ pytest tests/test_rust_backend.py -v
   - Violation types: 'linear', 'constant', 'last_period', 'custom'
   - Integrates with HonestDiD for comprehensive sensitivity analysis
 
-- **`diff_diff/prep.py`** - Data preparation utilities:
-  - `generate_did_data` - Create synthetic data with known treatment effect (basic 2x2 DiD)
-  - `generate_staggered_data` - Staggered adoption data for CallawaySantAnna/SunAbraham
-  - `generate_factor_data` - Factor model data for TROP/SyntheticDiD
-  - `generate_ddd_data` - Triple Difference (DDD) design data
-  - `generate_panel_data` - Panel data with optional parallel trends violations
-  - `generate_event_study_data` - Event study data with simultaneous treatment
+- **`diff_diff/prep.py`** - Data preparation utilities (core functions):
   - `make_treatment_indicator`, `make_post_indicator` - Create binary indicators
   - `wide_to_long`, `balance_panel` - Panel data reshaping
   - `validate_did_data`, `summarize_did_data` - Data validation and summary
   - `create_event_time` - Create event-time column for staggered adoption designs
   - `aggregate_to_cohorts` - Aggregate unit-level data to cohort means
   - `rank_control_units` - Rank control units by suitability for DiD/Synthetic control
+  - Re-exports all functions from `prep_dgp.py` for backward compatibility
+
+- **`diff_diff/prep_dgp.py`** - Data generation functions (DGP):
+  - `generate_did_data` - Create synthetic data with known treatment effect (basic 2x2 DiD)
+  - `generate_staggered_data` - Staggered adoption data for CallawaySantAnna/SunAbraham
+  - `generate_factor_data` - Factor model data for TROP/SyntheticDiD
+  - `generate_ddd_data` - Triple Difference (DDD) design data
+  - `generate_panel_data` - Panel data with optional parallel trends violations
+  - `generate_event_study_data` - Event study data with simultaneous treatment
 
 ### Key Design Patterns
 

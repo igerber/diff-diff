@@ -372,18 +372,24 @@ class CallawaySantAnnaBootstrapMixin:
 
             # Vectorized perturbation: matrix-vector multiply
             # Shape: (n_bootstrap,)
-            perturbations = (
-                treated_weights @ treated_inf +
-                control_weights @ control_inf
-            )
+            # Suppress RuntimeWarnings for edge cases (small samples, extreme weights)
+            with np.errstate(divide='ignore', invalid='ignore', over='ignore'):
+                perturbations = (
+                    treated_weights @ treated_inf +
+                    control_weights @ control_inf
+                )
 
+            # Let non-finite values propagate - they will be handled at statistics computation
             bootstrap_atts_gt[:, j] = original_atts[j] + perturbations
 
         # Vectorized overall ATT: matrix-vector multiply
         # Shape: (n_bootstrap,)
-        bootstrap_overall = bootstrap_atts_gt @ overall_weights
+        # Suppress RuntimeWarnings for edge cases - non-finite values handled at statistics computation
+        with np.errstate(divide='ignore', invalid='ignore', over='ignore'):
+            bootstrap_overall = bootstrap_atts_gt @ overall_weights
 
         # Vectorized event study aggregation
+        # Non-finite values handled at statistics computation stage
         rel_periods: List[int] = []
         bootstrap_event_study: Optional[Dict[int, np.ndarray]] = None
         if event_study_info is not None:
@@ -394,9 +400,12 @@ class CallawaySantAnnaBootstrapMixin:
                 gt_indices = agg_info['gt_indices']
                 weights = agg_info['weights']
                 # Vectorized: select columns and multiply by weights
-                bootstrap_event_study[e] = bootstrap_atts_gt[:, gt_indices] @ weights
+                # Suppress RuntimeWarnings for edge cases
+                with np.errstate(divide='ignore', invalid='ignore', over='ignore'):
+                    bootstrap_event_study[e] = bootstrap_atts_gt[:, gt_indices] @ weights
 
         # Vectorized group aggregation
+        # Non-finite values handled at statistics computation stage
         group_list: List[Any] = []
         bootstrap_group: Optional[Dict[Any, np.ndarray]] = None
         if group_agg_info is not None:
@@ -406,7 +415,9 @@ class CallawaySantAnnaBootstrapMixin:
                 agg_info = group_agg_info[g]
                 gt_indices = agg_info['gt_indices']
                 weights = agg_info['weights']
-                bootstrap_group[g] = bootstrap_atts_gt[:, gt_indices] @ weights
+                # Suppress RuntimeWarnings for edge cases
+                with np.errstate(divide='ignore', invalid='ignore', over='ignore'):
+                    bootstrap_group[g] = bootstrap_atts_gt[:, gt_indices] @ weights
 
         # Compute bootstrap statistics for ATT(g,t)
         gt_ses = {}
@@ -415,7 +426,8 @@ class CallawaySantAnnaBootstrapMixin:
 
         for j, gt in enumerate(gt_pairs):
             se, ci, p_value = self._compute_effect_bootstrap_stats(
-                original_atts[j], bootstrap_atts_gt[:, j]
+                original_atts[j], bootstrap_atts_gt[:, j],
+                context=f"ATT(g={gt[0]}, t={gt[1]})"
             )
             gt_ses[gt] = se
             gt_cis[gt] = ci
@@ -423,7 +435,8 @@ class CallawaySantAnnaBootstrapMixin:
 
         # Compute bootstrap statistics for overall ATT
         overall_se, overall_ci, overall_p_value = self._compute_effect_bootstrap_stats(
-            original_overall, bootstrap_overall
+            original_overall, bootstrap_overall,
+            context="overall ATT"
         )
 
         # Compute bootstrap statistics for event study effects
@@ -438,7 +451,8 @@ class CallawaySantAnnaBootstrapMixin:
 
             for e in rel_periods:
                 se, ci, p_value = self._compute_effect_bootstrap_stats(
-                    event_study_info[e]['effect'], bootstrap_event_study[e]
+                    event_study_info[e]['effect'], bootstrap_event_study[e],
+                    context=f"event study (e={e})"
                 )
                 event_study_ses[e] = se
                 event_study_cis[e] = ci
@@ -456,7 +470,8 @@ class CallawaySantAnnaBootstrapMixin:
 
             for g in group_list:
                 se, ci, p_value = self._compute_effect_bootstrap_stats(
-                    group_agg_info[g]['effect'], bootstrap_group[g]
+                    group_agg_info[g]['effect'], bootstrap_group[g],
+                    context=f"group effect (g={g})"
                 )
                 group_effect_ses[g] = se
                 group_effect_cis[g] = ci
@@ -590,6 +605,7 @@ class CallawaySantAnnaBootstrapMixin:
         self,
         original_effect: float,
         boot_dist: np.ndarray,
+        n_valid: Optional[int] = None,
     ) -> float:
         """
         Compute two-sided bootstrap p-value.
@@ -597,6 +613,22 @@ class CallawaySantAnnaBootstrapMixin:
         Uses the percentile method: p-value is the proportion of bootstrap
         estimates on the opposite side of zero from the original estimate,
         doubled for two-sided test.
+
+        Parameters
+        ----------
+        original_effect : float
+            Original point estimate.
+        boot_dist : np.ndarray
+            Bootstrap distribution of the effect.
+        n_valid : int, optional
+            Number of valid bootstrap samples. If None, uses self.n_bootstrap.
+            Use this when boot_dist has already been filtered for non-finite values
+            to ensure the p-value floor is based on the actual valid sample count.
+
+        Returns
+        -------
+        float
+            Two-sided bootstrap p-value.
         """
         if original_effect >= 0:
             # Proportion of bootstrap estimates <= 0
@@ -608,8 +640,9 @@ class CallawaySantAnnaBootstrapMixin:
         # Two-sided p-value
         p_value = min(2 * p_one_sided, 1.0)
 
-        # Ensure minimum p-value
-        p_value = max(p_value, 1 / (self.n_bootstrap + 1))
+        # Ensure minimum p-value using n_valid if provided, otherwise n_bootstrap
+        n_for_floor = n_valid if n_valid is not None else self.n_bootstrap
+        p_value = max(p_value, 1 / (n_for_floor + 1))
 
         return float(p_value)
 
@@ -617,9 +650,14 @@ class CallawaySantAnnaBootstrapMixin:
         self,
         original_effect: float,
         boot_dist: np.ndarray,
+        context: str = "bootstrap distribution",
     ) -> Tuple[float, Tuple[float, float], float]:
         """
         Compute bootstrap statistics for a single effect.
+
+        Non-finite bootstrap samples are dropped and a warning is issued if any
+        are present. If too few valid samples remain (<50%), returns NaN for all
+        statistics to signal invalid inference.
 
         Parameters
         ----------
@@ -627,6 +665,8 @@ class CallawaySantAnnaBootstrapMixin:
             Original point estimate.
         boot_dist : np.ndarray
             Bootstrap distribution of the effect.
+        context : str, optional
+            Description for warning messages, by default "bootstrap distribution".
 
         Returns
         -------
@@ -637,7 +677,41 @@ class CallawaySantAnnaBootstrapMixin:
         p_value : float
             Bootstrap p-value.
         """
-        se = float(np.std(boot_dist, ddof=1))
-        ci = self._compute_percentile_ci(boot_dist, self.alpha)
-        p_value = self._compute_bootstrap_pvalue(original_effect, boot_dist)
+        # Filter out non-finite values
+        finite_mask = np.isfinite(boot_dist)
+        n_valid = np.sum(finite_mask)
+        n_total = len(boot_dist)
+
+        if n_valid < n_total:
+            import warnings
+            n_nonfinite = n_total - n_valid
+            warnings.warn(
+                f"Dropping {n_nonfinite}/{n_total} non-finite bootstrap samples in {context}. "
+                "This may occur with very small samples or extreme weights. "
+                "Bootstrap estimates based on remaining valid samples.",
+                RuntimeWarning,
+                stacklevel=3
+            )
+
+        # Check if we have enough valid samples
+        if n_valid < n_total * 0.5:
+            import warnings
+            warnings.warn(
+                f"Too few valid bootstrap samples ({n_valid}/{n_total}) in {context}. "
+                "Returning NaN for SE/CI/p-value to signal invalid inference.",
+                RuntimeWarning,
+                stacklevel=3
+            )
+            return np.nan, (np.nan, np.nan), np.nan
+
+        # Use only valid samples
+        valid_dist = boot_dist[finite_mask]
+        n_valid_bootstrap = len(valid_dist)
+
+        se = float(np.std(valid_dist, ddof=1))
+        ci = self._compute_percentile_ci(valid_dist, self.alpha)
+
+        # Compute p-value using shared method with correct floor based on valid sample count
+        p_value = self._compute_bootstrap_pvalue(original_effect, valid_dist, n_valid=n_valid_bootstrap)
+
         return se, ci, p_value

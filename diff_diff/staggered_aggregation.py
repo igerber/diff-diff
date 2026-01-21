@@ -273,15 +273,31 @@ class CallawaySantAnnaAggregationMixin:
         indicator_sum = np.sum(indicator_matrix - pg_keepers, axis=1)
 
         # Vectorized wif matrix computation
-        # if1_matrix[i,k] = (indicator[i,k] - pg[k]) / sum_pg
-        if1_matrix = (indicator_matrix - pg_keepers) / sum_pg_keepers
-        # if2_matrix[i,k] = indicator_sum[i] * pg[k] / sum_pg^2
-        if2_matrix = np.outer(indicator_sum, pg_keepers) / (sum_pg_keepers ** 2)
-        wif_matrix = if1_matrix - if2_matrix
+        # Suppress RuntimeWarnings for edge cases (small samples, extreme weights)
+        # in division operations and matrix multiplication
+        with np.errstate(divide='ignore', invalid='ignore', over='ignore'):
+            # if1_matrix[i,k] = (indicator[i,k] - pg[k]) / sum_pg
+            if1_matrix = (indicator_matrix - pg_keepers) / sum_pg_keepers
+            # if2_matrix[i,k] = indicator_sum[i] * pg[k] / sum_pg^2
+            if2_matrix = np.outer(indicator_sum, pg_keepers) / (sum_pg_keepers ** 2)
+            wif_matrix = if1_matrix - if2_matrix
 
-        # Single matrix-vector multiply for all contributions
-        # wif_contrib[i] = sum_k(wif[i,k] * att[k])
-        wif_contrib = wif_matrix @ effects
+            # Single matrix-vector multiply for all contributions
+            # wif_contrib[i] = sum_k(wif[i,k] * att[k])
+            wif_contrib = wif_matrix @ effects
+
+        # Check for non-finite values from edge cases
+        if not np.all(np.isfinite(wif_contrib)):
+            import warnings
+            n_nonfinite = np.sum(~np.isfinite(wif_contrib))
+            warnings.warn(
+                f"Non-finite values ({n_nonfinite}/{len(wif_contrib)}) in weight influence "
+                "function computation. This may occur with very small samples or extreme "
+                "weights. Returning NaN for SE to signal invalid inference.",
+                RuntimeWarning,
+                stacklevel=2
+            )
+            return np.nan  # Signal invalid inference instead of biased SE
 
         # Scale by 1/n_units to match R's getSE formula: sqrt(mean(IF^2)/n)
         psi_wif = wif_contrib / n_units

@@ -146,9 +146,9 @@ fn project_simplex_internal(v: &ArrayView1<f64>) -> Array1<f64> {
     // Find rho: largest index where u[rho] + (1 - cumsum[rho]) / (rho + 1) > 0
     let mut cumsum = 0.0;
     let mut rho = 0;
-    for i in 0..n {
-        cumsum += u[i];
-        if u[i] + (1.0 - cumsum) / (i + 1) as f64 > 0.0 {
+    for (i, &ui) in u.iter().enumerate().take(n) {
+        cumsum += ui;
+        if ui + (1.0 - cumsum) / (i + 1) as f64 > 0.0 {
             rho = i;
         }
     }
