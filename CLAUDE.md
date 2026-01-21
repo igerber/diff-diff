@@ -306,6 +306,14 @@ See `docs/performance-plan.md` for full optimization details and `docs/benchmark
 
 ### Documentation
 
+- **`docs/methodology/REGISTRY.md`** - Methodology Registry:
+  - Academic foundations and citations for each estimator
+  - Key implementation requirements (equations, SE formulas, edge cases)
+  - Reference implementations (R packages, Stata commands)
+  - Requirements checklists for validation
+  - **Must be consulted before implementing methodology-related changes**
+  - **Must be updated when deviating from reference implementations**
+
 - **`docs/tutorials/`** - Jupyter notebook tutorials:
   - `01_basic_did.ipynb` - Basic 2x2 DiD, covariates, fixed effects, wild bootstrap
   - `02_staggered_did.ipynb` - Staggered adoption with Callaway-Sant'Anna, bootstrap inference
@@ -421,6 +429,7 @@ When implementing new functionality, **always include accompanying documentation
 - Update relevant docstrings
 - Add/update tests
 - Update CHANGELOG.md (if exists)
+- **If methodology-related**: Update `docs/methodology/REGISTRY.md` edge cases section
 
 ### Scholarly References
 
@@ -459,16 +468,49 @@ When adding a new `__init__` parameter that should be available across estimator
    - [ ] Update docstring in all affected classes
    - [ ] Update CLAUDE.md if it's a key design pattern
 
+### Implementing Methodology-Critical Code
+
+When implementing or modifying code that affects statistical methodology (estimators, SE calculation, inference, edge case handling):
+
+1. **Before coding - consult the Methodology Registry**:
+   - [ ] Read the relevant estimator section in `docs/methodology/REGISTRY.md`
+   - [ ] Identify the reference implementation(s) listed
+   - [ ] Note the edge case handling requirements
+
+2. **During implementation**:
+   - [ ] Follow the documented equations and formulas
+   - [ ] Match reference implementation behavior for standard cases
+   - [ ] For edge cases: either match reference OR document deviation
+
+3. **When deviating from reference implementations**:
+   - [ ] Add a **Note** in the Methodology Registry explaining the deviation
+   - [ ] Include rationale (e.g., "defensive enhancement", "R errors here")
+   - [ ] Ensure the deviation is an improvement, not a bug
+
+4. **Testing methodology-aligned behavior**:
+   - [ ] Test that edge cases produce documented behavior (NaN, warning, etc.)
+   - [ ] Assert warnings are raised (not just captured)
+   - [ ] Assert the warned-about behavior actually occurred
+   - [ ] For NaN results: assert `np.isnan()`, don't just check "no exception"
+
 ### Adding Warning/Error/Fallback Handling
 
 When adding code that emits warnings or handles errors:
 
-1. **Verify behavior matches message**:
+1. **Consult Methodology Registry first**:
+   - [ ] Check if behavior is documented in edge cases section
+   - [ ] If not documented, add it before implementing
+
+2. **Verify behavior matches message**:
    - [ ] Manually trace the code path after warning/error
    - [ ] Confirm the stated behavior actually occurs
 
-2. **Write behavioral tests**:
+3. **Write behavioral tests**:
    - [ ] Don't just test "no exception raised"
    - [ ] Assert the expected outcome occurred
    - [ ] For fallbacks: verify fallback behavior was applied
    - [ ] Example: If warning says "setting NaN", assert `np.any(np.isnan(result))`
+
+4. **Protect arithmetic operations**:
+   - [ ] Wrap ALL related operations in `np.errstate()`, not just the final one
+   - [ ] Include division, matrix multiplication, and any operation that can overflow/underflow
