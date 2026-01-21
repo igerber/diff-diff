@@ -682,7 +682,14 @@ class TestCallawaySantAnnaCovariates:
         assert results.overall_se > 0, "SE should be positive"
 
     def test_extreme_weights_warning(self):
-        """Test that extreme weights produce warnings, not silent failures."""
+        """Test that extreme weights produce warnings and methodology-aligned behavior.
+
+        Per the Methodology Registry (docs/methodology/REGISTRY.md):
+        - Missing group-time cells: ATT(g,t) set to NaN
+        - Analytic SE: returns NaN to signal invalid inference (not biased via zeroing)
+        - Bootstrap: drops invalid samples and warns, preserving valid distribution
+        """
+        import warnings
         np.random.seed(42)
 
         # Minimal dataset: very small sample with unbalanced groups
@@ -705,7 +712,7 @@ class TestCallawaySantAnnaCovariates:
             'first_treat': first_treat_expanded.astype(int),
         })
 
-        # Test without bootstrap first
+        # Test without bootstrap - ATT should be finite, SE may be NaN for edge cases
         cs = CallawaySantAnna()
         results = cs.fit(
             data,
@@ -715,24 +722,31 @@ class TestCallawaySantAnnaCovariates:
             first_treat='first_treat'
         )
 
-        # Results should be finite even in edge cases
+        # ATT point estimate should be finite
         assert np.isfinite(results.overall_att), "ATT should be finite"
-        assert np.isfinite(results.overall_se), "SE should be finite"
+        # SE is either finite (valid) or NaN (signals invalid inference) - not biased
+        assert np.isfinite(results.overall_se) or np.isnan(results.overall_se), \
+            "SE should be finite or NaN (not inf)"
 
-        # Test with bootstrap enabled
-        cs_boot = CallawaySantAnna(n_bootstrap=50, seed=42)
-        boot_results = cs_boot.fit(
-            data,
-            outcome='outcome',
-            unit='unit',
-            time='time',
-            first_treat='first_treat'
-        )
+        # Test with bootstrap - should drop invalid samples with warning
+        cs_boot = CallawaySantAnna(n_bootstrap=100, seed=42)
 
-        # Bootstrap should also produce finite results
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            boot_results = cs_boot.fit(
+                data,
+                outcome='outcome',
+                unit='unit',
+                time='time',
+                first_treat='first_treat'
+            )
+
+        # ATT should be finite
         assert np.isfinite(boot_results.overall_att), "ATT should be finite"
+        # Bootstrap SE based on valid samples - may be finite or NaN
         assert boot_results.bootstrap_results is not None, "Bootstrap results should exist"
-        assert np.isfinite(boot_results.overall_se), "Bootstrap SE should be finite"
+        assert np.isfinite(boot_results.overall_se) or np.isnan(boot_results.overall_se), \
+            "Bootstrap SE should be finite or NaN (not inf)"
 
     def test_near_collinear_covariates(self):
         """Test that near-collinear covariates are handled gracefully."""

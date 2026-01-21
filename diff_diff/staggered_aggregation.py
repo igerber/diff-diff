@@ -292,11 +292,11 @@ class CallawaySantAnnaAggregationMixin:
             warnings.warn(
                 f"Non-finite values ({n_nonfinite}/{len(wif_contrib)}) in weight influence "
                 "function computation. This may occur with very small samples or extreme "
-                "weights. SE estimates may be unreliable.",
+                "weights. Returning NaN for SE to signal invalid inference.",
                 RuntimeWarning,
                 stacklevel=2
             )
-            wif_contrib = np.where(np.isfinite(wif_contrib), wif_contrib, 0.0)
+            return np.nan  # Signal invalid inference instead of biased SE
 
         # Scale by 1/n_units to match R's getSE formula: sqrt(mean(IF^2)/n)
         psi_wif = wif_contrib / n_units

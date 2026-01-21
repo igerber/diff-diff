@@ -379,22 +379,17 @@ class CallawaySantAnnaBootstrapMixin:
                     control_weights @ control_inf
                 )
 
-            perturbations = self._check_and_fix_nonfinite(
-                perturbations, f"bootstrap perturbations for ATT(g,t) {gt_pairs[j]}"
-            )
+            # Let non-finite values propagate - they will be handled at statistics computation
             bootstrap_atts_gt[:, j] = original_atts[j] + perturbations
 
         # Vectorized overall ATT: matrix-vector multiply
         # Shape: (n_bootstrap,)
-        # Suppress RuntimeWarnings for edge cases
+        # Suppress RuntimeWarnings for edge cases - non-finite values handled at statistics computation
         with np.errstate(divide='ignore', invalid='ignore', over='ignore'):
             bootstrap_overall = bootstrap_atts_gt @ overall_weights
 
-        bootstrap_overall = self._check_and_fix_nonfinite(
-            bootstrap_overall, "bootstrap overall ATT aggregation"
-        )
-
         # Vectorized event study aggregation
+        # Non-finite values handled at statistics computation stage
         rel_periods: List[int] = []
         bootstrap_event_study: Optional[Dict[int, np.ndarray]] = None
         if event_study_info is not None:
@@ -409,11 +404,8 @@ class CallawaySantAnnaBootstrapMixin:
                 with np.errstate(divide='ignore', invalid='ignore', over='ignore'):
                     bootstrap_event_study[e] = bootstrap_atts_gt[:, gt_indices] @ weights
 
-                bootstrap_event_study[e] = self._check_and_fix_nonfinite(
-                    bootstrap_event_study[e], f"bootstrap event study aggregation (e={e})"
-                )
-
         # Vectorized group aggregation
+        # Non-finite values handled at statistics computation stage
         group_list: List[Any] = []
         bootstrap_group: Optional[Dict[Any, np.ndarray]] = None
         if group_agg_info is not None:
@@ -427,10 +419,6 @@ class CallawaySantAnnaBootstrapMixin:
                 with np.errstate(divide='ignore', invalid='ignore', over='ignore'):
                     bootstrap_group[g] = bootstrap_atts_gt[:, gt_indices] @ weights
 
-                bootstrap_group[g] = self._check_and_fix_nonfinite(
-                    bootstrap_group[g], f"bootstrap group aggregation (g={g})"
-                )
-
         # Compute bootstrap statistics for ATT(g,t)
         gt_ses = {}
         gt_cis = {}
@@ -438,7 +426,8 @@ class CallawaySantAnnaBootstrapMixin:
 
         for j, gt in enumerate(gt_pairs):
             se, ci, p_value = self._compute_effect_bootstrap_stats(
-                original_atts[j], bootstrap_atts_gt[:, j]
+                original_atts[j], bootstrap_atts_gt[:, j],
+                context=f"ATT(g={gt[0]}, t={gt[1]})"
             )
             gt_ses[gt] = se
             gt_cis[gt] = ci
@@ -446,7 +435,8 @@ class CallawaySantAnnaBootstrapMixin:
 
         # Compute bootstrap statistics for overall ATT
         overall_se, overall_ci, overall_p_value = self._compute_effect_bootstrap_stats(
-            original_overall, bootstrap_overall
+            original_overall, bootstrap_overall,
+            context="overall ATT"
         )
 
         # Compute bootstrap statistics for event study effects
@@ -461,7 +451,8 @@ class CallawaySantAnnaBootstrapMixin:
 
             for e in rel_periods:
                 se, ci, p_value = self._compute_effect_bootstrap_stats(
-                    event_study_info[e]['effect'], bootstrap_event_study[e]
+                    event_study_info[e]['effect'], bootstrap_event_study[e],
+                    context=f"event study (e={e})"
                 )
                 event_study_ses[e] = se
                 event_study_cis[e] = ci
@@ -479,7 +470,8 @@ class CallawaySantAnnaBootstrapMixin:
 
             for g in group_list:
                 se, ci, p_value = self._compute_effect_bootstrap_stats(
-                    group_agg_info[g]['effect'], bootstrap_group[g]
+                    group_agg_info[g]['effect'], bootstrap_group[g],
+                    context=f"group effect (g={g})"
                 )
                 group_effect_ses[g] = se
                 group_effect_cis[g] = ci
@@ -640,9 +632,14 @@ class CallawaySantAnnaBootstrapMixin:
         self,
         original_effect: float,
         boot_dist: np.ndarray,
+        context: str = "bootstrap distribution",
     ) -> Tuple[float, Tuple[float, float], float]:
         """
         Compute bootstrap statistics for a single effect.
+
+        Non-finite bootstrap samples are dropped and a warning is issued if any
+        are present. If too few valid samples remain (<50%), returns NaN for all
+        statistics to signal invalid inference.
 
         Parameters
         ----------
@@ -650,6 +647,8 @@ class CallawaySantAnnaBootstrapMixin:
             Original point estimate.
         boot_dist : np.ndarray
             Bootstrap distribution of the effect.
+        context : str, optional
+            Description for warning messages, by default "bootstrap distribution".
 
         Returns
         -------
@@ -660,35 +659,65 @@ class CallawaySantAnnaBootstrapMixin:
         p_value : float
             Bootstrap p-value.
         """
-        se = float(np.std(boot_dist, ddof=1))
-        ci = self._compute_percentile_ci(boot_dist, self.alpha)
-        p_value = self._compute_bootstrap_pvalue(original_effect, boot_dist)
+        # Filter out non-finite values
+        finite_mask = np.isfinite(boot_dist)
+        n_valid = np.sum(finite_mask)
+        n_total = len(boot_dist)
+
+        if n_valid < n_total:
+            import warnings
+            n_nonfinite = n_total - n_valid
+            warnings.warn(
+                f"Dropping {n_nonfinite}/{n_total} non-finite bootstrap samples in {context}. "
+                "This may occur with very small samples or extreme weights. "
+                "Bootstrap estimates based on remaining valid samples.",
+                RuntimeWarning,
+                stacklevel=3
+            )
+
+        # Check if we have enough valid samples
+        if n_valid < n_total * 0.5:
+            import warnings
+            warnings.warn(
+                f"Too few valid bootstrap samples ({n_valid}/{n_total}) in {context}. "
+                "Returning NaN for SE/CI/p-value to signal invalid inference.",
+                RuntimeWarning,
+                stacklevel=3
+            )
+            return np.nan, (np.nan, np.nan), np.nan
+
+        # Use only valid samples
+        valid_dist = boot_dist[finite_mask]
+
+        se = float(np.std(valid_dist, ddof=1))
+        ci = self._compute_percentile_ci(valid_dist, self.alpha)
+        p_value = self._compute_bootstrap_pvalue(original_effect, valid_dist)
         return se, ci, p_value
 
-    def _check_and_fix_nonfinite(self, arr: np.ndarray, context: str) -> np.ndarray:
-        """Check for non-finite values and warn if found.
+    def _mask_nonfinite_samples(self, arr: np.ndarray, context: str) -> np.ndarray:
+        """Return boolean mask of finite samples, warning if any dropped.
 
         Parameters
         ----------
         arr : np.ndarray
-            Array to check.
+            Array to check (1D bootstrap distribution).
         context : str
             Description of where this check is happening (for warning message).
 
         Returns
         -------
         np.ndarray
-            Array with non-finite values replaced by 0.0.
+            Boolean mask where True indicates finite (valid) samples.
         """
-        if not np.all(np.isfinite(arr)):
+        finite_mask = np.isfinite(arr)
+        if not np.all(finite_mask):
             import warnings
-            n_nonfinite = np.sum(~np.isfinite(arr))
+            n_nonfinite = np.sum(~finite_mask)
             warnings.warn(
-                f"Non-finite values ({n_nonfinite}/{arr.size}) in {context}. "
+                f"Dropping {n_nonfinite}/{arr.size} non-finite bootstrap samples in {context}. "
                 "This may occur with very small samples or extreme weights. "
-                "Bootstrap estimates may be unreliable.",
+                "Bootstrap estimates based on remaining valid samples.",
                 RuntimeWarning,
                 stacklevel=3
             )
-            return np.where(np.isfinite(arr), arr, 0.0)
-        return arr
+        return finite_mask
