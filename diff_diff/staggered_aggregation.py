@@ -31,6 +31,9 @@ class CallawaySantAnnaAggregationMixin:
     # Type hints for attributes accessed from the main class
     alpha: float
 
+    # Type hint for anticipation attribute accessed from main class
+    anticipation: int
+
     def _aggregate_simple(
         self,
         group_time_effects: Dict,
@@ -49,6 +52,10 @@ class CallawaySantAnnaAggregationMixin:
         shared control units. This includes the wif (weight influence function)
         adjustment from R's `did` package that accounts for uncertainty in
         estimating the group-size weights.
+
+        Note: Only post-treatment effects (t >= g - anticipation) are included
+        in the overall ATT. Pre-treatment effects are computed for parallel
+        trends assessment but are not aggregated into the overall ATT.
         """
         effects = []
         weights_list = []
@@ -56,6 +63,10 @@ class CallawaySantAnnaAggregationMixin:
         groups_for_gt = []
 
         for (g, t), data in group_time_effects.items():
+            # Only include post-treatment effects (t >= g - anticipation)
+            # Pre-treatment effects are for parallel trends, not overall ATT
+            if t < g - self.anticipation:
+                continue
             effects.append(data['effect'])
             weights_list.append(data['n_treated'])
             gt_pairs.append((g, t))

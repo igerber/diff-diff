@@ -248,6 +248,7 @@ class CallawaySantAnnaBootstrapMixin:
     bootstrap_weight_type: str
     alpha: float
     seed: Optional[int]
+    anticipation: int
 
     def _run_multiplier_bootstrap(
         self,
@@ -310,15 +311,23 @@ class CallawaySantAnnaBootstrapMixin:
         gt_pairs = list(group_time_effects.keys())
         n_gt = len(gt_pairs)
 
-        # Compute aggregation weights for overall ATT
-        overall_weights = np.array([
+        # Identify post-treatment (g,t) pairs for overall ATT
+        # Pre-treatment effects are for parallel trends assessment, not aggregated
+        post_treatment_mask = np.array([
+            t >= g - self.anticipation for (g, t) in gt_pairs
+        ])
+        post_treatment_indices = np.where(post_treatment_mask)[0]
+
+        # Compute aggregation weights for overall ATT (post-treatment only)
+        all_n_treated = np.array([
             group_time_effects[gt]['n_treated'] for gt in gt_pairs
         ], dtype=float)
-        overall_weights = overall_weights / np.sum(overall_weights)
+        post_n_treated = all_n_treated[post_treatment_mask]
+        overall_weights_post = post_n_treated / np.sum(post_n_treated)
 
         # Original point estimates
         original_atts = np.array([group_time_effects[gt]['effect'] for gt in gt_pairs])
-        original_overall = np.sum(overall_weights * original_atts)
+        original_overall = np.sum(overall_weights_post * original_atts[post_treatment_mask])
 
         # Prepare event study and group aggregation info if needed
         event_study_info = None
@@ -382,11 +391,11 @@ class CallawaySantAnnaBootstrapMixin:
             # Let non-finite values propagate - they will be handled at statistics computation
             bootstrap_atts_gt[:, j] = original_atts[j] + perturbations
 
-        # Vectorized overall ATT: matrix-vector multiply
+        # Vectorized overall ATT: matrix-vector multiply (post-treatment only)
         # Shape: (n_bootstrap,)
         # Suppress RuntimeWarnings for edge cases - non-finite values handled at statistics computation
         with np.errstate(divide='ignore', invalid='ignore', over='ignore'):
-            bootstrap_overall = bootstrap_atts_gt @ overall_weights
+            bootstrap_overall = bootstrap_atts_gt[:, post_treatment_indices] @ overall_weights_post
 
         # Vectorized event study aggregation
         # Non-finite values handled at statistics computation stage

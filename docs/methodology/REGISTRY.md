@@ -209,6 +209,11 @@ Aggregations:
   - Bootstrap: Drops non-finite samples, warns, and adjusts p-value floor accordingly
   - Threshold: Returns NaN if <50% of bootstrap samples are valid
   - **Note**: This is a defensive enhancement over reference implementations (R's `did::att_gt`, Stata's `csdid`) which may error or produce unhandled inf/nan in edge cases without informative warnings
+- Base period selection (`base_period` parameter):
+  - "varying" (default): Pre-treatment uses t-1 as base (consecutive comparisons)
+  - "universal": All comparisons use g-anticipation-1 as base
+  - Both produce identical post-treatment ATT(g,t); differ only pre-treatment
+  - Matches R `did::att_gt()` base_period parameter
 
 **Reference implementation(s):**
 - R: `did::att_gt()` (Callaway & Sant'Anna's official package)

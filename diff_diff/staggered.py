@@ -292,6 +292,7 @@ class CallawaySantAnna(
         bootstrap_weight_type: Optional[str] = None,
         seed: Optional[int] = None,
         rank_deficient_action: str = "warn",
+        base_period: str = "varying",
     ):
         import warnings
 
@@ -333,6 +334,12 @@ class CallawaySantAnna(
                 f"got '{rank_deficient_action}'"
             )
 
+        if base_period not in ["varying", "universal"]:
+            raise ValueError(
+                f"base_period must be 'varying' or 'universal', "
+                f"got '{base_period}'"
+            )
+
         self.control_group = control_group
         self.anticipation = anticipation
         self.estimation_method = estimation_method
@@ -344,6 +351,7 @@ class CallawaySantAnna(
         self.bootstrap_weight_type = bootstrap_weights
         self.seed = seed
         self.rank_deficient_action = rank_deficient_action
+        self.base_period = base_period
 
         self.is_fitted_ = False
         self.results_: Optional[CallawaySantAnnaResults] = None
@@ -441,20 +449,30 @@ class CallawaySantAnna(
         all_units = precomputed['all_units']
         covariate_by_period = precomputed['covariate_by_period']
 
-        # Base period for comparison
-        base_period = g - 1 - self.anticipation
-        if base_period not in period_to_col:
+        # Base period selection based on mode
+        if self.base_period == "universal":
+            # Universal: always use g - 1 - anticipation
+            base_period_val = g - 1 - self.anticipation
+        else:  # varying
+            if t < g - self.anticipation:
+                # Pre-treatment: use t - 1 (consecutive comparison)
+                base_period_val = t - 1
+            else:
+                # Post-treatment: use g - 1 - anticipation
+                base_period_val = g - 1 - self.anticipation
+
+        if base_period_val not in period_to_col:
             # Find closest earlier period
-            earlier = [p for p in time_periods if p < g - self.anticipation]
+            earlier = [p for p in time_periods if p < base_period_val]
             if not earlier:
                 return None, 0.0, 0, 0, None
-            base_period = max(earlier)
+            base_period_val = max(earlier)
 
         # Check if periods exist in the data
-        if base_period not in period_to_col or t not in period_to_col:
+        if base_period_val not in period_to_col or t not in period_to_col:
             return None, 0.0, 0, 0, None
 
-        base_col = period_to_col[base_period]
+        base_col = period_to_col[base_period_val]
         post_col = period_to_col[t]
 
         # Get treated units mask (cohort g)
@@ -499,7 +517,7 @@ class CallawaySantAnna(
         X_treated = None
         X_control = None
         if covariates and covariate_by_period is not None:
-            cov_matrix = covariate_by_period[base_period]
+            cov_matrix = covariate_by_period[base_period_val]
             X_treated = cov_matrix[treated_valid]
             X_control = cov_matrix[control_valid]
 
@@ -640,9 +658,21 @@ class CallawaySantAnna(
         group_time_effects = {}
         influence_func_info = {}  # Store influence functions for bootstrap
 
+        # Get minimum period for determining valid pre-treatment periods
+        min_period = min(time_periods)
+
         for g in treatment_groups:
-            # Periods for which we compute effects (t >= g - anticipation)
-            valid_periods = [t for t in time_periods if t >= g - self.anticipation]
+            # Compute valid periods including pre-treatment
+            if self.base_period == "universal":
+                # Universal: all periods except the base period (which is normalized to 0)
+                universal_base = g - 1 - self.anticipation
+                valid_periods = [t for t in time_periods if t != universal_base]
+            else:
+                # Varying: post-treatment + pre-treatment where t-1 exists
+                valid_periods = [
+                    t for t in time_periods
+                    if t >= g - self.anticipation or t > min_period
+                ]
 
             for t in valid_periods:
                 att_gt, se_gt, n_treat, n_ctrl, inf_info = self._compute_att_gt_fast(
@@ -768,6 +798,7 @@ class CallawaySantAnna(
             n_control_units=n_control_units,
             alpha=self.alpha,
             control_group=self.control_group,
+            base_period=self.base_period,
             event_study_effects=event_study_effects,
             group_effects=group_effects,
             bootstrap_results=bootstrap_results,
@@ -1043,6 +1074,7 @@ class CallawaySantAnna(
             "bootstrap_weight_type": self.bootstrap_weight_type,
             "seed": self.seed,
             "rank_deficient_action": self.rank_deficient_action,
+            "base_period": self.base_period,
         }
 
     def set_params(self, **params) -> "CallawaySantAnna":

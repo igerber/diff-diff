@@ -1965,3 +1965,243 @@ class TestCallawaySantAnnaNonStandardColumnNames:
         )
 
         assert results.overall_att is not None
+
+
+class TestCallawaySantAnnaPreTreatment:
+    """Tests for CallawaySantAnna pre-treatment effects (base_period parameter)."""
+
+    def test_base_period_validation(self):
+        """Invalid base_period raises ValueError."""
+        with pytest.raises(ValueError, match="base_period must be 'varying' or 'universal'"):
+            CallawaySantAnna(base_period="invalid")
+
+    def test_base_period_in_get_params(self):
+        """base_period appears in get_params()."""
+        cs = CallawaySantAnna(base_period="universal")
+        params = cs.get_params()
+        assert "base_period" in params
+        assert params["base_period"] == "universal"
+
+        cs2 = CallawaySantAnna(base_period="varying")
+        params2 = cs2.get_params()
+        assert params2["base_period"] == "varying"
+
+    def test_varying_pre_treatment_effects(self):
+        """Varying mode computes pre-treatment ATT(g,t) for t < g."""
+        # Generate data with enough pre-treatment periods
+        data = generate_staggered_data(
+            n_units=100,
+            n_periods=10,
+            n_cohorts=2,
+            treatment_effect=2.0,
+            seed=42
+        )
+
+        cs = CallawaySantAnna(base_period="varying")
+        results = cs.fit(
+            data,
+            outcome='outcome',
+            unit='unit',
+            time='time',
+            first_treat='first_treat'
+        )
+
+        # Should have pre-treatment effects (t < g)
+        pre_treatment_effects = [
+            (g, t) for (g, t) in results.group_time_effects.keys()
+            if t < g
+        ]
+        assert len(pre_treatment_effects) > 0, "Should compute pre-treatment effects"
+
+    def test_universal_pre_treatment_effects(self):
+        """Universal mode computes pre-treatment ATT(g,t) for t < g."""
+        data = generate_staggered_data(
+            n_units=100,
+            n_periods=10,
+            n_cohorts=2,
+            treatment_effect=2.0,
+            seed=42
+        )
+
+        cs = CallawaySantAnna(base_period="universal")
+        results = cs.fit(
+            data,
+            outcome='outcome',
+            unit='unit',
+            time='time',
+            first_treat='first_treat'
+        )
+
+        # Should have pre-treatment effects (t < g)
+        pre_treatment_effects = [
+            (g, t) for (g, t) in results.group_time_effects.keys()
+            if t < g
+        ]
+        assert len(pre_treatment_effects) > 0, "Should compute pre-treatment effects"
+
+    def test_post_treatment_identical(self):
+        """Post-treatment ATT(g,t) identical for both modes."""
+        data = generate_staggered_data(
+            n_units=100,
+            n_periods=10,
+            n_cohorts=2,
+            treatment_effect=2.0,
+            seed=42
+        )
+
+        # Fit with varying
+        cs_v = CallawaySantAnna(base_period="varying")
+        res_v = cs_v.fit(
+            data,
+            outcome='outcome',
+            unit='unit',
+            time='time',
+            first_treat='first_treat'
+        )
+
+        # Fit with universal
+        cs_u = CallawaySantAnna(base_period="universal")
+        res_u = cs_u.fit(
+            data,
+            outcome='outcome',
+            unit='unit',
+            time='time',
+            first_treat='first_treat'
+        )
+
+        # Post-treatment effects should be identical
+        for (g, t), eff_v in res_v.group_time_effects.items():
+            if t >= g:  # Post-treatment
+                if (g, t) in res_u.group_time_effects:
+                    eff_u = res_u.group_time_effects[(g, t)]
+                    assert abs(eff_v['effect'] - eff_u['effect']) < 1e-10, (
+                        f"Post-treatment ATT({g},{t}) differs: "
+                        f"varying={eff_v['effect']:.6f}, universal={eff_u['effect']:.6f}"
+                    )
+
+    def test_event_study_negative_periods(self):
+        """Event study includes negative relative periods."""
+        data = generate_staggered_data(
+            n_units=100,
+            n_periods=12,
+            n_cohorts=2,
+            treatment_effect=2.0,
+            seed=42
+        )
+
+        cs = CallawaySantAnna(base_period="varying")
+        results = cs.fit(
+            data,
+            outcome='outcome',
+            unit='unit',
+            time='time',
+            first_treat='first_treat',
+            aggregate='event_study'
+        )
+
+        assert results.event_study_effects is not None
+
+        # Should have negative relative periods
+        rel_periods = list(results.event_study_effects.keys())
+        negative_periods = [e for e in rel_periods if e < 0]
+        assert len(negative_periods) > 0, (
+            f"Event study should include negative periods, got {rel_periods}"
+        )
+
+    def test_base_period_in_results(self):
+        """base_period is stored in results and shown in summary."""
+        data = generate_staggered_data(n_units=50, seed=42)
+
+        cs = CallawaySantAnna(base_period="universal")
+        results = cs.fit(
+            data,
+            outcome='outcome',
+            unit='unit',
+            time='time',
+            first_treat='first_treat'
+        )
+
+        assert results.base_period == "universal"
+        summary = results.summary()
+        assert "Base period:" in summary
+        assert "universal" in summary
+
+    def test_pre_treatment_bootstrap(self):
+        """Bootstrap handles pre-treatment effects."""
+        data = generate_staggered_data(
+            n_units=60,
+            n_periods=8,
+            n_cohorts=2,
+            treatment_effect=2.0,
+            seed=42
+        )
+
+        cs = CallawaySantAnna(
+            base_period="varying",
+            n_bootstrap=99,
+            seed=42
+        )
+        results = cs.fit(
+            data,
+            outcome='outcome',
+            unit='unit',
+            time='time',
+            first_treat='first_treat'
+        )
+
+        assert results.bootstrap_results is not None
+
+        # Pre-treatment effects should have valid bootstrap SEs
+        for (g, t), eff in results.group_time_effects.items():
+            if t < g:  # Pre-treatment
+                assert eff['se'] > 0, f"Pre-treatment ATT({g},{t}) should have positive SE"
+                assert np.isfinite(eff['se']), f"Pre-treatment ATT({g},{t}) SE should be finite"
+
+    def test_pre_treatment_near_zero_under_parallel_trends(self):
+        """Pre-treatment effects should be near zero when parallel trends holds."""
+        # Generate data with true parallel trends (no pre-trends)
+        data = generate_staggered_data(
+            n_units=200,
+            n_periods=10,
+            n_cohorts=2,
+            treatment_effect=3.0,  # Only post-treatment effect
+            seed=123
+        )
+
+        cs = CallawaySantAnna(base_period="varying")
+        results = cs.fit(
+            data,
+            outcome='outcome',
+            unit='unit',
+            time='time',
+            first_treat='first_treat'
+        )
+
+        # Pre-treatment effects should be close to zero
+        pre_effects = [
+            eff['effect'] for (g, t), eff in results.group_time_effects.items()
+            if t < g
+        ]
+        if pre_effects:
+            # Mean of pre-treatment effects should be close to 0
+            mean_pre = np.mean(pre_effects)
+            assert abs(mean_pre) < 1.0, (
+                f"Pre-treatment effects mean={mean_pre:.3f} should be near zero"
+            )
+
+    def test_set_params_base_period(self):
+        """set_params() can change base_period."""
+        cs = CallawaySantAnna(base_period="varying")
+        assert cs.base_period == "varying"
+
+        cs.set_params(base_period="universal")
+        assert cs.base_period == "universal"
+
+        params = cs.get_params()
+        assert params["base_period"] == "universal"
+
+    def test_default_base_period_is_varying(self):
+        """Default base_period is 'varying'."""
+        cs = CallawaySantAnna()
+        assert cs.base_period == "varying"
+        assert cs.get_params()["base_period"] == "varying"
