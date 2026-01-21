@@ -204,6 +204,10 @@ Aggregations:
   - Detection: Pivoted QR decomposition with tolerance `1e-07` (R's `qr()` default)
   - Handling: Warns and drops linearly dependent columns, sets NA for dropped coefficients (R-style, matches `lm()`)
   - Parameter: `rank_deficient_action` controls behavior: "warn" (default), "error", or "silent"
+- Non-finite inference values:
+  - Analytic SE: Returns NaN to signal invalid inference (not biased via zeroing)
+  - Bootstrap: Drops non-finite samples, warns, and adjusts p-value floor accordingly
+  - Threshold: Returns NaN if <50% of bootstrap samples are valid
 
 **Reference implementation(s):**
 - R: `did::att_gt()` (Callaway & Sant'Anna's official package)

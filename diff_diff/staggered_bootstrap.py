@@ -688,36 +688,17 @@ class CallawaySantAnnaBootstrapMixin:
 
         # Use only valid samples
         valid_dist = boot_dist[finite_mask]
+        n_valid_bootstrap = len(valid_dist)
 
         se = float(np.std(valid_dist, ddof=1))
         ci = self._compute_percentile_ci(valid_dist, self.alpha)
-        p_value = self._compute_bootstrap_pvalue(original_effect, valid_dist)
-        return se, ci, p_value
 
-    def _mask_nonfinite_samples(self, arr: np.ndarray, context: str) -> np.ndarray:
-        """Return boolean mask of finite samples, warning if any dropped.
+        # Compute p-value inline with correct floor based on valid sample count
+        if original_effect >= 0:
+            p_one_sided = np.mean(valid_dist <= 0)
+        else:
+            p_one_sided = np.mean(valid_dist >= 0)
+        p_value = min(2 * p_one_sided, 1.0)
+        p_value = max(p_value, 1 / (n_valid_bootstrap + 1))  # Floor uses valid count
 
-        Parameters
-        ----------
-        arr : np.ndarray
-            Array to check (1D bootstrap distribution).
-        context : str
-            Description of where this check is happening (for warning message).
-
-        Returns
-        -------
-        np.ndarray
-            Boolean mask where True indicates finite (valid) samples.
-        """
-        finite_mask = np.isfinite(arr)
-        if not np.all(finite_mask):
-            import warnings
-            n_nonfinite = np.sum(~finite_mask)
-            warnings.warn(
-                f"Dropping {n_nonfinite}/{arr.size} non-finite bootstrap samples in {context}. "
-                "This may occur with very small samples or extreme weights. "
-                "Bootstrap estimates based on remaining valid samples.",
-                RuntimeWarning,
-                stacklevel=3
-            )
-        return finite_mask
+        return se, ci, float(p_value)

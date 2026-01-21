@@ -684,10 +684,10 @@ class TestCallawaySantAnnaCovariates:
     def test_extreme_weights_warning(self):
         """Test that extreme weights produce warnings and methodology-aligned behavior.
 
-        Per the Methodology Registry (docs/methodology/REGISTRY.md):
-        - Missing group-time cells: ATT(g,t) set to NaN
-        - Analytic SE: returns NaN to signal invalid inference (not biased via zeroing)
-        - Bootstrap: drops invalid samples and warns, preserving valid distribution
+        Tests that:
+        - ATT point estimates remain finite
+        - SE is finite (valid) or NaN (signals invalid inference), never biased
+        - Bootstrap drops invalid samples and adjusts inference accordingly
         """
         import warnings
         np.random.seed(42)
