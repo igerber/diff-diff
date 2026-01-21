@@ -2205,3 +2205,89 @@ class TestCallawaySantAnnaPreTreatment:
         cs = CallawaySantAnna()
         assert cs.base_period == "varying"
         assert cs.get_params()["base_period"] == "varying"
+
+    def test_varying_mode_no_fallback_to_nonconsecutive(self):
+        """Varying mode skips pre-treatment effects where t-1 doesn't exist."""
+        # Create data where first period (e.g., period 1) has no t-1 predecessor
+        data = generate_staggered_data(
+            n_units=100,
+            n_periods=6,  # periods 1-6
+            n_cohorts=2,
+            treatment_effect=2.0,
+            seed=42
+        )
+
+        # Identify the earliest time period in data
+        min_period = data['time'].min()
+
+        cs = CallawaySantAnna(base_period="varying")
+        results = cs.fit(
+            data,
+            outcome='outcome',
+            unit='unit',
+            time='time',
+            first_treat='first_treat'
+        )
+
+        # In varying mode, ATT(g, min_period) should NOT be computed for
+        # any cohort g because t-1 (period 0) doesn't exist
+        for (g, t) in results.group_time_effects.keys():
+            if t == min_period:
+                # This should not happen - the (g, min_period) pair should be skipped
+                pytest.fail(
+                    f"ATT({g}, {t}) should not exist because t-1 doesn't exist. "
+                    "Fallback to non-consecutive base period was incorrectly applied."
+                )
+
+    def test_no_post_treatment_effects_returns_nan_with_warning(self):
+        """Warn and return NaN when no post-treatment effects exist."""
+        import warnings
+
+        # Create data where the treatment cohort treats AFTER the last observed period
+        # so there are no post-treatment periods (t >= g never holds)
+        n_units = 50
+        n_periods = 5
+        np.random.seed(42)
+
+        data = []
+        for unit in range(n_units):
+            for t in range(1, n_periods + 1):
+                # Treated units get treated at period 6 (beyond data range)
+                # Data only goes to period 5, so no post-treatment periods exist
+                first_treat = n_periods + 1 if unit < n_units // 2 else 0
+                outcome = np.random.randn()
+                data.append({
+                    'unit': unit,
+                    'time': t,
+                    'outcome': outcome,
+                    'first_treat': first_treat
+                })
+
+        df = pd.DataFrame(data)
+
+        cs = CallawaySantAnna(base_period="varying")
+
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            results = cs.fit(
+                df,
+                outcome='outcome',
+                unit='unit',
+                time='time',
+                first_treat='first_treat'
+            )
+
+            # Should have emitted a warning about no post-treatment effects
+            warning_messages = [str(warning.message) for warning in w]
+            has_warning = any(
+                "No post-treatment effects" in msg for msg in warning_messages
+            )
+            assert has_warning, (
+                f"Expected warning about no post-treatment effects, got: {warning_messages}"
+            )
+
+        # Overall ATT should be NaN
+        assert np.isnan(results.overall_att), (
+            f"Expected NaN for overall_att when no post-treatment effects exist, "
+            f"got {results.overall_att}"
+        )

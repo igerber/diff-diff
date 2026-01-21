@@ -72,6 +72,17 @@ class CallawaySantAnnaAggregationMixin:
             gt_pairs.append((g, t))
             groups_for_gt.append(g)
 
+        # Guard against empty post-treatment set
+        if len(effects) == 0:
+            import warnings
+            warnings.warn(
+                "No post-treatment effects available for overall ATT aggregation. "
+                "This can occur when cohorts lack post-treatment periods in the data.",
+                UserWarning,
+                stacklevel=2
+            )
+            return np.nan, np.nan
+
         effects = np.array(effects)
         weights = np.array(weights_list, dtype=float)
         groups_for_gt = np.array(groups_for_gt)

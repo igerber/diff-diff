@@ -323,6 +323,16 @@ class CallawaySantAnnaBootstrapMixin:
             group_time_effects[gt]['n_treated'] for gt in gt_pairs
         ], dtype=float)
         post_n_treated = all_n_treated[post_treatment_mask]
+
+        # Guard against empty post-treatment set
+        if len(post_treatment_indices) == 0:
+            warnings.warn(
+                "No post-treatment effects for bootstrap aggregation.",
+                UserWarning,
+                stacklevel=2
+            )
+            # Return results with NaN for overall ATT - will be handled by caller
+
         overall_weights_post = post_n_treated / np.sum(post_n_treated)
 
         # Original point estimates

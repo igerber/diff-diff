@@ -209,6 +209,15 @@ class CallawaySantAnna(
         - "warn": Issue warning and drop linearly dependent columns (default)
         - "error": Raise ValueError
         - "silent": Drop columns silently without warning
+    base_period : str, default="varying"
+        Method for selecting the base (reference) period for computing
+        ATT(g,t). Options:
+        - "varying": For pre-treatment periods (t < g - anticipation), use
+          t-1 as base (consecutive comparisons). For post-treatment, use
+          g-1-anticipation. Requires t-1 to exist in data.
+        - "universal": Always use g-1-anticipation as base period.
+        Both produce identical post-treatment effects. Matches R's
+        did::att_gt() base_period parameter.
 
     Attributes
     ----------
@@ -462,11 +471,8 @@ class CallawaySantAnna(
                 base_period_val = g - 1 - self.anticipation
 
         if base_period_val not in period_to_col:
-            # Find closest earlier period
-            earlier = [p for p in time_periods if p < base_period_val]
-            if not earlier:
-                return None, 0.0, 0, 0, None
-            base_period_val = max(earlier)
+            # Base period must exist; no fallback to maintain methodological consistency
+            return None, 0.0, 0, 0, None
 
         # Check if periods exist in the data
         if base_period_val not in period_to_col or t not in period_to_col:
