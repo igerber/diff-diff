@@ -229,6 +229,11 @@ Aggregations:
   - "universal": All comparisons use g-anticipation-1 as base
   - Both produce identical post-treatment ATT(g,t); differ only pre-treatment
   - Matches R `did::att_gt()` base_period parameter
+- Base period interaction with Sun-Abraham comparison:
+  - CS with `base_period="varying"` produces different pre-treatment estimates than SA
+  - This is expected: CS uses consecutive comparisons, SA uses fixed reference (e=-1)
+  - Use `base_period="universal"` for methodologically comparable pre-treatment effects
+  - Post-treatment effects match regardless of base_period setting
 - Control group with `control_group="not_yet_treated"`:
   - Always excludes cohort g from controls when computing ATT(g,t)
   - This applies to both pre-treatment (t < g) and post-treatment (t >= g) periods
