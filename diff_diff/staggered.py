@@ -282,6 +282,9 @@ class CallawaySantAnna(
         E[Y(0)_t - Y(0)_g-1 | G=g] = E[Y(0)_t - Y(0)_g-1 | C=1]
 
     where G=g indicates treatment cohort g and C=1 indicates control units.
+    This uses g-1 as the base period, which applies to post-treatment (t >= g).
+    With base_period="varying" (default), pre-treatment uses t-1 as base for
+    consecutive comparisons useful in parallel trends diagnostics.
 
     References
     ----------
