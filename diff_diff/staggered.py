@@ -209,6 +209,15 @@ class CallawaySantAnna(
         - "warn": Issue warning and drop linearly dependent columns (default)
         - "error": Raise ValueError
         - "silent": Drop columns silently without warning
+    base_period : str, default="varying"
+        Method for selecting the base (reference) period for computing
+        ATT(g,t). Options:
+        - "varying": For pre-treatment periods (t < g - anticipation), use
+          t-1 as base (consecutive comparisons). For post-treatment, use
+          g-1-anticipation. Requires t-1 to exist in data.
+        - "universal": Always use g-1-anticipation as base period.
+        Both produce identical post-treatment effects. Matches R's
+        did::att_gt() base_period parameter.
 
     Attributes
     ----------
@@ -273,6 +282,9 @@ class CallawaySantAnna(
         E[Y(0)_t - Y(0)_g-1 | G=g] = E[Y(0)_t - Y(0)_g-1 | C=1]
 
     where G=g indicates treatment cohort g and C=1 indicates control units.
+    This uses g-1 as the base period, which applies to post-treatment (t >= g).
+    With base_period="varying" (default), pre-treatment uses t-1 as base for
+    consecutive comparisons useful in parallel trends diagnostics.
 
     References
     ----------
@@ -292,6 +304,7 @@ class CallawaySantAnna(
         bootstrap_weight_type: Optional[str] = None,
         seed: Optional[int] = None,
         rank_deficient_action: str = "warn",
+        base_period: str = "varying",
     ):
         import warnings
 
@@ -333,6 +346,12 @@ class CallawaySantAnna(
                 f"got '{rank_deficient_action}'"
             )
 
+        if base_period not in ["varying", "universal"]:
+            raise ValueError(
+                f"base_period must be 'varying' or 'universal', "
+                f"got '{base_period}'"
+            )
+
         self.control_group = control_group
         self.anticipation = anticipation
         self.estimation_method = estimation_method
@@ -344,6 +363,7 @@ class CallawaySantAnna(
         self.bootstrap_weight_type = bootstrap_weights
         self.seed = seed
         self.rank_deficient_action = rank_deficient_action
+        self.base_period = base_period
 
         self.is_fitted_ = False
         self.results_: Optional[CallawaySantAnnaResults] = None
@@ -441,20 +461,27 @@ class CallawaySantAnna(
         all_units = precomputed['all_units']
         covariate_by_period = precomputed['covariate_by_period']
 
-        # Base period for comparison
-        base_period = g - 1 - self.anticipation
-        if base_period not in period_to_col:
-            # Find closest earlier period
-            earlier = [p for p in time_periods if p < g - self.anticipation]
-            if not earlier:
-                return None, 0.0, 0, 0, None
-            base_period = max(earlier)
+        # Base period selection based on mode
+        if self.base_period == "universal":
+            # Universal: always use g - 1 - anticipation
+            base_period_val = g - 1 - self.anticipation
+        else:  # varying
+            if t < g - self.anticipation:
+                # Pre-treatment: use t - 1 (consecutive comparison)
+                base_period_val = t - 1
+            else:
+                # Post-treatment: use g - 1 - anticipation
+                base_period_val = g - 1 - self.anticipation
 
-        # Check if periods exist in the data
-        if base_period not in period_to_col or t not in period_to_col:
+        if base_period_val not in period_to_col:
+            # Base period must exist; no fallback to maintain methodological consistency
             return None, 0.0, 0, 0, None
 
-        base_col = period_to_col[base_period]
+        # Check if periods exist in the data
+        if base_period_val not in period_to_col or t not in period_to_col:
+            return None, 0.0, 0, 0, None
+
+        base_col = period_to_col[base_period_val]
         post_col = period_to_col[t]
 
         # Get treated units mask (cohort g)
@@ -464,8 +491,9 @@ class CallawaySantAnna(
         if self.control_group == "never_treated":
             control_mask = never_treated_mask
         else:  # not_yet_treated
-            # Not yet treated at time t: never-treated OR first_treat > t
-            control_mask = never_treated_mask | (unit_cohorts > t)
+            # Not yet treated at time t: never-treated OR (first_treat > t AND not cohort g)
+            # Must exclude cohort g since they are the treated group for this ATT(g,t)
+            control_mask = never_treated_mask | ((unit_cohorts > t) & (unit_cohorts != g))
 
         # Extract outcomes for base and post periods
         y_base = outcome_matrix[:, base_col]
@@ -499,7 +527,7 @@ class CallawaySantAnna(
         X_treated = None
         X_control = None
         if covariates and covariate_by_period is not None:
-            cov_matrix = covariate_by_period[base_period]
+            cov_matrix = covariate_by_period[base_period_val]
             X_treated = cov_matrix[treated_valid]
             X_control = cov_matrix[control_valid]
 
@@ -640,9 +668,21 @@ class CallawaySantAnna(
         group_time_effects = {}
         influence_func_info = {}  # Store influence functions for bootstrap
 
+        # Get minimum period for determining valid pre-treatment periods
+        min_period = min(time_periods)
+
         for g in treatment_groups:
-            # Periods for which we compute effects (t >= g - anticipation)
-            valid_periods = [t for t in time_periods if t >= g - self.anticipation]
+            # Compute valid periods including pre-treatment
+            if self.base_period == "universal":
+                # Universal: all periods except the base period (which is normalized to 0)
+                universal_base = g - 1 - self.anticipation
+                valid_periods = [t for t in time_periods if t != universal_base]
+            else:
+                # Varying: post-treatment + pre-treatment where t-1 exists
+                valid_periods = [
+                    t for t in time_periods
+                    if t >= g - self.anticipation or t > min_period
+                ]
 
             for t in valid_periods:
                 att_gt, se_gt, n_treat, n_ctrl, inf_info = self._compute_att_gt_fast(
@@ -650,7 +690,7 @@ class CallawaySantAnna(
                 )
 
                 if att_gt is not None:
-                    t_stat = att_gt / se_gt if se_gt > 0 else 0.0
+                    t_stat = att_gt / se_gt if np.isfinite(se_gt) and se_gt > 0 else np.nan
                     p_val = compute_p_value(t_stat)
                     ci = compute_confidence_interval(att_gt, se_gt, self.alpha)
 
@@ -677,8 +717,13 @@ class CallawaySantAnna(
         overall_att, overall_se = self._aggregate_simple(
             group_time_effects, influence_func_info, df, unit, precomputed
         )
-        overall_t = overall_att / overall_se if overall_se > 0 else 0.0
-        overall_p = compute_p_value(overall_t)
+        # Use NaN for t-stat and p-value when SE is undefined (NaN or non-positive)
+        if np.isfinite(overall_se) and overall_se > 0:
+            overall_t = overall_att / overall_se
+            overall_p = compute_p_value(overall_t)
+        else:
+            overall_t = np.nan
+            overall_p = np.nan
         overall_ci = compute_confidence_interval(overall_att, overall_se, self.alpha)
 
         # Compute additional aggregations if requested
@@ -710,7 +755,11 @@ class CallawaySantAnna(
 
             # Update estimates with bootstrap inference
             overall_se = bootstrap_results.overall_att_se
-            overall_t = overall_att / overall_se if overall_se > 0 else 0.0
+            # Use NaN for t-stat when SE is undefined; p-value comes from bootstrap
+            if np.isfinite(overall_se) and overall_se > 0:
+                overall_t = overall_att / overall_se
+            else:
+                overall_t = np.nan
             overall_p = bootstrap_results.overall_att_p_value
             overall_ci = bootstrap_results.overall_att_ci
 
@@ -722,7 +771,7 @@ class CallawaySantAnna(
                     group_time_effects[gt]['p_value'] = bootstrap_results.group_time_p_values[gt]
                     effect = float(group_time_effects[gt]['effect'])
                     se = float(group_time_effects[gt]['se'])
-                    group_time_effects[gt]['t_stat'] = effect / se if se > 0 else 0.0
+                    group_time_effects[gt]['t_stat'] = effect / se if np.isfinite(se) and se > 0 else np.nan
 
             # Update event study effects with bootstrap SEs
             if (event_study_effects is not None
@@ -737,7 +786,7 @@ class CallawaySantAnna(
                         event_study_effects[e]['p_value'] = p_val
                         effect = float(event_study_effects[e]['effect'])
                         se = float(event_study_effects[e]['se'])
-                        event_study_effects[e]['t_stat'] = effect / se if se > 0 else 0.0
+                        event_study_effects[e]['t_stat'] = effect / se if np.isfinite(se) and se > 0 else np.nan
 
             # Update group effects with bootstrap SEs
             if (group_effects is not None
@@ -751,7 +800,7 @@ class CallawaySantAnna(
                         group_effects[g]['p_value'] = bootstrap_results.group_effect_p_values[g]
                         effect = float(group_effects[g]['effect'])
                         se = float(group_effects[g]['se'])
-                        group_effects[g]['t_stat'] = effect / se if se > 0 else 0.0
+                        group_effects[g]['t_stat'] = effect / se if np.isfinite(se) and se > 0 else np.nan
 
         # Store results
         self.results_ = CallawaySantAnnaResults(
@@ -768,6 +817,7 @@ class CallawaySantAnna(
             n_control_units=n_control_units,
             alpha=self.alpha,
             control_group=self.control_group,
+            base_period=self.base_period,
             event_study_effects=event_study_effects,
             group_effects=group_effects,
             bootstrap_results=bootstrap_results,
@@ -1043,6 +1093,7 @@ class CallawaySantAnna(
             "bootstrap_weight_type": self.bootstrap_weight_type,
             "seed": self.seed,
             "rank_deficient_action": self.rank_deficient_action,
+            "base_period": self.base_period,
         }
 
     def set_params(self, **params) -> "CallawaySantAnna":

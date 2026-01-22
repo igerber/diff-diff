@@ -181,6 +181,8 @@ ATT(g,t) = E[Y_t - Y_{g-1} | G_g=1] - E[Y_t - Y_{g-1} | C=1]
 ```
 where G_g=1 indicates units first treated in period g, and C=1 indicates never-treated.
 
+*Note:* This equation uses g-1 as the base period, which applies to post-treatment effects (t ≥ g) and `base_period="universal"`. With `base_period="varying"` (default), pre-treatment effects use t-1 as base for consecutive comparisons (see Base period selection in Edge cases).
+
 With covariates (doubly robust):
 ```
 ATT(g,t) = E[((G_g - p̂_g(X))/(1-p̂_g(X))) × (Y_t - Y_{g-1} - m̂_{0,g,t}(X) + m̂_{0,g,g-1}(X))] / E[G_g]
@@ -200,6 +202,8 @@ Aggregations:
 - Groups with single observation: included but may have high variance
 - Missing group-time cells: ATT(g,t) set to NaN
 - Anticipation: `anticipation` parameter shifts reference period
+  - Group aggregation includes periods t >= g - anticipation (not just t >= g)
+  - Both analytical SE and bootstrap SE aggregation respect anticipation
 - Rank-deficient design matrix (covariate collinearity):
   - Detection: Pivoted QR decomposition with tolerance `1e-07` (R's `qr()` default)
   - Handling: Warns and drops linearly dependent columns, sets NA for dropped coefficients (R-style, matches `lm()`)
@@ -208,7 +212,28 @@ Aggregations:
   - Analytic SE: Returns NaN to signal invalid inference (not biased via zeroing)
   - Bootstrap: Drops non-finite samples, warns, and adjusts p-value floor accordingly
   - Threshold: Returns NaN if <50% of bootstrap samples are valid
+  - Per-effect t_stat: Uses NaN (not 0.0) when SE is non-finite or zero (consistent with overall_t_stat)
   - **Note**: This is a defensive enhancement over reference implementations (R's `did::att_gt`, Stata's `csdid`) which may error or produce unhandled inf/nan in edge cases without informative warnings
+- No post-treatment effects (all treatment occurs after data ends):
+  - Overall ATT set to NaN (no post-treatment periods to aggregate)
+  - All overall inference fields (SE, t-stat, p-value, CI) also set to NaN
+  - Warning emitted: "No post-treatment effects for aggregation"
+  - Individual pre-treatment ATT(g,t) are computed (for parallel trends assessment)
+  - Bootstrap runs for per-effect SEs even without post-treatment; only overall statistics are NaN
+  - **Principle**: NaN propagates consistently through overall inference fields; pre-treatment effects get full bootstrap inference
+- Aggregated t_stat (event-study, group-level):
+  - Uses NaN when SE is non-finite or zero (matches per-effect and overall t_stat behavior)
+  - Previous behavior (0.0 default) was inconsistent and misleading
+- Base period selection (`base_period` parameter):
+  - "varying" (default): Pre-treatment uses t-1 as base (consecutive comparisons)
+  - "universal": All comparisons use g-anticipation-1 as base
+  - Both produce identical post-treatment ATT(g,t); differ only pre-treatment
+  - Matches R `did::att_gt()` base_period parameter
+- Control group with `control_group="not_yet_treated"`:
+  - Always excludes cohort g from controls when computing ATT(g,t)
+  - This applies to both pre-treatment (t < g) and post-treatment (t >= g) periods
+  - For pre-treatment periods: even though cohort g hasn't been treated yet at time t, they are the treated group for this ATT(g,t) and cannot serve as their own controls
+  - Control mask: `never_treated OR (first_treat > t AND first_treat != g)`
 
 **Reference implementation(s):**
 - R: `did::att_gt()` (Callaway & Sant'Anna's official package)

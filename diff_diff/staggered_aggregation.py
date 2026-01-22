@@ -31,6 +31,9 @@ class CallawaySantAnnaAggregationMixin:
     # Type hints for attributes accessed from the main class
     alpha: float
 
+    # Type hint for anticipation attribute accessed from main class
+    anticipation: int
+
     def _aggregate_simple(
         self,
         group_time_effects: Dict,
@@ -49,6 +52,10 @@ class CallawaySantAnnaAggregationMixin:
         shared control units. This includes the wif (weight influence function)
         adjustment from R's `did` package that accounts for uncertainty in
         estimating the group-size weights.
+
+        Note: Only post-treatment effects (t >= g - anticipation) are included
+        in the overall ATT. Pre-treatment effects are computed for parallel
+        trends assessment but are not aggregated into the overall ATT.
         """
         effects = []
         weights_list = []
@@ -56,10 +63,25 @@ class CallawaySantAnnaAggregationMixin:
         groups_for_gt = []
 
         for (g, t), data in group_time_effects.items():
+            # Only include post-treatment effects (t >= g - anticipation)
+            # Pre-treatment effects are for parallel trends, not overall ATT
+            if t < g - self.anticipation:
+                continue
             effects.append(data['effect'])
             weights_list.append(data['n_treated'])
             gt_pairs.append((g, t))
             groups_for_gt.append(g)
+
+        # Guard against empty post-treatment set
+        if len(effects) == 0:
+            import warnings
+            warnings.warn(
+                "No post-treatment effects available for overall ATT aggregation. "
+                "This can occur when cohorts lack post-treatment periods in the data.",
+                UserWarning,
+                stacklevel=2
+            )
+            return np.nan, np.nan
 
         effects = np.array(effects)
         weights = np.array(weights_list, dtype=float)
@@ -379,7 +401,7 @@ class CallawaySantAnnaAggregationMixin:
                 gt_pairs, weights, influence_func_info
             )
 
-            t_stat = agg_effect / agg_se if agg_se > 0 else 0.0
+            t_stat = agg_effect / agg_se if np.isfinite(agg_se) and agg_se > 0 else np.nan
             p_val = compute_p_value(t_stat)
             ci = compute_confidence_interval(agg_effect, agg_se, self.alpha)
 
@@ -411,12 +433,12 @@ class CallawaySantAnnaAggregationMixin:
         group_effects = {}
 
         for g in groups:
-            # Get all effects for this group (post-treatment only: t >= g)
+            # Get all effects for this group (post-treatment only: t >= g - anticipation)
             # Keep track of (g, t) pairs for influence function aggregation
             g_effects = [
                 ((g, t), data['effect'])
                 for (gg, t), data in group_time_effects.items()
-                if gg == g and t >= g
+                if gg == g and t >= g - self.anticipation
             ]
 
             if not g_effects:
@@ -435,7 +457,7 @@ class CallawaySantAnnaAggregationMixin:
                 gt_pairs, weights, influence_func_info
             )
 
-            t_stat = agg_effect / agg_se if agg_se > 0 else 0.0
+            t_stat = agg_effect / agg_se if np.isfinite(agg_se) and agg_se > 0 else np.nan
             p_val = compute_p_value(t_stat)
             ci = compute_confidence_interval(agg_effect, agg_se, self.alpha)
 
