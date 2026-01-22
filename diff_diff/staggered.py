@@ -686,7 +686,7 @@ class CallawaySantAnna(
                 )
 
                 if att_gt is not None:
-                    t_stat = att_gt / se_gt if se_gt > 0 else 0.0
+                    t_stat = att_gt / se_gt if np.isfinite(se_gt) and se_gt > 0 else np.nan
                     p_val = compute_p_value(t_stat)
                     ci = compute_confidence_interval(att_gt, se_gt, self.alpha)
 
@@ -767,7 +767,7 @@ class CallawaySantAnna(
                     group_time_effects[gt]['p_value'] = bootstrap_results.group_time_p_values[gt]
                     effect = float(group_time_effects[gt]['effect'])
                     se = float(group_time_effects[gt]['se'])
-                    group_time_effects[gt]['t_stat'] = effect / se if se > 0 else 0.0
+                    group_time_effects[gt]['t_stat'] = effect / se if np.isfinite(se) and se > 0 else np.nan
 
             # Update event study effects with bootstrap SEs
             if (event_study_effects is not None
@@ -782,7 +782,7 @@ class CallawaySantAnna(
                         event_study_effects[e]['p_value'] = p_val
                         effect = float(event_study_effects[e]['effect'])
                         se = float(event_study_effects[e]['se'])
-                        event_study_effects[e]['t_stat'] = effect / se if se > 0 else 0.0
+                        event_study_effects[e]['t_stat'] = effect / se if np.isfinite(se) and se > 0 else np.nan
 
             # Update group effects with bootstrap SEs
             if (group_effects is not None
@@ -796,7 +796,7 @@ class CallawaySantAnna(
                         group_effects[g]['p_value'] = bootstrap_results.group_effect_p_values[g]
                         effect = float(group_effects[g]['effect'])
                         se = float(group_effects[g]['se'])
-                        group_effects[g]['t_stat'] = effect / se if se > 0 else 0.0
+                        group_effects[g]['t_stat'] = effect / se if np.isfinite(se) and se > 0 else np.nan
 
         # Store results
         self.results_ = CallawaySantAnnaResults(

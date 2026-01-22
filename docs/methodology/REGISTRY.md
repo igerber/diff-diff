@@ -200,6 +200,8 @@ Aggregations:
 - Groups with single observation: included but may have high variance
 - Missing group-time cells: ATT(g,t) set to NaN
 - Anticipation: `anticipation` parameter shifts reference period
+  - Group aggregation includes periods t >= g - anticipation (not just t >= g)
+  - Both analytical SE and bootstrap SE aggregation respect anticipation
 - Rank-deficient design matrix (covariate collinearity):
   - Detection: Pivoted QR decomposition with tolerance `1e-07` (R's `qr()` default)
   - Handling: Warns and drops linearly dependent columns, sets NA for dropped coefficients (R-style, matches `lm()`)
@@ -208,6 +210,7 @@ Aggregations:
   - Analytic SE: Returns NaN to signal invalid inference (not biased via zeroing)
   - Bootstrap: Drops non-finite samples, warns, and adjusts p-value floor accordingly
   - Threshold: Returns NaN if <50% of bootstrap samples are valid
+  - Per-effect t_stat: Uses NaN (not 0.0) when SE is non-finite or zero (consistent with overall_t_stat)
   - **Note**: This is a defensive enhancement over reference implementations (R's `did::att_gt`, Stata's `csdid`) which may error or produce unhandled inf/nan in edge cases without informative warnings
 - No post-treatment effects (all treatment occurs after data ends):
   - Overall ATT set to NaN (no post-treatment periods to aggregate)

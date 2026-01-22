@@ -611,10 +611,10 @@ class CallawaySantAnnaBootstrapMixin:
         result = {}
 
         for g in treatment_groups:
-            # Get all effects for this group (post-treatment only: t >= g)
+            # Get all effects for this group (post-treatment only: t >= g - anticipation)
             group_data = []
             for j, (gg, t) in enumerate(gt_pairs):
-                if gg == g and t >= g:
+                if gg == g and t >= g - self.anticipation:
                     group_data.append((
                         j,
                         group_time_effects[(gg, t)]['effect'],

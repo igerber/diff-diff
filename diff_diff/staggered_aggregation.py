@@ -433,12 +433,12 @@ class CallawaySantAnnaAggregationMixin:
         group_effects = {}
 
         for g in groups:
-            # Get all effects for this group (post-treatment only: t >= g)
+            # Get all effects for this group (post-treatment only: t >= g - anticipation)
             # Keep track of (g, t) pairs for influence function aggregation
             g_effects = [
                 ((g, t), data['effect'])
                 for (gg, t), data in group_time_effects.items()
-                if gg == g and t >= g
+                if gg == g and t >= g - self.anticipation
             ]
 
             if not g_effects:
