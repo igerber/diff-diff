@@ -227,6 +227,11 @@ Aggregations:
   - "universal": All comparisons use g-anticipation-1 as base
   - Both produce identical post-treatment ATT(g,t); differ only pre-treatment
   - Matches R `did::att_gt()` base_period parameter
+- Control group with `control_group="not_yet_treated"`:
+  - Always excludes cohort g from controls when computing ATT(g,t)
+  - This applies to both pre-treatment (t < g) and post-treatment (t >= g) periods
+  - For pre-treatment periods: even though cohort g hasn't been treated yet at time t, they are the treated group for this ATT(g,t) and cannot serve as their own controls
+  - Control mask: `never_treated OR (first_treat > t AND first_treat != g)`
 
 **Reference implementation(s):**
 - R: `did::att_gt()` (Callaway & Sant'Anna's official package)

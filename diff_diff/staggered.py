@@ -488,8 +488,9 @@ class CallawaySantAnna(
         if self.control_group == "never_treated":
             control_mask = never_treated_mask
         else:  # not_yet_treated
-            # Not yet treated at time t: never-treated OR first_treat > t
-            control_mask = never_treated_mask | (unit_cohorts > t)
+            # Not yet treated at time t: never-treated OR (first_treat > t AND not cohort g)
+            # Must exclude cohort g since they are the treated group for this ATT(g,t)
+            control_mask = never_treated_mask | ((unit_cohorts > t) & (unit_cohorts != g))
 
         # Extract outcomes for base and post periods
         y_base = outcome_matrix[:, base_col]

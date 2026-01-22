@@ -2439,6 +2439,100 @@ class TestCallawaySantAnnaPreTreatment:
             "Overall ATT p-value should be NaN when no post-treatment"
         )
 
+    def test_not_yet_treated_excludes_cohort_from_controls(self):
+        """Not-yet-treated control excludes treated cohort g for pre-treatment periods.
+
+        When computing ATT(g,t) for t < g with control_group="not_yet_treated",
+        cohort g should NOT be included in the control group even though
+        they haven't been treated yet at time t.
+
+        Bug scenario (before fix):
+        - Computing ATT(g=5, t=3) with control_group="not_yet_treated"
+        - Control mask was: never_treated OR first_treat > t
+        - Units with first_treat=5 satisfy first_treat > 3, so they were
+          incorrectly included as controls for themselves!
+
+        After fix:
+        - Control mask is: never_treated OR (first_treat > t AND first_treat != g)
+        - Cohort g is always excluded from controls.
+        """
+        # Create data with 3 distinct cohorts: g=4, g=7, and never-treated (g=0)
+        # This setup ensures for ATT(g=7, t=3):
+        #   - Treated: units with first_treat=7
+        #   - Valid controls: never-treated + cohort g=4 (since 4 > 3 and 4 != 7)
+        #   - Invalid (excluded): cohort g=7 (even though 7 > 3)
+        n_units = 90  # 30 per group
+        n_periods = 10
+        np.random.seed(42)
+
+        data = []
+        for unit in range(n_units):
+            # Assign to cohorts: 0-29 -> g=4, 30-59 -> g=7, 60-89 -> never-treated
+            if unit < 30:
+                first_treat = 4
+            elif unit < 60:
+                first_treat = 7
+            else:
+                first_treat = 0  # Never-treated
+
+            for t in range(1, n_periods + 1):
+                # Add treatment effect after treatment
+                effect = 0.0
+                if first_treat > 0 and t >= first_treat:
+                    effect = 2.0
+
+                outcome = np.random.randn() + effect
+                data.append({
+                    'unit': unit,
+                    'time': t,
+                    'outcome': outcome,
+                    'first_treat': first_treat
+                })
+
+        df = pd.DataFrame(data)
+
+        # Fit with not_yet_treated control group
+        cs = CallawaySantAnna(
+            control_group="not_yet_treated",
+            base_period="varying"  # To get pre-treatment effects
+        )
+        results = cs.fit(
+            df,
+            outcome='outcome',
+            unit='unit',
+            time='time',
+            first_treat='first_treat'
+        )
+
+        # Check the group-time effects for pre-treatment ATT(g=7, t) where t < 7
+        # These should have been computed using valid controls only
+        for (g, t), eff in results.group_time_effects.items():
+            if g == 7 and t < g:  # Pre-treatment for cohort 7
+                n_control = eff['n_control']
+                # Control should include:
+                #   - 30 never-treated units
+                #   - 30 units from cohort g=4 (if t < 4, they're not yet treated either)
+                # Control should NOT include:
+                #   - The 30 units from cohort g=7 (they're the treated group!)
+
+                # For t < 4: controls = never-treated (30) + cohort 4 (30) = 60
+                # For 4 <= t < 7: controls = never-treated (30) only (cohort 4 is treated)
+                if t < 4:
+                    expected_max = 60  # never-treated + cohort 4
+                else:
+                    expected_max = 30  # never-treated only
+
+                # Key assertion: n_control should NOT be 90 (which would include cohort 7)
+                assert n_control <= expected_max, (
+                    f"ATT(g=7, t={t}): n_control={n_control} should be <= {expected_max}. "
+                    f"Cohort 7 (30 units) should NOT be included as controls for itself."
+                )
+
+                # Also verify we have a reasonable number of controls
+                assert n_control >= 30, (
+                    f"ATT(g=7, t={t}): n_control={n_control} should be >= 30 (never-treated)."
+                )
+
 
 class TestCallawaySantAnnaAnticipation:
     """Tests for anticipation parameter handling in aggregation."""
