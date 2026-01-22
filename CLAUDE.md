@@ -514,3 +514,120 @@ When adding code that emits warnings or handles errors:
 4. **Protect arithmetic operations**:
    - [ ] Wrap ALL related operations in `np.errstate()`, not just the final one
    - [ ] Include division, matrix multiplication, and any operation that can overflow/underflow
+
+### Reviewing New Features or Code Paths
+
+When reviewing PRs that add new features, modes, or code paths (learned from PR #97 analysis):
+
+1. **Edge Case Coverage**:
+   - [ ] Empty result sets (no matching data for a filter condition)
+   - [ ] NaN/Inf propagation through ALL inference fields (SE, t-stat, p-value, CI)
+   - [ ] Parameter interactions (e.g., new param × existing aggregation methods)
+   - [ ] Control/comparison group composition for all code paths
+
+2. **Documentation Completeness**:
+   - [ ] All new parameters have docstrings with type, default, and description
+   - [ ] Methodology docs match implementation behavior (equations, edge cases)
+   - [ ] Edge cases documented in `docs/methodology/REGISTRY.md`
+
+3. **Logic Audit for New Code Paths**:
+   - [ ] When adding new modes (like `base_period="varying"`), trace ALL downstream effects
+   - [ ] Check aggregation methods handle the new mode correctly
+   - [ ] Check bootstrap/inference methods handle the new mode correctly
+   - [ ] Explicitly test control group composition in new code paths
+
+4. **Pattern Consistency**:
+   - [ ] Search for similar patterns in codebase (e.g., `t_stat = x / se if se > 0 else ...`)
+   - [ ] Ensure new code follows established patterns or updates ALL instances
+   - [ ] If fixing a pattern, grep for ALL occurrences first:
+     ```bash
+     grep -n "if.*se.*> 0.*else" diff_diff/*.py
+     ```
+
+### Fixing Bugs Across Multiple Locations
+
+When a bug fix involves a pattern that appears in multiple places (learned from PR #97 analysis):
+
+1. **Find All Instances First**:
+   - [ ] Use grep/search to find ALL occurrences of the pattern before fixing
+   - [ ] Document the locations found (file:line)
+   - [ ] Example: `t_stat = effect / se if se > 0 else 0.0` appeared in 7 locations
+
+2. **Fix Comprehensively in One Round**:
+   - [ ] Fix ALL instances in the same PR/commit
+   - [ ] Create a test that covers all locations
+   - [ ] Don't fix incrementally across multiple review rounds
+
+3. **Regression Test the Fix**:
+   - [ ] Verify fix doesn't break other code paths
+   - [ ] For early-return fixes: ensure downstream code still runs when needed
+   - [ ] Example: Bootstrap early return must still compute per-effect SEs
+
+4. **Common Patterns to Watch For**:
+   - `if se > 0 else 0.0` → should be `else np.nan` for undefined statistics
+   - `if len(data) > 0 else return` → check what downstream code expects
+   - `mask = (condition)` → verify mask logic for all parameter combinations
+
+### Pre-Merge Review Checklist
+
+Final checklist before approving a PR:
+
+1. **Behavioral Completeness**:
+   - [ ] Happy path tested
+   - [ ] Edge cases tested (empty data, NaN inputs, boundary conditions)
+   - [ ] Error/warning paths tested with behavioral assertions
+
+2. **Inference Field Consistency**:
+   - [ ] If one inference field (SE, t-stat, p-value) can be NaN, all related fields handle it
+   - [ ] Aggregation methods propagate NaN correctly
+   - [ ] Bootstrap methods handle NaN in base estimates
+
+3. **Documentation Sync**:
+   - [ ] Docstrings updated for all changed signatures
+   - [ ] README updated if user-facing behavior changes
+   - [ ] REGISTRY.md updated if methodology edge cases change
+
+## Task Implementation Workflow
+
+When implementing features or fixes, follow this workflow to ensure quality and catch issues early:
+
+### Phase 1: Planning
+- Use `EnterPlanMode` for non-trivial tasks
+- Consult `docs/methodology/REGISTRY.md` for methodology-critical code
+- Identify all files and code paths that will be affected
+- For bug fixes: grep for the pattern first to find ALL occurrences
+
+### Phase 2: Implementation
+- Follow the relevant development checklists above
+- Write tests alongside implementation (not after)
+- For bug fixes: fix ALL occurrences in the same commit
+- For new parameters: ensure all aggregation/bootstrap paths handle them
+
+### Phase 3: Pre-Merge Review
+**Run `/pre-merge-check` before submitting**. This skill will:
+1. Run automated pattern checks on changed files (NaN handling, etc.)
+2. Check for missing test coverage
+3. Display context-specific checklist items based on what changed
+4. Optionally run the test suite
+
+Address any warnings before proceeding.
+
+### Phase 4: Submit
+- Use `/submit-pr` to create the PR
+- Automated AI review will run additional methodology and edge case checks
+- The PR template will prompt for methodology references if applicable
+
+### Quick Reference: Common Patterns to Check
+
+Before submitting methodology changes, verify these patterns:
+
+```bash
+# Find potential NaN handling issues (should use np.nan, not 0.0)
+grep -n "if.*se.*>.*0.*else 0" diff_diff/*.py
+
+# Find all t_stat calculations to ensure consistency
+grep -n "t_stat.*=" diff_diff/*.py
+
+# Find all inference field assignments
+grep -n "\(se\|t_stat\|p_value\|ci_lower\|ci_upper\).*=" diff_diff/*.py | head -30
+```
