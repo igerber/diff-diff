@@ -526,6 +526,107 @@ class TestSunAbrahamVsCallawaySantAnna:
         assert abs(sa_results.overall_att - 3.0) < 2.0
         assert abs(cs_results.overall_att - 3.0) < 2.0
 
+    def test_pre_period_difference_expected_between_cs_sa(self):
+        """Pre-periods differ between CS (varying) and SA; post-periods match.
+
+        This is expected: CS uses consecutive comparisons, SA uses fixed reference.
+        CS with base_period="universal" should be closer to SA for pre-periods.
+        """
+        from diff_diff import CallawaySantAnna
+
+        data = generate_staggered_data(
+            n_units=200, treatment_effect=3.0, seed=42
+        )
+
+        # Sun-Abraham (uses fixed reference period e=-1)
+        sa = SunAbraham()
+        sa_results = sa.fit(
+            data,
+            outcome="outcome",
+            unit="unit",
+            time="time",
+            first_treat="first_treat",
+        )
+
+        # Callaway-Sant'Anna with varying base (default: consecutive comparisons)
+        cs_varying = CallawaySantAnna(base_period="varying")
+        cs_varying_results = cs_varying.fit(
+            data,
+            outcome="outcome",
+            unit="unit",
+            time="time",
+            first_treat="first_treat",
+            aggregate="event_study",
+        )
+
+        # Callaway-Sant'Anna with universal base (all compare to g-1)
+        cs_universal = CallawaySantAnna(base_period="universal")
+        cs_universal_results = cs_universal.fit(
+            data,
+            outcome="outcome",
+            unit="unit",
+            time="time",
+            first_treat="first_treat",
+            aggregate="event_study",
+        )
+
+        # Find common event times
+        sa_times = set(sa_results.event_study_effects.keys())
+        cs_varying_times = set(cs_varying_results.event_study_effects.keys())
+        cs_universal_times = set(cs_universal_results.event_study_effects.keys())
+        common_times = sa_times & cs_varying_times & cs_universal_times
+
+        # Separate pre and post periods
+        pre_times = [t for t in common_times if t < 0]
+        post_times = [t for t in common_times if t > 0]
+
+        # Post-treatment effects should match across all methods
+        for t in post_times:
+            sa_eff = sa_results.event_study_effects[t]["effect"]
+            cs_vary_eff = cs_varying_results.event_study_effects[t]["effect"]
+            cs_univ_eff = cs_universal_results.event_study_effects[t]["effect"]
+
+            # All three should be similar for post-treatment
+            max_se = max(
+                sa_results.event_study_effects[t]["se"],
+                cs_varying_results.event_study_effects[t]["se"],
+                cs_universal_results.event_study_effects[t]["se"],
+            )
+            assert abs(sa_eff - cs_vary_eff) < 3 * max_se, (
+                f"Post-period t={t}: SA and CS(varying) differ too much: "
+                f"SA={sa_eff:.4f}, CS(vary)={cs_vary_eff:.4f}"
+            )
+            assert abs(sa_eff - cs_univ_eff) < 3 * max_se, (
+                f"Post-period t={t}: SA and CS(universal) differ too much: "
+                f"SA={sa_eff:.4f}, CS(univ)={cs_univ_eff:.4f}"
+            )
+
+        # Require pre-periods exist for this test to be meaningful
+        assert len(pre_times) > 0, (
+            "Test requires pre-treatment periods to validate methodology difference. "
+            "Increase n_periods or adjust cohort timing in test data."
+        )
+
+        # Compute total absolute differences
+        total_diff_varying = 0.0
+        total_diff_universal = 0.0
+        for t in pre_times:
+            sa_eff = sa_results.event_study_effects[t]["effect"]
+            cs_vary_eff = cs_varying_results.event_study_effects[t]["effect"]
+            cs_univ_eff = cs_universal_results.event_study_effects[t]["effect"]
+
+            total_diff_varying += abs(sa_eff - cs_vary_eff)
+            total_diff_universal += abs(sa_eff - cs_univ_eff)
+
+        # CS(universal) should generally be closer to SA than CS(varying)
+        # for pre-treatment periods (due to similar reference period approach)
+        # Allow some tolerance since weighting schemes still differ
+        assert total_diff_universal <= total_diff_varying + 0.5, (
+            f"Expected CS(universal) to be closer to SA than CS(varying) for pre-periods. "
+            f"Got: CS(univ)-SA diff={total_diff_universal:.4f}, "
+            f"CS(vary)-SA diff={total_diff_varying:.4f}"
+        )
+
     def test_agreement_under_homogeneous_effects(self):
         """Test that SA and CS agree under homogeneous treatment effects."""
         from diff_diff import CallawaySantAnna
