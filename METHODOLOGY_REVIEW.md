@@ -1,0 +1,334 @@
+# Methodology Review
+
+This document tracks the progress of reviewing each estimator's implementation against the Methodology Registry and academic references. It ensures that implementations are correct, consistent, and well-documented.
+
+For the methodology registry with academic foundations and key equations, see [docs/methodology/REGISTRY.md](docs/methodology/REGISTRY.md).
+
+---
+
+## Overview
+
+Each estimator in diff-diff should be periodically reviewed to ensure:
+1. **Correctness**: Implementation matches the academic paper's equations
+2. **Reference alignment**: Behavior matches reference implementations (R packages, Stata commands)
+3. **Edge case handling**: Documented edge cases are handled correctly
+4. **Standard errors**: SE formulas match the documented approach
+
+---
+
+## Review Status Summary
+
+| Estimator | Module | R Reference | Status | Last Review |
+|-----------|--------|-------------|--------|-------------|
+| DifferenceInDifferences | `estimators.py` | `fixest::feols()` | Not Started | - |
+| MultiPeriodDiD | `estimators.py` | `fixest::feols()` | Not Started | - |
+| TwoWayFixedEffects | `twfe.py` | `fixest::feols()` | Not Started | - |
+| CallawaySantAnna | `staggered.py` | `did::att_gt()` | Not Started | - |
+| SunAbraham | `sun_abraham.py` | `fixest::sunab()` | Not Started | - |
+| SyntheticDiD | `synthetic_did.py` | `synthdid::synthdid_estimate()` | Not Started | - |
+| TripleDifference | `triple_diff.py` | (forthcoming) | Not Started | - |
+| TROP | `trop.py` | (forthcoming) | Not Started | - |
+| BaconDecomposition | `bacon.py` | `bacondecomp::bacon()` | Not Started | - |
+| HonestDiD | `honest_did.py` | `HonestDiD` package | Not Started | - |
+| PreTrendsPower | `pretrends.py` | `pretrends` package | Not Started | - |
+| PowerAnalysis | `power.py` | `pwr` / `DeclareDesign` | Not Started | - |
+
+**Status legend:**
+- **Not Started**: No formal review conducted
+- **In Progress**: Review underway
+- **Complete**: Review finished, implementation verified
+
+---
+
+## Detailed Review Notes
+
+### Core DiD Estimators
+
+#### DifferenceInDifferences
+
+| Field | Value |
+|-------|-------|
+| Module | `estimators.py` |
+| Primary Reference | Wooldridge (2010), Angrist & Pischke (2009) |
+| R Reference | `fixest::feols()` |
+| Status | Not Started |
+| Last Review | - |
+
+**Corrections Made:**
+- (None yet)
+
+**Outstanding Concerns:**
+- (None yet)
+
+---
+
+#### MultiPeriodDiD
+
+| Field | Value |
+|-------|-------|
+| Module | `estimators.py` |
+| Primary Reference | Freyaldenhoven et al. (2021) |
+| R Reference | `fixest::feols()` |
+| Status | Not Started |
+| Last Review | - |
+
+**Corrections Made:**
+- (None yet)
+
+**Outstanding Concerns:**
+- (None yet)
+
+---
+
+#### TwoWayFixedEffects
+
+| Field | Value |
+|-------|-------|
+| Module | `twfe.py` |
+| Primary Reference | Wooldridge (2010), Ch. 10 |
+| R Reference | `fixest::feols()` |
+| Status | Not Started |
+| Last Review | - |
+
+**Corrections Made:**
+- (None yet)
+
+**Outstanding Concerns:**
+- (None yet)
+
+---
+
+### Modern Staggered Estimators
+
+#### CallawaySantAnna
+
+| Field | Value |
+|-------|-------|
+| Module | `staggered.py` |
+| Primary Reference | Callaway & Sant'Anna (2021) |
+| R Reference | `did::att_gt()` |
+| Status | Not Started |
+| Last Review | - |
+
+**Corrections Made:**
+- (None yet)
+
+**Outstanding Concerns:**
+- (None yet)
+
+---
+
+#### SunAbraham
+
+| Field | Value |
+|-------|-------|
+| Module | `sun_abraham.py` |
+| Primary Reference | Sun & Abraham (2021) |
+| R Reference | `fixest::sunab()` |
+| Status | Not Started |
+| Last Review | - |
+
+**Corrections Made:**
+- (None yet)
+
+**Outstanding Concerns:**
+- (None yet)
+
+---
+
+### Advanced Estimators
+
+#### SyntheticDiD
+
+| Field | Value |
+|-------|-------|
+| Module | `synthetic_did.py` |
+| Primary Reference | Arkhangelsky et al. (2021) |
+| R Reference | `synthdid::synthdid_estimate()` |
+| Status | Not Started |
+| Last Review | - |
+
+**Corrections Made:**
+- (None yet)
+
+**Outstanding Concerns:**
+- (None yet)
+
+---
+
+#### TripleDifference
+
+| Field | Value |
+|-------|-------|
+| Module | `triple_diff.py` |
+| Primary Reference | Ortiz-Villavicencio & Sant'Anna (2025) |
+| R Reference | (forthcoming) |
+| Status | Not Started |
+| Last Review | - |
+
+**Corrections Made:**
+- (None yet)
+
+**Outstanding Concerns:**
+- (None yet)
+
+---
+
+#### TROP
+
+| Field | Value |
+|-------|-------|
+| Module | `trop.py` |
+| Primary Reference | Athey, Imbens, Qu & Viviano (2025) |
+| R Reference | (forthcoming) |
+| Status | Not Started |
+| Last Review | - |
+
+**Corrections Made:**
+- (None yet)
+
+**Outstanding Concerns:**
+- (None yet)
+
+---
+
+### Diagnostics & Sensitivity
+
+#### BaconDecomposition
+
+| Field | Value |
+|-------|-------|
+| Module | `bacon.py` |
+| Primary Reference | Goodman-Bacon (2021) |
+| R Reference | `bacondecomp::bacon()` |
+| Status | Not Started |
+| Last Review | - |
+
+**Corrections Made:**
+- (None yet)
+
+**Outstanding Concerns:**
+- (None yet)
+
+---
+
+#### HonestDiD
+
+| Field | Value |
+|-------|-------|
+| Module | `honest_did.py` |
+| Primary Reference | Rambachan & Roth (2023) |
+| R Reference | `HonestDiD` package |
+| Status | Not Started |
+| Last Review | - |
+
+**Corrections Made:**
+- (None yet)
+
+**Outstanding Concerns:**
+- (None yet)
+
+---
+
+#### PreTrendsPower
+
+| Field | Value |
+|-------|-------|
+| Module | `pretrends.py` |
+| Primary Reference | Roth (2022) |
+| R Reference | `pretrends` package |
+| Status | Not Started |
+| Last Review | - |
+
+**Corrections Made:**
+- (None yet)
+
+**Outstanding Concerns:**
+- (None yet)
+
+---
+
+#### PowerAnalysis
+
+| Field | Value |
+|-------|-------|
+| Module | `power.py` |
+| Primary Reference | Bloom (1995), Burlig et al. (2020) |
+| R Reference | `pwr` / `DeclareDesign` |
+| Status | Not Started |
+| Last Review | - |
+
+**Corrections Made:**
+- (None yet)
+
+**Outstanding Concerns:**
+- (None yet)
+
+---
+
+## Review Process Guidelines
+
+### Review Checklist
+
+For each estimator, complete the following steps:
+
+- [ ] **Read primary academic source** - Review the key paper(s) cited in REGISTRY.md
+- [ ] **Compare key equations** - Verify implementation matches equations in REGISTRY.md
+- [ ] **Run benchmark against R reference** - Execute `benchmarks/run_benchmarks.py --estimator <name>` if available
+- [ ] **Verify edge case handling** - Check behavior matches REGISTRY.md documentation
+- [ ] **Check standard error formula** - Confirm SE computation matches reference
+- [ ] **Document any deviations** - Add notes explaining intentional differences with rationale
+
+### When to Update This Document
+
+1. **After completing a review**: Update status to "Complete" and add date
+2. **When making corrections**: Document what was fixed in the "Corrections Made" section
+3. **When identifying issues**: Add to "Outstanding Concerns" for future investigation
+4. **When deviating from reference**: Document the deviation and rationale
+
+### Deviation Documentation
+
+When our implementation intentionally differs from the reference implementation, document:
+
+1. **What differs**: Specific behavior or formula that differs
+2. **Why**: Rationale (e.g., "defensive enhancement", "bug in R package", "follows updated paper")
+3. **Impact**: Whether results differ in practice
+4. **Cross-reference**: Update REGISTRY.md edge cases section
+
+Example:
+```
+**Deviation (2025-01-15)**: CallawaySantAnna returns NaN for t_stat when SE is non-finite,
+whereas R's `did::att_gt` would error. This is a defensive enhancement that provides
+more graceful handling of edge cases while still signaling invalid inference to users.
+```
+
+### Priority Order
+
+Suggested order for reviews based on usage and complexity:
+
+1. **High priority** (most used, complex methodology):
+   - CallawaySantAnna
+   - SyntheticDiD
+   - HonestDiD
+
+2. **Medium priority** (commonly used, simpler methodology):
+   - DifferenceInDifferences
+   - TwoWayFixedEffects
+   - MultiPeriodDiD
+   - SunAbraham
+   - BaconDecomposition
+
+3. **Lower priority** (newer or less commonly used):
+   - TripleDifference
+   - TROP
+   - PreTrendsPower
+   - PowerAnalysis
+
+---
+
+## Related Documents
+
+- [REGISTRY.md](docs/methodology/REGISTRY.md) - Academic foundations and key equations
+- [ROADMAP.md](ROADMAP.md) - Feature roadmap
+- [TODO.md](TODO.md) - Technical debt tracking
+- [CLAUDE.md](CLAUDE.md) - Development guidelines
