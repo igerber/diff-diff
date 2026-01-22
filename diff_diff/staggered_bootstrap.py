@@ -324,48 +324,27 @@ class CallawaySantAnnaBootstrapMixin:
         ], dtype=float)
         post_n_treated = all_n_treated[post_treatment_mask]
 
-        # Guard against empty post-treatment set - return early with NaN results
+        # Flag to skip overall ATT aggregation when no post-treatment effects
+        # But continue bootstrap for per-effect SEs (pre-treatment effects need bootstrap SEs too)
+        skip_overall_aggregation = False
         if len(post_treatment_indices) == 0:
             warnings.warn(
                 "No post-treatment effects for bootstrap aggregation. "
-                "Returning NaN for overall ATT statistics.",
+                "Overall ATT statistics will be NaN, but per-effect SEs will be computed.",
                 UserWarning,
                 stacklevel=2
             )
-            # Return bootstrap results with NaN for overall ATT inference
-            # Individual group-time effects may still have valid pre-treatment SEs
-            gt_ses = {gt: group_time_effects[gt].get('se', np.nan) for gt in gt_pairs}
-            gt_cis = {
-                gt: group_time_effects[gt].get('conf_int', (np.nan, np.nan))
-                for gt in gt_pairs
-            }
-            gt_p_values = {
-                gt: group_time_effects[gt].get('p_value', np.nan) for gt in gt_pairs
-            }
-            return CSBootstrapResults(
-                n_bootstrap=self.n_bootstrap,
-                weight_type=self.bootstrap_weight_type,
-                alpha=self.alpha,
-                overall_att_se=np.nan,
-                overall_att_ci=(np.nan, np.nan),
-                overall_att_p_value=np.nan,
-                group_time_ses=gt_ses,
-                group_time_cis=gt_cis,
-                group_time_p_values=gt_p_values,
-                event_study_ses=None,
-                event_study_cis=None,
-                event_study_p_values=None,
-                group_effect_ses=None,
-                group_effect_cis=None,
-                group_effect_p_values=None,
-                bootstrap_distribution=np.array([]),
-            )
-
-        overall_weights_post = post_n_treated / np.sum(post_n_treated)
+            skip_overall_aggregation = True
+            overall_weights_post = np.array([])
+        else:
+            overall_weights_post = post_n_treated / np.sum(post_n_treated)
 
         # Original point estimates
         original_atts = np.array([group_time_effects[gt]['effect'] for gt in gt_pairs])
-        original_overall = np.sum(overall_weights_post * original_atts[post_treatment_mask])
+        if skip_overall_aggregation:
+            original_overall = np.nan
+        else:
+            original_overall = np.sum(overall_weights_post * original_atts[post_treatment_mask])
 
         # Prepare event study and group aggregation info if needed
         event_study_info = None
@@ -431,9 +410,12 @@ class CallawaySantAnnaBootstrapMixin:
 
         # Vectorized overall ATT: matrix-vector multiply (post-treatment only)
         # Shape: (n_bootstrap,)
-        # Suppress RuntimeWarnings for edge cases - non-finite values handled at statistics computation
-        with np.errstate(divide='ignore', invalid='ignore', over='ignore'):
-            bootstrap_overall = bootstrap_atts_gt[:, post_treatment_indices] @ overall_weights_post
+        if skip_overall_aggregation:
+            bootstrap_overall = np.full(self.n_bootstrap, np.nan)
+        else:
+            # Suppress RuntimeWarnings for edge cases - non-finite values handled at statistics computation
+            with np.errstate(divide='ignore', invalid='ignore', over='ignore'):
+                bootstrap_overall = bootstrap_atts_gt[:, post_treatment_indices] @ overall_weights_post
 
         # Vectorized event study aggregation
         # Non-finite values handled at statistics computation stage
@@ -481,10 +463,15 @@ class CallawaySantAnnaBootstrapMixin:
             gt_p_values[gt] = p_value
 
         # Compute bootstrap statistics for overall ATT
-        overall_se, overall_ci, overall_p_value = self._compute_effect_bootstrap_stats(
-            original_overall, bootstrap_overall,
-            context="overall ATT"
-        )
+        if skip_overall_aggregation:
+            overall_se = np.nan
+            overall_ci = (np.nan, np.nan)
+            overall_p_value = np.nan
+        else:
+            overall_se, overall_ci, overall_p_value = self._compute_effect_bootstrap_stats(
+                original_overall, bootstrap_overall,
+                context="overall ATT"
+            )
 
         # Compute bootstrap statistics for event study effects
         event_study_ses = None

@@ -2357,6 +2357,88 @@ class TestCallawaySantAnnaPreTreatment:
         assert np.isnan(results.bootstrap_results.overall_att_se)
         assert np.isnan(results.bootstrap_results.overall_att_p_value)
 
+    def test_bootstrap_runs_for_pretreatment_effects(self):
+        """Bootstrap computes SEs for pre-treatment effects even when no post-treatment.
+
+        When all treatment occurs after data ends, the overall ATT should be NaN,
+        but pre-treatment effects should still get bootstrap SEs (not analytical).
+        """
+        import warnings
+
+        # Create data where all treatment happens after the data ends
+        # so we have only pre-treatment effects
+        n_units = 60
+        n_periods = 6
+        np.random.seed(999)
+
+        data = []
+        for unit in range(n_units):
+            # Half the units have first_treat at period 10 (after data ends at 6)
+            # Other half are never-treated (control)
+            first_treat = 10 if unit < n_units // 2 else 0
+            for t in range(1, n_periods + 1):
+                outcome = np.random.randn() + (0.5 * t)  # Some time trend
+                data.append({
+                    'unit': unit,
+                    'time': t,
+                    'outcome': outcome,
+                    'first_treat': first_treat
+                })
+
+        df = pd.DataFrame(data)
+
+        # Fit with bootstrap and base_period="varying" to get pre-treatment effects
+        cs = CallawaySantAnna(base_period="varying", n_bootstrap=99, seed=42)
+
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            results = cs.fit(
+                df,
+                outcome='outcome',
+                unit='unit',
+                time='time',
+                first_treat='first_treat'
+            )
+
+            # Should have warning about no post-treatment effects
+            warning_messages = [str(warning.message) for warning in w]
+            has_warning = any(
+                "No post-treatment effects" in msg for msg in warning_messages
+            )
+            assert has_warning, f"Expected warning about no post-treatment effects"
+
+        # Verify overall ATT is NaN
+        assert np.isnan(results.overall_att), "overall_att should be NaN"
+        assert np.isnan(results.overall_se), "overall_se should be NaN"
+
+        # Verify we have pre-treatment effects
+        pre_treatment_effects = [
+            (g, t) for (g, t) in results.group_time_effects.keys()
+            if t < g
+        ]
+        assert len(pre_treatment_effects) > 0, "Should have pre-treatment effects"
+
+        # Key test: bootstrap should have computed SEs for the pre-treatment effects
+        assert results.bootstrap_results is not None, "Bootstrap results should exist"
+
+        # Check that pre-treatment effects have bootstrap SEs
+        for gt in pre_treatment_effects:
+            bootstrap_se = results.bootstrap_results.group_time_ses.get(gt)
+            assert bootstrap_se is not None, f"Bootstrap SE missing for {gt}"
+            # Bootstrap SE should be finite (it was computed, not analytical fallback)
+            # Note: in the old code, these would be analytical SEs, not bootstrap
+            assert np.isfinite(bootstrap_se), (
+                f"Bootstrap SE for {gt} should be finite, got {bootstrap_se}"
+            )
+
+        # Also verify overall bootstrap statistics are NaN
+        assert np.isnan(results.bootstrap_results.overall_att_se), (
+            "Overall ATT SE should be NaN when no post-treatment"
+        )
+        assert np.isnan(results.bootstrap_results.overall_att_p_value), (
+            "Overall ATT p-value should be NaN when no post-treatment"
+        )
+
 
 class TestCallawaySantAnnaAnticipation:
     """Tests for anticipation parameter handling in aggregation."""
@@ -2569,4 +2651,79 @@ class TestCallawaySantAnnaTStatNaN:
                 if not np.isfinite(se) or se == 0:
                     assert np.isnan(t_stat), (
                         f"group t_stat for g={g} should be NaN when SE={se}"
+                    )
+
+    def test_aggregated_tstat_nan_when_se_zero(self):
+        """Aggregated t_stat (event-study and group) is NaN when SE is zero or non-finite.
+
+        This tests the fix in staggered_aggregation.py for _aggregate_event_study and
+        _aggregate_by_group, which previously defaulted to 0.0 instead of NaN.
+        """
+        # Create a small dataset that may produce edge cases in SE computation
+        n_units = 20
+        n_periods = 5
+        np.random.seed(123)
+
+        data = []
+        for unit in range(n_units):
+            # First half: treat at period 3, second half: never treated
+            first_treat = 3 if unit < n_units // 2 else 0
+            for t in range(1, n_periods + 1):
+                outcome = np.random.randn()
+                data.append({
+                    'unit': unit,
+                    'time': t,
+                    'outcome': outcome,
+                    'first_treat': first_treat
+                })
+
+        df = pd.DataFrame(data)
+
+        # Fit with event study aggregation to get event_study_effects
+        cs = CallawaySantAnna(n_bootstrap=0)
+        results = cs.fit(
+            df,
+            outcome='outcome',
+            unit='unit',
+            time='time',
+            first_treat='first_treat',
+            aggregate='all'  # Get both event study and group effects
+        )
+
+        # Check that t_stat computation follows the correct pattern:
+        # t_stat = effect / se if np.isfinite(se) and se > 0 else np.nan
+        if results.event_study_effects:
+            for e, data in results.event_study_effects.items():
+                se = data['se']
+                t_stat = data['t_stat']
+                effect = data['effect']
+
+                if not np.isfinite(se) or se <= 0:
+                    assert np.isnan(t_stat), (
+                        f"Event study t_stat for e={e} should be NaN when SE={se}, "
+                        f"got t_stat={t_stat}"
+                    )
+                else:
+                    expected_t = effect / se
+                    assert np.isclose(t_stat, expected_t, rtol=1e-10), (
+                        f"Event study t_stat for e={e} should be effect/SE={expected_t}, "
+                        f"got {t_stat}"
+                    )
+
+        if results.group_effects:
+            for g, data in results.group_effects.items():
+                se = data['se']
+                t_stat = data['t_stat']
+                effect = data['effect']
+
+                if not np.isfinite(se) or se <= 0:
+                    assert np.isnan(t_stat), (
+                        f"Group t_stat for g={g} should be NaN when SE={se}, "
+                        f"got t_stat={t_stat}"
+                    )
+                else:
+                    expected_t = effect / se
+                    assert np.isclose(t_stat, expected_t, rtol=1e-10), (
+                        f"Group t_stat for g={g} should be effect/SE={expected_t}, "
+                        f"got {t_stat}"
                     )

@@ -401,7 +401,7 @@ class CallawaySantAnnaAggregationMixin:
                 gt_pairs, weights, influence_func_info
             )
 
-            t_stat = agg_effect / agg_se if agg_se > 0 else 0.0
+            t_stat = agg_effect / agg_se if np.isfinite(agg_se) and agg_se > 0 else np.nan
             p_val = compute_p_value(t_stat)
             ci = compute_confidence_interval(agg_effect, agg_se, self.alpha)
 
@@ -457,7 +457,7 @@ class CallawaySantAnnaAggregationMixin:
                 gt_pairs, weights, influence_func_info
             )
 
-            t_stat = agg_effect / agg_se if agg_se > 0 else 0.0
+            t_stat = agg_effect / agg_se if np.isfinite(agg_se) and agg_se > 0 else np.nan
             p_val = compute_p_value(t_stat)
             ci = compute_confidence_interval(agg_effect, agg_se, self.alpha)
 

@@ -214,11 +214,14 @@ Aggregations:
   - **Note**: This is a defensive enhancement over reference implementations (R's `did::att_gt`, Stata's `csdid`) which may error or produce unhandled inf/nan in edge cases without informative warnings
 - No post-treatment effects (all treatment occurs after data ends):
   - Overall ATT set to NaN (no post-treatment periods to aggregate)
-  - All inference fields (SE, t-stat, p-value, CI) also set to NaN
-  - Bootstrap returns early with NaN for overall statistics
+  - All overall inference fields (SE, t-stat, p-value, CI) also set to NaN
   - Warning emitted: "No post-treatment effects for aggregation"
-  - Individual pre-treatment ATT(g,t) may still be computed (for parallel trends assessment)
-  - **Principle**: NaN propagates consistently through all inference fields; avoids misleading defaults (e.g., t=0, p=1)
+  - Individual pre-treatment ATT(g,t) are computed (for parallel trends assessment)
+  - Bootstrap runs for per-effect SEs even without post-treatment; only overall statistics are NaN
+  - **Principle**: NaN propagates consistently through overall inference fields; pre-treatment effects get full bootstrap inference
+- Aggregated t_stat (event-study, group-level):
+  - Uses NaN when SE is non-finite or zero (matches per-effect and overall t_stat behavior)
+  - Previous behavior (0.0 default) was inconsistent and misleading
 - Base period selection (`base_period` parameter):
   - "varying" (default): Pre-treatment uses t-1 as base (consecutive comparisons)
   - "universal": All comparisons use g-anticipation-1 as base
