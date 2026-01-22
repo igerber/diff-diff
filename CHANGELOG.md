@@ -5,6 +5,31 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.5] - 2026-01-22
+
+### Added
+- **METHODOLOGY_REVIEW.md** tracking document for methodology review progress
+  - Review status summary table for all 12 estimators
+  - Detailed notes template for each estimator by category
+  - Review process guidelines with checklist and priority ordering
+- **`base_period` parameter** for CallawaySantAnna pre-treatment effect computation
+  - "varying" (default): Pre-treatment uses t-1 as base (consecutive comparisons)
+  - "universal": All comparisons use g-anticipation-1 as base
+  - Matches R `did::att_gt()` base_period parameter
+- **Pre-merge-check skill** (`/pre-merge-check`) for automated PR validation
+  - Pattern checks for NaN handling consistency
+  - Context-specific checklist generation
+
+### Changed
+- **Tutorial 02 improvements**: Added pre-trends section, clarified base_period interaction with anticipation
+
+### Fixed
+- Not-yet-treated control group now properly excludes cohort g when computing ATT(g,t)
+- Aggregation t_stat uses NaN (not 0.0) when SE is non-finite or zero
+- Bootstrap inference for pre-treatment effects with `base_period="varying"`
+- NaN propagation for empty post-treatment effects in CallawaySantAnna
+- Grep word boundary pattern in pre-merge-check skill
+
 ## [2.1.4] - 2026-01-20
 
 ### Added
@@ -492,6 +517,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `to_dict()` and `to_dataframe()` export methods
   - `is_significant` and `significance_stars` properties
 
+[2.1.5]: https://github.com/igerber/diff-diff/compare/v2.1.4...v2.1.5
 [2.1.4]: https://github.com/igerber/diff-diff/compare/v2.1.3...v2.1.4
 [2.1.3]: https://github.com/igerber/diff-diff/compare/v2.1.2...v2.1.3
 [2.1.2]: https://github.com/igerber/diff-diff/compare/v2.1.1...v2.1.2

@@ -1,6 +1,6 @@
 [package]
 name = "diff_diff_rust"
-version = "2.1.4"
+version = "2.1.5"
 edition = "2021"
 description = "Rust backend for diff-diff DiD library"
 license = "MIT"
