@@ -601,27 +601,31 @@ class TestSunAbrahamVsCallawaySantAnna:
                 f"SA={sa_eff:.4f}, CS(univ)={cs_univ_eff:.4f}"
             )
 
-        # For pre-treatment periods, CS(universal) should be closer to SA than CS(varying)
-        # because both SA and CS(universal) use a fixed reference period
-        if len(pre_times) > 0:
-            total_diff_varying = 0.0
-            total_diff_universal = 0.0
-            for t in pre_times:
-                sa_eff = sa_results.event_study_effects[t]["effect"]
-                cs_vary_eff = cs_varying_results.event_study_effects[t]["effect"]
-                cs_univ_eff = cs_universal_results.event_study_effects[t]["effect"]
+        # Require pre-periods exist for this test to be meaningful
+        assert len(pre_times) > 0, (
+            "Test requires pre-treatment periods to validate methodology difference. "
+            "Increase n_periods or adjust cohort timing in test data."
+        )
 
-                total_diff_varying += abs(sa_eff - cs_vary_eff)
-                total_diff_universal += abs(sa_eff - cs_univ_eff)
+        # Compute total absolute differences
+        total_diff_varying = 0.0
+        total_diff_universal = 0.0
+        for t in pre_times:
+            sa_eff = sa_results.event_study_effects[t]["effect"]
+            cs_vary_eff = cs_varying_results.event_study_effects[t]["effect"]
+            cs_univ_eff = cs_universal_results.event_study_effects[t]["effect"]
 
-            # CS(universal) should generally be closer to SA than CS(varying)
-            # for pre-treatment periods (due to similar reference period approach)
-            # Note: This is a soft assertion - in some data configurations
-            # the relationship may not hold perfectly due to weighting differences
-            # The key point is that the methodological difference exists
-            assert (
-                len(pre_times) > 0
-            ), "Test requires pre-treatment periods to verify methodology difference"
+            total_diff_varying += abs(sa_eff - cs_vary_eff)
+            total_diff_universal += abs(sa_eff - cs_univ_eff)
+
+        # CS(universal) should generally be closer to SA than CS(varying)
+        # for pre-treatment periods (due to similar reference period approach)
+        # Allow some tolerance since weighting schemes still differ
+        assert total_diff_universal <= total_diff_varying + 0.5, (
+            f"Expected CS(universal) to be closer to SA than CS(varying) for pre-periods. "
+            f"Got: CS(univ)-SA diff={total_diff_universal:.4f}, "
+            f"CS(vary)-SA diff={total_diff_varying:.4f}"
+        )
 
     def test_agreement_under_homogeneous_effects(self):
         """Test that SA and CS agree under homogeneous treatment effects."""

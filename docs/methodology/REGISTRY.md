@@ -231,7 +231,7 @@ Aggregations:
   - Matches R `did::att_gt()` base_period parameter
 - Base period interaction with Sun-Abraham comparison:
   - CS with `base_period="varying"` produces different pre-treatment estimates than SA
-  - This is expected: CS uses consecutive comparisons, SA uses fixed reference (e=-1)
+  - This is expected: CS uses consecutive comparisons, SA uses fixed reference (e=-1-anticipation)
   - Use `base_period="universal"` for methodologically comparable pre-treatment effects
   - Post-treatment effects match regardless of base_period setting
 - Control group with `control_group="not_yet_treated"`:
@@ -262,7 +262,7 @@ Aggregations:
 *Assumption checks / warnings:*
 - Requires never-treated units as control group
 - Warns if treatment effects may be heterogeneous across cohorts (which the method handles)
-- Reference period must be specified (default: e=-1)
+- Reference period: e=-1-anticipation (defaults to e=-1 when anticipation=0)
 
 *Estimator equation (as implemented):*
 
