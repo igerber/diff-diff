@@ -36,7 +36,7 @@ If any methodology files changed, run these pattern checks:
 grep -n "if.*se.*>.*0.*else 0" diff_diff/*.py || true
 
 # Check for potential division issues without NaN handling
-grep -n "/ se\b" diff_diff/*.py | grep -v "np.nan" | grep -v "#" || true
+grep -E -n "/[[:space:]]*se\>" diff_diff/*.py | grep -v "np.nan" | grep -v "#" || true
 ```
 
 **Report findings**: If matches found, warn about potential NaN handling issues.
