@@ -124,7 +124,7 @@ Examine treatment effects over time:
        treatment='treated',
        time='period',
        post_periods=[5, 6, 7, 8, 9],
-       reference_period=-1
+       reference_period=4
    )
 
    # Plot the event study
