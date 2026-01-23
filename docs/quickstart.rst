@@ -27,7 +27,7 @@ The simplest DiD design has two groups (treated/control) and two periods (pre/po
        n_units=100,
        n_periods=10,
        treatment_effect=5.0,
-       treatment_start=5,
+       treatment_period=5,
        treatment_fraction=0.5,
    )
 
@@ -36,8 +36,8 @@ The simplest DiD design has two groups (treated/control) and two periods (pre/po
    results = did.fit(
        data,
        outcome='outcome',
-       treated='treated',
-       post='post'
+       treatment='treated',
+       time='post'
    )
 
    # View results
@@ -75,8 +75,8 @@ Control for confounders with the ``covariates`` parameter:
    results = did.fit(
        data,
        outcome='outcome',
-       treated='treated',
-       post='post',
+       treatment='treated',
+       time='post',
        covariates=['age', 'income']
    )
 
@@ -87,8 +87,8 @@ For panel data, cluster standard errors at the unit level:
 
 .. code-block:: python
 
-   did = DifferenceInDifferences(cluster_col='unit_id')
-   results = did.fit(data, outcome='y', treated='treated', post='post')
+   did = DifferenceInDifferences(cluster='unit_id')
+   results = did.fit(data, outcome='y', treatment='treated', time='post')
 
 Two-Way Fixed Effects
 ---------------------
@@ -103,7 +103,7 @@ For panel data with multiple periods:
    results = twfe.fit(
        data,
        outcome='outcome',
-       treated='treated',
+       treatment='treated',
        unit='unit_id',
        time='period'
    )
@@ -117,19 +117,19 @@ Examine treatment effects over time:
 
    from diff_diff import MultiPeriodDiD
 
-   event = MultiPeriodDiD(reference_period=-1)
+   event = MultiPeriodDiD()
    results = event.fit(
        data,
        outcome='outcome',
-       treated='treated',
+       treatment='treated',
        time='period',
-       unit='unit_id',
-       treatment_start=5
+       post_periods=[5, 6, 7, 8, 9],
+       reference_period=4
    )
 
    # Plot the event study
-   from diff_diff import plot_event_study
-   fig = plot_event_study(results)
+   from diff_diff.visualization import plot_event_study
+   ax = plot_event_study(results)
 
 Staggered Adoption
 ------------------
@@ -150,7 +150,7 @@ When treatment is adopted at different times across units:
    )
 
    # View aggregated treatment effect
-   print(f"Overall ATT: {results.att:.3f}")
+   print(f"Overall ATT: {results.overall_att:.3f}")
 
 Parallel Trends Testing
 -----------------------
@@ -159,15 +159,14 @@ Test the key identifying assumption:
 
 .. code-block:: python
 
-   from diff_diff import check_parallel_trends
+   from diff_diff.utils import check_parallel_trends
 
    trends_result = check_parallel_trends(
        data,
        outcome='outcome',
-       unit='unit_id',
        time='period',
-       treated='treated',
-       pre_periods=4
+       treatment_group='treated',
+       pre_periods=[0, 1, 2, 3]
    )
 
    if trends_result['p_value'] > 0.05:
@@ -180,13 +179,13 @@ Assess robustness to parallel trends violations with Honest DiD:
 
 .. code-block:: python
 
-   from diff_diff import HonestDiD, DeltaRM
+   from diff_diff import HonestDiD
 
    # Compute bounds under relative magnitudes restriction
-   honest = HonestDiD(delta=DeltaRM(M_bar=1.0))
+   honest = HonestDiD(method="relative_magnitude", M=1.0)
    bounds = honest.fit(event_study_results)
 
-   print(f"Robust CI: [{bounds.robust_ci[0]:.3f}, {bounds.robust_ci[1]:.3f}]")
+   print(f"Robust CI: [{bounds.ci_lb:.3f}, {bounds.ci_ub:.3f}]")
 
 Next Steps
 ----------
