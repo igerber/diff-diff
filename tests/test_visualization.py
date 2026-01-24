@@ -285,6 +285,39 @@ class TestPlotEventStudy:
 
         plt.close()
 
+    def test_plot_cs_with_anticipation(self):
+        """Test plotting CallawaySantAnna results with anticipation > 0.
+
+        When anticipation=1, the reference period should be e=-2, not e=-1.
+        """
+        pytest.importorskip("matplotlib")
+        import matplotlib.pyplot as plt
+        from diff_diff import generate_staggered_data
+
+        data = generate_staggered_data(n_units=200, n_periods=10, seed=42)
+        cs = CallawaySantAnna(base_period="universal", anticipation=1)
+        results = cs.fit(
+            data,
+            outcome='outcome',
+            unit='unit',
+            time='period',
+            first_treat='first_treat',
+            aggregate='event_study'
+        )
+
+        # Reference period should be at e=-2 (not e=-1) with anticipation=1
+        assert -2 in results.event_study_effects
+        assert results.event_study_effects[-2]['n_groups'] == 0
+
+        ax = plot_event_study(results, show=False)
+        assert ax is not None
+
+        # Verify -2 is in the plot (the true reference period)
+        xtick_labels = [t.get_text() for t in ax.get_xticklabels()]
+        assert '-2' in xtick_labels
+
+        plt.close()
+
 
 class TestPlotEventStudyIntegration:
     """Integration tests for event study plotting."""
