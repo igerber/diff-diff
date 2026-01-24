@@ -52,6 +52,28 @@ Target: < 1000 lines per module for maintainability.
 | `pretrends.py` | 1160 | Acceptable |
 | `bacon.py` | 1027 | OK |
 
+### NaN Handling for Undefined t-statistics
+
+Several estimators return `0.0` for t-statistic when SE is 0 or undefined. This is incorrect—a t-stat of 0 implies a null effect, whereas `np.nan` correctly indicates undefined inference.
+
+**Pattern to fix**: `t_stat = effect / se if se > 0 else 0.0` → `t_stat = effect / se if se > 0 else np.nan`
+
+| Location | Line | Current Code |
+|----------|------|--------------|
+| `diagnostics.py` | 665 | `t_stat = original_att / se if se > 0 else 0.0` |
+| `diagnostics.py` | 786 | `t_stat = mean_effect / se if se > 0 else 0.0` |
+| `sun_abraham.py` | 603 | `overall_t = overall_att / overall_se if overall_se > 0 else 0.0` |
+| `sun_abraham.py` | 626 | `overall_t = overall_att / overall_se if overall_se > 0 else 0.0` |
+| `sun_abraham.py` | 643 | `eff_val / se_val if se_val > 0 else 0.0` |
+| `sun_abraham.py` | 881 | `t_stat = agg_effect / agg_se if agg_se > 0 else 0.0` |
+| `triple_diff.py` | 601 | `t_stat = att / se if se > 0 else 0.0` |
+
+**Priority**: Medium - affects inference reporting in edge cases.
+
+**Note**: CallawaySantAnna was fixed in PR #97 to use `np.nan`. These other estimators should follow the same pattern.
+
+---
+
 ### Standard Error Consistency
 
 Different estimators compute SEs differently. Consider unified interface.

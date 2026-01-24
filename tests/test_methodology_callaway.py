@@ -72,21 +72,8 @@ def generate_hand_calculable_data() -> Tuple[pd.DataFrame, float]:
     return data, expected_att
 
 
-def check_r_available() -> bool:
-    """Check if R and the did package are available."""
-    try:
-        result = subprocess.run(
-            ["Rscript", "-e", "library(did); cat('OK')"],
-            capture_output=True,
-            text=True,
-            timeout=30
-        )
-        return result.returncode == 0 and "OK" in result.stdout
-    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
-        return False
-
-
-R_AVAILABLE = check_r_available()
+# R availability is now checked lazily via conftest.py fixtures
+# to avoid subprocess latency at import time
 
 
 # =============================================================================
@@ -343,7 +330,6 @@ class TestDoublyRobustEstimator:
 # =============================================================================
 
 
-@pytest.mark.skipif(not R_AVAILABLE, reason="R or did package not available")
 class TestRBenchmarkCallaway:
     """Tests comparing Python implementation to R's did::att_gt()."""
 
@@ -450,7 +436,7 @@ class TestRBenchmarkCallaway:
         data.to_csv(csv_path, index=False)
         return data, str(csv_path)
 
-    def test_overall_att_matches_r_dr(self, benchmark_data):
+    def test_overall_att_matches_r_dr(self, require_r, benchmark_data):
         """Test overall ATT matches R with doubly robust estimation.
 
         Note: Due to differences in dynamic effect handling in generated data,
@@ -473,7 +459,7 @@ class TestRBenchmarkCallaway:
         assert np.isclose(py_results.overall_att, r_results['overall_att'], rtol=0.20), \
             f"ATT mismatch: Python={py_results.overall_att}, R={r_results['overall_att']}"
 
-    def test_overall_att_matches_r_reg(self, benchmark_data):
+    def test_overall_att_matches_r_reg(self, require_r, benchmark_data):
         """Test overall ATT matches R with outcome regression.
 
         Note: Due to differences in dynamic effect handling in generated data,
@@ -492,7 +478,7 @@ class TestRBenchmarkCallaway:
         assert np.isclose(py_results.overall_att, r_results['overall_att'], rtol=0.20), \
             f"ATT mismatch: Python={py_results.overall_att}, R={r_results['overall_att']}"
 
-    def test_group_time_effects_match_r(self, benchmark_data):
+    def test_group_time_effects_match_r(self, require_r, benchmark_data):
         """Test individual ATT(g,t) values match R for post-treatment periods.
 
         Post-treatment effects (t >= g) should match closely since both
@@ -809,6 +795,7 @@ class TestRankDeficiencyHandling:
 class TestSEFormulas:
     """Tests for standard error formula verification."""
 
+    @pytest.mark.slow
     def test_analytical_se_close_to_bootstrap_se(self):
         """
         Analytical and bootstrap SEs should be within 20%.
@@ -816,6 +803,9 @@ class TestSEFormulas:
         Analytical SEs use influence function aggregation.
         Bootstrap SEs use multiplier bootstrap.
         They should converge for large samples.
+
+        This test is marked slow because it uses 499 bootstrap iterations
+        for thorough validation of SE convergence.
         """
         data = generate_staggered_data(
             n_units=300,
@@ -881,9 +871,13 @@ class TestSEFormulas:
         Webb weights have E[w]=0 and well-defined variance.
 
         Webb's 6-point distribution is recommended for few clusters.
-        The variance is not exactly 1 for Webb weights by design.
-        Values: ±sqrt(1/2), ±sqrt(2/2), ±sqrt(3/2) with probs [1,2,3,3,2,1]/12
-        Expected variance: (1/6)*(1/2+1+3/2) = (1/6)*3 ≈ 0.5 but actual is ~0.72
+        Values: ±sqrt(3/2), ±sqrt(2/2)=±1, ±sqrt(1/2) with probs [1,2,3,3,2,1]/12
+
+        Theoretical variance:
+            Var = 2 * (1/12 * 3/2 + 2/12 * 1 + 3/12 * 1/2)
+                = 2 * (3/24 + 4/24 + 3/24)
+                = 2 * 10/24
+                = 10/12 ≈ 0.833
         """
         rng = np.random.default_rng(42)
         weights = _generate_bootstrap_weights_batch(10000, 100, 'webb', rng)
@@ -891,13 +885,17 @@ class TestSEFormulas:
         mean_w = np.mean(weights)
         assert abs(mean_w) < 0.02, f"Webb E[w] should be ~0, got {mean_w}"
 
-        # Webb's variance is approximately 0.72 (not 1.0)
+        # Webb's variance is approximately 10/12 ≈ 0.833
         # This is the theoretical variance of the 6-point distribution
         var_w = np.var(weights)
-        assert 0.6 < var_w < 0.85, f"Webb Var(w) should be ~0.72, got {var_w}"
+        assert 0.75 < var_w < 0.90, f"Webb Var(w) should be ~0.833, got {var_w}"
 
     def test_bootstrap_produces_valid_inference(self):
-        """Test that bootstrap produces valid inference with p-values and CIs."""
+        """Test that bootstrap produces valid inference with p-values and CIs.
+
+        Uses 99 bootstrap iterations - sufficient to verify the mechanism works
+        without being slow for CI runs.
+        """
         data = generate_staggered_data(
             n_units=100,
             n_periods=6,
@@ -906,7 +904,7 @@ class TestSEFormulas:
             seed=42
         )
 
-        cs = CallawaySantAnna(n_bootstrap=199, seed=42)
+        cs = CallawaySantAnna(n_bootstrap=99, seed=42)
         results = cs.fit(
             data, outcome='outcome', unit='unit',
             time='period', first_treat='first_treat'

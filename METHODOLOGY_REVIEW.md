@@ -148,8 +148,9 @@ Each estimator in diff-diff should be periodically reviewed to ensure:
 **Deviations from R's did::att_gt():**
 1. **NaN for invalid inference**: When SE is non-finite or zero, Python returns NaN for
    t_stat/p_value rather than potentially erroring. This is a defensive enhancement.
-2. **Webb weights variance**: Webb's 6-point distribution has Var(w) ≈ 0.72, not 1.0.
-   This is the correct theoretical variance for this distribution.
+2. **Webb weights variance**: Webb's 6-point distribution with values ±√(3/2), ±1, ±√(1/2)
+   and probabilities [1,2,3,3,2,1]/12 has Var(w) ≈ 0.833 (=10/12), not 1.0.
+   This is the correct theoretical variance matching the NumPy and Rust implementations.
 
 ---
 

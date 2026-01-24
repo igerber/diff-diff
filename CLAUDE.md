@@ -53,6 +53,36 @@ DIFF_DIFF_BACKEND=rust pytest
 pytest tests/test_rust_backend.py -v
 ```
 
+#### Troubleshooting Rust Tests (PyO3 Linking)
+
+If `cargo test` fails with `library 'pythonX.Y' not found`, PyO3 cannot find the Python library. This commonly happens on macOS when using the system Python (which lacks development headers in expected locations).
+
+**Solution**: Use a Python environment with proper library paths (e.g., conda, Homebrew, or pyenv):
+
+```bash
+# Using miniconda (example path - adjust for your system)
+cd rust
+PYO3_PYTHON=/path/to/miniconda3/bin/python3 \
+DYLD_LIBRARY_PATH="/path/to/miniconda3/lib" \
+cargo test
+
+# Using Homebrew Python
+PYO3_PYTHON=/opt/homebrew/bin/python3 \
+DYLD_LIBRARY_PATH="/opt/homebrew/lib" \
+cargo test
+```
+
+**Environment variables:**
+- `PYO3_PYTHON`: Path to Python interpreter with development headers
+- `DYLD_LIBRARY_PATH` (macOS) / `LD_LIBRARY_PATH` (Linux): Path to `libpythonX.Y.dylib`/`.so`
+
+**Verification**: All 22 Rust tests should pass, including bootstrap weight tests:
+```
+test bootstrap::tests::test_webb_variance_approx_correct ... ok
+test bootstrap::tests::test_webb_values_correct ... ok
+test bootstrap::tests::test_webb_mean_approx_zero ... ok
+```
+
 ## Architecture
 
 ### Module Structure
