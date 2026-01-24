@@ -70,9 +70,11 @@ python-packages = ["diff_diff"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = "test_*.py"
+# Exclude slow tests by default for faster CI; run `pytest -m slow` to include them
+# or `pytest -m ""` to run all tests including slow ones
 addopts = "-v --tb=short -m 'not slow'"
 markers = [
-    "slow: marks tests as slow (run with '-m slow' to include)",
+    "slow: marks tests as slow (excluded by default; run with `pytest -m slow` or `pytest -m ''` for all)",
 ]
 
 [tool.black]

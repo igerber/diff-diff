@@ -361,11 +361,16 @@ class TestRBenchmarkCallaway:
         -------
         Dict with keys: overall_att, overall_se, group_time (dict of lists)
         """
+        # Escape path for cross-platform compatibility (Windows backslashes, spaces)
+        escaped_path = data_path.replace("\\", "/")
+
         r_script = f'''
         suppressMessages(library(did))
         suppressMessages(library(jsonlite))
 
-        data <- read.csv("{data_path}")
+        # Use normalizePath for cross-platform path handling
+        data_file <- normalizePath("{escaped_path}", mustWork = TRUE)
+        data <- read.csv(data_file)
 
         result <- att_gt(
             yname = "outcome",
