@@ -34,6 +34,9 @@ class CallawaySantAnnaAggregationMixin:
     # Type hint for anticipation attribute accessed from main class
     anticipation: int
 
+    # Type hint for base_period attribute accessed from main class
+    base_period: str
+
     def _aggregate_simple(
         self,
         group_time_effects: Dict,
@@ -413,6 +416,22 @@ class CallawaySantAnnaAggregationMixin:
                 'conf_int': ci,
                 'n_groups': len(effect_list),
             }
+
+        # Add reference period for universal base period mode (matches R did package)
+        # The reference period e = -1 - anticipation has effect = 0 by construction
+        # Only add if there are actual computed effects (guard against empty data)
+        if getattr(self, 'base_period', 'varying') == "universal":
+            ref_period = -1 - self.anticipation
+            # Only inject reference if we have at least one real effect
+            if event_study_effects and ref_period not in event_study_effects:
+                event_study_effects[ref_period] = {
+                    'effect': 0.0,
+                    'se': np.nan,  # Undefined - no data, normalization constraint
+                    't_stat': np.nan,  # Undefined - normalization constraint
+                    'p_value': np.nan,
+                    'conf_int': (np.nan, np.nan),  # NaN propagation for undefined inference
+                    'n_groups': 0,  # No groups contribute - fixed by construction
+                }
 
         return event_study_effects
 

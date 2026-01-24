@@ -76,3 +76,7 @@ target/
 
 # Local scripts (not part of package)
 scripts/
+
+# Launch directories (local only)
+launch/
+launch-video/

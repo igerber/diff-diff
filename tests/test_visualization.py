@@ -222,6 +222,102 @@ class TestPlotEventStudy:
         with pytest.raises(TypeError, match="Cannot extract plot data"):
             plot_event_study("invalid")
 
+    def test_plot_with_nan_se_reference_period(self):
+        """Test that reference period with NaN SE is plotted without error bars.
+
+        With universal base period, the reference period (e=-1) has SE=NaN.
+        The plot should show the point estimate without error bars rather than
+        skipping it entirely.
+        """
+        pytest.importorskip("matplotlib")
+        import matplotlib.pyplot as plt
+
+        # Create data with NaN SE for reference period
+        effects = {-2: 0.1, -1: 0.0, 0: 0.5, 1: 0.6}
+        se = {-2: 0.1, -1: np.nan, 0: 0.15, 1: 0.15}  # NaN SE at reference period
+
+        ax = plot_event_study(
+            effects=effects,
+            se=se,
+            reference_period=-1,
+            show=False
+        )
+
+        # Verify the plot was created successfully
+        assert ax is not None
+
+        # Verify all 4 periods are plotted (including reference with NaN SE)
+        # The x-axis should have 4 tick labels
+        xtick_labels = [t.get_text() for t in ax.get_xticklabels()]
+        assert len(xtick_labels) == 4
+        assert '-1' in xtick_labels
+
+        plt.close()
+
+    def test_plot_cs_universal_base_period(self):
+        """Test plotting CallawaySantAnna results with universal base period.
+
+        The reference period (e=-1) should appear in the plot even though
+        it has SE=NaN.
+        """
+        pytest.importorskip("matplotlib")
+        import matplotlib.pyplot as plt
+        from diff_diff import generate_staggered_data
+
+        data = generate_staggered_data(n_units=200, n_periods=10, seed=42)
+        cs = CallawaySantAnna(base_period="universal")
+        results = cs.fit(
+            data,
+            outcome='outcome',
+            unit='unit',
+            time='period',
+            first_treat='first_treat',
+            aggregate='event_study'
+        )
+
+        # Should not raise even with NaN SE in reference period
+        ax = plot_event_study(results, show=False)
+        assert ax is not None
+
+        # Verify reference period (-1) is in the plot
+        xtick_labels = [t.get_text() for t in ax.get_xticklabels()]
+        assert '-1' in xtick_labels
+
+        plt.close()
+
+    def test_plot_cs_with_anticipation(self):
+        """Test plotting CallawaySantAnna results with anticipation > 0.
+
+        When anticipation=1, the reference period should be e=-2, not e=-1.
+        """
+        pytest.importorskip("matplotlib")
+        import matplotlib.pyplot as plt
+        from diff_diff import generate_staggered_data
+
+        data = generate_staggered_data(n_units=200, n_periods=10, seed=42)
+        cs = CallawaySantAnna(base_period="universal", anticipation=1)
+        results = cs.fit(
+            data,
+            outcome='outcome',
+            unit='unit',
+            time='period',
+            first_treat='first_treat',
+            aggregate='event_study'
+        )
+
+        # Reference period should be at e=-2 (not e=-1) with anticipation=1
+        assert -2 in results.event_study_effects
+        assert results.event_study_effects[-2]['n_groups'] == 0
+
+        ax = plot_event_study(results, show=False)
+        assert ax is not None
+
+        # Verify -2 is in the plot (the true reference period)
+        xtick_labels = [t.get_text() for t in ax.get_xticklabels()]
+        assert '-2' in xtick_labels
+
+        plt.close()
+
 
 class TestPlotEventStudyIntegration:
     """Integration tests for event study plotting."""
