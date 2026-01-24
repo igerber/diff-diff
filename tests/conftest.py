@@ -20,7 +20,7 @@ _r_available_cache = None
 
 def _check_r_available() -> bool:
     """
-    Check if R and the did package are available (cached).
+    Check if R and required packages (did, jsonlite) are available (cached).
 
     This is called lazily when the r_available fixture is first used,
     not at module import time, to avoid subprocess latency during test collection.
@@ -28,7 +28,7 @@ def _check_r_available() -> bool:
     Returns
     -------
     bool
-        True if R and did package are available, False otherwise.
+        True if R and required packages are available, False otherwise.
     """
     global _r_available_cache
     if _r_available_cache is None:
@@ -39,7 +39,7 @@ def _check_r_available() -> bool:
         else:
             try:
                 result = subprocess.run(
-                    ["Rscript", "-e", "library(did); cat('OK')"],
+                    ["Rscript", "-e", "library(did); library(jsonlite); cat('OK')"],
                     capture_output=True,
                     text=True,
                     timeout=30,
@@ -61,7 +61,7 @@ def r_available():
     Returns
     -------
     bool
-        True if R and did package are available.
+        True if R and required packages (did, jsonlite) are available.
     """
     return _check_r_available()
 
