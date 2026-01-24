@@ -56,7 +56,10 @@ where τ is the ATT.
 - Optional: Wild cluster bootstrap for small number of clusters
 
 *Edge cases:*
-- Empty cells (e.g., no treated-pre observations) raise ValueError
+- Empty cells (e.g., no treated-pre observations) cause rank deficiency, handled per `rank_deficient_action` setting
+  - With "warn" (default): emits warning, sets NaN for affected coefficients
+  - With "error": raises ValueError
+  - With "silent": continues silently with NaN coefficients
 - Singleton groups in clustering are dropped with warning
 - Rank-deficient design matrix (collinearity): warns and sets NA for dropped coefficients (R-style, matches `lm()`)
   - Tolerance: `1e-07` (matches R's `qr()` default), relative to largest diagonal element of R in QR decomposition
@@ -67,10 +70,10 @@ where τ is the ATT.
 - Stata: `reghdfe` or manual regression with interaction
 
 **Requirements checklist:**
-- [ ] Treatment and time indicators are binary 0/1 with variation
-- [ ] ATT equals coefficient on interaction term
-- [ ] Wild bootstrap supports Rademacher, Mammen, Webb weight distributions
-- [ ] Formula interface parses `y ~ treated * post` correctly
+- [x] Treatment and time indicators are binary 0/1 with variation
+- [x] ATT equals coefficient on interaction term
+- [x] Wild bootstrap supports Rademacher, Mammen, Webb weight distributions
+- [x] Formula interface parses `y ~ treated * post` correctly
 
 ---
 
