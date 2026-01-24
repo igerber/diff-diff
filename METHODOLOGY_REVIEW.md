@@ -86,7 +86,7 @@ Each estimator in diff-diff should be periodically reviewed to ensure:
 
 **Edge Cases Verified:**
 1. Empty cells: Produces rank deficiency warning (expected behavior)
-2. Singleton clusters: Included in variance estimation (no dropping/warning - updated REGISTRY.md to match)
+2. Singleton clusters: Included in variance estimation, contribute via residuals (corrected REGISTRY.md)
 3. Rank deficiency: All three modes (warn/error/silent) working
 4. Non-binary treatment/time: Raises ValueError as expected
 5. No variation in treatment/time: Raises ValueError as expected
