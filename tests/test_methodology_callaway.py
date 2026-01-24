@@ -1209,3 +1209,208 @@ class TestDeprecationWarnings:
 
             # bootstrap_weights should take precedence
             assert cs.bootstrap_weights == "rademacher"
+
+
+# =============================================================================
+# MPDTA-based Strict R Comparison Tests
+# =============================================================================
+
+
+class TestMPDTARComparison:
+    """Strict R comparison tests using the real MPDTA dataset.
+
+    These tests compare Python's CallawaySantAnna to R's did::att_gt() using
+    the same data exported from R. We export R's mpdta dataset to a temp file
+    and load it in Python to ensure identical input data.
+
+    Note: Python's load_mpdta() downloads from a different source than R's
+    packaged data, which has different values. These tests use R's data directly.
+
+    Expected tolerances (based on benchmark analysis):
+    - Overall ATT: <1% difference
+    - Overall SE: <1% difference
+    """
+
+    def _get_r_mpdta_and_results(self, tmp_path) -> Tuple[pd.DataFrame, dict]:
+        """
+        Export R's mpdta dataset and run att_gt(), returning both data and results.
+
+        Returns
+        -------
+        Tuple of (DataFrame, dict) where dict has keys: overall_att, overall_se, etc.
+        """
+        import json
+
+        csv_path = tmp_path / "r_mpdta.csv"
+        escaped_path = str(csv_path).replace("\\", "/")
+
+        r_script = f'''
+        suppressMessages(library(did))
+        suppressMessages(library(jsonlite))
+
+        # Load mpdta from did package
+        data(mpdta)
+
+        # Export to CSV for Python to read
+        # Rename first.treat to first_treat for Python compatibility
+        mpdta$first_treat <- mpdta$first.treat
+        write.csv(mpdta, "{escaped_path}", row.names = FALSE)
+
+        # Run att_gt with default settings (matching Python defaults)
+        result <- att_gt(
+            yname = "lemp",
+            tname = "year",
+            idname = "countyreal",
+            gname = "first.treat",
+            xformla = ~ 1,
+            data = mpdta,
+            est_method = "dr",
+            control_group = "nevertreated",
+            anticipation = 0,
+            base_period = "varying",
+            bstrap = FALSE,
+            cband = FALSE
+        )
+
+        # Simple aggregation
+        agg <- aggte(result, type = "simple")
+
+        output <- list(
+            overall_att = unbox(agg$overall.att),
+            overall_se = unbox(agg$overall.se),
+            n_groups = unbox(length(unique(result$group[result$group > 0]))),
+            group_time = list(
+                group = as.integer(result$group),
+                time = as.integer(result$t),
+                att = result$att,
+                se = result$se
+            )
+        )
+
+        cat(toJSON(output, pretty = TRUE))
+        '''
+
+        result = subprocess.run(
+            ["Rscript", "-e", r_script],
+            capture_output=True,
+            text=True,
+            timeout=60
+        )
+
+        if result.returncode != 0:
+            raise RuntimeError(f"R script failed: {result.stderr}")
+
+        parsed = json.loads(result.stdout)
+
+        # Handle R's JSON serialization quirks
+        if isinstance(parsed.get('overall_att'), list):
+            parsed['overall_att'] = parsed['overall_att'][0]
+        if isinstance(parsed.get('overall_se'), list):
+            parsed['overall_se'] = parsed['overall_se'][0]
+
+        # Read the exported CSV
+        mpdta = pd.read_csv(csv_path)
+
+        return mpdta, parsed
+
+    def test_mpdta_overall_att_matches_r_strict(self, require_r, tmp_path):
+        """Test overall ATT matches R within 1% using MPDTA dataset.
+
+        This test uses R's actual mpdta dataset (exported to CSV) to ensure
+        identical input data between Python and R.
+        """
+        # Get R's mpdta data and results
+        mpdta, r_results = self._get_r_mpdta_and_results(tmp_path)
+
+        # Python estimation using R's data
+        cs = CallawaySantAnna(estimation_method='dr', n_bootstrap=0)
+        py_results = cs.fit(
+            mpdta,
+            outcome='lemp',
+            unit='countyreal',
+            time='year',
+            first_treat='first_treat'
+        )
+
+        # Compare overall ATT - strict 1% tolerance for MPDTA
+        rel_diff = abs(py_results.overall_att - r_results['overall_att']) / abs(r_results['overall_att'])
+        assert rel_diff < 0.01, \
+            f"MPDTA ATT mismatch: Python={py_results.overall_att:.6f}, " \
+            f"R={r_results['overall_att']:.6f}, diff={rel_diff*100:.2f}%"
+
+    def test_mpdta_overall_se_matches_r_strict(self, require_r, tmp_path):
+        """Test overall SE matches R within 1% using MPDTA dataset.
+
+        Uses 1% tolerance to account for minor numerical differences.
+        """
+        mpdta, r_results = self._get_r_mpdta_and_results(tmp_path)
+
+        cs = CallawaySantAnna(estimation_method='dr', n_bootstrap=0)
+        py_results = cs.fit(
+            mpdta,
+            outcome='lemp',
+            unit='countyreal',
+            time='year',
+            first_treat='first_treat'
+        )
+
+        # Compare overall SE - strict 1% tolerance for MPDTA
+        rel_diff = abs(py_results.overall_se - r_results['overall_se']) / r_results['overall_se']
+        assert rel_diff < 0.01, \
+            f"MPDTA SE mismatch: Python={py_results.overall_se:.6f}, " \
+            f"R={r_results['overall_se']:.6f}, diff={rel_diff*100:.2f}%"
+
+    def test_mpdta_group_time_effects_match_r_strict(self, require_r, tmp_path):
+        """Test individual ATT(g,t) values match R within 1% for MPDTA.
+
+        Post-treatment ATT(g,t) values should match very closely since
+        both Python and R use identical methodology with the same dataset.
+        """
+        mpdta, r_results = self._get_r_mpdta_and_results(tmp_path)
+
+        cs = CallawaySantAnna(estimation_method='dr', n_bootstrap=0)
+        py_results = cs.fit(
+            mpdta,
+            outcome='lemp',
+            unit='countyreal',
+            time='year',
+            first_treat='first_treat'
+        )
+
+        # Compare each post-treatment ATT(g,t)
+        r_gt = r_results['group_time']
+        n_comparisons = 0
+        mismatches = []
+
+        for i in range(len(r_gt['group'])):
+            g = int(r_gt['group'][i])
+            t = int(r_gt['time'][i])
+            r_att = r_gt['att'][i]
+
+            # Skip pre-treatment effects
+            if t < g:
+                continue
+
+            if (g, t) in py_results.group_time_effects:
+                py_att = py_results.group_time_effects[(g, t)]['effect']
+
+                # Handle near-zero effects (use absolute tolerance)
+                if abs(r_att) < 0.001:
+                    if abs(py_att - r_att) > 0.01:
+                        mismatches.append(
+                            f"ATT({g},{t}): Python={py_att:.6f}, R={r_att:.6f}"
+                        )
+                else:
+                    rel_diff = abs(py_att - r_att) / abs(r_att)
+                    if rel_diff > 0.01:  # 1% tolerance
+                        mismatches.append(
+                            f"ATT({g},{t}): Python={py_att:.6f}, R={r_att:.6f}, " \
+                            f"diff={rel_diff*100:.2f}%"
+                        )
+                n_comparisons += 1
+
+        assert n_comparisons > 0, \
+            "No post-treatment group-time effects matched between Python and R"
+
+        assert len(mismatches) == 0, \
+            f"MPDTA post-treatment ATT mismatches (>1% diff):\n" + "\n".join(mismatches)

@@ -238,7 +238,7 @@ def _generate_webb_weights(n_clusters: int, rng: np.random.Generator) -> np.ndar
     Generate Webb's 6-point distribution weights.
 
     Values: {-sqrt(3/2), -sqrt(2/2), -sqrt(1/2), sqrt(1/2), sqrt(2/2), sqrt(3/2)}
-    with probabilities proportional to {1, 2, 3, 3, 2, 1}.
+    with equal probabilities (1/6 each), giving E[w]=0 and Var(w)=1.0.
 
     This distribution is recommended for very few clusters (G < 10) as it
     provides better finite-sample properties than Rademacher weights.
@@ -259,13 +259,16 @@ def _generate_webb_weights(n_clusters: int, rng: np.random.Generator) -> np.ndar
     ----------
     Webb, M. D. (2014). Reworking wild bootstrap based inference for
     clustered errors. Queen's Economics Department Working Paper No. 1315.
+
+    Note: Uses equal probabilities (1/6 each) matching R's `did` package,
+    which gives unit variance for consistency with other weight distributions.
     """
     values = np.array([
         -np.sqrt(3 / 2), -np.sqrt(2 / 2), -np.sqrt(1 / 2),
         np.sqrt(1 / 2), np.sqrt(2 / 2), np.sqrt(3 / 2)
     ])
-    probs = np.array([1, 2, 3, 3, 2, 1]) / 12
-    return np.asarray(rng.choice(values, size=n_clusters, p=probs))
+    # Equal probabilities (1/6 each) matching R's did package, giving Var(w) = 1.0
+    return np.asarray(rng.choice(values, size=n_clusters))
 
 
 def _generate_mammen_weights(n_clusters: int, rng: np.random.Generator) -> np.ndarray:
