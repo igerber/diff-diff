@@ -192,6 +192,12 @@ def plot_event_study(
     # Compute confidence intervals
     critical_value = scipy_stats.norm.ppf(1 - alpha / 2)
 
+    # Normalize effects to reference period if specified
+    if reference_period is not None and reference_period in effects:
+        ref_effect = effects[reference_period]
+        if np.isfinite(ref_effect):
+            effects = {p: e - ref_effect for p, e in effects.items()}
+
     plot_data = []
     for period in periods:
         effect = effects.get(period, np.nan)

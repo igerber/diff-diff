@@ -318,6 +318,108 @@ class TestPlotEventStudy:
 
         plt.close()
 
+    def test_plot_event_study_reference_period_normalization(self):
+        """Test that reference_period actually normalizes effects to 0.
+
+        When reference_period is specified, the effect at that period should
+        be subtracted from all effects, so the reference period becomes exactly 0.
+        """
+        pytest.importorskip("matplotlib")
+        import matplotlib.pyplot as plt
+
+        # Create data where reference period (period=0) has effect=0.3
+        df = pd.DataFrame({
+            'period': [-2, -1, 0, 1, 2],
+            'effect': [0.1, 0.2, 0.3, 0.5, 0.6],  # ref at 0 has effect 0.3
+            'se': [0.1, 0.1, 0.1, 0.1, 0.1]
+        })
+
+        ax = plot_event_study(df, reference_period=0, show=False)
+
+        # Find plotted y-values by extracting data from Line2D objects
+        # The point estimates are plotted as individual markers
+        y_values = []
+        for child in ax.get_children():
+            # Line2D objects with single points are our markers
+            if hasattr(child, 'get_ydata'):
+                ydata = child.get_ydata()
+                if len(ydata) == 1:
+                    y_values.append(float(ydata[0]))
+
+        # After normalization:
+        # - Original effects: [0.1, 0.2, 0.3, 0.5, 0.6]
+        # - Reference effect: 0.3
+        # - Normalized: [-0.2, -0.1, 0.0, 0.2, 0.3]
+        expected_normalized = [-0.2, -0.1, 0.0, 0.2, 0.3]
+
+        # Check that reference period (0) is at y=0
+        assert 0.0 in y_values or any(abs(y) < 0.01 for y in y_values), \
+            f"Reference period should be at y=0, got y_values={y_values}"
+
+        # Verify all expected normalized values are present
+        for expected in expected_normalized:
+            assert any(abs(y - expected) < 0.01 for y in y_values), \
+                f"Expected normalized value {expected} not found in {y_values}"
+
+        plt.close()
+
+    def test_plot_event_study_no_normalization_without_reference(self):
+        """Test that effects are NOT normalized when reference_period is None."""
+        pytest.importorskip("matplotlib")
+        import matplotlib.pyplot as plt
+
+        df = pd.DataFrame({
+            'period': [-1, 0, 1],
+            'effect': [0.1, 0.3, 0.5],
+            'se': [0.1, 0.1, 0.1]
+        })
+
+        ax = plot_event_study(df, reference_period=None, show=False)
+
+        # Extract y-values
+        y_values = []
+        for child in ax.get_children():
+            if hasattr(child, 'get_ydata'):
+                ydata = child.get_ydata()
+                if len(ydata) == 1:
+                    y_values.append(float(ydata[0]))
+
+        # Without normalization, original values should be preserved
+        for expected in [0.1, 0.3, 0.5]:
+            assert any(abs(y - expected) < 0.01 for y in y_values), \
+                f"Original value {expected} not found in {y_values}"
+
+        plt.close()
+
+    def test_plot_event_study_normalization_with_nan_reference(self):
+        """Test that normalization is skipped when reference effect is NaN."""
+        pytest.importorskip("matplotlib")
+        import matplotlib.pyplot as plt
+
+        df = pd.DataFrame({
+            'period': [-1, 0, 1],
+            'effect': [0.1, np.nan, 0.5],  # Reference period has NaN effect
+            'se': [0.1, 0.1, 0.1]
+        })
+
+        # This should not raise and should skip normalization
+        ax = plot_event_study(df, reference_period=0, show=False)
+
+        # Extract y-values (NaN effect is skipped in plotting)
+        y_values = []
+        for child in ax.get_children():
+            if hasattr(child, 'get_ydata'):
+                ydata = child.get_ydata()
+                if len(ydata) == 1:
+                    y_values.append(float(ydata[0]))
+
+        # Original non-NaN values should be preserved (not normalized)
+        for expected in [0.1, 0.5]:
+            assert any(abs(y - expected) < 0.01 for y in y_values), \
+                f"Original value {expected} not found in {y_values}"
+
+        plt.close()
+
 
 class TestPlotEventStudyIntegration:
     """Integration tests for event study plotting."""
