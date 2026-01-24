@@ -154,6 +154,16 @@ Each estimator in diff-diff should be periodically reviewed to ensure:
    uses equal probabilities (1/6 each) matching R's `did` package. This gives
    E[w]=0, Var(w)=1.0, consistent with other bootstrap weight distributions.
 
+   **Verification**: Our implementation matches the well-established `fwildclusterboot`
+   R package (C++ source: [wildboottest.cpp](https://github.com/s3alfisc/fwildclusterboot/blob/master/src/wildboottest.cpp)).
+   The implementation uses `sqrt(1.5)`, `1`, `sqrt(0.5)` (and negatives) with equal 1/6
+   probabilities—identical to our values.
+
+   **Note on documentation discrepancy**: Some documentation (e.g., fwildclusterboot
+   vignette) describes Webb weights as "±1.5, ±1, ±0.5". This appears to be a
+   simplification for readability. The actual implementations use ±√1.5, ±1, ±√0.5
+   which provides the required unit variance (Var(w) = 1.0).
+
 ---
 
 #### SunAbraham
