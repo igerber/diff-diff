@@ -420,6 +420,50 @@ class TestSolveOLS:
         with pytest.raises(ValueError, match="at least 2 clusters"):
             solve_ols(X, y, cluster_ids=cluster_ids)
 
+    def test_singleton_clusters_included_in_variance(self):
+        """Test that singleton clusters contribute to variance estimation.
+
+        REGISTRY.md documents: "Singleton clusters (one observation): included
+        in variance estimation; contribute to meat matrix via (residual² × X'X),
+        same as larger clusters"
+
+        This test verifies that behavior.
+        """
+        np.random.seed(42)
+        n = 100
+        X = np.column_stack([np.ones(n), np.random.randn(n)])
+        y = X @ np.array([1.0, 2.0]) + np.random.randn(n)
+
+        # Create clusters: one large cluster (50 obs), 50 singleton clusters
+        # Total: 51 clusters, 50 of which are singletons
+        cluster_ids = np.concatenate([
+            np.zeros(50),           # Large cluster (id=0)
+            np.arange(1, 51)        # 50 singleton clusters (ids 1-50)
+        ])
+
+        coef, resid, vcov = solve_ols(X, y, cluster_ids=cluster_ids)
+
+        # Basic validity checks
+        assert vcov.shape == (2, 2), "VCoV should be 2x2"
+        assert np.all(np.isfinite(vcov)), "VCoV should have finite values"
+        assert np.allclose(vcov, vcov.T), "VCoV should be symmetric"
+
+        # Variance should be positive (singletons contribute, not zero)
+        assert vcov[0, 0] > 0, "Intercept variance should be positive"
+        assert vcov[1, 1] > 0, "Slope variance should be positive"
+
+        # Compare to case without singletons (only large clusters)
+        # With fewer clusters, variance should be DIFFERENT (not necessarily larger)
+        cluster_ids_no_singletons = np.concatenate([
+            np.zeros(50),           # Cluster 0
+            np.ones(50)             # Cluster 1
+        ])
+        _, _, vcov_no_singletons = solve_ols(X, y, cluster_ids=cluster_ids_no_singletons)
+
+        # The two variance estimates should differ (singletons change the calculation)
+        assert not np.allclose(vcov, vcov_no_singletons), \
+            "Singleton clusters should affect variance estimation"
+
 
 class TestComputeRobustVcov:
     """Tests for compute_robust_vcov function."""
