@@ -60,7 +60,7 @@ where τ is the ATT.
   - With "warn" (default): emits warning, sets NaN for affected coefficients
   - With "error": raises ValueError
   - With "silent": continues silently with NaN coefficients
-- Singleton groups in clustering are dropped with warning
+- Singleton clusters (one observation): included in variance estimation, contribute 0 to cluster variance component (no within-cluster variation)
 - Rank-deficient design matrix (collinearity): warns and sets NA for dropped coefficients (R-style, matches `lm()`)
   - Tolerance: `1e-07` (matches R's `qr()` default), relative to largest diagonal element of R in QR decomposition
   - Controllable via `rank_deficient_action` parameter: "warn" (default), "error", or "silent"

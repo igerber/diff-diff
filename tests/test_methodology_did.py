@@ -895,11 +895,9 @@ class TestEdgeCases:
         """
         Empty cells (no observations in a cell) produce rank deficiency.
 
-        REGISTRY.md: "Empty cells (e.g., no treated-pre observations) raise ValueError"
-
-        Note: The current implementation doesn't explicitly check for empty cells
-        but produces rank-deficient design matrices which result in warnings
-        or NaN coefficients depending on rank_deficient_action setting.
+        Empty cells create linearly dependent columns, resulting in rank deficiency
+        handled per rank_deficient_action setting (warn → NaN coefficients,
+        error → ValueError, silent → NaN without warning).
         """
         # No treated units in pre-period
         data = pd.DataFrame({
