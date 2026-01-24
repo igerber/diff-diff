@@ -2847,10 +2847,14 @@ class TestCallawaySantAnnaTStatNaN:
 
         # Effect is 0 by construction (normalization)
         assert ref['effect'] == 0.0, f"Reference period effect should be 0.0, got {ref['effect']}"
-        assert ref['se'] == 0.0, f"Reference period SE should be 0.0, got {ref['se']}"
+        # Inference fields are NaN - this is a normalization constraint, not an estimated effect
+        assert np.isnan(ref['se']), f"Reference period SE should be NaN, got {ref['se']}"
         assert np.isnan(ref['t_stat']), f"Reference period t_stat should be NaN, got {ref['t_stat']}"
         assert np.isnan(ref['p_value']), f"Reference period p_value should be NaN, got {ref['p_value']}"
-        assert ref['conf_int'] == (0.0, 0.0), f"Reference period CI should be (0.0, 0.0), got {ref['conf_int']}"
+        assert np.isnan(ref['conf_int'][0]) and np.isnan(ref['conf_int'][1]), (
+            f"Reference period CI should be (NaN, NaN), got {ref['conf_int']}"
+        )
+        assert ref['n_groups'] == 0, f"Reference period n_groups should be 0, got {ref['n_groups']}"
 
     def test_event_study_varying_excludes_reference_period(self):
         """Test that varying base period does NOT artificially add e=-1 with effect=0."""
@@ -2899,3 +2903,36 @@ class TestCallawaySantAnnaTStatNaN:
         )
         ref = results.event_study_effects[-2]
         assert ref['effect'] == 0.0, f"Reference period effect should be 0.0, got {ref['effect']}"
+        # Inference fields are NaN - normalization constraint
+        assert np.isnan(ref['se']), f"Reference period SE should be NaN, got {ref['se']}"
+        assert np.isnan(ref['conf_int'][0]) and np.isnan(ref['conf_int'][1]), (
+            f"Reference period CI should be (NaN, NaN), got {ref['conf_int']}"
+        )
+
+    def test_event_study_universal_no_effects_raises_error(self):
+        """Test that estimator raises error when no effects can be computed.
+
+        This ensures the reference period injection code (which has an empty guard)
+        is never reached with empty effects - the estimator fails fast instead.
+        """
+        import pandas as pd
+
+        # Create minimal data with only never-treated units
+        # This ensures no ATT(g,t) can be computed (no treatment groups)
+        data = pd.DataFrame({
+            'unit': [1, 1, 2, 2, 3, 3],
+            'time': [1, 2, 1, 2, 1, 2],
+            'outcome': [1.0, 1.1, 1.2, 1.3, 1.4, 1.5],
+            'first_treat': [0, 0, 0, 0, 0, 0],  # All never-treated
+        })
+
+        cs = CallawaySantAnna(base_period="universal")
+        with pytest.raises(ValueError, match="Could not estimate any group-time effects"):
+            cs.fit(
+                data,
+                outcome='outcome',
+                unit='unit',
+                time='time',
+                first_treat='first_treat',
+                aggregate='event_study'
+            )

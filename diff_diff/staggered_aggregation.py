@@ -419,15 +419,17 @@ class CallawaySantAnnaAggregationMixin:
 
         # Add reference period for universal base period mode (matches R did package)
         # The reference period e = -1 - anticipation has effect = 0 by construction
+        # Only add if there are actual computed effects (guard against empty data)
         if getattr(self, 'base_period', 'varying') == "universal":
             ref_period = -1 - self.anticipation
-            if ref_period not in event_study_effects:
+            # Only inject reference if we have at least one real effect
+            if event_study_effects and ref_period not in event_study_effects:
                 event_study_effects[ref_period] = {
                     'effect': 0.0,
-                    'se': 0.0,
+                    'se': np.nan,  # Undefined - no data, normalization constraint
                     't_stat': np.nan,  # Undefined - normalization constraint
                     'p_value': np.nan,
-                    'conf_int': (0.0, 0.0),
+                    'conf_int': (np.nan, np.nan),  # NaN propagation for undefined inference
                     'n_groups': 0,  # No groups contribute - fixed by construction
                 }
 

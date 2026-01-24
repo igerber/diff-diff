@@ -230,7 +230,8 @@ Aggregations:
   - Both produce identical post-treatment ATT(g,t); differ only pre-treatment
   - Matches R `did::att_gt()` base_period parameter
   - **Event study output**: With "universal", includes reference period (e=-1-anticipation)
-    with effect=0, se=0, matching R behavior for complete event study plots
+    with effect=0, se=NaN, conf_int=(NaN, NaN). Inference fields are NaN since this is
+    a normalization constraint, not an estimated effect. Only added when real effects exist.
 - Base period interaction with Sun-Abraham comparison:
   - CS with `base_period="varying"` produces different pre-treatment estimates than SA
   - This is expected: CS uses consecutive comparisons, SA uses fixed reference (e=-1-anticipation)
