@@ -136,7 +136,7 @@ from diff_diff.datasets import (
     load_mpdta,
 )
 
-__version__ = "2.1.5"
+__version__ = "2.1.6"
 __all__ = [
     # Estimators
     "DifferenceInDifferences",
