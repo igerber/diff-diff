@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.6] - 2026-01-24
+
+### Added
+- **Methodology verification tests** for DifferenceInDifferences estimator
+  - Comprehensive test suite validating all REGISTRY.md requirements
+  - Tests for formula interface, coefficient extraction, rank deficiency handling
+  - Singleton cluster variance estimation behavioral tests
+
+### Changed
+- **REGISTRY.md documentation improvements**
+  - Clarified singleton cluster formula notation (u_i² X_i X_i' instead of ambiguous residual² × X'X)
+  - Verified DifferenceInDifferences behavior against documented requirements
+
 ## [2.1.5] - 2026-01-22
 
 ### Added
@@ -517,6 +530,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `to_dict()` and `to_dataframe()` export methods
   - `is_significant` and `significance_stars` properties
 
+[2.1.6]: https://github.com/igerber/diff-diff/compare/v2.1.5...v2.1.6
 [2.1.5]: https://github.com/igerber/diff-diff/compare/v2.1.4...v2.1.5
 [2.1.4]: https://github.com/igerber/diff-diff/compare/v2.1.3...v2.1.4
 [2.1.3]: https://github.com/igerber/diff-diff/compare/v2.1.2...v2.1.3
