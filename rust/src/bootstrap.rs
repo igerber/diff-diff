@@ -115,24 +115,24 @@ fn generate_mammen_batch(n_bootstrap: usize, n_units: usize, seed: u64) -> Array
 
 /// Generate Webb 6-point distribution weights.
 ///
-/// Six-point distribution that matches additional moments:
-/// E[w] = 0, E[w²] = 1, E[w³] = 0, E[w⁴] = 1
+/// Six-point distribution with equal probabilities (1/6 each) matching R's `did` package:
+/// E[w] = 0, Var[w] = 1
 ///
-/// Values: ±√(3/2), ±√(1/2), ±√(1/6) with specific probabilities
+/// Values: ±√(3/2), ±√(2/2)=±1, ±√(1/2)
 fn generate_webb_batch(n_bootstrap: usize, n_units: usize, seed: u64) -> Array2<f64> {
     // Webb 6-point values
-    let val1 = (3.0_f64 / 2.0).sqrt(); // √(3/2) ≈ 1.225
-    let val2 = (1.0_f64 / 2.0).sqrt(); // √(1/2) ≈ 0.707
-    let val3 = (1.0_f64 / 6.0).sqrt(); // √(1/6) ≈ 0.408
+    let val1 = (3.0_f64 / 2.0).sqrt(); // √(3/2) ≈ 1.2247
+    let val2 = 1.0_f64; // √(2/2) = 1.0
+    let val3 = (1.0_f64 / 2.0).sqrt(); // √(1/2) ≈ 0.7071
 
-    // Lookup table for direct index computation (replaces 6-way if-else)
-    // Equal probability: u in [0, 1/6) -> -val1, [1/6, 2/6) -> -val2, etc.
+    // Values in order: -val1, -val2, -val3, val3, val2, val1
     let weights_table = [-val1, -val2, -val3, val3, val2, val1];
 
     // Pre-allocate output array - eliminates double allocation
     let mut weights = Array2::<f64>::zeros((n_bootstrap, n_units));
 
     // Fill rows in parallel with chunk size tuning
+    // Use uniform selection (1/6 probability each) matching R's did package
     weights
         .axis_iter_mut(Axis(0))
         .into_par_iter()
@@ -141,10 +141,8 @@ fn generate_webb_batch(n_bootstrap: usize, n_units: usize, seed: u64) -> Array2<
         .for_each(|(i, mut row)| {
             let mut rng = Xoshiro256PlusPlus::seed_from_u64(seed.wrapping_add(i as u64));
             for elem in row.iter_mut() {
-                let u = rng.gen::<f64>();
-                // Direct bucket computation: multiply by 6 and floor to get index 0-5
-                // Clamp to 5 to handle edge case where u == 1.0
-                let bucket = ((u * 6.0).floor() as usize).min(5);
+                // Uniform selection: generate integer 0-5, index into weights_table
+                let bucket = rng.gen_range(0..6);
                 *elem = weights_table[bucket];
             }
         });
@@ -224,5 +222,61 @@ mod tests {
 
         // Different seeds should produce different results
         assert_ne!(weights1, weights2);
+    }
+
+    #[test]
+    fn test_webb_mean_approx_zero() {
+        let weights = generate_webb_batch(10000, 1, 42);
+        let mean: f64 = weights.iter().sum::<f64>() / weights.len() as f64;
+
+        // With 10000 samples, mean should be close to 0
+        assert!(
+            mean.abs() < 0.1,
+            "Webb mean should be close to 0, got {}",
+            mean
+        );
+    }
+
+    #[test]
+    fn test_webb_variance_approx_correct() {
+        // Webb's 6-point distribution with values ±√(3/2), ±1, ±√(1/2)
+        // and equal probabilities (1/6 each) should have variance = 1.0
+        // This matches R's did package behavior.
+        // Theoretical: Var = (1/6) * (3/2 + 1 + 1/2 + 1/2 + 1 + 3/2) = (1/6) * 6 = 1.0
+        let weights = generate_webb_batch(10000, 100, 42);
+        let n = weights.len() as f64;
+        let mean: f64 = weights.iter().sum::<f64>() / n;
+        let variance: f64 = weights.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / n;
+
+        // Theoretical variance = 1.0 with equal probabilities
+        // Allow some statistical variance in the estimate
+        assert!(
+            (variance - 1.0).abs() < 0.05,
+            "Webb variance should be ~1.0 (matching R's did package), got {}",
+            variance
+        );
+    }
+
+    #[test]
+    fn test_webb_values_correct() {
+        // Verify that Webb weights only take the expected 6 values
+        let weights = generate_webb_batch(100, 1000, 42);
+
+        let val1 = (3.0_f64 / 2.0).sqrt(); // ≈ 1.2247
+        let val2 = 1.0_f64;
+        let val3 = (1.0_f64 / 2.0).sqrt(); // ≈ 0.7071
+
+        let expected_values = [-val1, -val2, -val3, val3, val2, val1];
+
+        for w in weights.iter() {
+            let matches_expected = expected_values
+                .iter()
+                .any(|&expected| (*w - expected).abs() < 1e-10);
+            assert!(
+                matches_expected,
+                "Webb weight {} is not one of the expected values",
+                w
+            );
+        }
     }
 }

@@ -198,6 +198,28 @@ Aggregations:
 - Bootstrap: Multiplier bootstrap with Rademacher, Mammen, or Webb weights
 - Block structure preserves within-unit correlation
 
+*Bootstrap weight distributions:*
+
+The multiplier bootstrap uses random weights w_i with E[w]=0 and Var(w)=1:
+
+| Weight Type | Values | Probabilities | Properties |
+|-------------|--------|---------------|------------|
+| Rademacher | ±1 | 1/2 each | Simplest; E[w³]=0 |
+| Mammen | -(√5-1)/2, (√5+1)/2 | (√5+1)/(2√5), (√5-1)/(2√5) | E[w³]=1; better for skewed data |
+| Webb | ±√(3/2), ±1, ±√(1/2) | 1/6 each | 6-point; recommended for few clusters |
+
+**Webb distribution details:**
+- Values: {-√(3/2), -1, -√(1/2), √(1/2), 1, √(3/2)} ≈ {-1.225, -1, -0.707, 0.707, 1, 1.225}
+- Equal probabilities (1/6 each) giving E[w]=0, Var(w)=1
+- Matches R's `did` package implementation
+- **Verification**: Implementation matches `fwildclusterboot` R package
+  ([C++ source](https://github.com/s3alfisc/fwildclusterboot/blob/master/src/wildboottest.cpp))
+  which uses identical `sqrt(1.5)`, `1`, `sqrt(0.5)` values with equal 1/6 probabilities.
+  Some documentation shows simplified values (±1.5, ±1, ±0.5) but actual implementations
+  use square root values to achieve unit variance.
+- Reference: Webb, M.D. (2023). Reworking Wild Bootstrap Based Inference for Clustered Errors.
+  Queen's Economics Department Working Paper No. 1315. (Updated from Webb 2014)
+
 *Edge cases:*
 - Groups with single observation: included but may have high variance
 - Missing group-time cells: ATT(g,t) set to NaN
