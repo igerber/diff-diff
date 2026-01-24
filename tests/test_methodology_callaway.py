@@ -362,8 +362,8 @@ class TestRBenchmarkCallaway:
         Dict with keys: overall_att, overall_se, group_time (dict of lists)
         """
         r_script = f'''
-        library(did)
-        library(jsonlite)
+        suppressMessages(library(did))
+        suppressMessages(library(jsonlite))
 
         data <- read.csv("{data_path}")
 
@@ -868,16 +868,15 @@ class TestSEFormulas:
 
     def test_bootstrap_weight_moments_webb(self):
         """
-        Webb weights have E[w]=0 and well-defined variance.
+        Webb weights have E[w]=0 and Var[w]=1.
 
         Webb's 6-point distribution is recommended for few clusters.
-        Values: ±sqrt(3/2), ±sqrt(2/2)=±1, ±sqrt(1/2) with probs [1,2,3,3,2,1]/12
+        Values: ±sqrt(3/2), ±sqrt(2/2)=±1, ±sqrt(1/2) with equal probs (1/6 each)
 
-        Theoretical variance:
-            Var = 2 * (1/12 * 3/2 + 2/12 * 1 + 3/12 * 1/2)
-                = 2 * (3/24 + 4/24 + 3/24)
-                = 2 * 10/24
-                = 10/12 ≈ 0.833
+        Theoretical variance with equal probabilities:
+            Var = (1/6) * (3/2 + 1 + 1/2 + 1/2 + 1 + 3/2) = (1/6) * 6 = 1.0
+
+        This matches R's `did` package behavior.
         """
         rng = np.random.default_rng(42)
         weights = _generate_bootstrap_weights_batch(10000, 100, 'webb', rng)
@@ -885,10 +884,9 @@ class TestSEFormulas:
         mean_w = np.mean(weights)
         assert abs(mean_w) < 0.02, f"Webb E[w] should be ~0, got {mean_w}"
 
-        # Webb's variance is approximately 10/12 ≈ 0.833
-        # This is the theoretical variance of the 6-point distribution
+        # Webb's variance is 1.0 with equal probabilities (matching R's did package)
         var_w = np.var(weights)
-        assert 0.75 < var_w < 0.90, f"Webb Var(w) should be ~0.833, got {var_w}"
+        assert abs(var_w - 1.0) < 0.05, f"Webb Var(w) should be ~1.0, got {var_w}"
 
     def test_bootstrap_produces_valid_inference(self):
         """Test that bootstrap produces valid inference with p-values and CIs.

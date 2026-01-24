@@ -115,13 +115,12 @@ fn generate_mammen_batch(n_bootstrap: usize, n_units: usize, seed: u64) -> Array
 
 /// Generate Webb 6-point distribution weights.
 ///
-/// Six-point distribution that matches additional moments:
-/// E[w] = 0, E[w²] = 1, E[w³] = 0, E[w⁴] = 1
+/// Six-point distribution with equal probabilities (1/6 each) matching R's `did` package:
+/// E[w] = 0, Var[w] = 1
 ///
-/// Values: ±√(3/2), ±√(2/2)=±1, ±√(1/2) with probabilities [1,2,3,3,2,1]/12
-/// This matches the NumPy implementation in staggered_bootstrap.py
+/// Values: ±√(3/2), ±√(2/2)=±1, ±√(1/2)
 fn generate_webb_batch(n_bootstrap: usize, n_units: usize, seed: u64) -> Array2<f64> {
-    // Webb 6-point values (matching NumPy implementation)
+    // Webb 6-point values
     let val1 = (3.0_f64 / 2.0).sqrt(); // √(3/2) ≈ 1.2247
     let val2 = 1.0_f64; // √(2/2) = 1.0
     let val3 = (1.0_f64 / 2.0).sqrt(); // √(1/2) ≈ 0.7071
@@ -129,22 +128,11 @@ fn generate_webb_batch(n_bootstrap: usize, n_units: usize, seed: u64) -> Array2<
     // Values in order: -val1, -val2, -val3, val3, val2, val1
     let weights_table = [-val1, -val2, -val3, val3, val2, val1];
 
-    // Cumulative probabilities for [1,2,3,3,2,1]/12
-    // Probs: 1/12, 2/12, 3/12, 3/12, 2/12, 1/12
-    // Cumulative: 1/12, 3/12, 6/12, 9/12, 11/12, 12/12
-    let cum_probs = [
-        1.0 / 12.0,  // P(bucket 0) = 1/12
-        3.0 / 12.0,  // P(bucket <= 1) = 3/12
-        6.0 / 12.0,  // P(bucket <= 2) = 6/12 = 0.5
-        9.0 / 12.0,  // P(bucket <= 3) = 9/12 = 0.75
-        11.0 / 12.0, // P(bucket <= 4) = 11/12
-        // bucket 5 is implicit (u >= 11/12)
-    ];
-
     // Pre-allocate output array - eliminates double allocation
     let mut weights = Array2::<f64>::zeros((n_bootstrap, n_units));
 
     // Fill rows in parallel with chunk size tuning
+    // Use uniform selection (1/6 probability each) matching R's did package
     weights
         .axis_iter_mut(Axis(0))
         .into_par_iter()
@@ -153,21 +141,8 @@ fn generate_webb_batch(n_bootstrap: usize, n_units: usize, seed: u64) -> Array2<
         .for_each(|(i, mut row)| {
             let mut rng = Xoshiro256PlusPlus::seed_from_u64(seed.wrapping_add(i as u64));
             for elem in row.iter_mut() {
-                let u = rng.gen::<f64>();
-                // Find bucket using cumulative probabilities
-                let bucket = if u < cum_probs[0] {
-                    0
-                } else if u < cum_probs[1] {
-                    1
-                } else if u < cum_probs[2] {
-                    2
-                } else if u < cum_probs[3] {
-                    3
-                } else if u < cum_probs[4] {
-                    4
-                } else {
-                    5
-                };
+                // Uniform selection: generate integer 0-5, index into weights_table
+                let bucket = rng.gen_range(0..6);
                 *elem = weights_table[bucket];
             }
         });
@@ -265,18 +240,19 @@ mod tests {
     #[test]
     fn test_webb_variance_approx_correct() {
         // Webb's 6-point distribution with values ±√(3/2), ±1, ±√(1/2)
-        // and probabilities [1,2,3,3,2,1]/12 should have variance close to
-        // the theoretical value of 10/12 ≈ 0.833
+        // and equal probabilities (1/6 each) should have variance = 1.0
+        // This matches R's did package behavior.
+        // Theoretical: Var = (1/6) * (3/2 + 1 + 1/2 + 1/2 + 1 + 3/2) = (1/6) * 6 = 1.0
         let weights = generate_webb_batch(10000, 100, 42);
         let n = weights.len() as f64;
         let mean: f64 = weights.iter().sum::<f64>() / n;
         let variance: f64 = weights.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / n;
 
-        // Theoretical variance = 2 * (1/12 * 3/2 + 2/12 * 1 + 3/12 * 1/2) = 10/12 ≈ 0.833
+        // Theoretical variance = 1.0 with equal probabilities
         // Allow some statistical variance in the estimate
         assert!(
-            (variance - 0.833).abs() < 0.05,
-            "Webb variance should be ~0.833 (matching NumPy), got {}",
+            (variance - 1.0).abs() < 0.05,
+            "Webb variance should be ~1.0 (matching R's did package), got {}",
             variance
         );
     }

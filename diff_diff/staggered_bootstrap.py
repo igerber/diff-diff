@@ -60,12 +60,13 @@ def _generate_bootstrap_weights(
 
     elif weight_type == "webb":
         # Webb's 6-point distribution (recommended for few clusters)
+        # Values: ±√(3/2), ±1, ±√(1/2) with equal probabilities (1/6 each)
+        # This matches R's did package: E[w]=0, Var(w)=1.0
         values = np.array([
             -np.sqrt(3 / 2), -np.sqrt(2 / 2), -np.sqrt(1 / 2),
             np.sqrt(1 / 2), np.sqrt(2 / 2), np.sqrt(3 / 2)
         ])
-        probs = np.array([1, 2, 3, 3, 2, 1]) / 12
-        return rng.choice(values, size=n_units, p=probs)
+        return rng.choice(values, size=n_units)  # Equal probs (1/6 each)
 
     else:
         raise ValueError(
@@ -152,12 +153,13 @@ def _generate_bootstrap_weights_batch_numpy(
 
     elif weight_type == "webb":
         # Webb's 6-point distribution
+        # Values: ±√(3/2), ±1, ±√(1/2) with equal probabilities (1/6 each)
+        # This matches R's did package: E[w]=0, Var(w)=1.0
         values = np.array([
             -np.sqrt(3 / 2), -np.sqrt(2 / 2), -np.sqrt(1 / 2),
             np.sqrt(1 / 2), np.sqrt(2 / 2), np.sqrt(3 / 2)
         ])
-        probs = np.array([1, 2, 3, 3, 2, 1]) / 12
-        return rng.choice(values, size=(n_bootstrap, n_units), p=probs)
+        return rng.choice(values, size=(n_bootstrap, n_units))  # Equal probs (1/6 each)
 
     else:
         raise ValueError(
