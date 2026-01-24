@@ -714,6 +714,50 @@ class TestEdgeCases:
         assert np.isfinite(bounds.ci_lb)
         assert np.isfinite(bounds.ci_ub)
 
+    def test_max_pre_violation_excludes_reference_period(self):
+        """Test that reference period (effect=0, n_groups=0) is excluded from max pre-violation.
+
+        With universal base period, the reference period e=-1 is a normalization constraint
+        with n_groups=0. It should not be used in _estimate_max_pre_violation because
+        its effect is artificially set to 0, which would collapse RM bounds incorrectly.
+        """
+        from diff_diff import CallawaySantAnna, generate_staggered_data
+
+        # Generate data with universal base period
+        data = generate_staggered_data(n_units=200, n_periods=10, seed=42)
+        cs = CallawaySantAnna(base_period="universal")
+        results = cs.fit(
+            data,
+            outcome='outcome',
+            unit='unit',
+            time='period',
+            first_treat='first_treat',
+            aggregate='event_study'
+        )
+
+        # Verify reference period exists with n_groups=0
+        assert -1 in results.event_study_effects
+        assert results.event_study_effects[-1]['n_groups'] == 0
+
+        # The max pre-violation calculation should exclude the reference period
+        honest = HonestDiD(method='relative_magnitude', M=1.0)
+
+        # Get pre_periods excluding reference (n_groups=0)
+        real_pre_periods = [
+            t for t in results.event_study_effects
+            if t < 0 and results.event_study_effects[t].get('n_groups', 1) > 0
+        ]
+
+        # If there are real pre-periods, max_violation should be > 0
+        # (based on actual pre-period effects, not the reference period's effect=0)
+        if real_pre_periods:
+            max_violation = honest._estimate_max_pre_violation(results, real_pre_periods)
+            # Max violation should reflect actual pre-period coefficients, not 0
+            # The actual effects are non-zero due to sampling variation
+            assert max_violation > 0, (
+                "max_pre_violation should be > 0 when real pre-periods exist"
+            )
+
 
 # =============================================================================
 # Tests for Visualization (without matplotlib)

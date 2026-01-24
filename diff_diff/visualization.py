@@ -197,11 +197,17 @@ def plot_event_study(
         effect = effects.get(period, np.nan)
         std_err = se.get(period, np.nan)
 
-        if np.isnan(effect) or np.isnan(std_err):
+        # Skip entries with NaN effect, but allow NaN SE (will plot without error bars)
+        if np.isnan(effect):
             continue
 
-        ci_lower = effect - critical_value * std_err
-        ci_upper = effect + critical_value * std_err
+        # Compute CI only if SE is finite
+        if np.isfinite(std_err):
+            ci_lower = effect - critical_value * std_err
+            ci_upper = effect + critical_value * std_err
+        else:
+            ci_lower = np.nan
+            ci_upper = np.nan
 
         plot_data.append({
             'period': period,
@@ -244,13 +250,20 @@ def plot_event_study(
             ref_x = period_to_x[reference_period]
             ax.axvline(x=ref_x, color='gray', linestyle=':', linewidth=1, zorder=1)
 
-    # Plot error bars
-    yerr = [df['effect'] - df['ci_lower'], df['ci_upper'] - df['effect']]
-    ax.errorbar(
-        x_vals, df['effect'], yerr=yerr,
-        fmt='none', color=color, capsize=capsize, linewidth=linewidth,
-        capthick=linewidth, zorder=2
-    )
+    # Plot error bars (only for entries with finite CI)
+    has_ci = df['ci_lower'].notna() & df['ci_upper'].notna()
+    if has_ci.any():
+        df_with_ci = df[has_ci]
+        x_with_ci = [period_to_x[p] for p in df_with_ci['period']]
+        yerr = [
+            df_with_ci['effect'] - df_with_ci['ci_lower'],
+            df_with_ci['ci_upper'] - df_with_ci['effect']
+        ]
+        ax.errorbar(
+            x_with_ci, df_with_ci['effect'], yerr=yerr,
+            fmt='none', color=color, capsize=capsize, linewidth=linewidth,
+            capthick=linewidth, zorder=2
+        )
 
     # Plot point estimates
     for i, row in df.iterrows():

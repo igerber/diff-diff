@@ -1266,10 +1266,12 @@ class HonestDiD:
             from diff_diff.staggered import CallawaySantAnnaResults
             if isinstance(results, CallawaySantAnnaResults):
                 if results.event_study_effects:
+                    # Filter out normalization constraints (n_groups=0, e.g. reference period)
                     pre_effects = [
                         abs(results.event_study_effects[t]['effect'])
                         for t in results.event_study_effects
                         if t < 0
+                        and results.event_study_effects[t].get('n_groups', 1) > 0
                     ]
                     if pre_effects:
                         return max(pre_effects)
