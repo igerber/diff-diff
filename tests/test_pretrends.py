@@ -795,6 +795,38 @@ class TestEdgeCases:
         with pytest.raises(TypeError, match="Unsupported results type"):
             pt.fit("not a results object")
 
+    def test_callaway_santanna_universal_base_period(self):
+        """Test that reference period (e=-1) is correctly filtered out with universal base period.
+
+        The reference period has n_groups=0 and se=NaN, so it should be excluded
+        from pre-trends power analysis to avoid contaminating the vcov matrix.
+        """
+        from diff_diff import CallawaySantAnna, generate_staggered_data
+
+        # Generate data and fit with universal base period
+        data = generate_staggered_data(n_units=200, n_periods=10, seed=42)
+        cs = CallawaySantAnna(base_period="universal")
+        results = cs.fit(
+            data,
+            outcome='outcome',
+            unit='unit',
+            time='period',
+            first_treat='first_treat',
+            aggregate='event_study'
+        )
+
+        # Verify reference period exists with NaN SE
+        assert -1 in results.event_study_effects
+        assert np.isnan(results.event_study_effects[-1]['se'])
+
+        # PreTrendsPower should work without errors (reference period filtered out)
+        pt = PreTrendsPower()
+        power_results = pt.fit(results)
+
+        # Should have valid (non-NaN) results
+        assert np.isfinite(power_results.power)
+        assert power_results.n_pre_periods >= 1
+
 
 # =============================================================================
 # Tests for visualization (without rendering)

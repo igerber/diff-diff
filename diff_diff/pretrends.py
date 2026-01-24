@@ -656,9 +656,12 @@ class PreTrendsPower:
                     )
 
                 # Get pre-period effects (negative relative times)
+                # Filter out normalization constraints (n_groups=0) and non-finite SEs
                 pre_effects = {
                     t: data for t, data in results.event_study_effects.items()
                     if t < 0
+                    and data.get('n_groups', 1) > 0
+                    and np.isfinite(data.get('se', np.nan))
                 }
 
                 if not pre_effects:
@@ -680,9 +683,12 @@ class PreTrendsPower:
             from diff_diff.sun_abraham import SunAbrahamResults
             if isinstance(results, SunAbrahamResults):
                 # Get pre-period effects (negative relative times)
+                # Filter out normalization constraints (n_groups=0) and non-finite SEs
                 pre_effects = {
                     t: data for t, data in results.event_study_effects.items()
                     if t < 0
+                    and data.get('n_groups', 1) > 0
+                    and np.isfinite(data.get('se', np.nan))
                 }
 
                 if not pre_effects:

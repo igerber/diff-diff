@@ -681,6 +681,39 @@ class TestEdgeCases:
         assert isinstance(results, HonestDiDResults)
         assert results.ci_width > 0
 
+    def test_callaway_santanna_universal_base_period(self):
+        """Test that reference period (e=-1) is correctly filtered out with universal base period.
+
+        The reference period has n_groups=0 and se=NaN, so it should be excluded
+        from HonestDiD analysis to avoid contaminating the vcov matrix.
+        """
+        from diff_diff import CallawaySantAnna, generate_staggered_data
+
+        # Generate data and fit with universal base period
+        data = generate_staggered_data(n_units=200, n_periods=10, seed=42)
+        cs = CallawaySantAnna(base_period="universal")
+        results = cs.fit(
+            data,
+            outcome='outcome',
+            unit='unit',
+            time='period',
+            first_treat='first_treat',
+            aggregate='event_study'
+        )
+
+        # Verify reference period exists with NaN SE
+        assert -1 in results.event_study_effects
+        assert np.isnan(results.event_study_effects[-1]['se'])
+
+        # HonestDiD should work without errors (reference period filtered out)
+        honest = HonestDiD(method='relative_magnitude', M=1.0)
+        bounds = honest.fit(results)
+
+        # Should have valid (non-NaN) results
+        assert isinstance(bounds, HonestDiDResults)
+        assert np.isfinite(bounds.ci_lb)
+        assert np.isfinite(bounds.ci_ub)
+
 
 # =============================================================================
 # Tests for Visualization (without matplotlib)

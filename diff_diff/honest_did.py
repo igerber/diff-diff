@@ -584,7 +584,12 @@ def _extract_event_study_params(
                     )
 
                 # Extract event study effects by relative time
-                event_effects = results.event_study_effects
+                # Filter out normalization constraints (n_groups=0) and non-finite SEs
+                event_effects = {
+                    t: data for t, data in results.event_study_effects.items()
+                    if data.get('n_groups', 1) > 0
+                    and np.isfinite(data.get('se', np.nan))
+                }
                 rel_times = sorted(event_effects.keys())
 
                 # Split into pre and post
