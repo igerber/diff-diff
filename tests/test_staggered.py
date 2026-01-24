@@ -2821,3 +2821,81 @@ class TestCallawaySantAnnaTStatNaN:
                         f"Group t_stat for g={g} should be effect/SE={expected_t}, "
                         f"got {t_stat}"
                     )
+
+    def test_event_study_universal_includes_reference_period(self):
+        """Test that universal base period includes e=-1 with effect=0."""
+        data = generate_staggered_data(n_units=200, n_periods=10, seed=42)
+
+        cs = CallawaySantAnna(base_period="universal")
+        results = cs.fit(
+            data,
+            outcome='outcome',
+            unit='unit',
+            time='time',
+            first_treat='first_treat',
+            aggregate='event_study'
+        )
+
+        assert results.event_study_effects is not None, "event_study_effects should not be None"
+
+        # Reference period should be included
+        assert -1 in results.event_study_effects, (
+            f"Reference period e=-1 should be in event_study_effects, "
+            f"got periods: {list(results.event_study_effects.keys())}"
+        )
+        ref = results.event_study_effects[-1]
+
+        # Effect is 0 by construction (normalization)
+        assert ref['effect'] == 0.0, f"Reference period effect should be 0.0, got {ref['effect']}"
+        assert ref['se'] == 0.0, f"Reference period SE should be 0.0, got {ref['se']}"
+        assert np.isnan(ref['t_stat']), f"Reference period t_stat should be NaN, got {ref['t_stat']}"
+        assert np.isnan(ref['p_value']), f"Reference period p_value should be NaN, got {ref['p_value']}"
+        assert ref['conf_int'] == (0.0, 0.0), f"Reference period CI should be (0.0, 0.0), got {ref['conf_int']}"
+
+    def test_event_study_varying_excludes_reference_period(self):
+        """Test that varying base period does NOT artificially add e=-1 with effect=0."""
+        data = generate_staggered_data(n_units=200, n_periods=10, seed=42)
+
+        cs = CallawaySantAnna(base_period="varying")
+        results = cs.fit(
+            data,
+            outcome='outcome',
+            unit='unit',
+            time='time',
+            first_treat='first_treat',
+            aggregate='event_study'
+        )
+
+        assert results.event_study_effects is not None, "event_study_effects should not be None"
+
+        # Varying mode: no single reference period, e=-1 computed normally or excluded
+        # The key is we don't artificially add a 0-effect entry
+        if -1 in results.event_study_effects:
+            # If it exists, it should be an actual computed effect, not 0.0 with n_groups=0
+            assert results.event_study_effects[-1]['n_groups'] > 0, (
+                "Varying mode should not artificially add e=-1 with n_groups=0"
+            )
+
+    def test_event_study_universal_with_anticipation(self):
+        """Test reference period with anticipation > 0."""
+        data = generate_staggered_data(n_units=200, n_periods=10, seed=42)
+
+        cs = CallawaySantAnna(base_period="universal", anticipation=1)
+        results = cs.fit(
+            data,
+            outcome='outcome',
+            unit='unit',
+            time='time',
+            first_treat='first_treat',
+            aggregate='event_study'
+        )
+
+        assert results.event_study_effects is not None, "event_study_effects should not be None"
+
+        # With anticipation=1, reference is e=-2
+        assert -2 in results.event_study_effects, (
+            f"With anticipation=1, reference period e=-2 should be in event_study_effects, "
+            f"got periods: {list(results.event_study_effects.keys())}"
+        )
+        ref = results.event_study_effects[-2]
+        assert ref['effect'] == 0.0, f"Reference period effect should be 0.0, got {ref['effect']}"
