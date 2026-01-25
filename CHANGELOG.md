@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.7] - 2026-01-25
+
+### Fixed
+- **`plot_event_study` reference period normalization behavior**
+  - Effects are now only normalized when `reference_period` is explicitly provided
+  - Auto-inferred reference periods only apply hollow marker styling (no normalization)
+  - Reference period SE is set to NaN during normalization (constraint, not estimate)
+  - Updated docstring to clarify explicit vs auto-inferred behavior
+
+### Changed
+- Refactored visualization tests to reuse `cs_results` fixture for better performance
+
 ## [2.1.6] - 2026-01-24
 
 ### Added
@@ -530,6 +542,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `to_dict()` and `to_dataframe()` export methods
   - `is_significant` and `significance_stars` properties
 
+[2.1.7]: https://github.com/igerber/diff-diff/compare/v2.1.6...v2.1.7
 [2.1.6]: https://github.com/igerber/diff-diff/compare/v2.1.5...v2.1.6
 [2.1.5]: https://github.com/igerber/diff-diff/compare/v2.1.4...v2.1.5
 [2.1.4]: https://github.com/igerber/diff-diff/compare/v2.1.3...v2.1.4
