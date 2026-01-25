@@ -970,7 +970,7 @@ class TestTROPRustBackend:
         lambda_unit = np.array([0.0, 1.0], dtype=np.float64)
         lambda_nn = np.array([0.0, 0.1], dtype=np.float64)
 
-        best_lt, best_lu, best_ln, score = loocv_grid_search(
+        best_lt, best_lu, best_ln, score, n_valid, n_attempted = loocv_grid_search(
             Y, D, control_mask, time_dist,
             lambda_time, lambda_unit, lambda_nn,
             50, 100, 1e-6, 42
@@ -981,6 +981,10 @@ class TestTROPRustBackend:
         assert best_lu in lambda_unit
         assert best_ln in lambda_nn
         assert np.isfinite(score) or score == np.inf
+        # Check failure counts are valid
+        assert n_valid >= 0
+        assert n_attempted >= 0
+        assert n_valid <= n_attempted
 
     def test_bootstrap_variance_shape(self):
         """Test bootstrap returns correct shapes."""
