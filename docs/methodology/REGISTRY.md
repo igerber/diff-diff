@@ -449,9 +449,33 @@ Doubly robust estimator:
 **Key implementation requirements:**
 
 *Assumption checks / warnings:*
-- Requires sufficient pre-treatment periods for factor estimation
+- Requires sufficient pre-treatment periods for factor estimation (at least 2)
 - Warns if estimated rank seems too high/low relative to panel dimensions
 - Unit weights can become degenerate if λ_unit too large
+- Returns Q(λ) = ∞ if ANY LOOCV fit fails (Equation 5 compliance)
+
+*Treatment indicator (D matrix) semantics:*
+
+D must be an **ABSORBING STATE** indicator, not a treatment timing indicator:
+- D[t, i] = 0 for all t < g_i (pre-treatment periods for unit i)
+- D[t, i] = 1 for all t >= g_i (during and after treatment for unit i)
+
+where g_i is the treatment start time for unit i.
+
+For staggered adoption, different units have different treatment start times g_i.
+The D matrix naturally handles this - distances use periods where BOTH units
+have D=0, matching the paper's (1 - W_iu)(1 - W_ju) formula in Equation 3.
+
+**Wrong D specification**: If user provides event-style D (only first treatment period
+has D=1), ATT will be incorrect - document this clearly.
+
+*ATT definition (Equation 1, Section 6.1):*
+```
+τ̂ = (1 / Σ_i Σ_t W_{it}) Σ_{i=1}^N Σ_{t=1}^T W_{it} τ̂_{it}(λ̂)
+```
+- ATT averages over ALL cells where D_it=1 (treatment indicator)
+- No separate "post_periods" concept - D matrix is the sole input for treatment timing
+- Supports general assignment patterns including staggered adoption
 
 *Estimator equation (as implemented):*
 
@@ -478,6 +502,30 @@ where d(j, treated) is RMSE distance to treated units in pre-period.
 
 Time weights: analogous construction for periods.
 
+*LOOCV tuning parameter selection (Equation 5, Footnote 2):*
+```
+Q(λ) = Σ_{j,s: D_js=0} [τ̂_js^loocv(λ)]²
+```
+- Score is **SUM** of squared pseudo-treatment effects on control observations
+- **Two-stage procedure** (per paper's footnote 2):
+  - Stage 1: Univariate grid searches with extreme fixed values
+    - λ_time search: fix λ_unit=0, λ_nn=∞ (disabled)
+    - λ_nn search: fix λ_time=∞ (uniform time weights), λ_unit=0
+    - λ_unit search: fix λ_nn=∞, λ_time=0
+  - Stage 2: Cycling (coordinate descent) until convergence
+- **"Disabled" parameter semantics** (per paper Equations 2-3):
+  - `λ_time=∞` or `λ_unit=∞`: Converts to `0.0` internally → exp(-0×dist)=1 → uniform weights
+  - `λ_nn=∞`: Converts to `1e10` internally → very large penalty → L≈0 (factor model off, recovers DID/TWFE)
+  - **Note**: `λ_nn=0` means NO regularization (full-rank L), which is the OPPOSITE of "disabled"
+- **Subsampling**: max_loocv_samples (default 100) for computational tractability
+  - This subsamples control observations, NOT parameter combinations
+  - Increases precision at cost of computation; increase for more precise tuning
+- **LOOCV failure handling** (Equation 5 compliance):
+  - If ANY LOOCV fit fails for a parameter combination, Q(λ) = ∞
+  - A warning is emitted on the first failure with the observation (t, i) and λ values
+  - Subsequent failures for the same λ are not individually warned (early return)
+  - This ensures λ selection only considers fully estimable combinations
+
 *Standard errors:*
 - Default: Block bootstrap preserving panel structure
 - Alternative: Jackknife (leave-one-unit-out)
@@ -486,16 +534,42 @@ Time weights: analogous construction for periods.
 - Rank selection: automatic via cross-validation, information criterion, or elbow
 - Zero singular values: handled by soft-thresholding
 - Extreme distances: weights regularized to prevent degeneracy
+- LOOCV fit failures: returns Q(λ) = ∞ on first failure (per Equation 5 requirement that Q sums over ALL D==0 cells); if all parameter combinations fail, falls back to defaults (1.0, 1.0, 0.1)
+- **λ=∞ implementation**: Infinity values are converted in both LOOCV search and final estimation:
+  - λ_time=∞ or λ_unit=∞ → 0.0 (uniform weights via exp(-0×d)=1)
+  - λ_nn=∞ → 1e10 (large penalty → L≈0, factor model disabled)
+  - Conversion applied to grid values during LOOCV (including Rust backend)
+  - Conversion applied to selected values for point estimation
+  - Conversion applied to selected values for variance estimation (ensures SE matches ATT)
+  - **Results storage**: `TROPResults` stores *original* grid values (e.g., inf), while computations use converted values. This lets users see what was selected from their grid.
+- **Empty control observations**: If LOOCV control observations become empty (edge case during subsampling), returns Q(λ) = ∞ with warning. A score of 0.0 would incorrectly "win" over legitimate parameters.
+- **Infinite LOOCV score handling**: If best LOOCV score is infinite, `best_lambda` is set to None, triggering defaults fallback
+- Validation: requires at least 2 periods before first treatment
+- **D matrix validation**: Treatment indicator must be an absorbing state (monotonic non-decreasing per unit)
+  - Detection: `np.diff(D, axis=0) < 0` for any column indicates violation
+  - Handling: Raises `ValueError` with list of violating unit IDs and remediation guidance
+  - Error message includes: "convert to absorbing state: D[t, i] = 1 for all t >= first treatment period"
+  - **Rationale**: Event-style D (0→1→0) silently biases ATT; runtime validation prevents misuse
+  - **Unbalanced panels**: Missing unit-period observations are allowed. Monotonicity validation checks each unit's *observed* D sequence for monotonicity, which correctly catches 1→0 violations that span missing period gaps (e.g., D[2]=1, missing [3,4], D[5]=0 is detected as a violation even though the gap hides the transition in adjacent-period checks).
+  - **n_post_periods metadata**: Counts periods where D=1 is actually observed (at least one unit has D=1), not calendar periods from first treatment. In unbalanced panels where treated units are missing in some post-treatment periods, only periods with observed D=1 values are counted.
+- Wrong D specification: if user provides event-style D (only first treatment period),
+  the absorbing-state validation will raise ValueError with helpful guidance
+- **LOOCV failure metadata**: When LOOCV fits fail in the Rust backend, the first failed observation coordinates (t, i) are returned to Python for informative warning messages
 
 **Reference implementation(s):**
 - Authors' replication code (forthcoming)
 
 **Requirements checklist:**
-- [ ] Factor matrix estimated via soft-threshold SVD
-- [ ] Unit weights: `exp(-λ_unit × distance)` with normalization
-- [ ] LOOCV implemented for tuning parameter selection
-- [ ] Multiple rank selection methods: cv, ic, elbow
-- [ ] Returns factor loadings and scores for interpretation
+- [x] Factor matrix estimated via soft-threshold SVD
+- [x] Unit weights: `exp(-λ_unit × distance)` with normalization
+- [x] LOOCV implemented for tuning parameter selection
+- [x] LOOCV uses SUM of squared errors per Equation 5
+- [x] Multiple rank selection methods: cv, ic, elbow
+- [x] Returns factor loadings and scores for interpretation
+- [x] ATT averages over all D==1 cells (general assignment patterns)
+- [x] No post_periods parameter (D matrix determines treatment timing)
+- [x] D matrix semantics documented (absorbing state, not event indicator)
+- [x] Unbalanced panels supported (missing observations don't trigger false violations)
 
 ---
 

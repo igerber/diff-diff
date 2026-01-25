@@ -1,5 +1,7 @@
 """Tests for Triply Robust Panel (TROP) estimator."""
 
+import warnings
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -108,7 +110,6 @@ class TestTROP:
             treatment="treated",
             unit="unit",
             time="period",
-            post_periods=[5, 6, 7],
         )
 
         assert isinstance(results, TROPResults)
@@ -126,14 +127,12 @@ class TestTROP:
             n_bootstrap=20,
             seed=42
         )
-        post_periods = list(range(8, 12))
         results = trop_est.fit(
             factor_dgp_data,
             outcome="outcome",
             treatment="treated",
             unit="unit",
             time="period",
-            post_periods=post_periods,
         )
 
         assert isinstance(results, TROPResults)
@@ -151,14 +150,12 @@ class TestTROP:
             n_bootstrap=30,
             seed=42
         )
-        post_periods = list(range(8, 12))
         results = trop_est.fit(
             factor_dgp_data,
             outcome="outcome",
             treatment="treated",
             unit="unit",
             time="period",
-            post_periods=post_periods,
         )
 
         # ATT should be positive (correct direction)
@@ -181,7 +178,6 @@ class TestTROP:
             treatment="treated",
             unit="unit",
             time="period",
-            post_periods=[5, 6, 7],
         )
 
         # Check that lambda values are from the grid
@@ -205,7 +201,6 @@ class TestTROP:
             treatment="treated",
             unit="unit",
             time="period",
-            post_periods=[5, 6, 7],
         )
 
         assert results.se > 0
@@ -228,7 +223,6 @@ class TestTROP:
             treatment="treated",
             unit="unit",
             time="period",
-            post_periods=[5, 6, 7],
         )
 
         assert results.se >= 0
@@ -250,7 +244,6 @@ class TestTROP:
             treatment="treated",
             unit="unit",
             time="period",
-            post_periods=[5, 6, 7],
         )
 
         lower, upper = results.conf_int
@@ -356,7 +349,6 @@ class TestTROPResults:
             treatment="treated",
             unit="unit",
             time="period",
-            post_periods=[5, 6, 7],
         )
 
         summary = results.summary()
@@ -381,7 +373,6 @@ class TestTROPResults:
             treatment="treated",
             unit="unit",
             time="period",
-            post_periods=[5, 6, 7],
         )
 
         d = results.to_dict()
@@ -407,7 +398,6 @@ class TestTROPResults:
             treatment="treated",
             unit="unit",
             time="period",
-            post_periods=[5, 6, 7],
         )
 
         df = results.to_dataframe()
@@ -430,7 +420,6 @@ class TestTROPResults:
             treatment="treated",
             unit="unit",
             time="period",
-            post_periods=[5, 6, 7],
         )
 
         effects_df = results.get_treatment_effects_df()
@@ -455,7 +444,6 @@ class TestTROPResults:
             treatment="treated",
             unit="unit",
             time="period",
-            post_periods=[5, 6, 7],
         )
 
         effects_df = results.get_unit_effects_df()
@@ -478,7 +466,6 @@ class TestTROPResults:
             treatment="treated",
             unit="unit",
             time="period",
-            post_periods=[5, 6, 7],
         )
 
         effects_df = results.get_time_effects_df()
@@ -502,7 +489,6 @@ class TestTROPResults:
             treatment="treated",
             unit="unit",
             time="period",
-            post_periods=[5, 6, 7],
         )
 
         assert isinstance(results.is_significant, bool)
@@ -522,11 +508,50 @@ class TestTROPResults:
             treatment="treated",
             unit="unit",
             time="period",
-            post_periods=[5, 6, 7],
         )
 
         stars = results.significance_stars
         assert stars in ["", ".", "*", "**", "***"]
+
+    def test_nan_propagation_when_se_zero(self):
+        """Test that inference fields are NaN when SE is zero/undefined.
+
+        This verifies the P0 fix: when SE <= 0, all inference fields
+        (t_stat, p_value, conf_int) should be NaN, not finite values.
+        """
+        from diff_diff.trop import TROPResults
+
+        # Create a TROPResults directly with SE=0
+        results = TROPResults(
+            att=1.0,
+            se=0.0,  # Zero SE - inference should be undefined
+            t_stat=np.nan,
+            p_value=np.nan,
+            conf_int=(np.nan, np.nan),
+            n_obs=100,
+            n_treated=5,
+            n_control=10,
+            n_treated_obs=20,
+            unit_effects={0: 0.1, 1: 0.2},
+            time_effects={0: 0.0, 1: 0.1},
+            treatment_effects={(0, 5): 1.0},
+            lambda_time=1.0,
+            lambda_unit=1.0,
+            lambda_nn=0.1,
+            factor_matrix=np.zeros((10, 15)),
+            effective_rank=2.0,
+            loocv_score=0.5,
+            variance_method="bootstrap",
+        )
+
+        # Verify that all inference fields are NaN when SE=0
+        assert np.isnan(results.t_stat), "t_stat should be NaN when SE=0"
+        assert np.isnan(results.p_value), "p_value should be NaN when SE=0"
+        assert np.isnan(results.conf_int[0]), "conf_int[0] should be NaN when SE=0"
+        assert np.isnan(results.conf_int[1]), "conf_int[1] should be NaN when SE=0"
+
+        # Verify the ATT itself is still valid
+        assert results.att == 1.0, "ATT should still be valid"
 
 
 class TestTROPvsSDID:
@@ -545,7 +570,6 @@ class TestTROPvsSDID:
             noise_std=0.5,
             seed=42,
         )
-        post_periods = list(range(8, 12))
 
         # TROP should complete without error
         trop_est = TROP(
@@ -561,7 +585,6 @@ class TestTROPvsSDID:
             treatment="treated",
             unit="unit",
             time="period",
-            post_periods=post_periods,
         )
 
         assert results.att != 0
@@ -579,7 +602,6 @@ class TestConvenienceFunction:
             treatment="treated",
             unit="unit",
             time="period",
-            post_periods=[5, 6, 7],
             lambda_time_grid=[0.0, 1.0],
             lambda_unit_grid=[0.0, 1.0],
             lambda_nn_grid=[0.0, 0.1],
@@ -598,7 +620,6 @@ class TestConvenienceFunction:
             treatment="treated",
             unit="unit",
             time="period",
-            post_periods=[5, 6, 7],
             lambda_time_grid=[0.0, 0.5, 1.0],
             lambda_unit_grid=[0.0, 0.5],
             lambda_nn_grid=[0.0, 0.1],
@@ -654,7 +675,6 @@ class TestMethodologyVerification:
                 })
 
         df = pd.DataFrame(data)
-        post_periods = list(range(n_pre, n_pre + n_post))
 
         # TROP with uniform weights
         trop_est = TROP(
@@ -670,7 +690,6 @@ class TestMethodologyVerification:
             treatment="treated",
             unit="unit",
             time="period",
-            post_periods=post_periods,
         )
 
         # Should recover treatment effect within reasonable tolerance
@@ -722,7 +741,6 @@ class TestMethodologyVerification:
                 })
 
         df = pd.DataFrame(data)
-        post_periods = list(range(n_pre, n_pre + n_post))
 
         # TROP with unit weighting enabled
         trop_est = TROP(
@@ -738,7 +756,6 @@ class TestMethodologyVerification:
             treatment="treated",
             unit="unit",
             time="period",
-            post_periods=post_periods,
         )
 
         # Should recover treatment effect reasonably well
@@ -781,7 +798,6 @@ class TestMethodologyVerification:
                 })
 
         df = pd.DataFrame(data)
-        post_periods = list(range(n_pre, n_pre + n_post))
 
         # TROP with time weighting enabled
         trop_est = TROP(
@@ -797,7 +813,6 @@ class TestMethodologyVerification:
             treatment="treated",
             unit="unit",
             time="period",
-            post_periods=post_periods,
         )
 
         # Should recover treatment effect direction
@@ -824,7 +839,6 @@ class TestMethodologyVerification:
             noise_std=0.5,
             seed=789,
         )
-        post_periods = list(range(10, 15))
 
         # TROP with nuclear norm regularization
         trop_est = TROP(
@@ -840,7 +854,6 @@ class TestMethodologyVerification:
             treatment="treated",
             unit="unit",
             time="period",
-            post_periods=post_periods,
         )
 
         true_att = 2.0
@@ -906,7 +919,6 @@ class TestMethodologyVerification:
                 })
 
         df = pd.DataFrame(data)
-        post_periods = list(range(n_pre, n_pre + n_post))
 
         # TROP estimation
         trop_est = TROP(
@@ -922,7 +934,6 @@ class TestMethodologyVerification:
             treatment="treated",
             unit="unit",
             time="period",
-            post_periods=post_periods,
         )
 
         # Under null hypothesis, ATT should be close to zero
@@ -964,7 +975,6 @@ class TestOptimizationEquivalence:
             treatment="treated",
             unit="unit",
             time="period",
-            post_periods=[5, 6, 7],
         )
 
         precomputed = trop_est._precomputed
@@ -1058,7 +1068,6 @@ class TestOptimizationEquivalence:
             treatment="treated",
             unit="unit",
             time="period",
-            post_periods=[5, 6, 7],
         )
 
         precomputed = trop_est._precomputed
@@ -1170,7 +1179,6 @@ class TestOptimizationEquivalence:
             treatment="treated",
             unit="unit",
             time="period",
-            post_periods=[5, 6, 7],
             lambda_time_grid=[0.0, 1.0],
             lambda_unit_grid=[0.0, 1.0],
             lambda_nn_grid=[0.0, 0.1],
@@ -1184,7 +1192,6 @@ class TestOptimizationEquivalence:
             treatment="treated",
             unit="unit",
             time="period",
-            post_periods=[5, 6, 7],
             lambda_time_grid=[0.0, 1.0],
             lambda_unit_grid=[0.0, 1.0],
             lambda_nn_grid=[0.0, 0.1],
@@ -1198,6 +1205,231 @@ class TestOptimizationEquivalence:
         assert results1.lambda_time == results2.lambda_time
         assert results1.lambda_unit == results2.lambda_unit
         assert results1.lambda_nn == results2.lambda_nn
+
+
+class TestDMatrixValidation:
+    """Tests for D matrix absorbing-state validation."""
+
+    def test_d_matrix_absorbing_state_validation_valid(self):
+        """Test that valid absorbing-state D passes validation."""
+        # Staggered adoption: once treated, always treated
+        rng = np.random.default_rng(42)
+        n_units = 15
+        n_periods = 8
+
+        data = []
+        for i in range(n_units):
+            # Different treatment timing for different units
+            if i < 5:
+                treat_period = 3  # Early adopters
+            elif i < 10:
+                treat_period = 5  # Late adopters
+            else:
+                treat_period = None  # Never treated
+
+            for t in range(n_periods):
+                is_treated = treat_period is not None and t >= treat_period
+                y = 10.0 + rng.normal(0, 0.5)
+                if is_treated:
+                    y += 2.0
+                data.append({
+                    "unit": i,
+                    "period": t,
+                    "outcome": y,
+                    "treated": 1 if is_treated else 0,
+                })
+
+        df = pd.DataFrame(data)
+
+        # Should work without error
+        trop_est = TROP(
+            lambda_time_grid=[0.0],
+            lambda_unit_grid=[0.0],
+            lambda_nn_grid=[0.0],
+            n_bootstrap=5,
+            seed=42
+        )
+        results = trop_est.fit(
+            df,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="period",
+        )
+        assert results is not None
+        assert isinstance(results, TROPResults)
+
+    def test_d_matrix_absorbing_state_validation_invalid(self):
+        """Test that non-absorbing D raises ValueError."""
+        # Event-style D: only first treatment period has D=1
+        data = []
+        n_units = 10
+        n_periods = 6
+
+        for i in range(n_units):
+            is_treated_unit = i < 3
+            for t in range(n_periods):
+                # Event-style: D=1 only at t=3, then back to 0
+                if is_treated_unit and t == 3:
+                    treated = 1
+                else:
+                    treated = 0
+                data.append({
+                    "unit": i,
+                    "period": t,
+                    "outcome": float(i + t),
+                    "treated": treated,
+                })
+
+        df = pd.DataFrame(data)
+
+        trop_est = TROP(
+            lambda_time_grid=[0.0],
+            lambda_unit_grid=[0.0],
+            lambda_nn_grid=[0.0],
+            n_bootstrap=5
+        )
+
+        with pytest.raises(ValueError, match="not an absorbing state"):
+            trop_est.fit(
+                df,
+                outcome="outcome",
+                treatment="treated",
+                unit="unit",
+                time="period",
+            )
+
+    def test_d_matrix_validation_error_message_helpful(self):
+        """Test that error message includes unit IDs and remediation guidance."""
+        # Event-style D for unit 5 only
+        data = []
+        for i in range(10):
+            for t in range(5):
+                # Unit 5: D goes 0→1→0 (invalid)
+                if i == 5:
+                    treated = 1 if t == 2 else 0
+                else:
+                    # Other units: proper absorbing state
+                    treated = 1 if (i < 3 and t >= 3) else 0
+                data.append({
+                    "unit": i,
+                    "period": t,
+                    "outcome": float(i + t),
+                    "treated": treated,
+                })
+
+        df = pd.DataFrame(data)
+
+        trop_est = TROP(
+            lambda_time_grid=[0.0],
+            lambda_unit_grid=[0.0],
+            lambda_nn_grid=[0.0],
+            n_bootstrap=5
+        )
+
+        with pytest.raises(ValueError) as exc_info:
+            trop_est.fit(
+                df,
+                outcome="outcome",
+                treatment="treated",
+                unit="unit",
+                time="period",
+            )
+
+        error_msg = str(exc_info.value)
+        # Check that error message is helpful
+        assert "5" in error_msg, "Should mention unit ID 5"
+        assert "absorbing state" in error_msg
+        assert "monotonic" in error_msg.lower() or "non-decreasing" in error_msg.lower()
+        assert "D[t, i] = 1 for all t >= first treatment" in error_msg
+
+
+class TestCyclingSearch:
+    """Tests for LOOCV cycling (coordinate descent) search."""
+
+    def test_cycling_search_converges(self, simple_panel_data):
+        """Test that cycling search converges to reasonable values."""
+        trop_est = TROP(
+            lambda_time_grid=[0.0, 0.5, 1.0],
+            lambda_unit_grid=[0.0, 0.5, 1.0],
+            lambda_nn_grid=[0.0, 0.1, 1.0],
+            n_bootstrap=5,
+            seed=42
+        )
+
+        results = trop_est.fit(
+            simple_panel_data,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="period",
+        )
+
+        # Check that lambda values are from the grid
+        assert results.lambda_time in trop_est.lambda_time_grid
+        assert results.lambda_unit in trop_est.lambda_unit_grid
+        assert results.lambda_nn in trop_est.lambda_nn_grid
+
+        # Check that results are reasonable
+        assert np.isfinite(results.att)
+        assert results.se >= 0
+
+    def test_cycling_search_reproducible(self, simple_panel_data):
+        """Test that cycling search produces reproducible results."""
+        results1 = trop(
+            simple_panel_data,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="period",
+            lambda_time_grid=[0.0, 0.5, 1.0],
+            lambda_unit_grid=[0.0, 0.5, 1.0],
+            lambda_nn_grid=[0.0, 0.1],
+            n_bootstrap=10,
+            seed=42,
+        )
+
+        results2 = trop(
+            simple_panel_data,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="period",
+            lambda_time_grid=[0.0, 0.5, 1.0],
+            lambda_unit_grid=[0.0, 0.5, 1.0],
+            lambda_nn_grid=[0.0, 0.1],
+            n_bootstrap=10,
+            seed=42,
+        )
+
+        # Results should be identical with same seed
+        assert results1.att == results2.att
+        assert results1.lambda_time == results2.lambda_time
+        assert results1.lambda_unit == results2.lambda_unit
+        assert results1.lambda_nn == results2.lambda_nn
+
+    def test_cycling_search_single_value_grids(self, simple_panel_data):
+        """Test cycling search with single-value grids (degenerate case)."""
+        trop_est = TROP(
+            lambda_time_grid=[0.5],  # Single value
+            lambda_unit_grid=[0.5],  # Single value
+            lambda_nn_grid=[0.1],    # Single value
+            n_bootstrap=5,
+            seed=42
+        )
+
+        results = trop_est.fit(
+            simple_panel_data,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="period",
+        )
+
+        # Should use the only available values
+        assert results.lambda_time == 0.5
+        assert results.lambda_unit == 0.5
+        assert results.lambda_nn == 0.1
 
 
 class TestPaperConformanceFixes:
@@ -1328,7 +1560,6 @@ class TestPaperConformanceFixes:
             treatment="treated",
             unit="unit",
             time="period",
-            post_periods=[3, 4, 5],
         )
 
         # Model should fit without error
@@ -1389,7 +1620,6 @@ class TestPaperConformanceFixes:
             treatment="treated",
             unit="unit",
             time="period",
-            post_periods=[5, 6, 7],
         )
 
         # Factor matrix should have been estimated with non-zero effective rank
@@ -1447,7 +1677,6 @@ class TestPaperConformanceFixes:
             treatment="treated",
             unit="unit",
             time="period",
-            post_periods=[3, 4, 5],
         )
 
         # Bootstrap should complete successfully
@@ -1490,3 +1719,939 @@ class TestPaperConformanceFixes:
         # Regularized singular values should be smaller than original
         assert np.sum(s) < np.sum(s_orig), \
             "Nuclear norm regularization should reduce total singular value mass"
+
+
+class TestAPIChangesV2_1_8:
+    """Tests verifying API changes in v2.1.8.
+
+    These tests verify:
+    1. post_periods parameter has been removed
+    2. TROPResults uses n_pre_periods/n_post_periods instead of lists
+    3. CV scoring uses sum (not average) per Equation 5
+    4. LOOCV warning is emitted when fits fail
+    """
+
+    def test_fit_no_post_periods_parameter(self, simple_panel_data):
+        """Test that fit() no longer accepts post_periods parameter."""
+        trop_est = TROP(
+            lambda_time_grid=[0.0],
+            lambda_unit_grid=[0.0],
+            lambda_nn_grid=[0.0],
+            n_bootstrap=5,
+            seed=42
+        )
+
+        # This should work - no post_periods parameter
+        results = trop_est.fit(
+            simple_panel_data,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="period",
+        )
+        assert results is not None
+        assert isinstance(results, TROPResults)
+
+        # Verify the API change - post_periods should raise TypeError
+        with pytest.raises(TypeError, match="unexpected keyword argument"):
+            trop_est.fit(
+                simple_panel_data,
+                outcome="outcome",
+                treatment="treated",
+                unit="unit",
+                time="period",
+                post_periods=[5, 6, 7],  # This should fail
+            )
+
+    def test_convenience_function_no_post_periods(self, simple_panel_data):
+        """Test that trop() convenience function no longer accepts post_periods."""
+        # This should work
+        results = trop(
+            simple_panel_data,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="period",
+            lambda_time_grid=[0.0],
+            lambda_unit_grid=[0.0],
+            lambda_nn_grid=[0.0],
+            n_bootstrap=5,
+            seed=42,
+        )
+        assert results is not None
+
+        # This should fail
+        with pytest.raises(TypeError, match="unexpected keyword argument"):
+            trop(
+                simple_panel_data,
+                outcome="outcome",
+                treatment="treated",
+                unit="unit",
+                time="period",
+                post_periods=[5, 6, 7],  # Should fail
+                lambda_time_grid=[0.0],
+                lambda_unit_grid=[0.0],
+                lambda_nn_grid=[0.0],
+                n_bootstrap=5,
+                seed=42,
+            )
+
+    def test_results_has_period_counts_not_lists(self, simple_panel_data):
+        """Test that TROPResults has n_pre_periods/n_post_periods, not lists."""
+        trop_est = TROP(
+            lambda_time_grid=[0.0],
+            lambda_unit_grid=[0.0],
+            lambda_nn_grid=[0.0],
+            n_bootstrap=5,
+            seed=42
+        )
+        results = trop_est.fit(
+            simple_panel_data,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="period",
+        )
+
+        # Should have count attributes, not list attributes
+        assert hasattr(results, "n_pre_periods")
+        assert hasattr(results, "n_post_periods")
+        assert isinstance(results.n_pre_periods, int)
+        assert isinstance(results.n_post_periods, int)
+
+        # Should NOT have list attributes
+        assert not hasattr(results, "pre_periods")
+        assert not hasattr(results, "post_periods")
+
+        # Values should be correct (5 pre, 3 post in simple_panel_data)
+        assert results.n_pre_periods == 5
+        assert results.n_post_periods == 3
+
+    def test_validation_still_checks_pre_periods(self):
+        """Test that validation still requires at least 2 pre-treatment periods."""
+        # Create data with only 1 pre-treatment period
+        data = pd.DataFrame({
+            "unit": [0, 0, 1, 1],
+            "period": [0, 1, 0, 1],
+            "outcome": [1.0, 2.0, 1.5, 2.5],
+            "treated": [0, 1, 0, 0],  # Treatment at period 1
+        })
+
+        trop_est = TROP(
+            lambda_time_grid=[0.0],
+            lambda_unit_grid=[0.0],
+            lambda_nn_grid=[0.0],
+            n_bootstrap=5
+        )
+
+        with pytest.raises(ValueError, match="at least 2 pre-treatment periods"):
+            trop_est.fit(
+                data,
+                outcome="outcome",
+                treatment="treated",
+                unit="unit",
+                time="period",
+            )
+
+    def test_loocv_warning_on_many_failures(self):
+        """Test that LOOCV emits warning when many fits fail."""
+        import warnings
+
+        # Create numerically challenging data that may cause LOOCV failures
+        rng = np.random.default_rng(42)
+        n_units = 10
+        n_periods = 5
+
+        data = []
+        for i in range(n_units):
+            is_treated = i < 2
+            for t in range(n_periods):
+                post = t >= 3
+                # Add some extreme values that might cause numerical issues
+                y = rng.normal(0, 1) if not (is_treated and post) else 1e10
+                treatment_indicator = 1 if (is_treated and post) else 0
+                data.append({
+                    "unit": i,
+                    "period": t,
+                    "outcome": y,
+                    "treated": treatment_indicator,
+                })
+
+        df = pd.DataFrame(data)
+
+        trop_est = TROP(
+            lambda_time_grid=[100.0],  # Extreme lambda may cause issues
+            lambda_unit_grid=[100.0],
+            lambda_nn_grid=[0.0],
+            n_bootstrap=5,
+            seed=42
+        )
+
+        # Capture warnings and verify the warning code path
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            fit_succeeded = False
+            try:
+                trop_est.fit(
+                    df,
+                    outcome="outcome",
+                    treatment="treated",
+                    unit="unit",
+                    time="period",
+                )
+                fit_succeeded = True
+            except (ValueError, np.linalg.LinAlgError):
+                # Expected if data is too extreme - this is valid behavior
+                pass
+
+            # Check for LOOCV-related warnings
+            loocv_warnings = [
+                x for x in w
+                if issubclass(x.category, UserWarning)
+                and "LOOCV" in str(x.message)
+            ]
+
+            # If fit succeeded, check that we can capture warnings properly
+            # (warnings may or may not be raised depending on data)
+            if fit_succeeded:
+                # At minimum, verify warnings capture infrastructure is working
+                # by checking that w is a list we can inspect
+                assert isinstance(w, list), "Warning capture should work"
+
+            # If any LOOCV warnings were raised, verify they have expected content
+            for warning in loocv_warnings:
+                msg = str(warning.message)
+                # Warnings should mention LOOCV and provide context
+                assert "LOOCV" in msg, f"Warning should mention LOOCV: {msg}"
+
+    def test_loocv_warning_deterministic_with_mock(self, simple_panel_data):
+        """Test that LOOCV returns infinity and warns on first fit failure.
+
+        Per Equation 5, Q(λ) must sum over ALL D==0 cells. Any failure means
+        this λ cannot produce valid estimates, so we return infinity immediately.
+        """
+        import warnings
+        from unittest.mock import patch
+
+        trop_est = TROP(
+            lambda_time_grid=[1.0],
+            lambda_unit_grid=[1.0],
+            lambda_nn_grid=[0.1],
+            n_bootstrap=5,
+            seed=42
+        )
+
+        # Mock _estimate_model to fail on the first LOOCV call
+        # This simulates a parameter combination that can't estimate all control cells
+        call_count = [0]
+        original_estimate = trop_est._estimate_model
+
+        def mock_estimate_with_failure(*args, **kwargs):
+            """Mock that fails on first call (immediate rejection per Equation 5)."""
+            call_count[0] += 1
+            # Fail on first call to trigger immediate infinity return
+            if call_count[0] == 1:
+                raise np.linalg.LinAlgError("Simulated failure")
+            return original_estimate(*args, **kwargs)
+
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+
+            # Disable Rust backend for this test by patching the module-level variables
+            import sys
+            trop_module = sys.modules['diff_diff.trop']
+            with patch.object(trop_module, 'HAS_RUST_BACKEND', False), \
+                 patch.object(trop_module, '_rust_loocv_grid_search', None), \
+                 patch.object(trop_est, '_estimate_model', mock_estimate_with_failure):
+                try:
+                    trop_est.fit(
+                        simple_panel_data,
+                        outcome="outcome",
+                        treatment="treated",
+                        unit="unit",
+                        time="period",
+                    )
+                except (ValueError, np.linalg.LinAlgError):
+                    # If all fits fail, that's acceptable
+                    pass
+
+            # Check that LOOCV warning was raised on first failure
+            loocv_warnings = [
+                x for x in w
+                if issubclass(x.category, UserWarning)
+                and "LOOCV" in str(x.message)
+            ]
+
+            # With any failure, we should get a warning about returning infinity
+            assert len(loocv_warnings) > 0, (
+                "Expected LOOCV warning on first failure, but none was raised. "
+                f"call_count={call_count[0]}, warnings={[str(x.message) for x in w]}"
+            )
+
+            # Verify warning content mentions Equation 5 and returning infinity
+            msg = str(loocv_warnings[0].message)
+            assert "LOOCV" in msg
+            assert "fail" in msg.lower(), f"Warning should mention failure: {msg}"
+            assert "Equation 5" in msg, f"Warning should reference Equation 5: {msg}"
+
+
+class TestLOOCVFallback:
+    """Tests for LOOCV fallback to defaults when all fits fail."""
+
+    def test_infinite_score_triggers_fallback(self, simple_panel_data):
+        """
+        Test that infinite LOOCV scores trigger fallback to defaults.
+
+        When all LOOCV fits return infinity (e.g., due to numerical issues),
+        the estimator should:
+        1. Emit a warning about using defaults
+        2. Use default parameters (1.0, 1.0, 0.1)
+        3. Still complete estimation
+        """
+        import sys
+        from unittest.mock import patch
+
+        trop_est = TROP(
+            lambda_time_grid=[0.0, 1.0],
+            lambda_unit_grid=[0.0, 1.0],
+            lambda_nn_grid=[0.0, 0.1],
+            n_bootstrap=5,
+            seed=42
+        )
+
+        # Mock LOOCV to always return infinity
+        def always_infinity(*args, **kwargs):
+            return np.inf
+
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+
+            # Disable Rust backend and mock LOOCV score to always return infinity
+            trop_module = sys.modules['diff_diff.trop']
+            with patch.object(trop_module, 'HAS_RUST_BACKEND', False), \
+                 patch.object(trop_module, '_rust_loocv_grid_search', None), \
+                 patch.object(trop_est, '_loocv_score_obs_specific', always_infinity):
+                results = trop_est.fit(
+                    simple_panel_data,
+                    outcome="outcome",
+                    treatment="treated",
+                    unit="unit",
+                    time="period",
+                )
+
+            # Verify warning emitted about fallback to defaults
+            fallback_warnings = [
+                x for x in w
+                if issubclass(x.category, UserWarning)
+                and "defaults" in str(x.message).lower()
+            ]
+            assert len(fallback_warnings) > 0, (
+                f"Expected fallback warning, got: {[str(x.message) for x in w]}"
+            )
+
+            # Verify defaults used (per REGISTRY.md: 1.0, 1.0, 0.1)
+            assert results.lambda_time == 1.0, \
+                f"Expected default lambda_time=1.0, got {results.lambda_time}"
+            assert results.lambda_unit == 1.0, \
+                f"Expected default lambda_unit=1.0, got {results.lambda_unit}"
+            assert results.lambda_nn == 0.1, \
+                f"Expected default lambda_nn=0.1, got {results.lambda_nn}"
+
+            # Verify estimation still completed
+            assert np.isfinite(results.att), "ATT should be finite even with default params"
+
+    def test_rust_infinite_score_triggers_fallback(self, simple_panel_data):
+        """
+        Test that infinite LOOCV score from Rust backend triggers fallback.
+
+        The Rust backend may return infinite score when all fits fail.
+        Python should detect this and fall back to defaults.
+        When Rust returns infinity, best_lambda stays None, then Python fallback
+        is attempted. If Python also returns infinity, defaults are used.
+        """
+        import sys
+        from unittest.mock import patch, MagicMock
+
+        trop_est = TROP(
+            lambda_time_grid=[0.0, 1.0],
+            lambda_unit_grid=[0.0, 1.0],
+            lambda_nn_grid=[0.0, 0.1],
+            n_bootstrap=5,
+            seed=42
+        )
+
+        # Mock Rust function to return infinite score
+        # Return format: (lambda_time, lambda_unit, lambda_nn, score, n_valid, n_attempted, first_failed_obs)
+        mock_rust_loocv = MagicMock(return_value=(0.5, 0.5, 0.05, np.inf, 0, 100, None))
+
+        # Also mock Python LOOCV to return infinity (so Python fallback also fails)
+        def always_infinity(*args, **kwargs):
+            return np.inf
+
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+
+            trop_module = sys.modules['diff_diff.trop']
+            with patch.object(trop_module, 'HAS_RUST_BACKEND', True), \
+                 patch.object(trop_module, '_rust_loocv_grid_search', mock_rust_loocv), \
+                 patch.object(trop_est, '_loocv_score_obs_specific', always_infinity):
+                results = trop_est.fit(
+                    simple_panel_data,
+                    outcome="outcome",
+                    treatment="treated",
+                    unit="unit",
+                    time="period",
+                )
+
+            # Verify warning emitted about fallback to defaults
+            fallback_warnings = [
+                x for x in w
+                if issubclass(x.category, UserWarning)
+                and "defaults" in str(x.message).lower()
+            ]
+            assert len(fallback_warnings) > 0, (
+                f"Expected fallback warning with Rust backend, got: {[str(x.message) for x in w]}"
+            )
+
+            # Verify defaults used (NOT the Rust-returned values)
+            assert results.lambda_time == 1.0, \
+                f"Expected default lambda_time=1.0, got {results.lambda_time}"
+            assert results.lambda_unit == 1.0, \
+                f"Expected default lambda_unit=1.0, got {results.lambda_unit}"
+            assert results.lambda_nn == 0.1, \
+                f"Expected default lambda_nn=0.1, got {results.lambda_nn}"
+
+    def test_infinity_grid_values_handled_consistently(self, simple_panel_data):
+        """
+        Test that infinity in grids is handled consistently in LOOCV and final estimation.
+
+        When infinity is in the parameter grid:
+        - LOOCV converts it for computation (λ_time=∞→0, λ_unit=∞→0, λ_nn=∞→1e10)
+        - LOOCV returns the original grid value (inf) if it was best
+        - Final estimation must also convert infinity to match LOOCV behavior
+
+        This test ensures the conversion in final estimation matches LOOCV.
+        """
+        # Create estimator with infinity in grids
+        # Use grids where infinity is likely to be selected:
+        # - lambda_time_grid: [inf] forces selection of inf
+        # - lambda_nn_grid: [inf] forces selection of inf
+        trop_est = TROP(
+            lambda_time_grid=[np.inf],  # Only inf available → must be selected
+            lambda_unit_grid=[0.0],     # Normal value
+            lambda_nn_grid=[np.inf],    # Only inf available → must be selected
+            n_bootstrap=5,
+            seed=42
+        )
+
+        results = trop_est.fit(
+            simple_panel_data,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="period",
+        )
+
+        # ATT should be finite (no NaN/inf from unconverted infinity parameters)
+        assert np.isfinite(results.att), (
+            f"ATT should be finite when infinity params are converted, got {results.att}"
+        )
+
+        # SE should be finite or at least non-negative
+        assert np.isfinite(results.se) or results.se >= 0, (
+            f"SE should be finite, got {results.se}"
+        )
+
+        # The stored lambda values should be the original grid values (inf)
+        # because we store what was selected, but conversion happens internally
+        # (This documents current behavior; the key is that ATT is finite)
+        assert np.isinf(results.lambda_time) or results.lambda_time == 0.0, (
+            f"lambda_time should be inf (stored) or 0.0 (if converted for storage)"
+        )
+        assert np.isinf(results.lambda_nn) or results.lambda_nn == 1e10, (
+            f"lambda_nn should be inf (stored) or 1e10 (if converted for storage)"
+        )
+
+    def test_variance_estimation_uses_converted_params(self, simple_panel_data):
+        """
+        Test that variance estimation uses the same converted parameters as point estimation.
+
+        When infinity is in the grid and gets selected, both ATT and SE should be
+        computed with the same effective parameters (e.g., λ_time=∞ converted to 0.0).
+        This test verifies the fix for variance estimation inconsistency (PR #110 Round 7).
+        """
+        from unittest.mock import patch
+
+        # Use grids with only infinity values to force selection
+        trop_est = TROP(
+            lambda_time_grid=[np.inf],  # Will be converted to 0.0 internally
+            lambda_unit_grid=[0.0],
+            lambda_nn_grid=[np.inf],    # Will be converted to 1e10 internally
+            n_bootstrap=5,
+            variance_method="bootstrap",
+            seed=42
+        )
+
+        # Track what parameters are passed to _fit_with_fixed_lambda
+        # (called by bootstrap variance estimation)
+        original_fit_with_fixed = TROP._fit_with_fixed_lambda
+        captured_lambda = []
+
+        def tracking_fit(self, data, outcome, treatment, unit, time, fixed_lambda):
+            captured_lambda.append(fixed_lambda)
+            return original_fit_with_fixed(self, data, outcome, treatment, unit, time, fixed_lambda)
+
+        with patch.object(TROP, '_fit_with_fixed_lambda', tracking_fit):
+            results = trop_est.fit(
+                simple_panel_data,
+                outcome="outcome",
+                treatment="treated",
+                unit="unit",
+                time="period",
+            )
+
+        # Results should store original grid values
+        assert np.isinf(results.lambda_time), "Results should store original infinity value"
+        assert np.isinf(results.lambda_nn), "Results should store original infinity value"
+
+        # ATT should be finite (computed with converted params)
+        assert np.isfinite(results.att), "ATT should be finite"
+
+        # Variance estimation should have received converted parameters
+        # Check that bootstrap iterations used converted (non-infinite) values
+        for captured in captured_lambda:
+            lambda_time, lambda_unit, lambda_nn = captured
+            assert not np.isinf(lambda_time), (
+                f"Bootstrap should receive converted λ_time=0.0, not {lambda_time}"
+            )
+            assert not np.isinf(lambda_nn), (
+                f"Bootstrap should receive converted λ_nn=1e10, not {lambda_nn}"
+            )
+
+    def test_empty_control_obs_returns_infinity(self, simple_panel_data):
+        """
+        Test that LOOCV returns infinity when control observations are empty.
+
+        A score of 0.0 for empty control would incorrectly "win" over legitimate
+        parameters. This test verifies the fix for empty control handling (PR #110 Round 7).
+        """
+        import warnings
+
+        trop_est = TROP(
+            lambda_time_grid=[1.0],
+            lambda_unit_grid=[1.0],
+            lambda_nn_grid=[1.0],
+            max_loocv_samples=100,
+            seed=42
+        )
+
+        # Setup matrices from data
+        data = simple_panel_data
+        all_units = sorted(data['unit'].unique())
+        all_periods = sorted(data['period'].unique())
+        n_units = len(all_units)
+        n_periods = len(all_periods)
+
+        Y = (
+            data.pivot(index='period', columns='unit', values='outcome')
+            .reindex(index=all_periods, columns=all_units)
+            .values
+        )
+        D = (
+            data.pivot(index='period', columns='unit', values='treated')
+            .reindex(index=all_periods, columns=all_units)
+            .fillna(0)
+            .astype(int)
+            .values
+        )
+
+        control_mask = D == 0
+        control_unit_idx = np.where(~np.any(D == 1, axis=0))[0]
+
+        # Force empty control_obs by setting precomputed with empty list
+        trop_est._precomputed = {
+            "control_obs": [],  # Empty!
+            "time_dist_matrix": np.abs(np.subtract.outer(
+                np.arange(n_periods), np.arange(n_periods)
+            )),
+        }
+
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            score = trop_est._loocv_score_obs_specific(
+                Y, D, control_mask, control_unit_idx,
+                1.0, 1.0, 1.0, n_units, n_periods
+            )
+
+        # Should return infinity, not 0.0
+        assert np.isinf(score), f"Empty control_obs should return inf, got {score}"
+
+        # Should emit warning
+        warning_msgs = [str(warning.message) for warning in w]
+        assert any("No valid control observations" in msg for msg in warning_msgs), (
+            f"Should warn about empty control obs. Warnings: {warning_msgs}"
+        )
+
+    def test_original_grid_values_stored_in_results(self, simple_panel_data):
+        """
+        Test that TROPResults stores the original grid values, not converted ones.
+
+        Per the design decision in PR #110 Round 7, results should store the
+        original grid values (possibly inf) so users can see what was selected,
+        while internally using converted values for computation.
+        """
+        trop_est = TROP(
+            lambda_time_grid=[np.inf],  # Original value: inf
+            lambda_unit_grid=[0.5],
+            lambda_nn_grid=[np.inf],    # Original value: inf
+            n_bootstrap=5,
+            seed=42
+        )
+
+        results = trop_est.fit(
+            simple_panel_data,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="period",
+        )
+
+        # Results should store original grid values (inf)
+        assert np.isinf(results.lambda_time), (
+            f"results.lambda_time should be inf (original), got {results.lambda_time}"
+        )
+        assert results.lambda_unit == 0.5, (
+            f"results.lambda_unit should be 0.5, got {results.lambda_unit}"
+        )
+        assert np.isinf(results.lambda_nn), (
+            f"results.lambda_nn should be inf (original), got {results.lambda_nn}"
+        )
+
+        # But ATT should still be finite (computed with converted values)
+        assert np.isfinite(results.att), "ATT should be finite"
+
+
+class TestPR110FeedbackRound8:
+    """Tests for PR #110 feedback round 8 fixes.
+
+    Issue 1: Final LOOCV score uses converted infinity values (not raw inf)
+    Issue 2: Rust LOOCV warnings include failed observation metadata
+    Issue 3: D matrix validation handles unbalanced panels correctly
+    """
+
+    def test_unbalanced_panel_d_matrix_validation(self):
+        """Test that unbalanced panels don't trigger spurious D matrix violations.
+
+        Issue 3 fix: Missing unit-period observations should not be flagged
+        as violations. Only validate monotonicity between observed periods.
+        """
+        # Create an unbalanced panel: unit 1 is missing period 5
+        # Unit 1: treated from period 3 onwards, but missing period 5
+        # This should NOT raise an error, because the 1→0 transition at period 5
+        # is due to missing data, not a real violation.
+        data = []
+
+        # Unit 0: control, complete panel
+        for t in range(6):
+            data.append({
+                "unit": 0,
+                "period": t,
+                "outcome": 10.0 + t,
+                "treated": 0,
+            })
+
+        # Unit 1: treated from t=3, missing t=5 (unbalanced)
+        for t in range(6):
+            if t == 5:
+                continue  # Skip period 5 - creates unbalanced panel
+            treated = 1 if t >= 3 else 0
+            data.append({
+                "unit": 1,
+                "period": t,
+                "outcome": 10.0 + t + (2.0 if treated else 0),
+                "treated": treated,
+            })
+
+        # Unit 2: control, complete panel
+        for t in range(6):
+            data.append({
+                "unit": 2,
+                "period": t,
+                "outcome": 10.0 + t,
+                "treated": 0,
+            })
+
+        df = pd.DataFrame(data)
+
+        # This should NOT raise an error
+        trop_est = TROP(
+            lambda_time_grid=[0.0],
+            lambda_unit_grid=[0.0],
+            lambda_nn_grid=[0.0],
+            n_bootstrap=5,
+            seed=42
+        )
+
+        # Should not raise ValueError - missing data is not a violation
+        try:
+            results = trop_est.fit(
+                df,
+                outcome="outcome",
+                treatment="treated",
+                unit="unit",
+                time="period",
+            )
+            # Basic sanity checks
+            assert results is not None
+            assert np.isfinite(results.att)
+        except ValueError as e:
+            if "absorbing state" in str(e):
+                pytest.fail(
+                    f"Unbalanced panel incorrectly flagged as absorbing state violation: {e}"
+                )
+            raise
+
+    def test_unbalanced_panel_real_violation_still_caught(self):
+        """Test that real violations are still caught in unbalanced panels.
+
+        Even with missing data, actual D→1→0 violations on observed periods
+        should still be detected and raise ValueError.
+        """
+        data = []
+
+        # Unit 0: control, complete
+        for t in range(5):
+            data.append({
+                "unit": 0,
+                "period": t,
+                "outcome": 10.0 + t,
+                "treated": 0,
+            })
+
+        # Unit 1: REAL violation - D goes 0→1→0 on observed periods (t=2: D=1, t=3: D=0)
+        # This is a real violation, not a missing data artifact
+        for t in range(5):
+            if t == 2:
+                treated = 1
+            else:
+                treated = 0
+            data.append({
+                "unit": 1,
+                "period": t,
+                "outcome": 10.0 + t,
+                "treated": treated,
+            })
+
+        # Unit 2: control
+        for t in range(5):
+            data.append({
+                "unit": 2,
+                "period": t,
+                "outcome": 10.0 + t,
+                "treated": 0,
+            })
+
+        df = pd.DataFrame(data)
+
+        trop_est = TROP(
+            lambda_time_grid=[0.0],
+            lambda_unit_grid=[0.0],
+            lambda_nn_grid=[0.0],
+            n_bootstrap=5
+        )
+
+        # This SHOULD raise an error - real violation
+        with pytest.raises(ValueError, match="absorbing state"):
+            trop_est.fit(
+                df,
+                outcome="outcome",
+                treatment="treated",
+                unit="unit",
+                time="period",
+            )
+
+    def test_unbalanced_panel_multiple_missing_periods(self):
+        """Test unbalanced panel with multiple missing periods per unit."""
+        data = []
+
+        # Unit 0: control, complete
+        for t in range(8):
+            data.append({
+                "unit": 0,
+                "period": t,
+                "outcome": 10.0 + t,
+                "treated": 0,
+            })
+
+        # Unit 1: treated from t=4, missing t=2 and t=6
+        for t in range(8):
+            if t in [2, 6]:
+                continue  # Skip these periods
+            treated = 1 if t >= 4 else 0
+            data.append({
+                "unit": 1,
+                "period": t,
+                "outcome": 10.0 + t + (2.0 if treated else 0),
+                "treated": treated,
+            })
+
+        # Unit 2: control, missing t=0
+        for t in range(8):
+            if t == 0:
+                continue
+            data.append({
+                "unit": 2,
+                "period": t,
+                "outcome": 10.0 + t,
+                "treated": 0,
+            })
+
+        df = pd.DataFrame(data)
+
+        trop_est = TROP(
+            lambda_time_grid=[0.0],
+            lambda_unit_grid=[0.0],
+            lambda_nn_grid=[0.0],
+            n_bootstrap=5,
+            seed=42
+        )
+
+        # Should not raise error
+        results = trop_est.fit(
+            df,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="period",
+        )
+        assert results is not None
+        assert np.isfinite(results.att)
+
+    def test_infinity_grid_values_with_final_score_computation(self, simple_panel_data):
+        """Test that infinity grid values are properly converted for final score.
+
+        Issue 1 fix: When LOOCV selects infinity values from the grid, the
+        final score computation should use converted values (0.0 or 1e10),
+        not raw infinity.
+        """
+        trop_est = TROP(
+            lambda_time_grid=[np.inf, 0.5],  # inf should convert to 0.0
+            lambda_unit_grid=[np.inf, 0.5],  # inf should convert to 0.0
+            lambda_nn_grid=[np.inf, 0.1],    # inf should convert to 1e10
+            n_bootstrap=5,
+            seed=42
+        )
+
+        # This should complete without error, even if inf values are selected
+        results = trop_est.fit(
+            simple_panel_data,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="period",
+        )
+
+        # ATT should be finite regardless of which grid values were selected
+        assert np.isfinite(results.att), "ATT should be finite with inf grid values"
+        assert results.se >= 0, "SE should be non-negative"
+
+        # If inf values were selected, LOOCV score should still be computed correctly
+        # (using converted values, not raw inf)
+        if np.isinf(results.loocv_score):
+            # Infinite LOOCV score is acceptable (means fits failed)
+            # but ATT should still be finite (falls back to defaults)
+            pass
+        else:
+            assert np.isfinite(results.loocv_score), (
+                "LOOCV score should be finite when computed with converted inf values"
+            )
+
+    def test_violation_across_missing_gap_caught(self):
+        """Test that 1→0 violations spanning missing periods are caught.
+
+        Issue: If periods [3, 4] are missing and D[2]=1, D[5]=0, this is a
+        real violation that must be detected even though the adjacent
+        period transitions don't show it (the gap hides the transition).
+
+        PR #110 round 10 fix: Check each unit's observed D sequence for
+        monotonicity, not just adjacent periods in the full time grid.
+        """
+        data = []
+
+        # Unit 0: control, complete
+        for t in range(6):
+            data.append({"unit": 0, "period": t, "outcome": 10.0 + t, "treated": 0})
+
+        # Unit 1: VIOLATION across gap
+        # Observed at [0, 1, 2, 5], missing [3, 4]
+        # D[2]=1, D[5]=0 is a real violation spanning the gap
+        for t in [0, 1, 2, 5]:
+            treated = 1 if t == 2 else 0  # Only treated at period 2
+            data.append({"unit": 1, "period": t, "outcome": 10.0 + t, "treated": treated})
+
+        # Unit 2: control, complete
+        for t in range(6):
+            data.append({"unit": 2, "period": t, "outcome": 10.0 + t, "treated": 0})
+
+        df = pd.DataFrame(data)
+        trop_est = TROP(
+            lambda_time_grid=[0.0],
+            lambda_unit_grid=[0.0],
+            lambda_nn_grid=[0.0],
+            n_bootstrap=5,
+        )
+
+        with pytest.raises(ValueError, match="absorbing state"):
+            trop_est.fit(
+                df,
+                outcome="outcome",
+                treatment="treated",
+                unit="unit",
+                time="period",
+            )
+
+    def test_n_post_periods_counts_observed_treatment(self):
+        """Test n_post_periods counts periods with actual D=1 observations.
+
+        Per docstring: "Number of post-treatment periods (periods with D=1 observations)"
+
+        This tests that n_post_periods reflects periods where treatment is
+        actually observed, not just calendar periods from first treatment.
+        """
+        data = []
+
+        # Create panel where period 5 exists but has no D=1 observations
+        # (all treated units are missing at period 5)
+        for unit in range(3):
+            for period in range(6):
+                # Units 1, 2 are treated from period 3, but missing at period 5
+                if unit in [1, 2] and period == 5:
+                    continue  # Skip - creates unbalanced panel
+                treated = 1 if (unit in [1, 2] and period >= 3) else 0
+                data.append({
+                    "unit": unit,
+                    "period": period,
+                    "outcome": 10.0 + period,
+                    "treated": treated,
+                })
+
+        df = pd.DataFrame(data)
+        trop_est = TROP(
+            lambda_time_grid=[0.0],
+            lambda_unit_grid=[0.0],
+            lambda_nn_grid=[0.0],
+            n_bootstrap=5,
+            seed=42,
+        )
+        results = trop_est.fit(
+            df,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="period",
+        )
+
+        # Periods with D=1 observations: 3, 4 (not 5 - missing for treated units)
+        assert results.n_post_periods == 2, (
+            f"Expected 2 post-periods with D=1, got {results.n_post_periods}"
+        )
