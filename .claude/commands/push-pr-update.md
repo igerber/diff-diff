@@ -60,8 +60,15 @@ Parse `$ARGUMENTS` to extract:
        git rev-parse --abbrev-ref @{u} 2>/dev/null
        ```
      - If NO upstream exists:
-       - Check if branch has commits ahead of default: `git rev-list --count <default-branch>..HEAD 2>/dev/null || echo "0"`
-       - If ahead count > 0: Skip to Section 4 (Push to Remote) — will push with `-u` to set upstream
+       - Determine comparison ref (handles shallow clones where local branch may not exist):
+         - If `<default-branch>` exists locally (`git rev-parse --verify <default-branch> 2>/dev/null`): use `<default-branch>`
+         - Otherwise: use `origin/<default-branch>`
+         - Store as `<comparison-ref>`
+       - Check if branch has commits ahead: `git rev-list --count <comparison-ref>..HEAD 2>/dev/null || echo "0"`
+       - If ahead count > 0:
+         - **Scan for secrets in commits to push** (see Section 3a below)
+         - Compute `<files-changed-count>`: `git diff --name-only <comparison-ref>..HEAD | wc -l`
+         - Skip to Section 4 (Push to Remote) — will push with `-u` to set upstream
        - If ahead count = 0: Abort (new branch with nothing to push):
          ```
          No changes detected. Working directory is clean and branch has no commits ahead of <default-branch>.
@@ -69,12 +76,42 @@ Parse `$ARGUMENTS` to extract:
          ```
      - If upstream EXISTS:
        - Check if branch is ahead: `git rev-list --count @{u}..HEAD`
-       - If ahead count > 0: Skip to Section 4 (Push to Remote) — there are committed changes to push
+       - If ahead count > 0:
+         - **Scan for secrets in commits to push** (see Section 3a below)
+         - Compute `<files-changed-count>`: `git diff --name-only @{u}..HEAD | wc -l`
+         - Skip to Section 4 (Push to Remote) — there are committed changes to push
        - If ahead count = 0: Abort:
          ```
          No changes detected. Working directory is clean and branch is up to date.
          Nothing to push.
          ```
+
+### 3a. Secret Scan for Already-Committed Changes (when skipping Section 3)
+
+When the working tree is clean but commits are ahead, scan for secrets in the commits to be pushed before proceeding to Section 4:
+
+1. **Get diff range**: Use `<comparison-ref>..HEAD` (from Section 2.4 — either `@{u}`, `<default-branch>`, or `origin/<default-branch>`)
+
+2. **Run pattern check** (file names only, no content leaked):
+   ```bash
+   secret_files=$(git diff <comparison-ref>..HEAD -G "(AKIA[A-Z0-9]{16}|ghp_[a-zA-Z0-9]{36}|sk-[a-zA-Z0-9]{48}|gho_[a-zA-Z0-9]{36}|[Aa][Pp][Ii][_-]?[Kk][Ee][Yy][[:space:]]*[=:]|[Ss][Ee][Cc][Rr][Ee][Tt][_-]?[Kk][Ee][Yy][[:space:]]*[=:]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd][[:space:]]*[=:]|[Pp][Rr][Ii][Vv][Aa][Tt][Ee][_-]?[Kk][Ee][Yy]|[Bb][Ee][Aa][Rr][Ee][Rr][[:space:]]+[a-zA-Z0-9_-]+|[Tt][Oo][Kk][Ee][Nn][[:space:]]*[=:])" --name-only 2>/dev/null || true)
+   ```
+
+3. **Check for sensitive file names**:
+   ```bash
+   sensitive_files=$(git diff --name-only <comparison-ref>..HEAD | grep -iE "(\.env|credentials|secret|\.pem|\.key|\.p12|\.pfx|id_rsa|id_ed25519)$" || true)
+   ```
+
+4. **If patterns detected**, warn with AskUserQuestion:
+   ```
+   Warning: Potential secrets detected in committed changes:
+   - <list of files/patterns>
+
+   These changes are already committed. Options:
+   1. Abort - use 'git reset --soft HEAD~N' to uncommit and remove secrets before retrying
+   2. Continue anyway - I confirm these are not real secrets
+   ```
+   Note: Unlike Section 3, we cannot simply unstage these changes since they are already committed.
 
 ### 3. Stage and Commit Changes
 
@@ -92,14 +129,14 @@ Parse `$ARGUMENTS` to extract:
 3. **Secret scanning check** (same as submit-pr):
    - **Run deterministic pattern check** (file names only, no content leaked):
      ```bash
-     git diff --cached -G "(AKIA[A-Z0-9]{16}|ghp_[a-zA-Z0-9]{36}|sk-[a-zA-Z0-9]{48}|gho_[a-zA-Z0-9]{36}|[Aa][Pp][Ii][_-]?[Kk][Ee][Yy][[:space:]]*[=:]|[Ss][Ee][Cc][Rr][Ee][Tt][_-]?[Kk][Ee][Yy][[:space:]]*[=:]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd][[:space:]]*[=:]|[Pp][Rr][Ii][Vv][Aa][Tt][Ee][_-]?[Kk][Ee][Yy]|[Bb][Ee][Aa][Rr][Ee][Rr][[:space:]]+[a-zA-Z0-9_-]+|[Tt][Oo][Kk][Ee][Nn][[:space:]]*[=:])" --name-only
+     secret_files=$(git diff --cached -G "(AKIA[A-Z0-9]{16}|ghp_[a-zA-Z0-9]{36}|sk-[a-zA-Z0-9]{48}|gho_[a-zA-Z0-9]{36}|[Aa][Pp][Ii][_-]?[Kk][Ee][Yy][[:space:]]*[=:]|[Ss][Ee][Cc][Rr][Ee][Tt][_-]?[Kk][Ee][Yy][[:space:]]*[=:]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd][[:space:]]*[=:]|[Pp][Rr][Ii][Vv][Aa][Tt][Ee][_-]?[Kk][Ee][Yy]|[Bb][Ee][Aa][Rr][Ee][Rr][[:space:]]+[a-zA-Z0-9_-]+|[Tt][Oo][Kk][Ee][Nn][[:space:]]*[=:])" --name-only 2>/dev/null || true)
      ```
-     Note: Uses `-G` to search diff content but `--name-only` to output only file names, preventing secret values from appearing in logs.
+     Note: Uses `-G` to search diff content but `--name-only` to output only file names, preventing secret values from appearing in logs. The `|| true` prevents exit status 1 when patterns match from aborting strict runners.
    - **Check for sensitive file names**:
      ```bash
-     git diff --cached --name-only | grep -iE "(\.env|credentials|secret|\.pem|\.key|\.p12|\.pfx|id_rsa|id_ed25519)$" || true
+     sensitive_files=$(git diff --cached --name-only | grep -iE "(\.env|credentials|secret|\.pem|\.key|\.p12|\.pfx|id_rsa|id_ed25519)$" || true)
      ```
-   - If patterns detected, **unstage and warn**:
+   - **If patterns detected** (i.e., `secret_files` or `sensitive_files` is non-empty), **unstage and warn**:
      ```bash
      git reset HEAD
      ```
