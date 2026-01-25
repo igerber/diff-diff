@@ -5,6 +5,31 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.8] - 2026-01-25
+
+### Added
+- **`/push-pr-update` skill** for committing and pushing PR revisions
+  - Commits local changes to current branch and pushes to remote
+  - Triggers AI code review automatically
+  - Robust handling for fork repos, unpushed commits, and upstream tracking
+
+### Fixed
+- **TROP estimator methodology alignment** (PR #110)
+  - Aligned with paper methodology (Equation 5, D matrix semantics)
+  - NaN propagation and LOOCV warnings improvements
+  - Rust backend test alignment with new loocv_grid_search return signature
+  - LOOCV cycling, D matrix validation fixes
+  - Final estimation infinity handling and edge case fixes
+  - Absorbing-state gap detection and n_post_periods fix
+
+### Changed
+- **`/submit-pr` skill improvements** (PR #111)
+  - Case-insensitive secret scanning with POSIX ERE regex
+  - Verify origin ref exists before push
+  - Dynamic default branch detection with fallback
+  - Robust handling for unpushed commits, fork repos
+  - Files count display in PR summary
+
 ## [2.1.7] - 2026-01-25
 
 ### Fixed
@@ -542,6 +567,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `to_dict()` and `to_dataframe()` export methods
   - `is_significant` and `significance_stars` properties
 
+[2.1.8]: https://github.com/igerber/diff-diff/compare/v2.1.7...v2.1.8
 [2.1.7]: https://github.com/igerber/diff-diff/compare/v2.1.6...v2.1.7
 [2.1.6]: https://github.com/igerber/diff-diff/compare/v2.1.5...v2.1.6
 [2.1.5]: https://github.com/igerber/diff-diff/compare/v2.1.4...v2.1.5
