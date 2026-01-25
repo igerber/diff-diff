@@ -538,7 +538,11 @@ Q(λ) = Σ_{j,s: D_js=0} [τ̂_js^loocv(λ)]²
 - **λ=∞ implementation**: Infinity values are converted in both LOOCV search and final estimation:
   - λ_time=∞ or λ_unit=∞ → 0.0 (uniform weights via exp(-0×d)=1)
   - λ_nn=∞ → 1e10 (large penalty → L≈0, factor model disabled)
-  - Conversion in final estimation ensures behavior matches what LOOCV evaluated
+  - Conversion applied to grid values during LOOCV (including Rust backend)
+  - Conversion applied to selected values for point estimation
+  - Conversion applied to selected values for variance estimation (ensures SE matches ATT)
+  - **Results storage**: `TROPResults` stores *original* grid values (e.g., inf), while computations use converted values. This lets users see what was selected from their grid.
+- **Empty control observations**: If LOOCV control observations become empty (edge case during subsampling), returns Q(λ) = ∞ with warning. A score of 0.0 would incorrectly "win" over legitimate parameters.
 - **Infinite LOOCV score handling**: If best LOOCV score is infinite, `best_lambda` is set to None, triggering defaults fallback
 - Validation: requires at least 2 periods before first treatment
 - **D matrix validation**: Treatment indicator must be an absorbing state (monotonic non-decreasing per unit)

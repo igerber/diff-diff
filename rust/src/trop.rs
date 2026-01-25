@@ -193,13 +193,31 @@ fn univariate_loocv_search(
             // - λ_time/λ_unit=∞ → uniform weights → use 0.0
             // - λ_nn=∞ → infinite penalty → L≈0 (factor model disabled) → use 1e10
             // Note: λ_nn=0 means NO regularization (full-rank L), opposite of "disabled"
+            //
+            // IMPORTANT: Convert the grid value BEFORE using it, matching Python behavior.
+            // This ensures Rust and Python evaluate the same objective for infinity grids.
             let (lambda_time, lambda_unit, lambda_nn) = match param_type {
-                0 => (value, if fixed_unit.is_infinite() { 0.0 } else { fixed_unit },
-                      if fixed_nn.is_infinite() { 1e10 } else { fixed_nn }),
-                1 => (if fixed_time.is_infinite() { 0.0 } else { fixed_time }, value,
-                      if fixed_nn.is_infinite() { 1e10 } else { fixed_nn }),
-                _ => (if fixed_time.is_infinite() { 0.0 } else { fixed_time },
-                      if fixed_unit.is_infinite() { 0.0 } else { fixed_unit }, value),
+                0 => {
+                    // Searching λ_time: convert grid value if infinite
+                    let value_converted = if value.is_infinite() { 0.0 } else { value };
+                    (value_converted,
+                     if fixed_unit.is_infinite() { 0.0 } else { fixed_unit },
+                     if fixed_nn.is_infinite() { 1e10 } else { fixed_nn })
+                },
+                1 => {
+                    // Searching λ_unit: convert grid value if infinite
+                    let value_converted = if value.is_infinite() { 0.0 } else { value };
+                    (if fixed_time.is_infinite() { 0.0 } else { fixed_time },
+                     value_converted,
+                     if fixed_nn.is_infinite() { 1e10 } else { fixed_nn })
+                },
+                _ => {
+                    // Searching λ_nn: convert grid value if infinite
+                    let value_converted = if value.is_infinite() { 1e10 } else { value };
+                    (if fixed_time.is_infinite() { 0.0 } else { fixed_time },
+                     if fixed_unit.is_infinite() { 0.0 } else { fixed_unit },
+                     value_converted)
+                },
             };
 
             let (score, _) = loocv_score_for_params(

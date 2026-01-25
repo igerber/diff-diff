@@ -2171,3 +2171,161 @@ class TestLOOCVFallback:
         assert np.isinf(results.lambda_nn) or results.lambda_nn == 1e10, (
             f"lambda_nn should be inf (stored) or 1e10 (if converted for storage)"
         )
+
+    def test_variance_estimation_uses_converted_params(self, simple_panel_data):
+        """
+        Test that variance estimation uses the same converted parameters as point estimation.
+
+        When infinity is in the grid and gets selected, both ATT and SE should be
+        computed with the same effective parameters (e.g., λ_time=∞ converted to 0.0).
+        This test verifies the fix for variance estimation inconsistency (PR #110 Round 7).
+        """
+        from unittest.mock import patch
+
+        # Use grids with only infinity values to force selection
+        trop_est = TROP(
+            lambda_time_grid=[np.inf],  # Will be converted to 0.0 internally
+            lambda_unit_grid=[0.0],
+            lambda_nn_grid=[np.inf],    # Will be converted to 1e10 internally
+            n_bootstrap=5,
+            variance_method="bootstrap",
+            seed=42
+        )
+
+        # Track what parameters are passed to _fit_with_fixed_lambda
+        # (called by bootstrap variance estimation)
+        original_fit_with_fixed = TROP._fit_with_fixed_lambda
+        captured_lambda = []
+
+        def tracking_fit(self, data, outcome, treatment, unit, time, fixed_lambda):
+            captured_lambda.append(fixed_lambda)
+            return original_fit_with_fixed(self, data, outcome, treatment, unit, time, fixed_lambda)
+
+        with patch.object(TROP, '_fit_with_fixed_lambda', tracking_fit):
+            results = trop_est.fit(
+                simple_panel_data,
+                outcome="outcome",
+                treatment="treated",
+                unit="unit",
+                time="period",
+            )
+
+        # Results should store original grid values
+        assert np.isinf(results.lambda_time), "Results should store original infinity value"
+        assert np.isinf(results.lambda_nn), "Results should store original infinity value"
+
+        # ATT should be finite (computed with converted params)
+        assert np.isfinite(results.att), "ATT should be finite"
+
+        # Variance estimation should have received converted parameters
+        # Check that bootstrap iterations used converted (non-infinite) values
+        for captured in captured_lambda:
+            lambda_time, lambda_unit, lambda_nn = captured
+            assert not np.isinf(lambda_time), (
+                f"Bootstrap should receive converted λ_time=0.0, not {lambda_time}"
+            )
+            assert not np.isinf(lambda_nn), (
+                f"Bootstrap should receive converted λ_nn=1e10, not {lambda_nn}"
+            )
+
+    def test_empty_control_obs_returns_infinity(self, simple_panel_data):
+        """
+        Test that LOOCV returns infinity when control observations are empty.
+
+        A score of 0.0 for empty control would incorrectly "win" over legitimate
+        parameters. This test verifies the fix for empty control handling (PR #110 Round 7).
+        """
+        import warnings
+
+        trop_est = TROP(
+            lambda_time_grid=[1.0],
+            lambda_unit_grid=[1.0],
+            lambda_nn_grid=[1.0],
+            max_loocv_samples=100,
+            seed=42
+        )
+
+        # Setup matrices from data
+        data = simple_panel_data
+        all_units = sorted(data['unit'].unique())
+        all_periods = sorted(data['period'].unique())
+        n_units = len(all_units)
+        n_periods = len(all_periods)
+
+        Y = (
+            data.pivot(index='period', columns='unit', values='outcome')
+            .reindex(index=all_periods, columns=all_units)
+            .values
+        )
+        D = (
+            data.pivot(index='period', columns='unit', values='treated')
+            .reindex(index=all_periods, columns=all_units)
+            .fillna(0)
+            .astype(int)
+            .values
+        )
+
+        control_mask = D == 0
+        control_unit_idx = np.where(~np.any(D == 1, axis=0))[0]
+
+        # Force empty control_obs by setting precomputed with empty list
+        trop_est._precomputed = {
+            "control_obs": [],  # Empty!
+            "time_dist_matrix": np.abs(np.subtract.outer(
+                np.arange(n_periods), np.arange(n_periods)
+            )),
+        }
+
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            score = trop_est._loocv_score_obs_specific(
+                Y, D, control_mask, control_unit_idx,
+                1.0, 1.0, 1.0, n_units, n_periods
+            )
+
+        # Should return infinity, not 0.0
+        assert np.isinf(score), f"Empty control_obs should return inf, got {score}"
+
+        # Should emit warning
+        warning_msgs = [str(warning.message) for warning in w]
+        assert any("No valid control observations" in msg for msg in warning_msgs), (
+            f"Should warn about empty control obs. Warnings: {warning_msgs}"
+        )
+
+    def test_original_grid_values_stored_in_results(self, simple_panel_data):
+        """
+        Test that TROPResults stores the original grid values, not converted ones.
+
+        Per the design decision in PR #110 Round 7, results should store the
+        original grid values (possibly inf) so users can see what was selected,
+        while internally using converted values for computation.
+        """
+        trop_est = TROP(
+            lambda_time_grid=[np.inf],  # Original value: inf
+            lambda_unit_grid=[0.5],
+            lambda_nn_grid=[np.inf],    # Original value: inf
+            n_bootstrap=5,
+            seed=42
+        )
+
+        results = trop_est.fit(
+            simple_panel_data,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="period",
+        )
+
+        # Results should store original grid values (inf)
+        assert np.isinf(results.lambda_time), (
+            f"results.lambda_time should be inf (original), got {results.lambda_time}"
+        )
+        assert results.lambda_unit == 0.5, (
+            f"results.lambda_unit should be 0.5, got {results.lambda_unit}"
+        )
+        assert np.isinf(results.lambda_nn), (
+            f"results.lambda_nn should be inf (original), got {results.lambda_nn}"
+        )
+
+        # But ATT should still be finite (computed with converted values)
+        assert np.isfinite(results.att), "ATT should be finite"

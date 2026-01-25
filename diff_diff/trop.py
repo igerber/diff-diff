@@ -114,11 +114,15 @@ class TROPResults:
     treatment_effects : dict
         Individual treatment effects for each treated (unit, time) pair.
     lambda_time : float
-        Selected time weight decay parameter.
+        Selected time weight decay parameter from grid. Note: infinity values
+        are converted internally (∞ → 0.0 for uniform weights) for computation.
     lambda_unit : float
-        Selected unit weight decay parameter.
+        Selected unit weight decay parameter from grid. Note: infinity values
+        are converted internally (∞ → 0.0 for uniform weights) for computation.
     lambda_nn : float
-        Selected nuclear norm regularization parameter.
+        Selected nuclear norm regularization parameter from grid. Note: infinity
+        values are converted internally (∞ → 1e10, factor model disabled) for
+        computation.
     factor_matrix : np.ndarray
         Estimated low-rank factor matrix L (n_periods x n_units).
     effective_rank : float
@@ -865,7 +869,10 @@ class TROP:
         -------
         TROPResults
             Object containing the ATT estimate, standard error,
-            factor estimates, and tuning parameters.
+            factor estimates, and tuning parameters. The lambda_*
+            attributes show the selected grid values. Infinity values
+            (∞) are converted internally: λ_time/λ_unit=∞ → 0.0 (uniform
+            weights), λ_nn=∞ → 1e10 (factor model disabled).
         """
         # Validate inputs
         required_cols = [outcome, treatment, unit, time]
@@ -1069,12 +1076,22 @@ class TROP:
         # Convert infinity values for final estimation (matching LOOCV conversion)
         # This ensures final estimation uses the same effective parameters that LOOCV evaluated.
         # See REGISTRY.md "λ=∞ implementation" for rationale.
+        #
+        # IMPORTANT: Store original grid values for results, use converted for computation.
+        # This lets users see what was selected from their grid, while ensuring consistent
+        # behavior between point estimation and variance estimation.
+        original_lambda_time, original_lambda_unit, original_lambda_nn = best_lambda
+
         if np.isinf(lambda_time):
             lambda_time = 0.0  # Uniform time weights
         if np.isinf(lambda_unit):
             lambda_unit = 0.0  # Uniform unit weights
         if np.isinf(lambda_nn):
             lambda_nn = 1e10  # Very large → L≈0 (factor model disabled)
+
+        # Create effective_lambda with converted values for ALL downstream computation
+        # This ensures variance estimation uses the same parameters as point estimation
+        effective_lambda = (lambda_time, lambda_unit, lambda_nn)
 
         # Step 2: Final estimation - per-observation model fitting following Algorithm 2
         # For each treated (i,t): compute observation-specific weights, fit model, compute τ̂_{it}
@@ -1129,14 +1146,16 @@ class TROP:
             effective_rank = 0.0
 
         # Step 4: Variance estimation
+        # Use effective_lambda (converted values) to ensure SE is computed with same
+        # parameters as point estimation. This fixes the variance inconsistency issue.
         if self.variance_method == "bootstrap":
             se, bootstrap_dist = self._bootstrap_variance(
                 data, outcome, treatment, unit, time,
-                best_lambda, Y=Y, D=D, control_unit_idx=control_unit_idx
+                effective_lambda, Y=Y, D=D, control_unit_idx=control_unit_idx
             )
         else:
             se, bootstrap_dist = self._jackknife_variance(
-                Y, D, control_mask, control_unit_idx, best_lambda,
+                Y, D, control_mask, control_unit_idx, effective_lambda,
                 n_units, n_periods
             )
 
@@ -1169,9 +1188,11 @@ class TROP:
             unit_effects=unit_effects_dict,
             time_effects=time_effects_dict,
             treatment_effects=treatment_effects,
-            lambda_time=lambda_time,
-            lambda_unit=lambda_unit,
-            lambda_nn=lambda_nn,
+            # Store ORIGINAL grid values (possibly inf) so users see what was selected.
+            # Internally, infinity values are converted for computation (see effective_lambda).
+            lambda_time=original_lambda_time,
+            lambda_unit=original_lambda_unit,
+            lambda_nn=original_lambda_nn,
             factor_matrix=L_hat,
             effective_rank=effective_rank,
             loocv_score=best_score,
@@ -1652,6 +1673,17 @@ class TROP:
         if len(control_obs) > max_loocv:
             indices = rng.choice(len(control_obs), size=max_loocv, replace=False)
             control_obs = [control_obs[idx] for idx in indices]
+
+        # Empty control set check: if no control observations, return infinity
+        # A score of 0.0 would incorrectly "win" over legitimate parameters
+        if len(control_obs) == 0:
+            warnings.warn(
+                f"LOOCV: No valid control observations for "
+                f"λ=({lambda_time}, {lambda_unit}, {lambda_nn}). "
+                "Returning infinite score.",
+                UserWarning
+            )
+            return np.inf
 
         tau_squared_sum = 0.0
         n_valid = 0
