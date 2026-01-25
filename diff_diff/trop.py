@@ -796,6 +796,13 @@ class TROP:
                     self.seed if self.seed is not None else 0
                 )
                 best_lambda = (best_lt, best_lu, best_ln)
+                # Warn if Rust returned infinite score (all LOOCV fits failed)
+                if np.isinf(best_score):
+                    warnings.warn(
+                        "LOOCV: All parameter combinations returned infinite scores. "
+                        "This may indicate numerical instability or data issues.",
+                        UserWarning
+                    )
             except Exception as e:
                 # Fall back to Python implementation on error
                 logger.debug(
@@ -900,12 +907,12 @@ class TROP:
         if se > 0:
             t_stat = att / se
             p_value = 2 * (1 - stats.t.cdf(abs(t_stat), df=max(1, n_treated_obs - 1)))
+            conf_int = compute_confidence_interval(att, se, self.alpha)
         else:
-            # When SE is undefined/zero, inference fields should be NaN (not arbitrary values)
+            # When SE is undefined/zero, ALL inference fields should be NaN
             t_stat = np.nan
             p_value = np.nan
-
-        conf_int = compute_confidence_interval(att, se, self.alpha)
+            conf_int = (np.nan, np.nan)
 
         # Create results dictionaries
         unit_effects_dict = {idx_to_unit[i]: alpha_hat[i] for i in range(n_units)}
@@ -1436,6 +1443,13 @@ class TROP:
                 continue
 
         if n_valid == 0:
+            # Warn when ALL fits fail (not just >10%)
+            warnings.warn(
+                f"LOOCV: All {len(control_obs)} fits failed for "
+                f"λ=({lambda_time}, {lambda_unit}, {lambda_nn}). "
+                "Returning infinite score.",
+                UserWarning
+            )
             return np.inf
 
         # Warn if significant fraction of fits failed
