@@ -39,23 +39,7 @@ Parse `$ARGUMENTS` to extract:
      Switch to a feature branch or use /submit-pr to create a new PR.
      ```
 
-3. **Check for changes to commit or push**:
-   ```bash
-   git status --porcelain
-   ```
-   - If output is empty (working directory clean):
-     - Check if branch is ahead of upstream:
-       ```bash
-       git rev-list --count @{u}..HEAD 2>/dev/null || echo "0"
-       ```
-     - If ahead count > 0: Skip to Section 4 (Push to Remote) — there are committed changes to push
-     - If ahead count = 0 (or no upstream): Abort:
-       ```
-       No changes detected. Working directory is clean and branch is up to date.
-       Nothing to push.
-       ```
-
-4. **Get PR information**:
+3. **Get PR information**:
    ```bash
    gh pr view --json number,url,headRefName,baseRefName
    ```
@@ -65,6 +49,32 @@ Parse `$ARGUMENTS` to extract:
      Use /submit-pr to create a new pull request.
      ```
    - Store PR number and URL for later use.
+
+4. **Check for changes to commit or push**:
+   ```bash
+   git status --porcelain
+   ```
+   - If output is empty (working directory clean):
+     - Check if branch has an upstream tracking branch:
+       ```bash
+       git rev-parse --abbrev-ref @{u} 2>/dev/null
+       ```
+     - If NO upstream exists:
+       - Check if there are local commits: `git rev-list --count HEAD 2>/dev/null || echo "0"`
+       - If local commits > 0: Skip to Section 4 (Push to Remote) — will push with `-u` to set upstream
+       - If no local commits: Abort (new branch with nothing to push):
+         ```
+         No changes detected. Working directory is clean and branch has no commits.
+         Nothing to push.
+         ```
+     - If upstream EXISTS:
+       - Check if branch is ahead: `git rev-list --count @{u}..HEAD`
+       - If ahead count > 0: Skip to Section 4 (Push to Remote) — there are committed changes to push
+       - If ahead count = 0: Abort:
+         ```
+         No changes detected. Working directory is clean and branch is up to date.
+         Nothing to push.
+         ```
 
 ### 3. Stage and Commit Changes
 
@@ -200,9 +210,15 @@ Error: Cannot push PR update from <default-branch> branch.
 Switch to a feature branch or use /submit-pr to create a new PR.
 ```
 
-### No Changes to Commit or Push
+### No Changes to Commit or Push (with upstream)
 ```
 No changes detected. Working directory is clean and branch is up to date.
+Nothing to push.
+```
+
+### No Changes to Commit or Push (no upstream, no commits)
+```
+No changes detected. Working directory is clean and branch has no commits.
 Nothing to push.
 ```
 
