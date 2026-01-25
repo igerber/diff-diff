@@ -136,7 +136,7 @@ Determine if this is a fork-based workflow:
 2. **Secret scanning check** (AFTER staging to catch all files):
    - **Run deterministic pattern check** (case-insensitive with expanded patterns):
      ```bash
-     git diff --cached | grep -iE "(AKIA[A-Z0-9]{16}|ghp_[a-zA-Z0-9]{36}|sk-[a-zA-Z0-9]{48}|gho_[a-zA-Z0-9]{36}|api[_-]?key\s*[=:]|secret[_-]?key\s*[=:]|password\s*[=:]|private[_-]?key|bearer\s+[a-zA-Z0-9_-]+|token\s*[=:])" || true
+     git diff --cached | grep -iE "(AKIA[A-Z0-9]{16}|ghp_[a-zA-Z0-9]{36}|sk-[a-zA-Z0-9]{48}|gho_[a-zA-Z0-9]{36}|api[_-]?key[[:space:]]*[=:]|secret[_-]?key[[:space:]]*[=:]|password[[:space:]]*[=:]|private[_-]?key|bearer[[:space:]]+[a-zA-Z0-9_-]+|token[[:space:]]*[=:])" || true
      ```
    - **Check for sensitive file names** (case-insensitive):
      ```bash

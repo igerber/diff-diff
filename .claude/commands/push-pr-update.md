@@ -92,7 +92,7 @@ Parse `$ARGUMENTS` to extract:
 3. **Secret scanning check** (same as submit-pr):
    - **Run deterministic pattern check** (file names only, no content leaked):
      ```bash
-     git diff --cached -G "(AKIA[A-Z0-9]{16}|ghp_[a-zA-Z0-9]{36}|sk-[a-zA-Z0-9]{48}|gho_[a-zA-Z0-9]{36}|api[_-]?key\s*[=:]|secret[_-]?key\s*[=:]|password\s*[=:]|private[_-]?key|bearer\s+[a-zA-Z0-9_-]+|token\s*[=:])" --name-only
+     git diff --cached -G "(AKIA[A-Z0-9]{16}|ghp_[a-zA-Z0-9]{36}|sk-[a-zA-Z0-9]{48}|gho_[a-zA-Z0-9]{36}|api[_-]?key[[:space:]]*[=:]|secret[_-]?key[[:space:]]*[=:]|password[[:space:]]*[=:]|private[_-]?key|bearer[[:space:]]+[a-zA-Z0-9_-]+|token[[:space:]]*[=:])" --name-only
      ```
      Note: Uses `-G` to search diff content but `--name-only` to output only file names, preventing secret values from appearing in logs.
    - **Check for sensitive file names**:
