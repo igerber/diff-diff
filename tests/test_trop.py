@@ -2081,8 +2081,8 @@ class TestLOOCVFallback:
         )
 
         # Mock Rust function to return infinite score
-        # Return format: (lambda_time, lambda_unit, lambda_nn, score, n_valid, n_attempted)
-        mock_rust_loocv = MagicMock(return_value=(0.5, 0.5, 0.05, np.inf, 0, 100))
+        # Return format: (lambda_time, lambda_unit, lambda_nn, score, n_valid, n_attempted, first_failed_obs)
+        mock_rust_loocv = MagicMock(return_value=(0.5, 0.5, 0.05, np.inf, 0, 100, None))
 
         # Also mock Python LOOCV to return infinity (so Python fallback also fails)
         def always_infinity(*args, **kwargs):
