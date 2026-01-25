@@ -60,11 +60,11 @@ Parse `$ARGUMENTS` to extract:
        git rev-parse --abbrev-ref @{u} 2>/dev/null
        ```
      - If NO upstream exists:
-       - Check if there are local commits: `git rev-list --count HEAD 2>/dev/null || echo "0"`
-       - If local commits > 0: Skip to Section 4 (Push to Remote) — will push with `-u` to set upstream
-       - If no local commits: Abort (new branch with nothing to push):
+       - Check if branch has commits ahead of default: `git rev-list --count <default-branch>..HEAD 2>/dev/null || echo "0"`
+       - If ahead count > 0: Skip to Section 4 (Push to Remote) — will push with `-u` to set upstream
+       - If ahead count = 0: Abort (new branch with nothing to push):
          ```
-         No changes detected. Working directory is clean and branch has no commits.
+         No changes detected. Working directory is clean and branch has no commits ahead of <default-branch>.
          Nothing to push.
          ```
      - If upstream EXISTS:
@@ -92,7 +92,7 @@ Parse `$ARGUMENTS` to extract:
 3. **Secret scanning check** (same as submit-pr):
    - **Run deterministic pattern check** (file names only, no content leaked):
      ```bash
-     git diff --cached -G "(AKIA[A-Z0-9]{16}|ghp_[a-zA-Z0-9]{36}|sk-[a-zA-Z0-9]{48}|gho_[a-zA-Z0-9]{36}|api[_-]?key[[:space:]]*[=:]|secret[_-]?key[[:space:]]*[=:]|password[[:space:]]*[=:]|private[_-]?key|bearer[[:space:]]+[a-zA-Z0-9_-]+|token[[:space:]]*[=:])" --name-only
+     git diff --cached -G "(AKIA[A-Z0-9]{16}|ghp_[a-zA-Z0-9]{36}|sk-[a-zA-Z0-9]{48}|gho_[a-zA-Z0-9]{36}|[Aa][Pp][Ii][_-]?[Kk][Ee][Yy][[:space:]]*[=:]|[Ss][Ee][Cc][Rr][Ee][Tt][_-]?[Kk][Ee][Yy][[:space:]]*[=:]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd][[:space:]]*[=:]|[Pp][Rr][Ii][Vv][Aa][Tt][Ee][_-]?[Kk][Ee][Yy]|[Bb][Ee][Aa][Rr][Ee][Rr][[:space:]]+[a-zA-Z0-9_-]+|[Tt][Oo][Kk][Ee][Nn][[:space:]]*[=:])" --name-only
      ```
      Note: Uses `-G` to search diff content but `--name-only` to output only file names, preventing secret values from appearing in logs.
    - **Check for sensitive file names**:
@@ -216,9 +216,9 @@ No changes detected. Working directory is clean and branch is up to date.
 Nothing to push.
 ```
 
-### No Changes to Commit or Push (no upstream, no commits)
+### No Changes to Commit or Push (no upstream, no commits ahead)
 ```
-No changes detected. Working directory is clean and branch has no commits.
+No changes detected. Working directory is clean and branch has no commits ahead of <default-branch>.
 Nothing to push.
 ```
 
