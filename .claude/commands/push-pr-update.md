@@ -60,9 +60,10 @@ Parse `$ARGUMENTS` to extract:
        git rev-parse --abbrev-ref @{u} 2>/dev/null
        ```
      - If NO upstream exists:
-       - Determine comparison ref (handles shallow clones where local branch may not exist):
+       - Determine comparison ref (handles shallow/single-branch clones):
          - If `<default-branch>` exists locally (`git rev-parse --verify <default-branch> 2>/dev/null`): use `<default-branch>`
-         - Otherwise: use `origin/<default-branch>`
+         - Else if `origin/<default-branch>` exists (`git rev-parse --verify origin/<default-branch> 2>/dev/null`): use `origin/<default-branch>`
+         - Else: fetch it first (`git fetch origin <default-branch> --depth=1 2>/dev/null || true`), then use `origin/<default-branch>`
          - Store as `<comparison-ref>`
        - Check if branch has commits ahead: `git rev-list --count <comparison-ref>..HEAD 2>/dev/null || echo "0"`
        - If ahead count > 0:

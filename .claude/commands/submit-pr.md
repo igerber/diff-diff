@@ -134,10 +134,11 @@ Determine if this is a fork-based workflow:
    ```
 
 2. **Secret scanning check** (AFTER staging to catch all files):
-   - **Run deterministic pattern check** (case-insensitive with expanded patterns):
+   - **Run deterministic pattern check** (file names only, no content leaked):
      ```bash
-     git diff --cached | grep -iE "(AKIA[A-Z0-9]{16}|ghp_[a-zA-Z0-9]{36}|sk-[a-zA-Z0-9]{48}|gho_[a-zA-Z0-9]{36}|api[_-]?key[[:space:]]*[=:]|secret[_-]?key[[:space:]]*[=:]|password[[:space:]]*[=:]|private[_-]?key|bearer[[:space:]]+[a-zA-Z0-9_-]+|token[[:space:]]*[=:])" || true
+     secret_files=$(git diff --cached -G "(AKIA[A-Z0-9]{16}|ghp_[a-zA-Z0-9]{36}|sk-[a-zA-Z0-9]{48}|gho_[a-zA-Z0-9]{36}|[Aa][Pp][Ii][_-]?[Kk][Ee][Yy][[:space:]]*[=:]|[Ss][Ee][Cc][Rr][Ee][Tt][_-]?[Kk][Ee][Yy][[:space:]]*[=:]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd][[:space:]]*[=:]|[Pp][Rr][Ii][Vv][Aa][Tt][Ee][_-]?[Kk][Ee][Yy]|[Bb][Ee][Aa][Rr][Ee][Rr][[:space:]]+[a-zA-Z0-9_-]+|[Tt][Oo][Kk][Ee][Nn][[:space:]]*[=:])" --name-only 2>/dev/null || true)
      ```
+     Note: Uses `-G` to search diff content but `--name-only` to output only file names, preventing secret values from appearing in logs. The `|| true` prevents exit status 1 when patterns match from aborting strict runners.
    - **Check for sensitive file names** (case-insensitive):
      ```bash
      git diff --cached --name-only | grep -iE "(\.env|credentials|secret|\.pem|\.key|\.p12|\.pfx|id_rsa|id_ed25519)$" || true
@@ -151,7 +152,7 @@ Determine if this is a fork-based workflow:
      ```bash
      git diff --cached --name-only --diff-filter=A
      ```
-   - If pattern check returns matches or sensitive files detected, **unstage and warn**:
+   - **If patterns detected** (i.e., `secret_files` or sensitive file names non-empty), **unstage and warn**:
      ```bash
      git reset HEAD  # Unstage all files
      ```
