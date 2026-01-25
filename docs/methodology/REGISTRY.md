@@ -535,7 +535,10 @@ Q(λ) = Σ_{j,s: D_js=0} [τ̂_js^loocv(λ)]²
 - Zero singular values: handled by soft-thresholding
 - Extreme distances: weights regularized to prevent degeneracy
 - LOOCV fit failures: returns Q(λ) = ∞ on first failure (per Equation 5 requirement that Q sums over ALL D==0 cells); if all parameter combinations fail, falls back to defaults (1.0, 1.0, 0.1)
-- **λ=∞ implementation**: For time/unit weights, ∞→0 (uniform weights). For nuclear norm, ∞→1e10 (L≈0, factor model disabled)
+- **λ=∞ implementation**: Infinity values are converted in both LOOCV search and final estimation:
+  - λ_time=∞ or λ_unit=∞ → 0.0 (uniform weights via exp(-0×d)=1)
+  - λ_nn=∞ → 1e10 (large penalty → L≈0, factor model disabled)
+  - Conversion in final estimation ensures behavior matches what LOOCV evaluated
 - **Infinite LOOCV score handling**: If best LOOCV score is infinite, `best_lambda` is set to None, triggering defaults fallback
 - Validation: requires at least 2 periods before first treatment
 - **D matrix validation**: Treatment indicator must be an absorbing state (monotonic non-decreasing per unit)

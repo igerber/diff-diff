@@ -2120,3 +2120,54 @@ class TestLOOCVFallback:
                 f"Expected default lambda_unit=1.0, got {results.lambda_unit}"
             assert results.lambda_nn == 0.1, \
                 f"Expected default lambda_nn=0.1, got {results.lambda_nn}"
+
+    def test_infinity_grid_values_handled_consistently(self, simple_panel_data):
+        """
+        Test that infinity in grids is handled consistently in LOOCV and final estimation.
+
+        When infinity is in the parameter grid:
+        - LOOCV converts it for computation (λ_time=∞→0, λ_unit=∞→0, λ_nn=∞→1e10)
+        - LOOCV returns the original grid value (inf) if it was best
+        - Final estimation must also convert infinity to match LOOCV behavior
+
+        This test ensures the conversion in final estimation matches LOOCV.
+        """
+        # Create estimator with infinity in grids
+        # Use grids where infinity is likely to be selected:
+        # - lambda_time_grid: [inf] forces selection of inf
+        # - lambda_nn_grid: [inf] forces selection of inf
+        trop_est = TROP(
+            lambda_time_grid=[np.inf],  # Only inf available → must be selected
+            lambda_unit_grid=[0.0],     # Normal value
+            lambda_nn_grid=[np.inf],    # Only inf available → must be selected
+            n_bootstrap=5,
+            seed=42
+        )
+
+        results = trop_est.fit(
+            simple_panel_data,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="period",
+        )
+
+        # ATT should be finite (no NaN/inf from unconverted infinity parameters)
+        assert np.isfinite(results.att), (
+            f"ATT should be finite when infinity params are converted, got {results.att}"
+        )
+
+        # SE should be finite or at least non-negative
+        assert np.isfinite(results.se) or results.se >= 0, (
+            f"SE should be finite, got {results.se}"
+        )
+
+        # The stored lambda values should be the original grid values (inf)
+        # because we store what was selected, but conversion happens internally
+        # (This documents current behavior; the key is that ATT is finite)
+        assert np.isinf(results.lambda_time) or results.lambda_time == 0.0, (
+            f"lambda_time should be inf (stored) or 0.0 (if converted for storage)"
+        )
+        assert np.isinf(results.lambda_nn) or results.lambda_nn == 1e10, (
+            f"lambda_nn should be inf (stored) or 1e10 (if converted for storage)"
+        )

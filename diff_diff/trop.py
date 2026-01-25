@@ -1066,6 +1066,16 @@ class TROP:
         self._optimal_lambda = best_lambda
         lambda_time, lambda_unit, lambda_nn = best_lambda
 
+        # Convert infinity values for final estimation (matching LOOCV conversion)
+        # This ensures final estimation uses the same effective parameters that LOOCV evaluated.
+        # See REGISTRY.md "λ=∞ implementation" for rationale.
+        if np.isinf(lambda_time):
+            lambda_time = 0.0  # Uniform time weights
+        if np.isinf(lambda_unit):
+            lambda_unit = 0.0  # Uniform unit weights
+        if np.isinf(lambda_nn):
+            lambda_nn = 1e10  # Very large → L≈0 (factor model disabled)
+
         # Step 2: Final estimation - per-observation model fitting following Algorithm 2
         # For each treated (i,t): compute observation-specific weights, fit model, compute τ̂_{it}
         treatment_effects = {}
