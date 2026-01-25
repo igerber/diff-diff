@@ -73,8 +73,10 @@ def plot_event_study(
     periods : list, optional
         List of periods to plot. If None, uses all periods from results.
     reference_period : any, optional
-        The reference period (normalized to effect=0). Will be shown as a
-        hollow marker. If None, tries to infer from results.
+        The reference period to highlight. When explicitly provided, effects
+        are normalized (ref effect subtracted) and ref SE is set to NaN.
+        When None and auto-inferred from results, only hollow marker styling
+        is applied (no normalization). If None, tries to infer from results.
     pre_periods : list, optional
         List of pre-treatment periods. Used for shading.
     post_periods : list, optional
@@ -151,8 +153,9 @@ def plot_event_study(
        trends holds. Large pre-treatment effects suggest the assumption may
        be violated.
 
-    2. **Reference period**: Usually the last pre-treatment period (t=-1),
-       normalized to zero. This is the omitted category.
+    2. **Reference period**: Usually the last pre-treatment period (t=-1).
+       When explicitly specified via ``reference_period``, effects are normalized
+       to zero at this period. When auto-inferred, shown with hollow marker only.
 
     3. **Post-treatment periods**: The treatment effects of interest. These
        show how the outcome evolved after treatment.

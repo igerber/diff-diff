@@ -456,7 +456,7 @@ class TestPlotEventStudy:
 
         plt.close()
 
-    def test_plot_cs_results_no_auto_normalization(self):
+    def test_plot_cs_results_no_auto_normalization(self, cs_results):
         """Test that auto-inferred reference period does NOT normalize effects.
 
         When CallawaySantAnna results auto-infer reference_period=-1 (or from n_groups=0),
@@ -466,17 +466,8 @@ class TestPlotEventStudy:
         pytest.importorskip("matplotlib")
         import matplotlib.pyplot as plt
 
-        # Generate staggered data and fit CallawaySantAnna with event study
-        data = generate_staggered_data()
-        cs = CallawaySantAnna()
-        results = cs.fit(
-            data,
-            outcome='outcome',
-            unit='unit',
-            time='time',
-            first_treat='first_treat',
-            aggregate='event_study'
-        )
+        # Use fixture instead of re-fitting
+        results = cs_results
 
         # Get original effects from results (before any normalization)
         original_effects = {
@@ -513,7 +504,7 @@ class TestPlotEventStudy:
 
         plt.close()
 
-    def test_plot_cs_results_explicit_reference_normalizes(self):
+    def test_plot_cs_results_explicit_reference_normalizes(self, cs_results):
         """Test that explicit reference_period normalizes CallawaySantAnna results.
 
         When user explicitly passes reference_period=X to plot_event_study,
@@ -522,17 +513,8 @@ class TestPlotEventStudy:
         pytest.importorskip("matplotlib")
         import matplotlib.pyplot as plt
 
-        # Generate staggered data and fit CallawaySantAnna with event study
-        data = generate_staggered_data()
-        cs = CallawaySantAnna()
-        results = cs.fit(
-            data,
-            outcome='outcome',
-            unit='unit',
-            time='time',
-            first_treat='first_treat',
-            aggregate='event_study'
-        )
+        # Use fixture instead of re-fitting
+        results = cs_results
 
         # Get original effects from results
         original_effects = {
