@@ -728,6 +728,38 @@ n = 2(t_{α/2} + t_{1-κ})² σ² / MDE²
 
 ---
 
+# Visualization
+
+## Event Study Plotting (`plot_event_study`)
+
+**Reference Period Normalization**
+
+When `reference_period` is specified:
+- Point estimates are normalized: `effect_normalized = effect - effect_ref`
+- Reference period SE is set to NaN (it's now a constraint, not an estimate)
+- Other periods' SEs are unchanged (they represent uncertainty relative to the constraint)
+- CIs are recomputed from normalized effects and original SEs
+
+This follows the `fixest` (R) convention where the omitted/reference category is an identifying
+constraint with no associated uncertainty. This differs from the `did` (R) package which does
+not normalize and reports full inference for all periods including the reference.
+
+**Rationale**: When normalizing to a reference period, we're treating that period as an
+identifying constraint (effect ≡ 0 by definition). The variance of a constant is zero,
+but since it's a constraint rather than an estimated quantity, we report NaN rather than 0.
+
+**Edge Cases:**
+- If `reference_period` not in data: No normalization applied
+- If reference effect is NaN: No normalization applied
+- Reference period CI becomes (NaN, NaN) after normalization
+- Reference period is plotted with hollow marker but no error bars
+
+**Reference implementation(s):**
+- R: `fixest::coefplot()` with reference category shown at 0 with no CI
+- R: `did::ggdid()` does not normalize; shows full inference for all periods
+
+---
+
 # Cross-Reference: Standard Errors Summary
 
 | Estimator | Default SE | Alternatives |

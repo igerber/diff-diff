@@ -319,10 +319,15 @@ class TestPlotEventStudy:
         plt.close()
 
     def test_plot_event_study_reference_period_normalization(self):
-        """Test that reference_period actually normalizes effects to 0.
+        """Test that reference_period normalizes effects and sets reference SE to NaN.
 
-        When reference_period is specified, the effect at that period should
-        be subtracted from all effects, so the reference period becomes exactly 0.
+        When reference_period is specified:
+        1. The effect at that period is subtracted from all effects (ref period = 0)
+        2. The SE at the reference period is set to NaN (it's a constraint, not an estimate)
+        3. Other periods retain their original SEs and have error bars
+
+        This follows the fixest (R) convention where the omitted/reference category
+        has no associated uncertainty (it's an identifying constraint).
         """
         pytest.importorskip("matplotlib")
         import matplotlib.pyplot as plt
@@ -360,6 +365,37 @@ class TestPlotEventStudy:
         for expected in expected_normalized:
             assert any(abs(y - expected) < 0.01 for y in y_values), \
                 f"Expected normalized value {expected} not found in {y_values}"
+
+        # Verify error bars: reference period (y=0) should have NO error bars
+        # while other periods should have error bars
+        # Error bars are drawn via ax.errorbar, which creates ErrorbarContainer or Line2D
+        # The error bar x-coordinates tell us which periods have error bars
+
+        # Find the errorbar data (the line segments that form error bars)
+        errorbar_x_coords = set()
+        for child in ax.get_children():
+            # ErrorbarContainer's children include LineCollection for the caps/stems
+            if hasattr(child, 'get_segments'):
+                segments = child.get_segments()
+                for seg in segments:
+                    # Each segment is [[x1, y1], [x2, y2]]
+                    if len(seg) >= 2:
+                        # x-coordinate of error bar (both points have same x)
+                        errorbar_x_coords.add(round(seg[0][0], 1))
+
+        # x-coordinates: period -2 -> x=0, -1 -> x=1, 0 -> x=2, 1 -> x=3, 2 -> x=4
+        # The reference period (period=0) is at x=2
+        reference_x = 2  # period 0 is at x-coordinate 2
+
+        # Reference period should NOT have error bars (x=2 should not be in errorbar_x_coords)
+        assert reference_x not in errorbar_x_coords, \
+            f"Reference period should have no error bars but found error bar at x={reference_x}"
+
+        # Other periods SHOULD have error bars
+        # At least some of x=0, x=1, x=3, x=4 should have error bars
+        non_ref_x_coords = {0, 1, 3, 4}
+        assert len(errorbar_x_coords & non_ref_x_coords) >= 2, \
+            f"Non-reference periods should have error bars, found: {errorbar_x_coords}"
 
         plt.close()
 

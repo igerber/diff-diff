@@ -197,6 +197,9 @@ def plot_event_study(
         ref_effect = effects[reference_period]
         if np.isfinite(ref_effect):
             effects = {p: e - ref_effect for p, e in effects.items()}
+            # Set reference SE to NaN (it's now a constraint, not an estimate)
+            # This follows fixest convention where the omitted category has no SE/CI
+            se = {p: (np.nan if p == reference_period else s) for p, s in se.items()}
 
     plot_data = []
     for period in periods:
