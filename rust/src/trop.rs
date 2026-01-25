@@ -188,12 +188,16 @@ fn univariate_loocv_search(
     let results: Vec<(f64, f64)> = grid
         .par_iter()
         .map(|&value| {
-            // Set parameters, converting inf to 0 (disabled = uniform weights)
+            // Set parameters, converting inf for "disabled" mode
+            // Per paper Equations 2-3:
+            // - λ_time/λ_unit=∞ → uniform weights → use 0.0
+            // - λ_nn=∞ → infinite penalty → L≈0 (factor model disabled) → use 1e10
+            // Note: λ_nn=0 means NO regularization (full-rank L), opposite of "disabled"
             let (lambda_time, lambda_unit, lambda_nn) = match param_type {
                 0 => (value, if fixed_unit.is_infinite() { 0.0 } else { fixed_unit },
-                      if fixed_nn.is_infinite() { 0.0 } else { fixed_nn }),
+                      if fixed_nn.is_infinite() { 1e10 } else { fixed_nn }),
                 1 => (if fixed_time.is_infinite() { 0.0 } else { fixed_time }, value,
-                      if fixed_nn.is_infinite() { 0.0 } else { fixed_nn }),
+                      if fixed_nn.is_infinite() { 1e10 } else { fixed_nn }),
                 _ => (if fixed_time.is_infinite() { 0.0 } else { fixed_time },
                       if fixed_unit.is_infinite() { 0.0 } else { fixed_unit }, value),
             };

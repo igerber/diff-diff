@@ -1,5 +1,7 @@
 """Tests for Triply Robust Panel (TROP) estimator."""
 
+import warnings
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -1991,3 +1993,130 @@ class TestAPIChangesV2_1_8:
             assert "LOOCV" in msg
             assert "fail" in msg.lower(), f"Warning should mention failure: {msg}"
             assert "Equation 5" in msg, f"Warning should reference Equation 5: {msg}"
+
+
+class TestLOOCVFallback:
+    """Tests for LOOCV fallback to defaults when all fits fail."""
+
+    def test_infinite_score_triggers_fallback(self, simple_panel_data):
+        """
+        Test that infinite LOOCV scores trigger fallback to defaults.
+
+        When all LOOCV fits return infinity (e.g., due to numerical issues),
+        the estimator should:
+        1. Emit a warning about using defaults
+        2. Use default parameters (1.0, 1.0, 0.1)
+        3. Still complete estimation
+        """
+        import sys
+        from unittest.mock import patch
+
+        trop_est = TROP(
+            lambda_time_grid=[0.0, 1.0],
+            lambda_unit_grid=[0.0, 1.0],
+            lambda_nn_grid=[0.0, 0.1],
+            n_bootstrap=5,
+            seed=42
+        )
+
+        # Mock LOOCV to always return infinity
+        def always_infinity(*args, **kwargs):
+            return np.inf
+
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+
+            # Disable Rust backend and mock LOOCV score to always return infinity
+            trop_module = sys.modules['diff_diff.trop']
+            with patch.object(trop_module, 'HAS_RUST_BACKEND', False), \
+                 patch.object(trop_module, '_rust_loocv_grid_search', None), \
+                 patch.object(trop_est, '_loocv_score_obs_specific', always_infinity):
+                results = trop_est.fit(
+                    simple_panel_data,
+                    outcome="outcome",
+                    treatment="treated",
+                    unit="unit",
+                    time="period",
+                )
+
+            # Verify warning emitted about fallback to defaults
+            fallback_warnings = [
+                x for x in w
+                if issubclass(x.category, UserWarning)
+                and "defaults" in str(x.message).lower()
+            ]
+            assert len(fallback_warnings) > 0, (
+                f"Expected fallback warning, got: {[str(x.message) for x in w]}"
+            )
+
+            # Verify defaults used (per REGISTRY.md: 1.0, 1.0, 0.1)
+            assert results.lambda_time == 1.0, \
+                f"Expected default lambda_time=1.0, got {results.lambda_time}"
+            assert results.lambda_unit == 1.0, \
+                f"Expected default lambda_unit=1.0, got {results.lambda_unit}"
+            assert results.lambda_nn == 0.1, \
+                f"Expected default lambda_nn=0.1, got {results.lambda_nn}"
+
+            # Verify estimation still completed
+            assert np.isfinite(results.att), "ATT should be finite even with default params"
+
+    def test_rust_infinite_score_triggers_fallback(self, simple_panel_data):
+        """
+        Test that infinite LOOCV score from Rust backend triggers fallback.
+
+        The Rust backend may return infinite score when all fits fail.
+        Python should detect this and fall back to defaults.
+        When Rust returns infinity, best_lambda stays None, then Python fallback
+        is attempted. If Python also returns infinity, defaults are used.
+        """
+        import sys
+        from unittest.mock import patch, MagicMock
+
+        trop_est = TROP(
+            lambda_time_grid=[0.0, 1.0],
+            lambda_unit_grid=[0.0, 1.0],
+            lambda_nn_grid=[0.0, 0.1],
+            n_bootstrap=5,
+            seed=42
+        )
+
+        # Mock Rust function to return infinite score
+        # Return format: (lambda_time, lambda_unit, lambda_nn, score, n_valid, n_attempted)
+        mock_rust_loocv = MagicMock(return_value=(0.5, 0.5, 0.05, np.inf, 0, 100))
+
+        # Also mock Python LOOCV to return infinity (so Python fallback also fails)
+        def always_infinity(*args, **kwargs):
+            return np.inf
+
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+
+            trop_module = sys.modules['diff_diff.trop']
+            with patch.object(trop_module, 'HAS_RUST_BACKEND', True), \
+                 patch.object(trop_module, '_rust_loocv_grid_search', mock_rust_loocv), \
+                 patch.object(trop_est, '_loocv_score_obs_specific', always_infinity):
+                results = trop_est.fit(
+                    simple_panel_data,
+                    outcome="outcome",
+                    treatment="treated",
+                    unit="unit",
+                    time="period",
+                )
+
+            # Verify warning emitted about fallback to defaults
+            fallback_warnings = [
+                x for x in w
+                if issubclass(x.category, UserWarning)
+                and "defaults" in str(x.message).lower()
+            ]
+            assert len(fallback_warnings) > 0, (
+                f"Expected fallback warning with Rust backend, got: {[str(x.message) for x in w]}"
+            )
+
+            # Verify defaults used (NOT the Rust-returned values)
+            assert results.lambda_time == 1.0, \
+                f"Expected default lambda_time=1.0, got {results.lambda_time}"
+            assert results.lambda_unit == 1.0, \
+                f"Expected default lambda_unit=1.0, got {results.lambda_unit}"
+            assert results.lambda_nn == 0.1, \
+                f"Expected default lambda_nn=0.1, got {results.lambda_nn}"

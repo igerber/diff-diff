@@ -513,6 +513,10 @@ Q(λ) = Σ_{j,s: D_js=0} [τ̂_js^loocv(λ)]²
     - λ_nn search: fix λ_time=∞ (uniform time weights), λ_unit=0
     - λ_unit search: fix λ_nn=∞, λ_time=0
   - Stage 2: Cycling (coordinate descent) until convergence
+- **"Disabled" parameter semantics** (per paper Equations 2-3):
+  - `λ_time=∞` or `λ_unit=∞`: Converts to `0.0` internally → exp(-0×dist)=1 → uniform weights
+  - `λ_nn=∞`: Converts to `1e10` internally → very large penalty → L≈0 (factor model off, recovers DID/TWFE)
+  - **Note**: `λ_nn=0` means NO regularization (full-rank L), which is the OPPOSITE of "disabled"
 - **Subsampling**: max_loocv_samples (default 100) for computational tractability
   - This subsamples control observations, NOT parameter combinations
   - Increases precision at cost of computation; increase for more precise tuning
@@ -531,6 +535,8 @@ Q(λ) = Σ_{j,s: D_js=0} [τ̂_js^loocv(λ)]²
 - Zero singular values: handled by soft-thresholding
 - Extreme distances: weights regularized to prevent degeneracy
 - LOOCV fit failures: returns Q(λ) = ∞ on first failure (per Equation 5 requirement that Q sums over ALL D==0 cells); if all parameter combinations fail, falls back to defaults (1.0, 1.0, 0.1)
+- **λ=∞ implementation**: For time/unit weights, ∞→0 (uniform weights). For nuclear norm, ∞→1e10 (L≈0, factor model disabled)
+- **Infinite LOOCV score handling**: If best LOOCV score is infinite, `best_lambda` is set to None, triggering defaults fallback
 - Validation: requires at least 2 periods before first treatment
 - **D matrix validation**: Treatment indicator must be an absorbing state (monotonic non-decreasing per unit)
   - Detection: `np.diff(D, axis=0) < 0` for any column indicates violation

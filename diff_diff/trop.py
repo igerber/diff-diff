@@ -722,12 +722,16 @@ class TROP:
             lambda_nn = params.get('lambda_nn', 0.0)
 
             # Handle infinity as "disabled" mode
+            # Per paper Equations 2-3:
+            # - λ_time/λ_unit=∞ → exp(-∞×dist)→0 for dist>0, uniform weights → use 0.0
+            # - λ_nn=∞ → infinite penalty → L≈0 (factor model disabled) → use 1e10
+            # Note: λ_nn=0 means NO regularization (full-rank L), opposite of "disabled"
             if np.isinf(lambda_time):
                 lambda_time = 0.0  # Uniform time weights
             if np.isinf(lambda_unit):
                 lambda_unit = 0.0  # Uniform unit weights
             if np.isinf(lambda_nn):
-                lambda_nn = 0.0  # No nuclear norm regularization
+                lambda_nn = 1e10  # Very large → L≈0 (factor model disabled)
 
             try:
                 score = self._loocv_score_obs_specific(
@@ -973,7 +977,10 @@ class TROP:
                     self.max_loocv_samples, self.max_iter, self.tol,
                     self.seed if self.seed is not None else 0
                 )
-                best_lambda = (best_lt, best_lu, best_ln)
+                # Only accept finite scores - infinite means all fits failed
+                if np.isfinite(best_score):
+                    best_lambda = (best_lt, best_lu, best_ln)
+                # else: best_lambda stays None, triggering defaults fallback
                 # Emit warnings consistent with Python implementation
                 if n_valid == 0:
                     warnings.warn(
@@ -1040,7 +1047,10 @@ class TROP:
                     lambda_time, lambda_unit, lambda_nn,
                     n_units, n_periods
                 )
-                best_lambda = (lambda_time, lambda_unit, lambda_nn)
+                # Only accept finite scores - infinite means all fits failed
+                if np.isfinite(best_score):
+                    best_lambda = (lambda_time, lambda_unit, lambda_nn)
+                # else: best_lambda stays None, triggering defaults fallback
             except (np.linalg.LinAlgError, ValueError):
                 # If even the optimized parameters fail, best_lambda stays None
                 pass
