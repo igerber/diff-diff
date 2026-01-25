@@ -1138,13 +1138,15 @@ trop_est = TROP(
     lambda_nn_grid=[0.0, 0.1, 1.0],          # Nuclear norm grid
     n_bootstrap=200
 )
+# Note: TROP infers treatment periods from the treatment indicator column.
+# The 'treated' column must be an absorbing state (D=1 for all periods
+# during and after treatment starts for each unit).
 results = trop_est.fit(
     panel_data,
     outcome='gdp_growth',
     treatment='treated',
     unit='state',
-    time='year',
-    post_periods=[2015, 2016, 2017, 2018]
+    time='year'
 )
 
 # View results

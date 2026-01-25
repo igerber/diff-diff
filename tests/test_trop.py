@@ -1696,3 +1696,73 @@ class TestAPIChangesV2_1_8:
                 msg = str(warning.message)
                 # Warnings should mention LOOCV and provide context
                 assert "LOOCV" in msg, f"Warning should mention LOOCV: {msg}"
+
+    def test_loocv_warning_deterministic_with_mock(self, simple_panel_data):
+        """Deterministic test that LOOCV warning is emitted when >10% fits fail.
+
+        Uses mocking to force internal observation-level failures within the
+        LOOCV scoring function, ensuring deterministic behavior.
+        """
+        import warnings
+        from unittest.mock import patch
+
+        trop_est = TROP(
+            lambda_time_grid=[1.0],
+            lambda_unit_grid=[1.0],
+            lambda_nn_grid=[0.1],
+            n_bootstrap=5,
+            seed=42
+        )
+
+        # Mock _estimate_model to fail 20% of the time
+        # This is the internal method called for each LOOCV observation
+        call_count = [0]
+        original_estimate = trop_est._estimate_model
+
+        def mock_estimate_with_failures(*args, **kwargs):
+            """Mock that fails 20% of the time (>10% threshold)."""
+            call_count[0] += 1
+            # Fail every 5th call (20% failure rate)
+            if call_count[0] % 5 == 0:
+                raise np.linalg.LinAlgError("Simulated failure")
+            return original_estimate(*args, **kwargs)
+
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+
+            # Disable Rust backend for this test by patching the module-level variables
+            import sys
+            trop_module = sys.modules['diff_diff.trop']
+            with patch.object(trop_module, 'HAS_RUST_BACKEND', False), \
+                 patch.object(trop_module, '_rust_loocv_grid_search', None), \
+                 patch.object(trop_est, '_estimate_model', mock_estimate_with_failures):
+                try:
+                    trop_est.fit(
+                        simple_panel_data,
+                        outcome="outcome",
+                        treatment="treated",
+                        unit="unit",
+                        time="period",
+                    )
+                except (ValueError, np.linalg.LinAlgError):
+                    # If all fits fail, that's acceptable
+                    pass
+
+            # Check that LOOCV warning was raised (either >10% failure or all failed)
+            loocv_warnings = [
+                x for x in w
+                if issubclass(x.category, UserWarning)
+                and "LOOCV" in str(x.message)
+            ]
+
+            # With 20% failure rate, we should get a warning
+            assert len(loocv_warnings) > 0, (
+                "Expected LOOCV warning when >10% of fits fail, but none was raised. "
+                f"call_count={call_count[0]}, warnings={[str(x.message) for x in w]}"
+            )
+
+            # Verify warning content
+            msg = str(loocv_warnings[0].message)
+            assert "LOOCV" in msg
+            # Should mention either "fits failed" or "failed"
+            assert "fail" in msg.lower(), f"Warning should mention failures: {msg}"

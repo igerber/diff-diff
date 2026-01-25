@@ -788,7 +788,7 @@ class TROP:
                 lambda_unit_arr = np.array(self.lambda_unit_grid, dtype=np.float64)
                 lambda_nn_arr = np.array(self.lambda_nn_grid, dtype=np.float64)
 
-                best_lt, best_lu, best_ln, best_score = _rust_loocv_grid_search(
+                best_lt, best_lu, best_ln, best_score, n_valid, n_attempted = _rust_loocv_grid_search(
                     Y, D.astype(np.float64), control_mask_u8,
                     time_dist_matrix,
                     lambda_time_arr, lambda_unit_arr, lambda_nn_arr,
@@ -796,11 +796,20 @@ class TROP:
                     self.seed if self.seed is not None else 0
                 )
                 best_lambda = (best_lt, best_lu, best_ln)
-                # Warn if Rust returned infinite score (all LOOCV fits failed)
-                if np.isinf(best_score):
+                # Emit warnings consistent with Python implementation
+                if n_valid == 0:
                     warnings.warn(
-                        "LOOCV: All parameter combinations returned infinite scores. "
-                        "This may indicate numerical instability or data issues.",
+                        f"LOOCV: All {n_attempted} fits failed for "
+                        f"λ=({best_lt}, {best_lu}, {best_ln}). "
+                        "Returning infinite score.",
+                        UserWarning
+                    )
+                elif n_attempted > 0 and (n_attempted - n_valid) > 0.1 * n_attempted:
+                    n_failed = n_attempted - n_valid
+                    warnings.warn(
+                        f"LOOCV: {n_failed}/{n_attempted} fits failed for "
+                        f"λ=({best_lt}, {best_lu}, {best_ln}). "
+                        "This may indicate numerical instability.",
                         UserWarning
                     )
             except Exception as e:

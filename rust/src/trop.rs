@@ -170,7 +170,9 @@ fn compute_pair_distance(
 /// * `seed` - Random seed for subsampling
 ///
 /// # Returns
-/// (best_lambda_time, best_lambda_unit, best_lambda_nn, best_score)
+/// (best_lambda_time, best_lambda_unit, best_lambda_nn, best_score, n_valid, n_attempted)
+/// where n_valid and n_attempted are the counts for the best parameter combination,
+/// allowing Python to emit warnings when >10% of fits fail.
 #[pyfunction]
 #[pyo3(signature = (y, d, control_mask, time_dist_matrix, lambda_time_grid, lambda_unit_grid, lambda_nn_grid, max_loocv_samples, max_iter, tol, seed))]
 #[allow(clippy::too_many_arguments)]
@@ -187,7 +189,7 @@ pub fn loocv_grid_search<'py>(
     max_iter: usize,
     tol: f64,
     seed: u64,
-) -> PyResult<(f64, f64, f64, f64)> {
+) -> PyResult<(f64, f64, f64, f64, usize, usize)> {
     let y_arr = y.as_array();
     let d_arr = d.as_array();
     let control_mask_arr = control_mask.as_array();
@@ -214,11 +216,14 @@ pub fn loocv_grid_search<'py>(
         }
     }
 
+    let n_attempted = control_obs.len();
+
     // Evaluate all combinations in parallel
-    let results: Vec<(f64, f64, f64, f64)> = param_combos
+    // Returns (lambda_time, lambda_unit, lambda_nn, score, n_valid, n_attempted)
+    let results: Vec<(f64, f64, f64, f64, usize, usize)> = param_combos
         .par_iter()
         .map(|&(lambda_time, lambda_unit, lambda_nn)| {
-            let score = loocv_score_for_params(
+            let (score, n_valid) = loocv_score_for_params(
                 &y_arr,
                 &d_arr,
                 &control_mask_arr,
@@ -230,7 +235,7 @@ pub fn loocv_grid_search<'py>(
                 max_iter,
                 tol,
             );
-            (lambda_time, lambda_unit, lambda_nn, score)
+            (lambda_time, lambda_unit, lambda_nn, score, n_valid, n_attempted)
         })
         .collect();
 
@@ -238,7 +243,7 @@ pub fn loocv_grid_search<'py>(
     let best = results
         .into_iter()
         .min_by(|a, b| a.3.partial_cmp(&b.3).unwrap_or(std::cmp::Ordering::Equal))
-        .unwrap_or((1.0, 1.0, 0.1, f64::INFINITY));
+        .unwrap_or((1.0, 1.0, 0.1, f64::INFINITY, 0, n_attempted));
 
     Ok(best)
 }
@@ -277,6 +282,9 @@ fn get_control_observations(
 }
 
 /// Compute LOOCV score for a specific parameter combination.
+///
+/// # Returns
+/// (score, n_valid) - the LOOCV score and number of successful fits
 #[allow(clippy::too_many_arguments)]
 fn loocv_score_for_params(
     y: &ArrayView2<f64>,
@@ -289,7 +297,7 @@ fn loocv_score_for_params(
     lambda_nn: f64,
     max_iter: usize,
     tol: f64,
-) -> f64 {
+) -> (f64, usize) {
     let n_periods = y.nrows();
     let n_units = y.ncols();
 
@@ -333,11 +341,11 @@ fn loocv_score_for_params(
     }
 
     if n_valid == 0 {
-        f64::INFINITY
+        (f64::INFINITY, 0)
     } else {
         // Return SUM of squared pseudo-treatment effects per Equation 5 (page 8):
         // Q(λ) = Σ_{j,s: D_js=0} [τ̂_js^loocv(λ)]²
-        tau_sq_sum
+        (tau_sq_sum, n_valid)
     }
 }
 
