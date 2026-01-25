@@ -502,13 +502,25 @@ where d(j, treated) is RMSE distance to treated units in pre-period.
 
 Time weights: analogous construction for periods.
 
-*LOOCV tuning parameter selection (Equation 5):*
+*LOOCV tuning parameter selection (Equation 5, Footnote 2):*
 ```
 Q(λ) = Σ_{j,s: D_js=0} [τ̂_js^loocv(λ)]²
 ```
 - Score is **SUM** of squared pseudo-treatment effects on control observations
-- Subsampling: max_loocv_samples (default 100) per paper footnote 2
-- Failed fits: Q(λ) = ∞ if ANY fit fails (ensures λ selection only considers fully estimable combinations)
+- **Two-stage procedure** (per paper's footnote 2):
+  - Stage 1: Univariate grid searches with extreme fixed values
+    - λ_time search: fix λ_unit=0, λ_nn=∞ (disabled)
+    - λ_nn search: fix λ_time=∞ (uniform time weights), λ_unit=0
+    - λ_unit search: fix λ_nn=∞, λ_time=0
+  - Stage 2: Cycling (coordinate descent) until convergence
+- **Subsampling**: max_loocv_samples (default 100) for computational tractability
+  - This subsamples control observations, NOT parameter combinations
+  - Increases precision at cost of computation; increase for more precise tuning
+- **LOOCV failure handling** (Equation 5 compliance):
+  - If ANY LOOCV fit fails for a parameter combination, Q(λ) = ∞
+  - A warning is emitted on the first failure with the observation (t, i) and λ values
+  - Subsequent failures for the same λ are not individually warned (early return)
+  - This ensures λ selection only considers fully estimable combinations
 
 *Standard errors:*
 - Default: Block bootstrap preserving panel structure
@@ -520,8 +532,13 @@ Q(λ) = Σ_{j,s: D_js=0} [τ̂_js^loocv(λ)]²
 - Extreme distances: weights regularized to prevent degeneracy
 - LOOCV fit failures: returns Q(λ) = ∞ on first failure (per Equation 5 requirement that Q sums over ALL D==0 cells); if all parameter combinations fail, falls back to defaults (1.0, 1.0, 0.1)
 - Validation: requires at least 2 periods before first treatment
+- **D matrix validation**: Treatment indicator must be an absorbing state (monotonic non-decreasing per unit)
+  - Detection: `np.diff(D, axis=0) < 0` for any column indicates violation
+  - Handling: Raises `ValueError` with list of violating unit IDs and remediation guidance
+  - Error message includes: "convert to absorbing state: D[t, i] = 1 for all t >= first treatment period"
+  - **Rationale**: Event-style D (0→1→0) silently biases ATT; runtime validation prevents misuse
 - Wrong D specification: if user provides event-style D (only first treatment period),
-  ATT will be incorrect - document this clearly
+  the absorbing-state validation will raise ValueError with helpful guidance
 
 **Reference implementation(s):**
 - Authors' replication code (forthcoming)

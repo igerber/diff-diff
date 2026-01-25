@@ -146,10 +146,138 @@ fn compute_pair_distance(
     }
 }
 
-/// Perform LOOCV grid search over tuning parameters in parallel.
+/// Perform univariate LOOCV search over a single parameter.
 ///
-/// Evaluates all combinations of (lambda_time, lambda_unit, lambda_nn) in parallel
-/// and returns the combination with the lowest LOOCV score.
+/// Following paper's footnote 2, this performs a grid search for one parameter
+/// while holding others fixed. Used in the two-stage LOOCV approach.
+///
+/// # Arguments
+/// * `y` - Outcome matrix (n_periods x n_units)
+/// * `d` - Treatment indicator matrix
+/// * `control_mask` - Boolean mask for control observations
+/// * `time_dist` - Time distance matrix
+/// * `control_obs` - List of control observations for LOOCV
+/// * `grid` - Grid of values to search
+/// * `fixed_time` - Fixed lambda_time (inf for disabled)
+/// * `fixed_unit` - Fixed lambda_unit (inf for disabled)
+/// * `fixed_nn` - Fixed lambda_nn (inf for disabled)
+/// * `param_type` - Which parameter to search: 0=time, 1=unit, 2=nn
+/// * `max_iter` - Maximum iterations
+/// * `tol` - Convergence tolerance
+///
+/// # Returns
+/// (best_value, best_score)
+fn univariate_loocv_search(
+    y: &ArrayView2<f64>,
+    d: &ArrayView2<f64>,
+    control_mask: &ArrayView2<u8>,
+    time_dist: &ArrayView2<i64>,
+    control_obs: &[(usize, usize)],
+    grid: &[f64],
+    fixed_time: f64,
+    fixed_unit: f64,
+    fixed_nn: f64,
+    param_type: usize, // 0=time, 1=unit, 2=nn
+    max_iter: usize,
+    tol: f64,
+) -> (f64, f64) {
+    let mut best_score = f64::INFINITY;
+    let mut best_value = grid.first().copied().unwrap_or(0.0);
+
+    // Parallelize over grid values
+    let results: Vec<(f64, f64)> = grid
+        .par_iter()
+        .map(|&value| {
+            // Set parameters, converting inf to 0 (disabled = uniform weights)
+            let (lambda_time, lambda_unit, lambda_nn) = match param_type {
+                0 => (value, if fixed_unit.is_infinite() { 0.0 } else { fixed_unit },
+                      if fixed_nn.is_infinite() { 0.0 } else { fixed_nn }),
+                1 => (if fixed_time.is_infinite() { 0.0 } else { fixed_time }, value,
+                      if fixed_nn.is_infinite() { 0.0 } else { fixed_nn }),
+                _ => (if fixed_time.is_infinite() { 0.0 } else { fixed_time },
+                      if fixed_unit.is_infinite() { 0.0 } else { fixed_unit }, value),
+            };
+
+            let (score, _) = loocv_score_for_params(
+                y, d, control_mask, time_dist, control_obs,
+                lambda_time, lambda_unit, lambda_nn,
+                max_iter, tol,
+            );
+            (value, score)
+        })
+        .collect();
+
+    for (value, score) in results {
+        if score < best_score {
+            best_score = score;
+            best_value = value;
+        }
+    }
+
+    (best_value, best_score)
+}
+
+/// Cycle through parameters until convergence (coordinate descent).
+///
+/// Following paper's footnote 2 (Stage 2), iteratively optimize each parameter.
+fn cycling_parameter_search(
+    y: &ArrayView2<f64>,
+    d: &ArrayView2<f64>,
+    control_mask: &ArrayView2<u8>,
+    time_dist: &ArrayView2<i64>,
+    control_obs: &[(usize, usize)],
+    lambda_time_grid: &[f64],
+    lambda_unit_grid: &[f64],
+    lambda_nn_grid: &[f64],
+    initial_time: f64,
+    initial_unit: f64,
+    initial_nn: f64,
+    max_iter: usize,
+    tol: f64,
+    max_cycles: usize,
+) -> (f64, f64, f64) {
+    let mut lambda_time = initial_time;
+    let mut lambda_unit = initial_unit;
+    let mut lambda_nn = initial_nn;
+    let mut prev_score = f64::INFINITY;
+
+    for _cycle in 0..max_cycles {
+        // Optimize λ_unit (fix λ_time, λ_nn)
+        let (new_unit, _) = univariate_loocv_search(
+            y, d, control_mask, time_dist, control_obs,
+            lambda_unit_grid, lambda_time, 0.0, lambda_nn, 1, max_iter, tol,
+        );
+        lambda_unit = new_unit;
+
+        // Optimize λ_time (fix λ_unit, λ_nn)
+        let (new_time, _) = univariate_loocv_search(
+            y, d, control_mask, time_dist, control_obs,
+            lambda_time_grid, 0.0, lambda_unit, lambda_nn, 0, max_iter, tol,
+        );
+        lambda_time = new_time;
+
+        // Optimize λ_nn (fix λ_unit, λ_time)
+        let (new_nn, score) = univariate_loocv_search(
+            y, d, control_mask, time_dist, control_obs,
+            lambda_nn_grid, lambda_time, lambda_unit, 0.0, 2, max_iter, tol,
+        );
+        lambda_nn = new_nn;
+
+        // Check convergence
+        if (score - prev_score).abs() < 1e-6 {
+            break;
+        }
+        prev_score = score;
+    }
+
+    (lambda_time, lambda_unit, lambda_nn)
+}
+
+/// Perform LOOCV grid search over tuning parameters using two-stage approach.
+///
+/// Following paper's footnote 2:
+/// - Stage 1: Univariate searches for initial values with extreme fixed parameters
+/// - Stage 2: Cycling (coordinate descent) until convergence
 ///
 /// Following TROP Equation 5 (page 8):
 /// Q(λ) = Σ_{j,s: D_js=0} [τ̂_js^loocv(λ)]²
@@ -158,8 +286,6 @@ fn compute_pair_distance(
 /// * `y` - Outcome matrix (n_periods x n_units)
 /// * `d` - Treatment indicator matrix (n_periods x n_units)
 /// * `control_mask` - Boolean mask (n_periods x n_units) for control observations
-/// * `control_unit_idx` - Array of control unit indices
-/// * `unit_dist_matrix` - Pre-computed unit distance matrix (n_units x n_units)
 /// * `time_dist_matrix` - Pre-computed time distance matrix (n_periods x n_periods)
 /// * `lambda_time_grid` - Grid of time decay parameters
 /// * `lambda_unit_grid` - Grid of unit distance parameters
@@ -206,46 +332,43 @@ pub fn loocv_grid_search<'py>(
         seed,
     );
 
-    // Generate all parameter combinations
-    let mut param_combos: Vec<(f64, f64, f64)> = Vec::new();
-    for &lt in &lambda_time_vec {
-        for &lu in &lambda_unit_vec {
-            for &ln in &lambda_nn_vec {
-                param_combos.push((lt, lu, ln));
-            }
-        }
-    }
-
     let n_attempted = control_obs.len();
 
-    // Evaluate all combinations in parallel
-    // Returns (lambda_time, lambda_unit, lambda_nn, score, n_valid, n_attempted)
-    let results: Vec<(f64, f64, f64, f64, usize, usize)> = param_combos
-        .par_iter()
-        .map(|&(lambda_time, lambda_unit, lambda_nn)| {
-            let (score, n_valid) = loocv_score_for_params(
-                &y_arr,
-                &d_arr,
-                &control_mask_arr,
-                &time_dist_arr,
-                &control_obs,
-                lambda_time,
-                lambda_unit,
-                lambda_nn,
-                max_iter,
-                tol,
-            );
-            (lambda_time, lambda_unit, lambda_nn, score, n_valid, n_attempted)
-        })
-        .collect();
+    // Stage 1: Univariate searches for initial values (paper footnote 2)
+    // λ_time search: fix λ_unit=0, λ_nn=∞ (disabled)
+    let (lambda_time_init, _) = univariate_loocv_search(
+        &y_arr, &d_arr, &control_mask_arr, &time_dist_arr, &control_obs,
+        &lambda_time_vec, 0.0, 0.0, f64::INFINITY, 0, max_iter, tol,
+    );
 
-    // Find best (minimum score)
-    let best = results
-        .into_iter()
-        .min_by(|a, b| a.3.partial_cmp(&b.3).unwrap_or(std::cmp::Ordering::Equal))
-        .unwrap_or((1.0, 1.0, 0.1, f64::INFINITY, 0, n_attempted));
+    // λ_nn search: fix λ_time=∞ (disabled), λ_unit=0
+    let (lambda_nn_init, _) = univariate_loocv_search(
+        &y_arr, &d_arr, &control_mask_arr, &time_dist_arr, &control_obs,
+        &lambda_nn_vec, f64::INFINITY, 0.0, 0.0, 2, max_iter, tol,
+    );
 
-    Ok(best)
+    // λ_unit search: fix λ_nn=∞, λ_time=0
+    let (lambda_unit_init, _) = univariate_loocv_search(
+        &y_arr, &d_arr, &control_mask_arr, &time_dist_arr, &control_obs,
+        &lambda_unit_vec, 0.0, 0.0, f64::INFINITY, 1, max_iter, tol,
+    );
+
+    // Stage 2: Cycling refinement
+    let (best_time, best_unit, best_nn) = cycling_parameter_search(
+        &y_arr, &d_arr, &control_mask_arr, &time_dist_arr, &control_obs,
+        &lambda_time_vec, &lambda_unit_vec, &lambda_nn_vec,
+        lambda_time_init, lambda_unit_init, lambda_nn_init,
+        max_iter, tol, 10,
+    );
+
+    // Compute final score
+    let (best_score, n_valid) = loocv_score_for_params(
+        &y_arr, &d_arr, &control_mask_arr, &time_dist_arr, &control_obs,
+        best_time, best_unit, best_nn,
+        max_iter, tol,
+    );
+
+    Ok((best_time, best_unit, best_nn, best_score, n_valid, n_attempted))
 }
 
 /// Get sampled control observations for LOOCV.

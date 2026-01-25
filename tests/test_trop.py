@@ -1205,6 +1205,231 @@ class TestOptimizationEquivalence:
         assert results1.lambda_nn == results2.lambda_nn
 
 
+class TestDMatrixValidation:
+    """Tests for D matrix absorbing-state validation."""
+
+    def test_d_matrix_absorbing_state_validation_valid(self):
+        """Test that valid absorbing-state D passes validation."""
+        # Staggered adoption: once treated, always treated
+        rng = np.random.default_rng(42)
+        n_units = 15
+        n_periods = 8
+
+        data = []
+        for i in range(n_units):
+            # Different treatment timing for different units
+            if i < 5:
+                treat_period = 3  # Early adopters
+            elif i < 10:
+                treat_period = 5  # Late adopters
+            else:
+                treat_period = None  # Never treated
+
+            for t in range(n_periods):
+                is_treated = treat_period is not None and t >= treat_period
+                y = 10.0 + rng.normal(0, 0.5)
+                if is_treated:
+                    y += 2.0
+                data.append({
+                    "unit": i,
+                    "period": t,
+                    "outcome": y,
+                    "treated": 1 if is_treated else 0,
+                })
+
+        df = pd.DataFrame(data)
+
+        # Should work without error
+        trop_est = TROP(
+            lambda_time_grid=[0.0],
+            lambda_unit_grid=[0.0],
+            lambda_nn_grid=[0.0],
+            n_bootstrap=5,
+            seed=42
+        )
+        results = trop_est.fit(
+            df,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="period",
+        )
+        assert results is not None
+        assert isinstance(results, TROPResults)
+
+    def test_d_matrix_absorbing_state_validation_invalid(self):
+        """Test that non-absorbing D raises ValueError."""
+        # Event-style D: only first treatment period has D=1
+        data = []
+        n_units = 10
+        n_periods = 6
+
+        for i in range(n_units):
+            is_treated_unit = i < 3
+            for t in range(n_periods):
+                # Event-style: D=1 only at t=3, then back to 0
+                if is_treated_unit and t == 3:
+                    treated = 1
+                else:
+                    treated = 0
+                data.append({
+                    "unit": i,
+                    "period": t,
+                    "outcome": float(i + t),
+                    "treated": treated,
+                })
+
+        df = pd.DataFrame(data)
+
+        trop_est = TROP(
+            lambda_time_grid=[0.0],
+            lambda_unit_grid=[0.0],
+            lambda_nn_grid=[0.0],
+            n_bootstrap=5
+        )
+
+        with pytest.raises(ValueError, match="not an absorbing state"):
+            trop_est.fit(
+                df,
+                outcome="outcome",
+                treatment="treated",
+                unit="unit",
+                time="period",
+            )
+
+    def test_d_matrix_validation_error_message_helpful(self):
+        """Test that error message includes unit IDs and remediation guidance."""
+        # Event-style D for unit 5 only
+        data = []
+        for i in range(10):
+            for t in range(5):
+                # Unit 5: D goes 0→1→0 (invalid)
+                if i == 5:
+                    treated = 1 if t == 2 else 0
+                else:
+                    # Other units: proper absorbing state
+                    treated = 1 if (i < 3 and t >= 3) else 0
+                data.append({
+                    "unit": i,
+                    "period": t,
+                    "outcome": float(i + t),
+                    "treated": treated,
+                })
+
+        df = pd.DataFrame(data)
+
+        trop_est = TROP(
+            lambda_time_grid=[0.0],
+            lambda_unit_grid=[0.0],
+            lambda_nn_grid=[0.0],
+            n_bootstrap=5
+        )
+
+        with pytest.raises(ValueError) as exc_info:
+            trop_est.fit(
+                df,
+                outcome="outcome",
+                treatment="treated",
+                unit="unit",
+                time="period",
+            )
+
+        error_msg = str(exc_info.value)
+        # Check that error message is helpful
+        assert "5" in error_msg, "Should mention unit ID 5"
+        assert "absorbing state" in error_msg
+        assert "monotonic" in error_msg.lower() or "non-decreasing" in error_msg.lower()
+        assert "D[t, i] = 1 for all t >= first treatment" in error_msg
+
+
+class TestCyclingSearch:
+    """Tests for LOOCV cycling (coordinate descent) search."""
+
+    def test_cycling_search_converges(self, simple_panel_data):
+        """Test that cycling search converges to reasonable values."""
+        trop_est = TROP(
+            lambda_time_grid=[0.0, 0.5, 1.0],
+            lambda_unit_grid=[0.0, 0.5, 1.0],
+            lambda_nn_grid=[0.0, 0.1, 1.0],
+            n_bootstrap=5,
+            seed=42
+        )
+
+        results = trop_est.fit(
+            simple_panel_data,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="period",
+        )
+
+        # Check that lambda values are from the grid
+        assert results.lambda_time in trop_est.lambda_time_grid
+        assert results.lambda_unit in trop_est.lambda_unit_grid
+        assert results.lambda_nn in trop_est.lambda_nn_grid
+
+        # Check that results are reasonable
+        assert np.isfinite(results.att)
+        assert results.se >= 0
+
+    def test_cycling_search_reproducible(self, simple_panel_data):
+        """Test that cycling search produces reproducible results."""
+        results1 = trop(
+            simple_panel_data,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="period",
+            lambda_time_grid=[0.0, 0.5, 1.0],
+            lambda_unit_grid=[0.0, 0.5, 1.0],
+            lambda_nn_grid=[0.0, 0.1],
+            n_bootstrap=10,
+            seed=42,
+        )
+
+        results2 = trop(
+            simple_panel_data,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="period",
+            lambda_time_grid=[0.0, 0.5, 1.0],
+            lambda_unit_grid=[0.0, 0.5, 1.0],
+            lambda_nn_grid=[0.0, 0.1],
+            n_bootstrap=10,
+            seed=42,
+        )
+
+        # Results should be identical with same seed
+        assert results1.att == results2.att
+        assert results1.lambda_time == results2.lambda_time
+        assert results1.lambda_unit == results2.lambda_unit
+        assert results1.lambda_nn == results2.lambda_nn
+
+    def test_cycling_search_single_value_grids(self, simple_panel_data):
+        """Test cycling search with single-value grids (degenerate case)."""
+        trop_est = TROP(
+            lambda_time_grid=[0.5],  # Single value
+            lambda_unit_grid=[0.5],  # Single value
+            lambda_nn_grid=[0.1],    # Single value
+            n_bootstrap=5,
+            seed=42
+        )
+
+        results = trop_est.fit(
+            simple_panel_data,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="period",
+        )
+
+        # Should use the only available values
+        assert results.lambda_time == 0.5
+        assert results.lambda_unit == 0.5
+        assert results.lambda_nn == 0.1
+
+
 class TestPaperConformanceFixes:
     """Tests verifying fixes for paper conformance issues.
 

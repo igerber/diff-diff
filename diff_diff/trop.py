@@ -43,6 +43,11 @@ from diff_diff.results import _get_significance_stars
 from diff_diff.utils import compute_confidence_interval, compute_p_value
 
 
+# Sentinel value for "disabled" mode in LOOCV parameter search
+# Following paper's footnote 2: λ=∞ disables the corresponding component
+_LAMBDA_INF: float = float('inf')
+
+
 class _PrecomputedStructures(TypedDict):
     """Type definition for pre-computed structures used across LOOCV iterations.
 
@@ -657,6 +662,164 @@ class TROP:
         else:
             return np.inf
 
+    def _univariate_loocv_search(
+        self,
+        Y: np.ndarray,
+        D: np.ndarray,
+        control_mask: np.ndarray,
+        control_unit_idx: np.ndarray,
+        n_units: int,
+        n_periods: int,
+        param_name: str,
+        grid: List[float],
+        fixed_params: Dict[str, float],
+    ) -> Tuple[float, float]:
+        """
+        Search over one parameter with others fixed.
+
+        Following paper's footnote 2, this performs a univariate grid search
+        for one tuning parameter while holding others fixed. The fixed_params
+        can include _LAMBDA_INF values to disable specific components:
+        - lambda_nn = inf: Skip nuclear norm regularization (L=0)
+        - lambda_time = inf: Uniform time weights (treated as 0)
+        - lambda_unit = inf: Uniform unit weights (treated as 0)
+
+        Parameters
+        ----------
+        Y : np.ndarray
+            Outcome matrix (n_periods x n_units).
+        D : np.ndarray
+            Treatment indicator matrix (n_periods x n_units).
+        control_mask : np.ndarray
+            Boolean mask for control observations.
+        control_unit_idx : np.ndarray
+            Indices of control units.
+        n_units : int
+            Number of units.
+        n_periods : int
+            Number of periods.
+        param_name : str
+            Name of parameter to search: 'lambda_time', 'lambda_unit', or 'lambda_nn'.
+        grid : List[float]
+            Grid of values to search over.
+        fixed_params : Dict[str, float]
+            Fixed values for other parameters. May include _LAMBDA_INF.
+
+        Returns
+        -------
+        Tuple[float, float]
+            (best_value, best_score) for the searched parameter.
+        """
+        best_score = np.inf
+        best_value = grid[0] if grid else 0.0
+
+        for value in grid:
+            params = {**fixed_params, param_name: value}
+
+            # Convert inf values to 0 for computation (inf means "disabled" = uniform weights)
+            lambda_time = params.get('lambda_time', 0.0)
+            lambda_unit = params.get('lambda_unit', 0.0)
+            lambda_nn = params.get('lambda_nn', 0.0)
+
+            # Handle infinity as "disabled" mode
+            if np.isinf(lambda_time):
+                lambda_time = 0.0  # Uniform time weights
+            if np.isinf(lambda_unit):
+                lambda_unit = 0.0  # Uniform unit weights
+            if np.isinf(lambda_nn):
+                lambda_nn = 0.0  # No nuclear norm regularization
+
+            try:
+                score = self._loocv_score_obs_specific(
+                    Y, D, control_mask, control_unit_idx,
+                    lambda_time, lambda_unit, lambda_nn,
+                    n_units, n_periods
+                )
+                if score < best_score:
+                    best_score = score
+                    best_value = value
+            except (np.linalg.LinAlgError, ValueError):
+                continue
+
+        return best_value, best_score
+
+    def _cycling_parameter_search(
+        self,
+        Y: np.ndarray,
+        D: np.ndarray,
+        control_mask: np.ndarray,
+        control_unit_idx: np.ndarray,
+        n_units: int,
+        n_periods: int,
+        initial_lambda: Tuple[float, float, float],
+        max_cycles: int = 10,
+    ) -> Tuple[float, float, float]:
+        """
+        Cycle through parameters until convergence (coordinate descent).
+
+        Following paper's footnote 2 (Stage 2), this iteratively optimizes
+        each tuning parameter while holding the others fixed, until convergence.
+
+        Parameters
+        ----------
+        Y : np.ndarray
+            Outcome matrix (n_periods x n_units).
+        D : np.ndarray
+            Treatment indicator matrix (n_periods x n_units).
+        control_mask : np.ndarray
+            Boolean mask for control observations.
+        control_unit_idx : np.ndarray
+            Indices of control units.
+        n_units : int
+            Number of units.
+        n_periods : int
+            Number of periods.
+        initial_lambda : Tuple[float, float, float]
+            Initial values (lambda_time, lambda_unit, lambda_nn).
+        max_cycles : int, default=10
+            Maximum number of coordinate descent cycles.
+
+        Returns
+        -------
+        Tuple[float, float, float]
+            Optimized (lambda_time, lambda_unit, lambda_nn).
+        """
+        lambda_time, lambda_unit, lambda_nn = initial_lambda
+        prev_score = np.inf
+
+        for cycle in range(max_cycles):
+            # Optimize λ_unit (fix λ_time, λ_nn)
+            lambda_unit, _ = self._univariate_loocv_search(
+                Y, D, control_mask, control_unit_idx, n_units, n_periods,
+                'lambda_unit', self.lambda_unit_grid,
+                {'lambda_time': lambda_time, 'lambda_nn': lambda_nn}
+            )
+
+            # Optimize λ_time (fix λ_unit, λ_nn)
+            lambda_time, _ = self._univariate_loocv_search(
+                Y, D, control_mask, control_unit_idx, n_units, n_periods,
+                'lambda_time', self.lambda_time_grid,
+                {'lambda_unit': lambda_unit, 'lambda_nn': lambda_nn}
+            )
+
+            # Optimize λ_nn (fix λ_unit, λ_time)
+            lambda_nn, score = self._univariate_loocv_search(
+                Y, D, control_mask, control_unit_idx, n_units, n_periods,
+                'lambda_nn', self.lambda_nn_grid,
+                {'lambda_unit': lambda_unit, 'lambda_time': lambda_time}
+            )
+
+            # Check convergence
+            if abs(score - prev_score) < 1e-6:
+                logger.debug(
+                    "Cycling search converged after %d cycles with score %.6f",
+                    cycle + 1, score
+                )
+                break
+            prev_score = score
+
+        return lambda_time, lambda_unit, lambda_nn
+
     def fit(
         self,
         data: pd.DataFrame,
@@ -733,6 +896,21 @@ class TROP:
             .astype(int)
             .values
         )
+
+        # Validate D is monotonic non-decreasing per unit (absorbing state)
+        # D[t, i] must satisfy: once D=1, it must stay 1 for all subsequent periods
+        # Vectorized check: diff(D, axis=0) should never be negative
+        d_diff = np.diff(D, axis=0)
+        if np.any(d_diff < 0):
+            # Find which units violate the absorbing state constraint
+            violating_units_mask = np.any(d_diff < 0, axis=0)
+            violating_unit_ids = [all_units[i] for i in np.where(violating_units_mask)[0]]
+            raise ValueError(
+                f"Treatment indicator is not an absorbing state for units: {violating_unit_ids}. "
+                f"D[t, unit] must be monotonic non-decreasing (once treated, always treated). "
+                f"If this is event-study style data, convert to absorbing state: "
+                f"D[t, i] = 1 for all t >= first treatment period."
+            )
 
         # Identify treated observations
         treated_mask = D == 1
@@ -821,21 +999,51 @@ class TROP:
                 best_score = np.inf
 
         # Fall back to Python implementation if Rust unavailable or failed
+        # Uses two-stage approach per paper's footnote 2:
+        # Stage 1: Univariate searches for initial values
+        # Stage 2: Cycling (coordinate descent) until convergence
         if best_lambda is None:
-            for lambda_time in self.lambda_time_grid:
-                for lambda_unit in self.lambda_unit_grid:
-                    for lambda_nn in self.lambda_nn_grid:
-                        try:
-                            score = self._loocv_score_obs_specific(
-                                Y, D, control_mask, control_unit_idx,
-                                lambda_time, lambda_unit, lambda_nn,
-                                n_units, n_periods
-                            )
-                            if score < best_score:
-                                best_score = score
-                                best_lambda = (lambda_time, lambda_unit, lambda_nn)
-                        except (np.linalg.LinAlgError, ValueError):
-                            continue
+            # Stage 1: Univariate searches with extreme fixed values
+            # Following paper's footnote 2 for initial bounds
+
+            # λ_time search: fix λ_unit=0, λ_nn=∞ (disabled - no factor adjustment)
+            lambda_time_init, _ = self._univariate_loocv_search(
+                Y, D, control_mask, control_unit_idx, n_units, n_periods,
+                'lambda_time', self.lambda_time_grid,
+                {'lambda_unit': 0.0, 'lambda_nn': _LAMBDA_INF}
+            )
+
+            # λ_nn search: fix λ_time=∞ (uniform time weights), λ_unit=0
+            lambda_nn_init, _ = self._univariate_loocv_search(
+                Y, D, control_mask, control_unit_idx, n_units, n_periods,
+                'lambda_nn', self.lambda_nn_grid,
+                {'lambda_time': _LAMBDA_INF, 'lambda_unit': 0.0}
+            )
+
+            # λ_unit search: fix λ_nn=∞, λ_time=0
+            lambda_unit_init, _ = self._univariate_loocv_search(
+                Y, D, control_mask, control_unit_idx, n_units, n_periods,
+                'lambda_unit', self.lambda_unit_grid,
+                {'lambda_nn': _LAMBDA_INF, 'lambda_time': 0.0}
+            )
+
+            # Stage 2: Cycling refinement (coordinate descent)
+            lambda_time, lambda_unit, lambda_nn = self._cycling_parameter_search(
+                Y, D, control_mask, control_unit_idx, n_units, n_periods,
+                (lambda_time_init, lambda_unit_init, lambda_nn_init)
+            )
+
+            # Compute final score for the optimized parameters
+            try:
+                best_score = self._loocv_score_obs_specific(
+                    Y, D, control_mask, control_unit_idx,
+                    lambda_time, lambda_unit, lambda_nn,
+                    n_units, n_periods
+                )
+                best_lambda = (lambda_time, lambda_unit, lambda_nn)
+            except (np.linalg.LinAlgError, ValueError):
+                # If even the optimized parameters fail, best_lambda stays None
+                pass
 
         if best_lambda is None:
             warnings.warn(
