@@ -734,25 +734,39 @@ n = 2(t_{α/2} + t_{1-κ})² σ² / MDE²
 
 **Reference Period Normalization**
 
-When `reference_period` is specified:
-- Point estimates are normalized: `effect_normalized = effect - effect_ref`
-- Reference period SE is set to NaN (it's now a constraint, not an estimate)
-- Other periods' SEs are unchanged (they represent uncertainty relative to the constraint)
-- CIs are recomputed from normalized effects and original SEs
+Normalization only occurs when `reference_period` is **explicitly specified** by the user:
 
-This follows the `fixest` (R) convention where the omitted/reference category is an identifying
-constraint with no associated uncertainty. This differs from the `did` (R) package which does
-not normalize and reports full inference for all periods including the reference.
+- **Explicit `reference_period=X`**: Normalizes effects (subtracts ref effect), sets ref SE to NaN
+  - Point estimates: `effect_normalized = effect - effect_ref`
+  - Reference period SE → NaN (it's now a constraint, not an estimate)
+  - Other periods' SEs unchanged (uncertainty relative to the constraint)
+  - CIs recomputed from normalized effects and original SEs
+
+- **Auto-inferred reference** (from CallawaySantAnna results): Hollow marker styling only, no normalization
+  - Original effects are plotted unchanged
+  - Reference period shown with hollow marker for visual indication
+  - All periods retain their original SEs and error bars
+
+This design prevents unintended normalization when the reference period isn't a true
+identifying constraint (e.g., CallawaySantAnna with `base_period="varying"` where different
+cohorts use different comparison periods).
+
+The explicit-only normalization follows the `fixest` (R) convention where the omitted/reference
+category is an identifying constraint with no associated uncertainty. Auto-inferred references
+follow the `did` (R) package convention which does not normalize and reports full inference.
 
 **Rationale**: When normalizing to a reference period, we're treating that period as an
 identifying constraint (effect ≡ 0 by definition). The variance of a constant is zero,
 but since it's a constraint rather than an estimated quantity, we report NaN rather than 0.
+Auto-inferred references may not represent true identifying constraints, so normalization
+should be a deliberate user choice.
 
 **Edge Cases:**
 - If `reference_period` not in data: No normalization applied
 - If reference effect is NaN: No normalization applied
-- Reference period CI becomes (NaN, NaN) after normalization
-- Reference period is plotted with hollow marker but no error bars
+- Reference period CI becomes (NaN, NaN) after normalization (explicit only)
+- Reference period is plotted with hollow marker (both explicit and auto-inferred)
+- Reference period error bars: removed for explicit, retained for auto-inferred
 
 **Reference implementation(s):**
 - R: `fixest::coefplot()` with reference category shown at 0 with no CI

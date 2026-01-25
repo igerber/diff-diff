@@ -456,6 +456,142 @@ class TestPlotEventStudy:
 
         plt.close()
 
+    def test_plot_cs_results_no_auto_normalization(self):
+        """Test that auto-inferred reference period does NOT normalize effects.
+
+        When CallawaySantAnna results auto-infer reference_period=-1 (or from n_groups=0),
+        effects should NOT be normalized (just hollow marker styling).
+        Only explicit reference_period=X should trigger normalization.
+        """
+        pytest.importorskip("matplotlib")
+        import matplotlib.pyplot as plt
+
+        # Generate staggered data and fit CallawaySantAnna with event study
+        data = generate_staggered_data()
+        cs = CallawaySantAnna()
+        results = cs.fit(
+            data,
+            outcome='outcome',
+            unit='unit',
+            time='time',
+            first_treat='first_treat',
+            aggregate='event_study'
+        )
+
+        # Get original effects from results (before any normalization)
+        original_effects = {
+            period: effect_data['effect']
+            for period, effect_data in results.event_study_effects.items()
+        }
+
+        # Plot WITHOUT explicitly specifying reference_period
+        # This should auto-infer reference but NOT normalize
+        ax = plot_event_study(results, show=False)
+
+        # Extract plotted y-values
+        y_values = []
+        for child in ax.get_children():
+            if hasattr(child, 'get_ydata'):
+                ydata = child.get_ydata()
+                if len(ydata) == 1:
+                    y_values.append(float(ydata[0]))
+
+        # Verify that the original (non-normalized) effects are plotted
+        # Check that at least some non-zero effects are preserved
+        non_zero_originals = [e for e in original_effects.values() if abs(e) > 0.01]
+        assert len(non_zero_originals) > 0, "Should have non-zero original effects"
+
+        # The key check: effects should NOT all be relative to some reference
+        # If normalized, reference would be at 0 and others shifted accordingly
+        # Since NOT normalized, we should see the original effect values
+        for period, orig_effect in original_effects.items():
+            if np.isfinite(orig_effect):
+                # Check that original value is present (not normalized)
+                assert any(abs(y - orig_effect) < 0.05 for y in y_values), \
+                    f"Original effect {orig_effect:.3f} for period {period} " \
+                    f"should be plotted without normalization. Found y_values: {y_values}"
+
+        plt.close()
+
+    def test_plot_cs_results_explicit_reference_normalizes(self):
+        """Test that explicit reference_period normalizes CallawaySantAnna results.
+
+        When user explicitly passes reference_period=X to plot_event_study,
+        it should normalize effects (subtract ref effect) and set ref SE to NaN.
+        """
+        pytest.importorskip("matplotlib")
+        import matplotlib.pyplot as plt
+
+        # Generate staggered data and fit CallawaySantAnna with event study
+        data = generate_staggered_data()
+        cs = CallawaySantAnna()
+        results = cs.fit(
+            data,
+            outcome='outcome',
+            unit='unit',
+            time='time',
+            first_treat='first_treat',
+            aggregate='event_study'
+        )
+
+        # Get original effects from results
+        original_effects = {
+            period: effect_data['effect']
+            for period, effect_data in results.event_study_effects.items()
+        }
+
+        # Choose reference period (typically -1)
+        ref_period = -1
+        ref_effect = original_effects.get(ref_period, 0.0)
+
+        # Compute expected normalized effects
+        expected_normalized = {
+            period: effect - ref_effect
+            for period, effect in original_effects.items()
+        }
+
+        # Plot WITH explicit reference_period - this SHOULD normalize
+        ax = plot_event_study(results, reference_period=ref_period, show=False)
+
+        # Extract plotted y-values
+        y_values = []
+        for child in ax.get_children():
+            if hasattr(child, 'get_ydata'):
+                ydata = child.get_ydata()
+                if len(ydata) == 1:
+                    y_values.append(float(ydata[0]))
+
+        # The reference period should now be at y=0 (normalized)
+        assert any(abs(y) < 0.01 for y in y_values), \
+            f"Reference period should be normalized to y=0, got y_values={y_values}"
+
+        # Verify normalized values are present
+        for period, norm_effect in expected_normalized.items():
+            if np.isfinite(norm_effect):
+                assert any(abs(y - norm_effect) < 0.05 for y in y_values), \
+                    f"Normalized effect {norm_effect:.3f} for period {period} " \
+                    f"not found in {y_values}"
+
+        # Verify reference period has no error bars (SE was set to NaN)
+        # Find error bar x-coordinates
+        periods_in_plot = sorted(original_effects.keys())
+        ref_x_idx = periods_in_plot.index(ref_period) if ref_period in periods_in_plot else None
+
+        if ref_x_idx is not None:
+            errorbar_x_coords = set()
+            for child in ax.get_children():
+                if hasattr(child, 'get_segments'):
+                    segments = child.get_segments()
+                    for seg in segments:
+                        if len(seg) >= 2:
+                            errorbar_x_coords.add(round(seg[0][0], 1))
+
+            # Reference period should NOT have error bars
+            assert ref_x_idx not in errorbar_x_coords, \
+                f"Reference period at x={ref_x_idx} should have no error bars"
+
+        plt.close()
+
 
 class TestPlotEventStudyIntegration:
     """Integration tests for event study plotting."""

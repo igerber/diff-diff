@@ -170,10 +170,18 @@ def plot_event_study(
 
     from scipy import stats as scipy_stats
 
+    # Track if reference_period was explicitly provided by user
+    reference_period_explicit = reference_period is not None
+
     # Extract data from results if provided
     if results is not None:
-        effects, se, periods, pre_periods, post_periods, reference_period = \
-            _extract_plot_data(results, periods, pre_periods, post_periods, reference_period)
+        extracted = _extract_plot_data(
+            results, periods, pre_periods, post_periods, reference_period
+        )
+        effects, se, periods, pre_periods, post_periods, reference_period, reference_inferred = extracted
+        # If reference was inferred from results, it was NOT explicitly provided
+        if reference_inferred:
+            reference_period_explicit = False
     elif effects is None or se is None:
         raise ValueError(
             "Must provide either 'results' or both 'effects' and 'se'"
@@ -192,8 +200,12 @@ def plot_event_study(
     # Compute confidence intervals
     critical_value = scipy_stats.norm.ppf(1 - alpha / 2)
 
-    # Normalize effects to reference period if specified
-    if reference_period is not None and reference_period in effects:
+    # Normalize effects to reference period ONLY if explicitly specified by user
+    # Auto-inferred reference periods (from CallawaySantAnna) just get hollow marker styling,
+    # NO normalization. This prevents unintended normalization when the reference period
+    # isn't a true identifying constraint (e.g., CallawaySantAnna with base_period="varying").
+    if (reference_period is not None and reference_period in effects and
+            reference_period_explicit):
         ref_effect = effects[reference_period]
         if np.isfinite(ref_effect):
             effects = {p: e - ref_effect for p, e in effects.items()}
@@ -313,14 +325,17 @@ def _extract_plot_data(
     pre_periods: Optional[List[Any]],
     post_periods: Optional[List[Any]],
     reference_period: Optional[Any],
-) -> Tuple[Dict, Dict, List, List, List, Any]:
+) -> Tuple[Dict, Dict, List, List, List, Any, bool]:
     """
     Extract plotting data from various result types.
 
     Returns
     -------
     tuple
-        (effects, se, periods, pre_periods, post_periods, reference_period)
+        (effects, se, periods, pre_periods, post_periods, reference_period, reference_inferred)
+
+        reference_inferred is True if reference_period was auto-detected from results
+        rather than explicitly provided by the user.
     """
     # Handle DataFrame input
     if isinstance(results, pd.DataFrame):
@@ -337,7 +352,8 @@ def _extract_plot_data(
         if periods is None:
             periods = list(results['period'])
 
-        return effects, se, periods, pre_periods, post_periods, reference_period
+        # DataFrame input: reference_period was already set by caller, never inferred here
+        return effects, se, periods, pre_periods, post_periods, reference_period, False
 
     # Handle MultiPeriodDiDResults
     if hasattr(results, 'period_effects'):
@@ -357,7 +373,8 @@ def _extract_plot_data(
         if periods is None:
             periods = post_periods
 
-        return effects, se, periods, pre_periods, post_periods, reference_period
+        # MultiPeriodDiDResults: reference_period was already set by caller, never inferred here
+        return effects, se, periods, pre_periods, post_periods, reference_period, False
 
     # Handle CallawaySantAnnaResults (event study aggregation)
     if hasattr(results, 'event_study_effects') and results.event_study_effects is not None:
@@ -371,8 +388,12 @@ def _extract_plot_data(
         if periods is None:
             periods = sorted(effects.keys())
 
+        # Track if reference_period was explicitly provided vs auto-inferred
+        reference_inferred = False
+
         # Reference period is typically -1 for event study
         if reference_period is None:
+            reference_inferred = True  # We're about to infer it
             # Detect reference period from n_groups=0 marker (normalization constraint)
             # This handles anticipation > 0 where reference is at e = -1 - anticipation
             for period, effect_data in results.event_study_effects.items():
@@ -389,7 +410,7 @@ def _extract_plot_data(
         if post_periods is None:
             post_periods = [p for p in periods if p >= 0]
 
-        return effects, se, periods, pre_periods, post_periods, reference_period
+        return effects, se, periods, pre_periods, post_periods, reference_period, reference_inferred
 
     raise TypeError(
         f"Cannot extract plot data from {type(results).__name__}. "
