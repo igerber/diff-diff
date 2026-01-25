@@ -2565,3 +2565,93 @@ class TestPR110FeedbackRound8:
             assert np.isfinite(results.loocv_score), (
                 "LOOCV score should be finite when computed with converted inf values"
             )
+
+    def test_violation_across_missing_gap_caught(self):
+        """Test that 1→0 violations spanning missing periods are caught.
+
+        Issue: If periods [3, 4] are missing and D[2]=1, D[5]=0, this is a
+        real violation that must be detected even though the adjacent
+        period transitions don't show it (the gap hides the transition).
+
+        PR #110 round 10 fix: Check each unit's observed D sequence for
+        monotonicity, not just adjacent periods in the full time grid.
+        """
+        data = []
+
+        # Unit 0: control, complete
+        for t in range(6):
+            data.append({"unit": 0, "period": t, "outcome": 10.0 + t, "treated": 0})
+
+        # Unit 1: VIOLATION across gap
+        # Observed at [0, 1, 2, 5], missing [3, 4]
+        # D[2]=1, D[5]=0 is a real violation spanning the gap
+        for t in [0, 1, 2, 5]:
+            treated = 1 if t == 2 else 0  # Only treated at period 2
+            data.append({"unit": 1, "period": t, "outcome": 10.0 + t, "treated": treated})
+
+        # Unit 2: control, complete
+        for t in range(6):
+            data.append({"unit": 2, "period": t, "outcome": 10.0 + t, "treated": 0})
+
+        df = pd.DataFrame(data)
+        trop_est = TROP(
+            lambda_time_grid=[0.0],
+            lambda_unit_grid=[0.0],
+            lambda_nn_grid=[0.0],
+            n_bootstrap=5,
+        )
+
+        with pytest.raises(ValueError, match="absorbing state"):
+            trop_est.fit(
+                df,
+                outcome="outcome",
+                treatment="treated",
+                unit="unit",
+                time="period",
+            )
+
+    def test_n_post_periods_counts_observed_treatment(self):
+        """Test n_post_periods counts periods with actual D=1 observations.
+
+        Per docstring: "Number of post-treatment periods (periods with D=1 observations)"
+
+        This tests that n_post_periods reflects periods where treatment is
+        actually observed, not just calendar periods from first treatment.
+        """
+        data = []
+
+        # Create panel where period 5 exists but has no D=1 observations
+        # (all treated units are missing at period 5)
+        for unit in range(3):
+            for period in range(6):
+                # Units 1, 2 are treated from period 3, but missing at period 5
+                if unit in [1, 2] and period == 5:
+                    continue  # Skip - creates unbalanced panel
+                treated = 1 if (unit in [1, 2] and period >= 3) else 0
+                data.append({
+                    "unit": unit,
+                    "period": period,
+                    "outcome": 10.0 + period,
+                    "treated": treated,
+                })
+
+        df = pd.DataFrame(data)
+        trop_est = TROP(
+            lambda_time_grid=[0.0],
+            lambda_unit_grid=[0.0],
+            lambda_nn_grid=[0.0],
+            n_bootstrap=5,
+            seed=42,
+        )
+        results = trop_est.fit(
+            df,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="period",
+        )
+
+        # Periods with D=1 observations: 3, 4 (not 5 - missing for treated units)
+        assert results.n_post_periods == 2, (
+            f"Expected 2 post-periods with D=1, got {results.n_post_periods}"
+        )

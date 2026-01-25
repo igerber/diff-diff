@@ -912,23 +912,23 @@ class TROP:
 
         # Validate D is monotonic non-decreasing per unit (absorbing state)
         # D[t, i] must satisfy: once D=1, it must stay 1 for all subsequent periods
-        # Vectorized check: diff(D, axis=0) should never be negative
-        # Issue 3 fix: Only check transitions where BOTH periods are observed
-        d_diff = np.diff(D, axis=0)
+        # Issue 3 fix (round 10): Check each unit's OBSERVED D sequence for monotonicity
+        # This catches 1→0 violations that span missing period gaps
+        # Example: D[2]=1, missing [3,4], D[5]=0 is a real violation even though
+        # adjacent period transitions don't show it (the gap hides the transition)
+        violating_units = []
+        for unit_idx in range(n_units):
+            # Get observed D values for this unit (where not missing)
+            observed_mask = ~missing_mask[:, unit_idx]
+            observed_d = D[observed_mask, unit_idx]
 
-        # Valid transition mask: neither the current nor next period is missing
-        # missing_mask[:-1] = source period missing, missing_mask[1:] = target period missing
-        valid_transition = ~(missing_mask[:-1] | missing_mask[1:])
+            # Check if observed sequence is monotonically non-decreasing
+            if len(observed_d) > 1 and np.any(np.diff(observed_d) < 0):
+                violating_units.append(all_units[unit_idx])
 
-        # Only flag violations where both periods are observed
-        violations = (d_diff < 0) & valid_transition
-
-        if np.any(violations):
-            # Find which units violate the absorbing state constraint
-            violating_units_mask = np.any(violations, axis=0)
-            violating_unit_ids = [all_units[i] for i in np.where(violating_units_mask)[0]]
+        if violating_units:
             raise ValueError(
-                f"Treatment indicator is not an absorbing state for units: {violating_unit_ids}. "
+                f"Treatment indicator is not an absorbing state for units: {violating_units}. "
                 f"D[t, unit] must be monotonic non-decreasing (once treated, always treated). "
                 f"If this is event-study style data, convert to absorbing state: "
                 f"D[t, i] = 1 for all t >= first treatment period."
@@ -960,7 +960,9 @@ class TROP:
             raise ValueError("Could not infer post-treatment periods from D matrix")
 
         n_pre_periods = first_treat_period
-        n_post_periods = n_periods - first_treat_period
+        # Count periods where D=1 is actually observed (matches docstring)
+        # Per docstring: "Number of post-treatment periods (periods with D=1 observations)"
+        n_post_periods = int(np.sum(np.any(D[first_treat_period:, :] == 1, axis=1)))
 
         if n_pre_periods < 2:
             raise ValueError("Need at least 2 pre-treatment periods")
