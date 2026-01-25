@@ -130,13 +130,15 @@ Basic usage::
         seed=42
     )
 
+    # Note: TROP infers treatment periods from the treatment indicator column.
+    # The treatment column should be an absorbing state (D=1 for all periods
+    # during and after treatment starts).
     results = trop.fit(
         data,
         outcome='y',
         treatment='treated',
         unit='unit_id',
-        time='period',
-        post_periods=[10, 11, 12, 13, 14]
+        time='period'
     )
     results.print_summary()
 
@@ -150,7 +152,6 @@ Quick estimation with convenience function::
         treatment='treated',
         unit='unit_id',
         time='period',
-        post_periods=[10, 11, 12, 13, 14],
         n_bootstrap=200
     )
 

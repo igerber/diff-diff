@@ -1138,13 +1138,15 @@ trop_est = TROP(
     lambda_nn_grid=[0.0, 0.1, 1.0],          # Nuclear norm grid
     n_bootstrap=200
 )
+# Note: TROP infers treatment periods from the treatment indicator column.
+# The 'treated' column must be an absorbing state (D=1 for all periods
+# during and after treatment starts for each unit).
 results = trop_est.fit(
     panel_data,
     outcome='gdp_growth',
     treatment='treated',
     unit='state',
-    time='year',
-    post_periods=[2015, 2016, 2017, 2018]
+    time='year'
 )
 
 # View results
@@ -1232,9 +1234,11 @@ sdid_results = sdid.fit(data, outcome='y', treatment='treated',
                         unit='unit', time='time', post_periods=[5,6,7])
 
 # TROP (accounts for factors)
+# Note: TROP infers treatment periods from the treatment indicator column
+# (D=1 for treated observations, D=0 for control)
 trop_est = TROP()  # Uses default grids with LOOCV selection
 trop_results = trop_est.fit(data, outcome='y', treatment='treated',
-                            unit='unit', time='time', post_periods=[5,6,7])
+                            unit='unit', time='time')
 
 print(f"SDID estimate: {sdid_results.att:.3f}")
 print(f"TROP estimate: {trop_results.att:.3f}")
@@ -1279,13 +1283,13 @@ TROP(
 
 ```python
 # One-liner estimation with default tuning grids
+# Note: TROP infers treatment periods from the treatment indicator
 results = trop(
     data,
     outcome='y',
     treatment='treated',
     unit='unit',
     time='time',
-    post_periods=[5, 6, 7],
     n_bootstrap=200
 )
 ```
@@ -1877,10 +1881,11 @@ TROP(
 |-----------|------|-------------|
 | `data` | DataFrame | Panel data |
 | `outcome` | str | Outcome variable column name |
-| `treatment` | str | Treatment indicator column (0/1) |
+| `treatment` | str | Treatment indicator column (0/1 absorbing state) |
 | `unit` | str | Unit identifier column |
 | `time` | str | Time period column |
-| `post_periods` | list | List of post-treatment period values |
+
+Note: TROP infers treatment periods from the treatment indicator column. The treatment column should be an absorbing state indicator where D=1 for all periods during and after treatment starts.
 
 ### TROPResults
 
@@ -1906,8 +1911,8 @@ TROP(
 | `factor_matrix` | Low-rank factor matrix L (n_periods x n_units) |
 | `effective_rank` | Effective rank of factor matrix |
 | `loocv_score` | LOOCV score for selected parameters |
-| `pre_periods` | List of pre-treatment periods |
-| `post_periods` | List of post-treatment periods |
+| `n_pre_periods` | Number of pre-treatment periods |
+| `n_post_periods` | Number of post-treatment periods |
 | `variance_method` | Variance estimation method |
 | `bootstrap_distribution` | Bootstrap distribution (if bootstrap) |
 

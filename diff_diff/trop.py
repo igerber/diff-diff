@@ -43,6 +43,11 @@ from diff_diff.results import _get_significance_stars
 from diff_diff.utils import compute_confidence_interval, compute_p_value
 
 
+# Sentinel value for "disabled" mode in LOOCV parameter search
+# Following paper's footnote 2: λ=∞ disables the corresponding component
+_LAMBDA_INF: float = float('inf')
+
+
 class _PrecomputedStructures(TypedDict):
     """Type definition for pre-computed structures used across LOOCV iterations.
 
@@ -109,11 +114,15 @@ class TROPResults:
     treatment_effects : dict
         Individual treatment effects for each treated (unit, time) pair.
     lambda_time : float
-        Selected time weight decay parameter.
+        Selected time weight decay parameter from grid. Note: infinity values
+        are converted internally (∞ → 0.0 for uniform weights) for computation.
     lambda_unit : float
-        Selected unit weight decay parameter.
+        Selected unit weight decay parameter from grid. Note: infinity values
+        are converted internally (∞ → 0.0 for uniform weights) for computation.
     lambda_nn : float
-        Selected nuclear norm regularization parameter.
+        Selected nuclear norm regularization parameter from grid. Note: infinity
+        values are converted internally (∞ → 1e10, factor model disabled) for
+        computation.
     factor_matrix : np.ndarray
         Estimated low-rank factor matrix L (n_periods x n_units).
     effective_rank : float
@@ -124,10 +133,10 @@ class TROPResults:
         Method used for variance estimation.
     alpha : float
         Significance level for confidence interval.
-    pre_periods : list
-        List of pre-treatment period identifiers.
-    post_periods : list
-        List of post-treatment period identifiers.
+    n_pre_periods : int
+        Number of pre-treatment periods.
+    n_post_periods : int
+        Number of post-treatment periods (periods with D=1 observations).
     n_bootstrap : int, optional
         Number of bootstrap replications (if bootstrap variance).
     bootstrap_distribution : np.ndarray, optional
@@ -154,8 +163,8 @@ class TROPResults:
     loocv_score: float
     variance_method: str
     alpha: float = 0.05
-    pre_periods: List[Any] = field(default_factory=list)
-    post_periods: List[Any] = field(default_factory=list)
+    n_pre_periods: int = 0
+    n_post_periods: int = 0
     n_bootstrap: Optional[int] = field(default=None)
     bootstrap_distribution: Optional[np.ndarray] = field(default=None, repr=False)
 
@@ -197,8 +206,8 @@ class TROPResults:
             f"{'Treated units:':<25} {self.n_treated:>10}",
             f"{'Control units:':<25} {self.n_control:>10}",
             f"{'Treated observations:':<25} {self.n_treated_obs:>10}",
-            f"{'Pre-treatment periods:':<25} {len(self.pre_periods):>10}",
-            f"{'Post-treatment periods:':<25} {len(self.post_periods):>10}",
+            f"{'Pre-treatment periods:':<25} {self.n_pre_periods:>10}",
+            f"{'Post-treatment periods:':<25} {self.n_post_periods:>10}",
             "",
             "-" * 75,
             "Tuning Parameters (selected via LOOCV)".center(75),
@@ -261,8 +270,8 @@ class TROPResults:
             "n_treated": self.n_treated,
             "n_control": self.n_control,
             "n_treated_obs": self.n_treated_obs,
-            "n_pre_periods": len(self.pre_periods),
-            "n_post_periods": len(self.post_periods),
+            "n_pre_periods": self.n_pre_periods,
+            "n_post_periods": self.n_post_periods,
             "lambda_time": self.lambda_time,
             "lambda_unit": self.lambda_unit,
             "lambda_nn": self.lambda_nn,
@@ -397,7 +406,6 @@ class TROP:
     ...     treatment='treated',
     ...     unit='unit',
     ...     time='period',
-    ...     post_periods=[5, 6, 7, 8]
     ... )
     >>> results.print_summary()
 
@@ -658,6 +666,168 @@ class TROP:
         else:
             return np.inf
 
+    def _univariate_loocv_search(
+        self,
+        Y: np.ndarray,
+        D: np.ndarray,
+        control_mask: np.ndarray,
+        control_unit_idx: np.ndarray,
+        n_units: int,
+        n_periods: int,
+        param_name: str,
+        grid: List[float],
+        fixed_params: Dict[str, float],
+    ) -> Tuple[float, float]:
+        """
+        Search over one parameter with others fixed.
+
+        Following paper's footnote 2, this performs a univariate grid search
+        for one tuning parameter while holding others fixed. The fixed_params
+        can include _LAMBDA_INF values to disable specific components:
+        - lambda_nn = inf: Skip nuclear norm regularization (L=0)
+        - lambda_time = inf: Uniform time weights (treated as 0)
+        - lambda_unit = inf: Uniform unit weights (treated as 0)
+
+        Parameters
+        ----------
+        Y : np.ndarray
+            Outcome matrix (n_periods x n_units).
+        D : np.ndarray
+            Treatment indicator matrix (n_periods x n_units).
+        control_mask : np.ndarray
+            Boolean mask for control observations.
+        control_unit_idx : np.ndarray
+            Indices of control units.
+        n_units : int
+            Number of units.
+        n_periods : int
+            Number of periods.
+        param_name : str
+            Name of parameter to search: 'lambda_time', 'lambda_unit', or 'lambda_nn'.
+        grid : List[float]
+            Grid of values to search over.
+        fixed_params : Dict[str, float]
+            Fixed values for other parameters. May include _LAMBDA_INF.
+
+        Returns
+        -------
+        Tuple[float, float]
+            (best_value, best_score) for the searched parameter.
+        """
+        best_score = np.inf
+        best_value = grid[0] if grid else 0.0
+
+        for value in grid:
+            params = {**fixed_params, param_name: value}
+
+            # Convert inf values to 0 for computation (inf means "disabled" = uniform weights)
+            lambda_time = params.get('lambda_time', 0.0)
+            lambda_unit = params.get('lambda_unit', 0.0)
+            lambda_nn = params.get('lambda_nn', 0.0)
+
+            # Handle infinity as "disabled" mode
+            # Per paper Equations 2-3:
+            # - λ_time/λ_unit=∞ → exp(-∞×dist)→0 for dist>0, uniform weights → use 0.0
+            # - λ_nn=∞ → infinite penalty → L≈0 (factor model disabled) → use 1e10
+            # Note: λ_nn=0 means NO regularization (full-rank L), opposite of "disabled"
+            if np.isinf(lambda_time):
+                lambda_time = 0.0  # Uniform time weights
+            if np.isinf(lambda_unit):
+                lambda_unit = 0.0  # Uniform unit weights
+            if np.isinf(lambda_nn):
+                lambda_nn = 1e10  # Very large → L≈0 (factor model disabled)
+
+            try:
+                score = self._loocv_score_obs_specific(
+                    Y, D, control_mask, control_unit_idx,
+                    lambda_time, lambda_unit, lambda_nn,
+                    n_units, n_periods
+                )
+                if score < best_score:
+                    best_score = score
+                    best_value = value
+            except (np.linalg.LinAlgError, ValueError):
+                continue
+
+        return best_value, best_score
+
+    def _cycling_parameter_search(
+        self,
+        Y: np.ndarray,
+        D: np.ndarray,
+        control_mask: np.ndarray,
+        control_unit_idx: np.ndarray,
+        n_units: int,
+        n_periods: int,
+        initial_lambda: Tuple[float, float, float],
+        max_cycles: int = 10,
+    ) -> Tuple[float, float, float]:
+        """
+        Cycle through parameters until convergence (coordinate descent).
+
+        Following paper's footnote 2 (Stage 2), this iteratively optimizes
+        each tuning parameter while holding the others fixed, until convergence.
+
+        Parameters
+        ----------
+        Y : np.ndarray
+            Outcome matrix (n_periods x n_units).
+        D : np.ndarray
+            Treatment indicator matrix (n_periods x n_units).
+        control_mask : np.ndarray
+            Boolean mask for control observations.
+        control_unit_idx : np.ndarray
+            Indices of control units.
+        n_units : int
+            Number of units.
+        n_periods : int
+            Number of periods.
+        initial_lambda : Tuple[float, float, float]
+            Initial values (lambda_time, lambda_unit, lambda_nn).
+        max_cycles : int, default=10
+            Maximum number of coordinate descent cycles.
+
+        Returns
+        -------
+        Tuple[float, float, float]
+            Optimized (lambda_time, lambda_unit, lambda_nn).
+        """
+        lambda_time, lambda_unit, lambda_nn = initial_lambda
+        prev_score = np.inf
+
+        for cycle in range(max_cycles):
+            # Optimize λ_unit (fix λ_time, λ_nn)
+            lambda_unit, _ = self._univariate_loocv_search(
+                Y, D, control_mask, control_unit_idx, n_units, n_periods,
+                'lambda_unit', self.lambda_unit_grid,
+                {'lambda_time': lambda_time, 'lambda_nn': lambda_nn}
+            )
+
+            # Optimize λ_time (fix λ_unit, λ_nn)
+            lambda_time, _ = self._univariate_loocv_search(
+                Y, D, control_mask, control_unit_idx, n_units, n_periods,
+                'lambda_time', self.lambda_time_grid,
+                {'lambda_unit': lambda_unit, 'lambda_nn': lambda_nn}
+            )
+
+            # Optimize λ_nn (fix λ_unit, λ_time)
+            lambda_nn, score = self._univariate_loocv_search(
+                Y, D, control_mask, control_unit_idx, n_units, n_periods,
+                'lambda_nn', self.lambda_nn_grid,
+                {'lambda_unit': lambda_unit, 'lambda_time': lambda_time}
+            )
+
+            # Check convergence
+            if abs(score - prev_score) < 1e-6:
+                logger.debug(
+                    "Cycling search converged after %d cycles with score %.6f",
+                    cycle + 1, score
+                )
+                break
+            prev_score = score
+
+        return lambda_time, lambda_unit, lambda_nn
+
     def fit(
         self,
         data: pd.DataFrame,
@@ -665,7 +835,6 @@ class TROP:
         treatment: str,
         unit: str,
         time: str,
-        post_periods: Optional[List[Any]] = None,
     ) -> TROPResults:
         """
         Fit the TROP model.
@@ -679,20 +848,31 @@ class TROP:
             Name of the outcome variable column.
         treatment : str
             Name of the treatment indicator column (0/1).
-            Should be 1 for treated unit-time observations.
+
+            IMPORTANT: This should be an ABSORBING STATE indicator, not a
+            treatment timing indicator. For each unit, D=1 for ALL periods
+            during and after treatment:
+
+            - D[t, i] = 0 for all t < g_i (pre-treatment periods)
+            - D[t, i] = 1 for all t >= g_i (treatment and post-treatment)
+
+            where g_i is the treatment start time for unit i.
+
+            For staggered adoption, different units can have different g_i.
+            The ATT averages over ALL D=1 cells per Equation 1 of the paper.
         unit : str
             Name of the unit identifier column.
         time : str
             Name of the time period column.
-        post_periods : list, optional
-            List of time period values that are post-treatment.
-            If None, infers from treatment indicator.
 
         Returns
         -------
         TROPResults
             Object containing the ATT estimate, standard error,
-            factor estimates, and tuning parameters.
+            factor estimates, and tuning parameters. The lambda_*
+            attributes show the selected grid values. Infinity values
+            (∞) are converted internally: λ_time/λ_unit=∞ → 0.0 (uniform
+            weights), λ_nn=∞ → 1e10 (factor model disabled).
         """
         # Validate inputs
         required_cols = [outcome, treatment, unit, time]
@@ -720,13 +900,39 @@ class TROP:
             .reindex(index=all_periods, columns=all_units)
             .values
         )
-        D = (
+
+        # For D matrix, track missing values BEFORE fillna to support unbalanced panels
+        # Issue 3 fix: Missing observations should not trigger spurious violations
+        D_raw = (
             data.pivot(index=time, columns=unit, values=treatment)
             .reindex(index=all_periods, columns=all_units)
-            .fillna(0)
-            .astype(int)
-            .values
         )
+        missing_mask = pd.isna(D_raw).values  # True where originally missing
+        D = D_raw.fillna(0).astype(int).values
+
+        # Validate D is monotonic non-decreasing per unit (absorbing state)
+        # D[t, i] must satisfy: once D=1, it must stay 1 for all subsequent periods
+        # Issue 3 fix (round 10): Check each unit's OBSERVED D sequence for monotonicity
+        # This catches 1→0 violations that span missing period gaps
+        # Example: D[2]=1, missing [3,4], D[5]=0 is a real violation even though
+        # adjacent period transitions don't show it (the gap hides the transition)
+        violating_units = []
+        for unit_idx in range(n_units):
+            # Get observed D values for this unit (where not missing)
+            observed_mask = ~missing_mask[:, unit_idx]
+            observed_d = D[observed_mask, unit_idx]
+
+            # Check if observed sequence is monotonically non-decreasing
+            if len(observed_d) > 1 and np.any(np.diff(observed_d) < 0):
+                violating_units.append(all_units[unit_idx])
+
+        if violating_units:
+            raise ValueError(
+                f"Treatment indicator is not an absorbing state for units: {violating_units}. "
+                f"D[t, unit] must be monotonic non-decreasing (once treated, always treated). "
+                f"If this is event-study style data, convert to absorbing state: "
+                f"D[t, i] = 1 for all t >= first treatment period."
+            )
 
         # Identify treated observations
         treated_mask = D == 1
@@ -743,28 +949,23 @@ class TROP:
         if len(control_unit_idx) == 0:
             raise ValueError("No control units found")
 
-        # Determine pre/post periods
-        if post_periods is None:
-            # Infer from first treatment time
-            first_treat_period = None
-            for t in range(n_periods):
-                if np.any(D[t, :] == 1):
-                    first_treat_period = t
-                    break
-            if first_treat_period is None:
-                raise ValueError("Could not infer post-treatment periods")
-            pre_period_idx = list(range(first_treat_period))
-            post_period_idx = list(range(first_treat_period, n_periods))
-        else:
-            post_period_idx = [period_to_idx[p] for p in post_periods if p in period_to_idx]
-            pre_period_idx = [i for i in range(n_periods) if i not in post_period_idx]
+        # Determine pre/post periods from treatment indicator D
+        # D matrix is the sole input for treatment timing per the paper
+        first_treat_period = None
+        for t in range(n_periods):
+            if np.any(D[t, :] == 1):
+                first_treat_period = t
+                break
+        if first_treat_period is None:
+            raise ValueError("Could not infer post-treatment periods from D matrix")
 
-        if len(pre_period_idx) < 2:
+        n_pre_periods = first_treat_period
+        # Count periods where D=1 is actually observed (matches docstring)
+        # Per docstring: "Number of post-treatment periods (periods with D=1 observations)"
+        n_post_periods = int(np.sum(np.any(D[first_treat_period:, :] == 1, axis=1)))
+
+        if n_pre_periods < 2:
             raise ValueError("Need at least 2 pre-treatment periods")
-
-        pre_periods_list = [idx_to_period[i] for i in pre_period_idx]
-        post_periods_list = [idx_to_period[i] for i in post_period_idx]
-        n_treated_periods = len(post_period_idx)
 
         # Step 1: Grid search with LOOCV for tuning parameters
         best_lambda = None
@@ -789,14 +990,45 @@ class TROP:
                 lambda_unit_arr = np.array(self.lambda_unit_grid, dtype=np.float64)
                 lambda_nn_arr = np.array(self.lambda_nn_grid, dtype=np.float64)
 
-                best_lt, best_lu, best_ln, best_score = _rust_loocv_grid_search(
+                result = _rust_loocv_grid_search(
                     Y, D.astype(np.float64), control_mask_u8,
                     time_dist_matrix,
                     lambda_time_arr, lambda_unit_arr, lambda_nn_arr,
                     self.max_loocv_samples, self.max_iter, self.tol,
                     self.seed if self.seed is not None else 0
                 )
-                best_lambda = (best_lt, best_lu, best_ln)
+                # Unpack result - 7 values including optional first_failed_obs
+                best_lt, best_lu, best_ln, best_score, n_valid, n_attempted, first_failed_obs = result
+                # Only accept finite scores - infinite means all fits failed
+                if np.isfinite(best_score):
+                    best_lambda = (best_lt, best_lu, best_ln)
+                # else: best_lambda stays None, triggering defaults fallback
+                # Emit warnings consistent with Python implementation
+                if n_valid == 0:
+                    # Include failed observation coordinates if available (Issue 2 fix)
+                    obs_info = ""
+                    if first_failed_obs is not None:
+                        t_idx, i_idx = first_failed_obs
+                        obs_info = f" First failure at observation ({t_idx}, {i_idx})."
+                    warnings.warn(
+                        f"LOOCV: All {n_attempted} fits failed for "
+                        f"λ=({best_lt}, {best_lu}, {best_ln}). "
+                        f"Returning infinite score.{obs_info}",
+                        UserWarning
+                    )
+                elif n_attempted > 0 and (n_attempted - n_valid) > 0.1 * n_attempted:
+                    n_failed = n_attempted - n_valid
+                    # Include failed observation coordinates if available
+                    obs_info = ""
+                    if first_failed_obs is not None:
+                        t_idx, i_idx = first_failed_obs
+                        obs_info = f" First failure at observation ({t_idx}, {i_idx})."
+                    warnings.warn(
+                        f"LOOCV: {n_failed}/{n_attempted} fits failed for "
+                        f"λ=({best_lt}, {best_lu}, {best_ln}). "
+                        f"This may indicate numerical instability.{obs_info}",
+                        UserWarning
+                    )
             except Exception as e:
                 # Fall back to Python implementation on error
                 logger.debug(
@@ -806,21 +1038,54 @@ class TROP:
                 best_score = np.inf
 
         # Fall back to Python implementation if Rust unavailable or failed
+        # Uses two-stage approach per paper's footnote 2:
+        # Stage 1: Univariate searches for initial values
+        # Stage 2: Cycling (coordinate descent) until convergence
         if best_lambda is None:
-            for lambda_time in self.lambda_time_grid:
-                for lambda_unit in self.lambda_unit_grid:
-                    for lambda_nn in self.lambda_nn_grid:
-                        try:
-                            score = self._loocv_score_obs_specific(
-                                Y, D, control_mask, control_unit_idx,
-                                lambda_time, lambda_unit, lambda_nn,
-                                n_units, n_periods
-                            )
-                            if score < best_score:
-                                best_score = score
-                                best_lambda = (lambda_time, lambda_unit, lambda_nn)
-                        except (np.linalg.LinAlgError, ValueError):
-                            continue
+            # Stage 1: Univariate searches with extreme fixed values
+            # Following paper's footnote 2 for initial bounds
+
+            # λ_time search: fix λ_unit=0, λ_nn=∞ (disabled - no factor adjustment)
+            lambda_time_init, _ = self._univariate_loocv_search(
+                Y, D, control_mask, control_unit_idx, n_units, n_periods,
+                'lambda_time', self.lambda_time_grid,
+                {'lambda_unit': 0.0, 'lambda_nn': _LAMBDA_INF}
+            )
+
+            # λ_nn search: fix λ_time=∞ (uniform time weights), λ_unit=0
+            lambda_nn_init, _ = self._univariate_loocv_search(
+                Y, D, control_mask, control_unit_idx, n_units, n_periods,
+                'lambda_nn', self.lambda_nn_grid,
+                {'lambda_time': _LAMBDA_INF, 'lambda_unit': 0.0}
+            )
+
+            # λ_unit search: fix λ_nn=∞, λ_time=0
+            lambda_unit_init, _ = self._univariate_loocv_search(
+                Y, D, control_mask, control_unit_idx, n_units, n_periods,
+                'lambda_unit', self.lambda_unit_grid,
+                {'lambda_nn': _LAMBDA_INF, 'lambda_time': 0.0}
+            )
+
+            # Stage 2: Cycling refinement (coordinate descent)
+            lambda_time, lambda_unit, lambda_nn = self._cycling_parameter_search(
+                Y, D, control_mask, control_unit_idx, n_units, n_periods,
+                (lambda_time_init, lambda_unit_init, lambda_nn_init)
+            )
+
+            # Compute final score for the optimized parameters
+            try:
+                best_score = self._loocv_score_obs_specific(
+                    Y, D, control_mask, control_unit_idx,
+                    lambda_time, lambda_unit, lambda_nn,
+                    n_units, n_periods
+                )
+                # Only accept finite scores - infinite means all fits failed
+                if np.isfinite(best_score):
+                    best_lambda = (lambda_time, lambda_unit, lambda_nn)
+                # else: best_lambda stays None, triggering defaults fallback
+            except (np.linalg.LinAlgError, ValueError):
+                # If even the optimized parameters fail, best_lambda stays None
+                pass
 
         if best_lambda is None:
             warnings.warn(
@@ -832,6 +1097,26 @@ class TROP:
 
         self._optimal_lambda = best_lambda
         lambda_time, lambda_unit, lambda_nn = best_lambda
+
+        # Convert infinity values for final estimation (matching LOOCV conversion)
+        # This ensures final estimation uses the same effective parameters that LOOCV evaluated.
+        # See REGISTRY.md "λ=∞ implementation" for rationale.
+        #
+        # IMPORTANT: Store original grid values for results, use converted for computation.
+        # This lets users see what was selected from their grid, while ensuring consistent
+        # behavior between point estimation and variance estimation.
+        original_lambda_time, original_lambda_unit, original_lambda_nn = best_lambda
+
+        if np.isinf(lambda_time):
+            lambda_time = 0.0  # Uniform time weights
+        if np.isinf(lambda_unit):
+            lambda_unit = 0.0  # Uniform unit weights
+        if np.isinf(lambda_nn):
+            lambda_nn = 1e10  # Very large → L≈0 (factor model disabled)
+
+        # Create effective_lambda with converted values for ALL downstream computation
+        # This ensures variance estimation uses the same parameters as point estimation
+        effective_lambda = (lambda_time, lambda_unit, lambda_nn)
 
         # Step 2: Final estimation - per-observation model fitting following Algorithm 2
         # For each treated (i,t): compute observation-specific weights, fit model, compute τ̂_{it}
@@ -886,14 +1171,16 @@ class TROP:
             effective_rank = 0.0
 
         # Step 4: Variance estimation
+        # Use effective_lambda (converted values) to ensure SE is computed with same
+        # parameters as point estimation. This fixes the variance inconsistency issue.
         if self.variance_method == "bootstrap":
             se, bootstrap_dist = self._bootstrap_variance(
-                data, outcome, treatment, unit, time, post_periods_list,
-                best_lambda, Y=Y, D=D, control_unit_idx=control_unit_idx
+                data, outcome, treatment, unit, time,
+                effective_lambda, Y=Y, D=D, control_unit_idx=control_unit_idx
             )
         else:
             se, bootstrap_dist = self._jackknife_variance(
-                Y, D, control_mask, control_unit_idx, best_lambda,
+                Y, D, control_mask, control_unit_idx, effective_lambda,
                 n_units, n_periods
             )
 
@@ -901,11 +1188,12 @@ class TROP:
         if se > 0:
             t_stat = att / se
             p_value = 2 * (1 - stats.t.cdf(abs(t_stat), df=max(1, n_treated_obs - 1)))
+            conf_int = compute_confidence_interval(att, se, self.alpha)
         else:
-            t_stat = 0.0
-            p_value = 1.0
-
-        conf_int = compute_confidence_interval(att, se, self.alpha)
+            # When SE is undefined/zero, ALL inference fields should be NaN
+            t_stat = np.nan
+            p_value = np.nan
+            conf_int = (np.nan, np.nan)
 
         # Create results dictionaries
         unit_effects_dict = {idx_to_unit[i]: alpha_hat[i] for i in range(n_units)}
@@ -925,16 +1213,18 @@ class TROP:
             unit_effects=unit_effects_dict,
             time_effects=time_effects_dict,
             treatment_effects=treatment_effects,
-            lambda_time=lambda_time,
-            lambda_unit=lambda_unit,
-            lambda_nn=lambda_nn,
+            # Store ORIGINAL grid values (possibly inf) so users see what was selected.
+            # Internally, infinity values are converted for computation (see effective_lambda).
+            lambda_time=original_lambda_time,
+            lambda_unit=original_lambda_unit,
+            lambda_nn=original_lambda_nn,
             factor_matrix=L_hat,
             effective_rank=effective_rank,
             loocv_score=best_score,
             variance_method=self.variance_method,
             alpha=self.alpha,
-            pre_periods=pre_periods_list,
-            post_periods=post_periods_list,
+            n_pre_periods=n_pre_periods,
+            n_post_periods=n_post_periods,
             n_bootstrap=self.n_bootstrap if self.variance_method == "bootstrap" else None,
             bootstrap_distribution=bootstrap_dist if len(bootstrap_dist) > 0 else None,
         )
@@ -1409,6 +1699,17 @@ class TROP:
             indices = rng.choice(len(control_obs), size=max_loocv, replace=False)
             control_obs = [control_obs[idx] for idx in indices]
 
+        # Empty control set check: if no control observations, return infinity
+        # A score of 0.0 would incorrectly "win" over legitimate parameters
+        if len(control_obs) == 0:
+            warnings.warn(
+                f"LOOCV: No valid control observations for "
+                f"λ=({lambda_time}, {lambda_unit}, {lambda_nn}). "
+                "Returning infinite score.",
+                UserWarning
+            )
+            return np.inf
+
         tau_squared_sum = 0.0
         n_valid = 0
 
@@ -1433,12 +1734,19 @@ class TROP:
                 n_valid += 1
 
             except (np.linalg.LinAlgError, ValueError):
-                continue
+                # Per Equation 5: Q(λ) must sum over ALL D==0 cells
+                # Any failure means this λ cannot produce valid estimates for all cells
+                warnings.warn(
+                    f"LOOCV: Fit failed for observation ({t}, {i}) with "
+                    f"λ=({lambda_time}, {lambda_unit}, {lambda_nn}). "
+                    "Returning infinite score per Equation 5.",
+                    UserWarning
+                )
+                return np.inf
 
-        if n_valid == 0:
-            return np.inf
-
-        return tau_squared_sum / n_valid
+        # Return SUM of squared pseudo-treatment effects per Equation 5 (page 8):
+        # Q(λ) = Σ_{j,s: D_js=0} [τ̂_js^loocv(λ)]²
+        return tau_squared_sum
 
     def _bootstrap_variance(
         self,
@@ -1447,7 +1755,6 @@ class TROP:
         treatment: str,
         unit: str,
         time: str,
-        post_periods: List[Any],
         optimal_lambda: Tuple[float, float, float],
         Y: Optional[np.ndarray] = None,
         D: Optional[np.ndarray] = None,
@@ -1473,8 +1780,6 @@ class TROP:
             Name of the unit identifier column in data.
         time : str
             Name of the time period column in data.
-        post_periods : list
-            List of post-treatment time periods.
         optimal_lambda : tuple of float
             Optimal tuning parameters (lambda_time, lambda_unit, lambda_nn)
             from cross-validation. Used for model estimation in each bootstrap.
@@ -1579,7 +1884,7 @@ class TROP:
                 # Fit with fixed lambda (skip LOOCV for speed)
                 att = self._fit_with_fixed_lambda(
                     boot_data, outcome, treatment, unit, time,
-                    post_periods, optimal_lambda
+                    optimal_lambda
                 )
                 bootstrap_estimates_list.append(att)
             except (ValueError, np.linalg.LinAlgError, KeyError):
@@ -1703,7 +2008,6 @@ class TROP:
         treatment: str,
         unit: str,
         time: str,
-        post_periods: List[Any],
         fixed_lambda: Tuple[float, float, float],
     ) -> float:
         """
@@ -1803,7 +2107,6 @@ def trop(
     treatment: str,
     unit: str,
     time: str,
-    post_periods: Optional[List[Any]] = None,
     **kwargs,
 ) -> TROPResults:
     """
@@ -1816,13 +2119,16 @@ def trop(
     outcome : str
         Outcome variable column name.
     treatment : str
-        Treatment indicator column name.
+        Treatment indicator column name (0/1).
+
+        IMPORTANT: This should be an ABSORBING STATE indicator, not a treatment
+        timing indicator. For each unit, D=1 for ALL periods during and after
+        treatment (D[t,i]=0 for t < g_i, D[t,i]=1 for t >= g_i where g_i is
+        the treatment start time for unit i).
     unit : str
         Unit identifier column name.
     time : str
         Time period column name.
-    post_periods : list, optional
-        Post-treatment periods.
     **kwargs
         Additional arguments passed to TROP constructor.
 
@@ -1834,8 +2140,8 @@ def trop(
     Examples
     --------
     >>> from diff_diff import trop
-    >>> results = trop(data, 'y', 'treated', 'unit', 'time', post_periods=[5,6,7])
+    >>> results = trop(data, 'y', 'treated', 'unit', 'time')
     >>> print(f"ATT: {results.att:.3f}")
     """
     estimator = TROP(**kwargs)
-    return estimator.fit(data, outcome, treatment, unit, time, post_periods)
+    return estimator.fit(data, outcome, treatment, unit, time)
