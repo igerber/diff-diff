@@ -449,9 +449,33 @@ Doubly robust estimator:
 **Key implementation requirements:**
 
 *Assumption checks / warnings:*
-- Requires sufficient pre-treatment periods for factor estimation
+- Requires sufficient pre-treatment periods for factor estimation (at least 2)
 - Warns if estimated rank seems too high/low relative to panel dimensions
 - Unit weights can become degenerate if λ_unit too large
+- Warns if >10% of LOOCV fits fail (may indicate numerical instability)
+
+*Treatment indicator (D matrix) semantics:*
+
+D must be an **ABSORBING STATE** indicator, not a treatment timing indicator:
+- D[t, i] = 0 for all t < g_i (pre-treatment periods for unit i)
+- D[t, i] = 1 for all t >= g_i (during and after treatment for unit i)
+
+where g_i is the treatment start time for unit i.
+
+For staggered adoption, different units have different treatment start times g_i.
+The D matrix naturally handles this - distances use periods where BOTH units
+have D=0, matching the paper's (1 - W_iu)(1 - W_ju) formula in Equation 3.
+
+**Wrong D specification**: If user provides event-style D (only first treatment period
+has D=1), ATT will be incorrect - document this clearly.
+
+*ATT definition (Equation 1, Section 6.1):*
+```
+τ̂ = (1 / Σ_i Σ_t W_{it}) Σ_{i=1}^N Σ_{t=1}^T W_{it} τ̂_{it}(λ̂)
+```
+- ATT averages over ALL cells where D_it=1 (treatment indicator)
+- No separate "post_periods" concept - D matrix is the sole input for treatment timing
+- Supports general assignment patterns including staggered adoption
 
 *Estimator equation (as implemented):*
 
@@ -478,6 +502,14 @@ where d(j, treated) is RMSE distance to treated units in pre-period.
 
 Time weights: analogous construction for periods.
 
+*LOOCV tuning parameter selection (Equation 5):*
+```
+Q(λ) = Σ_{j,s: D_js=0} [τ̂_js^loocv(λ)]²
+```
+- Score is **SUM** of squared pseudo-treatment effects on control observations
+- Subsampling: max_loocv_samples (default 100) per paper footnote 2
+- Failed fits: emit warning if >10% fail
+
 *Standard errors:*
 - Default: Block bootstrap preserving panel structure
 - Alternative: Jackknife (leave-one-unit-out)
@@ -486,16 +518,24 @@ Time weights: analogous construction for periods.
 - Rank selection: automatic via cross-validation, information criterion, or elbow
 - Zero singular values: handled by soft-thresholding
 - Extreme distances: weights regularized to prevent degeneracy
+- LOOCV fit failures: emit warning if >10% of control observations fail
+- Validation: requires at least 2 periods before first treatment
+- Wrong D specification: if user provides event-style D (only first treatment period),
+  ATT will be incorrect - document this clearly
 
 **Reference implementation(s):**
 - Authors' replication code (forthcoming)
 
 **Requirements checklist:**
-- [ ] Factor matrix estimated via soft-threshold SVD
-- [ ] Unit weights: `exp(-λ_unit × distance)` with normalization
-- [ ] LOOCV implemented for tuning parameter selection
-- [ ] Multiple rank selection methods: cv, ic, elbow
-- [ ] Returns factor loadings and scores for interpretation
+- [x] Factor matrix estimated via soft-threshold SVD
+- [x] Unit weights: `exp(-λ_unit × distance)` with normalization
+- [x] LOOCV implemented for tuning parameter selection
+- [x] LOOCV uses SUM of squared errors per Equation 5
+- [x] Multiple rank selection methods: cv, ic, elbow
+- [x] Returns factor loadings and scores for interpretation
+- [x] ATT averages over all D==1 cells (general assignment patterns)
+- [x] No post_periods parameter (D matrix determines treatment timing)
+- [x] D matrix semantics documented (absorbing state, not event indicator)
 
 ---
 

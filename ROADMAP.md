@@ -44,6 +44,17 @@ Two-stage approach gaining traction in applied work. First residualizes outcomes
 
 **Reference**: Gardner (2022). *Working Paper*.
 
+### Stacked Difference-in-Differences
+
+An intuitive approach that explicitly constructs sub-experiments for each treatment cohort, avoiding forbidden comparisons.
+
+- Creates separate datasets per cohort with valid controls only
+- Stacks sub-experiments and applies corrective sample weights
+- Returns variance-weighted ATT with proper compositional balance
+- Conceptually simpler alternative to aggregation-based methods
+
+**Reference**: [Wing, Freedman & Hollingsworth (2024)](https://www.nber.org/papers/w32054). *NBER Working Paper 32054*. Stata: `STACKDID`.
+
 ### Staggered Triple Difference (DDD)
 
 Extend the existing `TripleDifference` estimator to handle staggered adoption settings. The current implementation handles 2-period DDD; this extends to multi-period designs.

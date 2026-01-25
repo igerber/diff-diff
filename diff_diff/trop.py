@@ -124,10 +124,10 @@ class TROPResults:
         Method used for variance estimation.
     alpha : float
         Significance level for confidence interval.
-    pre_periods : list
-        List of pre-treatment period identifiers.
-    post_periods : list
-        List of post-treatment period identifiers.
+    n_pre_periods : int
+        Number of pre-treatment periods.
+    n_post_periods : int
+        Number of post-treatment periods (periods with D=1 observations).
     n_bootstrap : int, optional
         Number of bootstrap replications (if bootstrap variance).
     bootstrap_distribution : np.ndarray, optional
@@ -154,8 +154,8 @@ class TROPResults:
     loocv_score: float
     variance_method: str
     alpha: float = 0.05
-    pre_periods: List[Any] = field(default_factory=list)
-    post_periods: List[Any] = field(default_factory=list)
+    n_pre_periods: int = 0
+    n_post_periods: int = 0
     n_bootstrap: Optional[int] = field(default=None)
     bootstrap_distribution: Optional[np.ndarray] = field(default=None, repr=False)
 
@@ -197,8 +197,8 @@ class TROPResults:
             f"{'Treated units:':<25} {self.n_treated:>10}",
             f"{'Control units:':<25} {self.n_control:>10}",
             f"{'Treated observations:':<25} {self.n_treated_obs:>10}",
-            f"{'Pre-treatment periods:':<25} {len(self.pre_periods):>10}",
-            f"{'Post-treatment periods:':<25} {len(self.post_periods):>10}",
+            f"{'Pre-treatment periods:':<25} {self.n_pre_periods:>10}",
+            f"{'Post-treatment periods:':<25} {self.n_post_periods:>10}",
             "",
             "-" * 75,
             "Tuning Parameters (selected via LOOCV)".center(75),
@@ -261,8 +261,8 @@ class TROPResults:
             "n_treated": self.n_treated,
             "n_control": self.n_control,
             "n_treated_obs": self.n_treated_obs,
-            "n_pre_periods": len(self.pre_periods),
-            "n_post_periods": len(self.post_periods),
+            "n_pre_periods": self.n_pre_periods,
+            "n_post_periods": self.n_post_periods,
             "lambda_time": self.lambda_time,
             "lambda_unit": self.lambda_unit,
             "lambda_nn": self.lambda_nn,
@@ -397,7 +397,6 @@ class TROP:
     ...     treatment='treated',
     ...     unit='unit',
     ...     time='period',
-    ...     post_periods=[5, 6, 7, 8]
     ... )
     >>> results.print_summary()
 
@@ -665,7 +664,6 @@ class TROP:
         treatment: str,
         unit: str,
         time: str,
-        post_periods: Optional[List[Any]] = None,
     ) -> TROPResults:
         """
         Fit the TROP model.
@@ -679,14 +677,22 @@ class TROP:
             Name of the outcome variable column.
         treatment : str
             Name of the treatment indicator column (0/1).
-            Should be 1 for treated unit-time observations.
+
+            IMPORTANT: This should be an ABSORBING STATE indicator, not a
+            treatment timing indicator. For each unit, D=1 for ALL periods
+            during and after treatment:
+
+            - D[t, i] = 0 for all t < g_i (pre-treatment periods)
+            - D[t, i] = 1 for all t >= g_i (treatment and post-treatment)
+
+            where g_i is the treatment start time for unit i.
+
+            For staggered adoption, different units can have different g_i.
+            The ATT averages over ALL D=1 cells per Equation 1 of the paper.
         unit : str
             Name of the unit identifier column.
         time : str
             Name of the time period column.
-        post_periods : list, optional
-            List of time period values that are post-treatment.
-            If None, infers from treatment indicator.
 
         Returns
         -------
@@ -743,28 +749,21 @@ class TROP:
         if len(control_unit_idx) == 0:
             raise ValueError("No control units found")
 
-        # Determine pre/post periods
-        if post_periods is None:
-            # Infer from first treatment time
-            first_treat_period = None
-            for t in range(n_periods):
-                if np.any(D[t, :] == 1):
-                    first_treat_period = t
-                    break
-            if first_treat_period is None:
-                raise ValueError("Could not infer post-treatment periods")
-            pre_period_idx = list(range(first_treat_period))
-            post_period_idx = list(range(first_treat_period, n_periods))
-        else:
-            post_period_idx = [period_to_idx[p] for p in post_periods if p in period_to_idx]
-            pre_period_idx = [i for i in range(n_periods) if i not in post_period_idx]
+        # Determine pre/post periods from treatment indicator D
+        # D matrix is the sole input for treatment timing per the paper
+        first_treat_period = None
+        for t in range(n_periods):
+            if np.any(D[t, :] == 1):
+                first_treat_period = t
+                break
+        if first_treat_period is None:
+            raise ValueError("Could not infer post-treatment periods from D matrix")
 
-        if len(pre_period_idx) < 2:
+        n_pre_periods = first_treat_period
+        n_post_periods = n_periods - first_treat_period
+
+        if n_pre_periods < 2:
             raise ValueError("Need at least 2 pre-treatment periods")
-
-        pre_periods_list = [idx_to_period[i] for i in pre_period_idx]
-        post_periods_list = [idx_to_period[i] for i in post_period_idx]
-        n_treated_periods = len(post_period_idx)
 
         # Step 1: Grid search with LOOCV for tuning parameters
         best_lambda = None
@@ -888,7 +887,7 @@ class TROP:
         # Step 4: Variance estimation
         if self.variance_method == "bootstrap":
             se, bootstrap_dist = self._bootstrap_variance(
-                data, outcome, treatment, unit, time, post_periods_list,
+                data, outcome, treatment, unit, time,
                 best_lambda, Y=Y, D=D, control_unit_idx=control_unit_idx
             )
         else:
@@ -902,8 +901,9 @@ class TROP:
             t_stat = att / se
             p_value = 2 * (1 - stats.t.cdf(abs(t_stat), df=max(1, n_treated_obs - 1)))
         else:
-            t_stat = 0.0
-            p_value = 1.0
+            # When SE is undefined/zero, inference fields should be NaN (not arbitrary values)
+            t_stat = np.nan
+            p_value = np.nan
 
         conf_int = compute_confidence_interval(att, se, self.alpha)
 
@@ -933,8 +933,8 @@ class TROP:
             loocv_score=best_score,
             variance_method=self.variance_method,
             alpha=self.alpha,
-            pre_periods=pre_periods_list,
-            post_periods=post_periods_list,
+            n_pre_periods=n_pre_periods,
+            n_post_periods=n_post_periods,
             n_bootstrap=self.n_bootstrap if self.variance_method == "bootstrap" else None,
             bootstrap_distribution=bootstrap_dist if len(bootstrap_dist) > 0 else None,
         )
@@ -1438,7 +1438,20 @@ class TROP:
         if n_valid == 0:
             return np.inf
 
-        return tau_squared_sum / n_valid
+        # Warn if significant fraction of fits failed
+        n_attempted = len(control_obs)
+        n_failed = n_attempted - n_valid
+        if n_failed > 0.1 * n_attempted:
+            warnings.warn(
+                f"LOOCV: {n_failed}/{n_attempted} fits failed for "
+                f"λ=({lambda_time}, {lambda_unit}, {lambda_nn}). "
+                "This may indicate numerical instability.",
+                UserWarning
+            )
+
+        # Return SUM of squared pseudo-treatment effects per Equation 5 (page 8):
+        # Q(λ) = Σ_{j,s: D_js=0} [τ̂_js^loocv(λ)]²
+        return tau_squared_sum
 
     def _bootstrap_variance(
         self,
@@ -1447,7 +1460,6 @@ class TROP:
         treatment: str,
         unit: str,
         time: str,
-        post_periods: List[Any],
         optimal_lambda: Tuple[float, float, float],
         Y: Optional[np.ndarray] = None,
         D: Optional[np.ndarray] = None,
@@ -1473,8 +1485,6 @@ class TROP:
             Name of the unit identifier column in data.
         time : str
             Name of the time period column in data.
-        post_periods : list
-            List of post-treatment time periods.
         optimal_lambda : tuple of float
             Optimal tuning parameters (lambda_time, lambda_unit, lambda_nn)
             from cross-validation. Used for model estimation in each bootstrap.
@@ -1579,7 +1589,7 @@ class TROP:
                 # Fit with fixed lambda (skip LOOCV for speed)
                 att = self._fit_with_fixed_lambda(
                     boot_data, outcome, treatment, unit, time,
-                    post_periods, optimal_lambda
+                    optimal_lambda
                 )
                 bootstrap_estimates_list.append(att)
             except (ValueError, np.linalg.LinAlgError, KeyError):
@@ -1703,7 +1713,6 @@ class TROP:
         treatment: str,
         unit: str,
         time: str,
-        post_periods: List[Any],
         fixed_lambda: Tuple[float, float, float],
     ) -> float:
         """
@@ -1803,7 +1812,6 @@ def trop(
     treatment: str,
     unit: str,
     time: str,
-    post_periods: Optional[List[Any]] = None,
     **kwargs,
 ) -> TROPResults:
     """
@@ -1816,13 +1824,16 @@ def trop(
     outcome : str
         Outcome variable column name.
     treatment : str
-        Treatment indicator column name.
+        Treatment indicator column name (0/1).
+
+        IMPORTANT: This should be an ABSORBING STATE indicator, not a treatment
+        timing indicator. For each unit, D=1 for ALL periods during and after
+        treatment (D[t,i]=0 for t < g_i, D[t,i]=1 for t >= g_i where g_i is
+        the treatment start time for unit i).
     unit : str
         Unit identifier column name.
     time : str
         Time period column name.
-    post_periods : list, optional
-        Post-treatment periods.
     **kwargs
         Additional arguments passed to TROP constructor.
 
@@ -1834,8 +1845,8 @@ def trop(
     Examples
     --------
     >>> from diff_diff import trop
-    >>> results = trop(data, 'y', 'treated', 'unit', 'time', post_periods=[5,6,7])
+    >>> results = trop(data, 'y', 'treated', 'unit', 'time')
     >>> print(f"ATT: {results.att:.3f}")
     """
     estimator = TROP(**kwargs)
-    return estimator.fit(data, outcome, treatment, unit, time, post_periods)
+    return estimator.fit(data, outcome, treatment, unit, time)

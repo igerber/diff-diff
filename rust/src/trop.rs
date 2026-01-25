@@ -335,7 +335,9 @@ fn loocv_score_for_params(
     if n_valid == 0 {
         f64::INFINITY
     } else {
-        tau_sq_sum / n_valid as f64
+        // Return SUM of squared pseudo-treatment effects per Equation 5 (page 8):
+        // Q(λ) = Σ_{j,s: D_js=0} [τ̂_js^loocv(λ)]²
+        tau_sq_sum
     }
 }
 
