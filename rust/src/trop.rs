@@ -220,7 +220,7 @@ fn univariate_loocv_search(
                 },
             };
 
-            let (score, _) = loocv_score_for_params(
+            let (score, _, _) = loocv_score_for_params(
                 y, d, control_mask, time_dist, control_obs,
                 lambda_time, lambda_unit, lambda_nn,
                 max_iter, tol,
@@ -318,9 +318,10 @@ fn cycling_parameter_search(
 /// * `seed` - Random seed for subsampling
 ///
 /// # Returns
-/// (best_lambda_time, best_lambda_unit, best_lambda_nn, best_score, n_valid, n_attempted)
+/// (best_lambda_time, best_lambda_unit, best_lambda_nn, best_score, n_valid, n_attempted, first_failed_obs)
 /// where n_valid and n_attempted are the counts for the best parameter combination,
 /// allowing Python to emit warnings when >10% of fits fail.
+/// first_failed_obs is Some((t, i)) if a fit failed during final score computation, None otherwise.
 #[pyfunction]
 #[pyo3(signature = (y, d, control_mask, time_dist_matrix, lambda_time_grid, lambda_unit_grid, lambda_nn_grid, max_loocv_samples, max_iter, tol, seed))]
 #[allow(clippy::too_many_arguments)]
@@ -337,7 +338,7 @@ pub fn loocv_grid_search<'py>(
     max_iter: usize,
     tol: f64,
     seed: u64,
-) -> PyResult<(f64, f64, f64, f64, usize, usize)> {
+) -> PyResult<(f64, f64, f64, f64, usize, usize, Option<(usize, usize)>)> {
     let y_arr = y.as_array();
     let d_arr = d.as_array();
     let control_mask_arr = control_mask.as_array();
@@ -383,14 +384,24 @@ pub fn loocv_grid_search<'py>(
         max_iter, tol, 10,
     );
 
-    // Compute final score
-    let (best_score, n_valid) = loocv_score_for_params(
+    // Convert infinity values BEFORE computing final score (Issue 1 fix)
+    // Per paper Equations 2-3:
+    // - λ_time/λ_unit=∞ → uniform weights → use 0.0
+    // - λ_nn=∞ → infinite penalty → L≈0 (factor model disabled) → use 1e10
+    // This ensures final score computation matches what LOOCV evaluated.
+    let best_time_eff = if best_time.is_infinite() { 0.0 } else { best_time };
+    let best_unit_eff = if best_unit.is_infinite() { 0.0 } else { best_unit };
+    let best_nn_eff = if best_nn.is_infinite() { 1e10 } else { best_nn };
+
+    // Compute final score with converted values
+    let (best_score, n_valid, first_failed) = loocv_score_for_params(
         &y_arr, &d_arr, &control_mask_arr, &time_dist_arr, &control_obs,
-        best_time, best_unit, best_nn,
+        best_time_eff, best_unit_eff, best_nn_eff,
         max_iter, tol,
     );
 
-    Ok((best_time, best_unit, best_nn, best_score, n_valid, n_attempted))
+    // Return ORIGINAL grid values (for user visibility) but score computed with converted
+    Ok((best_time, best_unit, best_nn, best_score, n_valid, n_attempted, first_failed))
 }
 
 /// Get sampled control observations for LOOCV.
@@ -429,7 +440,8 @@ fn get_control_observations(
 /// Compute LOOCV score for a specific parameter combination.
 ///
 /// # Returns
-/// (score, n_valid) - the LOOCV score and number of successful fits
+/// (score, n_valid, first_failed_obs) - the LOOCV score, number of successful fits,
+/// and the first failed observation (t, i) if any fit failed, None otherwise.
 #[allow(clippy::too_many_arguments)]
 fn loocv_score_for_params(
     y: &ArrayView2<f64>,
@@ -442,7 +454,7 @@ fn loocv_score_for_params(
     lambda_nn: f64,
     max_iter: usize,
     tol: f64,
-) -> (f64, usize) {
+) -> (f64, usize, Option<(usize, usize)>) {
     let n_periods = y.nrows();
     let n_units = y.ncols();
 
@@ -484,17 +496,18 @@ fn loocv_score_for_params(
             None => {
                 // Per Equation 5: Q(λ) must sum over ALL D==0 cells
                 // Any failure means this λ cannot produce valid estimates for all cells
-                return (f64::INFINITY, n_valid);
+                // Return the failed observation (t, i) for warning metadata
+                return (f64::INFINITY, n_valid, Some((t, i)));
             }
         }
     }
 
     if n_valid == 0 {
-        (f64::INFINITY, 0)
+        (f64::INFINITY, 0, None)
     } else {
         // Return SUM of squared pseudo-treatment effects per Equation 5 (page 8):
         // Q(λ) = Σ_{j,s: D_js=0} [τ̂_js^loocv(λ)]²
-        (tau_sq_sum, n_valid)
+        (tau_sq_sum, n_valid, None)
     }
 }
 

@@ -550,8 +550,10 @@ Q(λ) = Σ_{j,s: D_js=0} [τ̂_js^loocv(λ)]²
   - Handling: Raises `ValueError` with list of violating unit IDs and remediation guidance
   - Error message includes: "convert to absorbing state: D[t, i] = 1 for all t >= first treatment period"
   - **Rationale**: Event-style D (0→1→0) silently biases ATT; runtime validation prevents misuse
+  - **Unbalanced panels**: Missing unit-period observations are allowed. Monotonicity validation only checks transitions between observed periods. A unit with D=1 at t=3 and missing data at t=5 is NOT flagged as a violation (the apparent 1→0 transition is due to missing data, not a real violation).
 - Wrong D specification: if user provides event-style D (only first treatment period),
   the absorbing-state validation will raise ValueError with helpful guidance
+- **LOOCV failure metadata**: When LOOCV fits fail in the Rust backend, the first failed observation coordinates (t, i) are returned to Python for informative warning messages
 
 **Reference implementation(s):**
 - Authors' replication code (forthcoming)
@@ -566,6 +568,7 @@ Q(λ) = Σ_{j,s: D_js=0} [τ̂_js^loocv(λ)]²
 - [x] ATT averages over all D==1 cells (general assignment patterns)
 - [x] No post_periods parameter (D matrix determines treatment timing)
 - [x] D matrix semantics documented (absorbing state, not event indicator)
+- [x] Unbalanced panels supported (missing observations don't trigger false violations)
 
 ---
 

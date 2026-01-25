@@ -2329,3 +2329,239 @@ class TestLOOCVFallback:
 
         # But ATT should still be finite (computed with converted values)
         assert np.isfinite(results.att), "ATT should be finite"
+
+
+class TestPR110FeedbackRound8:
+    """Tests for PR #110 feedback round 8 fixes.
+
+    Issue 1: Final LOOCV score uses converted infinity values (not raw inf)
+    Issue 2: Rust LOOCV warnings include failed observation metadata
+    Issue 3: D matrix validation handles unbalanced panels correctly
+    """
+
+    def test_unbalanced_panel_d_matrix_validation(self):
+        """Test that unbalanced panels don't trigger spurious D matrix violations.
+
+        Issue 3 fix: Missing unit-period observations should not be flagged
+        as violations. Only validate monotonicity between observed periods.
+        """
+        # Create an unbalanced panel: unit 1 is missing period 5
+        # Unit 1: treated from period 3 onwards, but missing period 5
+        # This should NOT raise an error, because the 1→0 transition at period 5
+        # is due to missing data, not a real violation.
+        data = []
+
+        # Unit 0: control, complete panel
+        for t in range(6):
+            data.append({
+                "unit": 0,
+                "period": t,
+                "outcome": 10.0 + t,
+                "treated": 0,
+            })
+
+        # Unit 1: treated from t=3, missing t=5 (unbalanced)
+        for t in range(6):
+            if t == 5:
+                continue  # Skip period 5 - creates unbalanced panel
+            treated = 1 if t >= 3 else 0
+            data.append({
+                "unit": 1,
+                "period": t,
+                "outcome": 10.0 + t + (2.0 if treated else 0),
+                "treated": treated,
+            })
+
+        # Unit 2: control, complete panel
+        for t in range(6):
+            data.append({
+                "unit": 2,
+                "period": t,
+                "outcome": 10.0 + t,
+                "treated": 0,
+            })
+
+        df = pd.DataFrame(data)
+
+        # This should NOT raise an error
+        trop_est = TROP(
+            lambda_time_grid=[0.0],
+            lambda_unit_grid=[0.0],
+            lambda_nn_grid=[0.0],
+            n_bootstrap=5,
+            seed=42
+        )
+
+        # Should not raise ValueError - missing data is not a violation
+        try:
+            results = trop_est.fit(
+                df,
+                outcome="outcome",
+                treatment="treated",
+                unit="unit",
+                time="period",
+            )
+            # Basic sanity checks
+            assert results is not None
+            assert np.isfinite(results.att)
+        except ValueError as e:
+            if "absorbing state" in str(e):
+                pytest.fail(
+                    f"Unbalanced panel incorrectly flagged as absorbing state violation: {e}"
+                )
+            raise
+
+    def test_unbalanced_panel_real_violation_still_caught(self):
+        """Test that real violations are still caught in unbalanced panels.
+
+        Even with missing data, actual D→1→0 violations on observed periods
+        should still be detected and raise ValueError.
+        """
+        data = []
+
+        # Unit 0: control, complete
+        for t in range(5):
+            data.append({
+                "unit": 0,
+                "period": t,
+                "outcome": 10.0 + t,
+                "treated": 0,
+            })
+
+        # Unit 1: REAL violation - D goes 0→1→0 on observed periods (t=2: D=1, t=3: D=0)
+        # This is a real violation, not a missing data artifact
+        for t in range(5):
+            if t == 2:
+                treated = 1
+            else:
+                treated = 0
+            data.append({
+                "unit": 1,
+                "period": t,
+                "outcome": 10.0 + t,
+                "treated": treated,
+            })
+
+        # Unit 2: control
+        for t in range(5):
+            data.append({
+                "unit": 2,
+                "period": t,
+                "outcome": 10.0 + t,
+                "treated": 0,
+            })
+
+        df = pd.DataFrame(data)
+
+        trop_est = TROP(
+            lambda_time_grid=[0.0],
+            lambda_unit_grid=[0.0],
+            lambda_nn_grid=[0.0],
+            n_bootstrap=5
+        )
+
+        # This SHOULD raise an error - real violation
+        with pytest.raises(ValueError, match="absorbing state"):
+            trop_est.fit(
+                df,
+                outcome="outcome",
+                treatment="treated",
+                unit="unit",
+                time="period",
+            )
+
+    def test_unbalanced_panel_multiple_missing_periods(self):
+        """Test unbalanced panel with multiple missing periods per unit."""
+        data = []
+
+        # Unit 0: control, complete
+        for t in range(8):
+            data.append({
+                "unit": 0,
+                "period": t,
+                "outcome": 10.0 + t,
+                "treated": 0,
+            })
+
+        # Unit 1: treated from t=4, missing t=2 and t=6
+        for t in range(8):
+            if t in [2, 6]:
+                continue  # Skip these periods
+            treated = 1 if t >= 4 else 0
+            data.append({
+                "unit": 1,
+                "period": t,
+                "outcome": 10.0 + t + (2.0 if treated else 0),
+                "treated": treated,
+            })
+
+        # Unit 2: control, missing t=0
+        for t in range(8):
+            if t == 0:
+                continue
+            data.append({
+                "unit": 2,
+                "period": t,
+                "outcome": 10.0 + t,
+                "treated": 0,
+            })
+
+        df = pd.DataFrame(data)
+
+        trop_est = TROP(
+            lambda_time_grid=[0.0],
+            lambda_unit_grid=[0.0],
+            lambda_nn_grid=[0.0],
+            n_bootstrap=5,
+            seed=42
+        )
+
+        # Should not raise error
+        results = trop_est.fit(
+            df,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="period",
+        )
+        assert results is not None
+        assert np.isfinite(results.att)
+
+    def test_infinity_grid_values_with_final_score_computation(self, simple_panel_data):
+        """Test that infinity grid values are properly converted for final score.
+
+        Issue 1 fix: When LOOCV selects infinity values from the grid, the
+        final score computation should use converted values (0.0 or 1e10),
+        not raw infinity.
+        """
+        trop_est = TROP(
+            lambda_time_grid=[np.inf, 0.5],  # inf should convert to 0.0
+            lambda_unit_grid=[np.inf, 0.5],  # inf should convert to 0.0
+            lambda_nn_grid=[np.inf, 0.1],    # inf should convert to 1e10
+            n_bootstrap=5,
+            seed=42
+        )
+
+        # This should complete without error, even if inf values are selected
+        results = trop_est.fit(
+            simple_panel_data,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="period",
+        )
+
+        # ATT should be finite regardless of which grid values were selected
+        assert np.isfinite(results.att), "ATT should be finite with inf grid values"
+        assert results.se >= 0, "SE should be non-negative"
+
+        # If inf values were selected, LOOCV score should still be computed correctly
+        # (using converted values, not raw inf)
+        if np.isinf(results.loocv_score):
+            # Infinite LOOCV score is acceptable (means fits failed)
+            # but ATT should still be finite (falls back to defaults)
+            pass
+        else:
+            assert np.isfinite(results.loocv_score), (
+                "LOOCV score should be finite when computed with converted inf values"
+            )

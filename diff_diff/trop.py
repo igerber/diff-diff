@@ -900,21 +900,32 @@ class TROP:
             .reindex(index=all_periods, columns=all_units)
             .values
         )
-        D = (
+
+        # For D matrix, track missing values BEFORE fillna to support unbalanced panels
+        # Issue 3 fix: Missing observations should not trigger spurious violations
+        D_raw = (
             data.pivot(index=time, columns=unit, values=treatment)
             .reindex(index=all_periods, columns=all_units)
-            .fillna(0)
-            .astype(int)
-            .values
         )
+        missing_mask = pd.isna(D_raw).values  # True where originally missing
+        D = D_raw.fillna(0).astype(int).values
 
         # Validate D is monotonic non-decreasing per unit (absorbing state)
         # D[t, i] must satisfy: once D=1, it must stay 1 for all subsequent periods
         # Vectorized check: diff(D, axis=0) should never be negative
+        # Issue 3 fix: Only check transitions where BOTH periods are observed
         d_diff = np.diff(D, axis=0)
-        if np.any(d_diff < 0):
+
+        # Valid transition mask: neither the current nor next period is missing
+        # missing_mask[:-1] = source period missing, missing_mask[1:] = target period missing
+        valid_transition = ~(missing_mask[:-1] | missing_mask[1:])
+
+        # Only flag violations where both periods are observed
+        violations = (d_diff < 0) & valid_transition
+
+        if np.any(violations):
             # Find which units violate the absorbing state constraint
-            violating_units_mask = np.any(d_diff < 0, axis=0)
+            violating_units_mask = np.any(violations, axis=0)
             violating_unit_ids = [all_units[i] for i in np.where(violating_units_mask)[0]]
             raise ValueError(
                 f"Treatment indicator is not an absorbing state for units: {violating_unit_ids}. "
@@ -977,31 +988,43 @@ class TROP:
                 lambda_unit_arr = np.array(self.lambda_unit_grid, dtype=np.float64)
                 lambda_nn_arr = np.array(self.lambda_nn_grid, dtype=np.float64)
 
-                best_lt, best_lu, best_ln, best_score, n_valid, n_attempted = _rust_loocv_grid_search(
+                result = _rust_loocv_grid_search(
                     Y, D.astype(np.float64), control_mask_u8,
                     time_dist_matrix,
                     lambda_time_arr, lambda_unit_arr, lambda_nn_arr,
                     self.max_loocv_samples, self.max_iter, self.tol,
                     self.seed if self.seed is not None else 0
                 )
+                # Unpack result - 7 values including optional first_failed_obs
+                best_lt, best_lu, best_ln, best_score, n_valid, n_attempted, first_failed_obs = result
                 # Only accept finite scores - infinite means all fits failed
                 if np.isfinite(best_score):
                     best_lambda = (best_lt, best_lu, best_ln)
                 # else: best_lambda stays None, triggering defaults fallback
                 # Emit warnings consistent with Python implementation
                 if n_valid == 0:
+                    # Include failed observation coordinates if available (Issue 2 fix)
+                    obs_info = ""
+                    if first_failed_obs is not None:
+                        t_idx, i_idx = first_failed_obs
+                        obs_info = f" First failure at observation ({t_idx}, {i_idx})."
                     warnings.warn(
                         f"LOOCV: All {n_attempted} fits failed for "
                         f"λ=({best_lt}, {best_lu}, {best_ln}). "
-                        "Returning infinite score.",
+                        f"Returning infinite score.{obs_info}",
                         UserWarning
                     )
                 elif n_attempted > 0 and (n_attempted - n_valid) > 0.1 * n_attempted:
                     n_failed = n_attempted - n_valid
+                    # Include failed observation coordinates if available
+                    obs_info = ""
+                    if first_failed_obs is not None:
+                        t_idx, i_idx = first_failed_obs
+                        obs_info = f" First failure at observation ({t_idx}, {i_idx})."
                     warnings.warn(
                         f"LOOCV: {n_failed}/{n_attempted} fits failed for "
                         f"λ=({best_lt}, {best_lu}, {best_ln}). "
-                        "This may indicate numerical instability.",
+                        f"This may indicate numerical instability.{obs_info}",
                         UserWarning
                     )
             except Exception as e:
