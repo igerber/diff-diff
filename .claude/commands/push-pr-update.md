@@ -39,15 +39,21 @@ Parse `$ARGUMENTS` to extract:
      Switch to a feature branch or use /submit-pr to create a new PR.
      ```
 
-3. **Check for changes to commit**:
+3. **Check for changes to commit or push**:
    ```bash
    git status --porcelain
    ```
-   - If output is empty, abort:
-     ```
-     No changes detected. Working directory is clean.
-     Nothing to push.
-     ```
+   - If output is empty (working directory clean):
+     - Check if branch is ahead of upstream:
+       ```bash
+       git rev-list --count @{u}..HEAD 2>/dev/null || echo "0"
+       ```
+     - If ahead count > 0: Skip to Section 4 (Push to Remote) — there are committed changes to push
+     - If ahead count = 0 (or no upstream): Abort:
+       ```
+       No changes detected. Working directory is clean and branch is up to date.
+       Nothing to push.
+       ```
 
 4. **Get PR information**:
    ```bash
@@ -74,10 +80,11 @@ Parse `$ARGUMENTS` to extract:
    Store as `<files-changed-count>` for use in final report.
 
 3. **Secret scanning check** (same as submit-pr):
-   - **Run deterministic pattern check** (case-insensitive):
+   - **Run deterministic pattern check** (file names only, no content leaked):
      ```bash
-     git diff --cached | grep -iE "(AKIA[A-Z0-9]{16}|ghp_[a-zA-Z0-9]{36}|sk-[a-zA-Z0-9]{48}|gho_[a-zA-Z0-9]{36}|api[_-]?key\s*[=:]|secret[_-]?key\s*[=:]|password\s*[=:]|private[_-]?key|bearer\s+[a-zA-Z0-9_-]+|token\s*[=:])" || true
+     git diff --cached -G "(AKIA[A-Z0-9]{16}|ghp_[a-zA-Z0-9]{36}|sk-[a-zA-Z0-9]{48}|gho_[a-zA-Z0-9]{36}|api[_-]?key\s*[=:]|secret[_-]?key\s*[=:]|password\s*[=:]|private[_-]?key|bearer\s+[a-zA-Z0-9_-]+|token\s*[=:])" --name-only
      ```
+     Note: Uses `-G` to search diff content but `--name-only` to output only file names, preventing secret values from appearing in logs.
    - **Check for sensitive file names**:
      ```bash
      git diff --cached --name-only | grep -iE "(\.env|credentials|secret|\.pem|\.key|\.p12|\.pfx|id_rsa|id_ed25519)$" || true
@@ -143,11 +150,12 @@ Parse `$ARGUMENTS` to extract:
 
 If `--no-review` flag was NOT provided:
 
-1. **Extract repository owner/repo from remote URL**:
+1. **Get base repository from PR**:
    ```bash
-   git remote get-url origin
+   gh pr view --json baseRepository --jq '.baseRepository.owner.login + "/" + .baseRepository.name'
    ```
-   Parse to extract `<owner>` and `<repo>` from URL (handles both SSH and HTTPS formats).
+   Store as `<owner>/<repo>` (this is the upstream repo, correct for fork workflows).
+   Parse to extract `<owner>` and `<repo>`.
 
 2. **Add review comment using MCP tool**:
    ```
@@ -192,9 +200,9 @@ Error: Cannot push PR update from <default-branch> branch.
 Switch to a feature branch or use /submit-pr to create a new PR.
 ```
 
-### No Changes to Commit
+### No Changes to Commit or Push
 ```
-No changes detected. Working directory is clean.
+No changes detected. Working directory is clean and branch is up to date.
 Nothing to push.
 ```
 
