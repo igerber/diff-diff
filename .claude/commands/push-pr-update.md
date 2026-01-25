@@ -23,17 +23,23 @@ Parse `$ARGUMENTS` to extract:
 
 ### 2. Validate Current State
 
-1. **Check current branch**:
+1. **Get repository default branch**:
+   ```bash
+   gh repo view --json defaultBranchRef --jq '.defaultBranchRef.name'
+   ```
+   Store as `<default-branch>`.
+
+2. **Check current branch**:
    ```bash
    git branch --show-current
    ```
-   - If on `main` (or the repository's default branch), abort:
+   - If current branch equals `<default-branch>`, abort:
      ```
-     Error: Cannot push PR update from main branch.
+     Error: Cannot push PR update from <default-branch> branch.
      Switch to a feature branch or use /submit-pr to create a new PR.
      ```
 
-2. **Check for changes to commit**:
+3. **Check for changes to commit**:
    ```bash
    git status --porcelain
    ```
@@ -43,7 +49,7 @@ Parse `$ARGUMENTS` to extract:
      Nothing to push.
      ```
 
-3. **Get PR information**:
+4. **Get PR information**:
    ```bash
    gh pr view --json number,url,headRefName,baseRefName
    ```
@@ -61,7 +67,13 @@ Parse `$ARGUMENTS` to extract:
    git add -A
    ```
 
-2. **Secret scanning check** (same as submit-pr):
+2. **Capture file count for reporting**:
+   ```bash
+   git diff --cached --name-only | wc -l
+   ```
+   Store as `<files-changed-count>` for use in final report.
+
+3. **Secret scanning check** (same as submit-pr):
    - **Run deterministic pattern check** (case-insensitive):
      ```bash
      git diff --cached | grep -iE "(AKIA[A-Z0-9]{16}|ghp_[a-zA-Z0-9]{36}|sk-[a-zA-Z0-9]{48}|gho_[a-zA-Z0-9]{36}|api[_-]?key\s*[=:]|secret[_-]?key\s*[=:]|password\s*[=:]|private[_-]?key|bearer\s+[a-zA-Z0-9_-]+|token\s*[=:])" || true
@@ -87,7 +99,7 @@ Parse `$ARGUMENTS` to extract:
      ```
    - If user chooses to continue, re-stage with `git add -A`
 
-3. **Generate or use commit message**:
+4. **Generate or use commit message**:
    - If `--message` provided, use that message
    - Otherwise, generate from changes:
      - Run `git diff --cached --stat` to see what's being committed
@@ -105,19 +117,24 @@ Parse `$ARGUMENTS` to extract:
 
 ### 4. Push to Remote
 
-1. **Push to the tracked remote branch**:
+1. **Check for upstream tracking branch**:
    ```bash
-   git push
+   git rev-parse --abbrev-ref --symbolic-full-name @{u} 2>/dev/null
    ```
-   - If push fails (e.g., remote rejected), report error and suggest:
-     ```
-     Push failed: <error message>
 
-     If the remote has new commits, try:
-       git pull --rebase && /push-pr-update
-     ```
+2. **Push to remote**:
+   - If upstream exists: `git push`
+   - If no upstream: `git push -u origin HEAD`
 
-2. **Get pushed commit info**:
+   If push fails, report error and suggest:
+   ```
+   Push failed: <error message>
+
+   If the remote has new commits, try:
+     git pull --rebase && /push-pr-update
+   ```
+
+3. **Get pushed commit info**:
    ```bash
    git log -1 --oneline
    ```
@@ -148,7 +165,7 @@ If `--no-review` flag was NOT provided:
 Changes pushed to PR #<number>
 
 Commit: <hash> - <message>
-Files changed: <count>
+Files changed: <files-changed-count>
 
 AI code review triggered. Results will appear shortly.
 
@@ -160,7 +177,7 @@ PR URL: <url>
 Changes pushed to PR #<number>
 
 Commit: <hash> - <message>
-Files changed: <count>
+Files changed: <files-changed-count>
 
 PR URL: <url>
 
@@ -171,7 +188,7 @@ Tip: Run /ai-review to request AI code review.
 
 ### Not on a Feature Branch
 ```
-Error: Cannot push PR update from main branch.
+Error: Cannot push PR update from <default-branch> branch.
 Switch to a feature branch or use /submit-pr to create a new PR.
 ```
 
