@@ -1449,28 +1449,15 @@ class TROP:
                 n_valid += 1
 
             except (np.linalg.LinAlgError, ValueError):
-                continue
-
-        if n_valid == 0:
-            # Warn when ALL fits fail (not just >10%)
-            warnings.warn(
-                f"LOOCV: All {len(control_obs)} fits failed for "
-                f"λ=({lambda_time}, {lambda_unit}, {lambda_nn}). "
-                "Returning infinite score.",
-                UserWarning
-            )
-            return np.inf
-
-        # Warn if significant fraction of fits failed
-        n_attempted = len(control_obs)
-        n_failed = n_attempted - n_valid
-        if n_failed > 0.1 * n_attempted:
-            warnings.warn(
-                f"LOOCV: {n_failed}/{n_attempted} fits failed for "
-                f"λ=({lambda_time}, {lambda_unit}, {lambda_nn}). "
-                "This may indicate numerical instability.",
-                UserWarning
-            )
+                # Per Equation 5: Q(λ) must sum over ALL D==0 cells
+                # Any failure means this λ cannot produce valid estimates for all cells
+                warnings.warn(
+                    f"LOOCV: Fit failed for observation ({t}, {i}) with "
+                    f"λ=({lambda_time}, {lambda_unit}, {lambda_nn}). "
+                    "Returning infinite score per Equation 5.",
+                    UserWarning
+                )
+                return np.inf
 
         # Return SUM of squared pseudo-treatment effects per Equation 5 (page 8):
         # Q(λ) = Σ_{j,s: D_js=0} [τ̂_js^loocv(λ)]²

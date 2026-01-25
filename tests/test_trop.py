@@ -1698,10 +1698,10 @@ class TestAPIChangesV2_1_8:
                 assert "LOOCV" in msg, f"Warning should mention LOOCV: {msg}"
 
     def test_loocv_warning_deterministic_with_mock(self, simple_panel_data):
-        """Deterministic test that LOOCV warning is emitted when >10% fits fail.
+        """Test that LOOCV returns infinity and warns on first fit failure.
 
-        Uses mocking to force internal observation-level failures within the
-        LOOCV scoring function, ensuring deterministic behavior.
+        Per Equation 5, Q(λ) must sum over ALL D==0 cells. Any failure means
+        this λ cannot produce valid estimates, so we return infinity immediately.
         """
         import warnings
         from unittest.mock import patch
@@ -1714,16 +1714,16 @@ class TestAPIChangesV2_1_8:
             seed=42
         )
 
-        # Mock _estimate_model to fail 20% of the time
-        # This is the internal method called for each LOOCV observation
+        # Mock _estimate_model to fail on the first LOOCV call
+        # This simulates a parameter combination that can't estimate all control cells
         call_count = [0]
         original_estimate = trop_est._estimate_model
 
-        def mock_estimate_with_failures(*args, **kwargs):
-            """Mock that fails 20% of the time (>10% threshold)."""
+        def mock_estimate_with_failure(*args, **kwargs):
+            """Mock that fails on first call (immediate rejection per Equation 5)."""
             call_count[0] += 1
-            # Fail every 5th call (20% failure rate)
-            if call_count[0] % 5 == 0:
+            # Fail on first call to trigger immediate infinity return
+            if call_count[0] == 1:
                 raise np.linalg.LinAlgError("Simulated failure")
             return original_estimate(*args, **kwargs)
 
@@ -1735,7 +1735,7 @@ class TestAPIChangesV2_1_8:
             trop_module = sys.modules['diff_diff.trop']
             with patch.object(trop_module, 'HAS_RUST_BACKEND', False), \
                  patch.object(trop_module, '_rust_loocv_grid_search', None), \
-                 patch.object(trop_est, '_estimate_model', mock_estimate_with_failures):
+                 patch.object(trop_est, '_estimate_model', mock_estimate_with_failure):
                 try:
                     trop_est.fit(
                         simple_panel_data,
@@ -1748,21 +1748,21 @@ class TestAPIChangesV2_1_8:
                     # If all fits fail, that's acceptable
                     pass
 
-            # Check that LOOCV warning was raised (either >10% failure or all failed)
+            # Check that LOOCV warning was raised on first failure
             loocv_warnings = [
                 x for x in w
                 if issubclass(x.category, UserWarning)
                 and "LOOCV" in str(x.message)
             ]
 
-            # With 20% failure rate, we should get a warning
+            # With any failure, we should get a warning about returning infinity
             assert len(loocv_warnings) > 0, (
-                "Expected LOOCV warning when >10% of fits fail, but none was raised. "
+                "Expected LOOCV warning on first failure, but none was raised. "
                 f"call_count={call_count[0]}, warnings={[str(x.message) for x in w]}"
             )
 
-            # Verify warning content
+            # Verify warning content mentions Equation 5 and returning infinity
             msg = str(loocv_warnings[0].message)
             assert "LOOCV" in msg
-            # Should mention either "fits failed" or "failed"
-            assert "fail" in msg.lower(), f"Warning should mention failures: {msg}"
+            assert "fail" in msg.lower(), f"Warning should mention failure: {msg}"
+            assert "Equation 5" in msg, f"Warning should reference Equation 5: {msg}"

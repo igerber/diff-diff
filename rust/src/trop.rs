@@ -336,7 +336,11 @@ fn loocv_score_for_params(
                 tau_sq_sum += tau * tau;
                 n_valid += 1;
             }
-            None => continue, // Skip if estimation failed
+            None => {
+                // Per Equation 5: Q(λ) must sum over ALL D==0 cells
+                // Any failure means this λ cannot produce valid estimates for all cells
+                return (f64::INFINITY, n_valid);
+            }
         }
     }
 

@@ -452,7 +452,7 @@ Doubly robust estimator:
 - Requires sufficient pre-treatment periods for factor estimation (at least 2)
 - Warns if estimated rank seems too high/low relative to panel dimensions
 - Unit weights can become degenerate if λ_unit too large
-- Warns if >10% of LOOCV fits fail (may indicate numerical instability)
+- Returns Q(λ) = ∞ if ANY LOOCV fit fails (Equation 5 compliance)
 
 *Treatment indicator (D matrix) semantics:*
 
@@ -508,7 +508,7 @@ Q(λ) = Σ_{j,s: D_js=0} [τ̂_js^loocv(λ)]²
 ```
 - Score is **SUM** of squared pseudo-treatment effects on control observations
 - Subsampling: max_loocv_samples (default 100) per paper footnote 2
-- Failed fits: emit warning if >10% fail
+- Failed fits: Q(λ) = ∞ if ANY fit fails (ensures λ selection only considers fully estimable combinations)
 
 *Standard errors:*
 - Default: Block bootstrap preserving panel structure
@@ -518,7 +518,7 @@ Q(λ) = Σ_{j,s: D_js=0} [τ̂_js^loocv(λ)]²
 - Rank selection: automatic via cross-validation, information criterion, or elbow
 - Zero singular values: handled by soft-thresholding
 - Extreme distances: weights regularized to prevent degeneracy
-- LOOCV fit failures: emit warning if >10% of control observations fail
+- LOOCV fit failures: returns Q(λ) = ∞ on first failure (per Equation 5 requirement that Q sums over ALL D==0 cells); if all parameter combinations fail, falls back to defaults (1.0, 1.0, 0.1)
 - Validation: requires at least 2 periods before first treatment
 - Wrong D specification: if user provides event-style D (only first treatment period),
   ATT will be incorrect - document this clearly
