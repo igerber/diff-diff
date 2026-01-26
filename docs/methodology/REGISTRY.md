@@ -636,9 +636,11 @@ For joint method, LOOCV works as follows:
 - Faster computation for large panels
 
 **Assumptions**:
-- **Simultaneous adoption**: Bootstrap and jackknife variance estimation assume fixed
-  `treated_periods` across all resamples. Treatment timing is inferred once from the
-  data and held constant. For staggered adoption designs, use `method="twostep"`.
+- **Simultaneous adoption (enforced)**: The joint method requires all treated units
+  to receive treatment at the same time. A `ValueError` is raised if staggered
+  adoption is detected (units first treated at different periods). Treatment timing is
+  inferred once and held constant for bootstrap/jackknife variance estimation.
+  For staggered adoption designs, use `method="twostep"`.
 
 **Reference**: Adapted from reference implementation. See also Athey et al. (2025).
 

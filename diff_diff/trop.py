@@ -1318,6 +1318,21 @@ class TROP:
         if n_pre_periods < 2:
             raise ValueError("Need at least 2 pre-treatment periods")
 
+        # Check for staggered adoption (joint method requires simultaneous treatment)
+        first_treat_by_unit = []
+        for i in treated_unit_idx:
+            treated_periods_i = np.where(D[:, i] == 1)[0]
+            if len(treated_periods_i) > 0:
+                first_treat_by_unit.append(treated_periods_i[0])
+
+        unique_starts = sorted(set(first_treat_by_unit))
+        if len(unique_starts) > 1:
+            raise ValueError(
+                f"method='joint' requires simultaneous treatment adoption, but your data "
+                f"shows staggered adoption (units first treated at periods {unique_starts}). "
+                f"Use method='twostep' which properly handles staggered adoption designs."
+            )
+
         # LOOCV grid search for tuning parameters
         # Use Rust backend when available for parallel LOOCV (5-10x speedup)
         best_lambda = None

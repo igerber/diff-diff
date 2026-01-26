@@ -3157,3 +3157,31 @@ class TestTROPJointMethod:
 
         assert np.isfinite(results.att), "ATT should be finite even with unit having no pre-period data"
         assert np.isfinite(results.se), "SE should be finite"
+
+    def test_joint_rejects_staggered_adoption(self):
+        """Joint method raises ValueError for staggered adoption data.
+
+        The joint method assumes all treated units receive treatment at the
+        same time. With staggered adoption (units first treated at different
+        periods), the method's weights and variance estimation are invalid.
+        """
+        # Create data with staggered treatment (units treated at different times)
+        data = []
+        np.random.seed(42)
+        for i in range(10):
+            # Units 0-2 first treated at t=5, units 3-4 first treated at t=7
+            first_treat = 5 if i < 3 else 7
+            is_treated_unit = i < 5  # Units 0-4 are treated, 5-9 are control
+            for t in range(10):
+                treated = 1 if is_treated_unit and t >= first_treat else 0
+                data.append({
+                    'unit': i,
+                    'time': t,
+                    'outcome': np.random.randn(),
+                    'treated': treated
+                })
+        df = pd.DataFrame(data)
+
+        trop = TROP(method="joint")
+        with pytest.raises(ValueError, match="staggered adoption"):
+            trop.fit(df, 'outcome', 'treated', 'unit', 'time')

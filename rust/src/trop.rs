@@ -1075,7 +1075,8 @@ fn compute_joint_weights(
     let n_pre = n_periods.saturating_sub(treated_periods);
 
     // Compute average treated trajectory
-    let mut average_treated = Array1::<f64>::zeros(n_periods);
+    // Initialize to NaN so periods with all-NaN treated data stay NaN (excluded from RMSE)
+    let mut average_treated = Array1::<f64>::from_elem(n_periods, f64::NAN);
     if !treated_unit_idx.is_empty() {
         for t in 0..n_periods {
             let mut sum = 0.0;
@@ -1089,6 +1090,7 @@ fn compute_joint_weights(
             if count > 0 {
                 average_treated[t] = sum / count as f64;
             }
+            // If count == 0, average_treated[t] stays NaN (correctly excluded)
         }
     }
 
@@ -1163,7 +1165,8 @@ fn solve_joint_no_lowrank(
 
     for t in 0..n_periods {
         for i in 0..n_units {
-            let w = delta[[t, i]];
+            // NaN outcomes get zero weight (not imputed to 0.0 with active weight)
+            let w = if y[[t, i]].is_finite() { delta[[t, i]] } else { 0.0 };
             let y_ti = if y[[t, i]].is_finite() { y[[t, i]] } else { 0.0 };
 
             sum_w += w;
@@ -1196,7 +1199,8 @@ fn solve_joint_no_lowrank(
             if sum_w_by_unit[i] > 1e-10 {
                 let mut num = 0.0;
                 for t in 0..n_periods {
-                    let w = delta[[t, i]];
+                    // NaN outcomes get zero weight
+                    let w = if y[[t, i]].is_finite() { delta[[t, i]] } else { 0.0 };
                     let y_ti = if y[[t, i]].is_finite() { y[[t, i]] } else { 0.0 };
                     num += w * (y_ti - mu - beta[t] - tau * d[[t, i]]);
                 }
@@ -1209,7 +1213,8 @@ fn solve_joint_no_lowrank(
             if sum_w_by_period[t] > 1e-10 {
                 let mut num = 0.0;
                 for i in 0..n_units {
-                    let w = delta[[t, i]];
+                    // NaN outcomes get zero weight
+                    let w = if y[[t, i]].is_finite() { delta[[t, i]] } else { 0.0 };
                     let y_ti = if y[[t, i]].is_finite() { y[[t, i]] } else { 0.0 };
                     num += w * (y_ti - mu - alpha[i] - tau * d[[t, i]]);
                 }
@@ -1222,7 +1227,8 @@ fn solve_joint_no_lowrank(
         let mut denom_tau = 0.0;
         for t in 0..n_periods {
             for i in 0..n_units {
-                let w = delta[[t, i]];
+                // NaN outcomes get zero weight
+                let w = if y[[t, i]].is_finite() { delta[[t, i]] } else { 0.0 };
                 let y_ti = if y[[t, i]].is_finite() { y[[t, i]] } else { 0.0 };
                 let d_ti = d[[t, i]];
                 if d_ti > 0.5 {  // Only treated observations contribute
@@ -1239,7 +1245,8 @@ fn solve_joint_no_lowrank(
         let mut num_mu = 0.0;
         for t in 0..n_periods {
             for i in 0..n_units {
-                let w = delta[[t, i]];
+                // NaN outcomes get zero weight
+                let w = if y[[t, i]].is_finite() { delta[[t, i]] } else { 0.0 };
                 let y_ti = if y[[t, i]].is_finite() { y[[t, i]] } else { 0.0 };
                 num_mu += w * (y_ti - alpha[i] - beta[t] - tau * d[[t, i]]);
             }
@@ -1279,21 +1286,20 @@ fn solve_joint_with_lowrank(
         let l_old = l.clone();
 
         // Step 1: Fix L, solve for (mu, alpha, beta, tau)
-        // Adjusted outcome: Y - L
+        // Adjusted outcome: Y - L (preserve NaN so solve_joint_no_lowrank masks weights)
         let y_adj = Array2::from_shape_fn((n_periods, n_units), |(t, i)| {
-            let y_ti = if y[[t, i]].is_finite() { y[[t, i]] } else { 0.0 };
-            y_ti - l[[t, i]]
+            y[[t, i]] - l[[t, i]]  // NaN - finite = NaN (preserves NaN info)
         });
 
         let (mu, alpha, beta, tau) = solve_joint_no_lowrank(&y_adj.view(), d, delta)?;
 
         // Step 2: Fix (mu, alpha, beta, tau), update L
-        // Residual: R = Y - mu - alpha - beta - tau*D
+        // Residual: R = Y - mu - alpha - beta - tau*D (preserve NaN)
         let mut r = Array2::<f64>::zeros((n_periods, n_units));
         for t in 0..n_periods {
             for i in 0..n_units {
-                let y_ti = if y[[t, i]].is_finite() { y[[t, i]] } else { 0.0 };
-                r[[t, i]] = y_ti - mu - alpha[i] - beta[t] - tau * d[[t, i]];
+                // NaN - finite = NaN (will be masked in gradient step)
+                r[[t, i]] = y[[t, i]] - mu - alpha[i] - beta[t] - tau * d[[t, i]];
             }
         }
 
@@ -1302,15 +1308,20 @@ fn solve_joint_with_lowrank(
         let eta = if delta_max > 0.0 { 1.0 / delta_max } else { 1.0 };
 
         // gradient_step = L + eta * delta * (R - L)
+        // NaN outcomes get zero weight so they don't affect gradient
         let mut gradient_step = Array2::<f64>::zeros((n_periods, n_units));
         for t in 0..n_periods {
             for i in 0..n_units {
+                // Mask delta for NaN outcomes
+                let delta_ti = if y[[t, i]].is_finite() { delta[[t, i]] } else { 0.0 };
                 let delta_norm = if delta_max > 0.0 {
-                    delta[[t, i]] / delta_max
+                    delta_ti / delta_max
                 } else {
-                    delta[[t, i]]
+                    delta_ti
                 };
-                gradient_step[[t, i]] = l[[t, i]] + delta_norm * (r[[t, i]] - l[[t, i]]);
+                // r[[t,i]] may be NaN, but delta_norm=0 for NaN obs, so contribution=0
+                let r_contrib = if r[[t, i]].is_finite() { r[[t, i]] } else { 0.0 };
+                gradient_step[[t, i]] = l[[t, i]] + delta_norm * (r_contrib - l[[t, i]]);
             }
         }
 
@@ -1324,10 +1335,9 @@ fn solve_joint_with_lowrank(
         }
     }
 
-    // Final solve with converged L
+    // Final solve with converged L (preserve NaN so solve_joint_no_lowrank masks weights)
     let y_adj = Array2::from_shape_fn((n_periods, n_units), |(t, i)| {
-        let y_ti = if y[[t, i]].is_finite() { y[[t, i]] } else { 0.0 };
-        y_ti - l[[t, i]]
+        y[[t, i]] - l[[t, i]]  // NaN - finite = NaN (preserves NaN info)
     });
     let (mu, alpha, beta, tau) = solve_joint_no_lowrank(&y_adj.view(), d, delta)?;
 
