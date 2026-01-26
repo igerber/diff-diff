@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.9] - 2026-01-26
+
+### Added
+- **Unified LOOCV for TROP joint method** with Rust acceleration (PR #113)
+  - Leave-one-out cross-validation for rank and regularization parameter selection
+  - Rust backend provides significant speedup for LOOCV grid search
+
+### Fixed
+- **TROP joint method Rust/Python parity** (PR #113)
+  - Fixed valid_count bug in LOOCV computation
+  - Proper NaN exclusion for units with no valid pre-period data
+  - Zero weight assignment for units missing pre-period data
+  - Jackknife variance estimation fixes
+  - Staggered adoption validation and simultaneous adoption enforcement
+  - Treated-pre NaN handling improvements
+  - LOOCV subsampling fix for Python-only path
+
 ## [2.1.8] - 2026-01-25
 
 ### Added
@@ -567,6 +584,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `to_dict()` and `to_dataframe()` export methods
   - `is_significant` and `significance_stars` properties
 
+[2.1.9]: https://github.com/igerber/diff-diff/compare/v2.1.8...v2.1.9
 [2.1.8]: https://github.com/igerber/diff-diff/compare/v2.1.7...v2.1.8
 [2.1.7]: https://github.com/igerber/diff-diff/compare/v2.1.6...v2.1.7
 [2.1.6]: https://github.com/igerber/diff-diff/compare/v2.1.5...v2.1.6
