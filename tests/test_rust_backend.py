@@ -1423,6 +1423,173 @@ class TestTROPJointRustVsNumpy:
         # ATT should still be positive (true effect is positive)
         assert results.att > 0, f"ATT {results.att:.2f} should be positive"
 
+    def test_trop_joint_no_valid_pre_unit_gets_zero_weight(self):
+        """Test that units with no valid pre-period data get zero weight.
+
+        When a control unit has all NaN values in the pre-treatment period,
+        it should receive zero weight (not maximum weight). This prevents
+        such units from influencing the counterfactual estimation.
+
+        This tests the fix for PR #113 Round 3 feedback (P1-1) where Rust
+        backend was setting dist=0 -> delta_unit=exp(0)=1.0 (max weight)
+        instead of dist=inf -> delta_unit=exp(-inf)=0.0 (zero weight).
+        """
+        import pandas as pd
+        from diff_diff import TROP
+
+        np.random.seed(42)
+        n_units, n_periods = 15, 10
+        n_treated = 3
+        n_post = 3
+        true_effect = 2.0
+
+        data = []
+        for i in range(n_units):
+            is_treated = i < n_treated
+            for t in range(n_periods):
+                post = t >= (n_periods - n_post)
+                y = 10.0 + i * 0.2 + t * 0.3 + np.random.randn() * 0.3
+                treatment_indicator = 1 if (is_treated and post) else 0
+                if treatment_indicator:
+                    y += true_effect
+                data.append({
+                    'unit': i,
+                    'time': t,
+                    'outcome': y,
+                    'treated': treatment_indicator,
+                })
+
+        df = pd.DataFrame(data)
+
+        # Set ALL pre-period outcomes to NaN for one control unit (unit n_treated)
+        # This unit has no valid pre-period data and should get zero weight
+        control_unit_with_no_pre = n_treated  # First control unit
+        pre_mask = (df['unit'] == control_unit_with_no_pre) & (df['time'] < (n_periods - n_post))
+        df.loc[pre_mask, 'outcome'] = np.nan
+
+        # Verify we set NaN correctly
+        unit_pre_data = df[(df['unit'] == control_unit_with_no_pre) & (df['time'] < (n_periods - n_post))]
+        assert unit_pre_data['outcome'].isna().all(), "Control unit should have all NaN in pre-period"
+
+        # Fit with joint method - should handle gracefully
+        trop = TROP(
+            method="joint",
+            lambda_time_grid=[0.5, 1.0],
+            lambda_unit_grid=[0.5, 1.0],
+            lambda_nn_grid=[0.0],
+            n_bootstrap=20,
+            seed=42
+        )
+        results = trop.fit(df, 'outcome', 'treated', 'unit', 'time')
+
+        # Results should be finite - the unit with no valid pre-period data
+        # should get zero weight and not break estimation
+        assert np.isfinite(results.att), f"ATT {results.att} should be finite"
+        assert np.isfinite(results.se), f"SE {results.se} should be finite"
+
+        # ATT should be in reasonable range of true effect
+        # The no-valid-pre unit getting zero weight shouldn't corrupt the estimate
+        assert abs(results.att - true_effect) < 1.5, \
+            f"ATT {results.att:.2f} should be close to true effect {true_effect}"
+
+    def test_trop_joint_nan_exclusion_rust_python_parity(self):
+        """Test Rust and Python backends produce matching results with NaN data.
+
+        This verifies that when data contains NaN values:
+        1. Both backends exclude NaN observations consistently
+        2. ATT estimates are close (within tolerance)
+        3. Neither backend produces corrupt results
+
+        This tests the fix for PR #113 Round 3 feedback (P2-1).
+        """
+        import os
+        import pandas as pd
+        from diff_diff import TROP
+
+        np.random.seed(42)
+        n_units, n_periods = 20, 10
+        n_treated = 5
+        n_post = 3
+        true_effect = 2.0
+
+        data = []
+        for i in range(n_units):
+            is_treated = i < n_treated
+            for t in range(n_periods):
+                post = t >= (n_periods - n_post)
+                y = 10.0 + i * 0.2 + t * 0.3 + np.random.randn() * 0.3
+                treatment_indicator = 1 if (is_treated and post) else 0
+                if treatment_indicator:
+                    y += true_effect
+                data.append({
+                    'unit': i,
+                    'time': t,
+                    'outcome': y,
+                    'treated': treatment_indicator,
+                })
+
+        df = pd.DataFrame(data)
+
+        # Introduce scattered NaN values (5% of control pre-period observations)
+        np.random.seed(123)  # Different seed for NaN placement
+        for idx, row in df.iterrows():
+            if row['treated'] == 0 and row['time'] < (n_periods - n_post):
+                if np.random.rand() < 0.05:
+                    df.loc[idx, 'outcome'] = np.nan
+
+        n_nan = df['outcome'].isna().sum()
+        assert n_nan > 0, "Should have some NaN values"
+
+        # Common TROP parameters
+        trop_params = dict(
+            method="joint",
+            lambda_time_grid=[0.5, 1.0],
+            lambda_unit_grid=[0.5, 1.0],
+            lambda_nn_grid=[0.0],
+            n_bootstrap=20,
+            seed=42
+        )
+
+        # Run with Rust backend (current default when available)
+        trop_rust = TROP(**trop_params)
+        results_rust = trop_rust.fit(df.copy(), 'outcome', 'treated', 'unit', 'time')
+
+        # Run with Python-only backend
+        old_backend = os.environ.get('DIFF_DIFF_BACKEND')
+        try:
+            os.environ['DIFF_DIFF_BACKEND'] = 'python'
+            # Need to reimport to pick up new backend setting
+            import importlib
+            import diff_diff._backend
+            importlib.reload(diff_diff._backend)
+
+            trop_python = TROP(**trop_params)
+            results_python = trop_python.fit(df.copy(), 'outcome', 'treated', 'unit', 'time')
+        finally:
+            # Restore original backend setting
+            if old_backend is None:
+                os.environ.pop('DIFF_DIFF_BACKEND', None)
+            else:
+                os.environ['DIFF_DIFF_BACKEND'] = old_backend
+            import importlib
+            import diff_diff._backend
+            importlib.reload(diff_diff._backend)
+
+        # Both should produce finite results
+        assert np.isfinite(results_rust.att), f"Rust ATT {results_rust.att} should be finite"
+        assert np.isfinite(results_python.att), f"Python ATT {results_python.att} should be finite"
+
+        # ATT estimates should be close (within reasonable tolerance)
+        # Allow some difference due to LOOCV randomness and numerical differences
+        att_diff = abs(results_rust.att - results_python.att)
+        assert att_diff < 0.5, \
+            f"Rust ATT ({results_rust.att:.3f}) and Python ATT ({results_python.att:.3f}) " \
+            f"differ by {att_diff:.3f}, should be < 0.5"
+
+        # Both should recover true effect direction
+        assert results_rust.att > 0, f"Rust ATT {results_rust.att} should be positive"
+        assert results_python.att > 0, f"Python ATT {results_python.att} should be positive"
+
 
 class TestFallbackWhenNoRust:
     """Test that pure Python fallback works when Rust is unavailable."""

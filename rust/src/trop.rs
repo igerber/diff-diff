@@ -1108,7 +1108,11 @@ fn compute_joint_weights(
             let dist = if n_valid > 0 {
                 (sum_sq / n_valid as f64).sqrt()
             } else {
-                0.0
+                // No valid pre-period observations for this unit.
+                // Set dist = infinity so delta_unit = exp(-infinity) = 0.
+                // This ensures units with no valid pre-period data get zero weight,
+                // matching the Python behavior.
+                f64::INFINITY
             };
             delta_unit[i] = (-lambda_unit * dist).exp();
         } else {
