@@ -1590,6 +1590,98 @@ class TestTROPJointRustVsNumpy:
         assert results_rust.att > 0, f"Rust ATT {results_rust.att} should be positive"
         assert results_python.att > 0, f"Python ATT {results_python.att} should be positive"
 
+    def test_trop_joint_treated_pre_nan_rust_python_parity(self):
+        """Test Rust/Python parity when treated units have pre-period NaN.
+
+        When all treated units have NaN at a pre-period, average_treated[t] = NaN.
+        Both backends should exclude this period from unit distance calculation
+        (both numerator and denominator) to avoid inflating valid_count.
+
+        This tests the fix for PR #113 Round 5 feedback (P2).
+        """
+        import os
+        import pandas as pd
+        from diff_diff import TROP
+
+        np.random.seed(42)
+        n_units, n_periods = 20, 10
+        n_treated = 5
+        n_post = 3
+        true_effect = 2.0
+
+        data = []
+        for i in range(n_units):
+            is_treated = i < n_treated
+            for t in range(n_periods):
+                post = t >= (n_periods - n_post)
+                y = 10.0 + i * 0.2 + t * 0.3 + np.random.randn() * 0.3
+                treatment_indicator = 1 if (is_treated and post) else 0
+                if treatment_indicator:
+                    y += true_effect
+                data.append({
+                    'unit': i,
+                    'time': t,
+                    'outcome': y,
+                    'treated': treatment_indicator,
+                })
+
+        df = pd.DataFrame(data)
+
+        # Set ALL treated units' outcomes at period 3 (a pre-period) to NaN
+        # This makes average_treated[3] = NaN
+        target_period = 3
+        treated_units = list(range(n_treated))
+        mask = df['unit'].isin(treated_units) & (df['time'] == target_period)
+        df.loc[mask, 'outcome'] = np.nan
+
+        # Verify we set NaN correctly
+        n_nan = df.loc[mask, 'outcome'].isna().sum()
+        assert n_nan == n_treated, f"Should have {n_treated} NaN, got {n_nan}"
+
+        # Common TROP parameters
+        trop_params = dict(
+            method="joint",
+            lambda_time_grid=[1.0],
+            lambda_unit_grid=[1.0],
+            lambda_nn_grid=[0.0],
+            n_bootstrap=20,
+            seed=42
+        )
+
+        # Run with Rust backend (current default when available)
+        trop_rust = TROP(**trop_params)
+        results_rust = trop_rust.fit(df.copy(), 'outcome', 'treated', 'unit', 'time')
+
+        # Run with Python-only backend
+        old_backend = os.environ.get('DIFF_DIFF_BACKEND')
+        try:
+            os.environ['DIFF_DIFF_BACKEND'] = 'python'
+            import importlib
+            import diff_diff._backend
+            importlib.reload(diff_diff._backend)
+
+            trop_python = TROP(**trop_params)
+            results_python = trop_python.fit(df.copy(), 'outcome', 'treated', 'unit', 'time')
+        finally:
+            # Restore original backend setting
+            if old_backend is None:
+                os.environ.pop('DIFF_DIFF_BACKEND', None)
+            else:
+                os.environ['DIFF_DIFF_BACKEND'] = old_backend
+            import importlib
+            import diff_diff._backend
+            importlib.reload(diff_diff._backend)
+
+        # Both should produce finite results
+        assert np.isfinite(results_rust.att), f"Rust ATT {results_rust.att} should be finite"
+        assert np.isfinite(results_python.att), f"Python ATT {results_python.att} should be finite"
+
+        # ATT estimates should be close (within reasonable tolerance)
+        att_diff = abs(results_rust.att - results_python.att)
+        assert att_diff < 0.5, \
+            f"Rust ATT ({results_rust.att:.3f}) and Python ATT ({results_python.att:.3f}) " \
+            f"differ by {att_diff:.3f}, should be < 0.5"
+
 
 class TestFallbackWhenNoRust:
     """Test that pure Python fallback works when Rust is unavailable."""

@@ -3158,6 +3158,57 @@ class TestTROPJointMethod:
         assert np.isfinite(results.att), "ATT should be finite even with unit having no pre-period data"
         assert np.isfinite(results.se), "SE should be finite"
 
+    def test_joint_treated_pre_nan_handling(self, simple_panel_data):
+        """Verify joint method handles NaN in treated units during pre-periods.
+
+        When all treated units have NaN at a pre-period, average_treated[t] = NaN.
+        This period should be excluded from unit distance calculation (both numerator
+        and denominator) to avoid inflating valid_count.
+
+        This tests the fix for PR #113 Round 5 feedback (P1).
+        """
+        data = simple_panel_data.copy()
+
+        # Find treated units and pre-periods
+        treated_units = data[data['treated'] == 1]['unit'].unique()
+        # Pre-periods are periods where treated=0 for treated units
+        pre_periods = sorted(
+            data[(data['unit'].isin(treated_units)) & (data['treated'] == 0)]['period'].unique()
+        )
+        assert len(pre_periods) >= 2, "Need at least 2 pre-periods for this test"
+
+        # Pick a middle pre-period
+        target_period = pre_periods[len(pre_periods) // 2]
+
+        # Set ALL treated units' outcomes at target_period to NaN
+        # This makes average_treated[target_period] = NaN
+        mask = (data['unit'].isin(treated_units)) & (data['period'] == target_period)
+        data.loc[mask, 'outcome'] = np.nan
+
+        # Verify we set NaN correctly
+        n_nan = data.loc[mask, 'outcome'].isna().sum()
+        assert n_nan == len(treated_units), f"Should have {len(treated_units)} NaN, got {n_nan}"
+
+        trop_est = TROP(
+            method="joint",
+            lambda_time_grid=[1.0],
+            lambda_unit_grid=[1.0],
+            lambda_nn_grid=[0.0],
+            n_bootstrap=10,
+            seed=42,
+        )
+        results = trop_est.fit(
+            data,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="period",
+        )
+
+        # Results should be finite - NaN period properly excluded from distance calc
+        assert np.isfinite(results.att), f"ATT should be finite, got {results.att}"
+        assert np.isfinite(results.se), f"SE should be finite, got {results.se}"
+
     def test_joint_rejects_staggered_adoption(self):
         """Joint method raises ValueError for staggered adoption data.
 

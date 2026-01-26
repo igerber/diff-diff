@@ -924,8 +924,10 @@ class TROP:
         diff_sq = np.where(np.isfinite(diff), diff ** 2, 0.0) * pre_mask[:, np.newaxis]
 
         # Count valid observations per unit in pre-period
+        # Must check diff is finite (both Y and average_treated finite)
+        # to match the periods contributing to diff_sq
         valid_count = np.sum(
-            np.isfinite(Y) * pre_mask[:, np.newaxis], axis=0
+            np.isfinite(diff) * pre_mask[:, np.newaxis], axis=0
         )
         sum_sq = np.sum(diff_sq, axis=0)
         n_pre = np.sum(pre_mask)

@@ -1417,11 +1417,10 @@ fn loocv_score_joint(
     }
 }
 
-/// Perform LOOCV grid search for joint method using two-stage approach.
+/// Perform LOOCV grid search for joint method using parallel grid search.
 ///
-/// Following paper's footnote 2:
-/// - Stage 1: Univariate searches for initial values with extreme fixed parameters
-/// - Stage 2: Cycling (coordinate descent) until convergence
+/// Evaluates all combinations of (lambda_time, lambda_unit, lambda_nn) in parallel
+/// and returns the combination with lowest LOOCV score.
 ///
 /// # Arguments
 /// * `y` - Outcome matrix (n_periods x n_units)
