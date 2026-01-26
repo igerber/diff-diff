@@ -1134,6 +1134,237 @@ class TestTROPRustVsNumpy:
         assert results.lambda_nn in [0.0, 0.1]
 
 
+@pytest.mark.skipif(not HAS_RUST_BACKEND, reason="Rust backend not available")
+class TestTROPJointRustBackend:
+    """Test suite for TROP joint method Rust backend functions."""
+
+    def test_loocv_grid_search_joint_returns_valid_result(self):
+        """Test loocv_grid_search_joint returns valid tuning parameters."""
+        from diff_diff._rust_backend import loocv_grid_search_joint
+
+        np.random.seed(42)
+        n_periods, n_units = 10, 20
+        n_treated = 5
+        n_post = 3
+
+        # Generate simple data
+        Y = np.random.randn(n_periods, n_units)
+        D = np.zeros((n_periods, n_units))
+        D[-n_post:, :n_treated] = 1.0
+
+        control_mask = (D == 0).astype(np.uint8)
+        lambda_time_grid = np.array([0.0, 1.0])
+        lambda_unit_grid = np.array([0.0, 1.0])
+        lambda_nn_grid = np.array([0.0, 0.1])
+
+        result = loocv_grid_search_joint(
+            Y, D, control_mask,
+            lambda_time_grid, lambda_unit_grid, lambda_nn_grid,
+            50, 100, 1e-6, 42
+        )
+
+        best_lt, best_lu, best_ln, best_score, n_valid, n_attempted, _ = result
+
+        # Check types and bounds
+        assert isinstance(best_lt, float)
+        assert isinstance(best_lu, float)
+        assert isinstance(best_ln, float)
+        assert best_lt in [0.0, 1.0]
+        assert best_lu in [0.0, 1.0]
+        assert best_ln in [0.0, 0.1]
+        assert n_valid > 0
+        assert n_attempted > 0
+        assert best_score >= 0 or np.isinf(best_score)
+
+    def test_loocv_grid_search_joint_reproducible(self):
+        """Test loocv_grid_search_joint is reproducible with same seed."""
+        from diff_diff._rust_backend import loocv_grid_search_joint
+
+        np.random.seed(42)
+        n_periods, n_units = 8, 15
+        n_treated = 4
+        n_post = 2
+
+        Y = np.random.randn(n_periods, n_units)
+        D = np.zeros((n_periods, n_units))
+        D[-n_post:, :n_treated] = 1.0
+
+        control_mask = (D == 0).astype(np.uint8)
+        lambda_time_grid = np.array([0.0, 0.5])
+        lambda_unit_grid = np.array([0.0, 0.5])
+        lambda_nn_grid = np.array([0.0, 0.1])
+
+        result1 = loocv_grid_search_joint(
+            Y, D, control_mask,
+            lambda_time_grid, lambda_unit_grid, lambda_nn_grid,
+            30, 50, 1e-6, 42
+        )
+        result2 = loocv_grid_search_joint(
+            Y, D, control_mask,
+            lambda_time_grid, lambda_unit_grid, lambda_nn_grid,
+            30, 50, 1e-6, 42
+        )
+
+        # Same seed should produce same results
+        assert result1[:4] == result2[:4]
+
+    def test_bootstrap_trop_variance_joint_shape(self):
+        """Test bootstrap_trop_variance_joint returns valid output."""
+        from diff_diff._rust_backend import bootstrap_trop_variance_joint
+
+        np.random.seed(42)
+        n_periods, n_units = 8, 15
+        n_treated = 4
+        n_post = 2
+
+        Y = np.random.randn(n_periods, n_units)
+        D = np.zeros((n_periods, n_units))
+        D[-n_post:, :n_treated] = 1.0
+
+        estimates, se = bootstrap_trop_variance_joint(
+            Y, D, 0.5, 0.5, 0.1, 50, 50, 1e-6, 42
+        )
+
+        assert isinstance(estimates, np.ndarray)
+        assert len(estimates) > 0
+        assert isinstance(se, float)
+        assert se >= 0
+
+    def test_bootstrap_trop_variance_joint_reproducible(self):
+        """Test bootstrap_trop_variance_joint is reproducible."""
+        from diff_diff._rust_backend import bootstrap_trop_variance_joint
+
+        np.random.seed(42)
+        n_periods, n_units = 8, 15
+        n_treated = 4
+        n_post = 2
+
+        Y = np.random.randn(n_periods, n_units)
+        D = np.zeros((n_periods, n_units))
+        D[-n_post:, :n_treated] = 1.0
+
+        est1, se1 = bootstrap_trop_variance_joint(
+            Y, D, 0.5, 0.5, 0.1, 50, 50, 1e-6, 42
+        )
+        est2, se2 = bootstrap_trop_variance_joint(
+            Y, D, 0.5, 0.5, 0.1, 50, 50, 1e-6, 42
+        )
+
+        np.testing.assert_array_almost_equal(est1, est2)
+        np.testing.assert_almost_equal(se1, se2)
+
+
+@pytest.mark.skipif(not HAS_RUST_BACKEND, reason="Rust backend not available")
+class TestTROPJointRustVsNumpy:
+    """Tests comparing TROP joint Rust and NumPy implementations."""
+
+    def test_trop_joint_produces_valid_results(self):
+        """Test TROP joint with Rust backend produces valid results."""
+        import pandas as pd
+        from diff_diff import TROP
+
+        np.random.seed(42)
+        n_units, n_periods = 20, 10
+        n_treated = 5
+        n_post = 3
+        true_effect = 2.0
+
+        data = []
+        for i in range(n_units):
+            is_treated = i < n_treated
+            for t in range(n_periods):
+                post = t >= (n_periods - n_post)
+                y = 10.0 + i * 0.2 + t * 0.3 + np.random.randn() * 0.5
+                treatment_indicator = 1 if (is_treated and post) else 0
+                if treatment_indicator:
+                    y += true_effect
+                data.append({
+                    'unit': i,
+                    'time': t,
+                    'outcome': y,
+                    'treated': treatment_indicator,
+                })
+
+        df = pd.DataFrame(data)
+
+        trop = TROP(
+            method="joint",
+            lambda_time_grid=[0.0, 1.0],
+            lambda_unit_grid=[0.0, 1.0],
+            lambda_nn_grid=[0.0, 0.1],
+            n_bootstrap=30,
+            seed=42
+        )
+        results = trop.fit(df, 'outcome', 'treated', 'unit', 'time')
+
+        # Check results are valid
+        assert np.isfinite(results.att), "ATT should be finite"
+        assert np.isfinite(results.se), "SE should be finite"
+        assert results.se >= 0, "SE should be non-negative"
+
+        # ATT should be positive (same direction as true effect)
+        assert results.att > 0, f"ATT {results.att:.2f} should be positive"
+
+        # Tuning parameters should be from the grid
+        assert results.lambda_time in [0.0, 1.0]
+        assert results.lambda_unit in [0.0, 1.0]
+        assert results.lambda_nn in [0.0, 0.1]
+
+    def test_trop_joint_and_twostep_agree_in_direction(self):
+        """Test joint and twostep methods agree on treatment effect direction."""
+        import pandas as pd
+        from diff_diff import TROP
+
+        np.random.seed(42)
+        n_units, n_periods = 20, 10
+        n_treated = 5
+        n_post = 3
+        true_effect = 2.0
+
+        data = []
+        for i in range(n_units):
+            is_treated = i < n_treated
+            for t in range(n_periods):
+                post = t >= (n_periods - n_post)
+                y = 10.0 + i * 0.2 + t * 0.3 + np.random.randn() * 0.5
+                treatment_indicator = 1 if (is_treated and post) else 0
+                if treatment_indicator:
+                    y += true_effect
+                data.append({
+                    'unit': i,
+                    'time': t,
+                    'outcome': y,
+                    'treated': treatment_indicator,
+                })
+
+        df = pd.DataFrame(data)
+
+        # Fit with joint method
+        trop_joint = TROP(
+            method="joint",
+            lambda_time_grid=[0.0, 1.0],
+            lambda_unit_grid=[0.0, 1.0],
+            lambda_nn_grid=[0.0, 0.1],
+            n_bootstrap=20,
+            seed=42
+        )
+        results_joint = trop_joint.fit(df, 'outcome', 'treated', 'unit', 'time')
+
+        # Fit with twostep method
+        trop_twostep = TROP(
+            method="twostep",
+            lambda_time_grid=[0.0, 1.0],
+            lambda_unit_grid=[0.0, 1.0],
+            lambda_nn_grid=[0.0, 0.1],
+            n_bootstrap=20,
+            seed=42
+        )
+        results_twostep = trop_twostep.fit(df, 'outcome', 'treated', 'unit', 'time')
+
+        # Both should have same sign (both positive for true_effect=2.0)
+        assert np.sign(results_joint.att) == np.sign(results_twostep.att)
+
+
 class TestFallbackWhenNoRust:
     """Test that pure Python fallback works when Rust is unavailable."""
 

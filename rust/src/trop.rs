@@ -1024,6 +1024,658 @@ pub fn bootstrap_trop_variance<'py>(
     Ok((estimates_arr.into_pyarray(py), se))
 }
 
+// ============================================================================
+// Joint method implementation
+// ============================================================================
+
+/// Compute global weights for joint method estimation.
+///
+/// Unlike twostep (which computes per-observation weights), joint uses global
+/// weights based on:
+/// - Time weights: distance to center of treated block
+/// - Unit weights: RMSE to average treated trajectory over pre-periods
+///
+/// # Arguments
+/// * `y` - Outcome matrix (n_periods x n_units)
+/// * `d` - Treatment indicator matrix (n_periods x n_units)
+/// * `lambda_time` - Time weight decay parameter
+/// * `lambda_unit` - Unit weight decay parameter
+/// * `treated_periods` - Number of post-treatment periods
+///
+/// # Returns
+/// Weight matrix (n_periods x n_units)
+fn compute_joint_weights(
+    y: &ArrayView2<f64>,
+    d: &ArrayView2<f64>,
+    lambda_time: f64,
+    lambda_unit: f64,
+    treated_periods: usize,
+) -> Array2<f64> {
+    let n_periods = y.nrows();
+    let n_units = y.ncols();
+
+    // Identify treated units (ever treated)
+    let mut treated_unit_idx: Vec<usize> = Vec::new();
+    for i in 0..n_units {
+        if (0..n_periods).any(|t| d[[t, i]] == 1.0) {
+            treated_unit_idx.push(i);
+        }
+    }
+
+    // Time weights: distance to center of treated block
+    // center = T - treated_periods / 2
+    let center = n_periods as f64 - treated_periods as f64 / 2.0;
+    let mut delta_time = Array1::<f64>::zeros(n_periods);
+    for t in 0..n_periods {
+        let dist = (t as f64 - center).abs();
+        delta_time[t] = (-lambda_time * dist).exp();
+    }
+
+    // Unit weights: RMSE to average treated trajectory over pre-periods
+    let n_pre = n_periods.saturating_sub(treated_periods);
+
+    // Compute average treated trajectory
+    let mut average_treated = Array1::<f64>::zeros(n_periods);
+    if !treated_unit_idx.is_empty() {
+        for t in 0..n_periods {
+            let mut sum = 0.0;
+            let mut count = 0;
+            for &i in &treated_unit_idx {
+                if y[[t, i]].is_finite() {
+                    sum += y[[t, i]];
+                    count += 1;
+                }
+            }
+            if count > 0 {
+                average_treated[t] = sum / count as f64;
+            }
+        }
+    }
+
+    // Compute RMS distance for each unit over pre-periods
+    let mut delta_unit = Array1::<f64>::zeros(n_units);
+    for i in 0..n_units {
+        if n_pre > 0 {
+            let mut sum_sq = 0.0;
+            let mut n_valid = 0;
+            for t in 0..n_pre {
+                if y[[t, i]].is_finite() && average_treated[t].is_finite() {
+                    let diff = average_treated[t] - y[[t, i]];
+                    sum_sq += diff * diff;
+                    n_valid += 1;
+                }
+            }
+            let dist = if n_valid > 0 {
+                (sum_sq / n_valid as f64).sqrt()
+            } else {
+                0.0
+            };
+            delta_unit[i] = (-lambda_unit * dist).exp();
+        } else {
+            delta_unit[i] = 1.0;
+        }
+    }
+
+    // Outer product: (n_periods x n_units)
+    let mut delta = Array2::<f64>::zeros((n_periods, n_units));
+    for t in 0..n_periods {
+        for i in 0..n_units {
+            delta[[t, i]] = delta_time[t] * delta_unit[i];
+        }
+    }
+
+    delta
+}
+
+/// Solve joint TWFE + treatment via weighted least squares (no low-rank).
+///
+/// Minimizes: min Σ δ_{it}(Y_{it} - μ - α_i - β_t - τ*W_{it})²
+///
+/// # Returns
+/// (mu, alpha, beta, tau) estimated parameters
+fn solve_joint_no_lowrank(
+    y: &ArrayView2<f64>,
+    d: &ArrayView2<f64>,
+    delta: &ArrayView2<f64>,
+) -> Option<(f64, Array1<f64>, Array1<f64>, f64)> {
+    let n_periods = y.nrows();
+    let n_units = y.ncols();
+
+    // We solve using normal equations with the design matrix structure
+    // Rather than build full X matrix, use block structure for efficiency
+    //
+    // The model: Y_it = μ + α_i + β_t + τ*D_it + ε_it
+    // With identification: α_0 = β_0 = 0
+
+    // Compute weighted sums needed for normal equations
+    let mut sum_w = 0.0;
+    let mut sum_wy = 0.0;
+
+    // Per-unit and per-period weighted sums
+    let mut sum_w_by_unit = Array1::<f64>::zeros(n_units);
+    let mut sum_wy_by_unit = Array1::<f64>::zeros(n_units);
+    let mut sum_w_by_period = Array1::<f64>::zeros(n_periods);
+    let mut sum_wy_by_period = Array1::<f64>::zeros(n_periods);
+
+    for t in 0..n_periods {
+        for i in 0..n_units {
+            let w = delta[[t, i]];
+            let y_ti = if y[[t, i]].is_finite() { y[[t, i]] } else { 0.0 };
+
+            sum_w += w;
+            sum_wy += w * y_ti;
+
+            sum_w_by_unit[i] += w;
+            sum_wy_by_unit[i] += w * y_ti;
+            sum_w_by_period[t] += w;
+            sum_wy_by_period[t] += w * y_ti;
+        }
+    }
+
+    if sum_w < 1e-10 {
+        return None;
+    }
+
+    // Use iterative approach: alternate between (alpha, beta, tau) and mu
+    // until convergence (simpler than full normal equations)
+    let mut mu = sum_wy / sum_w;
+    let mut alpha = Array1::<f64>::zeros(n_units);
+    let mut beta = Array1::<f64>::zeros(n_periods);
+    let mut tau = 0.0;
+
+    for _ in 0..50 {
+        let mu_old = mu;
+        let tau_old = tau;
+
+        // Update alpha (fixing beta, tau, mu)
+        for i in 1..n_units {  // α_0 = 0 for identification
+            if sum_w_by_unit[i] > 1e-10 {
+                let mut num = 0.0;
+                for t in 0..n_periods {
+                    let w = delta[[t, i]];
+                    let y_ti = if y[[t, i]].is_finite() { y[[t, i]] } else { 0.0 };
+                    num += w * (y_ti - mu - beta[t] - tau * d[[t, i]]);
+                }
+                alpha[i] = num / sum_w_by_unit[i];
+            }
+        }
+
+        // Update beta (fixing alpha, tau, mu)
+        for t in 1..n_periods {  // β_0 = 0 for identification
+            if sum_w_by_period[t] > 1e-10 {
+                let mut num = 0.0;
+                for i in 0..n_units {
+                    let w = delta[[t, i]];
+                    let y_ti = if y[[t, i]].is_finite() { y[[t, i]] } else { 0.0 };
+                    num += w * (y_ti - mu - alpha[i] - tau * d[[t, i]]);
+                }
+                beta[t] = num / sum_w_by_period[t];
+            }
+        }
+
+        // Update tau (fixing alpha, beta, mu)
+        let mut num_tau = 0.0;
+        let mut denom_tau = 0.0;
+        for t in 0..n_periods {
+            for i in 0..n_units {
+                let w = delta[[t, i]];
+                let y_ti = if y[[t, i]].is_finite() { y[[t, i]] } else { 0.0 };
+                let d_ti = d[[t, i]];
+                if d_ti > 0.5 {  // Only treated observations contribute
+                    num_tau += w * d_ti * (y_ti - mu - alpha[i] - beta[t]);
+                    denom_tau += w * d_ti * d_ti;
+                }
+            }
+        }
+        if denom_tau > 1e-10 {
+            tau = num_tau / denom_tau;
+        }
+
+        // Update mu (fixing alpha, beta, tau)
+        let mut num_mu = 0.0;
+        for t in 0..n_periods {
+            for i in 0..n_units {
+                let w = delta[[t, i]];
+                let y_ti = if y[[t, i]].is_finite() { y[[t, i]] } else { 0.0 };
+                num_mu += w * (y_ti - alpha[i] - beta[t] - tau * d[[t, i]]);
+            }
+        }
+        mu = num_mu / sum_w;
+
+        // Check convergence
+        if (mu - mu_old).abs() < 1e-8 && (tau - tau_old).abs() < 1e-8 {
+            break;
+        }
+    }
+
+    Some((mu, alpha, beta, tau))
+}
+
+/// Solve joint TWFE + treatment + low-rank via alternating minimization.
+///
+/// Minimizes: min Σ δ_{it}(Y_{it} - μ - α_i - β_t - L_{it} - τ*W_{it})² + λ_nn||L||_*
+///
+/// # Returns
+/// (mu, alpha, beta, L, tau) estimated parameters
+fn solve_joint_with_lowrank(
+    y: &ArrayView2<f64>,
+    d: &ArrayView2<f64>,
+    delta: &ArrayView2<f64>,
+    lambda_nn: f64,
+    max_iter: usize,
+    tol: f64,
+) -> Option<(f64, Array1<f64>, Array1<f64>, Array2<f64>, f64)> {
+    let n_periods = y.nrows();
+    let n_units = y.ncols();
+
+    // Initialize L = 0
+    let mut l = Array2::<f64>::zeros((n_periods, n_units));
+
+    for _ in 0..max_iter {
+        let l_old = l.clone();
+
+        // Step 1: Fix L, solve for (mu, alpha, beta, tau)
+        // Adjusted outcome: Y - L
+        let y_adj = Array2::from_shape_fn((n_periods, n_units), |(t, i)| {
+            let y_ti = if y[[t, i]].is_finite() { y[[t, i]] } else { 0.0 };
+            y_ti - l[[t, i]]
+        });
+
+        let (mu, alpha, beta, tau) = solve_joint_no_lowrank(&y_adj.view(), d, delta)?;
+
+        // Step 2: Fix (mu, alpha, beta, tau), update L
+        // Residual: R = Y - mu - alpha - beta - tau*D
+        let mut r = Array2::<f64>::zeros((n_periods, n_units));
+        for t in 0..n_periods {
+            for i in 0..n_units {
+                let y_ti = if y[[t, i]].is_finite() { y[[t, i]] } else { 0.0 };
+                r[[t, i]] = y_ti - mu - alpha[i] - beta[t] - tau * d[[t, i]];
+            }
+        }
+
+        // Weighted proximal step for L (soft-threshold SVD)
+        let delta_max = delta.iter().cloned().fold(0.0_f64, f64::max);
+        let eta = if delta_max > 0.0 { 1.0 / delta_max } else { 1.0 };
+
+        // gradient_step = L + eta * delta * (R - L)
+        let mut gradient_step = Array2::<f64>::zeros((n_periods, n_units));
+        for t in 0..n_periods {
+            for i in 0..n_units {
+                let delta_norm = if delta_max > 0.0 {
+                    delta[[t, i]] / delta_max
+                } else {
+                    delta[[t, i]]
+                };
+                gradient_step[[t, i]] = l[[t, i]] + delta_norm * (r[[t, i]] - l[[t, i]]);
+            }
+        }
+
+        // Soft-threshold singular values
+        l = soft_threshold_svd(&gradient_step, eta * lambda_nn)?;
+
+        // Check convergence
+        let l_diff = max_abs_diff_2d(&l, &l_old);
+        if l_diff < tol {
+            break;
+        }
+    }
+
+    // Final solve with converged L
+    let y_adj = Array2::from_shape_fn((n_periods, n_units), |(t, i)| {
+        let y_ti = if y[[t, i]].is_finite() { y[[t, i]] } else { 0.0 };
+        y_ti - l[[t, i]]
+    });
+    let (mu, alpha, beta, tau) = solve_joint_no_lowrank(&y_adj.view(), d, delta)?;
+
+    Some((mu, alpha, beta, l, tau))
+}
+
+/// Compute LOOCV score for joint method with specific parameter combination.
+///
+/// Following paper's Equation 5:
+/// Q(λ) = Σ_{j,s: D_js=0} [τ̂_js^loocv(λ)]²
+///
+/// For joint method, we exclude each control observation, fit the joint model
+/// on remaining data, and compute the pseudo-treatment effect at the excluded obs.
+///
+/// # Returns
+/// (score, n_valid, first_failed_obs)
+#[allow(clippy::too_many_arguments)]
+fn loocv_score_joint(
+    y: &ArrayView2<f64>,
+    d: &ArrayView2<f64>,
+    control_obs: &[(usize, usize)],
+    lambda_time: f64,
+    lambda_unit: f64,
+    lambda_nn: f64,
+    treated_periods: usize,
+    max_iter: usize,
+    tol: f64,
+) -> (f64, usize, Option<(usize, usize)>) {
+    let n_periods = y.nrows();
+    let n_units = y.ncols();
+
+    let mut tau_sq_sum = 0.0;
+    let mut n_valid = 0usize;
+
+    // Compute global weights (same for all LOOCV iterations)
+    let delta = compute_joint_weights(y, d, lambda_time, lambda_unit, treated_periods);
+
+    for &(t_ex, i_ex) in control_obs {
+        // Create modified delta with excluded observation zeroed out
+        let mut delta_ex = delta.clone();
+        delta_ex[[t_ex, i_ex]] = 0.0;
+
+        // Fit joint model excluding this observation
+        let result = if lambda_nn >= 1e10 {
+            solve_joint_no_lowrank(y, d, &delta_ex.view())
+                .map(|(mu, alpha, beta, tau)| {
+                    let l = Array2::<f64>::zeros((n_periods, n_units));
+                    (mu, alpha, beta, l, tau)
+                })
+        } else {
+            solve_joint_with_lowrank(y, d, &delta_ex.view(), lambda_nn, max_iter, tol)
+        };
+
+        match result {
+            Some((mu, alpha, beta, l, _tau)) => {
+                // Pseudo treatment effect: τ = Y - μ - α - β - L
+                let y_ti = if y[[t_ex, i_ex]].is_finite() {
+                    y[[t_ex, i_ex]]
+                } else {
+                    continue;
+                };
+                let tau_loocv = y_ti - mu - alpha[i_ex] - beta[t_ex] - l[[t_ex, i_ex]];
+                tau_sq_sum += tau_loocv * tau_loocv;
+                n_valid += 1;
+            }
+            None => {
+                // Any failure means this λ combination is invalid per Equation 5
+                return (f64::INFINITY, n_valid, Some((t_ex, i_ex)));
+            }
+        }
+    }
+
+    if n_valid == 0 {
+        (f64::INFINITY, 0, None)
+    } else {
+        (tau_sq_sum, n_valid, None)
+    }
+}
+
+/// Perform LOOCV grid search for joint method using two-stage approach.
+///
+/// Following paper's footnote 2:
+/// - Stage 1: Univariate searches for initial values with extreme fixed parameters
+/// - Stage 2: Cycling (coordinate descent) until convergence
+///
+/// # Arguments
+/// * `y` - Outcome matrix (n_periods x n_units)
+/// * `d` - Treatment indicator matrix (n_periods x n_units)
+/// * `control_mask` - Boolean mask (n_periods x n_units) for control observations
+/// * `lambda_time_grid` - Grid of time decay parameters
+/// * `lambda_unit_grid` - Grid of unit distance parameters
+/// * `lambda_nn_grid` - Grid of nuclear norm parameters
+/// * `max_loocv_samples` - Maximum control observations to evaluate
+/// * `max_iter` - Maximum iterations for model estimation
+/// * `tol` - Convergence tolerance
+/// * `seed` - Random seed for subsampling
+///
+/// # Returns
+/// (best_lambda_time, best_lambda_unit, best_lambda_nn, best_score, n_valid, n_attempted, first_failed_obs)
+#[pyfunction]
+#[pyo3(signature = (y, d, control_mask, lambda_time_grid, lambda_unit_grid, lambda_nn_grid, max_loocv_samples, max_iter, tol, seed))]
+#[allow(clippy::too_many_arguments)]
+pub fn loocv_grid_search_joint<'py>(
+    _py: Python<'py>,
+    y: PyReadonlyArray2<'py, f64>,
+    d: PyReadonlyArray2<'py, f64>,
+    control_mask: PyReadonlyArray2<'py, u8>,
+    lambda_time_grid: PyReadonlyArray1<'py, f64>,
+    lambda_unit_grid: PyReadonlyArray1<'py, f64>,
+    lambda_nn_grid: PyReadonlyArray1<'py, f64>,
+    max_loocv_samples: usize,
+    max_iter: usize,
+    tol: f64,
+    seed: u64,
+) -> PyResult<(f64, f64, f64, f64, usize, usize, Option<(usize, usize)>)> {
+    let y_arr = y.as_array();
+    let d_arr = d.as_array();
+    let control_mask_arr = control_mask.as_array();
+    let lambda_time_vec: Vec<f64> = lambda_time_grid.as_array().to_vec();
+    let lambda_unit_vec: Vec<f64> = lambda_unit_grid.as_array().to_vec();
+    let lambda_nn_vec: Vec<f64> = lambda_nn_grid.as_array().to_vec();
+
+    let n_periods = y_arr.nrows();
+    let n_units = y_arr.ncols();
+
+    // Determine treated periods from D matrix
+    let mut first_treat_period = n_periods;
+    for t in 0..n_periods {
+        for i in 0..n_units {
+            if d_arr[[t, i]] == 1.0 {
+                first_treat_period = first_treat_period.min(t);
+                break;
+            }
+        }
+    }
+    let treated_periods = n_periods.saturating_sub(first_treat_period);
+
+    // Get control observations for LOOCV
+    let control_obs = get_control_observations(&y_arr, &control_mask_arr, max_loocv_samples, seed);
+    let n_attempted = control_obs.len();
+
+    // Build grid combinations
+    let mut grid_combinations: Vec<(f64, f64, f64)> = Vec::new();
+    for &lt in &lambda_time_vec {
+        for &lu in &lambda_unit_vec {
+            for &ln in &lambda_nn_vec {
+                grid_combinations.push((lt, lu, ln));
+            }
+        }
+    }
+
+    // Parallel grid search - try all combinations
+    let results: Vec<(f64, f64, f64, f64, usize, Option<(usize, usize)>)> = grid_combinations
+        .into_par_iter()
+        .map(|(lt, lu, ln)| {
+            // Convert infinity values
+            let lt_eff = if lt.is_infinite() { 0.0 } else { lt };
+            let lu_eff = if lu.is_infinite() { 0.0 } else { lu };
+            let ln_eff = if ln.is_infinite() { 1e10 } else { ln };
+
+            let (score, n_valid, first_failed) = loocv_score_joint(
+                &y_arr,
+                &d_arr,
+                &control_obs,
+                lt_eff,
+                lu_eff,
+                ln_eff,
+                treated_periods,
+                max_iter,
+                tol,
+            );
+
+            (lt, lu, ln, score, n_valid, first_failed)
+        })
+        .collect();
+
+    // Find best result
+    let mut best_result = (
+        lambda_time_vec.first().copied().unwrap_or(0.0),
+        lambda_unit_vec.first().copied().unwrap_or(0.0),
+        lambda_nn_vec.first().copied().unwrap_or(0.0),
+        f64::INFINITY,
+        0usize,
+        None,
+    );
+
+    for (lt, lu, ln, score, n_valid, first_failed) in results {
+        if score < best_result.3 {
+            best_result = (lt, lu, ln, score, n_valid, first_failed);
+        }
+    }
+
+    let (best_lt, best_lu, best_ln, best_score, n_valid, first_failed) = best_result;
+
+    Ok((best_lt, best_lu, best_ln, best_score, n_valid, n_attempted, first_failed))
+}
+
+/// Compute bootstrap variance estimation for TROP joint method in parallel.
+///
+/// Performs unit-level block bootstrap, parallelizing across bootstrap iterations.
+/// Uses stratified sampling to preserve treated/control unit ratio.
+///
+/// # Arguments
+/// * `y` - Outcome matrix (n_periods x n_units)
+/// * `d` - Treatment indicator matrix (n_periods x n_units)
+/// * `lambda_time` - Selected time decay parameter
+/// * `lambda_unit` - Selected unit distance parameter
+/// * `lambda_nn` - Selected nuclear norm parameter
+/// * `n_bootstrap` - Number of bootstrap iterations
+/// * `max_iter` - Maximum iterations for model estimation
+/// * `tol` - Convergence tolerance
+/// * `seed` - Random seed
+///
+/// # Returns
+/// (bootstrap_estimates, standard_error)
+#[pyfunction]
+#[pyo3(signature = (y, d, lambda_time, lambda_unit, lambda_nn, n_bootstrap, max_iter, tol, seed))]
+#[allow(clippy::too_many_arguments)]
+pub fn bootstrap_trop_variance_joint<'py>(
+    py: Python<'py>,
+    y: PyReadonlyArray2<'py, f64>,
+    d: PyReadonlyArray2<'py, f64>,
+    lambda_time: f64,
+    lambda_unit: f64,
+    lambda_nn: f64,
+    n_bootstrap: usize,
+    max_iter: usize,
+    tol: f64,
+    seed: u64,
+) -> PyResult<(&'py PyArray1<f64>, f64)> {
+    let y_arr = y.as_array().to_owned();
+    let d_arr = d.as_array().to_owned();
+
+    let n_units = y_arr.ncols();
+    let n_periods = y_arr.nrows();
+
+    // Identify treated and control units for stratified sampling
+    let mut original_treated_units: Vec<usize> = Vec::new();
+    let mut original_control_units: Vec<usize> = Vec::new();
+    for i in 0..n_units {
+        let is_ever_treated = (0..n_periods).any(|t| d_arr[[t, i]] == 1.0);
+        if is_ever_treated {
+            original_treated_units.push(i);
+        } else {
+            original_control_units.push(i);
+        }
+    }
+    let n_treated_units = original_treated_units.len();
+    let n_control_units = original_control_units.len();
+
+    // Determine treated periods from D matrix
+    let mut first_treat_period = n_periods;
+    for t in 0..n_periods {
+        for i in 0..n_units {
+            if d_arr[[t, i]] == 1.0 {
+                first_treat_period = first_treat_period.min(t);
+                break;
+            }
+        }
+    }
+    let treated_periods = n_periods.saturating_sub(first_treat_period);
+
+    // Convert infinity values for computation
+    let lt_eff = if lambda_time.is_infinite() { 0.0 } else { lambda_time };
+    let lu_eff = if lambda_unit.is_infinite() { 0.0 } else { lambda_unit };
+    let ln_eff = if lambda_nn.is_infinite() { 1e10 } else { lambda_nn };
+
+    // Run bootstrap iterations in parallel
+    let bootstrap_estimates: Vec<f64> = (0..n_bootstrap)
+        .into_par_iter()
+        .filter_map(|b| {
+            use rand::prelude::*;
+            use rand_xoshiro::Xoshiro256PlusPlus;
+
+            let mut rng = Xoshiro256PlusPlus::seed_from_u64(seed.wrapping_add(b as u64));
+
+            // Stratified sampling - sample control and treated units separately
+            let mut sampled_units: Vec<usize> = Vec::with_capacity(n_units);
+
+            // Sample control units with replacement
+            for _ in 0..n_control_units {
+                if n_control_units > 0 {
+                    let idx = rng.gen_range(0..n_control_units);
+                    sampled_units.push(original_control_units[idx]);
+                }
+            }
+
+            // Sample treated units with replacement
+            for _ in 0..n_treated_units {
+                if n_treated_units > 0 {
+                    let idx = rng.gen_range(0..n_treated_units);
+                    sampled_units.push(original_treated_units[idx]);
+                }
+            }
+
+            // Create bootstrap matrices by selecting columns
+            let mut y_boot = Array2::<f64>::zeros((n_periods, n_units));
+            let mut d_boot = Array2::<f64>::zeros((n_periods, n_units));
+
+            for (new_idx, &old_idx) in sampled_units.iter().enumerate() {
+                for t in 0..n_periods {
+                    y_boot[[t, new_idx]] = y_arr[[t, old_idx]];
+                    d_boot[[t, new_idx]] = d_arr[[t, old_idx]];
+                }
+            }
+
+            // Compute weights and fit joint model
+            let delta = compute_joint_weights(
+                &y_boot.view(),
+                &d_boot.view(),
+                lt_eff,
+                lu_eff,
+                treated_periods,
+            );
+
+            let result = if ln_eff >= 1e10 {
+                solve_joint_no_lowrank(&y_boot.view(), &d_boot.view(), &delta.view())
+                    .map(|(_, _, _, tau)| tau)
+            } else {
+                solve_joint_with_lowrank(
+                    &y_boot.view(),
+                    &d_boot.view(),
+                    &delta.view(),
+                    ln_eff,
+                    max_iter,
+                    tol,
+                )
+                .map(|(_, _, _, _, tau)| tau)
+            };
+
+            result
+        })
+        .collect();
+
+    // Compute standard error
+    let se = if bootstrap_estimates.len() < 2 {
+        0.0
+    } else {
+        let n = bootstrap_estimates.len() as f64;
+        let mean = bootstrap_estimates.iter().sum::<f64>() / n;
+        let variance = bootstrap_estimates
+            .iter()
+            .map(|x| (x - mean).powi(2))
+            .sum::<f64>()
+            / (n - 1.0);
+        variance.sqrt()
+    };
+
+    let estimates_arr = Array1::from_vec(bootstrap_estimates);
+    Ok((estimates_arr.into_pyarray(py), se))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

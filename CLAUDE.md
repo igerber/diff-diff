@@ -138,6 +138,9 @@ test bootstrap::tests::test_webb_mean_approx_zero ... ok
   - `TROPResults` - Results with ATT, factors, loadings, unit/time weights
   - `trop()` - Convenience function for quick estimation
   - Three robustness components: factor adjustment, unit weights, time weights
+  - Two estimation methods via `method` parameter:
+    - `"twostep"` (default): Per-observation model fitting (Algorithm 2 of paper)
+    - `"joint"`: Weighted least squares with homogeneous treatment effect (faster)
   - Automatic rank selection via cross-validation, information criterion, or elbow detection
   - Bootstrap and placebo-based variance estimation
 
