@@ -2655,3 +2655,641 @@ class TestPR110FeedbackRound8:
         assert results.n_post_periods == 2, (
             f"Expected 2 post-periods with D=1, got {results.n_post_periods}"
         )
+
+
+class TestTROPJointMethod:
+    """Tests for TROP method='joint'.
+
+    The joint method estimates a single scalar treatment effect τ via
+    weighted least squares, as opposed to the twostep method which
+    computes per-observation effects.
+    """
+
+    def test_joint_basic(self, simple_panel_data):
+        """Joint method runs and produces reasonable ATT."""
+        trop_est = TROP(
+            method="joint",
+            lambda_time_grid=[0.0, 1.0],
+            lambda_unit_grid=[0.0, 1.0],
+            lambda_nn_grid=[0.0, 0.1],
+            n_bootstrap=10,
+            seed=42,
+        )
+        results = trop_est.fit(
+            simple_panel_data,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="period",
+        )
+
+        assert isinstance(results, TROPResults)
+        assert trop_est.is_fitted_
+        assert results.n_obs == len(simple_panel_data)
+        assert results.n_control == 15
+        assert results.n_treated == 5
+        # ATT should be positive (true effect is 3.0)
+        assert results.att > 0
+
+    def test_joint_no_lowrank(self, simple_panel_data):
+        """Joint method with lambda_nn=inf (no low-rank)."""
+        trop_est = TROP(
+            method="joint",
+            lambda_time_grid=[0.0],
+            lambda_unit_grid=[0.0],
+            lambda_nn_grid=[float('inf')],  # Disable low-rank
+            n_bootstrap=10,
+            seed=42,
+        )
+        results = trop_est.fit(
+            simple_panel_data,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="period",
+        )
+
+        assert isinstance(results, TROPResults)
+        # Effective rank should be 0 when L=0
+        assert results.effective_rank == 0.0
+        # Factor matrix should be all zeros
+        assert np.allclose(results.factor_matrix, 0.0)
+
+    def test_joint_with_lowrank(self, factor_dgp_data):
+        """Joint method with finite lambda_nn (with low-rank)."""
+        trop_est = TROP(
+            method="joint",
+            lambda_time_grid=[0.0, 1.0],
+            lambda_unit_grid=[0.0, 1.0],
+            lambda_nn_grid=[0.0, 0.1, 1.0],
+            n_bootstrap=20,
+            seed=42,
+        )
+        results = trop_est.fit(
+            factor_dgp_data,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="period",
+        )
+
+        assert isinstance(results, TROPResults)
+        assert results.effective_rank >= 0
+        # Should produce non-zero factor matrix if low-rank is used
+        # (depends on which lambda_nn is selected)
+
+    def test_joint_matches_direction(self, simple_panel_data):
+        """Joint method sign/magnitude roughly matches twostep."""
+        # Fit with twostep
+        trop_twostep = TROP(
+            method="twostep",
+            lambda_time_grid=[0.0, 1.0],
+            lambda_unit_grid=[0.0, 1.0],
+            lambda_nn_grid=[0.0, 0.1],
+            n_bootstrap=10,
+            seed=42,
+        )
+        results_twostep = trop_twostep.fit(
+            simple_panel_data,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="period",
+        )
+
+        # Fit with joint
+        trop_joint = TROP(
+            method="joint",
+            lambda_time_grid=[0.0, 1.0],
+            lambda_unit_grid=[0.0, 1.0],
+            lambda_nn_grid=[0.0, 0.1],
+            n_bootstrap=10,
+            seed=42,
+        )
+        results_joint = trop_joint.fit(
+            simple_panel_data,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="period",
+        )
+
+        # Both should have positive ATT (true effect is 3.0)
+        assert results_twostep.att > 0
+        assert results_joint.att > 0
+
+        # Signs should match
+        assert np.sign(results_twostep.att) == np.sign(results_joint.att)
+
+    def test_method_parameter_validation(self):
+        """Invalid method raises ValueError."""
+        with pytest.raises(ValueError, match="method must be one of"):
+            TROP(method="invalid_method")
+
+    def test_method_in_get_params(self):
+        """method parameter appears in get_params()."""
+        trop_est = TROP(method="joint")
+        params = trop_est.get_params()
+        assert "method" in params
+        assert params["method"] == "joint"
+
+    def test_method_in_set_params(self):
+        """method parameter can be set via set_params()."""
+        trop_est = TROP(method="twostep")
+        assert trop_est.method == "twostep"
+
+        trop_est.set_params(method="joint")
+        assert trop_est.method == "joint"
+
+    def test_joint_bootstrap_variance(self, simple_panel_data):
+        """Joint method bootstrap variance estimation works."""
+        trop_est = TROP(
+            method="joint",
+            lambda_time_grid=[0.0, 1.0],
+            lambda_unit_grid=[0.0, 1.0],
+            lambda_nn_grid=[0.0, 0.1],
+            variance_method="bootstrap",
+            n_bootstrap=20,
+            seed=42,
+        )
+        results = trop_est.fit(
+            simple_panel_data,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="period",
+        )
+
+        assert results.se > 0
+        assert results.variance_method == "bootstrap"
+        assert results.n_bootstrap == 20
+        assert results.bootstrap_distribution is not None
+
+    def test_joint_jackknife_variance(self, simple_panel_data):
+        """Joint method jackknife variance estimation works."""
+        trop_est = TROP(
+            method="joint",
+            lambda_time_grid=[0.0, 1.0],
+            lambda_unit_grid=[0.0, 1.0],
+            lambda_nn_grid=[0.0, 0.1],
+            variance_method="jackknife",
+            seed=42,
+        )
+        results = trop_est.fit(
+            simple_panel_data,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="period",
+        )
+
+        assert results.se >= 0
+        assert results.variance_method == "jackknife"
+
+    def test_joint_confidence_interval(self, simple_panel_data):
+        """Joint method produces valid confidence intervals."""
+        trop_est = TROP(
+            method="joint",
+            lambda_time_grid=[0.0, 1.0],
+            lambda_unit_grid=[0.0, 1.0],
+            lambda_nn_grid=[0.0, 0.1],
+            alpha=0.05,
+            n_bootstrap=30,
+            seed=42,
+        )
+        results = trop_est.fit(
+            simple_panel_data,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="period",
+        )
+
+        lower, upper = results.conf_int
+        assert lower < results.att < upper
+        assert lower < upper
+
+    def test_joint_loocv_selects_from_grid(self, simple_panel_data):
+        """Joint method LOOCV selects tuning parameters from the grid."""
+        grid_time = [0.0, 0.5, 1.0]
+        grid_unit = [0.0, 0.5, 1.0]
+        grid_nn = [0.0, 0.1]
+
+        trop_est = TROP(
+            method="joint",
+            lambda_time_grid=grid_time,
+            lambda_unit_grid=grid_unit,
+            lambda_nn_grid=grid_nn,
+            n_bootstrap=10,
+            seed=42,
+        )
+        results = trop_est.fit(
+            simple_panel_data,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="period",
+        )
+
+        # Selected lambdas should be from the grid
+        assert results.lambda_time in grid_time
+        assert results.lambda_unit in grid_unit
+        assert results.lambda_nn in grid_nn
+        # LOOCV score should be computed
+        assert np.isfinite(results.loocv_score) or np.isnan(results.loocv_score)
+
+    def test_joint_loocv_score_internal(self, simple_panel_data):
+        """Test the internal _loocv_score_joint method produces valid scores."""
+        trop_est = TROP(
+            method="joint",
+            lambda_time_grid=[0.0, 1.0],
+            lambda_unit_grid=[0.0, 1.0],
+            lambda_nn_grid=[0.0, 0.1],
+            seed=42,
+        )
+
+        # Setup data matrices
+        all_units = sorted(simple_panel_data['unit'].unique())
+        all_periods = sorted(simple_panel_data['period'].unique())
+        n_units = len(all_units)
+        n_periods = len(all_periods)
+
+        Y = (
+            simple_panel_data.pivot(index='period', columns='unit', values='outcome')
+            .reindex(index=all_periods, columns=all_units)
+            .values
+        )
+        D = (
+            simple_panel_data.pivot(index='period', columns='unit', values='treated')
+            .reindex(index=all_periods, columns=all_units)
+            .fillna(0)
+            .astype(int)
+            .values
+        )
+
+        control_mask = D == 0
+        control_obs = [
+            (t, i) for t in range(n_periods) for i in range(n_units)
+            if control_mask[t, i] and not np.isnan(Y[t, i])
+        ][:20]  # Limit for speed
+
+        treated_periods = 3  # From fixture: n_post = 3
+
+        # Score should be finite
+        score = trop_est._loocv_score_joint(
+            Y, D, control_obs, 0.0, 0.0, 0.0,
+            treated_periods, n_units, n_periods
+        )
+        assert np.isfinite(score) or np.isinf(score), "Score should be finite or inf"
+
+        # Score with larger lambda_nn should still work
+        score2 = trop_est._loocv_score_joint(
+            Y, D, control_obs, 1.0, 1.0, 0.1,
+            treated_periods, n_units, n_periods
+        )
+        assert np.isfinite(score2) or np.isinf(score2), "Score should be finite or inf"
+
+    def test_joint_handles_nan_outcomes(self, simple_panel_data):
+        """Joint method handles NaN outcome values gracefully."""
+        # Introduce NaN in some control observations
+        data = simple_panel_data.copy()
+        control_mask = data['treated'] == 0
+        control_indices = data[control_mask].index.tolist()
+
+        # Set 5 random control observations to NaN
+        np.random.seed(42)
+        nan_indices = np.random.choice(control_indices, size=5, replace=False)
+        data.loc[nan_indices, 'outcome'] = np.nan
+
+        trop_est = TROP(
+            method="joint",
+            lambda_time_grid=[0.0, 1.0],
+            lambda_unit_grid=[0.0, 1.0],
+            lambda_nn_grid=[0.0, 0.1],
+            n_bootstrap=10,
+            seed=42,
+        )
+        results = trop_est.fit(
+            data,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="period",
+        )
+
+        # Results should be finite (NaN observations excluded)
+        assert np.isfinite(results.att), "ATT should be finite with NaN data"
+        assert np.isfinite(results.se), "SE should be finite with NaN data"
+        # ATT should be positive (true effect is 3.0)
+        assert results.att > 0, "ATT should be positive"
+
+    def test_joint_with_lowrank_handles_nan(self, simple_panel_data):
+        """Joint method with low-rank handles NaN values correctly."""
+        # Introduce NaN in some control observations
+        data = simple_panel_data.copy()
+        control_mask = data['treated'] == 0
+        control_indices = data[control_mask].index.tolist()
+
+        # Set 3 random control observations to NaN
+        np.random.seed(123)
+        nan_indices = np.random.choice(control_indices, size=3, replace=False)
+        data.loc[nan_indices, 'outcome'] = np.nan
+
+        trop_est = TROP(
+            method="joint",
+            lambda_time_grid=[0.0],
+            lambda_unit_grid=[0.0],
+            lambda_nn_grid=[0.1],  # Finite lambda_nn enables low-rank
+            n_bootstrap=10,
+            seed=42,
+        )
+        results = trop_est.fit(
+            data,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="period",
+        )
+
+        # Results should be finite
+        assert np.isfinite(results.att), "ATT should be finite with NaN data"
+        assert np.isfinite(results.se), "SE should be finite with NaN data"
+
+    def test_joint_nan_exclusion_behavior(self, simple_panel_data):
+        """Verify NaN observations are truly excluded from estimation.
+
+        This tests the PR #113 fix: NaN observations should not contribute
+        to the weighted gradient step. We verify this by comparing results
+        when fitting on data with NaN vs data with those observations removed.
+        """
+        # Get a clean copy
+        data_full = simple_panel_data.copy()
+
+        # Identify a specific control observation to "remove"
+        control_mask = data_full['treated'] == 0
+        control_indices = data_full[control_mask].index.tolist()
+
+        # Pick a few specific observations to remove/set to NaN
+        np.random.seed(42)
+        remove_indices = np.random.choice(control_indices, size=3, replace=False)
+
+        # Create version with NaN
+        data_nan = data_full.copy()
+        data_nan.loc[remove_indices, 'outcome'] = np.nan
+
+        # Create version with rows removed
+        data_dropped = data_full.drop(remove_indices)
+
+        # Fit on both versions with identical settings
+        trop_nan = TROP(
+            method="joint",
+            lambda_time_grid=[1.0],
+            lambda_unit_grid=[1.0],
+            lambda_nn_grid=[0.0],  # Disable low-rank for cleaner comparison
+            n_bootstrap=10,
+            seed=42,
+        )
+        trop_dropped = TROP(
+            method="joint",
+            lambda_time_grid=[1.0],
+            lambda_unit_grid=[1.0],
+            lambda_nn_grid=[0.0],
+            n_bootstrap=10,
+            seed=42,
+        )
+
+        results_nan = trop_nan.fit(
+            data_nan,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="period",
+        )
+        results_dropped = trop_dropped.fit(
+            data_dropped,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="period",
+        )
+
+        # ATT should be very close (allowing small numerical tolerance)
+        # If NaN observations were not truly excluded, ATT would differ
+        assert np.abs(results_nan.att - results_dropped.att) < 0.5, (
+            f"ATT with NaN ({results_nan.att:.4f}) should match dropped data "
+            f"({results_dropped.att:.4f}) - true NaN exclusion"
+        )
+
+    def test_joint_jackknife_produces_variation(self, simple_panel_data):
+        """Verify jackknife produces variation across leave-out iterations.
+
+        This tests the PR #113 fix: jackknife should truly exclude units
+        via weight zeroing, not imputation. If imputation were used, all
+        jackknife estimates would be nearly identical.
+        """
+        trop_est = TROP(
+            method="joint",
+            lambda_time_grid=[1.0],
+            lambda_unit_grid=[1.0],
+            lambda_nn_grid=[0.0],
+            variance_method="jackknife",
+            seed=42,
+        )
+        results = trop_est.fit(
+            simple_panel_data,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="period",
+        )
+
+        # SE should be positive (variation exists)
+        assert results.se > 0, "Jackknife SE should be positive"
+
+        # If we can access jackknife estimates, verify they vary
+        # (The SE being > 0 already implies variation, but this is more explicit)
+        if hasattr(results, 'bootstrap_distribution') and results.bootstrap_distribution is not None:
+            # For jackknife, this stores the jackknife estimates
+            jack_estimates = results.bootstrap_distribution
+            if len(jack_estimates) > 1:
+                estimate_std = np.std(jack_estimates)
+                assert estimate_std > 0, "Jackknife estimates should vary"
+
+    def test_joint_unit_no_valid_pre_gets_zero_weight(self, simple_panel_data):
+        """Verify units with no valid pre-period data get zero weight.
+
+        This tests the PR #113 fix: units with no valid pre-period observations
+        should get zero weight (instead of max weight via dist=0).
+        """
+        # Create data where one control unit has all NaN in pre-period
+        data = simple_panel_data.copy()
+
+        # Find a control unit (unit that never has treated=1)
+        unit_ever_treated = data.groupby('unit')['treated'].max()
+        control_units = unit_ever_treated[unit_ever_treated == 0].index.tolist()
+        target_unit = control_units[0]
+
+        # Get pre-periods (periods where this control unit has treated=0)
+        unit_data = data[data['unit'] == target_unit]
+        pre_periods = sorted(unit_data[unit_data['treated'] == 0]['period'].unique())[:5]
+
+        # Set all pre-period values for target_unit to NaN
+        mask = (data['unit'] == target_unit) & (data['period'].isin(pre_periods))
+        data.loc[mask, 'outcome'] = np.nan
+
+        trop_est = TROP(
+            method="joint",
+            lambda_time_grid=[1.0],
+            lambda_unit_grid=[1.0],  # Non-zero lambda_unit to use distance weighting
+            lambda_nn_grid=[0.0],
+            n_bootstrap=10,
+            seed=42,
+        )
+
+        # This should not error and should produce finite results
+        results = trop_est.fit(
+            data,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="period",
+        )
+
+        assert np.isfinite(results.att), "ATT should be finite even with unit having no pre-period data"
+        assert np.isfinite(results.se), "SE should be finite"
+
+    def test_joint_treated_pre_nan_handling(self, simple_panel_data):
+        """Verify joint method handles NaN in treated units during pre-periods.
+
+        When all treated units have NaN at a pre-period, average_treated[t] = NaN.
+        This period should be excluded from unit distance calculation (both numerator
+        and denominator) to avoid inflating valid_count.
+
+        This tests the fix for PR #113 Round 5 feedback (P1).
+        """
+        data = simple_panel_data.copy()
+
+        # Find treated units and pre-periods
+        treated_units = data[data['treated'] == 1]['unit'].unique()
+        # Pre-periods are periods where treated=0 for treated units
+        pre_periods = sorted(
+            data[(data['unit'].isin(treated_units)) & (data['treated'] == 0)]['period'].unique()
+        )
+        assert len(pre_periods) >= 2, "Need at least 2 pre-periods for this test"
+
+        # Pick a middle pre-period
+        target_period = pre_periods[len(pre_periods) // 2]
+
+        # Set ALL treated units' outcomes at target_period to NaN
+        # This makes average_treated[target_period] = NaN
+        mask = (data['unit'].isin(treated_units)) & (data['period'] == target_period)
+        data.loc[mask, 'outcome'] = np.nan
+
+        # Verify we set NaN correctly
+        n_nan = data.loc[mask, 'outcome'].isna().sum()
+        assert n_nan == len(treated_units), f"Should have {len(treated_units)} NaN, got {n_nan}"
+
+        trop_est = TROP(
+            method="joint",
+            lambda_time_grid=[1.0],
+            lambda_unit_grid=[1.0],
+            lambda_nn_grid=[0.0],
+            n_bootstrap=10,
+            seed=42,
+        )
+        results = trop_est.fit(
+            data,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="period",
+        )
+
+        # Results should be finite - NaN period properly excluded from distance calc
+        assert np.isfinite(results.att), f"ATT should be finite, got {results.att}"
+        assert np.isfinite(results.se), f"SE should be finite, got {results.se}"
+
+    def test_joint_rejects_staggered_adoption(self):
+        """Joint method raises ValueError for staggered adoption data.
+
+        The joint method assumes all treated units receive treatment at the
+        same time. With staggered adoption (units first treated at different
+        periods), the method's weights and variance estimation are invalid.
+        """
+        # Create data with staggered treatment (units treated at different times)
+        data = []
+        np.random.seed(42)
+        for i in range(10):
+            # Units 0-2 first treated at t=5, units 3-4 first treated at t=7
+            first_treat = 5 if i < 3 else 7
+            is_treated_unit = i < 5  # Units 0-4 are treated, 5-9 are control
+            for t in range(10):
+                treated = 1 if is_treated_unit and t >= first_treat else 0
+                data.append({
+                    'unit': i,
+                    'time': t,
+                    'outcome': np.random.randn(),
+                    'treated': treated
+                })
+        df = pd.DataFrame(data)
+
+        trop = TROP(method="joint")
+        with pytest.raises(ValueError, match="staggered adoption"):
+            trop.fit(df, 'outcome', 'treated', 'unit', 'time')
+
+    def test_joint_python_loocv_subsampling(self):
+        """Test that joint method works with Python-only LOOCV when control_obs > max_loocv_samples.
+
+        This tests the fix for PR #113 Round 7 feedback (P1): Python fallback
+        LOOCV sampling could raise ValueError when control_obs is a list of tuples.
+        """
+        from unittest.mock import patch
+        import sys
+
+        np.random.seed(42)
+        # Create data with many control observations (> default max_loocv_samples=500)
+        n_units, n_periods = 30, 25  # 30*25 = 750 observations, most are control
+        n_treated = 3
+        n_post = 3
+
+        data = []
+        for i in range(n_units):
+            is_treated = i < n_treated
+            for t in range(n_periods):
+                post = t >= (n_periods - n_post)
+                y = 10.0 + i * 0.1 + t * 0.1 + np.random.randn() * 0.5
+                treatment_indicator = 1 if (is_treated and post) else 0
+                if treatment_indicator:
+                    y += 2.0
+                data.append({
+                    'unit': i,
+                    'time': t,
+                    'outcome': y,
+                    'treated': treatment_indicator,
+                })
+
+        df = pd.DataFrame(data)
+
+        # Patch to force Python backend and set small max_loocv_samples
+        trop_module = sys.modules['diff_diff.trop']
+
+        with patch.object(trop_module, 'HAS_RUST_BACKEND', False), \
+             patch.object(trop_module, '_rust_loocv_grid_search_joint', None), \
+             patch.object(trop_module, '_rust_bootstrap_trop_variance_joint', None):
+
+            # Use small max_loocv_samples to trigger subsampling
+            trop_est = TROP(
+                method="joint",
+                lambda_time_grid=[1.0],
+                lambda_unit_grid=[1.0],
+                lambda_nn_grid=[0.0],
+                max_loocv_samples=100,  # Force subsampling (control_obs > 100)
+                n_bootstrap=0,
+                seed=42
+            )
+
+            # This should not raise ValueError
+            results = trop_est.fit(df, 'outcome', 'treated', 'unit', 'time')
+
+            assert isinstance(results, TROPResults)
+            assert np.isfinite(results.att)

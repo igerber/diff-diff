@@ -38,6 +38,8 @@ from diff_diff._backend import (
     _rust_unit_distance_matrix,
     _rust_loocv_grid_search,
     _rust_bootstrap_trop_variance,
+    _rust_loocv_grid_search_joint,
+    _rust_bootstrap_trop_variance_joint,
 )
 from diff_diff.results import _get_significance_stars
 from diff_diff.utils import compute_confidence_interval, compute_p_value
@@ -365,6 +367,20 @@ class TROP:
 
     Parameters
     ----------
+    method : str, default='twostep'
+        Estimation method to use:
+
+        - 'twostep': Per-observation model fitting following Algorithm 2 of
+          Athey et al. (2025). Computes observation-specific weights and fits
+          a model for each treated observation, averaging the individual
+          treatment effects. More flexible but computationally intensive.
+
+        - 'joint': Joint weighted least squares optimization. Estimates a
+          single scalar treatment effect τ along with fixed effects and
+          optional low-rank factor adjustment. Faster but assumes homogeneous
+          treatment effects. Uses alternating minimization when nuclear norm
+          penalty is finite.
+
     lambda_time_grid : list, optional
         Grid of time weight decay parameters. Default: [0, 0.1, 0.5, 1, 2, 5].
     lambda_unit_grid : list, optional
@@ -434,6 +450,7 @@ class TROP:
 
     def __init__(
         self,
+        method: str = "twostep",
         lambda_time_grid: Optional[List[float]] = None,
         lambda_unit_grid: Optional[List[float]] = None,
         lambda_nn_grid: Optional[List[float]] = None,
@@ -445,6 +462,14 @@ class TROP:
         max_loocv_samples: int = 100,
         seed: Optional[int] = None,
     ):
+        # Validate method parameter
+        valid_methods = ("twostep", "joint")
+        if method not in valid_methods:
+            raise ValueError(
+                f"method must be one of {valid_methods}, got '{method}'"
+            )
+        self.method = method
+
         # Default grids from paper
         self.lambda_time_grid = lambda_time_grid or [0.0, 0.1, 0.5, 1.0, 2.0, 5.0]
         self.lambda_unit_grid = lambda_unit_grid or [0.0, 0.1, 0.5, 1.0, 2.0, 5.0]
@@ -828,6 +853,977 @@ class TROP:
 
         return lambda_time, lambda_unit, lambda_nn
 
+    # =========================================================================
+    # Joint estimation method
+    # =========================================================================
+
+    def _compute_joint_weights(
+        self,
+        Y: np.ndarray,
+        D: np.ndarray,
+        lambda_time: float,
+        lambda_unit: float,
+        treated_periods: int,
+        n_units: int,
+        n_periods: int,
+    ) -> np.ndarray:
+        """
+        Compute distance-based weights for joint estimation.
+
+        Following the reference implementation, weights are computed based on:
+        - Time distance: distance to center of treated block
+        - Unit distance: RMSE to average treated trajectory over pre-periods
+
+        Parameters
+        ----------
+        Y : np.ndarray
+            Outcome matrix (n_periods x n_units).
+        D : np.ndarray
+            Treatment indicator matrix (n_periods x n_units).
+        lambda_time : float
+            Time weight decay parameter.
+        lambda_unit : float
+            Unit weight decay parameter.
+        treated_periods : int
+            Number of post-treatment periods.
+        n_units : int
+            Number of units.
+        n_periods : int
+            Number of periods.
+
+        Returns
+        -------
+        np.ndarray
+            Weight matrix (n_periods x n_units).
+        """
+        # Identify treated units (ever treated)
+        treated_mask = np.any(D == 1, axis=0)
+        treated_unit_idx = np.where(treated_mask)[0]
+
+        if len(treated_unit_idx) == 0:
+            raise ValueError("No treated units found")
+
+        # Time weights: distance to center of treated block
+        # Following reference: center = T - treated_periods/2
+        center = n_periods - treated_periods / 2.0
+        dist_time = np.abs(np.arange(n_periods, dtype=float) - center)
+        delta_time = np.exp(-lambda_time * dist_time)
+
+        # Unit weights: RMSE to average treated trajectory over pre-periods
+        # Compute average treated trajectory (use nanmean to handle NaN)
+        average_treated = np.nanmean(Y[:, treated_unit_idx], axis=1)
+
+        # Pre-period mask: 1 in pre, 0 in post
+        pre_mask = np.ones(n_periods, dtype=float)
+        pre_mask[-treated_periods:] = 0.0
+
+        # Compute RMS distance for each unit
+        # dist_unit[i] = sqrt(sum_pre(avg_tr - Y_i)^2 / n_pre)
+        # Use NaN-safe operations: treat NaN differences as 0 (excluded)
+        diff = average_treated[:, np.newaxis] - Y
+        diff_sq = np.where(np.isfinite(diff), diff ** 2, 0.0) * pre_mask[:, np.newaxis]
+
+        # Count valid observations per unit in pre-period
+        # Must check diff is finite (both Y and average_treated finite)
+        # to match the periods contributing to diff_sq
+        valid_count = np.sum(
+            np.isfinite(diff) * pre_mask[:, np.newaxis], axis=0
+        )
+        sum_sq = np.sum(diff_sq, axis=0)
+        n_pre = np.sum(pre_mask)
+
+        if n_pre == 0:
+            raise ValueError("No pre-treatment periods")
+
+        # Track units with no valid pre-period data
+        no_valid_pre = valid_count == 0
+
+        # Use valid count per unit (avoid division by zero for calculation)
+        valid_count_safe = np.maximum(valid_count, 1)
+        dist_unit = np.sqrt(sum_sq / valid_count_safe)
+
+        # Units with no valid pre-period data get zero weight
+        # (dist is undefined, so we set it to inf -> delta_unit = exp(-inf) = 0)
+        delta_unit = np.exp(-lambda_unit * dist_unit)
+        delta_unit[no_valid_pre] = 0.0
+
+        # Outer product: (n_periods x n_units)
+        delta = np.outer(delta_time, delta_unit)
+
+        return delta
+
+    def _loocv_score_joint(
+        self,
+        Y: np.ndarray,
+        D: np.ndarray,
+        control_obs: List[Tuple[int, int]],
+        lambda_time: float,
+        lambda_unit: float,
+        lambda_nn: float,
+        treated_periods: int,
+        n_units: int,
+        n_periods: int,
+    ) -> float:
+        """
+        Compute LOOCV score for joint method with specific parameter combination.
+
+        Following paper's Equation 5:
+        Q(λ) = Σ_{j,s: D_js=0} [τ̂_js^loocv(λ)]²
+
+        For joint method, we exclude each control observation, fit the joint model
+        on remaining data, and compute the pseudo-treatment effect at the excluded obs.
+
+        Parameters
+        ----------
+        Y : np.ndarray
+            Outcome matrix (n_periods x n_units).
+        D : np.ndarray
+            Treatment indicator matrix (n_periods x n_units).
+        control_obs : List[Tuple[int, int]]
+            List of (t, i) control observations for LOOCV.
+        lambda_time : float
+            Time weight decay parameter.
+        lambda_unit : float
+            Unit weight decay parameter.
+        lambda_nn : float
+            Nuclear norm regularization parameter.
+        treated_periods : int
+            Number of post-treatment periods.
+        n_units : int
+            Number of units.
+        n_periods : int
+            Number of periods.
+
+        Returns
+        -------
+        float
+            LOOCV score (sum of squared pseudo-treatment effects).
+        """
+        # Compute global weights (same for all LOOCV iterations)
+        delta = self._compute_joint_weights(
+            Y, D, lambda_time, lambda_unit, treated_periods, n_units, n_periods
+        )
+
+        tau_sq_sum = 0.0
+        n_valid = 0
+
+        for t_ex, i_ex in control_obs:
+            # Create modified delta with excluded observation zeroed out
+            delta_ex = delta.copy()
+            delta_ex[t_ex, i_ex] = 0.0
+
+            try:
+                # Fit joint model excluding this observation
+                if lambda_nn >= 1e10:
+                    mu, alpha, beta, tau = self._solve_joint_no_lowrank(Y, D, delta_ex)
+                    L = np.zeros((n_periods, n_units))
+                else:
+                    mu, alpha, beta, L, tau = self._solve_joint_with_lowrank(
+                        Y, D, delta_ex, lambda_nn, self.max_iter, self.tol
+                    )
+
+                # Pseudo treatment effect: τ = Y - μ - α - β - L
+                if np.isfinite(Y[t_ex, i_ex]):
+                    tau_loocv = Y[t_ex, i_ex] - mu - alpha[i_ex] - beta[t_ex] - L[t_ex, i_ex]
+                    tau_sq_sum += tau_loocv ** 2
+                    n_valid += 1
+
+            except (np.linalg.LinAlgError, ValueError):
+                # Any failure means this λ combination is invalid per Equation 5
+                return np.inf
+
+        if n_valid == 0:
+            return np.inf
+
+        return tau_sq_sum
+
+    def _solve_joint_no_lowrank(
+        self,
+        Y: np.ndarray,
+        D: np.ndarray,
+        delta: np.ndarray,
+    ) -> Tuple[float, np.ndarray, np.ndarray, float]:
+        """
+        Solve joint TWFE + treatment via weighted least squares (no low-rank).
+
+        Solves: min Σ δ_{it}(Y_{it} - μ - α_i - β_t - τ*W_{it})²
+
+        Parameters
+        ----------
+        Y : np.ndarray
+            Outcome matrix (n_periods x n_units).
+        D : np.ndarray
+            Treatment indicator matrix (n_periods x n_units).
+        delta : np.ndarray
+            Weight matrix (n_periods x n_units).
+
+        Returns
+        -------
+        Tuple[float, np.ndarray, np.ndarray, float]
+            (mu, alpha, beta, tau) estimated parameters.
+        """
+        n_periods, n_units = Y.shape
+
+        # Flatten matrices for regression
+        y = Y.flatten()  # length n_periods * n_units
+        w = D.flatten()
+        weights = delta.flatten()
+
+        # Handle NaN values: zero weight for NaN outcomes/weights, impute with 0
+        # This ensures NaN observations don't contribute to estimation
+        valid_y = np.isfinite(y)
+        valid_w = np.isfinite(weights)
+        valid_mask = valid_y & valid_w
+        weights = np.where(valid_mask, weights, 0.0)
+        y = np.where(valid_mask, y, 0.0)
+
+        sqrt_weights = np.sqrt(np.maximum(weights, 0))
+
+        # Check for all-zero weights (matches Rust's sum_w < 1e-10 check)
+        sum_w = np.sum(weights)
+        if sum_w < 1e-10:
+            raise ValueError("All weights are zero - cannot estimate")
+
+        # Build design matrix: [intercept, unit_dummies, time_dummies, treatment]
+        # Total columns: 1 + n_units + n_periods + 1
+        # But we need to drop one unit and one time dummy for identification
+        # Drop first unit (unit 0) and first time (time 0)
+        n_obs = n_periods * n_units
+        n_params = 1 + (n_units - 1) + (n_periods - 1) + 1
+
+        X = np.zeros((n_obs, n_params))
+        X[:, 0] = 1.0  # intercept
+
+        # Unit dummies (skip unit 0)
+        for i in range(1, n_units):
+            for t in range(n_periods):
+                X[t * n_units + i, i] = 1.0
+
+        # Time dummies (skip time 0)
+        for t in range(1, n_periods):
+            for i in range(n_units):
+                X[t * n_units + i, (n_units - 1) + t] = 1.0
+
+        # Treatment indicator
+        X[:, -1] = w
+
+        # Apply weights
+        X_weighted = X * sqrt_weights[:, np.newaxis]
+        y_weighted = y * sqrt_weights
+
+        # Solve weighted least squares
+        try:
+            coeffs, _, _, _ = np.linalg.lstsq(X_weighted, y_weighted, rcond=None)
+        except np.linalg.LinAlgError:
+            # Fallback: use pseudo-inverse
+            coeffs = np.linalg.pinv(X_weighted) @ y_weighted
+
+        # Extract parameters
+        mu = coeffs[0]
+        alpha = np.zeros(n_units)
+        alpha[1:] = coeffs[1:n_units]
+        beta = np.zeros(n_periods)
+        beta[1:] = coeffs[n_units:(n_units + n_periods - 1)]
+        tau = coeffs[-1]
+
+        return float(mu), alpha, beta, float(tau)
+
+    def _solve_joint_with_lowrank(
+        self,
+        Y: np.ndarray,
+        D: np.ndarray,
+        delta: np.ndarray,
+        lambda_nn: float,
+        max_iter: int = 100,
+        tol: float = 1e-6,
+    ) -> Tuple[float, np.ndarray, np.ndarray, np.ndarray, float]:
+        """
+        Solve joint TWFE + treatment + low-rank via alternating minimization.
+
+        Solves: min Σ δ_{it}(Y_{it} - μ - α_i - β_t - L_{it} - τ*W_{it})² + λ_nn||L||_*
+
+        Parameters
+        ----------
+        Y : np.ndarray
+            Outcome matrix (n_periods x n_units).
+        D : np.ndarray
+            Treatment indicator matrix (n_periods x n_units).
+        delta : np.ndarray
+            Weight matrix (n_periods x n_units).
+        lambda_nn : float
+            Nuclear norm regularization parameter.
+        max_iter : int, default=100
+            Maximum iterations for alternating minimization.
+        tol : float, default=1e-6
+            Convergence tolerance.
+
+        Returns
+        -------
+        Tuple[float, np.ndarray, np.ndarray, np.ndarray, float]
+            (mu, alpha, beta, L, tau) estimated parameters.
+        """
+        n_periods, n_units = Y.shape
+
+        # Handle NaN values: impute with 0 for computations
+        # The solver will also zero weights for NaN observations
+        Y_safe = np.where(np.isfinite(Y), Y, 0.0)
+
+        # Mask delta to exclude NaN outcomes from estimation
+        # This ensures NaN observations don't contribute to the gradient step
+        nan_mask = ~np.isfinite(Y)
+        delta_masked = delta.copy()
+        delta_masked[nan_mask] = 0.0
+
+        # Initialize L = 0
+        L = np.zeros((n_periods, n_units))
+
+        for iteration in range(max_iter):
+            L_old = L.copy()
+
+            # Step 1: Fix L, solve for (mu, alpha, beta, tau)
+            # Adjusted outcome: Y - L (using NaN-safe Y)
+            # Pass masked delta to exclude NaN observations from WLS
+            Y_adj = Y_safe - L
+            mu, alpha, beta, tau = self._solve_joint_no_lowrank(Y_adj, D, delta_masked)
+
+            # Step 2: Fix (mu, alpha, beta, tau), update L
+            # Residual: R = Y - mu - alpha - beta - tau*D (using NaN-safe Y)
+            R = Y_safe - mu - alpha[np.newaxis, :] - beta[:, np.newaxis] - tau * D
+
+            # Weighted proximal step for L (soft-threshold SVD)
+            # Normalize weights (using masked delta to exclude NaN observations)
+            delta_max = np.max(delta_masked)
+            if delta_max > 0:
+                delta_norm = delta_masked / delta_max
+            else:
+                delta_norm = delta_masked
+
+            # Weighted average between current L and target R
+            # L_next = L + delta_norm * (R - L), then soft-threshold
+            # NaN observations have delta_norm=0, so they don't influence L update
+            gradient_step = L + delta_norm * (R - L)
+
+            # Soft-threshold singular values
+            # Use eta * lambda_nn for proper proximal step size (matches Rust)
+            eta = 1.0 / delta_max if delta_max > 0 else 1.0
+            L = self._soft_threshold_svd(gradient_step, eta * lambda_nn)
+
+            # Check convergence
+            if np.max(np.abs(L - L_old)) < tol:
+                break
+
+        return mu, alpha, beta, L, tau
+
+    def _fit_joint(
+        self,
+        data: pd.DataFrame,
+        outcome: str,
+        treatment: str,
+        unit: str,
+        time: str,
+    ) -> TROPResults:
+        """
+        Fit TROP using joint weighted least squares method.
+
+        This method estimates a single scalar treatment effect τ along with
+        fixed effects and optional low-rank factor adjustment.
+
+        Parameters
+        ----------
+        data : pd.DataFrame
+            Panel data.
+        outcome : str
+            Outcome variable column name.
+        treatment : str
+            Treatment indicator column name.
+        unit : str
+            Unit identifier column name.
+        time : str
+            Time period column name.
+
+        Returns
+        -------
+        TROPResults
+            Estimation results.
+
+        Notes
+        -----
+        Bootstrap and jackknife variance estimation assume simultaneous treatment
+        adoption (fixed `treated_periods` across resamples). The treatment timing
+        is inferred from the data once and held constant for all bootstrap/jackknife
+        iterations. For staggered adoption designs where treatment timing varies
+        across units, use `method="twostep"` which computes observation-specific
+        weights that naturally handle heterogeneous timing.
+        """
+        # Data setup (same as twostep method)
+        all_units = sorted(data[unit].unique())
+        all_periods = sorted(data[time].unique())
+
+        n_units = len(all_units)
+        n_periods = len(all_periods)
+
+        idx_to_unit = {i: u for i, u in enumerate(all_units)}
+        idx_to_period = {i: p for i, p in enumerate(all_periods)}
+
+        # Create matrices
+        Y = (
+            data.pivot(index=time, columns=unit, values=outcome)
+            .reindex(index=all_periods, columns=all_units)
+            .values
+        )
+
+        D_raw = (
+            data.pivot(index=time, columns=unit, values=treatment)
+            .reindex(index=all_periods, columns=all_units)
+        )
+        missing_mask = pd.isna(D_raw).values
+        D = D_raw.fillna(0).astype(int).values
+
+        # Validate absorbing state
+        violating_units = []
+        for unit_idx in range(n_units):
+            observed_mask = ~missing_mask[:, unit_idx]
+            observed_d = D[observed_mask, unit_idx]
+            if len(observed_d) > 1 and np.any(np.diff(observed_d) < 0):
+                violating_units.append(all_units[unit_idx])
+
+        if violating_units:
+            raise ValueError(
+                f"Treatment indicator is not an absorbing state for units: {violating_units}. "
+                f"D[t, unit] must be monotonic non-decreasing."
+            )
+
+        # Identify treated observations
+        treated_mask = D == 1
+        n_treated_obs = np.sum(treated_mask)
+
+        if n_treated_obs == 0:
+            raise ValueError("No treated observations found")
+
+        # Identify treated and control units
+        unit_ever_treated = np.any(D == 1, axis=0)
+        treated_unit_idx = np.where(unit_ever_treated)[0]
+        control_unit_idx = np.where(~unit_ever_treated)[0]
+
+        if len(control_unit_idx) == 0:
+            raise ValueError("No control units found")
+
+        # Determine pre/post periods
+        first_treat_period = None
+        for t in range(n_periods):
+            if np.any(D[t, :] == 1):
+                first_treat_period = t
+                break
+
+        if first_treat_period is None:
+            raise ValueError("Could not infer post-treatment periods from D matrix")
+
+        n_pre_periods = first_treat_period
+        treated_periods = n_periods - first_treat_period
+        n_post_periods = int(np.sum(np.any(D[first_treat_period:, :] == 1, axis=1)))
+
+        if n_pre_periods < 2:
+            raise ValueError("Need at least 2 pre-treatment periods")
+
+        # Check for staggered adoption (joint method requires simultaneous treatment)
+        # Use only observed periods (skip missing) to avoid false positives on unbalanced panels
+        first_treat_by_unit = []
+        for i in treated_unit_idx:
+            observed_mask = ~missing_mask[:, i]
+            # Get D values for observed periods only
+            observed_d = D[observed_mask, i]
+            observed_periods = np.where(observed_mask)[0]
+            # Find first treatment among observed periods
+            treated_idx = np.where(observed_d == 1)[0]
+            if len(treated_idx) > 0:
+                first_treat_by_unit.append(observed_periods[treated_idx[0]])
+
+        unique_starts = sorted(set(first_treat_by_unit))
+        if len(unique_starts) > 1:
+            raise ValueError(
+                f"method='joint' requires simultaneous treatment adoption, but your data "
+                f"shows staggered adoption (units first treated at periods {unique_starts}). "
+                f"Use method='twostep' which properly handles staggered adoption designs."
+            )
+
+        # LOOCV grid search for tuning parameters
+        # Use Rust backend when available for parallel LOOCV (5-10x speedup)
+        best_lambda = None
+        best_score = np.inf
+        control_mask = D == 0
+
+        if HAS_RUST_BACKEND and _rust_loocv_grid_search_joint is not None:
+            try:
+                # Prepare inputs for Rust function
+                control_mask_u8 = control_mask.astype(np.uint8)
+
+                lambda_time_arr = np.array(self.lambda_time_grid, dtype=np.float64)
+                lambda_unit_arr = np.array(self.lambda_unit_grid, dtype=np.float64)
+                lambda_nn_arr = np.array(self.lambda_nn_grid, dtype=np.float64)
+
+                result = _rust_loocv_grid_search_joint(
+                    Y, D.astype(np.float64), control_mask_u8,
+                    lambda_time_arr, lambda_unit_arr, lambda_nn_arr,
+                    self.max_loocv_samples, self.max_iter, self.tol,
+                    self.seed if self.seed is not None else 0
+                )
+                # Unpack result - 7 values including optional first_failed_obs
+                best_lt, best_lu, best_ln, best_score, n_valid, n_attempted, first_failed_obs = result
+                # Only accept finite scores - infinite means all fits failed
+                if np.isfinite(best_score):
+                    best_lambda = (best_lt, best_lu, best_ln)
+                # Emit warnings consistent with Python implementation
+                if n_valid == 0:
+                    obs_info = ""
+                    if first_failed_obs is not None:
+                        t_idx, i_idx = first_failed_obs
+                        obs_info = f" First failure at observation ({t_idx}, {i_idx})."
+                    warnings.warn(
+                        f"LOOCV: All {n_attempted} fits failed for "
+                        f"λ=({best_lt}, {best_lu}, {best_ln}). "
+                        f"Returning infinite score.{obs_info}",
+                        UserWarning
+                    )
+                elif n_attempted > 0 and (n_attempted - n_valid) > 0.1 * n_attempted:
+                    n_failed = n_attempted - n_valid
+                    obs_info = ""
+                    if first_failed_obs is not None:
+                        t_idx, i_idx = first_failed_obs
+                        obs_info = f" First failure at observation ({t_idx}, {i_idx})."
+                    warnings.warn(
+                        f"LOOCV: {n_failed}/{n_attempted} fits failed for "
+                        f"λ=({best_lt}, {best_lu}, {best_ln}). "
+                        f"This may indicate numerical instability.{obs_info}",
+                        UserWarning
+                    )
+            except Exception as e:
+                # Fall back to Python implementation on error
+                logger.debug(
+                    "Rust LOOCV grid search (joint) failed, falling back to Python: %s", e
+                )
+                best_lambda = None
+                best_score = np.inf
+
+        # Fall back to Python implementation if Rust unavailable or failed
+        if best_lambda is None:
+            # Get control observations for LOOCV
+            control_obs = [
+                (t, i) for t in range(n_periods) for i in range(n_units)
+                if control_mask[t, i] and not np.isnan(Y[t, i])
+            ]
+
+            # Subsample if needed (sample indices to avoid ValueError on list of tuples)
+            rng = np.random.default_rng(self.seed)
+            max_loocv = min(self.max_loocv_samples, len(control_obs))
+            if len(control_obs) > max_loocv:
+                indices = rng.choice(len(control_obs), size=max_loocv, replace=False)
+                control_obs = [control_obs[idx] for idx in indices]
+
+            # Grid search with true LOOCV
+            for lambda_time_val in self.lambda_time_grid:
+                for lambda_unit_val in self.lambda_unit_grid:
+                    for lambda_nn_val in self.lambda_nn_grid:
+                        # Convert infinity values
+                        lt = 0.0 if np.isinf(lambda_time_val) else lambda_time_val
+                        lu = 0.0 if np.isinf(lambda_unit_val) else lambda_unit_val
+                        ln = 1e10 if np.isinf(lambda_nn_val) else lambda_nn_val
+
+                        try:
+                            score = self._loocv_score_joint(
+                                Y, D, control_obs, lt, lu, ln,
+                                treated_periods, n_units, n_periods
+                            )
+
+                            if score < best_score:
+                                best_score = score
+                                best_lambda = (lambda_time_val, lambda_unit_val, lambda_nn_val)
+
+                        except (np.linalg.LinAlgError, ValueError):
+                            continue
+
+        if best_lambda is None:
+            warnings.warn(
+                "All tuning parameter combinations failed. Using defaults.",
+                UserWarning
+            )
+            best_lambda = (1.0, 1.0, 0.1)
+            best_score = np.nan
+
+        # Final estimation with best parameters
+        lambda_time, lambda_unit, lambda_nn = best_lambda
+        original_lambda_time, original_lambda_unit, original_lambda_nn = best_lambda
+
+        # Convert infinity values for computation
+        if np.isinf(lambda_time):
+            lambda_time = 0.0
+        if np.isinf(lambda_unit):
+            lambda_unit = 0.0
+        if np.isinf(lambda_nn):
+            lambda_nn = 1e10
+
+        # Compute final weights and fit
+        delta = self._compute_joint_weights(
+            Y, D, lambda_time, lambda_unit, treated_periods, n_units, n_periods
+        )
+
+        if lambda_nn >= 1e10:
+            mu, alpha, beta, tau = self._solve_joint_no_lowrank(Y, D, delta)
+            L = np.zeros((n_periods, n_units))
+        else:
+            mu, alpha, beta, L, tau = self._solve_joint_with_lowrank(
+                Y, D, delta, lambda_nn, self.max_iter, self.tol
+            )
+
+        # ATT is the scalar treatment effect
+        att = tau
+
+        # Compute individual treatment effects for reporting (same τ for all)
+        treatment_effects = {}
+        for t in range(n_periods):
+            for i in range(n_units):
+                if D[t, i] == 1:
+                    unit_id = idx_to_unit[i]
+                    time_id = idx_to_period[t]
+                    treatment_effects[(unit_id, time_id)] = tau
+
+        # Compute effective rank of L
+        _, s, _ = np.linalg.svd(L, full_matrices=False)
+        if s[0] > 0:
+            effective_rank = np.sum(s) / s[0]
+        else:
+            effective_rank = 0.0
+
+        # Bootstrap variance estimation
+        effective_lambda = (lambda_time, lambda_unit, lambda_nn)
+
+        if self.variance_method == "bootstrap":
+            se, bootstrap_dist = self._bootstrap_variance_joint(
+                data, outcome, treatment, unit, time,
+                effective_lambda, treated_periods
+            )
+        else:
+            # Jackknife for joint method
+            se, bootstrap_dist = self._jackknife_variance_joint(
+                Y, D, effective_lambda, treated_periods,
+                n_units, n_periods
+            )
+
+        # Compute test statistics
+        if se > 0:
+            t_stat = att / se
+            p_value = 2 * (1 - stats.t.cdf(abs(t_stat), df=max(1, n_treated_obs - 1)))
+            conf_int = compute_confidence_interval(att, se, self.alpha)
+        else:
+            t_stat = np.nan
+            p_value = np.nan
+            conf_int = (np.nan, np.nan)
+
+        # Create results dictionaries
+        unit_effects_dict = {idx_to_unit[i]: alpha[i] for i in range(n_units)}
+        time_effects_dict = {idx_to_period[t]: beta[t] for t in range(n_periods)}
+
+        self.results_ = TROPResults(
+            att=float(att),
+            se=float(se),
+            t_stat=float(t_stat) if np.isfinite(t_stat) else t_stat,
+            p_value=float(p_value) if np.isfinite(p_value) else p_value,
+            conf_int=conf_int,
+            n_obs=len(data),
+            n_treated=len(treated_unit_idx),
+            n_control=len(control_unit_idx),
+            n_treated_obs=int(n_treated_obs),
+            unit_effects=unit_effects_dict,
+            time_effects=time_effects_dict,
+            treatment_effects=treatment_effects,
+            lambda_time=original_lambda_time,
+            lambda_unit=original_lambda_unit,
+            lambda_nn=original_lambda_nn,
+            factor_matrix=L,
+            effective_rank=effective_rank,
+            loocv_score=best_score,
+            variance_method=self.variance_method,
+            alpha=self.alpha,
+            n_pre_periods=n_pre_periods,
+            n_post_periods=n_post_periods,
+            n_bootstrap=self.n_bootstrap if self.variance_method == "bootstrap" else None,
+            bootstrap_distribution=bootstrap_dist if len(bootstrap_dist) > 0 else None,
+        )
+
+        self.is_fitted_ = True
+        return self.results_
+
+    def _bootstrap_variance_joint(
+        self,
+        data: pd.DataFrame,
+        outcome: str,
+        treatment: str,
+        unit: str,
+        time: str,
+        optimal_lambda: Tuple[float, float, float],
+        treated_periods: int,
+    ) -> Tuple[float, np.ndarray]:
+        """
+        Compute bootstrap standard error for joint method.
+
+        Uses Rust backend when available for parallel bootstrap (5-15x speedup).
+
+        Parameters
+        ----------
+        data : pd.DataFrame
+            Original data.
+        outcome : str
+            Outcome column name.
+        treatment : str
+            Treatment column name.
+        unit : str
+            Unit column name.
+        time : str
+            Time column name.
+        optimal_lambda : tuple
+            Optimal tuning parameters.
+        treated_periods : int
+            Number of post-treatment periods.
+
+        Returns
+        -------
+        Tuple[float, np.ndarray]
+            (se, bootstrap_estimates).
+        """
+        lambda_time, lambda_unit, lambda_nn = optimal_lambda
+
+        # Try Rust backend for parallel bootstrap (5-15x speedup)
+        if HAS_RUST_BACKEND and _rust_bootstrap_trop_variance_joint is not None:
+            try:
+                # Create matrices for Rust function
+                all_units = sorted(data[unit].unique())
+                all_periods = sorted(data[time].unique())
+
+                Y = (
+                    data.pivot(index=time, columns=unit, values=outcome)
+                    .reindex(index=all_periods, columns=all_units)
+                    .values
+                )
+                D = (
+                    data.pivot(index=time, columns=unit, values=treatment)
+                    .reindex(index=all_periods, columns=all_units)
+                    .fillna(0)
+                    .astype(np.float64)
+                    .values
+                )
+
+                bootstrap_estimates, se = _rust_bootstrap_trop_variance_joint(
+                    Y, D,
+                    lambda_time, lambda_unit, lambda_nn,
+                    self.n_bootstrap, self.max_iter, self.tol,
+                    self.seed if self.seed is not None else 0
+                )
+
+                if len(bootstrap_estimates) < 10:
+                    warnings.warn(
+                        f"Only {len(bootstrap_estimates)} bootstrap iterations succeeded.",
+                        UserWarning
+                    )
+                    if len(bootstrap_estimates) == 0:
+                        return 0.0, np.array([])
+
+                return float(se), np.array(bootstrap_estimates)
+
+            except Exception as e:
+                logger.debug(
+                    "Rust bootstrap (joint) failed, falling back to Python: %s", e
+                )
+
+        # Python fallback implementation
+        rng = np.random.default_rng(self.seed)
+
+        # Stratified bootstrap sampling
+        unit_ever_treated = data.groupby(unit)[treatment].max()
+        treated_units = np.array(unit_ever_treated[unit_ever_treated == 1].index.tolist())
+        control_units = np.array(unit_ever_treated[unit_ever_treated == 0].index.tolist())
+
+        n_treated_units = len(treated_units)
+        n_control_units = len(control_units)
+
+        bootstrap_estimates_list: List[float] = []
+
+        for _ in range(self.n_bootstrap):
+            # Stratified sampling
+            if n_control_units > 0:
+                sampled_control = rng.choice(
+                    control_units, size=n_control_units, replace=True
+                )
+            else:
+                sampled_control = np.array([], dtype=object)
+
+            if n_treated_units > 0:
+                sampled_treated = rng.choice(
+                    treated_units, size=n_treated_units, replace=True
+                )
+            else:
+                sampled_treated = np.array([], dtype=object)
+
+            sampled_units = np.concatenate([sampled_control, sampled_treated])
+
+            # Create bootstrap sample
+            boot_data = pd.concat([
+                data[data[unit] == u].assign(**{unit: f"{u}_{idx}"})
+                for idx, u in enumerate(sampled_units)
+            ], ignore_index=True)
+
+            try:
+                tau = self._fit_joint_with_fixed_lambda(
+                    boot_data, outcome, treatment, unit, time,
+                    optimal_lambda, treated_periods
+                )
+                bootstrap_estimates_list.append(tau)
+            except (ValueError, np.linalg.LinAlgError, KeyError):
+                continue
+
+        bootstrap_estimates = np.array(bootstrap_estimates_list)
+
+        if len(bootstrap_estimates) < 10:
+            warnings.warn(
+                f"Only {len(bootstrap_estimates)} bootstrap iterations succeeded.",
+                UserWarning
+            )
+            if len(bootstrap_estimates) == 0:
+                return 0.0, np.array([])
+
+        se = np.std(bootstrap_estimates, ddof=1)
+        return float(se), bootstrap_estimates
+
+    def _fit_joint_with_fixed_lambda(
+        self,
+        data: pd.DataFrame,
+        outcome: str,
+        treatment: str,
+        unit: str,
+        time: str,
+        fixed_lambda: Tuple[float, float, float],
+        treated_periods: int,
+    ) -> float:
+        """
+        Fit joint model with fixed tuning parameters.
+
+        Returns only the treatment effect τ.
+        """
+        lambda_time, lambda_unit, lambda_nn = fixed_lambda
+
+        all_units = sorted(data[unit].unique())
+        all_periods = sorted(data[time].unique())
+
+        n_units = len(all_units)
+        n_periods = len(all_periods)
+
+        Y = (
+            data.pivot(index=time, columns=unit, values=outcome)
+            .reindex(index=all_periods, columns=all_units)
+            .values
+        )
+        D = (
+            data.pivot(index=time, columns=unit, values=treatment)
+            .reindex(index=all_periods, columns=all_units)
+            .fillna(0)
+            .astype(int)
+            .values
+        )
+
+        # Compute weights
+        delta = self._compute_joint_weights(
+            Y, D, lambda_time, lambda_unit, treated_periods, n_units, n_periods
+        )
+
+        # Fit model
+        if lambda_nn >= 1e10:
+            _, _, _, tau = self._solve_joint_no_lowrank(Y, D, delta)
+        else:
+            _, _, _, _, tau = self._solve_joint_with_lowrank(
+                Y, D, delta, lambda_nn, self.max_iter, self.tol
+            )
+
+        return tau
+
+    def _jackknife_variance_joint(
+        self,
+        Y: np.ndarray,
+        D: np.ndarray,
+        optimal_lambda: Tuple[float, float, float],
+        treated_periods: int,
+        n_units: int,
+        n_periods: int,
+    ) -> Tuple[float, np.ndarray]:
+        """
+        Compute jackknife standard error for joint method.
+
+        Parameters
+        ----------
+        Y : np.ndarray
+            Outcome matrix.
+        D : np.ndarray
+            Treatment matrix.
+        optimal_lambda : tuple
+            Optimal tuning parameters.
+        treated_periods : int
+            Number of post-treatment periods.
+        n_units : int
+            Number of units.
+        n_periods : int
+            Number of periods.
+
+        Returns
+        -------
+        Tuple[float, np.ndarray]
+            (se, jackknife_estimates).
+        """
+        lambda_time, lambda_unit, lambda_nn = optimal_lambda
+        jackknife_estimates = []
+
+        # Get treated unit indices
+        treated_unit_idx = np.where(np.any(D == 1, axis=0))[0]
+
+        for leave_out in treated_unit_idx:
+            # True leave-one-out: zero the delta weight for the left-out unit
+            # This excludes the unit from estimation without imputation
+            Y_jack = Y.copy()
+            D_jack = D.copy()
+            D_jack[:, leave_out] = 0  # Mark as not treated for weight computation
+
+            try:
+                # Compute weights (left-out unit is still in calculation)
+                delta = self._compute_joint_weights(
+                    Y_jack, D_jack, lambda_time, lambda_unit,
+                    treated_periods, n_units, n_periods
+                )
+
+                # Zero the delta weight for the left-out unit
+                # This ensures the unit doesn't contribute to estimation
+                delta[:, leave_out] = 0.0
+
+                # Fit model (left-out unit has zero weight, truly excluded)
+                if lambda_nn >= 1e10:
+                    _, _, _, tau = self._solve_joint_no_lowrank(Y_jack, D_jack, delta)
+                else:
+                    _, _, _, _, tau = self._solve_joint_with_lowrank(
+                        Y_jack, D_jack, delta, lambda_nn, self.max_iter, self.tol
+                    )
+
+                jackknife_estimates.append(tau)
+
+            except (np.linalg.LinAlgError, ValueError):
+                continue
+
+        jackknife_estimates = np.array(jackknife_estimates)
+
+        if len(jackknife_estimates) < 2:
+            return 0.0, jackknife_estimates
+
+        # Jackknife SE formula
+        n = len(jackknife_estimates)
+        mean_est = np.mean(jackknife_estimates)
+        se = np.sqrt((n - 1) / n * np.sum((jackknife_estimates - mean_est) ** 2))
+
+        return float(se), jackknife_estimates
+
     def fit(
         self,
         data: pd.DataFrame,
@@ -880,6 +1876,11 @@ class TROP:
         if missing:
             raise ValueError(f"Missing columns: {missing}")
 
+        # Dispatch based on estimation method
+        if self.method == "joint":
+            return self._fit_joint(data, outcome, treatment, unit, time)
+
+        # Below is the twostep method (default)
         # Get unique units and periods
         all_units = sorted(data[unit].unique())
         all_periods = sorted(data[time].unique())
@@ -2079,6 +3080,7 @@ class TROP:
     def get_params(self) -> Dict[str, Any]:
         """Get estimator parameters."""
         return {
+            "method": self.method,
             "lambda_time_grid": self.lambda_time_grid,
             "lambda_unit_grid": self.lambda_unit_grid,
             "lambda_nn_grid": self.lambda_nn_grid,

@@ -95,10 +95,14 @@ TROP uses leave-one-out cross-validation (LOOCV) to select three tuning paramete
      - Nuclear norm penalty
      - Higher values encourage lower-rank factor structure
 
-Algorithm
----------
+Estimation Methods
+------------------
 
-TROP follows Algorithm 2 from the paper:
+TROP supports two estimation methods via the ``method`` parameter:
+
+**Two-Step Method** (``method='twostep'``, default)
+
+The default method follows Algorithm 2 from the paper:
 
 1. **Grid search with LOOCV**: For each (λ_time, λ_unit, λ_nn) combination,
    compute cross-validation score by treating control observations as pseudo-treated
@@ -111,9 +115,53 @@ TROP follows Algorithm 2 from the paper:
 
 3. **Average**: ATT = mean(τ̂_{it}) over all treated observations
 
-This structure provides the **triple robustness** property (Theorem 5.1):
+This provides the **triple robustness** property (Theorem 5.1):
 the estimator is consistent if any one of the three components
 (unit weights, time weights, factor model) is correctly specified.
+
+**Joint Method** (``method='joint'``)
+
+An alternative approach that estimates a single scalar treatment effect:
+
+1. **Compute weights**: Distance-based unit and time weights computed once
+   (distance to center of treated block, RMSE to average treated trajectory)
+
+2. **Joint optimization**: Solve weighted least squares problem
+
+   .. math::
+
+      \min_{\mu, \alpha, \beta, L, \tau} \sum_{i,t} \delta_{it} (Y_{it} - \mu - \alpha_i - \beta_t - L_{it} - W_{it} \tau)^2 + \lambda_{nn} \|L\|_*
+
+   where τ is a **single scalar** (homogeneous treatment effect).
+
+3. **With low-rank** (finite λ_nn): Uses alternating minimization between
+   weighted LS for (μ, α, β, τ) and soft-threshold SVD for L.
+
+The joint method is **faster** (single optimization vs N_treated optimizations)
+but assumes **homogeneous treatment effects** across all treated observations.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 20 40 40
+
+   * - Feature
+     - Two-Step (default)
+     - Joint
+   * - Treatment effect
+     - Per-observation τ_{it}
+     - Single scalar τ
+   * - Flexibility
+     - Heterogeneous effects
+     - Homogeneous assumption
+   * - Speed
+     - Slower (N_treated fits)
+     - Faster (single fit)
+   * - Weights
+     - Observation-specific
+     - Global (center of treated block)
+
+Use ``method='twostep'`` when treatment effects may vary across observations.
+Use ``method='joint'`` for faster estimation when effects are expected to be homogeneous.
 
 Example Usage
 -------------
@@ -154,6 +202,28 @@ Quick estimation with convenience function::
         time='period',
         n_bootstrap=200
     )
+
+Using the joint method for faster estimation::
+
+    from diff_diff import TROP
+
+    # Joint method: single scalar treatment effect via weighted LS
+    trop_joint = TROP(
+        method='joint',  # Use joint weighted least squares
+        lambda_time_grid=[0.0, 0.5, 1.0, 2.0],
+        lambda_unit_grid=[0.0, 0.5, 1.0, 2.0],
+        lambda_nn_grid=[0.0, 0.1, 1.0],
+        n_bootstrap=200,
+        seed=42
+    )
+    results_joint = trop_joint.fit(data, outcome='y', treatment='treated',
+                                    unit='unit_id', time='period')
+
+    # Compare methods
+    trop_twostep = TROP(method='twostep', ...)  # Default
+    results_twostep = trop_twostep.fit(data, ...)
+    print(f"Two-step ATT: {results_twostep.att:.3f}")
+    print(f"Joint ATT: {results_joint.att:.3f}")
 
 Examining factor structure::
 

@@ -1267,6 +1267,7 @@ trop = TROP(
 
 ```python
 TROP(
+    method='twostep',           # Estimation method: 'twostep' (default) or 'joint'
     lambda_time_grid=None,      # Time decay grid (default: [0, 0.1, 0.5, 1, 2, 5])
     lambda_unit_grid=None,      # Unit distance grid (default: [0, 0.1, 0.5, 1, 2, 5])
     lambda_nn_grid=None,        # Nuclear norm grid (default: [0, 0.01, 0.1, 1, 10])
@@ -1278,6 +1279,10 @@ TROP(
     seed=None                   # Random seed
 )
 ```
+
+**Estimation methods:**
+- `'twostep'` (default): Per-observation model fitting following Algorithm 2 of the paper. Computes observation-specific weights and fits a model for each treated observation, then averages the individual treatment effects. More flexible but computationally intensive.
+- `'joint'`: Joint weighted least squares optimization. Estimates a single scalar treatment effect τ along with fixed effects and optional low-rank factor adjustment. Faster but assumes homogeneous treatment effects.
 
 **Convenience function:**
 

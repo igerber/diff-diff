@@ -80,3 +80,6 @@ scripts/
 # Launch directories (local only)
 launch/
 launch-video/
+
+# Reference implementations (local only)
+trop_avg_ref/
