@@ -910,8 +910,8 @@ class TROP:
         delta_time = np.exp(-lambda_time * dist_time)
 
         # Unit weights: RMSE to average treated trajectory over pre-periods
-        # Compute average treated trajectory
-        average_treated = np.mean(Y[:, treated_unit_idx], axis=1)
+        # Compute average treated trajectory (use nanmean to handle NaN)
+        average_treated = np.nanmean(Y[:, treated_unit_idx], axis=1)
 
         # Pre-period mask: 1 in pre, 0 in post
         pre_mask = np.ones(n_periods, dtype=float)
@@ -919,14 +919,23 @@ class TROP:
 
         # Compute RMS distance for each unit
         # dist_unit[i] = sqrt(sum_pre(avg_tr - Y_i)^2 / n_pre)
-        diff_sq = ((average_treated[:, np.newaxis] - Y) ** 2) * pre_mask[:, np.newaxis]
+        # Use NaN-safe operations: treat NaN differences as 0 (excluded)
+        diff = average_treated[:, np.newaxis] - Y
+        diff_sq = np.where(np.isfinite(diff), diff ** 2, 0.0) * pre_mask[:, np.newaxis]
+
+        # Count valid observations per unit in pre-period
+        valid_count = np.sum(
+            np.isfinite(Y) * pre_mask[:, np.newaxis], axis=0
+        )
         sum_sq = np.sum(diff_sq, axis=0)
         n_pre = np.sum(pre_mask)
 
         if n_pre == 0:
             raise ValueError("No pre-treatment periods")
 
-        dist_unit = np.sqrt(sum_sq / n_pre)
+        # Use valid count per unit (avoid division by zero)
+        valid_count = np.maximum(valid_count, 1)
+        dist_unit = np.sqrt(sum_sq / valid_count)
         delta_unit = np.exp(-lambda_unit * dist_unit)
 
         # Outer product: (n_periods x n_units)
@@ -1050,6 +1059,15 @@ class TROP:
         y = Y.flatten()  # length n_periods * n_units
         w = D.flatten()
         weights = delta.flatten()
+
+        # Handle NaN values: zero weight for NaN outcomes/weights, impute with 0
+        # This ensures NaN observations don't contribute to estimation
+        valid_y = np.isfinite(y)
+        valid_w = np.isfinite(weights)
+        valid_mask = valid_y & valid_w
+        weights = np.where(valid_mask, weights, 0.0)
+        y = np.where(valid_mask, y, 0.0)
+
         sqrt_weights = np.sqrt(np.maximum(weights, 0))
 
         # Build design matrix: [intercept, unit_dummies, time_dummies, treatment]
@@ -1132,6 +1150,10 @@ class TROP:
         """
         n_periods, n_units = Y.shape
 
+        # Handle NaN values: impute with 0 for computations
+        # The solver will also zero weights for NaN observations
+        Y_safe = np.where(np.isfinite(Y), Y, 0.0)
+
         # Initialize L = 0
         L = np.zeros((n_periods, n_units))
 
@@ -1139,13 +1161,13 @@ class TROP:
             L_old = L.copy()
 
             # Step 1: Fix L, solve for (mu, alpha, beta, tau)
-            # Adjusted outcome: Y - L
-            Y_adj = Y - L
+            # Adjusted outcome: Y - L (using NaN-safe Y)
+            Y_adj = Y_safe - L
             mu, alpha, beta, tau = self._solve_joint_no_lowrank(Y_adj, D, delta)
 
             # Step 2: Fix (mu, alpha, beta, tau), update L
-            # Residual: R = Y - mu - alpha - beta - tau*D
-            R = Y - mu - alpha[np.newaxis, :] - beta[:, np.newaxis] - tau * D
+            # Residual: R = Y - mu - alpha - beta - tau*D (using NaN-safe Y)
+            R = Y_safe - mu - alpha[np.newaxis, :] - beta[:, np.newaxis] - tau * D
 
             # Weighted proximal step for L (soft-threshold SVD)
             # Normalize weights
@@ -1160,7 +1182,9 @@ class TROP:
             gradient_step = L + delta_norm * (R - L)
 
             # Soft-threshold singular values
-            L = self._soft_threshold_svd(gradient_step, lambda_nn)
+            # Use eta * lambda_nn for proper proximal step size (matches Rust)
+            eta = 1.0 / delta_max if delta_max > 0 else 1.0
+            L = self._soft_threshold_svd(gradient_step, eta * lambda_nn)
 
             # Check convergence
             if np.max(np.abs(L - L_old)) < tol:

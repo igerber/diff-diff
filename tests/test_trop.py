@@ -2948,3 +2948,69 @@ class TestTROPJointMethod:
             treated_periods, n_units, n_periods
         )
         assert np.isfinite(score2) or np.isinf(score2), "Score should be finite or inf"
+
+    def test_joint_handles_nan_outcomes(self, simple_panel_data):
+        """Joint method handles NaN outcome values gracefully."""
+        # Introduce NaN in some control observations
+        data = simple_panel_data.copy()
+        control_mask = data['treated'] == 0
+        control_indices = data[control_mask].index.tolist()
+
+        # Set 5 random control observations to NaN
+        np.random.seed(42)
+        nan_indices = np.random.choice(control_indices, size=5, replace=False)
+        data.loc[nan_indices, 'outcome'] = np.nan
+
+        trop_est = TROP(
+            method="joint",
+            lambda_time_grid=[0.0, 1.0],
+            lambda_unit_grid=[0.0, 1.0],
+            lambda_nn_grid=[0.0, 0.1],
+            n_bootstrap=10,
+            seed=42,
+        )
+        results = trop_est.fit(
+            data,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="period",
+        )
+
+        # Results should be finite (NaN observations excluded)
+        assert np.isfinite(results.att), "ATT should be finite with NaN data"
+        assert np.isfinite(results.se), "SE should be finite with NaN data"
+        # ATT should be positive (true effect is 3.0)
+        assert results.att > 0, "ATT should be positive"
+
+    def test_joint_with_lowrank_handles_nan(self, simple_panel_data):
+        """Joint method with low-rank handles NaN values correctly."""
+        # Introduce NaN in some control observations
+        data = simple_panel_data.copy()
+        control_mask = data['treated'] == 0
+        control_indices = data[control_mask].index.tolist()
+
+        # Set 3 random control observations to NaN
+        np.random.seed(123)
+        nan_indices = np.random.choice(control_indices, size=3, replace=False)
+        data.loc[nan_indices, 'outcome'] = np.nan
+
+        trop_est = TROP(
+            method="joint",
+            lambda_time_grid=[0.0],
+            lambda_unit_grid=[0.0],
+            lambda_nn_grid=[0.1],  # Finite lambda_nn enables low-rank
+            n_bootstrap=10,
+            seed=42,
+        )
+        results = trop_est.fit(
+            data,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="period",
+        )
+
+        # Results should be finite
+        assert np.isfinite(results.att), "ATT should be finite with NaN data"
+        assert np.isfinite(results.se), "SE should be finite with NaN data"

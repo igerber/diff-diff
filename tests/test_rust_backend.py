@@ -1364,6 +1364,65 @@ class TestTROPJointRustVsNumpy:
         # Both should have same sign (both positive for true_effect=2.0)
         assert np.sign(results_joint.att) == np.sign(results_twostep.att)
 
+    def test_trop_joint_handles_nan_outcomes(self):
+        """Test TROP joint method handles NaN outcome values gracefully."""
+        import pandas as pd
+        from diff_diff import TROP
+
+        np.random.seed(42)
+        n_units, n_periods = 20, 10
+        n_treated = 5
+        n_post = 3
+        true_effect = 2.0
+
+        data = []
+        for i in range(n_units):
+            is_treated = i < n_treated
+            for t in range(n_periods):
+                post = t >= (n_periods - n_post)
+                y = 10.0 + i * 0.2 + t * 0.3 + np.random.randn() * 0.5
+                treatment_indicator = 1 if (is_treated and post) else 0
+                if treatment_indicator:
+                    y += true_effect
+                data.append({
+                    'unit': i,
+                    'time': t,
+                    'outcome': y,
+                    'treated': treatment_indicator,
+                })
+
+        df = pd.DataFrame(data)
+
+        # Introduce NaN values in control observations (pre-treatment periods)
+        # Set 5% of control pre-treatment observations to NaN
+        nan_indices = []
+        for idx, row in df.iterrows():
+            if row['treated'] == 0 and row['time'] < (n_periods - n_post):
+                if np.random.rand() < 0.05:
+                    nan_indices.append(idx)
+        df.loc[nan_indices, 'outcome'] = np.nan
+
+        n_nan = len(nan_indices)
+        assert n_nan > 0, "Should have introduced some NaN values"
+
+        trop = TROP(
+            method="joint",
+            lambda_time_grid=[0.0, 1.0],
+            lambda_unit_grid=[0.0, 1.0],
+            lambda_nn_grid=[0.0, 0.1],
+            n_bootstrap=20,
+            seed=42
+        )
+        results = trop.fit(df, 'outcome', 'treated', 'unit', 'time')
+
+        # Results should be finite (NaN observations are excluded)
+        assert np.isfinite(results.att), f"ATT {results.att} should be finite with NaN data"
+        assert np.isfinite(results.se), f"SE {results.se} should be finite with NaN data"
+        assert results.se >= 0, "SE should be non-negative"
+
+        # ATT should still be positive (true effect is positive)
+        assert results.att > 0, f"ATT {results.att:.2f} should be positive"
+
 
 class TestFallbackWhenNoRust:
     """Test that pure Python fallback works when Rust is unavailable."""
