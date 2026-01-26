@@ -5,7 +5,7 @@
 //! - Simplex projection
 
 use ndarray::{Array1, ArrayView1, ArrayView2};
-use numpy::{IntoPyArray, PyArray1, PyReadonlyArray1, PyReadonlyArray2};
+use numpy::{PyArray1, PyReadonlyArray1, PyReadonlyArray2, ToPyArray};
 use pyo3::prelude::*;
 
 /// Maximum number of optimization iterations.
@@ -40,14 +40,14 @@ pub fn compute_synthetic_weights<'py>(
     lambda_reg: f64,
     max_iter: Option<usize>,
     tol: Option<f64>,
-) -> PyResult<&'py PyArray1<f64>> {
+) -> PyResult<Bound<'py, PyArray1<f64>>> {
     let y_control_arr = y_control.as_array();
     let y_treated_arr = y_treated.as_array();
 
     let weights =
         compute_synthetic_weights_internal(&y_control_arr, &y_treated_arr, lambda_reg, max_iter, tol)?;
 
-    Ok(weights.into_pyarray(py))
+    Ok(weights.to_pyarray_bound(py))
 }
 
 /// Internal implementation of synthetic weight computation.
@@ -123,10 +123,10 @@ fn compute_synthetic_weights_internal(
 pub fn project_simplex<'py>(
     py: Python<'py>,
     v: PyReadonlyArray1<'py, f64>,
-) -> PyResult<&'py PyArray1<f64>> {
+) -> PyResult<Bound<'py, PyArray1<f64>>> {
     let v_arr = v.as_array();
     let result = project_simplex_internal(&v_arr);
-    Ok(result.into_pyarray(py))
+    Ok(result.to_pyarray_bound(py))
 }
 
 /// Internal implementation of simplex projection.

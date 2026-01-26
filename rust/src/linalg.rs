@@ -1,15 +1,17 @@
 //! Linear algebra operations for OLS estimation and robust variance computation.
 //!
 //! This module provides optimized implementations of:
-//! - OLS solving using LAPACK
+//! - OLS solving using pure Rust (faer library)
 //! - HC1 (heteroskedasticity-consistent) variance-covariance estimation
 //! - Cluster-robust variance-covariance estimation
 
 use ndarray::{Array1, Array2, ArrayView1, ArrayView2, Axis};
-use ndarray_linalg::{FactorizeC, Solve, SolveC, SVD, UPLO};
-use numpy::{IntoPyArray, PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2};
+use numpy::{PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2, ToPyArray};
 use pyo3::prelude::*;
 use std::collections::HashMap;
+
+// faer for pure Rust linear algebra (no external BLAS/LAPACK dependencies)
+use faer::linalg::solvers::{PartialPivLu, Solve};
 
 /// Solve OLS regression: β = (X'X)^{-1} X'y
 ///
@@ -46,14 +48,14 @@ pub fn solve_ols<'py>(
     cluster_ids: Option<PyReadonlyArray1<'py, i64>>,
     return_vcov: bool,
 ) -> PyResult<(
-    &'py PyArray1<f64>,
-    &'py PyArray1<f64>,
-    Option<&'py PyArray2<f64>>,
+    Bound<'py, PyArray1<f64>>,
+    Bound<'py, PyArray1<f64>>,
+    Option<Bound<'py, PyArray2<f64>>>,
 )> {
     let x_arr = x.as_array();
     let y_arr = y.as_array();
 
-    let _n = x_arr.nrows();
+    let n = x_arr.nrows();
     let k = x_arr.ncols();
 
     // Solve using SVD with truncation for rank-deficient matrices
@@ -61,17 +63,49 @@ pub fn solve_ols<'py>(
     let x_owned = x_arr.to_owned();
     let y_owned = y_arr.to_owned();
 
-    // Compute SVD: X = U * S * V^T
-    let (u_opt, s, vt_opt) = x_owned
-        .svd(true, true)
-        .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("SVD failed: {}", e)))?;
+    // Convert ndarray to faer for SVD computation
+    let x_faer = ndarray_to_faer(&x_owned);
 
-    let u = u_opt.ok_or_else(|| {
-        PyErr::new::<pyo3::exceptions::PyValueError, _>("SVD did not return U matrix")
-    })?;
-    let vt = vt_opt.ok_or_else(|| {
-        PyErr::new::<pyo3::exceptions::PyValueError, _>("SVD did not return V^T matrix")
-    })?;
+    // Compute thin SVD using faer: X = U * S * V^T
+    let svd = match x_faer.thin_svd() {
+        Ok(s) => s,
+        Err(_) => {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                "SVD computation failed"
+            ))
+        }
+    };
+
+    // Extract U, S, V from faer SVD result (capitalized methods in faer 0.24)
+    let u_faer = svd.U();
+    let s_diag = svd.S();  // Returns diagonal view
+    let s_col = s_diag.column_vector();  // Get as column vector
+    let v_faer = svd.V();  // This is V, not V^T
+
+    // Convert back to ndarray
+    let n_rows = u_faer.nrows();
+    let n_svd_cols = u_faer.ncols();
+    let mut u = Array2::<f64>::zeros((n_rows, n_svd_cols));
+    for i in 0..n_rows {
+        for j in 0..n_svd_cols {
+            u[[i, j]] = u_faer[(i, j)];
+        }
+    }
+
+    let s_len = s_col.nrows();
+    let mut s = Array1::<f64>::zeros(s_len);
+    for i in 0..s_len {
+        s[i] = s_col[i];  // S column vector
+    }
+
+    let v_rows = v_faer.nrows();
+    let v_cols = v_faer.ncols();
+    let mut vt = Array2::<f64>::zeros((v_cols, v_rows));  // V^T has shape (k, k)
+    for i in 0..v_rows {
+        for j in 0..v_cols {
+            vt[[j, i]] = v_faer[(i, j)];  // Transpose V to get V^T
+        }
+    }
 
     // Compute rcond threshold to match R's lm() behavior
     // R's qr() uses tol = 1e-07 by default, which is sqrt(eps) ≈ 1.49e-08
@@ -109,20 +143,20 @@ pub fn solve_ols<'py>(
             // Rank-deficient: cannot compute valid vcov, return NaN matrix
             let mut nan_vcov = Array2::<f64>::zeros((k, k));
             nan_vcov.fill(f64::NAN);
-            Some(nan_vcov.into_pyarray(py))
+            Some(nan_vcov.to_pyarray_bound(py))
         } else {
             // Full rank: compute robust vcov normally
             let cluster_arr = cluster_ids.as_ref().map(|c| c.as_array().to_owned());
-            let vcov_arr = compute_robust_vcov_internal(&x_arr, &residuals.view(), cluster_arr.as_ref())?;
-            Some(vcov_arr.into_pyarray(py))
+            let vcov_arr = compute_robust_vcov_internal(&x_arr, &residuals.view(), cluster_arr.as_ref(), n, k)?;
+            Some(vcov_arr.to_pyarray_bound(py))
         }
     } else {
         None
     };
 
     Ok((
-        coefficients.into_pyarray(py),
-        residuals.into_pyarray(py),
+        coefficients.to_pyarray_bound(py),
+        residuals.to_pyarray_bound(py),
         vcov,
     ))
 }
@@ -143,13 +177,15 @@ pub fn compute_robust_vcov<'py>(
     x: PyReadonlyArray2<'py, f64>,
     residuals: PyReadonlyArray1<'py, f64>,
     cluster_ids: Option<PyReadonlyArray1<'py, i64>>,
-) -> PyResult<&'py PyArray2<f64>> {
+) -> PyResult<Bound<'py, PyArray2<f64>>> {
     let x_arr = x.as_array();
     let residuals_arr = residuals.as_array();
     let cluster_arr = cluster_ids.as_ref().map(|c| c.as_array().to_owned());
 
-    let vcov = compute_robust_vcov_internal(&x_arr, &residuals_arr, cluster_arr.as_ref())?;
-    Ok(vcov.into_pyarray(py))
+    let n = x_arr.nrows();
+    let k = x_arr.ncols();
+    let vcov = compute_robust_vcov_internal(&x_arr, &residuals_arr, cluster_arr.as_ref(), n, k)?;
+    Ok(vcov.to_pyarray_bound(py))
 }
 
 /// Internal implementation of robust variance-covariance computation.
@@ -157,14 +193,13 @@ fn compute_robust_vcov_internal(
     x: &ArrayView2<f64>,
     residuals: &ArrayView1<f64>,
     cluster_ids: Option<&Array1<i64>>,
+    n: usize,
+    k: usize,
 ) -> PyResult<Array2<f64>> {
-    let n = x.nrows();
-    let k = x.ncols();
-
     // Compute X'X
     let xtx = x.t().dot(x);
 
-    // Compute (X'X)^{-1} using Cholesky decomposition
+    // Compute (X'X)^{-1} using LU decomposition
     let xtx_inv = invert_symmetric(&xtx)?;
 
     match cluster_ids {
@@ -240,58 +275,59 @@ fn compute_robust_vcov_internal(
     }
 }
 
+/// Convert ndarray Array2 to faer Mat
+fn ndarray_to_faer(arr: &Array2<f64>) -> faer::Mat<f64> {
+    let nrows = arr.nrows();
+    let ncols = arr.ncols();
+    faer::Mat::from_fn(nrows, ncols, |i, j| arr[[i, j]])
+}
+
 /// Invert a symmetric positive-definite matrix.
 ///
-/// Tries Cholesky factorization first (faster for well-conditioned SPD matrices),
-/// falls back to LU decomposition for near-singular or indefinite matrices.
-///
-/// Cholesky (when applicable):
-/// - ~2x faster than LU decomposition
-/// - More numerically stable for positive-definite matrices
-/// - Reuses the factorization across all column solves
+/// Uses LU decomposition with partial pivoting.
 fn invert_symmetric(a: &Array2<f64>) -> PyResult<Array2<f64>> {
     let n = a.nrows();
 
-    // Try Cholesky factorization first (faster for well-conditioned SPD matrices)
-    if let Ok(factorized) = a.factorizec(UPLO::Lower) {
-        // Solve A X = I for each column using Cholesky
-        let mut result = Array2::<f64>::zeros((n, n));
-        let mut cholesky_failed = false;
+    // Convert ndarray to faer
+    let a_faer = ndarray_to_faer(a);
 
-        for i in 0..n {
-            let mut e_i = Array1::<f64>::zeros(n);
-            e_i[i] = 1.0;
+    // Create identity matrix in faer
+    let identity = faer::Mat::from_fn(n, n, |i, j| if i == j { 1.0 } else { 0.0 });
 
-            match factorized.solvec(&e_i) {
-                Ok(col) => result.column_mut(i).assign(&col),
-                Err(_) => {
-                    cholesky_failed = true;
-                    break;
-                }
+    // Use LU decomposition with partial pivoting
+    let lu = PartialPivLu::new(a_faer.as_ref());
+
+    // Solve A * X = I  =>  X = A^{-1}
+    let x_faer = lu.solve(&identity);
+
+    // Check for NaN/Inf in result (indicates singular matrix)
+    let mut has_nan = false;
+    for i in 0..n {
+        for j in 0..n {
+            if !x_faer[(i, j)].is_finite() {
+                has_nan = true;
+                break;
             }
         }
-
-        if !cholesky_failed {
-            return Ok(result);
+        if has_nan {
+            break;
         }
     }
 
-    // Fallback to LU decomposition for near-singular or indefinite matrices
+    if has_nan {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "Matrix inversion failed (likely rank-deficient X'X). \
+             If the design matrix is rank-deficient, use solve_ols without \
+             skip_rank_check=True to enable R-style handling."
+        ));
+    }
+
+    // Convert back to ndarray
     let mut result = Array2::<f64>::zeros((n, n));
     for i in 0..n {
-        let mut e_i = Array1::<f64>::zeros(n);
-        e_i[i] = 1.0;
-
-        let col = a.solve(&e_i).map_err(|e| {
-            PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
-                "Matrix inversion failed (likely rank-deficient X'X): {}. \
-                 If the design matrix is rank-deficient, use solve_ols without \
-                 skip_rank_check=True to enable R-style handling.",
-                e
-            ))
-        })?;
-
-        result.column_mut(i).assign(&col);
+        for j in 0..n {
+            result[[i, j]] = x_faer[(i, j)];
+        }
     }
 
     Ok(result)
@@ -313,5 +349,15 @@ mod tests {
         assert!((identity[[1, 1]] - 1.0).abs() < 1e-10);
         assert!((identity[[0, 1]]).abs() < 1e-10);
         assert!((identity[[1, 0]]).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_ndarray_to_faer() {
+        let arr = array![[1.0, 2.0], [3.0, 4.0]];
+        let faer_mat = ndarray_to_faer(&arr);
+        assert_eq!(faer_mat[(0, 0)], 1.0);
+        assert_eq!(faer_mat[(0, 1)], 2.0);
+        assert_eq!(faer_mat[(1, 0)], 3.0);
+        assert_eq!(faer_mat[(1, 1)], 4.0);
     }
 }

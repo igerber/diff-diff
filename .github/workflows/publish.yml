@@ -15,7 +15,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          dnf install -y openblas-devel openssl-devel perl-IPC-Cmd
+          dnf install -y openssl-devel perl-IPC-Cmd
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --no-modify-path
           /opt/python/cp312-cp312/bin/pip install maturin
 
@@ -54,22 +54,46 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Install OpenBLAS
-        run: brew install openblas
-
       - name: Install maturin
         run: pip install maturin
 
       - name: Build wheel
-        run: |
-          export OPENBLAS_DIR=$(brew --prefix openblas)
-          export PKG_CONFIG_PATH=$(brew --prefix openblas)/lib/pkgconfig
-          maturin build --release --out dist --features extension-module
+        run: maturin build --release --out dist --features extension-module
 
       - name: Upload wheels
         uses: actions/upload-artifact@v4
         with:
           name: wheels-macos-arm64-py${{ matrix.python-version }}
+          path: dist/*.whl
+
+  # Build wheels on Windows
+  build-windows:
+    name: Build Windows wheels
+    runs-on: windows-latest
+    strategy:
+      matrix:
+        python-version: ['3.9', '3.10', '3.11', '3.12']
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install maturin
+        run: pip install maturin
+
+      - name: Build wheel
+        run: maturin build --release --out dist --features extension-module
+
+      - name: Upload wheels
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheels-windows-py${{ matrix.python-version }}
           path: dist/*.whl
 
   # Build source distribution
@@ -97,10 +121,9 @@ jobs:
           path: dist/*.tar.gz
 
   # Publish to PyPI
-  # Windows and macOS x86_64 users install from sdist and get pure Python fallback
   publish:
     name: Publish to PyPI
-    needs: [build-linux, build-macos-arm, build-sdist]
+    needs: [build-linux, build-macos-arm, build-windows, build-sdist]
     runs-on: ubuntu-latest
     environment: pypi
     permissions:
