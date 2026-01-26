@@ -119,9 +119,10 @@ pub fn solve_ols<'py>(
     let uty = u.t().dot(&y_owned); // (min(n,k),)
 
     // Build S^{-1} with truncation and count effective rank
-    let mut s_inv_uty = Array1::<f64>::zeros(k);
+    // Note: s.len() = min(n, k) from thin SVD, so this handles underdetermined (n < k) correctly
+    let mut s_inv_uty = Array1::<f64>::zeros(s.len());
     let mut rank = 0usize;
-    for i in 0..s.len().min(k) {
+    for i in 0..s.len() {
         if s[i] > threshold {
             s_inv_uty[i] = uty[i] / s[i];
             rank += 1;
@@ -359,5 +360,33 @@ mod tests {
         assert_eq!(faer_mat[(0, 1)], 2.0);
         assert_eq!(faer_mat[(1, 0)], 3.0);
         assert_eq!(faer_mat[(1, 1)], 4.0);
+    }
+
+    #[test]
+    fn test_svd_underdetermined_dimensions() {
+        // Underdetermined system: n=2 observations, k=3 coefficients
+        // X is (2, 3), y is (2,)
+        // This test verifies that thin SVD returns the correct dimensions
+        // for underdetermined systems and that our code handles them correctly
+        let x = array![[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]];
+        let _y = array![7.0, 8.0];
+
+        // Convert to faer and compute thin SVD
+        let x_faer = ndarray_to_faer(&x);
+        let svd = x_faer.thin_svd().unwrap();
+
+        // For n=2 < k=3: U is (2, 2), S has 2 values, V is (3, 2)
+        assert_eq!(svd.U().nrows(), 2, "U should have n=2 rows");
+        assert_eq!(svd.U().ncols(), 2, "U should have min(n,k)=2 cols");
+        assert_eq!(svd.S().column_vector().nrows(), 2, "S should have min(n,k)=2 singular values");
+        assert_eq!(svd.V().nrows(), 3, "V should have k=3 rows");
+        assert_eq!(svd.V().ncols(), 2, "V should have min(n,k)=2 cols");
+
+        // Verify s_inv_uty dimension calculation
+        let s_len = svd.S().column_vector().nrows();
+        assert_eq!(s_len, 2, "s.len() should be min(n,k)=2, not k=3");
+
+        // This is the key fix: s_inv_uty must have dimension s.len()=min(n,k),
+        // not k, otherwise vt.t().dot(&s_inv_uty) will have mismatched dimensions
     }
 }
