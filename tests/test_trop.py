@@ -3236,3 +3236,60 @@ class TestTROPJointMethod:
         trop = TROP(method="joint")
         with pytest.raises(ValueError, match="staggered adoption"):
             trop.fit(df, 'outcome', 'treated', 'unit', 'time')
+
+    def test_joint_python_loocv_subsampling(self):
+        """Test that joint method works with Python-only LOOCV when control_obs > max_loocv_samples.
+
+        This tests the fix for PR #113 Round 7 feedback (P1): Python fallback
+        LOOCV sampling could raise ValueError when control_obs is a list of tuples.
+        """
+        from unittest.mock import patch
+        import sys
+
+        np.random.seed(42)
+        # Create data with many control observations (> default max_loocv_samples=500)
+        n_units, n_periods = 30, 25  # 30*25 = 750 observations, most are control
+        n_treated = 3
+        n_post = 3
+
+        data = []
+        for i in range(n_units):
+            is_treated = i < n_treated
+            for t in range(n_periods):
+                post = t >= (n_periods - n_post)
+                y = 10.0 + i * 0.1 + t * 0.1 + np.random.randn() * 0.5
+                treatment_indicator = 1 if (is_treated and post) else 0
+                if treatment_indicator:
+                    y += 2.0
+                data.append({
+                    'unit': i,
+                    'time': t,
+                    'outcome': y,
+                    'treated': treatment_indicator,
+                })
+
+        df = pd.DataFrame(data)
+
+        # Patch to force Python backend and set small max_loocv_samples
+        trop_module = sys.modules['diff_diff.trop']
+
+        with patch.object(trop_module, 'HAS_RUST_BACKEND', False), \
+             patch.object(trop_module, '_rust_loocv_grid_search_joint', None), \
+             patch.object(trop_module, '_rust_bootstrap_trop_variance_joint', None):
+
+            # Use small max_loocv_samples to trigger subsampling
+            trop_est = TROP(
+                method="joint",
+                lambda_time_grid=[1.0],
+                lambda_unit_grid=[1.0],
+                lambda_nn_grid=[0.0],
+                max_loocv_samples=100,  # Force subsampling (control_obs > 100)
+                n_bootstrap=0,
+                seed=42
+            )
+
+            # This should not raise ValueError
+            results = trop_est.fit(df, 'outcome', 'treated', 'unit', 'time')
+
+            assert isinstance(results, TROPResults)
+            assert np.isfinite(results.att)

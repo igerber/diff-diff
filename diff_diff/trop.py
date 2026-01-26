@@ -1412,12 +1412,12 @@ class TROP:
                 if control_mask[t, i] and not np.isnan(Y[t, i])
             ]
 
-            # Subsample if needed
-            if len(control_obs) > self.max_loocv_samples:
-                rng = np.random.default_rng(self.seed)
-                control_obs = list(
-                    rng.choice(control_obs, size=self.max_loocv_samples, replace=False)
-                )
+            # Subsample if needed (sample indices to avoid ValueError on list of tuples)
+            rng = np.random.default_rng(self.seed)
+            max_loocv = min(self.max_loocv_samples, len(control_obs))
+            if len(control_obs) > max_loocv:
+                indices = rng.choice(len(control_obs), size=max_loocv, replace=False)
+                control_obs = [control_obs[idx] for idx in indices]
 
             # Grid search with true LOOCV
             for lambda_time_val in self.lambda_time_grid:

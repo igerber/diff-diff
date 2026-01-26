@@ -1554,31 +1554,18 @@ class TestTROPJointRustVsNumpy:
         trop_rust = TROP(**trop_params)
         results_rust = trop_rust.fit(df.copy(), 'outcome', 'treated', 'unit', 'time')
 
-        # Run with Python-only backend
-        old_backend = os.environ.get('DIFF_DIFF_BACKEND')
-        try:
-            os.environ['DIFF_DIFF_BACKEND'] = 'python'
-            # Need to reimport to pick up new backend setting
-            # Must reload both _backend AND trop modules since trop imports
-            # HAS_RUST_BACKEND and Rust functions at module load time
-            import importlib
-            import sys
-            importlib.reload(sys.modules['diff_diff._backend'])
-            importlib.reload(sys.modules['diff_diff.trop'])
-            from diff_diff.trop import TROP as TROP_Python
+        # Run with Python-only backend using mock.patch to avoid module reload issues
+        # (Module reload breaks isinstance() checks in other tests due to class identity)
+        from unittest.mock import patch
+        import sys
+        trop_module = sys.modules['diff_diff.trop']
 
-            trop_python = TROP_Python(**trop_params)
+        with patch.object(trop_module, 'HAS_RUST_BACKEND', False), \
+             patch.object(trop_module, '_rust_loocv_grid_search_joint', None), \
+             patch.object(trop_module, '_rust_bootstrap_trop_variance_joint', None):
+
+            trop_python = TROP(**trop_params)
             results_python = trop_python.fit(df.copy(), 'outcome', 'treated', 'unit', 'time')
-        finally:
-            # Restore original backend setting
-            if old_backend is None:
-                os.environ.pop('DIFF_DIFF_BACKEND', None)
-            else:
-                os.environ['DIFF_DIFF_BACKEND'] = old_backend
-            import importlib
-            import sys
-            importlib.reload(sys.modules['diff_diff._backend'])
-            importlib.reload(sys.modules['diff_diff.trop'])
 
         # Both should produce finite results
         assert np.isfinite(results_rust.att), f"Rust ATT {results_rust.att} should be finite"
@@ -1657,31 +1644,18 @@ class TestTROPJointRustVsNumpy:
         trop_rust = TROP(**trop_params)
         results_rust = trop_rust.fit(df.copy(), 'outcome', 'treated', 'unit', 'time')
 
-        # Run with Python-only backend
-        old_backend = os.environ.get('DIFF_DIFF_BACKEND')
-        try:
-            os.environ['DIFF_DIFF_BACKEND'] = 'python'
-            # Need to reimport to pick up new backend setting
-            # Must reload both _backend AND trop modules since trop imports
-            # HAS_RUST_BACKEND and Rust functions at module load time
-            import importlib
-            import sys
-            importlib.reload(sys.modules['diff_diff._backend'])
-            importlib.reload(sys.modules['diff_diff.trop'])
-            from diff_diff.trop import TROP as TROP_Python
+        # Run with Python-only backend using mock.patch to avoid module reload issues
+        # (Module reload breaks isinstance() checks in other tests due to class identity)
+        from unittest.mock import patch
+        import sys
+        trop_module = sys.modules['diff_diff.trop']
 
-            trop_python = TROP_Python(**trop_params)
+        with patch.object(trop_module, 'HAS_RUST_BACKEND', False), \
+             patch.object(trop_module, '_rust_loocv_grid_search_joint', None), \
+             patch.object(trop_module, '_rust_bootstrap_trop_variance_joint', None):
+
+            trop_python = TROP(**trop_params)
             results_python = trop_python.fit(df.copy(), 'outcome', 'treated', 'unit', 'time')
-        finally:
-            # Restore original backend setting
-            if old_backend is None:
-                os.environ.pop('DIFF_DIFF_BACKEND', None)
-            else:
-                os.environ['DIFF_DIFF_BACKEND'] = old_backend
-            import importlib
-            import sys
-            importlib.reload(sys.modules['diff_diff._backend'])
-            importlib.reload(sys.modules['diff_diff.trop'])
 
         # Both should produce finite results
         assert np.isfinite(results_rust.att), f"Rust ATT {results_rust.att} should be finite"
