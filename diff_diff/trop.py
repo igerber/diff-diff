@@ -1079,6 +1079,11 @@ class TROP:
 
         sqrt_weights = np.sqrt(np.maximum(weights, 0))
 
+        # Check for all-zero weights (matches Rust's sum_w < 1e-10 check)
+        sum_w = np.sum(weights)
+        if sum_w < 1e-10:
+            raise ValueError("All weights are zero - cannot estimate")
+
         # Build design matrix: [intercept, unit_dummies, time_dummies, treatment]
         # Total columns: 1 + n_units + n_periods + 1
         # But we need to drop one unit and one time dummy for identification
@@ -1321,11 +1326,17 @@ class TROP:
             raise ValueError("Need at least 2 pre-treatment periods")
 
         # Check for staggered adoption (joint method requires simultaneous treatment)
+        # Use only observed periods (skip missing) to avoid false positives on unbalanced panels
         first_treat_by_unit = []
         for i in treated_unit_idx:
-            treated_periods_i = np.where(D[:, i] == 1)[0]
-            if len(treated_periods_i) > 0:
-                first_treat_by_unit.append(treated_periods_i[0])
+            observed_mask = ~missing_mask[:, i]
+            # Get D values for observed periods only
+            observed_d = D[observed_mask, i]
+            observed_periods = np.where(observed_mask)[0]
+            # Find first treatment among observed periods
+            treated_idx = np.where(observed_d == 1)[0]
+            if len(treated_idx) > 0:
+                first_treat_by_unit.append(observed_periods[treated_idx[0]])
 
         unique_starts = sorted(set(first_treat_by_unit))
         if len(unique_starts) > 1:

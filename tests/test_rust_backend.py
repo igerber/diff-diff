@@ -1559,11 +1559,15 @@ class TestTROPJointRustVsNumpy:
         try:
             os.environ['DIFF_DIFF_BACKEND'] = 'python'
             # Need to reimport to pick up new backend setting
+            # Must reload both _backend AND trop modules since trop imports
+            # HAS_RUST_BACKEND and Rust functions at module load time
             import importlib
-            import diff_diff._backend
-            importlib.reload(diff_diff._backend)
+            import sys
+            importlib.reload(sys.modules['diff_diff._backend'])
+            importlib.reload(sys.modules['diff_diff.trop'])
+            from diff_diff.trop import TROP as TROP_Python
 
-            trop_python = TROP(**trop_params)
+            trop_python = TROP_Python(**trop_params)
             results_python = trop_python.fit(df.copy(), 'outcome', 'treated', 'unit', 'time')
         finally:
             # Restore original backend setting
@@ -1572,8 +1576,9 @@ class TestTROPJointRustVsNumpy:
             else:
                 os.environ['DIFF_DIFF_BACKEND'] = old_backend
             import importlib
-            import diff_diff._backend
-            importlib.reload(diff_diff._backend)
+            import sys
+            importlib.reload(sys.modules['diff_diff._backend'])
+            importlib.reload(sys.modules['diff_diff.trop'])
 
         # Both should produce finite results
         assert np.isfinite(results_rust.att), f"Rust ATT {results_rust.att} should be finite"
@@ -1656,11 +1661,16 @@ class TestTROPJointRustVsNumpy:
         old_backend = os.environ.get('DIFF_DIFF_BACKEND')
         try:
             os.environ['DIFF_DIFF_BACKEND'] = 'python'
+            # Need to reimport to pick up new backend setting
+            # Must reload both _backend AND trop modules since trop imports
+            # HAS_RUST_BACKEND and Rust functions at module load time
             import importlib
-            import diff_diff._backend
-            importlib.reload(diff_diff._backend)
+            import sys
+            importlib.reload(sys.modules['diff_diff._backend'])
+            importlib.reload(sys.modules['diff_diff.trop'])
+            from diff_diff.trop import TROP as TROP_Python
 
-            trop_python = TROP(**trop_params)
+            trop_python = TROP_Python(**trop_params)
             results_python = trop_python.fit(df.copy(), 'outcome', 'treated', 'unit', 'time')
         finally:
             # Restore original backend setting
@@ -1669,8 +1679,9 @@ class TestTROPJointRustVsNumpy:
             else:
                 os.environ['DIFF_DIFF_BACKEND'] = old_backend
             import importlib
-            import diff_diff._backend
-            importlib.reload(diff_diff._backend)
+            import sys
+            importlib.reload(sys.modules['diff_diff._backend'])
+            importlib.reload(sys.modules['diff_diff.trop'])
 
         # Both should produce finite results
         assert np.isfinite(results_rust.att), f"Rust ATT {results_rust.att} should be finite"
