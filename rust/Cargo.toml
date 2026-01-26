@@ -17,7 +17,6 @@ extension-module = ["pyo3/extension-module"]
 
 [dependencies]
 # PyO3 0.22 supports Python 3.8-3.13
-# numpy 0.22 is compatible with ndarray 0.16 (required for faer-ext)
 pyo3 = "0.22"
 numpy = "0.22"
 ndarray = { version = "0.16", features = ["rayon"] }
@@ -28,7 +27,6 @@ rayon = "1.8"
 # Pure Rust linear algebra library - no external BLAS/LAPACK dependencies
 # This enables Windows builds without Intel MKL complexity
 faer = "0.24"
-faer-ext = { version = "0.7", features = ["ndarray"] }
 
 [profile.release]
 lto = true

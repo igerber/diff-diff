@@ -285,7 +285,9 @@ fn ndarray_to_faer(arr: &Array2<f64>) -> faer::Mat<f64> {
 
 /// Invert a symmetric positive-definite matrix.
 ///
-/// Uses LU decomposition with partial pivoting.
+/// Uses LU decomposition with partial pivoting. Includes both NaN/Inf check
+/// and residual-based verification to catch near-singular matrices that
+/// produce finite but numerically inaccurate results.
 fn invert_symmetric(a: &Array2<f64>) -> PyResult<Array2<f64>> {
     let n = a.nrows();
 
@@ -317,9 +319,34 @@ fn invert_symmetric(a: &Array2<f64>) -> PyResult<Array2<f64>> {
 
     if has_nan {
         return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "Matrix inversion failed (likely rank-deficient X'X). \
-             If the design matrix is rank-deficient, use solve_ols without \
-             skip_rank_check=True to enable R-style handling."
+            "Matrix inversion failed (singular matrix)"
+        ));
+    }
+
+    // Verify inversion accuracy by checking ||A * A^{-1} - I||_max
+    // For near-singular matrices, this residual will be large even if
+    // the result contains no NaN/Inf values
+    let a_times_inv = a_faer.as_ref() * &x_faer;
+    let mut max_residual = 0.0_f64;
+    for i in 0..n {
+        for j in 0..n {
+            let expected = if i == j { 1.0 } else { 0.0 };
+            let residual = (a_times_inv[(i, j)] - expected).abs();
+            max_residual = max_residual.max(residual);
+        }
+    }
+
+    // Threshold: detect truly singular matrices while allowing ill-conditioned ones
+    // Ill-conditioned matrices (high condition number) can have residuals up to ~1e-4
+    // while still producing usable results. Use 1e-4 * n as threshold.
+    let threshold = 1e-4 * (n as f64);
+    if max_residual > threshold {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            format!(
+                "Matrix inversion numerically unstable (residual={:.2e} > threshold={:.2e}). \
+                 Design matrix may be near-singular.",
+                max_residual, threshold
+            )
         ));
     }
 
@@ -388,5 +415,44 @@ mod tests {
 
         // This is the key fix: s_inv_uty must have dimension s.len()=min(n,k),
         // not k, otherwise vt.t().dot(&s_inv_uty) will have mismatched dimensions
+    }
+
+    #[test]
+    fn test_invert_symmetric_singular_matrix() {
+        // Create singular matrix: rows are linearly dependent
+        let a = array![
+            [1.0, 2.0, 3.0],
+            [2.0, 4.0, 6.0],  // = 2 * row 0
+            [3.0, 6.0, 9.0],  // = 3 * row 0
+        ];
+
+        // Should fail because matrix is singular (rank 1, not full rank 3)
+        let result = invert_symmetric(&a);
+        assert!(result.is_err(), "Singular matrix inversion should fail");
+
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("singular") || err_msg.contains("unstable"),
+            "Error should mention singularity or instability: {}", err_msg
+        );
+    }
+
+    #[test]
+    fn test_invert_symmetric_near_singular_matrix() {
+        // Create near-singular matrix (high condition number)
+        let a = array![
+            [1.0, 1.0],
+            [1.0, 1.0 + 1e-15],  // Nearly identical rows
+        ];
+
+        // Should fail due to numerical instability
+        let result = invert_symmetric(&a);
+        assert!(result.is_err(), "Near-singular matrix inversion should fail");
+
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("singular") || err_msg.contains("unstable"),
+            "Error should mention singularity or instability: {}", err_msg
+        );
     }
 }
