@@ -933,10 +933,17 @@ class TROP:
         if n_pre == 0:
             raise ValueError("No pre-treatment periods")
 
-        # Use valid count per unit (avoid division by zero)
-        valid_count = np.maximum(valid_count, 1)
-        dist_unit = np.sqrt(sum_sq / valid_count)
+        # Track units with no valid pre-period data
+        no_valid_pre = valid_count == 0
+
+        # Use valid count per unit (avoid division by zero for calculation)
+        valid_count_safe = np.maximum(valid_count, 1)
+        dist_unit = np.sqrt(sum_sq / valid_count_safe)
+
+        # Units with no valid pre-period data get zero weight
+        # (dist is undefined, so we set it to inf -> delta_unit = exp(-inf) = 0)
         delta_unit = np.exp(-lambda_unit * dist_unit)
+        delta_unit[no_valid_pre] = 0.0
 
         # Outer product: (n_periods x n_units)
         delta = np.outer(delta_time, delta_unit)
@@ -1154,6 +1161,12 @@ class TROP:
         # The solver will also zero weights for NaN observations
         Y_safe = np.where(np.isfinite(Y), Y, 0.0)
 
+        # Mask delta to exclude NaN outcomes from estimation
+        # This ensures NaN observations don't contribute to the gradient step
+        nan_mask = ~np.isfinite(Y)
+        delta_masked = delta.copy()
+        delta_masked[nan_mask] = 0.0
+
         # Initialize L = 0
         L = np.zeros((n_periods, n_units))
 
@@ -1162,23 +1175,25 @@ class TROP:
 
             # Step 1: Fix L, solve for (mu, alpha, beta, tau)
             # Adjusted outcome: Y - L (using NaN-safe Y)
+            # Pass masked delta to exclude NaN observations from WLS
             Y_adj = Y_safe - L
-            mu, alpha, beta, tau = self._solve_joint_no_lowrank(Y_adj, D, delta)
+            mu, alpha, beta, tau = self._solve_joint_no_lowrank(Y_adj, D, delta_masked)
 
             # Step 2: Fix (mu, alpha, beta, tau), update L
             # Residual: R = Y - mu - alpha - beta - tau*D (using NaN-safe Y)
             R = Y_safe - mu - alpha[np.newaxis, :] - beta[:, np.newaxis] - tau * D
 
             # Weighted proximal step for L (soft-threshold SVD)
-            # Normalize weights
-            delta_max = np.max(delta)
+            # Normalize weights (using masked delta to exclude NaN observations)
+            delta_max = np.max(delta_masked)
             if delta_max > 0:
-                delta_norm = delta / delta_max
+                delta_norm = delta_masked / delta_max
             else:
-                delta_norm = delta
+                delta_norm = delta_masked
 
             # Weighted average between current L and target R
             # L_next = L + delta_norm * (R - L), then soft-threshold
+            # NaN observations have delta_norm=0, so they don't influence L update
             gradient_step = L + delta_norm * (R - L)
 
             # Soft-threshold singular values
@@ -1223,6 +1238,15 @@ class TROP:
         -------
         TROPResults
             Estimation results.
+
+        Notes
+        -----
+        Bootstrap and jackknife variance estimation assume simultaneous treatment
+        adoption (fixed `treated_periods` across resamples). The treatment timing
+        is inferred from the data once and held constant for all bootstrap/jackknife
+        iterations. For staggered adoption designs where treatment timing varies
+        across units, use `method="twostep"` which computes observation-specific
+        weights that naturally handle heterogeneous timing.
         """
         # Data setup (same as twostep method)
         all_units = sorted(data[unit].unique())
@@ -1730,26 +1754,24 @@ class TROP:
         treated_unit_idx = np.where(np.any(D == 1, axis=0))[0]
 
         for leave_out in treated_unit_idx:
-            # Create mask excluding this unit
+            # True leave-one-out: zero the delta weight for the left-out unit
+            # This excludes the unit from estimation without imputation
             Y_jack = Y.copy()
             D_jack = D.copy()
-            Y_jack[:, leave_out] = np.nan
-            D_jack[:, leave_out] = 0
-
-            # Replace NaN with column mean for stability
-            col_means = np.nanmean(Y_jack, axis=0)
-            for i in range(n_units):
-                nan_mask = np.isnan(Y_jack[:, i])
-                Y_jack[nan_mask, i] = col_means[i] if np.isfinite(col_means[i]) else 0.0
+            D_jack[:, leave_out] = 0  # Mark as not treated for weight computation
 
             try:
-                # Compute weights
+                # Compute weights (left-out unit is still in calculation)
                 delta = self._compute_joint_weights(
                     Y_jack, D_jack, lambda_time, lambda_unit,
                     treated_periods, n_units, n_periods
                 )
 
-                # Fit model
+                # Zero the delta weight for the left-out unit
+                # This ensures the unit doesn't contribute to estimation
+                delta[:, leave_out] = 0.0
+
+                # Fit model (left-out unit has zero weight, truly excluded)
                 if lambda_nn >= 1e10:
                     _, _, _, tau = self._solve_joint_no_lowrank(Y_jack, D_jack, delta)
                 else:

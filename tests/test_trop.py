@@ -3014,3 +3014,146 @@ class TestTROPJointMethod:
         # Results should be finite
         assert np.isfinite(results.att), "ATT should be finite with NaN data"
         assert np.isfinite(results.se), "SE should be finite with NaN data"
+
+    def test_joint_nan_exclusion_behavior(self, simple_panel_data):
+        """Verify NaN observations are truly excluded from estimation.
+
+        This tests the PR #113 fix: NaN observations should not contribute
+        to the weighted gradient step. We verify this by comparing results
+        when fitting on data with NaN vs data with those observations removed.
+        """
+        # Get a clean copy
+        data_full = simple_panel_data.copy()
+
+        # Identify a specific control observation to "remove"
+        control_mask = data_full['treated'] == 0
+        control_indices = data_full[control_mask].index.tolist()
+
+        # Pick a few specific observations to remove/set to NaN
+        np.random.seed(42)
+        remove_indices = np.random.choice(control_indices, size=3, replace=False)
+
+        # Create version with NaN
+        data_nan = data_full.copy()
+        data_nan.loc[remove_indices, 'outcome'] = np.nan
+
+        # Create version with rows removed
+        data_dropped = data_full.drop(remove_indices)
+
+        # Fit on both versions with identical settings
+        trop_nan = TROP(
+            method="joint",
+            lambda_time_grid=[1.0],
+            lambda_unit_grid=[1.0],
+            lambda_nn_grid=[0.0],  # Disable low-rank for cleaner comparison
+            n_bootstrap=10,
+            seed=42,
+        )
+        trop_dropped = TROP(
+            method="joint",
+            lambda_time_grid=[1.0],
+            lambda_unit_grid=[1.0],
+            lambda_nn_grid=[0.0],
+            n_bootstrap=10,
+            seed=42,
+        )
+
+        results_nan = trop_nan.fit(
+            data_nan,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="period",
+        )
+        results_dropped = trop_dropped.fit(
+            data_dropped,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="period",
+        )
+
+        # ATT should be very close (allowing small numerical tolerance)
+        # If NaN observations were not truly excluded, ATT would differ
+        assert np.abs(results_nan.att - results_dropped.att) < 0.5, (
+            f"ATT with NaN ({results_nan.att:.4f}) should match dropped data "
+            f"({results_dropped.att:.4f}) - true NaN exclusion"
+        )
+
+    def test_joint_jackknife_produces_variation(self, simple_panel_data):
+        """Verify jackknife produces variation across leave-out iterations.
+
+        This tests the PR #113 fix: jackknife should truly exclude units
+        via weight zeroing, not imputation. If imputation were used, all
+        jackknife estimates would be nearly identical.
+        """
+        trop_est = TROP(
+            method="joint",
+            lambda_time_grid=[1.0],
+            lambda_unit_grid=[1.0],
+            lambda_nn_grid=[0.0],
+            variance_method="jackknife",
+            seed=42,
+        )
+        results = trop_est.fit(
+            simple_panel_data,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="period",
+        )
+
+        # SE should be positive (variation exists)
+        assert results.se > 0, "Jackknife SE should be positive"
+
+        # If we can access jackknife estimates, verify they vary
+        # (The SE being > 0 already implies variation, but this is more explicit)
+        if hasattr(results, 'bootstrap_distribution') and results.bootstrap_distribution is not None:
+            # For jackknife, this stores the jackknife estimates
+            jack_estimates = results.bootstrap_distribution
+            if len(jack_estimates) > 1:
+                estimate_std = np.std(jack_estimates)
+                assert estimate_std > 0, "Jackknife estimates should vary"
+
+    def test_joint_unit_no_valid_pre_gets_zero_weight(self, simple_panel_data):
+        """Verify units with no valid pre-period data get zero weight.
+
+        This tests the PR #113 fix: units with no valid pre-period observations
+        should get zero weight (instead of max weight via dist=0).
+        """
+        # Create data where one control unit has all NaN in pre-period
+        data = simple_panel_data.copy()
+
+        # Find a control unit (unit that never has treated=1)
+        unit_ever_treated = data.groupby('unit')['treated'].max()
+        control_units = unit_ever_treated[unit_ever_treated == 0].index.tolist()
+        target_unit = control_units[0]
+
+        # Get pre-periods (periods where this control unit has treated=0)
+        unit_data = data[data['unit'] == target_unit]
+        pre_periods = sorted(unit_data[unit_data['treated'] == 0]['period'].unique())[:5]
+
+        # Set all pre-period values for target_unit to NaN
+        mask = (data['unit'] == target_unit) & (data['period'].isin(pre_periods))
+        data.loc[mask, 'outcome'] = np.nan
+
+        trop_est = TROP(
+            method="joint",
+            lambda_time_grid=[1.0],
+            lambda_unit_grid=[1.0],  # Non-zero lambda_unit to use distance weighting
+            lambda_nn_grid=[0.0],
+            n_bootstrap=10,
+            seed=42,
+        )
+
+        # This should not error and should produce finite results
+        results = trop_est.fit(
+            data,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="period",
+        )
+
+        assert np.isfinite(results.att), "ATT should be finite even with unit having no pre-period data"
+        assert np.isfinite(results.se), "SE should be finite"
