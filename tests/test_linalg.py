@@ -520,6 +520,41 @@ class TestComputeRobustVcov:
 
         np.testing.assert_array_almost_equal(vcov, vcov.T)
 
+    def test_numerical_instability_fallback_warns(self, ols_data):
+        """Test that numerical instability in Rust backend triggers warning and fallback."""
+        from unittest.mock import patch
+        import warnings
+
+        from diff_diff import HAS_RUST_BACKEND
+
+        if not HAS_RUST_BACKEND:
+            pytest.skip("Rust backend not available")
+
+        X, residuals = ols_data
+
+        # Mock _rust_compute_robust_vcov to raise numerical instability error
+        def mock_rust_vcov(*args, **kwargs):
+            raise ValueError("Matrix inversion numerically unstable")
+
+        with patch("diff_diff.linalg._rust_compute_robust_vcov", mock_rust_vcov):
+            with warnings.catch_warnings(record=True) as caught_warnings:
+                warnings.simplefilter("always")
+                vcov = compute_robust_vcov(X, residuals)
+
+                # Verify warning was emitted
+                instability_warnings = [
+                    w for w in caught_warnings
+                    if "numerical instability" in str(w.message).lower()
+                ]
+                assert len(instability_warnings) == 1, (
+                    f"Expected 1 numerical instability warning, got {len(instability_warnings)}"
+                )
+
+                # Verify fallback produced valid vcov matrix
+                assert vcov.shape == (X.shape[1], X.shape[1])
+                assert np.allclose(vcov, vcov.T)  # Symmetric
+                assert np.all(np.linalg.eigvalsh(vcov) >= -1e-10)  # PSD
+
 
 class TestComputeRSquared:
     """Tests for compute_r_squared function."""

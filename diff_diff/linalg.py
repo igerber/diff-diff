@@ -773,7 +773,13 @@ def compute_robust_vcov(
                     "and covariates for linear dependencies."
                 ) from e
             if "numerically unstable" in error_msg.lower():
-                # Fall back to NumPy on numerical instability
+                # Fall back to NumPy on numerical instability (with warning)
+                warnings.warn(
+                    f"Rust backend detected numerical instability: {e}. "
+                    "Falling back to Python backend for variance computation.",
+                    UserWarning,
+                    stacklevel=2,
+                )
                 return _compute_robust_vcov_numpy(X, residuals, cluster_ids)
             raise
 
