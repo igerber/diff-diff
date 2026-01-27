@@ -5,6 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.0] - 2026-01-27
+
+### Added
+- **Windows wheel builds** using pure-Rust `faer` library for linear algebra (PR #115)
+  - Eliminates external BLAS/LAPACK dependencies (no OpenBLAS or Intel MKL required)
+  - Enables cross-platform wheel builds for Linux, macOS, and Windows
+  - Simplifies installation on all platforms
+
+### Changed
+- **Rust backend migrated from nalgebra/ndarray to faer** (PR #115)
+  - OLS solver now uses faer's SVD implementation
+  - Robust variance estimation uses faer's matrix operations
+  - TROP distance calculations use faer primitives
+  - Maintains numerical parity with existing NumPy backend
+
+### Fixed
+- **Rust backend numerical stability improvements** (PR #115)
+  - Improved singular matrix detection with condition number checks
+  - NaN propagation in variance-covariance estimation
+  - Fallback to Python backend on numerical instability with warning
+  - Underdetermined SVD handling (n < k case)
+- **macOS CI compatibility** for Python 3.14 with `PYO3_USE_ABI3_FORWARD_COMPATIBILITY`
+
 ## [2.1.9] - 2026-01-26
 
 ### Added
@@ -584,6 +607,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `to_dict()` and `to_dataframe()` export methods
   - `is_significant` and `significance_stars` properties
 
+[2.2.0]: https://github.com/igerber/diff-diff/compare/v2.1.9...v2.2.0
 [2.1.9]: https://github.com/igerber/diff-diff/compare/v2.1.8...v2.1.9
 [2.1.8]: https://github.com/igerber/diff-diff/compare/v2.1.7...v2.1.8
 [2.1.7]: https://github.com/igerber/diff-diff/compare/v2.1.6...v2.1.7
