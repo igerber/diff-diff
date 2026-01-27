@@ -1036,8 +1036,9 @@ pub fn bootstrap_trop_variance<'py>(
         .collect();
 
     // Compute standard error
+    // Return NaN when < 2 samples to properly propagate undefined inference
     let se = if bootstrap_estimates.len() < 2 {
-        0.0
+        f64::NAN
     } else {
         let n = bootstrap_estimates.len() as f64;
         let mean = bootstrap_estimates.iter().sum::<f64>() / n;
@@ -1701,8 +1702,9 @@ pub fn bootstrap_trop_variance_joint<'py>(
         .collect();
 
     // Compute standard error
+    // Return NaN when < 2 samples to properly propagate undefined inference
     let se = if bootstrap_estimates.len() < 2 {
-        0.0
+        f64::NAN
     } else {
         let n = bootstrap_estimates.len() as f64;
         let mean = bootstrap_estimates.iter().sum::<f64>() / n;

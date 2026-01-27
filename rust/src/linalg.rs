@@ -286,8 +286,12 @@ fn ndarray_to_faer(arr: &Array2<f64>) -> faer::Mat<f64> {
 /// Invert a symmetric positive-definite matrix.
 ///
 /// Uses LU decomposition with partial pivoting. Includes both NaN/Inf check
-/// and residual-based verification to catch near-singular matrices that
-/// produce finite but numerically inaccurate results.
+/// and conditional residual-based verification to catch near-singular matrices
+/// that produce finite but numerically inaccurate results.
+///
+/// Performance optimization: The expensive O(n³) residual check (A * A⁻¹ - I)
+/// is only performed when LU pivot ratios suggest potential instability. For
+/// well-conditioned matrices (the common case), this check is skipped.
 fn invert_symmetric(a: &Array2<f64>) -> PyResult<Array2<f64>> {
     let n = a.nrows();
 
@@ -323,31 +327,51 @@ fn invert_symmetric(a: &Array2<f64>) -> PyResult<Array2<f64>> {
         ));
     }
 
-    // Verify inversion accuracy by checking ||A * A^{-1} - I||_max
-    // For near-singular matrices, this residual will be large even if
-    // the result contains no NaN/Inf values
-    let a_times_inv = a_faer.as_ref() * &x_faer;
-    let mut max_residual = 0.0_f64;
+    // Check pivot ratio to detect potential instability.
+    // The diagonal of U contains the pivots from LU factorization.
+    // A small pivot ratio (min/max) indicates potential numerical instability.
+    let u_factor = lu.U();
+    let mut max_pivot = 0.0_f64;
+    let mut min_pivot = f64::INFINITY;
     for i in 0..n {
-        for j in 0..n {
-            let expected = if i == j { 1.0 } else { 0.0 };
-            let residual = (a_times_inv[(i, j)] - expected).abs();
-            max_residual = max_residual.max(residual);
+        let pivot = u_factor[(i, i)].abs();
+        if pivot > 0.0 {
+            max_pivot = max_pivot.max(pivot);
+            min_pivot = min_pivot.min(pivot);
         }
     }
+    let pivot_ratio = if max_pivot > 0.0 { min_pivot / max_pivot } else { 0.0 };
 
-    // Threshold: detect truly singular matrices while allowing ill-conditioned ones
-    // Ill-conditioned matrices (high condition number) can have residuals up to ~1e-4
-    // while still producing usable results. Use 1e-4 * n as threshold.
-    let threshold = 1e-4 * (n as f64);
-    if max_residual > threshold {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            format!(
-                "Matrix inversion numerically unstable (residual={:.2e} > threshold={:.2e}). \
-                 Design matrix may be near-singular.",
-                max_residual, threshold
-            )
-        ));
+    // Only perform expensive residual check if pivots suggest potential instability.
+    // Threshold of 1e-10 catches truly problematic matrices while avoiding
+    // unnecessary O(n³) computation for well-conditioned cases.
+    if pivot_ratio < 1e-10 {
+        // Verify inversion accuracy by checking ||A * A^{-1} - I||_max
+        // For near-singular matrices, this residual will be large even if
+        // the result contains no NaN/Inf values
+        let a_times_inv = a_faer.as_ref() * &x_faer;
+        let mut max_residual = 0.0_f64;
+        for i in 0..n {
+            for j in 0..n {
+                let expected = if i == j { 1.0 } else { 0.0 };
+                let residual = (a_times_inv[(i, j)] - expected).abs();
+                max_residual = max_residual.max(residual);
+            }
+        }
+
+        // Threshold: detect truly singular matrices while allowing ill-conditioned ones
+        // Ill-conditioned matrices (high condition number) can have residuals up to ~1e-4
+        // while still producing usable results. Use 1e-4 * n as threshold.
+        let threshold = 1e-4 * (n as f64);
+        if max_residual > threshold {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                format!(
+                    "Matrix inversion numerically unstable (residual={:.2e} > threshold={:.2e}). \
+                     Design matrix may be near-singular.",
+                    max_residual, threshold
+                )
+            ));
+        }
     }
 
     // Convert back to ndarray
@@ -445,7 +469,8 @@ mod tests {
             [1.0, 1.0 + 1e-15],  // Nearly identical rows
         ];
 
-        // Should fail due to numerical instability
+        // Should fail due to numerical instability (small pivot ratio triggers
+        // residual check which detects the inversion error)
         let result = invert_symmetric(&a);
         assert!(result.is_err(), "Near-singular matrix inversion should fail");
 

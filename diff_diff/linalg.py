@@ -251,10 +251,10 @@ def _solve_ols_rust(
     cluster_ids: Optional[np.ndarray] = None,
     return_vcov: bool = True,
     return_fitted: bool = False,
-) -> Union[
+) -> Optional[Union[
     Tuple[np.ndarray, np.ndarray, Optional[np.ndarray]],
     Tuple[np.ndarray, np.ndarray, np.ndarray, Optional[np.ndarray]],
-]:
+]]:
     """
     Rust backend implementation of solve_ols for full-rank matrices.
 
@@ -296,15 +296,30 @@ def _solve_ols_rust(
         Fitted values if return_fitted=True.
     vcov : np.ndarray, optional
         Variance-covariance matrix if return_vcov=True.
+    None
+        If Rust backend detects numerical instability and caller should
+        fall back to Python backend.
     """
     # Convert cluster_ids to int64 for Rust (handles string/categorical IDs)
     if cluster_ids is not None:
         cluster_ids = _factorize_cluster_ids(cluster_ids)
 
-    # Call Rust backend
-    coefficients, residuals, vcov = _rust_solve_ols(
-        X, y, cluster_ids=cluster_ids, return_vcov=return_vcov
-    )
+    # Call Rust backend with fallback on numerical instability
+    try:
+        coefficients, residuals, vcov = _rust_solve_ols(
+            X, y, cluster_ids=cluster_ids, return_vcov=return_vcov
+        )
+    except ValueError as e:
+        error_msg = str(e).lower()
+        if "numerically unstable" in error_msg or "singular" in error_msg:
+            warnings.warn(
+                f"Rust backend detected numerical instability: {e}. "
+                "Falling back to Python backend.",
+                UserWarning,
+                stacklevel=3,
+            )
+            return None  # Signal caller to use Python fallback
+        raise
 
     # Convert to numpy arrays
     coefficients = np.asarray(coefficients)
@@ -499,6 +514,7 @@ def solve_ols(
     # Routing strategy:
     # - Full-rank + Rust available → fast Rust backend (SVD-based solve)
     # - Rank-deficient → Python backend (proper NA handling, valid SEs)
+    # - Rust numerical instability → Python fallback (via None return)
     # - No Rust → Python backend (works for all cases)
     if HAS_RUST_BACKEND and _rust_solve_ols is not None and not is_rank_deficient:
         result = _solve_ols_rust(
@@ -507,6 +523,19 @@ def solve_ols(
             return_vcov=return_vcov,
             return_fitted=return_fitted,
         )
+
+        # Check for None: Rust backend detected numerical instability and
+        # signaled us to fall back to Python backend
+        if result is None:
+            return _solve_ols_numpy(
+                X, y,
+                cluster_ids=cluster_ids,
+                return_vcov=return_vcov,
+                return_fitted=return_fitted,
+                rank_deficient_action=rank_deficient_action,
+                column_names=column_names,
+                _precomputed_rank_info=None,  # Force fresh rank detection
+            )
 
         # Check for NaN vcov: Rust SVD may detect rank-deficiency that QR missed
         # for ill-conditioned matrices (QR and SVD have different numerical properties).
