@@ -4,7 +4,7 @@
 //! using various distributions (Rademacher, Mammen, Webb).
 
 use ndarray::{Array2, Axis};
-use numpy::{IntoPyArray, PyArray2};
+use numpy::{PyArray2, ToPyArray};
 use pyo3::prelude::*;
 use rand::prelude::*;
 use rand_xoshiro::Xoshiro256PlusPlus;
@@ -35,7 +35,7 @@ pub fn generate_bootstrap_weights_batch<'py>(
     n_units: usize,
     weight_type: &str,
     seed: u64,
-) -> PyResult<&'py PyArray2<f64>> {
+) -> PyResult<Bound<'py, PyArray2<f64>>> {
     let weights = match weight_type.to_lowercase().as_str() {
         "rademacher" => generate_rademacher_batch(n_bootstrap, n_units, seed),
         "mammen" => generate_mammen_batch(n_bootstrap, n_units, seed),
@@ -48,7 +48,7 @@ pub fn generate_bootstrap_weights_batch<'py>(
         }
     };
 
-    Ok(weights.into_pyarray(py))
+    Ok(weights.to_pyarray_bound(py))
 }
 
 /// Generate Rademacher weights: ±1 with equal probability.

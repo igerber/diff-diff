@@ -10,7 +10,7 @@
 //! Panel Estimators. Working Paper.
 
 use ndarray::{Array1, Array2, ArrayView1, ArrayView2, Axis};
-use numpy::{IntoPyArray, PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2};
+use numpy::{PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2, ToPyArray};
 use pyo3::prelude::*;
 use rayon::prelude::*;
 
@@ -38,13 +38,13 @@ pub fn compute_unit_distance_matrix<'py>(
     py: Python<'py>,
     y: PyReadonlyArray2<'py, f64>,
     d: PyReadonlyArray2<'py, f64>,
-) -> PyResult<&'py PyArray2<f64>> {
+) -> PyResult<Bound<'py, PyArray2<f64>>> {
     let y_arr = y.as_array();
     let d_arr = d.as_array();
 
     let dist_matrix = compute_unit_distance_matrix_internal(&y_arr, &d_arr);
 
-    Ok(dist_matrix.into_pyarray(py))
+    Ok(dist_matrix.to_pyarray_bound(py))
 }
 
 /// Internal implementation of unit distance matrix computation.
@@ -778,42 +778,71 @@ fn soft_threshold_svd(m: &Array2<f64>, threshold: f64) -> Option<Array2<f64>> {
         return Some(Array2::zeros(m.raw_dim()));
     }
 
-    // Compute SVD using ndarray-linalg
-    use ndarray_linalg::SVD;
+    let n_rows = m.nrows();
+    let n_cols = m.ncols();
 
-    let (u, s, vt) = match m.svd(true, true) {
-        Ok((Some(u), s, Some(vt))) => (u, s, vt),
-        _ => return Some(Array2::zeros(m.raw_dim())),
+    // Convert ndarray to faer using Mat::from_fn (pure Rust, no external deps)
+    let m_faer = faer::Mat::from_fn(n_rows, n_cols, |i, j| m[[i, j]]);
+
+    // Compute thin SVD using faer (capitalized methods in faer 0.24)
+    let svd = match m_faer.thin_svd() {
+        Ok(s) => s,
+        Err(_) => return Some(Array2::zeros(m.raw_dim())),
     };
 
+    let u_faer = svd.U();
+    let s_diag = svd.S();  // Returns diagonal view
+    let s_col = s_diag.column_vector();  // Get as column vector
+    let v_faer = svd.V();  // This is V, not V^T
+
+    let s_len = s_col.nrows();
+
     // Check for non-finite SVD output
-    if !u.iter().all(|&x| x.is_finite())
-        || !s.iter().all(|&x| x.is_finite())
-        || !vt.iter().all(|&x| x.is_finite())
-    {
-        return Some(Array2::zeros(m.raw_dim()));
+    for i in 0..u_faer.nrows() {
+        for j in 0..u_faer.ncols() {
+            if !u_faer[(i, j)].is_finite() {
+                return Some(Array2::zeros(m.raw_dim()));
+            }
+        }
+    }
+    for i in 0..s_len {
+        if !s_col[i].is_finite() {
+            return Some(Array2::zeros(m.raw_dim()));
+        }
+    }
+    for i in 0..v_faer.nrows() {
+        for j in 0..v_faer.ncols() {
+            if !v_faer[(i, j)].is_finite() {
+                return Some(Array2::zeros(m.raw_dim()));
+            }
+        }
     }
 
-    // Soft-threshold singular values
-    let s_thresh: Array1<f64> = s.mapv(|sv| (sv - threshold).max(0.0));
-
-    // Count non-zero singular values
-    let nonzero_count = s_thresh.iter().filter(|&&sv| sv > 1e-10).count();
+    // Soft-threshold singular values and count non-zero
+    let mut s_thresh = Vec::with_capacity(s_len);
+    let mut nonzero_count = 0;
+    for i in 0..s_len {
+        let sv = s_col[i];
+        let sv_thresh = (sv - threshold).max(0.0);
+        s_thresh.push(sv_thresh);
+        if sv_thresh > 1e-10 {
+            nonzero_count += 1;
+        }
+    }
 
     if nonzero_count == 0 {
         return Some(Array2::zeros(m.raw_dim()));
     }
 
-    // Truncated reconstruction: U @ diag(s_thresh) @ Vt
-    let n_rows = m.nrows();
-    let n_cols = m.ncols();
+    // Truncated reconstruction: U @ diag(s_thresh) @ V^T
     let mut result = Array2::<f64>::zeros((n_rows, n_cols));
 
-    for k in 0..nonzero_count {
+    for k in 0..s_thresh.len() {
         if s_thresh[k] > 1e-10 {
             for i in 0..n_rows {
                 for j in 0..n_cols {
-                    result[[i, j]] += s_thresh[k] * u[[i, k]] * vt[[k, j]];
+                    // u_faer[(i, k)] * s_thresh[k] * v_faer[(j, k)] (since V^T[k,j] = V[j,k])
+                    result[[i, j]] += s_thresh[k] * u_faer[(i, k)] * v_faer[(j, k)];
                 }
             }
         }
@@ -878,7 +907,7 @@ pub fn bootstrap_trop_variance<'py>(
     max_iter: usize,
     tol: f64,
     seed: u64,
-) -> PyResult<(&'py PyArray1<f64>, f64)> {
+) -> PyResult<(Bound<'py, PyArray1<f64>>, f64)> {
     let y_arr = y.as_array().to_owned();
     let d_arr = d.as_array().to_owned();
     let control_mask_arr = control_mask.as_array().to_owned();
@@ -1007,8 +1036,9 @@ pub fn bootstrap_trop_variance<'py>(
         .collect();
 
     // Compute standard error
+    // Return NaN when < 2 samples to properly propagate undefined inference
     let se = if bootstrap_estimates.len() < 2 {
-        0.0
+        f64::NAN
     } else {
         let n = bootstrap_estimates.len() as f64;
         let mean = bootstrap_estimates.iter().sum::<f64>() / n;
@@ -1021,7 +1051,7 @@ pub fn bootstrap_trop_variance<'py>(
     };
 
     let estimates_arr = Array1::from_vec(bootstrap_estimates);
-    Ok((estimates_arr.into_pyarray(py), se))
+    Ok((estimates_arr.to_pyarray_bound(py), se))
 }
 
 // ============================================================================
@@ -1566,7 +1596,7 @@ pub fn bootstrap_trop_variance_joint<'py>(
     max_iter: usize,
     tol: f64,
     seed: u64,
-) -> PyResult<(&'py PyArray1<f64>, f64)> {
+) -> PyResult<(Bound<'py, PyArray1<f64>>, f64)> {
     let y_arr = y.as_array().to_owned();
     let d_arr = d.as_array().to_owned();
 
@@ -1672,8 +1702,9 @@ pub fn bootstrap_trop_variance_joint<'py>(
         .collect();
 
     // Compute standard error
+    // Return NaN when < 2 samples to properly propagate undefined inference
     let se = if bootstrap_estimates.len() < 2 {
-        0.0
+        f64::NAN
     } else {
         let n = bootstrap_estimates.len() as f64;
         let mean = bootstrap_estimates.iter().sum::<f64>() / n;
@@ -1686,7 +1717,7 @@ pub fn bootstrap_trop_variance_joint<'py>(
     };
 
     let estimates_arr = Array1::from_vec(bootstrap_estimates);
-    Ok((estimates_arr.into_pyarray(py), se))
+    Ok((estimates_arr.to_pyarray_bound(py), se))
 }
 
 #[cfg(test)]

@@ -12,7 +12,7 @@ mod weights;
 
 /// A Python module implemented in Rust for diff-diff acceleration.
 #[pymodule]
-fn _rust_backend(_py: Python, m: &PyModule) -> PyResult<()> {
+fn _rust_backend(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Bootstrap weight generation
     m.add_function(wrap_pyfunction!(
         bootstrap::generate_bootstrap_weights_batch,

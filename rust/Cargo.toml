@@ -14,28 +14,19 @@ crate-type = ["cdylib", "rlib"]
 default = []
 # extension-module is only needed for cdylib builds, not for cargo test
 extension-module = ["pyo3/extension-module"]
-# Static BLAS linking for standalone distribution (adds ~20-50MB to binary)
-# Eliminates runtime BLAS dependency at cost of larger binary size
-openblas-static = ["ndarray-linalg/openblas-static"]
-intel-mkl-static = ["ndarray-linalg/intel-mkl-static"]
 
 [dependencies]
-# PyO3 0.20 supports Python 3.7-3.12
-# numpy 0.20 is compatible with ndarray 0.15 (same as ndarray-linalg)
-# Python 3.13+ support pending ecosystem updates
-pyo3 = "0.20"
-numpy = "0.20"
-ndarray = { version = "0.15", features = ["rayon"] }
+# PyO3 0.22 supports Python 3.8-3.13
+pyo3 = "0.22"
+numpy = "0.22"
+ndarray = { version = "0.16", features = ["rayon"] }
 rand = "0.8"
 rand_xoshiro = "0.6"
 rayon = "1.8"
 
-# Platform-specific BLAS backends for linear algebra
-[target.'cfg(not(target_os = "windows"))'.dependencies]
-ndarray-linalg = { version = "0.16", features = ["openblas-system"] }
-
-[target.'cfg(target_os = "windows")'.dependencies]
-ndarray-linalg = { version = "0.16", features = ["intel-mkl-system"] }
+# Pure Rust linear algebra library - no external BLAS/LAPACK dependencies
+# This enables Windows builds without Intel MKL complexity
+faer = "0.24"
 
 [profile.release]
 lto = true

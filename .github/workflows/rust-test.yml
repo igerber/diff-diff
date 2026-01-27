@@ -22,18 +22,22 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  # Run Rust unit tests
+  # Run Rust unit tests on all platforms
   rust-tests:
-    name: Rust Unit Tests
-    runs-on: ubuntu-latest
+    name: Rust Unit Tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    env:
+      PYO3_USE_ABI3_FORWARD_COMPATIBILITY: 1
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+
     steps:
       - uses: actions/checkout@v4
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
-
-      - name: Install OpenBLAS
-        run: sudo apt-get update && sudo apt-get install -y libopenblas-dev
 
       - name: Run Rust tests
         working-directory: rust
@@ -46,8 +50,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
-        # Windows excluded due to Intel MKL build complexity
+        os: [ubuntu-latest, macos-latest, windows-latest]
 
     steps:
       - uses: actions/checkout@v4
@@ -56,20 +59,6 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-
-      - name: Install OpenBLAS (Ubuntu)
-        if: matrix.os == 'ubuntu-latest'
-        run: sudo apt-get update && sudo apt-get install -y libopenblas-dev
-
-      - name: Install OpenBLAS (macOS)
-        if: matrix.os == 'macos-latest'
-        run: brew install openblas
-
-      - name: Set OpenBLAS paths (macOS)
-        if: matrix.os == 'macos-latest'
-        run: |
-          echo "OPENBLAS_DIR=$(brew --prefix openblas)" >> $GITHUB_ENV
-          echo "PKG_CONFIG_PATH=$(brew --prefix openblas)/lib/pkgconfig" >> $GITHUB_ENV
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -82,27 +71,65 @@ jobs:
           pip install maturin
           maturin build --release -o dist
           echo "=== Built wheels ==="
-          ls -la dist/
-          # --no-index ensures we install from local wheel, not PyPI
-          pip install --no-index --find-links=dist diff-diff
+          ls -la dist/ || dir dist
+        shell: bash
 
-      - name: Verify Rust backend is available
-        # Run from /tmp to avoid source directory shadowing installed package
+      - name: Install wheel (Unix)
+        if: runner.os != 'Windows'
+        run: pip install --no-index --find-links=dist diff-diff
+
+      - name: Install wheel (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          $wheel = Get-ChildItem dist/*.whl | Select-Object -First 1
+          pip install $wheel.FullName
+        shell: pwsh
+
+      - name: Verify Rust backend is available (Unix)
+        if: runner.os != 'Windows'
         working-directory: /tmp
         run: |
           python -c "import diff_diff; print('Location:', diff_diff.__file__)"
           python -c "from diff_diff import HAS_RUST_BACKEND; print('HAS_RUST_BACKEND:', HAS_RUST_BACKEND); assert HAS_RUST_BACKEND, 'Rust backend not available'"
 
-      - name: Copy tests to isolated location
+      - name: Verify Rust backend is available (Windows)
+        if: runner.os == 'Windows'
+        working-directory: ${{ runner.temp }}
+        run: |
+          python -c "import diff_diff; print('Location:', diff_diff.__file__)"
+          python -c "from diff_diff import HAS_RUST_BACKEND; print('HAS_RUST_BACKEND:', HAS_RUST_BACKEND); assert HAS_RUST_BACKEND, 'Rust backend not available'"
+
+      - name: Copy tests to isolated location (Unix)
+        if: runner.os != 'Windows'
         run: cp -r tests /tmp/tests
 
-      - name: Run Rust backend tests
+      - name: Copy tests to isolated location (Windows)
+        if: runner.os == 'Windows'
+        run: Copy-Item -Recurse tests $env:RUNNER_TEMP\tests
+        shell: pwsh
+
+      - name: Run Rust backend tests (Unix)
+        if: runner.os != 'Windows'
         working-directory: /tmp
         run: pytest tests/test_rust_backend.py -v
 
-      - name: Run tests with Rust backend
+      - name: Run Rust backend tests (Windows)
+        if: runner.os == 'Windows'
+        working-directory: ${{ runner.temp }}
+        run: pytest tests/test_rust_backend.py -v
+
+      - name: Run tests with Rust backend (Unix)
+        if: runner.os != 'Windows'
         working-directory: /tmp
         run: DIFF_DIFF_BACKEND=rust pytest tests/ -x -q
+
+      - name: Run tests with Rust backend (Windows)
+        if: runner.os == 'Windows'
+        working-directory: ${{ runner.temp }}
+        run: |
+          $env:DIFF_DIFF_BACKEND="rust"
+          pytest tests/ -x -q
+        shell: pwsh
 
   # Test pure Python fallback (without Rust extension)
   python-fallback:
