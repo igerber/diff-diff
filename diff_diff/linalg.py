@@ -483,12 +483,15 @@ def solve_ols(
     # This saves O(nk²) QR overhead but won't detect rank-deficient matrices
     if skip_rank_check:
         if HAS_RUST_BACKEND and _rust_solve_ols is not None:
-            return _solve_ols_rust(
+            result = _solve_ols_rust(
                 X, y,
                 cluster_ids=cluster_ids,
                 return_vcov=return_vcov,
                 return_fitted=return_fitted,
             )
+            if result is not None:
+                return result
+            # Fall through to NumPy on numerical instability
         # Fall through to Python without rank check (user guarantees full rank)
         return _solve_ols_numpy(
             X, y,
@@ -761,7 +764,7 @@ def compute_robust_vcov(
         try:
             return _rust_compute_robust_vcov(X, residuals, cluster_ids_int)
         except ValueError as e:
-            # Translate Rust LAPACK errors to consistent Python error messages
+            # Translate Rust errors to consistent Python error messages or fallback
             error_msg = str(e)
             if "Matrix inversion failed" in error_msg:
                 raise ValueError(
@@ -769,6 +772,9 @@ def compute_robust_vcov(
                     "This indicates perfect multicollinearity. Check your fixed effects "
                     "and covariates for linear dependencies."
                 ) from e
+            if "numerically unstable" in error_msg.lower():
+                # Fall back to NumPy on numerical instability
+                return _compute_robust_vcov_numpy(X, residuals, cluster_ids)
             raise
 
     # Fallback to NumPy implementation
