@@ -148,6 +148,22 @@ from diff_diff.datasets import (
     load_mpdta,
 )
 
+# ---------------------------------------------------------------------------
+# Short aliases – standard econometric abbreviations for interactive use.
+# The canonical (long) names remain the primary API; these are convenience
+# bindings so users can write e.g. ``from diff_diff import DiD``.
+# ---------------------------------------------------------------------------
+DiD = DifferenceInDifferences
+TWFE = TwoWayFixedEffects
+MPDiD = MultiPeriodDiD
+SDiD = SyntheticDiD
+CSA = CallawaySantAnna
+SA = SunAbraham
+IDiD = ImputationDiD
+TSDiD = TwoStageDiD
+DDD = TripleDifference
+Bacon = BaconDecomposition
+
 __version__ = "2.4.1"
 __all__ = [
     # Estimators
@@ -261,4 +277,15 @@ __all__ = [
     "load_dataset",
     "list_datasets",
     "clear_cache",
+    # Short aliases (standard econometric abbreviations)
+    "DiD",
+    "TWFE",
+    "MPDiD",
+    "SDiD",
+    "CSA",
+    "SA",
+    "IDiD",
+    "TSDiD",
+    "DDD",
+    "Bacon",
 ]
