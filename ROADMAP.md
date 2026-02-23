@@ -8,9 +8,9 @@ For past changes and release history, see [CHANGELOG.md](CHANGELOG.md).
 
 ## Current Status
 
-diff-diff v2.4.0 is a **production-ready** DiD library with feature parity with R's `did` + `HonestDiD` + `synthdid` ecosystem for core DiD analysis:
+diff-diff v2.4.1 is a **production-ready** DiD library with feature parity with R's `did` + `HonestDiD` + `synthdid` ecosystem for core DiD analysis:
 
-- **Core estimators**: Basic DiD, TWFE, MultiPeriod, Callaway-Sant'Anna, Sun-Abraham, Borusyak-Jaravel-Spiess Imputation, Synthetic DiD, Triple Difference (DDD), TROP, Two-Stage DiD (Gardner 2022)
+- **Core estimators**: Basic DiD, TWFE, MultiPeriod, Callaway-Sant'Anna, Sun-Abraham, Borusyak-Jaravel-Spiess Imputation, Synthetic DiD, Triple Difference (DDD), TROP, Two-Stage DiD (Gardner 2022), Stacked DiD (Wing et al. 2024)
 - **Valid inference**: Robust SEs, cluster SEs, wild bootstrap, multiplier bootstrap, placebo-based variance
 - **Assumption diagnostics**: Parallel trends tests, placebo tests, Goodman-Bacon decomposition
 - **Sensitivity analysis**: Honest DiD (Rambachan-Roth), Pre-trends power analysis (Roth 2022)
@@ -20,30 +20,13 @@ diff-diff v2.4.0 is a **production-ready** DiD library with feature parity with 
 
 ---
 
-## Near-Term Enhancements (v2.4)
+## Near-Term Enhancements (v2.5)
 
 High-value additions building on our existing foundation.
 
-### Gardner's Two-Stage DiD (did2s) -- IMPLEMENTED (v2.4)
+### ~~Stacked Difference-in-Differences~~ (Implemented in v2.5)
 
-Two-stage approach gaining traction in applied work. First residualizes outcomes, then estimates effects.
-
-- Stage 1: Estimate unit and time FEs using only untreated observations
-- Stage 2: Regress residualized outcomes on treatment indicators
-- Clean separation of identification and estimation
-
-**Reference**: Gardner (2022). *Working Paper*.
-
-### Stacked Difference-in-Differences
-
-An intuitive approach that explicitly constructs sub-experiments for each treatment cohort, avoiding forbidden comparisons.
-
-- Creates separate datasets per cohort with valid controls only
-- Stacks sub-experiments and applies corrective sample weights
-- Returns variance-weighted ATT with proper compositional balance
-- Conceptually simpler alternative to aggregation-based methods
-
-**Reference**: [Wing, Freedman & Hollingsworth (2024)](https://www.nber.org/papers/w32054). *NBER Working Paper 32054*. Stata: `STACKDID`.
+Implemented as `StackedDiD`. See `diff_diff/stacked_did.py`.
 
 ### Staggered Triple Difference (DDD)
 

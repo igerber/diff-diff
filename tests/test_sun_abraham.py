@@ -2,11 +2,13 @@
 Tests for Sun-Abraham interaction-weighted estimator.
 """
 
+import warnings
+
 import numpy as np
 import pandas as pd
 import pytest
 
-from diff_diff.sun_abraham import SunAbraham, SunAbrahamResults, SABootstrapResults
+from diff_diff.sun_abraham import SABootstrapResults, SunAbraham, SunAbrahamResults
 
 
 def generate_staggered_data(
@@ -1157,9 +1159,11 @@ class TestSunAbrahamMethodology:
 
         n_boot = ci_params.bootstrap(50)
         sa = SunAbraham(n_bootstrap=n_boot, seed=42)
-        results = sa.fit(
-            data, outcome="outcome", unit="unit", time="time", first_treat="first_treat"
-        )
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+            results = sa.fit(
+                data, outcome="outcome", unit="unit", time="time", first_treat="first_treat"
+            )
 
         # All overall inference fields should be NaN
         assert np.isnan(results.overall_att), (
@@ -1229,6 +1233,7 @@ class TestSunAbrahamMethodology:
         absorbed unit and time fixed effects.
         """
         from unittest.mock import patch
+
         from diff_diff.linalg import LinearRegression
 
         data = generate_staggered_data(n_units=100, n_periods=8, seed=42)

@@ -39,9 +39,21 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Install OpenBLAS (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libopenblas-dev
+
       - name: Run Rust tests
         working-directory: rust
-        run: cargo test --verbose
+        run: |
+          if [ "${{ runner.os }}" == "macOS" ]; then
+            cargo test --verbose --features accelerate
+          elif [ "${{ runner.os }}" == "Linux" ]; then
+            cargo test --verbose --features openblas
+          else
+            cargo test --verbose
+          fi
+        shell: bash
 
   # Build and test with Python on multiple platforms
   python-tests:
@@ -68,10 +80,20 @@ jobs:
         # Keep in sync with pyproject.toml [project.dependencies] and [project.optional-dependencies.dev]
         run: pip install pytest pytest-xdist numpy pandas scipy
 
+      - name: Install OpenBLAS (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libopenblas-dev
+
       - name: Build and install with maturin
         run: |
           pip install maturin
-          maturin build --release -o dist
+          if [ "${{ runner.os }}" == "macOS" ]; then
+            maturin build --release -o dist --features extension-module,accelerate
+          elif [ "${{ runner.os }}" == "Linux" ]; then
+            maturin build --release -o dist --features extension-module,openblas
+          else
+            maturin build --release -o dist
+          fi
           echo "=== Built wheels ==="
           ls -la dist/ || dir dist
         shell: bash

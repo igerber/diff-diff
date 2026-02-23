@@ -10,9 +10,11 @@ This document provides the academic foundations and key implementation requireme
    - [TwoWayFixedEffects](#twowayfixedeffects)
 2. [Modern Staggered Estimators](#modern-staggered-estimators)
    - [CallawaySantAnna](#callawaysantanna)
+   - [ContinuousDiD](#continuousdid)
    - [SunAbraham](#sunabraham)
    - [ImputationDiD](#imputationdid)
    - [TwoStageDiD](#twostagedid)
+   - [StackedDiD](#stackeddid)
 3. [Advanced Estimators](#advanced-estimators)
    - [SyntheticDiD](#syntheticdid)
    - [TripleDifference](#tripledifference)
@@ -339,13 +341,15 @@ The multiplier bootstrap uses random weights w_i with E[w]=0 and Var(w)=1:
 - Anticipation: `anticipation` parameter shifts reference period
   - Group aggregation includes periods t >= g - anticipation (not just t >= g)
   - Both analytical SE and bootstrap SE aggregation respect anticipation
+  - Not-yet-treated + anticipation: control mask uses `G > t + anticipation`
+    (not just `G > t`) to exclude cohorts in the anticipation window
 - Rank-deficient design matrix (covariate collinearity):
   - Detection: Pivoted QR decomposition with tolerance `1e-07` (R's `qr()` default)
   - Handling: Warns and drops linearly dependent columns, sets NA for dropped coefficients (R-style, matches `lm()`)
   - Parameter: `rank_deficient_action` controls behavior: "warn" (default), "error", or "silent"
 - Non-finite inference values:
   - Analytic SE: Returns NaN to signal invalid inference (not biased via zeroing)
-  - Bootstrap: Drops non-finite samples, warns, and adjusts p-value floor accordingly
+  - Bootstrap: Drops non-finite samples, warns, and adjusts p-value floor accordingly. SE, CI, and p-value are all NaN if the original point estimate is non-finite, SE is non-finite or zero (e.g., n_valid=1 with ddof=1, or identical samples)
   - Threshold: Returns NaN if <50% of bootstrap samples are valid
   - Per-effect t_stat: Uses NaN (not 0.0) when SE is non-finite or zero (consistent with overall_t_stat)
   - **Note**: This is a defensive enhancement over reference implementations (R's `did::att_gt`, Stata's `csdid`) which may error or produce unhandled inf/nan in edge cases without informative warnings
@@ -376,7 +380,7 @@ The multiplier bootstrap uses random weights w_i with E[w]=0 and Var(w)=1:
   - Always excludes cohort g from controls when computing ATT(g,t)
   - This applies to both pre-treatment (t < g) and post-treatment (t >= g) periods
   - For pre-treatment periods: even though cohort g hasn't been treated yet at time t, they are the treated group for this ATT(g,t) and cannot serve as their own controls
-  - Control mask: `never_treated OR (first_treat > t AND first_treat != g)`
+  - Control mask: `never_treated OR (first_treat > t + anticipation AND first_treat != g)`
 
 **Reference implementation(s):**
 - R: `did::att_gt()` (Callaway & Sant'Anna's official package)
@@ -388,6 +392,73 @@ The multiplier bootstrap uses random weights w_i with E[w]=0 and Var(w)=1:
 - [ ] Aggregations: simple, event_study, group all implemented
 - [ ] Doubly robust estimation when covariates provided
 - [ ] Multiplier bootstrap preserves panel structure
+
+---
+
+## ContinuousDiD
+
+**Primary Source:** Callaway, Goodman-Bacon & Sant'Anna (2024), "Difference-in-Differences with a Continuous Treatment," NBER Working Paper 32117.
+
+**R Reference:** `contdid` v0.1.0 (CRAN).
+
+### Identification
+
+Two levels of parallel trends (following CGBS 2024, Assumptions 1-2):
+
+**Parallel Trends (PT):** for all doses d in D_+,
+`E[Y_t(0) - Y_{t-1}(0) | D = d] = E[Y_t(0) - Y_{t-1}(0) | D = 0]`.
+Untreated potential outcome paths are the same across all dose groups and the
+untreated group. Stronger than binary PT because it conditions on specific dose values.
+Identifies: `ATT(d|d)`, `ATT^{loc}`. Does NOT identify `ATT(d)`, `ACRT`, or cross-dose comparisons.
+
+**Strong Parallel Trends (SPT):** additionally, for all d in D,
+`E[Y_t(d) - Y_{t-1}(0) | D > 0] = E[Y_t(d) - Y_{t-1}(0) | D = d]`.
+No selection into dose groups on the basis of treatment effects.
+Implies `ATT(d|d) = ATT(d)` for all d.
+Additionally identifies: `ATT(d)`, `ACRT(d)`, `ACRT^{glob}`, and cross-dose comparisons.
+
+See `docs/methodology/continuous-did.md` Section 4 for full details.
+
+### Key Equations
+
+**Target parameters:**
+- `ATT(d|d) = E[Y_t(d) - Y_t(0) | D = d]` — effect of dose d on units who received dose d (PT)
+- `ATT(d) = E[Y_t(d) - Y_t(0) | D > 0]` — dose-response curve (SPT required)
+- `ACRT(d) = dATT(d)/dd` — average causal response / marginal effect (SPT required)
+- `ATT^{loc} = E[ATT(D|D) | D > 0] = E[Delta Y | D > 0] - E[Delta Y | D = 0]` — binarized ATT (PT); equals `ATT^{glob}` under SPT
+- `ATT^{glob} = E[ATT(D) | D > 0]` — global average dose-response level (SPT required)
+- `ACRT^{glob} = E[ACRT(D_i) | D > 0]` — plug-in average marginal effect (SPT required)
+
+**Estimation via B-spline OLS:**
+1. Compute `Delta_tilde_Y = (Y_t - Y_{t-1})_treated - mean((Y_t - Y_{t-1})_control)`
+2. Build B-spline basis `Psi(D_i)` from treated doses
+3. OLS: `beta = (Psi'Psi)^{-1} Psi' Delta_tilde_Y`
+4. `ATT(d) = Psi(d)' beta`, `ACRT(d) = dPsi(d)/dd' beta`
+
+### Edge Cases
+
+- **No untreated group**: Remark 3.1 (lowest-dose-as-control) not implemented; requires P(D=0) > 0.
+- **Discrete treatment**: Detect integer-valued dose and warn; saturated regression deferred.
+- **All-same dose**: B-spline basis collapses; ACRT(d) = 0 everywhere.
+- **Rank deficiency**: When n_treated <= n_basis, cell is skipped.
+- **Balanced panel required**: Matches R `contdid` v0.1.0.
+- **Anticipation + not-yet-treated**: Control mask uses `G > t + anticipation`
+  (not just `G > t`) to exclude cohorts in the anticipation window from
+  not-yet-treated controls. When `anticipation=0` (default), behavior is
+  unchanged.
+- **Boundary knots**: Knots are built once from all treated doses (global, not per-cell) to ensure a common basis across (g,t) cells for aggregation. Evaluation grid is clamped to training-dose boundary knots (`range(dose)`). R's `contdid` v0.1.0 has an inconsistency where `splines2::bSpline(dvals)` uses `range(dvals)` instead of `range(dose)`, which can produce extrapolation artifacts at dose grid extremes. Our approach avoids extrapolation and is methodologically sound.
+
+### Implementation Checklist
+
+- [x] B-spline basis construction matching R's `splines2::bSpline` (global knots from all treated doses; boundary knots use training-dose range; see deviation note above)
+- [x] Multi-period (g,t) cell iteration with base period selection
+- [x] Dose-response and event-study aggregation with group-proportional weights (n_treated/n_total per group, divided among post-treatment cells; R `ptetools` convention)
+- [x] Multiplier bootstrap for inference
+- [x] Analytical SEs via influence functions
+- [x] Equation verification tests (linear, quadratic, multi-period)
+- [ ] Covariate support (deferred, matching R v0.1.0)
+- [ ] Discrete treatment saturated regression
+- [ ] Lowest-dose-as-control (Remark 3.1)
 
 ---
 
@@ -436,7 +507,7 @@ where weights ŵ_{g,e} = n_{g,e} / Σ_g n_{g,e} (sample share of cohort g at eve
 - NaN inference for undefined statistics:
   - t_stat: Uses NaN (not 0.0) when SE is non-finite or zero
   - Analytical inference: p_value and CI also NaN when t_stat is NaN (NaN propagates through `compute_p_value` and `compute_confidence_interval`)
-  - Bootstrap inference: p_value and CI computed from bootstrap distribution, may be valid even when SE/t_stat is NaN (only NaN if <50% of bootstrap samples are valid)
+  - Bootstrap inference: p_value and CI computed from bootstrap distribution. SE, CI, and p-value are all NaN if the original point estimate is non-finite, SE is non-finite or zero, or if <50% of bootstrap samples are valid
   - Applies to overall ATT, per-effect event study, and aggregated event study
   - **Note**: Defensive enhancement matching CallawaySantAnna behavior; R's `fixest::sunab()` may produce Inf/NaN without warning
 - Inference distribution:
@@ -639,6 +710,98 @@ Our implementation uses multiplier bootstrap on the GMM influence function: clus
 
 ---
 
+## StackedDiD
+
+**Primary source:** Wing, C., Freedman, S. M., & Hollingsworth, A. (2024). Stacked Difference-in-Differences. NBER Working Paper 32054. http://www.nber.org/papers/w32054
+
+**Key implementation requirements:**
+
+*Assumption checks / warnings:*
+- Assumption 1 (No Anticipation): ATT(a, a+e) = 0 for all e < 0
+- Assumption 2 (Common Trends): E[Y_{s,a+e}(0) - Y_{s,a-1}(0) | A_s = a] = E[Y_{s,a+e}(0) - Y_{s,a-1}(0) | A_s > a + e]
+- Clean controls must exist for each sub-experiment (IC2)
+- Event window must fit within observed data range (IC1)
+
+*Target parameter (Equation 2):*
+
+    theta_kappa^e = sum_{a in Omega_kappa} ATT(a, a+e) * (N_a^D / N_Omega_kappa^D)
+
+where:
+- `theta_kappa^e` = trimmed aggregate ATT at event time e
+- `Omega_kappa` = trimmed set of adoption events satisfying IC1 and IC2
+- `N_a^D` = number of treated units in sub-experiment a
+- `N_Omega_kappa^D` = total treated units across all sub-experiments in trimmed set
+
+*Estimator equation (Equation 3 — weighted saturated event study, recommended):*
+
+    Y_sae = alpha_0 + alpha_1 * D_sa + sum_{h != -1} [lambda_h * 1(e=h) + delta_h * D_sa * 1(e=h)] + U_sae
+
+Estimated via WLS with Q-weights. The delta_h coefficients identify theta_kappa^e.
+
+*Q-weights (Section 5.3, Table 1):*
+
+    Q_sa = 1                                           if D_sa = 1 (treated)
+    Q_sa = (N_a^D / N^D) / (N_a^C / N^C)             if D_sa = 0 (control, aggregate weighting)
+    Q_sa = (Pop_a^D / Pop^D) / (N_a^C / N^C)         if D_sa = 0 (control, population weighting)
+    Q_sa = ((N_a + N_a^C)/(N^D+N^C)) / (N_a^C/N^C)  if D_sa = 0 (control, sample share weighting)
+
+*Standard errors (Section 5.4):*
+- Default: Cluster-robust standard errors at the group (unit) level
+- Alternative: Cluster at group x sub-experiment level
+- Both approaches yield approximately correct coverage when clusters > 100 (Table 2)
+- No special bootstrap procedure specified; standard cluster-robust SEs recommended
+- For post-period average: delta method or `lincom`/`marginaleffects`
+
+*Edge cases:*
+- All events trimmed: `len(Omega_kappa) == 0` -> ValueError suggesting reduced kappa
+- No clean controls for event a: IC2 check fails -> Trim event, warn user
+- Single cohort in trimmed set: Valid — Q-weights simplify
+- Duplicate observations: Same (unit, time) appears in multiple sub-experiments -> handled by clustering at unit level
+- Constant treatment share across sub-exps: Unweighted FE recovers correct estimand (special case, Section 5.5)
+- Anticipation > 0: Reference period shifts to e = -1 - anticipation. Post-treatment includes anticipation periods (e >= -anticipation). Window expands by anticipation pre-periods.
+- Group aggregation: Not supported — pooled stacked regression cannot produce cohort-specific effects. Use CallawaySantAnna or ImputationDiD.
+
+*Algorithm (Section 5):*
+1. Choose kappa_pre, kappa_post event window
+2. Apply IC1 (window fits in data) and IC2 (clean controls exist) to get Omega_kappa
+3. For each a in Omega_kappa: build sub-experiment with treated (A_s = a), clean controls (A_s > a + kappa_post), time window [a - kappa_pre, a + kappa_post] (with anticipation: [a - kappa_pre - anticipation, a + kappa_post])
+4. Stack all sub-experiments vertically
+5. Compute Q-weights: aggregate weighting uses observation counts per (event_time, sub_exp), matching R reference. Population/sample_share use unit counts per sub_exp (paper notation).
+6. Run WLS regression of Equation 3 with Q-weights
+7. Extract delta_h coefficients as event-study ATTs
+8. Compute cluster-robust SEs at unit level
+
+*IC1 (Adoption Event Window, Section 3):*
+
+    IC1_a = 1[a - kappa_pre >= T_min  AND  a + kappa_post <= T_max]
+
+Note: Matches R reference implementation (`focalAdoptionTime - kappa_pre >= minTime`).
+The reference period a-1 is included in the window [a-kappa_pre, a+kappa_post] when kappa_pre >= 1.
+The paper text states a stricter bound (T_min + 1) but the R code by the co-author uses T_min.
+
+*IC2 (Clean Controls Exist, Section 3):*
+
+    IC2_a = 1[exists s with A_s > a + kappa_post]    (not_yet_treated)
+    IC2_a = 1[exists s with A_s > a + kappa_post + kappa_pre]  (strict)
+    IC2_a = 1[exists s with A_s = infinity]           (never_treated)
+
+**Reference implementation(s):**
+- R: https://github.com/hollina/stacked-did-weights (`create_sub_exp()`, `compute_weights()`)
+- No Stata or Python package; Stata estimation via standard `reghdfe` with Q-weight column
+
+**Requirements checklist:**
+- [x] Sub-experiment construction with treated + clean controls + time window
+- [x] IC1 and IC2 trimming with warnings
+- [x] Q-weight computation for all three weighting schemes (Table 1)
+- [x] WLS via sqrt(w) transformation
+- [x] Event study regression (Equation 3) with reference period e=-1
+- [x] Cluster-robust SEs at unit or unit x sub-exp level
+- [x] Overall ATT as average of post-treatment delta_h with delta-method SE
+- [x] Anticipation parameter support
+- [x] Never-treated encoding (0 and inf)
+
+---
+
 # Advanced Estimators
 
 ## SyntheticDiD
@@ -780,45 +943,76 @@ Convergence criterion: stop when objective decrease < min_decrease² (default mi
 
 *Estimator equation (as implemented):*
 
-Eight-cell structure:
+Three-DiD decomposition (matching R's `triplediff::ddd()`):
 ```
-τ^DDD = [(Ȳ₁₁₁ - Ȳ₁₀₁) - (Ȳ₀₁₁ - Ȳ₀₀₁)] - [(Ȳ₁₁₀ - Ȳ₁₀₀) - (Ȳ₀₁₀ - Ȳ₀₀₀)]
+Subgroups: 4=G1P1, 3=G1P0, 2=G0P1, 1=G0P0
+DDD = DiD_3 + DiD_2 - DiD_1
 ```
-where subscripts are (Group, Period, Treatment eligibility).
+where `DiD_j` is a pairwise DiD comparing subgroup j vs subgroup 4 (reference).
 
-Regression form:
-```
-Y = β₀ + β_G(G) + β_P(P) + β_T(T) + β_{GP}(G×P) + β_{GT}(G×T) + β_{PT}(P×T) + τ(G×P×T) + X'γ + ε
-```
+Each pairwise DiD uses the selected estimation method (DR, IPW, or RA) with
+repeated cross-section implementation (`panel=FALSE` in R).
 
-Doubly robust estimator:
-```
-τ̂^DR = E[(ψ_IPW(Y,D,X;π̂) + ψ_RA(Y,X;μ̂) - ψ_bias(X;π̂,μ̂))]
-```
+Regression adjustment (RA): Separate OLS per subgroup-time cell within each
+pairwise comparison, imputed counterfactual means.
 
-*Standard errors:*
-- Regression adjustment: HC1 or cluster-robust
-- IPW: Influence function-based (accounts for estimated propensity)
-- Doubly robust: Efficient influence function
+IPW: Propensity score P(subgroup=4|X) within {j, 4} subset, Hajek normalization.
+
+Doubly robust (DR): Combines outcome regression and IPW with efficiency correction
+(OR bias correction term).
+
+*Standard errors (all methods):*
+
+Individual-level (default):
+```
+SE = std(w₃·IF₃ + w₂·IF₂ - w₁·IF₁, ddof=1) / sqrt(n)
+```
+where `w_j = n / n_j`, `n_j = |{subgroup=j}| + |{subgroup=4}|`, and `IF_j` is the
+per-observation influence function for pairwise DiD j (padded to full n with zeros).
+
+Cluster-robust (when `cluster` parameter is provided):
+```
+SE = sqrt( (G/(G-1)) * (1/n²) * Σ_c ψ_c² )
+```
+where `G` is the number of clusters, `ψ_c = Σ_{i∈c} IF_i` is the sum of the combined
+influence function within cluster `c`, and the `G/(G-1)` factor is the Liang-Zeger
+finite-sample adjustment.
+
+Note: IF-based SEs are inherently heteroskedasticity-robust; the `robust` parameter
+has no additional effect.
 
 *Edge cases:*
 - Propensity scores near 0/1: trimmed at `pscore_trim` (default 0.01)
 - Empty cells: raises ValueError with diagnostic message
-- Collinear covariates: automatic detection and warning
+- Low cell counts: warns when any cell has fewer than 10 observations
+- Cluster-robust SE: requires at least 2 clusters (raises `ValueError`)
+- Cluster IDs: must not contain NaN (raises `ValueError`)
+- Overlap warning: emitted when >5% of observations are trimmed at pscore bounds (IPW/DR only)
+- Propensity score estimation failure: falls back to unconditional probability P(subgroup=4),
+  sets hessian=None (skipping PS correction in influence function), emits UserWarning
+- Collinear covariates: detected via pivoted QR in `solve_ols()`, action controlled by
+  `rank_deficient_action` ("warn", "error", "silent")
+- Non-finite influence function values (e.g., from extreme propensity scores in IPW/DR
+  or near-singular design): warns and sets SE to NaN, propagated to t_stat/p_value/CI
+  via safe_inference()
 - NaN inference for undefined statistics:
   - t_stat: Uses NaN (not 0.0) when SE is non-finite or zero
   - p_value and CI: Also NaN when t_stat is NaN
   - **Note**: Defensive enhancement; reference implementation behavior not yet documented
 
 **Reference implementation(s):**
-- Authors' replication code (forthcoming)
+- R `triplediff::ddd()` (v0.2.1, CRAN) — official companion by paper authors
 
 **Requirements checklist:**
-- [ ] All 8 cells (G×P×T) must have observations
-- [ ] Propensity scores clipped at `pscore_trim` bounds
-- [ ] Doubly robust consistent if either propensity or outcome model correct
-- [ ] Returns cell means for diagnostic inspection
-- [ ] Supports RA, IPW, and DR estimation methods
+- [x] All 8 cells (G×P×T) must have observations
+- [x] Propensity scores clipped at `pscore_trim` bounds
+- [x] Doubly robust consistent if either propensity or outcome model correct
+- [x] Returns cell means for diagnostic inspection
+- [x] Supports RA, IPW, and DR estimation methods
+- [x] Three-DiD decomposition: DDD = DiD_3 + DiD_2 - DiD_1 (matching R)
+- [x] Influence function SE: std(w3·IF_3 + w2·IF_2 - w1·IF_1) / sqrt(n)
+- [x] Cluster-robust SE via Liang-Zeger variance on influence function
+- [x] ATT and SE match R within <0.001% for all methods and DGP types
 
 ---
 
@@ -1342,7 +1536,8 @@ should be a deliberate user choice.
 | ImputationDiD | Conservative clustered (Thm 3) | Multiplier bootstrap (library extension; percentile CIs and empirical p-values, consistent with CS/SA) |
 | TwoStageDiD | GMM sandwich (Newey & McFadden 1994) | Multiplier bootstrap on GMM influence function |
 | SyntheticDiD | Placebo variance (Alg 4) | Unit-level bootstrap (fixed weights) |
-| TripleDifference | HC1 / cluster-robust | Influence function for IPW/DR |
+| TripleDifference | Influence function (all methods) | SE = std(IF) / sqrt(n) |
+| StackedDiD | Cluster-robust (unit) | Cluster at unit × sub-experiment |
 | TROP | Block bootstrap | — |
 | BaconDecomposition | N/A (exact decomposition) | Individual 2×2 SEs |
 | HonestDiD | Inherited from event study | FLCI, C-LF |
@@ -1362,8 +1557,10 @@ should be a deliberate user choice.
 | SunAbraham | fixest | `sunab()` |
 | ImputationDiD | didimputation | `did_imputation()` |
 | TwoStageDiD | did2s | `did2s()` |
+| ContinuousDiD | contdid | `cont_did()` |
 | SyntheticDiD | synthdid | `synthdid_estimate()` |
-| TripleDifference | - | (forthcoming) |
+| TripleDifference | triplediff | `ddd()` |
+| StackedDiD | stacked-did-weights | `create_sub_exp()` + `compute_weights()` |
 | TROP | - | (forthcoming) |
 | BaconDecomposition | bacondecomp | `bacon()` |
 | HonestDiD | HonestDiD | `createSensitivityResults()` |

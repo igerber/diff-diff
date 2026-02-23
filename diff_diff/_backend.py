@@ -35,6 +35,8 @@ try:
         compute_time_weights as _rust_compute_time_weights,
         compute_noise_level as _rust_compute_noise_level,
         sc_weight_fw as _rust_sc_weight_fw,
+        # Diagnostics
+        rust_backend_info as _rust_backend_info,
     )
     _rust_available = True
 except ImportError:
@@ -56,6 +58,7 @@ except ImportError:
     _rust_compute_time_weights = None
     _rust_compute_noise_level = None
     _rust_sc_weight_fw = None
+    _rust_backend_info = None
 
 # Determine final backend based on environment variable and availability
 if _backend_env == 'python':
@@ -78,6 +81,7 @@ if _backend_env == 'python':
     _rust_compute_time_weights = None
     _rust_compute_noise_level = None
     _rust_sc_weight_fw = None
+    _rust_backend_info = None
 elif _backend_env == 'rust':
     # Force Rust mode - fail if not available
     if not _rust_available:
@@ -90,8 +94,25 @@ else:
     # Auto mode - use Rust if available
     HAS_RUST_BACKEND = _rust_available
 
+
+def rust_backend_info():
+    """Return compile-time BLAS feature information for the Rust backend.
+
+    Returns a dict with keys:
+    - 'blas': True if any BLAS backend is linked
+    - 'accelerate': True if Apple Accelerate is linked (macOS)
+    - 'openblas': True if OpenBLAS is linked (Linux)
+
+    If the Rust backend is not available, all values are False.
+    """
+    if _rust_backend_info is not None:
+        return _rust_backend_info()
+    return {"blas": False, "accelerate": False, "openblas": False}
+
+
 __all__ = [
     'HAS_RUST_BACKEND',
+    'rust_backend_info',
     '_rust_bootstrap_weights',
     '_rust_synthetic_weights',
     '_rust_project_simplex',

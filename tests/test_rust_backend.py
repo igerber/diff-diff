@@ -23,6 +23,22 @@ class TestRustBackend:
         """Verify Rust backend is available when this test runs."""
         assert HAS_RUST_BACKEND
 
+    def test_rust_backend_info(self):
+        """Test rust_backend_info returns valid diagnostics dict."""
+        from diff_diff._backend import rust_backend_info
+
+        info = rust_backend_info()
+        assert isinstance(info, dict)
+        assert "blas" in info
+        assert "accelerate" in info
+        assert "openblas" in info
+        assert isinstance(info["blas"], bool)
+        assert isinstance(info["accelerate"], bool)
+        assert isinstance(info["openblas"], bool)
+        # If either platform BLAS is enabled, blas should be True
+        if info["accelerate"] or info["openblas"]:
+            assert info["blas"] is True
+
     # =========================================================================
     # Bootstrap Weight Tests
     # =========================================================================
@@ -1827,6 +1843,85 @@ class TestSDIDRustBackend:
         weights = rust_fn(Y_pre, Y_tr_mean, 0.5)
         assert weights.shape == (1,)
         assert abs(weights[0] - 1.0) < 1e-10
+
+    def test_fw_gram_vs_standard_equivalence(self):
+        """Test Gram path (T0 < N) and standard path produce equivalent results.
+
+        Creates a problem where T0 < N (triggers Gram path in Rust), then
+        verifies the Rust result matches pure Python exactly. This validates
+        that the Gram precomputation optimization produces identical weights.
+        """
+        from diff_diff._rust_backend import sc_weight_fw as rust_fn
+        from diff_diff.utils import _sc_weight_fw_numpy as numpy_fn
+
+        np.random.seed(42)
+        # N=50 rows, T0=8 columns + 1 target = 9 cols total
+        # This triggers Gram path (T0=8 < N=50)
+        Y = np.random.randn(50, 9)
+
+        rust_w = rust_fn(Y, 0.3, True, None, 1e-5, 10000)
+        numpy_w = numpy_fn(Y, 0.3, True, None, 1e-5, 10000)
+
+        # Weights must match to high precision
+        np.testing.assert_array_almost_equal(
+            rust_w, numpy_w, decimal=6,
+            err_msg="Gram path weights should match Python"
+        )
+        assert abs(rust_w.sum() - 1.0) < 1e-6
+        assert np.all(rust_w >= -1e-6)
+
+    def test_fw_standard_path_equivalence(self):
+        """Test standard path (T0 >= N) produces results matching Python.
+
+        Creates a problem where T0 >= N (triggers standard path in Rust),
+        then verifies the Rust result matches pure Python exactly.
+        """
+        from diff_diff._rust_backend import sc_weight_fw as rust_fn
+        from diff_diff.utils import _sc_weight_fw_numpy as numpy_fn
+
+        np.random.seed(42)
+        # N=5 rows, T0=12 columns + 1 target = 13 cols total
+        # This triggers standard path (T0=12 >= N=5)
+        Y = np.random.randn(5, 13)
+
+        rust_w = rust_fn(Y, 0.5, True, None, 1e-5, 10000)
+        numpy_w = numpy_fn(Y, 0.5, True, None, 1e-5, 10000)
+
+        np.testing.assert_array_almost_equal(
+            rust_w, numpy_w, decimal=6,
+            err_msg="Standard path weights should match Python"
+        )
+        assert abs(rust_w.sum() - 1.0) < 1e-6
+        assert np.all(rust_w >= -1e-6)
+
+    def test_sdid_intercept_false_rust_vs_python(self):
+        """Test intercept=false produces matching weights in both backends.
+
+        Verifies both Gram and standard paths handle intercept=false correctly
+        (no column centering applied).
+        """
+        from diff_diff._rust_backend import sc_weight_fw as rust_fn
+        from diff_diff.utils import _sc_weight_fw_numpy as numpy_fn
+
+        np.random.seed(42)
+
+        # Gram path: T0 < N
+        Y_gram = np.random.randn(30, 6)
+        rust_w_gram = rust_fn(Y_gram, 0.2, False, None, 1e-5, 10000)
+        numpy_w_gram = numpy_fn(Y_gram, 0.2, False, None, 1e-5, 10000)
+        np.testing.assert_array_almost_equal(
+            rust_w_gram, numpy_w_gram, decimal=6,
+            err_msg="Gram path intercept=false weights should match Python"
+        )
+
+        # Standard path: T0 >= N
+        Y_std = np.random.randn(4, 10)
+        rust_w_std = rust_fn(Y_std, 0.2, False, None, 1e-5, 10000)
+        numpy_w_std = numpy_fn(Y_std, 0.2, False, None, 1e-5, 10000)
+        np.testing.assert_array_almost_equal(
+            rust_w_std, numpy_w_std, decimal=6,
+            err_msg="Standard path intercept=false weights should match Python"
+        )
 
     def test_full_sdid_rust_vs_python(self):
         """Test full SDID estimation produces same results with Rust and Python."""

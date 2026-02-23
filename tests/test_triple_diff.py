@@ -241,8 +241,8 @@ class TestEstimationMethods:
         )
 
         assert results.estimation_method == "reg"
-        assert results.r_squared is not None
-        assert 0 <= results.r_squared <= 1
+        # r_squared is only computed when covariates are present
+        # (the decomposition approach doesn't use a single OLS)
         assert abs(results.att - 2.0) < 0.5
 
     def test_ipw_estimation(self, simple_ddd_data):
@@ -366,8 +366,8 @@ class TestCovariates:
             covariates=["x1", "x2"],
         )
 
-        # Covariates should improve R-squared
-        assert results_with_cov.r_squared >= results_no_cov.r_squared
+        # Covariates should improve precision (lower SE)
+        assert results_with_cov.se <= results_no_cov.se
 
     def test_ipw_with_covariates_has_pscore_stats(self, ddd_data_with_covariates):
         """Test that IPW with covariates provides propensity score stats."""
@@ -382,7 +382,7 @@ class TestCovariates:
         )
 
         assert results.pscore_stats is not None
-        assert "P(G=1) mean" in results.pscore_stats
+        assert "P(subgroup=4|X) mean" in results.pscore_stats
 
 
 # =============================================================================
@@ -400,6 +400,18 @@ class TestInputValidation:
             ddd.fit(
                 simple_ddd_data,
                 outcome="nonexistent",
+                group="group",
+                partition="partition",
+                time="time",
+            )
+
+    def test_missing_cluster_column(self, simple_ddd_data):
+        """Test error when cluster column is missing from data."""
+        ddd = TripleDifference(cluster="nonexistent")
+        with pytest.raises(ValueError, match="Missing columns"):
+            ddd.fit(
+                simple_ddd_data,
+                outcome="outcome",
                 group="group",
                 partition="partition",
                 time="time",
@@ -897,7 +909,7 @@ class TestRankDeficientAction:
             estimation_method="reg",  # Use regression method to test OLS path
             rank_deficient_action="error"
         )
-        with pytest.raises(ValueError, match="rank-deficient"):
+        with pytest.raises(ValueError, match="[Rr]ank-deficient"):
             ddd.fit(
                 ddd_data_with_covariates,
                 outcome="outcome",
@@ -947,7 +959,7 @@ class TestRankDeficientAction:
         ddd_data_with_covariates["x1_dup"] = ddd_data_with_covariates["x1"].copy()
 
         # Should raise with "error" action
-        with pytest.raises(ValueError, match="rank-deficient"):
+        with pytest.raises(ValueError, match="[Rr]ank-deficient"):
             triple_difference(
                 ddd_data_with_covariates,
                 outcome="outcome",

@@ -18,7 +18,7 @@
 #   - A stale sentinel can approve an unreviewed newer plan. This occurs only when:
 #     (a) the sentinel points to an older plan with a valid review, AND
 #     (b) a newer plan was created without updating the sentinel.
-#     CLAUDE.md instructs sentinel updates on new plan creation (line 647), making (b)
+#     CLAUDE.md instructs sentinel updates on new plan creation (Plan Review section), making (b)
 #     unlikely in practice. A runtime guard was tested and removed (cb8d5e3) because it
 #     caused false denials in multi-plan workflows. Automated tests in
 #     test-check-plan-review.sh verify existing behavior; full mitigation would require
@@ -102,7 +102,7 @@ if [ -f "$REVIEW_FILE" ]; then
   fi
   exit 0  # Review exists and is fresh, allow
 else
-  deny "No plan review found. Expected: $REVIEW_FILE. Follow the Plan Review Before Approval instructions in CLAUDE.md."
+  deny "No plan review found. Expected: $REVIEW_FILE. Run the plan review workflow: offer review via AskUserQuestion, spawn /review-plan if requested, or write a Skipped marker. See CLAUDE.md Plan Review section."
 fi
 
 # Manual verification checklist:

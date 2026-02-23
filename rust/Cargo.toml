@@ -1,6 +1,6 @@
 [package]
 name = "diff_diff_rust"
-version = "2.4.1"
+version = "2.6.0"
 edition = "2021"
 description = "Rust backend for diff-diff DiD library"
 license = "MIT"
@@ -14,6 +14,10 @@ crate-type = ["cdylib", "rlib"]
 default = []
 # extension-module is only needed for cdylib builds, not for cargo test
 extension-module = ["pyo3/extension-module"]
+# Platform BLAS backends (optional, activated for pre-built wheels)
+# When enabled, ndarray's .dot() and general_mat_vec_mul dispatch to BLAS dgemv/dgemm
+accelerate = ["ndarray/blas", "dep:blas-src", "blas-src/accelerate"]
+openblas = ["ndarray/blas"]
 
 [dependencies]
 # PyO3 0.22 supports Python 3.8-3.13
@@ -24,9 +28,13 @@ rand = "0.8"
 rand_xoshiro = "0.6"
 rayon = "1.8"
 
-# Pure Rust linear algebra library - no external BLAS/LAPACK dependencies
-# This enables Windows builds without Intel MKL complexity
+# Pure Rust linear algebra for SVD/matrix inversion (no external deps).
+# BLAS for matrix-vector products is optional via accelerate/openblas features.
 faer = "0.24"
+
+# BLAS backend (optional, activated by accelerate/openblas features)
+# blas-src 0.10 is ndarray's tested version (see ndarray/crates/blas-tests/Cargo.toml)
+blas-src = { version = "0.10", optional = true }
 
 [profile.release]
 lto = true

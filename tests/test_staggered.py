@@ -2692,6 +2692,40 @@ class TestCallawaySantAnnaAnticipation:
             post_treatment = [t for (gg, t) in gt_for_group if t >= g]
             assert len(post_treatment) > 0, "Should have post-treatment effects"
 
+    def test_not_yet_treated_with_anticipation_excludes_anticipation_window(self):
+        """Not-yet-treated controls must exclude cohorts in the anticipation window.
+
+        With anticipation=1, the control mask should use G > t + anticipation
+        (not just G > t). Without the fix, cohorts about to be treated are
+        incorrectly included as controls, biasing pre-treatment ATTs toward
+        the treatment effect (~3.0) instead of near zero.
+        """
+        data = generate_staggered_data(
+            n_units=100, n_periods=10, n_cohorts=2,
+            treatment_effect=3.0, seed=42,
+        )
+
+        cs = CallawaySantAnna(anticipation=1, control_group="not_yet_treated")
+        result = cs.fit(
+            data, outcome="outcome", unit="unit",
+            time="time", first_treat="first_treat",
+        )
+
+        groups = sorted(
+            g for g in data[data["first_treat"] > 0]["first_treat"].unique()
+        )
+
+        for g in groups:
+            for (gg, t), eff in result.group_time_effects.items():
+                if gg != g:
+                    continue
+                # Pre-treatment: t < g - anticipation
+                if t < g - 1:
+                    assert abs(eff["effect"]) < 1.5, (
+                        f"Pre-treatment ATT(g={g}, t={t}) = {eff['effect']:.3f} "
+                        f"should be near zero (< 1.5); contaminated controls?"
+                    )
+
 
 class TestCallawaySantAnnaTStatNaN:
     """Tests for NaN t_stat when SE is invalid."""

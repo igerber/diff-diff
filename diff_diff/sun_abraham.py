@@ -16,6 +16,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
+from diff_diff.bootstrap_utils import compute_effect_bootstrap_stats
 from diff_diff.linalg import LinearRegression, compute_robust_vcov
 from diff_diff.results import _get_significance_stars
 from diff_diff.utils import (
@@ -1107,26 +1108,19 @@ class SunAbraham:
         for e in rel_periods:
             boot_dist = bootstrap_effects[e]
             original_effect = original_event_study[e]["effect"]
-
-            se = float(np.std(boot_dist, ddof=1))
-            ci = self._compute_percentile_ci(boot_dist, self.alpha)
-            p_value = self._compute_bootstrap_pvalue(original_effect, boot_dist)
-
+            se, ci, p_value = compute_effect_bootstrap_stats(
+                original_effect, boot_dist, alpha=self.alpha,
+                context=f"event study e={e}",
+            )
             event_study_ses[e] = se
             event_study_cis[e] = ci
             event_study_p_values[e] = p_value
 
         # Overall ATT statistics
-        if not np.isfinite(original_overall_att):
-            overall_se = np.nan
-            overall_ci = (np.nan, np.nan)
-            overall_p = np.nan
-        else:
-            overall_se = float(np.std(bootstrap_overall, ddof=1))
-            overall_ci = self._compute_percentile_ci(bootstrap_overall, self.alpha)
-            overall_p = self._compute_bootstrap_pvalue(
-                original_overall_att, bootstrap_overall
-            )
+        overall_se, overall_ci, overall_p = compute_effect_bootstrap_stats(
+            original_overall_att, bootstrap_overall, alpha=self.alpha,
+            context="overall ATT",
+        )
 
         return SABootstrapResults(
             n_bootstrap=self.n_bootstrap,
@@ -1140,32 +1134,6 @@ class SunAbraham:
             event_study_p_values=event_study_p_values,
             bootstrap_distribution=bootstrap_overall,
         )
-
-    def _compute_percentile_ci(
-        self,
-        boot_dist: np.ndarray,
-        alpha: float,
-    ) -> Tuple[float, float]:
-        """Compute percentile confidence interval."""
-        lower = float(np.percentile(boot_dist, alpha / 2 * 100))
-        upper = float(np.percentile(boot_dist, (1 - alpha / 2) * 100))
-        return (lower, upper)
-
-    def _compute_bootstrap_pvalue(
-        self,
-        original_effect: float,
-        boot_dist: np.ndarray,
-    ) -> float:
-        """Compute two-sided bootstrap p-value."""
-        if original_effect >= 0:
-            p_one_sided = float(np.mean(boot_dist <= 0))
-        else:
-            p_one_sided = float(np.mean(boot_dist >= 0))
-
-        p_value = min(2 * p_one_sided, 1.0)
-        p_value = max(p_value, 1 / (self.n_bootstrap + 1))
-
-        return p_value
 
     def get_params(self) -> Dict[str, Any]:
         """Get estimator parameters (sklearn-compatible)."""

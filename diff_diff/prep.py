@@ -18,6 +18,7 @@ from diff_diff.utils import compute_synthetic_weights
 
 # Re-export data generation functions from prep_dgp for backward compatibility
 from diff_diff.prep_dgp import (
+    generate_continuous_did_data,
     generate_did_data,
     generate_staggered_data,
     generate_factor_data,

@@ -26,7 +26,8 @@ Each estimator in diff-diff should be periodically reviewed to ensure:
 | CallawaySantAnna | `staggered.py` | `did::att_gt()` | **Complete** | 2026-01-24 |
 | SunAbraham | `sun_abraham.py` | `fixest::sunab()` | **Complete** | 2026-02-15 |
 | SyntheticDiD | `synthetic_did.py` | `synthdid::synthdid_estimate()` | **Complete** | 2026-02-10 |
-| TripleDifference | `triple_diff.py` | (forthcoming) | Not Started | - |
+| TripleDifference | `triple_diff.py` | `triplediff::ddd()` | **Complete** | 2026-02-18 |
+| StackedDiD | `stacked_did.py` | `stacked-did-weights` | **Complete** | 2026-02-19 |
 | TROP | `trop.py` | (forthcoming) | Not Started | - |
 | BaconDecomposition | `bacon.py` | `bacondecomp::bacon()` | Not Started | - |
 | HonestDiD | `honest_did.py` | `HonestDiD` package | Not Started | - |
@@ -379,6 +380,102 @@ variables appear to the left of the `|` separator.
 
 ---
 
+#### StackedDiD
+
+| Field | Value |
+|-------|-------|
+| Module | `stacked_did.py` |
+| Primary Reference | Wing, Freedman & Hollingsworth (2024), NBER WP 32054 |
+| R Reference | `stacked-did-weights` (`create_sub_exp()` + `compute_weights()`) |
+| Status | **Complete** |
+| Last Review | 2026-02-19 |
+
+**Verified Components:**
+- [x] IC1 trimming: `a - kappa_pre >= T_min AND a + kappa_post <= T_max` (matches R reference)
+- [x] IC2 trimming: Three clean control modes (not_yet_treated, strict, never_treated)
+- [x] Sub-experiment construction: treated + clean controls within `[a - kappa_pre, a + kappa_post]`
+- [x] Q-weights aggregate: treated Q=1, control `Q = (sub_treat_n/stack_treat_n) / (sub_control_n/stack_control_n)` per (event_time, sub_exp) — matches R `compute_weights()`
+- [x] Q-weights population: `Q_a = (Pop_a^D / Pop^D) / (N_a^C / N^C)` (Table 1, Row 2)
+- [x] Q-weights sample_share: `Q_a = ((N_a^D + N_a^C)/(N^D+N^C)) / (N_a^C / N^C)` (Table 1, Row 3)
+- [x] WLS via sqrt(w) transformation (numerically equivalent to weighted regression)
+- [x] Event study regression: `Y = α_0 + α_1·D_sa + Σ_{h≠-1}[λ_h·1(e=h) + δ_h·D_sa·1(e=h)] + U` (Eq. 3)
+- [x] Reference period e=-1-anticipation normalized to zero (omitted from design matrix)
+- [x] Delta-method SE for overall ATT: `SE = sqrt(ones' @ sub_vcv @ ones) / K`
+- [x] Cluster-robust SEs at unit level (default) and unit×sub-experiment level
+- [x] Anticipation parameter: reference period shifts to e=-1-anticipation, post-treatment includes anticipation periods
+- [x] Rank deficiency handling (warn/error/silent via `solve_ols()`)
+- [x] Never-treated encoding: both `first_treat=0` and `first_treat=inf` handled
+- [x] R comparison: ATT matches within machine precision (diff < 2.1e-11)
+- [x] R comparison: SE matches within machine precision (diff < 4.0e-10)
+- [x] R comparison: Event study effects correlation = 1.000000, max diff < 4.5e-11
+- [x] safe_inference() used for all inference fields
+- [x] All REGISTRY.md edge cases tested
+
+**Test Coverage:**
+- 72 tests in `tests/test_stacked_did.py` across 11 test classes:
+  - `TestStackedDiDBasic` (8): fit, event study, group/all raises, simple aggregation, known constant effect, dynamic effects
+  - `TestTrimming` (5): IC1 window, IC2 no-controls, trimmed groups reported, all-trimmed raises, wider window
+  - `TestQWeights` (4): treated=1, aggregate formula, sample_share formula, positivity
+  - `TestCleanControl` (5): not_yet_treated, strict, never_treated, missing never-treated raises
+  - `TestClustering` (2): unit, unit_subexp
+  - `TestStackedData` (4): accessible, required columns, event time range
+  - `TestEdgeCases` (8): single cohort, anticipation, unbalanced panel, NaN inference, never-treated encodings
+  - `TestSklearnInterface` (4): get_params, set_params, unknown raises, convenience function
+  - `TestResultsMethods` (7): summary, to_dataframe, is_significant, significance_stars, repr
+  - `TestValidation` (8): missing columns, invalid params, population required, no treated units
+- R benchmark tests via `benchmarks/run_benchmarks.py --estimator stacked`
+
+**R Comparison Results (200 units, 8 periods, kappa_pre=2, kappa_post=2):**
+| Metric | Python | R | Diff |
+|--------|--------|---|------|
+| Overall ATT | 2.277699574579 | 2.2776995746 | 2.1e-11 |
+| Overall SE | 0.062045687626 | 0.062045688027 | 4.0e-10 |
+| ES e=-2 ATT | 0.044517975379 | 0.044517975379 | <1e-12 |
+| ES e=0 ATT | 2.104181683763 | 2.104181683800 | <1e-11 |
+| ES e=1 ATT | 2.209990715130 | 2.209990715100 | <1e-11 |
+| ES e=2 ATT | 2.518926324845 | 2.518926324800 | <1e-11 |
+| Stacked obs | 1600 | 1600 | exact |
+| Sub-experiments | 3 | 3 | exact |
+
+**Corrections Made:**
+1. **IC1 lower bound and time window aligned with R reference** (`stacked_did.py`,
+   `_trim_adoption_events()` and `_build_sub_experiment()`): The paper text specifies
+   time window `[a - kappa_pre - 1, a + kappa_post]` (including an extra pre-period),
+   but the R reference implementation by co-author Hollingsworth uses
+   `[a - kappa_pre, a + kappa_post]`. The extra period had no event-study dummy,
+   altering the baseline regression. Fixed to match R: removed `-1` from both
+   IC1 check (`a - kappa_pre >= T_min`) and time window start. Discrepancy documented
+   in `docs/methodology/papers/wing-2024-review.md` Gaps section.
+
+2. **Q-weight computation: event-time-specific for aggregate weighting** (`stacked_did.py`,
+   `_compute_q_weights()`): Changed aggregate Q-weights from unit counts per sub-experiment
+   to observation counts per (event_time, sub_exp), matching R reference `compute_weights()`.
+   For balanced panels, results are unchanged. For unbalanced panels, weights now adjust for
+   varying observation density. Population/sample_share retain unit-count formulas (paper notation).
+
+3. **Anticipation parameter: reference period and dummies** (`stacked_did.py`, `fit()`):
+   Reference period now shifts to `e = -1 - anticipation`. Event-time dummies cover the
+   full window `[-kappa_pre - anticipation, ..., kappa_post]`. Post-treatment effects include
+   anticipation periods. Consistent with ImputationDiD, TwoStageDiD, SunAbraham.
+
+4. **Group aggregation removed** (`stacked_did.py`): `aggregate="group"` and `aggregate="all"`
+   removed. The pooled stacked regression cannot produce cohort-specific effects without
+   cohort×event-time interactions. Use CallawaySantAnna or ImputationDiD for cohort-level estimates.
+
+5. **n_sub_experiments metadata** (`stacked_did.py`, `fit()`): Now tracks actual built
+   sub-experiments, not all events in omega_kappa. Warns if any sub-experiments are empty
+   after data filtering.
+
+**Outstanding Concerns:**
+- Population/sample_share Q-weights use paper's unit-count formulas (no R reference to validate)
+- Anticipation not validated against R (R reference doesn't test anticipation > 0)
+
+**Deviations from R's stacked-did-weights:**
+1. **NaN for invalid inference**: Python returns NaN for t_stat/p_value/conf_int when
+   SE is non-finite or zero. R would propagate through `fixest::feols()` error handling.
+
+---
+
 ### Advanced Estimators
 
 #### SyntheticDiD
@@ -428,15 +525,51 @@ variables appear to the left of the `|` separator.
 |-------|-------|
 | Module | `triple_diff.py` |
 | Primary Reference | Ortiz-Villavicencio & Sant'Anna (2025) |
-| R Reference | (forthcoming) |
-| Status | Not Started |
-| Last Review | - |
+| R Reference | `triplediff::ddd()` (v0.2.1, CRAN) |
+| Status | **Complete** |
+| Last Review | 2026-02-18 |
+
+**Verified Components:**
+- [x] ATT matches R `triplediff::ddd()` for all 3 methods (DR, RA, IPW) — <0.001% relative difference
+- [x] SE matches R `triplediff::ddd()` for all 3 methods — <0.001% relative difference
+- [x] With-covariates ATT matches R — <0.001% relative difference
+- [x] With-covariates SE matches R — <0.001% relative difference
+- [x] Verified across all 4 DGP types from `gen_dgp_2periods()` (different model misspecification scenarios)
+- [x] Influence function-based SE: `SE = std(w3*IF_3 + w2*IF_2 - w1*IF_1, ddof=1) / sqrt(n)`
+- [x] Three-DiD decomposition: `DDD = DiD_3 + DiD_2 - DiD_1` matching R's approach
+- [x] safe_inference() used for all inference fields (t_stat, p_value, conf_int)
 
 **Corrections Made:**
-- (None yet)
+1. **Complete rewrite of estimation methods** (was naive cell-mean approach, now three-DiD
+   decomposition). The original implementation computed DDD directly from 8 cell means with
+   a naive cell-variance SE. Replaced with R's decomposition into three pairwise DiD
+   comparisons (subgroup j vs reference subgroup 4), each using DR/IPW/RA methodology
+   from Callaway & Sant'Anna. This fixed:
+   - DR SE: was off by >100% (naive cell variance vs influence function)
+   - IPW SE: was off by >200% (incorrect cell-probability-ratio weights)
+   - With-covariates ATT: was off by >1000% for all methods (incorrect cell-by-cell regression)
+2. **Influence function SE** replaces naive cell variance for all methods:
+   `SE = std(w3*IF_3 + w2*IF_2 - w1*IF_1, ddof=1) / sqrt(n)` where
+   `w_j = n / n_j` and `IF_j` is the per-observation influence function for pairwise DiD j.
+3. **Propensity score estimation** now runs per-pairwise-comparison (P(subgroup=4|X) within
+   {j, 4} subset) instead of global P(G=1|X).
+4. **Outcome regression** now fits separate OLS per subgroup-time cell within each pairwise
+   comparison, matching R's `compute_outcome_regression_rc()`.
 
 **Outstanding Concerns:**
-- (None yet)
+- Implementation uses `panel=FALSE` (repeated cross-section) mode. Panel mode (`panel=TRUE`)
+  with differenced outcomes not yet implemented.
+
+**R Comparison Results (panel=FALSE, n=500 per DGP):**
+| DGP | Method | Covariates | ATT Diff | SE Diff |
+|-----|--------|-----------|----------|---------|
+| 1 | DR | No | <0.001% | <0.001% |
+| 1 | DR | Yes | <0.001% | <0.001% |
+| 1 | REG | No | <0.001% | <0.001% |
+| 1 | REG | Yes | <0.001% | <0.001% |
+| 1 | IPW | No | <0.001% | <0.001% |
+| 1 | IPW | Yes | <0.001% | <0.001% |
+| 2-4 | All | Both | <0.001% | <0.001% |
 
 ---
 

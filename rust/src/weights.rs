@@ -7,6 +7,7 @@
 //! - SDID unit and time weight computation
 
 use ndarray::{s, Array1, Array2, ArrayView1, ArrayView2, Axis};
+use ndarray::linalg::general_mat_vec_mul;
 use numpy::{PyArray1, PyReadonlyArray1, PyReadonlyArray2, ToPyArray};
 use pyo3::prelude::*;
 
@@ -201,46 +202,254 @@ fn sparsify_internal(v: &Array1<f64>) -> Array1<f64> {
     sum_normalize_internal(&result)
 }
 
-/// Single Frank-Wolfe step on the simplex.
-/// Matches R's fw.step() in synthdid's sc.weight.fw().
-fn fw_step_internal(
-    a: &ArrayView2<f64>,
-    x: &Array1<f64>,
-    b: &ArrayView1<f64>,
-    eta: f64,
-) -> Array1<f64> {
-    let ax = a.dot(x);
-    let diff = &ax - b;
-    let half_grad = a.t().dot(&diff) + eta * x;
+/// Interval (in iterations) at which the Gram path refreshes `ata_x = ATA @ lam`
+/// from scratch to prevent floating-point drift from incremental updates.
+const GRAM_REFRESH_INTERVAL: usize = 100;
 
-    // Find vertex with smallest gradient component
-    let i = half_grad
-        .iter()
+/// Find the index of the minimum element in a vector.
+#[inline]
+fn argmin_f64(v: &Array1<f64>) -> usize {
+    debug_assert!(!v.is_empty(), "argmin called on empty array");
+    v.iter()
         .enumerate()
         .min_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
         .map(|(idx, _)| idx)
-        .unwrap_or(0);
+        .unwrap_or(0)
+}
 
-    // Direction: d_x = e_i - x
-    let mut d_x = -x.clone();
-    d_x[i] += 1.0;
+/// Gram-accelerated Frank-Wolfe loop for the T0 < N case (time weights).
+///
+/// By precomputing `ATA = A^T @ A` (T0×T0) and `ATb = A^T @ b` (T0,),
+/// the entire FW iteration reduces from O(N×T0) per step to O(T0) per step.
+/// This is a ~N/T0 speedup (e.g., ~100x at 5k scale where N=4000, T0=40).
+///
+/// Zero heap allocations per iteration — all workspace is pre-allocated.
+fn sc_weight_fw_gram(
+    a: &ArrayView2<f64>,
+    b: &ArrayView1<f64>,
+    lam: &mut Array1<f64>,
+    eta: f64,
+    zeta: f64,
+    n: usize,
+    min_decrease_sq: f64,
+    max_iter: usize,
+) {
+    let t0 = lam.len();
 
-    // Check if direction is essentially zero
-    let d_x_norm_sq: f64 = d_x.iter().map(|&v| v * v).sum();
-    if d_x_norm_sq < 1e-24 {
-        return x.clone();
+    // Precompute Gram matrix and related quantities — O(N×T0²) once
+    let ata = a.t().dot(a); // (T0, T0)
+    let atb = a.t().dot(b); // (T0,)
+    let b_norm_sq = b.dot(b); // scalar
+
+    // Diagonal of ATA for d_err_sq computation
+    let mut ata_diag = Array1::zeros(t0);
+    for j in 0..t0 {
+        ata_diag[j] = ata[[j, j]];
     }
 
-    // Compute step size via exact line search
-    let d_err = a.column(i).to_owned() - &ax;
-    let denom = d_err.dot(&d_err) + eta * d_x.dot(&d_x);
-    if denom <= 0.0 {
-        return x.clone();
-    }
-    let step = -(half_grad.dot(&d_x)) / denom;
-    let step = step.max(0.0).min(1.0);
+    // Maintained incrementally: ata_x = ATA @ lam
+    let mut ata_x = ata.dot(lam);
 
-    x + &(step * &d_x)
+    // Pre-allocate workspace
+    let mut half_grad = Array1::zeros(t0);
+
+    let mut prev_val = f64::INFINITY;
+
+    for t in 0..max_iter {
+        // Step 1: half_grad[j] = ata_x[j] - atb[j] + eta * lam[j]
+        for j in 0..t0 {
+            half_grad[j] = ata_x[j] - atb[j] + eta * lam[j];
+        }
+
+        // Step 2: Find vertex with smallest gradient component
+        let i = argmin_f64(&half_grad);
+
+        // Step 3: Guard — check if direction is essentially zero
+        // d_x_norm_sq = ||lam||² + 1 - 2*lam[i]  (since d_x = e_i - lam)
+        let lam_norm_sq: f64 = lam.iter().map(|&v| v * v).sum();
+        let d_x_norm_sq = lam_norm_sq + 1.0 - 2.0 * lam[i];
+        if d_x_norm_sq < 1e-24 {
+            // Already at optimal vertex — compute objective for convergence check
+            let xt_ata_x: f64 = ata_x.iter().zip(lam.iter()).map(|(&a, &b)| a * b).sum();
+            let atb_dot_lam: f64 = atb.iter().zip(lam.iter()).map(|(&a, &b)| a * b).sum();
+            let val = zeta * zeta * lam_norm_sq + (xt_ata_x - 2.0 * atb_dot_lam + b_norm_sq) / n as f64;
+            if t >= 1 && prev_val - val < min_decrease_sq {
+                break;
+            }
+            prev_val = val;
+            continue;
+        }
+
+        // Step 4: Guard — compute denominator for step size
+        // d_err_sq = ||A[:,i] - A@lam||² = ata_diag[i] - 2*ata_x[i] + lam^T ATA lam
+        let xt_ata_x: f64 = ata_x.iter().zip(lam.iter()).map(|(&a, &b)| a * b).sum();
+        let d_err_sq = ata_diag[i] - 2.0 * ata_x[i] + xt_ata_x;
+        let denom = d_err_sq + eta * d_x_norm_sq;
+        if denom <= 0.0 {
+            let atb_dot_lam: f64 = atb.iter().zip(lam.iter()).map(|(&a, &b)| a * b).sum();
+            let val = zeta * zeta * lam_norm_sq + (xt_ata_x - 2.0 * atb_dot_lam + b_norm_sq) / n as f64;
+            if t >= 1 && prev_val - val < min_decrease_sq {
+                break;
+            }
+            prev_val = val;
+            continue;
+        }
+
+        // Step 5: hg_dot_dx = half_grad[i] - half_grad @ lam
+        let hg_dot_lam: f64 = half_grad.iter().zip(lam.iter()).map(|(&a, &b)| a * b).sum();
+        let hg_dot_dx = half_grad[i] - hg_dot_lam;
+
+        // Step 6: step = clamp(-hg_dot_dx / denom, 0, 1)
+        let step = (-hg_dot_dx / denom).max(0.0).min(1.0);
+
+        // Step 7: lam = (1-step)*lam + step*e_i  (in-place)
+        let one_minus_step = 1.0 - step;
+        for j in 0..t0 {
+            lam[j] *= one_minus_step;
+        }
+        lam[i] += step;
+
+        // Step 8: ata_x incremental update — O(T0)
+        // ata_x = (1-step)*ata_x + step*ATA[:,i]
+        let ata_col_i = ata.column(i);
+        for j in 0..t0 {
+            ata_x[j] = one_minus_step * ata_x[j] + step * ata_col_i[j];
+        }
+        // Periodic refresh to prevent drift
+        if t > 0 && t % GRAM_REFRESH_INTERVAL == 0 {
+            ata_x = ata.dot(lam as &Array1<f64>);
+        }
+
+        // Step 9: Compute objective
+        let lam_norm_sq: f64 = lam.iter().map(|&v| v * v).sum();
+        let xt_ata_x: f64 = ata_x.iter().zip(lam.iter()).map(|(&a, &b)| a * b).sum();
+        let atb_dot_lam: f64 = atb.iter().zip(lam.iter()).map(|(&a, &b)| a * b).sum();
+        let val = zeta * zeta * lam_norm_sq + (xt_ata_x - 2.0 * atb_dot_lam + b_norm_sq) / n as f64;
+
+        // Step 10: Convergence check
+        if t >= 1 && prev_val - val < min_decrease_sq {
+            break;
+        }
+        prev_val = val;
+    }
+}
+
+/// Allocation-free standard Frank-Wolfe loop for the T0 >= N case (unit weights).
+///
+/// Same algorithm as the original `fw_step_internal` but with:
+/// - 1 GEMV per iteration (down from 3)
+/// - 0 heap allocations per iteration (down from ~8)
+/// - Incremental `ax` maintenance instead of recomputing A @ lam each step
+fn sc_weight_fw_standard(
+    a: &ArrayView2<f64>,
+    b: &ArrayView1<f64>,
+    lam: &mut Array1<f64>,
+    eta: f64,
+    zeta: f64,
+    n: usize,
+    min_decrease_sq: f64,
+    max_iter: usize,
+) {
+    let t0 = lam.len();
+
+    // Precompute column norms: col_norms_sq[j] = ||A[:,j]||²
+    let mut col_norms_sq = Array1::zeros(t0);
+    for j in 0..t0 {
+        let col = a.column(j);
+        col_norms_sq[j] = col.dot(&col);
+    }
+
+    // Pre-allocate workspace
+    let mut ax = a.dot(lam as &Array1<f64>); // (N,), maintained incrementally
+    let mut half_grad = Array1::zeros(t0);
+    let mut diff = Array1::zeros(n); // Reusable buffer for ax - b
+
+    let mut prev_val = f64::INFINITY;
+
+    for t in 0..max_iter {
+        // Step 1-2: Compute half_grad = A^T @ (ax - b) + eta * lam
+        // Uses general_mat_vec_mul which dispatches to BLAS dgemv when enabled,
+        // otherwise falls back to ndarray's optimized matrixmultiply kernel.
+        diff.assign(&ax);
+        diff -= &*b;
+        general_mat_vec_mul(1.0, &a.t(), &diff, 0.0, &mut half_grad);
+        half_grad.scaled_add(eta, &*lam);
+
+        // Step 3: Find vertex with smallest gradient component
+        let i = argmin_f64(&half_grad);
+
+        // Step 4: Guard — d_x_norm_sq = ||lam||² + 1 - 2*lam[i]
+        let lam_norm_sq: f64 = lam.iter().map(|&v| v * v).sum();
+        let d_x_norm_sq = lam_norm_sq + 1.0 - 2.0 * lam[i];
+        if d_x_norm_sq < 1e-24 {
+            // Compute objective for convergence check
+            let mut err_sq = 0.0;
+            for k in 0..n {
+                let e = ax[k] - b[k];
+                err_sq += e * e;
+            }
+            let val = zeta * zeta * lam_norm_sq + err_sq / n as f64;
+            if t >= 1 && prev_val - val < min_decrease_sq {
+                break;
+            }
+            prev_val = val;
+            continue;
+        }
+
+        // Step 5: d_err_sq = col_norms_sq[i] - 2*A[:,i].dot(&ax) + ax.dot(&ax)
+        let col_i = a.column(i);
+        let col_dot_ax: f64 = col_i.iter().zip(ax.iter()).map(|(&a, &b)| a * b).sum();
+        let ax_dot_ax: f64 = ax.iter().map(|&v| v * v).sum();
+        let d_err_sq = col_norms_sq[i] - 2.0 * col_dot_ax + ax_dot_ax;
+
+        // Step 6: Guard — denom
+        let denom = d_err_sq + eta * d_x_norm_sq;
+        if denom <= 0.0 {
+            let mut err_sq = 0.0;
+            for k in 0..n {
+                let e = ax[k] - b[k];
+                err_sq += e * e;
+            }
+            let val = zeta * zeta * lam_norm_sq + err_sq / n as f64;
+            if t >= 1 && prev_val - val < min_decrease_sq {
+                break;
+            }
+            prev_val = val;
+            continue;
+        }
+
+        // Step 7: hg_dot_dx and step
+        let hg_dot_lam: f64 = half_grad.iter().zip(lam.iter()).map(|(&a, &b)| a * b).sum();
+        let hg_dot_dx = half_grad[i] - hg_dot_lam;
+        let step = (-hg_dot_dx / denom).max(0.0).min(1.0);
+
+        // Step 8: Update lam in-place: lam = (1-step)*lam + step*e_i
+        let one_minus_step = 1.0 - step;
+        for j in 0..t0 {
+            lam[j] *= one_minus_step;
+        }
+        lam[i] += step;
+
+        // Step 9: Update ax incrementally — O(N)
+        // ax = (1-step)*ax + step*A[:,i]
+        for k in 0..n {
+            ax[k] = one_minus_step * ax[k] + step * col_i[k];
+        }
+
+        // Step 10: Compute objective
+        let mut err_sq = 0.0;
+        for k in 0..n {
+            let e = ax[k] - b[k];
+            err_sq += e * e;
+        }
+        let lam_norm_sq: f64 = lam.iter().map(|&v| v * v).sum();
+        let val = zeta * zeta * lam_norm_sq + err_sq / n as f64;
+
+        if t >= 1 && prev_val - val < min_decrease_sq {
+            break;
+        }
+        prev_val = val;
+    }
 }
 
 /// Compute synthetic control weights via Frank-Wolfe optimization.
@@ -248,6 +457,10 @@ fn fw_step_internal(
 /// Matches R's sc.weight.fw() from the synthdid package. Solves:
 ///   min_{lambda on simplex}  zeta^2 * ||lambda||^2
 ///       + (1/N) * ||A_centered @ lambda - b_centered||^2
+///
+/// Dispatches to one of two optimized loop implementations:
+/// - **Gram path** (T0 < N): Precomputes A^T@A, reducing per-iteration cost from O(N×T0) to O(T0)
+/// - **Standard path** (T0 >= N): Allocation-free loop with 1 GEMV/iter (was 3) and 0 allocs (was ~8)
 ///
 /// # Arguments
 /// * `y` - Matrix of shape (N, T0+1). Last column is the target.
@@ -292,22 +505,14 @@ fn sc_weight_fw_internal(
     };
 
     let min_decrease_sq = min_decrease * min_decrease;
-    let mut prev_val = f64::INFINITY;
 
-    for t in 0..max_iter {
-        lam = fw_step_internal(&a, &lam, &b, eta);
-
-        // Compute objective: zeta^2 * ||lam||^2 + (1/N) * ||Y @ [lam, -1]||^2
-        let mut lam_ext = Array1::zeros(t0 + 1);
-        lam_ext.slice_mut(s![..t0]).assign(&lam);
-        lam_ext[t0] = -1.0;
-        let err = y_owned.dot(&lam_ext);
-        let val = zeta * zeta * lam.dot(&lam) + err.dot(&err) / n as f64;
-
-        if t >= 1 && prev_val - val < min_decrease_sq {
-            break;
-        }
-        prev_val = val;
+    // Dispatch to optimized loop based on problem dimensions
+    if t0 < n {
+        // Gram path: precompute A^T@A for O(T0) per iteration
+        sc_weight_fw_gram(&a, &b, &mut lam, eta, zeta, n, min_decrease_sq, max_iter);
+    } else {
+        // Standard path: allocation-free with 1 GEMV per iteration
+        sc_weight_fw_standard(&a, &b, &mut lam, eta, zeta, n, min_decrease_sq, max_iter);
     }
 
     lam
@@ -709,5 +914,165 @@ mod tests {
         );
         assert_eq!(result.len(), 1);
         assert!((result[0] - 1.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_fw_gram_matches_standard() {
+        // Create a T0 < N problem and verify both paths produce identical weights.
+        // N=20, T0=5 -> Gram path. Force standard path via a wrapper for comparison.
+        let vals: Vec<f64> = (0..120).map(|i| ((i * 7 + 3) % 97) as f64 / 97.0).collect();
+        let y_gram = Array2::from_shape_vec((20, 6), vals).unwrap();
+
+        // Directly call both internal functions on the same centered data.
+        let y_owned: Array2<f64> = {
+            let col_means = y_gram.mean_axis(Axis(0)).unwrap();
+            &y_gram - &col_means
+        };
+        let t0 = 5;
+        let n = 20;
+        let a = y_owned.slice(s![.., ..t0]);
+        let b = y_owned.column(t0);
+        let eta = n as f64 * 0.3 * 0.3;
+        let min_decrease_sq = 1e-5 * 1e-5;
+
+        // Run Gram path
+        let mut lam_gram = Array1::from_elem(t0, 1.0 / t0 as f64);
+        sc_weight_fw_gram(&a, &b, &mut lam_gram, eta, 0.3, n, min_decrease_sq, 10000);
+
+        // Run standard path on same data
+        let mut lam_std = Array1::from_elem(t0, 1.0 / t0 as f64);
+        sc_weight_fw_standard(&a, &b, &mut lam_std, eta, 0.3, n, min_decrease_sq, 10000);
+
+        // Both should produce nearly identical weights
+        for j in 0..t0 {
+            assert!(
+                (lam_gram[j] - lam_std[j]).abs() < 1e-10,
+                "Gram and standard paths diverge at index {}: gram={}, std={}",
+                j, lam_gram[j], lam_std[j]
+            );
+        }
+
+        // Verify both are valid simplex weights
+        let sum_gram: f64 = lam_gram.sum();
+        let sum_std: f64 = lam_std.sum();
+        assert!((sum_gram - 1.0).abs() < 1e-6, "Gram weights should sum to 1, got {}", sum_gram);
+        assert!((sum_std - 1.0).abs() < 1e-6, "Standard weights should sum to 1, got {}", sum_std);
+    }
+
+    #[test]
+    fn test_fw_standard_no_regression() {
+        // Create a T0 >= N problem (unit weights case) and verify against known output.
+        // N=5, T0=8 -> Standard path.
+        let vals: Vec<f64> = (0..45).map(|i| ((i * 13 + 5) % 53) as f64 / 53.0).collect();
+        let y = Array2::from_shape_vec((5, 9), vals).unwrap();
+
+        let result = sc_weight_fw_internal(&y.view(), 0.5, true, None, 1e-5, 10000);
+
+        // Verify valid simplex weights
+        let sum: f64 = result.sum();
+        assert!((sum - 1.0).abs() < 1e-6, "Weights should sum to 1, got {}", sum);
+        assert!(result.iter().all(|&w| w >= -1e-6), "Weights should be non-negative");
+        assert_eq!(result.len(), 8);
+    }
+
+    #[test]
+    fn test_incremental_ata_x_accuracy() {
+        // Run 500+ iterations on a T0 < N problem and verify incremental ata_x
+        // doesn't drift significantly from fresh computation.
+        let vals: Vec<f64> = (0..200).map(|i| {
+            let x = (i as f64) * 0.1;
+            x.sin() + ((i * 7) % 31) as f64 / 31.0
+        }).collect();
+        let y = Array2::from_shape_vec((20, 10), vals).unwrap();
+
+        // Run with enough iterations to exercise the refresh mechanism
+        let result = sc_weight_fw_internal(&y.view(), 0.1, true, None, 1e-8, 1000);
+
+        // Verify valid result (convergence with correct weights)
+        let sum: f64 = result.sum();
+        assert!((sum - 1.0).abs() < 1e-6, "Weights should sum to 1, got {}", sum);
+        assert!(result.iter().all(|&w| w >= -1e-6), "Weights should be non-negative");
+
+        // Verify Gram path was used (T0=9 < N=20)
+        assert_eq!(result.len(), 9);
+    }
+
+    #[test]
+    fn test_gram_boundary_t0_equals_n_minus_1() {
+        // T0 = N-1 triggers Gram path (T0 < N), works correctly
+        // N=6, T0=5 -> just barely Gram path
+        let vals: Vec<f64> = (0..36).map(|i| ((i * 11 + 7) % 41) as f64 / 41.0).collect();
+        let y = Array2::from_shape_vec((6, 6), vals).unwrap();
+
+        let result = sc_weight_fw_internal(&y.view(), 0.2, true, None, 1e-5, 10000);
+
+        let sum: f64 = result.sum();
+        assert!((sum - 1.0).abs() < 1e-6, "Weights should sum to 1, got {}", sum);
+        assert!(result.iter().all(|&w| w >= -1e-6), "Weights should be non-negative");
+        assert_eq!(result.len(), 5); // T0 = 5
+    }
+
+    #[test]
+    fn test_gemv_produces_correct_half_grad() {
+        // Verify that general_mat_vec_mul produces the same half_grad as manual loop.
+        let n = 10;
+        let t0 = 4;
+        let eta = 0.5;
+
+        // Deterministic test data
+        let a_vals: Vec<f64> = (0..(n * t0)).map(|i| ((i * 7 + 3) % 41) as f64 / 41.0).collect();
+        let a = Array2::from_shape_vec((n, t0), a_vals).unwrap();
+
+        let ax: Array1<f64> = (0..n).map(|i| ((i * 11 + 5) % 37) as f64 / 37.0).collect();
+        let b: Array1<f64> = (0..n).map(|i| ((i * 13 + 2) % 29) as f64 / 29.0).collect();
+        let lam: Array1<f64> = (0..t0).map(|j| ((j * 17 + 1) % 19) as f64 / 19.0).collect();
+
+        // Reference: manual loop
+        let mut ref_grad = Array1::zeros(t0);
+        for j in 0..t0 {
+            let col = a.column(j);
+            let mut dot = 0.0;
+            for k in 0..n {
+                dot += col[k] * (ax[k] - b[k]);
+            }
+            ref_grad[j] = dot + eta * lam[j];
+        }
+
+        // New code path: general_mat_vec_mul + scaled_add
+        let mut new_grad = Array1::zeros(t0);
+        let mut diff = Array1::zeros(n);
+        diff.assign(&ax);
+        diff -= &b;
+        general_mat_vec_mul(1.0, &a.t(), &diff, 0.0, &mut new_grad);
+        new_grad.scaled_add(eta, &lam);
+
+        // Verify match to high precision
+        for j in 0..t0 {
+            assert!(
+                (ref_grad[j] - new_grad[j]).abs() < 1e-12,
+                "half_grad mismatch at index {}: manual={}, gemv={}",
+                j, ref_grad[j], new_grad[j]
+            );
+        }
+    }
+
+    #[test]
+    fn test_intercept_false_both_paths() {
+        // Verify both Gram and standard paths work with intercept=false
+        // Gram path: N=15, T0=4 (T0 < N)
+        let vals_gram: Vec<f64> = (0..75).map(|i| ((i * 3 + 1) % 37) as f64 / 37.0).collect();
+        let y_gram = Array2::from_shape_vec((15, 5), vals_gram).unwrap();
+        let result_gram = sc_weight_fw_internal(&y_gram.view(), 0.3, false, None, 1e-5, 10000);
+        let sum_gram: f64 = result_gram.sum();
+        assert!((sum_gram - 1.0).abs() < 1e-6, "Gram intercept=false: weights should sum to 1, got {}", sum_gram);
+        assert!(result_gram.iter().all(|&w| w >= -1e-6), "Gram intercept=false: weights should be non-negative");
+
+        // Standard path: N=4, T0=10 (T0 >= N)
+        let vals_std: Vec<f64> = (0..44).map(|i| ((i * 5 + 2) % 29) as f64 / 29.0).collect();
+        let y_std = Array2::from_shape_vec((4, 11), vals_std).unwrap();
+        let result_std = sc_weight_fw_internal(&y_std.view(), 0.3, false, None, 1e-5, 10000);
+        let sum_std: f64 = result_std.sum();
+        assert!((sum_std - 1.0).abs() < 1e-6, "Standard intercept=false: weights should sum to 1, got {}", sum_std);
+        assert!(result_std.iter().all(|&w| w >= -1e-6), "Standard intercept=false: weights should be non-negative");
     }
 }

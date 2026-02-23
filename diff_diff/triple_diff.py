@@ -9,19 +9,12 @@ when treatment requires satisfying two criteria:
 
 This module provides regression adjustment, inverse probability weighting,
 and doubly robust estimators that correctly handle covariate adjustment,
-unlike naive implementations.
+unlike naive implementations. Standard errors use the efficient influence
+function: SE = std(IF) / sqrt(n), which is inherently heteroskedasticity-
+robust. Cluster-robust SEs are available via the ``cluster`` parameter.
 
-Current Implementation (v1.3):
-    - 2-period DDD (pre/post binary time indicator)
-    - Regression adjustment, IPW, and doubly robust estimation
-    - Analytical standard errors with robust/cluster options
-    - Proper covariate handling
-
-Planned for v1.4 (see ROADMAP.md):
-    - Staggered adoption support (multiple treatment timing)
-    - Event study aggregation for dynamic treatment effects
-    - Multiplier bootstrap inference
-    - Integration with plot_event_study() visualization
+The DDD is computed via three pairwise DiD comparisons matching R's
+``triplediff::ddd()`` package (panel=FALSE mode).
 
 Reference:
     Ortiz-Villavicencio, M., & Sant'Anna, P. H. C. (2025).
@@ -37,9 +30,11 @@ import numpy as np
 import pandas as pd
 from scipy import optimize
 
-from diff_diff.linalg import LinearRegression, compute_robust_vcov, solve_ols
+from diff_diff.linalg import solve_ols
 from diff_diff.results import _get_significance_stars
 from diff_diff.utils import safe_inference
+
+_MIN_CELL_SIZE = 10
 
 # =============================================================================
 # Results Classes
@@ -157,8 +152,8 @@ class TripleDifferenceResults:
             lines.append(f"{'Inference method:':<30} {self.inference_method:>15}")
             if self.n_bootstrap is not None:
                 lines.append(f"{'Bootstrap replications:':<30} {self.n_bootstrap:>15}")
-            if self.n_clusters is not None:
-                lines.append(f"{'Number of clusters:':<30} {self.n_clusters:>15}")
+        if self.n_clusters is not None:
+            lines.append(f"{'Number of clusters:':<30} {self.n_clusters:>15}")
 
         lines.extend([
             "",
@@ -324,52 +319,6 @@ def _logistic_regression(
     return beta, probs
 
 
-def _linear_regression(
-    X: np.ndarray,
-    y: np.ndarray,
-    rank_deficient_action: str = "warn",
-) -> Tuple[np.ndarray, np.ndarray, float]:
-    """
-    Fit OLS regression.
-
-    Parameters
-    ----------
-    X : np.ndarray
-        Feature matrix (n_samples, n_features). Intercept added automatically.
-    y : np.ndarray
-        Outcome variable.
-    rank_deficient_action : str, default "warn"
-        Action when design matrix is rank-deficient:
-        - "warn": Issue warning and drop linearly dependent columns (default)
-        - "error": Raise ValueError
-        - "silent": Drop columns silently without warning
-
-    Returns
-    -------
-    beta : np.ndarray
-        Fitted coefficients (including intercept).
-    fitted : np.ndarray
-        Fitted values.
-    r_squared : float
-        R-squared of the regression.
-    """
-    n = X.shape[0]
-    X_with_intercept = np.column_stack([np.ones(n), X])
-
-    # Use unified OLS backend
-    beta, residuals, fitted, _ = solve_ols(
-        X_with_intercept, y, return_fitted=True, return_vcov=False,
-        rank_deficient_action=rank_deficient_action,
-    )
-
-    # Compute R-squared
-    ss_res = np.sum(residuals**2)
-    ss_tot = np.sum((y - np.mean(y)) ** 2)
-    r_squared = 1 - (ss_res / ss_tot) if ss_tot > 0 else 0.0
-
-    return beta, fitted, r_squared
-
-
 # =============================================================================
 # Main Estimator Class
 # =============================================================================
@@ -396,9 +345,14 @@ class TripleDifference:
         - "reg": Regression adjustment (outcome regression).
         - "ipw": Inverse probability weighting.
     robust : bool, default=True
-        Whether to use heteroskedasticity-robust standard errors (HC1).
+        Whether to use heteroskedasticity-robust standard errors.
+        Note: influence function-based SEs are inherently robust to
+        heteroskedasticity, so this parameter has no effect. Retained
+        for API compatibility.
     cluster : str, optional
-        Column name for cluster-robust standard errors.
+        Column name for cluster-robust standard errors. When provided,
+        SEs are computed using the Liang-Zeger cluster-robust variance
+        estimator on the influence function.
     alpha : float, default=0.05
         Significance level for confidence intervals.
     pscore_trim : float, default=0.01
@@ -563,6 +517,13 @@ class TripleDifference:
         P = data[partition].values.astype(float)
         T = data[time].values.astype(float)
 
+        # Store cluster IDs for SE computation
+        self._cluster_ids = data[self.cluster].values if self.cluster is not None else None
+        if self._cluster_ids is not None and np.any(pd.isna(data[self.cluster])):
+            raise ValueError(
+                f"Cluster column '{self.cluster}' contains missing values"
+            )
+
         # Get covariates if specified
         X = None
         if covariates:
@@ -648,6 +609,8 @@ class TripleDifference:
         required_cols = [outcome, group, partition, time]
         if covariates:
             required_cols.extend(covariates)
+        if self.cluster is not None:
+            required_cols.append(self.cluster)
 
         missing_cols = [col for col in required_cols if col not in data.columns]
         if missing_cols:
@@ -688,10 +651,19 @@ class TripleDifference:
         ]
 
         for mask, cell_name in cells:
-            if np.sum(mask) == 0:
+            n_cell = int(np.sum(mask))
+            if n_cell == 0:
                 raise ValueError(
                     f"No observations in cell: {cell_name}. "
                     "DDD requires observations in all 8 cells."
+                )
+            elif n_cell < _MIN_CELL_SIZE:
+                warnings.warn(
+                    f"Low observation count ({n_cell}) in cell: {cell_name}. "
+                    f"Estimates may be unreliable with fewer than "
+                    f"{_MIN_CELL_SIZE} observations per cell.",
+                    UserWarning,
+                    stacklevel=2,
                 )
 
     def _compute_cell_means(
@@ -711,6 +683,26 @@ class TripleDifference:
                     means[cell_name] = float(np.mean(y[mask]))
         return means
 
+    # =========================================================================
+    # Three-DiD Decomposition (matches R's triplediff::ddd())
+    # =========================================================================
+    #
+    # The DDD is decomposed into three pairwise DiD comparisons:
+    #   DiD_3: subgroup 3 (G=1,P=0) vs subgroup 4 (G=1,P=1)
+    #   DiD_2: subgroup 2 (G=0,P=1) vs subgroup 4 (G=1,P=1)
+    #   DiD_1: subgroup 1 (G=0,P=0) vs subgroup 4 (G=1,P=1)
+    #
+    # DDD = DiD_3 + DiD_2 - DiD_1
+    #
+    # Each DiD uses the selected estimation method (DR, IPW, or RA).
+    # SE is computed from the combined influence function:
+    #   inf = w3*inf_3 + w2*inf_2 - w1*inf_1
+    #   SE = std(inf, ddof=1) / sqrt(n)
+    #
+    # Reference: Ortiz-Villavicencio & Sant'Anna (2025), implemented in
+    # R's triplediff::ddd() with panel=FALSE (repeated cross-section).
+    # =========================================================================
+
     def _regression_adjustment(
         self,
         y: np.ndarray,
@@ -720,54 +712,14 @@ class TripleDifference:
         X: Optional[np.ndarray],
     ) -> Tuple[float, float, Optional[float], Optional[Dict[str, float]]]:
         """
-        Estimate ATT using regression adjustment.
+        Estimate ATT using regression adjustment via three-DiD decomposition.
 
-        Fits an outcome regression with full interactions and covariates,
-        then computes the DDD estimand.
-
-        With covariates, this properly conditions on X rather than naively
-        differencing two DiD estimates.
+        For each pairwise comparison (subgroup j vs subgroup 4), fits
+        separate outcome models per subgroup-time cell and computes
+        imputed counterfactual means. Matches R's triplediff::ddd()
+        with est_method="reg".
         """
-        n = len(y)
-
-        # Build design matrix for DDD regression
-        # Full specification: Y = α + β_G*G + β_P*P + β_T*T
-        #                        + β_GP*G*P + β_GT*G*T + β_PT*P*T
-        #                        + β_GPT*G*P*T + γ'X + ε
-        # The DDD estimate is β_GPT
-
-        # Create interactions
-        GP = G * P
-        GT = G * T
-        PT = P * T
-        GPT = G * P * T
-
-        # Build design matrix
-        design_cols = [np.ones(n), G, P, T, GP, GT, PT, GPT]
-        col_names = ["const", "G", "P", "T", "G*P", "G*T", "P*T", "G*P*T"]
-
-        if X is not None:
-            for i in range(X.shape[1]):
-                design_cols.append(X[:, i])
-                col_names.append(f"X{i}")
-
-        design_matrix = np.column_stack(design_cols)
-
-        # Fit OLS using LinearRegression helper
-        reg = LinearRegression(
-            include_intercept=False,  # Intercept already in design_matrix
-            robust=self.robust,
-            alpha=self.alpha,
-            rank_deficient_action=self.rank_deficient_action,
-        ).fit(design_matrix, y)
-
-        # ATT is the coefficient on G*P*T (index 7)
-        inference = reg.get_inference(7)
-        att = inference.coefficient
-        se = inference.se
-        r_squared = reg.r_squared()
-
-        return att, se, r_squared, None
+        return self._estimate_ddd_decomposition(y, G, P, T, X)
 
     def _ipw_estimation(
         self,
@@ -778,141 +730,14 @@ class TripleDifference:
         X: Optional[np.ndarray],
     ) -> Tuple[float, float, Optional[float], Optional[Dict[str, float]]]:
         """
-        Estimate ATT using inverse probability weighting.
+        Estimate ATT using inverse probability weighting via three-DiD
+        decomposition.
 
-        Estimates propensity scores for cell membership and uses IPW
-        to reweight observations for the DDD estimand.
+        For each pairwise comparison, estimates propensity scores for
+        subgroup membership P(subgroup=4|X) within {j, 4} subset.
+        Matches R's triplediff::ddd() with est_method="ipw".
         """
-        n = len(y)
-
-        # For DDD-IPW, we need to estimate probabilities for each cell
-        # and use them to construct weighted estimators
-
-        # Create cell indicators
-        # Cell 1: G=1, P=1 (treated, eligible) - "effectively treated"
-        # Cell 2: G=1, P=0 (treated, ineligible)
-        # Cell 3: G=0, P=1 (control, eligible)
-        # Cell 4: G=0, P=0 (control, ineligible)
-
-        cell_1 = (G == 1) & (P == 1)
-        cell_2 = (G == 1) & (P == 0)
-        cell_3 = (G == 0) & (P == 1)
-        cell_4 = (G == 0) & (P == 0)
-
-        if X is not None and X.shape[1] > 0:
-            # Estimate multinomial propensity scores
-            # For simplicity, we estimate binary propensity scores for each cell
-            # P(G=1|X) and P(P=1|X,G)
-
-            # Propensity for being in treated group
-            try:
-                _, p_G = _logistic_regression(X, G)
-            except Exception:
-                warnings.warn(
-                    "Propensity score estimation for G failed. "
-                    "Using unconditional probabilities.",
-                    UserWarning,
-                    stacklevel=3,
-                )
-                p_G = np.full(n, np.mean(G))
-
-            # Propensity for being in eligible partition (conditional on X)
-            try:
-                _, p_P = _logistic_regression(X, P)
-            except Exception:
-                warnings.warn(
-                    "Propensity score estimation for P failed. "
-                    "Using unconditional probabilities.",
-                    UserWarning,
-                    stacklevel=3,
-                )
-                p_P = np.full(n, np.mean(P))
-
-            # Clip propensity scores
-            p_G = np.clip(p_G, self.pscore_trim, 1 - self.pscore_trim)
-            p_P = np.clip(p_P, self.pscore_trim, 1 - self.pscore_trim)
-
-            # Cell probabilities (assuming independence conditional on X)
-            p_cell_1 = p_G * p_P  # P(G=1, P=1|X)
-            p_cell_2 = p_G * (1 - p_P)  # P(G=1, P=0|X)
-            p_cell_3 = (1 - p_G) * p_P  # P(G=0, P=1|X)
-            p_cell_4 = (1 - p_G) * (1 - p_P)  # P(G=0, P=0|X)
-
-            pscore_stats = {
-                "P(G=1) mean": float(np.mean(p_G)),
-                "P(G=1) std": float(np.std(p_G)),
-                "P(P=1) mean": float(np.mean(p_P)),
-                "P(P=1) std": float(np.std(p_P)),
-            }
-        else:
-            # Unconditional probabilities
-            p_cell_1 = np.full(n, np.mean(cell_1))
-            p_cell_2 = np.full(n, np.mean(cell_2))
-            p_cell_3 = np.full(n, np.mean(cell_3))
-            p_cell_4 = np.full(n, np.mean(cell_4))
-            pscore_stats = None
-
-        # Clip cell probabilities
-        p_cell_1 = np.clip(p_cell_1, self.pscore_trim, 1 - self.pscore_trim)
-        p_cell_2 = np.clip(p_cell_2, self.pscore_trim, 1 - self.pscore_trim)
-        p_cell_3 = np.clip(p_cell_3, self.pscore_trim, 1 - self.pscore_trim)
-        p_cell_4 = np.clip(p_cell_4, self.pscore_trim, 1 - self.pscore_trim)
-
-        # IPW estimator for DDD
-        # The DDD-IPW estimator reweights each cell to have the same
-        # covariate distribution as the effectively treated (G=1, P=1)
-
-        # Pre-period means
-        pre_mask = T == 0
-        post_mask = T == 1
-
-        def weighted_mean(y_vals, weights):
-            """Compute weighted mean, handling edge cases."""
-            w_sum = np.sum(weights)
-            if w_sum <= 0:
-                return 0.0
-            return np.sum(y_vals * weights) / w_sum
-
-        # Cell 1 (G=1, P=1): weight = 1 (reference)
-        w1_pre = cell_1 & pre_mask
-        w1_post = cell_1 & post_mask
-        y_11_pre = np.mean(y[w1_pre]) if np.sum(w1_pre) > 0 else 0
-        y_11_post = np.mean(y[w1_post]) if np.sum(w1_post) > 0 else 0
-
-        # Cell 2 (G=1, P=0): reweight to match X-distribution of cell 1
-        w2_pre = (cell_2 & pre_mask).astype(float) * (p_cell_1 / p_cell_2)
-        w2_post = (cell_2 & post_mask).astype(float) * (p_cell_1 / p_cell_2)
-        y_10_pre = weighted_mean(y, w2_pre)
-        y_10_post = weighted_mean(y, w2_post)
-
-        # Cell 3 (G=0, P=1): reweight to match X-distribution of cell 1
-        w3_pre = (cell_3 & pre_mask).astype(float) * (p_cell_1 / p_cell_3)
-        w3_post = (cell_3 & post_mask).astype(float) * (p_cell_1 / p_cell_3)
-        y_01_pre = weighted_mean(y, w3_pre)
-        y_01_post = weighted_mean(y, w3_post)
-
-        # Cell 4 (G=0, P=0): reweight to match X-distribution of cell 1
-        w4_pre = (cell_4 & pre_mask).astype(float) * (p_cell_1 / p_cell_4)
-        w4_post = (cell_4 & post_mask).astype(float) * (p_cell_1 / p_cell_4)
-        y_00_pre = weighted_mean(y, w4_pre)
-        y_00_post = weighted_mean(y, w4_post)
-
-        # DDD estimate
-        att = (
-            (y_11_post - y_11_pre)
-            - (y_10_post - y_10_pre)
-            - (y_01_post - y_01_pre)
-            + (y_00_post - y_00_pre)
-        )
-
-        # Standard error (approximate, using delta method)
-        # For simplicity, use influence function approach
-        se = self._compute_ipw_se(
-            y, G, P, T, cell_1, cell_2, cell_3, cell_4,
-            p_cell_1, p_cell_2, p_cell_3, p_cell_4, att
-        )
-
-        return att, se, None, pscore_stats
+        return self._estimate_ddd_decomposition(y, G, P, T, X)
 
     def _doubly_robust(
         self,
@@ -923,251 +748,704 @@ class TripleDifference:
         X: Optional[np.ndarray],
     ) -> Tuple[float, float, Optional[float], Optional[Dict[str, float]]]:
         """
-        Estimate ATT using doubly robust estimation.
+        Estimate ATT using doubly robust estimation via three-DiD
+        decomposition.
 
-        Combines outcome regression and IPW for robustness:
-        consistent if either the outcome model or propensity score
-        model is correctly specified.
+        Combines outcome regression and IPW for robustness: consistent
+        if either the outcome model or propensity score model is
+        correctly specified. Matches R's triplediff::ddd() with
+        est_method="dr".
         """
-        n = len(y)
+        return self._estimate_ddd_decomposition(y, G, P, T, X)
 
-        # Cell indicators
-        cell_1 = (G == 1) & (P == 1)
-        cell_2 = (G == 1) & (P == 0)
-        cell_3 = (G == 0) & (P == 1)
-        cell_4 = (G == 0) & (P == 0)
-
-        # Step 1: Outcome regression for each cell-time combination
-        # Predict E[Y|X,T] for each cell
-        if X is not None and X.shape[1] > 0:
-            # Fit outcome models for each cell
-            mu_fitted = np.zeros(n)
-
-            for cell_mask, cell_name in [
-                (cell_1, "cell_1"), (cell_2, "cell_2"),
-                (cell_3, "cell_3"), (cell_4, "cell_4")
-            ]:
-                for t_val in [0, 1]:
-                    mask = cell_mask & (T == t_val)
-                    if np.sum(mask) > 1:
-                        X_cell = np.column_stack([X[mask], T[mask]])
-                        try:
-                            _, fitted, _ = _linear_regression(
-                                X_cell, y[mask],
-                                rank_deficient_action=self.rank_deficient_action,
-                            )
-                            mu_fitted[mask] = fitted
-                        except Exception:
-                            mu_fitted[mask] = np.mean(y[mask])
-                    elif np.sum(mask) == 1:
-                        mu_fitted[mask] = y[mask]
-
-            # Propensity scores
-            try:
-                _, p_G = _logistic_regression(X, G)
-            except Exception:
-                p_G = np.full(n, np.mean(G))
-
-            try:
-                _, p_P = _logistic_regression(X, P)
-            except Exception:
-                p_P = np.full(n, np.mean(P))
-
-            p_G = np.clip(p_G, self.pscore_trim, 1 - self.pscore_trim)
-            p_P = np.clip(p_P, self.pscore_trim, 1 - self.pscore_trim)
-
-            p_cell_1 = p_G * p_P
-            p_cell_2 = p_G * (1 - p_P)
-            p_cell_3 = (1 - p_G) * p_P
-            p_cell_4 = (1 - p_G) * (1 - p_P)
-
-            pscore_stats = {
-                "P(G=1) mean": float(np.mean(p_G)),
-                "P(G=1) std": float(np.std(p_G)),
-                "P(P=1) mean": float(np.mean(p_P)),
-                "P(P=1) std": float(np.std(p_P)),
-            }
-        else:
-            # No covariates: use cell means as predictions
-            mu_fitted = np.zeros(n)
-            for cell_mask in [cell_1, cell_2, cell_3, cell_4]:
-                for t_val in [0, 1]:
-                    mask = cell_mask & (T == t_val)
-                    if np.sum(mask) > 0:
-                        mu_fitted[mask] = np.mean(y[mask])
-
-            # Unconditional probabilities
-            p_cell_1 = np.full(n, np.mean(cell_1))
-            p_cell_2 = np.full(n, np.mean(cell_2))
-            p_cell_3 = np.full(n, np.mean(cell_3))
-            p_cell_4 = np.full(n, np.mean(cell_4))
-            pscore_stats = None
-
-        # Clip cell probabilities
-        p_cell_1 = np.clip(p_cell_1, self.pscore_trim, 1 - self.pscore_trim)
-        p_cell_2 = np.clip(p_cell_2, self.pscore_trim, 1 - self.pscore_trim)
-        p_cell_3 = np.clip(p_cell_3, self.pscore_trim, 1 - self.pscore_trim)
-        p_cell_4 = np.clip(p_cell_4, self.pscore_trim, 1 - self.pscore_trim)
-
-        # Step 2: Doubly robust estimator
-        # For each cell, compute the augmented IPW term:
-        # (Y - mu(X)) * weight + mu(X)
-
-        pre_mask = T == 0
-        post_mask = T == 1
-
-        # Influence function components for each observation
-        n_1 = np.sum(cell_1)
-        p_ref = n_1 / n
-
-        # Cell 1 (G=1, P=1) - effectively treated
-        inf_11 = np.zeros(n)
-        inf_11[cell_1] = (y[cell_1] - mu_fitted[cell_1]) / p_ref
-        # Add outcome model contribution
-        inf_11 += mu_fitted * cell_1.astype(float) / p_ref
-
-        # Cell 2 (G=1, P=0)
-        w_10 = cell_2.astype(float) * (p_cell_1 / p_cell_2)
-        inf_10 = w_10 * (y - mu_fitted) / p_ref
-        # Add outcome model contribution for cell 2 (vectorized)
-        inf_10[cell_2] += mu_fitted[cell_2] * (p_cell_1[cell_2] / p_cell_2[cell_2]) / p_ref
-
-        # Cell 3 (G=0, P=1)
-        w_01 = cell_3.astype(float) * (p_cell_1 / p_cell_3)
-        inf_01 = w_01 * (y - mu_fitted) / p_ref
-        # Add outcome model contribution for cell 3 (vectorized)
-        inf_01[cell_3] += mu_fitted[cell_3] * (p_cell_1[cell_3] / p_cell_3[cell_3]) / p_ref
-
-        # Cell 4 (G=0, P=0)
-        w_00 = cell_4.astype(float) * (p_cell_1 / p_cell_4)
-        inf_00 = w_00 * (y - mu_fitted) / p_ref
-        # Add outcome model contribution for cell 4 (vectorized)
-        inf_00[cell_4] += mu_fitted[cell_4] * (p_cell_1[cell_4] / p_cell_4[cell_4]) / p_ref
-
-        # Compute cell-time means using DR formula
-        def dr_mean(inf_vals, t_mask):
-            return np.mean(inf_vals[t_mask])
-
-        y_11_pre = dr_mean(inf_11, pre_mask)
-        y_11_post = dr_mean(inf_11, post_mask)
-        y_10_pre = dr_mean(inf_10, pre_mask)
-        y_10_post = dr_mean(inf_10, post_mask)
-        y_01_pre = dr_mean(inf_01, pre_mask)
-        y_01_post = dr_mean(inf_01, post_mask)
-        y_00_pre = dr_mean(inf_00, pre_mask)
-        y_00_post = dr_mean(inf_00, post_mask)
-
-        # DDD estimate
-        att = (
-            (y_11_post - y_11_pre)
-            - (y_10_post - y_10_pre)
-            - (y_01_post - y_01_pre)
-            + (y_00_post - y_00_pre)
-        )
-
-        # Standard error computation
-        # Use the simpler variance formula for the DDD estimator
-        # Var(DDD) ≈ sum of variances of cell means / cell_sizes
-
-        # Compute variances within each cell-time combination
-        def cell_var(cell_mask, t_mask, y_vals):
-            mask = cell_mask & t_mask
-            if np.sum(mask) > 1:
-                return np.var(y_vals[mask], ddof=1), np.sum(mask)
-            return 0.0, max(1, np.sum(mask))
-
-        # Variance components for each of the 8 cells
-        var_components = []
-        for cell_mask in [cell_1, cell_2, cell_3, cell_4]:
-            for t_mask in [pre_mask, post_mask]:
-                v, n_cell = cell_var(cell_mask, t_mask, y)
-                if n_cell > 0:
-                    var_components.append(v / n_cell)
-
-        # Total variance is sum of components (assuming independence)
-        total_var = sum(var_components)
-        se = np.sqrt(total_var)
-
-        # R-squared from outcome regression
-        if X is not None:
-            ss_res = np.sum((y - mu_fitted) ** 2)
-            ss_tot = np.sum((y - np.mean(y)) ** 2)
-            r_squared = 1 - (ss_res / ss_tot) if ss_tot > 0 else 0.0
-        else:
-            r_squared = None
-
-        return att, se, r_squared, pscore_stats
-
-    def _compute_se(
-        self,
-        X: np.ndarray,
-        residuals: np.ndarray,
-        coef_idx: int,
-    ) -> float:
-        """Compute standard error for a coefficient using robust or clustered SE."""
-        n, k = X.shape
-
-        if self.robust:
-            # HC1 robust standard errors
-            vcov = compute_robust_vcov(X, residuals, cluster_ids=None)
-        else:
-            # Classical OLS standard errors
-            mse = np.sum(residuals**2) / (n - k)
-            try:
-                vcov = np.linalg.solve(X.T @ X, mse * np.eye(k))
-            except np.linalg.LinAlgError:
-                vcov = np.linalg.pinv(X.T @ X) * mse
-
-        return float(np.sqrt(vcov[coef_idx, coef_idx]))
-
-    def _compute_ipw_se(
+    def _estimate_ddd_decomposition(
         self,
         y: np.ndarray,
         G: np.ndarray,
         P: np.ndarray,
         T: np.ndarray,
-        cell_1: np.ndarray,
-        cell_2: np.ndarray,
-        cell_3: np.ndarray,
-        cell_4: np.ndarray,
-        p_cell_1: np.ndarray,
-        p_cell_2: np.ndarray,
-        p_cell_3: np.ndarray,
-        p_cell_4: np.ndarray,
-        att: float,
-    ) -> float:
-        """Compute standard error for IPW estimator using influence function."""
+        X: Optional[np.ndarray],
+    ) -> Tuple[float, float, Optional[float], Optional[Dict[str, float]]]:
+        """
+        Core DDD estimation via three-DiD decomposition.
+
+        Implements the methodology from Ortiz-Villavicencio & Sant'Anna
+        (2025), matching R's triplediff::ddd() for repeated cross-section
+        data (panel=FALSE).
+
+        The DDD is decomposed into three pairwise DiD comparisons,
+        each using the selected estimation method (DR, IPW, or RA):
+          DDD = DiD_3 + DiD_2 - DiD_1
+
+        Standard errors use the efficient influence function:
+          SE = std(w3*IF_3 + w2*IF_2 - w1*IF_1) / sqrt(n)
+        """
         n = len(y)
-        post_mask = T == 1
+        est_method = self.estimation_method
 
-        # Influence function for IPW estimator (vectorized)
-        inf_func = np.zeros(n)
+        # Assign subgroups following R convention:
+        #   4: G=1, P=1 (treated, eligible - reference/"treated")
+        #   3: G=1, P=0 (treated, ineligible)
+        #   2: G=0, P=1 (control, eligible)
+        #   1: G=0, P=0 (control, ineligible)
+        subgroup = np.zeros(n, dtype=int)
+        subgroup[(G == 1) & (P == 1)] = 4
+        subgroup[(G == 1) & (P == 0)] = 3
+        subgroup[(G == 0) & (P == 1)] = 2
+        subgroup[(G == 0) & (P == 0)] = 1
 
-        n_ref = np.sum(cell_1)
-        p_ref = n_ref / n
+        post = T.astype(float)
 
-        # Sign: +1 for post, -1 for pre
-        sign = np.where(post_mask, 1.0, -1.0)
+        # Covariate matrix (always includes intercept)
+        if X is not None and X.shape[1] > 0:
+            covX = np.column_stack([np.ones(n), X])
+            has_covariates = True
+        else:
+            covX = np.ones((n, 1))
+            has_covariates = False
 
-        # Cell 1 (G=1, P=1): sign * (y - att) / p_ref
-        inf_func[cell_1] = sign[cell_1] * (y[cell_1] - att) / p_ref
+        # Three DiD comparisons: j vs 4 for j in {3, 2, 1}
+        did_results = {}
+        pscore_stats = None
+        all_pscores = {}  # Collect pscores for diagnostics
+        overlap_issues = []  # Collect overlap diagnostics across comparisons
+        any_nonfinite_if = False
 
-        # Cell 2 (G=1, P=0): -sign * y * (p_cell_1 / p_cell_2) / p_ref
-        w_2 = p_cell_1[cell_2] / p_cell_2[cell_2]
-        inf_func[cell_2] = -sign[cell_2] * y[cell_2] * w_2 / p_ref
+        with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
+            for j in [3, 2, 1]:
+                mask = (subgroup == j) | (subgroup == 4)
+                y_sub = y[mask]
+                post_sub = post[mask]
+                sg_sub = subgroup[mask]
+                covX_sub = covX[mask]
+                n_sub = len(y_sub)
 
-        # Cell 3 (G=0, P=1): -sign * y * (p_cell_1 / p_cell_3) / p_ref
-        w_3 = p_cell_1[cell_3] / p_cell_3[cell_3]
-        inf_func[cell_3] = -sign[cell_3] * y[cell_3] * w_3 / p_ref
+                PA4 = (sg_sub == 4).astype(float)
+                PAa = (sg_sub == j).astype(float)
 
-        # Cell 4 (G=0, P=0): sign * y * (p_cell_1 / p_cell_4) / p_ref
-        w_4 = p_cell_1[cell_4] / p_cell_4[cell_4]
-        inf_func[cell_4] = sign[cell_4] * y[cell_4] * w_4 / p_ref
+                # --- Propensity scores ---
+                if est_method == "reg":
+                    # RA: no propensity scores needed
+                    pscore_sub = np.ones(n_sub)
+                    hessian = None
+                elif has_covariates:
+                    # Logistic regression: P(subgroup=4 | X) within {j, 4}
+                    ps_estimated = True
+                    try:
+                        _, pscore_sub = _logistic_regression(
+                            covX_sub[:, 1:], PA4
+                        )
+                    except Exception:
+                        pscore_sub = np.full(n_sub, np.mean(PA4))
+                        ps_estimated = False
+                        warnings.warn(
+                            f"Propensity score estimation failed for subgroup "
+                            f"{j} vs 4; using unconditional probability. "
+                            f"SEs may be less efficient.",
+                            UserWarning,
+                            stacklevel=3,
+                        )
 
-        var_inf = np.var(inf_func, ddof=1)
-        se = np.sqrt(var_inf / n)
+                    pscore_sub = np.clip(pscore_sub, self.pscore_trim,
+                                         1 - self.pscore_trim)
+                    all_pscores[j] = pscore_sub
 
-        return se
+                    # Check overlap: count obs at trim bounds
+                    # (1e-10 tolerance for floating-point after np.clip)
+                    n_trimmed = int(np.sum(
+                        (pscore_sub <= self.pscore_trim + 1e-10)
+                        | (pscore_sub >= 1 - self.pscore_trim - 1e-10)
+                    ))
+                    frac_trimmed = n_trimmed / len(pscore_sub)
+                    if frac_trimmed > 0.05:
+                        overlap_issues.append((j, frac_trimmed))
+
+                    # Hessian only when PS was actually estimated
+                    if ps_estimated:
+                        W_ps = pscore_sub * (1 - pscore_sub)
+                        try:
+                            XWX = covX_sub.T @ (W_ps[:, None] * covX_sub)
+                            hessian = np.linalg.inv(XWX) * n_sub
+                        except np.linalg.LinAlgError:
+                            hessian = np.linalg.pinv(XWX) * n_sub
+                    else:
+                        hessian = None
+                else:
+                    # No covariates: unconditional probability
+                    pscore_sub = np.full(n_sub, np.mean(PA4))
+                    pscore_sub = np.clip(pscore_sub, self.pscore_trim,
+                                         1 - self.pscore_trim)
+                    # Check overlap (same logic as covariate branch)
+                    n_trimmed = int(np.sum(
+                        (pscore_sub <= self.pscore_trim + 1e-10)
+                        | (pscore_sub >= 1 - self.pscore_trim - 1e-10)
+                    ))
+                    frac_trimmed = n_trimmed / len(pscore_sub)
+                    if frac_trimmed > 0.05:
+                        overlap_issues.append((j, frac_trimmed))
+                    hessian = None
+
+                # --- Outcome regression ---
+                if est_method == "ipw":
+                    # IPW: no outcome regression
+                    or_ctrl_pre = np.zeros(n_sub)
+                    or_ctrl_post = np.zeros(n_sub)
+                    or_trt_pre = np.zeros(n_sub)
+                    or_trt_post = np.zeros(n_sub)
+                else:
+                    # Fit separate OLS per subgroup-time cell, predict for all
+                    or_ctrl_pre = self._fit_predict_mu(
+                        y_sub, covX_sub, sg_sub == j, post_sub == 0, n_sub)
+                    or_ctrl_post = self._fit_predict_mu(
+                        y_sub, covX_sub, sg_sub == j, post_sub == 1, n_sub)
+                    or_trt_pre = self._fit_predict_mu(
+                        y_sub, covX_sub, sg_sub == 4, post_sub == 0, n_sub)
+                    or_trt_post = self._fit_predict_mu(
+                        y_sub, covX_sub, sg_sub == 4, post_sub == 1, n_sub)
+
+                # --- Compute DiD ATT and influence function ---
+                att_j, inf_j = self._compute_did_rc(
+                    y_sub, post_sub, PA4, PAa, pscore_sub, covX_sub,
+                    or_ctrl_pre, or_ctrl_post, or_trt_pre, or_trt_post,
+                    hessian, est_method, n_sub,
+                )
+
+                # Track non-finite IF values (flag for NaN SE later)
+                if not np.all(np.isfinite(inf_j)):
+                    any_nonfinite_if = True
+                    inf_j = np.where(np.isfinite(inf_j), inf_j, 0.0)
+
+                # Pad influence function to full length
+                inf_full = np.zeros(n)
+                inf_full[mask] = inf_j
+
+                did_results[j] = {"att": att_j, "inf": inf_full}
+
+        # Emit overlap warning if >5% of observations trimmed in any comparison
+        if overlap_issues:
+            details = ", ".join(
+                f"subgroup {j} vs 4: {frac:.0%}" for j, frac in overlap_issues
+            )
+            warnings.warn(
+                f"Poor propensity score overlap ({details} of observations "
+                f"trimmed at bounds). IPW/DR estimates may be unreliable.",
+                UserWarning,
+                stacklevel=3,
+            )
+
+        # --- Combine three DiDs ---
+        att = did_results[3]["att"] + did_results[2]["att"] - did_results[1]["att"]
+
+        # Influence function weights (matching R's att_dr_rc)
+        n3 = np.sum((subgroup == 3) | (subgroup == 4))
+        n2 = np.sum((subgroup == 2) | (subgroup == 4))
+        n1 = np.sum((subgroup == 1) | (subgroup == 4))
+        w3 = n / n3
+        w2 = n / n2
+        w1 = n / n1
+
+        inf_func = (w3 * did_results[3]["inf"]
+                     + w2 * did_results[2]["inf"]
+                     - w1 * did_results[1]["inf"])
+
+        if self._cluster_ids is not None:
+            # Cluster-robust SE: sum IF within clusters, then Liang-Zeger variance
+            unique_clusters = np.unique(self._cluster_ids)
+            n_clusters_val = len(unique_clusters)
+            if n_clusters_val < 2:
+                raise ValueError(
+                    f"Need at least 2 clusters for cluster-robust SEs, "
+                    f"got {n_clusters_val}"
+                )
+            cluster_sums = np.array([
+                np.sum(inf_func[self._cluster_ids == c]) for c in unique_clusters
+            ])
+            # V = (G/(G-1)) * (1/n^2) * sum(psi_c^2)
+            se = float(np.sqrt(
+                (n_clusters_val / (n_clusters_val - 1))
+                * np.sum(cluster_sums**2) / n**2
+            ))
+        else:
+            se = float(np.std(inf_func, ddof=1) / np.sqrt(n))
+
+        # Non-finite IF values make SE undefined
+        if any_nonfinite_if:
+            warnings.warn(
+                "Non-finite values in influence function (likely due to "
+                "extreme propensity scores or near-singular design). "
+                "SE set to NaN.",
+                UserWarning,
+                stacklevel=3,
+            )
+            se = np.nan
+
+        # Propensity score stats (for IPW/DR with covariates)
+        if has_covariates and est_method != "reg" and all_pscores:
+            all_ps = np.concatenate(list(all_pscores.values()))
+            pscore_stats = {
+                "P(subgroup=4|X) mean": float(np.mean(all_ps)),
+                "P(subgroup=4|X) std": float(np.std(all_ps)),
+                "P(subgroup=4|X) min": float(np.min(all_ps)),
+                "P(subgroup=4|X) max": float(np.max(all_ps)),
+            }
+
+        # R-squared for regression-based methods
+        r_squared = None
+        if est_method in ("reg", "dr") and has_covariates:
+            # Compute R-squared from fitted values on full data
+            mu_fitted = np.zeros(n)
+            for sg_val in [1, 2, 3, 4]:
+                for t_val in [0, 1]:
+                    cell_mask = (subgroup == sg_val) & (post == t_val)
+                    if np.sum(cell_mask) > 0:
+                        X_fit = covX[cell_mask]
+                        y_fit = y[cell_mask]
+                        try:
+                            beta_rs, _, _ = solve_ols(
+                                X_fit, y_fit,
+                                rank_deficient_action=self.rank_deficient_action,
+                            )
+                            beta_rs = np.where(np.isnan(beta_rs), 0.0, beta_rs)
+                            mu_fitted[cell_mask] = X_fit @ beta_rs
+                        except (np.linalg.LinAlgError, ValueError):
+                            mu_fitted[cell_mask] = np.mean(y_fit)
+            ss_res = np.sum((y - mu_fitted) ** 2)
+            ss_tot = np.sum((y - np.mean(y)) ** 2)
+            r_squared = 1 - (ss_res / ss_tot) if ss_tot > 0 else 0.0
+
+        return att, se, r_squared, pscore_stats
+
+    def _fit_predict_mu(
+        self,
+        y: np.ndarray,
+        covX: np.ndarray,
+        subgroup_mask: np.ndarray,
+        time_mask: np.ndarray,
+        n_total: int,
+    ) -> np.ndarray:
+        """Fit OLS on a subgroup-time cell, predict for all observations."""
+        fit_mask = subgroup_mask & time_mask
+        n_fit = int(np.sum(fit_mask))
+
+        if n_fit == 0:
+            return np.zeros(n_total)
+
+        X_fit = covX[fit_mask]
+        y_fit = y[fit_mask]
+
+        try:
+            beta, _, _ = solve_ols(
+                X_fit, y_fit,
+                rank_deficient_action=self.rank_deficient_action,
+            )
+            # Replace NaN coefficients (dropped columns) with 0 for prediction
+            beta = np.where(np.isnan(beta), 0.0, beta)
+        except ValueError:
+            if self.rank_deficient_action == "error":
+                raise
+            return np.full(n_total, np.mean(y_fit))
+        except np.linalg.LinAlgError:
+            return np.full(n_total, np.mean(y_fit))
+
+        return covX @ beta
+
+    def _compute_did_rc(
+        self,
+        y: np.ndarray,
+        post: np.ndarray,
+        PA4: np.ndarray,
+        PAa: np.ndarray,
+        pscore: np.ndarray,
+        covX: np.ndarray,
+        or_ctrl_pre: np.ndarray,
+        or_ctrl_post: np.ndarray,
+        or_trt_pre: np.ndarray,
+        or_trt_post: np.ndarray,
+        hessian: Optional[np.ndarray],
+        est_method: str,
+        n: int,
+    ) -> Tuple[float, np.ndarray]:
+        """
+        Compute a single pairwise DiD (subgroup j vs 4) for RC data.
+
+        Returns ATT and per-observation influence function.
+        Matches R's triplediff::compute_did_rc().
+        """
+        if est_method == "ipw":
+            return self._compute_did_rc_ipw(
+                y, post, PA4, PAa, pscore, covX, hessian, n)
+        elif est_method == "reg":
+            return self._compute_did_rc_reg(
+                y, post, PA4, PAa, covX,
+                or_ctrl_pre, or_ctrl_post, or_trt_pre, or_trt_post, n)
+        else:
+            return self._compute_did_rc_dr(
+                y, post, PA4, PAa, pscore, covX,
+                or_ctrl_pre, or_ctrl_post, or_trt_pre, or_trt_post,
+                hessian, n)
+
+    def _compute_did_rc_ipw(
+        self,
+        y: np.ndarray,
+        post: np.ndarray,
+        PA4: np.ndarray,
+        PAa: np.ndarray,
+        pscore: np.ndarray,
+        covX: np.ndarray,
+        hessian: Optional[np.ndarray],
+        n: int,
+    ) -> Tuple[float, np.ndarray]:
+        """IPW DiD for a single pairwise comparison (RC)."""
+        # Riesz representers (IPW weights * indicators)
+        riesz_treat_pre = PA4 * (1 - post)
+        riesz_treat_post = PA4 * post
+        riesz_control_pre = pscore * PAa * (1 - post) / (1 - pscore)
+        riesz_control_post = pscore * PAa * post / (1 - pscore)
+
+        # Hajek-normalized cell-time means
+        def _hajek(riesz, y_vals):
+            denom = np.mean(riesz)
+            if denom <= 0:
+                return np.zeros_like(riesz), 0.0
+            eta = riesz * y_vals / denom
+            return eta, float(np.mean(eta))
+
+        eta_treat_pre, att_treat_pre = _hajek(riesz_treat_pre, y)
+        eta_treat_post, att_treat_post = _hajek(riesz_treat_post, y)
+        eta_control_pre, att_control_pre = _hajek(riesz_control_pre, y)
+        eta_control_post, att_control_post = _hajek(riesz_control_post, y)
+
+        att = ((att_treat_post - att_treat_pre)
+               - (att_control_post - att_control_pre))
+
+        # Influence function
+        inf_treat_pre = (eta_treat_pre
+                         - riesz_treat_pre * att_treat_pre
+                         / np.mean(riesz_treat_pre))
+        inf_treat_post = (eta_treat_post
+                          - riesz_treat_post * att_treat_post
+                          / np.mean(riesz_treat_post))
+        inf_treat = inf_treat_post - inf_treat_pre
+
+        inf_control_pre = (eta_control_pre
+                           - riesz_control_pre * att_control_pre
+                           / np.mean(riesz_control_pre))
+        inf_control_post = (eta_control_post
+                            - riesz_control_post * att_control_post
+                            / np.mean(riesz_control_post))
+        inf_control = inf_control_post - inf_control_pre
+
+        # Propensity score correction for influence function
+        if hessian is not None:
+            score_ps = (PA4 - pscore)[:, None] * covX
+            asy_lin_rep_ps = score_ps @ hessian
+
+            M2_pre = np.mean(
+                (riesz_control_pre * (y - att_control_pre))[:, None] * covX,
+                axis=0,
+            ) / np.mean(riesz_control_pre)
+            M2_post = np.mean(
+                (riesz_control_post * (y - att_control_post))[:, None] * covX,
+                axis=0,
+            ) / np.mean(riesz_control_post)
+            inf_control_ps = asy_lin_rep_ps @ (M2_post - M2_pre)
+            inf_control = inf_control + inf_control_ps
+
+        inf_func = inf_treat - inf_control
+        return att, inf_func
+
+    def _compute_did_rc_reg(
+        self,
+        y: np.ndarray,
+        post: np.ndarray,
+        PA4: np.ndarray,
+        PAa: np.ndarray,
+        covX: np.ndarray,
+        or_ctrl_pre: np.ndarray,
+        or_ctrl_post: np.ndarray,
+        or_trt_pre: np.ndarray,
+        or_trt_post: np.ndarray,
+        n: int,
+    ) -> Tuple[float, np.ndarray]:
+        """Regression adjustment DiD for a single pairwise comparison (RC)."""
+        # Riesz representers
+        riesz_treat_pre = PA4 * (1 - post)
+        riesz_treat_post = PA4 * post
+        riesz_control = PA4  # weights for OR prediction
+
+        # ATT components
+        reg_att_treat_pre = riesz_treat_pre * y
+        reg_att_treat_post = riesz_treat_post * y
+        reg_att_control = riesz_control * (or_ctrl_post - or_ctrl_pre)
+
+        eta_treat_pre = (np.mean(reg_att_treat_pre)
+                         / np.mean(riesz_treat_pre))
+        eta_treat_post = (np.mean(reg_att_treat_post)
+                          / np.mean(riesz_treat_post))
+        eta_control = np.mean(reg_att_control) / np.mean(riesz_control)
+
+        att = (eta_treat_post - eta_treat_pre) - eta_control
+
+        # Influence function
+        # OLS asymptotic linear representation for pre/post
+        weights_ols_pre = PAa * (1 - post)
+        wols_x_pre = weights_ols_pre[:, None] * covX
+        wols_eX_pre = (weights_ols_pre * (y - or_ctrl_pre))[:, None] * covX
+        XpX_pre = wols_x_pre.T @ covX / n
+        try:
+            XpX_inv_pre = np.linalg.inv(XpX_pre)
+        except np.linalg.LinAlgError:
+            XpX_inv_pre = np.linalg.pinv(XpX_pre)
+        asy_lin_rep_ols_pre = wols_eX_pre @ XpX_inv_pre
+
+        weights_ols_post = PAa * post
+        wols_x_post = weights_ols_post[:, None] * covX
+        wols_eX_post = (weights_ols_post * (y - or_ctrl_post))[:, None] * covX
+        XpX_post = wols_x_post.T @ covX / n
+        try:
+            XpX_inv_post = np.linalg.inv(XpX_post)
+        except np.linalg.LinAlgError:
+            XpX_inv_post = np.linalg.pinv(XpX_post)
+        asy_lin_rep_ols_post = wols_eX_post @ XpX_inv_post
+
+        inf_treat_pre = ((reg_att_treat_pre
+                          - riesz_treat_pre * eta_treat_pre)
+                         / np.mean(riesz_treat_pre))
+        inf_treat_post = ((reg_att_treat_post
+                           - riesz_treat_post * eta_treat_post)
+                          / np.mean(riesz_treat_post))
+        inf_treat = inf_treat_post - inf_treat_pre
+
+        inf_control_1 = reg_att_control - riesz_control * eta_control
+        M1 = np.mean(riesz_control[:, None] * covX, axis=0)
+        inf_control_2_post = asy_lin_rep_ols_post @ M1
+        inf_control_2_pre = asy_lin_rep_ols_pre @ M1
+        inf_control = ((inf_control_1 + inf_control_2_post - inf_control_2_pre)
+                        / np.mean(riesz_control))
+
+        inf_func = inf_treat - inf_control
+        return att, inf_func
+
+    def _compute_did_rc_dr(
+        self,
+        y: np.ndarray,
+        post: np.ndarray,
+        PA4: np.ndarray,
+        PAa: np.ndarray,
+        pscore: np.ndarray,
+        covX: np.ndarray,
+        or_ctrl_pre: np.ndarray,
+        or_ctrl_post: np.ndarray,
+        or_trt_pre: np.ndarray,
+        or_trt_post: np.ndarray,
+        hessian: Optional[np.ndarray],
+        n: int,
+    ) -> Tuple[float, np.ndarray]:
+        """Doubly robust DiD for a single pairwise comparison (RC)."""
+        or_ctrl = post * or_ctrl_post + (1 - post) * or_ctrl_pre
+
+        # Riesz representers
+        riesz_treat_pre = PA4 * (1 - post)
+        riesz_treat_post = PA4 * post
+        riesz_control_pre = pscore * PAa * (1 - post) / (1 - pscore)
+        riesz_control_post = pscore * PAa * post / (1 - pscore)
+        riesz_d = PA4
+        riesz_dt1 = PA4 * post
+        riesz_dt0 = PA4 * (1 - post)
+
+        # DR cell-time components
+        def _safe_ratio(num, denom):
+            return num / denom if denom > 0 else 0.0
+
+        eta_treat_pre = (riesz_treat_pre * (y - or_ctrl)
+                         * _safe_ratio(1, np.mean(riesz_treat_pre)))
+        eta_treat_post = (riesz_treat_post * (y - or_ctrl)
+                          * _safe_ratio(1, np.mean(riesz_treat_post)))
+        eta_control_pre = (riesz_control_pre * (y - or_ctrl)
+                           * _safe_ratio(1, np.mean(riesz_control_pre)))
+        eta_control_post = (riesz_control_post * (y - or_ctrl)
+                            * _safe_ratio(1, np.mean(riesz_control_post)))
+
+        # Efficiency correction (OR bias correction)
+        eta_d_post = (riesz_d * (or_trt_post - or_ctrl_post)
+                      * _safe_ratio(1, np.mean(riesz_d)))
+        eta_dt1_post = (riesz_dt1 * (or_trt_post - or_ctrl_post)
+                        * _safe_ratio(1, np.mean(riesz_dt1)))
+        eta_d_pre = (riesz_d * (or_trt_pre - or_ctrl_pre)
+                     * _safe_ratio(1, np.mean(riesz_d)))
+        eta_dt0_pre = (riesz_dt0 * (or_trt_pre - or_ctrl_pre)
+                       * _safe_ratio(1, np.mean(riesz_dt0)))
+
+        att_treat_pre = float(np.mean(eta_treat_pre))
+        att_treat_post = float(np.mean(eta_treat_post))
+        att_control_pre = float(np.mean(eta_control_pre))
+        att_control_post = float(np.mean(eta_control_post))
+        att_d_post = float(np.mean(eta_d_post))
+        att_dt1_post = float(np.mean(eta_dt1_post))
+        att_d_pre = float(np.mean(eta_d_pre))
+        att_dt0_pre = float(np.mean(eta_dt0_pre))
+
+        att = ((att_treat_post - att_treat_pre)
+               - (att_control_post - att_control_pre)
+               + (att_d_post - att_dt1_post)
+               - (att_d_pre - att_dt0_pre))
+
+        # --- Influence function ---
+        # OLS asymptotic linear representations (control subgroup)
+        weights_ols_pre = PAa * (1 - post)
+        wols_x_pre = weights_ols_pre[:, None] * covX
+        wols_eX_pre = (weights_ols_pre * (y - or_ctrl_pre))[:, None] * covX
+        XpX_pre = wols_x_pre.T @ covX / n
+        try:
+            XpX_inv_pre = np.linalg.inv(XpX_pre)
+        except np.linalg.LinAlgError:
+            XpX_inv_pre = np.linalg.pinv(XpX_pre)
+        asy_lin_rep_ols_pre = wols_eX_pre @ XpX_inv_pre
+
+        weights_ols_post = PAa * post
+        wols_x_post = weights_ols_post[:, None] * covX
+        wols_eX_post = (weights_ols_post * (y - or_ctrl_post))[:, None] * covX
+        XpX_post = wols_x_post.T @ covX / n
+        try:
+            XpX_inv_post = np.linalg.inv(XpX_post)
+        except np.linalg.LinAlgError:
+            XpX_inv_post = np.linalg.pinv(XpX_post)
+        asy_lin_rep_ols_post = wols_eX_post @ XpX_inv_post
+
+        # OLS representations (treated subgroup)
+        weights_ols_pre_treat = PA4 * (1 - post)
+        wols_x_pre_treat = weights_ols_pre_treat[:, None] * covX
+        wols_eX_pre_treat = (weights_ols_pre_treat
+                             * (y - or_trt_pre))[:, None] * covX
+        XpX_pre_treat = wols_x_pre_treat.T @ covX / n
+        try:
+            XpX_inv_pre_treat = np.linalg.inv(XpX_pre_treat)
+        except np.linalg.LinAlgError:
+            XpX_inv_pre_treat = np.linalg.pinv(XpX_pre_treat)
+        asy_lin_rep_ols_pre_treat = wols_eX_pre_treat @ XpX_inv_pre_treat
+
+        weights_ols_post_treat = PA4 * post
+        wols_x_post_treat = weights_ols_post_treat[:, None] * covX
+        wols_eX_post_treat = (weights_ols_post_treat
+                              * (y - or_trt_post))[:, None] * covX
+        XpX_post_treat = wols_x_post_treat.T @ covX / n
+        try:
+            XpX_inv_post_treat = np.linalg.inv(XpX_post_treat)
+        except np.linalg.LinAlgError:
+            XpX_inv_post_treat = np.linalg.pinv(XpX_post_treat)
+        asy_lin_rep_ols_post_treat = wols_eX_post_treat @ XpX_inv_post_treat
+
+        # Propensity score linear representation
+        score_ps = (PA4 - pscore)[:, None] * covX
+        if hessian is not None:
+            asy_lin_rep_ps = score_ps @ hessian
+        else:
+            asy_lin_rep_ps = np.zeros_like(score_ps)
+
+        # Treat influence function components
+        m_riesz_treat_pre = np.mean(riesz_treat_pre)
+        m_riesz_treat_post = np.mean(riesz_treat_post)
+
+        inf_treat_pre = (eta_treat_pre - riesz_treat_pre * att_treat_pre
+                         / m_riesz_treat_pre) if m_riesz_treat_pre > 0 \
+            else np.zeros(n)
+        inf_treat_post = (eta_treat_post - riesz_treat_post * att_treat_post
+                          / m_riesz_treat_post) if m_riesz_treat_post > 0 \
+            else np.zeros(n)
+
+        # OR correction for treated
+        M1_post = (-np.mean(
+            (riesz_treat_post * post)[:, None] * covX, axis=0)
+            / m_riesz_treat_post) if m_riesz_treat_post > 0 \
+            else np.zeros(covX.shape[1])
+        M1_pre = (-np.mean(
+            (riesz_treat_pre * (1 - post))[:, None] * covX, axis=0)
+            / m_riesz_treat_pre) if m_riesz_treat_pre > 0 \
+            else np.zeros(covX.shape[1])
+        inf_treat_or_post = asy_lin_rep_ols_post @ M1_post
+        inf_treat_or_pre = asy_lin_rep_ols_pre @ M1_pre
+
+        # Control influence function components
+        m_riesz_control_pre = np.mean(riesz_control_pre)
+        m_riesz_control_post = np.mean(riesz_control_post)
+
+        inf_control_pre = (eta_control_pre
+                           - riesz_control_pre * att_control_pre
+                           / m_riesz_control_pre) if m_riesz_control_pre > 0 \
+            else np.zeros(n)
+        inf_control_post = (eta_control_post
+                            - riesz_control_post * att_control_post
+                            / m_riesz_control_post) if m_riesz_control_post > 0 \
+            else np.zeros(n)
+
+        # PS correction for control
+        M2_pre = (np.mean(
+            (riesz_control_pre * (y - or_ctrl - att_control_pre))[:, None]
+            * covX, axis=0)
+            / m_riesz_control_pre) if m_riesz_control_pre > 0 \
+            else np.zeros(covX.shape[1])
+        M2_post = (np.mean(
+            (riesz_control_post * (y - or_ctrl - att_control_post))[:, None]
+            * covX, axis=0)
+            / m_riesz_control_post) if m_riesz_control_post > 0 \
+            else np.zeros(covX.shape[1])
+        inf_control_ps = asy_lin_rep_ps @ (M2_post - M2_pre)
+
+        # OR correction for control
+        M3_post = (-np.mean(
+            (riesz_control_post * post)[:, None] * covX, axis=0)
+            / m_riesz_control_post) if m_riesz_control_post > 0 \
+            else np.zeros(covX.shape[1])
+        M3_pre = (-np.mean(
+            (riesz_control_pre * (1 - post))[:, None] * covX, axis=0)
+            / m_riesz_control_pre) if m_riesz_control_pre > 0 \
+            else np.zeros(covX.shape[1])
+        inf_control_or_post = asy_lin_rep_ols_post @ M3_post
+        inf_control_or_pre = asy_lin_rep_ols_pre @ M3_pre
+
+        # Efficiency correction
+        m_riesz_d = np.mean(riesz_d)
+        m_riesz_dt1 = np.mean(riesz_dt1)
+        m_riesz_dt0 = np.mean(riesz_dt0)
+
+        inf_eff1 = ((eta_d_post - riesz_d * att_d_post / m_riesz_d)
+                     if m_riesz_d > 0 else np.zeros(n))
+        inf_eff2 = ((eta_dt1_post - riesz_dt1 * att_dt1_post / m_riesz_dt1)
+                     if m_riesz_dt1 > 0 else np.zeros(n))
+        inf_eff3 = ((eta_d_pre - riesz_d * att_d_pre / m_riesz_d)
+                     if m_riesz_d > 0 else np.zeros(n))
+        inf_eff4 = ((eta_dt0_pre - riesz_dt0 * att_dt0_pre / m_riesz_dt0)
+                     if m_riesz_dt0 > 0 else np.zeros(n))
+        inf_eff = (inf_eff1 - inf_eff2) - (inf_eff3 - inf_eff4)
+
+        # OR combination
+        mom_post = np.mean(
+            (riesz_d[:, None] / m_riesz_d
+             - riesz_dt1[:, None] / m_riesz_dt1) * covX,
+            axis=0,
+        ) if (m_riesz_d > 0 and m_riesz_dt1 > 0) \
+            else np.zeros(covX.shape[1])
+        mom_pre = np.mean(
+            (riesz_d[:, None] / m_riesz_d
+             - riesz_dt0[:, None] / m_riesz_dt0) * covX,
+            axis=0,
+        ) if (m_riesz_d > 0 and m_riesz_dt0 > 0) \
+            else np.zeros(covX.shape[1])
+        inf_or_post = ((asy_lin_rep_ols_post_treat - asy_lin_rep_ols_post)
+                        @ mom_post)
+        inf_or_pre = ((asy_lin_rep_ols_pre_treat - asy_lin_rep_ols_pre)
+                       @ mom_pre)
+
+        inf_treat_or = inf_treat_or_post + inf_treat_or_pre
+        inf_control_or = inf_control_or_post + inf_control_or_pre
+        inf_or = inf_or_post - inf_or_pre
+
+        inf_treat = inf_treat_post - inf_treat_pre + inf_treat_or
+        inf_control = (inf_control_post - inf_control_pre
+                       + inf_control_ps + inf_control_or)
+
+        inf_func = inf_treat - inf_control + inf_eff + inf_or
+        return att, inf_func
 
     def get_params(self) -> Dict[str, Any]:
         """
@@ -1271,7 +1549,10 @@ def triple_difference(
         Estimation method: "dr" (doubly robust), "reg" (regression),
         or "ipw" (inverse probability weighting).
     robust : bool, default=True
-        Whether to use robust standard errors.
+        Whether to use heteroskedasticity-robust standard errors.
+        Note: influence function-based SEs are inherently robust to
+        heteroskedasticity, so this parameter has no effect. Retained
+        for API compatibility.
     cluster : str, optional
         Column name for cluster-robust standard errors.
     alpha : float, default=0.05

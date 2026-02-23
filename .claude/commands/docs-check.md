@@ -200,6 +200,6 @@ Summary: 15/18 checks passed, 3 issues found
 ## Notes
 
 - This check is especially important after adding new estimators
-- The CLAUDE.md file documents what documentation is required for new features
+- The CONTRIBUTING.md file documents what documentation is required for new features
 - Missing references should cite the original methodology paper, not textbooks
 - When adding new estimators, update this skill's tables accordingly

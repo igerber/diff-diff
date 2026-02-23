@@ -6,7 +6,7 @@ and validating DiD estimators, including basic 2x2 DiD, staggered adoption,
 factor model data, triple difference, and event study designs.
 """
 
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 import numpy as np
 import pandas as pd
@@ -772,6 +772,161 @@ def generate_event_study_data(
                 "outcome": y,
                 "event_time": event_time,
                 "true_effect": effect,
+            })
+
+    return pd.DataFrame(records)
+
+
+def generate_continuous_did_data(
+    n_units: int = 500,
+    n_periods: int = 4,
+    cohort_periods: Optional[List[int]] = None,
+    never_treated_frac: float = 0.3,
+    dose_distribution: str = "lognormal",
+    dose_params: Optional[Dict] = None,
+    att_function: str = "linear",
+    att_slope: float = 2.0,
+    att_intercept: float = 1.0,
+    unit_fe_sd: float = 2.0,
+    time_trend: float = 0.5,
+    noise_sd: float = 1.0,
+    seed: Optional[int] = None,
+) -> pd.DataFrame:
+    """
+    Generate synthetic data for continuous DiD analysis with known dose-response.
+
+    Creates a balanced panel with continuous treatment doses and known ATT(d)
+    function, satisfying strong parallel trends by construction.
+
+    Parameters
+    ----------
+    n_units : int, default=500
+        Number of units in the panel.
+    n_periods : int, default=4
+        Number of time periods (1-indexed).
+    cohort_periods : list of int, optional
+        Treatment cohort periods. Default: ``[2]`` (single cohort).
+    never_treated_frac : float, default=0.3
+        Fraction of units that are never-treated.
+    dose_distribution : str, default="lognormal"
+        Distribution for dose: ``"lognormal"``, ``"uniform"``, ``"exponential"``.
+    dose_params : dict, optional
+        Distribution-specific parameters. Defaults:
+        lognormal: ``{"mean": 0.5, "sigma": 0.5}``
+        uniform: ``{"low": 0.5, "high": 5.0}``
+        exponential: ``{"scale": 2.0}``
+    att_function : str, default="linear"
+        Functional form of ATT(d): ``"linear"``, ``"quadratic"``, ``"log"``.
+    att_slope : float, default=2.0
+        Slope parameter for ATT function.
+    att_intercept : float, default=1.0
+        Intercept parameter for ATT function.
+    unit_fe_sd : float, default=2.0
+        Standard deviation of unit fixed effects.
+    time_trend : float, default=0.5
+        Linear time trend coefficient.
+    noise_sd : float, default=1.0
+        Standard deviation of idiosyncratic noise.
+    seed : int, optional
+        Random seed for reproducibility.
+
+    Returns
+    -------
+    pd.DataFrame
+        Panel data with columns: ``unit``, ``period``, ``outcome``,
+        ``first_treat``, ``dose``, ``true_att``.
+    """
+    rng = np.random.default_rng(seed)
+
+    if cohort_periods is None:
+        cohort_periods = [2]
+
+    # Assign units to cohorts
+    n_never = int(n_units * never_treated_frac)
+    n_treated_total = n_units - n_never
+    n_per_cohort = n_treated_total // len(cohort_periods)
+
+    cohort_assignments = np.zeros(n_units, dtype=int)
+    idx = 0
+    for i, g in enumerate(cohort_periods):
+        n_this = n_per_cohort if i < len(cohort_periods) - 1 else n_treated_total - idx
+        cohort_assignments[n_never + idx: n_never + idx + n_this] = g
+        idx += n_this
+
+    # Generate doses
+    default_params = {
+        "lognormal": {"mean": 0.5, "sigma": 0.5},
+        "uniform": {"low": 0.5, "high": 5.0},
+        "exponential": {"scale": 2.0},
+    }
+    params = dose_params or default_params.get(dose_distribution, {})
+
+    dose_per_unit = np.zeros(n_units)
+    treated_mask = cohort_assignments > 0
+    n_treated_actual = int(np.sum(treated_mask))
+
+    if dose_distribution == "lognormal":
+        dose_per_unit[treated_mask] = rng.lognormal(
+            mean=params.get("mean", 0.5),
+            sigma=params.get("sigma", 0.5),
+            size=n_treated_actual,
+        )
+    elif dose_distribution == "uniform":
+        dose_per_unit[treated_mask] = rng.uniform(
+            low=params.get("low", 0.5),
+            high=params.get("high", 5.0),
+            size=n_treated_actual,
+        )
+    elif dose_distribution == "exponential":
+        dose_per_unit[treated_mask] = rng.exponential(
+            scale=params.get("scale", 2.0),
+            size=n_treated_actual,
+        )
+    else:
+        raise ValueError(
+            f"dose_distribution must be 'lognormal', 'uniform', or 'exponential', "
+            f"got '{dose_distribution}'"
+        )
+
+    # ATT function
+    def _att_func(d):
+        if att_function == "linear":
+            return att_intercept + att_slope * d
+        elif att_function == "quadratic":
+            return att_intercept + att_slope * d**2
+        elif att_function == "log":
+            return att_intercept + att_slope * np.log1p(d)
+        else:
+            raise ValueError(
+                f"att_function must be 'linear', 'quadratic', or 'log', "
+                f"got '{att_function}'"
+            )
+
+    # Unit fixed effects
+    unit_fe = rng.normal(0, unit_fe_sd, size=n_units)
+
+    # Build panel
+    periods = np.arange(1, n_periods + 1)
+    records = []
+    for i in range(n_units):
+        g_i = cohort_assignments[i]
+        d_i = dose_per_unit[i]
+        for t in periods:
+            # Potential outcome without treatment
+            y0 = unit_fe[i] + time_trend * t + rng.normal(0, noise_sd)
+            # Treatment effect
+            if g_i > 0 and t >= g_i:
+                att_d = _att_func(d_i)
+            else:
+                att_d = 0.0
+
+            records.append({
+                "unit": i,
+                "period": int(t),
+                "outcome": y0 + att_d,
+                "first_treat": int(g_i) if g_i > 0 else 0,
+                "dose": d_i,
+                "true_att": att_d,
             })
 
     return pd.DataFrame(records)

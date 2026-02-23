@@ -267,6 +267,11 @@ implementations:
    additional speedup since these estimators primarily use OLS and variance
    computations that are already highly optimized in NumPy/SciPy via BLAS/LAPACK.
 
+   As of v2.5.0, pre-built wheels on macOS and Linux link platform-optimized
+   BLAS libraries (Apple Accelerate and OpenBLAS respectively) for matrix-vector
+   and matrix-matrix products across all Rust-accelerated code paths. Windows
+   wheels continue to use pure Rust with no external dependencies.
+
 Three-Way Performance Summary
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -394,10 +399,11 @@ Three-Way Performance Summary
    Frank-Wolfe optimization algorithm. At 5k scale, R takes ~9 minutes while
    pure Python completes in 32 seconds. ATT estimates are numerically identical
    (< 1e-10 difference) since both implementations use the same Frank-Wolfe
-   optimizer with two-pass sparsification. The Rust backend provides a speedup
-   at small scale (2.1x over pure Python) but is slower at larger scales due to
-   overhead in the placebo variance estimation loop; this is a known area for
-   future optimization.
+   optimizer with two-pass sparsification. The Rust backend uses a
+   Gram-accelerated Frank-Wolfe solver for time weights (reducing per-iteration
+   cost from O(N×T0) to O(T0)) and an allocation-free solver for unit weights
+   (1 GEMV per iteration instead of 3, zero heap allocations). These
+   optimizations make the Rust backend faster than pure Python at all scales.
 
 Dataset Sizes
 ~~~~~~~~~~~~~

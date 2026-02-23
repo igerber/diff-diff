@@ -23,11 +23,6 @@ Target: < 1000 lines per module for maintainability.
 
 | File | Lines | Action |
 |------|-------|--------|
-| ~~`staggered.py`~~ | ~~2301~~ 1120 | ✅ Split into staggered.py, staggered_bootstrap.py, staggered_aggregation.py, staggered_results.py |
-| ~~`prep.py`~~ | ~~1993~~ 1241 | ✅ Split: DGP functions moved to `prep_dgp.py` (777 lines) |
-| ~~`trop.py`~~ | ~~2904~~ ~2560 | ✅ Partially split: results extracted to `trop_results.py` (~340 lines) |
-| ~~`imputation.py`~~ | ~~2480~~ ~1740 | ✅ Split into imputation.py, imputation_results.py, imputation_bootstrap.py |
-| ~~`two_stage.py`~~ | ~~2209~~ ~1490 | ✅ Split into two_stage.py, two_stage_results.py, two_stage_bootstrap.py |
 | `utils.py` | 1780 | Monitor -- legacy placebo function removed |
 | `visualization.py` | 1678 | Monitor -- growing but cohesive |
 | `linalg.py` | 1537 | Monitor -- unified backend, splitting would hurt cohesion |
@@ -37,16 +32,6 @@ Target: < 1000 lines per module for maintainability.
 | `sun_abraham.py` | 1227 | Acceptable |
 | `estimators.py` | 1161 | Acceptable |
 | `pretrends.py` | 1104 | Acceptable |
-
-### ~~NaN Handling for Undefined t-statistics~~ -- DONE
-
-All 7 t_stat locations fixed (diagnostics.py, sun_abraham.py, triple_diff.py) -- all now use `np.nan` or `np.isfinite()` guards. Fixed in PR #118 and follow-up PRs.
-
-~~**Remaining nuance**: `diagnostics.py:785` SE = 0.0~~ — ✅ Fixed: SE now returns `np.nan` when undefined, and all downstream inference uses `safe_inference()`.
-
-### ~~Migrate Existing Inference Call Sites to `safe_inference()`~~ -- DONE
-
-✅ All ~32 inline inference call sites migrated to `safe_inference()` across 11 source files: `estimators.py`, `sun_abraham.py`, `staggered.py`, `staggered_aggregation.py`, `triple_diff.py`, `imputation.py`, `two_stage.py`, `diagnostics.py`, `synthetic_did.py`, `trop.py`, `utils.py`. Two sites left as-is with comments: `diagnostics.py:665` (permutation-based p_value) and `linalg.py:1310` (deliberately uses ±inf for zero-SE).
 
 ---
 
@@ -58,18 +43,14 @@ Deferred items from PR reviews that were not addressed before merge.
 
 | Issue | Location | PR | Priority |
 |-------|----------|----|----------|
-| ~~TwoStageDiD & ImputationDiD bootstrap hardcodes Rademacher only; no `bootstrap_weights` parameter unlike CallawaySantAnna~~ | ~~`two_stage_bootstrap.py`, `imputation_bootstrap.py`~~ | ~~#156, #141~~ | ✅ Fixed: Added `bootstrap_weights` parameter to both estimators |
-| ~~TwoStageDiD GMM score logic duplicated between analytic/bootstrap with inconsistent NaN/overflow handling~~ | ~~`two_stage.py`, `two_stage_bootstrap.py`~~ | ~~#156~~ | ✅ Fixed: Unified via `_compute_gmm_scores()` static method |
-| ~~ImputationDiD weight construction duplicated between aggregation and bootstrap (drift risk)~~ | ~~`imputation.py`, `imputation_bootstrap.py`~~ | ~~#141~~ | ✅ Fixed: Extracted `_compute_target_weights()` helper in `imputation_bootstrap.py` |
 | ImputationDiD dense `(A0'A0).toarray()` scales O((U+T+K)^2), OOM risk on large panels | `imputation.py` | #141 | Medium (deferred — only triggers when sparse solver fails; fixing requires sparse least-squares alternatives) |
+| Bootstrap NaN-gating gap: manual SE/CI/p-value without non-finite filtering or SE<=0 guard | `imputation_bootstrap.py`, `two_stage_bootstrap.py` | #177 | Medium — migrate to `compute_effect_bootstrap_stats` from `bootstrap_utils.py` |
 
 #### Performance
 
 | Issue | Location | PR | Priority |
 |-------|----------|----|----------|
-| ~~TwoStageDiD per-column `.toarray()` in loop for cluster scores~~ | ~~`two_stage_bootstrap.py`~~ | ~~#156~~ | ✅ Fixed: Single `.toarray()` call replaces per-column loop |
 | ImputationDiD event-study SEs recompute full conservative variance per horizon (should cache A0/A1 factorization) | `imputation.py` | #141 | Low |
-| ~~Legacy `compute_placebo_effects` uses deprecated projected-gradient weights~~ | ~~`utils.py:1689-1691`~~ | ~~#145~~ | ✅ Fixed: Removed function entirely |
 | Rust faer SVD ndarray-to-faer conversion overhead (minimal vs SVD cost) | `rust/src/linalg.rs:67` | #115 | Low |
 
 #### Testing/Docs
@@ -77,12 +58,7 @@ Deferred items from PR reviews that were not addressed before merge.
 | Issue | Location | PR | Priority |
 |-------|----------|----|----------|
 | Tutorial notebooks not executed in CI | `docs/tutorials/*.ipynb` | #159 | Low |
-| ~~TwoStageDiD `test_nan_propagation` is a no-op~~ | ~~`tests/test_two_stage.py:643-652`~~ | ~~#156~~ | ✅ Fixed |
-| ~~ImputationDiD bootstrap + covariate path untested~~ | ~~`tests/test_imputation.py`~~ | ~~#141~~ | ✅ Fixed: Added `test_bootstrap_with_covariates` |
-| ~~TROP `n_bootstrap >= 2` validation missing (can yield 0/NaN SE silently)~~ | ~~`trop.py:462`~~ | ~~#124~~ | ✅ Fixed: Added `ValueError` for `n_bootstrap < 2` |
-| ~~SunAbraham deprecated `min_pre_periods`/`min_post_periods` still in `fit()` docstring~~ | ~~`sun_abraham.py:458-487`~~ | ~~#153~~ | ✅ Fixed: Removed deprecated params from `fit()` |
 | R comparison tests spawn separate `Rscript` per test (slow CI) | `tests/test_methodology_twfe.py:294` | #139 | Low |
-| ~~Rust TROP bootstrap SE returns 0.0 instead of NaN for <2 samples~~ | ~~`rust/src/trop.rs:1038-1054`~~ | ~~#115~~ | ✅ Already fixed: Returns `f64::NAN` at `rust/src/trop.rs:1034` |
 
 ---
 
@@ -171,11 +147,7 @@ Spurious RuntimeWarnings ("divide by zero", "overflow", "invalid value") are emi
   - Occurs in IPW and DR estimation methods with covariates
   - Related to logistic regression overflow in edge cases (separate from BLAS bug)
 
-### ~~Fix Plan (follow-up PR)~~ -- DONE
-
-✅ Replaced `@` operator with `np.dot()` at all 19 affected call sites across 6 files: `linalg.py` (5), `staggered.py` (5), `triple_diff.py` (3), `utils.py` (1), `imputation.py` (4), `trop.py` (1). Regression test added in `test_linalg.py::TestNoDotRuntimeWarnings`.
-
-**Long-term:** Revert to `@` operator when numpy ≥ 2.3 becomes the minimum supported version.
+- **Long-term:** Revert to `@` operator when numpy ≥ 2.3 becomes the minimum supported version.
 
 ---
 

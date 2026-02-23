@@ -76,11 +76,12 @@ If no prior review is available from either source (conversation context or revi
 ### Step 2: Read CLAUDE.md for Project Context
 
 Read the project's `CLAUDE.md` file to understand:
-- Module structure and architecture
+- Key design patterns (sklearn-like API, formula interface, results objects, etc.)
 - Estimator inheritance map
-- Development checklists (adding parameters, methodology-critical code, etc.)
-- Test structure and conventions
-- Design patterns (sklearn-like API, formula interface, results objects, etc.)
+- Testing conventions
+- Key reference file pointers (methodology registry, development checklists, etc.)
+
+Also read `.claude/commands/dev-checklists.md` for development checklists.
 
 If the plan modifies estimator math, standard error formulas, inference logic, or edge-case handling, also read `docs/methodology/REGISTRY.md` to understand the academic foundations and reference implementations for the affected estimator(s).
 
@@ -224,7 +225,7 @@ Check for **missing related changes**:
 - Tests for new/changed functionality
 - `__init__.py` export updates
 - `get_params()` / `set_params()` updates for new parameters
-- Documentation updates (README, RST, tutorials, CLAUDE.md)
+- Documentation updates (README, RST, tutorials, CONTRIBUTING.md, CLAUDE.md if design patterns change)
 - For bug fixes: did the plan grep for ALL occurrences of the pattern, or just the one reported?
 
 Check for **unnecessary additions**:
@@ -354,9 +355,9 @@ Present the review in the following format. Number each issue sequentially withi
 
 ## Checklist Gaps
 
-Cross-reference against the relevant CLAUDE.md checklists. List which checklist items are not addressed by the plan.
+Cross-reference against the relevant development checklists in `.claude/commands/dev-checklists.md`. List which checklist items are not addressed by the plan.
 
-[Identify which CLAUDE.md checklist applies (e.g., "Adding a New Parameter to Estimators", "Implementing Methodology-Critical Code", "Fixing Bugs Across Multiple Locations") and list any items from that checklist that the plan doesn't cover.]
+[Identify which checklist applies (e.g., "Adding a New Parameter to Estimators", "Implementing Methodology-Critical Code", "Fixing Bugs Across Multiple Locations") and list any items from that checklist that the plan doesn't cover.]
 
 **Registry Alignment** (if methodology files changed):
 - [ ] Plan equations match REGISTRY.md (or deviations documented)

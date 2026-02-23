@@ -70,6 +70,7 @@ from diff_diff.prep import (
     aggregate_to_cohorts,
     balance_panel,
     create_event_time,
+    generate_continuous_did_data,
     generate_did_data,
     generate_ddd_data,
     generate_event_study_data,
@@ -107,6 +108,11 @@ from diff_diff.two_stage import (
     TwoStageDiDResults,
     two_stage_did,
 )
+from diff_diff.stacked_did import (
+    StackedDiD,
+    StackedDiDResults,
+    stacked_did,
+)
 from diff_diff.sun_abraham import (
     SABootstrapResults,
     SunAbraham,
@@ -116,6 +122,11 @@ from diff_diff.triple_diff import (
     TripleDifference,
     TripleDifferenceResults,
     triple_difference,
+)
+from diff_diff.continuous_did import (
+    ContinuousDiD,
+    ContinuousDiDResults,
+    DoseResponseCurve,
 )
 from diff_diff.trop import (
     TROP,
@@ -172,11 +183,13 @@ __all__ = [
     "MultiPeriodDiD",
     "SyntheticDiD",
     "CallawaySantAnna",
+    "ContinuousDiD",
     "SunAbraham",
     "ImputationDiD",
     "TwoStageDiD",
     "TripleDifference",
     "TROP",
+    "StackedDiD",
     # Bacon Decomposition
     "BaconDecomposition",
     "BaconDecompositionResults",
@@ -191,6 +204,8 @@ __all__ = [
     "CallawaySantAnnaResults",
     "CSBootstrapResults",
     "GroupTimeEffect",
+    "ContinuousDiDResults",
+    "DoseResponseCurve",
     "SunAbrahamResults",
     "SABootstrapResults",
     "ImputationDiDResults",
@@ -203,6 +218,8 @@ __all__ = [
     "triple_difference",
     "TROPResults",
     "trop",
+    "StackedDiDResults",
+    "stacked_did",
     # Visualization
     "plot_event_study",
     "plot_group_effects",
@@ -236,6 +253,7 @@ __all__ = [
     "generate_ddd_data",
     "generate_panel_data",
     "generate_event_study_data",
+    "generate_continuous_did_data",
     "create_event_time",
     "aggregate_to_cohorts",
     "rank_control_units",

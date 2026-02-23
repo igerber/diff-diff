@@ -19,6 +19,7 @@ if TYPE_CHECKING:
     from diff_diff.imputation import ImputationDiDResults
     from diff_diff.sun_abraham import SunAbrahamResults
     from diff_diff.two_stage import TwoStageDiDResults
+    from diff_diff.stacked_did import StackedDiDResults
 
 # Type alias for results that can be plotted
 PlottableResults = Union[
@@ -27,6 +28,7 @@ PlottableResults = Union[
     "SunAbrahamResults",
     "ImputationDiDResults",
     "TwoStageDiDResults",
+    "StackedDiDResults",
     pd.DataFrame,
 ]
 
