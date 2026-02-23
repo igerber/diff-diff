@@ -465,7 +465,13 @@ class DifferenceInDifferences:
         if "~" not in formula:
             raise ValueError("Formula must contain '~' to separate outcome from predictors")
 
-        lhs, rhs = formula.split("~")
+        parts = formula.split("~")
+        if len(parts) != 2:
+            raise ValueError(
+                "Formula must contain exactly one '~' to separate outcome from predictors"
+            )
+
+        lhs, rhs = parts
         outcome = lhs.strip()
 
         # Parse RHS
@@ -473,21 +479,37 @@ class DifferenceInDifferences:
 
         # Check for interaction term
         if "*" in rhs:
-            # Handle "treatment * time" syntax
-            parts = rhs.split("*")
-            if len(parts) != 2:
-                raise ValueError("Currently only supports single interaction (treatment * time)")
+            # Split into additive terms first, then find the one with '*'
+            # This correctly handles "x1 + treated * post + x2"
+            terms = [t.strip() for t in rhs.split("+")]
+            interaction_term = None
+            covariates = []
 
-            treatment = parts[0].strip()
-            time = parts[1].strip()
+            for term in terms:
+                if "*" in term:
+                    if interaction_term is not None:
+                        raise ValueError(
+                            "Currently only supports single interaction (treatment * time)"
+                        )
+                    interaction_term = term
+                else:
+                    covariates.append(term)
 
-            # Check for additional covariates after interaction
-            if "+" in time:
-                time_parts = time.split("+")
-                time = time_parts[0].strip()
-                covariates = [p.strip() for p in time_parts[1:]]
-            else:
-                covariates = None
+            if interaction_term is None:
+                raise ValueError(
+                    "Formula must contain an interaction term (treatment * time)"
+                )
+
+            star_parts = interaction_term.split("*")
+            if len(star_parts) != 2:
+                raise ValueError(
+                    "Currently only supports single interaction (treatment * time)"
+                )
+
+            treatment = star_parts[0].strip()
+            time = star_parts[1].strip()
+
+            covariates = covariates if covariates else None
 
         elif ":" in rhs:
             # Handle explicit interaction syntax
