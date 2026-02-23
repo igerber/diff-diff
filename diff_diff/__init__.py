@@ -164,7 +164,7 @@ TSDiD = TwoStageDiD
 DDD = TripleDifference
 Bacon = BaconDecomposition
 
-__version__ = "2.4.1"
+__version__ = "2.6.0"
 __all__ = [
     # Estimators
     "DifferenceInDifferences",
