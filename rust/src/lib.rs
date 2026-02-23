@@ -3,7 +3,16 @@
 //! This module provides optimized implementations of computationally
 //! intensive operations used in difference-in-differences analysis.
 
+// Pull in BLAS linker flags for macOS Accelerate.
+// blas-src is a linker-only crate — extern crate is required to ensure
+// the Accelerate framework is actually linked.
+// For OpenBLAS (Linux), linking is handled by build.rs instead of blas-src
+// to avoid the openblas-src -> ureq -> native-tls dependency chain.
+#[cfg(feature = "accelerate")]
+extern crate blas_src;
+
 use pyo3::prelude::*;
+use std::collections::HashMap;
 
 mod bootstrap;
 mod linalg;
@@ -42,8 +51,24 @@ fn _rust_backend(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(trop::loocv_grid_search_joint, m)?)?;
     m.add_function(wrap_pyfunction!(trop::bootstrap_trop_variance_joint, m)?)?;
 
+    // Diagnostics
+    m.add_function(wrap_pyfunction!(rust_backend_info, m)?)?;
+
     // Version info
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
 
     Ok(())
+}
+
+/// Return compile-time BLAS feature information for diagnostics.
+#[pyfunction]
+fn rust_backend_info() -> PyResult<HashMap<String, bool>> {
+    let mut info = HashMap::new();
+    info.insert(
+        "blas".to_string(),
+        cfg!(feature = "accelerate") || cfg!(feature = "openblas"),
+    );
+    info.insert("accelerate".to_string(), cfg!(feature = "accelerate"));
+    info.insert("openblas".to_string(), cfg!(feature = "openblas"));
+    Ok(info)
 }

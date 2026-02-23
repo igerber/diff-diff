@@ -70,7 +70,7 @@ Signif. codes: '***' 0.001, '**' 0.01, '*' 0.05, '.' 0.1
 - **Wild cluster bootstrap**: Valid inference with few clusters (<50) using Rademacher, Webb, or Mammen weights
 - **Panel data support**: Two-way fixed effects estimator for panel designs
 - **Multi-period analysis**: Event-study style DiD with period-specific treatment effects
-- **Staggered adoption**: Callaway-Sant'Anna (2021), Sun-Abraham (2021), Borusyak-Jaravel-Spiess (2024) imputation, and Two-Stage DiD (Gardner 2022) estimators for heterogeneous treatment timing
+- **Staggered adoption**: Callaway-Sant'Anna (2021), Sun-Abraham (2021), Borusyak-Jaravel-Spiess (2024) imputation, Two-Stage DiD (Gardner 2022), and Stacked DiD (Wing, Freedman & Hollingsworth 2024) estimators for heterogeneous treatment timing
 - **Triple Difference (DDD)**: Ortiz-Villavicencio & Sant'Anna (2025) estimators with proper covariate handling
 - **Synthetic DiD**: Combined DiD with synthetic control for improved robustness
 - **Triply Robust Panel (TROP)**: Factor-adjusted DiD with synthetic weights (Athey et al. 2025)
@@ -100,6 +100,9 @@ We provide Jupyter notebook tutorials in `docs/tutorials/`:
 | `08_triple_diff.ipynb` | Triple Difference (DDD) estimation with proper covariate handling |
 | `09_real_world_examples.ipynb` | Real-world data examples (Card-Krueger, Castle Doctrine, Divorce Laws) |
 | `10_trop.ipynb` | Triply Robust Panel (TROP) estimation with factor model adjustment |
+| `11_imputation_did.ipynb` | Imputation DiD (Borusyak et al. 2024), pre-trend test, efficiency comparison |
+| `12_two_stage_did.ipynb` | Two-Stage DiD (Gardner 2022), GMM sandwich variance, per-observation effects |
+| `13_stacked_did.ipynb` | Stacked DiD (Wing et al. 2024), Q-weights, sub-experiment inspection, trimming, clean control definitions |
 
 ## Data Preparation
 
@@ -973,6 +976,78 @@ TwoStageDiD(
 | Reference impl. | R `did2s` package | R `didimputation` package |
 
 Both estimators are the efficient estimator under homogeneous treatment effects, producing shorter confidence intervals than Callaway-Sant'Anna or Sun-Abraham.
+
+### Stacked DiD (Wing, Freedman & Hollingsworth 2024)
+
+Stacked DiD addresses TWFE bias in staggered adoption settings by constructing a "clean" comparison dataset for each treatment cohort and stacking them together. Each cohort's sub-experiment compares units treated at that cohort's timing against units that are not yet treated (or never treated) within a symmetric event-study window. This avoids the "bad comparisons" problem in TWFE while retaining a regression-based framework that practitioners familiar with event studies will find intuitive.
+
+```python
+from diff_diff import StackedDiD, generate_staggered_data
+
+# Generate sample data
+data = generate_staggered_data(n_units=200, n_periods=12,
+                                cohort_periods=[4, 6, 8], seed=42)
+
+# Fit stacked DiD with event study
+est = StackedDiD(kappa_pre=2, kappa_post=2)
+results = est.fit(data, outcome='outcome', unit='unit',
+                  time='period', first_treat='first_treat',
+                  aggregate='event_study')
+results.print_summary()
+
+# Access stacked data for custom analysis
+stacked = results.stacked_data
+
+# Convenience function
+from diff_diff import stacked_did
+results = stacked_did(data, 'outcome', 'unit', 'period', 'first_treat',
+                      kappa_pre=2, kappa_post=2, aggregate='event_study')
+```
+
+**Parameters:**
+
+```python
+StackedDiD(
+    kappa_pre=1,                          # Pre-treatment event-study periods
+    kappa_post=1,                         # Post-treatment event-study periods
+    weighting='aggregate',                # 'aggregate', 'population', or 'sample_share'
+    clean_control='not_yet_treated',      # 'not_yet_treated', 'strict', or 'never_treated'
+    cluster='unit',                       # 'unit' or 'unit_subexp'
+    alpha=0.05,                           # Significance level
+    anticipation=0,                       # Anticipation periods
+    rank_deficient_action='warn',         # 'warn', 'error', or 'silent'
+)
+```
+
+> **Note:** Group aggregation (`aggregate='group'`) is not supported because the pooled
+> stacked regression cannot produce cohort-specific effects. Use `CallawaySantAnna` or
+> `ImputationDiD` for cohort-level estimates.
+
+**When to use Stacked DiD vs Callaway-Sant'Anna:**
+
+| Aspect | Stacked DiD | Callaway-Sant'Anna |
+|--------|-------------|-------------------|
+| Approach | Stack cohort sub-experiments, run pooled TWFE | 2x2 DiD aggregation |
+| Symmetric windows | Enforced via kappa_pre / kappa_post | Not required |
+| Control group | Not-yet-treated (default) or never-treated | Never-treated or not-yet-treated |
+| Covariates | Passed to pooled regression | Doubly robust / IPW |
+| Intuition | Familiar event-study regression | Nonparametric aggregation |
+
+**Convenience function:**
+
+```python
+# One-liner estimation
+results = stacked_did(
+    data,
+    outcome='outcome',
+    unit='unit',
+    time='period',
+    first_treat='first_treat',
+    kappa_pre=3,
+    kappa_post=3,
+    aggregate='event_study'
+)
+```
 
 ### Triple Difference (DDD)
 
@@ -2203,6 +2278,60 @@ TwoStageDiD(
 | `print_summary(alpha)` | Print summary to stdout |
 | `to_dataframe(level)` | Convert to DataFrame ('observation', 'event_study', 'group') |
 
+### StackedDiD
+
+```python
+StackedDiD(
+    kappa_pre=1,                          # Pre-treatment event-study periods
+    kappa_post=1,                         # Post-treatment event-study periods
+    weighting='aggregate',                # 'aggregate', 'population', or 'sample_share'
+    clean_control='not_yet_treated',      # 'not_yet_treated', 'strict', or 'never_treated'
+    cluster='unit',                       # 'unit' or 'unit_subexp'
+    alpha=0.05,                           # Significance level
+    anticipation=0,                       # Anticipation periods
+    rank_deficient_action='warn',         # 'warn', 'error', or 'silent'
+)
+```
+
+**fit() Parameters:**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `data` | DataFrame | Panel data |
+| `outcome` | str | Outcome variable column name |
+| `unit` | str | Unit identifier column |
+| `time` | str | Time period column |
+| `first_treat` | str | First treatment period column (0 for never-treated) |
+| `population` | str, optional | Population column (required if weighting='population') |
+| `aggregate` | str | Aggregation: None, `"simple"`, or `"event_study"` |
+
+### StackedDiDResults
+
+**Attributes:**
+
+| Attribute | Description |
+|-----------|-------------|
+| `overall_att` | Overall average treatment effect on the treated |
+| `overall_se` | Standard error |
+| `overall_t_stat` | T-statistic |
+| `overall_p_value` | P-value for H0: ATT = 0 |
+| `overall_conf_int` | Confidence interval |
+| `event_study_effects` | Dict of relative time -> effect dict (if `aggregate='event_study'`) |
+| `stacked_data` | The stacked dataset used for estimation |
+| `n_treated_obs` | Number of treated observations |
+| `n_untreated_obs` | Number of untreated (clean control) observations |
+| `n_cohorts` | Number of treatment cohorts |
+| `kappa_pre` | Pre-treatment window used |
+| `kappa_post` | Post-treatment window used |
+
+**Methods:**
+
+| Method | Description |
+|--------|-------------|
+| `summary(alpha)` | Get formatted summary string |
+| `print_summary(alpha)` | Print summary to stdout |
+| `to_dataframe(level)` | Convert to DataFrame ('event_study') |
+
 ### TripleDifference
 
 ```python
@@ -2688,6 +2817,8 @@ The `HonestDiD` module implements sensitivity analysis methods for relaxing the 
 - **de Chaisemartin, C., & D'Haultfœuille, X. (2020).** "Two-Way Fixed Effects Estimators with Heterogeneous Treatment Effects." *American Economic Review*, 110(9), 2964-2996. [https://doi.org/10.1257/aer.20181169](https://doi.org/10.1257/aer.20181169)
 
 - **Goodman-Bacon, A. (2021).** "Difference-in-Differences with Variation in Treatment Timing." *Journal of Econometrics*, 225(2), 254-277. [https://doi.org/10.1016/j.jeconom.2021.03.014](https://doi.org/10.1016/j.jeconom.2021.03.014)
+
+- **Wing, C., Freedman, S. M., & Hollingsworth, A. (2024).** "Stacked Difference-in-Differences." *NBER Working Paper* 32054. [https://www.nber.org/papers/w32054](https://www.nber.org/papers/w32054)
 
 ### Power Analysis
 

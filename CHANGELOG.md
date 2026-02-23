@@ -5,6 +5,85 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.6.0] - 2026-02-22
+
+### Added
+- **Continuous DiD estimator** (`ContinuousDiD`) implementing Callaway, Goodman-Bacon & Sant'Anna (2024)
+  for continuous treatment dose-response analysis
+  - `ContinuousDiDResults` with dose-response curves and event-study effects
+  - `DoseResponseCurve` with bootstrap p-values
+  - Analytical and bootstrap event-study SEs
+  - P(D=0) warning for low-probability control groups
+- Stacked DiD tutorial (Tutorial 13) with Q-weight computation walkthrough
+
+### Changed
+- Clarify aggregate Q-weight computation for unbalanced panels in Stacked DiD tutorial
+- Replace SunAbraham manual bootstrap stats with NaN-gated utility
+
+### Fixed
+- Fix not-yet-treated control mask to respect anticipation parameter in ContinuousDiD
+- Guard non-finite `original_effect` in `compute_effect_bootstrap_stats`
+- Fix bootstrap NaN propagation for rank-deficient cells
+- Fix NaN propagation in rank-deficient spline predictions
+- Guard bootstrap NaN propagation: SE/CI/p-value all NaN when SE invalid
+- Fix bootstrap ACRT^{glob} centering bug
+- Fix bootstrap percentile inference and analytical event-study SE scaling
+- Fix control group bug and dose validation in ContinuousDiD
+
+## [2.5.0] - 2026-02-19
+
+### Added
+- Stacked DiD estimator (`StackedDiD`) implementing Wing, Freedman & Hollingsworth (2024)
+  with corrective Q-weights for compositional balance across event times
+- Sub-experiment construction per adoption cohort with clean (never-yet-treated) controls
+- IC1/IC2 trimming for compositional balance across event times
+- Q-weights for aggregate, population, or sample share estimands (Table 1)
+- WLS event study regression via sqrt(w) transformation
+- `stacked_did()` convenience function
+- R benchmark scripts for Stacked DiD validation (`benchmarks/R/benchmark_stacked_did.R`)
+- Comprehensive test suite for Stacked DiD (`tests/test_stacked_did.py`)
+
+### Fixed
+- NaN inference handling in pure Python mode for edge cases
+
+## [2.4.3] - 2026-02-19
+
+### Changed
+- Rewrite TripleDifference estimator to match R's `triplediff::ddd()` — all 3 estimation
+  methods (DR, IPW, RA) now use three-DiD decomposition with influence function SE, achieving
+  <0.001% relative difference from R across all 24 comparisons (4 DGPs × 3 methods × 2 covariate settings)
+- Validate cluster column in TripleDifference for proper cluster-robust SEs
+- Handle non-finite influence function propagation in TripleDifference edge cases
+- Propensity score fallback uses Hessian-based SE when score optimization fails
+- Improved R-squared consistency across estimation methods
+
+### Fixed
+- Fix low cell count warning and overlap detection in TripleDifference IPW
+- Fix cluster SE computation to use functional (groupby) approach instead of loop
+- Fix rank deficiency handling in TripleDifference regression adjustment
+
+### Added
+- 91 methodology verification tests for TripleDifference (`tests/test_methodology_triple_diff.py`)
+- R benchmark scripts for triple difference validation (`benchmarks/R/benchmark_triplediff.R`)
+- Update METHODOLOGY_REVIEW.md to reflect completed TripleDifference review
+
+## [2.4.2] - 2026-02-18
+
+### Added
+- **Conditional BLAS linking for Rust backend** — Apple Accelerate on macOS, OpenBLAS on Linux.
+  Pre-built wheels now use platform-optimized BLAS for matrix-vector and matrix-matrix
+  operations across all Rust-accelerated code paths (weights, OLS, TROP). Windows continues
+  using pure Rust (no external dependencies). Improves Rust backend performance at larger scales.
+- `rust_backend_info()` diagnostic function in `diff_diff._backend` — reports compile-time
+  BLAS feature status (blas, accelerate, openblas)
+
+### Fixed
+- **Rust SDID backend performance regression at scale** — Frank-Wolfe solver was 3-10x slower than pure Python at 1k+ scale
+  - Gram-accelerated FW loop for time weights: precomputes A^T@A, reducing per-iteration cost from O(N×T0) to O(T0) (~100x speedup per iteration at 5k scale)
+  - Allocation-free FW loop for unit weights: 1 GEMV per iteration (was 3), zero heap allocations (was ~8)
+  - Dispatch based on problem dimensions: Gram path when T0 < N, standard path when T0 >= N
+  - Rust backend now faster than pure Python at all scales
+
 ## [2.4.1] - 2026-02-17
 
 ### Added
@@ -13,7 +92,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - Module splits for large files: ImputationDiD, TwoStageDiD, and TROP each split into separate results and bootstrap submodules
 - Migrated remaining inline inference computations to `safe_inference()` utility
-- Replaced `np.dot()` calls with `@` operator across codebase
+- Replaced `@` operator with `np.dot()` at observation-dimension sites to avoid Apple M4 BLAS warnings
 - Updated TODO.md and ROADMAP.md for accuracy post-v2.4.0
 
 ### Fixed
@@ -754,6 +833,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `to_dict()` and `to_dataframe()` export methods
   - `is_significant` and `significance_stars` properties
 
+[2.6.0]: https://github.com/igerber/diff-diff/compare/v2.5.0...v2.6.0
+[2.5.0]: https://github.com/igerber/diff-diff/compare/v2.4.3...v2.5.0
+[2.4.3]: https://github.com/igerber/diff-diff/compare/v2.4.2...v2.4.3
+[2.4.2]: https://github.com/igerber/diff-diff/compare/v2.4.1...v2.4.2
 [2.4.1]: https://github.com/igerber/diff-diff/compare/v2.4.0...v2.4.1
 [2.4.0]: https://github.com/igerber/diff-diff/compare/v2.3.2...v2.4.0
 [2.3.2]: https://github.com/igerber/diff-diff/compare/v2.3.1...v2.3.2

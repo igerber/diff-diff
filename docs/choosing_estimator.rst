@@ -8,6 +8,11 @@ Decision Flowchart
 
 Start here and follow the questions:
 
+0. **Is treatment continuous?** (Units receive different doses or intensities)
+
+   - **No** → Go to question 1
+   - **Yes** → Use :class:`~diff_diff.ContinuousDiD`
+
 1. **Is treatment staggered?** (Different units treated at different times)
 
    - **No** → Go to question 2
@@ -58,6 +63,10 @@ Quick Reference
      - Few treated units, many controls
      - Synthetic parallel trends
      - ATT with unit/time weights
+   * - ``ContinuousDiD``
+     - Continuous dose / treatment intensity
+     - Strong Parallel Trends (SPT) for dose-response; PT for binarized ATT
+     - ATT\ :sup:`loc` (PT); ATT(d), ACRT(d) (SPT)
 
 Detailed Guidance
 -----------------
@@ -173,6 +182,38 @@ Use :class:`~diff_diff.SyntheticDiD` when:
    # View the unit weights
    print(results.unit_weights)
 
+Continuous Treatment
+~~~~~~~~~~~~~~~~~~~~
+
+Use :class:`~diff_diff.ContinuousDiD` when:
+
+- Treatment varies in **intensity or dose** (e.g., subsidy amount, hours of training)
+- You want to estimate how effects change with treatment dose
+- You need the full dose-response curve, not just a single average effect
+- Staggered adoption where units receive different treatment levels
+
+.. note::
+
+   Dose-response curves ATT(d) and ACRT(d) require **Strong Parallel Trends (SPT)**.
+   Under standard PT only the binarized ATT\ :sup:`loc` is identified.
+   Data must include an untreated group (D = 0), a balanced panel, and
+   time-invariant dose (each unit's dose is fixed across periods).
+
+.. code-block:: python
+
+   from diff_diff import ContinuousDiD, generate_continuous_did_data
+
+   data = generate_continuous_did_data(n_units=200, seed=42)
+
+   est = ContinuousDiD(n_bootstrap=199, seed=42)
+   results = est.fit(data, outcome='outcome', unit='unit',
+                     time='period', first_treat='first_treat',
+                     dose='dose', aggregate='dose')
+
+   # Overall effect and dose-response curve
+   print(f"Overall ATT: {results.overall_att:.3f}")
+   att_curve = results.dose_response_att.to_dataframe()
+
 Common Pitfalls
 ---------------
 
@@ -234,6 +275,9 @@ differences helps interpret results and choose appropriate inference.
    * - ``SyntheticDiD``
      - Bootstrap or placebo-based
      - Default uses bootstrap resampling. Set ``n_bootstrap=0`` for placebo-based inference using pre-treatment residuals.
+   * - ``ContinuousDiD``
+     - Analytical (influence function)
+     - Uses influence-function-based SEs by default. Use ``n_bootstrap=199`` (or higher) for multiplier bootstrap inference with proper CIs.
 
 **Recommendations by sample size:**
 

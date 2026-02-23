@@ -15,7 +15,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          dnf install -y openssl-devel perl-IPC-Cmd
+          dnf install -y openssl-devel perl-IPC-Cmd openblas-devel
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --no-modify-path
           /opt/python/cp312-cp312/bin/pip install maturin
 
@@ -25,7 +25,7 @@ jobs:
           for pyver in 39 310 311 312 313; do
             pybin="/opt/python/cp${pyver}-cp${pyver}/bin/python"
             if [ -f "$pybin" ]; then
-              /opt/python/cp312-cp312/bin/maturin build --release --out dist -i "$pybin" --features extension-module
+              /opt/python/cp312-cp312/bin/maturin build --release --out dist -i "$pybin" --features extension-module,openblas
             fi
           done
 
@@ -58,7 +58,7 @@ jobs:
         run: pip install maturin
 
       - name: Build wheel
-        run: maturin build --release --out dist --features extension-module
+        run: maturin build --release --out dist --features extension-module,accelerate
 
       - name: Upload wheels
         uses: actions/upload-artifact@v4

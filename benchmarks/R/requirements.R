@@ -10,6 +10,7 @@ required_packages <- c(
   "didimputation", # Borusyak, Jaravel & Spiess (2024) imputation DiD
   "HonestDiD",     # Rambachan & Roth (2023) sensitivity analysis
   "fixest",        # Fast TWFE and basic DiD
+  "triplediff",    # Ortiz-Villavicencio & Sant'Anna (2025) triple difference
 
   # Utilities
   "jsonlite",      # JSON output for Python interop

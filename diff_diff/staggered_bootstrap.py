@@ -1,171 +1,32 @@
 """
 Bootstrap inference for Callaway-Sant'Anna estimator.
 
-This module provides bootstrap weight generation functions, the bootstrap
-results container, and the mixin class with bootstrap inference methods.
+This module provides the bootstrap results container and the mixin class
+with bootstrap inference methods. Weight generation and statistical helpers
+are in :mod:`diff_diff.bootstrap_utils`.
 """
 
 import warnings
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
-# Import Rust backend if available (from _backend to avoid circular imports)
-from diff_diff._backend import HAS_RUST_BACKEND, _rust_bootstrap_weights
+from diff_diff.bootstrap_utils import (
+    compute_bootstrap_pvalue as _compute_bootstrap_pvalue_func,
+)
+from diff_diff.bootstrap_utils import (
+    compute_effect_bootstrap_stats as _compute_effect_bootstrap_stats_func,
+)
+from diff_diff.bootstrap_utils import (
+    compute_percentile_ci as _compute_percentile_ci_func,
+)
+from diff_diff.bootstrap_utils import (
+    generate_bootstrap_weights_batch as _generate_bootstrap_weights_batch,
+)
 
 if TYPE_CHECKING:
     pass
-
-
-# =============================================================================
-# Bootstrap Weight Generators
-# =============================================================================
-
-
-def _generate_bootstrap_weights(
-    n_units: int,
-    weight_type: str,
-    rng: np.random.Generator,
-) -> np.ndarray:
-    """
-    Generate bootstrap weights for multiplier bootstrap.
-
-    Parameters
-    ----------
-    n_units : int
-        Number of units (clusters) to generate weights for.
-    weight_type : str
-        Type of weights: "rademacher", "mammen", or "webb".
-    rng : np.random.Generator
-        Random number generator.
-
-    Returns
-    -------
-    np.ndarray
-        Array of bootstrap weights with shape (n_units,).
-    """
-    if weight_type == "rademacher":
-        # Rademacher: +1 or -1 with equal probability
-        return rng.choice([-1.0, 1.0], size=n_units)
-
-    elif weight_type == "mammen":
-        # Mammen's two-point distribution
-        # E[v] = 0, E[v^2] = 1, E[v^3] = 1
-        sqrt5 = np.sqrt(5)
-        val1 = -(sqrt5 - 1) / 2  # ≈ -0.618
-        val2 = (sqrt5 + 1) / 2   # ≈ 1.618 (golden ratio)
-        p1 = (sqrt5 + 1) / (2 * sqrt5)  # ≈ 0.724
-        return rng.choice([val1, val2], size=n_units, p=[p1, 1 - p1])
-
-    elif weight_type == "webb":
-        # Webb's 6-point distribution (recommended for few clusters)
-        # Values: ±√(3/2), ±1, ±√(1/2) with equal probabilities (1/6 each)
-        # This matches R's did package: E[w]=0, Var(w)=1.0
-        values = np.array([
-            -np.sqrt(3 / 2), -np.sqrt(2 / 2), -np.sqrt(1 / 2),
-            np.sqrt(1 / 2), np.sqrt(2 / 2), np.sqrt(3 / 2)
-        ])
-        return rng.choice(values, size=n_units)  # Equal probs (1/6 each)
-
-    else:
-        raise ValueError(
-            f"weight_type must be 'rademacher', 'mammen', or 'webb', "
-            f"got '{weight_type}'"
-        )
-
-
-def _generate_bootstrap_weights_batch(
-    n_bootstrap: int,
-    n_units: int,
-    weight_type: str,
-    rng: np.random.Generator,
-) -> np.ndarray:
-    """
-    Generate all bootstrap weights at once (vectorized).
-
-    Parameters
-    ----------
-    n_bootstrap : int
-        Number of bootstrap iterations.
-    n_units : int
-        Number of units (clusters) to generate weights for.
-    weight_type : str
-        Type of weights: "rademacher", "mammen", or "webb".
-    rng : np.random.Generator
-        Random number generator.
-
-    Returns
-    -------
-    np.ndarray
-        Array of bootstrap weights with shape (n_bootstrap, n_units).
-    """
-    # Use Rust backend if available (parallel + fast RNG)
-    if HAS_RUST_BACKEND and _rust_bootstrap_weights is not None:
-        # Get seed from the NumPy RNG for reproducibility
-        seed = rng.integers(0, 2**63 - 1)
-        return _rust_bootstrap_weights(n_bootstrap, n_units, weight_type, seed)
-
-    # Fallback to NumPy implementation
-    return _generate_bootstrap_weights_batch_numpy(n_bootstrap, n_units, weight_type, rng)
-
-
-def _generate_bootstrap_weights_batch_numpy(
-    n_bootstrap: int,
-    n_units: int,
-    weight_type: str,
-    rng: np.random.Generator,
-) -> np.ndarray:
-    """
-    NumPy fallback implementation of _generate_bootstrap_weights_batch.
-
-    Generates multiplier bootstrap weights for wild cluster bootstrap.
-    All weight distributions satisfy E[w] = 0, E[w^2] = 1.
-
-    Parameters
-    ----------
-    n_bootstrap : int
-        Number of bootstrap iterations.
-    n_units : int
-        Number of units (clusters) to generate weights for.
-    weight_type : str
-        Type of weights: "rademacher" (+-1), "mammen" (2-point),
-        or "webb" (6-point).
-    rng : np.random.Generator
-        Random number generator for reproducibility.
-
-    Returns
-    -------
-    np.ndarray
-        Array of bootstrap weights with shape (n_bootstrap, n_units).
-    """
-    if weight_type == "rademacher":
-        # Rademacher: +1 or -1 with equal probability
-        return rng.choice([-1.0, 1.0], size=(n_bootstrap, n_units))
-
-    elif weight_type == "mammen":
-        # Mammen's two-point distribution
-        sqrt5 = np.sqrt(5)
-        val1 = -(sqrt5 - 1) / 2
-        val2 = (sqrt5 + 1) / 2
-        p1 = (sqrt5 + 1) / (2 * sqrt5)
-        return rng.choice([val1, val2], size=(n_bootstrap, n_units), p=[p1, 1 - p1])
-
-    elif weight_type == "webb":
-        # Webb's 6-point distribution
-        # Values: ±√(3/2), ±1, ±√(1/2) with equal probabilities (1/6 each)
-        # This matches R's did package: E[w]=0, Var(w)=1.0
-        values = np.array([
-            -np.sqrt(3 / 2), -np.sqrt(2 / 2), -np.sqrt(1 / 2),
-            np.sqrt(1 / 2), np.sqrt(2 / 2), np.sqrt(3 / 2)
-        ])
-        return rng.choice(values, size=(n_bootstrap, n_units))  # Equal probs (1/6 each)
-
-    else:
-        raise ValueError(
-            f"weight_type must be 'rademacher', 'mammen', or 'webb', "
-            f"got '{weight_type}'"
-        )
 
 
 # =============================================================================
@@ -633,9 +494,7 @@ class CallawaySantAnnaBootstrapMixin:
         alpha: float,
     ) -> Tuple[float, float]:
         """Compute percentile confidence interval from bootstrap distribution."""
-        lower = float(np.percentile(boot_dist, alpha / 2 * 100))
-        upper = float(np.percentile(boot_dist, (1 - alpha / 2) * 100))
-        return (lower, upper)
+        return _compute_percentile_ci_func(boot_dist, alpha)
 
     def _compute_bootstrap_pvalue(
         self,
@@ -646,41 +505,9 @@ class CallawaySantAnnaBootstrapMixin:
         """
         Compute two-sided bootstrap p-value.
 
-        Uses the percentile method: p-value is the proportion of bootstrap
-        estimates on the opposite side of zero from the original estimate,
-        doubled for two-sided test.
-
-        Parameters
-        ----------
-        original_effect : float
-            Original point estimate.
-        boot_dist : np.ndarray
-            Bootstrap distribution of the effect.
-        n_valid : int, optional
-            Number of valid bootstrap samples. If None, uses self.n_bootstrap.
-            Use this when boot_dist has already been filtered for non-finite values
-            to ensure the p-value floor is based on the actual valid sample count.
-
-        Returns
-        -------
-        float
-            Two-sided bootstrap p-value.
+        Delegates to :func:`bootstrap_utils.compute_bootstrap_pvalue`.
         """
-        if original_effect >= 0:
-            # Proportion of bootstrap estimates <= 0
-            p_one_sided = np.mean(boot_dist <= 0)
-        else:
-            # Proportion of bootstrap estimates >= 0
-            p_one_sided = np.mean(boot_dist >= 0)
-
-        # Two-sided p-value
-        p_value = min(2 * p_one_sided, 1.0)
-
-        # Ensure minimum p-value using n_valid if provided, otherwise n_bootstrap
-        n_for_floor = n_valid if n_valid is not None else self.n_bootstrap
-        p_value = max(p_value, 1 / (n_for_floor + 1))
-
-        return float(p_value)
+        return _compute_bootstrap_pvalue_func(original_effect, boot_dist, n_valid=n_valid)
 
     def _compute_effect_bootstrap_stats(
         self,
@@ -691,63 +518,8 @@ class CallawaySantAnnaBootstrapMixin:
         """
         Compute bootstrap statistics for a single effect.
 
-        Non-finite bootstrap samples are dropped and a warning is issued if any
-        are present. If too few valid samples remain (<50%), returns NaN for all
-        statistics to signal invalid inference.
-
-        Parameters
-        ----------
-        original_effect : float
-            Original point estimate.
-        boot_dist : np.ndarray
-            Bootstrap distribution of the effect.
-        context : str, optional
-            Description for warning messages, by default "bootstrap distribution".
-
-        Returns
-        -------
-        se : float
-            Bootstrap standard error.
-        ci : Tuple[float, float]
-            Percentile confidence interval.
-        p_value : float
-            Bootstrap p-value.
+        Delegates to :func:`bootstrap_utils.compute_effect_bootstrap_stats`.
         """
-        # Filter out non-finite values
-        finite_mask = np.isfinite(boot_dist)
-        n_valid = np.sum(finite_mask)
-        n_total = len(boot_dist)
-
-        if n_valid < n_total:
-            import warnings
-            n_nonfinite = n_total - n_valid
-            warnings.warn(
-                f"Dropping {n_nonfinite}/{n_total} non-finite bootstrap samples in {context}. "
-                "This may occur with very small samples or extreme weights. "
-                "Bootstrap estimates based on remaining valid samples.",
-                RuntimeWarning,
-                stacklevel=3
-            )
-
-        # Check if we have enough valid samples
-        if n_valid < n_total * 0.5:
-            import warnings
-            warnings.warn(
-                f"Too few valid bootstrap samples ({n_valid}/{n_total}) in {context}. "
-                "Returning NaN for SE/CI/p-value to signal invalid inference.",
-                RuntimeWarning,
-                stacklevel=3
-            )
-            return np.nan, (np.nan, np.nan), np.nan
-
-        # Use only valid samples
-        valid_dist = boot_dist[finite_mask]
-        n_valid_bootstrap = len(valid_dist)
-
-        se = float(np.std(valid_dist, ddof=1))
-        ci = self._compute_percentile_ci(valid_dist, self.alpha)
-
-        # Compute p-value using shared method with correct floor based on valid sample count
-        p_value = self._compute_bootstrap_pvalue(original_effect, valid_dist, n_valid=n_valid_bootstrap)
-
-        return se, ci, p_value
+        return _compute_effect_bootstrap_stats_func(
+            original_effect, boot_dist, alpha=self.alpha, context=context
+        )

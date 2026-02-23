@@ -19,8 +19,10 @@ Core estimator classes for DiD analysis:
    diff_diff.CallawaySantAnna
    diff_diff.SunAbraham
    diff_diff.ImputationDiD
+   diff_diff.StackedDiD
    diff_diff.TripleDifference
    diff_diff.TROP
+   diff_diff.ContinuousDiD
 
 Results Classes
 ---------------
@@ -43,7 +45,10 @@ Result containers returned by estimators:
    diff_diff.ImputationDiDResults
    diff_diff.ImputationBootstrapResults
    diff_diff.TripleDifferenceResults
+   diff_diff.StackedDiDResults
    diff_diff.trop.TROPResults
+   diff_diff.ContinuousDiDResults
+   diff_diff.DoseResponseCurve
 
 Visualization
 -------------
@@ -164,6 +169,7 @@ Utilities for preparing DiD data:
    :nosignatures:
 
    diff_diff.generate_did_data
+   diff_diff.generate_continuous_did_data
    diff_diff.make_treatment_indicator
    diff_diff.make_post_indicator
    diff_diff.wide_to_long
@@ -185,8 +191,10 @@ Detailed documentation by module:
    estimators
    staggered
    imputation
+   stacked_did
    triple_diff
    trop
+   continuous_did
    results
    visualization
    diagnostics

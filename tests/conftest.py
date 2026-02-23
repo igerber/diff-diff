@@ -9,6 +9,10 @@ import math
 import os
 import subprocess
 
+# Force non-interactive matplotlib backend before any test imports it.
+# Prevents plt.show() from blocking the test suite on a GUI window.
+os.environ.setdefault("MPLBACKEND", "Agg")
+
 import pytest
 
 
