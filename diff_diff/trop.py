@@ -889,8 +889,8 @@ class TROP:
             gradient_step = L + delta_norm * (R - L)
 
             # Soft-threshold singular values
-            # Use eta * lambda_nn for proper proximal step size (matches Rust)
-            eta = 1.0 / delta_max if delta_max > 0 else 1.0
+            # Lipschitz constant of ∇f is L_f = 2·max(δ), step size η = 1/L_f
+            eta = 1.0 / (2.0 * delta_max) if delta_max > 0 else 0.5
             L = self._soft_threshold_svd(gradient_step, eta * lambda_nn)
 
             # Check convergence
@@ -2047,20 +2047,29 @@ class TROP:
 
         # Initialize L
         L = L_init.copy()
+        L_prev = L.copy()
+        t_fista = 1.0
 
-        # Proximal gradient iteration with weighted soft-impute
+        # Proximal gradient iteration with FISTA/Nesterov acceleration
         # This solves: min_L ||W^{1/2} ⊙ (R - L)||_F^2 + λ||L||_*
-        # Using: L_{k+1} = prox_{λ/η}(L_k + W ⊙ (R - L_k))
-        # where η is the step size (we use η = 1 with normalized weights)
+        # Lipschitz constant L_f = 2·max(W_norm) = 2, so η = 1/2
+        # Threshold = η·λ_nn = λ_nn/2
         for _ in range(max_inner_iter):
             L_old = L.copy()
 
-            # Gradient step: L_k + W ⊙ (R - L_k)
-            # For W=0 observations, this keeps L_k unchanged
-            gradient_step = L + W_norm * (R_masked - L)
+            # FISTA momentum
+            t_fista_new = (1.0 + np.sqrt(1.0 + 4.0 * t_fista**2)) / 2.0
+            momentum = (t_fista - 1.0) / t_fista_new
+            L_momentum = L + momentum * (L - L_prev)
+
+            # Gradient step from momentum point: L_m + W ⊙ (R - L_m)
+            # For W=0 observations, this keeps L_m unchanged
+            gradient_step = L_momentum + W_norm * (R_masked - L_momentum)
 
             # Proximal step: soft-threshold singular values
-            L = self._soft_threshold_svd(gradient_step, lambda_nn)
+            L_prev = L.copy()
+            L = self._soft_threshold_svd(gradient_step, lambda_nn / 2.0)
+            t_fista = t_fista_new
 
             # Check convergence
             if np.max(np.abs(L - L_old)) < self.tol:

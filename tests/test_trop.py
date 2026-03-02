@@ -2592,6 +2592,66 @@ class TestPR110FeedbackRound8:
         )
 
 
+class TestTROPNuclearNormSolver:
+    """Tests for proximal gradient step size correctness and objective monotonicity."""
+
+    def test_proximal_step_size_correctness(self):
+        """Verify L converges to prox_{λ/2}(R) for uniform weights."""
+        trop_est = TROP(method="joint", n_bootstrap=2)
+
+        # Small problem with known solution
+        rng = np.random.default_rng(42)
+        R = rng.normal(0, 1, (4, 3))
+        delta = np.ones((4, 3))
+        lambda_nn = 0.5
+
+        # Run solver (many iterations to ensure convergence)
+        L = np.zeros_like(R)
+        for _ in range(500):
+            delta_max = np.max(delta)
+            delta_norm = delta / delta_max
+            gradient_step = L + delta_norm * (R - L)
+            eta = 1.0 / (2.0 * delta_max)
+            L = trop_est._soft_threshold_svd(gradient_step, eta * lambda_nn)
+
+        # Analytical solution for uniform weights: prox_{λ/2}(R)
+        L_exact = trop_est._soft_threshold_svd(R, lambda_nn / 2.0)
+
+        np.testing.assert_array_almost_equal(L, L_exact, decimal=4)
+
+    def test_lowrank_objective_decreases(self):
+        """Verify objective f(L) + λ||L||_* is non-increasing across iterations."""
+        # Generate small problem
+        rng = np.random.default_rng(42)
+        R = rng.normal(0, 1, (6, 4))
+        delta = rng.uniform(0.5, 2.0, (6, 4))
+        lambda_nn = 0.3
+
+        trop_est = TROP(method="joint", n_bootstrap=2)
+        L = np.zeros_like(R)
+        objectives = []
+
+        for _ in range(50):
+            # Compute objective
+            f_val = np.sum(delta * (R - L) ** 2)
+            _, s, _ = np.linalg.svd(L, full_matrices=False)
+            obj = f_val + lambda_nn * np.sum(s)
+            objectives.append(obj)
+
+            # Proximal gradient step
+            delta_max = np.max(delta)
+            delta_norm = delta / delta_max
+            gradient_step = L + delta_norm * (R - L)
+            eta = 1.0 / (2.0 * delta_max)
+            L = trop_est._soft_threshold_svd(gradient_step, eta * lambda_nn)
+
+        # Objective should be non-increasing (within numerical tolerance)
+        for k in range(1, len(objectives)):
+            assert objectives[k] <= objectives[k - 1] + 1e-10, (
+                f"Objective increased at step {k}: {objectives[k]} > {objectives[k-1]}"
+            )
+
+
 class TestTROPJointMethod:
     """Tests for TROP method='joint'.
 

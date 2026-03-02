@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+- **BREAKING: TROP nuclear norm solver step size fix** — The proximal gradient
+  threshold for the L matrix (both `method="joint"` and `method="twostep"` with
+  finite `lambda_nn`) was over-shrinking singular values by a factor of 2. The
+  soft-thresholding threshold was λ_nn/max(δ) when the correct value is
+  λ_nn/(2·max(δ)), derived from the Lipschitz constant L_f=2·max(δ) of the
+  quadratic gradient. This fix produces higher-rank L matrices and closer
+  agreement with exact convex optimization solutions. Users with finite
+  `lambda_nn` will observe different ATT estimates. Added FISTA/Nesterov
+  acceleration to the twostep inner solver for faster L convergence.
+
 ## [2.6.0] - 2026-02-22
 
 ### Added

@@ -1184,13 +1184,17 @@ where:
 
 1. **Without low-rank (λ_nn = ∞)**: Standard weighted least squares
    - Build design matrix with unit/time dummies + treatment indicator
-   - Solve via iterative coordinate descent for (μ, α, β, τ)
+   - Solve via np.linalg.lstsq for (μ, α, β, τ)
 
 2. **With low-rank (finite λ_nn)**: Alternating minimization
    - Alternate between:
      - Fix L, solve weighted LS for (μ, α, β, τ)
-     - Fix (μ, α, β, τ), soft-threshold SVD for L (proximal step)
-   - Continue until convergence
+     - Fix (μ, α, β, τ), proximal gradient for L:
+       - Lipschitz constant of ∇f is L_f = 2·max(δ)
+       - Step size η = 1/L_f = 1/(2·max(δ))
+       - Proximal operator: soft_threshold(gradient_step, η·λ_nn)
+       - Twostep inner solver uses FISTA/Nesterov acceleration (O(1/k²))
+   - Continue until max(|L_new - L_old|) < tol
 
 **LOOCV parameter selection** (unified with twostep, Equation 5):
 Following paper's Equation 5 and footnote 2:

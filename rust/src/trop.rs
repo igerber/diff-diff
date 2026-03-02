@@ -660,9 +660,9 @@ fn estimate_model(
         }
     });
 
-    // Compute step size for proximal gradient: η ≤ 1/max(W)
+    // Lipschitz constant of ∇f is L_f = 2·max(W), so prox threshold = λ/(2·max(W))
     let w_max = w_masked.iter().cloned().fold(0.0_f64, f64::max);
-    let eta = if w_max > 0.0 { 1.0 / w_max } else { 1.0 };
+    let prox_threshold = if w_max > 0.0 { lambda_nn / (2.0 * w_max) } else { lambda_nn / 2.0 };
 
     // Weight sums per unit and time
     let weight_sum_per_unit: Array1<f64> = w_masked.sum_axis(Axis(0));
@@ -722,9 +722,9 @@ fn estimate_model(
         }
 
         // Step 2: Update L with WEIGHTED nuclear norm penalty
-        // Paper alignment: Use proximal gradient instead of direct soft-thresholding
-        // L ← prox_{η·λ_nn·||·||_*}(L + η·(W ⊙ (R - L)))
-        // where R = Y - α - β
+        // Inner FISTA-accelerated proximal gradient loop (α, β fixed)
+        // L ← prox_{threshold·||·||_*}(L + W_norm ⊙ (R - L))
+        // where R = Y - α - β, W_norm = W/max(W)
 
         // Compute target residual R = Y - α - β
         let mut r_target = Array2::<f64>::zeros((n_periods, n_units));
@@ -734,18 +734,50 @@ fn estimate_model(
             }
         }
 
-        // Weighted proximal gradient step:
-        // gradient_step = L + η * W ⊙ (R - L)
-        // For W=0 cells (treated obs), this keeps L unchanged
-        let mut gradient_step = Array2::<f64>::zeros((n_periods, n_units));
-        for t in 0..n_periods {
-            for i in 0..n_units {
-                gradient_step[[t, i]] = l[[t, i]] + eta * w_masked[[t, i]] * (r_target[[t, i]] - l[[t, i]]);
+        // For W=0 cells, use current L instead of R (prevent absorbing treatment)
+        let r_masked = Array2::from_shape_fn((n_periods, n_units), |(t, i)| {
+            if w_masked[[t, i]] > 0.0 { r_target[[t, i]] } else { l[[t, i]] }
+        });
+
+        // Normalize weights: W_norm = W / W_max (max becomes 1)
+        let w_norm = Array2::from_shape_fn((n_periods, n_units), |(t, i)| {
+            if w_max > 0.0 { w_masked[[t, i]] / w_max } else { w_masked[[t, i]] }
+        });
+
+        // FISTA inner loop for L update
+        let mut l_prev = l.clone();
+        let mut t_fista = 1.0_f64;
+        let max_inner_iter = 10;
+
+        for _ in 0..max_inner_iter {
+            let l_inner_old = l.clone();
+
+            // FISTA momentum
+            let t_fista_new = (1.0 + (1.0 + 4.0 * t_fista * t_fista).sqrt()) / 2.0;
+            let momentum = (t_fista - 1.0) / t_fista_new;
+            let l_momentum = Array2::from_shape_fn((n_periods, n_units), |(t, i)| {
+                l[[t, i]] + momentum * (l[[t, i]] - l_prev[[t, i]])
+            });
+
+            // Gradient step from momentum point
+            let mut gradient_step = Array2::<f64>::zeros((n_periods, n_units));
+            for t in 0..n_periods {
+                for i in 0..n_units {
+                    gradient_step[[t, i]] = l_momentum[[t, i]] + w_norm[[t, i]] * (r_masked[[t, i]] - l_momentum[[t, i]]);
+                }
+            }
+
+            // Proximal step: soft-threshold with corrected threshold
+            l_prev = l.clone();
+            l = soft_threshold_svd(&gradient_step, prox_threshold)?;
+            t_fista = t_fista_new;
+
+            // Check inner convergence
+            let l_inner_diff = max_abs_diff_2d(&l, &l_inner_old);
+            if l_inner_diff < tol {
+                break;
             }
         }
-
-        // Proximal step: soft-threshold singular values with scaled lambda
-        l = soft_threshold_svd(&gradient_step, eta * lambda_nn)?;
 
         // Check convergence
         let alpha_diff = max_abs_diff(&alpha, &alpha_old);
@@ -1327,8 +1359,9 @@ fn solve_joint_with_lowrank(
         }
 
         // Weighted proximal step for L (soft-threshold SVD)
+        // Lipschitz constant of ∇f is L_f = 2·max(δ), step size η = 1/L_f
         let delta_max = delta.iter().cloned().fold(0.0_f64, f64::max);
-        let eta = if delta_max > 0.0 { 1.0 / delta_max } else { 1.0 };
+        let eta = if delta_max > 0.0 { 1.0 / (2.0 * delta_max) } else { 0.5 };
 
         // gradient_step = L + eta * delta * (R - L)
         // NaN outcomes get zero weight so they don't affect gradient
