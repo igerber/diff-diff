@@ -1065,10 +1065,15 @@ Optimization (Equation 2):
 ```
 (α̂, β̂, L̂) = argmin_{α,β,L} Σ_j Σ_s θ_s^{i,t} ω_j^{i,t} (1-W_js)(Y_js - α_j - β_s - L_js)² + λ_nn ||L||_*
 ```
-Solved via alternating minimization with soft-thresholding of singular values for L:
+Solved via alternating minimization. For α, β (or μ, α, β, τ in joint): weighted least
+squares (closed form). For L: proximal gradient with step size η = 1/(2·max(W)):
 ```
-L̂ = U × soft_threshold(Σ, λ_nn) × V'
+Gradient step: G = L + (W/max(W)) ⊙ (R - L)
+Proximal step: L = U × soft_threshold(Σ, η·λ_nn) × V'  (SVD of G = UΣV')
 ```
+where R is the residual after removing fixed effects (and τ·D in joint mode).
+The twostep solver's inner L update uses FISTA/Nesterov acceleration (O(1/k²) convergence);
+the Python joint solver uses a single proximal gradient step per outer alternating iteration.
 
 Per-observation weights (Equation 3):
 ```

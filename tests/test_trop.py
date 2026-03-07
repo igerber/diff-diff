@@ -2651,6 +2651,48 @@ class TestTROPNuclearNormSolver:
                 f"Objective increased at step {k}: {objectives[k]} > {objectives[k-1]}"
             )
 
+    def test_twostep_nonuniform_weights_objective(self):
+        """Verify objective decreases with non-uniform weights (W_max < 1)."""
+        rng = np.random.default_rng(123)
+        R = rng.normal(0, 1, (6, 4))
+        W = rng.uniform(0.1, 0.8, (6, 4))
+        lambda_nn = 0.3
+
+        trop_est = TROP(method="twostep", n_bootstrap=2)
+
+        # Initial objective with L=0
+        L_init = np.zeros_like(R)
+        f_init = np.sum(W * (R - L_init) ** 2)
+        _, s_init, _ = np.linalg.svd(L_init, full_matrices=False)
+        obj_init = f_init + lambda_nn * np.sum(s_init)
+
+        # Solve
+        L_final = trop_est._weighted_nuclear_norm_solve(
+            Y=R,
+            W=W,
+            L_init=L_init,
+            alpha=np.zeros(R.shape[1]),
+            beta=np.zeros(R.shape[0]),
+            lambda_nn=lambda_nn,
+            max_inner_iter=20,
+        )
+
+        # Final objective
+        f_final = np.sum(W * (R - L_final) ** 2)
+        _, s_final, _ = np.linalg.svd(L_final, full_matrices=False)
+        obj_final = f_final + lambda_nn * np.sum(s_final)
+
+        assert obj_final <= obj_init + 1e-10, (
+            f"Objective did not decrease: {obj_final} > {obj_init}"
+        )
+
+        # Soft-thresholding should reduce nuclear norm vs residual
+        nuclear_norm_R = np.sum(np.linalg.svd(R, compute_uv=False))
+        nuclear_norm_L = np.sum(s_final)
+        assert nuclear_norm_L < nuclear_norm_R, (
+            f"Nuclear norm not reduced: {nuclear_norm_L} >= {nuclear_norm_R}"
+        )
+
 
 class TestTROPJointMethod:
     """Tests for TROP method='joint'.

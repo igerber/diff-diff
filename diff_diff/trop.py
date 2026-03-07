@@ -2052,8 +2052,8 @@ class TROP:
 
         # Proximal gradient iteration with FISTA/Nesterov acceleration
         # This solves: min_L ||W^{1/2} ⊙ (R - L)||_F^2 + λ||L||_*
-        # Lipschitz constant L_f = 2·max(W_norm) = 2, so η = 1/2
-        # Threshold = η·λ_nn = λ_nn/2
+        # Lipschitz constant L_f = 2·max(W), so η = 1/(2·max(W))
+        # Threshold = η·λ_nn = λ_nn/(2·max(W))
         for _ in range(max_inner_iter):
             L_old = L.copy()
 
@@ -2068,7 +2068,7 @@ class TROP:
 
             # Proximal step: soft-threshold singular values
             L_prev = L.copy()
-            L = self._soft_threshold_svd(gradient_step, lambda_nn / 2.0)
+            L = self._soft_threshold_svd(gradient_step, lambda_nn / (2.0 * W_max))
             t_fista = t_fista_new
 
             # Check convergence
