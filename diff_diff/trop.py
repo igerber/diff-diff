@@ -1990,10 +1990,11 @@ class TROP:
         paper's Equation 2 (page 7). The full objective is:
             min_L Σ W_{ti}(R_{ti} - L_{ti})² + λ_nn||L||_*
 
-        This uses a proximal gradient / soft-impute approach (Mazumder et al. 2010):
-            L_{k+1} = prox_{λ||·||_*}(L_k + W ⊙ (R - L_k))
-
-        where W ⊙ denotes element-wise multiplication with normalized weights.
+        This uses proximal gradient descent (Mazumder et al. 2010) with
+        FISTA/Nesterov acceleration. Lipschitz constant L_f = 2·max(W),
+        step size η = 1/(2·max(W)), proximal threshold η·λ_nn:
+            G_k = L_k + (W/max(W)) ⊙ (R - L_k)
+            L_{k+1} = prox_{η·λ_nn·||·||_*}(G_k)
 
         IMPORTANT: For observations with W=0 (treated observations), we keep
         L values from the previous iteration rather than setting L = R, which
@@ -2068,7 +2069,8 @@ class TROP:
 
             # Proximal step: soft-threshold singular values
             L_prev = L.copy()
-            L = self._soft_threshold_svd(gradient_step, lambda_nn / (2.0 * W_max))
+            threshold = lambda_nn / (2.0 * W_max) if W_max > 0 else lambda_nn / 2.0
+            L = self._soft_threshold_svd(gradient_step, threshold)
             t_fista = t_fista_new
 
             # Check convergence

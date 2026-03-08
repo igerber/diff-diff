@@ -2693,6 +2693,26 @@ class TestTROPNuclearNormSolver:
             f"Nuclear norm not reduced: {nuclear_norm_L} >= {nuclear_norm_R}"
         )
 
+    def test_zero_weights_no_division_error(self):
+        """Verify solver handles all-zero weights without ZeroDivisionError."""
+        rng = np.random.default_rng(99)
+        Y = rng.normal(0, 1, (6, 4))
+        W = np.zeros((6, 4))
+        L_init = rng.normal(0, 1, (6, 4))
+
+        trop_est = TROP(method="twostep", n_bootstrap=2)
+        result = trop_est._weighted_nuclear_norm_solve(
+            Y=Y,
+            W=W,
+            L_init=L_init,
+            alpha=np.zeros(4),
+            beta=np.zeros(6),
+            lambda_nn=0.3,
+        )
+
+        assert np.isfinite(result).all(), "Result contains NaN or Inf"
+        assert result.shape == (6, 4), f"Expected (6, 4), got {result.shape}"
+
 
 class TestTROPJointMethod:
     """Tests for TROP method='joint'.

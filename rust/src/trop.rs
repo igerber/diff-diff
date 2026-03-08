@@ -620,9 +620,10 @@ fn compute_weight_matrix(
 ///
 /// Minimizes: Σ W_{ti}(Y_{ti} - α_i - β_t - L_{ti})² + λ_nn||L||_*
 ///
-/// Paper alignment: Uses weighted proximal gradient for L update:
-///   L ← prox_{η·λ_nn·||·||_*}(L + η·(W ⊙ (R - L)))
-/// where η ≤ 1/max(W) for convergence.
+/// Paper alignment: Uses weighted proximal gradient for L update with
+/// Lipschitz constant L_f = 2·max(W), step size η = 1/(2·max(W)):
+///   G = L + (W/max(W)) ⊙ (R - L)
+///   L ← prox_{η·λ_nn·||·||_*}(G)
 ///
 /// Returns None if estimation fails due to numerical issues.
 #[allow(clippy::too_many_arguments)]
