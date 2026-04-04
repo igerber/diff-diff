@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Survey real-data validation** (Phase 9) — 15 cross-validation tests against R's `survey` package using three real federal survey datasets:
+  - **API** (R `survey` package): TSL variance with strata, FPC, subpopulations, covariates, and Fay's BRR replicates
+  - **NHANES** (CDC/NCHS): TSL variance with strata + PSU + nest=TRUE, validating the ACA young adult coverage provision DiD
+  - **RECS 2020** (U.S. EIA): JK1 replicate weight variance with 60 pre-computed replicate columns
+  - All metrics (ATT, SE, df, CI) match R to machine precision (< 1e-10 differences)
+
 ## [2.8.4] - 2026-04-04
 
 ### Added

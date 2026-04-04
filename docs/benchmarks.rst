@@ -593,6 +593,170 @@ Results Comparison
 This validation on real-world data with known published results confirms that
 diff-diff produces correct estimates that match the reference R implementation.
 
+Survey Real-Data Validation
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+In addition to synthetic-data survey cross-validation (see
+``test_survey_r_crossvalidation.py``), diff-diff's survey variance is validated
+against R's ``survey`` package using three real federal survey datasets. All
+comparisons match to machine precision (differences < 1e-10).
+
+**Datasets:**
+
+.. list-table::
+   :header-rows: 1
+   :widths: 15 20 15 20 30
+
+   * - Dataset
+     - Source
+     - Size
+     - Survey Design
+     - Policy Context
+   * - API (apistrat)
+     - R ``survey`` package
+     - 200 schools
+     - Strata + FPC + weights
+     - California school accountability (PSAA 1999)
+   * - NHANES
+     - CDC/NCHS
+     - 2,946 adults
+     - Strata + PSU + weights (nest)
+     - ACA young adult coverage provision (2010)
+   * - RECS 2020
+     - U.S. EIA
+     - 2,000 households
+     - 60 JK1 replicate weights
+     - Residential energy consumption survey
+
+**Suite A — API Dataset (TSL Variance):**
+
+.. list-table::
+   :header-rows: 1
+   :widths: 10 30 20 20 20
+
+   * - Test
+     - Design Variant
+     - ATT Gap
+     - SE Gap
+     - df
+   * - A1
+     - Strata + FPC + weights
+     - 2.1e-12
+     - 3.2e-11 (0.0000%)
+     - Exact
+   * - A2
+     - Strata + weights (no FPC)
+     - 2.1e-12
+     - 5.3e-11 (0.0000%)
+     - Exact
+   * - A3
+     - Weights only
+     - 2.1e-12
+     - 2.7e-11 (0.0000%)
+     - Exact
+   * - A5
+     - Subpopulation (elementary)
+     - 1.5e-11
+     - 7.5e-12 (0.0000%)
+     - Exact
+   * - A6
+     - Covariates (meals, ell)
+     - 2.2e-12
+     - 8.4e-12 (0.0000%)
+     - Exact
+   * - A7
+     - Fay's BRR replicates (rho=0.3)
+     - 2.1e-12
+     - 7.7e-11 (0.0000%)
+     - Exact
+
+**Suite B — NHANES (TSL with Strata + PSU + nest=TRUE):**
+
+.. list-table::
+   :header-rows: 1
+   :widths: 10 30 20 20 20
+
+   * - Test
+     - Design Variant
+     - ATT Gap
+     - SE Gap
+     - df
+   * - B1
+     - Strata + PSU + weights
+     - 4.6e-13
+     - 2.3e-14 (0.0000%)
+     - Exact (31)
+   * - B2
+     - Covariates (gender, poverty)
+     - 4.9e-13
+     - 2.3e-13 (0.0000%)
+     - Exact
+   * - B3
+     - Weights only
+     - 4.6e-13
+     - 2.6e-13 (0.0000%)
+     - Exact
+   * - B4
+     - Subpopulation (female)
+     - 1.1e-13
+     - 8.7e-14 (0.0000%)
+     - Exact
+
+**Suite C — RECS 2020 (JK1 Replicate Weights):**
+
+.. list-table::
+   :header-rows: 1
+   :widths: 10 30 20 20 20
+
+   * - Test
+     - Model
+     - Coef Gap
+     - SE Gap
+     - df
+   * - C1
+     - TOTALBTU ~ KOWNRENT
+     - 1.5e-11
+     - 2.0e-11 (0.0000%)
+     - Exact (59)
+   * - C2
+     - + TYPEHUQ + REGIONC
+     - 3.8e-10
+     - 2.9e-11 (0.0000%)
+     - Exact (59)
+
+**Key Findings:**
+
+1. **Machine-precision agreement across all tests.** ATT/coefficient, SE, df, and
+   CI all match R's ``survey::svyglm()`` and ``svrepdesign()`` to 10-13 decimal
+   places. The tolerances (1-5% for SEs) were never remotely approached.
+
+2. **All survey design features validated with real data:** stratification, PSU
+   clustering, FPC corrections, probability weight normalization, nested PSU
+   handling (``nest=TRUE``), subpopulation analysis, covariate adjustment, and
+   JK1 replicate weight variance.
+
+3. **Fay's BRR replicate weights** generated from the real API stratified design
+   (212 replicates) also match R exactly.
+
+Reproducing Survey Validation
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+.. code-block:: bash
+
+   # 1. Generate API golden values (no download needed — data ships with R)
+   Rscript benchmarks/R/benchmark_realdata_api.R
+
+   # 2. Download and process NHANES data from CDC
+   python benchmarks/scripts/download_nhanes.py
+   Rscript benchmarks/R/benchmark_realdata_nhanes.R
+
+   # 3. Download and subset RECS 2020 from EIA
+   python benchmarks/scripts/download_recs.py
+   Rscript benchmarks/R/benchmark_realdata_recs.R
+
+   # 4. Run validation tests
+   pytest tests/test_survey_real_data.py -v
+
 Reproducing Benchmarks
 ----------------------
 

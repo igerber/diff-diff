@@ -272,6 +272,43 @@ deferred to the consolidated list below:
   expects pre-calibrated weights. Point users to `samplics` or R's
   `survey::calibrate()` for weight calibration.
 
+---
+
+## Phase 9: Real-Data Validation
+
+Complements the synthetic-data cross-validation (Phase 6 BRR, Tier 1-3 in
+`benchmark_survey_crossvalidation.R`) with real federal survey datasets.
+Validates that diff-diff's survey variance matches R's `survey` package
+when fed actual survey design variables from published data sources.
+
+### Datasets
+
+| Dataset | Source | Design | Validates |
+|---------|--------|--------|-----------|
+| API (apistrat) | R `survey` package | Strata + FPC + weights | TSL variance, subpopulations, Fay's BRR |
+| NHANES 2007-08 / 2015-16 | CDC/NCHS | Strata + PSU + weights (nest=TRUE) | TSL with real clustering, ACA DiD |
+| RECS 2020 | U.S. EIA | 60 JK1 replicate weights | JK1 replicate weight variance |
+
+### Results
+
+- **Suite A (API):** 8 tests, all matching R — ATT, SE, df, CI across
+  7 design variants including subpopulation and Fay's BRR replicates.
+- **Suite B (NHANES):** 4 tests passing, 1 skipped (CallawaySantAnna
+  RC-DiD with 2-period data not supported by R's `did` package). ATT,
+  SE, df, CI match R for strata+PSU+weights, covariates, weights-only,
+  and female subpopulation.
+- **Suite C (RECS):** 3 tests, all matching R — JK1 regression SEs
+  with 60 real replicate weight columns.
+
+### Files
+
+- R scripts: `benchmarks/R/benchmark_realdata_{api,nhanes,recs}.R`
+- Download scripts: `benchmarks/scripts/download_{nhanes,recs}.py`
+- Python tests: `tests/test_survey_real_data.py`
+- Golden values: `benchmarks/data/real/*_realdata_golden.json`
+
+---
+
 ## Deferred Work (Consolidated)
 
 ### Documented Deviations

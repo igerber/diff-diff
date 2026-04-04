@@ -55,6 +55,7 @@ Thumbs.db
 
 # Benchmarks - generated data and results (can be regenerated)
 benchmarks/data/synthetic/*.csv
+benchmarks/data/real/raw/
 benchmarks/results/
 
 # Rust build artifacts
