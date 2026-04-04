@@ -148,7 +148,11 @@ jobs:
             git --no-pager diff --name-status "$BASE_SHA" "$HEAD_SHA"
             echo ""
             echo "Unified diff (context=5):"
-            git --no-pager diff --unified=5 "$BASE_SHA" "$HEAD_SHA"
+            # Exclude large generated data files from the full diff to stay
+            # within the model's input limit. The --stat above still lists them.
+            git --no-pager diff --unified=5 "$BASE_SHA" "$HEAD_SHA" \
+              -- . ':!benchmarks/data/**/*.json' ':!benchmarks/data/**/*.csv' \
+                   ':!docs/tutorials/*.ipynb'
           } >> "$PROMPT"
 
       - name: Run Codex
