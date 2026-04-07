@@ -2137,9 +2137,9 @@ class TestLOOCVFallback:
         original_fit_with_fixed = TROP._fit_with_fixed_lambda
         captured_lambda = []
 
-        def tracking_fit(self, data, outcome, treatment, unit, time, fixed_lambda):
+        def tracking_fit(self, data, outcome, treatment, unit, time, fixed_lambda, **kwargs):
             captured_lambda.append(fixed_lambda)
-            return original_fit_with_fixed(self, data, outcome, treatment, unit, time, fixed_lambda)
+            return original_fit_with_fixed(self, data, outcome, treatment, unit, time, fixed_lambda, **kwargs)
 
         with patch.object(TROP, '_fit_with_fixed_lambda', tracking_fit):
             results = trop_est.fit(
@@ -2601,7 +2601,7 @@ class TestTROPNuclearNormSolver:
 
     def test_proximal_step_size_correctness(self):
         """Verify L converges to prox_{λ/2}(R) for uniform weights."""
-        trop_est = TROP(method="joint", n_bootstrap=2)
+        trop_est = TROP(method="global", n_bootstrap=2)
 
         # Small problem with known solution
         rng = np.random.default_rng(42)
@@ -2631,7 +2631,7 @@ class TestTROPNuclearNormSolver:
         delta = rng.uniform(0.5, 2.0, (6, 4))
         lambda_nn = 0.3
 
-        trop_est = TROP(method="joint", n_bootstrap=2)
+        trop_est = TROP(method="global", n_bootstrap=2)
         L = np.zeros_like(R)
         objectives = []
 
@@ -2655,14 +2655,14 @@ class TestTROPNuclearNormSolver:
                 f"Objective increased at step {k}: {objectives[k]} > {objectives[k-1]}"
             )
 
-    def test_twostep_nonuniform_weights_objective(self):
+    def test_local_nonuniform_weights_objective(self):
         """Verify objective decreases with non-uniform weights (W_max < 1)."""
         rng = np.random.default_rng(123)
         R = rng.normal(0, 1, (6, 4))
         W = rng.uniform(0.1, 0.8, (6, 4))
         lambda_nn = 0.3
 
-        trop_est = TROP(method="twostep", n_bootstrap=2)
+        trop_est = TROP(method="local", n_bootstrap=2)
 
         # Initial objective with L=0
         L_init = np.zeros_like(R)
@@ -2704,7 +2704,7 @@ class TestTROPNuclearNormSolver:
         W = np.zeros((6, 4))
         L_init = rng.normal(0, 1, (6, 4))
 
-        trop_est = TROP(method="twostep", n_bootstrap=2)
+        trop_est = TROP(method="local", n_bootstrap=2)
         result = trop_est._weighted_nuclear_norm_solve(
             Y=Y,
             W=W,
@@ -2719,18 +2719,20 @@ class TestTROPNuclearNormSolver:
 
 
 @pytest.mark.slow
-class TestTROPJointMethod:
-    """Tests for TROP method='joint'.
+class TestTROPGlobalMethod:
+    """Tests for TROP method='global'.
 
-    The joint method estimates a single scalar treatment effect τ via
-    weighted least squares, as opposed to the twostep method which
-    computes per-observation effects.
+    The global method fits a single model on control data with global
+    weights, then extracts per-observation treatment effects as
+    residuals (τ_it = Y_it - μ - α_i - β_t - L_it). ATT is the mean
+    of these effects. The local method instead fits a separate model
+    per treated observation with observation-specific weights.
     """
 
-    def test_joint_basic(self, simple_panel_data):
-        """Joint method runs and produces reasonable ATT."""
+    def test_global_basic(self, simple_panel_data):
+        """Global method runs and produces reasonable ATT."""
         trop_est = TROP(
-            method="joint",
+            method="global",
             lambda_time_grid=[0.0, 1.0],
             lambda_unit_grid=[0.0, 1.0],
             lambda_nn_grid=[0.0, 0.1],
@@ -2753,10 +2755,10 @@ class TestTROPJointMethod:
         # ATT should be positive (true effect is 3.0)
         assert results.att > 0
 
-    def test_joint_no_lowrank(self, simple_panel_data):
-        """Joint method with lambda_nn=inf (no low-rank)."""
+    def test_global_no_lowrank(self, simple_panel_data):
+        """Global method with lambda_nn=inf (no low-rank)."""
         trop_est = TROP(
-            method="joint",
+            method="global",
             lambda_time_grid=[0.0],
             lambda_unit_grid=[0.0],
             lambda_nn_grid=[float('inf')],  # Disable low-rank
@@ -2777,11 +2779,11 @@ class TestTROPJointMethod:
         # Factor matrix should be all zeros
         assert np.allclose(results.factor_matrix, 0.0)
 
-    def test_joint_with_lowrank(self, factor_dgp_data, ci_params):
-        """Joint method with finite lambda_nn (with low-rank)."""
+    def test_global_with_lowrank(self, factor_dgp_data, ci_params):
+        """Global method with finite lambda_nn (with low-rank)."""
         n_boot = ci_params.bootstrap(20)
         trop_est = TROP(
-            method="joint",
+            method="global",
             lambda_time_grid=[0.0, 1.0],
             lambda_unit_grid=[0.0, 1.0],
             lambda_nn_grid=[0.0, 0.1, 1.0],
@@ -2801,18 +2803,18 @@ class TestTROPJointMethod:
         # Should produce non-zero factor matrix if low-rank is used
         # (depends on which lambda_nn is selected)
 
-    def test_joint_matches_direction(self, simple_panel_data):
-        """Joint method sign/magnitude roughly matches twostep."""
-        # Fit with twostep
-        trop_twostep = TROP(
-            method="twostep",
+    def test_global_matches_direction(self, simple_panel_data):
+        """Global method sign/magnitude roughly matches local."""
+        # Fit with local
+        trop_local = TROP(
+            method="local",
             lambda_time_grid=[0.0, 1.0],
             lambda_unit_grid=[0.0, 1.0],
             lambda_nn_grid=[0.0, 0.1],
             n_bootstrap=10,
             seed=42,
         )
-        results_twostep = trop_twostep.fit(
+        results_local = trop_local.fit(
             simple_panel_data,
             outcome="outcome",
             treatment="treated",
@@ -2820,16 +2822,16 @@ class TestTROPJointMethod:
             time="period",
         )
 
-        # Fit with joint
-        trop_joint = TROP(
-            method="joint",
+        # Fit with global
+        trop_global = TROP(
+            method="global",
             lambda_time_grid=[0.0, 1.0],
             lambda_unit_grid=[0.0, 1.0],
             lambda_nn_grid=[0.0, 0.1],
             n_bootstrap=10,
             seed=42,
         )
-        results_joint = trop_joint.fit(
+        results_global = trop_global.fit(
             simple_panel_data,
             outcome="outcome",
             treatment="treated",
@@ -2838,11 +2840,11 @@ class TestTROPJointMethod:
         )
 
         # Both should have positive ATT (true effect is 3.0)
-        assert results_twostep.att > 0
-        assert results_joint.att > 0
+        assert results_local.att > 0
+        assert results_global.att > 0
 
         # Signs should match
-        assert np.sign(results_twostep.att) == np.sign(results_joint.att)
+        assert np.sign(results_local.att) == np.sign(results_global.att)
 
     def test_method_parameter_validation(self):
         """Invalid method raises ValueError."""
@@ -2865,24 +2867,38 @@ class TestTROPJointMethod:
 
     def test_method_in_set_params(self):
         """method parameter can be set via set_params()."""
-        trop_est = TROP(method="twostep")
-        assert trop_est.method == "twostep"
+        trop_est = TROP(method="local")
+        assert trop_est.method == "local"
 
         trop_est.set_params(method="global")
         assert trop_est.method == "global"
 
     def test_method_set_params_joint_deprecated(self):
         """'joint' alias maps to 'global' via set_params()."""
-        trop_est = TROP(method="twostep")
+        trop_est = TROP(method="local")
         with pytest.warns(FutureWarning, match="deprecated"):
             trop_est.set_params(method="joint")
         assert trop_est.method == "global"
 
-    def test_joint_bootstrap_variance(self, simple_panel_data, ci_params):
-        """Joint method bootstrap variance estimation works."""
+    def test_method_in_get_params_twostep_deprecated(self):
+        """'twostep' alias maps to 'local' in get_params()."""
+        with pytest.warns(FutureWarning, match="deprecated"):
+            trop_est = TROP(method="twostep")
+        params = trop_est.get_params()
+        assert params["method"] == "local"
+
+    def test_method_set_params_twostep_deprecated(self):
+        """'twostep' alias maps to 'local' via set_params()."""
+        trop_est = TROP(method="global")
+        with pytest.warns(FutureWarning, match="deprecated"):
+            trop_est.set_params(method="twostep")
+        assert trop_est.method == "local"
+
+    def test_global_bootstrap_variance(self, simple_panel_data, ci_params):
+        """Global method bootstrap variance estimation works."""
         n_boot = ci_params.bootstrap(20)
         trop_est = TROP(
-            method="joint",
+            method="global",
             lambda_time_grid=[0.0, 1.0],
             lambda_unit_grid=[0.0, 1.0],
             lambda_nn_grid=[0.0, 0.1],
@@ -2901,11 +2917,11 @@ class TestTROPJointMethod:
         assert results.n_bootstrap == n_boot
         assert results.bootstrap_distribution is not None
 
-    def test_joint_confidence_interval(self, simple_panel_data, ci_params):
-        """Joint method produces valid confidence intervals."""
+    def test_global_confidence_interval(self, simple_panel_data, ci_params):
+        """Global method produces valid confidence intervals."""
         n_boot = ci_params.bootstrap(30)
         trop_est = TROP(
-            method="joint",
+            method="global",
             lambda_time_grid=[0.0, 1.0],
             lambda_unit_grid=[0.0, 1.0],
             lambda_nn_grid=[0.0, 0.1],
@@ -2925,14 +2941,14 @@ class TestTROPJointMethod:
         assert lower < results.att < upper
         assert lower < upper
 
-    def test_joint_loocv_selects_from_grid(self, simple_panel_data):
-        """Joint method LOOCV selects tuning parameters from the grid."""
+    def test_global_loocv_selects_from_grid(self, simple_panel_data):
+        """Global method LOOCV selects tuning parameters from the grid."""
         grid_time = [0.0, 0.5, 1.0]
         grid_unit = [0.0, 0.5, 1.0]
         grid_nn = [0.0, 0.1]
 
         trop_est = TROP(
-            method="joint",
+            method="global",
             lambda_time_grid=grid_time,
             lambda_unit_grid=grid_unit,
             lambda_nn_grid=grid_nn,
@@ -2954,10 +2970,10 @@ class TestTROPJointMethod:
         # LOOCV score should be computed
         assert np.isfinite(results.loocv_score) or np.isnan(results.loocv_score)
 
-    def test_joint_loocv_score_internal(self, simple_panel_data):
-        """Test the internal _loocv_score_joint method produces valid scores."""
+    def test_global_loocv_score_internal(self, simple_panel_data):
+        """Test the internal _loocv_score_global method produces valid scores."""
         trop_est = TROP(
-            method="joint",
+            method="global",
             lambda_time_grid=[0.0, 1.0],
             lambda_unit_grid=[0.0, 1.0],
             lambda_nn_grid=[0.0, 0.1],
@@ -2992,21 +3008,21 @@ class TestTROPJointMethod:
         treated_periods = 3  # From fixture: n_post = 3
 
         # Score should be finite
-        score = trop_est._loocv_score_joint(
+        score = trop_est._loocv_score_global(
             Y, D, control_obs, 0.0, 0.0, 0.0,
             treated_periods, n_units, n_periods
         )
         assert np.isfinite(score) or np.isinf(score), "Score should be finite or inf"
 
         # Score with larger lambda_nn should still work
-        score2 = trop_est._loocv_score_joint(
+        score2 = trop_est._loocv_score_global(
             Y, D, control_obs, 1.0, 1.0, 0.1,
             treated_periods, n_units, n_periods
         )
         assert np.isfinite(score2) or np.isinf(score2), "Score should be finite or inf"
 
-    def test_joint_handles_nan_outcomes(self, simple_panel_data):
-        """Joint method handles NaN outcome values gracefully."""
+    def test_global_handles_nan_outcomes(self, simple_panel_data):
+        """Global method handles NaN outcome values gracefully."""
         # Introduce NaN in some control observations
         data = simple_panel_data.copy()
         control_mask = data['treated'] == 0
@@ -3018,7 +3034,7 @@ class TestTROPJointMethod:
         data.loc[nan_indices, 'outcome'] = np.nan
 
         trop_est = TROP(
-            method="joint",
+            method="global",
             lambda_time_grid=[0.0, 1.0],
             lambda_unit_grid=[0.0, 1.0],
             lambda_nn_grid=[0.0, 0.1],
@@ -3039,8 +3055,8 @@ class TestTROPJointMethod:
         # ATT should be positive (true effect is 3.0)
         assert results.att > 0, "ATT should be positive"
 
-    def test_joint_with_lowrank_handles_nan(self, simple_panel_data):
-        """Joint method with low-rank handles NaN values correctly."""
+    def test_global_with_lowrank_handles_nan(self, simple_panel_data):
+        """Global method with low-rank handles NaN values correctly."""
         # Introduce NaN in some control observations
         data = simple_panel_data.copy()
         control_mask = data['treated'] == 0
@@ -3052,7 +3068,7 @@ class TestTROPJointMethod:
         data.loc[nan_indices, 'outcome'] = np.nan
 
         trop_est = TROP(
-            method="joint",
+            method="global",
             lambda_time_grid=[0.0],
             lambda_unit_grid=[0.0],
             lambda_nn_grid=[0.1],  # Finite lambda_nn enables low-rank
@@ -3071,7 +3087,7 @@ class TestTROPJointMethod:
         assert np.isfinite(results.att), "ATT should be finite with NaN data"
         assert np.isfinite(results.se), "SE should be finite with NaN data"
 
-    def test_joint_nan_exclusion_behavior(self, simple_panel_data):
+    def test_global_nan_exclusion_behavior(self, simple_panel_data):
         """Verify NaN observations are truly excluded from estimation.
 
         This tests the PR #113 fix: NaN observations should not contribute
@@ -3098,7 +3114,7 @@ class TestTROPJointMethod:
 
         # Fit on both versions with identical settings
         trop_nan = TROP(
-            method="joint",
+            method="global",
             lambda_time_grid=[1.0],
             lambda_unit_grid=[1.0],
             lambda_nn_grid=[0.0],  # Disable low-rank for cleaner comparison
@@ -3106,7 +3122,7 @@ class TestTROPJointMethod:
             seed=42,
         )
         trop_dropped = TROP(
-            method="joint",
+            method="global",
             lambda_time_grid=[1.0],
             lambda_unit_grid=[1.0],
             lambda_nn_grid=[0.0],
@@ -3136,7 +3152,7 @@ class TestTROPJointMethod:
             f"({results_dropped.att:.4f}) - true NaN exclusion"
         )
 
-    def test_joint_unit_no_valid_pre_gets_zero_weight(self, simple_panel_data):
+    def test_global_unit_no_valid_pre_gets_zero_weight(self, simple_panel_data):
         """Verify units with no valid pre-period data get zero weight.
 
         This tests the PR #113 fix: units with no valid pre-period observations
@@ -3159,7 +3175,7 @@ class TestTROPJointMethod:
         data.loc[mask, 'outcome'] = np.nan
 
         trop_est = TROP(
-            method="joint",
+            method="global",
             lambda_time_grid=[1.0],
             lambda_unit_grid=[1.0],  # Non-zero lambda_unit to use distance weighting
             lambda_nn_grid=[0.0],
@@ -3179,8 +3195,8 @@ class TestTROPJointMethod:
         assert np.isfinite(results.att), "ATT should be finite even with unit having no pre-period data"
         assert np.isfinite(results.se), "SE should be finite"
 
-    def test_joint_treated_pre_nan_handling(self, simple_panel_data):
-        """Verify joint method handles NaN in treated units during pre-periods.
+    def test_global_treated_pre_nan_handling(self, simple_panel_data):
+        """Verify global method handles NaN in treated units during pre-periods.
 
         When all treated units have NaN at a pre-period, average_treated[t] = NaN.
         This period should be excluded from unit distance calculation (both numerator
@@ -3211,7 +3227,7 @@ class TestTROPJointMethod:
         assert n_nan == len(treated_units), f"Should have {len(treated_units)} NaN, got {n_nan}"
 
         trop_est = TROP(
-            method="joint",
+            method="global",
             lambda_time_grid=[1.0],
             lambda_unit_grid=[1.0],
             lambda_nn_grid=[0.0],
@@ -3230,7 +3246,7 @@ class TestTROPJointMethod:
         assert np.isfinite(results.att), f"ATT should be finite, got {results.att}"
         assert np.isfinite(results.se), f"SE should be finite, got {results.se}"
 
-    def test_joint_rejects_staggered_adoption(self):
+    def test_global_rejects_staggered_adoption(self):
         """Global method raises ValueError for staggered adoption data.
 
         The global method assumes all treated units receive treatment at the
@@ -3259,7 +3275,7 @@ class TestTROPJointMethod:
             trop.fit(df, 'outcome', 'treated', 'unit', 'time')
 
     def test_global_method_alias(self, simple_panel_data):
-        """method='global' works and produces same results as deprecated 'joint'."""
+        """method='global' runs and produces a valid positive ATT."""
         trop_est = TROP(
             method="global",
             lambda_time_grid=[0.0, 1.0],
@@ -3310,7 +3326,7 @@ class TestTROPJointMethod:
 
         treated_periods = np.sum(np.any(D == 1, axis=1))
 
-        delta = trop_est._compute_joint_weights(
+        delta = trop_est._compute_global_weights(
             Y, D, 1.0, 1.0, int(treated_periods), n_units, n_periods
         )
 
@@ -3404,10 +3420,10 @@ class TestTROPJointMethod:
         )
 
         # Compute weights and fit with original data
-        delta = trop_est._compute_joint_weights(
+        delta = trop_est._compute_global_weights(
             Y, D, 1.0, 1.0, treated_periods, n_units, n_periods
         )
-        mu1, alpha1, beta1, L1 = trop_est._solve_joint_with_lowrank(
+        mu1, alpha1, beta1, L1 = trop_est._solve_global_with_lowrank(
             Y, delta, 0.1, 100, 1e-6
         )
 
@@ -3416,10 +3432,10 @@ class TestTROPJointMethod:
         Y_perturbed[D == 1] += 1000.0
 
         # Recompute (same weights since (1-W) zeroes treated cells)
-        delta2 = trop_est._compute_joint_weights(
+        delta2 = trop_est._compute_global_weights(
             Y_perturbed, D, 1.0, 1.0, treated_periods, n_units, n_periods
         )
-        mu2, alpha2, beta2, L2 = trop_est._solve_joint_with_lowrank(
+        mu2, alpha2, beta2, L2 = trop_est._solve_global_with_lowrank(
             Y_perturbed, delta2, 0.1, 100, 1e-6
         )
 
@@ -3479,8 +3495,8 @@ class TestTROPNValidTreated:
             f"Expected {total_treated - n_nan}, got {results.n_treated_obs}"
         assert np.isfinite(results.att)
 
-    def test_twostep_n_treated_obs_partial_nan(self):
-        """Twostep method: n_treated_obs reflects only finite outcomes."""
+    def test_local_n_treated_obs_partial_nan(self):
+        """Local method: n_treated_obs reflects only finite outcomes."""
         df = self._make_panel()
 
         treated_mask = (df['treated'] == 1)
@@ -3492,7 +3508,7 @@ class TestTROPNValidTreated:
         total_treated = int(treated_mask.sum())
 
         trop_est = TROP(
-            method="twostep",
+            method="local",
             lambda_time_grid=[1.0],
             lambda_unit_grid=[1.0],
             lambda_nn_grid=[np.inf],
@@ -3507,8 +3523,8 @@ class TestTROPNValidTreated:
             f"Expected {total_treated - n_nan}, got {results.n_treated_obs}"
         assert np.isfinite(results.att)
 
-    def test_twostep_nan_treated_not_poison_att(self):
-        """Twostep: NaN treated outcomes don't poison ATT via np.mean."""
+    def test_local_nan_treated_not_poison_att(self):
+        """Local: NaN treated outcomes don't poison ATT via np.mean."""
         df = self._make_panel(effect=3.0)
 
         # Make ONE treated outcome NaN
@@ -3517,7 +3533,7 @@ class TestTROPNValidTreated:
         df.loc[first_treated_idx, 'outcome'] = np.nan
 
         trop_est = TROP(
-            method="twostep",
+            method="local",
             lambda_time_grid=[1.0],
             lambda_unit_grid=[1.0],
             lambda_nn_grid=[np.inf],
@@ -3558,14 +3574,14 @@ class TestTROPNValidTreated:
         assert results.n_treated_obs == 0
         assert np.isnan(results.att)
 
-    def test_twostep_all_treated_nan_warns(self):
-        """Twostep method warns when all treated outcomes are NaN."""
+    def test_local_all_treated_nan_warns(self):
+        """Local method warns when all treated outcomes are NaN."""
         df = self._make_panel()
 
         df.loc[df['treated'] == 1, 'outcome'] = np.nan
 
         trop_est = TROP(
-            method="twostep",
+            method="local",
             lambda_time_grid=[1.0],
             lambda_unit_grid=[1.0],
             lambda_nn_grid=[np.inf],
@@ -3602,15 +3618,15 @@ class TestTROPBootstrapNaNSE:
         )
 
         # Disable Rust backend so Python fallback path is tested,
-        # then patch _fit_joint_with_fixed_lambda to always raise
-        trop_module = sys.modules['diff_diff.trop']
-        with patch.object(trop_module, 'HAS_RUST_BACKEND', False), \
-             patch.object(trop_module, '_rust_bootstrap_trop_variance_joint', None), \
-             patch.object(TROP, '_fit_joint_with_fixed_lambda',
+        # then patch _fit_global_with_fixed_lambda to always raise
+        trop_global_module = sys.modules['diff_diff.trop_global']
+        with patch.object(trop_global_module, 'HAS_RUST_BACKEND', False), \
+             patch.object(trop_global_module, '_rust_bootstrap_trop_variance_global', None), \
+             patch.object(TROP, '_fit_global_with_fixed_lambda',
                           side_effect=ValueError("forced failure")):
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
-                se, dist = trop_est._bootstrap_variance_joint(
+                se, dist = trop_est._bootstrap_variance_global(
                     df, 'outcome', 'treated', 'unit', 'time',
                     (1.0, 1.0, 1e10), 3,
                 )
@@ -3618,14 +3634,14 @@ class TestTROPBootstrapNaNSE:
         assert np.isnan(se), f"SE should be NaN when 0 draws succeed, got {se}"
         assert len(dist) == 0
 
-    def test_twostep_bootstrap_zero_draws_returns_nan_se(self):
-        """Twostep bootstrap with 0 successful draws returns NaN SE, not 0.0."""
+    def test_local_bootstrap_zero_draws_returns_nan_se(self):
+        """Local bootstrap with 0 successful draws returns NaN SE, not 0.0."""
         from unittest.mock import patch
 
         df = TestTROPNValidTreated._make_panel()
 
         trop_est = TROP(
-            method="twostep",
+            method="local",
             lambda_time_grid=[1.0],
             lambda_unit_grid=[1.0],
             lambda_nn_grid=[np.inf],
@@ -3645,4 +3661,98 @@ class TestTROPBootstrapNaNSE:
 
         assert np.isnan(se), f"SE should be NaN when 0 draws succeed, got {se}"
         assert len(dist) == 0
+
+
+class TestTROPModuleSplit:
+    """Regression tests for the trop.py -> trop_global.py / trop_local.py split."""
+
+    @staticmethod
+    def _make_panel():
+        """Create a simple balanced panel for split regression tests."""
+        rng = np.random.default_rng(42)
+        n_units, n_periods = 8, 6
+        rows = []
+        for i in range(n_units):
+            treated = i < 3  # 3 treated, 5 control
+            for t in range(n_periods):
+                y = rng.normal(0, 1)
+                if treated and t >= 4:
+                    y += 2.0  # treatment effect
+                rows.append({
+                    "unit": i, "time": t, "outcome": y,
+                    "treated": 1 if treated and t >= 4 else 0,
+                })
+        return pd.DataFrame(rows)
+
+    def test_global_absorbing_state_error_has_remediation_guidance(self):
+        """Global path ValueError for non-absorbing D includes remediation text."""
+        df = self._make_panel()
+        # Break absorbing state: unit 0 goes 0->1->0
+        df.loc[(df["unit"] == 0) & (df["time"] == 5), "treated"] = 0
+
+        with pytest.raises(ValueError, match="once treated, always treated"):
+            TROP(method="global").fit(df, "outcome", "treated", "unit", "time")
+
+        with pytest.raises(ValueError, match="convert to absorbing state"):
+            TROP(method="global").fit(df, "outcome", "treated", "unit", "time")
+
+    def test_global_finite_lambda_nn_exercises_lowrank_path(self):
+        """method='global' with finite lambda_nn successfully fits the low-rank solver."""
+        df = self._make_panel()
+        trop_est = TROP(
+            method="global",
+            lambda_time_grid=[0.0],
+            lambda_unit_grid=[0.0],
+            lambda_nn_grid=[0.1],  # finite -> exercises _solve_global_with_lowrank
+            n_bootstrap=5,
+            seed=42,
+        )
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            result = trop_est.fit(df, "outcome", "treated", "unit", "time")
+        assert np.isfinite(result.att)
+
+    def test_local_finite_lambda_nn_exercises_nuclear_norm(self):
+        """method='local' with finite lambda_nn exercises weighted nuclear norm solver."""
+        df = self._make_panel()
+        trop_est = TROP(
+            method="local",
+            lambda_time_grid=[0.0],
+            lambda_unit_grid=[0.0],
+            lambda_nn_grid=[0.1],  # finite -> exercises _weighted_nuclear_norm_solve
+            n_bootstrap=5,
+            seed=42,
+        )
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            result = trop_est.fit(df, "outcome", "treated", "unit", "time")
+        assert np.isfinite(result.att)
+
+    def test_method_dispatch_global_uses_fit_global(self):
+        """method='global' dispatches to _fit_global from TROPGlobalMixin."""
+        from unittest.mock import patch
+
+        df = self._make_panel()
+        trop_est = TROP(method="global", n_bootstrap=2, seed=42)
+
+        with patch.object(TROP, '_fit_global', wraps=trop_est._fit_global) as mock_fg:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                trop_est.fit(df, "outcome", "treated", "unit", "time")
+            mock_fg.assert_called_once()
+
+    def test_method_dispatch_local_does_not_use_fit_global(self):
+        """method='local' does NOT call _fit_global."""
+        from unittest.mock import patch
+
+        df = self._make_panel()
+        trop_est = TROP(method="local", n_bootstrap=2, seed=42,
+                        lambda_time_grid=[0.0], lambda_unit_grid=[0.0],
+                        lambda_nn_grid=[np.inf])
+
+        with patch.object(TROP, '_fit_global') as mock_fg:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                trop_est.fit(df, "outcome", "treated", "unit", "time")
+            mock_fg.assert_not_called()
 

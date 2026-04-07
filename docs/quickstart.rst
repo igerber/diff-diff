@@ -1,3 +1,7 @@
+.. meta::
+   :description: Get started with diff-diff for Difference-in-Differences analysis in Python. Step-by-step tutorial covering basic DiD, formulas, covariates, and robust inference.
+   :keywords: difference-in-differences tutorial, DiD python getting started, causal inference quickstart
+
 Getting Started
 ===============
 
@@ -154,7 +158,7 @@ When treatment is adopted at different times across units:
        outcome='outcome',
        unit='unit_id',
        time='period',
-       first_treat='first_treatment_period'
+       first_treat='first_treat'
    )
 
    # View aggregated treatment effect

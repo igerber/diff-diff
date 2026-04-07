@@ -16,6 +16,9 @@ __all__ = [
     "generate_bootstrap_weights",
     "generate_bootstrap_weights_batch",
     "generate_bootstrap_weights_batch_numpy",
+    "generate_survey_multiplier_weights_batch",
+    "generate_rao_wu_weights",
+    "generate_rao_wu_weights_batch",
     "compute_percentile_ci",
     "compute_bootstrap_pvalue",
     "compute_effect_bootstrap_stats",
@@ -54,15 +57,20 @@ def generate_bootstrap_weights(
         p1 = (sqrt5 + 1) / (2 * sqrt5)
         return rng.choice([val1, val2], size=n_units, p=[p1, 1 - p1])
     elif weight_type == "webb":
-        values = np.array([
-            -np.sqrt(3 / 2), -np.sqrt(2 / 2), -np.sqrt(1 / 2),
-            np.sqrt(1 / 2), np.sqrt(2 / 2), np.sqrt(3 / 2)
-        ])
+        values = np.array(
+            [
+                -np.sqrt(3 / 2),
+                -np.sqrt(2 / 2),
+                -np.sqrt(1 / 2),
+                np.sqrt(1 / 2),
+                np.sqrt(2 / 2),
+                np.sqrt(3 / 2),
+            ]
+        )
         return rng.choice(values, size=n_units)
     else:
         raise ValueError(
-            f"weight_type must be 'rademacher', 'mammen', or 'webb', "
-            f"got '{weight_type}'"
+            f"weight_type must be 'rademacher', 'mammen', or 'webb', " f"got '{weight_type}'"
         )
 
 
@@ -133,15 +141,20 @@ def generate_bootstrap_weights_batch_numpy(
         p1 = (sqrt5 + 1) / (2 * sqrt5)
         return rng.choice([val1, val2], size=(n_bootstrap, n_units), p=[p1, 1 - p1])
     elif weight_type == "webb":
-        values = np.array([
-            -np.sqrt(3 / 2), -np.sqrt(2 / 2), -np.sqrt(1 / 2),
-            np.sqrt(1 / 2), np.sqrt(2 / 2), np.sqrt(3 / 2)
-        ])
+        values = np.array(
+            [
+                -np.sqrt(3 / 2),
+                -np.sqrt(2 / 2),
+                -np.sqrt(1 / 2),
+                np.sqrt(1 / 2),
+                np.sqrt(2 / 2),
+                np.sqrt(3 / 2),
+            ]
+        )
         return rng.choice(values, size=(n_bootstrap, n_units))
     else:
         raise ValueError(
-            f"weight_type must be 'rademacher', 'mammen', or 'webb', "
-            f"got '{weight_type}'"
+            f"weight_type must be 'rademacher', 'mammen', or 'webb', " f"got '{weight_type}'"
         )
 
 
@@ -274,9 +287,7 @@ def compute_effect_bootstrap_stats(
         return np.nan, (np.nan, np.nan), np.nan
 
     ci = compute_percentile_ci(valid_dist, alpha)
-    p_value = compute_bootstrap_pvalue(
-        original_effect, valid_dist, n_valid=len(valid_dist)
-    )
+    p_value = compute_bootstrap_pvalue(original_effect, valid_dist, n_valid=len(valid_dist))
     return se, ci, p_value
 
 
@@ -392,8 +403,10 @@ def compute_effect_bootstrap_stats_batch(
     if np.any(partial_valid):
         for j in np.where(partial_valid)[0]:
             se, ci, pv = compute_effect_bootstrap_stats(
-                original_effects[j], bootstrap_matrix[:, j], alpha=alpha,
-                context=f"effect {j}"
+                original_effects[j],
+                bootstrap_matrix[:, j],
+                alpha=alpha,
+                context=f"effect {j}",
             )
             ses[j] = se
             ci_lowers[j] = ci[0]
@@ -401,3 +414,247 @@ def compute_effect_bootstrap_stats_batch(
             p_values[j] = pv
 
     return ses, ci_lowers, ci_uppers, p_values
+
+
+# ---------------------------------------------------------------------------
+# Survey-aware bootstrap weight generators
+# ---------------------------------------------------------------------------
+
+
+def generate_survey_multiplier_weights_batch(
+    n_bootstrap: int,
+    resolved_survey: "ResolvedSurveyDesign",
+    weight_type: str,
+    rng: np.random.Generator,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Generate PSU-level multiplier weights for survey-aware bootstrap.
+
+    Within each stratum, weights are generated independently.  When FPC
+    is present, weights are scaled by ``sqrt(1 - f_h)`` per stratum so
+    the bootstrap variance matches the TSL variance.
+
+    Parameters
+    ----------
+    n_bootstrap : int
+        Number of bootstrap iterations.
+    resolved_survey : ResolvedSurveyDesign
+        Resolved survey design.
+    weight_type : str
+        Multiplier distribution: ``"rademacher"``, ``"mammen"``, or ``"webb"``.
+    rng : np.random.Generator
+        Random number generator.
+
+    Returns
+    -------
+    weights : np.ndarray
+        Multiplier weights, shape ``(n_bootstrap, n_psu)``.
+    psu_ids : np.ndarray
+        Unique PSU identifiers aligned to columns of *weights*.
+    """
+    psu = resolved_survey.psu
+    strata = resolved_survey.strata
+
+    if resolved_survey.lonely_psu == "adjust":
+        raise NotImplementedError(
+            "lonely_psu='adjust' is not yet supported for survey-aware bootstrap. "
+            "Use lonely_psu='remove' or 'certainty', or use analytical inference."
+        )
+
+    if psu is None:
+        # Each observation is its own PSU
+        n_psu = len(resolved_survey.weights)
+        psu_ids = np.arange(n_psu)
+    else:
+        psu_ids = np.unique(psu)
+        n_psu = len(psu_ids)
+
+    if strata is None:
+        # No stratification — generate a single block of weights
+        if n_psu < 2:
+            # Single PSU — variance unidentified (matches compute_survey_vcov)
+            weights = np.zeros((n_bootstrap, n_psu), dtype=np.float64)
+            return weights, psu_ids
+        weights = generate_bootstrap_weights_batch(n_bootstrap, n_psu, weight_type, rng)
+        # FPC scaling (unstratified)
+        if resolved_survey.fpc is not None:
+            if psu is not None:
+                n_units_for_fpc = n_psu
+            else:
+                n_units_for_fpc = len(resolved_survey.weights)
+            if resolved_survey.fpc[0] < n_units_for_fpc:
+                raise ValueError(
+                    f"FPC ({resolved_survey.fpc[0]}) is less than the number of PSUs "
+                    f"({n_units_for_fpc}). FPC must be >= number of PSUs."
+                )
+            f = n_units_for_fpc / resolved_survey.fpc[0]
+            if f < 1.0:
+                weights = weights * np.sqrt(1.0 - f)
+            else:
+                weights = np.zeros_like(weights)
+    else:
+        # Stratified — generate independently within strata
+        weights = np.empty((n_bootstrap, n_psu), dtype=np.float64)
+
+        # Build PSU → column-index map
+        psu_to_col = {int(p): i for i, p in enumerate(psu_ids)}
+
+        unique_strata = np.unique(strata)
+        for h in unique_strata:
+            mask_h = strata == h
+
+            if psu is not None:
+                psus_in_h = np.unique(psu[mask_h])
+            else:
+                psus_in_h = np.where(mask_h)[0]
+
+            n_h = len(psus_in_h)
+            cols = np.array([psu_to_col[int(p)] for p in psus_in_h])
+
+            if n_h < 2:
+                # Lonely PSU — zero weight (matches remove/certainty behavior)
+                weights[:, cols] = 0.0
+                continue
+
+            # Generate weights for this stratum
+            stratum_weights = generate_bootstrap_weights_batch_numpy(
+                n_bootstrap, n_h, weight_type, rng
+            )
+
+            # FPC scaling
+            if resolved_survey.fpc is not None:
+                N_h = resolved_survey.fpc[mask_h][0]
+                if N_h < n_h:
+                    raise ValueError(
+                        f"FPC ({N_h}) is less than the number of PSUs "
+                        f"({n_h}) in stratum {h}. FPC must be >= n_PSU."
+                    )
+                f_h = n_h / N_h
+                if f_h < 1.0:
+                    stratum_weights = stratum_weights * np.sqrt(1.0 - f_h)
+                else:
+                    stratum_weights = np.zeros_like(stratum_weights)
+
+            weights[:, cols] = stratum_weights
+
+    return weights, psu_ids
+
+
+def generate_rao_wu_weights(
+    resolved_survey: "ResolvedSurveyDesign",
+    rng: np.random.Generator,
+) -> np.ndarray:
+    """Generate one set of Rao-Wu (1988) rescaled observation weights.
+
+    Within each stratum *h* with *n_h* PSUs, draw ``m_h`` PSUs with
+    replacement and rescale observation weights by ``(n_h / m_h) * r_hi``
+    where ``r_hi`` is the count of PSU *i* being selected.
+
+    Without FPC: ``m_h = n_h - 1``.
+    With FPC: ``m_h = max(1, round((1 - f_h) * (n_h - 1)))``
+    (Rao, Wu & Yue 1992, Section 3).
+
+    Parameters
+    ----------
+    resolved_survey : ResolvedSurveyDesign
+        Resolved survey design.
+    rng : np.random.Generator
+        Random number generator.
+
+    Returns
+    -------
+    np.ndarray
+        Rescaled observation weights, shape ``(n_obs,)``.
+    """
+    n_obs = len(resolved_survey.weights)
+    base_weights = resolved_survey.weights
+    psu = resolved_survey.psu
+    strata = resolved_survey.strata
+
+    if resolved_survey.lonely_psu == "adjust":
+        raise NotImplementedError(
+            "lonely_psu='adjust' is not yet supported for survey-aware bootstrap. "
+            "Use lonely_psu='remove' or 'certainty', or use analytical inference."
+        )
+
+    rescaled = np.zeros(n_obs, dtype=np.float64)
+
+    if psu is None:
+        obs_psu = np.arange(n_obs)
+    else:
+        obs_psu = psu
+
+    if strata is None:
+        strata_masks = [np.ones(n_obs, dtype=bool)]
+    else:
+        unique_strata = np.unique(strata)
+        strata_masks = [strata == h for h in unique_strata]
+
+    for mask_h in strata_masks:
+        psu_h = obs_psu[mask_h]
+        unique_psu_h = np.unique(psu_h)
+        n_h = len(unique_psu_h)
+
+        if n_h < 2:
+            # Census / lonely PSU — keep original weights (zero variance)
+            rescaled[mask_h] = base_weights[mask_h]
+            continue
+
+        # Compute resample size
+        if resolved_survey.fpc is not None:
+            N_h = resolved_survey.fpc[mask_h][0]
+            if N_h < n_h:
+                raise ValueError(
+                    f"FPC ({N_h}) is less than the number of PSUs "
+                    f"({n_h}). FPC must be >= number of PSUs."
+                )
+            f_h = n_h / N_h
+            if f_h >= 1.0:
+                # Census stratum — keep original weights (zero variance)
+                rescaled[mask_h] = base_weights[mask_h]
+                continue
+            m_h = max(1, round((1.0 - f_h) * (n_h - 1)))
+        else:
+            m_h = n_h - 1
+
+        # Draw m_h PSUs with replacement
+        drawn_indices = rng.choice(n_h, size=m_h, replace=True)
+        counts = np.bincount(drawn_indices, minlength=n_h)
+
+        # Rescale factor per PSU: (n_h / m_h) * r_hi
+        scale_per_psu = (n_h / m_h) * counts.astype(np.float64)
+
+        # Map PSU → local index for vectorized application
+        psu_to_local = {int(p): i for i, p in enumerate(unique_psu_h)}
+        obs_in_h = np.where(mask_h)[0]
+        local_indices = np.array([psu_to_local[int(obs_psu[idx])] for idx in obs_in_h])
+        rescaled[obs_in_h] = base_weights[obs_in_h] * scale_per_psu[local_indices]
+
+    return rescaled
+
+
+def generate_rao_wu_weights_batch(
+    n_bootstrap: int,
+    resolved_survey: "ResolvedSurveyDesign",
+    rng: np.random.Generator,
+) -> np.ndarray:
+    """Generate multiple sets of Rao-Wu rescaled weights.
+
+    Parameters
+    ----------
+    n_bootstrap : int
+        Number of bootstrap iterations.
+    resolved_survey : ResolvedSurveyDesign
+        Resolved survey design.
+    rng : np.random.Generator
+        Random number generator.
+
+    Returns
+    -------
+    np.ndarray
+        Rescaled weights, shape ``(n_bootstrap, n_obs)``.
+    """
+    n_obs = len(resolved_survey.weights)
+    result = np.empty((n_bootstrap, n_obs), dtype=np.float64)
+    for b in range(n_bootstrap):
+        result[b] = generate_rao_wu_weights(resolved_survey, rng)
+    return result

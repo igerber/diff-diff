@@ -17,10 +17,12 @@ import numpy as np
 import pandas as pd
 
 from diff_diff.bootstrap_utils import compute_effect_bootstrap_stats
-from diff_diff.linalg import LinearRegression, compute_robust_vcov
-from diff_diff.results import _get_significance_stars
+from diff_diff.linalg import LinearRegression
+from diff_diff.results import _format_survey_block, _get_significance_stars
 from diff_diff.utils import (
     safe_inference,
+)
+from diff_diff.utils import (
     within_transform as _within_transform_util,
 )
 
@@ -81,6 +83,8 @@ class SunAbrahamResults:
     cohort_effects: Optional[Dict[Tuple[Any, int], Dict[str, Any]]] = field(
         default=None, repr=False
     )
+    # Survey design metadata (SurveyMetadata instance from diff_diff.survey)
+    survey_metadata: Optional[Any] = field(default=None)
 
     def __repr__(self) -> str:
         """Concise string representation."""
@@ -123,6 +127,11 @@ class SunAbrahamResults:
             f"{'Control group:':<30} {self.control_group:>10}",
             "",
         ]
+
+        # Add survey design info
+        if self.survey_metadata is not None:
+            sm = self.survey_metadata
+            lines.extend(_format_survey_block(sm, 85))
 
         # Overall ATT
         lines.extend(
@@ -229,9 +238,7 @@ class SunAbrahamResults:
             return pd.DataFrame(rows)
 
         else:
-            raise ValueError(
-                f"Unknown level: {level}. Use 'event_study' or 'cohort'."
-            )
+            raise ValueError(f"Unknown level: {level}. Use 'event_study' or 'cohort'.")
 
     @property
     def is_significant(self) -> bool:
@@ -434,6 +441,7 @@ class SunAbraham:
         time: str,
         first_treat: str,
         covariates: Optional[List[str]] = None,
+        survey_design: object = None,
     ) -> SunAbrahamResults:
         """
         Fit the Sun-Abraham estimator using saturated regression.
@@ -453,6 +461,10 @@ class SunAbraham:
             Use 0 (or np.inf) for never-treated units.
         covariates : list, optional
             List of covariate column names to include in regression.
+        survey_design : SurveyDesign, optional
+            Survey design specification for design-based inference.
+            Supports weighted estimation and Taylor series linearization
+            variance with strata, PSU, and FPC.
 
         Returns
         -------
@@ -473,6 +485,45 @@ class SunAbraham:
         if missing:
             raise ValueError(f"Missing columns: {missing}")
 
+        # Resolve survey design if provided
+        from diff_diff.survey import (
+            _resolve_effective_cluster,
+            _resolve_survey_for_fit,
+            _validate_unit_constant_survey,
+        )
+
+        resolved_survey, survey_weights, survey_weight_type, survey_metadata = (
+            _resolve_survey_for_fit(survey_design, data, "analytical")
+        )
+
+        # Validate survey columns are constant within units (required for
+        # unit-level collapse in Rao-Wu bootstrap)
+        if resolved_survey is not None:
+            _validate_unit_constant_survey(data, unit, survey_design)
+
+        # Reject replicate-weight designs — SunAbraham's weighted
+        # within-transformation bakes survey weights into X and y, so
+        # replicate refits on the already-transformed design are incorrect.
+        # Full estimator-level replicate refits are not yet implemented.
+        if resolved_survey is not None and resolved_survey.uses_replicate_variance:
+            raise NotImplementedError(
+                "SunAbraham does not yet support replicate-weight survey designs. "
+                "The weighted within-transformation must be recomputed for each "
+                "replicate, which requires estimator-level replicate refits. "
+                "Use a TSL-based survey design (strata/psu/fpc) instead."
+            )
+
+        # Bootstrap + survey supported via Rao-Wu rescaled bootstrap.
+        # Determine Rao-Wu eligibility from the *original* survey_design
+        # (before cluster-as-PSU injection which adds PSU to weights-only designs).
+        _use_rao_wu = False
+        if survey_design is not None and resolved_survey is not None:
+            _has_explicit_strata = getattr(survey_design, "strata", None) is not None
+            _has_explicit_psu = getattr(survey_design, "psu", None) is not None
+            _has_explicit_fpc = getattr(survey_design, "fpc", None) is not None
+            if _has_explicit_strata or _has_explicit_psu or _has_explicit_fpc:
+                _use_rao_wu = True
+
         # Create working copy
         df = data.copy()
 
@@ -491,30 +542,20 @@ class SunAbraham:
 
         # Get unique units
         unit_info = (
-            df.groupby(unit)
-            .agg({first_treat: "first", "_never_treated": "first"})
-            .reset_index()
+            df.groupby(unit).agg({first_treat: "first", "_never_treated": "first"}).reset_index()
         )
 
         n_treated_units = int((unit_info[first_treat] > 0).sum())
         n_control_units = int((unit_info["_never_treated"]).sum())
 
         if n_control_units == 0:
-            raise ValueError(
-                "No never-treated units found. Check 'first_treat' column."
-            )
+            raise ValueError("No never-treated units found. Check 'first_treat' column.")
 
         if len(treatment_groups) == 0:
-            raise ValueError(
-                "No treated units found. Check 'first_treat' column."
-            )
+            raise ValueError("No treated units found. Check 'first_treat' column.")
 
         # Compute relative time for each observation (vectorized)
-        df["_rel_time"] = np.where(
-            df[first_treat] > 0,
-            df[time] - df[first_treat],
-            np.nan
-        )
+        df["_rel_time"] = np.where(df[first_treat] > 0, df[time] - df[first_treat], np.nan)
 
         # Identify the range of relative time periods to estimate
         rel_times_by_cohort = {}
@@ -554,6 +595,23 @@ class SunAbraham:
             # Keep all units (not_yet_treated will be handled by the regression)
             df_reg = df.copy()
 
+        # Resolve effective cluster and inject cluster-as-PSU
+        cluster_ids_raw = df_reg[cluster_var].values if cluster_var in df_reg.columns else None
+        effective_cluster_ids = _resolve_effective_cluster(
+            resolved_survey, cluster_ids_raw, cluster_var if self.cluster is not None else None
+        )
+        if resolved_survey is not None and effective_cluster_ids is not None:
+            from diff_diff.survey import _inject_cluster_as_psu, compute_survey_metadata
+
+            resolved_survey = _inject_cluster_as_psu(resolved_survey, effective_cluster_ids)
+            if resolved_survey.psu is not None and survey_metadata is not None:
+                raw_w = (
+                    data[survey_design.weights].values.astype(np.float64)
+                    if survey_design.weights
+                    else np.ones(len(data), dtype=np.float64)
+                )
+                survey_metadata = compute_survey_metadata(resolved_survey, raw_w)
+
         # Fit saturated regression
         (
             cohort_effects,
@@ -570,6 +628,25 @@ class SunAbraham:
             rel_periods_to_estimate,
             covariates,
             cluster_var,
+            survey_weights=survey_weights,
+            survey_weight_type=survey_weight_type,
+            resolved_survey=resolved_survey,
+        )
+
+        # Resolve survey weight column name for cohort aggregation
+        survey_weight_col = (
+            survey_design.weights
+            if survey_design is not None
+            and hasattr(survey_design, "weights")
+            and survey_design.weights
+            else None
+        )
+
+        # Survey degrees of freedom for t-distribution inference
+        _sa_survey_df = (
+            max(survey_metadata.df_survey, 1)
+            if survey_metadata is not None and survey_metadata.df_survey is not None
+            else None
         )
 
         # Compute interaction-weighted event study effects
@@ -583,6 +660,8 @@ class SunAbraham:
             cohort_ses,
             vcov_cohort,
             coef_index_map,
+            survey_weight_col=survey_weight_col,
+            survey_df=_sa_survey_df,
         )
 
         # Compute overall ATT (average of post-treatment effects)
@@ -594,9 +673,12 @@ class SunAbraham:
             cohort_weights,
             vcov_cohort,
             coef_index_map,
+            survey_weight_col=survey_weight_col,
         )
 
-        overall_t, overall_p, overall_ci = safe_inference(overall_att, overall_se, alpha=self.alpha)
+        overall_t, overall_p, overall_ci = safe_inference(
+            overall_att, overall_se, alpha=self.alpha, df=_sa_survey_df
+        )
 
         # Run bootstrap if requested
         bootstrap_results = None
@@ -613,6 +695,11 @@ class SunAbraham:
                 cluster_var=cluster_var,
                 original_event_study=event_study_effects,
                 original_overall_att=overall_att,
+                resolved_survey=resolved_survey,
+                survey_weights=survey_weights,
+                survey_weight_type=survey_weight_type,
+                survey_weight_col=survey_weight_col,
+                use_rao_wu=_use_rao_wu,
             )
 
             # Update results with bootstrap inference
@@ -625,12 +712,8 @@ class SunAbraham:
             for e in event_study_effects:
                 if e in bootstrap_results.event_study_ses:
                     event_study_effects[e]["se"] = bootstrap_results.event_study_ses[e]
-                    event_study_effects[e]["conf_int"] = (
-                        bootstrap_results.event_study_cis[e]
-                    )
-                    event_study_effects[e]["p_value"] = (
-                        bootstrap_results.event_study_p_values[e]
-                    )
+                    event_study_effects[e]["conf_int"] = bootstrap_results.event_study_cis[e]
+                    event_study_effects[e]["p_value"] = bootstrap_results.event_study_p_values[e]
                     eff_val = event_study_effects[e]["effect"]
                     se_val = event_study_effects[e]["se"]
                     event_study_effects[e]["t_stat"] = safe_inference(
@@ -666,6 +749,7 @@ class SunAbraham:
             control_group=self.control_group,
             bootstrap_results=bootstrap_results,
             cohort_effects=cohort_effects_storage,
+            survey_metadata=survey_metadata,
         )
 
         self.is_fitted_ = True
@@ -682,6 +766,9 @@ class SunAbraham:
         rel_periods: List[int],
         covariates: Optional[List[str]],
         cluster_var: str,
+        survey_weights: Optional[np.ndarray] = None,
+        survey_weight_type: str = "pweight",
+        resolved_survey: object = None,
     ) -> Tuple[
         Dict[Tuple[Any, int], float],
         Dict[Tuple[Any, int], float],
@@ -719,10 +806,7 @@ class SunAbraham:
             for e in rel_periods:
                 col_name = f"_D_{g}_{e}"
                 # Indicator: unit is in cohort g AND at relative time e
-                indicator = (
-                    (df[first_treat] == g) &
-                    (df["_rel_time"] == e)
-                ).astype(float)
+                indicator = ((df[first_treat] == g) & (df["_rel_time"] == e)).astype(float)
 
                 # Only include if there are observations
                 if indicator.sum() > 0:
@@ -738,8 +822,7 @@ class SunAbraham:
 
         if len(interaction_cols) == 0:
             raise ValueError(
-                "No valid cohort × relative-time interactions found. "
-                "Check your data structure."
+                "No valid cohort × relative-time interactions found. " "Check your data structure."
             )
 
         # Apply within-transformation for unit and time fixed effects
@@ -747,7 +830,9 @@ class SunAbraham:
         if covariates:
             variables_to_demean.extend(covariates)
 
-        df_demeaned = self._within_transform(df, variables_to_demean, unit, time)
+        df_demeaned = _within_transform_util(
+            df, variables_to_demean, unit, time, suffix="_dm", weights=survey_weights
+        )
 
         # Build design matrix
         X_cols = [f"{col}_dm" for col in interaction_cols]
@@ -770,9 +855,11 @@ class SunAbraham:
             robust=True,
             cluster_ids=cluster_ids,
             rank_deficient_action=self.rank_deficient_action,
+            weights=survey_weights,
+            weight_type=survey_weight_type,
+            survey_design=resolved_survey,
         ).fit(X, y, df_adjustment=df_adj)
 
-        coefficients = reg.coefficients_
         vcov = reg.vcov_
 
         # Extract cohort effects and standard errors using get_inference
@@ -786,6 +873,7 @@ class SunAbraham:
             cohort_ses[(g, e)] = inference.se
 
         # Extract just the vcov for cohort effects (excluding covariates)
+        assert vcov is not None
         vcov_cohort = vcov[:n_interactions, :n_interactions]
 
         return cohort_effects, cohort_ses, vcov_cohort, coef_index_map
@@ -815,6 +903,8 @@ class SunAbraham:
         cohort_ses: Dict[Tuple[Any, int], float],
         vcov_cohort: np.ndarray,
         coef_index_map: Dict[Tuple[Any, int], int],
+        survey_weight_col: Optional[str] = None,
+        survey_df: Optional[int] = None,
     ) -> Tuple[Dict[int, Dict[str, Any]], Dict[int, Dict[Any, float]]]:
         """
         Compute interaction-weighted event study effects.
@@ -823,6 +913,10 @@ class SunAbraham:
 
         where w_{g,e} = n_{g,e} / Σ_g n_{g,e} is the share of observations from cohort g
         at event-time e among all treated observations at that event-time.
+
+        When survey weights are provided, n_{g,e} is the survey-weighted mass
+        (sum of weights) rather than raw observation counts, so the estimand
+        reflects the survey-weighted cohort composition.
 
         Returns
         -------
@@ -834,15 +928,19 @@ class SunAbraham:
         event_study_effects: Dict[int, Dict[str, Any]] = {}
         cohort_weights: Dict[int, Dict[Any, float]] = {}
 
-        # Pre-compute per-event-time observation counts: n_{g,e}
-        event_time_counts = df[df[first_treat] > 0].groupby([first_treat, "_rel_time"]).size()
+        # Pre-compute per-event-time observation mass: n_{g,e}
+        # With survey weights, use weighted sum; otherwise raw counts.
+        treated_mask = df[first_treat] > 0
+        if survey_weight_col is not None and survey_weight_col in df.columns:
+            event_time_counts = (
+                df[treated_mask].groupby([first_treat, "_rel_time"])[survey_weight_col].sum()
+            )
+        else:
+            event_time_counts = df[treated_mask].groupby([first_treat, "_rel_time"]).size()
 
         for e in rel_periods:
             # Get cohorts that have observations at this relative time
-            cohorts_at_e = [
-                g for g in treatment_groups
-                if (g, e) in cohort_effects
-            ]
+            cohorts_at_e = [g for g in treatment_groups if (g, e) in cohort_effects]
 
             if not cohorts_at_e:
                 continue
@@ -878,7 +976,7 @@ class SunAbraham:
             agg_var = float(weight_vec @ vcov_subset @ weight_vec)
             agg_se = np.sqrt(max(agg_var, 0))
 
-            t_stat, p_val, ci = safe_inference(agg_effect, agg_se, alpha=self.alpha)
+            t_stat, p_val, ci = safe_inference(agg_effect, agg_se, alpha=self.alpha, df=survey_df)
 
             event_study_effects[e] = {
                 "effect": agg_effect,
@@ -900,34 +998,40 @@ class SunAbraham:
         cohort_weights: Dict[int, Dict[Any, float]],
         vcov_cohort: np.ndarray,
         coef_index_map: Dict[Tuple[Any, int], int],
+        survey_weight_col: Optional[str] = None,
     ) -> Tuple[float, float]:
         """
         Compute overall ATT as weighted average of post-treatment effects.
 
+        When survey weights are provided, the per-period weights use
+        survey-weighted mass rather than raw observation counts.
+
         Returns (att, se) tuple.
         """
-        post_effects = [
-            (e, eff)
-            for e, eff in event_study_effects.items()
-            if e >= 0
-        ]
+        post_effects = [(e, eff) for e, eff in event_study_effects.items() if e >= 0]
 
         if not post_effects:
             return np.nan, np.nan
 
-        # Weight by number of treated observations at each relative time
+        # Weight by (survey-weighted) mass of treated observations at each relative time
         post_weights = []
         post_estimates = []
 
         for e, eff in post_effects:
-            n_at_e = len(df[(df["_rel_time"] == e) & (df[first_treat] > 0)])
-            post_weights.append(max(n_at_e, 1))
+            mask = (df["_rel_time"] == e) & (df[first_treat] > 0)
+            if survey_weight_col is not None and survey_weight_col in df.columns:
+                # No floor for survey weights — valid masses can be < 1
+                n_at_e = df.loc[mask, survey_weight_col].sum()
+                post_weights.append(n_at_e if n_at_e > 0 else 0.0)
+            else:
+                n_at_e = len(df[mask])
+                post_weights.append(max(n_at_e, 1))
             post_estimates.append(eff["effect"])
 
-        post_weights = np.array(post_weights, dtype=float)
-        post_weights = post_weights / post_weights.sum()
+        post_weights_arr = np.array(post_weights, dtype=float)
+        post_weights_arr = post_weights_arr / post_weights_arr.sum()
 
-        overall_att = float(np.sum(post_weights * np.array(post_estimates)))
+        overall_att = float(np.sum(post_weights_arr * np.array(post_estimates)))
 
         # Compute SE using delta method
         # Need to trace back through the full weighting scheme
@@ -936,7 +1040,7 @@ class SunAbraham:
         overall_weights_by_coef: Dict[Tuple[Any, int], float] = {}
 
         for i, (e, _) in enumerate(post_effects):
-            period_weight = post_weights[i]
+            period_weight = post_weights_arr[i]
             if e in cohort_weights:
                 for g, cw in cohort_weights[e].items():
                     key = (g, e)
@@ -954,7 +1058,9 @@ class SunAbraham:
                 stacklevel=2,
             )
             overall_var = float(
-                np.sum((post_weights ** 2) * np.array([eff["se"] ** 2 for _, eff in post_effects]))
+                np.sum(
+                    (post_weights_arr**2) * np.array([eff["se"] ** 2 for _, eff in post_effects])
+                )
             )
             return overall_att, np.sqrt(overall_var)
 
@@ -980,11 +1086,18 @@ class SunAbraham:
         cluster_var: str,
         original_event_study: Dict[int, Dict[str, Any]],
         original_overall_att: float,
+        resolved_survey: object = None,
+        survey_weights: Optional[np.ndarray] = None,
+        survey_weight_type: str = "pweight",
+        survey_weight_col: Optional[str] = None,
+        use_rao_wu: bool = False,
     ) -> SABootstrapResults:
         """
-        Run pairs bootstrap for inference.
+        Run bootstrap for inference.
 
-        Resamples units with replacement and re-estimates the full model.
+        When use_rao_wu is True (survey design with explicit strata/PSU/FPC),
+        uses Rao-Wu rescaled bootstrap (weight perturbation). Otherwise, uses
+        pairs bootstrap (resampling units with replacement).
         """
         if self.n_bootstrap < 50:
             warnings.warn(
@@ -995,6 +1108,27 @@ class SunAbraham:
             )
 
         rng = np.random.default_rng(self.seed)
+
+        if use_rao_wu:
+            return self._run_rao_wu_bootstrap(
+                df=df,
+                outcome=outcome,
+                unit=unit,
+                time=time,
+                first_treat=first_treat,
+                treatment_groups=treatment_groups,
+                rel_periods_to_estimate=rel_periods_to_estimate,
+                covariates=covariates,
+                cluster_var=cluster_var,
+                original_event_study=original_event_study,
+                original_overall_att=original_overall_att,
+                resolved_survey=resolved_survey,
+                survey_weight_type=survey_weight_type,
+                survey_weight_col=survey_weight_col,
+                rng=rng,
+            )
+
+        # --- Pairs bootstrap (non-survey or weights-only survey) ---
 
         # Get unique units
         all_units = df[unit].unique()
@@ -1023,16 +1157,17 @@ class SunAbraham:
 
             # Recompute relative time (vectorized)
             df_b["_rel_time"] = np.where(
-                df_b[first_treat] > 0,
-                df_b[time] - df_b[first_treat],
-                np.nan
+                df_b[first_treat] > 0, df_b[time] - df_b[first_treat], np.nan
             )
             # np.inf was normalized to 0 in fit(), so the np.inf check is defensive only
-            df_b["_never_treated"] = (
-                (df_b[first_treat] == 0) | (df_b[first_treat] == np.inf)
-            )
+            df_b["_never_treated"] = (df_b[first_treat] == 0) | (df_b[first_treat] == np.inf)
 
             try:
+                # Extract survey weights from resampled data if present
+                boot_survey_weights = None
+                if survey_weight_col is not None and survey_weight_col in df_b.columns:
+                    boot_survey_weights = df_b[survey_weight_col].values
+
                 # Re-estimate saturated regression
                 (
                     cohort_effects_b,
@@ -1049,6 +1184,9 @@ class SunAbraham:
                     rel_periods_to_estimate,
                     covariates,
                     cluster_var,
+                    survey_weights=boot_survey_weights,
+                    survey_weight_type=survey_weight_type,
+                    resolved_survey=None,  # Use explicit weights, not stale design
                 )
 
                 # Compute IW effects for this bootstrap sample
@@ -1062,6 +1200,7 @@ class SunAbraham:
                     cohort_ses_b,
                     vcov_b,
                     coef_map_b,
+                    survey_weight_col=survey_weight_col,
                 )
 
                 # Store bootstrap estimates
@@ -1080,6 +1219,7 @@ class SunAbraham:
                     cohort_weights_b,
                     vcov_b,
                     coef_map_b,
+                    survey_weight_col=survey_weight_col,
                 )
                 bootstrap_overall[b] = overall_b
 
@@ -1103,7 +1243,9 @@ class SunAbraham:
             boot_dist = bootstrap_effects[e]
             original_effect = original_event_study[e]["effect"]
             se, ci, p_value = compute_effect_bootstrap_stats(
-                original_effect, boot_dist, alpha=self.alpha,
+                original_effect,
+                boot_dist,
+                alpha=self.alpha,
                 context=f"event study e={e}",
             )
             event_study_ses[e] = se
@@ -1112,13 +1254,249 @@ class SunAbraham:
 
         # Overall ATT statistics
         overall_se, overall_ci, overall_p = compute_effect_bootstrap_stats(
-            original_overall_att, bootstrap_overall, alpha=self.alpha,
+            original_overall_att,
+            bootstrap_overall,
+            alpha=self.alpha,
             context="overall ATT",
         )
 
         return SABootstrapResults(
             n_bootstrap=self.n_bootstrap,
             weight_type="pairs",
+            alpha=self.alpha,
+            overall_att_se=overall_se,
+            overall_att_ci=overall_ci,
+            overall_att_p_value=overall_p,
+            event_study_ses=event_study_ses,
+            event_study_cis=event_study_cis,
+            event_study_p_values=event_study_p_values,
+            bootstrap_distribution=bootstrap_overall,
+        )
+
+    def _run_rao_wu_bootstrap(
+        self,
+        df: pd.DataFrame,
+        outcome: str,
+        unit: str,
+        time: str,
+        first_treat: str,
+        treatment_groups: List[Any],
+        rel_periods_to_estimate: List[int],
+        covariates: Optional[List[str]],
+        cluster_var: str,
+        original_event_study: Dict[int, Dict[str, Any]],
+        original_overall_att: float,
+        resolved_survey: object,
+        survey_weight_type: str,
+        survey_weight_col: Optional[str],
+        rng: np.random.Generator,
+    ) -> SABootstrapResults:
+        """
+        Run Rao-Wu rescaled bootstrap for survey-aware inference.
+
+        Instead of physically resampling units, each iteration generates
+        rescaled observation weights via Rao-Wu (1988) weight perturbation.
+        The rescaled weights feed into the existing WLS regression path.
+        """
+        from diff_diff.bootstrap_utils import generate_rao_wu_weights
+        from diff_diff.survey import ResolvedSurveyDesign
+
+        # Column name for rescaled weights in the bootstrap DataFrame
+        _rw_col = "__rw_boot_weight"
+
+        # Collapse survey design to unit level so Rao-Wu respects panel
+        # structure: each unit gets one set of weights regardless of how
+        # many time periods it has.  Without this, when there is no
+        # explicit PSU, generate_rao_wu_weights treats each observation as
+        # its own PSU and different obs of the same unit can get different
+        # weights, breaking panel semantics.
+        all_units = df[unit].unique()
+
+        weights_unit = (
+            pd.Series(resolved_survey.weights, index=df.index)
+            .groupby(df[unit])
+            .first()
+            .reindex(all_units)
+            .values
+            .astype(np.float64)
+        )
+
+        strata_unit = None
+        if resolved_survey.strata is not None:
+            strata_unit = (
+                pd.Series(resolved_survey.strata, index=df.index)
+                .groupby(df[unit])
+                .first()
+                .reindex(all_units)
+                .values
+            )
+
+        psu_unit = None
+        if resolved_survey.psu is not None:
+            psu_unit = (
+                pd.Series(resolved_survey.psu, index=df.index)
+                .groupby(df[unit])
+                .first()
+                .reindex(all_units)
+                .values
+            )
+
+        fpc_unit = None
+        if resolved_survey.fpc is not None:
+            fpc_unit = (
+                pd.Series(resolved_survey.fpc, index=df.index)
+                .groupby(df[unit])
+                .first()
+                .reindex(all_units)
+                .values
+            )
+
+        unit_resolved = ResolvedSurveyDesign(
+            weights=weights_unit,
+            weight_type=resolved_survey.weight_type,
+            strata=strata_unit,
+            psu=psu_unit,
+            fpc=fpc_unit,
+            n_strata=resolved_survey.n_strata,
+            n_psu=resolved_survey.n_psu,
+            lonely_psu=resolved_survey.lonely_psu,
+        )
+
+        # Build unit -> row indices mapping for expanding unit-level weights
+        unit_to_rows = {u: df.index[df[unit] == u].values for u in all_units}
+        unit_order = {u: i for i, u in enumerate(all_units)}
+
+        # Store bootstrap samples
+        rel_periods = sorted(original_event_study.keys())
+        bootstrap_effects = {e: np.full(self.n_bootstrap, np.nan) for e in rel_periods}
+        bootstrap_overall = np.full(self.n_bootstrap, np.nan)
+
+        for b in range(self.n_bootstrap):
+            try:
+                # Generate Rao-Wu rescaled weights at unit level
+                unit_boot_weights = generate_rao_wu_weights(unit_resolved, rng)
+
+                # Expand unit-level weights to observation level
+                boot_weights = np.empty(len(df), dtype=np.float64)
+                for u, idx in unit_to_rows.items():
+                    boot_weights[idx] = unit_boot_weights[unit_order[u]]
+
+                # Drop observations with zero weight (PSUs not drawn in this
+                # iteration) to avoid NaN/Inf in within-transformation.
+                positive_mask = boot_weights > 0
+                if positive_mask.sum() < 2:
+                    # Too few observations with positive weight
+                    raise ValueError("Rao-Wu iteration produced < 2 positive weights")
+
+                df_b = df[positive_mask].reset_index(drop=True)
+                boot_weights_b = boot_weights[positive_mask]
+                df_b[_rw_col] = boot_weights_b
+
+                # Verify we still have both treated and control observations
+                has_treated = (df_b[first_treat] > 0).any()
+                has_control = ((df_b[first_treat] == 0) | (df_b[first_treat] == np.inf)).any()
+                if not has_treated or not has_control:
+                    raise ValueError("Rao-Wu iteration dropped all treated or control units")
+
+                # Re-estimate saturated regression with rescaled weights.
+                # Pass resolved_survey=None since inference comes from the
+                # bootstrap distribution, not from within-iteration vcov.
+                (
+                    cohort_effects_b,
+                    cohort_ses_b,
+                    vcov_b,
+                    coef_map_b,
+                ) = self._fit_saturated_regression(
+                    df_b,
+                    outcome,
+                    unit,
+                    time,
+                    first_treat,
+                    treatment_groups,
+                    rel_periods_to_estimate,
+                    covariates,
+                    cluster_var,
+                    survey_weights=boot_weights_b,
+                    survey_weight_type=survey_weight_type,
+                    resolved_survey=None,
+                )
+
+                # Compute IW effects using rescaled weights for cohort shares
+                event_study_b, cohort_weights_b = self._compute_iw_effects(
+                    df_b,
+                    unit,
+                    first_treat,
+                    treatment_groups,
+                    rel_periods_to_estimate,
+                    cohort_effects_b,
+                    cohort_ses_b,
+                    vcov_b,
+                    coef_map_b,
+                    survey_weight_col=_rw_col,
+                )
+
+                # Store bootstrap estimates
+                for e in rel_periods:
+                    if e in event_study_b:
+                        bootstrap_effects[e][b] = event_study_b[e]["effect"]
+                    else:
+                        bootstrap_effects[e][b] = original_event_study[e]["effect"]
+
+                # Compute overall ATT using rescaled weights
+                overall_b, _ = self._compute_overall_att(
+                    df_b,
+                    first_treat,
+                    event_study_b,
+                    cohort_effects_b,
+                    cohort_weights_b,
+                    vcov_b,
+                    coef_map_b,
+                    survey_weight_col=_rw_col,
+                )
+                bootstrap_overall[b] = overall_b
+
+            except (ValueError, np.linalg.LinAlgError) as exc:
+                # Failed draws stored as NaN (not original estimate) to avoid
+                # shrinking bootstrap dispersion.  compute_effect_bootstrap_stats
+                # handles NaN draws via nanstd.
+                warnings.warn(
+                    f"Bootstrap iteration {b} failed: {exc}. Storing NaN.",
+                    UserWarning,
+                    stacklevel=2,
+                )
+                for e in rel_periods:
+                    bootstrap_effects[e][b] = np.nan
+                bootstrap_overall[b] = np.nan
+
+        # Compute bootstrap statistics
+        event_study_ses = {}
+        event_study_cis = {}
+        event_study_p_values = {}
+
+        for e in rel_periods:
+            boot_dist = bootstrap_effects[e]
+            original_effect = original_event_study[e]["effect"]
+            se, ci, p_value = compute_effect_bootstrap_stats(
+                original_effect,
+                boot_dist,
+                alpha=self.alpha,
+                context=f"event study e={e}",
+            )
+            event_study_ses[e] = se
+            event_study_cis[e] = ci
+            event_study_p_values[e] = p_value
+
+        # Overall ATT statistics
+        overall_se, overall_ci, overall_p = compute_effect_bootstrap_stats(
+            original_overall_att,
+            bootstrap_overall,
+            alpha=self.alpha,
+            context="overall ATT",
+        )
+
+        return SABootstrapResults(
+            n_bootstrap=self.n_bootstrap,
+            weight_type="rao_wu",
             alpha=self.alpha,
             overall_att_se=overall_se,
             overall_att_ci=overall_ci,

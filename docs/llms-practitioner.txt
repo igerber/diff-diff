@@ -1,0 +1,515 @@
+# diff-diff Practitioner Guide
+
+> An 8-step workflow for rigorous Difference-in-Differences analysis, based on
+> Baker et al. (2025) "Difference-in-Differences Designs: A Practitioner's
+> Guide" and adapted for the diff-diff library. Some steps are reorganized or
+> extended relative to the paper (see docs/methodology/REGISTRY.md for details).
+
+## Instructions for AI Agents
+
+You MUST follow all 8 steps below for any DiD analysis. Skipping diagnostic
+steps (2, 3, 6, 7, 8) produces analyses that are incomplete and potentially
+misleading. A DiD analysis is not just calling `.fit()` — it requires testing
+assumptions, running sensitivity analysis, and checking robustness.
+
+After estimation, call `practitioner_next_steps(results)` for context-aware
+guidance on remaining steps.
+
+---
+
+## Step 1: Define Target Parameters
+
+Before writing any code, state explicitly what causal effect you are estimating.
+
+- **ATT** (Average Treatment Effect on the Treated): The average effect of
+  treatment on those who were actually treated.
+- **ATT(g,t)**: Group-time specific effects — the ATT for cohort g at time t.
+  These are the building blocks; aggregate parameters combine them.
+- **ATT_es(e)**: Event-study parameters — average effect at relative time e
+  since treatment.
+
+Key questions to answer:
+- Are you targeting weighted or unweighted averages? They answer different
+  policy questions. Population-weighted estimates give more weight to larger
+  units.
+- Is there treatment effect heterogeneity you should preserve rather than
+  average over?
+
+```python
+# After estimation, the target parameter is available as:
+# Basic DiD (DiDResults):
+results.att          # ATT
+results.se           # Standard error
+results.conf_int     # Confidence interval
+
+# CallawaySantAnna (with aggregate parameter):
+results.overall_att       # Overall ATT
+results.overall_se        # Standard error
+results.group_effects     # Per-cohort ATTs (aggregate='group' or 'all')
+results.event_study_effects  # Dynamic effects (aggregate='event_study' or 'all')
+
+# SunAbraham (no aggregate parameter — effects computed automatically):
+results.overall_att           # Overall ATT
+results.event_study_effects   # Dynamic effects by relative period
+results.cohort_effects        # Per-cohort effects (via to_dataframe(level='cohort'))
+
+# Other staggered (ImputationDiD, TwoStageDiD, etc.):
+results.overall_att       # Overall ATT
+results.overall_se        # Standard error
+```
+
+---
+
+## Step 2: State Identification Assumptions
+
+Explicitly state which assumptions you are invoking and argue why they are
+plausible in your setting.
+
+### Parallel Trends (PT)
+The core assumption. In the absence of treatment, treated and untreated groups
+would have followed the same trend. This is **untestable** for post-treatment
+periods but can be assessed with pre-treatment data.
+
+Variants for staggered designs:
+- **PT-GT-Nev**: Parallel trends between each cohort and never-treated units
+- **PT-GT-NYT**: Parallel trends between each cohort and not-yet-treated units
+  (larger comparison group but requires no anticipation for not-yet-treated units)
+- **PT-GT-all**: Parallel trends across all groups and periods (most restrictive)
+- **Conditional PT**: Parallel trends holds within covariate strata (use with
+  covariates via `estimation_method="dr"`)
+
+### No-Anticipation
+Treatment does not affect outcomes before it is implemented. Violated when
+units adjust behavior in anticipation of future treatment. Set `anticipation=k`
+to allow k periods of anticipation.
+
+---
+
+## Step 3: Test Parallel Trends
+
+Test the parallel trends assumption empirically. This step is separated from
+Step 2 because it requires code execution, not just stating assumptions.
+
+**For simple 2x2 designs** (single treatment timing):
+```python
+from diff_diff import check_parallel_trends, equivalence_test_trends
+
+# Simple pre-trends test (compares slopes for a binary treatment indicator)
+pt_result = check_parallel_trends(
+    data, outcome='y', time='period', treatment_group='treated',
+    pre_periods=[1, 2, 3]
+)
+print(f"Treated trend: {pt_result['treated_trend']:.4f}")
+print(f"Control trend: {pt_result['control_trend']:.4f}")
+print(f"Difference p-value: {pt_result['p_value']:.4f}")
+
+# Equivalence test (TOST) — tests that trends are meaningfully similar
+equiv = equivalence_test_trends(
+    data, outcome='y', time='period', treatment_group='treated',
+    pre_periods=[1, 2, 3], equivalence_margin=0.5
+)
+```
+
+**For staggered designs** (multiple cohorts adopting at different times):
+The generic `check_parallel_trends()` assumes a single binary treatment with
+universal pre-periods, which is invalid when cohorts adopt at different times
+(some "pre-periods" are post-treatment for early cohorts). Instead, use the
+CS event-study pre-period coefficients as the pre-trends diagnostic:
+```python
+# Fit CS with event_study aggregation, then inspect pre-periods
+cs = CallawaySantAnna(control_group='never_treated', cluster='unit_id')
+results = cs.fit(data, ..., aggregate='event_study')
+
+# Pre-treatment relative-time ATTs should be near zero
+if results.event_study_effects:
+    for rel_t, eff in sorted(results.event_study_effects.items()):
+        if rel_t < 0:
+            print(f"Pre-period {rel_t}: ATT={eff['effect']:.4f}, SE={eff['se']:.4f}")
+# Significant pre-treatment effects → parallel trends may be violated
+```
+
+CAUTION: Small, statistically insignificant pre-trends do NOT guarantee
+parallel trends holds post-treatment. Use HonestDiD (Step 6) to bound how
+large a violation would need to be to overturn your results.
+
+---
+
+## Step 4: Choose Estimation Method
+
+Use this decision tree to select the appropriate estimator:
+
+```
+Is treatment adoption staggered (multiple cohorts, different timing)?
+|-- YES: Do NOT use plain TWFE. Use one of:
+|   |-- CallawaySantAnna (CS)  -- most general, doubly robust, recommended default
+|   |-- SunAbraham (SA)        -- interaction-weighted, good for event studies
+|   |-- ImputationDiD (BJS)    -- most efficient under homogeneous effects
+|   |-- TwoStageDiD (Gardner)  -- two-stage with GMM variance
+|   |-- StackedDiD (Stacked)   -- sub-experiment approach
+|   \-- EfficientDiD (EDiD)    -- optimal weighting for tighter SEs
+|
+|-- NO, simple 2x2 design:
+|   \-- DifferenceInDifferences (DiD)
+|
+|-- Few treated units (< 20)?
+|   \-- SyntheticDiD (SDiD)    -- synthetic control + DiD hybrid
+|
+|-- Suspected factor confounding / interactive fixed effects?
+|   \-- TROP                   -- triply robust with nuclear norm factor adjustment
+|
+|-- Continuous treatment (doses)?
+|   \-- ContinuousDiD (CDiD)
+|
+\-- Two eligibility criteria?
+    \-- TripleDifference (DDD)
+```
+
+Always run BaconDecomposition first if using TWFE, to check for negative
+weights from forbidden comparisons:
+
+```python
+from diff_diff import BaconDecomposition
+
+bacon = BaconDecomposition()
+bacon_result = bacon.fit(
+    data, outcome='y', unit='unit_id', time='period', first_treat='first_treat'
+)
+print(bacon_result.summary())
+# If substantial weight falls on "later vs earlier" comparisons,
+# switch to a heterogeneity-robust estimator (CS, SA, BJS, etc.)
+```
+
+---
+
+## Step 5: Estimate
+
+Before fitting, you MUST check the cluster count and choose inference
+accordingly. Do not assume — always print and decide based on the data.
+
+```python
+# ALWAYS check the cluster count before choosing inference:
+cluster_col = 'county_id'  # the level at which treatment is assigned
+n_clusters = data[cluster_col].nunique()
+print(f"Number of clusters: {n_clusters}")
+
+if n_clusters >= 50:
+    print("-> Use cluster-robust SEs (asymptotic approximation is reliable)")
+else:
+    print(f"-> Only {n_clusters} clusters — use wild cluster bootstrap")
+```
+
+Now run the estimator chosen in Step 4. Examples for common designs:
+
+### Staggered adoption (recommended: Callaway-Sant'Anna)
+```python
+from diff_diff import CallawaySantAnna
+
+cs = CallawaySantAnna(
+    control_group='never_treated',  # or 'not_yet_treated' — context-dependent choice
+    estimation_method='dr',            # doubly robust (recommended)
+    cluster='county_id',
+    n_bootstrap=999,
+)
+results = cs.fit(
+    data,
+    outcome='lemp',
+    unit='county_id',
+    time='year',
+    first_treat='first_treat',
+    covariates=['lpop'],
+    aggregate='all',  # computes simple, event_study, and group aggregations
+)
+print(results.summary())
+```
+
+### Simple 2x2
+```python
+from diff_diff import DifferenceInDifferences
+
+did = DifferenceInDifferences(robust=True, cluster='state_id')
+results = did.fit(data, outcome='y', treatment='treated', time='post')
+print(results.summary())
+```
+
+### Event study
+```python
+from diff_diff import MultiPeriodDiD
+
+es = MultiPeriodDiD(cluster='unit_id')
+results = es.fit(data, outcome='y', unit='unit_id', time='period',
+                 treatment='treated')
+print(results.summary())
+```
+
+---
+
+## Step 6: Sensitivity Analysis
+
+This step is CRITICAL and most often skipped. Run at least one of:
+
+### HonestDiD (Rambachan & Roth 2023) — recommended
+Bounds on the treatment effect under violations of parallel trends.
+Works with MultiPeriodDiD and CallawaySantAnna results only. For CS,
+requires `aggregate='event_study'` or `aggregate='all'` so that event
+study effects are available.
+
+```python
+from diff_diff import compute_honest_did
+
+# Relative magnitude restriction: post-treatment violations bounded by
+# M times the max pre-treatment violation
+honest = compute_honest_did(results, method='relative_magnitude', M=1.0)
+print(honest.summary())
+# M=1.0 means: "if post-treatment PT violations are at most as large as
+# the max pre-treatment violation, the ATT is in this range"
+
+# Smoothness restriction: bounds on the rate of change of violations
+honest_sd = compute_honest_did(results, method='smoothness', M=0.5)
+```
+
+### Placebo tests (simple 2x2 designs only)
+`run_all_placebo_tests()` refits a basic 2x2 DiD — it is valid for simple
+designs but NOT for staggered, synthetic control, or other advanced estimators.
+
+**For non-2x2 estimators**, use specification-based falsification appropriate
+to your estimator's API. Examples:
+- **CS/SA**: compare `control_group='never_treated'` vs `'not_yet_treated'`
+- **StackedDiD**: vary `clean_control` definition
+- **EfficientDiD**: compare `control_group='never_treated'` vs `'last_cohort'`
+- **ImputationDiD/TwoStageDiD**: leave-one-cohort-out, cross-estimator comparison
+- **SyntheticDiD/TROP**: in-time or in-space placebo (fake treatment date, leave-one-unit-out)
+
+```python
+from diff_diff import run_all_placebo_tests
+
+# For simple 2x2 designs (requires binary time indicator, e.g. post=0/1):
+placebo = run_all_placebo_tests(
+    data, outcome='y', treatment='treated', time='post',
+    unit='unit_id', pre_periods=[0], post_periods=[1],
+    n_permutations=500, seed=42,
+)
+for test_name, result in placebo.items():
+    if isinstance(result, dict) and 'error' in result:
+        print(f"{test_name}: ERROR — {result['error']}")
+    elif hasattr(result, 'p_value'):
+        print(f"{test_name}: p={result.p_value:.4f}")
+```
+
+### Bacon decomposition (for TWFE users)
+If you used TWFE, always run BaconDecomposition to check whether the
+estimate is contaminated by forbidden comparisons (see Step 4).
+
+---
+
+## Step 7: Heterogeneity Analysis
+
+Aggregate treatment effects may mask important variation.
+
+### For CallawaySantAnna (and estimators with `aggregate` parameter)
+```python
+# Group-level effects — do early vs late adopters differ?
+results = cs.fit(data, ..., aggregate='group')
+print(results.overall_att)       # Overall ATT
+print(results.group_effects)     # Per-cohort ATTs
+
+# Event study — how does the effect evolve over time?
+results = cs.fit(data, ..., aggregate='event_study')
+print(results.event_study_effects)  # Per-relative-period ATTs
+
+# All aggregations at once
+results = cs.fit(data, ..., aggregate='all')
+```
+
+### For SunAbraham (no `aggregate` parameter)
+SA computes event-study and cohort effects automatically during `fit()`:
+```python
+sa = SunAbraham()
+results = sa.fit(data, ...)
+# Event-study effects (dynamic):
+es_df = results.to_dataframe(level='event_study')
+# Cohort-specific effects:
+cohort_df = results.to_dataframe(level='cohort')
+```
+
+### Subgroup analysis
+Re-estimate on meaningful subsamples:
+```python
+# Example: separate estimates for urban vs rural
+urban_results = cs.fit(data[data['urban'] == 1], ...)
+rural_results = cs.fit(data[data['urban'] == 0], ...)
+```
+
+---
+
+## Step 8: Robustness & Reporting
+
+### Compare multiple estimators
+Run at least 2-3 different estimators on the same data:
+```python
+from diff_diff import CallawaySantAnna, SunAbraham, ImputationDiD
+
+cs = CallawaySantAnna(control_group='never_treated', estimation_method='dr')
+sa = SunAbraham()
+bjs = ImputationDiD()
+
+cs_result = cs.fit(data, outcome='y', unit='id', time='t', first_treat='g')
+sa_result = sa.fit(data, outcome='y', unit='id', time='t', first_treat='g')
+bjs_result = bjs.fit(data, outcome='y', unit='id', time='t', first_treat='g')
+
+print(f"CS ATT:  {cs_result.overall_att:.4f} (SE: {cs_result.overall_se:.4f})")
+print(f"SA ATT:  {sa_result.overall_att:.4f} (SE: {sa_result.overall_se:.4f})")
+print(f"BJS ATT: {bjs_result.overall_att:.4f} (SE: {bjs_result.overall_se:.4f})")
+```
+
+### Report with and without covariates — REQUIRED
+
+You MUST report estimates both with and without covariates. This is not
+optional — it shows whether covariate conditioning is driving identification
+or merely improving precision. A large shift between the two specifications
+signals that covariates are substantively important for the parallel trends
+assumption and warrants discussion.
+
+```python
+# REQUIRED: compare with and without covariates
+result_no_cov = cs.fit(data, outcome='y', unit='id', time='t', first_treat='g')
+result_cov = cs.fit(data, outcome='y', unit='id', time='t', first_treat='g',
+                    covariates=['x1', 'x2'])
+
+print(f"Without covariates: ATT={result_no_cov.overall_att:.4f} (SE: {result_no_cov.overall_se:.4f})")
+print(f"With covariates:    ATT={result_cov.overall_att:.4f} (SE: {result_cov.overall_se:.4f})")
+# If estimates differ substantially, covariates matter for identification.
+# If they are similar, the unconditional PT assumption appears sufficient.
+```
+
+### Reporting checklist
+Your analysis report MUST include all of the following:
+- [ ] Target parameter definition (what causal effect, weighted/unweighted)
+- [ ] Identification assumptions stated and justified
+- [ ] Pre-trends test results (with confidence intervals)
+- [ ] Point estimate with standard errors and confidence intervals
+- [ ] Sensitivity analysis results (HonestDiD bounds or placebo tests)
+- [ ] Event study plot (if applicable)
+- [ ] Comparison across at least 2-3 estimators
+- [ ] Estimates with and without covariates (REQUIRED)
+
+### Runtime guidance
+```python
+from diff_diff import practitioner_next_steps
+
+guidance = practitioner_next_steps(results)
+# Returns context-aware suggestions for what to do next
+```
+
+---
+
+## Common Pitfalls
+
+1. **Using TWFE with staggered adoption**: TWFE assigns negative weights to
+   some group-time cells when treatment timing varies. Always use CS, SA, or
+   another heterogeneity-robust estimator for staggered designs.
+
+2. **Equating insignificant pre-trends with valid parallel trends**: Failing
+   to reject a pre-trends test does NOT prove parallel trends holds. Use
+   HonestDiD to bound how large a violation could be.
+
+3. **Including "bad controls"**: Covariates affected by treatment will bias
+   estimates. Only include pre-treatment or time-invariant covariates.
+
+4. **Ignoring sensitivity analysis**: Without HonestDiD or placebo tests,
+   you cannot assess how robust your results are to assumption violations.
+
+5. **Reporting only one estimator**: Different estimators make different
+   assumptions. Agreement across CS, SA, and BJS strengthens conclusions;
+   disagreement reveals specification sensitivity.
+
+---
+
+## Complete Example: Staggered DiD with load_mpdta()
+
+```python
+from diff_diff import (
+    CallawaySantAnna, SunAbraham, ImputationDiD,
+    BaconDecomposition, check_parallel_trends,
+    compute_honest_did, run_all_placebo_tests,
+    load_mpdta, practitioner_next_steps,
+)
+
+# Load data
+data = load_mpdta()
+
+# Step 1: Target — overall ATT for the policy, weighted by cohort size
+
+# Step 2: Assumptions — PT-GT-Nev (never-treated parallel trends),
+#          no anticipation, doubly robust for conditional PT
+
+# Step 3: Test parallel trends
+# For staggered designs, use the CS event-study pre-period coefficients
+# as the pre-trends diagnostic (NOT the generic check_parallel_trends,
+# which assumes a single binary treatment and universal pre-periods).
+# We estimate CS with event_study aggregation first, then inspect pre-periods.
+
+# Step 4: Choose estimator — staggered adoption -> CS (primary), SA (robustness)
+# Diagnose TWFE bias first:
+bacon = BaconDecomposition()
+bacon_result = bacon.fit(data, outcome='lemp', unit='countyreal',
+                         time='year', first_treat='first_treat')
+print(bacon_result.summary())
+
+# Step 5: Estimate (cluster at county level — treatment assignment unit)
+n_clusters = data['countyreal'].nunique()
+print(f"Clusters: {n_clusters} -> {'cluster-robust SEs' if n_clusters >= 50 else 'wild bootstrap'}")
+cs = CallawaySantAnna(
+    control_group='never_treated', estimation_method='dr',
+    cluster='countyreal',
+)
+results = cs.fit(data, outcome='lemp', unit='countyreal', time='year',
+                 first_treat='first_treat', covariates=['lpop'],
+                 aggregate='all')
+print(results.summary())
+
+# Step 3 (continued): Inspect CS event-study pre-period coefficients
+# Pre-treatment relative-time ATTs should be near zero and insignificant.
+if results.event_study_effects:
+    for rel_t, eff in sorted(results.event_study_effects.items()):
+        if rel_t < 0:
+            print(f"  Pre-period {rel_t}: ATT={eff['effect']:.4f}, "
+                  f"SE={eff['se']:.4f}")
+
+# Step 6: Sensitivity — HonestDiD bounds
+honest = compute_honest_did(results, method='relative_magnitude', M=1.0)
+print(honest.summary())
+
+# Step 7: Heterogeneity — group and event study (already computed via aggregate='all')
+print("Group effects:", results.group_effects)
+print("Event study:", results.event_study_effects)
+
+# Step 8: Robustness — compare estimators
+sa = SunAbraham(cluster='countyreal')
+sa_result = sa.fit(data, outcome='lemp', unit='countyreal', time='year',
+                   first_treat='first_treat')
+
+bjs = ImputationDiD(cluster='countyreal')
+bjs_result = bjs.fit(data, outcome='lemp', unit='countyreal', time='year',
+                     first_treat='first_treat')
+
+print(f"CS ATT:  {results.overall_att:.4f} (SE: {results.overall_se:.4f})")
+print(f"SA ATT:  {sa_result.overall_att:.4f} (SE: {sa_result.overall_se:.4f})")
+print(f"BJS ATT: {bjs_result.overall_att:.4f} (SE: {bjs_result.overall_se:.4f})")
+
+# Step 8 (continued): REQUIRED with/without covariates comparison
+results_no_cov = cs.fit(data, outcome='lemp', unit='countyreal', time='year',
+                        first_treat='first_treat', aggregate='all')
+print(f"Without covariates: ATT={results_no_cov.overall_att:.4f}")
+print(f"With covariates:    ATT={results.overall_att:.4f}")
+
+# Context-aware next steps
+guidance = practitioner_next_steps(results)
+```
+
+---
+
+## References
+
+Baker, A., Callaway, B., Cunningham, S., Goodman-Bacon, A., & Sant'Anna, P.
+H. C. (2025). Difference-in-Differences Designs: A Practitioner's Guide.
+arXiv:2503.13323.

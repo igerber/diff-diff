@@ -22,6 +22,7 @@ Butts, K. & Gardner, J. (2022). did2s: Two-Stage
 """
 
 import warnings
+from dataclasses import replace
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
@@ -36,9 +37,11 @@ _SPARSE_DENSE_THRESHOLD = 10_000_000
 
 from diff_diff.linalg import solve_ols
 from diff_diff.two_stage_bootstrap import TwoStageDiDBootstrapMixin
-from diff_diff.two_stage_results import TwoStageBootstrapResults, TwoStageDiDResults  # noqa: F401 (re-export)
+from diff_diff.two_stage_results import (
+    TwoStageBootstrapResults,  # noqa: F401
+    TwoStageDiDResults,
+)  # noqa: F401 (re-export)
 from diff_diff.utils import safe_inference
-
 
 # =============================================================================
 # Main Estimator
@@ -170,6 +173,7 @@ class TwoStageDiD(TwoStageDiDBootstrapMixin):
         covariates: Optional[List[str]] = None,
         aggregate: Optional[str] = None,
         balance_e: Optional[int] = None,
+        survey_design: object = None,
     ) -> TwoStageDiDResults:
         """
         Fit the two-stage DiD estimator.
@@ -195,6 +199,12 @@ class TwoStageDiD(TwoStageDiDBootstrapMixin):
         balance_e : int, optional
             When computing event study, restrict to cohorts observed at all
             relative times in [-balance_e, max_h].
+        survey_design : SurveyDesign, optional
+            Survey design specification for design-based inference. Supports
+            pweight only (aweight/fweight raise ValueError). FPC raises
+            NotImplementedError. PSU is used as cluster variable for Theorem 3
+            variance. Strata enters survey df for t-distribution inference.
+            Both analytical (n_bootstrap=0) and bootstrap inference are supported.
 
         Returns
         -------
@@ -215,7 +225,44 @@ class TwoStageDiD(TwoStageDiDBootstrapMixin):
         if missing:
             raise ValueError(f"Missing columns: {missing}")
 
+        # Create working copy
         df = data.copy()
+
+        # Resolve survey design if provided
+        from diff_diff.survey import (
+            _inject_cluster_as_psu,
+            _resolve_effective_cluster,
+            _resolve_survey_for_fit,
+            _validate_unit_constant_survey,
+        )
+
+        resolved_survey, survey_weights, survey_weight_type, survey_metadata = (
+            _resolve_survey_for_fit(survey_design, data, "analytical")
+        )
+
+        # Validate within-unit constancy for panel survey designs
+        if resolved_survey is not None:
+            if resolved_survey.uses_replicate_variance:
+                raise NotImplementedError(
+                    "TwoStageDiD does not yet support replicate-weight survey "
+                    "designs. Use a TSL-based survey design (strata/psu/fpc)."
+                )
+            _validate_unit_constant_survey(data, unit, survey_design)
+            if resolved_survey.weight_type != "pweight":
+                raise ValueError(
+                    f"TwoStageDiD survey support requires weight_type='pweight', "
+                    f"got '{resolved_survey.weight_type}'. The survey variance math "
+                    f"assumes probability weights (pweight)."
+                )
+            if resolved_survey.fpc is not None:
+                raise NotImplementedError(
+                    "TwoStageDiD does not yet support FPC (finite population "
+                    "correction) in SurveyDesign. Weights, strata (for survey df), "
+                    "and PSU (for cluster-robust variance) are supported."
+                )
+
+        # Bootstrap + survey supported via PSU-level multiplier bootstrap.
+
         df[time] = pd.to_numeric(df[time])
         df[first_treat] = pd.to_numeric(df[first_treat])
 
@@ -258,6 +305,51 @@ class TwoStageDiD(TwoStageDiDBootstrapMixin):
             )
             df = df[~df[unit].isin(always_treated_units)].copy()
 
+            # Subset survey arrays to match filtered df
+            if survey_weights is not None:
+                keep_mask = ~data[unit].isin(always_treated_units)
+                survey_weights = survey_weights[keep_mask.values]
+            if resolved_survey is not None:
+                keep_mask = ~data[unit].isin(always_treated_units)
+                resolved_survey = replace(
+                    resolved_survey,
+                    weights=resolved_survey.weights[keep_mask.values],
+                    strata=(
+                        resolved_survey.strata[keep_mask.values]
+                        if resolved_survey.strata is not None
+                        else None
+                    ),
+                    psu=(
+                        resolved_survey.psu[keep_mask.values]
+                        if resolved_survey.psu is not None
+                        else None
+                    ),
+                    fpc=(
+                        resolved_survey.fpc[keep_mask.values]
+                        if resolved_survey.fpc is not None
+                        else None
+                    ),
+                )
+                # Recompute n_psu/n_strata after subsetting
+                new_n_psu = (
+                    len(np.unique(resolved_survey.psu)) if resolved_survey.psu is not None else 0
+                )
+                new_n_strata = (
+                    len(np.unique(resolved_survey.strata))
+                    if resolved_survey.strata is not None
+                    else 0
+                )
+                resolved_survey = replace(resolved_survey, n_psu=new_n_psu, n_strata=new_n_strata)
+                # Recompute survey_metadata since it depends on these counts
+                from diff_diff.survey import compute_survey_metadata
+
+                raw_w = (
+                    df[survey_design.weights].values.astype(np.float64)
+                    if survey_design.weights
+                    else np.ones(len(df), dtype=np.float64)
+                )
+                survey_metadata = compute_survey_metadata(resolved_survey, raw_w)
+
         # Treatment indicator with anticipation
         effective_treat = df[first_treat] - self.anticipation
         df["_treated"] = (~df["_never_treated"]) & (df[time] >= effective_treat)
@@ -299,6 +391,31 @@ class TwoStageDiD(TwoStageDiDBootstrapMixin):
                 f"Available columns: {list(df.columns)}"
             )
 
+        # Resolve effective cluster and inject cluster-as-PSU for survey variance
+        if resolved_survey is not None:
+            cluster_ids_raw = df[cluster_var].values if cluster_var in df.columns else None
+            effective_cluster_ids = _resolve_effective_cluster(
+                resolved_survey,
+                cluster_ids_raw,
+                cluster_var if self.cluster is not None else None,
+            )
+            resolved_survey = _inject_cluster_as_psu(resolved_survey, effective_cluster_ids)
+            # When survey PSU is present, use it as the effective cluster for
+            # GMM variance (PSU overrides unit-level clustering)
+            if resolved_survey.psu is not None:
+                df["_survey_cluster"] = resolved_survey.psu
+                cluster_var = "_survey_cluster"
+            # Recompute metadata after PSU injection
+            if resolved_survey.psu is not None and survey_metadata is not None:
+                from diff_diff.survey import compute_survey_metadata
+
+                raw_w = (
+                    df[survey_design.weights].values.astype(np.float64)
+                    if survey_design.weights
+                    else np.ones(len(df), dtype=np.float64)
+                )
+                survey_metadata = compute_survey_metadata(resolved_survey, raw_w)
+
         # Relative time
         df["_rel_time"] = np.where(
             ~df["_never_treated"],
@@ -308,7 +425,7 @@ class TwoStageDiD(TwoStageDiDBootstrapMixin):
 
         # ---- Stage 1: OLS on untreated observations ----
         unit_fe, time_fe, grand_mean, delta_hat, kept_cov_mask = self._fit_untreated_model(
-            df, outcome, unit, time, covariates, omega_0_mask
+            df, outcome, unit, time, covariates, omega_0_mask, weights=survey_weights
         )
 
         # ---- Rank condition checks ----
@@ -356,6 +473,9 @@ class TwoStageDiD(TwoStageDiDBootstrapMixin):
         # Build design matrices and compute effects + GMM variance
         ref_period = -1 - self.anticipation
 
+        # Survey degrees of freedom for t-distribution inference
+        _survey_df = resolved_survey.df_survey if resolved_survey is not None else None
+
         # Always compute overall ATT (static specification)
         overall_att, overall_se = self._stage2_static(
             df=df,
@@ -371,10 +491,12 @@ class TwoStageDiD(TwoStageDiDBootstrapMixin):
             delta_hat=delta_hat,
             cluster_var=cluster_var,
             kept_cov_mask=kept_cov_mask,
+            survey_weights=survey_weights,
+            survey_weight_type=survey_weight_type,
         )
 
         overall_t, overall_p, overall_ci = safe_inference(
-            overall_att, overall_se, alpha=self.alpha
+            overall_att, overall_se, alpha=self.alpha, df=_survey_df
         )
 
         # Event study and group aggregation
@@ -399,6 +521,9 @@ class TwoStageDiD(TwoStageDiDBootstrapMixin):
                 ref_period=ref_period,
                 balance_e=balance_e,
                 kept_cov_mask=kept_cov_mask,
+                survey_weights=survey_weights,
+                survey_weight_type=survey_weight_type,
+                survey_df=_survey_df,
             )
 
         if aggregate in ("group", "all"):
@@ -417,6 +542,9 @@ class TwoStageDiD(TwoStageDiDBootstrapMixin):
                 cluster_var=cluster_var,
                 treatment_groups=treatment_groups,
                 kept_cov_mask=kept_cov_mask,
+                survey_weights=survey_weights,
+                survey_weight_type=survey_weight_type,
+                survey_df=_survey_df,
             )
 
         # Build treatment effects DataFrame
@@ -425,7 +553,13 @@ class TwoStageDiD(TwoStageDiDBootstrapMixin):
         tau_finite = treated_df["tau_hat"].notna() & np.isfinite(treated_df["tau_hat"].values)
         n_valid_te = int(tau_finite.sum())
         if n_valid_te > 0:
-            treated_df["weight"] = np.where(tau_finite, 1.0 / n_valid_te, 0.0)
+            if survey_weights is not None:
+                treated_sw = survey_weights[omega_1_mask.values]
+                sw_finite = np.where(tau_finite, treated_sw, 0.0)
+                sw_sum = sw_finite.sum()
+                treated_df["weight"] = sw_finite / sw_sum if sw_sum > 0 else 0.0
+            else:
+                treated_df["weight"] = np.where(tau_finite, 1.0 / n_valid_te, 0.0)
         else:
             treated_df["weight"] = 0.0
 
@@ -454,7 +588,10 @@ class TwoStageDiD(TwoStageDiDBootstrapMixin):
                     original_event_study=event_study_effects,
                     original_group=group_effects,
                     aggregate=aggregate,
+                    resolved_survey=resolved_survey,
                 )
+            except NotImplementedError:
+                raise  # Don't swallow explicit rejections (e.g. lonely_psu="adjust")
             except Exception as e:
                 warnings.warn(
                     f"Bootstrap failed: {e}. Skipping bootstrap inference.",
@@ -481,9 +618,11 @@ class TwoStageDiD(TwoStageDiDBootstrapMixin):
                             and event_study_effects[h].get("n_obs", 1) > 0
                         ):
                             event_study_effects[h]["se"] = bootstrap_results.event_study_ses[h]
+                            assert bootstrap_results.event_study_cis is not None
                             event_study_effects[h]["conf_int"] = bootstrap_results.event_study_cis[
                                 h
                             ]
+                            assert bootstrap_results.event_study_p_values is not None
                             event_study_effects[h]["p_value"] = (
                                 bootstrap_results.event_study_p_values[h]
                             )
@@ -498,7 +637,9 @@ class TwoStageDiD(TwoStageDiDBootstrapMixin):
                     for g in group_effects:
                         if g in bootstrap_results.group_ses:
                             group_effects[g]["se"] = bootstrap_results.group_ses[g]
+                            assert bootstrap_results.group_cis is not None
                             group_effects[g]["conf_int"] = bootstrap_results.group_cis[g]
+                            assert bootstrap_results.group_p_values is not None
                             group_effects[g]["p_value"] = bootstrap_results.group_p_values[g]
                             eff_val = group_effects[g]["effect"]
                             se_val = group_effects[g]["se"]
@@ -525,6 +666,7 @@ class TwoStageDiD(TwoStageDiDBootstrapMixin):
             n_control_units=n_control_units,
             alpha=self.alpha,
             bootstrap_results=bootstrap_results,
+            survey_metadata=survey_metadata,
         )
 
         self.is_fitted_ = True
@@ -542,9 +684,16 @@ class TwoStageDiD(TwoStageDiDBootstrapMixin):
         idx: pd.Index,
         max_iter: int = 100,
         tol: float = 1e-10,
+        weights: Optional[np.ndarray] = None,
     ) -> Tuple[Dict[Any, float], Dict[Any, float]]:
         """
         Estimate unit and time FE via iterative alternating projection.
+
+        Parameters
+        ----------
+        weights : np.ndarray, optional
+            Survey weights. When provided, uses weighted group means
+            (sum(w*x)/sum(w)) instead of unweighted means.
 
         Returns
         -------
@@ -557,23 +706,36 @@ class TwoStageDiD(TwoStageDiDBootstrapMixin):
         alpha = np.zeros(n)
         beta = np.zeros(n)
 
+        if weights is not None:
+            w_series = pd.Series(weights, index=idx)
+            wsum_t = w_series.groupby(time_vals).transform("sum").values
+            wsum_u = w_series.groupby(unit_vals).transform("sum").values
+
         with np.errstate(invalid="ignore", divide="ignore"):
             for iteration in range(max_iter):
                 resid_after_alpha = y - alpha
-                beta_new = (
-                    pd.Series(resid_after_alpha, index=idx)
-                    .groupby(time_vals)
-                    .transform("mean")
-                    .values
-                )
+                if weights is not None:
+                    wr_t = pd.Series(resid_after_alpha * weights, index=idx)
+                    beta_new = wr_t.groupby(time_vals).transform("sum").values / wsum_t
+                else:
+                    beta_new = (
+                        pd.Series(resid_after_alpha, index=idx)
+                        .groupby(time_vals)
+                        .transform("mean")
+                        .values
+                    )
 
                 resid_after_beta = y - beta_new
-                alpha_new = (
-                    pd.Series(resid_after_beta, index=idx)
-                    .groupby(unit_vals)
-                    .transform("mean")
-                    .values
-                )
+                if weights is not None:
+                    wr_u = pd.Series(resid_after_beta * weights, index=idx)
+                    alpha_new = wr_u.groupby(unit_vals).transform("sum").values / wsum_u
+                else:
+                    alpha_new = (
+                        pd.Series(resid_after_beta, index=idx)
+                        .groupby(unit_vals)
+                        .transform("mean")
+                        .values
+                    )
 
                 max_change = max(
                     np.max(np.abs(alpha_new - alpha)),
@@ -596,21 +758,43 @@ class TwoStageDiD(TwoStageDiDBootstrapMixin):
         idx: pd.Index,
         max_iter: int = 100,
         tol: float = 1e-10,
+        weights: Optional[np.ndarray] = None,
     ) -> np.ndarray:
-        """Demean a vector by iterative alternating projection."""
+        """Demean a vector by iterative alternating projection (unit + time FE removal).
+
+        Parameters
+        ----------
+        weights : np.ndarray, optional
+            Survey weights. When provided, uses weighted group means
+            (sum(w*x)/sum(w)) instead of unweighted means.
+        """
         result = vals.copy()
+
+        if weights is not None:
+            w_series = pd.Series(weights, index=idx)
+            wsum_t = w_series.groupby(time_vals).transform("sum").values
+            wsum_u = w_series.groupby(unit_vals).transform("sum").values
+
         with np.errstate(invalid="ignore", divide="ignore"):
             for _ in range(max_iter):
-                time_means = (
-                    pd.Series(result, index=idx).groupby(time_vals).transform("mean").values
-                )
+                if weights is not None:
+                    wr_t = pd.Series(result * weights, index=idx)
+                    time_means = wr_t.groupby(time_vals).transform("sum").values / wsum_t
+                else:
+                    time_means = (
+                        pd.Series(result, index=idx).groupby(time_vals).transform("mean").values
+                    )
                 result_after_time = result - time_means
-                unit_means = (
-                    pd.Series(result_after_time, index=idx)
-                    .groupby(unit_vals)
-                    .transform("mean")
-                    .values
-                )
+                if weights is not None:
+                    wr_u = pd.Series(result_after_time * weights, index=idx)
+                    unit_means = wr_u.groupby(unit_vals).transform("sum").values / wsum_u
+                else:
+                    unit_means = (
+                        pd.Series(result_after_time, index=idx)
+                        .groupby(unit_vals)
+                        .transform("mean")
+                        .values
+                    )
                 result_new = result_after_time - unit_means
                 if np.max(np.abs(result_new - result)) < tol:
                     result = result_new
@@ -626,22 +810,30 @@ class TwoStageDiD(TwoStageDiDBootstrapMixin):
         time: str,
         covariates: Optional[List[str]],
         omega_0_mask: pd.Series,
+        weights: Optional[np.ndarray] = None,
     ) -> Tuple[
         Dict[Any, float], Dict[Any, float], float, Optional[np.ndarray], Optional[np.ndarray]
     ]:
         """
         Stage 1: Estimate unit + time FE on untreated observations.
 
+        Parameters
+        ----------
+        weights : np.ndarray, optional
+            Full-panel survey weights (same length as df). The untreated subset
+            is extracted internally via omega_0_mask. When None, unweighted.
+
         Returns
         -------
         unit_fe, time_fe, grand_mean, delta_hat, kept_cov_mask
         """
         df_0 = df.loc[omega_0_mask]
+        w_0 = weights[omega_0_mask.values] if weights is not None else None
 
         if covariates is None or len(covariates) == 0:
             y = df_0[outcome].values.copy()
             unit_fe, time_fe = self._iterative_fe(
-                y, df_0[unit].values, df_0[time].values, df_0.index
+                y, df_0[unit].values, df_0[time].values, df_0.index, weights=w_0
             )
             return unit_fe, time_fe, 0.0, None, None
 
@@ -652,10 +844,10 @@ class TwoStageDiD(TwoStageDiDBootstrapMixin):
             times = df_0[time].values
             n_cov = len(covariates)
 
-            y_dm = self._iterative_demean(y, units, times, df_0.index)
+            y_dm = self._iterative_demean(y, units, times, df_0.index, weights=w_0)
             X_dm = np.column_stack(
                 [
-                    self._iterative_demean(X_raw[:, j], units, times, df_0.index)
+                    self._iterative_demean(X_raw[:, j], units, times, df_0.index, weights=w_0)
                     for j in range(n_cov)
                 ]
             )
@@ -666,13 +858,14 @@ class TwoStageDiD(TwoStageDiDBootstrapMixin):
                 return_vcov=False,
                 rank_deficient_action=self.rank_deficient_action,
                 column_names=covariates,
+                weights=w_0,
             )
             delta_hat = result[0]
             kept_cov_mask = np.isfinite(delta_hat)
             delta_hat_clean = np.where(np.isfinite(delta_hat), delta_hat, 0.0)
 
             y_adj = y - np.dot(X_raw, delta_hat_clean)
-            unit_fe, time_fe = self._iterative_fe(y_adj, units, times, df_0.index)
+            unit_fe, time_fe = self._iterative_fe(y_adj, units, times, df_0.index, weights=w_0)
 
             return unit_fe, time_fe, 0.0, delta_hat_clean, kept_cov_mask
 
@@ -731,6 +924,8 @@ class TwoStageDiD(TwoStageDiDBootstrapMixin):
         delta_hat: Optional[np.ndarray],
         cluster_var: str,
         kept_cov_mask: Optional[np.ndarray],
+        survey_weights: Optional[np.ndarray] = None,
+        survey_weight_type: str = "pweight",
     ) -> Tuple[float, float]:
         """
         Static (simple ATT) Stage 2: OLS of y_tilde on D_it.
@@ -758,7 +953,13 @@ class TwoStageDiD(TwoStageDiDBootstrapMixin):
             return np.nan, np.nan
 
         # Stage 2 OLS for point estimate (discard naive SE)
-        coef, residuals, _ = solve_ols(X_2, y_tilde, return_vcov=False)
+        coef, residuals, _ = solve_ols(
+            X_2,
+            y_tilde,
+            return_vcov=False,
+            weights=survey_weights,
+            weight_type=survey_weight_type,
+        )
         att = float(coef[0])
 
         # GMM sandwich variance
@@ -777,6 +978,7 @@ class TwoStageDiD(TwoStageDiDBootstrapMixin):
             X_2=X_2,
             eps_2=eps_2,
             cluster_ids=df[cluster_var].values,
+            survey_weights=survey_weights,
         )
 
         se = float(np.sqrt(max(V[0, 0], 0.0)))
@@ -800,6 +1002,9 @@ class TwoStageDiD(TwoStageDiDBootstrapMixin):
         ref_period: int,
         balance_e: Optional[int],
         kept_cov_mask: Optional[np.ndarray],
+        survey_weights: Optional[np.ndarray] = None,
+        survey_weight_type: str = "pweight",
+        survey_df: Optional[int] = None,
     ) -> Dict[int, Dict[str, Any]]:
         """Event study Stage 2: OLS of y_tilde on relative-time dummies."""
         y_tilde = df["_y_tilde"].values.copy()
@@ -916,7 +1121,13 @@ class TwoStageDiD(TwoStageDiDBootstrapMixin):
                     X_2[i, horizon_to_col[h_int]] = 1.0
 
         # Stage 2 OLS
-        coef, residuals, _ = solve_ols(X_2, y_tilde, return_vcov=False)
+        coef, residuals, _ = solve_ols(
+            X_2,
+            y_tilde,
+            return_vcov=False,
+            weights=survey_weights,
+            weight_type=survey_weight_type,
+        )
         eps_2 = y_tilde - np.dot(X_2, coef)
 
         # GMM variance for full coefficient vector
@@ -933,6 +1144,7 @@ class TwoStageDiD(TwoStageDiDBootstrapMixin):
             X_2=X_2,
             eps_2=eps_2,
             cluster_ids=df[cluster_var].values,
+            survey_weights=survey_weights,
         )
 
         # Build results dict
@@ -966,7 +1178,7 @@ class TwoStageDiD(TwoStageDiDBootstrapMixin):
             effect = float(coef[j])
             se = float(np.sqrt(max(V[j, j], 0.0)))
 
-            t_stat, p_val, ci = safe_inference(effect, se, alpha=self.alpha)
+            t_stat, p_val, ci = safe_inference(effect, se, alpha=self.alpha, df=survey_df)
 
             event_study_effects[h] = {
                 "effect": effect,
@@ -1006,6 +1218,9 @@ class TwoStageDiD(TwoStageDiDBootstrapMixin):
         cluster_var: str,
         treatment_groups: List[Any],
         kept_cov_mask: Optional[np.ndarray],
+        survey_weights: Optional[np.ndarray] = None,
+        survey_weight_type: str = "pweight",
+        survey_df: Optional[int] = None,
     ) -> Dict[Any, Dict[str, Any]]:
         """Group (cohort) Stage 2: OLS of y_tilde on cohort dummies."""
         y_tilde = df["_y_tilde"].values.copy()
@@ -1028,7 +1243,13 @@ class TwoStageDiD(TwoStageDiDBootstrapMixin):
                     X_2[i, group_to_col[g]] = 1.0
 
         # Stage 2 OLS
-        coef, residuals, _ = solve_ols(X_2, y_tilde, return_vcov=False)
+        coef, residuals, _ = solve_ols(
+            X_2,
+            y_tilde,
+            return_vcov=False,
+            weights=survey_weights,
+            weight_type=survey_weight_type,
+        )
         eps_2 = y_tilde - np.dot(X_2, coef)
 
         # GMM variance
@@ -1045,6 +1266,7 @@ class TwoStageDiD(TwoStageDiDBootstrapMixin):
             X_2=X_2,
             eps_2=eps_2,
             cluster_ids=df[cluster_var].values,
+            survey_weights=survey_weights,
         )
 
         group_effects: Dict[Any, Dict[str, Any]] = {}
@@ -1066,7 +1288,7 @@ class TwoStageDiD(TwoStageDiDBootstrapMixin):
             effect = float(coef[j])
             se = float(np.sqrt(max(V[j, j], 0.0)))
 
-            t_stat, p_val, ci = safe_inference(effect, se, alpha=self.alpha)
+            t_stat, p_val, ci = safe_inference(effect, se, alpha=self.alpha, df=survey_df)
 
             group_effects[g] = {
                 "effect": effect,
@@ -1132,6 +1354,7 @@ class TwoStageDiD(TwoStageDiDBootstrapMixin):
         X_2: np.ndarray,
         eps_2: np.ndarray,
         cluster_ids: np.ndarray,
+        survey_weights: Optional[np.ndarray] = None,
     ) -> np.ndarray:
         """
         Compute GMM sandwich variance (Butts & Gardner 2022).
@@ -1150,6 +1373,12 @@ class TwoStageDiD(TwoStageDiDBootstrapMixin):
             S_g = gamma_hat' c_g - X'_{2g} eps_{2g}
             c_g = X'_{10g} eps_{10g}
 
+        With survey weights W (diagonal):
+            Bread: (X'_2 W X_2)^{-1}
+            gamma_hat: (X'_{10} W X_{10})^{-1} (X'_1 W X_2)
+            c_g = sum_{i in g} w_i * x_{10i} * eps_{10i}
+            s2_g = sum_{i in g} w_i * x_{2i} * eps_{2i}
+
         Parameters
         ----------
         X_2 : np.ndarray, shape (n, k)
@@ -1158,6 +1387,9 @@ class TwoStageDiD(TwoStageDiDBootstrapMixin):
             Stage 2 residuals.
         cluster_ids : np.ndarray, shape (n,)
             Cluster identifiers.
+        survey_weights : np.ndarray, optional
+            Survey weights of shape (n,). When None, unweighted (identical
+            to current code).
 
         Returns
         -------
@@ -1202,27 +1434,37 @@ class TwoStageDiD(TwoStageDiDBootstrapMixin):
         eps_10[omega_0] = y_vals[omega_0] - fitted_1[omega_0]  # Stage 1 residual
         eps_10[~omega_0] = y_vals[~omega_0]  # x_{10i} = 0, so eps_10 = Y
 
-        # 1. gamma_hat = (X'_{10} X_{10})^{-1} (X'_1 X_2)  [p x k]
-        XtX_10 = X_10_sparse.T @ X_10_sparse  # (p x p) sparse
-        Xt1_X2 = X_1_sparse.T @ X_2  # (p x k) dense
+        # 1. gamma_hat = (X'_{10} W X_{10})^{-1} (X'_1 W X_2)  [p x k]
+        # With survey weights, both cross-products need W
+        if survey_weights is not None:
+            XtWX_10 = X_10_sparse.T @ X_10_sparse.multiply(survey_weights[:, None])
+            Xt1_WX2 = X_1_sparse.T @ (X_2 * survey_weights[:, None])
+        else:
+            XtWX_10 = X_10_sparse.T @ X_10_sparse  # (p x p) sparse
+            Xt1_WX2 = X_1_sparse.T @ X_2  # (p x k) dense
 
         try:
-            solve_XtX = sparse_factorized(XtX_10.tocsc())
-            if Xt1_X2.ndim == 1:
-                gamma_hat = solve_XtX(Xt1_X2).reshape(-1, 1)
+            solve_XtX = sparse_factorized(XtWX_10.tocsc())
+            if Xt1_WX2.ndim == 1:
+                gamma_hat = solve_XtX(Xt1_WX2).reshape(-1, 1)
             else:
                 gamma_hat = np.column_stack(
-                    [solve_XtX(Xt1_X2[:, j]) for j in range(Xt1_X2.shape[1])]
+                    [solve_XtX(Xt1_WX2[:, j]) for j in range(Xt1_WX2.shape[1])]
                 )
         except RuntimeError:
             # Singular matrix — fall back to dense least-squares
-            gamma_hat = np.linalg.lstsq(XtX_10.toarray(), Xt1_X2, rcond=None)[0]
+            gamma_hat = np.linalg.lstsq(XtWX_10.toarray(), Xt1_WX2, rcond=None)[0]
             if gamma_hat.ndim == 1:
                 gamma_hat = gamma_hat.reshape(-1, 1)
 
-        # 2. Per-cluster Stage 1 scores: c_g = X'_{10g} eps_{10g}
+        # 2. Per-cluster Stage 1 scores: c_g = sum_{i in g} w_i * x_{10i} * eps_{10i}
         # Only untreated obs have non-zero X_10 rows
-        weighted_X10 = X_10_sparse.multiply(eps_10[:, None])  # sparse element-wise
+        # With survey weights: multiply eps_10 by survey_weights before sparse multiply
+        if survey_weights is not None:
+            weighted_eps_10 = survey_weights * eps_10
+        else:
+            weighted_eps_10 = eps_10
+        weighted_X10 = X_10_sparse.multiply(weighted_eps_10[:, None])  # sparse element-wise
 
         unique_clusters, cluster_indices = np.unique(cluster_ids, return_inverse=True)
         G = len(unique_clusters)
@@ -1241,8 +1483,12 @@ class TwoStageDiD(TwoStageDiDBootstrapMixin):
             for j_col in range(p):
                 np.add.at(c_by_cluster[:, j_col], cluster_indices, weighted_X10_dense[:, j_col])
 
-        # 3. Per-cluster Stage 2 scores: X'_{2g} eps_{2g}
-        weighted_X2 = X_2 * eps_2[:, None]  # (n x k) dense
+        # 3. Per-cluster Stage 2 scores: s2_g = sum_{i in g} w_i * x_{2i} * eps_{2i}
+        if survey_weights is not None:
+            weighted_eps_2 = survey_weights * eps_2
+        else:
+            weighted_eps_2 = eps_2
+        weighted_X2 = X_2 * weighted_eps_2[:, None]  # (n x k) dense
         s2_by_cluster = np.zeros((G, k))
         for j_col in range(k):
             np.add.at(s2_by_cluster[:, j_col], cluster_indices, weighted_X2[:, j_col])
@@ -1254,13 +1500,16 @@ class TwoStageDiD(TwoStageDiDBootstrapMixin):
         with np.errstate(invalid="ignore", over="ignore"):
             meat = S.T @ S  # (k x k)
 
-        # 6. Bread: (X'_2 X_2)^{-1}
+        # 6. Bread: (X'_2 W X_2)^{-1}
         with np.errstate(invalid="ignore", over="ignore", divide="ignore"):
-            XtX_2 = X_2.T @ X_2
+            if survey_weights is not None:
+                XtWX_2 = X_2.T @ (X_2 * survey_weights[:, None])
+            else:
+                XtWX_2 = X_2.T @ X_2
         try:
-            bread = np.linalg.solve(XtX_2, np.eye(k))
+            bread = np.linalg.solve(XtWX_2, np.eye(k))
         except np.linalg.LinAlgError:
-            bread = np.linalg.lstsq(XtX_2, np.eye(k), rcond=None)[0]
+            bread = np.linalg.lstsq(XtWX_2, np.eye(k), rcond=None)[0]
 
         # 7. V = bread @ meat @ bread
         V = bread @ meat @ bread
@@ -1397,6 +1646,7 @@ def two_stage_did(
     covariates: Optional[List[str]] = None,
     aggregate: Optional[str] = None,
     balance_e: Optional[int] = None,
+    survey_design: object = None,
     **kwargs,
 ) -> TwoStageDiDResults:
     """
@@ -1422,6 +1672,12 @@ def two_stage_did(
         Aggregation mode: None, "simple", "event_study", "group", "all".
     balance_e : int, optional
         Balance event study to cohorts observed at all relative times.
+    survey_design : SurveyDesign, optional
+        Survey design specification for design-based inference. Supports
+        pweight only (aweight/fweight raise ValueError). FPC raises
+        NotImplementedError. PSU is used as cluster variable for Theorem 3
+        variance. Strata enters survey df for t-distribution inference.
+        Requires analytical inference (n_bootstrap=0).
     **kwargs
         Additional keyword arguments passed to TwoStageDiD constructor.
 
@@ -1448,4 +1704,5 @@ def two_stage_did(
         covariates=covariates,
         aggregate=aggregate,
         balance_e=balance_e,
+        survey_design=survey_design,
     )

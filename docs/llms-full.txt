@@ -1,0 +1,1466 @@
+# diff-diff
+
+> A Python library for Difference-in-Differences causal inference analysis. Provides sklearn-like estimators with statsmodels-style output for econometric analysis.
+
+- Version: 2.8.0
+- Repository: https://github.com/igerber/diff-diff
+- License: MIT
+- Dependencies: numpy, pandas, scipy (no statsmodels dependency)
+- Optional: Rust backend for performance (via maturin)
+
+## Quick Start
+
+```python
+import pandas as pd
+from diff_diff import DifferenceInDifferences, generate_did_data
+
+# Generate synthetic data with known treatment effect
+data = generate_did_data(n_units=200, treatment_effect=5.0, seed=42)
+
+# Fit basic 2x2 DiD
+did = DifferenceInDifferences()
+results = did.fit(data, outcome='outcome', treatment='treated', time='post')
+print(results.summary())
+print(f"ATT: {results.att:.3f} (SE: {results.se:.3f})")
+```
+
+## Design Patterns
+
+- **sklearn-like API**: All estimators use `fit()` method, `get_params()`/`set_params()` for configuration.
+- **Formula interface**: Supports R-style formulas like `"outcome ~ treated * post"`.
+- **Results objects**: Rich dataclass containers with `summary()`, `to_dict()`, `to_dataframe()`.
+- **Estimator aliases**: Short names available (e.g., `DiD`, `CS`, `SA`, `BJS`, `Gardner`, `SDiD`, `TWFE`, `DDD`, `CDiD`, `EDiD`, `Stacked`, `Bacon`).
+
+## Practitioner Workflow (based on Baker et al. 2025)
+
+For rigorous DiD analysis, follow the 8-step framework in docs/llms-practitioner.txt.
+After estimation, call:
+
+```python
+from diff_diff import practitioner_next_steps
+guidance = practitioner_next_steps(results)
+```
+
+Returns context-aware guidance on remaining diagnostic steps (parallel trends
+testing, sensitivity analysis, heterogeneity checks, robustness comparisons).
+
+## Estimators
+
+### DifferenceInDifferences
+
+Basic 2x2 Difference-in-Differences estimator.
+
+```python
+DifferenceInDifferences(
+    robust: bool = True,                    # HC1 robust standard errors
+    cluster: str | None = None,             # Column for cluster-robust SEs
+    alpha: float = 0.05,                    # Significance level
+    inference: str = "analytical",          # "analytical" or "wild_bootstrap"
+    n_bootstrap: int = 999,                 # Bootstrap replications (if inference="wild_bootstrap")
+    bootstrap_weights: str = "rademacher",  # "rademacher", "webb", or "mammen"
+    seed: int | None = None,                # Random seed
+    rank_deficient_action: str = "warn",    # "warn", "error", or "silent"
+)
+```
+
+**Alias:** `DiD`
+
+**fit() parameters:**
+
+```python
+did.fit(
+    data: pd.DataFrame,
+    outcome: str = None,                   # Outcome variable column
+    treatment: str = None,                 # Treatment indicator column (0/1)
+    time: str = None,                      # Post-treatment indicator column (0/1)
+    formula: str = None,                   # R-style formula (e.g., "y ~ treated * post")
+    covariates: list[str] = None,          # Linear control variables
+    fixed_effects: list[str] = None,       # Low-dimensional FE (dummy variables)
+    absorb: list[str] = None,             # High-dimensional FE (within-transformation)
+) -> DiDResults
+```
+
+**Usage:**
+
+```python
+from diff_diff import DifferenceInDifferences
+
+did = DifferenceInDifferences(robust=True)
+results = did.fit(data, outcome='y', treatment='treated', time='post')
+results.print_summary()
+
+# Formula interface
+results = did.fit(data, formula='y ~ treated * post')
+
+# With covariates and fixed effects
+results = did.fit(data, outcome='y', treatment='treated', time='post',
+                  covariates=['age', 'income'], absorb=['firm_id'])
+```
+
+### TwoWayFixedEffects
+
+Two-Way Fixed Effects estimator for panel data. Inherits from DifferenceInDifferences.
+
+```python
+TwoWayFixedEffects(
+    robust: bool = True,
+    cluster: str | None = None,   # Auto-clusters at unit level if None
+    alpha: float = 0.05,
+)
+```
+
+**Alias:** `TWFE`
+
+**fit() parameters:**
+
+```python
+twfe.fit(
+    data: pd.DataFrame,
+    outcome: str,
+    treatment: str,
+    time: str,
+    unit: str,
+    covariates: list[str] = None,
+) -> DiDResults
+```
+
+**Usage:**
+
+```python
+from diff_diff import TwoWayFixedEffects
+
+twfe = TwoWayFixedEffects()
+results = twfe.fit(data, outcome='y', treatment='treated', time='post', unit='unit_id')
+results.print_summary()
+```
+
+**Note:** TWFE can be biased with staggered treatment timing and heterogeneous effects. Consider CallawaySantAnna, SunAbraham, or ImputationDiD for staggered designs.
+
+### MultiPeriodDiD
+
+Event-study style DiD with period-specific treatment effects. Inherits from DifferenceInDifferences.
+
+```python
+MultiPeriodDiD(
+    robust: bool = True,
+    cluster: str | None = None,
+    alpha: float = 0.05,
+)
+```
+
+**Alias:** `EventStudy`
+
+**fit() parameters:**
+
+```python
+mp_did.fit(
+    data: pd.DataFrame,
+    outcome: str,
+    treatment: str,
+    time: str,
+    post_periods: list = None,             # Which periods are post-treatment
+    covariates: list[str] = None,
+    fixed_effects: list[str] = None,
+    absorb: list[str] = None,
+    reference_period: Any = None,          # Reference period (default: last pre-period)
+) -> MultiPeriodDiDResults
+```
+
+**Usage:**
+
+```python
+from diff_diff import MultiPeriodDiD, plot_event_study
+
+did = MultiPeriodDiD()
+results = did.fit(data, outcome='sales', treatment='treated',
+                  time='period', post_periods=[4, 5, 6, 7])
+results.print_summary()
+plot_event_study(results)
+```
+
+### CallawaySantAnna
+
+Callaway-Sant'Anna (2021) estimator for staggered DiD with heterogeneous treatment effects.
+
+```python
+CallawaySantAnna(
+    control_group: str = "never_treated",        # "never_treated" or "not_yet_treated"
+    anticipation: int = 0,                       # Anticipation periods
+    estimation_method: str = "dr",               # "dr", "ipw", or "reg"
+    alpha: float = 0.05,
+    cluster: str | None = None,                  # Defaults to unit-level clustering
+    n_bootstrap: int = 0,                        # 0 = analytical SEs, 999+ recommended
+    bootstrap_weights: str | None = None,        # "rademacher", "mammen", or "webb"
+    seed: int | None = None,
+    rank_deficient_action: str = "warn",
+    base_period: str = "varying",                # "varying" or "universal"
+    cband: bool = True,                          # Simultaneous confidence bands
+    pscore_trim: float = 0.01,                   # Propensity score trimming bound
+)
+```
+
+**Alias:** `CS`
+
+**fit() parameters:**
+
+```python
+cs.fit(
+    data: pd.DataFrame,
+    outcome: str,
+    unit: str,
+    time: str,
+    first_treat: str,              # Column: first treatment period (0 or inf for never-treated)
+    covariates: list[str] = None,
+    aggregate: str = None,         # None, "simple", "event_study", "group", or "all"
+    balance_e: int = None,         # Balance event study at this relative period
+) -> CallawaySantAnnaResults
+```
+
+**Usage:**
+
+```python
+from diff_diff import CallawaySantAnna, plot_event_study
+
+cs = CallawaySantAnna(estimation_method="dr", n_bootstrap=999, seed=42)
+results = cs.fit(data, outcome='outcome', unit='unit', time='period',
+                 first_treat='first_treat', aggregate='event_study')
+results.print_summary()
+plot_event_study(results)
+```
+
+### SunAbraham
+
+Sun-Abraham (2021) interaction-weighted estimator for staggered DiD.
+
+```python
+SunAbraham(
+    control_group: str = "never_treated",        # "never_treated" or "not_yet_treated"
+    anticipation: int = 0,
+    alpha: float = 0.05,
+    cluster: str | None = None,                  # Defaults to unit-level clustering
+    n_bootstrap: int = 0,                        # 0 = analytical cluster-robust SEs
+    seed: int | None = None,
+    rank_deficient_action: str = "warn",
+)
+```
+
+**Alias:** `SA`
+
+**fit() parameters:**
+
+```python
+sa.fit(
+    data: pd.DataFrame,
+    outcome: str,
+    unit: str,
+    time: str,
+    first_treat: str,
+    covariates: list[str] = None,
+) -> SunAbrahamResults
+```
+
+**Usage:**
+
+```python
+from diff_diff import SunAbraham
+
+sa = SunAbraham()
+results = sa.fit(data, outcome='outcome', unit='unit',
+                 time='period', first_treat='first_treat')
+results.print_summary()
+```
+
+### ImputationDiD
+
+Borusyak-Jaravel-Spiess (2024) imputation DiD estimator. Efficient estimator producing shorter CIs than CS/SA under homogeneous effects.
+
+```python
+ImputationDiD(
+    anticipation: int = 0,
+    alpha: float = 0.05,
+    cluster: str | None = None,                  # Defaults to unit-level clustering
+    n_bootstrap: int = 0,                        # 0 = analytical (Theorem 3 variance)
+    bootstrap_weights: str = "rademacher",       # "rademacher", "mammen", or "webb"
+    seed: int | None = None,
+    rank_deficient_action: str = "warn",
+    horizon_max: int | None = None,              # Max event-study horizon
+    aux_partition: str = "cohort_horizon",        # "cohort_horizon", "cohort", or "horizon"
+)
+```
+
+**Alias:** `BJS`
+
+**fit() parameters:**
+
+```python
+imp.fit(
+    data: pd.DataFrame,
+    outcome: str,
+    unit: str,
+    time: str,
+    first_treat: str,
+    covariates: list[str] = None,
+    aggregate: str = None,         # None, "simple", "event_study", "group", or "all"
+    balance_e: int = None,
+) -> ImputationDiDResults
+```
+
+**Usage:**
+
+```python
+from diff_diff import ImputationDiD, plot_event_study
+
+est = ImputationDiD()
+results = est.fit(data, outcome='outcome', unit='unit',
+                  time='period', first_treat='first_treat',
+                  aggregate='event_study')
+results.print_summary()
+plot_event_study(results)
+```
+
+### TwoStageDiD
+
+Gardner (2022) two-stage DiD estimator. Point estimates match ImputationDiD; uses GMM sandwich variance.
+
+```python
+TwoStageDiD(
+    anticipation: int = 0,
+    alpha: float = 0.05,
+    cluster: str | None = None,
+    n_bootstrap: int = 0,
+    bootstrap_weights: str = "rademacher",
+    seed: int | None = None,
+    rank_deficient_action: str = "warn",
+    horizon_max: int | None = None,
+)
+```
+
+**Alias:** `Gardner`
+
+**fit() parameters:**
+
+```python
+ts.fit(
+    data: pd.DataFrame,
+    outcome: str,
+    unit: str,
+    time: str,
+    first_treat: str,
+    covariates: list[str] = None,
+    aggregate: str = None,         # None, "simple", "event_study", "group", or "all"
+    balance_e: int = None,
+) -> TwoStageDiDResults
+```
+
+**Usage:**
+
+```python
+from diff_diff import TwoStageDiD
+
+est = TwoStageDiD()
+results = est.fit(data, outcome='outcome', unit='unit',
+                  time='period', first_treat='first_treat')
+results.print_summary()
+```
+
+### SyntheticDiD
+
+Synthetic Difference-in-Differences (Arkhangelsky et al. 2021). Combines DiD with synthetic control by re-weighting control units.
+
+```python
+SyntheticDiD(
+    zeta_omega: float | None = None,        # Unit weight regularization (auto-computed if None)
+    zeta_lambda: float | None = None,       # Time weight regularization (auto-computed if None)
+    alpha: float = 0.05,
+    variance_method: str = "placebo",       # "placebo" or "bootstrap"
+    n_bootstrap: int = 200,                 # Replications for variance estimation
+    seed: int | None = None,
+)
+```
+
+**Alias:** `SDiD`
+
+**fit() parameters:**
+
+```python
+sdid.fit(
+    data: pd.DataFrame,
+    outcome: str,
+    treatment: str,
+    unit: str,
+    time: str,
+    post_periods: list,
+) -> SyntheticDiDResults
+```
+
+**Usage:**
+
+```python
+from diff_diff import SyntheticDiD
+
+sdid = SyntheticDiD(seed=42)
+results = sdid.fit(data, outcome='outcome', treatment='treated',
+                   unit='unit', time='period', post_periods=[5, 6, 7, 8])
+results.print_summary()
+weights_df = results.get_unit_weights_df()
+```
+
+### TripleDifference
+
+Triple Difference (DDD) estimator following Ortiz-Villavicencio & Sant'Anna (2025).
+
+```python
+TripleDifference(
+    estimation_method: str = "dr",            # "dr", "reg", or "ipw"
+    robust: bool = True,
+    cluster: str | None = None,
+    alpha: float = 0.05,
+    pscore_trim: float = 0.01,
+    rank_deficient_action: str = "warn",
+)
+```
+
+**Alias:** `DDD`
+
+**fit() parameters:**
+
+```python
+ddd.fit(
+    data: pd.DataFrame,
+    outcome: str,
+    group: str,                # Treated group indicator (0/1)
+    partition: str,            # Eligible partition indicator (0/1)
+    time: str,                 # Post-treatment indicator (0/1)
+    covariates: list[str] = None,
+) -> TripleDifferenceResults
+```
+
+**Usage:**
+
+```python
+from diff_diff import TripleDifference
+
+ddd = TripleDifference(estimation_method="dr")
+results = ddd.fit(data, outcome='outcome', group='group',
+                  partition='partition', time='post')
+results.print_summary()
+```
+
+### ContinuousDiD
+
+Continuous Difference-in-Differences estimator (Callaway, Goodman-Bacon & Sant'Anna 2024). Estimates dose-response curves ATT(d) and ACRT(d).
+
+```python
+ContinuousDiD(
+    degree: int = 3,                          # B-spline degree (3 = cubic)
+    num_knots: int = 0,                       # Interior knots
+    dvals: np.ndarray | None = None,          # Custom dose evaluation grid
+    control_group: str = "never_treated",     # "never_treated" or "not_yet_treated"
+    anticipation: int = 0,
+    base_period: str = "varying",             # "varying" or "universal"
+    alpha: float = 0.05,
+    n_bootstrap: int = 0,
+    bootstrap_weights: str = "rademacher",
+    seed: int | None = None,
+    rank_deficient_action: str = "warn",
+)
+```
+
+**Alias:** `CDiD`
+
+**fit() parameters:**
+
+```python
+cdid.fit(
+    data: pd.DataFrame,
+    outcome: str,
+    unit: str,
+    time: str,
+    first_treat: str,
+    dose: str,                     # Column with continuous treatment dose
+    aggregate: str = None,         # None, "dose", "eventstudy"
+) -> ContinuousDiDResults
+```
+
+**Usage:**
+
+```python
+from diff_diff import ContinuousDiD
+
+est = ContinuousDiD(n_bootstrap=199, seed=42)
+results = est.fit(data, outcome='outcome', unit='unit', time='period',
+                  first_treat='first_treat', dose='dose', aggregate='dose')
+results.print_summary()
+```
+
+### StackedDiD
+
+Stacked DiD estimator (Wing, Freedman & Hollingsworth 2024). Addresses TWFE bias with corrective Q-weights.
+
+```python
+StackedDiD(
+    kappa_pre: int = 1,                       # Pre-treatment event-time periods
+    kappa_post: int = 1,                      # Post-treatment event-time periods
+    weighting: str = "aggregate",             # "aggregate", "population", or "sample_share"
+    clean_control: str = "not_yet_treated",   # "not_yet_treated", "strict", or "never_treated"
+    cluster: str = "unit",                    # "unit" or "unit_subexp"
+    alpha: float = 0.05,
+    anticipation: int = 0,
+    rank_deficient_action: str = "warn",
+)
+```
+
+**Alias:** `Stacked`
+
+**fit() parameters:**
+
+```python
+stacked.fit(
+    data: pd.DataFrame,
+    outcome: str,
+    unit: str,
+    time: str,
+    first_treat: str,
+    aggregate: str = None,         # None, "simple", or "event_study"
+    population: str = None,        # Required when weighting="population"
+) -> StackedDiDResults
+```
+
+**Usage:**
+
+```python
+from diff_diff import StackedDiD, plot_event_study
+
+est = StackedDiD(kappa_pre=2, kappa_post=2)
+results = est.fit(data, outcome='outcome', unit='unit',
+                  time='period', first_treat='first_treat',
+                  aggregate='event_study')
+results.print_summary()
+plot_event_study(results)
+```
+
+### EfficientDiD
+
+Efficient DiD estimator (Chen, Sant'Anna & Xie 2025). Achieves the semiparametric efficiency bound for ATT(g,t). Phase 1: no-covariates path only.
+
+```python
+EfficientDiD(
+    pt_assumption: str = "all",              # "all" (overidentified) or "post" (just-identified)
+    alpha: float = 0.05,
+    cluster: str | None = None,              # Not yet implemented
+    n_bootstrap: int = 0,                    # Multiplier bootstrap iterations
+    bootstrap_weights: str = "rademacher",   # "rademacher", "mammen", or "webb"
+    seed: int | None = None,
+    anticipation: int = 0,
+)
+```
+
+**Alias:** `EDiD`
+
+**fit() parameters:**
+
+```python
+edid.fit(
+    data: pd.DataFrame,
+    outcome: str,
+    unit: str,
+    time: str,
+    first_treat: str,
+    covariates: list[str] = None,  # Not yet implemented (Phase 2)
+    aggregate: str = None,         # None, "simple", "event_study", "group", or "all"
+    balance_e: int = None,
+) -> EfficientDiDResults
+```
+
+**Usage:**
+
+```python
+from diff_diff import EfficientDiD
+
+edid = EfficientDiD(pt_assumption="all")
+results = edid.fit(data, outcome='y', unit='id', time='t',
+                   first_treat='first_treat', aggregate='all')
+results.print_summary()
+```
+
+### TROP
+
+Triply Robust Panel estimator (Athey, Imbens, Qu & Viviano 2025). Combines nuclear norm regularization, distance-based unit weights, and time decay weights.
+
+```python
+TROP(
+    method: str = "twostep",                  # "twostep" or "global" (or deprecated "joint")
+    lambda_time_grid: list[float] = None,     # Time weight decay grid [0, 0.1, 0.5, 1, 2, 5]
+    lambda_unit_grid: list[float] = None,     # Unit weight decay grid [0, 0.1, 0.5, 1, 2, 5]
+    lambda_nn_grid: list[float] = None,       # Nuclear norm grid [0, 0.01, 0.1, 1, 10]
+    max_iter: int = 100,
+    tol: float = 1e-6,
+    alpha: float = 0.05,
+    n_bootstrap: int = 200,
+    seed: int | None = None,
+)
+```
+
+**fit() parameters:**
+
+```python
+trop.fit(
+    data: pd.DataFrame,
+    outcome: str,
+    treatment: str,                # Absorbing-state treatment indicator (0/1). Must be 0 for all pre-treatment periods and 1 for treatment and post-treatment periods.
+    unit: str,
+    time: str,
+) -> TROPResults
+```
+
+**Usage:**
+
+```python
+from diff_diff import TROP
+
+trop = TROP(method='twostep', seed=42)
+results = trop.fit(data, outcome='outcome', treatment='treated',
+                   unit='unit', time='period')
+results.print_summary()
+```
+
+### BaconDecomposition
+
+Goodman-Bacon (2021) decomposition of TWFE into 2x2 DiD comparisons.
+
+```python
+BaconDecomposition(
+    weights: str = "approximate",   # "approximate" or "exact"
+)
+```
+
+**Alias:** `Bacon`
+
+**fit() parameters:**
+
+```python
+bacon.fit(
+    data: pd.DataFrame,
+    outcome: str,
+    unit: str,
+    time: str,
+    first_treat: str,
+) -> BaconDecompositionResults
+```
+
+**Usage:**
+
+```python
+from diff_diff import BaconDecomposition, plot_bacon
+
+bacon = BaconDecomposition(weights="exact")
+results = bacon.fit(data, outcome='outcome', unit='unit',
+                    time='period', first_treat='first_treat')
+results.print_summary()
+plot_bacon(results)
+```
+
+### Convenience Functions
+
+```python
+# Functional interfaces (create estimator + call fit in one step)
+from diff_diff import imputation_did, two_stage_did, triple_difference, stacked_did, trop, bacon_decompose
+
+results = imputation_did(data, outcome='y', unit='id', time='t', first_treat='ft')
+results = two_stage_did(data, outcome='y', unit='id', time='t', first_treat='ft')
+results = triple_difference(data, outcome='y', group='g', partition='p', time='t')
+results = stacked_did(data, outcome='y', unit='id', time='t', first_treat='ft',
+                      kappa_pre=2, kappa_post=2)
+results = trop(data, outcome='y', treatment='d', unit='id', time='t')
+results = bacon_decompose(data, outcome='y', unit='id', time='t', first_treat='ft')
+```
+
+## Results Objects
+
+### DiDResults
+
+Returned by `DifferenceInDifferences.fit()` and `TwoWayFixedEffects.fit()`.
+
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| `att` | `float` | Average Treatment effect on the Treated |
+| `se` | `float` | Standard error of ATT |
+| `t_stat` | `float` | T-statistic |
+| `p_value` | `float` | P-value (H0: ATT = 0) |
+| `conf_int` | `tuple[float, float]` | Confidence interval |
+| `n_obs` | `int` | Number of observations |
+| `n_treated` | `int` | Number of treated units |
+| `n_control` | `int` | Number of control units |
+| `alpha` | `float` | Significance level |
+| `coefficients` | `dict` | All regression coefficients |
+| `vcov` | `np.ndarray` | Variance-covariance matrix |
+| `residuals` | `np.ndarray` | Regression residuals |
+| `fitted_values` | `np.ndarray` | Fitted values |
+| `r_squared` | `float` | R-squared |
+| `inference_method` | `str` | "analytical" or "wild_bootstrap" |
+| `n_bootstrap` | `int` | Number of bootstrap replications |
+| `n_clusters` | `int` | Number of clusters |
+| `bootstrap_distribution` | `np.ndarray` | Bootstrap ATT distribution |
+
+**Methods:** `summary(alpha=None)`, `print_summary()`, `to_dict()`, `to_dataframe()`
+
+**Properties:** `is_significant`, `significance_stars`
+
+### MultiPeriodDiDResults
+
+Returned by `MultiPeriodDiD.fit()`.
+
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| `period_effects` | `dict[Any, PeriodEffect]` | Period-specific effects (pre and post) |
+| `avg_att` | `float` | Average ATT across post-periods |
+| `avg_se` | `float` | SE of average ATT |
+| `avg_t_stat` | `float` | T-statistic for average ATT |
+| `avg_p_value` | `float` | P-value for average ATT |
+| `avg_conf_int` | `tuple[float, float]` | CI for average ATT |
+| `n_obs` | `int` | Number of observations |
+| `n_treated` | `int` | Number of treated observations |
+| `n_control` | `int` | Number of control observations |
+| `pre_periods` | `list` | Pre-treatment period identifiers |
+| `post_periods` | `list` | Post-treatment period identifiers |
+| `reference_period` | `Any` | Reference (omitted) period |
+| `r_squared` | `float` | R-squared |
+| `vcov` | `np.ndarray` | Variance-covariance matrix |
+| `interaction_indices` | `dict` | Period to VCV column index mapping |
+
+**Methods:** `summary()`, `print_summary()`, `get_effect(period)`, `to_dict()`, `to_dataframe()`
+
+**Properties:** `pre_period_effects`, `post_period_effects`, `is_significant`, `significance_stars`
+
+### PeriodEffect
+
+Individual period treatment effect (used in MultiPeriodDiDResults).
+
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| `period` | `Any` | Time period identifier |
+| `effect` | `float` | Treatment effect estimate |
+| `se` | `float` | Standard error |
+| `t_stat` | `float` | T-statistic |
+| `p_value` | `float` | P-value |
+| `conf_int` | `tuple[float, float]` | Confidence interval |
+
+**Properties:** `is_significant`, `significance_stars`
+
+### CallawaySantAnnaResults
+
+Returned by `CallawaySantAnna.fit()`.
+
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| `group_time_effects` | `dict[(g,t), GroupTimeEffect]` | ATT(g,t) for each (group, time) |
+| `overall_att` | `float` | Overall ATT |
+| `overall_se` | `float` | SE of overall ATT |
+| `overall_t_stat` | `float` | T-statistic |
+| `overall_p_value` | `float` | P-value |
+| `overall_conf_int` | `tuple[float, float]` | CI for overall ATT |
+| `groups` | `list` | Treatment cohorts |
+| `time_periods` | `list` | All time periods |
+| `n_obs` | `int` | Number of observations |
+| `event_study_effects` | `dict[int, dict]` | Event study effects by relative time |
+| `group_effects` | `dict` | Group-level aggregated effects |
+
+**Methods:** `summary()`, `print_summary()`, `to_dataframe(level="event_study"|"group_time"|"group")`
+
+### SunAbrahamResults
+
+Returned by `SunAbraham.fit()`.
+
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| `event_study_effects` | `dict[int, dict]` | Effects by relative time |
+| `overall_att` | `float` | Overall ATT |
+| `overall_se` | `float` | SE of overall ATT |
+| `overall_t_stat` | `float` | T-statistic |
+| `overall_p_value` | `float` | P-value |
+| `overall_conf_int` | `tuple[float, float]` | CI |
+| `cohort_weights` | `dict[int, dict]` | Interaction weights per period |
+| `groups` | `list` | Treatment cohorts |
+| `n_obs` | `int` | Number of observations |
+| `n_treated_units` | `int` | Number of ever-treated units |
+| `n_control_units` | `int` | Number of never-treated units |
+| `control_group` | `str` | Control group type used |
+| `cohort_effects` | `dict` | Cohort-level effects |
+
+**Methods:** `summary()`, `print_summary()`, `to_dataframe(level="event_study"|"cohort")`
+
+### SyntheticDiDResults
+
+Returned by `SyntheticDiD.fit()`.
+
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| `att` | `float` | Average Treatment effect on the Treated |
+| `se` | `float` | Standard error (bootstrap or placebo-based) |
+| `t_stat` | `float` | T-statistic |
+| `p_value` | `float` | P-value |
+| `conf_int` | `tuple[float, float]` | Confidence interval |
+| `n_obs` | `int` | Number of observations |
+| `n_treated` | `int` | Number of treated units |
+| `n_control` | `int` | Number of control units |
+| `unit_weights` | `dict` | Control unit synthetic weights |
+| `time_weights` | `dict` | Pre-treatment time weights |
+| `pre_periods` | `list` | Pre-treatment periods |
+| `post_periods` | `list` | Post-treatment periods |
+| `variance_method` | `str` | "bootstrap" or "placebo" |
+| `noise_level` | `float` | Estimated noise level |
+| `zeta_omega` | `float` | Unit weight regularization |
+| `zeta_lambda` | `float` | Time weight regularization |
+| `pre_treatment_fit` | `float` | Pre-treatment RMSE |
+
+**Methods:** `summary()`, `print_summary()`, `to_dict()`, `to_dataframe()`, `get_unit_weights_df()`, `get_time_weights_df()`
+
+### TripleDifferenceResults
+
+Returned by `TripleDifference.fit()`.
+
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| `att` | `float` | ATT estimate |
+| `se` | `float` | Standard error |
+| `t_stat` | `float` | T-statistic |
+| `p_value` | `float` | P-value |
+| `conf_int` | `tuple[float, float]` | Confidence interval |
+| `n_obs` | `int` | Total observations |
+| `n_treated_eligible` | `int` | Treated + eligible count |
+| `n_treated_ineligible` | `int` | Treated + ineligible count |
+| `n_control_eligible` | `int` | Control + eligible count |
+| `n_control_ineligible` | `int` | Control + ineligible count |
+| `estimation_method` | `str` | "dr", "reg", or "ipw" |
+| `group_means` | `dict` | Cell means |
+| `pscore_stats` | `dict` | Propensity score diagnostics |
+| `r_squared` | `float` | R-squared (for "reg") |
+
+**Methods:** `summary()`, `print_summary()`, `to_dict()`, `to_dataframe()`
+
+### BaconDecompositionResults
+
+Returned by `BaconDecomposition.fit()` and `bacon_decompose()`.
+
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| `twfe_estimate` | `float` | Overall TWFE coefficient |
+| `comparisons` | `list[Comparison2x2]` | All 2x2 comparisons |
+| `total_weight_treated_vs_never` | `float` | Weight on treated vs never-treated |
+| `total_weight_earlier_vs_later` | `float` | Weight on earlier vs later |
+| `total_weight_later_vs_earlier` | `float` | Weight on forbidden comparisons |
+| `weighted_avg_treated_vs_never` | `float` | Avg effect from clean comparisons |
+| `weighted_avg_earlier_vs_later` | `float` | Avg effect from earlier vs later |
+| `weighted_avg_later_vs_earlier` | `float` | Avg effect from forbidden comparisons |
+| `n_timing_groups` | `int` | Number of treatment timing groups |
+| `n_never_treated` | `int` | Number of never-treated units |
+| `timing_groups` | `list` | Treatment timing cohorts |
+| `n_obs` | `int` | Total observations |
+| `decomposition_error` | `float` | Error: TWFE minus weighted sum |
+
+**Methods:** `summary()`, `print_summary()`, `to_dataframe()`
+
+### Comparison2x2
+
+Individual 2x2 DiD comparison (used in BaconDecompositionResults).
+
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| `treated_group` | `Any` | Timing group used as treated |
+| `control_group` | `Any` | Timing group used as control |
+| `comparison_type` | `str` | "treated_vs_never", "earlier_vs_later", or "later_vs_earlier" |
+| `estimate` | `float` | 2x2 DiD estimate |
+| `weight` | `float` | Weight in TWFE average |
+| `n_treated` | `int` | Number of treated observations |
+| `n_control` | `int` | Number of control observations |
+| `time_window` | `tuple[float, float]` | (start, end) time window |
+
+### Common Results Pattern for Staggered Estimators
+
+ImputationDiDResults, TwoStageDiDResults, StackedDiDResults, and EfficientDiDResults share a similar structure:
+
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| `overall_att` | `float` | Overall ATT |
+| `overall_se` | `float` | SE of overall ATT |
+| `overall_t_stat` | `float` | T-statistic |
+| `overall_p_value` | `float` | P-value |
+| `overall_conf_int` | `tuple[float, float]` | CI |
+| `event_study_effects` | `dict[int, dict]` | Event study effects (if aggregate includes event_study) |
+| `group_effects` | `dict` | Group-level effects (if aggregate includes group) |
+| `groups` | `list` | Treatment cohorts |
+| `time_periods` | `list` | All time periods |
+| `n_obs` | `int` | Number of observations |
+| `n_treated_units` | `int` | Number of treated units |
+| `n_control_units` | `int` | Number of control units |
+
+Each event study effect dict contains: `effect`, `se`, `t_stat`, `p_value`, `conf_int`, `n_obs` (or `n_groups`).
+
+**Methods:** `summary()`, `print_summary()`, `to_dataframe()`
+
+### ContinuousDiDResults
+
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| `dose_response_att` | `DoseResponseCurve` | Dose-response curve for ATT |
+| `dose_response_acrt` | `DoseResponseCurve` | Dose-response curve for ACRT |
+| `overall_att` | `float` | Overall ATT |
+| `overall_att_se` | `float` | SE of overall ATT |
+| `overall_att_t_stat` | `float` | T-statistic for ATT |
+| `overall_att_p_value` | `float` | P-value for ATT |
+| `overall_att_conf_int` | `tuple[float, float]` | CI for ATT |
+| `overall_acrt` | `float` | Overall ACRT |
+| `overall_acrt_se` | `float` | SE of overall ACRT |
+| `overall_acrt_t_stat` | `float` | T-statistic for ACRT |
+| `overall_acrt_p_value` | `float` | P-value for ACRT |
+| `overall_acrt_conf_int` | `tuple[float, float]` | CI for ACRT |
+| `group_time_effects` | `dict[tuple, dict]` | Group-time level effects |
+| `dose_grid` | `np.ndarray` | Evaluation grid for dose-response |
+| `groups` | `list` | Treatment cohorts |
+| `time_periods` | `list` | All time periods |
+| `n_obs` | `int` | Number of observations |
+| `n_treated_units` | `int` | Treated units |
+| `n_control_units` | `int` | Control units |
+| `event_study_effects` | `dict[int, dict] or None` | Event study effects (if `aggregate="eventstudy"`) |
+
+**DoseResponseCurve** sub-dataclass:
+
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| `dose_grid` | `np.ndarray` | Dose values |
+| `effects` | `np.ndarray` | Estimated effects at each dose |
+| `se` | `np.ndarray` | Standard errors |
+| `conf_int_lower` | `np.ndarray` | Lower CI bound |
+| `conf_int_upper` | `np.ndarray` | Upper CI bound |
+| `target` | `str` | `"att"` or `"acrt"` |
+
+**Methods:** `summary()`, `print_summary()`, `to_dataframe()`
+
+### TROPResults
+
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| `att` | `float` | ATT estimate |
+| `se` | `float` | Bootstrap standard error |
+| `t_stat` | `float` | T-statistic |
+| `p_value` | `float` | P-value |
+| `conf_int` | `tuple[float, float]` | CI |
+| `n_obs` | `int` | Number of observations |
+| `n_treated` | `int` | Number of treated units |
+| `n_control` | `int` | Number of control units |
+| `n_treated_obs` | `int` | Number of treated unit-time observations |
+| `lambda_time` | `float` | Selected time decay parameter |
+| `lambda_unit` | `float` | Selected unit decay parameter |
+| `lambda_nn` | `float` | Selected nuclear norm parameter |
+| `n_bootstrap` | `int` | Number of bootstrap replications |
+
+**Methods:** `summary()`, `print_summary()`, `to_dict()`, `to_dataframe()`
+
+## Diagnostics
+
+### Placebo Tests
+
+```python
+from diff_diff import (
+    run_placebo_test,
+    placebo_timing_test,
+    placebo_group_test,
+    permutation_test,
+    leave_one_out_test,
+    run_all_placebo_tests,
+)
+
+# Unified interface
+results = run_placebo_test(
+    data, outcome='y', treatment='treated', time='period',
+    test_type='fake_timing',           # "fake_timing", "fake_group", "permutation", "leave_one_out"
+    fake_treatment_period=1,           # For fake_timing
+    post_periods=[3, 4, 5],
+)
+
+# Run all tests at once
+all_results = run_all_placebo_tests(
+    data, outcome='y', treatment='treated', time='period', unit='unit_id',
+    pre_periods=[0, 1, 2], post_periods=[3, 4, 5],
+    n_permutations=500, seed=42,
+)
+```
+
+**Individual test functions:**
+
+```python
+# Fake timing test
+placebo_timing_test(data, outcome, treatment, time,
+                    fake_treatment_period, post_periods=None, alpha=0.05)
+
+# Fake group test
+placebo_group_test(data, outcome, time, unit,
+                   fake_treated_units, post_periods=None, alpha=0.05)
+
+# Permutation test
+permutation_test(data, outcome, treatment, time, unit,
+                 n_permutations=1000, alpha=0.05, seed=None)
+
+# Leave-one-out test
+leave_one_out_test(data, outcome, treatment, time, unit, alpha=0.05)
+```
+
+All return `PlaceboTestResults` with attributes: `test_type`, `placebo_effect`, `se`, `t_stat`, `p_value`, `conf_int`, `n_obs`, `is_significant`.
+
+### Parallel Trends Testing
+
+```python
+from diff_diff import check_parallel_trends, check_parallel_trends_robust, equivalence_test_trends
+
+# Simple trend comparison
+result = check_parallel_trends(
+    data, outcome='y', time='period', treatment_group='treated',
+    pre_periods=[0, 1, 2],
+)
+
+# Distributional comparison (Wasserstein distance + permutation inference)
+result = check_parallel_trends_robust(
+    data, outcome='y', time='period', treatment_group='treated',
+    unit='unit_id', pre_periods=[0, 1, 2],
+    n_permutations=1000, seed=42,
+)
+
+# TOST equivalence test
+result = equivalence_test_trends(
+    data, outcome='y', time='period', treatment_group='treated',
+    unit='unit_id', pre_periods=[0, 1, 2],
+    equivalence_margin=0.5,
+)
+```
+
+### Wild Cluster Bootstrap
+
+```python
+from diff_diff import wild_bootstrap_se, WildBootstrapResults
+
+# Directly via estimator
+did = DifferenceInDifferences(inference="wild_bootstrap", n_bootstrap=999,
+                              bootstrap_weights="webb", cluster="state")
+results = did.fit(data, outcome='y', treatment='treated', time='post')
+```
+
+## Honest DiD Sensitivity Analysis
+
+Rambachan & Roth (2023) robust inference allowing bounded parallel trends violations.
+
+### Delta Restriction Classes
+
+```python
+from diff_diff import DeltaSD, DeltaRM, DeltaSDRM
+
+# Smoothness: bounds on second differences
+delta_sd = DeltaSD(M=0.5)
+
+# Relative magnitudes: post violations <= Mbar * max pre violation
+delta_rm = DeltaRM(Mbar=1.0)
+
+# Combined restriction
+delta_sdrm = DeltaSDRM(M=0.5, Mbar=1.0)
+```
+
+### HonestDiD Class
+
+```python
+from diff_diff import HonestDiD
+
+honest = HonestDiD(
+    method="relative_magnitude",     # "smoothness", "relative_magnitude", or "combined"
+    M=1.0,                           # Restriction parameter
+    alpha=0.05,
+    l_vec=None,                      # Weighting vector (None = uniform)
+)
+
+# Fit to event study results
+bounds = honest.fit(event_study_results)
+print(bounds.summary())
+
+# Sensitivity analysis over M grid
+sensitivity = honest.sensitivity_analysis(
+    event_study_results,
+    M_grid=[0, 0.5, 1.0, 1.5, 2.0],
+)
+sensitivity.plot()
+```
+
+### Convenience Functions
+
+```python
+from diff_diff import compute_honest_did, sensitivity_plot
+
+bounds = compute_honest_did(results, method="relative_magnitude", M=1.0, alpha=0.05)
+sensitivity_plot(results, method="relative_magnitude", M_grid=[0, 0.5, 1, 1.5, 2])
+```
+
+### HonestDiDResults
+
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| `lb` | `float` | Lower bound of identified set |
+| `ub` | `float` | Upper bound of identified set |
+| `ci_lb` | `float` | Lower bound of robust CI |
+| `ci_ub` | `float` | Upper bound of robust CI |
+| `M` | `float` | Restriction parameter value |
+| `method` | `str` | Restriction type |
+| `original_estimate` | `float` | Original point estimate |
+| `original_se` | `float` | Original SE |
+| `ci_method` | `str` | "FLCI" or "C-LF" |
+| `event_study_bounds` | `dict` | Per-period bounds (optional) |
+
+**Properties:** `is_significant` (CI excludes zero)
+
+## Power Analysis
+
+```python
+from diff_diff import PowerAnalysis, compute_mde, compute_power, compute_sample_size, simulate_power
+
+# Class-based interface
+pa = PowerAnalysis(alpha=0.05, power=0.80, alternative='two-sided')
+mde_result = pa.mde(n_treated=50, n_control=50, sigma=1.0)
+sample_result = pa.sample_size(effect_size=0.5, sigma=1.0)
+power_result = pa.power(effect_size=0.5, n_treated=50, n_control=50, sigma=1.0)
+
+# Convenience functions
+mde_result = compute_mde(n_treated=50, n_control=50, sigma=1.0)
+power_result = compute_power(effect_size=0.5, n_treated=50, n_control=50, sigma=1.0)
+sample_result = compute_sample_size(effect_size=0.5, sigma=1.0)
+
+# Simulation-based power
+sim_result = simulate_power(
+    n_units=200, n_periods=8, treatment_period=4,
+    effect_sizes=[0.1, 0.5, 1.0, 2.0],
+    n_simulations=500, seed=42,
+)
+```
+
+## Pre-Trends Power Analysis
+
+```python
+from diff_diff import PreTrendsPower, compute_pretrends_power, compute_mdv
+
+# Class-based
+ptp = PreTrendsPower()
+results = ptp.compute(event_study_results, M_grid=[0, 0.5, 1.0, 2.0])
+
+# Convenience functions
+results = compute_pretrends_power(event_study_results, M_grid=[0, 0.5, 1.0, 2.0])
+mdv = compute_mdv(event_study_results, target_power=0.80)
+```
+
+## Visualization
+
+All plotting functions return a matplotlib `Figure` object.
+
+### plot_event_study
+
+```python
+from diff_diff import plot_event_study
+
+plot_event_study(
+    results,                           # MultiPeriodDiDResults, CS, SA, BJS, Gardner, Stacked, or DataFrame
+    effects=None,                      # Manual dict of effects (alternative to results)
+    se=None,                           # Manual dict of SEs
+    periods=None,
+    reference_period=None,
+    pre_periods=None,
+    post_periods=None,
+    alpha=0.05,
+    figsize=(10, 6),
+    title="Event Study",
+    xlabel="Period Relative to Treatment",
+    ylabel="Treatment Effect",
+    color="#2563eb",
+    show_zero_line=True,
+    show_reference_line=True,
+    shade_pre=True,
+    ax=None,
+    show=True,
+    use_cband=True,                    # Use simultaneous confidence bands if available
+)
+```
+
+### plot_group_effects
+
+```python
+from diff_diff import plot_group_effects
+
+plot_group_effects(
+    results,                           # CallawaySantAnnaResults
+    groups=None,
+    figsize=(10, 6),
+    title="Treatment Effects by Cohort",
+    alpha=0.05,
+    show=True,
+    ax=None,
+)
+```
+
+### plot_sensitivity
+
+```python
+from diff_diff import plot_sensitivity
+
+plot_sensitivity(
+    sensitivity_results,               # SensitivityResults from HonestDiD
+    show_bounds=True,
+    show_ci=True,
+    breakdown_line=True,
+    figsize=(10, 6),
+    title="Honest DiD Sensitivity Analysis",
+    ax=None,
+    show=True,
+)
+```
+
+### plot_honest_event_study
+
+```python
+from diff_diff import plot_honest_event_study
+
+plot_honest_event_study(
+    honest_results,                    # HonestDiDResults with event_study_bounds
+    periods=None,
+    reference_period=None,
+    figsize=(10, 6),
+    title="Event Study with Honest Confidence Intervals",
+    ax=None,
+    show=True,
+)
+```
+
+### plot_bacon
+
+```python
+from diff_diff import plot_bacon
+
+plot_bacon(
+    results,                           # BaconDecompositionResults
+    plot_type="scatter",               # "scatter" or "bar"
+    figsize=(10, 6),
+    show_weighted_avg=True,
+    show_twfe_line=True,
+    ax=None,
+    show=True,
+)
+```
+
+### plot_power_curve
+
+```python
+from diff_diff import plot_power_curve
+
+plot_power_curve(
+    results=None,                      # PowerResults, SimulationPowerResults, or DataFrame
+    effect_sizes=None,
+    powers=None,
+    mde=None,
+    target_power=0.80,
+    plot_type="effect",                # "effect" or "sample_size"
+    figsize=(10, 6),
+    show_mde_line=True,
+    show_target_line=True,
+    ax=None,
+    show=True,
+)
+```
+
+### plot_pretrends_power
+
+```python
+from diff_diff import plot_pretrends_power
+
+plot_pretrends_power(
+    results=None,                      # PreTrendsPowerResults or PreTrendsPowerCurve
+    M_values=None,
+    powers=None,
+    mdv=None,
+    target_power=0.80,
+    figsize=(10, 6),
+    ax=None,
+    show=True,
+)
+```
+
+## Data Preparation Utilities
+
+### Data Manipulation
+
+```python
+from diff_diff import (
+    make_treatment_indicator,
+    make_post_indicator,
+    wide_to_long,
+    balance_panel,
+    validate_did_data,
+    summarize_did_data,
+    create_event_time,
+    aggregate_to_cohorts,
+    rank_control_units,
+)
+
+# Create binary treatment indicator
+df = make_treatment_indicator(data, column='group', treated_values='A', new_column='treated')
+df = make_treatment_indicator(data, column='size', threshold=75, new_column='treated')
+
+# Create binary post indicator
+df = make_post_indicator(data, time_column='year', treatment_start=2020, new_column='post')
+df = make_post_indicator(data, time_column='year', post_periods=[2020, 2021])
+
+# Reshape wide to long
+long_df = wide_to_long(data, value_columns=['y2018', 'y2019', 'y2020'],
+                       id_column='unit', time_name='year', value_name='outcome')
+
+# Balance panel (keep only units observed in all periods)
+balanced_df = balance_panel(data, unit='unit', time='period')
+
+# Validate DiD data
+validation = validate_did_data(data, outcome='y', treatment='treated',
+                               time='period', unit='unit')
+
+# Summarize DiD data
+summary = summarize_did_data(data, outcome='y', treatment='treated',
+                             time='period', unit='unit')
+
+# Create event time column
+df = create_event_time(data, time='period', first_treat='first_treat', new_column='event_time')
+
+# Aggregate to cohort level
+cohort_df = aggregate_to_cohorts(data, outcome='y', unit='unit', time='period',
+                                 first_treat='first_treat')
+
+# Rank control units by similarity to treated
+ranking = rank_control_units(data, outcome='y', unit='unit', time='period',
+                             treatment='treated')
+```
+
+### Data Generation
+
+```python
+from diff_diff import (
+    generate_did_data,
+    generate_staggered_data,
+    generate_panel_data,
+    generate_event_study_data,
+    generate_factor_data,
+    generate_ddd_data,
+    generate_continuous_did_data,
+)
+
+# Basic 2x2 DiD data
+data = generate_did_data(n_units=100, n_periods=4, treatment_effect=5.0,
+                         treatment_fraction=0.5, treatment_period=2, seed=42)
+
+# Staggered adoption data
+data = generate_staggered_data(n_units=100, n_periods=10,
+                               treatment_effect=2.0, dynamic_effects=True,
+                               never_treated_frac=0.3, seed=42)
+
+# Panel data with optional trend violations
+data = generate_panel_data(n_units=100, n_periods=8, treatment_period=4,
+                           parallel_trends=True, seed=42)
+
+# Event study data
+data = generate_event_study_data(n_units=300, n_pre=5, n_post=5,
+                                 treatment_effect=5.0, seed=42)
+
+# Factor model data (for TROP)
+data = generate_factor_data(n_units=50, n_pre=10, n_post=5,
+                            n_treated=10, n_factors=2, seed=42)
+
+# Triple difference data
+data = generate_ddd_data(n_per_cell=100, treatment_effect=2.0, seed=42)
+
+# Continuous dose data
+data = generate_continuous_did_data(n_units=500, n_periods=4,
+                                    att_function="linear", att_slope=2.0, seed=42)
+```
+
+## Real-World Datasets
+
+```python
+from diff_diff import load_card_krueger, load_castle_doctrine, load_divorce_laws, load_mpdta
+from diff_diff import load_dataset, list_datasets, clear_cache
+
+# List available datasets
+for name, desc in list_datasets().items():
+    print(f"{name}: {desc}")
+
+# Load by name
+data = load_dataset("card_krueger")
+
+# Named loaders
+ck = load_card_krueger()          # Card & Krueger (1994) minimum wage
+castle = load_castle_doctrine()    # Castle Doctrine / Stand Your Ground laws
+divorce = load_divorce_laws()      # Unilateral divorce laws (staggered)
+mpdta = load_mpdta()              # Minimum wage panel (simulated, from R did package)
+
+# Force re-download
+data = load_card_krueger(force_download=True)
+
+# Clear local cache
+clear_cache()
+```
+
+## Linear Algebra Helpers
+
+```python
+from diff_diff import LinearRegression, InferenceResult
+
+# Low-level regression helper
+reg = LinearRegression(
+    include_intercept=True,
+    robust=True,
+    cluster_ids=cluster_array,
+)
+reg.fit(X, y)
+inference = reg.get_inference(coef_index)  # -> InferenceResult
+```
+
+### InferenceResult
+
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| `coefficient` | `float` | Point estimate |
+| `se` | `float` | Standard error |
+| `t_stat` | `float` | T-statistic |
+| `p_value` | `float` | P-value |
+| `conf_int` | `tuple[float, float]` | Confidence interval |
+
+## Rust Backend
+
+diff-diff includes an optional Rust backend for performance-critical operations.
+
+```python
+from diff_diff import HAS_RUST_BACKEND
+
+if HAS_RUST_BACKEND:
+    print("Rust backend available - computations will be faster")
+```
+
+The Rust backend accelerates: OLS solving, robust VCV computation, bootstrap weight generation, synthetic control weights, and simplex projection. It is used transparently when available. Force backend selection via environment variables:
+
+```bash
+DIFF_DIFF_BACKEND=python pytest   # Force pure Python
+DIFF_DIFF_BACKEND=rust pytest     # Force Rust (fail if unavailable)
+```
+
+## Choosing an Estimator
+
+| Scenario | Recommended Estimator |
+|----------|----------------------|
+| Classic 2x2 design (one treated group, one time split) | `DifferenceInDifferences` |
+| Panel data with unit + time FE | `TwoWayFixedEffects` |
+| Event study with multiple periods | `MultiPeriodDiD` |
+| Staggered treatment timing | `CallawaySantAnna`, `ImputationDiD`, or `SunAbraham` |
+| Few treated units / synthetic control | `SyntheticDiD` |
+| Interactive fixed effects / factor confounding | `TROP` |
+| Continuous treatment intensity | `ContinuousDiD` |
+| Two-criterion treatment (group + eligibility) | `TripleDifference` |
+| Diagnosing TWFE bias | `BaconDecomposition` |
+| Efficiency-optimal estimation | `EfficientDiD` |
+| Corrective weighting for stacked regressions | `StackedDiD` |
+| Robustness to parallel trends violations | `HonestDiD` |

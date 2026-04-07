@@ -1,0 +1,63 @@
+name: Tutorial Notebooks
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'docs/tutorials/**'
+      - 'diff_diff/**'
+      - 'pyproject.toml'
+      - '.github/workflows/notebooks.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'docs/tutorials/**'
+      - 'diff_diff/**'
+      - 'pyproject.toml'
+      - '.github/workflows/notebooks.yml'
+  schedule:
+    # Weekly Sunday 6am UTC — smoke test that notebooks still execute cleanly
+    - cron: '0 6 * * 0'
+
+jobs:
+  execute-notebooks:
+    name: Execute tutorial notebooks
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        # Keep in sync with pyproject.toml [project.dependencies] and [project.optional-dependencies.dev]
+        run: |
+          pip install numpy pandas scipy matplotlib nbmake pytest ipykernel
+          # Add repo root to Python path so Jupyter kernels can import diff_diff
+          # (pip install -e . requires the Rust/maturin toolchain; .pth avoids that)
+          python -c "import site; print(site.getsitepackages()[0])" | xargs -I{} sh -c 'echo "$PWD" > {}/diff_diff_dev.pth'
+
+      - name: Execute notebooks
+        env:
+          DIFF_DIFF_BACKEND: python
+        run: |
+          pytest --nbmake docs/tutorials/ \
+            --nbmake-timeout=600 \
+            --ignore=docs/tutorials/06_power_analysis.ipynb \
+            --ignore=docs/tutorials/10_trop.ipynb \
+            -v \
+            --tb=short
+          # Excluded notebooks (too slow for pure-Python CI without Rust backend):
+          #   06_power_analysis — SyntheticDiD simulate_power Monte Carlo (>600s)
+          #   10_trop — LOOCV grid search (>600s)
+
+      - name: Upload failed notebook outputs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: failed-notebook-outputs
+          path: docs/tutorials/*.ipynb
+          retention-days: 7

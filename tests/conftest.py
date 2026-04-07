@@ -8,6 +8,10 @@ to avoid import-time subprocess latency.
 import math
 import os
 import subprocess
+import sys
+
+# Make tests/helpers/ importable without adding all of tests/ to sys.path
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "helpers"))
 
 # Force non-interactive matplotlib backend before any test imports it.
 # Prevents plt.show() from blocking the test suite on a GUI window.

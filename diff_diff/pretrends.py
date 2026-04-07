@@ -30,10 +30,9 @@ from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd
-from scipy import stats, optimize
+from scipy import optimize, stats
 
 from diff_diff.results import MultiPeriodDiDResults
-
 
 # =============================================================================
 # Results Classes
@@ -501,6 +500,7 @@ class PreTrendsPower:
             Violation weights, normalized to have L2 norm of 1.
         """
         if self.violation_type == "custom":
+            assert self.violation_weights is not None
             if len(self.violation_weights) != n_pre:
                 raise ValueError(
                     f"violation_weights has length {len(self.violation_weights)}, "
@@ -932,6 +932,7 @@ class PreTrendsPower:
             M_grid = np.asarray(M_grid)
 
         # Compute power at each M
+        assert M_grid is not None
         powers = np.array([self._compute_power(M, weights, vcov)[0] for M in M_grid])
 
         return PreTrendsPowerCurve(

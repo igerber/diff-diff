@@ -100,7 +100,7 @@ Estimation Methods
 
 TROP supports two estimation methods via the ``method`` parameter:
 
-**Two-Step Method** (``method='twostep'``, default)
+**Local Method** (``method='local'``, default)
 
 The default method follows Algorithm 2 from the paper:
 
@@ -124,7 +124,7 @@ the estimator is consistent if any one of the three components
 A computationally efficient adaptation using the ``(1-W)`` masking principle
 from Eq. 2. Fits a single global model rather than per-treated-cell models.
 For the paper's full per-treated-cell estimator (Algorithm 2), use
-``method='twostep'``.
+``method='local'``.
 
 1. **Compute weights**: Distance-based unit and time weights computed once
    (distance to center of treated block, RMSE to average treated trajectory),
@@ -145,15 +145,16 @@ For the paper's full per-treated-cell estimator (Algorithm 2), use
 The global method is **faster** (single optimization vs N_treated optimizations).
 Treatment effects are **heterogeneous** per-observation residuals; ATT is their mean.
 
-``method='joint'`` is a deprecated alias for ``method='global'`` and will be
-removed in a future version.
+``method='twostep'`` is a deprecated alias for ``method='local'`` and will be
+removed in v3.0. ``method='joint'`` is a deprecated alias for ``method='global'``
+and will be removed in v3.0.
 
 .. list-table::
    :header-rows: 1
    :widths: 20 40 40
 
    * - Feature
-     - Two-Step (default)
+     - Local (default)
      - Global
    * - Treatment effect
      - Per-observation τ_{it} (per-obs models)
@@ -168,7 +169,7 @@ removed in a future version.
      - Observation-specific
      - Global (center of treated block)
 
-Use ``method='twostep'`` for observation-specific weight optimization.
+Use ``method='local'`` for observation-specific weight optimization.
 Use ``method='global'`` for faster estimation with global weights.
 
 Example Usage
@@ -228,9 +229,9 @@ Using the global method for faster estimation::
                                       unit='unit_id', time='period')
 
     # Compare methods
-    trop_twostep = TROP(method='twostep', ...)  # Default (per-observation)
-    results_twostep = trop_twostep.fit(data, ...)
-    print(f"Two-step ATT: {results_twostep.att:.3f}")
+    trop_local = TROP(method='local', ...)  # Default (per-observation)
+    results_local = trop_local.fit(data, ...)
+    print(f"Local ATT: {results_local.att:.3f}")
     print(f"Global ATT: {results_global.att:.3f}")
 
 Examining factor structure::

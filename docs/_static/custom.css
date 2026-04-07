@@ -26,11 +26,6 @@ table.docutils td, table.docutils th {
     font-weight: bold;
 }
 
-/* Method/function signature styling */
-.sig-name {
-    font-weight: bold;
-}
-
 /* Better parameter list styling */
 .field-list {
     margin-top: 1em;

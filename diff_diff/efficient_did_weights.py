@@ -10,7 +10,7 @@ All functions are pure (no state), operating on pre-pivoted numpy arrays.
 """
 
 import warnings
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
@@ -101,15 +101,36 @@ def enumerate_valid_triples(
     return pairs
 
 
-def _sample_cov(a: np.ndarray, b: np.ndarray) -> float:
+def _sample_cov(
+    a: np.ndarray,
+    b: np.ndarray,
+    w: Optional[np.ndarray] = None,
+) -> float:
     """Sample covariance between two 1-D arrays (ddof=1).
 
     Returns 0.0 if fewer than 2 observations.
+
+    Parameters
+    ----------
+    a, b : ndarray, shape (n,)
+        Data arrays.
+    w : ndarray, shape (n,), optional
+        Survey weights.  When provided, computes the reliability-weighted
+        covariance: ``sum(w*(a-a_bar)*(b-b_bar)) / (sum(w) - 1)`` where
+        ``a_bar = average(a, weights=w)``.
     """
     n = len(a)
     if n < 2:
         return 0.0
-    return float(((a - a.mean()) * (b - b.mean())).sum() / (n - 1))
+    if w is None:
+        return float(((a - a.mean()) * (b - b.mean())).sum() / (n - 1))
+    # Weighted covariance with reliability weights (Bessel-style correction)
+    a_bar = float(np.average(a, weights=w))
+    b_bar = float(np.average(b, weights=w))
+    sum_w = float(np.sum(w))
+    if sum_w <= 1.0:
+        return 0.0
+    return float(np.sum(w * (a - a_bar) * (b - b_bar)) / (sum_w - 1.0))
 
 
 def compute_omega_star_nocov(
@@ -123,6 +144,7 @@ def compute_omega_star_nocov(
     period_1_col: int,
     cohort_fractions: Dict[float, float],
     never_treated_val: float = np.inf,
+    unit_weights: Optional[np.ndarray] = None,
 ) -> np.ndarray:
     """Build the |H| x |H| covariance matrix Omega* (Eq 3.12, unconditional).
 
@@ -152,6 +174,9 @@ def compute_omega_star_nocov(
         ``{cohort: n_cohort / n}`` for each cohort.
     never_treated_val : float
         Sentinel for the never-treated group.
+    unit_weights : ndarray, shape (n_units,), optional
+        Survey weights at the unit level.  When provided, all sample
+        means and covariances are weighted.
 
     Returns
     -------
@@ -170,6 +195,10 @@ def compute_omega_star_nocov(
     Y_g = outcome_wide[g_mask]  # (n_g, n_periods)
     pi_g = cohort_fractions[target_g]
 
+    # Extract per-cohort weights (None propagates = unweighted)
+    w_g = unit_weights[g_mask] if unit_weights is not None else None
+    w_inf = unit_weights[never_treated_mask] if unit_weights is not None else None
+
     # Y_t - Y_1 for the target group
     Yg_t_minus_1 = Y_g[:, t_col] - Y_g[:, y1_col]
 
@@ -182,7 +211,7 @@ def compute_omega_star_nocov(
     # Hoist Term 1: (1/pi_g) * Var(Y_t - Y_1 | G=g) — same for all (j, k)
     term1 = 0.0
     if pi_g > 0:
-        term1 = (1.0 / pi_g) * _sample_cov(Yg_t_minus_1, Yg_t_minus_1)
+        term1 = (1.0 / pi_g) * _sample_cov(Yg_t_minus_1, Yg_t_minus_1, w=w_g)
 
     # Precompute differenced arrays to avoid redundant slicing in the loop
     # Never-treated: Y_t - Y_{tpre} and Y_{tpre} - Y_1 for each tpre
@@ -206,10 +235,14 @@ def compute_omega_star_nocov(
 
     # Comparison cohort submatrices: cache outcome_wide[cohort_masks[gp]]
     gp_outcomes: Dict[float, np.ndarray] = {}
+    gp_weights: Dict[float, Optional[np.ndarray]] = {}
     for gp, _ in valid_pairs:
         if not np.isinf(gp) and gp not in gp_outcomes:
             if gp in cohort_masks:
                 gp_outcomes[gp] = outcome_wide[cohort_masks[gp]]
+                gp_weights[gp] = (
+                    unit_weights[cohort_masks[gp]] if unit_weights is not None else None
+                )
 
     # Comparison cohort: Y_{tpre} - Y_1 for each (gp, tpre) pair in Term 5
     gp_tpre_minus_1: Dict[Tuple[float, int], np.ndarray] = {}
@@ -227,23 +260,35 @@ def compute_omega_star_nocov(
             # Term 2: (1/pi_inf) * SampleCov(Y_t - Y_{tpre_j}, Y_t - Y_{tpre_k} | G=inf)
             if pi_inf > 0 and tpre_j_col in inf_t_minus_tpre:
                 val += (1.0 / pi_inf) * _sample_cov(
-                    inf_t_minus_tpre[tpre_j_col], inf_t_minus_tpre[tpre_k_col]
+                    inf_t_minus_tpre[tpre_j_col],
+                    inf_t_minus_tpre[tpre_k_col],
+                    w=w_inf,
                 )
 
             # Term 3: -1{g == g'_j} / pi_g * SampleCov(Y_t-Y_1, Y_{tpre_j}-Y_1 | G=g)
             if gp_j == target_g and tpre_j_col in g_tpre_minus_1:
-                val -= (1.0 / pi_g) * _sample_cov(Yg_t_minus_1, g_tpre_minus_1[tpre_j_col])
+                val -= (1.0 / pi_g) * _sample_cov(
+                    Yg_t_minus_1,
+                    g_tpre_minus_1[tpre_j_col],
+                    w=w_g,
+                )
 
             # Term 4: -1{g == g'_k} / pi_g * SampleCov(Y_t-Y_1, Y_{tpre_k}-Y_1 | G=g)
             if gp_k == target_g and tpre_k_col in g_tpre_minus_1:
-                val -= (1.0 / pi_g) * _sample_cov(Yg_t_minus_1, g_tpre_minus_1[tpre_k_col])
+                val -= (1.0 / pi_g) * _sample_cov(
+                    Yg_t_minus_1,
+                    g_tpre_minus_1[tpre_k_col],
+                    w=w_g,
+                )
 
             # Term 5: 1{g'_j == g'_k} / pi_{g'_j} * SampleCov(Y_{tpre_j}-Y_1, Y_{tpre_k}-Y_1 | G=g'_j)
             if gp_j == gp_k:
                 if np.isinf(gp_j):
                     if pi_inf > 0 and tpre_j_col in inf_tpre_minus_1:
                         val += (1.0 / pi_inf) * _sample_cov(
-                            inf_tpre_minus_1[tpre_j_col], inf_tpre_minus_1[tpre_k_col]
+                            inf_tpre_minus_1[tpre_j_col],
+                            inf_tpre_minus_1[tpre_k_col],
+                            w=w_inf,
                         )
                 else:
                     pi_gp = cohort_fractions.get(gp_j, 0.0)
@@ -251,6 +296,7 @@ def compute_omega_star_nocov(
                         Y_gp = gp_outcomes.get(gp_j)
                         if Y_gp is None:
                             Y_gp = outcome_wide[cohort_masks[gp_j]]
+                        w_gp = gp_weights.get(gp_j)
                         if len(Y_gp) >= 2:
                             # Cache tpre diffs for comparison cohorts
                             key_j = (gp_j, tpre_j_col)
@@ -260,7 +306,9 @@ def compute_omega_star_nocov(
                             if key_k not in gp_tpre_minus_1:
                                 gp_tpre_minus_1[key_k] = Y_gp[:, tpre_k_col] - Y_gp[:, y1_col]
                             val += (1.0 / pi_gp) * _sample_cov(
-                                gp_tpre_minus_1[key_j], gp_tpre_minus_1[key_k]
+                                gp_tpre_minus_1[key_j],
+                                gp_tpre_minus_1[key_k],
+                                w=w_gp,
                             )
 
             omega[j, k] = val
@@ -354,6 +402,7 @@ def compute_generated_outcomes_nocov(
     period_to_col: Dict[float, int],
     period_1_col: int,
     never_treated_val: float = np.inf,
+    unit_weights: Optional[np.ndarray] = None,
 ) -> np.ndarray:
     """Compute generated outcome vector (one scalar per valid pair).
 
@@ -378,6 +427,9 @@ def compute_generated_outcomes_nocov(
         Pre-computed data structures.
     never_treated_val : float
         Sentinel for never-treated.
+    unit_weights : ndarray, shape (n_units,), optional
+        Survey weights at the unit level.  When provided, all sample
+        means become weighted means.
 
     Returns
     -------
@@ -391,10 +443,20 @@ def compute_generated_outcomes_nocov(
     t_col = period_to_col[target_t]
     y1_col = period_1_col
 
-    # Target group mean: mean(Y_t - Y_1 | G = g)
+    # Helper: weighted or unweighted mean
+    def _wmean(vals: np.ndarray, w: Optional[np.ndarray]) -> float:
+        if w is not None:
+            return float(np.average(vals, weights=w))
+        return float(np.mean(vals))
+
+    # Per-cohort weights
     g_mask = cohort_masks[target_g]
+    w_g = unit_weights[g_mask] if unit_weights is not None else None
+    w_inf = unit_weights[never_treated_mask] if unit_weights is not None else None
+
+    # Target group mean: mean(Y_t - Y_1 | G = g)
     Y_g = outcome_wide[g_mask]
-    mean_g_t_1 = float(np.mean(Y_g[:, t_col] - Y_g[:, y1_col]))
+    mean_g_t_1 = _wmean(Y_g[:, t_col] - Y_g[:, y1_col], w_g)
 
     # Never-treated outcomes
     Y_inf = outcome_wide[never_treated_mask]
@@ -405,14 +467,16 @@ def compute_generated_outcomes_nocov(
         tpre_col = period_to_col[tpre]
 
         # mean(Y_t - Y_{tpre} | G = inf)
-        mean_inf_t_tpre = float(np.mean(Y_inf[:, t_col] - Y_inf[:, tpre_col]))
+        mean_inf_t_tpre = _wmean(Y_inf[:, t_col] - Y_inf[:, tpre_col], w_inf)
 
         # mean(Y_{tpre} - Y_1 | G = g')
         if np.isinf(gp):
             Y_gp = Y_inf
+            w_gp = w_inf
         else:
             Y_gp = outcome_wide[cohort_masks[gp]]
-        mean_gp_tpre_1 = float(np.mean(Y_gp[:, tpre_col] - Y_gp[:, y1_col]))
+            w_gp = unit_weights[cohort_masks[gp]] if unit_weights is not None else None
+        mean_gp_tpre_1 = _wmean(Y_gp[:, tpre_col] - Y_gp[:, y1_col], w_gp)
 
         y_hat[j] = mean_g_t_1 - mean_inf_t_tpre - mean_gp_tpre_1
 
@@ -432,6 +496,7 @@ def compute_eif_nocov(
     cohort_fractions: Dict[float, float],
     n_units: int,
     never_treated_val: float = np.inf,
+    unit_weights: Optional[np.ndarray] = None,
 ) -> np.ndarray:
     """Compute per-unit efficient influence function values.
 
@@ -462,6 +527,9 @@ def compute_eif_nocov(
     outcome_wide, cohort_masks, never_treated_mask, period_to_col,
     period_1_col, cohort_fractions, n_units, never_treated_val :
         Pre-computed data structures.
+    unit_weights : ndarray, shape (n_units,), optional
+        Survey weights at the unit level.  When provided, within-group
+        means are weighted means.
 
     Returns
     -------
@@ -482,11 +550,21 @@ def compute_eif_nocov(
     Y_inf = outcome_wide[never_treated_mask]
     pi_inf = cohort_fractions.get(never_treated_val, 0.0)
 
+    # Per-cohort weights
+    w_g = unit_weights[g_mask] if unit_weights is not None else None
+    w_inf = unit_weights[never_treated_mask] if unit_weights is not None else None
+
+    # Helper for weighted/unweighted mean
+    def _wmean(vals: np.ndarray, w: Optional[np.ndarray]) -> float:
+        if w is not None:
+            return float(np.average(vals, weights=w))
+        return float(np.mean(vals))
+
     eif = np.zeros(n_units)
 
     # Hoist treated-group computations out of the per-pair loop (j-invariant)
     Yg_t_minus_1 = Y_g[:, t_col] - Y_g[:, y1_col]
-    mean_g_t_1 = float(np.mean(Yg_t_minus_1))
+    mean_g_t_1 = _wmean(Yg_t_minus_1, w_g)
     treated_demeaned = None
     if pi_g > 0:
         treated_demeaned = (1.0 / pi_g) * (Yg_t_minus_1 - mean_g_t_1)
@@ -507,7 +585,7 @@ def compute_eif_nocov(
         # --- Never-treated term ---
         if tpre_col not in inf_diffs:
             inf_diffs[tpre_col] = Y_inf[:, t_col] - Y_inf[:, tpre_col]
-            inf_means[tpre_col] = float(np.mean(inf_diffs[tpre_col]))
+            inf_means[tpre_col] = _wmean(inf_diffs[tpre_col], w_inf)
         if pi_inf > 0:
             inf_contrib = -(1.0 / pi_inf) * (inf_diffs[tpre_col] - inf_means[tpre_col])
             eif[never_treated_mask] += w_j * inf_contrib
@@ -518,7 +596,7 @@ def compute_eif_nocov(
             # Comparison group is never-treated; contribution is folded into
             # the never-treated term via Y_{tpre} - Y_1 differencing.
             # Additional term: -(1/pi_inf) * demeaned (Y_{tpre} - Y_1 | G=inf)
-            mean_inf_tpre_1 = np.mean(Y_inf[:, tpre_col] - Y_inf[:, y1_col])
+            mean_inf_tpre_1 = _wmean(Y_inf[:, tpre_col] - Y_inf[:, y1_col], w_inf)
             if pi_inf > 0:
                 gp_contrib = -(1.0 / pi_inf) * (
                     (Y_inf[:, tpre_col] - Y_inf[:, y1_col]) - mean_inf_tpre_1
@@ -528,7 +606,8 @@ def compute_eif_nocov(
             gp_mask = cohort_masks[gp]
             Y_gp = outcome_wide[gp_mask]
             pi_gp = cohort_fractions.get(gp, 0.0)
-            mean_gp_tpre_1 = np.mean(Y_gp[:, tpre_col] - Y_gp[:, y1_col])
+            w_gp = unit_weights[gp_mask] if unit_weights is not None else None
+            mean_gp_tpre_1 = _wmean(Y_gp[:, tpre_col] - Y_gp[:, y1_col], w_gp)
             if pi_gp > 0:
                 gp_contrib = -(1.0 / pi_gp) * (
                     (Y_gp[:, tpre_col] - Y_gp[:, y1_col]) - mean_gp_tpre_1

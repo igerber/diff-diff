@@ -5,34 +5,57 @@ on:
     types: [published]
 
 jobs:
-  # Build wheels on Linux using manylinux container
+  # Build wheels on Linux using manylinux containers
   build-linux:
-    name: Build Linux wheels
-    runs-on: ubuntu-latest
-    container: quay.io/pypa/manylinux_2_28_x86_64
+    name: Build Linux ${{ matrix.arch }} wheels
+    runs-on: ${{ matrix.runner }}
+    container: ${{ matrix.container }}
+    strategy:
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-latest
+            container: quay.io/pypa/manylinux_2_28_x86_64
+            artifact: wheels-linux-x86_64
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+            container: quay.io/pypa/manylinux_2_28_aarch64
+            artifact: wheels-linux-aarch64
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install dependencies
-        run: |
-          dnf install -y openssl-devel perl-IPC-Cmd openblas-devel
-          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --no-modify-path
-          /opt/python/cp312-cp312/bin/pip install maturin
+      - name: Install system dependencies
+        run: dnf install -y openssl-devel perl-IPC-Cmd openblas-devel
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install maturin
+        run: /opt/python/cp312-cp312/bin/pip install maturin
 
       - name: Build wheels
         run: |
-          export PATH="$HOME/.cargo/bin:$PATH"
+          expected=0
           for pyver in 39 310 311 312 313; do
             pybin="/opt/python/cp${pyver}-cp${pyver}/bin/python"
-            if [ -f "$pybin" ]; then
-              /opt/python/cp312-cp312/bin/maturin build --release --out dist -i "$pybin" --features extension-module,openblas
+            if [ ! -f "$pybin" ]; then
+              echo "ERROR: Expected Python interpreter not found: $pybin"
+              exit 1
             fi
+            /opt/python/cp312-cp312/bin/maturin build --release --out dist -i "$pybin" --features extension-module,openblas
+            expected=$((expected + 1))
           done
+          actual=$(ls dist/*.whl 2>/dev/null | wc -l)
+          echo "Built $actual wheels (expected $expected)"
+          if [ "$actual" -ne "$expected" ]; then
+            echo "ERROR: Expected $expected wheels but found $actual"
+            exit 1
+          fi
 
       - name: Upload wheels
         uses: actions/upload-artifact@v4
         with:
-          name: wheels-linux-x86_64
+          name: ${{ matrix.artifact }}
           path: dist/*.whl
 
   # Build wheels on macOS ARM64 (native build)

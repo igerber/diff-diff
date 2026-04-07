@@ -15,8 +15,6 @@ from diff_diff.estimators import DifferenceInDifferences
 from diff_diff.linalg import LinearRegression
 from diff_diff.results import DiDResults
 from diff_diff.utils import (
-    compute_confidence_interval,
-    compute_p_value,
     within_transform as _within_transform_util,
 )
 
@@ -61,7 +59,8 @@ class TwoWayFixedEffects(DifferenceInDifferences):
         treatment: str,
         time: str,
         unit: str,
-        covariates: Optional[List[str]] = None
+        covariates: Optional[List[str]] = None,
+        survey_design: object = None,
     ) -> DiDResults:
         """
         Fit Two-Way Fixed Effects model.
@@ -80,6 +79,10 @@ class TwoWayFixedEffects(DifferenceInDifferences):
             Name of unit identifier column.
         covariates : list, optional
             List of covariate column names.
+        survey_design : SurveyDesign, optional
+            Survey design specification for design-based inference. When provided,
+            uses Taylor Series Linearization for variance estimation and
+            applies sampling weights to the regression.
 
         Returns
         -------
@@ -118,6 +121,23 @@ class TwoWayFixedEffects(DifferenceInDifferences):
                     stacklevel=2,
                 )
 
+        # Resolve survey design if provided
+        from diff_diff.survey import _resolve_effective_cluster, _resolve_survey_for_fit
+
+        resolved_survey, survey_weights, survey_weight_type, survey_metadata = (
+            _resolve_survey_for_fit(survey_design, data, self.inference)
+        )
+        # Reject replicate-weight designs — TWFE within-transformation must
+        # be recomputed per replicate (same reason as SunAbraham rejection)
+        if resolved_survey is not None and resolved_survey.uses_replicate_variance:
+            raise NotImplementedError(
+                "TwoWayFixedEffects does not yet support replicate-weight "
+                "survey designs. The weighted within-transformation must be "
+                "recomputed for each replicate. Use CallawaySantAnna or "
+                "TripleDifference for replicate-weight inference, or use a "
+                "TSL-based survey design (strata/psu/fpc)."
+            )
+
         # Use unit-level clustering if not specified (use local variable to avoid mutation)
         cluster_var = self.cluster if self.cluster is not None else unit
 
@@ -130,7 +150,12 @@ class TwoWayFixedEffects(DifferenceInDifferences):
         # Demean outcome, covariates, AND interaction in a single pass
         all_vars = [outcome] + (covariates or []) + ["_treatment_post"]
         data_demeaned = _within_transform_util(
-            data, all_vars, unit, time, suffix="_demeaned"
+            data,
+            all_vars,
+            unit,
+            time,
+            suffix="_demeaned",
+            weights=survey_weights,
         )
 
         # Extract variables for regression
@@ -155,6 +180,32 @@ class TwoWayFixedEffects(DifferenceInDifferences):
         # For wild bootstrap, we don't need cluster SEs from the initial fit
         cluster_ids = data[cluster_var].values
 
+        # When survey PSU is present, it overrides cluster for variance estimation
+        effective_cluster_ids = _resolve_effective_cluster(
+            resolved_survey, cluster_ids, self.cluster
+        )
+
+        # For survey variance: only inject user-explicit cluster as PSU.
+        # TWFE's default unit clustering should not override the documented
+        # no-PSU survey path (implicit per-observation PSUs).
+        if resolved_survey is not None and self.cluster is None:
+            survey_cluster_ids = None
+        else:
+            survey_cluster_ids = effective_cluster_ids
+
+        # Inject cluster as effective PSU for survey variance estimation
+        if resolved_survey is not None and survey_cluster_ids is not None:
+            from diff_diff.survey import _inject_cluster_as_psu, compute_survey_metadata
+
+            resolved_survey = _inject_cluster_as_psu(resolved_survey, survey_cluster_ids)
+            if resolved_survey.psu is not None and survey_metadata is not None:
+                raw_w = (
+                    data[survey_design.weights].values.astype(np.float64)
+                    if survey_design.weights
+                    else np.ones(len(data), dtype=np.float64)
+                )
+                survey_metadata = compute_survey_metadata(resolved_survey, raw_w)
+
         # Pass rank_deficient_action to LinearRegression
         # If "error", let LinearRegression raise immediately
         # If "warn" or "silent", suppress generic warning and use TWFE's context-specific
@@ -163,9 +214,12 @@ class TwoWayFixedEffects(DifferenceInDifferences):
             reg = LinearRegression(
                 include_intercept=False,
                 robust=True,
-                cluster_ids=cluster_ids if self.inference != "wild_bootstrap" else None,
+                cluster_ids=survey_cluster_ids if self.inference != "wild_bootstrap" else None,
                 alpha=self.alpha,
                 rank_deficient_action="error",
+                weights=survey_weights,
+                weight_type=survey_weight_type,
+                survey_design=resolved_survey,
             ).fit(X, y, df_adjustment=df_adjustment)
         else:
             # Suppress generic warning, TWFE provides context-specific messages below
@@ -174,15 +228,21 @@ class TwoWayFixedEffects(DifferenceInDifferences):
                 reg = LinearRegression(
                     include_intercept=False,
                     robust=True,
-                    cluster_ids=cluster_ids if self.inference != "wild_bootstrap" else None,
+                    cluster_ids=(
+                        survey_cluster_ids if self.inference != "wild_bootstrap" else None
+                    ),
                     alpha=self.alpha,
                     rank_deficient_action="silent",
+                    weights=survey_weights,
+                    weight_type=survey_weight_type,
+                    survey_design=resolved_survey,
                 ).fit(X, y, df_adjustment=df_adjustment)
 
         coefficients = reg.coefficients_
         residuals = reg.residuals_
         fitted = reg.fitted_values_
         r_squared = reg.r_squared()
+        assert coefficients is not None
         att = coefficients[att_idx]
 
         # Check for unidentified coefficients (collinearity)
@@ -194,8 +254,9 @@ class TwoWayFixedEffects(DifferenceInDifferences):
         nan_mask = np.isnan(coefficients)
         if np.any(nan_mask):
             dropped_indices = np.where(nan_mask)[0]
-            dropped_names = [column_names[i] if i < len(column_names)
-                            else f"column {i}" for i in dropped_indices]
+            dropped_names = [
+                column_names[i] if i < len(column_names) else f"column {i}" for i in dropped_indices
+            ]
 
             # Determine the source of collinearity for better error message
             if att_idx in dropped_indices:
@@ -267,6 +328,7 @@ class TwoWayFixedEffects(DifferenceInDifferences):
             inference_method=inference_method,
             n_bootstrap=n_bootstrap_used,
             n_clusters=n_clusters_used,
+            survey_metadata=survey_metadata,
         )
 
         self.is_fitted_ = True
@@ -278,7 +340,7 @@ class TwoWayFixedEffects(DifferenceInDifferences):
         outcome: str,
         unit: str,
         time: str,
-        covariates: Optional[List[str]] = None
+        covariates: Optional[List[str]] = None,
     ) -> pd.DataFrame:
         """
         Apply within transformation to remove unit and time fixed effects.

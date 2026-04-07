@@ -158,3 +158,22 @@ ci = compute_confidence_interval(effect, se)  # produces point estimate for se=0
 t_stat, p_value, conf_int = safe_inference(effect, se)
 ```
 Flag partial NaN guards as P0 — they produce misleading statistical output.
+
+### 4. Incomplete parameter propagation (P1)
+For each changed public method signature (new parameter, renamed parameter,
+changed default), verify that ALL callers and wrappers in the changed files
+also received the same parameter. Check:
+- Direct callers within the same file
+- Cross-file callers visible in the diff or provided source files
+- Wrapper methods that delegate to the changed method
+- `get_params()` / `set_params()` return dicts
+Flag each missing propagation as P1.
+
+### 5. Semantic contract violation in composed values (P1)
+When code composes, transforms, or normalizes values from different sources
+(e.g., weights from different estimators, variance components, time indices),
+verify the semantic contract of each source is preserved through the operation:
+- Units and scales must be compatible before arithmetic
+- Normalization denominators must use the correct population
+- Index alignment must match the data contract (inner vs outer join semantics)
+Flag as P1 if semantic contracts are silently violated with no warning or check.

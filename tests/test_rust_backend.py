@@ -1151,12 +1151,12 @@ class TestTROPRustVsNumpy:
 
 @pytest.mark.slow
 @pytest.mark.skipif(not HAS_RUST_BACKEND, reason="Rust backend not available")
-class TestTROPJointRustBackend:
-    """Test suite for TROP joint method Rust backend functions."""
+class TestTROPGlobalRustBackend:
+    """Test suite for TROP global method Rust backend functions."""
 
-    def test_loocv_grid_search_joint_returns_valid_result(self):
-        """Test loocv_grid_search_joint returns valid tuning parameters."""
-        from diff_diff._rust_backend import loocv_grid_search_joint
+    def test_loocv_grid_search_global_returns_valid_result(self):
+        """Test loocv_grid_search_global returns valid tuning parameters."""
+        from diff_diff._rust_backend import loocv_grid_search_global
 
         np.random.seed(42)
         n_periods, n_units = 10, 20
@@ -1173,7 +1173,7 @@ class TestTROPJointRustBackend:
         lambda_unit_grid = np.array([0.0, 1.0])
         lambda_nn_grid = np.array([0.0, 0.1])
 
-        result = loocv_grid_search_joint(
+        result = loocv_grid_search_global(
             Y, D, control_mask,
             lambda_time_grid, lambda_unit_grid, lambda_nn_grid,
             100, 1e-6,
@@ -1192,9 +1192,9 @@ class TestTROPJointRustBackend:
         assert n_attempted > 0
         assert best_score >= 0 or np.isinf(best_score)
 
-    def test_loocv_grid_search_joint_reproducible(self):
-        """Test loocv_grid_search_joint is deterministic (no subsampling)."""
-        from diff_diff._rust_backend import loocv_grid_search_joint
+    def test_loocv_grid_search_global_reproducible(self):
+        """Test loocv_grid_search_global is deterministic (no subsampling)."""
+        from diff_diff._rust_backend import loocv_grid_search_global
 
         np.random.seed(42)
         n_periods, n_units = 8, 15
@@ -1210,12 +1210,12 @@ class TestTROPJointRustBackend:
         lambda_unit_grid = np.array([0.0, 0.5])
         lambda_nn_grid = np.array([0.0, 0.1])
 
-        result1 = loocv_grid_search_joint(
+        result1 = loocv_grid_search_global(
             Y, D, control_mask,
             lambda_time_grid, lambda_unit_grid, lambda_nn_grid,
             50, 1e-6,
         )
-        result2 = loocv_grid_search_joint(
+        result2 = loocv_grid_search_global(
             Y, D, control_mask,
             lambda_time_grid, lambda_unit_grid, lambda_nn_grid,
             50, 1e-6,
@@ -1224,9 +1224,9 @@ class TestTROPJointRustBackend:
         # Without subsampling, results should be deterministic
         assert result1[:4] == result2[:4]
 
-    def test_bootstrap_trop_variance_joint_shape(self):
-        """Test bootstrap_trop_variance_joint returns valid output."""
-        from diff_diff._rust_backend import bootstrap_trop_variance_joint
+    def test_bootstrap_trop_variance_global_shape(self):
+        """Test bootstrap_trop_variance_global returns valid output."""
+        from diff_diff._rust_backend import bootstrap_trop_variance_global
 
         np.random.seed(42)
         n_periods, n_units = 8, 15
@@ -1237,7 +1237,7 @@ class TestTROPJointRustBackend:
         D = np.zeros((n_periods, n_units))
         D[-n_post:, :n_treated] = 1.0
 
-        estimates, se = bootstrap_trop_variance_joint(
+        estimates, se = bootstrap_trop_variance_global(
             Y, D, 0.5, 0.5, 0.1, 50, 50, 1e-6, 42
         )
 
@@ -1246,9 +1246,9 @@ class TestTROPJointRustBackend:
         assert isinstance(se, float)
         assert se >= 0
 
-    def test_bootstrap_trop_variance_joint_reproducible(self):
-        """Test bootstrap_trop_variance_joint is reproducible."""
-        from diff_diff._rust_backend import bootstrap_trop_variance_joint
+    def test_bootstrap_trop_variance_global_reproducible(self):
+        """Test bootstrap_trop_variance_global is reproducible."""
+        from diff_diff._rust_backend import bootstrap_trop_variance_global
 
         np.random.seed(42)
         n_periods, n_units = 8, 15
@@ -1259,10 +1259,10 @@ class TestTROPJointRustBackend:
         D = np.zeros((n_periods, n_units))
         D[-n_post:, :n_treated] = 1.0
 
-        est1, se1 = bootstrap_trop_variance_joint(
+        est1, se1 = bootstrap_trop_variance_global(
             Y, D, 0.5, 0.5, 0.1, 50, 50, 1e-6, 42
         )
-        est2, se2 = bootstrap_trop_variance_joint(
+        est2, se2 = bootstrap_trop_variance_global(
             Y, D, 0.5, 0.5, 0.1, 50, 50, 1e-6, 42
         )
 
@@ -1272,11 +1272,11 @@ class TestTROPJointRustBackend:
 
 @pytest.mark.slow
 @pytest.mark.skipif(not HAS_RUST_BACKEND, reason="Rust backend not available")
-class TestTROPJointRustVsNumpy:
-    """Tests comparing TROP joint Rust and NumPy implementations."""
+class TestTROPGlobalRustVsNumpy:
+    """Tests comparing TROP global Rust and NumPy implementations."""
 
-    def test_trop_joint_produces_valid_results(self):
-        """Test TROP joint with Rust backend produces valid results."""
+    def test_trop_global_produces_valid_results(self):
+        """Test TROP global with Rust backend produces valid results."""
         import pandas as pd
         from diff_diff import TROP
 
@@ -1305,7 +1305,7 @@ class TestTROPJointRustVsNumpy:
         df = pd.DataFrame(data)
 
         trop = TROP(
-            method="joint",
+            method="global",
             lambda_time_grid=[0.0, 1.0],
             lambda_unit_grid=[0.0, 1.0],
             lambda_nn_grid=[0.0, 0.1],
@@ -1327,8 +1327,8 @@ class TestTROPJointRustVsNumpy:
         assert results.lambda_unit in [0.0, 1.0]
         assert results.lambda_nn in [0.0, 0.1]
 
-    def test_trop_joint_and_twostep_agree_in_direction(self):
-        """Test joint and twostep methods agree on treatment effect direction."""
+    def test_trop_global_and_local_agree_in_direction(self):
+        """Test global and local methods agree on treatment effect direction."""
         import pandas as pd
         from diff_diff import TROP
 
@@ -1356,33 +1356,33 @@ class TestTROPJointRustVsNumpy:
 
         df = pd.DataFrame(data)
 
-        # Fit with joint method
-        trop_joint = TROP(
-            method="joint",
+        # Fit with global method
+        trop_global = TROP(
+            method="global",
             lambda_time_grid=[0.0, 1.0],
             lambda_unit_grid=[0.0, 1.0],
             lambda_nn_grid=[0.0, 0.1],
             n_bootstrap=20,
             seed=42
         )
-        results_joint = trop_joint.fit(df, 'outcome', 'treated', 'unit', 'time')
+        results_global = trop_global.fit(df, 'outcome', 'treated', 'unit', 'time')
 
-        # Fit with twostep method
-        trop_twostep = TROP(
-            method="twostep",
+        # Fit with local method
+        trop_local = TROP(
+            method="local",
             lambda_time_grid=[0.0, 1.0],
             lambda_unit_grid=[0.0, 1.0],
             lambda_nn_grid=[0.0, 0.1],
             n_bootstrap=20,
             seed=42
         )
-        results_twostep = trop_twostep.fit(df, 'outcome', 'treated', 'unit', 'time')
+        results_local = trop_local.fit(df, 'outcome', 'treated', 'unit', 'time')
 
         # Both should have same sign (both positive for true_effect=2.0)
-        assert np.sign(results_joint.att) == np.sign(results_twostep.att)
+        assert np.sign(results_global.att) == np.sign(results_local.att)
 
-    def test_trop_joint_handles_nan_outcomes(self):
-        """Test TROP joint method handles NaN outcome values gracefully."""
+    def test_trop_global_handles_nan_outcomes(self):
+        """Test TROP global method handles NaN outcome values gracefully."""
         import pandas as pd
         from diff_diff import TROP
 
@@ -1423,7 +1423,7 @@ class TestTROPJointRustVsNumpy:
         assert n_nan > 0, "Should have introduced some NaN values"
 
         trop = TROP(
-            method="joint",
+            method="global",
             lambda_time_grid=[0.0, 1.0],
             lambda_unit_grid=[0.0, 1.0],
             lambda_nn_grid=[0.0, 0.1],
@@ -1440,7 +1440,7 @@ class TestTROPJointRustVsNumpy:
         # ATT should still be positive (true effect is positive)
         assert results.att > 0, f"ATT {results.att:.2f} should be positive"
 
-    def test_trop_joint_no_valid_pre_unit_gets_zero_weight(self):
+    def test_trop_global_no_valid_pre_unit_gets_zero_weight(self):
         """Test that units with no valid pre-period data get zero weight.
 
         When a control unit has all NaN values in the pre-treatment period,
@@ -1488,9 +1488,9 @@ class TestTROPJointRustVsNumpy:
         unit_pre_data = df[(df['unit'] == control_unit_with_no_pre) & (df['time'] < (n_periods - n_post))]
         assert unit_pre_data['outcome'].isna().all(), "Control unit should have all NaN in pre-period"
 
-        # Fit with joint method - should handle gracefully
+        # Fit with global method - should handle gracefully
         trop = TROP(
-            method="joint",
+            method="global",
             lambda_time_grid=[0.5, 1.0],
             lambda_unit_grid=[0.5, 1.0],
             lambda_nn_grid=[0.0],
@@ -1509,7 +1509,7 @@ class TestTROPJointRustVsNumpy:
         assert abs(results.att - true_effect) < 1.5, \
             f"ATT {results.att:.2f} should be close to true effect {true_effect}"
 
-    def test_trop_joint_nan_exclusion_rust_python_parity(self):
+    def test_trop_global_nan_exclusion_rust_python_parity(self):
         """Test Rust and Python backends produce matching results with NaN data.
 
         This verifies that when data contains NaN values:
@@ -1559,7 +1559,7 @@ class TestTROPJointRustVsNumpy:
 
         # Common TROP parameters
         trop_params = dict(
-            method="joint",
+            method="global",
             lambda_time_grid=[0.5, 1.0],
             lambda_unit_grid=[0.5, 1.0],
             lambda_nn_grid=[0.0],
@@ -1575,11 +1575,11 @@ class TestTROPJointRustVsNumpy:
         # (Module reload breaks isinstance() checks in other tests due to class identity)
         from unittest.mock import patch
         import sys
-        trop_module = sys.modules['diff_diff.trop']
+        trop_global_module = sys.modules['diff_diff.trop_global']
 
-        with patch.object(trop_module, 'HAS_RUST_BACKEND', False), \
-             patch.object(trop_module, '_rust_loocv_grid_search_joint', None), \
-             patch.object(trop_module, '_rust_bootstrap_trop_variance_joint', None):
+        with patch.object(trop_global_module, 'HAS_RUST_BACKEND', False), \
+             patch.object(trop_global_module, '_rust_loocv_grid_search_global', None), \
+             patch.object(trop_global_module, '_rust_bootstrap_trop_variance_global', None):
 
             trop_python = TROP(**trop_params)
             results_python = trop_python.fit(df.copy(), 'outcome', 'treated', 'unit', 'time')
@@ -1599,7 +1599,7 @@ class TestTROPJointRustVsNumpy:
         assert results_rust.att > 0, f"Rust ATT {results_rust.att} should be positive"
         assert results_python.att > 0, f"Python ATT {results_python.att} should be positive"
 
-    def test_trop_joint_treated_pre_nan_rust_python_parity(self):
+    def test_trop_global_treated_pre_nan_rust_python_parity(self):
         """Test Rust/Python parity when treated units have pre-period NaN.
 
         When all treated units have NaN at a pre-period, average_treated[t] = NaN.
@@ -1649,7 +1649,7 @@ class TestTROPJointRustVsNumpy:
 
         # Common TROP parameters
         trop_params = dict(
-            method="joint",
+            method="global",
             lambda_time_grid=[1.0],
             lambda_unit_grid=[1.0],
             lambda_nn_grid=[0.0],
@@ -1665,11 +1665,11 @@ class TestTROPJointRustVsNumpy:
         # (Module reload breaks isinstance() checks in other tests due to class identity)
         from unittest.mock import patch
         import sys
-        trop_module = sys.modules['diff_diff.trop']
+        trop_global_module = sys.modules['diff_diff.trop_global']
 
-        with patch.object(trop_module, 'HAS_RUST_BACKEND', False), \
-             patch.object(trop_module, '_rust_loocv_grid_search_joint', None), \
-             patch.object(trop_module, '_rust_bootstrap_trop_variance_joint', None):
+        with patch.object(trop_global_module, 'HAS_RUST_BACKEND', False), \
+             patch.object(trop_global_module, '_rust_loocv_grid_search_global', None), \
+             patch.object(trop_global_module, '_rust_bootstrap_trop_variance_global', None):
 
             trop_python = TROP(**trop_params)
             results_python = trop_python.fit(df.copy(), 'outcome', 'treated', 'unit', 'time')
@@ -1684,7 +1684,7 @@ class TestTROPJointRustVsNumpy:
             f"Rust ATT ({results_rust.att:.3f}) and Python ATT ({results_python.att:.3f}) " \
             f"differ by {att_diff:.3f}, should be < 0.5"
 
-    def test_trop_joint_solver_parity_no_lowrank(self):
+    def test_trop_global_solver_parity_no_lowrank(self):
         """Test Rust/Python solver parity for no-lowrank path (lambda_nn >= 1e10).
 
         Both backends should produce matching (mu, alpha, beta) at atol=1e-6.
@@ -1730,10 +1730,10 @@ class TestTROPJointRustVsNumpy:
         results_rust = trop_rust.fit(df.copy(), 'outcome', 'treated', 'unit', 'time')
 
         # Python-only backend
-        trop_module = sys.modules['diff_diff.trop']
-        with patch.object(trop_module, 'HAS_RUST_BACKEND', False), \
-             patch.object(trop_module, '_rust_loocv_grid_search_joint', None), \
-             patch.object(trop_module, '_rust_bootstrap_trop_variance_joint', None):
+        trop_global_module = sys.modules['diff_diff.trop_global']
+        with patch.object(trop_global_module, 'HAS_RUST_BACKEND', False), \
+             patch.object(trop_global_module, '_rust_loocv_grid_search_global', None), \
+             patch.object(trop_global_module, '_rust_bootstrap_trop_variance_global', None):
             trop_python = TROP(**trop_params)
             results_python = trop_python.fit(df.copy(), 'outcome', 'treated', 'unit', 'time')
 
@@ -1754,7 +1754,7 @@ class TestTROPJointRustVsNumpy:
             assert abs(r_val - p_val) < 1e-6, \
                 f"Time effect mismatch for {key}: Rust={r_val:.8f}, Python={p_val:.8f}"
 
-    def test_trop_joint_solver_parity_with_lowrank(self):
+    def test_trop_global_solver_parity_with_lowrank(self):
         """Test Rust/Python solver parity for with-lowrank path (finite lambda_nn).
 
         Both backends should produce matching (mu, alpha, beta) at atol=1e-6.
@@ -1801,10 +1801,10 @@ class TestTROPJointRustVsNumpy:
         results_rust = trop_rust.fit(df.copy(), 'outcome', 'treated', 'unit', 'time')
 
         # Python-only backend
-        trop_module = sys.modules['diff_diff.trop']
-        with patch.object(trop_module, 'HAS_RUST_BACKEND', False), \
-             patch.object(trop_module, '_rust_loocv_grid_search_joint', None), \
-             patch.object(trop_module, '_rust_bootstrap_trop_variance_joint', None):
+        trop_global_module = sys.modules['diff_diff.trop_global']
+        with patch.object(trop_global_module, 'HAS_RUST_BACKEND', False), \
+             patch.object(trop_global_module, '_rust_loocv_grid_search_global', None), \
+             patch.object(trop_global_module, '_rust_bootstrap_trop_variance_global', None):
             trop_python = TROP(**trop_params)
             results_python = trop_python.fit(df.copy(), 'outcome', 'treated', 'unit', 'time')
 

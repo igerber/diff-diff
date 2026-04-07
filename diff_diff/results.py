@@ -11,6 +11,41 @@ import numpy as np
 import pandas as pd
 
 
+def _format_survey_block(sm, width: int) -> list:
+    """Format survey design metadata block for summary() output.
+
+    Parameters
+    ----------
+    sm : SurveyMetadata
+        Survey metadata from results object.
+    width : int
+        Total width for separator lines and centering.
+    """
+    label_width = 30 if width >= 80 else 25
+    lines = [
+        "",
+        "-" * width,
+        "Survey Design".center(width),
+        "-" * width,
+        f"{'Weight type:':<{label_width}} {sm.weight_type:>10}",
+    ]
+    if getattr(sm, "replicate_method", None) is not None:
+        lines.append(f"{'Replicate method:':<{label_width}} {sm.replicate_method:>10}")
+        if getattr(sm, "n_replicates", None) is not None:
+            lines.append(f"{'Replicates:':<{label_width}} {sm.n_replicates:>10}")
+    else:
+        if sm.n_strata is not None:
+            lines.append(f"{'Strata:':<{label_width}} {sm.n_strata:>10}")
+        if sm.n_psu is not None:
+            lines.append(f"{'PSU/Cluster:':<{label_width}} {sm.n_psu:>10}")
+    lines.append(f"{'Effective sample size:':<{label_width}} {sm.effective_n:>10.1f}")
+    lines.append(f"{'Kish DEFF (weights):':<{label_width}} {sm.design_effect:>10.2f}")
+    if sm.df_survey is not None:
+        lines.append(f"{'Survey d.f.:':<{label_width}} {sm.df_survey:>10}")
+    lines.append("-" * width)
+    return lines
+
+
 @dataclass
 class DiDResults:
     """
@@ -34,9 +69,9 @@ class DiDResults:
     n_obs : int
         Number of observations used in estimation.
     n_treated : int
-        Number of treated units.
+        Number of treated units/observations.
     n_control : int
-        Number of control units.
+        Number of control units/observations.
     """
 
     att: float
@@ -58,6 +93,8 @@ class DiDResults:
     n_bootstrap: Optional[int] = field(default=None)
     n_clusters: Optional[int] = field(default=None)
     bootstrap_distribution: Optional[np.ndarray] = field(default=None, repr=False)
+    # Survey design metadata (SurveyMetadata instance from diff_diff.survey)
+    survey_metadata: Optional[Any] = field(default=None)
 
     def __repr__(self) -> str:
         """Concise string representation."""
@@ -91,12 +128,17 @@ class DiDResults:
             "=" * 70,
             "",
             f"{'Observations:':<25} {self.n_obs:>10}",
-            f"{'Treated units:':<25} {self.n_treated:>10}",
-            f"{'Control units:':<25} {self.n_control:>10}",
+            f"{'Treated:':<25} {self.n_treated:>10}",
+            f"{'Control:':<25} {self.n_control:>10}",
         ]
 
         if self.r_squared is not None:
             lines.append(f"{'R-squared:':<25} {self.r_squared:>10.4f}")
+
+        # Add survey design info
+        if self.survey_metadata is not None:
+            sm = self.survey_metadata
+            lines.extend(_format_survey_block(sm, 70))
 
         # Add inference method info
         if self.inference_method != "analytical":
@@ -160,6 +202,15 @@ class DiDResults:
             result["n_bootstrap"] = self.n_bootstrap
         if self.n_clusters is not None:
             result["n_clusters"] = self.n_clusters
+        if self.survey_metadata is not None:
+            sm = self.survey_metadata
+            result["weight_type"] = sm.weight_type
+            result["effective_n"] = sm.effective_n
+            result["design_effect"] = sm.design_effect
+            result["sum_weights"] = sm.sum_weights
+            result["n_strata"] = sm.n_strata
+            result["n_psu"] = sm.n_psu
+            result["df_survey"] = sm.df_survey
         return result
 
     def to_dataframe(self) -> pd.DataFrame:
@@ -279,9 +330,9 @@ class MultiPeriodDiDResults:
     n_obs : int
         Number of observations used in estimation.
     n_treated : int
-        Number of treated observations.
+        Number of treated units/observations.
     n_control : int
-        Number of control observations.
+        Number of control units/observations.
     pre_periods : list
         List of pre-treatment period identifiers.
     post_periods : list
@@ -314,6 +365,8 @@ class MultiPeriodDiDResults:
     r_squared: Optional[float] = field(default=None)
     reference_period: Optional[Any] = field(default=None)
     interaction_indices: Optional[Dict[Any, int]] = field(default=None, repr=False)
+    # Survey design metadata (SurveyMetadata instance from diff_diff.survey)
+    survey_metadata: Optional[Any] = field(default=None)
 
     def __repr__(self) -> str:
         """Concise string representation."""
@@ -366,6 +419,11 @@ class MultiPeriodDiDResults:
 
         if self.r_squared is not None:
             lines.append(f"{'R-squared:':<25} {self.r_squared:>10.4f}")
+
+        # Add survey design info
+        if self.survey_metadata is not None:
+            sm = self.survey_metadata
+            lines.extend(_format_survey_block(sm, 80))
 
         # Pre-period effects (parallel trends test)
         pre_effects = {p: pe for p, pe in self.period_effects.items() if p in self.pre_periods}
@@ -515,6 +573,17 @@ class MultiPeriodDiDResults:
             result[f"se_period_{period}"] = pe.se
             result[f"pval_period_{period}"] = pe.p_value
 
+        # Add survey metadata if present
+        if self.survey_metadata is not None:
+            sm = self.survey_metadata
+            result["weight_type"] = sm.weight_type
+            result["effective_n"] = sm.effective_n
+            result["design_effect"] = sm.design_effect
+            result["sum_weights"] = sm.sum_weights
+            result["n_strata"] = sm.n_strata
+            result["n_psu"] = sm.n_psu
+            result["df_survey"] = sm.df_survey
+
         return result
 
     def to_dataframe(self) -> pd.DataFrame:
@@ -577,9 +646,9 @@ class SyntheticDiDResults:
     n_obs : int
         Number of observations used in estimation.
     n_treated : int
-        Number of treated units.
+        Number of treated units/observations.
     n_control : int
-        Number of control units.
+        Number of control units/observations.
     unit_weights : dict
         Dictionary mapping control unit IDs to their synthetic weights.
     time_weights : dict
@@ -612,6 +681,8 @@ class SyntheticDiDResults:
     pre_treatment_fit: Optional[float] = field(default=None)
     placebo_effects: Optional[np.ndarray] = field(default=None)
     n_bootstrap: Optional[int] = field(default=None)
+    # Survey design metadata (SurveyMetadata instance from diff_diff.survey)
+    survey_metadata: Optional[Any] = field(default=None)
 
     def __repr__(self) -> str:
         """Concise string representation."""
@@ -646,8 +717,8 @@ class SyntheticDiDResults:
             "=" * 75,
             "",
             f"{'Observations:':<25} {self.n_obs:>10}",
-            f"{'Treated units:':<25} {self.n_treated:>10}",
-            f"{'Control units:':<25} {self.n_control:>10}",
+            f"{'Treated:':<25} {self.n_treated:>10}",
+            f"{'Control:':<25} {self.n_control:>10}",
             f"{'Pre-treatment periods:':<25} {len(self.pre_periods):>10}",
             f"{'Post-treatment periods:':<25} {len(self.post_periods):>10}",
         ]
@@ -666,6 +737,11 @@ class SyntheticDiDResults:
         lines.append(f"{'Variance method:':<25} {self.variance_method:>10}")
         if self.variance_method == "bootstrap" and self.n_bootstrap is not None:
             lines.append(f"{'Bootstrap replications:':<25} {self.n_bootstrap:>10}")
+
+        # Add survey design info
+        if self.survey_metadata is not None:
+            sm = self.survey_metadata
+            lines.extend(_format_survey_block(sm, 75))
 
         lines.extend(
             [
@@ -744,6 +820,15 @@ class SyntheticDiDResults:
         }
         if self.n_bootstrap is not None:
             result["n_bootstrap"] = self.n_bootstrap
+        if self.survey_metadata is not None:
+            sm = self.survey_metadata
+            result["weight_type"] = sm.weight_type
+            result["effective_n"] = sm.effective_n
+            result["design_effect"] = sm.design_effect
+            result["sum_weights"] = sm.sum_weights
+            result["n_strata"] = sm.n_strata
+            result["n_psu"] = sm.n_psu
+            result["df_survey"] = sm.df_survey
         return result
 
     def to_dataframe(self) -> pd.DataFrame:

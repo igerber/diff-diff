@@ -21,7 +21,7 @@ def generate_did_data(
     unit_fe_sd: float = 2.0,
     time_trend: float = 0.5,
     noise_sd: float = 1.0,
-    seed: Optional[int] = None
+    seed: Optional[int] = None,
 ) -> pd.DataFrame:
     """
     Generate synthetic data for DiD analysis with known treatment effect.
@@ -110,14 +110,16 @@ def generate_did_data(
             # Add noise
             y += rng.normal(0, noise_sd)
 
-            records.append({
-                "unit": unit,
-                "period": period,
-                "treated": int(is_treated),
-                "post": int(is_post),
-                "outcome": y,
-                "true_effect": effect
-            })
+            records.append(
+                {
+                    "unit": unit,
+                    "period": period,
+                    "treated": int(is_treated),
+                    "post": int(is_post),
+                    "outcome": y,
+                    "true_effect": effect,
+                }
+            )
 
     return pd.DataFrame(records)
 
@@ -134,6 +136,7 @@ def generate_staggered_data(
     time_trend: float = 0.1,
     noise_sd: float = 0.5,
     seed: Optional[int] = None,
+    panel: bool = True,
 ) -> pd.DataFrame:
     """
     Generate synthetic data for staggered adoption DiD analysis.
@@ -168,6 +171,10 @@ def generate_staggered_data(
         Standard deviation of idiosyncratic noise.
     seed : int, optional
         Random seed for reproducibility.
+    panel : bool, default=True
+        If True (default), generate balanced panel data (same units across
+        all periods). If False, generate repeated cross-section data where
+        each period draws independent observations with globally unique IDs.
 
     Returns
     -------
@@ -211,14 +218,62 @@ def generate_staggered_data(
     # Validate cohort periods
     for cp in cohort_periods:
         if cp < 1 or cp >= n_periods:
-            raise ValueError(
-                f"Cohort period {cp} must be between 1 and {n_periods - 1}"
-            )
+            raise ValueError(f"Cohort period {cp} must be between 1 and {n_periods - 1}")
 
     # Determine number of never-treated and treated units
     n_never = int(n_units * never_treated_frac)
     n_treated = n_units - n_never
 
+    if not panel:
+        # --- Repeated cross-section mode ---
+        # Each period draws n_units independent observations with unique IDs.
+        # Cohorts are assigned from the same distribution as panel.
+        records = []
+        for period in range(n_periods):
+            # For each period, draw fresh cohort assignments
+            ft_period = np.zeros(n_units, dtype=int)
+            if n_treated > 0:
+                cohort_assignments = rng.choice(len(cohort_periods), size=n_treated)
+                ft_period[n_never:] = [cohort_periods[c] for c in cohort_assignments]
+
+            # Unique unit IDs per period
+            for i in range(n_units):
+                uid = f"u{period}_{i}"
+                unit_first_treat = ft_period[i]
+                is_ever_treated = unit_first_treat > 0
+
+                is_treated = is_ever_treated and period >= unit_first_treat
+
+                # Outcome: unit_fe_proxy (drawn fresh) + time trend + treatment + noise
+                unit_fe_proxy = rng.normal(0, unit_fe_sd)
+                y = 10.0 + unit_fe_proxy + time_trend * period
+
+                effect = 0.0
+                if is_treated:
+                    time_since_treatment = period - unit_first_treat
+                    if dynamic_effects:
+                        effect = treatment_effect * (1 + effect_growth * time_since_treatment)
+                    else:
+                        effect = treatment_effect
+                    y += effect
+
+                y += rng.normal(0, noise_sd)
+
+                records.append(
+                    {
+                        "unit": uid,
+                        "period": period,
+                        "outcome": y,
+                        "first_treat": unit_first_treat,
+                        "treated": int(is_treated),
+                        "treat": int(is_ever_treated),
+                        "true_effect": effect,
+                    }
+                )
+
+        return pd.DataFrame(records)
+
+    # --- Panel mode (default) ---
     # Assign treatment cohorts
     first_treat = np.zeros(n_units, dtype=int)
     if n_treated > 0:
@@ -254,15 +309,17 @@ def generate_staggered_data(
             # Add noise
             y += rng.normal(0, noise_sd)
 
-            records.append({
-                "unit": unit,
-                "period": period,
-                "outcome": y,
-                "first_treat": unit_first_treat,
-                "treated": int(is_treated),
-                "treat": int(is_ever_treated),
-                "true_effect": effect,
-            })
+            records.append(
+                {
+                    "unit": unit,
+                    "period": period,
+                    "outcome": y,
+                    "first_treat": unit_first_treat,
+                    "treated": int(is_treated),
+                    "treat": int(is_ever_treated),
+                    "true_effect": effect,
+                }
+            )
 
     return pd.DataFrame(records)
 
@@ -395,14 +452,16 @@ def generate_factor_data(
             # Add noise
             y += rng.normal(0, noise_sd)
 
-            records.append({
-                "unit": i,
-                "period": t,
-                "outcome": y,
-                "treated": int(is_ever_treated and post),
-                "treat": int(is_ever_treated),
-                "true_effect": effect,
-            })
+            records.append(
+                {
+                    "unit": i,
+                    "period": t,
+                    "outcome": y,
+                    "treated": int(is_ever_treated and post),
+                    "treat": int(is_ever_treated),
+                    "true_effect": effect,
+                }
+            )
 
     return pd.DataFrame(records)
 
@@ -500,9 +559,9 @@ def generate_ddd_data(
                     y = 50 + group_effect * g + partition_effect * p + time_effect * t
 
                     # Second-order interactions (non-treatment)
-                    y += 1.5 * g * p   # group-partition interaction
-                    y += 1.0 * g * t   # group-time interaction (diff trends)
-                    y += 0.5 * p * t   # partition-time interaction
+                    y += 1.5 * g * p  # group-partition interaction
+                    y += 1.0 * g * t  # group-time interaction (diff trends)
+                    y += 0.5 * p * t  # partition-time interaction
 
                     # Treatment effect: ONLY for G=1, P=1, T=1
                     effect = 0.0
@@ -653,14 +712,16 @@ def generate_panel_data(
             # Add noise
             y += rng.normal(0, noise_sd)
 
-            records.append({
-                "unit": unit,
-                "period": period,
-                "treated": int(is_treated),
-                "post": int(post),
-                "outcome": y,
-                "true_effect": effect,
-            })
+            records.append(
+                {
+                    "unit": unit,
+                    "period": period,
+                    "treated": int(is_treated),
+                    "post": int(post),
+                    "outcome": y,
+                    "true_effect": effect,
+                }
+            )
 
     return pd.DataFrame(records)
 
@@ -764,15 +825,17 @@ def generate_event_study_data(
             # Add noise
             y += rng.normal(0, noise_sd)
 
-            records.append({
-                "unit": unit,
-                "period": period,
-                "treated": int(is_treated),
-                "post": int(post),
-                "outcome": y,
-                "event_time": event_time,
-                "true_effect": effect,
-            })
+            records.append(
+                {
+                    "unit": unit,
+                    "period": period,
+                    "treated": int(is_treated),
+                    "post": int(post),
+                    "outcome": y,
+                    "event_time": event_time,
+                    "true_effect": effect,
+                }
+            )
 
     return pd.DataFrame(records)
 
@@ -850,7 +913,7 @@ def generate_continuous_did_data(
     idx = 0
     for i, g in enumerate(cohort_periods):
         n_this = n_per_cohort if i < len(cohort_periods) - 1 else n_treated_total - idx
-        cohort_assignments[n_never + idx: n_never + idx + n_this] = g
+        cohort_assignments[n_never + idx : n_never + idx + n_this] = g
         idx += n_this
 
     # Generate doses
@@ -898,8 +961,7 @@ def generate_continuous_did_data(
             return att_intercept + att_slope * np.log1p(d)
         else:
             raise ValueError(
-                f"att_function must be 'linear', 'quadratic', or 'log', "
-                f"got '{att_function}'"
+                f"att_function must be 'linear', 'quadratic', or 'log', " f"got '{att_function}'"
             )
 
     # Unit fixed effects
@@ -920,13 +982,148 @@ def generate_continuous_did_data(
             else:
                 att_d = 0.0
 
-            records.append({
+            records.append(
+                {
+                    "unit": i,
+                    "period": int(t),
+                    "outcome": y0 + att_d,
+                    "first_treat": int(g_i) if g_i > 0 else 0,
+                    "dose": d_i,
+                    "true_att": att_d,
+                }
+            )
+
+    return pd.DataFrame(records)
+
+
+def generate_staggered_ddd_data(
+    n_units: int = 200,
+    n_periods: int = 8,
+    cohort_periods: Optional[List[int]] = None,
+    never_enabled_frac: float = 0.25,
+    eligibility_frac: float = 0.5,
+    treatment_effect: float = 3.0,
+    dynamic_effects: bool = False,
+    effect_growth: float = 0.1,
+    eligibility_trend: float = 0.3,
+    noise_sd: float = 0.5,
+    add_covariates: bool = False,
+    seed: Optional[int] = None,
+) -> pd.DataFrame:
+    """
+    Generate synthetic data for staggered triple difference (DDD) analysis.
+
+    Creates a balanced panel with staggered enabling times and a binary
+    eligibility dimension. Treatment occurs when a unit is both enabled
+    (t >= S_i) and eligible (Q_i = 1). DDD-CPT holds by construction.
+
+    Parameters
+    ----------
+    n_units : int, default=200
+        Number of units.
+    n_periods : int, default=8
+        Number of time periods (1-indexed).
+    cohort_periods : list of int, optional
+        Enabling periods. Default: [4, 6].
+    never_enabled_frac : float, default=0.25
+        Fraction of never-enabled units.
+    eligibility_frac : float, default=0.5
+        Fraction of eligible units (Q=1) within each cohort.
+    treatment_effect : float, default=3.0
+        True ATT for treated units.
+    dynamic_effects : bool, default=False
+        If True, effects grow over time since enabling.
+    effect_growth : float, default=0.1
+        Per-period effect growth rate when dynamic_effects=True.
+    eligibility_trend : float, default=0.3
+        Differential time trend for eligible vs ineligible units.
+        Same across all enabling groups (preserves DDD-CPT).
+    noise_sd : float, default=0.5
+        Standard deviation of idiosyncratic noise.
+    add_covariates : bool, default=False
+        If True, add covariates x1 (continuous) and x2 (binary).
+    seed : int, optional
+        Random seed.
+
+    Returns
+    -------
+    pd.DataFrame
+        Columns: unit, period, outcome, first_treat, eligibility, treated,
+        true_effect. Also x1, x2 if add_covariates=True.
+    """
+    rng = np.random.default_rng(seed)
+
+    if cohort_periods is None:
+        cohort_periods = [4, 6]
+
+    # Assign units to cohorts
+    n_never = int(n_units * never_enabled_frac)
+    n_treated_total = n_units - n_never
+    n_per_cohort = n_treated_total // len(cohort_periods)
+
+    unit_cohort = np.zeros(n_units, dtype=float)
+    idx = n_never
+    for i, g in enumerate(cohort_periods):
+        n_g = n_per_cohort if i < len(cohort_periods) - 1 else n_treated_total - idx + n_never
+        unit_cohort[idx : idx + n_g] = g
+        idx += n_g
+
+    # Assign eligibility (within each cohort, fraction eligible)
+    unit_elig = np.zeros(n_units, dtype=int)
+    for g_val in [0.0] + [float(g) for g in cohort_periods]:
+        mask = unit_cohort == g_val
+        n_g = int(np.sum(mask))
+        if n_g == 0:
+            continue
+        n_eligible = max(1, min(int(n_g * eligibility_frac), n_g))
+        indices = np.where(mask)[0]
+        eligible_idx = rng.choice(indices, size=n_eligible, replace=False)
+        unit_elig[eligible_idx] = 1
+
+    # Unit fixed effects
+    unit_fe = rng.normal(0, 2.0, size=n_units)
+
+    # Covariates
+    x1 = rng.normal(0, 1, size=n_units) if add_covariates else None
+    x2 = rng.choice([0, 1], size=n_units) if add_covariates else None
+
+    # Generate panel
+    records = []
+    for i in range(n_units):
+        g_i = unit_cohort[i]
+        q_i = unit_elig[i]
+        for t in range(1, n_periods + 1):
+            # Base: unit FE + time trend + eligibility-time interaction
+            gamma_t = 0.1 * t
+            y = unit_fe[i] + gamma_t + 1.0 * q_i + eligibility_trend * q_i * gamma_t
+
+            if add_covariates:
+                y += 0.5 * x1[i] + 0.3 * x2[i]
+
+            # Treatment effect: enabled AND eligible
+            treated = int(g_i > 0 and t >= g_i and q_i == 1)
+            true_eff = 0.0
+            if treated:
+                true_eff = treatment_effect
+                if dynamic_effects:
+                    true_eff *= 1 + effect_growth * (t - g_i)
+                y += true_eff
+
+            y += rng.normal(0, noise_sd)
+
+            row = {
                 "unit": i,
-                "period": int(t),
-                "outcome": y0 + att_d,
+                "period": t,
+                "outcome": y,
                 "first_treat": int(g_i) if g_i > 0 else 0,
-                "dose": d_i,
-                "true_att": att_d,
-            })
+                "eligibility": q_i,
+                "treated": treated,
+                "true_effect": true_eff,
+            }
+            if add_covariates:
+                row["x1"] = x1[i]
+                row["x2"] = x2[i]
+
+            records.append(row)
 
     return pd.DataFrame(records)

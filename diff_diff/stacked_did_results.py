@@ -11,7 +11,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
-from diff_diff.results import _get_significance_stars
+from diff_diff.results import _format_survey_block, _get_significance_stars
 
 __all__ = [
     "StackedDiDResults",
@@ -93,6 +93,8 @@ class StackedDiDResults:
     weighting: str = "aggregate"
     clean_control: str = "not_yet_treated"
     alpha: float = 0.05
+    # Survey design metadata (SurveyMetadata instance from diff_diff.survey)
+    survey_metadata: Optional[Any] = field(default=None)
 
     def __repr__(self) -> str:
         """Concise string representation."""
@@ -138,6 +140,11 @@ class StackedDiDResults:
             f"{'Clean control:':<30} {self.clean_control:>10}",
             "",
         ]
+
+        # Add survey design info
+        if self.survey_metadata is not None:
+            sm = self.survey_metadata
+            lines.extend(_format_survey_block(sm, 85))
 
         # Overall ATT
         lines.extend(

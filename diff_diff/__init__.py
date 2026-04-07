@@ -3,6 +3,13 @@ diff-diff: A library for Difference-in-Differences analysis.
 
 This library provides sklearn-like estimators for causal inference
 using the difference-in-differences methodology.
+
+For rigorous analysis, follow the 8-step practitioner workflow in
+docs/llms-practitioner.txt (based on Baker et al. 2025). After
+estimation, call ``practitioner_next_steps(results)`` for context-aware
+guidance on remaining diagnostic steps.
+
+AI agent reference: docs/llms.txt
 """
 
 # Import backend detection from dedicated module (avoids circular imports)
@@ -53,11 +60,15 @@ from diff_diff.honest_did import (
 from diff_diff.power import (
     PowerAnalysis,
     PowerResults,
+    SimulationMDEResults,
     SimulationPowerResults,
+    SimulationSampleSizeResults,
     compute_mde,
     compute_power,
     compute_sample_size,
+    simulate_mde,
     simulate_power,
+    simulate_sample_size,
 )
 from diff_diff.pretrends import (
     PreTrendsPower,
@@ -77,6 +88,7 @@ from diff_diff.prep import (
     generate_factor_data,
     generate_panel_data,
     generate_staggered_data,
+    generate_staggered_ddd_data,
     make_post_indicator,
     make_treatment_indicator,
     rank_control_units,
@@ -89,6 +101,12 @@ from diff_diff.results import (
     MultiPeriodDiDResults,
     PeriodEffect,
     SyntheticDiDResults,
+)
+from diff_diff.survey import (
+    DEFFDiagnostics,
+    SurveyDesign,
+    SurveyMetadata,
+    compute_deff_diagnostics,
 )
 from diff_diff.staggered import (
     CallawaySantAnna,
@@ -123,6 +141,12 @@ from diff_diff.triple_diff import (
     TripleDifferenceResults,
     triple_difference,
 )
+from diff_diff.staggered_triple_diff import (
+    StaggeredTripleDifference,
+)
+from diff_diff.staggered_triple_diff_results import (
+    StaggeredTripleDiffResults,
+)
 from diff_diff.continuous_did import (
     ContinuousDiD,
     ContinuousDiDResults,
@@ -147,13 +171,18 @@ from diff_diff.utils import (
 )
 from diff_diff.visualization import (
     plot_bacon,
+    plot_dose_response,
     plot_event_study,
     plot_group_effects,
+    plot_group_time_heatmap,
     plot_honest_event_study,
     plot_power_curve,
     plot_pretrends_power,
     plot_sensitivity,
+    plot_staircase,
+    plot_synth_weights,
 )
+from diff_diff.practitioner import practitioner_next_steps
 from diff_diff.datasets import (
     clear_cache,
     list_datasets,
@@ -175,11 +204,12 @@ SA = SunAbraham
 BJS = ImputationDiD
 Gardner = TwoStageDiD
 DDD = TripleDifference
+SDDD = StaggeredTripleDifference
 Stacked = StackedDiD
 Bacon = BaconDecomposition
 EDiD = EfficientDiD
 
-__version__ = "2.7.1"
+__version__ = "2.8.0"
 __all__ = [
     # Estimators
     "DifferenceInDifferences",
@@ -205,6 +235,7 @@ __all__ = [
     "BJS",
     "Gardner",
     "DDD",
+    "SDDD",
     "Stacked",
     "Bacon",
     # Bacon Decomposition
@@ -212,7 +243,6 @@ __all__ = [
     "BaconDecompositionResults",
     "Comparison2x2",
     "bacon_decompose",
-    "plot_bacon",
     # Results
     "DiDResults",
     "MultiPeriodDiDResults",
@@ -233,6 +263,8 @@ __all__ = [
     "two_stage_did",
     "TripleDifferenceResults",
     "triple_difference",
+    "StaggeredTripleDifference",
+    "StaggeredTripleDiffResults",
     "TROPResults",
     "trop",
     "StackedDiDResults",
@@ -243,10 +275,17 @@ __all__ = [
     "EDiDBootstrapResults",
     "EDiD",
     # Visualization
+    "plot_bacon",
     "plot_event_study",
     "plot_group_effects",
     "plot_sensitivity",
     "plot_honest_event_study",
+    "plot_power_curve",
+    "plot_pretrends_power",
+    "plot_synth_weights",
+    "plot_staircase",
+    "plot_dose_response",
+    "plot_group_time_heatmap",
     # Parallel trends testing
     "check_parallel_trends",
     "check_parallel_trends_robust",
@@ -275,6 +314,7 @@ __all__ = [
     "generate_ddd_data",
     "generate_panel_data",
     "generate_event_study_data",
+    "generate_staggered_ddd_data",
     "generate_continuous_did_data",
     "create_event_time",
     "aggregate_to_cohorts",
@@ -291,19 +331,26 @@ __all__ = [
     # Power analysis
     "PowerAnalysis",
     "PowerResults",
+    "SimulationMDEResults",
     "SimulationPowerResults",
+    "SimulationSampleSizeResults",
     "compute_mde",
     "compute_power",
     "compute_sample_size",
+    "simulate_mde",
     "simulate_power",
-    "plot_power_curve",
+    "simulate_sample_size",
     # Pre-trends power analysis
     "PreTrendsPower",
     "PreTrendsPowerResults",
     "PreTrendsPowerCurve",
     "compute_pretrends_power",
     "compute_mdv",
-    "plot_pretrends_power",
+    # Survey support
+    "SurveyDesign",
+    "SurveyMetadata",
+    "DEFFDiagnostics",
+    "compute_deff_diagnostics",
     # Rust backend
     "HAS_RUST_BACKEND",
     # Linear algebra helpers
@@ -317,4 +364,6 @@ __all__ = [
     "load_dataset",
     "list_datasets",
     "clear_cache",
+    # Practitioner guidance
+    "practitioner_next_steps",
 ]

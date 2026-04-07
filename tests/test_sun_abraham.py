@@ -1291,7 +1291,8 @@ class TestSunAbrahamMethodology:
 
         def patched_compute_overall_att(df, first_treat, event_study_effects,
                                         cohort_effects, cohort_weights,
-                                        vcov_cohort, coef_index_map):
+                                        vcov_cohort, coef_index_map,
+                                        survey_weight_col=None):
             # Pass an empty coef_index_map to trigger the fallback
             return original_method(
                 df, first_treat, event_study_effects,

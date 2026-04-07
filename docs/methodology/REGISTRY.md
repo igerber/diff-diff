@@ -18,6 +18,7 @@ This document provides the academic foundations and key implementation requireme
 3. [Advanced Estimators](#advanced-estimators)
    - [SyntheticDiD](#syntheticdid)
    - [TripleDifference](#tripledifference)
+   - [StaggeredTripleDifference](#staggeredtripledifference)
    - [TROP](#trop)
 4. [Diagnostics & Sensitivity](#diagnostics--sensitivity)
    - [PlaceboTests](#placebotests)
@@ -351,8 +352,10 @@ The multiplier bootstrap uses random weights w_i with E[w]=0 and Var(w)=1:
 - Anticipation: `anticipation` parameter shifts reference period
   - Group aggregation includes periods t >= g - anticipation (not just t >= g)
   - Both analytical SE and bootstrap SE aggregation respect anticipation
-  - Not-yet-treated + anticipation: control mask uses `G > t + anticipation`
-    (not just `G > t`) to exclude cohorts in the anticipation window
+  - Not-yet-treated + anticipation: control mask uses `G > max(t, base_period) + anticipation`
+    to exclude cohorts treated at either the evaluation period or the base period.
+    This prevents control contamination when `base_period="universal"` and the base
+    period is later than the evaluation period (e.g., pre-treatment ATT with universal base)
 - Rank-deficient design matrix (covariate collinearity):
   - Detection: Pivoted QR decomposition with tolerance `1e-07` (R's `qr()` default)
   - Handling: Warns and drops linearly dependent columns, sets NA for dropped coefficients (R-style, matches `lm()`)
@@ -408,18 +411,33 @@ The multiplier bootstrap uses random weights w_i with E[w]=0 and Var(w)=1:
   - Always excludes cohort g from controls when computing ATT(g,t)
   - This applies to both pre-treatment (t < g) and post-treatment (t >= g) periods
   - For pre-treatment periods: even though cohort g hasn't been treated yet at time t, they are the treated group for this ATT(g,t) and cannot serve as their own controls
-  - Control mask: `never_treated OR (first_treat > t + anticipation AND first_treat != g)`
+  - Control mask: `never_treated OR (first_treat > max(t, base_period) + anticipation AND first_treat != g)`
+  - The `max(t, base_period)` ensures controls are untreated at both the evaluation period
+    and the base period, preventing contamination when `base_period="universal"` uses
+    a base period later than `t` (matching R's `did::att_gt()`)
+  - Does not require never-treated units: when all units are eventually treated,
+    not-yet-treated cohorts serve as controls for each other (requires ≥2 cohorts)
+- **Note:** CallawaySantAnna survey support: weights, strata, PSU, and FPC are all supported for all estimation methods (reg, ipw, dr) with or without covariates. Analytical (`n_bootstrap=0`): aggregated SEs use design-based variance via `compute_survey_if_variance()`. Bootstrap (`n_bootstrap>0`): PSU-level multiplier weights replace analytical SEs for aggregated quantities. IPW and DR with covariates use DRDID panel nuisance IF corrections (Phase 7a: PS IF correction via survey-weighted Hessian/score, OR IF correction via WLS bread and gradient; Sant'Anna & Zhao 2020, Theorem 3.1). Survey weights compose with IPW weights multiplicatively. WIF in aggregation matches R's did::wif() formula. Per-unit survey weights are extracted via `groupby(unit).first()` from the panel-normalized pweight array; on unbalanced panels the pweight normalization (`w * n_obs / sum(w)`) preserves relative unit weights since all IF/WIF formulas use weight ratios (`sw_i / sum(sw)`) where the normalization constant cancels. Scale-invariance tests pass on both balanced and unbalanced panels.
+- **Note (deviation from R):** Panel DR control augmentation is normalized by treated mass (`sw_t_sum` or `n_t`) rather than control IPW mass (`sum(w_cont)`). R's `DRDID::drdid_panel` uses `mean(w.cont)` as the control normalizer. Both are consistent asymptotically (under correct model specification, `E[w_cont] = E[D]` so the normalizers converge), but they differ in finite samples when IPW reweighting doesn't perfectly balance. The treated-mass normalization is simpler and matches the `did::att_gt` convention where ATT is defined per treated unit. Aligning to `DRDID::drdid_panel`'s exact `w.cont` normalization is deferred.
+- **Note:** PS nuisance IF corrections follow DRDID's M-estimation convention: `asy_lin_rep_psi` is computed on O(1) psi scale (matching R's `asy.lin.rep.ps = score %*% Hessian.ps`), then the correction `asy_lin_rep_psi @ M2` is converted to the library's O(1/n) phi convention via a single `/n` division. OR corrections use the same phi-scale pattern via `solve(X'WX)` (unnormalized Hessian).
+- **Note (deviation from R):** CallawaySantAnna survey reg+covariates per-cell SE uses a conservative plug-in IF based on WLS residuals. The treated IF is `inf_treated_i = (sw_i/sum(sw_treated)) * (resid_i - ATT)` (normalized by treated weight sum, matching unweighted `(resid-ATT)/n_t`). The control IF is `inf_control_i = -(sw_i/sum(sw_control)) * wls_resid_i` (normalized by control weight sum, matching unweighted `-resid/n_c`). SE is computed as `sqrt(sum(sw_t_norm * (resid_t - ATT)^2) + sum(sw_c_norm * resid_c^2))`, the weighted analogue of the unweighted `sqrt(var_t/n_t + var_c/n_c)`. This omits the semiparametrically efficient nuisance correction from DRDID's `reg_did_panel` — WLS residuals are orthogonal to the weighted design matrix by construction, so the first-order IF term is asymptotically valid but may be conservative. SEs pass weight-scale-invariance tests. The efficient DRDID correction is deferred to future work.
+- **Note (deviation from R):** Per-cell ATT(g,t) SEs under survey weights use influence-function-based variance (matching R's `did::att_gt` analytical SE path) rather than full Taylor-series linearization. When strata/PSU/FPC are present, analytical aggregated SEs (`n_bootstrap=0`) use `compute_survey_if_variance()` on the combined IF/WIF; bootstrap aggregated SEs (`n_bootstrap>0`) use PSU-level multiplier weights.
+
+- **Note:** Repeated cross-sections (`panel=False`, Phase 7b): supports surveys like BRFSS, ACS annual, and CPS monthly where units are not followed over time. Uses cross-sectional DRDID (Sant'Anna & Zhao 2020, Section 4): `reg` matches `DRDID::reg_did_rc` (Eq 2.2), `dr` matches `DRDID::drdid_rc` (locally efficient, Eq 3.3+3.4 with 4 OLS fits), `ipw` matches `DRDID::std_ipw_did_rc`. Per-observation influence functions instead of per-unit. All three estimation methods support covariates and survey weights.
+- **Note:** Panel and RCS influence functions use the library-wide `phi_i = psi_i / n` convention (SE = `sqrt(sum(phi^2))`, algebraically equivalent to R's `sd(psi)*sqrt(n-1)/n`). Leading IF terms are computed on psi scale and divided by n; PS nuisance corrections are computed on psi scale (`score @ solve(Hessian)`) with a single `/n` conversion to phi.
+- **Note:** Non-survey DR path also includes nuisance IF corrections (PS + OR), matching the survey path structure (Phase 7a). Previously used plug-in IF only.
 
 **Reference implementation(s):**
 - R: `did::att_gt()` (Callaway & Sant'Anna's official package)
 - Stata: `csdid`
 
 **Requirements checklist:**
-- [ ] Requires never-treated units (first_treat=0 or equivalent)
+- [ ] Requires never-treated units when `control_group="never_treated"` (default); not required for `"not_yet_treated"`
 - [ ] Bootstrap weights support Rademacher, Mammen, Webb distributions
 - [ ] Aggregations: simple, event_study, group all implemented
 - [ ] Doubly robust estimation when covariates provided
 - [ ] Multiplier bootstrap preserves panel structure
+- [x] Repeated cross-sections (`panel=False`) for non-panel surveys (Phase 7b)
 
 ---
 
@@ -487,6 +505,8 @@ See `docs/methodology/continuous-did.md` Section 4 for full details.
 - [ ] Covariate support (deferred, matching R v0.1.0)
 - [ ] Discrete treatment saturated regression
 - [ ] Lowest-dose-as-control (Remark 3.1)
+- [x] Survey design support (Phase 3): weighted B-spline OLS, TSL on influence functions; bootstrap+survey supported (Phase 6)
+- **Note:** ContinuousDiD bootstrap with survey weights supported (Phase 6) via PSU-level multiplier weights
 
 ---
 
@@ -611,7 +631,9 @@ where `q_{g,e} = pi_g / sum_{g' in G_{trt,e}} pi_{g'}`.
 - **Single pre-treatment period (g=2)**: `V*_{gt}(X)` is 1x1, efficient weights are trivially 1, estimator collapses to standard DiD with single baseline
 - **Rank deficiency in `V*_{gt}(X)` or `Omega*_{gt}(X)`**: Inverse does not exist if outcome changes are linearly dependent conditional on covariates. Detect via matrix condition number; fall back to pseudoinverse or standard estimator
 - **Near-zero propensity scores**: Ratio `p_g(X)/p_{g'}(X)` explodes. Overlap assumption (O) rules this out in population; implement trimming or warn on finite-sample instability
-- **All units eventually treated**: Last cohort serves as "never-treated" by dropping last time period (Phase 1: raises ValueError; last-cohort-as-control fallback planned for Phase 2)
+- **Note:** When no sieve degree K succeeds for ratio estimation (basis dimension exceeds comparison group size, or all linear systems are singular), the estimator falls back to a constant ratio of 1 for all units with a UserWarning. The outcome regression adjustment remains active, so the generated outcomes (Eq 4.4) still incorporate covariate information via the m_hat terms. The DR property ensures consistency as long as the outcome regression is correctly specified.
+- **Note:** When no sieve degree K succeeds for inverse propensity estimation (algorithm step 4), the estimator falls back to unconditional n/n_group scaling with a UserWarning, which reduces to the unconditional Omega* approximation for the affected group.
+- **All units eventually treated**: Last cohort serves as "never-treated" by dropping time periods from the last cohort's treatment onset onward. Use `control_group="last_cohort"` to enable; default `"never_treated"` raises ValueError if no never-treated units exist
 - **Negative weights**: Explicitly stated as harmless for bias and beneficial for precision; arise from efficiency optimization under overidentification (Section 5.2)
 - **PT-Post regime (just-identified)**: Under PT-Post, EDiD automatically reduces to standard single-baseline estimator (Corollary 3.2). No downside to using EDiD -- it subsumes standard estimators
 - **Duplicate rows**: Duplicate `(unit, time)` entries are rejected with `ValueError`. The estimator requires exactly one observation per unit-period
@@ -650,17 +672,27 @@ where `q_{g,e} = pi_g / sum_{g' in G_{trt,e}} pi_{g'}`.
 - [x] Implements two-step semiparametric estimator (Equation 4.3)
 - [x] Supports both PT-Post (just-identified) and PT-All (overidentified) regimes
 - [x] Computes efficient weights from conditional covariance matrix inverse
-- [ ] Doubly robust: consistent if either outcome regression or propensity score ratio is correct
+- [x] Doubly robust: consistent if either outcome regression or propensity score ratio is correct
 - [x] No-covariates case uses closed-form sample means/covariances (no tuning)
-- [ ] With covariates: sieve-based propensity ratio estimation with AIC/BIC selection
-- [ ] Kernel-smoothed conditional covariance estimation
+- [x] With covariates: sieve-based propensity ratio estimation with AIC/BIC selection
+- [x] Kernel-smoothed conditional covariance estimation
 - [x] Analytical SE from EIF sample variance
-- [ ] Cluster bootstrap SE option (recommended for small samples)
+- [x] Cluster-robust SE option (analytical from EIF + cluster-level multiplier bootstrap)
 - [x] Event-study aggregation ES(e) with cohort-size weights
-- [ ] Hausman-type pre-test for PT-All vs PT-Post (Theorem A.1)
+- [x] Hausman-type pre-test for PT-All vs PT-Post (Theorem A.1)
 - [x] Each ATT(g,t) can be estimated independently (parallelizable)
 - [x] Absorbing treatment validation
-- [ ] Overlap diagnostics for propensity score ratios
+- [x] Overlap diagnostics for propensity score ratios
+- [x] Survey design support (Phase 3): survey-weighted means/covariances in Omega*, TSL on EIF scores; bootstrap+survey supported (Phase 6)
+- **Note:** Sieve ratio estimation uses polynomial basis functions (total degree up to K) with AIC/BIC model selection. The paper describes sieve estimators generally without specifying a particular basis family; polynomial sieves are a standard choice (Section 4, Eq 4.2). Negative sieve ratio predictions are clipped to a small positive value since the population ratio p_g(X)/p_{g'}(X) is non-negative.
+- **Note:** Kernel-smoothed conditional covariance Omega*(X) uses Gaussian kernel with Silverman's rule-of-thumb bandwidth by default. The paper specifies kernel smoothing (step 5, Section 4) without mandating a particular kernel or bandwidth selection method.
+- **Note:** Conditional covariance Omega*(X) scales each term by per-unit sieve-estimated inverse propensities s_hat_{g'}(X) = 1/p_{g'}(X) (algorithm step 4), matching Eq 3.12. The inverse propensity estimation uses the same polynomial sieve convex minimization as the ratio estimator. Estimated s_hat values are clipped to [1, n] with a UserWarning when clipping binds, mirroring the ratio path's overlap diagnostics.
+- **Note:** Outcome regressions m_hat_{g',t,tpre}(X) use linear OLS working models. The paper's Section 4 describes flexible nonparametric nuisance estimation (sieve regression, kernel smoothing, or ML methods). The DR property ensures consistency if either the OLS outcome model or the sieve propensity ratio is correctly specified, but the linear OLS specification does not generically guarantee attainment of the semiparametric efficiency bound unless the conditional mean is linear in the covariates.
+- **Note:** EfficientDiD bootstrap with survey weights supported (Phase 6) via PSU-level multiplier weights
+- **Note:** EfficientDiD covariates (DR path) with survey weights deferred — the doubly robust nuisance estimation does not yet thread survey weights through sieve/kernel steps
+- **Note:** Cluster-robust SEs use the standard Liang-Zeger clustered sandwich estimator applied to EIF values: aggregate EIF within clusters, center, and compute variance with G/(G-1) small-sample correction. Cluster bootstrap generates multiplier weights at the cluster level (all units in a cluster share the same weight). Analytical clustered SEs are the default when `cluster` is set; cluster bootstrap is opt-in via `n_bootstrap > 0`.
+- **Note:** Hausman pretest operates on the post-treatment event-study vector ES(e) per Theorem A.1. Both PT-All and PT-Post fits are aggregated to ES(e) using cohort-size weights before computing the test statistic H = delta' V^{-1} delta where delta = ES_post - ES_all and V = Cov(ES_post) - Cov(ES_all). Covariance is computed from aggregated ES(e)-level EIF values. The variance-difference matrix V is inverted via Moore-Penrose pseudoinverse to handle finite-sample non-positive-definiteness. Effective rank of V (number of positive eigenvalues) is used as degrees of freedom.
+- **Note:** Last-cohort-as-control (`control_group="last_cohort"`) reclassifies the latest treatment cohort as pseudo-never-treated and drops time periods at/after that cohort's treatment start. This is distinct from CallawaySantAnna's `not_yet_treated` option which dynamically selects not-yet-treated units per (g,t) pair.
 
 ---
 
@@ -731,6 +763,7 @@ where weights ŵ_{g,e} = n_{g,e} / Σ_g n_{g,e} (sample share of cohort g at eve
 - [x] R comparison: ATT matches within machine precision (<1e-11)
 - [x] R comparison: SE matches within 0.3% (well within 1% threshold)
 - [x] R comparison: Event study effects match perfectly (correlation 1.0)
+- [x] Survey design support (Phase 3): weighted within-transform, survey weights in LinearRegression with TSL vcov; bootstrap+survey supported (Phase 6) via Rao-Wu rescaled bootstrap
 
 ---
 
@@ -815,9 +848,10 @@ Y_it = alpha_i + beta_t [+ X'_it * delta] + W'_it * gamma + epsilon_it
 - **`balance_e` cohort filtering:** When `balance_e` is set, cohort balance is checked against the *full panel* (pre + post treatment) via `_build_cohort_rel_times()`, requiring observations at every relative time in `[-balance_e, max_h]`. Both analytical aggregation and bootstrap inference use the same `_compute_balanced_cohort_mask` with pre-computed cohort horizons.
 - **Bootstrap clustering:** Multiplier bootstrap generates weights at `cluster_var` granularity (defaults to `unit` if `cluster` not specified). Invalid cluster column raises ValueError.
 - **Non-constant `first_treat` within a unit:** Emits `UserWarning` identifying the count and example unit. The estimator proceeds using the first observed value per unit (via `.first()` aggregation), but results may be unreliable.
-- **treatment_effects DataFrame weights:** `weight` column uses `1/n_valid` for finite tau_hat and 0 for NaN tau_hat, consistent with the ATT estimand.
+- **treatment_effects DataFrame weights:** `weight` column uses `1/n_valid` for finite tau_hat and 0 for NaN tau_hat, consistent with the ATT estimand (unweighted), or normalized survey weights `sw_i/sum(sw)` when `survey_design` is active.
 - **Rank-deficient covariates in variance:** Covariates with NaN coefficients (dropped for rank deficiency in Step 1) are excluded from the variance design matrices `A_0`/`A_1`. Only covariates with finite coefficients participate in the `v_it` projection.
 - **Sparse variance solver:** `_compute_v_untreated_with_covariates` uses `scipy.sparse.linalg.spsolve` to solve `(A_0'A_0) z = A_1'w` without densifying the normal equations matrix. Falls back to dense `lstsq` if the sparse solver fails.
+- **Note:** Survey weights enter ImputationDiD via weighted iterative FE (Step 1), survey-weighted ATT aggregation (Step 3), and survey-weighted conservative variance (Theorem 3). PSU is used as the cluster variable for Theorem 3 variance. Strata enters survey df (n_PSU - n_strata) for t-distribution inference. FPC is not supported (raises NotImplementedError). Strata does NOT enter the variance formula itself (no stratified sandwich) — this is conservative relative to stratified variance. Bootstrap + survey supported (Phase 6) via PSU-level multiplier weights.
 - **Bootstrap inference:** Uses multiplier bootstrap on the Theorem 3 influence function: `psi_i = sum_t v_it * epsilon_tilde_it`. Cluster-level psi sums are pre-computed for each aggregation target (overall, per-horizon, per-group), then perturbed with multiplier weights (Rademacher by default; configurable via `bootstrap_weights` parameter to use Mammen or Webb weights, matching CallawaySantAnna). This is a library extension (not in the paper) consistent with CallawaySantAnna/SunAbraham bootstrap patterns.
 - **Auxiliary residuals (Equation 8):** Uses v_it-weighted tau_tilde_g formula: `tau_tilde_g = sum(v_it * tau_hat_it) / sum(v_it)` within each partition group. Zero-weight groups (common in event-study SE computation) fall back to unweighted mean.
 
@@ -895,6 +929,7 @@ Our implementation uses multiplier bootstrap on the GMM influence function: clus
 - **No never-treated units (Proposition 5):** When there are no never-treated units and multiple treatment cohorts, horizons h >= h_bar (where h_bar = max(groups) - min(groups)) are unidentified per Proposition 5 of Borusyak et al. (2024). These produce NaN inference with n_obs > 0 (treated observations exist but counterfactual is unidentified) and a warning listing affected horizons. Matches ImputationDiD behavior. Proposition 5 applies to event study horizons only, not cohort aggregation — a cohort whose treated obs all fall at Prop 5 horizons naturally gets n_obs=0 in group effects because all its y_tilde values are NaN.
 - **Zero-observation horizons after filtering:** When `balance_e` or NaN `y_tilde` filtering results in zero observations for some non-Prop-5 event study horizons, those horizons produce NaN for all inference fields (effect, SE, t-stat, p-value, CI) with n_obs=0.
 - **Zero-observation cohorts in group effects:** If all treated observations for a cohort have NaN `y_tilde` (excluded from estimation), that cohort's group effect is NaN with n_obs=0.
+- **Note:** Survey weights in TwoStageDiD GMM sandwich via weighted cross-products: bread uses (X'_2 W X_2)^{-1}, gamma_hat uses (X'_{10} W X_{10})^{-1}(X'_1 W X_2), per-cluster scores multiply by survey weights. PSU is used as the cluster variable for GMM variance. Strata enters survey df (n_PSU - n_strata) for t-distribution inference. FPC is not supported (raises NotImplementedError). Strata does NOT enter the variance formula itself (no stratified sandwich) — this is conservative. Bootstrap + survey supported (Phase 6) via PSU-level multiplier weights.
 
 **Reference implementation(s):**
 - R: `did2s::did2s()` (Kyle Butts & John Gardner)
@@ -1001,6 +1036,8 @@ The paper text states a stricter bound (T_min + 1) but the R code by the co-auth
 - [x] Overall ATT as average of post-treatment delta_h with delta-method SE
 - [x] Anticipation parameter support
 - [x] Never-treated encoding (0 and inf)
+- [x] Survey design support (Phase 3): Q-weights compose multiplicatively with survey weights; TSL vcov on composed weights; survey design columns propagated through sub-experiments
+- **Note:** Survey weights compose multiplicatively with Q-weights for StackedDiD; only `weight_type="pweight"` (default) is supported — `fweight` and `aweight` are rejected because Q-weight composition changes weight semantics (non-integer for fweight, non-inverse-variance for aweight)
 
 ---
 
@@ -1104,6 +1141,7 @@ Convergence criterion: stop when objective decrease < min_decrease² (default mi
 - **Single pre-period**: `compute_time_weights` returns `[1.0]` when `n_pre <= 1` (Frank-Wolfe on a 1-element simplex is trivial).
 - **Bootstrap with 0 control or 0 treated in resample**: Skip iteration (`continue`). If ALL bootstrap iterations fail, raises `ValueError`. If only 1 succeeds, warns and returns SE=0.0. If >5% failure rate, warns about reliability.
 - **Placebo with n_control <= n_treated**: Warns that not enough control units for placebo variance estimation, returns SE=0.0 and empty placebo effects array. The check is `n_control - n_treated < 1`.
+- **Note:** Power analysis functions (`simulate_power`, `simulate_mde`, `simulate_sample_size`) raise `ValueError` for placebo variance when `n_control <= n_treated`. The registry path checks pre-generation using `n_units * treatment_fraction`; the custom-DGP path checks post-generation on the realized data (first iteration only, since treatment allocation is deterministic per `n_units`/`treatment_fraction`).
 - **Negative weights attempted**: Frank-Wolfe operates on the simplex (non-negative, sum-to-1), so weights are always feasible by construction. The step size is clipped to [0, 1] and the move is toward a simplex vertex.
 - **Perfect pre-treatment fit**: Regularization (ζ² ||ω||²) prevents overfitting by penalizing weight concentration.
 - **Single treated unit**: Valid; placebo variance uses jackknife-style permutations of controls.
@@ -1113,6 +1151,7 @@ Convergence criterion: stop when objective decrease < min_decrease² (default mi
 - **Varying treatment within unit**: Raises `ValueError`. SDID requires block treatment (constant within each unit). Suggests CallawaySantAnna or ImputationDiD for staggered adoption.
 - **Unbalanced panel**: Raises `ValueError`. SDID requires all units observed in all periods. Suggests `balance_panel()`.
 - **Poor pre-treatment fit**: Warns (`UserWarning`) when `pre_fit_rmse > std(treated_pre_outcomes, ddof=1)`. Diagnostic only; estimation proceeds.
+- **Note:** Survey support: weights, strata, PSU, and FPC are all supported. Full-design surveys use Rao-Wu rescaled bootstrap (Phase 6); `variance_method="placebo"` requires weights-only (strata/PSU/FPC require bootstrap). Both sides weighted per WLS regression interpretation: treated-side means are survey-weighted (Frank-Wolfe target and ATT formula); control-side synthetic weights are composed with survey weights post-optimization (ω_eff = ω * w_co, renormalized). Frank-Wolfe optimization itself is unweighted — survey importance enters after trajectory-matching. Covariate residualization uses WLS with survey weights. Placebo and bootstrap SE preserve survey weights on both sides.
 
 **Reference implementation(s):**
 - R: `synthdid::synthdid_estimate()` (Arkhangelsky et al.'s official package)
@@ -1216,6 +1255,185 @@ has no additional effect.
 - [x] Influence function SE: std(w3·IF_3 + w2·IF_2 - w1·IF_1) / sqrt(n)
 - [x] Cluster-robust SE via Liang-Zeger variance on influence function
 - [x] ATT and SE match R within <0.001% for all methods and DGP types
+- [x] Survey design support: all methods (reg, IPW, DR) with weighted OLS/logit + TSL on combined influence functions. Weighted solve_logit() for propensity scores in IPW/DR paths.
+- **Note:** TripleDifference survey SE: for IPW/DR, pairwise IFs incorporate survey weights via weighted Riesz representers (`riesz *= weights`), so the combined IF is divided by per-observation survey weights (`inf / sw`) before passing to `compute_survey_vcov()` to prevent double-weighting. For regression (RA), pairwise IFs are already on the unweighted residual scale (WLS fits use weights internally but the IF is not Riesz-multiplied), so the combined IF passes directly to TSL without de-weighting. The OLS nuisance IF corrections in DR mode use weighted cross-products normalized by subgroup row count `n` (not `sum(weights)`).
+
+---
+
+## StaggeredTripleDifference
+
+**Primary source:** [Ortiz-Villavicencio, M., & Sant'Anna, P.H.C. (2025). Better Understanding Triple Differences Estimators. arXiv:2505.09942.](https://arxiv.org/abs/2505.09942)
+
+**Key implementation requirements:**
+
+*Assumption checks / warnings:*
+- Requires balanced panel with enabling-group `S_i`, binary eligibility `Q_i` (time-invariant), and outcome `Y`
+- Eligibility must be binary (0/1) — raises `ValueError` if not
+- Eligibility must be time-invariant within each unit — raises `ValueError` if varying
+- Requires both eligible (Q=1) and ineligible (Q=0) units
+- Warns if any (S, Q) cell in a three-DiD comparison has < 5 units
+- Warns if no valid comparison groups exist for a (g, t) pair (skips that pair)
+- Propensity score overlap enforced by clipping at `pscore_trim` (default 0.01)
+- Warns on singular GMM covariance matrix (falls back to pseudoinverse)
+
+*Data structure:*
+
+Balanced panel. Key variables:
+- `S_i` (`first_treat`): enabling group — 0 or inf for never-enabled
+- `Q_i` (`eligibility`): binary, time-invariant eligibility indicator
+- Treatment: `D_{i,t} = 1{t >= S_i AND Q_i = 1}` (absorbing)
+- Covariates `X_i`: time-invariant (first observation per unit used)
+
+*Estimator equation (Equation 4.1 in paper, as implemented):*
+
+Three-DiD decomposition for each (g, g_c, t) triple:
+
+```
+DDD(g, g_c, t) = DiD_A + DiD_B - DiD_C
+```
+
+where each pairwise DiD operates on panel outcome changes `delta_Y = Y_t - Y_b`:
+- DiD_A: treated (S=g, Q=1) vs (S=g, Q=0)     [+1, paper Term 1]
+- DiD_B: treated (S=g, Q=1) vs (S=g_c, Q=1)   [+1, paper Term 2]
+- DiD_C: treated (S=g, Q=1) vs (S=g_c, Q=0)   [-1, paper Term 3]
+
+This sign convention matches both the paper's Equation 4.1 and the existing
+`TripleDifference` decomposition (DDD = DiD_3 + DiD_2 - DiD_1 with subgroups
+4=G1P1, 3=G1P0, 2=G0P1, 1=G0P0).
+
+Valid comparison groups: for `control_group="nevertreated"`, only the never-enabled
+cohort (S=0). For `control_group="notyettreated"`, `G_c = {g_c : g_c > max(t, base_period)
++ anticipation}`, plus never-enabled.
+
+- **Deviation from paper:** The paper's Section 4 defines admissible comparison cohorts
+  as `g_c > max(g, t)`. The implementation follows the companion R package `triplediff`
+  which uses `g_c > max(t, base_period) + anticipation`. These rules differ for
+  pre-treatment cells (`t < g`) when a later cohort lies in `(t, g)`: the paper would
+  exclude it, while the R package (and this implementation) may include it depending
+  on the base period. The R-matching rule correctly accounts for the anticipation
+  parameter and base-period selection in the comparison-group filter.
+
+*With covariates / doubly robust (DR, recommended):*
+
+Each pairwise DiD uses the CallawaySantAnna DR estimator on outcome changes:
+1. Fit outcome regression `E[delta_Y | X]` on control units (OLS)
+2. Estimate propensity score `P(treated | X)` within each 2-cell subset (logistic)
+3. Combine: `ATT = mean(treated_change - m_hat) + sum(w_ipw * (m_hat - control_change)) / n_t`
+
+*GMM-optimal combination across comparison groups (Equations 4.11-4.12):*
+
+```
+ATT_gmm(g,t) = w_gmm' @ [ATT_1, ..., ATT_k]
+w_gmm = Omega^{-1} @ 1 / (1' @ Omega^{-1} @ 1)
+```
+
+where `Omega[j,l] = (1/n) * sum_i IF_j[i] * IF_l[i]` is estimated from influence
+functions across comparison groups. Minimizes asymptotic variance subject to `sum(w) = 1`.
+
+*Aggregation:*
+
+Event study (Equation 4.13): cohort-share-weighted average across cohorts for each
+relative time `e = t - g`. Reuses `CallawaySantAnnaAggregationMixin._aggregate_event_study()`.
+
+Overall ATT: cohort-size-weighted average across post-treatment (g,t) pairs.
+Reuses `CallawaySantAnnaAggregationMixin._aggregate_simple()`. Note: this is the
+simple post-treatment aggregation, not the paper's Equation 4.14 (which averages
+over event-study effects).
+
+Group effects: average across post-treatment time periods for each cohort.
+Reuses `CallawaySantAnnaAggregationMixin._aggregate_by_group()`.
+
+All aggregation SEs include the WIF (Weight Influence Function) adjustment for
+uncertainty in cohort-share weights, inherited from the CallawaySantAnna mixin.
+
+- **Deviation from R:** Aggregation weights and WIF use the eligible-treated
+  population `P(S=g, Q=1)` (matching the paper's Eq 4.13, where `G_i` is defined
+  only for `Q=1` units). R's `agg_ddd()` uses `P(S=g)` (all units in the enabling
+  group, including ineligible). This is implemented by setting `unit_cohorts=0` for
+  ineligible units before calling the aggregation mixin.
+- **Note:** Per-cohort group-effect SEs include WIF via the inherited mixin.
+  R's `agg_ddd(type="group")` uses `wif=NULL` for per-cohort aggregation since
+  within-cohort weights are fixed. This makes our per-cohort group-effect SEs
+  slightly conservative relative to R.
+
+*Standard errors:*
+
+Individual (g,t) level:
+```
+SE(g,t) = std(IF_gmm, ddof=1) / sqrt(n)
+```
+where `IF_gmm = w_gmm' @ IF_matrix` is the GMM-combined unit-level influence function
+(length n_units, zero-padded for non-participating units). Inherently
+heteroskedasticity-robust via the influence function approach.
+
+Aggregation SEs: via WIF-adjusted combined influence functions from the
+CallawaySantAnna aggregation mixin.
+
+Bootstrap: multiplier bootstrap (Algorithm 1 of Callaway & Sant'Anna 2021) via
+`CallawaySantAnnaBootstrapMixin._run_multiplier_bootstrap()`. Supports
+Rademacher, Mammen, and Webb weight distributions. Provides simultaneous
+confidence bands (sup-t) for event study.
+
+- **Note:** Matches R `triplediff` package `compute_did()` formulation:
+  Hajek-normalized Riesz representers, separate M1/M3 OR corrections on
+  treated/control IF components, PS correction via logistic Hessian and score
+  function, hessian = (X'WX)^{-1} * n_pair. Three-DiD IF combination weights
+  use `w_j = n_cell / n_pair_j` (matching R's att_dr). GMM Omega estimated via
+  sample covariance (ddof=1). Per-(g,t) SE uses R's GMM formula
+  `sqrt(1 / (n * sum(Omega_inv)))` for multiple comparison groups, or
+  `sqrt(sum(IF^2) / n^2)` for single comparison group.
+- **Deviation from R:** Propensity scores are clipped to `[pscore_trim, 1-pscore_trim]`
+  (default 0.01). R's `triplediff` uses hard exclusion (`keep_ps`) for control units
+  with `pscore >= 0.995` but does not apply a lower bound. The soft-clipping approach
+  retains all observations with bounded weights, which is more conservative under
+  moderate overlap violations.
+- **Note:** The `cluster` parameter is accepted but not currently wired to the
+  analytical SE computation. The multiplier bootstrap provides unit-level
+  clustering. Full cluster-robust analytical SEs are deferred.
+- **Note:** Full survey design support (pweight only). Survey weights enter
+  propensity score estimation (weighted IRLS), outcome regression (WLS), and
+  Riesz representer computation. IF combination weights (w1/w2/w3) use
+  survey-weighted cell sizes. Aggregated SEs use `compute_survey_if_variance()`
+  (TSL) or `compute_replicate_if_variance()` (replicate weights). Bootstrap
+  uses PSU-level multiplier weights. The R `triplediff` package does not
+  support survey weights.
+- **Deviation from R:** Event-study and simple aggregation reuse
+  `CallawaySantAnnaAggregationMixin` cohort-size weights (`n_treated` per cohort)
+  instead of R's `agg_ddd()` group-probability weights (`pg = P(G=g)` over all
+  units including ineligible). Group-time ATT(g,t) values are identical; only the
+  weighted average across (g,t) pairs differs.
+
+*Edge cases:*
+- Single comparison group: GMM reduces to w=[1], no matrix inversion
+- Zero valid comparison groups for a (g,t): skipped with warning
+- Singular GMM covariance: falls back to pseudoinverse with warning
+- Small cells (< 5 units): warns but proceeds
+- Non-finite ATT from a comparison group: excluded from GMM combination
+- Never-enabled encoded as inf: normalized to 0 internally
+- No valid (g,t) pairs at all: raises `ValueError`
+
+**Reference implementation(s):**
+- R `triplediff` (companion package by paper authors) — not yet validated against
+
+**Requirements checklist:**
+- [x] Panel data with (unit, time, enabling-group S, eligibility Q, outcome Y)
+- [x] Three comparison sub-groups per (g, g_c): (S=g, Q=0), (S=g_c, Q=1), (S=g_c, Q=0)
+- [x] Individual comparison cohorts, never pooled — combined via GMM weights
+- [x] Comparison groups satisfy g_c > max(t, base_period) + anticipation (notyettreated)
+  or g_c = never-enabled only (nevertreated)
+- [x] Doubly robust: consistent if either propensity or outcome model correct (per component)
+- [x] GMM-optimal weighting via closed-form inverse-variance formula
+- [x] Event-study aggregation with cohort-share weights (via CS mixin)
+- [x] Pre-treatment event-study coefficients constructable
+- [x] Influence-function-based SEs
+- [x] Multiplier bootstrap for simultaneous confidence bands (via CS mixin)
+- [ ] Cluster-robust analytical SEs (accepted but not wired — deferred)
+- [x] Survey design support (pweight, strata/PSU/FPC, replicate weights)
+- [x] Validation against R `triplediff` package: group-time ATT and SE match within
+  0.001% across 10 scenarios (3 seeds, 3 methods, both control group modes).
+  Aggregation (event study, overall ATT) uses CS mixin cohort-size weights which
+  differ from R's `agg_ddd()` group-probability weights (within 25%); this is a
+  documented weighting choice, not a specification violation.
 
 ---
 
@@ -1268,14 +1486,16 @@ Optimization (Equation 2):
 ```
 (α̂, β̂, L̂) = argmin_{α,β,L} Σ_j Σ_s θ_s^{i,t} ω_j^{i,t} (1-W_js)(Y_js - α_j - β_s - L_js)² + λ_nn ||L||_*
 ```
-Solved via alternating minimization. For α, β (or μ, α, β, τ in joint): weighted least
-squares (closed form). For L: proximal gradient with step size η = 1/(2·max(W)):
+Solved via alternating minimization. For α, β: weighted least squares (closed form).
+The global solver adds an intercept μ and solves for (μ, α, β, L) on control data only,
+extracting τ_it post-hoc as residuals (see Global section below).
+For L: proximal gradient with step size η = 1/(2·max(W)):
 ```
 Gradient step: G = L + (W/max(W)) ⊙ (R - L)
 Proximal step: L = U × soft_threshold(Σ, η·λ_nn) × V'  (SVD of G = UΣV')
 ```
-where R is the residual after removing fixed effects (and τ·D in joint mode).
-Both the twostep and global solvers use FISTA/Nesterov acceleration for the
+where R is the residual after removing fixed effects.
+Both the local and global solvers use FISTA/Nesterov acceleration for the
 inner L update (O(1/k²) convergence rate, up to 20 inner iterations per
 outer alternating step).
 
@@ -1362,15 +1582,17 @@ Q(λ) = Σ_{j,s: D_js=0} [τ̂_js^loocv(λ)]²
 - [x] No post_periods parameter (D matrix determines treatment timing)
 - [x] D matrix semantics documented (absorbing state, not event indicator)
 - [x] Unbalanced panels supported (missing observations don't trigger false violations)
+- **Note:** Survey support: weights, strata, PSU, and FPC are all supported via Rao-Wu rescaled bootstrap with cross-classified pseudo-strata (Phase 6). Rust backend remains pweight-only; full-design surveys fall back to the Python bootstrap path. Survey weights enter ATT aggregation only — population-weighted average of per-observation treatment effects. Model fitting (kernel weights, LOOCV, nuclear norm regularization) stays unchanged. Rust and Python bootstrap paths both support survey-weighted ATT in each iteration.
 
 ### TROP Global Estimation Method
 
-**Method**: `method="global"` in TROP estimator (`method="joint"` is a deprecated alias)
+**Method**: `method="global"` in TROP estimator (`method="joint"` is a deprecated alias;
+`method="twostep"` is a deprecated alias for `method="local"`)
 
 **Approach**: Computationally efficient adaptation using the (1-W) masking
 principle from Eq. 2. Fits a single global model on control data, then
 extracts treatment effects as post-hoc residuals. For the paper's full
-per-treated-cell estimator (Algorithm 2), use `method='twostep'`.
+per-treated-cell estimator (Algorithm 2), use `method='local'`.
 
 **Objective function** (Equation G1):
 ```
@@ -1393,7 +1615,7 @@ ATT = mean(τ̂_{it})  over all treated observations
 
 Treatment effects are **heterogeneous** per-observation values. ATT is their mean.
 
-**Weight computation** (differs from twostep):
+**Weight computation** (differs from local):
 - Time weights: δ_time(t) = exp(-λ_time × |t - center|) where center = T - treated_periods/2
 - Unit weights: δ_unit(i) = exp(-λ_unit × RMSE(i, treated_avg))
   where RMSE is computed over pre-treatment periods comparing to average treated trajectory
@@ -1417,7 +1639,7 @@ Treatment effects are **heterogeneous** per-observation values. ATT is their mea
 
 3. **Post-hoc**: Extract τ̂_{it} = Y_{it} - μ̂ - α̂_i - β̂_t - L̂_{it} for treated cells
 
-**LOOCV parameter selection** (unified with twostep, Equation 5):
+**LOOCV parameter selection** (unified with local, Equation 5):
 Following paper's Equation 5 and footnote 2:
 ```
 Q(λ) = Σ_{j,s: D_js=0} [τ̂_js^loocv(λ)]²
@@ -1434,14 +1656,14 @@ For global method, LOOCV works as follows:
 3. Select λ combination that minimizes Q(λ)
 
 **Rust acceleration**: The LOOCV grid search is parallelized in Rust for 5-10x speedup.
-- `loocv_grid_search_joint()` - Parallel LOOCV across all λ combinations
-- `bootstrap_trop_variance_joint()` - Parallel bootstrap variance estimation
+- `loocv_grid_search_global()` - Parallel LOOCV across all λ combinations
+- `bootstrap_trop_variance_global()` - Parallel bootstrap variance estimation
 
-**Key differences from twostep method**:
+**Key differences from local method**:
 - Global weights (distance to treated block center) vs. per-observation weights
 - Single model fit per λ combination vs. N_treated fits
 - Treatment effects are post-hoc residuals from a single global model (global)
-  vs. post-hoc residuals from per-observation models (twostep)
+  vs. post-hoc residuals from per-observation models (local)
 - Both use (1-W) masking (control-only fitting)
 - Faster computation for large panels
 
@@ -1450,14 +1672,14 @@ For global method, LOOCV works as follows:
   to receive treatment at the same time. A `ValueError` is raised if staggered
   adoption is detected (units first treated at different periods). Treatment timing is
   inferred once and held constant for bootstrap variance estimation.
-  For staggered adoption designs, use `method="twostep"`.
+  For staggered adoption designs, use `method="local"`.
 
 **Reference**: Adapted from reference implementation. See also Athey et al. (2025).
 
 **Edge Cases (treated NaN outcomes):**
 - **Partial NaN**: When some treated outcomes Y_{it} are NaN/missing:
   - `_extract_posthoc_tau()` (global) skips these cells; only finite τ̂ values are averaged
-  - Twostep loop skips NaN outcomes entirely (no model fit, no tau appended)
+  - Local loop skips NaN outcomes entirely (no model fit, no tau appended)
   - `n_treated_obs` in results reflects valid (finite) count, not total D==1 count
   - `df_trop = max(1, n_valid_treated - 1)` uses valid count
   - Warning issued when n_valid_treated < total treated count
@@ -1468,12 +1690,14 @@ For global method, LOOCV works as follows:
   iterations succeed. `safe_inference()` propagates NaN downstream.
 
 **Requirements checklist:**
-- [x] Same LOOCV framework as twostep (Equation 5)
+- [x] Same LOOCV framework as local (Equation 5)
 - [x] Global weight computation using treated block center
 - [x] (1-W) masking for control-only fitting (per paper Eq. 2)
 - [x] Alternating minimization for nuclear norm penalty
 - [x] Returns ATT = mean of per-observation post-hoc τ̂_{it}
 - [x] Rust acceleration for LOOCV and bootstrap
+
+- **Note:** `method="twostep"` renamed to `method="local"` and `method="joint"` renamed to `method="global"` to form a natural local/global pair. Both old names are deprecated aliases, removal planned for v3.0.
 
 ---
 
@@ -1500,7 +1724,7 @@ For global method, LOOCV works as follows:
 *Assumption checks / warnings:*
 - Requires variation in treatment timing (staggered adoption)
 - Warns if only one treatment cohort (decomposition not meaningful)
-- Assumes no never-treated: uses not-yet-treated as controls
+- Uses never-treated units as controls when present; falls back to timing-only comparisons otherwise
 
 *Estimator equation (as implemented):*
 
@@ -1546,6 +1770,8 @@ Weights depend on group sizes and variance in treatment timing.
 - [ ] Weights sum to approximately 1 (numerical precision)
 - [ ] TWFE coefficient ≈ weighted sum of 2×2 estimates
 - [ ] Visualization shows weight vs. estimate by comparison type
+- [x] Survey design support (Phase 3): weighted cell means, weighted within-transform, weighted group shares
+- **Note:** Bacon decomposition with survey weights is diagnostic; exact-sum guarantee is approximate; `weights="exact"` requires within-unit-constant survey columns (approximate path accepts time-varying weights)
 
 ---
 
@@ -1589,6 +1815,9 @@ Confidence intervals:
 - Breakdown point: smallest M where CI includes zero
 - M=0: reduces to standard parallel trends
 - Negative M: not valid (constraints become infeasible)
+- **Note:** Phase 7d: survey variance support. When input results carry `survey_metadata` with `df_survey`, HonestDiD uses t-distribution critical values (via `_get_critical_value(alpha, df)`) instead of normal. CallawaySantAnnaResults now stores `event_study_vcov` (full cross-event-time VCV from IF vectors), which HonestDiD uses instead of the diagonal fallback. For replicate-weight designs, the event-study VCV falls back to diagonal (multivariate replicate VCV deferred).
+- **Note (deviation from R):** When HonestDiD receives bootstrap-fitted CallawaySantAnna results (`n_bootstrap > 0`), the full event-study covariance is unavailable (cleared to prevent mixing analytical VCV with bootstrap SEs). HonestDiD falls back to `diag(se^2)` from the bootstrap SEs with a UserWarning. R's `honest_did.AGGTEobj` computes a full covariance from the influence function matrix; implementing bootstrap event-study covariance is deferred. For full covariance structure in HonestDiD, use analytical SEs (`n_bootstrap=0`).
+- **Note (deviation from R):** When CallawaySantAnna results are passed to HonestDiD, `base_period != "universal"` emits a warning but does not error. R's `honest_did::honest_did.AGGTEobj` requires universal base period. Our implementation warns because the varying-base pre-treatment coefficients use consecutive comparisons (not a common reference), which changes the parallel-trends restriction interpretation.
 
 **Reference implementation(s):**
 - R: `HonestDiD` package (Rambachan & Roth's official package)
@@ -1704,6 +1933,10 @@ n = 2(t_{α/2} + t_{1-κ})² σ² / MDE²
 - Very small effects: may require infeasibly large samples
 - High ICC: dramatically reduces effective sample size
 - Unequal allocation: optimal is often 50-50 but depends on costs
+- **Note:** `data_generator_kwargs` keys that overlap with registry-managed simulation inputs (`treatment_effect`, `noise_sd`, `n_units`, `n_periods`, `treatment_fraction`, `treatment_period`, `n_pre`, `n_post`) are rejected with `ValueError` to prevent silent desync between the DGP and result metadata. `n_pre` and `n_post` are derived from `treatment_period` and `n_periods` in factor-model DGPs (SyntheticDiD, TROP); the 3-way intersection check naturally scopes the rejection to those estimators only. Use the corresponding `simulate_power()` parameters directly, or pass a custom `data_generator` to override the DGP entirely.
+- **Note:** `simulate_sample_size()` rejects `n_per_cell` in `data_generator_kwargs` for `TripleDifference` because `n_per_cell` is derived from `n_units` (the search variable). A fixed override would freeze the effective sample size across bisection iterations, making the search degenerate. Use `simulate_power()` with a fixed `n_per_cell` override instead, or pass a custom `data_generator`.
+- **Note:** The simulation-based power registry (`simulate_power`, `simulate_mde`, `simulate_sample_size`) uses a single-cohort staggered DGP by default. Estimators configured with `control_group="not_yet_treated"`, `clean_control="strict"`, or `anticipation>0` will receive a `UserWarning` because the default DGP does not match their identification strategy. Users must supply `data_generator_kwargs` (e.g., `cohort_periods=[2, 4]`, `never_treated_frac=0.0`) or a custom `data_generator` to match the estimator design.
+- **Note:** The `TripleDifference` registry adapter uses `generate_ddd_data`, a fixed 2×2×2 factorial DGP (group × partition × time). The `n_periods`, `treatment_period`, and `treatment_fraction` parameters are ignored — DDD always simulates 2 periods with balanced groups. `n_units` is mapped to `n_per_cell = max(2, n_units // 8)` (effective total N = `n_per_cell × 8`), so non-multiples of 8 are rounded down and values below 16 are clamped to 16. A `UserWarning` is emitted when simulation inputs differ from the effective DDD design. When rounding occurs, all result objects (`SimulationPowerResults`, `SimulationMDEResults`, `SimulationSampleSizeResults`) set `effective_n_units` to the actual sample size used; it is `None` when no rounding occurred. `simulate_sample_size()` snaps bisection candidates to multiples of 8 so that `required_n` is always a realizable DDD sample size. Passing `n_per_cell` in `data_generator_kwargs` suppresses the effective-N rounding warning but not warnings for ignored parameters (`n_periods`, `treatment_period`, `treatment_fraction`).
 
 **Reference implementation(s):**
 - R: `pwr` package (general), `DeclareDesign` (simulation-based)
@@ -1809,6 +2042,288 @@ should be a deliberate user choice.
 
 ---
 
+## Survey Data Support
+
+Survey-weighted estimation allows correct population-level inference from data
+collected via complex survey designs (multi-stage sampling, stratification,
+unequal selection probabilities).
+
+### Weighted Estimation
+
+- **Reference**: Lumley (2004) "Analysis of Complex Survey Samples", Journal of
+  Statistical Software 9(8). Solon, Haider, & Wooldridge (2015) "What Are We
+  Weighting For?" Journal of Human Resources 50(2).
+- **WLS formula**: `beta_WLS = (X'WX)^{-1} X'Wy` where `W = diag(w_i)`
+- **Implementation**: Equivalent transformation via `sqrt(w)` scaling, then
+  standard OLS. Residuals back-transformed to original scale.
+- **Weight types**: pweight (inverse selection probability), fweight
+  (frequency/expansion), aweight (inverse variance/precision)
+- **Note:** Weight normalization uses `sum(w) = n` convention (DRDID/Stata), not
+  raw weights (R `survey`). Coefficients are identical; SEs differ by constant
+  factor.
+
+### Taylor Series Linearization (TSL) Variance
+
+- **Reference**: Binder (1983) "On the Variances of Asymptotically Normal
+  Estimators from Complex Surveys", International Statistical Review 51(3).
+  Lumley (2004).
+- **Formula**: `V_TSL = (X'WX)^{-1} [sum_h V_h] (X'WX)^{-1}` with stratified
+  PSU-level scores
+- **Relationship to sandwich estimator**: TSL is a generalization of the
+  Huber-White sandwich estimator that accounts for stratification and finite
+  population correction
+- **Deviation from R:** R `survey` defaults `lonely_psu` to "fail"; we default
+  to "remove" with warning, matching common applied practice
+- **Edge case**: Singleton strata (one PSU per stratum) — handled via
+  `lonely_psu` parameter ("remove", "certainty", or "adjust")
+- **Note:** For unstratified designs with a single PSU, all `lonely_psu` modes
+  produce NaN variance. The "adjust" mode cannot center against a global mean
+  when there is only one stratum (the single PSU is the entire sample).
+- **Note:** Weights-only designs (no explicit PSU or strata) use implicit
+  per-observation PSUs for the TSL meat computation, consistent with the
+  stratified-no-PSU path. The adjustment factor is `n/(n-1)` (not HC1's
+  `n/(n-k)`).
+
+### Weight Type Effects on Inference
+
+- **Note:** aweights use unweighted meat in the sandwich estimator (no `w` in
+  `u^2` term). This matches Stata convention. Rationale: aweights model known
+  heteroskedasticity; after WLS transformation, errors are approximately
+  homoskedastic.
+- **Note:** fweights affect degrees of freedom (`df = sum(w) - k`, not
+  `n - k`). This matches Stata convention for frequency-expanded data.
+- **Note:** pweight HC1 meat uses score outer products (Σ s_i s_i' where
+  s_i = w_i x_i u_i), giving w² in the meat. fweight HC1 meat uses
+  X'diag(w u²)X (one power of w), matching frequency-expanded HC1.
+- **Note:** fweights must be non-negative integers; fractional values are
+  rejected by `_validate_weights()`. All-zero vectors rejected at solver
+  level. This matches Stata's convention.
+
+### Absorbed Fixed Effects with Survey Weights
+
+- **Note:** When `absorb` is used with a single variable in DiD/MultiPeriodDiD,
+  all regressors (treatment, time, interactions, covariates) are within-transformed
+  alongside the outcome per the FWL theorem. Regressors collinear with
+  the absorbed FE (e.g., treatment after absorbing unit FE) are dropped
+  via rank-deficiency handling. Multiple absorbed variables with survey weights
+  are rejected (single-pass sequential demeaning is not the correct weighted
+  FWL projection for N > 1 dimensions; iterative alternating projections are
+  needed but not yet implemented).
+
+### Survey Degrees of Freedom
+
+- **Reference**: Korn & Graubard (1990) "Simultaneous Testing of Regression
+  Coefficients with Complex Survey Data", JASA 85(409).
+- **Formula**: `df = n_PSU - n_strata` (replaces `n - k` for t-distribution
+  inference)
+- **Deviation from R:** Some software uses Satterthwaite-type df approximation;
+  we use the simpler and more common `n_PSU - n_strata` convention.
+- **Note:** When no explicit PSU is specified (weights-only or stratified-no-PSU
+  designs), each observation is treated as its own PSU for df purposes. Survey df
+  becomes `n_obs - n_strata` (or `n_obs - 1` when unstratified).
+- **Note:** When survey_design specifies weights only (no PSU) and cluster=
+  is specified, cluster IDs are injected as effective PSUs for Taylor Series
+  Linearization variance estimation, matching the R `survey` package
+  convention that clusters are the primary sampling units.
+
+### Survey-Aware Bootstrap (Phase 6)
+
+Two strategies for bootstrap variance under complex survey designs:
+
+**Multiplier Bootstrap at PSU Level** (CallawaySantAnna, ImputationDiD, TwoStageDiD,
+ContinuousDiD, EfficientDiD):
+
+- **Reference**: Standard Taylor linearization bootstrap (Shao 2003, "Impact of the
+  Bootstrap on Sample Surveys", Statistical Science 18(2))
+- **Formula**: Generate multiplier weights independently within strata at the PSU level.
+  Scale by `sqrt(1 - f_h)` for FPC. Perturbation:
+  `ATT_boot[b] = ATT + w_b^T @ psi_psu` where `psi_psu` are PSU-aggregated IF sums.
+- **Note:** When no strata/PSU/FPC, degenerates to standard unit-level multiplier bootstrap.
+
+**Rao-Wu Rescaled Bootstrap** (SunAbraham, SyntheticDiD, TROP):
+
+- **Reference**: Rao & Wu (1988) "Resampling Inference with Complex Survey Data",
+  JASA 83(401); Rao, Wu & Yue (1992) "Some Recent Work on Resampling Methods for
+  Complex Surveys", Survey Methodology 18(2), Section 3.
+- **Formula**: Within each stratum *h* with *n_h* PSUs, draw `m_h` PSUs with replacement.
+  Without FPC: `m_h = n_h - 1`. With FPC: `m_h = max(1, round((1 - f_h) * (n_h - 1)))`.
+  Rescaled weight: `w*_i = w_i * (n_h / m_h) * r_hi` where `r_hi` = count of PSU *i* drawn.
+- **Note:** FPC enters through the resample size `m_h`, not as a post-hoc scaling factor.
+  When `f_h >= 1` (census stratum), observations keep original weights (zero variance).
+- **Note:** Bootstrap paths support `lonely_psu="remove"` and `"certainty"` only.
+  `lonely_psu="adjust"` raises `NotImplementedError` for survey-aware bootstrap;
+  use analytical inference for designs requiring `adjust` semantics.
+- **Deviation from R:** For the no-FPC case (`m_h = n_h - 1`), this matches R
+  `survey::as.svrepdesign(type="subbootstrap")`. The FPC-adjusted resample size
+  `m_h = round((1-f_h)*(n_h-1))` follows Rao, Wu & Yue (1992) Section 3.
+
+**CallawaySantAnna Design-Based Aggregated SEs**:
+
+- **Formula**: `V_design = sum_h (1-f_h) * (n_h/(n_h-1)) * sum_j (psi_hj - psi_h_bar)^2`
+  where `psi_hj = sum_{i in PSU j} psi_i` and `psi_i` is the combined IF (standard + WIF).
+- **Note:** Per-(g,t) cell SEs use the simpler IF-based formula `sqrt(sum(psi^2))` which
+  already incorporates survey weights. Only aggregated SEs (overall, event study, group)
+  use the full design-based variance.
+
+**TROP Cross-Classified Strata**:
+
+- **Note (deviation from R):** When survey strata and treatment groups both exist, TROP
+  creates pseudo-strata as `(survey_stratum x treatment_group)` for Rao-Wu resampling.
+  This preserves both survey variance structure and treatment ratio. Survey df computed
+  from pseudo-strata structure.
+- **Note:** When `survey_design.strata` is None but PSU/FPC trigger full-design bootstrap,
+  TROP uses treatment group (treated vs control) as pseudo-strata for Rao-Wu resampling
+  to preserve treatment ratio. FPC is applied within these pseudo-strata. This matches
+  TROP's existing treatment-stratified resampling pattern.
+- **Note (deviation from block bootstrap):** In Rao-Wu survey bootstrap, per-observation
+  treatment effects tau_{it} are deterministic given (Y, D, lambda) because survey weights
+  do not enter the kernel-weighted matrix completion. The Rao-Wu path therefore precomputes
+  tau values once and only varies the ATT aggregation weights across draws. This is
+  mathematically equivalent to refitting per draw and avoids redundant computation.
+
+### Replicate Weight Variance (Phase 6)
+
+Alternative to TSL: re-run WLS for each replicate weight column and compute
+variance from the distribution of replicate estimates.
+
+- **Reference**: Wolter (2007) "Introduction to Variance Estimation", 2nd ed.
+  Rao & Wu (1988).
+- **Supported methods**: BRR, Fay's BRR, JK1, JKn
+- **Formulas**:
+  - BRR: `V = (1/R) * sum_r (theta_r - theta)^2`
+  - Fay: `V = 1/(R*(1-rho)^2) * sum_r (theta_r - theta)^2`
+  - JK1: `V = (R-1)/R * sum_r (theta_r - theta)^2`
+  - JKn: `V = sum_h ((n_h-1)/n_h) * sum_{r in h} (theta_r - theta)^2`
+- **IF-based replicate variance**: For influence-function estimators (CS
+  aggregation, ContinuousDiD, EfficientDiD, TripleDifference), replicate
+  contrasts are formed via weight-ratio rescaling:
+  `theta_r = sum((w_r/w_full) * psi)` when `combined_weights=True`,
+  `theta_r = sum(w_r * psi)` when `combined_weights=False`.
+- **Survey df**: QR-rank of the analysis-weight matrix minus 1,
+  matching R's `survey::degf()` which uses `qr(..., tol=1e-5)$rank`.
+  For `combined_weights=True` (default), analysis weights are the raw
+  replicate columns. For `combined_weights=False`, analysis weights are
+  `replicate_weights * full_sample_weights`. Returns `None` (undefined)
+  when rank <= 1, yielding NaN inference. Replaces `n_PSU - n_strata`.
+- **Mutual exclusion**: Replicate weights cannot be combined with
+  strata/psu/fpc (the replicates encode design structure implicitly)
+- **Design parameters** (matching R `svrepdesign()`):
+  - `combined_weights` (default True): replicate columns include full-sample
+    weight. If False, replicate columns are perturbation factors multiplied
+    by full-sample weight before WLS.
+  - `replicate_scale`: overall variance multiplier, applied multiplicatively
+    with `replicate_rscales` when both are provided (`scale * rscales`)
+  - `replicate_rscales`: per-replicate scaling factors (vector of length R).
+    BRR and Fay ignore custom `replicate_scale`/`replicate_rscales` with a
+    warning (fixed scaling by design); JK1/JKn allow overrides.
+  - `mse` (default False, matching R's `survey::svrepdesign()`): if True,
+    center variance on full-sample estimate; if False, center on mean of
+    replicate estimates. When `replicate_rscales` contains zero entries
+    and `mse=False`, centering excludes zero-scaled replicates, matching
+    R's `survey::svrVar()` convention.
+- **Note:** Replicate columns are NOT normalized — raw values are preserved
+  to maintain correct weight ratios in the IF path.
+- **Note:** JKn requires explicit `replicate_strata` (per-replicate stratum
+  assignment). Auto-derivation from weight patterns is not supported.
+- **Note:** Invalid replicate solves (singular/degenerate) are dropped with
+  a warning. Variance is computed from valid replicates only. Fewer than 2
+  valid replicates returns NaN variance. The variance scaling factor
+  (e.g., `1/R` for BRR, `(R-1)/R` for JK1) uses the original design's `R`,
+  not the valid count — matching R's `survey` package convention where the
+  design structure is fixed and dropped replicates contribute zero to the
+  sum without changing the scale. Survey df uses `n_valid - 1` for
+  t-based inference.
+- **Note:** Replicate-weight support matrix:
+  - **Supported**: CallawaySantAnna (reg/ipw/dr without covariates, no
+    bootstrap), ContinuousDiD
+    (no bootstrap), EfficientDiD (no bootstrap), TripleDifference (all
+    methods), LinearRegression (OLS path)
+  - **Rejected with NotImplementedError**: SunAbraham, TwoWayFixedEffects
+    (within-transformation must be recomputed per replicate),
+    DifferenceInDifferences, MultiPeriodDiD, StackedDiD (use
+    compute_survey_vcov directly), ImputationDiD, TwoStageDiD (custom
+    variance), SyntheticDiD, TROP (bootstrap-based variance),
+    BaconDecomposition (diagnostic only)
+  - CS/ContinuousDiD/EfficientDiD reject replicate + `n_bootstrap > 0`
+    (replicate weights provide analytical variance)
+- **Note:** When invalid replicates are dropped in `compute_replicate_vcov`
+  (OLS path), `n_valid` is returned and used for `df_survey = n_valid - 1`
+  in `LinearRegression.fit()`. For IF-based replicate paths, replicates
+  essentially never fail (weighted sums cannot be singular), so `n_valid`
+  equals `R` in practice and df propagation is not needed.
+
+### DEFF Diagnostics (Phase 6)
+
+Per-coefficient design effect comparing survey variance to SRS variance.
+
+- **Reference**: Kish (1965) "Survey Sampling", Wiley. Chapter 8.
+- **Formula**: `DEFF_k = Var_survey(beta_k) / Var_SRS(beta_k)` where
+  SRS baseline uses HC1 sandwich ignoring design structure
+- **Effective n**: `n_eff_k = n / DEFF_k`
+- **Display**: Existing weight-based DEFF labeled "Kish DEFF (weights)";
+  per-coefficient DEFF available via `compute_deff_diagnostics()` or
+  `LinearRegression.compute_deff()` post-fit
+- **Note:** Opt-in computation — not run automatically. Users call standalone
+  function or post-fit method when diagnostics are needed.
+
+### Subpopulation Analysis (Phase 6)
+
+Domain estimation preserving full design structure.
+
+- **Reference**: Lumley (2004) Section 3.4. Stata `svy: subpop`.
+- **Method**: `SurveyDesign.subpopulation(data, mask)` zeros out weights for
+  excluded observations while retaining strata/PSU layout for correct
+  variance estimation
+- **Note:** Unlike naive subsetting, subpopulation analysis preserves design
+  information (PSU structure, strata counts) that would be lost by dropping
+  observations. This is the methodologically correct approach for domain
+  estimation under complex survey designs.
+- **Note:** Weight validation relaxed from "strictly positive" to
+  "non-negative" to support zero-weight observations. Negative weights
+  still rejected. All-zero weight vectors rejected at solver level.
+- **Note:** Survey design df (`n_PSU - n_strata`) uses total design
+  structure (including zero-weight rows), matching R's `survey::degf()`
+  convention after `subset()`. The generic HC1/classical inference paths
+  use positive-weight count for df adjustments, ensuring zero-weight
+  padding is inference-invariant outside the survey vcov path. DEFF
+  effective-n also uses positive-weight count.
+- **Note:** For replicate-weight designs, `subpopulation()` zeros out both
+  full-sample and replicate weight columns for excluded observations,
+  preserving all replicate metadata.
+- **Note:** Defensive enhancement: ContinuousDiD and TripleDifference
+  validate the positive-weight effective sample size before WLS cell fits.
+  After `subpopulation()` zeroes weights, raw row counts may exceed the
+  regression rank requirement while the weighted effective sample does not.
+  Underidentified cells are skipped (ContinuousDiD) or fall back to
+  weighted means (TripleDifference).
+
+---
+
+# Practitioner Guide
+
+The 8-step workflow in `docs/llms-practitioner.txt` is adapted from Baker et al. (2025)
+"Difference-in-Differences Designs: A Practitioner's Guide" (arXiv:2503.13323), not a
+1:1 mapping of the paper's forward-engineering framework.
+
+- **Note:** The diff-diff canonical numbering is: 1-Define, 2-Assumptions, 3-Test PT,
+  4-Choose estimator, 5-Estimate, 6-Sensitivity, 7-Heterogeneity, 8-Robustness.
+  Paper's numbering: 1-Define, 2-Assumptions, 3-Estimation method, 4-Uncertainty,
+  5-Estimate, 6-Sensitivity, 7-Heterogeneity, 8-Keep learning.
+- **Note:** Parallel trends testing is a separate Step 3 (paper embeds it in Step 2),
+  to ensure AI agents execute it as a distinct action.
+- **Note:** Sources of uncertainty (paper's Step 4) is folded into Step 5 (Estimate)
+  with an explicit cluster-count check directive (>= 50 clusters for asymptotic SEs,
+  otherwise wild bootstrap). The 50-cluster threshold is a diff-diff convention.
+- **Note:** Step 8 is "Robustness & Reporting" (compare estimators, report with/without
+  covariates). Paper's Step 8 is "Keep learning." The mandatory with/without covariate
+  comparison is a diff-diff convention.
+
+---
+
 # Version History
 
+- **v1.3** (2026-03-26): Added Replicate Weight Variance, DEFF Diagnostics,
+  and Subpopulation Analysis sections (Phase 6 completion)
+- **v1.2** (2026-03-24): Added Survey-Aware Bootstrap section (Phase 6)
+- **v1.1** (2026-03-20): Added Survey Data Support section
 - **v1.0** (2025-01-19): Initial registry with 12 estimators

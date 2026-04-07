@@ -6,13 +6,21 @@ bootstrap inference. Extracted from imputation.py for module size management.
 """
 
 import warnings
-from typing import Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set, Tuple
 
 import numpy as np
 import pandas as pd
 
+from diff_diff.bootstrap_utils import (
+    compute_effect_bootstrap_stats as _compute_effect_bootstrap_stats,
+)
+from diff_diff.bootstrap_utils import (
+    generate_bootstrap_weights_batch as _generate_bootstrap_weights_batch,
+)
+from diff_diff.bootstrap_utils import (
+    generate_survey_multiplier_weights_batch as _generate_survey_multiplier_weights_batch,
+)
 from diff_diff.imputation_results import ImputationBootstrapResults
-from diff_diff.staggered_bootstrap import _generate_bootstrap_weights_batch
 
 __all__ = [
     "ImputationDiDBootstrapMixin",
@@ -55,46 +63,50 @@ def _compute_target_weights(
 class ImputationDiDBootstrapMixin:
     """Mixin providing bootstrap inference methods for ImputationDiD."""
 
-    def _compute_percentile_ci(
-        self,
-        boot_dist: np.ndarray,
-        alpha: float,
-    ) -> Tuple[float, float]:
-        """Compute percentile confidence interval from bootstrap distribution."""
-        lower = float(np.percentile(boot_dist, alpha / 2 * 100))
-        upper = float(np.percentile(boot_dist, (1 - alpha / 2) * 100))
-        return (lower, upper)
+    # Type hints for attributes accessed from the main class
+    n_bootstrap: int
+    bootstrap_weights: str
+    alpha: float
+    seed: Optional[int]
+    anticipation: int
+    horizon_max: Optional[int]
 
-    def _compute_bootstrap_pvalue(
-        self,
-        original_effect: float,
-        boot_dist: np.ndarray,
-        n_valid: Optional[int] = None,
-    ) -> float:
-        """
-        Compute two-sided bootstrap p-value.
+    if TYPE_CHECKING:
 
-        Uses the percentile method: p-value is the proportion of bootstrap
-        estimates on the opposite side of zero from the original estimate,
-        doubled for two-sided test.
+        def _compute_cluster_psi_sums(
+            self,
+            df: pd.DataFrame,
+            outcome: str,
+            unit: str,
+            time: str,
+            first_treat: str,
+            covariates: Optional[List[str]],
+            omega_0_mask: pd.Series,
+            omega_1_mask: pd.Series,
+            unit_fe: Dict[Any, float],
+            time_fe: Dict[Any, float],
+            grand_mean: float,
+            delta_hat: Optional[np.ndarray],
+            weights: np.ndarray,
+            cluster_var: str,
+            kept_cov_mask: Optional[np.ndarray] = None,
+            survey_weights_0: Optional[np.ndarray] = None,
+        ) -> Tuple[np.ndarray, np.ndarray]: ...
 
-        Parameters
-        ----------
-        original_effect : float
-            Original point estimate.
-        boot_dist : np.ndarray
-            Bootstrap distribution of the effect.
-        n_valid : int, optional
-            Number of valid bootstrap samples. If None, uses self.n_bootstrap.
-        """
-        if original_effect >= 0:
-            p_one_sided = float(np.mean(boot_dist <= 0))
-        else:
-            p_one_sided = float(np.mean(boot_dist >= 0))
-        p_value = min(2 * p_one_sided, 1.0)
-        n_for_floor = n_valid if n_valid is not None else self.n_bootstrap
-        p_value = max(p_value, 1 / (n_for_floor + 1))
-        return p_value
+        @staticmethod
+        def _build_cohort_rel_times(
+            df: pd.DataFrame,
+            first_treat: str,
+        ) -> Dict[Any, Set[int]]: ...
+
+        @staticmethod
+        def _compute_balanced_cohort_mask(
+            df_treated: pd.DataFrame,
+            first_treat: str,
+            all_horizons: List[int],
+            balance_e: int,
+            cohort_rel_times: Dict[Any, Set[int]],
+        ) -> np.ndarray: ...
 
     def _precompute_bootstrap_psi(
         self,
@@ -118,6 +130,8 @@ class ImputationDiDBootstrapMixin:
         treatment_groups: List[Any],
         tau_hat: np.ndarray,
         balance_e: Optional[int],
+        survey_weights_0: Optional[np.ndarray] = None,
+        survey_weights_1: Optional[np.ndarray] = None,
     ) -> Dict[str, Any]:
         """
         Pre-compute cluster-level influence function sums for each bootstrap target.
@@ -147,6 +161,7 @@ class ImputationDiDBootstrapMixin:
             delta_hat=delta_hat,
             cluster_var=cluster_var,
             kept_cov_mask=kept_cov_mask,
+            survey_weights_0=survey_weights_0,
         )
 
         # Overall ATT
@@ -181,9 +196,28 @@ class ImputationDiDBootstrapMixin:
                 h_mask = rel_times == h
                 if balanced_mask is not None:
                     h_mask = h_mask & balanced_mask
-                weights_h, n_valid_h = _compute_target_weights(tau_hat, h_mask)
-                if n_valid_h == 0:
-                    continue
+
+                # When survey weights are provided, build weights proportional
+                # to treated-observation survey weights (matching the analytical
+                # path in _aggregate_event_study).  Otherwise use equal weights.
+                if survey_weights_1 is not None:
+                    finite_target = np.isfinite(tau_hat) & h_mask
+                    n_valid_h = int(finite_target.sum())
+                    if n_valid_h == 0:
+                        continue
+                    treated_sw = survey_weights_1
+                    sw_h = treated_sw[h_mask]
+                    finite_in_h = np.isfinite(tau_hat[h_mask])
+                    sw_finite = sw_h[finite_in_h]
+                    weights_h = np.zeros(len(tau_hat))
+                    if sw_finite.sum() > 0:
+                        h_indices = np.where(h_mask)[0]
+                        finite_indices = h_indices[finite_in_h]
+                        weights_h[finite_indices] = sw_finite / sw_finite.sum()
+                else:
+                    weights_h, n_valid_h = _compute_target_weights(tau_hat, h_mask)
+                    if n_valid_h == 0:
+                        continue
 
                 psi_h, _ = self._compute_cluster_psi_sums(**common, weights=weights_h)
                 result["event_study"][h] = psi_h
@@ -200,9 +234,28 @@ class ImputationDiDBootstrapMixin:
                 if not np.isfinite(group_effects[g].get("effect", np.nan)):
                     continue
                 g_mask = cohorts == g
-                weights_g, n_valid_g = _compute_target_weights(tau_hat, g_mask)
-                if n_valid_g == 0:
-                    continue
+
+                # When survey weights are provided, build weights proportional
+                # to treated-observation survey weights (matching the analytical
+                # path in _aggregate_group).  Otherwise use equal weights.
+                if survey_weights_1 is not None:
+                    finite_target = np.isfinite(tau_hat) & g_mask
+                    n_valid_g = int(finite_target.sum())
+                    if n_valid_g == 0:
+                        continue
+                    treated_sw = survey_weights_1
+                    sw_g = treated_sw[g_mask]
+                    finite_in_g = np.isfinite(tau_hat[g_mask])
+                    sw_finite = sw_g[finite_in_g]
+                    weights_g = np.zeros(len(tau_hat))
+                    if sw_finite.sum() > 0:
+                        g_indices = np.where(g_mask)[0]
+                        finite_indices = g_indices[finite_in_g]
+                        weights_g[finite_indices] = sw_finite / sw_finite.sum()
+                else:
+                    weights_g, n_valid_g = _compute_target_weights(tau_hat, g_mask)
+                    if n_valid_g == 0:
+                        continue
 
                 psi_g, _ = self._compute_cluster_psi_sums(**common, weights=weights_g)
                 result["group"][g] = psi_g
@@ -215,6 +268,7 @@ class ImputationDiDBootstrapMixin:
         original_event_study: Optional[Dict[int, Dict[str, Any]]],
         original_group: Optional[Dict[Any, Dict[str, Any]]],
         psi_data: Dict[str, Any],
+        resolved_survey: Optional[Any] = None,
     ) -> ImputationBootstrapResults:
         """
         Run multiplier bootstrap on pre-computed influence function sums.
@@ -223,6 +277,11 @@ class ImputationDiDBootstrapMixin:
         (rademacher/mammen/webb; configurable via ``bootstrap_weights``)
         and psi_i are cluster-level influence function sums from Theorem 3.
         SE = std(T_b, ddof=1).
+
+        When ``resolved_survey`` carries PSU/strata/FPC structure, weights are
+        generated via ``generate_survey_multiplier_weights_batch`` so the
+        bootstrap variance respects the survey design (stratification and FPC
+        scaling).
         """
         if self.n_bootstrap < 50:
             warnings.warn(
@@ -237,10 +296,29 @@ class ImputationDiDBootstrapMixin:
         overall_psi, cluster_ids = psi_data["overall"]
         n_clusters = len(cluster_ids)
 
-        # Generate ALL weights upfront: shape (n_bootstrap, n_clusters)
-        all_weights = _generate_bootstrap_weights_batch(
-            self.n_bootstrap, n_clusters, self.bootstrap_weights, rng
+        # Determine whether to use survey-aware bootstrap weights
+        _use_survey_bootstrap = resolved_survey is not None and (
+            resolved_survey.strata is not None
+            or resolved_survey.psu is not None
+            or resolved_survey.fpc is not None
         )
+
+        # Generate ALL weights upfront: shape (n_bootstrap, n_clusters)
+        if _use_survey_bootstrap:
+            psu_weights, psu_ids = _generate_survey_multiplier_weights_batch(
+                self.n_bootstrap, resolved_survey, self.bootstrap_weights, rng
+            )
+            # Reindex PSU weights to match cluster_ids ordering.
+            # cluster_ids are unique PSU values from _compute_cluster_psi_sums;
+            # psu_ids are unique PSU values from the survey weight generator.
+            # Build a map from psu_id -> column index in psu_weights.
+            psu_id_to_col = {int(p): c for c, p in enumerate(psu_ids)}
+            cluster_to_psu_col = np.array([psu_id_to_col[int(cid)] for cid in cluster_ids])
+            all_weights = psu_weights[:, cluster_to_psu_col]
+        else:
+            all_weights = _generate_bootstrap_weights_batch(
+                self.n_bootstrap, n_clusters, self.bootstrap_weights, rng
+            )
 
         # Overall ATT bootstrap draws
         boot_overall = np.dot(all_weights, overall_psi)  # (n_bootstrap,)
@@ -266,16 +344,11 @@ class ImputationDiDBootstrapMixin:
         # We do the same here so percentile CIs and empirical p-values work correctly.
         boot_overall_shifted = boot_overall + original_att
 
-        overall_se = float(np.std(boot_overall, ddof=1))
-        overall_ci = (
-            self._compute_percentile_ci(boot_overall_shifted, self.alpha)
-            if overall_se > 0
-            else (np.nan, np.nan)
-        )
-        overall_p = (
-            self._compute_bootstrap_pvalue(original_att, boot_overall_shifted)
-            if overall_se > 0
-            else np.nan
+        overall_se, overall_ci, overall_p = _compute_effect_bootstrap_stats(
+            original_att,
+            boot_overall_shifted,
+            alpha=self.alpha,
+            context="ImputationDiD overall ATT",
         )
 
         event_study_ses = None
@@ -286,16 +359,17 @@ class ImputationDiDBootstrapMixin:
             event_study_cis = {}
             event_study_p_values = {}
             for h in boot_event_study:
-                se_h = float(np.std(boot_event_study[h], ddof=1))
-                event_study_ses[h] = se_h
                 orig_eff = original_event_study[h]["effect"]
-                if se_h > 0 and np.isfinite(orig_eff):
-                    shifted_h = boot_event_study[h] + orig_eff
-                    event_study_p_values[h] = self._compute_bootstrap_pvalue(orig_eff, shifted_h)
-                    event_study_cis[h] = self._compute_percentile_ci(shifted_h, self.alpha)
-                else:
-                    event_study_p_values[h] = np.nan
-                    event_study_cis[h] = (np.nan, np.nan)
+                shifted_h = boot_event_study[h] + orig_eff
+                se_h, ci_h, p_h = _compute_effect_bootstrap_stats(
+                    orig_eff,
+                    shifted_h,
+                    alpha=self.alpha,
+                    context=f"ImputationDiD event study (h={h})",
+                )
+                event_study_ses[h] = se_h
+                event_study_cis[h] = ci_h
+                event_study_p_values[h] = p_h
 
         group_ses = None
         group_cis = None
@@ -305,16 +379,17 @@ class ImputationDiDBootstrapMixin:
             group_cis = {}
             group_p_values = {}
             for g in boot_group:
-                se_g = float(np.std(boot_group[g], ddof=1))
-                group_ses[g] = se_g
                 orig_eff = original_group[g]["effect"]
-                if se_g > 0 and np.isfinite(orig_eff):
-                    shifted_g = boot_group[g] + orig_eff
-                    group_p_values[g] = self._compute_bootstrap_pvalue(orig_eff, shifted_g)
-                    group_cis[g] = self._compute_percentile_ci(shifted_g, self.alpha)
-                else:
-                    group_p_values[g] = np.nan
-                    group_cis[g] = (np.nan, np.nan)
+                shifted_g = boot_group[g] + orig_eff
+                se_g, ci_g, p_g = _compute_effect_bootstrap_stats(
+                    orig_eff,
+                    shifted_g,
+                    alpha=self.alpha,
+                    context=f"ImputationDiD group effect (g={g})",
+                )
+                group_ses[g] = se_g
+                group_cis[g] = ci_g
+                group_p_values[g] = p_g
 
         return ImputationBootstrapResults(
             n_bootstrap=self.n_bootstrap,

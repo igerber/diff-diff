@@ -1,0 +1,27 @@
+cff-version: 1.2.0
+title: "diff-diff: Difference-in-Differences Causal Inference for Python"
+message: "If you use this software, please cite it as below."
+type: software
+authors:
+  - name: "diff-diff contributors"
+license: MIT
+version: "2.7.1"
+date-released: "2026-03-18"
+url: "https://github.com/igerber/diff-diff"
+repository-code: "https://github.com/igerber/diff-diff"
+keywords:
+  - difference-in-differences
+  - causal-inference
+  - econometrics
+  - python
+  - treatment-effects
+  - event-study
+  - staggered-adoption
+  - parallel-trends
+  - synthetic-control
+  - panel-data
+abstract: >-
+  A Python library for Difference-in-Differences (DiD) causal inference analysis.
+  Provides sklearn-like estimators for modern DiD methods including
+  Callaway-Sant'Anna, Synthetic DiD, Honest DiD, event studies, and parallel
+  trends testing. Validated against R packages (did, synthdid, fixest).

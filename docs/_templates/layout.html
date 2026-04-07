@@ -1,0 +1,21 @@
+{% extends "pydata_sphinx_theme/layout.html" %}
+{% block extrahead %}
+{{ super() }}
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  "name": "diff-diff",
+  "description": "Python library for Difference-in-Differences causal inference analysis with sklearn-like API",
+  "applicationCategory": "Scientific Software",
+  "operatingSystem": "Cross-platform",
+  "programmingLanguage": "Python",
+  "url": "https://diff-diff.readthedocs.io",
+  "downloadUrl": "https://pypi.org/project/diff-diff/",
+  "softwareVersion": "{{ release }}",
+  "license": "https://opensource.org/licenses/MIT",
+  "offers": {"@type": "Offer", "price": "0", "priceCurrency": "USD"},
+  "author": {"@type": "Organization", "name": "diff-diff contributors"}
+}
+</script>
+{% endblock %}

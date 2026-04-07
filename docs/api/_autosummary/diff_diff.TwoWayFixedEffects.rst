@@ -14,6 +14,7 @@
    .. autosummary::
    
       ~TwoWayFixedEffects.__init__
+      ~TwoWayFixedEffects.decompose
       ~TwoWayFixedEffects.fit
       ~TwoWayFixedEffects.get_params
       ~TwoWayFixedEffects.predict

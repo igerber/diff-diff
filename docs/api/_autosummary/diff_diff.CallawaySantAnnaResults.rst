@@ -27,11 +27,15 @@
    .. autosummary::
    
       ~CallawaySantAnnaResults.alpha
+      ~CallawaySantAnnaResults.base_period
+      ~CallawaySantAnnaResults.bootstrap_results
+      ~CallawaySantAnnaResults.cband_crit_value
       ~CallawaySantAnnaResults.control_group
       ~CallawaySantAnnaResults.event_study_effects
       ~CallawaySantAnnaResults.group_effects
       ~CallawaySantAnnaResults.influence_functions
       ~CallawaySantAnnaResults.is_significant
+      ~CallawaySantAnnaResults.pscore_trim
       ~CallawaySantAnnaResults.significance_stars
       ~CallawaySantAnnaResults.group_time_effects
       ~CallawaySantAnnaResults.overall_att

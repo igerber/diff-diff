@@ -1,5 +1,9 @@
-Benchmarks: Validation Against R Packages
-=========================================
+.. meta::
+   :description: Validation benchmarks comparing diff-diff against R packages (did, synthdid, fixest). Coefficient accuracy, standard error comparison, and performance metrics.
+   :keywords: difference-in-differences benchmark, DiD validation R, python econometrics accuracy, did package comparison
+
+Benchmarks
+==========
 
 This document presents validation benchmarks comparing diff-diff against
 established R packages for difference-in-differences analysis. As of v2.0.0,

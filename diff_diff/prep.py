@@ -25,6 +25,7 @@ from diff_diff.prep_dgp import (
     generate_ddd_data,
     generate_panel_data,
     generate_event_study_data,
+    generate_staggered_ddd_data,
 )
 
 # Constants for rank_control_units
@@ -38,7 +39,7 @@ def make_treatment_indicator(
     treated_values: Optional[Union[Any, List[Any]]] = None,
     threshold: Optional[float] = None,
     above_threshold: bool = True,
-    new_column: str = "treated"
+    new_column: str = "treated",
 ) -> pd.DataFrame:
     """
     Create a binary treatment indicator column from various input types.
@@ -119,7 +120,7 @@ def make_post_indicator(
     time_column: str,
     post_periods: Optional[Union[Any, List[Any]]] = None,
     treatment_start: Optional[Any] = None,
-    new_column: str = "post"
+    new_column: str = "post",
 ) -> pd.DataFrame:
     """
     Create a binary post-treatment indicator column.
@@ -196,7 +197,7 @@ def wide_to_long(
     id_column: str,
     time_name: str = "period",
     value_name: str = "value",
-    time_values: Optional[List[Any]] = None
+    time_values: Optional[List[Any]] = None,
 ) -> pd.DataFrame:
     """
     Convert wide-format panel data to long format for DiD analysis.
@@ -274,14 +275,14 @@ def wide_to_long(
         data,
         id_vars=[id_column] + other_cols,
         value_vars=value_columns,
-        var_name='_temp_var',
-        value_name=value_name
+        var_name="_temp_var",
+        value_name=value_name,
     )
 
     # Map column names to time values
     col_to_time = dict(zip(value_columns, time_values))
-    long_df[time_name] = long_df['_temp_var'].map(col_to_time)
-    long_df = long_df.drop('_temp_var', axis=1)
+    long_df[time_name] = long_df["_temp_var"].map(col_to_time)
+    long_df = long_df.drop("_temp_var", axis=1)
 
     # Reorder columns and sort
     cols = [id_column, time_name, value_name] + other_cols
@@ -293,7 +294,7 @@ def balance_panel(
     unit_column: str,
     time_column: str,
     method: str = "inner",
-    fill_value: Optional[float] = None
+    fill_value: Optional[float] = None,
 ) -> pd.DataFrame:
     """
     Balance a panel dataset to ensure all units have all time periods.
@@ -360,8 +361,7 @@ def balance_panel(
     elif method in ["outer", "fill"]:
         # Create full grid of unit-period combinations
         full_index = pd.MultiIndex.from_product(
-            [all_units, all_periods],
-            names=[unit_column, time_column]
+            [all_units, all_periods], names=[unit_column, time_column]
         )
         full_df = pd.DataFrame(index=full_index).reset_index()
 
@@ -396,7 +396,7 @@ def validate_did_data(
     treatment: str,
     time: str,
     unit: Optional[str] = None,
-    raise_on_error: bool = True
+    raise_on_error: bool = True,
 ) -> Dict[str, Any]:
     """
     Validate that data is properly formatted for DiD analysis.
@@ -459,8 +459,7 @@ def validate_did_data(
     # Check outcome is numeric
     if not pd.api.types.is_numeric_dtype(data[outcome]):
         errors.append(
-            f"Outcome column '{outcome}' must be numeric. "
-            f"Got type: {data[outcome].dtype}"
+            f"Outcome column '{outcome}' must be numeric. " f"Got type: {data[outcome].dtype}"
         )
 
     # Check treatment is binary
@@ -553,20 +552,11 @@ def validate_did_data(
     if raise_on_error and not valid:
         raise ValueError("Data validation failed:\n" + "\n".join(errors))
 
-    return {
-        "valid": valid,
-        "errors": errors,
-        "warnings": warnings,
-        "summary": summary
-    }
+    return {"valid": valid, "errors": errors, "warnings": warnings, "summary": summary}
 
 
 def summarize_did_data(
-    data: pd.DataFrame,
-    outcome: str,
-    treatment: str,
-    time: str,
-    unit: Optional[str] = None
+    data: pd.DataFrame, outcome: str, treatment: str, time: str, unit: Optional[str] = None
 ) -> pd.DataFrame:
     """
     Generate summary statistics by treatment group and time period.
@@ -600,13 +590,11 @@ def summarize_did_data(
     >>> print(summary)
     """
     # Group by treatment and time
-    summary = data.groupby([treatment, time])[outcome].agg([
-        ("n", "count"),
-        ("mean", "mean"),
-        ("std", "std"),
-        ("min", "min"),
-        ("max", "max")
-    ]).round(4)
+    summary = (
+        data.groupby([treatment, time])[outcome]
+        .agg([("n", "count"), ("mean", "mean"), ("std", "std"), ("min", "min"), ("max", "max")])
+        .round(4)
+    )
 
     # Calculate time values for labeling
     time_vals = sorted(data[time].unique())
@@ -616,8 +604,8 @@ def summarize_did_data(
         pre_val, post_val = time_vals[0], time_vals[1]
 
         def format_label(x: tuple) -> str:
-            treatment_label = 'Treated' if x[0] == 1 else 'Control'
-            time_label = 'Post' if x[1] == post_val else 'Pre'
+            treatment_label = "Treated" if x[0] == 1 else "Control"
+            time_label = "Post" if x[1] == post_val else "Pre"
             return f"{treatment_label} - {time_label}"
 
         summary.index = summary.index.map(format_label)
@@ -635,14 +623,8 @@ def summarize_did_data(
 
         # Add to summary as a new row
         did_row = pd.DataFrame(
-            {
-                "n": ["-"],
-                "mean": [did_estimate],
-                "std": ["-"],
-                "min": ["-"],
-                "max": ["-"]
-            },
-            index=["DiD Estimate"]
+            {"n": ["-"], "mean": [did_estimate], "std": ["-"], "min": ["-"], "max": ["-"]},
+            index=["DiD Estimate"],
         )
         summary = pd.concat([summary, did_row])
     else:
@@ -654,10 +636,7 @@ def summarize_did_data(
 
 
 def create_event_time(
-    data: pd.DataFrame,
-    time_column: str,
-    treatment_time_column: str,
-    new_column: str = "event_time"
+    data: pd.DataFrame, time_column: str, treatment_time_column: str, new_column: str = "event_time"
 ) -> pd.DataFrame:
     """
     Create an event-time column relative to treatment timing.
@@ -724,7 +703,7 @@ def aggregate_to_cohorts(
     time_column: str,
     treatment_column: str,
     outcome: str,
-    covariates: Optional[List[str]] = None
+    covariates: Optional[List[str]] = None,
 ) -> pd.DataFrame:
     """
     Aggregate unit-level data to treatment cohort means.
@@ -772,10 +751,7 @@ def aggregate_to_cohorts(
     cohort_data = data.groupby([treatment_column, time_column]).agg(agg_cols).reset_index()
 
     # Rename columns
-    cohort_data = cohort_data.rename(columns={
-        unit_column: "n_units",
-        outcome: f"mean_{outcome}"
-    })
+    cohort_data = cohort_data.rename(columns={unit_column: "n_units", outcome: f"mean_{outcome}"})
 
     return cohort_data
 
@@ -960,8 +936,7 @@ def rank_control_units(
     # -------------------------------------------------------------------------
     if suggest_treatment_candidates and len(treated_set) == 0:
         return _suggest_treatment_candidates(
-            data, unit_column, time_column, outcome_column,
-            pre_periods, n_treatment_candidates
+            data, unit_column, time_column, outcome_column, pre_periods, n_treatment_candidates
         )
 
     if len(treated_set) == 0:
@@ -1005,9 +980,7 @@ def rank_control_units(
     # Compute outcome trend scores
     # -------------------------------------------------------------------------
     # Synthetic weights (higher = better match)
-    synthetic_weights = compute_synthetic_weights(
-        Y_control, Y_treated_mean, lambda_reg=lambda_reg
-    )
+    synthetic_weights = compute_synthetic_weights(Y_control, Y_treated_mean, lambda_reg=lambda_reg)
 
     # RMSE for each control vs treated mean (use nanmean to handle missing data)
     rmse_scores = []
@@ -1095,31 +1068,33 @@ def rank_control_units(
     # -------------------------------------------------------------------------
     require_set = set(require_units) if require_units else set()
 
-    result = pd.DataFrame({
-        'unit': control_candidates,
-        'quality_score': quality_scores,
-        'outcome_trend_score': outcome_trend_scores,
-        'covariate_score': covariate_scores,
-        'synthetic_weight': synthetic_weights,
-        'pre_trend_rmse': rmse_scores,
-        'is_required': [u in require_set for u in control_candidates]
-    })
+    result = pd.DataFrame(
+        {
+            "unit": control_candidates,
+            "quality_score": quality_scores,
+            "outcome_trend_score": outcome_trend_scores,
+            "covariate_score": covariate_scores,
+            "synthetic_weight": synthetic_weights,
+            "pre_trend_rmse": rmse_scores,
+            "is_required": [u in require_set for u in control_candidates],
+        }
+    )
 
     # Sort by quality score (descending)
-    result = result.sort_values('quality_score', ascending=False)
+    result = result.sort_values("quality_score", ascending=False)
 
     # Apply n_top limit if specified
     if n_top is not None and n_top < len(result):
         # Always include required units
-        required_df = result[result['is_required']]
-        non_required_df = result[~result['is_required']]
+        required_df = result[result["is_required"]]
+        non_required_df = result[~result["is_required"]]
 
         # Take top from non-required to fill remaining slots
         remaining_slots = max(0, n_top - len(required_df))
         top_non_required = non_required_df.head(remaining_slots)
 
         result = pd.concat([required_df, top_non_required])
-        result = result.sort_values('quality_score', ascending=False)
+        result = result.sort_values("quality_score", ascending=False)
 
     return result.reset_index(drop=True)
 
@@ -1130,7 +1105,7 @@ def _suggest_treatment_candidates(
     time_column: str,
     outcome_column: str,
     pre_periods: List[Any],
-    n_candidates: int
+    n_candidates: int,
 ) -> pd.DataFrame:
     """
     Identify units that would make good treatment candidates.
@@ -1188,55 +1163,64 @@ def _suggest_treatment_candidates(
 
         # Count similar potential controls
         other_units = [u for u in all_units if u != unit]
-        other_means = pre_data[
-            pre_data[unit_column].isin(other_units)
-        ].groupby(unit_column)[outcome_column].mean()
+        other_means = (
+            pre_data[pre_data[unit_column].isin(other_units)]
+            .groupby(unit_column)[outcome_column]
+            .mean()
+        )
 
         if len(other_means) > 0:
             sd = other_means.std()
             if sd > 0:
-                n_similar = int(np.sum(
-                    np.abs(other_means - avg_outcome) < _SIMILARITY_THRESHOLD_SD * sd
-                ))
+                n_similar = int(
+                    np.sum(np.abs(other_means - avg_outcome) < _SIMILARITY_THRESHOLD_SD * sd)
+                )
             else:
                 n_similar = len(other_means)
         else:
             n_similar = 0
 
-        candidate_info.append({
-            'unit': unit,
-            'avg_outcome_level': avg_outcome,
-            'outcome_trend': slope,
-            'n_similar_controls': n_similar
-        })
+        candidate_info.append(
+            {
+                "unit": unit,
+                "avg_outcome_level": avg_outcome,
+                "outcome_trend": slope,
+                "n_similar_controls": n_similar,
+            }
+        )
 
     if len(candidate_info) == 0:
-        return pd.DataFrame(columns=[
-            'unit', 'treatment_candidate_score', 'avg_outcome_level',
-            'outcome_trend', 'n_similar_controls'
-        ])
+        return pd.DataFrame(
+            columns=[
+                "unit",
+                "treatment_candidate_score",
+                "avg_outcome_level",
+                "outcome_trend",
+                "n_similar_controls",
+            ]
+        )
 
     result = pd.DataFrame(candidate_info)
 
     # Score: prefer units with many similar controls and moderate outcome levels
-    max_similar = result['n_similar_controls'].max()
+    max_similar = result["n_similar_controls"].max()
     if max_similar > 0:
-        similarity_score = result['n_similar_controls'] / max_similar
+        similarity_score = result["n_similar_controls"] / max_similar
     else:
         similarity_score = pd.Series([0.0] * len(result))
 
     # Penalty for outliers in outcome level
-    outcome_mean = result['avg_outcome_level'].mean()
-    outcome_std = result['avg_outcome_level'].std()
+    outcome_mean = result["avg_outcome_level"].mean()
+    outcome_std = result["avg_outcome_level"].std()
     if outcome_std > 0:
-        outcome_z = np.abs((result['avg_outcome_level'] - outcome_mean) / outcome_std)
+        outcome_z = np.abs((result["avg_outcome_level"] - outcome_mean) / outcome_std)
     else:
         outcome_z = pd.Series([0.0] * len(result))
 
-    result['treatment_candidate_score'] = (
+    result["treatment_candidate_score"] = (
         similarity_score - _OUTLIER_PENALTY_WEIGHT * outcome_z
     ).clip(0, 1)
 
     # Return top candidates
-    result = result.nlargest(n_candidates, 'treatment_candidate_score')
+    result = result.nlargest(n_candidates, "treatment_candidate_score")
     return result.reset_index(drop=True)

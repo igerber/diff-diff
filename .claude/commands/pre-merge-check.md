@@ -29,6 +29,8 @@ Categorize files into:
 
 #### 2.1 Inference & Parameter Pattern Checks (for methodology files)
 
+> **Canonical definitions** — This section is referenced by `/submit-pr` and `/push-pr-update`. Keep it as the single source of truth for methodology pattern checks.
+
 If any methodology files changed, run these pattern checks on the **changed methodology files only**:
 
 **Check A — Inline inference computation**:
@@ -120,6 +122,22 @@ undocumented deviations are flagged as P1 by the AI reviewer and cannot be mitig
 by TODO.md."
 
 This is a WARNING, not a blocker — not every methodology change involves a deviation.
+
+#### 2.6 Secret Scanning Patterns (Canonical Definitions)
+
+> These patterns are referenced by `/submit-pr` and `/push-pr-update`.
+
+**Content pattern** (use with `-G` flag, `--name-only` to avoid leaking secrets):
+```bash
+-G "(AKIA[A-Z0-9]{16}|ghp_[a-zA-Z0-9]{36}|sk-[a-zA-Z0-9]{48}|gho_[a-zA-Z0-9]{36}|[Aa][Pp][Ii][_-]?[Kk][Ee][Yy][[:space:]]*[=:]|[Ss][Ee][Cc][Rr][Ee][Tt][_-]?[Kk][Ee][Yy][[:space:]]*[=:]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd][[:space:]]*[=:]|[Pp][Rr][Ii][Vv][Aa][Tt][Ee][_-]?[Kk][Ee][Yy]|[Bb][Ee][Aa][Rr][Ee][Rr][[:space:]]+[a-zA-Z0-9_-]+|[Tt][Oo][Kk][Ee][Nn][[:space:]]*[=:])"
+```
+
+**Sensitive filename pattern**:
+```bash
+grep -iE "(\.env|credentials|secret|\.pem|\.key|\.p12|\.pfx|id_rsa|id_ed25519)$"
+```
+
+**Usage**: Apply content pattern to `--cached` for staged changes, or `<ref>..HEAD` for already-committed changes. Always use `--name-only` and `|| true`.
 
 ### 3. Display Context-Specific Checklist
 

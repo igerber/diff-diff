@@ -33,6 +33,509 @@ from scipy import stats
 MAX_SAMPLE_SIZE = 2**31 - 1
 
 
+# ---------------------------------------------------------------------------
+# Estimator registry — maps estimator class names to DGP/fit/extract profiles
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class _EstimatorProfile:
+    """Internal profile describing how to run power simulations for an estimator."""
+
+    default_dgp: Callable
+    dgp_kwargs_builder: Callable
+    fit_kwargs_builder: Callable
+    result_extractor: Callable
+    min_n: int = 20
+
+
+# -- DGP kwargs adapters -----------------------------------------------------
+
+
+def _basic_dgp_kwargs(
+    n_units: int,
+    n_periods: int,
+    treatment_effect: float,
+    treatment_fraction: float,
+    treatment_period: int,
+    sigma: float,
+) -> Dict[str, Any]:
+    return dict(
+        n_units=n_units,
+        n_periods=n_periods,
+        treatment_effect=treatment_effect,
+        treatment_fraction=treatment_fraction,
+        treatment_period=treatment_period,
+        noise_sd=sigma,
+    )
+
+
+def _staggered_dgp_kwargs(
+    n_units: int,
+    n_periods: int,
+    treatment_effect: float,
+    treatment_fraction: float,
+    treatment_period: int,
+    sigma: float,
+) -> Dict[str, Any]:
+    return dict(
+        n_units=n_units,
+        n_periods=n_periods,
+        treatment_effect=treatment_effect,
+        never_treated_frac=1 - treatment_fraction,
+        cohort_periods=[treatment_period],
+        dynamic_effects=False,
+        noise_sd=sigma,
+    )
+
+
+def _factor_dgp_kwargs(
+    n_units: int,
+    n_periods: int,
+    treatment_effect: float,
+    treatment_fraction: float,
+    treatment_period: int,
+    sigma: float,
+) -> Dict[str, Any]:
+    n_pre = treatment_period
+    n_post = n_periods - treatment_period
+    return dict(
+        n_units=n_units,
+        n_pre=n_pre,
+        n_post=n_post,
+        n_treated=max(1, int(n_units * treatment_fraction)),
+        treatment_effect=treatment_effect,
+        noise_sd=sigma,
+    )
+
+
+def _ddd_dgp_kwargs(
+    n_units: int,
+    n_periods: int,
+    treatment_effect: float,
+    treatment_fraction: float,
+    treatment_period: int,
+    sigma: float,
+) -> Dict[str, Any]:
+    return dict(
+        n_per_cell=max(2, n_units // 8),
+        treatment_effect=treatment_effect,
+        noise_sd=sigma,
+    )
+
+
+# -- Fit kwargs builders ------------------------------------------------------
+
+
+def _basic_fit_kwargs(
+    data: pd.DataFrame,
+    n_units: int,
+    n_periods: int,
+    treatment_period: int,
+) -> Dict[str, Any]:
+    return dict(outcome="outcome", treatment="treated", time="post")
+
+
+def _twfe_fit_kwargs(
+    data: pd.DataFrame,
+    n_units: int,
+    n_periods: int,
+    treatment_period: int,
+) -> Dict[str, Any]:
+    return dict(outcome="outcome", treatment="treated", time="post", unit="unit")
+
+
+def _multiperiod_fit_kwargs(
+    data: pd.DataFrame,
+    n_units: int,
+    n_periods: int,
+    treatment_period: int,
+) -> Dict[str, Any]:
+    return dict(
+        outcome="outcome",
+        treatment="treated",
+        time="period",
+        post_periods=list(range(treatment_period, n_periods)),
+    )
+
+
+def _staggered_fit_kwargs(
+    data: pd.DataFrame,
+    n_units: int,
+    n_periods: int,
+    treatment_period: int,
+) -> Dict[str, Any]:
+    return dict(outcome="outcome", unit="unit", time="period", first_treat="first_treat")
+
+
+def _ddd_fit_kwargs(
+    data: pd.DataFrame,
+    n_units: int,
+    n_periods: int,
+    treatment_period: int,
+) -> Dict[str, Any]:
+    return dict(outcome="outcome", group="group", partition="partition", time="time")
+
+
+def _trop_fit_kwargs(
+    data: pd.DataFrame,
+    n_units: int,
+    n_periods: int,
+    treatment_period: int,
+) -> Dict[str, Any]:
+    return dict(outcome="outcome", treatment="treated", unit="unit", time="period")
+
+
+def _sdid_fit_kwargs(
+    data: pd.DataFrame,
+    n_units: int,
+    n_periods: int,
+    treatment_period: int,
+) -> Dict[str, Any]:
+    periods = sorted(data["period"].unique())
+    post_periods = [p for p in periods if p >= treatment_period]
+    return dict(
+        outcome="outcome",
+        treatment="treat",
+        unit="unit",
+        time="period",
+        post_periods=post_periods,
+    )
+
+
+# -- Result extractors --------------------------------------------------------
+
+
+def _extract_simple(result: Any) -> Tuple[float, float, float, Tuple[float, float]]:
+    return (result.att, result.se, result.p_value, result.conf_int)
+
+
+def _extract_multiperiod(
+    result: Any,
+) -> Tuple[float, float, float, Tuple[float, float]]:
+    return (result.avg_att, result.avg_se, result.avg_p_value, result.avg_conf_int)
+
+
+def _extract_staggered(
+    result: Any,
+) -> Tuple[float, float, float, Tuple[float, float]]:
+    _nan = float("nan")
+    _nan_ci = (_nan, _nan)
+
+    def _first(r: Any, *attrs: str, default: Any = _nan) -> Any:
+        for a in attrs:
+            v = getattr(r, a, None)
+            if v is not None:
+                return v
+        return default
+
+    return (
+        result.overall_att,
+        _first(result, "overall_se", "overall_att_se"),
+        _first(result, "overall_p_value", "overall_att_p_value"),
+        _first(result, "overall_conf_int", "overall_att_ci", default=_nan_ci),
+    )
+
+
+# Keys derived from simulate_power() public params — overriding these
+# via data_generator_kwargs would desync the DGP from the result object.
+_PROTECTED_DGP_KEYS = frozenset(
+    {
+        "treatment_effect",  # → true_effect in results / MDE search variable
+        "noise_sd",  # → sigma param
+        "n_units",  # → sample-size search variable
+        "n_periods",  # → n_periods param
+        "treatment_fraction",  # → treatment_fraction param
+        "treatment_period",  # → treatment_period param
+        "n_pre",  # → derived from treatment_period in factor-model DGPs
+        "n_post",  # → derived from n_periods - treatment_period in factor-model DGPs
+    }
+)
+
+
+# -- Staggered DGP compatibility check ----------------------------------------
+
+_STAGGERED_ESTIMATORS = frozenset(
+    {
+        "CallawaySantAnna",
+        "SunAbraham",
+        "ImputationDiD",
+        "TwoStageDiD",
+        "StackedDiD",
+        "EfficientDiD",
+    }
+)
+
+
+def _check_staggered_dgp_compat(
+    estimator: Any,
+    data_generator_kwargs: Optional[Dict[str, Any]],
+) -> None:
+    """Warn if a staggered estimator's settings don't match the default DGP."""
+    name = type(estimator).__name__
+    if name not in _STAGGERED_ESTIMATORS:
+        return
+
+    dgp_overrides = data_generator_kwargs or {}
+    cohort_periods = dgp_overrides.get("cohort_periods")
+    has_multi_cohort = cohort_periods is not None and len(set(cohort_periods)) >= 2
+    issues: List[str] = []
+
+    # Check control_group="not_yet_treated" (CS, SA)
+    cg = getattr(estimator, "control_group", "never_treated")
+    if cg == "not_yet_treated" and not has_multi_cohort:
+        issues.append(
+            f'  - {name} has control_group="not_yet_treated" but the default '
+            f"DGP generates a single treatment cohort with never-treated "
+            f"controls. Power may not reflect the intended not-yet-treated "
+            f"design.\n"
+            f"    Fix: pass data_generator_kwargs="
+            f'{{"cohort_periods": [2, 4], "never_treated_frac": 0.0}} '
+            f"(or a custom data_generator)."
+        )
+
+    # Check anticipation > 0 (all staggered)
+    antic = getattr(estimator, "anticipation", 0)
+    if antic > 0:
+        issues.append(
+            f"  - {name} has anticipation={antic} but the default DGP does "
+            f"not model anticipatory effects. The estimator will look for "
+            f"treatment effects {antic} period(s) before the DGP generates "
+            f"them, biasing power estimates.\n"
+            f"    Fix: supply a custom data_generator that shifts the "
+            f"effect onset."
+        )
+
+    # Check clean_control on StackedDiD
+    if name == "StackedDiD":
+        cc = getattr(estimator, "clean_control", "not_yet_treated")
+        if cc == "strict" and not has_multi_cohort:
+            issues.append(
+                '  - StackedDiD has clean_control="strict" but the default '
+                "single-cohort DGP makes strict controls equivalent to "
+                "never-treated controls.\n"
+                "    Fix: pass data_generator_kwargs="
+                '{"cohort_periods": [2, 4]} '
+                "to test true strict clean-control behavior."
+            )
+
+    if issues:
+        msg = (
+            f"Staggered power DGP mismatch for {name}. The default "
+            f"single-cohort DGP may not match the estimator "
+            f"configuration:\n" + "\n".join(issues)
+        )
+        warnings.warn(msg, UserWarning, stacklevel=2)
+
+
+def _ddd_effective_n(
+    n_units: int, data_generator_kwargs: Optional[Dict[str, Any]]
+) -> Optional[int]:
+    """Return effective DDD sample size, or None if no rounding occurred."""
+    overrides = data_generator_kwargs or {}
+    if "n_per_cell" in overrides:
+        eff = overrides["n_per_cell"] * 8
+    else:
+        eff = max(2, n_units // 8) * 8
+    return eff if eff != n_units else None
+
+
+def _check_ddd_dgp_compat(
+    n_units: int,
+    n_periods: int,
+    treatment_fraction: float,
+    treatment_period: int,
+    data_generator_kwargs: Optional[Dict[str, Any]],
+) -> None:
+    """Warn when simulation inputs don't match DDD's fixed 2×2×2 design."""
+    issues: List[str] = []
+
+    # DDD is a fixed 2-period factorial; n_periods and treatment_period are ignored
+    if n_periods != 2:
+        issues.append(
+            f"n_periods={n_periods} is ignored (DDD uses a fixed " f"2-period design: pre/post)"
+        )
+    if treatment_period != 1:
+        issues.append(
+            f"treatment_period={treatment_period} is ignored (DDD "
+            f"always treats in the second period)"
+        )
+
+    # DDD's 2×2×2 factorial has inherent 50% treatment fraction
+    if treatment_fraction != 0.5:
+        issues.append(
+            f"treatment_fraction={treatment_fraction} is ignored "
+            f"(DDD uses a balanced 2×2×2 factorial where 50% of "
+            f"groups are treated)"
+        )
+
+    # n_units rounding: n_per_cell = max(2, n_units // 8)
+    eff_n = _ddd_effective_n(n_units, data_generator_kwargs)
+    if eff_n is not None:
+        eff_n_per_cell = eff_n // 8
+        issues.append(
+            f"effective sample size is {eff_n} "
+            f"(n_per_cell={eff_n_per_cell} × 8 cells), "
+            f"not the requested n_units={n_units}"
+        )
+
+    if issues:
+        warnings.warn(
+            "TripleDifference uses a fixed 2×2×2 factorial DGP "
+            "(group × partition × time). "
+            + "; ".join(issues)
+            + ". Pass a custom data_generator for non-standard DDD designs.",
+            UserWarning,
+            stacklevel=2,
+        )
+
+
+def _check_sdid_placebo_data(
+    data: pd.DataFrame,
+    estimator: Any,
+    est_kwargs: Dict[str, Any],
+) -> None:
+    """Check SyntheticDiD placebo feasibility on realized data.
+
+    This catches infeasible designs on the custom-DGP path where the
+    pre-generation check (which uses ``n_units * treatment_fraction``)
+    cannot run because treatment allocation is determined by the DGP.
+    """
+    vm = getattr(estimator, "variance_method", "placebo")
+    if vm != "placebo":
+        return
+
+    treat_col = est_kwargs.get("treatment", "treat")
+    unit_col = est_kwargs.get("unit", "unit")
+
+    if treat_col not in data.columns or unit_col not in data.columns:
+        return  # fit will fail with a more specific error
+
+    unit_treat = data.groupby(unit_col)[treat_col].first()
+    n_treated = int(unit_treat.sum())
+    n_control = len(unit_treat) - n_treated
+
+    if n_control <= n_treated:
+        raise ValueError(
+            f"SyntheticDiD placebo variance requires more control than "
+            f"treated units, but the generated data has n_control={n_control}, "
+            f"n_treated={n_treated}. Either adjust your data_generator so that "
+            f"n_control > n_treated, or use "
+            f"SyntheticDiD(variance_method='bootstrap')."
+        )
+
+
+# -- Registry construction (deferred to avoid import-time cost) ---------------
+
+_ESTIMATOR_REGISTRY: Optional[Dict[str, _EstimatorProfile]] = None
+
+
+def _get_registry() -> Dict[str, _EstimatorProfile]:
+    """Lazily build and return the estimator registry."""
+    global _ESTIMATOR_REGISTRY  # noqa: PLW0603
+    if _ESTIMATOR_REGISTRY is not None:
+        return _ESTIMATOR_REGISTRY
+
+    from diff_diff.prep import (
+        generate_ddd_data,
+        generate_did_data,
+        generate_factor_data,
+        generate_staggered_data,
+    )
+
+    _ESTIMATOR_REGISTRY = {
+        # --- Basic DiD group ---
+        "DifferenceInDifferences": _EstimatorProfile(
+            default_dgp=generate_did_data,
+            dgp_kwargs_builder=_basic_dgp_kwargs,
+            fit_kwargs_builder=_basic_fit_kwargs,
+            result_extractor=_extract_simple,
+            min_n=20,
+        ),
+        "TwoWayFixedEffects": _EstimatorProfile(
+            default_dgp=generate_did_data,
+            dgp_kwargs_builder=_basic_dgp_kwargs,
+            fit_kwargs_builder=_twfe_fit_kwargs,
+            result_extractor=_extract_simple,
+            min_n=20,
+        ),
+        "MultiPeriodDiD": _EstimatorProfile(
+            default_dgp=generate_did_data,
+            dgp_kwargs_builder=_basic_dgp_kwargs,
+            fit_kwargs_builder=_multiperiod_fit_kwargs,
+            result_extractor=_extract_multiperiod,
+            min_n=20,
+        ),
+        # --- Staggered group ---
+        "CallawaySantAnna": _EstimatorProfile(
+            default_dgp=generate_staggered_data,
+            dgp_kwargs_builder=_staggered_dgp_kwargs,
+            fit_kwargs_builder=_staggered_fit_kwargs,
+            result_extractor=_extract_staggered,
+            min_n=40,
+        ),
+        "SunAbraham": _EstimatorProfile(
+            default_dgp=generate_staggered_data,
+            dgp_kwargs_builder=_staggered_dgp_kwargs,
+            fit_kwargs_builder=_staggered_fit_kwargs,
+            result_extractor=_extract_staggered,
+            min_n=40,
+        ),
+        "ImputationDiD": _EstimatorProfile(
+            default_dgp=generate_staggered_data,
+            dgp_kwargs_builder=_staggered_dgp_kwargs,
+            fit_kwargs_builder=_staggered_fit_kwargs,
+            result_extractor=_extract_staggered,
+            min_n=40,
+        ),
+        "TwoStageDiD": _EstimatorProfile(
+            default_dgp=generate_staggered_data,
+            dgp_kwargs_builder=_staggered_dgp_kwargs,
+            fit_kwargs_builder=_staggered_fit_kwargs,
+            result_extractor=_extract_staggered,
+            min_n=40,
+        ),
+        "StackedDiD": _EstimatorProfile(
+            default_dgp=generate_staggered_data,
+            dgp_kwargs_builder=_staggered_dgp_kwargs,
+            fit_kwargs_builder=_staggered_fit_kwargs,
+            result_extractor=_extract_staggered,
+            min_n=40,
+        ),
+        "EfficientDiD": _EstimatorProfile(
+            default_dgp=generate_staggered_data,
+            dgp_kwargs_builder=_staggered_dgp_kwargs,
+            fit_kwargs_builder=_staggered_fit_kwargs,
+            result_extractor=_extract_staggered,
+            min_n=40,
+        ),
+        # --- Factor model group ---
+        "TROP": _EstimatorProfile(
+            default_dgp=generate_factor_data,
+            dgp_kwargs_builder=_factor_dgp_kwargs,
+            fit_kwargs_builder=_trop_fit_kwargs,
+            result_extractor=_extract_simple,
+            min_n=30,
+        ),
+        "SyntheticDiD": _EstimatorProfile(
+            default_dgp=generate_factor_data,
+            dgp_kwargs_builder=_factor_dgp_kwargs,
+            fit_kwargs_builder=_sdid_fit_kwargs,
+            result_extractor=_extract_simple,
+            min_n=30,
+        ),
+        # --- Triple difference ---
+        "TripleDifference": _EstimatorProfile(
+            default_dgp=generate_ddd_data,
+            dgp_kwargs_builder=_ddd_dgp_kwargs,
+            fit_kwargs_builder=_ddd_fit_kwargs,
+            result_extractor=_extract_simple,
+            min_n=64,
+        ),
+    }
+    return _ESTIMATOR_REGISTRY
+
+
 @dataclass
 class PowerResults:
     """
@@ -209,6 +712,9 @@ class SimulationPowerResults:
         Significance level.
     estimator_name : str
         Name of the estimator used.
+    effective_n_units : int or None
+        Effective sample size when it differs from the requested ``n_units``
+        (e.g., due to DDD grid rounding). ``None`` when no rounding occurred.
     """
 
     power: float
@@ -228,6 +734,7 @@ class SimulationPowerResults:
     bias: float = field(init=False)
     rmse: float = field(init=False)
     simulation_results: Optional[List[Dict[str, Any]]] = field(default=None, repr=False)
+    effective_n_units: Optional[int] = None
 
     def __post_init__(self):
         """Compute derived statistics."""
@@ -277,8 +784,12 @@ class SimulationPowerResults:
             f"{'RMSE:':<35} {self.rmse:.4f}",
             f"{'Mean standard error:':<35} {self.mean_se:.4f}",
             f"{'Coverage (CI contains true):':<35} {self.coverage:.1%}",
-            "=" * 65,
         ]
+        if self.effective_n_units is not None:
+            lines.append(
+                f"{'Effective sample size:':<35} {self.effective_n_units}" f" (DDD grid-rounded)"
+            )
+        lines.append("=" * 65)
         return "\n".join(lines)
 
     def print_summary(self) -> None:
@@ -294,7 +805,7 @@ class SimulationPowerResults:
         Dict[str, Any]
             Dictionary containing simulation power results.
         """
-        return {
+        d: Dict[str, Any] = {
             "power": self.power,
             "power_se": self.power_se,
             "power_ci_lower": self.power_ci[0],
@@ -310,7 +821,9 @@ class SimulationPowerResults:
             "true_effect": self.true_effect,
             "alpha": self.alpha,
             "estimator_name": self.estimator_name,
+            "effective_n_units": self.effective_n_units,
         }
+        return d
 
     def to_dataframe(self) -> pd.DataFrame:
         """
@@ -332,10 +845,7 @@ class SimulationPowerResults:
         pd.DataFrame
             DataFrame with effect_size and power columns.
         """
-        return pd.DataFrame({
-            "effect_size": self.effect_sizes,
-            "power": self.powers
-        })
+        return pd.DataFrame({"effect_size": self.effect_sizes, "power": self.powers})
 
 
 class PowerAnalysis:
@@ -463,9 +973,7 @@ class PowerAnalysis:
             n_c_pre = n_control
             n_c_post = n_control
 
-            variance = sigma**2 * (
-                1 / n_t_post + 1 / n_t_pre + 1 / n_c_post + 1 / n_c_pre
-            )
+            variance = sigma**2 * (1 / n_t_post + 1 / n_t_pre + 1 / n_c_post + 1 / n_c_pre)
         elif design == "panel":
             # Panel DiD with multiple periods
             # Account for serial correlation via ICC
@@ -528,9 +1036,7 @@ class PowerAnalysis:
         T = n_pre + n_post
         design = "panel" if T > 2 else "basic_did"
 
-        variance = self._compute_variance(
-            n_treated, n_control, n_pre, n_post, sigma, rho, design
-        )
+        variance = self._compute_variance(n_treated, n_control, n_pre, n_post, sigma, rho, design)
         se = np.sqrt(variance)
 
         # Calculate power
@@ -538,7 +1044,8 @@ class PowerAnalysis:
             z_alpha = stats.norm.ppf(1 - self.alpha / 2)
             # Power = P(reject | effect) = P(|Z| > z_alpha | effect)
             power_val = (
-                1 - stats.norm.cdf(z_alpha - effect_size / se)
+                1
+                - stats.norm.cdf(z_alpha - effect_size / se)
                 + stats.norm.cdf(-z_alpha - effect_size / se)
             )
         elif self.alternative == "greater":
@@ -551,8 +1058,7 @@ class PowerAnalysis:
         # Also compute MDE and required N for reference
         mde = self._compute_mde_from_se(se)
         required_n = self._compute_required_n(
-            effect_size, sigma, n_pre, n_post, rho, design,
-            n_treated / (n_treated + n_control)
+            effect_size, sigma, n_pre, n_post, rho, design, n_treated / (n_treated + n_control)
         )
 
         return PowerResults(
@@ -620,9 +1126,7 @@ class PowerAnalysis:
         T = n_pre + n_post
         design = "panel" if T > 2 else "basic_did"
 
-        variance = self._compute_variance(
-            n_treated, n_control, n_pre, n_post, sigma, rho, design
-        )
+        variance = self._compute_variance(n_treated, n_control, n_pre, n_post, sigma, rho, design)
         se = np.sqrt(variance)
 
         mde = self._compute_mde_from_se(se)
@@ -674,7 +1178,9 @@ class PowerAnalysis:
             #     = 2 * sigma^2 / N * (1/(p*(1-p)))
 
             n_total = (
-                2 * sigma**2 * (z_alpha + z_beta)**2
+                2
+                * sigma**2
+                * (z_alpha + z_beta) ** 2
                 / (effect_size**2 * treat_frac * (1 - treat_frac))
             )
         else:  # panel
@@ -684,7 +1190,10 @@ class PowerAnalysis:
             # For balanced: Var = 2 * sigma^2 / N * design_effect / T
 
             n_total = (
-                2 * sigma**2 * (z_alpha + z_beta)**2 * design_effect
+                2
+                * sigma**2
+                * (z_alpha + z_beta) ** 2
+                * design_effect
                 / (effect_size**2 * treat_frac * (1 - treat_frac) * T)
             )
 
@@ -744,9 +1253,7 @@ class PowerAnalysis:
         n_total = n_treated + n_control
 
         # Compute actual power achieved
-        variance = self._compute_variance(
-            n_treated, n_control, n_pre, n_post, sigma, rho, design
-        )
+        variance = self._compute_variance(n_treated, n_control, n_pre, n_post, sigma, rho, design)
         se = np.sqrt(variance)
         mde = self._compute_mde_from_se(se)
 
@@ -865,9 +1372,7 @@ class PowerAnalysis:
             DataFrame with columns 'sample_size' and 'power'.
         """
         # Get required N to determine default range
-        required = self.sample_size(
-            effect_size, sigma, n_pre, n_post, rho, treat_frac
-        )
+        required = self.sample_size(effect_size, sigma, n_pre, n_post, rho, treat_frac)
 
         if sample_sizes is None:
             min_n = max(10, required.required_n // 4)
@@ -907,6 +1412,7 @@ def simulate_power(
     data_generator: Optional[Callable] = None,
     data_generator_kwargs: Optional[Dict[str, Any]] = None,
     estimator_kwargs: Optional[Dict[str, Any]] = None,
+    result_extractor: Optional[Callable] = None,
     progress: bool = True,
 ) -> SimulationPowerResults:
     """
@@ -914,7 +1420,8 @@ def simulate_power(
 
     This function simulates datasets with known treatment effects and estimates
     power as the fraction of simulations where the null hypothesis is rejected.
-    This is the recommended approach for complex designs like staggered adoption.
+    Most built-in estimators are supported via an internal registry that selects
+    the appropriate data-generating process and fit signature automatically.
 
     Parameters
     ----------
@@ -942,12 +1449,18 @@ def simulate_power(
     seed : int, optional
         Random seed for reproducibility.
     data_generator : callable, optional
-        Custom data generation function. Should accept same signature as
-        generate_did_data(). If None, uses generate_did_data().
+        Custom data generation function. When provided, bypasses the
+        registry DGP and calls this function with the standard kwargs
+        (n_units, n_periods, treatment_effect, etc.).
     data_generator_kwargs : dict, optional
         Additional keyword arguments for data generator.
     estimator_kwargs : dict, optional
         Additional keyword arguments for estimator.fit().
+    result_extractor : callable, optional
+        Custom function to extract results from the estimator output.
+        Takes the estimator result object and returns a tuple of
+        ``(att, se, p_value, conf_int)``. Useful for unregistered
+        estimators with non-standard result schemas.
     progress : bool, default=True
         Whether to print progress updates.
 
@@ -982,15 +1495,11 @@ def simulate_power(
     ... )
     >>> print(results.power_curve_df())
 
-    With Callaway-Sant'Anna for staggered designs:
+    With Callaway-Sant'Anna (auto-detected, no custom DGP needed):
 
     >>> from diff_diff import CallawaySantAnna
     >>> cs = CallawaySantAnna()
-    >>> # Custom data generator for staggered adoption
-    >>> def staggered_data(n_units, n_periods, treatment_effect, **kwargs):
-    ...     # Your staggered data generation logic
-    ...     ...
-    >>> results = simulate_power(cs, data_generator=staggered_data, ...)
+    >>> results = simulate_power(cs, n_simulations=200, seed=42)
 
     Notes
     -----
@@ -1000,23 +1509,87 @@ def simulate_power(
     3. Repeat n_simulations times
     4. Power = fraction of simulations where p-value < alpha
 
-    For staggered designs, you'll need to provide a custom data_generator
-    that creates appropriate staggered treatment timing.
-
     References
     ----------
     Burlig, F., Preonas, L., & Woerman, M. (2020). "Panel Data and Experimental Design."
     """
-    from diff_diff.prep import generate_did_data
-
     rng = np.random.default_rng(seed)
 
-    # Use default data generator if none provided
-    if data_generator is None:
-        data_generator = generate_did_data
+    estimator_name = type(estimator).__name__
+    registry = _get_registry()
+    profile = registry.get(estimator_name)
+
+    # If no profile and no custom data_generator, raise
+    if profile is None and data_generator is None:
+        raise ValueError(
+            f"Estimator '{estimator_name}' not in registry. "
+            f"Provide a custom data_generator and estimator_kwargs "
+            f"(the full dict of keyword arguments for estimator.fit(), "
+            f"e.g. dict(outcome='y', treatment='treat', time='period'))."
+        )
+
+    # When a custom data_generator is provided, bypass registry DGP
+    use_custom_dgp = data_generator is not None
 
     data_gen_kwargs = data_generator_kwargs or {}
     est_kwargs = estimator_kwargs or {}
+
+    # SyntheticDiD placebo variance requires n_control > n_treated.
+    # Check after merging data_generator_kwargs so overrides of n_treated
+    # are accounted for.
+    if estimator_name == "SyntheticDiD" and not use_custom_dgp:
+        vm = getattr(estimator, "variance_method", "placebo")
+        effective_n_treated = data_gen_kwargs.get(
+            "n_treated", max(1, int(n_units * treatment_fraction))
+        )
+        n_control = n_units - effective_n_treated
+        if vm == "placebo" and n_control <= effective_n_treated:
+            raise ValueError(
+                f"SyntheticDiD placebo variance requires more control than "
+                f"treated units (got n_control={n_control}, "
+                f"n_treated={effective_n_treated}). Either lower "
+                f"treatment_fraction so that n_control > n_treated, or use "
+                f"SyntheticDiD(variance_method='bootstrap')."
+            )
+
+    # Warn if staggered estimator settings don't match auto DGP
+    if profile is not None and not use_custom_dgp:
+        _check_staggered_dgp_compat(estimator, data_generator_kwargs)
+
+    # Block registry-path collisions on search-critical keys
+    if profile is not None and not use_custom_dgp and data_gen_kwargs:
+        sample_dgp_keys = set(
+            profile.dgp_kwargs_builder(
+                n_units=n_units,
+                n_periods=n_periods,
+                treatment_effect=treatment_effect,
+                treatment_fraction=treatment_fraction,
+                treatment_period=treatment_period,
+                sigma=sigma,
+            ).keys()
+        )
+        collisions = _PROTECTED_DGP_KEYS & set(data_gen_kwargs) & sample_dgp_keys
+        if collisions:
+            raise ValueError(
+                f"data_generator_kwargs contains keys that conflict with "
+                f"registry-managed simulation inputs: {sorted(collisions)}. "
+                f"These are controlled by simulate_power() parameters directly. "
+                f"Use the corresponding function parameters instead, or pass a "
+                f"custom data_generator to override the DGP entirely."
+            )
+
+    # Warn if DDD design inputs are silently ignored
+    if estimator_name == "TripleDifference" and not use_custom_dgp:
+        _check_ddd_dgp_compat(
+            n_units,
+            n_periods,
+            treatment_fraction,
+            treatment_period,
+            data_generator_kwargs,
+        )
+        effective_n_units = _ddd_effective_n(n_units, data_generator_kwargs)
+    else:
+        effective_n_units = None
 
     # Determine effect sizes to test
     if effect_sizes is None:
@@ -1024,30 +1597,35 @@ def simulate_power(
 
     all_powers = []
 
-    # For the primary effect (last in list), collect detailed results
-    # Use index-based comparison to avoid float precision issues
+    # For the primary effect, collect detailed results
     if len(effect_sizes) == 1:
         primary_idx = 0
     else:
-        # Find index of treatment_effect in effect_sizes
         primary_idx = -1
         for i, es in enumerate(effect_sizes):
             if np.isclose(es, treatment_effect):
                 primary_idx = i
                 break
         if primary_idx == -1:
-            primary_idx = len(effect_sizes) - 1  # Default to last
+            primary_idx = len(effect_sizes) - 1
 
     primary_effect = effect_sizes[primary_idx]
 
-    for effect_idx, effect in enumerate(effect_sizes):
-        is_primary = (effect_idx == primary_idx)
+    # Initialize so they are always bound
+    primary_estimates: List[float] = []
+    primary_ses: List[float] = []
+    primary_p_values: List[float] = []
+    primary_rejections: List[bool] = []
+    primary_ci_contains: List[bool] = []
 
-        estimates = []
-        ses = []
-        p_values = []
-        rejections = []
-        ci_contains_true = []
+    for effect_idx, effect in enumerate(effect_sizes):
+        is_primary = effect_idx == primary_idx
+
+        estimates: List[float] = []
+        ses: List[float] = []
+        p_values: List[float] = []
+        rejections: List[bool] = []
+        ci_contains_true: List[bool] = []
         n_failures = 0
 
         for sim in range(n_simulations):
@@ -1055,90 +1633,80 @@ def simulate_power(
                 pct = (sim + effect_idx * n_simulations) / (len(effect_sizes) * n_simulations)
                 print(f"  Simulation progress: {pct:.0%}")
 
-            # Generate data
             sim_seed = rng.integers(0, 2**31)
-            data = data_generator(
-                n_units=n_units,
-                n_periods=n_periods,
-                treatment_effect=effect,
-                treatment_fraction=treatment_fraction,
-                treatment_period=treatment_period,
-                noise_sd=sigma,
-                seed=sim_seed,
-                **data_gen_kwargs
-            )
+
+            # --- Generate data ---
+            if use_custom_dgp:
+                assert data_generator is not None
+                data = data_generator(
+                    n_units=n_units,
+                    n_periods=n_periods,
+                    treatment_effect=effect,
+                    treatment_fraction=treatment_fraction,
+                    treatment_period=treatment_period,
+                    noise_sd=sigma,
+                    seed=sim_seed,
+                    **data_gen_kwargs,
+                )
+            else:
+                assert profile is not None
+                dgp_kwargs = profile.dgp_kwargs_builder(
+                    n_units=n_units,
+                    n_periods=n_periods,
+                    treatment_effect=effect,
+                    treatment_fraction=treatment_fraction,
+                    treatment_period=treatment_period,
+                    sigma=sigma,
+                )
+                dgp_kwargs.update(data_gen_kwargs)
+                dgp_kwargs.pop("seed", None)
+                data = profile.default_dgp(seed=sim_seed, **dgp_kwargs)
+
+            # Check SDID placebo feasibility on realized data (custom DGP path)
+            if effect_idx == 0 and sim == 0 and estimator_name == "SyntheticDiD":
+                _check_sdid_placebo_data(data, estimator, est_kwargs)
 
             try:
-                # Fit estimator
-                # Try to determine the right arguments based on estimator type
-                estimator_name = type(estimator).__name__
-
-                if estimator_name == "DifferenceInDifferences":
-                    result = estimator.fit(
-                        data,
-                        outcome="outcome",
-                        treatment="treated",
-                        time="post",
-                        **est_kwargs
+                # --- Fit estimator ---
+                if profile is not None and not use_custom_dgp:
+                    fit_kwargs = profile.fit_kwargs_builder(
+                        data, n_units, n_periods, treatment_period
                     )
-                elif estimator_name == "TwoWayFixedEffects":
-                    result = estimator.fit(
-                        data,
-                        outcome="outcome",
-                        treatment="treated",
-                        time="period",
-                        unit="unit",
-                        **est_kwargs
-                    )
-                elif estimator_name == "MultiPeriodDiD":
-                    post_periods = list(range(treatment_period, n_periods))
-                    result = estimator.fit(
-                        data,
-                        outcome="outcome",
-                        treatment="treated",
-                        time="period",
-                        post_periods=post_periods,
-                        **est_kwargs
-                    )
-                elif estimator_name == "CallawaySantAnna":
-                    # Need to create first_treat column for staggered
-                    # For standard generate_did_data, convert to first_treat format
-                    data = data.copy()
-                    data["first_treat"] = np.where(
-                        data["treated"] == 1, treatment_period, 0
-                    )
-                    result = estimator.fit(
-                        data,
-                        outcome="outcome",
-                        unit="unit",
-                        time="period",
-                        first_treat="first_treat",
-                        **est_kwargs
-                    )
+                    fit_kwargs.update(est_kwargs)
                 else:
-                    # Generic fallback - try common signature
-                    result = estimator.fit(
-                        data,
-                        outcome="outcome",
-                        treatment="treated",
-                        time="post",
-                        **est_kwargs
-                    )
+                    # Custom DGP fallback: use registry fit kwargs if available,
+                    # otherwise use basic DiD signature
+                    if profile is not None:
+                        fit_kwargs = profile.fit_kwargs_builder(
+                            data, n_units, n_periods, treatment_period
+                        )
+                        fit_kwargs.update(est_kwargs)
+                    else:
+                        fit_kwargs = dict(est_kwargs)
 
-                # Extract results
-                att = result.att if hasattr(result, 'att') else result.avg_att
-                se = result.se if hasattr(result, 'se') else result.avg_se
-                p_val = result.p_value if hasattr(result, 'p_value') else result.avg_p_value
-                ci = result.conf_int if hasattr(result, 'conf_int') else result.avg_conf_int
+                result = estimator.fit(data, **fit_kwargs)
+
+                # --- Extract results ---
+                if profile is not None:
+                    att, se, p_val, ci = profile.result_extractor(result)
+                elif result_extractor is not None:
+                    att, se, p_val, ci = result_extractor(result)
+                else:
+                    att = result.att if hasattr(result, "att") else result.avg_att
+                    se = result.se if hasattr(result, "se") else result.avg_se
+                    p_val = result.p_value if hasattr(result, "p_value") else result.avg_p_value
+                    ci = result.conf_int if hasattr(result, "conf_int") else result.avg_conf_int
+
+                # NaN p-value → treat as non-rejection
+                rejected = bool(p_val < alpha) if not np.isnan(p_val) else False
 
                 estimates.append(att)
                 ses.append(se)
                 p_values.append(p_val)
-                rejections.append(p_val < alpha)
+                rejections.append(rejected)
                 ci_contains_true.append(ci[0] <= effect <= ci[1])
 
             except Exception as e:
-                # Track failed simulations
                 n_failures += 1
                 if progress:
                     print(f"  Warning: Simulation {sim} failed: {e}")
@@ -1148,21 +1716,18 @@ def simulate_power(
         failure_rate = n_failures / n_simulations
         if failure_rate > 0.1:
             warnings.warn(
-                f"{n_failures}/{n_simulations} simulations ({failure_rate:.1%}) failed "
-                f"for effect_size={effect}. Check estimator and data generator.",
-                UserWarning
+                f"{n_failures}/{n_simulations} simulations ({failure_rate:.1%}) "
+                f"failed for effect_size={effect}. "
+                f"Check estimator and data generator.",
+                UserWarning,
             )
 
         if len(estimates) == 0:
             raise RuntimeError("All simulations failed. Check estimator and data generator.")
 
-        # Compute power and SE
         power_val = np.mean(rejections)
-        power_se = np.sqrt(power_val * (1 - power_val) / len(rejections))
-
         all_powers.append(power_val)
 
-        # Store detailed results for primary effect
         if is_primary:
             primary_estimates = estimates
             primary_ses = ses
@@ -1177,10 +1742,9 @@ def simulate_power(
     z = stats.norm.ppf(0.975)
     power_ci = (
         max(0.0, power_val - z * power_se),
-        min(1.0, power_val + z * power_se)
+        min(1.0, power_val + z * power_se),
     )
 
-    # Compute summary statistics
     mean_estimate = np.mean(primary_estimates)
     std_estimate = np.std(primary_estimates, ddof=1)
     mean_se = np.mean(primary_ses)
@@ -1200,12 +1764,686 @@ def simulate_power(
         powers=all_powers,
         true_effect=primary_effect,
         alpha=alpha,
-        estimator_name=type(estimator).__name__,
+        estimator_name=estimator_name,
         simulation_results=[
             {"estimate": e, "se": s, "p_value": p, "rejected": r}
-            for e, s, p, r in zip(primary_estimates, primary_ses,
-                                   primary_p_values, primary_rejections)
+            for e, s, p, r in zip(
+                primary_estimates,
+                primary_ses,
+                primary_p_values,
+                primary_rejections,
+            )
         ],
+        effective_n_units=effective_n_units,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Simulation-based MDE and sample-size search
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class SimulationMDEResults:
+    """
+    Results from simulation-based minimum detectable effect search.
+
+    Attributes
+    ----------
+    mde : float
+        Minimum detectable effect (smallest effect achieving target power).
+    power_at_mde : float
+        Power achieved at the MDE.
+    target_power : float
+        Target power used in the search.
+    alpha : float
+        Significance level.
+    n_units : int
+        Sample size used.
+    n_simulations_per_step : int
+        Number of simulations per bisection step.
+    n_steps : int
+        Number of bisection steps performed.
+    search_path : list of dict
+        Diagnostic trace of ``{effect_size, power}`` at each step.
+    estimator_name : str
+        Name of the estimator used.
+    effective_n_units : int or None
+        Effective sample size when it differs from the requested ``n_units``
+        (e.g., due to DDD grid rounding). ``None`` when no rounding occurred.
+    """
+
+    mde: float
+    power_at_mde: float
+    target_power: float
+    alpha: float
+    n_units: int
+    n_simulations_per_step: int
+    n_steps: int
+    search_path: List[Dict[str, float]]
+    estimator_name: str
+    effective_n_units: Optional[int] = None
+
+    def __repr__(self) -> str:
+        return (
+            f"SimulationMDEResults(mde={self.mde:.4f}, "
+            f"power_at_mde={self.power_at_mde:.3f}, "
+            f"n_steps={self.n_steps})"
+        )
+
+    def summary(self) -> str:
+        """Generate a formatted summary."""
+        lines = [
+            "=" * 65,
+            "Simulation-Based MDE Results".center(65),
+            "=" * 65,
+            "",
+            f"{'Estimator:':<35} {self.estimator_name}",
+            f"{'Significance level (alpha):':<35} {self.alpha:.3f}",
+            f"{'Target power:':<35} {self.target_power:.1%}",
+            f"{'Sample size (n_units):':<35} {self.n_units}",
+        ]
+        if self.effective_n_units is not None:
+            lines.append(
+                f"{'Effective sample size:':<35} {self.effective_n_units}" f" (DDD grid-rounded)"
+            )
+        lines += [
+            f"{'Simulations per step:':<35} {self.n_simulations_per_step}",
+            "",
+            "-" * 65,
+            "Search Results".center(65),
+            "-" * 65,
+            f"{'Minimum detectable effect:':<35} {self.mde:.4f}",
+            f"{'Power at MDE:':<35} {self.power_at_mde:.1%}",
+            f"{'Bisection steps:':<35} {self.n_steps}",
+            "=" * 65,
+        ]
+        return "\n".join(lines)
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert results to a dictionary."""
+        return {
+            "mde": self.mde,
+            "power_at_mde": self.power_at_mde,
+            "target_power": self.target_power,
+            "alpha": self.alpha,
+            "n_units": self.n_units,
+            "effective_n_units": self.effective_n_units,
+            "n_simulations_per_step": self.n_simulations_per_step,
+            "n_steps": self.n_steps,
+            "estimator_name": self.estimator_name,
+        }
+
+    def to_dataframe(self) -> pd.DataFrame:
+        """Convert results to a single-row DataFrame."""
+        return pd.DataFrame([self.to_dict()])
+
+
+@dataclass
+class SimulationSampleSizeResults:
+    """
+    Results from simulation-based sample size search.
+
+    Attributes
+    ----------
+    required_n : int
+        Required number of units to achieve target power.
+    power_at_n : float
+        Power achieved at the required N.
+    target_power : float
+        Target power used in the search.
+    alpha : float
+        Significance level.
+    effect_size : float
+        Effect size used in the search.
+    n_simulations_per_step : int
+        Number of simulations per bisection step.
+    n_steps : int
+        Number of bisection steps performed.
+    search_path : list of dict
+        Diagnostic trace of ``{n_units, power}`` at each step.
+    estimator_name : str
+        Name of the estimator used.
+    effective_n_units : int or None
+        Effective sample size when it differs from ``required_n``
+        (e.g., due to DDD grid rounding). ``None`` when no rounding occurred
+        or when the search already snapped to the estimator's grid.
+    """
+
+    required_n: int
+    power_at_n: float
+    target_power: float
+    alpha: float
+    effect_size: float
+    n_simulations_per_step: int
+    n_steps: int
+    search_path: List[Dict[str, float]]
+    estimator_name: str
+    effective_n_units: Optional[int] = None
+
+    def __repr__(self) -> str:
+        return (
+            f"SimulationSampleSizeResults(required_n={self.required_n}, "
+            f"power_at_n={self.power_at_n:.3f}, "
+            f"n_steps={self.n_steps})"
+        )
+
+    def summary(self) -> str:
+        """Generate a formatted summary."""
+        lines = [
+            "=" * 65,
+            "Simulation-Based Sample Size Results".center(65),
+            "=" * 65,
+            "",
+            f"{'Estimator:':<35} {self.estimator_name}",
+            f"{'Significance level (alpha):':<35} {self.alpha:.3f}",
+            f"{'Target power:':<35} {self.target_power:.1%}",
+            f"{'Effect size:':<35} {self.effect_size:.4f}",
+            f"{'Simulations per step:':<35} {self.n_simulations_per_step}",
+            "",
+            "-" * 65,
+            "Search Results".center(65),
+            "-" * 65,
+            f"{'Required sample size:':<35} {self.required_n}",
+            f"{'Power at required N:':<35} {self.power_at_n:.1%}",
+            f"{'Bisection steps:':<35} {self.n_steps}",
+        ]
+        if self.effective_n_units is not None:
+            lines.append(
+                f"{'Effective sample size:':<35} {self.effective_n_units}" f" (DDD grid-rounded)"
+            )
+        lines.append("=" * 65)
+        return "\n".join(lines)
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert results to a dictionary."""
+        return {
+            "required_n": self.required_n,
+            "power_at_n": self.power_at_n,
+            "target_power": self.target_power,
+            "alpha": self.alpha,
+            "effect_size": self.effect_size,
+            "n_simulations_per_step": self.n_simulations_per_step,
+            "n_steps": self.n_steps,
+            "estimator_name": self.estimator_name,
+            "effective_n_units": self.effective_n_units,
+        }
+
+    def to_dataframe(self) -> pd.DataFrame:
+        """Convert results to a single-row DataFrame."""
+        return pd.DataFrame([self.to_dict()])
+
+
+def simulate_mde(
+    estimator: Any,
+    n_units: int = 100,
+    n_periods: int = 4,
+    treatment_fraction: float = 0.5,
+    treatment_period: int = 2,
+    sigma: float = 1.0,
+    n_simulations: int = 200,
+    power: float = 0.80,
+    alpha: float = 0.05,
+    effect_range: Optional[Tuple[float, float]] = None,
+    tol: float = 0.02,
+    max_steps: int = 15,
+    seed: Optional[int] = None,
+    data_generator: Optional[Callable] = None,
+    data_generator_kwargs: Optional[Dict[str, Any]] = None,
+    estimator_kwargs: Optional[Dict[str, Any]] = None,
+    result_extractor: Optional[Callable] = None,
+    progress: bool = True,
+) -> SimulationMDEResults:
+    """
+    Find the minimum detectable effect via simulation-based bisection search.
+
+    Searches over effect sizes to find the smallest effect that achieves the
+    target power, using ``simulate_power()`` at each step.
+
+    Parameters
+    ----------
+    estimator : estimator object
+        DiD estimator to use.
+    n_units : int, default=100
+        Number of units per simulation.
+    n_periods : int, default=4
+        Number of time periods.
+    treatment_fraction : float, default=0.5
+        Fraction of units that are treated.
+    treatment_period : int, default=2
+        First post-treatment period (0-indexed).
+    sigma : float, default=1.0
+        Residual standard deviation.
+    n_simulations : int, default=200
+        Simulations per bisection step.
+    power : float, default=0.80
+        Target power.
+    alpha : float, default=0.05
+        Significance level.
+    effect_range : tuple of (float, float), optional
+        ``(lo, hi)`` bracket for the search. If None, auto-brackets.
+    tol : float, default=0.02
+        Convergence tolerance on power.
+    max_steps : int, default=15
+        Maximum bisection steps.
+    seed : int, optional
+        Random seed for reproducibility.
+    data_generator : callable, optional
+        Custom data generation function.
+    data_generator_kwargs : dict, optional
+        Additional keyword arguments for data generator.
+    estimator_kwargs : dict, optional
+        Additional keyword arguments for estimator.fit().
+    result_extractor : callable, optional
+        Custom function to extract results from the estimator output.
+        Forwarded to ``simulate_power()``.
+    progress : bool, default=True
+        Whether to print progress updates.
+
+    Returns
+    -------
+    SimulationMDEResults
+        Results including the MDE and search diagnostics.
+
+    Examples
+    --------
+    >>> from diff_diff import simulate_mde, DifferenceInDifferences
+    >>> result = simulate_mde(DifferenceInDifferences(), n_simulations=100, seed=42)
+    >>> print(f"MDE: {result.mde:.3f}")
+    """
+    master_rng = np.random.default_rng(seed)
+    estimator_name = type(estimator).__name__
+    search_path: List[Dict[str, float]] = []
+
+    # Compute effective N for DDD (N is fixed throughout MDE search)
+    if estimator_name == "TripleDifference" and data_generator is None:
+        effective_n_units = _ddd_effective_n(n_units, data_generator_kwargs)
+    else:
+        effective_n_units = None
+
+    common_kwargs: Dict[str, Any] = dict(
+        estimator=estimator,
+        n_units=n_units,
+        n_periods=n_periods,
+        treatment_fraction=treatment_fraction,
+        treatment_period=treatment_period,
+        sigma=sigma,
+        n_simulations=n_simulations,
+        alpha=alpha,
+        data_generator=data_generator,
+        data_generator_kwargs=data_generator_kwargs,
+        estimator_kwargs=estimator_kwargs,
+        result_extractor=result_extractor,
+        progress=False,
+    )
+
+    def _power_at(effect: float) -> float:
+        step_seed = int(master_rng.integers(0, 2**31))
+        res = simulate_power(treatment_effect=effect, seed=step_seed, **common_kwargs)
+        pwr = float(res.power)
+        search_path.append({"effect_size": effect, "power": pwr})
+        if progress:
+            print(f"  MDE search: effect={effect:.4f}, power={pwr:.3f}")
+        return pwr
+
+    # --- Bracket ---
+    if effect_range is not None:
+        lo, hi = effect_range
+        power_lo = _power_at(lo)
+        power_hi = _power_at(hi)
+        if power_lo >= power:
+            warnings.warn(
+                f"Power at effect={lo} is {power_lo:.2f} >= target {power}. "
+                f"Lower bound already exceeds target power. Returning lo as MDE.",
+                UserWarning,
+            )
+            return SimulationMDEResults(
+                mde=lo,
+                power_at_mde=power_lo,
+                target_power=power,
+                alpha=alpha,
+                n_units=n_units,
+                n_simulations_per_step=n_simulations,
+                n_steps=len(search_path),
+                search_path=search_path,
+                estimator_name=estimator_name,
+                effective_n_units=effective_n_units,
+            )
+        if power_hi < power:
+            warnings.warn(
+                f"Target power {power} not bracketed: power at effect={hi} "
+                f"is {power_hi:.2f}. Upper bound may be too low.",
+                UserWarning,
+            )
+    else:
+        lo = 0.0
+        # Check that power at zero is below target (no inflated Type I error)
+        power_at_zero = _power_at(0.0)
+        if power_at_zero >= power:
+            warnings.warn(
+                f"Power at effect=0 is {power_at_zero:.2f} >= target {power}. "
+                f"This suggests inflated Type I error. Returning MDE=0.",
+                UserWarning,
+            )
+            return SimulationMDEResults(
+                mde=0.0,
+                power_at_mde=power_at_zero,
+                target_power=power,
+                alpha=alpha,
+                n_units=n_units,
+                n_simulations_per_step=n_simulations,
+                n_steps=len(search_path),
+                search_path=search_path,
+                estimator_name=estimator_name,
+                effective_n_units=effective_n_units,
+            )
+
+        hi = sigma
+        for _ in range(10):
+            if _power_at(hi) >= power:
+                break
+            hi *= 2
+        else:
+            warnings.warn(
+                f"Could not bracket MDE (power at effect={hi} still below "
+                f"{power}). Returning best upper bound.",
+                UserWarning,
+            )
+
+    # --- Bisect ---
+    best_effect = hi
+    best_power = search_path[-1]["power"] if search_path else 0.0
+
+    for _ in range(max_steps):
+        mid = (lo + hi) / 2
+        pwr = _power_at(mid)
+
+        if pwr >= power:
+            hi = mid
+            best_effect = mid
+            best_power = pwr
+        else:
+            lo = mid
+
+        # Convergence: effect range is tight or power is close enough
+        if hi - lo < max(tol * hi, 1e-6) or abs(pwr - power) < tol:
+            break
+
+    return SimulationMDEResults(
+        mde=best_effect,
+        power_at_mde=best_power,
+        target_power=power,
+        alpha=alpha,
+        n_units=n_units,
+        n_simulations_per_step=n_simulations,
+        n_steps=len(search_path),
+        search_path=search_path,
+        estimator_name=estimator_name,
+        effective_n_units=effective_n_units,
+    )
+
+
+def simulate_sample_size(
+    estimator: Any,
+    treatment_effect: float = 5.0,
+    n_periods: int = 4,
+    treatment_fraction: float = 0.5,
+    treatment_period: int = 2,
+    sigma: float = 1.0,
+    n_simulations: int = 200,
+    power: float = 0.80,
+    alpha: float = 0.05,
+    n_range: Optional[Tuple[int, int]] = None,
+    max_steps: int = 15,
+    seed: Optional[int] = None,
+    data_generator: Optional[Callable] = None,
+    data_generator_kwargs: Optional[Dict[str, Any]] = None,
+    estimator_kwargs: Optional[Dict[str, Any]] = None,
+    result_extractor: Optional[Callable] = None,
+    progress: bool = True,
+) -> SimulationSampleSizeResults:
+    """
+    Find the required sample size via simulation-based bisection search.
+
+    Searches over ``n_units`` to find the smallest N that achieves the
+    target power, using ``simulate_power()`` at each step.
+
+    Parameters
+    ----------
+    estimator : estimator object
+        DiD estimator to use.
+    treatment_effect : float, default=5.0
+        True treatment effect to simulate.
+    n_periods : int, default=4
+        Number of time periods.
+    treatment_fraction : float, default=0.5
+        Fraction of units that are treated.
+    treatment_period : int, default=2
+        First post-treatment period (0-indexed).
+    sigma : float, default=1.0
+        Residual standard deviation.
+    n_simulations : int, default=200
+        Simulations per bisection step.
+    power : float, default=0.80
+        Target power.
+    alpha : float, default=0.05
+        Significance level.
+    n_range : tuple of (int, int), optional
+        ``(lo, hi)`` bracket for sample size. If None, auto-brackets.
+    max_steps : int, default=15
+        Maximum bisection steps.
+    seed : int, optional
+        Random seed for reproducibility.
+    data_generator : callable, optional
+        Custom data generation function.
+    data_generator_kwargs : dict, optional
+        Additional keyword arguments for data generator.
+    estimator_kwargs : dict, optional
+        Additional keyword arguments for estimator.fit().
+    result_extractor : callable, optional
+        Custom function to extract results from the estimator output.
+        Forwarded to ``simulate_power()``.
+    progress : bool, default=True
+        Whether to print progress updates.
+
+    Returns
+    -------
+    SimulationSampleSizeResults
+        Results including the required N and search diagnostics.
+
+    Examples
+    --------
+    >>> from diff_diff import simulate_sample_size, DifferenceInDifferences
+    >>> result = simulate_sample_size(
+    ...     DifferenceInDifferences(), treatment_effect=5.0, n_simulations=100, seed=42
+    ... )
+    >>> print(f"Required N: {result.required_n}")
+    """
+    master_rng = np.random.default_rng(seed)
+    estimator_name = type(estimator).__name__
+    search_path: List[Dict[str, float]] = []
+
+    # Determine min_n from registry
+    registry = _get_registry()
+    profile = registry.get(estimator_name)
+    min_n = profile.min_n if profile is not None else 20
+
+    # DDD grid snapping: bisection candidates must be multiples of 8
+    is_ddd_grid = estimator_name == "TripleDifference" and data_generator is None
+    grid_step = 8 if is_ddd_grid else 1
+    convergence_threshold = grid_step + 1  # 9 for DDD, 2 for others
+
+    if is_ddd_grid and data_generator_kwargs and "n_per_cell" in data_generator_kwargs:
+        raise ValueError(
+            "data_generator_kwargs contains 'n_per_cell', which conflicts with "
+            "the sample-size search in simulate_sample_size(). For "
+            "TripleDifference, n_per_cell is derived from n_units (the search "
+            "variable). Use simulate_power() with a fixed n_per_cell override "
+            "instead, or pass a custom data_generator."
+        )
+
+    def _snap_n(n: int, direction: str = "down", floor: Optional[int] = None) -> int:
+        if grid_step == 1:
+            return n
+        actual_floor = floor if floor is not None else min_n
+        if direction == "up":
+            return max(actual_floor, ((n + grid_step - 1) // grid_step) * grid_step)
+        return max(actual_floor, (n // grid_step) * grid_step)
+
+    common_kwargs: Dict[str, Any] = dict(
+        estimator=estimator,
+        n_periods=n_periods,
+        treatment_effect=treatment_effect,
+        treatment_fraction=treatment_fraction,
+        treatment_period=treatment_period,
+        sigma=sigma,
+        n_simulations=n_simulations,
+        alpha=alpha,
+        data_generator=data_generator,
+        data_generator_kwargs=data_generator_kwargs,
+        estimator_kwargs=estimator_kwargs,
+        result_extractor=result_extractor,
+        progress=False,
+    )
+
+    def _power_at_n(n: int) -> float:
+        step_seed = int(master_rng.integers(0, 2**31))
+        res = simulate_power(n_units=n, seed=step_seed, **common_kwargs)
+        pwr = float(res.power)
+        search_path.append({"n_units": float(n), "power": pwr})
+        if progress:
+            print(f"  Sample size search: n={n}, power={pwr:.3f}")
+        return pwr
+
+    # --- Bracket ---
+    abs_min = 16 if is_ddd_grid else 4
+    if n_range is not None:
+        lo, hi = _snap_n(n_range[0], "up", floor=abs_min), _snap_n(
+            n_range[1], "down", floor=abs_min
+        )
+        if lo > hi:
+            lo = hi  # collapsed bracket — evaluate single point
+        power_lo = _power_at_n(lo)
+        if power_lo >= power:
+            warnings.warn(
+                f"Power at n={lo} is {power_lo:.2f} >= target {power}. "
+                f"Lower bound already achieves target power. Returning lo.",
+                UserWarning,
+            )
+            return SimulationSampleSizeResults(
+                required_n=lo,
+                power_at_n=power_lo,
+                target_power=power,
+                alpha=alpha,
+                effect_size=treatment_effect,
+                n_simulations_per_step=n_simulations,
+                n_steps=len(search_path),
+                search_path=search_path,
+                estimator_name=estimator_name,
+            )
+        power_hi = _power_at_n(hi)
+        if power_hi < power:
+            warnings.warn(
+                f"Target power {power} not bracketed: power at n={hi} "
+                f"is {power_hi:.2f}. Upper bound may be too low.",
+                UserWarning,
+            )
+    else:
+        lo = min_n
+        power_lo = _power_at_n(lo)
+        if power_lo >= power:
+            # Floor achieves target — search downward for true minimum
+            hi = lo
+            found_lower = False
+            probe = _snap_n(max(abs_min, lo // 2), floor=abs_min)
+            for _ in range(8):
+                if probe >= hi or probe < abs_min:
+                    break
+                pwr = _power_at_n(probe)
+                if pwr < power:
+                    lo = probe
+                    found_lower = True
+                    break
+                hi = probe
+                probe = _snap_n(max(abs_min, probe // 2), floor=abs_min)
+            if not found_lower:
+                # Even smallest viable N achieves target — return best found
+                best = min(
+                    (s for s in search_path if s["power"] >= power),
+                    key=lambda s: s["n_units"],
+                )
+                warnings.warn(
+                    f"Power at n={int(best['n_units'])} is "
+                    f"{best['power']:.2f} >= target {power}. Could not "
+                    f"find a smaller N below target power. Pass "
+                    f"n_range=(lo, hi) to refine.",
+                    UserWarning,
+                )
+                return SimulationSampleSizeResults(
+                    required_n=int(best["n_units"]),
+                    power_at_n=best["power"],
+                    target_power=power,
+                    alpha=alpha,
+                    effect_size=treatment_effect,
+                    n_simulations_per_step=n_simulations,
+                    n_steps=len(search_path),
+                    search_path=search_path,
+                    estimator_name=estimator_name,
+                )
+            # Fall through to bisection with lo..hi bracket
+        else:
+            hi = max(100, 2 * min_n)
+            for _ in range(10):
+                if _power_at_n(hi) >= power:
+                    break
+                hi *= 2
+            else:
+                warnings.warn(
+                    f"Could not bracket required N (power at n={hi} still "
+                    f"below {power}). Returning best upper bound.",
+                    UserWarning,
+                )
+
+    # --- Bisect on integer n_units ---
+    best_n = hi
+    # Look up power at hi (search_path[-1] may not be hi after downward search)
+    best_power = next(
+        (s["power"] for s in reversed(search_path) if int(s["n_units"]) == hi),
+        search_path[-1]["power"] if search_path else 0.0,
+    )
+
+    for _ in range(max_steps):
+        if hi - lo <= convergence_threshold:
+            break
+        mid = _snap_n((lo + hi) // 2, floor=abs_min)
+        if mid <= lo or mid >= hi:
+            break
+        pwr = _power_at_n(mid)
+
+        if pwr >= power:
+            hi = mid
+            best_n = mid
+            best_power = pwr
+        else:
+            lo = mid
+
+    # Final answer is hi (conservative ceiling) — skip if already evaluated
+    if best_n != hi:
+        final_pwr = _power_at_n(hi)
+        if final_pwr >= power:
+            best_n = hi
+            best_power = final_pwr
+
+    return SimulationSampleSizeResults(
+        required_n=best_n,
+        power_at_n=best_power,
+        target_power=power,
+        alpha=alpha,
+        effect_size=treatment_effect,
+        n_simulations_per_step=n_simulations,
+        n_steps=len(search_path),
+        search_path=search_path,
+        estimator_name=estimator_name,
     )
 
 

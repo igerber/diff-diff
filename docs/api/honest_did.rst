@@ -44,20 +44,20 @@ Example
 
 .. code-block:: python
 
-   from diff_diff import MultiPeriodDiD, HonestDiD, DeltaRM
+   from diff_diff import MultiPeriodDiD, HonestDiD
 
    # First fit an event study
-   model = MultiPeriodDiD(reference_period=-1)
-   results = model.fit(data, outcome='y', treated='treated',
-                       time='period', unit='unit_id', treatment_start=5)
+   model = MultiPeriodDiD()
+   results = model.fit(data, outcome='y', treatment='treated',
+                       time='period', unit='unit_id',
+                       post_periods=[5, 6, 7], reference_period=4)
 
    # Compute bounds under relative magnitudes restriction
-   honest = HonestDiD(delta=DeltaRM(M_bar=1.0))
+   honest = HonestDiD(method='relative_magnitude', M=1.0)
    bounds = honest.fit(results)
 
-   print(f"Original CI: [{results.att - 1.96*results.se:.3f}, "
-         f"{results.att + 1.96*results.se:.3f}]")
-   print(f"Robust CI: [{bounds.robust_ci[0]:.3f}, {bounds.robust_ci[1]:.3f}]")
+   print(f"Original estimate: {bounds.original_estimate:.3f}")
+   print(f"Robust CI: [{bounds.ci_lb:.3f}, {bounds.ci_ub:.3f}]")
 
 HonestDiDResults
 ----------------
@@ -138,36 +138,35 @@ Complete Example
    from diff_diff import (
        MultiPeriodDiD,
        HonestDiD,
-       DeltaRM,
-       DeltaSD,
        plot_sensitivity,
        plot_honest_event_study,
    )
 
    # Fit event study
-   model = MultiPeriodDiD(reference_period=-1)
-   results = model.fit(data, outcome='y', treated='treated',
-                       time='period', unit='unit_id', treatment_start=5)
+   model = MultiPeriodDiD()
+   results = model.fit(data, outcome='y', treatment='treated',
+                       time='period', unit='unit_id',
+                       post_periods=[5, 6, 7], reference_period=4)
 
    # Sensitivity analysis under relative magnitudes
-   honest_rm = HonestDiD(delta=DeltaRM(M_bar=1.0))
+   honest_rm = HonestDiD(method='relative_magnitude', M=1.0)
    sensitivity_rm = honest_rm.sensitivity_analysis(
        results,
-       M_grid=np.linspace(0, 2, 21)
+       M_grid=np.linspace(0, 2, 21).tolist()
    )
 
    # Find breakdown value
    breakdown = honest_rm.breakdown_value(results)
-   print(f"Breakdown M̄: {breakdown:.3f}")
+   print(f"Breakdown M̄: {breakdown}")
 
    # Plot sensitivity
-   fig1 = plot_sensitivity(sensitivity_rm)
-   fig1.savefig('sensitivity_rm.png')
+   ax1 = plot_sensitivity(sensitivity_rm)
+   ax1.figure.savefig('sensitivity_rm.png')
 
    # Event study with honest CIs
    bounds = honest_rm.fit(results)
-   fig2 = plot_honest_event_study(results, bounds)
-   fig2.savefig('honest_event_study.png')
+   ax2 = plot_honest_event_study(bounds)
+   ax2.figure.savefig('honest_event_study.png')
 
 References
 ----------

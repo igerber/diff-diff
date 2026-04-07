@@ -44,7 +44,7 @@ create_review() {
 ---
 plan: $plan_path
 reviewed_at: 2026-01-01T00:00:00Z
-verdict: "Approved"
+assessment: "No critical issues found"
 critical_count: 0
 medium_count: 0
 low_count: 0
@@ -167,7 +167,7 @@ touch -t 202601010001 "$PLAN"
 cat > "$REVIEW" <<EOF
 ---
 reviewed_at: 2026-01-01T00:00:00Z
-verdict: "Approved"
+assessment: "No critical issues found"
 ---
 Review without plan field.
 EOF

@@ -1,0 +1,99 @@
+# diff-diff
+
+> A Python library for Difference-in-Differences (DiD) causal inference analysis. Provides sklearn-like estimators with statsmodels-style summary output for econometric analysis.
+
+diff-diff offers 14 estimators covering basic 2x2 DiD, modern staggered adoption methods, advanced panel estimators, and diagnostic tools. It supports robust and cluster-robust standard errors, wild cluster bootstrap, formula and column-name interfaces, fixed effects (dummy and absorbed), and publication-ready output. The optional Rust backend accelerates compute-intensive estimators like Synthetic DiD and TROP.
+
+- Install: `pip install diff-diff`
+- License: MIT
+- Dependencies: numpy, pandas, scipy (no statsmodels dependency)
+- Source: https://github.com/igerber/diff-diff
+- Docs: https://diff-diff.readthedocs.io/en/stable/
+
+## Practitioner Workflow (based on Baker et al. 2025)
+
+IMPORTANT: For rigorous DiD analysis, follow these 8 steps. Skipping
+diagnostic steps produces unreliable results.
+
+1. **Define target parameter** — ATT, group-time ATT(g,t), or event-study ATT_es(e). State whether weighted or unweighted.
+2. **State identification assumptions** — which parallel trends variant (unconditional, conditional, PT-GT-Nev, PT-GT-NYT), no-anticipation, overlap.
+3. **Test parallel trends** — simple 2x2: `check_parallel_trends()`, `equivalence_test_trends()`; staggered: inspect CS event-study pre-period coefficients (generic PT tests are invalid for staggered designs). Insignificant pre-trends do NOT prove PT holds.
+4. **Choose estimator** — staggered adoption → CS/SA/BJS (NOT plain TWFE); few treated units → SDiD; factor confounding → TROP; simple 2x2 → DiD. Run `BaconDecomposition` to diagnose TWFE bias.
+5. **Estimate** — `estimator.fit(data, ...)`. Always print the cluster count first and choose inference method based on the result (cluster-robust if >= 50 clusters, wild bootstrap if fewer).
+6. **Sensitivity analysis** — `compute_honest_did(results)` for bounds under PT violations (MultiPeriodDiD/CS only), `run_all_placebo_tests()` for 2x2 falsification, specification comparisons for staggered designs.
+7. **Heterogeneity** — CS: `aggregate='group'`/`'event_study'`; SA: `results.event_study_effects`/`to_dataframe(level='cohort')`; subgroup re-estimation.
+8. **Robustness** — compare 2-3 estimators (CS vs SA vs BJS), MUST report with and without covariates (shows whether conditioning drives identification), present pre-trends and sensitivity bounds.
+
+After estimation, call `practitioner_next_steps(results)` for context-aware
+guidance on remaining steps.
+
+Full practitioner guide: docs/llms-practitioner.txt
+
+## Documentation
+
+### Getting Started
+
+- [Practitioner Guide](docs/llms-practitioner.txt): 8-step workflow for rigorous DiD analysis (Baker et al. 2025) — **start here**
+- [Quickstart](https://diff-diff.readthedocs.io/en/stable/quickstart.html): Installation, basic 2x2 DiD — column-name and formula interfaces, covariates, fixed effects, cluster-robust SEs
+- [Choosing an Estimator](https://diff-diff.readthedocs.io/en/stable/choosing_estimator.html): Decision flowchart for selecting the right estimator for your research design
+- [Troubleshooting](https://diff-diff.readthedocs.io/en/stable/troubleshooting.html): Common issues and solutions
+
+### Comparisons & Benchmarks
+
+- [R Comparison](https://diff-diff.readthedocs.io/en/stable/r_comparison.html): Side-by-side comparison with R packages (did, fixest, synthdid, didimputation, did2s, stackedev)
+- [Python Comparison](https://diff-diff.readthedocs.io/en/stable/python_comparison.html): Comparison with Python DiD packages
+- [Benchmarks](https://diff-diff.readthedocs.io/en/stable/benchmarks.html): Validation results and performance benchmarks vs R
+
+### API Reference
+
+- [API Reference](https://diff-diff.readthedocs.io/en/stable/api/index.html): Full API documentation for all estimators, results classes, diagnostics, and utilities
+
+## Estimators
+
+- [DifferenceInDifferences](https://diff-diff.readthedocs.io/en/stable/api/estimators.html): Basic 2x2 DiD with robust/cluster-robust SEs, wild bootstrap, formula interface, and fixed effects
+- [TwoWayFixedEffects](https://diff-diff.readthedocs.io/en/stable/api/estimators.html): Panel data DiD with unit and time fixed effects via within-transformation or dummies
+- [MultiPeriodDiD](https://diff-diff.readthedocs.io/en/stable/api/estimators.html): Event study design with period-specific treatment effects for dynamic analysis
+- [CallawaySantAnna](https://diff-diff.readthedocs.io/en/stable/api/staggered.html): Callaway & Sant'Anna (2021) group-time ATT estimator for staggered adoption with aggregation
+- [SunAbraham](https://diff-diff.readthedocs.io/en/stable/api/staggered.html): Sun & Abraham (2021) interaction-weighted estimator for heterogeneity-robust event studies
+- [ImputationDiD](https://diff-diff.readthedocs.io/en/stable/api/imputation.html): Borusyak, Jaravel & Spiess (2024) imputation estimator — most efficient under homogeneous effects
+- [TwoStageDiD](https://diff-diff.readthedocs.io/en/stable/api/two_stage.html): Gardner (2022) two-stage estimator with GMM sandwich variance
+- [SyntheticDiD](https://diff-diff.readthedocs.io/en/stable/api/estimators.html): Synthetic DiD combining standard DiD and synthetic control methods for few treated units
+- [TripleDifference](https://diff-diff.readthedocs.io/en/stable/api/triple_diff.html): Triple difference (DDD) estimator for designs requiring two criteria for treatment eligibility
+- [ContinuousDiD](https://diff-diff.readthedocs.io/en/stable/api/continuous_did.html): Callaway, Goodman-Bacon & Sant'Anna (2024) continuous treatment DiD with dose-response curves
+- [StackedDiD](https://diff-diff.readthedocs.io/en/stable/api/stacked_did.html): Wing, Freedman & Hollingsworth (2024) stacked DiD with Q-weights and sub-experiments
+- [EfficientDiD](https://diff-diff.readthedocs.io/en/stable/api/efficient_did.html): Chen, Sant'Anna & Xie (2025) efficient DiD with optimal weighting for tighter SEs
+- [TROP](https://diff-diff.readthedocs.io/en/stable/api/trop.html): Triply Robust Panel estimator (Athey et al. 2025) with nuclear norm factor adjustment
+- [BaconDecomposition](https://diff-diff.readthedocs.io/en/stable/api/bacon.html): Goodman-Bacon (2021) decomposition for diagnosing TWFE bias in staggered settings
+
+## Diagnostics and Sensitivity Analysis
+
+- [Parallel Trends Testing](https://diff-diff.readthedocs.io/en/stable/api/diagnostics.html): Simple and Wasserstein-robust parallel trends tests, equivalence testing (TOST)
+- [Placebo Tests](https://diff-diff.readthedocs.io/en/stable/api/diagnostics.html): Placebo timing, group, permutation, and leave-one-out diagnostics
+- [Honest DiD](https://diff-diff.readthedocs.io/en/stable/api/honest_did.html): Rambachan & Roth (2023) sensitivity analysis — robust CI under parallel trends violations, breakdown values
+- [Pre-Trends Power Analysis](https://diff-diff.readthedocs.io/en/stable/api/pretrends.html): Roth (2022) minimum detectable violation and pre-trends test power curves
+- [Power Analysis](https://diff-diff.readthedocs.io/en/stable/api/power.html): Analytical and simulation-based power analysis — MDE, sample size, power curves for study design
+
+## Tutorials
+
+- [01 Basic DiD](https://diff-diff.readthedocs.io/en/stable/tutorials/01_basic_did.html): Introduction to 2x2 DiD — column-name and formula interfaces, covariates, fixed effects, TWFE, bootstrap
+- [02 Staggered DiD](https://diff-diff.readthedocs.io/en/stable/tutorials/02_staggered_did.html): Handling staggered treatment adoption with Callaway-Sant'Anna, Bacon decomposition, and aggregation
+- [03 Synthetic DiD](https://diff-diff.readthedocs.io/en/stable/tutorials/03_synthetic_did.html): Synthetic DiD for few treated units — unit/time weights, diagnostics, regularization tuning
+- [04 Parallel Trends](https://diff-diff.readthedocs.io/en/stable/tutorials/04_parallel_trends.html): Testing assumptions — visual inspection, robust tests, equivalence testing, placebo tests
+- [05 Honest DiD](https://diff-diff.readthedocs.io/en/stable/tutorials/05_honest_did.html): Sensitivity analysis for parallel trends violations — relative magnitudes, smoothness, breakdown values
+- [06 Power Analysis](https://diff-diff.readthedocs.io/en/stable/tutorials/06_power_analysis.html): Study design — MDE, sample size, power curves, panel data considerations, simulation-based power
+- [07 Pre-Trends Power](https://diff-diff.readthedocs.io/en/stable/tutorials/07_pretrends_power.html): Roth (2022) pre-trends power — MDV, power curves, violation types, integration with Honest DiD
+- [08 Triple Difference](https://diff-diff.readthedocs.io/en/stable/tutorials/08_triple_diff.html): DDD estimation — two-criteria treatment, estimation methods (regression, IPW, doubly robust), covariates
+- [09 Real-World Examples](https://diff-diff.readthedocs.io/en/stable/tutorials/09_real_world_examples.html): Card & Krueger minimum wage, Castle Doctrine laws, unilateral divorce laws with built-in datasets
+- [10 TROP](https://diff-diff.readthedocs.io/en/stable/tutorials/10_trop.html): Triply robust panel estimation — factor adjustment, LOOCV tuning, comparison with Synthetic DiD
+- [11 Imputation DiD](https://diff-diff.readthedocs.io/en/stable/tutorials/11_imputation_did.html): Borusyak et al. imputation estimator — event study, pre-trend test, efficiency comparison
+- [12 Two-Stage DiD](https://diff-diff.readthedocs.io/en/stable/tutorials/12_two_stage_did.html): Gardner two-stage estimator — GMM sandwich variance, per-observation treatment effects
+- [13 Stacked DiD](https://diff-diff.readthedocs.io/en/stable/tutorials/13_stacked_did.html): Stacked DiD — sub-experiments, Q-weights, event windows, trimming, clean control definitions
+- [14 Continuous DiD](https://diff-diff.readthedocs.io/en/stable/tutorials/14_continuous_did.html): Continuous treatment DiD — dose-response curves, ATT(d), ACRT, B-splines, event study diagnostics
+- [15 Efficient DiD](https://diff-diff.readthedocs.io/en/stable/tutorials/15_efficient_did.html): Chen, Sant'Anna & Xie (2025) efficient DiD — optimal weighting, PT-All vs PT-Post, efficiency gains
+
+## Optional
+
+- [Rust Backend](https://diff-diff.readthedocs.io/en/stable/benchmarks.html): Optional Rust backend (`maturin develop --release`) for 5-50x speedups on Synthetic DiD, TROP, and other compute-intensive estimators
+- [Built-in Datasets](https://diff-diff.readthedocs.io/en/stable/api/datasets.html): Real-world datasets — Card & Krueger (1994), Castle Doctrine, divorce laws, MPDTA
+- [Visualization](https://diff-diff.readthedocs.io/en/stable/api/visualization.html): Event study plots, group effects, sensitivity plots, Bacon decomposition plots, power curves
+- [Data Preparation](https://diff-diff.readthedocs.io/en/stable/api/prep.html): Data generation, panel balancing, wide-to-long conversion, treatment/post indicator creation

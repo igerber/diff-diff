@@ -8,7 +8,7 @@ For past changes and release history, see [CHANGELOG.md](CHANGELOG.md).
 
 ## Current Status
 
-diff-diff v2.6.0 is a **production-ready** DiD library with feature parity with R's `did` + `HonestDiD` + `synthdid` ecosystem for core DiD analysis:
+diff-diff v2.7.5 is a **production-ready** DiD library with feature parity with R's `did` + `HonestDiD` + `synthdid` ecosystem for core DiD analysis, plus **unique survey support** — design-based variance estimation (Taylor linearization, replicate weights) integrated across all estimators. No R or Python package offers this combination:
 
 - **Core estimators**: Basic DiD, TWFE, MultiPeriod, Callaway-Sant'Anna, Sun-Abraham, Borusyak-Jaravel-Spiess Imputation, Synthetic DiD, Triple Difference (DDD), TROP, Two-Stage DiD (Gardner 2022), Stacked DiD (Wing et al. 2024), Continuous DiD (Callaway, Goodman-Bacon & Sant'Anna 2024)
 - **Valid inference**: Robust SEs, cluster SEs, wild bootstrap, multiplier bootstrap, placebo-based variance
@@ -16,11 +16,29 @@ diff-diff v2.6.0 is a **production-ready** DiD library with feature parity with 
 - **Sensitivity analysis**: Honest DiD (Rambachan-Roth), Pre-trends power analysis (Roth 2022)
 - **Study design**: Power analysis tools
 - **Data utilities**: Real-world datasets (Card-Krueger, Castle Doctrine, Divorce Laws, MPDTA), DGP functions for all supported designs
+- **Survey support**: Full `SurveyDesign` with strata, PSU, FPC, weight types, replicate weights (BRR/Fay/JK1/JKn), Taylor linearization, DEFF diagnostics, subpopulation analysis — integrated across all estimators (see [survey-roadmap.md](docs/survey-roadmap.md))
 - **Performance**: Optional Rust backend for accelerated computation; faster than R at scale (see [CHANGELOG.md](CHANGELOG.md) for benchmarks)
 
 ---
 
-## Near-Term Enhancements (v2.7)
+## Near-Term Enhancements (v2.8)
+
+### Survey Phase 7: Completing the Survey Story
+
+Close the remaining gaps for practitioners using major population surveys
+(ACS, CPS, BRFSS, MEPS). See [survey-roadmap.md](docs/survey-roadmap.md) for
+full details.
+
+- **CS Covariates + IPW/DR + Survey** *(Implemented)*: DRDID nuisance IF
+  corrections (PS + OR) under survey weights for all estimation methods.
+- **Repeated Cross-Sections** *(Implemented)*: `panel=False` support for
+  CallawaySantAnna using cross-sectional DRDID (Sant'Anna & Zhao 2020,
+  Section 4). Supports BRFSS, ACS annual, CPS monthly.
+- **Survey-Aware DiD Tutorial** *(Open)*: Jupyter notebook demonstrating
+  the full workflow with realistic survey data.
+- **HonestDiD + Survey Variance** *(Implemented)*: Survey df and full
+  event-study VCV propagated to sensitivity analysis, with bootstrap/replicate
+  diagonal fallback.
 
 ### Staggered Triple Difference (DDD)
 
@@ -30,13 +48,7 @@ Extend the existing `TripleDifference` estimator to handle staggered adoption se
 - Event study aggregation and pre-treatment placebo effects
 - Multiplier bootstrap for valid inference in staggered settings
 
-**Reference**: [Ortiz-Villavicencio & Sant'Anna (2025)](https://arxiv.org/abs/2505.09942). *Working Paper*. R package: `triplediff`.
-
-### Enhanced Visualization
-
-- Synthetic control weight visualization (bar chart of unit weights)
-- Treatment adoption "staircase" plot for staggered designs
-- Interactive plots with plotly backend option
+**Reference**: [Ortiz-Villavicencio & Sant'Anna (2025)](https://arxiv.org/abs/2505.09942). "Better Understanding Triple Differences Estimators." *Working Paper*. R package: `triplediff`.
 
 ---
 

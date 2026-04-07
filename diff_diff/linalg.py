@@ -34,7 +34,7 @@ This is controlled by the `rank_deficient_action` parameter:
 
 import warnings
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Dict, List, Literal, Optional, Tuple, Union, overload
 
 import numpy as np
 import pandas as pd
@@ -48,7 +48,6 @@ from diff_diff._backend import (
     _rust_compute_robust_vcov,
     _rust_solve_ols,
 )
-
 
 # =============================================================================
 # Utility Functions
@@ -336,6 +335,88 @@ def _solve_ols_rust(
         return coefficients, residuals, vcov
 
 
+@overload
+def solve_ols(
+    X: np.ndarray,
+    y: np.ndarray,
+    *,
+    cluster_ids: Optional[np.ndarray] = ...,
+    return_vcov: bool = ...,
+    return_fitted: Literal[False] = ...,
+    check_finite: bool = ...,
+    rank_deficient_action: str = ...,
+    column_names: Optional[List[str]] = ...,
+    skip_rank_check: bool = ...,
+) -> Tuple[np.ndarray, np.ndarray, Optional[np.ndarray]]: ...
+
+
+@overload
+def solve_ols(
+    X: np.ndarray,
+    y: np.ndarray,
+    *,
+    cluster_ids: Optional[np.ndarray] = ...,
+    return_vcov: bool = ...,
+    return_fitted: Literal[True],
+    check_finite: bool = ...,
+    rank_deficient_action: str = ...,
+    column_names: Optional[List[str]] = ...,
+    skip_rank_check: bool = ...,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, Optional[np.ndarray]]: ...
+
+
+@overload
+def solve_ols(
+    X: np.ndarray,
+    y: np.ndarray,
+    *,
+    cluster_ids: Optional[np.ndarray] = ...,
+    return_vcov: bool = ...,
+    return_fitted: bool,
+    check_finite: bool = ...,
+    rank_deficient_action: str = ...,
+    column_names: Optional[List[str]] = ...,
+    skip_rank_check: bool = ...,
+) -> Union[
+    Tuple[np.ndarray, np.ndarray, Optional[np.ndarray]],
+    Tuple[np.ndarray, np.ndarray, np.ndarray, Optional[np.ndarray]],
+]: ...
+
+
+_VALID_WEIGHT_TYPES = {"pweight", "fweight", "aweight"}
+
+
+def _validate_weights(weights, weight_type, n):
+    """Validate weights array and weight_type for solve_ols/LinearRegression."""
+    if weight_type not in _VALID_WEIGHT_TYPES:
+        raise ValueError(
+            f"weight_type must be one of {_VALID_WEIGHT_TYPES}, " f"got '{weight_type}'"
+        )
+    if weights is not None:
+        weights = np.asarray(weights, dtype=np.float64)
+        if weights.shape[0] != n:
+            raise ValueError(f"weights length ({weights.shape[0]}) must match " f"X rows ({n})")
+        if np.any(np.isnan(weights)):
+            raise ValueError("Weights contain NaN values")
+        if np.any(np.isinf(weights)):
+            raise ValueError("Weights contain Inf values")
+        if np.any(weights < 0):
+            raise ValueError("Weights must be non-negative")
+        if np.sum(weights) <= 0:
+            raise ValueError(
+                "Weights sum to zero — no observations have positive weight. "
+                "Cannot fit a model on an empty effective sample."
+            )
+        if weight_type == "fweight":
+            fractional = weights - np.round(weights)
+            if np.any(np.abs(fractional) > 1e-10):
+                raise ValueError(
+                    "Frequency weights (fweight) must be non-negative integers. "
+                    "Fractional values detected. Use pweight for non-integer weights."
+                )
+    return weights
+
+
 def solve_ols(
     X: np.ndarray,
     y: np.ndarray,
@@ -347,6 +428,8 @@ def solve_ols(
     rank_deficient_action: str = "warn",
     column_names: Optional[List[str]] = None,
     skip_rank_check: bool = False,
+    weights: Optional[np.ndarray] = None,
+    weight_type: str = "pweight",
 ) -> Union[
     Tuple[np.ndarray, np.ndarray, Optional[np.ndarray]],
     Tuple[np.ndarray, np.ndarray, np.ndarray, Optional[np.ndarray]],
@@ -388,6 +471,14 @@ def solve_ols(
         rank-deficient matrices. Use only when you know the design matrix is
         full rank. If the matrix is actually rank-deficient, results may be
         incorrect (minimum-norm solution instead of R-style NA handling).
+    weights : ndarray of shape (n,), optional
+        Observation weights for Weighted Least Squares. When provided,
+        minimizes sum(w_i * (y_i - X_i @ beta)^2). Weights should be
+        pre-normalized (e.g., mean=1 for pweights).
+    weight_type : str, default "pweight"
+        Type of weights: "pweight" (inverse selection probability),
+        "fweight" (frequency), or "aweight" (inverse variance).
+        Affects variance estimation but not coefficient computation.
 
     Returns
     -------
@@ -479,111 +570,194 @@ def solve_ols(
                 "Clean your data or set check_finite=False to skip this check."
             )
 
+    # WLS transformation: apply sqrt(w) scaling to X and y
+    # This happens BEFORE routing to Rust or NumPy backends — they receive
+    # pre-transformed X_w, y_w and solve standard OLS.
+    # Residuals are back-transformed to original scale afterward.
+    _original_X = None
+    _original_y = None
+    if weights is not None:
+        weights = _validate_weights(weights, weight_type, n)
+        _original_X = X
+        _original_y = y
+        sqrt_w = np.sqrt(weights)
+        X = X * sqrt_w[:, np.newaxis]
+        y = y * sqrt_w
+
+    # When weights are present, compute vcov separately on original-scale data
+    # to avoid double-weighting. The backend only computes point estimates.
+    _weighted_vcov_external = weights is not None
+    _backend_return_vcov = return_vcov and not _weighted_vcov_external
+
     # Fast path: skip rank check and use Rust directly when requested
     # This saves O(nk²) QR overhead but won't detect rank-deficient matrices
+    result = None  # Will hold the tuple from backend functions
+
     if skip_rank_check:
-        if HAS_RUST_BACKEND and _rust_solve_ols is not None:
+        if HAS_RUST_BACKEND and _rust_solve_ols is not None and weights is None:
             result = _solve_ols_rust(
                 X,
                 y,
                 cluster_ids=cluster_ids,
-                return_vcov=return_vcov,
+                return_vcov=_backend_return_vcov,
                 return_fitted=return_fitted,
             )
-            if result is not None:
-                return result
-            # Fall through to NumPy on numerical instability
-        # Fall through to Python without rank check (user guarantees full rank)
-        return _solve_ols_numpy(
-            X,
-            y,
-            cluster_ids=cluster_ids,
-            return_vcov=return_vcov,
-            return_fitted=return_fitted,
-            rank_deficient_action=rank_deficient_action,
-            column_names=column_names,
-            _skip_rank_check=True,
-        )
-
-    # Check for rank deficiency using fast pivoted QR decomposition.
-    # This adds O(nk²) overhead but is necessary for:
-    # 1. Detecting which columns to drop (R-style NA handling)
-    # 2. Routing rank-deficient cases to Python (Rust doesn't support pivoted QR)
-    #
-    # Trade-off: ~2x compute cost for full-rank matrices in exchange for proper
-    # rank deficiency handling. For maximum performance on known full-rank data,
-    # set skip_rank_check=True.
-    rank, dropped_cols, pivot = _detect_rank_deficiency(X)
-    is_rank_deficient = len(dropped_cols) > 0
-
-    # Routing strategy:
-    # - Full-rank + Rust available → fast Rust backend (SVD-based solve)
-    # - Rank-deficient → Python backend (proper NA handling, valid SEs)
-    # - Rust numerical instability → Python fallback (via None return)
-    # - No Rust → Python backend (works for all cases)
-    if HAS_RUST_BACKEND and _rust_solve_ols is not None and not is_rank_deficient:
-        result = _solve_ols_rust(
-            X,
-            y,
-            cluster_ids=cluster_ids,
-            return_vcov=return_vcov,
-            return_fitted=return_fitted,
-        )
-
-        # Check for None: Rust backend detected numerical instability and
-        # signaled us to fall back to Python backend
+            # result is None on numerical instability → fall through
         if result is None:
-            return _solve_ols_numpy(
+            result = _solve_ols_numpy(
                 X,
                 y,
                 cluster_ids=cluster_ids,
-                return_vcov=return_vcov,
+                return_vcov=_backend_return_vcov,
                 return_fitted=return_fitted,
                 rank_deficient_action=rank_deficient_action,
                 column_names=column_names,
-                _precomputed_rank_info=None,  # Force fresh rank detection
+                _skip_rank_check=True,
+            )
+    else:
+        # Check for rank deficiency using fast pivoted QR decomposition.
+        # Rank detection operates on (possibly weighted) X since collinearity
+        # depends on the weighted column space.
+        rank, dropped_cols, pivot = _detect_rank_deficiency(X)
+        is_rank_deficient = len(dropped_cols) > 0
+
+        # Routing strategy:
+        # - Full-rank + Rust available + no weights → fast Rust backend
+        # - Weighted or rank-deficient → Python backend
+        # - Rust numerical instability → Python fallback (via None return)
+        if (
+            HAS_RUST_BACKEND
+            and _rust_solve_ols is not None
+            and not is_rank_deficient
+            and weights is None
+        ):
+            result = _solve_ols_rust(
+                X,
+                y,
+                cluster_ids=cluster_ids,
+                return_vcov=_backend_return_vcov,
+                return_fitted=return_fitted,
             )
 
-        # Check for NaN vcov: Rust SVD may detect rank-deficiency that QR missed
-        # for ill-conditioned matrices (QR and SVD have different numerical properties).
-        # When this happens, fall back to Python's R-style handling.
-        vcov = result[-1]  # vcov is always the last element
-        if return_vcov and vcov is not None and np.any(np.isnan(vcov)):
-            warnings.warn(
-                "Rust backend detected ill-conditioned matrix (NaN in variance-covariance). "
-                "Re-running with Python backend for proper rank detection.",
-                UserWarning,
-                stacklevel=2,
-            )
-            # Force fresh rank detection - don't pass cached info since QR
-            # and SVD disagreed about rank. Python's QR will re-detect and
-            # apply R-style NaN handling for dropped columns.
-            return _solve_ols_numpy(
+            if result is not None:
+                vcov_check = result[-1]
+                if _backend_return_vcov and vcov_check is not None and np.any(np.isnan(vcov_check)):
+                    warnings.warn(
+                        "Rust backend detected ill-conditioned matrix (NaN in variance-covariance). "
+                        "Re-running with Python backend for proper rank detection.",
+                        UserWarning,
+                        stacklevel=2,
+                    )
+                    result = None  # Force Python fallback below
+
+        if result is None:
+            result = _solve_ols_numpy(
                 X,
                 y,
                 cluster_ids=cluster_ids,
-                return_vcov=return_vcov,
+                return_vcov=_backend_return_vcov,
                 return_fitted=return_fitted,
                 rank_deficient_action=rank_deficient_action,
                 column_names=column_names,
-                _precomputed_rank_info=None,  # Force re-detection
+                _precomputed_rank_info=(rank, dropped_cols, pivot),
             )
+
+    # Back-transform residuals and compute weighted vcov on original-scale data.
+    # The WLS transform (sqrt(w) scaling) is for point estimates only. Vcov must
+    # be computed on original X and residuals with weights applied exactly once.
+    if _original_X is not None and _original_y is not None:
+        if return_fitted:
+            coefficients, _resid_w, _fitted_w, vcov_out = result
         else:
-            return result
+            coefficients, _resid_w, vcov_out = result
 
-    # Use NumPy implementation for rank-deficient cases (R-style NA handling)
-    # or when Rust backend is not available
-    return _solve_ols_numpy(
-        X,
-        y,
-        cluster_ids=cluster_ids,
-        return_vcov=return_vcov,
-        return_fitted=return_fitted,
-        rank_deficient_action=rank_deficient_action,
-        column_names=column_names,
-        # Pass pre-computed rank info to avoid redundant computation
-        _precomputed_rank_info=(rank, dropped_cols, pivot),
-    )
+        # Handle rank-deficient case: use only identified columns for fitted values
+        # to avoid NaN propagation from dropped coefficients
+        nan_mask = np.isnan(coefficients)
+        if np.any(nan_mask):
+            kept_cols = np.where(~nan_mask)[0]
+            fitted_orig = np.dot(_original_X[:, kept_cols], coefficients[kept_cols])
+        else:
+            fitted_orig = np.dot(_original_X, coefficients)
+        residuals_orig = _original_y - fitted_orig
+
+        if return_vcov:
+            if np.any(nan_mask):
+                kept_cols = np.where(~nan_mask)[0]
+                if len(kept_cols) > 0:
+                    vcov_reduced = _compute_robust_vcov_numpy(
+                        _original_X[:, kept_cols],
+                        residuals_orig,
+                        cluster_ids,
+                        weights=weights,
+                        weight_type=weight_type,
+                    )
+                    vcov_out = _expand_vcov_with_nan(vcov_reduced, _original_X.shape[1], kept_cols)
+                else:
+                    vcov_out = np.full((_original_X.shape[1], _original_X.shape[1]), np.nan)
+            else:
+                vcov_out = _compute_robust_vcov_numpy(
+                    _original_X,
+                    residuals_orig,
+                    cluster_ids,
+                    weights=weights,
+                    weight_type=weight_type,
+                )
+
+        if return_fitted:
+            result = (coefficients, residuals_orig, fitted_orig, vcov_out)
+        else:
+            result = (coefficients, residuals_orig, vcov_out)
+
+    return result
+
+
+@overload
+def _solve_ols_numpy(
+    X: np.ndarray,
+    y: np.ndarray,
+    *,
+    cluster_ids: Optional[np.ndarray] = ...,
+    return_vcov: bool = ...,
+    return_fitted: Literal[False] = ...,
+    rank_deficient_action: str = ...,
+    column_names: Optional[List[str]] = ...,
+    _precomputed_rank_info: Optional[Tuple[int, np.ndarray, np.ndarray]] = ...,
+    _skip_rank_check: bool = ...,
+) -> Tuple[np.ndarray, np.ndarray, Optional[np.ndarray]]: ...
+
+
+@overload
+def _solve_ols_numpy(
+    X: np.ndarray,
+    y: np.ndarray,
+    *,
+    cluster_ids: Optional[np.ndarray] = ...,
+    return_vcov: bool = ...,
+    return_fitted: Literal[True],
+    rank_deficient_action: str = ...,
+    column_names: Optional[List[str]] = ...,
+    _precomputed_rank_info: Optional[Tuple[int, np.ndarray, np.ndarray]] = ...,
+    _skip_rank_check: bool = ...,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, Optional[np.ndarray]]: ...
+
+
+@overload
+def _solve_ols_numpy(
+    X: np.ndarray,
+    y: np.ndarray,
+    *,
+    cluster_ids: Optional[np.ndarray] = ...,
+    return_vcov: bool = ...,
+    return_fitted: bool,
+    rank_deficient_action: str = ...,
+    column_names: Optional[List[str]] = ...,
+    _precomputed_rank_info: Optional[Tuple[int, np.ndarray, np.ndarray]] = ...,
+    _skip_rank_check: bool = ...,
+) -> Union[
+    Tuple[np.ndarray, np.ndarray, Optional[np.ndarray]],
+    Tuple[np.ndarray, np.ndarray, np.ndarray, Optional[np.ndarray]],
+]: ...
 
 
 def _solve_ols_numpy(
@@ -699,7 +873,11 @@ def _solve_ols_numpy(
         # Compute variance-covariance matrix for reduced system, then expand
         vcov = None
         if return_vcov:
-            vcov_reduced = _compute_robust_vcov_numpy(X_reduced, residuals, cluster_ids)
+            vcov_reduced = _compute_robust_vcov_numpy(
+                X_reduced,
+                residuals,
+                cluster_ids,
+            )
             vcov = _expand_vcov_with_nan(vcov_reduced, k, kept_cols)
     else:
         # Full-rank case: proceed normally
@@ -725,6 +903,8 @@ def compute_robust_vcov(
     X: np.ndarray,
     residuals: np.ndarray,
     cluster_ids: Optional[np.ndarray] = None,
+    weights: Optional[np.ndarray] = None,
+    weight_type: str = "pweight",
 ) -> np.ndarray:
     """
     Compute heteroskedasticity-robust or cluster-robust variance-covariance matrix.
@@ -739,6 +919,10 @@ def compute_robust_vcov(
         OLS residuals.
     cluster_ids : ndarray of shape (n,), optional
         Cluster identifiers. If None, computes HC1 robust SEs.
+    weights : ndarray of shape (n,), optional
+        Observation weights. If provided, computes weighted sandwich estimator.
+    weight_type : str, default "pweight"
+        Weight type: "pweight", "fweight", or "aweight".
 
     Returns
     -------
@@ -748,8 +932,10 @@ def compute_robust_vcov(
     Notes
     -----
     For HC1 (no clustering):
-        meat = X' * diag(u^2) * X
-        adjustment = n / (n - k)
+        pweight: meat = Σ s_i s_i' where s_i = w_i x_i u_i (w² in meat)
+        fweight: meat = X' diag(w u²) X (matches frequency-expanded HC1)
+        aweight/unweighted: meat = X' diag(u²) X
+        adjustment = n / (n - k)  (fweight uses n_eff = sum(w))
 
     For cluster-robust:
         meat = sum_g (X_g' u_g)(X_g' u_g)'
@@ -758,8 +944,12 @@ def compute_robust_vcov(
     The cluster-robust computation is vectorized using pandas groupby,
     which is much faster than a Python loop over clusters.
     """
-    # Use Rust backend if available
-    if HAS_RUST_BACKEND:
+    # Validate weights before dispatching to backend
+    if weights is not None:
+        weights = _validate_weights(weights, weight_type, X.shape[0])
+
+    # Use Rust backend if available AND no weights (Rust doesn't support weights yet)
+    if HAS_RUST_BACKEND and weights is None:
         X = np.ascontiguousarray(X, dtype=np.float64)
         residuals = np.ascontiguousarray(residuals, dtype=np.float64)
 
@@ -786,17 +976,31 @@ def compute_robust_vcov(
                     UserWarning,
                     stacklevel=2,
                 )
-                return _compute_robust_vcov_numpy(X, residuals, cluster_ids)
+                return _compute_robust_vcov_numpy(
+                    X,
+                    residuals,
+                    cluster_ids,
+                    weights=weights,
+                    weight_type=weight_type,
+                )
             raise
 
     # Fallback to NumPy implementation
-    return _compute_robust_vcov_numpy(X, residuals, cluster_ids)
+    return _compute_robust_vcov_numpy(
+        X,
+        residuals,
+        cluster_ids,
+        weights=weights,
+        weight_type=weight_type,
+    )
 
 
 def _compute_robust_vcov_numpy(
     X: np.ndarray,
     residuals: np.ndarray,
     cluster_ids: Optional[np.ndarray] = None,
+    weights: Optional[np.ndarray] = None,
+    weight_type: str = "pweight",
 ) -> np.ndarray:
     """
     NumPy fallback implementation of compute_robust_vcov.
@@ -813,6 +1017,10 @@ def _compute_robust_vcov_numpy(
     cluster_ids : np.ndarray, optional
         Cluster identifiers. If None, uses HC1. If provided, uses
         cluster-robust with G/(G-1) small-sample adjustment.
+    weights : np.ndarray, optional
+        Observation weights. If provided, computes weighted sandwich estimator.
+    weight_type : str, default "pweight"
+        Weight type: "pweight", "fweight", or "aweight".
 
     Returns
     -------
@@ -823,46 +1031,81 @@ def _compute_robust_vcov_numpy(
     -----
     Uses vectorized groupby aggregation for cluster-robust SEs to avoid
     the O(n * G) loop that would be required with explicit iteration.
+
+    Weight type affects the meat computation:
+    - pweight: scores = w_i * X_i * u_i (HC1 meat = Σ s_i s_i' = X'diag(w²u²)X)
+    - fweight: scores = w_i * X_i * u_i (weighted scores), df = sum(w) - k
+    - aweight: scores = X_i * u_i (no weight in meat; after WLS, errors ~homoskedastic)
     """
     n, k = X.shape
-    XtX = X.T @ X
+
+    # Bread: (X'WX) or (X'X) depending on whether weights present
+    if weights is not None:
+        XtWX = X.T @ (X * weights[:, np.newaxis])
+        bread_matrix = XtWX
+    else:
+        bread_matrix = X.T @ X
+
+    # Effective n for df computation
+    # fweights: sum(w) (frequency expansion)
+    # pweight/aweight with zeros: positive-weight count (zero-weight rows
+    # contribute nothing to the sandwich and should not inflate df)
+    n_eff = n
+    if weights is not None:
+        if weight_type == "fweight":
+            n_eff = int(round(np.sum(weights)))
+        elif np.any(weights == 0):
+            n_eff = int(np.count_nonzero(weights > 0))
+
+    # Compute weighted scores for cluster-robust meat (outer product of sums).
+    # pweight/fweight multiply by w; aweight and unweighted use raw residuals.
+    _use_weighted_scores = weights is not None and weight_type not in ("aweight",)
+    if _use_weighted_scores:
+        scores = X * (weights * residuals)[:, np.newaxis]
+    else:
+        scores = X * residuals[:, np.newaxis]
+        # Zero out scores for zero-weight aweight rows (subpopulation invariance)
+        if weights is not None and np.any(weights == 0):
+            scores[weights == 0] = 0.0
 
     if cluster_ids is None:
         # HC1 (heteroskedasticity-robust) standard errors
-        adjustment = n / (n - k)
-        u_squared = residuals**2
-        # Vectorized meat computation: X' diag(u^2) X = (X * u^2)' X
-        meat = np.dot(X.T, X * u_squared[:, np.newaxis])
+        adjustment = n_eff / (n_eff - k)
+        if weights is not None and weight_type == "fweight":
+            # fweight: frequency-expanded HC1, meat = Σ w_i x_i x_i' u_i²
+            meat = np.dot(X.T, X * (weights * residuals**2)[:, np.newaxis])
+        else:
+            # pweight: WLS score outer product, meat = Σ w_i² x_i x_i' u_i²
+            # aweight/unweighted: meat = Σ x_i x_i' u_i² (scores have no w)
+            meat = scores.T @ scores
     else:
         # Cluster-robust standard errors (vectorized via groupby)
         cluster_ids = np.asarray(cluster_ids)
         unique_clusters = np.unique(cluster_ids)
         n_clusters = len(unique_clusters)
 
+        # Exclude clusters with zero total weight (subpopulation-zeroed)
+        if weights is not None and weight_type != "fweight" and np.any(weights == 0):
+            cluster_weights = pd.Series(weights).groupby(cluster_ids).sum()
+            n_clusters = int((cluster_weights > 0).sum())
+
         if n_clusters < 2:
             raise ValueError(f"Need at least 2 clusters for cluster-robust SEs, got {n_clusters}")
 
         # Small-sample adjustment
-        adjustment = (n_clusters / (n_clusters - 1)) * ((n - 1) / (n - k))
-
-        # Compute cluster-level scores: sum of X_i * u_i within each cluster
-        # scores[i] = X[i] * residuals[i] for each observation
-        scores = X * residuals[:, np.newaxis]  # (n, k)
+        adjustment = (n_clusters / (n_clusters - 1)) * ((n_eff - 1) / (n_eff - k))
 
         # Sum scores within each cluster using pandas groupby (vectorized)
-        # This is much faster than looping over clusters
-        cluster_scores = pd.DataFrame(scores).groupby(cluster_ids).sum().values  # (G, k)
+        cluster_scores = pd.DataFrame(scores).groupby(cluster_ids).sum().values
 
         # Meat is the outer product sum: sum_g (score_g)(score_g)'
-        # Equivalent to cluster_scores.T @ cluster_scores
-        meat = cluster_scores.T @ cluster_scores  # (k, k)
+        meat = cluster_scores.T @ cluster_scores
 
-    # Sandwich estimator: (X'X)^{-1} meat (X'X)^{-1}
-    # Solve (X'X) temp = meat, then solve (X'X) vcov' = temp'
-    # More stable than explicit inverse
+    # Sandwich estimator: bread^{-1} meat bread^{-1}
+    # Solve bread * temp = meat, then solve bread * vcov' = temp'
     try:
-        temp = np.linalg.solve(XtX, meat)
-        vcov = adjustment * np.linalg.solve(XtX, temp.T).T
+        temp = np.linalg.solve(bread_matrix, meat)
+        vcov = adjustment * np.linalg.solve(bread_matrix, temp.T).T
     except np.linalg.LinAlgError as e:
         if "Singular" in str(e):
             raise ValueError(
@@ -888,6 +1131,7 @@ def solve_logit(
     tol: float = 1e-8,
     check_separation: bool = True,
     rank_deficient_action: str = "warn",
+    weights: Optional[np.ndarray] = None,
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
     Fit logistic regression via IRLS (Fisher scoring).
@@ -913,6 +1157,13 @@ def solve_logit(
         - "warn": Emit warning and drop columns (default)
         - "error": Raise ValueError
         - "silent": Drop columns silently
+    weights : np.ndarray, optional
+        Survey/observation weights of shape (n_samples,). When provided,
+        the IRLS working weights become ``weights * mu * (1 - mu)``
+        instead of ``mu * (1 - mu)``. This produces the survey-weighted
+        maximum likelihood estimator, matching R's ``svyglm(family=binomial)``.
+        When None (default), behavior is identical to unweighted logistic
+        regression.
 
     Returns
     -------
@@ -925,6 +1176,22 @@ def solve_logit(
     X_with_intercept = np.column_stack([np.ones(n), X])
     k = p + 1  # number of parameters including intercept
 
+    # Validate weights
+    if weights is not None:
+        weights = np.asarray(weights, dtype=np.float64)
+        if weights.shape != (n,):
+            raise ValueError(f"weights must have shape ({n},), got {weights.shape}")
+        if np.any(np.isnan(weights)):
+            raise ValueError("weights contain NaN values")
+        if np.any(~np.isfinite(weights)):
+            raise ValueError("weights contain Inf values")
+        if np.any(weights < 0):
+            raise ValueError("weights must be non-negative")
+        if np.sum(weights) <= 0:
+            raise ValueError(
+                "weights sum to zero — no observations have positive weight"
+            )
+
     # Validate rank_deficient_action
     valid_actions = {"warn", "error", "silent"}
     if rank_deficient_action not in valid_actions:
@@ -933,7 +1200,57 @@ def solve_logit(
             f"got '{rank_deficient_action}'"
         )
 
-    # Check rank deficiency once before iterating
+    # Track original column count for coefficient expansion at the end
+    k_original = X_with_intercept.shape[1]
+    eff_dropped_original: list = []  # indices in original column space
+
+    # Validate effective weighted sample when weights have zeros
+    if weights is not None and np.any(weights == 0):
+        pos_mask = weights > 0
+        n_pos = int(np.sum(pos_mask))
+        y_pos = y[pos_mask]
+        # Need both outcome classes in the positive-weight subset
+        unique_y = np.unique(y_pos)
+        if len(unique_y) < 2:
+            raise ValueError(
+                f"Positive-weight observations have only {len(unique_y)} "
+                f"outcome class(es). Logistic regression requires both 0 and 1 "
+                f"in the effective (positive-weight) sample."
+            )
+        # Check rank deficiency on positive-weight rows FIRST — full design
+        # may be full rank due to zero-weight padding. Drop columns before
+        # checking sample-size identification.
+        X_eff = X_with_intercept[pos_mask]
+        eff_rank_info = _detect_rank_deficiency(X_eff)
+        if len(eff_rank_info[1]) > 0:
+            n_dropped_eff = len(eff_rank_info[1])
+            if rank_deficient_action == "error":
+                raise ValueError(
+                    f"Effective (positive-weight) sample is rank-deficient: "
+                    f"{n_dropped_eff} linearly dependent column(s). "
+                    f"Cannot identify logistic model on this subpopulation."
+                )
+            elif rank_deficient_action == "warn":
+                warnings.warn(
+                    f"Effective (positive-weight) sample is rank-deficient: "
+                    f"dropping {n_dropped_eff} column(s). Propensity estimates "
+                    f"may be unreliable on this subpopulation.",
+                    UserWarning,
+                    stacklevel=2,
+                )
+            # Drop columns and track original indices for final expansion
+            eff_dropped_original = list(eff_rank_info[1])
+            X_with_intercept = np.delete(X_with_intercept, eff_rank_info[1], axis=1)
+            k = X_with_intercept.shape[1]
+        # Check sample-size identification AFTER column dropping
+        if n_pos <= k:
+            raise ValueError(
+                f"Only {n_pos} positive-weight observation(s) for "
+                f"{k} parameters (after rank reduction). "
+                f"Cannot identify logistic model."
+            )
+
+    # Check rank deficiency once before iterating (on possibly-shrunk matrix)
     rank_info = _detect_rank_deficiency(X_with_intercept)
     rank, dropped_cols, _ = rank_info
     if len(dropped_cols) > 0:
@@ -969,11 +1286,16 @@ def solve_logit(
         mu = np.clip(mu, 1e-10, 1 - 1e-10)
 
         # Working weights and working response
-        w = mu * (1.0 - mu)
-        z = eta + (y - mu) / w
+        w_irls = mu * (1.0 - mu)
+        z = eta + (y - mu) / w_irls
+
+        if weights is not None:
+            w_total = weights * w_irls
+        else:
+            w_total = w_irls
 
         # Weighted least squares: solve (X'WX) beta = X'Wz
-        sqrt_w = np.sqrt(w)
+        sqrt_w = np.sqrt(w_total)
         Xw = X_solve * sqrt_w[:, None]
         zw = z * sqrt_w
         beta_new, _, _, _ = np.linalg.lstsq(Xw, zw, rcond=None)
@@ -1024,10 +1346,21 @@ def solve_logit(
                 stacklevel=2,
             )
 
-    # Expand beta back to full size if columns were dropped
-    if len(dropped_cols) > 0:
-        beta_full = np.zeros(k)
-        beta_full[kept_cols] = beta_solve
+    # Expand beta back to original column count, accounting for columns
+    # dropped in both the effective-sample check and the full-sample check
+    if len(dropped_cols) > 0 or len(eff_dropped_original) > 0:
+        # First expand from X_solve columns back to post-eff-drop columns
+        # Use NaN for dropped coefficients (R convention: not estimable)
+        beta_post_eff = np.full(k, np.nan)
+        beta_post_eff[kept_cols] = beta_solve
+
+        # Then expand from post-eff-drop columns back to original columns
+        if len(eff_dropped_original) > 0:
+            beta_full = np.full(k_original, np.nan)
+            kept_original = [i for i in range(k_original) if i not in eff_dropped_original]
+            beta_full[kept_original] = beta_post_eff
+        else:
+            beta_full = beta_post_eff
     else:
         beta_full = beta_solve
 
@@ -1221,6 +1554,15 @@ class LinearRegression:
         - "warn": Issue warning and drop linearly dependent columns (default)
         - "error": Raise ValueError
         - "silent": Drop columns silently without warning
+    weights : array-like, optional
+        Observation weights. When survey_design is provided, weights are
+        automatically derived from it (explicit weights are overridden).
+    weight_type : str, default "pweight"
+        Weight type: "pweight", "fweight", or "aweight".
+    survey_design : ResolvedSurveyDesign, optional
+        Resolved survey design for Taylor Series Linearization variance
+        estimation. When provided, weights and weight_type are canonicalized
+        from this object.
 
     Attributes
     ----------
@@ -1276,12 +1618,18 @@ class LinearRegression:
         cluster_ids: Optional[np.ndarray] = None,
         alpha: float = 0.05,
         rank_deficient_action: str = "warn",
+        weights: Optional[np.ndarray] = None,
+        weight_type: str = "pweight",
+        survey_design: object = None,
     ):
         self.include_intercept = include_intercept
         self.robust = robust
         self.cluster_ids = cluster_ids
         self.alpha = alpha
         self.rank_deficient_action = rank_deficient_action
+        self.weights = weights
+        self.weight_type = weight_type
+        self.survey_design = survey_design  # ResolvedSurveyDesign or None
 
         # Fitted attributes (set by fit())
         self.coefficients_: Optional[np.ndarray] = None
@@ -1294,6 +1642,7 @@ class LinearRegression:
         self.n_params_: Optional[int] = None
         self.n_params_effective_: Optional[int] = None
         self.df_: Optional[int] = None
+        self.survey_df_: Optional[int] = None
 
     def fit(
         self,
@@ -1327,6 +1676,9 @@ class LinearRegression:
         X = np.asarray(X, dtype=np.float64)
         y = np.asarray(y, dtype=np.float64)
 
+        # Reset replicate df from any previous fit
+        self._replicate_df = None
+
         # Add intercept if requested
         if self.include_intercept:
             X = np.column_stack([np.ones(X.shape[0]), X])
@@ -1334,18 +1686,59 @@ class LinearRegression:
         # Use provided cluster_ids or fall back to instance-level
         effective_cluster_ids = cluster_ids if cluster_ids is not None else self.cluster_ids
 
-        # Determine if we need robust/cluster vcov
-        compute_vcov = True
+        # Determine if survey vcov should be used
+        _use_survey_vcov = False
+        if self.survey_design is not None:
+            from diff_diff.survey import ResolvedSurveyDesign
+
+            if isinstance(self.survey_design, ResolvedSurveyDesign):
+                _use_survey_vcov = self.survey_design.needs_survey_vcov
+                # Canonicalize weights from survey_design to ensure consistency
+                # between coefficient estimation and survey vcov computation
+                if self.weights is not None and self.weights is not self.survey_design.weights:
+                    warnings.warn(
+                        "Explicit weights= differ from survey_design.weights. "
+                        "Using survey_design weights for both coefficient "
+                        "estimation and variance computation to ensure "
+                        "consistency.",
+                        UserWarning,
+                        stacklevel=2,
+                    )
+                self.weights = self.survey_design.weights
+                self.weight_type = self.survey_design.weight_type
+
+        if self.weights is not None:
+            self.weights = _validate_weights(self.weights, self.weight_type, X.shape[0])
+
+        # Inject cluster as PSU for survey variance when no PSU specified.
+        # Use a local variable to avoid mutating self.survey_design, which
+        # would cause stale PSU on repeated fit() calls with different clusters.
+        _effective_survey_design = self.survey_design
+        if (
+            effective_cluster_ids is not None
+            and _effective_survey_design is not None
+            and _use_survey_vcov
+        ):
+            from diff_diff.survey import ResolvedSurveyDesign as _RSD
+            from diff_diff.survey import _inject_cluster_as_psu
+
+            if isinstance(_effective_survey_design, _RSD) and _effective_survey_design.psu is None:
+                _effective_survey_design = _inject_cluster_as_psu(
+                    _effective_survey_design, effective_cluster_ids
+                )
 
         if self.robust or effective_cluster_ids is not None:
             # Use solve_ols with robust/cluster SEs
+            # When survey vcov will be used, skip standard vcov computation
             coefficients, residuals, fitted, vcov = solve_ols(
                 X,
                 y,
                 cluster_ids=effective_cluster_ids,
                 return_fitted=True,
-                return_vcov=compute_vcov,
+                return_vcov=not _use_survey_vcov,
                 rank_deficient_action=self.rank_deficient_action,
+                weights=self.weights,
+                weight_type=self.weight_type,
             )
         else:
             # Classical OLS - compute vcov separately
@@ -1355,12 +1748,23 @@ class LinearRegression:
                 return_fitted=True,
                 return_vcov=False,
                 rank_deficient_action=self.rank_deficient_action,
+                weights=self.weights,
+                weight_type=self.weight_type,
             )
             # Compute classical OLS variance-covariance matrix
             # Handle rank-deficient case: use effective rank for df
             n, k = X.shape
             nan_mask = np.isnan(coefficients)
             k_effective = k - np.sum(nan_mask)  # Number of identified coefficients
+
+            # Effective n for df: fweights use sum(w), pweight/aweight with
+            # zeros use positive-weight count (zero-weight rows don't contribute)
+            n_eff_df = n
+            if self.weights is not None:
+                if self.weight_type == "fweight":
+                    n_eff_df = int(round(np.sum(self.weights)))
+                elif np.any(self.weights == 0):
+                    n_eff_df = int(np.count_nonzero(self.weights > 0))
 
             if k_effective == 0:
                 # All coefficients dropped - no valid inference
@@ -1369,22 +1773,93 @@ class LinearRegression:
                 # Rank-deficient: compute vcov for identified coefficients only
                 kept_cols = np.where(~nan_mask)[0]
                 X_reduced = X[:, kept_cols]
-                mse = np.sum(residuals**2) / (n - k_effective)
-                try:
-                    vcov_reduced = np.linalg.solve(
-                        X_reduced.T @ X_reduced, mse * np.eye(k_effective)
-                    )
-                except np.linalg.LinAlgError:
-                    vcov_reduced = np.linalg.pinv(X_reduced.T @ X_reduced) * mse
+                if self.weights is not None:
+                    # Weighted classical vcov: use weighted RSS and X'WX
+                    w = self.weights
+                    mse = np.sum(w * residuals**2) / (n_eff_df - k_effective)
+                    XtWX_reduced = X_reduced.T @ (X_reduced * w[:, np.newaxis])
+                    try:
+                        vcov_reduced = np.linalg.solve(XtWX_reduced, mse * np.eye(k_effective))
+                    except np.linalg.LinAlgError:
+                        vcov_reduced = np.linalg.pinv(XtWX_reduced) * mse
+                else:
+                    mse = np.sum(residuals**2) / (n_eff_df - k_effective)
+                    try:
+                        vcov_reduced = np.linalg.solve(
+                            X_reduced.T @ X_reduced, mse * np.eye(k_effective)
+                        )
+                    except np.linalg.LinAlgError:
+                        vcov_reduced = np.linalg.pinv(X_reduced.T @ X_reduced) * mse
                 # Expand to full size with NaN for dropped columns
                 vcov = _expand_vcov_with_nan(vcov_reduced, k, kept_cols)
             else:
                 # Full rank: standard computation
-                mse = np.sum(residuals**2) / (n - k)
-                try:
-                    vcov = np.linalg.solve(X.T @ X, mse * np.eye(k))
-                except np.linalg.LinAlgError:
-                    vcov = np.linalg.pinv(X.T @ X) * mse
+                if self.weights is not None:
+                    # Weighted classical vcov: use weighted RSS and X'WX
+                    w = self.weights
+                    mse = np.sum(w * residuals**2) / (n_eff_df - k)
+                    XtWX = X.T @ (X * w[:, np.newaxis])
+                    try:
+                        vcov = np.linalg.solve(XtWX, mse * np.eye(k))
+                    except np.linalg.LinAlgError:
+                        vcov = np.linalg.pinv(XtWX) * mse
+                else:
+                    mse = np.sum(residuals**2) / (n_eff_df - k)
+                    try:
+                        vcov = np.linalg.solve(X.T @ X, mse * np.eye(k))
+                    except np.linalg.LinAlgError:
+                        vcov = np.linalg.pinv(X.T @ X) * mse
+
+        # Compute survey vcov if applicable
+        if _use_survey_vcov:
+            from diff_diff.survey import ResolvedSurveyDesign as _RSD
+
+            _uses_rep = (
+                isinstance(_effective_survey_design, _RSD)
+                and _effective_survey_design.uses_replicate_variance
+            )
+
+            if _uses_rep:
+                from diff_diff.survey import compute_replicate_vcov
+
+                nan_mask = np.isnan(coefficients)
+                if np.any(nan_mask):
+                    kept_cols = np.where(~nan_mask)[0]
+                    if len(kept_cols) > 0:
+                        vcov_reduced, _n_valid_rep = compute_replicate_vcov(
+                            X[:, kept_cols], y, coefficients[kept_cols],
+                            _effective_survey_design,
+                            weight_type=self.weight_type,
+                        )
+                        vcov = _expand_vcov_with_nan(vcov_reduced, X.shape[1], kept_cols)
+                    else:
+                        vcov = np.full((X.shape[1], X.shape[1]), np.nan)
+                        _n_valid_rep = 0
+                else:
+                    vcov, _n_valid_rep = compute_replicate_vcov(
+                        X, y, coefficients, _effective_survey_design,
+                        weight_type=self.weight_type,
+                    )
+                # Store effective replicate df only when replicates were dropped
+                if _n_valid_rep < _effective_survey_design.n_replicates:
+                    self._replicate_df = _n_valid_rep - 1 if _n_valid_rep > 1 else None
+                else:
+                    self._replicate_df = None  # use rank-based df from design
+            else:
+                from diff_diff.survey import compute_survey_vcov
+
+                nan_mask = np.isnan(coefficients)
+                if np.any(nan_mask):
+                    kept_cols = np.where(~nan_mask)[0]
+                    if len(kept_cols) > 0:
+                        vcov_reduced = compute_survey_vcov(
+                            X[:, kept_cols], residuals, _effective_survey_design
+                        )
+                        vcov = _expand_vcov_with_nan(vcov_reduced, X.shape[1], kept_cols)
+                    else:
+                        vcov = np.full((X.shape[1], X.shape[1]), np.nan)
+                else:
+                    vcov = compute_survey_vcov(X, residuals, _effective_survey_design)
 
         # Store fitted attributes
         self.coefficients_ = coefficients
@@ -1400,9 +1875,90 @@ class LinearRegression:
         # This is needed for correct degrees of freedom in inference
         nan_mask = np.isnan(coefficients)
         self.n_params_effective_ = int(self.n_params_ - np.sum(nan_mask))
-        self.df_ = self.n_obs_ - self.n_params_effective_ - df_adjustment
+        # Effective n for df: fweights use sum(w), pweight/aweight with
+        # zeros use positive-weight count (matches compute_robust_vcov)
+        n_eff_df = self.n_obs_
+        if self.weights is not None:
+            if self.weight_type == "fweight":
+                n_eff_df = int(round(np.sum(self.weights)))
+            elif np.any(self.weights == 0):
+                n_eff_df = int(np.count_nonzero(self.weights > 0))
+        self.df_ = n_eff_df - self.n_params_effective_ - df_adjustment
+
+        # Survey degrees of freedom: n_PSU - n_strata (overrides standard df)
+        self.survey_df_ = None
+        if _effective_survey_design is not None:
+            from diff_diff.survey import ResolvedSurveyDesign
+
+            if isinstance(_effective_survey_design, ResolvedSurveyDesign):
+                self.survey_df_ = _effective_survey_design.df_survey
+                # Override with effective replicate df if available
+                if hasattr(self, '_replicate_df') and self._replicate_df is not None:
+                    self.survey_df_ = self._replicate_df
 
         return self
+
+    def compute_deff(self, coefficient_names=None):
+        """Compute per-coefficient design effect diagnostics.
+
+        Compares the survey vcov to an SRS (HC1) baseline.  Must be called
+        after ``fit()`` with a survey design.
+
+        Returns
+        -------
+        DEFFDiagnostics
+        """
+        self._check_fitted()
+        if not (hasattr(self, 'survey_design') and self.survey_design is not None):
+            raise ValueError(
+                "compute_deff() requires a survey design. "
+                "Fit with survey_design= first."
+            )
+        from diff_diff.survey import compute_deff_diagnostics
+
+        # Handle rank-deficient fits: compute DEFF only on kept columns,
+        # then expand back with NaN for dropped columns
+        nan_mask = np.isnan(self.coefficients_)
+        if np.any(nan_mask):
+            kept = np.where(~nan_mask)[0]
+            if len(kept) == 0:
+                k = len(self.coefficients_)
+                nan_arr = np.full(k, np.nan)
+                from diff_diff.survey import DEFFDiagnostics
+                return DEFFDiagnostics(
+                    deff=nan_arr, effective_n=nan_arr.copy(),
+                    srs_se=nan_arr.copy(), survey_se=nan_arr.copy(),
+                    coefficient_names=coefficient_names,
+                )
+            # Compute on kept columns only
+            X_kept = self._X[:, kept]
+            vcov_kept = self.vcov_[np.ix_(kept, kept)]
+            deff_kept = compute_deff_diagnostics(
+                X_kept, self.residuals_, vcov_kept,
+                self.weights, weight_type=self.weight_type,
+            )
+            # Expand back to full size with NaN for dropped
+            k = len(self.coefficients_)
+            full_deff = np.full(k, np.nan)
+            full_eff_n = np.full(k, np.nan)
+            full_srs_se = np.full(k, np.nan)
+            full_survey_se = np.full(k, np.nan)
+            full_deff[kept] = deff_kept.deff
+            full_eff_n[kept] = deff_kept.effective_n
+            full_srs_se[kept] = deff_kept.srs_se
+            full_survey_se[kept] = deff_kept.survey_se
+            from diff_diff.survey import DEFFDiagnostics
+            return DEFFDiagnostics(
+                deff=full_deff, effective_n=full_eff_n,
+                srs_se=full_srs_se, survey_se=full_survey_se,
+                coefficient_names=coefficient_names,
+            )
+
+        return compute_deff_diagnostics(
+            self._X, self.residuals_, self.vcov_,
+            self.weights, weight_type=self.weight_type,
+            coefficient_names=coefficient_names,
+        )
 
     def _check_fitted(self) -> None:
         """Raise error if model has not been fitted."""
@@ -1424,6 +1980,7 @@ class LinearRegression:
             Coefficient value.
         """
         self._check_fitted()
+        assert self.coefficients_ is not None
         return float(self.coefficients_[index])
 
     def get_se(self, index: int) -> float:
@@ -1441,6 +1998,7 @@ class LinearRegression:
             Standard error.
         """
         self._check_fitted()
+        assert self.vcov_ is not None
         return float(np.sqrt(self.vcov_[index, index]))
 
     def get_inference(
@@ -1480,38 +2038,40 @@ class LinearRegression:
         ...     print("Statistically significant!")
         """
         self._check_fitted()
+        assert self.coefficients_ is not None
+        assert self.vcov_ is not None
 
         coef = float(self.coefficients_[index])
         se = float(np.sqrt(self.vcov_[index, index]))
 
-        # Handle zero or negative SE (indicates perfect fit or numerical issues)
-        if se <= 0:
-            import warnings
-
-            warnings.warn(
-                f"Standard error is zero or negative (se={se}) for coefficient at index {index}. "
-                "This may indicate perfect multicollinearity or numerical issues.",
-                UserWarning,
-            )
-            # NOTE: Deliberately uses ±inf (not NaN via safe_inference) for zero-SE coefficients.
-            if coef > 0:
-                t_stat = np.inf
-            elif coef < 0:
-                t_stat = -np.inf
-            else:
-                t_stat = 0.0
-        else:
-            t_stat = coef / se
-
         # Use instance alpha if not provided
         effective_alpha = alpha if alpha is not None else self.alpha
 
-        # Use fitted df if not explicitly provided
+        # Use survey df if available, otherwise fitted df
         # Note: df=None means use normal distribution
-        effective_df = df if df is not None else self.df_
+        if df is not None:
+            effective_df = df
+        elif self.survey_df_ is not None:
+            effective_df = self.survey_df_
+        elif (hasattr(self, 'survey_design') and self.survey_design is not None
+              and hasattr(self.survey_design, 'uses_replicate_variance')
+              and self.survey_design.uses_replicate_variance):
+            # Replicate design with undefined df (rank <= 1) — NaN inference
+            warnings.warn(
+                "Replicate design has undefined survey d.f. (rank <= 1). "
+                "Inference fields will be NaN.",
+                UserWarning, stacklevel=2,
+            )
+            effective_df = 0  # Forces NaN from t-distribution
+        else:
+            effective_df = self.df_
 
         # Warn if df is non-positive and fall back to normal distribution
-        if effective_df is not None and effective_df <= 0:
+        # (skip for replicate designs — df=0 is intentional for NaN inference)
+        _is_replicate = (hasattr(self, 'survey_design') and self.survey_design is not None
+                         and hasattr(self.survey_design, 'uses_replicate_variance')
+                         and self.survey_design.uses_replicate_variance)
+        if effective_df is not None and effective_df <= 0 and not _is_replicate:
             import warnings
 
             warnings.warn(
@@ -1521,11 +2081,10 @@ class LinearRegression:
             )
             effective_df = None
 
-        # Compute p-value
-        p_value = _compute_p_value(t_stat, df=effective_df)
+        # Use project-standard NaN-safe inference (returns all-NaN when SE <= 0)
+        from diff_diff.utils import safe_inference
 
-        # Compute confidence interval
-        conf_int = _compute_confidence_interval(coef, se, effective_alpha, df=effective_df)
+        t_stat, p_value, conf_int = safe_inference(coef, se, alpha=effective_alpha, df=effective_df)
 
         return InferenceResult(
             coefficient=coef,
@@ -1614,6 +2173,8 @@ class LinearRegression:
         corrected degrees of freedom.
         """
         self._check_fitted()
+        assert self._y is not None
+        assert self.residuals_ is not None
         # Use effective params for adjusted R² to match df correction
         n_params = self.n_params_effective_ if adjusted else self.n_params_
         return compute_r_squared(self._y, self.residuals_, adjusted=adjusted, n_params=n_params)
@@ -1647,6 +2208,7 @@ class LinearRegression:
 
         # Handle rank-deficient case: use only identified coefficients
         # Replace NaN with 0 so they don't contribute to prediction
+        assert self.coefficients_ is not None
         coef = self.coefficients_.copy()
         coef[np.isnan(coef)] = 0.0
 

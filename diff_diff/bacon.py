@@ -17,6 +17,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
+from diff_diff.results import _format_survey_block
 from diff_diff.utils import within_transform as _within_transform_util
 
 
@@ -110,6 +111,8 @@ class BaconDecompositionResults:
     timing_groups: List[Any]
     n_obs: int = 0
     decomposition_error: float = field(default=0.0)
+    # Survey design metadata (SurveyMetadata instance from diff_diff.survey)
+    survey_metadata: Optional[Any] = field(default=None)
 
     def __repr__(self) -> str:
         return (
@@ -137,30 +140,40 @@ class BaconDecompositionResults:
             f"{'Never-treated units:':<35} {self.n_never_treated:>10}",
             f"{'Total 2x2 comparisons:':<35} {len(self.comparisons):>10}",
             "",
-            "-" * 85,
-            "TWFE Decomposition".center(85),
-            "-" * 85,
-            "",
-            f"{'TWFE Estimate:':<35} {self.twfe_estimate:>12.4f}",
-            f"{'Weighted Sum of 2x2 Estimates:':<35} {self._weighted_sum():>12.4f}",
-            f"{'Decomposition Error:':<35} {self.decomposition_error:>12.6f}",
-            "",
         ]
 
+        # Add survey design info
+        if self.survey_metadata is not None:
+            sm = self.survey_metadata
+            lines.extend(_format_survey_block(sm, 85))
+
+        lines.extend(
+            [
+                "-" * 85,
+                "TWFE Decomposition".center(85),
+                "-" * 85,
+                "",
+                f"{'TWFE Estimate:':<35} {self.twfe_estimate:>12.4f}",
+                f"{'Weighted Sum of 2x2 Estimates:':<35} {self._weighted_sum():>12.4f}",
+                f"{'Decomposition Error:':<35} {self.decomposition_error:>12.6f}",
+                "",
+            ]
+        )
+
         # Weight breakdown by comparison type
-        lines.extend([
-            "-" * 85,
-            "Weight Breakdown by Comparison Type".center(85),
-            "-" * 85,
-            f"{'Comparison Type':<30} {'Weight':>12} {'Avg Effect':>12} {'Contribution':>12}",
-            "-" * 85,
-        ])
+        lines.extend(
+            [
+                "-" * 85,
+                "Weight Breakdown by Comparison Type".center(85),
+                "-" * 85,
+                f"{'Comparison Type':<30} {'Weight':>12} {'Avg Effect':>12} {'Contribution':>12}",
+                "-" * 85,
+            ]
+        )
 
         # Treated vs Never-treated
         if self.total_weight_treated_vs_never > 0:
-            contrib = self.total_weight_treated_vs_never * (
-                self.weighted_avg_treated_vs_never or 0
-            )
+            contrib = self.total_weight_treated_vs_never * (self.weighted_avg_treated_vs_never or 0)
             lines.append(
                 f"{'Treated vs Never-treated':<30} "
                 f"{self.total_weight_treated_vs_never:>12.4f} "
@@ -170,9 +183,7 @@ class BaconDecompositionResults:
 
         # Earlier vs Later
         if self.total_weight_earlier_vs_later > 0:
-            contrib = self.total_weight_earlier_vs_later * (
-                self.weighted_avg_earlier_vs_later or 0
-            )
+            contrib = self.total_weight_earlier_vs_later * (self.weighted_avg_earlier_vs_later or 0)
             lines.append(
                 f"{'Earlier vs Later treated':<30} "
                 f"{self.total_weight_earlier_vs_later:>12.4f} "
@@ -182,9 +193,7 @@ class BaconDecompositionResults:
 
         # Later vs Earlier (forbidden)
         if self.total_weight_later_vs_earlier > 0:
-            contrib = self.total_weight_later_vs_earlier * (
-                self.weighted_avg_later_vs_earlier or 0
-            )
+            contrib = self.total_weight_later_vs_earlier * (self.weighted_avg_later_vs_earlier or 0)
             lines.append(
                 f"{'Later vs Earlier (forbidden)':<30} "
                 f"{self.total_weight_later_vs_earlier:>12.4f} "
@@ -192,27 +201,29 @@ class BaconDecompositionResults:
                 f"{contrib:>12.4f}"
             )
 
-        lines.extend([
-            "-" * 85,
-            f"{'Total':<30} {self._total_weight():>12.4f} "
-            f"{'':>12} {self._weighted_sum():>12.4f}",
-            "-" * 85,
-            "",
-        ])
+        lines.extend(
+            [
+                "-" * 85,
+                f"{'Total':<30} {self._total_weight():>12.4f} "
+                f"{'':>12} {self._weighted_sum():>12.4f}",
+                "-" * 85,
+                "",
+            ]
+        )
 
         # Warning about forbidden comparisons
         if self.total_weight_later_vs_earlier > 0.01:
             pct = self.total_weight_later_vs_earlier * 100
-            lines.extend([
-                "WARNING: {:.1f}% of weight is on 'forbidden' comparisons where".format(
-                    pct
-                ),
-                "already-treated units serve as controls. This can bias TWFE",
-                "when treatment effects are heterogeneous over time.",
-                "",
-                "Consider using Callaway-Sant'Anna or other robust estimators.",
-                "",
-            ])
+            lines.extend(
+                [
+                    "WARNING: {:.1f}% of weight is on 'forbidden' comparisons where".format(pct),
+                    "already-treated units serve as controls. This can bias TWFE",
+                    "when treatment effects are heterogeneous over time.",
+                    "",
+                    "Consider using Callaway-Sant'Anna or other robust estimators.",
+                    "",
+                ]
+            )
 
         lines.append("=" * 85)
 
@@ -241,17 +252,19 @@ class BaconDecompositionResults:
         """
         rows = []
         for c in self.comparisons:
-            rows.append({
-                "treated_group": c.treated_group,
-                "control_group": c.control_group,
-                "comparison_type": c.comparison_type,
-                "estimate": c.estimate,
-                "weight": c.weight,
-                "n_treated": c.n_treated,
-                "n_control": c.n_control,
-                "time_start": c.time_window[0],
-                "time_end": c.time_window[1],
-            })
+            rows.append(
+                {
+                    "treated_group": c.treated_group,
+                    "control_group": c.control_group,
+                    "comparison_type": c.comparison_type,
+                    "estimate": c.estimate,
+                    "weight": c.weight,
+                    "n_treated": c.n_treated,
+                    "n_control": c.n_control,
+                    "time_start": c.time_window[0],
+                    "time_end": c.time_window[1],
+                }
+            )
         return pd.DataFrame(rows)
 
     def weight_by_type(self) -> Dict[str, float]:
@@ -392,9 +405,7 @@ class BaconDecomposition:
             - "exact": Variance-based weights from Goodman-Bacon (2021)
         """
         if weights not in ("approximate", "exact"):
-            raise ValueError(
-                f"weights must be 'approximate' or 'exact', got '{weights}'"
-            )
+            raise ValueError(f"weights must be 'approximate' or 'exact', got '{weights}'")
         self.weights = weights
         self.results_: Optional[BaconDecompositionResults] = None
         self.is_fitted_: bool = False
@@ -406,6 +417,7 @@ class BaconDecomposition:
         unit: str,
         time: str,
         first_treat: str,
+        survey_design=None,
     ) -> BaconDecompositionResults:
         """
         Perform the Goodman-Bacon decomposition.
@@ -423,6 +435,10 @@ class BaconDecomposition:
         first_treat : str
             Name of column indicating when unit was first treated.
             Use 0 (or np.inf) for never-treated units.
+        survey_design : SurveyDesign, optional
+            Survey design specification for weighted estimation.
+            When provided, all means and group shares use survey weights.
+            The decomposition remains diagnostic (no survey vcov needed).
 
         Returns
         -------
@@ -439,6 +455,29 @@ class BaconDecomposition:
         missing = [c for c in required_cols if c not in data.columns]
         if missing:
             raise ValueError(f"Missing columns: {missing}")
+
+        # Resolve survey design if provided
+        from diff_diff.survey import _resolve_survey_for_fit
+
+        resolved_survey, survey_weights, survey_weight_type, survey_metadata = (
+            _resolve_survey_for_fit(survey_design, data, "analytical")
+        )
+        # Reject replicate-weight designs — Bacon decomposition is a
+        # diagnostic that does not compute replicate-based variance
+        if resolved_survey is not None and resolved_survey.uses_replicate_variance:
+            raise NotImplementedError(
+                "BaconDecomposition does not support replicate-weight survey "
+                "designs. Use a TSL-based survey design (strata/psu/fpc)."
+            )
+
+        # Validate within-unit constancy for exact survey weights only.
+        # The exact-weight path collapses to per-unit weights via groupby().first(),
+        # which requires constant survey columns within units. The approximate path
+        # uses observation-level weighted means and does not need this constraint.
+        if resolved_survey is not None and self.weights == "exact":
+            from diff_diff.survey import _validate_unit_constant_survey
+
+            _validate_unit_constant_survey(data, unit, survey_design)
 
         # Create working copy
         df = data.copy()
@@ -463,22 +502,21 @@ class BaconDecomposition:
         # Identify never-treated and timing groups
         # Never-treated: first_treat = 0 or inf
         never_treated_mask = (df[first_treat] == 0) | (df[first_treat] == np.inf)
-        timing_groups = sorted([g for g in df[first_treat].unique()
-                               if g > 0 and g != np.inf])
+        timing_groups = sorted([g for g in df[first_treat].unique() if g > 0 and g != np.inf])
 
         # Get unit-level treatment timing
-        unit_info = df.groupby(unit).agg({first_treat: 'first'}).reset_index()
-        n_never_treated = (
-            (unit_info[first_treat] == 0) | (unit_info[first_treat] == np.inf)
-        ).sum()
+        unit_info = df.groupby(unit).agg({first_treat: "first"}).reset_index()
+        n_never_treated = ((unit_info[first_treat] == 0) | (unit_info[first_treat] == np.inf)).sum()
 
         # Create treatment indicator (D_it = 1 if treated at time t)
         # Use unique internal name to avoid conflicts with user data
-        _TREAT_COL = '__bacon_treated_internal__'
+        _TREAT_COL = "__bacon_treated_internal__"
         df[_TREAT_COL] = (~never_treated_mask) & (df[time] >= df[first_treat])
 
         # First, compute TWFE estimate for reference
-        twfe_estimate = self._compute_twfe(df, outcome, unit, time, _TREAT_COL)
+        twfe_estimate = self._compute_twfe(
+            df, outcome, unit, time, _TREAT_COL, weights=survey_weights
+        )
 
         # Perform decomposition
         comparisons = []
@@ -487,26 +525,49 @@ class BaconDecomposition:
         if n_never_treated > 0:
             for g in timing_groups:
                 comp = self._compute_treated_vs_never(
-                    df, outcome, unit, time, first_treat, g, time_periods
+                    df,
+                    outcome,
+                    unit,
+                    time,
+                    first_treat,
+                    g,
+                    time_periods,
+                    weights=survey_weights,
                 )
                 if comp is not None:
                     comparisons.append(comp)
 
         # 2. Timing group comparisons (earlier vs later and later vs earlier)
         for i, g_early in enumerate(timing_groups):
-            for g_late in timing_groups[i + 1:]:
+            for g_late in timing_groups[i + 1 :]:
                 # Earlier vs Later: g_early treated, g_late as control
                 comp_early = self._compute_timing_comparison(
-                    df, outcome, unit, time, first_treat,
-                    g_early, g_late, time_periods, "earlier_vs_later"
+                    df,
+                    outcome,
+                    unit,
+                    time,
+                    first_treat,
+                    g_early,
+                    g_late,
+                    time_periods,
+                    "earlier_vs_later",
+                    weights=survey_weights,
                 )
                 if comp_early is not None:
                     comparisons.append(comp_early)
 
                 # Later vs Earlier: g_late treated, g_early as control (forbidden)
                 comp_late = self._compute_timing_comparison(
-                    df, outcome, unit, time, first_treat,
-                    g_late, g_early, time_periods, "later_vs_earlier"
+                    df,
+                    outcome,
+                    unit,
+                    time,
+                    first_treat,
+                    g_late,
+                    g_early,
+                    time_periods,
+                    "later_vs_earlier",
+                    weights=survey_weights,
                 )
                 if comp_late is not None:
                     comparisons.append(comp_late)
@@ -514,7 +575,21 @@ class BaconDecomposition:
         # Recompute exact weights if requested
         if self.weights == "exact":
             self._recompute_exact_weights(
-                comparisons, df, outcome, unit, time, first_treat, time_periods
+                comparisons,
+                df,
+                outcome,
+                unit,
+                time,
+                first_treat,
+                time_periods,
+                weights=survey_weights,
+            )
+
+        if not comparisons:
+            raise ValueError(
+                "No valid 2x2 comparisons remain after filtering. "
+                "All cells have zero effective weight or insufficient data. "
+                "Check subpopulation/domain definition."
             )
 
         # Normalize weights to sum to 1
@@ -524,10 +599,12 @@ class BaconDecomposition:
                 c.weight = c.weight / total_weight
 
         # Calculate weight totals and weighted averages by type
-        weight_by_type = {"treated_vs_never": 0.0, "earlier_vs_later": 0.0,
-                         "later_vs_earlier": 0.0}
-        weighted_sum_by_type = {"treated_vs_never": 0.0, "earlier_vs_later": 0.0,
-                               "later_vs_earlier": 0.0}
+        weight_by_type = {"treated_vs_never": 0.0, "earlier_vs_later": 0.0, "later_vs_earlier": 0.0}
+        weighted_sum_by_type = {
+            "treated_vs_never": 0.0,
+            "earlier_vs_later": 0.0,
+            "later_vs_earlier": 0.0,
+        }
 
         for c in comparisons:
             weight_by_type[c.comparison_type] += c.weight
@@ -537,9 +614,7 @@ class BaconDecomposition:
         avg_by_type = {}
         for ctype in weight_by_type:
             if weight_by_type[ctype] > 0:
-                avg_by_type[ctype] = (
-                    weighted_sum_by_type[ctype] / weight_by_type[ctype]
-                )
+                avg_by_type[ctype] = weighted_sum_by_type[ctype] / weight_by_type[ctype]
             else:
                 avg_by_type[ctype] = None
 
@@ -561,6 +636,7 @@ class BaconDecomposition:
             timing_groups=timing_groups,
             n_obs=len(df),
             decomposition_error=decomp_error,
+            survey_metadata=survey_metadata,
         )
 
         self.is_fitted_ = True
@@ -572,22 +648,29 @@ class BaconDecomposition:
         outcome: str,
         unit: str,
         time: str,
-        treat_col: str = '__bacon_treated_internal__',
+        treat_col: str = "__bacon_treated_internal__",
+        weights: Optional[np.ndarray] = None,
     ) -> float:
         """Compute TWFE estimate using within-transformation."""
-        # Apply two-way within transformation
+        # Apply two-way within transformation (weighted if survey weights provided)
         df_dm = _within_transform_util(
-            df, [outcome, treat_col], unit, time, suffix="_within"
+            df,
+            [outcome, treat_col],
+            unit,
+            time,
+            suffix="_within",
+            weights=weights,
         )
 
         # Extract within-transformed values
         y_within = df_dm[f"{outcome}_within"].values
         d_within = df_dm[f"{treat_col}_within"].values
 
-        # OLS on demeaned data: beta = sum(d * y) / sum(d^2)
-        d_var = np.sum(d_within ** 2)
+        # OLS on demeaned data: beta = sum(w * d * y) / sum(w * d^2)
+        w = weights if weights is not None else np.ones(len(y_within))
+        d_var = np.sum(w * d_within**2)
         if d_var > 0:
-            beta = np.sum(d_within * y_within) / d_var
+            beta = np.sum(w * d_within * y_within) / d_var
         else:
             beta = 0.0
 
@@ -602,6 +685,7 @@ class BaconDecomposition:
         time: str,
         first_treat: str,
         time_periods: List[Any],
+        weights: Optional[np.ndarray] = None,
     ) -> None:
         """
         Recompute weights using exact variance-based formula from Theorem 1.
@@ -609,8 +693,16 @@ class BaconDecomposition:
         This modifies comparison weights in-place to use the exact formula
         from Goodman-Bacon (2021) which accounts for within-group variance
         of the treatment indicator in each 2x2 comparison window.
+
+        When survey weights are provided, uses weighted unit counts and
+        within-group variance of the treatment indicator.
         """
         n_total_obs = len(df)
+        w_arr = weights if weights is not None else np.ones(n_total_obs)
+        # Store weights as a column for safe label-based subsetting
+        df = df.copy()
+        df["_sw"] = w_arr
+        w_total = np.sum(w_arr)
         n_total_units = df[unit].nunique()
 
         for comp in comparisons:
@@ -620,9 +712,9 @@ class BaconDecomposition:
                 post_periods = [t for t in time_periods if t >= comp.treated_group]
                 # Get units in each group
                 units_treated = df[df[first_treat] == comp.treated_group][unit].unique()
-                units_control = df[
-                    (df[first_treat] == 0) | (df[first_treat] == np.inf)
-                ][unit].unique()
+                units_control = df[(df[first_treat] == 0) | (df[first_treat] == np.inf)][
+                    unit
+                ].unique()
             elif comp.comparison_type == "earlier_vs_later":
                 g_early = comp.treated_group
                 g_late = comp.control_group
@@ -646,10 +738,7 @@ class BaconDecomposition:
             relevant_periods = set(pre_periods) | set(post_periods)
             all_units = set(units_treated) | set(units_control)
 
-            df_22 = df[
-                (df[unit].isin(all_units)) &
-                (df[time].isin(relevant_periods))
-            ]
+            df_22 = df[(df[unit].isin(all_units)) & (df[time].isin(relevant_periods))]
 
             if len(df_22) == 0:
                 comp.weight = 0.0
@@ -663,14 +752,17 @@ class BaconDecomposition:
                 comp.weight = 0.0
                 continue
 
-            # Number of observations in this 2x2 sample
-            n_22 = len(df_22)
+            # Weighted observation counts for the 2x2 sample
+            w_22 = df_22["_sw"].values
+            w_22_sum = np.sum(w_22)
 
-            # Sample share of this comparison
-            sample_share = n_22 / n_total_obs
+            # Sample share of this comparison (weighted)
+            sample_share = w_22_sum / w_total
 
-            # Group shares within the 2x2
-            n_k_share = n_k / (n_k + n_l)
+            # Weighted group shares within the 2x2
+            treated_mask_22 = df_22[unit].isin(units_treated)
+            w_k = np.sum(w_22[treated_mask_22.values])
+            n_k_share = w_k / w_22_sum if w_22_sum > 0 else 0.0
 
             # Create treatment indicator for the 2x2
             T_pre = len(pre_periods)
@@ -682,13 +774,30 @@ class BaconDecomposition:
             # D = 0 for all periods for control units in this window
             D_k = T_post / T_window  # proportion treated for treated group
 
-            # Within-comparison variance of treatment
+            # Within-comparison variance of treatment (weighted)
             # Var(D) = n_k/(n_k+n_l) * D_k * (1-D_k) for the 2x2
             var_D_22 = n_k_share * D_k * (1 - D_k)
 
             # Exact weight: proportional to sample share * variance
-            # Scale by (n_k + n_l) / n_total_units to account for subsample
-            unit_share = (n_k + n_l) / n_total_units
+            # Scale by weighted unit share to account for subsample
+            # Use survey-weighted unit mass when weights present
+            if weights is not None:
+                # Sum of per-unit weights for treated + control units in this 2x2
+                unit_w_k = (
+                    df_22.loc[treated_mask_22, "_sw"]
+                    .groupby(df_22.loc[treated_mask_22, unit])
+                    .first()
+                    .sum()
+                )
+                unit_w_l = (
+                    df_22.loc[~treated_mask_22, "_sw"]
+                    .groupby(df_22.loc[~treated_mask_22, unit])
+                    .first()
+                    .sum()
+                )
+                unit_share = (unit_w_k + unit_w_l) / w_total
+            else:
+                unit_share = (n_k + n_l) / n_total_units
             comp.weight = sample_share * var_D_22 * unit_share
 
     def _compute_treated_vs_never(
@@ -700,6 +809,7 @@ class BaconDecomposition:
         first_treat: str,
         treated_group: Any,
         time_periods: List[Any],
+        weights: Optional[np.ndarray] = None,
     ) -> Optional[Comparison2x2]:
         """
         Compute 2x2 DiD comparing treated group to never-treated.
@@ -728,24 +838,49 @@ class BaconDecomposition:
         if not pre_periods or not post_periods:
             return None
 
-        # Compute 2x2 DiD estimate
-        # Mean change for treated
-        treated_pre = df_treated[df_treated[time].isin(pre_periods)][outcome].mean()
-        treated_post = df_treated[df_treated[time].isin(post_periods)][outcome].mean()
+        # Compute 2x2 DiD estimate using weighted means if survey weights provided
+        w = weights if weights is not None else np.ones(len(df))
+        y = df[outcome].values
 
-        # Mean change for never-treated
-        never_pre = df_never[df_never[time].isin(pre_periods)][outcome].mean()
-        never_post = df_never[df_never[time].isin(post_periods)][outcome].mean()
+        treated_pre_mask = treated_mask & df[time].isin(pre_periods)
+        treated_post_mask = treated_mask & df[time].isin(post_periods)
+        never_pre_mask = never_mask & df[time].isin(pre_periods)
+        never_post_mask = never_mask & df[time].isin(post_periods)
+
+        # Guard against empty cells (unbalanced/filtered panels)
+        # Also check positive weight mass for survey/subpopulation designs
+        if not (
+            np.any(treated_pre_mask)
+            and np.any(treated_post_mask)
+            and np.any(never_pre_mask)
+            and np.any(never_post_mask)
+        ):
+            return None
+        if (
+            np.sum(w[treated_pre_mask]) <= 0
+            or np.sum(w[treated_post_mask]) <= 0
+            or np.sum(w[never_pre_mask]) <= 0
+            or np.sum(w[never_post_mask]) <= 0
+        ):
+            return None
+
+        treated_pre = np.average(y[treated_pre_mask], weights=w[treated_pre_mask])
+        treated_post = np.average(y[treated_post_mask], weights=w[treated_post_mask])
+        never_pre = np.average(y[never_pre_mask], weights=w[never_pre_mask])
+        never_post = np.average(y[never_post_mask], weights=w[never_post_mask])
 
         estimate = (treated_post - treated_pre) - (never_post - never_pre)
 
-        # Calculate weight components
+        # Calculate weight components using weighted group shares
         n_treated = df_treated[unit].nunique()
         n_never = df_never[unit].nunique()
-        n_total = n_treated + n_never
 
-        # Group share
-        n_k = n_treated / n_total
+        w_treated_sum = np.sum(w[treated_mask])
+        w_never_sum = np.sum(w[never_mask])
+        w_total = w_treated_sum + w_never_sum
+
+        # Weighted group share
+        n_k = w_treated_sum / w_total if w_total > 0 else 0.0
 
         # Variance of treatment: proportion of post-treatment periods
         D_k = len(post_periods) / len(time_periods)
@@ -776,6 +911,7 @@ class BaconDecomposition:
         control_group: Any,
         time_periods: List[Any],
         comparison_type: str,
+        weights: Optional[np.ndarray] = None,
     ) -> Optional[Comparison2x2]:
         """
         Compute 2x2 DiD comparing two timing groups.
@@ -794,7 +930,6 @@ class BaconDecomposition:
 
         n_treated = df_treated[unit].nunique()
         n_control = df_control[unit].nunique()
-        n_total = n_treated + n_control
 
         if comparison_type == "earlier_vs_later":
             # Earlier treated vs Later treated
@@ -829,12 +964,35 @@ class BaconDecomposition:
 
             time_window = (g_early, max(time_periods))
 
-        # Compute 2x2 DiD estimate
-        treated_pre = df_treated[df_treated[time].isin(pre_periods)][outcome].mean()
-        treated_post = df_treated[df_treated[time].isin(post_periods)][outcome].mean()
+        # Compute 2x2 DiD estimate using weighted means if survey weights provided
+        w = weights if weights is not None else np.ones(len(df))
+        y = df[outcome].values
 
-        control_pre = df_control[df_control[time].isin(pre_periods)][outcome].mean()
-        control_post = df_control[df_control[time].isin(post_periods)][outcome].mean()
+        treated_pre_mask = treated_mask & df[time].isin(pre_periods)
+        treated_post_mask = treated_mask & df[time].isin(post_periods)
+        control_pre_mask = control_mask & df[time].isin(pre_periods)
+        control_post_mask = control_mask & df[time].isin(post_periods)
+
+        # Skip if any cell is empty or has zero effective weight
+        if (
+            treated_pre_mask.sum() == 0
+            or treated_post_mask.sum() == 0
+            or control_pre_mask.sum() == 0
+            or control_post_mask.sum() == 0
+        ):
+            return None
+        if (
+            np.sum(w[treated_pre_mask]) <= 0
+            or np.sum(w[treated_post_mask]) <= 0
+            or np.sum(w[control_pre_mask]) <= 0
+            or np.sum(w[control_post_mask]) <= 0
+        ):
+            return None
+
+        treated_pre = np.average(y[treated_pre_mask], weights=w[treated_pre_mask])
+        treated_post = np.average(y[treated_post_mask], weights=w[treated_post_mask])
+        control_pre = np.average(y[control_pre_mask], weights=w[control_pre_mask])
+        control_post = np.average(y[control_post_mask], weights=w[control_post_mask])
 
         if np.isnan(treated_pre) or np.isnan(treated_post):
             return None
@@ -843,8 +1001,11 @@ class BaconDecomposition:
 
         estimate = (treated_post - treated_pre) - (control_post - control_pre)
 
-        # Calculate weight
-        n_k = n_treated / n_total
+        # Calculate weight using weighted group shares
+        w_treated_sum = np.sum(w[treated_mask])
+        w_control_sum = np.sum(w[control_mask])
+        w_total = w_treated_sum + w_control_sum
+        n_k = w_treated_sum / w_total if w_total > 0 else 0.0
 
         # Variance of treatment within the comparison window
         total_periods_in_window = len(pre_periods) + len(post_periods)
@@ -875,8 +1036,7 @@ class BaconDecomposition:
         if "weights" in params:
             if params["weights"] not in ("approximate", "exact"):
                 raise ValueError(
-                    f"weights must be 'approximate' or 'exact', "
-                    f"got '{params['weights']}'"
+                    f"weights must be 'approximate' or 'exact', " f"got '{params['weights']}'"
                 )
             self.weights = params["weights"]
         return self
@@ -900,6 +1060,7 @@ def bacon_decompose(
     time: str,
     first_treat: str,
     weights: str = "approximate",
+    survey_design: object = None,
 ) -> BaconDecompositionResults:
     """
     Convenience function for Goodman-Bacon decomposition.
@@ -976,4 +1137,4 @@ def bacon_decompose(
     CallawaySantAnna : Robust estimator that avoids forbidden comparisons
     """
     decomp = BaconDecomposition(weights=weights)
-    return decomp.fit(data, outcome, unit, time, first_treat)
+    return decomp.fit(data, outcome, unit, time, first_treat, survey_design=survey_design)

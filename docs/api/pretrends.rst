@@ -48,9 +48,10 @@ Example
    from diff_diff import MultiPeriodDiD, PreTrendsPower
 
    # First fit an event study
-   model = MultiPeriodDiD(reference_period=-1)
-   results = model.fit(data, outcome='y', treated='treated',
-                       time='period', unit='unit_id', treatment_start=5)
+   model = MultiPeriodDiD()
+   results = model.fit(data, outcome='y', treatment='treated',
+                       time='period', unit='unit_id',
+                       post_periods=[5, 6, 7], reference_period=4)
 
    # Compute pre-trends power for linear violations
    pt = PreTrendsPower(alpha=0.05, power=0.80, violation_type='linear')
@@ -130,12 +131,13 @@ Complete Example
    )
 
    # Fit event study
-   model = MultiPeriodDiD(reference_period=-1)
-   results = model.fit(data, outcome='y', treated='treated',
-                       time='period', unit='unit_id', treatment_start=5)
+   model = MultiPeriodDiD()
+   results = model.fit(data, outcome='y', treatment='treated',
+                       time='period', unit='unit_id',
+                       post_periods=[5, 6, 7], reference_period=4)
 
    # Compute MDV
-   mdv = compute_mdv(results, alpha=0.05, power=0.80)
+   mdv = compute_mdv(results, alpha=0.05, target_power=0.80)
    print(f"Minimum Detectable Violation: {mdv:.3f}")
 
    # Power curve analysis
@@ -143,15 +145,11 @@ Complete Example
    curve = pt.power_curve(results, n_points=50)
 
    # Plot power curve
-   fig = plot_pretrends_power(curve, show_mdv=True, target_power=0.80)
-   fig.savefig('pretrends_power.png')
+   ax = plot_pretrends_power(curve, target_power=0.80)
+   ax.figure.savefig('pretrends_power.png')
 
    # Integration with HonestDiD
-   sensitivity = pt.sensitivity_to_honest_did(
-       results,
-       honest_method='smoothness',
-       M_grid=np.linspace(0, mdv, 21)
-   )
+   sensitivity = pt.sensitivity_to_honest_did(results)
 
 References
 ----------

@@ -86,7 +86,7 @@ If "Skip review" is chosen:
     ---
     plan: <plan-file-path>
     reviewed_at: <ISO 8601 timestamp>
-    verdict: "Skipped"
+    assessment: "Skipped"
     critical_count: 0
     medium_count: 0
     low_count: 0
@@ -140,12 +140,12 @@ Extract from the review content:
 - Issues by severity: CRITICAL #N, MEDIUM #N, LOW #N
 - Checklist gaps
 - Questions for Author
-- Verdict
+- Assessment
 
 Display a summary:
 ```
 Found: N CRITICAL, N MEDIUM, N LOW issues, N checklist gaps, N questions
-Verdict: <verdict>
+Assessment: <assessment>
 ```
 
 ### Step 6: Collect User Input

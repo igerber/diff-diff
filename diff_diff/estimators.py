@@ -20,6 +20,7 @@ import pandas as pd
 
 from diff_diff.linalg import (
     LinearRegression,
+    _expand_vcov_with_nan,
     compute_r_squared,
     compute_robust_vcov,
     solve_ols,
@@ -153,6 +154,7 @@ class DifferenceInDifferences:
         covariates: Optional[List[str]] = None,
         fixed_effects: Optional[List[str]] = None,
         absorb: Optional[List[str]] = None,
+        survey_design=None,
     ) -> DiDResults:
         """
         Fit the Difference-in-Differences model.
@@ -180,6 +182,10 @@ class DifferenceInDifferences:
             List of categorical column names for high-dimensional fixed effects.
             Uses within-transformation (demeaning) instead of dummy variables.
             More efficient for large numbers of categories (e.g., firm, individual).
+        survey_design : SurveyDesign, optional
+            Survey design specification for design-based inference. When provided,
+            uses Taylor Series Linearization for variance estimation and
+            applies sampling weights to the regression.
 
         Returns
         -------
@@ -228,20 +234,65 @@ class DifferenceInDifferences:
                 if ab not in data.columns:
                     raise ValueError(f"Absorb column '{ab}' not found in data")
 
+        # Resolve survey design if provided
+        from diff_diff.survey import _resolve_effective_cluster, _resolve_survey_for_fit
+
+        resolved_survey, survey_weights, survey_weight_type, survey_metadata = (
+            _resolve_survey_for_fit(survey_design, data, self.inference)
+        )
+        # Reject replicate-weight designs — base DiD uses compute_survey_vcov
+        # (TSL) directly, not LinearRegression's replicate dispatch.
+        if resolved_survey is not None and resolved_survey.uses_replicate_variance:
+            raise NotImplementedError(
+                "DifferenceInDifferences does not yet support replicate-weight "
+                "survey designs. Use CallawaySantAnna, EfficientDiD, "
+                "ContinuousDiD, or TripleDifference for replicate-weight "
+                "inference, or use a TSL-based survey design (strata/psu/fpc)."
+            )
+
         # Handle absorbed fixed effects (within-transformation)
         working_data = data.copy()
         absorbed_vars = []
         n_absorbed_effects = 0
 
+        # Save raw treatment counts before absorb demeaning
+        n_treated_raw = int(np.sum(data[treatment].values.astype(float)))
+        n_control_raw = len(data) - n_treated_raw
+
+        # Reject multi-absorb with survey weights (single-pass demeaning is
+        # not the correct weighted FWL projection for N > 1 dimensions)
+        if absorb and len(absorb) > 1 and survey_weights is not None:
+            raise ValueError(
+                f"Multiple absorbed fixed effects (absorb={absorb}) with survey "
+                "weights is not supported. Single-pass sequential demeaning is not "
+                "the correct weighted FWL projection for multiple absorbed dimensions. "
+                "Use absorb with a single variable, or use fixed_effects= instead."
+            )
+
+        if absorb and fixed_effects:
+            raise ValueError(
+                "Cannot use both absorb and fixed_effects. "
+                "The absorb within-transformation does not residualize "
+                "fixed_effects dummies, violating the FWL theorem. "
+                "Use absorb alone (for high-dimensional FE) "
+                "or fixed_effects alone (for low-dimensional FE)."
+            )
+
         if absorb:
-            # Apply within-transformation for each absorbed variable
-            # Only demean outcome and covariates, NOT treatment/time indicators
-            # Treatment is typically time-invariant (within unit), and time is
-            # unit-invariant, so demeaning them would create multicollinearity
-            vars_to_demean = [outcome] + (covariates or [])
+            # FWL theorem: demean ALL regressors alongside outcome.
+            # Regressors collinear with absorbed FE (e.g., treatment after
+            # absorbing unit FE) will zero out and be handled by rank-deficiency.
+            working_data["_treat_time"] = working_data[treatment].values.astype(
+                float
+            ) * working_data[time].values.astype(float)
+            vars_to_demean = [outcome, treatment, time, "_treat_time"] + (covariates or [])
             for ab_var in absorb:
                 working_data, n_fe = demean_by_group(
-                    working_data, vars_to_demean, ab_var, inplace=True
+                    working_data,
+                    vars_to_demean,
+                    ab_var,
+                    inplace=True,
+                    weights=survey_weights,
                 )
                 n_absorbed_effects += n_fe
                 absorbed_vars.append(ab_var)
@@ -252,7 +303,10 @@ class DifferenceInDifferences:
         t = working_data[time].values.astype(float)
 
         # Create interaction term
-        dt = d * t
+        if absorb:
+            dt = working_data["_treat_time"].values.astype(float)
+        else:
+            dt = d * t
 
         # Build design matrix
         X = np.column_stack([np.ones(len(y)), d, t, dt])
@@ -285,17 +339,40 @@ class DifferenceInDifferences:
         # Always use LinearRegression for initial fit (unified code path)
         # For wild bootstrap, we don't need cluster SEs from the initial fit
         cluster_ids = data[self.cluster].values if self.cluster is not None else None
+
+        # When survey PSU is present, it overrides cluster for variance estimation
+        effective_cluster_ids = _resolve_effective_cluster(
+            resolved_survey, cluster_ids, self.cluster
+        )
+
+        # Inject cluster as effective PSU for survey variance estimation
+        if resolved_survey is not None and effective_cluster_ids is not None:
+            from diff_diff.survey import _inject_cluster_as_psu, compute_survey_metadata
+
+            resolved_survey = _inject_cluster_as_psu(resolved_survey, effective_cluster_ids)
+            if resolved_survey.psu is not None and survey_metadata is not None:
+                raw_w = (
+                    data[survey_design.weights].values.astype(np.float64)
+                    if survey_design.weights
+                    else np.ones(len(data), dtype=np.float64)
+                )
+                survey_metadata = compute_survey_metadata(resolved_survey, raw_w)
+
         reg = LinearRegression(
             include_intercept=False,  # Intercept already in X
             robust=self.robust,
-            cluster_ids=cluster_ids if self.inference != "wild_bootstrap" else None,
+            cluster_ids=effective_cluster_ids if self.inference != "wild_bootstrap" else None,
             alpha=self.alpha,
             rank_deficient_action=self.rank_deficient_action,
+            weights=survey_weights,
+            weight_type=survey_weight_type,
+            survey_design=resolved_survey,
         ).fit(X, y, df_adjustment=n_absorbed_effects)
 
         coefficients = reg.coefficients_
         residuals = reg.residuals_
         fitted = reg.fitted_values_
+        assert coefficients is not None
         att = coefficients[att_idx]
 
         # Get inference - either from bootstrap or analytical
@@ -315,9 +392,9 @@ class DifferenceInDifferences:
 
         r_squared = compute_r_squared(y, residuals)
 
-        # Count observations
-        n_treated = int(np.sum(d))
-        n_control = int(np.sum(1 - d))
+        # Count observations (use raw counts to avoid demeaned values from absorb)
+        n_treated = n_treated_raw
+        n_control = n_control_raw
 
         # Create coefficient dictionary
         coef_dict = {name: coef for name, coef in zip(var_names, coefficients)}
@@ -350,6 +427,7 @@ class DifferenceInDifferences:
             inference_method=inference_method,
             n_bootstrap=n_bootstrap_used,
             n_clusters=n_clusters_used,
+            survey_metadata=survey_metadata,
         )
 
         self._coefficients = coefficients
@@ -729,6 +807,7 @@ class MultiPeriodDiD(DifferenceInDifferences):
         absorb: Optional[List[str]] = None,
         reference_period: Any = None,
         unit: Optional[str] = None,
+        survey_design=None,
     ) -> MultiPeriodDiDResults:
         """
         Fit the Multi-Period Difference-in-Differences model.
@@ -764,6 +843,10 @@ class MultiPeriodDiD(DifferenceInDifferences):
             is detected (suggests CallawaySantAnna instead). Does NOT affect
             standard error computation -- use the ``cluster`` parameter for
             cluster-robust SEs.
+        survey_design : SurveyDesign, optional
+            Survey design specification for design-based inference. When provided,
+            uses Taylor Series Linearization for variance estimation and
+            applies sampling weights to the regression.
 
         Returns
         -------
@@ -775,13 +858,16 @@ class MultiPeriodDiD(DifferenceInDifferences):
         ValueError
             If required parameters are missing or data validation fails.
         """
-        # Warn if wild bootstrap is requested but not supported
+        # Fall back to analytical inference if wild bootstrap requested
+        # (must happen before _resolve_survey_for_fit which rejects bootstrap+survey)
+        effective_inference = self.inference
         if self.inference == "wild_bootstrap":
             warnings.warn(
                 "Wild bootstrap inference is not yet supported for MultiPeriodDiD. "
                 "Using analytical inference instead.",
                 UserWarning,
             )
+            effective_inference = "analytical"
 
         # Validate basic inputs
         if outcome is None or treatment is None or time is None:
@@ -925,21 +1011,84 @@ class MultiPeriodDiD(DifferenceInDifferences):
                 if ab not in data.columns:
                     raise ValueError(f"Absorb column '{ab}' not found in data")
 
+        # Resolve survey design if provided
+        from diff_diff.survey import _resolve_effective_cluster, _resolve_survey_for_fit
+
+        resolved_survey, survey_weights, survey_weight_type, survey_metadata = (
+            _resolve_survey_for_fit(survey_design, data, effective_inference)
+        )
+        # Reject replicate-weight designs — MultiPeriodDiD uses
+        # compute_survey_vcov (TSL) directly without replicate dispatch.
+        if resolved_survey is not None and resolved_survey.uses_replicate_variance:
+            raise NotImplementedError(
+                "MultiPeriodDiD does not yet support replicate-weight survey "
+                "designs. Use CallawaySantAnna for staggered adoption with "
+                "replicate weights, or use a TSL-based survey design "
+                "(strata/psu/fpc)."
+            )
+
         # Handle absorbed fixed effects (within-transformation)
         working_data = data.copy()
         n_absorbed_effects = 0
 
+        # Save raw treatment counts before absorb demeaning
+        n_treated_raw = int(np.sum(data[treatment].values.astype(float)))
+        n_control_raw = len(data) - n_treated_raw
+
+        # Reject multi-absorb with survey weights (single-pass demeaning is
+        # not the correct weighted FWL projection for N > 1 dimensions)
+        if absorb and len(absorb) > 1 and survey_weights is not None:
+            raise ValueError(
+                f"Multiple absorbed fixed effects (absorb={absorb}) with survey "
+                "weights is not supported. Single-pass sequential demeaning is not "
+                "the correct weighted FWL projection for multiple absorbed dimensions. "
+                "Use absorb with a single variable, or use fixed_effects= instead."
+            )
+
+        if absorb and fixed_effects:
+            raise ValueError(
+                "Cannot use both absorb and fixed_effects. "
+                "The absorb within-transformation does not residualize "
+                "fixed_effects dummies, violating the FWL theorem. "
+                "Use absorb alone (for high-dimensional FE) "
+                "or fixed_effects alone (for low-dimensional FE)."
+            )
+
+        # Pre-compute non_ref_periods (needed for absorb demeaning)
+        non_ref_periods = [p for p in all_periods if p != reference_period]
+
         if absorb:
-            vars_to_demean = [outcome] + (covariates or [])
+            # FWL theorem: demean ALL regressors alongside outcome.
+            # Regressors collinear with absorbed FE (e.g., treatment after
+            # absorbing unit FE) will zero out and be handled by rank-deficiency.
+            d_raw = working_data[treatment].values.astype(float)
+            t_raw = working_data[time].values
+            working_data["_did_treatment"] = d_raw
+            for period in non_ref_periods:
+                working_data[f"_did_period_{period}"] = (t_raw == period).astype(float)
+                working_data[f"_did_interact_{period}"] = d_raw * (t_raw == period).astype(float)
+            vars_to_demean = (
+                [outcome, "_did_treatment"]
+                + [f"_did_period_{p}" for p in non_ref_periods]
+                + [f"_did_interact_{p}" for p in non_ref_periods]
+                + (covariates or [])
+            )
             for ab_var in absorb:
                 working_data, n_fe = demean_by_group(
-                    working_data, vars_to_demean, ab_var, inplace=True
+                    working_data,
+                    vars_to_demean,
+                    ab_var,
+                    inplace=True,
+                    weights=survey_weights,
                 )
                 n_absorbed_effects += n_fe
 
-        # Extract outcome and treatment
+        # Extract outcome and treatment (may be demeaned if absorb was used)
         y = working_data[outcome].values.astype(float)
-        d = working_data[treatment].values.astype(float)
+        if absorb:
+            d = working_data["_did_treatment"].values.astype(float)
+        else:
+            d = working_data[treatment].values.astype(float)
         t = working_data[time].values
 
         # Build design matrix
@@ -948,11 +1097,13 @@ class MultiPeriodDiD(DifferenceInDifferences):
         var_names = ["const", treatment]
 
         # Add period dummies (excluding reference period)
-        non_ref_periods = [p for p in all_periods if p != reference_period]
         period_dummy_indices = {}  # Map period -> column index in X
 
         for period in non_ref_periods:
-            period_dummy = (t == period).astype(float)
+            if absorb:
+                period_dummy = working_data[f"_did_period_{period}"].values.astype(float)
+            else:
+                period_dummy = (t == period).astype(float)
             X = np.column_stack([X, period_dummy])
             var_names.append(f"period_{period}")
             period_dummy_indices[period] = X.shape[1] - 1
@@ -963,7 +1114,10 @@ class MultiPeriodDiD(DifferenceInDifferences):
         interaction_indices = {}  # Map period -> column index in X
 
         for period in non_ref_periods:
-            interaction = d * (t == period).astype(float)
+            if absorb:
+                interaction = working_data[f"_did_interact_{period}"].values.astype(float)
+            else:
+                interaction = d * (t == period).astype(float)
             X = np.column_stack([X, interaction])
             var_names.append(f"{treatment}:period_{period}")
             interaction_indices[period] = X.shape[1] - 1
@@ -987,26 +1141,80 @@ class MultiPeriodDiD(DifferenceInDifferences):
         # This handles rank-deficient matrices by returning NaN for dropped columns
         cluster_ids = data[self.cluster].values if self.cluster is not None else None
 
+        # When survey PSU is present, it overrides cluster for variance estimation
+        effective_cluster_ids = _resolve_effective_cluster(
+            resolved_survey, cluster_ids, self.cluster
+        )
+
+        # Inject cluster as effective PSU for survey variance estimation
+        if resolved_survey is not None and effective_cluster_ids is not None:
+            from diff_diff.survey import _inject_cluster_as_psu, compute_survey_metadata
+
+            resolved_survey = _inject_cluster_as_psu(resolved_survey, effective_cluster_ids)
+            if resolved_survey.psu is not None and survey_metadata is not None:
+                raw_w = (
+                    data[survey_design.weights].values.astype(np.float64)
+                    if survey_design.weights
+                    else np.ones(len(data), dtype=np.float64)
+                )
+                survey_metadata = compute_survey_metadata(resolved_survey, raw_w)
+
+        # Determine if survey vcov should be used
+        _use_survey_vcov = resolved_survey is not None and resolved_survey.needs_survey_vcov
+
         # Note: Wild bootstrap for multi-period effects is complex (multiple coefficients)
         # For now, we use analytical inference even if inference="wild_bootstrap"
         coefficients, residuals, fitted, vcov = solve_ols(
             X,
             y,
             return_fitted=True,
-            return_vcov=True,
-            cluster_ids=cluster_ids,
+            return_vcov=not _use_survey_vcov,
+            cluster_ids=effective_cluster_ids,
             column_names=var_names,
             rank_deficient_action=self.rank_deficient_action,
+            weights=survey_weights,
+            weight_type=survey_weight_type,
         )
+
+        # Compute survey vcov if applicable
+        if _use_survey_vcov:
+            from diff_diff.survey import compute_survey_vcov
+
+            nan_mask = np.isnan(coefficients)
+            if np.any(nan_mask):
+                kept_cols = np.where(~nan_mask)[0]
+                if len(kept_cols) > 0:
+                    vcov_reduced = compute_survey_vcov(X[:, kept_cols], residuals, resolved_survey)
+                    vcov = _expand_vcov_with_nan(vcov_reduced, X.shape[1], kept_cols)
+                else:
+                    vcov = np.full((X.shape[1], X.shape[1]), np.nan)
+            else:
+                vcov = compute_survey_vcov(X, residuals, resolved_survey)
         r_squared = compute_r_squared(y, residuals)
 
-        # Degrees of freedom using effective rank (non-NaN coefficients)
+        # Degrees of freedom: survey df overrides standard df
         k_effective = int(np.sum(~np.isnan(coefficients)))
-        df = len(y) - k_effective - n_absorbed_effects
+        # For fweights, df uses sum(w) - k (effective sample size)
+        n_eff_df = len(y)
+        if survey_weights is not None and survey_weight_type == "fweight":
+            n_eff_df = int(round(np.sum(survey_weights)))
+        df = n_eff_df - k_effective - n_absorbed_effects
+        if resolved_survey is not None and resolved_survey.df_survey is not None:
+            df = resolved_survey.df_survey
+
+        # Guard: fall back to normal distribution if df is non-positive
+        if df is not None and df <= 0:
+            warnings.warn(
+                f"Degrees of freedom is non-positive (df={df}). "
+                "Using normal distribution instead of t-distribution for inference.",
+                UserWarning,
+                stacklevel=2,
+            )
+            df = None
 
         # For non-robust, non-clustered case, we need homoskedastic vcov
         # solve_ols returns HC1 by default, so compute homoskedastic if needed
-        if not self.robust and self.cluster is None:
+        if not self.robust and self.cluster is None and survey_weights is None:
             n = len(y)
             mse = np.sum(residuals**2) / (n - k_effective)
             # Use solve() instead of inv() for numerical stability
@@ -1029,6 +1237,7 @@ class MultiPeriodDiD(DifferenceInDifferences):
         post_effect_values = []
         post_effect_indices = []
 
+        assert vcov is not None
         for period in non_ref_periods:
             idx = interaction_indices[period]
             effect = coefficients[idx]
@@ -1081,9 +1290,9 @@ class MultiPeriodDiD(DifferenceInDifferences):
                     avg_att, avg_se, alpha=self.alpha, df=df
                 )
 
-        # Count observations
-        n_treated = int(np.sum(d))
-        n_control = int(np.sum(1 - d))
+        # Count observations (use raw counts to avoid demeaned values from absorb)
+        n_treated = n_treated_raw
+        n_control = n_control_raw
 
         # Create coefficient dictionary
         coef_dict = {name: coef for name, coef in zip(var_names, coefficients)}
@@ -1109,6 +1318,7 @@ class MultiPeriodDiD(DifferenceInDifferences):
             r_squared=r_squared,
             reference_period=reference_period,
             interaction_indices=interaction_indices,
+            survey_metadata=survey_metadata,
         )
 
         self._coefficients = coefficients

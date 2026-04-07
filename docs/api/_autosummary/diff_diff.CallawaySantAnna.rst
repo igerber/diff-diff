@@ -24,4 +24,15 @@
 
    
    
+   .. rubric:: Attributes
+
+   .. autosummary::
+   
+      ~CallawaySantAnna.n_bootstrap
+      ~CallawaySantAnna.bootstrap_weight_type
+      ~CallawaySantAnna.alpha
+      ~CallawaySantAnna.seed
+      ~CallawaySantAnna.anticipation
+      ~CallawaySantAnna.base_period
+   
    

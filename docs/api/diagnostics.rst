@@ -30,14 +30,12 @@ Example
    result = placebo_timing_test(
        data,
        outcome='y',
-       treated='treated',
+       treatment='treated',
        time='period',
-       unit='unit_id',
-       true_treatment_start=5,
-       placebo_treatment_start=3  # Test earlier period
+       fake_treatment_period=3  # Test earlier period
    )
 
-   print(f"Placebo effect: {result.effect:.3f}")
+   print(f"Placebo effect: {result.placebo_effect:.3f}")
    print(f"p-value: {result.p_value:.3f}")
 
 placebo_group_test
@@ -60,12 +58,11 @@ Example
        outcome='y',
        time='period',
        unit='unit_id',
-       treated='treated',
-       post='post'
+       fake_treated_units=[10, 11, 12]  # Assign some control units as fake-treated
    )
 
    # Should find no effect if parallel trends holds
-   print(f"Placebo effect: {result.effect:.3f}")
+   print(f"Placebo effect: {result.placebo_effect:.3f}")
 
 permutation_test
 ----------------
@@ -79,13 +76,15 @@ Example
 
 .. code-block:: python
 
-   from diff_diff import permutation_test
+   from diff_diff import permutation_test, generate_did_data
 
+   panel = generate_did_data(n_units=100, n_periods=10, treatment_effect=2.0)
    result = permutation_test(
-       data,
-       outcome='y',
-       treated='treated',
-       post='post',
+       panel,
+       outcome='outcome',
+       treatment='treated',
+       time='post',
+       unit='unit',
        n_permutations=1000
    )
 
@@ -103,18 +102,20 @@ Example
 
 .. code-block:: python
 
-   from diff_diff import leave_one_out_test
+   from diff_diff import leave_one_out_test, generate_did_data
 
+   panel = generate_did_data(n_units=100, n_periods=10, treatment_effect=2.0)
    result = leave_one_out_test(
-       data,
-       outcome='y',
-       treated='treated',
-       post='post',
-       unit='unit_id'
+       panel,
+       outcome='outcome',
+       treatment='treated',
+       time='post',
+       unit='unit'
    )
 
    # Check if results are driven by single units
-   print(f"Effect range: [{result.min_effect:.3f}, {result.max_effect:.3f}]")
+   loo = result.leave_one_out_effects
+   print(f"Effect range: [{min(loo.values()):.3f}, {max(loo.values()):.3f}]")
 
 run_all_placebo_tests
 ---------------------

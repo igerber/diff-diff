@@ -11,7 +11,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
-from diff_diff.results import _get_significance_stars
+from diff_diff.results import _format_survey_block, _get_significance_stars
 
 __all__ = [
     "ImputationBootstrapResults",
@@ -139,6 +139,8 @@ class ImputationDiDResults:
     bootstrap_results: Optional[ImputationBootstrapResults] = field(default=None, repr=False)
     # Internal: stores data needed for pretrend_test()
     _estimator_ref: Optional[Any] = field(default=None, repr=False)
+    # Survey design metadata (SurveyMetadata instance from diff_diff.survey)
+    survey_metadata: Optional[Any] = field(default=None, repr=False)
 
     def __repr__(self) -> str:
         """Concise string representation."""
@@ -181,6 +183,11 @@ class ImputationDiDResults:
             f"{'Time periods:':<30} {len(self.time_periods):>10}",
             "",
         ]
+
+        # Survey design info
+        if self.survey_metadata is not None:
+            sm = self.survey_metadata
+            lines.extend(_format_survey_block(sm, 85))
 
         # Overall ATT
         lines.extend(

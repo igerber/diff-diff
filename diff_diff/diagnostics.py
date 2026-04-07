@@ -102,13 +102,15 @@ class PlaceboTestResults:
         ]
 
         if self.original_effect is not None:
-            lines.extend([
-                "",
-                "-" * 65,
-                "Comparison with Original Estimate".center(65),
-                "-" * 65,
-                f"{'Original ATT:':<25} {self.original_effect:>12.4f}",
-            ])
+            lines.extend(
+                [
+                    "",
+                    "-" * 65,
+                    "Comparison with Original Estimate".center(65),
+                    "-" * 65,
+                    f"{'Original ATT:':<25} {self.original_effect:>12.4f}",
+                ]
+            )
             if self.original_se is not None:
                 lines.append(f"{'Original SE:':<25} {self.original_se:>12.4f}")
 
@@ -121,40 +123,36 @@ class PlaceboTestResults:
         if self.leave_one_out_effects is not None:
             n_units = len(self.leave_one_out_effects)
             effects = list(self.leave_one_out_effects.values())
-            lines.extend([
-                "",
-                "-" * 65,
-                "Leave-One-Out Summary".center(65),
-                "-" * 65,
-                f"{'Units analyzed:':<25} {n_units:>12}",
-                f"{'Mean effect:':<25} {np.mean(effects):>12.4f}",
-                f"{'Std. dev.:':<25} {np.std(effects, ddof=1):>12.4f}",
-                f"{'Min effect:':<25} {np.min(effects):>12.4f}",
-                f"{'Max effect:':<25} {np.max(effects):>12.4f}",
-            ])
+            lines.extend(
+                [
+                    "",
+                    "-" * 65,
+                    "Leave-One-Out Summary".center(65),
+                    "-" * 65,
+                    f"{'Units analyzed:':<25} {n_units:>12}",
+                    f"{'Mean effect:':<25} {np.mean(effects):>12.4f}",
+                    f"{'Std. dev.:':<25} {np.std(effects, ddof=1):>12.4f}",
+                    f"{'Min effect:':<25} {np.min(effects):>12.4f}",
+                    f"{'Max effect:':<25} {np.max(effects):>12.4f}",
+                ]
+            )
 
         # Interpretation
-        lines.extend([
-            "",
-            "-" * 65,
-            "Interpretation".center(65),
-            "-" * 65,
-        ])
+        lines.extend(
+            [
+                "",
+                "-" * 65,
+                "Interpretation".center(65),
+                "-" * 65,
+            ]
+        )
 
         if self.is_significant:
-            lines.append(
-                "WARNING: Significant placebo effect detected (p < 0.05)."
-            )
-            lines.append(
-                "This suggests potential violations of the parallel trends assumption."
-            )
+            lines.append("WARNING: Significant placebo effect detected (p < 0.05).")
+            lines.append("This suggests potential violations of the parallel trends assumption.")
         else:
-            lines.append(
-                "No significant placebo effect detected (p >= 0.05)."
-            )
-            lines.append(
-                "This is consistent with the parallel trends assumption."
-            )
+            lines.append("No significant placebo effect detected (p >= 0.05).")
+            lines.append("This is consistent with the parallel trends assumption.")
 
         lines.append("=" * 65)
 
@@ -205,7 +203,7 @@ def run_placebo_test(
     n_permutations: int = 1000,
     alpha: float = 0.05,
     seed: Optional[int] = None,
-    **estimator_kwargs
+    **estimator_kwargs,
 ) -> PlaceboTestResults:
     """
     Run a placebo test to validate DiD assumptions.
@@ -288,9 +286,7 @@ def run_placebo_test(
     valid_types = ["fake_timing", "fake_group", "permutation", "leave_one_out"]
 
     if test_type not in valid_types:
-        raise ValueError(
-            f"test_type must be one of {valid_types}, got '{test_type}'"
-        )
+        raise ValueError(f"test_type must be one of {valid_types}, got '{test_type}'")
 
     if test_type == "fake_timing":
         return placebo_timing_test(
@@ -301,7 +297,7 @@ def run_placebo_test(
             fake_treatment_period=fake_treatment_period,
             post_periods=post_periods,
             alpha=alpha,
-            **estimator_kwargs
+            **estimator_kwargs,
         )
 
     elif test_type == "fake_group":
@@ -317,7 +313,7 @@ def run_placebo_test(
             fake_treated_units=fake_treatment_group,
             post_periods=post_periods,
             alpha=alpha,
-            **estimator_kwargs
+            **estimator_kwargs,
         )
 
     elif test_type == "permutation":
@@ -332,7 +328,7 @@ def run_placebo_test(
             n_permutations=n_permutations,
             alpha=alpha,
             seed=seed,
-            **estimator_kwargs
+            **estimator_kwargs,
         )
 
     elif test_type == "leave_one_out":
@@ -345,7 +341,7 @@ def run_placebo_test(
             time=time,
             unit=unit,
             alpha=alpha,
-            **estimator_kwargs
+            **estimator_kwargs,
         )
 
     # This should never be reached due to validation above
@@ -360,7 +356,7 @@ def placebo_timing_test(
     fake_treatment_period: Any,
     post_periods: Optional[List[Any]] = None,
     alpha: float = 0.05,
-    **estimator_kwargs
+    **estimator_kwargs,
 ) -> PlaceboTestResults:
     """
     Test for pre-treatment effects by moving treatment timing earlier.
@@ -417,23 +413,13 @@ def placebo_timing_test(
 
     # Fit DiD on pre-treatment data with fake post
     did = DifferenceInDifferences(**estimator_kwargs)
-    results = did.fit(
-        pre_data,
-        outcome=outcome,
-        treatment=treatment,
-        time="_fake_post"
-    )
+    results = did.fit(pre_data, outcome=outcome, treatment=treatment, time="_fake_post")
 
     # Also fit on full data for comparison
     data_with_post = data.copy()
     data_with_post["_post"] = data_with_post[time].isin(post_periods).astype(int)
     did_full = DifferenceInDifferences(**estimator_kwargs)
-    results_full = did_full.fit(
-        data_with_post,
-        outcome=outcome,
-        treatment=treatment,
-        time="_post"
-    )
+    results_full = did_full.fit(data_with_post, outcome=outcome, treatment=treatment, time="_post")
 
     return PlaceboTestResults(
         test_type="fake_timing",
@@ -459,7 +445,7 @@ def placebo_group_test(
     fake_treated_units: List[Any],
     post_periods: Optional[List[Any]] = None,
     alpha: float = 0.05,
-    **estimator_kwargs
+    **estimator_kwargs,
 ) -> PlaceboTestResults:
     """
     Test for differential trends among never-treated units.
@@ -509,12 +495,7 @@ def placebo_group_test(
 
     # Fit DiD
     did = DifferenceInDifferences(**estimator_kwargs)
-    results = did.fit(
-        fake_data,
-        outcome=outcome,
-        treatment="_fake_treated",
-        time="_post"
-    )
+    results = did.fit(fake_data, outcome=outcome, treatment="_fake_treated", time="_post")
 
     return PlaceboTestResults(
         test_type="fake_group",
@@ -539,7 +520,7 @@ def permutation_test(
     n_permutations: int = 1000,
     alpha: float = 0.05,
     seed: Optional[int] = None,
-    **estimator_kwargs
+    **estimator_kwargs,
 ) -> PlaceboTestResults:
     """
     Compute permutation-based p-value for DiD estimate.
@@ -583,20 +564,11 @@ def permutation_test(
 
     # First, fit original model
     did = DifferenceInDifferences(**estimator_kwargs)
-    original_results = did.fit(
-        data,
-        outcome=outcome,
-        treatment=treatment,
-        time=time
-    )
+    original_results = did.fit(data, outcome=outcome, treatment=treatment, time=time)
     original_att = original_results.att
 
     # Get unit-level treatment assignment
-    unit_treatment = (
-        data.groupby(unit)[treatment]
-        .first()
-        .reset_index()
-    )
+    unit_treatment = data.groupby(unit)[treatment].first().reset_index()
     units = unit_treatment[unit].values
     n_treated = int(unit_treatment[treatment].sum())
 
@@ -615,10 +587,7 @@ def permutation_test(
         try:
             perm_did = DifferenceInDifferences(**estimator_kwargs)
             perm_results = perm_did.fit(
-                perm_data,
-                outcome=outcome,
-                treatment="_perm_treatment",
-                time=time
+                perm_data, outcome=outcome, treatment="_perm_treatment", time=time
             )
             permuted_effects[i] = perm_results.att
         except (ValueError, KeyError, np.linalg.LinAlgError):
@@ -643,11 +612,12 @@ def permutation_test(
         failure_rate = n_failed / n_permutations
         if failure_rate > 0.1:
             import warnings
+
             warnings.warn(
                 f"{n_failed}/{n_permutations} permutations failed ({failure_rate:.1%}). "
                 f"Results based on {len(valid_effects)} successful permutations.",
                 UserWarning,
-                stacklevel=2
+                stacklevel=2,
             )
 
     # Compute p-value: proportion of |permuted| >= |original|
@@ -688,7 +658,7 @@ def leave_one_out_test(
     time: str,
     unit: str,
     alpha: float = 0.05,
-    **estimator_kwargs
+    **estimator_kwargs,
 ) -> PlaceboTestResults:
     """
     Assess sensitivity by dropping each treated unit in turn.
@@ -720,12 +690,7 @@ def leave_one_out_test(
     """
     # Fit original model
     did = DifferenceInDifferences(**estimator_kwargs)
-    original_results = did.fit(
-        data,
-        outcome=outcome,
-        treatment=treatment,
-        time=time
-    )
+    original_results = did.fit(data, outcome=outcome, treatment=treatment, time=time)
     original_att = original_results.att
 
     # Get treated units
@@ -744,12 +709,7 @@ def leave_one_out_test(
 
         try:
             loo_did = DifferenceInDifferences(**estimator_kwargs)
-            loo_results = loo_did.fit(
-                loo_data,
-                outcome=outcome,
-                treatment=treatment,
-                time=time
-            )
+            loo_results = loo_did.fit(loo_data, outcome=outcome, treatment=treatment, time=time)
             loo_effects[u] = loo_results.att
         except (ValueError, KeyError, np.linalg.LinAlgError):
             # Skip units that cause fitting issues
@@ -772,12 +732,13 @@ def leave_one_out_test(
     # Warn if significant number of LOO iterations failed
     if n_failed > 0:
         import warnings
+
         failed_units = [u for u, v in loo_effects.items() if np.isnan(v)]
         warnings.warn(
             f"{n_failed}/{n_total} leave-one-out estimates failed for units: {failed_units}. "
             f"Results based on {len(valid_effects)} successful iterations.",
             UserWarning,
-            stacklevel=2
+            stacklevel=2,
         )
 
     # Statistics of LOO distribution
@@ -813,7 +774,7 @@ def run_all_placebo_tests(
     n_permutations: int = 500,
     alpha: float = 0.05,
     seed: Optional[int] = None,
-    **estimator_kwargs
+    **estimator_kwargs,
 ) -> Dict[str, Union[PlaceboTestResults, Dict[str, str]]]:
     """
     Run a comprehensive suite of placebo tests.
@@ -866,7 +827,7 @@ def run_all_placebo_tests(
                 fake_treatment_period=period,
                 post_periods=post_periods,
                 alpha=alpha,
-                **estimator_kwargs
+                **estimator_kwargs,
             )
             results[f"fake_timing_{period}"] = test_result
         except Exception as e:
@@ -875,7 +836,7 @@ def run_all_placebo_tests(
                 "error": str(e),
                 "error_type": type(e).__name__,
                 "test_type": "fake_timing",
-                "period": period
+                "period": period,
             }
 
     # Permutation test
@@ -889,14 +850,14 @@ def run_all_placebo_tests(
             n_permutations=n_permutations,
             alpha=alpha,
             seed=seed,
-            **estimator_kwargs
+            **estimator_kwargs,
         )
         results["permutation"] = perm_result
     except Exception as e:
         results["permutation"] = {
             "error": str(e),
             "error_type": type(e).__name__,
-            "test_type": "permutation"
+            "test_type": "permutation",
         }
 
     # Leave-one-out test
@@ -908,14 +869,14 @@ def run_all_placebo_tests(
             time=time,
             unit=unit,
             alpha=alpha,
-            **estimator_kwargs
+            **estimator_kwargs,
         )
         results["leave_one_out"] = loo_result
     except Exception as e:
         results["leave_one_out"] = {
             "error": str(e),
             "error_type": type(e).__name__,
-            "test_type": "leave_one_out"
+            "test_type": "leave_one_out",
         }
 
     return results

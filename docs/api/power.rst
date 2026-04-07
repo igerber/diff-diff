@@ -30,9 +30,11 @@ Main class for analytical power calculations.
 
    .. autosummary::
 
-      ~PowerAnalysis.compute_power
-      ~PowerAnalysis.compute_mde
-      ~PowerAnalysis.compute_sample_size
+      ~PowerAnalysis.power
+      ~PowerAnalysis.mde
+      ~PowerAnalysis.sample_size
+      ~PowerAnalysis.power_curve
+      ~PowerAnalysis.sample_size_curve
 
 Example
 ~~~~~~~
@@ -41,29 +43,19 @@ Example
 
    from diff_diff import PowerAnalysis
 
-   # Create power analysis object
-   pa = PowerAnalysis(
-       effect_size=0.5,
-       n_treated=100,
-       n_control=100,
-       n_pre=4,
-       n_post=4,
-       sigma=1.0,
-       rho=0.5,  # Within-unit correlation
-       alpha=0.05
-   )
+   pa = PowerAnalysis(alpha=0.05, power=0.80)
 
    # Compute power
-   power = pa.compute_power()
-   print(f"Power: {power:.2%}")
+   result = pa.power(effect_size=0.5, n_treated=100, n_control=100, sigma=1.0)
+   print(f"Power: {result.power:.2%}")
 
    # Compute MDE at 80% power
-   mde = pa.compute_mde(power=0.80)
-   print(f"MDE: {mde:.3f}")
+   result = pa.mde(n_treated=100, n_control=100, sigma=1.0)
+   print(f"MDE: {result.mde:.3f}")
 
    # Required sample size
-   n = pa.compute_sample_size(power=0.80)
-   print(f"Required N per group: {n}")
+   result = pa.sample_size(effect_size=0.5, sigma=1.0)
+   print(f"Required N: {result.required_n}")
 
 PowerResults
 ------------
@@ -81,6 +73,26 @@ SimulationPowerResults
 Results from simulation-based power analysis.
 
 .. autoclass:: diff_diff.SimulationPowerResults
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+SimulationMDEResults
+--------------------
+
+Results from simulation-based MDE search.
+
+.. autoclass:: diff_diff.SimulationMDEResults
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+SimulationSampleSizeResults
+---------------------------
+
+Results from simulation-based sample size search.
+
+.. autoclass:: diff_diff.SimulationSampleSizeResults
    :members:
    :undoc-members:
    :show-inheritance:
@@ -116,6 +128,20 @@ Simulation-based power for any DiD estimator.
 
 .. autofunction:: diff_diff.simulate_power
 
+simulate_mde
+~~~~~~~~~~~~~
+
+Simulation-based MDE for any DiD estimator.
+
+.. autofunction:: diff_diff.simulate_mde
+
+simulate_sample_size
+~~~~~~~~~~~~~~~~~~~~
+
+Simulation-based sample size for any DiD estimator.
+
+.. autofunction:: diff_diff.simulate_sample_size
+
 Complete Example
 ----------------
 
@@ -125,8 +151,8 @@ Complete Example
        PowerAnalysis,
        compute_mde,
        simulate_power,
+       simulate_mde,
        DifferenceInDifferences,
-       plot_power_curve,
    )
 
    # Quick MDE calculation
@@ -145,20 +171,23 @@ Complete Example
    # Simulation-based power for DiD estimator
    sim_results = simulate_power(
        estimator=DifferenceInDifferences(),
-       effect_size=0.5,
-       n_treated=100,
-       n_control=100,
-       n_periods=8,
-       treatment_start=4,
+       treatment_effect=5.0,
+       n_units=100,
+       n_periods=4,
+       treatment_period=2,
        sigma=1.0,
-       n_simulations=1000
+       n_simulations=20,
    )
    print(f"Simulated power: {sim_results.power:.2%}")
 
-   # Power curve
-   pa = PowerAnalysis(n_treated=100, n_control=100, n_pre=4, n_post=4, sigma=1.0)
-   fig = plot_power_curve(pa, effect_range=(0, 1), n_points=50)
-   fig.savefig('power_curve.png')
+   # Simulation-based MDE
+   mde_results = simulate_mde(
+       estimator=DifferenceInDifferences(),
+       n_units=100,
+       n_simulations=10,
+       max_steps=5,
+   )
+   print(f"Simulated MDE: {mde_results.mde:.3f}")
 
 See Also
 --------

@@ -297,8 +297,8 @@ Only evaluate this dimension when `--pr` was provided and a non-empty comment wa
 
 Use judgment, not just substring matching — the plan may use different words to describe the same fix.
 
-**Verdict impact:**
-- Unaddressed P0/P1/Critical items -> automatic "Needs revision"
+**Assessment impact:**
+- Unaddressed P0/P1/Critical items -> results in "Significant issues found"
 - Unaddressed P2/Medium items count as Medium issues
 - Unaddressed P3/Low items count as Low issues
 
@@ -325,7 +325,7 @@ Present the review in the following format. Number each issue sequentially withi
 ```
 ## Overall Assessment
 
-[2-3 sentences: what the plan does, whether it's ready for implementation, and the biggest concern if any]
+[2-3 sentences: what the plan does, the reviewer's key observations, and the biggest concern if any]
 
 ---
 
@@ -426,11 +426,11 @@ The `--pr` URL must be the same across the initial review and the `--updated` re
 | PR feedback gaps | [count of Not Addressed + Partially Addressed] (only if `--pr`) |
 | Questions | [count] |
 
-**Verdict**: [Ready / Ready with minor fixes / Needs revision]
+**Assessment**: [No critical issues found / Minor issues to address / Significant issues found]
 
-- **Ready**: No critical issues, few or no medium issues
-- **Ready with minor fixes**: No critical issues, some medium issues that are straightforward to address
-- **Needs revision**: Has critical issues or many medium issues that require rethinking the approach
+- **No critical issues found**: No critical issues, few or no medium issues
+- **Minor issues to address**: No critical issues, some medium issues that are straightforward to address
+- **Significant issues found**: Has critical issues or many medium issues that require rethinking the approach
 ```
 
 ### Step 6: Save Review to File
@@ -455,7 +455,7 @@ After displaying the review in the conversation (Step 5), persist it to a file a
    ---
    plan: ~/.claude/plans/foo.md
    reviewed_at: "2026-02-15T14:30:00Z"
-   verdict: "Needs revision"
+   assessment: "Significant issues found"
    critical_count: 2
    medium_count: 3
    low_count: 1

@@ -801,6 +801,44 @@ class TestAnticipationEventStudy:
         )
         assert np.isfinite(results.event_study_effects[-1]["effect"])
 
+    def test_anticipation_event_study_excludes_contaminated_periods(self):
+        """With anticipation=2, event study should not contain e < -2."""
+        rng = np.random.default_rng(42)
+        n_per_group = 30
+        periods = list(range(1, 9))  # 8 periods
+
+        rows = []
+        # Never-treated
+        for i in range(n_per_group):
+            for t in periods:
+                rows.append({
+                    "unit": i, "period": t, "first_treat": 0,
+                    "dose": 0.0, "outcome": rng.normal(0, 0.5),
+                })
+        # Cohort g=5 — treatment at t=5, anticipation=2 means post at t>=3
+        for i in range(n_per_group):
+            uid = n_per_group + i
+            d = rng.uniform(0.5, 2.0)
+            for t in periods:
+                y = rng.normal(0, 0.5) + (2.0 * d if t >= 5 else 0)
+                rows.append({
+                    "unit": uid, "period": t, "first_treat": 5,
+                    "dose": d, "outcome": y,
+                })
+
+        data = pd.DataFrame(rows)
+        est = ContinuousDiD(anticipation=2, n_bootstrap=0)
+        results = est.fit(
+            data, "outcome", "unit", "period", "first_treat", "dose",
+            aggregate="eventstudy",
+        )
+        assert results.event_study_effects is not None
+        for e in results.event_study_effects.keys():
+            assert e >= -2, (
+                f"Found relative period e={e} with anticipation=2; "
+                f"expected e >= -2"
+            )
+
     def test_anticipation_not_yet_treated_excludes_anticipation_window(self):
         """Not-yet-treated controls must exclude cohorts in the anticipation window.
 

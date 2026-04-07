@@ -1,3 +1,7 @@
+.. meta::
+   :description: Guide to choosing the right Difference-in-Differences estimator. Covers basic DiD, TWFE, staggered adoption methods (Callaway-Sant'Anna, Sun-Abraham), Synthetic DiD, and more.
+   :keywords: which DiD estimator, staggered DiD estimator, difference-in-differences method selection, TWFE alternatives
+
 Choosing an Estimator
 =====================
 
@@ -17,6 +21,8 @@ Start here and follow the questions:
 
    - **No** → Go to question 2
    - **Yes** → Use :class:`~diff_diff.CallawaySantAnna` (or :class:`~diff_diff.EfficientDiD` for tighter SEs under PT-All)
+   - **Yes, and you suspect homogeneous effects** → Use :class:`~diff_diff.ImputationDiD` or :class:`~diff_diff.TwoStageDiD` for tighter CIs
+   - **Want to diagnose TWFE bias?** → Use :class:`~diff_diff.BaconDecomposition` first
 
 2. **Do you have panel data?** (Multiple observations per unit over time)
 
@@ -71,6 +77,30 @@ Quick Reference
      - Continuous dose / treatment intensity
      - Strong Parallel Trends (SPT) for dose-response; PT for binarized ATT
      - ATT\ :sup:`loc` (PT); ATT(d), ACRT(d) (SPT)
+   * - ``SunAbraham``
+     - Staggered adoption, interaction-weighted
+     - Conditional parallel trends
+     - Cohort-specific ATTs, event study
+   * - ``ImputationDiD``
+     - Staggered, homogeneous effects
+     - Unit + time FE structure
+     - Imputed treatment effects, event study
+   * - ``TwoStageDiD``
+     - Staggered adoption, efficient
+     - Unit + time FE structure
+     - Single ATT or event study
+   * - ``StackedDiD``
+     - Staggered, sub-experiment approach
+     - Parallel trends per cohort
+     - Trimmed aggregate ATT
+   * - ``TROP``
+     - Factor confounding suspected
+     - Factor model + weights
+     - ATT with triple robustness
+   * - ``BaconDecomposition``
+     - TWFE diagnostic
+     - (diagnostic tool)
+     - 2x2 decomposition weights
 
 Detailed Guidance
 -----------------
@@ -89,7 +119,7 @@ Use :class:`~diff_diff.DifferenceInDifferences` when:
    from diff_diff import DifferenceInDifferences
 
    did = DifferenceInDifferences()
-   results = did.fit(data, outcome='y', treated='treated', post='post')
+   results = did.fit(data, outcome='y', treatment='treated', time='post')
 
 Two-Way Fixed Effects
 ~~~~~~~~~~~~~~~~~~~~~
@@ -112,7 +142,7 @@ Use :class:`~diff_diff.TwoWayFixedEffects` when:
    from diff_diff import TwoWayFixedEffects
 
    twfe = TwoWayFixedEffects()
-   results = twfe.fit(data, outcome='y', treated='treated',
+   results = twfe.fit(data, outcome='y', treatment='treated',
                       unit='unit_id', time='period')
 
 Multi-Period Event Study
@@ -129,9 +159,9 @@ Use :class:`~diff_diff.MultiPeriodDiD` when:
 
    from diff_diff import MultiPeriodDiD, plot_event_study
 
-   event = MultiPeriodDiD(reference_period=-1)
-   results = event.fit(data, outcome='y', treated='treated',
-                       time='period', unit='unit_id', treatment_start=5)
+   event = MultiPeriodDiD()
+   results = event.fit(data, outcome='y', treatment='treated',
+                       time='period', unit='unit_id', reference_period=2)
 
    # Visualize
    plot_event_study(results)
@@ -159,11 +189,14 @@ This is the recommended estimator for most applied work with staggered adoption.
                     time='period', first_treat='first_treat',
                     covariates=['x1', 'x2'])
 
-   # Get aggregated effects
-   print(f"Overall ATT: {results.att:.3f}")
+   # Overall ATT
+   print(f"Overall ATT: {results.overall_att:.3f}")
 
    # Event study aggregation
-   event_study = results.aggregate('event_time')
+   es = cs.fit(data, outcome='y', unit='unit_id',
+               time='period', first_treat='first_treat',
+               covariates=['x1', 'x2'], aggregate='event_study')
+   event_study_df = es.to_dataframe('event_study')
 
 Synthetic DiD
 ~~~~~~~~~~~~~
@@ -176,12 +209,13 @@ Use :class:`~diff_diff.SyntheticDiD` when:
 
 .. code-block:: python
 
-   from diff_diff import SyntheticDiD
+   from diff_diff import SyntheticDiD, generate_did_data
 
+   # SyntheticDiD requires block treatment (constant within units)
+   block_data = generate_did_data(n_units=40, n_periods=10, treatment_effect=2.0)
    sdid = SyntheticDiD()
-   results = sdid.fit(data, outcome='y', unit='unit_id',
-                      time='period', treated='treated',
-                      treatment_start=5)
+   results = sdid.fit(block_data, outcome='outcome', unit='unit',
+                      time='period', treatment='treated')
 
    # View the unit weights
    print(results.unit_weights)
@@ -244,6 +278,168 @@ Use :class:`~diff_diff.EfficientDiD` when:
                       aggregate='all')
    results.print_summary()
 
+Sun-Abraham
+~~~~~~~~~~~
+
+Use :class:`~diff_diff.SunAbraham` when:
+
+- You have staggered adoption and want an interaction-weighted event study
+- You want to decompose effects by cohort and relative time
+- You need a regression-based complement to Callaway-Sant'Anna
+
+Sun & Abraham (2021) uses a saturated TWFE regression with cohort x relative-time
+interactions, then aggregates cohort-specific effects using interaction weights.
+
+.. code-block:: python
+
+   from diff_diff import SunAbraham
+
+   sa = SunAbraham(control_group='never_treated')
+   results = sa.fit(data, outcome='y', unit='unit_id',
+                    time='period', first_treat='first_treat')
+   results.print_summary()
+
+.. note::
+
+   Running both Sun-Abraham and Callaway-Sant'Anna provides a useful robustness
+   check. Both are consistent under heterogeneous treatment effects.
+
+Imputation DiD
+~~~~~~~~~~~~~~
+
+Use :class:`~diff_diff.ImputationDiD` when:
+
+- You have staggered adoption with homogeneous treatment effects
+- You want shorter confidence intervals than Callaway-Sant'Anna (~50% shorter)
+- You need imputed counterfactual outcomes for treated observations
+
+Borusyak, Jaravel & Spiess (2024) estimate unit + time FE on untreated observations,
+impute counterfactual Y(0) for treated observations, then aggregate.
+
+.. code-block:: python
+
+   from diff_diff import ImputationDiD
+
+   imp = ImputationDiD()
+   results = imp.fit(data, outcome='y', unit='unit_id',
+                     time='period', first_treat='first_treat',
+                     aggregate='event_study')
+   results.print_summary()
+
+.. note::
+
+   Under homogeneous effects, ImputationDiD is semiparametrically efficient.
+   If you suspect heterogeneous effects across cohorts, prefer Callaway-Sant'Anna.
+
+Two-Stage DiD
+~~~~~~~~~~~~~
+
+Use :class:`~diff_diff.TwoStageDiD` when:
+
+- You want the same point estimates as ImputationDiD with a different variance estimator
+- You prefer the GMM sandwich variance that accounts for first-stage uncertainty
+- You want a single ATT or an event study from a two-stage procedure
+
+Gardner (2022) estimates FE on untreated obs (stage 1), residualizes all outcomes,
+then regresses residuals on treatment indicators (stage 2).
+
+.. code-block:: python
+
+   from diff_diff import TwoStageDiD
+
+   ts = TwoStageDiD()
+   results = ts.fit(data, outcome='y', unit='unit_id',
+                    time='period', first_treat='first_treat',
+                    aggregate='event_study')
+   results.print_summary()
+
+.. note::
+
+   Point estimates are identical to ImputationDiD; the key difference is the
+   variance estimator (GMM sandwich vs. conservative clustered).
+
+Stacked DiD
+~~~~~~~~~~~
+
+Use :class:`~diff_diff.StackedDiD` when:
+
+- You have staggered adoption and want a sub-experiment approach
+- You want to avoid forbidden comparisons in TWFE by construction
+- You need corrective Q-weights for unbiased stacked estimation
+
+Wing, Freedman & Hollingsworth (2024) create one sub-experiment per adoption cohort
+with clean controls and apply Q-weights to reweight the stacked regression.
+
+.. code-block:: python
+
+   from diff_diff import StackedDiD
+
+   stk = StackedDiD(kappa_pre=2, kappa_post=3)
+   results = stk.fit(data, outcome='y', unit='unit_id',
+                     time='period', first_treat='first_treat',
+                     aggregate='event_study')
+   results.print_summary()
+
+.. note::
+
+   The trimmed aggregate ATT may exclude early or late cohorts whose event
+   windows do not fit in the data. Check ``results.trimmed_groups``.
+
+TROP
+~~~~
+
+Use :class:`~diff_diff.TROP` when:
+
+- You suspect interactive fixed effects (factor confounding)
+- Standard parallel trends may not hold due to unobserved factors
+- You want triple robustness: factor model + unit weights + time weights
+
+Athey, Imbens, Qu & Viviano (2025) combine nuclear norm regularization,
+exponential unit distance weights, and time decay weights with LOOCV tuning.
+
+.. code-block:: python
+
+   from diff_diff import TROP
+
+   trop = TROP(n_bootstrap=200)
+   results = trop.fit(data, outcome='y', treatment='treated',
+                      unit='unit_id', time='period')
+   results.print_summary()
+
+.. note::
+
+   TROP is computationally intensive. Use ``method='global'`` for faster
+   estimation at the cost of some flexibility vs. ``method='local'``.
+
+Bacon Decomposition
+~~~~~~~~~~~~~~~~~~~
+
+Use :class:`~diff_diff.BaconDecomposition` when:
+
+- You want to **diagnose** whether TWFE is biased in your staggered setting
+- You need to see which 2x2 comparisons drive the TWFE estimate
+- You want to check whether later-vs-earlier or already-treated-as-control comparisons carry substantial weight
+
+Goodman-Bacon (2021) decomposes the TWFE estimate into a weighted average of
+all 2x2 DiD comparisons and their weights.
+
+.. code-block:: python
+
+   from diff_diff import BaconDecomposition, plot_bacon
+
+   bacon = BaconDecomposition()
+   results = bacon.fit(data, outcome='y', unit='unit_id',
+                       time='period', first_treat='first_treat')
+   results.print_summary()
+
+   # Visualize the decomposition
+   plot_bacon(results)
+
+.. note::
+
+   This is a diagnostic tool, not an estimator. If the decomposition reveals
+   problematic weights, switch to Callaway-Sant'Anna or another robust estimator.
+
 Common Pitfalls
 ---------------
 
@@ -275,7 +471,7 @@ Common Pitfalls
    Standard errors should typically be clustered at the level of treatment
    assignment (often the unit level).
 
-   *Solution*: Always specify ``cluster_col`` for panel data.
+   *Solution*: Always specify ``cluster`` for panel data.
 
 Standard Error Methods
 ----------------------
@@ -292,22 +488,46 @@ differences helps interpret results and choose appropriate inference.
      - Details
    * - ``DifferenceInDifferences``
      - HC1 (heteroskedasticity-robust)
-     - Uses White's robust SEs by default. Specify ``cluster_col`` for cluster-robust SEs. Use ``inference='wild_bootstrap'`` for few clusters (<30).
+     - Uses White's robust SEs by default. Specify ``cluster`` for cluster-robust SEs. Use ``inference='wild_bootstrap'`` for few clusters (<30).
    * - ``TwoWayFixedEffects``
      - Cluster-robust (unit level)
-     - Always clusters at unit level after within-transformation. Specify ``cluster_col`` to override. Use ``inference='wild_bootstrap'`` for few clusters.
+     - Always clusters at unit level after within-transformation. Specify ``cluster`` to override. Use ``inference='wild_bootstrap'`` for few clusters.
    * - ``MultiPeriodDiD``
      - HC1 (heteroskedasticity-robust)
-     - Same as basic DiD. Cluster-robust available via ``cluster_col``. Wild bootstrap not yet supported for multi-coefficient inference.
+     - Same as basic DiD. Cluster-robust available via ``cluster``. Wild bootstrap not yet supported for multi-coefficient inference.
    * - ``CallawaySantAnna``
-     - Analytical (simple difference)
-     - Uses simple variance of group-time means. Use ``bootstrap()`` method for multiplier bootstrap inference with proper SEs, CIs, and p-values.
+     - Analytical (influence function)
+     - Uses influence-function SEs with WIF adjustment by default. Set ``n_bootstrap=999`` for multiplier bootstrap inference (weight types: ``rademacher``, ``mammen``, ``webb``).
    * - ``SyntheticDiD``
-     - Bootstrap or placebo-based
-     - Default uses bootstrap resampling. Set ``n_bootstrap=0`` for placebo-based inference using pre-treatment residuals.
+     - Placebo or bootstrap
+     - Default uses placebo-based variance (``variance_method="placebo"``). Set ``variance_method="bootstrap"`` for bootstrap inference. Both methods use ``n_bootstrap`` replications (default 200).
    * - ``ContinuousDiD``
      - Analytical (influence function)
      - Uses influence-function-based SEs by default. Use ``n_bootstrap=199`` (or higher) for multiplier bootstrap inference with proper CIs.
+   * - ``SunAbraham``
+     - Cluster-robust (unit level)
+     - Clusters at unit level by default. Specify ``cluster`` to override. Use ``n_bootstrap`` for pairs bootstrap inference.
+   * - ``ImputationDiD``
+     - Conservative clustered (Theorem 3)
+     - Uses conservative clustered variance from Borusyak et al. Theorem 3, clustered at unit level. Use ``n_bootstrap`` for multiplier bootstrap.
+   * - ``TwoStageDiD``
+     - GMM sandwich (clustered)
+     - Uses GMM sandwich variance accounting for first-stage estimation uncertainty, clustered at unit level. Use ``n_bootstrap`` for multiplier bootstrap.
+   * - ``StackedDiD``
+     - Cluster-robust (unit level)
+     - Clusters at unit level by default. Set ``cluster='unit_subexp'`` for (unit, sub-experiment) clustering.
+   * - ``TripleDifference``
+     - Influence function (robust)
+     - Uses influence-function-based SEs (inherently heteroskedasticity-robust). Specify ``cluster`` for cluster-robust SEs.
+   * - ``TROP``
+     - Bootstrap (n_bootstrap=200)
+     - Uses unit-level block bootstrap for variance estimation. Bootstrap is always required (minimum n_bootstrap=2).
+   * - ``EfficientDiD``
+     - Analytical (EIF-based)
+     - Uses efficient influence function SE = sqrt(mean(EIF^2) / n). Use ``n_bootstrap`` for multiplier bootstrap.
+   * - ``BaconDecomposition``
+     - N/A (diagnostic)
+     - Diagnostic tool only; does not produce standard errors.
 
 **Recommendations by sample size:**
 
@@ -321,15 +541,19 @@ For panel data, always cluster at the unit level unless you have a strong reason
 
 .. code-block:: python
 
+   from diff_diff import DifferenceInDifferences, generate_did_data
+
+   panel = generate_did_data(n_units=200, n_periods=10, treatment_effect=2.0)
+
    # Good: Cluster at unit level for panel data
-   did = DifferenceInDifferences()
-   results = did.fit(data, outcome='y', treated='treated',
-                     post='post', cluster_col='unit_id')
+   did = DifferenceInDifferences(cluster='unit')
+   results = did.fit(panel, outcome='outcome', treatment='treated',
+                     time='post')
 
    # Better for few clusters: Wild bootstrap
-   did = DifferenceInDifferences(inference='wild_bootstrap')
-   results = did.fit(data, outcome='y', treated='treated',
-                     post='post', cluster_col='state')
+   did = DifferenceInDifferences(inference='wild_bootstrap', cluster='unit')
+   results = did.fit(panel, outcome='outcome', treatment='treated',
+                     time='post')
 
 When in Doubt
 -------------

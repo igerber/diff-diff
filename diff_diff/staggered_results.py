@@ -6,12 +6,12 @@ group-time average treatment effects and their aggregations.
 """
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
 
-from diff_diff.results import _get_significance_stars
+from diff_diff.results import _format_survey_block, _get_significance_stars
 
 if TYPE_CHECKING:
     from diff_diff.staggered_bootstrap import CSBootstrapResults
@@ -88,7 +88,7 @@ class CallawaySantAnnaResults:
     n_treated_units : int
         Number of ever-treated units.
     n_control_units : int
-        Number of never-treated units.
+        Number of never-treated units (excludes not-yet-treated dynamic controls).
     event_study_effects : dict, optional
         Effects aggregated by relative time (event study).
     group_effects : dict, optional
@@ -111,12 +111,18 @@ class CallawaySantAnnaResults:
     alpha: float = 0.05
     control_group: str = "never_treated"
     base_period: str = "varying"
+    panel: bool = True
     event_study_effects: Optional[Dict[int, Dict[str, Any]]] = field(default=None)
     group_effects: Optional[Dict[Any, Dict[str, Any]]] = field(default=None)
     influence_functions: Optional["np.ndarray"] = field(default=None, repr=False)
+    # Full event-study VCV matrix (Phase 7d): indexed by event_study_vcov_index
+    event_study_vcov: Optional["np.ndarray"] = field(default=None, repr=False)
+    event_study_vcov_index: Optional[list] = field(default=None, repr=False)
     bootstrap_results: Optional["CSBootstrapResults"] = field(default=None, repr=False)
     cband_crit_value: Optional[float] = None
     pscore_trim: float = 0.01
+    # Survey design metadata (SurveyMetadata instance from diff_diff.survey)
+    survey_metadata: Optional[Any] = field(default=None, repr=False)
 
     def __repr__(self) -> str:
         """Concise string representation."""
@@ -151,14 +157,19 @@ class CallawaySantAnnaResults:
             "=" * 85,
             "",
             f"{'Total observations:':<30} {self.n_obs:>10}",
-            f"{'Treated units:':<30} {self.n_treated_units:>10}",
-            f"{'Control units:':<30} {self.n_control_units:>10}",
+            f"{'Treated ' + ('obs:' if not self.panel else 'units:'):<30} {self.n_treated_units:>10}",
+            f"{'Never-treated ' + ('obs:' if not self.panel else 'units:'):<30} {self.n_control_units:>10}",
             f"{'Treatment cohorts:':<30} {len(self.groups):>10}",
             f"{'Time periods:':<30} {len(self.time_periods):>10}",
             f"{'Control group:':<30} {self.control_group:>10}",
             f"{'Base period:':<30} {self.base_period:>10}",
             "",
         ]
+
+        # Survey design info
+        if self.survey_metadata is not None:
+            sm = self.survey_metadata
+            lines.extend(_format_survey_block(sm, 85))
 
         # Overall ATT
         lines.extend(

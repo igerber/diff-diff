@@ -7,6 +7,149 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.8.0] - 2026-03-31
+
+### Added
+- **Staggered Triple Difference estimator** (Ortiz-Villavicencio & Sant'Anna 2025)
+  - `StaggeredTripleDifference` class with group-time ATT(g,t) for DDD designs with staggered adoption
+  - Event study aggregation, pre-treatment placebo effects, multiplier bootstrap inference
+  - R benchmark validation against `triplediff` package
+  - DGP function `generate_staggered_ddd_data()` for simulation and testing
+- **Survey Phase 7a: CS IPW/DR + covariates + survey**
+  - DRDID panel nuisance-estimation IF corrections (PS + OR) under survey weights
+  - Survey-weighted propensity score estimation and outcome regression
+  - IFs account for nuisance parameter estimation uncertainty (Sant'Anna & Zhao 2020, Theorem 3.1)
+- **Survey Phase 7b: Repeated cross-sections**
+  - `CallawaySantAnna(panel=False)` for repeated cross-section surveys (BRFSS, ACS, CPS)
+  - Cross-sectional DRDID: `reg` matches `DRDID::reg_did_rc`, `dr` matches `DRDID::drdid_rc`, `ipw` matches `DRDID::std_ipw_did_rc`
+  - Survey weights, covariates, and all estimation methods supported
+- **Survey Phase 7d: HonestDiD + survey variance**
+  - Survey df and full event-study VCV from IF vectors propagated to sensitivity analysis
+  - t-distribution critical values with survey degrees of freedom
+  - Bootstrap/replicate designs fall back to diagonal VCV with warning
+- **Plotly visualization styling**: thread `marker`, `markersize`, `linewidth`, `capsize`, `ci_linewidth` kwargs through plotly backends (previously silently ignored)
+- AI agent discoverability for practitioner guide
+
+### Changed
+- HonestDiD now raises `ValueError` on non-consecutive event-time grid (was warning)
+- HonestDiD validates full grid around reference period
+- Panel IPW/DR PS correction scaling matches R's `H/n`, `asy_rep/n`, `colMeans` convention
+- RC IF normalization follows R's `psi` convention with explicit `phi` conversion
+
+### Fixed
+- Fix HonestDiD reference-aware pre/post split for varying-base event studies
+- Fix HonestDiD `_estimate_max_pre_violation` to use reference-aware pre_periods
+- Fix panel M2 gradient scaling for IPW/DR nuisance IF corrections
+- Fix VCV index alignment for repeated cross-section aggregation
+- Fix replicate-weight df propagation: return per-statistic df instead of mutating shared state
+- Fix WIF population consistency: zero df `first_treat` for ineligible units
+- Fix bootstrap RCS cohort-mass weighting and stale event-study VCV reset
+
+## [2.7.6] - 2026-03-28
+
+### Added
+- **AI practitioner guardrails** based on Baker et al. (2025) "Difference-in-Differences Designs: A Practitioner's Guide"
+  - `practitioner.py` module with 8-step workflow enforcement for AI agents
+  - Estimator-specific handlers ensuring correct diagnostic ordering (pre-trends before estimation, Bacon decomposition before estimator selection)
+  - `docs/llms.txt`, `docs/llms-practitioner.txt`, `docs/llms-full.txt` for AI agent discoverability
+  - Evaluation rubric (`docs/practitioner-guide-evaluation.md`) with correctness-aware scoring
+- **Survey Phase 6: Advanced features**
+  - Survey-aware bootstrap for all 8 bootstrap-using estimators (PSU-level multiplier for CS/Imputation/TwoStage/Continuous/Efficient; Rao-Wu rescaled for SA/SyntheticDiD/TROP)
+  - Replicate weight variance estimation (BRR, Fay's BRR, JK1, JKn) for OLS-based and IF-based estimators
+  - Per-coefficient DEFF diagnostics comparing survey vs SRS variance
+  - Subpopulation analysis via `SurveyDesign.subpopulation()` preserving full design structure
+  - CS analytical expansion: strata/PSU/FPC for aggregated SEs via `compute_survey_if_variance()`
+  - TROP cross-classified pseudo-strata for survey-aware bootstrap
+
+### Changed
+- Estimator-specific guidance for parallel trends tests and placebo checks (no shared templates)
+- SDiD and TROP split into separate decision tree branches in practitioner workflow
+
+### Fixed
+- Fix replicate weight df calculation using pivoted QR rank with R-compatible tolerance
+- Fix replicate IF variance score scaling for EfficientDiD, TripleDiff, ContinuousDiD
+- Fix panel-to-unit replicate weight propagation and normalization
+- Fix CS zero-mass return type and vectorized guard for survey paths
+- Fix `solve_logit` effective-sample validation for zero-weight designs
+- Fix subpopulation mask validation and EfficientDiD bootstrap guard
+
+## [2.7.5] - 2026-03-23
+
+### Added
+- **Phase 4 survey support** for ImputationDiD, TwoStageDiD, and CallawaySantAnna estimators
+  - ImputationDiD/TwoStageDiD: analytical survey inference with weights, strata, and PSU (FPC not supported; bootstrap+survey deferred)
+  - CallawaySantAnna: weights-only analytical IF/WIF inference matching R `did::wif()` (strata/PSU/FPC deferred)
+  - Survey-aware aggregation for group-time, event-study, and overall ATT
+- **EfficientDiD enhancements**: doubly robust covariates path, sieve inverse propensity (Eq 3.12), conditional Omega*
+- **Cluster-robust SEs** for EfficientDiD with last-cohort control and Hausman pretest
+- **Enhanced visualizations**: synth weights, staircase, dose-response, group-time heatmap, plotly backend
+- **Local AI review skill** (`/ai-review-local`) with Responses API, delta-diff re-review, and cost visibility
+- Add `plotly` optional dependency group (`pip install diff-diff[plotly]`)
+
+### Changed
+- Migrate AI local review from Chat Completions to Responses API
+- Split TROP estimator into mixin modules (`trop_local.py`, `trop_global.py`) for maintainability
+- Refactor `visualization.py` into `visualization/` subpackage
+- Improve review script: full-file context, content-first parsing, tiered matching, fingerprint stability
+
+### Fixed
+- Fix CallawaySantAnna reg+cov control IF normalization and survey df calculation
+- Fix TripleDifference TSL double-weighting and RA nuisance linearization with survey weights
+- Fix ContinuousDiD bread normalization, fweight TSL scaling, and weighted-mass IF linearization
+- Fix BaconDecomposition exact-weight survey unit_share and empty-cell guard
+- Fix SunAbraham survey weight floor in overall ATT aggregation
+- Fix plotly event study for non-numeric periods, heatmap masking, color parser
+
+## [2.7.4] - 2026-03-21
+
+### Added
+- **Survey/sampling weights support** (`survey_design` parameter) for `DifferenceInDifferences` and `TwoWayFixedEffects`
+  - Taylor-series linearization (TSL) variance estimation with stratified multi-stage designs
+  - Probability weights (pweight), frequency weights (fweight), and analytic weights (aweight)
+  - Finite population correction (FPC) support
+  - PSU-based clustering with lonely PSU handling
+  - New `diff_diff/survey.py` module with `SurveyDesign` and `compute_survey_vcov`
+- **EfficientDiD validation tests** against Chen, Sant'Anna & Xie (2025) using HRS dataset
+  - HRS validation fixture with provenance documentation
+  - Shared DGP helper in `tests/helpers/edid_dgp.py`
+- Simulation-based power analysis for all registry-backed estimators (MDE, sample size, power curves); unregistered estimators supported via custom `data_generator` and `result_extractor`
+
+### Changed
+- Extend power analysis to support all registry-backed estimators with `result_extractor` parameter
+- Update power analysis tutorial with simulation-based features
+- Reject `absorb + fixed_effects` combination (FWL violation) in both survey and non-survey paths
+
+### Fixed
+- TWFE cluster-as-PSU injection for no-PSU survey designs
+- Non-unique PSU labels across strata with `nest=False`
+- FPC validation moved to `compute_survey_vcov` for effective PSU structure
+- Survey HC1 meat formula and weighted rank-deficiency handling
+- Zero-SE inference, full-census FPC, fweight contract corrections
+- Bootstrap+survey fallback in MultiPeriodDiD
+- DDD `_snap_n` floor mismatch and `n_per_cell` suppression scope
+
+## [2.7.3] - 2026-03-19
+
+### Added
+- Add aarch64 Linux wheel builds to publish workflow
+
+### Changed
+- Improve documentation information architecture
+- Fix silent interpreter skip and consolidate Linux jobs in publish workflow
+
+## [2.7.2] - 2026-03-18
+
+### Added
+- SEO infrastructure: meta tags, sitemap, llms.txt/llms-full.txt for AI discoverability
+
+### Changed
+- Rename TROP `method="twostep"` to `method="local"`; `"twostep"` deprecated, removal in v3.0
+- Rename internal TROP `_joint_*` methods to `_global_*` for consistency
+
+### Fixed
+- Fix TROPResults schema: report unit counts not observation counts
+- Fix llms-full.txt accuracy and dynamic canonical URLs
+
 ## [2.7.1] - 2026-03-15
 
 ### Changed
@@ -901,6 +1044,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `to_dict()` and `to_dataframe()` export methods
   - `is_significant` and `significance_stars` properties
 
+[2.8.0]: https://github.com/igerber/diff-diff/compare/v2.7.6...v2.8.0
+[2.7.6]: https://github.com/igerber/diff-diff/compare/v2.7.5...v2.7.6
+[2.7.5]: https://github.com/igerber/diff-diff/compare/v2.7.4...v2.7.5
+[2.7.4]: https://github.com/igerber/diff-diff/compare/v2.7.3...v2.7.4
+[2.7.3]: https://github.com/igerber/diff-diff/compare/v2.7.2...v2.7.3
+[2.7.2]: https://github.com/igerber/diff-diff/compare/v2.7.1...v2.7.2
 [2.7.1]: https://github.com/igerber/diff-diff/compare/v2.7.0...v2.7.1
 [2.7.0]: https://github.com/igerber/diff-diff/compare/v2.6.1...v2.7.0
 [2.6.1]: https://github.com/igerber/diff-diff/compare/v2.6.0...v2.6.1

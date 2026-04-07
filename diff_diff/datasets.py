@@ -135,9 +135,11 @@ def load_card_krueger(force_download: bool = False) -> pd.DataFrame:
         df = _construct_card_krueger_data()
 
     # Standardize column names and add convenience columns
-    df = df.rename(columns={
-        "sheet": "store_id",
-    })
+    df = df.rename(
+        columns={
+            "sheet": "store_id",
+        }
+    )
 
     # Ensure proper types
     if "state" not in df.columns and "nj" in df.columns:
@@ -176,15 +178,17 @@ def _construct_card_krueger_data() -> pd.DataFrame:
             emp_pre = max(0, emp_pre)
             emp_post = max(0, emp_post)
 
-            stores.append({
-                "store_id": store_id,
-                "state": "NJ",
-                "chain": chain,
-                "emp_pre": round(emp_pre, 1),
-                "emp_post": round(emp_post, 1),
-                "wage_pre": round(np.random.normal(4.61, 0.35), 2),
-                "wage_post": round(np.random.normal(5.08, 0.12), 2),
-            })
+            stores.append(
+                {
+                    "store_id": store_id,
+                    "state": "NJ",
+                    "chain": chain,
+                    "emp_pre": round(emp_pre, 1),
+                    "emp_post": round(emp_post, 1),
+                    "wage_pre": round(np.random.normal(4.61, 0.35), 2),
+                    "wage_post": round(np.random.normal(5.08, 0.12), 2),
+                }
+            )
             store_id += 1
 
     # Pennsylvania stores (control) - summary stats from paper
@@ -198,15 +202,17 @@ def _construct_card_krueger_data() -> pd.DataFrame:
             emp_pre = max(0, emp_pre)
             emp_post = max(0, emp_post)
 
-            stores.append({
-                "store_id": store_id,
-                "state": "PA",
-                "chain": chain,
-                "emp_pre": round(emp_pre, 1),
-                "emp_post": round(emp_post, 1),
-                "wage_pre": round(np.random.normal(4.63, 0.35), 2),
-                "wage_post": round(np.random.normal(4.62, 0.35), 2),
-            })
+            stores.append(
+                {
+                    "store_id": store_id,
+                    "state": "PA",
+                    "chain": chain,
+                    "emp_pre": round(emp_pre, 1),
+                    "emp_post": round(emp_post, 1),
+                    "wage_pre": round(np.random.normal(4.63, 0.35), 2),
+                    "wage_post": round(np.random.normal(4.62, 0.35), 2),
+                }
+            )
             store_id += 1
 
     df = pd.DataFrame(stores)
@@ -266,7 +272,7 @@ def load_castle_doctrine(force_download: bool = False) -> pd.DataFrame:
     ...     outcome="homicide_rate",
     ...     unit="state",
     ...     time="year",
-    ...     cohort="first_treat"
+    ...     first_treat="first_treat"
     ... )
     """
     url = "https://raw.githubusercontent.com/causaldata/causal_datasets/main/castle/castle.csv"
@@ -310,16 +316,56 @@ def _construct_castle_doctrine_data() -> pd.DataFrame:
     # States and their Castle Doctrine adoption years
     # 0 = never adopted during the study period
     state_adoption = {
-        "AL": 2006, "AK": 2006, "AZ": 2006, "FL": 2005, "GA": 2006,
-        "IN": 2006, "KS": 2006, "KY": 2006, "LA": 2006, "MI": 2006,
-        "MS": 2006, "MO": 2007, "MT": 2009, "NH": 2011, "NC": 2011,
-        "ND": 2007, "OH": 2008, "OK": 2006, "PA": 2011, "SC": 2006,
-        "SD": 2006, "TN": 2007, "TX": 2007, "UT": 2010, "WV": 2008,
+        "AL": 2006,
+        "AK": 2006,
+        "AZ": 2006,
+        "FL": 2005,
+        "GA": 2006,
+        "IN": 2006,
+        "KS": 2006,
+        "KY": 2006,
+        "LA": 2006,
+        "MI": 2006,
+        "MS": 2006,
+        "MO": 2007,
+        "MT": 2009,
+        "NH": 2011,
+        "NC": 2011,
+        "ND": 2007,
+        "OH": 2008,
+        "OK": 2006,
+        "PA": 2011,
+        "SC": 2006,
+        "SD": 2006,
+        "TN": 2007,
+        "TX": 2007,
+        "UT": 2010,
+        "WV": 2008,
         # Control states (never adopted or adopted after 2010)
-        "CA": 0, "CO": 0, "CT": 0, "DE": 0, "HI": 0, "ID": 0,
-        "IL": 0, "IA": 0, "ME": 0, "MD": 0, "MA": 0, "MN": 0,
-        "NE": 0, "NV": 0, "NJ": 0, "NM": 0, "NY": 0, "OR": 0,
-        "RI": 0, "VT": 0, "VA": 0, "WA": 0, "WI": 0, "WY": 0,
+        "CA": 0,
+        "CO": 0,
+        "CT": 0,
+        "DE": 0,
+        "HI": 0,
+        "ID": 0,
+        "IL": 0,
+        "IA": 0,
+        "ME": 0,
+        "MD": 0,
+        "MA": 0,
+        "MN": 0,
+        "NE": 0,
+        "NV": 0,
+        "NJ": 0,
+        "NM": 0,
+        "NY": 0,
+        "OR": 0,
+        "RI": 0,
+        "VT": 0,
+        "VA": 0,
+        "WA": 0,
+        "WI": 0,
+        "WY": 0,
     }
 
     # Only include states that adopted before or during 2010, or never adopted
@@ -342,17 +388,23 @@ def _construct_castle_doctrine_data() -> pd.DataFrame:
             else:
                 treatment_effect = 0
 
-            homicide = max(0, base_homicide + time_effect + treatment_effect + np.random.normal(0, 0.5))
+            homicide = max(
+                0, base_homicide + time_effect + treatment_effect + np.random.normal(0, 0.5)
+            )
 
-            data.append({
-                "state": state,
-                "year": year,
-                "first_treat": first_treat,
-                "homicide_rate": round(homicide, 2),
-                "population": pop + year * 10000 + np.random.randint(-5000, 5000),
-                "income": round(base_income * (1 + 0.02 * (year - 2000)) + np.random.normal(0, 1000), 0),
-                "treated": int(first_treat > 0 and year >= first_treat),
-            })
+            data.append(
+                {
+                    "state": state,
+                    "year": year,
+                    "first_treat": first_treat,
+                    "homicide_rate": round(homicide, 2),
+                    "population": pop + year * 10000 + np.random.randint(-5000, 5000),
+                    "income": round(
+                        base_income * (1 + 0.02 * (year - 2000)) + np.random.normal(0, 1000), 0
+                    ),
+                    "treated": int(first_treat > 0 and year >= first_treat),
+                }
+            )
 
     df = pd.DataFrame(data)
     df["cohort"] = df["first_treat"]
@@ -412,7 +464,7 @@ def load_divorce_laws(force_download: bool = False) -> pd.DataFrame:
     ...     outcome="divorce_rate",
     ...     unit="state",
     ...     time="year",
-    ...     cohort="first_treat"
+    ...     first_treat="first_treat"
     ... )
     """
     # Try to load from causaldata repository
@@ -443,7 +495,9 @@ def load_divorce_laws(force_download: bool = False) -> pd.DataFrame:
         if "unilateral" in df.columns:
             df["treated"] = df["unilateral"]
         elif "first_treat" in df.columns:
-            df["treated"] = ((df["first_treat"] > 0) & (df["year"] >= df["first_treat"])).astype(int)
+            df["treated"] = ((df["first_treat"] > 0) & (df["year"] >= df["first_treat"])).astype(
+                int
+            )
 
     return df
 
@@ -459,20 +513,53 @@ def _construct_divorce_laws_data() -> pd.DataFrame:
     # State adoption years for unilateral divorce (from Wolfers 2006)
     # 0 = never adopted or adopted before 1968
     state_adoption = {
-        "AK": 1935, "AL": 1971, "AZ": 1973, "CA": 1970, "CO": 1972,
-        "CT": 1973, "DE": 1968, "FL": 1971, "GA": 1973, "HI": 1973,
-        "IA": 1970, "ID": 1971, "IN": 1973, "KS": 1969, "KY": 1972,
-        "MA": 1975, "ME": 1973, "MI": 1972, "MN": 1974, "MO": 0,
-        "MT": 1975, "NC": 0, "ND": 1971, "NE": 1972, "NH": 1971,
-        "NJ": 0, "NM": 1973, "NV": 1967, "NY": 0, "OH": 0,
-        "OK": 1975, "OR": 1971, "PA": 0, "RI": 1975, "SD": 1985,
-        "TN": 0, "TX": 1970, "UT": 1987, "VA": 0, "WA": 1973,
-        "WI": 1978, "WV": 1984, "WY": 1977,
+        "AK": 1935,
+        "AL": 1971,
+        "AZ": 1973,
+        "CA": 1970,
+        "CO": 1972,
+        "CT": 1973,
+        "DE": 1968,
+        "FL": 1971,
+        "GA": 1973,
+        "HI": 1973,
+        "IA": 1970,
+        "ID": 1971,
+        "IN": 1973,
+        "KS": 1969,
+        "KY": 1972,
+        "MA": 1975,
+        "ME": 1973,
+        "MI": 1972,
+        "MN": 1974,
+        "MO": 0,
+        "MT": 1975,
+        "NC": 0,
+        "ND": 1971,
+        "NE": 1972,
+        "NH": 1971,
+        "NJ": 0,
+        "NM": 1973,
+        "NV": 1967,
+        "NY": 0,
+        "OH": 0,
+        "OK": 1975,
+        "OR": 1971,
+        "PA": 0,
+        "RI": 1975,
+        "SD": 1985,
+        "TN": 0,
+        "TX": 1970,
+        "UT": 1987,
+        "VA": 0,
+        "WA": 1973,
+        "WI": 1978,
+        "WV": 1984,
+        "WY": 1977,
     }
 
     # Filter to states with adoption dates in our range or never adopted
-    state_adoption = {k: v for k, v in state_adoption.items()
-                      if v == 0 or (1968 <= v <= 1990)}
+    state_adoption = {k: v for k, v in state_adoption.items() if v == 0 or (1968 <= v <= 1990)}
 
     data = []
     for state, first_treat in state_adoption.items():
@@ -507,17 +594,35 @@ def _construct_divorce_laws_data() -> pd.DataFrame:
                 lfp_effect = 0
                 suicide_effect = 0
 
-            data.append({
-                "state": state,
-                "year": year,
-                "first_treat": first_treat if first_treat >= 1968 else 0,
-                "divorce_rate": round(max(0, base_divorce + time_trend + divorce_effect +
-                                          np.random.normal(0, 0.3)), 2),
-                "female_lfp": round(min(1, max(0, base_lfp + 0.01 * (year - 1968) +
-                                               lfp_effect + np.random.normal(0, 0.02))), 3),
-                "suicide_rate": round(max(0, base_suicide + suicide_effect +
-                                          np.random.normal(0, 0.5)), 2),
-            })
+            data.append(
+                {
+                    "state": state,
+                    "year": year,
+                    "first_treat": first_treat if first_treat >= 1968 else 0,
+                    "divorce_rate": round(
+                        max(
+                            0, base_divorce + time_trend + divorce_effect + np.random.normal(0, 0.3)
+                        ),
+                        2,
+                    ),
+                    "female_lfp": round(
+                        min(
+                            1,
+                            max(
+                                0,
+                                base_lfp
+                                + 0.01 * (year - 1968)
+                                + lfp_effect
+                                + np.random.normal(0, 0.02),
+                            ),
+                        ),
+                        3,
+                    ),
+                    "suicide_rate": round(
+                        max(0, base_suicide + suicide_effect + np.random.normal(0, 0.5)), 2
+                    ),
+                }
+            )
 
     df = pd.DataFrame(data)
     df["cohort"] = df["first_treat"]
@@ -571,7 +676,7 @@ def load_mpdta(force_download: bool = False) -> pd.DataFrame:
     ...     outcome="lemp",
     ...     unit="countyreal",
     ...     time="year",
-    ...     cohort="first_treat"
+    ...     first_treat="first_treat"
     ... )
     """
     # mpdta is available from the did package documentation
@@ -630,14 +735,16 @@ def _construct_mpdta_data() -> pd.DataFrame:
             else:
                 te = 0
 
-            data.append({
-                "countyreal": county,
-                "year": year,
-                "lpop": round(base_lpop + np.random.normal(0, 0.05), 4),
-                "lemp": round(base_lemp + time_effect + te + np.random.normal(0, 0.02), 4),
-                "first_treat": first_treat,
-                "treat": int(first_treat > 0),
-            })
+            data.append(
+                {
+                    "countyreal": county,
+                    "year": year,
+                    "lpop": round(base_lpop + np.random.normal(0, 0.05), 4),
+                    "lemp": round(base_lemp + time_effect + te + np.random.normal(0, 0.02), 4),
+                    "first_treat": first_treat,
+                    "treat": int(first_treat > 0),
+                }
+            )
 
     df = pd.DataFrame(data)
     df["cohort"] = df["first_treat"]

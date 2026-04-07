@@ -51,11 +51,13 @@ def build_bspline_basis(dose, degree=3, num_knots=0):
         interior_knots = np.array([])
 
     # Full knot vector: clamped at boundaries
-    knots = np.concatenate([
-        np.repeat(d_L, degree + 1),
-        interior_knots,
-        np.repeat(d_U, degree + 1),
-    ])
+    knots = np.concatenate(
+        [
+            np.repeat(d_L, degree + 1),
+            interior_knots,
+            np.repeat(d_U, degree + 1),
+        ]
+    )
 
     return knots, degree
 

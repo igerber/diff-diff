@@ -31,8 +31,12 @@
       ~MultiPeriodDiDResults.alpha
       ~MultiPeriodDiDResults.coefficients
       ~MultiPeriodDiDResults.fitted_values
+      ~MultiPeriodDiDResults.interaction_indices
       ~MultiPeriodDiDResults.is_significant
+      ~MultiPeriodDiDResults.post_period_effects
+      ~MultiPeriodDiDResults.pre_period_effects
       ~MultiPeriodDiDResults.r_squared
+      ~MultiPeriodDiDResults.reference_period
       ~MultiPeriodDiDResults.residuals
       ~MultiPeriodDiDResults.significance_stars
       ~MultiPeriodDiDResults.vcov

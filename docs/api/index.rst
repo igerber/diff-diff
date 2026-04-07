@@ -24,6 +24,8 @@ Core estimator classes for DiD analysis:
    diff_diff.TROP
    diff_diff.ContinuousDiD
    diff_diff.EfficientDiD
+   diff_diff.TwoStageDiD
+   diff_diff.BaconDecomposition
 
 Results Classes
 ---------------
@@ -47,11 +49,15 @@ Result containers returned by estimators:
    diff_diff.ImputationBootstrapResults
    diff_diff.TripleDifferenceResults
    diff_diff.StackedDiDResults
-   diff_diff.trop.TROPResults
+   diff_diff.TROPResults
    diff_diff.ContinuousDiDResults
    diff_diff.DoseResponseCurve
    diff_diff.EfficientDiDResults
    diff_diff.EDiDBootstrapResults
+   diff_diff.TwoStageDiDResults
+   diff_diff.TwoStageBootstrapResults
+   diff_diff.BaconDecompositionResults
+   diff_diff.Comparison2x2
 
 Visualization
 -------------
@@ -142,10 +148,14 @@ Power analysis for study design:
    diff_diff.PowerAnalysis
    diff_diff.PowerResults
    diff_diff.SimulationPowerResults
+   diff_diff.SimulationMDEResults
+   diff_diff.SimulationSampleSizeResults
    diff_diff.compute_power
    diff_diff.compute_mde
    diff_diff.compute_sample_size
    diff_diff.simulate_power
+   diff_diff.simulate_mde
+   diff_diff.simulate_sample_size
 
 Pre-Trends Power Analysis
 -------------------------
@@ -173,6 +183,11 @@ Utilities for preparing DiD data:
 
    diff_diff.generate_did_data
    diff_diff.generate_continuous_did_data
+   diff_diff.generate_staggered_data
+   diff_diff.generate_event_study_data
+   diff_diff.generate_ddd_data
+   diff_diff.generate_factor_data
+   diff_diff.generate_panel_data
    diff_diff.make_treatment_indicator
    diff_diff.make_post_indicator
    diff_diff.wide_to_long
@@ -183,10 +198,28 @@ Utilities for preparing DiD data:
    diff_diff.aggregate_to_cohorts
    diff_diff.rank_control_units
 
+Datasets
+--------
+
+Built-in datasets for examples and testing:
+
+.. autosummary::
+   :toctree: _autosummary
+   :nosignatures:
+
+   diff_diff.load_card_krueger
+   diff_diff.load_castle_doctrine
+   diff_diff.load_divorce_laws
+   diff_diff.load_mpdta
+   diff_diff.load_dataset
+   diff_diff.list_datasets
+   diff_diff.clear_cache
+
 Module Documentation
 --------------------
 
-Detailed documentation by module:
+Estimators
+~~~~~~~~~~
 
 .. toctree::
    :maxdepth: 2
@@ -199,11 +232,35 @@ Detailed documentation by module:
    trop
    continuous_did
    efficient_did
-   results
-   visualization
+   two_stage
+   bacon
+
+Diagnostics & Inference
+~~~~~~~~~~~~~~~~~~~~~~~
+
+.. toctree::
+   :maxdepth: 2
+
    diagnostics
    honest_did
    power
    pretrends
+
+Results & Visualization
+~~~~~~~~~~~~~~~~~~~~~~~
+
+.. toctree::
+   :maxdepth: 2
+
+   results
+   visualization
+
+Data & Utilities
+~~~~~~~~~~~~~~~~
+
+.. toctree::
+   :maxdepth: 2
+
    utils
    prep
+   datasets

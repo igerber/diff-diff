@@ -27,13 +27,69 @@ Example
        n_units=100,
        n_periods=10,
        treatment_effect=5.0,
-       treatment_start=5,
+       treatment_period=5,
        treatment_fraction=0.5,
        noise_sd=1.0
    )
 
    print(data.head())
    # Columns: unit_id, period, outcome, treated, post
+
+generate_staggered_data
+~~~~~~~~~~~~~~~~~~~~~~~
+
+Generate synthetic staggered adoption data for testing.
+
+.. autofunction:: diff_diff.generate_staggered_data
+
+Example
+^^^^^^^
+
+.. code-block:: python
+
+   from diff_diff import generate_staggered_data
+
+   data = generate_staggered_data(
+       n_units=200,
+       n_periods=10,
+       cohort_periods=[4, 6, 8],
+       seed=42
+   )
+
+generate_event_study_data
+~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Generate synthetic event study data for testing.
+
+.. autofunction:: diff_diff.generate_event_study_data
+
+generate_ddd_data
+~~~~~~~~~~~~~~~~~
+
+Generate synthetic Triple Difference data.
+
+.. autofunction:: diff_diff.generate_ddd_data
+
+generate_factor_data
+~~~~~~~~~~~~~~~~~~~~
+
+Generate synthetic data with factor structure for TROP testing.
+
+.. autofunction:: diff_diff.generate_factor_data
+
+generate_panel_data
+~~~~~~~~~~~~~~~~~~~
+
+Generate generic synthetic panel data.
+
+.. autofunction:: diff_diff.generate_panel_data
+
+generate_continuous_did_data
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Generate synthetic continuous treatment DiD data with known dose-response.
+
+.. autofunction:: diff_diff.generate_continuous_did_data
 
 Indicator Creation
 ------------------
@@ -53,17 +109,18 @@ Example
    from diff_diff import make_treatment_indicator
 
    # From categorical
-   data['treated'] = make_treatment_indicator(
+   data = make_treatment_indicator(
        data,
        column='group',
-       treated_value='treatment'
+       treated_values='treatment'
    )
 
    # From numeric threshold
-   data['high_exposure'] = make_treatment_indicator(
+   data = make_treatment_indicator(
        data,
        column='exposure',
-       threshold=0.5
+       threshold=0.5,
+       new_column='high_exposure'
    )
 
 make_post_indicator
@@ -80,7 +137,7 @@ Example
 
    from diff_diff import make_post_indicator
 
-   data['post'] = make_post_indicator(
+   data = make_post_indicator(
        data,
        time_column='period',
        treatment_start=5
@@ -129,17 +186,17 @@ Example
    # Fill missing periods with NaN
    balanced = balance_panel(
        data,
-       unit='unit_id',
-       time='period',
+       unit_column='unit_id',
+       time_column='period',
        method='fill'
    )
 
-   # Or drop units with missing periods
+   # Or keep only units with all periods (default)
    balanced = balance_panel(
        data,
-       unit='unit_id',
-       time='period',
-       method='drop'
+       unit_column='unit_id',
+       time_column='period',
+       method='inner'
    )
 
 Staggered Adoption Utilities
@@ -159,13 +216,13 @@ Example
 
    from diff_diff import create_event_time
 
-   data['event_time'] = create_event_time(
+   data = create_event_time(
        data,
-       time_col='period',
-       first_treat_col='first_treatment'
+       time_column='period',
+       treatment_time_column='first_treat'
    )
 
-   # event_time = period - first_treatment
+   # event_time = period - first_treat
    # Negative values: pre-treatment
    # Zero: treatment period
    # Positive values: post-treatment
@@ -187,10 +244,10 @@ Example
 
    cohort_data = aggregate_to_cohorts(
        data,
-       outcome='outcome',
-       time='period',
-       cohort='first_treatment',
-       agg_func='mean'
+       unit_column='unit_id',
+       time_column='period',
+       treatment_column='first_treat',
+       outcome='outcome'
    )
 
 Data Validation
@@ -210,18 +267,19 @@ Example
 
    from diff_diff import validate_did_data
 
-   is_valid, issues = validate_did_data(
+   result = validate_did_data(
        data,
        outcome='outcome',
-       treated='treated',
-       post='post',
-       unit='unit_id',
-       time='period'
+       treatment='treated',
+       time='period',
+       unit='unit_id'
    )
 
-   if not is_valid:
-       for issue in issues:
-           print(f"Issue: {issue}")
+   if not result['valid']:
+       for error in result['errors']:
+           print(f"Error: {error}")
+       for warning in result['warnings']:
+           print(f"Warning: {warning}")
 
 summarize_did_data
 ~~~~~~~~~~~~~~~~~~
@@ -240,15 +298,12 @@ Example
    summary = summarize_did_data(
        data,
        outcome='outcome',
-       treated='treated',
-       post='post',
-       unit='unit_id',
-       time='period'
+       treatment='treated',
+       time='period',
+       unit='unit_id'
    )
 
-   print(f"N units: {summary['n_units']}")
-   print(f"N periods: {summary['n_periods']}")
-   print(f"Treatment fraction: {summary['treatment_fraction']:.1%}")
+   print(summary)
 
 Control Unit Selection
 ----------------------
@@ -265,17 +320,17 @@ Example
 
 .. code-block:: python
 
-   from diff_diff import rank_control_units
+   from diff_diff import rank_control_units, generate_did_data
 
+   panel = generate_did_data(n_units=100, n_periods=10, treatment_effect=2.0)
    ranked = rank_control_units(
-       data,
-       outcome='outcome',
-       unit='unit_id',
-       time='period',
-       treated='treated',
-       pre_periods=4,
-       method='correlation'  # or 'rmse'
+       panel,
+       unit_column='unit',
+       time_column='period',
+       outcome_column='outcome',
+       treatment_column='treated',
+       pre_periods=[0, 1, 2, 3, 4]
    )
 
    # Select top 10 control units
-   best_controls = ranked.head(10)['unit_id'].tolist()
+   best_controls = ranked.head(10)['unit'].tolist()

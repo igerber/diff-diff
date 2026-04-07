@@ -122,7 +122,7 @@ category (`Methodology/Correctness`, `Performance`, or `Testing/Docs`):
   `threshold = 0.40 if n_boot < 100 else 0.15`.
 - **`assert_nan_inference()`** from conftest.py: Use to validate ALL inference fields are
   NaN-consistent. Don't check individual fields separately.
-- **Slow tests**: TROP methodology/joint-method tests, Sun-Abraham bootstrap, and
+- **Slow tests**: TROP methodology/global-method tests, Sun-Abraham bootstrap, and
   TROP-parity tests are marked `@pytest.mark.slow` and excluded by default via `addopts`.
   `test_trop.py` uses per-class markers (not file-level) so that validation, API, and
   solver tests still run in the pure Python CI fallback. Run `pytest -m ''` to include
@@ -138,6 +138,7 @@ category (`Methodology/Correctness`, `Performance`, or `Testing/Docs`):
 | `CONTRIBUTING.md` | Documentation requirements, test writing guidelines |
 | `.claude/commands/dev-checklists.md` | Checklists for params, methodology, warnings, reviews, bugs (run `/dev-checklists`) |
 | `.claude/memory.md` | Debugging patterns, tolerances, API conventions (git-tracked) |
+| `docs/llms-practitioner.txt` | Baker et al. (2025) 8-step practitioner workflow for AI agents |
 | `docs/performance-plan.md` | Performance optimization details |
 | `docs/benchmarks.rst` | Validation results vs R |
 
@@ -146,7 +147,7 @@ category (`Methodology/Correctness`, `Performance`, or `Testing/Docs`):
 - For non-trivial tasks, use `EnterPlanMode`. Consult `docs/methodology/REGISTRY.md` for methodology changes.
 - For bug fixes, grep for the pattern across all files before fixing.
 - Follow the relevant development checklists (run `/dev-checklists`).
-- Before submitting: run `/pre-merge-check`.
+- Before submitting: run `/pre-merge-check`, then `/ai-review-local` for pre-PR AI review.
 - Submit with `/submit-pr`.
 
 ## Plan Review Before Approval
@@ -163,7 +164,7 @@ Before calling `ExitPlanMode`, offer the user an independent plan review via `As
 **If review requested**: Spawn review agent (Task tool, `subagent_type: "general-purpose"`)
 to read `.claude/commands/review-plan.md` and follow Steps 2-5. Display output in conversation.
 Save to `~/.claude/plans/<plan-basename>.review.md` with YAML frontmatter (plan path,
-timestamp, verdict, issue counts). Update sentinel. Collect feedback and revise if needed.
+timestamp, assessment, issue counts). Update sentinel. Collect feedback and revise if needed.
 Touch review file after revision to avoid staleness check failure.
 
 **If skipped**: Write a minimal review marker to `~/.claude/plans/<plan-basename>.review.md`:
@@ -171,7 +172,7 @@ Touch review file after revision to avoid staleness check failure.
 ---
 plan: <plan-file-path>
 reviewed_at: <ISO 8601 timestamp>
-verdict: "Skipped"
+assessment: "Skipped"
 critical_count: 0
 medium_count: 0
 low_count: 0

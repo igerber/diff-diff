@@ -13,7 +13,7 @@ import os
 
 # Check for backend override via environment variable
 # DIFF_DIFF_BACKEND can be: 'auto' (default), 'python', or 'rust'
-_backend_env = os.environ.get('DIFF_DIFF_BACKEND', 'auto').lower()
+_backend_env = os.environ.get("DIFF_DIFF_BACKEND", "auto").lower()
 
 # Try to import Rust backend for accelerated operations
 try:
@@ -23,13 +23,13 @@ try:
         project_simplex as _rust_project_simplex,
         solve_ols as _rust_solve_ols,
         compute_robust_vcov as _rust_compute_robust_vcov,
-        # TROP estimator acceleration (twostep method)
+        # TROP estimator acceleration (local method)
         compute_unit_distance_matrix as _rust_unit_distance_matrix,
         loocv_grid_search as _rust_loocv_grid_search,
         bootstrap_trop_variance as _rust_bootstrap_trop_variance,
-        # TROP estimator acceleration (joint method)
-        loocv_grid_search_joint as _rust_loocv_grid_search_joint,
-        bootstrap_trop_variance_joint as _rust_bootstrap_trop_variance_joint,
+        # TROP estimator acceleration (global method)
+        loocv_grid_search_global as _rust_loocv_grid_search_global,
+        bootstrap_trop_variance_global as _rust_bootstrap_trop_variance_global,
         # SDID weights (Frank-Wolfe matching R's synthdid)
         compute_sdid_unit_weights as _rust_sdid_unit_weights,
         compute_time_weights as _rust_compute_time_weights,
@@ -38,6 +38,7 @@ try:
         # Diagnostics
         rust_backend_info as _rust_backend_info,
     )
+
     _rust_available = True
 except ImportError:
     _rust_available = False
@@ -46,13 +47,13 @@ except ImportError:
     _rust_project_simplex = None
     _rust_solve_ols = None
     _rust_compute_robust_vcov = None
-    # TROP estimator acceleration (twostep method)
+    # TROP estimator acceleration (local method)
     _rust_unit_distance_matrix = None
     _rust_loocv_grid_search = None
     _rust_bootstrap_trop_variance = None
-    # TROP estimator acceleration (joint method)
-    _rust_loocv_grid_search_joint = None
-    _rust_bootstrap_trop_variance_joint = None
+    # TROP estimator acceleration (global method)
+    _rust_loocv_grid_search_global = None
+    _rust_bootstrap_trop_variance_global = None
     # SDID weights (Frank-Wolfe matching R's synthdid)
     _rust_sdid_unit_weights = None
     _rust_compute_time_weights = None
@@ -61,7 +62,7 @@ except ImportError:
     _rust_backend_info = None
 
 # Determine final backend based on environment variable and availability
-if _backend_env == 'python':
+if _backend_env == "python":
     # Force pure Python mode - disable Rust even if available
     HAS_RUST_BACKEND = False
     _rust_bootstrap_weights = None
@@ -69,20 +70,20 @@ if _backend_env == 'python':
     _rust_project_simplex = None
     _rust_solve_ols = None
     _rust_compute_robust_vcov = None
-    # TROP estimator acceleration (twostep method)
+    # TROP estimator acceleration (local method)
     _rust_unit_distance_matrix = None
     _rust_loocv_grid_search = None
     _rust_bootstrap_trop_variance = None
-    # TROP estimator acceleration (joint method)
-    _rust_loocv_grid_search_joint = None
-    _rust_bootstrap_trop_variance_joint = None
+    # TROP estimator acceleration (global method)
+    _rust_loocv_grid_search_global = None
+    _rust_bootstrap_trop_variance_global = None
     # SDID weights (Frank-Wolfe matching R's synthdid)
     _rust_sdid_unit_weights = None
     _rust_compute_time_weights = None
     _rust_compute_noise_level = None
     _rust_sc_weight_fw = None
     _rust_backend_info = None
-elif _backend_env == 'rust':
+elif _backend_env == "rust":
     # Force Rust mode - fail if not available
     if not _rust_available:
         raise ImportError(
@@ -111,23 +112,23 @@ def rust_backend_info():
 
 
 __all__ = [
-    'HAS_RUST_BACKEND',
-    'rust_backend_info',
-    '_rust_bootstrap_weights',
-    '_rust_synthetic_weights',
-    '_rust_project_simplex',
-    '_rust_solve_ols',
-    '_rust_compute_robust_vcov',
-    # TROP estimator acceleration (twostep method)
-    '_rust_unit_distance_matrix',
-    '_rust_loocv_grid_search',
-    '_rust_bootstrap_trop_variance',
-    # TROP estimator acceleration (joint method)
-    '_rust_loocv_grid_search_joint',
-    '_rust_bootstrap_trop_variance_joint',
+    "HAS_RUST_BACKEND",
+    "rust_backend_info",
+    "_rust_bootstrap_weights",
+    "_rust_synthetic_weights",
+    "_rust_project_simplex",
+    "_rust_solve_ols",
+    "_rust_compute_robust_vcov",
+    # TROP estimator acceleration (local method)
+    "_rust_unit_distance_matrix",
+    "_rust_loocv_grid_search",
+    "_rust_bootstrap_trop_variance",
+    # TROP estimator acceleration (global method)
+    "_rust_loocv_grid_search_global",
+    "_rust_bootstrap_trop_variance_global",
     # SDID weights (Frank-Wolfe matching R's synthdid)
-    '_rust_sdid_unit_weights',
-    '_rust_compute_time_weights',
-    '_rust_compute_noise_level',
-    '_rust_sc_weight_fw',
+    "_rust_sdid_unit_weights",
+    "_rust_compute_time_weights",
+    "_rust_compute_noise_level",
+    "_rust_sc_weight_fw",
 ]
