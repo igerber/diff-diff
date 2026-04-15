@@ -28,6 +28,10 @@ from diff_diff.bacon import (
     Comparison2x2,
     bacon_decompose,
 )
+from diff_diff.lpdid import (
+    LPDiD,
+    LPDiDResults,
+)
 from diff_diff.diagnostics import (
     PlaceboTestResults,
     leave_one_out_test,
@@ -224,6 +228,7 @@ __all__ = [
     "TripleDifference",
     "TROP",
     "StackedDiD",
+    "LPDiD",
     # Estimator aliases (short names)
     "DiD",
     "TWFE",
@@ -243,6 +248,7 @@ __all__ = [
     "BaconDecompositionResults",
     "Comparison2x2",
     "bacon_decompose",
+    "LPDiDResults",
     # Results
     "DiDResults",
     "MultiPeriodDiDResults",
