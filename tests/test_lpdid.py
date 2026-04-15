@@ -37,6 +37,18 @@ def test_lpdid_set_params_rejects_unknown_key():
         est.set_params(nonexistent_param=1)
 
 
+def test_lpdid_set_params_rejects_invalid_control_group():
+    est = LPDiD()
+    with pytest.raises(ValueError, match="control_group"):
+        est.set_params(control_group="bad")
+
+
+def test_lpdid_set_params_rejects_invalid_rank_deficient_action():
+    est = LPDiD()
+    with pytest.raises(ValueError, match="rank_deficient_action"):
+        est.set_params(rank_deficient_action="bad")
+
+
 def test_lpdid_results_to_dataframe_and_repr():
     df = pd.DataFrame({"effect": [1.0], "se": [0.1]})
     results = LPDiDResults(
