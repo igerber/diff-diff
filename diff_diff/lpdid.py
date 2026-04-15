@@ -76,19 +76,8 @@ class LPDiD:
         pooled = None
 
         if not only_pooled:
-            event_rows = [
-                {
-                    "horizon": -1,
-                    "coefficient": 0.0,
-                    "se": 0.0,
-                    "t_stat": None,
-                    "p_value": None,
-                    "conf_low": None,
-                    "conf_high": None,
-                    "n_obs": None,
-                }
-            ]
-            for horizon in range(0, self.post_window + 1):
+            event_rows = []
+            for horizon in range(-self.pre_window, self.post_window + 1):
                 event_rows.append(
                     {
                         "horizon": horizon,

@@ -115,7 +115,7 @@ def test_lpdid_event_dataframe_contains_reference_and_requested_horizons():
     res = LPDiD(pre_window=2, post_window=1).fit(
         df, outcome="y", unit="unit", time="time", treatment="treat"
     )
-    assert list(res.event_study["horizon"]) == [-1, 0, 1]
+    assert list(res.event_study["horizon"]) == [-2, -1, 0, 1]
 
 
 def test_lpdid_pooled_dataframe_has_pre_and_post_rows():
