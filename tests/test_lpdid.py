@@ -74,3 +74,30 @@ def test_lpdid_results_to_dataframe_and_repr():
     rep = repr(results)
     assert "LPDiDResults" in rep
     assert "effect" not in rep
+
+
+def test_lpdid_requires_core_columns():
+    df = pd.DataFrame({"y": [1.0], "id": [1], "t": [0]})
+    est = LPDiD()
+    with pytest.raises(ValueError, match="Missing columns"):
+        est.fit(df, outcome="y", unit="id", time="t", treatment="treat")
+
+
+def test_lpdid_rejects_only_event_and_only_pooled_together():
+    df = pd.DataFrame({"y": [1.0], "id": [1], "t": [0], "treat": [0]})
+    est = LPDiD()
+    with pytest.raises(ValueError, match="only_event"):
+        est.fit(
+            df,
+            outcome="y",
+            unit="id",
+            time="t",
+            treatment="treat",
+            only_event=True,
+            only_pooled=True,
+        )
+
+
+def test_lpdid_rejects_invalid_pmd_value():
+    with pytest.raises(ValueError, match="pmd"):
+        LPDiD(pmd="bad")

@@ -36,6 +36,58 @@ class LPDiD:
             raise ValueError("control_group must be 'clean' or 'never_treated'")
         if self.rank_deficient_action not in ("warn", "error", "silent"):
             raise ValueError("rank_deficient_action must be 'warn', 'error', or 'silent'")
+        if self.pmd is not None and not (
+            self.pmd == "max" or (isinstance(self.pmd, int) and not isinstance(self.pmd, bool) and self.pmd > 0)
+        ):
+            raise ValueError("pmd must be None, 'max', or a positive integer")
+
+    def fit(
+        self,
+        data,
+        outcome,
+        unit,
+        time,
+        treatment,
+        covariates=None,
+        ylags=0,
+        dylags=0,
+        absorb=None,
+        post_pooled=None,
+        pre_pooled=None,
+        only_event=False,
+        only_pooled=False,
+    ):
+        required = [outcome, unit, time, treatment]
+        if covariates:
+            required.extend(covariates)
+        if absorb:
+            required.extend(absorb)
+        missing = [col for col in required if col not in data.columns]
+        if missing:
+            raise ValueError(f"Missing columns: {missing}")
+        if only_event and only_pooled:
+            raise ValueError("only_event and only_pooled cannot both be True")
+
+        cluster = self.cluster or unit
+        treatment_by_unit = data.groupby(unit)[treatment].max().fillna(0)
+
+        self.results_ = LPDiDResults(
+            event_study=None,
+            pooled=None,
+            n_obs=len(data),
+            n_treated_units=int(treatment_by_unit.gt(0).sum()),
+            n_control_units=int(treatment_by_unit.eq(0).sum()),
+            pre_window=self.pre_window,
+            post_window=self.post_window,
+            control_group=self.control_group,
+            reweight=self.reweight,
+            no_composition=self.no_composition,
+            pmd=self.pmd,
+            alpha=self.alpha,
+        )
+        self._fit_meta = {"cluster": cluster, "outcome": outcome, "unit": unit, "time": time}
+        self.is_fitted_ = True
+        return self.results_
 
     def get_params(self) -> Dict[str, Any]:
         return {
