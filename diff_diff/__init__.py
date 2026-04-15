@@ -30,7 +30,6 @@ from diff_diff.bacon import (
 )
 from diff_diff.lpdid import (
     LPDiD,
-    LPDiDResults,
 )
 from diff_diff.diagnostics import (
     PlaceboTestResults,
@@ -105,6 +104,9 @@ from diff_diff.results import (
     MultiPeriodDiDResults,
     PeriodEffect,
     SyntheticDiDResults,
+)
+from diff_diff.lpdid_results import (
+    LPDiDResults,
 )
 from diff_diff.survey import (
     DEFFDiagnostics,
@@ -248,7 +250,6 @@ __all__ = [
     "BaconDecompositionResults",
     "Comparison2x2",
     "bacon_decompose",
-    "LPDiDResults",
     # Results
     "DiDResults",
     "MultiPeriodDiDResults",
@@ -275,6 +276,7 @@ __all__ = [
     "trop",
     "StackedDiDResults",
     "stacked_did",
+    "LPDiDResults",
     # EfficientDiD
     "EfficientDiD",
     "EfficientDiDResults",
