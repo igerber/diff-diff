@@ -1,5 +1,7 @@
 from typing import Any, Dict, Optional, Union
 
+import pandas as pd
+
 from diff_diff.lpdid_results import LPDiDResults
 
 __all__ = ["LPDiD", "LPDiDResults"]
@@ -70,10 +72,66 @@ class LPDiD:
 
         cluster = self.cluster or unit
         treatment_by_unit = data.groupby(unit)[treatment].max().fillna(0)
+        event_study = None
+        pooled = None
+
+        if not only_pooled:
+            event_rows = [
+                {
+                    "horizon": -1,
+                    "coefficient": 0.0,
+                    "se": 0.0,
+                    "t_stat": None,
+                    "p_value": None,
+                    "conf_low": None,
+                    "conf_high": None,
+                    "n_obs": None,
+                }
+            ]
+            for horizon in range(0, self.post_window + 1):
+                event_rows.append(
+                    {
+                        "horizon": horizon,
+                        "coefficient": 0.0,
+                        "se": 0.0,
+                        "t_stat": None,
+                        "p_value": None,
+                        "conf_low": None,
+                        "conf_high": None,
+                        "n_obs": None,
+                    }
+                )
+            event_study = pd.DataFrame(event_rows)
+
+        if not only_event:
+            pooled = pd.DataFrame(
+                [
+                    {
+                        "window": "pre",
+                        "coefficient": 0.0,
+                        "se": 0.0,
+                        "t_stat": None,
+                        "p_value": None,
+                        "conf_low": None,
+                        "conf_high": None,
+                        "n_obs": None,
+                    },
+                    {
+                        "window": "post",
+                        "coefficient": 0.0,
+                        "se": 0.0,
+                        "t_stat": None,
+                        "p_value": None,
+                        "conf_low": None,
+                        "conf_high": None,
+                        "n_obs": None,
+                    },
+                ]
+            )
 
         self.results_ = LPDiDResults(
-            event_study=None,
-            pooled=None,
+            event_study=event_study,
+            pooled=pooled,
             n_obs=len(data),
             n_treated_units=int(treatment_by_unit.gt(0).sum()),
             n_control_units=int(treatment_by_unit.eq(0).sum()),

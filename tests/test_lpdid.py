@@ -101,3 +101,33 @@ def test_lpdid_rejects_only_event_and_only_pooled_together():
 def test_lpdid_rejects_invalid_pmd_value():
     with pytest.raises(ValueError, match="pmd"):
         LPDiD(pmd="bad")
+
+
+def test_lpdid_event_dataframe_contains_reference_and_requested_horizons():
+    df = pd.DataFrame(
+        {
+            "unit": [1, 1, 1, 2, 2, 2, 3, 3, 3],
+            "time": [0, 1, 2, 0, 1, 2, 0, 1, 2],
+            "y": [1, 2, 4, 1, 1, 1, 2, 2, 2],
+            "treat": [0, 1, 1, 0, 0, 0, 0, 0, 0],
+        }
+    )
+    res = LPDiD(pre_window=2, post_window=1).fit(
+        df, outcome="y", unit="unit", time="time", treatment="treat"
+    )
+    assert list(res.event_study["horizon"]) == [-1, 0, 1]
+
+
+def test_lpdid_pooled_dataframe_has_pre_and_post_rows():
+    df = pd.DataFrame(
+        {
+            "unit": [1, 1, 1, 2, 2, 2],
+            "time": [0, 1, 2, 0, 1, 2],
+            "y": [1, 2, 3, 1, 1, 1],
+            "treat": [0, 1, 1, 0, 0, 0],
+        }
+    )
+    res = LPDiD(pre_window=2, post_window=1).fit(
+        df, outcome="y", unit="unit", time="time", treatment="treat"
+    )
+    assert set(res.pooled["window"]) == {"pre", "post"}
