@@ -54,7 +54,11 @@ class LPDiD:
         if panel.duplicated([unit, time]).any():
             raise ValueError("LPDiD requires unique unit-time observations")
 
-        panel["_treated"] = pd.to_numeric(panel[treatment], errors="coerce").fillna(0).gt(0).astype(int)
+        treated_numeric = pd.to_numeric(panel[treatment], errors="coerce")
+        if treated_numeric.isna().any() or not treated_numeric.isin([0, 1]).all():
+            raise ValueError("treatment must contain binary numeric 0/1 values with no missing data")
+
+        panel["_treated"] = treated_numeric.astype(int)
         panel["_cluster"] = panel[cluster]
         panel["_lag_treated"] = panel.groupby(unit)["_treated"].shift(1, fill_value=0)
         panel["_entry"] = ((panel["_treated"] == 1) & (panel["_lag_treated"] == 0)).astype(float)
@@ -97,6 +101,9 @@ class LPDiD:
         sample["horizon"] = horizon
         sample["_long_diff"] = sample["_target_outcome"] - sample["_baseline_outcome"]
         return sample[["horizon", "_long_diff", "_entry", "_cluster"]]
+
+    def _sample_is_identified(self, sample: pd.DataFrame) -> bool:
+        return len(sample) > 0 and sample["_entry"].nunique() >= 2
 
     def _estimate_sample(self, sample: pd.DataFrame) -> Dict[str, Optional[float]]:
         n_obs = int(len(sample))
@@ -145,13 +152,31 @@ class LPDiD:
                 "n_obs": n_obs,
             }
 
-        coef, _, vcov = solve_ols(
-            design,
-            response,
-            cluster_ids=cluster_ids,
-            return_vcov=True,
-            rank_deficient_action=self.rank_deficient_action,
-        )
+        use_cluster_vcov = len(pd.unique(cluster_ids)) >= 2
+        vcov = None
+        if use_cluster_vcov:
+            try:
+                coef, _, vcov = solve_ols(
+                    design,
+                    response,
+                    cluster_ids=cluster_ids,
+                    return_vcov=True,
+                    rank_deficient_action=self.rank_deficient_action,
+                )
+            except (ValueError, ZeroDivisionError):
+                coef, _, _ = solve_ols(
+                    design,
+                    response,
+                    return_vcov=False,
+                    rank_deficient_action=self.rank_deficient_action,
+                )
+        else:
+            coef, _, _ = solve_ols(
+                design,
+                response,
+                return_vcov=False,
+                rank_deficient_action=self.rank_deficient_action,
+            )
 
         effect = float(coef[1])
         se = np.nan
@@ -159,7 +184,7 @@ class LPDiD:
             se = float(np.sqrt(vcov[1, 1]))
 
         n_clusters = len(pd.unique(cluster_ids))
-        df = n_clusters - 1 if n_clusters > 1 else None
+        df = n_clusters - 1 if vcov is not None and n_clusters > 1 else None
         t_stat, p_value, conf_int = safe_inference(effect, se, alpha=self.alpha, df=df)
         return {
             "coefficient": effect,
@@ -176,10 +201,12 @@ class LPDiD:
         return self._estimate_sample(sample)
 
     def _estimate_window(self, panel, *, outcome, unit, time, horizons: Iterable[int]):
-        samples = [
-            self._build_horizon_sample(panel, outcome=outcome, unit=unit, time=time, horizon=horizon)
-            for horizon in horizons
-        ]
+        samples = []
+        for horizon in horizons:
+            sample = self._build_horizon_sample(panel, outcome=outcome, unit=unit, time=time, horizon=horizon)
+            if self._sample_is_identified(sample):
+                samples.append(sample)
+
         stacked = pd.concat(samples, ignore_index=True) if samples else pd.DataFrame()
         if stacked.empty:
             return {
@@ -229,6 +256,10 @@ class LPDiD:
         only_event=False,
         only_pooled=False,
     ):
+        self.results_ = None
+        self.is_fitted_ = False
+        self._fit_meta = None
+
         required = [outcome, unit, time, treatment]
         if covariates:
             required.extend(covariates)
