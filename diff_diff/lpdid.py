@@ -200,45 +200,57 @@ class LPDiD:
         sample = self._build_horizon_sample(panel, outcome=outcome, unit=unit, time=time, horizon=horizon)
         return self._estimate_sample(sample)
 
-    def _estimate_window(self, panel, *, outcome, unit, time, horizons: Iterable[int]):
+    def _estimate_window(self, panel, *, outcome, unit, time, horizons: Iterable[int], kind: str):
         samples = []
+        unidentified_horizons = []
         for horizon in horizons:
             sample = self._build_horizon_sample(panel, outcome=outcome, unit=unit, time=time, horizon=horizon)
             if self._sample_is_identified(sample):
                 samples.append(sample)
+            else:
+                unidentified_horizons.append(horizon)
+
+        if unidentified_horizons:
+            raise ValueError(f"unidentified pooled {kind} horizons: {unidentified_horizons}")
 
         stacked = pd.concat(samples, ignore_index=True) if samples else pd.DataFrame()
         if stacked.empty:
-            return {
-                "coefficient": np.nan,
-                "se": np.nan,
-                "t_stat": np.nan,
-                "p_value": np.nan,
-                "conf_low": np.nan,
-                "conf_high": np.nan,
-                "n_obs": 0,
-            }
+            raise ValueError(f"pooled {kind} window did not contain any horizons")
         return self._estimate_sample(stacked)
 
     def _resolve_pooled_horizons(self, pooled, *, kind):
         if kind == "pre":
             default = list(range(-self.pre_window, -1))
-            if pooled is None:
-                return default
             if isinstance(pooled, int):
-                return list(range(-pooled, -1))
+                horizons = list(range(-pooled, -1))
+            elif pooled is None:
+                horizons = default
         else:
             default = list(range(0, self.post_window + 1))
-            if pooled is None:
-                return default
             if isinstance(pooled, int):
-                return list(range(0, pooled + 1))
+                horizons = list(range(0, pooled + 1))
+            elif pooled is None:
+                horizons = default
 
         if isinstance(pooled, tuple) and len(pooled) == 2:
             start, end = pooled
-            return list(range(start, end + 1))
+            horizons = list(range(start, end + 1))
+        elif not (pooled is None or isinstance(pooled, int)):
+            raise ValueError(f"{kind}_pooled must be None, an int, or a length-2 tuple")
 
-        raise ValueError(f"{kind}_pooled must be None, an int, or a length-2 tuple")
+        if kind == "pre":
+            supported_horizons = set(range(-self.pre_window, 0))
+        else:
+            supported_horizons = set(range(0, self.post_window + 1))
+
+        invalid_horizons = [horizon for horizon in horizons if horizon not in supported_horizons]
+        if invalid_horizons:
+            raise ValueError(
+                f"Requested pooled {kind} horizons {invalid_horizons} fall outside the supported {kind} "
+                f"window {sorted(supported_horizons)}"
+            )
+
+        return horizons
 
     def fit(
         self,
@@ -295,10 +307,10 @@ class LPDiD:
             pre_horizons = self._resolve_pooled_horizons(pre_pooled, kind="pre")
             post_horizons = self._resolve_pooled_horizons(post_pooled, kind="post")
             pre_estimate = self._estimate_window(
-                panel, outcome=outcome, unit=unit, time=time, horizons=pre_horizons
+                panel, outcome=outcome, unit=unit, time=time, horizons=pre_horizons, kind="pre"
             )
             post_estimate = self._estimate_window(
-                panel, outcome=outcome, unit=unit, time=time, horizons=post_horizons
+                panel, outcome=outcome, unit=unit, time=time, horizons=post_horizons, kind="post"
             )
             pooled = pd.DataFrame(
                 [

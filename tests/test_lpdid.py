@@ -113,7 +113,7 @@ def test_lpdid_event_dataframe_contains_reference_and_requested_horizons():
         }
     )
     res = LPDiD(pre_window=2, post_window=1).fit(
-        df, outcome="y", unit="unit", time="time", treatment="treat"
+        df, outcome="y", unit="unit", time="time", treatment="treat", only_event=True
     )
     assert list(res.event_study["horizon"]) == [-2, -1, 0, 1]
 
@@ -121,10 +121,10 @@ def test_lpdid_event_dataframe_contains_reference_and_requested_horizons():
 def test_lpdid_pooled_dataframe_has_pre_and_post_rows():
     df = pd.DataFrame(
         {
-            "unit": [1, 1, 1, 2, 2, 2],
-            "time": [0, 1, 2, 0, 1, 2],
-            "y": [1, 2, 3, 1, 1, 1],
-            "treat": [0, 1, 1, 0, 0, 0],
+            "unit": [1, 1, 1, 1, 2, 2, 2, 2],
+            "time": [0, 1, 2, 3] * 2,
+            "y": [1, 2, 4, 6, 1, 1, 1, 1],
+            "treat": [0, 0, 1, 1, 0, 0, 0, 0],
         }
     )
     res = LPDiD(pre_window=2, post_window=1).fit(
@@ -144,14 +144,35 @@ def test_lpdid_detects_positive_post_effect_on_simple_panel():
     )
 
     res = LPDiD(pre_window=2, post_window=1).fit(
-        df, outcome="y", unit="unit", time="time", treatment="treat"
+        df, outcome="y", unit="unit", time="time", treatment="treat", only_event=True
     )
 
     post0 = res.event_study.loc[res.event_study["horizon"] == 0, "coefficient"].iloc[0]
     assert post0 > 0.5
 
 
-def test_lpdid_pooled_window_excludes_unsupported_horizons():
+def test_lpdid_rejects_pooled_horizon_outside_supported_window():
+    df = pd.DataFrame(
+        {
+            "unit": [1, 1, 1, 2, 2, 2],
+            "time": [0, 1, 2, 0, 1, 2],
+            "y": [1, 3, 5, 1, 1, 1],
+            "treat": [0, 1, 1, 0, 0, 0],
+        }
+    )
+
+    with pytest.raises(ValueError, match="outside the supported pre window"):
+        LPDiD(pre_window=2, post_window=1).fit(
+            df,
+            outcome="y",
+            unit="unit",
+            time="time",
+            treatment="treat",
+            pre_pooled=(-3, -1),
+        )
+
+
+def test_lpdid_rejects_pooled_window_with_unidentified_horizon():
     df = pd.DataFrame(
         {
             "unit": [1, 1, 1, 2, 2, 2, 3, 3, 3],
@@ -161,20 +182,15 @@ def test_lpdid_pooled_window_excludes_unsupported_horizons():
         }
     )
 
-    res = LPDiD(pre_window=2, post_window=1).fit(
-        df,
-        outcome="y",
-        unit="unit",
-        time="time",
-        treatment="treat",
-        pre_pooled=(-2, -1),
-    )
-
-    pooled_pre = res.pooled.loc[res.pooled["window"] == "pre"].iloc[0]
-    event_pre1 = res.event_study.loc[res.event_study["horizon"] == -1].iloc[0]
-
-    assert pooled_pre["n_obs"] == event_pre1["n_obs"]
-    assert pooled_pre["coefficient"] == event_pre1["coefficient"]
+    with pytest.raises(ValueError, match="unidentified pooled pre horizons"):
+        LPDiD(pre_window=2, post_window=1).fit(
+            df,
+            outcome="y",
+            unit="unit",
+            time="time",
+            treatment="treat",
+            pre_pooled=(-2, -1),
+        )
 
 
 def test_lpdid_returns_nan_inference_when_cluster_vcov_is_undefined():
@@ -189,7 +205,7 @@ def test_lpdid_returns_nan_inference_when_cluster_vcov_is_undefined():
     )
 
     res = LPDiD(pre_window=2, post_window=1, cluster="cluster_id").fit(
-        df, outcome="y", unit="unit", time="time", treatment="treat"
+        df, outcome="y", unit="unit", time="time", treatment="treat", only_event=True
     )
 
     post0 = res.event_study.loc[res.event_study["horizon"] == 0].iloc[0]
@@ -242,7 +258,7 @@ def test_lpdid_clears_fitted_state_after_failed_refit():
     bad["treat"] = [0, "bad", 1, 0, 0, 0]
 
     est = LPDiD(pre_window=2, post_window=1)
-    est.fit(good, outcome="y", unit="unit", time="time", treatment="treat")
+    est.fit(good, outcome="y", unit="unit", time="time", treatment="treat", only_event=True)
 
     with pytest.raises(ValueError, match="binary numeric"):
         est.fit(bad, outcome="y", unit="unit", time="time", treatment="treat")
