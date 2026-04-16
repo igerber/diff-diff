@@ -131,3 +131,21 @@ def test_lpdid_pooled_dataframe_has_pre_and_post_rows():
         df, outcome="y", unit="unit", time="time", treatment="treat"
     )
     assert set(res.pooled["window"]) == {"pre", "post"}
+
+
+def test_lpdid_detects_positive_post_effect_on_simple_panel():
+    df = pd.DataFrame(
+        {
+            "unit": [1, 1, 1, 2, 2, 2, 3, 3, 3, 4, 4, 4],
+            "time": [0, 1, 2] * 4,
+            "y": [1, 3, 5, 1, 1, 1, 2, 4, 6, 2, 2, 2],
+            "treat": [0, 1, 1, 0, 0, 0, 0, 1, 1, 0, 0, 0],
+        }
+    )
+
+    res = LPDiD(pre_window=2, post_window=1).fit(
+        df, outcome="y", unit="unit", time="time", treatment="treat"
+    )
+
+    post0 = res.event_study.loc[res.event_study["horizon"] == 0, "coefficient"].iloc[0]
+    assert post0 > 0.5

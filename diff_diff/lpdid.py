@@ -1,8 +1,11 @@
-from typing import Any, Dict, Optional, Union
+from typing import Any, Dict, Iterable, Optional, Union
 
+import numpy as np
 import pandas as pd
 
+from diff_diff.linalg import solve_ols
 from diff_diff.lpdid_results import LPDiDResults
+from diff_diff.utils import safe_inference
 
 __all__ = ["LPDiD", "LPDiDResults"]
 
@@ -43,6 +46,173 @@ class LPDiD:
         ):
             raise ValueError("pmd must be None, 'max', or a positive integer")
 
+    def _prepare_panel(self, data, outcome, unit, time, treatment, cluster):
+        selected_columns = list(dict.fromkeys([unit, time, outcome, treatment, cluster]))
+        panel = data[selected_columns].copy()
+        panel = panel.sort_values([unit, time]).reset_index(drop=True)
+
+        if panel.duplicated([unit, time]).any():
+            raise ValueError("LPDiD requires unique unit-time observations")
+
+        panel["_treated"] = pd.to_numeric(panel[treatment], errors="coerce").fillna(0).gt(0).astype(int)
+        panel["_cluster"] = panel[cluster]
+        panel["_lag_treated"] = panel.groupby(unit)["_treated"].shift(1, fill_value=0)
+        panel["_entry"] = ((panel["_treated"] == 1) & (panel["_lag_treated"] == 0)).astype(float)
+        panel["_treated_cummax"] = panel.groupby(unit)["_treated"].cummax()
+
+        violating_units = panel.loc[panel["_treated_cummax"] > panel["_treated"], unit].unique()
+        if len(violating_units) > 0:
+            raise ValueError(
+                "LPDiD currently requires an absorbing treatment path "
+                "(once treated, always treated)"
+            )
+
+        first_treat = panel.loc[panel["_entry"] == 1].groupby(unit)[time].min()
+        panel["_first_treat"] = panel[unit].map(first_treat).astype(float).fillna(np.inf)
+        return panel
+
+    def _build_horizon_sample(self, panel, *, outcome, unit, time, horizon):
+        base = panel[[unit, time, "_entry", "_first_treat", "_cluster"]].copy()
+        base["_baseline_time"] = base[time] - 1
+        base["_target_time"] = base[time] + horizon
+
+        outcomes = panel[[unit, time, outcome]].copy()
+
+        baseline = outcomes.rename(columns={time: "_baseline_time", outcome: "_baseline_outcome"})
+        target = outcomes.rename(columns={time: "_target_time", outcome: "_target_outcome"})
+
+        sample = base.merge(baseline, on=[unit, "_baseline_time"], how="left")
+        sample = sample.merge(target, on=[unit, "_target_time"], how="left")
+        sample = sample.dropna(subset=["_baseline_outcome", "_target_outcome"]).copy()
+
+        treated_mask = sample["_entry"].eq(1.0)
+        if self.control_group == "never_treated":
+            control_mask = sample["_entry"].eq(0.0) & np.isinf(sample["_first_treat"])
+        else:
+            control_mask = sample["_entry"].eq(0.0) & sample[time].lt(sample["_first_treat"])
+            if horizon >= 0:
+                control_mask &= sample["_target_time"].lt(sample["_first_treat"])
+
+        sample = sample.loc[treated_mask | control_mask].copy()
+        sample["horizon"] = horizon
+        sample["_long_diff"] = sample["_target_outcome"] - sample["_baseline_outcome"]
+        return sample[["horizon", "_long_diff", "_entry", "_cluster"]]
+
+    def _estimate_sample(self, sample: pd.DataFrame) -> Dict[str, Optional[float]]:
+        n_obs = int(len(sample))
+        empty_result = {
+            "coefficient": np.nan,
+            "se": np.nan,
+            "t_stat": np.nan,
+            "p_value": np.nan,
+            "conf_low": np.nan,
+            "conf_high": np.nan,
+            "n_obs": n_obs,
+        }
+
+        if n_obs == 0 or sample["_entry"].nunique() < 2:
+            return empty_result
+
+        design_columns = [
+            np.ones(n_obs, dtype=float),
+            sample["_entry"].to_numpy(dtype=float),
+        ]
+        column_names = ["intercept", "treatment_entry"]
+
+        if sample["horizon"].nunique() > 1:
+            horizon_dummies = pd.get_dummies(sample["horizon"], prefix="horizon", drop_first=True, dtype=float)
+            if not horizon_dummies.empty:
+                design_columns.append(horizon_dummies.to_numpy(dtype=float))
+                column_names.extend(horizon_dummies.columns.tolist())
+
+        design = np.column_stack(design_columns)
+        response = sample["_long_diff"].to_numpy(dtype=float)
+        cluster_ids = sample["_cluster"].to_numpy()
+        if n_obs <= design.shape[1]:
+            coef, _, _ = solve_ols(
+                design,
+                response,
+                return_vcov=False,
+                rank_deficient_action=self.rank_deficient_action,
+            )
+            return {
+                "coefficient": float(coef[1]),
+                "se": np.nan,
+                "t_stat": np.nan,
+                "p_value": np.nan,
+                "conf_low": np.nan,
+                "conf_high": np.nan,
+                "n_obs": n_obs,
+            }
+
+        coef, _, vcov = solve_ols(
+            design,
+            response,
+            cluster_ids=cluster_ids,
+            return_vcov=True,
+            rank_deficient_action=self.rank_deficient_action,
+        )
+
+        effect = float(coef[1])
+        se = np.nan
+        if vcov is not None and vcov.shape[0] > 1 and np.isfinite(vcov[1, 1]) and vcov[1, 1] >= 0:
+            se = float(np.sqrt(vcov[1, 1]))
+
+        n_clusters = len(pd.unique(cluster_ids))
+        df = n_clusters - 1 if n_clusters > 1 else None
+        t_stat, p_value, conf_int = safe_inference(effect, se, alpha=self.alpha, df=df)
+        return {
+            "coefficient": effect,
+            "se": se,
+            "t_stat": t_stat,
+            "p_value": p_value,
+            "conf_low": conf_int[0],
+            "conf_high": conf_int[1],
+            "n_obs": n_obs,
+        }
+
+    def _estimate_horizon(self, panel, *, outcome, unit, time, horizon):
+        sample = self._build_horizon_sample(panel, outcome=outcome, unit=unit, time=time, horizon=horizon)
+        return self._estimate_sample(sample)
+
+    def _estimate_window(self, panel, *, outcome, unit, time, horizons: Iterable[int]):
+        samples = [
+            self._build_horizon_sample(panel, outcome=outcome, unit=unit, time=time, horizon=horizon)
+            for horizon in horizons
+        ]
+        stacked = pd.concat(samples, ignore_index=True) if samples else pd.DataFrame()
+        if stacked.empty:
+            return {
+                "coefficient": np.nan,
+                "se": np.nan,
+                "t_stat": np.nan,
+                "p_value": np.nan,
+                "conf_low": np.nan,
+                "conf_high": np.nan,
+                "n_obs": 0,
+            }
+        return self._estimate_sample(stacked)
+
+    def _resolve_pooled_horizons(self, pooled, *, kind):
+        if kind == "pre":
+            default = list(range(-self.pre_window, -1))
+            if pooled is None:
+                return default
+            if isinstance(pooled, int):
+                return list(range(-pooled, -1))
+        else:
+            default = list(range(0, self.post_window + 1))
+            if pooled is None:
+                return default
+            if isinstance(pooled, int):
+                return list(range(0, pooled + 1))
+
+        if isinstance(pooled, tuple) and len(pooled) == 2:
+            start, end = pooled
+            return list(range(start, end + 1))
+
+        raise ValueError(f"{kind}_pooled must be None, an int, or a length-2 tuple")
+
     def fit(
         self,
         data,
@@ -64,6 +234,8 @@ class LPDiD:
             required.extend(covariates)
         if absorb:
             required.extend(absorb)
+        if self.cluster:
+            required.append(self.cluster)
         missing = [col for col in required if col not in data.columns]
         if missing:
             raise ValueError(f"Missing columns: {missing}")
@@ -71,49 +243,41 @@ class LPDiD:
             raise ValueError("only_event and only_pooled cannot both be True")
 
         cluster = self.cluster or unit
-        treatment_by_unit = data.groupby(unit)[treatment].max().fillna(0)
+        panel = self._prepare_panel(data, outcome=outcome, unit=unit, time=time, treatment=treatment, cluster=cluster)
+        treatment_by_unit = panel.groupby(unit)["_treated"].max()
         event_study = None
         pooled = None
 
         if not only_pooled:
             event_rows = []
             for horizon in range(-self.pre_window, self.post_window + 1):
+                estimate = self._estimate_horizon(panel, outcome=outcome, unit=unit, time=time, horizon=horizon)
                 event_rows.append(
                     {
                         "horizon": horizon,
-                        "coefficient": 0.0,
-                        "se": 0.0,
-                        "t_stat": None,
-                        "p_value": None,
-                        "conf_low": None,
-                        "conf_high": None,
-                        "n_obs": None,
+                        **estimate,
                     }
                 )
             event_study = pd.DataFrame(event_rows)
 
         if not only_event:
+            pre_horizons = self._resolve_pooled_horizons(pre_pooled, kind="pre")
+            post_horizons = self._resolve_pooled_horizons(post_pooled, kind="post")
+            pre_estimate = self._estimate_window(
+                panel, outcome=outcome, unit=unit, time=time, horizons=pre_horizons
+            )
+            post_estimate = self._estimate_window(
+                panel, outcome=outcome, unit=unit, time=time, horizons=post_horizons
+            )
             pooled = pd.DataFrame(
                 [
                     {
                         "window": "pre",
-                        "coefficient": 0.0,
-                        "se": 0.0,
-                        "t_stat": None,
-                        "p_value": None,
-                        "conf_low": None,
-                        "conf_high": None,
-                        "n_obs": None,
+                        **pre_estimate,
                     },
                     {
                         "window": "post",
-                        "coefficient": 0.0,
-                        "se": 0.0,
-                        "t_stat": None,
-                        "p_value": None,
-                        "conf_low": None,
-                        "conf_high": None,
-                        "n_obs": None,
+                        **post_estimate,
                     },
                 ]
             )
