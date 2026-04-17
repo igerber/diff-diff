@@ -99,13 +99,20 @@ class LPDiD:
 
         sample = sample.loc[treated_mask | control_mask].copy()
         sample["horizon"] = horizon
+        sample["_event_time"] = sample[time]
         sample["_long_diff"] = sample["_target_outcome"] - sample["_baseline_outcome"]
-        return sample[["horizon", "_long_diff", "_entry", "_cluster"]]
+        return sample[["horizon", "_event_time", "_long_diff", "_entry", "_cluster"]]
 
     def _sample_is_identified(self, sample: pd.DataFrame) -> bool:
         return len(sample) > 0 and sample["_entry"].nunique() >= 2
 
-    def _estimate_sample(self, sample: pd.DataFrame) -> Dict[str, Optional[float]]:
+    def _estimate_sample(
+        self,
+        sample: pd.DataFrame,
+        *,
+        response_column: str = "_long_diff",
+        include_time_fe: bool = True,
+    ) -> Dict[str, Optional[float]]:
         n_obs = int(len(sample))
         empty_result = {
             "coefficient": np.nan,
@@ -126,14 +133,19 @@ class LPDiD:
         ]
         column_names = ["intercept", "treatment_entry"]
 
-        if sample["horizon"].nunique() > 1:
-            horizon_dummies = pd.get_dummies(sample["horizon"], prefix="horizon", drop_first=True, dtype=float)
-            if not horizon_dummies.empty:
-                design_columns.append(horizon_dummies.to_numpy(dtype=float))
-                column_names.extend(horizon_dummies.columns.tolist())
+        if include_time_fe:
+            time_dummies = pd.get_dummies(
+                sample["_event_time"],
+                prefix="time",
+                drop_first=True,
+                dtype=float,
+            )
+            if not time_dummies.empty:
+                design_columns.append(time_dummies.to_numpy(dtype=float))
+                column_names.extend(time_dummies.columns.tolist())
 
         design = np.column_stack(design_columns)
-        response = sample["_long_diff"].to_numpy(dtype=float)
+        response = sample[response_column].to_numpy(dtype=float)
         cluster_ids = sample["_cluster"].to_numpy()
         if n_obs <= design.shape[1]:
             coef, _, _ = solve_ols(
@@ -141,6 +153,7 @@ class LPDiD:
                 response,
                 return_vcov=False,
                 rank_deficient_action=self.rank_deficient_action,
+                column_names=column_names,
             )
             return {
                 "coefficient": float(coef[1]),
@@ -162,6 +175,7 @@ class LPDiD:
                     cluster_ids=cluster_ids,
                     return_vcov=True,
                     rank_deficient_action=self.rank_deficient_action,
+                    column_names=column_names,
                 )
             except (ValueError, ZeroDivisionError):
                 coef, _, _ = solve_ols(
@@ -169,6 +183,7 @@ class LPDiD:
                     response,
                     return_vcov=False,
                     rank_deficient_action=self.rank_deficient_action,
+                    column_names=column_names,
                 )
         else:
             coef, _, _ = solve_ols(
@@ -176,6 +191,7 @@ class LPDiD:
                 response,
                 return_vcov=False,
                 rank_deficient_action=self.rank_deficient_action,
+                column_names=column_names,
             )
 
         effect = float(coef[1])
@@ -200,23 +216,65 @@ class LPDiD:
         sample = self._build_horizon_sample(panel, outcome=outcome, unit=unit, time=time, horizon=horizon)
         return self._estimate_sample(sample)
 
-    def _estimate_window(self, panel, *, outcome, unit, time, horizons: Iterable[int], kind: str):
-        samples = []
-        unidentified_horizons = []
-        for horizon in horizons:
-            sample = self._build_horizon_sample(panel, outcome=outcome, unit=unit, time=time, horizon=horizon)
-            if self._sample_is_identified(sample):
-                samples.append(sample)
-            else:
-                unidentified_horizons.append(horizon)
+    def _build_pooled_sample(self, panel, *, outcome, unit, time, horizons, kind: str):
+        base = panel[[unit, time, "_entry", "_first_treat", "_cluster"]].copy()
+        base["_baseline_time"] = base[time] - 1
 
+        outcomes = panel[[unit, time, outcome]].copy()
+        baseline = outcomes.rename(columns={time: "_baseline_time", outcome: "_baseline_outcome"})
+        sample = base.merge(baseline, on=[unit, "_baseline_time"], how="left")
+
+        target_columns = []
+        for idx, horizon in enumerate(horizons):
+            target_time_col = f"_target_time_{idx}"
+            target_outcome_col = f"_target_outcome_{idx}"
+            sample[target_time_col] = sample[time] + horizon
+            target = outcomes.rename(columns={time: target_time_col, outcome: target_outcome_col})
+            sample = sample.merge(target, on=[unit, target_time_col], how="left")
+            target_columns.append(target_outcome_col)
+
+        sample = sample.dropna(subset=["_baseline_outcome", *target_columns]).copy()
+
+        treated_mask = sample["_entry"].eq(1.0)
+        if self.control_group == "never_treated":
+            control_mask = sample["_entry"].eq(0.0) & np.isinf(sample["_first_treat"])
+        else:
+            control_mask = sample["_entry"].eq(0.0) & sample[time].lt(sample["_first_treat"])
+            if kind == "post":
+                max_horizon = max(horizons)
+                control_mask &= (sample[time] + max_horizon).lt(sample["_first_treat"])
+
+        sample = sample.loc[treated_mask | control_mask].copy()
+        sample["_event_time"] = sample[time]
+        sample["_pooled_diff"] = sample[target_columns].mean(axis=1) - sample["_baseline_outcome"]
+        return sample[["_event_time", "_pooled_diff", "_entry", "_cluster"]]
+
+    def _estimate_window(self, panel, *, outcome, unit, time, horizons: Iterable[int], kind: str):
+        unidentified_horizons = [
+            horizon
+            for horizon in horizons
+            if not self._sample_is_identified(
+                self._build_horizon_sample(panel, outcome=outcome, unit=unit, time=time, horizon=horizon)
+            )
+        ]
         if unidentified_horizons:
             raise ValueError(f"unidentified pooled {kind} horizons: {unidentified_horizons}")
 
-        stacked = pd.concat(samples, ignore_index=True) if samples else pd.DataFrame()
-        if stacked.empty:
+        pooled_sample = self._build_pooled_sample(
+            panel,
+            outcome=outcome,
+            unit=unit,
+            time=time,
+            horizons=horizons,
+            kind=kind,
+        )
+        if pooled_sample.empty:
             raise ValueError(f"pooled {kind} window did not contain any horizons")
-        return self._estimate_sample(stacked)
+        return self._estimate_sample(
+            pooled_sample,
+            response_column="_pooled_diff",
+            include_time_fe=True,
+        )
 
     def _resolve_pooled_horizons(self, pooled, *, kind):
         if kind == "pre":
@@ -294,7 +352,18 @@ class LPDiD:
         if not only_pooled:
             event_rows = []
             for horizon in range(-self.pre_window, self.post_window + 1):
-                estimate = self._estimate_horizon(panel, outcome=outcome, unit=unit, time=time, horizon=horizon)
+                if horizon == -1:
+                    estimate = {
+                        "coefficient": 0.0,
+                        "se": np.nan,
+                        "t_stat": np.nan,
+                        "p_value": np.nan,
+                        "conf_low": np.nan,
+                        "conf_high": np.nan,
+                        "n_obs": np.nan,
+                    }
+                else:
+                    estimate = self._estimate_horizon(panel, outcome=outcome, unit=unit, time=time, horizon=horizon)
                 event_rows.append(
                     {
                         "horizon": horizon,

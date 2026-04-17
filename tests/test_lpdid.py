@@ -151,6 +151,81 @@ def test_lpdid_detects_positive_post_effect_on_simple_panel():
     assert post0 > 0.5
 
 
+def test_lpdid_event_estimation_controls_for_calendar_time():
+    df = pd.DataFrame(
+        {
+            "unit": [
+                "c1",
+                "c1",
+                "c1",
+                "c2",
+                "c2",
+                "c2",
+                "t1",
+                "t1",
+                "t1",
+                "t2a",
+                "t2a",
+                "t2a",
+                "t2b",
+                "t2b",
+                "t2b",
+                "t2c",
+                "t2c",
+                "t2c",
+            ],
+            "time": [0, 1, 2] * 6,
+            "y": [
+                0,
+                0,
+                100,
+                0,
+                0,
+                100,
+                0,
+                5,
+                105,
+                0,
+                0,
+                105,
+                0,
+                0,
+                105,
+                0,
+                0,
+                105,
+            ],
+            "treat": [
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                1,
+                1,
+                0,
+                0,
+                1,
+                0,
+                0,
+                1,
+                0,
+                0,
+                1,
+            ],
+        }
+    )
+
+    res = LPDiD(pre_window=2, post_window=0).fit(
+        df, outcome="y", unit="unit", time="time", treatment="treat", only_event=True
+    )
+
+    post0 = res.event_study.loc[res.event_study["horizon"] == 0, "coefficient"].iloc[0]
+    assert post0 == pytest.approx(5.0, abs=1e-8)
+
+
 def test_lpdid_rejects_pooled_horizon_outside_supported_window():
     df = pd.DataFrame(
         {
