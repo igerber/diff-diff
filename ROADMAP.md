@@ -10,7 +10,7 @@ For past changes and release history, see [CHANGELOG.md](CHANGELOG.md).
 
 diff-diff v2.7.5 is a **production-ready** DiD library with feature parity with R's `did` + `HonestDiD` + `synthdid` ecosystem for core DiD analysis, plus **unique survey support** — design-based variance estimation (Taylor linearization, replicate weights) integrated across all estimators. No R or Python package offers this combination:
 
-- **Core estimators**: Basic DiD, TWFE, MultiPeriod, Callaway-Sant'Anna, Sun-Abraham, Borusyak-Jaravel-Spiess Imputation, Synthetic DiD, Triple Difference (DDD), TROP, Two-Stage DiD (Gardner 2022), Stacked DiD (Wing et al. 2024), Continuous DiD (Callaway, Goodman-Bacon & Sant'Anna 2024)
+- **Core estimators**: Basic DiD, TWFE, MultiPeriod, Callaway-Sant'Anna, Sun-Abraham, Borusyak-Jaravel-Spiess Imputation, Synthetic DiD, LPDiD, Triple Difference (DDD), TROP, Two-Stage DiD (Gardner 2022), Stacked DiD (Wing et al. 2024), Continuous DiD (Callaway, Goodman-Bacon & Sant'Anna 2024)
 - **Valid inference**: Robust SEs, cluster SEs, wild bootstrap, multiplier bootstrap, placebo-based variance
 - **Assumption diagnostics**: Parallel trends tests, placebo tests, Goodman-Bacon decomposition
 - **Sensitivity analysis**: Honest DiD (Rambachan-Roth), Pre-trends power analysis (Roth 2022)
@@ -50,6 +50,19 @@ Extend the existing `TripleDifference` estimator to handle staggered adoption se
 
 **Reference**: [Ortiz-Villavicencio & Sant'Anna (2025)](https://arxiv.org/abs/2505.09942). "Better Understanding Triple Differences Estimators." *Working Paper*. R package: `triplediff`.
 
+### Local Projections DiD
+
+The absorbing-treatment main path is now implemented as `LPDiD`, including
+event-study and pooled effects, clean vs never-treated controls, `rw`,
+`nocomp`, `pmd`, covariates, lags, and additional absorbed fixed effects with
+Stata-validated parity coverage.
+
+Remaining work is now narrower and more specialized:
+
+- nonabsorbing-treatment support
+- bootstrap inference parity for LPDiD-specific paths
+- broader documentation examples
+
 ---
 
 ## Medium-Term Enhancements
@@ -69,16 +82,6 @@ Handles treatment that switches on and off (reversible treatments), unlike most 
 - Comparison with never-switchers or flexible control groups
 
 **Reference**: [de Chaisemartin & D'Haultfœuille (2020, 2024)](https://papers.ssrn.com/sol3/papers.cfm?abstract_id=3980758). *American Economic Review*.
-
-### Local Projections DiD
-
-Implements local projections for dynamic treatment effects. Doesn't require specifying full dynamic structure.
-
-- Flexible impulse response estimation
-- Robust to misspecification of dynamics
-- Natural handling of anticipation effects
-
-**Reference**: Dube, Girardi, Jordà, and Taylor (2023).
 
 ### Nonlinear DiD
 

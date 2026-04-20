@@ -26,6 +26,7 @@ Core estimator classes for DiD analysis:
    diff_diff.EfficientDiD
    diff_diff.TwoStageDiD
    diff_diff.BaconDecomposition
+   diff_diff.LPDiD
 
 Results Classes
 ---------------
@@ -58,6 +59,7 @@ Result containers returned by estimators:
    diff_diff.TwoStageBootstrapResults
    diff_diff.BaconDecompositionResults
    diff_diff.Comparison2x2
+   diff_diff.LPDiDResults
 
 Visualization
 -------------
@@ -234,6 +236,7 @@ Estimators
    efficient_did
    two_stage
    bacon
+   lpdid
 
 Diagnostics & Inference
 ~~~~~~~~~~~~~~~~~~~~~~~

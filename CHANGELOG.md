@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **LPDiD estimator** (`LPDiD`) for the absorbing-treatment main path of Stata `lpdid`
+  - Event-study and pooled pre/post effects with clean controls or never-treated controls
+  - `rw` and `nocomp` support with official Stata parity tests on bundled example data
+  - `pmd(max|k)`, covariates, `ylags`, `dylags`, and additional absorbed fixed effects
+  - Regression-adjustment parity for `rw + controls/absorb/ylags/dylags` on focused Stata-validated samples
+
+### Changed
+- Move Local Projections DiD from roadmap item to implemented estimator in public documentation
+
 ## [2.8.0] - 2026-03-31
 
 ### Added

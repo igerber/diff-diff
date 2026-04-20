@@ -85,6 +85,7 @@ Detailed guide: [`docs/llms-practitioner.txt`](docs/llms-practitioner.txt)
 - **Panel data support**: Two-way fixed effects estimator for panel designs
 - **Multi-period analysis**: Event-study style DiD with period-specific treatment effects
 - **Staggered adoption**: Callaway-Sant'Anna (2021), Sun-Abraham (2021), Borusyak-Jaravel-Spiess (2024) imputation, Two-Stage DiD (Gardner 2022), Stacked DiD (Wing, Freedman & Hollingsworth 2024), and Efficient DiD (Chen, Sant'Anna & Xie 2025) estimators for heterogeneous treatment timing
+- **Local Projections DiD**: `LPDiD` for absorbing-treatment event studies and pooled effects, with clean controls, `rw`, `nocomp`, `pmd`, covariates, lags, and additional absorbed fixed effects
 - **Triple Difference (DDD)**: Ortiz-Villavicencio & Sant'Anna (2025) estimators with proper covariate handling
 - **Synthetic DiD**: Combined DiD with synthetic control for improved robustness
 - **Triply Robust Panel (TROP)**: Factor-adjusted DiD with synthetic weights (Athey et al. 2025)
@@ -117,8 +118,41 @@ All estimators have short aliases for convenience:
 | `Stacked` | `StackedDiD` | Stacked DiD |
 | `Bacon` | `BaconDecomposition` | Goodman-Bacon decomposition |
 | `EDiD` | `EfficientDiD` | Efficient DiD |
+| `LPDiD` | `LPDiD` | Local Projections DiD |
 
 `TROP` already uses its short canonical name and needs no alias.
+
+## Local Projections DiD
+
+`LPDiD` ports the absorbing-treatment main path of Stata's `lpdid` command into
+the `diff-diff` estimator interface. It supports dynamic event-study effects and
+pooled pre/post effects with clean controls or never-treated controls, optional
+reweighting (`rw`), common-composition samples (`nocomp`), pre-mean
+differencing (`pmd`), covariates, outcome lags, first-difference lags, and
+additional absorbed fixed effects.
+
+```python
+from diff_diff import LPDiD
+
+res = LPDiD(
+    pre_window=5,
+    post_window=10,
+    reweight=True,
+    no_composition=True,
+).fit(
+    data,
+    outcome="Y",
+    unit="unit",
+    time="time",
+    treatment="treat",
+)
+
+print(res.event_study.head())
+print(res.pooled)
+```
+
+The current implementation is validated against official Stata `lpdid`
+absorbing-treatment examples and option paths used in the test suite.
 
 ## Tutorials
 
@@ -140,6 +174,7 @@ We provide Jupyter notebook tutorials in `docs/tutorials/`:
 | `12_two_stage_did.ipynb` | Two-Stage DiD (Gardner 2022), GMM sandwich variance, per-observation effects |
 | `13_stacked_did.ipynb` | Stacked DiD (Wing et al. 2024), Q-weights, sub-experiment inspection, trimming, clean control definitions |
 | `15_efficient_did.ipynb` | Efficient DiD (Chen et al. 2025), optimal weighting, PT-All vs PT-Post, efficiency gains, bootstrap inference |
+| `16_lpdid.ipynb` | LPDiD for absorbing treatments, official Stata `lpdid` example workflow, `rw`, `nocomp`, and event-study plotting |
 
 ## Data Preparation
 

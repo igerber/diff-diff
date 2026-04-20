@@ -51,6 +51,13 @@ Efficient Difference-in-Differences (Chen, Sant'Anna & Xie 2025):
 - Event study and group-level aggregation
 - Bootstrap inference and diagnostics
 
+### 16. LPDiD (`16_lpdid.ipynb`)
+Local Projections Difference-in-Differences for absorbing treatments:
+- Event-study and pooled pre/post effects
+- `rw` and `nocomp` option paths
+- Official Stata `lpdid` example workflow
+- Manual event-study plotting from `LPDiDResults`
+
 ## Running the Notebooks
 
 1. Install diff-diff with dependencies:

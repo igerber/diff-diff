@@ -46,8 +46,14 @@ class LPDiD:
         ):
             raise ValueError("pmd must be None, 'max', or a positive integer")
 
-    def _prepare_panel(self, data, outcome, unit, time, treatment, cluster):
-        selected_columns = list(dict.fromkeys([unit, time, outcome, treatment, cluster]))
+    def _rhs_column_names(self, covariates=None, ylags=0, dylags=0):
+        rhs_columns = list(covariates or [])
+        rhs_columns.extend([f"_y_lag_{lag}" for lag in range(1, ylags + 1)])
+        rhs_columns.extend([f"_dy_lag_{lag}" for lag in range(1, dylags + 1)])
+        return rhs_columns
+
+    def _prepare_panel(self, data, outcome, unit, time, treatment, cluster, covariates=None, ylags=0, dylags=0, absorb=None):
+        selected_columns = list(dict.fromkeys([unit, time, outcome, treatment, cluster, *(covariates or []), *(absorb or [])]))
         panel = data[selected_columns].copy()
         panel = panel.sort_values([unit, time]).reset_index(drop=True)
 
@@ -73,10 +79,104 @@ class LPDiD:
 
         first_treat = panel.loc[panel["_entry"] == 1].groupby(unit)[time].min()
         panel["_first_treat"] = panel[unit].map(first_treat).astype(float).fillna(np.inf)
+
+        outcome_history_sum = panel.groupby(unit)[outcome].cumsum() - panel[outcome]
+        history_count = panel.groupby(unit).cumcount()
+        panel["_pmd_all_baseline"] = outcome_history_sum / history_count.replace(0, np.nan)
+
+        lagged_outcome = panel.groupby(unit)[outcome].shift(1)
+        if isinstance(self.pmd, int):
+            panel["_pmd_k_baseline"] = (
+                lagged_outcome.groupby(panel[unit])
+                .rolling(window=self.pmd, min_periods=self.pmd)
+                .mean()
+                .reset_index(level=0, drop=True)
+            )
+
+        for lag in range(1, ylags + 1):
+            panel[f"_y_lag_{lag}"] = panel.groupby(unit)[outcome].shift(lag)
+
+        panel["_dy_current"] = panel.groupby(unit)[outcome].diff()
+        for lag in range(1, dylags + 1):
+            panel[f"_dy_lag_{lag}"] = panel.groupby(unit)["_dy_current"].shift(lag)
         return panel
 
-    def _build_horizon_sample(self, panel, *, outcome, unit, time, horizon):
-        base = panel[[unit, time, "_entry", "_first_treat", "_cluster"]].copy()
+    def _baseline_column(self):
+        if self.pmd == "max":
+            return "_pmd_all_baseline"
+        if isinstance(self.pmd, int):
+            return "_pmd_k_baseline"
+        return "_baseline_outcome"
+
+    def _clean_control_mask(self, panel: pd.DataFrame, *, time: str, horizon: int) -> pd.Series:
+        if self.control_group == "never_treated":
+            return panel["_treated"].eq(0) & np.isinf(panel["_first_treat"])
+
+        control_mask = panel["_treated"].eq(0) & panel[time].lt(panel["_first_treat"])
+        if horizon >= 0:
+            control_mask &= (panel[time] + horizon).lt(panel["_first_treat"])
+        return control_mask
+
+    def _outcome_available_mask(self, panel: pd.DataFrame, *, unit: str, time: str, horizon: int) -> pd.Series:
+        if horizon == 0:
+            return pd.Series(True, index=panel.index)
+
+        observed_index = pd.MultiIndex.from_frame(panel[[unit, time]])
+        target_index = pd.MultiIndex.from_arrays(
+            [panel[unit].to_numpy(), (panel[time] + horizon).to_numpy()],
+            names=[unit, time],
+        )
+        return pd.Series(target_index.isin(observed_index), index=panel.index)
+
+    def _common_clean_sample_indicator(self, panel: pd.DataFrame, *, unit: str, time: str, max_post_horizon: int) -> pd.Series:
+        common_sample = panel["_entry"].eq(1.0) | self._clean_control_mask(
+            panel,
+            time=time,
+            horizon=max_post_horizon,
+        )
+        return common_sample & self._outcome_available_mask(
+            panel,
+            unit=unit,
+            time=time,
+            horizon=max_post_horizon,
+        )
+
+    def _rw_weights(self, panel: pd.DataFrame, eligibility_mask: pd.Series, *, time: str) -> pd.Series:
+        eligible = panel.loc[eligibility_mask, [time, "_entry"]].copy()
+        if eligible.empty:
+            return pd.Series(dtype=float)
+
+        group_stats = eligible.groupby(time)["_entry"].agg(["sum", "count"])
+        treated_counts = group_stats["sum"]
+        control_counts = group_stats["count"] - treated_counts
+
+        valid = (treated_counts > 0) & (control_counts > 0)
+        if not valid.any():
+            return pd.Series(dtype=float)
+
+        return (group_stats.loc[valid, "count"] / control_counts.loc[valid]).astype(float)
+
+    def _build_horizon_sample(
+        self,
+        panel,
+        *,
+        outcome,
+        unit,
+        time,
+        horizon,
+        covariates=None,
+        ylags=0,
+        dylags=0,
+        absorb=None,
+    ):
+        rhs_columns = self._rhs_column_names(covariates=covariates, ylags=ylags, dylags=dylags)
+        base_columns = [unit, time, "_treated", "_entry", "_first_treat", "_cluster", "_common_event_ok", *rhs_columns, *(absorb or [])]
+        if self.pmd == "max":
+            base_columns.append("_pmd_all_baseline")
+        elif isinstance(self.pmd, int):
+            base_columns.append("_pmd_k_baseline")
+
+        base = panel[base_columns].copy()
         base["_baseline_time"] = base[time] - 1
         base["_target_time"] = base[time] + horizon
 
@@ -87,24 +187,184 @@ class LPDiD:
 
         sample = base.merge(baseline, on=[unit, "_baseline_time"], how="left")
         sample = sample.merge(target, on=[unit, "_target_time"], how="left")
-        sample = sample.dropna(subset=["_baseline_outcome", "_target_outcome"]).copy()
+        baseline_column = self._baseline_column()
+        required_columns = ["_baseline_outcome", "_target_outcome", *rhs_columns, *(absorb or [])]
+        if baseline_column != "_baseline_outcome":
+            required_columns.append(baseline_column)
+        sample = sample.dropna(subset=required_columns).copy()
 
         treated_mask = sample["_entry"].eq(1.0)
         if self.control_group == "never_treated":
             control_mask = sample["_entry"].eq(0.0) & np.isinf(sample["_first_treat"])
         else:
-            control_mask = sample["_entry"].eq(0.0) & sample[time].lt(sample["_first_treat"])
-            if horizon >= 0:
-                control_mask &= sample["_target_time"].lt(sample["_first_treat"])
+            control_mask = self._clean_control_mask(sample, time=time, horizon=horizon)
 
         sample = sample.loc[treated_mask | control_mask].copy()
+        if self.no_composition:
+            sample = sample.loc[sample["_common_event_ok"]].copy()
         sample["horizon"] = horizon
         sample["_event_time"] = sample[time]
-        sample["_long_diff"] = sample["_target_outcome"] - sample["_baseline_outcome"]
-        return sample[["horizon", "_event_time", "_long_diff", "_entry", "_cluster"]]
+        sample["_long_diff"] = sample["_target_outcome"] - sample[baseline_column]
+        return sample[
+            ["horizon", "_event_time", "_long_diff", "_entry", "_cluster", *rhs_columns, *(absorb or [])]
+        ]
 
     def _sample_is_identified(self, sample: pd.DataFrame) -> bool:
         return len(sample) > 0 and sample["_entry"].nunique() >= 2
+
+    def _build_feature_frame(
+        self,
+        sample: pd.DataFrame,
+        *,
+        rhs_columns=None,
+        absorb_columns=None,
+        include_time_fe: bool = True,
+        time_levels=None,
+        absorb_levels=None,
+    ) -> pd.DataFrame:
+        rhs_columns = list(rhs_columns or [])
+        absorb_columns = list(absorb_columns or [])
+        feature_blocks = []
+
+        for col in rhs_columns:
+            values = pd.to_numeric(sample[col], errors="coerce")
+            if values.isna().any():
+                raise ValueError(f"LPDiD requires numeric covariate-style columns, got invalid values in '{col}'")
+            feature_blocks.append(pd.DataFrame({col: values.to_numpy(dtype=float)}, index=sample.index))
+
+        if include_time_fe:
+            time_categories = list(time_levels if time_levels is not None else pd.unique(sample["_event_time"]))
+            time_dummies = pd.get_dummies(
+                pd.Categorical(sample["_event_time"], categories=time_categories),
+                prefix="time",
+                drop_first=True,
+                dtype=float,
+            )
+            if not time_dummies.empty:
+                time_dummies.index = sample.index
+                feature_blocks.append(time_dummies)
+
+        for col in absorb_columns:
+            categories = list(absorb_levels[col] if absorb_levels is not None else pd.unique(sample[col]))
+            dummies = pd.get_dummies(
+                pd.Categorical(sample[col], categories=categories),
+                prefix=col,
+                drop_first=True,
+                dtype=float,
+            )
+            if not dummies.empty:
+                dummies.index = sample.index
+                feature_blocks.append(dummies)
+
+        if not feature_blocks:
+            return pd.DataFrame(index=sample.index)
+        return pd.concat(feature_blocks, axis=1)
+
+    def _estimate_regression_adjustment_sample(
+        self,
+        sample: pd.DataFrame,
+        *,
+        response_column: str = "_long_diff",
+        include_time_fe: bool = True,
+        rhs_columns=None,
+        absorb_columns=None,
+    ) -> Dict[str, Optional[float]]:
+        rhs_columns = list(rhs_columns or [])
+        absorb_columns = list(absorb_columns or [])
+        dropna_columns = [*rhs_columns, *absorb_columns]
+        if dropna_columns:
+            sample = sample.dropna(subset=dropna_columns).copy()
+
+        n_obs = int(len(sample))
+        empty_result = {
+            "coefficient": np.nan,
+            "se": np.nan,
+            "t_stat": np.nan,
+            "p_value": np.nan,
+            "conf_low": np.nan,
+            "conf_high": np.nan,
+            "n_obs": n_obs,
+        }
+        if n_obs == 0 or sample["_entry"].nunique() < 2:
+            return empty_result
+
+        controls = sample.loc[sample["_entry"].eq(0.0)].copy()
+        treated = sample.loc[sample["_entry"].eq(1.0)].copy()
+        if controls.empty or treated.empty:
+            return empty_result
+
+        time_levels = list(pd.unique(sample["_event_time"])) if include_time_fe else None
+        absorb_levels = {col: list(pd.unique(sample[col])) for col in absorb_columns}
+        control_features = self._build_feature_frame(
+            controls,
+            rhs_columns=rhs_columns,
+            absorb_columns=absorb_columns,
+            include_time_fe=include_time_fe,
+            time_levels=time_levels,
+            absorb_levels=absorb_levels,
+        )
+        treated_features = self._build_feature_frame(
+            treated,
+            rhs_columns=rhs_columns,
+            absorb_columns=absorb_columns,
+            include_time_fe=include_time_fe,
+            time_levels=time_levels,
+            absorb_levels=absorb_levels,
+        )
+
+        control_design = np.column_stack(
+            [np.ones(len(controls), dtype=float), control_features.to_numpy(dtype=float)]
+        )
+        column_names = ["intercept", *control_features.columns.tolist()]
+        control_coef, _, _ = solve_ols(
+            control_design,
+            controls[response_column].to_numpy(dtype=float),
+            return_vcov=False,
+            rank_deficient_action=self.rank_deficient_action,
+            column_names=column_names,
+        )
+
+        treated_design = np.column_stack(
+            [np.ones(len(treated), dtype=float), treated_features.to_numpy(dtype=float)]
+        )
+        untreated_prediction = treated_design @ control_coef
+        treated_residual = treated[response_column].to_numpy(dtype=float) - untreated_prediction
+
+        effect = float(treated_residual.mean())
+        se = np.nan
+        cluster_ids = sample["_cluster"].to_numpy()
+        n_clusters = len(pd.unique(cluster_ids))
+        if n_clusters >= 2:
+            n_total = len(sample)
+            n_treated = len(treated)
+            q0_inv = np.linalg.inv(control_design.T @ control_design)
+            mu_treated = treated_design.mean(axis=0)
+            control_projection = control_design @ (q0_inv @ mu_treated)
+
+            phi = np.zeros(n_total, dtype=float)
+            treated_mask = sample["_entry"].to_numpy(dtype=float) == 1.0
+            phi[treated_mask] = (n_total / n_treated) * (treated_residual - effect)
+            control_residual = controls[response_column].to_numpy(dtype=float) - control_design @ control_coef
+            phi[~treated_mask] = -n_total * control_projection * control_residual
+
+            cluster_scores = []
+            for cluster_value in pd.unique(cluster_ids):
+                cluster_scores.append(phi[cluster_ids == cluster_value].sum())
+            cluster_scores = np.asarray(cluster_scores, dtype=float)
+            vcov_scalar = float(cluster_scores @ cluster_scores) / float(n_total ** 2)
+            if np.isfinite(vcov_scalar) and vcov_scalar >= 0:
+                se = float(np.sqrt(vcov_scalar))
+
+        t_stat, p_value, conf_int = safe_inference(effect, se, alpha=self.alpha, df=None)
+        return {
+            "coefficient": effect,
+            "se": se,
+            "t_stat": t_stat,
+            "p_value": p_value,
+            "conf_low": conf_int[0],
+            "conf_high": conf_int[1],
+            "n_obs": n_obs,
+        }
 
     def _estimate_sample(
         self,
@@ -112,7 +372,18 @@ class LPDiD:
         *,
         response_column: str = "_long_diff",
         include_time_fe: bool = True,
+        rhs_columns=None,
+        absorb_columns=None,
+        weight_column: Optional[str] = None,
     ) -> Dict[str, Optional[float]]:
+        rhs_columns = list(rhs_columns or [])
+        absorb_columns = list(absorb_columns or [])
+        dropna_columns = [*rhs_columns, *absorb_columns]
+        if weight_column is not None:
+            dropna_columns.append(weight_column)
+        if dropna_columns:
+            sample = sample.dropna(subset=dropna_columns).copy()
+
         n_obs = int(len(sample))
         empty_result = {
             "coefficient": np.nan,
@@ -133,6 +404,13 @@ class LPDiD:
         ]
         column_names = ["intercept", "treatment_entry"]
 
+        for col in rhs_columns:
+            values = pd.to_numeric(sample[col], errors="coerce")
+            if values.isna().any():
+                raise ValueError(f"LPDiD requires numeric covariate-style columns, got invalid values in '{col}'")
+            design_columns.append(values.to_numpy(dtype=float))
+            column_names.append(col)
+
         if include_time_fe:
             time_dummies = pd.get_dummies(
                 sample["_event_time"],
@@ -144,9 +422,16 @@ class LPDiD:
                 design_columns.append(time_dummies.to_numpy(dtype=float))
                 column_names.extend(time_dummies.columns.tolist())
 
+        for col in absorb_columns:
+            dummies = pd.get_dummies(sample[col], prefix=col, drop_first=True, dtype=float)
+            if not dummies.empty:
+                design_columns.append(dummies.to_numpy(dtype=float))
+                column_names.extend(dummies.columns.tolist())
+
         design = np.column_stack(design_columns)
         response = sample[response_column].to_numpy(dtype=float)
         cluster_ids = sample["_cluster"].to_numpy()
+        weights = None if weight_column is None else sample[weight_column].to_numpy(dtype=float)
         if n_obs <= design.shape[1]:
             coef, _, _ = solve_ols(
                 design,
@@ -154,6 +439,7 @@ class LPDiD:
                 return_vcov=False,
                 rank_deficient_action=self.rank_deficient_action,
                 column_names=column_names,
+                weights=weights,
             )
             return {
                 "coefficient": float(coef[1]),
@@ -176,6 +462,7 @@ class LPDiD:
                     return_vcov=True,
                     rank_deficient_action=self.rank_deficient_action,
                     column_names=column_names,
+                    weights=weights,
                 )
             except (ValueError, ZeroDivisionError):
                 coef, _, _ = solve_ols(
@@ -184,6 +471,7 @@ class LPDiD:
                     return_vcov=False,
                     rank_deficient_action=self.rank_deficient_action,
                     column_names=column_names,
+                    weights=weights,
                 )
         else:
             coef, _, _ = solve_ols(
@@ -192,6 +480,7 @@ class LPDiD:
                 return_vcov=False,
                 rank_deficient_action=self.rank_deficient_action,
                 column_names=column_names,
+                weights=weights,
             )
 
         effect = float(coef[1])
@@ -212,12 +501,49 @@ class LPDiD:
             "n_obs": n_obs,
         }
 
-    def _estimate_horizon(self, panel, *, outcome, unit, time, horizon):
-        sample = self._build_horizon_sample(panel, outcome=outcome, unit=unit, time=time, horizon=horizon)
-        return self._estimate_sample(sample)
+    def _estimate_horizon(self, panel, *, outcome, unit, time, horizon, covariates=None, ylags=0, dylags=0, absorb=None):
+        rhs_columns = self._rhs_column_names(covariates=covariates, ylags=ylags, dylags=dylags)
+        sample = self._build_horizon_sample(
+            panel,
+            outcome=outcome,
+            unit=unit,
+            time=time,
+            horizon=horizon,
+            covariates=covariates,
+            ylags=ylags,
+            dylags=dylags,
+            absorb=absorb,
+        )
+        ra_required = self.reweight and bool(rhs_columns or absorb)
+        if ra_required:
+            return self._estimate_regression_adjustment_sample(
+                sample,
+                rhs_columns=rhs_columns,
+                absorb_columns=absorb,
+            )
+        if self.reweight:
+            weight_horizon = 0 if (self.no_composition or horizon < 0) else horizon
+            eligibility_mask = panel["_common_event_ok"] if self.no_composition else (
+                panel["_entry"].eq(1.0) | self._clean_control_mask(panel, time=time, horizon=weight_horizon)
+            )
+            weight_map = self._rw_weights(panel, eligibility_mask, time=time)
+            sample["_rw_event_weight"] = sample["_event_time"].map(weight_map)
+        return self._estimate_sample(
+            sample,
+            rhs_columns=rhs_columns,
+            absorb_columns=absorb,
+            weight_column="_rw_event_weight" if self.reweight else None,
+        )
 
-    def _build_pooled_sample(self, panel, *, outcome, unit, time, horizons, kind: str):
-        base = panel[[unit, time, "_entry", "_first_treat", "_cluster"]].copy()
+    def _build_pooled_sample(self, panel, *, outcome, unit, time, horizons, kind: str, covariates=None, ylags=0, dylags=0, absorb=None):
+        rhs_columns = self._rhs_column_names(covariates=covariates, ylags=ylags, dylags=dylags)
+        base_columns = [unit, time, "_treated", "_entry", "_first_treat", "_cluster", "_common_pooled_ok", *rhs_columns, *(absorb or [])]
+        if self.pmd == "max":
+            base_columns.append("_pmd_all_baseline")
+        elif isinstance(self.pmd, int):
+            base_columns.append("_pmd_k_baseline")
+
+        base = panel[base_columns].copy()
         base["_baseline_time"] = base[time] - 1
 
         outcomes = panel[[unit, time, outcome]].copy()
@@ -233,33 +559,48 @@ class LPDiD:
             sample = sample.merge(target, on=[unit, target_time_col], how="left")
             target_columns.append(target_outcome_col)
 
-        sample = sample.dropna(subset=["_baseline_outcome", *target_columns]).copy()
+        baseline_column = self._baseline_column()
+        required_columns = ["_baseline_outcome", *target_columns, *rhs_columns, *(absorb or [])]
+        if baseline_column != "_baseline_outcome":
+            required_columns.append(baseline_column)
+        sample = sample.dropna(subset=required_columns).copy()
 
         treated_mask = sample["_entry"].eq(1.0)
         if self.control_group == "never_treated":
             control_mask = sample["_entry"].eq(0.0) & np.isinf(sample["_first_treat"])
         else:
-            control_mask = sample["_entry"].eq(0.0) & sample[time].lt(sample["_first_treat"])
-            if kind == "post":
-                max_horizon = max(horizons)
-                control_mask &= (sample[time] + max_horizon).lt(sample["_first_treat"])
+            control_horizon = max(horizons) if kind == "post" else 0
+            control_mask = self._clean_control_mask(sample, time=time, horizon=control_horizon)
 
         sample = sample.loc[treated_mask | control_mask].copy()
+        if self.no_composition:
+            sample = sample.loc[sample["_common_pooled_ok"]].copy()
         sample["_event_time"] = sample[time]
-        sample["_pooled_diff"] = sample[target_columns].mean(axis=1) - sample["_baseline_outcome"]
-        return sample[["_event_time", "_pooled_diff", "_entry", "_cluster"]]
+        sample["_pooled_diff"] = sample[target_columns].mean(axis=1) - sample[baseline_column]
+        return sample[["_event_time", "_pooled_diff", "_entry", "_cluster", *rhs_columns, *(absorb or [])]]
 
-    def _estimate_window(self, panel, *, outcome, unit, time, horizons: Iterable[int], kind: str):
+    def _estimate_window(self, panel, *, outcome, unit, time, horizons: Iterable[int], kind: str, covariates=None, ylags=0, dylags=0, absorb=None):
         unidentified_horizons = [
             horizon
             for horizon in horizons
             if not self._sample_is_identified(
-                self._build_horizon_sample(panel, outcome=outcome, unit=unit, time=time, horizon=horizon)
+                self._build_horizon_sample(
+                    panel,
+                    outcome=outcome,
+                    unit=unit,
+                    time=time,
+                    horizon=horizon,
+                    covariates=covariates,
+                    ylags=ylags,
+                    dylags=dylags,
+                    absorb=absorb,
+                )
             )
         ]
         if unidentified_horizons:
             raise ValueError(f"unidentified pooled {kind} horizons: {unidentified_horizons}")
 
+        rhs_columns = self._rhs_column_names(covariates=covariates, ylags=ylags, dylags=dylags)
         pooled_sample = self._build_pooled_sample(
             panel,
             outcome=outcome,
@@ -267,13 +608,36 @@ class LPDiD:
             time=time,
             horizons=horizons,
             kind=kind,
+            covariates=covariates,
+            ylags=ylags,
+            dylags=dylags,
+            absorb=absorb,
         )
         if pooled_sample.empty:
             raise ValueError(f"pooled {kind} window did not contain any horizons")
+        ra_required = self.reweight and bool(rhs_columns or absorb)
+        if ra_required:
+            return self._estimate_regression_adjustment_sample(
+                pooled_sample,
+                response_column="_pooled_diff",
+                include_time_fe=True,
+                rhs_columns=rhs_columns,
+                absorb_columns=absorb,
+            )
+        if self.reweight:
+            weight_horizon = 0 if (self.no_composition or kind == "pre") else max(horizons)
+            eligibility_mask = panel["_common_pooled_ok"] if self.no_composition else (
+                panel["_entry"].eq(1.0) | self._clean_control_mask(panel, time=time, horizon=weight_horizon)
+            )
+            weight_map = self._rw_weights(panel, eligibility_mask, time=time)
+            pooled_sample["_rw_pooled_weight"] = pooled_sample["_event_time"].map(weight_map)
         return self._estimate_sample(
             pooled_sample,
             response_column="_pooled_diff",
             include_time_fe=True,
+            rhs_columns=rhs_columns,
+            absorb_columns=absorb,
+            weight_column="_rw_pooled_weight" if self.reweight else None,
         )
 
     def _resolve_pooled_horizons(self, pooled, *, kind):
@@ -342,9 +706,38 @@ class LPDiD:
             raise ValueError(f"Missing columns: {missing}")
         if only_event and only_pooled:
             raise ValueError("only_event and only_pooled cannot both be True")
+        if not isinstance(ylags, int) or isinstance(ylags, bool) or ylags < 0:
+            raise ValueError("ylags must be a non-negative integer")
+        if not isinstance(dylags, int) or isinstance(dylags, bool) or dylags < 0:
+            raise ValueError("dylags must be a non-negative integer")
 
         cluster = self.cluster or unit
-        panel = self._prepare_panel(data, outcome=outcome, unit=unit, time=time, treatment=treatment, cluster=cluster)
+        pre_horizons = self._resolve_pooled_horizons(pre_pooled, kind="pre")
+        post_horizons = self._resolve_pooled_horizons(post_pooled, kind="post")
+        panel = self._prepare_panel(
+            data,
+            outcome=outcome,
+            unit=unit,
+            time=time,
+            treatment=treatment,
+            cluster=cluster,
+            covariates=covariates,
+            ylags=ylags,
+            dylags=dylags,
+            absorb=absorb,
+        )
+        panel["_common_event_ok"] = self._common_clean_sample_indicator(
+            panel,
+            unit=unit,
+            time=time,
+            max_post_horizon=self.post_window,
+        )
+        panel["_common_pooled_ok"] = self._common_clean_sample_indicator(
+            panel,
+            unit=unit,
+            time=time,
+            max_post_horizon=max(post_horizons) if post_horizons else 0,
+        )
         treatment_by_unit = panel.groupby(unit)["_treated"].max()
         event_study = None
         pooled = None
@@ -363,7 +756,17 @@ class LPDiD:
                         "n_obs": np.nan,
                     }
                 else:
-                    estimate = self._estimate_horizon(panel, outcome=outcome, unit=unit, time=time, horizon=horizon)
+                    estimate = self._estimate_horizon(
+                        panel,
+                        outcome=outcome,
+                        unit=unit,
+                        time=time,
+                        horizon=horizon,
+                        covariates=covariates,
+                        ylags=ylags,
+                        dylags=dylags,
+                        absorb=absorb,
+                    )
                 event_rows.append(
                     {
                         "horizon": horizon,
@@ -373,13 +776,29 @@ class LPDiD:
             event_study = pd.DataFrame(event_rows)
 
         if not only_event:
-            pre_horizons = self._resolve_pooled_horizons(pre_pooled, kind="pre")
-            post_horizons = self._resolve_pooled_horizons(post_pooled, kind="post")
             pre_estimate = self._estimate_window(
-                panel, outcome=outcome, unit=unit, time=time, horizons=pre_horizons, kind="pre"
+                panel,
+                outcome=outcome,
+                unit=unit,
+                time=time,
+                horizons=pre_horizons,
+                kind="pre",
+                covariates=covariates,
+                ylags=ylags,
+                dylags=dylags,
+                absorb=absorb,
             )
             post_estimate = self._estimate_window(
-                panel, outcome=outcome, unit=unit, time=time, horizons=post_horizons, kind="post"
+                panel,
+                outcome=outcome,
+                unit=unit,
+                time=time,
+                horizons=post_horizons,
+                kind="post",
+                covariates=covariates,
+                ylags=ylags,
+                dylags=dylags,
+                absorb=absorb,
             )
             pooled = pd.DataFrame(
                 [
