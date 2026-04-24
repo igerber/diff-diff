@@ -1,6 +1,5 @@
 """Survey support tests for ChaisemartinDHaultfoeuille (dCDH)."""
 
-import os
 from typing import Optional
 
 import numpy as np
@@ -1815,17 +1814,16 @@ class TestBootstrapCellPeriod:
     """
 
     # Captured on pre-PR-4 code (origin/main at SHA ac181b7f — PR #329
-    # merge) via a scratch fit on the fixture below. Pinned here as
-    # the bit-identity regression guard for the dispatcher's
-    # PSU-within-group-constant legacy-path routing. If this test
-    # drifts, the dispatcher is no longer reproducing pre-PR-4
-    # behavior under PSU=group and the legacy fast path has
-    # regressed. Values differ between Rust and pure-Python backends
-    # because `_generate_bootstrap_weights_batch` and `solve_ols`
-    # take different numeric paths; bit-identity still holds within
-    # each backend.
-    _BASELINE_OVERALL_SE_RUST = 0.30560839419979546
-    _BASELINE_OVERALL_SE_PYTHON = 0.3030802540369796
+    # merge) via a scratch fit on the fixture below, on the pure-Python
+    # backend. Pinned here as the bit-identity regression guard for the
+    # dispatcher's PSU-within-group-constant legacy-path routing: if
+    # this test drifts, the dispatcher is no longer reproducing pre-PR-4
+    # behavior under PSU=group and the legacy fast path has regressed.
+    # Both backends now converge on this value — PR #362 unified the
+    # multiplier-weight RNG on the numpy PCG64 path (previously Rust
+    # seeded Xoshiro per-row, producing a different Rust baseline of
+    # 0.30560839419979546 under the same fixture).
+    _BASELINE_OVERALL_SE = 0.3030802540369796
 
     @staticmethod
     def _make_baseline_fixture() -> pd.DataFrame:
@@ -1861,21 +1859,11 @@ class TestBootstrapCellPeriod:
     def test_bootstrap_se_matches_pre_pr4_baseline(self):
         """Bit-identity regression guard: under PSU=group the
         dispatcher routes through the legacy group-level bootstrap
-        path, so the overall bootstrap SE must match pre-PR-4 code
-        to ULP precision. The baseline values were captured on
-        `origin/main` at `ac181b7f` (the PR #329 merge) under each
-        backend independently.
+        path, so the overall bootstrap SE must match the pre-PR-4
+        pure-Python baseline to ULP precision under either backend
+        (PR #362 unified the multiplier-weight RNG on numpy PCG64, so
+        Rust and Python now produce the same value).
         """
-        from diff_diff._backend import HAS_RUST_BACKEND
-        pure_python = (
-            os.environ.get("DIFF_DIFF_BACKEND", "auto").lower() == "python"
-            or not HAS_RUST_BACKEND
-        )
-        expected = (
-            self._BASELINE_OVERALL_SE_PYTHON
-            if pure_python
-            else self._BASELINE_OVERALL_SE_RUST
-        )
         df_ = self._make_baseline_fixture()
         sd = SurveyDesign(weights="pw", psu="group")
         res = ChaisemartinDHaultfoeuille(n_bootstrap=500, seed=42).fit(
@@ -1885,12 +1873,11 @@ class TestBootstrapCellPeriod:
         )
         assert res.bootstrap_results is not None
         observed_se = float(res.bootstrap_results.overall_se)
-        backend_label = "pure-python" if pure_python else "rust"
         assert observed_se == pytest.approx(
-            expected, rel=0.0, abs=1e-15,
+            self._BASELINE_OVERALL_SE, rel=0.0, abs=1e-15,
         ), (
-            f"Bootstrap SE drifted from pre-PR-4 baseline "
-            f"(backend={backend_label}). expected={expected!r}, "
+            f"Bootstrap SE drifted from pre-PR-4 baseline. "
+            f"expected={self._BASELINE_OVERALL_SE!r}, "
             f"observed={observed_se!r}. The dispatcher's "
             f"PSU-within-group-constant routing is no longer "
             f"bit-identical to the legacy group-level bootstrap."
