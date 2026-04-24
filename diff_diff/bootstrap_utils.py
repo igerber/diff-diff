@@ -166,10 +166,11 @@ def generate_bootstrap_weights_batch(
     """
     Generate all bootstrap weights at once (vectorized).
 
-    Runs under the numpy PCG64 RNG exclusively, so the output is a
-    deterministic function of ``rng`` state regardless of whether the
-    Rust backend is available. A single ``seed`` therefore produces
-    identical multiplier-bootstrap weights in both installs.
+    Output is a deterministic function of the supplied ``rng`` state,
+    so a single ``seed`` produces identical multiplier-bootstrap weights
+    regardless of whether the Rust backend is compiled in. (Library
+    call sites seed via ``np.random.default_rng`` — PCG64 — but any
+    ``np.random.Generator`` is accepted.)
 
     Parameters
     ----------
