@@ -17,7 +17,6 @@ Use ``get_llm_guide("practitioner")`` for the 8-step workflow or
 # Import backend detection from dedicated module (avoids circular imports)
 from diff_diff._backend import (
     HAS_RUST_BACKEND,
-    _rust_bootstrap_weights,
     _rust_compute_robust_vcov,
     _rust_project_simplex,
     _rust_solve_ols,

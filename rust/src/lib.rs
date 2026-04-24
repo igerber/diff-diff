@@ -14,7 +14,6 @@ extern crate blas_src;
 use pyo3::prelude::*;
 use std::collections::HashMap;
 
-mod bootstrap;
 mod linalg;
 mod trop;
 mod weights;
@@ -22,12 +21,6 @@ mod weights;
 /// A Python module implemented in Rust for diff-diff acceleration.
 #[pymodule]
 fn _rust_backend(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    // Bootstrap weight generation
-    m.add_function(wrap_pyfunction!(
-        bootstrap::generate_bootstrap_weights_batch,
-        m
-    )?)?;
-
     // Simplex projection
     m.add_function(wrap_pyfunction!(weights::project_simplex, m)?)?;
 

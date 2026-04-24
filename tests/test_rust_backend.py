@@ -43,62 +43,35 @@ class TestRustBackend:
     # Bootstrap Weight Tests
     # =========================================================================
 
-    def test_bootstrap_weights_shape(self):
-        """Test bootstrap weights have correct shape."""
-        from diff_diff._rust_backend import generate_bootstrap_weights_batch
+    # The direct-Rust multiplier-bootstrap weight tests were removed when the
+    # Rust `generate_bootstrap_weights_batch` PyO3 binding was deleted as part
+    # of the silent-failures audit follow-up. Python's numpy implementation is
+    # now the canonical (and only) path, so `seed` is backend-invariant across
+    # all six downstream multiplier-bootstrap estimators. Distributional
+    # coverage lives in
+    # `tests/test_bootstrap_utils.py::TestBootstrapWeightsBatchDistributions`.
 
-        n_bootstrap, n_units = 100, 50
-        weights = generate_bootstrap_weights_batch(n_bootstrap, n_units, "rademacher", 42)
-        assert weights.shape == (n_bootstrap, n_units)
+    def test_rust_bootstrap_weights_batch_is_removed(self):
+        """Regression guard against accidental re-export of the deleted
+        `generate_bootstrap_weights_batch` PyO3 binding. The Rust RNG path
+        diverged from Python's numpy PCG64 under fixed seeds, producing
+        different multiplier-bootstrap SE / CI / p-values depending on
+        whether the Rust backend was compiled in. Removing the binding and
+        routing everything through the numpy helper closes that silent
+        failure. If this test fails, someone reintroduced the binding —
+        audit the reason before adding it back."""
+        import diff_diff._rust_backend as rb
 
-    def test_rademacher_weights_values(self):
-        """Test Rademacher weights are +-1."""
-        from diff_diff._rust_backend import generate_bootstrap_weights_batch
+        with pytest.raises(ImportError):
+            from diff_diff._rust_backend import (  # noqa: F401
+                generate_bootstrap_weights_batch,
+            )
 
-        weights = generate_bootstrap_weights_batch(100, 50, "rademacher", 42)
-        unique_vals = np.unique(weights)
-        assert len(unique_vals) == 2
-        assert set(unique_vals) == {-1.0, 1.0}
-
-    def test_rademacher_weights_mean_zero(self):
-        """Test Rademacher weights have approximately zero mean."""
-        from diff_diff._rust_backend import generate_bootstrap_weights_batch
-
-        weights = generate_bootstrap_weights_batch(10000, 1, "rademacher", 42)
-        mean = weights.mean()
-        assert abs(mean) < 0.05, f"Rademacher mean should be ~0, got {mean}"
-
-    def test_mammen_weights_mean_zero(self):
-        """Test Mammen weights have approximately zero mean."""
-        from diff_diff._rust_backend import generate_bootstrap_weights_batch
-
-        weights = generate_bootstrap_weights_batch(10000, 1, "mammen", 42)
-        mean = weights.mean()
-        assert abs(mean) < 0.05, f"Mammen mean should be ~0, got {mean}"
-
-    def test_webb_weights_mean_zero(self):
-        """Test Webb weights have approximately zero mean."""
-        from diff_diff._rust_backend import generate_bootstrap_weights_batch
-
-        weights = generate_bootstrap_weights_batch(10000, 1, "webb", 42)
-        mean = weights.mean()
-        assert abs(mean) < 0.1, f"Webb mean should be ~0, got {mean}"
-
-    def test_bootstrap_reproducibility(self):
-        """Test bootstrap weights are reproducible with same seed."""
-        from diff_diff._rust_backend import generate_bootstrap_weights_batch
-
-        weights1 = generate_bootstrap_weights_batch(100, 50, "rademacher", 42)
-        weights2 = generate_bootstrap_weights_batch(100, 50, "rademacher", 42)
-        np.testing.assert_array_equal(weights1, weights2)
-
-    def test_bootstrap_different_seeds(self):
-        """Test different seeds produce different weights."""
-        from diff_diff._rust_backend import generate_bootstrap_weights_batch
-
-        weights1 = generate_bootstrap_weights_batch(100, 50, "rademacher", 42)
-        weights2 = generate_bootstrap_weights_batch(100, 50, "rademacher", 43)
-        assert not np.array_equal(weights1, weights2)
+        assert not hasattr(rb, "generate_bootstrap_weights_batch"), (
+            "generate_bootstrap_weights_batch was removed from the Rust "
+            "backend to restore cross-backend RNG parity for multiplier "
+            "bootstrap; its presence here indicates accidental re-export."
+        )
 
     # =========================================================================
     # Synthetic Weight Tests
@@ -664,55 +637,10 @@ class TestRustVsNumpy:
     # Bootstrap Weights Equivalence (Statistical Properties)
     # =========================================================================
 
-    def test_bootstrap_weights_rademacher_properties(self):
-        """Test Rust Rademacher weights have correct statistical properties."""
-        from diff_diff._rust_backend import generate_bootstrap_weights_batch as rust_fn
-
-        # Generate large sample for statistical tests
-        n_bootstrap, n_units = 10000, 100
-        weights = rust_fn(n_bootstrap, n_units, "rademacher", 42)
-
-        # Rademacher: values are +-1, mean ~0, variance ~1
-        unique_vals = np.unique(weights)
-        assert set(unique_vals) == {-1.0, 1.0}, "Rademacher weights should be +-1"
-
-        mean = weights.mean()
-        assert abs(mean) < 0.02, f"Rademacher mean should be ~0, got {mean}"
-
-        var = weights.var()
-        assert abs(var - 1.0) < 0.02, f"Rademacher variance should be ~1, got {var}"
-
-    def test_bootstrap_weights_mammen_properties(self):
-        """Test Rust Mammen weights have correct statistical properties."""
-        from diff_diff._rust_backend import generate_bootstrap_weights_batch as rust_fn
-
-        n_bootstrap, n_units = 10000, 100
-        weights = rust_fn(n_bootstrap, n_units, "mammen", 42)
-
-        # Mammen: E[w] = 0, E[w^2] = 1, E[w^3] = 1
-        mean = weights.mean()
-        assert abs(mean) < 0.02, f"Mammen mean should be ~0, got {mean}"
-
-        second_moment = (weights ** 2).mean()
-        assert abs(second_moment - 1.0) < 0.02, f"Mammen E[w^2] should be ~1, got {second_moment}"
-
-        third_moment = (weights ** 3).mean()
-        assert abs(third_moment - 1.0) < 0.1, f"Mammen E[w^3] should be ~1, got {third_moment}"
-
-    def test_bootstrap_weights_webb_properties(self):
-        """Test Rust Webb weights have correct statistical properties."""
-        from diff_diff._rust_backend import generate_bootstrap_weights_batch as rust_fn
-
-        n_bootstrap, n_units = 10000, 100
-        weights = rust_fn(n_bootstrap, n_units, "webb", 42)
-
-        # Webb: 6-point distribution with E[w] = 0
-        mean = weights.mean()
-        assert abs(mean) < 0.1, f"Webb mean should be ~0, got {mean}"
-
-        # Should have 6 unique values
-        unique_vals = np.unique(weights.flatten())
-        assert len(unique_vals) == 6, f"Webb should have 6 unique values, got {len(unique_vals)}"
+    # Moved to
+    # `tests/test_bootstrap_utils.py::TestBootstrapWeightsBatchDistributions`
+    # after the Rust `generate_bootstrap_weights_batch` binding was removed
+    # and the Python numpy helper became the canonical path.
 
     # =========================================================================
     # Synthetic Weights Equivalence

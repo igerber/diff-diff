@@ -10,8 +10,6 @@ from typing import Optional, Tuple
 
 import numpy as np
 
-from diff_diff._backend import HAS_RUST_BACKEND, _rust_bootstrap_weights
-
 __all__ = [
     "generate_bootstrap_weights",
     "generate_bootstrap_weights_batch",
@@ -168,38 +166,10 @@ def generate_bootstrap_weights_batch(
     """
     Generate all bootstrap weights at once (vectorized).
 
-    Uses Rust backend if available for parallel generation.
-
-    Parameters
-    ----------
-    n_bootstrap : int
-        Number of bootstrap iterations.
-    n_units : int
-        Number of units (clusters) to generate weights for.
-    weight_type : str
-        Type of weights: "rademacher", "mammen", or "webb".
-    rng : np.random.Generator
-        Random number generator.
-
-    Returns
-    -------
-    np.ndarray
-        Array of bootstrap weights with shape (n_bootstrap, n_units).
-    """
-    if HAS_RUST_BACKEND and _rust_bootstrap_weights is not None:
-        seed = rng.integers(0, 2**63 - 1)
-        return _rust_bootstrap_weights(n_bootstrap, n_units, weight_type, seed)
-    return generate_bootstrap_weights_batch_numpy(n_bootstrap, n_units, weight_type, rng)
-
-
-def generate_bootstrap_weights_batch_numpy(
-    n_bootstrap: int,
-    n_units: int,
-    weight_type: str,
-    rng: np.random.Generator,
-) -> np.ndarray:
-    """
-    NumPy fallback implementation of :func:`generate_bootstrap_weights_batch`.
+    Runs under the numpy PCG64 RNG exclusively, so the output is a
+    deterministic function of ``rng`` state regardless of whether the
+    Rust backend is available. A single ``seed`` therefore produces
+    identical multiplier-bootstrap weights in both installs.
 
     Parameters
     ----------
@@ -241,6 +211,11 @@ def generate_bootstrap_weights_batch_numpy(
         raise ValueError(
             f"weight_type must be 'rademacher', 'mammen', or 'webb', " f"got '{weight_type}'"
         )
+
+
+# Alias kept for backward compatibility with callers that imported the
+# explicit numpy variant; both names resolve to the same implementation.
+generate_bootstrap_weights_batch_numpy = generate_bootstrap_weights_batch
 
 
 def compute_percentile_ci(

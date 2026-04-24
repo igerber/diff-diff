@@ -8,6 +8,8 @@ import pytest
 from diff_diff.bootstrap_utils import (
     compute_effect_bootstrap_stats,
     compute_effect_bootstrap_stats_batch,
+    generate_bootstrap_weights_batch,
+    generate_bootstrap_weights_batch_numpy,
     stratified_bootstrap_indices,
     warn_bootstrap_failure_rate,
 )
@@ -267,3 +269,124 @@ class TestStratifiedBootstrapIndices:
         assert ctrl.shape == (4, 3)
         assert trt.shape == (4, 0)
         assert ctrl.min() >= 0 and ctrl.max() < 3
+
+
+class TestBootstrapWeightsBatchDistributions:
+    """Distributional coverage for the numpy multiplier-weight helper.
+
+    Ported from the deleted Rust-backend tests when the Rust
+    ``generate_bootstrap_weights_batch`` binding was removed (silent-failures
+    audit follow-up). The numpy helper is now the sole code path, so these
+    tests cover shape, support, and statistical moments for each of the
+    Rademacher, Mammen, and Webb multiplier distributions.
+    """
+
+    def test_alias_is_same_function(self):
+        """``generate_bootstrap_weights_batch_numpy`` is a back-compat alias."""
+        assert generate_bootstrap_weights_batch_numpy is generate_bootstrap_weights_batch
+
+    def test_invalid_weight_type_raises(self):
+        rng = np.random.default_rng(0)
+        with pytest.raises(ValueError, match="weight_type must be"):
+            generate_bootstrap_weights_batch(5, 3, "unknown", rng)
+
+    def test_rademacher_shape_and_support(self):
+        rng = np.random.default_rng(42)
+        weights = generate_bootstrap_weights_batch(100, 50, "rademacher", rng)
+        assert weights.shape == (100, 50)
+        assert set(np.unique(weights)) == {-1.0, 1.0}
+
+    def test_rademacher_mean_and_variance(self):
+        rng = np.random.default_rng(42)
+        weights = generate_bootstrap_weights_batch(10000, 100, "rademacher", rng)
+        assert abs(weights.mean()) < 0.02, f"mean={weights.mean()}"
+        assert abs(weights.var() - 1.0) < 0.02, f"var={weights.var()}"
+
+    def test_mammen_moments(self):
+        rng = np.random.default_rng(42)
+        weights = generate_bootstrap_weights_batch(10000, 100, "mammen", rng)
+        # Mammen: E[w]=0, E[w^2]=1, E[w^3]=1
+        assert abs(weights.mean()) < 0.02, f"E[w]={weights.mean()}"
+        assert abs((weights**2).mean() - 1.0) < 0.02, f"E[w^2]={(weights ** 2).mean()}"
+        assert abs((weights**3).mean() - 1.0) < 0.1, f"E[w^3]={(weights ** 3).mean()}"
+        # Support is exactly two values
+        unique = np.unique(weights)
+        assert len(unique) == 2, f"Mammen has two-point support, got {len(unique)}"
+
+    def test_webb_support_and_moments(self):
+        rng = np.random.default_rng(42)
+        weights = generate_bootstrap_weights_batch(10000, 100, "webb", rng)
+        # Webb: six-point support, E[w]=0, Var[w]=1
+        unique = np.unique(weights)
+        assert len(unique) == 6, f"Webb has six-point support, got {len(unique)}"
+        assert abs(weights.mean()) < 0.05, f"E[w]={weights.mean()}"
+        assert abs(weights.var() - 1.0) < 0.05, f"Var[w]={weights.var()}"
+
+    def test_reproducibility_same_seed(self):
+        rng1 = np.random.default_rng(42)
+        rng2 = np.random.default_rng(42)
+        w1 = generate_bootstrap_weights_batch(100, 50, "rademacher", rng1)
+        w2 = generate_bootstrap_weights_batch(100, 50, "rademacher", rng2)
+        np.testing.assert_array_equal(w1, w2)
+
+    def test_different_seeds_differ(self):
+        rng1 = np.random.default_rng(42)
+        rng2 = np.random.default_rng(43)
+        w1 = generate_bootstrap_weights_batch(100, 50, "rademacher", rng1)
+        w2 = generate_bootstrap_weights_batch(100, 50, "rademacher", rng2)
+        assert not np.array_equal(w1, w2)
+
+    def test_value_pin_default_rng_42_rademacher(self):
+        """Byte-level pin of ``default_rng(42)`` Rademacher output.
+
+        Catches silent numpy-RNG stream drift across numpy versions. Mirror
+        of the ``TestStratifiedBootstrapIndices::test_value_pin_default_rng_42``
+        pattern.
+        """
+        rng = np.random.default_rng(42)
+        w = generate_bootstrap_weights_batch(5, 3, "rademacher", rng)
+        expected = np.array(
+            [
+                [-1.0, 1.0, 1.0],
+                [-1.0, -1.0, 1.0],
+                [-1.0, 1.0, -1.0],
+                [-1.0, 1.0, 1.0],
+                [1.0, 1.0, 1.0],
+            ]
+        )
+        np.testing.assert_array_equal(w, expected)
+
+    def test_value_pin_default_rng_42_mammen(self):
+        """Byte-level pin of ``default_rng(42)`` Mammen output."""
+        rng = np.random.default_rng(42)
+        w = generate_bootstrap_weights_batch(5, 3, "mammen", rng)
+        sqrt5 = np.sqrt(5.0)
+        neg = -(sqrt5 - 1.0) / 2.0
+        pos = (sqrt5 + 1.0) / 2.0
+        expected = np.array(
+            [
+                [pos, neg, pos],
+                [neg, neg, pos],
+                [pos, pos, neg],
+                [neg, neg, pos],
+                [neg, pos, neg],
+            ]
+        )
+        np.testing.assert_allclose(w, expected, atol=1e-14, rtol=1e-14)
+
+    def test_value_pin_default_rng_42_webb(self):
+        """Byte-level pin of ``default_rng(42)`` Webb output."""
+        rng = np.random.default_rng(42)
+        w = generate_bootstrap_weights_batch(5, 3, "webb", rng)
+        v3 = np.sqrt(3.0 / 2.0)
+        v1 = np.sqrt(1.0 / 2.0)
+        expected = np.array(
+            [
+                [-v3, 1.0, v1],
+                [-v1, -v1, v3],
+                [-v3, 1.0, -1.0],
+                [-v3, v1, v3],
+                [1.0, 1.0, 1.0],
+            ]
+        )
+        np.testing.assert_allclose(w, expected, atol=1e-14, rtol=1e-14)
