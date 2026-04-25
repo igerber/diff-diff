@@ -35,7 +35,7 @@ faer = "0.24"
 
 # BLAS backend (optional, activated by accelerate/openblas features)
 # blas-src 0.10 is ndarray's tested version (see ndarray/crates/blas-tests/Cargo.toml)
-blas-src = { version = "0.10", optional = true }
+blas-src = { version = "0.14", optional = true }
 
 [profile.release]
 lto = true
