@@ -965,6 +965,30 @@ class TestWorkflowContract:
         via .git/config reads."""
         assert "persist-credentials: false" in workflow_text
 
+    def test_notebook_extraction_loop_and_caps_pinned(self, workflow_text):
+        """The CHANGELOG entry explicitly claims the workflow extracts
+        changed tutorial notebooks via the trusted extractor, applies
+        per-output and per-notebook char caps, writes the result to
+        /tmp/notebook-prose.md, and passes the file to openai_review.py
+        via --notebook-prose. Pin each piece so a future workflow edit
+        cannot silently drop one while extractor unit tests continue to
+        pass. (Claim-vs-shipped audit per pr_review.md Section 6.)"""
+        for required in [
+            'python3 /tmp/notebook_md_extract.py --input "$nb"',
+            "--max-output-chars 20000",
+            "--max-total-chars 200000",
+            "/tmp/notebook-prose.md",
+            "ARGS+=(--notebook-prose /tmp/notebook-prose.md)",
+            # Diff still excludes raw .ipynb — markdown extraction is the
+            # substitute, not an addition on top of the JSON blob.
+            "':!docs/tutorials/*.ipynb'",
+        ]:
+            assert required in workflow_text, (
+                f"Workflow contract missing: {required!r} not found in "
+                f"ai_pr_review.yml. The CHANGELOG claims this behavior "
+                f"shipped — a future workflow edit must not silently drop it."
+            )
+
     def test_passes_required_flags(self, workflow_text):
         for flag in [
             "--ci-mode",
