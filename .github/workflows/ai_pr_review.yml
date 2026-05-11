@@ -81,13 +81,52 @@ jobs:
       - uses: actions/checkout@v6
         with:
           ref: refs/pull/${{ steps.pr.outputs.number }}/merge
+          # Strip GITHUB_TOKEN from .git/config so PR-controlled code in
+          # later steps cannot exfiltrate it via `git config` reads. The
+          # subsequent `git fetch` re-supplies the token via extraheader.
+          persist-credentials: false
 
       - name: Pre-fetch base and head refs
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          git fetch --no-tags origin \
-            "${{ steps.pr.outputs.base_ref }}" \
-            +refs/pull/${{ steps.pr.outputs.number }}/head
+          # Token passed via extraheader env-scoped to this step only; not
+          # persisted in .git/config (per persist-credentials: false above).
+          git -c http.extraheader="Authorization: bearer ${GH_TOKEN}" \
+            fetch --no-tags origin \
+              "${{ steps.pr.outputs.base_ref }}" \
+              +refs/pull/${{ steps.pr.outputs.number }}/head
+
+      - name: Stage trusted reviewer prompt + script + extractor from base
+        env:
+          BASE_SHA: ${{ steps.pr.outputs.base_sha }}
+        run: |
+          set -euo pipefail
+          # Stage the reviewer prompt, prompt-builder script, and notebook
+          # extractor from BASE_SHA — NOT from the PR checkout. A malicious
+          # PR could otherwise rewrite reviewer instructions, exfiltrate
+          # OPENAI_API_KEY via the script, or inject code into the prompt
+          # before the secret-bearing API call. Diff content for these
+          # files remains visible in the unified diff appended below, so
+          # changes are still reviewed — they just do not take effect on
+          # this run.
+          #
+          # Fail-closed staging — pr_review.md and openai_review.py MUST
+          # exist on base; if absent, the workflow aborts rather than
+          # silently fall through to the PR-controlled version.
+          git show "$BASE_SHA:.github/codex/prompts/pr_review.md" > /tmp/pr_review.md
+          git show "$BASE_SHA:.claude/scripts/openai_review.py" > /tmp/openai_review.py
+          echo "Trusted reviewer prompt + script staged from base SHA $BASE_SHA."
+          # Bootstrap-safe — the extractor is being added in this PR, so
+          # the first PR (THIS one) will not find it on base. After merge,
+          # subsequent PRs always find it.
+          if git show "$BASE_SHA:tools/notebook_md_extract.py" > /tmp/notebook_md_extract.py 2>/dev/null; then
+            echo "Trusted extractor staged from base SHA."
+          else
+            rm -f /tmp/notebook_md_extract.py
+            echo "Base SHA does not contain tools/notebook_md_extract.py; tutorial prose extraction will be skipped for this run (one-shot bootstrap)."
+          fi
 
       - name: Fetch previous AI review (if any)
         id: prev_review
@@ -107,7 +146,7 @@ jobs:
             core.setOutput("body", last ? last.body : "");
             core.setOutput("found", last ? "true" : "false");
 
-      - name: Build review inputs (diff + previous review)
+      - name: Build review inputs (diff + previous review + notebook prose)
         env:
           BASE_SHA: ${{ steps.pr.outputs.base_sha }}
           HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
@@ -119,7 +158,9 @@ jobs:
 
           # Exclude large generated/data files from the full diff to stay
           # within the model's input limit. The --name-status output still
-          # lists them. Narrowed to real-data assets and notebook outputs.
+          # lists them. Notebook JSON is also excluded here; tutorial prose
+          # is appended via /tmp/notebook-prose.md below as a markdown
+          # extract instead.
           git --no-pager diff --unified=5 "$BASE_SHA" "$HEAD_SHA" \
             -- . ':!benchmarks/data/real/*.json' ':!benchmarks/data/real/*.csv' \
                  ':!docs/tutorials/*.ipynb' \
@@ -130,6 +171,28 @@ jobs:
 
           if [ "$IS_RERUN" = "true" ] && [ "$PREV_REVIEW_FOUND" = "true" ]; then
             printf '%s\n' "$PREV_REVIEW" > /tmp/previous-review.md
+          fi
+
+          # Extract tutorial notebook prose from changed .ipynb files using
+          # the BASE-staged extractor (see "Stage trusted ... from base"
+          # above). Per-output cap 20000 chars, per-notebook cap 200000
+          # chars. Fail-soft per notebook: a malformed notebook degrades
+          # to a placeholder line rather than killing the AI review job.
+          # Skip entirely if the extractor isn't on BASE (bootstrap).
+          if [ -f /tmp/notebook_md_extract.py ]; then
+            git --no-pager diff --name-only "$BASE_SHA" "$HEAD_SHA" \
+              -- 'docs/tutorials/*.ipynb' | while IFS= read -r nb; do
+              if [ -f "$nb" ]; then
+                echo ""
+                echo "--- $nb ---"
+                python3 /tmp/notebook_md_extract.py --input "$nb" \
+                    --max-output-chars 20000 --max-total-chars 200000 \
+                  || echo "(extraction failed for $nb)"
+              fi
+            done > /tmp/notebook-prose.md
+            if [ ! -s /tmp/notebook-prose.md ]; then
+              rm -f /tmp/notebook-prose.md
+            fi
           fi
 
       - name: Run AI review (single-shot Responses API)
@@ -148,8 +211,14 @@ jobs:
           # Use --key=value form for untrusted PR title/body so argparse
           # cannot misinterpret an option-looking value (e.g. a PR body
           # starting with "--") as a separate flag and break the job.
+          # --review-criteria and the script itself are sourced from
+          # /tmp/ (staged from BASE_SHA in the "Stage trusted ... from
+          # base" step) — NOT from the PR checkout. This prevents a
+          # malicious PR from modifying the reviewer prompt or the
+          # prompt-builder script before the API call with
+          # OPENAI_API_KEY in env.
           ARGS=(--ci-mode --full-registry --context standard --model gpt-5.5
-                --review-criteria .github/codex/prompts/pr_review.md
+                --review-criteria /tmp/pr_review.md
                 --registry docs/methodology/REGISTRY.md
                 --diff /tmp/pr-diff.patch
                 --changed-files /tmp/pr-files.txt
@@ -161,7 +230,10 @@ jobs:
           if [ "$IS_RERUN" = "true" ] && [ -f /tmp/previous-review.md ]; then
             ARGS+=(--previous-review /tmp/previous-review.md)
           fi
-          python3 .claude/scripts/openai_review.py "${ARGS[@]}"
+          if [ -f /tmp/notebook-prose.md ]; then
+            ARGS+=(--notebook-prose /tmp/notebook-prose.md)
+          fi
+          python3 /tmp/openai_review.py "${ARGS[@]}"
 
       - name: Post PR comment (new on /ai-review, update on opened)
         uses: actions/github-script@v9
