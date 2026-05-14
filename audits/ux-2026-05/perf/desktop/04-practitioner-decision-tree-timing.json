@@ -1,0 +1,9 @@
+{
+  "DOMContentLoaded_ms": 123,
+  "load_ms": 262,
+  "FCP_ms": 120,
+  "htmlTransferSize_KB": 14,
+  "htmlDecodedSize_KB": 70,
+  "resourceCount": 25,
+  "totalResourceTransfer_KB": 1
+}
