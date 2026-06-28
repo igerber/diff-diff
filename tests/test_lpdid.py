@@ -153,6 +153,23 @@ class TestLPDiDAPI:
                 df, outcome="y", unit="unit", time="time", treatment="treat", covariates="x"
             )
 
+    def test_rejects_reserved_internal_column_names(self):
+        # a covariate/absorb colliding with an LPDiD working column (e.g. "_entry")
+        # must be rejected, not silently overwrite the internal column.
+        df = pd.DataFrame(
+            {
+                "unit": [1, 1, 2, 2],
+                "time": [0, 1, 0, 1],
+                "y": [1.0, 2, 1, 1],
+                "treat": [0, 1, 0, 0],
+                "_entry": [0.0, 0.0, 0.0, 0.0],
+            }
+        )
+        with pytest.raises(ValueError, match="reserved"):
+            LPDiD().fit(
+                df, outcome="y", unit="unit", time="time", treatment="treat", covariates=["_entry"]
+            )
+
     def test_rejects_missing_cluster_labels(self):
         df = pd.DataFrame(
             {

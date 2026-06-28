@@ -1857,7 +1857,7 @@ The paper specifies no standard-error formula (Section 1 defers to "standard, we
 - [x] Cluster-robust SE at unit level by default; NaN-consistent inference via `safe_inference` (PR-B1)
 - [x] `LPDiDResults` with `summary()` / `to_dict()` / cluster metadata (PR-B1)
 - [x] doc-deps.yaml mapping for `diff_diff/lpdid.py` + `lpdid_results.py`; llms.txt / llms-full.txt catalog entries (PR-B1, test-enforced)
-- [ ] B1 tests: analytical DGPs + cross-estimator equivalence (CS / BJS / Stacked / DiD)
+- [x] B1 pure-Python tests: analytical DGPs + cross-estimator equivalence (CS / BJS / DiD; Cengiz-stacked dropped, documented) + unbalanced / interior-gap / RA-overlap / pmd-missing edge cases (PR-B1)
 - [ ] B2: self-generated R-parity (authors' `danielegirardi/lpdid` + `alexCardazzi/lpdid` cross-check)
 - [ ] Non-absorbing extension (Section 4.2) - deferred to a later PR
 - [ ] Survey-design support - deferred to a later PR

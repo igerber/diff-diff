@@ -933,6 +933,22 @@ class LPDiD:
         self.is_fitted_ = False
         self._fit_meta = None
 
+        # Validate covariate/absorb shape and reserved names BEFORE building the
+        # required-columns list, so a string (e.g. absorb="region") raises the
+        # precise "must be a list" error rather than an iterate-characters
+        # missing-column error, and a name colliding with an LPDiD working column
+        # is rejected up front.
+        for _arg_name, _arg in (("covariates", covariates), ("absorb", absorb)):
+            if isinstance(_arg, str):
+                raise ValueError(f"{_arg_name} must be a list of column names, not a string")
+            for _col in _arg or []:
+                if isinstance(_col, str) and (_col.startswith("_") or _col == "horizon"):
+                    raise ValueError(
+                        f"{_arg_name} column '{_col}' collides with an LPDiD reserved/internal "
+                        "name (names starting with '_' or named 'horizon' are reserved by the "
+                        "estimator's working columns); rename it."
+                    )
+
         required = [outcome, unit, time, treatment]
         if covariates:
             required.extend(covariates)
@@ -968,10 +984,6 @@ class LPDiD:
                 "the global time grid is irregular (e.g. 2000, 2002, ...). Remap periods "
                 "to consecutive integers first so t-1 / t+h horizons are well defined."
             )
-        for _arg_name, _arg in (("covariates", covariates), ("absorb", absorb)):
-            if isinstance(_arg, str):
-                raise ValueError(f"{_arg_name} must be a list of column names, not a string")
-
         if (covariates or absorb or ylags or dylags) and not self.reweight:
             warnings.warn(
                 "LPDiD: covariate-style controls (covariates, outcome lags `ylags`, "

@@ -164,7 +164,7 @@ class LPDiDResults:
             "Local Projections DiD (Dube, Girardi, Jorda & Taylor 2025) Results".center(width),
             bar,
             f"Observations: {self.n_obs}    Treated units: {self.n_treated_units}"
-            f"    Control units: {self.n_control_units}",
+            f"    Never-treated units: {self.n_control_units}",
             f"Estimand: {self.estimand}    Control group: {self.control_group}",
             f"Base period: {self._base_period_label()}    No composition: {self.no_composition}",
         ]
