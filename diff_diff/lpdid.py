@@ -103,8 +103,13 @@ class LPDiD:
         first_treat = panel.loc[panel["_entry"] == 1].groupby(unit)[time].min()
         panel["_first_treat"] = panel[unit].map(first_treat).astype(float).fillna(np.inf)
 
+        # Premean ("max") baseline = mean of all AVAILABLE prior outcomes. The
+        # denominator must count non-missing prior outcomes, not prior rows, so a
+        # present-but-NaN pretreatment outcome does not deflate the mean. (cumsum
+        # already skips NaN, so the numerator is the non-missing prior sum.)
         outcome_history_sum = panel.groupby(unit)[outcome].cumsum() - panel[outcome]
-        history_count = panel.groupby(unit).cumcount()
+        prior_nonnull = panel[outcome].notna().astype(int)
+        history_count = prior_nonnull.groupby(panel[unit]).cumsum() - prior_nonnull
         panel["_pmd_all_baseline"] = outcome_history_sum / history_count.replace(0, np.nan)
 
         lagged_outcome = panel.groupby(unit)[outcome].shift(1)
@@ -854,16 +859,17 @@ class LPDiD:
         if not isinstance(dylags, int) or isinstance(dylags, bool) or dylags < 0:
             raise ValueError("dylags must be a non-negative integer")
 
-        if (covariates or absorb) and not self.reweight:
+        if (covariates or absorb or ylags or dylags) and not self.reweight:
             warnings.warn(
-                "LPDiD: covariates/absorbed factors are entering the long-difference "
-                "regression by direct inclusion (reweight=False). Per Dube, Girardi, "
-                "Jorda & Taylor (2025) online Appendix B.2.2, direct covariate inclusion "
-                "preserves the non-negative LP-DiD weighting result only under linear and "
-                "homogeneous covariate effects (Assumption 6 / Appendix B.2.1); under "
-                "heterogeneous covariate effects the implied weights are not guaranteed "
-                "non-negative. For the recommended regression-adjustment covariate path, "
-                "set reweight=True (Appendix B.2.2 / Section 4.1).",
+                "LPDiD: covariate-style controls (covariates, outcome lags `ylags`, "
+                "first-difference lags `dylags`, and absorbed factors) are entering the "
+                "long-difference regression by direct inclusion (reweight=False). Per "
+                "Dube, Girardi, Jorda & Taylor (2025) online Appendix B.2.2, direct "
+                "inclusion preserves the non-negative LP-DiD weighting result only under "
+                "linear and homogeneous control effects (Assumption 6 / Appendix B.2.1); "
+                "otherwise the implied weights are not guaranteed non-negative. For the "
+                "recommended regression-adjustment path, set reweight=True "
+                "(Appendix B.2.2 / Section 4.1).",
                 UserWarning,
                 stacklevel=2,
             )

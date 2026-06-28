@@ -880,3 +880,49 @@ class TestLPDiDUnbalanced:
         )
         assert base.to_dict()["vcov_type"] == "hc1"
         assert "CR1 cluster-robust" in base.summary()
+
+    def test_pmd_max_excludes_present_but_nan_pretreatment(self):
+        # A present-but-NaN pretreatment outcome must not deflate the premean
+        # baseline: the denominator counts non-missing prior outcomes, not rows.
+        rows = []
+        for u in (1, 2):
+            for t, y in enumerate([10.0, np.nan, 30.0, 40.0, 50.0]):
+                rows.append({"unit": u, "time": t, "y": y, "treat": int(t >= 3)})
+        for u, base in {3: 0, 4: 1, 5: 2, 6: 3}.items():
+            for t in range(5):
+                rows.append({"unit": u, "time": t, "y": float(base + t), "treat": 0})
+        df = pd.DataFrame(rows)
+        est = LPDiD(pre_window=2, post_window=1, pmd="max")
+        est.fit(df, outcome="y", unit="unit", time="time", treatment="treat", only_event=True)
+        panel = est._prepare_panel(
+            df, outcome="y", unit="unit", time="time", treatment="treat", cluster="unit"
+        )
+        baseline = panel.loc[(panel["unit"] == 1) & (panel["time"] == 3), "_pmd_all_baseline"].iloc[
+            0
+        ]
+        assert baseline == pytest.approx(20.0, abs=1e-9)  # mean(10, 30); NaN at t=1 excluded
+
+    def test_ylags_dylags_trigger_direct_inclusion_warning(self):
+        # Outcome/first-difference lags are direct-included controls under
+        # reweight=False, so they fire the same homogeneity warning as covariates.
+        df = make_lpdid_panel(cohorts=(5,), n_per_cohort=10, n_never=10, n_periods=10, seed=4)
+        with pytest.warns(UserWarning, match="covariate-style controls"):
+            LPDiD(pre_window=2, post_window=2).fit(
+                df,
+                outcome="y",
+                unit="unit",
+                time="time",
+                treatment="treat",
+                ylags=1,
+                only_event=True,
+            )
+        with pytest.warns(UserWarning, match="covariate-style controls"):
+            LPDiD(pre_window=2, post_window=2).fit(
+                df,
+                outcome="y",
+                unit="unit",
+                time="time",
+                treatment="treat",
+                dylags=1,
+                only_event=True,
+            )
