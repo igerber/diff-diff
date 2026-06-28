@@ -1026,3 +1026,137 @@ class TestLPDiDUnbalanced:
         )
         post_g = res.pooled.loc[res.pooled["window"] == "post", "n_clusters"].iloc[0]
         assert res.n_clusters == int(post_g)
+
+
+class TestLPDiDInteriorGaps:
+    """Interior per-unit time gaps must be handled by calendar-correct feature
+    construction (reindex each unit to its interior grid), NOT by the previous-
+    observed-row semantics of ``shift()``/``diff()``/``rolling()``."""
+
+    @staticmethod
+    def _gapped_panel():
+        # unit 1 = never-treated control with an INTERIOR gap at t=2 (observed 0,1,3,4);
+        # units 2-4 = regular controls; units 5-6 = treated with a +2 jump from t=2.
+        rows = [(1, 0, 10.0, 0), (1, 1, 11.0, 0), (1, 3, 13.0, 0), (1, 4, 14.0, 0)]
+        for u in (2, 3, 4):
+            for t in range(5):
+                rows.append((u, t, float(u + t), 0))
+        for u in (5, 6):
+            for t in range(5):
+                rows.append((u, t, float(10 + u + t + (2.0 if t >= 2 else 0.0)), int(t >= 2)))
+        return pd.DataFrame(rows, columns=["unit", "time", "y", "treat"])
+
+    def test_lag_features_are_calendar_correct_across_gap(self):
+        df = self._gapped_panel()
+        est = LPDiD(pre_window=1, post_window=2)
+        panel = est._prepare_panel(
+            df,
+            outcome="y",
+            unit="unit",
+            time="time",
+            treatment="treat",
+            cluster="unit",
+            ylags=1,
+            dylags=1,
+        )
+        u1 = panel[panel["unit"] == 1].set_index("time")
+        # calendar t-1 = 2 is a gap -> NaN, NOT the previous-observed value at t=1
+        assert np.isnan(u1.loc[3, "_y_lag_1"])
+        assert np.isnan(u1.loc[3, "_dy_current"])
+        # rows whose calendar t-1 IS observed are unaffected
+        assert u1.loc[4, "_y_lag_1"] == 13.0
+        assert u1.loc[1, "_y_lag_1"] == 10.0
+
+    def test_pmd_int_baseline_fails_closed_across_gap(self):
+        df = self._gapped_panel()
+        est = LPDiD(pre_window=1, post_window=2, pmd=2)
+        panel = est._prepare_panel(
+            df,
+            outcome="y",
+            unit="unit",
+            time="time",
+            treatment="treat",
+            cluster="unit",
+        )
+        u1 = panel[panel["unit"] == 1].set_index("time")
+        # the 2-period premean window at t=4 spans the t=2 gap -> NaN (not last-2-observed)
+        assert np.isnan(u1.loc[4, "_pmd_k_baseline"])
+
+    def test_gap_rows_dropped_and_no_nan_cluster(self):
+        df = self._gapped_panel()
+        est = LPDiD(pre_window=1, post_window=2)
+        panel = est._prepare_panel(
+            df,
+            outcome="y",
+            unit="unit",
+            time="time",
+            treatment="treat",
+            cluster="unit",
+        )
+        # only the 4 observed rows of unit 1 survive; the synthetic t=2 gap row is dropped
+        assert int((panel["unit"] == 1).sum()) == 4
+        assert len(panel) == len(df)
+        # no phantom NaN-cluster row can reach the variance computation
+        assert not panel["_cluster"].isna().any()
+
+    def test_fit_on_gapped_panel_recovers_effect_with_finite_clusters(self):
+        df = self._gapped_panel()
+        res = LPDiD(pre_window=1, post_window=2).fit(
+            df,
+            outcome="y",
+            unit="unit",
+            time="time",
+            treatment="treat",
+            only_event=True,
+        )
+        post = res.event_study[res.event_study["horizon"] >= 0]
+        assert np.isfinite(post["coefficient"]).all()
+        assert (post["n_clusters"].dropna() >= 1).all()  # no NaN-cluster inflation
+        assert np.allclose(post["coefficient"], 2.0, atol=1e-6)  # +2 recovered despite the gap
+
+    def test_regular_panel_takes_early_out(self):
+        # a contiguous panel returns exactly its input rows (no reindex, no fabricated rows)
+        df = make_lpdid_panel(cohorts=(5,), n_per_cohort=8, n_never=8, n_periods=10, seed=1)
+        est = LPDiD(pre_window=2, post_window=2)
+        panel = est._prepare_panel(
+            df,
+            outcome="y",
+            unit="unit",
+            time="time",
+            treatment="treat",
+            cluster="unit",
+        )
+        assert len(panel) == len(df)
+
+    def test_entry_is_first_observed_treated_with_pre_onset_gap(self):
+        # unit 1 observed 0,1,4,5 (gap at 2-3), treated from t=4 -> entry = first OBSERVED
+        # treated period = 4 (the unobservable pre-onset gap cannot move it earlier).
+        rows = [(1, 0, 1.0, 0), (1, 1, 1.0, 0), (1, 4, 5.0, 1), (1, 5, 6.0, 1)]
+        for u in (2, 3):
+            for t in range(6):
+                rows.append((u, t, float(t), 0))
+        df = pd.DataFrame(rows, columns=["unit", "time", "y", "treat"])
+        est = LPDiD(pre_window=1, post_window=1)
+        panel = est._prepare_panel(
+            df,
+            outcome="y",
+            unit="unit",
+            time="time",
+            treatment="treat",
+            cluster="unit",
+        )
+        assert panel.loc[panel["unit"] == 1, "_first_treat"].iloc[0] == 4.0
+        ent = panel[(panel["unit"] == 1) & (panel["_entry"] == 1.0)]
+        assert ent["time"].tolist() == [4]
+
+    def test_rejects_fractional_time_labels(self):
+        df = pd.DataFrame(
+            {
+                "unit": [1, 1, 2, 2],
+                "time": [0.5, 1.5, 0.5, 1.5],
+                "y": [1.0, 2, 1, 1],
+                "treat": [0, 1, 0, 0],
+            }
+        )
+        with pytest.raises(ValueError, match="integer-valued"):
+            LPDiD().fit(df, outcome="y", unit="unit", time="time", treatment="treat")

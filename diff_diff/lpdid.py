@@ -101,19 +101,50 @@ class LPDiD:
                 "cluster-robust standard errors with missing cluster labels (the affected "
                 "rows would silently drop from the variance)."
             )
-        panel["_lag_treated"] = panel.groupby(unit)["_treated"].shift(1, fill_value=0)
-        panel["_entry"] = ((panel["_treated"] == 1) & (panel["_lag_treated"] == 0)).astype(float)
-        panel["_treated_cummax"] = panel.groupby(unit)["_treated"].cummax()
 
-        violating_units = panel.loc[panel["_treated_cummax"] > panel["_treated"], unit].unique()
-        if len(violating_units) > 0:
+        # Absorbing-path validation and entry detection run on the OBSERVED rows,
+        # BEFORE any calendar reindex below (the absorbing fill would otherwise make
+        # the monotonicity check trivially pass, and gap rows carry NaN clusters).
+        treated_cummax = panel.groupby(unit)["_treated"].cummax()
+        if (treated_cummax > panel["_treated"]).any():
             raise ValueError(
                 "LPDiD currently requires an absorbing treatment path "
                 "(once treated, always treated)"
             )
+        # Entry = first OBSERVED treated period (documented convention; an unobserved
+        # pre-onset gap is unknowable). For an absorbing path this is min(t | D=1).
+        first_treat = panel.loc[panel["_treated"].eq(1)].groupby(unit)[time].min()
 
-        first_treat = panel.loc[panel["_entry"] == 1].groupby(unit)[time].min()
-        panel["_first_treat"] = panel[unit].map(first_treat).astype(float).fillna(np.inf)
+        # LP-DiD's per-unit features (outcome lags, first differences, premean
+        # baselines) are CALENDAR quantities (t-1, t-k, t+h). Computing them with
+        # row-order ops (shift/diff/rolling) silently equates "previous observed row"
+        # with "calendar t-1", which is wrong when a unit has an interior time gap.
+        # Reindex each unit to its complete interior calendar grid so every row-order
+        # op is calendar-correct, compute the features on the grid, then restrict back
+        # to the observed rows so the synthetic NaN gap rows never enter a regression.
+        # A gap-free panel skips this entirely and is bit-identical to before.
+        span = panel.groupby(unit)[time].agg(["min", "max", "nunique"])
+        has_gap = bool((span["nunique"] != (span["max"] - span["min"] + 1)).any())
+        if has_gap:
+            panel["_observed"] = True
+            grid = pd.concat(
+                [
+                    pd.DataFrame({unit: u, time: np.arange(int(lo), int(hi) + 1)})
+                    for u, lo, hi in zip(span.index, span["min"], span["max"])
+                ],
+                ignore_index=True,
+            )
+            panel = grid.merge(panel, on=[unit, time], how="left")
+            panel["_observed"] = panel["_observed"].fillna(False).astype(bool)
+            panel = panel.sort_values([unit, time]).reset_index(drop=True)
+            panel["_first_treat"] = panel[unit].map(first_treat).astype(float).fillna(np.inf)
+            # Absorbing fill: treatment is fully determined by the entry period, so the
+            # filled gap rows are consistent and observed rows are reproduced exactly.
+            panel["_treated"] = (panel[time] >= panel["_first_treat"]).astype(int)
+            panel["_entry"] = (panel[time] == panel["_first_treat"]).astype(float)
+        else:
+            panel["_first_treat"] = panel[unit].map(first_treat).astype(float).fillna(np.inf)
+            panel["_entry"] = (panel[time] == panel["_first_treat"]).astype(float)
 
         # Premean ("max") baseline = mean of all AVAILABLE prior outcomes. The
         # denominator must count non-missing prior outcomes, not prior rows, so a
@@ -139,6 +170,18 @@ class LPDiD:
         panel["_dy_current"] = panel.groupby(unit)[outcome].diff()
         for lag in range(1, dylags + 1):
             panel[f"_dy_lag_{lag}"] = panel.groupby(unit)["_dy_current"].shift(lag)
+
+        if has_gap:
+            # Drop the synthetic gap rows. The features above are now calendar-correct
+            # on the observed rows (a lag/difference spanning a gap is NaN, so the
+            # observation fails closed via the downstream dropna), and no NaN-outcome /
+            # NaN-cluster phantom row reaches estimation or the reweight denominators.
+            panel = (
+                panel.loc[panel["_observed"]]
+                .drop(columns="_observed")
+                .sort_values([unit, time])
+                .reset_index(drop=True)
+            )
         return panel
 
     def _baseline_column(self):
@@ -882,6 +925,12 @@ class LPDiD:
                 "irregular or datetime periods to consecutive integers first."
             )
         _unique_times = np.sort(pd.unique(data[time]))
+        if not np.allclose(_unique_times, np.round(_unique_times)):
+            raise ValueError(
+                "LPDiD requires integer-valued `time` labels (e.g. 0, 1, 2 or 2000, "
+                "2001, ...): the per-unit calendar grid is built with t-1 / t+h integer "
+                "arithmetic. Map fractional or datetime periods to consecutive integers first."
+            )
         if len(_unique_times) > 1 and not np.allclose(np.diff(_unique_times), 1.0):
             raise ValueError(
                 "LPDiD requires integer-spaced `time` periods (consecutive, spaced by 1); "
