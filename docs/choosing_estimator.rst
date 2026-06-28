@@ -129,6 +129,10 @@ Quick Reference
      - Nonlinear outcomes or saturated OLS
      - Conditional parallel trends
      - OLS: direct coefficients; logit/Poisson: ASF-based ATT
+   * - ``LPDiD``
+     - Fast staggered (absorbing) event studies without negative weighting
+     - Parallel trends, no anticipation; absorbing treatment
+     - Event-study path + pooled pre/post ATT
    * - ``BaconDecomposition``
      - TWFE diagnostic
      - (diagnostic tool)

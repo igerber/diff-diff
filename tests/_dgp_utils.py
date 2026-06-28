@@ -283,3 +283,69 @@ def generate_butts_staggered_dgp(
                 }
             )
     return pd.DataFrame(rows)
+
+
+def make_lpdid_panel(
+    *,
+    cohorts=(5, 8),
+    n_per_cohort: int = 20,
+    n_never: int = 30,
+    n_periods: int = 12,
+    tau: Callable[[int], float] = lambda k: 1.0 + 0.5 * k,
+    unit_fe_sd: float = 0.5,
+    time_trend: float = 0.5,
+    error_sd: float = 0.2,
+    heterogeneous: bool = True,
+    seed: int = 20260628,
+) -> pd.DataFrame:
+    """Staggered, absorbing-treatment panel for LP-DiD tests.
+
+    Emits columns the two estimator families both need:
+
+    - ``treat``: binary absorbing indicator ``1[t >= first_treat]`` (LPDiD's
+      ``treatment=`` input; never-treated units are always 0).
+    - ``first_treat``: onset period; ``np.inf`` for never-treated (the repo
+      convention consumed by CallawaySantAnna / ImputationDiD / StackedDiD).
+
+    Untreated potential outcome is ``alpha_i + time_trend * t + noise`` so
+    parallel trends and no-anticipation hold by construction. The dynamic
+    effect at event time ``k = t - g`` is ``tau(k)`` for ``k >= 0`` (zero
+    otherwise), scaled per cohort when ``heterogeneous=True`` so different
+    cohorts have genuinely different effect paths.
+    """
+    rng = np.random.default_rng(seed)
+    rows = []
+    uid = 0
+    for ci, g in enumerate(cohorts):
+        scale = (1.0 + 0.3 * ci) if heterogeneous else 1.0
+        for _ in range(n_per_cohort):
+            uid += 1
+            alpha = rng.normal(0.0, unit_fe_sd)
+            for t in range(n_periods):
+                y0 = alpha + time_trend * t + rng.normal(0.0, error_sd)
+                k = t - g
+                effect = scale * tau(k) if k >= 0 else 0.0
+                rows.append(
+                    {
+                        "unit": uid,
+                        "time": t,
+                        "y": y0 + effect,
+                        "treat": int(t >= g),
+                        "first_treat": float(g),
+                    }
+                )
+    for _ in range(n_never):
+        uid += 1
+        alpha = rng.normal(0.0, unit_fe_sd)
+        for t in range(n_periods):
+            y0 = alpha + time_trend * t + rng.normal(0.0, error_sd)
+            rows.append(
+                {
+                    "unit": uid,
+                    "time": t,
+                    "y": y0,
+                    "treat": 0,
+                    "first_treat": np.inf,
+                }
+            )
+    return pd.DataFrame(rows)

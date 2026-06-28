@@ -1837,20 +1837,26 @@ Weights are **always non-negative** (the central result). Via Frisch-Waugh-Lovel
 
 ### Deviations from the paper / from R / library extensions
 
-*To be populated in PR-B (source + tests). Anticipated entries: (1) the analytical/cluster SE convention (paper specifies none - implementation choice vs Stata `lpdid` `vce(cluster unit)`); (2) any RA-path influence-function variance; (3) the `pmd="max"` / integer-`k` panel-start edge behavior vs the package; (4) absorbing-only scope in the first release, with non-absorbing (Section 4.2) deferred.*
+The paper specifies no standard-error formula (Section 1 defers to "standard, well-understood techniques"); the reference Stata `lpdid` uses `vce(cluster unit)`. The entries below document diff-diff's inference and scope choices.
+
+1. **Note:** Standard errors are **cluster-robust at the unit level by default** - `cluster=None` auto-clusters at the unit identifier and the results record `cluster_name`/`n_clusters` - with a `t(G-1)` reference distribution (G = realized clusters in each horizon's clean-control sample). Matches Stata `lpdid` `vce(cluster unit)`; the paper prescribes no SE.
+2. **Note:** The regression-adjustment (RA) covariate path (`reweight=True` with covariates/absorb) reports an **influence-function cluster variance** `sum_c (sum_{i in c} psi_i)^2 / n^2`, in the same family as `ImputationDiD`'s Theorem-3 / BJS variance (see "IF-based variance estimators vs analytical-sandwich estimators" above). Its single Gram inversion is routed through `linalg._rank_guarded_inv` (finite SE on the identified subspace under near-collinearity; NaN at rank 0). Unlike the default/weighted `solve_ols` `hc1`-cluster path - which applies the `(G/(G-1))*((n-1)/(n-k))` finite-sample factor - the RA IF variance currently carries **no finite-sample factor** (the ImputationDiD convention), while both paths share the `t(G-1)` reference. This RA-vs-default small-sample-scaling asymmetry is validated against the reference R packages and reconciled in the R-parity follow-up (PR-B2).
+3. **Note:** Direct covariate inclusion (`reweight=False` with covariates/absorb) emits a `UserWarning`: per online Appendix B.2.2 it preserves the non-negative LP-DiD weighting result only under linear and homogeneous covariate effects, so the regression-adjustment path (`reweight=True`) is preferred.
+4. **Deviation from R:** Scope - this release implements the **absorbing-treatment main path only** (the estimator raises on non-absorbing input). Non-absorbing treatment (Section 4.2) and survey-design support are deferred to later PRs; the reference `lpdid` packages support non-absorbing treatment.
 
 ### Implementation Checklist
 
-- [ ] Per-horizon long-difference OLS with time FE, no unit FE; `h=-1` reference fixed at 0 (PR-B)
-- [ ] Clean-control sample restriction (absorbing: `D_{i,t+h}=0`) (PR-B)
-- [ ] Variance-weighted (default) + reweighted (equal-weight) estimands (PR-B)
-- [ ] Regression-adjustment covariate path (recommended) + direct-inclusion path with homogeneity warning (PR-B)
-- [ ] PMD base period; pooled pre/post estimands (PR-B)
-- [ ] `no_composition` option (PR-B)
-- [ ] Cluster-robust SE at unit level by default; NaN-consistent inference via `safe_inference` (PR-B)
-- [ ] `LPDiDResults` with `summary()` / `to_dict()` / cluster metadata (PR-B)
-- [ ] Layered tests: analytical DGPs + cross-estimator equivalence (CS / BJS / Stacked / DiD) + self-generated R-parity (PR-B)
-- [ ] doc-deps.yaml mapping for `diff_diff/lpdid.py` + `lpdid_results.py`; llms.txt catalog entry (PR-B, test-enforced)
+- [x] Per-horizon long-difference OLS with time FE, no unit FE; `h=-1` reference fixed at 0 (PR-B1)
+- [x] Clean-control sample restriction (absorbing: `D_{i,t+h}=0`) (PR-B1)
+- [x] Variance-weighted (default) + reweighted (equal-weight) estimands (PR-B1)
+- [x] Regression-adjustment covariate path (recommended) + direct-inclusion path with homogeneity warning (PR-B1)
+- [x] PMD base period; pooled pre/post estimands (PR-B1)
+- [x] `no_composition` option (PR-B1)
+- [x] Cluster-robust SE at unit level by default; NaN-consistent inference via `safe_inference` (PR-B1)
+- [x] `LPDiDResults` with `summary()` / `to_dict()` / cluster metadata (PR-B1)
+- [x] doc-deps.yaml mapping for `diff_diff/lpdid.py` + `lpdid_results.py`; llms.txt / llms-full.txt catalog entries (PR-B1, test-enforced)
+- [ ] B1 tests: analytical DGPs + cross-estimator equivalence (CS / BJS / Stacked / DiD)
+- [ ] B2: self-generated R-parity (authors' `danielegirardi/lpdid` + `alexCardazzi/lpdid` cross-check)
 - [ ] Non-absorbing extension (Section 4.2) - deferred to a later PR
 - [ ] Survey-design support - deferred to a later PR
 

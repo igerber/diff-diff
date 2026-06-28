@@ -770,3 +770,54 @@ class TestLLMsFullStackedDiDCoverage:
         )
         # balance= must be documented somewhere in the section (constructor param)
         assert "balance" in section
+
+
+class TestLLMsFullLPDiDCoverage:
+    """Pin the LPDiD section of llms-full.txt to the real API.
+
+    Adding a public parameter to LPDiD.__init__ or LPDiD.fit() requires updating
+    diff_diff/guides/llms-full.txt — these tests catch drift.
+    """
+
+    def _lpdid_section(self):
+        text = get_llm_guide("full")
+        start = text.index("### LPDiD")
+        nxt = text.index("\n### ", start + 1)
+        return text[start:nxt]
+
+    def test_llms_full_has_lpdid_section(self):
+        assert "### LPDiD" in get_llm_guide("full")
+
+    def test_llms_full_lpdid_constructor_signature_matches_real_api(self):
+        import inspect
+
+        from diff_diff import LPDiD
+
+        sig_params = set(inspect.signature(LPDiD.__init__).parameters)
+        sig_params.discard("self")
+        section = self._lpdid_section()
+        block_start = section.index("LPDiD(")
+        block_end = section.index("\n)", block_start)
+        ctor_block = section[block_start:block_end]
+        for param in sig_params:
+            assert f"{param}:" in ctor_block or f"{param} " in ctor_block, (
+                f"LPDiD constructor block in llms-full.txt is missing the real "
+                f"public parameter {param!r} (adding a public param requires updating "
+                f"the guide)."
+            )
+
+    def test_llms_full_lpdid_fit_signature_matches_real_api(self):
+        import inspect
+
+        from diff_diff import LPDiD
+
+        sig_params = set(inspect.signature(LPDiD.fit).parameters)
+        sig_params.discard("self")
+        section = self._lpdid_section()
+        fit_start = section.index("lpdid.fit(")
+        fit_block = section[fit_start : section.index(") -> ", fit_start)]
+        for param in sig_params:
+            assert f"{param}:" in fit_block or f"{param} " in fit_block, (
+                f"LPDiD.fit() block in llms-full.txt is missing the real public "
+                f"parameter {param!r} (adding a public param requires updating the guide)."
+            )

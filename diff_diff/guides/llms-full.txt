@@ -895,6 +895,56 @@ results = edid.fit(data, outcome='y', unit='id', time='t',
 results.print_summary()
 ```
 
+### LPDiD
+
+Local Projections DiD (Dube, Girardi, Jorda & Taylor 2025). Estimates a separate OLS at each event-time horizon of a long difference (`y_{i,t+h} - y_{i,t-1}`) on the treatment-switch indicator plus calendar-time fixed effects (no unit FE), restricted to a flexible "clean control" sample of newly-treated and not-yet-treated units. Excluding already-treated units from the control group removes the negative-weighting bias of naive TWFE, so the default (variance-weighted) estimand has strictly non-negative weights. `reweight=True` yields the equally-weighted ATT (numerically equivalent to Callaway-Sant'Anna); covariates then enter via regression adjustment. Standard errors are cluster-robust at the unit level (the paper specifies no SE; matches Stata `lpdid` `vce(cluster unit)`). Scope: binary, absorbing treatment (rejects panels where treatment turns off).
+
+```python
+LPDiD(
+    pre_window: int = 2,                     # Number of pre-treatment horizons (placebos)
+    post_window: int = 0,                    # Number of post-treatment horizons
+    control_group: str = "clean",            # "clean" (not-yet-treated) or "never_treated"
+    reweight: bool = False,                  # True -> equally-weighted ATT (== Callaway-Sant'Anna); False -> variance-weighted
+    no_composition: bool = False,            # Hold the treated/clean-control sample fixed across horizons
+    pmd: str | int | None = None,            # Base period: None=first-lag (t-1), "max"=premean over all pretreatment periods, int=last-k premean
+    alpha: float = 0.05,
+    cluster: str | None = None,              # Cluster column for cluster-robust SEs; defaults to the unit identifier
+    rank_deficient_action: str = "warn",     # "warn", "error", or "silent"
+)
+```
+
+**fit() parameters:**
+
+```python
+lpdid.fit(
+    data: pd.DataFrame,
+    outcome: str,
+    unit: str,
+    time: str,
+    treatment: str,                    # Binary, absorbing treatment indicator (0/1)
+    covariates: list[str] = None,      # Direct inclusion (reweight=False) or regression adjustment (reweight=True)
+    ylags: int = 0,                    # Lagged-outcome controls
+    dylags: int = 0,                   # Lagged first-difference controls
+    absorb: list[str] = None,          # Additional absorbed fixed-effect columns
+    post_pooled: int | tuple = None,   # Pooled post-window horizons (int or (start, end))
+    pre_pooled: int | tuple = None,    # Pooled pre-window horizons (int or (start, end))
+    only_event: bool = False,          # Compute only the event-study table
+    only_pooled: bool = False,         # Compute only the pooled pre/post table
+) -> LPDiDResults
+```
+
+**Usage:**
+
+```python
+from diff_diff import LPDiD
+
+lp = LPDiD(pre_window=5, post_window=10)
+results = lp.fit(data, outcome='y', unit='id', time='t', treatment='treated')
+results.print_summary()
+print(results.event_study)   # per-horizon coefficients
+print(results.pooled)        # pooled pre (placebo) / post (ATT) rows
+```
+
 ### TROP
 
 Triply Robust Panel estimator (Athey, Imbens, Qu & Viviano 2025). Combines nuclear norm regularization, distance-based unit weights, and time decay weights.

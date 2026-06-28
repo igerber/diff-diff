@@ -62,6 +62,9 @@ groups:
   wooldridge:
     - diff_diff/wooldridge.py
     - diff_diff/wooldridge_results.py
+  lpdid:
+    - diff_diff/lpdid.py
+    - diff_diff/lpdid_results.py
   visualization:
     - diff_diff/visualization/__init__.py
     - diff_diff/visualization/_common.py
@@ -583,6 +586,30 @@ sources:
         type: user_guide
       - path: diff_diff/guides/llms-full.txt
         section: "WooldridgeDiD"
+        type: user_guide
+      - path: diff_diff/guides/llms.txt
+        section: "Estimators"
+        type: user_guide
+      - path: docs/choosing_estimator.rst
+        type: user_guide
+
+  # ── LPDiD (lpdid group) ────────────────────────────────────────────
+
+  diff_diff/lpdid.py:
+    drift_risk: medium
+    docs:
+      - path: docs/methodology/REGISTRY.md
+        section: "LPDiD"
+        type: methodology
+      - path: docs/api/lpdid.rst
+        type: api_reference
+      - path: README.md
+        section: "Estimators (one-line catalog entry)"
+        type: user_guide
+      - path: docs/references.rst
+        type: user_guide
+      - path: diff_diff/guides/llms-full.txt
+        section: "LPDiD"
         type: user_guide
       - path: diff_diff/guides/llms.txt
         section: "Estimators"

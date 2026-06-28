@@ -230,6 +230,8 @@ from diff_diff.synthetic_control import (
 from diff_diff.synthetic_control_results import SyntheticControlResults
 from diff_diff.wooldridge import WooldridgeDiD
 from diff_diff.wooldridge_results import WooldridgeDiDResults
+from diff_diff.lpdid import LPDiD
+from diff_diff.lpdid_results import LPDiDResults
 from diff_diff.utils import (
     WildBootstrapResults,
     check_parallel_trends,
@@ -381,6 +383,9 @@ __all__ = [
     "WooldridgeDiD",
     "WooldridgeDiDResults",
     "ETWFE",
+    # LPDiD (Local Projections DiD)
+    "LPDiD",
+    "LPDiDResults",
     # Visualization
     "plot_bacon",
     "plot_event_study",
