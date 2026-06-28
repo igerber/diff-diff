@@ -107,6 +107,23 @@ class TestLPDiDAPI:
         with pytest.raises(ValueError, match="pre_window"):
             LPDiD(pre_window=True)  # bool is not a valid int window
 
+    def test_rejects_invalid_alpha(self):
+        for bad in (0.0, 1.0, 1.5, -0.1, True):
+            with pytest.raises(ValueError, match="alpha"):
+                LPDiD(alpha=bad)
+
+    def test_rejects_non_numeric_time(self):
+        df = pd.DataFrame(
+            {
+                "unit": [1, 1, 2, 2],
+                "time": ["a", "b", "a", "b"],
+                "y": [1.0, 2, 1, 1],
+                "treat": [0, 1, 0, 0],
+            }
+        )
+        with pytest.raises(ValueError, match="numeric `time`"):
+            LPDiD().fit(df, outcome="y", unit="unit", time="time", treatment="treat")
+
     def test_set_params_rejects_unknown_key(self):
         with pytest.raises(ValueError, match="Unknown parameter"):
             LPDiD().set_params(nonexistent_param=1)
@@ -955,3 +972,13 @@ class TestLPDiDUnbalanced:
         assert res.ylags == 2 and res.dylags == 1
         d = res.to_dict()
         assert d["ylags"] == 2 and d["dylags"] == 1
+
+    def test_headline_n_clusters_matches_pooled_post(self):
+        # The results-level n_clusters (the summary "G") is the realized cluster
+        # count of the pooled-post headline row, not the full-panel count.
+        df = make_lpdid_panel(cohorts=(5,), n_per_cohort=15, n_never=15, n_periods=10, seed=5)
+        res = LPDiD(pre_window=2, post_window=2).fit(
+            df, outcome="y", unit="unit", time="time", treatment="treat"
+        )
+        post_g = res.pooled.loc[res.pooled["window"] == "post", "n_clusters"].iloc[0]
+        assert res.n_clusters == int(post_g)

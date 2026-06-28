@@ -41,6 +41,12 @@ class LPDiD:
         for _name, _val in (("pre_window", self.pre_window), ("post_window", self.post_window)):
             if not isinstance(_val, int) or isinstance(_val, bool) or _val < 0:
                 raise ValueError(f"{_name} must be a non-negative integer")
+        if (
+            isinstance(self.alpha, bool)
+            or not isinstance(self.alpha, (int, float))
+            or not (0.0 < float(self.alpha) < 1.0)
+        ):
+            raise ValueError("alpha must be a float in (0, 1)")
         if self.control_group not in ("clean", "never_treated"):
             raise ValueError("control_group must be 'clean' or 'never_treated'")
         if self.rank_deficient_action not in ("warn", "error", "silent"):
@@ -144,19 +150,6 @@ class LPDiD:
         if horizon >= 0:
             control_mask &= (panel[time] + horizon).lt(panel["_first_treat"])
         return control_mask
-
-    def _outcome_available_mask(
-        self, panel: pd.DataFrame, *, unit: str, time: str, horizon: int
-    ) -> pd.Series:
-        if horizon == 0:
-            return pd.Series(True, index=panel.index)
-
-        observed_index = pd.MultiIndex.from_frame(panel[[unit, time]])
-        target_index = pd.MultiIndex.from_arrays(
-            [panel[unit].to_numpy(), (panel[time] + horizon).to_numpy()],
-            names=[unit, time],
-        )
-        return pd.Series(target_index.isin(observed_index), index=panel.index)
 
     def _common_clean_sample_indicator(
         self, panel: pd.DataFrame, *, unit: str, time: str, outcome: str, max_post_horizon: int
@@ -876,6 +869,12 @@ class LPDiD:
             raise ValueError("ylags must be a non-negative integer")
         if not isinstance(dylags, int) or isinstance(dylags, bool) or dylags < 0:
             raise ValueError("dylags must be a non-negative integer")
+        if not pd.api.types.is_numeric_dtype(data[time]):
+            raise ValueError(
+                "LPDiD requires a numeric `time` column with integer-spaced periods: "
+                "long differences use t-1 / t+h arithmetic on the time labels. Map "
+                "irregular or datetime periods to consecutive integers first."
+            )
 
         if (covariates or absorb or ylags or dylags) and not self.reweight:
             warnings.warn(
@@ -996,6 +995,15 @@ class LPDiD:
                 ]
             )
 
+        # Headline G = realized clusters in the pooled-post (headline ATT) sample
+        # when computed; otherwise the panel-level unit-cluster count. Per-horizon
+        # rows carry their own realized n_clusters in the event_study/pooled tables.
+        headline_n_clusters = int(panel["_cluster"].nunique())
+        if pooled is not None:
+            _post = pooled.loc[pooled["window"] == "post", "n_clusters"]
+            if not _post.empty and pd.notna(_post.iloc[0]):
+                headline_n_clusters = int(_post.iloc[0])
+
         self.results_ = LPDiDResults(
             event_study=event_study,
             pooled=pooled,
@@ -1010,7 +1018,7 @@ class LPDiD:
             pmd=self.pmd,
             alpha=self.alpha,
             cluster_name=cluster,
-            n_clusters=int(panel["_cluster"].nunique()),
+            n_clusters=headline_n_clusters,
             vcov_type=(
                 "if_cluster"
                 if (self.reweight and bool(covariates or ylags or dylags or absorb))

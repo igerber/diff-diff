@@ -23,8 +23,10 @@ estimand is a strictly non-negatively-weighted average of cohort effects.
    homogeneous covariate effects (online Appendix B.2.2) — the
    regression-adjustment path (``reweight=True``) is preferred for
    covariate-adjusted designs (it does not auto-switch; the default remains
-   ``reweight=False``, which emits the warning). See
-   ``docs/methodology/REGISTRY.md`` for the full contract.
+   ``reweight=False``, which emits the warning). The ``time`` column must be
+   numeric with integer-spaced periods (long differences use ``t-1`` / ``t+h``
+   arithmetic on the labels); map irregular or datetime periods to consecutive
+   integers first. See ``docs/methodology/REGISTRY.md`` for the full contract.
 
 **When to use LPDiD:**
 
