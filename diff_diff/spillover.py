@@ -38,7 +38,7 @@ from diff_diff.conley import (
     _haversine_km,
     _validate_callable_metric_result,
 )
-from diff_diff.linalg import solve_ols
+from diff_diff.linalg import _rank_guarded_inv, solve_ols
 from diff_diff.results import SpilloverDiDResults
 from diff_diff.two_stage import _compute_gmm_corrected_meat
 from diff_diff.utils import safe_inference
@@ -3357,27 +3357,38 @@ class SpilloverDiD:
             score_pad_mask=score_pad_mask_arg,
         )
 
-        # Bread sandwich: A_22^{-1} = (X_2' W X_2)^{-1} via `np.linalg.solve`
-        # with dense lstsq fallback + UserWarning (mirrors the bread-fallback
-        # pattern at `two_stage.py:1763-1788`). Wave E.1 adds the W diagonal
-        # under the survey path so the bread aligns with the WLS gamma /
-        # weighted Psi construction in the meat helper.
+        # Bread sandwich: A_22^{-1} = (X_2' W X_2)^{-1} via the shared rank-guarded
+        # generalized inverse `_rank_guarded_inv` (column-drop on a near-singular
+        # Gram + UserWarning; dropped coordinates are NaN'd in the vcov below).
+        # Wave E.1 adds the W diagonal under the survey path so the bread aligns
+        # with the WLS gamma / weighted Psi construction in the meat helper.
         if survey_weights_fit is not None:
             A_22_kept = X_2_kept.T @ (X_2_kept * survey_weights_fit[:, None])
         else:
             A_22_kept = X_2_kept.T @ X_2_kept
-        eye_kept = np.eye(A_22_kept.shape[0])
-        try:
-            bread_kept = np.linalg.solve(A_22_kept, eye_kept)
-        except np.linalg.LinAlgError:
+        # np.linalg.solve only raises on an *exactly* singular Gram; a *near*-
+        # singular A_22 would otherwise flow a garbage inverse (~1e13) into the
+        # SE. `_rank_guarded_inv` truncates redundant directions on the
+        # equilibrated Gram -> finite SE on the identified subspace (NaN at
+        # rank 0), matching the covariate IF rank-guard. A_22_kept is already
+        # column-dropped upstream; this is the within-kept near-singular guard
+        # (its rank-0 all-NaN return composes with the (k,k) re-inflation below).
+        bread_kept, n_dropped, _, dropped = _rank_guarded_inv(A_22_kept, return_dropped=True)
+        if n_dropped:
             warnings.warn(
-                "SpilloverDiD Wave D bread: A_22 = X_2' X_2 is singular; "
-                "falling back to dense lstsq. SE may be unreliable.",
+                "SpilloverDiD Wave D bread: A_22 = X_2' W X_2 is rank-deficient; "
+                "rank-reducing to a finite SE on the identified subspace "
+                f"({n_dropped} redundant direction(s) dropped, NaN if rank 0).",
                 UserWarning,
                 stacklevel=2,
             )
-            bread_kept = np.linalg.lstsq(A_22_kept, eye_kept, rcond=None)[0]
         vcov_kept = bread_kept @ meat_kept @ bread_kept
+        # A within-kept dropped (unidentified) coefficient is zero-filled in
+        # bread_kept, which would report se=0; NaN its row/col so per-coef SE is
+        # NaN, not 0. These ride along the (k, k) re-inflation below.
+        if dropped.any():
+            vcov_kept[dropped, :] = np.nan
+            vcov_kept[:, dropped] = np.nan
 
         # Re-inflate to (k, k) with NaN at rank-deficient column positions
         # so downstream code (which indexes vcov[i, i] for per-coef SE) sees

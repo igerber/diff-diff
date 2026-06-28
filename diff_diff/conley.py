@@ -1104,16 +1104,37 @@ def _compute_conley_vcov(
         _conley_sparse=_conley_sparse,
     )
 
-    # Sandwich via two solves (mirrors _compute_cr2_bm pattern in linalg.py)
-    try:
-        temp = np.linalg.solve(bread_matrix, meat)
-        vcov = np.linalg.solve(bread_matrix, temp.T).T
-    except np.linalg.LinAlgError as e:
-        if "Singular" in str(e):
-            raise ValueError(
-                "Design matrix is rank-deficient (singular X'X matrix). "
-                "Cannot compute Conley spatial HAC variance."
-            ) from e
-        raise
+    # Sandwich via the shared rank-guarded inverse of the design Gram.
+    # np.linalg.solve only raises on an *exactly* singular bread, so a *near*-
+    # singular X'WX would otherwise flow a garbage inverse (~1e13) straight into
+    # the spatial-HAC variance. `_rank_guarded_inv` truncates redundant
+    # directions on the equilibrated Gram -> a finite SE on the identified
+    # subspace (NaN only at rank 0), matching the covariate IF rank-guard and the
+    # other structural bread inversions (ContinuousDiD / TwoStageDiD /
+    # SpilloverDiD). Lazy import: `linalg` imports this module, so a top-level
+    # `from diff_diff.linalg import ...` would be circular; resolving at call time
+    # is safe (linalg is already loaded by the time this runs).
+    from diff_diff.linalg import _rank_guarded_inv
+
+    bread_inv, n_dropped, _, dropped = _rank_guarded_inv(bread_matrix, return_dropped=True)
+    if n_dropped:
+        warnings.warn(
+            "Conley spatial HAC variance: the design Gram (X'WX) is "
+            f"rank-deficient ({n_dropped} redundant direction(s) dropped); "
+            "rank-reducing to a finite SE on the identified subspace "
+            "(NaN if rank 0). This usually indicates collinear regressors.",
+            UserWarning,
+            stacklevel=2,
+        )
+    # vcov = bread^{-1} @ meat @ bread^{-1}; algebraically identical to the prior
+    # two symmetric solves given `bread` symmetric (holds for any meat).
+    vcov = bread_inv @ meat @ bread_inv
+    # A dropped (unidentified) coefficient is zero-filled in bread_inv, which would
+    # otherwise report se=0 for that named coefficient. NaN its row/col in the
+    # FINAL vcov so per-coefficient SE extraction yields NaN (not 0) for the
+    # unidentified directions, while the identified coefficients stay finite.
+    if dropped.any():
+        vcov[dropped, :] = np.nan
+        vcov[:, dropped] = np.nan
 
     return vcov

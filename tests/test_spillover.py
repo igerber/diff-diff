@@ -8826,3 +8826,80 @@ class TestSpilloverDiDWaveE2ConleySurveyDesignEventStudy:
         assert res.n_psu == 8
         assert res.n_strata == 2
         assert res.survey_metadata.df_survey == 6
+
+
+class TestSpilloverDiDBreadRankGuard:
+    """The SpilloverDiD Wave D bread (A_22 = X_2' W X_2) now routes through the
+    shared ``_rank_guarded_inv``: a near-singular Stage-2 design Gram rank-
+    reduces to a finite SE on the identified subspace and warns (was a dense
+    lstsq fallback that fired only on an exactly-singular bread)."""
+
+    def test_rank_deficient_bread_warns_and_fits(self):
+        from unittest.mock import patch
+
+        import diff_diff.spillover as sp_mod
+
+        df = _make_butts_2period_dgp(seed=42)
+        real_rgi = sp_mod._rank_guarded_inv
+
+        def force_drop(A, **kwargs):
+            # Finite inverse + n_dropped=1 (warning fires), empty dropped mask so
+            # the identified SE stays finite. Mirrors the helper's return arity.
+            inv, _, rank = real_rgi(A)
+            if kwargs.get("return_dropped"):
+                return inv, 1, rank, np.zeros(A.shape[0], dtype=bool)
+            return inv, 1, rank
+
+        est = SpilloverDiD(rings=[0.0, 100.0], conley_coords=("lat", "lon"))
+        with patch.object(sp_mod, "_rank_guarded_inv", side_effect=force_drop):
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always")
+                result = est.fit(df, outcome="y", unit="unit", time="time", treatment="D")
+        msgs = [str(w.message) for w in caught]
+        assert any(
+            "SpilloverDiD Wave D bread" in m and "rank-deficient" in m for m in msgs
+        ), msgs
+        assert est.is_fitted_ and np.isfinite(result.att)
+
+    def test_dropped_ring_coefficient_propagates_nan_inference(self):
+        """A dropped (unidentified) Wave D coefficient must report NaN se / t_stat /
+        p_value / CI for its ring effect at the ESTIMATOR level (not the zero-filled
+        se=0) — the per-coefficient propagation the rank-guard enables (CI codex P2
+        test-depth)."""
+        from unittest.mock import patch
+
+        import diff_diff.spillover as sp_mod
+
+        df = _make_butts_2period_dgp(seed=42)
+        real_rgi = sp_mod._rank_guarded_inv
+
+        def drop_last(A, **kwargs):
+            # Genuinely drop the last Wave D coordinate (zero-fill its row/col +
+            # report it dropped) so the caller NaNs that ring's vcov entry.
+            inv, _, rank = real_rgi(A)
+            inv = np.array(inv, dtype=float)
+            inv[-1, :] = 0.0
+            inv[:, -1] = 0.0
+            k = A.shape[0]
+            dropped = np.zeros(k, dtype=bool)
+            dropped[-1] = True
+            if kwargs.get("return_dropped"):
+                return inv, 1, k - 1, dropped
+            return inv, 1, k - 1
+
+        est = SpilloverDiD(rings=[0.0, 50.0, 100.0], conley_coords=("lat", "lon"))
+        with patch.object(sp_mod, "_rank_guarded_inv", side_effect=drop_last):
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                res = est.fit(df, outcome="y", unit="unit", time="time", treatment="D")
+        eff = res.spillover_effects
+        nan_rows = eff[np.isnan(eff["se"])]
+        fin_rows = eff[np.isfinite(eff["se"]) & (eff["se"] > 0)]
+        assert len(nan_rows) >= 1, (
+            f"a dropped Wave D coord should NaN a ring SE; got {eff['se'].tolist()}"
+        )
+        assert len(fin_rows) >= 1, "identified rings should keep finite SE"
+        # The NaN-SE ring's FULL inference must be NaN, not just se.
+        for _, r in nan_rows.iterrows():
+            assert np.isnan(r["t_stat"]) and np.isnan(r["p_value"])
+            assert np.isnan(r["ci_low"]) and np.isnan(r["ci_high"])

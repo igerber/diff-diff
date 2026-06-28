@@ -29,7 +29,7 @@ from diff_diff.continuous_did_results import (
     ContinuousDiDResults,
     DoseResponseCurve,
 )
-from diff_diff.linalg import solve_ols
+from diff_diff.linalg import _rank_guarded_inv, solve_ols
 from diff_diff.survey import (
     ResolvedSurveyDesign,
     _resolve_survey_for_fit,
@@ -1047,21 +1047,32 @@ class ContinuousDiD:
 
         # Store bootstrap info for influence function computation
         # bread = (Psi'WPsi / n_treated)^{-1} when survey, (Psi'Psi / n_treated)^{-1} otherwise
+        # Bread = (Psi'WPsi / mass)^{-1} via the shared rank-guarded inverse:
+        # np.linalg.inv only raises on an *exactly* singular Gram, so a *near*-
+        # singular B-spline design (clustered doses / near-duplicate knots)
+        # previously returned a garbage inverse (~1e13) -> garbage SE. The prior
+        # `pinv` fallback was both minimum-norm (not the column-drop / near-
+        # collinear limit) and *silent*. `_rank_guarded_inv` truncates redundant
+        # directions on the equilibrated Gram -> finite SE on the identified
+        # subspace (NaN only at rank 0), matching the covariate IF rank-guard.
         if w_treated is not None:
             w_treated_sum = float(np.sum(w_treated))
             PtWP = Psi.T @ (Psi * w_treated[:, np.newaxis])
             # Normalize bread by weighted mass (not raw count) for consistency
             # with downstream IF score denominators that also use weighted mass
-            try:
-                bread = np.linalg.inv(PtWP / w_treated_sum)
-            except np.linalg.LinAlgError:
-                bread = np.linalg.pinv(PtWP / w_treated_sum)
+            bread, n_dropped, _ = _rank_guarded_inv(PtWP / w_treated_sum)
         else:
             PtP = Psi.T @ Psi
-            try:
-                bread = np.linalg.inv(PtP / n_treated)
-            except np.linalg.LinAlgError:
-                bread = np.linalg.pinv(PtP / n_treated)
+            bread, n_dropped, _ = _rank_guarded_inv(PtP / n_treated)
+        if n_dropped:
+            warnings.warn(
+                "ContinuousDiD ACRT variance: the B-spline design Gram is "
+                f"rank-deficient ({n_dropped} redundant direction(s) dropped); "
+                "rank-reducing to a finite SE on the identified subspace. "
+                "Analytical SEs reflect the reduced rank (NaN if rank 0).",
+                UserWarning,
+                stacklevel=2,
+            )
 
         # ee_treated: per-unit estimating equation vectors (K-vector per unit)
         # For WLS (survey weights), the score is w_i * X_i * u_i to match the

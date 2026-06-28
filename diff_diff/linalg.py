@@ -312,12 +312,33 @@ def _equilibrated_lstsq(X: np.ndarray, y: np.ndarray) -> np.ndarray:
     return coef_scaled / safe_norms
 
 
+@overload
+def _rank_guarded_inv(
+    A: np.ndarray,
+    *,
+    rcond: float = ...,
+    tracker: Optional[list] = ...,
+    return_dropped: Literal[False] = ...,
+) -> Tuple[np.ndarray, int, int]: ...
+
+
+@overload
+def _rank_guarded_inv(
+    A: np.ndarray,
+    *,
+    rcond: float = ...,
+    tracker: Optional[list] = ...,
+    return_dropped: Literal[True],
+) -> Tuple[np.ndarray, int, int, np.ndarray]: ...
+
+
 def _rank_guarded_inv(
     A: np.ndarray,
     *,
     rcond: float = 1e-10,
     tracker: Optional[list] = None,
-) -> Tuple[np.ndarray, int, int]:
+    return_dropped: bool = False,
+) -> Union[Tuple[np.ndarray, int, int], Tuple[np.ndarray, int, int, np.ndarray]]:
     """Rank-guarded (generalized) inverse of a symmetric PSD Gram matrix.
 
     Influence-function standard errors invert a covariate Gram matrix
@@ -384,8 +405,19 @@ def _rank_guarded_inv(
     unchanged, so well-conditioned fits are numerically unaffected.
     """
     k = A.shape[0]
+
+    def _ret(inv, n_dropped, n_keep, dropped):
+        # ``dropped`` is a length-k boolean mask of the truncated (unidentified)
+        # coordinates. Callers that report a PER-COEFFICIENT SE from ``vcov``
+        # diagonals must NaN the dropped coordinates in the FINAL vcov — the
+        # zero-filled inverse would otherwise report ``se=0`` for an unidentified
+        # coefficient. (Linear-combination consumers — e.g. an ATT or dose
+        # prediction — keep the default 3-tuple: the dropped direction correctly
+        # contributes 0 to an identified linear combination.)
+        return (inv, n_dropped, n_keep, dropped) if return_dropped else (inv, n_dropped, n_keep)
+
     if k == 0:
-        return np.zeros((0, 0), dtype=float), 0, 0
+        return _ret(np.zeros((0, 0), dtype=float), 0, 0, np.zeros(0, dtype=bool))
 
     # Symmetric equilibration: scale row/col i by sqrt(A[i, i]) so the
     # eigenvalue threshold is scale-invariant. Zero/negative diagonal -> 1.0
@@ -406,7 +438,7 @@ def _rank_guarded_inv(
 
     # Fast path: full rank -> exact solve (bit-identical to the prior code).
     if max_eig > 0.0 and n_keep == k:
-        return np.linalg.solve(A, np.eye(k)), 0, k
+        return _ret(np.linalg.solve(A, np.eye(k)), 0, k, np.zeros(k, dtype=bool))
 
     # Rank-deficient: record one condition-number sample for the aggregate
     # fallback warning (the helper is the sole owner of this append).
@@ -415,7 +447,7 @@ def _rank_guarded_inv(
             tracker.append(float(np.linalg.cond(A)))
 
     if n_keep == 0:
-        return np.full((k, k), np.nan), k, 0
+        return _ret(np.full((k, k), np.nan), k, 0, np.ones(k, dtype=bool))
 
     # Column-drop generalized inverse: keep the n_keep most-independent columns
     # (pivoted QR on the equilibrated Gram), invert that principal submatrix, and
@@ -431,7 +463,9 @@ def _rank_guarded_inv(
     A_eq_ginv[np.ix_(kept, kept)] = np.linalg.inv(A_eq[np.ix_(kept, kept)])
     A_ginv = A_eq_ginv * inv_scales[:, None] * inv_scales[None, :]
     n_dropped = k - n_keep
-    return A_ginv, n_dropped, n_keep
+    dropped_mask = np.ones(k, dtype=bool)
+    dropped_mask[kept] = False
+    return _ret(A_ginv, n_dropped, n_keep, dropped_mask)
 
 
 def _solve_ols_rust(

@@ -861,6 +861,8 @@ The guard is fired by `_survey_se_from_group_if` (analytical and replicate) and 
 
 **R Reference:** `contdid` v0.1.0 (CRAN).
 
+- **Note (rank-guarded ACRT-variance bread):** The ACRT influence-function bread `(Psi'WPsi / mass)^{-1}` (`_compute_dose_response_gt`, `continuous_did.py`) is inverted by the shared `_rank_guarded_inv` (`diff_diff/linalg.py`). `np.linalg.inv` raises only on an *exactly* singular B-spline design Gram; a **near**-singular Gram (clustered doses / near-duplicate knots) previously returned a garbage inverse (~1e13), and the exact-singular fallback was a *silent* minimum-norm `pinv`. The rank-guard truncates redundant directions on the equilibrated Gram → a finite SE on the identified subspace (the well-conditioned near-collinear limit, **not** minimum-norm; NaN only at rank 0), and `fit()` warns when a direction is dropped. See the CallawaySantAnna "rank-guarded IF standard errors" Note for the generalized-inverse semantics.
+
 ### Identification
 
 Two levels of parallel trends (following CGBS 2024, Assumptions 1-2):
@@ -1424,6 +1426,8 @@ where `W_it(h) = 1[K_it = h]` are lead indicators, estimated on `Omega_0` only.
 ## TwoStageDiD
 
 **Primary source:** [Gardner, J. (2022). Two-stage differences in differences. arXiv:2207.05943.](https://arxiv.org/abs/2207.05943)
+
+- **Note (rank-guarded TSL-variance bread):** The Stage-2 variance bread `(X_2'WX_2)^{-1}` is inverted by the shared `_rank_guarded_inv` (`diff_diff/linalg.py`) on BOTH the analytical (`two_stage.py`) and multiplier-bootstrap (`two_stage_bootstrap.py`) surfaces. `np.linalg.solve` raised only on an exactly-singular bread (prior fallback: dense `lstsq`); a **near**-singular `X_2'WX_2` would otherwise flow a garbage inverse (~1e13) into the SE. The rank-guard truncates redundant directions → finite SE on the identified subspace (NaN at rank 0) and warns. A dropped (unidentified) Stage-2 coefficient (event-time / group effect) is reported with **NaN** SE on both the analytical and bootstrap surfaces — not the zero-filled `0`. `X_2` is the Stage-2 indicator design (treatment/event-time/group dummies), not user covariates. See the CallawaySantAnna "rank-guarded IF standard errors" Note. Sibling of axis-A finding #17.
 
 **Key implementation requirements:**
 
@@ -3668,6 +3672,8 @@ should be a deliberate user choice.
 
 **Note:** This estimator is a **documented synthesis** of ingredients — no single published software package implements the exact recipe. `did2s` (R/Stata, Butts & Gardner 2022) implements the Gardner two-stage residualization but does NOT support ring covariates. The Butts (2021/2023) paper proposes the ring estimator in Equations 5/6/8 (non-staggered) and Section 5 / Table 2 (staggered) but does not ship reference software. The diff-diff implementation combines: (a) Butts (2021) Section 5 / Table 2 identification, (b) Gardner (2022) two-stage residualize-then-fit, (c) Wave A's Conley spatial-HAC vcov.
 
+- **Note (rank-guarded Wave D bread):** The Wave D variance bread `A_22 = (X_2'WX_2)^{-1}` is inverted by the shared `_rank_guarded_inv` (`diff_diff/linalg.py`) on the already-column-dropped kept submatrix. `np.linalg.solve` raised only on an exactly-singular bread (prior fallback: dense `lstsq`); a **near**-singular kept Gram would otherwise flow a garbage inverse (~1e13) into the SE. The rank-guard truncates redundant directions → finite SE on the identified subspace (NaN at rank 0), re-inflated to (k, k) with NaN at the dropped positions, and warns. See the CallawaySantAnna "rank-guarded IF standard errors" Note. Sibling of axis-A finding #17.
+
 **Identification spec (committed):**
 
 The stage-2 regressor for ring `j` is the **time-varying** form
@@ -3902,6 +3908,8 @@ standard errors for OLS when residuals are spatially (and optionally
 temporally) correlated. Extends White (1980) HC0 by allowing pairwise
 correlation that decays with geographic distance, plus a within-unit
 Newey-West-style Bartlett temporal HAC on panel data.
+
+- **Note (rank-guarded design bread):** The spatial-HAC sandwich bread `(X'WX)^{-1}` (`_compute_conley_vcov`, `conley.py`) is inverted by the shared `_rank_guarded_inv` (`diff_diff/linalg.py`). A near-singular design Gram previously returned a garbage inverse (~1e13) and an *exactly* singular one **raised `ValueError`**; the bread now rank-reduces to a finite SE on the identified subspace (NaN only at rank 0) and warns, matching the other structural bread guards. A dropped (unidentified) regression coefficient is reported with **NaN** SE (its row/col in the returned vcov), not the zero-filled `0`. **Behavior change:** a rank-deficient design (collinear regressors) no longer raises — it rank-reduces with a warning. The well-conditioned path is unchanged (`np.linalg.solve(A, I)`). `_rank_guarded_inv` is imported lazily inside the function because `linalg` imports `conley` (one-way), so a top-level import would be circular. See the CallawaySantAnna "rank-guarded IF standard errors" Note.
 
 **Two operating modes:**
 - **Cross-sectional (Phase 1):** Pass `vcov_type="conley"` plus

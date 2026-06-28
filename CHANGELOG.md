@@ -118,6 +118,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   numerical, or public-API change.
 
 ### Fixed
+- **Structural (non-covariate) matrix inverses are now rank-guarded.** The internal design-Gram
+  bread inversions in `ContinuousDiD` (ACRT-variance `Psi'WPsi`), `TwoStageDiD` (Stage-2
+  `X_2'WX_2`, both the analytical and multiplier-bootstrap surfaces), `SpilloverDiD` (Wave D
+  `A_22`), and the Conley spatial-HAC variance (`X'WX`) sat on a `LinAlgError`-only fallback:
+  `np.linalg.inv`/`solve` raise only on an *exactly* singular matrix, so a **near**-singular
+  Gram returned a garbage inverse (~1e13) straight into the SE (and `ContinuousDiD`'s exact-
+  singular fallback was a *silent* minimum-norm `pinv`; Conley *raised* `ValueError`). All now
+  route through the shared `_rank_guarded_inv` (`diff_diff/linalg.py`) — the same generalized
+  inverse already used for the covariate IF SEs — which truncates redundant directions on the
+  equilibrated Gram to give a finite SE on the identified subspace (the well-conditioned
+  near-collinear limit, not minimum-norm; NaN only at rank 0) and emits a `UserWarning` when a
+  direction is dropped. For the per-coefficient reporters (TwoStageDiD event/group, SpilloverDiD
+  rings, Conley), a dropped (unidentified) named coefficient is reported with **NaN** SE (not the
+  zero-filled `0`); linear-combination reporters (ContinuousDiD dose curves) are unaffected, since
+  a dropped direction correctly contributes 0 there. These invert *internal* bases users cannot
+  perturb with `covariates=`.
+  **Behavior change:** a rank-deficient Conley design no longer raises — it rank-reduces with a
+  warning. Well-conditioned designs are unchanged (the fast path is `np.linalg.solve(A, I)`,
+  R-parity preserved). (`HeterogeneousAdoptionDiD`'s non-symmetric IV bread and `ImputationDiD`
+  — whose vcov is already rank-guarded upstream via `solve_ols` — were assessed and excluded;
+  see `TODO.md`.)
 - **`CallawaySantAnna` / `StaggeredTripleDifference` covariate outcome-regression is now
   scale-robust.** The covariate OR nuisance fits — `_compute_all_att_gt_covariate_reg` and
   `_doubly_robust` (CS) and `_compute_or` (StaggeredTripleDifference) — previously used an

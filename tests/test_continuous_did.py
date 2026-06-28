@@ -1528,3 +1528,39 @@ class TestEventStudyAnalyticalSE:
             assert 0 <= info["p_value"] <= 1, f"p_value out of range for e={e}"
             lo, hi = info["conf_int"]
             assert np.isfinite(lo) and np.isfinite(hi), f"conf_int contains NaN for e={e}"
+
+
+class TestContinuousDiDBreadRankGuard:
+    """The ContinuousDiD ACRT-variance bread (Psi'WPsi) now routes through the
+    shared ``_rank_guarded_inv``: a near-singular B-spline design Gram rank-
+    reduces to a finite SE on the identified subspace and warns (the prior
+    ``pinv`` fallback was minimum-norm AND silent)."""
+
+    def test_rank_deficient_bspline_gram_warns_and_finite_se(self):
+        import warnings
+        from unittest.mock import patch
+
+        import diff_diff.continuous_did as cd_mod
+
+        data = generate_continuous_did_data(n_units=100, n_periods=3, seed=42, noise_sd=0.5)
+        real_rgi = cd_mod._rank_guarded_inv
+
+        def force_drop(A, **kwargs):
+            # Finite inverse, but report a dropped direction to exercise the
+            # rank-reduce warning path deterministically (B-spline Gram rank-
+            # deficiency is hard to force via dose data alone).
+            inv, _, rank = real_rgi(A, **kwargs)
+            return inv, 1, rank
+
+        with patch.object(cd_mod, "_rank_guarded_inv", side_effect=force_drop):
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always")
+                results = ContinuousDiD().fit(
+                    data, "outcome", "unit", "period", "first_treat", "dose"
+                )
+        msgs = [str(w.message) for w in caught]
+        assert any(
+            "ContinuousDiD ACRT variance" in m and "rank-deficient" in m for m in msgs
+        ), msgs
+        # rank-reduced bread still yields finite ACRT SEs.
+        assert np.all(np.isfinite(results.dose_response_acrt.se))

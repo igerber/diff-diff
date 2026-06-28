@@ -3657,3 +3657,78 @@ def _staggered_panel(seed=51, n_units=36, n_periods=6):
             y = 0.3 * (u / n_units) + 0.4 * t + 1.5 * post + rng.normal(0, 0.5)
             recs.append({"unit": u, "time": t, "y": y, "cohort": g, "lat": lat, "lon": lon})
     return pd.DataFrame(recs)
+
+
+class TestConleyBreadRankGuard:
+    """The conley spatial-HAC bread inversion now routes through the shared
+    ``_rank_guarded_inv``: a near-singular design Gram rank-reduces to a finite
+    SE on the identified subspace (previously a garbage ~1e13 inverse), and a
+    singular Gram no longer raises ``ValueError`` (it rank-reduces + warns).
+    Sibling of the covariate IF rank-guard and the ContinuousDiD / TwoStageDiD /
+    SpilloverDiD structural bread guards."""
+
+    @staticmethod
+    def _cross_section(seed, dup="indep"):
+        # Fixed rng draw order (x1, noise, y) so ``exact`` and ``near`` share
+        # x1 / coords / y and differ ONLY in the third column.
+        rng = np.random.default_rng(seed)
+        n = 60
+        coords = rng.uniform(0.0, 5.0, size=(n, 2))
+        x1 = rng.normal(size=n)
+        noise = rng.normal(size=n)
+        y = rng.normal(size=n)
+        if dup == "exact":
+            x2 = x1.copy()  # exactly collinear -> singular X'X
+        elif dup == "near":
+            x2 = x1 + 1e-3 * noise  # highly collinear but full rank
+        else:
+            x2 = noise  # independent
+        X = np.column_stack([np.ones(n), x1, x2])
+        beta, *_ = np.linalg.lstsq(X, y, rcond=None)
+        resid = y - X @ beta
+        return X, resid, coords
+
+    def test_singular_gram_rank_reduces_not_raises(self):
+        X, resid, coords = self._cross_section(0, dup="exact")
+        bread = X.T @ X  # exactly singular (x2 == x1)
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            V = _compute_conley_vcov(X, resid, coords, 3.0, "euclidean", "bartlett", bread)
+        # Pre-fix this raised ValueError; now it rank-reduces. The dropped
+        # (duplicate, unidentified) coefficient gets a NaN row/col — se=NaN, not
+        # the zero-filled se=0 — while the identified coefficients stay finite.
+        nan_diag = np.isnan(np.diag(V))
+        assert nan_diag.sum() == 1, f"exactly one duplicate coef should be NaN, got {np.diag(V)}"
+        kept = np.flatnonzero(~nan_diag)
+        assert 0 in kept, "intercept (identified) must remain finite"
+        assert np.all(np.isfinite(V[np.ix_(kept, kept)])), "identified block must be finite"
+        dropped_idx = int(np.flatnonzero(nan_diag)[0])
+        assert np.all(np.isnan(V[dropped_idx, :])) and np.all(np.isnan(V[:, dropped_idx]))
+        msgs = [str(w.message) for w in caught]
+        assert any(
+            "Conley spatial HAC variance" in m and "rank-deficient" in m for m in msgs
+        ), msgs
+
+    def test_rank_zero_gram_returns_nan(self):
+        X, resid, coords = self._cross_section(1, dup="indep")
+        Xz = np.zeros_like(X)
+        bread = Xz.T @ Xz  # rank 0
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            V = _compute_conley_vcov(Xz, resid, coords, 3.0, "euclidean", "bartlett", bread)
+        assert np.all(np.isnan(V))
+
+    def test_column_drop_equals_near_collinear_limit(self):
+        # Column-drop generalized inverse == the near-collinear full-rank limit:
+        # the identified-subspace SE (intercept) matches between an exactly-
+        # collinear design (rank-reduced) and a highly-but-not-exactly collinear
+        # one (full-rank normal inverse). Mirrors the covariate rank-guard's
+        # verified se_ratio ~ 1 property.
+        Xe, re_, ce = self._cross_section(7, dup="exact")
+        Xn, rn, cn = self._cross_section(7, dup="near")
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            Ve = _compute_conley_vcov(Xe, re_, ce, 3.0, "euclidean", "bartlett", Xe.T @ Xe)
+            Vn = _compute_conley_vcov(Xn, rn, cn, 3.0, "euclidean", "bartlett", Xn.T @ Xn)
+        assert np.isfinite(Ve[0, 0]) and Ve[0, 0] > 0
+        np.testing.assert_allclose(Ve[0, 0], Vn[0, 0], rtol=5e-2)

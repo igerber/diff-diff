@@ -464,7 +464,7 @@ class TestGardner2022Section33GMMVariance:
         )
         treated = ((df["first_treat"] > 0) & (df["time"] >= df["first_treat"])).values
         X_2 = treated.astype(float).reshape(-1, 1)
-        S, bread, _ = est._compute_cluster_S_scores(
+        S, bread, _, _ = est._compute_cluster_S_scores(
             df,
             "unit",
             "time",
@@ -523,7 +523,7 @@ class TestGardner2022Section33GMMVariance:
             X_2,
             cluster_ids,
         )
-        S, bread, _ = est._compute_cluster_S_scores(
+        S, bread, _, _ = est._compute_cluster_S_scores(
             df,
             "unit",
             "time",

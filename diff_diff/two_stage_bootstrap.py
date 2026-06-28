@@ -22,6 +22,7 @@ from diff_diff.bootstrap_utils import (
 from diff_diff.bootstrap_utils import (
     generate_survey_multiplier_weights_batch as _generate_survey_multiplier_weights_batch,
 )
+from diff_diff.linalg import _rank_guarded_inv
 from diff_diff.two_stage_results import TwoStageBootstrapResults
 
 # Maximum number of elements before falling back to per-column sparse aggregation.
@@ -136,7 +137,7 @@ class TwoStageDiDBootstrapMixin:
         X_2: np.ndarray,
         cluster_ids: np.ndarray,
         survey_weights: Optional[np.ndarray] = None,
-    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """
         Compute per-cluster S_g scores for bootstrap.
 
@@ -145,9 +146,13 @@ class TwoStageDiDBootstrapMixin:
         S : np.ndarray, shape (G, k)
             Per-cluster influence scores.
         bread : np.ndarray, shape (k, k)
-            (X'_2 X_2)^{-1}.
+            (X'_2 X_2)^{-1} (rank-guarded; zero-filled rows/cols for any dropped,
+            unidentified Stage-2 coordinate).
         unique_clusters : np.ndarray
             Unique cluster identifiers.
+        dropped : np.ndarray of bool, shape (k,)
+            Mask of dropped (unidentified) Stage-2 coordinates; callers NaN the
+            corresponding bootstrap coefficient columns so their SE is NaN, not 0.
         """
         k = X_2.shape[1]
 
@@ -273,27 +278,28 @@ class TwoStageDiDBootstrapMixin:
                 XtX_2 = X_2.T @ (X_2 * survey_weights[:, None])
             else:
                 XtX_2 = np.dot(X_2.T, X_2)
-        try:
-            bread = np.linalg.solve(XtX_2, np.eye(k))
-        except np.linalg.LinAlgError:
-            # Sibling of finding #17 (axis A) — the bootstrap bread
-            # fallback was previously silent. X_2 is the Stage-2 indicator
-            # design (treatment / horizon / group dummies), so a singular
-            # bread typically indicates a zero-weight or all-zero column.
+        # np.linalg.solve only raises on an *exactly* singular Gram; a *near*-
+        # singular X_2'WX_2 would otherwise flow a garbage inverse (~1e13) into
+        # the bootstrap SE. `_rank_guarded_inv` truncates redundant directions on
+        # the equilibrated Gram -> finite SE on the identified subspace (NaN at
+        # rank 0) — the cross-surface twin of the analytical TSL bread guard in
+        # two_stage.py. Sibling of finding #17 (axis A): the prior fallback fired
+        # only on an exactly-singular matrix.
+        bread, n_dropped, _, dropped = _rank_guarded_inv(XtX_2, return_dropped=True)
+        if n_dropped:
             warnings.warn(
                 "Rank-deficient second-stage design matrix X_2'WX_2 in "
-                "TwoStageDiD multiplier bootstrap bread; falling back to "
-                "np.linalg.lstsq. Bootstrap SEs may be numerically "
-                "unstable. The Stage-2 design is built from treatment, "
-                "event-time, or group indicators, so this typically "
-                "indicates a zero-weight or all-zero indicator column "
+                "TwoStageDiD multiplier bootstrap bread; rank-reducing to a "
+                f"finite SE on the identified subspace ({n_dropped} redundant "
+                "direction(s) dropped, NaN if rank 0). The Stage-2 design is "
+                "built from treatment, event-time, or group indicators, so this "
+                "typically indicates a zero-weight or all-zero indicator column "
                 "(e.g. an aggregation path with no qualifying observations).",
                 UserWarning,
                 stacklevel=2,
             )
-            bread = np.linalg.lstsq(XtX_2, np.eye(k), rcond=None)[0]
 
-        return S, bread, unique_clusters
+        return S, bread, unique_clusters, dropped
 
     def _build_nan_bootstrap_results(
         self,
@@ -404,7 +410,7 @@ class TwoStageDiDBootstrapMixin:
 
         X_2_static = D.reshape(-1, 1)
 
-        S_static, bread_static, unique_clusters = self._compute_cluster_S_scores(
+        S_static, bread_static, unique_clusters, _ = self._compute_cluster_S_scores(
             df=df,
             unit=unit,
             time=time,
@@ -553,7 +559,7 @@ class TwoStageDiDBootstrapMixin:
                         if h_int in horizon_to_col:
                             X_2_es[i, horizon_to_col[h_int]] = 1.0
 
-                S_es, bread_es, _ = self._compute_cluster_S_scores(
+                S_es, bread_es, _, dropped_es = self._compute_cluster_S_scores(
                     df=df,
                     unit=unit,
                     time=time,
@@ -570,6 +576,12 @@ class TwoStageDiDBootstrapMixin:
 
                 # boot_coef_es: (B, k_es)
                 boot_coef_es = np.dot(np.dot(all_weights, S_es), bread_es.T)
+                # A dropped (unidentified) event-time coefficient is zero-filled in
+                # bread_es -> a 0 bootstrap column -> se=0. NaN it (via the explicit
+                # dropped mask) so the per-horizon SE is NaN, not 0. (Defensive: a
+                # coefficient the point estimate also drops already has a NaN effect
+                # and is skipped below; this guards the inconsistent case.)
+                boot_coef_es[:, dropped_es] = np.nan
 
                 event_study_ses = {}
                 event_study_cis = {}
@@ -614,7 +626,7 @@ class TwoStageDiDBootstrapMixin:
                     if g in group_to_col:
                         X_2_grp[i, group_to_col[g]] = 1.0
 
-            S_grp, bread_grp, _ = self._compute_cluster_S_scores(
+            S_grp, bread_grp, _, dropped_grp = self._compute_cluster_S_scores(
                 df=df,
                 unit=unit,
                 time=time,
@@ -630,6 +642,9 @@ class TwoStageDiDBootstrapMixin:
             )
 
             boot_coef_grp = np.dot(np.dot(all_weights, S_grp), bread_grp.T)
+            # NaN any dropped (unidentified) group coefficient (via the explicit
+            # dropped mask) so its per-group SE is NaN, not 0 (see event-study note).
+            boot_coef_grp[:, dropped_grp] = np.nan
 
             group_ses = {}
             group_cis = {}

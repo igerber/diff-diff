@@ -36,7 +36,7 @@ from diff_diff.conley import (
     _validate_conley_kwargs,
     _validate_meat_psd,
 )
-from diff_diff.linalg import solve_ols
+from diff_diff.linalg import _rank_guarded_inv, solve_ols
 from diff_diff.two_stage_bootstrap import TwoStageDiDBootstrapMixin
 from diff_diff.two_stage_results import (
     TwoStageBootstrapResults,  # noqa: F401
@@ -3175,29 +3175,36 @@ class TwoStageDiD(TwoStageDiDBootstrapMixin):
                 XtWX_2 = X_2.T @ (X_2 * survey_weights[:, None])
             else:
                 XtWX_2 = X_2.T @ X_2
-        try:
-            bread = np.linalg.solve(XtWX_2, np.eye(k))
-        except np.linalg.LinAlgError:
-            # Sibling of finding #17 (axis A) — the TSL-variance bread
-            # fallback was previously silent. Note: X_2 is the Stage-2
-            # indicator design (treatment / horizon / group dummies), not
-            # user covariates, so the diagnostic guidance points at that
-            # layer.
+        # np.linalg.solve only raises on an *exactly* singular Gram; a *near*-
+        # singular X_2'WX_2 would otherwise flow a garbage inverse (~1e13)
+        # straight into the SE. `_rank_guarded_inv` truncates redundant
+        # directions on the equilibrated Gram -> finite SE on the identified
+        # subspace (NaN only at rank 0), matching the covariate IF rank-guard.
+        # Sibling of finding #17 (axis A): the prior fallback fired only on an
+        # exactly-singular matrix. X_2 is the Stage-2 indicator design (not user
+        # covariates), so the diagnostic guidance points at that layer.
+        bread, n_dropped, _, dropped = _rank_guarded_inv(XtWX_2, return_dropped=True)
+        if n_dropped:
             warnings.warn(
                 "Rank-deficient second-stage design matrix X_2'WX_2 in "
-                "TwoStageDiD TSL variance; falling back to np.linalg.lstsq "
-                "for the bread matrix. Analytical SEs may be numerically "
-                "unstable. The Stage-2 design is built from treatment, "
-                "event-time, or group indicators, so this typically "
+                "TwoStageDiD TSL variance; rank-reducing to a finite SE on the "
+                f"identified subspace ({n_dropped} redundant direction(s) "
+                "dropped, NaN if rank 0). The Stage-2 design is built from "
+                "treatment, event-time, or group indicators, so this typically "
                 "indicates a zero-weight or all-zero indicator column "
                 "(e.g. an aggregation path with no qualifying observations).",
                 UserWarning,
                 stacklevel=2,
             )
-            bread = np.linalg.lstsq(XtWX_2, np.eye(k), rcond=None)[0]
 
         # 7. V = bread @ meat @ bread
         V = bread @ meat @ bread
+        # A dropped (unidentified) Stage-2 coefficient is zero-filled in `bread`,
+        # which would report se=0 for that named coefficient; NaN its row/col in
+        # the FINAL vcov so per-coefficient SE extraction yields NaN (not 0).
+        if dropped.any():
+            V[dropped, :] = np.nan
+            V[:, dropped] = np.nan
         return V
 
     def _build_fe_design(

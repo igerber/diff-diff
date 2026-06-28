@@ -2221,3 +2221,33 @@ class TestRankGuardedInv:
         assert ginv.shape == (0, 0)
         assert n_dropped == 0
         assert rank == 0
+
+    def test_return_dropped_mask(self):
+        # return_dropped=True exposes a length-k boolean mask of the truncated
+        # (unidentified) coordinates so per-coefficient callers can NaN them
+        # (a zero-filled dropped coordinate would otherwise report se=0).
+        rng = np.random.RandomState(7)
+        n = 100
+        x = rng.standard_normal(n)
+        X = np.column_stack([np.ones(n), x, x])  # cols 1 and 2 exactly collinear
+        A = self._gram(X)
+
+        # Default call is unchanged (backward-compatible 3-tuple).
+        assert len(_rank_guarded_inv(A)) == 3
+
+        ginv, n_dropped, rank, dropped = _rank_guarded_inv(A, return_dropped=True)
+        assert n_dropped == 1 and rank == 2
+        assert dropped.dtype == bool and dropped.shape == (3,)
+        assert dropped.sum() == 1
+        # The dropped coordinate is exactly the zero-filled row/col of the inverse.
+        assert np.all(ginv[dropped] == 0.0)
+        assert bool(dropped[0]) is False  # intercept stays identified
+
+        # Full rank -> no dropped coordinates.
+        A_ok = self._gram(rng.standard_normal((n, 3)))
+        _, nd_ok, _, dropped_ok = _rank_guarded_inv(A_ok, return_dropped=True)
+        assert nd_ok == 0 and not dropped_ok.any()
+
+        # Rank 0 -> every coordinate dropped.
+        _, nd0, _, dropped0 = _rank_guarded_inv(np.zeros((3, 3)), return_dropped=True)
+        assert nd0 == 3 and dropped0.all()

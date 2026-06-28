@@ -1451,15 +1451,18 @@ class TestSilentWarningAudit:
 
 
 class TestTwoStageStage2BreadWarning:
-    """Sibling of STD finding #17: the TwoStage Stage-2 bread fallback
-    (`X'_2 W X_2` singular) was silent. X_2 is built from treatment/
-    event-time/group indicators — not user covariates — so we force the
-    LinAlgError via patching `np.linalg.solve` rather than data crafting,
+    """Sibling of STD finding #17: the TwoStage Stage-2 bread (`X'_2 W X_2`)
+    inversion was silent on a singular design and garbage on a *near*-singular
+    one. It now routes through the shared `_rank_guarded_inv`, which rank-reduces
+    to a finite SE on the identified subspace and warns. X_2 is built from
+    treatment/event-time/group indicators (not user covariates), so we force the
+    rank-deficiency at the `_rank_guarded_inv` seam rather than via data crafting,
     per the PR #334 CI review guidance."""
 
-    def test_analytical_bread_lstsq_fallback_warns(self):
-        """When np.linalg.solve on the Stage-2 bread raises, the analytical
-        TSL path must warn and still return a finite variance via lstsq."""
+    def test_analytical_bread_rank_reduces_and_warns(self):
+        """When the Stage-2 bread is rank-deficient, the analytical TSL path
+        rank-reduces via `_rank_guarded_inv`, warns, and still returns a finite
+        variance."""
         from unittest.mock import patch
 
         import diff_diff.two_stage as ts_mod
@@ -1467,22 +1470,20 @@ class TestTwoStageStage2BreadWarning:
         data = generate_test_data(n_units=80, n_periods=6, seed=77)
         est = TwoStageDiD()
 
-        real_solve = np.linalg.solve
+        real_rgi = ts_mod._rank_guarded_inv
 
-        def raise_for_square_eye(a, b):
-            # Identify the Stage-2 bread call by shape: b is np.eye(k)
-            # (square identity). All other solve calls in the codepath
-            # have different b shapes.
-            if (
-                isinstance(b, np.ndarray)
-                and b.ndim == 2
-                and b.shape[0] == b.shape[1]
-                and np.allclose(b, np.eye(b.shape[0]))
-            ):
-                raise np.linalg.LinAlgError("forced by test")
-            return real_solve(a, b)
+        def force_drop(A, **kwargs):
+            # Force a rank-deficiency *report* (finite inverse, n_dropped=1) to
+            # exercise the rank-reduce warning path deterministically, with an
+            # empty dropped mask so the identified ATT SE stays finite (the
+            # NaN-for-dropped behavior is covered by the conley direct-call and
+            # _rank_guarded_inv unit tests). Mirrors the helper's return arity.
+            inv, _, rank = real_rgi(A)
+            if kwargs.get("return_dropped"):
+                return inv, 1, rank, np.zeros(A.shape[0], dtype=bool)
+            return inv, 1, rank
 
-        with patch.object(ts_mod.np.linalg, "solve", side_effect=raise_for_square_eye):
+        with patch.object(ts_mod, "_rank_guarded_inv", side_effect=force_drop):
             with warnings.catch_warnings(record=True) as caught:
                 warnings.simplefilter("always")
                 result = est.fit(
@@ -1494,18 +1495,18 @@ class TestTwoStageStage2BreadWarning:
                 )
         fallback = [w for w in caught if "TwoStageDiD TSL variance" in str(w.message)]
         assert len(fallback) >= 1, (
-            "Expected TSL-variance bread fallback warning when np.linalg.solve "
-            f"was forced to raise; got warnings: "
-            f"{[str(w.message) for w in caught]}"
+            "Expected TSL-variance rank-reduce warning when the Stage-2 bread is "
+            f"rank-deficient; got warnings: {[str(w.message) for w in caught]}"
         )
         msg = str(fallback[0].message)
-        assert "np.linalg.lstsq" in msg
+        assert "rank-reducing" in msg
         assert "X_2'WX_2" in msg
-        # lstsq fallback must still produce a finite SE.
+        # rank-reduced bread must still produce a finite SE.
         assert np.isfinite(result.overall_se)
 
-    def test_bootstrap_bread_lstsq_fallback_warns(self):
-        """Same contract for the multiplier-bootstrap bread path."""
+    def test_bootstrap_bread_rank_reduces_and_warns(self):
+        """Same contract for the multiplier-bootstrap bread path (the
+        cross-surface twin in two_stage_bootstrap.py)."""
         from unittest.mock import patch
 
         import diff_diff.two_stage_bootstrap as tsb_mod
@@ -1513,19 +1514,17 @@ class TestTwoStageStage2BreadWarning:
         data = generate_test_data(n_units=80, n_periods=6, seed=77)
         est = TwoStageDiD(n_bootstrap=10, seed=0)
 
-        real_solve = np.linalg.solve
+        real_rgi = tsb_mod._rank_guarded_inv
 
-        def raise_for_square_eye(a, b):
-            if (
-                isinstance(b, np.ndarray)
-                and b.ndim == 2
-                and b.shape[0] == b.shape[1]
-                and np.allclose(b, np.eye(b.shape[0]))
-            ):
-                raise np.linalg.LinAlgError("forced by test")
-            return real_solve(a, b)
+        def force_drop(A, **kwargs):
+            # n_dropped=1 (warning fires), empty dropped mask so the identified
+            # bootstrap SEs stay finite. Mirrors the helper's return arity.
+            inv, _, rank = real_rgi(A)
+            if kwargs.get("return_dropped"):
+                return inv, 1, rank, np.zeros(A.shape[0], dtype=bool)
+            return inv, 1, rank
 
-        with patch.object(tsb_mod.np.linalg, "solve", side_effect=raise_for_square_eye):
+        with patch.object(tsb_mod, "_rank_guarded_inv", side_effect=force_drop):
             with warnings.catch_warnings(record=True) as caught:
                 warnings.simplefilter("always")
                 est.fit(
@@ -1537,13 +1536,104 @@ class TestTwoStageStage2BreadWarning:
                 )
         fallback = [w for w in caught if "TwoStageDiD multiplier bootstrap bread" in str(w.message)]
         assert len(fallback) >= 1, (
-            "Expected bootstrap-bread fallback warning when np.linalg.solve "
-            f"was forced to raise; got warnings: "
-            f"{[str(w.message) for w in caught]}"
+            "Expected bootstrap-bread rank-reduce warning when the bread is "
+            f"rank-deficient; got warnings: {[str(w.message) for w in caught]}"
         )
         msg = str(fallback[0].message)
-        assert "np.linalg.lstsq" in msg
+        assert "rank-reducing" in msg
         assert "X_2'WX_2" in msg
+
+    @staticmethod
+    def _drop_last_rgi(real_rgi):
+        """Mock factory: genuinely drop the last Stage-2 coordinate (zero-fill its
+        row/col in the inverse + report it dropped) so the caller NaNs it."""
+
+        def drop_last(A, **kwargs):
+            inv, _, rank = real_rgi(A)
+            inv = np.array(inv, dtype=float)
+            inv[-1, :] = 0.0
+            inv[:, -1] = 0.0
+            k = A.shape[0]
+            dropped = np.zeros(k, dtype=bool)
+            dropped[-1] = True
+            if kwargs.get("return_dropped"):
+                return inv, 1, k - 1, dropped
+            return inv, 1, k - 1
+
+        return drop_last
+
+    @pytest.mark.parametrize(
+        "aggregate,attr",
+        [("event_study", "event_study_effects"), ("group", "group_effects")],
+    )
+    def test_dropped_coefficient_propagates_nan_inference(self, aggregate, attr):
+        """A dropped (unidentified) Stage-2 coefficient must report NaN se / t_stat
+        / p_value / conf_int at the ESTIMATOR level (not the zero-filled se=0) — the
+        per-coefficient propagation the rank-guard enables (CI codex P2 test-depth).
+        Covers the analytical event-study AND group surfaces."""
+        from unittest.mock import patch
+
+        import diff_diff.two_stage as ts_mod
+
+        data = generate_test_data(n_units=80, n_periods=6, seed=77)
+        with patch.object(
+            ts_mod, "_rank_guarded_inv", side_effect=self._drop_last_rgi(ts_mod._rank_guarded_inv)
+        ):
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                res = TwoStageDiD().fit(
+                    data,
+                    outcome="outcome",
+                    unit="unit",
+                    time="time",
+                    first_treat="first_treat",
+                    aggregate=aggregate,
+                )
+        effects = getattr(res, attr)
+        nan_k = [k for k, e in effects.items() if np.isnan(e["se"])]
+        fin_k = [k for k, e in effects.items() if np.isfinite(e["se"]) and e["se"] > 0]
+        assert nan_k, (
+            f"a dropped Stage-2 coordinate should yield a NaN-se {aggregate} effect; "
+            f"got {{k: e['se'] for k, e in effects.items()}}"
+        )
+        assert fin_k, "identified effects should keep finite SE"
+        # A dropped coefficient's FULL inference tuple must be NaN, not just se.
+        for k in nan_k:
+            e = effects[k]
+            assert np.isnan(e["t_stat"]) and np.isnan(e["p_value"])
+            assert all(np.isnan(c) for c in e["conf_int"])
+
+    def test_bootstrap_dropped_coefficient_propagates_nan_inference(self):
+        """Same estimator-level NaN propagation on the multiplier-bootstrap surface:
+        a dropped Stage-2 coordinate NaNs the bootstrap coefficient column, so the
+        affected event-time SE is NaN while identified horizons stay finite."""
+        from unittest.mock import patch
+
+        import diff_diff.two_stage as ts_mod
+        import diff_diff.two_stage_bootstrap as tsb_mod
+
+        data = generate_test_data(n_units=80, n_periods=6, seed=77)
+        with patch.object(
+            tsb_mod, "_rank_guarded_inv", side_effect=self._drop_last_rgi(tsb_mod._rank_guarded_inv)
+        ):
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                res = ts_mod.TwoStageDiD(n_bootstrap=25, seed=0).fit(
+                    data,
+                    outcome="outcome",
+                    unit="unit",
+                    time="time",
+                    first_treat="first_treat",
+                    aggregate="all",
+                )
+        es = res.event_study_effects
+        nan_h = [h for h, e in es.items() if np.isnan(e["se"])]
+        fin_h = [h for h, e in es.items() if np.isfinite(e["se"]) and e["se"] > 0]
+        assert nan_h, (
+            "a dropped Stage-2 coordinate should yield a NaN-se bootstrap horizon; "
+            f"got {{h: e['se'] for h, e in es.items()}}"
+        )
+        assert fin_h, "identified bootstrap horizons should keep finite SE"
 
 
 # =============================================================================
