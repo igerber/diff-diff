@@ -8,6 +8,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **`LPDiD` (Local Projections Difference-in-Differences; Dube, Girardi, Jordà & Taylor 2025,
+  *J. Applied Econometrics* 40(5):741-758).** Per-horizon long-difference OLS
+  (`y_{i,t+h} − y_{i,t−1}`) on a clean-control sample (newly-treated + not-yet-treated) with
+  calendar-time fixed effects and no unit FE, so the default variance-weighted estimand has
+  strictly non-negative weights (no TWFE negative-weighting). Options: `reweight=True`
+  (equally-weighted ATT, numerically equivalent to Callaway-Sant'Anna), premean-differenced base
+  period (`pmd`), `no_composition` (fixed post-treatment composition), pooled pre/post estimands,
+  outcome/first-difference lag controls (`ylags`/`dylags`), and a regression-adjustment covariate
+  path (ImputationDiD/BJS-family influence-function cluster variance). Cluster-robust SEs at the
+  unit level by default. This release implements the **absorbing-treatment** path; per-unit
+  interior time gaps are handled by calendar-correct feature construction. Non-absorbing
+  treatment, survey-design support, and external R-package parity are tracked follow-ups.
 - **`placebo_group_test` gained an optional `treatment` parameter.** When supplied, units
   that are ever real-treated are dropped before the placebo so it runs on never-treated units
   only (the uncontaminated design); without it, behavior is unchanged and the caller must pass
