@@ -579,6 +579,31 @@ class LPDiD:
         if n_obs == 0 or sample["_entry"].nunique() < 2:
             return empty_result
 
+        if include_time_fe:
+            # Clean-control support: a treated observation at an event time with no
+            # clean control has a time fixed effect collinear with the treatment
+            # indicator. The rank handler could then drop that time dummy and
+            # identify the treatment effect off invalid cross-event-time
+            # comparisons, so drop those unsupported treated observations (and
+            # surface the drop) rather than emit a spurious estimate. Mirrors the
+            # regression-adjustment path's event-time identification check.
+            control_event_times = set(sample.loc[sample["_entry"].eq(0.0), "_event_time"].unique())
+            unsupported = sample["_entry"].eq(1.0) & ~sample["_event_time"].isin(
+                control_event_times
+            )
+            if bool(unsupported.any()):
+                n_drop = int(unsupported.sum())
+                warnings.warn(
+                    f"LPDiD: dropped {n_drop} treated observation(s) at event time(s) with no "
+                    "clean control (the treatment effect is unidentified at that event time).",
+                    UserWarning,
+                    stacklevel=2,
+                )
+                sample = sample.loc[~unsupported].copy()
+                n_obs = int(len(sample))
+                if n_obs == 0 or sample["_entry"].nunique() < 2:
+                    return {**empty_result, "n_obs": n_obs}
+
         design_columns = [
             np.ones(n_obs, dtype=float),
             sample["_entry"].to_numpy(dtype=float),

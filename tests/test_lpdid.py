@@ -1047,6 +1047,60 @@ class TestLPDiDUnbalanced:
         h0 = res.event_study.loc[res.event_study["horizon"] == 0, "coefficient"].iloc[0]
         assert np.isfinite(h0)
 
+    @staticmethod
+    def _unsupported_event_time_panel():
+        # cohorts {2, 4}, NO never-treated: cohort B (entry t=4) has no clean control
+        # (every other unit treated since t=2). Cohort B gets a HUGE effect (99) so a
+        # spurious cross-time identification would visibly contaminate the estimate;
+        # cohort A's true effect is +3.
+        rows = []
+        for u in (1, 2):
+            for t in range(6):
+                rows.append(
+                    {
+                        "unit": u,
+                        "time": t,
+                        "y": float(t + (3 if t >= 2 else 0)),
+                        "treat": int(t >= 2),
+                    }
+                )
+        for u in (3, 4):
+            for t in range(6):
+                rows.append(
+                    {
+                        "unit": u,
+                        "time": t,
+                        "y": float(t + (99 if t >= 4 else 0)),
+                        "treat": int(t >= 4),
+                    }
+                )
+        return pd.DataFrame(rows)
+
+    def test_default_path_drops_unsupported_event_time(self):
+        # Default (reweight=False) OLS path: a treated event-time with NO clean
+        # control must be dropped, not identified via a collinear time-FE drop --
+        # even under rank_deficient_action="silent".
+        df = self._unsupported_event_time_panel()
+        with pytest.warns(UserWarning, match="no clean control"):
+            res = LPDiD(
+                pre_window=1, post_window=1, control_group="clean", rank_deficient_action="silent"
+            ).fit(df, outcome="y", unit="unit", time="time", treatment="treat", only_event=True)
+        # cohort A (+3) only; the unidentified cohort B (+99) is dropped, so the
+        # estimate is NOT pulled toward 99.
+        h0 = res.event_study.loc[res.event_study["horizon"] == 0, "coefficient"].iloc[0]
+        assert h0 == pytest.approx(3.0, abs=1e-6)
+
+    def test_pooled_path_drops_unsupported_event_time(self):
+        # The same enforcement must apply on the pooled path (pre_window>=2 so the
+        # pooled-pre window is non-empty).
+        df = self._unsupported_event_time_panel()
+        with pytest.warns(UserWarning, match="no clean control"):
+            res = LPDiD(pre_window=2, post_window=1, control_group="clean").fit(
+                df, outcome="y", unit="unit", time="time", treatment="treat"
+            )
+        pooled_post = res.pooled.loc[res.pooled["window"] == "post", "coefficient"].iloc[0]
+        assert pooled_post == pytest.approx(3.0, abs=1e-6)  # cohort A only, not pulled to 99
+
     def test_ylags_dylags_trigger_direct_inclusion_warning(self):
         # Outcome/first-difference lags are direct-included controls under
         # reweight=False, so they fire the same homogeneity warning as covariates.
