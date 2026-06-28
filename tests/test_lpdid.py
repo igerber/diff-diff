@@ -124,6 +124,50 @@ class TestLPDiDAPI:
         with pytest.raises(ValueError, match="numeric `time`"):
             LPDiD().fit(df, outcome="y", unit="unit", time="time", treatment="treat")
 
+    def test_rejects_irregular_time_grid(self):
+        df = pd.DataFrame(
+            {
+                "unit": [1, 1, 1, 2, 2, 2],
+                "time": [2000, 2002, 2004] * 2,  # spacing 2, not 1
+                "y": [1.0, 2, 3, 1, 1, 1],
+                "treat": [0, 1, 1, 0, 0, 0],
+            }
+        )
+        with pytest.raises(ValueError, match="integer-spaced"):
+            LPDiD(pre_window=1, post_window=1).fit(
+                df, outcome="y", unit="unit", time="time", treatment="treat"
+            )
+
+    def test_rejects_string_covariates(self):
+        df = pd.DataFrame(
+            {
+                "unit": [1, 1, 2, 2],
+                "time": [0, 1, 0, 1],
+                "y": [1.0, 2, 1, 1],
+                "treat": [0, 1, 0, 0],
+                "x": [1.0, 2, 3, 4],
+            }
+        )
+        with pytest.raises(ValueError, match="covariates must be a list"):
+            LPDiD().fit(
+                df, outcome="y", unit="unit", time="time", treatment="treat", covariates="x"
+            )
+
+    def test_rejects_missing_cluster_labels(self):
+        df = pd.DataFrame(
+            {
+                "unit": [1, 1, 1, 2, 2, 2],
+                "time": [0, 1, 2] * 2,
+                "y": [1.0, 3, 5, 1, 1, 1],
+                "treat": [0, 1, 1, 0, 0, 0],
+                "cl": [1, 1, 1, np.nan, 2, 2],
+            }
+        )
+        with pytest.raises(ValueError, match="missing values"):
+            LPDiD(pre_window=1, post_window=1, cluster="cl").fit(
+                df, outcome="y", unit="unit", time="time", treatment="treat", only_event=True
+            )
+
     def test_set_params_rejects_unknown_key(self):
         with pytest.raises(ValueError, match="Unknown parameter"):
             LPDiD().set_params(nonexistent_param=1)

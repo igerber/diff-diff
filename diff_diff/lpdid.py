@@ -95,6 +95,12 @@ class LPDiD:
 
         panel["_treated"] = treated_numeric.astype(int)
         panel["_cluster"] = panel[cluster]
+        if panel["_cluster"].isna().any():
+            raise ValueError(
+                f"cluster column '{cluster}' contains missing values; LPDiD cannot form "
+                "cluster-robust standard errors with missing cluster labels (the affected "
+                "rows would silently drop from the variance)."
+            )
         panel["_lag_treated"] = panel.groupby(unit)["_treated"].shift(1, fill_value=0)
         panel["_entry"] = ((panel["_treated"] == 1) & (panel["_lag_treated"] == 0)).astype(float)
         panel["_treated_cummax"] = panel.groupby(unit)["_treated"].cummax()
@@ -875,6 +881,16 @@ class LPDiD:
                 "long differences use t-1 / t+h arithmetic on the time labels. Map "
                 "irregular or datetime periods to consecutive integers first."
             )
+        _unique_times = np.sort(pd.unique(data[time]))
+        if len(_unique_times) > 1 and not np.allclose(np.diff(_unique_times), 1.0):
+            raise ValueError(
+                "LPDiD requires integer-spaced `time` periods (consecutive, spaced by 1); "
+                "the global time grid is irregular (e.g. 2000, 2002, ...). Remap periods "
+                "to consecutive integers first so t-1 / t+h horizons are well defined."
+            )
+        for _arg_name, _arg in (("covariates", covariates), ("absorb", absorb)):
+            if isinstance(_arg, str):
+                raise ValueError(f"{_arg_name} must be a list of column names, not a string")
 
         if (covariates or absorb or ylags or dylags) and not self.reweight:
             warnings.warn(
