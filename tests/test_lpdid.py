@@ -963,6 +963,26 @@ class TestLPDiDUnbalanced:
         ]
         assert baseline == pytest.approx(20.0, abs=1e-9)  # mean(10, 30); NaN at t=1 excluded
 
+    def test_pmd_max_retains_obs_with_missing_current_outcome(self):
+        # The premean baseline uses only PRIOR outcomes, never the base row's own
+        # y_t, so a treated entry whose current-period outcome is missing (but
+        # priors and the h>0 target are observed) stays identified -- it must not
+        # be silently dropped (which would zero out the treatment variation).
+        rows = []
+        for u in (1, 2):  # treated, entry t=3, entry-period outcome y_3 missing
+            for t, y in enumerate([10.0, 11.0, 12.0, np.nan, 14.0, 15.0]):
+                rows.append({"unit": u, "time": t, "y": y, "treat": int(t >= 3)})
+        for u in (3, 4, 5, 6):
+            for t in range(6):
+                rows.append({"unit": u, "time": t, "y": float(u + t), "treat": 0})
+        df = pd.DataFrame(rows)
+        res = LPDiD(pre_window=2, post_window=2, pmd="max").fit(
+            df, outcome="y", unit="unit", time="time", treatment="treat", only_event=True
+        )
+        h1 = res.event_study[res.event_study["horizon"] == 1].iloc[0]
+        assert np.isfinite(h1["coefficient"])  # treated entry retained -> estimable
+        assert h1["n_obs"] > 0
+
     def test_ylags_dylags_trigger_direct_inclusion_warning(self):
         # Outcome/first-difference lags are direct-included controls under
         # reweight=False, so they fire the same homogeneity warning as covariates.

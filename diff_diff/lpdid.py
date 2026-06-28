@@ -146,11 +146,17 @@ class LPDiD:
             panel["_first_treat"] = panel[unit].map(first_treat).astype(float).fillna(np.inf)
             panel["_entry"] = (panel[time] == panel["_first_treat"]).astype(float)
 
-        # Premean ("max") baseline = mean of all AVAILABLE prior outcomes. The
-        # denominator must count non-missing prior outcomes, not prior rows, so a
-        # present-but-NaN pretreatment outcome does not deflate the mean. (cumsum
-        # already skips NaN, so the numerator is the non-missing prior sum.)
-        outcome_history_sum = panel.groupby(unit)[outcome].cumsum() - panel[outcome]
+        # Premean ("max") baseline = mean of all AVAILABLE strictly-prior outcomes.
+        # It must NOT depend on the base row's own outcome y_t: PMD replaces the
+        # t-1 baseline with the premean of prior periods, and the long difference is
+        # y_{t+h} - premean, so a base row with a missing current outcome (but
+        # observed priors and target) stays identified. fillna(0) before the
+        # cumulative sum makes the numerator the strictly-prior non-missing sum even
+        # when y_t (or an interior period) is missing; the denominator counts
+        # strictly-prior non-missing outcomes (not rows). Bit-identical to a plain
+        # cumsum when no outcome is NaN.
+        _filled_outcome = panel[outcome].fillna(0.0)
+        outcome_history_sum = _filled_outcome.groupby(panel[unit]).cumsum() - _filled_outcome
         prior_nonnull = panel[outcome].notna().astype(int)
         history_count = prior_nonnull.groupby(panel[unit]).cumsum() - prior_nonnull
         panel["_pmd_all_baseline"] = outcome_history_sum / history_count.replace(0, np.nan)
