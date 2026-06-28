@@ -1101,6 +1101,32 @@ class TestLPDiDUnbalanced:
         pooled_post = res.pooled.loc[res.pooled["window"] == "post", "coefficient"].iloc[0]
         assert pooled_post == pytest.approx(3.0, abs=1e-6)  # cohort A only, not pulled to 99
 
+    def test_ra_path_drops_redundant_covariate_without_nan(self):
+        # RA path: a redundant nuisance column (duplicate / constant covariate) is
+        # dropped by solve_ols (its coefficient becomes NaN); the ATT must stay
+        # finite and EQUAL the no-redundant-column fit -- the dropped coefficient
+        # acts as 0, not NaN (its effect is absorbed by the retained columns).
+        df = make_lpdid_panel(cohorts=(5,), n_per_cohort=15, n_never=15, n_periods=10, seed=3)
+        df["x"] = np.arange(len(df)) % 4
+        df["xdup"] = df["x"]  # exact duplicate -> redundant
+        df["xc"] = 7.0  # constant -> collinear with the intercept
+        kw = dict(outcome="y", unit="unit", time="time", treatment="treat", only_event=True)
+        ref = LPDiD(pre_window=2, post_window=2, reweight=True, rank_deficient_action="silent").fit(
+            df, covariates=["x"], **kw
+        )
+        red = LPDiD(pre_window=2, post_window=2, reweight=True, rank_deficient_action="silent").fit(
+            df, covariates=["x", "xdup", "xc"], **kw
+        )
+        ref_h0 = ref.event_study.loc[ref.event_study["horizon"] == 0, "coefficient"].iloc[0]
+        red_h0 = red.event_study.loc[red.event_study["horizon"] == 0, "coefficient"].iloc[0]
+        assert np.isfinite(red_h0)
+        assert red_h0 == pytest.approx(ref_h0, abs=1e-9)
+        # rank_deficient_action="error" still raises on the redundant nuisance design
+        with pytest.raises(ValueError):
+            LPDiD(pre_window=2, post_window=2, reweight=True, rank_deficient_action="error").fit(
+                df, covariates=["x", "xdup"], **kw
+            )
+
     def test_ylags_dylags_trigger_direct_inclusion_warning(self):
         # Outcome/first-difference lags are direct-included controls under
         # reweight=False, so they fire the same homogeneity warning as covariates.

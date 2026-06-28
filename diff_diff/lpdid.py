@@ -502,6 +502,14 @@ class LPDiD:
             rank_deficient_action=self.rank_deficient_action,
             column_names=column_names,
         )
+        # solve_ols sets DROPPED redundant-nuisance coefficients to NaN under
+        # rank_deficient_action="warn"/"silent" (a constant/duplicate covariate, a
+        # collinear absorbed level, or lag collinearity). The dropped column's
+        # contribution is absorbed by the retained collinear column(s), so it acts
+        # as 0 for prediction/residuals; without this zero-fill the NaN would
+        # propagate through every prediction and NaN an otherwise-identified ATT.
+        # ("error" still raises inside solve_ols before returning.)
+        control_coef = np.where(np.isfinite(control_coef), control_coef, 0.0)
 
         treated_design = np.column_stack(
             [np.ones(len(treated), dtype=float), treated_features.to_numpy(dtype=float)]
