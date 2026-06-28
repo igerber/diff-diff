@@ -144,7 +144,7 @@ No other Python or R DiD package offers design-based variance estimation for mod
 - Python 3.9 - 3.14
 - numpy >= 1.20
 - pandas >= 1.3
-- scipy >= 1.7
+- scipy >= 1.10
 
 ## Development
 
