@@ -353,12 +353,21 @@ class BusinessReport:
         """Return a structured multi-section markdown report."""
         base = _render_full_report(self.to_dict())
         if self._include_appendix:
+            appendix_text = None
             try:
                 appendix = self._results.summary()
-            except Exception:  # noqa: BLE001
-                appendix = None
-            if appendix:
-                base = base + "\n\n## Technical Appendix\n\n```\n" + str(appendix) + "\n```\n"
+                if appendix:
+                    appendix_text = str(appendix)
+            except Exception as exc:  # noqa: BLE001
+                appendix_error = type(exc).__name__ or "Exception"
+                base = (
+                    base
+                    + "\n\n## Technical Appendix\n\n"
+                    + "Technical appendix unavailable: estimator summary rendering failed "
+                    + f"({appendix_error}).\n"
+                )
+            if appendix_text:
+                base = base + "\n\n## Technical Appendix\n\n```\n" + appendix_text + "\n```\n"
         return base
 
     def export_markdown(self) -> str:

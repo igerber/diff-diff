@@ -480,6 +480,40 @@ class TestAppendix:
         md = br.full_report()
         assert "## Technical Appendix" not in md
 
+    def test_appendix_summary_failure_is_visible(self, event_study_fit):
+        fit, _ = event_study_fit
+        with patch.object(fit, "summary", side_effect=RuntimeError("internal path /tmp/private")):
+            br = BusinessReport(fit, auto_diagnostics=False, include_appendix=True)
+            md = br.full_report()
+
+        assert "## Technical Appendix" in md
+        assert "Technical appendix unavailable" in md
+        assert "RuntimeError" in md
+
+    def test_appendix_summary_failure_does_not_leak_exception_details(self, event_study_fit):
+        fit, _ = event_study_fit
+        with patch.object(fit, "summary", side_effect=RuntimeError("secret-token-123")):
+            br = BusinessReport(fit, auto_diagnostics=False, include_appendix=True)
+            md = br.full_report()
+
+        assert "secret-token-123" not in md
+        assert "Traceback" not in md
+
+    def test_appendix_stringification_failure_is_visible(self, event_study_fit):
+        class _BadSummary:
+            def __str__(self):
+                raise ValueError("sensitive-render-context")
+
+        fit, _ = event_study_fit
+        with patch.object(fit, "summary", return_value=_BadSummary()):
+            br = BusinessReport(fit, auto_diagnostics=False, include_appendix=True)
+            md = br.full_report()
+
+        assert "## Technical Appendix" in md
+        assert "Technical appendix unavailable" in md
+        assert "ValueError" in md
+        assert "sensitive-render-context" not in md
+
 
 # ---------------------------------------------------------------------------
 # BaconDecompositionResults
