@@ -897,7 +897,7 @@ results.print_summary()
 
 ### LPDiD
 
-Local Projections DiD (Dube, Girardi, Jorda & Taylor 2025). Estimates a separate OLS at each event-time horizon of a long difference (`y_{i,t+h} - y_{i,t-1}`) on the treatment-switch indicator plus calendar-time fixed effects (no unit FE), restricted to a flexible "clean control" sample of newly-treated and not-yet-treated units. Excluding already-treated units from the control group removes the negative-weighting bias of naive TWFE, so the default (variance-weighted) estimand has strictly non-negative weights. `reweight=True` yields the equally-weighted ATT (numerically equivalent to Callaway-Sant'Anna); covariates then enter via regression adjustment. Standard errors are cluster-robust at the unit level (the paper specifies no SE; matches Stata `lpdid` `vce(cluster unit)`). Scope: binary, absorbing treatment (rejects panels where treatment turns off).
+Local Projections DiD (Dube, Girardi, Jorda & Taylor 2025). Estimates a separate OLS at each event-time horizon of a long difference (`y_{i,t+h} - y_{i,t-1}`) on the treatment-switch indicator plus calendar-time fixed effects (no unit FE), restricted to a flexible "clean control" sample of newly-treated and not-yet-treated units. Excluding already-treated units from the control group removes the negative-weighting bias of naive TWFE, so the default (variance-weighted) estimand has strictly non-negative weights. `reweight=True` yields the equally-weighted ATT (numerically equivalent to Callaway-Sant'Anna); covariates then enter via regression adjustment. Standard errors on the default/weighted path are cluster-robust at the unit level (the paper specifies no SE; matches Stata `lpdid` `vce(cluster unit)`); the regression-adjustment covariate path (`reweight=True`) instead reports an influence-function cluster variance (ImputationDiD/BJS family). Scope: binary, absorbing treatment (rejects panels where treatment turns off).
 
 ```python
 LPDiD(
@@ -905,7 +905,7 @@ LPDiD(
     post_window: int = 0,                    # Number of post-treatment horizons
     control_group: str = "clean",            # "clean" (not-yet-treated) or "never_treated"
     reweight: bool = False,                  # True -> equally-weighted ATT (== Callaway-Sant'Anna); False -> variance-weighted
-    no_composition: bool = False,            # Hold the treated/clean-control sample fixed across horizons
+    no_composition: bool = False,            # Hold the post-treatment composition fixed across post horizons
     pmd: str | int | None = None,            # Base period: None=first-lag (t-1), "max"=premean over all pretreatment periods, int=last-k premean
     alpha: float = 0.05,
     cluster: str | None = None,              # Cluster column for cluster-robust SEs; defaults to the unit identifier

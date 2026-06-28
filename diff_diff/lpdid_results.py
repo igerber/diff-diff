@@ -176,11 +176,17 @@ class LPDiDResults:
             f"Estimand: {self.estimand}    Control group: {self.control_group}",
             f"Base period: {self._base_period_label()}    No composition: {self.no_composition}",
         ]
-        if self.covariates or self.absorb:
+        if self.covariates or self.absorb or self.ylags or self.dylags:
             cov_path = "regression-adjustment" if self.reweight else "direct inclusion"
+            lag_bits = []
+            if self.ylags:
+                lag_bits.append(f"ylags={self.ylags}")
+            if self.dylags:
+                lag_bits.append(f"dylags={self.dylags}")
+            lag_str = ("    " + ", ".join(lag_bits)) if lag_bits else ""
             lines.append(
                 f"Covariates: {self.covariates or []}    Absorb: {self.absorb or []}"
-                f"    ({cov_path})"
+                f"{lag_str}    ({cov_path})"
             )
         if self.vcov_type == "if_cluster":
             # Regression-adjustment path: influence-function cluster variance

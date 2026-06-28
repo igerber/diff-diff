@@ -34,7 +34,7 @@ estimand is a strictly non-negatively-weighted average of cohort effects.
   regression-based event study free of negative weighting
 - You want both a dynamic event-study path and a single pooled pre/post ATT
 - You want to flexibly choose the pretreatment base period (first-lag or
-  premean-differenced) or hold the sample composition fixed across horizons
+  premean-differenced) or hold the post-treatment sample composition fixed across post horizons
 - You want an estimator that is numerically equivalent to Callaway-Sant'Anna
   (reweighted) or to a Cengiz et al. (2019)-style stacked regression
   (variance-weighted), but much faster
