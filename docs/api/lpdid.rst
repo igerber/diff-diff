@@ -34,7 +34,8 @@ estimand is a strictly non-negatively-weighted average of cohort effects.
 - You want to flexibly choose the pretreatment base period (first-lag or
   premean-differenced) or hold the sample composition fixed across horizons
 - You want an estimator that is numerically equivalent to Callaway-Sant'Anna
-  (reweighted) or to a stacked regression (variance-weighted), but much faster
+  (reweighted) or to a Cengiz et al. (2019)-style stacked regression
+  (variance-weighted), but much faster
 
 **Reference:** Dube, A., Girardi, D., Jordà, Ò., & Taylor, A. M. (2025). A Local
 Projections Approach to Difference-in-Differences. *Journal of Applied
@@ -138,7 +139,7 @@ Comparison with Other Staggered Estimators
      - Equally-weighted ATT
      - Equally-weighted ATT
    * - Equivalences
-     - Reweighted == CS; variance-weighted == stacked; PMD single-cohort == BJS
+     - Reweighted == CS; variance-weighted == Cengiz (2019)-style stacking (not ``diff_diff.StackedDiD``, which is Wing et al. 2024 Q-weights); PMD single-cohort == BJS
      - Baseline
      - == reweighted PMD LP-DiD (single cohort)
    * - Covariates

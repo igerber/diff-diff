@@ -30,6 +30,7 @@ class LPDiDResults:
     cluster_name: Optional[str] = None
     n_clusters: Optional[int] = None
     vcov_type: str = "hc1"
+    rank_deficient_action: str = "warn"
     covariates: Optional[List[str]] = None
     absorb: Optional[List[str]] = None
 
@@ -123,6 +124,7 @@ class LPDiDResults:
             "estimand": self.estimand,
             "alpha": self.alpha,
             "vcov_type": self.vcov_type,
+            "rank_deficient_action": self.rank_deficient_action,
         }
         if self.cluster_name is not None:
             result["cluster_name"] = self.cluster_name

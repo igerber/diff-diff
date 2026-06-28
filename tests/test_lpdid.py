@@ -841,3 +841,24 @@ class TestLPDiDUnbalanced:
             LPDiD(pre_window=3, post_window=1).fit(
                 df, outcome="y", unit="unit", time="time", treatment="treat", pre_pooled=(-2, -1)
             )
+
+    def test_no_composition_post_fixed_under_nonmonotone_missingness(self):
+        # Missing an INTERMEDIATE target (t+1) while the max target (t+2) is
+        # observed must still give identical post-horizon n_obs (the common mask
+        # requires every post target, not just the maximum horizon).
+        df = make_lpdid_panel(cohorts=(5,), n_per_cohort=20, n_never=20, n_periods=12, seed=7)
+        drop = (df["first_treat"] == np.inf) & (df["time"] == 6) & (df["unit"] % 4 == 0)
+        ub = df.loc[~drop].reset_index(drop=True)
+        res = LPDiD(pre_window=2, post_window=2, no_composition=True).fit(
+            ub, outcome="y", unit="unit", time="time", treatment="treat", only_event=True
+        )
+        post = res.event_study.loc[res.event_study["horizon"].between(0, 2), "n_obs"]
+        assert post.nunique() == 1
+
+    def test_rank_deficient_action_propagates_to_results(self):
+        df = make_lpdid_panel(cohorts=(5,), n_per_cohort=10, n_never=10, n_periods=8, seed=8)
+        res = LPDiD(pre_window=2, post_window=2, rank_deficient_action="silent").fit(
+            df, outcome="y", unit="unit", time="time", treatment="treat"
+        )
+        assert res.rank_deficient_action == "silent"
+        assert res.to_dict()["rank_deficient_action"] == "silent"

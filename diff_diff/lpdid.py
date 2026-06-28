@@ -161,12 +161,14 @@ class LPDiD:
             time=time,
             horizon=max_post_horizon,
         )
-        return common_sample & self._outcome_available_mask(
-            panel,
-            unit=unit,
-            time=time,
-            horizon=max_post_horizon,
-        )
+        # Require EVERY post-treatment target (h = 0..max_post_horizon) to be
+        # observed, not just the maximum horizon, so the no_composition sample is
+        # truly fixed across all post horizons even under non-monotone missingness
+        # (e.g. a missing t+1 with an observed t+2).
+        available = pd.Series(True, index=panel.index)
+        for h in range(0, max_post_horizon + 1):
+            available &= self._outcome_available_mask(panel, unit=unit, time=time, horizon=h)
+        return common_sample & available
 
     def _rw_weights_from_sample(self, sample: pd.DataFrame) -> pd.Series:
         """Equal-weighting weights from the REALIZED estimation sample.
@@ -244,7 +246,9 @@ class LPDiD:
             control_mask = self._clean_control_mask(sample, time=time, horizon=horizon)
 
         sample = sample.loc[treated_mask | control_mask].copy()
-        if self.no_composition:
+        # Fixed composition is a POST-treatment contract: apply it only to post
+        # horizons; pre-treatment placebos use whatever pre-period data exists.
+        if self.no_composition and horizon >= 0:
             sample = sample.loc[sample["_common_event_ok"]].copy()
         sample["horizon"] = horizon
         sample["_event_time"] = sample[time]
@@ -693,7 +697,7 @@ class LPDiD:
             control_mask = self._clean_control_mask(sample, time=time, horizon=control_horizon)
 
         sample = sample.loc[treated_mask | control_mask].copy()
-        if self.no_composition:
+        if self.no_composition and kind == "post":
             sample = sample.loc[sample["_common_pooled_ok"]].copy()
         sample["_event_time"] = sample[time]
         sample["_pooled_diff"] = sample[target_columns].mean(axis=1) - sample[baseline_column]
@@ -982,6 +986,7 @@ class LPDiD:
             cluster_name=cluster,
             n_clusters=int(panel["_cluster"].nunique()),
             vcov_type="hc1",
+            rank_deficient_action=self.rank_deficient_action,
             covariates=list(covariates) if covariates else None,
             absorb=list(absorb) if absorb else None,
         )
