@@ -99,6 +99,14 @@ class TestLPDiDAPI:
         with pytest.raises(ValueError, match="pmd"):
             LPDiD(pmd="bad")
 
+    def test_rejects_negative_window(self):
+        with pytest.raises(ValueError, match="pre_window"):
+            LPDiD(pre_window=-1)
+        with pytest.raises(ValueError, match="post_window"):
+            LPDiD(post_window=-2)
+        with pytest.raises(ValueError, match="pre_window"):
+            LPDiD(pre_window=True)  # bool is not a valid int window
+
     def test_set_params_rejects_unknown_key(self):
         with pytest.raises(ValueError, match="Unknown parameter"):
             LPDiD().set_params(nonexistent_param=1)
@@ -722,3 +730,67 @@ class TestLPDiDEdgeCases:
         u0 = unrestricted.event_study.loc[unrestricted.event_study["horizon"] == 0, "n_obs"].iloc[0]
         c0 = common.event_study.loc[common.event_study["horizon"] == 0, "n_obs"].iloc[0]
         assert c0 < u0
+
+
+class TestLPDiDUnbalanced:
+    """Unbalanced-panel correctness (review round 1: reweight denominators, RA
+    identification, no_composition all computed from the realized sample)."""
+
+    def _unbalanced(self):
+        df = make_lpdid_panel(cohorts=(5, 8), n_per_cohort=25, n_never=30, n_periods=12, seed=21)
+        drop = (
+            (df["first_treat"] == np.inf) & (df["time"].isin([9, 10, 11])) & (df["unit"] % 3 == 0)
+        )
+        return df.loc[~drop].reset_index(drop=True)
+
+    def test_reweight_matches_cs_on_unbalanced(self):
+        # Equal-weighting denominators must come from the realized (post-drop)
+        # sample, else the Callaway-Sant'Anna equivalence breaks on missing rows.
+        ub = self._unbalanced()
+        lp = LPDiD(pre_window=3, post_window=3, reweight=True).fit(
+            ub, outcome="y", unit="unit", time="time", treatment="treat", only_event=True
+        )
+        cs = CallawaySantAnna(control_group="not_yet_treated").fit(
+            ub,
+            outcome="y",
+            unit="unit",
+            time="time",
+            first_treat="first_treat",
+            aggregate="event_study",
+        )
+        for h in range(0, 4):
+            assert _event_coef(lp, h) == pytest.approx(
+                cs.event_study_effects[h]["effect"], abs=1e-9
+            )
+
+    def test_ra_nan_consistent_on_uncontrolled_event_time(self):
+        # An event time with treated units but no clean control is unidentified:
+        # the RA path drops those treated (with a warning) and returns jointly
+        # NaN inference, never a coef=NaN / se=0 mismatch.
+        df = make_lpdid_panel(cohorts=(5,), n_per_cohort=10, n_never=10, n_periods=10, seed=3)
+        df["x"] = np.arange(len(df)) % 3
+        df = df.loc[~((df["first_treat"] == np.inf) & (df["time"] == 5))].reset_index(drop=True)
+        with pytest.warns(UserWarning, match="no clean control"):
+            res = LPDiD(pre_window=2, post_window=2, reweight=True).fit(
+                df,
+                outcome="y",
+                unit="unit",
+                time="time",
+                treatment="treat",
+                covariates=["x"],
+                only_event=True,
+            )
+        row0 = _event_row(res, 0)
+        assert pd.isna(row0["coefficient"]) and pd.isna(row0["se"])
+        for col in ("t_stat", "p_value", "conf_low", "conf_high"):
+            assert pd.isna(row0[col])
+
+    def test_no_composition_holds_post_horizons_fixed(self):
+        # no_composition fixes the POST-treatment composition: every post horizon
+        # shares the same realized n_obs even on an unbalanced panel.
+        ub = self._unbalanced()
+        res = LPDiD(pre_window=3, post_window=3, no_composition=True).fit(
+            ub, outcome="y", unit="unit", time="time", treatment="treat", only_event=True
+        )
+        post = res.event_study.loc[res.event_study["horizon"].between(0, 3), "n_obs"]
+        assert post.nunique() == 1

@@ -21,8 +21,9 @@ estimand is a strictly non-negatively-weighted average of cohort effects.
    effects are supported; under ``reweight=False`` they enter by direct
    inclusion, which preserves the non-negative weighting result only under
    homogeneous covariate effects (online Appendix B.2.2) — the
-   regression-adjustment path (``reweight=True``) is preferred and is the
-   default for covariate-adjusted designs. See
+   regression-adjustment path (``reweight=True``) is preferred for
+   covariate-adjusted designs (it does not auto-switch; the default remains
+   ``reweight=False``, which emits the warning). See
    ``docs/methodology/REGISTRY.md`` for the full contract.
 
 **When to use LPDiD:**

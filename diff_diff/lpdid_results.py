@@ -134,11 +134,14 @@ class LPDiDResults:
     # ------------------------------------------------------------------
     # text summary
     # ------------------------------------------------------------------
-    def summary(self, alpha: Optional[float] = None) -> str:
+    def summary(self) -> str:
         from diff_diff.results import _format_vcov_label, _get_significance_stars
 
-        alpha = self.alpha if alpha is None else alpha
-        ci_pct = int(round((1 - alpha) * 100))
+        # Confidence intervals in the event_study / pooled tables are computed at
+        # fit time using ``self.alpha``; the displayed level must match them, so
+        # summary() does not accept an alpha override (it would relabel without
+        # recomputing the intervals).
+        ci_pct = int(round((1 - self.alpha) * 100))
         width = 88
         bar = "=" * width
         dash = "-" * width
@@ -209,8 +212,8 @@ class LPDiDResults:
         lines.append("Signif. codes: *** p<0.001, ** p<0.01, * p<0.05")
         return "\n".join(lines)
 
-    def print_summary(self, alpha: Optional[float] = None) -> None:
-        print(self.summary(alpha=alpha))
+    def print_summary(self) -> None:
+        print(self.summary())
 
     def __repr__(self) -> str:
         cluster = f", cluster={self.cluster_name}, G={self.n_clusters}" if self.cluster_name else ""

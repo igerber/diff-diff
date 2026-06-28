@@ -38,6 +38,9 @@ class LPDiD:
         self.results_: Optional[LPDiDResults] = None
 
     def _validate_params(self) -> None:
+        for _name, _val in (("pre_window", self.pre_window), ("post_window", self.post_window)):
+            if not isinstance(_val, int) or isinstance(_val, bool) or _val < 0:
+                raise ValueError(f"{_name} must be a non-negative integer")
         if self.control_group not in ("clean", "never_treated"):
             raise ValueError("control_group must be 'clean' or 'never_treated'")
         if self.rank_deficient_action not in ("warn", "error", "silent"):
@@ -165,14 +168,18 @@ class LPDiD:
             horizon=max_post_horizon,
         )
 
-    def _rw_weights(
-        self, panel: pd.DataFrame, eligibility_mask: pd.Series, *, time: str
-    ) -> pd.Series:
-        eligible = panel.loc[eligibility_mask, [time, "_entry"]].copy()
-        if eligible.empty:
-            return pd.Series(dtype=float)
+    def _rw_weights_from_sample(self, sample: pd.DataFrame) -> pd.Series:
+        """Equal-weighting weights from the REALIZED estimation sample.
 
-        group_stats = eligible.groupby(time)["_entry"].agg(["sum", "count"])
+        Computed after all row drops and clean-control restrictions, so the
+        per-event-time denominator matches the regression's actual risk set.
+        Computing from the pre-drop panel would silently change the estimand
+        (and break the Callaway-Sant'Anna equivalence) on unbalanced panels.
+        For each event time, weight = N_clean_control_sample / N_control.
+        """
+        if sample.empty:
+            return pd.Series(dtype=float)
+        group_stats = sample.groupby("_event_time")["_entry"].agg(["sum", "count"])
         treated_counts = group_stats["sum"]
         control_counts = group_stats["count"] - treated_counts
 
@@ -346,6 +353,29 @@ class LPDiD:
         if controls.empty or treated.empty:
             return empty_result
 
+        # The RA counterfactual for a treated observation is the predicted long
+        # difference from the clean-control regression at that event time. An
+        # event time with treated units but no clean control has an unidentified
+        # time fixed effect, so those treated observations cannot be imputed:
+        # drop them (and surface the drop) rather than extrapolate off a
+        # rank-deficient fit.
+        if include_time_fe:
+            control_event_times = set(controls["_event_time"].unique())
+            identified = treated["_event_time"].isin(control_event_times)
+            if not bool(identified.all()):
+                n_drop = int((~identified).sum())
+                warnings.warn(
+                    f"LPDiD regression adjustment: dropped {n_drop} treated observation(s) "
+                    "at event time(s) with no clean control (counterfactual unidentified).",
+                    UserWarning,
+                    stacklevel=2,
+                )
+                treated = treated.loc[identified].copy()
+                if treated.empty:
+                    return empty_result
+                sample = pd.concat([controls, treated])
+                n_obs = int(len(sample))
+
         time_levels = list(pd.unique(sample["_event_time"])) if include_time_fe else None
         absorb_levels = {col: list(pd.unique(sample[col])) for col in absorb_columns}
         control_features = self._build_feature_frame(
@@ -387,7 +417,7 @@ class LPDiD:
         se = np.nan
         cluster_ids = sample["_cluster"].to_numpy()
         n_clusters = len(pd.unique(cluster_ids))
-        if n_clusters >= 2:
+        if n_clusters >= 2 and np.isfinite(effect):
             n_total = len(sample)
             n_treated = len(treated)
             q0_inv, _, _ = _rank_guarded_inv(control_design.T @ control_design)
@@ -593,16 +623,7 @@ class LPDiD:
                 absorb_columns=absorb,
             )
         if self.reweight:
-            weight_horizon = 0 if (self.no_composition or horizon < 0) else horizon
-            eligibility_mask = (
-                panel["_common_event_ok"]
-                if self.no_composition
-                else (
-                    panel["_entry"].eq(1.0)
-                    | self._clean_control_mask(panel, time=time, horizon=weight_horizon)
-                )
-            )
-            weight_map = self._rw_weights(panel, eligibility_mask, time=time)
+            weight_map = self._rw_weights_from_sample(sample)
             sample["_rw_event_weight"] = sample["_event_time"].map(weight_map)
         return self._estimate_sample(
             sample,
@@ -739,16 +760,7 @@ class LPDiD:
                 absorb_columns=absorb,
             )
         if self.reweight:
-            weight_horizon = 0 if (self.no_composition or kind == "pre") else max(horizons)
-            eligibility_mask = (
-                panel["_common_pooled_ok"]
-                if self.no_composition
-                else (
-                    panel["_entry"].eq(1.0)
-                    | self._clean_control_mask(panel, time=time, horizon=weight_horizon)
-                )
-            )
-            weight_map = self._rw_weights(panel, eligibility_mask, time=time)
+            weight_map = self._rw_weights_from_sample(pooled_sample)
             pooled_sample["_rw_pooled_weight"] = pooled_sample["_event_time"].map(weight_map)
         return self._estimate_sample(
             pooled_sample,
