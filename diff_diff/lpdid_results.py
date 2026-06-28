@@ -13,6 +13,12 @@ class LPDiDResults:
     table (each a :class:`pandas.DataFrame` with ``coefficient``, ``se``,
     ``t_stat``, ``p_value``, ``conf_low``, ``conf_high``, ``n_obs``,
     ``n_clusters`` columns). The headline ATT is the pooled ``post`` row.
+
+    ``n_control_units`` counts **never-treated** units only (the library-wide
+    field convention, surfaced as "Never-treated units" in ``summary()``); under
+    ``control_group="clean"`` the realized control pool at each horizon also
+    includes not-yet-treated cohorts, whose per-horizon counts live in the
+    ``n_obs`` / ``n_clusters`` columns of the tables.
     """
 
     event_study: Optional[pd.DataFrame]
@@ -129,6 +135,8 @@ class LPDiDResults:
             "rank_deficient_action": self.rank_deficient_action,
             "ylags": self.ylags,
             "dylags": self.dylags,
+            "covariates": self.covariates,
+            "absorb": self.absorb,
         }
         if self.cluster_name is not None:
             result["cluster_name"] = self.cluster_name

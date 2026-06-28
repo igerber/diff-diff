@@ -13,7 +13,7 @@ Validation strategy (B1, pure-Python, no R required):
   (point estimates only; SEs are anchored separately by the B2 R-parity layer).
 
 External R-parity (authors' ``danielegirardi/lpdid`` + ``alexCardazzi/lpdid``)
-lives in ``tests/test_methodology_lpdid.py`` (PR-B2).
+will live in ``tests/test_methodology_lpdid.py`` (added in PR-B2).
 """
 
 import sys
