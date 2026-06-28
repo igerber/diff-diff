@@ -926,3 +926,32 @@ class TestLPDiDUnbalanced:
                 dylags=1,
                 only_event=True,
             )
+
+    def test_no_composition_post_fixed_with_present_but_nan_outcome(self):
+        # Fixed composition must hold even when a target row exists but its
+        # outcome is NaN (value-based availability, not row existence).
+        df = make_lpdid_panel(cohorts=(5,), n_per_cohort=20, n_never=20, n_periods=12, seed=7)
+        df.loc[(df["first_treat"] == np.inf) & (df["time"] == 6) & (df["unit"] % 4 == 0), "y"] = (
+            np.nan
+        )
+        res = LPDiD(pre_window=2, post_window=2, no_composition=True).fit(
+            df, outcome="y", unit="unit", time="time", treatment="treat", only_event=True
+        )
+        post = res.event_study.loc[res.event_study["horizon"].between(0, 2), "n_obs"]
+        assert post.nunique() == 1
+
+    def test_pooled_rejects_bool_window(self):
+        df = make_lpdid_panel(cohorts=(5,), n_per_cohort=8, n_never=8, n_periods=10, seed=2)
+        with pytest.raises(ValueError, match="not bool"):
+            LPDiD(pre_window=3, post_window=1).fit(
+                df, outcome="y", unit="unit", time="time", treatment="treat", pre_pooled=True
+            )
+
+    def test_ylags_dylags_recorded_in_results(self):
+        df = make_lpdid_panel(cohorts=(5,), n_per_cohort=10, n_never=10, n_periods=10, seed=4)
+        res = LPDiD(pre_window=2, post_window=2, reweight=True).fit(
+            df, outcome="y", unit="unit", time="time", treatment="treat", ylags=2, dylags=1
+        )
+        assert res.ylags == 2 and res.dylags == 1
+        d = res.to_dict()
+        assert d["ylags"] == 2 and d["dylags"] == 1

@@ -159,20 +159,32 @@ class LPDiD:
         return pd.Series(target_index.isin(observed_index), index=panel.index)
 
     def _common_clean_sample_indicator(
-        self, panel: pd.DataFrame, *, unit: str, time: str, max_post_horizon: int
+        self, panel: pd.DataFrame, *, unit: str, time: str, outcome: str, max_post_horizon: int
     ) -> pd.Series:
         common_sample = panel["_entry"].eq(1.0) | self._clean_control_mask(
             panel,
             time=time,
             horizon=max_post_horizon,
         )
-        # Require EVERY post-treatment target (h = 0..max_post_horizon) to be
-        # observed, not just the maximum horizon, so the no_composition sample is
-        # truly fixed across all post horizons even under non-monotone missingness
-        # (e.g. a missing t+1 with an observed t+2).
-        available = pd.Series(True, index=panel.index)
+        # Fixed composition requires the active baseline AND every post-treatment
+        # target outcome (h = 0..max_post_horizon) to be NON-MISSING for each base
+        # observation -- not merely that the target row exists. This keeps the
+        # realized post sample fixed across all post horizons under any missingness
+        # encoding (absent rows OR present-but-NaN outcomes).
+        outcome_by_key = panel.set_index([unit, time])[outcome]
+
+        def _value_available(horizon: int) -> pd.Series:
+            keys = pd.MultiIndex.from_arrays(
+                [panel[unit].to_numpy(), (panel[time] + horizon).to_numpy()]
+            )
+            return pd.Series(outcome_by_key.reindex(keys).notna().to_numpy(), index=panel.index)
+
+        if self.pmd is None:
+            available = _value_available(-1)  # t-1 baseline outcome
+        else:
+            available = panel[self._baseline_column()].notna()
         for h in range(0, max_post_horizon + 1):
-            available &= self._outcome_available_mask(panel, unit=unit, time=time, horizon=h)
+            available &= _value_available(h)
         return common_sample & available
 
     def _rw_weights_from_sample(self, sample: pd.DataFrame) -> pd.Series:
@@ -208,6 +220,7 @@ class LPDiD:
         ylags=0,
         dylags=0,
         absorb=None,
+        apply_no_composition: bool = True,
     ):
         rhs_columns = self._rhs_column_names(covariates=covariates, ylags=ylags, dylags=dylags)
         base_columns = [
@@ -253,7 +266,7 @@ class LPDiD:
         sample = sample.loc[treated_mask | control_mask].copy()
         # Fixed composition is a POST-treatment contract: apply it only to post
         # horizons; pre-treatment placebos use whatever pre-period data exists.
-        if self.no_composition and horizon >= 0:
+        if self.no_composition and apply_no_composition and horizon >= 0:
             sample = sample.loc[sample["_common_event_ok"]].copy()
         sample["horizon"] = horizon
         sample["_event_time"] = sample[time]
@@ -744,6 +757,9 @@ class LPDiD:
                     ylags=ylags,
                     dylags=dylags,
                     absorb=absorb,
+                    # Base identification only; pooled estimation applies its own
+                    # (pooled-window) composition mask via _common_pooled_ok.
+                    apply_no_composition=False,
                 )
             )
         ]
@@ -787,6 +803,8 @@ class LPDiD:
         )
 
     def _resolve_pooled_horizons(self, pooled, *, kind):
+        if isinstance(pooled, bool):
+            raise ValueError(f"{kind}_pooled must be None, an int, or a length-2 tuple (not bool)")
         if kind == "pre":
             default = list(range(-self.pre_window, -1))
             if isinstance(pooled, int):
@@ -893,12 +911,14 @@ class LPDiD:
             panel,
             unit=unit,
             time=time,
+            outcome=outcome,
             max_post_horizon=self.post_window,
         )
         panel["_common_pooled_ok"] = self._common_clean_sample_indicator(
             panel,
             unit=unit,
             time=time,
+            outcome=outcome,
             max_post_horizon=max(post_horizons) if post_horizons else 0,
         )
         treatment_by_unit = panel.groupby(unit)["_treated"].max()
@@ -999,6 +1019,8 @@ class LPDiD:
             rank_deficient_action=self.rank_deficient_action,
             covariates=list(covariates) if covariates else None,
             absorb=list(absorb) if absorb else None,
+            ylags=ylags,
+            dylags=dylags,
         )
         self._fit_meta = {"cluster": cluster, "outcome": outcome, "unit": unit, "time": time}
         self.is_fitted_ = True

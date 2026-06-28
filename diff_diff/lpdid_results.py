@@ -33,6 +33,8 @@ class LPDiDResults:
     rank_deficient_action: str = "warn"
     covariates: Optional[List[str]] = None
     absorb: Optional[List[str]] = None
+    ylags: int = 0
+    dylags: int = 0
 
     # ------------------------------------------------------------------
     # internal helpers
@@ -125,6 +127,8 @@ class LPDiDResults:
             "alpha": self.alpha,
             "vcov_type": self.vcov_type,
             "rank_deficient_action": self.rank_deficient_action,
+            "ylags": self.ylags,
+            "dylags": self.dylags,
         }
         if self.cluster_name is not None:
             result["cluster_name"] = self.cluster_name
