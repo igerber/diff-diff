@@ -170,12 +170,18 @@ class LPDiDResults:
                 f"Covariates: {self.covariates or []}    Absorb: {self.absorb or []}"
                 f"    ({cov_path})"
             )
-        vcov_label = _format_vcov_label(
-            self.vcov_type,
-            cluster_name=self.cluster_name,
-            n_clusters=self.n_clusters,
-            n_obs=self.n_obs,
-        )
+        if self.vcov_type == "if_cluster":
+            # Regression-adjustment path: influence-function cluster variance
+            # (ImputationDiD/BJS family), not an OLS CR1 sandwich.
+            g = f", G={self.n_clusters}" if self.n_clusters else ""
+            vcov_label = f"Influence-function cluster-robust at {self.cluster_name}{g}"
+        else:
+            vcov_label = _format_vcov_label(
+                self.vcov_type,
+                cluster_name=self.cluster_name,
+                n_clusters=self.n_clusters,
+                n_obs=self.n_obs,
+            )
         if vcov_label:
             lines.append(f"Std. errors: {vcov_label}")
 

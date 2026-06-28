@@ -985,7 +985,11 @@ class LPDiD:
             alpha=self.alpha,
             cluster_name=cluster,
             n_clusters=int(panel["_cluster"].nunique()),
-            vcov_type="hc1",
+            vcov_type=(
+                "if_cluster"
+                if (self.reweight and bool(covariates or ylags or dylags or absorb))
+                else "hc1"
+            ),
             rank_deficient_action=self.rank_deficient_action,
             covariates=list(covariates) if covariates else None,
             absorb=list(absorb) if absorb else None,

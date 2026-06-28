@@ -862,3 +862,21 @@ class TestLPDiDUnbalanced:
         )
         assert res.rank_deficient_action == "silent"
         assert res.to_dict()["rank_deficient_action"] == "silent"
+
+    def test_ra_path_reports_if_cluster_variance_label(self):
+        # The regression-adjustment covariate path uses an influence-function
+        # cluster variance, not an OLS CR1 sandwich: the results metadata and the
+        # summary label must say so (not "hc1" / "CR1").
+        df = make_lpdid_panel(cohorts=(5,), n_per_cohort=12, n_never=12, n_periods=8, seed=9)
+        df["x"] = np.arange(len(df)) % 3
+        ra = LPDiD(pre_window=2, post_window=2, reweight=True).fit(
+            df, outcome="y", unit="unit", time="time", treatment="treat", covariates=["x"]
+        )
+        assert ra.to_dict()["vcov_type"] == "if_cluster"
+        assert "Influence-function" in ra.summary()
+        # the default (non-RA) path stays hc1 / CR1
+        base = LPDiD(pre_window=2, post_window=2).fit(
+            df, outcome="y", unit="unit", time="time", treatment="treat"
+        )
+        assert base.to_dict()["vcov_type"] == "hc1"
+        assert "CR1 cluster-robust" in base.summary()
