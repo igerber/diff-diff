@@ -447,6 +447,31 @@ class LPDiD:
                 sample = pd.concat([controls, treated])
                 n_obs = int(len(sample))
 
+        # Absorbed-factor overlap: a treated observation whose absorbed level is
+        # absent from the clean controls has an all-zero control dummy for that
+        # level, so its counterfactual would be extrapolated through an unidentified
+        # coefficient. Drop those treated observations (and surface the drop) rather
+        # than impute off a non-identified fit. Mirrors the event-time check above.
+        if absorb_columns:
+            unsupported = pd.Series(False, index=treated.index)
+            for col in absorb_columns:
+                control_levels = set(controls[col].unique())
+                unsupported = unsupported | ~treated[col].isin(control_levels)
+            if bool(unsupported.any()):
+                n_drop = int(unsupported.sum())
+                warnings.warn(
+                    f"LPDiD regression adjustment: dropped {n_drop} treated observation(s) "
+                    "with an absorbed-factor level absent from the clean controls "
+                    "(counterfactual unidentified -- no overlap).",
+                    UserWarning,
+                    stacklevel=2,
+                )
+                treated = treated.loc[~unsupported].copy()
+                if treated.empty:
+                    return empty_result
+                sample = pd.concat([controls, treated])
+                n_obs = int(len(sample))
+
         time_levels = list(pd.unique(sample["_event_time"])) if include_time_fe else None
         absorb_levels = {col: list(pd.unique(sample[col])) for col in absorb_columns}
         control_features = self._build_feature_frame(

@@ -983,6 +983,53 @@ class TestLPDiDUnbalanced:
         assert np.isfinite(h1["coefficient"])  # treated entry retained -> estimable
         assert h1["n_obs"] > 0
 
+    def test_pooled_post_is_mean_of_event_study_balanced(self):
+        # Documented pooled estimand: the pooled-post ATT is the unit-equal-weighted
+        # mean of the per-horizon event-study coefficients. On a balanced single-
+        # cohort panel (consistent clean-control sample across horizons) this is
+        # exact; it pins the fixed-composition pooled definition (REGISTRY Note 6).
+        df = make_lpdid_panel(cohorts=(5,), n_per_cohort=15, n_never=15, n_periods=12, seed=3)
+        res = LPDiD(pre_window=2, post_window=3).fit(
+            df, outcome="y", unit="unit", time="time", treatment="treat"
+        )
+        es_post = res.event_study[res.event_study["horizon"] >= 0]["coefficient"]
+        pooled_post = res.pooled.loc[res.pooled["window"] == "post", "coefficient"].iloc[0]
+        assert pooled_post == pytest.approx(es_post.mean(), rel=1e-6)
+
+    def test_ra_absorb_overlap_drops_unsupported_treated(self):
+        # RA path (reweight=True) with an absorbed factor: a treated unit whose
+        # absorbed level has NO clean-control support is dropped with a warning,
+        # not extrapolated through a non-identified all-zero dummy.
+        rows = []
+        for u, region in [(1, "A"), (2, "A"), (7, "B"), (8, "B")]:  # region B = treated-only
+            for t in range(5):
+                rows.append(
+                    {
+                        "unit": u,
+                        "time": t,
+                        "y": float(t + (2 if t >= 2 else 0)),
+                        "treat": int(t >= 2),
+                        "region": region,
+                    }
+                )
+        for u in (3, 4, 5, 6):  # clean controls only in region A
+            for t in range(5):
+                rows.append({"unit": u, "time": t, "y": float(t), "treat": 0, "region": "A"})
+        df = pd.DataFrame(rows)
+        with pytest.warns(UserWarning, match="absorbed-factor level absent"):
+            res = LPDiD(pre_window=1, post_window=1, reweight=True).fit(
+                df,
+                outcome="y",
+                unit="unit",
+                time="time",
+                treatment="treat",
+                absorb=["region"],
+                only_event=True,
+            )
+        # region-A treated remain identified -> finite estimate (no extrapolation)
+        h0 = res.event_study.loc[res.event_study["horizon"] == 0, "coefficient"].iloc[0]
+        assert np.isfinite(h0)
+
     def test_ylags_dylags_trigger_direct_inclusion_warning(self):
         # Outcome/first-difference lags are direct-included controls under
         # reweight=False, so they fire the same homogeneity warning as covariates.
