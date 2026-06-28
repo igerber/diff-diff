@@ -231,9 +231,10 @@ class LPDiD:
         sample = base.merge(baseline, on=[unit, "_baseline_time"], how="left")
         sample = sample.merge(target, on=[unit, "_target_time"], how="left")
         baseline_column = self._baseline_column()
-        required_columns = ["_baseline_outcome", "_target_outcome", *rhs_columns, *(absorb or [])]
-        if baseline_column != "_baseline_outcome":
-            required_columns.append(baseline_column)
+        # Require the ACTIVE baseline column only: under PMD the long difference
+        # uses the premean baseline, so a missing exact t-1 outcome must not drop
+        # an otherwise-identified observation (matters on unbalanced panels).
+        required_columns = [baseline_column, "_target_outcome", *rhs_columns, *(absorb or [])]
         sample = sample.dropna(subset=required_columns).copy()
 
         treated_mask = sample["_entry"].eq(1.0)
@@ -680,9 +681,8 @@ class LPDiD:
             target_columns.append(target_outcome_col)
 
         baseline_column = self._baseline_column()
-        required_columns = ["_baseline_outcome", *target_columns, *rhs_columns, *(absorb or [])]
-        if baseline_column != "_baseline_outcome":
-            required_columns.append(baseline_column)
+        # Require the ACTIVE baseline column only (see _build_horizon_sample).
+        required_columns = [baseline_column, *target_columns, *rhs_columns, *(absorb or [])]
         sample = sample.dropna(subset=required_columns).copy()
 
         treated_mask = sample["_entry"].eq(1.0)
@@ -715,6 +715,12 @@ class LPDiD:
         dylags=0,
         absorb=None,
     ):
+        horizons = list(horizons)
+        if not horizons:
+            raise ValueError(
+                f"pooled {kind} window is empty (no horizons to pool); a pooled pre "
+                "window requires pre_window >= 2. Use only_event=True or widen the window."
+            )
         unidentified_horizons = [
             horizon
             for horizon in horizons
@@ -792,7 +798,9 @@ class LPDiD:
             raise ValueError(f"{kind}_pooled must be None, an int, or a length-2 tuple")
 
         if kind == "pre":
-            supported_horizons = set(range(-self.pre_window, 0))
+            # Exclude h=-1: it is the fixed base-period reference (coefficient 0),
+            # not an estimable placebo, so it cannot enter a pooled pre window.
+            supported_horizons = set(range(-self.pre_window, -1))
         else:
             supported_horizons = set(range(0, self.post_window + 1))
 

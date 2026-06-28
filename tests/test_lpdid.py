@@ -794,3 +794,50 @@ class TestLPDiDUnbalanced:
         )
         post = res.event_study.loc[res.event_study["horizon"].between(0, 3), "n_obs"]
         assert post.nunique() == 1
+
+    def test_pmd_retains_treated_missing_exact_t_minus_1(self):
+        # Under PMD the long difference uses the premean baseline, so a treated
+        # observation missing the exact t-1 outcome (but with earlier pre-data)
+        # must NOT be dropped.
+        df = make_lpdid_panel(
+            cohorts=(5,),
+            n_per_cohort=12,
+            n_never=12,
+            n_periods=10,
+            unit_fe_sd=0.0,
+            error_sd=0.0,
+            heterogeneous=False,
+            tau=lambda k: 2.0,
+            seed=1,
+        )
+        treated = df.loc[df["first_treat"] == 5, "unit"].unique()
+        df = df.loc[~(df["unit"].isin(treated[:6]) & (df["time"] == 4))].reset_index(drop=True)
+        std = LPDiD(pre_window=2, post_window=2).fit(
+            df, outcome="y", unit="unit", time="time", treatment="treat", only_event=True
+        )
+        pmd = LPDiD(pre_window=2, post_window=2, pmd="max").fit(
+            df, outcome="y", unit="unit", time="time", treatment="treat", only_event=True
+        )
+        std_n = std.event_study.loc[std.event_study["horizon"] == 0, "n_obs"].iloc[0]
+        pmd_n = pmd.event_study.loc[pmd.event_study["horizon"] == 0, "n_obs"].iloc[0]
+        assert pmd_n > std_n  # PMD keeps missing-t-1 treated that first-lag drops
+        assert np.isfinite(_event_coef(pmd, 0))
+
+    def test_pre_window_too_small_for_pooled_raises(self):
+        df = make_lpdid_panel(cohorts=(5,), n_per_cohort=8, n_never=8, n_periods=10, seed=2)
+        with pytest.raises(ValueError, match="pooled pre window is empty"):
+            LPDiD(pre_window=1, post_window=1).fit(
+                df, outcome="y", unit="unit", time="time", treatment="treat"
+            )
+        # only_event=True does not need a pooled pre window
+        r = LPDiD(pre_window=1, post_window=1).fit(
+            df, outcome="y", unit="unit", time="time", treatment="treat", only_event=True
+        )
+        assert list(r.event_study["horizon"]) == [-1, 0, 1]
+
+    def test_pre_pooled_rejects_reference_horizon(self):
+        df = make_lpdid_panel(cohorts=(5,), n_per_cohort=8, n_never=8, n_periods=10, seed=3)
+        with pytest.raises(ValueError, match="outside the supported pre window"):
+            LPDiD(pre_window=3, post_window=1).fit(
+                df, outcome="y", unit="unit", time="time", treatment="treat", pre_pooled=(-2, -1)
+            )
