@@ -1505,6 +1505,31 @@ class TestCallawaySantAnnaNonEstimableMaterialization:
             assert np.isnan(v["se"]) and np.isnan(v["t_stat"]) and np.isnan(v["p_value"])
         assert np.isfinite(results.overall_att)
 
+    def test_event_study_omits_all_nonestimable_relative_time(self):
+        """An event-time bucket whose cells are ALL non-estimable is omitted from
+        event_study_effects (matches the prior omit behavior / R did::aggte),
+        not emitted as an all-NaN row."""
+        data = _cs_nonestimable_data(panel=True, seed=0)
+        cs = CallawaySantAnna(n_bootstrap=0, control_group="not_yet_treated")
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            results = cs.fit(
+                data,
+                outcome="outcome",
+                unit="unit",
+                time="time",
+                first_treat="first_treat",
+                aggregate="event_study",
+            )
+        es = results.event_study_effects
+        # Relative time e=2 contains only (g=2, t=4), which is non-estimable (no
+        # not-yet-treated controls at t=4) -> the whole bucket must be omitted.
+        assert 2 not in es, "all-non-estimable relative time must be omitted, not a NaN row"
+        # Every emitted relative time has a finite effect and >=1 contributing group.
+        for e, d in es.items():
+            assert np.isfinite(d["effect"]), f"e={e} effect should be finite"
+            assert d["n_groups"] >= 1, f"e={e} should have >=1 contributing group"
+
     def test_all_nonestimable_raises_with_materialized_cells(self):
         """All cells non-estimable (dict non-empty, all NaN) -> ValueError via the
         no-finite-effect guard (distinct from the empty-dict case)."""

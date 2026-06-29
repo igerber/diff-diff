@@ -651,6 +651,7 @@ class CallawaySantAnnaAggregationMixin:
         agg_ses_list = []
         agg_n_groups = []
         agg_effective_dfs = []  # Per-horizon effective df (replicate designs)
+        agg_periods = []  # Relative times that yielded an estimable aggregate row
         _psi_vectors = []  # Per-event-time combined IF vectors for VCV
         _psi_event_times = []  # Event times that contributed a psi column
         for e, effect_list in sorted_periods:
@@ -665,10 +666,12 @@ class CallawaySantAnnaAggregationMixin:
                 ns = ns[finite_mask]
                 gt_pairs = [gt for gt, m in zip(gt_pairs, finite_mask) if m]
                 if len(effs) == 0:
-                    agg_effects_list.append(np.nan)
-                    agg_ses_list.append(np.nan)
-                    agg_n_groups.append(0)
-                    agg_effective_dfs.append(None)
+                    # Every cell in this relative-time bucket is non-estimable
+                    # (materialized NaN). Omit the bucket entirely so the
+                    # event-study surface matches the prior omit behavior and R
+                    # did::aggte() (a relative time with no estimable cell yields
+                    # no row), and stays consistent with _aggregate_by_group,
+                    # which already drops all-NaN groups.
                     continue
 
             weights = ns / np.sum(ns)
@@ -695,6 +698,7 @@ class CallawaySantAnnaAggregationMixin:
             # the all-NaN early-return which already reports 0.
             agg_n_groups.append(len(gt_pairs))
             agg_effective_dfs.append(eff_df)
+            agg_periods.append(e)
             _psi_vectors.append(psi_e)
             _psi_event_times.append(e)
 
@@ -730,7 +734,7 @@ class CallawaySantAnnaAggregationMixin:
         )
 
         event_study_effects = {}
-        for idx, (e, _) in enumerate(sorted_periods):
+        for idx, e in enumerate(agg_periods):
             event_study_effects[e] = {
                 "effect": agg_effects_list[idx],
                 "se": agg_ses_list[idx],
