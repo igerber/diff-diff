@@ -633,9 +633,16 @@ class TestCSDIDNonStandardConfigs:
                 time="period",
                 first_treat="first_treat",
             )
-        # G=2 should be excluded (no pre-treatment period available)
-        groups_in_results = set(k[0] for k in results.group_time_effects.keys())
-        assert 2 not in groups_in_results, "G=2 treated in first period should be excluded"
+        # G=2 is treated in the first observed period, so it has no valid base
+        # period -> all its (g,t) cells are non-estimable. They are now materialized
+        # as NaN entries (skip_reason="missing_period") rather than omitted, so G=2
+        # contributes no FINITE estimate (the prior "excluded from the analysis"
+        # intent: it is not silently dropped, but it is never estimated).
+        g2_cells = [v for (g, t), v in results.group_time_effects.items() if g == 2]
+        assert g2_cells, "G=2 cells should be materialized (as NaN), not silently dropped"
+        assert all(
+            np.isnan(v["effect"]) and v["skip_reason"] == "missing_period" for v in g2_cells
+        ), "G=2 (no pre-treatment period) must be all-NaN (missing_period), never estimated"
 
 
 class TestCSDIDBugFixRegressions:
@@ -774,6 +781,11 @@ class TestCSDIDBugFixRegressions:
         gt = results.group_time_effects
         pre_effects = {k: v for k, v in gt.items() if k[1] < k[0]}
         for (g, t), eff in pre_effects.items():
+            # Non-estimable pre-cells are now materialized as NaN (e.g. the last
+            # cohort under not_yet_treated has no controls); skip them. Finite
+            # pre-treatment cells (DiD of 0-0 vs 0-0) must still be ~0.
+            if np.isnan(eff["effect"]):
+                continue
             assert abs(eff["effect"]) < 0.01, (
                 f"Pre-treatment ATT(g={g}, t={t}) = {eff['effect']:.4f}, " "expected 0"
             )
@@ -1199,6 +1211,13 @@ class TestCSDIDGoldenValues:
             g, t = int(g), int(t)
             if (g, t) in results.group_time_effects:
                 py_att = results.group_time_effects[(g, t)]["effect"]
+                # Skip cells we materialize as non-estimable (e.g. a gapped panel
+                # where the base period g-1 is not observed -> missing_period). R
+                # falls back to an available base and reports a value where our
+                # impl does not; compare only cells both estimate (R-parity on the
+                # finite cells, which is what this golden test pins).
+                if not np.isfinite(py_att):
+                    continue
                 r_att = r_gt["att"][i]
                 assert abs(py_att - r_att) < 0.05, (
                     f"Fewer periods ATT(g={g},t={t}): " f"Py={py_att:.4f}, R={r_att:.4f}"
