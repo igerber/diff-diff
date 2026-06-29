@@ -690,7 +690,10 @@ class CallawaySantAnnaAggregationMixin:
 
             agg_effects_list.append(agg_effect)
             agg_ses_list.append(agg_se)
-            agg_n_groups.append(len(effect_list))
+            # Count only finite-contributing cells (gt_pairs is finite-filtered
+            # above) so materialized NaN cells don't inflate n_groups — matches
+            # the all-NaN early-return which already reports 0.
+            agg_n_groups.append(len(gt_pairs))
             agg_effective_dfs.append(eff_df)
             _psi_vectors.append(psi_e)
             _psi_event_times.append(e)
@@ -887,7 +890,9 @@ class CallawaySantAnnaAggregationMixin:
             agg_se, eff_df = self._compute_aggregated_se_with_wif(
                 gt_pairs, weights, effs, groups_for_gt, influence_func_info, df, unit, precomputed
             )
-            group_data_list.append((g, agg_effect, agg_se, len(g_effects), eff_df))
+            # Count only finite-contributing cells (gt_pairs is finite-filtered
+            # above) so materialized NaN cells don't inflate n_periods.
+            group_data_list.append((g, agg_effect, agg_se, len(gt_pairs), eff_df))
 
         if not group_data_list:
             return {}

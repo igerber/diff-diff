@@ -43,6 +43,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Korn-Graubard (1990), and Solon-Haider-Wooldridge (2015) to `docs/references.rst`.
 
 ### Changed
+- **CallawaySantAnna now materializes non-estimable `(g,t)` cells as NaN entries instead of
+  omitting them.** Cells that cannot be estimated (missing base/post period, zero
+  treated/control, zero survey-weight mass, or a non-finite regression solve) are stored in
+  `group_time_effects` as NaN entries carrying a machine-readable `skip_reason`
+  (`"missing_period"` / `"zero_treated_control"` / `"zero_weight_mass"` /
+  `"non_finite_regression"`; estimable cells carry `None`), uniformly across all estimation paths
+  (no-covariate regression, covariate regression, IPW/DR, repeated cross-section, survey-weighted)
+  — previously only the covariate-regression singular case did this and the other paths dropped
+  the cell silently from the grid. The cells are excluded from every aggregation
+  (simple/group/calendar/event-study), from `balance_e`, and from the bootstrap, so all aggregate
+  point estimates and standard errors — and the event-study `n_groups` / by-group `n_periods`
+  metadata — are numerically **unchanged** and continue to match R `did`'s `aggte()`; a fit where
+  no cell is estimable still raises `ValueError`. `to_dataframe("group_time")` now includes these
+  NaN rows and a `skip_reason` column. This is a documented per-cell surface **deviation from R**'s
+  `att_gt` (which omits the rows). See REGISTRY.md "CallawaySantAnna" edge cases.
 - **CallawaySantAnna multiplier bootstrap now tiles weight generation over draws, cutting
   peak memory at large `n_units`.** The dense `(n_bootstrap × n_units)` multiplier-weight
   matrix (the dominant allocation for the default unit-level bootstrap — `cluster=None`,

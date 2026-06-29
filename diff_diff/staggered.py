@@ -222,6 +222,44 @@ def _safe_inv(
     return inv
 
 
+def _nan_gt_entry(
+    n_treated: int = 0,
+    n_control: int = 0,
+    skip_reason: Optional[str] = None,
+    survey_weight_sum: Optional[float] = None,
+) -> Dict[str, Any]:
+    """Build a materialized NaN group-time entry for a non-estimable (g, t) cell.
+
+    Non-estimable cells (missing base/post period, zero treated/control, zero
+    survey-weight mass, or a non-finite regression solve) are stored as a NaN
+    entry in ``group_time_effects`` rather than omitted, so the (g, t) grid is
+    inspectable (``to_dataframe`` / direct dict access) and the reason is
+    machine-readable via ``skip_reason`` (one of ``"missing_period"``,
+    ``"zero_treated_control"``, ``"zero_weight_mass"``,
+    ``"non_finite_regression"``; estimable cells carry ``None``).
+
+    The cell carries NO ``influence_func_info`` entry: every aggregation and
+    bootstrap consumer finite-masks (``np.isfinite(effect)``) or filters to IF
+    members before use, so the NaN cell contributes nothing to any aggregate or
+    SE — aggregates stay numerically identical to the prior omit behavior, which
+    matches R ``did``'s ``aggte()``. See REGISTRY.md "CallawaySantAnna" edge
+    cases for the documented contract.
+    """
+    entry: Dict[str, Any] = {
+        "effect": np.nan,
+        "se": np.nan,
+        "t_stat": np.nan,
+        "p_value": np.nan,
+        "conf_int": (np.nan, np.nan),
+        "n_treated": int(n_treated),
+        "n_control": int(n_control),
+        "skip_reason": skip_reason,
+    }
+    if survey_weight_sum is not None:
+        entry["survey_weight_sum"] = survey_weight_sum
+    return entry
+
+
 class CallawaySantAnna(
     CallawaySantAnnaBootstrapMixin,
     CallawaySantAnnaAggregationMixin,
@@ -786,7 +824,9 @@ class CallawaySantAnna(
         covariates: Optional[List[str]],
         pscore_cache: Optional[Dict] = None,
         epv_diagnostics: Optional[Dict] = None,
-    ) -> Tuple[Optional[float], float, int, int, Optional[Dict[str, Any]], Optional[float]]:
+    ) -> Tuple[
+        Optional[float], float, int, int, Optional[Dict[str, Any]], Optional[float], Optional[str]
+    ]:
         """
         Compute ATT(g,t) using pre-computed data structures (fast version).
 
@@ -802,6 +842,11 @@ class CallawaySantAnna(
         inf_func_info : dict or None
         survey_weight_sum : float or None
             Sum of survey weights for treated units (for aggregation weighting).
+        skip_reason : str or None
+            When ``att_gt is None`` (non-estimable cell), the machine-readable
+            reason (``"missing_period"`` / ``"zero_treated_control"`` /
+            ``"zero_weight_mass"``) so the caller can materialize a NaN cell with
+            a ``skip_reason``. ``None`` on a successful return.
         """
         period_to_col = precomputed["period_to_col"]
         outcome_matrix = precomputed["outcome_matrix"]
@@ -824,11 +869,11 @@ class CallawaySantAnna(
 
         if base_period_val not in period_to_col:
             # Base period must exist; no fallback to maintain methodological consistency
-            return None, 0.0, 0, 0, None, None
+            return None, 0.0, 0, 0, None, None, "missing_period"
 
         # Check if periods exist in the data
         if base_period_val not in period_to_col or t not in period_to_col:
-            return None, 0.0, 0, 0, None, None
+            return None, 0.0, 0, 0, None, None, "missing_period"
 
         base_col = period_to_col[base_period_val]
         post_col = period_to_col[t]
@@ -866,7 +911,7 @@ class CallawaySantAnna(
         n_control = np.sum(control_valid)
 
         if n_treated == 0 or n_control == 0:
-            return None, 0.0, 0, 0, None, None
+            return None, 0.0, 0, 0, None, None, "zero_treated_control"
 
         # Extract outcome changes for treated and control
         treated_change = outcome_change[treated_valid]
@@ -879,9 +924,9 @@ class CallawaySantAnna(
 
         # Guard against zero effective mass after subpopulation filtering
         if sw_treated is not None and np.sum(sw_treated) <= 0:
-            return None, 0.0, 0, 0, None, None
+            return None, 0.0, 0, 0, None, None, "zero_weight_mass"
         if sw_control is not None and np.sum(sw_control) <= 0:
-            return None, 0.0, 0, 0, None, None
+            return None, 0.0, 0, 0, None, None, "zero_weight_mass"
 
         # Get covariates if specified (from the base period)
         X_treated = None
@@ -977,7 +1022,7 @@ class CallawaySantAnna(
         }
 
         sw_sum = float(np.sum(sw_treated)) if sw_treated is not None else None
-        return att_gt, se_gt, int(n_treated), int(n_control), inf_func_info, sw_sum
+        return att_gt, se_gt, int(n_treated), int(n_control), inf_func_info, sw_sum, None
 
     def _compute_all_att_gt_vectorized(
         self,
@@ -1034,6 +1079,7 @@ class CallawaySantAnna(
 
                 if base_period_val not in period_to_col or t not in period_to_col:
                     skipped_missing_period.append((g, t))
+                    group_time_effects[(g, t)] = _nan_gt_entry(skip_reason="missing_period")
                     continue
 
                 tasks.append(
@@ -1070,6 +1116,11 @@ class CallawaySantAnna(
 
             if n_treated == 0 or n_control == 0:
                 skipped_empty_cell.append((g, t))
+                group_time_effects[(g, t)] = _nan_gt_entry(
+                    n_treated=int(n_treated),
+                    n_control=int(n_control),
+                    skip_reason="zero_treated_control",
+                )
                 continue
 
             treated_change = outcome_change[treated_valid]
@@ -1085,6 +1136,11 @@ class CallawaySantAnna(
                 # Guard against zero effective mass
                 if np.sum(sw_t) <= 0 or np.sum(sw_c) <= 0:
                     skipped_empty_cell.append((g, t))
+                    group_time_effects[(g, t)] = _nan_gt_entry(
+                        n_treated=n_t,
+                        n_control=n_c,
+                        skip_reason="zero_weight_mass",
+                    )
                     continue
                 sw_t_norm = sw_t / np.sum(sw_t)
                 sw_c_norm = sw_c / np.sum(sw_c)
@@ -1123,6 +1179,7 @@ class CallawaySantAnna(
                 "conf_int": (np.nan, np.nan),
                 "n_treated": n_t,
                 "n_control": n_c,
+                "skip_reason": None if np.isfinite(att) else "non_finite_regression",
             }
             if sw_sum is not None:
                 gte_entry["survey_weight_sum"] = sw_sum
@@ -1251,6 +1308,7 @@ class CallawaySantAnna(
 
                 if base_period_val not in period_to_col or t not in period_to_col:
                     skipped_missing_period.append((g, t))
+                    group_time_effects[(g, t)] = _nan_gt_entry(skip_reason="missing_period")
                     continue
 
                 # Determine control regression grouping key.
@@ -1301,6 +1359,10 @@ class CallawaySantAnna(
             n_c_base = int(np.sum(control_valid_base))
             if n_c_base == 0:
                 skipped_empty_cell.extend((g, t) for g, t, *_ in tasks)
+                for g, t, *_ in tasks:
+                    group_time_effects[(g, t)] = _nan_gt_entry(
+                        n_control=0, skip_reason="zero_treated_control"
+                    )
                 continue
 
             X_ctrl = None
@@ -1358,6 +1420,9 @@ class CallawaySantAnna(
 
                 if n_t == 0 or n_c == 0:
                     skipped_empty_cell.append((g, t))
+                    group_time_effects[(g, t)] = _nan_gt_entry(
+                        n_treated=n_t, n_control=n_c, skip_reason="zero_treated_control"
+                    )
                     continue
 
                 treated_change = outcome_change[treated_valid]
@@ -1475,6 +1540,7 @@ class CallawaySantAnna(
                     "conf_int": (np.nan, np.nan),
                     "n_treated": n_t,
                     "n_control": n_c,
+                    "skip_reason": None if np.isfinite(att) else "non_finite_regression",
                 }
 
                 all_units = precomputed["all_units"]
@@ -1930,8 +1996,17 @@ class CallawaySantAnna(
                         covariates,
                         epv_diagnostics=epv_diagnostics,
                     )
-                    att_gt, se_gt, n_treat, n_ctrl, inf_info, sw_sum = rc_result[:6]
-                    agg_w = rc_result[6] if len(rc_result) > 6 else n_treat
+                    (
+                        att_gt,
+                        se_gt,
+                        n_treat,
+                        n_ctrl,
+                        inf_info,
+                        sw_sum,
+                        cohort_mass,
+                        skip_reason,
+                    ) = rc_result
+                    agg_w = cohort_mass if cohort_mass is not None else n_treat
 
                     if att_gt is not None:
                         # Cluster-aware per-(g,t) SE on the RCS path. RC
@@ -1970,6 +2045,9 @@ class CallawaySantAnna(
                             "n_treated": n_treat,
                             "n_control": n_ctrl,
                             "agg_weight": agg_w,
+                            "skip_reason": (
+                                None if np.isfinite(att_gt) else "non_finite_regression"
+                            ),
                         }
                         if sw_sum is not None:
                             gte_entry["survey_weight_sum"] = sw_sum
@@ -1979,6 +2057,11 @@ class CallawaySantAnna(
                             influence_func_info[(g, t)] = inf_info
                     else:
                         _n_skipped_other += 1
+                        group_time_effects[(g, t)] = _nan_gt_entry(
+                            n_treated=n_treat,
+                            n_control=n_ctrl,
+                            skip_reason=skip_reason,
+                        )
 
         elif covariates is None and self.estimation_method == "reg":
             # Fast vectorized path for the common no-covariates regression case
@@ -2024,13 +2107,15 @@ class CallawaySantAnna(
                     ]
 
                 for t in valid_periods:
-                    att_gt, se_gt, n_treat, n_ctrl, inf_info, sw_sum = self._compute_att_gt_fast(
-                        precomputed,
-                        g,
-                        t,
-                        covariates,
-                        pscore_cache=pscore_cache,
-                        epv_diagnostics=epv_diagnostics,
+                    att_gt, se_gt, n_treat, n_ctrl, inf_info, sw_sum, skip_reason = (
+                        self._compute_att_gt_fast(
+                            precomputed,
+                            g,
+                            t,
+                            covariates,
+                            pscore_cache=pscore_cache,
+                            epv_diagnostics=epv_diagnostics,
+                        )
                     )
 
                     if att_gt is not None:
@@ -2069,6 +2154,9 @@ class CallawaySantAnna(
                             "conf_int": ci,
                             "n_treated": n_treat,
                             "n_control": n_ctrl,
+                            "skip_reason": (
+                                None if np.isfinite(att_gt) else "non_finite_regression"
+                            ),
                         }
                         if sw_sum is not None:
                             gte_entry["survey_weight_sum"] = sw_sum
@@ -2078,8 +2166,15 @@ class CallawaySantAnna(
                             influence_func_info[(g, t)] = inf_info
                     else:
                         _n_skipped_other += 1
+                        group_time_effects[(g, t)] = _nan_gt_entry(
+                            n_treated=n_treat,
+                            n_control=n_ctrl,
+                            skip_reason=skip_reason,
+                        )
 
-        if not group_time_effects:
+        if not group_time_effects or not any(
+            np.isfinite(v["effect"]) for v in group_time_effects.values()
+        ):
             raise ValueError(
                 "Could not estimate any group-time effects. "
                 "Check that data has sufficient observations."
@@ -3175,7 +3270,16 @@ class CallawaySantAnna(
         t: Any,
         covariates: Optional[List[str]],
         epv_diagnostics: Optional[Dict] = None,
-    ) -> Tuple[Optional[float], float, int, int, Optional[Dict[str, Any]], Optional[float]]:
+    ) -> Tuple[
+        Optional[float],
+        float,
+        int,
+        int,
+        Optional[Dict[str, Any]],
+        Optional[float],
+        Optional[float],
+        Optional[str],
+    ]:
         """
         Compute ATT(g,t) for repeated cross-section data.
 
@@ -3191,6 +3295,13 @@ class CallawaySantAnna(
         n_control : int (control obs at period t)
         inf_func_info : dict or None
         survey_weight_sum : float or None
+        cohort_mass : float or None
+            Aggregation weight (survey-weighted cohort mass); ``None`` on a
+            non-estimable return.
+        skip_reason : str or None
+            When ``att_gt is None`` (non-estimable cell), the machine-readable
+            reason (``"missing_period"`` / ``"zero_treated_control"`` /
+            ``"zero_weight_mass"``); ``None`` on a successful return.
         """
         cohort_masks = precomputed["cohort_masks"]
         never_treated_mask = precomputed["never_treated_mask"]
@@ -3209,7 +3320,7 @@ class CallawaySantAnna(
                 base_period_val = g - 1 - self.anticipation
 
         if base_period_val not in period_to_col or t not in period_to_col:
-            return None, 0.0, 0, 0, None, None
+            return None, 0.0, 0, 0, None, None, None, "missing_period"
 
         # Treated mask = cohort g
         treated_mask = cohort_masks[g]
@@ -3239,7 +3350,7 @@ class CallawaySantAnna(
         n_cs = int(np.sum(control_s))
 
         if n_gt == 0 or n_ct == 0 or n_gs == 0 or n_cs == 0:
-            return None, 0.0, 0, 0, None, None
+            return None, 0.0, 0, 0, None, None, None, "zero_treated_control"
 
         # Extract outcomes for each group
         y_gt = obs_outcome[treated_t]
@@ -3257,9 +3368,9 @@ class CallawaySantAnna(
         # Guard against zero effective mass
         if sw_gt is not None:
             if np.sum(sw_gt) <= 0 or np.sum(sw_gs) <= 0:
-                return None, 0.0, 0, 0, None, None
+                return None, 0.0, 0, 0, None, None, None, "zero_weight_mass"
             if np.sum(sw_ct) <= 0 or np.sum(sw_cs) <= 0:
-                return None, 0.0, 0, 0, None, None
+                return None, 0.0, 0, 0, None, None, None, "zero_weight_mass"
 
         # Get covariates if specified
         obs_covariates = precomputed.get("obs_covariates")
@@ -3377,7 +3488,7 @@ class CallawaySantAnna(
         # n_treated = per-cell treated count at period t (for display).
         # cohort_mass = total treated across all periods (for aggregation weights).
         cohort_mass = precomputed.get("rcs_cohort_masses", {}).get(g, n_gt)
-        return att, se, n_gt, n_ct, inf_func_info, sw_sum, cohort_mass
+        return att, se, n_gt, n_ct, inf_func_info, sw_sum, cohort_mass, None
 
     def _rc_2x2_did(
         self,

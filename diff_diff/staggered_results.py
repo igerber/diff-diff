@@ -36,6 +36,11 @@ class GroupTimeEffect:
         Number of treated observations.
     n_control : int
         Number of control observations.
+    skip_reason : str or None
+        ``None`` for an estimable cell; otherwise a machine-readable reason the
+        cell is non-estimable (``"missing_period"``, ``"zero_treated_control"``,
+        ``"zero_weight_mass"``, ``"non_finite_regression"``) and ``effect``/``se``
+        are NaN. Non-estimable cells are excluded from all aggregation.
     """
 
     group: Any
@@ -47,6 +52,7 @@ class GroupTimeEffect:
     conf_int: Tuple[float, float]
     n_treated: int
     n_control: int
+    skip_reason: Optional[str] = None
 
     @property
     def is_significant(self) -> bool:
@@ -433,6 +439,9 @@ class CallawaySantAnnaResults:
                     "p_value": data["p_value"],
                     "conf_int_lower": data["conf_int"][0],
                     "conf_int_upper": data["conf_int"][1],
+                    # None for estimable cells; a reason code for non-estimable
+                    # (NaN) cells materialized in group_time_effects.
+                    "skip_reason": data.get("skip_reason"),
                 }
                 if self.epv_diagnostics and (g, t) in self.epv_diagnostics:
                     row["epv"] = self.epv_diagnostics[(g, t)].get("epv")
