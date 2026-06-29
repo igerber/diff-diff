@@ -1621,6 +1621,28 @@ class TestLPDiDNonAbsorbing:
             for _, row in post.iterrows():
                 assert row["coefficient"] == pytest.approx(2.0, abs=0.2), (mode_kw, row.to_dict())
 
+    def test_effect_stabilization_pooled_pre_window_clean(self):
+        # Pooled-pre placebo must be clean over the DEEPEST reach-back, not just
+        # [t-L, t-1] (codex P1). With L=1 and pre_window=3 the pooled pre window is
+        # [-3, -2], so a unit with a treated spell at t-3 contaminates the placebo even
+        # though [t-1] is clean; the pooled mask must use the most-negative horizon. The
+        # "spell" entrants (treated at t=3, re-enter at t=5) must be excluded from the
+        # pooled-pre sample, leaving the clean entrants' ~0 placebo. A horizon=0 pooled
+        # mask would leak the spell rows and bias the estimate to ~tau/2.
+        clean_entrant = [0, 0, 0, 0, 0, 1, 1, 1]  # enter t=5, no prior spell
+        spell_entrant = [0, 0, 0, 1, 0, 1, 1, 1]  # treated spell at t=3, re-enter t=5
+        specs = [clean_entrant] * 5 + [spell_entrant] * 5 + [[0] * 8] * 6 + [[1] * 8] * 4
+        df = _deterministic_panel(specs, tau=2.0)
+        r = LPDiD(
+            pre_window=3,
+            post_window=1,
+            cluster="unit",
+            non_absorbing="effect_stabilization",
+            stabilization_window=1,
+        ).fit(df, **_FIT_KW)
+        pre = r.pooled.loc[r.pooled["window"] == "pre", "coefficient"].iloc[0]
+        assert abs(pre) < 1e-6, f"pooled pre placebo contaminated by a prior spell: {pre}"
+
     def test_interior_gap_raises(self):
         df = pd.DataFrame(
             {

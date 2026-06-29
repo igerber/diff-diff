@@ -962,7 +962,13 @@ class LPDiD:
                 control_horizon = max(horizons) if kind == "post" else 0
                 control_mask = self._clean_control_mask(sample, time=time, horizon=control_horizon)
         else:
-            control_horizon = max(horizons) if kind == "post" else 0
+            # Pre pooling reaches back to the MOST NEGATIVE horizon, so the
+            # non-absorbing clean window must cover it (the effect_stabilization
+            # placebo window widens to [t - max(L, -h), t-1]); using horizon=0 would
+            # only clean [t-L, t] and leak prior treatment changes inside the pooled
+            # pre reach-back. (Absorbing pre uses horizon=0 above: not-yet-treated at t
+            # implies clean across the whole pre-span, so it is unaffected.)
+            control_horizon = max(horizons) if kind == "post" else min(horizons)
             treated_mask, control_mask = self._nonabsorbing_masks(
                 sample, panel, unit=unit, time=time, horizon=control_horizon
             )
