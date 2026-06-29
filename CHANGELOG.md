@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.6.0] - 2026-06-29
+
 ### Added
 - **`LPDiD` (Local Projections Difference-in-Differences; Dube, Girardi, Jordà & Taylor 2025,
   *J. Applied Econometrics* 40(5):741-758).** Per-horizon long-difference OLS
@@ -1794,6 +1796,7 @@ for the full feature history leading to this release.
 [2.1.2]: https://github.com/igerber/diff-diff/compare/v2.1.1...v2.1.2
 [2.1.1]: https://github.com/igerber/diff-diff/compare/v2.1.0...v2.1.1
 [2.1.0]: https://github.com/igerber/diff-diff/compare/v2.0.3...v2.1.0
+[3.6.0]: https://github.com/igerber/diff-diff/compare/v3.5.3...v3.6.0
 [3.5.3]: https://github.com/igerber/diff-diff/compare/v3.5.2...v3.5.3
 [3.5.2]: https://github.com/igerber/diff-diff/compare/v3.5.1...v3.5.2
 [3.5.1]: https://github.com/igerber/diff-diff/compare/v3.5.0...v3.5.1
