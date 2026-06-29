@@ -22,8 +22,10 @@
 # coverage study benchmarks/python/coverage_lpdid_ra.py. See REGISTRY.md "## LPDiD".
 #
 # Outputs (checked into the repo):
-#   benchmarks/data/lpdid_test_panel.csv
-#   benchmarks/data/lpdid_golden.json
+#   benchmarks/data/lpdid_test_panel.csv          (absorbing panel)
+#   benchmarks/data/lpdid_golden.json             (absorbing goldens)
+#   benchmarks/data/lpdid_nonabsorbing_panel.csv  (non-absorbing panel, Phase C2)
+#   benchmarks/data/lpdid_nonabsorbing_golden.json (non-absorbing goldens, Phase C2)
 #
 # Usage:
 #   Rscript benchmarks/R/generate_lpdid_golden.R
@@ -396,13 +398,13 @@ na_clean_sample <- function(dt, mode, h) {
     .(time = time, role = role)
   }, by = unit][!is.na(role)]
 }
-na_es_one <- function(h, reweight = FALSE) {
-  cs <- na_clean_sample(na_dt, na_mode, h)
+na_es_one <- function(h, reweight = FALSE, dt = na_dt) {
+  cs <- na_clean_sample(dt, na_mode, h)
   if (nrow(cs) == 0L) return(c(NA_real_, NA_real_))
-  d <- merge(na_dt, cs, by = c("unit", "time"))
+  d <- merge(dt, cs, by = c("unit", "time"))
   d[, `:=`(tb = time - 1L, tt = time + h)]
-  d <- merge(d, na_dt[, .(unit, tb = time, yb = y)], by = c("unit", "tb"))
-  d <- merge(d, na_dt[, .(unit, tt = time, yt = y)], by = c("unit", "tt"))
+  d <- merge(d, dt[, .(unit, tb = time, yb = y)], by = c("unit", "tb"))
+  d <- merge(d, dt[, .(unit, tt = time, yt = y)], by = c("unit", "tt"))
   d[, Dy := yt - yb]; d[, tr := as.integer(role == "T")]
   d[, has_c := any(tr == 0L), by = time]; d <- d[has_c == TRUE]    # drop event-times with no clean control
   if (uniqueN(d$tr) < 2L) return(c(NA_real_, NA_real_))
@@ -415,17 +417,34 @@ na_es_one <- function(h, reweight = FALSE) {
   }
   c(unname(coef(m)["tr"]), unname(se(m)["tr"]))
 }
-na_es <- function(mode, reweight = FALSE) {
+na_es <- function(mode, reweight = FALSE, dt = na_dt) {
   na_mode <<- mode
   out <- list()
-  for (h in 0:NA_POST) out[[as.character(h)]]  <- na_es_one(h, reweight)
-  for (h in 2:NA_PRE)  out[[as.character(-h)]] <- na_es_one(-h, reweight)
+  for (h in 0:NA_POST) out[[as.character(h)]]  <- na_es_one(h, reweight, dt)
+  for (h in 2:NA_PRE)  out[[as.character(-h)]] <- na_es_one(-h, reweight, dt)
   out
 }
 
 first_entry_es    <- na_es("eq12")
 effect_stab_es    <- na_es("eq13")
 effect_stab_rw_es <- na_es("eq13", reweight = TRUE)
+
+# ---- monotone (no-off-switch) slice: PIN the "alex diverges even without off-switches"
+# claim with committed evidence. On units whose treatment never decreases, alex's
+# off-switch clamp is inert, yet alex still diverges from the paper-faithful Eq.13 (its
+# non-paper boundary/window convention), so the recorded max post-horizon |alex - Eq.13|
+# is well above 0 -> documents that the divergence is NOT only off-switch handling.
+na_mono <- na_dt[, if (all(diff(treat) >= 0L)) .SD, by = unit]   # drop units with any turn-off
+na_mode <<- "eq13"
+mono_ours <- vapply(0:NA_POST, function(h) na_es_one(h, FALSE, na_mono)[1], numeric(1))
+mono_alex <- tryCatch({
+  am <- lpdid::lpdid(as.data.frame(na_mono), window = c(-NA_PRE, NA_POST), y = "y",
+                     unit = "unit", time = "time", treat_status = "treat",
+                     cluster = "unit", nonabsorbing_lag = NA_L)
+  am$coeftable[(NA_PRE + 1L):(NA_PRE + 1L + NA_POST), "Estimate"]   # rows for h = 0..POST
+}, error = function(e) rep(NA_real_, NA_POST + 1L))
+alex_monotone_divergence <- max(abs(mono_ours - mono_alex), na.rm = TRUE)
+message(sprintf("alex monotone-slice max|alex - Eq.13| (post h) = %.4f", alex_monotone_divergence))
 
 # ---- alexCardazzi nonabsorbing_lag: divergent reference (recorded, NOT gated) ----
 na_alex <- tryCatch({
@@ -473,7 +492,8 @@ na_golden <- list(
       "Boundary convention (closes the REGISTRY 'confirm vs R in PR-C2' item): periods",
       "before a unit's first observed period are treated as untreated/no-change (the",
       "library clamps pre-min_t to 0); alexCardazzi NA-excludes such rows (first-row lag",
-      "is NA). A documented divergence, not a defect.")
+      "is NA). A documented divergence, not a defect."),
+    alex_monotone_post_divergence = alex_monotone_divergence  # max|alex - Eq.13| over post h on the monotone (no-off-switch) sub-panel; > 0 shows the divergence is not only off-switch handling
   ),
   first_entry = first_entry_es,
   effect_stab = effect_stab_es,

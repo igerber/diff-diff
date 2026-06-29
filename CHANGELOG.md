@@ -27,7 +27,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   non-absorbing input, bit-for-bit identical results). Both modes implement the entry-effect
   estimands with mode-aware clean-sample masks, a documented "untreated before the first
   observed period" boundary convention, and a gap-free-panel requirement; the Appendix-C
-  exit-event dynamics, R-package parity (PR-C2), and survey-design support remain follow-ups.
+  exit-event dynamics and survey-design support remain follow-ups (R-parity is covered by
+  the entry above).
   Pure-Python validation covers the absorbing reduction, the re-entry mechanism, pre-trend
   placebos, non-negative weighting, stabilized-control admission, and DGP recovery.
 - **`LPDiD` R-parity validation (absorbing).** `tests/test_methodology_lpdid.py` pins the

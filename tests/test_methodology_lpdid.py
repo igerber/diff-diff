@@ -349,3 +349,7 @@ class TestLPDiDNonAbsorbingParityR:
             and np.isfinite(_num(alex[k][0]))
         ]
         assert diffs and max(diffs) > 1e-3, "expected a documented alex divergence on post horizons"
+        # The divergence is NOT only off-switch handling: it persists on the monotone
+        # (no-off-switch) sub-panel, recorded as committed evidence in meta.
+        mono = _num(na_golden["meta"]["alex_monotone_post_divergence"])
+        assert mono > 1e-3, f"expected alex to diverge from Eq.13 on the monotone slice, got {mono}"

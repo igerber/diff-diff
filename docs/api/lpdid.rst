@@ -24,9 +24,12 @@ estimand is a strictly non-negatively-weighted average of cohort effects.
    ``stabilization_window=L`` and lets units whose treatment has been stable for
    at least ``L`` periods serve as clean controls — feasible with few or no
    never-treated units). Non-absorbing modes require a gap-free panel within
-   each unit's observed span and cover the entry-effect estimands; the
-   Appendix-C exit-event dynamics, R-package parity, and survey-design support
-   are planned follow-ups. Covariates and absorbed fixed
+   each unit's observed span and cover the entry-effect estimands. The
+   non-absorbing entry-effect paths are R-parity-validated against an independent
+   ``fixest::feols`` reconstruction of the paper's Eq. 12/13 (see
+   ``docs/methodology/REGISTRY.md``); the Appendix-C exit-event dynamics, the
+   Stata canonical SE, and survey-design support remain planned follow-ups.
+   Covariates and absorbed fixed
    effects are supported; under ``reweight=False`` they enter by direct
    inclusion, which preserves the non-negative weighting result only under
    homogeneous covariate effects (online Appendix B.2.2) — the
