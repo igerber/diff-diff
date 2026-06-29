@@ -1475,6 +1475,36 @@ class TestCallawaySantAnnaNonEstimableMaterialization:
         # Excluded from aggregation -> overall ATT still finite.
         assert np.isfinite(results.overall_att)
 
+    def test_no_covariate_path_nonfinite_att_materialized_as_nan(self):
+        """No-covariate vectorized path: an inf outcome (passes the NaN-only valid
+        mask) yields a non-finite ATT, which must be materialized as a NaN cell
+        with skip_reason -- not stored as inf with an IF entry / batch inference."""
+        data = generate_staggered_data(n_units=200, seed=11)
+        # Inject inf into one treated unit's outcome at its treatment period; inf is
+        # not NaN so it survives the valid mask and makes that cohort's cell ATT inf.
+        fin = data[np.isfinite(data["first_treat"]) & (data["first_treat"] > 0)]
+        u = fin["unit"].iloc[0]
+        g = int(data.loc[data["unit"] == u, "first_treat"].iloc[0])
+        data.loc[(data["unit"] == u) & (data["time"] == g), "outcome"] = np.inf
+
+        cs = CallawaySantAnna(n_bootstrap=0, estimation_method="reg")
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            results = cs.fit(
+                data, outcome="outcome", unit="unit", time="time", first_treat="first_treat"
+            )
+
+        nf = [
+            (k, v)
+            for k, v in results.group_time_effects.items()
+            if v["skip_reason"] == "non_finite_regression"
+        ]
+        assert nf, "an inf outcome must yield a non_finite_regression cell"
+        for _, v in nf:
+            assert np.isnan(v["effect"]) and not np.isinf(v["effect"])
+            assert np.isnan(v["se"]) and np.isnan(v["t_stat"]) and np.isnan(v["p_value"])
+        assert np.isfinite(results.overall_att)
+
     def test_all_nonestimable_raises_with_materialized_cells(self):
         """All cells non-estimable (dict non-empty, all NaN) -> ValueError via the
         no-finite-effect guard (distinct from the empty-dict case)."""

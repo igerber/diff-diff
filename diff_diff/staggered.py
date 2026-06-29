@@ -1170,6 +1170,19 @@ class CallawaySantAnna(
                 inf_control = -(control_change - np.mean(control_change)) / n_c
                 sw_sum = None
 
+            # A difference-in-means ATT is finite given n_t, n_c > 0, but enforce
+            # the uniform contract anyway: a non-estimable cell is a NaN entry with
+            # NO influence-function entry, skipped from batch inference and the
+            # bootstrap (matches the covariate / general / RCS paths).
+            if not np.isfinite(att):
+                group_time_effects[(g, t)] = _nan_gt_entry(
+                    n_treated=n_t,
+                    n_control=n_c,
+                    skip_reason="non_finite_regression",
+                    survey_weight_sum=sw_sum,
+                )
+                continue
+
             gte_entry = {
                 "effect": att,
                 "se": se,
@@ -1179,7 +1192,7 @@ class CallawaySantAnna(
                 "conf_int": (np.nan, np.nan),
                 "n_treated": n_t,
                 "n_control": n_c,
-                "skip_reason": None if np.isfinite(att) else "non_finite_regression",
+                "skip_reason": None,
             }
             if sw_sum is not None:
                 gte_entry["survey_weight_sum"] = sw_sum
