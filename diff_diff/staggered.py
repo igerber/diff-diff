@@ -1522,15 +1522,25 @@ class CallawaySantAnna(
 
                     if nan_cell:
                         att = np.nan
-                        se = np.nan
-                        inf_treated = np.zeros(n_t)
-                        inf_control = np.zeros(n_c)
                     else:
                         var_t = float(np.var(treated_residuals, ddof=1)) if n_t > 1 else 0.0
                         var_c = float(np.var(residuals, ddof=1)) if pair_n_c > 1 else 0.0
                         se = float(np.sqrt(var_t / n_t + var_c / pair_n_c))
                         inf_treated = (treated_residuals - np.mean(treated_residuals)) / n_t
                         inf_control = -residuals / pair_n_c
+
+                # Non-estimable (non-finite regression) cell: materialize NaN with
+                # NO influence-function entry — uniform with the missing-period /
+                # zero-control / zero-weight paths, so every NaN cell is excluded
+                # from aggregation and the bootstrap (the IF-membership filter and
+                # the finite-mask both drop it). Skip batch inference (already NaN).
+                if not np.isfinite(att):
+                    group_time_effects[(g, t)] = _nan_gt_entry(
+                        n_treated=n_t,
+                        n_control=n_c,
+                        skip_reason="non_finite_regression",
+                    )
+                    continue
 
                 group_time_effects[(g, t)] = {
                     "effect": att,
@@ -1540,7 +1550,7 @@ class CallawaySantAnna(
                     "conf_int": (np.nan, np.nan),
                     "n_treated": n_t,
                     "n_control": n_c,
-                    "skip_reason": None if np.isfinite(att) else "non_finite_regression",
+                    "skip_reason": None,
                 }
 
                 all_units = precomputed["all_units"]

@@ -1298,6 +1298,7 @@ def _cs_nonestimable_data(panel: bool, n: int = 25, seed: int = 0) -> pd.DataFra
     uid = 0
     for g in (2, 3, 4):
         for _ in range(n):
+            x = rng.normal(0, 1)  # unit-level covariate (for IPW/DR/reg covariate paths)
             if panel:
                 fe = rng.normal(0, 1)
                 for t in range(1, 5):
@@ -1306,20 +1307,23 @@ def _cs_nonestimable_data(panel: bool, n: int = 25, seed: int = 0) -> pd.DataFra
                         {
                             "unit": uid,
                             "time": t,
-                            "outcome": fe + 0.3 * t + 1.5 * post + rng.normal(0, 0.5),
+                            "outcome": fe + 0.3 * t + 1.5 * post + 0.5 * x + rng.normal(0, 0.5),
                             "first_treat": g,
+                            "x": x,
                         }
                     )
                 uid += 1
             else:
                 for t in range(1, 5):
                     post = 1.0 if t >= g else 0.0
+                    x_t = rng.normal(0, 1)
                     rows.append(
                         {
                             "unit": uid,
                             "time": t,
-                            "outcome": rng.normal(0, 1) + 0.3 * t + 1.5 * post,
+                            "outcome": rng.normal(0, 1) + 0.3 * t + 1.5 * post + 0.5 * x_t,
                             "first_treat": g,
+                            "x": x_t,
                         }
                     )
                     uid += 1
@@ -1341,10 +1345,19 @@ class TestCallawaySantAnnaNonEstimableMaterialization:
     }
 
     @pytest.mark.parametrize(
-        "method,panel",
-        [("reg", True), ("ipw", True), ("dr", True), ("reg", False)],
+        "method,panel,covariates",
+        [
+            ("reg", True, None),  # no-covariate vectorized path
+            ("ipw", True, None),  # general path, no covariates
+            ("dr", True, None),  # general path, no covariates
+            ("reg", False, None),  # repeated cross-section path
+            ("reg", True, ["x"]),  # covariate-regression vectorized path
+            ("ipw", True, ["x"]),  # general path, covariate IPW
+            ("dr", True, ["x"]),  # general path, covariate DR
+            ("dr", False, ["x"]),  # repeated cross-section, covariate DR
+        ],
     )
-    def test_materializes_nan_cell_with_skip_reason(self, method, panel):
+    def test_materializes_nan_cell_with_skip_reason(self, method, panel, covariates):
         """Each previously-omitting path now stores the non-estimable cell as NaN."""
         data = _cs_nonestimable_data(panel=panel, seed=0)
         cs = CallawaySantAnna(
@@ -1356,7 +1369,12 @@ class TestCallawaySantAnnaNonEstimableMaterialization:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             results = cs.fit(
-                data, outcome="outcome", unit="unit", time="time", first_treat="first_treat"
+                data,
+                outcome="outcome",
+                unit="unit",
+                time="time",
+                first_treat="first_treat",
+                covariates=covariates,
             )
 
         # The (g=4, t=4) cell has no not-yet-treated controls -> materialized, not omitted.
