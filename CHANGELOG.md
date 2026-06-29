@@ -52,7 +52,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (no-covariate regression, covariate regression, IPW/DR, repeated cross-section, survey-weighted)
   — previously only the covariate-regression singular case did this and the other paths dropped
   the cell silently from the grid. The cells are excluded from every aggregation
-  (simple/group/calendar/event-study), from `balance_e`, and from the bootstrap, so all aggregate
+  (simple/group/event-study), from `balance_e`, and from the bootstrap, so all aggregate
   point estimates and standard errors — and the event-study `n_groups` / by-group `n_periods`
   metadata — are numerically **unchanged** and continue to match R `did`'s `aggte()`; a fit where
   no cell is estimable still raises `ValueError`. `to_dataframe("group_time")` now includes these
