@@ -28,7 +28,7 @@ from diff_diff.linalg import (
 from diff_diff.results import DiDResults, MultiPeriodDiDResults, PeriodEffect
 from diff_diff.utils import (
     WildBootstrapResults,
-    demean_by_group,
+    demean_by_groups,
     fe_dummy_names,
     safe_inference,
     validate_binary,
@@ -414,17 +414,9 @@ class DifferenceInDifferences:
             absorbed_vars = []
             n_absorbed_effects = 0
 
-        # Reject multi-absorb with survey weights (single-pass demeaning is
-        # not the correct weighted FWL projection for N > 1 dimensions). Only
-        # fires when absorb is still set — i.e., the auto-route above didn't
-        # consume it.
-        if absorb and len(absorb) > 1 and survey_weights is not None:
-            raise ValueError(
-                f"Multiple absorbed fixed effects (absorb={absorb}) with survey "
-                "weights is not supported. Single-pass sequential demeaning is not "
-                "the correct weighted FWL projection for multiple absorbed dimensions. "
-                "Use absorb with a single variable, or use fixed_effects= instead."
-            )
+        # Weighted multiple absorbed FE is supported: the absorb path below uses
+        # iterative alternating projections (demean_by_groups), the exact weighted
+        # FWL projection for N > 1 dimensions on both balanced and unbalanced panels.
 
         # Validate vcov_type="conley" wire-up. DiD.fit() accepts `unit`
         # as a fit-time arg (NOT on __init__) because cluster/unit
@@ -462,16 +454,18 @@ class DifferenceInDifferences:
                 float
             ) * working_data[time].values.astype(float)
             vars_to_demean = [outcome, treatment, time, "_treat_time"] + (covariates or [])
-            for ab_var in absorb:
-                working_data, n_fe = demean_by_group(
-                    working_data,
-                    vars_to_demean,
-                    ab_var,
-                    inplace=True,
-                    weights=survey_weights,
-                )
-                n_absorbed_effects += n_fe
-                absorbed_vars.append(ab_var)
+            # Method of alternating projections: for N > 1 absorbed dimensions a
+            # single sequential sweep is only exact on balanced (orthogonal-FE)
+            # panels; demean_by_groups iterates to the exact (W)LS-FWL residual.
+            working_data, n_fe = demean_by_groups(
+                working_data,
+                vars_to_demean,
+                list(absorb),
+                inplace=True,
+                weights=survey_weights,
+            )
+            n_absorbed_effects += n_fe
+            absorbed_vars = list(absorb)
 
         # Extract variables (may be demeaned if absorb was used)
         y = working_data[outcome].values.astype(float)
@@ -644,8 +638,7 @@ class DifferenceInDifferences:
                     float
                 )
                 vars_dm = [outcome, treatment, time, "_treat_time"] + (covariates or [])
-                for ab_var in _absorb_list:
-                    wd, _ = demean_by_group(wd, vars_dm, ab_var, inplace=True, weights=w_nz)
+                wd, _ = demean_by_groups(wd, vars_dm, _absorb_list, inplace=True, weights=w_nz)
                 y_r = wd[outcome].values.astype(float)
                 d_r = wd[treatment].values.astype(float)
                 t_r = wd[time].values.astype(float)
@@ -1572,17 +1565,9 @@ class MultiPeriodDiD(DifferenceInDifferences):
             absorb = None
             n_absorbed_effects = 0
 
-        # Reject multi-absorb with survey weights (single-pass demeaning is
-        # not the correct weighted FWL projection for N > 1 dimensions).
-        # Only fires when absorb is still set — i.e., the auto-route above
-        # didn't consume it.
-        if absorb and len(absorb) > 1 and survey_weights is not None:
-            raise ValueError(
-                f"Multiple absorbed fixed effects (absorb={absorb}) with survey "
-                "weights is not supported. Single-pass sequential demeaning is not "
-                "the correct weighted FWL projection for multiple absorbed dimensions. "
-                "Use absorb with a single variable, or use fixed_effects= instead."
-            )
+        # Weighted multiple absorbed FE is supported: the absorb path below uses
+        # iterative alternating projections (demean_by_groups), the exact weighted
+        # FWL projection for N > 1 dimensions on both balanced and unbalanced panels.
 
         # MultiPeriodDiD is intrinsically a multi-period panel estimator;
         # Phase 2 panel block-decomposed Conley (matches R conleyreg) needs
@@ -1622,15 +1607,16 @@ class MultiPeriodDiD(DifferenceInDifferences):
                 + [f"_did_interact_{p}" for p in non_ref_periods]
                 + (covariates or [])
             )
-            for ab_var in absorb:
-                working_data, n_fe = demean_by_group(
-                    working_data,
-                    vars_to_demean,
-                    ab_var,
-                    inplace=True,
-                    weights=survey_weights,
-                )
-                n_absorbed_effects += n_fe
+            # Method of alternating projections (exact for unbalanced panels; a
+            # single sequential sweep is exact only on balanced orthogonal-FE panels).
+            working_data, n_fe = demean_by_groups(
+                working_data,
+                vars_to_demean,
+                list(absorb),
+                inplace=True,
+                weights=survey_weights,
+            )
+            n_absorbed_effects += n_fe
 
         # Extract outcome and treatment (may be demeaned if absorb was used)
         y = working_data[outcome].values.astype(float)
@@ -1854,8 +1840,7 @@ class MultiPeriodDiD(DifferenceInDifferences):
                     + [f"_did_interact_{p}" for p in non_ref_periods]
                     + (covariates or [])
                 )
-                for ab_var_ in _absorb_list_mp:
-                    wd, _ = demean_by_group(wd, vars_dm_, ab_var_, inplace=True, weights=w_nz)
+                wd, _ = demean_by_groups(wd, vars_dm_, _absorb_list_mp, inplace=True, weights=w_nz)
                 y_r = wd[outcome].values.astype(float)
                 d_r = wd["_did_treatment"].values.astype(float)
                 X_r = np.column_stack([np.ones(len(y_r)), d_r])

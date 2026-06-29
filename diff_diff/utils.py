@@ -2618,13 +2618,18 @@ def demean_by_group(
         groups = data[group_var].values
         w = np.asarray(weights, dtype=np.float64)
         # Cache weight sums per group (invariant across variables)
-        w_sum = pd.Series(w).groupby(groups).transform("sum")
+        w_sum = pd.Series(w).groupby(groups).transform("sum").values
         for var in variables:
             col_name = var if not suffix else f"{var}{suffix}"
             x = data[var].values.astype(np.float64)
-            wx = pd.Series(w * x).groupby(groups).transform("sum")
-            weighted_means = wx / w_sum
-            data[col_name] = x - weighted_means.values
+            wx = pd.Series(w * x).groupby(groups).transform("sum").values
+            # Guard zero-total-weight groups (survey subpopulation / zero-weight
+            # domain padding) so those rows pass through unchanged and stay inert
+            # in WLS. For positive-weight groups this is bit-identical to wx/w_sum.
+            weighted_means = np.divide(
+                wx, w_sum, out=np.zeros_like(wx, dtype=np.float64), where=w_sum > 0
+            )
+            data[col_name] = x - weighted_means
     else:
         # Cache the groupby object for efficiency
         grouper = data.groupby(group_var, sort=False)
@@ -2634,6 +2639,161 @@ def demean_by_group(
             data[col_name] = data[var] - group_means
 
     return data, n_effects
+
+
+def demean_by_groups(
+    data: pd.DataFrame,
+    variables: List[str],
+    group_vars: List[str],
+    inplace: bool = False,
+    suffix: str = "",
+    weights: Optional[np.ndarray] = None,
+    max_iter: int = 100,
+    tol: float = 1e-10,
+) -> Tuple[pd.DataFrame, int]:
+    """N-way within transformation via the method of alternating projections (MAP).
+
+    Removes ``len(group_vars)`` absorbed fixed-effect dimensions by repeatedly
+    demeaning each variable by each group in ``group_vars`` order until the
+    iterate stops changing (``max|x - x_old| < tol``) or ``max_iter`` is reached.
+    This converges to the exact (W)LS Frisch-Waugh-Lovell residualization onto the
+    combined column space of all ``group_vars`` dummies, for both balanced and
+    unbalanced panels and for both unweighted and survey-weighted designs (it is
+    the algorithm used by R ``fixest`` / ``reghdfe`` / ``lfe``).
+
+    Single-pass sequential demeaning (one sweep) is only the one-iteration
+    approximation of this projection; it is exact only when the FE subspaces are
+    orthogonal (balanced fully-crossed panels). For ``len(group_vars) == 1`` the
+    projection is exact in one pass, so this delegates to :func:`demean_by_group`
+    (byte-identical to the prior one-way behavior).
+
+    Parameters
+    ----------
+    data : pd.DataFrame
+        DataFrame containing the variables to demean.
+    variables : list of str
+        Column names to demean.
+    group_vars : list of str
+        Grouping (fixed-effect) columns to absorb. Must be non-empty.
+    inplace : bool, default False
+        If True, writes the demeaned values onto ``data`` (the caller must own it)
+        and returns it. If False, attaches them as a consolidated block via
+        ``pd.concat`` and returns a new frame (the input is not mutated).
+    suffix : str, default ""
+        Demeaned column naming. Empty overwrites the source columns; a non-empty
+        suffix writes to ``f"{var}{suffix}"`` columns (originals preserved).
+    weights : np.ndarray, optional
+        Observation weights. When provided, uses weighted group means
+        ``sum(w*x)/sum(w)`` per group and converges to the WLS-FWL residual.
+    max_iter : int, default 100
+        Maximum number of alternating-projection iterations per variable. Emits a
+        single ``UserWarning`` per call listing any variable that fails to converge.
+    tol : float, default 1e-10
+        Convergence tolerance on the max absolute change across the iterate.
+
+    Returns
+    -------
+    data : pd.DataFrame
+        DataFrame with demeaned variables.
+    n_effects : int
+        Number of absorbed fixed effects, ``sum_d (nunique_d - 1)`` over
+        ``group_vars`` (the standard DOF-accounting convention).
+
+    Examples
+    --------
+    >>> df, n_fe = demean_by_groups(df, ['y', 'x'], ['unit', 'period'])
+    """
+    if not group_vars:
+        raise ValueError("demean_by_groups requires at least one grouping variable.")
+
+    # One dimension: the within projection is exact in a single pass. Delegate so
+    # the one-way callers stay byte-identical to demean_by_group.
+    if len(group_vars) == 1:
+        return demean_by_group(
+            data,
+            variables,
+            group_vars[0],
+            inplace=inplace,
+            suffix=suffix,
+            weights=weights,
+        )
+
+    # N >= 2: method of alternating projections. Per-variable independent
+    # convergence (outer loop = variable, inner = iterations) — this mirrors
+    # within_transform's weighted loop exactly so that the two-way weighted case
+    # (group_vars == [unit, time]) is bit-identical.
+    n_effects = sum(int(data[g].nunique()) - 1 for g in group_vars)
+    target_cols = [var if not suffix else f"{var}{suffix}" for var in variables]
+    group_arrays = [data[g].values for g in group_vars]
+    demeaned_values: List[np.ndarray] = []
+    non_converged_vars: List[str] = []
+
+    if weights is not None:
+        w = np.asarray(weights, dtype=np.float64)
+        # Cache per-group weight sums once (invariant across variables/iterations).
+        w_sums = [pd.Series(w).groupby(g).transform("sum").values for g in group_arrays]
+
+        def _weighted_group_demean(x, groups, w, w_sum):
+            wx_sum = pd.Series(w * x).groupby(groups).transform("sum").values
+            # Guard zero-total-weight groups (survey subpopulation / zero-weight
+            # domain padding): leave such rows unchanged (mean 0) so they remain
+            # inert in the downstream WLS instead of poisoning the design with
+            # NaN/Inf. For positive-weight groups this is bit-identical to wx/w_sum.
+            means = np.divide(
+                wx_sum, w_sum, out=np.zeros_like(wx_sum, dtype=np.float64), where=w_sum > 0
+            )
+            return x - means
+
+        for var in variables:
+            x = data[var].values.astype(np.float64)
+            converged = False
+            for _iter in range(max_iter):
+                x_old = x.copy()
+                for groups, w_sum in zip(group_arrays, w_sums):
+                    x = _weighted_group_demean(x, groups, w, w_sum)
+                if np.max(np.abs(x - x_old)) < tol:
+                    converged = True
+                    break
+            if not converged:
+                non_converged_vars.append(var)
+            demeaned_values.append(x)
+    else:
+        for var in variables:
+            x = data[var].values.astype(np.float64)
+            converged = False
+            for _iter in range(max_iter):
+                x_old = x.copy()
+                for groups in group_arrays:
+                    x = x - pd.Series(x).groupby(groups).transform("mean").values
+                if np.max(np.abs(x - x_old)) < tol:
+                    converged = True
+                    break
+            if not converged:
+                non_converged_vars.append(var)
+            demeaned_values.append(x)
+
+    if non_converged_vars:
+        warn_if_not_converged(
+            False,
+            f"demean_by_groups alternating projection (variables: {non_converged_vars})",
+            max_iter,
+            tol,
+        )
+
+    if inplace:
+        for col, vals in zip(target_cols, demeaned_values):
+            data[col] = vals
+        return data, n_effects
+
+    # Non-inplace: attach the demeaned columns as a single consolidated block via
+    # pd.concat (no defensive copy — the demean above is read-only). Mirrors the
+    # within_transform attach contract: a colliding target name (suffix="" or a
+    # re-demean) is dropped first so concat replaces rather than duplicates.
+    new_block = pd.DataFrame(dict(zip(target_cols, demeaned_values)), index=data.index)
+    collisions = [c for c in target_cols if c in data.columns]
+    if collisions:
+        data = data.drop(columns=collisions)
+    return pd.concat([data, new_block], axis=1), n_effects
 
 
 def within_transform(
@@ -2650,8 +2810,14 @@ def within_transform(
     """
     Apply two-way within transformation to remove unit and time fixed effects.
 
-    Computes: y_it - y_i. - y_.t + y_.. for each variable.
-    When weights are provided, uses weighted group means at each step.
+    Computed via the method of alternating projections (a thin two-way wrapper
+    over :func:`demean_by_groups` with ``group_vars=[unit, time]``): each variable
+    is demeaned by unit, then by time, iterated until convergence. This is the
+    exact (weighted) Frisch-Waugh-Lovell residualization for both balanced and
+    unbalanced panels. The closed-form additive expression ``y_it - y_i. - y_.t +
+    y_..`` is the balanced fully-crossed special case (it equals the converged
+    iterate only when the unit and time FE subspaces are orthogonal). When weights
+    are provided, weighted group means are used at each step.
 
     This is the standard fixed effects transformation for panel data that
     removes both unit-specific and time-specific effects.
@@ -2681,13 +2847,13 @@ def within_transform(
     weights : np.ndarray, optional
         Observation weights for weighted group means.
     max_iter : int, default 100
-        Maximum number of alternating-projection iterations. Used only when
-        ``weights`` is not ``None``; the unweighted path is a single pass and
-        ignores this argument. Emits a ``UserWarning`` per call when any
-        variable fails to converge within this budget.
+        Maximum number of alternating-projection iterations. Applies to BOTH the
+        weighted and unweighted paths (both now iterate via the method of
+        alternating projections, exact for unbalanced panels). Emits a
+        ``UserWarning`` per call when any variable fails to converge within this
+        budget. Balanced panels converge in ~2 iterations.
     tol : float, default 1e-8
         Convergence tolerance on the max absolute change across the iterate.
-        Used only when ``weights`` is not ``None``.
 
     Returns
     -------
@@ -2706,81 +2872,21 @@ def within_transform(
     >>> df = within_transform(df, ['y', 'x'], 'unit_id', 'year')
     >>> # df now has 'y_demeaned' and 'x_demeaned' columns
     """
-    # Column naming (``suffix``) is independent of how the demeaned columns are
-    # attached (``inplace``): an empty suffix targets the source column (overwrite),
-    # a non-empty suffix a new ``f"{var}{suffix}"`` column. The demean below only
-    # reads ``data``, so no defensive copy is taken up front.
-    target_cols = [var if not suffix else f"{var}{suffix}" for var in variables]
-    demeaned_values: List[np.ndarray] = []
-
-    if weights is not None:
-        # Weighted within-transformation via iterative alternating projections
-        w = np.asarray(weights, dtype=np.float64)
-        unit_groups = data[unit].values
-        time_groups = data[time].values
-
-        # Cache weight sums per group (invariant across variables)
-        unit_w_sum = pd.Series(w).groupby(unit_groups).transform("sum").values
-        time_w_sum = pd.Series(w).groupby(time_groups).transform("sum").values
-
-        def _weighted_group_demean(x, groups, w, w_sum):
-            wx_sum = pd.Series(w * x).groupby(groups).transform("sum").values
-            return x - wx_sum / w_sum
-
-        non_converged_vars: List[str] = []
-        for var in variables:
-            x = data[var].values.astype(np.float64)
-            converged = False
-            for _iter in range(max_iter):
-                x_old = x.copy()
-                x = _weighted_group_demean(x, unit_groups, w, unit_w_sum)
-                x = _weighted_group_demean(x, time_groups, w, time_w_sum)
-                if np.max(np.abs(x - x_old)) < tol:
-                    converged = True
-                    break
-            if not converged:
-                non_converged_vars.append(var)
-            demeaned_values.append(x)
-        if non_converged_vars:
-            warn_if_not_converged(
-                False,
-                f"within_transform weighted demean (variables: {non_converged_vars})",
-                max_iter,
-                tol,
-            )
-    else:
-        # Cache groupby objects for efficiency
-        unit_grouper = data.groupby(unit, sort=False)
-        time_grouper = data.groupby(time, sort=False)
-
-        for var in variables:
-            unit_means = unit_grouper[var].transform("mean")
-            time_means = time_grouper[var].transform("mean")
-            grand_mean = data[var].mean()
-            demeaned_values.append((data[var] - unit_means - time_means + grand_mean).values)
-
-    if inplace:
-        # Write onto the passed frame (the caller must own it); an existing
-        # same-named column is overwritten. Used for the in-place overwrite
-        # callers (small column sets); large suffixed sets take the concat path
-        # below to avoid per-column block fragmentation.
-        for col, vals in zip(target_cols, demeaned_values):
-            data[col] = vals
-        return data
-
-    # Default (non-inplace): attach the demeaned columns as a single consolidated
-    # block via ``pd.concat``. No defensive copy of ``data`` is taken — the demean
-    # above is read-only and concat does not mutate its inputs, so the caller's
-    # frame is preserved (and shared rather than copied under copy-on-write). This
-    # both drops the redundant copy the old code took before the concat and avoids
-    # the ``DataFrame is highly fragmented`` warning of N per-column inserts.
-    new_block = pd.DataFrame(dict(zip(target_cols, demeaned_values)), index=data.index)
-    # Honor the overwrite contract: if a target name already exists (``suffix=""``,
-    # or re-demeaning a frame that already carries the suffix), drop it first so the
-    # concat replaces it instead of producing a duplicate label. ``drop`` returns a
-    # new frame (the input is not mutated). The common case — fresh suffixed targets
-    # — has no collision and skips straight to the concat.
-    collisions = [c for c in target_cols if c in data.columns]
-    if collisions:
-        data = data.drop(columns=collisions)
-    return pd.concat([data, new_block], axis=1)
+    # Two-way (unit + time) within transformation is the N-way method of
+    # alternating projections specialized to two FE dimensions. Delegate to the
+    # shared engine so there is one MAP implementation. The weighted path is
+    # bit-identical to the previous inline loop (same per-variable convergence,
+    # unit-then-time order, and forwarded tol=1e-8); the unweighted path now also
+    # iterates (MAP) instead of the closed-form additive demean, which was exact
+    # only for balanced panels. ``tol`` is forwarded explicitly (within_transform's
+    # default is 1e-8, not demean_by_groups' 1e-10) to preserve weighted goldens.
+    return demean_by_groups(
+        data,
+        variables,
+        [unit, time],
+        inplace=inplace,
+        suffix=suffix,
+        weights=weights,
+        max_iter=max_iter,
+        tol=tol,
+    )[0]

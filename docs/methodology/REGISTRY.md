@@ -347,6 +347,13 @@ This matches the behavior of R's `fixest::feols()` with absorbed FE.
   - **Note (scale invariance):** shared `diff_diff/linalg.py` behavior — rank detection re-checks on column-equilibrated columns and the solve equilibrates/unscales, so detection and fit are invariant to per-column scaling. For a well-scaled collinear design the dropped column is unchanged; a scale-induced under-count adopts the scale-corrected equilibrated selection (which may differ from the raw choice but retains an identified subset). See the CallawaySantAnna rank-deficiency Note.
   - **Note (covariate-name collision guard):** a covariate named `const`, `ATT`, `_treatment_post`, or a unit/time fixed-effect dummy name — or a duplicate covariate name — raises `ValueError` on both variance paths (would otherwise silently overwrite a structural coefficient on the full-dummy HC2/HC2-BM path). See the DifferenceInDifferences "covariate-name collision guard" Note.
 - Unbalanced panels handled via proper demeaning
+  - **Note (iterative demeaning):** the two-way within transformation
+    (`diff_diff.utils.within_transform`) uses the method of alternating projections
+    (iteratively demean by unit, then time, until convergence) for BOTH the weighted
+    and unweighted paths. This is exact on unbalanced panels. The unweighted path
+    previously used the closed-form additive demean `y - ȳ_i - ȳ_t + ȳ`, which is
+    exact only for balanced fully-crossed panels; on unbalanced panels it was a
+    biased approximation. Balanced-panel results are unchanged to machine precision.
 - Multi-period `time` parameter: only binary (0/1) post indicator is recommended; multi-period values
   produce `treated × period_number` rather than `treated × post_indicator`. A `UserWarning` is
   emitted when `time` has >2 unique values, advising users to create a binary post column.
@@ -4260,23 +4267,30 @@ unequal selection probabilities).
 
 ### Absorbed Fixed Effects with Survey Weights
 
-- **Note:** When `absorb` is used with a single variable in DiD/MultiPeriodDiD,
-  all regressors (treatment, time, interactions, covariates) are within-transformed
-  alongside the outcome per the FWL theorem. Regressors collinear with
-  the absorbed FE (e.g., treatment after absorbing unit FE) are dropped
-  via rank-deficiency handling. Multiple absorbed variables with survey weights
-  are rejected (single-pass sequential demeaning is not the correct weighted
-  FWL projection for N > 1 dimensions; iterative alternating projections are
-  needed but not yet implemented).
-- **Note:** The shared weighted within-transformation path
-  (`diff_diff.utils.within_transform`, hit whenever `weights is not None`) emits
-  a `UserWarning` per call when any transformed variable exits the
-  alternating-projection loop without reaching `tol` within `max_iter`.
-  Defaults: `max_iter=100`, `tol=1e-8`. This signal applies uniformly across
-  TwoWayFixedEffects, SunAbraham, BaconDecomposition, and WooldridgeDiD whenever
-  they route through this helper (survey-weighted or otherwise). Silent return
-  of the current iterate was classified as a silent failure under the Phase 2
-  audit and replaced with this explicit signal.
+- **Note:** When `absorb` is used in DiD/MultiPeriodDiD, all regressors
+  (treatment, time, interactions, covariates) are within-transformed alongside
+  the outcome per the FWL theorem. Regressors collinear with the absorbed FE
+  (e.g., treatment after absorbing unit FE) are dropped via rank-deficiency
+  handling. Multiple absorbed variables (weighted or unweighted) are
+  within-transformed via the **method of alternating projections**
+  (`diff_diff.utils.demean_by_groups`): each variable is demeaned by each FE
+  dimension in turn until the iterate converges. This is the exact (weighted)
+  FWL residualization onto the combined column space of all absorbed dummies for
+  both balanced and unbalanced panels, matching R `fixest` / `reghdfe` / `lfe`.
+  A single sequential sweep (the prior behavior) is only the one-iteration
+  approximation and is exact only when the FE subspaces are orthogonal (balanced
+  fully-crossed panels); on unbalanced panels it was wrong. A single absorbed
+  variable converges in one pass (delegates to `demean_by_group`).
+- **Note:** The shared within-transformation path (`diff_diff.utils.demean_by_groups`,
+  also reached via the two-way `within_transform`) emits a `UserWarning` per call
+  when any transformed variable exits the alternating-projection loop without
+  reaching `tol` within `max_iter`. This now covers the **unweighted** path as well
+  (previously the unweighted two-way transform used a closed-form additive demean
+  and could not warn). Defaults: `max_iter=100`; `tol=1e-8` via `within_transform`
+  (TwoWayFixedEffects, SunAbraham, BaconDecomposition, WooldridgeDiD) and `tol=1e-10`
+  for the DiD/MultiPeriodDiD `absorb=` path. Balanced panels converge in ~2
+  iterations. Silent return of the current iterate was classified as a silent
+  failure under the Phase 2 audit and replaced with this explicit signal.
 
 ### Survey Degrees of Freedom
 

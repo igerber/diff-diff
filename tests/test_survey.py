@@ -2644,8 +2644,16 @@ class TestRound11Fixes:
         # Original survey_design must be immutable
         assert lr.survey_design.psu is None
 
-    def test_multi_absorb_survey_rejected_did(self):
-        """DiD with multi-absorb + survey weights raises ValueError."""
+    def test_multi_absorb_survey_now_supported_did(self):
+        """DiD with multi-absorb + survey weights is now supported (iterative MAP).
+
+        Previously rejected. The absorb path uses the method of alternating
+        projections, the exact weighted FWL projection for N>1 dimensions, so the
+        ATT matches the equivalent ``fixed_effects=[a, b]`` full-dummy fit. (This
+        panel is balanced in a×b + uniform weights, so it verifies the lifted guard
+        and weighted equivalence; the unbalanced strong discriminator vs single-pass
+        lives in test_methodology_did.py::TestMultiAbsorbIterativeDemean.)
+        """
         np.random.seed(42)
         n = 40
         df = pd.DataFrame(
@@ -2659,9 +2667,9 @@ class TestRound11Fixes:
             }
         )
         sd = SurveyDesign(weights="w", weight_type="pweight")
-        did = DifferenceInDifferences()
-        with pytest.raises(ValueError, match="Multiple absorbed fixed effects"):
-            did.fit(
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            res_abs = DifferenceInDifferences().fit(
                 df,
                 outcome="outcome",
                 treatment="treated",
@@ -2669,9 +2677,19 @@ class TestRound11Fixes:
                 absorb=["a", "b"],
                 survey_design=sd,
             )
+            res_fe = DifferenceInDifferences().fit(
+                df,
+                outcome="outcome",
+                treatment="treated",
+                time="post",
+                fixed_effects=["a", "b"],
+                survey_design=sd,
+            )
+        assert np.isfinite(res_abs.att)
+        assert abs(res_abs.att - res_fe.att) < 1e-8
 
-    def test_multi_absorb_survey_rejected_multiperiod(self):
-        """MultiPeriodDiD with multi-absorb + survey weights raises ValueError."""
+    def test_multi_absorb_survey_now_supported_multiperiod(self):
+        """MultiPeriodDiD with multi-absorb + survey weights is now supported."""
         np.random.seed(42)
         n = 60
         df = pd.DataFrame(
@@ -2685,9 +2703,9 @@ class TestRound11Fixes:
             }
         )
         sd = SurveyDesign(weights="w", weight_type="pweight")
-        mpd = MultiPeriodDiD()
-        with pytest.raises(ValueError, match="Multiple absorbed fixed effects"):
-            mpd.fit(
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            res_abs = MultiPeriodDiD().fit(
                 df,
                 outcome="outcome",
                 treatment="treated",
@@ -2696,6 +2714,25 @@ class TestRound11Fixes:
                 absorb=["a", "b"],
                 survey_design=sd,
             )
+            res_fe = MultiPeriodDiD().fit(
+                df,
+                outcome="outcome",
+                treatment="treated",
+                time="time",
+                post_periods=[2],
+                fixed_effects=["a", "b"],
+                survey_design=sd,
+            )
+        a_eff = {p: pe.effect for p, pe in res_abs.period_effects.items()}
+        f_eff = {p: pe.effect for p, pe in res_fe.period_effects.items()}
+        compared = [
+            (a_eff[p], f_eff[p])
+            for p in a_eff
+            if p in f_eff and np.isfinite(a_eff[p]) and np.isfinite(f_eff[p])
+        ]
+        assert compared, "no finite period effects to compare"
+        for ae, fe in compared:
+            assert abs(ae - fe) < 1e-8
 
     def test_single_absorb_survey_allowed(self):
         """Single-absorb with survey weights should still work (regression guard)."""

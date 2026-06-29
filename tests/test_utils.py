@@ -26,12 +26,15 @@ from diff_diff.utils import (
     compute_robust_se,
     compute_sdid_estimator,
     compute_time_weights,
+    demean_by_group,
+    demean_by_groups,
     equivalence_test_trends,
     fe_dummy_names,
     safe_inference,
     validate_binary,
     validate_covariate_names,
     validate_design_term_names,
+    within_transform,
 )
 
 # =============================================================================
@@ -1386,3 +1389,210 @@ class TestFeDummyNames:
         assert fe_dummy_names(col, "fe") == list(
             pd.get_dummies(col, prefix="fe", drop_first=True).columns
         )
+
+
+# =============================================================================
+# demean_by_groups — N-way method of alternating projections (MAP)
+# =============================================================================
+
+
+def _unbalanced_2way_panel(seed=0, drop=0.30):
+    """Unbalanced (non-orthogonal) 2-way panel: some unit-period cells dropped."""
+    rng = np.random.default_rng(seed)
+    rows = [
+        (u, t)
+        for u in range(8)
+        for t in range(6)
+        if rng.random() >= drop
+    ]
+    df = pd.DataFrame(rows, columns=["unit", "period"])
+    n = len(df)
+    df["x1"] = rng.normal(size=n)
+    df["x2"] = rng.normal(size=n)
+    df["y"] = 2.0 * df["x1"] - 1.5 * df["x2"] + rng.normal(size=n)
+    df["w"] = rng.uniform(0.5, 2.0, size=n)
+    return df
+
+
+def _full_dummy_slopes(df, group_cols, xcols, weights=None):
+    """Ground truth: (W)OLS of y on [1, xcols, dummies(group_cols)]; return x slopes."""
+    cols = [np.ones(len(df))] + [df[c].values.astype(float) for c in xcols]
+    for g in group_cols:
+        d = pd.get_dummies(df[g], prefix=g, drop_first=True).values.astype(float)
+        cols.extend(d[:, j] for j in range(d.shape[1]))
+    X = np.column_stack(cols)
+    y = df["y"].values.astype(float)
+    if weights is None:
+        beta, *_ = np.linalg.lstsq(X, y, rcond=None)
+    else:
+        sw = np.sqrt(np.asarray(weights, dtype=float))
+        beta, *_ = np.linalg.lstsq(X * sw[:, None], y * sw, rcond=None)
+    return beta[1 : 1 + len(xcols)]
+
+
+def _fwl_slopes(demeaned, xcols, weights=None):
+    """OLS of demeaned y on demeaned xcols (FWL residualization)."""
+    X = np.column_stack([demeaned[c] for c in xcols])
+    y = demeaned["y"]
+    if weights is None:
+        beta, *_ = np.linalg.lstsq(X, y, rcond=None)
+    else:
+        sw = np.sqrt(np.asarray(weights, dtype=float))
+        beta, *_ = np.linalg.lstsq(X * sw[:, None], y * sw, rcond=None)
+    return beta
+
+
+def _frozen_old_within_transform_weighted(
+    df, variables, unit, time, weights, max_iter=100, tol=1e-8
+):
+    """Byte-for-byte copy of the PRE-REFACTOR within_transform weighted loop.
+
+    Used as the byte-identity guard: demean_by_groups([unit, time], weighted) and
+    the refactored within_transform must reproduce this exactly.
+    """
+    w = np.asarray(weights, dtype=np.float64)
+    unit_groups = df[unit].values
+    time_groups = df[time].values
+    unit_w_sum = pd.Series(w).groupby(unit_groups).transform("sum").values
+    time_w_sum = pd.Series(w).groupby(time_groups).transform("sum").values
+
+    def _wgd(x, groups, w, w_sum):
+        wx_sum = pd.Series(w * x).groupby(groups).transform("sum").values
+        return x - wx_sum / w_sum
+
+    out = {}
+    for var in variables:
+        x = df[var].values.astype(np.float64)
+        for _ in range(max_iter):
+            x_old = x.copy()
+            x = _wgd(x, unit_groups, w, unit_w_sum)
+            x = _wgd(x, time_groups, w, time_w_sum)
+            if np.max(np.abs(x - x_old)) < tol:
+                break
+        out[var] = x
+    return out
+
+
+class TestDemeanByGroups:
+    @pytest.mark.parametrize("weighted", [False, True])
+    def test_len1_byte_identical_to_demean_by_group(self, weighted):
+        """One grouping var must delegate to demean_by_group (byte-identical)."""
+        df = _unbalanced_2way_panel(seed=1)
+        w = df["w"].values if weighted else None
+        out_groups, n_g = demean_by_groups(
+            df, ["y", "x1"], ["unit"], suffix="_dm", weights=w
+        )
+        out_single, n_s = demean_by_group(
+            df, ["y", "x1"], "unit", suffix="_dm", weights=w
+        )
+        assert n_g == n_s
+        np.testing.assert_array_equal(
+            out_groups["y_dm"].values, out_single["y_dm"].values
+        )
+        np.testing.assert_array_equal(
+            out_groups["x1_dm"].values, out_single["x1_dm"].values
+        )
+
+    def test_n_effects_is_sum_nunique_minus_one(self):
+        df = _unbalanced_2way_panel(seed=2)
+        _, n_eff = demean_by_groups(df, ["y"], ["unit", "period"], suffix="_dm")
+        expected = (df["unit"].nunique() - 1) + (df["period"].nunique() - 1)
+        assert n_eff == expected
+
+    @pytest.mark.parametrize("weighted", [False, True])
+    def test_unbalanced_2way_matches_full_dummy_ols(self, weighted):
+        """The core correctness claim: MAP residualization == full-dummy (W)OLS."""
+        df = _unbalanced_2way_panel(seed=3)
+        w = df["w"].values if weighted else None
+        out, _ = demean_by_groups(
+            df, ["y", "x1", "x2"], ["unit", "period"], suffix="_dm", weights=w
+        )
+        demeaned = {c: out[f"{c}_dm"].values for c in ("y", "x1", "x2")}
+        map_slopes = _fwl_slopes(demeaned, ["x1", "x2"], weights=w)
+        gt = _full_dummy_slopes(df, ["unit", "period"], ["x1", "x2"], weights=w)
+        np.testing.assert_allclose(map_slopes, gt, atol=1e-9, rtol=0)
+
+    def test_n3_absorb_matches_full_dummy_ols(self):
+        """Generalizes to 3 absorbed dimensions."""
+        rng = np.random.default_rng(4)
+        rows = [
+            (u, t, (u + t) % 4)
+            for u in range(10)
+            for t in range(6)
+            if rng.random() >= 0.4
+        ]
+        df = pd.DataFrame(rows, columns=["unit", "period", "firm"])
+        n = len(df)
+        df["x1"] = rng.normal(size=n)
+        df["y"] = 2.0 * df["x1"] + rng.normal(size=n)
+        out, _ = demean_by_groups(
+            df, ["y", "x1"], ["unit", "period", "firm"], suffix="_dm"
+        )
+        demeaned = {c: out[f"{c}_dm"].values for c in ("y", "x1")}
+        map_slope = _fwl_slopes(demeaned, ["x1"])[0]
+        gt = _full_dummy_slopes(df, ["unit", "period", "firm"], ["x1"])[0]
+        np.testing.assert_allclose(map_slope, gt, atol=1e-9, rtol=0)
+
+    @pytest.mark.parametrize("weighted", [False, True])
+    def test_result_orthogonal_to_fe_spans(self, weighted):
+        """Demeaned variables must have ~0 (weighted) group means in every FE dim."""
+        df = _unbalanced_2way_panel(seed=5)
+        w = df["w"].values if weighted else None
+        out, _ = demean_by_groups(
+            df, ["y"], ["unit", "period"], suffix="_dm", weights=w, tol=1e-12
+        )
+        ydm = out["y_dm"].values
+        for g in ("unit", "period"):
+            if weighted:
+                num = pd.Series(w * ydm).groupby(df[g].values).transform("sum").values
+                den = pd.Series(w).groupby(df[g].values).transform("sum").values
+                means = num / den
+            else:
+                means = pd.Series(ydm).groupby(df[g].values).transform("mean").values
+            assert np.max(np.abs(means)) < 1e-9
+
+    def test_weighted_byte_identity_vs_frozen_within_transform(self):
+        """demean_by_groups([unit, time], weighted) reproduces the old loop exactly."""
+        df = _unbalanced_2way_panel(seed=6)
+        w = df["w"].values
+        frozen = _frozen_old_within_transform_weighted(
+            df, ["y", "x1", "x2"], "unit", "period", w
+        )
+        out, _ = demean_by_groups(
+            df, ["y", "x1", "x2"], ["unit", "period"], suffix="_dm", weights=w, tol=1e-8
+        )
+        for var in ("y", "x1", "x2"):
+            np.testing.assert_array_equal(out[f"{var}_dm"].values, frozen[var])
+
+    def test_within_transform_weighted_unchanged(self):
+        """The refactored within_transform weighted path is byte-identical to before."""
+        df = _unbalanced_2way_panel(seed=7)
+        w = df["w"].values
+        frozen = _frozen_old_within_transform_weighted(
+            df, ["y", "x1"], "unit", "period", w
+        )
+        out = within_transform(df, ["y", "x1"], "unit", "period", weights=w)
+        np.testing.assert_array_equal(out["y_demeaned"].values, frozen["y"])
+        np.testing.assert_array_equal(out["x1_demeaned"].values, frozen["x1"])
+
+    def test_within_transform_unweighted_now_matches_full_dummy(self):
+        """Unweighted within_transform now uses MAP -> exact on unbalanced panels."""
+        df = _unbalanced_2way_panel(seed=8)
+        out = within_transform(df, ["y", "x1", "x2"], "unit", "period")
+        demeaned = {c: out[f"{c}_demeaned"].values for c in ("y", "x1", "x2")}
+        map_slopes = _fwl_slopes(demeaned, ["x1", "x2"])
+        gt = _full_dummy_slopes(df, ["unit", "period"], ["x1", "x2"])
+        np.testing.assert_allclose(map_slopes, gt, atol=1e-9, rtol=0)
+
+    def test_nonconvergence_emits_warning(self):
+        """A starved iteration budget on an unbalanced panel warns (not silent)."""
+        df = _unbalanced_2way_panel(seed=9)
+        with pytest.warns(UserWarning, match="did not converge"):
+            demean_by_groups(
+                df, ["y"], ["unit", "period"], suffix="_dm", max_iter=1, tol=1e-15
+            )
+
+    def test_empty_group_vars_raises(self):
+        df = _unbalanced_2way_panel(seed=10)
+        with pytest.raises(ValueError, match="at least one grouping variable"):
+            demean_by_groups(df, ["y"], [])

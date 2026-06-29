@@ -20,6 +20,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   exit-event dynamics, R-package parity (PR-C2), and survey-design support remain follow-ups.
   Pure-Python validation covers the absorbing reduction, the re-entry mechanism, pre-trend
   placebos, non-negative weighting, stabilized-control admission, and DGP recovery.
+- **Weighted multiple absorbed fixed effects (`absorb=[a, b, ...]`) now supported in
+  `DifferenceInDifferences` / `MultiPeriodDiD`.** The prior `ValueError` rejecting multi-absorb
+  with survey weights is lifted: the absorb path now uses the method of alternating projections
+  (`diff_diff.utils.demean_by_groups`), the exact weighted Frisch-Waugh-Lovell residualization for
+  N > 1 dimensions. New `demean_by_groups()` N-way helper; the two-way `within_transform()` now
+  delegates to it. Single-absorb and balanced-panel results are byte-stable (weighted
+  `within_transform` output is bit-identical; balanced multi-way matches the prior closed-form
+  demean to machine precision).
 - **`LPDiD` R-parity validation (absorbing).** `tests/test_methodology_lpdid.py` pins the
   estimator against the method authors' own R recipes (`danielegirardi/lpdid` event-study /
   reweight / premean / pooled `fixest::feols` specifications) with an `alexCardazzi/lpdid`
@@ -174,6 +182,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   numerical, or public-API change.
 
 ### Fixed
+- **Unbalanced-panel correctness: N > 1 absorbed fixed effects now use iterative alternating
+  projections instead of single-pass sequential demeaning.** Affected `DifferenceInDifferences` /
+  `MultiPeriodDiD` with `absorb=[a, b, ...]` and the shared unweighted two-way `within_transform`
+  (used by `TwoWayFixedEffects`, `SunAbraham`, `BaconDecomposition`). A single sequential demean
+  sweep is the exact Frisch-Waugh-Lovell residualization only when the fixed-effect subspaces are
+  orthogonal (balanced fully-crossed panels); on unbalanced panels it was a biased approximation
+  (coefficients off by ~1e-2 in tested cases). The within transformation now iterates to
+  convergence (`diff_diff.utils.demean_by_groups`), matching R `fixest` / `reghdfe` / `lfe`.
+  Balanced-panel and single-absorb results are unchanged to machine precision; the unweighted
+  two-way path now also emits the non-convergence `UserWarning` (previously only the weighted path
+  could).
 - **Structural (non-covariate) matrix inverses are now rank-guarded.** The internal design-Gram
   bread inversions in `ContinuousDiD` (ACRT-variance `Psi'WPsi`), `TwoStageDiD` (Stage-2
   `X_2'WX_2`, both the analytical and multiplier-bootstrap surfaces), `SpilloverDiD` (Wave D
