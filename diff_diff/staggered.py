@@ -911,7 +911,7 @@ class CallawaySantAnna(
         n_control = np.sum(control_valid)
 
         if n_treated == 0 or n_control == 0:
-            return None, 0.0, 0, 0, None, None, "zero_treated_control"
+            return None, 0.0, int(n_treated), int(n_control), None, None, "zero_treated_control"
 
         # Extract outcome changes for treated and control
         treated_change = outcome_change[treated_valid]
@@ -924,9 +924,9 @@ class CallawaySantAnna(
 
         # Guard against zero effective mass after subpopulation filtering
         if sw_treated is not None and np.sum(sw_treated) <= 0:
-            return None, 0.0, 0, 0, None, None, "zero_weight_mass"
+            return None, 0.0, int(n_treated), int(n_control), None, None, "zero_weight_mass"
         if sw_control is not None and np.sum(sw_control) <= 0:
-            return None, 0.0, 0, 0, None, None, "zero_weight_mass"
+            return None, 0.0, int(n_treated), int(n_control), None, None, "zero_weight_mass"
 
         # Get covariates if specified (from the base period)
         X_treated = None
@@ -1372,9 +1372,19 @@ class CallawaySantAnna(
             n_c_base = int(np.sum(control_valid_base))
             if n_c_base == 0:
                 skipped_empty_cell.extend((g, t) for g, t, *_ in tasks)
-                for g, t, *_ in tasks:
+                # Controls are empty for this whole group; report each cell's actual
+                # treated count (computed as in the per-pair loop), not a hardcoded 0.
+                for g, t, _bp, base_col, post_col in tasks:
+                    if is_balanced:
+                        n_t_task = int(np.sum(cohort_masks[g]))
+                    else:
+                        valid_pair = ~(
+                            np.isnan(outcome_matrix[:, base_col])
+                            | np.isnan(outcome_matrix[:, post_col])
+                        )
+                        n_t_task = int(np.sum(cohort_masks[g] & valid_pair))
                     group_time_effects[(g, t)] = _nan_gt_entry(
-                        n_control=0, skip_reason="zero_treated_control"
+                        n_treated=n_t_task, n_control=0, skip_reason="zero_treated_control"
                     )
                 continue
 
@@ -3381,7 +3391,7 @@ class CallawaySantAnna(
         n_cs = int(np.sum(control_s))
 
         if n_gt == 0 or n_ct == 0 or n_gs == 0 or n_cs == 0:
-            return None, 0.0, 0, 0, None, None, None, "zero_treated_control"
+            return None, 0.0, n_gt, n_ct, None, None, None, "zero_treated_control"
 
         # Extract outcomes for each group
         y_gt = obs_outcome[treated_t]
@@ -3399,9 +3409,9 @@ class CallawaySantAnna(
         # Guard against zero effective mass
         if sw_gt is not None:
             if np.sum(sw_gt) <= 0 or np.sum(sw_gs) <= 0:
-                return None, 0.0, 0, 0, None, None, None, "zero_weight_mass"
+                return None, 0.0, n_gt, n_ct, None, None, None, "zero_weight_mass"
             if np.sum(sw_ct) <= 0 or np.sum(sw_cs) <= 0:
-                return None, 0.0, 0, 0, None, None, None, "zero_weight_mass"
+                return None, 0.0, n_gt, n_ct, None, None, None, "zero_weight_mass"
 
         # Get covariates if specified
         obs_covariates = precomputed.get("obs_covariates")

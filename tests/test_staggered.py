@@ -1387,6 +1387,10 @@ class TestCallawaySantAnnaNonEstimableMaterialization:
         assert np.isnan(cell["t_stat"]) and np.isnan(cell["p_value"])
         assert all(np.isnan(b) for b in cell["conf_int"])
         assert cell["skip_reason"] == "zero_treated_control"
+        # The cell genuinely has treated observations but no controls -> the
+        # materialized counts must reflect that, not a hardcoded (0, 0).
+        assert cell["n_treated"] > 0
+        assert cell["n_control"] == 0
 
         # Every NaN cell carries a known reason + NaN SE; every estimable cell None.
         n_finite = 0
