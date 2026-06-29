@@ -968,26 +968,39 @@ class DifferenceInDifferences:
 
     def predict(self, data: pd.DataFrame) -> np.ndarray:
         """
-        Predict outcomes using fitted model.
+        Predict outcomes using the fitted model.
+
+        Out-of-sample prediction is intentionally unsupported pending a broader
+        post-estimation design for estimator result objects. For fitted
+        training-data predictions, use ``results_.fitted_values`` after
+        :meth:`fit`.
 
         Parameters
         ----------
         data : pd.DataFrame
-            DataFrame with same structure as training data.
+            Candidate prediction data. Currently unused because out-of-sample
+            prediction is unsupported.
 
         Returns
         -------
         np.ndarray
             Predicted values.
+
+        Raises
+        ------
+        RuntimeError
+            If called before :meth:`fit`.
+        NotImplementedError
+            Always raised after fitting until the broader post-estimation
+            prediction contract is designed.
         """
         if not self.is_fitted_:
             raise RuntimeError("Model must be fitted before calling predict()")
 
-        # This is a placeholder - would need to store column names
-        # for full implementation
         raise NotImplementedError(
-            "predict() is not yet implemented. "
-            "Use results_.fitted_values for training data predictions."
+            "out-of-sample predict() is unsupported pending a broader "
+            "post-estimation design. Use results_.fitted_values for fitted "
+            "training-data predictions."
         )
 
     def get_params(self) -> Dict[str, Any]:

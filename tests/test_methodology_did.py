@@ -1550,6 +1550,18 @@ class TestResultsObject:
         assert np.allclose(reconstructed, original), \
             "Residuals + fitted should equal original outcome"
 
+    def test_predict_contract_points_to_fitted_values(self):
+        """predict() is intentionally unsupported until post-estimation is designed."""
+        data, _ = generate_hand_calculable_data()
+
+        did = DifferenceInDifferences()
+        did.fit(data, outcome='outcome', treatment='treated', time='post')
+
+        with pytest.raises(
+            NotImplementedError,
+            match="out-of-sample.*post-estimation.*results_\\.fitted_values",
+        ):
+            did.predict(data)
 
 # =============================================================================
 # Multi-absorb (N>1 FE) iterative alternating-projection demeaning

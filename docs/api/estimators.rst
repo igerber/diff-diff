@@ -30,6 +30,11 @@ DifferenceInDifferences (alias: ``DiD``)
 
 Basic 2x2 DiD estimator.
 
+``DifferenceInDifferences.predict()`` is present for sklearn-like
+discoverability, but out-of-sample prediction is not currently supported. Use
+``results_.fitted_values`` for fitted training-data predictions until a broader
+post-estimation result-object contract is designed.
+
 .. autoclass:: diff_diff.DifferenceInDifferences
    :no-index:
    :members:
@@ -42,6 +47,7 @@ Basic 2x2 DiD estimator.
    .. autosummary::
 
       ~DifferenceInDifferences.fit
+      ~DifferenceInDifferences.predict
       ~DifferenceInDifferences.get_params
       ~DifferenceInDifferences.set_params
 
@@ -84,4 +90,3 @@ Synthetic control combined with DiD (Arkhangelsky et al. 2021).
    :undoc-members:
    :show-inheritance:
    :inherited-members:
-
