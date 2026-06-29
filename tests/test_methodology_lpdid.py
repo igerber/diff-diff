@@ -45,6 +45,16 @@ GOLDEN_PATH = _DATA / "lpdid_golden.json"
 PANEL_PATH = _DATA / "lpdid_test_panel.csv"
 _R_FIXTURE_AVAILABLE = GOLDEN_PATH.is_file() and PANEL_PATH.is_file()
 
+# Phase C2: non-absorbing R-parity (a separate panel + golden so the absorbing
+# fixtures above stay byte-identical). Both non-absorbing modes are anchored on an
+# INDEPENDENT fixest::feols reconstruction of the paper's Eq. 12 (first_entry) and
+# Eq. 13 (effect_stabilization) clean-sample restrictions; alexCardazzi's
+# nonabsorbing_lag is recorded in the golden meta as a divergent reference, NOT a
+# parity gate (it clamps off-switches + uses a non-paper boundary/window convention).
+NA_GOLDEN_PATH = _DATA / "lpdid_nonabsorbing_golden.json"
+NA_PANEL_PATH = _DATA / "lpdid_nonabsorbing_panel.csv"
+_NONABSORB_FIXTURE_AVAILABLE = NA_GOLDEN_PATH.is_file() and NA_PANEL_PATH.is_file()
+
 # Library regression-adjustment influence-function SE per horizon (reweight=True,
 # covariates=["x"]). NOT R-parity: the canonical RA SE is Stata teffects only, with
 # no runnable R analogue (see module docstring / REGISTRY ## LPDiD Deviation 2).
@@ -64,6 +74,24 @@ RA_SE_PIN = {
 # Headline (pooled) RA influence-function SE, same convention as RA_SE_PIN.
 POOLED_RA_SE_PIN = {"post": 0.35917407532121975, "pre": 0.3785290141761256}
 
+# Non-absorbing reweighted (effect_stabilization) SE per horizon. NOT feols-parity:
+# the reweighted POINT matches the independent feols recipe to ~1e-13, but the
+# weighted-cluster SE has a small feols convention difference (~5e-5), so the library
+# value is pinned as a regression guard (the variance-weighted SEs ARE feols-parity).
+# Refresh from the library if the committed non-absorbing panel changes: fit
+# LPDiD(pre_window=3, post_window=4, reweight=True, cluster="unit",
+# non_absorbing="effect_stabilization", stabilization_window=3) on
+# lpdid_nonabsorbing_panel.csv and read event_study["se"].
+RW_SE_PIN = {
+    -3: 0.0645474561163424,
+    -2: 0.04782093937871335,
+    0: 0.07250480396311137,
+    1: 0.06781253723720812,
+    2: 0.08001875551196519,
+    3: 0.07730466850470008,
+    4: 0.09296215631711323,
+}
+
 
 @pytest.fixture(scope="module")
 def golden() -> dict:
@@ -82,6 +110,24 @@ def panel() -> pd.DataFrame:
     if not _R_FIXTURE_AVAILABLE:
         pytest.skip("R LPDiD parity fixture not present.")
     return pd.read_csv(PANEL_PATH)
+
+
+@pytest.fixture(scope="module")
+def na_golden() -> dict:
+    if not _NONABSORB_FIXTURE_AVAILABLE:
+        pytest.skip(
+            "Non-absorbing R parity fixture not present. Run "
+            "`Rscript benchmarks/R/generate_lpdid_golden.R`."
+        )
+    with NA_GOLDEN_PATH.open("r") as f:
+        return json.loads(f.read())
+
+
+@pytest.fixture(scope="module")
+def na_panel() -> pd.DataFrame:
+    if not _NONABSORB_FIXTURE_AVAILABLE:
+        pytest.skip("Non-absorbing R parity fixture not present.")
+    return pd.read_csv(NA_PANEL_PATH)
 
 
 def _es_map(res) -> dict:
@@ -226,3 +272,80 @@ class TestLPDiDParityR:
         ), "pooled-post RA SE drift"
         pre_se = float(res.pooled.loc[res.pooled["window"] == "pre", "se"].iloc[0])
         assert pre_se == pytest.approx(POOLED_RA_SE_PIN["pre"], abs=1e-6), "pooled-pre RA SE drift"
+
+
+class TestLPDiDNonAbsorbingParityR:
+    """Pin the C1 non-absorbing modes against the independent feols Eq. 12/13 recipes.
+
+    The variance-weighted variants match the feols golden on point AND SE; the
+    reweighted point matches feols while its SE is a pinned regression guard
+    (documented weighted-cluster convention difference). alexCardazzi's
+    ``nonabsorbing_lag`` is recorded in the golden meta as a divergent reference only.
+    """
+
+    def _meta(self, na_golden: dict):
+        m = na_golden["meta"]
+        return int(m["L"]), int(m["pre_window"]), int(m["post_window"])
+
+    def test_first_entry_event_study(self, na_golden: dict, na_panel: pd.DataFrame) -> None:
+        L, pre, post = self._meta(na_golden)
+        res = LPDiD(
+            pre_window=pre, post_window=post, cluster="unit", non_absorbing="first_entry"
+        ).fit(na_panel, outcome="y", unit="unit", time="time", treatment="treat", only_event=True)
+        _assert_es(_es_map(res), na_golden["first_entry"])  # point + SE (feols-parity)
+
+    def test_effect_stabilization_event_study(
+        self, na_golden: dict, na_panel: pd.DataFrame
+    ) -> None:
+        L, pre, post = self._meta(na_golden)
+        res = LPDiD(
+            pre_window=pre,
+            post_window=post,
+            cluster="unit",
+            non_absorbing="effect_stabilization",
+            stabilization_window=L,
+        ).fit(na_panel, outcome="y", unit="unit", time="time", treatment="treat", only_event=True)
+        _assert_es(_es_map(res), na_golden["effect_stab"])  # point + SE (feols-parity)
+
+    def test_effect_stabilization_reweighted_point(
+        self, na_golden: dict, na_panel: pd.DataFrame
+    ) -> None:
+        """Reweighted (equally-weighted) effect_stabilization POINT == feols recipe.
+
+        The reweighted SE is pinned separately (RW_SE_PIN) - it has a small
+        weighted-cluster convention difference vs feols, not feols-parity.
+        """
+        L, pre, post = self._meta(na_golden)
+        res = LPDiD(
+            pre_window=pre,
+            post_window=post,
+            reweight=True,
+            cluster="unit",
+            non_absorbing="effect_stabilization",
+            stabilization_window=L,
+        ).fit(na_panel, outcome="y", unit="unit", time="time", treatment="treat", only_event=True)
+        _assert_es(_es_map(res), na_golden["effect_stab_rw"], check_se=False)
+        # Reweighted SE: pinned regression guard (documented feols convention diff).
+        es = {int(r.horizon): float(r.se) for r in res.event_study.itertuples()}
+        for h, pinned in RW_SE_PIN.items():
+            assert h in es, f"missing horizon {h}"
+            assert np.isfinite(es[h]) and es[h] > 0, f"h={h}: reweighted SE not finite/positive"
+            assert es[h] == pytest.approx(pinned, abs=1e-6), f"reweighted SE pin drift at h={h}"
+
+    def test_alex_recorded_as_divergent_reference(self, na_golden: dict) -> None:
+        """alexCardazzi nonabsorbing_lag is recorded (meta), NOT a parity gate: it
+        diverges from the paper-faithful Eq.13 even on this panel."""
+        alex = na_golden["alex_nonabsorbing_lag"]
+        assert "error" not in alex, f"alex reference failed to generate: {alex}"
+        es = na_golden["effect_stab"]
+        # At least one post horizon differs materially (off-switch clamp / boundary),
+        # which is exactly why alex is documented, not gated.
+        diffs = [
+            abs(_num(alex[k][0]) - _num(es[k][0]))
+            for k in es
+            if int(k) >= 0
+            and k in alex
+            and np.isfinite(_num(es[k][0]))
+            and np.isfinite(_num(alex[k][0]))
+        ]
+        assert diffs and max(diffs) > 1e-3, "expected a documented alex divergence on post horizons"

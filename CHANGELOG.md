@@ -8,6 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **`LPDiD` non-absorbing R-parity validation** (Phase C2). Pins both non-absorbing modes
+  against an independent `fixest::feols` reconstruction of the paper's Eq. 12 (`first_entry`)
+  and Eq. 13 (`effect_stabilization`) clean-sample restrictions: variance-weighted point and
+  SE match to ~1e-13/~1e-15; the `effect_stabilization` reweighted point matches (its SE is
+  pinned as a regression guard, a small weighted-cluster convention difference). New `tests/test_methodology_lpdid.py`
+  parity class + separate `lpdid_nonabsorbing_panel.csv` / `lpdid_nonabsorbing_golden.json`
+  (the absorbing B2 goldens stay byte-identical). `alexCardazzi/lpdid`'s `nonabsorbing_lag` is
+  recorded as a divergent third-party reference (it clamps off-switches and uses a non-paper
+  boundary/placebo convention, diverging ~0.01-0.05 from Eq. 13 even on a monotone panel), not
+  a parity gate. No estimator change.
 - **`LPDiD` non-absorbing (reversible) treatment** (Dube, Girardi, Jordà & Taylor 2025,
   Section 4.2). New `non_absorbing` parameter: `"first_entry"` (Eq. 12 — the effect of
   entering treatment for the first time and staying treated) and `"effect_stabilization"`
