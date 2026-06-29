@@ -23,6 +23,8 @@ class LPDiD:
         alpha: float = 0.05,
         cluster: Optional[str] = None,
         rank_deficient_action: str = "warn",
+        non_absorbing: Optional[str] = None,
+        stabilization_window: Optional[int] = None,
     ):
         self.pre_window = pre_window
         self.post_window = post_window
@@ -33,6 +35,8 @@ class LPDiD:
         self.alpha = alpha
         self.cluster = cluster
         self.rank_deficient_action = rank_deficient_action
+        self.non_absorbing = non_absorbing
+        self.stabilization_window = stabilization_window
         self._validate_params()
         self.is_fitted_ = False
         self.results_: Optional[LPDiDResults] = None
@@ -56,6 +60,31 @@ class LPDiD:
             or (isinstance(self.pmd, int) and not isinstance(self.pmd, bool) and self.pmd > 0)
         ):
             raise ValueError("pmd must be None, 'max', or a positive integer")
+        if self.non_absorbing not in (None, "first_entry", "effect_stabilization"):
+            raise ValueError(
+                "non_absorbing must be None (absorbing treatment), 'first_entry' "
+                "(Dube et al. 2025 Eq. 12), or 'effect_stabilization' (Eq. 13)"
+            )
+        if self.non_absorbing == "effect_stabilization":
+            if (
+                isinstance(self.stabilization_window, bool)
+                or not isinstance(self.stabilization_window, int)
+                or self.stabilization_window < 1
+            ):
+                raise ValueError(
+                    "stabilization_window (the paper's L) must be a positive integer when "
+                    "non_absorbing='effect_stabilization'"
+                )
+        elif self.stabilization_window is not None:
+            raise ValueError(
+                "stabilization_window only applies when non_absorbing='effect_stabilization'; "
+                "leave it None for absorbing or first_entry modes"
+            )
+        if self.non_absorbing is not None and self.control_group == "never_treated":
+            raise ValueError(
+                "control_group='never_treated' is not supported with a non-absorbing mode "
+                "(the estimand becomes ambiguous); use control_group='clean' (the default)"
+            )
 
     def _rhs_column_names(self, covariates=None, ylags=0, dylags=0):
         rhs_columns = list(covariates or [])
@@ -105,12 +134,14 @@ class LPDiD:
         # Absorbing-path validation and entry detection run on the OBSERVED rows,
         # BEFORE any calendar reindex below (the absorbing fill would otherwise make
         # the monotonicity check trivially pass, and gap rows carry NaN clusters).
-        treated_cummax = panel.groupby(unit)["_treated"].cummax()
-        if (treated_cummax > panel["_treated"]).any():
-            raise ValueError(
-                "LPDiD currently requires an absorbing treatment path "
-                "(once treated, always treated)"
-            )
+        if self.non_absorbing is None:
+            treated_cummax = panel.groupby(unit)["_treated"].cummax()
+            if (treated_cummax > panel["_treated"]).any():
+                raise ValueError(
+                    "LPDiD requires an absorbing treatment path (once treated, always "
+                    "treated) unless non_absorbing is set to 'first_entry' or "
+                    "'effect_stabilization' (Dube et al. 2025 Section 4.2)"
+                )
         # Entry = first OBSERVED treated period (documented convention; an unobserved
         # pre-onset gap is unknowable). For an absorbing path this is min(t | D=1).
         first_treat = panel.loc[panel["_treated"].eq(1)].groupby(unit)[time].min()
@@ -125,6 +156,14 @@ class LPDiD:
         # A gap-free panel skips this entirely and is bit-identical to before.
         span = panel.groupby(unit)[time].agg(["min", "max", "nunique"])
         has_gap = bool((span["nunique"] != (span["max"] - span["min"] + 1)).any())
+        if self.non_absorbing is not None and has_gap:
+            raise ValueError(
+                "LPDiD non-absorbing modes require gap-free panels within each unit's "
+                "observed span: the [t-L, t+h] window conditions cannot be verified across "
+                "an interior time gap. Fill or regularize the panel, or use the absorbing "
+                "path. (Interior-gap support for non-absorbing treatment is a deferred "
+                "follow-up.)"
+            )
         if has_gap:
             panel["_observed"] = True
             grid = pd.concat(
@@ -145,6 +184,25 @@ class LPDiD:
         else:
             panel["_first_treat"] = panel[unit].map(first_treat).astype(float).fillna(np.inf)
             panel["_entry"] = (panel[time] == panel["_first_treat"]).astype(float)
+
+        if self.non_absorbing is not None:
+            # Non-absorbing window operators (Dube et al. 2025 Section 4.2 / online
+            # Appendix C). Non-absorbing requires a gap-free panel (enforced above), so
+            # each unit's observed rows ARE its complete calendar grid and the groupby
+            # shift/cumsum below are calendar-correct. `_treated` here is the GENUINE
+            # treatment (the absorbing fill above is skipped for non-absorbing), so off
+            # periods are preserved. Boundary convention (extends Deviation 5): periods
+            # before a unit's first observed period are untreated with no change, so the
+            # first first-difference uses fill_value=0 and the mask lookups clamp
+            # pre-`_unit_min_t` offsets to 0.
+            prev_treated = panel.groupby(unit)["_treated"].shift(1, fill_value=0)
+            panel["_delta_d"] = panel["_treated"].astype(float) - prev_treated.astype(float)
+            # `_switch_cum` = cumulative count of treatment CHANGES (for "no change in
+            # window" conditions); `_d_cum` = cumulative SUM of D (for "D=0 across window"
+            # level conditions). Both keyed by calendar time for offset lookups.
+            panel["_switch_cum"] = panel["_delta_d"].abs().groupby(panel[unit]).cumsum()
+            panel["_d_cum"] = panel["_treated"].astype(float).groupby(panel[unit]).cumsum()
+            panel["_unit_min_t"] = panel.groupby(unit)[time].transform("min")
 
         # Premean ("max") baseline = mean of all AVAILABLE strictly-prior outcomes.
         # It must NOT depend on the base row's own outcome y_t: PMD replaces the
@@ -206,14 +264,82 @@ class LPDiD:
             control_mask &= (panel[time] + horizon).lt(panel["_first_treat"])
         return control_mask
 
+    def _nonabsorbing_masks(self, sample, panel, *, unit, time, horizon):
+        """Mode-aware (treated_event, clean_control) masks for non-absorbing treatment.
+
+        Dube et al. (2025) Section 4.2 / online Appendix C. Window conditions over
+        ``[t-L, t+h]`` are evaluated with offset key-lookups against ``panel``'s
+        cumulative columns (``_switch_cum`` = running count of treatment CHANGES, for
+        "no change in window"; ``_d_cum`` = running SUM of D, for "D=0 across window").
+        Lookups clamp to 0 for periods before a unit's first observed period (boundary
+        convention; gap-free panels are enforced in ``_prepare_panel`` so every in-range
+        period is present). Returns boolean Series indexed like ``sample``.
+        """
+        u = sample[unit].to_numpy()
+        t = sample[time].to_numpy()
+        min_t = sample["_unit_min_t"].to_numpy()
+        th = t + horizon
+
+        switch_by_key = panel.set_index([unit, time])["_switch_cum"]
+        d_by_key = panel.set_index([unit, time])["_d_cum"]
+
+        def _at(series, times):
+            keys = pd.MultiIndex.from_arrays([u, np.asarray(times)])
+            vals = series.reindex(keys).to_numpy(dtype=float)
+            return np.where(np.asarray(times) < min_t, 0.0, vals)
+
+        if self.non_absorbing == "first_entry":
+            # Eq. 12: treated = first entry that stays treated through t+h; control =
+            # untreated from start through t+h (== absorbing clean control, reused).
+            treated = sample["_entry"].to_numpy(dtype=float) == 1.0
+            if horizon >= 0:
+                # no exit in (t, t+h]
+                treated = treated & (_at(switch_by_key, th) - _at(switch_by_key, t) == 0.0)
+            control = self._clean_control_mask(sample, time=time, horizon=horizon).to_numpy()
+        else:
+            # Eq. 13 (effect stabilization, window L).
+            L = self.stabilization_window
+            delta_d = sample["_delta_d"].to_numpy(dtype=float)
+            if horizon >= 0:
+                # treated = fresh entry untreated in [t-L, t-1] (level sum 0) with no other
+                # change in (t, t+h]; control = no treatment change in [t-L, t+h] (admits
+                # stabilized already-treated units as controls).
+                clean_pre = (_at(d_by_key, t - 1) - _at(d_by_key, t - L - 1)) == 0.0
+                treated = (delta_d == 1.0) & clean_pre
+                treated = treated & (_at(switch_by_key, th) - _at(switch_by_key, t) == 0.0)
+                control = (_at(switch_by_key, th) - _at(switch_by_key, t - L - 1)) == 0.0
+            else:
+                # Placebo horizons: the long-difference y_{t+h} - y_{t-1} reaches back to
+                # the target t+h, so the clean window must cover the whole pre-span widened
+                # to the stabilization length: [t-M, t-1] with M = max(L, -h). Treated must
+                # be untreated across it (a fresh entry contaminated at an earlier period is
+                # excluded); controls must have no treatment change across it.
+                m = max(L, -horizon)
+                clean_pre = (_at(d_by_key, t - 1) - _at(d_by_key, t - m - 1)) == 0.0
+                treated = (delta_d == 1.0) & clean_pre
+                control = (_at(switch_by_key, t - 1) - _at(switch_by_key, t - m - 1)) == 0.0
+
+        treated_mask = pd.Series(np.asarray(treated, dtype=bool), index=sample.index)
+        control_mask = pd.Series(np.asarray(control, dtype=bool), index=sample.index)
+        # Treated events have a change at t, clean controls have none -> disjoint by
+        # construction; enforce defensively so a row is never classified as both.
+        control_mask = control_mask & ~treated_mask
+        return treated_mask, control_mask
+
     def _common_clean_sample_indicator(
         self, panel: pd.DataFrame, *, unit: str, time: str, outcome: str, max_post_horizon: int
     ) -> pd.Series:
-        common_sample = panel["_entry"].eq(1.0) | self._clean_control_mask(
-            panel,
-            time=time,
-            horizon=max_post_horizon,
-        )
+        if self.non_absorbing is None:
+            common_sample = panel["_entry"].eq(1.0) | self._clean_control_mask(
+                panel,
+                time=time,
+                horizon=max_post_horizon,
+            )
+        else:
+            _treated_mask, _control_mask = self._nonabsorbing_masks(
+                panel, panel, unit=unit, time=time, horizon=max_post_horizon
+            )
+            common_sample = _treated_mask | _control_mask
         # Fixed composition requires the active baseline AND every post-treatment
         # target outcome (h = 0..max_post_horizon) to be NON-MISSING for each base
         # observation -- not merely that the target row exists. This keeps the
@@ -279,6 +405,7 @@ class LPDiD:
             "_first_treat",
             "_cluster",
             "_common_event_ok",
+            *(["_delta_d", "_unit_min_t"] if self.non_absorbing is not None else []),
             *rhs_columns,
             *(absorb or []),
         ]
@@ -305,13 +432,26 @@ class LPDiD:
         required_columns = [baseline_column, "_target_outcome", *rhs_columns, *(absorb or [])]
         sample = sample.dropna(subset=required_columns).copy()
 
-        treated_mask = sample["_entry"].eq(1.0)
-        if self.control_group == "never_treated":
-            control_mask = sample["_entry"].eq(0.0) & np.isinf(sample["_first_treat"])
+        if self.non_absorbing is None:
+            treated_mask = sample["_entry"].eq(1.0)
+            if self.control_group == "never_treated":
+                control_mask = sample["_entry"].eq(0.0) & np.isinf(sample["_first_treat"])
+            else:
+                control_mask = self._clean_control_mask(sample, time=time, horizon=horizon)
         else:
-            control_mask = self._clean_control_mask(sample, time=time, horizon=horizon)
+            treated_mask, control_mask = self._nonabsorbing_masks(
+                sample, panel, unit=unit, time=time, horizon=horizon
+            )
 
         sample = sample.loc[treated_mask | control_mask].copy()
+        if self.non_absorbing is not None:
+            # The per-horizon clean-treated indicator becomes the regression's treatment
+            # variable and the treated/control key in every downstream path (estimator,
+            # RA split, reweight denominators, identification check). For absorbing and
+            # first_entry this equals the original first-entry _entry on the realized
+            # sample; under effect_stabilization it also marks re-entry events (which have
+            # _entry==0) as treated.
+            sample["_entry"] = treated_mask.loc[sample.index].astype(float)
         # Fixed composition is a POST-treatment contract: apply it only to post
         # horizons; pre-treatment placebos use whatever pre-period data exists.
         if self.no_composition and apply_no_composition and horizon >= 0:
@@ -784,6 +924,7 @@ class LPDiD:
             "_first_treat",
             "_cluster",
             "_common_pooled_ok",
+            *(["_delta_d", "_unit_min_t"] if self.non_absorbing is not None else []),
             *rhs_columns,
             *(absorb or []),
         ]
@@ -813,14 +954,22 @@ class LPDiD:
         required_columns = [baseline_column, *target_columns, *rhs_columns, *(absorb or [])]
         sample = sample.dropna(subset=required_columns).copy()
 
-        treated_mask = sample["_entry"].eq(1.0)
-        if self.control_group == "never_treated":
-            control_mask = sample["_entry"].eq(0.0) & np.isinf(sample["_first_treat"])
+        if self.non_absorbing is None:
+            treated_mask = sample["_entry"].eq(1.0)
+            if self.control_group == "never_treated":
+                control_mask = sample["_entry"].eq(0.0) & np.isinf(sample["_first_treat"])
+            else:
+                control_horizon = max(horizons) if kind == "post" else 0
+                control_mask = self._clean_control_mask(sample, time=time, horizon=control_horizon)
         else:
             control_horizon = max(horizons) if kind == "post" else 0
-            control_mask = self._clean_control_mask(sample, time=time, horizon=control_horizon)
+            treated_mask, control_mask = self._nonabsorbing_masks(
+                sample, panel, unit=unit, time=time, horizon=control_horizon
+            )
 
         sample = sample.loc[treated_mask | control_mask].copy()
+        if self.non_absorbing is not None:
+            sample["_entry"] = treated_mask.loc[sample.index].astype(float)
         if self.no_composition and kind == "post":
             sample = sample.loc[sample["_common_pooled_ok"]].copy()
         sample["_event_time"] = sample[time]
@@ -1170,6 +1319,8 @@ class LPDiD:
             absorb=list(absorb) if absorb else None,
             ylags=ylags,
             dylags=dylags,
+            non_absorbing=self.non_absorbing,
+            stabilization_window=self.stabilization_window,
         )
         self._fit_meta = {"cluster": cluster, "outcome": outcome, "unit": unit, "time": time}
         self.is_fitted_ = True
@@ -1186,6 +1337,8 @@ class LPDiD:
             "alpha": self.alpha,
             "cluster": self.cluster,
             "rank_deficient_action": self.rank_deficient_action,
+            "non_absorbing": self.non_absorbing,
+            "stabilization_window": self.stabilization_window,
         }
 
     def set_params(self, **params: Any) -> "LPDiD":

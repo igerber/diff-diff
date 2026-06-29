@@ -41,6 +41,8 @@ class LPDiDResults:
     absorb: Optional[List[str]] = None
     ylags: int = 0
     dylags: int = 0
+    non_absorbing: Optional[str] = None
+    stabilization_window: Optional[int] = None
 
     # ------------------------------------------------------------------
     # internal helpers
@@ -142,6 +144,9 @@ class LPDiDResults:
             result["cluster_name"] = self.cluster_name
         if self.n_clusters is not None:
             result["n_clusters"] = self.n_clusters
+        if self.non_absorbing is not None:
+            result["non_absorbing"] = self.non_absorbing
+            result["stabilization_window"] = self.stabilization_window
         result["inference_method"] = "cluster_robust"
         return result
 
@@ -176,6 +181,13 @@ class LPDiDResults:
             f"Estimand: {self.estimand}    Control group: {self.control_group}",
             f"Base period: {self._base_period_label()}    No composition: {self.no_composition}",
         ]
+        if self.non_absorbing is not None:
+            mode = (
+                f"effect-stabilization (L={self.stabilization_window})"
+                if self.non_absorbing == "effect_stabilization"
+                else "first-entry"
+            )
+            lines.append(f"Treatment path: non-absorbing, {mode} (Dube et al. 2025 Sec. 4.2)")
         if self.covariates or self.absorb or self.ylags or self.dylags:
             cov_path = "regression-adjustment" if self.reweight else "direct inclusion"
             lag_bits = []

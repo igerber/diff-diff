@@ -8,6 +8,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **`LPDiD` non-absorbing (reversible) treatment** (Dube, Girardi, Jordà & Taylor 2025,
+  Section 4.2). New `non_absorbing` parameter: `"first_entry"` (Eq. 12 — the effect of
+  entering treatment for the first time and staying treated) and `"effect_stabilization"`
+  (Eq. 13, with `stabilization_window=L` — units whose treatment has been stable for at least
+  `L` periods serve as clean controls, so estimation is feasible with few or no never-treated
+  units). The default `non_absorbing=None` is unchanged (absorbing path; still rejects
+  non-absorbing input, bit-for-bit identical results). Both modes implement the entry-effect
+  estimands with mode-aware clean-sample masks, a documented "untreated before the first
+  observed period" boundary convention, and a gap-free-panel requirement; the Appendix-C
+  exit-event dynamics, R-package parity (PR-C2), and survey-design support remain follow-ups.
+  Pure-Python validation covers the absorbing reduction, the re-entry mechanism, pre-trend
+  placebos, non-negative weighting, stabilized-control admission, and DGP recovery.
 - **`LPDiD` R-parity validation (absorbing).** `tests/test_methodology_lpdid.py` pins the
   estimator against the method authors' own R recipes (`danielegirardi/lpdid` event-study /
   reweight / premean / pooled `fixest::feols` specifications) with an `alexCardazzi/lpdid`

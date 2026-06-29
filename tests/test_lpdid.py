@@ -32,6 +32,7 @@ from diff_diff import (  # noqa: E402
     LPDiD,
     LPDiDResults,
 )
+from tests.conftest import assert_nan_inference  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -762,7 +763,8 @@ class TestLPDiDCrossEstimator:
 # ===========================================================================
 class TestLPDiDEdgeCases:
     def test_rejects_non_absorbing_treatment(self):
-        # Treatment that turns off must raise (absorbing-path scope).
+        # Treatment that turns off must raise on the DEFAULT (absorbing) path; a
+        # non_absorbing mode must accept the same panel (Phase C).
         df = pd.DataFrame(
             {
                 "unit": [1, 1, 1, 2, 2, 2],
@@ -774,6 +776,14 @@ class TestLPDiDEdgeCases:
         with pytest.raises(ValueError, match="absorbing"):
             LPDiD(pre_window=1, post_window=1).fit(
                 df, outcome="y", unit="unit", time="time", treatment="treat"
+            )
+        # first_entry / effect_stabilization accept non-absorbing input (no raise).
+        for mode_kw in (
+            {"non_absorbing": "first_entry"},
+            {"non_absorbing": "effect_stabilization", "stabilization_window": 1},
+        ):
+            LPDiD(pre_window=1, post_window=1, **mode_kw).fit(
+                df, outcome="y", unit="unit", time="time", treatment="treat", only_event=True
             )
 
     def test_no_composition_drops_controls(self):
@@ -1324,3 +1334,356 @@ class TestLPDiDInteriorGaps:
         )
         with pytest.raises(ValueError, match="integer-valued"):
             LPDiD().fit(df, outcome="y", unit="unit", time="time", treatment="treat")
+
+
+# ===========================================================================
+# Non-absorbing treatment (Phase C1; Dube, Girardi, Jorda & Taylor 2025 Sec. 4.2)
+# ===========================================================================
+def _nonabsorbing_homog_panel(
+    seed=0, n=200, T=12, tau=2.0, p_switch=0.18, error_sd=0.03, trend=0.4
+):
+    """Non-absorbing panel with a HOMOGENEOUS, instantly-stabilizing effect ``tau``.
+
+    Each unit follows a random on/off path; ``y = unit_fe + trend*t + tau*D + noise``.
+    The level jump is the same for every (re-)entry and is constant while treated, so
+    the per-horizon entry effect equals ``tau`` for both estimands and a stabilized
+    treated unit differences out (``tau`` cancels) -> a valid Eq.13 control.
+    """
+    rng = np.random.default_rng(seed)
+    rows = []
+    for u in range(n):
+        ufe = rng.normal(0.0, 1.0)
+        d = 0
+        for t in range(T):
+            if rng.random() < p_switch:
+                d = 1 - d
+            y = ufe + trend * t + tau * d + rng.normal(0.0, error_sd)
+            rows.append((u + 1, t, d, y))
+    return pd.DataFrame(rows, columns=["unit", "time", "treat", "y"])
+
+
+def _nonabsorbing_het_panel(
+    seed=0,
+    n_lo=180,
+    n_hi=60,
+    T=12,
+    tau_lo=1.0,
+    tau_hi=3.0,
+    p_switch=0.16,
+    error_sd=0.03,
+    trend=0.3,
+):
+    """Two effect levels (``tau_lo`` for ``n_lo`` units, ``tau_hi`` for ``n_hi``).
+
+    True per-horizon effects live in ``[tau_lo, tau_hi]`` (no-negative-weighting hull).
+    The observation-equally-weighted ATT is the unit-count-weighted mean of the two
+    levels: ``(n_lo*tau_lo + n_hi*tau_hi)/(n_lo+n_hi)``.
+    """
+    rng = np.random.default_rng(seed)
+    rows = []
+    for u in range(n_lo + n_hi):
+        ufe = rng.normal(0.0, 1.0)
+        tau = tau_lo if u < n_lo else tau_hi
+        d = 0
+        for t in range(T):
+            if rng.random() < p_switch:
+                d = 1 - d
+            y = ufe + trend * t + tau * d + rng.normal(0.0, error_sd)
+            rows.append((u + 1, t, d, y))
+    return pd.DataFrame(rows, columns=["unit", "time", "treat", "y"])
+
+
+def _deterministic_panel(specs, tau=2.0, trend=0.5, ufe_step=10.0):
+    """Noise-free panel from per-unit binary D paths; ``y = unit_fe + trend*t + tau*D``."""
+    rows = []
+    for i, d_path in enumerate(specs):
+        ufe = ufe_step * (i + 1)
+        for t, d in enumerate(d_path):
+            rows.append((i + 1, t, int(d), ufe + trend * t + tau * int(d)))
+    return pd.DataFrame(rows, columns=["unit", "time", "treat", "y"])
+
+
+_FIT_KW = dict(outcome="y", unit="unit", time="time", treatment="treat")
+
+
+class TestLPDiDNonAbsorbingAPI:
+    def test_get_params_round_trip(self):
+        est = LPDiD(non_absorbing="effect_stabilization", stabilization_window=4)
+        p = est.get_params()
+        assert p["non_absorbing"] == "effect_stabilization"
+        assert p["stabilization_window"] == 4
+
+    def test_rejects_bad_mode(self):
+        with pytest.raises(ValueError, match="non_absorbing"):
+            LPDiD(non_absorbing="bogus")
+
+    def test_rejects_missing_or_misused_window(self):
+        with pytest.raises(ValueError, match="stabilization_window"):
+            LPDiD(non_absorbing="effect_stabilization")  # missing L
+        with pytest.raises(ValueError, match="stabilization_window"):
+            LPDiD(non_absorbing="effect_stabilization", stabilization_window=0)  # not positive
+        with pytest.raises(ValueError, match="stabilization_window"):
+            LPDiD(non_absorbing="first_entry", stabilization_window=3)  # L without stab mode
+
+    def test_rejects_never_treated_control_group(self):
+        with pytest.raises(ValueError, match="never_treated"):
+            LPDiD(non_absorbing="first_entry", control_group="never_treated")
+
+    def test_set_params_atomic_rollback(self):
+        est = LPDiD(non_absorbing="effect_stabilization", stabilization_window=2)
+        with pytest.raises(ValueError):
+            est.set_params(non_absorbing="first_entry")  # would leave a dangling window
+        # rolled back: still effect_stabilization with its window
+        assert est.non_absorbing == "effect_stabilization"
+        assert est.stabilization_window == 2
+
+
+class TestLPDiDNonAbsorbing:
+    def test_first_entry_reduces_to_absorbing(self):
+        # Eq.12 clean control == absorbing clean control; on an absorbing panel every
+        # treated unit trivially "stays treated", so first_entry == absorbing exactly.
+        df = make_lpdid_panel(cohorts=(4, 8), n_per_cohort=20, n_never=25, n_periods=12, seed=7)
+        r0 = LPDiD(pre_window=3, post_window=4, cluster="unit").fit(df, **_FIT_KW)
+        r1 = LPDiD(pre_window=3, post_window=4, cluster="unit", non_absorbing="first_entry").fit(
+            df, **_FIT_KW
+        )
+        np.testing.assert_allclose(
+            r1.event_study["coefficient"].to_numpy(dtype=float),
+            r0.event_study["coefficient"].to_numpy(dtype=float),
+            atol=1e-10,
+            equal_nan=True,
+        )
+        np.testing.assert_allclose(
+            r1.event_study["se"].to_numpy(dtype=float),
+            r0.event_study["se"].to_numpy(dtype=float),
+            atol=1e-10,
+            equal_nan=True,
+        )
+        assert r1.att == pytest.approx(r0.att, abs=1e-10)
+        assert r1.se == pytest.approx(r0.se, abs=1e-10)
+
+    def test_effect_stabilization_reduces_on_single_cohort(self):
+        # Single cohort + never-treated controls is the one configuration where Eq.13
+        # admits exactly the absorbing clean-control set, so all three modes coincide.
+        df = make_lpdid_panel(cohorts=(6,), n_per_cohort=30, n_never=40, n_periods=12, seed=11)
+        r_ab = LPDiD(pre_window=3, post_window=3, cluster="unit").fit(df, **_FIT_KW)
+        r_fe = LPDiD(pre_window=3, post_window=3, cluster="unit", non_absorbing="first_entry").fit(
+            df, **_FIT_KW
+        )
+        r_es = LPDiD(
+            pre_window=3,
+            post_window=3,
+            cluster="unit",
+            non_absorbing="effect_stabilization",
+            stabilization_window=12,
+        ).fit(df, **_FIT_KW)
+        for r in (r_fe, r_es):
+            np.testing.assert_allclose(
+                r.event_study["coefficient"].to_numpy(dtype=float),
+                r_ab.event_study["coefficient"].to_numpy(dtype=float),
+                atol=1e-10,
+                equal_nan=True,
+            )
+            assert r.att == pytest.approx(r_ab.att, abs=1e-10)
+
+    def test_effect_stabilization_uses_reentry_events(self):
+        # Regression guard for the _entry-keyed misclassification (review critical #2):
+        # first onsets all exit within the horizon (excluded at h=2); only RE-ENTRY events
+        # (which have _entry==0) stay treated. effect_stabilization must identify h=2 off
+        # them; first_entry (first onset only) finds no clean treated event -> NaN.
+        treated_path = [0, 0, 1, 0, 1, 1, 1, 1, 0, 0]  # enter 2, exit 3, re-enter 4, stay..7
+        specs = [treated_path] * 6 + [[0] * 10] * 6 + [[1] * 10] * 4  # + never + always
+        df = _deterministic_panel(specs, tau=2.0)
+        r_es = LPDiD(
+            pre_window=1,
+            post_window=2,
+            cluster="unit",
+            non_absorbing="effect_stabilization",
+            stabilization_window=1,
+        ).fit(df, only_event=True, **_FIT_KW)
+        r_fe = LPDiD(pre_window=1, post_window=2, cluster="unit", non_absorbing="first_entry").fit(
+            df, only_event=True, **_FIT_KW
+        )
+        es_h2 = _event_row(r_es, 2)
+        assert np.isfinite(es_h2["coefficient"])
+        assert es_h2["coefficient"] == pytest.approx(2.0, abs=1e-9)
+        assert not np.isfinite(_event_row(r_fe, 2)["coefficient"])
+
+    def test_boundary_clamp_retains_early_controls(self):
+        # An entry at t=2 with L=4 has a window starting at 2-4-1=-3 < min_t=0; the
+        # C=0-below-min_t convention must keep the never-treated controls (a NaN-from-
+        # below-min_t bug would drop them and unidentify the horizon). Review critical #3.
+        specs = [[0, 0, 1, 1, 1, 1, 1, 1]] * 5 + [[0] * 8] * 8
+        df = _deterministic_panel(specs, tau=3.0)
+        r = LPDiD(
+            pre_window=1,
+            post_window=2,
+            cluster="unit",
+            non_absorbing="effect_stabilization",
+            stabilization_window=4,
+        ).fit(df, only_event=True, **_FIT_KW)
+        h0 = _event_row(r, 0)
+        assert np.isfinite(h0["coefficient"])
+        assert h0["coefficient"] == pytest.approx(3.0, abs=1e-9)
+        assert h0["n_obs"] > 5  # 5 treated + retained never-treated controls
+
+    def test_negative_horizon_placebos_are_clean(self):
+        # Parallel trends hold -> pre-trend (h<-1) coefficients ~ 0 for both modes. A
+        # broken h<0 mask (post-window term spanning the entry) would distort them.
+        df = _nonabsorbing_homog_panel(seed=3, n=220, T=12, error_sd=0.02)
+        for mode_kw in (
+            {"non_absorbing": "first_entry"},
+            {"non_absorbing": "effect_stabilization", "stabilization_window": 2},
+        ):
+            r = LPDiD(pre_window=3, post_window=3, cluster="unit", **mode_kw).fit(df, **_FIT_KW)
+            pre = r.event_study[r.event_study["horizon"] < -1]
+            assert (pre["coefficient"].abs() < 0.1).all(), (mode_kw, pre)
+
+    def test_no_negative_weighting(self):
+        # The central LP-DiD result: non-negative weights -> the estimate stays inside the
+        # convex hull [tau_lo, tau_hi] of the true effects (TWFE-style negative weighting
+        # would push it outside). Holds for both modes and the headline ATT.
+        df = _nonabsorbing_het_panel(seed=5, error_sd=0.03)
+        for mode_kw in (
+            {"non_absorbing": "first_entry"},
+            {"non_absorbing": "effect_stabilization", "stabilization_window": 3},
+        ):
+            r = LPDiD(pre_window=2, post_window=3, cluster="unit", **mode_kw).fit(df, **_FIT_KW)
+            post = r.event_study[r.event_study["horizon"] >= 0]["coefficient"]
+            assert (post >= 1.0 - 0.25).all() and (post <= 3.0 + 0.25).all(), (mode_kw, post)
+            assert 1.0 - 0.25 <= r.att <= 3.0 + 0.25
+
+    def test_effect_stabilization_admits_stabilized_treated_controls(self):
+        # No never-treated units exist; early units are treated-from-start (stabilized).
+        # effect_stabilization uses them as clean controls -> identified; first_entry
+        # (controls must be untreated through t+h) finds none -> NaN.
+        specs = [[1] * 10] * 8 + [[0, 0, 0, 0, 1, 1, 1, 1, 1, 1]] * 6  # stabilized + entrant@4
+        df = _deterministic_panel(specs, tau=2.0)
+        r_es = LPDiD(
+            pre_window=1,
+            post_window=2,
+            cluster="unit",
+            non_absorbing="effect_stabilization",
+            stabilization_window=2,
+        ).fit(df, only_event=True, **_FIT_KW)
+        r_fe = LPDiD(pre_window=1, post_window=2, cluster="unit", non_absorbing="first_entry").fit(
+            df, only_event=True, **_FIT_KW
+        )
+        es0 = _event_row(r_es, 0)
+        assert np.isfinite(es0["coefficient"])
+        assert es0["coefficient"] == pytest.approx(2.0, abs=1e-9)
+        assert not np.isfinite(_event_row(r_fe, 0)["coefficient"])
+
+    def test_reweight_first_entry_reduces_to_absorbing(self):
+        # The reweight (equal-weight) path also reduces: on an absorbing panel,
+        # reweighted first_entry == reweighted absorbing (== Callaway-Sant'Anna).
+        df = make_lpdid_panel(cohorts=(4, 8), n_per_cohort=20, n_never=25, n_periods=12, seed=9)
+        r_ab = LPDiD(pre_window=2, post_window=4, reweight=True, cluster="unit").fit(df, **_FIT_KW)
+        r_fe = LPDiD(
+            pre_window=2, post_window=4, reweight=True, cluster="unit", non_absorbing="first_entry"
+        ).fit(df, **_FIT_KW)
+        np.testing.assert_allclose(
+            r_fe.event_study["coefficient"].to_numpy(dtype=float),
+            r_ab.event_study["coefficient"].to_numpy(dtype=float),
+            atol=1e-10,
+            equal_nan=True,
+        )
+        assert r_fe.att == pytest.approx(r_ab.att, abs=1e-10)
+
+    def test_reweight_recovers_equal_weight_nonabsorbing(self):
+        # Equal weighting on the heterogeneous panel recovers the observation-equally-
+        # weighted mean effect = (180*1 + 60*3)/240 = 1.5, distinct from the size of the
+        # groups' effects taken alone.
+        df = _nonabsorbing_het_panel(
+            seed=8, n_lo=180, n_hi=60, tau_lo=1.0, tau_hi=3.0, error_sd=0.02
+        )
+        r = LPDiD(
+            pre_window=1,
+            post_window=2,
+            reweight=True,
+            cluster="unit",
+            non_absorbing="effect_stabilization",
+            stabilization_window=2,
+        ).fit(df, only_event=True, **_FIT_KW)
+        assert r.event_study.set_index("horizon").loc[0, "coefficient"] == pytest.approx(
+            1.5, abs=0.2
+        )
+
+    def test_dgp_recovery_both_modes(self):
+        # Homogeneous instant effect tau=2 -> both modes recover ~2 at every post horizon.
+        df = _nonabsorbing_homog_panel(seed=2, n=250, T=12, tau=2.0, error_sd=0.04)
+        for mode_kw in (
+            {"non_absorbing": "first_entry"},
+            {"non_absorbing": "effect_stabilization", "stabilization_window": 2},
+        ):
+            r = LPDiD(pre_window=2, post_window=3, cluster="unit", **mode_kw).fit(df, **_FIT_KW)
+            post = r.event_study[r.event_study["horizon"] >= 0]
+            for _, row in post.iterrows():
+                assert row["coefficient"] == pytest.approx(2.0, abs=0.2), (mode_kw, row.to_dict())
+
+    def test_interior_gap_raises(self):
+        df = pd.DataFrame(
+            {
+                "unit": [1, 1, 1, 2, 2, 2, 2],
+                "time": [0, 1, 3, 0, 1, 2, 3],  # unit 1 missing t=2 (interior gap)
+                "y": [1.0, 2, 3, 1, 1, 1, 1],
+                "treat": [0, 1, 0, 0, 0, 0, 0],
+            }
+        )
+        with pytest.raises(ValueError, match="gap-free"):
+            LPDiD(pre_window=1, post_window=1, non_absorbing="first_entry").fit(df, **_FIT_KW)
+
+    def test_one_off_treatment_runs(self):
+        # Natural-disaster style: a single treated period then off forever.
+        specs = [[0, 0, 1, 0, 0, 0, 0, 0]] * 8 + [[0] * 8] * 8
+        df = _deterministic_panel(specs, tau=2.0)
+        r = LPDiD(
+            pre_window=1,
+            post_window=2,
+            cluster="unit",
+            non_absorbing="effect_stabilization",
+            stabilization_window=1,
+        ).fit(df, only_event=True, **_FIT_KW)
+        # h=0 (the treated period itself) is identified off the entry jump.
+        assert np.isfinite(_event_row(r, 0)["coefficient"])
+
+    def test_no_clean_control_is_nan_consistent(self):
+        # All units switch on at t=2 -> no clean controls at that event time; the horizon
+        # is unidentified and ALL inference fields are NaN together.
+        specs = [[0, 0, 1, 1, 1, 1]] * 6
+        df = _deterministic_panel(specs, tau=2.0)
+        with pytest.warns(UserWarning):
+            r = LPDiD(
+                pre_window=1,
+                post_window=1,
+                cluster="unit",
+                non_absorbing="effect_stabilization",
+                stabilization_window=1,
+            ).fit(df, only_event=True, **_FIT_KW)
+        row = _event_row(r, 0)
+        assert_nan_inference(
+            {
+                "se": row["se"],
+                "t_stat": row["t_stat"],
+                "p_value": row["p_value"],
+                "conf_int": (row["conf_low"], row["conf_high"]),
+            }
+        )
+
+    def test_results_metadata_records_mode(self):
+        df = _nonabsorbing_homog_panel(seed=1, n=60, T=10)
+        r = LPDiD(
+            pre_window=1,
+            post_window=2,
+            cluster="unit",
+            non_absorbing="effect_stabilization",
+            stabilization_window=3,
+        ).fit(df, only_event=True, **_FIT_KW)
+        assert r.to_dict()["non_absorbing"] == "effect_stabilization"
+        assert r.to_dict()["stabilization_window"] == 3
+        assert "non-absorbing" in r.summary()
+        # absorbing results omit the keys
+        r_ab = LPDiD(pre_window=1, post_window=2, cluster="unit").fit(
+            make_lpdid_panel(n_periods=8, seed=1), only_event=True, **_FIT_KW
+        )
+        assert "non_absorbing" not in r_ab.to_dict()

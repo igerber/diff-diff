@@ -1,8 +1,9 @@
 Local Projections Difference-in-Differences
 ===========================================
 
-Local Projections DiD (LP-DiD) estimator for staggered, absorbing-treatment
-event studies, from Dube, Girardi, Jordà & Taylor (2025).
+Local Projections DiD (LP-DiD) estimator for staggered event studies, from
+Dube, Girardi, Jordà & Taylor (2025). Absorbing treatment by default, with
+optional non-absorbing (reversible) treatment via ``non_absorbing``.
 
 LP-DiD estimates a separate regression at each event-time horizon ``h`` of a
 long difference of the outcome (``y_{i,t+h} - y_{i,t-1}``) on the
@@ -14,10 +15,18 @@ estimand is a strictly non-negatively-weighted average of cohort effects.
 
 .. note::
 
-   This release implements the **absorbing-treatment main path**: treatment is
-   binary and, once switched on, stays on. The estimator rejects panels where a
-   unit's treatment turns off. Non-absorbing (switch on/off) treatment and
-   survey-design support are planned follow-ups. Covariates and absorbed fixed
+   Treatment is binary. By default (``non_absorbing=None``) the estimator
+   follows the **absorbing main path**: once switched on, treatment stays on,
+   and panels where a unit's treatment turns off are rejected. Non-absorbing
+   (switch on/off) treatment is supported via ``non_absorbing="first_entry"``
+   (Eq. 12, the effect of entering for the first time and staying treated) or
+   ``non_absorbing="effect_stabilization"`` (Eq. 13, which requires
+   ``stabilization_window=L`` and lets units whose treatment has been stable for
+   at least ``L`` periods serve as clean controls — feasible with few or no
+   never-treated units). Non-absorbing modes require a gap-free panel within
+   each unit's observed span and cover the entry-effect estimands; the
+   Appendix-C exit-event dynamics, R-package parity, and survey-design support
+   are planned follow-ups. Covariates and absorbed fixed
    effects are supported; under ``reweight=False`` they enter by direct
    inclusion, which preserves the non-negative weighting result only under
    homogeneous covariate effects (online Appendix B.2.2) — the
@@ -117,6 +126,17 @@ Premean-differenced base period and fixed-composition sample::
     results_pmd = lp_pmd.fit(data, outcome="outcome", unit="unit",
                              time="period", treatment="treated")
 
+Non-absorbing (reversible) treatment — units may switch on and off. Use
+``effect_stabilization`` (Eq. 13) when there are few or no never-treated units,
+so that units whose treatment has been stable for ``L`` periods can serve as
+clean controls::
+
+    # `treated` here is a non-absorbing 0/1 indicator that can turn on and off.
+    lp_na = LPDiD(pre_window=3, post_window=4,
+                  non_absorbing="effect_stabilization", stabilization_window=5)
+    results_na = lp_na.fit(panel, outcome="y", unit="unit",
+                           time="t", treatment="treated")
+
 Comparison with Other Staggered Estimators
 ------------------------------------------
 
@@ -133,7 +153,7 @@ Comparison with Other Staggered Estimators
      - Separate 2x2 DiD aggregation
      - Impute Y(0) via FE model
    * - Treatment
-     - Binary, absorbing (this release)
+     - Binary; absorbing or non-absorbing (``non_absorbing=``)
      - Binary, absorbing
      - Binary, absorbing
    * - Default estimand

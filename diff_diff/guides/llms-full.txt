@@ -897,7 +897,7 @@ results.print_summary()
 
 ### LPDiD
 
-Local Projections DiD (Dube, Girardi, Jorda & Taylor 2025). Estimates a separate OLS at each event-time horizon of a long difference (`y_{i,t+h} - y_{i,t-1}`) on the treatment-switch indicator plus calendar-time fixed effects (no unit FE), restricted to a flexible "clean control" sample of newly-treated and not-yet-treated units. Excluding already-treated units from the control group removes the negative-weighting bias of naive TWFE, so the default (variance-weighted) estimand has strictly non-negative weights. `reweight=True` yields the equally-weighted ATT (numerically equivalent to Callaway-Sant'Anna); covariates then enter via regression adjustment. Standard errors on the default/weighted path are cluster-robust at the unit level (the paper specifies no SE; matches Stata `lpdid` `vce(cluster unit)`); the regression-adjustment covariate path (`reweight=True`) instead reports an influence-function cluster variance (ImputationDiD/BJS family). Scope: binary, absorbing treatment (rejects panels where treatment turns off).
+Local Projections DiD (Dube, Girardi, Jorda & Taylor 2025). Estimates a separate OLS at each event-time horizon of a long difference (`y_{i,t+h} - y_{i,t-1}`) on the treatment-switch indicator plus calendar-time fixed effects (no unit FE), restricted to a flexible "clean control" sample of newly-treated and not-yet-treated units. Excluding already-treated units from the control group removes the negative-weighting bias of naive TWFE, so the default (variance-weighted) estimand has strictly non-negative weights. `reweight=True` yields the equally-weighted ATT (numerically equivalent to Callaway-Sant'Anna); covariates then enter via regression adjustment. Standard errors on the default/weighted path are cluster-robust at the unit level (the paper specifies no SE; matches Stata `lpdid` `vce(cluster unit)`); the regression-adjustment covariate path (`reweight=True`) instead reports an influence-function cluster variance (ImputationDiD/BJS family). Scope: binary treatment; absorbing by default (rejects panels where treatment turns off), with non-absorbing (reversible) treatment available via `non_absorbing` - `"first_entry"` (Dube et al. Eq. 12, the effect of entering for the first time and staying treated) or `"effect_stabilization"` (Eq. 13, requires `stabilization_window=L`; lets units whose treatment has been stable for at least `L` periods act as clean controls, so estimation is feasible with few/no never-treated units). Non-absorbing modes require a gap-free panel within each unit's observed span.
 
 ```python
 LPDiD(
@@ -910,6 +910,8 @@ LPDiD(
     alpha: float = 0.05,
     cluster: str | None = None,              # Cluster column for cluster-robust SEs; defaults to the unit identifier
     rank_deficient_action: str = "warn",     # "warn", "error", or "silent"
+    non_absorbing: str | None = None,        # None=absorbing; "first_entry" (Eq. 12); "effect_stabilization" (Eq. 13)
+    stabilization_window: int | None = None, # The paper's L; required when non_absorbing="effect_stabilization"
 )
 ```
 
@@ -921,7 +923,7 @@ lpdid.fit(
     outcome: str,
     unit: str,
     time: str,
-    treatment: str,                    # Binary, absorbing treatment indicator (0/1)
+    treatment: str,                    # Binary treatment indicator (0/1); absorbing unless non_absorbing is set
     covariates: list[str] = None,      # Direct inclusion (reweight=False) or regression adjustment (reweight=True)
     ylags: int = 0,                    # Lagged-outcome controls
     dylags: int = 0,                   # Lagged first-difference controls
