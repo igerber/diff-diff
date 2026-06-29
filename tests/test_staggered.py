@@ -1437,6 +1437,44 @@ class TestCallawaySantAnnaNonEstimableMaterialization:
         assert len(estimable) > 0
         assert estimable["skip_reason"].isna().all()
 
+    def test_general_path_nonfinite_att_materialized_as_nan_no_inf(self):
+        """A non-finite ATT(g,t) in the general (IPW/DR) path must surface as a NaN
+        cell with skip_reason, NOT a finite-but-non-finite (inf) effect carrying an
+        IF entry. Regression guard for the per-cell contract."""
+        from unittest.mock import patch
+
+        data = generate_staggered_data(n_units=120, seed=7)
+        real = CallawaySantAnna._compute_att_gt_fast
+        state = {"poisoned": None}
+
+        def wrapped(self, precomputed, g, t, covariates, **kw):
+            res = real(self, precomputed, g, t, covariates, **kw)
+            att = res[0]
+            # Poison the first estimable post cell: return inf ATT WITH a real IF
+            # entry (res[4]), mimicking a degenerate IPW/DR solve that returns a
+            # non-finite point estimate without a None sentinel.
+            if state["poisoned"] is None and att is not None and np.isfinite(att) and t >= g:
+                state["poisoned"] = (g, t)
+                return (np.inf,) + res[1:6] + (None,)
+            return res
+
+        cs = CallawaySantAnna(n_bootstrap=0, estimation_method="ipw")
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            with patch.object(CallawaySantAnna, "_compute_att_gt_fast", wrapped):
+                results = cs.fit(
+                    data, outcome="outcome", unit="unit", time="time", first_treat="first_treat"
+                )
+
+        assert state["poisoned"] is not None, "poison hook never fired (test is vacuous)"
+        cell = results.group_time_effects[state["poisoned"]]
+        # The non-finite ATT must be materialized as NaN (not inf) with the reason.
+        assert np.isnan(cell["effect"]), "non-finite ATT must surface as NaN, not inf"
+        assert not np.isinf(cell["effect"])
+        assert cell["skip_reason"] == "non_finite_regression"
+        # Excluded from aggregation -> overall ATT still finite.
+        assert np.isfinite(results.overall_att)
+
     def test_all_nonestimable_raises_with_materialized_cells(self):
         """All cells non-estimable (dict non-empty, all NaN) -> ValueError via the
         no-finite-effect guard (distinct from the empty-dict case)."""

@@ -2018,7 +2018,20 @@ class CallawaySantAnna(
                     ) = rc_result
                     agg_w = cohort_mass if cohort_mass is not None else n_treat
 
-                    if att_gt is not None:
+                    if att_gt is None or not np.isfinite(att_gt):
+                        # Non-estimable cell: materialize NaN with NO IF entry,
+                        # uniform across paths. att_gt is None -> the helper
+                        # reported the reason; a non-finite att_gt (solve produced
+                        # NaN/inf) -> "non_finite_regression".
+                        _n_skipped_other += 1
+                        group_time_effects[(g, t)] = _nan_gt_entry(
+                            n_treated=n_treat,
+                            n_control=n_ctrl,
+                            skip_reason=(
+                                skip_reason if att_gt is None else "non_finite_regression"
+                            ),
+                        )
+                    else:
                         # Cluster-aware per-(g,t) SE on the RCS path. RC
                         # IF indices are per-obs (vs per-unit on the panel
                         # path); the corresponding PSU array is
@@ -2055,9 +2068,7 @@ class CallawaySantAnna(
                             "n_treated": n_treat,
                             "n_control": n_ctrl,
                             "agg_weight": agg_w,
-                            "skip_reason": (
-                                None if np.isfinite(att_gt) else "non_finite_regression"
-                            ),
+                            "skip_reason": None,
                         }
                         if sw_sum is not None:
                             gte_entry["survey_weight_sum"] = sw_sum
@@ -2065,13 +2076,6 @@ class CallawaySantAnna(
 
                         if inf_info is not None:
                             influence_func_info[(g, t)] = inf_info
-                    else:
-                        _n_skipped_other += 1
-                        group_time_effects[(g, t)] = _nan_gt_entry(
-                            n_treated=n_treat,
-                            n_control=n_ctrl,
-                            skip_reason=skip_reason,
-                        )
 
         elif covariates is None and self.estimation_method == "reg":
             # Fast vectorized path for the common no-covariates regression case
@@ -2128,7 +2132,20 @@ class CallawaySantAnna(
                         )
                     )
 
-                    if att_gt is not None:
+                    if att_gt is None or not np.isfinite(att_gt):
+                        # Non-estimable cell: materialize NaN with NO IF entry,
+                        # uniform across paths. att_gt is None -> the helper
+                        # reported the reason; a non-finite att_gt (solve produced
+                        # NaN/inf) -> "non_finite_regression".
+                        _n_skipped_other += 1
+                        group_time_effects[(g, t)] = _nan_gt_entry(
+                            n_treated=n_treat,
+                            n_control=n_ctrl,
+                            skip_reason=(
+                                skip_reason if att_gt is None else "non_finite_regression"
+                            ),
+                        )
+                    else:
                         # Cluster-aware per-(g,t) SE: when a survey PSU is
                         # in play (explicit OR synthesized from bare
                         # cluster=), aggregate the per-(g,t) IF by PSU
@@ -2164,9 +2181,7 @@ class CallawaySantAnna(
                             "conf_int": ci,
                             "n_treated": n_treat,
                             "n_control": n_ctrl,
-                            "skip_reason": (
-                                None if np.isfinite(att_gt) else "non_finite_regression"
-                            ),
+                            "skip_reason": None,
                         }
                         if sw_sum is not None:
                             gte_entry["survey_weight_sum"] = sw_sum
@@ -2174,13 +2189,6 @@ class CallawaySantAnna(
 
                         if inf_info is not None:
                             influence_func_info[(g, t)] = inf_info
-                    else:
-                        _n_skipped_other += 1
-                        group_time_effects[(g, t)] = _nan_gt_entry(
-                            n_treated=n_treat,
-                            n_control=n_ctrl,
-                            skip_reason=skip_reason,
-                        )
 
         if not group_time_effects or not any(
             np.isfinite(v["effect"]) for v in group_time_effects.values()
