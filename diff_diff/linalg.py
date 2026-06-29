@@ -134,7 +134,9 @@ def _detect_rank_deficiency(
     pivot : ndarray of int
         Column permutation from QR decomposition.
     """
-    n, k = X.shape
+    _, k = X.shape
+    if k == 0:
+        return 0, np.array([], dtype=int), np.array([], dtype=int)
 
     # R's qr() uses tol = 1e-07 by default (sqrt(eps) ≈ 1.49e-08); we use 1e-07.
     if rcond is None:

@@ -1525,6 +1525,20 @@ class TestNumericalStability:
         np.testing.assert_allclose(resid, y)  # fitted = 0
         assert vcov.shape == (3, 3) and np.all(np.isnan(vcov))
 
+    def test_rank_detection_zero_column_matrix_returns_empty_contract(self):
+        """An ``(n, 0)`` design has rank 0, no dropped columns, and no pivot."""
+        from diff_diff.linalg import _detect_rank_deficiency
+
+        X = np.empty((5, 0))
+
+        rank, dropped, pivot = _detect_rank_deficiency(X)
+
+        assert rank == 0
+        assert dropped.dtype == int
+        assert pivot.dtype == int
+        assert dropped.shape == (0,)
+        assert pivot.shape == (0,)
+
     def test_rank_detection_scale_repair_preserves_raw_drop_selection(self):
         """The scale-invariance repair must NOT change which column is dropped in a
         genuinely collinear, well-scaled design: the dropped column equals the raw
