@@ -1499,9 +1499,16 @@ class LPDiD:
             )
 
         # Headline G = realized clusters in the pooled-post (headline ATT) sample
-        # when computed; otherwise the panel-level unit-cluster count. Per-horizon
-        # rows carry their own realized n_clusters in the event_study/pooled tables.
+        # when computed; otherwise the panel-level cluster count. Per-horizon rows
+        # carry their own realized n_clusters in the event_study/pooled tables.
         headline_n_clusters = int(panel["_cluster"].nunique())
+        if survey_n_psu is not None:
+            # Under a survey design the effective variance cluster is the PSU, and
+            # cluster_name reports the PSU column. Use the panel-level PSU count so the
+            # headline G matches that label even for only_event fits (pooled is None);
+            # an explicit PSU design can have n_psu != n_units. The pooled-post override
+            # below still prefers the realized survey-sample count when available.
+            headline_n_clusters = survey_n_psu
         if pooled is not None:
             _post = pooled.loc[pooled["window"] == "post", "n_clusters"]
             if not _post.empty and pd.notna(_post.iloc[0]):

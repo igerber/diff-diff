@@ -1864,6 +1864,22 @@ class TestLPDiDSurvey:
         c = clone.fit(_survey_panel(), survey_design=_full_design(), **_FIT_KW)
         assert c.vcov_type == "survey_tsl"  # survey applies because passed to fit()
 
+    def test_only_event_survey_headline_g_is_psu_count(self):
+        # only_event=True (pooled is None) must still report the survey PSU count as the
+        # headline G, matching cluster_name=PSU -- not the unit count. The panel design
+        # has 10 PSUs across ~80 units (n_psu != n_units).
+        df = _survey_panel()
+        n_units = df["unit"].nunique()
+        res = LPDiD(pre_window=2, post_window=2).fit(
+            df, survey_design=_full_design(), only_event=True, **_FIT_KW
+        )
+        assert res.pooled is None
+        assert res.cluster_name == "psu"
+        assert res.n_psu == 10
+        assert n_units != 10
+        assert res.n_clusters == 10  # headline G == PSU count, NOT n_units
+        assert "G=10" in res.summary()
+
     # --- NaN-consistency: every stratum singleton + lonely_psu="remove" ---
     def test_all_singleton_strata_remove_is_nan(self):
         base = _survey_panel().drop(columns=["stratum", "psu", "fpc", "weight"])
