@@ -96,7 +96,15 @@ class TROPResults:
     time_effects : dict
         Estimated time fixed effects (beta_t).
     treatment_effects : dict
-        Individual treatment effects for each treated (unit, time) pair.
+        Individual treatment effects for each treated (unit, time) pair. The
+        value is NaN for a cell that is not estimable -- a missing outcome, or a
+        cell whose unit/time fixed effect ``alpha_i + beta_t`` is unidentified by
+        the control fit (the target unit and target period are not in the same
+        connected component of the observed-control graph: an always-treated unit,
+        a fully-treated period, or disconnected control support). This applies to
+        all local TROP fits; it is reachable mainly under ``non_absorbing=True``
+        but also on unbalanced absorbing panels. The reported ATT is the mean over
+        the finite (estimable) cells.
     lambda_time : float
         Selected time weight decay parameter from grid. 0.0 = uniform time
         weights (disabled) per Eq. 3.
@@ -122,6 +130,12 @@ class TROPResults:
         Number of bootstrap replications (if bootstrap variance).
     bootstrap_distribution : np.ndarray, optional
         Bootstrap distribution of estimates.
+    non_absorbing : bool, default=False
+        Treatment-assignment scope used for the fit. False = absorbing-state
+        treatment (default); True = general on/off assignment (``method='local'``
+        only). Recorded so a persisted result retains the assignment-scope and
+        inference-caveat context (Theorem 5.1 is block-only) after the fit-time
+        ``UserWarning`` is gone.
     """
 
     att: float
@@ -149,6 +163,11 @@ class TROPResults:
     bootstrap_distribution: Optional[np.ndarray] = field(default=None, repr=False)
     # Survey design metadata (SurveyMetadata instance from diff_diff.survey)
     survey_metadata: Optional[Any] = field(default=None)
+    # Treatment-assignment scope used for the fit: False = absorbing (default),
+    # True = general on/off assignment (method='local'; Athey et al. 2025 Eq. 12).
+    # Recorded so a persisted result retains the assignment-scope / inference
+    # caveat context after the fit-time UserWarning is gone.
+    non_absorbing: bool = False
 
     def __repr__(self) -> str:
         """Concise string representation."""
@@ -195,10 +214,21 @@ class TROPResults:
             "",
             f"{'Observations:':<25} {self.n_obs:>10}",
             f"{'Treated units:':<25} {self.n_treated:>10}",
-            f"{'Control units:':<25} {self.n_control:>10}",
+            # Under non-absorbing assignment a unit can be treated in some periods
+            # and untreated in others, so n_control (never-treated units) may be 0
+            # even though many untreated control *cells* exist; label accordingly.
+            (
+                f"{'Never-treated units:':<25} {self.n_control:>10}"
+                if self.non_absorbing
+                else f"{'Control units:':<25} {self.n_control:>10}"
+            ),
             f"{'Treated observations:':<25} {self.n_treated_obs:>10}",
             f"{'Pre-treatment periods:':<25} {self.n_pre_periods:>10}",
             f"{'Post-treatment periods:':<25} {self.n_post_periods:>10}",
+        ]
+        if self.non_absorbing:
+            lines.append(f"{'Assignment scope:':<25} {'non-absorbing (on/off)':>20}")
+        lines += [
             "",
             "-" * 75,
             "Tuning Parameters (selected via LOOCV)".center(75),
@@ -280,6 +310,7 @@ class TROPResults:
             "lambda_nn": self.lambda_nn,
             "effective_rank": self.effective_rank,
             "loocv_score": self.loocv_score,
+            "non_absorbing": self.non_absorbing,
         }
         if self.survey_metadata is not None:
             sm = self.survey_metadata

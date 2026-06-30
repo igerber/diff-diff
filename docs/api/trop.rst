@@ -168,6 +168,36 @@ Treatment effects are **heterogeneous** per-observation residuals; ATT is their 
 Use ``method='local'`` for observation-specific weight optimization.
 Use ``method='global'`` for faster estimation with global weights.
 
+Non-absorbing (on/off) treatment
+--------------------------------
+
+By default TROP requires an **absorbing-state** treatment indicator (once treated,
+always treated) and rejects a non-monotonic indicator with a ``ValueError``. This
+guards against the common mistake of encoding absorbing treatment as an event-style
+spike (a single ``D=1`` period), which would silently bias the ATT.
+
+The paper, however, supports **general assignment patterns** including treatment that
+switches on and off (§2.1: "units moving into and out of treatment"; Eq. 12 /
+Algorithm 2). Enable this with the opt-in ``non_absorbing=True`` (``method='local'``
+only)::
+
+    from diff_diff import TROP
+
+    trop = TROP(method='local', non_absorbing=True)
+    results = trop.fit(data, outcome='y', treatment='treated',
+                       unit='unit_id', time='period')
+
+Caveats (a ``UserWarning`` is emitted on fit):
+
+- Validity relies on the paper's **no-spillover / no-dynamic-effects (no carryover)**
+  assumption.
+- The point estimator (Eq. 12) is general, but the formal **triple-robustness
+  guarantee (Theorem 5.1) is proven only under block assignment**; the bootstrap is
+  offered generally but its validity requires a growing number of treated units, so
+  interpret standard errors with care.
+- ``non_absorbing=True`` is supported for ``method='local'`` only;
+  ``TROP(method='global', non_absorbing=True)`` raises a ``ValueError``.
+
 Example Usage
 -------------
 
@@ -184,8 +214,11 @@ Basic usage::
     )
 
     # Note: TROP infers treatment periods from the treatment indicator column.
-    # The treatment column should be an absorbing state (D=1 for all periods
-    # during and after treatment starts).
+    # By default the treatment column must be an absorbing state (D=1 for all
+    # periods during and after treatment starts); a non-monotonic indicator
+    # raises ValueError. For treatment that genuinely switches on and off,
+    # pass non_absorbing=True (method='local' only) -- see "Non-absorbing
+    # (on/off) treatment" below.
     results = trop.fit(
         data,
         outcome='y',

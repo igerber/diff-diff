@@ -213,9 +213,12 @@ Is treatment adoption staggered (multiple cohorts, different timing)?
 |
 |-- Treatment switches ON and OFF (reversible / non-absorbing)?
 |   \-- ChaisemartinDHaultfoeuille (dCDH / alias `DCDH`)
-|       -- Only library estimator for non-absorbing treatments; supports
-|          L_max multi-horizon, dynamic placebos, cost-benefit delta,
-|          HonestDiD, and `survey_design=` (pweight + strata/PSU/FPC via TSL)
+|       -- Most general option for non-absorbing treatments (allows dynamic
+|          effects + joiner/leaver views); supports L_max multi-horizon,
+|          dynamic placebos, cost-benefit delta, HonestDiD, and
+|          `survey_design=` (pweight + strata/PSU/FPC via TSL)
+|       -- Also: LPDiD(non_absorbing="first_entry"/"effect_stabilization")
+|          and TROP(non_absorbing=True, no-dynamic-effects) under stronger assumptions
 |
 |-- Few treated units (< 20)?
 |   \-- SyntheticDiD (SDiD)    -- synthetic control + DiD hybrid

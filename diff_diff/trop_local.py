@@ -32,6 +32,72 @@ from diff_diff.trop_results import _PrecomputedStructures
 from diff_diff.utils import warn_if_not_converged
 
 
+def _treated_cell_is_estimable(
+    control_mask: np.ndarray,
+    Y: np.ndarray,
+    weight_matrix: np.ndarray,
+    i: int,
+    t: int,
+) -> bool:
+    """True iff treated cell (i, t)'s counterfactual is identified by the control fit.
+
+    The working model fits unregularized unit and time fixed effects
+    ``alpha_j`` / ``beta_s`` on the weighted observed control cells, then sets
+    ``tau_it = Y_it - alpha_i - beta_t - L_it``. For that difference to be a valid
+    counterfactual rather than a fixed-effect-contaminated raw outcome, the sum
+    ``alpha_i + beta_t`` must be identified by the two-way-FE control fit.
+
+    In a two-way fixed-effect model the effects are pinned only **within each
+    connected component** of the bipartite graph whose nodes are units and
+    periods and whose edges are the positively-weighted observed control cells
+    (``usable = (D==0) & finite(Y) & weight>0``); across components there is a
+    free per-component offset. Hence ``alpha_i + beta_t`` is identified iff the
+    **target unit node and target period node lie in the same component**.
+
+    A marginal "the target unit has some usable control AND the target period has
+    some usable control" test is necessary but NOT sufficient: e.g. usable cells
+    at ``(unitA, t0)`` and ``(unitB, t1)`` with target ``(unitA, t1)`` pass it,
+    yet ``alpha_A + beta_1`` spans two disconnected components and is unidentified.
+    This connected-component check subsumes the simpler degeneracies it replaced:
+    an always-treated unit (empty unit column) or a fully-treated period (empty
+    period row) leaves the corresponding node isolated, hence non-estimable.
+
+    This is a **general correctness guard applied to every local fit** (absorbing
+    and non-absorbing): it NaNs exactly the cells whose ``alpha_i + beta_t`` is
+    unidentified. On balanced panels (and absorbing panels with an observed
+    never-treated unit, which connects every period to every unit) the whole
+    control graph is one component, so the predicate is a no-op (no behavior
+    change). Shared by the final point fit and the bootstrap fixed-lambda refit.
+
+    Cost: a bipartite BFS bounded by the usable-cell count, run per treated cell
+    only when both the unit column and period row are non-empty (the cheap
+    fast-path rejects the common degeneracies first). non_absorbing is opt-in and
+    correctness-first, so the extra work is acceptable.
+    """
+    usable = control_mask & np.isfinite(Y) & (weight_matrix > 0)
+    # Fast path: an empty target column (alpha_i) or row (beta_t) is isolated.
+    if not bool(np.any(usable[:, i])) or not bool(np.any(usable[t, :])):
+        return False
+    # Bipartite reachability from period-node t; estimable iff unit-node i reached.
+    reached_periods = np.zeros(usable.shape[0], dtype=bool)
+    reached_units = np.zeros(usable.shape[1], dtype=bool)
+    reached_periods[t] = True
+    while True:
+        # Units adjacent to any reached period, then periods adjacent to any
+        # reached unit; iterate the bipartite expansion to a fixpoint.
+        new_units = reached_units | np.any(usable[reached_periods, :], axis=0)
+        if np.any(new_units):
+            new_periods = reached_periods | np.any(usable[:, new_units], axis=1)
+        else:
+            new_periods = reached_periods
+        if np.array_equal(new_units, reached_units) and np.array_equal(
+            new_periods, reached_periods
+        ):
+            break
+        reached_units, reached_periods = new_units, new_periods
+    return bool(reached_units[i])
+
+
 def _validate_and_pivot_treatment(data, time, unit, treatment, all_periods, all_units):
     """Validate treatment column and create D matrix with missing mask.
 
@@ -71,13 +137,34 @@ def _validate_and_pivot_treatment(data, time, unit, treatment, all_periods, all_
     return D, missing_mask
 
 
-def _setup_trop_data(data, outcome, treatment, unit, time, resolved_survey, survey_design):
+def _setup_trop_data(
+    data,
+    outcome,
+    treatment,
+    unit,
+    time,
+    resolved_survey,
+    survey_design,
+    non_absorbing: bool = False,
+):
     """Shared data setup for TROP local and global fit paths.
 
     Performs panel pivoting (long → wide), absorbing-state validation,
     treated/control unit identification, first-treatment-period detection,
     and pre/post period counting. Returns a dict so both callers can
     unpack only the fields they need.
+
+    When ``non_absorbing`` is False (default) the treatment indicator must be an
+    absorbing state (monotonic non-decreasing per unit) and a non-monotonic
+    indicator raises ``ValueError``; there must be at least one never-treated
+    unit and at least 2 leading pre-treatment periods. When ``non_absorbing`` is
+    True these absorbing-specific guards are relaxed to support general (on/off)
+    assignment patterns (Athey et al. 2025 Eq. 12 / Algorithm 2): the
+    monotonicity check is skipped, identification falls back to untreated *cells*
+    (rather than requiring whole never-treated units), and the pre-period guard
+    becomes a weaker "at least 2 periods contain untreated cells" check. The
+    global fit path always calls with ``non_absorbing=False`` (it additionally
+    requires simultaneous block adoption).
 
     The global-method-specific staggered-adoption check stays in
     `_fit_global` as a post-helper validation because it depends on
@@ -128,20 +215,25 @@ def _setup_trop_data(data, outcome, treatment, unit, time, resolved_survey, surv
         data, time, unit, treatment, all_periods, all_units
     )
 
-    violating_units = []
-    for unit_idx in range(n_units):
-        observed_mask = ~missing_mask[:, unit_idx]
-        observed_d = D[observed_mask, unit_idx]
-        if len(observed_d) > 1 and np.any(np.diff(observed_d) < 0):
-            violating_units.append(all_units[unit_idx])
+    # Absorbing-state (monotonic non-decreasing) validation. Skipped when the
+    # caller opts into general (on/off) assignment via non_absorbing=True.
+    if not non_absorbing:
+        violating_units = []
+        for unit_idx in range(n_units):
+            observed_mask = ~missing_mask[:, unit_idx]
+            observed_d = D[observed_mask, unit_idx]
+            if len(observed_d) > 1 and np.any(np.diff(observed_d) < 0):
+                violating_units.append(all_units[unit_idx])
 
-    if violating_units:
-        raise ValueError(
-            f"Treatment indicator is not an absorbing state for units: {violating_units}. "
-            f"D[t, unit] must be monotonic non-decreasing (once treated, always treated). "
-            f"If this is event-study style data, convert to absorbing state: "
-            f"D[t, i] = 1 for all t >= first treatment period."
-        )
+        if violating_units:
+            raise ValueError(
+                f"Treatment indicator is not an absorbing state for units: {violating_units}. "
+                f"D[t, unit] must be monotonic non-decreasing (once treated, always treated). "
+                f"If this is event-study style data with absorbing treatment, convert to "
+                f"absorbing state: D[t, i] = 1 for all t >= first treatment period. "
+                f"If treatment genuinely turns on and off (non-absorbing), pass "
+                f"non_absorbing=True (method='local' only; assumes no dynamic effects)."
+            )
 
     treated_mask = D == 1
     n_treated_obs = int(np.sum(treated_mask))
@@ -153,8 +245,28 @@ def _setup_trop_data(data, outcome, treatment, unit, time, resolved_survey, surv
     treated_unit_idx = np.where(unit_ever_treated)[0]
     control_unit_idx = np.where(~unit_ever_treated)[0]
 
-    if len(control_unit_idx) == 0:
-        raise ValueError("No control units found")
+    # Observed untreated cells. Structural panel gaps are filled with D=0
+    # (_validate_and_pivot_treatment), so identification checks under
+    # non_absorbing must exclude those filled cells (and non-finite outcomes):
+    # only an OBSERVED D=0 cell can serve as a control for the (1-W)
+    # counterfactual fit. A raw `D == 0` count would let an all-observed-treated
+    # unbalanced panel pass with no real control outcomes.
+    valid_control_mask = (D == 0) & (~missing_mask) & np.isfinite(Y)
+
+    if non_absorbing:
+        # General assignment identifies off untreated *cells* (the per-(i,t)
+        # estimator masks treated cells via (1-W) and fits the rest), so a fully
+        # toggling panel with no never-treated unit is still identified. Require
+        # at least one observed untreated cell.
+        if not np.any(valid_control_mask):
+            raise ValueError(
+                "No observed untreated (control) observations found; non_absorbing "
+                "TROP needs observed cells with D=0 (not structural panel gaps) to "
+                "impute the counterfactual."
+            )
+    else:
+        if len(control_unit_idx) == 0:
+            raise ValueError("No control units found")
 
     first_treat_period = None
     for t in range(n_periods):
@@ -168,7 +280,20 @@ def _setup_trop_data(data, outcome, treatment, unit, time, resolved_survey, surv
     n_pre_periods = first_treat_period
     n_post_periods = int(np.sum(np.any(D[first_treat_period:, :] == 1, axis=1)))
 
-    if n_pre_periods < 2:
+    if non_absorbing:
+        # "Leading all-control block" is ill-defined when treatment toggles, so
+        # the absorbing n_pre_periods>=2 guard does not apply. Require instead
+        # that at least 2 periods contain an OBSERVED untreated cell (a weak
+        # factor-model identifiability floor); finer donor-pool degeneracy is
+        # handled downstream by the LOOCV empty-control (Q=inf) and inf-distance
+        # guards.
+        n_periods_with_controls = int(np.sum(np.any(valid_control_mask, axis=1)))
+        if n_periods_with_controls < 2:
+            raise ValueError(
+                "Need at least 2 periods containing observed untreated "
+                "observations for non_absorbing TROP."
+            )
+    elif n_pre_periods < 2:
         raise ValueError("Need at least 2 pre-treatment periods")
 
     return {
@@ -1031,9 +1156,16 @@ class TROPLocalMixin:
         survey_design=None,
         unit_weight_arr: Optional[np.ndarray] = None,
         resolved_survey=None,
+        force_python: bool = False,
     ) -> Tuple[float, np.ndarray]:
         """
         Compute bootstrap standard error using unit-level block bootstrap.
+
+        ``force_python=True`` skips the Rust happy path so the cell-specific
+        estimability guard in ``_fit_with_fixed_lambda`` is applied per draw. The
+        point fit sets this whenever it trimmed any non-estimable treated cell
+        (the Rust per-cell tau path lacks the guard), keeping the bootstrap SE
+        and the point ATT on the same estimable-cell set.
 
         When the optional Rust backend is available and the matrix parameters
         (Y, D, control_unit_idx) are provided, uses parallelized Rust
@@ -1132,13 +1264,25 @@ class TROPLocalMixin:
         )
 
         # Try Rust backend for parallel bootstrap (5-15x speedup)
-        # Only used for pweight-only designs (no strata/PSU/FPC)
+        # Only used for pweight-only designs (no strata/PSU/FPC).
+        # Routed to the Python loop when the cell-specific estimability contract
+        # could diverge from Rust: (a) non_absorbing fits -- a fully non-absorbing
+        # panel can have zero never-treated units (empty control stratum -> Rust
+        # can return a degenerate ~0 SE), and the Rust per-cell tau path lacks the
+        # estimability guard; (b) force_python -- the point fit trimmed at least
+        # one non-estimable treated cell (e.g. an unbalanced absorbing panel), so
+        # the Rust path (no guard) would compute SE over a different cell set than
+        # the point ATT. The Python `_fit_with_fixed_lambda` enforces the guard
+        # per draw in both cases.
         if (
             HAS_RUST_BACKEND
             and _rust_bootstrap_trop_variance is not None
             and self._precomputed is not None
             and Y is not None
             and D is not None
+            and n_control_units > 0
+            and not getattr(self, "non_absorbing", False)
+            and not force_python
         ):
             try:
                 control_mask = self._precomputed["control_mask"]
@@ -1479,6 +1623,14 @@ class TROPLocalMixin:
                 Y, D, i, t, lambda_time, lambda_unit, control_unit_idx, n_units, n_periods
             )
 
+            # Skip non-estimable cells (same predicate as the main fit): if the
+            # target unit or target period has no weighted observed control cell,
+            # alpha_i / beta_t are unidentified and tau leaks the fixed effect,
+            # silently biasing the draw's ATT. A draw with no estimable cell
+            # returns NaN and is counted as a failed replicate.
+            if not _treated_cell_is_estimable(control_mask, Y, weight_matrix, i, t):
+                continue
+
             # Fit model with these weights
             alpha, beta, L = self._estimate_model(
                 Y,
@@ -1499,5 +1651,13 @@ class TROPLocalMixin:
         if not tau_values:
             return float("nan")
         if local_weight_arr is not None:
+            # Guard against a degenerate weighted draw: after non-estimable cells
+            # are skipped, the remaining estimable cells can all carry zero
+            # (rescaled survey / Rao-Wu) weight, which would make np.average raise
+            # ZeroDivisionError. Treat such a draw as failed (NaN) per the
+            # bootstrap NaN-on-degenerate contract.
+            weight_sum = float(np.sum(tau_weights))
+            if not np.isfinite(weight_sum) or weight_sum <= 0.0:
+                return float("nan")
             return float(np.average(tau_values, weights=tau_weights))
         return float(np.mean(tau_values))

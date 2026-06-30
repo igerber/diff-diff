@@ -588,7 +588,20 @@ class TROPGlobalMixin:
         across units, use `method="local"` which computes observation-specific
         weights that naturally handle heterogeneous timing.
         """
-        # Data setup (shared with local method via _setup_trop_data helper).
+        # The global method's post-hoc weighting and bootstrap bake in a
+        # contiguous, simultaneous treated block (see Notes above), which is
+        # incompatible with general on/off assignment. Non-absorbing support is
+        # local-method only (Athey et al. 2025 Eq. 12 / Algorithm 2).
+        if getattr(self, "non_absorbing", False):
+            raise ValueError(
+                "non_absorbing=True requires method='local'; the global method "
+                "requires block (simultaneous) treatment assignment. Use "
+                "TROP(method='local', non_absorbing=True) for on/off treatment."
+            )
+
+        # Data setup (shared with local method via _setup_trop_data helper). The
+        # global path always validates absorbing-state (non_absorbing=False); it
+        # additionally requires simultaneous block adoption (checked below).
         _ctx = _setup_trop_data(
             data, outcome, treatment, unit, time, resolved_survey, survey_design
         )
@@ -835,6 +848,9 @@ class TROPGlobalMixin:
             n_bootstrap=self.n_bootstrap,
             bootstrap_distribution=bootstrap_dist if len(bootstrap_dist) > 0 else None,
             survey_metadata=survey_metadata,
+            # Global method requires block assignment (non_absorbing=True is
+            # rejected at the top of _fit_global), so this is always absorbing.
+            non_absorbing=False,
         )
 
         self.is_fitted_ = True

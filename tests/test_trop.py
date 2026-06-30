@@ -8,6 +8,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from diff_diff import HAS_RUST_BACKEND
 from diff_diff.prep import generate_factor_data
 from diff_diff.trop import TROP, TROPResults, trop
 from diff_diff.trop_local import _run_trop_bootstrap_loop
@@ -909,6 +910,268 @@ class TestDMatrixValidation:
         assert "absorbing state" in error_msg
         assert "monotonic" in error_msg.lower() or "non-decreasing" in error_msg.lower()
         assert "D[t, i] = 1 for all t >= first treatment" in error_msg
+        # Also steers genuine on/off (non-absorbing) users to the opt-in.
+        assert "non_absorbing" in error_msg
+
+    @staticmethod
+    def _non_absorbing_df(seed=0, tau=3.0, n_units=14, n_periods=8):
+        """Small TWFE-clean panel with on/off (non-monotonic) treatment."""
+        rng = np.random.default_rng(seed)
+        alpha = rng.normal(0.0, 1.0, n_units)
+        beta = rng.normal(0.0, 1.0, n_periods)
+        rows = []
+        for i in range(n_units):
+            d = np.zeros(n_periods, dtype=int)
+            if i % 4 == 0 and i > 0:
+                d[4:6] = 1  # on then off (non-absorbing)
+            elif i % 3 == 0:
+                d[5:] = 1  # absorbing block
+            for t in range(n_periods):
+                y0 = alpha[i] + beta[t] + rng.normal(0.0, 0.05)
+                rows.append(
+                    {
+                        "unit": i,
+                        "period": t,
+                        "outcome": y0 + (tau if d[t] == 1 else 0.0),
+                        "treated": int(d[t]),
+                    }
+                )
+        return pd.DataFrame(rows)
+
+    @pytest.mark.slow
+    def test_non_absorbing_opt_in_accepted(self):
+        """TROP(non_absorbing=True) accepts a non-monotonic D and returns a
+        finite ATT instead of raising (the default still rejects -- see
+        test_d_matrix_absorbing_state_validation_invalid).
+        """
+        df = self._non_absorbing_df(seed=0, tau=3.0)
+        est = TROP(
+            method="local",
+            non_absorbing=True,
+            lambda_time_grid=[0.0],
+            lambda_unit_grid=[0.0],
+            lambda_nn_grid=[0.1],
+            n_bootstrap=2,
+            seed=42,
+        )
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")  # caveat warning asserted elsewhere
+            results = est.fit(df, "outcome", "treated", "unit", "period")
+        assert isinstance(results, TROPResults)
+        assert np.isfinite(results.att)
+
+    def test_non_absorbing_global_method_raises(self):
+        """non_absorbing=True is local-only; the global method must raise."""
+        df = self._non_absorbing_df(seed=1)
+        est = TROP(
+            method="global",
+            non_absorbing=True,
+            lambda_time_grid=[0.0],
+            lambda_unit_grid=[0.0],
+            lambda_nn_grid=[0.1],
+            n_bootstrap=2,
+        )
+        with pytest.raises(ValueError, match="(?i)non_absorbing.*local|local.*non_absorbing"):
+            est.fit(df, "outcome", "treated", "unit", "period")
+
+    def test_non_absorbing_param_round_trip_and_validation(self):
+        """non_absorbing round-trips through get_params/set_params and rejects
+        non-bool values in both __init__ and set_params.
+        """
+        est = TROP(non_absorbing=True)
+        assert est.get_params()["non_absorbing"] is True
+        est.set_params(non_absorbing=False)
+        assert est.non_absorbing is False
+        with pytest.raises(ValueError, match="non_absorbing must be a bool"):
+            TROP(non_absorbing="yes")  # type: ignore[arg-type]
+        with pytest.raises(ValueError, match="non_absorbing must be a bool"):
+            TROP().set_params(non_absorbing=1)  # type: ignore[arg-type]
+
+    @pytest.mark.slow
+    @pytest.mark.skipif(not HAS_RUST_BACKEND, reason="Rust backend not available")
+    def test_non_absorbing_rust_python_parity(self):
+        """The Rust local path is absorbing-agnostic: on a non-absorbing panel
+        it produces the same ATT as the forced-Python path (single-point grids
+        remove lambda-selection ambiguity, so only solver roundoff remains).
+        """
+        # The package re-exports the ``trop`` function, shadowing the submodule
+        # attribute, so reach the modules via sys.modules (matches the idiom used
+        # by the other Rust-toggle tests in this file).
+        trop_mod = sys.modules["diff_diff.trop"]
+        trop_local_mod = sys.modules["diff_diff.trop_local"]
+
+        df = self._non_absorbing_df(seed=3, tau=3.0)
+        kwargs = dict(
+            method="local",
+            non_absorbing=True,
+            lambda_time_grid=[0.0],
+            lambda_unit_grid=[0.0],
+            lambda_nn_grid=[0.1],
+            n_bootstrap=2,
+            seed=7,
+        )
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            att_rust = TROP(**kwargs).fit(df, "outcome", "treated", "unit", "period").att
+            with (
+                patch.object(trop_mod, "HAS_RUST_BACKEND", False),
+                patch.object(trop_local_mod, "HAS_RUST_BACKEND", False),
+            ):
+                att_py = TROP(**kwargs).fit(df, "outcome", "treated", "unit", "period").att
+        assert np.isfinite(att_rust) and np.isfinite(att_py)
+        np.testing.assert_allclose(att_rust, att_py, atol=1e-6, rtol=1e-6)
+
+    def test_non_absorbing_rejects_no_observed_untreated_cells(self):
+        """non_absorbing identification needs OBSERVED untreated cells. An
+        unbalanced panel whose only D=0 cells are structural gaps (every observed
+        row is treated) must raise before LOOCV/default fallback, not fit on
+        raw-outcome residuals. Guards against the missing-cell-fill loophole.
+        """
+        # Every observed row treated=1; ~half the (unit, period) cells dropped so
+        # all 4 periods still appear in the pivot and the missing cells fill to
+        # D=0 (with NaN outcomes).
+        rows = []
+        for i in range(6):
+            for t in range(4):
+                if (i + t) % 2 == 0:  # keep ~half -> unbalanced
+                    rows.append(
+                        {"unit": i, "period": t, "outcome": float(i) * 0.1 + t, "treated": 1}
+                    )
+        df = pd.DataFrame(rows)
+        est = TROP(
+            method="local",
+            non_absorbing=True,
+            lambda_time_grid=[0.0],
+            lambda_unit_grid=[0.0],
+            lambda_nn_grid=[0.1],
+            n_bootstrap=2,
+            seed=1,
+        )
+        with pytest.raises(ValueError, match="(?i)no observed untreated"):
+            est.fit(df, "outcome", "treated", "unit", "period")
+
+    def test_non_absorbing_rejects_single_control_period(self):
+        """non_absorbing requires >=2 periods with an observed untreated cell.
+        A panel with exactly one such period must raise (factor-model
+        identifiability floor), counting only OBSERVED untreated cells.
+        """
+        # Balanced panel, every cell treated except one observed untreated cell
+        # at (unit 0, period 0) -> only one period has an untreated observation.
+        rows = []
+        for i in range(6):
+            for t in range(5):
+                treated = 0 if (i == 0 and t == 0) else 1
+                rows.append(
+                    {"unit": i, "period": t, "outcome": float(i) * 0.1 + t, "treated": treated}
+                )
+        df = pd.DataFrame(rows)
+        est = TROP(
+            method="local",
+            non_absorbing=True,
+            lambda_time_grid=[0.0],
+            lambda_unit_grid=[0.0],
+            lambda_nn_grid=[0.1],
+            n_bootstrap=2,
+            seed=1,
+        )
+        with pytest.raises(ValueError, match="(?i)2 periods .* observed untreated"):
+            est.fit(df, "outcome", "treated", "unit", "period")
+
+    @pytest.mark.slow
+    def test_non_absorbing_recorded_on_results(self):
+        """The assignment scope is persisted on TROPResults / to_dict() so a
+        saved result retains the non-absorbing + inference-caveat context after
+        the fit-time warning is gone.
+        """
+        grid = dict(
+            lambda_time_grid=[0.0],
+            lambda_unit_grid=[0.0],
+            lambda_nn_grid=[0.1],
+            n_bootstrap=2,
+            seed=1,
+        )
+        df = self._non_absorbing_df(seed=0, tau=3.0)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            res = TROP(method="local", non_absorbing=True, **grid).fit(
+                df, "outcome", "treated", "unit", "period"
+            )
+        assert res.non_absorbing is True
+        assert res.to_dict()["non_absorbing"] is True
+
+        # Default (absorbing) fit records False.
+        abs_rows = []
+        for i in range(12):
+            g = 4 if i < 6 else None
+            for t in range(8):
+                d = 1 if (g is not None and t >= g) else 0
+                abs_rows.append(
+                    {
+                        "unit": i,
+                        "period": t,
+                        "outcome": float(i) * 0.1 + 0.2 * t + (2.0 if d else 0.0),
+                        "treated": d,
+                    }
+                )
+        res_abs = TROP(method="local", **grid).fit(
+            pd.DataFrame(abs_rows), "outcome", "treated", "unit", "period"
+        )
+        assert res_abs.non_absorbing is False
+        assert res_abs.to_dict()["non_absorbing"] is False
+
+    @pytest.mark.slow
+    @pytest.mark.skipif(not HAS_RUST_BACKEND, reason="Rust backend not available")
+    def test_unbalanced_panel_bootstrap_uses_python_guard(self):
+        """On an UNBALANCED panel (default absorbing here), the point fit may be
+        fully estimable, yet a bootstrap resample can lose a treated cell's only
+        control support. The Rust bootstrap lacks the estimability guard, so the
+        fit must route the bootstrap to the guarded Python path whenever the panel
+        has missing cells -- locking the force_python condition. Balanced panels
+        keep the Rust happy path (covered elsewhere).
+        """
+        rng = np.random.default_rng(5)
+        rows = []
+        for i in range(12):
+            g = 4 if i < 4 else (6 if i < 8 else None)  # 4 never-treated controls
+            for t in range(8):
+                d = 1 if (g is not None and t >= g) else 0
+                rows.append(
+                    {
+                        "unit": i,
+                        "period": t,
+                        "outcome": float(i) * 0.1
+                        + 0.2 * t
+                        + rng.normal(0, 0.05)
+                        + (2.0 if d else 0.0),
+                        "treated": d,
+                    }
+                )
+        df = pd.DataFrame(rows)
+        # Drop a few control rows -> unbalanced, but leave ample support so the
+        # point fit trims nothing (isolates the missing-cell trigger).
+        ctrl = df.index[df["treated"] == 0].to_numpy()
+        drop = rng.choice(ctrl, size=max(1, int(0.06 * len(ctrl))), replace=False)
+        df = df.drop(index=drop).reset_index(drop=True)
+
+        est = TROP(
+            method="local",
+            lambda_time_grid=[0.0],
+            lambda_unit_grid=[0.0],
+            lambda_nn_grid=[0.1],
+            n_bootstrap=3,
+            seed=1,
+        )
+        trop_local_mod = sys.modules["diff_diff.trop_local"]
+        with patch.object(trop_local_mod, "_rust_bootstrap_trop_variance") as mock_rust:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                res = est.fit(df, "outcome", "treated", "unit", "period")
+        # The Rust bootstrap must NOT be used for an unbalanced panel.
+        mock_rust.assert_not_called()
+        # The point fit itself trimmed nothing (so the trigger was the missing
+        # cells, not point-fit non-estimability).
+        assert all(np.isfinite(v) for v in res.treatment_effects.values())
+        assert np.isfinite(res.att) and np.isfinite(res.se)
 
 
 @pytest.mark.slow
@@ -3360,6 +3623,71 @@ class TestTROPBootstrapFailureRateGuard:
             lonely_psu="remove",
         )
         return df, survey_design, resolved_survey
+
+    def test_non_absorbing_rao_wu_zero_estimable_weight_is_nan_not_crash(self):
+        """Survey Rao-Wu bootstrap after non-estimable trimming: a draw whose
+        nonzero rescaled weight lands only on a skipped (non-estimable) unit
+        leaves the estimable treated cells with zero total weight. np.average
+        would raise ZeroDivisionError; the guard must return NaN for that draw so
+        the bootstrap stays NaN-safe (no crash) per the contract.
+        """
+        from unittest.mock import patch
+
+        from diff_diff import SurveyDesign
+
+        # unit 0: always treated (non-estimable). units 1,2: treated at periods
+        # 4,5. units 3,4,5: never-treated controls (so periods 4,5 are NOT fully
+        # treated and units 1,2 have estimable cells).
+        rows = []
+        for i in range(6):
+            for t in range(6):
+                if i == 0:
+                    d = 1
+                elif i in (1, 2):
+                    d = 1 if t >= 4 else 0
+                else:
+                    d = 0
+                rows.append(
+                    {
+                        "unit": i,
+                        "period": t,
+                        "outcome": float(i) + t + (2.0 if d else 0.0),
+                        "treated": d,
+                        "weight": 1.0,
+                        "psu": i,
+                    }
+                )
+        df = pd.DataFrame(rows)
+        survey_design = SurveyDesign(weights="weight", psu="psu")
+
+        # Per-unit Rao-Wu draw: nonzero weight only on unit 0 (always-treated,
+        # skipped); estimable units 1,2 get zero -> zero estimable-cell weight.
+        zero_estimable = np.zeros(6, dtype=np.float64)
+        zero_estimable[0] = 1.0
+
+        est = TROP(
+            method="local",
+            non_absorbing=True,
+            lambda_time_grid=[0.0],
+            lambda_unit_grid=[0.0],
+            lambda_nn_grid=[0.1],
+            n_bootstrap=3,
+            seed=1,
+        )
+        with patch(
+            "diff_diff.bootstrap_utils.generate_rao_wu_weights",
+            return_value=zero_estimable,
+        ):
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                # Must not raise ZeroDivisionError.
+                res = est.fit(
+                    df, "outcome", "treated", "unit", "period", survey_design=survey_design
+                )
+        # Point fit (original unit weights) is estimable; bootstrap draws all
+        # degenerate -> SE is NaN, not a crash.
+        assert np.isfinite(res.att)
+        assert np.isnan(res.se)
 
     def test_local_rao_wu_bootstrap_warns_above_5pct_failure(self):
         """Local Rao-Wu survey bootstrap: forced failures → proportional warn."""

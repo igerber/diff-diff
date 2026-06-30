@@ -531,12 +531,21 @@ When `has_never_treated == False`:
 
 When `treatment_type == "binary_non_absorbing"`:
 
-- `ChaisemartinDHaultfoeuille` is the only estimator in the library
-  that treats this natively. Switcher / non-switcher comparisons are
-  its primitive object.
-- Other estimators assume absorbing treatment and will produce
-  estimates whose interpretation is unclear. Do not use them without
-  a well-argued reason.
+- `ChaisemartinDHaultfoeuille` is the most general / default choice and
+  treats this natively. Switcher / non-switcher comparisons are its
+  primitive object; it allows dynamic (carryover) effects and reports
+  joiner/leaver (`DID_+` / `DID_-`) views. Prefer it when effects may
+  persist after treatment turns off.
+- `LPDiD(non_absorbing="first_entry")` or `"effect_stabilization"`
+  (entry-effect estimands) and `TROP(non_absorbing=True, method="local")`
+  (valid under a no-dynamic-effects / no-carryover assumption) also handle
+  non-absorbing treatment, under stronger assumptions. Use TROP's option
+  only when effects are contemporaneous (no carryover).
+- The remaining estimators (`CallawaySantAnna`, `SunAbraham`,
+  `ImputationDiD`, `TwoStageDiD`, `EfficientDiD`, `WooldridgeDiD`) assume
+  absorbing treatment and will produce estimates whose interpretation is
+  unclear on non-absorbing data. Do not use them without a well-argued
+  reason.
 
 ### §4.6 Triple-difference design (DDD)
 

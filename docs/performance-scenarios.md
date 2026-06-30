@@ -259,8 +259,9 @@ serves a different purpose: R-parity accuracy). They complement it.
 
 - **Persona / domain.** Marketing analyst measuring an always-on-with-
   dark-periods campaign, or a health-policy researcher studying a policy
-  that switches on and off. Reversible treatment breaks every other
-  staggered estimator; dCDH is the only option.
+  that switches on and off. Reversible treatment breaks the absorbing-only
+  staggered estimators; dCDH is the most general fit (LPDiD/TROP `non_absorbing`
+  also handle it under stronger assumptions).
 - **Data shape.** 120 groups x 10 periods, single-switch pattern per group,
   ~40% always-control, survey-weighted with 8 strata and 24 PSUs. Larger
   than the Tutorial's 80 x 6 demo to expose the `L_max` multi-horizon

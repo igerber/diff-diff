@@ -5,7 +5,7 @@
 **PDF reviewed:** https://arxiv.org/abs/2508.21536v2 (version-pinned arXiv abstract for v2)
 **Review date:** 2026-02-08
 
-**Version-pinning note (2026-05-25):** The current arXiv version of arXiv:2508.21536 is **v3** (submitted 2026-02-09). The 2026-05-24 methodology promotion ships against this v2-pinned review; a formal v2-vs-v3 delta-check against the v3 PDF for TROP-relevant methodology changes (Eqs. 2-3, Algorithms 1-3, Section 2.2, Section 5.2-5.3, Section 6.1-6.2, Theorem 5.1, Corollary 1, Appendix Theorem 8.1) has **NOT** been performed.
+**Version-pinning note (2026-05-25):** The current arXiv version of arXiv:2508.21536 is **v3** (submitted 2026-02-09). The 2026-05-24 methodology promotion ships against this v2-pinned review; a formal v2-vs-v3 delta-check against the v3 PDF for TROP-relevant methodology changes (Eqs. 2-3, Algorithms 1-3, Section 2.2, Section 5.2-5.3, Section 6.1-6.2, Theorem 5.1, Corollary 1, Appendix Theorem 8.1) has **NOT** been performed in full. **Update (non-absorbing support work):** the v3 PDF was consulted for the treatment-assignment-pattern sections (§2.1 general assignment, §2.2 Eq. 2 masking, §6.1 Eq. 12 / Algorithm 2, Assumption 1(i), Theorem 5.1) and confirms the general-assignment scope on which `TROP(non_absorbing=True)` is built; the remaining sections of the delta-check stay deferred.
 
 **Action item**: before the next paper-author reference implementation or substantive v3 release, refresh this review against the most recent arXiv version, perform a real v2→v3 PDF delta audit, and re-validate that the verified-component checklist still maps cleanly. Pending that refresh, the methodology promotion is anchored on v2 as documented here.
 
@@ -283,9 +283,9 @@ Note: Stratified bootstrap -- control and treated units resampled separately. Pr
 - **Outcome matrix**: Y (N x T), observed outcomes
 - **Treatment matrix**: W (N x T), binary treatment assignments where `W_it in {0, 1}`
 - **Covariates** (optional): X_it, observed covariates for each unit-period pair
-- Treatment must be an absorbing state for standard block assignment (W_it = 1{i > N_0} * 1{t > T_0})
-- **Paper scope (Equation 13):** the paper extends TROP to general assignment patterns including treatment switching on/off.
-- **Shipped implementation:** the current `diff_diff/trop.py` requires an absorbing-state treatment indicator and rejects non-absorbing/event-style inputs (gate in `diff_diff/trop.py:505-525`, also documented in `docs/methodology/REGISTRY.md` under TROP). Generalization to non-absorbing patterns is not in scope for the current implementation.
+- Treatment is an absorbing state for standard block assignment (W_it = 1{i > N_0} * 1{t > T_0}); this is the default mode.
+- **Paper scope (Equation 13 / Section 6.1):** the paper extends TROP to general assignment patterns including treatment switching on/off (§2.1: "units moving into and out of treatment").
+- **Shipped implementation:** `diff_diff/trop.py` accepts general (on/off) assignment via the opt-in `TROP(non_absorbing=True)` (`method='local'` only), matching the paper's scope. The default `non_absorbing=False` retains the absorbing-state monotonicity gate (in `diff_diff/trop_local.py::_setup_trop_data`, around `trop_local.py:131-144`) as a defensive guard against event-style mis-encoding; it rejects non-monotonic D with a `ValueError` that also points to the opt-in. See `docs/methodology/REGISTRY.md` under TROP for the no-dynamic-effects requirement and the block-only inference caveat (Theorem 5.1 is proven under Assumption 1(i) block assignment only). Removing the opt-in restriction *narrows* a prior implementation over-restriction; the global method still requires block assignment and rejects `non_absorbing=True`.
 
 ### Computational Considerations
 - **Main bottleneck**: LOOCV grid search -- for each grid point, every control observation requires a separate nuclear-norm penalized weighted least squares solve

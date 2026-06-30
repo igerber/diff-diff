@@ -2423,3 +2423,435 @@ class TestTROPDeviations:
                     "conf_int": conf_int,
                 }
             )
+
+    # ------------------------------------------------------------------
+    # Non-absorbing (general assignment) support — Eq. 1 / Eq. 12 /
+    # Algorithm 2, Section 6.1. The paper's estimator handles general
+    # assignment patterns ("units moving into and out of treatment"),
+    # not only absorbing/staggered adoption (§2.1). The library exposes
+    # this via the opt-in TROP(non_absorbing=True); the default still
+    # rejects non-monotonic D (covered in test_trop.py::TestDMatrixValidation
+    # and test_event_style_d_rejected_with_value_error above).
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _make_non_absorbing_panel(seed=0, tau=3.0, n_units=16, n_periods=8, all_toggle=False):
+        """TWFE-clean panel with on/off (non-absorbing) treatment, no dynamic effects.
+
+        Y_it(0) = alpha_i + beta_t + noise; Y_it(1) = Y_it(0) + tau. Some units
+        switch treatment on and then off again, so D is non-monotonic.
+        """
+        rng = np.random.default_rng(seed)
+        alpha = rng.normal(0.0, 1.0, n_units)
+        beta = rng.normal(0.0, 1.0, n_periods)
+        rows = []
+        for i in range(n_units):
+            d = np.zeros(n_periods, dtype=int)
+            if all_toggle:
+                on = 3 + (i % 2)
+                d[on : on + 2] = 1  # every unit treated on an interior block
+            elif i % 4 == 0 and i > 0:
+                d[4:6] = 1  # on then off (non-absorbing)
+            elif i % 3 == 0:
+                d[5:] = 1  # absorbing block (mix of patterns)
+            for t in range(n_periods):
+                y0 = alpha[i] + beta[t] + rng.normal(0.0, 0.05)
+                rows.append(
+                    {
+                        "unit": i,
+                        "period": t,
+                        "outcome": y0 + (tau if d[t] == 1 else 0.0),
+                        "treated": int(d[t]),
+                    }
+                )
+        return pd.DataFrame(rows)
+
+    @pytest.mark.slow
+    def test_non_absorbing_general_assignment_supported(self):
+        """TROP(non_absorbing=True) accepts on/off treatment and recovers the
+        ATT on a no-dynamic-effects DGP (Eq. 1 averages over all D=1 cells;
+        Eq. 12 / Algorithm 2 masks treated cells per (i, t)). A caveat
+        ``UserWarning`` is emitted because Theorem 5.1's guarantee is proven
+        only under block assignment.
+        """
+        tau = 3.0
+        df = self._make_non_absorbing_panel(seed=0, tau=tau)
+        n_treated_cells = int(df["treated"].to_numpy().sum())
+        # Sanity: the panel really is non-absorbing (some unit goes 1 -> 0).
+        treated_wide = df.pivot(index="period", columns="unit", values="treated").to_numpy()
+        assert bool(
+            (np.diff(treated_wide, axis=0) < 0).any()
+        ), "test panel must contain a 1->0 transition"
+
+        est = TROP(
+            method="local",
+            non_absorbing=True,
+            lambda_time_grid=[0.0],
+            lambda_unit_grid=[0.0],
+            lambda_nn_grid=[0.1],
+            n_bootstrap=2,
+            seed=1,
+        )
+        with pytest.warns(UserWarning, match="(?i)non_absorbing.*Theorem 5.1"):
+            res = est.fit(df, "outcome", "treated", "unit", "period")
+
+        # Estimand: ATT averages the per-cell effects over all D=1 cells (Eq. 1).
+        assert np.isfinite(res.att)
+        assert abs(res.att - tau) < 0.5, f"ATT {res.att} should recover tau={tau}"
+        # One finite per-cell effect per treated cell (Eq. 12 / Algorithm 2).
+        assert len(res.treatment_effects) == n_treated_cells
+        assert all(np.isfinite(v) for v in res.treatment_effects.values())
+
+    def test_non_absorbing_no_caveat_in_default_mode(self):
+        """The non-absorbing caveat warning fires ONLY for non_absorbing=True;
+        a default (absorbing) fit must not emit it.
+        """
+        # Absorbing staggered panel (monotonic per unit).
+        rows = []
+        for i in range(12):
+            g = 4 if i < 3 else (6 if i < 6 else None)
+            for t in range(8):
+                d = 1 if (g is not None and t >= g) else 0
+                rows.append(
+                    {
+                        "unit": i,
+                        "period": t,
+                        "outcome": float(i) * 0.1 + float(t) * 0.2 + (2.0 if d else 0.0),
+                        "treated": d,
+                    }
+                )
+        df = pd.DataFrame(rows)
+        est = TROP(
+            method="local",
+            lambda_time_grid=[0.0],
+            lambda_unit_grid=[0.0],
+            lambda_nn_grid=[0.1],
+            n_bootstrap=2,
+            seed=1,
+        )
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            est.fit(df, "outcome", "treated", "unit", "period")
+        assert not any(
+            "non_absorbing" in str(w.message) for w in caught
+        ), "default (absorbing) mode must not emit the non_absorbing caveat"
+
+    @pytest.mark.slow
+    def test_non_absorbing_unbalanced_panel_supported(self):
+        """Non-absorbing support tolerates unbalanced panels (random missing
+        control cells) and still returns a finite ATT.
+        """
+        df = self._make_non_absorbing_panel(seed=7, tau=3.0)
+        # Drop 10% of untreated rows at random (missing control observations).
+        rng = np.random.default_rng(11)
+        control_rows = df.index[df["treated"] == 0].to_numpy()
+        drop = rng.choice(control_rows, size=int(0.1 * len(control_rows)), replace=False)
+        df_unbalanced = df.drop(index=drop).reset_index(drop=True)
+
+        est = TROP(
+            method="local",
+            non_absorbing=True,
+            lambda_time_grid=[0.0],
+            lambda_unit_grid=[0.0],
+            lambda_nn_grid=[0.1],
+            n_bootstrap=2,
+            seed=1,
+        )
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            res = est.fit(df_unbalanced, "outcome", "treated", "unit", "period")
+        assert np.isfinite(res.att)
+        assert np.isfinite(res.se)
+
+    @pytest.mark.slow
+    @pytest.mark.parametrize("lambda_unit", [0.0, 1.0])
+    def test_non_absorbing_always_treated_unit_not_raw_outcome(self, lambda_unit):
+        """A treated cell whose UNIT has no observed control cell leaves ``alpha_i``
+        unidentified, so its tau would silently leak the unit fixed effect (a
+        raw-outcome-like value). Such cells must be marked non-estimable (NaN).
+        This holds for BOTH ``lambda_unit=0`` (uniform unit weights still give the
+        always-treated unit no own control row) and ``lambda_unit>0`` (inf
+        distance -> zero donor weights). Estimable cells still recover the effect
+        and the bootstrap SE stays finite.
+
+        Locks the documented behavior (REGISTRY ## TROP "non-absorbing
+        non-estimable-cell trimming" Note): the ATT is the mean over estimable
+        treated cells (library-wide non-estimable->NaN convention).
+        """
+        rng = np.random.default_rng(0)
+        n_units, n_periods, tau = 8, 8, 5.0
+        alpha = rng.normal(0.0, 1.0, n_units)
+        alpha[0] = 10.0  # large unit-0 FE so any leak is unmistakable
+        beta = rng.normal(0.0, 1.0, n_periods)
+        rows = []
+        for i in range(n_units):
+            for t in range(n_periods):
+                if i == 0:
+                    d = 1  # always-treated: no untreated history
+                elif i % 3 == 0:
+                    d = 1 if 4 <= t <= 5 else 0  # on/off
+                else:
+                    d = 1 if t >= 6 else 0  # untreated history present
+                y0 = alpha[i] + beta[t] + rng.normal(0.0, 0.05)
+                rows.append(
+                    {
+                        "unit": i,
+                        "period": t,
+                        "outcome": y0 + (tau if d else 0.0),
+                        "treated": int(d),
+                    }
+                )
+        df = pd.DataFrame(rows)
+        est = TROP(
+            method="local",
+            non_absorbing=True,
+            lambda_time_grid=[0.0],
+            lambda_unit_grid=[lambda_unit],
+            lambda_nn_grid=[0.1],
+            n_bootstrap=3,
+            seed=1,
+        )
+        with pytest.warns(UserWarning, match="(?i)not estimable"):
+            res = est.fit(df, "outcome", "treated", "unit", "period")
+
+        # Every cell of the always-treated unit is non-estimable (NaN), never a
+        # fixed-effect-contaminated raw outcome (alpha_0 = 10 would leak otherwise).
+        raw_y = {
+            t: float(df[(df.unit == 0) & (df.period == t)]["outcome"].iloc[0])
+            for t in range(n_periods)
+        }
+        u0 = {k: v for k, v in res.treatment_effects.items() if k[0] == 0}
+        assert len(u0) == n_periods
+        for (_, t), v in u0.items():
+            assert np.isnan(v), f"cell(0,{t}) should be NaN, got {v}"
+            assert not np.isclose(v, raw_y[t]), "tau must not equal raw outcome"
+
+        # Estimable cells (other units) remain finite and aggregate near the truth.
+        assert np.isfinite(res.att)
+        assert np.isfinite(res.se)
+        assert abs(res.att - tau) < 0.6
+
+    @pytest.mark.slow
+    def test_non_absorbing_fully_treated_period_not_estimable(self):
+        """A period in which EVERY unit is treated has no control cell, so
+        ``beta_t`` is unidentified and that period's tau would leak the time fixed
+        effect. Those cells must be NaN (non-estimable), not finite raw-outcome
+        values; treated cells in other periods still recover the effect.
+        """
+        rng = np.random.default_rng(1)
+        n_units, n_periods, tau, hot = 8, 8, 3.0, 4
+        alpha = rng.normal(0.0, 1.0, n_units)
+        beta = rng.normal(0.0, 1.0, n_periods)
+        beta[hot] = 20.0  # large period-`hot` FE so any leak is unmistakable
+        rows = []
+        for i in range(n_units):
+            for t in range(n_periods):
+                if t == hot:
+                    d = 1  # every unit treated at `hot` -> no control at that period
+                elif i % 2 == 0:
+                    d = 1 if t >= 6 else 0
+                else:
+                    d = 1 if 1 <= t <= 2 else 0
+                y0 = alpha[i] + beta[t] + rng.normal(0.0, 0.05)
+                rows.append(
+                    {
+                        "unit": i,
+                        "period": t,
+                        "outcome": y0 + (tau if d else 0.0),
+                        "treated": int(d),
+                    }
+                )
+        df = pd.DataFrame(rows)
+        # Sanity: period `hot` is fully treated.
+        assert bool((df[df.period == hot]["treated"].to_numpy() == 1).all())
+        est = TROP(
+            method="local",
+            non_absorbing=True,
+            lambda_time_grid=[0.0],
+            lambda_unit_grid=[0.0],
+            lambda_nn_grid=[0.1],
+            n_bootstrap=3,
+            seed=1,
+        )
+        with pytest.warns(UserWarning, match="(?i)not estimable"):
+            res = est.fit(df, "outcome", "treated", "unit", "period")
+
+        hot_cells = {k: v for k, v in res.treatment_effects.items() if k[1] == hot}
+        assert len(hot_cells) == n_units
+        for k, v in hot_cells.items():
+            assert np.isnan(v), f"fully-treated-period cell {k} should be NaN, got {v}"
+        # Treated cells in other (estimable) periods still recover the effect.
+        assert np.isfinite(res.att)
+        assert np.isfinite(res.se)
+        assert abs(res.att - tau) < 0.6
+
+    @pytest.mark.slow
+    def test_non_absorbing_fully_toggling_no_never_treated_unit(self):
+        """non_absorbing admits a fully toggling panel with NO never-treated unit
+        (every unit is treated at some point but retains observed untreated
+        cells). Identification falls back to untreated cells, and the bootstrap
+        runs via the Python path (the Rust stratified resampler can return a
+        degenerate ~0 SE on an empty control stratum). Asserts admission + finite
+        ATT/SE + recovery.
+        """
+        tau = 4.0
+        df = self._make_non_absorbing_panel(seed=2, tau=tau, all_toggle=True)
+        # Sanity: no never-treated unit (every unit treated at some period).
+        assert bool((df.groupby("unit")["treated"].max().to_numpy() == 1).all())
+        est = TROP(
+            method="local",
+            non_absorbing=True,
+            lambda_time_grid=[0.0],
+            lambda_unit_grid=[0.0],
+            lambda_nn_grid=[0.1],
+            n_bootstrap=3,
+            seed=1,
+        )
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            res = est.fit(df, "outcome", "treated", "unit", "period")
+        assert np.isfinite(res.att)
+        assert np.isfinite(res.se)
+        assert res.se > 0  # not a degenerate empty-stratum ~0 SE
+        assert abs(res.att - tau) < 0.6
+
+    @pytest.mark.slow
+    def test_unbalanced_absorbing_unidentified_unit_not_estimable(self):
+        """The estimability guard applies to DEFAULT (absorbing) local fits too,
+        not only non_absorbing. On an unbalanced absorbing panel where a treated
+        unit's pre-treatment rows are entirely missing, that unit has no observed
+        control cell, so ``alpha_i`` is unidentified; its cells must be NaN (the
+        prior behavior silently reported a fixed-effect-contaminated tau), while
+        the rest of the panel is estimated normally. ``non_absorbing=False``.
+        """
+        rng = np.random.default_rng(3)
+        n_periods, tau = 6, 4.0
+        beta = rng.normal(0.0, 1.0, n_periods)
+        rows = []
+        # Never-treated controls (units 0-2), observed all periods.
+        for i in range(3):
+            a = rng.normal(0.0, 1.0)
+            for t in range(n_periods):
+                rows.append(
+                    {
+                        "unit": i,
+                        "period": t,
+                        "outcome": a + beta[t] + rng.normal(0, 0.05),
+                        "treated": 0,
+                    }
+                )
+        # Well-observed treated unit (unit 3), adopts at t=4, full pre-history.
+        a3 = rng.normal(0.0, 1.0)
+        for t in range(n_periods):
+            d = 1 if t >= 4 else 0
+            rows.append(
+                {
+                    "unit": 3,
+                    "period": t,
+                    "outcome": a3 + beta[t] + rng.normal(0, 0.05) + (tau if d else 0),
+                    "treated": d,
+                }
+            )
+        # Pathological treated unit (unit 4): adopts at t=3 but ONLY observed at
+        # its treated periods 3,4,5 -- pre-treatment rows 0,1,2 are MISSING, so it
+        # has no observed control cell and alpha_4 is unidentified.
+        a4 = rng.normal(0.0, 1.0)
+        a4 += 12.0  # large FE so any leak into tau would be unmistakable
+        for t in (3, 4, 5):
+            rows.append(
+                {
+                    "unit": 4,
+                    "period": t,
+                    "outcome": a4 + beta[t] + rng.normal(0, 0.05) + tau,
+                    "treated": 1,
+                }
+            )
+        df = pd.DataFrame(rows)
+
+        est = TROP(
+            method="local",  # non_absorbing defaults to False (absorbing)
+            lambda_time_grid=[0.0],
+            lambda_unit_grid=[0.0],
+            lambda_nn_grid=[0.1],
+            n_bootstrap=3,
+            seed=1,
+        )
+        with pytest.warns(UserWarning, match="(?i)not estimable"):
+            res = est.fit(df, "outcome", "treated", "unit", "period")
+
+        # Unit 4's treated cells are NaN (alpha_4 unidentified), never a leaked FE.
+        u4 = {k: v for k, v in res.treatment_effects.items() if k[0] == 4}
+        assert len(u4) == 3
+        for k, v in u4.items():
+            assert np.isnan(v), f"unidentified-unit cell {k} should be NaN, got {v}"
+        # Unit 3 (well-observed) is estimated and recovers the effect.
+        u3 = [v for k, v in res.treatment_effects.items() if k[0] == 3 and np.isfinite(v)]
+        assert len(u3) > 0
+        assert np.isfinite(res.att)
+        assert abs(res.att - tau) < 0.6
+
+    @pytest.mark.slow
+    def test_non_absorbing_disconnected_support_not_estimable(self):
+        """Strict two-way-FE identification: ``alpha_i + beta_t`` is pinned only
+        within a connected component of the observed-control bipartite graph. A
+        treated cell whose target unit and target period fall in DIFFERENT
+        components is non-estimable even though both have *some* control support
+        (the marginal row/column check would wrongly pass it). Such cells must be
+        NaN, not a finite cross-component FE-contaminated value.
+
+        Construction (periods 0-5): component A = units {0,1,2} whose untreated
+        periods rotate within {0,1,2,3} (so A's control graph connects periods
+        0-3 and units 0-2 into one component, with estimable treated cells inside
+        it); component B = units {3,4} untreated only at periods {4,5}. A and B
+        share no unit or period, so they are disconnected. Target cell (unit 0,
+        period 4): unit 0 in A, period 4 in B -> alpha_0 + beta_4 unidentified ->
+        NaN. A large beta_4 makes any cross-component leak unmistakable; component
+        A still yields a finite ATT.
+        """
+        rng = np.random.default_rng(0)
+        n_periods, tau = 6, 3.0
+        alpha = np.array([0.0, 1.0, 2.0, 5.0, 6.0])
+        beta = np.zeros(n_periods)
+        beta[4] = 20.0
+        # untreated-period sets: component A rotates within {0..3} and is treated
+        # at {4,5}; component B is untreated only at {4,5}.
+        untreated = {
+            0: {0, 1},
+            1: {1, 2},
+            2: {2, 3},
+            3: {4, 5},
+            4: {4, 5},
+        }
+        rows = []
+        for i in range(5):
+            for t in range(n_periods):
+                d = 0 if t in untreated[i] else 1
+                rows.append(
+                    {
+                        "unit": i,
+                        "period": t,
+                        "outcome": alpha[i] + beta[t] + rng.normal(0, 0.05) + (tau if d else 0),
+                        "treated": int(d),
+                    }
+                )
+        df = pd.DataFrame(rows)
+        est = TROP(
+            method="local",
+            non_absorbing=True,
+            lambda_time_grid=[0.0],
+            lambda_unit_grid=[0.0],
+            lambda_nn_grid=[0.1],
+            n_bootstrap=3,
+            seed=1,
+        )
+        with pytest.warns(UserWarning, match="(?i)not estimable"):
+            res = est.fit(df, "outcome", "treated", "unit", "period")
+
+        # The cross-component target cell (unit 0 treated at period 4) is
+        # non-estimable (NaN), not a beta_4-contaminated value.
+        cell = res.treatment_effects.get((0, 4))
+        assert cell is not None and np.isnan(cell), f"(0,4) should be NaN, got {cell}"
+        # Within-component A treated cells (e.g. unit 0 at period 2) stay
+        # estimable, so the fit still produces a finite ATT.
+        assert np.isfinite(res.treatment_effects.get((0, 2)))
+        assert np.isfinite(res.att)

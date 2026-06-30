@@ -231,7 +231,7 @@ plot_event_study(results)
 
 ### ChaisemartinDHaultfoeuille
 
-de Chaisemartin & D'Haultfœuille (2020/2022) estimator for **non-absorbing (reversible) treatments**. The only library estimator that handles treatments which can switch on AND off over time. Ships `DID_M` (= `DID_1` at horizon `l = 1`) plus the full multi-horizon event study `DID_l` for `l = 1..L_max` from the dynamic companion paper (NBER WP 29873). Includes normalized estimator `DID^n_l`, cost-benefit aggregate `delta`, dynamic placebos `DID^{pl}_l`, and sup-t simultaneous confidence bands.
+de Chaisemartin & D'Haultfœuille (2020/2022) estimator for **non-absorbing (reversible) treatments**. The most general library estimator for treatments that switch on AND off over time (allows dynamic/carryover effects + joiner/leaver decomposition); `LPDiD` (`non_absorbing="first_entry"`/`"effect_stabilization"`) and `TROP` (`non_absorbing=True`, no-dynamic-effects) also handle non-absorbing treatment under stronger assumptions. Ships `DID_M` (= `DID_1` at horizon `l = 1`) plus the full multi-horizon event study `DID_l` for `l = 1..L_max` from the dynamic companion paper (NBER WP 29873). Includes normalized estimator `DID^n_l`, cost-benefit aggregate `delta`, dynamic placebos `DID^{pl}_l`, and sup-t simultaneous confidence bands.
 
 ```python
 ChaisemartinDHaultfoeuille(
@@ -963,6 +963,7 @@ TROP(
     alpha: float = 0.05,
     n_bootstrap: int = 200,
     seed: int | None = None,
+    non_absorbing: bool = False,               # False: require absorbing D (reject non-monotonic). True: allow on/off treatment (Eq. 12/Alg. 2), method='local' only; emits a caveat warning (Thm 5.1 is block-only).
 )
 ```
 
@@ -972,7 +973,7 @@ TROP(
 trop.fit(
     data: pd.DataFrame,
     outcome: str,
-    treatment: str,                # Absorbing-state treatment indicator (0/1). Must be 0 for all pre-treatment periods and 1 for treatment and post-treatment periods.
+    treatment: str,                # Treatment indicator (0/1). Default (non_absorbing=False): absorbing state -- 0 for all pre-treatment periods, 1 for treatment and post-treatment; non-monotonic D raises ValueError. With non_absorbing=True: any on/off pattern (general assignment).
     unit: str,
     time: str,
 ) -> TROPResults

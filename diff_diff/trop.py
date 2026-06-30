@@ -31,7 +31,11 @@ from diff_diff._backend import (
     _rust_loocv_grid_search,
 )
 from diff_diff.trop_global import TROPGlobalMixin
-from diff_diff.trop_local import TROPLocalMixin, _setup_trop_data
+from diff_diff.trop_local import (
+    TROPLocalMixin,
+    _setup_trop_data,
+    _treated_cell_is_estimable,
+)
 from diff_diff.trop_results import (
     _LAMBDA_INF,
     _PrecomputedStructures,
@@ -96,6 +100,28 @@ class TROP(TROPLocalMixin, TROPGlobalMixin):
         Number of bootstrap replications for variance estimation. Must be >= 2.
     seed : int, optional
         Random seed for reproducibility.
+    non_absorbing : bool, default=False
+        Treatment-assignment scope for the treatment indicator.
+
+        - ``False`` (default): require an ABSORBING STATE indicator (once
+          treated, always treated). A non-monotonic indicator raises
+          ``ValueError``. This guards against the common mistake of encoding
+          absorbing treatment as an event-style spike (a single D=1 period),
+          which would silently bias the ATT.
+        - ``True``: accept general (on/off) assignment patterns, where treatment
+          may switch on and off, per Athey et al. (2025) Eq. 12 / Algorithm 2.
+          Supported for ``method='local'`` only (``method='global'`` raises).
+          Relies on the paper's no-dynamic-effects (no carryover) assumption; the
+          triple-robustness guarantee (Theorem 5.1) is proven only under block
+          assignment, so a ``UserWarning`` is emitted on fit. The estimand
+          averages the per-cell effects over the **estimable** treated (D=1)
+          cells (Eq. 1): a cell is non-estimable (NaN, excluded) when its unit/time
+          fixed effect ``alpha_i + beta_t`` is unidentified by the control fit --
+          i.e. the target unit and target period are not in the same connected
+          component of the observed-control graph (an always-treated unit, a
+          fully-treated period, or disconnected control support). This matches the
+          library non-estimable->NaN convention (see REGISTRY ## TROP
+          "non-absorbing non-estimable-cell trimming").
 
     Attributes
     ----------
@@ -134,12 +160,21 @@ class TROP(TROPLocalMixin, TROPGlobalMixin):
         alpha: float = 0.05,
         n_bootstrap: int = 200,
         seed: Optional[int] = None,
+        non_absorbing: bool = False,
     ):
         # Validate method parameter
         valid_methods = ("local", "global")
         if method not in valid_methods:
             raise ValueError(f"method must be one of {valid_methods}, got '{method}'")
         self.method = method
+
+        # Validate non_absorbing flag (must be a plain bool, not a truthy value).
+        # When False (default) TROP requires an absorbing-state treatment indicator;
+        # when True it accepts general (on/off) assignment patterns per Athey et al.
+        # (2025) Eq. 12 / Algorithm 2 -- local method only (see fit()).
+        if not isinstance(non_absorbing, bool):
+            raise ValueError(f"non_absorbing must be a bool, got {type(non_absorbing).__name__}")
+        self.non_absorbing = non_absorbing
 
         # Default grids from paper
         self.lambda_time_grid = lambda_time_grid or [0.0, 0.1, 0.5, 1.0, 2.0, 5.0]
@@ -389,17 +424,21 @@ class TROP(TROPLocalMixin, TROPGlobalMixin):
         treatment : str
             Name of the treatment indicator column (0/1).
 
-            IMPORTANT: This should be an ABSORBING STATE indicator, not a
-            treatment timing indicator. For each unit, D=1 for ALL periods
-            during and after treatment:
+            By default (``non_absorbing=False``) this must be an ABSORBING STATE
+            indicator, not a treatment timing indicator. For each unit, D=1 for
+            ALL periods during and after treatment:
 
             - D[t, i] = 0 for all t < g_i (pre-treatment periods)
             - D[t, i] = 1 for all t >= g_i (treatment and post-treatment)
 
             where g_i is the treatment start time for unit i.
 
-            For staggered adoption, different units can have different g_i.
-            The ATT averages over ALL D=1 cells per Equation 1 of the paper.
+            For staggered adoption, different units can have different g_i (this
+            is still absorbing). Set ``non_absorbing=True`` to allow treatment to
+            switch on and off (general assignment, ``method='local'`` only). The
+            ATT averages over the **estimable** D=1 cells per Equation 1 (a cell
+            whose unit/time fixed effect is unidentified by the control fit is
+            NaN and excluded; see ``non_absorbing`` and ``TROPResults``).
         unit : str
             Name of the unit identifier column.
         time : str
@@ -470,8 +509,34 @@ class TROP(TROPLocalMixin, TROPGlobalMixin):
 
         # Below is the local method (default)
         _ctx = _setup_trop_data(
-            data, outcome, treatment, unit, time, resolved_survey, survey_design
+            data,
+            outcome,
+            treatment,
+            unit,
+            time,
+            resolved_survey,
+            survey_design,
+            non_absorbing=self.non_absorbing,
         )
+
+        # Non-absorbing (general assignment) is a paper-supported point estimator
+        # (Athey et al. 2025 Eq. 12 / Algorithm 2) but the formal triple-robustness
+        # guarantee (Theorem 5.1) is proven only under block assignment, and the
+        # bootstrap's validity (Algorithm 3) requires a growing number of treated
+        # units. Surface that caveat once per fit so users do not over-read the SE.
+        if self.non_absorbing:
+            warnings.warn(
+                "TROP(non_absorbing=True): treating the panel as a general "
+                "(on/off) assignment pattern per Athey et al. (2025) Eq. 12 / "
+                "Algorithm 2. This relies on the no-dynamic-effects (no carryover) "
+                "assumption. The triple-robustness guarantee (Theorem 5.1) is "
+                "proven only under block assignment, and bootstrap-SE validity "
+                "requires a growing number of treated units -- interpret standard "
+                "errors with care.",
+                UserWarning,
+                stacklevel=2,
+            )
+
         n_units = _ctx["n_units"]
         n_periods = _ctx["n_periods"]
         idx_to_unit = _ctx["idx_to_unit"]
@@ -479,6 +544,7 @@ class TROP(TROPLocalMixin, TROPGlobalMixin):
         unit_weight_arr = _ctx["unit_weight_arr"]
         Y = _ctx["Y"]
         D = _ctx["D"]
+        missing_mask = _ctx["missing_mask"]
         n_treated_obs = _ctx["n_treated_obs"]
         treated_unit_idx = _ctx["treated_unit_idx"]
         control_unit_idx = _ctx["control_unit_idx"]
@@ -676,6 +742,7 @@ class TROP(TROPLocalMixin, TROPGlobalMixin):
         treated_observations = self._precomputed["treated_observations"]
         nonconverg_tracker: list = []
         n_fits_attempted = 0
+        n_no_support = 0
 
         for t, i in treated_observations:
             unit_id = idx_to_unit[i]
@@ -691,6 +758,25 @@ class TROP(TROPLocalMixin, TROPGlobalMixin):
             weight_matrix = self._compute_observation_weights(
                 Y, D, i, t, lambda_time, lambda_unit, control_unit_idx, n_units, n_periods
             )
+
+            # Guard against a treated cell with no positively-weighted, observed
+            # control support. Under non_absorbing with lambda_unit>0, a unit that
+            # is never observed untreated has inf distance to every donor, so all
+            # unit weights collapse to 0; the model then fits nothing and tau would
+            # silently equal the raw outcome Y_it. Mark such cells non-estimable
+            # (NaN) -- consistent with the missing-outcome NaN convention above --
+            # rather than report a wrong effect. The cell-specific check also
+            # covers lambda_unit=0 (uniform weights still leave an always-treated
+            # unit's alpha_i unidentified) and a fully-treated period (beta_t
+            # unidentified). It is a general correctness guard applied to every
+            # local fit: a no-op when each treated cell's unit and period have an
+            # observed control cell (always so on balanced panels, and in
+            # absorbing mode unless an unbalanced panel leaves a unit's pre-period
+            # controls or a period's controls entirely missing).
+            if not _treated_cell_is_estimable(control_mask, Y, weight_matrix, i, t):
+                treatment_effects[(unit_id, time_id)] = np.nan
+                n_no_support += 1
+                continue
 
             # Fit model with these weights
             n_fits_attempted += 1
@@ -717,6 +803,19 @@ class TROP(TROPLocalMixin, TROPGlobalMixin):
             beta_estimates.append(beta_hat)
             L_estimates.append(L_hat)
 
+        if n_no_support > 0:
+            warnings.warn(
+                f"{n_no_support} of {n_treated_obs} treated cell(s) are not "
+                f"estimable: the target unit and target period are not connected "
+                f"in the observed-control graph, so the cell's unit/time fixed "
+                f"effect (alpha_i + beta_t) is unidentified (e.g. an always-treated "
+                f"unit, a period in which every unit is treated, or disconnected "
+                f"control support). Their treatment effects are NaN and are "
+                f"excluded from the ATT.",
+                UserWarning,
+                stacklevel=2,
+            )
+
         if nonconverg_tracker:
             warn_if_not_converged(
                 False,
@@ -727,25 +826,42 @@ class TROP(TROPLocalMixin, TROPGlobalMixin):
                 self.tol,
             )
 
-        # Count valid treated observations
+        # Count valid (estimable) treated observations. A cell is excluded when
+        # its outcome is NaN/missing or it has no weighted control support (the
+        # latter is additionally surfaced by the no-support warning above).
         n_valid_treated = len(tau_values)
         if n_valid_treated == 0:
-            warnings.warn(
-                "All treated outcomes are NaN/missing. Cannot estimate ATT.",
-                UserWarning,
-            )
+            if n_no_support > 0:
+                warnings.warn(
+                    "No treated cells were estimable (for every treated cell the "
+                    "target unit and target period are not connected in the "
+                    "observed-control graph, leaving alpha_i + beta_t "
+                    "unidentified). Cannot estimate ATT.",
+                    UserWarning,
+                )
+            else:
+                warnings.warn(
+                    "All treated outcomes are NaN/missing. Cannot estimate ATT.",
+                    UserWarning,
+                )
         elif n_valid_treated < n_treated_obs:
             warnings.warn(
-                f"Only {n_valid_treated} of {n_treated_obs} treated outcomes are finite. "
-                "df and n_treated_obs reflect valid observations only.",
+                f"Only {n_valid_treated} of {n_treated_obs} treated cells were "
+                "estimable (finite outcome with weighted control support). "
+                "df and n_treated_obs reflect estimable observations only.",
                 UserWarning,
             )
 
-        # Average ATT (survey-weighted when applicable)
-        if unit_weight_arr is not None and tau_values:
+        # Average ATT (survey-weighted when applicable). Guard the weighted path
+        # against a zero total weight (e.g. the only estimable treated cells all
+        # carry zero survey weight after non-estimable cells are excluded), which
+        # would make np.average raise; fall back to NaN per the inference contract.
+        if unit_weight_arr is not None and tau_values and float(np.sum(tau_weights)) > 0.0:
             att = float(np.average(tau_values, weights=tau_weights))
+        elif tau_values and unit_weight_arr is None:
+            att = float(np.mean(tau_values))
         else:
-            att = np.mean(tau_values) if tau_values else np.nan
+            att = np.nan
 
         # Average parameter estimates for output (representative)
         alpha_hat = np.mean(alpha_estimates, axis=0) if alpha_estimates else np.zeros(n_units)
@@ -775,6 +891,15 @@ class TROP(TROPLocalMixin, TROPGlobalMixin):
             survey_design=survey_design,
             unit_weight_arr=unit_weight_arr,
             resolved_survey=resolved_survey,
+            # Force the guarded Python bootstrap (the Rust per-cell tau path lacks
+            # the estimability guard) whenever a resample could need it: (a) the
+            # point fit already trimmed a cell (n_no_support>0); or (b) the panel
+            # is unbalanced (has missing cells) -- a bootstrap resample can then
+            # lose a cell's only control support even if the original fit was
+            # fully estimable, and Rust would contaminate that draw's SE. Balanced
+            # panels keep the Rust happy path: the stratified resample always
+            # re-draws the control stratum, so support is preserved.
+            force_python=bool(n_no_support > 0 or np.any(missing_mask)),
         )
 
         # Compute test statistics
@@ -811,6 +936,7 @@ class TROP(TROPLocalMixin, TROPGlobalMixin):
             n_bootstrap=self.n_bootstrap,
             bootstrap_distribution=bootstrap_dist if len(bootstrap_dist) > 0 else None,
             survey_metadata=survey_metadata,
+            non_absorbing=self.non_absorbing,
         )
 
         self.is_fitted_ = True
@@ -832,6 +958,7 @@ class TROP(TROPLocalMixin, TROPGlobalMixin):
             "alpha": self.alpha,
             "n_bootstrap": self.n_bootstrap,
             "seed": self.seed,
+            "non_absorbing": self.non_absorbing,
         }
 
     def set_params(self, **params) -> "TROP":
@@ -839,6 +966,8 @@ class TROP(TROPLocalMixin, TROPGlobalMixin):
         for key, value in params.items():
             if key == "method" and value not in ("local", "global"):
                 raise ValueError(f"method must be one of ('local', 'global'), got '{value}'")
+            if key == "non_absorbing" and not isinstance(value, bool):
+                raise ValueError(f"non_absorbing must be a bool, got {type(value).__name__}")
             if hasattr(self, key):
                 setattr(self, key, value)
             else:
@@ -867,10 +996,12 @@ def trop(
     treatment : str
         Treatment indicator column name (0/1).
 
-        IMPORTANT: This should be an ABSORBING STATE indicator, not a treatment
-        timing indicator. For each unit, D=1 for ALL periods during and after
-        treatment (D[t,i]=0 for t < g_i, D[t,i]=1 for t >= g_i where g_i is
-        the treatment start time for unit i).
+        By default (``non_absorbing=False``) this must be an ABSORBING STATE
+        indicator, not a treatment timing indicator: for each unit, D=1 for ALL
+        periods during and after treatment (D[t,i]=0 for t < g_i, D[t,i]=1 for
+        t >= g_i where g_i is the treatment start time for unit i). Pass
+        ``non_absorbing=True`` (via ``**kwargs``) to accept general on/off
+        assignment patterns (``method='local'`` only); see ``TROP``.
     unit : str
         Unit identifier column name.
     time : str
@@ -878,7 +1009,7 @@ def trop(
     survey_design : SurveyDesign, optional
         Survey design specification. Supports pweight, strata, PSU, and FPC.
     **kwargs
-        Additional arguments passed to TROP constructor.
+        Additional arguments passed to TROP constructor (e.g. ``non_absorbing``).
 
     Returns
     -------

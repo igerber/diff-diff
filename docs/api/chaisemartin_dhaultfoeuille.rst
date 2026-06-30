@@ -1,9 +1,11 @@
 de Chaisemartin-D'Haultfœuille (dCDH) DiD
 ============================================
 
-The only modern staggered DiD estimator in diff-diff that handles
-**non-absorbing (reversible) treatments** — treatment may switch on AND
-off over time.
+The most general estimator in diff-diff for **non-absorbing (reversible)
+treatments** — treatment may switch on AND off over time, with explicit
+joiner/leaver decomposition and multi-horizon dynamics. (:class:`~diff_diff.LPDiD`
+and :class:`~diff_diff.TROP` also support non-absorbing treatment under stronger
+assumptions; see their ``non_absorbing`` parameters.)
 
 This module implements the methodology from de Chaisemartin & D'Haultfœuille
 (2020/2022). The estimator ships the contemporaneous-switch path ``DID_M``
@@ -79,12 +81,15 @@ The estimator:
   ``l = 1`` on cell-aggregated input (see REGISTRY.md for documented
   deviations on individual-level inputs with uneven cell sizes)
 
-All other staggered estimators in diff-diff (:class:`~diff_diff.CallawaySantAnna`,
+The remaining staggered estimators in diff-diff (:class:`~diff_diff.CallawaySantAnna`,
 :class:`~diff_diff.SunAbraham`, :class:`~diff_diff.ImputationDiD`,
 :class:`~diff_diff.TwoStageDiD`, :class:`~diff_diff.EfficientDiD`,
 :class:`~diff_diff.WooldridgeDiD`) assume treatment is **absorbing** —
-once treated, stays treated. ``ChaisemartinDHaultfoeuille`` is the only
-library option for non-absorbing treatments.
+once treated, stays treated. ``ChaisemartinDHaultfoeuille`` is the most general
+option for non-absorbing treatments; :class:`~diff_diff.LPDiD`
+(``non_absorbing="first_entry"`` / ``"effect_stabilization"``) and
+:class:`~diff_diff.TROP` (``non_absorbing=True``, under a no-dynamic-effects
+assumption) also support non-absorbing treatment.
 
 **Panel requirements (deviation from R DIDmultiplegtDYN):**
 

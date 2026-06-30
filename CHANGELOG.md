@@ -22,6 +22,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `"survey_tsl"` `vcov_type`, and a Survey Design block in `summary()`. The non-survey path is
   byte-for-byte unchanged. Validated against `survey::svyglm` on the stacked long difference
   (numeric golden parity is the D2 follow-up).
+- **`TROP` non-absorbing (on/off) treatment support** (Athey, Imbens, Qu & Viviano 2025,
+  §2.1 / Eq. 12 / Algorithm 2). New `non_absorbing` parameter (default `False`). The paper
+  supports general assignment patterns ("units moving into and out of treatment"), not only
+  absorbing/staggered adoption; `TROP(non_absorbing=True)` (`method='local'` only) now
+  accepts treatment that switches on and off, imputing each treated cell's counterfactual via
+  the paper's `(1-W)` masking. The default `non_absorbing=False` is unchanged and still
+  rejects non-monotonic D with a `ValueError` (now also pointing to the opt-in), guarding
+  against the common mistake of encoding absorbing treatment as an event-style spike. This
+  *removes a prior implementation over-restriction* (the estimator was stricter than the
+  paper) rather than adding a deviation. `method='global'` keeps its block-assignment
+  requirement and rejects `non_absorbing=True`. A one-time `UserWarning` is emitted noting
+  that validity relies on the no-dynamic-effects assumption and that the triple-robustness
+  guarantee (Theorem 5.1) is proven only under block assignment. The Rust local LOOCV and
+  point-estimate paths were already mask-driven and unchanged (Rust/Python ATT parity is
+  regression-tested); the non-absorbing **bootstrap** is routed to the Python path, because
+  the Rust resampler lacks the no-weighted-control-support guard and can return a degenerate
+  ~0 SE on an empty control stratum. Treated cells with no weighted control support (e.g. an
+  always-treated unit under `lambda_unit>0`) are materialized as NaN and excluded from the
+  ATT (the library non-estimable->NaN convention), with a `UserWarning`.
 - **`LPDiD` non-absorbing R-parity validation** (Phase C2). Pins both non-absorbing modes
   against an independent `fixest::feols` reconstruction of the paper's Eq. 12 (`first_entry`)
   and Eq. 13 (`effect_stabilization`) clean-sample restrictions: variance-weighted point and

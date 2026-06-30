@@ -26,7 +26,7 @@ Start here and follow the questions:
 2. **Can treatment switch on AND off?** (Reversible / non-absorbing treatment — e.g., marketing campaigns, seasonal promotions, on/off policy cycles)
 
    - **No (treatment is absorbing — once treated, stays treated)** → Go to question 3
-   - **Yes** → Use :class:`~diff_diff.ChaisemartinDHaultfoeuille` — the only library estimator that handles non-absorbing treatments
+   - **Yes** → Use :class:`~diff_diff.ChaisemartinDHaultfoeuille` — the most general option (allows dynamic/carryover effects, with joiner/leaver views). :class:`~diff_diff.LPDiD` (``non_absorbing="first_entry"`` / ``"effect_stabilization"``) and :class:`~diff_diff.TROP` (``non_absorbing=True``, under a no-dynamic-effects assumption) also handle non-absorbing treatment under stronger assumptions
 
 3. **Is treatment staggered?** (Different units treated at different times)
 
@@ -78,7 +78,7 @@ Quick Reference
      - Conditional parallel trends
      - Group-time ATT(g,t), aggregations
    * - ``ChaisemartinDHaultfoeuille``
-     - Reversible / non-absorbing treatments (only library option)
+     - Reversible / non-absorbing treatments (most general; allows dynamic effects)
      - Parallel trends + A5 (no crossing) + A11 (stable controls)
      - DID_l event study (L_max), normalized DID^n_l, cost-benefit delta, placebos, sup-t bands, TWFE diagnostic
    * - ``SyntheticDiD``
@@ -250,8 +250,13 @@ Use :class:`~diff_diff.ChaisemartinDHaultfoeuille` (alias :class:`~diff_diff.DCD
   normalized effects, cost-benefit aggregation, dynamic placebos, and
   sup-t simultaneous confidence bands
 
-This is **the only library estimator that handles non-absorbing treatments**.
-All other staggered estimators
+This is the **most general** library estimator for non-absorbing treatment: it
+allows dynamic (carryover) effects and reports separate joiner/leaver views.
+Two other estimators also accept non-absorbing treatment under stronger
+assumptions: :class:`~diff_diff.LPDiD` (``non_absorbing="first_entry"`` /
+``"effect_stabilization"`` — entry-effect estimands) and :class:`~diff_diff.TROP`
+(``non_absorbing=True``, ``method='local'`` — valid under the paper's
+no-dynamic-effects / no-carryover assumption). The remaining staggered estimators
 (:class:`~diff_diff.CallawaySantAnna`, :class:`~diff_diff.SunAbraham`,
 :class:`~diff_diff.ImputationDiD`, :class:`~diff_diff.TwoStageDiD`,
 :class:`~diff_diff.EfficientDiD`, :class:`~diff_diff.WooldridgeDiD`) assume

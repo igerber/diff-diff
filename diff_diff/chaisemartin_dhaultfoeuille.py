@@ -1,9 +1,14 @@
 """
 de Chaisemartin-D'Haultfoeuille (dCDH) estimator for reversible-treatment DiD.
 
-The dCDH estimator is the only modern DiD estimator in the diff-diff library
-that handles **non-absorbing (reversible) treatments** — treatment can switch
-on AND off over time. All other staggered estimators in the library
+The dCDH estimator is the most general DiD estimator in the diff-diff library
+for **non-absorbing (reversible) treatments** — treatment can switch on AND off
+over time, switcher vs non-switcher comparisons are its primitive object, and it
+allows dynamic (carryover) effects with explicit joiner/leaver (``DID_+`` /
+``DID_-``) decomposition. ``LPDiD`` (``non_absorbing="first_entry"`` /
+``"effect_stabilization"``) and ``TROP`` (``non_absorbing=True``, under a
+no-dynamic-effects assumption) also accept non-absorbing treatment under stronger
+assumptions. The remaining staggered estimators in the library
 (``CallawaySantAnna``, ``SunAbraham``, ``ImputationDiD``, ``TwoStageDiD``,
 ``EfficientDiD``, ``WooldridgeDiD``) assume treatment is absorbing.
 
@@ -354,9 +359,11 @@ class ChaisemartinDHaultfoeuille(ChaisemartinDHaultfoeuilleBootstrapMixin):
     """
     de Chaisemartin-D'Haultfoeuille (dCDH) estimator.
 
-    The only modern DiD estimator in the library that handles **reversible
-    (non-absorbing) treatments** - treatment may switch on AND off over
-    time. Computes the contemporaneous-switch DiD ``DID_M`` from the
+    The most general library estimator for **reversible (non-absorbing)
+    treatments** - treatment may switch on AND off over time, with explicit
+    joiner/leaver (``DID_+`` / ``DID_-``) decomposition (``LPDiD`` and ``TROP``
+    also support non-absorbing treatment under stronger assumptions; see their
+    ``non_absorbing`` parameters). Computes the contemporaneous-switch DiD ``DID_M`` from the
     AER 2020 paper (equivalently ``DID_1`` at horizon ``l = 1`` of the
     dynamic companion paper, NBER WP 29873) plus the full multi-horizon
     event study ``DID_l`` for ``l = 1..L_max`` via the ``L_max`` parameter

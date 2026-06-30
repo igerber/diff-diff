@@ -157,11 +157,14 @@ market is treated it stays treated.
 
 **Recommended method:** :class:`~diff_diff.ChaisemartinDHaultfoeuille` (alias :class:`~diff_diff.DCDH`)
 
-This is the **only library estimator** that handles non-absorbing (reversible)
+This is the **most general library estimator** for non-absorbing (reversible)
 treatments. It compares period-to-period outcome changes in markets that switch
 into treatment ("joiners") and markets that switch out ("leavers"), against
 simultaneously-stable controls. You get three numbers: the overall lift `DID_M`,
-a joiners-only view `DID_+`, and a leavers-only view `DID_-`.
+a joiners-only view `DID_+`, and a leavers-only view `DID_-`. (:class:`~diff_diff.LPDiD`
+with ``non_absorbing="first_entry"`` / ``"effect_stabilization"`` and
+:class:`~diff_diff.TROP` with ``non_absorbing=True`` — under a no-dynamic-effects
+assumption — also handle non-absorbing treatment, under stronger assumptions.)
 
 .. code-block:: python
 
@@ -442,7 +445,7 @@ At a Glance
      - Handles different launch dates correctly
    * - On/off cycles (reversible treatment)
      - ``ChaisemartinDHaultfoeuille``
-     - Only library option for non-absorbing treatments
+     - Most general option for non-absorbing treatments (see also LPDiD/TROP ``non_absorbing``)
    * - Varied spending levels
      - ``ContinuousDiD``
      - Dose-response curve

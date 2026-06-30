@@ -4,9 +4,11 @@ Result containers for the de Chaisemartin-D'Haultfoeuille (dCDH) estimator.
 This module contains ``ChaisemartinDHaultfoeuilleResults`` and
 ``DCDHBootstrapResults`` dataclasses produced by the
 ``ChaisemartinDHaultfoeuille`` (alias ``DCDH``) estimator. The dCDH
-estimator is the only modern DiD estimator in the library that handles
-non-absorbing (reversible) treatments. Phase 1 ships the contemporaneous-
-switch case ``DID_M`` (= ``DID_1`` of the dynamic companion paper).
+estimator is the most general library estimator for non-absorbing
+(reversible) treatments (``LPDiD`` and ``TROP`` also support non-absorbing
+treatment under stronger assumptions; see their ``non_absorbing`` parameters).
+Phase 1 ships the contemporaneous-switch case ``DID_M`` (= ``DID_1`` of the
+dynamic companion paper).
 
 References
 ----------
