@@ -15,6 +15,7 @@ from diff_diff import (
 from diff_diff.linalg import LinearRegression, compute_robust_vcov, solve_ols
 from diff_diff.survey import (
     ResolvedSurveyDesign,
+    _compute_stratified_psu_meat,
     compute_survey_metadata,
     compute_survey_vcov,
 )
@@ -2253,6 +2254,61 @@ class TestZeroWeightPsuConventionWaiver:
             f"(rel_gap={rel_gap:.2e}); the full-design Lumley convention "
             f"(TODO § Won't-fix / waived) appears to have been reverted."
         )
+
+    def test_stratified_meat_counts_zero_score_psu_in_full_design(self):
+        """Direct unit test on ``_compute_stratified_psu_meat``: an all-zero-score
+        PSU (a fully zeroed subpopulation PSU) stays in ``n_PSU_h``, the stratum
+        PSU-mean, and the centering. Asserts the **exact** full-design meat and
+        that it is NOT the positive-weight-only meat (which would drop the zero
+        PSU). This guards against partial edits the SE-level test could miss —
+        e.g. changing only the finite-sample denominator while still centering
+        over the zero PSU.
+        """
+        # Two strata; stratum 0 has an all-zero PSU (psu 2 = two zeroed rows).
+        scores = np.array(
+            [
+                [1.5, -0.5],  # stratum 0, psu 0
+                [0.5, 2.0],  # stratum 0, psu 1
+                [0.0, 0.0],  # stratum 0, psu 2 (all-zero subpop PSU), row 1
+                [0.0, 0.0],  # stratum 0, psu 2, row 2
+                [-1.0, 0.7],  # stratum 1, psu 3
+                [0.3, -1.2],  # stratum 1, psu 4
+            ]
+        )
+        strata = np.array([0, 0, 0, 0, 1, 1])
+        psu = np.array([0, 1, 2, 2, 3, 4])
+        resolved = ResolvedSurveyDesign(
+            weights=np.ones(6),
+            weight_type="pweight",
+            strata=strata,
+            psu=psu,
+            fpc=None,
+            n_strata=2,
+            n_psu=5,
+            lonely_psu="remove",
+        )
+
+        meat, variance_computed, _ = _compute_stratified_psu_meat(scores, resolved)
+        assert variance_computed
+
+        def _stratum_meat(psu_scores):
+            # Full-design per-stratum meat with fpc=None: (n_h/(n_h-1)) * S'S.
+            n_h = psu_scores.shape[0]
+            centered = psu_scores - psu_scores.mean(axis=0, keepdims=True)
+            return (n_h / (n_h - 1)) * (centered.T @ centered)
+
+        # Full-design reference INCLUDES the all-zero PSU in stratum 0 (n_h=3).
+        s0_full = np.array([[1.5, -0.5], [0.5, 2.0], [0.0, 0.0]])
+        s1 = np.array([[-1.0, 0.7], [0.3, -1.2]])
+        expected_full = _stratum_meat(s0_full) + _stratum_meat(s1)
+        np.testing.assert_allclose(meat, expected_full, atol=1e-12)
+
+        # The positive-weight-only meat would DROP the zero PSU from stratum 0
+        # (n_h=2, mean over the two nonzero PSUs) — exactly the change the waived
+        # TODO proposed. The full-design meat must NOT equal it.
+        s0_pos = np.array([[1.5, -0.5], [0.5, 2.0]])
+        positive_only = _stratum_meat(s0_pos) + _stratum_meat(s1)
+        assert not np.allclose(meat, positive_only, atol=1e-8)
 
 
 class TestRound8Fixes:
