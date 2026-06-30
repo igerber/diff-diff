@@ -2277,8 +2277,13 @@ class TestZeroWeightPsuConventionWaiver:
         )
         strata = np.array([0, 0, 0, 0, 1, 1])
         psu = np.array([0, 1, 2, 2, 3, 4])
+        # PSU 2's rows carry zero weight as well as zero score, so the fixture
+        # models a *true* fully zero-weight subpopulation PSU. The current meat
+        # ignores `weights` (it operates on scores), so this does not change the
+        # expected value — but it hardens the lock against a future denominator-
+        # only edit that reads `resolved.weights` to drop positive-weight PSUs.
         resolved = ResolvedSurveyDesign(
-            weights=np.ones(6),
+            weights=np.array([1.0, 1.0, 0.0, 0.0, 1.0, 1.0]),
             weight_type="pweight",
             strata=strata,
             psu=psu,
