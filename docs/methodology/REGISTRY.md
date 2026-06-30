@@ -4536,6 +4536,25 @@ Domain estimation preserving full design structure.
   paths use positive-weight count for df adjustments, ensuring zero-weight
   padding is inference-invariant outside the survey vcov path. DEFF
   effective-n also uses positive-weight count.
+- **Note:** The TSL meat itself follows the same full-design convention:
+  `_compute_stratified_psu_meat`'s per-stratum finite-sample correction
+  `(1 - f_h)·n_{PSU,h}/(n_{PSU,h}-1)` and PSU-mean centering count
+  zero-weight PSUs (a genuine-subpopulation PSU with all members outside the
+  domain contributes a zero PSU-score `0` that is centered to `-\bar{z}_h`
+  and still increments `n_{PSU,h}`). This is the Lumley (2004 §3.4) /
+  R `survey::svyrecvar(subset())` domain estimator — so the survey SE is
+  deliberately **not** invariant to genuine-subpopulation zeroing: it
+  differs from the SE of a naive physical subset, which is the whole point
+  of preserving the design (`subpopulation()` is correct *because* it does
+  not equal the naive subset). Zero-weight rows that reuse an existing PSU
+  label are inert (their weighted score is `0`, so the PSU-score sum is
+  unchanged), so padding that preserves PSU membership is bit-invariant;
+  only adding *new* synthetic all-zero PSUs would shift the SE, and no
+  estimator path does so (domain padding goes through the zero-padded
+  full-design cell variance in `prep.py`, which retains the real PSU layout).
+  A former TODO proposed counting only positive-weight PSUs to force SE
+  invariance; that was waived (TODO § "Won't-fix / waived") because it would
+  break this documented R parity.
 - **Deviation from R:** `subpopulation()` preserves all strata in df
   computation even when a stratum has no positive-weight observations,
   while R's `subset()` drops empty strata from `survey::degf()`. For
