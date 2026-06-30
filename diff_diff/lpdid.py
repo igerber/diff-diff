@@ -936,7 +936,10 @@ class LPDiD:
             _resolve_effective_cluster(resolved, cluster_ids, cluster_name=self.cluster)
 
         weights = resolved.weights
-        coef, _, _ = solve_ols(
+        # solve_ols returns the original-scale residuals computed on the IDENTIFIED
+        # (rank-reduced) design and NaNs the coefficients of any dropped collinear
+        # columns ("error" mode raises and propagates, matching the non-survey path).
+        coef, residuals, _ = solve_ols(
             design,
             response,
             return_vcov=False,
@@ -946,17 +949,29 @@ class LPDiD:
         )
         effect = float(coef[1])
         se = np.nan
-        # Fail closed (never crash): an under-identified survey sample (n_obs <= k,
-        # singular X'WX) makes compute_survey_vcov raise; an unidentified design-based
-        # variance (e.g. all strata removed by lonely_psu='remove') returns NaN. Both
-        # collapse the full inference tuple to NaN via safe_inference.
-        try:
-            residuals = response - design @ coef
-            vcov = compute_survey_vcov(design, residuals, resolved)
-            if vcov.shape[0] > 1 and np.isfinite(vcov[1, 1]) and vcov[1, 1] >= 0:
-                se = float(np.sqrt(vcov[1, 1]))
-        except (ValueError, np.linalg.LinAlgError):
-            se = np.nan
+        kept = np.isfinite(coef)
+        # Build the Binder sandwich on the kept-column design only. A redundant
+        # direct-inclusion covariate / absorbed dummy / lag is dropped by the rank
+        # handler; feeding the UNREDUCED design into compute_survey_vcov would
+        # singularize the X'WX bread (or NaN the kept-coef variance) and collapse an
+        # otherwise-identified treatment SE to NaN, breaking the library's
+        # rank-deficient contract (solve_ols reduces its own vcov the same way). When
+        # treatment itself is dropped (unidentified), effect is NaN and the SE stays
+        # NaN. Fail closed on a genuinely under-identified sample (n_obs <= k_kept,
+        # singular X'WX -> compute_survey_vcov raises) or an unidentified design-based
+        # variance (e.g. all strata removed by lonely_psu='remove' -> NaN meat).
+        if kept[1]:
+            try:
+                vcov = compute_survey_vcov(design[:, kept], residuals, resolved)
+                treat_pos = int(kept[:1].sum())  # treatment's index among kept columns
+                if (
+                    vcov.shape[0] > treat_pos
+                    and np.isfinite(vcov[treat_pos, treat_pos])
+                    and vcov[treat_pos, treat_pos] >= 0
+                ):
+                    se = float(np.sqrt(vcov[treat_pos, treat_pos]))
+            except (ValueError, np.linalg.LinAlgError):
+                se = np.nan
 
         df = resolved.df_survey
         t_stat, p_value, conf_int = safe_inference(effect, se, alpha=self.alpha, df=df)
@@ -1346,12 +1361,19 @@ class LPDiD:
         survey_cluster_name = cluster
         if survey_design is not None:
             from diff_diff.survey import (
+                SurveyDesign,
                 _inject_cluster_as_psu,
                 _resolve_survey_for_fit,
                 _validate_unit_constant_survey,
                 compute_survey_metadata,
             )
 
+            # Type-check up front so a non-SurveyDesign argument raises the intended
+            # TypeError rather than an incidental AttributeError from _survey_columns
+            # (which reads survey_design.weights/strata/...). _resolve_survey_for_fit
+            # re-checks below; this just moves the public error before first access.
+            if not isinstance(survey_design, SurveyDesign):
+                raise TypeError("survey_design must be a SurveyDesign instance")
             for _col in self._survey_columns(survey_design):
                 if isinstance(_col, str) and (_col.startswith("_") or _col == "horizon"):
                     raise ValueError(

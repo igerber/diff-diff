@@ -1828,6 +1828,40 @@ class TestLPDiDSurvey:
         assert res.vcov_type == "survey_tsl"
         assert np.isfinite(res.se)
 
+    def test_survey_rank_deficient_covariate_keeps_treatment_finite(self):
+        # A redundant direct-inclusion covariate (duplicate + constant) is dropped by
+        # the rank handler; the survey TSL SE must stay FINITE for the identified
+        # treatment effect -- the Binder sandwich is built on the kept-column design,
+        # not the singular full design -- and must match the non-redundant reference
+        # fit. rank_deficient_action="error" must raise.
+        df = _survey_panel()
+        df["x"] = np.linspace(-1.0, 1.0, len(df))
+        df["xdup"] = df["x"]  # exact duplicate -> collinear with x
+        df["xc"] = 1.0  # constant -> collinear with the intercept
+        sd = _full_design()
+        with pytest.warns(UserWarning):  # direct-inclusion homogeneity warning
+            ref = LPDiD(post_window=2).fit(df, covariates=["x"], survey_design=sd, **_FIT_KW)
+        with pytest.warns(UserWarning):
+            red = LPDiD(post_window=2, rank_deficient_action="silent").fit(
+                df, covariates=["x", "xdup", "xc"], survey_design=sd, **_FIT_KW
+            )
+        assert np.isfinite(ref.se)
+        assert np.isfinite(red.se)  # dropped nuisance cols must NOT NaN the treatment SE
+        assert red.att == pytest.approx(ref.att, rel=1e-9)  # same identified effect
+        assert red.se == pytest.approx(ref.se, rel=1e-9)  # same identified SE
+        # error mode raises on the rank-deficient design
+        with pytest.warns(UserWarning):
+            with pytest.raises((ValueError, np.linalg.LinAlgError)):
+                LPDiD(post_window=2, rank_deficient_action="error").fit(
+                    df, covariates=["x", "xdup", "xc"], survey_design=sd, **_FIT_KW
+                )
+
+    def test_rejects_non_survey_design_object(self):
+        # A non-SurveyDesign argument raises TypeError (not an incidental AttributeError)
+        df = _survey_panel()
+        with pytest.raises(TypeError):
+            LPDiD(post_window=2).fit(df, survey_design={"weights": "weight"}, **_FIT_KW)
+
     # --- metadata + idempotence ---
     def test_metadata_populated(self):
         df = _survey_panel()
