@@ -616,6 +616,8 @@ sources:
         type: user_guide
       - path: docs/choosing_estimator.rst
         type: user_guide
+      - path: docs/survey-roadmap.md
+        type: user_guide
 
   # ── TROP (trop group) ──────────────────────────────────────────────
 

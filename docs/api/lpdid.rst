@@ -27,8 +27,16 @@ estimand is a strictly non-negatively-weighted average of cohort effects.
    each unit's observed span and cover the entry-effect estimands. The
    non-absorbing entry-effect paths are R-parity-validated against an independent
    ``fixest::feols`` reconstruction of the paper's Eq. 12/13 (see
-   ``docs/methodology/REGISTRY.md``); the Appendix-C exit-event dynamics, the
-   Stata canonical SE, and survey-design support remain planned follow-ups.
+   ``docs/methodology/REGISTRY.md``); the Appendix-C exit-event dynamics and the
+   Stata canonical SE remain planned follow-ups.
+   Complex-survey designs (probability weights + stratified-PSU
+   Taylor-linearization standard errors with optional finite-population
+   correction and lonely-PSU handling) are supported on the variance-weighted
+   default path via the ``survey_design`` argument to ``fit()`` (pass a
+   :class:`~diff_diff.SurveyDesign`); ``df = n_PSU - n_strata``. The
+   reweighted / regression-adjustment path, replicate-weight designs, and
+   non-pweight (fweight/aweight) types are not yet supported with a survey
+   design.
    Covariates and absorbed fixed
    effects are supported; under ``reweight=False`` they enter by direct
    inclusion, which preserves the non-negative weighting result only under

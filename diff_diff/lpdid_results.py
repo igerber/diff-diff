@@ -43,6 +43,14 @@ class LPDiDResults:
     dylags: int = 0
     non_absorbing: Optional[str] = None
     stabilization_window: Optional[int] = None
+    # Survey-design (Taylor-linearization) metadata, set only when fit() received a
+    # ``survey_design``. ``survey_metadata`` is a ``SurveyMetadata`` (weight type, Kish
+    # effective N, design effect, panel-level n_strata/n_psu, survey d.f.); ``n_strata``
+    # / ``n_psu`` echo the panel-level effective design dimensions. ``vcov_type`` is then
+    # ``"survey_tsl"`` and ``n_clusters`` is the realized headline (pooled-post) PSU count.
+    survey_metadata: Optional[Any] = None
+    n_strata: Optional[int] = None
+    n_psu: Optional[int] = None
 
     # ------------------------------------------------------------------
     # internal helpers
@@ -147,14 +155,25 @@ class LPDiDResults:
         if self.non_absorbing is not None:
             result["non_absorbing"] = self.non_absorbing
             result["stabilization_window"] = self.stabilization_window
-        result["inference_method"] = "cluster_robust"
+        if self.survey_metadata is not None:
+            result["n_strata"] = self.n_strata
+            result["n_psu"] = self.n_psu
+            result["weight_type"] = getattr(self.survey_metadata, "weight_type", None)
+            result["df_survey"] = getattr(self.survey_metadata, "df_survey", None)
+        result["inference_method"] = (
+            "survey_tsl" if self.vcov_type == "survey_tsl" else "cluster_robust"
+        )
         return result
 
     # ------------------------------------------------------------------
     # text summary
     # ------------------------------------------------------------------
     def summary(self) -> str:
-        from diff_diff.results import _format_vcov_label, _get_significance_stars
+        from diff_diff.results import (
+            _format_survey_block,
+            _format_vcov_label,
+            _get_significance_stars,
+        )
 
         # Confidence intervals in the event_study / pooled tables are computed at
         # fit time using ``self.alpha``; the displayed level must match them, so
@@ -205,6 +224,14 @@ class LPDiDResults:
             # (ImputationDiD/BJS family), not an OLS CR1 sandwich.
             g = f", G={self.n_clusters}" if self.n_clusters else ""
             vcov_label = f"Influence-function cluster-robust at {self.cluster_name}{g}"
+        elif self.vcov_type == "survey_tsl":
+            # Complex-survey path: stratified-PSU Taylor-linearization (Binder TSL)
+            # sandwich. _format_vcov_label does not know "survey_tsl", so build the
+            # label here (G = realized pooled-post PSU count). The design block below
+            # carries the full survey metadata.
+            g = f", G={self.n_clusters}" if self.n_clusters else ""
+            psu = self.cluster_name or "PSU"
+            vcov_label = f"Survey Taylor-linearization (stratified PSU) at {psu}{g}"
         else:
             vcov_label = _format_vcov_label(
                 self.vcov_type,
@@ -214,6 +241,8 @@ class LPDiDResults:
             )
         if vcov_label:
             lines.append(f"Std. errors: {vcov_label}")
+        if self.survey_metadata is not None:
+            lines.extend(_format_survey_block(self.survey_metadata, width))
 
         header = (
             f"{'':>8}  {'Estimate':>10}  {'Std.Err':>10}  {'t':>8}  {'P>|t|':>8}"

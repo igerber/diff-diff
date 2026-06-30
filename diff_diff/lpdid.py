@@ -92,6 +92,18 @@ class LPDiD:
         rhs_columns.extend([f"_dy_lag_{lag}" for lag in range(1, dylags + 1)])
         return rhs_columns
 
+    def _survey_columns(self, survey_design):
+        """Survey design column names (weights/strata/psu/fpc) to carry through the
+        panel and every per-horizon sample so the per-sample survey design can be
+        re-resolved on the realized estimation rows. Empty when no survey design.
+
+        ``survey_design`` is threaded from ``fit()`` as a local (data-binding), matching
+        the library-wide convention; it is never stored on the estimator instance."""
+        if survey_design is None:
+            return []
+        sd = survey_design
+        return [c for c in (sd.weights, sd.strata, sd.psu, sd.fpc) if c is not None]
+
     def _prepare_panel(
         self,
         data,
@@ -104,10 +116,20 @@ class LPDiD:
         ylags=0,
         dylags=0,
         absorb=None,
+        survey_design=None,
     ):
         selected_columns = list(
             dict.fromkeys(
-                [unit, time, outcome, treatment, cluster, *(covariates or []), *(absorb or [])]
+                [
+                    unit,
+                    time,
+                    outcome,
+                    treatment,
+                    cluster,
+                    *(covariates or []),
+                    *(absorb or []),
+                    *self._survey_columns(survey_design),
+                ]
             )
         )
         panel = data[selected_columns].copy()
@@ -395,20 +417,26 @@ class LPDiD:
         dylags=0,
         absorb=None,
         apply_no_composition: bool = True,
+        survey_design=None,
     ):
         rhs_columns = self._rhs_column_names(covariates=covariates, ylags=ylags, dylags=dylags)
-        base_columns = [
-            unit,
-            time,
-            "_treated",
-            "_entry",
-            "_first_treat",
-            "_cluster",
-            "_common_event_ok",
-            *(["_delta_d", "_unit_min_t"] if self.non_absorbing is not None else []),
-            *rhs_columns,
-            *(absorb or []),
-        ]
+        base_columns = list(
+            dict.fromkeys(
+                [
+                    unit,
+                    time,
+                    "_treated",
+                    "_entry",
+                    "_first_treat",
+                    "_cluster",
+                    "_common_event_ok",
+                    *(["_delta_d", "_unit_min_t"] if self.non_absorbing is not None else []),
+                    *rhs_columns,
+                    *(absorb or []),
+                    *self._survey_columns(survey_design),
+                ]
+            )
+        )
         if self.pmd == "max":
             base_columns.append("_pmd_all_baseline")
         elif isinstance(self.pmd, int):
@@ -460,15 +488,20 @@ class LPDiD:
         sample["_event_time"] = sample[time]
         sample["_long_diff"] = sample["_target_outcome"] - sample[baseline_column]
         return sample[
-            [
-                "horizon",
-                "_event_time",
-                "_long_diff",
-                "_entry",
-                "_cluster",
-                *rhs_columns,
-                *(absorb or []),
-            ]
+            list(
+                dict.fromkeys(
+                    [
+                        "horizon",
+                        "_event_time",
+                        "_long_diff",
+                        "_entry",
+                        "_cluster",
+                        *rhs_columns,
+                        *(absorb or []),
+                        *self._survey_columns(survey_design),
+                    ]
+                )
+            )
         ]
 
     def _sample_is_identified(self, sample: pd.DataFrame) -> bool:
@@ -703,6 +736,7 @@ class LPDiD:
         rhs_columns=None,
         absorb_columns=None,
         weight_column: Optional[str] = None,
+        survey_design=None,
     ) -> Dict[str, Optional[float]]:
         rhs_columns = list(rhs_columns or [])
         absorb_columns = list(absorb_columns or [])
@@ -788,6 +822,14 @@ class LPDiD:
         response = sample[response_column].to_numpy(dtype=float)
         cluster_ids = sample["_cluster"].to_numpy()
         weights = None if weight_column is None else sample[weight_column].to_numpy(dtype=float)
+        if survey_design is not None:
+            # Complex-survey path: WLS point estimate weighted by the survey design,
+            # stratified-PSU Taylor-linearization (Binder TSL) sandwich variance.
+            # reweight is rejected upstream when survey_design is set, so weight_column
+            # is None here (the survey weights are the only observation weights).
+            return self._estimate_survey_sample(
+                sample, design, response, column_names, n_obs, survey_design
+            )
         if n_obs <= design.shape[1]:
             coef, _, _ = solve_ols(
                 design,
@@ -859,6 +901,76 @@ class LPDiD:
             "n_clusters": n_clusters,
         }
 
+    def _estimate_survey_sample(self, sample, design, response, column_names, n_obs, survey_design):
+        """Complex-survey variance for the (variance-weighted) long-difference
+        regression: WLS point estimate weighted by the survey design, stratified-PSU
+        Taylor-linearization sandwich (Binder TSL). Mirrors ``survey::svyglm`` on the
+        stacked long difference. ``reweight`` is rejected upstream when a survey design
+        is set, so the survey weights are the only observation weights.
+
+        ``df`` is the survey degrees of freedom (``n_PSU - n_strata``), and the reported
+        ``n_clusters`` is the realized number of PSUs in this sample.
+        """
+        from diff_diff.survey import (
+            _inject_cluster_as_psu,
+            _resolve_effective_cluster,
+            compute_survey_vcov,
+        )
+
+        cluster_ids = sample["_cluster"].to_numpy()
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore", message="pweight weights normalized", category=UserWarning
+            )
+            resolved = survey_design.resolve(sample)
+        if resolved.psu is None:
+            # No explicit PSU: cluster LP-DiD's unit (the default cluster) as the
+            # effective PSU. The rebind is load-bearing -- _inject_cluster_as_psu
+            # returns a NEW object; dropping it would leave each observation its own
+            # PSU and silently deflate the SE.
+            resolved = _inject_cluster_as_psu(resolved, cluster_ids)
+        else:
+            # Explicit survey PSU wins; warn only if the user ALSO set an explicit
+            # cluster that partitions differently (self.cluster is None under the
+            # default unit clustering, which suppresses the warning).
+            _resolve_effective_cluster(resolved, cluster_ids, cluster_name=self.cluster)
+
+        weights = resolved.weights
+        coef, _, _ = solve_ols(
+            design,
+            response,
+            return_vcov=False,
+            rank_deficient_action=self.rank_deficient_action,
+            column_names=column_names,
+            weights=weights,
+        )
+        effect = float(coef[1])
+        se = np.nan
+        # Fail closed (never crash): an under-identified survey sample (n_obs <= k,
+        # singular X'WX) makes compute_survey_vcov raise; an unidentified design-based
+        # variance (e.g. all strata removed by lonely_psu='remove') returns NaN. Both
+        # collapse the full inference tuple to NaN via safe_inference.
+        try:
+            residuals = response - design @ coef
+            vcov = compute_survey_vcov(design, residuals, resolved)
+            if vcov.shape[0] > 1 and np.isfinite(vcov[1, 1]) and vcov[1, 1] >= 0:
+                se = float(np.sqrt(vcov[1, 1]))
+        except (ValueError, np.linalg.LinAlgError):
+            se = np.nan
+
+        df = resolved.df_survey
+        t_stat, p_value, conf_int = safe_inference(effect, se, alpha=self.alpha, df=df)
+        return {
+            "coefficient": effect,
+            "se": se,
+            "t_stat": t_stat,
+            "p_value": p_value,
+            "conf_low": conf_int[0],
+            "conf_high": conf_int[1],
+            "n_obs": n_obs,
+            "n_clusters": int(resolved.n_psu),
+        }
+
     def _estimate_horizon(
         self,
         panel,
@@ -871,6 +983,7 @@ class LPDiD:
         ylags=0,
         dylags=0,
         absorb=None,
+        survey_design=None,
     ):
         rhs_columns = self._rhs_column_names(covariates=covariates, ylags=ylags, dylags=dylags)
         sample = self._build_horizon_sample(
@@ -883,6 +996,7 @@ class LPDiD:
             ylags=ylags,
             dylags=dylags,
             absorb=absorb,
+            survey_design=survey_design,
         )
         ra_required = self.reweight and bool(rhs_columns or absorb)
         if ra_required:
@@ -899,6 +1013,7 @@ class LPDiD:
             rhs_columns=rhs_columns,
             absorb_columns=absorb,
             weight_column="_rw_event_weight" if self.reweight else None,
+            survey_design=survey_design,
         )
 
     def _build_pooled_sample(
@@ -914,20 +1029,26 @@ class LPDiD:
         ylags=0,
         dylags=0,
         absorb=None,
+        survey_design=None,
     ):
         rhs_columns = self._rhs_column_names(covariates=covariates, ylags=ylags, dylags=dylags)
-        base_columns = [
-            unit,
-            time,
-            "_treated",
-            "_entry",
-            "_first_treat",
-            "_cluster",
-            "_common_pooled_ok",
-            *(["_delta_d", "_unit_min_t"] if self.non_absorbing is not None else []),
-            *rhs_columns,
-            *(absorb or []),
-        ]
+        base_columns = list(
+            dict.fromkeys(
+                [
+                    unit,
+                    time,
+                    "_treated",
+                    "_entry",
+                    "_first_treat",
+                    "_cluster",
+                    "_common_pooled_ok",
+                    *(["_delta_d", "_unit_min_t"] if self.non_absorbing is not None else []),
+                    *rhs_columns,
+                    *(absorb or []),
+                    *self._survey_columns(survey_design),
+                ]
+            )
+        )
         if self.pmd == "max":
             base_columns.append("_pmd_all_baseline")
         elif isinstance(self.pmd, int):
@@ -981,7 +1102,19 @@ class LPDiD:
         sample["_event_time"] = sample[time]
         sample["_pooled_diff"] = sample[target_columns].mean(axis=1) - sample[baseline_column]
         return sample[
-            ["_event_time", "_pooled_diff", "_entry", "_cluster", *rhs_columns, *(absorb or [])]
+            list(
+                dict.fromkeys(
+                    [
+                        "_event_time",
+                        "_pooled_diff",
+                        "_entry",
+                        "_cluster",
+                        *rhs_columns,
+                        *(absorb or []),
+                        *self._survey_columns(survey_design),
+                    ]
+                )
+            )
         ]
 
     def _estimate_window(
@@ -997,6 +1130,7 @@ class LPDiD:
         ylags=0,
         dylags=0,
         absorb=None,
+        survey_design=None,
     ):
         horizons = list(horizons)
         if not horizons:
@@ -1039,6 +1173,7 @@ class LPDiD:
             ylags=ylags,
             dylags=dylags,
             absorb=absorb,
+            survey_design=survey_design,
         )
         if pooled_sample.empty:
             raise ValueError(f"pooled {kind} window did not contain any horizons")
@@ -1061,6 +1196,7 @@ class LPDiD:
             rhs_columns=rhs_columns,
             absorb_columns=absorb,
             weight_column="_rw_pooled_weight" if self.reweight else None,
+            survey_design=survey_design,
         )
 
     def _resolve_pooled_horizons(self, pooled, *, kind):
@@ -1116,10 +1252,25 @@ class LPDiD:
         pre_pooled=None,
         only_event=False,
         only_pooled=False,
+        survey_design=None,
     ):
         self.results_ = None
         self.is_fitted_ = False
         self._fit_meta = None
+        # `survey_design` (complex-survey design: probability weights + optional
+        # strata/PSU/FPC) is a fit()-time data-binding threaded through as a local,
+        # matching the library-wide convention; it is never stored on the instance and
+        # is not a get_params() config field. Supported only on the variance-weighted
+        # default path (rejected with reweight=True).
+        if survey_design is not None and self.reweight:
+            raise NotImplementedError(
+                "survey_design is not supported with reweight=True. The survey "
+                "Taylor-linearization (TSL) standard errors are implemented for the "
+                "variance-weighted default path (reweight=False), which has a runnable "
+                "survey::svyglm reference; the reweighted equally-weighted ATT and the "
+                "regression-adjustment influence-function path have no validated survey "
+                "reference yet. Set reweight=False to use survey_design."
+            )
 
         # Validate covariate/absorb shape and reserved names BEFORE building the
         # required-columns list, so a string (e.g. absorb="region") raises the
@@ -1188,6 +1339,58 @@ class LPDiD:
             )
 
         cluster = self.cluster or unit
+
+        survey_metadata = None
+        survey_n_strata = None
+        survey_n_psu = None
+        survey_cluster_name = cluster
+        if survey_design is not None:
+            from diff_diff.survey import (
+                _inject_cluster_as_psu,
+                _resolve_survey_for_fit,
+                _validate_unit_constant_survey,
+                compute_survey_metadata,
+            )
+
+            for _col in self._survey_columns(survey_design):
+                if isinstance(_col, str) and (_col.startswith("_") or _col == "horizon"):
+                    raise ValueError(
+                        f"survey_design column '{_col}' collides with an LPDiD "
+                        "reserved/internal name (names starting with '_' or named "
+                        "'horizon' are reserved by the estimator); rename it."
+                    )
+            resolved_panel, _, _, _ = _resolve_survey_for_fit(survey_design, data, "analytical")
+            if resolved_panel.weight_type != "pweight":
+                raise ValueError(
+                    "LPDiD survey support requires weight_type='pweight' (probability "
+                    f"weights); got '{resolved_panel.weight_type}'. Frequency (fweight) and "
+                    "analytic (aweight) weight types are a deferred follow-up."
+                )
+            if resolved_panel.uses_replicate_variance:
+                raise NotImplementedError(
+                    "LPDiD does not yet support replicate-weight survey designs (BRR/Fay/"
+                    "JK1/JKn/SDR); use a Taylor-linearization design (weights + optional "
+                    "strata/PSU/FPC). Replicate-weight support is a deferred follow-up."
+                )
+            _validate_unit_constant_survey(data, unit, survey_design)
+            # Panel-level effective design for the REPORTED metadata: inject the unit
+            # (LP-DiD's default cluster) as the PSU when no explicit PSU is given, so the
+            # reported design dimensions describe unit-level clustering (not implicit
+            # per-observation PSUs). The per-horizon SE uses each realized sample's own
+            # resolved design (see _estimate_survey_sample); the headline G in the
+            # SE-family line is the realized pooled-post PSU count.
+            if resolved_panel.psu is None:
+                resolved_panel = _inject_cluster_as_psu(resolved_panel, data[cluster].to_numpy())
+            raw_weights = (
+                data[survey_design.weights].to_numpy(dtype=float)
+                if survey_design.weights
+                else np.ones(len(data), dtype=float)
+            )
+            survey_metadata = compute_survey_metadata(resolved_panel, raw_weights)
+            survey_n_strata = int(resolved_panel.n_strata)
+            survey_n_psu = int(resolved_panel.n_psu)
+            survey_cluster_name = survey_design.psu or cluster
+
         pre_horizons = self._resolve_pooled_horizons(pre_pooled, kind="pre")
         post_horizons = self._resolve_pooled_horizons(post_pooled, kind="post")
         panel = self._prepare_panel(
@@ -1201,6 +1404,7 @@ class LPDiD:
             ylags=ylags,
             dylags=dylags,
             absorb=absorb,
+            survey_design=survey_design,
         )
         panel["_common_event_ok"] = self._common_clean_sample_indicator(
             panel,
@@ -1244,6 +1448,7 @@ class LPDiD:
                         ylags=ylags,
                         dylags=dylags,
                         absorb=absorb,
+                        survey_design=survey_design,
                     )
                 event_rows.append(
                     {
@@ -1265,6 +1470,7 @@ class LPDiD:
                 ylags=ylags,
                 dylags=dylags,
                 absorb=absorb,
+                survey_design=survey_design,
             )
             post_estimate = self._estimate_window(
                 panel,
@@ -1277,6 +1483,7 @@ class LPDiD:
                 ylags=ylags,
                 dylags=dylags,
                 absorb=absorb,
+                survey_design=survey_design,
             )
             pooled = pd.DataFrame(
                 [
@@ -1313,12 +1520,16 @@ class LPDiD:
             no_composition=self.no_composition,
             pmd=self.pmd,
             alpha=self.alpha,
-            cluster_name=cluster,
+            cluster_name=survey_cluster_name,
             n_clusters=headline_n_clusters,
             vcov_type=(
-                "if_cluster"
-                if (self.reweight and bool(covariates or ylags or dylags or absorb))
-                else "hc1"
+                "survey_tsl"
+                if survey_design is not None
+                else (
+                    "if_cluster"
+                    if (self.reweight and bool(covariates or ylags or dylags or absorb))
+                    else "hc1"
+                )
             ),
             rank_deficient_action=self.rank_deficient_action,
             covariates=list(covariates) if covariates else None,
@@ -1327,6 +1538,9 @@ class LPDiD:
             dylags=dylags,
             non_absorbing=self.non_absorbing,
             stabilization_window=self.stabilization_window,
+            survey_metadata=survey_metadata,
+            n_strata=survey_n_strata,
+            n_psu=survey_n_psu,
         )
         self._fit_meta = {"cluster": cluster, "outcome": outcome, "unit": unit, "time": time}
         self.is_fitted_ = True

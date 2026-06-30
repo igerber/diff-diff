@@ -124,6 +124,7 @@ Files: `benchmarks/R/benchmark_realdata_*.R`, `tests/test_survey_real_data.py`,
 - **10c.** R validation expansion — 8 of 16 estimators cross-validated against R's `survey::svyglm()`
 - **10d.** Tutorial rewrite — flat-weight vs design-based comparison with known ground truth
 - **10f.** WooldridgeDiD survey support — OLS, logit, Poisson paths with `pweight` + strata/PSU/FPC + TSL variance
+- **10g.** LPDiD survey support — variance-weighted default path via `fit(survey_design=...)` with `pweight` + strata/PSU/FPC + stratified-PSU Taylor-linearization variance (`survey::svyglm` parity); reweight/regression-adjustment, replicate-weight, and non-pweight designs rejected (deferred follow-ups)
 
 ### v3.0.1: Survey Aggregation Helper
 

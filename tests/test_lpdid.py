@@ -1709,3 +1709,222 @@ class TestLPDiDNonAbsorbing:
             make_lpdid_panel(n_periods=8, seed=1), only_event=True, **_FIT_KW
         )
         assert "non_absorbing" not in r_ab.to_dict()
+
+
+# ===========================================================================
+# Survey-design support (Phase D1): pweight + stratified-PSU TSL variance
+# ===========================================================================
+from diff_diff import SurveyDesign  # noqa: E402
+
+
+def _attach_survey_design(
+    df,
+    *,
+    n_strata=4,
+    psu_per_stratum=(2, 2, 3, 3),
+    fpc_values=(100.0, 150.0, 200.0, 250.0),
+):
+    """Attach a unit-constant complex-survey design (stratum / PSU / FPC / weight)
+    to an LP-DiD panel. Weights vary across strata (``w_h = fpc_h / n_h``) so survey
+    weighting moves the point estimate. Mirrors ``benchmark_survey_estimators.R``.
+    With ``psu_per_stratum=(1, 1, 1, 1)`` every stratum is a single-PSU (lonely)
+    stratum, used to exercise the lonely-PSU paths."""
+    units = np.sort(df["unit"].unique())
+    splits = np.array_split(units, n_strata)
+    stratum, psu, fpc, weight = {}, {}, {}, {}
+    global_psu = 0
+    for h, block in enumerate(splits):
+        n_h = len(block)
+        n_psu_h = psu_per_stratum[h]
+        fpc_h = fpc_values[h]
+        w_h = fpc_h / n_h
+        for i, u in enumerate(block):
+            stratum[u] = h + 1
+            psu[u] = global_psu + (i % n_psu_h) + 1
+            fpc[u] = fpc_h
+            weight[u] = w_h
+        global_psu += n_psu_h
+    out = df.copy()
+    out["stratum"] = out["unit"].map(stratum)
+    out["psu"] = out["unit"].map(psu)
+    out["fpc"] = out["unit"].map(fpc)
+    out["weight"] = out["unit"].map(weight)
+    return out
+
+
+def _survey_panel(seed=21):
+    df = make_lpdid_panel(cohorts=(5, 8), n_per_cohort=25, n_never=30, n_periods=12, seed=seed)
+    return _attach_survey_design(df)
+
+
+def _full_design():
+    return SurveyDesign(weights="weight", strata="stratum", psu="psu", fpc="fpc")
+
+
+class TestLPDiDSurvey:
+    # ``survey_design`` is a fit()-time argument (data-binding), matching the
+    # library-wide convention (CallawaySantAnna / SpilloverDiD / ...).
+
+    # --- reduction / clustering ---
+    def test_weights_only_clusters_at_unit(self):
+        # Constant weights + weights-only design injects the unit as the PSU, so the
+        # survey path clusters at the unit just like the default HC1 path: identical
+        # point estimate and G, SE within the small-sample-factor neighborhood.
+        df = _survey_panel()
+        df["weight"] = 1.0  # constant -> WLS point == OLS point
+        plain = LPDiD(pre_window=2, post_window=2).fit(df, **_FIT_KW)
+        surv = LPDiD(pre_window=2, post_window=2).fit(
+            df, survey_design=SurveyDesign(weights="weight"), **_FIT_KW
+        )
+        assert surv.vcov_type == "survey_tsl"
+        assert surv.n_clusters == plain.n_clusters  # injected unit-PSU == unit cluster
+        assert surv.att == pytest.approx(plain.att, rel=1e-10)
+        assert np.isfinite(surv.se)
+        assert surv.se == pytest.approx(plain.se, rel=0.25)  # CR1 vs TSL factor
+
+    # --- FPC ---
+    def test_fpc_reduces_se(self):
+        df = _survey_panel()
+        with_fpc = LPDiD(post_window=2).fit(df, survey_design=_full_design(), **_FIT_KW)
+        no_fpc = LPDiD(post_window=2).fit(
+            df,
+            survey_design=SurveyDesign(weights="weight", strata="stratum", psu="psu"),
+            **_FIT_KW,
+        )
+        assert np.isfinite(with_fpc.se) and np.isfinite(no_fpc.se)
+        assert with_fpc.se < no_fpc.se
+
+    # --- stratification ---
+    def test_stratification_changes_se(self):
+        df = _survey_panel()
+        strat = LPDiD(post_window=2).fit(
+            df,
+            survey_design=SurveyDesign(weights="weight", strata="stratum", psu="psu"),
+            **_FIT_KW,
+        )
+        nostrat = LPDiD(post_window=2).fit(
+            df, survey_design=SurveyDesign(weights="weight", psu="psu"), **_FIT_KW
+        )
+        assert np.isfinite(strat.se) and np.isfinite(nostrat.se)
+        assert strat.se != pytest.approx(nostrat.se, rel=1e-6)
+
+    # --- weighting moves the point estimate ---
+    def test_weighting_moves_point_estimate(self):
+        df = _survey_panel()  # unequal weights across strata
+        plain = LPDiD(post_window=2).fit(df, **_FIT_KW)
+        surv = LPDiD(post_window=2).fit(df, survey_design=_full_design(), **_FIT_KW)
+        assert np.isfinite(surv.att)
+        assert surv.att != pytest.approx(plain.att, rel=1e-6)
+
+    def test_survey_with_covariates_direct_inclusion_runs(self):
+        # reweight=False + covariates => direct-inclusion OLS path, survey-supported
+        # (the RA path, which is rejected, requires reweight=True).
+        df = _survey_panel()
+        df["x"] = (np.arange(len(df)) % 7).astype(float)
+        with pytest.warns(UserWarning):  # direct-inclusion homogeneity warning
+            res = LPDiD(post_window=2).fit(
+                df, covariates=["x"], survey_design=_full_design(), **_FIT_KW
+            )
+        assert res.vcov_type == "survey_tsl"
+        assert np.isfinite(res.se)
+
+    # --- metadata + idempotence ---
+    def test_metadata_populated(self):
+        df = _survey_panel()
+        res = LPDiD(post_window=2).fit(df, survey_design=_full_design(), **_FIT_KW)
+        assert res.vcov_type == "survey_tsl"
+        assert res.cluster_name == "psu"
+        assert res.n_strata == 4
+        assert res.n_psu == 10  # (2 + 2 + 3 + 3) PSUs in the panel design
+        assert res.survey_metadata is not None
+        d = res.to_dict()
+        assert d["inference_method"] == "survey_tsl"
+        assert d["weight_type"] == "pweight"
+        assert d["n_strata"] == 4 and d["n_psu"] == 10
+        assert "Survey Design" in res.summary()
+        assert "Taylor-linearization" in res.summary()
+
+    def test_fit_idempotent(self):
+        df = _survey_panel()
+        est = LPDiD(post_window=2)
+        a = est.fit(df, survey_design=_full_design(), **_FIT_KW)
+        b = est.fit(df, survey_design=_full_design(), **_FIT_KW)  # repeat, same args
+        assert a.att == pytest.approx(b.att, rel=1e-12)
+        assert a.se == pytest.approx(b.se, rel=1e-12)
+        # A re-fit WITHOUT survey_design reverts to the plain (HC1) path: survey_design
+        # is a fit()-time binding, not sticky config.
+        plain = est.fit(df, **_FIT_KW)
+        assert plain.vcov_type == "hc1"
+
+    def test_get_params_excludes_survey_design(self):
+        # survey_design is a fit()-time argument, not a get_params() config field.
+        est = LPDiD(post_window=2)
+        assert "survey_design" not in est.get_params()
+        clone = LPDiD(**est.get_params())  # config-only clone
+        c = clone.fit(_survey_panel(), survey_design=_full_design(), **_FIT_KW)
+        assert c.vcov_type == "survey_tsl"  # survey applies because passed to fit()
+
+    # --- NaN-consistency: every stratum singleton + lonely_psu="remove" ---
+    def test_all_singleton_strata_remove_is_nan(self):
+        base = _survey_panel().drop(columns=["stratum", "psu", "fpc", "weight"])
+        df = _attach_survey_design(base, psu_per_stratum=(1, 1, 1, 1))
+        sd = SurveyDesign(weights="weight", strata="stratum", psu="psu", lonely_psu="remove")
+        res = LPDiD(post_window=2).fit(df, survey_design=sd, **_FIT_KW)
+        row = res._pooled_row("post")
+        assert_nan_inference(
+            {
+                "se": row["se"],
+                "t_stat": row["t_stat"],
+                "p_value": row["p_value"],
+                "conf_int": (row["conf_low"], row["conf_high"]),
+            }
+        )
+
+    # --- rejection paths ---
+    def test_rejects_survey_with_reweight(self):
+        # The reweight (equally-weighted / RA) path has no validated survey reference.
+        df = _survey_panel()
+        with pytest.raises(NotImplementedError):
+            LPDiD(post_window=2, reweight=True).fit(
+                df, survey_design=SurveyDesign(weights="weight"), **_FIT_KW
+            )
+
+    def test_rejects_survey_with_reweight_and_covariates(self):
+        # RA path (reweight + covariates) is a strict subset of reweight; same guard.
+        df = _survey_panel()
+        df["x"] = (np.arange(len(df)) % 5).astype(float)
+        with pytest.raises(NotImplementedError):
+            LPDiD(post_window=2, reweight=True).fit(
+                df, covariates=["x"], survey_design=_full_design(), **_FIT_KW
+            )
+
+    def test_rejects_non_pweight(self):
+        df = _survey_panel()
+        sd = SurveyDesign(weights="weight", weight_type="aweight")
+        with pytest.raises(ValueError):
+            LPDiD(post_window=2).fit(df, survey_design=sd, **_FIT_KW)
+
+    def test_rejects_replicate_weights(self):
+        df = _survey_panel()
+        for j in range(1, 5):
+            df[f"rw{j}"] = df["weight"] * (1.0 + 0.1 * ((j + df["unit"]) % 2))
+        sd = SurveyDesign(
+            weights="weight",
+            replicate_weights=[f"rw{j}" for j in range(1, 5)],
+            replicate_method="JK1",
+        )
+        with pytest.raises(NotImplementedError):
+            LPDiD(post_window=2).fit(df, survey_design=sd, **_FIT_KW)
+
+    def test_rejects_survey_column_varying_within_unit(self):
+        df = _survey_panel().copy()
+        df.loc[df.index[0], "weight"] = df["weight"].iloc[0] + 1.0  # break constancy
+        sd = SurveyDesign(weights="weight", strata="stratum", psu="psu")
+        with pytest.raises(ValueError):
+            LPDiD(post_window=2).fit(df, survey_design=sd, **_FIT_KW)
+
+    def test_rejects_reserved_survey_column_name(self):
+        df = _survey_panel().rename(columns={"weight": "_weight"})
+        sd = SurveyDesign(weights="_weight", strata="stratum", psu="psu")
+        with pytest.raises(ValueError):
+            LPDiD(post_window=2).fit(df, survey_design=sd, **_FIT_KW)

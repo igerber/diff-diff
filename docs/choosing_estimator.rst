@@ -877,6 +877,11 @@ estimation. The depth of support varies by estimator:
      - Full (analytical)
      - --
      - --
+   * - ``LPDiD``
+     - pweight only
+     - Full (Binder TSL)
+     - --
+     - --
    * - ``BaconDecomposition``
      - Diagnostic
      - Diagnostic

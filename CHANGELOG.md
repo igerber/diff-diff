@@ -8,6 +8,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **`LPDiD` complex-survey-design support** (Phase D1). Adds a `survey_design=` argument to
+  `LPDiD.fit()` (a `SurveyDesign` with probability weights + optional strata/PSU/FPC). On the
+  variance-weighted default path the long-difference regression at each horizon is fit by WLS on
+  the survey weights, and the standard error is the stratified-PSU Taylor-linearization (Binder
+  TSL) sandwich with `df = n_PSU - n_strata`, reusing `diff_diff/survey.py`
+  (`compute_survey_vcov` / `_compute_stratified_psu_meat`). The design is re-resolved on each
+  realized (post-clean-control) sample so weights/strata/PSU align with the regression rows; with
+  no explicit PSU the unit (LP-DiD's default cluster) is injected as the PSU. Rejects
+  `survey_design` combined with `reweight=True` (the equally-weighted / regression-adjustment
+  influence-function path), replicate-weight designs, and non-pweight (fweight/aweight) types,
+  each a deferred follow-up. `LPDiDResults` gains `survey_metadata` / `n_strata` / `n_psu`, a
+  `"survey_tsl"` `vcov_type`, and a Survey Design block in `summary()`. The non-survey path is
+  byte-for-byte unchanged. Validated against `survey::svyglm` on the stacked long difference
+  (numeric golden parity is the D2 follow-up).
 - **`LPDiD` non-absorbing R-parity validation** (Phase C2). Pins both non-absorbing modes
   against an independent `fixest::feols` reconstruction of the paper's Eq. 12 (`first_entry`)
   and Eq. 13 (`effect_stabilization`) clean-sample restrictions: variance-weighted point and
