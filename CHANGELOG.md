@@ -21,7 +21,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   each a deferred follow-up. `LPDiDResults` gains `survey_metadata` / `n_strata` / `n_psu`, a
   `"survey_tsl"` `vcov_type`, and a Survey Design block in `summary()`. The non-survey path is
   byte-for-byte unchanged. Validated against `survey::svyglm` on the stacked long difference
-  (numeric golden parity is the D2 follow-up).
+  (full numeric golden parity in Phase D2, below).
+- **`LPDiD` complex-survey R-parity validation** (Phase D2). Pins the D1 survey path end-to-end
+  against `survey::svyglm` (Lumley) goldens on a dedicated staggered-absorbing survey panel:
+  per-horizon point/SE/df + pooled-post/pre for three variance paths: the variance-weighted full
+  design (strata+PSU+FPC), the weights-only unit-injected-PSU design, and the direct-covariate
+  variant (point ~1e-6, SE ~1e-5, df exact via the per-design `n_PSU - n_strata` / `n_PSU - 1`
+  formula). Each horizon uses a fresh `svydesign` over that horizon's clean sample, matching the
+  library's per-sample resolution; `svyglm` is the reference implementation of the Binder TSL
+  sandwich so it anchors the variance directly, and the clean-sample construction is independently
+  cross-checked against `alexCardazzi/lpdid` (the unweighted variance-weighted event study matches
+  to <1e-8). New `tests/test_methodology_lpdid.py::TestLPDiDSurveyParityR` +
+  `benchmarks/R/generate_lpdid_survey_golden.R` + `lpdid_survey_panel.csv` /
+  `lpdid_survey_golden.json` (own seed, so the absorbing / non-absorbing goldens stay
+  byte-identical). No estimator change.
 - **`TROP` non-absorbing (on/off) treatment support** (Athey, Imbens, Qu & Viviano 2025,
   §2.1 / Eq. 12 / Algorithm 2). New `non_absorbing` parameter (default `False`). The paper
   supports general assignment patterns ("units moving into and out of treatment"), not only
