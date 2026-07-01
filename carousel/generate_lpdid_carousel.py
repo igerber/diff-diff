@@ -1137,7 +1137,7 @@ class LPDiDCarouselPDF(FPDF):
         items = [
             (
                 "Authors' R recipes (danielegirardi/lpdid)",
-                "Event-study and pooled estimands match to ~1e-13.",
+                "Event-study and pooled estimands match to ~1e-12.",
             ),
             (
                 "Independent fixest reconstruction",

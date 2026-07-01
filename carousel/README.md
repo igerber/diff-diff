@@ -18,8 +18,10 @@ scope), so a stale PDF can ship an overclaim that the script no longer makes.
 
 ## Dependencies
 
-Generation-only dependencies, intentionally NOT part of the library's install
-or dev extras: `fpdf2`, `Pillow`, `matplotlib` (plus Python >= 3.9).
+Carousel generation additionally requires `fpdf2` and `Pillow`, which are
+intentionally NOT part of the library's install or dev extras; `matplotlib`
+is already available through the dev/docs extras but is not a runtime
+install dependency. Python >= 3.9.
 
 ## Claim discipline
 
