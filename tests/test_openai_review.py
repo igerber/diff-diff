@@ -2451,7 +2451,8 @@ class TestWorkflowCodexActionContract:
     gates), or ``TestWorkflowDoesNotExecutePRHeadCode`` (``sandbox:
     read-only``):
 
-      - the action pin (``openai/codex-action@v1``) + its ``prompt-file`` input
+      - the action pin (``openai/codex-action`` at a full commit SHA with a
+        ``# v1`` version comment) + its ``prompt-file`` input
       - the compiled-prompt path agreeing between the build step (``PROMPT=``)
         and the action input (``prompt-file:``)
       - the ``final-message`` output flowing from the ``id:``-tagged Codex step
@@ -2520,11 +2521,14 @@ class TestWorkflowCodexActionContract:
     def test_run_codex_uses_pinned_action(self, workflow_text):
         block = self._require_block(workflow_text, self.RUN_CODEX_STEP)
         assert re.search(
-            r"^\s*uses:\s*openai/codex-action@v1\s*$", block, re.MULTILINE
+            r"^\s*uses:\s*openai/codex-action@[0-9a-f]{40}\s*#\s*v1(?:\.\d+)*\s*$",
+            block,
+            re.MULTILINE,
         ), (
-            "the Run Codex step must invoke the pinned openai/codex-action@v1; "
-            "a floating tag or a different action silently changes the review "
-            "contract."
+            "the Run Codex step must invoke openai/codex-action pinned to a "
+            "full commit SHA with a `# v1` version comment; a floating ref, a "
+            "different action, or a major-version bump silently changes the "
+            "review contract."
         )
 
     def test_run_codex_passes_prompt_file_input(self, workflow_text):
@@ -3359,7 +3363,7 @@ class TestWorkflowDoesNotExecutePRHeadCode:
         import re
 
         pattern = re.compile(
-            r"^      - uses: actions/checkout@\S+\s*\n"
+            r"^      - uses: actions/checkout@\S+(?:\s+#[^\n]*)?\n"
             r"        if: [^\n]*state == 'open'[^\n]*\n"
             r"((?:[ ]{8,}.*\n|[ ]*\n)*)",
             re.MULTILINE,
