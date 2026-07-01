@@ -117,7 +117,7 @@ jobs:
       # ─────────────────────────────────────────────────────────────────
       - name: Resolve PR number + metadata
         id: pr
-        uses: actions/github-script@v9
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         with:
           script: |
             const prNumber =
@@ -180,7 +180,7 @@ jobs:
       # durably even after the fork is deleted or branches removed.
       # The previous workflow used `refs/pull/<N>/merge`, which is
       # garbage-collected on closed PRs — this path replaces that.
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         if: steps.pr.outputs.state != 'open' && steps.pr.outputs.is_fork == 'false'
         with:
           ref: refs/pull/${{ steps.pr.outputs.number }}/head
@@ -191,7 +191,7 @@ jobs:
       # has not yet mirrored a freshly API-created PR's head
       # (see .claude/commands/submit-pr.md:327-345). head_sha is
       # guaranteed to exist on the head repo for an open PR.
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         if: steps.pr.outputs.state == 'open' && steps.pr.outputs.is_fork == 'false'
         with:
           repository: ${{ steps.pr.outputs.head_repo_full_name }}
@@ -211,7 +211,7 @@ jobs:
       - name: Fetch previous AI review (if any)
         id: prev_review
         if: steps.pr.outputs.is_fork == 'false'
-        uses: actions/github-script@v9
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         with:
           script: |
             const { owner, repo } = context.repo;
@@ -509,7 +509,7 @@ jobs:
       - name: Run Codex
         id: run_codex
         if: steps.pr.outputs.is_fork == 'false'
-        uses: openai/codex-action@v1
+        uses: openai/codex-action@10cb888d2ed3b99867f7e7ccff174a861a75aeb6 # v1
         with:
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
           prompt-file: .github/codex/prompts/pr_review_compiled.md
@@ -521,7 +521,7 @@ jobs:
 
       - name: Post PR comment (new on every event except initial open)
         if: steps.pr.outputs.is_fork == 'false'
-        uses: actions/github-script@v9
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         env:
           CODEX_FINAL_MESSAGE: ${{ steps.run_codex.outputs.final-message }}
           PR_NUMBER: ${{ steps.pr.outputs.number }}

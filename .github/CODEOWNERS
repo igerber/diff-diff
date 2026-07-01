@@ -1,0 +1,7 @@
+# Code owners are auto-requested as reviewers when a PR touches these paths.
+# This is an advisory flag for release/CI/build infrastructure, not a merge
+# gate (require_code_owner_reviews is intentionally off).
+
+/.github/       @igerber
+/pyproject.toml @igerber
+/rust/          @igerber
