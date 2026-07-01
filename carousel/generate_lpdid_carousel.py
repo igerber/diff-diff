@@ -39,7 +39,9 @@ Run with::
 
     python carousel/generate_lpdid_carousel.py
 
-Produces ``carousel/diff-diff-lpdid-carousel.pdf``.
+Produces ``carousel/diff-diff-lpdid-carousel.pdf``. Generation requires
+``fpdf2``, ``Pillow``, and ``matplotlib`` (carousel-only dependencies, not
+part of the library's install or dev extras).
 """
 
 import os
@@ -206,23 +208,6 @@ class LPDiDCarouselPDF(FPDF):
     # -----------------------------------------------------------------
     # Equation rendering (matplotlib mathtext -> PNG -> fpdf image)
     # -----------------------------------------------------------------
-
-    def _render_equations(self, latex_lines, fontsize=26, color=NAVY_HEX):
-        n = len(latex_lines)
-        fig_h = max(0.7, 0.55 * n + 0.15)
-        fig = plt.figure(figsize=(10, fig_h))
-        for i, line in enumerate(latex_lines):
-            y_frac = 1.0 - (2 * i + 1) / (2 * n)
-            fig.text(0.5, y_frac, line, fontsize=fontsize, ha="center", va="center", color=color)
-        fig.patch.set_alpha(0)
-        fd, path = tempfile.mkstemp(suffix=".png")
-        os.close(fd)
-        fig.savefig(path, dpi=250, bbox_inches="tight", pad_inches=0.06, transparent=True)
-        plt.close(fig)
-        with PILImage.open(path) as img:
-            pw, ph = img.size
-        self._temp_files.append(path)
-        return path, pw, ph
 
     def _place_equation_centered(self, path, pw, ph, y, max_w=200):
         aspect = ph / pw
@@ -733,7 +718,7 @@ class LPDiDCarouselPDF(FPDF):
         )
         self.centered_text(
             cap_y + 16,
-            "Same target. Four mental models.",
+            "Same causal question. Four mental models.",
             size=16,
             bold=True,
             color=NAVY,
@@ -1093,7 +1078,7 @@ class LPDiDCarouselPDF(FPDF):
             ("PMD Baselines", "Premean differencing +\npooled pre/post ATTs"),
             ("Non-Absorbing Treatment", "First-entry & effect-\nstabilization (Eq. 12/13)"),
             ("Survey Designs", "pweights, strata, PSU, FPC;\nBinder TSL (default path)"),
-            ("Composition Control", "no_composition fixes the\nsample across horizons"),
+            ("Composition Control", "no_composition fixes the\npost-window sample"),
         ]
 
         for idx, (title, desc) in enumerate(features):
@@ -1154,7 +1139,7 @@ class LPDiDCarouselPDF(FPDF):
             ),
             (
                 "Independent fixest reconstruction",
-                "Non-absorbing Eq. 12/13: point + SE parity to ~1e-13.",
+                "Non-absorbing Eq. 12/13, variance-weighted: point + SE to ~1e-13.",
             ),
             (
                 "survey::svyglm, end to end",
