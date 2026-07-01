@@ -839,7 +839,7 @@ class LPDiDCarouselPDF(FPDF):
         )
         self.centered_text(
             cap_y + 16,
-            "Already-treated units never serve as controls.",
+            "In the absorbing (default) path, already-treated units never serve as controls.",
             size=13,
             bold=False,
             italic=True,
