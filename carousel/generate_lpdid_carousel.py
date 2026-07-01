@@ -23,6 +23,11 @@ Narrative spine ("one regression to rule them all"):
 11. CTA          -- pip install + GitHub
 
 Claim discipline (verified against docs/methodology/papers/dube-2025-review.md):
+- The "zoo" named on the cover / shelf / equivalence map is EXACTLY the four
+  estimators the paper proves LP-DiD nests: Callaway-Sant'Anna, Cengiz-style
+  stacking, classic 2x2 DiD, and (single-cohort) BJS. Sun-Abraham has no
+  documented LP-DiD equivalence and is deliberately absent from the
+  unification arc.
 - CS and Cengiz-stacked equivalences are EXACT (paper Section 3.7).
 - BJS equality holds only for PMD k=t-1 single-cohort (fn. 10-11); phrased
   as "BJS-style / exact single-cohort" everywhere. Never a bare "==".
@@ -42,6 +47,7 @@ import tempfile
 from pathlib import Path
 
 import matplotlib
+import tomllib
 
 matplotlib.use("Agg")
 import matplotlib.patches as patches  # noqa: E402
@@ -57,8 +63,11 @@ plt.rcParams["mathtext.fontset"] = "cm"
 WIDTH = 270  # mm
 HEIGHT = 337.5  # mm
 
-# Version label -- single source of truth for the footer wordmark
-VERSION_LABEL = "v3.6.0"
+# Version label for the footer wordmark -- derived from pyproject.toml so the
+# carousel can never drift from the release it advertises.
+_PYPROJECT = Path(__file__).parent.parent / "pyproject.toml"
+with open(_PYPROJECT, "rb") as _f:
+    VERSION_LABEL = "v" + tomllib.load(_f)["project"]["version"]
 
 TOTAL_SLIDES = 11
 
@@ -625,9 +634,10 @@ class LPDiDCarouselPDF(FPDF):
 
         self.draw_split_logo(38, size=42)
 
-        # The zoo -- four estimator names as the setup
-        self.centered_text(104, "Callaway-Sant'Anna. Sun-Abraham.", size=27)
-        self.centered_text(128, "Borusyak-Jaravel-Spiess. Stacked DiD.", size=27)
+        # The zoo -- exactly the four estimators LP-DiD provably nests
+        # (paper Secs. 2.2 / 3.7, fn. 10-11), so the punchline is cashable.
+        self.centered_text(104, "Callaway-Sant'Anna. Stacked DiD.", size=27)
+        self.centered_text(128, "Borusyak-Jaravel-Spiess. The classic 2x2.", size=27)
 
         # Punchline
         self.centered_text(186, "One regression", size=50, color=VIOLET)
@@ -669,11 +679,13 @@ class LPDiDCarouselPDF(FPDF):
         card_h = 52
         start_y = 122
 
+        # Same four estimators as the cover and the slide-6 equivalence map:
+        # the shelf we show is exactly the shelf LP-DiD provably nests.
         boxes = [
+            ("Classic 2x2 DiD", "Where you started.\nOne clean comparison."),
             ("Callaway-Sant'Anna", "Group-time ATTs.\nIts own aggregation layer."),
-            ("Sun-Abraham", "Interaction-weighted ES.\nIts own saturated model."),
+            ("Stacked DiD (Cengiz et al.)", "Dataset duplication.\nIts own weighting scheme."),
             ("Borusyak-Jaravel-Spiess", "Imputation.\nIts own two-step machinery."),
-            ("Stacked DiD", "Dataset duplication.\nIts own weighting scheme."),
         ]
 
         for idx, (title, desc) in enumerate(boxes):
@@ -707,7 +719,7 @@ class LPDiDCarouselPDF(FPDF):
         cap_y = start_y + 2 * (card_h + 22) + 12
         self.centered_text(
             cap_y,
-            "Every fix for TWFE's negative weights brought its own framework.",
+            "Three fixes for TWFE's negative weights - plus the textbook case they outgrew.",
             size=14,
             bold=False,
             italic=True,
@@ -751,7 +763,7 @@ class LPDiDCarouselPDF(FPDF):
             ),
             (
                 "Phased Product Rollout",
-                "The feature ships to markets in waves. Sun-Abraham? Which saturation?",
+                "The feature ships to markets in waves. Event study? Which estimator?",
             ),
             (
                 "Programs That Switch Off",
@@ -1028,10 +1040,10 @@ class LPDiDCarouselPDF(FPDF):
                 ("#   reweight=True   ->  Callaway-Sant'Anna", LIGHT_GRAY),
             ],
             [
-                ("#   non_absorbing=  ->  treatments that switch off", LIGHT_GRAY),
+                ("#   non_absorbing=  ->  on/off treatments (entry effects)", LIGHT_GRAY),
             ],
             [
-                ("#   survey_design=  ->  pweights + strata + PSUs", LIGHT_GRAY),
+                ("#   survey_design=  ->  pweights + strata + PSUs (default path)", LIGHT_GRAY),
             ],
         ]
 
@@ -1046,7 +1058,11 @@ class LPDiDCarouselPDF(FPDF):
 
         sub_y = code_y + code_h + 10
         self.centered_text(
-            sub_y, "The whole zoo is a keyword argument.", size=13, bold=False, color=GRAY
+            sub_y,
+            "Callaway-Sant'Anna is literally a keyword argument.",
+            size=13,
+            bold=False,
+            color=GRAY,
         )
 
         self.add_footer()
