@@ -625,10 +625,11 @@ class LPDiDCarouselPDF(FPDF):
 
         # The zoo -- exactly the four estimators LP-DiD provably nests
         # (paper Secs. 2.2 / 3.7, fn. 10-11), so the punchline is cashable.
-        # "Cengiz-style" qualifier: the paper's equivalence target is the
-        # Cengiz et al. (2019) stacked design, not any stacked variant.
-        self.centered_text(104, "Callaway-Sant'Anna. Borusyak-Jaravel-Spiess.", size=27)
-        self.centered_text(128, "Cengiz-style stacking. The classic 2x2.", size=27)
+        # Qualified names carry the equivalence scope on the user-visible
+        # surface: "Cengiz-style" (the paper's stacked target, not any
+        # stacked variant) and "BJS-style" (exact only single-cohort PMD).
+        self.centered_text(104, "Callaway-Sant'Anna. Cengiz-style stacking.", size=27)
+        self.centered_text(128, "BJS-style imputation. The classic 2x2.", size=27)
 
         # Punchline
         self.centered_text(186, "One regression", size=50, color=VIOLET)
@@ -672,11 +673,12 @@ class LPDiDCarouselPDF(FPDF):
 
         # Same four estimators as the cover and the slide-6 equivalence map:
         # the shelf we show is exactly the shelf LP-DiD provably nests.
+        # "BJS-Style" keeps the single-cohort equivalence scope visible.
         boxes = [
             ("Classic 2x2 DiD", "Where you started.\nOne clean comparison."),
             ("Callaway-Sant'Anna", "Group-time ATTs.\nIts own aggregation layer."),
             ("Stacked DiD (Cengiz et al.)", "Dataset duplication.\nIts own weighting scheme."),
-            ("Borusyak-Jaravel-Spiess", "Imputation.\nIts own two-step machinery."),
+            ("BJS-Style Imputation", "Borusyak-Jaravel-Spiess.\nIts own two-step machinery."),
         ]
 
         for idx, (title, desc) in enumerate(boxes):
