@@ -1361,6 +1361,19 @@ def lprobust(
     se_cl = float(np.sqrt((deriv_fact**2) * V_Y_cl[deriv, deriv]))
     se_rb = float(np.sqrt((deriv_fact**2) * V_Y_bc[deriv, deriv]))
 
+    # Cluster-robust variance is unidentified when fewer than two clusters
+    # contribute to the ACTIVE kernel window (``eC = cluster[ind]``): the
+    # between-cluster meat is degenerate, so a finite ``se`` here would report
+    # unidentified clustered inference as if identified. NaN both SEs so any
+    # downstream inference (the ``safe_inference`` gate in
+    # ``bias_corrected_local_linear``; HAD's beta-scale rescale) is NaN-coupled.
+    # Unclustered fits (``eC is None``) are unaffected, and a clustered window
+    # with >= 2 distinct clusters is bit-identical, so the DGP-4 golden parity
+    # is preserved.
+    if eC is not None and len(np.unique(eC)) < 2:
+        se_cl = float("nan")
+        se_rb = float("nan")
+
     # --- Per-observation influence function for the BIAS-CORRECTED point
     # estimate at ``deriv`` (Phase 4.5 survey composition).
     # Aligned with ``V_Y_bc`` (NOT ``V_Y_cl``) so survey-composed variance

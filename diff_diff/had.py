@@ -297,18 +297,22 @@ class HeterogeneousAdoptionDiDResults:
         ``"analytical_nonparametric"`` (continuous designs) or
         ``"analytical_2sls"`` (mass-point).
     vcov_type : str or None
-        Effective variance-covariance family used. ``None`` on continuous
-        paths (they use the CCT-2014 robust SE from Phase 1c, not the
-        library's ``vcov_type`` enum). Mass-point: ``"classical"`` or
-        ``"hc1"`` when ``cluster`` is not supplied, and ``"cr1"``
-        whenever ``cluster`` is supplied (cluster-robust CR1 is computed
-        regardless of the requested ``vcov_type`` because
-        classical/hc1 + cluster collapses to the same CR1 sandwich).
-        Downstream consumers reading ``result.to_dict()`` can inspect
-        this field directly to determine the effective SE family.
+        Effective variance-covariance family used. On continuous paths:
+        ``None`` when unclustered (they use the CCT-2014 robust SE from
+        Phase 1c, not the library's ``vcov_type`` enum) and ``"cr1"`` when
+        ``cluster`` is supplied (the CCT SE becomes cluster-robust; paired
+        with ``inference_method="analytical_nonparametric"`` this identifies
+        the clustered CCT variance, distinct from the mass-point 2SLS CR1
+        sandwich). Mass-point: ``"classical"`` or ``"hc1"`` when ``cluster``
+        is not supplied, and ``"cr1"`` whenever ``cluster`` is supplied
+        (cluster-robust CR1 is computed regardless of the requested
+        ``vcov_type`` because classical/hc1 + cluster collapses to the same
+        CR1 sandwich). Downstream consumers reading ``result.to_dict()`` can
+        inspect this field directly to determine the effective SE family.
     cluster_name : str or None
-        Column name of the cluster variable on the mass-point path when
-        cluster-robust SE is requested. ``None`` otherwise.
+        Column name of the cluster variable when cluster-robust SE is
+        requested — on the mass-point path (2SLS CR1) or the continuous
+        paths (clustered CCT SE, Phase 2a). ``None`` otherwise.
     survey_metadata : SurveyMetadata or None
         Repo-standard survey metadata dataclass from
         :class:`diff_diff.survey.SurveyMetadata`. ``None`` when ``fit()``
@@ -2608,11 +2612,18 @@ class HeterogeneousAdoptionDiD:
         the mass-point path consumes these; continuous paths ignore
         both with a warning.
     cluster : str or None
-        Column name for cluster-robust SE on the mass-point path (CR1).
-        Ignored with a ``UserWarning`` on the continuous paths in Phase
-        2a (nonparametric cluster support exists on Phase 1c but is
-        exposed separately via ``bias_corrected_local_linear``; the
-        estimator-level knob is queued for a follow-up PR).
+        Column name for cluster-robust SE. On the mass-point path this is
+        the 2SLS CR1 sandwich; on the continuous (``continuous_at_zero`` /
+        ``continuous_near_d_lower``) paths (Phase 2a) it threads the cluster
+        IDs into ``bias_corrected_local_linear`` so ``se_robust`` is the
+        cluster-robust CCT-2014 nonparametric SE (``β̂``-scale
+        ``se = se_robust / |den|``). Composes with the ``weights=`` shortcut
+        (weighted cluster-robust). The cluster + ``survey_design=``
+        composition raises ``NotImplementedError`` (the Binder-TSL survey
+        variance would override the cluster-robust SE — route clustering
+        through ``survey_design=SurveyDesign(psu=<cluster_col>)`` instead).
+        Cluster must be constant within unit. Estimator-level cluster
+        threading on the event-study path (Phase 2b) remains a follow-up.
 
     Notes
     -----
@@ -3172,11 +3183,11 @@ class HeterogeneousAdoptionDiD:
         )
 
         # ---- Aggregate to unit-level first differences (no cluster yet) ----
-        # Defer cluster validation/extraction until after the design is
-        # resolved: the continuous paths ignore cluster= with a warning,
-        # so a malformed or irrelevant cluster column must not abort a
-        # valid continuous fit. Cluster extraction is re-run below only
-        # when resolved_design == "mass_point".
+        # Cluster validation/extraction is re-run below (after design
+        # resolution) whenever cluster= is set, so this first aggregation
+        # skips the cluster column. Both the mass-point 2SLS sandwich and the
+        # continuous (Phase 2a) bias_corrected_local_linear path consume the
+        # extracted cluster IDs.
         d_arr, dy_arr, _, _ = _aggregate_first_difference(
             data,
             outcome_col,
@@ -3340,14 +3351,35 @@ class HeterogeneousAdoptionDiD:
         else:
             resolved_design = design_arg
 
-        # ---- Extract cluster IDs (mass-point path only) ----
-        # Continuous paths ignore cluster= with a warning emitted later in
-        # the dispatch block; the cluster column is not read for them. On
-        # the mass-point path we now re-run the aggregation with
-        # cluster_col so validation (missing column / NaN / within-unit
-        # variance) fires only when cluster is actually going to be used.
+        # ---- Extract cluster IDs (mass-point + continuous paths) ----
+        # Reject the continuous cluster + ``survey_design=`` composition BEFORE
+        # extracting/validating the cluster column, so the unsupported-
+        # composition error is predictable even when the cluster column itself
+        # is malformed (a nonexistent column would otherwise raise ``ValueError``
+        # first). The Binder-TSL survey path composes variance from the per-unit
+        # IF and would silently override the cluster-robust local-linear SE.
+        if (
+            cluster_arg is not None
+            and resolved_survey_unit_full is not None
+            and resolved_design in ("continuous_at_zero", "continuous_near_d_lower")
+        ):
+            raise NotImplementedError(
+                f"cluster={cluster_arg!r} + survey_design= on the "
+                f"'{resolved_design}' path is not yet supported: the survey path "
+                f"composes Binder-TSL variance via compute_survey_if_variance and "
+                f"would silently override the cluster-robust local-linear SE. Pass "
+                f"cluster= alone (unweighted cluster-robust), weights= + cluster= "
+                f"(weighted cluster-robust), or "
+                f"survey_design=SurveyDesign(psu=<cluster_col>) to cluster through "
+                f"the survey (Binder-TSL) path."
+            )
+        # Re-run the aggregation with cluster_col so validation (missing column /
+        # NaN / within-unit variance) fires only when cluster is actually going to
+        # be used. The per-unit cluster array is threaded into the 2SLS sandwich on
+        # the mass-point path and into ``bias_corrected_local_linear`` on the
+        # continuous paths (Phase 2a).
         cluster_arr: Optional[np.ndarray] = None
-        if resolved_design == "mass_point" and cluster_arg is not None:
+        if cluster_arg is not None:
             _, _, cluster_arr, _ = _aggregate_first_difference(
                 data,
                 outcome_col,
@@ -3556,21 +3588,13 @@ class HeterogeneousAdoptionDiD:
                     UserWarning,
                     stacklevel=2,
                 )
-            if cluster_arg is not None:
-                warnings.warn(
-                    f"cluster={cluster_arg!r} is ignored on the "
-                    f"'{resolved_design}' path in Phase 2a. Cluster-"
-                    f"robust SE on the nonparametric path is exposed "
-                    f"via diff_diff.bias_corrected_local_linear directly "
-                    f"but not yet threaded through the estimator-level "
-                    f"knob.",
-                    UserWarning,
-                    stacklevel=2,
-                )
+            # (cluster= + survey_design= was rejected up front, before cluster
+            # extraction — see the guard in the design-resolution block above.)
             # Fit on FULL (unfiltered) arrays so the IF aligns with the
             # full survey design. bias_corrected_local_linear drops
             # zero-weight rows internally for its validation + selector +
-            # fit, then zero-pads the IF back to full length. Survey
+            # fit, then zero-pads the IF back to full length, and filters the
+            # cluster IDs by the same positive-weight mask. Survey
             # composition below runs on the full design, preserving
             # domain-estimation semantics.
             att, se, bc_fit, bw_diag = self._fit_continuous(
@@ -3580,10 +3604,16 @@ class HeterogeneousAdoptionDiD:
                 d_lower_val,
                 weights_arr=weights_unit_full,
                 resolved_survey_unit=resolved_survey_unit_full,
+                cluster_arr=cluster_arr,
             )
             inference_method = "analytical_nonparametric"
-            vcov_label: Optional[str] = None
-            cluster_label: Optional[str] = None
+            # Cluster-robust (Phase 2a): the CCT nonparametric SE from
+            # bias_corrected_local_linear is cluster-robust when cluster= is
+            # threaded. vcov_type="cr1" + inference_method="analytical_
+            # nonparametric" together identify the clustered CCT variance
+            # (distinct from the mass-point 2SLS CR1 sandwich).
+            vcov_label: Optional[str] = "cr1" if cluster_arg is not None else None
+            cluster_label: Optional[str] = cluster_arg if cluster_arg is not None else None
         elif resolved_design == "mass_point":
             # Review R4 P1: narrow the cluster+weighted rejection. Only
             # survey= + cluster= is a silent-mismatch case (the
@@ -3843,6 +3873,7 @@ class HeterogeneousAdoptionDiD:
         weights_arr: Optional[np.ndarray] = None,
         resolved_survey_unit: Any = None,  # ResolvedSurveyDesign (G,) or None
         force_return_influence: bool = False,
+        cluster_arr: Optional[np.ndarray] = None,
     ) -> Tuple[float, float, Optional[BiasCorrectedFit], Optional[BandwidthResult]]:
         """Fit Phase 1c ``bias_corrected_local_linear`` and form the WAS estimate.
 
@@ -3928,8 +3959,16 @@ class HeterogeneousAdoptionDiD:
                 # Unconditional IF computation would add a small O(G) cost
                 # to every fit; gate it on the survey path.
                 return_influence=(resolved_survey_unit is not None or force_return_influence),
-                # No cluster / vce threading in Phase 2a (see UserWarning
-                # in fit()).
+                # Cluster-robust CCT variance (Phase 2a): when ``cluster_arr``
+                # is provided, ``bias_corrected_local_linear`` forwards it to
+                # the bandwidth selector and the ``lprobust`` variance so
+                # ``se_robust`` is the cluster-robust nonparametric SE. It also
+                # filters ``cluster_arr`` by the same positive-weight mask it
+                # uses to drop zero-weight rows, so a full-length array aligns.
+                # ``cluster=`` composes with ``weights=`` (weighted cluster-
+                # robust); the ``survey_design=`` composition is rejected
+                # up-front in ``fit()`` (Binder-TSL would override se_robust).
+                cluster=cluster_arr,
             )
         except (ZeroDivisionError, FloatingPointError, np.linalg.LinAlgError):
             return float("nan"), float("nan"), None, None
@@ -3969,6 +4008,12 @@ class HeterogeneousAdoptionDiD:
             else:
                 se = float(bc_fit.se_robust) / abs(den)
 
+        # Note: cluster-robust inference with fewer than two clusters in the
+        # active kernel window is NaN'd inside bias_corrected_local_linear /
+        # _nprobust_port.lprobust (``se_robust`` becomes NaN), so ``se`` here is
+        # already NaN in that degenerate case and safe_inference NaNs the
+        # downstream t-stat / p-value / CI (att stays the raw point estimate,
+        # mirroring the mass-point CR1 single-cluster contract).
         return att, se, bc_fit, bc_fit.bandwidth_diagnostics
 
     # ------------------------------------------------------------------

@@ -317,6 +317,24 @@ class TestInputContract:
         with pytest.raises(NotImplementedError, match="mass-point"):
             bias_corrected_local_linear(d, y, boundary=0.1)
 
+    def test_single_cluster_in_active_window_nans_se(self):
+        """Cluster-robust SE is NaN when fewer than two clusters fall inside the
+        active kernel window, even with >= 2 clusters globally (the window is a
+        subset of the sample selected by the bandwidth). Unidentified clustered
+        inference must not report a finite se_robust."""
+        rng = np.random.default_rng(0)
+        d = np.linspace(0.0, 1.0, 200)
+        y = 0.5 * d + 0.1 * rng.standard_normal(200)
+        # cluster 0 = doses <= 0.2 (near boundary 0); cluster 1 = doses > 0.2
+        cluster = (d > 0.2).astype(int)
+        # Narrow bandwidth -> the window at boundary 0 sees only cluster 0.
+        bc_narrow = bias_corrected_local_linear(d, y, boundary=0.0, h=0.1, cluster=cluster)
+        assert np.isnan(bc_narrow.se_robust)
+        assert np.isnan(bc_narrow.ci_low) and np.isnan(bc_narrow.ci_high)
+        # Wide bandwidth spanning both clusters -> identified -> finite SE.
+        bc_wide = bias_corrected_local_linear(d, y, boundary=0.0, h=0.6, cluster=cluster)
+        assert np.isfinite(bc_wide.se_robust)
+
     def test_cluster_nan_raises(self):
         """Float NaN in cluster IDs is rejected."""
         d = np.linspace(0.0, 1.0, 100)

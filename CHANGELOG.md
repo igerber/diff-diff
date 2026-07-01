@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **`HeterogeneousAdoptionDiD` cluster-robust SE on the continuous paths** (Phase 2a). `cluster=`
+  is now threaded into `bias_corrected_local_linear` on the `continuous_at_zero` /
+  `continuous_near_d_lower` designs, so the CCT-2014 robust variance becomes cluster-robust and the
+  β̂-scale SE is `se_robust / |den|` (previously `cluster=` was ignored on the continuous path with a
+  `UserWarning`). Composes with the `weights=` shortcut (weighted cluster-robust). The `cluster=` +
+  `survey_design=` composition raises `NotImplementedError` (route clustering through
+  `survey_design=SurveyDesign(psu=<cluster_col>)`). Cluster IDs must be unit-constant — a nonexistent
+  column, NaN, or within-unit-varying cluster now raises (mirroring the mass-point path) instead of
+  being silently ignored. Cluster-robust inference with fewer than two clusters in the active kernel
+  window (the in-bandwidth subset the CCT variance is computed on) returns `se=nan` (and NaN t-stat /
+  p-value / CI, `att` finite), matching the mass-point CR1 single-cluster contract; the guard lives in
+  `_nprobust_port.lprobust` so it also covers the direct `bias_corrected_local_linear` API. Result metadata reports `vcov_type="cr1"` +
+  `cluster_name`. The mass-point path and the event-study (Phase 2b) path are unchanged (Phase 2b
+  still defers cluster with a warning).
+
 ## [3.6.1] - 2026-07-01
 
 ### Added

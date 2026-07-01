@@ -1582,16 +1582,160 @@ class TestClusterHandling:
         with pytest.raises(ValueError, match="NaN"):
             est.fit(panel, "outcome", "dose", "period", "unit")
 
-    def test_cluster_warns_on_continuous_path(self):
-        d, dy = _dgp_continuous_at_zero(200, seed=0)
-        cluster_unit = np.repeat(np.arange(100), 2)  # length 200 unit-level
-        panel = _make_panel(d, dy, extra_cols={"state": cluster_unit})
-        est = HeterogeneousAdoptionDiD(design="continuous_at_zero", cluster="state")
+    @staticmethod
+    def _clustered_continuous(G=200, n_clusters=40, seed=0):
+        """Design 1' DGP with cluster-correlated errors (so CR1 != HC)."""
+        rng = np.random.default_rng(seed)
+        d = np.where(rng.random(G) < 0.15, 0.0, rng.uniform(0.2, 1.5, size=G))
+        d[0] = 0.0
+        cl = np.repeat(np.arange(n_clusters), G // n_clusters)
+        shock = rng.normal(scale=1.0, size=n_clusters)[cl]
+        dy = 1.5 * d + shock + rng.normal(scale=0.3, size=G)
+        return d, dy, cl
+
+    def test_cluster_threaded_on_continuous_path(self):
+        # Phase 2a: cluster= is now threaded into bias_corrected_local_linear
+        # (no longer ignored). The estimator SE equals the direct clustered
+        # local-linear se_robust rescaled by 1/|den|; the point estimate is
+        # unchanged and the clustered SE differs from the unclustered SE.
+        d, dy, cl = self._clustered_continuous()
+        panel = _make_panel(d, dy, extra_cols={"state": cl})
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
-            r = est.fit(panel, "outcome", "dose", "period", "unit")
-            assert any("cluster" in str(warn.message).lower() for warn in w)
+            r_cl = HeterogeneousAdoptionDiD(design="continuous_at_zero", cluster="state").fit(
+                panel, "outcome", "dose", "period", "unit"
+            )
+        # No "cluster ignored" warning any more.
+        assert not any(
+            "cluster" in str(x.message).lower() and "ignore" in str(x.message).lower() for x in w
+        )
+        r_none = HeterogeneousAdoptionDiD(design="continuous_at_zero").fit(
+            panel, "outcome", "dose", "period", "unit"
+        )
+        den = float(d.mean())
+        bc = bias_corrected_local_linear(d=d, y=dy, boundary=0.0, cluster=cl)
+        se_ref = float(bc.se_robust) / abs(den)
+        np.testing.assert_allclose(r_cl.att, r_none.att, atol=1e-12)  # point unchanged
+        np.testing.assert_allclose(r_cl.se, se_ref, rtol=0.0, atol=1e-12)  # exact rescale
+        assert abs(r_cl.se - r_none.se) > 1e-4  # cluster-robust differs from HC
+        assert r_cl.vcov_type == "cr1"
+        assert r_cl.cluster_name == "state"
+
+    def test_cluster_weighted_on_continuous_path(self):
+        # cluster= composes with the weights= shortcut: weighted cluster-robust
+        # SE equals the direct weighted+clustered local-linear se_robust / |den_w|.
+        d, dy, cl = self._clustered_continuous(seed=1)
+        rng = np.random.default_rng(2)
+        w = rng.uniform(0.5, 2.0, size=len(d))
+        panel = _make_panel(d, dy, extra_cols={"state": cl})
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            r = HeterogeneousAdoptionDiD(design="continuous_at_zero", cluster="state").fit(
+                panel, "outcome", "dose", "period", "unit", weights=np.repeat(w, 2)
+            )
+        den_w = float(np.average(d, weights=w))
+        bc = bias_corrected_local_linear(d=d, y=dy, boundary=0.0, weights=w, cluster=cl)
+        np.testing.assert_allclose(r.se, float(bc.se_robust) / abs(den_w), rtol=0.0, atol=1e-12)
+        assert r.cluster_name == "state"
+
+    def test_cluster_survey_design_raises_on_continuous(self):
+        # cluster= + survey_design= is rejected: the Binder-TSL survey path
+        # would override the cluster-robust SE (route via psu= instead).
+        from diff_diff.survey import SurveyDesign
+
+        d, dy, cl = self._clustered_continuous(seed=3)
+        rng = np.random.default_rng(4)
+        panel = _make_panel(
+            d, dy, extra_cols={"state": cl, "wt": rng.uniform(0.5, 2.0, size=len(d))}
+        )
+        with pytest.raises(NotImplementedError, match="cluster.*survey_design"):
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                HeterogeneousAdoptionDiD(design="continuous_at_zero", cluster="state").fit(
+                    panel,
+                    "outcome",
+                    "dose",
+                    "period",
+                    "unit",
+                    survey_design=SurveyDesign(weights="wt", psu="state"),
+                )
+
+    def test_cluster_threaded_on_continuous_near_d_lower(self):
+        # The other continuous design (continuous_near_d_lower) threads cluster=
+        # through the same _fit_continuous hook: the SE equals the direct
+        # clustered local-linear se_robust on the shifted regressor (d - d_lower)
+        # rescaled by 1/|mean(d - d_lower)|.
+        rng = np.random.default_rng(5)
+        G, n_clusters = 200, 40
+        d = 0.1 + 0.9 * rng.beta(2, 2, G)
+        cl = np.repeat(np.arange(n_clusters), G // n_clusters)
+        shock = rng.normal(scale=1.0, size=n_clusters)[cl]
+        dy = 1.5 * d + shock + rng.normal(scale=0.3, size=G)
+        panel = _make_panel(d, dy, extra_cols={"state": cl})
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            r = HeterogeneousAdoptionDiD(design="continuous_near_d_lower", cluster="state").fit(
+                panel, "outcome", "dose", "period", "unit"
+            )
+        d_lower = float(d.min())
+        den = float((d - d_lower).mean())
+        bc = bias_corrected_local_linear(d=d - d_lower, y=dy, boundary=0.0, cluster=cl)
+        np.testing.assert_allclose(r.se, float(bc.se_robust) / abs(den), rtol=0.0, atol=1e-12)
+        assert r.cluster_name == "state"
+        assert r.vcov_type == "cr1"
+
+    def test_single_cluster_continuous_at_zero_nan_inference(self):
+        # Cluster-robust inference is unidentified with one cluster: se/p/CI are
+        # NaN while att stays finite (mirrors the mass-point CR1 contract).
+        rng = np.random.default_rng(0)
+        G = 300
+        d = rng.uniform(0.0, 1.0, G)
+        d[0] = 0.0
+        dy = 0.3 * d + 0.1 * rng.standard_normal(G)
+        panel = _make_panel(d, dy, extra_cols={"state": np.zeros(G, dtype=int)})
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            r = HeterogeneousAdoptionDiD(design="continuous_at_zero", cluster="state").fit(
+                panel, "outcome", "dose", "period", "unit"
+            )
         assert np.isfinite(r.att)
+        assert np.isnan(r.se)
+        assert np.isnan(r.p_value)
+        assert np.all(np.isnan(r.conf_int))
+
+    def test_single_cluster_continuous_near_d_lower_nan_inference(self):
+        rng = np.random.default_rng(1)
+        G = 300
+        d = 0.1 + 0.9 * rng.beta(2, 2, G)
+        dy = 0.3 * d + 0.1 * rng.standard_normal(G)
+        panel = _make_panel(d, dy, extra_cols={"state": np.zeros(G, dtype=int)})
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            r = HeterogeneousAdoptionDiD(design="continuous_near_d_lower", cluster="state").fit(
+                panel, "outcome", "dose", "period", "unit"
+            )
+        assert np.isfinite(r.att)
+        assert np.isnan(r.se)
+
+    def test_single_positive_weight_cluster_continuous_nan_inference(self):
+        # Two global clusters, but zero weights leave only one with positive
+        # weight -> effective clusters < 2 -> NaN inference (the effective-cluster
+        # count is taken on the positive-weight support).
+        rng = np.random.default_rng(2)
+        G = 300
+        d = rng.uniform(0.0, 1.0, G)
+        d[0] = 0.0
+        dy = 0.3 * d + 0.1 * rng.standard_normal(G)
+        state = np.arange(G) % 2  # two clusters
+        w = np.where(state == 0, rng.uniform(0.5, 2.0, G), 0.0)  # cluster 1 all zero-weight
+        panel = _make_panel(d, dy, extra_cols={"state": state})
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            r = HeterogeneousAdoptionDiD(design="continuous_at_zero", cluster="state").fit(
+                panel, "outcome", "dose", "period", "unit", weights=np.repeat(w, 2)
+            )
+        assert np.isfinite(r.att)
+        assert np.isnan(r.se)
 
     def test_cluster_name_populated_mass_point(self):
         d, dy = _dgp_mass_point(200, seed=0)
@@ -1609,57 +1753,50 @@ class TestClusterHandling:
         )
         assert r.cluster_name is None
 
-    def test_missing_cluster_column_on_continuous_only_warns(self):
-        """Review P1 round 7: irrelevant cluster on continuous path must not
-        abort the fit. The cluster column doesn't even need to exist.
-        """
+    def test_missing_cluster_column_on_continuous_raises(self):
+        """Now that cluster= is threaded on the continuous path (Phase 2a), a
+        nonexistent cluster column raises (mirrors the mass-point path) rather
+        than being silently ignored with a warning."""
         d, dy = _dgp_continuous_at_zero(200, seed=0)
         panel = _make_panel(d, dy)
         est = HeterogeneousAdoptionDiD(design="continuous_at_zero", cluster="does_not_exist")
-        with warnings.catch_warnings(record=True) as w:
-            warnings.simplefilter("always")
-            r = est.fit(panel, "outcome", "dose", "period", "unit")
-            assert any("cluster" in str(warn.message).lower() for warn in w)
-        assert np.isfinite(r.att)
-        assert r.cluster_name is None
+        with pytest.raises(ValueError, match="cluster"):
+            est.fit(panel, "outcome", "dose", "period", "unit")
 
-    def test_nan_cluster_on_continuous_only_warns(self):
-        """NaN cluster IDs on continuous path must not abort the fit."""
+    def test_nan_cluster_on_continuous_raises(self):
+        """NaN cluster IDs on the continuous path now raise (cluster is used)."""
         d, dy = _dgp_continuous_at_zero(200, seed=0)
         cluster_unit = np.repeat(np.arange(100).astype(float), 2)
         cluster_unit[0] = np.nan
         panel = _make_panel(d, dy, extra_cols={"state": cluster_unit})
         est = HeterogeneousAdoptionDiD(design="continuous_at_zero", cluster="state")
-        with warnings.catch_warnings(record=True) as w:
-            warnings.simplefilter("always")
-            r = est.fit(panel, "outcome", "dose", "period", "unit")
-            assert any("cluster" in str(warn.message).lower() for warn in w)
-        assert np.isfinite(r.att)
+        with pytest.raises(ValueError, match="cluster"):
+            est.fit(panel, "outcome", "dose", "period", "unit")
 
-    def test_within_unit_varying_cluster_on_continuous_only_warns(self):
-        """Within-unit-varying cluster IDs on continuous path must not abort."""
+    def test_within_unit_varying_cluster_on_continuous_raises(self):
+        """Within-unit-varying cluster IDs on the continuous path now raise."""
         d, dy = _dgp_continuous_at_zero(200, seed=0)
         panel = _make_panel(d, dy)
         # Varies within unit (distinct value per row)
         panel["state"] = np.arange(len(panel))
         est = HeterogeneousAdoptionDiD(design="continuous_at_zero", cluster="state")
-        with warnings.catch_warnings(record=True) as w:
-            warnings.simplefilter("always")
-            r = est.fit(panel, "outcome", "dose", "period", "unit")
-            assert any("cluster" in str(warn.message).lower() for warn in w)
-        assert np.isfinite(r.att)
+        with pytest.raises(ValueError, match="cluster"):
+            est.fit(panel, "outcome", "dose", "period", "unit")
 
-    def test_auto_design_ignores_irrelevant_cluster_on_continuous(self):
-        """design='auto' resolving to a continuous path must also ignore cluster."""
+    def test_auto_design_continuous_threads_cluster(self):
+        """design='auto' resolving to a continuous path now threads (and honors)
+        a valid cluster column."""
         d, dy = _dgp_continuous_at_zero(500, seed=0)
-        panel = _make_panel(d, dy)
-        est = HeterogeneousAdoptionDiD(design="auto", cluster="does_not_exist")
-        with warnings.catch_warnings(record=True) as w:
-            warnings.simplefilter("always")
+        cluster_unit = np.repeat(np.arange(100), 5)  # 100 clusters, unit-level
+        panel = _make_panel(d, dy, extra_cols={"state": cluster_unit})
+        est = HeterogeneousAdoptionDiD(design="auto", cluster="state")
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
             r = est.fit(panel, "outcome", "dose", "period", "unit")
-            assert any("cluster" in str(warn.message).lower() for warn in w)
         assert r.design == "continuous_at_zero"
         assert np.isfinite(r.att)
+        assert r.cluster_name == "state"
+        assert r.vcov_type == "cr1"
 
 
 # =============================================================================
