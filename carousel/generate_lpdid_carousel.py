@@ -256,11 +256,12 @@ class LPDiDCarouselPDF(FPDF):
             color=NAVY_HEX,
         )
 
-        # The estimand (paper Eqs. 9-10): non-negative cohort weights
+        # The estimand (paper Eqs. 9-10): non-negative weights over TREATED
+        # cohorts only (g != 0; the never-treated cohort is the control).
         ax.text(
             0.5,
             0.52,
-            r"$E(\beta_h) \;=\; \sum_{g}\,\omega_{g,h}\,\tau_h^g\,,"
+            r"$E(\beta_h) \;=\; \sum_{g \neq 0}\,\omega_{g,h}\,\tau_h^g\,,"
             r"\qquad \omega_{g,h} \,\geq\, 0$",
             fontsize=25,
             ha="center",
@@ -1121,7 +1122,12 @@ class LPDiDCarouselPDF(FPDF):
         self.set_xy(0, comp_y)
         self.set_font("Helvetica", "I", 10)
         self.set_text_color(*LIGHT_GRAY)
-        self.cell(WIDTH, 8, "All composable on the basic fit() call.", align="C")
+        self.cell(
+            WIDTH,
+            8,
+            "Composable where validated - survey_design runs the default path only.",
+            align="C",
+        )
 
         self.add_footer()
 
