@@ -43,11 +43,11 @@ Produces ``carousel/diff-diff-lpdid-carousel.pdf``.
 """
 
 import os
+import re
 import tempfile
 from pathlib import Path
 
 import matplotlib
-import tomllib
 
 matplotlib.use("Agg")
 import matplotlib.patches as patches  # noqa: E402
@@ -64,10 +64,13 @@ WIDTH = 270  # mm
 HEIGHT = 337.5  # mm
 
 # Version label for the footer wordmark -- derived from pyproject.toml so the
-# carousel can never drift from the release it advertises.
+# carousel can never drift from the release it advertises. Parsed with a
+# regex (not tomllib, which is Python 3.11+; the project supports >=3.9).
 _PYPROJECT = Path(__file__).parent.parent / "pyproject.toml"
-with open(_PYPROJECT, "rb") as _f:
-    VERSION_LABEL = "v" + tomllib.load(_f)["project"]["version"]
+_m = re.search(r'^version\s*=\s*"([^"]+)"', _PYPROJECT.read_text(encoding="utf-8"), re.MULTILINE)
+if _m is None:
+    raise RuntimeError(f"could not parse project version from {_PYPROJECT}")
+VERSION_LABEL = "v" + _m.group(1)
 
 TOTAL_SLIDES = 11
 
@@ -636,8 +639,10 @@ class LPDiDCarouselPDF(FPDF):
 
         # The zoo -- exactly the four estimators LP-DiD provably nests
         # (paper Secs. 2.2 / 3.7, fn. 10-11), so the punchline is cashable.
-        self.centered_text(104, "Callaway-Sant'Anna. Stacked DiD.", size=27)
-        self.centered_text(128, "Borusyak-Jaravel-Spiess. The classic 2x2.", size=27)
+        # "Cengiz-style" qualifier: the paper's equivalence target is the
+        # Cengiz et al. (2019) stacked design, not any stacked variant.
+        self.centered_text(104, "Callaway-Sant'Anna. Borusyak-Jaravel-Spiess.", size=27)
+        self.centered_text(128, "Cengiz-style stacking. The classic 2x2.", size=27)
 
         # Punchline
         self.centered_text(186, "One regression", size=50, color=VIOLET)
@@ -803,7 +808,7 @@ class LPDiDCarouselPDF(FPDF):
             ),
             (
                 "Weights provably non-negative.",
-                "The TWFE negative-weighting pathology cannot come back (Eqs. 9-10).",
+                "Clean-control baseline result (Eqs. 9-10). With covariates, prefer RA.",
             ),
             (
                 "The estimand is a dial.",
@@ -1086,7 +1091,7 @@ class LPDiDCarouselPDF(FPDF):
             ("Covariates, Two Ways", "RA path (BJS-style) or\ndirect with guardrails"),
             ("PMD Baselines", "Premean differencing +\npooled pre/post ATTs"),
             ("Non-Absorbing Treatment", "First-entry & effect-\nstabilization (Eq. 12/13)"),
-            ("Survey Designs", "pweights, strata, PSU,\nFPC via Binder TSL"),
+            ("Survey Designs", "pweights, strata, PSU, FPC;\nBinder TSL (default path)"),
             ("Composition Control", "no_composition fixes the\nsample across horizons"),
         ]
 
@@ -1147,7 +1152,7 @@ class LPDiDCarouselPDF(FPDF):
             ),
             (
                 "survey::svyglm, end to end",
-                "Survey path: per-horizon point, SE, and df all pinned.",
+                "Default-path survey: per-horizon point, SE, and df all pinned.",
             ),
             (
                 "Equivalences tested, not cited",
