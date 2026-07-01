@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "diff-diff"
-version = "3.6.0"
+version = "3.6.1"
 description = "Difference-in-Differences causal inference with sklearn-like API. Callaway-Sant'Anna, Synthetic DiD, Honest DiD, event studies, parallel trends."
 readme = "README.md"
 license = "MIT"
