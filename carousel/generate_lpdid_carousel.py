@@ -29,6 +29,10 @@ Claim discipline (verified against docs/methodology/papers/dube-2025-review.md):
   documented LP-DiD equivalence and is deliberately absent from the
   unification arc.
 - CS and Cengiz-stacked equivalences are EXACT (paper Section 3.7).
+- The stacking equivalence target is the Cengiz et al. (2019) LITERATURE design.
+  Never call it "Stacked DiD": this library's `StackedDiD` estimator implements
+  Wing, Freedman & Hollingsworth (2024) with Q-weights, a different (corrected)
+  scheme that LP-DiD does NOT nest (see the CE-4 note in tests/test_lpdid.py).
 - BJS equality holds only for PMD k=t-1 single-cohort (fn. 10-11); phrased
   as "BJS-style / exact single-cohort" everywhere. Never a bare "==".
 - NO speed claims: the paper's Table 2 speedups are Stata-implementation
@@ -674,10 +678,13 @@ class LPDiDCarouselPDF(FPDF):
         # Same four estimators as the cover and the slide-6 equivalence map:
         # the shelf we show is exactly the shelf LP-DiD provably nests.
         # "BJS-Style" keeps the single-cohort equivalence scope visible.
+        # "Cengiz-Style Stacking" (literature name) -- NEVER "Stacked DiD",
+        # which is this library's WFH-2024 Q-weighted estimator, a different
+        # scheme LP-DiD does not nest (tests/test_lpdid.py CE-4 note).
         boxes = [
             ("Classic 2x2 DiD", "Where you started.\nOne clean comparison."),
             ("Callaway-Sant'Anna", "Group-time ATTs.\nIts own aggregation layer."),
-            ("Stacked DiD (Cengiz et al.)", "Dataset duplication.\nIts own weighting scheme."),
+            ("Cengiz-Style Stacking", "Cengiz et al. (2019).\nIts own dataset duplication."),
             ("BJS-Style Imputation", "Borusyak-Jaravel-Spiess.\nIts own two-step machinery."),
         ]
 
