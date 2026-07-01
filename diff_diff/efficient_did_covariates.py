@@ -805,22 +805,45 @@ def _silverman_bandwidth(X: np.ndarray, unit_weights: Optional[np.ndarray] = Non
     ``h = (4 / (d + 2))^{1/(d+4)} * median_std * n^{-1/(d+4)}``
 
     When ``unit_weights`` is provided, the rule is evaluated on the
-    **positive-weight support** (rows with ``w > 0``) only. The dispersion
-    statistic stays unweighted within that support (a documented second-order
-    simplification — survey-weighted bandwidth is deferred), but dropping
-    zero-weight rows keeps the bandwidth — and hence the kernel-smoothed
-    ``Omega*(X)`` and the per-unit efficient weights it feeds — invariant to
-    zero-weight (survey-subpopulation / padded) rows: such rows carry no
-    information yet would otherwise move both ``n`` and the standard deviation
-    (e.g. a zero-weight row with an extreme covariate inflates ``median_std``).
-    Falls back to the full matrix if the support is empty.
+    **positive-weight support** (rows with ``w > 0``) only, and the per-dimension
+    dispersion is **survey-weighted**: ``median_std`` is the median across
+    covariate dimensions of the weighted standard deviation
+    ``sqrt(sum_i w_i (x_i - xbar_w)^2 / sum_i w_i)`` with the weighted mean
+    ``xbar_w = sum_i w_i x_i / sum_i w_i``. Survey-weighted moments reflect the
+    population distribution the kernel-smoothed ``Omega*(X)`` targets, rather than
+    the unweighted sample. The rate term ``n`` remains the positive-weight support
+    count (the dispersion is weighted; the sample-size term is not — the
+    TODO-scoped refinement).
+
+    Invariances preserved:
+
+    - **Weight scale** (``w -> c*w``, ``c > 0``): the weighted mean/std and the
+      positive-weight count are all invariant, so the bandwidth is unchanged.
+    - **Zero-weight (survey-subpopulation / padded) rows**: zero-weight rows drop
+      from the support, contribute nothing to the weighted moments, and do not
+      change the count, so the bandwidth — and hence ``Omega*(X)`` and the
+      per-unit efficient weights it feeds — is invariant to such padding (e.g. a
+      zero-weight row with an extreme covariate cannot inflate ``median_std``).
+    - **Uniform positive weights**: the weighted std reduces to the unweighted
+      population std, matching the pre-refinement bandwidth up to floating point.
+
+    Falls back to the unweighted full matrix when no weights are given or the
+    positive-weight support is empty.
     """
+    weights = None
     if unit_weights is not None:
         support = unit_weights > 0
         if np.any(support):
             X = X[support]
+            weights = unit_weights[support]
     n, d = X.shape
-    stds = np.std(X, axis=0)
+    if weights is not None:
+        w_norm = weights / weights.sum()
+        weighted_mean = w_norm @ X
+        weighted_var = w_norm @ (X - weighted_mean) ** 2
+        stds = np.sqrt(weighted_var)
+    else:
+        stds = np.std(X, axis=0)
     stds[stds < 1e-10] = 1.0
     median_std = float(np.median(stds))
     h = (4.0 / (d + 2)) ** (1.0 / (d + 4)) * median_std * n ** (-1.0 / (d + 4))

@@ -59,6 +59,7 @@ import pytest
 from diff_diff import CallawaySantAnna, EfficientDiD
 from diff_diff.efficient_did import _hausman_quadratic_form
 from diff_diff.efficient_did_covariates import (
+    _silverman_bandwidth,
     estimate_inverse_propensity_sieve,
     estimate_outcome_regression,
     estimate_propensity_ratio_sieve,
@@ -762,6 +763,78 @@ class TestPropensitySieveGrowingOrder:
         assert int(g.sum() ** 0.2) == 6  # group support gives auto k_max = 6
         assert not np.allclose(auto, cap5, atol=1e-9)  # order > 5 was selected
         np.testing.assert_allclose(auto, cap6, atol=1e-9)  # specifically order 6
+
+
+# =============================================================================
+# Survey-weighted Silverman bandwidth (conditional Omega* kernel)
+# =============================================================================
+
+
+class TestSurveyWeightedSilvermanBandwidth:
+    """`_silverman_bandwidth` uses a survey-weighted per-dimension dispersion on
+    the positive-weight support, with the rate term `n` kept as the positive-
+    weight count (REGISTRY EfficientDiD covariates Note). These lock the
+    refinement's behavior and its invariances.
+    """
+
+    @staticmethod
+    def _weighted_median_std_bandwidth(X, w):
+        """Reference: median-of-weighted-std Silverman bandwidth over the
+        positive-weight support, n = positive-weight count."""
+        support = w > 0
+        Xs, ws = X[support], w[support]
+        n, d = Xs.shape
+        wn = ws / ws.sum()
+        mean = wn @ Xs
+        var = wn @ (Xs - mean) ** 2
+        stds = np.sqrt(var)
+        stds[stds < 1e-10] = 1.0
+        median_std = float(np.median(stds))
+        return (4.0 / (d + 2)) ** (1.0 / (d + 4)) * median_std * n ** (-1.0 / (d + 4))
+
+    def test_matches_weighted_reference_formula(self):
+        # Under non-uniform weights the bandwidth equals the hand-computed
+        # weighted-dispersion formula (not the unweighted one).
+        rng = np.random.default_rng(11)
+        X = rng.normal(size=(250, 3))
+        w = rng.uniform(0.4, 3.0, size=250)
+        got = _silverman_bandwidth(X, w)
+        expected = self._weighted_median_std_bandwidth(X, w)
+        np.testing.assert_allclose(got, expected, rtol=0.0, atol=1e-12)
+        # And it genuinely differs from the unweighted bandwidth.
+        assert abs(got - _silverman_bandwidth(X)) > 1e-4
+
+    def test_reduces_to_unweighted_under_uniform_weights(self):
+        # Uniform positive weights -> weighted std == unweighted population std.
+        rng = np.random.default_rng(12)
+        X = rng.normal(size=(200, 2))
+        np.testing.assert_allclose(
+            _silverman_bandwidth(X, np.full(200, 3.7)),
+            _silverman_bandwidth(X),
+            rtol=0.0,
+            atol=1e-12,
+        )
+
+    def test_invariant_to_weight_scale(self):
+        # w -> c*w leaves the weighted mean/std and the count unchanged.
+        rng = np.random.default_rng(13)
+        X = rng.normal(size=(180, 3))
+        w = rng.uniform(0.5, 2.0, size=180)
+        np.testing.assert_allclose(
+            _silverman_bandwidth(X, w), _silverman_bandwidth(X, 137.0 * w), rtol=0.0, atol=1e-12
+        )
+
+    def test_invariant_to_zero_weight_padding(self):
+        # Appending extreme zero-weight rows must not move the bandwidth: they
+        # leave the support, the weighted moments, and the count all unchanged.
+        rng = np.random.default_rng(14)
+        X = rng.normal(size=(150, 2))
+        w = rng.uniform(0.5, 2.0, size=150)
+        X_pad = np.vstack([X, rng.uniform(30.0, 60.0, size=(40, 2))])
+        w_pad = np.concatenate([w, np.zeros(40)])
+        np.testing.assert_allclose(
+            _silverman_bandwidth(X, w), _silverman_bandwidth(X_pad, w_pad), rtol=0.0, atol=0.0
+        )
 
 
 # =============================================================================

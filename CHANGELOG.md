@@ -99,6 +99,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the two previously-provisional REGISTRY notes (RA influence-function variance convention;
   pooled fixed-composition estimand) resolve in the library's favour with no estimator change.
 
+### Changed
+- **`EfficientDiD` survey-weighted Silverman bandwidth** (covariate DR path). The auto
+  Silverman bandwidth for the kernel-smoothed conditional `Omega*(X)` now uses a
+  **survey-weighted** per-dimension dispersion (weighted mean/std over the positive-weight
+  support) instead of the unweighted sample dispersion, so the bandwidth reflects the
+  population covariate distribution the kernel targets. The rate term `n` remains the
+  positive-weight support count. This shifts the DR point estimate and SE only in
+  **overidentified (H>1) covariate cells under non-uniform survey weights**; under uniform
+  weights it reduces to the previous bandwidth up to floating point, and it preserves the
+  existing invariances to zero-weight (subpopulation / padded) rows and to weight rescaling.
+  Non-survey and just-identified (H=1) paths are unchanged.
+
 ## [3.6.0] - 2026-06-29
 
 ### Added
