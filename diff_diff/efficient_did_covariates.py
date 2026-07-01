@@ -812,8 +812,8 @@ def _silverman_bandwidth(X: np.ndarray, unit_weights: Optional[np.ndarray] = Non
     ``xbar_w = sum_i w_i x_i / sum_i w_i``. Survey-weighted moments reflect the
     population distribution the kernel-smoothed ``Omega*(X)`` targets, rather than
     the unweighted sample. The rate term ``n`` remains the positive-weight support
-    count (the dispersion is weighted; the sample-size term is not — the
-    TODO-scoped refinement).
+    count (the dispersion is weighted; the sample-size term is not — a deliberately
+    scoped refinement, not Kish ``n_eff``).
 
     Invariances preserved:
 
