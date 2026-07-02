@@ -320,6 +320,65 @@ serves a different purpose: R-parity accuracy). They complement it.
   Callaway, Goodman-Bacon & Sant'Anna (2024), `docs/methodology/REGISTRY.md`
   ContinuousDiD section.
 
+### FE-absorption suite (scenarios 7-13) - isolated-fit machinery benchmarks
+
+Unlike scenarios 1-6, which time full practitioner operation chains, scenarios
+7-13 time **isolated `fit()` calls** on the fixed-effects absorption hot path
+(`demean_by_groups` / `within_transform`, the method-of-alternating-projections
+demeaning engine). They exist because the 2026-07 pyfixest gap analysis
+measured 64-87% of fit time inside that engine for the TWFE-family estimators,
+so a chain benchmark would only dilute the signal. Scripts:
+`benchmarks/speed_review/bench_fe_absorption.py` (diff-diff lane, committed
+`fe_absorption_before/after.json` baselines) and
+`bench_fe_absorption_pyfixest.py` (optional external yardstick, guarded on
+`import pyfixest`). Data shapes live in
+`benchmarks/speed_review/fe_absorption_datagen.py`; every scenario is
+seeded-deterministic and records an outcome checksum plus ATT/SE identity
+fields so optimization PRs can prove estimates did not move.
+
+- **7. `county_policy`** - staggered state/county policy event study.
+  3,109 counties (the US county count) x 60 months, four adoption cohorts
+  plus never-treated, ~5% attrition; `SunAbraham()` fit. The everyday
+  applied-micro shape (minimum-wage / opioid-policy literatures). Anchor:
+  Sun & Abraham (2021) applications; REGISTRY SunAbraham section.
+- **8. `firm_churn`** - corporate panel with entry/exit. 100k firms x 40
+  quarters, contiguous lifetimes covering ~60% of the window (Compustat/LBD
+  convention that firms enter and exit the sample); `SunAbraham()` fit.
+  Correlated unit-time incidence is the slow-convergence regime for MAP
+  (measured 16-17 iterations vs 2 balanced).
+- **9. `scanner_twfe`** - retail scanner panel. 35k stores x 156 weeks with
+  entry/exit, binary post treatment; `TwoWayFixedEffects()` fit (~3.3M rows).
+  Nielsen-scanner shape; TWFE is the workhorse estimator.
+- **10. `geo_experiment`** - order-level static-geo experiment. 5M orders
+  across 100k stores + 1k weeks, store-level treatment on for the post
+  window; `DifferenceInDifferences(absorb=["store", "week"])`. The
+  high-cardinality marketplace shape from the Instacart pyfixest writeup
+  (tech.instacart.com, 2025) - the workload PR #586's multi-absorb MAP
+  exists for.
+- **11. `survey_absorb`** - state-policy microdata with replicate weights.
+  500k rows, state + month FE, sampling weights plus 80 BRR replicate-weight
+  columns (BRFSS public-use convention);
+  `DifferenceInDifferences(absorb=..., survey_design=...)`. Times the
+  replicate-refit multiplier path: each replicate re-runs the full weighted
+  demean (`estimators.py` `_refit_did_absorb`).
+- **12. `tail_stress`** - correlated-FE stress case, NOT a headline number.
+  5M order-level rows where stores live for a contiguous ~20% of the weeks;
+  ~250+ MAP iterations. Characterizes the iteration tail and the `max_iter`
+  cap (the committed BEFORE baseline records the non-convergence warning).
+  Reported separately from scenarios 7-11 by design: it is a deliberately
+  adversarial shape, kept to make the suite honest about the worst case
+  rather than to flatter average-case wins.
+- **13. `guard_small`** - regression guard. Balanced 1k x 20 panel through
+  `TwoWayFixedEffects()`; exists so optimization PRs prove the small-data
+  path did not regress (factorization/setup overhead would show here first).
+
+Noise protocol: every (scenario, repeat) runs in a fresh subprocess, strictly
+sequential; sub-second scenarios take the median of several in-process fits
+per subprocess; the driver pools all timed fits and reports median / min /
+max / CV, flagging CV > 10% as unusable. Identity tolerances (ATT
+atol=1e-9, SE rtol=1e-7, survey replicate SE rtol=1e-6) are recorded in the
+baseline JSON itself.
+
 ## Backend and environment notes
 
 All scenarios run under both backends where available:

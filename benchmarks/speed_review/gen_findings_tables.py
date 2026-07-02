@@ -43,12 +43,12 @@ MULTI_SCALE = (
 SINGLE_SCALE = ("reversible_dcdh", "dose_response")
 
 SCENARIO_DISPLAY = {
-    "campaign_staggered":     "1. Staggered campaign",
+    "campaign_staggered": "1. Staggered campaign",
     "brand_awareness_survey": "2. Brand awareness survey",
-    "brfss_panel":            "3. BRFSS microdata -> CS panel",
-    "geo_few_markets":        "4. SDiD few markets",
-    "reversible_dcdh":        "5. Reversible dCDH",
-    "dose_response":          "6. Pricing dose-response",
+    "brfss_panel": "3. BRFSS microdata -> CS panel",
+    "geo_few_markets": "4. SDiD few markets",
+    "reversible_dcdh": "5. Reversible dCDH",
+    "dose_response": "6. Pricing dose-response",
 }
 
 
@@ -84,15 +84,12 @@ def render_scale_sweep_totals():
             py_t = py["total_seconds"] if py else None
             rs_t = rs["total_seconds"] if rs else None
             ratio = (
-                f"{py_t/rs_t:.1f}x"
-                if (py_t is not None and rs_t is not None and rs_t > 0)
-                else "-"
+                f"{py_t/rs_t:.1f}x" if (py_t is not None and rs_t is not None and rs_t > 0) else "-"
             )
             name_col = display if first else ""
             first = False
             rows.append(
-                f"| {name_col} | {scale} | "
-                f"{fmt_secs(py_t)} | {fmt_secs(rs_t)} | {ratio} |"
+                f"| {name_col} | {scale} | " f"{fmt_secs(py_t)} | {fmt_secs(rs_t)} | {ratio} |"
             )
     for scen in SINGLE_SCALE:
         display = SCENARIO_DISPLAY[scen]
@@ -100,15 +97,8 @@ def render_scale_sweep_totals():
         rs = load(scen, None, "rust")
         py_t = py["total_seconds"] if py else None
         rs_t = rs["total_seconds"] if rs else None
-        ratio = (
-            f"{py_t/rs_t:.1f}x"
-            if (py_t is not None and rs_t is not None and rs_t > 0)
-            else "-"
-        )
-        rows.append(
-            f"| {display} | single | "
-            f"{fmt_secs(py_t)} | {fmt_secs(rs_t)} | {ratio} |"
-        )
+        ratio = f"{py_t/rs_t:.1f}x" if (py_t is not None and rs_t is not None and rs_t > 0) else "-"
+        rows.append(f"| {display} | single | " f"{fmt_secs(py_t)} | {fmt_secs(rs_t)} | {ratio} |")
     return "\n".join(rows)
 
 
@@ -160,8 +150,7 @@ def render_top_phases_by_scenario():
     dropping the row entirely.
     """
     rows = [
-        "| Scenario | Scale | Backend | Top phase (%) "
-        "| 2nd phase (%) | 3rd phase (%) |",
+        "| Scenario | Scale | Backend | Top phase (%) " "| 2nd phase (%) | 3rd phase (%) |",
         "|---|---|---|---|---|---|",
     ]
 
@@ -196,10 +185,7 @@ def render_top_phases_by_scenario():
             top = phase_rank(rec)
             if not top:
                 continue
-            rows.append(
-                f"| {display} | {scale} | {backend} | "
-                f"{top[0]} | {top[1]} | {top[2]} |"
-            )
+            rows.append(f"| {display} | {scale} | {backend} | " f"{top[0]} | {top[1]} | {top[2]} |")
     for scen in SINGLE_SCALE:
         display = SCENARIO_DISPLAY[scen]
         for backend in ("python", "rust"):
@@ -207,10 +193,61 @@ def render_top_phases_by_scenario():
             top = phase_rank(rec)
             if not top:
                 continue
-            rows.append(
-                f"| {display} | single | {backend} | "
-                f"{top[0]} | {top[1]} | {top[2]} |"
-            )
+            rows.append(f"| {display} | single | {backend} | " f"{top[0]} | {top[1]} | {top[2]} |")
+    return "\n".join(rows)
+
+
+FE_SCENARIO_DISPLAY = {
+    "county_policy": "7. County policy event study (SunAbraham)",
+    "firm_churn": "8. Firm panel with churn (SunAbraham)",
+    "scanner_twfe": "9. Scanner store-week (TWFE)",
+    "geo_experiment": "10. Geo experiment 5M orders (DiD absorb)",
+    "survey_absorb": "11. Survey BRR replicates (DiD absorb)",
+    "tail_stress": "12. Correlated-FE stress (DiD absorb)",
+    "guard_small": "13. Small-panel guard (TWFE)",
+}
+
+
+def render_fe_absorption():
+    """Before/after/yardstick wall-clock for the FE-absorption suite.
+
+    Renders whichever of fe_absorption_before.json / fe_absorption_after.json
+    / fe_absorption_pyfixest.json exist; absent files render as "-" columns so
+    the table is valid from PR-A (before only) onward.
+    """
+
+    def load_suite(name):
+        path = BASELINES / f"{name}.json"
+        if not path.exists():
+            return {}
+        return {
+            r["scenario"]: r for r in json.loads(path.read_text())["results"] if "error" not in r
+        }
+
+    before = load_suite("fe_absorption_before")
+    after = load_suite("fe_absorption_after")
+    yard = load_suite("fe_absorption_pyfixest")
+
+    def cell(rec):
+        if not rec or rec.get("fit_median_s") is None:
+            return "-"
+        flag = " (noisy)" if rec.get("noisy") else ""
+        return f"{rec['fit_median_s']:.3f} (cv {rec['fit_cv']:.1%}){flag}"
+
+    rows = [
+        "| Scenario | n rows | Before (s) | After (s) | Speedup | pyfixest (s) |",
+        "|---|---:|---:|---:|---:|---:|",
+    ]
+    for scen, display in FE_SCENARIO_DISPLAY.items():
+        b, a, y = before.get(scen), after.get(scen), yard.get(scen)
+        n_obs = (b or a or y or {}).get("n_obs")
+        n_col = f"{n_obs:,}" if n_obs else "-"
+        speedup = (
+            f"{b['fit_median_s'] / a['fit_median_s']:.1f}x"
+            if (b and a and a.get("fit_median_s"))
+            else "-"
+        )
+        rows.append(f"| {display} | {n_col} | {cell(b)} | {cell(a)} | {speedup} | {cell(y)} |")
     return "\n".join(rows)
 
 
@@ -218,6 +255,7 @@ TABLES = {
     "scale_sweep_totals": render_scale_sweep_totals,
     "memory_by_scenario": render_memory_by_scenario,
     "top_phases_by_scenario": render_top_phases_by_scenario,
+    "fe_absorption": render_fe_absorption,
 }
 
 
@@ -240,9 +278,7 @@ def update_markdown(path):
                 f" <!-- TABLE:end {table_id} --> to the document first."
             )
         if n > 1:
-            raise RuntimeError(
-                f"Multiple marker pairs for '{table_id}' in {path}."
-            )
+            raise RuntimeError(f"Multiple marker pairs for '{table_id}' in {path}.")
         text = new_text
     path.write_text(text)
 

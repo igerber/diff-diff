@@ -1,0 +1,69 @@
+{
+  "suite": "fe_absorption_pyfixest",
+  "pyfixest": "0.60.0",
+  "platform": "macOS-26.5.1-arm64-arm-64bit-Mach-O",
+  "repeats": 3,
+  "quick": false,
+  "results": [
+    {
+      "scenario": "county_policy",
+      "n_obs": 177289,
+      "checksum": 6315.071127371084,
+      "formula": "y ~ i(rel_time, ref=-1) | unit + time",
+      "coef": null,
+      "fit_median_s": 0.1904,
+      "fit_cv": 0.0401,
+      "parity_ok": null
+    },
+    {
+      "scenario": "firm_churn",
+      "n_obs": 2400000,
+      "checksum": 240997.06223418942,
+      "formula": "y ~ i(rel_time, ref=-1) | unit + time",
+      "coef": null,
+      "fit_median_s": 1.9116,
+      "fit_cv": 0.2027,
+      "parity_ok": null
+    },
+    {
+      "scenario": "scanner_twfe",
+      "n_obs": 3255000,
+      "checksum": 76832.22571739106,
+      "formula": "y ~ d | unit + post",
+      "coef": 0.2511641314950137,
+      "fit_median_s": 0.6441,
+      "fit_cv": 0.1229,
+      "parity_ok": true
+    },
+    {
+      "scenario": "geo_experiment",
+      "n_obs": 5000000,
+      "checksum": 443696.3834000407,
+      "formula": "y ~ d | store + week",
+      "coef": 0.2519437259991667,
+      "fit_median_s": 0.6228,
+      "fit_cv": 0.078,
+      "parity_ok": true
+    },
+    {
+      "scenario": "tail_stress",
+      "n_obs": 5000000,
+      "checksum": 376703.7248141762,
+      "formula": "y ~ d | store + week",
+      "coef": 0.2502082587524758,
+      "fit_median_s": 3.0748,
+      "fit_cv": 0.0149,
+      "parity_ok": true
+    },
+    {
+      "scenario": "guard_small",
+      "n_obs": 20000,
+      "checksum": -571.6190664591859,
+      "formula": "y ~ d | unit + post",
+      "coef": 0.2515087011451808,
+      "fit_median_s": 0.0066,
+      "fit_cv": 0.0222,
+      "parity_ok": true
+    }
+  ]
+}

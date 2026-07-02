@@ -8,6 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **FE-absorption benchmark suite** (`benchmarks/speed_review/bench_fe_absorption.py`, scenarios
+  7-13 in `docs/performance-scenarios.md`): seven realistic workloads (county policy event study,
+  firm panel with churn, scanner store-week, 5M-order geo experiment, survey BRR replicates,
+  correlated-FE stress, small-panel guard) timing the MAP-demeaning hot path
+  (`demean_by_groups` / `within_transform`) with subprocess isolation, multi-run CV reporting, and
+  ATT/SE identity capture so optimization PRs can prove estimates are unchanged
+  (`--check-estimates`). Includes an optional pyfixest yardstick lane
+  (`bench_fe_absorption_pyfixest.py`, guarded on import - never a dependency) asserting < 1e-6
+  coefficient parity on the exact-estimand scenarios, and committed BEFORE baselines
+  (`baselines/fe_absorption_before.json`). Measurement-only: no library behavior change.
 - **`HeterogeneousAdoptionDiD` cluster-robust SE on the continuous paths** (Phase 2a). `cluster=`
   is now threaded into `bias_corrected_local_linear` on the `continuous_at_zero` /
   `continuous_near_d_lower` designs, so the CCT-2014 robust variance becomes cluster-robust and the

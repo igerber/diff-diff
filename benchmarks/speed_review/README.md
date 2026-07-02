@@ -34,8 +34,16 @@ benchmarks/speed_review/
 ├── bench_memory_scaling.py             # peak-RSS sweep for the memory-scaling
 │                                       #   work (B1 #561 / B2 #563 / C #567);
 │                                       #   subprocess-isolated ru_maxrss, median
+├── bench_fe_absorption.py              # Scenarios 7-13: MAP-demeaning hot path
+│                                       #   (subprocess-isolated, multi-run CV,
+│                                       #   ATT/SE identity capture + gate)
+├── bench_fe_absorption_pyfixest.py     # optional external yardstick (guarded
+│                                       #   on `import pyfixest`; never a dep)
+├── fe_absorption_datagen.py            # seeded DGPs shared by both FE lanes
 └── baselines/                          # this effort's output
     ├── memory_scaling_{before,after}.json  # peak RSS pre-#561 vs current
+    ├── fe_absorption_{before,after}.json   # FE-absorption timings + identity
+    ├── fe_absorption_pyfixest.json     # yardstick timings + parity (optional)
     ├── <scenario>_<backend>.json       # phase-level wall-clock + peak RSS
     ├── mem_profile_brfss_large_<backend>.txt   # tracemalloc top-N sites
     └── profiles/                       # flame HTMLs (gitignored)
@@ -75,6 +83,33 @@ Multi-scale scenarios write per-scale outputs
 `..._large_rust.json`). Single-scale scenarios write the scale-free form
 (e.g. `dose_response_rust.json`). Full runtime for all scales × both
 backends is ~90 seconds on Apple Silicon M4.
+
+### FE-absorption suite (scenarios 7-13)
+
+Standalone like `bench_memory_scaling.py` (not part of `run_all.py` - the 5M-row
+scenarios are too heavy for the routine sweep):
+
+```bash
+# Full suite (~20-40 min on M4; strictly sequential subprocesses by design)
+python benchmarks/speed_review/bench_fe_absorption.py \
+    --out benchmarks/speed_review/baselines/fe_absorption_before.json
+
+# Smoke test / one scenario
+python benchmarks/speed_review/bench_fe_absorption.py --quick
+python benchmarks/speed_review/bench_fe_absorption.py --only geo_experiment
+
+# After an optimization: regenerate + prove estimates did not move
+python benchmarks/speed_review/bench_fe_absorption.py \
+    --out benchmarks/speed_review/baselines/fe_absorption_after.json \
+    --check-estimates benchmarks/speed_review/baselines/fe_absorption_before.json
+
+# Optional external yardstick (skipped cleanly if pyfixest is absent)
+pip install pyfixest
+python benchmarks/speed_review/bench_fe_absorption_pyfixest.py
+```
+
+Do not run anything else on the machine during a baseline run - the committed
+JSONs carry a CV field per scenario and the driver flags CV > 10% as unusable.
 
 ## Where to look for findings
 

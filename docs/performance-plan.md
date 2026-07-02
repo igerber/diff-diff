@@ -4,6 +4,70 @@ This document outlines the strategy for improving diff-diff's performance on lar
 
 ---
 
+## FE-absorption baseline: the MAP demeaning hot path (v3.6.x, July 2026)
+
+A measured head-to-head against pyfixest 0.60 (Rust demeaner core), prompted by
+Instacart's high-cardinality marketplace-modeling writeup, established that the
+method-of-alternating-projections demeaning engine (`demean_by_groups`,
+`diff_diff/utils.py`) is the dominant cost of every TWFE-family fit - and that
+the gap is machinery, not architecture:
+
+- **The engine is mainline, not edge.** `within_transform` is a thin two-way
+  wrapper over `demean_by_groups`, so every fit of TwoWayFixedEffects,
+  SunAbraham, BaconDecomposition, and WooldridgeDiD runs the MAP loop;
+  DiD/MultiPeriodDiD hit it via `absorb=`; the survey replicate path re-runs
+  the full weighted demean once per replicate (~80-200x per fit).
+- **Attribution.** cProfile on SunAbraham's canonical staggered entry/exit
+  panel (30k units x 30 periods, 540k rows): 13.5s fit with **82% inside
+  `demean_by_groups`** - 2,948 `groupby().transform("mean")` calls, of which
+  3.9s is pandas rebuilding the group index (`result_index_and_ids`) on every
+  call. The demeaning share of fit time across the estimator sweep was 64-87%.
+- **Machinery gap.** On identical 5M-row arrays at tol=1e-8, the pandas MAP
+  loop is ~15x slower than pyfixest's compiled demeaner (2.39s vs 0.15s
+  two-way; 3.01s vs 0.20s three-way). Estimator-level gaps are 2-7x on
+  realistic workloads (shared fit costs dilute the demeaner share). Peak RSS
+  is at parity or better - memory is a non-issue.
+- **Iteration regimes** (two-way, tol=1e-8, measured): balanced panel 2
+  iterations; 10% random gaps 6; entry/exit lifetimes at 60% span 16-17;
+  order-level random incidence 8-9; contiguous 20% lifetimes 238-279 - the
+  last crosses the `max_iter=100` cap, so the fit warns and returns
+  slightly-off residuals where fixest/reghdfe/pyfixest (cap 10,000) converge.
+- **Measured fix candidate.** A factorize-once + `np.bincount` rewrite of the
+  MAP loop (pure numpy, identical convergence semantics) measured **3.4x** on
+  the 5M-row two-way case and reaches full convergence on the stress case in
+  19.2s where the current loop burns 25.1s hitting the cap without
+  converging. The same pattern already exists in-tree
+  (`diff_diff/survey.py` `_PsuScaffolding`).
+
+The measurement surface is the seven-scenario FE-absorption suite
+(`benchmarks/speed_review/bench_fe_absorption.py`; shapes documented in
+`docs/performance-scenarios.md` scenarios 7-13; committed baseline
+`baselines/fe_absorption_before.json`, with `_after.json` to be added by the
+optimization PR). The optional pyfixest yardstick
+(`bench_fe_absorption_pyfixest.py`, guarded on import) asserts coefficient
+parity < 1e-6 on the four exact-estimand scenarios so the comparison stays
+honest over time.
+
+### FE-absorption suite results
+
+<!-- TABLE:start fe_absorption -->
+| Scenario | n rows | Before (s) | After (s) | Speedup | pyfixest (s) |
+|---|---:|---:|---:|---:|---:|
+| 7. County policy event study (SunAbraham) | 177,289 | 3.865 (cv 2.5%) | - | - | 0.190 (cv 4.0%) |
+| 8. Firm panel with churn (SunAbraham) | 2,400,000 | 92.957 (cv 0.9%) | - | - | 1.912 (cv 20.3%) |
+| 9. Scanner store-week (TWFE) | 3,255,000 | 1.549 (cv 0.3%) | - | - | 0.644 (cv 12.3%) |
+| 10. Geo experiment 5M orders (DiD absorb) | 5,000,000 | 2.630 (cv 0.6%) | - | - | 0.623 (cv 7.8%) |
+| 11. Survey BRR replicates (DiD absorb) | 500,000 | 7.385 (cv 8.6%) | - | - | - |
+| 12. Correlated-FE stress (DiD absorb) | 5,000,000 | 26.271 (cv 0.4%) | - | - | 3.075 (cv 1.5%) |
+| 13. Small-panel guard (TWFE) | 20,000 | 0.005 (cv 4.1%) | - | - | 0.007 (cv 2.2%) |
+<!-- TABLE:end fe_absorption -->
+
+`tail_stress` is a deliberately adversarial correlated-FE shape and is
+reported separately from the headline scenarios; the BEFORE baseline records
+its non-convergence warning as evidence of the `max_iter=100` contract issue.
+
+---
+
 ## Memory scaling at the millions-of-units tail (v3.x, June 2026)
 
 At the scale where the dense working arrays - not compute - are the binding constraint
