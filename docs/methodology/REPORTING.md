@@ -98,6 +98,7 @@ Field semantics:
     branched on `pt_assumption`)
   - `"dose_overall"` (ContinuousDiD)
   - `"ddd"` / `"staggered_ddd"` (TripleDifference / StaggeredTripleDiff)
+  - `"spillover"` (SpilloverDiD — Butts 2021 total effect on the treated `tau_total`, identified off far-away controls; headline `att`)
   - dCDH dynamic branches follow the exact `overall_att`
     contract: `"M"` / `"M_x"` / `"M_fd"` / `"M_x_fd"` for
     `L_max=None`; `"DID_1"` / `"DID_1_x"` / `"DID_1_fd"` /
@@ -301,7 +302,7 @@ a library setting.
   `_APPLICABILITY["pretrends_power"]` in
   `diff_diff/diagnostic_report.py`). Other staggered families with
   event-study output (`ImputationDiDResults`, `TwoStageDiDResults`,
-  `StackedDiDResults`, `EfficientDiDResults`,
+  `SpilloverDiDResults`, `StackedDiDResults`, `EfficientDiDResults`,
   `StaggeredTripleDiffResults`, `WooldridgeDiDResults`,
   `ChaisemartinDHaultfoeuilleResults`) do not yet have a power
   adapter and therefore render the `no_detected_violation` tier as

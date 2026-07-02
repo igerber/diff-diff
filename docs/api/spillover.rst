@@ -196,7 +196,10 @@ and planned follow-up enhancements:
   ``TwoStageDiD``'s schema for ``plot_event_study`` consumption (the
   plotter prefers the new ``reference_period`` attribute over the
   legacy ``n_obs==0`` heuristic). ``DiagnosticReport`` routing for
-  ``SpilloverDiDResults`` is queued as a follow-up. Reference
+  ``SpilloverDiDResults`` is wired: parallel-trends (event-study on
+  the direct-effect dynamics), design-effect, and heterogeneity apply;
+  Goodman-Bacon is excluded (spillover identifies off far-away
+  controls, not TWFE 2x2 comparisons). Reference
   period ``-1 - anticipation`` (TwoStageDiD parity). ``horizon_max``
   bins event-times into endpoint pools (no row drop — divergence
   from TwoStageDiD's filtering semantic, intentional per

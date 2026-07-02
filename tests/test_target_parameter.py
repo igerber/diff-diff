@@ -324,6 +324,13 @@ class TestTargetParameterPerEstimator:
         assert tp["aggregation"] == "factor_model"
         assert "factor" in tp["name"].lower()
 
+    def test_spillover_did(self):
+        tp = describe_target_parameter(_minimal_result("SpilloverDiDResults"))
+        assert tp["aggregation"] == "spillover"
+        assert tp["headline_attribute"] == "att"
+        assert "Butts" in tp["reference"]
+        assert "far-away" in tp["definition"].lower()
+
     def test_bacon_decomposition(self):
         """PR #347 R8 P3: BaconDecompositionResults is accepted by DR
         (as a diagnostic read-out) but is NOT in ``_APPLICABILITY``,

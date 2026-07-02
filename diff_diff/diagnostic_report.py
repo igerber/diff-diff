@@ -65,8 +65,8 @@ _CHECK_NAMES: Tuple[str, ...] = (
     "placebo",
 )
 
-# Type-level applicability: which checks are *ever* applicable for each of the
-# 16 result types. Instance-level applicability further filters by whether
+# Type-level applicability: which checks are *ever* applicable for each
+# registered result type. Instance-level applicability further filters by whether
 # required attributes are present (e.g. ``survey_metadata`` for DEFF) and by
 # whether the user disabled a check via ``run_*=False``.
 # See ``docs/methodology/REPORTING.md`` for the full matrix and rationale.
@@ -74,7 +74,7 @@ _CHECK_NAMES: Tuple[str, ...] = (
 # Implementation note: The keys are result-class names looked up via
 # ``type(results).__name__``. This string-based dispatch mirrors the
 # ``_HANDLERS`` pattern in ``diff_diff/practitioner.py`` and avoids circular
-# imports across the 16 result modules. Renaming or aliasing any result class
+# imports across the result modules. Renaming or aliasing any result class
 # requires updating both this table and ``_PT_METHOD`` below; the
 # applicability-matrix test parametrized over all result types serves as the
 # regression guard.
@@ -127,6 +127,27 @@ _APPLICABILITY: Dict[str, FrozenSet[str]] = {
         {
             "parallel_trends",
             "bacon",
+            "design_effect",
+            "heterogeneity",
+        }
+    ),
+    "SpilloverDiDResults": frozenset(
+        # Butts (2021) ring-indicator spillover DiD is a two-stage-GMM
+        # estimator, so it inherits TwoStage's diagnostic set MINUS
+        # ``bacon``. ``bacon`` is excluded because SpilloverDiD identifies
+        # the direct effect off FAR-AWAY units (Butts Assumption 5), not
+        # off the TWFE 2x2 comparisons a Goodman-Bacon decomposition
+        # enumerates: ``bacon_decompose`` on the raw binary treatment
+        # ignores the ring/distance structure and would pool spillover-
+        # contaminated in-ring units into the control group — the exact
+        # SUTVA violation the estimator exists to handle (same rationale
+        # that excludes bacon for SyntheticControl / TROP / Continuous).
+        # ``parallel_trends`` routes to ``event_study`` on the per-event-
+        # time DIRECT-effect dynamics (populated when ``event_study=True``);
+        # ``design_effect`` is instance-gated on ``survey_metadata`` (Wave
+        # E.1); ``heterogeneity`` reads ``event_study_effects``.
+        {
+            "parallel_trends",
             "design_effect",
             "heterogeneity",
         }
@@ -218,6 +239,7 @@ _PT_METHOD: Dict[str, str] = {
     "SunAbrahamResults": "event_study",
     "ImputationDiDResults": "event_study",
     "TwoStageDiDResults": "event_study",
+    "SpilloverDiDResults": "event_study",
     "StackedDiDResults": "event_study",
     "EfficientDiDResults": "hausman",
     "ContinuousDiDResults": "event_study",
@@ -263,7 +285,7 @@ class DiagnosticReport:
     ----------
     results : Any
         A fitted diff-diff results object (e.g. ``CallawaySantAnnaResults``,
-        ``DiDResults``, ``SyntheticDiDResults``). Any of the 16 result types
+        ``DiDResults``, ``SyntheticDiDResults``). Any registered result type
         in the library is accepted.
     data : pandas.DataFrame, optional
         The underlying panel. Required for checks that need raw data
@@ -703,6 +725,19 @@ class DiagnosticReport:
                 # summary emits the "inconclusive" identifying-
                 # assumption warning rather than silently dropping PT.
                 if not pre_coefs and n_dropped_undefined == 0:
+                    # SpilloverDiD's event-study switch is the
+                    # ``SpilloverDiD(..., event_study=True)`` constructor
+                    # kwarg, not the ``aggregate='event_study'`` argument
+                    # the generic staggered-estimator message points at
+                    # (SpilloverDiD has no ``aggregate`` kwarg). Emit an
+                    # estimator-accurate remediation for this family.
+                    if name == "SpilloverDiDResults":
+                        return (
+                            "No pre-period event-study coefficients are exposed "
+                            "on this fit. Re-fit with "
+                            "SpilloverDiD(..., event_study=True) to populate the "
+                            "per-event-time direct-effect output."
+                        )
                     return (
                         "No pre-period event-study coefficients are exposed on "
                         "this fit. For staggered estimators, re-fit with "

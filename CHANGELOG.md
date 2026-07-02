@@ -24,6 +24,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   still defers cluster with a warning).
 
 ### Changed
+- **`DiagnosticReport` now routes `SpilloverDiDResults`.** Previously a fitted
+  `SpilloverDiD` (Butts 2021) result matched no `_APPLICABILITY` / `_PT_METHOD` entry, so
+  `DiagnosticReport(spillover_result)` reported every check as `not_applicable`. It now routes
+  to parallel-trends (event-study joint test on the per-event-time direct-effect dynamics,
+  populated when `event_study=True`), design-effect (survey-weighted fits), and heterogeneity;
+  Goodman-Bacon is intentionally excluded because SpilloverDiD identifies off far-away control
+  units rather than TWFE 2×2 comparisons. Aggregate-only fits now skip parallel-trends with an
+  estimator-accurate remediation (`SpilloverDiD(..., event_study=True)`). `BusinessReport` and the
+  `describe_target_parameter` block pick up the routing automatically.
 - **`SyntheticControl` in-space / leave-one-out placebo diagnostics now distinguish structural `cv`
   infeasibility from solver non-convergence.** Under `v_method="cv"`, an excluded `in_space_placebo()`
   / `leave_one_out()` refit whose pseudo-treated (in-space) or reduced (leave-one-out) donor pool is

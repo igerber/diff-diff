@@ -434,9 +434,11 @@ class SpilloverDiDResults(DiDResults):
     # TwoStageDiD-compatible alias for ``att_dynamic`` consumable by
     # ``plot_event_study`` (wired in Wave C via the ``reference_period``
     # attribute fallback in ``_extract_plot_data``). ``DiagnosticReport``
-    # routing is NOT yet wired — registering ``SpilloverDiDResults`` in
-    # ``DiagnosticReport``'s applicability/method tables is a planned
-    # follow-up (see TODO.md).
+    # routing is now wired: ``SpilloverDiDResults`` is registered in
+    # ``DiagnosticReport``'s ``_APPLICABILITY`` / ``_PT_METHOD`` tables with
+    # applicable checks {parallel_trends (event-study on these direct-effect
+    # dynamics), design_effect, heterogeneity}; bacon is excluded (spillover
+    # identifies off far-away units, not TWFE 2x2 comparisons).
     # Schema mirrors ``two_stage.py:1355-1389``:
     #   {k: {"effect", "se", "n_obs", "t_stat", "p_value", "conf_int": (low, high)}}
     # Reference row uses ``conf_int = (0.0, 0.0)`` (TwoStageDiD parity).

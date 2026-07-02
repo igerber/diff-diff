@@ -2853,6 +2853,119 @@ class TestSurveyDesignThreading:
 
 
 # ---------------------------------------------------------------------------
+# SpilloverDiD routing (Butts 2021 ring-indicator spillover-aware DiD)
+# ---------------------------------------------------------------------------
+class TestSpilloverDiDDiagnosticReportRouting:
+    """``SpilloverDiDResults`` registration in ``_APPLICABILITY`` / ``_PT_METHOD``.
+
+    Applicable set is TwoStageDiD's MINUS ``bacon``: ``parallel_trends``
+    (event-study joint test on the per-event-time DIRECT-effect dynamics),
+    ``design_effect`` (survey-weighted fits), ``heterogeneity``. ``bacon`` is
+    excluded because SpilloverDiD identifies off far-away controls, not TWFE
+    2x2 comparisons; ``pretrends_power`` / ``sensitivity`` / ``epv`` /
+    ``estimator_native`` are likewise not applicable.
+    """
+
+    @staticmethod
+    def _staggered_df():
+        from tests._dgp_utils import generate_butts_staggered_dgp
+
+        return generate_butts_staggered_dgp(seed=42)
+
+    @staticmethod
+    def _fit(df, *, event_study=True, survey_design=None):
+        from diff_diff import SpilloverDiD
+
+        est = SpilloverDiD(
+            rings=[0.0, 50.0, 200.0],
+            d_bar=200.0,
+            conley_coords=("lat", "lon"),
+            conley_metric="haversine",
+            conley_cutoff_km=200.0,
+            conley_lag_cutoff=0,
+            vcov_type="hc1",
+            event_study=event_study,
+            horizon_max=2 if event_study else None,
+        )
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            return est.fit(
+                df,
+                outcome="y",
+                unit="unit",
+                time="time",
+                first_treat="first_treat",
+                survey_design=survey_design,
+            )
+
+    def _report(self, res, df):
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            return DiagnosticReport(
+                res, data=df, outcome="y", unit="unit", time="time", first_treat="first_treat"
+            )
+
+    def test_event_study_fit_routes_pt_and_heterogeneity(self):
+        df = self._staggered_df()
+        res = self._fit(df)
+        dr = self._report(res, df)
+        schema = dr.to_dict()
+        # Non-survey event-study fit: exactly PT + heterogeneity apply.
+        assert set(dr.applicable_checks) == {"parallel_trends", "heterogeneity"}
+        assert schema["parallel_trends"]["status"] == "ran"
+        assert schema["heterogeneity"]["status"] == "ran"
+        # Excluded checks (bacon deliberately excluded; the rest have no adapter).
+        for chk in ("bacon", "pretrends_power", "sensitivity", "epv"):
+            assert chk not in dr.applicable_checks
+            assert schema[chk]["status"] == "not_applicable"
+
+    def test_survey_fit_routes_design_effect(self):
+        from diff_diff import SurveyDesign
+
+        df = self._staggered_df().copy()
+        df["w"] = 1.0
+        units_sorted = sorted(df["unit"].unique())
+        unit_to_psu = {u: i for i, u in enumerate(units_sorted)}
+        df["psu"] = df["unit"].map(unit_to_psu)
+        res = self._fit(df, survey_design=SurveyDesign(weights="w", psu="psu"))
+        dr = self._report(res, df)
+        schema = dr.to_dict()
+        assert "design_effect" in dr.applicable_checks
+        assert schema["design_effect"]["status"] == "ran"
+
+    def test_aggregate_only_fit_skips_pt_with_estimator_aware_message(self):
+        df = self._staggered_df()
+        res = self._fit(df, event_study=False)
+        dr = self._report(res, df)
+        skipped = dr.skipped_checks
+        # SpilloverDiD's event-study switch is the ``event_study=True``
+        # CONSTRUCTOR kwarg, not the generic ``aggregate='event_study'`` the
+        # shared staggered-estimator message points at.
+        assert "parallel_trends" in skipped
+        assert "event_study=True" in skipped["parallel_trends"]
+        assert "aggregate='event_study'" not in skipped["parallel_trends"]
+        assert "parallel_trends" not in dr.applicable_checks
+        assert "heterogeneity" in skipped
+        assert "group/event-study effects" in skipped["heterogeneity"]
+
+    def test_business_report_smoke(self):
+        from diff_diff import BusinessReport
+
+        df = self._staggered_df()
+        res = self._fit(df)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            br = BusinessReport(
+                res, data=df, outcome="y", unit="unit", time="time", first_treat="first_treat"
+            )
+            schema = br.to_dict()
+        # Registration flows through to the target-parameter block; BR no
+        # longer routes spillover to an empty diagnostic set.
+        assert schema["target_parameter"]["aggregation"] == "spillover"
+        assert schema["target_parameter"]["headline_attribute"] == "att"
+
+
+# ---------------------------------------------------------------------------
 # Public API exposure
 # ---------------------------------------------------------------------------
 def test_public_api_exports():

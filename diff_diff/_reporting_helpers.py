@@ -635,6 +635,26 @@ def describe_target_parameter(results: Any) -> Dict[str, Any]:
             "reference": "REGISTRY.md Sec. SyntheticControl",
         }
 
+    if name == "SpilloverDiDResults":
+        return {
+            "name": "total effect on the treated (Butts spillover-aware ATT)",
+            "definition": (
+                "The total effect on the treated ``tau_total`` from Butts (2021) "
+                "ring-indicator spillover DiD, identified off FAR-AWAY control "
+                "observations (``d_it > d_bar``, Assumption 5) rather than any "
+                "not-yet-/never-treated pool. The estimator decomposes into the "
+                "DIRECT effect on treated units plus per-ring spillover-on-control "
+                "effects that relax SUTVA within the treated units' spatial "
+                "neighborhood; ``att`` is the headline total effect, while the "
+                "per-ring ``spillover_effects`` and (when ``event_study=True``) the "
+                "per-event-time direct dynamics are available on the result object "
+                "for disaggregated inference."
+            ),
+            "aggregation": "spillover",
+            "headline_attribute": "att",
+            "reference": "Butts (2021); REGISTRY.md Sec. SpilloverDiD",
+        }
+
     # Default: unrecognized result class. Fall through with a neutral
     # block — agents / downstream consumers can still dispatch on
     # ``aggregation="unknown"`` and fall back to generic ATT narration.
