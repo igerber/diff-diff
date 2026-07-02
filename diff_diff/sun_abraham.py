@@ -20,7 +20,9 @@ from diff_diff.bootstrap_utils import compute_effect_bootstrap_stats
 from diff_diff.linalg import LinearRegression
 from diff_diff.results import _format_survey_block, _get_significance_stars
 from diff_diff.utils import (
+    pre_demean_norms,
     safe_inference,
+    snap_absorbed_regressors,
 )
 from diff_diff.utils import (
     within_transform as _within_transform_util,
@@ -1491,9 +1493,23 @@ class SunAbraham:
             variables_to_demean = [outcome] + interaction_cols
             if covariates:
                 variables_to_demean.extend(covariates)
+            _sa_regressors = variables_to_demean[1:]  # everything except outcome
+            _pre_norms = pre_demean_norms(df, _sa_regressors, weights=survey_weights)
 
             df_demeaned = _within_transform_util(
                 df, variables_to_demean, unit, time, suffix="_dm", weights=survey_weights
+            )
+            # Snap FE-spanned regressors (e.g. a unit-constant covariate) to
+            # exact zero so rank handling drops them deterministically.
+            snap_absorbed_regressors(
+                df_demeaned,
+                _sa_regressors,
+                _pre_norms,
+                absorbed_desc=f"unit '{unit}' and time '{time}' fixed effects",
+                group_vars=[unit, time],
+                rank_deficient_action=self.rank_deficient_action,
+                suffix="_dm",
+                weights=survey_weights,
             )
 
             X_cols = [f"{col}_dm" for col in interaction_cols]
@@ -1584,20 +1600,6 @@ class SunAbraham:
             bm_artifacts = None
 
         return cohort_effects, cohort_ses, vcov_cohort, coef_index_map, bm_artifacts
-
-    def _within_transform(
-        self,
-        df: pd.DataFrame,
-        variables: List[str],
-        unit: str,
-        time: str,
-    ) -> pd.DataFrame:
-        """
-        Apply two-way within transformation to remove unit and time fixed effects.
-
-        y_it - y_i. - y_.t + y_..
-        """
-        return _within_transform_util(df, variables, unit, time, suffix="_dm")
 
     def _compute_iw_effects(
         self,

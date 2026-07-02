@@ -41,25 +41,43 @@ the gap is machinery, not architecture:
 
 The measurement surface is the seven-scenario FE-absorption suite
 (`benchmarks/speed_review/bench_fe_absorption.py`; shapes documented in
-`docs/performance-scenarios.md` scenarios 7-13; committed baseline
-`baselines/fe_absorption_before.json`, with `_after.json` to be added by the
-optimization PR). The optional pyfixest yardstick
-(`bench_fe_absorption_pyfixest.py`, guarded on import) asserts coefficient
-parity < 1e-6 on the four exact-estimand scenarios so the comparison stays
-honest over time.
+`docs/performance-scenarios.md` scenarios 7-13; committed baselines
+`baselines/fe_absorption_{before,after}.json`). The optional pyfixest
+yardstick (`bench_fe_absorption_pyfixest.py`, guarded on import) asserts
+coefficient parity < 1e-6 on the four exact-estimand scenarios so the
+comparison stays honest over time.
+
+**Landed (v3.6.x): factorize-once + bincount MAP rewrite.** End-to-end fit
+speedups of 1.6-2.7x across the headline scenarios (table below). The
+correlated-FE stress case now CONVERGES (~270 iterations under the raised
+`max_iter=10_000` cap; ~2.7x cheaper per iteration) where the old loop hit
+the cap of 100 and returned slightly-off residuals - its 0.8x wall-clock
+ratio is the price of correctness: it runs 2.7x the iterations to full
+convergence AND pays the exact LSMR span confirmation that now catches its
+truncation-masked FE-spanned `post` column (previously kept as a junk
+regressor in the design). The identity gate held at 1e-14-1e-16 on all
+scenarios except the two carrying FE-spanned regressors through the DiD
+`absorb=` path, whose estimates moved once (survey_absorb ATT by 9.8e-6;
+geo_experiment SE by 1e-7) when the FE-spanned junk columns were snapped to
+zero - a deliberate correction documented in REGISTRY "Absorbed Fixed
+Effects" and the CHANGELOG. Remaining gap vs the pyfixest yardstick (2-26x
+depending on scenario) is the compiled+parallel margin; a Rust demean kernel
+in the existing `rust/` backend is the candidate next step, to be scoped
+only if the remaining gap matters in practice (pyfixest itself validates
+that architecture).
 
 ### FE-absorption suite results
 
 <!-- TABLE:start fe_absorption -->
 | Scenario | n rows | Before (s) | After (s) | Speedup | pyfixest (s) |
 |---|---:|---:|---:|---:|---:|
-| 7. County policy event study (SunAbraham) | 177,289 | 3.865 (cv 2.5%) | - | - | 0.190 (cv 4.0%, proxy) |
-| 8. Firm panel with churn (SunAbraham) | 2,400,000 | 92.957 (cv 0.9%) | - | - | 1.912 (cv 20.3%, noisy, proxy) |
-| 9. Scanner store-week (TWFE) | 3,255,000 | 1.549 (cv 0.3%) | - | - | 0.644 (cv 12.3%, noisy) |
-| 10. Geo experiment 5M orders (DiD absorb) | 5,000,000 | 2.630 (cv 0.6%) | - | - | 0.623 (cv 7.8%) |
-| 11. Survey BRR replicates (DiD absorb) | 500,000 | 7.385 (cv 8.6%) | - | - | - |
-| 12. Correlated-FE stress (DiD absorb) | 5,000,000 | 26.271 (cv 0.4%) | - | - | 3.075 (cv 1.5%) |
-| 13. Small-panel guard (TWFE) | 20,000 | 0.005 (cv 4.1%) | - | - | 0.007 (cv 2.2%) |
+| 7. County policy event study (SunAbraham) | 177,289 | 3.865 (cv 2.5%) | 2.388 (cv 2.6%) | 1.6x | 0.190 (cv 4.0%, proxy) |
+| 8. Firm panel with churn (SunAbraham) | 2,400,000 | 92.957 (cv 0.9%) | 49.502 (cv 1.9%) | 1.9x | 1.912 (cv 20.3%, noisy, proxy) |
+| 9. Scanner store-week (TWFE) | 3,255,000 | 1.549 (cv 0.3%) | 0.983 (cv 0.1%) | 1.6x | 0.644 (cv 12.3%, noisy) |
+| 10. Geo experiment 5M orders (DiD absorb) | 5,000,000 | 2.630 (cv 0.6%) | 0.973 (cv 0.4%) | 2.7x | 0.623 (cv 7.8%) |
+| 11. Survey BRR replicates (DiD absorb) | 500,000 | 7.385 (cv 8.6%) | 4.077 (cv 0.1%) | 1.8x | - |
+| 12. Correlated-FE stress (DiD absorb) | 5,000,000 | 26.271 (cv 0.4%) | 31.765 (cv 0.6%) | 0.8x | 3.075 (cv 1.5%) |
+| 13. Small-panel guard (TWFE) | 20,000 | 0.005 (cv 4.1%) | 0.004 (cv 4.4%) | 1.3x | 0.007 (cv 2.2%) |
 
 *noisy* = CV above the 10% unusable threshold from the noise protocol. *proxy* = timing-only pyfixest stand-in: the Sun-Abraham scenarios run a saturated `i(rel_time)` event study there (pyfixest 0.60 has no `sunab()`) - comparable demeaning load, different estimand, so those cells are not exact-estimand comparisons (see `bench_fe_absorption_pyfixest.py`).
 <!-- TABLE:end fe_absorption -->

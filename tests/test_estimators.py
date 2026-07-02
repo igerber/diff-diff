@@ -1,5 +1,7 @@
 """Tests for difference-in-differences estimators."""
 
+import warnings
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -12,6 +14,7 @@ from diff_diff import (
     PeriodEffect,
     SyntheticDiD,
     SyntheticDiDResults,
+    TwoWayFixedEffects,
 )
 
 
@@ -3264,11 +3267,25 @@ class TestUnbalancedPanels:
         df = pd.DataFrame(data)
 
         twfe = TwoWayFixedEffects()
-        results = twfe.fit(df, outcome="outcome", treatment="post", unit="unit", time="period")
+        # NOTE: this test previously passed treatment="post" with time="period",
+        # making the treatment interaction a pure function of the period FE -
+        # an unidentifiable specification that "worked" only because the
+        # FE-spanned junk column survived rank detection and produced a finite
+        # garbage ATT. The v3.6.x span guard now routes that spec into TWFE's
+        # collinearity error, so the test uses the well-specified form.
+        results = twfe.fit(df, outcome="outcome", treatment="treated", unit="unit", time="post")
 
         # Should produce valid results
         assert np.isfinite(results.att)
         assert results.se > 0
+        # the degenerate spec now raises the pre-existing identification error
+        # (routed there deterministically by the FE-span snap):
+        with pytest.raises(ValueError, match="cannot be identified"):
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                TwoWayFixedEffects().fit(
+                    df, outcome="outcome", treatment="post", unit="unit", time="period"
+                )
 
     def test_multiperiod_with_sparse_data(self):
         """Test MultiPeriodDiD with sparse data across periods."""
@@ -3549,8 +3566,12 @@ class TestCollinearityDetection:
         # absorbed by unit FE (becomes zero after within-transformation)
         twfe = TwoWayFixedEffects(rank_deficient_action="silent")
         results = twfe.fit(
-            df, outcome="outcome", treatment="treated", unit="unit",
-            time="post", covariates=["unit_covariate"],
+            df,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="post",
+            covariates=["unit_covariate"],
         )
 
         assert np.isfinite(results.att)
@@ -3586,13 +3607,13 @@ class TestCovariateNameCollision:
             ueff = rng.normal()
             for period in range(6):
                 y = (
-                    10.0 + ueff + 0.5 * period
+                    10.0
+                    + ueff
+                    + 0.5 * period
                     + (3.0 if (treated and period >= 3) else 0.0)
                     + rng.normal(0, 0.5)
                 )
-                rows.append(
-                    {"unit": unit, "treated": treated, "time": period, "outcome": y}
-                )
+                rows.append({"unit": unit, "treated": treated, "time": period, "outcome": y})
         df = pd.DataFrame(rows)
         df["x1"] = np.random.default_rng(11).normal(size=len(df))
         return df
@@ -3602,9 +3623,7 @@ class TestCovariateNameCollision:
         # the test cannot drift from the real var_names (const/treated/post/
         # treated:post), plus the internal _treat_time working column.
         data = self._did_data()
-        clean = DifferenceInDifferences().fit(
-            data, "outcome", "treated", "post", covariates=["x1"]
-        )
+        clean = DifferenceInDifferences().fit(data, "outcome", "treated", "post", covariates=["x1"])
         reserved = [k for k in clean.coefficients if k != "x1"] + ["_treat_time"]
         assert "const" in reserved and "treated:post" in reserved  # sanity
         for name in reserved:
@@ -3612,9 +3631,7 @@ class TestCovariateNameCollision:
             if name not in d2.columns:
                 d2[name] = np.random.default_rng(5).normal(size=len(d2))
             with pytest.raises(ValueError, match="collide"):
-                DifferenceInDifferences().fit(
-                    d2, "outcome", "treated", "post", covariates=[name]
-                )
+                DifferenceInDifferences().fit(d2, "outcome", "treated", "post", covariates=[name])
 
     def test_did_fixed_effects_dummy_collision(self):
         # get_dummies(region, prefix="region", drop_first=True) drops "region_A"
@@ -3624,15 +3641,17 @@ class TestCovariateNameCollision:
         data["region_B"] = np.random.default_rng(2).normal(size=len(data))
         with pytest.raises(ValueError, match="collide"):
             DifferenceInDifferences().fit(
-                data, "outcome", "treated", "post",
-                covariates=["region_B"], fixed_effects=["region"],
+                data,
+                "outcome",
+                "treated",
+                "post",
+                covariates=["region_B"],
+                fixed_effects=["region"],
             )
 
     def test_did_noncolliding_preserves_structural_coefs(self):
         data = self._did_data()
-        r = DifferenceInDifferences().fit(
-            data, "outcome", "treated", "post", covariates=["x1"]
-        )
+        r = DifferenceInDifferences().fit(data, "outcome", "treated", "post", covariates=["x1"])
         ck = r.coefficients
         assert np.isfinite(ck["const"]) and np.isfinite(ck["treated:post"])
         assert "x1" in ck and ck["x1"] != ck["treated:post"]
@@ -3659,9 +3678,7 @@ class TestCovariateNameCollision:
 
     def test_mpd_collision_for_each_structural_name(self):
         data = self._mpd_data()
-        clean = MultiPeriodDiD().fit(
-            data, "outcome", "treated", "time", covariates=["x1"]
-        )
+        clean = MultiPeriodDiD().fit(data, "outcome", "treated", "time", covariates=["x1"])
         # const/treated/period_*/treated:period_* (actual keys) + internal column.
         reserved = [k for k in clean.coefficients if k != "x1"] + ["_did_treatment"]
         assert any(k.startswith("period_") for k in reserved)  # sanity
@@ -3670,15 +3687,11 @@ class TestCovariateNameCollision:
             if name not in d2.columns:
                 d2[name] = np.random.default_rng(5).normal(size=len(d2))
             with pytest.raises(ValueError, match="collide"):
-                MultiPeriodDiD().fit(
-                    d2, "outcome", "treated", "time", covariates=[name]
-                )
+                MultiPeriodDiD().fit(d2, "outcome", "treated", "time", covariates=[name])
 
     def test_mpd_noncolliding_preserves_structural_coefs(self):
         data = self._mpd_data()
-        r = MultiPeriodDiD().fit(
-            data, "outcome", "treated", "time", covariates=["x1"]
-        )
+        r = MultiPeriodDiD().fit(data, "outcome", "treated", "time", covariates=["x1"])
         ck = r.coefficients
         assert "x1" in ck and np.isfinite(ck["const"])
         assert any(k.startswith("period_") for k in ck)
@@ -3693,8 +3706,12 @@ class TestCovariateNameCollision:
         data["period"] = data["time"]  # FE column 'period' -> 'period_1'... dummies
         with pytest.raises(ValueError, match="collide"):
             MultiPeriodDiD().fit(
-                data, "outcome", "treated", "time",
-                covariates=["x1"], fixed_effects=["period"],
+                data,
+                "outcome",
+                "treated",
+                "time",
+                covariates=["x1"],
+                fixed_effects=["period"],
             )
 
     def test_synthetic_did_unaffected_by_guard(self):
@@ -3707,17 +3724,275 @@ class TestCovariateNameCollision:
             ueff = rng.normal(0, 3)
             for period in range(8):
                 y = (
-                    10.0 + ueff + 0.5 * period
+                    10.0
+                    + ueff
+                    + 0.5 * period
                     + (5.0 if (treated and period >= 4) else 0.0)
                     + rng.normal(0, 0.5)
                 )
-                rows.append(
-                    {"unit": unit, "period": period, "treated": treated, "outcome": y}
-                )
+                rows.append({"unit": unit, "period": period, "treated": treated, "outcome": y})
         d = pd.DataFrame(rows)
         d["x1"] = rng.normal(size=len(d))
         r = SyntheticDiD().fit(
-            d, "outcome", "treated", unit="unit", time="period",
-            post_periods=[4, 5, 6, 7], covariates=["x1"],
+            d,
+            "outcome",
+            "treated",
+            unit="unit",
+            time="period",
+            post_periods=[4, 5, 6, 7],
+            covariates=["x1"],
         )
         assert np.isfinite(r.att)
+
+
+class TestAbsorbedRegressorSnap:
+    """FE-spanned regressors snap to zero -> deterministic NaN + warning
+    (REGISTRY 'Absorbed Fixed Effects'; the pre-snap junk columns perturbed
+    identified coefficients at ~1e-5, tolerance- and implementation-dependent).
+    """
+
+    @staticmethod
+    def _geo_frame(seed=0, n_states=20, n_months=12, n_rows=4_000):
+        rng = np.random.default_rng(seed)
+        state = rng.integers(0, n_states, n_rows)
+        month = rng.integers(0, n_months, n_rows)
+        treated = (state < n_states // 2).astype(int)
+        post = (month >= n_months // 2).astype(int)
+        y = (
+            rng.normal(0, 1, n_states)[state]
+            + rng.normal(0, 0.5, n_months)[month]
+            + 0.3 * treated * post
+            + rng.normal(size=n_rows)
+        )
+        return pd.DataFrame(
+            {"y": y, "treated": treated, "post": post, "state": state, "month": month}
+        )
+
+    def test_did_absorb_spanned_main_effects_nan_with_cause_warning(self):
+        df = self._geo_frame()
+        est = DifferenceInDifferences()
+        with pytest.warns(UserWarning, match="collinear with the absorbed"):
+            res = est.fit(
+                df,
+                outcome="y",
+                treatment="treated",
+                time="post",
+                absorb=["state", "month"],
+            )
+        assert np.isnan(res.coefficients["treated"])
+        assert np.isnan(res.coefficients["post"])
+        assert np.isfinite(res.att) and np.isfinite(res.se)
+
+    def test_did_absorb_att_matches_clean_fwl_ground_truth(self):
+        """With the junk columns snapped, ATT must equal the regression on the
+        demeaned interaction ALONE (the identified FWL estimand) at 1e-10."""
+        from diff_diff.utils import demean_by_groups
+
+        df = self._geo_frame(seed=1)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            res = DifferenceInDifferences().fit(
+                df,
+                outcome="y",
+                treatment="treated",
+                time="post",
+                absorb=["state", "month"],
+            )
+        d = df.copy()
+        d["_tt"] = d["treated"].values.astype(float) * d["post"].values.astype(float)
+        out, _ = demean_by_groups(d, ["y", "_tt"], ["state", "month"], suffix="_dm", tol=1e-12)
+        tt = out["_tt_dm"].values
+        gt = float(np.dot(tt, out["y_dm"].values) / np.dot(tt, tt))
+        assert res.att == pytest.approx(gt, abs=1e-10)
+
+    def test_multiperiod_absorb_spanned_period_dummies_snap(self):
+        """MPD with an absorbed time dimension: the period dummies are spanned
+        (NaN), the interaction effects stay identified."""
+        df = self._geo_frame(seed=2)
+        est = MultiPeriodDiD()
+        with pytest.warns(UserWarning, match="collinear with the absorbed"):
+            res = est.fit(
+                df,
+                outcome="y",
+                treatment="treated",
+                time="month",
+                absorb=["state", "month"],
+            )
+        assert any(np.isfinite(e.effect) for e in res.period_effects.values())
+
+    def test_twfe_unit_constant_covariate_nan_att_unaffected(self):
+        rng = np.random.default_rng(3)
+        n_units, n_periods = 80, 6
+        unit = np.repeat(np.arange(n_units), n_periods)
+        time = np.tile(np.arange(n_periods), n_units)
+        treated = (unit < n_units // 2).astype(int)
+        post = (time >= n_periods // 2).astype(int)
+        y = 0.4 * treated * post + rng.normal(size=unit.size)
+        df = pd.DataFrame({"y": y, "treated": treated, "post": post, "unit": unit, "time": time})
+        df["xc"] = np.repeat(rng.normal(size=n_units), n_periods)  # unit-constant
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            base = TwoWayFixedEffects().fit(
+                df, outcome="y", treatment="treated", time="post", unit="unit"
+            )
+        with pytest.warns(UserWarning, match="collinear with the absorbed"):
+            res = TwoWayFixedEffects().fit(
+                df,
+                outcome="y",
+                treatment="treated",
+                time="post",
+                unit="unit",
+                covariates=["xc"],
+            )
+        # TWFE results expose only the ATT coefficient; the snapped covariate
+        # column is dropped by rank handling, so the fit must reduce EXACTLY
+        # to the no-covariate design.
+        assert res.att == pytest.approx(base.att, abs=1e-10)
+        assert res.se == pytest.approx(base.se, rel=1e-8)
+
+
+class TestReplicateRefitSnap:
+    """Replicate refits must fail closed when a regressor becomes FE-spanned
+    within a replicate's effective half-sample (local-review follow-up)."""
+
+    def test_replicate_local_spanning_yields_finite_inference(self):
+        from diff_diff.survey import SurveyDesign
+
+        rng = np.random.default_rng(30)
+        n_states, n_months, n_rows = 8, 10, 4_000
+        state = rng.integers(0, n_states, n_rows)
+        month = rng.integers(0, n_months, n_rows)
+        treated = (state < n_states // 2).astype(int)
+        post = (month >= n_months // 2).astype(int)
+        # covariate varies ONLY within state 0's rows; on any replicate that
+        # zeroes state 0 it becomes state-spanned in the effective sample
+        xc = np.where(state == 0, rng.normal(size=n_rows), 1.0)
+        y = (
+            rng.normal(0, 1, n_states)[state]
+            + rng.normal(0, 0.3, n_months)[month]
+            + 0.3 * treated * post
+            + 0.1 * xc
+            + rng.normal(size=n_rows)
+        )
+        df = pd.DataFrame(
+            {
+                "y": y,
+                "treated": treated,
+                "post": post,
+                "xc": xc,
+                "state": state,
+                "month": month,
+                "w": np.ones(n_rows),
+            }
+        )
+        # BRR-style replicates; replicate 1 zeroes states {0, 1} so xc is
+        # constant (spanned by state FE) on its effective sample
+        halves = [
+            np.array([1, 0, 1, 0, 1, 0, 1, 0]),
+            np.array([0, 1, 0, 1, 1, 0, 0, 1]),
+            np.array([1, 1, 0, 0, 0, 1, 1, 0]),
+            np.array([0, 0, 1, 1, 0, 1, 0, 1]),
+        ]
+        for i, h in enumerate(halves, 1):
+            df[f"rw{i}"] = 2.0 * h[state]
+        design = SurveyDesign(
+            weights="w",
+            replicate_weights=[f"rw{i}" for i in range(1, 5)],
+            replicate_method="BRR",
+        )
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            res = DifferenceInDifferences().fit(
+                df,
+                outcome="y",
+                treatment="treated",
+                time="post",
+                absorb=["state", "month"],
+                covariates=["xc"],
+                survey_design=design,
+            )
+        # fail-closed contract: inference is finite (invalid replicates are
+        # dropped by compute_replicate_refit_variance), never junk-inflated
+        assert np.isfinite(res.att)
+        assert np.isfinite(res.se) and res.se > 0
+
+
+class TestJointSpanCovariateSnap:
+    """Local-review P0 end-to-end: a covariate exactly in the joint span of
+    the absorbed dimensions must be dropped (NaN + warning) and leave the
+    identified ATT untouched, even when MAP truncation masks it from the
+    fast-path norm test (unbalanced, correlated FE incidence)."""
+
+    @staticmethod
+    def _frame(seed=7):
+        rng = np.random.default_rng(seed)
+        n_units, n_periods, span = 150, 30, 9
+        unit = np.repeat(np.arange(n_units), n_periods)
+        time = np.tile(np.arange(n_periods), n_units)
+        entry = rng.integers(0, n_periods - span, n_units)
+        keep = (time >= entry[unit]) & (time < entry[unit] + span)
+        unit, time = unit[keep], time[keep]
+        treated = (unit < n_units // 2).astype(int)
+        post = (time >= n_periods // 2).astype(int)
+        y = 0.4 * treated * post + rng.normal(size=unit.size)
+        a = rng.normal(0, 1, n_units)
+        b = rng.normal(0, 1, n_periods)
+        return pd.DataFrame(
+            {
+                "y": y,
+                "treated": treated,
+                "post": post,
+                "unit": unit,
+                "time": time,
+                "xspan": a[unit] + b[time],
+            }
+        )
+
+    def test_did_absorb_joint_span_covariate_dropped_att_stable(self):
+        df = self._frame()
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            base = DifferenceInDifferences().fit(
+                df,
+                outcome="y",
+                treatment="treated",
+                time="post",
+                absorb=["unit", "time"],
+            )
+        with pytest.warns(UserWarning, match=r"xspan.*collinear with the absorbed"):
+            res = DifferenceInDifferences().fit(
+                df,
+                outcome="y",
+                treatment="treated",
+                time="post",
+                absorb=["unit", "time"],
+                covariates=["xspan"],
+            )
+        assert np.isnan(res.coefficients["xspan"])
+        assert res.att == pytest.approx(base.att, abs=1e-10)
+
+    def test_sun_abraham_joint_span_covariate_dropped_att_stable(self):
+        from diff_diff import SunAbraham
+
+        df = self._frame(seed=8)
+        rng = np.random.default_rng(9)
+        first = np.where(np.arange(df["unit"].nunique()) % 3 == 0, 0, 15)[
+            df["unit"].values % df["unit"].nunique()
+        ]
+        df = df.assign(first_treat=first)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            base = SunAbraham().fit(
+                df, outcome="y", unit="unit", time="time", first_treat="first_treat"
+            )
+        with pytest.warns(UserWarning, match="collinear with the absorbed"):
+            res = SunAbraham().fit(
+                df,
+                outcome="y",
+                unit="unit",
+                time="time",
+                first_treat="first_treat",
+                covariates=["xspan"],
+            )
+        assert res.att == pytest.approx(base.att, abs=1e-8)

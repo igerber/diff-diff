@@ -30,7 +30,9 @@ from diff_diff.utils import (
     WildBootstrapResults,
     demean_by_groups,
     fe_dummy_names,
+    pre_demean_norms,
     safe_inference,
+    snap_absorbed_regressors,
     validate_binary,
     validate_covariate_names,
     validate_design_term_names,
@@ -454,6 +456,8 @@ class DifferenceInDifferences:
                 float
             ) * working_data[time].values.astype(float)
             vars_to_demean = [outcome, treatment, time, "_treat_time"] + (covariates or [])
+            _absorb_regressors = vars_to_demean[1:]  # everything except outcome
+            _pre_norms = pre_demean_norms(working_data, _absorb_regressors, weights=survey_weights)
             # Method of alternating projections: for N > 1 absorbed dimensions a
             # single sequential sweep is only exact on balanced (orthogonal-FE)
             # panels; demean_by_groups iterates to the exact (W)LS-FWL residual.
@@ -462,6 +466,19 @@ class DifferenceInDifferences:
                 vars_to_demean,
                 list(absorb),
                 inplace=True,
+                weights=survey_weights,
+            )
+            # FE-spanned regressors demean to numerical junk, not exact zero;
+            # snap them so rank handling drops them deterministically instead
+            # of the junk direction perturbing the identified coefficients.
+            snap_absorbed_regressors(
+                working_data,
+                _absorb_regressors,
+                _pre_norms,
+                absorbed_desc=f"absorb={list(absorb)}",
+                group_vars=list(absorb),
+                rank_deficient_action=self.rank_deficient_action,
+                display_names={"_treat_time": f"{treatment}:{time}"},
                 weights=survey_weights,
             )
             n_absorbed_effects += n_fe
@@ -638,7 +655,21 @@ class DifferenceInDifferences:
                     float
                 )
                 vars_dm = [outcome, treatment, time, "_treat_time"] + (covariates or [])
+                _rep_norms = pre_demean_norms(wd, vars_dm[1:], weights=w_nz)
                 wd, _ = demean_by_groups(wd, vars_dm, _absorb_list, inplace=True, weights=w_nz)
+                # A regressor can become FE-spanned WITHIN a replicate's
+                # effective sample (half-sample zeroing): snap silently so the
+                # replicate solve drops it (NaN replicate -> invalid) instead
+                # of consuming a junk direction.
+                snap_absorbed_regressors(
+                    wd,
+                    vars_dm[1:],
+                    _rep_norms,
+                    absorbed_desc=f"absorb={_absorb_list}",
+                    group_vars=_absorb_list,
+                    rank_deficient_action="silent",
+                    weights=w_nz,
+                )
                 y_r = wd[outcome].values.astype(float)
                 d_r = wd[treatment].values.astype(float)
                 t_r = wd[time].values.astype(float)
@@ -1607,6 +1638,8 @@ class MultiPeriodDiD(DifferenceInDifferences):
                 + [f"_did_interact_{p}" for p in non_ref_periods]
                 + (covariates or [])
             )
+            _absorb_regressors = vars_to_demean[1:]  # everything except outcome
+            _pre_norms = pre_demean_norms(working_data, _absorb_regressors, weights=survey_weights)
             # Method of alternating projections (exact for unbalanced panels; a
             # single sequential sweep is exact only on balanced orthogonal-FE panels).
             working_data, n_fe = demean_by_groups(
@@ -1614,6 +1647,24 @@ class MultiPeriodDiD(DifferenceInDifferences):
                 vars_to_demean,
                 list(absorb),
                 inplace=True,
+                weights=survey_weights,
+            )
+            # Snap FE-spanned regressors (e.g. period dummies when a time
+            # dimension is absorbed) to exact zero: rank handling then drops
+            # them deterministically instead of their junk directions
+            # perturbing the identified interaction coefficients.
+            snap_absorbed_regressors(
+                working_data,
+                _absorb_regressors,
+                _pre_norms,
+                absorbed_desc=f"absorb={list(absorb)}",
+                group_vars=list(absorb),
+                rank_deficient_action=self.rank_deficient_action,
+                display_names={
+                    "_did_treatment": treatment,
+                    **{f"_did_period_{p}": f"{time}=={p}" for p in non_ref_periods},
+                    **{f"_did_interact_{p}": f"{treatment}:{time}=={p}" for p in non_ref_periods},
+                },
                 weights=survey_weights,
             )
             n_absorbed_effects += n_fe
@@ -1840,7 +1891,18 @@ class MultiPeriodDiD(DifferenceInDifferences):
                     + [f"_did_interact_{p}" for p in non_ref_periods]
                     + (covariates or [])
                 )
+                _rep_norms_mp = pre_demean_norms(wd, vars_dm_[1:], weights=w_nz)
                 wd, _ = demean_by_groups(wd, vars_dm_, _absorb_list_mp, inplace=True, weights=w_nz)
+                # Replicate-local FE spanning: snap silently (see DiD closure).
+                snap_absorbed_regressors(
+                    wd,
+                    vars_dm_[1:],
+                    _rep_norms_mp,
+                    absorbed_desc=f"absorb={_absorb_list_mp}",
+                    group_vars=_absorb_list_mp,
+                    rank_deficient_action="silent",
+                    weights=w_nz,
+                )
                 y_r = wd[outcome].values.astype(float)
                 d_r = wd["_did_treatment"].values.astype(float)
                 X_r = np.column_stack([np.ones(len(y_r)), d_r])

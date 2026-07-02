@@ -16,6 +16,8 @@ from diff_diff.linalg import LinearRegression
 from diff_diff.results import DiDResults
 from diff_diff.utils import (
     fe_dummy_names,
+    pre_demean_norms,
+    snap_absorbed_regressors,
     validate_covariate_names,
     validate_design_term_names,
 )
@@ -382,12 +384,27 @@ class TwoWayFixedEffects(DifferenceInDifferences):
             # demean outcome, covariates, AND interaction in a single pass
             # so the regression uses demeaned regressors (FWL theorem).
             all_vars = [outcome] + (covariates or []) + ["_treatment_post"]
+            _twfe_regressors = all_vars[1:]  # everything except outcome
+            _pre_norms = pre_demean_norms(data, _twfe_regressors, weights=survey_weights)
             data_demeaned = _within_transform_util(
                 data,
                 all_vars,
                 unit,
                 time,
                 suffix="_demeaned",
+                weights=survey_weights,
+            )
+            # Snap FE-spanned regressors (e.g. a unit-constant covariate) to
+            # exact zero so rank handling drops them deterministically.
+            snap_absorbed_regressors(
+                data_demeaned,
+                _twfe_regressors,
+                _pre_norms,
+                absorbed_desc=f"unit '{unit}' and time '{time}' fixed effects",
+                group_vars=[unit, time],
+                rank_deficient_action=self.rank_deficient_action,
+                suffix="_demeaned",
+                display_names={"_treatment_post": f"{treatment}:{time}"},
                 weights=survey_weights,
             )
             y = data_demeaned[f"{outcome}_demeaned"].values
@@ -595,11 +612,23 @@ class TwoWayFixedEffects(DifferenceInDifferences):
                 nz = w_r > 0
                 data_nz = data[nz].copy()
                 w_nz = w_r[nz]
+                _rep_norms_twfe = pre_demean_norms(data_nz, _all_vars_twfe[1:], weights=w_nz)
                 data_dem_r = _within_transform_util(
                     data_nz,
                     _all_vars_twfe,
                     unit,
                     time,
+                    suffix="_demeaned",
+                    weights=w_nz,
+                )
+                # Replicate-local FE spanning: snap silently (see DiD closure).
+                snap_absorbed_regressors(
+                    data_dem_r,
+                    _all_vars_twfe[1:],
+                    _rep_norms_twfe,
+                    absorbed_desc=f"unit '{unit}' and time '{time}' fixed effects",
+                    group_vars=[unit, time],
+                    rank_deficient_action="silent",
                     suffix="_demeaned",
                     weights=w_nz,
                 )
@@ -731,41 +760,6 @@ class TwoWayFixedEffects(DifferenceInDifferences):
 
         self.is_fitted_ = True
         return self.results_
-
-    def _within_transform(
-        self,
-        data: pd.DataFrame,
-        outcome: str,
-        unit: str,
-        time: str,
-        covariates: Optional[List[str]] = None,
-    ) -> pd.DataFrame:
-        """
-        Apply within transformation to remove unit and time fixed effects.
-
-        This implements the standard two-way within transformation:
-        y_it - y_i. - y_.t + y_..
-
-        Parameters
-        ----------
-        data : pd.DataFrame
-            Panel data.
-        outcome : str
-            Outcome variable name.
-        unit : str
-            Unit identifier column.
-        time : str
-            Time period column.
-        covariates : list, optional
-            Covariate column names.
-
-        Returns
-        -------
-        pd.DataFrame
-            Data with demeaned variables.
-        """
-        variables = [outcome] + (covariates or [])
-        return _within_transform_util(data, variables, unit, time, suffix="_demeaned")
 
     def _check_staggered_treatment(
         self,

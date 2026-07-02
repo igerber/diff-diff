@@ -4319,11 +4319,64 @@ unequal selection probabilities).
   when any transformed variable exits the alternating-projection loop without
   reaching `tol` within `max_iter`. This now covers the **unweighted** path as well
   (previously the unweighted two-way transform used a closed-form additive demean
-  and could not warn). Defaults: `max_iter=100`; `tol=1e-8` via `within_transform`
+  and could not warn). Defaults: `max_iter=10_000` in both `demean_by_groups` and
+  `within_transform` (raised from 100 in v3.6.x to match the compiled-library
+  convention - R `fixest` `fixef.iter` and `pyfixest` `fixef_maxiter` both default
+  to 10,000; correlated FE incidence such as contiguous unit lifetimes in
+  order-level data genuinely requires hundreds of iterations, measured ~250-280 on
+  the `tail_stress` benchmark scenario where the old cap of 100 warned and
+  returned slightly-off residuals). `tol=1e-8` via `within_transform`
   (TwoWayFixedEffects, SunAbraham, BaconDecomposition, WooldridgeDiD) and `tol=1e-10`
   for the DiD/MultiPeriodDiD `absorb=` path. Balanced panels converge in ~2
-  iterations. Silent return of the current iterate was classified as a silent
-  failure under the Phase 2 audit and replaced with this explicit signal.
+  iterations. Worst-case trade-off, accepted deliberately: an input that cannot
+  converge at all now burns the full 10,000 iterations before warning
+  (correctness-over-latency). Silent return of the current iterate was classified
+  as a silent failure under the Phase 2 audit and replaced with this explicit signal.
+- **Note:** The MAP inner loop factorizes each absorbed dimension once
+  (`pd.factorize`) and forms group means via `np.bincount` accumulation. Plain
+  summation is not Kahan-compensated the way pandas `groupby().mean()` is, so
+  demeaned values agree with the pre-v3.6.x pandas implementation to ~1e-10 order
+  (drift compounds across MAP iterations), not bit-for-bit; estimator estimates
+  are validated unchanged at the FE-absorption benchmark identity gate
+  (`benchmarks/speed_review/bench_fe_absorption.py --check-estimates`).
+- **Edge case:** NaN in an absorbed group column raises a `ValueError` naming the
+  column. `pd.factorize` codes NaN keys as -1, which would otherwise silently index
+  the last group's mean; the prior pandas behavior was itself silently bad
+  (unweighted: NaN-poisoned the affected rows; weighted: passed those rows through
+  un-demeaned into the regression), so the explicit error replaces two distinct
+  silent failure modes.
+- **Edge case (FE-spanned regressors, v3.6.x):** a regressor lying exactly in the
+  span of the absorbed/within-transformed FE dummies (e.g. the treated-group
+  indicator after absorbing the unit dimension, a period dummy after absorbing
+  time, or a unit-constant covariate) demeans to numerical junk (relative norm
+  ~1e-13), NOT exact zero. Such a column previously reached the solver, where
+  column equilibration re-inflated it to unit norm, it passed the rank check as
+  linearly independent, and its arbitrary direction perturbed the identified
+  coefficients at the ~1e-5 level (tolerance- and implementation-dependent).
+  `diff_diff.utils.snap_absorbed_regressors` now zeroes spanned regressors at
+  every demeaning consumer (DiD/MultiPeriodDiD `absorb=`, TwoWayFixedEffects,
+  SunAbraham, BaconDecomposition, WooldridgeDiD) — including the replicate-refit
+  closures (silently, matching their `rank_deficient_action="silent"` solves) —
+  so the rank-deficiency machinery drops them deterministically (coefficient
+  NaN). Detection is **two-stage**, because the MAP stopping rule bounds the
+  last iteration step, not the distance to the limit, and a spanned column in a
+  slow-convergence regime (unbalanced, correlated FE incidence — e.g.
+  `x = a_unit + b_time` on a contiguous-lifetimes panel) can stop with a
+  structured truncation residual far above any fixed norm threshold (measured
+  1.9e-10 at tol=1e-10 and 2e-8 at tol=1e-8; left unsnapped it shifted ATT by
+  ~3e-3 and reported a ~1e14-scale garbage coefficient): (1) relative demeaned
+  norm <= 1e-10 snaps immediately; (2) candidates in (1e-10, 1e-3] get an exact
+  span-membership confirmation via sparse LSMR on the (weighted) FE incidence
+  and snap iff the true projection residual is <= 1e-10 relative — genuinely
+  identified low-within-variation regressors are left untouched (their LSMR
+  residual equals their real within-variation). Norms are `sqrt(w)`-weighted
+  under WLS so zero-weight domain rows (left inert by the weighted demean)
+  cannot mask spanning on the positive-weight sample. A cause-specific
+  `UserWarning` naming the spanned regressors is emitted under
+  `rank_deficient_action="warn"`; `"silent"` and `"error"` defer to the rank
+  machinery per that parameter's existing contract. Identified coefficients are
+  consequently stable in the demeaning tolerance (verified to ~1e-14 across
+  tol=1e-8..1e-12, previously ~1e-5 swings).
 
 ### Survey Degrees of Freedom
 

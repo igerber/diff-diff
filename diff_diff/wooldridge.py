@@ -20,7 +20,12 @@ import numpy as np
 import pandas as pd
 
 from diff_diff.linalg import compute_robust_vcov, solve_logit, solve_ols, solve_poisson
-from diff_diff.utils import safe_inference, within_transform
+from diff_diff.utils import (
+    pre_demean_norms,
+    safe_inference,
+    snap_absorbed_regressors,
+    within_transform,
+)
 from diff_diff.wooldridge_results import WooldridgeDiDResults
 
 _VALID_METHODS = ("ols", "logit", "poisson")
@@ -1195,12 +1200,27 @@ class WooldridgeDiD:
                             f"{grp_label}s or use non-zero weights."
                         )
 
+            _w_regressors = [f"_x{i}" for i in range(X_design.shape[1])]
+            _pre_norms = pre_demean_norms(tmp, _w_regressors, weights=wt_weights)
             transformed = within_transform(
                 tmp,
                 all_vars,
                 unit=unit,
                 time=time,
                 suffix="_demeaned",
+                weights=wt_weights,
+            )
+            # Snap FE-spanned design columns (e.g. a unit-constant covariate)
+            # to exact zero so rank handling drops them deterministically.
+            snap_absorbed_regressors(
+                transformed,
+                _w_regressors,
+                _pre_norms,
+                absorbed_desc=f"unit '{unit}' and time '{time}' fixed effects",
+                group_vars=[unit, time],
+                rank_deficient_action=self.rank_deficient_action,
+                suffix="_demeaned",
+                display_names=dict(zip(_w_regressors, col_names)),
                 weights=wt_weights,
             )
 

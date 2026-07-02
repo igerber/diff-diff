@@ -18,6 +18,7 @@ import numpy as np
 import pandas as pd
 
 from diff_diff.results import _format_survey_block
+from diff_diff.utils import pre_demean_norms, snap_absorbed_regressors
 from diff_diff.utils import within_transform as _within_transform_util
 
 
@@ -795,12 +796,26 @@ class BaconDecomposition:
     ) -> float:
         """Compute TWFE estimate using within-transformation."""
         # Apply two-way within transformation (weighted if survey weights provided)
+        _pre_norms = pre_demean_norms(df, [treat_col], weights=weights)
         df_dm = _within_transform_util(
             df,
             [outcome, treat_col],
             unit,
             time,
             suffix="_within",
+            weights=weights,
+        )
+        # Snap an FE-spanned treatment to exact zero: the d_var == 0 guard
+        # below then returns its deterministic 0.0 (with the cause warning)
+        # instead of an arbitrary junk/junk division.
+        snap_absorbed_regressors(
+            df_dm,
+            [treat_col],
+            _pre_norms,
+            absorbed_desc=f"unit '{unit}' and time '{time}' fixed effects",
+            group_vars=[unit, time],
+            suffix="_within",
+            display_names={treat_col: "treatment"},
             weights=weights,
         )
 

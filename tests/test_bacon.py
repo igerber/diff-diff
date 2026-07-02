@@ -65,19 +65,18 @@ def generate_staggered_data(
         effect = np.full(len(units), treatment_effect)
 
     outcomes = (
-        unit_fe_expanded +
-        time_fe_expanded +
-        effect * post +
-        np.random.randn(len(units)) * 0.5
+        unit_fe_expanded + time_fe_expanded + effect * post + np.random.randn(len(units)) * 0.5
     )
 
-    df = pd.DataFrame({
-        'unit': units,
-        'time': times,
-        'outcome': outcomes,
-        'first_treat': first_treat_expanded.astype(int),
-        'treated': post.astype(int),
-    })
+    df = pd.DataFrame(
+        {
+            "unit": units,
+            "time": times,
+            "outcome": outcomes,
+            "first_treat": first_treat_expanded.astype(int),
+            "treated": post.astype(int),
+        }
+    )
 
     return df
 
@@ -91,11 +90,7 @@ class TestBaconDecomposition:
 
         decomp = BaconDecomposition()
         results = decomp.fit(
-            data,
-            outcome='outcome',
-            unit='unit',
-            time='time',
-            first_treat='first_treat'
+            data, outcome="outcome", unit="unit", time="time", first_treat="first_treat"
         )
 
         assert decomp.is_fitted_
@@ -108,11 +103,7 @@ class TestBaconDecomposition:
         data = generate_staggered_data(seed=123)
 
         results = bacon_decompose(
-            data,
-            outcome='outcome',
-            unit='unit',
-            time='time',
-            first_treat='first_treat'
+            data, outcome="outcome", unit="unit", time="time", first_treat="first_treat"
         )
 
         total_weight = sum(c.weight for c in results.comparisons)
@@ -128,11 +119,11 @@ class TestBaconDecomposition:
 
         results = bacon_decompose(
             data,
-            outcome='outcome',
-            unit='unit',
-            time='time',
-            first_treat='first_treat',
-            weights='exact',
+            outcome="outcome",
+            unit="unit",
+            time="time",
+            first_treat="first_treat",
+            weights="exact",
         )
 
         weighted_sum = sum(c.weight * c.estimate for c in results.comparisons)
@@ -147,11 +138,7 @@ class TestBaconDecomposition:
         data = generate_staggered_data(n_cohorts=3, never_treated_frac=0.3)
 
         results = bacon_decompose(
-            data,
-            outcome='outcome',
-            unit='unit',
-            time='time',
-            first_treat='first_treat'
+            data, outcome="outcome", unit="unit", time="time", first_treat="first_treat"
         )
 
         comp_types = set(c.comparison_type for c in results.comparisons)
@@ -166,11 +153,7 @@ class TestBaconDecomposition:
         data = generate_staggered_data(never_treated_frac=0.0)
 
         results = bacon_decompose(
-            data,
-            outcome='outcome',
-            unit='unit',
-            time='time',
-            first_treat='first_treat'
+            data, outcome="outcome", unit="unit", time="time", first_treat="first_treat"
         )
 
         # Should still work
@@ -182,11 +165,7 @@ class TestBaconDecomposition:
         data = generate_staggered_data(n_cohorts=1, never_treated_frac=0.3)
 
         results = bacon_decompose(
-            data,
-            outcome='outcome',
-            unit='unit',
-            time='time',
-            first_treat='first_treat'
+            data, outcome="outcome", unit="unit", time="time", first_treat="first_treat"
         )
 
         # With single cohort, should only have treated vs never
@@ -199,11 +178,7 @@ class TestBaconDecomposition:
         data = generate_staggered_data()
 
         results = bacon_decompose(
-            data,
-            outcome='outcome',
-            unit='unit',
-            time='time',
-            first_treat='first_treat'
+            data, outcome="outcome", unit="unit", time="time", first_treat="first_treat"
         )
 
         weights = results.weight_by_type()
@@ -218,11 +193,7 @@ class TestBaconDecomposition:
         data = generate_staggered_data()
 
         results = bacon_decompose(
-            data,
-            outcome='outcome',
-            unit='unit',
-            time='time',
-            first_treat='first_treat'
+            data, outcome="outcome", unit="unit", time="time", first_treat="first_treat"
         )
 
         effects = results.effect_by_type()
@@ -236,11 +207,7 @@ class TestBaconDecomposition:
         data = generate_staggered_data()
 
         results = bacon_decompose(
-            data,
-            outcome='outcome',
-            unit='unit',
-            time='time',
-            first_treat='first_treat'
+            data, outcome="outcome", unit="unit", time="time", first_treat="first_treat"
         )
 
         df = results.to_dataframe()
@@ -258,11 +225,7 @@ class TestBaconDecomposition:
         data = generate_staggered_data()
 
         results = bacon_decompose(
-            data,
-            outcome='outcome',
-            unit='unit',
-            time='time',
-            first_treat='first_treat'
+            data, outcome="outcome", unit="unit", time="time", first_treat="first_treat"
         )
 
         summary = results.summary()
@@ -277,11 +240,7 @@ class TestBaconDecomposition:
 
         with pytest.raises(ValueError, match="Missing columns"):
             bacon_decompose(
-                data,
-                outcome='nonexistent',
-                unit='unit',
-                time='time',
-                first_treat='first_treat'
+                data, outcome="nonexistent", unit="unit", time="time", first_treat="first_treat"
             )
 
 
@@ -315,11 +274,7 @@ class TestTWFEIntegration:
 
         twfe = TwoWayFixedEffects()
         decomp = twfe.decompose(
-            data,
-            outcome='outcome',
-            unit='unit',
-            time='time',
-            first_treat='first_treat'
+            data, outcome="outcome", unit="unit", time="time", first_treat="first_treat"
         )
 
         assert isinstance(decomp, BaconDecompositionResults)
@@ -333,19 +288,10 @@ class TestTWFEIntegration:
 
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
-            twfe.fit(
-                data,
-                outcome='outcome',
-                treatment='treated',
-                time='time',
-                unit='unit'
-            )
+            twfe.fit(data, outcome="outcome", treatment="treated", time="time", unit="unit")
 
             # Should have emitted a warning about staggered treatment
-            staggered_warnings = [
-                x for x in w
-                if "staggered" in str(x.message).lower()
-            ]
+            staggered_warnings = [x for x in w if "staggered" in str(x.message).lower()]
             assert len(staggered_warnings) > 0
 
 
@@ -357,11 +303,7 @@ class TestBaconDecomposeFunction:
         data = generate_staggered_data()
 
         results = bacon_decompose(
-            data,
-            outcome='outcome',
-            unit='unit',
-            time='time',
-            first_treat='first_treat'
+            data, outcome="outcome", unit="unit", time="time", first_treat="first_treat"
         )
 
         assert isinstance(results, BaconDecompositionResults)
@@ -377,15 +319,11 @@ class TestVisualization:
 
         data = generate_staggered_data()
         results = bacon_decompose(
-            data,
-            outcome='outcome',
-            unit='unit',
-            time='time',
-            first_treat='first_treat'
+            data, outcome="outcome", unit="unit", time="time", first_treat="first_treat"
         )
 
         # Should not raise
-        ax = plot_bacon(results, plot_type='scatter', show=False)
+        ax = plot_bacon(results, plot_type="scatter", show=False)
         assert ax is not None
 
     def test_plot_bacon_bar(self):
@@ -395,15 +333,11 @@ class TestVisualization:
 
         data = generate_staggered_data()
         results = bacon_decompose(
-            data,
-            outcome='outcome',
-            unit='unit',
-            time='time',
-            first_treat='first_treat'
+            data, outcome="outcome", unit="unit", time="time", first_treat="first_treat"
         )
 
         # Should not raise
-        ax = plot_bacon(results, plot_type='bar', show=False)
+        ax = plot_bacon(results, plot_type="bar", show=False)
         assert ax is not None
 
     def test_plot_bacon_invalid_type(self):
@@ -413,15 +347,11 @@ class TestVisualization:
 
         data = generate_staggered_data()
         results = bacon_decompose(
-            data,
-            outcome='outcome',
-            unit='unit',
-            time='time',
-            first_treat='first_treat'
+            data, outcome="outcome", unit="unit", time="time", first_treat="first_treat"
         )
 
         with pytest.raises(ValueError, match="Unknown plot_type"):
-            plot_bacon(results, plot_type='invalid', show=False)
+            plot_bacon(results, plot_type="invalid", show=False)
 
 
 class TestWeightsParameter:
@@ -441,11 +371,7 @@ class TestWeightsParameter:
         assert decomp.weights == "exact"
 
         results = decomp.fit(
-            data,
-            outcome='outcome',
-            unit='unit',
-            time='time',
-            first_treat='first_treat'
+            data, outcome="outcome", unit="unit", time="time", first_treat="first_treat"
         )
 
         # Weights should sum to 1
@@ -467,11 +393,7 @@ class TestWeightsParameter:
         assert decomp.weights == "approximate"
 
         results = decomp.fit(
-            data,
-            outcome='outcome',
-            unit='unit',
-            time='time',
-            first_treat='first_treat'
+            data, outcome="outcome", unit="unit", time="time", first_treat="first_treat"
         )
 
         # Sum-to-1 contract preserved via normalization, but tolerance is
@@ -487,11 +409,7 @@ class TestWeightsParameter:
         assert decomp.weights == "exact"
 
         results = decomp.fit(
-            data,
-            outcome='outcome',
-            unit='unit',
-            time='time',
-            first_treat='first_treat'
+            data, outcome="outcome", unit="unit", time="time", first_treat="first_treat"
         )
 
         # Weights should still sum to 1
@@ -504,20 +422,20 @@ class TestWeightsParameter:
 
         results_approx = bacon_decompose(
             data,
-            outcome='outcome',
-            unit='unit',
-            time='time',
-            first_treat='first_treat',
-            weights="approximate"
+            outcome="outcome",
+            unit="unit",
+            time="time",
+            first_treat="first_treat",
+            weights="approximate",
         )
 
         results_exact = bacon_decompose(
             data,
-            outcome='outcome',
-            unit='unit',
-            time='time',
-            first_treat='first_treat',
-            weights="exact"
+            outcome="outcome",
+            unit="unit",
+            time="time",
+            first_treat="first_treat",
+            weights="exact",
         )
 
         # TWFE estimates should be the same
@@ -532,20 +450,20 @@ class TestWeightsParameter:
 
         results_approx = bacon_decompose(
             data,
-            outcome='outcome',
-            unit='unit',
-            time='time',
-            first_treat='first_treat',
-            weights="approximate"
+            outcome="outcome",
+            unit="unit",
+            time="time",
+            first_treat="first_treat",
+            weights="approximate",
         )
 
         results_exact = bacon_decompose(
             data,
-            outcome='outcome',
-            unit='unit',
-            time='time',
-            first_treat='first_treat',
-            weights="exact"
+            outcome="outcome",
+            unit="unit",
+            time="time",
+            first_treat="first_treat",
+            weights="exact",
         )
 
         # Exact weights should have equal or lower decomposition error
@@ -563,11 +481,11 @@ class TestWeightsParameter:
 
         results = bacon_decompose(
             data,
-            outcome='outcome',
-            unit='unit',
-            time='time',
-            first_treat='first_treat',
-            weights="exact"
+            outcome="outcome",
+            unit="unit",
+            time="time",
+            first_treat="first_treat",
+            weights="exact",
         )
 
         assert isinstance(results, BaconDecompositionResults)
@@ -581,22 +499,22 @@ class TestWeightsParameter:
         # Test with approximate
         decomp_approx = twfe.decompose(
             data,
-            outcome='outcome',
-            unit='unit',
-            time='time',
-            first_treat='first_treat',
-            weights="approximate"
+            outcome="outcome",
+            unit="unit",
+            time="time",
+            first_treat="first_treat",
+            weights="approximate",
         )
         assert isinstance(decomp_approx, BaconDecompositionResults)
 
         # Test with exact
         decomp_exact = twfe.decompose(
             data,
-            outcome='outcome',
-            unit='unit',
-            time='time',
-            first_treat='first_treat',
-            weights="exact"
+            outcome="outcome",
+            unit="unit",
+            time="time",
+            first_treat="first_treat",
+            weights="exact",
         )
         assert isinstance(decomp_exact, BaconDecompositionResults)
 
@@ -622,24 +540,17 @@ class TestBalancedPanelWarning:
 
         # Remove some observations from specific units to make it unbalanced
         # This ensures different units have different numbers of periods
-        mask = ~((data['unit'] == 0) & (data['time'] == 0))  # Remove one period from unit 0
+        mask = ~((data["unit"] == 0) & (data["time"] == 0))  # Remove one period from unit 0
         data = data[mask].reset_index(drop=True)
 
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
             bacon_decompose(
-                data,
-                outcome='outcome',
-                unit='unit',
-                time='time',
-                first_treat='first_treat'
+                data, outcome="outcome", unit="unit", time="time", first_treat="first_treat"
             )
 
             # Should have warning about unbalanced panel
-            unbalanced_warnings = [
-                x for x in w
-                if "unbalanced" in str(x.message).lower()
-            ]
+            unbalanced_warnings = [x for x in w if "unbalanced" in str(x.message).lower()]
             assert len(unbalanced_warnings) > 0
 
     def test_balanced_panel_no_warning(self):
@@ -649,18 +560,11 @@ class TestBalancedPanelWarning:
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
             bacon_decompose(
-                data,
-                outcome='outcome',
-                unit='unit',
-                time='time',
-                first_treat='first_treat'
+                data, outcome="outcome", unit="unit", time="time", first_treat="first_treat"
             )
 
             # Should NOT have warning about unbalanced panel
-            unbalanced_warnings = [
-                x for x in w
-                if "unbalanced" in str(x.message).lower()
-            ]
+            unbalanced_warnings = [x for x in w if "unbalanced" in str(x.message).lower()]
             assert len(unbalanced_warnings) == 0
 
 
@@ -672,11 +576,7 @@ class TestEdgeCases:
         data = generate_staggered_data(n_units=20, n_periods=5, n_cohorts=2)
 
         results = bacon_decompose(
-            data,
-            outcome='outcome',
-            unit='unit',
-            time='time',
-            first_treat='first_treat'
+            data, outcome="outcome", unit="unit", time="time", first_treat="first_treat"
         )
 
         assert len(results.comparisons) > 0
@@ -688,11 +588,7 @@ class TestEdgeCases:
         )
 
         results = bacon_decompose(
-            data,
-            outcome='outcome',
-            unit='unit',
-            time='time',
-            first_treat='first_treat'
+            data, outcome="outcome", unit="unit", time="time", first_treat="first_treat"
         )
 
         # Should have comparisons from all cohort pairs
@@ -703,15 +599,38 @@ class TestEdgeCases:
         data = generate_staggered_data()
 
         # Replace 0 with inf for never-treated
-        data['first_treat'] = data['first_treat'].replace(0, np.inf)
+        data["first_treat"] = data["first_treat"].replace(0, np.inf)
 
         results = bacon_decompose(
-            data,
-            outcome='outcome',
-            unit='unit',
-            time='time',
-            first_treat='first_treat'
+            data, outcome="outcome", unit="unit", time="time", first_treat="first_treat"
         )
 
         assert results.n_never_treated > 0
         assert len(results.comparisons) > 0
+
+
+class TestAbsorbedTreatmentSnap:
+    """A treatment indicator spanned by the FEs in an internal 2x2 TWFE cell
+    must hit the deterministic zero-variance guard with a cause warning,
+    not an arbitrary junk/junk division (REGISTRY 'Absorbed FE'). The 0.0
+    return for the degenerate cell is _compute_twfe's pre-existing contract.
+    """
+
+    def test_fe_spanned_treatment_hits_zero_variance_guard_with_warning(self):
+        rng = np.random.default_rng(0)
+        # treat == post for every unit -> treatment is a function of time,
+        # spanned by the time FE
+        unit = np.repeat(np.arange(20), 4)
+        time = np.tile(np.arange(4), 20)
+        df = pd.DataFrame(
+            {
+                "unit": unit,
+                "time": time,
+                "y": rng.normal(size=unit.size),
+                "__bacon_treated_internal__": (time >= 2).astype(float),
+            }
+        )
+        decomp = BaconDecomposition()
+        with pytest.warns(UserWarning, match="collinear with the absorbed"):
+            beta = decomp._compute_twfe(df, outcome="y", unit="unit", time="time")
+        assert beta == 0.0  # deterministic d_var == 0 guard, not junk/junk

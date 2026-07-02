@@ -1968,3 +1968,47 @@ class TestSunAbrahamVcovType:
                 f"{vt}={results[vt].overall_att}. Bootstrap refits in the new "
                 "full-dummy branch are not FWL-invariant."
             )
+
+
+class TestAbsorbedCovariateSnap:
+    """A unit-constant covariate is spanned by the unit FE: it must snap to
+    zero (deterministic drop + cause warning) instead of leaving a junk
+    column that perturbs the IW estimates (REGISTRY 'Absorbed FE')."""
+
+    @staticmethod
+    def _panel(seed=0, with_cov=False):
+        rng = np.random.default_rng(seed)
+        n_units, n_periods = 90, 8
+        unit = np.repeat(np.arange(n_units), n_periods)
+        time = np.tile(np.arange(n_periods), n_units)
+        first = np.repeat(rng.choice([0, 4, 5], n_units), n_periods)
+        d = (first > 0) & (time >= first)
+        y = 0.3 * d + rng.normal(size=unit.size)
+        df = pd.DataFrame({"y": y, "unit": unit, "time": time, "first_treat": first})
+        if with_cov:
+            df["xc"] = np.repeat(rng.normal(size=n_units), n_periods)
+        return df
+
+    def test_unit_constant_covariate_snaps_att_unaffected(self):
+        base_df = self._panel(seed=42)
+        cov_df = self._panel(seed=42, with_cov=True)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            base = SunAbraham().fit(
+                base_df,
+                outcome="y",
+                unit="unit",
+                time="time",
+                first_treat="first_treat",
+            )
+        with pytest.warns(UserWarning, match="collinear with the absorbed"):
+            res = SunAbraham().fit(
+                cov_df,
+                outcome="y",
+                unit="unit",
+                time="time",
+                first_treat="first_treat",
+                covariates=["xc"],
+            )
+        # snapped covariate -> dropped -> identical to the no-covariate design
+        assert res.att == pytest.approx(base.att, abs=1e-10)

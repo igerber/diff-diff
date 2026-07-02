@@ -1,0 +1,151 @@
+{
+  "suite": "fe_absorption",
+  "platform": "macOS-26.5.1-arm64-arm-64bit-Mach-O",
+  "python": "3.14.4",
+  "versions": {
+    "diff_diff": "3.6.1",
+    "numpy": "2.5.0",
+    "pandas": "3.0.3"
+  },
+  "backend_requested": "python",
+  "repeats": 3,
+  "quick": false,
+  "tolerances": {
+    "att_atol": 1e-09,
+    "se_rtol": 1e-07,
+    "se_rtol_survey": 1e-06,
+    "gate_exempt": [
+      "tail_stress"
+    ]
+  },
+  "results": [
+    {
+      "scenario": "county_policy",
+      "n_obs": 177289,
+      "checksum": 6315.071127371084,
+      "att": 0.2803785413990301,
+      "se": 0.031244864610215972,
+      "fit_median_s": 2.3882,
+      "fit_min_s": 2.3505,
+      "fit_max_s": 2.4948,
+      "fit_cv": 0.0257,
+      "noisy": false,
+      "n_timed_fits": 9,
+      "datagen_s": 0.004,
+      "peak_rss_mb": 3177.5,
+      "backend_resolved": "python",
+      "warnings": []
+    },
+    {
+      "scenario": "firm_churn",
+      "n_obs": 2400000,
+      "checksum": 240997.06223418942,
+      "att": 0.3144327184497798,
+      "se": 0.005837281701253927,
+      "fit_median_s": 49.502,
+      "fit_min_s": 48.4532,
+      "fit_max_s": 50.3118,
+      "fit_cv": 0.0189,
+      "noisy": false,
+      "n_timed_fits": 3,
+      "datagen_s": 0.07,
+      "peak_rss_mb": 15900.8,
+      "backend_resolved": "python",
+      "warnings": []
+    },
+    {
+      "scenario": "scanner_twfe",
+      "n_obs": 3255000,
+      "checksum": 76832.22571739106,
+      "att": 0.251164131495566,
+      "se": 0.002414938742160613,
+      "fit_median_s": 0.9834,
+      "fit_min_s": 0.9825,
+      "fit_max_s": 0.9845,
+      "fit_cv": 0.001,
+      "noisy": false,
+      "n_timed_fits": 3,
+      "datagen_s": 0.077,
+      "peak_rss_mb": 976.9,
+      "backend_resolved": "python",
+      "warnings": []
+    },
+    {
+      "scenario": "geo_experiment",
+      "n_obs": 5000000,
+      "checksum": 443696.3834000407,
+      "att": 0.25194372599916653,
+      "se": 0.0017886314723251327,
+      "fit_median_s": 0.973,
+      "fit_min_s": 0.968,
+      "fit_max_s": 0.9759,
+      "fit_cv": 0.0041,
+      "noisy": false,
+      "n_timed_fits": 3,
+      "datagen_s": 0.062,
+      "peak_rss_mb": 1664.8,
+      "backend_resolved": "python",
+      "warnings": [
+        "Rank-deficient design matrix: dropping 2 of 4 columns (column 1, column 2). Coefficients for these columns are",
+        "Regressor(s) ['treated', 'post'] are collinear with the absorbed fixed effects (absorb=['store', 'week']): the"
+      ]
+    },
+    {
+      "scenario": "survey_absorb",
+      "n_obs": 500000,
+      "checksum": -176482.6014001448,
+      "att": 0.24554568144130481,
+      "se": 0.007662698712656388,
+      "fit_median_s": 4.0767,
+      "fit_min_s": 4.0736,
+      "fit_max_s": 4.0778,
+      "fit_cv": 0.0005,
+      "noisy": false,
+      "n_timed_fits": 3,
+      "datagen_s": 0.107,
+      "peak_rss_mb": 3589.2,
+      "backend_resolved": "python",
+      "warnings": [
+        "Rank-deficient design matrix: dropping 2 of 4 columns (column 1, column 2). Coefficients for these columns are",
+        "Regressor(s) ['treated', 'post'] are collinear with the absorbed fixed effects (absorb=['state', 'month']): th"
+      ]
+    },
+    {
+      "scenario": "tail_stress",
+      "n_obs": 5000000,
+      "checksum": 376703.7248141762,
+      "att": 0.2502082560083505,
+      "se": 0.004392830594147583,
+      "fit_median_s": 31.7648,
+      "fit_min_s": 31.4957,
+      "fit_max_s": 31.8372,
+      "fit_cv": 0.0057,
+      "noisy": false,
+      "n_timed_fits": 3,
+      "datagen_s": 0.067,
+      "peak_rss_mb": 1840.7,
+      "backend_resolved": "python",
+      "warnings": [
+        "Rank-deficient design matrix: dropping 2 of 4 columns (column 1, column 2). Coefficients for these columns are",
+        "Regressor(s) ['treated', 'post'] are collinear with the absorbed fixed effects (absorb=['store', 'week']): the"
+      ]
+    },
+    {
+      "scenario": "guard_small",
+      "n_obs": 20000,
+      "checksum": -571.6190664591859,
+      "att": 0.2515087011451766,
+      "se": 0.028726073333820948,
+      "fit_median_s": 0.0035,
+      "fit_min_s": 0.0034,
+      "fit_max_s": 0.0039,
+      "fit_cv": 0.0437,
+      "noisy": false,
+      "n_timed_fits": 21,
+      "datagen_s": 0.001,
+      "peak_rss_mb": 145.1,
+      "backend_resolved": "python",
+      "warnings": []
+    }
+  ]
+}

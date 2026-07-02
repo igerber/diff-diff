@@ -7,6 +7,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **FE-absorption demeaning rewritten: factorize-once + `np.bincount` method of alternating
+  projections** (`demean_by_groups` / `within_transform`). Each absorbed dimension is factorized
+  once and group means are formed via `np.bincount` instead of re-hashing the group keys with
+  `pandas.groupby().transform("mean")` on every iteration x variable x dimension. Affects every
+  fit of `TwoWayFixedEffects`, `SunAbraham`, `BaconDecomposition`, `WooldridgeDiD`,
+  `DifferenceInDifferences`/`MultiPeriodDiD` with `absorb=`, and the survey replicate-refit path.
+  Convergence semantics (per-variable sweep order, `max|x - x_old| < tol` criterion, zero-total-
+  weight group guard, non-convergence warning) are unchanged. **Numerical contract**: bincount
+  accumulation is not Kahan-compensated the way pandas' grouped mean is, so demeaned values agree
+  with the prior implementation to ~1e-10 order rather than bit-for-bit; estimator estimates are
+  validated unchanged at the benchmark identity gate
+  (`bench_fe_absorption.py --check-estimates`, coefficients atol=1e-9).
+- **MAP iteration cap raised from 100 to 10,000** (`max_iter` in both `demean_by_groups` and
+  `within_transform`), matching the R `fixest` (`fixef.iter`) and `pyfixest` (`fixef_maxiter`)
+  defaults. Correlated FE incidence (e.g. stores active in contiguous week windows) genuinely
+  needs hundreds of iterations; the old cap made such fits warn and return slightly-off residuals.
+  Worst-case trade-off accepted deliberately: a truly non-convergent input now iterates 10,000x
+  before warning. Documented in `docs/methodology/REGISTRY.md` "Absorbed Fixed Effects".
+- **NaN in an absorbed group column now raises `ValueError`** naming the column (previously the
+  unweighted path silently NaN-poisoned the affected rows and the weighted path silently passed
+  them through un-demeaned).
+- **FE-spanned regressors are now snapped to exact zero before the solver** (new
+  `diff_diff.utils.snap_absorbed_regressors`, wired at every demeaning consumer: DiD/MPD
+  `absorb=`, TWFE, SunAbraham, BaconDecomposition, WooldridgeDiD, and the DiD/MPD/TWFE
+  replicate-refit closures). A regressor spanned by the absorbed FEs (treated-group indicator with
+  the unit dimension absorbed, a period dummy with time absorbed, a unit-constant covariate, or an
+  additive `a_unit + b_time` combination) demeans to numerical junk that previously survived the
+  rank check via column equilibration and perturbed the identified coefficients - up to ~3e-3 on
+  ATT with a ~1e14-scale garbage coefficient reported for the spanned column in the joint-span
+  case. Detection is two-stage (fast relative-norm path at 1e-10, then an exact sparse-LSMR
+  span-membership confirmation for candidates masked by MAP truncation on unbalanced/correlated
+  panels); norms are `sqrt(w)`-weighted under WLS so zero-weight domain rows cannot mask spanning.
+  Spanned regressors are dropped deterministically (coefficient NaN) with a cause-specific
+  `UserWarning` naming them under `rank_deficient_action="warn"`.
+  **Point-estimate note**: designs carrying such spanned regressors (e.g. 2x2 DiD with
+  `absorb=[unit_dim, time_dim]`) see identified estimates shift by up to ~1e-5 relative to
+  v3.6.1 - the removal of the junk direction, documented in REGISTRY "Absorbed Fixed Effects";
+  estimates are now invariant (~1e-14) to the demeaning tolerance where they previously swung
+  at ~1e-5.
+
 ### Added
 - **FE-absorption benchmark suite** (`benchmarks/speed_review/bench_fe_absorption.py`, scenarios
   7-13 in `docs/performance-scenarios.md`): seven realistic workloads (county policy event study,

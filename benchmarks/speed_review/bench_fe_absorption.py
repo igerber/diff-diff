@@ -189,9 +189,15 @@ def _measure(scenario, repeats, backend, quick):
 
 
 # --------------------------------------------------------------- identity gate
-def check_estimates(results, before_path):
+def check_estimates(results, before_path, allow_shift=()):
     """Compare ATT/SE per scenario against a prior baseline JSON. Returns the
     number of failures (0 = pass). tail_stress reports its delta, ungated.
+
+    allow_shift: scenario ids whose estimates are EXPECTED to move this run
+    because of a documented estimate-affecting fix (the reason must be in the
+    PR/CHANGELOG). Their deltas are printed loudly but do not fail the gate -
+    this is a per-run flag, never a permanent exemption, so future runs
+    re-gate them against the refreshed baseline.
     """
     before = {r["scenario"]: r for r in json.loads(Path(before_path).read_text())["results"]}
     failures = 0
@@ -207,6 +213,12 @@ def check_estimates(results, before_path):
         if scen in GATE_EXEMPT:
             print(
                 f"  identity {scen:16s} EXEMPT (expected shift): "
+                f"|d att|={d_att:.3e} rel d se={rel_se:.3e}"
+            )
+            continue
+        if scen in allow_shift:
+            print(
+                f"  identity {scen:16s} ALLOWED SHIFT (documented fix): "
                 f"|d att|={d_att:.3e} rel d se={rel_se:.3e}"
             )
             continue
@@ -238,6 +250,14 @@ def main():
         "--check-estimates",
         metavar="BEFORE_JSON",
         help="compare ATT/SE against a prior baseline at the unified tolerances",
+    )
+    ap.add_argument(
+        "--allow-shift",
+        metavar="SCEN[,SCEN...]",
+        default="",
+        help="comma-separated scenarios whose estimates are expected to move "
+        "this run due to a documented estimate-affecting fix (printed loudly, "
+        "not failed; per-run only - never a permanent exemption)",
     )
     args = ap.parse_args()
 
@@ -301,7 +321,10 @@ def main():
     exit_code = 0
     if args.check_estimates:
         print("\nidentity gate vs", args.check_estimates)
-        failures = check_estimates([r for r in results if "error" not in r], args.check_estimates)
+        allow = tuple(s for s in args.allow_shift.split(",") if s)
+        failures = check_estimates(
+            [r for r in results if "error" not in r], args.check_estimates, allow
+        )
         if failures:
             print(f"IDENTITY GATE FAILED: {failures} scenario(s) moved")
             exit_code = 1

@@ -2648,7 +2648,7 @@ def demean_by_groups(
     inplace: bool = False,
     suffix: str = "",
     weights: Optional[np.ndarray] = None,
-    max_iter: int = 100,
+    max_iter: int = 10_000,
     tol: float = 1e-10,
 ) -> Tuple[pd.DataFrame, int]:
     """N-way within transformation via the method of alternating projections (MAP).
@@ -2685,9 +2685,12 @@ def demean_by_groups(
     weights : np.ndarray, optional
         Observation weights. When provided, uses weighted group means
         ``sum(w*x)/sum(w)`` per group and converges to the WLS-FWL residual.
-    max_iter : int, default 100
-        Maximum number of alternating-projection iterations per variable. Emits a
-        single ``UserWarning`` per call listing any variable that fails to converge.
+    max_iter : int, default 10_000
+        Maximum number of alternating-projection iterations per variable
+        (matching the R ``fixest`` ``fixef.iter`` / ``pyfixest``
+        ``fixef_maxiter`` defaults; correlated FE incidence can genuinely
+        require hundreds of iterations). Emits a single ``UserWarning`` per
+        call listing any variable that fails to converge.
     tol : float, default 1e-10
         Convergence tolerance on the max absolute change across the iterate.
 
@@ -2699,6 +2702,25 @@ def demean_by_groups(
         Number of absorbed fixed effects, ``sum_d (nunique_d - 1)`` over
         ``group_vars`` (the standard DOF-accounting convention).
 
+    Raises
+    ------
+    ValueError
+        If ``group_vars`` is empty, or if any absorbed group column contains
+        NaN (checked for every ``len(group_vars)``, one-way included) —
+        pandas groupby silently drops NaN keys and ``pd.factorize`` codes
+        them ``-1``, which would silently mis-index the group means, so
+        missing group keys must be dropped or imputed by the caller.
+
+    Notes
+    -----
+    For ``len(group_vars) >= 2`` each dimension is factorized once and the MAP
+    sweeps compute group means via ``np.bincount`` (two O(n) passes per
+    dimension). Plain bincount summation is not compensated the way pandas'
+    grouped mean is, so results agree with a pandas ``groupby`` implementation
+    to ~1e-10 order (drift compounds across iterations), not bit-for-bit. See
+    ``docs/methodology/REGISTRY.md`` "Absorbed Fixed Effects with Survey
+    Weights".
+
     Examples
     --------
     >>> df, n_fe = demean_by_groups(df, ['y', 'x'], ['unit', 'period'])
@@ -2706,8 +2728,22 @@ def demean_by_groups(
     if not group_vars:
         raise ValueError("demean_by_groups requires at least one grouping variable.")
 
+    # NaN group keys are rejected for EVERY N (one-way included): pandas
+    # groupby silently drops NaN keys (NaN-poisoning the affected rows
+    # unweighted, passing them through un-demeaned weighted) and
+    # pd.factorize codes them -1, which would mis-index the last group's
+    # mean in the bincount sweeps below.
+    for g in group_vars:
+        if pd.isna(data[g].values).any():
+            raise ValueError(
+                f"demean_by_groups: absorbed group column '{g}' contains NaN. "
+                "Drop or impute missing group keys before absorbing this "
+                "dimension."
+            )
+
     # One dimension: the within projection is exact in a single pass. Delegate so
-    # the one-way callers stay byte-identical to demean_by_group.
+    # the one-way callers stay byte-identical to demean_by_group (for valid,
+    # NaN-free group keys).
     if len(group_vars) == 1:
         return demean_by_group(
             data,
@@ -2719,38 +2755,49 @@ def demean_by_groups(
         )
 
     # N >= 2: method of alternating projections. Per-variable independent
-    # convergence (outer loop = variable, inner = iterations) — this mirrors
-    # within_transform's weighted loop exactly so that the two-way weighted case
-    # (group_vars == [unit, time]) is bit-identical.
-    n_effects = sum(int(data[g].nunique()) - 1 for g in group_vars)
+    # convergence (outer loop = variable, inner = iterations), same sweep order
+    # over group_vars as within_transform's historical unit-then-time loop.
+    #
+    # Each absorbed dimension is factorized ONCE; every MAP sweep is then two
+    # O(n) passes (np.bincount group-sum + fancy-index gather) with no group
+    # re-hashing — pandas groupby.transform rebuilt its hash table on every
+    # (iteration x variable x dimension) call. Same precompute pattern as
+    # survey._PsuScaffolding. Bincount accumulation is not compensated the way
+    # pandas' grouped mean is: results agree with the prior implementation to
+    # ~1e-10 order, not bit-for-bit (see REGISTRY "Absorbed Fixed Effects").
     target_cols = [var if not suffix else f"{var}{suffix}" for var in variables]
-    group_arrays = [data[g].values for g in group_vars]
+    codes_list: List[np.ndarray] = []
+    n_groups_list: List[int] = []
+    for g in group_vars:
+        # NaN keys already rejected above, so codes are all >= 0 here.
+        codes, uniques = pd.factorize(data[g].values, sort=False)
+        codes_list.append(codes.astype(np.intp, copy=False))
+        n_groups_list.append(len(uniques))
+    n_effects = sum(n_g - 1 for n_g in n_groups_list)
     demeaned_values: List[np.ndarray] = []
     non_converged_vars: List[str] = []
 
     if weights is not None:
         w = np.asarray(weights, dtype=np.float64)
         # Cache per-group weight sums once (invariant across variables/iterations).
-        w_sums = [pd.Series(w).groupby(g).transform("sum").values for g in group_arrays]
-
-        def _weighted_group_demean(x, groups, w, w_sum):
-            wx_sum = pd.Series(w * x).groupby(groups).transform("sum").values
-            # Guard zero-total-weight groups (survey subpopulation / zero-weight
-            # domain padding): leave such rows unchanged (mean 0) so they remain
-            # inert in the downstream WLS instead of poisoning the design with
-            # NaN/Inf. For positive-weight groups this is bit-identical to wx/w_sum.
-            means = np.divide(
-                wx_sum, w_sum, out=np.zeros_like(wx_sum, dtype=np.float64), where=w_sum > 0
-            )
-            return x - means
+        w_sums = [
+            np.bincount(codes, weights=w, minlength=n_g)
+            for codes, n_g in zip(codes_list, n_groups_list)
+        ]
 
         for var in variables:
             x = data[var].values.astype(np.float64)
             converged = False
             for _iter in range(max_iter):
                 x_old = x.copy()
-                for groups, w_sum in zip(group_arrays, w_sums):
-                    x = _weighted_group_demean(x, groups, w, w_sum)
+                for codes, n_g, w_sum in zip(codes_list, n_groups_list, w_sums):
+                    wx_sum = np.bincount(codes, weights=w * x, minlength=n_g)
+                    # Guard zero-total-weight groups (survey subpopulation /
+                    # zero-weight domain padding): leave such rows unchanged
+                    # (mean 0) so they remain inert in the downstream WLS
+                    # instead of poisoning the design with NaN/Inf.
+                    means = np.divide(wx_sum, w_sum, out=np.zeros_like(wx_sum), where=w_sum > 0)
+                    x = x - means[codes]
                 if np.max(np.abs(x - x_old)) < tol:
                     converged = True
                     break
@@ -2758,13 +2805,18 @@ def demean_by_groups(
                 non_converged_vars.append(var)
             demeaned_values.append(x)
     else:
+        counts = [
+            np.bincount(codes, minlength=n_g).astype(np.float64)
+            for codes, n_g in zip(codes_list, n_groups_list)
+        ]
         for var in variables:
             x = data[var].values.astype(np.float64)
             converged = False
             for _iter in range(max_iter):
                 x_old = x.copy()
-                for groups in group_arrays:
-                    x = x - pd.Series(x).groupby(groups).transform("mean").values
+                for codes, n_g, cnt in zip(codes_list, n_groups_list, counts):
+                    means = np.bincount(codes, weights=x, minlength=n_g) / cnt
+                    x = x - means[codes]
                 if np.max(np.abs(x - x_old)) < tol:
                     converged = True
                     break
@@ -2796,6 +2848,191 @@ def demean_by_groups(
     return pd.concat([data, new_block], axis=1), n_effects
 
 
+def pre_demean_norms(
+    data: pd.DataFrame,
+    regressors: List[str],
+    weights: Optional[np.ndarray] = None,
+) -> Dict[str, float]:
+    """L2 norms of regressor columns BEFORE demeaning, for
+    :func:`snap_absorbed_regressors` (capture before an in-place demean
+    overwrites the source values).
+
+    When ``weights`` is given, norms are ``||sqrt(w) * x||`` — the same
+    effective-sample scaling ``solve_ols`` applies in WLS, so the snap
+    decision is made on the sample the solver actually sees (zero-weight
+    domain rows, which the weighted demean leaves inert by design, must not
+    mask a regressor that is FE-spanned on the positive-weight sample).
+    """
+    sw = None if weights is None else np.sqrt(np.asarray(weights, dtype=np.float64))
+    out: Dict[str, float] = {}
+    for v in regressors:
+        x = data[v].to_numpy(dtype=np.float64)
+        out[v] = float(np.linalg.norm(x if sw is None else sw * x))
+    return out
+
+
+def _fe_span_residual_norm(
+    x_eff: np.ndarray,
+    group_codes: List[np.ndarray],
+    n_groups: List[int],
+    sqrt_w: Optional[np.ndarray],
+) -> float:
+    """Exact residual norm of an (effective-sample) column projected onto the
+    absorbed-FE span, via sparse LSMR.
+
+    The MAP demean's per-iteration stopping rule bounds the last STEP, not the
+    distance to the limit, so a truncated iterate of an exactly-spanned column
+    can carry a structured residual orders of magnitude above the convergence
+    tolerance (slow-convergence regimes: unbalanced, correlated FE incidence).
+    A Krylov solve on the sparse FE incidence decides span membership exactly
+    (up to fp), and because ``x_eff`` is the ALREADY-DEMEANED column (nearly
+    orthogonal to the span), LSMR converges in a handful of iterations.
+
+    Returns the achieved residual norm ``||x_eff - A @ sol||`` — an upper
+    bound on the true projection residual, so an unconverged LSMR errs toward
+    KEEPING the column (the pre-guard status quo), never toward over-snapping.
+    """
+    from scipy.sparse import csr_matrix, hstack
+    from scipy.sparse.linalg import lsmr
+
+    n = x_eff.shape[0]
+    rows = np.arange(n)
+    ones = np.ones(n) if sqrt_w is None else sqrt_w
+    blocks = [
+        csr_matrix((ones, (rows, codes)), shape=(n, n_g))
+        for codes, n_g in zip(group_codes, n_groups)
+    ]
+    a_mat = hstack(blocks, format="csr")
+    sol = lsmr(a_mat, x_eff, atol=1e-13, btol=1e-13)[0]
+    return float(np.linalg.norm(x_eff - a_mat @ sol))
+
+
+def snap_absorbed_regressors(
+    demeaned: pd.DataFrame,
+    regressors: List[str],
+    pre_norms: Dict[str, float],
+    absorbed_desc: str,
+    group_vars: List[str],
+    rank_deficient_action: str = "warn",
+    suffix: str = "",
+    display_names: Optional[Dict[str, str]] = None,
+    rel_tol: float = 1e-10,
+    weights: Optional[np.ndarray] = None,
+    screen_tol: float = 1e-3,
+) -> List[str]:
+    """Zero out regressors that were absorbed (spanned) by the fixed effects.
+
+    A regressor lying exactly in the span of the absorbed FE dummies demeans
+    to numerical junk rather than exact zero. Such a column must not reach the
+    solver: column equilibration re-inflates it to unit norm, it passes the
+    rank check as linearly independent, and its arbitrary direction perturbs
+    the OTHER coefficients (measured up to ~3e-3 on ATT with a garbage
+    ~1e14-scale coefficient reported for the spanned column itself). Snapping
+    it to exact zero makes the downstream rank-deficiency handling drop it
+    deterministically (coefficient NaN) — the documented contract for
+    FE-collinear regressors. See ``docs/methodology/REGISTRY.md`` "Absorbed
+    Fixed Effects".
+
+    Detection is TWO-STAGE, because MAP truncation bounds the last iteration
+    step, not the distance to the limit — a spanned column in a
+    slow-convergence regime (unbalanced, correlated FE incidence) can stop
+    with a structured residual far above ``rel_tol``:
+
+    1. fast path: relative demeaned norm ``<= rel_tol`` snaps immediately
+       (covers exactly-converged spanned columns);
+    2. candidates with relative norm in ``(rel_tol, screen_tol]`` get an
+       exact span-membership confirmation via sparse LSMR on the FE incidence
+       (:func:`_fe_span_residual_norm`) and snap iff the true projection
+       residual is ``<= rel_tol`` — genuinely identified low-within-variation
+       regressors keep their (real) residual and are left untouched.
+
+    Parameters
+    ----------
+    demeaned : pd.DataFrame
+        Frame holding the demeaned columns AND the ``group_vars`` columns
+        (modified in place).
+    regressors : list of str
+        SOURCE names of the regressors (never the outcome — an outcome spanned
+        by the FEs is a zero-residual-variance situation, not a collinearity).
+    pre_norms : dict
+        Pre-demean L2 norm per source name (:func:`pre_demean_norms`).
+    absorbed_desc : str
+        Human description of the absorbed dimensions, for the warning.
+    group_vars : list of str
+        The absorbed FE columns (present in ``demeaned``), needed to build
+        the sparse incidence for the stage-2 confirmation.
+    rank_deficient_action : str, default "warn"
+        The owning estimator's contract: ``"warn"`` emits the cause-specific
+        ``UserWarning`` here; ``"silent"`` and ``"error"`` defer entirely to
+        the downstream rank machinery (silent drop / raise respectively).
+    suffix : str, default ""
+        Demeaned column naming (``f"{var}{suffix}"``).
+    display_names : dict, optional
+        Source name -> user-facing name for the warning message.
+    rel_tol : float, default 1e-10
+        Snap threshold on the (confirmed) relative projection residual.
+    weights : np.ndarray, optional
+        WLS observation weights. When given, BOTH norms must be
+        ``sqrt(w)``-weighted (pass the same weights to
+        :func:`pre_demean_norms`) so the snap decision matches the effective
+        sample ``solve_ols`` sees — zero-weight rows, which the weighted
+        demean leaves inert by design, must not mask an FE-spanned regressor
+        on the positive-weight sample.
+    screen_tol : float, default 1e-3
+        Stage-2 screening bound. Spanned columns whose MAP truncation
+        residual exceeds this are outside the guard — but at that point the
+        demeaning of every other column is equally unconverged and the
+        non-convergence warning contract applies.
+
+    Returns
+    -------
+    list of str
+        Source names of the snapped regressors (empty if none).
+    """
+    sw = None if weights is None else np.sqrt(np.asarray(weights, dtype=np.float64))
+    snapped: List[str] = []
+    span_cache: Optional[Tuple[List[np.ndarray], List[int]]] = None
+    for var in regressors:
+        pre = pre_norms.get(var, 0.0)
+        if pre <= 0.0:
+            continue  # all-zero input column: rank handling covers it as-is
+        col = f"{var}{suffix}" if suffix else var
+        vals = demeaned[col].to_numpy(dtype=np.float64)
+        eff = vals if sw is None else sw * vals
+        eff_norm = float(np.linalg.norm(eff))
+        if eff_norm <= rel_tol * pre:
+            demeaned[col] = np.zeros(len(vals), dtype=np.float64)
+            snapped.append(var)
+            continue
+        if eff_norm <= screen_tol * pre:
+            # Stage 2: MAP truncation may mask an exactly-spanned column;
+            # confirm with an exact projection on the FE incidence.
+            if span_cache is None:
+                codes_l: List[np.ndarray] = []
+                sizes_l: List[int] = []
+                for g in group_vars:
+                    codes_g, uniques_g = pd.factorize(demeaned[g].values, sort=False)
+                    codes_l.append(codes_g.astype(np.intp, copy=False))
+                    sizes_l.append(len(uniques_g))
+                span_cache = (codes_l, sizes_l)
+            resid = _fe_span_residual_norm(eff, span_cache[0], span_cache[1], sw)
+            if resid <= rel_tol * pre:
+                demeaned[col] = np.zeros(len(vals), dtype=np.float64)
+                snapped.append(var)
+    if snapped and rank_deficient_action == "warn":
+        shown = [display_names.get(v, v) if display_names else v for v in snapped]
+        warnings.warn(
+            f"Regressor(s) {shown} are collinear with the absorbed fixed "
+            f"effects ({absorbed_desc}): their within-transformed values are "
+            f"numerically zero (relative projection residual <= {rel_tol:g}), "
+            "so their coefficients are not identified and will be reported "
+            "as NaN.",
+            UserWarning,
+            stacklevel=3,
+        )
+    return snapped
+
+
 def within_transform(
     data: pd.DataFrame,
     variables: List[str],
@@ -2804,7 +3041,7 @@ def within_transform(
     inplace: bool = False,
     suffix: str = "_demeaned",
     weights: Optional[np.ndarray] = None,
-    max_iter: int = 100,
+    max_iter: int = 10_000,
     tol: float = 1e-8,
 ) -> pd.DataFrame:
     """
@@ -2846,12 +3083,14 @@ def within_transform(
         column name overwrites it rather than appending a duplicate label.
     weights : np.ndarray, optional
         Observation weights for weighted group means.
-    max_iter : int, default 100
+    max_iter : int, default 10_000
         Maximum number of alternating-projection iterations. Applies to BOTH the
         weighted and unweighted paths (both now iterate via the method of
         alternating projections, exact for unbalanced panels). Emits a
         ``UserWarning`` per call when any variable fails to converge within this
-        budget. Balanced panels converge in ~2 iterations.
+        budget. Balanced panels converge in ~2 iterations; correlated FE
+        incidence (contiguous unit lifetimes) can require hundreds. The default
+        matches ``fixest``'s ``fixef.iter`` / ``pyfixest``'s ``fixef_maxiter``.
     tol : float, default 1e-8
         Convergence tolerance on the max absolute change across the iterate.
 
@@ -2874,12 +3113,11 @@ def within_transform(
     """
     # Two-way (unit + time) within transformation is the N-way method of
     # alternating projections specialized to two FE dimensions. Delegate to the
-    # shared engine so there is one MAP implementation. The weighted path is
-    # bit-identical to the previous inline loop (same per-variable convergence,
-    # unit-then-time order, and forwarded tol=1e-8); the unweighted path now also
-    # iterates (MAP) instead of the closed-form additive demean, which was exact
-    # only for balanced panels. ``tol`` is forwarded explicitly (within_transform's
-    # default is 1e-8, not demean_by_groups' 1e-10) to preserve weighted goldens.
+    # shared engine so there is one MAP implementation (same per-variable
+    # convergence, unit-then-time sweep order; agrees with the historical
+    # pandas-groupby loop to ~1e-10 order — see the engine's Notes). ``tol`` is
+    # forwarded explicitly (within_transform's default is 1e-8, not
+    # demean_by_groups' 1e-10) to preserve the historical convergence budget.
     return demean_by_groups(
         data,
         variables,

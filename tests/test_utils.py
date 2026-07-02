@@ -11,6 +11,8 @@ This module provides comprehensive test coverage for:
 - Placebo effects for Synthetic DiD
 """
 
+import warnings
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -47,11 +49,13 @@ def simple_regression_data():
     """Create simple regression data for testing robust SE."""
     np.random.seed(42)
     n = 100
-    X = np.column_stack([
-        np.ones(n),
-        np.random.randn(n),
-        np.random.randn(n),
-    ])
+    X = np.column_stack(
+        [
+            np.ones(n),
+            np.random.randn(n),
+            np.random.randn(n),
+        ]
+    )
     beta_true = np.array([1.0, 2.0, -1.0])
     # Heteroskedastic errors
     errors = np.random.randn(n) * (1 + np.abs(X[:, 1]))
@@ -70,10 +74,12 @@ def clustered_regression_data():
     cluster_ids = np.repeat(np.arange(n_clusters), obs_per_cluster)
     cluster_effects = np.random.randn(n_clusters)
 
-    X = np.column_stack([
-        np.ones(n),
-        np.random.randn(n),
-    ])
+    X = np.column_stack(
+        [
+            np.ones(n),
+            np.random.randn(n),
+        ]
+    )
 
     beta_true = np.array([5.0, 2.0])
     # Cluster-correlated errors
@@ -106,12 +112,14 @@ def parallel_trends_data():
 
             y += np.random.normal(0, 0.5)
 
-            data.append({
-                "unit": unit,
-                "period": period,
-                "treated": int(is_treated),
-                "outcome": y,
-            })
+            data.append(
+                {
+                    "unit": unit,
+                    "period": period,
+                    "treated": int(is_treated),
+                    "outcome": y,
+                }
+            )
 
     return pd.DataFrame(data)
 
@@ -143,12 +151,14 @@ def non_parallel_trends_data():
 
             y += np.random.normal(0, 0.5)
 
-            data.append({
-                "unit": unit,
-                "period": period,
-                "treated": int(is_treated),
-                "outcome": y,
-            })
+            data.append(
+                {
+                    "unit": unit,
+                    "period": period,
+                    "treated": int(is_treated),
+                    "outcome": y,
+                }
+            )
 
     return pd.DataFrame(data)
 
@@ -169,12 +179,14 @@ def sdid_panel_data():
         unit_effect = np.random.normal(0, 2)
         for period in range(n_pre + n_post):
             y = 10.0 + unit_effect + period * 0.5 + np.random.normal(0, 0.3)
-            data.append({
-                "unit": unit,
-                "period": period,
-                "treated": 0,
-                "outcome": y,
-            })
+            data.append(
+                {
+                    "unit": unit,
+                    "period": period,
+                    "treated": 0,
+                    "outcome": y,
+                }
+            )
 
     # Treated units
     for unit in range(n_control, n_control + n_treated):
@@ -184,12 +196,14 @@ def sdid_panel_data():
             if period >= n_pre:
                 y += 3.0  # Treatment effect
             y += np.random.normal(0, 0.3)
-            data.append({
-                "unit": unit,
-                "period": period,
-                "treated": 1,
-                "outcome": y,
-            })
+            data.append(
+                {
+                    "unit": unit,
+                    "period": period,
+                    "treated": 1,
+                    "outcome": y,
+                }
+            )
 
     return pd.DataFrame(data)
 
@@ -640,7 +654,7 @@ class TestCheckParallelTrends:
             outcome="outcome",
             time="period",
             treatment_group="treated",
-            pre_periods=[0, 1, 2]
+            pre_periods=[0, 1, 2],
         )
 
         expected_keys = [
@@ -665,7 +679,7 @@ class TestCheckParallelTrends:
             outcome="outcome",
             time="period",
             treatment_group="treated",
-            pre_periods=[0, 1, 2]
+            pre_periods=[0, 1, 2],
         )
 
         # Should not reject parallel trends
@@ -679,7 +693,7 @@ class TestCheckParallelTrends:
             outcome="outcome",
             time="period",
             treatment_group="treated",
-            pre_periods=[0, 1, 2]
+            pre_periods=[0, 1, 2],
         )
 
         # Should reject parallel trends (different slopes)
@@ -693,7 +707,7 @@ class TestCheckParallelTrends:
             outcome="outcome",
             time="period",
             treatment_group="treated",
-            pre_periods=[0, 1, 2]
+            pre_periods=[0, 1, 2],
         )
 
         # Treated has steeper trend (3.0 vs 1.0), so difference should be positive
@@ -705,7 +719,7 @@ class TestCheckParallelTrends:
             parallel_trends_data,
             outcome="outcome",
             time="period",
-            treatment_group="treated"
+            treatment_group="treated",
             # pre_periods not specified
         )
 
@@ -715,18 +729,16 @@ class TestCheckParallelTrends:
 
     def test_single_period_returns_nan(self):
         """Test that single pre-period returns NaN for trends."""
-        data = pd.DataFrame({
-            "outcome": [10, 11, 12, 13],
-            "period": [0, 0, 0, 0],  # All same period
-            "treated": [1, 1, 0, 0],
-        })
+        data = pd.DataFrame(
+            {
+                "outcome": [10, 11, 12, 13],
+                "period": [0, 0, 0, 0],  # All same period
+                "treated": [1, 1, 0, 0],
+            }
+        )
 
         results = check_parallel_trends(
-            data,
-            outcome="outcome",
-            time="period",
-            treatment_group="treated",
-            pre_periods=[0]
+            data, outcome="outcome", time="period", treatment_group="treated", pre_periods=[0]
         )
 
         # Cannot compute trend with single period
@@ -740,7 +752,7 @@ class TestCheckParallelTrends:
             outcome="outcome",
             time="period",
             treatment_group="treated",
-            pre_periods=[0, 1, 2]
+            pre_periods=[0, 1, 2],
         )
 
         assert results["treated_trend_se"] > 0
@@ -761,11 +773,7 @@ class TestComputeOutcomeChanges:
         pre_data = parallel_trends_data[parallel_trends_data["period"] < 3]
 
         treated_changes, control_changes = _compute_outcome_changes(
-            pre_data,
-            outcome="outcome",
-            time="period",
-            treatment_group="treated",
-            unit="unit"
+            pre_data, outcome="outcome", time="period", treatment_group="treated", unit="unit"
         )
 
         # Should have changes for each unit-period transition
@@ -777,11 +785,7 @@ class TestComputeOutcomeChanges:
         pre_data = parallel_trends_data[parallel_trends_data["period"] < 3]
 
         treated_changes, control_changes = _compute_outcome_changes(
-            pre_data,
-            outcome="outcome",
-            time="period",
-            treatment_group="treated",
-            unit=None
+            pre_data, outcome="outcome", time="period", treatment_group="treated", unit=None
         )
 
         # Should have aggregate changes (fewer than with unit)
@@ -793,11 +797,7 @@ class TestComputeOutcomeChanges:
         pre_data = parallel_trends_data[parallel_trends_data["period"] < 3]
 
         treated_changes, control_changes = _compute_outcome_changes(
-            pre_data,
-            outcome="outcome",
-            time="period",
-            treatment_group="treated",
-            unit="unit"
+            pre_data, outcome="outcome", time="period", treatment_group="treated", unit="unit"
         )
 
         assert treated_changes.dtype == np.float64
@@ -811,21 +811,19 @@ class TestComputeOutcomeChanges:
             is_treated = unit < 5
             for period in range(3):
                 y = 10.0 + period * 2.0  # Trend of 2.0 per period
-                data.append({
-                    "unit": unit,
-                    "period": period,
-                    "treated": int(is_treated),
-                    "outcome": y,
-                })
+                data.append(
+                    {
+                        "unit": unit,
+                        "period": period,
+                        "treated": int(is_treated),
+                        "outcome": y,
+                    }
+                )
 
         df = pd.DataFrame(data)
 
         treated_changes, control_changes = _compute_outcome_changes(
-            df,
-            outcome="outcome",
-            time="period",
-            treatment_group="treated",
-            unit="unit"
+            df, outcome="outcome", time="period", treatment_group="treated", unit="unit"
         )
 
         # All changes should be approximately 2.0
@@ -841,17 +839,24 @@ class TestComputeOutcomeChanges:
         for unit in range(10):
             treated = int(unit >= 5)
             for t in range(1, 5):
-                rows.append({
-                    "unit": unit, "period": t,
-                    "treated": treated, "outcome": rng.normal(),
-                })
+                rows.append(
+                    {
+                        "unit": unit,
+                        "period": t,
+                        "treated": treated,
+                        "outcome": rng.normal(),
+                    }
+                )
         df = pd.DataFrame(rows)
 
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
             _compute_outcome_changes(
-                df, outcome="outcome", time="period",
-                treatment_group="treated", unit="unit",
+                df,
+                outcome="outcome",
+                time="period",
+                treatment_group="treated",
+                unit="unit",
             )
 
         # Generic filter on "dropped" catches both the old and new label so a
@@ -867,10 +872,14 @@ class TestComputeOutcomeChanges:
         for unit in range(10):
             treated = int(unit >= 5)
             for t in range(1, 5):
-                rows.append({
-                    "unit": unit, "period": t,
-                    "treated": treated, "outcome": rng.normal(),
-                })
+                rows.append(
+                    {
+                        "unit": unit,
+                        "period": t,
+                        "treated": treated,
+                        "outcome": rng.normal(),
+                    }
+                )
         df = pd.DataFrame(rows)
         df.loc[[5, 12, 22], "outcome"] = np.nan
 
@@ -879,8 +888,11 @@ class TestComputeOutcomeChanges:
             match=r"parallel-trend diagnostic: dropped \d+ row\(s\).*additional NaN first-differences",
         ):
             _compute_outcome_changes(
-                df, outcome="outcome", time="period",
-                treatment_group="treated", unit="unit",
+                df,
+                outcome="outcome",
+                time="period",
+                treatment_group="treated",
+                unit="unit",
             )
 
     def test_warning_label_reflects_public_caller(self):
@@ -892,24 +904,35 @@ class TestComputeOutcomeChanges:
         for unit in range(10):
             treated = int(unit >= 5)
             for t in range(1, 5):
-                rows.append({
-                    "unit": unit, "period": t,
-                    "treated": treated, "outcome": rng.normal(),
-                })
+                rows.append(
+                    {
+                        "unit": unit,
+                        "period": t,
+                        "treated": treated,
+                        "outcome": rng.normal(),
+                    }
+                )
         df = pd.DataFrame(rows)
         df.loc[[5, 12, 22], "outcome"] = np.nan
 
         with pytest.warns(UserWarning, match="check_parallel_trends_robust:"):
             check_parallel_trends_robust(
-                df, outcome="outcome", time="period",
-                treatment_group="treated", unit="unit",
-                n_permutations=100, seed=0,
+                df,
+                outcome="outcome",
+                time="period",
+                treatment_group="treated",
+                unit="unit",
+                n_permutations=100,
+                seed=0,
             )
 
         with pytest.warns(UserWarning, match="equivalence_test_trends:"):
             equivalence_test_trends(
-                df, outcome="outcome", time="period",
-                treatment_group="treated", unit="unit",
+                df,
+                outcome="outcome",
+                time="period",
+                treatment_group="treated",
+                unit="unit",
             )
 
 
@@ -930,7 +953,7 @@ class TestCheckParallelTrendsRobust:
             treatment_group="treated",
             unit="unit",
             pre_periods=[0, 1, 2],
-            seed=42
+            seed=42,
         )
 
         results2 = check_parallel_trends_robust(
@@ -940,7 +963,7 @@ class TestCheckParallelTrendsRobust:
             treatment_group="treated",
             unit="unit",
             pre_periods=[0, 1, 2],
-            seed=42
+            seed=42,
         )
 
         assert results1["wasserstein_p_value"] == results2["wasserstein_p_value"]
@@ -954,7 +977,7 @@ class TestCheckParallelTrendsRobust:
             treatment_group="treated",
             unit="unit",
             pre_periods=[0, 1, 2],
-            seed=42
+            seed=42,
         )
 
         results2 = check_parallel_trends_robust(
@@ -964,7 +987,7 @@ class TestCheckParallelTrendsRobust:
             treatment_group="treated",
             unit="unit",
             pre_periods=[0, 1, 2],
-            seed=123
+            seed=123,
         )
 
         # May be equal by chance but typically different
@@ -982,7 +1005,7 @@ class TestCheckParallelTrendsRobust:
             unit="unit",
             pre_periods=[0, 1, 2],
             n_permutations=100,
-            seed=42
+            seed=42,
         )
 
         results_many = check_parallel_trends_robust(
@@ -993,7 +1016,7 @@ class TestCheckParallelTrendsRobust:
             unit="unit",
             pre_periods=[0, 1, 2],
             n_permutations=1000,
-            seed=42
+            seed=42,
         )
 
         # Both should be valid
@@ -1009,7 +1032,7 @@ class TestCheckParallelTrendsRobust:
             treatment_group="treated",
             unit="unit",
             pre_periods=[0, 1, 2],
-            seed=42
+            seed=42,
         )
 
         assert "wasserstein_normalized" in results
@@ -1024,7 +1047,7 @@ class TestCheckParallelTrendsRobust:
             treatment_group="treated",
             unit="unit",
             pre_periods=[0, 1, 2],
-            seed=42
+            seed=42,
         )
 
         assert "n_treated" in results
@@ -1035,12 +1058,14 @@ class TestCheckParallelTrendsRobust:
     def test_insufficient_data_returns_nan(self):
         """Test that insufficient data returns NaN values."""
         # Only one observation per group
-        data = pd.DataFrame({
-            "unit": [0, 1],
-            "period": [0, 0],
-            "treated": [1, 0],
-            "outcome": [10.0, 12.0],
-        })
+        data = pd.DataFrame(
+            {
+                "unit": [0, 1],
+                "period": [0, 0],
+                "treated": [1, 0],
+                "outcome": [10.0, 12.0],
+            }
+        )
 
         results = check_parallel_trends_robust(
             data,
@@ -1049,7 +1074,7 @@ class TestCheckParallelTrendsRobust:
             treatment_group="treated",
             unit="unit",
             pre_periods=[0],
-            seed=42
+            seed=42,
         )
 
         assert np.isnan(results["wasserstein_distance"])
@@ -1072,7 +1097,7 @@ class TestEquivalenceTestTrends:
             time="period",
             treatment_group="treated",
             unit="unit",
-            pre_periods=[0, 1, 2]
+            pre_periods=[0, 1, 2],
         )
 
         assert 0 <= results["tost_p_value"] <= 1
@@ -1085,7 +1110,7 @@ class TestEquivalenceTestTrends:
             time="period",
             treatment_group="treated",
             unit="unit",
-            pre_periods=[0, 1, 2]
+            pre_periods=[0, 1, 2],
         )
 
         assert results["equivalence_margin"] > 0
@@ -1098,7 +1123,7 @@ class TestEquivalenceTestTrends:
             time="period",
             treatment_group="treated",
             unit="unit",
-            pre_periods=[0, 1, 2]
+            pre_periods=[0, 1, 2],
         )
 
         assert "degrees_of_freedom" in results
@@ -1113,7 +1138,7 @@ class TestEquivalenceTestTrends:
             treatment_group="treated",
             unit="unit",
             pre_periods=[0, 1, 2],
-            equivalence_margin=10.0  # Very wide margin
+            equivalence_margin=10.0,  # Very wide margin
         )
 
         results_tight = equivalence_test_trends(
@@ -1123,7 +1148,7 @@ class TestEquivalenceTestTrends:
             treatment_group="treated",
             unit="unit",
             pre_periods=[0, 1, 2],
-            equivalence_margin=0.001  # Very tight margin
+            equivalence_margin=0.001,  # Very tight margin
         )
 
         # Wide margin should have smaller TOST p-value (easier to show equivalence)
@@ -1258,9 +1283,7 @@ class TestComputeSDIDEstimator:
         time_weights = np.array([1.0])
 
         tau = compute_sdid_estimator(
-            Y_pre_control, Y_post_control,
-            Y_pre_treated, Y_post_treated,
-            unit_weights, time_weights
+            Y_pre_control, Y_post_control, Y_pre_treated, Y_post_treated, unit_weights, time_weights
         )
 
         # Standard DiD: (16-10) - (12-10) = 6 - 2 = 4
@@ -1278,9 +1301,7 @@ class TestComputeSDIDEstimator:
         time_weights = np.array([1.0])
 
         tau = compute_sdid_estimator(
-            Y_pre_control, Y_post_control,
-            Y_pre_treated, Y_post_treated,
-            unit_weights, time_weights
+            Y_pre_control, Y_post_control, Y_pre_treated, Y_post_treated, unit_weights, time_weights
         )
 
         # DiD using only first control: (20-15) - (12-10) = 5 - 2 = 3
@@ -1297,9 +1318,7 @@ class TestComputeSDIDEstimator:
         time_weights = np.array([1.0])
 
         tau = compute_sdid_estimator(
-            Y_pre_control, Y_post_control,
-            Y_pre_treated, Y_post_treated,
-            unit_weights, time_weights
+            Y_pre_control, Y_post_control, Y_pre_treated, Y_post_treated, unit_weights, time_weights
         )
 
         # Treated post mean: (17+19+21)/3 = 19
@@ -1399,12 +1418,7 @@ class TestFeDummyNames:
 def _unbalanced_2way_panel(seed=0, drop=0.30):
     """Unbalanced (non-orthogonal) 2-way panel: some unit-period cells dropped."""
     rng = np.random.default_rng(seed)
-    rows = [
-        (u, t)
-        for u in range(8)
-        for t in range(6)
-        if rng.random() >= drop
-    ]
+    rows = [(u, t) for u in range(8) for t in range(6) if rng.random() >= drop]
     df = pd.DataFrame(rows, columns=["unit", "period"])
     n = len(df)
     df["x1"] = rng.normal(size=n)
@@ -1445,10 +1459,14 @@ def _fwl_slopes(demeaned, xcols, weights=None):
 def _frozen_old_within_transform_weighted(
     df, variables, unit, time, weights, max_iter=100, tol=1e-8
 ):
-    """Byte-for-byte copy of the PRE-REFACTOR within_transform weighted loop.
+    """Byte-for-byte copy of the PRE-v3.6.x pandas-groupby weighted MAP loop.
 
-    Used as the byte-identity guard: demean_by_groups([unit, time], weighted) and
-    the refactored within_transform must reproduce this exactly.
+    Historical reference implementation. The v3.6.x factorize-once + bincount
+    engine is NOT bit-identical to this loop (bincount accumulation is not
+    Kahan-compensated the way pandas' grouped mean is; drift compounds across
+    MAP iterations to ~1e-10 order — see REGISTRY "Absorbed Fixed Effects").
+    Kept as a drift-bound guard: the new engine must agree with this loop at
+    atol=1e-9, and with full-dummy WLS ground truth at atol=1e-9.
     """
     w = np.asarray(weights, dtype=np.float64)
     unit_groups = df[unit].values
@@ -1479,19 +1497,11 @@ class TestDemeanByGroups:
         """One grouping var must delegate to demean_by_group (byte-identical)."""
         df = _unbalanced_2way_panel(seed=1)
         w = df["w"].values if weighted else None
-        out_groups, n_g = demean_by_groups(
-            df, ["y", "x1"], ["unit"], suffix="_dm", weights=w
-        )
-        out_single, n_s = demean_by_group(
-            df, ["y", "x1"], "unit", suffix="_dm", weights=w
-        )
+        out_groups, n_g = demean_by_groups(df, ["y", "x1"], ["unit"], suffix="_dm", weights=w)
+        out_single, n_s = demean_by_group(df, ["y", "x1"], "unit", suffix="_dm", weights=w)
         assert n_g == n_s
-        np.testing.assert_array_equal(
-            out_groups["y_dm"].values, out_single["y_dm"].values
-        )
-        np.testing.assert_array_equal(
-            out_groups["x1_dm"].values, out_single["x1_dm"].values
-        )
+        np.testing.assert_array_equal(out_groups["y_dm"].values, out_single["y_dm"].values)
+        np.testing.assert_array_equal(out_groups["x1_dm"].values, out_single["x1_dm"].values)
 
     def test_n_effects_is_sum_nunique_minus_one(self):
         df = _unbalanced_2way_panel(seed=2)
@@ -1515,19 +1525,12 @@ class TestDemeanByGroups:
     def test_n3_absorb_matches_full_dummy_ols(self):
         """Generalizes to 3 absorbed dimensions."""
         rng = np.random.default_rng(4)
-        rows = [
-            (u, t, (u + t) % 4)
-            for u in range(10)
-            for t in range(6)
-            if rng.random() >= 0.4
-        ]
+        rows = [(u, t, (u + t) % 4) for u in range(10) for t in range(6) if rng.random() >= 0.4]
         df = pd.DataFrame(rows, columns=["unit", "period", "firm"])
         n = len(df)
         df["x1"] = rng.normal(size=n)
         df["y"] = 2.0 * df["x1"] + rng.normal(size=n)
-        out, _ = demean_by_groups(
-            df, ["y", "x1"], ["unit", "period", "firm"], suffix="_dm"
-        )
+        out, _ = demean_by_groups(df, ["y", "x1"], ["unit", "period", "firm"], suffix="_dm")
         demeaned = {c: out[f"{c}_dm"].values for c in ("y", "x1")}
         map_slope = _fwl_slopes(demeaned, ["x1"])[0]
         gt = _full_dummy_slopes(df, ["unit", "period", "firm"], ["x1"])[0]
@@ -1538,9 +1541,7 @@ class TestDemeanByGroups:
         """Demeaned variables must have ~0 (weighted) group means in every FE dim."""
         df = _unbalanced_2way_panel(seed=5)
         w = df["w"].values if weighted else None
-        out, _ = demean_by_groups(
-            df, ["y"], ["unit", "period"], suffix="_dm", weights=w, tol=1e-12
-        )
+        out, _ = demean_by_groups(df, ["y"], ["unit", "period"], suffix="_dm", weights=w, tol=1e-12)
         ydm = out["y_dm"].values
         for g in ("unit", "period"):
             if weighted:
@@ -1551,29 +1552,38 @@ class TestDemeanByGroups:
                 means = pd.Series(ydm).groupby(df[g].values).transform("mean").values
             assert np.max(np.abs(means)) < 1e-9
 
-    def test_weighted_byte_identity_vs_frozen_within_transform(self):
-        """demean_by_groups([unit, time], weighted) reproduces the old loop exactly."""
+    def test_weighted_close_to_frozen_pandas_loop(self):
+        """demean_by_groups([unit, time], weighted) agrees with the legacy
+        pandas-groupby loop at the documented ~1e-9 drift bound (bincount
+        accumulation vs Kahan-compensated pandas mean; not bit-identical)."""
         df = _unbalanced_2way_panel(seed=6)
         w = df["w"].values
-        frozen = _frozen_old_within_transform_weighted(
-            df, ["y", "x1", "x2"], "unit", "period", w
-        )
+        frozen = _frozen_old_within_transform_weighted(df, ["y", "x1", "x2"], "unit", "period", w)
         out, _ = demean_by_groups(
             df, ["y", "x1", "x2"], ["unit", "period"], suffix="_dm", weights=w, tol=1e-8
         )
         for var in ("y", "x1", "x2"):
-            np.testing.assert_array_equal(out[f"{var}_dm"].values, frozen[var])
+            np.testing.assert_allclose(out[f"{var}_dm"].values, frozen[var], atol=1e-9, rtol=0)
 
-    def test_within_transform_weighted_unchanged(self):
-        """The refactored within_transform weighted path is byte-identical to before."""
+    def test_within_transform_weighted_close_to_frozen_loop(self):
+        """within_transform weighted path agrees with the legacy loop at 1e-9."""
         df = _unbalanced_2way_panel(seed=7)
         w = df["w"].values
-        frozen = _frozen_old_within_transform_weighted(
-            df, ["y", "x1"], "unit", "period", w
-        )
+        frozen = _frozen_old_within_transform_weighted(df, ["y", "x1"], "unit", "period", w)
         out = within_transform(df, ["y", "x1"], "unit", "period", weights=w)
-        np.testing.assert_array_equal(out["y_demeaned"].values, frozen["y"])
-        np.testing.assert_array_equal(out["x1_demeaned"].values, frozen["x1"])
+        np.testing.assert_allclose(out["y_demeaned"].values, frozen["y"], atol=1e-9, rtol=0)
+        np.testing.assert_allclose(out["x1_demeaned"].values, frozen["x1"], atol=1e-9, rtol=0)
+
+    def test_within_transform_weighted_matches_full_dummy_wls(self):
+        """Ground truth (not implementation identity): weighted within_transform
+        residualization must reproduce full-dummy WLS slopes."""
+        df = _unbalanced_2way_panel(seed=7)
+        w = df["w"].values
+        out = within_transform(df, ["y", "x1", "x2"], "unit", "period", weights=w)
+        demeaned = {c: out[f"{c}_demeaned"].values for c in ("y", "x1", "x2")}
+        map_slopes = _fwl_slopes(demeaned, ["x1", "x2"], weights=w)
+        gt = _full_dummy_slopes(df, ["unit", "period"], ["x1", "x2"], weights=w)
+        np.testing.assert_allclose(map_slopes, gt, atol=1e-9, rtol=0)
 
     def test_within_transform_unweighted_now_matches_full_dummy(self):
         """Unweighted within_transform now uses MAP -> exact on unbalanced panels."""
@@ -1588,11 +1598,323 @@ class TestDemeanByGroups:
         """A starved iteration budget on an unbalanced panel warns (not silent)."""
         df = _unbalanced_2way_panel(seed=9)
         with pytest.warns(UserWarning, match="did not converge"):
-            demean_by_groups(
-                df, ["y"], ["unit", "period"], suffix="_dm", max_iter=1, tol=1e-15
-            )
+            demean_by_groups(df, ["y"], ["unit", "period"], suffix="_dm", max_iter=1, tol=1e-15)
 
     def test_empty_group_vars_raises(self):
         df = _unbalanced_2way_panel(seed=10)
         with pytest.raises(ValueError, match="at least one grouping variable"):
             demean_by_groups(df, ["y"], [])
+
+    @pytest.mark.parametrize("weighted", [False, True])
+    def test_nan_group_key_raises(self, weighted):
+        """NaN in an absorbed group column must raise, naming the column.
+
+        pd.factorize codes NaN as -1, which would silently index the LAST
+        group's mean; the pre-v3.6.x behavior was also silently wrong
+        (unweighted NaN-poisoned rows; weighted passed them through
+        un-demeaned). REGISTRY "Absorbed Fixed Effects" edge case.
+        """
+        df = _unbalanced_2way_panel(seed=11)
+        df.loc[df.index[5], "period"] = np.nan
+        w = df["w"].values if weighted else None
+        with pytest.raises(ValueError, match="'period' contains NaN"):
+            demean_by_groups(df, ["y"], ["unit", "period"], suffix="_dm", weights=w)
+
+    def test_zero_total_weight_group_rows_inert_and_finite(self):
+        """Zero-total-weight groups stay inert (no NaN/Inf poisoning) and
+        positive-weight groups remain weighted-orthogonal."""
+        df = _unbalanced_2way_panel(seed=12)
+        w = df["w"].values.copy()
+        zero_units = df["unit"].values == df["unit"].values[0]
+        w[zero_units] = 0.0
+        out, _ = demean_by_groups(df, ["y"], ["unit", "period"], suffix="_dm", weights=w, tol=1e-12)
+        ydm = out["y_dm"].values
+        assert np.isfinite(ydm).all()
+        pos = ~zero_units
+        num = pd.Series(w * ydm).groupby(df["unit"].values).transform("sum").values
+        den = pd.Series(w).groupby(df["unit"].values).transform("sum").values
+        means = np.divide(num, den, out=np.zeros_like(num), where=den > 0)
+        assert np.max(np.abs(means[pos])) < 1e-9
+
+    def test_defaults_max_iter_10000_both_entry_points(self):
+        """Both re-declared max_iter defaults must stay in sync at 10,000
+        (fixest fixef.iter / pyfixest fixef_maxiter parity); raising only one
+        would leave the within_transform family capped differently."""
+        import inspect
+
+        assert inspect.signature(demean_by_groups).parameters["max_iter"].default == 10_000
+        assert inspect.signature(within_transform).parameters["max_iter"].default == 10_000
+
+    def test_balanced_panel_converges_within_two_iterations(self):
+        """Balanced fully-crossed panels have orthogonal FE subspaces: MAP must
+        converge in ~2 sweeps (iteration-count regression guard)."""
+        rng = np.random.default_rng(13)
+        df = pd.DataFrame(
+            {
+                "unit": np.repeat(np.arange(30), 8),
+                "period": np.tile(np.arange(8), 30),
+            }
+        )
+        df["y"] = rng.normal(size=len(df))
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")  # a convergence warning fails the test
+            demean_by_groups(df, ["y"], ["unit", "period"], suffix="_dm", max_iter=2, tol=1e-10)
+
+    def test_correlated_fe_needs_over_100_iterations_and_converges(self):
+        """The headline max_iter change: banded (contiguous-lifetime) two-way
+        incidence genuinely needs >100 MAP iterations. Under the old cap of 100
+        this warned and returned slightly-off residuals; under the 10,000
+        default it must converge silently AND match full-dummy OLS.
+
+        Iteration count depends on the angle between the FE subspaces, not on
+        data size, so this fixture stays small and fast.
+        """
+        rng = np.random.default_rng(14)
+        n_units, n_periods = 300, 60
+        span = max(2, int(n_periods * 0.1))  # 10% contiguous lifetimes
+        entry = rng.integers(0, n_periods - span + 1, n_units)
+        rows = [(u, t) for u in range(n_units) for t in range(entry[u], entry[u] + span)]
+        df = pd.DataFrame(rows, columns=["unit", "period"])
+        df["x1"] = rng.normal(size=len(df))
+        df["y"] = 1.5 * df["x1"] + rng.normal(size=len(df))
+
+        # the fixture is honest: the old cap genuinely fails on it
+        with pytest.warns(UserWarning, match="did not converge"):
+            demean_by_groups(df.copy(), ["y", "x1"], ["unit", "period"], suffix="_dm", max_iter=100)
+
+        # the new default converges silently and matches ground truth
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            out, _ = demean_by_groups(df, ["y", "x1"], ["unit", "period"], suffix="_dm")
+        demeaned = {c: out[f"{c}_dm"].values for c in ("y", "x1")}
+        map_slope = _fwl_slopes(demeaned, ["x1"])[0]
+        gt = _full_dummy_slopes(df, ["unit", "period"], ["x1"])[0]
+        np.testing.assert_allclose(map_slope, gt, atol=1e-8, rtol=0)
+
+
+class TestSnapAbsorbedRegressors:
+    """Unit tests for the FE-spanned-regressor snap (REGISTRY 'Absorbed FE')."""
+
+    def _frame(self, seed=0):
+        rng = np.random.default_rng(seed)
+        n = 40
+        return pd.DataFrame(
+            {
+                "junk_dm": rng.normal(0.0, 1e-14, n),  # spanned: numerical junk
+                "real_dm": rng.normal(0.0, 1.0, n),  # genuinely identified
+                "g": np.arange(n) % 4,  # FE column for group_vars
+            }
+        )
+
+    def test_snaps_junk_keeps_real(self):
+        from diff_diff.utils import snap_absorbed_regressors
+
+        df = self._frame()
+        real_before = df["real_dm"].values.copy()
+        with pytest.warns(UserWarning, match="collinear with the absorbed"):
+            snapped = snap_absorbed_regressors(
+                df,
+                ["junk", "real"],
+                {"junk": 1.0, "real": 1.0},
+                absorbed_desc="test FEs",
+                group_vars=["g"],
+                suffix="_dm",
+            )
+        assert snapped == ["junk"]
+        assert (df["junk_dm"].values == 0.0).all()
+        np.testing.assert_array_equal(df["real_dm"].values, real_before)
+
+    @pytest.mark.parametrize("action", ["silent", "error"])
+    def test_non_warn_actions_snap_without_warning(self, action):
+        from diff_diff.utils import snap_absorbed_regressors
+
+        df = self._frame()
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")  # any warning fails the test
+            snapped = snap_absorbed_regressors(
+                df,
+                ["junk"],
+                {"junk": 1.0},
+                absorbed_desc="test FEs",
+                group_vars=["g"],
+                rank_deficient_action=action,
+                suffix="_dm",
+            )
+        assert snapped == ["junk"]
+        assert (df["junk_dm"].values == 0.0).all()
+
+    def test_zero_pre_norm_skipped(self):
+        from diff_diff.utils import snap_absorbed_regressors
+
+        df = self._frame()
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            snapped = snap_absorbed_regressors(
+                df,
+                ["junk"],
+                {"junk": 0.0},  # all-zero input column: rank handling owns it
+                absorbed_desc="test FEs",
+                group_vars=["g"],
+                suffix="_dm",
+            )
+        assert snapped == []
+
+    def test_display_names_in_warning(self):
+        from diff_diff.utils import snap_absorbed_regressors
+
+        df = self._frame()
+        with pytest.warns(UserWarning, match=r"treated:post"):
+            snap_absorbed_regressors(
+                df,
+                ["junk"],
+                {"junk": 1.0},
+                absorbed_desc="test FEs",
+                group_vars=["g"],
+                suffix="_dm",
+                display_names={"junk": "treated:post"},
+            )
+
+    def test_pre_demean_norms_captures_l2(self):
+        from diff_diff.utils import pre_demean_norms
+
+        df = pd.DataFrame({"a": [3.0, 4.0], "b": [0, 0]})
+        norms = pre_demean_norms(df, ["a", "b"])
+        assert norms["a"] == pytest.approx(5.0)
+        assert norms["b"] == 0.0
+
+
+class TestReviewFollowupsAbsorbedFE:
+    """Local-review follow-ups: one-way NaN guard + weight-aware snap."""
+
+    @pytest.mark.parametrize("weighted", [False, True])
+    def test_one_way_nan_group_key_raises(self, weighted):
+        """The NaN-group guard must cover len(group_vars) == 1 too (the
+        delegation to demean_by_group previously bypassed it)."""
+        df = _unbalanced_2way_panel(seed=20)
+        df["unit"] = df["unit"].astype(float)
+        df.loc[df.index[3], "unit"] = np.nan
+        w = df["w"].values if weighted else None
+        with pytest.raises(ValueError, match="'unit' contains NaN"):
+            demean_by_groups(df, ["y"], ["unit"], suffix="_dm", weights=w)
+
+    def test_estimator_one_way_absorb_nan_raises(self):
+        from diff_diff import DifferenceInDifferences
+
+        df = _unbalanced_2way_panel(seed=21)
+        df["treated"] = (df["unit"] < df["unit"].median()).astype(int)
+        df["post"] = (df["period"] >= df["period"].median()).astype(int)
+        df["fe"] = df["unit"].astype(float)
+        df.loc[df.index[5], "fe"] = np.nan
+        with pytest.raises(ValueError, match="'fe' contains NaN"):
+            DifferenceInDifferences().fit(
+                df, outcome="y", treatment="treated", time="post", absorb=["fe"]
+            )
+
+    def test_weight_aware_snap_zero_weight_domain(self):
+        """A regressor FE-spanned on the POSITIVE-weight sample must snap even
+        though zero-weight domain rows (left inert by the weighted demean)
+        carry non-zero demeaned values that would mask it unweighted."""
+        from diff_diff.utils import pre_demean_norms, snap_absorbed_regressors
+
+        rng = np.random.default_rng(22)
+        n_units, n_periods = 30, 6
+        unit = np.repeat(np.arange(n_units), n_periods)
+        period = np.tile(np.arange(n_periods), n_units)
+        df = pd.DataFrame({"unit": unit, "period": period})
+        # xc is unit-constant on positive-weight units (spanned by unit FE
+        # there) but VARIES on the zero-weight unit's rows
+        xc = np.repeat(rng.normal(size=n_units), n_periods).astype(float)
+        zero_rows = unit == 0
+        xc[zero_rows] = rng.normal(size=zero_rows.sum())  # varying junk
+        df["xc"] = xc
+        df["y"] = rng.normal(size=len(df))
+        w = np.ones(len(df))
+        w[zero_rows] = 0.0  # domain-excluded unit
+
+        pre = pre_demean_norms(df, ["xc"], weights=w)
+        out, _ = demean_by_groups(
+            df, ["y", "xc"], ["unit", "period"], suffix="_dm", weights=w, tol=1e-12
+        )
+        # unweighted norm is large (inert zero-weight rows keep raw values):
+        assert float(np.linalg.norm(out["xc_dm"].values)) > 1e-3
+        # ...but the weight-aware snap sees the effective sample and fires
+        with pytest.warns(UserWarning, match="collinear with the absorbed"):
+            snapped = snap_absorbed_regressors(
+                out,
+                ["xc"],
+                pre,
+                absorbed_desc="unit and period FEs",
+                group_vars=["unit", "period"],
+                suffix="_dm",
+                weights=w,
+            )
+        assert snapped == ["xc"]
+        assert (out["xc_dm"].values == 0.0).all()
+
+
+class TestJointSpanSnapConfirmation:
+    """Local-review P0: a column in the JOINT span of two FE dimensions
+    (x = a[unit] + b[time]) converges to zero slowly under MAP on unbalanced
+    panels, so its truncation residual can sit far above the fast-path snap
+    threshold. Stage 2 (exact LSMR span confirmation) must catch it; a
+    genuinely identified low-within-variation covariate must NOT be snapped.
+    """
+
+    @staticmethod
+    def _unbalanced_panel(seed=7, n_units=120, n_periods=30, span=9):
+        rng = np.random.default_rng(seed)
+        unit = np.repeat(np.arange(n_units), n_periods)
+        period = np.tile(np.arange(n_periods), n_units)
+        entry = rng.integers(0, n_periods - span, n_units)
+        keep = (period >= entry[unit]) & (period < entry[unit] + span)
+        unit, period = unit[keep], period[keep]
+        df = pd.DataFrame({"unit": unit, "period": period})
+        df["y"] = rng.normal(size=len(df))
+        a = rng.normal(0, 1, n_units)
+        b = rng.normal(0, 1, n_periods)
+        df["xspan"] = a[unit] + b[period]  # exactly in span(unit + period)
+        return df, rng
+
+    def test_joint_span_column_snapped_via_confirmation(self):
+        from diff_diff.utils import pre_demean_norms, snap_absorbed_regressors
+
+        df, _ = self._unbalanced_panel()
+        pre = pre_demean_norms(df, ["xspan"])
+        out, _ = demean_by_groups(df, ["y", "xspan"], ["unit", "period"], suffix="_dm", tol=1e-8)
+        rel = np.linalg.norm(out["xspan_dm"].values) / pre["xspan"]
+        assert rel > 1e-10  # the fixture is honest: fast path alone misses it
+        with pytest.warns(UserWarning, match="collinear with the absorbed"):
+            snapped = snap_absorbed_regressors(
+                out,
+                ["xspan"],
+                pre,
+                absorbed_desc="unit and period FEs",
+                group_vars=["unit", "period"],
+                suffix="_dm",
+            )
+        assert snapped == ["xspan"]
+        assert (out["xspan_dm"].values == 0.0).all()
+
+    def test_identified_low_variation_covariate_not_snapped(self):
+        """Counter-test: near-spanned but genuinely identified (tiny real
+        within-variation) must survive stage 2 untouched."""
+        from diff_diff.utils import pre_demean_norms, snap_absorbed_regressors
+
+        df, rng = self._unbalanced_panel(seed=8)
+        z = rng.normal(size=len(df))
+        df["xnear"] = df["xspan"] + 1e-5 * z  # real within-FE variation ~1e-5
+        pre = pre_demean_norms(df, ["xnear"])
+        out, _ = demean_by_groups(df, ["xnear"], ["unit", "period"], suffix="_dm", tol=1e-10)
+        before = out["xnear_dm"].values.copy()
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")  # any snap warning fails the test
+            snapped = snap_absorbed_regressors(
+                out,
+                ["xnear"],
+                pre,
+                absorbed_desc="unit and period FEs",
+                group_vars=["unit", "period"],
+                suffix="_dm",
+            )
+        assert snapped == []
+        np.testing.assert_array_equal(out["xnear_dm"].values, before)

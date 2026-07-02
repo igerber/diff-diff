@@ -1093,8 +1093,12 @@ class TestUnbalancedOLS:
         # Build explicit dummy regression on same sample
         sample = _filter_sample(df, "unit", "time", "cohort", "not_yet_treated", 0)
         X_int, _, gt_keys = _build_interaction_matrix(
-            sample, cohort="cohort", time="time", anticipation=0,
-            control_group="not_yet_treated", method="ols",
+            sample,
+            cohort="cohort",
+            time="time",
+            anticipation=0,
+            control_group="not_yet_treated",
+            method="ols",
         )
         unit_dummies = pd.get_dummies(sample["unit"], drop_first=True).values.astype(float)
         time_dummies = pd.get_dummies(sample["time"], drop_first=True).values.astype(float)
@@ -1169,7 +1173,7 @@ class TestNonlinearNeverTreated:
             binary_data, outcome="y", unit="unit", time="time", cohort="cohort"
         )
         # All cells should be post-treatment
-        for (g, t) in r.group_time_effects:
+        for g, t in r.group_time_effects:
             assert t >= g, f"Pre-treatment cell ({g},{t}) in nonlinear never_treated"
         # All expected post-treatment cells present
         expected = {(g, t) for g in [3, 4] for t in range(1, 6) if t >= g}
@@ -1180,7 +1184,7 @@ class TestNonlinearNeverTreated:
         r = WooldridgeDiD(method="poisson", control_group="never_treated").fit(
             count_data, outcome="y", unit="unit", time="time", cohort="cohort"
         )
-        for (g, t) in r.group_time_effects:
+        for g, t in r.group_time_effects:
             assert t >= g, f"Pre-treatment cell ({g},{t}) in nonlinear never_treated"
         expected = {(g, t) for g in [3, 4] for t in range(1, 6) if t >= g}
         assert set(r.group_time_effects.keys()) == expected
@@ -1197,15 +1201,9 @@ class TestNonlinearNeverTreated:
                 rows.append({"unit": u, "time": t, "cohort": g, "y": 0.0})
         df = pd.DataFrame(rows)
 
-        X_ols, _, _ = _build_interaction_matrix(
-            df, "cohort", "time", 0, "never_treated", "ols"
-        )
-        X_logit, _, _ = _build_interaction_matrix(
-            df, "cohort", "time", 0, "never_treated", "logit"
-        )
-        X_nyt, _, _ = _build_interaction_matrix(
-            df, "cohort", "time", 0, "not_yet_treated", "ols"
-        )
+        X_ols, _, _ = _build_interaction_matrix(df, "cohort", "time", 0, "never_treated", "ols")
+        X_logit, _, _ = _build_interaction_matrix(df, "cohort", "time", 0, "never_treated", "logit")
+        X_nyt, _, _ = _build_interaction_matrix(df, "cohort", "time", 0, "not_yet_treated", "ols")
         # OLS never_treated > nonlinear never_treated == not_yet_treated
         assert X_ols.shape[1] > X_logit.shape[1]
         assert X_logit.shape[1] == X_nyt.shape[1]
@@ -1267,24 +1265,32 @@ class TestFullCovariateBasis:
         cell_cov = np.column_stack([X_int[:, i] * x1_demeaned for i in range(n_int)])
 
         # D_g × X (cohort × covariate)
-        cohort_cov = np.column_stack([
-            (sample["cohort"].values == g).astype(float) * x1_raw for g in groups
-        ])
+        cohort_cov = np.column_stack(
+            [(sample["cohort"].values == g).astype(float) * x1_raw for g in groups]
+        )
 
         # f_t × X (time × covariate, drop first)
         times = sorted(sample["time"].unique())
-        time_cov = np.column_stack([
-            (sample["time"].values == t).astype(float) * x1_raw for t in times[1:]
-        ])
+        time_cov = np.column_stack(
+            [(sample["time"].values == t).astype(float) * x1_raw for t in times[1:]]
+        )
 
         # Full design: intercept + cells + cell×cov + D_g×X + f_t×X + raw_X + unit + time dummies
         unit_dummies = pd.get_dummies(sample["unit"], drop_first=True).values.astype(float)
         time_dummies = pd.get_dummies(sample["time"], drop_first=True).values.astype(float)
         intercept = np.ones((len(sample), 1))
-        X_full = np.hstack([
-            intercept, X_int, cell_cov, cohort_cov, time_cov,
-            x1_raw.reshape(-1, 1), unit_dummies, time_dummies,
-        ])
+        X_full = np.hstack(
+            [
+                intercept,
+                X_int,
+                cell_cov,
+                cohort_cov,
+                time_cov,
+                x1_raw.reshape(-1, 1),
+                unit_dummies,
+                time_dummies,
+            ]
+        )
         y = sample["y"].values
         coefs_dummy, _, _ = solve_ols(X_full, y, rank_deficient_action="silent")
 
@@ -1304,12 +1310,10 @@ class TestFullCovariateBasis:
         r_cov = WooldridgeDiD().fit(
             df, outcome="y", unit="unit", time="time", cohort="cohort", exovar=["x1"]
         )
-        r_nocov = WooldridgeDiD().fit(
-            df, outcome="y", unit="unit", time="time", cohort="cohort"
-        )
-        assert r_cov.overall_att != r_nocov.overall_att, (
-            "Covariate-adjusted ATT should differ from unadjusted"
-        )
+        r_nocov = WooldridgeDiD().fit(df, outcome="y", unit="unit", time="time", cohort="cohort")
+        assert (
+            r_cov.overall_att != r_nocov.overall_att
+        ), "Covariate-adjusted ATT should differ from unadjusted"
 
 
 class TestWooldridgeSurvey:
@@ -1333,20 +1337,33 @@ class TestWooldridgeSurvey:
                 y_bin = int(rng.random() < 1 / (1 + np.exp(-eta)))
                 mu = np.exp(0.5 + 0.5 * treated + 0.1 * rng.standard_normal())
                 y_count = float(rng.poisson(mu))
-                rows.append({
-                    "unit": u, "time": t, "cohort": cohort,
-                    "y": y_cont, "y_bin": y_bin, "y_count": y_count,
-                    "stratum": stratum, "psu": psu, "weight": weight,
-                })
+                rows.append(
+                    {
+                        "unit": u,
+                        "time": t,
+                        "cohort": cohort,
+                        "y": y_cont,
+                        "y_bin": y_bin,
+                        "y_count": y_count,
+                        "stratum": stratum,
+                        "psu": psu,
+                        "weight": weight,
+                    }
+                )
         return pd.DataFrame(rows)
 
     def test_ols_survey_runs(self, survey_panel):
         """OLS with full survey design completes."""
         from diff_diff.survey import SurveyDesign
+
         sd = SurveyDesign(weights="weight", strata="stratum", psu="psu")
         r = WooldridgeDiD().fit(
-            survey_panel, outcome="y", unit="unit", time="time",
-            cohort="cohort", survey_design=sd,
+            survey_panel,
+            outcome="y",
+            unit="unit",
+            time="time",
+            cohort="cohort",
+            survey_design=sd,
         )
         assert np.isfinite(r.overall_att)
         assert np.isfinite(r.overall_se)
@@ -1355,13 +1372,21 @@ class TestWooldridgeSurvey:
     def test_ols_survey_se_differs_from_naive(self, survey_panel):
         """Survey SE should differ from naive (unweighted) SE."""
         from diff_diff.survey import SurveyDesign
+
         sd = SurveyDesign(weights="weight", strata="stratum", psu="psu")
         r_survey = WooldridgeDiD().fit(
-            survey_panel, outcome="y", unit="unit", time="time",
-            cohort="cohort", survey_design=sd,
+            survey_panel,
+            outcome="y",
+            unit="unit",
+            time="time",
+            cohort="cohort",
+            survey_design=sd,
         )
         r_naive = WooldridgeDiD().fit(
-            survey_panel, outcome="y", unit="unit", time="time",
+            survey_panel,
+            outcome="y",
+            unit="unit",
+            time="time",
             cohort="cohort",
         )
         assert r_survey.overall_se != r_naive.overall_se
@@ -1369,10 +1394,15 @@ class TestWooldridgeSurvey:
     def test_logit_survey_runs(self, survey_panel):
         """Logit with survey design completes."""
         from diff_diff.survey import SurveyDesign
+
         sd = SurveyDesign(weights="weight", strata="stratum", psu="psu")
         r = WooldridgeDiD(method="logit").fit(
-            survey_panel, outcome="y_bin", unit="unit", time="time",
-            cohort="cohort", survey_design=sd,
+            survey_panel,
+            outcome="y_bin",
+            unit="unit",
+            time="time",
+            cohort="cohort",
+            survey_design=sd,
         )
         assert np.isfinite(r.overall_att)
         assert np.isfinite(r.overall_se)
@@ -1381,10 +1411,15 @@ class TestWooldridgeSurvey:
     def test_poisson_survey_runs(self, survey_panel):
         """Poisson with survey design completes."""
         from diff_diff.survey import SurveyDesign
+
         sd = SurveyDesign(weights="weight", strata="stratum", psu="psu")
         r = WooldridgeDiD(method="poisson").fit(
-            survey_panel, outcome="y_count", unit="unit", time="time",
-            cohort="cohort", survey_design=sd,
+            survey_panel,
+            outcome="y_count",
+            unit="unit",
+            time="time",
+            cohort="cohort",
+            survey_design=sd,
         )
         assert np.isfinite(r.overall_att)
         assert np.isfinite(r.overall_se)
@@ -1393,20 +1428,32 @@ class TestWooldridgeSurvey:
     def test_bootstrap_survey_rejected(self, survey_panel):
         """n_bootstrap > 0 with survey_design raises ValueError."""
         from diff_diff.survey import SurveyDesign
+
         sd = SurveyDesign(weights="weight")
-        with pytest.raises(ValueError, match="Bootstrap inference is not supported with survey_design"):
+        with pytest.raises(
+            ValueError, match="Bootstrap inference is not supported with survey_design"
+        ):
             WooldridgeDiD(n_bootstrap=100).fit(
-                survey_panel, outcome="y", unit="unit", time="time",
-                cohort="cohort", survey_design=sd,
+                survey_panel,
+                outcome="y",
+                unit="unit",
+                time="time",
+                cohort="cohort",
+                survey_design=sd,
             )
 
     def test_weights_only_survey(self, survey_panel):
         """Weights-only survey (no strata/PSU) works."""
         from diff_diff.survey import SurveyDesign
+
         sd = SurveyDesign(weights="weight")
         r = WooldridgeDiD().fit(
-            survey_panel, outcome="y", unit="unit", time="time",
-            cohort="cohort", survey_design=sd,
+            survey_panel,
+            outcome="y",
+            unit="unit",
+            time="time",
+            cohort="cohort",
+            survey_design=sd,
         )
         assert np.isfinite(r.overall_att)
         assert np.isfinite(r.overall_se)
@@ -1415,10 +1462,15 @@ class TestWooldridgeSurvey:
     def test_survey_metadata_present(self, survey_panel):
         """survey_metadata is populated with correct fields."""
         from diff_diff.survey import SurveyDesign
+
         sd = SurveyDesign(weights="weight", strata="stratum", psu="psu")
         r = WooldridgeDiD().fit(
-            survey_panel, outcome="y", unit="unit", time="time",
-            cohort="cohort", survey_design=sd,
+            survey_panel,
+            outcome="y",
+            unit="unit",
+            time="time",
+            cohort="cohort",
+            survey_design=sd,
         )
         sm = r.survey_metadata
         assert sm is not None
@@ -1432,6 +1484,7 @@ class TestWooldridgeSurvey:
     def test_replicate_weights_rejected(self, survey_panel):
         """Replicate-weight designs raise NotImplementedError."""
         from diff_diff.survey import SurveyDesign
+
         # Add replicate weight columns
         survey_panel["rep_w1"] = 1.0
         survey_panel["rep_w2"] = 1.0
@@ -1442,17 +1495,26 @@ class TestWooldridgeSurvey:
         )
         with pytest.raises(NotImplementedError, match="replicate-weight variance"):
             WooldridgeDiD().fit(
-                survey_panel, outcome="y", unit="unit", time="time",
-                cohort="cohort", survey_design=sd,
+                survey_panel,
+                outcome="y",
+                unit="unit",
+                time="time",
+                cohort="cohort",
+                survey_design=sd,
             )
 
     def test_weights_only_plus_cluster(self, survey_panel):
         """Weights-only survey + cluster= injects cluster as PSU."""
         from diff_diff.survey import SurveyDesign
+
         sd = SurveyDesign(weights="weight")
         r = WooldridgeDiD(cluster="stratum").fit(
-            survey_panel, outcome="y", unit="unit", time="time",
-            cohort="cohort", survey_design=sd,
+            survey_panel,
+            outcome="y",
+            unit="unit",
+            time="time",
+            cohort="cohort",
+            survey_design=sd,
         )
         # Cluster should have been injected as PSU
         n_strata = survey_panel["stratum"].nunique()
@@ -1461,38 +1523,55 @@ class TestWooldridgeSurvey:
 
         # SE should differ from same run without cluster
         r_no_cluster = WooldridgeDiD().fit(
-            survey_panel, outcome="y", unit="unit", time="time",
-            cohort="cohort", survey_design=sd,
+            survey_panel,
+            outcome="y",
+            unit="unit",
+            time="time",
+            cohort="cohort",
+            survey_design=sd,
         )
         assert r.overall_se != r_no_cluster.overall_se
 
     def test_survey_gt_weights_are_counts(self, survey_panel):
         """Survey aggregation uses cell counts, not survey-weight sums."""
         from diff_diff.survey import SurveyDesign
+
         sd = SurveyDesign(weights="weight", strata="stratum", psu="unit")
         r = WooldridgeDiD(method="logit").fit(
-            survey_panel, outcome="y_bin", unit="unit", time="time",
-            cohort="cohort", survey_design=sd,
+            survey_panel,
+            outcome="y_bin",
+            unit="unit",
+            time="time",
+            cohort="cohort",
+            survey_design=sd,
         )
         for k, w in r._gt_weights.items():
             assert isinstance(w, int), (
-                f"gt_weights[{k}] = {w} (type {type(w).__name__}); "
-                f"expected int (cell count)"
+                f"gt_weights[{k}] = {w} (type {type(w).__name__}); " f"expected int (cell count)"
             )
 
     def test_weights_only_no_cluster_implicit_psu(self, survey_panel):
         """Weights-only survey without cluster= keeps implicit per-obs PSUs."""
         from diff_diff.survey import SurveyDesign
         from diff_diff.wooldridge import _filter_sample
+
         sd = SurveyDesign(weights="weight")
         r = WooldridgeDiD().fit(
-            survey_panel, outcome="y", unit="unit", time="time",
-            cohort="cohort", survey_design=sd,
+            survey_panel,
+            outcome="y",
+            unit="unit",
+            time="time",
+            cohort="cohort",
+            survey_design=sd,
         )
         # n_psu should equal n_obs in the filtered sample (not n_units)
         sample = _filter_sample(
             survey_panel.copy().assign(cohort=lambda d: d["cohort"].fillna(0)),
-            "unit", "time", "cohort", "not_yet_treated", 0,
+            "unit",
+            "time",
+            "cohort",
+            "not_yet_treated",
+            0,
         )
         assert r.survey_metadata is not None
         assert r.survey_metadata.n_psu == len(sample)
@@ -1500,6 +1579,7 @@ class TestWooldridgeSurvey:
     def test_fweight_rejected(self, survey_panel):
         """fweight raises ValueError (pweight only)."""
         from diff_diff.survey import SurveyDesign
+
         # Use integer weights so fweight validation passes in resolve(),
         # and the pweight guard in _resolve_survey_for_wooldridge fires.
         df = survey_panel.copy()
@@ -1507,20 +1587,29 @@ class TestWooldridgeSurvey:
         sd = SurveyDesign(weights="int_weight", weight_type="fweight")
         with pytest.raises(ValueError, match="weight_type='pweight'"):
             WooldridgeDiD().fit(
-                df, outcome="y", unit="unit", time="time",
-                cohort="cohort", survey_design=sd,
+                df,
+                outcome="y",
+                unit="unit",
+                time="time",
+                cohort="cohort",
+                survey_design=sd,
             )
 
     def test_poisson_zero_weight_cell(self, survey_panel):
         """Poisson survey fit handles zero-weight treated cells cleanly."""
         from diff_diff.survey import SurveyDesign
+
         df = survey_panel.copy()
         # Zero out weights for one treated cohort so some cells have zero weight
         df.loc[df["cohort"] == 3, "weight"] = 0.0
         sd = SurveyDesign(weights="weight", strata="stratum", psu="unit")
         r = WooldridgeDiD(method="poisson").fit(
-            df, outcome="y_count", unit="unit", time="time",
-            cohort="cohort", survey_design=sd,
+            df,
+            outcome="y_count",
+            unit="unit",
+            time="time",
+            cohort="cohort",
+            survey_design=sd,
         )
         assert np.isfinite(r.overall_att)
         assert np.isfinite(r.overall_se)
@@ -1528,12 +1617,17 @@ class TestWooldridgeSurvey:
     def test_ols_survey_rank_deficient(self, survey_panel):
         """Survey OLS handles rank-deficient all-eventually-treated designs."""
         from diff_diff.survey import SurveyDesign
+
         # Remove never-treated (cohort=0) to create rank-deficient design
         df = survey_panel[survey_panel["cohort"] > 0].copy()
         sd = SurveyDesign(weights="weight", strata="stratum", psu="unit")
         r = WooldridgeDiD(control_group="not_yet_treated").fit(
-            df, outcome="y", unit="unit", time="time",
-            cohort="cohort", survey_design=sd,
+            df,
+            outcome="y",
+            unit="unit",
+            time="time",
+            cohort="cohort",
+            survey_design=sd,
         )
         assert np.isfinite(r.overall_att)
         assert np.isfinite(r.overall_se)
@@ -1541,25 +1635,35 @@ class TestWooldridgeSurvey:
     def test_ols_survey_zero_weight_unit_rejected(self, survey_panel):
         """Zero-weight unit raises ValueError before within_transform."""
         from diff_diff.survey import SurveyDesign
+
         df = survey_panel.copy()
         # Zero out all weights for unit 0
         df.loc[df["unit"] == 0, "weight"] = 0.0
         sd = SurveyDesign(weights="weight", strata="stratum", psu="unit")
         with pytest.raises(ValueError, match="Survey weights sum to zero for unit"):
             WooldridgeDiD().fit(
-                df, outcome="y", unit="unit", time="time",
-                cohort="cohort", survey_design=sd,
+                df,
+                outcome="y",
+                unit="unit",
+                time="time",
+                cohort="cohort",
+                survey_design=sd,
             )
 
     def test_logit_survey_zero_weight_cell(self, survey_panel):
         """Logit survey fit skips zero-weight treated cells cleanly."""
         from diff_diff.survey import SurveyDesign
+
         df = survey_panel.copy()
         df.loc[df["cohort"] == 3, "weight"] = 0.0
         sd = SurveyDesign(weights="weight", strata="stratum", psu="unit")
         r = WooldridgeDiD(method="logit").fit(
-            df, outcome="y_bin", unit="unit", time="time",
-            cohort="cohort", survey_design=sd,
+            df,
+            outcome="y_bin",
+            unit="unit",
+            time="time",
+            cohort="cohort",
+            survey_design=sd,
         )
         assert np.isfinite(r.overall_att)
         assert np.isfinite(r.overall_se)
@@ -1567,23 +1671,33 @@ class TestWooldridgeSurvey:
     def test_ols_survey_non_range_index(self, survey_panel):
         """OLS survey zero-weight guard works with non-RangeIndex DataFrames."""
         from diff_diff.survey import SurveyDesign
+
         df = survey_panel.copy()
         df.index = df.index + 1000  # shift to non-zero-based index
         df.loc[df["unit"] == 0, "weight"] = 0.0
         sd = SurveyDesign(weights="weight", strata="stratum", psu="unit")
         with pytest.raises(ValueError, match="Survey weights sum to zero for unit"):
             WooldridgeDiD().fit(
-                df, outcome="y", unit="unit", time="time",
-                cohort="cohort", survey_design=sd,
+                df,
+                outcome="y",
+                unit="unit",
+                time="time",
+                cohort="cohort",
+                survey_design=sd,
             )
 
     def test_survey_aggregate_and_summary(self, survey_panel):
         """Survey aggregate() uses df_survey and summary() shows survey block."""
         from diff_diff.survey import SurveyDesign
+
         sd = SurveyDesign(weights="weight", strata="stratum", psu="unit")
         r = WooldridgeDiD().fit(
-            survey_panel, outcome="y", unit="unit", time="time",
-            cohort="cohort", survey_design=sd,
+            survey_panel,
+            outcome="y",
+            unit="unit",
+            time="time",
+            cohort="cohort",
+            survey_design=sd,
         )
         # aggregate() should use t-distribution with survey df
         r.aggregate("group")
@@ -1607,10 +1721,14 @@ class TestCohortNaNWarning:
         for unit in range(10):
             cohort_val = np.nan if unit < 2 else 0.0
             for t in range(1, 5):
-                rows.append({
-                    "unit": unit, "time": t, "cohort": cohort_val,
-                    "y": unit + t + np.random.default_rng(unit).normal(0, 0.1),
-                })
+                rows.append(
+                    {
+                        "unit": unit,
+                        "time": t,
+                        "cohort": cohort_val,
+                        "y": unit + t + np.random.default_rng(unit).normal(0, 0.1),
+                    }
+                )
         return pd.DataFrame(rows)
 
     def test_fit_warns_on_nan_cohort_with_count(self):
@@ -1624,6 +1742,7 @@ class TestCohortNaNWarning:
 
     def test_fit_silent_on_clean_cohort(self):
         import warnings
+
         df = self._make_panel_with_nan_cohort()
         df["cohort"] = df["cohort"].fillna(0)
         est = WooldridgeDiD(method="ols")
@@ -1640,8 +1759,12 @@ class TestCohortNaNWarning:
         df = self._make_panel_with_nan_cohort()
         with pytest.warns(UserWarning, match=r"8 row\(s\) have NaN cohort values"):
             _filter_sample(
-                df, unit="unit", time="time", cohort="cohort",
-                control_group="never_treated", anticipation=0,
+                df,
+                unit="unit",
+                time="time",
+                cohort="cohort",
+                control_group="never_treated",
+                anticipation=0,
             )
 
 
@@ -1669,9 +1792,7 @@ def _make_vcov_panel(n_units=40, n_periods=6, seed=202605211230):
         0.0,
     )
     y = 0.7 + 0.1 * periods + 0.05 * units + tau + 0.15 * rng.normal(size=len(units))
-    return pd.DataFrame(
-        {"unit": units, "time": periods, "cohort": cohort_per_obs, "y": y}
-    )
+    return pd.DataFrame({"unit": units, "time": periods, "cohort": cohort_per_obs, "y": y})
 
 
 class TestWooldridgeVcovType:
@@ -1683,19 +1804,23 @@ class TestWooldridgeVcovType:
         assert est._vcov_type_explicit is False
 
     def test_hc1_se_bit_equal_to_pre_pr_baseline(self):
-        """HC1 within-transform path must match pre-PR baseline at atol=1e-14.
+        """HC1 within-transform path must match the frozen baseline at atol=1e-14.
 
-        Baseline captured on the Phase 1b PR 3/8 branch with
-        ``_make_vcov_panel(seed=202605211230)``. FWL preserves the CR1
-        cluster-robust score, so the new ``vcov_type`` branching keeps HC1
-        bit-equal to the prior hard-coded HC1 behavior.
+        Baseline originally captured on the Phase 1b PR 3/8 branch with
+        ``_make_vcov_panel(seed=202605211230)`` (FWL preserves the CR1
+        cluster-robust score, so the ``vcov_type`` branching kept HC1 bit-equal
+        to the prior hard-coded HC1 behavior). Recaptured under the v3.6.x
+        factorize-once + bincount demeaner, which moved the values by ~1e-15
+        (bincount accumulation vs pandas' compensated grouped mean - see
+        REGISTRY "Absorbed Fixed Effects"); the 1e-14 lock semantics are
+        unchanged.
         """
         df = _make_vcov_panel()
         res = WooldridgeDiD(method="ols", vcov_type="hc1").fit(
             df, outcome="y", unit="unit", time="time", cohort="cohort"
         )
-        assert res.overall_att == pytest.approx(0.9178849934516247, abs=1e-14)
-        assert res.overall_se == pytest.approx(0.03149488781317814, abs=1e-14)
+        assert res.overall_att == pytest.approx(0.9178849934516233, abs=1e-14)
+        assert res.overall_se == pytest.approx(0.03149488781317813, abs=1e-14)
 
     def test_hc2_bm_finite_and_inflates_over_hc1(self):
         df = _make_vcov_panel()
@@ -1790,7 +1915,11 @@ class TestWooldridgeVcovType:
         est = WooldridgeDiD(method="ols", vcov_type="hc2_bm")
         with pytest.raises(NotImplementedError, match=r"survey_design"):
             est.fit(
-                df, outcome="y", unit="unit", time="time", cohort="cohort",
+                df,
+                outcome="y",
+                unit="unit",
+                time="time",
+                cohort="cohort",
                 survey_design=design,
             )
 
@@ -1803,7 +1932,11 @@ class TestWooldridgeVcovType:
         est = WooldridgeDiD(method="ols", vcov_type="classical")
         with pytest.raises(NotImplementedError, match=r"survey_design"):
             est.fit(
-                df, outcome="y", unit="unit", time="time", cohort="cohort",
+                df,
+                outcome="y",
+                unit="unit",
+                time="time",
+                cohort="cohort",
                 survey_design=design,
             )
 
@@ -1841,13 +1974,11 @@ class TestWooldridgeVcovType:
             df, outcome="y", unit="unit", time="time", cohort="cohort"
         )
         # Bootstrap fit on the same data + seed.
-        res_boot = WooldridgeDiD(
-            method="ols", vcov_type="hc2_bm", n_bootstrap=50, seed=0
-        ).fit(df, outcome="y", unit="unit", time="time", cohort="cohort")
-        # ATT is unchanged by the bootstrap (only SE is overridden)
-        assert res_boot.overall_att == pytest.approx(
-            res_analytical.overall_att, abs=1e-10
+        res_boot = WooldridgeDiD(method="ols", vcov_type="hc2_bm", n_bootstrap=50, seed=0).fit(
+            df, outcome="y", unit="unit", time="time", cohort="cohort"
         )
+        # ATT is unchanged by the bootstrap (only SE is overridden)
+        assert res_boot.overall_att == pytest.approx(res_analytical.overall_att, abs=1e-10)
         # SE finite + sensible (positive, smaller than the panel SD of y)
         assert np.isfinite(res_boot.overall_se)
         assert res_boot.overall_se > 0
@@ -1884,18 +2015,14 @@ class TestWooldridgeVcovType:
         periods = np.tile(np.arange(1, n_periods + 1), n_units)
         cohorts = rng.choice([3, 5, 7], size=n_units)
         cohort_per_obs = cohorts[units]
-        tau = np.where(
-            periods >= cohort_per_obs, 0.5 + 0.2 * (periods - cohort_per_obs), 0.0
-        )
+        tau = np.where(periods >= cohort_per_obs, 0.5 + 0.2 * (periods - cohort_per_obs), 0.0)
         y = 1.0 + 0.1 * periods + tau + 0.1 * rng.normal(size=len(units))
-        df = pd.DataFrame(
-            {"unit": units, "time": periods, "cohort": cohort_per_obs, "y": y}
-        )
+        df = pd.DataFrame({"unit": units, "time": periods, "cohort": cohort_per_obs, "y": y})
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", UserWarning)
-            res = WooldridgeDiD(
-                method="ols", vcov_type="hc2_bm", n_bootstrap=50, seed=0
-            ).fit(df, outcome="y", unit="unit", time="time", cohort="cohort")
+            res = WooldridgeDiD(method="ols", vcov_type="hc2_bm", n_bootstrap=50, seed=0).fit(
+                df, outcome="y", unit="unit", time="time", cohort="cohort"
+            )
         assert np.isfinite(res.overall_att)
         assert np.isfinite(res.overall_se)
         assert res.overall_se > 0
@@ -1963,7 +2090,11 @@ class TestWooldridgeVcovType:
         # have surfaced cluster_name='unit', n_clusters=N — but survey TSL
         # replaces that vcov, so the dataclass must report None.
         res = WooldridgeDiD(method="ols", vcov_type="hc1").fit(
-            df, outcome="y", unit="unit", time="time", cohort="cohort",
+            df,
+            outcome="y",
+            unit="unit",
+            time="time",
+            cohort="cohort",
             survey_design=design,
         )
         assert res.survey_metadata is not None
@@ -2077,7 +2208,9 @@ class TestWooldridgeVcovType:
         for k, eff in res.event_study_effects.items():
             assert np.isfinite(eff["att"])
             assert np.isfinite(eff["se"])
-            assert np.isfinite(eff["t_stat"]), f"event k={k} t_stat NaN — BM DOF threading regressed"
+            assert np.isfinite(
+                eff["t_stat"]
+            ), f"event k={k} t_stat NaN — BM DOF threading regressed"
             assert np.isfinite(eff["p_value"])
             assert np.isfinite(eff["conf_int"][0])
             assert np.isfinite(eff["conf_int"][1])
@@ -2094,7 +2227,9 @@ class TestWooldridgeVcovType:
         for t, eff in res.calendar_effects.items():
             assert np.isfinite(eff["att"])
             assert np.isfinite(eff["se"])
-            assert np.isfinite(eff["t_stat"]), f"calendar t={t} t_stat NaN — BM DOF threading regressed"
+            assert np.isfinite(
+                eff["t_stat"]
+            ), f"calendar t={t} t_stat NaN — BM DOF threading regressed"
             assert np.isfinite(eff["p_value"])
             assert np.isfinite(eff["conf_int"][0])
             assert np.isfinite(eff["conf_int"][1])
@@ -2113,13 +2248,9 @@ class TestWooldridgeVcovType:
         periods = np.tile(np.arange(1, n_periods + 1), n_units)
         cohorts = rng.choice([3, 5, 7], size=n_units)
         cohort_per_obs = cohorts[units]
-        tau = np.where(
-            periods >= cohort_per_obs, 0.5 + 0.2 * (periods - cohort_per_obs), 0.0
-        )
+        tau = np.where(periods >= cohort_per_obs, 0.5 + 0.2 * (periods - cohort_per_obs), 0.0)
         y = 1.0 + 0.1 * periods + tau + 0.1 * rng.normal(size=len(units))
-        df = pd.DataFrame(
-            {"unit": units, "time": periods, "cohort": cohort_per_obs, "y": y}
-        )
+        df = pd.DataFrame({"unit": units, "time": periods, "cohort": cohort_per_obs, "y": y})
         # Expect a rank-deficient warning from solve_ols (late-cohort drop).
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", UserWarning)
@@ -2133,7 +2264,9 @@ class TestWooldridgeVcovType:
         for k, eff in res.group_time_effects.items():
             assert np.isfinite(eff["att"]), f"({k}) att NaN"
             assert np.isfinite(eff["se"]), f"({k}) se NaN"
-            assert np.isfinite(eff["t_stat"]), f"({k}) t_stat NaN — BM DOF not threaded on reduced design"
+            assert np.isfinite(
+                eff["t_stat"]
+            ), f"({k}) t_stat NaN — BM DOF not threaded on reduced design"
             assert np.isfinite(eff["p_value"]), f"({k}) p_value NaN"
             assert np.isfinite(eff["conf_int"][0])
             assert np.isfinite(eff["conf_int"][1])
@@ -2146,18 +2279,24 @@ class TestWooldridgeVcovType:
             res.aggregate(agg_type)
         assert res.event_study_effects is not None
         for k, eff in res.event_study_effects.items():
-            assert np.isfinite(eff["t_stat"]), f"event k={k} t_stat NaN — aggregate BM DOF on reduced design regressed"
+            assert np.isfinite(
+                eff["t_stat"]
+            ), f"event k={k} t_stat NaN — aggregate BM DOF on reduced design regressed"
             assert np.isfinite(eff["p_value"])
         assert res.group_effects is not None
         for g, eff in res.group_effects.items():
-            assert np.isfinite(eff["t_stat"]), f"group g={g} t_stat NaN — aggregate BM DOF on reduced design regressed"
+            assert np.isfinite(
+                eff["t_stat"]
+            ), f"group g={g} t_stat NaN — aggregate BM DOF on reduced design regressed"
             assert np.isfinite(eff["p_value"])
         assert res.calendar_effects is not None
         # Calendar entries with at least one identified treated cell should
         # have finite BM inference; entirely-pre-treatment calendar periods
         # are absent from calendar_effects (their cells aren't post-treatment).
         for t, eff in res.calendar_effects.items():
-            assert np.isfinite(eff["t_stat"]), f"calendar t={t} t_stat NaN — aggregate BM DOF on reduced design regressed"
+            assert np.isfinite(
+                eff["t_stat"]
+            ), f"calendar t={t} t_stat NaN — aggregate BM DOF on reduced design regressed"
             assert np.isfinite(eff["p_value"])
 
     def test_hc2_bm_handles_rank_deficient_with_unit_invariant_exovar(self):
@@ -2182,7 +2321,9 @@ class TestWooldridgeVcovType:
         for k, eff in res.group_time_effects.items():
             assert np.isfinite(eff["att"]), f"({k}) att NaN"
             assert np.isfinite(eff["se"]), f"({k}) se NaN"
-            assert np.isfinite(eff["t_stat"]), f"({k}) t_stat NaN under rank-deficient exovar — BM DOF not threaded"
+            assert np.isfinite(
+                eff["t_stat"]
+            ), f"({k}) t_stat NaN under rank-deficient exovar — BM DOF not threaded"
             assert np.isfinite(eff["p_value"])
         assert np.isfinite(res.overall_t_stat)
         assert np.isfinite(res.overall_p_value)
@@ -2193,7 +2334,9 @@ class TestWooldridgeVcovType:
         for g, eff in (res.group_effects or {}).items():
             assert np.isfinite(eff["t_stat"]), f"group g={g} t_stat NaN under rank-deficient exovar"
         for t, eff in (res.calendar_effects or {}).items():
-            assert np.isfinite(eff["t_stat"]), f"calendar t={t} t_stat NaN under rank-deficient exovar"
+            assert np.isfinite(
+                eff["t_stat"]
+            ), f"calendar t={t} t_stat NaN under rank-deficient exovar"
         for k, eff in (res.event_study_effects or {}).items():
             assert np.isfinite(eff["t_stat"]), f"event k={k} t_stat NaN under rank-deficient exovar"
 
@@ -2351,3 +2494,36 @@ class TestOutcomeFitHint:
         for cg in ("not_yet_treated", "never_treated"):
             sample = _filter_sample(df, "unit", "time", "cohort", cg, 0)
             assert sorted(sample["y"].unique()) == sorted(df["y"].unique())
+
+
+class TestAbsorbedCovariateSnap:
+    """Unit-constant exovar columns (and their cohort interactions, which are
+    also unit-constant) are spanned by the unit FE on the within-transform
+    path: they must snap to deterministic NaN with a cause warning
+    (REGISTRY 'Absorbed FE')."""
+
+    def test_unit_constant_exovar_snaps_with_cause_warning(self):
+        rng = np.random.default_rng(5)
+        n_units, n_periods = 60, 6
+        units = np.repeat(np.arange(n_units), n_periods)
+        t = np.tile(np.arange(n_periods), n_units)
+        cohort = np.repeat(
+            np.where(np.arange(n_units) % 3 == 0, 0, np.where(np.arange(n_units) % 3 == 1, 3, 4)),
+            n_periods,
+        )
+        d = (cohort > 0) & (t >= cohort)
+        y = 0.5 * d + rng.normal(size=len(units))
+        df = pd.DataFrame({"unit": units, "time": t, "cohort": cohort, "y": y})
+        df["xc"] = np.repeat(rng.normal(size=n_units), n_periods)
+
+        with pytest.warns(UserWarning, match="collinear with the absorbed"):
+            res = WooldridgeDiD(method="ols", vcov_type="hc1").fit(
+                df,
+                outcome="y",
+                unit="unit",
+                time="time",
+                cohort="cohort",
+                exovar=["xc"],
+            )
+        assert np.isfinite(res.overall_att)
+        assert np.isfinite(res.overall_se)
