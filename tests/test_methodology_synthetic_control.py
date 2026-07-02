@@ -1031,12 +1031,37 @@ def test_in_space_placebo_pickle_drops_snapshot_keeps_scalars():
     assert restored.placebo_p_value == res.placebo_p_value
     assert restored.rmspe_ratio == res.rmspe_ratio
     assert restored.n_placebos == res.n_placebos and restored.n_failed == res.n_failed
+    assert restored.n_infeasible == res.n_infeasible
     assert restored._fit_snapshot is None and restored._placebo_gaps is None
     # The small aggregate table survives, so get_placebo_df still works...
     assert len(restored.get_placebo_df()) == len(res.get_placebo_df())
     # ...but a re-run of the refit raises (the snapshot is gone).
     with pytest.raises(ValueError, match="requires the fit snapshot"):
         restored.in_space_placebo()
+
+
+def test_legacy_pickle_missing_infeasible_fields_backfills_to_zero():
+    # A result pickled by a version predating n_infeasible / _loo_n_infeasible unpickles
+    # (bypassing __init__ / __post_init__) WITHOUT those attributes. __setstate__ must
+    # backfill them to 0 so the reporting paths that dereference them directly
+    # (summary() / to_dict()) do not raise AttributeError on a legacy result.
+    res = _fit_for_placebo(n_donors=4)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        res.in_space_placebo()
+        res.leave_one_out()
+    legacy_state = res.__getstate__()  # what pickle would persist ...
+    legacy_state.pop("n_infeasible", None)  # ... minus the fields an older version lacked
+    legacy_state.pop("_loo_n_infeasible", None)
+    restored = object.__new__(type(res))  # bypasses __init__/__post_init__, as pickle does
+    restored.__setstate__(legacy_state)
+    assert restored.n_infeasible == 0 and restored._loo_n_infeasible == 0
+    # Reporting paths that dereference the new fields directly must not raise.
+    assert isinstance(restored.summary(), str)
+    assert restored.to_dict()["n_infeasible"] == 0
+    native = DiagnosticReport(restored).to_dict()["estimator_native_diagnostics"]
+    assert native["in_space_placebo"]["n_infeasible"] == 0
+    assert native["leave_one_out"]["n_infeasible"] == 0
 
 
 def test_in_space_placebo_custom_v_path():
@@ -1173,8 +1198,8 @@ def test_get_placebo_df_includes_failed_donors(monkeypatch):
 
     def flaky_fit_unit(snap, unit, donor_pool, n_starts):
         calls["n"] += 1
-        if calls["n"] <= 2:  # first two donor refits "fail"
-            return None
+        if calls["n"] <= 2:  # first two donor refits "fail" (solver non-convergence)
+            return None, "failed"
         return real_fit_unit(snap, unit, donor_pool, n_starts)
 
     monkeypatch.setattr(sc, "_placebo_fit_unit", flaky_fit_unit)
@@ -1539,8 +1564,8 @@ def test_leave_one_out_refit_failure_tallied(monkeypatch):
 
     def flaky_fit_unit(snap, unit, donor_pool, n_starts):
         calls["n"] += 1
-        if calls["n"] == 1:  # first leave-one-out refit "fails"
-            return None
+        if calls["n"] == 1:  # first leave-one-out refit "fails" (solver non-convergence)
+            return None, "failed"
         return real_fit_unit(snap, unit, donor_pool, n_starts)
 
     monkeypatch.setattr(sc, "_placebo_fit_unit", flaky_fit_unit)
@@ -1894,7 +1919,7 @@ def test_leave_one_out_uniform_shift_surfaced_by_delta_not_range(monkeypatch):
     def uniform_shift(snap_arg, unit, pool, n_starts):
         gp = {p: 0.0 for p in snap.pre_periods}
         gp.update({p: baseline + shift for p in snap.post_periods})
-        return gp, 1.0
+        return (gp, 1.0), "ran"
 
     monkeypatch.setattr(sc, "_placebo_fit_unit", uniform_shift)
     with warnings.catch_warnings():
@@ -2169,7 +2194,8 @@ def test_leave_one_out_all_refits_failed_status(monkeypatch):
 
     sc = importlib.import_module("diff_diff.synthetic_control")
     res = _fit_for_placebo(n_donors=4)
-    monkeypatch.setattr(sc, "_placebo_fit_unit", lambda *a, **k: None)  # every drop fails
+    # every drop fails to converge (solver, not structural)
+    monkeypatch.setattr(sc, "_placebo_fit_unit", lambda *a, **k: (None, "failed"))
     with pytest.warns(UserWarning, match="did not reach a valid optimum"):
         loo = res.leave_one_out()
     # Distinct status (NOT "ran"); att_range is None; baseline + only failed rows.
@@ -2190,7 +2216,8 @@ def test_in_time_placebo_all_dates_failed_status(monkeypatch):
 
     sc = importlib.import_module("diff_diff.synthetic_control")
     res = _fit_for_placebo(n_donors=4)
-    monkeypatch.setattr(sc, "_placebo_fit_unit", lambda *a, **k: None)  # every refit fails
+    # every refit fails to converge (solver, not structural)
+    monkeypatch.setattr(sc, "_placebo_fit_unit", lambda *a, **k: (None, "failed"))
     with pytest.warns(UserWarning, match="failed to converge"):
         itp = res.in_time_placebo()
     # Convergence failure must NOT be mislabeled as dimensional infeasibility.
@@ -2212,7 +2239,7 @@ def test_in_time_placebo_mixed_failed_and_infeasible_status(monkeypatch):
     sc = importlib.import_module("diff_diff.synthetic_control")
     res = _fit_for_placebo(n_donors=4)
     # Feasible dates "fail" to converge; 2001 (1 pre-fake) is dimensionally infeasible.
-    monkeypatch.setattr(sc, "_placebo_fit_unit", lambda *a, **k: None)
+    monkeypatch.setattr(sc, "_placebo_fit_unit", lambda *a, **k: (None, "failed"))
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         itp = res.in_time_placebo([2001, 2003])  # 2001 infeasible, 2003 fails
@@ -2222,6 +2249,162 @@ def test_in_time_placebo_mixed_failed_and_infeasible_status(monkeypatch):
     block = DiagnosticReport(res).to_dict()["estimator_native_diagnostics"]["in_time_placebo"]
     assert block["reason_code"] == "all_dates_unusable"
     assert block["n_failed"] == 1 and block["n_infeasible"] == 1
+
+
+def test_in_space_placebo_all_infeasible_status(monkeypatch):
+    # Every donor refit is STRUCTURALLY infeasible (cv donor-indistinguishability) ->
+    # "all_placebos_infeasible", distinct from the solver "all_placebos_failed", with a
+    # machine-readable reason_code + n_infeasible surfaced on DiagnosticReport.
+    import importlib
+
+    sc = importlib.import_module("diff_diff.synthetic_control")
+    res = _fit_for_placebo(n_donors=4)
+    monkeypatch.setattr(sc, "_placebo_fit_unit", lambda *a, **k: (None, "infeasible"))
+    with pytest.warns(UserWarning, match="STRUCTURALLY infeasible"):
+        pdf = res.in_space_placebo()
+    assert res._placebo_status == "all_placebos_infeasible"
+    assert res.n_placebos == 0 and res.n_failed == 0 and res.n_infeasible == res.n_donors
+    assert (pdf["status"] == "infeasible").sum() == res.n_donors  # every donor row
+    block = DiagnosticReport(res).to_dict()["estimator_native_diagnostics"]["in_space_placebo"]
+    assert block["status"] == "infeasible"
+    assert block["reason_code"] == "all_placebos_infeasible"
+    assert block["n_infeasible"] == res.n_donors and block["n_failed"] == 0
+    assert "structurally infeasible" in block["reason"]
+
+
+def test_in_space_placebo_unusable_status(monkeypatch):
+    # A mix of solver failures AND structural infeasibilities with no usable placebo ->
+    # "all_placebos_unusable" (both counters surfaced), not mislabeled as exclusively one.
+    import importlib
+
+    sc = importlib.import_module("diff_diff.synthetic_control")
+    res = _fit_for_placebo(n_donors=4)
+    calls = {"n": 0}
+
+    def mixed(*a, **k):
+        calls["n"] += 1
+        return (None, "infeasible") if calls["n"] % 2 else (None, "failed")
+
+    monkeypatch.setattr(sc, "_placebo_fit_unit", mixed)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        res.in_space_placebo()
+    assert res._placebo_status == "all_placebos_unusable"
+    assert res.n_placebos == 0 and res.n_failed > 0 and res.n_infeasible > 0
+    block = DiagnosticReport(res).to_dict()["estimator_native_diagnostics"]["in_space_placebo"]
+    assert block["reason_code"] == "all_placebos_unusable"
+    assert block["n_failed"] == res.n_failed and block["n_infeasible"] == res.n_infeasible
+
+
+def test_confidence_set_reason_names_all_placebos_infeasible(monkeypatch):
+    # The test-inversion entrypoint (_require_placebo_reference, shared by confidence_set /
+    # test_sharp_null) must NAME the new no-reference statuses: an all-infeasible in-space
+    # run raises with the STRUCTURAL reason, not the generic "no valid reference set" fallback.
+    import importlib
+
+    sc = importlib.import_module("diff_diff.synthetic_control")
+    res = _fit_for_placebo(n_donors=4)
+    monkeypatch.setattr(sc, "_placebo_fit_unit", lambda *a, **k: (None, "infeasible"))
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        res.in_space_placebo()
+    assert res._placebo_status == "all_placebos_infeasible"
+    with pytest.raises(ValueError, match="structurally infeasible"):
+        res.confidence_set(family="constant", gamma=0.25)
+
+
+def test_cv_leave_one_out_infeasible_drop_counted_separately(monkeypatch):
+    # A single structurally-infeasible drop is routed to _loo_n_infeasible (NOT
+    # _loo_n_failed); the run still "ran" via the other drops, and the excluded row
+    # carries status="infeasible".
+    import importlib
+
+    sc = importlib.import_module("diff_diff.synthetic_control")
+    res = _fit_for_placebo(n_donors=4)
+    real_fit_unit = sc._placebo_fit_unit
+    calls = {"n": 0}
+
+    def flaky(snap, unit, pool, n_starts):
+        calls["n"] += 1
+        if calls["n"] == 1:  # first drop is structurally infeasible
+            return None, "infeasible"
+        return real_fit_unit(snap, unit, pool, n_starts)
+
+    monkeypatch.setattr(sc, "_placebo_fit_unit", flaky)
+    with pytest.warns(UserWarning, match="STRUCTURALLY infeasible"):
+        loo = res.leave_one_out()
+    assert res._loo_status == "ran"
+    assert res._loo_n_infeasible == 1 and res._loo_n_failed == 0
+    assert (loo["status"] == "infeasible").sum() == 1
+    native = DiagnosticReport(res).to_dict()["estimator_native_diagnostics"]["leave_one_out"]
+    assert native["status"] == "ran" and native["n_infeasible"] == 1
+
+
+def test_cv_leave_one_out_flat_reduced_pool_infeasible():
+    # LOO real-mechanism test (solve-level cv sentinel, mirroring the in-space flat-refit
+    # test): the treated unit equals the linchpin donor d0 (=8) in the flat validation
+    # window {2003,2004,2005}, so the cv fit loads all weight on d0 (the only donor at 8).
+    # Dropping d0 — the sole reportably-weighted donor — leaves {d1,d2,d3} identical (=10)
+    # there, so the reduced pool is donor-indistinguishable: a STRUCTURAL cv infeasibility
+    # routed to _loo_n_infeasible (NOT the solver _loo_n_failed), with status="infeasible".
+    rng = np.random.default_rng(3)
+    years = list(range(2000, 2008))
+    rows = []
+    for j in range(4):
+        for yr in years:
+            if yr in (2003, 2004, 2005):
+                y = 8.0 if j == 0 else 10.0  # d0 distinguishes the pool in the flat window
+            elif yr <= 2005:
+                y = 5.0 + j + rng.normal(0, 0.2)
+            else:
+                y = 10.0 + rng.normal(0, 0.2)
+            rows.append({"unit": f"d{j}", "year": yr, "y": y, "treated": 0})
+    for yr in years:
+        # treated == d0 in the flat window -> the synthetic must weight d0 (only donor at 8)
+        y = 8.0 if yr in (2003, 2004, 2005) else (5.5 + rng.normal(0, 0.2) if yr <= 2005 else 13.0)
+        rows.append({"unit": "treated", "year": yr, "y": y, "treated": int(yr >= 2006)})
+    df = pd.DataFrame(rows)
+    res = _fit_cv(df, seed=0)
+    assert np.isfinite(res.att)  # headline well-posed (full donor set distinguishable)
+    assert list(res._fit_snapshot.weighted_donor_ids) == ["d0"]  # d0 is the sole weighted donor
+    with pytest.warns(UserWarning, match="STRUCTURALLY infeasible"):
+        loo = res.leave_one_out()
+    # Real cv sentinel: the d0 drop is structural infeasibility, not solver failure.
+    assert res._loo_status == "all_refits_infeasible"
+    assert res._loo_n_infeasible == 1 and res._loo_n_failed == 0
+    assert res._loo_att_range is None
+    dropped = loo[loo["dropped_unit"] == "d0"]
+    assert len(dropped) == 1 and dropped.iloc[0]["status"] == "infeasible"
+    native = DiagnosticReport(res).to_dict()["estimator_native_diagnostics"]["leave_one_out"]
+    assert native["status"] != "ran"
+    assert native["reason_code"] == "all_refits_infeasible"
+    assert native["n_infeasible"] == 1 and native["n_failed"] == 0
+
+
+def test_leave_one_out_unusable_status(monkeypatch):
+    # A mix of failed + infeasible drops with none usable -> "all_refits_unusable".
+    import importlib
+
+    sc = importlib.import_module("diff_diff.synthetic_control")
+    res = _fit_for_placebo(n_donors=4)
+    assert len(res._fit_snapshot.weighted_donor_ids) >= 2  # need >=2 drops for a mix
+    calls = {"n": 0}
+
+    def mixed(*a, **k):
+        calls["n"] += 1
+        return (None, "infeasible") if calls["n"] == 1 else (None, "failed")
+
+    monkeypatch.setattr(sc, "_placebo_fit_unit", mixed)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        res.leave_one_out()
+    assert res._loo_status == "all_refits_unusable"
+    assert res._loo_n_failed > 0 and res._loo_n_infeasible > 0
+    native = DiagnosticReport(res).to_dict()["estimator_native_diagnostics"]["leave_one_out"]
+    assert native["reason_code"] == "all_refits_unusable"
+    assert (
+        native["n_failed"] == res._loo_n_failed and native["n_infeasible"] == res._loo_n_infeasible
+    )
 
 
 # ===========================================================================
@@ -2949,13 +3132,22 @@ def test_cv_in_space_placebo_excludes_donor_flat_refits():
     df = pd.DataFrame(rows)
     res = _fit_cv(df, seed=0)
     assert np.isfinite(res.att)  # headline well-posed: the full donor set is distinguishable
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        res.in_space_placebo()
-    # The d0 placebo (pool {d1,d2,d3} identical in val) is dropped; the others enter.
+    # The d0 placebo (pool {d1,d2,d3} identical in val) is dropped as STRUCTURALLY
+    # infeasible (cv donor-indistinguishability), NOT a solver "failed": the threading
+    # from _outer_solve_V_cv's structural sentinel through _placebo_fit_unit routes it to
+    # n_infeasible. The others keep d0 in the pool, so they remain identified and enter.
+    with pytest.warns(UserWarning, match="STRUCTURALLY infeasible"):
+        pdf = res.in_space_placebo()
     assert res._placebo_status == "ran"
     assert 1 <= res.n_placebos < res.n_donors
-    assert res.n_failed >= 1
+    assert res.n_infeasible >= 1 and res.n_failed == 0  # structural, not solver
+    # The excluded donor row carries status="infeasible" (not "failed").
+    excluded = pdf[pdf["rmspe_ratio"].isna()]
+    assert len(excluded) == res.n_infeasible
+    assert (excluded["status"] == "infeasible").all()
+    # DiagnosticReport surfaces the split count on the ran block.
+    block = DiagnosticReport(res).to_dict()["estimator_native_diagnostics"]["in_space_placebo"]
+    assert block["status"] == "ran" and block["n_infeasible"] == res.n_infeasible
 
 
 @pytest.mark.parametrize("specs", [_CV_SPANNING, [("y", [2000, 2002, 2004], "mean")]])

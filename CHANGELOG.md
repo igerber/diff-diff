@@ -23,6 +23,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `cluster_name`. The mass-point path and the event-study (Phase 2b) path are unchanged (Phase 2b
   still defers cluster with a warning).
 
+### Changed
+- **`SyntheticControl` in-space / leave-one-out placebo diagnostics now distinguish structural `cv`
+  infeasibility from solver non-convergence.** Under `v_method="cv"`, an excluded `in_space_placebo()`
+  / `leave_one_out()` refit whose pseudo-treated (in-space) or reduced (leave-one-out) donor pool is
+  indistinguishable in a re-aggregated CV window — a structural identification failure, not an
+  under-optimized solve — is now tallied in a new `n_infeasible` field (in-space) / `_loo_n_infeasible`
+  (leave-one-out) with a `status="infeasible"` row, mirroring the split `in_time_placebo` already
+  reported; `n_failed` now counts only genuine solver non-convergences. `_placebo_status` /
+  `_loo_status` gain `all_placebos_infeasible` / `all_placebos_unusable` (resp.
+  `all_refits_infeasible` / `all_refits_unusable`) codes, and `DiagnosticReport` surfaces a
+  machine-readable `reason_code` alongside `n_failed` / `n_infeasible`. The permutation
+  `placebo_p_value` / `n_placebos` are UNCHANGED — both causes are excluded from the rank / ATT range
+  identically, so only the diagnostic attribution is refined. `n_infeasible` is 0 for the non-`cv`
+  `v_method`s (no structural-identification gate). Internal: `_placebo_fit_unit` now returns a
+  `(result, status)` tuple and `_outer_solve_V_cv` a structural-infeasible flag.
+
 ## [3.6.1] - 2026-07-01
 
 ### Added

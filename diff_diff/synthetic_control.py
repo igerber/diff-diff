@@ -539,7 +539,10 @@ class SyntheticControl:
             # the predictor precondition were resolved/validated up front (above), so
             # resolved_v_cv_t0 is a valid int here.
             assert resolved_v_cv_t0 is not None
-            v, w, converged, mspe_v, outer_converged = _outer_solve_V_cv(
+            # The 6th return (structural-infeasible flag) is for the placebo/LOO path;
+            # fit() enforces the fully-spanning + donor-variation precondition up front
+            # (raising ValueError), so the headline solve never returns it -> ignore here.
+            v, w, converged, mspe_v, outer_converged, _ = _outer_solve_V_cv(
                 pivots,
                 specs,
                 treated_id,
@@ -1510,7 +1513,7 @@ def _outer_solve_V_cv(
     inner_max_iter: int,
     inner_min_decrease: float,
     standardize: str,
-) -> Tuple[np.ndarray, np.ndarray, bool, float, bool]:
+) -> Tuple[np.ndarray, np.ndarray, bool, float, bool, Optional[str]]:
     """Out-of-sample cross-validation V selection (ADH 2015 §; Abadie 2021 Eq. 9).
 
     Faithful per-window re-aggregation. The pre-period is split positionally at ``t0``
@@ -1541,9 +1544,16 @@ def _outer_solve_V_cv(
     every re-aggregated spec is non-empty; this guards defensively and fails closed
     (non-converged sentinel) otherwise.
 
-    Returns ``(v_star, w_star, inner_converged, mspe_v, outer_converged)`` where
-    ``mspe_v`` is the step-3 validation-MSPE selection criterion at V* (the validation
-    MSPE of the TRAINING-window fit).
+    Returns ``(v_star, w_star, inner_converged, mspe_v, outer_converged, infeasible)``
+    where ``mspe_v`` is the step-3 validation-MSPE selection criterion at V* (the
+    validation MSPE of the TRAINING-window fit), and ``infeasible`` is ``"infeasible"``
+    when the failure is STRUCTURAL (a non-spanning spec set or a re-aggregated window
+    with no cross-donor variation — the weights are unidentified, not merely
+    under-optimized) and ``None`` otherwise. The caller (``_placebo_fit_unit``) uses it
+    to report a dropped placebo as ``status="infeasible"`` (remedied by adjusting the
+    predictors / ``v_cv_t0`` / donor pool) vs ``status="failed"`` (a solver
+    non-convergence, remedied by ``inner_max_iter`` / ``n_starts``) — mirroring the
+    split ``in_time_placebo`` already emits.
     """
     k = len(specs)
     train_specs = _truncate_specs_to_window(specs, set(pre_periods[:t0]))
@@ -1557,7 +1567,7 @@ def _outer_solve_V_cv(
     # this guards the path defensively, returning a non-converged sentinel so the caller
     # drops/raises rather than crashing on an empty predictor build.
     if any(s is None for s in train_specs) or any(s is None for s in val_specs):
-        return np.ones(k) / k, np.zeros(len(donor_ids)), False, float("nan"), False
+        return np.ones(k) / k, np.zeros(len(donor_ids)), False, float("nan"), False, "infeasible"
     train_specs_c = cast(List["_PredictorSpec"], train_specs)
     val_specs_c = cast(List["_PredictorSpec"], val_specs)
 
@@ -1574,7 +1584,7 @@ def _outer_solve_V_cv(
     # placebos reassign the treated role and shrink the donor pool, so donor-distinguishability
     # must be re-checked for each pseudo-treated unit, not just the headline.)
     if not _window_has_donor_variation(X0_tr) or not _window_has_donor_variation(X0_va):
-        return np.ones(k) / k, np.zeros(len(donor_ids)), False, float("nan"), False
+        return np.ones(k) / k, np.zeros(len(donor_ids)), False, float("nan"), False, "infeasible"
 
     X1s_tr, X0s_tr, _ = _standardize(X1_tr, X0_tr, standardize)
     X1s_va, X0s_va, _ = _standardize(X1_va, X0_va, standardize)
@@ -1589,7 +1599,9 @@ def _outer_solve_V_cv(
         # non-converged) so downstream placebo/LOO diagnostics do not run off an invalid CV
         # criterion (there is no outer search here, so conv_tr IS the "search" convergence).
         mspe_v = float(np.mean((Z1_va - Z0_va @ w_tr) ** 2)) if conv_tr else float("nan")
-        return v, w_star, converged, mspe_v, conv_tr
+        # conv_tr=False here is a SOLVER truncation (training fit did not converge), not a
+        # structural infeasibility -> infeasible=None so the caller reports "failed".
+        return v, w_star, converged, mspe_v, conv_tr, None
 
     _st = {"total": 0, "nonconv": 0}
     # Penalty bound on the VALIDATION window (the objective's window), so a truncated
@@ -1729,7 +1741,9 @@ def _outer_solve_V_cv(
         outer_converged = False
     # Step 4 reported weights: refit V* on the VALIDATION-window re-aggregated predictors.
     w_star, converged = _inner_solve_W(X1s_va, X0s_va, v_star, inner_max_iter, inner_min_decrease)
-    return v_star, w_star, converged, mspe_v, outer_converged
+    # A non-converged outer search / truncated step-4 refit is a SOLVER failure (the
+    # windows spanned + varied, else we returned "infeasible" above) -> infeasible=None.
+    return v_star, w_star, converged, mspe_v, outer_converged, None
 
 
 def _compute_gap_path(
@@ -2133,23 +2147,39 @@ def _placebo_fit_unit(
     unit: Any,
     donor_pool: List[Any],
     n_starts: int,
-) -> Optional[Tuple[Dict[Any, float], float]]:
+) -> Tuple[Optional[Tuple[Dict[Any, float], float]], str]:
     """Refit a synthetic control for one (pseudo-)treated ``unit`` vs ``donor_pool``.
 
     Reuses the exact predictor build / standardization / weight solve / gap-path
     path as ``fit()`` — none of those helpers reads estimator (``self``) state, so
     the refit is driven entirely by the snapshot. The real treated unit is never in
-    ``donor_pool`` (the caller passes the other ``J−1`` donors). Returns
-    ``(gap_path, rmspe_ratio)``, or ``None`` when the weight solve does not converge
-    (the caller excludes such placebos from the permutation reference set).
-    Per-placebo ``UserWarning``s (poor fit, zero-variance row, non-convergence) are
-    suppressed here; the caller surfaces an aggregate count.
+    ``donor_pool`` (the caller passes the other ``J−1`` donors).
+
+    Returns ``(result, status)`` where ``status`` is one of:
+
+    - ``"ran"`` — ``result`` is ``(gap_path, rmspe_ratio)`` (a valid optimum).
+    - ``"infeasible"`` — ``result`` is ``None``; the refit is STRUCTURALLY
+      unidentified (non-finite cells, or — under ``v_method="cv"`` — a re-aggregated
+      window with no cross-donor variation for this pseudo-treated pool). Remedied by
+      adjusting the predictors / ``v_cv_t0`` / donor pool, NOT the optimizer budget.
+    - ``"failed"`` — ``result`` is ``None``; the refit reached no valid optimum (a
+      non-converged inner weight solve or outer V search). Remedied by a larger
+      ``inner_max_iter`` / ``n_starts``.
+
+    The caller excludes both non-``"ran"`` outcomes from the permutation reference set
+    but counts them separately (``n_failed`` vs ``n_infeasible``), mirroring the split
+    ``in_time_placebo`` already emits. Per-placebo ``UserWarning``s (poor fit,
+    zero-variance row, non-convergence) are suppressed here; the caller surfaces an
+    aggregate count.
     """
     X1, X0, _ = _build_predictor_matrix(snap.pivots, snap.specs, unit, donor_pool)
     # Belt-and-suspenders: fit() already gated non-finite outcomes over the full
     # treated+donor panel, so a donor reassigned as pseudo-treated has finite cells.
     if not (np.all(np.isfinite(X1)) and np.all(np.isfinite(X0))):
-        return None
+        # Non-finite predictor cells make the pool structurally unfittable (a data
+        # problem, not a solver hiccup) -> "infeasible". (Defensive: fit() already gated
+        # finiteness over the full treated+donor panel.)
+        return None, "infeasible"
     # inverse_variance applies 1/Var to the RAW predictors; cv re-standardizes each window
     # separately inside _outer_solve_V_cv (mirrors fit()). Both skip the full-pre
     # _standardize pass (unused on those paths) and its irrelevant zero-variance warning.
@@ -2161,8 +2191,11 @@ def _placebo_fit_unit(
     Z1 = Y.loc[snap.pre_periods, unit].to_numpy(dtype=float)
     Z0 = Y.loc[snap.pre_periods, donor_pool].to_numpy(dtype=float)
     # ``outer_converged`` is trivially True when there is no outer V search (custom
-    # V or a single-donor degenerate pool).
+    # V or a single-donor degenerate pool). ``infeasible_reason`` is set to
+    # ``"infeasible"`` only by the cv path's structural sentinel (below); every other
+    # path's non-convergence is a solver failure.
     outer_converged = True
+    infeasible_reason: Optional[str] = None
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         if snap.v_method == "custom":
@@ -2193,7 +2226,7 @@ def _placebo_fit_unit(
             # with an out-of-range pinned t0 nulled to the default).
             n_pre = len(snap.pre_periods)
             t0 = snap.v_cv_t0 if snap.v_cv_t0 is not None else n_pre // 2
-            _, w, converged, _, outer_converged = _outer_solve_V_cv(
+            _, w, converged, _, outer_converged, infeasible_reason = _outer_solve_V_cv(
                 snap.pivots,
                 snap.specs,
                 unit,
@@ -2226,14 +2259,15 @@ def _placebo_fit_unit(
     # Exclude a placebo whose fit is not a valid optimum — a truncated inner W OR an
     # under-optimized outer V search. An under-optimized placebo V fits the pre-period
     # worse, shrinking its RMSPE ratio and biasing the permutation p-value
-    # anti-conservatively, so such placebos must not silently enter the rank.
+    # anti-conservatively, so such placebos must not silently enter the rank. Attribute
+    # a cv structural sentinel to "infeasible"; every other non-convergence to "failed".
     if not (converged and outer_converged):
-        return None
+        return None, ("infeasible" if infeasible_reason == "infeasible" else "failed")
     gap_path = _compute_gap_path(Y, w, unit, donor_pool, snap.all_periods)
     pre_gaps = np.array([gap_path[p] for p in snap.pre_periods], dtype=float)
     post_gaps = np.array([gap_path[p] for p in snap.post_periods], dtype=float)
     scale = float(np.max(np.abs(Z1))) if Z1.size else 0.0
-    return gap_path, _rmspe_ratio(pre_gaps, post_gaps, scale)
+    return (gap_path, _rmspe_ratio(pre_gaps, post_gaps, scale)), "ran"
 
 
 # =============================================================================

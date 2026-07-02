@@ -2287,6 +2287,7 @@ class DiagnosticReport:
                 "rmspe_ratio": _to_python_float(getattr(r, "rmspe_ratio", None)),
                 "n_placebos": _to_python_scalar(n_placebos),
                 "n_failed": _to_python_scalar(getattr(r, "n_failed", None)),
+                "n_infeasible": _to_python_scalar(getattr(r, "n_infeasible", None)),
             }
             # Distinguish a valid run from an attempted-but-infeasible one so BR/DR
             # consumers see an explicit status/reason rather than a bare NaN p-value.
@@ -2312,15 +2313,35 @@ class DiagnosticReport:
                     "all_placebos_failed": (
                         "in_space_placebo() was run but every donor refit failed to "
                         "converge, so no placebo entered the reference set; "
-                        "placebo_p_value is NaN."
+                        "placebo_p_value is NaN. Raise n_starts or loosen the "
+                        "optimizer tolerances."
+                    ),
+                    "all_placebos_infeasible": (
+                        "in_space_placebo() was run but every donor refit was "
+                        "structurally infeasible under v_method='cv' (the "
+                        "pseudo-treated donor pool is indistinguishable in a "
+                        "re-aggregated CV window), so no placebo entered the reference "
+                        "set; placebo_p_value is NaN. Adjust the predictors, v_cv_t0, "
+                        "or the donor pool."
+                    ),
+                    "all_placebos_unusable": (
+                        "in_space_placebo() was run but no donor refit was usable: "
+                        "some failed to converge AND some were structurally infeasible "
+                        "(see n_failed / n_infeasible); placebo_p_value is NaN."
                     ),
                 }
                 block["status"] = "infeasible"
+                # Machine-readable code distinguishing a solver convergence failure
+                # ("all_placebos_failed") from structural infeasibility
+                # ("all_placebos_infeasible" / "too_few_donors") or a mix
+                # ("all_placebos_unusable"), without parsing `reason`.
+                block["reason_code"] = placebo_status
                 block["reason"] = _reasons.get(
                     placebo_status,
                     "in_space_placebo() was run but produced no valid reference set "
                     "(fewer than 2 donors, a non-converged treated fit, or all donor "
-                    "refits failed); placebo_p_value is NaN.",
+                    "refits failed / were structurally infeasible); placebo_p_value is "
+                    "NaN.",
                 )
             out["in_space_placebo"] = block
         else:
@@ -2353,6 +2374,7 @@ class DiagnosticReport:
                         else None
                     ),
                     "n_failed": _to_python_scalar(getattr(r, "_loo_n_failed", None)),
+                    "n_infeasible": _to_python_scalar(getattr(r, "_loo_n_infeasible", None)),
                 }
             else:
                 _loo_reasons = {
@@ -2371,13 +2393,29 @@ class DiagnosticReport:
                         "(see the status='failed' rows); raise n_starts or loosen the "
                         "optimizer tolerances."
                     ),
+                    "all_refits_infeasible": (
+                        "leave_one_out() was run but every donor-drop refit was "
+                        "structurally infeasible under v_method='cv' (the reduced donor "
+                        "pool is indistinguishable in a re-aggregated CV window; see the "
+                        "status='infeasible' rows); adjust the predictors, v_cv_t0, or "
+                        "the donor pool."
+                    ),
+                    "all_refits_unusable": (
+                        "leave_one_out() was run but no donor-drop refit was usable: "
+                        "some failed to converge AND some were structurally infeasible "
+                        "(see n_failed / n_infeasible)."
+                    ),
                 }
                 out["leave_one_out"] = {
                     "status": "infeasible",
                     # Machine-readable code so consumers can distinguish a numerical
                     # convergence failure ("all_refits_failed") from structural
-                    # infeasibility ("too_few_donors") without parsing `reason`.
+                    # infeasibility ("all_refits_infeasible" / "too_few_donors") or a
+                    # mix ("all_refits_unusable") without parsing `reason`. The n_failed
+                    # / n_infeasible counts give the exact breakdown.
                     "reason_code": loo_status,
+                    "n_failed": _to_python_scalar(getattr(r, "_loo_n_failed", None)),
+                    "n_infeasible": _to_python_scalar(getattr(r, "_loo_n_infeasible", None)),
                     "reason": _loo_reasons.get(
                         loo_status, "leave_one_out() produced no valid refits."
                     ),

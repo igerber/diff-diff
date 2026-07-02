@@ -199,9 +199,14 @@ class SyntheticControlResults:
         In-space placebo permutation p-value (``rank / (n_placebos + 1)``), NaN
         until :meth:`in_space_placebo` is run. SEPARATE from the (always-NaN)
         analytical ``p_value``; ``is_significant`` stays bound to ``p_value``.
-    n_placebos, n_failed : int
+    n_placebos, n_failed, n_infeasible : int
         Donor placebos that entered the permutation reference set / were excluded
-        for non-convergence. Both 0 until :meth:`in_space_placebo` is run.
+        for solver non-convergence / were excluded as structurally infeasible (under
+        ``v_method="cv"``, a re-aggregated window with no cross-donor variation once
+        that donor is pseudo-treated). All 0 until :meth:`in_space_placebo` is run.
+        ``n_infeasible`` mirrors the split :meth:`in_time_placebo` already reports; the
+        permutation ``placebo_p_value`` uses only the ``n_placebos`` that entered the
+        rank, so it is unaffected by how the excluded remainder is attributed.
     survey_metadata : Any, optional
         Reserved; always None in this release.
 
@@ -245,6 +250,13 @@ class SyntheticControlResults:
     rmspe_ratio: float = np.nan
     n_placebos: int = 0
     n_failed: int = 0
+    # Donor placebos excluded as STRUCTURALLY infeasible (distinct from n_failed's solver
+    # non-convergence): under v_method="cv", pseudo-treating a donor can leave a
+    # re-aggregated CV window with no cross-donor variation, so the weights are
+    # unidentified. 0 until in_space_placebo() runs. Mirrors the split in_time_placebo
+    # reports via _in_time_n_infeasible. Excluded from the permutation rank just like
+    # n_failed, so placebo_p_value is unaffected by the attribution.
+    n_infeasible: int = 0
     # Confidence set for the treatment-effect path by test inversion (Firpo & Possebom
     # 2018, "Synthetic Control Method: Inference, Sensitivity Analysis and Confidence
     # Sets," J. Causal Inference 6(2), §4), populated by ``confidence_set()``. A small
@@ -276,7 +288,10 @@ class SyntheticControlResults:
         # tell a non-converged treated fit ("treated_fit_nonconverged", n_failed=0)
         # apart from too few donors ("too_few_donors", also n_failed=0). Values:
         # None (not run), "ran", "treated_fit_nonconverged", "too_few_donors",
-        # "all_placebos_failed". A small string, so it survives pickling.
+        # "all_placebos_failed" (every excluded donor was a solver non-convergence),
+        # "all_placebos_infeasible" (every excluded donor was structurally infeasible),
+        # "all_placebos_unusable" (a MIX of failed + infeasible with none usable) —
+        # mirrors the in_time_placebo split. A small string, so it survives pickling.
         self._placebo_status: Optional[str] = None
         # Per-unit floored pre-period denominators (treated + each converged placebo),
         # captured by in_space_placebo() so the sharp-null test inversion
@@ -295,7 +310,10 @@ class SyntheticControlResults:
         self._loo_df: Optional[pd.DataFrame] = None
         self._loo_gaps: Optional[Dict[Any, Dict[Any, float]]] = None
         # Reason a leave-one-out run was infeasible/absent. Values: None (not run),
-        # "ran", "treated_fit_nonconverged", "too_few_donors", "all_refits_failed".
+        # "ran", "treated_fit_nonconverged", "too_few_donors", "all_refits_failed"
+        # (all excluded drops were solver non-convergences), "all_refits_infeasible"
+        # (all excluded drops were structurally infeasible), "all_refits_unusable" (a
+        # MIX with none usable) — mirrors the in_time_placebo split.
         self._loo_status: Optional[str] = None
         # (min, max) ATT across the successful leave-one-out refits (the absolute
         # spread of counterfactual ATTs); None until run.
@@ -306,6 +324,10 @@ class SyntheticControlResults:
         # would be. None until run.
         self._loo_max_abs_delta_att: Optional[float] = None
         self._loo_n_failed: int = 0
+        # Leave-one-out drops excluded as STRUCTURALLY infeasible (cv donor-pool
+        # indistinguishability), distinct from _loo_n_failed's solver non-convergence.
+        # Mirrors _in_time_n_infeasible. 0 until leave_one_out() runs.
+        self._loo_n_infeasible: int = 0
         self._in_time_df: Optional[pd.DataFrame] = None
         self._in_time_gaps: Optional[Dict[Any, Dict[Any, float]]] = None
         # Reason an in-time placebo run was infeasible/absent. Values: None (not run),
@@ -343,10 +365,10 @@ class SyntheticControlResults:
         ``_fit_snapshot`` retains the full treated+donor panel and ``_placebo_gaps``
         the per-unit gap paths — both panel-derived, a privacy/size hazard if the
         pickle is sent elsewhere. The scalar placebo fields (``placebo_p_value``,
-        ``rmspe_ratio``, ``n_placebos``, ``n_failed``) and the small ``_placebo_df``
-        aggregate table survive. An unpickled result keeps all public fields; a
-        diagnostic call that needs the snapshot (``in_space_placebo``) then raises a
-        ValueError directing the user to re-fit. Mirrors ``SyntheticDiDResults``.
+        ``rmspe_ratio``, ``n_placebos``, ``n_failed``, ``n_infeasible``) and the small
+        ``_placebo_df`` aggregate table survive. An unpickled result keeps all public
+        fields; a diagnostic call that needs the snapshot (``in_space_placebo``) then
+        raises a ValueError directing the user to re-fit. Mirrors ``SyntheticDiDResults``.
         """
         state = self.__dict__.copy()
         state["_fit_snapshot"] = None
@@ -358,6 +380,20 @@ class SyntheticControlResults:
         state["_loo_gaps"] = None
         state["_in_time_gaps"] = None
         return state
+
+    def __setstate__(self, state: Dict[str, Any]) -> None:
+        """Restore pickled state, backfilling scalar diagnostic fields added later.
+
+        Unpickling bypasses ``__init__`` / ``__post_init__``, so a pickle written by an
+        OLDER version (before ``n_infeasible`` / ``_loo_n_infeasible`` existed) would
+        otherwise leave those attributes unset and make ``summary()`` / ``to_dict()`` /
+        ``DiagnosticReport`` raise ``AttributeError``. Default any missing counter to 0
+        (the "no infeasible refits recorded" state) so a legacy result reports cleanly.
+        """
+        self.__dict__.update(state)
+        for _attr, _default in (("n_infeasible", 0), ("_loo_n_infeasible", 0)):
+            if not hasattr(self, _attr):
+                setattr(self, _attr, _default)
 
     def __repr__(self) -> str:
         """Concise string representation."""
@@ -507,6 +543,18 @@ class SyntheticControlResults:
         if placebo_attempted and np.isfinite(self.placebo_p_value):
             # The classic analytical fields above stay n/a (no SE); this is the
             # permutation p-value of the post/pre RMSPE ratio, p = rank/(n_placebos+1).
+            # Excluded donors split into solver failures + structural cv infeasibilities;
+            # show the breakdown when any donor was infeasible so the two are not conflated.
+            n_excluded = self.n_failed + self.n_infeasible
+            if n_excluded and self.n_infeasible:
+                excluded_suffix = (
+                    f"  ({n_excluded} excluded: {self.n_failed} failed, "
+                    f"{self.n_infeasible} infeasible)"
+                )
+            elif n_excluded:
+                excluded_suffix = f"  ({n_excluded} excluded)"
+            else:
+                excluded_suffix = ""
             lines.extend(
                 [
                     "In-space placebo permutation inference "
@@ -514,7 +562,7 @@ class SyntheticControlResults:
                     f"{'  RMSPE ratio (post/pre):':<34} {self.rmspe_ratio:>10.4f}",
                     f"{'  Permutation p-value:':<34} {self.placebo_p_value:>10.4f}",
                     f"{'  Placebos in reference set:':<34} {self.n_placebos:>10d}"
-                    + (f"  ({self.n_failed} excluded)" if self.n_failed else ""),
+                    + excluded_suffix,
                     "",
                     "(Analytical SE is still undefined for classic SCM; the "
                     "p-value above is permutation-based.)",
@@ -541,6 +589,23 @@ class SyntheticControlResults:
                     "In-space placebo inference requires at least 2 donors (each "
                     "placebo is fit against the other donors); too few were",
                     "available. placebo_p_value is undefined. Inspect " "get_placebo_df().",
+                ]
+            elif status == "all_placebos_infeasible":
+                reason = [
+                    "In-space placebo permutation inference was attempted but every "
+                    "donor refit was structurally infeasible",
+                    f"({self.n_infeasible} of {self.n_donors}; under v_method='cv' the "
+                    "pseudo-treated donor pool is indistinguishable in a",
+                    "re-aggregated CV window). placebo_p_value is undefined — adjust the "
+                    "predictors / v_cv_t0 / donor pool. Inspect get_placebo_df().",
+                ]
+            elif status == "all_placebos_unusable":
+                reason = [
+                    "In-space placebo permutation inference was attempted but no donor "
+                    "refit was usable",
+                    f"({self.n_failed} failed to converge, {self.n_infeasible} "
+                    "structurally infeasible under v_method='cv').",
+                    "placebo_p_value is undefined. Inspect get_placebo_df().",
                 ]
             else:  # "all_placebos_failed" (or a legacy unpickle without the status)
                 reason = [
@@ -595,12 +660,13 @@ class SyntheticControlResults:
             "v_cv_t0": self.v_cv_t0,
             "standardize": self.standardize,
             # In-space placebo permutation inference. rmspe_ratio is set at fit;
-            # placebo_p_value / n_placebos / n_failed stay at their no-inference
-            # defaults (NaN / 0) until in_space_placebo() runs.
+            # placebo_p_value / n_placebos / n_failed / n_infeasible stay at their
+            # no-inference defaults (NaN / 0) until in_space_placebo() runs.
             "rmspe_ratio": self.rmspe_ratio,
             "placebo_p_value": self.placebo_p_value,
             "n_placebos": self.n_placebos,
             "n_failed": self.n_failed,
+            "n_infeasible": self.n_infeasible,
         }
         # Test-inversion confidence set (Firpo & Possebom 2018), flattened to scalars so
         # to_dataframe() stays a single row of scalars; all None until confidence_set()
@@ -719,9 +785,9 @@ class SyntheticControlResults:
         Reassigns the treatment to each donor in turn, re-estimates a synthetic
         control for that pseudo-treated donor against the OTHER donors, and ranks
         the real treated unit's post/pre RMSPE ratio among all units. Populates
-        ``placebo_p_value``, ``n_placebos`` and ``n_failed`` on this object
-        (``rmspe_ratio`` — the treated unit's own ratio — is set at fit time) and
-        returns the placebo distribution via :meth:`get_placebo_df`.
+        ``placebo_p_value``, ``n_placebos``, ``n_failed`` and ``n_infeasible`` on
+        this object (``rmspe_ratio`` — the treated unit's own ratio — is set at fit
+        time) and returns the placebo distribution via :meth:`get_placebo_df`.
 
         The real treated unit is **excluded from every placebo's donor pool**: its
         post-period outcome is treatment-contaminated, so allowing a placebo to
@@ -737,12 +803,19 @@ class SyntheticControlResults:
         ``p_value`` (which stays NaN — classic SCM has no analytical SE) and from
         ``is_significant`` (which also stays bound to the NaN ``p_value``).
 
-        A placebo is **excluded** from the reference set (counted in ``n_failed``)
-        when its fit is not a valid optimum — EITHER its inner Frank-Wolfe weight
-        solve did not converge (a truncated ``W`` is unusable) OR its outer ``V``
-        search did not converge (an under-optimized ``V`` fits the pre-period worse,
-        shrinking its RMSPE ratio and biasing the permutation p-value
-        anti-conservatively). Each placebo refit **inherits the original fit's
+        A placebo is **excluded** from the reference set for one of two reasons,
+        counted separately. A **solver non-convergence** (counted in ``n_failed``,
+        ``status="failed"``) is EITHER an inner Frank-Wolfe weight solve that did not
+        converge (a truncated ``W`` is unusable) OR an outer ``V`` search that did not
+        converge (an under-optimized ``V`` fits the pre-period worse, shrinking its
+        RMSPE ratio and biasing the permutation p-value anti-conservatively). A
+        **structural cv infeasibility** (counted in ``n_infeasible``,
+        ``status="infeasible"``; ``v_method="cv"`` only) is a pseudo-treated donor
+        pool that is indistinguishable in a re-aggregated CV window, so the weights are
+        unidentified — remedied by adjusting the predictors / ``v_cv_t0`` / donor pool,
+        NOT the optimizer budget. Both are excluded from the rank identically, so
+        ``placebo_p_value`` is unaffected by the attribution. Each placebo refit
+        **inherits the original fit's
         ``optimizer_options`` / ``n_starts``**, so valid inference requires settings
         adequate for the outer ``V`` search to converge: production defaults do;
         with cheap settings, raise ``n_starts`` here or re-fit with a larger
@@ -833,6 +906,7 @@ class SyntheticControlResults:
             self.placebo_p_value = np.nan
             self.n_placebos = 0
             self.n_failed = 0
+            self.n_infeasible = 0
             self._placebo_gaps = {}
             self._placebo_pre_denoms = {}
             self._placebo_status = "treated_fit_nonconverged"
@@ -850,6 +924,7 @@ class SyntheticControlResults:
             self.placebo_p_value = np.nan
             self.n_placebos = 0
             self.n_failed = 0
+            self.n_infeasible = 0
             self._placebo_gaps = {}
             self._placebo_pre_denoms = {}
             self._placebo_status = "too_few_donors"
@@ -869,17 +944,22 @@ class SyntheticControlResults:
         placebo_gaps: Dict[Any, Dict[Any, float]] = {}
         ranked_ratios: List[float] = []
         n_failed = 0
+        n_infeasible = 0
 
         for j in donors:
             pool = [d for d in donors if d != j]
-            fitted = _placebo_fit_unit(snap, j, pool, n_starts_eff)
+            fitted, fit_status = _placebo_fit_unit(snap, j, pool, n_starts_eff)
             if fitted is None:
-                # Non-converged inner Frank-Wolfe weight solve (a truncated W is
-                # unusable for ranking): exclude from BOTH the numerator and the
-                # denominator (never penalize a truncated solve into the rank).
-                # Still record the donor with NaN metrics so get_placebo_df()
-                # returns the full treated + every-donor unit set.
-                n_failed += 1
+                # Excluded from BOTH the numerator and the denominator (never rank a
+                # non-optimal fit). "failed" (a truncated inner W / outer V search) and
+                # "infeasible" (a structural cv donor-indistinguishability for this
+                # pseudo-treated pool) are dropped alike but COUNTED separately, mirroring
+                # the split in_time_placebo reports. Still record the donor with NaN
+                # metrics so get_placebo_df() returns the full treated + every-donor set.
+                if fit_status == "infeasible":
+                    n_infeasible += 1
+                else:
+                    n_failed += 1
                 rows.append(
                     {
                         "unit": j,
@@ -887,7 +967,7 @@ class SyntheticControlResults:
                         "post_mspe": np.nan,
                         "rmspe_ratio": np.nan,
                         "is_treated": False,
-                        "status": "failed",
+                        "status": fit_status,
                     }
                 )
                 continue
@@ -910,9 +990,9 @@ class SyntheticControlResults:
         n_placebos = len(ranked_ratios)
         if n_placebos == 0:
             warnings.warn(
-                "No in-space placebo entered the reference set (all donors "
-                f"failed to converge or were filtered out of {n_donors}); "
-                "placebo_p_value is NaN.",
+                "No in-space placebo entered the reference set (all donors failed to "
+                "converge, were structurally infeasible, or were filtered out of "
+                f"{n_donors}); placebo_p_value is NaN.",
                 UserWarning,
                 stacklevel=2,
             )
@@ -924,20 +1004,26 @@ class SyntheticControlResults:
             rank = 1 + sum(1 for r in ranked_ratios if r >= treated_ratio)
             p_value = rank / (n_placebos + 1)
 
-        if n_failed > 0:
-            cv_note = (
-                " Under v_method='cv' an excluded refit may instead be STRUCTURALLY "
-                "infeasible (the pseudo-treated unit's donor pool is indistinguishable in a "
-                "re-aggregated CV window) — remedied by adjusting the predictors, v_cv_t0, "
-                "or the donor pool, NOT inner_max_iter / n_starts."
-                if snap.v_method == "cv"
-                else ""
-            )
+        # Two distinct exclusion causes, warned separately (mirrors in_time_placebo) so a
+        # structural cv exclusion is not mis-attributed to a solver budget the user could
+        # raise. Both remain out of the permutation rank; placebo_p_value uses n_placebos.
+        if n_infeasible > 0:
             warnings.warn(
-                f"{n_failed} of {n_donors} in-space placebos were excluded from the "
-                "permutation distribution (the refit did not reach a valid optimum — a "
-                "non-converged inner weight solve or outer V search); "
-                f"placebo_p_value uses the remaining {n_placebos}.{cv_note}",
+                f"{n_infeasible} of {n_donors} in-space placebos were STRUCTURALLY "
+                "infeasible under v_method='cv' (the pseudo-treated donor pool is "
+                "indistinguishable in a re-aggregated CV window, so the weights are "
+                "unidentified) and were excluded with status='infeasible'; remedy by "
+                "adjusting the predictors, v_cv_t0, or the donor pool (NOT inner_max_iter "
+                f"/ n_starts). placebo_p_value uses the remaining {n_placebos}.",
+                UserWarning,
+                stacklevel=2,
+            )
+        if n_failed > 0:
+            warnings.warn(
+                f"{n_failed} of {n_donors} in-space placebos failed to reach a valid "
+                "optimum (a non-converged inner weight solve or outer V search) and were "
+                "excluded with status='failed'; raise n_starts or loosen the optimizer "
+                f"tolerances. placebo_p_value uses the remaining {n_placebos}.",
                 UserWarning,
                 stacklevel=2,
             )
@@ -959,8 +1045,22 @@ class SyntheticControlResults:
         self.placebo_p_value = float(p_value)
         self.n_placebos = int(n_placebos)
         self.n_failed = int(n_failed)
+        self.n_infeasible = int(n_infeasible)
         self._placebo_gaps = placebo_gaps
-        self._placebo_status = "ran" if n_placebos > 0 else "all_placebos_failed"
+        # Classify a no-reference-set run by cause (mirrors in_time_placebo): a pure
+        # solver failure ("all_placebos_failed", actionable via n_starts / tolerances) and
+        # pure structural infeasibility ("all_placebos_infeasible", actionable via
+        # predictors / v_cv_t0 / donor pool) are distinct; a MIX gets "all_placebos_unusable"
+        # (both counters surfaced). By this point too-few-donors / non-converged-treated-fit
+        # have already returned, so >=1 donor was attempted.
+        if n_placebos > 0:
+            self._placebo_status = "ran"
+        elif n_failed > 0 and n_infeasible > 0:
+            self._placebo_status = "all_placebos_unusable"
+        elif n_infeasible > 0:
+            self._placebo_status = "all_placebos_infeasible"
+        else:
+            self._placebo_status = "all_placebos_failed"
         self._placebo_df = pd.DataFrame(rows, columns=self._PLACEBO_COLS)
         return self._placebo_df.copy()
 
@@ -1008,9 +1108,12 @@ class SyntheticControlResults:
         -------
         pandas.DataFrame
             One ``status="baseline"`` row (the full fit, ``delta_att=0``) followed by
-            one row per dropped donor (``status="loo"``, or ``"failed"`` with NaN
-            metrics when its refit did not converge), sorted by ``|delta_att|``
-            descending (failed rows last). Columns: ``dropped_unit``, ``att``,
+            one row per dropped donor: ``status="loo"``, or — with NaN metrics — an
+            excluded drop that is ``"failed"`` (its refit did not converge) or
+            ``"infeasible"`` (under ``v_method="cv"`` the reduced donor pool is
+            indistinguishable in a re-aggregated CV window). Rows are sorted by
+            ``|delta_att|`` descending, with the excluded (``"failed"`` /
+            ``"infeasible"``) rows last. Columns: ``dropped_unit``, ``att``,
             ``pre_rmspe``, ``post_rmspe``, ``rmspe_ratio``, ``delta_att``
             (``att_loo - full_att``), ``status``.
 
@@ -1067,6 +1170,7 @@ class SyntheticControlResults:
             self._loo_status = "treated_fit_nonconverged"
             self._loo_att_range = None
             self._loo_n_failed = 0
+            self._loo_n_infeasible = 0
             self._loo_gaps = {}
             self._loo_df = pd.DataFrame([baseline_row], columns=self._LOO_COLS)
             return self._loo_df.copy()
@@ -1083,6 +1187,7 @@ class SyntheticControlResults:
             self._loo_status = "too_few_donors"
             self._loo_att_range = None
             self._loo_n_failed = 0
+            self._loo_n_infeasible = 0
             self._loo_gaps = {}
             self._loo_df = pd.DataFrame([baseline_row], columns=self._LOO_COLS)
             return self._loo_df.copy()
@@ -1096,12 +1201,19 @@ class SyntheticControlResults:
         loo_rows: List[Dict[str, Any]] = []
         atts: List[float] = []
         n_failed = 0
+        n_infeasible = 0
 
         for d in pos_donors:
             pool = [x for x in snap.donor_ids if x != d]
-            fitted = _placebo_fit_unit(snap, snap.treated_id, pool, n_starts_eff)
+            fitted, fit_status = _placebo_fit_unit(snap, snap.treated_id, pool, n_starts_eff)
             if fitted is None:
-                n_failed += 1
+                # "infeasible" (structural cv donor-indistinguishability of the reduced
+                # pool) vs "failed" (solver non-convergence): counted separately, both
+                # excluded from the ATT range. Mirrors the in_time_placebo split.
+                if fit_status == "infeasible":
+                    n_infeasible += 1
+                else:
+                    n_failed += 1
                 loo_rows.append(
                     {
                         "dropped_unit": d,
@@ -1110,7 +1222,7 @@ class SyntheticControlResults:
                         "post_rmspe": np.nan,
                         "rmspe_ratio": np.nan,
                         "delta_att": np.nan,
-                        "status": "failed",
+                        "status": fit_status,
                     }
                 )
                 continue
@@ -1131,45 +1243,58 @@ class SyntheticControlResults:
             )
 
         # Sort successful drops by |delta_att| desc (most influential donor first);
-        # non-converged drops sort last.
+        # excluded drops (failed OR infeasible) sort last.
         finite_rows = sorted(
             (r for r in loo_rows if r["status"] == "loo"),
             key=lambda r: abs(r["delta_att"]),
             reverse=True,
         )
-        failed_rows = [r for r in loo_rows if r["status"] == "failed"]
-        ordered = [baseline_row] + finite_rows + failed_rows
+        excluded_rows = [r for r in loo_rows if r["status"] != "loo"]
+        ordered = [baseline_row] + finite_rows + excluded_rows
 
-        if n_failed > 0:
-            cv_note = (
-                " Under v_method='cv' a 'failed' drop may instead be STRUCTURALLY "
-                "infeasible (the reduced donor pool is indistinguishable in a re-aggregated "
-                "CV window) — remedied by adjusting the predictors, v_cv_t0, or the donor "
-                "pool, NOT inner_max_iter / n_starts."
-                if snap.v_method == "cv"
-                else ""
+        # Two exclusion causes, warned separately (mirrors in_time_placebo) so a structural
+        # cv exclusion is not mis-attributed to a solver budget. Both drop out of the ATT range.
+        if n_infeasible > 0:
+            warnings.warn(
+                f"{n_infeasible} of {len(pos_donors)} leave-one-out refits were STRUCTURALLY "
+                "infeasible under v_method='cv' (the reduced donor pool is indistinguishable "
+                "in a re-aggregated CV window) and were excluded with status='infeasible'; "
+                "remedy by adjusting the predictors, v_cv_t0, or the donor pool (NOT "
+                "inner_max_iter / n_starts); the ATT range uses the remaining refits.",
+                UserWarning,
+                stacklevel=2,
             )
+        if n_failed > 0:
             warnings.warn(
                 f"{n_failed} of {len(pos_donors)} leave-one-out refits were excluded with "
                 "NaN metrics (status='failed'; the refit did not reach a valid optimum — a "
                 "non-converged inner weight solve or outer V search); the ATT range uses "
-                f"the remaining refits.{cv_note}",
+                "the remaining refits.",
                 UserWarning,
                 stacklevel=2,
             )
 
         self._loo_gaps = loo_gaps
         self._loo_n_failed = int(n_failed)
+        self._loo_n_infeasible = int(n_infeasible)
         self._loo_att_range = (min(atts), max(atts)) if atts else None
         # Baseline-relative headline: the largest swing of any single donor-drop from
         # the full-fit ATT (max |delta_att|). Robust to a uniform shift that a raw
         # att_range would understate.
         self._loo_max_abs_delta_att = max(abs(a - float(self.att)) for a in atts) if atts else None
-        # Distinguish a real run from "every donor-drop refit failed to converge"
-        # (no valid leave-one-out estimate produced) so DR/BR do not report an empty
-        # diagnostic as completed. (pos_donors empty — a converged fit always has >=1
-        # positive weight — falls through to "ran": baseline-only, benign.)
-        self._loo_status = "all_refits_failed" if (pos_donors and not atts) else "ran"
+        # Distinguish a real run from "no valid leave-one-out estimate produced" (so DR/BR
+        # do not report an empty diagnostic as completed) AND classify the no-success cause
+        # by solver-failure vs structural-infeasibility vs a mix (mirrors in_time_placebo).
+        # (pos_donors empty — a converged fit always has >=1 positive weight — falls through
+        # to "ran": baseline-only, benign.)
+        if atts or not pos_donors:
+            self._loo_status = "ran"
+        elif n_failed > 0 and n_infeasible > 0:
+            self._loo_status = "all_refits_unusable"
+        elif n_infeasible > 0:
+            self._loo_status = "all_refits_infeasible"
+        else:
+            self._loo_status = "all_refits_failed"
         self._loo_df = pd.DataFrame(ordered, columns=self._LOO_COLS)
         return self._loo_df.copy()
 
@@ -1417,9 +1542,18 @@ class SyntheticControlResults:
                     }
                 )
                 continue
-            fitted = _placebo_fit_unit(snap_mod, snap.treated_id, snap.donor_ids, n_starts_eff)
+            fitted, fit_status = _placebo_fit_unit(
+                snap_mod, snap.treated_id, snap.donor_ids, n_starts_eff
+            )
             if fitted is None:
-                n_failed += 1
+                # _truncate_snapshot_in_time already applied the cv structural checks to the
+                # truncated snapshot, so a None here is normally a solver non-convergence
+                # ("failed"); defensively honor an "infeasible" status if the solve still
+                # reports one (counts it alongside the truncation-level n_infeasible).
+                if fit_status == "infeasible":
+                    n_infeasible += 1
+                else:
+                    n_failed += 1
                 rows.append(
                     {
                         "placebo_period": t_f,
@@ -1429,7 +1563,7 @@ class SyntheticControlResults:
                         "n_pre_fake": n_pre_fake,
                         "n_post_fake": n_post_fake,
                         "n_dropped_specs": len(dropped),
-                        "status": "failed",
+                        "status": fit_status,
                     }
                 )
                 continue
@@ -1569,8 +1703,8 @@ class SyntheticControlResults:
         (every sharp null re-ranks the SAME gaps), so honouring ``n_starts`` would mean an
         expensive O(J) re-fit that the caller did not ask for. Raises ValueError when no
         valid reference set could be produced (fewer than 2 donors, a non-converged treated
-        fit, or all donor refits failed) — there is then no permutation distribution to
-        invert.
+        fit, or all donor refits failed / were structurally infeasible) — there is then no
+        permutation distribution to invert.
         """
         if self._placebo_gaps is None:
             # Builds the reference set; raises ValueError if the snapshot is unavailable.
@@ -1597,6 +1731,15 @@ class SyntheticControlResults:
                 "all_placebos_failed": (
                     "every donor refit failed to converge, so no placebo entered the "
                     "reference set"
+                ),
+                "all_placebos_infeasible": (
+                    "every donor refit was structurally infeasible (under v_method='cv' "
+                    "the pseudo-treated donor pool is indistinguishable in a re-aggregated "
+                    "CV window), so no placebo entered the reference set"
+                ),
+                "all_placebos_unusable": (
+                    "no donor refit was usable — some failed to converge and some were "
+                    "structurally infeasible — so no placebo entered the reference set"
                 ),
             }
             default_reason = "no valid in-space placebo reference set was produced"
