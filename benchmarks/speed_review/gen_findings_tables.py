@@ -231,8 +231,18 @@ def render_fe_absorption():
     def cell(rec):
         if not rec or rec.get("fit_median_s") is None:
             return "-"
-        flag = " (noisy)" if rec.get("noisy") else ""
-        return f"{rec['fit_median_s']:.3f} (cv {rec['fit_cv']:.1%}){flag}"
+        quals = []
+        # The 10% threshold mirrors CV_FLAG in bench_fe_absorption.py. The
+        # diff-diff lane pre-computes `noisy`; the pyfixest lane records only
+        # `fit_cv`, so derive the flag here for both.
+        if rec.get("noisy") or (rec.get("fit_cv") or 0) > 0.10:
+            quals.append("noisy")
+        # Yardstick records with no coefficient are timing-only proxies
+        # (saturated i(rel_time) stand-in for Sun-Abraham; see the footnote).
+        if "coef" in rec and rec.get("coef") is None:
+            quals.append("proxy")
+        qual_txt = f", {', '.join(quals)}" if quals else ""
+        return f"{rec['fit_median_s']:.3f} (cv {rec['fit_cv']:.1%}{qual_txt})"
 
     rows = [
         "| Scenario | n rows | Before (s) | After (s) | Speedup | pyfixest (s) |",
@@ -248,6 +258,14 @@ def render_fe_absorption():
             else "-"
         )
         rows.append(f"| {display} | {n_col} | {cell(b)} | {cell(a)} | {speedup} | {cell(y)} |")
+    rows.append("")
+    rows.append(
+        "*noisy* = CV above the 10% unusable threshold from the noise protocol. "
+        "*proxy* = timing-only pyfixest stand-in: the Sun-Abraham scenarios run a "
+        "saturated `i(rel_time)` event study there (pyfixest 0.60 has no `sunab()`) - "
+        "comparable demeaning load, different estimand, so those cells are not "
+        "exact-estimand comparisons (see `bench_fe_absorption_pyfixest.py`)."
+    )
     return "\n".join(rows)
 
 

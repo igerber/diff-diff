@@ -53,13 +53,15 @@ honest over time.
 <!-- TABLE:start fe_absorption -->
 | Scenario | n rows | Before (s) | After (s) | Speedup | pyfixest (s) |
 |---|---:|---:|---:|---:|---:|
-| 7. County policy event study (SunAbraham) | 177,289 | 3.865 (cv 2.5%) | - | - | 0.190 (cv 4.0%) |
-| 8. Firm panel with churn (SunAbraham) | 2,400,000 | 92.957 (cv 0.9%) | - | - | 1.912 (cv 20.3%) |
-| 9. Scanner store-week (TWFE) | 3,255,000 | 1.549 (cv 0.3%) | - | - | 0.644 (cv 12.3%) |
+| 7. County policy event study (SunAbraham) | 177,289 | 3.865 (cv 2.5%) | - | - | 0.190 (cv 4.0%, proxy) |
+| 8. Firm panel with churn (SunAbraham) | 2,400,000 | 92.957 (cv 0.9%) | - | - | 1.912 (cv 20.3%, noisy, proxy) |
+| 9. Scanner store-week (TWFE) | 3,255,000 | 1.549 (cv 0.3%) | - | - | 0.644 (cv 12.3%, noisy) |
 | 10. Geo experiment 5M orders (DiD absorb) | 5,000,000 | 2.630 (cv 0.6%) | - | - | 0.623 (cv 7.8%) |
 | 11. Survey BRR replicates (DiD absorb) | 500,000 | 7.385 (cv 8.6%) | - | - | - |
 | 12. Correlated-FE stress (DiD absorb) | 5,000,000 | 26.271 (cv 0.4%) | - | - | 3.075 (cv 1.5%) |
 | 13. Small-panel guard (TWFE) | 20,000 | 0.005 (cv 4.1%) | - | - | 0.007 (cv 2.2%) |
+
+*noisy* = CV above the 10% unusable threshold from the noise protocol. *proxy* = timing-only pyfixest stand-in: the Sun-Abraham scenarios run a saturated `i(rel_time)` event study there (pyfixest 0.60 has no `sunab()`) - comparable demeaning load, different estimand, so those cells are not exact-estimand comparisons (see `bench_fe_absorption_pyfixest.py`).
 <!-- TABLE:end fe_absorption -->
 
 `tail_stress` is a deliberately adversarial correlated-FE shape and is

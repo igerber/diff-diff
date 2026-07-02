@@ -89,6 +89,9 @@ def main():
     )
     args = ap.parse_args()
 
+    if args.repeats < 1:
+        ap.error("--repeats must be >= 1")
+
     baseline = {}
     bp = Path(args.baseline)
     if bp.exists():
