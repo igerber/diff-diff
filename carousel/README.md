@@ -23,6 +23,10 @@ intentionally NOT part of the library's install or dev extras; `matplotlib`
 is already available through the dev/docs extras but is not a runtime
 install dependency. Python >= 3.9.
 
+```bash
+python -m pip install fpdf2 Pillow
+```
+
 ## Claim discipline
 
 Slide copy that states methodology facts (equivalence targets, tolerances,

@@ -1251,7 +1251,7 @@ class LPDiDCarouselPDF(FPDF):
             ("Cluster-Robust SEs", "Unit-level by default,\nmatches Stata lpdid"),
             ("Covariates, Two Ways", "RA path (BJS-style) or\ndirect with guardrails"),
             ("PMD Baselines", "Premean differencing +\npooled pre/post ATTs"),
-            ("Non-Absorbing Treatment", "First-entry & effect-\nstabilization (Eq. 12/13)"),
+            ("Non-Absorbing Entry Effects", "First-entry & effect-\nstabilization (Eq. 12/13)"),
             ("Survey Designs", "pweights, strata, PSU, FPC;\nBinder TSL (default path)"),
             ("Composition Control", "no_composition fixes the\npost-window sample"),
         ]
