@@ -3,31 +3,42 @@
 
 Mirrors the architecture of ``generate_spillover_carousel.py`` (magazine
 sidebar with progress tick, light gradient background, split-color logo,
-footer wordmark) but introduces the "Horizon" palette: violet primary /
-sky-cyan clean-control accent / amber impact accent on a lavender -> white
-gradient. The temporal-forward identity signals LP-DiD's horizon-by-horizon
-local-projection nature.
+footer wordmark) with the "Horizon" palette: violet primary / sky-cyan
+clean-control accent / amber impact accent on a lavender -> white gradient.
+Adds editorial flair: amber section kickers, serif pull-quotes lifted
+verbatim from the paper, soft card shadows, a cover impulse-response motif,
+and a single dark "twist" slide at the narrative pivot. Type sizes are
+floored for phone-width LinkedIn rendering (body >= 13pt, headlines 38-52).
 
-Narrative spine ("one regression to rule them all"):
+Narrative spine (the paper's own novelty argument, JAE 2025 pp. 741-742):
 
-1.  Cover        -- the estimator zoo, then the punchline (single LOTR nod)
-2.  Shelf        -- fragmentation problem: four fixes, four frameworks
-3.  Real world   -- four scenarios of tool-choice anxiety
-4.  Introducing  -- "It's just a regression" (3 capability cards)
-5.  Mechanism    -- clean-control panel schematic at one horizon
-6.  The math     -- LP-DiD equation + the proven equivalence map
-7.  Output       -- native event-study plot (pre-trends = negative horizons)
+1.  Cover        -- macro built LPs to read dynamic effects of shocks;
+                    your event study is one
+2.  Problem      -- negative weighting: previously treated units are
+                    implicitly used as controls (pull quote + schematic)
+3.  Twist (DARK) -- naive LP inherits the same bias (Eqs. 6-7); the
+                    comparisons are the fix, not the estimator
+4.  Insight      -- the "underappreciated feature": LP makes restricting
+                    comparisons easy; LP + clean controls = LP-DiD
+5.  Mechanism    -- "unclean" observations leave the control group
+                    (clean-control panel schematic)
+6.  The math     -- non-negative weights (Eqs. 9-10) + "subsumes":
+                    recent estimators as specific subcases (Sec. 3.7)
+7.  Output       -- native event study; pre/post estimated symmetrically
+                    (avoids Roth 2024 interpretation difficulties)
 8.  Code         -- sklearn-like fit(); reweight=True == Callaway-Sant'Anna
 9.  Production   -- 2x3 feature grid (incl. non-absorbing + survey designs)
 10. Validated    -- authors' tooling, fixest, svyglm, tested equivalences
 11. CTA          -- pip install + GitHub
 
-Claim discipline (verified against docs/methodology/papers/dube-2025-review.md):
-- The "zoo" named on the cover / shelf / equivalence map is EXACTLY the four
+Claim discipline (verified against docs/methodology/papers/dube-2025-review.md
+and the JAE 2025 PDF, pp. 741-742):
+- All pull quotes are VERBATIM from the paper (abstract + Section 1-2 intro);
+  "..." marks elisions. No invented or paraphrased-as-quoted text.
+- The "zoo" named on the slide-6 equivalence map is EXACTLY the four
   estimators the paper proves LP-DiD nests: Callaway-Sant'Anna, Cengiz-style
   stacking, classic 2x2 DiD, and (single-cohort) BJS. Sun-Abraham has no
-  documented LP-DiD equivalence and is deliberately absent from the
-  unification arc.
+  documented LP-DiD equivalence and is deliberately absent.
 - CS and Cengiz-stacked equivalences are EXACT (paper Section 3.7).
 - The stacking equivalence target is the Cengiz et al. (2019) LITERATURE design.
   Never call it "Stacked DiD": this library's `StackedDiD` estimator implements
@@ -35,6 +46,10 @@ Claim discipline (verified against docs/methodology/papers/dube-2025-review.md):
   scheme that LP-DiD does NOT nest (see the CE-4 note in tests/test_lpdid.py).
 - BJS equality holds only for PMD k=t-1 single-cohort (fn. 10-11); phrased
   as "BJS-style / exact single-cohort" everywhere. Never a bare "==".
+- Naive-LP-bias twist cites the paper's own statement (Sec. 2 intro, Eqs. 6-7):
+  a naive LP implementation incurs negative weighting analogous to TWFE.
+- The Roth (2024) symmetric-pretrends point is the authors' claim (Sec. 1),
+  attributed to the paper, not asserted independently.
 - NO speed claims: the paper's Table 2 speedups are Stata-implementation
   artifacts; diff-diff's own vectorized CS is faster than LPDiD (verified
   empirically 2026-07-01), so speed is omitted from the narrative.
@@ -45,7 +60,7 @@ Run with::
 
 Produces ``carousel/diff-diff-lpdid-carousel.pdf``. Generation requires
 ``fpdf2``, ``Pillow``, and ``matplotlib`` (carousel-only dependencies, not
-part of the library's install or dev extras).
+part of the library's install extras; matplotlib ships in dev/docs extras).
 """
 
 import os
@@ -87,17 +102,19 @@ TOTAL_SLIDES = 11
 VIOLET = (109, 40, 217)  # #6d28d9  primary accent
 VIOLET_DARK = (91, 33, 182)  # #5b21b6
 VIOLET_LIGHT = (196, 181, 253)  # #c4b5fd  treated-cell tint
+VIOLET_BRIGHT = (167, 139, 250)  # #a78bfa  accents on the dark slide
 CYAN = (8, 145, 178)  # #0891b2  clean-control / forward accent
 CYAN_LIGHT = (165, 243, 252)  # #a5f3fc
 AMBER = (245, 158, 11)  # #f59e0b  impact / event-time pop
 LAVENDER = (245, 243, 255)  # #f5f3ff  gradient start
+SHADOW = (203, 213, 225)  # #cbd5e1  soft card shadow
 
 # Text + structural (shared with the spillover deck for legibility)
 NAVY = (15, 23, 42)  # #0f172a  primary text
 GRAY = (100, 116, 139)  # #64748b  secondary text
 LIGHT_GRAY = (148, 163, 184)  # #94a3b8  fine print
 WHITE = (255, 255, 255)
-DARK_SLATE = (30, 41, 59)  # #1e293b  code block bg
+DARK_SLATE = (30, 41, 59)  # #1e293b  code block bg / dark-slide gradient end
 AMBER_CODE = (252, 211, 77)  # #fcd34d  code string literals
 SLATE_CODE = (148, 163, 184)  # #94a3b8  code keyword tone
 
@@ -106,7 +123,6 @@ VIOLET_HEX = "#6d28d9"
 VIOLET_DARK_HEX = "#5b21b6"
 VIOLET_LIGHT_HEX = "#c4b5fd"
 CYAN_HEX = "#0891b2"
-CYAN_LIGHT_HEX = "#a5f3fc"
 AMBER_HEX = "#f59e0b"
 NAVY_HEX = "#0f172a"
 GRAY_HEX = "#64748b"
@@ -129,15 +145,14 @@ class LPDiDCarouselPDF(FPDF):
     # -----------------------------------------------------------------
     # Magazine vertical sidebar -- drawn on every slide. The tick
     # advances from near-top (slide 1) to near-bottom (slide 11). Bar is
-    # VIOLET; tick is AMBER so the accent reads as a deliberate progress
-    # marker.
+    # VIOLET (VIOLET_BRIGHT on the dark slide); tick is AMBER.
     # -----------------------------------------------------------------
 
-    def _draw_vertical_sidebar(self, slide_number, total=TOTAL_SLIDES):
+    def _draw_vertical_sidebar(self, slide_number, total=TOTAL_SLIDES, dark=False):
         bar_x = 14  # mm from left edge
         bar_y_top = 45
         bar_y_bottom = 275
-        self.set_draw_color(*VIOLET)
+        self.set_draw_color(*(VIOLET_BRIGHT if dark else VIOLET))
         self.set_line_width(0.6)
         self.line(bar_x, bar_y_top, bar_x, bar_y_bottom)
 
@@ -147,11 +162,11 @@ class LPDiDCarouselPDF(FPDF):
             ratio = 0.0
         tick_y = bar_y_top + ratio * (bar_y_bottom - bar_y_top)
         self.set_draw_color(*AMBER)
-        self.set_line_width(0.9)
+        self.set_line_width(1.2)
         self.line(bar_x - 4, tick_y, bar_x + 7, tick_y)
 
     # -----------------------------------------------------------------
-    # Background + footer
+    # Backgrounds + footer
     # -----------------------------------------------------------------
 
     def light_gradient_background(self):
@@ -168,7 +183,21 @@ class LPDiDCarouselPDF(FPDF):
             y = i * HEIGHT / steps
             self.rect(0, y, WIDTH, HEIGHT / steps + 1, "F")
 
-    def add_footer(self):
+    def dark_gradient_background(self):
+        """Navy #0f172a fading to dark slate #1e293b (the twist slide)."""
+        steps = 50
+        r0, g0, b0 = NAVY
+        r1, g1, b1 = DARK_SLATE
+        for i in range(steps):
+            ratio = i / steps
+            r = int(r0 + (r1 - r0) * ratio)
+            g = int(g0 + (g1 - g0) * ratio)
+            b = int(b0 + (b1 - b0) * ratio)
+            self.set_fill_color(r, g, b)
+            y = i * HEIGHT / steps
+            self.rect(0, y, WIDTH, HEIGHT / steps + 1, "F")
+
+    def add_footer(self, dark=False):
         """Centered split-color ``diff-diff vX.Y.Z`` wordmark."""
         self.set_font("Helvetica", "B", 12)
         dd_text = "diff-diff "
@@ -178,9 +207,9 @@ class LPDiDCarouselPDF(FPDF):
         start_x = (WIDTH - dd_w - v_w) / 2
 
         self.set_xy(start_x, HEIGHT - 18)
-        self.set_text_color(*GRAY)
+        self.set_text_color(*(LIGHT_GRAY if dark else GRAY))
         self.cell(dd_w, 10, dd_text)
-        self.set_text_color(*VIOLET)
+        self.set_text_color(*(VIOLET_BRIGHT if dark else VIOLET))
         self.cell(v_w, 10, v_text)
 
     # -----------------------------------------------------------------
@@ -198,6 +227,48 @@ class LPDiDCarouselPDF(FPDF):
         self.set_text_color(*color)
         self.cell(WIDTH, size * 0.5, text, align="C")
 
+    def _kicker(self, y, text, color=AMBER):
+        """Editorial section label: letter-spaced small caps with flanking rules."""
+        spaced = " ".join(text.upper())
+        self.set_font("Helvetica", "B", 13)
+        tw = self.get_string_width(spaced)
+        mid_y = y + 3
+        rule = 20
+        gap = 8
+        self.set_draw_color(*color)
+        self.set_line_width(0.7)
+        self.line(WIDTH / 2 - tw / 2 - gap - rule, mid_y, WIDTH / 2 - tw / 2 - gap, mid_y)
+        self.line(WIDTH / 2 + tw / 2 + gap, mid_y, WIDTH / 2 + tw / 2 + gap + rule, mid_y)
+        self.set_xy(0, y)
+        self.set_text_color(*color)
+        self.cell(WIDTH, 6, spaced, align="C")
+
+    def _pull_quote(self, y, text, attribution, size=15, width_frac=0.76, dark=False):
+        """Serif pull quote (verbatim paper text) with an oversized amber mark.
+
+        Returns the y coordinate after the attribution line.
+        """
+        qw = WIDTH * width_frac
+        qx = (WIDTH - qw) / 2
+
+        # Oversized opening quotation mark
+        self.set_xy(qx - 13, y - 7)
+        self.set_font("Helvetica", "B", 46)
+        self.set_text_color(*AMBER)
+        self.cell(14, 14, '"')
+
+        self.set_xy(qx, y)
+        self.set_font("Times", "I", size)
+        self.set_text_color(*(WHITE if dark else NAVY))
+        self.multi_cell(qw, size * 0.52, text, align="C")
+        end_y = self.get_y() + 4
+
+        self.set_xy(0, end_y)
+        self.set_font("Helvetica", "", 12)
+        self.set_text_color(*(LIGHT_GRAY if dark else GRAY))
+        self.cell(WIDTH, 6, attribution, align="C")
+        return end_y + 8
+
     def draw_split_logo(self, y, size=18):
         """Split-color diff-diff logo with VIOLET middle dash."""
         self.set_xy(0, y)
@@ -210,20 +281,174 @@ class LPDiDCarouselPDF(FPDF):
         self.cell(WIDTH / 2 - 5, 10, "diff", align="L")
 
     # -----------------------------------------------------------------
+    # Shadowed card helpers
+    # -----------------------------------------------------------------
+
+    def _shadow_rect(self, x, y, w, h):
+        self.set_fill_color(*SHADOW)
+        self.rect(x + 1.4, y + 1.4, w, h, "F")
+
+    def _card_stack(
+        self, items, start_y, box_h=42, accent=VIOLET, margin=30, title_size=16, desc_size=13
+    ):
+        """Stacked cards: soft shadow, accent left bar, title + one-line desc."""
+        box_w = WIDTH - margin * 2
+        gap = 6
+        bar_w = 5
+        for i, (title, desc) in enumerate(items):
+            by = start_y + i * (box_h + gap)
+            self._shadow_rect(margin, by, box_w, box_h)
+            self.set_fill_color(*WHITE)
+            self.set_draw_color(220, 220, 220)
+            self.set_line_width(0.5)
+            self.rect(margin, by, box_w, box_h, "DF")
+            self.set_fill_color(*accent)
+            self.rect(margin, by, bar_w, box_h, "F")
+
+            self.set_xy(margin + bar_w + 12, by + 8)
+            self.set_font("Helvetica", "B", title_size)
+            self.set_text_color(*NAVY)
+            self.cell(box_w - bar_w - 24, 10, title)
+
+            self.set_xy(margin + bar_w + 12, by + 26)
+            self.set_font("Helvetica", "", desc_size)
+            self.set_text_color(*GRAY)
+            self.cell(box_w - bar_w - 24, 10, desc)
+        return start_y + len(items) * (box_h + gap)
+
+    # -----------------------------------------------------------------
     # Equation rendering (matplotlib mathtext -> PNG -> fpdf image)
     # -----------------------------------------------------------------
 
     def _place_equation_centered(self, path, pw, ph, y, max_w=200):
         aspect = ph / pw
-        display_w = min(max_w, WIDTH * 0.75)
+        display_w = min(max_w, WIDTH * 0.78)
         display_h = display_w * aspect
         eq_x = (WIDTH - display_w) / 2
         self.image(path, eq_x, y, display_w)
         return display_h
 
+    def _save_fig(self, fig, dpi=200, transparent=False, facecolor="white"):
+        fd, path = tempfile.mkstemp(suffix=".png")
+        os.close(fd)
+        fig.savefig(
+            path,
+            dpi=dpi,
+            bbox_inches="tight",
+            pad_inches=0.1,
+            transparent=transparent,
+            facecolor=None if transparent else facecolor,
+        )
+        plt.close(fig)
+        with PILImage.open(path) as img:
+            pw, ph = img.size
+        self._temp_files.append(path)
+        return path, pw, ph
+
+    # -----------------------------------------------------------------
+    # Cover motif -- a soft impulse-response curve: flat, then a shock
+    # (amber dash), then the dynamic response rising. Sits behind the
+    # punchline at low alpha.
+    # -----------------------------------------------------------------
+
+    def _render_cover_irf(self):
+        fig, ax = plt.subplots(figsize=(10, 3.4))
+        fig.patch.set_alpha(0)
+        ax.set_facecolor("none")
+
+        x_pre = np.linspace(-3.5, 0, 60)
+        x_post = np.linspace(0, 8, 160)
+        y_pre = np.zeros_like(x_pre)
+        y_post = 2.0 * (1 - np.exp(-x_post / 2.2))
+
+        ax.axvline(0, color=AMBER_HEX, linewidth=2.4, linestyle=(0, (5, 4)), alpha=0.6)
+        ax.plot(x_pre, y_pre, color=VIOLET_HEX, linewidth=3.2, alpha=0.45)
+        ax.plot(x_post, y_post, color=VIOLET_HEX, linewidth=3.2, alpha=0.45)
+        ax.fill_between(x_post, 0, y_post, color=VIOLET_HEX, alpha=0.09, linewidth=0)
+        # "shock" label sits low-left so it can't collide with the punchline
+        ax.text(-3.3, 0.18, "shock", fontsize=14, color=AMBER_HEX, fontweight="bold", alpha=0.75)
+
+        ax.set_xlim(-3.5, 8)
+        ax.set_ylim(-0.4, 2.4)
+        ax.set_xticks([])
+        ax.set_yticks([])
+        for spine in ax.spines.values():
+            spine.set_visible(False)
+        fig.tight_layout(pad=0.2)
+        return self._save_fig(fig, transparent=True)
+
+    # -----------------------------------------------------------------
+    # Slide-2 schematic -- contamination: an early-treated unit is still
+    # responding to its own treatment when TWFE drafts it as a "control"
+    # for a later cohort.
+    # -----------------------------------------------------------------
+
+    def _render_contamination(self):
+        fig, ax = plt.subplots(figsize=(10, 4.8))
+        fig.patch.set_facecolor("white")
+        ax.set_facecolor("white")
+
+        x = np.linspace(1, 12, 240)
+        early_entry, late_entry = 3.0, 8.0
+        y_early = np.where(x < early_entry, 0.0, 2.2 * (1 - np.exp(-(x - early_entry) / 2.6)))
+        y_never = np.zeros_like(x)
+
+        ax.plot(x, y_never, color=LIGHT_GRAY_HEX, linewidth=2.6, label="never treated")
+        ax.plot(x, y_early, color=VIOLET_HEX, linewidth=3.4, label="treated at t=3")
+
+        ax.axvline(late_entry, color=AMBER_HEX, linewidth=2.2, linestyle=(0, (5, 4)), zorder=3)
+        ax.text(
+            late_entry + 0.15,
+            -0.42,
+            "new cohort\ntreated at t=8",
+            fontsize=13,
+            color=AMBER_HEX,
+            fontweight="bold",
+            va="top",
+        )
+
+        # The contaminated stretch: still responding when drafted as control
+        mask = x >= late_entry
+        ax.fill_between(
+            x[mask], y_never[mask], y_early[mask], color=VIOLET_HEX, alpha=0.12, linewidth=0
+        )
+        ax.annotate(
+            "still responding to its OWN treatment...",
+            xy=(9.8, float(2.2 * (1 - np.exp(-(9.8 - early_entry) / 2.6)))),
+            xytext=(4.6, 2.62),
+            fontsize=14,
+            color=VIOLET_HEX,
+            fontweight="bold",
+            arrowprops=dict(arrowstyle="->", color=VIOLET_HEX, lw=1.6),
+        )
+        ax.text(
+            9.95,
+            1.02,
+            '...yet TWFE drafts it\nas a "control"',
+            fontsize=14,
+            color=NAVY_HEX,
+            fontweight="bold",
+            ha="center",
+        )
+
+        ax.set_xlim(1, 12)
+        ax.set_ylim(-1.15, 3.0)
+        ax.set_xlabel("time", fontsize=13, color=GRAY_HEX)
+        ax.set_xticks(range(1, 13))
+        ax.set_yticks([])
+        ax.tick_params(colors=GRAY_HEX, labelsize=11)
+        for spine in ax.spines.values():
+            spine.set_visible(False)
+        ax.spines["bottom"].set_visible(True)
+        ax.spines["bottom"].set_color(LIGHT_GRAY_HEX)
+        ax.legend(loc="upper left", fontsize=12, frameon=False, labelcolor=NAVY_HEX)
+
+        fig.tight_layout(pad=0.3)
+        return self._save_fig(fig)
+
     # -----------------------------------------------------------------
     # Slide-6 weight equation with annotation arrow pointing at the
-    # omega >= 0 condition specifically (the paper's central result).
+    # omega >= 0 condition (weights over TREATED cohorts only, g != 0).
     # -----------------------------------------------------------------
 
     def _render_weights_equation(self):
@@ -234,58 +459,42 @@ class LPDiDCarouselPDF(FPDF):
         ax.set_xlim(0, 1)
         ax.set_ylim(0, 1)
 
-        # The per-horizon regression (paper Eq. 4 restricted by Eq. 8)
         ax.text(
             0.5,
             0.82,
             r"$y_{i,t+h} - y_{i,t-1} \;=\; \beta_h\,\Delta D_{it} \;+\; \delta_t^h \;+\; e_{it}^h$",
-            fontsize=25,
+            fontsize=27,
             ha="center",
             va="center",
             color=NAVY_HEX,
         )
-
-        # The estimand (paper Eqs. 9-10): non-negative weights over TREATED
-        # cohorts only (g != 0; the never-treated cohort is the control).
         ax.text(
             0.5,
             0.52,
             r"$E(\beta_h) \;=\; \sum_{g \neq 0}\,\omega_{g,h}\,\tau_h^g\,,"
             r"\qquad \omega_{g,h} \,\geq\, 0$",
-            fontsize=25,
+            fontsize=27,
             ha="center",
             va="center",
             color=NAVY_HEX,
         )
-
-        # Arrow + label pointing UP at the omega >= 0 condition, which
-        # sits right of center in the rendered line.
         ax.annotate(
             "always non-negative -- no forbidden comparisons",
             xy=(0.735, 0.42),
             xytext=(0.60, 0.10),
-            fontsize=14,
+            fontsize=15,
             color=AMBER_HEX,
             fontweight="bold",
             ha="center",
             va="bottom",
-            arrowprops=dict(arrowstyle="->", color=AMBER_HEX, lw=1.5, shrinkA=2, shrinkB=4),
+            arrowprops=dict(arrowstyle="->", color=AMBER_HEX, lw=1.6, shrinkA=2, shrinkB=4),
         )
-
-        fd, path = tempfile.mkstemp(suffix=".png")
-        os.close(fd)
-        fig.savefig(path, dpi=250, bbox_inches="tight", pad_inches=0.06, transparent=True)
-        plt.close(fig)
-        with PILImage.open(path) as img:
-            pw, ph = img.size
-        self._temp_files.append(path)
-        return path, pw, ph
+        return self._save_fig(fig, dpi=250, transparent=True)
 
     # -----------------------------------------------------------------
-    # Slide-5 mechanism schematic -- panel grid (units x time), colored
-    # by treatment status, with the horizon-h=+2 regression's sample
-    # highlighted: newly-treated entry cells (violet outline), clean
-    # controls (cyan outline), already-treated cohort greyed out.
+    # Slide-5 mechanism schematic -- panel grid (units x time) with the
+    # horizon-h=+2 regression's sample highlighted; the already-treated
+    # ("unclean") cohort is greyed out of the control group.
     # -----------------------------------------------------------------
 
     def _render_clean_control_grid(self):
@@ -293,17 +502,17 @@ class LPDiDCarouselPDF(FPDF):
         fig.patch.set_facecolor("white")
         ax.set_facecolor("white")
 
-        n_t = 12  # periods 1..12
+        n_t = 12
         groups = [
             ("Cohort A\n(enters t=3)", 3, range(8, 12)),
             ("Cohort B\n(enters t=6)", 6, range(4, 8)),
             ("Never\ntreated", None, range(0, 4)),
         ]
-        t_entry = 6  # the regression under focus: cohort B entry
-        h = 2  # horizon +2
+        t_entry = 6
+        h = 2
 
-        cell = 0.86  # cell side (leaves gutters)
-        for label, entry, rows in groups:
+        cell = 0.86
+        for _, entry, rows in groups:
             for r in rows:
                 for t in range(1, n_t + 1):
                     treated = entry is not None and t >= entry
@@ -319,8 +528,8 @@ class LPDiDCarouselPDF(FPDF):
                     )
                     ax.add_patch(rect)
 
-        # Grey-out overlay on cohort A (already treated at t_entry) --
-        # excluded from the h=+2 regression at t=6.
+        # Grey-out overlay: cohort A is "unclean" at t=6 (still potentially
+        # responding to its own entry) -> excluded from the control group.
         overlay = patches.Rectangle(
             (1 - cell / 2 - 0.07, 8 - cell / 2 - 0.07),
             n_t - 1 + cell + 0.14,
@@ -334,49 +543,47 @@ class LPDiDCarouselPDF(FPDF):
         ax.text(
             (1 + n_t) / 2,
             9.5,
-            "already treated at t=6  ->  EXCLUDED",
+            '"unclean" at t=6  ->  EXCLUDED',
             ha="center",
             va="center",
-            fontsize=13,
+            fontsize=15,
             color=GRAY_HEX,
             fontweight="bold",
             zorder=4,
         )
 
-        # Newly-treated entry cells (cohort B at t=6): bold violet outline
         for r in range(4, 8):
-            rect = patches.Rectangle(
-                (t_entry - cell / 2, r - cell / 2),
-                cell,
-                cell,
-                facecolor="none",
-                edgecolor=VIOLET_HEX,
-                linewidth=2.4,
-                zorder=5,
+            ax.add_patch(
+                patches.Rectangle(
+                    (t_entry - cell / 2, r - cell / 2),
+                    cell,
+                    cell,
+                    facecolor="none",
+                    edgecolor=VIOLET_HEX,
+                    linewidth=2.6,
+                    zorder=5,
+                )
             )
-            ax.add_patch(rect)
-
-        # Clean controls (never-treated at t=6): bold cyan outline
         for r in range(0, 4):
-            rect = patches.Rectangle(
-                (t_entry - cell / 2, r - cell / 2),
-                cell,
-                cell,
-                facecolor="none",
-                edgecolor=CYAN_HEX,
-                linewidth=2.4,
-                zorder=5,
+            ax.add_patch(
+                patches.Rectangle(
+                    (t_entry - cell / 2, r - cell / 2),
+                    cell,
+                    cell,
+                    facecolor="none",
+                    edgecolor=CYAN_HEX,
+                    linewidth=2.6,
+                    zorder=5,
+                )
             )
-            ax.add_patch(rect)
 
-        # Long-difference bracket ABOVE the whole grid (kept clear of the
-        # cohort-A EXCLUDED overlay): y(t+2) - y(t-1), spanning t=5..8.
+        # Long-difference bracket above the grid: y(t+2) - y(t-1)
         brace_y = 12.1
         ax.annotate(
             "",
             xy=(t_entry + h, brace_y),
             xytext=(t_entry - 1, brace_y),
-            arrowprops=dict(arrowstyle="->", color=AMBER_HEX, lw=2.0),
+            arrowprops=dict(arrowstyle="->", color=AMBER_HEX, lw=2.2),
             zorder=6,
         )
         ax.text(
@@ -385,13 +592,12 @@ class LPDiDCarouselPDF(FPDF):
             r"long difference:  $y_{t+2} - y_{t-1}$",
             ha="center",
             va="bottom",
-            fontsize=13,
+            fontsize=15,
             color=AMBER_HEX,
             fontweight="bold",
             zorder=6,
         )
 
-        # Group labels on the left
         for label, _, rows in groups:
             mid = (min(rows) + max(rows)) / 2
             ax.text(
@@ -400,17 +606,16 @@ class LPDiDCarouselPDF(FPDF):
                 label,
                 ha="right",
                 va="center",
-                fontsize=11,
+                fontsize=13,
                 color=NAVY_HEX,
                 fontweight="bold",
             )
 
-        # Legend -- 2x2 grid so nothing clips at the right axis limit
         legend_items = [
             (VIOLET_LIGHT_HEX, None, "treated cell", 1.0, -1.5),
             ("#eef2f7", None, "untreated cell", 7.0, -1.5),
-            ("none", VIOLET_HEX, "newly treated (enters regression)", 1.0, -2.7),
-            ("none", CYAN_HEX, "clean control (enters regression)", 7.0, -2.7),
+            ("none", VIOLET_HEX, "newly treated (enters regression)", 1.0, -2.8),
+            ("none", CYAN_HEX, "clean control (enters regression)", 7.0, -2.8),
         ]
         for face, edge, txt, lx, ly in legend_items:
             sq = patches.Rectangle(
@@ -419,40 +624,32 @@ class LPDiDCarouselPDF(FPDF):
                 0.55,
                 facecolor=face if face != "none" else "white",
                 edgecolor=edge if edge else "white",
-                linewidth=2.0 if edge else 0.8,
+                linewidth=2.2 if edge else 0.8,
                 zorder=5,
             )
             ax.add_patch(sq)
-            ax.text(lx + 0.75, ly, txt, ha="left", va="center", fontsize=10.5, color=NAVY_HEX)
+            ax.text(lx + 0.75, ly, txt, ha="left", va="center", fontsize=12, color=NAVY_HEX)
 
         ax.set_xlim(-3.2, n_t + 0.8)
-        ax.set_ylim(-3.6, 13.6)
+        ax.set_ylim(-3.7, 13.6)
         ax.set_xticks(range(1, n_t + 1))
-        ax.set_xticklabels([f"{t}" for t in range(1, n_t + 1)], fontsize=9, color=GRAY_HEX)
+        ax.set_xticklabels([f"{t}" for t in range(1, n_t + 1)], fontsize=11, color=GRAY_HEX)
         ax.set_yticks([])
-        ax.set_xlabel("time", fontsize=11, color=GRAY_HEX)
+        ax.set_xlabel("time", fontsize=13, color=GRAY_HEX)
         ax.tick_params(length=0)
         for spine in ax.spines.values():
             spine.set_visible(False)
 
         fig.tight_layout(pad=0.4)
-        fd, path = tempfile.mkstemp(suffix=".png")
-        os.close(fd)
-        fig.savefig(path, dpi=200, bbox_inches="tight", pad_inches=0.12, facecolor="white")
-        plt.close(fig)
-        with PILImage.open(path) as img:
-            pw, ph = img.size
-        self._temp_files.append(path)
-        return path, pw, ph
+        return self._save_fig(fig)
 
     # -----------------------------------------------------------------
-    # Slide-7 event-study plot -- flat pre-trends, dynamic post path,
-    # violet CI band, amber treatment line. Values are illustrative
-    # (styled after the staggered DGP used in the library benchmarks).
+    # Slide-7 event-study plot -- symmetric pre/post estimation, flat
+    # pre-trends, dynamic post path, violet CI band. Values illustrative.
     # -----------------------------------------------------------------
 
     def _render_event_study(self):
-        fig, ax = plt.subplots(figsize=(10, 5.6))
+        fig, ax = plt.subplots(figsize=(10, 5.4))
         fig.patch.set_facecolor("white")
         ax.set_facecolor("white")
 
@@ -468,103 +665,80 @@ class LPDiDCarouselPDF(FPDF):
         cis = np.concatenate([pre_ci, [0.0], post_ci])
 
         ax.axhline(0, color=LIGHT_GRAY_HEX, linewidth=0.9, zorder=1)
-        ax.axvline(-0.5, color=AMBER_HEX, linewidth=1.6, linestyle=(0, (5, 4)), zorder=2)
+        ax.axvline(-0.5, color=AMBER_HEX, linewidth=1.8, linestyle=(0, (5, 4)), zorder=2)
         ax.text(
-            -0.62,
+            -0.66,
             2.72,
             "treatment",
             ha="right",
             va="top",
-            fontsize=11,
+            fontsize=13,
             color=AMBER_HEX,
             fontweight="bold",
         )
 
-        ax.fill_between(
-            hs,
-            bs - cis,
-            bs + cis,
-            color=VIOLET_HEX,
-            alpha=0.13,
-            linewidth=0,
-            zorder=2,
-        )
-        ax.plot(hs, bs, color=VIOLET_HEX, linewidth=2.2, zorder=4)
-        ax.scatter(
-            hs,
-            bs,
-            s=52,
-            color=VIOLET_HEX,
-            edgecolors="white",
-            linewidths=1.0,
-            zorder=5,
-        )
-        # Reference period h = -1: open marker, coefficient fixed at 0
+        ax.fill_between(hs, bs - cis, bs + cis, color=VIOLET_HEX, alpha=0.13, linewidth=0, zorder=2)
+        ax.plot(hs, bs, color=VIOLET_HEX, linewidth=2.4, zorder=4)
+        ax.scatter(hs, bs, s=62, color=VIOLET_HEX, edgecolors="white", linewidths=1.1, zorder=5)
         ax.scatter(
             [-1],
             [0],
-            s=64,
+            s=76,
             facecolors="white",
             edgecolors=VIOLET_HEX,
-            linewidths=1.8,
+            linewidths=2.0,
             zorder=6,
         )
         ax.annotate(
             "h = -1 reference",
             xy=(-1, 0),
-            xytext=(-3.4, 0.85),
-            fontsize=10.5,
+            xytext=(-3.6, 0.9),
+            fontsize=12,
             color=GRAY_HEX,
-            arrowprops=dict(arrowstyle="->", color=GRAY_HEX, lw=0.9),
+            arrowprops=dict(arrowstyle="->", color=GRAY_HEX, lw=1.0),
             zorder=6,
         )
         ax.text(
             -3.5,
-            -0.55,
-            "pre-trends: flat",
+            -0.62,
+            "placebos: the same\nregressions, run at h < 0",
             ha="center",
-            fontsize=11,
+            fontsize=12.5,
             color=CYAN_HEX,
             fontweight="bold",
         )
         ax.text(
             5.4,
-            1.15,
+            1.10,
             "dynamic ATT, one\ncoefficient per horizon",
             ha="center",
-            fontsize=11,
+            fontsize=12.5,
             color=VIOLET_HEX,
             fontweight="bold",
         )
 
-        ax.set_xlabel("event time h (periods since treatment)", fontsize=12, color=NAVY_HEX)
-        ax.set_ylabel(r"$\beta_h$", fontsize=13, color=NAVY_HEX)
+        ax.set_xlabel("event time h (periods since treatment)", fontsize=13, color=NAVY_HEX)
+        ax.set_ylabel(r"$\beta_h$", fontsize=14, color=NAVY_HEX)
         ax.set_xticks(list(range(-5, 9)))
-        ax.tick_params(colors=GRAY_HEX, labelsize=9)
-        ax.set_ylim(-0.8, 3.0)
+        ax.tick_params(colors=GRAY_HEX, labelsize=11)
+        ax.set_ylim(-1.0, 3.0)
         for spine in ax.spines.values():
             spine.set_color(LIGHT_GRAY_HEX)
         ax.spines["top"].set_visible(False)
         ax.spines["right"].set_visible(False)
 
         fig.tight_layout(pad=0.4)
-        fd, path = tempfile.mkstemp(suffix=".png")
-        os.close(fd)
-        fig.savefig(path, dpi=200, bbox_inches="tight", pad_inches=0.12, facecolor="white")
-        plt.close(fig)
-        with PILImage.open(path) as img:
-            pw, ph = img.size
-        self._temp_files.append(path)
-        return path, pw, ph
+        return self._save_fig(fig)
 
     # -----------------------------------------------------------------
     # Code block (dark-slate bg with token highlighting)
     # -----------------------------------------------------------------
 
-    def _add_code_block(self, x, y, w, token_lines, font_size=13, line_height=12):
+    def _add_code_block(self, x, y, w, token_lines, font_size=12, line_height=10):
         n_lines = len(token_lines)
         total_h = n_lines * line_height + 24
 
+        self._shadow_rect(x, y, w, total_h)
         self.set_fill_color(*DARK_SLATE)
         self.rect(x, y, w, total_h, "F")
 
@@ -587,267 +761,242 @@ class LPDiDCarouselPDF(FPDF):
 
         return total_h
 
-    # -----------------------------------------------------------------
-    # Card row helper (title + one-line description, accent left bar)
-    # -----------------------------------------------------------------
-
-    def _card_stack(self, items, start_y, box_h=40, accent=VIOLET, margin=30):
-        box_w = WIDTH - margin * 2
-        gap = 5
-        bar_w = 4
-        for i, (title, desc) in enumerate(items):
-            by = start_y + i * (box_h + gap)
-            self.set_fill_color(*WHITE)
-            self.set_draw_color(220, 220, 220)
-            self.set_line_width(0.5)
-            self.rect(margin, by, box_w, box_h, "DF")
-            self.set_fill_color(*accent)
-            self.rect(margin, by, bar_w, box_h, "F")
-
-            self.set_xy(margin + bar_w + 12, by + 8)
-            self.set_font("Helvetica", "B", 15)
-            self.set_text_color(*NAVY)
-            self.cell(box_w - bar_w - 24, 10, title)
-
-            self.set_xy(margin + bar_w + 12, by + 25)
-            self.set_font("Helvetica", "", 12)
-            self.set_text_color(*GRAY)
-            self.cell(box_w - bar_w - 24, 10, desc)
-        return start_y + len(items) * (box_h + gap)
-
     # =================================================================
     # SLIDES
     # =================================================================
 
     def slide_01_cover(self):
-        """Slide 1: the zoo, then the punchline (the single LOTR nod)."""
+        """Slide 1: macro built LPs for shocks; your event study is one."""
         self.add_page()
         self.light_gradient_background()
         self._draw_vertical_sidebar(1)
 
-        self.draw_split_logo(38, size=42)
+        self.draw_split_logo(34, size=40)
 
-        # The zoo -- exactly the four estimators LP-DiD provably nests
-        # (paper Secs. 2.2 / 3.7, fn. 10-11), so the punchline is cashable.
-        # Qualified names carry the equivalence scope on the user-visible
-        # surface: "Cengiz-style" (the paper's stacked target, not any
-        # stacked variant) and "BJS-style" (exact only single-cohort PMD).
-        self.centered_text(104, "Callaway-Sant'Anna. Cengiz-style stacking.", size=27)
-        self.centered_text(128, "BJS-style imputation. The classic 2x2.", size=27)
+        self.centered_text(88, "Macro built local projections to read", size=30)
+        self.centered_text(112, "the dynamic effects of shocks.", size=30)
 
-        # Punchline
-        self.centered_text(186, "One regression", size=50, color=VIOLET)
-        self.centered_text(216, "to rule them all.", size=50, color=VIOLET)
+        # IRF motif behind the punchline
+        irf_path, _ipw, _iph = self._render_cover_irf()
+        motif_w = 222
+        self.image(irf_path, (WIDTH - motif_w) / 2, 148, motif_w)
 
-        # Byline
-        self.set_xy(0, HEIGHT - 72)
-        self.set_font("Helvetica", "B", 13)
+        self.centered_text(168, "Your event study", size=52, color=VIOLET)
+        self.centered_text(200, "is one.", size=52, color=VIOLET)
+
+        self.set_xy(0, HEIGHT - 78)
+        self.set_font("Helvetica", "B", 15)
         self.set_text_color(*VIOLET)
-        self.cell(WIDTH, 8, "LP-DiD: Local Projections DiD.", align="C")
-        self.set_xy(0, HEIGHT - 60)
-        self.set_font("Helvetica", "I", 11)
+        self.cell(WIDTH, 8, "LP-DiD: Local Projections meet DiD. Now in diff-diff.", align="C")
+        self.set_xy(0, HEIGHT - 64)
+        self.set_font("Helvetica", "I", 12)
         self.set_text_color(*GRAY)
-        self.cell(WIDTH, 8, "Now in diff-diff.", align="C")
-        self.set_xy(0, HEIGHT - 48)
-        self.set_font("Helvetica", "I", 11)
-        self.set_text_color(*GRAY)
-        self.cell(WIDTH, 8, "Dube, Girardi, Jordà & Taylor (2025).", align="C")
-        self.set_xy(0, HEIGHT - 37)
-        self.set_font("Helvetica", "", 10)
+        self.cell(
+            WIDTH,
+            8,
+            "Dube, Girardi, Jordà & Taylor (2025), J. of Applied Econometrics 40(5).",
+            align="C",
+        )
+        self.set_xy(0, HEIGHT - 51)
+        self.set_font("Helvetica", "", 11.5)
         self.set_text_color(*LIGHT_GRAY)
-        self.cell(WIDTH, 8, "Journal of Applied Econometrics 40(5)", align="C")
+        self.cell(
+            WIDTH, 8, "Co-author Òscar Jordà introduced local projections in 2005.", align="C"
+        )
 
         self.add_footer()
 
-    def slide_02_shelf(self):
-        """Slide 2: fragmentation -- four fixes, four frameworks, one shelf."""
+    def slide_02_problem(self):
+        """Slide 2: negative weighting -- contamination schematic + pull quote."""
         self.add_page()
         self.light_gradient_background()
         self._draw_vertical_sidebar(2)
 
-        self.centered_text(40, "The staggered revolution", size=36)
-        self.centered_text(72, "left you with a shelf.", size=42, color=VIOLET)
+        self._kicker(34, "The Problem")
+        self.centered_text(52, "Already-treated units sneak", size=37)
+        self.centered_text(80, "into your control group.", size=37, color=VIOLET)
 
-        # 2x2 grid of estimator "boxes" sitting on literal shelf lines
-        margin = 32
-        grid_gap = 10
-        card_w = (WIDTH - margin * 2 - grid_gap) / 2
-        card_h = 52
-        start_y = 122
+        self._pull_quote(
+            112,
+            "Previously treated units, which might still be experiencing lagged"
+            " ... treatment effects, are implicitly used as controls for newly"
+            " treated ones.",
+            "- Dube, Girardi, Jordà & Taylor (2025)",
+            size=15,
+        )
 
-        # Same four estimators as the cover and the slide-6 equivalence map:
-        # the shelf we show is exactly the shelf LP-DiD provably nests.
-        # "BJS-Style" keeps the single-cohort equivalence scope visible.
-        # "Cengiz-Style Stacking" (literature name) -- NEVER "Stacked DiD",
-        # which is this library's WFH-2024 Q-weighted estimator, a different
-        # scheme LP-DiD does not nest (tests/test_lpdid.py CE-4 note).
-        boxes = [
-            ("Classic 2x2 DiD", "Where you started.\nOne clean comparison."),
-            ("Callaway-Sant'Anna", "Group-time ATTs.\nIts own aggregation layer."),
-            ("Cengiz-Style Stacking", "Cengiz et al. (2019).\nIts own dataset duplication."),
-            ("BJS-Style Imputation", "Borusyak-Jaravel-Spiess.\nIts own two-step machinery."),
-        ]
+        plot_path, ppw, pph = self._render_contamination()
+        plot_w = WIDTH * 0.78
+        plot_h = plot_w * (pph / ppw)
+        self.image(plot_path, (WIDTH - plot_w) / 2, 162, plot_w)
 
-        for idx, (title, desc) in enumerate(boxes):
-            row = idx // 2
-            col = idx % 2
-            cx = margin + col * (card_w + grid_gap)
-            cy = start_y + row * (card_h + 22)
-
-            self.set_fill_color(*WHITE)
-            self.set_draw_color(*VIOLET)
-            self.set_line_width(0.6)
-            self.rect(cx, cy, card_w, card_h, "DF")
-
-            self.set_xy(cx + 10, cy + 8)
-            self.set_font("Helvetica", "B", 15)
-            self.set_text_color(*NAVY)
-            self.cell(card_w - 20, 10, title)
-
-            for j, line in enumerate(desc.split("\n")):
-                self.set_xy(cx + 10, cy + 24 + j * 11)
-                self.set_font("Helvetica", "", 11)
-                self.set_text_color(*GRAY)
-                self.cell(card_w - 20, 10, line)
-
-            # Shelf line under each row of boxes
-            shelf_y = cy + card_h + 6
-            self.set_draw_color(*NAVY)
-            self.set_line_width(1.4)
-            self.line(margin - 6, shelf_y, WIDTH - margin + 6, shelf_y)
-
-        cap_y = start_y + 2 * (card_h + 22) + 12
+        fact_y = 162 + plot_h + 8
         self.centered_text(
-            cap_y,
-            "Three fixes for TWFE's negative weights - plus the textbook case they outgrew.",
-            size=14,
-            bold=False,
-            italic=True,
-            color=GRAY,
+            fact_y,
+            "The TWFE estimate could even lie outside the range",
+            size=15,
+            bold=True,
+            color=NAVY,
         )
         self.centered_text(
-            cap_y + 16,
-            "Same causal question. Four mental models.",
-            size=16,
+            fact_y + 14,
+            "of group-specific treatment effects.",
+            size=15,
             bold=True,
             color=NAVY,
         )
 
         self.add_footer()
 
-    def slide_03_real_world(self):
-        """Slide 3: four scenarios of tool-choice anxiety."""
+    def slide_03_twist(self):
+        """Slide 3 (DARK): naive LP inherits the same bias -- the pivot."""
         self.add_page()
-        self.light_gradient_background()
-        self._draw_vertical_sidebar(3)
+        self.dark_gradient_background()
+        self._draw_vertical_sidebar(3, dark=True)
 
-        self.centered_text(40, "Same question.", size=38)
+        self._kicker(38, "The Catch")
 
-        # Second line with "Four different machines." accented
-        self.set_font("Helvetica", "B", 38)
-        text_b = "Four different "
-        text_c = "machines."
-        w_b = self.get_string_width(text_b)
-        w_c = self.get_string_width(text_c)
-        start_x = (WIDTH - w_b - w_c) / 2
-        self.set_xy(start_x, 70)
-        self.set_text_color(*NAVY)
-        self.cell(w_b, 20, text_b)
-        self.set_text_color(*VIOLET)
-        self.cell(w_c, 20, text_c)
+        self.centered_text(78, "So just point macro's tool", size=38, color=WHITE)
+        self.centered_text(106, "at your rollout?", size=38, color=WHITE)
 
-        scenarios = [
-            (
-                "Staggered State Policy",
-                "Minimum wage rolls out state by state. CS? Stacked? Which aggregation?",
-            ),
-            (
-                "Phased Product Rollout",
-                "The feature ships to markets in waves. Event study? Which estimator?",
-            ),
-            (
-                "Programs That Switch Off",
-                "The retention treatment ends. Absorbing-only estimators don't apply.",
-            ),
-            (
-                "Survey-Weighted Panels",
-                "CPS-style pweights, strata, PSUs. Which estimator takes a design?",
-            ),
-        ]
-        self._card_stack(scenarios, start_y=130, accent=AMBER)
+        self.centered_text(152, "Not so fast.", size=58, color=VIOLET_BRIGHT)
 
-        self.add_footer()
+        self.centered_text(
+            206,
+            "A naive LP implementation inherits the same",
+            size=17,
+            bold=False,
+            color=WHITE,
+        )
+        self.centered_text(
+            222,
+            "negative-weighting bias as TWFE.",
+            size=17,
+            bold=False,
+            color=WHITE,
+        )
+        self.centered_text(
+            240,
+            "(Dube, Girardi, Jordà & Taylor 2025, Eqs. 6-7)",
+            size=12,
+            bold=False,
+            italic=True,
+            color=LIGHT_GRAY,
+        )
 
-    def slide_04_introducing(self):
-        """Slide 4: LP-DiD intro -- 'It's just a regression.'"""
+        self.centered_text(266, "The estimator isn't the fix.", size=21, color=AMBER)
+        self.centered_text(284, "The comparisons are.", size=21, color=AMBER)
+
+        self.add_footer(dark=True)
+
+    def slide_04_insight(self):
+        """Slide 4: the 'underappreciated feature' -- LP + clean controls."""
         self.add_page()
         self.light_gradient_background()
         self._draw_vertical_sidebar(4)
 
-        self.centered_text(40, "LP-DiD.", size=44)
-        self.centered_text(
-            78, "It's just a regression.", size=22, bold=False, italic=True, color=VIOLET
+        self._kicker(34, "The Insight")
+        self.centered_text(52, "The underappreciated feature.", size=38)
+
+        self._pull_quote(
+            88,
+            "An underappreciated feature of the LP framework is that it is"
+            " straightforward to limit the set of permissible comparisons"
+            " based on a desired criterion, such as past treatment history.",
+            "- Dube, Girardi, Jordà & Taylor (2025)",
+            size=15,
         )
 
-        self.centered_text(
-            114, "A local projection per horizon: long difference,", size=14, bold=False, color=GRAY
-        )
-        self.centered_text(
-            128, "time fixed effects, clean controls. Plain OLS.", size=14, bold=False, color=GRAY
-        )
+        # Fusion diagram: LP + clean controls = LP-DiD
+        card_w = 100
+        card_h = 56
+        y_cards = 168
+        x1 = 26
+        x2 = WIDTH - 26 - card_w
 
-        items = [
+        for cx, title, l1, l2 in [
             (
-                "One long difference per horizon.",
-                "OLS on clean controls. You can read every comparison it makes.",
+                x1,
+                "Local projections",
+                "Jordà (2005). Built to estimate",
+                "dynamic average effects.",
             ),
-            (
-                "Weights provably non-negative.",
-                "Clean-control baseline result (Eqs. 9-10). With covariates, prefer RA.",
-            ),
-            (
-                "The estimand is a dial.",
-                "Variance-weighted for precision, or equal-weighted - your call.",
-            ),
-        ]
-        end_y = self._card_stack(items, start_y=164)
+            (x2, "Clean controls", "Cengiz et al. (2019) spirit.", '"Unclean" units stay out.'),
+        ]:
+            self._shadow_rect(cx, y_cards, card_w, card_h)
+            self.set_fill_color(*WHITE)
+            self.set_draw_color(*VIOLET)
+            self.set_line_width(0.7)
+            self.rect(cx, y_cards, card_w, card_h, "DF")
+            self.set_xy(cx + 8, y_cards + 9)
+            self.set_font("Helvetica", "B", 16)
+            self.set_text_color(*NAVY)
+            self.cell(card_w - 16, 9, title)
+            for j, line in enumerate((l1, l2)):
+                self.set_xy(cx + 8, y_cards + 27 + j * 12)
+                self.set_font("Helvetica", "", 12.5)
+                self.set_text_color(*GRAY)
+                self.cell(card_w - 16, 9, line)
 
-        self.set_xy(0, end_y + 8)
-        self.set_font("Helvetica", "I", 10)
-        self.set_text_color(*LIGHT_GRAY)
-        self.cell(WIDTH, 8, "Local projections (Jordà 2005), pointed at DiD.", align="C")
+        # The "+" between cards
+        self.set_xy(0, y_cards + card_h / 2 - 9)
+        self.set_font("Helvetica", "B", 40)
+        self.set_text_color(*VIOLET)
+        self.cell(WIDTH, 18, "+", align="C")
+
+        # "=" then the result card
+        self.set_xy(0, y_cards + card_h + 8)
+        self.set_font("Helvetica", "B", 30)
+        self.set_text_color(*NAVY)
+        self.cell(WIDTH, 14, "=", align="C")
+
+        res_y = y_cards + card_h + 26
+        res_w = WIDTH - 2 * 26
+        res_h = 46
+        self._shadow_rect(26, res_y, res_w, res_h)
+        self.set_fill_color(*VIOLET)
+        self.rect(26, res_y, res_w, res_h, "F")
+        self.set_xy(26, res_y + 8)
+        self.set_font("Helvetica", "B", 22)
+        self.set_text_color(*WHITE)
+        self.cell(res_w, 12, "LP-DiD", align="C")
+        self.set_xy(26, res_y + 26)
+        self.set_font("Helvetica", "", 13.5)
+        self.set_text_color(255, 255, 255)
+        self.cell(
+            res_w, 9, "Dynamic treatment effects with provably non-negative weights.", align="C"
+        )
 
         self.add_footer()
 
     def slide_05_mechanism(self):
-        """Slide 5: clean-control panel schematic at horizon h=+2."""
+        """Slide 5: 'unclean' observations leave the control group."""
         self.add_page()
         self.light_gradient_background()
         self._draw_vertical_sidebar(5)
 
-        self.centered_text(40, "Clean controls,", size=36)
-        self.centered_text(64, "horizon by horizon.", size=36, color=VIOLET)
+        self._kicker(34, "How It Works")
+        self.centered_text(52, '"Unclean" observations', size=37)
+        self.centered_text(80, "leave the control group.", size=37, color=VIOLET)
 
         plot_path, ppw, pph = self._render_clean_control_grid()
-        plot_w = WIDTH * 0.80
-        plot_aspect = pph / ppw
-        plot_h = plot_w * plot_aspect
-        plot_x = (WIDTH - plot_w) / 2
-        plot_y = 104
-        self.image(plot_path, plot_x, plot_y, plot_w)
+        plot_w = WIDTH * 0.72
+        plot_h = plot_w * (pph / ppw)
+        plot_y = 106
+        self.image(plot_path, (WIDTH - plot_w) / 2, plot_y, plot_w)
 
-        cap_y = plot_y + plot_h + 10
+        cap_y = plot_y + plot_h + 8
         self.centered_text(
             cap_y,
             "Each horizon is one regression you could run by hand.",
-            size=16,
+            size=17,
             bold=True,
             color=VIOLET,
         )
         self.centered_text(
             cap_y + 16,
             "In the absorbing (default) path, already-treated units never serve as controls.",
-            size=13,
+            size=13.5,
             bold=False,
             italic=True,
             color=GRAY,
@@ -856,19 +1005,28 @@ class LPDiDCarouselPDF(FPDF):
         self.add_footer()
 
     def slide_06_math(self):
-        """Slide 6: the unification slide -- equation + equivalence map."""
+        """Slide 6: non-negative weights + 'subsumes' equivalence map."""
         self.add_page()
         self.light_gradient_background()
         self._draw_vertical_sidebar(6)
 
-        self.centered_text(38, "The zoo was one regression", size=32)
-        self.centered_text(62, "all along.", size=32, color=VIOLET)
+        self._kicker(34, "The Math")
+        self.centered_text(52, "Non-negative weights,", size=36)
+        self.centered_text(80, "guaranteed.", size=36, color=VIOLET)
 
         eq_path, epw, eph = self._render_weights_equation()
-        eq_y = 88
-        eq_h = self._place_equation_centered(eq_path, epw, eph, eq_y, max_w=225)
+        eq_h = self._place_equation_centered(eq_path, epw, eph, 102, max_w=205)
 
-        # Equivalence map -- each row: LPDiD setting == estimator (source)
+        intro_y = 102 + eq_h + 10
+        self.centered_text(
+            intro_y,
+            'And it "subsumes many of the recent solutions" - the abstract, verbatim:',
+            size=13.5,
+            bold=False,
+            italic=True,
+            color=GRAY,
+        )
+
         rows = [
             ("reweight=True", "==  Callaway-Sant'Anna", "exact  (Sec. 3.7)"),
             ("default (variance-weighted)", "==  Cengiz et al. stacked", "exact  (Sec. 3.7)"),
@@ -876,73 +1034,79 @@ class LPDiDCarouselPDF(FPDF):
             ("pmd='max'", "->  BJS imputation", "exact single-cohort  (fn. 10-11)"),
         ]
 
-        margin = 34
+        margin = 32
         box_w = WIDTH - margin * 2
-        row_h = 24
-        gap = 4
-        start_y = eq_y + eq_h + 14
-        col1_w = 82
+        row_h = 25
+        gap = 5
+        start_y = intro_y + 14
+        col1_w = 86
 
         for i, (setting, target, source) in enumerate(rows):
             by = start_y + i * (row_h + gap)
+            self._shadow_rect(margin, by, box_w, row_h)
             self.set_fill_color(*WHITE)
             self.set_draw_color(220, 220, 220)
             self.set_line_width(0.5)
             self.rect(margin, by, box_w, row_h, "DF")
             self.set_fill_color(*CYAN)
-            self.rect(margin, by, 4, row_h, "F")
+            self.rect(margin, by, 5, row_h, "F")
 
-            self.set_xy(margin + 12, by + 7)
-            self.set_font("Courier", "B", 12)
+            # Line 1: setting -> target; line 2: source citation (right-
+            # aligned on its own line so it can never collide with line 1).
+            self.set_xy(margin + 13, by + 4)
+            self.set_font("Courier", "B", 13)
             self.set_text_color(*VIOLET_DARK)
             self.cell(col1_w, 10, setting)
 
-            self.set_xy(margin + 12 + col1_w, by + 7)
-            self.set_font("Helvetica", "B", 13)
+            self.set_xy(margin + 13 + col1_w, by + 4)
+            self.set_font("Helvetica", "B", 14)
             self.set_text_color(*NAVY)
-            self.cell(84, 10, target)
+            self.cell(box_w - col1_w - 26, 10, target)
 
-            self.set_xy(margin + 12 + col1_w + 84, by + 7)
-            self.set_font("Helvetica", "I", 10)
+            self.set_xy(margin + 13, by + 14)
+            self.set_font("Helvetica", "I", 11)
             self.set_text_color(*GRAY)
-            self.cell(box_w - col1_w - 84 - 24, 10, source, align="R")
-
-        cap_y = start_y + len(rows) * (row_h + gap) + 8
-        self.centered_text(
-            cap_y,
-            "Numerical equivalences proven in the paper - not analogies.",
-            size=13,
-            bold=False,
-            italic=True,
-            color=GRAY,
-        )
+            self.cell(box_w - 26, 8, source, align="R")
 
         self.add_footer()
 
     def slide_07_output(self):
-        """Slide 7: native event study."""
+        """Slide 7: native event study, symmetric pre/post estimation."""
         self.add_page()
         self.light_gradient_background()
         self._draw_vertical_sidebar(7)
 
-        self.centered_text(40, "Pre-trends are just", size=36)
-        self.centered_text(64, "negative horizons.", size=36, color=VIOLET)
+        self._kicker(34, "What You Get")
+        self.centered_text(52, "Pre-trends, estimated", size=37)
+        self.centered_text(80, "symmetrically.", size=37, color=VIOLET)
 
         plot_path, ppw, pph = self._render_event_study()
-        plot_w = WIDTH * 0.86
-        plot_aspect = pph / ppw
-        plot_h = plot_w * plot_aspect
-        plot_x = (WIDTH - plot_w) / 2
-        plot_y = 112
-        self.image(plot_path, plot_x, plot_y, plot_w)
+        plot_w = WIDTH * 0.84
+        plot_h = plot_w * (pph / ppw)
+        plot_y = 106
+        self.image(plot_path, (WIDTH - plot_w) / 2, plot_y, plot_w)
 
-        cap_y = plot_y + plot_h + 12
+        cap_y = plot_y + plot_h + 10
         self.centered_text(
             cap_y,
             "The event study is native - not a post-hoc aggregation.",
-            size=16,
+            size=17,
             bold=True,
             color=VIOLET,
+        )
+        self.centered_text(
+            cap_y + 17,
+            "Pre and post coefficients are estimated symmetrically - the paper notes this",
+            size=13,
+            bold=False,
+            color=GRAY,
+        )
+        self.centered_text(
+            cap_y + 30,
+            "avoids the pretrend-interpretation difficulties raised in Roth (2024).",
+            size=13,
+            bold=False,
+            color=GRAY,
         )
 
         self.add_footer()
@@ -953,17 +1117,18 @@ class LPDiDCarouselPDF(FPDF):
         self.light_gradient_background()
         self._draw_vertical_sidebar(8)
 
-        self.centered_text(38, "The Code.", size=46)
+        self._kicker(34, "The Code")
+        self.centered_text(52, "It's just a regression.", size=42)
         self.centered_text(
-            78,
+            88,
             "Same sklearn-like API as every diff-diff estimator.",
             size=14,
             bold=False,
             color=GRAY,
         )
 
-        margin = 22
-        code_y = 98
+        margin = 24
+        code_y = 106
 
         token_lines = [
             [
@@ -1052,15 +1217,15 @@ class LPDiDCarouselPDF(FPDF):
             code_y,
             WIDTH - margin * 2,
             token_lines,
-            font_size=11,
-            line_height=9,
+            font_size=12,
+            line_height=10,
         )
 
         sub_y = code_y + code_h + 10
         self.centered_text(
             sub_y,
             "Callaway-Sant'Anna is literally a keyword argument.",
-            size=13,
+            size=14,
             bold=False,
             color=GRAY,
         )
@@ -1073,13 +1238,14 @@ class LPDiDCarouselPDF(FPDF):
         self.light_gradient_background()
         self._draw_vertical_sidebar(9)
 
-        self.centered_text(40, "Production-ready.", size=48, color=CYAN)
+        self._kicker(34, "In Production")
+        self.centered_text(52, "Production-ready.", size=46, color=CYAN)
 
         margin = 26
-        grid_gap = 8
+        grid_gap = 9
         card_w = (WIDTH - margin * 2 - grid_gap) / 2
         card_h = 56
-        start_y = 90
+        start_y = 96
 
         features = [
             ("Cluster-Robust SEs", "Unit-level by default,\nmatches Stata lpdid"),
@@ -1096,25 +1262,26 @@ class LPDiDCarouselPDF(FPDF):
             cx = margin + col * (card_w + grid_gap)
             cy = start_y + row * (card_h + grid_gap)
 
+            self._shadow_rect(cx, cy, card_w, card_h)
             self.set_fill_color(*WHITE)
             self.set_draw_color(*VIOLET)
             self.set_line_width(0.6)
             self.rect(cx, cy, card_w, card_h, "DF")
 
             self.set_xy(cx + 10, cy + 8)
-            self.set_font("Helvetica", "B", 14)
+            self.set_font("Helvetica", "B", 15)
             self.set_text_color(*CYAN)
             self.cell(card_w - 20, 10, title)
 
             for j, line in enumerate(desc.split("\n")):
-                self.set_xy(cx + 10, cy + 24 + j * 12)
-                self.set_font("Helvetica", "", 11)
+                self.set_xy(cx + 10, cy + 25 + j * 12)
+                self.set_font("Helvetica", "", 12.5)
                 self.set_text_color(*GRAY)
                 self.cell(card_w - 20, 10, line)
 
-        comp_y = start_y + 3 * (card_h + grid_gap) + 4
+        comp_y = start_y + 3 * (card_h + grid_gap) + 6
         self.set_xy(0, comp_y)
-        self.set_font("Helvetica", "I", 10)
+        self.set_font("Helvetica", "I", 12)
         self.set_text_color(*LIGHT_GRAY)
         self.cell(
             WIDTH,
@@ -1131,11 +1298,12 @@ class LPDiDCarouselPDF(FPDF):
         self.light_gradient_background()
         self._draw_vertical_sidebar(10)
 
-        self.centered_text(40, "Validated.", size=42, color=VIOLET)
+        self._kicker(34, "Validated")
+        self.centered_text(52, "Validated.", size=44, color=VIOLET)
         self.centered_text(
-            82,
+            92,
             "Against the authors' own tooling - and against our own shelf.",
-            size=13,
+            size=14,
             bold=False,
             italic=True,
             color=GRAY,
@@ -1159,7 +1327,7 @@ class LPDiDCarouselPDF(FPDF):
                 "reweight == our CallawaySantAnna; PMD == our ImputationDiD (1 cohort).",
             ),
         ]
-        self._card_stack(items, start_y=105)
+        self._card_stack(items, start_y=114, box_h=44)
 
         self.add_footer()
 
@@ -1170,26 +1338,27 @@ class LPDiDCarouselPDF(FPDF):
         self._draw_vertical_sidebar(11)
 
         self.centered_text(58, "Now in diff-diff.", size=24, bold=False, italic=True, color=GRAY)
-        self.centered_text(88, "LP-DiD.", size=52, color=VIOLET)
+        self.centered_text(88, "LP-DiD.", size=54, color=VIOLET)
 
-        badge_w = 230
-        badge_h = 42
+        badge_w = 232
+        badge_h = 44
         badge_x = (WIDTH - badge_w) / 2
-        badge_y = 158
+        badge_y = 156
+        self._shadow_rect(badge_x, badge_y, badge_w, badge_h)
         self.set_fill_color(*VIOLET)
         self.rect(badge_x, badge_y, badge_w, badge_h, "F")
 
-        self.set_xy(badge_x, badge_y + 12)
-        self.set_font("Courier", "B", 16)
+        self.set_xy(badge_x, badge_y + 13)
+        self.set_font("Courier", "B", 17)
         self.set_text_color(*WHITE)
         self.cell(badge_w, 16, "$ pip install --upgrade diff-diff", align="C")
 
-        self.centered_text(222, "github.com/igerber/diff-diff", size=18, color=VIOLET)
+        self.centered_text(222, "github.com/igerber/diff-diff", size=19, color=VIOLET)
 
-        self.draw_split_logo(258, size=28)
+        self.draw_split_logo(256, size=28)
 
         self.centered_text(
-            284, "Difference-in-Differences for Python", size=14, bold=False, color=GRAY
+            284, "Difference-in-Differences for Python", size=15, bold=False, color=GRAY
         )
 
         self.add_footer()
@@ -1199,9 +1368,9 @@ def main():
     pdf = LPDiDCarouselPDF()
     try:
         pdf.slide_01_cover()
-        pdf.slide_02_shelf()
-        pdf.slide_03_real_world()
-        pdf.slide_04_introducing()
+        pdf.slide_02_problem()
+        pdf.slide_03_twist()
+        pdf.slide_04_insight()
         pdf.slide_05_mechanism()
         pdf.slide_06_math()
         pdf.slide_07_output()
