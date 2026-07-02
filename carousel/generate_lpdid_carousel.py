@@ -378,7 +378,7 @@ class LPDiDCarouselPDF(FPDF):
         # "shock" hugs its dashed line (low, so it stays clear of the punchline)
         ax.text(
             -0.35,
-            0.35,
+            0.52,
             "shock",
             fontsize=14,
             color=AMBER_HEX,
@@ -388,7 +388,9 @@ class LPDiDCarouselPDF(FPDF):
         )
 
         ax.set_xlim(-3.5, 8)
-        ax.set_ylim(-0.4, 2.4)
+        # Almost no padding below y=0: the curve baseline IS the motif's
+        # bottom edge, so page text can sit flush above it.
+        ax.set_ylim(-0.1, 2.4)
         ax.set_xticks([])
         ax.set_yticks([])
         for spine in ax.spines.values():
@@ -800,8 +802,9 @@ class LPDiDCarouselPDF(FPDF):
         motif_w = 222
         self.image(irf_path, (WIDTH - motif_w) / 2, 148, motif_w)
 
-        self.centered_text(168, "Your event study", size=52, color=VIOLET)
-        self.centered_text(200, "is one.", size=52, color=VIOLET)
+        # Punchline sits fully ABOVE the motif's baseline (its bottom edge)
+        self.centered_text(156, "Your event study", size=52, color=VIOLET)
+        self.centered_text(188, "is one.", size=52, color=VIOLET)
 
         self.set_xy(0, HEIGHT - 78)
         self.set_font("Helvetica", "B", 15)
