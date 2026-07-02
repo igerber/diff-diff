@@ -361,12 +361,31 @@ class LPDiDCarouselPDF(FPDF):
         y_pre = np.zeros_like(x_pre)
         y_post = 2.0 * (1 - np.exp(-x_post / 2.2))
 
-        ax.axvline(0, color=AMBER_HEX, linewidth=2.4, linestyle=(0, (5, 4)), alpha=0.6)
+        # Shock dash anchored AT the curve baseline (y=0) -- extending it
+        # below the flat pre-period line reads as a rendering mistake.
+        ax.plot(
+            [0, 0],
+            [0, 2.3],
+            color=AMBER_HEX,
+            linewidth=2.4,
+            linestyle=(0, (5, 4)),
+            alpha=0.6,
+            solid_capstyle="butt",
+        )
         ax.plot(x_pre, y_pre, color=VIOLET_HEX, linewidth=3.2, alpha=0.45)
         ax.plot(x_post, y_post, color=VIOLET_HEX, linewidth=3.2, alpha=0.45)
         ax.fill_between(x_post, 0, y_post, color=VIOLET_HEX, alpha=0.09, linewidth=0)
-        # "shock" label sits low-left so it can't collide with the punchline
-        ax.text(-3.3, 0.18, "shock", fontsize=14, color=AMBER_HEX, fontweight="bold", alpha=0.75)
+        # "shock" hugs its dashed line (low, so it stays clear of the punchline)
+        ax.text(
+            -0.35,
+            0.35,
+            "shock",
+            fontsize=14,
+            color=AMBER_HEX,
+            fontweight="bold",
+            alpha=0.85,
+            ha="right",
+        )
 
         ax.set_xlim(-3.5, 8)
         ax.set_ylim(-0.4, 2.4)
@@ -1020,7 +1039,7 @@ class LPDiDCarouselPDF(FPDF):
         intro_y = 102 + eq_h + 10
         self.centered_text(
             intro_y,
-            'And it "subsumes many of the recent solutions" - the abstract, verbatim:',
+            'The paper\'s abstract says it "subsumes many of the recent solutions". Specifically:',
             size=13.5,
             bold=False,
             italic=True,
