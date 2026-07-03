@@ -816,7 +816,7 @@ class LPDiDCarouselPDF(FPDF):
         self.cell(
             WIDTH,
             8,
-            "Dube, Girardi, Jordà & Taylor (2025), J. of Applied Econometrics 40(5).",
+            "Dube, Girardi, Jordà & Taylor (2025), J. of Applied Econometrics 40(7).",
             align="C",
         )
         self.set_xy(0, HEIGHT - 51)

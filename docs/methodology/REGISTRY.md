@@ -1798,7 +1798,7 @@ Consolidated list of substantive deviations from the W2025 paper and from R `etw
 
 ## LPDiD
 
-**Primary source:** [Dube, A., Girardi, D., Jordà, Ò., & Taylor, A. M. (2025). "A Local Projections Approach to Difference-in-Differences." *Journal of Applied Econometrics*, 40(5), 741-758.](https://doi.org/10.1002/jae.70000) (Open Access; NBER Working Paper 31184; FRBSF Working Paper 2023-12.) Paper review on file: `docs/methodology/papers/dube-2025-review.md` (main article + official online appendix; equation/section numbering pinned to the JAE 2025 version).
+**Primary source:** [Dube, A., Girardi, D., Jordà, Ò., & Taylor, A. M. (2025). "A Local Projections Approach to Difference-in-Differences." *Journal of Applied Econometrics*, 40(7), 741-758.](https://doi.org/10.1002/jae.70000) (Open Access; NBER Working Paper 31184; FRBSF Working Paper 2023-12.) Paper review on file: `docs/methodology/papers/dube-2025-review.md` (main article + official online appendix; equation/section numbering pinned to the JAE 2025 version).
 
 **Reference implementations:** Stata `lpdid` (SSC `s459273`, the authors' reference); R `alexCardazzi/lpdid` (third-party; absorbing + non-absorbing); authors' example scripts `danielegirardi/lpdid` (R + Stata).
 

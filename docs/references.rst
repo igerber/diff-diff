@@ -259,7 +259,7 @@ Multi-Period and Staggered Adoption
 Local Projections DiD
 ---------------------
 
-- **Dube, A., Girardi, D., Jordà, Ò., & Taylor, A. M. (2025).** "A Local Projections Approach to Difference-in-Differences." *Journal of Applied Econometrics*, 40(5), 741-758. https://doi.org/10.1002/jae.70000 (Open Access; NBER Working Paper 31184; FRBSF Working Paper 2023-12.)
+- **Dube, A., Girardi, D., Jordà, Ò., & Taylor, A. M. (2025).** "A Local Projections Approach to Difference-in-Differences." *Journal of Applied Econometrics*, 40(7), 741-758. https://doi.org/10.1002/jae.70000 (Open Access; NBER Working Paper 31184; FRBSF Working Paper 2023-12.)
 
   Primary source for the ``LPDiD`` estimator: per-horizon long-difference local-projection regressions estimated on a "clean control" sample, yielding non-negatively-weighted event-study and pooled ATTs (variance-weighted by default; reweighted regression or regression adjustment for the equally-weighted ATT; premean-differenced base periods; covariates; non-absorbing extension). Reference Stata package ``lpdid`` (SSC s459273); R ``alexCardazzi/lpdid``. Paper review on file at ``docs/methodology/papers/dube-2025-review.md``.
 

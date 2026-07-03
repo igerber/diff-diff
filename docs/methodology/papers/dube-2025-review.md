@@ -1,7 +1,7 @@
 # Paper Review: A Local Projections Approach to Difference-in-Differences
 
 **Authors:** Arindrajit Dube, Daniele Girardi, Òscar Jordà, Alan M. Taylor
-**Citation:** Dube, A., Girardi, D., Jordà, Ò., & Taylor, A. M. (2025). A Local Projections Approach to Difference-in-Differences. *Journal of Applied Econometrics*, 40(5), 741-758. https://doi.org/10.1002/jae.70000 (Open Access, CC BY)
+**Citation:** Dube, A., Girardi, D., Jordà, Ò., & Taylor, A. M. (2025). A Local Projections Approach to Difference-in-Differences. *Journal of Applied Econometrics*, 40(7), 741-758. https://doi.org/10.1002/jae.70000 (Open Access, CC BY)
 **PDF reviewed:** papers/J of Applied Econometrics - 2025 - Dube - A Local Projections Approach to Difference-in-Differences.pdf (main article, 18 pp) **+** papers/lpdid_online_appendix.pdf (official Wiley online appendix, 24 pp; Appendices A-C reviewed in full, D-F = simulation/empirical replication, skimmed). Both gitignored under top-level `papers/`; do NOT commit the PDFs.
 **Review date:** 2026-06-28
 
@@ -13,7 +13,7 @@
 
 ## LPDiD
 
-**Primary source:** Dube, Girardi, Jordà & Taylor (2025), *Journal of Applied Econometrics* 40(5):741-758, https://doi.org/10.1002/jae.70000. NBER WP 31184; FRBSF WP 2023-12. Reference Stata package `lpdid` (SSC s459273); authors' example repo https://github.com/danielegirardi/lpdid (R + Stata).
+**Primary source:** Dube, Girardi, Jordà & Taylor (2025), *Journal of Applied Econometrics* 40(7):741-758, https://doi.org/10.1002/jae.70000. NBER WP 31184; FRBSF WP 2023-12. Reference Stata package `lpdid` (SSC s459273); authors' example repo https://github.com/danielegirardi/lpdid (R + Stata).
 
 **Key implementation requirements:**
 

@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- **Dube, Girardi, Jordà & Taylor (2025) citation corrected to *J. Applied Econometrics*
+  40(**7**):741-758** (was cited as issue 5) across `docs/references.rst`,
+  `docs/methodology/REGISTRY.md`, `docs/methodology/papers/dube-2025-review.md`,
+  `docs/api/lpdid.rst`, and `carousel/generate_lpdid_carousel.py`. Verified against the
+  published record (DOI 10.1002/jae.70000; IDEAS/RePEc `wly/japmet/v40y2025i7p741-758`).
+  Historical CHANGELOG entries (the 3.6.0 release notes) intentionally retain the
+  original attribution as a record of what was claimed at release time; this entry
+  supersedes it.
+
 ## [3.6.2] - 2026-07-03
 
 ### Added

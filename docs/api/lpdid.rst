@@ -61,7 +61,7 @@ estimand is a strictly non-negatively-weighted average of cohort effects.
 
 **Reference:** Dube, A., Girardi, D., Jordà, Ò., & Taylor, A. M. (2025). A Local
 Projections Approach to Difference-in-Differences. *Journal of Applied
-Econometrics*, 40(5), 741-758.
+Econometrics*, 40(7), 741-758.
 
 .. module:: diff_diff.lpdid
 
