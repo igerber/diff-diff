@@ -4595,7 +4595,9 @@ variance from the distribution of replicate estimates.
     (bootstrap-based variance), WooldridgeDiD, LPDiD, SpilloverDiD,
     HeterogeneousAdoptionDiD (TSL-only survey paths; replicate designs
     rejected at `fit()`), SyntheticControl (rejects `survey_design`
-    entirely), BaconDecomposition (diagnostic only)
+    entirely)
+  - **BaconDecomposition** is diagnostic-only — outside the 20-estimator
+    count — and likewise rejects replicate designs
   - Estimators with replicate support reject replicate + bootstrap
     (replicate weights provide analytical variance)
 - **Note:** When invalid replicates are dropped in `compute_replicate_vcov`
