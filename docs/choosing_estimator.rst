@@ -870,7 +870,7 @@ estimation. The depth of support varies by estimator and variance method:
      - Multiplier at PSU
    * - ``SyntheticDiD``
      - pweight only
-     - Via bootstrap
+     - Full (method-specific)
      - --
      - Hybrid pairs-bootstrap + Rao-Wu rescaled (bootstrap only)
    * - ``SyntheticControl``
@@ -908,24 +908,26 @@ estimation. The depth of support varies by estimator and variance method:
 
 - **Full**: All weight types (pweight/fweight/aweight) + strata/PSU/FPC + Taylor Series Linearization variance
 - **Full (pweight only)**: Full TSL with strata/PSU/FPC, but only ``pweight`` accepted (``fweight``/``aweight`` rejected because composition changes weight semantics)
-- **Via bootstrap**: Strata/PSU/FPC supported only with bootstrap variance. ``TROP`` uses bootstrap by default. ``SyntheticDiD`` supports strata/PSU/FPC on ``variance_method='bootstrap'`` via a hybrid pairs-bootstrap + Rao-Wu rescaling composition (see the ``Note (survey + bootstrap composition)`` in REGISTRY.md §SyntheticDiD); ``placebo`` and ``jackknife`` remain pweight-only.
+- **Via bootstrap**: Strata/PSU/FPC supported only with bootstrap variance (``TROP``, which uses bootstrap by default)
+- **Full (method-specific)**: ``SyntheticDiD`` supports strata/PSU/FPC on all three variance methods via method-specific survey paths — see the note below and the ``Note (survey support matrix)`` in REGISTRY.md §SyntheticDiD
 - **pweight only** (Weights column): Only ``pweight`` accepted; ``fweight``/``aweight`` raise an error
 - **Diagnostic**: Weighted descriptive statistics only (no inference)
 - **--**: Not supported
 
 .. note::
 
-   ``SyntheticDiD`` supports survey designs on ``variance_method='bootstrap'``
-   — both pweight-only and full strata/PSU/FPC — via a hybrid pairs-bootstrap
-   composed with per-draw Rao-Wu rescaled weights fed into a weighted
-   Frank-Wolfe re-estimation of ω and λ. See the
-   ``Note (survey + bootstrap composition)`` in REGISTRY.md §SyntheticDiD
-   for the objective form and argmin-set caveat.
-
-   ``variance_method='placebo'`` and ``variance_method='jackknife'`` remain
-   pweight-only — composing placebo permutations / leave-one-out with
-   Rao-Wu rescaling under the weighted objective is a separate derivation
-   (tracked in ``TODO.md``).
+   ``SyntheticDiD`` supports survey designs — both pweight-only and full
+   strata/PSU/FPC — on all three variance methods, each via a
+   method-specific path: ``bootstrap`` composes a hybrid pairs-bootstrap
+   with per-draw Rao-Wu rescaled weights fed into a weighted Frank-Wolfe
+   re-estimation of ω and λ; ``placebo`` switches to stratified
+   permutation (pseudo-treated draws within strata containing treated
+   units) with weighted-FW re-estimation, and FPC is a documented no-op
+   for the permutation test; ``jackknife`` switches to PSU-level
+   leave-one-out with stratum aggregation (Rust & Rao 1996).
+   Replicate-weight designs are rejected. See the
+   ``Note (survey support matrix)`` and the per-method composition notes
+   in REGISTRY.md §SyntheticDiD.
 
 For the full walkthrough with code examples, see the
 `survey tutorial <https://github.com/igerber/diff-diff/blob/main/docs/tutorials/16_survey_did.ipynb>`_.

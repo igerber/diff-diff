@@ -128,12 +128,14 @@ joint-inference contract: inference fields (standard error, t-statistic, p-value
 confidence interval) are always computed together and become NaN together when inference
 is not identified, rather than silently reporting partial results.
 
-Two design choices carry the survey capability and the deployment story. First, estimators
-compute influence functions for their target parameters, so design-based variance - Taylor
-series linearization over strata and clusters, replicate weights, survey-aware
-bootstrap - composes through one shared mechanism with estimators as different as
-Callaway-Sant'Anna and synthetic DiD; supported design-estimator combinations are
-documented in a per-estimator matrix, and unsupported ones are rejected explicitly rather
+Two design choices carry the survey capability and the deployment story. First, the
+regression- and influence-function-based estimators compute influence functions for their
+target parameters, so design-based variance - Taylor series linearization over strata and
+clusters, and replicate weights - routes through one shared survey-variance core rather
+than requiring per-estimator derivations; resampling-based estimators such as synthetic
+DiD and TROP compose survey designs through documented method-specific bootstrap,
+placebo, and jackknife paths. Supported design-estimator combinations are listed in a
+per-estimator compatibility matrix, and unsupported ones are rejected explicitly rather
 than silently approximated. Second, the runtime
 dependency footprint is minimal by policy - numpy, pandas, and scipy only - keeping the
 library easy to install in restricted industry environments; high-dimensional fixed
