@@ -4351,6 +4351,11 @@ unequal selection probabilities).
   tests assert iteration-count equality plus `assert_allclose` at atol=1e-12
   (never a bit-identity claim). `DIFF_DIFF_BACKEND=python` disables the
   kernel; any kernel-side validation error falls back to the numpy engine.
+  The dispatch can partition variables into balanced column blocks
+  (`DIFF_DIFF_DEMEAN_CHUNK_COLS`, internal opt-in knob, OFF by default) to
+  bound the kernel's transient memory; per-column results and iteration
+  counts are unchanged by construction (each column's MAP loop is fully
+  independent - no cross-column arithmetic).
 - **Edge case:** NaN in an absorbed group column raises a `ValueError` naming the
   column. `pd.factorize` codes NaN keys as -1, which would otherwise silently index
   the last group's mean; the prior pandas behavior was itself silently bad

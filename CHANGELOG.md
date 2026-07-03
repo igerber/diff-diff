@@ -19,6 +19,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   when the extension is absent or `DIFF_DIFF_BACKEND=python`; kernel-side validation errors fall
   back to the numpy engine. Affects every MAP consumer (TWFE, SunAbraham, Bacon, Wooldridge,
   DiD/MPD `absorb=`, and the survey replicate refits).
+- **Opt-in chunked dispatch for the Rust `demean_map` kernel** (internal
+  `DIFF_DIFF_DEMEAN_CHUNK_COLS` env knob; default behavior unchanged - single full-width
+  dispatch). When set to a positive integer, the wrapper feeds the kernel balanced
+  near-equal column blocks, capping the kernel's transient input/working copies on wide
+  absorbed designs for memory-constrained runs (a width near the machine's core count
+  measured best). Results are identical by construction - each column's MAP loop is fully
+  independent, so chunking changes neither demeaned values nor iteration counts (locked by
+  exact-equality tests vs single-call dispatch). Shipped opt-in rather than default-on:
+  measured end-to-end on the FE-absorption lane, the fit-level peak RSS on the widest
+  workload is dominated by the downstream solver phase, so default chunking would cost
+  ~2-7% wall-clock for only ~5-12% peak-RSS reduction (details + corrected memory
+  attribution in `docs/performance-plan.md`).
 
 ### Changed
 - **FE-absorption demeaning rewritten: factorize-once + `np.bincount` method of alternating

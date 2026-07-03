@@ -3157,3 +3157,176 @@ class TestDemeanMapKernel:
             )
             is None
         )
+
+    @staticmethod
+    def _counting_kernel(monkeypatch):
+        """Wrap the kernel symbol to count invocations (proves the chunked
+        path actually ran, per-chunk)."""
+        import diff_diff.utils as utils_mod
+
+        calls = {"kernel": 0}
+        orig = utils_mod._rust_demean_map
+
+        def counting(*a, **kw):
+            calls["kernel"] += 1
+            return orig(*a, **kw)
+
+        monkeypatch.setattr(utils_mod, "_rust_demean_map", counting)
+        return calls
+
+    @pytest.mark.parametrize("weighted", [False, True])
+    def test_chunked_dispatch_exactly_equals_single_call(self, monkeypatch, weighted):
+        """Chunking is exact partitioning: per-column outputs are IDENTICAL
+        (assert_array_equal - same code path, no cross-backend caveat) and
+        iteration counts equal, vs both single-chunk rust and the numpy
+        engine."""
+        import diff_diff.utils as utils_mod
+        from diff_diff.utils import _demean_map_numpy, _demean_map_rust
+
+        monkeypatch.delenv("DIFF_DIFF_DEMEAN_CHUNK_COLS", raising=False)
+        x_cols, codes_list, n_groups, w = self._fixture("unbalanced", seed=13, k=8)
+        weights = w if weighted else None
+
+        monkeypatch.setattr(utils_mod, "_DEMEAN_MAP_CHUNK_COLS", 1000)
+        single = _demean_map_rust(x_cols, codes_list, n_groups, weights, 1e-10, 10_000)
+        assert single is not None
+
+        calls = self._counting_kernel(monkeypatch)
+        monkeypatch.setattr(utils_mod, "_DEMEAN_MAP_CHUNK_COLS", 3)
+        chunked = _demean_map_rust(x_cols, codes_list, n_groups, weights, 1e-10, 10_000)
+        assert chunked is not None
+        assert calls["kernel"] == 3  # ceil(8 / 3)
+
+        assert chunked[1] == single[1]
+        for c_col, s_col in zip(chunked[0], single[0]):
+            np.testing.assert_array_equal(c_col, s_col)
+
+        numpy_res = _demean_map_numpy(x_cols, codes_list, n_groups, weights, 1e-10, 10_000)
+        assert chunked[1] == numpy_res[1]
+        for c_col, p_col in zip(chunked[0], numpy_res[0]):
+            np.testing.assert_allclose(c_col, p_col, rtol=0, atol=1e-12)
+
+    @pytest.mark.parametrize("k", [1, 4, 5])  # below / at / above the chunk boundary
+    def test_chunk_boundaries(self, monkeypatch, k):
+        """k <= chunk is a single kernel call; k = chunk+1 exercises the
+        two-chunk boundary (balanced partition: 5 -> 2+3). All cases match
+        the numpy engine."""
+        import math
+
+        import diff_diff.utils as utils_mod
+        from diff_diff.utils import _demean_map_numpy, _demean_map_rust
+
+        monkeypatch.delenv("DIFF_DIFF_DEMEAN_CHUNK_COLS", raising=False)
+        monkeypatch.setattr(utils_mod, "_DEMEAN_MAP_CHUNK_COLS", 4)
+        x_cols, codes_list, n_groups, _ = self._fixture("balanced", seed=14, k=k)
+        calls = self._counting_kernel(monkeypatch)
+        rust = _demean_map_rust(x_cols, codes_list, n_groups, None, 1e-10, 10_000)
+        assert rust is not None
+        assert calls["kernel"] == math.ceil(k / 4)
+        numpy_res = _demean_map_numpy(x_cols, codes_list, n_groups, None, 1e-10, 10_000)
+        assert rust[1] == numpy_res[1]
+        for r_col, p_col in zip(rust[0], numpy_res[0]):
+            np.testing.assert_allclose(r_col, p_col, rtol=0, atol=1e-12)
+
+    def test_nonconverged_variable_in_second_chunk_still_named(self, monkeypatch):
+        """The non-convergence warning names a variable whose column lands in
+        the SECOND chunk (iters aggregation preserves variable order)."""
+        import diff_diff.utils as utils_mod
+        from diff_diff.utils import demean_by_groups
+
+        monkeypatch.delenv("DIFF_DIFF_DEMEAN_CHUNK_COLS", raising=False)
+        monkeypatch.setattr(utils_mod, "_DEMEAN_MAP_CHUNK_COLS", 2)
+        rng = np.random.default_rng(15)
+        df = pd.DataFrame(
+            {
+                "unit": np.repeat(np.arange(30), 6),
+                "period": np.tile(np.arange(6), 30),
+            }
+        )
+        df = df[rng.random(len(df)) > 0.3].reset_index(drop=True)
+        for name in ["x1", "x2", "y"]:  # 'y' is column 3 -> chunk 2 of 2
+            df[name] = rng.normal(size=len(df))
+        calls = self._counting_kernel(monkeypatch)
+        with pytest.warns(UserWarning, match=r"\['x1', 'x2', 'y'\].*did not converge"):
+            demean_by_groups(
+                df, ["x1", "x2", "y"], ["unit", "period"], suffix="_dm", max_iter=1, tol=1e-15
+            )
+        assert calls["kernel"] == 2  # ceil(3 / 2): multi-chunk path exercised
+
+    def test_estimator_level_chunked_att_parity(self, monkeypatch):
+        """DiD(absorb=) ATT/SE with chunk=2 identical to the default chunk."""
+        import diff_diff.utils as utils_mod
+        from diff_diff import DifferenceInDifferences
+
+        monkeypatch.delenv("DIFF_DIFF_DEMEAN_CHUNK_COLS", raising=False)
+        rng = np.random.default_rng(16)
+        n_units, n_periods = 60, 8
+        df = pd.DataFrame(
+            {
+                "unit": np.repeat(np.arange(n_units), n_periods),
+                "period": np.tile(np.arange(n_periods), n_units),
+            }
+        )
+        df["treated"] = (df["unit"] < 30).astype(int)
+        df["post"] = (df["period"] >= 4).astype(int)
+        df["x1"] = rng.normal(size=len(df))
+        df["x2"] = rng.normal(size=len(df))
+        df["y"] = (
+            1.5 * df["treated"] * df["post"]
+            + 0.5 * df["x1"]
+            - 0.3 * df["x2"]
+            + rng.normal(0, 0.5, len(df))
+        )
+
+        def fit():
+            return DifferenceInDifferences().fit(
+                df,
+                outcome="y",
+                treatment="treated",
+                time="post",
+                absorb=["unit", "period"],
+                covariates=["x1", "x2"],
+            )
+
+        r_default = fit()
+        monkeypatch.setattr(utils_mod, "_DEMEAN_MAP_CHUNK_COLS", 2)
+        r_chunked = fit()
+        np.testing.assert_allclose(r_chunked.att, r_default.att, rtol=0, atol=1e-12)
+        np.testing.assert_allclose(r_chunked.se, r_default.se, rtol=0, atol=1e-12)
+
+    def test_default_is_single_dispatch(self, monkeypatch):
+        """With the env unset and the default constant (None), a k=8 dispatch
+        makes exactly ONE kernel call - chunking is opt-in."""
+        from diff_diff.utils import _demean_map_rust
+
+        monkeypatch.delenv("DIFF_DIFF_DEMEAN_CHUNK_COLS", raising=False)
+        x_cols, codes_list, n_groups, _ = self._fixture("balanced", seed=17, k=8)
+        calls = self._counting_kernel(monkeypatch)
+        result = _demean_map_rust(x_cols, codes_list, n_groups, None, 1e-10, 10_000)
+        assert result is not None
+        assert calls["kernel"] == 1
+
+
+class TestDemeanChunkResolver:
+    """Pure-Python env-override logic - runs regardless of the Rust build."""
+
+    def test_default_when_unset_is_none(self, monkeypatch):
+        """Chunking is OPT-IN: env unset -> None -> single dispatch."""
+        import diff_diff.utils as utils_mod
+
+        monkeypatch.delenv("DIFF_DIFF_DEMEAN_CHUNK_COLS", raising=False)
+        assert utils_mod._DEMEAN_MAP_CHUNK_COLS is None
+        assert utils_mod._resolve_demean_chunk_cols() is None
+
+    def test_valid_override_honored(self, monkeypatch):
+        import diff_diff.utils as utils_mod
+
+        monkeypatch.setenv("DIFF_DIFF_DEMEAN_CHUNK_COLS", "7")
+        assert utils_mod._resolve_demean_chunk_cols() == 7
+
+    @pytest.mark.parametrize("bad", ["abc", "0", "-4", "", "3.5"])
+    def test_invalid_values_fall_back_to_default(self, monkeypatch, bad):
+        import diff_diff.utils as utils_mod
+
+        monkeypatch.setenv("DIFF_DIFF_DEMEAN_CHUNK_COLS", bad)
+        assert utils_mod._resolve_demean_chunk_cols() is utils_mod._DEMEAN_MAP_CHUNK_COLS

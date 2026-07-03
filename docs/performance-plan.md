@@ -76,9 +76,22 @@ submit gate), tail_stress 31.74s -> 11.37s (2.79x), geo_experiment 0.976s ->
 0.484s (2.02x, now ahead of the pyfixest yardstick's 0.623s), scanner 1.59x,
 survey 1.44x, county 1.36x, guard_small unregressed. Identity vs the
 committed after-baselines: 1e-13-1e-16 on every scenario incl. tail_stress.
-Known trade-off: the kernel holds one owned input copy plus the result
-(firm_churn peak RSS 13.4 GB -> 21.0 GB); chunking variables through the
-kernel is the noted follow-up if that bites a real workload.
+Known trade-off: the rust-backend firm_churn fit peaks at ~21 GB RSS vs
+~13.4 GB under the numpy backend. **Corrected attribution (2026-07, PR-D
+probes):** the peak is dominated by the downstream SOLVER phase (the Rust
+faer path holds an owned copy of the ~2.5 GB stacked design plus SVD
+workspace), not by the demean kernel's dispatch marshalling as this
+paragraph originally claimed. Measured evidence: an isolated width-16
+chunked dispatch cuts the kernel's transients to near-numpy footprint, yet
+the end-to-end fit still peaks ~19-21 GB (only ~5-12% below unchunked) at a
++2-7% wall-clock cost - so chunked dispatch shipped as an opt-in env knob
+(`DIFF_DIFF_DEMEAN_CHUNK_COLS`, default off) rather than default-on, and
+the solver-phase peak is tracked as its own TODO row. `DIFF_DIFF_BACKEND=
+python` remains the OOM escape hatch. Measurement note: single-run
+`ru_maxrss` on macOS is unreliable under ambient memory pressure (the
+compressor deflates resident peaks - one probe read 15.1 GB for a
+configuration that reproducibly peaks ~19-20 GB); gate memory claims on
+repeated runs under matched machine state.
 
 ### FE-absorption suite results
 

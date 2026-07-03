@@ -2,6 +2,7 @@
 Utility functions for difference-in-differences estimation.
 """
 
+import os
 import warnings
 from dataclasses import dataclass, field
 from typing import Any, Dict, Iterable, List, Optional, Tuple
@@ -13,15 +14,14 @@ from scipy import stats
 # Import Rust backend if available (from _backend to avoid circular imports)
 from diff_diff._backend import (
     HAS_RUST_BACKEND,
-    _rust_demean_map,
-    _rust_project_simplex,
-    _rust_sdid_unit_weights,
-    _rust_compute_time_weights,
     _rust_compute_noise_level,
+    _rust_compute_time_weights,
+    _rust_demean_map,
     _rust_sc_weight_fw,
-    _rust_sc_weight_fw_with_convergence,
     _rust_sc_weight_fw_weighted,
     _rust_sc_weight_fw_weighted_with_convergence,
+    _rust_sc_weight_fw_with_convergence,
+    _rust_sdid_unit_weights,
 )
 from diff_diff.linalg import compute_robust_vcov as _compute_robust_vcov_linalg
 from diff_diff.linalg import solve_ols as _solve_ols_linalg
@@ -2707,6 +2707,41 @@ def _demean_map_numpy(
     return demeaned, iters
 
 
+# Opt-in column-block width for Rust demean_map kernel calls (None = single
+# dispatch, the default). The kernel holds an owned copy of its input block
+# plus the result, and chunking caps those transients at the block width while
+# leaving per-column results bit-identical: every column's MAP loop is fully
+# independent (no cross-column arithmetic), so partitioning changes neither
+# values nor iteration counts. Measured on the 2.4M x 130 firm-panel workload
+# (2026-07): dispatch-level transients shrink as designed, but the fit's peak
+# RSS is dominated by the downstream solver phase, so end-to-end peak dropped
+# only ~5-12% while wall-clock rose ~2-7% - hence OFF by default; the env
+# knob remains for memory-constrained runs (a block width near the machine's
+# core count measured best: each chunk is one full parallel wave). Peak-RSS
+# measurements need repeated runs under matched machine state - macOS memory
+# compression deflates single-run ru_maxrss readings under ambient pressure.
+_DEMEAN_MAP_CHUNK_COLS: Optional[int] = None
+
+
+def _resolve_demean_chunk_cols() -> Optional[int]:
+    """Opt-in chunk width for the Rust kernel dispatch (None = unchunked).
+
+    ``DIFF_DIFF_DEMEAN_CHUNK_COLS`` (positive integer) enables chunking;
+    invalid or non-positive values fall back silently to the module default,
+    mirroring ``DIFF_DIFF_BACKEND``'s convention. Unlike the backend switch
+    this is read PER CALL, not at import - deliberate, so benchmarks and tests
+    can A/B chunked vs unchunked dispatch within one process/build.
+    """
+    raw = os.environ.get("DIFF_DIFF_DEMEAN_CHUNK_COLS")
+    if raw is None:
+        return _DEMEAN_MAP_CHUNK_COLS
+    try:
+        value = int(raw)
+    except ValueError:
+        return _DEMEAN_MAP_CHUNK_COLS
+    return value if value > 0 else _DEMEAN_MAP_CHUNK_COLS
+
+
 def _demean_map_rust(
     x_cols: List[np.ndarray],
     codes_list: List[np.ndarray],
@@ -2715,36 +2750,61 @@ def _demean_map_rust(
     tol: float,
     max_iter: int,
 ) -> Optional[Tuple[List[np.ndarray], List[int]]]:
-    """Marshal to the Rust ``demean_map`` kernel.
+    """Marshal to the Rust ``demean_map`` kernel in column chunks.
 
     Returns None to signal "use the canonical numpy engine" (kernel absent,
     degenerate shapes, or a deliberate kernel-side validation error). Dtypes
     are coerced explicitly BEFORE the call - never rely on exception handling
     for dtype mismatches.
+
+    Variables are dispatched in blocks of ``_resolve_demean_chunk_cols()``
+    columns to bound peak memory (see ``_DEMEAN_MAP_CHUNK_COLS``); the codes
+    matrix and weights are built once and shared across chunks. Chunking is
+    exact partitioning - per-column outputs and iteration counts are identical
+    to a single-call dispatch.
     """
     if _rust_demean_map is None:
         return None
     if not x_cols or x_cols[0].shape[0] == 0:
         return None
-    x_mat = np.ascontiguousarray(np.column_stack(x_cols), dtype=np.float64)
     codes_mat = np.ascontiguousarray(np.column_stack(codes_list), dtype=np.int64)
     w = None if weights is None else np.ascontiguousarray(weights, dtype=np.float64)
-    try:
-        out, iters = _rust_demean_map(  # type: ignore[misc]
-            x_mat,
-            codes_mat,
-            [int(g) for g in n_groups_list],
-            w,
-            float(tol),
-            int(max_iter),
-        )
-    except ValueError as e:
-        if "demean_map" in str(e):
-            # deliberate kernel-side validation marker -> numpy fallback
-            return None
-        raise
-    # F-order result: per-column views are contiguous, no extra copy
-    return [out[:, j] for j in range(out.shape[1])], [int(i) for i in iters]
+    n_groups = [int(g) for g in n_groups_list]
+    k = len(x_cols)
+    chunk = _resolve_demean_chunk_cols()
+    if chunk is None:
+        chunk = k  # default: single dispatch, no partitioning
+    # Balanced partition into ceil(k / chunk) near-equal blocks. A naive
+    # fixed-stride split leaves a small remainder block (e.g. 130 columns at
+    # width 32 -> 4x32 + 2); that tail runs nearly serial across the rayon
+    # pool, and one slow-converging column in it stalls the whole dispatch.
+    n_chunks = -(-k // chunk)
+    bounds = [round(i * k / n_chunks) for i in range(n_chunks + 1)]
+    demeaned: List[np.ndarray] = []
+    iters_all: List[int] = []
+    for start, stop in zip(bounds, bounds[1:]):
+        x_mat = np.ascontiguousarray(np.column_stack(x_cols[start:stop]), dtype=np.float64)
+        try:
+            out, iters = _rust_demean_map(  # type: ignore[misc]
+                x_mat,
+                codes_mat,
+                n_groups,
+                w,
+                float(tol),
+                int(max_iter),
+            )
+        except ValueError as e:
+            if "demean_map" in str(e):
+                # deliberate kernel-side validation marker -> numpy fallback
+                # (kernel validation is chunk-invariant, so this fires on the
+                # first chunk; the whole call falls back, same contract as an
+                # unchunked dispatch)
+                return None
+            raise
+        # F-order result: per-column views are contiguous, no extra copy
+        demeaned.extend(out[:, j] for j in range(out.shape[1]))
+        iters_all.extend(int(i) for i in iters)
+    return demeaned, iters_all
 
 
 def demean_by_groups(
