@@ -15,6 +15,7 @@ use pyo3::prelude::*;
 use std::collections::HashMap;
 
 mod bootstrap;
+mod demean;
 mod linalg;
 mod trop;
 mod weights;
@@ -28,6 +29,9 @@ fn _rust_backend(m: &Bound<'_, PyModule>) -> PyResult<()> {
         m
     )?)?;
 
+    // FE-absorption MAP demeaning kernel
+    m.add_function(wrap_pyfunction!(demean::demean_map, m)?)?;
+
     // Simplex projection
     m.add_function(wrap_pyfunction!(weights::project_simplex, m)?)?;
 
@@ -38,7 +42,10 @@ fn _rust_backend(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(weights::sc_weight_fw, m)?)?;
     m.add_function(wrap_pyfunction!(weights::sc_weight_fw_with_convergence, m)?)?;
     m.add_function(wrap_pyfunction!(weights::sc_weight_fw_weighted, m)?)?;
-    m.add_function(wrap_pyfunction!(weights::sc_weight_fw_weighted_with_convergence, m)?)?;
+    m.add_function(wrap_pyfunction!(
+        weights::sc_weight_fw_weighted_with_convergence,
+        m
+    )?)?;
 
     // Linear algebra operations
     m.add_function(wrap_pyfunction!(linalg::solve_ols, m)?)?;

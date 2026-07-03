@@ -4339,6 +4339,18 @@ unequal selection probabilities).
   (drift compounds across MAP iterations), not bit-for-bit; estimator estimates
   are validated unchanged at the FE-absorption benchmark identity gate
   (`benchmarks/speed_review/bench_fe_absorption.py --check-estimates`).
+- **Note:** When the optional Rust backend is available, the MAP sweeps run in
+  the compiled `demean_map` kernel (rayon-parallel across the demeaned
+  variables). The kernel mirrors the canonical numpy engine
+  (`diff_diff.utils._demean_map_numpy`) exactly: same per-variable independent
+  convergence loops, same dimension sweep order, the same row-order
+  scatter-add accumulation as `np.bincount`, division by the per-group sums,
+  the same zero-total-weight inert-row guard, and the same
+  `max|x - x_old| < tol` stopping rule with NaN-poisoning semantics. Per the
+  python-canonical policy, numpy is the reference implementation; equivalence
+  tests assert iteration-count equality plus `assert_allclose` at atol=1e-12
+  (never a bit-identity claim). `DIFF_DIFF_BACKEND=python` disables the
+  kernel; any kernel-side validation error falls back to the numpy engine.
 - **Edge case:** NaN in an absorbed group column raises a `ValueError` naming the
   column. `pd.factorize` codes NaN keys as -1, which would otherwise silently index
   the last group's mean; the prior pandas behavior was itself silently bad

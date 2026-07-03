@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Rust `demean_map` kernel for FE absorption** (optional backend acceleration). When the Rust
+  extension is available, the method-of-alternating-projections sweeps in
+  `demean_by_groups`/`within_transform` run in a compiled kernel, rayon-parallel across the
+  demeaned variables, with the GIL released during compute. The kernel mirrors the canonical
+  numpy engine exactly (same sweep order, row-order bincount accumulation, zero-total-weight
+  inert guard, and `max|x - x_old| < tol` stopping rule with NaN-poisoning semantics); numpy
+  remains the reference implementation per the python-canonical policy, with equivalence tests
+  asserting iteration-count equality plus `assert_allclose` at atol=1e-12. No behavior change
+  when the extension is absent or `DIFF_DIFF_BACKEND=python`; kernel-side validation errors fall
+  back to the numpy engine. Affects every MAP consumer (TWFE, SunAbraham, Bacon, Wooldridge,
+  DiD/MPD `absorb=`, and the survey replicate refits).
+
 ### Changed
 - **FE-absorption demeaning rewritten: factorize-once + `np.bincount` method of alternating
   projections** (`demean_by_groups` / `within_transform`). Each absorbed dimension is factorized

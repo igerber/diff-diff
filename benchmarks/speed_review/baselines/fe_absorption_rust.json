@@ -1,0 +1,151 @@
+{
+  "suite": "fe_absorption",
+  "platform": "macOS-26.5.1-arm64-arm-64bit-Mach-O",
+  "python": "3.14.4",
+  "versions": {
+    "diff_diff": "3.6.1",
+    "numpy": "2.5.0",
+    "pandas": "3.0.3"
+  },
+  "backend_requested": "rust",
+  "repeats": 3,
+  "quick": false,
+  "tolerances": {
+    "att_atol": 1e-09,
+    "se_rtol": 1e-07,
+    "se_rtol_survey": 1e-06,
+    "gate_exempt": [
+      "tail_stress"
+    ]
+  },
+  "results": [
+    {
+      "scenario": "county_policy",
+      "n_obs": 177289,
+      "checksum": 6315.071127371084,
+      "att": 0.2803785413990308,
+      "se": 0.03124486461021617,
+      "fit_median_s": 1.7567,
+      "fit_min_s": 1.7285,
+      "fit_max_s": 1.8617,
+      "fit_cv": 0.0302,
+      "noisy": false,
+      "n_timed_fits": 9,
+      "datagen_s": 0.005,
+      "peak_rss_mb": 4237.1,
+      "backend_resolved": "rust",
+      "warnings": []
+    },
+    {
+      "scenario": "firm_churn",
+      "n_obs": 2400000,
+      "checksum": 240997.06223418942,
+      "att": 0.31443271844971477,
+      "se": 0.005837281701253889,
+      "fit_median_s": 25.8387,
+      "fit_min_s": 24.6121,
+      "fit_max_s": 26.7088,
+      "fit_cv": 0.041,
+      "noisy": false,
+      "n_timed_fits": 3,
+      "datagen_s": 0.069,
+      "peak_rss_mb": 20963.6,
+      "backend_resolved": "rust",
+      "warnings": []
+    },
+    {
+      "scenario": "scanner_twfe",
+      "n_obs": 3255000,
+      "checksum": 76832.22571739106,
+      "att": 0.25116413149501093,
+      "se": 0.0024149387421606118,
+      "fit_median_s": 0.6239,
+      "fit_min_s": 0.6215,
+      "fit_max_s": 0.6252,
+      "fit_cv": 0.003,
+      "noisy": false,
+      "n_timed_fits": 3,
+      "datagen_s": 0.076,
+      "peak_rss_mb": 1477.0,
+      "backend_resolved": "rust",
+      "warnings": []
+    },
+    {
+      "scenario": "geo_experiment",
+      "n_obs": 5000000,
+      "checksum": 443696.3834000407,
+      "att": 0.25194372599916653,
+      "se": 0.0017886314723251327,
+      "fit_median_s": 0.4839,
+      "fit_min_s": 0.483,
+      "fit_max_s": 0.4845,
+      "fit_cv": 0.0016,
+      "noisy": false,
+      "n_timed_fits": 3,
+      "datagen_s": 0.062,
+      "peak_rss_mb": 1744.8,
+      "backend_resolved": "rust",
+      "warnings": [
+        "Rank-deficient design matrix: dropping 2 of 4 columns (column 1, column 2). Coefficients for these columns are",
+        "Regressor(s) ['treated', 'post'] are collinear with the absorbed fixed effects (absorb=['store', 'week']): the"
+      ]
+    },
+    {
+      "scenario": "survey_absorb",
+      "n_obs": 500000,
+      "checksum": -176482.6014001448,
+      "att": 0.24554568144130481,
+      "se": 0.007662698712656388,
+      "fit_median_s": 2.8354,
+      "fit_min_s": 2.8354,
+      "fit_max_s": 2.8357,
+      "fit_cv": 0.0001,
+      "noisy": false,
+      "n_timed_fits": 3,
+      "datagen_s": 0.106,
+      "peak_rss_mb": 3587.3,
+      "backend_resolved": "rust",
+      "warnings": [
+        "Rank-deficient design matrix: dropping 2 of 4 columns (column 1, column 2). Coefficients for these columns are",
+        "Regressor(s) ['treated', 'post'] are collinear with the absorbed fixed effects (absorb=['state', 'month']): th"
+      ]
+    },
+    {
+      "scenario": "tail_stress",
+      "n_obs": 5000000,
+      "checksum": 376703.7248141762,
+      "att": 0.2502082560083505,
+      "se": 0.004392830594147583,
+      "fit_median_s": 11.365,
+      "fit_min_s": 11.3007,
+      "fit_max_s": 11.4856,
+      "fit_cv": 0.0082,
+      "noisy": false,
+      "n_timed_fits": 3,
+      "datagen_s": 0.066,
+      "peak_rss_mb": 1841.8,
+      "backend_resolved": "rust",
+      "warnings": [
+        "Rank-deficient design matrix: dropping 2 of 4 columns (column 1, column 2). Coefficients for these columns are",
+        "Regressor(s) ['treated', 'post'] are collinear with the absorbed fixed effects (absorb=['store', 'week']): the"
+      ]
+    },
+    {
+      "scenario": "guard_small",
+      "n_obs": 20000,
+      "checksum": -571.6190664591859,
+      "att": 0.2515087011451809,
+      "se": 0.028726073333820955,
+      "fit_median_s": 0.0034,
+      "fit_min_s": 0.0032,
+      "fit_max_s": 0.0036,
+      "fit_cv": 0.0346,
+      "noisy": false,
+      "n_timed_fits": 21,
+      "datagen_s": 0.001,
+      "peak_rss_mb": 148.0,
+      "backend_resolved": "rust",
+      "warnings": []
+    }
+  ]
+}

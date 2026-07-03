@@ -904,7 +904,7 @@ sources:
       - path: docs/methodology/REGISTRY.md
         section: "Absorbed Fixed Effects with Survey Weights"
         type: methodology
-        note: "demean_by_groups / within_transform: MAP convergence contract (max_iter/tol), bincount accumulation numerics, NaN-group-key guard, snap_absorbed_regressors FE-spanned snap + exact LSMR span confirmation"
+        note: "demean_by_groups / within_transform: MAP convergence contract (max_iter/tol), bincount accumulation numerics, NaN-group-key guard, snap_absorbed_regressors FE-spanned snap + exact LSMR span confirmation, rust demean_map dispatch"
       - path: docs/practitioner_getting_started.rst
         section: "Step 4: Check Whether the Result Is Trustworthy"
         type: user_guide

@@ -10,6 +10,7 @@ Tests are skipped if the Rust backend is not available.
 """
 
 import numpy as np
+import pandas as pd
 import pytest
 
 from diff_diff import HAS_RUST_BACKEND
@@ -128,8 +129,18 @@ class TestRustBackend:
             ),
             "mammen": np.array(
                 [
-                    [1.618033988749895, -0.6180339887498949, 1.618033988749895, -0.6180339887498949],
-                    [-0.6180339887498949, -0.6180339887498949, 1.618033988749895, 1.618033988749895],
+                    [
+                        1.618033988749895,
+                        -0.6180339887498949,
+                        1.618033988749895,
+                        -0.6180339887498949,
+                    ],
+                    [
+                        -0.6180339887498949,
+                        -0.6180339887498949,
+                        1.618033988749895,
+                        1.618033988749895,
+                    ],
                 ]
             ),
             "webb": np.array(
@@ -346,8 +357,10 @@ class TestRustBackend:
         # Verify residuals are correct given coefficients
         expected_residuals = y - X @ coeffs
         np.testing.assert_array_almost_equal(
-            residuals, expected_residuals, decimal=8,
-            err_msg="Residuals should match y - X @ coeffs"
+            residuals,
+            expected_residuals,
+            decimal=8,
+            err_msg="Residuals should match y - X @ coeffs",
         )
 
     def test_high_condition_number_matrix(self):
@@ -431,8 +444,10 @@ class TestRustBackend:
         # Residuals should be correct given coefficients
         expected_residuals = y - X @ coeffs
         np.testing.assert_array_almost_equal(
-            residuals, expected_residuals, decimal=8,
-            err_msg="Residuals should match y - X @ coeffs"
+            residuals,
+            expected_residuals,
+            decimal=8,
+            err_msg="Residuals should match y - X @ coeffs",
         )
 
     def test_multiperiod_did_like_design_matrix(self):
@@ -491,9 +506,9 @@ class TestRustBackend:
         assert np.all(np.abs(coeffs) < 1e6), f"Coefficients are unreasonably large: {coeffs}"
 
         # Treatment effect (last coefficient) should be close to true effect
-        assert abs(coeffs[-1] - true_effect) < 2.0, (
-            f"Treatment effect {coeffs[-1]} is too far from true effect {true_effect}"
-        )
+        assert (
+            abs(coeffs[-1] - true_effect) < 2.0
+        ), f"Treatment effect {coeffs[-1]} is too far from true effect {true_effect}"
 
 
 @pytest.mark.skipif(not HAS_RUST_BACKEND, reason="Rust backend not available")
@@ -518,12 +533,10 @@ class TestRustVsNumpy:
         numpy_coeffs, numpy_resid, numpy_vcov = numpy_fn(X, y, cluster_ids=None)
 
         np.testing.assert_array_almost_equal(
-            rust_coeffs, numpy_coeffs, decimal=8,
-            err_msg="OLS coefficients should match"
+            rust_coeffs, numpy_coeffs, decimal=8, err_msg="OLS coefficients should match"
         )
         np.testing.assert_array_almost_equal(
-            rust_resid, numpy_resid, decimal=8,
-            err_msg="OLS residuals should match"
+            rust_resid, numpy_resid, decimal=8, err_msg="OLS residuals should match"
         )
 
     def test_solve_ols_with_clusters_match(self):
@@ -542,13 +555,11 @@ class TestRustVsNumpy:
         numpy_coeffs, _, numpy_vcov = numpy_fn(X, y, cluster_ids=cluster_ids)
 
         np.testing.assert_array_almost_equal(
-            rust_coeffs, numpy_coeffs, decimal=8,
-            err_msg="Clustered OLS coefficients should match"
+            rust_coeffs, numpy_coeffs, decimal=8, err_msg="Clustered OLS coefficients should match"
         )
         # VCoV may differ slightly due to implementation details
         np.testing.assert_array_almost_equal(
-            rust_vcov, numpy_vcov, decimal=5,
-            err_msg="Clustered OLS VCoV should match"
+            rust_vcov, numpy_vcov, decimal=5, err_msg="Clustered OLS VCoV should match"
         )
 
     def test_rank_deficient_ols_residuals_match(self):
@@ -597,8 +608,10 @@ class TestRustVsNumpy:
         # Residuals should be very close (this is the key equivalence check)
         # Both approaches should produce the same fitted values and residuals
         np.testing.assert_array_almost_equal(
-            rust_resid, numpy_resid, decimal=5,
-            err_msg="Residuals should match despite different coefficient representations"
+            rust_resid,
+            numpy_resid,
+            decimal=5,
+            err_msg="Residuals should match despite different coefficient representations",
         )
 
     def test_multiperiod_did_design_residuals_equivalence(self):
@@ -648,25 +661,27 @@ class TestRustVsNumpy:
         # Rust should produce finite treatment effect
         rust_effect = rust_coeffs[-1]
         assert np.isfinite(rust_effect), "Rust treatment effect should be finite"
-        assert abs(rust_effect - true_effect) < 2.0, (
-            f"Rust treatment effect {rust_effect} too far from true {true_effect}"
-        )
+        assert (
+            abs(rust_effect - true_effect) < 2.0
+        ), f"Rust treatment effect {rust_effect} too far from true {true_effect}"
 
         # NumPy treatment effect should be close (may be finite or NaN depending on rank)
         numpy_effect = numpy_coeffs[-1]
         if np.isfinite(numpy_effect):
-            assert abs(numpy_effect - true_effect) < 2.0, (
-                f"NumPy treatment effect {numpy_effect} too far from true {true_effect}"
-            )
+            assert (
+                abs(numpy_effect - true_effect) < 2.0
+            ), f"NumPy treatment effect {numpy_effect} too far from true {true_effect}"
             # Effects should be close to each other
-            assert abs(rust_effect - numpy_effect) < 0.5, (
-                f"Rust ({rust_effect}) and NumPy ({numpy_effect}) effects should match"
-            )
+            assert (
+                abs(rust_effect - numpy_effect) < 0.5
+            ), f"Rust ({rust_effect}) and NumPy ({numpy_effect}) effects should match"
 
         # Residuals should be very close (key equivalence check)
         np.testing.assert_array_almost_equal(
-            rust_resid, numpy_resid, decimal=5,
-            err_msg="Residuals should match for MultiPeriodDiD-like design"
+            rust_resid,
+            numpy_resid,
+            decimal=5,
+            err_msg="Residuals should match for MultiPeriodDiD-like design",
         )
 
     # =========================================================================
@@ -687,8 +702,7 @@ class TestRustVsNumpy:
         numpy_vcov = numpy_fn(X, residuals, None)
 
         np.testing.assert_array_almost_equal(
-            rust_vcov, numpy_vcov, decimal=8,
-            err_msg="HC1 robust VCoV should match"
+            rust_vcov, numpy_vcov, decimal=8, err_msg="HC1 robust VCoV should match"
         )
 
     def test_robust_vcov_clustered_match(self):
@@ -707,8 +721,7 @@ class TestRustVsNumpy:
         numpy_vcov = numpy_fn(X, residuals, cluster_ids)
 
         np.testing.assert_array_almost_equal(
-            rust_vcov, numpy_vcov, decimal=6,
-            err_msg="Cluster-robust VCoV should match"
+            rust_vcov, numpy_vcov, decimal=6, err_msg="Cluster-robust VCoV should match"
         )
 
     # =========================================================================
@@ -744,10 +757,10 @@ class TestRustVsNumpy:
         mean = weights.mean()
         assert abs(mean) < 0.02, f"Mammen mean should be ~0, got {mean}"
 
-        second_moment = (weights ** 2).mean()
+        second_moment = (weights**2).mean()
         assert abs(second_moment - 1.0) < 0.02, f"Mammen E[w^2] should be ~1, got {second_moment}"
 
-        third_moment = (weights ** 3).mean()
+        third_moment = (weights**3).mean()
         assert abs(third_moment - 1.0) < 0.1, f"Mammen E[w^3] should be ~1, got {third_moment}"
 
     def test_bootstrap_weights_webb_properties(self):
@@ -793,8 +806,10 @@ class TestRustVsNumpy:
             numpy_proj = numpy_fn(v)
 
             np.testing.assert_array_almost_equal(
-                rust_proj, numpy_proj, decimal=10,
-                err_msg=f"Simplex projection mismatch for input {v}"
+                rust_proj,
+                numpy_proj,
+                decimal=10,
+                err_msg=f"Simplex projection mismatch for input {v}",
             )
 
     def test_nan_vcov_fallback_to_python(self):
@@ -834,17 +849,16 @@ class TestRustVsNumpy:
 
         # Check if fallback warning was emitted
         fallback_warning_emitted = any(
-            "Re-running with Python backend" in str(warning.message)
-            for warning in w
+            "Re-running with Python backend" in str(warning.message) for warning in w
         )
 
         # Key invariants that must hold regardless of which backend is used:
         # 1. Coefficients must be finite (either via Rust SVD or Python R-style)
         finite_coeffs = coeffs[np.isfinite(coeffs)]
-        assert len(finite_coeffs) >= 3, \
-            "At least 3 coefficients should be finite (identifiable)"
-        assert np.all(np.abs(finite_coeffs) < 1e10), \
-            f"Finite coefficients should be reasonable, got {finite_coeffs}"
+        assert len(finite_coeffs) >= 3, "At least 3 coefficients should be finite (identifiable)"
+        assert np.all(
+            np.abs(finite_coeffs) < 1e10
+        ), f"Finite coefficients should be reasonable, got {finite_coeffs}"
 
         # 2. If vcov has any finite values, they should correspond to finite coefficients
         if vcov is not None:
@@ -853,8 +867,9 @@ class TestRustVsNumpy:
                 if finite_coef_mask[i]:
                     # This coefficient's variance should be finite
                     var_i = vcov[i, i]
-                    assert np.isfinite(var_i) or np.isnan(var_i), \
-                        f"Variance for finite coef {i} should be finite or NaN (dropped)"
+                    assert np.isfinite(var_i) or np.isnan(
+                        var_i
+                    ), f"Variance for finite coef {i} should be finite or NaN (dropped)"
 
         # 3. Residuals must always be finite
         assert np.all(np.isfinite(residuals)), "Residuals should be finite"
@@ -865,20 +880,22 @@ class TestRustVsNumpy:
             nan_vcov_diag_indices = set(np.where(np.isnan(np.diag(vcov)))[0])
 
             # NaN in vcov diagonal should correspond exactly to NaN coefficients
-            assert nan_vcov_diag_indices == nan_coef_indices, \
-                f"NaN vcov diagonal {nan_vcov_diag_indices} should match " \
+            assert nan_vcov_diag_indices == nan_coef_indices, (
+                f"NaN vcov diagonal {nan_vcov_diag_indices} should match "
                 f"NaN coefficients {nan_coef_indices}"
+            )
 
         # 5. If fallback warning was emitted, R-style handling MUST have occurred
         # This verifies that the fallback actually applies R-style NaN handling
         # (not minimum-norm solution which would have all finite coefficients)
         if fallback_warning_emitted:
-            assert np.any(np.isnan(coeffs)), \
-                "Fallback warning emitted but no NaN coefficients - " \
+            assert np.any(np.isnan(coeffs)), (
+                "Fallback warning emitted but no NaN coefficients - "
                 "R-style handling was not applied"
-            assert vcov is not None and np.any(np.isnan(vcov)), \
-                "Fallback warning emitted but vcov has no NaN - " \
-                "R-style handling was not applied"
+            )
+            assert vcov is not None and np.any(np.isnan(vcov)), (
+                "Fallback warning emitted but vcov has no NaN - " "R-style handling was not applied"
+            )
 
 
 @pytest.mark.skipif(not HAS_RUST_BACKEND, reason="Rust backend not available")
@@ -941,8 +958,7 @@ class TestTROPRustBackend:
         numpy_dist = trop._compute_all_unit_distances(Y, D, n_units, n_periods)
 
         np.testing.assert_array_almost_equal(
-            rust_dist, numpy_dist, decimal=10,
-            err_msg="Distance matrices should match"
+            rust_dist, numpy_dist, decimal=10, err_msg="Distance matrices should match"
         )
 
     def test_unit_distance_excludes_treated(self):
@@ -985,9 +1001,15 @@ class TestTROPRustBackend:
         lambda_nn = np.array([0.0, 0.1], dtype=np.float64)
 
         best_lt, best_lu, best_ln, score, n_valid, n_attempted, first_failed = loocv_grid_search(
-            Y, D, control_mask, time_dist,
-            lambda_time, lambda_unit, lambda_nn,
-            100, 1e-6,
+            Y,
+            D,
+            control_mask,
+            time_dist,
+            lambda_time,
+            lambda_unit,
+            lambda_nn,
+            100,
+            1e-6,
         )
 
         # Check returned parameters are from the grid
@@ -1033,9 +1055,18 @@ class TestTROPRustBackend:
             n_control=5, n_treated=1, n_bootstrap=n_bootstrap, seed=42
         )
         estimates, se = bootstrap_trop_variance(
-            Y, D, control_mask, time_dist,
-            1.0, 1.0, 0.1,  # lambda values
-            n_bootstrap, 100, 1e-6, ctrl_idx, trt_idx,
+            Y,
+            D,
+            control_mask,
+            time_dist,
+            1.0,
+            1.0,
+            0.1,  # lambda values
+            n_bootstrap,
+            100,
+            1e-6,
+            ctrl_idx,
+            trt_idx,
         )
 
         # Should return array of bootstrap estimates and SE
@@ -1067,12 +1098,32 @@ class TestTROPRustBackend:
             n_control=5, n_treated=1, n_bootstrap=20, seed=42
         )
         est1, se1 = bootstrap_trop_variance(
-            Y, D, control_mask, time_dist,
-            1.0, 1.0, 0.1, 20, 100, 1e-6, ctrl_idx_a, trt_idx_a,
+            Y,
+            D,
+            control_mask,
+            time_dist,
+            1.0,
+            1.0,
+            0.1,
+            20,
+            100,
+            1e-6,
+            ctrl_idx_a,
+            trt_idx_a,
         )
         est2, se2 = bootstrap_trop_variance(
-            Y, D, control_mask, time_dist,
-            1.0, 1.0, 0.1, 20, 100, 1e-6, ctrl_idx_b, trt_idx_b,
+            Y,
+            D,
+            control_mask,
+            time_dist,
+            1.0,
+            1.0,
+            0.1,
+            20,
+            100,
+            1e-6,
+            ctrl_idx_b,
+            trt_idx_b,
         )
 
         np.testing.assert_array_almost_equal(est1, est2)
@@ -1098,8 +1149,18 @@ class TestTROPRustBackend:
         ctrl_idx[2, 3] = -1  # negative
         with pytest.raises(ValueError, match="control_indices.*out-of-range"):
             bootstrap_trop_variance(
-                Y, D, control_mask, time_dist,
-                1.0, 1.0, 0.1, 5, 100, 1e-6, ctrl_idx, trt_idx,
+                Y,
+                D,
+                control_mask,
+                time_dist,
+                1.0,
+                1.0,
+                0.1,
+                5,
+                100,
+                1e-6,
+                ctrl_idx,
+                trt_idx,
             )
 
     def test_bootstrap_rejects_out_of_range_index(self):
@@ -1122,8 +1183,18 @@ class TestTROPRustBackend:
         trt_idx[1, 0] = 99  # >> n_treated=1
         with pytest.raises(ValueError, match="treated_indices.*out-of-range"):
             bootstrap_trop_variance(
-                Y, D, control_mask, time_dist,
-                1.0, 1.0, 0.1, 5, 100, 1e-6, ctrl_idx, trt_idx,
+                Y,
+                D,
+                control_mask,
+                time_dist,
+                1.0,
+                1.0,
+                0.1,
+                5,
+                100,
+                1e-6,
+                ctrl_idx,
+                trt_idx,
             )
 
 
@@ -1152,8 +1223,7 @@ class TestTROPRustVsNumpy:
         numpy_dist = trop._compute_all_unit_distances(Y, D, n_units, n_periods)
 
         np.testing.assert_array_almost_equal(
-            rust_dist, numpy_dist, decimal=10,
-            err_msg="Distance matrices should match exactly"
+            rust_dist, numpy_dist, decimal=10, err_msg="Distance matrices should match exactly"
         )
 
     def test_trop_produces_valid_results(self):
@@ -1172,13 +1242,14 @@ class TestTROPRustVsNumpy:
         for i in range(n_units):
             for t in range(n_periods):
                 is_treated = (i == 0) and (t >= 6)
-                y = 1.0 + 0.5 * i + 0.3 * t + (true_effect if is_treated else 0) + np.random.randn() * 0.5
-                data.append({
-                    'unit': i,
-                    'time': t,
-                    'outcome': y,
-                    'treated': 1 if is_treated else 0
-                })
+                y = (
+                    1.0
+                    + 0.5 * i
+                    + 0.3 * t
+                    + (true_effect if is_treated else 0)
+                    + np.random.randn() * 0.5
+                )
+                data.append({"unit": i, "time": t, "outcome": y, "treated": 1 if is_treated else 0})
 
         df = pd.DataFrame(data)
 
@@ -1188,9 +1259,9 @@ class TestTROPRustVsNumpy:
             lambda_unit_grid=[0.0, 1.0],
             lambda_nn_grid=[0.0, 0.1],
             n_bootstrap=20,
-            seed=42
+            seed=42,
         )
-        results = trop.fit(df, 'outcome', 'treated', 'unit', 'time')
+        results = trop.fit(df, "outcome", "treated", "unit", "time")
 
         # Check results are valid
         assert np.isfinite(results.att), "ATT should be finite"
@@ -1204,8 +1275,9 @@ class TestTROPRustVsNumpy:
         # - LOOCV-selected tuning parameters may not be optimal for small samples
         # This is a validity test, not a precision test - we're checking the
         # estimation produces sensible results, not exact recovery.
-        assert abs(results.att - true_effect) < 2.0, \
-            f"ATT {results.att:.2f} should be close to true effect {true_effect}"
+        assert (
+            abs(results.att - true_effect) < 2.0
+        ), f"ATT {results.att:.2f} should be close to true effect {true_effect}"
 
         # Tuning parameters should be from the grid
         assert results.lambda_time in [0.0, 1.0]
@@ -1238,9 +1310,14 @@ class TestTROPGlobalRustBackend:
         lambda_nn_grid = np.array([0.0, 0.1])
 
         result = loocv_grid_search_global(
-            Y, D, control_mask,
-            lambda_time_grid, lambda_unit_grid, lambda_nn_grid,
-            100, 1e-6,
+            Y,
+            D,
+            control_mask,
+            lambda_time_grid,
+            lambda_unit_grid,
+            lambda_nn_grid,
+            100,
+            1e-6,
         )
 
         best_lt, best_lu, best_ln, best_score, n_valid, n_attempted, _ = result
@@ -1275,14 +1352,24 @@ class TestTROPGlobalRustBackend:
         lambda_nn_grid = np.array([0.0, 0.1])
 
         result1 = loocv_grid_search_global(
-            Y, D, control_mask,
-            lambda_time_grid, lambda_unit_grid, lambda_nn_grid,
-            50, 1e-6,
+            Y,
+            D,
+            control_mask,
+            lambda_time_grid,
+            lambda_unit_grid,
+            lambda_nn_grid,
+            50,
+            1e-6,
         )
         result2 = loocv_grid_search_global(
-            Y, D, control_mask,
-            lambda_time_grid, lambda_unit_grid, lambda_nn_grid,
-            50, 1e-6,
+            Y,
+            D,
+            control_mask,
+            lambda_time_grid,
+            lambda_unit_grid,
+            lambda_nn_grid,
+            50,
+            1e-6,
         )
 
         # Without subsampling, results should be deterministic
@@ -1314,7 +1401,16 @@ class TestTROPGlobalRustBackend:
             n_control=n_units - n_treated, n_treated=n_treated, n_bootstrap=50, seed=42
         )
         estimates, se = bootstrap_trop_variance_global(
-            Y, D, 0.5, 0.5, 0.1, 50, 50, 1e-6, ctrl_idx, trt_idx,
+            Y,
+            D,
+            0.5,
+            0.5,
+            0.1,
+            50,
+            50,
+            1e-6,
+            ctrl_idx,
+            trt_idx,
         )
 
         assert isinstance(estimates, np.ndarray)
@@ -1342,10 +1438,28 @@ class TestTROPGlobalRustBackend:
             n_control=n_units - n_treated, n_treated=n_treated, n_bootstrap=50, seed=42
         )
         est1, se1 = bootstrap_trop_variance_global(
-            Y, D, 0.5, 0.5, 0.1, 50, 50, 1e-6, ctrl_a, trt_a,
+            Y,
+            D,
+            0.5,
+            0.5,
+            0.1,
+            50,
+            50,
+            1e-6,
+            ctrl_a,
+            trt_a,
         )
         est2, se2 = bootstrap_trop_variance_global(
-            Y, D, 0.5, 0.5, 0.1, 50, 50, 1e-6, ctrl_b, trt_b,
+            Y,
+            D,
+            0.5,
+            0.5,
+            0.1,
+            50,
+            50,
+            1e-6,
+            ctrl_b,
+            trt_b,
         )
 
         np.testing.assert_array_almost_equal(est1, est2)
@@ -1368,7 +1482,16 @@ class TestTROPGlobalRustBackend:
         ctrl_idx[3, 2] = -5  # negative
         with pytest.raises(ValueError, match="control_indices.*out-of-range"):
             bootstrap_trop_variance_global(
-                Y, D, 0.5, 0.5, 0.1, 10, 50, 1e-6, ctrl_idx, trt_idx,
+                Y,
+                D,
+                0.5,
+                0.5,
+                0.1,
+                10,
+                50,
+                1e-6,
+                ctrl_idx,
+                trt_idx,
             )
 
     def test_bootstrap_global_rejects_out_of_range_index(self):
@@ -1388,7 +1511,16 @@ class TestTROPGlobalRustBackend:
         trt_idx[5, 1] = 99  # >> n_treated=4
         with pytest.raises(ValueError, match="treated_indices.*out-of-range"):
             bootstrap_trop_variance_global(
-                Y, D, 0.5, 0.5, 0.1, 10, 50, 1e-6, ctrl_idx, trt_idx,
+                Y,
+                D,
+                0.5,
+                0.5,
+                0.1,
+                10,
+                50,
+                1e-6,
+                ctrl_idx,
+                trt_idx,
             )
 
 
@@ -1417,12 +1549,14 @@ class TestTROPGlobalRustVsNumpy:
                 treatment_indicator = 1 if (is_treated and post) else 0
                 if treatment_indicator:
                     y += true_effect
-                data.append({
-                    'unit': i,
-                    'time': t,
-                    'outcome': y,
-                    'treated': treatment_indicator,
-                })
+                data.append(
+                    {
+                        "unit": i,
+                        "time": t,
+                        "outcome": y,
+                        "treated": treatment_indicator,
+                    }
+                )
 
         df = pd.DataFrame(data)
 
@@ -1432,9 +1566,9 @@ class TestTROPGlobalRustVsNumpy:
             lambda_unit_grid=[0.0, 1.0],
             lambda_nn_grid=[0.0, 0.1],
             n_bootstrap=30,
-            seed=42
+            seed=42,
         )
-        results = trop.fit(df, 'outcome', 'treated', 'unit', 'time')
+        results = trop.fit(df, "outcome", "treated", "unit", "time")
 
         # Check results are valid
         assert np.isfinite(results.att), "ATT should be finite"
@@ -1469,12 +1603,14 @@ class TestTROPGlobalRustVsNumpy:
                 treatment_indicator = 1 if (is_treated and post) else 0
                 if treatment_indicator:
                     y += true_effect
-                data.append({
-                    'unit': i,
-                    'time': t,
-                    'outcome': y,
-                    'treated': treatment_indicator,
-                })
+                data.append(
+                    {
+                        "unit": i,
+                        "time": t,
+                        "outcome": y,
+                        "treated": treatment_indicator,
+                    }
+                )
 
         df = pd.DataFrame(data)
 
@@ -1485,9 +1621,9 @@ class TestTROPGlobalRustVsNumpy:
             lambda_unit_grid=[0.0, 1.0],
             lambda_nn_grid=[0.0, 0.1],
             n_bootstrap=20,
-            seed=42
+            seed=42,
         )
-        results_global = trop_global.fit(df, 'outcome', 'treated', 'unit', 'time')
+        results_global = trop_global.fit(df, "outcome", "treated", "unit", "time")
 
         # Fit with local method
         trop_local = TROP(
@@ -1496,9 +1632,9 @@ class TestTROPGlobalRustVsNumpy:
             lambda_unit_grid=[0.0, 1.0],
             lambda_nn_grid=[0.0, 0.1],
             n_bootstrap=20,
-            seed=42
+            seed=42,
         )
-        results_local = trop_local.fit(df, 'outcome', 'treated', 'unit', 'time')
+        results_local = trop_local.fit(df, "outcome", "treated", "unit", "time")
 
         # Both should have same sign (both positive for true_effect=2.0)
         assert np.sign(results_global.att) == np.sign(results_local.att)
@@ -1523,12 +1659,14 @@ class TestTROPGlobalRustVsNumpy:
                 treatment_indicator = 1 if (is_treated and post) else 0
                 if treatment_indicator:
                     y += true_effect
-                data.append({
-                    'unit': i,
-                    'time': t,
-                    'outcome': y,
-                    'treated': treatment_indicator,
-                })
+                data.append(
+                    {
+                        "unit": i,
+                        "time": t,
+                        "outcome": y,
+                        "treated": treatment_indicator,
+                    }
+                )
 
         df = pd.DataFrame(data)
 
@@ -1536,10 +1674,10 @@ class TestTROPGlobalRustVsNumpy:
         # Set 5% of control pre-treatment observations to NaN
         nan_indices = []
         for idx, row in df.iterrows():
-            if row['treated'] == 0 and row['time'] < (n_periods - n_post):
+            if row["treated"] == 0 and row["time"] < (n_periods - n_post):
                 if np.random.rand() < 0.05:
                     nan_indices.append(idx)
-        df.loc[nan_indices, 'outcome'] = np.nan
+        df.loc[nan_indices, "outcome"] = np.nan
 
         n_nan = len(nan_indices)
         assert n_nan > 0, "Should have introduced some NaN values"
@@ -1550,9 +1688,9 @@ class TestTROPGlobalRustVsNumpy:
             lambda_unit_grid=[0.0, 1.0],
             lambda_nn_grid=[0.0, 0.1],
             n_bootstrap=20,
-            seed=42
+            seed=42,
         )
-        results = trop.fit(df, 'outcome', 'treated', 'unit', 'time')
+        results = trop.fit(df, "outcome", "treated", "unit", "time")
 
         # Results should be finite (NaN observations are excluded)
         assert np.isfinite(results.att), f"ATT {results.att} should be finite with NaN data"
@@ -1591,24 +1729,30 @@ class TestTROPGlobalRustVsNumpy:
                 treatment_indicator = 1 if (is_treated and post) else 0
                 if treatment_indicator:
                     y += true_effect
-                data.append({
-                    'unit': i,
-                    'time': t,
-                    'outcome': y,
-                    'treated': treatment_indicator,
-                })
+                data.append(
+                    {
+                        "unit": i,
+                        "time": t,
+                        "outcome": y,
+                        "treated": treatment_indicator,
+                    }
+                )
 
         df = pd.DataFrame(data)
 
         # Set ALL pre-period outcomes to NaN for one control unit (unit n_treated)
         # This unit has no valid pre-period data and should get zero weight
         control_unit_with_no_pre = n_treated  # First control unit
-        pre_mask = (df['unit'] == control_unit_with_no_pre) & (df['time'] < (n_periods - n_post))
-        df.loc[pre_mask, 'outcome'] = np.nan
+        pre_mask = (df["unit"] == control_unit_with_no_pre) & (df["time"] < (n_periods - n_post))
+        df.loc[pre_mask, "outcome"] = np.nan
 
         # Verify we set NaN correctly
-        unit_pre_data = df[(df['unit'] == control_unit_with_no_pre) & (df['time'] < (n_periods - n_post))]
-        assert unit_pre_data['outcome'].isna().all(), "Control unit should have all NaN in pre-period"
+        unit_pre_data = df[
+            (df["unit"] == control_unit_with_no_pre) & (df["time"] < (n_periods - n_post))
+        ]
+        assert (
+            unit_pre_data["outcome"].isna().all()
+        ), "Control unit should have all NaN in pre-period"
 
         # Fit with global method - should handle gracefully
         trop = TROP(
@@ -1617,9 +1761,9 @@ class TestTROPGlobalRustVsNumpy:
             lambda_unit_grid=[0.5, 1.0],
             lambda_nn_grid=[0.0],
             n_bootstrap=20,
-            seed=42
+            seed=42,
         )
-        results = trop.fit(df, 'outcome', 'treated', 'unit', 'time')
+        results = trop.fit(df, "outcome", "treated", "unit", "time")
 
         # Results should be finite - the unit with no valid pre-period data
         # should get zero weight and not break estimation
@@ -1628,8 +1772,9 @@ class TestTROPGlobalRustVsNumpy:
 
         # ATT should be in reasonable range of true effect
         # The no-valid-pre unit getting zero weight shouldn't corrupt the estimate
-        assert abs(results.att - true_effect) < 1.5, \
-            f"ATT {results.att:.2f} should be close to true effect {true_effect}"
+        assert (
+            abs(results.att - true_effect) < 1.5
+        ), f"ATT {results.att:.2f} should be close to true effect {true_effect}"
 
     def test_trop_global_nan_exclusion_rust_python_parity(self):
         """Test Rust and Python backends produce matching results with NaN data.
@@ -1660,23 +1805,25 @@ class TestTROPGlobalRustVsNumpy:
                 treatment_indicator = 1 if (is_treated and post) else 0
                 if treatment_indicator:
                     y += true_effect
-                data.append({
-                    'unit': i,
-                    'time': t,
-                    'outcome': y,
-                    'treated': treatment_indicator,
-                })
+                data.append(
+                    {
+                        "unit": i,
+                        "time": t,
+                        "outcome": y,
+                        "treated": treatment_indicator,
+                    }
+                )
 
         df = pd.DataFrame(data)
 
         # Introduce scattered NaN values (5% of control pre-period observations)
         np.random.seed(123)  # Different seed for NaN placement
         for idx, row in df.iterrows():
-            if row['treated'] == 0 and row['time'] < (n_periods - n_post):
+            if row["treated"] == 0 and row["time"] < (n_periods - n_post):
                 if np.random.rand() < 0.05:
-                    df.loc[idx, 'outcome'] = np.nan
+                    df.loc[idx, "outcome"] = np.nan
 
-        n_nan = df['outcome'].isna().sum()
+        n_nan = df["outcome"].isna().sum()
         assert n_nan > 0, "Should have some NaN values"
 
         # Common TROP parameters
@@ -1686,25 +1833,28 @@ class TestTROPGlobalRustVsNumpy:
             lambda_unit_grid=[0.5, 1.0],
             lambda_nn_grid=[0.0],
             n_bootstrap=20,
-            seed=42
+            seed=42,
         )
 
         # Run with Rust backend (current default when available)
         trop_rust = TROP(**trop_params)
-        results_rust = trop_rust.fit(df.copy(), 'outcome', 'treated', 'unit', 'time')
+        results_rust = trop_rust.fit(df.copy(), "outcome", "treated", "unit", "time")
 
         # Run with Python-only backend using mock.patch to avoid module reload issues
         # (Module reload breaks isinstance() checks in other tests due to class identity)
         from unittest.mock import patch
         import sys
-        trop_global_module = sys.modules['diff_diff.trop_global']
 
-        with patch.object(trop_global_module, 'HAS_RUST_BACKEND', False), \
-             patch.object(trop_global_module, '_rust_loocv_grid_search_global', None), \
-             patch.object(trop_global_module, '_rust_bootstrap_trop_variance_global', None):
+        trop_global_module = sys.modules["diff_diff.trop_global"]
+
+        with (
+            patch.object(trop_global_module, "HAS_RUST_BACKEND", False),
+            patch.object(trop_global_module, "_rust_loocv_grid_search_global", None),
+            patch.object(trop_global_module, "_rust_bootstrap_trop_variance_global", None),
+        ):
 
             trop_python = TROP(**trop_params)
-            results_python = trop_python.fit(df.copy(), 'outcome', 'treated', 'unit', 'time')
+            results_python = trop_python.fit(df.copy(), "outcome", "treated", "unit", "time")
 
         # Both should produce finite results
         assert np.isfinite(results_rust.att), f"Rust ATT {results_rust.att} should be finite"
@@ -1713,9 +1863,10 @@ class TestTROPGlobalRustVsNumpy:
         # ATT estimates should be close (within reasonable tolerance)
         # Allow some difference due to LOOCV randomness and numerical differences
         att_diff = abs(results_rust.att - results_python.att)
-        assert att_diff < 0.5, \
-            f"Rust ATT ({results_rust.att:.3f}) and Python ATT ({results_python.att:.3f}) " \
+        assert att_diff < 0.5, (
+            f"Rust ATT ({results_rust.att:.3f}) and Python ATT ({results_python.att:.3f}) "
             f"differ by {att_diff:.3f}, should be < 0.5"
+        )
 
         # Both should recover true effect direction
         assert results_rust.att > 0, f"Rust ATT {results_rust.att} should be positive"
@@ -1749,12 +1900,14 @@ class TestTROPGlobalRustVsNumpy:
                 treatment_indicator = 1 if (is_treated and post) else 0
                 if treatment_indicator:
                     y += true_effect
-                data.append({
-                    'unit': i,
-                    'time': t,
-                    'outcome': y,
-                    'treated': treatment_indicator,
-                })
+                data.append(
+                    {
+                        "unit": i,
+                        "time": t,
+                        "outcome": y,
+                        "treated": treatment_indicator,
+                    }
+                )
 
         df = pd.DataFrame(data)
 
@@ -1762,11 +1915,11 @@ class TestTROPGlobalRustVsNumpy:
         # This makes average_treated[3] = NaN
         target_period = 3
         treated_units = list(range(n_treated))
-        mask = df['unit'].isin(treated_units) & (df['time'] == target_period)
-        df.loc[mask, 'outcome'] = np.nan
+        mask = df["unit"].isin(treated_units) & (df["time"] == target_period)
+        df.loc[mask, "outcome"] = np.nan
 
         # Verify we set NaN correctly
-        n_nan = df.loc[mask, 'outcome'].isna().sum()
+        n_nan = df.loc[mask, "outcome"].isna().sum()
         assert n_nan == n_treated, f"Should have {n_treated} NaN, got {n_nan}"
 
         # Common TROP parameters
@@ -1776,25 +1929,28 @@ class TestTROPGlobalRustVsNumpy:
             lambda_unit_grid=[1.0],
             lambda_nn_grid=[0.0],
             n_bootstrap=20,
-            seed=42
+            seed=42,
         )
 
         # Run with Rust backend (current default when available)
         trop_rust = TROP(**trop_params)
-        results_rust = trop_rust.fit(df.copy(), 'outcome', 'treated', 'unit', 'time')
+        results_rust = trop_rust.fit(df.copy(), "outcome", "treated", "unit", "time")
 
         # Run with Python-only backend using mock.patch to avoid module reload issues
         # (Module reload breaks isinstance() checks in other tests due to class identity)
         from unittest.mock import patch
         import sys
-        trop_global_module = sys.modules['diff_diff.trop_global']
 
-        with patch.object(trop_global_module, 'HAS_RUST_BACKEND', False), \
-             patch.object(trop_global_module, '_rust_loocv_grid_search_global', None), \
-             patch.object(trop_global_module, '_rust_bootstrap_trop_variance_global', None):
+        trop_global_module = sys.modules["diff_diff.trop_global"]
+
+        with (
+            patch.object(trop_global_module, "HAS_RUST_BACKEND", False),
+            patch.object(trop_global_module, "_rust_loocv_grid_search_global", None),
+            patch.object(trop_global_module, "_rust_bootstrap_trop_variance_global", None),
+        ):
 
             trop_python = TROP(**trop_params)
-            results_python = trop_python.fit(df.copy(), 'outcome', 'treated', 'unit', 'time')
+            results_python = trop_python.fit(df.copy(), "outcome", "treated", "unit", "time")
 
         # Both should produce finite results
         assert np.isfinite(results_rust.att), f"Rust ATT {results_rust.att} should be finite"
@@ -1802,9 +1958,10 @@ class TestTROPGlobalRustVsNumpy:
 
         # ATT estimates should be close (within reasonable tolerance)
         att_diff = abs(results_rust.att - results_python.att)
-        assert att_diff < 0.5, \
-            f"Rust ATT ({results_rust.att:.3f}) and Python ATT ({results_python.att:.3f}) " \
+        assert att_diff < 0.5, (
+            f"Rust ATT ({results_rust.att:.3f}) and Python ATT ({results_python.att:.3f}) "
             f"differ by {att_diff:.3f}, should be < 0.5"
+        )
 
     def test_trop_global_solver_parity_no_lowrank(self):
         """Test Rust/Python solver parity for no-lowrank path (lambda_nn >= 1e10).
@@ -1831,10 +1988,14 @@ class TestTROPGlobalRustVsNumpy:
                 treatment_indicator = 1 if (is_treated and post) else 0
                 if treatment_indicator:
                     y += 2.0
-                data.append({
-                    'unit': i, 'time': t,
-                    'outcome': y, 'treated': treatment_indicator,
-                })
+                data.append(
+                    {
+                        "unit": i,
+                        "time": t,
+                        "outcome": y,
+                        "treated": treatment_indicator,
+                    }
+                )
         df = pd.DataFrame(data)
 
         # Fixed lambda with lambda_nn=inf (no low-rank)
@@ -1849,32 +2010,37 @@ class TestTROPGlobalRustVsNumpy:
 
         # Rust backend
         trop_rust = TROP(**trop_params)
-        results_rust = trop_rust.fit(df.copy(), 'outcome', 'treated', 'unit', 'time')
+        results_rust = trop_rust.fit(df.copy(), "outcome", "treated", "unit", "time")
 
         # Python-only backend
-        trop_global_module = sys.modules['diff_diff.trop_global']
-        with patch.object(trop_global_module, 'HAS_RUST_BACKEND', False), \
-             patch.object(trop_global_module, '_rust_loocv_grid_search_global', None), \
-             patch.object(trop_global_module, '_rust_bootstrap_trop_variance_global', None):
+        trop_global_module = sys.modules["diff_diff.trop_global"]
+        with (
+            patch.object(trop_global_module, "HAS_RUST_BACKEND", False),
+            patch.object(trop_global_module, "_rust_loocv_grid_search_global", None),
+            patch.object(trop_global_module, "_rust_bootstrap_trop_variance_global", None),
+        ):
             trop_python = TROP(**trop_params)
-            results_python = trop_python.fit(df.copy(), 'outcome', 'treated', 'unit', 'time')
+            results_python = trop_python.fit(df.copy(), "outcome", "treated", "unit", "time")
 
         # ATT should match closely
-        assert abs(results_rust.att - results_python.att) < 1e-6, \
-            f"No-lowrank ATT mismatch: Rust={results_rust.att:.8f}, Python={results_python.att:.8f}"
+        assert (
+            abs(results_rust.att - results_python.att) < 1e-6
+        ), f"No-lowrank ATT mismatch: Rust={results_rust.att:.8f}, Python={results_python.att:.8f}"
 
         # Unit and time effects should match
         for key in results_rust.unit_effects:
             r_val = results_rust.unit_effects[key]
             p_val = results_python.unit_effects[key]
-            assert abs(r_val - p_val) < 1e-6, \
-                f"Unit effect mismatch for {key}: Rust={r_val:.8f}, Python={p_val:.8f}"
+            assert (
+                abs(r_val - p_val) < 1e-6
+            ), f"Unit effect mismatch for {key}: Rust={r_val:.8f}, Python={p_val:.8f}"
 
         for key in results_rust.time_effects:
             r_val = results_rust.time_effects[key]
             p_val = results_python.time_effects[key]
-            assert abs(r_val - p_val) < 1e-6, \
-                f"Time effect mismatch for {key}: Rust={r_val:.8f}, Python={p_val:.8f}"
+            assert (
+                abs(r_val - p_val) < 1e-6
+            ), f"Time effect mismatch for {key}: Rust={r_val:.8f}, Python={p_val:.8f}"
 
     def test_trop_global_solver_parity_with_lowrank(self):
         """Test Rust/Python solver parity for with-lowrank path (finite lambda_nn).
@@ -1902,10 +2068,14 @@ class TestTROPGlobalRustVsNumpy:
                 treatment_indicator = 1 if (is_treated and post) else 0
                 if treatment_indicator:
                     y += 2.0
-                data.append({
-                    'unit': i, 'time': t,
-                    'outcome': y, 'treated': treatment_indicator,
-                })
+                data.append(
+                    {
+                        "unit": i,
+                        "time": t,
+                        "outcome": y,
+                        "treated": treatment_indicator,
+                    }
+                )
         df = pd.DataFrame(data)
 
         # Fixed lambda with finite lambda_nn (low-rank enabled)
@@ -1920,26 +2090,30 @@ class TestTROPGlobalRustVsNumpy:
 
         # Rust backend
         trop_rust = TROP(**trop_params)
-        results_rust = trop_rust.fit(df.copy(), 'outcome', 'treated', 'unit', 'time')
+        results_rust = trop_rust.fit(df.copy(), "outcome", "treated", "unit", "time")
 
         # Python-only backend
-        trop_global_module = sys.modules['diff_diff.trop_global']
-        with patch.object(trop_global_module, 'HAS_RUST_BACKEND', False), \
-             patch.object(trop_global_module, '_rust_loocv_grid_search_global', None), \
-             patch.object(trop_global_module, '_rust_bootstrap_trop_variance_global', None):
+        trop_global_module = sys.modules["diff_diff.trop_global"]
+        with (
+            patch.object(trop_global_module, "HAS_RUST_BACKEND", False),
+            patch.object(trop_global_module, "_rust_loocv_grid_search_global", None),
+            patch.object(trop_global_module, "_rust_bootstrap_trop_variance_global", None),
+        ):
             trop_python = TROP(**trop_params)
-            results_python = trop_python.fit(df.copy(), 'outcome', 'treated', 'unit', 'time')
+            results_python = trop_python.fit(df.copy(), "outcome", "treated", "unit", "time")
 
         # ATT should match closely
-        assert abs(results_rust.att - results_python.att) < 1e-6, \
-            f"With-lowrank ATT mismatch: Rust={results_rust.att:.8f}, Python={results_python.att:.8f}"
+        assert (
+            abs(results_rust.att - results_python.att) < 1e-6
+        ), f"With-lowrank ATT mismatch: Rust={results_rust.att:.8f}, Python={results_python.att:.8f}"
 
         # Unit and time effects should match
         for key in results_rust.unit_effects:
             r_val = results_rust.unit_effects[key]
             p_val = results_python.unit_effects[key]
-            assert abs(r_val - p_val) < 1e-6, \
-                f"Unit effect mismatch for {key}: Rust={r_val:.8f}, Python={p_val:.8f}"
+            assert (
+                abs(r_val - p_val) < 1e-6
+            ), f"Unit effect mismatch for {key}: Rust={r_val:.8f}, Python={p_val:.8f}"
 
 
 @pytest.mark.skipif(not HAS_RUST_BACKEND, reason="Rust backend not available")
@@ -1955,8 +2129,9 @@ class TestSDIDRustBackend:
         Y_pre = np.random.randn(10, 5)
         rust_nl = rust_fn(Y_pre)
         numpy_nl = numpy_fn(Y_pre)
-        assert abs(rust_nl - numpy_nl) < 1e-10, \
-            f"Noise levels differ: rust={rust_nl}, numpy={numpy_nl}"
+        assert (
+            abs(rust_nl - numpy_nl) < 1e-10
+        ), f"Noise levels differ: rust={rust_nl}, numpy={numpy_nl}"
 
     def test_noise_level_single_period(self):
         """Test noise level returns 0 for single pre-period."""
@@ -1986,8 +2161,7 @@ class TestSDIDRustBackend:
         rust_w = rust_fn(Y, 0.5, True, None, 1e-3, 1000)
         numpy_w = numpy_fn(Y, 0.5, True, None, 1e-3, 1000)
         np.testing.assert_array_almost_equal(
-            rust_w, numpy_w, decimal=6,
-            err_msg="Frank-Wolfe weights should match"
+            rust_w, numpy_w, decimal=6, err_msg="Frank-Wolfe weights should match"
         )
 
     def test_sc_weight_fw_with_init_weights(self):
@@ -2001,8 +2175,7 @@ class TestSDIDRustBackend:
         rust_w = rust_fn(Y, 0.2, True, init_w, 1e-3, 500)
         numpy_w = numpy_fn(Y, 0.2, True, init_w, 1e-3, 500)
         np.testing.assert_array_almost_equal(
-            rust_w, numpy_w, decimal=6,
-            err_msg="Frank-Wolfe with init weights should match"
+            rust_w, numpy_w, decimal=6, err_msg="Frank-Wolfe with init weights should match"
         )
 
     def test_time_weights_on_simplex(self):
@@ -2031,21 +2204,17 @@ class TestSDIDRustBackend:
         max_iter = 1000
 
         # Rust implementation (2-pass with sparsification)
-        rust_w = rust_fn(Y_pre, Y_post, 0.01, True, min_decrease,
-                         max_iter_pre, max_iter)
+        rust_w = rust_fn(Y_pre, Y_post, 0.01, True, min_decrease, max_iter_pre, max_iter)
 
         # Python implementation (manual 2-pass matching Rust)
         post_means = np.mean(Y_post, axis=0)
         Y_time = np.column_stack([Y_pre.T, post_means])
-        lam = _sc_weight_fw_numpy(Y_time, 0.01, True, None,
-                                  min_decrease, max_iter_pre)
+        lam = _sc_weight_fw_numpy(Y_time, 0.01, True, None, min_decrease, max_iter_pre)
         lam = _sparsify(lam)
-        numpy_w = _sc_weight_fw_numpy(Y_time, 0.01, True, lam,
-                                      min_decrease, max_iter)
+        numpy_w = _sc_weight_fw_numpy(Y_time, 0.01, True, lam, min_decrease, max_iter)
 
         np.testing.assert_array_almost_equal(
-            rust_w, numpy_w, decimal=6,
-            err_msg="Time weights should match"
+            rust_w, numpy_w, decimal=6, err_msg="Time weights should match"
         )
 
     def test_time_weights_single_preperiod(self):
@@ -2089,8 +2258,7 @@ class TestSDIDRustBackend:
         numpy_w = _sc_weight_fw_numpy(Y_unit, 0.5, True, omega, 1e-3, 1000)
 
         np.testing.assert_array_almost_equal(
-            rust_w, numpy_w, decimal=6,
-            err_msg="Unit weights should match"
+            rust_w, numpy_w, decimal=6, err_msg="Unit weights should match"
         )
 
     def test_unit_weights_single_control(self):
@@ -2123,8 +2291,7 @@ class TestSDIDRustBackend:
 
         # Weights must match to high precision
         np.testing.assert_array_almost_equal(
-            rust_w, numpy_w, decimal=6,
-            err_msg="Gram path weights should match Python"
+            rust_w, numpy_w, decimal=6, err_msg="Gram path weights should match Python"
         )
         assert abs(rust_w.sum() - 1.0) < 1e-6
         assert np.all(rust_w >= -1e-6)
@@ -2147,8 +2314,7 @@ class TestSDIDRustBackend:
         numpy_w = numpy_fn(Y, 0.5, True, None, 1e-5, 10000)
 
         np.testing.assert_array_almost_equal(
-            rust_w, numpy_w, decimal=6,
-            err_msg="Standard path weights should match Python"
+            rust_w, numpy_w, decimal=6, err_msg="Standard path weights should match Python"
         )
         assert abs(rust_w.sum() - 1.0) < 1e-6
         assert np.all(rust_w >= -1e-6)
@@ -2169,8 +2335,10 @@ class TestSDIDRustBackend:
         rust_w_gram = rust_fn(Y_gram, 0.2, False, None, 1e-5, 10000)
         numpy_w_gram = numpy_fn(Y_gram, 0.2, False, None, 1e-5, 10000)
         np.testing.assert_array_almost_equal(
-            rust_w_gram, numpy_w_gram, decimal=6,
-            err_msg="Gram path intercept=false weights should match Python"
+            rust_w_gram,
+            numpy_w_gram,
+            decimal=6,
+            err_msg="Gram path intercept=false weights should match Python",
         )
 
         # Standard path: T0 >= N
@@ -2178,8 +2346,10 @@ class TestSDIDRustBackend:
         rust_w_std = rust_fn(Y_std, 0.2, False, None, 1e-5, 10000)
         numpy_w_std = numpy_fn(Y_std, 0.2, False, None, 1e-5, 10000)
         np.testing.assert_array_almost_equal(
-            rust_w_std, numpy_w_std, decimal=6,
-            err_msg="Standard path intercept=false weights should match Python"
+            rust_w_std,
+            numpy_w_std,
+            decimal=6,
+            err_msg="Standard path intercept=false weights should match Python",
         )
 
     def test_full_sdid_rust_vs_python(self):
@@ -2200,28 +2370,31 @@ class TestSDIDRustBackend:
                 y = 1.0 + 0.5 * i + 0.3 * t + np.random.randn() * 0.3
                 if is_treated and post:
                     y += true_effect
-                data.append({
-                    'unit': i, 'time': t, 'outcome': y,
-                    'treated': 1 if is_treated else 0,
-                    'post': 1 if post else 0,
-                })
+                data.append(
+                    {
+                        "unit": i,
+                        "time": t,
+                        "outcome": y,
+                        "treated": 1 if is_treated else 0,
+                        "post": 1 if post else 0,
+                    }
+                )
         df = pd.DataFrame(data)
         post_periods = list(range(n_pre, n_pre + n_post))
 
         # Run with Rust backend
         sdid_rust = SyntheticDiD(variance_method="placebo", seed=42)
-        results_rust = sdid_rust.fit(df, 'outcome', 'treated', 'unit', 'time', post_periods)
+        results_rust = sdid_rust.fit(df, "outcome", "treated", "unit", "time", post_periods)
 
         # Run with Python backend
-        utils_mod = sys.modules['diff_diff.utils']
-        with patch.object(utils_mod, 'HAS_RUST_BACKEND', False):
+        utils_mod = sys.modules["diff_diff.utils"]
+        with patch.object(utils_mod, "HAS_RUST_BACKEND", False):
             sdid_py = SyntheticDiD(variance_method="placebo", seed=42)
-            results_py = sdid_py.fit(df.copy(), 'outcome', 'treated', 'unit', 'time', post_periods)
+            results_py = sdid_py.fit(df.copy(), "outcome", "treated", "unit", "time", post_periods)
 
         # ATT should be very close
         np.testing.assert_almost_equal(
-            results_rust.att, results_py.att, decimal=4,
-            err_msg="Rust and Python ATT should match"
+            results_rust.att, results_py.att, decimal=4, err_msg="Rust and Python ATT should match"
         )
 
 
@@ -2266,8 +2439,10 @@ class TestSolveOLSSkipRankCheckParity:
         )
 
         linalg_module = sys.modules["diff_diff.linalg"]
-        with patch.object(linalg_module, "HAS_RUST_BACKEND", False), \
-             patch.object(linalg_module, "_rust_solve_ols", None):
+        with (
+            patch.object(linalg_module, "HAS_RUST_BACKEND", False),
+            patch.object(linalg_module, "_rust_solve_ols", None),
+        ):
             coef_py, resid_py, _ = solve_ols(
                 X, y, skip_rank_check=True, vcov_type="hc1", return_vcov=False
             )
@@ -2278,11 +2453,13 @@ class TestSolveOLSSkipRankCheckParity:
         should truncate the same singular values."""
         rng = np.random.default_rng(11)
         n, k = 80, 3
-        X = np.column_stack([
-            rng.normal(0, 1, n),              # unit scale
-            rng.normal(0, 1e6, n),            # 1e6 scale
-            rng.normal(0, 1, n),              # unit scale
-        ])
+        X = np.column_stack(
+            [
+                rng.normal(0, 1, n),  # unit scale
+                rng.normal(0, 1e6, n),  # 1e6 scale
+                rng.normal(0, 1, n),  # unit scale
+            ]
+        )
         y = 1.0 + 0.5 * X[:, 0] + 1e-7 * X[:, 1] + 0.3 * X[:, 2] + rng.normal(0, 0.1, n)
 
         coef_rust, coef_py = self._run_both_backends(X, y)
@@ -2290,7 +2467,10 @@ class TestSolveOLSSkipRankCheckParity:
         fitted_rust = X @ coef_rust
         fitted_py = X @ coef_py
         np.testing.assert_allclose(
-            fitted_rust, fitted_py, rtol=1e-6, atol=1e-8,
+            fitted_rust,
+            fitted_py,
+            rtol=1e-6,
+            atol=1e-8,
             err_msg="Rust vs Python fitted-value divergence on mixed-scale X",
         )
 
@@ -2310,7 +2490,10 @@ class TestSolveOLSSkipRankCheckParity:
         fitted_rust = X @ coef_rust
         fitted_py = X @ coef_py
         np.testing.assert_allclose(
-            fitted_rust, fitted_py, rtol=1e-6, atol=1e-8,
+            fitted_rust,
+            fitted_py,
+            rtol=1e-6,
+            atol=1e-8,
             err_msg="Rust vs Python fitted-value divergence on near-singular X",
         )
 
@@ -2331,7 +2514,10 @@ class TestSolveOLSSkipRankCheckParity:
         fitted_py = X @ coef_py
         # Fitted values are the backend-invariant object under rank deficiency.
         np.testing.assert_allclose(
-            fitted_rust, fitted_py, rtol=1e-6, atol=1e-8,
+            fitted_rust,
+            fitted_py,
+            rtol=1e-6,
+            atol=1e-8,
             err_msg="Rust vs Python fitted-value divergence on rank-deficient X",
         )
 
@@ -2361,6 +2547,7 @@ class TestTROPRustEdgeCaseParity:
         """Panel with two control units nearly parallel to each other,
         making the pre-period Y matrix near rank-deficient."""
         import pandas as pd
+
         rng = np.random.default_rng(13)
         data = []
         shared_path = rng.normal(0, 1, n_periods)
@@ -2414,16 +2601,20 @@ class TestTROPRustEdgeCaseParity:
         res_rust = trop_rust.fit(df.copy(), "outcome", "treated", "unit", "time")
 
         trop_global_module = sys.modules["diff_diff.trop_global"]
-        with patch.object(trop_global_module, "HAS_RUST_BACKEND", False), \
-             patch.object(trop_global_module, "_rust_loocv_grid_search_global", None), \
-             patch.object(trop_global_module, "_rust_bootstrap_trop_variance_global", None):
+        with (
+            patch.object(trop_global_module, "HAS_RUST_BACKEND", False),
+            patch.object(trop_global_module, "_rust_loocv_grid_search_global", None),
+            patch.object(trop_global_module, "_rust_bootstrap_trop_variance_global", None),
+        ):
             trop_py = TROP(**trop_params)
             res_py = trop_py.fit(df.copy(), "outcome", "treated", "unit", "time")
 
         # Primary assertion: the ATT point estimate at the chosen λ matches.
         # This catches both (a) same λ chosen and (b) tied λ producing same fit.
         np.testing.assert_allclose(
-            res_rust.att, res_py.att, atol=1e-6,
+            res_rust.att,
+            res_py.att,
+            atol=1e-6,
             err_msg="Grid-search ATT divergence on rank-deficient Y: "
             f"Rust={res_rust.att:.8f}, Python={res_py.att:.8f}",
         )
@@ -2459,14 +2650,19 @@ class TestTROPRustEdgeCaseParity:
         res_rust = trop_rust.fit(df.copy(), "outcome", "treated", "unit", "time")
 
         trop_global_module = sys.modules["diff_diff.trop_global"]
-        with patch.object(trop_global_module, "HAS_RUST_BACKEND", False), \
-             patch.object(trop_global_module, "_rust_loocv_grid_search_global", None), \
-             patch.object(trop_global_module, "_rust_bootstrap_trop_variance_global", None):
+        with (
+            patch.object(trop_global_module, "HAS_RUST_BACKEND", False),
+            patch.object(trop_global_module, "_rust_loocv_grid_search_global", None),
+            patch.object(trop_global_module, "_rust_bootstrap_trop_variance_global", None),
+        ):
             trop_py = TROP(**trop_params)
             res_py = trop_py.fit(df.copy(), "outcome", "treated", "unit", "time")
 
         np.testing.assert_allclose(
-            res_rust.se, res_py.se, atol=1e-14, rtol=1e-14,
+            res_rust.se,
+            res_py.se,
+            atol=1e-14,
+            rtol=1e-14,
             err_msg=f"Bootstrap SE divergence under seed={seed}: "
             f"Rust={res_rust.se:.16f}, Python={res_py.se:.16f}",
         )
@@ -2522,13 +2718,18 @@ class TestTROPRustEdgeCaseParity:
         res_rust = trop_rust.fit(df.copy(), "outcome", "treated", "unit", "time")
 
         trop_local_module = sys.modules["diff_diff.trop_local"]
-        with patch.object(trop_local_module, "HAS_RUST_BACKEND", False), \
-             patch.object(trop_local_module, "_rust_bootstrap_trop_variance", None):
+        with (
+            patch.object(trop_local_module, "HAS_RUST_BACKEND", False),
+            patch.object(trop_local_module, "_rust_bootstrap_trop_variance", None),
+        ):
             trop_py = TROP(**trop_params)
             res_py = trop_py.fit(df.copy(), "outcome", "treated", "unit", "time")
 
         np.testing.assert_allclose(
-            res_rust.se, res_py.se, atol=1e-5, rtol=1e-5,
+            res_rust.se,
+            res_py.se,
+            atol=1e-5,
+            rtol=1e-5,
             err_msg=f"Local-method bootstrap SE divergence under "
             f"seed={seed}, lambda_nn={lambda_nn}: "
             f"Rust={res_rust.se:.16f}, Python={res_py.se:.16f}",
@@ -2587,15 +2788,20 @@ class TestTROPRustEdgeCaseParity:
 
         trop_module = sys.modules["diff_diff.trop"]
         trop_local_module = sys.modules["diff_diff.trop_local"]
-        with patch.object(trop_module, "HAS_RUST_BACKEND", False), \
-             patch.object(trop_module, "_rust_loocv_grid_search", None), \
-             patch.object(trop_local_module, "HAS_RUST_BACKEND", False), \
-             patch.object(trop_local_module, "_rust_bootstrap_trop_variance", None):
+        with (
+            patch.object(trop_module, "HAS_RUST_BACKEND", False),
+            patch.object(trop_module, "_rust_loocv_grid_search", None),
+            patch.object(trop_local_module, "HAS_RUST_BACKEND", False),
+            patch.object(trop_local_module, "_rust_bootstrap_trop_variance", None),
+        ):
             trop_py = TROP(**trop_params)
             res_py = trop_py.fit(df.copy(), "outcome", "treated", "unit", "time")
 
         np.testing.assert_allclose(
-            res_rust.att, res_py.att, atol=tol, rtol=tol,
+            res_rust.att,
+            res_py.att,
+            atol=tol,
+            rtol=tol,
             err_msg=f"Local-method ATT divergence at lambda_nn={lambda_nn}: "
             f"Rust={res_rust.att:.16f}, Python={res_py.att:.16f}",
         )
@@ -2653,15 +2859,20 @@ class TestTROPRustEdgeCaseParity:
 
         trop_module = sys.modules["diff_diff.trop"]
         trop_local_module = sys.modules["diff_diff.trop_local"]
-        with patch.object(trop_module, "HAS_RUST_BACKEND", False), \
-             patch.object(trop_module, "_rust_loocv_grid_search", None), \
-             patch.object(trop_local_module, "HAS_RUST_BACKEND", False), \
-             patch.object(trop_local_module, "_rust_bootstrap_trop_variance", None):
+        with (
+            patch.object(trop_module, "HAS_RUST_BACKEND", False),
+            patch.object(trop_module, "_rust_loocv_grid_search", None),
+            patch.object(trop_local_module, "HAS_RUST_BACKEND", False),
+            patch.object(trop_local_module, "_rust_bootstrap_trop_variance", None),
+        ):
             trop_py = TROP(**trop_params)
             res_py = trop_py.fit(df.copy(), "outcome", "treated", "unit", "time")
 
         np.testing.assert_allclose(
-            res_rust.att, res_py.att, atol=tol, rtol=tol,
+            res_rust.att,
+            res_py.att,
+            atol=tol,
+            rtol=tol,
             err_msg=f"Same-cohort donor ATT divergence at lambda_nn={lambda_nn}: "
             f"Rust={res_rust.att:.16f}, Python={res_py.att:.16f}",
         )
@@ -2699,3 +2910,250 @@ class TestFallbackWhenNoRust:
         assert coeffs.shape == (k,)
         assert residuals.shape == (n,)
         assert vcov.shape == (k, k)
+
+
+from diff_diff._backend import _rust_demean_map as _demean_map_symbol
+
+
+@pytest.mark.skipif(
+    not HAS_RUST_BACKEND or _demean_map_symbol is None,
+    reason="Rust backend or demean_map kernel not available",
+)
+class TestDemeanMapKernel:
+    """Rust demean_map vs the canonical numpy engine (_demean_map_numpy).
+
+    Contract: identical sweep order, row-order scatter-add accumulation, and
+    max|x - x_old| < tol convergence per column (incl. NaN poisoning). The
+    assertion order is iteration-count EQUALITY first (deterministic under
+    the pinned op-order contract), then allclose on outputs.
+    """
+
+    @staticmethod
+    def _fixture(kind, seed=0, k=3):
+        rng = np.random.default_rng(seed)
+        if kind == "balanced":
+            n_units, n_periods = 40, 8
+            unit = np.repeat(np.arange(n_units), n_periods)
+            period = np.tile(np.arange(n_periods), n_units)
+        elif kind == "unbalanced":
+            n_units, n_periods = 60, 12
+            unit = np.repeat(np.arange(n_units), n_periods)
+            period = np.tile(np.arange(n_periods), n_units)
+            keep = rng.random(unit.size) > 0.35
+            unit, period = unit[keep], period[keep]
+        elif kind == "contiguous":  # slow-convergence regime (>100 iterations)
+            n_units, n_periods, span = 120, 40, 6
+            unit = np.repeat(np.arange(n_units), n_periods)
+            period = np.tile(np.arange(n_periods), n_units)
+            entry = rng.integers(0, n_periods - span, n_units)
+            keep = (period >= entry[unit]) & (period < entry[unit] + span)
+            unit, period = unit[keep], period[keep]
+        else:
+            raise ValueError(kind)
+        n = unit.size
+        x_cols = [rng.normal(size=n) for _ in range(k)]
+        codes_list = [
+            pd.factorize(unit, sort=False)[0].astype(np.intp),
+            pd.factorize(period, sort=False)[0].astype(np.intp),
+        ]
+        n_groups = [len(np.unique(unit)), len(np.unique(period))]
+        w = rng.uniform(0.5, 2.0, n)
+        return x_cols, codes_list, n_groups, w
+
+    @staticmethod
+    def _run_both(x_cols, codes_list, n_groups, weights, tol=1e-10, max_iter=10_000):
+        from diff_diff.utils import _demean_map_numpy, _demean_map_rust
+
+        rust = _demean_map_rust(x_cols, codes_list, n_groups, weights, tol, max_iter)
+        assert rust is not None, "rust kernel unexpectedly fell back"
+        numpy_res = _demean_map_numpy(x_cols, codes_list, n_groups, weights, tol, max_iter)
+        return rust, numpy_res
+
+    @pytest.mark.parametrize("kind", ["balanced", "unbalanced", "contiguous"])
+    @pytest.mark.parametrize("weighted", [False, True])
+    def test_equivalence_two_way(self, kind, weighted):
+        x_cols, codes_list, n_groups, w = self._fixture(kind)
+        (r_cols, r_iters), (p_cols, p_iters) = self._run_both(
+            x_cols, codes_list, n_groups, w if weighted else None
+        )
+        assert r_iters == p_iters  # deterministic under the pinned op order
+        if kind == "contiguous":
+            assert all(it > 100 or it < 0 for it in p_iters) or max(p_iters) > 100
+        for rc, pc in zip(r_cols, p_cols):
+            np.testing.assert_allclose(rc, pc, rtol=0, atol=1e-12)
+
+    def test_equivalence_three_way(self):
+        rng = np.random.default_rng(3)
+        x_cols, codes_list, n_groups, w = self._fixture("unbalanced", seed=3)
+        n = x_cols[0].size
+        firm = rng.integers(0, 7, n)
+        codes_list = codes_list + [pd.factorize(firm, sort=False)[0].astype(np.intp)]
+        n_groups = n_groups + [len(np.unique(firm))]
+        (r_cols, r_iters), (p_cols, p_iters) = self._run_both(x_cols, codes_list, n_groups, w)
+        assert r_iters == p_iters
+        for rc, pc in zip(r_cols, p_cols):
+            np.testing.assert_allclose(rc, pc, rtol=0, atol=1e-12)
+
+    def test_zero_total_weight_group_rows_inert_parity(self):
+        x_cols, codes_list, n_groups, w = self._fixture("unbalanced", seed=4)
+        w = w.copy()
+        zero_rows = codes_list[0] == 0
+        w[zero_rows] = 0.0
+        (r_cols, r_iters), (p_cols, p_iters) = self._run_both(x_cols, codes_list, n_groups, w)
+        assert r_iters == p_iters
+        for rc, pc in zip(r_cols, p_cols):
+            np.testing.assert_allclose(rc, pc, rtol=0, atol=1e-12)
+            assert np.isfinite(rc).all()
+
+    def test_nan_in_variable_never_converges_both(self):
+        x_cols, codes_list, n_groups, _ = self._fixture("unbalanced", seed=5, k=1)
+        x_cols[0][3] = np.nan
+        (_, r_iters), (_, p_iters) = self._run_both(
+            x_cols, codes_list, n_groups, None, tol=1e-8, max_iter=25
+        )
+        assert r_iters == [-1]
+        assert p_iters == [-1]
+
+    @pytest.mark.parametrize("k", [1, 64])
+    def test_column_counts(self, k):
+        x_cols, codes_list, n_groups, _ = self._fixture("unbalanced", seed=6, k=k)
+        (r_cols, r_iters), (p_cols, p_iters) = self._run_both(x_cols, codes_list, n_groups, None)
+        assert len(r_cols) == k and r_iters == p_iters
+        for rc, pc in zip(r_cols, p_cols):
+            np.testing.assert_allclose(rc, pc, rtol=0, atol=1e-12)
+
+    def test_nonconvergence_flag_parity_at_max_iter_1(self):
+        x_cols, codes_list, n_groups, _ = self._fixture("unbalanced", seed=7)
+        (_, r_iters), (_, p_iters) = self._run_both(
+            x_cols, codes_list, n_groups, None, tol=1e-15, max_iter=1
+        )
+        assert r_iters == p_iters == [-1] * len(x_cols)
+
+    def test_forced_fallback_runs_numpy_engine(self, monkeypatch):
+        """Wrapper returning None must route demean_by_groups to the numpy
+        engine and still produce a correct result."""
+        import diff_diff.utils as utils_mod
+        from diff_diff.utils import demean_by_groups
+
+        rng = np.random.default_rng(8)
+        df = pd.DataFrame(
+            {
+                "unit": np.repeat(np.arange(20), 5),
+                "period": np.tile(np.arange(5), 20),
+                "y": rng.normal(size=100),
+            }
+        )
+        calls = {"numpy": 0}
+        orig_numpy = utils_mod._demean_map_numpy
+
+        def counting_numpy(*a, **kw):
+            calls["numpy"] += 1
+            return orig_numpy(*a, **kw)
+
+        monkeypatch.setattr(utils_mod, "_demean_map_rust", lambda *a, **kw: None)
+        monkeypatch.setattr(utils_mod, "_demean_map_numpy", counting_numpy)
+        out, _ = demean_by_groups(df, ["y"], ["unit", "period"], suffix="_dm")
+        assert calls["numpy"] == 1
+        assert np.abs(out["y_dm"].values.mean()) < 1e-12
+
+    def test_nonconvergence_warning_parity_under_rust(self):
+        """Same 'did not converge' warning, same variable names, via the
+        rust dispatch path."""
+        from diff_diff.utils import demean_by_groups
+
+        rng = np.random.default_rng(9)
+        df = pd.DataFrame(
+            {
+                "unit": np.repeat(np.arange(30), 6),
+                "period": np.tile(np.arange(6), 30),
+            }
+        )
+        df = df[rng.random(len(df)) > 0.3].reset_index(drop=True)
+        df["y"] = rng.normal(size=len(df))
+        with pytest.warns(UserWarning, match=r"\['y'\].*did not converge"):
+            demean_by_groups(df, ["y"], ["unit", "period"], suffix="_dm", max_iter=1, tol=1e-15)
+
+    def test_estimator_level_att_parity(self, monkeypatch):
+        """SunAbraham + DiD(absorb=) ATT/SE identical across engines,
+        including the FE-spanned-covariate snap decision."""
+        import warnings as _w
+
+        import diff_diff.utils as utils_mod
+        from diff_diff import DifferenceInDifferences, SunAbraham
+
+        rng = np.random.default_rng(10)
+        n_units, n_periods = 90, 10
+        unit = np.repeat(np.arange(n_units), n_periods)
+        time_ = np.tile(np.arange(n_periods), n_units)
+        keep = rng.random(unit.size) > 0.25
+        unit, time_ = unit[keep], time_[keep]
+        first = np.where(np.arange(n_units) % 3 == 0, 0, 5)[unit]
+        treated = (unit < n_units // 2).astype(int)
+        post = (time_ >= n_periods // 2).astype(int)
+        y = 0.3 * treated * post + rng.normal(size=unit.size)
+        df = pd.DataFrame(
+            {
+                "y": y,
+                "unit": unit,
+                "time": time_,
+                "first_treat": first,
+                "treated": treated,
+                "post": post,
+            }
+        )
+        # FE-spanned covariate: snap decisions must match across engines
+        a = rng.normal(size=n_units)
+        b = rng.normal(size=n_periods)
+        df["xspan"] = a[unit] + b[time_]
+
+        def fits():
+            with _w.catch_warnings():
+                _w.simplefilter("ignore")
+                sa = SunAbraham().fit(
+                    df, outcome="y", unit="unit", time="time", first_treat="first_treat"
+                )
+                did = DifferenceInDifferences().fit(
+                    df,
+                    outcome="y",
+                    treatment="treated",
+                    time="post",
+                    absorb=["unit", "time"],
+                    covariates=["xspan"],
+                )
+            return sa, did
+
+        sa_r, did_r = fits()
+        monkeypatch.setattr(utils_mod, "_rust_demean_map", None)
+        sa_p, did_p = fits()
+        assert sa_r.att == pytest.approx(sa_p.att, abs=1e-10)
+        assert sa_r.se == pytest.approx(sa_p.se, rel=1e-8)
+        assert did_r.att == pytest.approx(did_p.att, abs=1e-10)
+        assert did_r.se == pytest.approx(did_p.se, rel=1e-8)
+        # snap decision parity: spanned covariate NaN under BOTH engines
+        assert np.isnan(did_r.coefficients["xspan"])
+        assert np.isnan(did_p.coefficients["xspan"])
+
+    def test_stale_symbol_none_falls_back_to_numpy(self, monkeypatch):
+        """A mixed-version extension missing demean_map (symbol None) must
+        route the PUBLIC entry point to the numpy engine, not raise."""
+        import diff_diff.utils as utils_mod
+        from diff_diff.utils import demean_by_groups
+
+        rng = np.random.default_rng(11)
+        df = pd.DataFrame(
+            {
+                "unit": np.repeat(np.arange(15), 4),
+                "period": np.tile(np.arange(4), 15),
+                "y": rng.normal(size=60),
+            }
+        )
+        monkeypatch.setattr(utils_mod, "_rust_demean_map", None)
+        out, _ = demean_by_groups(df, ["y"], ["unit", "period"], suffix="_dm")
+        assert np.abs(out["y_dm"].values.mean()) < 1e-12
+        # the wrapper itself honors its documented None contract too
+        assert (
+            utils_mod._demean_map_rust(
+                [df["y"].values], [np.zeros(60, dtype=np.intp)], [1], None, 1e-10, 10
+            )
+            is None
+        )

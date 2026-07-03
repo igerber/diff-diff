@@ -13,6 +13,7 @@ from scipy import stats
 # Import Rust backend if available (from _backend to avoid circular imports)
 from diff_diff._backend import (
     HAS_RUST_BACKEND,
+    _rust_demean_map,
     _rust_project_simplex,
     _rust_sdid_unit_weights,
     _rust_compute_time_weights,
@@ -2641,6 +2642,111 @@ def demean_by_group(
     return data, n_effects
 
 
+def _demean_map_numpy(
+    x_cols: List[np.ndarray],
+    codes_list: List[np.ndarray],
+    n_groups_list: List[int],
+    weights: Optional[np.ndarray],
+    tol: float,
+    max_iter: int,
+) -> Tuple[List[np.ndarray], List[int]]:
+    """Canonical numpy MAP engine over pre-factorized group codes.
+
+    The reference implementation for the demeaning contract (python-canonical
+    policy): the Rust kernel mirrors this exactly (sweep order, row-order
+    bincount accumulation, ``max|x - x_old| < tol`` convergence per column)
+    and equivalence tests compare against THIS function directly.
+
+    Returns (demeaned columns, iterations per column; -1 = not converged).
+    """
+    demeaned: List[np.ndarray] = []
+    iters: List[int] = []
+    if weights is not None:
+        w = np.asarray(weights, dtype=np.float64)
+        # Cache per-group weight sums once (invariant across variables/iterations).
+        w_sums = [
+            np.bincount(codes, weights=w, minlength=n_g)
+            for codes, n_g in zip(codes_list, n_groups_list)
+        ]
+        for x0 in x_cols:
+            x = np.asarray(x0, dtype=np.float64).copy()
+            it_out = -1
+            for _iter in range(max_iter):
+                x_old = x.copy()
+                for codes, n_g, w_sum in zip(codes_list, n_groups_list, w_sums):
+                    wx_sum = np.bincount(codes, weights=w * x, minlength=n_g)
+                    # Guard zero-total-weight groups (survey subpopulation /
+                    # zero-weight domain padding): leave such rows unchanged
+                    # (mean 0) so they remain inert in the downstream WLS
+                    # instead of poisoning the design with NaN/Inf.
+                    means = np.divide(wx_sum, w_sum, out=np.zeros_like(wx_sum), where=w_sum > 0)
+                    x = x - means[codes]
+                if np.max(np.abs(x - x_old)) < tol:
+                    it_out = _iter + 1
+                    break
+            demeaned.append(x)
+            iters.append(it_out)
+    else:
+        counts = [
+            np.bincount(codes, minlength=n_g).astype(np.float64)
+            for codes, n_g in zip(codes_list, n_groups_list)
+        ]
+        for x0 in x_cols:
+            x = np.asarray(x0, dtype=np.float64).copy()
+            it_out = -1
+            for _iter in range(max_iter):
+                x_old = x.copy()
+                for codes, n_g, cnt in zip(codes_list, n_groups_list, counts):
+                    means = np.bincount(codes, weights=x, minlength=n_g) / cnt
+                    x = x - means[codes]
+                if np.max(np.abs(x - x_old)) < tol:
+                    it_out = _iter + 1
+                    break
+            demeaned.append(x)
+            iters.append(it_out)
+    return demeaned, iters
+
+
+def _demean_map_rust(
+    x_cols: List[np.ndarray],
+    codes_list: List[np.ndarray],
+    n_groups_list: List[int],
+    weights: Optional[np.ndarray],
+    tol: float,
+    max_iter: int,
+) -> Optional[Tuple[List[np.ndarray], List[int]]]:
+    """Marshal to the Rust ``demean_map`` kernel.
+
+    Returns None to signal "use the canonical numpy engine" (kernel absent,
+    degenerate shapes, or a deliberate kernel-side validation error). Dtypes
+    are coerced explicitly BEFORE the call - never rely on exception handling
+    for dtype mismatches.
+    """
+    if _rust_demean_map is None:
+        return None
+    if not x_cols or x_cols[0].shape[0] == 0:
+        return None
+    x_mat = np.ascontiguousarray(np.column_stack(x_cols), dtype=np.float64)
+    codes_mat = np.ascontiguousarray(np.column_stack(codes_list), dtype=np.int64)
+    w = None if weights is None else np.ascontiguousarray(weights, dtype=np.float64)
+    try:
+        out, iters = _rust_demean_map(  # type: ignore[misc]
+            x_mat,
+            codes_mat,
+            [int(g) for g in n_groups_list],
+            w,
+            float(tol),
+            int(max_iter),
+        )
+    except ValueError as e:
+        if "demean_map" in str(e):
+            # deliberate kernel-side validation marker -> numpy fallback
+            return None
+        raise
+    # F-order result: per-column views are contiguous, no extra copy
+    return [out[:, j] for j in range(out.shape[1])], [int(i) for i in iters]
+
+
 def demean_by_groups(
     data: pd.DataFrame,
     variables: List[str],
@@ -2774,55 +2880,18 @@ def demean_by_groups(
         codes_list.append(codes.astype(np.intp, copy=False))
         n_groups_list.append(len(uniques))
     n_effects = sum(n_g - 1 for n_g in n_groups_list)
-    demeaned_values: List[np.ndarray] = []
-    non_converged_vars: List[str] = []
 
-    if weights is not None:
-        w = np.asarray(weights, dtype=np.float64)
-        # Cache per-group weight sums once (invariant across variables/iterations).
-        w_sums = [
-            np.bincount(codes, weights=w, minlength=n_g)
-            for codes, n_g in zip(codes_list, n_groups_list)
-        ]
-
-        for var in variables:
-            x = data[var].values.astype(np.float64)
-            converged = False
-            for _iter in range(max_iter):
-                x_old = x.copy()
-                for codes, n_g, w_sum in zip(codes_list, n_groups_list, w_sums):
-                    wx_sum = np.bincount(codes, weights=w * x, minlength=n_g)
-                    # Guard zero-total-weight groups (survey subpopulation /
-                    # zero-weight domain padding): leave such rows unchanged
-                    # (mean 0) so they remain inert in the downstream WLS
-                    # instead of poisoning the design with NaN/Inf.
-                    means = np.divide(wx_sum, w_sum, out=np.zeros_like(wx_sum), where=w_sum > 0)
-                    x = x - means[codes]
-                if np.max(np.abs(x - x_old)) < tol:
-                    converged = True
-                    break
-            if not converged:
-                non_converged_vars.append(var)
-            demeaned_values.append(x)
-    else:
-        counts = [
-            np.bincount(codes, minlength=n_g).astype(np.float64)
-            for codes, n_g in zip(codes_list, n_groups_list)
-        ]
-        for var in variables:
-            x = data[var].values.astype(np.float64)
-            converged = False
-            for _iter in range(max_iter):
-                x_old = x.copy()
-                for codes, n_g, cnt in zip(codes_list, n_groups_list, counts):
-                    means = np.bincount(codes, weights=x, minlength=n_g) / cnt
-                    x = x - means[codes]
-                if np.max(np.abs(x - x_old)) < tol:
-                    converged = True
-                    break
-            if not converged:
-                non_converged_vars.append(var)
-            demeaned_values.append(x)
+    x_cols = [data[var].values for var in variables]
+    result = None
+    if HAS_RUST_BACKEND and _rust_demean_map is not None:
+        # Rust kernel: identical sweep order, accumulation order, and
+        # convergence criterion (rayon-parallel across columns). None means
+        # "use the canonical numpy engine".
+        result = _demean_map_rust(x_cols, codes_list, n_groups_list, weights, tol, max_iter)
+    if result is None:
+        result = _demean_map_numpy(x_cols, codes_list, n_groups_list, weights, tol, max_iter)
+    demeaned_values, _iters = result
+    non_converged_vars = [v for v, it in zip(variables, _iters) if it < 0]
 
     if non_converged_vars:
         warn_if_not_converged(

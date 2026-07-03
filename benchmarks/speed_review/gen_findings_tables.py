@@ -244,12 +244,13 @@ def render_fe_absorption():
         qual_txt = f", {', '.join(quals)}" if quals else ""
         return f"{rec['fit_median_s']:.3f} (cv {rec['fit_cv']:.1%}{qual_txt})"
 
+    rust = load_suite("fe_absorption_rust")
     rows = [
-        "| Scenario | n rows | Before (s) | After (s) | Speedup | pyfixest (s) |",
-        "|---|---:|---:|---:|---:|---:|",
+        "| Scenario | n rows | Before (s) | After (s) | Speedup | Rust (s) | Rust speedup | pyfixest (s) |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for scen, display in FE_SCENARIO_DISPLAY.items():
-        b, a, y = before.get(scen), after.get(scen), yard.get(scen)
+        b, a, y, r = before.get(scen), after.get(scen), yard.get(scen), rust.get(scen)
         n_obs = (b or a or y or {}).get("n_obs")
         n_col = f"{n_obs:,}" if n_obs else "-"
         speedup = (
@@ -257,10 +258,19 @@ def render_fe_absorption():
             if (b and a and a.get("fit_median_s"))
             else "-"
         )
-        rows.append(f"| {display} | {n_col} | {cell(b)} | {cell(a)} | {speedup} | {cell(y)} |")
+        rust_speedup = (
+            f"{a['fit_median_s'] / r['fit_median_s']:.1f}x"
+            if (a and r and r.get("fit_median_s"))
+            else "-"
+        )
+        rows.append(
+            f"| {display} | {n_col} | {cell(b)} | {cell(a)} | {speedup} | "
+            f"{cell(r)} | {rust_speedup} | {cell(y)} |"
+        )
     rows.append("")
     rows.append(
         "*noisy* = CV above the 10% unusable threshold from the noise protocol. "
+        "*Rust speedup* is vs the After column (numpy engine, same code). "
         "*proxy* = timing-only pyfixest stand-in: the Sun-Abraham scenarios run a "
         "saturated `i(rel_time)` event study there (pyfixest 0.60 has no `sunab()`) - "
         "comparable demeaning load, different estimand, so those cells are not "

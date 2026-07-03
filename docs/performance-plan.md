@@ -66,20 +66,34 @@ in the existing `rust/` backend is the candidate next step, to be scoped
 only if the remaining gap matters in practice (pyfixest itself validates
 that architecture).
 
+**Landed (v3.6.x): Rust `demean_map` kernel** (optional backend; numpy
+canonical). Rayon-parallel MAP sweeps across the demeaned variables with the
+GIL released; equivalence locked by iteration-count equality +
+assert_allclose(atol=1e-12) against `_demean_map_numpy`. Measured on frozen
+code against a fresh same-session numpy-backend run (medians, CVs <= 4.1%):
+firm_churn 48.98s -> 25.84s (1.90x; CV-adjusted lower bound 1.78x - the
+submit gate), tail_stress 31.74s -> 11.37s (2.79x), geo_experiment 0.976s ->
+0.484s (2.02x, now ahead of the pyfixest yardstick's 0.623s), scanner 1.59x,
+survey 1.44x, county 1.36x, guard_small unregressed. Identity vs the
+committed after-baselines: 1e-13-1e-16 on every scenario incl. tail_stress.
+Known trade-off: the kernel holds one owned input copy plus the result
+(firm_churn peak RSS 13.4 GB -> 21.0 GB); chunking variables through the
+kernel is the noted follow-up if that bites a real workload.
+
 ### FE-absorption suite results
 
 <!-- TABLE:start fe_absorption -->
-| Scenario | n rows | Before (s) | After (s) | Speedup | pyfixest (s) |
-|---|---:|---:|---:|---:|---:|
-| 7. County policy event study (SunAbraham) | 177,289 | 3.865 (cv 2.5%) | 2.388 (cv 2.6%) | 1.6x | 0.190 (cv 4.0%, proxy) |
-| 8. Firm panel with churn (SunAbraham) | 2,400,000 | 92.957 (cv 0.9%) | 49.502 (cv 1.9%) | 1.9x | 1.912 (cv 20.3%, noisy, proxy) |
-| 9. Scanner store-week (TWFE) | 3,255,000 | 1.549 (cv 0.3%) | 0.983 (cv 0.1%) | 1.6x | 0.644 (cv 12.3%, noisy) |
-| 10. Geo experiment 5M orders (DiD absorb) | 5,000,000 | 2.630 (cv 0.6%) | 0.973 (cv 0.4%) | 2.7x | 0.623 (cv 7.8%) |
-| 11. Survey BRR replicates (DiD absorb) | 500,000 | 7.385 (cv 8.6%) | 4.077 (cv 0.1%) | 1.8x | - |
-| 12. Correlated-FE stress (DiD absorb) | 5,000,000 | 26.271 (cv 0.4%) | 31.765 (cv 0.6%) | 0.8x | 3.075 (cv 1.5%) |
-| 13. Small-panel guard (TWFE) | 20,000 | 0.005 (cv 4.1%) | 0.004 (cv 4.4%) | 1.3x | 0.007 (cv 2.2%) |
+| Scenario | n rows | Before (s) | After (s) | Speedup | Rust (s) | Rust speedup | pyfixest (s) |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| 7. County policy event study (SunAbraham) | 177,289 | 3.865 (cv 2.5%) | 2.388 (cv 2.6%) | 1.6x | 1.757 (cv 3.0%) | 1.4x | 0.190 (cv 4.0%, proxy) |
+| 8. Firm panel with churn (SunAbraham) | 2,400,000 | 92.957 (cv 0.9%) | 49.502 (cv 1.9%) | 1.9x | 25.839 (cv 4.1%) | 1.9x | 1.912 (cv 20.3%, noisy, proxy) |
+| 9. Scanner store-week (TWFE) | 3,255,000 | 1.549 (cv 0.3%) | 0.983 (cv 0.1%) | 1.6x | 0.624 (cv 0.3%) | 1.6x | 0.644 (cv 12.3%, noisy) |
+| 10. Geo experiment 5M orders (DiD absorb) | 5,000,000 | 2.630 (cv 0.6%) | 0.973 (cv 0.4%) | 2.7x | 0.484 (cv 0.2%) | 2.0x | 0.623 (cv 7.8%) |
+| 11. Survey BRR replicates (DiD absorb) | 500,000 | 7.385 (cv 8.6%) | 4.077 (cv 0.1%) | 1.8x | 2.835 (cv 0.0%) | 1.4x | - |
+| 12. Correlated-FE stress (DiD absorb) | 5,000,000 | 26.271 (cv 0.4%) | 31.765 (cv 0.6%) | 0.8x | 11.365 (cv 0.8%) | 2.8x | 3.075 (cv 1.5%) |
+| 13. Small-panel guard (TWFE) | 20,000 | 0.005 (cv 4.1%) | 0.004 (cv 4.4%) | 1.3x | 0.003 (cv 3.5%) | 1.0x | 0.007 (cv 2.2%) |
 
-*noisy* = CV above the 10% unusable threshold from the noise protocol. *proxy* = timing-only pyfixest stand-in: the Sun-Abraham scenarios run a saturated `i(rel_time)` event study there (pyfixest 0.60 has no `sunab()`) - comparable demeaning load, different estimand, so those cells are not exact-estimand comparisons (see `bench_fe_absorption_pyfixest.py`).
+*noisy* = CV above the 10% unusable threshold from the noise protocol. *Rust speedup* is vs the After column (numpy engine, same code). *proxy* = timing-only pyfixest stand-in: the Sun-Abraham scenarios run a saturated `i(rel_time)` event study there (pyfixest 0.60 has no `sunab()`) - comparable demeaning load, different estimand, so those cells are not exact-estimand comparisons (see `bench_fe_absorption_pyfixest.py`).
 <!-- TABLE:end fe_absorption -->
 
 `tail_stress` is a deliberately adversarial correlated-FE shape and is

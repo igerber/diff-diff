@@ -65,6 +65,14 @@ except ImportError:
     _rust_sc_weight_fw_weighted_with_convergence = None
     _rust_backend_info = None
 
+# FE-absorption MAP demeaning kernel: imported independently so a stale or
+# mixed-version extension missing only this newer symbol degrades to the
+# numpy demeaning engine WITHOUT disabling the older Rust accelerations.
+try:
+    from diff_diff._rust_backend import demean_map as _rust_demean_map
+except ImportError:
+    _rust_demean_map = None
+
 # Determine final backend based on environment variable and availability
 if _backend_env == "python":
     # Force pure Python mode - disable Rust even if available
@@ -73,6 +81,8 @@ if _backend_env == "python":
     _rust_project_simplex = None
     _rust_solve_ols = None
     _rust_compute_robust_vcov = None
+    # FE-absorption MAP demeaning kernel
+    _rust_demean_map = None
     # TROP estimator acceleration (local method)
     _rust_unit_distance_matrix = None
     _rust_loocv_grid_search = None
@@ -124,6 +134,8 @@ __all__ = [
     "_rust_project_simplex",
     "_rust_solve_ols",
     "_rust_compute_robust_vcov",
+    # FE-absorption MAP demeaning kernel
+    "_rust_demean_map",
     # TROP estimator acceleration (local method)
     "_rust_unit_distance_matrix",
     "_rust_loocv_grid_search",
