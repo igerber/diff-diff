@@ -5,8 +5,8 @@
 //! - Simplex projection
 //! - SDID unit and time weight computation
 
-use ndarray::{s, Array1, Array2, ArrayView1, ArrayView2, Axis};
 use ndarray::linalg::general_mat_vec_mul;
+use ndarray::{s, Array1, Array2, ArrayView1, ArrayView2, Axis};
 use numpy::{PyArray1, PyReadonlyArray1, PyReadonlyArray2, ToPyArray};
 use pyo3::prelude::*;
 
@@ -167,7 +167,8 @@ fn sc_weight_fw_gram(
             // Already at optimal vertex — compute objective for convergence check
             let xt_ata_x: f64 = ata_x.iter().zip(lam.iter()).map(|(&a, &b)| a * b).sum();
             let atb_dot_lam: f64 = atb.iter().zip(lam.iter()).map(|(&a, &b)| a * b).sum();
-            let val = zeta * zeta * lam_norm_sq + (xt_ata_x - 2.0 * atb_dot_lam + b_norm_sq) / n as f64;
+            let val =
+                zeta * zeta * lam_norm_sq + (xt_ata_x - 2.0 * atb_dot_lam + b_norm_sq) / n as f64;
             if t >= 1 && prev_val - val < min_decrease_sq {
                 converged = true;
                 break;
@@ -183,7 +184,8 @@ fn sc_weight_fw_gram(
         let denom = d_err_sq + eta * d_x_norm_sq;
         if denom <= 0.0 {
             let atb_dot_lam: f64 = atb.iter().zip(lam.iter()).map(|(&a, &b)| a * b).sum();
-            let val = zeta * zeta * lam_norm_sq + (xt_ata_x - 2.0 * atb_dot_lam + b_norm_sq) / n as f64;
+            let val =
+                zeta * zeta * lam_norm_sq + (xt_ata_x - 2.0 * atb_dot_lam + b_norm_sq) / n as f64;
             if t >= 1 && prev_val - val < min_decrease_sq {
                 converged = true;
                 break;
@@ -461,8 +463,7 @@ fn sc_weight_fw_gram_weighted(
         }
 
         // Recompute weighted lam-norm after the in-place update
-        let lam_rw_norm_sq_new: f64 =
-            lam.iter().zip(reg_w.iter()).map(|(&l, &w)| w * l * l).sum();
+        let lam_rw_norm_sq_new: f64 = lam.iter().zip(reg_w.iter()).map(|(&l, &w)| w * l * l).sum();
         let xt_ata_x: f64 = ata_x.iter().zip(lam.iter()).map(|(&a, &b)| a * b).sum();
         let atb_dot_lam: f64 = atb.iter().zip(lam.iter()).map(|(&a, &b)| a * b).sum();
         let val = zeta * zeta * lam_rw_norm_sq_new
@@ -576,8 +577,7 @@ fn sc_weight_fw_standard_weighted(
             let e = ax[k] - b[k];
             err_sq += e * e;
         }
-        let lam_rw_norm_sq_new: f64 =
-            lam.iter().zip(reg_w.iter()).map(|(&l, &w)| w * l * l).sum();
+        let lam_rw_norm_sq_new: f64 = lam.iter().zip(reg_w.iter()).map(|(&l, &w)| w * l * l).sum();
         let val = zeta * zeta * lam_rw_norm_sq_new + err_sq / n as f64;
 
         if t >= 1 && prev_val - val < min_decrease_sq {
@@ -722,11 +722,27 @@ fn sc_weight_fw_weighted_internal(
 
     let converged = if t0 < n {
         sc_weight_fw_gram_weighted(
-            &a, &b, &mut lam, &rw_view, eta, zeta, n, min_decrease_sq, max_iter,
+            &a,
+            &b,
+            &mut lam,
+            &rw_view,
+            eta,
+            zeta,
+            n,
+            min_decrease_sq,
+            max_iter,
         )
     } else {
         sc_weight_fw_standard_weighted(
-            &a, &b, &mut lam, &rw_view, eta, zeta, n, min_decrease_sq, max_iter,
+            &a,
+            &b,
+            &mut lam,
+            &rw_view,
+            eta,
+            zeta,
+            n,
+            min_decrease_sq,
+            max_iter,
         )
     };
 
@@ -990,7 +1006,15 @@ pub fn compute_time_weights<'py>(
     let y_pre = y_pre_control.as_array();
     let y_post = y_post_control.as_array();
 
-    let result = compute_time_weights_internal(&y_pre, &y_post, zeta_lambda, intercept, min_decrease, max_iter_pre_sparsify, max_iter);
+    let result = compute_time_weights_internal(
+        &y_pre,
+        &y_post,
+        zeta_lambda,
+        intercept,
+        min_decrease,
+        max_iter_pre_sparsify,
+        max_iter,
+    );
     Ok(result.to_pyarray(py))
 }
 
@@ -1037,13 +1061,27 @@ pub(crate) fn compute_time_weights_internal(
     // `compute_time_weights` (Python wrapper in utils.py) with
     // `return_convergence=True`, which runs the two-pass in Python against
     // `sc_weight_fw_with_convergence`.
-    let (lam, _) = sc_weight_fw_internal(&y_time.view(), zeta_lambda, intercept, None, min_decrease, max_iter_pre_sparsify);
+    let (lam, _) = sc_weight_fw_internal(
+        &y_time.view(),
+        zeta_lambda,
+        intercept,
+        None,
+        min_decrease,
+        max_iter_pre_sparsify,
+    );
 
     // Sparsify
     let lam_sparse = sparsify_internal(&lam);
 
     // Second pass: from sparsified initialization
-    let (lam2, _) = sc_weight_fw_internal(&y_time.view(), zeta_lambda, intercept, Some(&lam_sparse), min_decrease, max_iter);
+    let (lam2, _) = sc_weight_fw_internal(
+        &y_time.view(),
+        zeta_lambda,
+        intercept,
+        Some(&lam_sparse),
+        min_decrease,
+        max_iter,
+    );
     lam2
 }
 
@@ -1076,8 +1114,13 @@ pub fn compute_sdid_unit_weights<'py>(
     let y_tr_mean = y_pre_treated_mean.as_array();
 
     let result = compute_sdid_unit_weights_internal(
-        &y_pre, &y_tr_mean, zeta_omega, intercept, min_decrease,
-        max_iter_pre_sparsify, max_iter,
+        &y_pre,
+        &y_tr_mean,
+        zeta_omega,
+        intercept,
+        min_decrease,
+        max_iter_pre_sparsify,
+        max_iter,
     );
     Ok(result.to_pyarray(py))
 }
@@ -1114,7 +1157,12 @@ pub(crate) fn compute_sdid_unit_weights_internal(
     // First pass: limited iterations. See note in compute_time_weights_internal
     // about convergence-tracking contract.
     let (omega, _) = sc_weight_fw_internal(
-        &y_unit.view(), zeta_omega, intercept, None, min_decrease, max_iter_pre_sparsify,
+        &y_unit.view(),
+        zeta_omega,
+        intercept,
+        None,
+        min_decrease,
+        max_iter_pre_sparsify,
     );
 
     // Sparsify: zero out weights <= max/4, renormalize
@@ -1122,7 +1170,12 @@ pub(crate) fn compute_sdid_unit_weights_internal(
 
     // Second pass: from sparsified initialization
     let (omega2, _) = sc_weight_fw_internal(
-        &y_unit.view(), zeta_omega, intercept, Some(&omega), min_decrease, max_iter,
+        &y_unit.view(),
+        zeta_omega,
+        intercept,
+        Some(&omega),
+        min_decrease,
+        max_iter,
     );
     omega2
 }
@@ -1221,19 +1274,41 @@ mod tests {
         let y = array![[1.0, 2.0, 1.5], [3.0, 4.0, 3.5], [5.0, 6.0, 5.5]];
         let (result, _converged) = sc_weight_fw_internal(&y.view(), 0.1, true, None, 1e-3, 100);
         let sum: f64 = result.sum();
-        assert!((sum - 1.0).abs() < 1e-6, "FW weights should sum to 1, got {}", sum);
-        assert!(result.iter().all(|&w| w >= -1e-6), "FW weights should be non-negative");
+        assert!(
+            (sum - 1.0).abs() < 1e-6,
+            "FW weights should sum to 1, got {}",
+            sum
+        );
+        assert!(
+            result.iter().all(|&w| w >= -1e-6),
+            "FW weights should be non-negative"
+        );
     }
 
     #[test]
     fn test_time_weights_on_simplex() {
         let y_pre = array![[1.0, 2.0, 3.0], [4.0, 5.0, 6.0], [7.0, 8.0, 9.0]];
         let y_post = array![[10.0, 11.0, 12.0]];
-        let result = compute_time_weights_internal(&y_pre.view(), &y_post.view(), 0.1, true, 1e-3, 100, 1000);
+        let result = compute_time_weights_internal(
+            &y_pre.view(),
+            &y_post.view(),
+            0.1,
+            true,
+            1e-3,
+            100,
+            1000,
+        );
         assert_eq!(result.len(), 3);
         let sum: f64 = result.sum();
-        assert!((sum - 1.0).abs() < 1e-6, "Time weights should sum to 1, got {}", sum);
-        assert!(result.iter().all(|&w| w >= -1e-6), "Time weights should be non-negative");
+        assert!(
+            (sum - 1.0).abs() < 1e-6,
+            "Time weights should sum to 1, got {}",
+            sum
+        );
+        assert!(
+            result.iter().all(|&w| w >= -1e-6),
+            "Time weights should be non-negative"
+        );
     }
 
     #[test]
@@ -1241,12 +1316,25 @@ mod tests {
         let y_pre = array![[1.0, 2.0, 3.0], [4.0, 5.0, 6.0], [7.0, 8.0, 9.0]];
         let y_tr_mean = array![2.0, 5.0, 8.0];
         let result = compute_sdid_unit_weights_internal(
-            &y_pre.view(), &y_tr_mean.view(), 0.5, true, 1e-3, 100, 1000,
+            &y_pre.view(),
+            &y_tr_mean.view(),
+            0.5,
+            true,
+            1e-3,
+            100,
+            1000,
         );
         assert_eq!(result.len(), 3);
         let sum: f64 = result.sum();
-        assert!((sum - 1.0).abs() < 1e-6, "Unit weights should sum to 1, got {}", sum);
-        assert!(result.iter().all(|&w| w >= -1e-6), "Unit weights should be non-negative");
+        assert!(
+            (sum - 1.0).abs() < 1e-6,
+            "Unit weights should sum to 1, got {}",
+            sum
+        );
+        assert!(
+            result.iter().all(|&w| w >= -1e-6),
+            "Unit weights should be non-negative"
+        );
     }
 
     #[test]
@@ -1254,7 +1342,13 @@ mod tests {
         let y_pre = array![[1.0], [2.0], [3.0]];
         let y_tr_mean = array![1.5, 2.5, 3.5];
         let result = compute_sdid_unit_weights_internal(
-            &y_pre.view(), &y_tr_mean.view(), 0.5, true, 1e-3, 100, 1000,
+            &y_pre.view(),
+            &y_tr_mean.view(),
+            0.5,
+            true,
+            1e-3,
+            100,
+            1000,
         );
         assert_eq!(result.len(), 1);
         assert!((result[0] - 1.0).abs() < 1e-10);
@@ -1292,15 +1386,25 @@ mod tests {
             assert!(
                 (lam_gram[j] - lam_std[j]).abs() < 1e-10,
                 "Gram and standard paths diverge at index {}: gram={}, std={}",
-                j, lam_gram[j], lam_std[j]
+                j,
+                lam_gram[j],
+                lam_std[j]
             );
         }
 
         // Verify both are valid simplex weights
         let sum_gram: f64 = lam_gram.sum();
         let sum_std: f64 = lam_std.sum();
-        assert!((sum_gram - 1.0).abs() < 1e-6, "Gram weights should sum to 1, got {}", sum_gram);
-        assert!((sum_std - 1.0).abs() < 1e-6, "Standard weights should sum to 1, got {}", sum_std);
+        assert!(
+            (sum_gram - 1.0).abs() < 1e-6,
+            "Gram weights should sum to 1, got {}",
+            sum_gram
+        );
+        assert!(
+            (sum_std - 1.0).abs() < 1e-6,
+            "Standard weights should sum to 1, got {}",
+            sum_std
+        );
     }
 
     #[test]
@@ -1314,8 +1418,15 @@ mod tests {
 
         // Verify valid simplex weights
         let sum: f64 = result.sum();
-        assert!((sum - 1.0).abs() < 1e-6, "Weights should sum to 1, got {}", sum);
-        assert!(result.iter().all(|&w| w >= -1e-6), "Weights should be non-negative");
+        assert!(
+            (sum - 1.0).abs() < 1e-6,
+            "Weights should sum to 1, got {}",
+            sum
+        );
+        assert!(
+            result.iter().all(|&w| w >= -1e-6),
+            "Weights should be non-negative"
+        );
         assert_eq!(result.len(), 8);
     }
 
@@ -1323,10 +1434,12 @@ mod tests {
     fn test_incremental_ata_x_accuracy() {
         // Run 500+ iterations on a T0 < N problem and verify incremental ata_x
         // doesn't drift significantly from fresh computation.
-        let vals: Vec<f64> = (0..200).map(|i| {
-            let x = (i as f64) * 0.1;
-            x.sin() + ((i * 7) % 31) as f64 / 31.0
-        }).collect();
+        let vals: Vec<f64> = (0..200)
+            .map(|i| {
+                let x = (i as f64) * 0.1;
+                x.sin() + ((i * 7) % 31) as f64 / 31.0
+            })
+            .collect();
         let y = Array2::from_shape_vec((20, 10), vals).unwrap();
 
         // Run with enough iterations to exercise the refresh mechanism
@@ -1334,8 +1447,15 @@ mod tests {
 
         // Verify valid result (convergence with correct weights)
         let sum: f64 = result.sum();
-        assert!((sum - 1.0).abs() < 1e-6, "Weights should sum to 1, got {}", sum);
-        assert!(result.iter().all(|&w| w >= -1e-6), "Weights should be non-negative");
+        assert!(
+            (sum - 1.0).abs() < 1e-6,
+            "Weights should sum to 1, got {}",
+            sum
+        );
+        assert!(
+            result.iter().all(|&w| w >= -1e-6),
+            "Weights should be non-negative"
+        );
 
         // Verify Gram path was used (T0=9 < N=20)
         assert_eq!(result.len(), 9);
@@ -1351,8 +1471,15 @@ mod tests {
         let (result, _converged) = sc_weight_fw_internal(&y.view(), 0.2, true, None, 1e-5, 10000);
 
         let sum: f64 = result.sum();
-        assert!((sum - 1.0).abs() < 1e-6, "Weights should sum to 1, got {}", sum);
-        assert!(result.iter().all(|&w| w >= -1e-6), "Weights should be non-negative");
+        assert!(
+            (sum - 1.0).abs() < 1e-6,
+            "Weights should sum to 1, got {}",
+            sum
+        );
+        assert!(
+            result.iter().all(|&w| w >= -1e-6),
+            "Weights should be non-negative"
+        );
         assert_eq!(result.len(), 5); // T0 = 5
     }
 
@@ -1364,7 +1491,9 @@ mod tests {
         let eta = 0.5;
 
         // Deterministic test data
-        let a_vals: Vec<f64> = (0..(n * t0)).map(|i| ((i * 7 + 3) % 41) as f64 / 41.0).collect();
+        let a_vals: Vec<f64> = (0..(n * t0))
+            .map(|i| ((i * 7 + 3) % 41) as f64 / 41.0)
+            .collect();
         let a = Array2::from_shape_vec((n, t0), a_vals).unwrap();
 
         let ax: Array1<f64> = (0..n).map(|i| ((i * 11 + 5) % 37) as f64 / 37.0).collect();
@@ -1395,7 +1524,9 @@ mod tests {
             assert!(
                 (ref_grad[j] - new_grad[j]).abs() < 1e-12,
                 "half_grad mismatch at index {}: manual={}, gemv={}",
-                j, ref_grad[j], new_grad[j]
+                j,
+                ref_grad[j],
+                new_grad[j]
             );
         }
     }
@@ -1406,18 +1537,34 @@ mod tests {
         // Gram path: N=15, T0=4 (T0 < N)
         let vals_gram: Vec<f64> = (0..75).map(|i| ((i * 3 + 1) % 37) as f64 / 37.0).collect();
         let y_gram = Array2::from_shape_vec((15, 5), vals_gram).unwrap();
-        let (result_gram, _converged_gram) = sc_weight_fw_internal(&y_gram.view(), 0.3, false, None, 1e-5, 10000);
+        let (result_gram, _converged_gram) =
+            sc_weight_fw_internal(&y_gram.view(), 0.3, false, None, 1e-5, 10000);
         let sum_gram: f64 = result_gram.sum();
-        assert!((sum_gram - 1.0).abs() < 1e-6, "Gram intercept=false: weights should sum to 1, got {}", sum_gram);
-        assert!(result_gram.iter().all(|&w| w >= -1e-6), "Gram intercept=false: weights should be non-negative");
+        assert!(
+            (sum_gram - 1.0).abs() < 1e-6,
+            "Gram intercept=false: weights should sum to 1, got {}",
+            sum_gram
+        );
+        assert!(
+            result_gram.iter().all(|&w| w >= -1e-6),
+            "Gram intercept=false: weights should be non-negative"
+        );
 
         // Standard path: N=4, T0=10 (T0 >= N)
         let vals_std: Vec<f64> = (0..44).map(|i| ((i * 5 + 2) % 29) as f64 / 29.0).collect();
         let y_std = Array2::from_shape_vec((4, 11), vals_std).unwrap();
-        let (result_std, _converged_std) = sc_weight_fw_internal(&y_std.view(), 0.3, false, None, 1e-5, 10000);
+        let (result_std, _converged_std) =
+            sc_weight_fw_internal(&y_std.view(), 0.3, false, None, 1e-5, 10000);
         let sum_std: f64 = result_std.sum();
-        assert!((sum_std - 1.0).abs() < 1e-6, "Standard intercept=false: weights should sum to 1, got {}", sum_std);
-        assert!(result_std.iter().all(|&w| w >= -1e-6), "Standard intercept=false: weights should be non-negative");
+        assert!(
+            (sum_std - 1.0).abs() < 1e-6,
+            "Standard intercept=false: weights should sum to 1, got {}",
+            sum_std
+        );
+        assert!(
+            result_std.iter().all(|&w| w >= -1e-6),
+            "Standard intercept=false: weights should be non-negative"
+        );
     }
 
     // -------------------------------------------------------------------------
@@ -1433,16 +1580,17 @@ mod tests {
 
         let (unweighted, conv_unweighted) =
             sc_weight_fw_internal(&y.view(), 0.3, true, None, 1e-5, 10000);
-        let (weighted, conv_weighted) = sc_weight_fw_weighted_internal(
-            &y.view(), 0.3, true, None, 1e-5, 10000, None,
-        );
+        let (weighted, conv_weighted) =
+            sc_weight_fw_weighted_internal(&y.view(), 0.3, true, None, 1e-5, 10000, None);
 
         assert_eq!(conv_unweighted, conv_weighted, "convergence flags differ");
         for j in 0..unweighted.len() {
             assert!(
                 (unweighted[j] - weighted[j]).abs() < 1e-14,
                 "reg_weights=None must delegate to unweighted; mismatch at {}: {} vs {}",
-                j, unweighted[j], weighted[j]
+                j,
+                unweighted[j],
+                weighted[j]
             );
         }
     }
@@ -1454,20 +1602,23 @@ mod tests {
         // agree to within machine precision (the weighted loop recomputes
         // lam_norm via the weighted code path each iteration so float
         // ordering can introduce tiny ULP-scale drift — stay at rel=1e-12).
-        let vals: Vec<f64> = (0..120).map(|i| ((i * 11 + 5) % 73) as f64 / 73.0).collect();
+        let vals: Vec<f64> = (0..120)
+            .map(|i| ((i * 11 + 5) % 73) as f64 / 73.0)
+            .collect();
         let y = Array2::from_shape_vec((20, 6), vals).unwrap();
         let rw = Array1::from_elem(5, 1.0); // t0 = ncols - 1 = 5
 
         let (unweighted, _) = sc_weight_fw_internal(&y.view(), 0.3, true, None, 1e-7, 10000);
-        let (weighted, _) = sc_weight_fw_weighted_internal(
-            &y.view(), 0.3, true, None, 1e-7, 10000, Some(&rw),
-        );
+        let (weighted, _) =
+            sc_weight_fw_weighted_internal(&y.view(), 0.3, true, None, 1e-7, 10000, Some(&rw));
 
         for j in 0..unweighted.len() {
             assert!(
                 (unweighted[j] - weighted[j]).abs() < 1e-12,
                 "uniform reg_weights must match unweighted at {}: {} vs {}",
-                j, unweighted[j], weighted[j]
+                j,
+                unweighted[j],
+                weighted[j]
             );
         }
     }
@@ -1477,18 +1628,26 @@ mod tests {
         // For arbitrary positive rw, the returned ω must lie on the standard
         // simplex (sums to 1, non-negative). Exercise both gram (T0 < N) and
         // standard (T0 >= N) paths.
-        let vals_gram: Vec<f64> =
-            (0..120).map(|i| ((i * 13 + 7) % 89) as f64 / 89.0).collect();
+        let vals_gram: Vec<f64> = (0..120)
+            .map(|i| ((i * 13 + 7) % 89) as f64 / 89.0)
+            .collect();
         let y_gram = Array2::from_shape_vec((20, 6), vals_gram).unwrap();
         let rw_gram = Array1::from_vec(vec![0.5, 1.0, 1.5, 2.0, 0.8]);
 
         let (omega_gram, _) = sc_weight_fw_weighted_internal(
-            &y_gram.view(), 0.4, true, None, 1e-6, 10000, Some(&rw_gram),
+            &y_gram.view(),
+            0.4,
+            true,
+            None,
+            1e-6,
+            10000,
+            Some(&rw_gram),
         );
         let sum_gram: f64 = omega_gram.sum();
         assert!(
             (sum_gram - 1.0).abs() < 1e-6,
-            "gram weighted-FW: ω must sum to 1, got {}", sum_gram
+            "gram weighted-FW: ω must sum to 1, got {}",
+            sum_gram
         );
         assert!(
             omega_gram.iter().all(|&w| w >= -1e-9),
@@ -1500,12 +1659,19 @@ mod tests {
         let rw_std = Array1::from_vec(vec![1.0, 0.5, 1.5, 2.0, 0.7, 1.2, 0.9, 1.3]);
 
         let (omega_std, _) = sc_weight_fw_weighted_internal(
-            &y_std.view(), 0.5, true, None, 1e-6, 10000, Some(&rw_std),
+            &y_std.view(),
+            0.5,
+            true,
+            None,
+            1e-6,
+            10000,
+            Some(&rw_std),
         );
         let sum_std: f64 = omega_std.sum();
         assert!(
             (sum_std - 1.0).abs() < 1e-6,
-            "standard weighted-FW: ω must sum to 1, got {}", sum_std
+            "standard weighted-FW: ω must sum to 1, got {}",
+            sum_std
         );
         assert!(
             omega_std.iter().all(|&w| w >= -1e-9),

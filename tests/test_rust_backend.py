@@ -539,6 +539,45 @@ class TestRustVsNumpy:
             rust_resid, numpy_resid, decimal=8, err_msg="OLS residuals should match"
         )
 
+    def test_solve_ols_underdetermined_match(self):
+        """n < k through the RAW rust backend's slimmed marshalling: the
+        thin-SVD U/V shapes flip (U is n x n, V is k x n), exercising the
+        uty and drop paths on the underdetermined branch. This is a
+        direct-kernel test - the PUBLIC solve_ols rejects n < k outright -
+        asserting the engines' shared residual/exact-fit contract."""
+        from diff_diff._rust_backend import solve_ols as rust_fn
+        from diff_diff.linalg import _solve_ols_numpy as numpy_fn
+
+        np.random.seed(7)
+        n, k = 6, 9
+        X = np.random.randn(n, k)
+        y = np.random.randn(n)
+
+        import warnings as _w
+
+        rust_coeffs, rust_resid, _ = rust_fn(X, y, None, True)
+        with _w.catch_warnings():
+            _w.simplefilter("ignore")  # numpy path warns on the rank drop
+            _, numpy_resid, _ = numpy_fn(X, y, cluster_ids=None)
+
+        # Coefficient CONVENTIONS legitimately differ here (rust kernel:
+        # truncated-SVD minimum-norm over all k; numpy path: column-drop with
+        # NaN); the public solve_ols never routes n < k to either engine (it
+        # rejects such designs up front), so like
+        # test_rank_deficient_ols_residuals_match this asserts the engines'
+        # shared contract: an exact fit with matching residuals.
+        assert np.all(np.isfinite(rust_coeffs))
+        np.testing.assert_array_almost_equal(
+            rust_resid, np.zeros(n), decimal=10, err_msg="rust residuals ~0"
+        )
+        np.testing.assert_array_almost_equal(
+            rust_resid, numpy_resid, decimal=8, err_msg="residuals should match"
+        )
+        # the rust min-norm solution reproduces y exactly (fitted = X @ beta)
+        np.testing.assert_array_almost_equal(
+            X @ rust_coeffs, y, decimal=10, err_msg="exact fit expected"
+        )
+
     def test_solve_ols_with_clusters_match(self):
         """Test Rust and NumPy OLS with cluster SEs match."""
         from diff_diff._rust_backend import solve_ols as rust_fn

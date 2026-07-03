@@ -19,6 +19,10 @@ extension-module = ["pyo3/extension-module"]
 # When enabled, ndarray's .dot() and general_mat_vec_mul dispatch to BLAS dgemv/dgemm
 accelerate = ["ndarray/blas", "dep:blas-src", "blas-src/accelerate"]
 openblas = ["ndarray/blas"]
+# Counting global allocator for memory-footprint measurement builds ONLY
+# (never enabled in wheels/CI): exposes reset_alloc_high_water /
+# alloc_high_water_bytes pyfunctions. See rust/src/alloc_profile.rs.
+alloc-profile = []
 
 [dependencies]
 # PyO3 0.29 supports Python 3.9-3.14

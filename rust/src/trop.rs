@@ -52,10 +52,7 @@ pub fn compute_unit_distance_matrix<'py>(
 /// Internal implementation of unit distance matrix computation.
 ///
 /// Parallelizes over unit pairs using rayon.
-fn compute_unit_distance_matrix_internal(
-    y: &ArrayView2<f64>,
-    d: &ArrayView2<f64>,
-) -> Array2<f64> {
+fn compute_unit_distance_matrix_internal(y: &ArrayView2<f64>, d: &ArrayView2<f64>) -> Array2<f64> {
     let n_periods = y.nrows();
     let n_units = y.ncols();
 
@@ -195,29 +192,46 @@ fn univariate_loocv_search(
             let (lambda_time, lambda_unit, lambda_nn) = match param_type {
                 0 => {
                     // Searching λ_time: use grid value directly (no inf expected)
-                    (value,
-                     fixed_unit,
-                     if fixed_nn.is_infinite() { 1e10 } else { fixed_nn })
-                },
+                    (
+                        value,
+                        fixed_unit,
+                        if fixed_nn.is_infinite() {
+                            1e10
+                        } else {
+                            fixed_nn
+                        },
+                    )
+                }
                 1 => {
                     // Searching λ_unit: use grid value directly (no inf expected)
-                    (fixed_time,
-                     value,
-                     if fixed_nn.is_infinite() { 1e10 } else { fixed_nn })
-                },
+                    (
+                        fixed_time,
+                        value,
+                        if fixed_nn.is_infinite() {
+                            1e10
+                        } else {
+                            fixed_nn
+                        },
+                    )
+                }
                 _ => {
                     // Searching λ_nn: convert inf → 1e10 (factor model disabled)
                     let value_converted = if value.is_infinite() { 1e10 } else { value };
-                    (fixed_time,
-                     fixed_unit,
-                     value_converted)
-                },
+                    (fixed_time, fixed_unit, value_converted)
+                }
             };
 
             let (score, _, _) = loocv_score_for_params(
-                y, d, control_mask, time_dist, control_obs,
-                lambda_time, lambda_unit, lambda_nn,
-                max_iter, tol,
+                y,
+                d,
+                control_mask,
+                time_dist,
+                control_obs,
+                lambda_time,
+                lambda_unit,
+                lambda_nn,
+                max_iter,
+                tol,
             );
             (value, score)
         })
@@ -260,22 +274,52 @@ fn cycling_parameter_search(
     for _cycle in 0..max_cycles {
         // Optimize λ_unit (fix λ_time, λ_nn)
         let (new_unit, _) = univariate_loocv_search(
-            y, d, control_mask, time_dist, control_obs,
-            lambda_unit_grid, lambda_time, 0.0, lambda_nn, 1, max_iter, tol,
+            y,
+            d,
+            control_mask,
+            time_dist,
+            control_obs,
+            lambda_unit_grid,
+            lambda_time,
+            0.0,
+            lambda_nn,
+            1,
+            max_iter,
+            tol,
         );
         lambda_unit = new_unit;
 
         // Optimize λ_time (fix λ_unit, λ_nn)
         let (new_time, _) = univariate_loocv_search(
-            y, d, control_mask, time_dist, control_obs,
-            lambda_time_grid, 0.0, lambda_unit, lambda_nn, 0, max_iter, tol,
+            y,
+            d,
+            control_mask,
+            time_dist,
+            control_obs,
+            lambda_time_grid,
+            0.0,
+            lambda_unit,
+            lambda_nn,
+            0,
+            max_iter,
+            tol,
         );
         lambda_time = new_time;
 
         // Optimize λ_nn (fix λ_unit, λ_time)
         let (new_nn, score) = univariate_loocv_search(
-            y, d, control_mask, time_dist, control_obs,
-            lambda_nn_grid, lambda_time, lambda_unit, 0.0, 2, max_iter, tol,
+            y,
+            d,
+            control_mask,
+            time_dist,
+            control_obs,
+            lambda_nn_grid,
+            lambda_time,
+            lambda_unit,
+            0.0,
+            2,
+            max_iter,
+            tol,
         );
         lambda_nn = new_nn;
 
@@ -355,38 +399,75 @@ pub fn loocv_grid_search<'py>(
     }
 
     // Get control observations for LOOCV
-    let control_obs = get_control_observations(
-        &y_arr,
-        &control_mask_arr,
-    );
+    let control_obs = get_control_observations(&y_arr, &control_mask_arr);
 
     let n_attempted = control_obs.len();
 
     // Stage 1: Univariate searches for initial values (paper footnote 2)
     // λ_time search: fix λ_unit=0, λ_nn=∞ (disabled)
     let (lambda_time_init, _) = univariate_loocv_search(
-        &y_arr, &d_arr, &control_mask_arr, &time_dist_arr, &control_obs,
-        &lambda_time_vec, 0.0, 0.0, f64::INFINITY, 0, max_iter, tol,
+        &y_arr,
+        &d_arr,
+        &control_mask_arr,
+        &time_dist_arr,
+        &control_obs,
+        &lambda_time_vec,
+        0.0,
+        0.0,
+        f64::INFINITY,
+        0,
+        max_iter,
+        tol,
     );
 
     // λ_nn search: fix λ_time=0 (uniform time weights), λ_unit=0
     let (lambda_nn_init, _) = univariate_loocv_search(
-        &y_arr, &d_arr, &control_mask_arr, &time_dist_arr, &control_obs,
-        &lambda_nn_vec, 0.0, 0.0, 0.0, 2, max_iter, tol,
+        &y_arr,
+        &d_arr,
+        &control_mask_arr,
+        &time_dist_arr,
+        &control_obs,
+        &lambda_nn_vec,
+        0.0,
+        0.0,
+        0.0,
+        2,
+        max_iter,
+        tol,
     );
 
     // λ_unit search: fix λ_nn=∞, λ_time=0
     let (lambda_unit_init, _) = univariate_loocv_search(
-        &y_arr, &d_arr, &control_mask_arr, &time_dist_arr, &control_obs,
-        &lambda_unit_vec, 0.0, 0.0, f64::INFINITY, 1, max_iter, tol,
+        &y_arr,
+        &d_arr,
+        &control_mask_arr,
+        &time_dist_arr,
+        &control_obs,
+        &lambda_unit_vec,
+        0.0,
+        0.0,
+        f64::INFINITY,
+        1,
+        max_iter,
+        tol,
     );
 
     // Stage 2: Cycling refinement
     let (best_time, best_unit, best_nn) = cycling_parameter_search(
-        &y_arr, &d_arr, &control_mask_arr, &time_dist_arr, &control_obs,
-        &lambda_time_vec, &lambda_unit_vec, &lambda_nn_vec,
-        lambda_time_init, lambda_unit_init, lambda_nn_init,
-        max_iter, tol, 10,
+        &y_arr,
+        &d_arr,
+        &control_mask_arr,
+        &time_dist_arr,
+        &control_obs,
+        &lambda_time_vec,
+        &lambda_unit_vec,
+        &lambda_nn_vec,
+        lambda_time_init,
+        lambda_unit_init,
+        lambda_nn_init,
+        max_iter,
+        tol,
+        10,
     );
 
     // Convert λ_nn=∞ → 1e10 for final score computation (factor model disabled)
@@ -396,13 +477,28 @@ pub fn loocv_grid_search<'py>(
 
     // Compute final score with converted values
     let (best_score, n_valid, first_failed) = loocv_score_for_params(
-        &y_arr, &d_arr, &control_mask_arr, &time_dist_arr, &control_obs,
-        best_time_eff, best_unit_eff, best_nn_eff,
-        max_iter, tol,
+        &y_arr,
+        &d_arr,
+        &control_mask_arr,
+        &time_dist_arr,
+        &control_obs,
+        best_time_eff,
+        best_unit_eff,
+        best_nn_eff,
+        max_iter,
+        tol,
     );
 
     // Return ORIGINAL grid values (for user visibility) but score computed with converted
-    Ok((best_time, best_unit, best_nn, best_score, n_valid, n_attempted, first_failed))
+    Ok((
+        best_time,
+        best_unit,
+        best_nn,
+        best_score,
+        n_valid,
+        n_attempted,
+        first_failed,
+    ))
 }
 
 /// Get all valid control observations for LOOCV.
@@ -526,9 +622,7 @@ fn compute_unit_distance_for_obs(
             continue;
         }
         // Both units must be control at this period and have valid values
-        if d[[t, i]] == 0.0 && d[[t, j]] == 0.0
-            && y[[t, i]].is_finite() && y[[t, j]].is_finite()
-        {
+        if d[[t, i]] == 0.0 && d[[t, j]] == 0.0 && y[[t, i]].is_finite() && y[[t, j]].is_finite() {
             let diff = y[[t, i]] - y[[t, j]];
             sum_sq += diff * diff;
             n_valid += 1;
@@ -632,9 +726,8 @@ fn estimate_model(
     exclude_obs: Option<(usize, usize)>,
 ) -> Option<(Array1<f64>, Array1<f64>, Array2<f64>)> {
     // Create estimation mask
-    let mut est_mask = Array2::<bool>::from_shape_fn((n_periods, n_units), |(t, i)| {
-        control_mask[[t, i]] != 0
-    });
+    let mut est_mask =
+        Array2::<bool>::from_shape_fn((n_periods, n_units), |(t, i)| control_mask[[t, i]] != 0);
 
     if let Some((t_ex, i_ex)) = exclude_obs {
         est_mask[[t_ex, i_ex]] = false;
@@ -656,7 +749,11 @@ fn estimate_model(
 
     // Lipschitz constant of ∇f is L_f = 2·max(W), so prox threshold = λ/(2·max(W))
     let w_max = w_masked.iter().cloned().fold(0.0_f64, f64::max);
-    let prox_threshold = if w_max > 0.0 { lambda_nn / (2.0 * w_max) } else { lambda_nn / 2.0 };
+    let prox_threshold = if w_max > 0.0 {
+        lambda_nn / (2.0 * w_max)
+    } else {
+        lambda_nn / 2.0
+    };
 
     // Weight sums per unit and time
     let weight_sum_per_unit: Array1<f64> = w_masked.sum_axis(Axis(0));
@@ -730,12 +827,20 @@ fn estimate_model(
 
         // For W=0 cells, use current L instead of R (prevent absorbing treatment)
         let r_masked = Array2::from_shape_fn((n_periods, n_units), |(t, i)| {
-            if w_masked[[t, i]] > 0.0 { r_target[[t, i]] } else { l[[t, i]] }
+            if w_masked[[t, i]] > 0.0 {
+                r_target[[t, i]]
+            } else {
+                l[[t, i]]
+            }
         });
 
         // Normalize weights: W_norm = W / W_max (max becomes 1)
         let w_norm = Array2::from_shape_fn((n_periods, n_units), |(t, i)| {
-            if w_max > 0.0 { w_masked[[t, i]] / w_max } else { w_masked[[t, i]] }
+            if w_max > 0.0 {
+                w_masked[[t, i]] / w_max
+            } else {
+                w_masked[[t, i]]
+            }
         });
 
         // FISTA inner loop for L update
@@ -757,7 +862,8 @@ fn estimate_model(
             let mut gradient_step = Array2::<f64>::zeros((n_periods, n_units));
             for t in 0..n_periods {
                 for i in 0..n_units {
-                    gradient_step[[t, i]] = l_momentum[[t, i]] + w_norm[[t, i]] * (r_masked[[t, i]] - l_momentum[[t, i]]);
+                    gradient_step[[t, i]] = l_momentum[[t, i]]
+                        + w_norm[[t, i]] * (r_masked[[t, i]] - l_momentum[[t, i]]);
                 }
             }
 
@@ -810,9 +916,9 @@ fn soft_threshold_svd(m: &Array2<f64>, threshold: f64) -> Option<Array2<f64>> {
     };
 
     let u_faer = svd.U();
-    let s_diag = svd.S();  // Returns diagonal view
-    let s_col = s_diag.column_vector();  // Get as column vector
-    let v_faer = svd.V();  // This is V, not V^T
+    let s_diag = svd.S(); // Returns diagonal view
+    let s_col = s_diag.column_vector(); // Get as column vector
+    let v_faer = svd.V(); // This is V, not V^T
 
     let s_len = s_col.nrows();
 
@@ -1457,14 +1563,26 @@ fn solve_joint_with_lowrank(
 
     // Precompute normalized weights and threshold (constant across iterations)
     let delta_max = delta.iter().cloned().fold(0.0_f64, f64::max);
-    let threshold = if delta_max > 0.0 { lambda_nn / (2.0 * delta_max) } else { lambda_nn / 2.0 };
+    let threshold = if delta_max > 0.0 {
+        lambda_nn / (2.0 * delta_max)
+    } else {
+        lambda_nn / 2.0
+    };
 
     // Precompute delta_norm (masked for NaN outcomes)
     let mut delta_norm = Array2::<f64>::zeros((n_periods, n_units));
     for t in 0..n_periods {
         for i in 0..n_units {
-            let d_ti = if y[[t, i]].is_finite() { delta[[t, i]] } else { 0.0 };
-            delta_norm[[t, i]] = if delta_max > 0.0 { d_ti / delta_max } else { d_ti };
+            let d_ti = if y[[t, i]].is_finite() {
+                delta[[t, i]]
+            } else {
+                0.0
+            };
+            delta_norm[[t, i]] = if delta_max > 0.0 {
+                d_ti / delta_max
+            } else {
+                d_ti
+            };
         }
     }
 
@@ -1476,7 +1594,7 @@ fn solve_joint_with_lowrank(
 
         // Step 1: Fix L, solve for (mu, alpha, beta)
         let y_adj = Array2::from_shape_fn((n_periods, n_units), |(t, i)| {
-            y[[t, i]] - l[[t, i]]  // NaN - finite = NaN (preserves NaN info)
+            y[[t, i]] - l[[t, i]] // NaN - finite = NaN (preserves NaN info)
         });
         let (mu, alpha, beta) = solve_joint_no_lowrank(&y_adj.view(), delta)?;
 
@@ -1508,7 +1626,8 @@ fn solve_joint_with_lowrank(
             let mut gradient_step = Array2::<f64>::zeros((n_periods, n_units));
             for t in 0..n_periods {
                 for i in 0..n_units {
-                    let l_mom = l_inner[[t, i]] + momentum * (l_inner[[t, i]] - l_inner_prev[[t, i]]);
+                    let l_mom =
+                        l_inner[[t, i]] + momentum * (l_inner[[t, i]] - l_inner_prev[[t, i]]);
                     gradient_step[[t, i]] = l_mom + delta_norm[[t, i]] * (r_masked[[t, i]] - l_mom);
                 }
             }
@@ -1536,9 +1655,7 @@ fn solve_joint_with_lowrank(
     }
 
     // Final solve with converged L
-    let y_adj = Array2::from_shape_fn((n_periods, n_units), |(t, i)| {
-        y[[t, i]] - l[[t, i]]
-    });
+    let y_adj = Array2::from_shape_fn((n_periods, n_units), |(t, i)| y[[t, i]] - l[[t, i]]);
     let (mu, alpha, beta) = solve_joint_no_lowrank(&y_adj.view(), delta)?;
 
     Some((mu, alpha, beta, l))
@@ -1585,11 +1702,10 @@ fn loocv_score_joint(
                 delta_ex[[t_ex, i_ex]] = 0.0;
 
                 let result = if lambda_nn >= 1e10 {
-                    solve_joint_no_lowrank(y, &delta_ex.view())
-                        .map(|(mu, alpha, beta)| {
-                            let l = Array2::<f64>::zeros((n_periods, n_units));
-                            (mu, alpha, beta, l)
-                        })
+                    solve_joint_no_lowrank(y, &delta_ex.view()).map(|(mu, alpha, beta)| {
+                        let l = Array2::<f64>::zeros((n_periods, n_units));
+                        (mu, alpha, beta, l)
+                    })
                 } else {
                     solve_joint_with_lowrank(y, &delta_ex.view(), lambda_nn, max_iter, tol)
                 };
@@ -1597,7 +1713,8 @@ fn loocv_score_joint(
                 match result {
                     Some((mu, alpha, beta, l)) => {
                         if y[[t_ex, i_ex]].is_finite() {
-                            let tau_loocv = y[[t_ex, i_ex]] - mu - alpha[i_ex] - beta[t_ex] - l[[t_ex, i_ex]];
+                            let tau_loocv =
+                                y[[t_ex, i_ex]] - mu - alpha[i_ex] - beta[t_ex] - l[[t_ex, i_ex]];
                             (sum + tau_loocv * tau_loocv, valid + 1, first_fail)
                         } else {
                             (sum, valid, first_fail)
@@ -1749,7 +1866,15 @@ pub fn loocv_grid_search_global<'py>(
 
     let (best_lt, best_lu, best_ln, best_score, n_valid, first_failed) = best_result;
 
-    Ok((best_lt, best_lu, best_ln, best_score, n_valid, n_attempted, first_failed))
+    Ok((
+        best_lt,
+        best_lu,
+        best_ln,
+        best_score,
+        n_valid,
+        n_attempted,
+        first_failed,
+    ))
 }
 
 /// Compute bootstrap variance estimation for TROP global method in parallel.
@@ -1883,7 +2008,11 @@ pub fn bootstrap_trop_variance_global<'py>(
     let treated_periods = n_periods.saturating_sub(first_treat_period);
 
     // Convert λ_nn=∞ → 1e10 (factor model disabled)
-    let ln_eff = if lambda_nn.is_infinite() { 1e10 } else { lambda_nn };
+    let ln_eff = if lambda_nn.is_infinite() {
+        1e10
+    } else {
+        lambda_nn
+    };
 
     // Run bootstrap iterations in parallel
     // RNG-canonical contract: control_indices and treated_indices are pre-generated
@@ -1925,19 +2054,12 @@ pub fn bootstrap_trop_variance_global<'py>(
             );
 
             let result = if ln_eff >= 1e10 {
-                solve_joint_no_lowrank(&y_boot.view(), &delta.view())
-                    .map(|(mu, alpha, beta)| {
-                        let l = Array2::<f64>::zeros((n_periods, n_units));
-                        (mu, alpha, beta, l)
-                    })
+                solve_joint_no_lowrank(&y_boot.view(), &delta.view()).map(|(mu, alpha, beta)| {
+                    let l = Array2::<f64>::zeros((n_periods, n_units));
+                    (mu, alpha, beta, l)
+                })
             } else {
-                solve_joint_with_lowrank(
-                    &y_boot.view(),
-                    &delta.view(),
-                    ln_eff,
-                    max_iter,
-                    tol,
-                )
+                solve_joint_with_lowrank(&y_boot.view(), &delta.view(), ln_eff, max_iter, tol)
             };
 
             // Post-hoc tau extraction: ATT = mean(Y - mu - alpha - beta - L) over treated
@@ -2000,7 +2122,8 @@ mod tests {
         let valid_j = array![true, true, true, true];
         let valid_i = array![true, true, true, true];
 
-        let dist = compute_pair_distance(&y_j.view(), &y_i.view(), &valid_j.view(), &valid_i.view());
+        let dist =
+            compute_pair_distance(&y_j.view(), &y_i.view(), &valid_j.view(), &valid_i.view());
 
         // RMSE of constant difference 0.5 should be 0.5
         assert!((dist - 0.5).abs() < 1e-10);
@@ -2014,7 +2137,8 @@ mod tests {
         let valid_i = array![true, false, true, false];
 
         // Only period 0 overlaps
-        let dist = compute_pair_distance(&y_j.view(), &y_i.view(), &valid_j.view(), &valid_i.view());
+        let dist =
+            compute_pair_distance(&y_j.view(), &y_i.view(), &valid_j.view(), &valid_i.view());
 
         // RMSE of single difference 0.5 should be 0.5
         assert!((dist - 0.5).abs() < 1e-10);
@@ -2027,7 +2151,8 @@ mod tests {
         let valid_j = array![true, true, false, false];
         let valid_i = array![false, false, true, true];
 
-        let dist = compute_pair_distance(&y_j.view(), &y_i.view(), &valid_j.view(), &valid_i.view());
+        let dist =
+            compute_pair_distance(&y_j.view(), &y_i.view(), &valid_j.view(), &valid_i.view());
 
         assert!(dist.is_infinite());
     }

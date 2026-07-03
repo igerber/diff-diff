@@ -145,7 +145,10 @@ def _detect_rank_deficiency(
     def _rank_and_pivot(M: np.ndarray) -> Tuple[int, np.ndarray]:
         # Pivoted QR: M @ P = Q @ R. The rank threshold is anchored to the
         # largest pivot diagonal |R[0,0]| (decreasing after pivoting).
-        _Q, R, piv = qr(M, mode="economic", pivoting=True)
+        # mode="r" skips forming the (unused) Q: R and the pivot come from
+        # the same dgeqp3 factorization either way, so rank decisions are
+        # bit-identical; only the dorgqr Q-formation work is saved.
+        R, piv = qr(M, mode="r", pivoting=True)
         r_diag = np.abs(np.diag(R))
         if r_diag[0] == 0:
             return 0, piv
@@ -308,8 +311,20 @@ def _equilibrated_lstsq(X: np.ndarray, y: np.ndarray) -> np.ndarray:
     """
     col_norms = np.sqrt(np.einsum("ij,ij->j", X, X))
     safe_norms = np.where(col_norms > 0, col_norms, 1.0)
+    # Materialize the scaled temporary F-order and let gelsd consume it
+    # in place: scipy honors overwrite_a only for F-contiguous input (it
+    # silently re-copies C-order), and LAPACK wants F-order anyway, so this
+    # skips the one internal copy lstsq would otherwise make. The temporary
+    # is exclusively ours (never reused after the call), and the VALUES are
+    # identical to the previous `X / safe_norms`, so results are bit-equal.
+    x_scaled = np.divide(X, safe_norms, out=np.empty(X.shape, order="F"))
     coef_scaled = scipy_lstsq(
-        X / safe_norms, y, lapack_driver="gelsd", check_finite=False, cond=1e-07
+        x_scaled,
+        y,
+        lapack_driver="gelsd",
+        check_finite=False,
+        cond=1e-07,
+        overwrite_a=True,
     )[0]
     return coef_scaled / safe_norms
 
@@ -459,7 +474,7 @@ def _rank_guarded_inv(
     # IF multiplier leaves range(A) — e.g. a treated-cell mean). Equilibrating the
     # selection (rather than a raw pivot) keeps the cell-only-aliasing SE equal to
     # the well-conditioned near-collinear limit (se_ratio ~ 1).
-    _Q, _R, piv = qr(A_eq, mode="economic", pivoting=True)
+    _R, piv = qr(A_eq, mode="r", pivoting=True)  # only the pivot is used
     kept = np.sort(piv[:n_keep])
     A_eq_ginv = np.zeros((k, k), dtype=float)
     A_eq_ginv[np.ix_(kept, kept)] = np.linalg.inv(A_eq[np.ix_(kept, kept)])

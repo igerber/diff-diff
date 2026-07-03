@@ -59,9 +59,13 @@ pub fn solve_ols<'py>(
     let k = x_arr.ncols();
 
     // Solve using SVD with truncation for rank-deficient matrices
-    // This matches scipy's 'gelsd' behavior
-    let x_owned = x_arr.to_owned();
-    let y_owned = y_arr.to_owned();
+    // This matches scipy's 'gelsd' behavior.
+    //
+    // Memory discipline (wide designs make one n x k block ~GBs): work from
+    // the borrowed numpy views, materialize exactly ONE owned n x k copy
+    // (the equilibrated faer matrix below), and drop the SVD factors before
+    // the fitted/residual/vcov stage so U never coexists with the vcov
+    // scores block. Verified via the alloc-profile counting allocator.
 
     // Column equilibration: scale each column to unit 2-norm before the SVD so
     // rank detection (threshold = s_max * rcond, anchored to the largest singular
@@ -71,67 +75,77 @@ pub fn solve_ols<'py>(
     // unscaled back to raw scale below, BEFORE fitted/residuals/vcov, so all
     // raw-scale quantities (x_arr) stay consistent. Mirrors the Python backend's
     // _detect_rank_deficiency / _equilibrated_lstsq equilibration.
+    // Norms are computed from the borrowed view in the same j-outer/i-inner
+    // accumulation order as before (bit-identical to the prior owned-copy scan).
     let mut safe_norms = Array1::<f64>::zeros(k);
     for j in 0..k {
         let mut acc = 0.0_f64;
         for i in 0..n {
-            let v = x_owned[[i, j]];
+            let v = x_arr[[i, j]];
             acc += v * v;
         }
         let norm = acc.sqrt();
         safe_norms[j] = if norm > 0.0 { norm } else { 1.0 };
     }
-    let mut x_scaled = x_owned.clone();
-    for j in 0..k {
-        let s = safe_norms[j];
-        for i in 0..n {
-            x_scaled[[i, j]] /= s;
-        }
-    }
 
-    // Convert ndarray to faer for SVD computation (on the equilibrated matrix)
-    let x_faer = ndarray_to_faer(&x_scaled);
+    // Equilibration fused into the faer conversion: the single owned n x k
+    // copy. Same per-element `x / norm` as the previous two-step
+    // clone-then-divide, so the SVD input values are unchanged.
+    let x_faer = faer::Mat::from_fn(n, k, |i, j| x_arr[[i, j]] / safe_norms[j]);
 
     // Compute thin SVD using faer: X = U * S * V^T
     let svd = match x_faer.thin_svd() {
         Ok(s) => s,
         Err(_) => {
             return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                "SVD computation failed"
+                "SVD computation failed",
             ))
         }
     };
+    // The equilibrated input is not needed once the factors exist.
+    drop(x_faer);
 
-    // Extract U, S, V from faer SVD result (capitalized methods in faer 0.24)
+    // Extract from the faer SVD result (capitalized methods in faer 0.24)
+    // only the small pieces the solve needs - s (min(n,k)), V^T (k x k),
+    // and U^T y (min(n,k)) - then drop the factorization, releasing the
+    // n x k U storage before any downstream allocation.
     let u_faer = svd.U();
-    let s_diag = svd.S();  // Returns diagonal view
-    let s_col = s_diag.column_vector();  // Get as column vector
-    let v_faer = svd.V();  // This is V, not V^T
+    let s_diag = svd.S(); // Returns diagonal view
+    let s_col = s_diag.column_vector(); // Get as column vector
+    let v_faer = svd.V(); // This is V, not V^T
 
-    // Convert back to ndarray
     let n_rows = u_faer.nrows();
     let n_svd_cols = u_faer.ncols();
-    let mut u = Array2::<f64>::zeros((n_rows, n_svd_cols));
-    for i in 0..n_rows {
-        for j in 0..n_svd_cols {
-            u[[i, j]] = u_faer[(i, j)];
-        }
-    }
 
     let s_len = s_col.nrows();
     let mut s = Array1::<f64>::zeros(s_len);
     for i in 0..s_len {
-        s[i] = s_col[i];  // S column vector
+        s[i] = s_col[i]; // S column vector
     }
 
     let v_rows = v_faer.nrows();
     let v_cols = v_faer.ncols();
-    let mut vt = Array2::<f64>::zeros((v_cols, v_rows));  // V^T has shape (k, k)
+    let mut vt = Array2::<f64>::zeros((v_cols, v_rows)); // V^T has shape (k, k)
     for i in 0..v_rows {
         for j in 0..v_cols {
-            vt[[j, i]] = v_faer[(i, j)];  // Transpose V to get V^T
+            vt[[j, i]] = v_faer[(i, j)]; // Transpose V to get V^T
         }
     }
+
+    // U^T y computed directly off the faer factor - never materializes an
+    // ndarray copy of U. Sequential column-order accumulation (U is
+    // col-major): deterministic bits independent of BLAS/thread count.
+    let mut uty = Array1::<f64>::zeros(n_svd_cols); // (min(n,k),)
+    for j in 0..n_svd_cols {
+        let mut acc = 0.0_f64;
+        for i in 0..n_rows {
+            acc += u_faer[(i, j)] * y_arr[i];
+        }
+        uty[j] = acc;
+    }
+    // Everything extracted; release the factorization (frees U's n x k
+    // storage) before fitted/residuals/vcov allocate.
+    drop(svd);
 
     // Compute rcond threshold to match R's lm() behavior
     // R's qr() uses tol = 1e-07 by default, which is sqrt(eps) ≈ 1.49e-08
@@ -140,9 +154,8 @@ pub fn solve_ols<'py>(
     let s_max = s.iter().cloned().fold(0.0_f64, f64::max);
     let threshold = s_max * rcond;
 
-    // Compute truncated pseudoinverse solution: β = V * S^{-1} * U^T * y
+    // Truncated pseudoinverse solution: β = V * S^{-1} * (U^T y).
     // Singular values below threshold are treated as zero (truncated)
-    let uty = u.t().dot(&y_owned); // (min(n,k),)
 
     // Build S^{-1} with truncation and count effective rank
     // Note: s.len() = min(n, k) from thin SVD, so this handles underdetermined (n < k) correctly
@@ -180,18 +193,20 @@ pub fn solve_ols<'py>(
         } else {
             // Full rank: compute robust vcov normally
             let cluster_arr = cluster_ids.as_ref().map(|c| c.as_array().to_owned());
-            let vcov_arr = compute_robust_vcov_internal(&x_arr, &residuals.view(), cluster_arr.as_ref(), n, k)?;
+            let vcov_arr = compute_robust_vcov_internal(
+                &x_arr,
+                &residuals.view(),
+                cluster_arr.as_ref(),
+                n,
+                k,
+            )?;
             Some(vcov_arr.to_pyarray(py))
         }
     } else {
         None
     };
 
-    Ok((
-        coefficients.to_pyarray(py),
-        residuals.to_pyarray(py),
-        vcov,
-    ))
+    Ok((coefficients.to_pyarray(py), residuals.to_pyarray(py), vcov))
 }
 
 /// Compute HC1 or cluster-robust variance-covariance matrix.
@@ -280,9 +295,10 @@ fn compute_robust_vcov_internal(
             let n_clusters = cluster_sums.len();
 
             if n_clusters < 2 {
-                return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                    format!("Need at least 2 clusters for cluster-robust SEs, got {}", n_clusters)
-                ));
+                return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                    "Need at least 2 clusters for cluster-robust SEs, got {}",
+                    n_clusters
+                )));
             }
 
             // Build cluster scores matrix (G, k)
@@ -355,7 +371,7 @@ fn invert_symmetric(a: &Array2<f64>) -> PyResult<Array2<f64>> {
 
     if has_nan {
         return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "Matrix inversion failed (singular matrix)"
+            "Matrix inversion failed (singular matrix)",
         ));
     }
 
@@ -372,7 +388,11 @@ fn invert_symmetric(a: &Array2<f64>) -> PyResult<Array2<f64>> {
             min_pivot = min_pivot.min(pivot);
         }
     }
-    let pivot_ratio = if max_pivot > 0.0 { min_pivot / max_pivot } else { 0.0 };
+    let pivot_ratio = if max_pivot > 0.0 {
+        min_pivot / max_pivot
+    } else {
+        0.0
+    };
 
     // Only perform expensive residual check if pivots suggest potential instability.
     // Threshold of 1e-10 catches truly problematic matrices while avoiding
@@ -396,13 +416,11 @@ fn invert_symmetric(a: &Array2<f64>) -> PyResult<Array2<f64>> {
         // while still producing usable results. Use 1e-4 * n as threshold.
         let threshold = 1e-4 * (n as f64);
         if max_residual > threshold {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                format!(
-                    "Matrix inversion numerically unstable (residual={:.2e} > threshold={:.2e}). \
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                "Matrix inversion numerically unstable (residual={:.2e} > threshold={:.2e}). \
                      Design matrix may be near-singular.",
-                    max_residual, threshold
-                )
-            ));
+                max_residual, threshold
+            )));
         }
     }
 
@@ -461,7 +479,11 @@ mod tests {
         // For n=2 < k=3: U is (2, 2), S has 2 values, V is (3, 2)
         assert_eq!(svd.U().nrows(), 2, "U should have n=2 rows");
         assert_eq!(svd.U().ncols(), 2, "U should have min(n,k)=2 cols");
-        assert_eq!(svd.S().column_vector().nrows(), 2, "S should have min(n,k)=2 singular values");
+        assert_eq!(
+            svd.S().column_vector().nrows(),
+            2,
+            "S should have min(n,k)=2 singular values"
+        );
         assert_eq!(svd.V().nrows(), 3, "V should have k=3 rows");
         assert_eq!(svd.V().ncols(), 2, "V should have min(n,k)=2 cols");
 

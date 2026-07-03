@@ -1599,6 +1599,66 @@ class TestNumericalStability:
         vd = np.diag(vcov)[kept]
         assert np.all(np.isfinite(vd)) and np.all(vd >= 0)  # valid kept-coef VCV
 
+    def test_rank_detection_qr_mode_r_matches_economic(self):
+        """Lock for the mode="r" refactor: rank detection reads only the R
+        diagonal and the pivot, and both are bit-identical between
+        mode="r" and mode="economic" (same dgeqp3 factorization; mode only
+        controls whether the unused Q is formed). Pivot values are locked by
+        same-session cross-mode equality, NOT hard-coded (dgeqp3 tie-breaks
+        are BLAS-dependent); only rank/dropped are asserted as values."""
+        from scipy.linalg import qr
+
+        from diff_diff.linalg import _detect_rank_deficiency
+
+        rng = np.random.default_rng(7)
+        base = rng.standard_normal((80, 3))
+        fixtures = {
+            # genuinely collinear, well-scaled: rank 3 of 4
+            "collinear": (np.column_stack([base, base[:, 0] - base[:, 2]]), 3),
+            # scale artifact: full rank but one huge column
+            "scale": (np.column_stack([base, 1e9 * rng.standard_normal(80)]), 4),
+        }
+        for name, (X, expected_rank) in fixtures.items():
+            rank, dropped, pivot = _detect_rank_deficiency(X)
+            assert rank == expected_rank, name
+            assert len(dropped) == X.shape[1] - expected_rank, name
+            # cross-mode equivalence: identical R diagonal and pivot
+            r_only = qr(X, mode="r", pivoting=True)
+            _q, r_eco, piv_eco = qr(X, mode="economic", pivoting=True)
+            np.testing.assert_array_equal(
+                np.abs(np.diag(r_only[0])), np.abs(np.diag(r_eco)), err_msg=name
+            )
+            np.testing.assert_array_equal(r_only[1], piv_eco, err_msg=name)
+
+    def test_equilibrated_lstsq_f_order_overwrite_matches_reference(self):
+        """Lock for the F-order + overwrite_a change: the in-place gelsd
+        consume must return bit-identical coefficients to a plain
+        non-overwriting C-order call (same values reach dgelsd either way),
+        and must not mutate the caller's X."""
+        from scipy.linalg import lstsq as scipy_lstsq
+
+        from diff_diff.linalg import _equilibrated_lstsq
+
+        rng = np.random.default_rng(11)
+        X = rng.standard_normal((300, 6))
+        X[:, 3] *= 1e7  # scale disparity exercises the equilibration
+        y = X[:, :3].sum(axis=1) + rng.standard_normal(300)
+        x_before = X.copy()
+
+        coef = _equilibrated_lstsq(X, y)
+
+        np.testing.assert_array_equal(X, x_before)  # caller's X untouched
+        # like-for-like reference: SAME norm accumulation (einsum) and lstsq
+        # options as _equilibrated_lstsq, differing ONLY in the C-order
+        # non-overwriting call - the exact contract the F-order change claims
+        # to preserve.
+        norms = np.sqrt(np.einsum("ij,ij->j", X, X))
+        ref = (
+            scipy_lstsq(X / norms, y, lapack_driver="gelsd", check_finite=False, cond=1e-07)[0]
+            / norms
+        )
+        np.testing.assert_array_equal(coef, ref)
+
 
 class TestEstimatorIntegration:
     """Integration tests verifying estimators produce correct results."""

@@ -14,6 +14,8 @@ extern crate blas_src;
 use pyo3::prelude::*;
 use std::collections::HashMap;
 
+#[cfg(feature = "alloc-profile")]
+mod alloc_profile;
 mod bootstrap;
 mod demean;
 mod linalg;
@@ -62,6 +64,13 @@ fn _rust_backend(m: &Bound<'_, PyModule>) -> PyResult<()> {
 
     // Diagnostics
     m.add_function(wrap_pyfunction!(rust_backend_info, m)?)?;
+
+    // Allocation profiling (measurement builds only; --features alloc-profile)
+    #[cfg(feature = "alloc-profile")]
+    {
+        m.add_function(wrap_pyfunction!(alloc_profile::reset_alloc_high_water, m)?)?;
+        m.add_function(wrap_pyfunction!(alloc_profile::alloc_high_water_bytes, m)?)?;
+    }
 
     // Version info
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;

@@ -33,6 +33,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   attribution in `docs/performance-plan.md`).
 
 ### Changed
+- **`solve_ols` marshalling slimmed on both backends** (memory + speed; outputs preserved).
+  Rust: column norms computed from the borrowed numpy view, equilibration fused into the
+  single owned faer copy, `U'y` computed directly off the faer SVD factor (the old path
+  materialized a full ndarray copy of U for one k-vector dot), and factors dropped before
+  the fitted/residual/vcov stage - rust-side allocator high-water on a 2.4M x 130 clustered
+  solve falls from 15.32 GB to 7.81 GB (measured with the new feature-gated `alloc-profile`
+  counting allocator; never compiled into wheels). Python: rank detection uses
+  `qr(mode="r")` (same dgeqp3 R and pivot, skips forming the discarded Q) and
+  `_equilibrated_lstsq` materializes its scaled temporary F-order with `overwrite_a=True`
+  so gelsd consumes it in place - python-backend estimates are bit-identical (benchmark
+  identity deltas exactly 0.0). The removed copies also cost time: frozen-code benchmark
+  arms measured CV-clear improvements incl. firm-panel rust fits -21% (25.8 -> 20.3 s),
+  county event studies -12%/-13% (rust/python), with no scenario regressing. Rust outputs
+  move only at the cross-backend parity tolerances (REGISTRY-documented; never
+  bit-identical across backends).
 - **FE-absorption demeaning rewritten: factorize-once + `np.bincount` method of alternating
   projections** (`demean_by_groups` / `within_transform`). Each absorbed dimension is factorized
   once and group means are formed via `np.bincount` instead of re-hashing the group keys with

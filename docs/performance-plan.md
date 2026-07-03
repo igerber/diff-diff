@@ -76,35 +76,49 @@ submit gate), tail_stress 31.74s -> 11.37s (2.79x), geo_experiment 0.976s ->
 0.484s (2.02x, now ahead of the pyfixest yardstick's 0.623s), scanner 1.59x,
 survey 1.44x, county 1.36x, guard_small unregressed. Identity vs the
 committed after-baselines: 1e-13-1e-16 on every scenario incl. tail_stress.
-Known trade-off: the rust-backend firm_churn fit peaks at ~21 GB RSS vs
-~13.4 GB under the numpy backend. **Corrected attribution (2026-07, PR-D
-probes):** the peak is dominated by the downstream SOLVER phase (the Rust
-faer path holds an owned copy of the ~2.5 GB stacked design plus SVD
-workspace), not by the demean kernel's dispatch marshalling as this
-paragraph originally claimed. Measured evidence: an isolated width-16
-chunked dispatch cuts the kernel's transients to near-numpy footprint, yet
-the end-to-end fit still peaks ~19-21 GB (only ~5-12% below unchunked) at a
-+2-7% wall-clock cost - so chunked dispatch shipped as an opt-in env knob
-(`DIFF_DIFF_DEMEAN_CHUNK_COLS`, default off) rather than default-on, and
-the solver-phase peak is tracked as its own TODO row. `DIFF_DIFF_BACKEND=
-python` remains the OOM escape hatch. Measurement note: single-run
-`ru_maxrss` on macOS is unreliable under ambient memory pressure (the
-compressor deflates resident peaks - one probe read 15.1 GB for a
-configuration that reproducibly peaks ~19-20 GB); gate memory claims on
-repeated runs under matched machine state.
+**Solver-phase memory: final diagnosis + fix (2026-07, PR-D/PR-E).** The
+fit-level peak on wide absorbed designs lives in the SOLVE phase on BOTH
+backends. There is NO systematic rust-vs-python peak-RSS gap: an
+interleaved A/B (3 rounds, alternating fresh subprocesses) measured rust
+17.8 GB mean vs python 18.1 GB on firm_churn, each swinging +-1.5 GB
+run-to-run - the historical "13.4 vs 21.0 GB backend gap" was a run-order
+artifact (macOS's memory compressor evicts cold pages from the resident
+set, so single-run `ru_maxrss` readings are machine-state lottery; gate
+memory claims on allocation-level instruments or interleaved repeats,
+never one RSS pair). The genuine waste was marshalling: the rust
+`solve_ols` held ~6 concurrent n x k blocks (defensive input copy, scaled
+clone, faer conversion copy, thin-SVD U, an ndarray COPY of U made only
+for a k-vector dot, all scope-held under the vcov scores block) and the
+python path formed a discarded Q in the rank-detection QR plus let gelsd
+re-copy a C-order temporary. The PR-E slim (norms from the borrowed view,
+equilibration fused into the single faer copy, U^T y off the faer factor,
+early factor drops; python: `qr(mode="r")` + F-order `overwrite_a=True`
+lstsq) cut the rust-side allocator high-water on the 2.4M x 130 clustered
+solve from **15.32 GB to 7.81 GB** (6.14 -> 3.13 blocks, measured with the
+feature-gated `alloc-profile` counting allocator) and, because the removed
+copies also cost time, delivered CV-clear wall-clock wins on frozen-code
+arms: firm_churn rust 25.84 -> 20.34 s (-21%), county 1.76 -> 1.55 s /
+2.39 -> 2.09 s (rust/python, the skipped dorgqr), geo rust -6%, survey
+rust -2%; python-arm estimates bit-identical (identity deltas exactly
+0.0). Remaining floor is inherent to SVD-based lstsq (fused input copy +
+thin-SVD U transient + vcov scores block + LAPACK gelsd internals);
+further reduction = the tall-skinny-QR path parked with the QR-reuse row
+in TODO.md. `DIFF_DIFF_BACKEND=python` remains an escape hatch, and the
+opt-in `DIFF_DIFF_DEMEAN_CHUNK_COLS` knob (PR-D) still caps the demean
+dispatch transients.
 
 ### FE-absorption suite results
 
 <!-- TABLE:start fe_absorption -->
 | Scenario | n rows | Before (s) | After (s) | Speedup | Rust (s) | Rust speedup | pyfixest (s) |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| 7. County policy event study (SunAbraham) | 177,289 | 3.865 (cv 2.5%) | 2.388 (cv 2.6%) | 1.6x | 1.757 (cv 3.0%) | 1.4x | 0.190 (cv 4.0%, proxy) |
-| 8. Firm panel with churn (SunAbraham) | 2,400,000 | 92.957 (cv 0.9%) | 49.502 (cv 1.9%) | 1.9x | 25.839 (cv 4.1%) | 1.9x | 1.912 (cv 20.3%, noisy, proxy) |
-| 9. Scanner store-week (TWFE) | 3,255,000 | 1.549 (cv 0.3%) | 0.983 (cv 0.1%) | 1.6x | 0.624 (cv 0.3%) | 1.6x | 0.644 (cv 12.3%, noisy) |
-| 10. Geo experiment 5M orders (DiD absorb) | 5,000,000 | 2.630 (cv 0.6%) | 0.973 (cv 0.4%) | 2.7x | 0.484 (cv 0.2%) | 2.0x | 0.623 (cv 7.8%) |
-| 11. Survey BRR replicates (DiD absorb) | 500,000 | 7.385 (cv 8.6%) | 4.077 (cv 0.1%) | 1.8x | 2.835 (cv 0.0%) | 1.4x | - |
-| 12. Correlated-FE stress (DiD absorb) | 5,000,000 | 26.271 (cv 0.4%) | 31.765 (cv 0.6%) | 0.8x | 11.365 (cv 0.8%) | 2.8x | 3.075 (cv 1.5%) |
-| 13. Small-panel guard (TWFE) | 20,000 | 0.005 (cv 4.1%) | 0.004 (cv 4.4%) | 1.3x | 0.003 (cv 3.5%) | 1.0x | 0.007 (cv 2.2%) |
+| 7. County policy event study (SunAbraham) | 177,289 | 3.865 (cv 2.5%) | 2.087 (cv 2.5%) | 1.9x | 1.554 (cv 2.9%) | 1.3x | 0.190 (cv 4.0%, proxy) |
+| 8. Firm panel with churn (SunAbraham) | 2,400,000 | 92.957 (cv 0.9%) | 46.127 (cv 2.7%) | 2.0x | 20.341 (cv 2.5%) | 2.3x | 1.912 (cv 20.3%, noisy, proxy) |
+| 9. Scanner store-week (TWFE) | 3,255,000 | 1.549 (cv 0.3%) | 0.980 (cv 0.8%) | 1.6x | 0.612 (cv 0.3%) | 1.6x | 0.644 (cv 12.3%, noisy) |
+| 10. Geo experiment 5M orders (DiD absorb) | 5,000,000 | 2.630 (cv 0.6%) | 0.942 (cv 0.0%) | 2.8x | 0.453 (cv 0.6%) | 2.1x | 0.623 (cv 7.8%) |
+| 11. Survey BRR replicates (DiD absorb) | 500,000 | 7.385 (cv 8.6%) | 4.039 (cv 0.3%) | 1.8x | 2.778 (cv 0.1%) | 1.5x | - |
+| 12. Correlated-FE stress (DiD absorb) | 5,000,000 | 26.271 (cv 0.4%) | 31.656 (cv 0.4%) | 0.8x | 11.381 (cv 0.3%) | 2.8x | 3.075 (cv 1.5%) |
+| 13. Small-panel guard (TWFE) | 20,000 | 0.005 (cv 4.1%) | 0.004 (cv 4.9%) | 1.3x | 0.004 (cv 5.1%) | 1.0x | 0.007 (cv 2.2%) |
 
 *noisy* = CV above the 10% unusable threshold from the noise protocol. *Rust speedup* is vs the After column (numpy engine, same code). *proxy* = timing-only pyfixest stand-in: the Sun-Abraham scenarios run a saturated `i(rel_time)` event study there (pyfixest 0.60 has no `sunab()`) - comparable demeaning load, different estimand, so those cells are not exact-estimand comparisons (see `bench_fe_absorption_pyfixest.py`).
 <!-- TABLE:end fe_absorption -->
