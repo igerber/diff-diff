@@ -31,6 +31,7 @@ source / Abadie-Gardeazabal (2003) App. B. See ``docs/methodology/REGISTRY.md``
 §SyntheticControl for the deviation/Note labels.
 """
 
+import itertools
 import warnings
 from dataclasses import dataclass, replace
 from typing import Any, Dict, List, Optional, Tuple, cast
@@ -676,6 +677,21 @@ class SyntheticControl:
         # estimator's inputs cannot silently change in_space_placebo() output on an
         # already-returned results object. (pivots are freshly pivoted here, and the
         # period/id lists are re-listed below, so those are not caller-aliased.)
+        #
+        # Capture the EXACT (X1s, X0s, V) triple that produced the treated unit's final
+        # donor weights, so the ADH-2015 §4 regression_weights() / sparse_synthetic_control()
+        # diagnostics can hold V FIXED (unlike leave_one_out / in_time_placebo, which
+        # re-search V). For nested / custom / inverse_variance the inner solve ran on X1s/X0s
+        # (standardized or raw per the branch above), so those locals are exactly right. For
+        # cv the final W is solved on the VALIDATION-window standardized predictors inside
+        # _outer_solve_V_cv; reuse the balance matrices (Xb1/Xb0, the identical
+        # validation-window re-aggregation) standardized the same way (== the solver's
+        # X1s_va/X0s_va, SC _outer_solve_V_cv). The J==1 short-circuit never reaches the cv
+        # solve, so guard on J > 1 (the diagnostics fail closed on J < 2 anyway).
+        if self.v_method == "cv" and J > 1:
+            fit_X1s, fit_X0s, _ = _standardize(Xb1, Xb0, self.standardize)
+        else:
+            fit_X1s, fit_X0s = X1s, X0s
         results._fit_snapshot = _SyntheticControlFitSnapshot(
             pivots=pivots,
             specs=list(specs),
@@ -701,6 +717,11 @@ class SyntheticControl:
             inner_max_iter=self.inner_max_iter,
             inner_min_decrease=self.inner_min_decrease,
             v_cv_t0=self.v_cv_t0,
+            # The V-fixed (X1s, X0s, V) triple captured just above (copied so post-fit
+            # mutation cannot change the diagnostics' output).
+            fit_X1s=np.array(fit_X1s, dtype=float, copy=True),
+            fit_X0s=np.array(fit_X0s, dtype=float, copy=True),
+            fit_v=np.array(v, dtype=float, copy=True),
         )
         # Persist whether the treated unit's own fit reached a valid optimum — both
         # the inner Frank-Wolfe weight solve AND (on the nested path) the outer V
@@ -2379,5 +2400,127 @@ def _truncate_snapshot_in_time(
         post_periods=new_post,
         custom_v=new_custom_v,
         v_cv_t0=new_v_cv_t0,
+        # Drop the baseline fit's (X1s, X0s, V) triple: it was built on the FULL pre-period
+        # predictors, so it must never be paired with these truncated specs. No in-time
+        # consumer reads it today, but nulling closes the latent trap up front.
+        fit_X1s=None,
+        fit_X0s=None,
+        fit_v=None,
     )
     return snap_mod, dropped
+
+
+# =============================================================================
+# ADH-2015 §4 tail diagnostics (opt-in) — used by SyntheticControlResults
+# .regression_weights() / .sparse_synthetic_control() via function-level import
+# =============================================================================
+
+
+def _regression_weights(X1s: np.ndarray, X0s: np.ndarray) -> Tuple[np.ndarray, bool, float]:
+    """Regression-weight extrapolation diagnostic (ADH 2015 §4, journal pp. 498-499).
+
+    Returns the implied donor weights ``W^reg = X0a'(X0a X0a')^{-1} X1a`` of the
+    regression counterfactual ``B̂'X_1`` (``B̂ = (X0 X0')^{-1} X0 Y0'``), where ``X0a`` /
+    ``X1a`` prepend an intercept row of ones to the predictor matrices. With the constant,
+    ``ι'W^reg = 1`` (under full row rank), so the regression is ALSO a weighting estimator
+    summing to one — but with UNRESTRICTED weights (can be < 0 or > 1), i.e. it
+    extrapolates outside the donors' convex hull (the simplex-constrained synthetic control
+    cannot). Detectable by flagging ``W^reg`` entries outside ``[0, 1]``.
+
+    Computed as the min-norm least-squares solution ``argmin_w ||X0a w - X1a||`` =
+    ``pinv(X0a) @ X1a`` (equal to the gram-inverse form under full row rank, but avoids
+    squaring the condition number; ``lstsq`` returns the rank directly). **At full row rank**
+    the system is exactly solvable, so ``W^reg`` is invariant to per-predictor row scaling
+    (standardization only divides rows by SD): the result is identical across the
+    standardized and raw predictor spaces. In the **rank-deficient** case the fit is inexact,
+    and row scaling reweights the least-squares residual metric, so the min-norm ``W^reg`` is
+    computed in the captured fit space and can differ across predictor spaces (still a valid
+    extrapolation witness there, just space-dependent).
+
+    Returns ``(w_reg, rank_deficient, weight_sum)``. ``rank_deficient`` is True when the
+    augmented predictor matrix is not full ROW rank (``k+1 > J``, or collinear predictors);
+    the min-norm ``W^reg`` is then still an informative extrapolation witness, but need not
+    sum to 1 (so ``weight_sum`` may deviate from 1 exactly in that case).
+    """
+    J = X0s.shape[1]
+    X0a = np.vstack([np.ones((1, J), dtype=float), np.asarray(X0s, dtype=float)])  # (k+1, J)
+    X1a = np.concatenate([[1.0], np.asarray(X1s, dtype=float).ravel()])  # (k+1,)
+    w_reg, _, rank, _ = np.linalg.lstsq(X0a, X1a, rcond=None)
+    rank_deficient = bool(rank < X0a.shape[0])  # not full ROW rank (rows = k+1)
+    w_reg = np.asarray(w_reg, dtype=float)
+    return w_reg, rank_deficient, float(np.sum(w_reg))
+
+
+def _sparse_search_size(snap: "_SyntheticControlFitSnapshot", size: int) -> Dict[str, Any]:
+    """Exhaustive best size-``size`` donor subset, holding V FIXED at the baseline fit.
+
+    Iterates every ``C(J, size)`` donor subset in deterministic ``itertools.combinations``
+    order, solves the inner simplex-constrained weight problem on that subset with the
+    baseline fit's FIXED ``V`` (``snap.fit_v`` — NOT re-searched, per ADH 2015 footnote 20),
+    and returns the subset minimizing the pre-period OUTCOME MSPE (strict ``<`` tie-break, so
+    the first subset in combination order wins ties). Non-converged subset solves are
+    excluded from the argmin and counted. Only the WINNER's full gap path / ATT is
+    materialized (the search itself computes only the cheap pre-MSPE per subset).
+
+    Returns a dict always carrying ``n_subsets_evaluated`` / ``n_failed`` / ``all_failed``;
+    when ``all_failed`` is False it also carries the winner's ``donor_ids`` (tuple),
+    ``weights`` (dict), ``gap_path``, ``att``, ``pre_rmspe``, ``post_rmspe``, ``rmspe_ratio``.
+    """
+    X1s = snap.fit_X1s
+    X0s = snap.fit_X0s
+    v = snap.fit_v
+    assert X1s is not None and X0s is not None and v is not None
+    donor_ids = snap.donor_ids
+    Y = snap.pivots[snap.outcome]
+    pre_periods = snap.pre_periods
+    post_periods = snap.post_periods
+
+    # Pre-period treated + donor OUTCOMES for ranking (uniform-outcome MSPE — the SC pre-fit
+    # metric that the reported pre_rmspe uses; the pre-period gaps equal this residual).
+    Z1_pre = Y.loc[pre_periods, snap.treated_id].to_numpy(dtype=float)  # (T0,)
+    Z0_pre_all = Y.loc[pre_periods, donor_ids].to_numpy(dtype=float)  # (T0, J)
+
+    n_eval = 0
+    n_failed = 0
+    best_mspe = np.inf
+    best: Optional[Tuple[List[int], np.ndarray]] = None
+    # Suppress the per-solve non-convergence / poor-fit warnings across the (up to
+    # max_subsets) inner solves; the aggregate is surfaced via n_failed instead.
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        for cols in itertools.combinations(range(len(donor_ids)), size):
+            n_eval += 1
+            cols_arr = list(cols)
+            w_sub, conv = _inner_solve_W(
+                X1s, X0s[:, cols_arr], v, snap.inner_max_iter, snap.inner_min_decrease
+            )
+            if not conv:
+                n_failed += 1
+                continue
+            resid = Z1_pre - Z0_pre_all[:, cols_arr] @ w_sub
+            mspe = float(np.mean(resid**2))
+            if mspe < best_mspe:  # strict < → first subset in combination order wins ties
+                best_mspe = mspe
+                best = (cols_arr, w_sub)
+
+    if best is None:
+        return {"n_subsets_evaluated": n_eval, "n_failed": n_failed, "all_failed": True}
+
+    cols_arr, w_sub = best
+    sub_ids = [donor_ids[c] for c in cols_arr]
+    gap_path = _compute_gap_path(Y, w_sub, snap.treated_id, sub_ids, snap.all_periods)
+    pre_gaps = np.array([gap_path[p] for p in pre_periods], dtype=float)
+    post_gaps = np.array([gap_path[p] for p in post_periods], dtype=float)
+    scale = float(np.max(np.abs(Z1_pre))) if Z1_pre.size else 0.0
+    return {
+        "donor_ids": tuple(sub_ids),
+        "weights": {sub_ids[i]: float(w_sub[i]) for i in range(len(sub_ids))},
+        "gap_path": gap_path,
+        "att": float(np.mean(post_gaps)),
+        "pre_rmspe": float(np.sqrt(_mspe(gap_path, pre_periods))),
+        "post_rmspe": float(np.sqrt(_mspe(gap_path, post_periods))),
+        "rmspe_ratio": _rmspe_ratio(pre_gaps, post_gaps, scale),
+        "n_subsets_evaluated": n_eval,
+        "n_failed": n_failed,
+        "all_failed": False,
+    }

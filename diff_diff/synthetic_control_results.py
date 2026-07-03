@@ -15,6 +15,7 @@ field, not the NaN ``p_value``).
 
 import warnings
 from dataclasses import dataclass, field
+from math import comb
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
@@ -67,6 +68,16 @@ class _SyntheticControlFitSnapshot:
     # None → len(pre_periods)//2 default. Carried so in-space/LOO/in-time placebo refits
     # reproduce the same CV split as the treated fit.
     v_cv_t0: Optional[int]
+    # The exact predictor matrices + diagonal V that produced the treated unit's FINAL
+    # donor weights, in the space the inner solve used (standardized for nested/custom,
+    # raw for inverse_variance, validation-window standardized for cv). Held FIXED (no
+    # re-search) by the ADH-2015 §4 regression_weights() / sparse_synthetic_control()
+    # diagnostics. Optional + nulled in _truncate_snapshot_in_time (a backdated in-time
+    # snapshot must never pair these full-pre matrices with truncated specs). fit_X1s is
+    # (k,), fit_X0s is (k, J), fit_v is (k,).
+    fit_X1s: Optional[np.ndarray] = None
+    fit_X0s: Optional[np.ndarray] = None
+    fit_v: Optional[np.ndarray] = None
 
 
 def _validate_conformal_bounds(
@@ -359,6 +370,35 @@ class SyntheticControlResults:
         self._conformal_ci_df: Optional[pd.DataFrame] = None
         self._conformal_grid_df: Optional[pd.DataFrame] = None
 
+        # --- ADH 2015 §4 "tail" diagnostics (opt-in, populated by regression_weights() / ---
+        # --- sparse_synthetic_control()). Both read the fit snapshot's captured (X1s, X0s, V) ---
+        # --- triple; an unpickled result (snapshot nulled) fails closed in those methods. The ---
+        # --- small summary tables survive pickling; the per-size sparse gap paths ---
+        # --- (_sparse_gaps) are panel-derived and nulled by __getstate__. analytical ---
+        # --- se/t/p/ci stay NaN throughout.
+        # Regression-weight extrapolation diagnostic:
+        self._regw_df: Optional[pd.DataFrame] = None
+        # Status: None (not run), "ran", "treated_fit_nonconverged", "too_few_donors".
+        self._regw_status: Optional[str] = None
+        # True if the intercept-augmented predictor matrix was not full ROW rank (a min-norm
+        # W^reg is reported; the sum-to-1 property then need not hold — see _regw_weight_sum).
+        self._regw_rank_deficient: bool = False
+        # Number of donors whose implied regression weight falls outside [0, 1] — the
+        # extrapolation signal (regression weights are unrestricted, unlike the SC simplex).
+        self._regw_n_extrapolating: int = 0
+        # Σ W^reg — a numerical self-check: ~1 under full row rank (the intercept forces
+        # ι'W^reg = 1), may deviate from 1 when _regw_rank_deficient. None until run.
+        self._regw_weight_sum: Optional[float] = None
+        # Sparse-SC subset search:
+        self._sparse_df: Optional[pd.DataFrame] = None
+        # Status: None (not run), "ran", "treated_fit_nonconverged", "too_few_donors".
+        self._sparse_status: Optional[str] = None
+        # Headline: max |att_sparse - baseline_att| over the searched sizes. None until run.
+        self._sparse_max_abs_delta_att: Optional[float] = None
+        # Per-size winning gap paths {size: {period: gap}} for the overlay plot; panel-
+        # derived, nulled by __getstate__.
+        self._sparse_gaps: Optional[Dict[int, Dict[Any, float]]] = None
+
     def __getstate__(self) -> Dict[str, Any]:
         """Exclude panel-derived internal state from pickling.
 
@@ -379,6 +419,10 @@ class SyntheticControlResults:
         # overlay gap accessors raise (re-fit to recompute).
         state["_loo_gaps"] = None
         state["_in_time_gaps"] = None
+        # Sparse-SC per-size winning gap paths are panel-derived (same hazard); the small
+        # _sparse_df / _regw_df summary tables survive so a round-tripped result still
+        # reports the diagnostic, but get_sparse_synthetic_control_gaps() raises (re-fit).
+        state["_sparse_gaps"] = None
         return state
 
     def __setstate__(self, state: Dict[str, Any]) -> None:
@@ -391,7 +435,21 @@ class SyntheticControlResults:
         (the "no infeasible refits recorded" state) so a legacy result reports cleanly.
         """
         self.__dict__.update(state)
-        for _attr, _default in (("n_infeasible", 0), ("_loo_n_infeasible", 0)):
+        for _attr, _default in (
+            ("n_infeasible", 0),
+            ("_loo_n_infeasible", 0),
+            # ADH-2015 §4 tail diagnostics (added later): default so a pre-feature pickle
+            # does not AttributeError in the accessors / DiagnosticReport.
+            ("_regw_df", None),
+            ("_regw_status", None),
+            ("_regw_rank_deficient", False),
+            ("_regw_n_extrapolating", 0),
+            ("_regw_weight_sum", None),
+            ("_sparse_df", None),
+            ("_sparse_status", None),
+            ("_sparse_max_abs_delta_att", None),
+            ("_sparse_gaps", None),
+        ):
             if not hasattr(self, _attr):
                 setattr(self, _attr, _default)
 
@@ -1688,6 +1746,450 @@ class SyntheticControlResults:
                         }
                     )
         return pd.DataFrame(rows, columns=["placebo_period", "period", "gap", "phase"])
+
+    # =====================================================================
+    # ADH-2015 §4 "tail" diagnostics: regression-weight extrapolation +
+    # sparse-SC subset search (opt-in; analytical inference unchanged)
+    # =====================================================================
+
+    _REGW_COLS = [
+        "donor_id",
+        "w_reg",
+        "w_sc",
+        "extrapolates",
+        "abs_extrapolation",
+    ]
+
+    def regression_weights(self) -> pd.DataFrame:
+        """
+        Regression-weight extrapolation diagnostic (ADH 2015 §4, journal pp. 498-499).
+
+        Computes the implied donor weights ``W^reg = X0a'(X0a X0a')^{-1} X1a`` of the
+        REGRESSION counterfactual ``B̂'X_1`` — the same predictor matrices the synthetic
+        control matched on, augmented with an intercept row of ones. Because a constant is
+        included, ``ι'W^reg = 1`` (under full row rank), so regression is ALSO a weighting
+        estimator summing to one — but with UNRESTRICTED weights (can be negative or exceed
+        1), i.e. it extrapolates outside the donors' convex hull. The simplex-constrained
+        synthetic control cannot; comparing the two quantifies how much a regression
+        counterfactual would have to extrapolate. (In ADH's application regression assigned
+        negative weights to Greece/Italy/Portugal/Spain.)
+
+        Pure linear algebra — NO solver re-fit — leaving the analytical inference contract
+        unchanged: ``se``/``t_stat``/``p_value``/``conf_int``/``is_significant`` stay bound
+        to the NaN analytical ``p_value``.
+
+        Returns
+        -------
+        pandas.DataFrame
+            One row per donor (all ``J`` donors), sorted by ``abs_extrapolation``
+            descending. Columns: ``donor_id``, ``w_reg`` (implied regression weight),
+            ``w_sc`` (the synthetic-control weight, 0 if below the reporting floor),
+            ``extrapolates`` (bool: ``w_reg < 0`` or ``w_reg > 1``), ``abs_extrapolation``
+            (``max(0, -w_reg, w_reg - 1)`` — the distance outside ``[0, 1]``).
+
+        Raises
+        ------
+        ValueError
+            If the fit snapshot is unavailable (e.g. this result was unpickled).
+
+        Notes
+        -----
+        When the intercept-augmented predictor matrix is not full ROW rank (``k+1 > J`` —
+        realistic with the default per-period outcome lags when ``T0 > J`` — or collinear
+        predictors), the reported ``W^reg`` is the MIN-NORM least-squares solution, a
+        ``UserWarning`` is emitted, and ``self._regw_rank_deficient`` is set True; it is
+        still an informative extrapolation witness, but ``Σ W^reg``
+        (``self._regw_weight_sum``) need not equal 1 in that case.
+        """
+        if self._fit_snapshot is None:
+            raise ValueError(
+                "regression_weights() requires the fit snapshot on the results object. "
+                "This result appears to have been loaded from serialization (which "
+                "excludes the snapshot) or produced by an older estimator version. "
+                "Re-fit to enable the regression-weight extrapolation diagnostic."
+            )
+        from diff_diff.synthetic_control import _regression_weights
+
+        snap = self._fit_snapshot
+        # Fail closed on a non-converged treated fit for CONSISTENCY with the other ADH-2015
+        # diagnostics. (W^reg itself is well-defined regardless — pure linear algebra on the
+        # captured predictor matrices — so this is a uniform-behaviour POLICY, not a
+        # correctness necessity: a non-converged treated fit is untrustworthy overall.)
+        if not self._fit_converged:
+            warnings.warn(
+                "regression_weights() skipped: the treated unit's own SCM fit did not "
+                "converge at fit time, so the synthetic control it is compared against is "
+                "not a valid optimum. Re-fit with a larger inner_max_iter / more n_starts.",
+                UserWarning,
+                stacklevel=2,
+            )
+            self._regw_status = "treated_fit_nonconverged"
+            self._regw_df = pd.DataFrame([], columns=self._REGW_COLS)
+            return self._regw_df.copy()
+
+        donor_ids = snap.donor_ids
+        if len(donor_ids) < 2:
+            warnings.warn(
+                "regression_weights() requires at least 2 donors to be informative (with a "
+                f"single donor W^reg is trivially [1]); only {len(donor_ids)} available. "
+                "Returning an empty table.",
+                UserWarning,
+                stacklevel=2,
+            )
+            self._regw_status = "too_few_donors"
+            self._regw_df = pd.DataFrame([], columns=self._REGW_COLS)
+            return self._regw_df.copy()
+
+        # The fit snapshot exists (guarded above) and a converged J>=2 fit always captured the
+        # matrices, so these are non-None here (narrow for the type checker).
+        assert snap.fit_X1s is not None and snap.fit_X0s is not None
+        w_reg, rank_deficient, weight_sum = _regression_weights(snap.fit_X1s, snap.fit_X0s)
+        if rank_deficient:
+            warnings.warn(
+                "regression_weights(): the intercept-augmented predictor matrix is not full "
+                "row rank (more predictors+intercept than donors, or collinear predictors), so "
+                "the ADH Gram-inverse form is unavailable; W^reg is the MIN-NORM least-squares "
+                "solution and need not sum to 1 (and, being an inexact fit, can differ across "
+                "predictor spaces). It still witnesses extrapolation (weights outside [0, 1]); "
+                "uniqueness of the least-squares solution depends on the predictor COLUMN rank. "
+                "Reduce the predictor set or enlarge the donor pool for a full-row-rank W^reg.",
+                UserWarning,
+                stacklevel=2,
+            )
+        rows: List[Dict[str, Any]] = []
+        for j, d in enumerate(donor_ids):
+            wj = float(w_reg[j])
+            extra = max(0.0, -wj, wj - 1.0)
+            rows.append(
+                {
+                    "donor_id": d,
+                    "w_reg": wj,
+                    "w_sc": float(self.donor_weights.get(d, 0.0)),
+                    "extrapolates": bool(wj < 0.0 or wj > 1.0),
+                    "abs_extrapolation": float(extra),
+                }
+            )
+        # Most-extrapolating donor first (the flagged donors surface at the top).
+        rows.sort(key=lambda r: r["abs_extrapolation"], reverse=True)
+        self._regw_rank_deficient = bool(rank_deficient)
+        self._regw_n_extrapolating = int(sum(1 for r in rows if r["extrapolates"]))
+        self._regw_weight_sum = float(weight_sum)
+        self._regw_status = "ran"
+        self._regw_df = pd.DataFrame(rows, columns=self._REGW_COLS)
+        return self._regw_df.copy()
+
+    def get_regression_weights_df(self) -> pd.DataFrame:
+        """
+        Get the regression-weight extrapolation table (see :meth:`regression_weights`).
+
+        Survives pickling. Raises if :meth:`regression_weights` has not been run.
+
+        Returns
+        -------
+        pandas.DataFrame
+        """
+        if self._regw_df is None:
+            raise ValueError("No regression-weight results yet; call regression_weights() first.")
+        return self._regw_df.copy()
+
+    _SPARSE_COLS = [
+        "size",
+        "donor_ids",
+        "weights",
+        "pre_rmspe",
+        "post_rmspe",
+        "rmspe_ratio",
+        "att",
+        "delta_att",
+        "n_subsets_evaluated",
+        "n_failed",
+        "status",
+    ]
+
+    def sparse_synthetic_control(
+        self, sizes: Optional[Any] = None, max_subsets: int = 50000
+    ) -> pd.DataFrame:
+        """
+        Sparse synthetic-control subset search (ADH 2015 §4, journal pp. 506-507).
+
+        For each target size ``l < J`` (the donor count), exhaustively searches ALL
+        ``C(J, l)`` donor subsets — HOLDING ``V`` FIXED at the baseline fit's V (ADH hold V
+        fixed to make the combinatorial search tractable, footnote 20) — refits the inner
+        simplex weight solve on each subset, and reports the best-fitting size-``l``
+        synthetic (lowest pre-period outcome MSPE). This shows how the fit degrades and the
+        ATT moves as the synthetic is forced to be sparse (ADH: reducing to ``l = 4, 3, 2``
+        degrades fit "moderately", ``l = 1`` much worse — a single-match design close to
+        DiD). A thin re-run of the validated inner solver: the analytical inference contract
+        is unchanged (``se``/``t_stat``/``p_value``/``conf_int``/``is_significant`` stay NaN).
+
+        Parameters
+        ----------
+        sizes : int or sequence of int, optional
+            Target sparsity size(s) ``l``. Default None sweeps ``[1, 2, 3]`` (clipped to
+            ``l < J``). A DEFAULTED size whose ``C(J, l)`` exceeds ``max_subsets`` is SKIPPED
+            with a warning (a defaulted call never raises); an EXPLICITLY requested ``l`` with
+            ``C(J, l) > max_subsets`` raises ValueError instead. Each explicit ``l`` must
+            satisfy ``1 <= l <= J - 1``.
+        max_subsets : int, default 50000
+            Guard on the exhaustive search. An explicitly requested size exceeding it raises
+            ValueError with guidance (lower ``l``, curate the donor pool, or raise this cap).
+
+        Returns
+        -------
+        pandas.DataFrame
+            A ``status="baseline"`` row first (the full fit; ``size`` = the baseline support
+            count, ``delta_att = 0``), then one ``status="ran"`` row per searched size (or a
+            ``status="all_subsets_failed"`` row with NaN metrics if every subset of that size
+            failed to converge). Columns: ``size``, ``donor_ids`` (winning subset, a tuple),
+            ``weights`` (dict), ``pre_rmspe``, ``post_rmspe``, ``rmspe_ratio``, ``att``,
+            ``delta_att`` (``att_sparse - full_att``), ``n_subsets_evaluated``, ``n_failed``,
+            ``status``.
+
+        Raises
+        ------
+        ValueError
+            If the fit snapshot is unavailable (unpickled result); if ``max_subsets`` is not
+            a positive integer; if ``sizes`` is an empty sequence; or if an explicitly
+            requested size is out of range or exceeds ``max_subsets``.
+
+        Notes
+        -----
+        Pre-fit typically degrades as ``l`` shrinks, but strict monotonicity is NOT
+        guaranteed: subsets are ranked by the uniform-outcome pre-period MSPE while each
+        subset's weights are V-optimal on the *predictor* objective. The diagnostic's signal
+        is the degradation of fit and the movement of the ATT as you sparsify.
+        """
+        if self._fit_snapshot is None:
+            raise ValueError(
+                "sparse_synthetic_control() requires the fit snapshot on the results "
+                "object. This result appears to have been loaded from serialization (which "
+                "excludes the snapshot) or produced by an older estimator version. Re-fit "
+                "to enable the sparse-SC subset search."
+            )
+        from diff_diff.synthetic_control import _mspe, _sparse_search_size
+
+        # Validate the search budget up front (before any work): a non-positive or non-integer
+        # max_subsets would otherwise silently mis-behave — e.g. NaN makes every `comb > NaN`
+        # comparison False, bypassing the cap entirely; <= 0 skips every default size.
+        if not isinstance(max_subsets, (int, np.integer)) or bool(max_subsets < 1):
+            raise ValueError(f"max_subsets must be a positive integer, got {max_subsets!r}.")
+
+        snap = self._fit_snapshot
+        J = len(snap.donor_ids)
+
+        # Baseline row: read DIRECTLY from the full fit (do NOT re-fit) so delta_att=0 is exact.
+        baseline_row = {
+            "size": len(snap.weighted_donor_ids),
+            "donor_ids": tuple(snap.weighted_donor_ids),
+            "weights": dict(self.donor_weights),
+            "pre_rmspe": float(self.pre_rmspe),
+            "post_rmspe": float(np.sqrt(_mspe(self.gap_path, snap.post_periods))),
+            "rmspe_ratio": float(self.rmspe_ratio),
+            "att": float(self.att),
+            "delta_att": 0.0,
+            "n_subsets_evaluated": 0,
+            "n_failed": 0,
+            "status": "baseline",
+        }
+
+        # Fail closed on a non-converged treated fit: an under-optimized baseline ATT makes
+        # every sparse delta_att meaningless (mirrors leave_one_out()).
+        if not self._fit_converged:
+            warnings.warn(
+                "sparse_synthetic_control() skipped: the treated unit's own SCM fit did not "
+                "converge at fit time, so the baseline ATT is not a valid optimum to compare "
+                "sparse refits against. Re-fit with a larger inner_max_iter / more n_starts.",
+                UserWarning,
+                stacklevel=2,
+            )
+            self._sparse_status = "treated_fit_nonconverged"
+            self._sparse_gaps = {}
+            self._sparse_df = pd.DataFrame([baseline_row], columns=self._SPARSE_COLS)
+            return self._sparse_df.copy()
+
+        if J < 2:
+            warnings.warn(
+                "sparse_synthetic_control requires at least 2 donors (a sparse subset must "
+                f"be smaller than the pool); only {J} available. Returning the baseline "
+                "fit only.",
+                UserWarning,
+                stacklevel=2,
+            )
+            self._sparse_status = "too_few_donors"
+            self._sparse_gaps = {}
+            self._sparse_df = pd.DataFrame([baseline_row], columns=self._SPARSE_COLS)
+            return self._sparse_df.copy()
+
+        # Resolve the requested sizes: default sweep [1,2,3] (skip over-cap), or explicit.
+        explicit = sizes is not None
+        if sizes is None:
+            requested = [size for size in (1, 2, 3) if size < J]
+        else:
+            # Normalize a scalar to a 1-list; anything else must be a sequence.
+            raw = [sizes] if isinstance(sizes, (int, np.integer, float)) else None
+            if raw is None:
+                try:
+                    raw = list(sizes)
+                except TypeError:
+                    raise ValueError(f"sizes must be an int or a sequence of ints, got {sizes!r}.")
+            if not raw:
+                raise ValueError(
+                    "sizes must be a non-empty int or sequence of ints (got an empty "
+                    "sequence); pass e.g. sizes=[1, 2, 3] or leave sizes=None for the default."
+                )
+            requested = []
+            for s in raw:
+                # Reject bool (an int subclass) and non-integral values: int(2.9) would
+                # silently truncate to a DIFFERENT requested size than the caller intended.
+                if isinstance(s, bool) or not isinstance(s, (int, np.integer)):
+                    raise ValueError(
+                        f"sparse_synthetic_control sizes must be integer(s); got {s!r} "
+                        f"(type {type(s).__name__})."
+                    )
+                requested.append(int(s))
+
+        search_sizes: List[int] = []
+        for size in requested:
+            if not (1 <= size <= J - 1):
+                if explicit:
+                    raise ValueError(
+                        f"sparse_synthetic_control size l={size} is out of range; each size "
+                        f"must satisfy 1 <= l <= J-1 = {J - 1}."
+                    )
+                continue  # defaulted sizes are pre-clipped; belt-and-suspenders
+            n_sub = comb(J, size)
+            if n_sub > max_subsets:
+                if explicit:
+                    raise ValueError(
+                        f"sparse_synthetic_control size l={size} requires "
+                        f"C({J},{size})={n_sub} inner solves, exceeding "
+                        f"max_subsets={max_subsets}. Lower l, curate the donor pool, or raise "
+                        "max_subsets (the search is exhaustive by design)."
+                    )
+                warnings.warn(
+                    f"sparse_synthetic_control: skipping default size l={size} — "
+                    f"C({J},{size})={n_sub} exceeds max_subsets={max_subsets}. Pass "
+                    f"sizes=[{size}] with a larger max_subsets to force it.",
+                    UserWarning,
+                    stacklevel=2,
+                )
+                continue
+            search_sizes.append(size)
+
+        sparse_rows: List[Dict[str, Any]] = [baseline_row]
+        sparse_gaps: Dict[int, Dict[Any, float]] = {}
+        deltas: List[float] = []
+        for size in search_sizes:
+            res = _sparse_search_size(snap, size)
+            if res["all_failed"]:
+                warnings.warn(
+                    f"sparse_synthetic_control: all C({J},{size})="
+                    f"{res['n_subsets_evaluated']} size-{size} subsets failed to converge; "
+                    "row reported with status='all_subsets_failed' and NaN metrics. Re-fit "
+                    "with a larger inner_max_iter / looser inner_min_decrease.",
+                    UserWarning,
+                    stacklevel=2,
+                )
+                sparse_rows.append(
+                    {
+                        "size": size,
+                        "donor_ids": None,
+                        "weights": None,
+                        "pre_rmspe": np.nan,
+                        "post_rmspe": np.nan,
+                        "rmspe_ratio": np.nan,
+                        "att": np.nan,
+                        "delta_att": np.nan,
+                        "n_subsets_evaluated": res["n_subsets_evaluated"],
+                        "n_failed": res["n_failed"],
+                        "status": "all_subsets_failed",
+                    }
+                )
+                continue
+            delta = float(res["att"]) - float(self.att)
+            deltas.append(delta)
+            sparse_gaps[size] = res["gap_path"]
+            sparse_rows.append(
+                {
+                    "size": size,
+                    "donor_ids": res["donor_ids"],
+                    "weights": res["weights"],
+                    "pre_rmspe": res["pre_rmspe"],
+                    "post_rmspe": res["post_rmspe"],
+                    "rmspe_ratio": res["rmspe_ratio"],
+                    "att": float(res["att"]),
+                    "delta_att": delta,
+                    "n_subsets_evaluated": res["n_subsets_evaluated"],
+                    "n_failed": res["n_failed"],
+                    "status": "ran",
+                }
+            )
+
+        self._sparse_gaps = sparse_gaps
+        self._sparse_max_abs_delta_att = max((abs(d) for d in deltas), default=None)
+        self._sparse_status = "ran"
+        self._sparse_df = pd.DataFrame(sparse_rows, columns=self._SPARSE_COLS)
+        return self._sparse_df.copy()
+
+    def get_sparse_synthetic_control_df(self) -> pd.DataFrame:
+        """
+        Get the sparse synthetic-control table (see :meth:`sparse_synthetic_control`).
+
+        Survives pickling. Raises if :meth:`sparse_synthetic_control` has not been run.
+
+        Returns
+        -------
+        pandas.DataFrame
+        """
+        if self._sparse_df is None:
+            raise ValueError(
+                "No sparse synthetic-control results yet; call sparse_synthetic_control() first."
+            )
+        return self._sparse_df.copy()
+
+    def get_sparse_synthetic_control_gaps(self) -> pd.DataFrame:
+        """
+        Long-form per-size sparse gap paths, for the overlay ("spaghetti") plot.
+
+        One row per (size, period) for every searched size's winning subset. Columns:
+        ``size``, ``period``, ``gap``, ``phase`` (``"pre"``/``"post"``) — mirroring
+        :meth:`get_gap_df`. These per-period paths are panel-derived and are NOT retained
+        after pickling.
+
+        Returns
+        -------
+        pandas.DataFrame
+
+        Raises
+        ------
+        ValueError
+            If :meth:`sparse_synthetic_control` has not been run, or if the gap paths were
+            dropped on pickling (re-fit and re-run to recompute them).
+        """
+        if self._sparse_df is None:
+            raise ValueError(
+                "No sparse synthetic-control results yet; call sparse_synthetic_control() first."
+            )
+        if self._sparse_gaps is None:
+            raise ValueError(
+                "Sparse synthetic-control gap paths are not retained after pickling "
+                "(panel-derived); re-run sparse_synthetic_control() on a freshly fitted "
+                "result to recompute them."
+            )
+        rows: List[Dict[str, Any]] = []
+        for size, gap_path in self._sparse_gaps.items():
+            for period in list(self.pre_periods) + list(self.post_periods):
+                if period in gap_path:
+                    phase = "post" if period in self.post_periods else "pre"
+                    rows.append(
+                        {
+                            "size": size,
+                            "period": period,
+                            "gap": gap_path[period],
+                            "phase": phase,
+                        }
+                    )
+        return pd.DataFrame(rows, columns=["size", "period", "gap", "phase"])
 
     # =====================================================================
     # Confidence sets by test inversion (Firpo & Possebom 2018, §4)

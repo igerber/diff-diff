@@ -2532,6 +2532,107 @@ class DiagnosticReport:
                 ),
             }
 
+        # Regression-weight extrapolation diagnostic (ADH 2015 §4): opt-in, surfaced once
+        # the user has run results.regression_weights() (pure linear algebra — no refits).
+        if getattr(r, "_regw_df", None) is not None:
+            regw_status = getattr(r, "_regw_status", None)
+            if regw_status == "ran":
+                out["regression_weights"] = {
+                    "status": "ran",
+                    # Headline: how many donors an OLS/regression counterfactual would push
+                    # outside [0,1] (extrapolate). The SC simplex never does.
+                    "n_extrapolating": _to_python_scalar(getattr(r, "_regw_n_extrapolating", None)),
+                    # True if W^reg is a non-unique min-norm solution (not full row rank);
+                    # weight_sum then need not equal 1.
+                    "rank_deficient": bool(getattr(r, "_regw_rank_deficient", False)),
+                    "weight_sum": _to_python_float(getattr(r, "_regw_weight_sum", None)),
+                }
+            else:
+                _regw_reasons = {
+                    "treated_fit_nonconverged": (
+                        "regression_weights() was run but the treated unit's own SCM fit "
+                        "did not converge at fit time, so the synthetic control it is "
+                        "compared against is not a valid optimum."
+                    ),
+                    "too_few_donors": (
+                        "regression_weights() was run but fewer than 2 donors are available "
+                        "(W^reg is trivially [1] with a single donor)."
+                    ),
+                }
+                out["regression_weights"] = {
+                    "status": "infeasible",
+                    "reason_code": regw_status,
+                    "reason": _regw_reasons.get(
+                        regw_status, "regression_weights() produced no table."
+                    ),
+                }
+        else:
+            out["regression_weights"] = {
+                "status": "not_run",
+                "reason": (
+                    "Call results.regression_weights() to flag donors an OLS/regression "
+                    "counterfactual would weight outside [0,1] (ADH 2015 §4 extrapolation "
+                    "diagnostic; opt-in, no refit)."
+                ),
+            }
+
+        # Sparse-SC subset search (ADH 2015 §4): opt-in, surfaced once the user has run
+        # results.sparse_synthetic_control() (exhaustive subset search, V held fixed).
+        if getattr(r, "_sparse_df", None) is not None:
+            sparse_status = getattr(r, "_sparse_status", None)
+            if sparse_status == "ran":
+                # Compact per-size summary: how far the ATT / fit move as the synthetic is
+                # forced sparse (the baseline row is dropped — it is the full-fit reference).
+                records = r._sparse_df.to_dict("records")
+                per_size = [
+                    {
+                        "size": _to_python_scalar(rec["size"]),
+                        "att": _to_python_float(rec["att"]),
+                        "delta_att": _to_python_float(rec["delta_att"]),
+                        "pre_rmspe": _to_python_float(rec["pre_rmspe"]),
+                        "n_failed": _to_python_scalar(rec["n_failed"]),
+                        "status": rec["status"],
+                    }
+                    for rec in records
+                    if rec["status"] != "baseline"
+                ]
+                out["sparse_synthetic_control"] = {
+                    "status": "ran",
+                    # Headline: the largest baseline-relative ATT swing across searched sizes.
+                    "max_abs_delta_att": _to_python_float(
+                        getattr(r, "_sparse_max_abs_delta_att", None)
+                    ),
+                    "sizes": per_size,
+                }
+            else:
+                _sparse_reasons = {
+                    "treated_fit_nonconverged": (
+                        "sparse_synthetic_control() was run but the treated unit's own SCM "
+                        "fit did not converge at fit time, so the baseline ATT is not a "
+                        "valid reference for the sparse deltas."
+                    ),
+                    "too_few_donors": (
+                        "sparse_synthetic_control() was run but fewer than 2 donors are "
+                        "available (a sparse subset must be smaller than the pool)."
+                    ),
+                }
+                out["sparse_synthetic_control"] = {
+                    "status": "infeasible",
+                    "reason_code": sparse_status,
+                    "reason": _sparse_reasons.get(
+                        sparse_status, "sparse_synthetic_control() produced no valid subsets."
+                    ),
+                }
+        else:
+            out["sparse_synthetic_control"] = {
+                "status": "not_run",
+                "reason": (
+                    "Call results.sparse_synthetic_control() to test how the fit / ATT "
+                    "degrade when the synthetic is forced to a few donors (ADH 2015 §4 "
+                    "sparse subset search; opt-in, V held fixed)."
+                ),
+            }
+
         # Test-inversion confidence set (Firpo & Possebom 2018 §4): opt-in, surfaced once
         # the user has run results.confidence_set() (it reuses the in-space placebo
         # reference set — no refits). The analytical conf_int stays NaN; this is a SEPARATE

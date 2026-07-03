@@ -30,11 +30,17 @@ from the (NaN) ``p_value``; ``is_significant`` stays bound to ``p_value``.
 **Robustness diagnostics (ADH 2015 §4, opt-in):**
 :meth:`~diff_diff.SyntheticControlResults.leave_one_out` drops each reportably-weighted (weight > 1e-6)
 donor and re-fits (per-drop ATT / ``delta_att`` table — a large ``delta_att`` flags
-single-donor dependence), and
+single-donor dependence);
 :meth:`~diff_diff.SyntheticControlResults.in_time_placebo` reassigns the intervention to an
 earlier pre-date and checks for a spurious gap before the true treatment date (the
-backdating placebo; ``placebo_att`` should be ~0). Both re-run the validated solver and
-leave the analytical inference fields NaN.
+backdating placebo; ``placebo_att`` should be ~0);
+:meth:`~diff_diff.SyntheticControlResults.regression_weights` computes the implied
+regression-counterfactual donor weights ``W^reg`` (intercept-augmented) and flags those
+outside ``[0, 1]`` — the extrapolation an OLS counterfactual would incur but the
+simplex-constrained synthetic control cannot (pure linear algebra, no refit); and
+:meth:`~diff_diff.SyntheticControlResults.sparse_synthetic_control` exhaustively searches
+size-``l`` donor subsets holding ``V`` fixed at the baseline, showing how fit / ATT degrade
+as the synthetic is forced sparse. All leave the analytical inference fields NaN.
 
 **Confidence sets by test inversion (Firpo & Possebom 2018 §4, opt-in):**
 :meth:`~diff_diff.SyntheticControlResults.test_sharp_null` tests a sharp null
@@ -120,6 +126,11 @@ Results container for synthetic control estimation.
       ~SyntheticControlResults.in_time_placebo
       ~SyntheticControlResults.get_in_time_placebo_df
       ~SyntheticControlResults.get_in_time_placebo_gaps
+      ~SyntheticControlResults.regression_weights
+      ~SyntheticControlResults.get_regression_weights_df
+      ~SyntheticControlResults.sparse_synthetic_control
+      ~SyntheticControlResults.get_sparse_synthetic_control_df
+      ~SyntheticControlResults.get_sparse_synthetic_control_gaps
       ~SyntheticControlResults.test_sharp_null
       ~SyntheticControlResults.confidence_set
       ~SyntheticControlResults.get_confidence_set_df

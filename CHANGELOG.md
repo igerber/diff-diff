@@ -8,6 +8,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **`SyntheticControl` ADH-2015 §4 tail diagnostics** (two opt-in `SyntheticControlResults`
+  methods, closing the last two ADH-2015 §4 checklist items). `regression_weights()` reports the
+  implied donor weights `W^reg = X0a'(X0a X0a')^{-1} X1a` of the regression counterfactual
+  (intercept-augmented so they sum to 1 at full row rank) and flags donors outside `[0, 1]` — the
+  extrapolation an OLS counterfactual incurs but the simplex-constrained synthetic control cannot;
+  pure linear algebra, min-norm least-squares with a rank-deficient warning. `sparse_synthetic_control()`
+  exhaustively searches `C(J, l)` size-`l` donor subsets holding `V` fixed at the baseline fit,
+  reporting how fit / ATT degrade as the synthetic is forced sparse (per-size winner table +
+  `get_sparse_synthetic_control_gaps()` overlay); the default `sizes=[1,2,3]` sweep skips over-cap
+  sizes with a warning while an explicitly requested oversized `l` raises (`max_subsets` guard). Both
+  are purely additive, surface under `estimator_native_diagnostics`, and leave the analytical
+  inference contract unchanged (`se`/`t_stat`/`p_value`/`conf_int` stay NaN). No behavior change to
+  any existing fit.
 - **Rust `demean_map` kernel for FE absorption** (optional backend acceleration). When the Rust
   extension is available, the method-of-alternating-projections sweeps in
   `demean_by_groups`/`within_transform` run in a compiled kernel, rayon-parallel across the

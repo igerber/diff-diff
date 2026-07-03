@@ -85,7 +85,8 @@ If a constant is included, `ι'W^{reg}=1` — i.e., regression is *also* a weigh
 - [ ] In-time placebo (date reassignment with predictor lagging).
 - [ ] Leave-one-out donor robustness (drop each positively-weighted donor).
 - [ ] Post/pre-RMSPE-ratio permutation p-value `(#{r_j ≥ r_1})/(J+1)`.
-- [ ] Regression-weight (`W^{reg}`) extrapolation diagnostic (flag weights outside `[0,1]`).
+- [x] Regression-weight (`W^{reg}`) extrapolation diagnostic (flag weights outside `[0,1]`) — implemented as `SyntheticControlResults.regression_weights()`.
+- [x] Sparse-SC subset search (`l<J` contributing units, `V` held fixed at the baseline, footnote 20) — implemented as `SyntheticControlResults.sparse_synthetic_control()`.
 - [ ] Donor-pool curation + size limit (overfitting guard); optional penalty terms for interpolation bias / tie-breaking.
 
 ---

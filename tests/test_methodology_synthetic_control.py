@@ -4262,3 +4262,304 @@ def test_conformal_confidence_intervals_warn_small_pre_period():
         )
     with pytest.warns(UserWarning, match="large pre-period"):
         res.conformal_confidence_intervals(alpha=0.3, scheme="iid", n_iid=200, seed=0)
+
+
+# ---------------------------------------------------------------------------
+# ADH-2015 §4 tail diagnostics: regression-weight extrapolation + sparse-SC
+# subset search. Both are opt-in, hold the analytical inference contract (NaN),
+# and re-use the FIXED baseline V captured on the fit snapshot.
+# ---------------------------------------------------------------------------
+
+
+def _fit_iv(df, **kw):
+    """Fast inverse-variance SC fit (closed-form V, no slow outer search)."""
+    return SyntheticControl(v_method="inverse_variance", seed=0, **_FAST, **kw).fit(
+        df, "y", "treated", "unit", "year"
+    )
+
+
+def test_regression_weights_matches_paper_formula_oracle():
+    # k = T0 = 3 predictors, J = 6 donors -> k+1 = 4 <= J so W^reg is full row rank.
+    df, _years, _T0 = _make_panel(n_donors=6, T=8, T0=3, seed=1)
+    res = _fit_iv(df)
+    assert res._fit_converged
+    snap = res._fit_snapshot
+    X1s, X0s = snap.fit_X1s, snap.fit_X0s
+    _k, J = X0s.shape
+    X0a = np.vstack([np.ones((1, J)), X0s])
+    X1a = np.concatenate([[1.0], X1s.ravel()])
+    # ADH's exact formula W^reg = X0a'(X0a X0a')^{-1} X1a (independent of the impl's lstsq).
+    w_expected = X0a.T @ np.linalg.solve(X0a @ X0a.T, X1a)
+    tab = res.regression_weights().set_index("donor_id")
+    got = np.array([tab.loc[d, "w_reg"] for d in snap.donor_ids])
+    np.testing.assert_allclose(got, w_expected, atol=1e-10)
+    # Full row rank -> intercept forces the weights to sum to 1.
+    assert res._regw_rank_deficient is False
+    assert res._regw_status == "ran"
+    assert abs(res._regw_weight_sum - 1.0) < 1e-8
+    # Flag columns are internally consistent with w_reg.
+    full = res.get_regression_weights_df()
+    for _, row in full.iterrows():
+        w = row["w_reg"]
+        assert row["extrapolates"] == bool(w < 0.0 or w > 1.0)
+        assert row["abs_extrapolation"] == pytest.approx(max(0.0, -w, w - 1.0))
+    assert res._regw_n_extrapolating == int(full["extrapolates"].sum())
+    # The FULL analytical inference contract is untouched by the diagnostic (all NaN; the
+    # permutation-only significance stays off the analytical fields).
+    res.sparse_synthetic_control(sizes=[2])
+    assert np.isnan(res.se) and np.isnan(res.p_value) and np.isnan(res.t_stat)
+    assert np.isnan(res.conf_int[0]) and np.isnan(res.conf_int[1])
+    assert not res.is_significant
+
+
+def test_regression_weights_invariant_to_predictor_row_scaling():
+    # At FULL ROW RANK (k=T0=3 predictors < J=6 donors, exact fit) W^reg is invariant to
+    # per-predictor row scaling: a custom (standardized) fit and an inverse_variance (raw) fit
+    # on the same data give identical implied regression weights. (The invariance holds only
+    # under full row rank — see test_regression_weights_rank_deficient_warns_and_min_norm and
+    # the REGISTRY note; in the rank-deficient min-norm case row scaling can change W^reg.)
+    df, _years, T0 = _make_panel(n_donors=6, T=8, T0=3, seed=2)
+    r_std = SyntheticControl(v_method="custom", custom_v=np.ones(T0), seed=0, **_FAST).fit(
+        df, "y", "treated", "unit", "year"
+    )
+    r_raw = _fit_iv(df)
+    t_std = r_std.regression_weights().set_index("donor_id")["w_reg"]
+    t_raw = r_raw.regression_weights().set_index("donor_id")["w_reg"]
+    assert not r_std._regw_rank_deficient and not r_raw._regw_rank_deficient  # full-rank regime
+    order = sorted(t_std.index)
+    np.testing.assert_allclose(
+        t_std.reindex(order).to_numpy(), t_raw.reindex(order).to_numpy(), atol=1e-10
+    )
+
+
+def test_regression_weights_rank_deficient_warns_and_min_norm():
+    # k = T0 = 6 predictors, J = 3 donors -> k+1 = 7 > J: not full row rank.
+    df, _years, _T0 = _make_panel(n_donors=3, T=10, T0=6, seed=1)
+    res = _fit_iv(df)
+    with pytest.warns(UserWarning, match="not full row rank"):
+        tab = res.regression_weights()
+    assert res._regw_rank_deficient is True
+    assert res._regw_status == "ran"
+    assert len(tab) == 3  # all donors still reported
+
+
+def test_regression_weights_fail_closed_on_unpickled():
+    df, _years, _T0 = _make_panel(n_donors=5, T=8, T0=4, seed=1)
+    res = _fit_iv(df)
+    res2 = pickle.loads(pickle.dumps(res))
+    with pytest.raises(ValueError, match="fit snapshot"):
+        res2.regression_weights()
+
+
+def test_regression_weights_too_few_donors():
+    df, _years, _T0 = _make_panel(n_donors=1, T=8, T0=4, seed=1)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        res = SyntheticControl(seed=0, **_FAST).fit(df, "y", "treated", "unit", "year")
+    with pytest.warns(UserWarning, match="at least 2 donors"):
+        tab = res.regression_weights()
+    assert res._regw_status == "too_few_donors"
+    assert tab.empty
+
+
+def test_sparse_self_consistency_and_holds_v_fixed():
+    from diff_diff.synthetic_control import _inner_solve_W
+
+    df, _years, _T0 = _make_panel(n_donors=6, T=8, T0=4, seed=1)
+    res = _fit_iv(df)
+    snap = res._fit_snapshot
+    tab = res.sparse_synthetic_control(sizes=[2])
+    row = tab[tab["status"] == "ran"].iloc[0]
+    won_ids = row["donor_ids"]
+    won_weights = row["weights"]
+
+    # Independent brute-force best size-2 subset, using the FIXED baseline V (snap.fit_v) —
+    # if the diagnostic re-searched V instead of holding it fixed, this would diverge.
+    import itertools
+
+    Y = snap.pivots[snap.outcome]
+    Z1_pre = Y.loc[snap.pre_periods, snap.treated_id].to_numpy(float)
+    Z0_pre = Y.loc[snap.pre_periods, snap.donor_ids].to_numpy(float)
+    best, best_mspe = None, np.inf
+    for cols in itertools.combinations(range(len(snap.donor_ids)), 2):
+        w, conv = _inner_solve_W(
+            snap.fit_X1s,
+            snap.fit_X0s[:, list(cols)],
+            snap.fit_v,
+            snap.inner_max_iter,
+            snap.inner_min_decrease,
+        )
+        if not conv:
+            continue
+        m = float(np.mean((Z1_pre - Z0_pre[:, list(cols)] @ w) ** 2))
+        if m < best_mspe:
+            best_mspe, best = m, (cols, w)
+    exp_ids = tuple(snap.donor_ids[c] for c in best[0])
+    assert won_ids == exp_ids
+    got_w = np.array([won_weights[i] for i in won_ids])
+    np.testing.assert_allclose(got_w, best[1], atol=1e-10)
+    # pre_rmspe reported equals sqrt of the winning subset's pre-MSPE.
+    assert row["pre_rmspe"] == pytest.approx(np.sqrt(best_mspe), abs=1e-10)
+
+
+def test_sparse_l1_picks_best_single_donor():
+    df, _years, _T0 = _make_panel(n_donors=5, T=8, T0=4, seed=3)
+    res = _fit_iv(df)
+    snap = res._fit_snapshot
+    tab = res.sparse_synthetic_control(sizes=[1])
+    won = tab[tab["status"] == "ran"].iloc[0]["donor_ids"]
+    assert len(won) == 1
+    # l=1 forces w=[1], so the synthetic IS that donor's series; the winner is the donor
+    # whose own pre-period outcomes best match the treated unit's.
+    Y = snap.pivots[snap.outcome]
+    Z1 = Y.loc[snap.pre_periods, snap.treated_id].to_numpy(float)
+    mspes = {
+        d: float(np.mean((Z1 - Y.loc[snap.pre_periods, d].to_numpy(float)) ** 2))
+        for d in snap.donor_ids
+    }
+    assert won[0] == min(mspes, key=mspes.get)
+
+
+def test_sparse_explicit_oversize_raises():
+    df, _years, _T0 = _make_panel(n_donors=6, T=8, T0=4, seed=1)
+    res = _fit_iv(df)
+    with pytest.raises(ValueError, match="exceeding max_subsets"):
+        res.sparse_synthetic_control(sizes=3, max_subsets=5)  # C(6,3)=20 > 5
+
+
+def test_sparse_default_skips_over_cap_without_raising():
+    # J=8: C(8,1)=8 (ok), C(8,2)=28 and C(8,3)=56 (> cap 10) -> the two large defaults skip.
+    df, _years, _T0 = _make_panel(n_donors=8, T=8, T0=4, seed=1)
+    res = _fit_iv(df)
+    with pytest.warns(UserWarning, match="skipping default size"):
+        tab = res.sparse_synthetic_control(max_subsets=10)
+    assert set(tab[tab["status"] == "ran"]["size"]) == {1}
+    assert res._sparse_status == "ran"  # skipped, NOT raised
+
+
+def test_sparse_baseline_row_is_exact():
+    df, _years, _T0 = _make_panel(n_donors=5, T=8, T0=4, seed=1)
+    res = _fit_iv(df)
+    tab = res.sparse_synthetic_control(sizes=[2])
+    base = tab[tab["status"] == "baseline"].iloc[0]
+    assert base["delta_att"] == 0.0
+    assert base["att"] == pytest.approx(res.att, abs=1e-12)
+    assert base["size"] == len(res._fit_snapshot.weighted_donor_ids)
+
+
+def test_sparse_fail_closed_on_unpickled():
+    df, _years, _T0 = _make_panel(n_donors=5, T=8, T0=4, seed=1)
+    res = _fit_iv(df)
+    res2 = pickle.loads(pickle.dumps(res))
+    with pytest.raises(ValueError, match="fit snapshot"):
+        res2.sparse_synthetic_control()
+    # The summary table survives, but the panel-derived gap accessor fails closed.
+    res.sparse_synthetic_control(sizes=[2])
+    res3 = pickle.loads(pickle.dumps(res))
+    assert res3.get_sparse_synthetic_control_df() is not None  # small table survives
+    with pytest.raises(ValueError, match="not retained after pickling"):
+        res3.get_sparse_synthetic_control_gaps()
+
+
+def test_sparse_too_few_donors():
+    df, _years, _T0 = _make_panel(n_donors=1, T=8, T0=4, seed=1)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        res = SyntheticControl(seed=0, **_FAST).fit(df, "y", "treated", "unit", "year")
+    with pytest.warns(UserWarning, match="at least 2 donors"):
+        tab = res.sparse_synthetic_control()
+    assert res._sparse_status == "too_few_donors"
+    assert list(tab["status"]) == ["baseline"]
+
+
+def test_adh_tail_diagnostics_surface_in_diagnostic_report():
+    df, _years, T = _make_panel(n_donors=5, T=8, T0=4, seed=1)
+    res = _fit_iv(df)
+    # not_run stubs before the opt-in methods are called.
+    nat0 = DiagnosticReport(res).to_dict()["estimator_native_diagnostics"]
+    assert nat0["regression_weights"]["status"] == "not_run"
+    assert nat0["sparse_synthetic_control"]["status"] == "not_run"
+    res.regression_weights()
+    res.sparse_synthetic_control(sizes=[2, 3])
+    gaps = res.get_sparse_synthetic_control_gaps()
+    assert set(gaps["size"]) == {2, 3}
+    assert len(gaps) == 2 * 8  # 2 sizes x T periods
+    nat = DiagnosticReport(res).to_dict()["estimator_native_diagnostics"]
+    assert nat["regression_weights"]["status"] == "ran"
+    assert "n_extrapolating" in nat["regression_weights"]
+    assert nat["sparse_synthetic_control"]["status"] == "ran"
+    assert len(nat["sparse_synthetic_control"]["sizes"]) == 2
+
+
+def test_sparse_max_subsets_invalid_raises():
+    df, _years, _T0 = _make_panel(n_donors=5, T=8, T0=4, seed=1)
+    res = _fit_iv(df)
+    for bad in (0, -1, 2.5, np.nan):
+        with pytest.raises(ValueError, match="max_subsets must be a positive integer"):
+            res.sparse_synthetic_control(sizes=[2], max_subsets=bad)
+
+
+def test_sparse_empty_sizes_raises():
+    df, _years, _T0 = _make_panel(n_donors=5, T=8, T0=4, seed=1)
+    res = _fit_iv(df)
+    with pytest.raises(ValueError, match="non-empty"):
+        res.sparse_synthetic_control(sizes=[])
+
+
+def test_cv_tail_diagnostics_use_validation_window_capture():
+    # Exercise the special v_method="cv" snapshot capture: the fixed (X1s, X0s, V) triple is
+    # the VALIDATION-window standardized predictor matrices (re-aggregated per window), NOT the
+    # full-pre matrices. Both tail diagnostics must operate on that captured cv space.
+    from diff_diff.synthetic_control import _inner_solve_W
+
+    df, _years, _T0 = _make_panel(n_donors=6, T=8, T0=6, seed=1)
+    res = _fit_cv(df)  # v_method="cv", spanning special predictors (_CV_SPANNING, k=2)
+    assert res._fit_converged
+    snap = res._fit_snapshot
+    # Captured matrices are the 2 spanning specs x 6 donors, in the cv validation-window space.
+    assert snap.fit_X0s.shape == (2, 6)
+    assert snap.fit_X1s.shape == (2,)
+    assert snap.fit_v.shape == (2,)
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        rw = res.regression_weights()
+    assert res._regw_status == "ran"
+    assert len(rw) == 6
+
+    # Sparse winner (size 2) matches an independent brute-force over the CAPTURED cv-space
+    # matrices with the fixed cv V — proving the cv path holds V fixed in the right space.
+    import itertools
+
+    tab = res.sparse_synthetic_control(sizes=[2])
+    won = tab[tab["status"] == "ran"].iloc[0]["donor_ids"]
+    Y = snap.pivots[snap.outcome]
+    Z1_pre = Y.loc[snap.pre_periods, snap.treated_id].to_numpy(float)
+    Z0_pre = Y.loc[snap.pre_periods, snap.donor_ids].to_numpy(float)
+    best, best_mspe = None, np.inf
+    for cols in itertools.combinations(range(len(snap.donor_ids)), 2):
+        w, conv = _inner_solve_W(
+            snap.fit_X1s,
+            snap.fit_X0s[:, list(cols)],
+            snap.fit_v,
+            snap.inner_max_iter,
+            snap.inner_min_decrease,
+        )
+        if not conv:
+            continue
+        m = float(np.mean((Z1_pre - Z0_pre[:, list(cols)] @ w) ** 2))
+        if m < best_mspe:
+            best_mspe, best = m, cols
+    assert won == tuple(snap.donor_ids[c] for c in best)
+
+
+def test_sparse_non_integer_sizes_raise():
+    df, _years, _T0 = _make_panel(n_donors=6, T=8, T0=4, seed=1)
+    res = _fit_iv(df)
+    # int(2.9) would silently truncate to size 2 -> reject non-integral / bool sizes.
+    for bad in ([2.9], [2, 3.0], True, [True], ["2"]):
+        with pytest.raises(ValueError, match="must be integer|int or a sequence"):
+            res.sparse_synthetic_control(sizes=bad)
+    # A valid numpy-int size still works.
+    tab = res.sparse_synthetic_control(sizes=[np.int64(2)])
+    assert set(tab[tab["status"] == "ran"]["size"]) == {2}
