@@ -954,6 +954,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   county event studies -12%/-13% (rust/python), with no scenario regressing. Rust outputs
   move only at the cross-backend parity tolerances (REGISTRY-documented; never
   bit-identical across backends).
+- **Internal: cleaned package-source Ruff static-analysis findings** across forward-reference,
+  stale f-string, invalid `noqa`, and audited unused-local sites. No public API or numerical
+  behavior change.
 - **FE-absorption demeaning rewritten: factorize-once + `np.bincount` method of alternating
   projections** (`demean_by_groups` / `within_transform`). Each absorbed dimension is factorized
   once and group means are formed via `np.bincount` instead of re-hashing the group keys with

@@ -4537,15 +4537,16 @@ class CallawaySantAnna(
         X_ct_int = np.column_stack([np.ones(n_ct), X_ct])
         X_cs_int = np.column_stack([np.ones(n_cs), X_cs])
 
-        # Control OR predictions for all groups
+        # Control OR predictions used downstream
         mu0_post_gt = X_gt_int @ beta_ct  # mu_{0,1}(X) for treated-post
         mu0_pre_gt = X_gt_int @ beta_cs  # mu_{0,0}(X) for treated-post
         mu0_post_gs = X_gs_int @ beta_ct  # mu_{0,1}(X) for treated-pre
         mu0_pre_gs = X_gs_int @ beta_cs  # mu_{0,0}(X) for treated-pre
         mu0_post_ct = X_ct_int @ beta_ct  # mu_{0,1}(X) for control-post
-        mu0_pre_ct = X_ct_int @ beta_cs  # mu_{0,0}(X) for control-post
-        mu0_post_cs = X_cs_int @ beta_ct  # mu_{0,1}(X) for control-pre
         mu0_pre_cs = X_cs_int @ beta_cs  # mu_{0,0}(X) for control-pre
+        # The full DRDID R-convention grid also names mu0_pre_ct and
+        # mu0_post_cs. They are intentionally not materialized here because no
+        # residual, adjustment, or influence-function term consumes them.
 
         # Treated OR predictions for all groups (for local efficiency adjustment)
         mu1_post_gt = X_gt_int @ beta_gt  # mu_{1,1}(X) for treated-post
@@ -4607,11 +4608,11 @@ class CallawaySantAnna(
 
         pscore = np.clip(pscore, self.pscore_trim, 1 - self.pscore_trim)
 
-        # Split propensity scores per group
-        ps_gt = pscore[:n_gt]
-        ps_gs = pscore[n_gt : n_gt + n_gs]
+        # Split control propensity scores per group.
         ps_ct = pscore[n_gt + n_gs : n_gt + n_gs + n_ct]
         ps_cs = pscore[n_gt + n_gs + n_ct :]
+        # The symmetric treated slices ps_gt and ps_gs are intentionally not
+        # materialized: only control propensity slices feed IPW control weights.
 
         # =====================================================================
         # 3. Group weights and R-convention means

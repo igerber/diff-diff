@@ -1341,7 +1341,6 @@ class ImputationDiD(ImputationDiDBootstrapMixin):
             Imputed counterfactual Y(0).
         """
         df_1 = df.loc[omega_1_mask]
-        n_1 = len(df_1)
 
         # Look up unit and time FE
         alpha_i = df_1[unit].map(unit_fe).values

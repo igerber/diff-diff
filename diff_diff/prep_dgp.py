@@ -406,7 +406,6 @@ def generate_factor_data(
     """
     rng = np.random.default_rng(seed)
 
-    n_control = n_units - n_treated
     n_periods = n_pre + n_post
 
     if n_treated > n_units:

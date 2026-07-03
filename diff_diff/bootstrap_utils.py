@@ -6,11 +6,14 @@ both CallawaySantAnna and ContinuousDiD estimators.
 """
 
 import warnings
-from typing import Optional, Tuple
+from typing import TYPE_CHECKING, Optional, Tuple
 
 import numpy as np
 
 from diff_diff._backend import HAS_RUST_BACKEND, _rust_bootstrap_weights
+
+if TYPE_CHECKING:
+    from diff_diff.survey import ResolvedSurveyDesign
 
 __all__ = [
     "generate_bootstrap_weights",

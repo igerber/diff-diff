@@ -988,7 +988,6 @@ def _extract_event_study_params(
                     )
 
                 # Build beta_hat and sigma (diagonal - no full VCV for dCDH)
-                all_times = pre_times + post_times
                 effects = []
                 ses = []
                 for h in pre_times:
@@ -2313,7 +2312,6 @@ def _arp_confidence_set(
     ci_ub : float
         Upper bound of confidence set.
     """
-    num_post = len(beta_hat) - num_pre
     beta_post = beta_hat[num_pre:]
 
     # Point estimate and SE for grid centering

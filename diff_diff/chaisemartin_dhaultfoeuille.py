@@ -5227,7 +5227,6 @@ def _compute_heterogeneity_test(
         # count, typically 30-300 groups).
         from diff_diff.linalg import _detect_rank_deficiency
 
-        n_params = design.shape[1]
         rank, _dropped, _pivot = _detect_rank_deficiency(design)
 
         # Guard: need MORE observations than rank for a well-defined

@@ -273,7 +273,7 @@ def _compute_nearest_treated_distance_sparse(
     """
     # Imported lazily to mirror conley.py's lazy-scipy pattern and keep
     # module import cheap when the sparse path isn't exercised.
-    from scipy.spatial import cKDTree  # noqa: WPS433  (deferred import)
+    from scipy.spatial import cKDTree  # deferred import
 
     n_units = all_coords.shape[0]
     if metric == "haversine":

@@ -182,9 +182,7 @@ class SurveyPowerConfig:
             return self.survey_design
         from diff_diff.survey import SurveyDesign
 
-        return SurveyDesign(
-            weights="weight", strata="stratum", psu="psu", fpc="fpc"
-        )
+        return SurveyDesign(weights="weight", strata="stratum", psu="psu", fpc="fpc")
 
     @property
     def min_viable_n(self) -> int:
@@ -2267,14 +2265,14 @@ def simulate_power(
         if control_group in ("not_yet_treated", "last_cohort"):
             raise ValueError(
                 f"survey_config does not support control_group='{control_group}' "
-                f"(requires multi-cohort DGP). Use the custom data_generator "
-                f"path for survey power with this control-group design."
+                "(requires multi-cohort DGP). Use the custom data_generator "
+                "path for survey power with this control-group design."
             )
         if clean_control == "strict":
             raise ValueError(
-                f"survey_config does not support clean_control='strict' "
-                f"(requires multi-cohort DGP). Use the custom data_generator "
-                f"path for survey power with strict clean controls."
+                "survey_config does not support clean_control='strict' "
+                "(requires multi-cohort DGP). Use the custom data_generator "
+                "path for survey power with strict clean controls."
             )
 
     # SyntheticDiD placebo variance requires n_control > n_treated.
