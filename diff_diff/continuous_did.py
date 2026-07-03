@@ -31,9 +31,9 @@ from diff_diff.continuous_did_results import (
 )
 from diff_diff.linalg import _rank_guarded_inv, solve_ols
 from diff_diff.survey import (
-    ResolvedSurveyDesign,
     _resolve_survey_for_fit,
     _validate_unit_constant_survey,
+    build_unit_first_row_index,
     compute_survey_vcov,
 )
 from diff_diff.utils import safe_inference
@@ -413,8 +413,7 @@ class ContinuousDiD:
 
         # Filter out NaN cells (e.g., from zero effective survey mass)
         gt_results = {
-            gt: r for gt, r in gt_results.items()
-            if np.isfinite(r.get("att_glob", np.nan))
+            gt: r for gt, r in gt_results.items() if np.isfinite(r.get("att_glob", np.nan))
         }
 
         if len(gt_results) == 0:
@@ -573,9 +572,12 @@ class ContinuousDiD:
                 # Survey df for t-distribution inference (unit-level, not panel-level)
                 _survey_df = analytic.get("df_survey")
                 # Guard: replicate design with undefined df → NaN inference
-                if (_survey_df is None and resolved_survey is not None
-                        and hasattr(resolved_survey, 'uses_replicate_variance')
-                        and resolved_survey.uses_replicate_variance):
+                if (
+                    _survey_df is None
+                    and resolved_survey is not None
+                    and hasattr(resolved_survey, "uses_replicate_variance")
+                    and resolved_survey.uses_replicate_variance
+                ):
                     _survey_df = 0
 
                 # Recompute survey_metadata from unit-level design so reported
@@ -589,8 +591,7 @@ class ContinuousDiD:
 
                 # Propagate replicate df override to survey_metadata for display
                 # (but not the df=0 sentinel — keep metadata as None for undefined df)
-                if (_survey_df is not None and _survey_df != 0
-                        and survey_metadata is not None):
+                if _survey_df is not None and _survey_df != 0 and survey_metadata is not None:
                     if survey_metadata.df_survey != _survey_df:
                         survey_metadata.df_survey = _survey_df
 
@@ -624,30 +625,8 @@ class ContinuousDiD:
                     unit_resolved_es = None
                     if resolved_survey is not None:
                         row_idx = precomp["unit_first_panel_row"]
-                        uw = (
-                            precomp.get("unit_survey_weights")
-                            if precomp.get("unit_survey_weights") is not None
-                            else np.ones(n_units)
-                        )
-                        us = (
-                            resolved_survey.strata[row_idx]
-                            if resolved_survey.strata is not None
-                            else None
-                        )
-                        up = (
-                            resolved_survey.psu[row_idx]
-                            if resolved_survey.psu is not None
-                            else None
-                        )
-                        uf = (
-                            resolved_survey.fpc[row_idx]
-                            if resolved_survey.fpc is not None
-                            else None
-                        )
-                        n_strata_u = len(np.unique(us)) if us is not None else 0
-                        n_psu_u = len(np.unique(up)) if up is not None else 0
-                        unit_resolved_es = resolved_survey.subset_to_units(
-                            row_idx, uw, us, up, uf, n_strata_u, n_psu_u,
+                        unit_resolved_es = resolved_survey.subset_to_units_by_row_idx(
+                            row_idx, unit_weights=precomp.get("unit_survey_weights")
                         )
 
                     for e_val, info_e in event_study_effects.items():
@@ -711,13 +690,21 @@ class ContinuousDiD:
 
                                 # Score-scale: psi = w * if_es (matches TSL bread)
                                 psi_es = unit_resolved_es.weights * if_es
-                                variance, _nv = compute_replicate_if_variance(psi_es, unit_resolved_es)
-                                es_se = float(np.sqrt(max(variance, 0.0))) if np.isfinite(variance) else np.nan
+                                variance, _nv = compute_replicate_if_variance(
+                                    psi_es, unit_resolved_es
+                                )
+                                es_se = (
+                                    float(np.sqrt(max(variance, 0.0)))
+                                    if np.isfinite(variance)
+                                    else np.nan
+                                )
                             else:
                                 X_ones_es = np.ones((n_units, 1))
                                 tsl_scale_es = float(unit_resolved_es.weights.sum())
                                 if_es_tsl = if_es * tsl_scale_es
-                                vcov_es = compute_survey_vcov(X_ones_es, if_es_tsl, unit_resolved_es)
+                                vcov_es = compute_survey_vcov(
+                                    X_ones_es, if_es_tsl, unit_resolved_es
+                                )
                                 es_se = float(np.sqrt(np.abs(vcov_es[0, 0])))
                         else:
                             es_se = float(np.sqrt(np.sum(if_es**2)))
@@ -831,15 +818,11 @@ class ContinuousDiD:
             unit_cohorts[i] = unit_first.loc[u, first_treat]
             dose_vector[i] = unit_first.loc[u, dose]
 
-        # Build unit-to-first-panel-row mapping (for subsetting panel-level arrays)
-        # This maps each unit index to the positional index of its first row in df.
-        unit_first_panel_row = np.zeros(n_units, dtype=int)
-        seen_units: set = set()
-        for pos_idx, (_, row) in enumerate(df.iterrows()):
-            u = row[unit]
-            if u not in seen_units:
-                seen_units.add(u)
-                unit_first_panel_row[unit_to_idx[u]] = pos_idx
+        # Build unit-to-first-panel-row mapping (for subsetting panel-level
+        # arrays): the positional index of each unit's first row in df, aligned
+        # to ``all_units`` (== ``unit_to_idx`` order since
+        # ``unit_to_idx = {u: i for i, u in enumerate(all_units)}``).
+        unit_first_panel_row = build_unit_first_row_index(df[unit].values, all_units)
 
         # Per-unit survey weights (take first obs per unit from panel data)
         unit_survey_weights = None
@@ -949,8 +932,10 @@ class ContinuousDiD:
             # Guard against zero effective mass (e.g., after subpopulation)
             if np.sum(w_treated) <= 0 or np.sum(w_control) <= 0:
                 return {
-                    "att_glob": np.nan, "acrt_glob": np.nan,
-                    "n_treated": 0, "n_control": 0,
+                    "att_glob": np.nan,
+                    "acrt_glob": np.nan,
+                    "n_treated": 0,
+                    "n_control": 0,
                     "att_d": np.full(len(dvals), np.nan),
                     "acrt_d": np.full(len(dvals), np.nan),
                 }
@@ -1293,23 +1278,8 @@ class ContinuousDiD:
             # but influence functions are unit-level (n_units). Build a unit-level
             # ResolvedSurveyDesign by subsetting to one obs per unit.
             row_idx = precomp["unit_first_panel_row"]
-            unit_weights = precomp.get("unit_survey_weights")
-            if unit_weights is None:
-                unit_weights = np.ones(n_units)
-
-            unit_strata = (
-                resolved_survey.strata[row_idx] if resolved_survey.strata is not None else None
-            )
-            unit_psu = resolved_survey.psu[row_idx] if resolved_survey.psu is not None else None
-            unit_fpc = resolved_survey.fpc[row_idx] if resolved_survey.fpc is not None else None
-
-            # Count unique strata/PSU in the unit-level subset
-            n_strata_unit = len(np.unique(unit_strata)) if unit_strata is not None else 0
-            n_psu_unit = len(np.unique(unit_psu)) if unit_psu is not None else 0
-
-            unit_resolved = resolved_survey.subset_to_units(
-                row_idx, unit_weights, unit_strata, unit_psu, unit_fpc,
-                n_strata_unit, n_psu_unit,
+            unit_resolved = resolved_survey.subset_to_units_by_row_idx(
+                row_idx, unit_weights=precomp.get("unit_survey_weights")
             )
 
             X_ones = np.ones((n_units, 1))
@@ -1370,7 +1340,11 @@ class ContinuousDiD:
 
         # Return unit-level survey df and resolved design for metadata recomputation
         # Only override with n_valid-based df when replicates were actually dropped
-        if resolved_survey is not None and hasattr(resolved_survey, 'uses_replicate_variance') and resolved_survey.uses_replicate_variance:
+        if (
+            resolved_survey is not None
+            and hasattr(resolved_survey, "uses_replicate_variance")
+            and resolved_survey.uses_replicate_variance
+        ):
             if _rep_n_valid < unit_resolved.n_replicates:
                 unit_df_survey = _rep_n_valid - 1 if _rep_n_valid > 1 else None
             else:
@@ -1415,7 +1389,11 @@ class ContinuousDiD:
 
         # Reject replicate-weight designs for bootstrap — replicate variance
         # is an analytical alternative to bootstrap, not compatible with it
-        if resolved_survey is not None and hasattr(resolved_survey, "uses_replicate_variance") and resolved_survey.uses_replicate_variance:
+        if (
+            resolved_survey is not None
+            and hasattr(resolved_survey, "uses_replicate_variance")
+            and resolved_survey.uses_replicate_variance
+        ):
             raise NotImplementedError(
                 "ContinuousDiD bootstrap (n_bootstrap > 0) is not supported "
                 "with replicate-weight survey designs. Replicate weights provide "
@@ -1429,22 +1407,9 @@ class ContinuousDiD:
         # Build unit-level ResolvedSurveyDesign for survey-aware bootstrap
         unit_resolved = None
         if resolved_survey is not None:
-            from diff_diff.survey import ResolvedSurveyDesign
-
             row_idx = precomp["unit_first_panel_row"]
-            unit_weights = precomp.get("unit_survey_weights")
-            if unit_weights is None:
-                unit_weights = np.ones(n_units)
-            unit_strata = (
-                resolved_survey.strata[row_idx] if resolved_survey.strata is not None else None
-            )
-            unit_psu = resolved_survey.psu[row_idx] if resolved_survey.psu is not None else None
-            unit_fpc = resolved_survey.fpc[row_idx] if resolved_survey.fpc is not None else None
-            n_strata_u = len(np.unique(unit_strata)) if unit_strata is not None else 0
-            n_psu_u = len(np.unique(unit_psu)) if unit_psu is not None else 0
-            unit_resolved = resolved_survey.subset_to_units(
-                row_idx, unit_weights, unit_strata, unit_psu, unit_fpc,
-                n_strata_u, n_psu_u,
+            unit_resolved = resolved_survey.subset_to_units_by_row_idx(
+                row_idx, unit_weights=precomp.get("unit_survey_weights")
             )
 
         # Generate bootstrap weights — PSU-level when survey design is present
@@ -1682,7 +1647,7 @@ class ContinuousDiD:
                     boot_es[e],
                     alpha=self.alpha,
                     context=f"event study e={e}",
-                    )
+                )
                 es_se[e] = se_e
                 es_ci[e] = ci_e
                 es_p[e] = p_e

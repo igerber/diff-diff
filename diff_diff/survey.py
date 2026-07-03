@@ -16,7 +16,7 @@ References
 
 import warnings
 from dataclasses import dataclass, field, replace
-from typing import Callable, List, Optional, Tuple
+from typing import Any, Callable, List, Optional, Sequence, Tuple
 
 import numpy as np
 import pandas as pd
@@ -645,7 +645,10 @@ class ResolvedSurveyDesign:
         """Create a unit-level copy preserving replicate metadata.
 
         Used by panel estimators (ContinuousDiD, EfficientDiD) that collapse
-        panel-level survey info to one row per unit.
+        panel-level survey info to one row per unit. Callers that only have a
+        ``row_idx`` (first panel row per unit) should prefer the
+        :meth:`subset_to_units_by_row_idx` convenience wrapper, which folds the
+        index-and-recount preamble.
 
         Parameters
         ----------
@@ -677,6 +680,46 @@ class ResolvedSurveyDesign:
             replicate_rscales=self.replicate_rscales,
             mse=self.mse,
             nest=self.nest,
+        )
+
+    def subset_to_units_by_row_idx(
+        self,
+        row_idx: np.ndarray,
+        unit_weights: Optional[np.ndarray] = None,
+    ) -> "ResolvedSurveyDesign":
+        """Collapse this panel-level design to unit level given a ``row_idx``.
+
+        Convenience wrapper over :meth:`subset_to_units` that folds the
+        index-and-recount preamble panel estimators (ContinuousDiD,
+        EfficientDiD) would otherwise hand-roll: index ``strata`` / ``psu`` /
+        ``fpc`` at ``row_idx`` (one panel row per unit) and recount
+        ``n_strata`` / ``n_psu`` from the collapsed arrays.
+
+        Parameters
+        ----------
+        row_idx : np.ndarray
+            First panel-row position for each unit (see
+            :func:`build_unit_first_row_index`).
+        unit_weights : np.ndarray, optional
+            Pre-collapsed unit-level weights. When ``None`` (default), uses
+            ``self.weights[row_idx]`` — identical to the caller-side
+            ``survey_weights[row_idx]`` collapse.
+        """
+        if unit_weights is None:
+            unit_weights = self.weights[row_idx]
+        unit_strata = self.strata[row_idx] if self.strata is not None else None
+        unit_psu = self.psu[row_idx] if self.psu is not None else None
+        unit_fpc = self.fpc[row_idx] if self.fpc is not None else None
+        n_strata_u = len(np.unique(unit_strata)) if unit_strata is not None else 0
+        n_psu_u = len(np.unique(unit_psu)) if unit_psu is not None else 0
+        return self.subset_to_units(
+            row_idx,
+            unit_weights,
+            unit_strata,
+            unit_psu,
+            unit_fpc,
+            n_strata_u,
+            n_psu_u,
         )
 
     @property
@@ -1090,6 +1133,26 @@ def _resolve_pweight_only(resolved_survey, estimator_name):
             "design-based bootstrap is planned for the Bootstrap + "
             "Survey Interaction phase."
         )
+
+
+def build_unit_first_row_index(unit_values: np.ndarray, unit_order: Sequence[Any]) -> np.ndarray:
+    """Positional index of each unit's first row, aligned to ``unit_order``.
+
+    Panel estimators that collapse a panel-level survey design to unit level
+    (ContinuousDiD, EfficientDiD) need, for each unit, the position of its first
+    row in the fit DataFrame so panel-length survey arrays can be indexed down
+    to one row per unit. ``unit_values`` is the fit frame's unit column
+    (``df[unit].values``, in row order); ``unit_order`` is the estimator's
+    canonical unit ordering (typically ``all_units = sorted(df[unit].unique())``).
+
+    Returns an ``int`` array ``idx`` where ``idx[i]`` is the first row position
+    of ``unit_order[i]``.
+    """
+    first_pos: dict = {}
+    for i, u in enumerate(unit_values):
+        if u not in first_pos:
+            first_pos[u] = i
+    return np.array([first_pos[u] for u in unit_order], dtype=int)
 
 
 def collapse_survey_to_unit_level(resolved_survey, df, unit_col, all_units):

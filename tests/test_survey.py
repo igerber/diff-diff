@@ -3690,3 +3690,98 @@ class TestSurveyVcovIllConditionedWarning:
         )
         assert vcov.shape == (3, 3)
         assert np.all(np.isfinite(vcov))
+
+
+class TestUnitCollapseHelpers:
+    """Shared panel-to-unit survey-collapse helpers (#226 consolidation).
+
+    ``build_unit_first_row_index`` and
+    ``ResolvedSurveyDesign.subset_to_units_by_row_idx`` replace the row_idx->unit
+    collapse hand-rolled in ContinuousDiD / EfficientDiD. These tests lock the
+    wrappers to bit-identity against the OLD inline preamble (the oracle).
+    """
+
+    def test_build_unit_first_row_index_unsorted_panel(self):
+        from diff_diff.survey import build_unit_first_row_index
+
+        # Unsorted 3-unit x 3-period panel (unit column neither grouped nor sorted).
+        unit_values = np.array([2, 0, 1, 2, 0, 1, 2, 0, 1])
+        unit_order = [0, 1, 2]  # sorted(unique)
+        idx = build_unit_first_row_index(unit_values, unit_order)
+        # First occurrence: unit 0 -> pos 1, unit 1 -> pos 2, unit 2 -> pos 0.
+        np.testing.assert_array_equal(idx, np.array([1, 2, 0]))
+        assert idx.dtype == np.dtype(int)
+
+    @staticmethod
+    def _oracle_collapse(resolved, row_idx, unit_weights):
+        # Frozen copy of the OLD inline preamble + subset_to_units call that the
+        # new subset_to_units_by_row_idx wrapper replaces. This is the oracle.
+        unit_strata = resolved.strata[row_idx] if resolved.strata is not None else None
+        unit_psu = resolved.psu[row_idx] if resolved.psu is not None else None
+        unit_fpc = resolved.fpc[row_idx] if resolved.fpc is not None else None
+        n_strata_u = len(np.unique(unit_strata)) if unit_strata is not None else 0
+        n_psu_u = len(np.unique(unit_psu)) if unit_psu is not None else 0
+        return resolved.subset_to_units(
+            row_idx, unit_weights, unit_strata, unit_psu, unit_fpc, n_strata_u, n_psu_u
+        )
+
+    @staticmethod
+    def _panel_design(with_replicates=False):
+        n_obs = 6  # 3 units x 2 periods, panel-level
+        kwargs = dict(
+            weights=np.array([1.0, 1.0, 2.0, 2.0, 3.0, 3.0]),
+            weight_type="pweight",
+            strata=np.array([0, 0, 0, 0, 1, 1]),
+            psu=np.array([0, 0, 1, 1, 2, 2]),
+            fpc=np.array([10.0, 10.0, 10.0, 10.0, 20.0, 20.0]),
+            n_strata=2,
+            n_psu=3,
+            lonely_psu="remove",
+        )
+        if with_replicates:
+            kwargs["replicate_weights"] = np.arange(n_obs * 4, dtype=float).reshape(n_obs, 4)
+            kwargs["replicate_method"] = "bootstrap"
+            kwargs["n_replicates"] = 4
+        return ResolvedSurveyDesign(**kwargs)
+
+    @staticmethod
+    def _assert_designs_equal(a, b):
+        np.testing.assert_array_equal(a.weights, b.weights)
+        np.testing.assert_array_equal(a.strata, b.strata)
+        np.testing.assert_array_equal(a.psu, b.psu)
+        np.testing.assert_array_equal(a.fpc, b.fpc)
+        assert a.n_strata == b.n_strata
+        assert a.n_psu == b.n_psu
+        if a.replicate_weights is None:
+            assert b.replicate_weights is None
+        else:
+            np.testing.assert_array_equal(a.replicate_weights, b.replicate_weights)
+
+    def test_subset_by_row_idx_matches_oracle_explicit_weights(self):
+        resolved = self._panel_design()
+        row_idx = np.array([0, 2, 4])
+        unit_weights = resolved.weights[row_idx]
+        got = resolved.subset_to_units_by_row_idx(row_idx, unit_weights=unit_weights)
+        want = self._oracle_collapse(resolved, row_idx, unit_weights)
+        self._assert_designs_equal(got, want)
+        # n_strata/n_psu recounted from the collapsed arrays (3 units -> 2 strata, 3 PSU).
+        assert got.n_strata == 2 and got.n_psu == 3
+
+    def test_subset_by_row_idx_default_weights_path(self):
+        # unit_weights=None must default to self.weights[row_idx] (review LOW #3).
+        resolved = self._panel_design()
+        row_idx = np.array([0, 2, 4])
+        got = resolved.subset_to_units_by_row_idx(row_idx)
+        want = self._oracle_collapse(resolved, row_idx, resolved.weights[row_idx])
+        self._assert_designs_equal(got, want)
+        np.testing.assert_array_equal(got.weights, resolved.weights[row_idx])
+
+    def test_subset_by_row_idx_preserves_replicate_rows(self):
+        # Replicate-weight design: the (row_idx, :) R-column subset must survive
+        # the wrapper unchanged (review LOW #3).
+        resolved = self._panel_design(with_replicates=True)
+        row_idx = np.array([0, 2, 4])
+        got = resolved.subset_to_units_by_row_idx(row_idx)
+        want = self._oracle_collapse(resolved, row_idx, resolved.weights[row_idx])
+        self._assert_designs_equal(got, want)
+        np.testing.assert_array_equal(got.replicate_weights, resolved.replicate_weights[row_idx, :])

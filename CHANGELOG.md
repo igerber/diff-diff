@@ -34,6 +34,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   still defers cluster with a warning).
 
 ### Changed
+- **Internal: consolidated the panel-to-unit survey-design collapse** shared by `ContinuousDiD`
+  and `EfficientDiD` into two `diff_diff/survey.py` helpers —
+  `ResolvedSurveyDesign.subset_to_units_by_row_idx` (folds the index-and-recount preamble around
+  the existing `subset_to_units`) and `build_unit_first_row_index` (first-panel-row index per
+  unit). Removes four hand-rolled copies of the collapse plus a slow `df.iterrows()` index build.
+  No behavior change: survey-weighted SEs, `df_survey`, and design-effect metadata are
+  bit-identical (locked by an oracle test against the old inline logic).
 - **`DiagnosticReport` now routes `SpilloverDiDResults`.** Previously a fitted
   `SpilloverDiD` (Butts 2021) result matched no `_APPLICABILITY` / `_PT_METHOD` entry, so
   `DiagnosticReport(spillover_result)` reported every check as `not_applicable`. It now routes

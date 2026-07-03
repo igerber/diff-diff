@@ -773,6 +773,10 @@ class StackedDiD:
 
             # Re-resolve survey design on the stacked data so that strata/PSU
             # arrays have the correct length for TSL variance estimation.
+            # (Unlike ContinuousDiD/EfficientDiD, StackedDiD does NOT collapse
+            # to unit level via ``subset_to_units_by_row_idx``: control units are
+            # duplicated across sub-experiments, so the design must be resolved
+            # at the stacked granularity, not one row per original unit.)
             resolved_stacked = survey_design.resolve(stacked_df)
 
             # Create a copy with composed weights (normalized to sum=n_stacked)

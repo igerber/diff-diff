@@ -521,7 +521,7 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
             )
 
         # Resolve survey design if provided
-        from diff_diff.survey import _resolve_survey_for_fit
+        from diff_diff.survey import _resolve_survey_for_fit, build_unit_first_row_index
 
         resolved_survey, survey_weights, survey_weight_type, survey_metadata = (
             _resolve_survey_for_fit(survey_design, data, "analytical")
@@ -655,33 +655,14 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
         # order.  The previous approach (groupby cumcount == 0) yielded
         # first-appearance order which can differ from sorted order when the
         # input DataFrame is not pre-sorted by unit.
-        first_pos: Dict[Any, int] = {}
-        for i, u in enumerate(df[unit].values):
-            if u not in first_pos:
-                first_pos[u] = i
-        self._unit_first_panel_row = np.array([first_pos[u] for u in all_units])
+        self._unit_first_panel_row = build_unit_first_row_index(df[unit].values, all_units)
 
         # Build unit-level ResolvedSurveyDesign once (avoids repeated
         # construction in _compute_survey_eif_se and ensures consistent
         # unit-level df for safe_inference t-distribution).
         if resolved_survey is not None:
-            row_idx = self._unit_first_panel_row
-            unit_weights_s = resolved_survey.weights[row_idx]
-            unit_strata = (
-                resolved_survey.strata[row_idx] if resolved_survey.strata is not None else None
-            )
-            unit_psu = resolved_survey.psu[row_idx] if resolved_survey.psu is not None else None
-            unit_fpc = resolved_survey.fpc[row_idx] if resolved_survey.fpc is not None else None
-            n_strata_u = len(np.unique(unit_strata)) if unit_strata is not None else 0
-            n_psu_u = len(np.unique(unit_psu)) if unit_psu is not None else 0
-            self._unit_resolved_survey = resolved_survey.subset_to_units(
-                row_idx,
-                unit_weights_s,
-                unit_strata,
-                unit_psu,
-                unit_fpc,
-                n_strata_u,
-                n_psu_u,
+            self._unit_resolved_survey = resolved_survey.subset_to_units_by_row_idx(
+                self._unit_first_panel_row
             )
             # Use unit-level df (not panel-level) for t-distribution
             self._survey_df = self._unit_resolved_survey.df_survey
