@@ -7,8 +7,8 @@ authors:
     family-names: Gerber
     orcid: "https://orcid.org/0009-0009-3275-5591"
 license: MIT
-version: "3.6.1"
-date-released: "2026-07-01"
+version: "3.6.2"
+date-released: "2026-07-03"
 doi: "10.5281/zenodo.19646175"
 url: "https://github.com/igerber/diff-diff"
 repository-code: "https://github.com/igerber/diff-diff"
