@@ -2,7 +2,7 @@
 
 > A Python library for Difference-in-Differences (DiD) causal inference analysis. Provides sklearn-like estimators with statsmodels-style summary output for econometric analysis.
 
-diff-diff offers 19 estimators covering basic 2x2 DiD, modern staggered adoption methods, reversible (non-absorbing) treatments, advanced panel estimators, nonlinear models, and diagnostic tools. It supports robust and cluster-robust standard errors, wild cluster bootstrap, formula and column-name interfaces, fixed effects (dummy and absorbed), complex survey designs (strata/PSU/FPC, replicate weights, design-based variance), and publication-ready output. The optional Rust backend accelerates compute-intensive estimators like Synthetic DiD and TROP.
+diff-diff offers 20 estimators covering basic 2x2 DiD, modern staggered adoption methods, reversible (non-absorbing) treatments, advanced panel estimators, nonlinear models, and diagnostic tools. It supports robust and cluster-robust standard errors, wild cluster bootstrap, formula and column-name interfaces, fixed effects (dummy and absorbed), complex survey designs (strata/PSU/FPC, replicate weights, design-based variance), and publication-ready output. The optional Rust backend accelerates compute-intensive estimators like Synthetic DiD and TROP.
 
 - Install: `pip install diff-diff`
 - License: MIT

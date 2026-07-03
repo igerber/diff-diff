@@ -2120,7 +2120,7 @@ sd_female, data_female = sd.subpopulation(data, mask=lambda df: df['sex'] == 'F'
 
 **Key features:**
 - Taylor Series Linearization (TSL) variance with strata + PSU + FPC
-- Replicate weight variance: BRR, Fay's BRR, JK1, JKn, SDR (13 of 16 estimators, including dCDH)
+- Replicate weight variance: BRR, Fay's BRR, JK1, JKn, SDR (13 of 20 estimators, including dCDH)
 - Survey-aware bootstrap: multiplier at PSU (Hall-Mammen wild; dCDH, staggered) or Rao-Wu rescaled (SunAbraham, SyntheticDiD, TROP). SyntheticDiD bootstrap composes Rao-Wu rescaled per-draw weights with the weighted Frank-Wolfe variant of `_sc_weight_fw` (PR #355): each draw solves `min ||A·diag(rw)·ω - b||² + ζ²·Σ rw_i ω_i²` and composes `ω_eff = rw·ω/Σ(rw·ω)` for the SDID estimator. Pweight-only fits use constant `rw = w_control`; full designs use Rao-Wu. SDID's placebo (stratified permutation + weighted FW) and jackknife (PSU-level LOO with stratum aggregation, Rust & Rao 1996) paths also support pweight-only and full strata/PSU/FPC designs
 - DEFF diagnostics, subpopulation analysis, weight trimming (`trim_weights`)
 - Repeated cross-sections: `CallawaySantAnna(panel=False)`

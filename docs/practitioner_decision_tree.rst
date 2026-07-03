@@ -463,9 +463,10 @@ At a Glance
 What About the Other Estimators?
 --------------------------------
 
-diff-diff has 17 estimators covering advanced scenarios: Sun-Abraham for
+diff-diff has 20 estimators covering advanced scenarios: Sun-Abraham for
 interaction-weighted estimation, Imputation DiD and Two-Stage DiD for alternative
-staggered approaches, Stacked DiD, Efficient DiD, Triple Difference, TROP, and more.
+staggered approaches, Local Projections DiD, Stacked DiD, Efficient DiD,
+Triple Difference, TROP, and more.
 The six scenarios above cover the most common business use cases.
 
 For the full academic decision tree with all estimators, see :doc:`choosing_estimator`.

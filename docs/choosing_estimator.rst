@@ -771,7 +771,8 @@ If you're unsure which estimator to use:
 Survey Design Support
 ---------------------
 
-All estimators accept an optional ``survey_design`` parameter in ``fit()``.
+All estimators accept an optional ``survey_design`` parameter in ``fit()``
+(``SyntheticControl`` does not yet support it and raises ``NotImplementedError``).
 Pass a :class:`~diff_diff.SurveyDesign` object to get design-based variance
 estimation. The depth of support varies by estimator:
 
@@ -820,7 +821,7 @@ estimation. The depth of support varies by estimator:
    * - ``ChaisemartinDHaultfoeuille``
      - pweight only
      - Full (TSL)
-     - --
+     - Full (analytical)
      - Group-level (warning)
    * - ``TripleDifference``
      - pweight only
@@ -872,6 +873,11 @@ estimation. The depth of support varies by estimator:
      - Via bootstrap
      - --
      - Hybrid pairs-bootstrap + Rao-Wu rescaled (bootstrap only)
+   * - ``SyntheticControl``
+     - --
+     - --
+     - --
+     - --
    * - ``TROP``
      - pweight only
      - Via bootstrap
@@ -885,6 +891,11 @@ estimation. The depth of support varies by estimator:
    * - ``LPDiD``
      - pweight only
      - Full (Binder TSL)
+     - --
+     - --
+   * - ``SpilloverDiD``
+     - pweight only
+     - Full (Binder TSL + Conley)
      - --
      - --
    * - ``BaconDecomposition``
