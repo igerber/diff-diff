@@ -4576,7 +4576,7 @@ variance from the distribution of replicate estimates.
   design structure is fixed and dropped replicates contribute zero to the
   sum without changing the scale. Survey df uses `n_valid - 1` for
   t-based inference.
-- **Note:** Replicate-weight support matrix (12 of 15 public estimators):
+- **Note:** Replicate-weight support matrix (13 of 20 public estimators):
   - **Supported**: CallawaySantAnna (reg/ipw/dr with or without covariates,
     no bootstrap; IF-based replicate variance is covariate-agnostic),
     ContinuousDiD (no bootstrap), EfficientDiD (no bootstrap),
@@ -4587,9 +4587,15 @@ variance from the distribution of replicate estimates.
     TwoWayFixedEffects (estimator-level refit with within-transformation),
     SunAbraham (estimator-level refit, replaces `vcov_cohort`),
     StackedDiD (estimator-level refit with Q-weight composition),
-    ImputationDiD (two-stage refit), TwoStageDiD (two-stage refit)
+    ImputationDiD (two-stage refit), TwoStageDiD (two-stage refit),
+    ChaisemartinDHaultfoeuille (closed-form cell-collapse replicate ATT,
+    multi-horizon and placebo paths; replicate + `n_bootstrap > 0` rejected
+    — see the ChaisemartinDHaultfoeuille Notes for the allocator contract)
   - **Rejected with NotImplementedError**: SyntheticDiD, TROP
-    (bootstrap-based variance), BaconDecomposition (diagnostic only)
+    (bootstrap-based variance), WooldridgeDiD, LPDiD, SpilloverDiD,
+    HeterogeneousAdoptionDiD (TSL-only survey paths; replicate designs
+    rejected at `fit()`), SyntheticControl (rejects `survey_design`
+    entirely), BaconDecomposition (diagnostic only)
   - Estimators with replicate support reject replicate + bootstrap
     (replicate weights provide analytical variance)
 - **Note:** When invalid replicates are dropped in `compute_replicate_vcov`

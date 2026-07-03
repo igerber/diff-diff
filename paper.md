@@ -114,15 +114,18 @@ geographic-period panels suitable for DiD analysis.
 # Software Design
 
 Every estimator implements a common contract: a scikit-learn-style `fit()` with
-`get_params()`/`set_params()` for configuration, R-style formula support, and rich results
-dataclasses with `summary()`, `to_dict()`, and `to_dataframe()`. Numerical work is
-deliberately centralized: all estimators solve their least-squares problems and their
-robust, cluster-robust, and survey variances through a single shared linear-algebra core,
-so numerical hardening - rank-deficiency guards, degrees-of-freedom corrections,
-small-cluster behavior - lands in one place and propagates to every estimator. Inference
-fields (standard error, t-statistic, p-value, confidence interval) are always computed
-together and become NaN together when inference is not identified, rather than silently
-reporting partial results.
+`get_params()`/`set_params()` for configuration and rich results dataclasses with
+`summary()`, `to_dict()`, and `to_dataframe()`; the classic regression estimators
+additionally accept R-style formulas. Numerical work is deliberately centralized:
+estimators solve their least-squares problems through a single shared linear-algebra
+core, and analytical robust, cluster-robust, and survey variances route through one
+shared sandwich-estimator path, so numerical hardening - rank-deficiency guards,
+degrees-of-freedom corrections, small-cluster behavior - lands in one place. Estimators
+whose inference is inherently resampling-based - synthetic DiD's placebo and jackknife
+variance, for example - use method-specific variance paths. All estimators share one
+joint-inference contract: inference fields (standard error, t-statistic, p-value,
+confidence interval) are always computed together and become NaN together when inference
+is not identified, rather than silently reporting partial results.
 
 Two design choices carry the survey capability and the deployment story. First, estimators
 compute influence functions for their target parameters, so design-based variance - Taylor
