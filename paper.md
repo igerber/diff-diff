@@ -71,7 +71,8 @@ staggered-adoption support. General-purpose causal inference toolkits such as `D
 `diff-diff` was built as a new library, rather than as contributions to these packages,
 because its central contribution is cross-cutting: one estimator contract, one shared
 inference core, and an influence-function architecture that composes design-based survey
-variance with every estimator in the taxonomy. To our knowledge, no existing DiD software
+variance across the estimator taxonomy, with per-estimator support documented in a
+compatibility matrix and unsupported combinations failing closed. To our knowledge, no existing DiD software
 in any language provides design-based variance estimation for complex survey data, and no
 Python package covers the modern estimator taxonomy end-to-end; `diff-diff` provides
 both, validated against the R reference implementations where they exist.
@@ -130,8 +131,10 @@ is not identified, rather than silently reporting partial results.
 Two design choices carry the survey capability and the deployment story. First, estimators
 compute influence functions for their target parameters, so design-based variance - Taylor
 series linearization over strata and clusters, replicate weights, survey-aware
-bootstrap - composes uniformly with estimators as different as Callaway-Sant'Anna and
-synthetic DiD instead of requiring per-estimator derivations. Second, the runtime
+bootstrap - composes through one shared mechanism with estimators as different as
+Callaway-Sant'Anna and synthetic DiD; supported design-estimator combinations are
+documented in a per-estimator matrix, and unsupported ones are rejected explicitly rather
+than silently approximated. Second, the runtime
 dependency footprint is minimal by policy - numpy, pandas, and scipy only - keeping the
 library easy to install in restricted industry environments; high-dimensional fixed
 effects are handled by within-transformation rather than by delegating to a heavier

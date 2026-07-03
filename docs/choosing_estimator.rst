@@ -771,10 +771,10 @@ If you're unsure which estimator to use:
 Survey Design Support
 ---------------------
 
-All estimators accept an optional ``survey_design`` parameter in ``fit()``
-(``SyntheticControl`` does not yet support it and raises ``NotImplementedError``).
+Most estimators support an optional ``survey_design`` parameter in ``fit()``
+(``SyntheticControl`` accepts the parameter but raises ``NotImplementedError``).
 Pass a :class:`~diff_diff.SurveyDesign` object to get design-based variance
-estimation. The depth of support varies by estimator:
+estimation. The depth of support varies by estimator and variance method:
 
 .. note::
 

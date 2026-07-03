@@ -2075,7 +2075,7 @@ clear_cache()
 
 ## Survey Support
 
-All estimators accept an optional `survey_design` parameter in `fit()`. Pass a `SurveyDesign` object to get design-based variance estimation.
+Most estimators accept an optional `survey_design` parameter in `fit()` (`SyntheticControl` rejects it as not yet supported); depth of support varies by estimator - see the compatibility matrix in `docs/choosing_estimator.rst` (Survey Design Support). Pass a `SurveyDesign` object to get design-based variance estimation.
 
 ```python
 from diff_diff import SurveyDesign, CallawaySantAnna

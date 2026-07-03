@@ -104,7 +104,7 @@ Full practitioner guide: call `diff_diff.get_llm_guide("practitioner")`
 
 ## Survey Support
 
-All estimators accept an optional `survey_design` parameter. Pass a `SurveyDesign` object to get design-based variance estimation:
+Most estimators accept an optional `survey_design` parameter (`SyntheticControl` does not yet support it); coverage and weight types vary by estimator - see the [Survey Design Support matrix](https://diff-diff.readthedocs.io/en/stable/choosing_estimator.html#survey-design-support). Pass a `SurveyDesign` object to get design-based variance estimation:
 
 - **Design elements**: strata, PSU, FPC, weight types (pweight/fweight/aweight), lonely PSU handling, nest
 - **Variance methods**: Taylor Series Linearization (TSL), replicate weights (BRR/Fay/JK1/JKn/SDR), survey-aware bootstrap
