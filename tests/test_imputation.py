@@ -1847,25 +1847,48 @@ class TestImputationEdgeCases:
         ), f"overall_se should be finite with {n_finite} finite and {n_nan} NaN tau_hat"
         assert np.isfinite(results.overall_att)
 
-    def test_iterative_demean_balanced_matches_one_pass(self):
-        """Test _iterative_demean matches one-pass for balanced panels."""
+    def test_covariate_delta_matches_full_dummy_ols(self):
+        """Step-A/B covariate coefficients match explicit unit+time dummy OLS.
+
+        Estimator-level lock on the shared-engine within-transform path
+        (replaces the direct `_iterative_demean` balanced-one-pass test; the
+        private per-estimator demean loops were consolidated into
+        `diff_diff.utils.demean_by_groups`).
+        """
         rng = np.random.default_rng(42)
-        n_units, n_periods = 20, 5
-        units = np.repeat(np.arange(n_units), n_periods)
-        times = np.tile(np.arange(n_periods), n_units)
-        vals = rng.standard_normal(n_units * n_periods)
-        idx = pd.RangeIndex(len(vals))
+        n_units, n_periods = 15, 6
+        rows = []
+        for i in range(n_units):
+            for t in range(n_periods):
+                if rng.random() < 0.2:  # unbalanced
+                    continue
+                rows.append({"unit": i, "time": t})
+        df = pd.DataFrame(rows)
+        n = len(df)
+        x = rng.standard_normal((n, 2))
+        df["x1"], df["x2"] = x[:, 0], x[:, 1]
+        u_fe = rng.standard_normal(n_units)
+        t_fe = np.linspace(0, 1, n_periods)
+        df["outcome"] = (
+            u_fe[df["unit"]]
+            + t_fe[df["time"]]
+            + x @ np.array([0.7, -0.4])
+            + rng.standard_normal(n) * 0.1
+        )
+        df["first_treat"] = 0  # all never-treated -> omega_0 = everything
 
-        result_iter = ImputationDiD._iterative_demean(vals, units, times, idx)
+        est = ImputationDiD()
+        omega_0 = pd.Series(True, index=df.index)
+        _, _, _, delta_hat, _ = est._fit_untreated_model(
+            df, "outcome", "unit", "time", ["x1", "x2"], omega_0
+        )
 
-        # One-pass for balanced panel
-        s = pd.DataFrame({"val": vals, "unit": units, "time": times})
-        gm = s["val"].mean()
-        um = s.groupby("unit")["val"].transform("mean").values
-        tm = s.groupby("time")["val"].transform("mean").values
-        result_onepass = vals - um - tm + gm
-
-        np.testing.assert_allclose(result_iter, result_onepass, atol=1e-8)
+        # Explicit full-dummy OLS: [all unit dummies, time dummies (drop 1), X]
+        u_d = pd.get_dummies(df["unit"]).values.astype(float)
+        t_d = pd.get_dummies(df["time"]).values.astype(float)[:, 1:]
+        X_full = np.column_stack([u_d, t_d, x])
+        coef = np.linalg.lstsq(X_full, df["outcome"].values, rcond=None)[0]
+        np.testing.assert_allclose(delta_hat, coef[-2:], atol=1e-8)
 
     def test_unbalanced_panel_fe_correctness(self):
         """Test FE estimates match OLS for unbalanced panel."""
@@ -2162,31 +2185,41 @@ class TestImputationEdgeCases:
             est._iterative_fe(y, units, times, idx)
         assert not any("did not converge" in str(x.message) for x in w)
 
-    def test_iterative_demean_warns_on_nonconvergence(self):
-        """Silent-failure audit axis B: _iterative_demean must warn when max_iter exhausts."""
+    # NOTE (intentional coverage narrowing): the direct `_iterative_demean`
+    # non-convergence warn tests were retired with the method itself - the
+    # covariate within-transform now routes through the shared MAP engine
+    # with max_iter=10_000 hardcoded at the call sites, so demean
+    # non-convergence is no longer forceable THROUGH this estimator.
+    # Engine-level warning coverage lives in
+    # tests/test_utils.py::TestDemeanByGroups; the `_iterative_fe` warn
+    # tests above still exercise this estimator's FE-solver warning path.
+
+    def test_iterative_fe_zero_weight_unit_gets_nan_fe(self):
+        """A unit whose rows ALL carry zero weight surfaces as NaN FE.
+
+        Locks the shared-solver zero-weight contract (spillover precedent:
+        never a silent finite 0.0) AND that the solver still converges
+        cleanly - the historical pandas loop divided 0/0 there and burned
+        max_iter iterations before warning.
+        """
         rng = np.random.default_rng(42)
         n_units, n_periods = 8, 5
         units = np.repeat(np.arange(n_units), n_periods)
         times = np.tile(np.arange(n_periods), n_units)
-        vals = rng.standard_normal(n_units * n_periods)
-        idx = pd.RangeIndex(len(vals))
+        y = rng.standard_normal(n_units * n_periods)
+        w = np.ones(n_units * n_periods)
+        w[units == 3] = 0.0  # zero out one whole unit
+        idx = pd.RangeIndex(len(y))
+        est = ImputationDiD()
 
-        with pytest.warns(UserWarning, match="did not converge"):
-            ImputationDiD._iterative_demean(vals, units, times, idx, max_iter=1, tol=1e-15)
-
-    def test_iterative_demean_no_warning_on_convergence(self):
-        """Silent-failure audit axis B: no warning on well-behaved convergent input."""
-        rng = np.random.default_rng(42)
-        n_units, n_periods = 8, 5
-        units = np.repeat(np.arange(n_units), n_periods)
-        times = np.tile(np.arange(n_periods), n_units)
-        vals = rng.standard_normal(n_units * n_periods)
-        idx = pd.RangeIndex(len(vals))
-
-        with warnings.catch_warnings(record=True) as w:
+        with warnings.catch_warnings(record=True) as rec:
             warnings.simplefilter("always")
-            ImputationDiD._iterative_demean(vals, units, times, idx)
-        assert not any("did not converge" in str(x.message) for x in w)
+            unit_fe, time_fe = est._iterative_fe(y, units, times, idx, weights=w)
+        assert not any("did not converge" in str(x.message) for x in rec)
+
+        assert np.isnan(unit_fe[3])  # zero-weight unit: NaN, key retained
+        assert all(np.isfinite(v) for u, v in unit_fe.items() if u != 3)
+        assert all(np.isfinite(v) for v in time_fe.values())
 
 
 # =============================================================================
@@ -2700,18 +2733,19 @@ class TestImputationDiDVcovType:
         # the same Theorem 3 variance machinery — values across default vs
         # explicit hc1 must agree to within iterative-FE-solver convergence
         # tolerance. Sub-ULP differences come from BLAS non-associativity in
-        # `_iterative_demean` across distinct estimator instances and are not
-        # methodological divergence under the narrow vcov_type contract.
+        # the shared MAP demean engine (`demean_by_groups`) across distinct
+        # estimator instances and are not methodological divergence under
+        # the narrow vcov_type contract.
         pt_default = r_default.pretrend_test()
         pt_explicit = r_explicit.pretrend_test()
         assert np.isclose(pt_default["f_stat"], pt_explicit["f_stat"], rtol=0, atol=1e-12)
         assert np.isclose(pt_default["p_value"], pt_explicit["p_value"], rtol=0, atol=1e-12)
         # Event-study SE (computed during fit() via Theorem 3 machinery on
-        # iterative-demeaned residuals; pretrends=True path includes the
+        # within-transformed residuals; pretrends=True path includes the
         # pre-period horizons). Sub-ULP differences come from BLAS
-        # non-associativity in `_iterative_demean` across distinct estimator
-        # instances and are not methodological divergence under the narrow
-        # vcov_type contract.
+        # non-associativity in the shared MAP demean engine
+        # (`demean_by_groups`) across distinct estimator instances and are
+        # not methodological divergence under the narrow vcov_type contract.
         assert r_default.event_study_effects is not None
         assert r_explicit.event_study_effects is not None
         for h in r_default.event_study_effects:
@@ -2912,3 +2946,113 @@ class TestImputationDiDVcovType:
             vcov_type="hc1",
         )
         assert r.vcov_type == "hc1"
+
+
+# =============================================================================
+# TestZeroWeightGroups — shared-engine migration behavioral locks
+# =============================================================================
+
+
+class TestZeroWeightGroups:
+    """Zero-total-weight groups on the Step-1 paths (shared-engine migration).
+
+    JK1/plain-BRR replicate weights zero whole PSUs and reach Step 1 unmasked.
+    Before the shared-engine migration the pandas loops divided 0/0 there:
+    with covariates, y_dm/X_dm NaN-poisoned, EVERY replicate refit failed
+    inside solve_ols(check_finite=True), and the fit returned NaN SEs after a
+    non-convergence warning storm. These tests lock the fixed contract.
+    """
+
+    @staticmethod
+    def _with_covariates(data, seed=7):
+        rng = np.random.default_rng(seed)
+        d = data.copy()
+        x = rng.standard_normal((len(d), 2))
+        d["x1"], d["x2"] = x[:, 0], x[:, 1]
+        d["outcome"] = d["outcome"] + x @ np.array([0.6, -0.3])
+        return d
+
+    def test_replicate_covariates_zero_weight_psus_finite_se(self):
+        """Covariates + JK1 zeroed-PSU replicates -> finite SE, no warning storm."""
+        data, rep_cols = _imputation_replicate_panel()
+        data = self._with_covariates(data)
+        design = SurveyDesign(
+            weights="weight",
+            replicate_weights=rep_cols,
+            replicate_method="JK1",
+            weight_type="pweight",
+        )
+        with warnings.catch_warnings(record=True) as rec:
+            warnings.simplefilter("always")
+            r = ImputationDiD().fit(
+                data,
+                outcome="outcome",
+                unit="unit",
+                time="time",
+                first_treat="first_treat",
+                covariates=["x1", "x2"],
+                survey_design=design,
+            )
+        messages = [str(w.message) for w in rec]
+        assert not any("replicate refits failed" in m for m in messages)
+        assert not any("did not converge" in m for m in messages)
+        assert np.isfinite(r.overall_att)
+        assert np.isfinite(r.overall_se) and r.overall_se > 0
+
+    def test_main_fit_zero_weight_treated_unit_covariates(self):
+        """Main fit with a zero-weight treated unit + covariates.
+
+        Before: opaque ValueError from solve_ols (NaN in demeaned design).
+        After: fit succeeds; the zero-weight unit's FE is NaN, its cohort
+        cell (it is the ONLY cohort-2 unit) goes NaN across ALL inference
+        fields, and the overall ATT stays finite.
+        """
+        rng = np.random.default_rng(11)
+        n_units, n_periods = 30, 6
+        units = np.repeat(np.arange(n_units), n_periods)
+        times = np.tile(np.arange(n_periods), n_units)
+        first_treat = np.zeros(n_units, dtype=int)
+        first_treat[0] = 2  # the ONLY cohort-2 unit — will carry zero weight
+        first_treat[10:20] = 3
+        ft = np.repeat(first_treat, n_periods)
+        x = rng.standard_normal((len(units), 2))
+        post = (ft > 0) & (times >= ft)
+        outcome = (
+            np.repeat(rng.standard_normal(n_units), n_periods)
+            + 0.2 * times
+            + 1.5 * post
+            + x @ np.array([0.6, -0.3])
+            + rng.standard_normal(len(units)) * 0.3
+        )
+        data = pd.DataFrame(
+            {
+                "unit": units,
+                "time": times,
+                "outcome": outcome,
+                "first_treat": ft,
+                "x1": x[:, 0],
+                "x2": x[:, 1],
+                "w": np.where(units == 0, 0.0, 1.0),
+            }
+        )
+        with warnings.catch_warnings(record=True):
+            warnings.simplefilter("always")
+            r = ImputationDiD().fit(
+                data,
+                outcome="outcome",
+                unit="unit",
+                time="time",
+                first_treat="first_treat",
+                covariates=["x1", "x2"],
+                survey_design=SurveyDesign(weights="w"),
+                aggregate="group",
+            )
+        from tests.conftest import assert_nan_inference
+
+        assert np.isfinite(r.overall_att)
+        assert r.group_effects is not None
+        # Cohort 2 contains only the zero-weight unit: NaN across ALL fields.
+        assert_nan_inference(r.group_effects[2])
+        assert np.isnan(r.group_effects[2]["effect"])
+        # Cohort 3 is unaffected.
+        assert np.isfinite(r.group_effects[3]["effect"])

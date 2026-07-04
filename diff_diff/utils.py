@@ -2977,6 +2977,118 @@ def demean_by_groups(
     return pd.concat([data, new_block], axis=1), n_effects
 
 
+def _iterative_fe_solve(
+    y: np.ndarray,
+    unit_codes: np.ndarray,
+    time_codes: np.ndarray,
+    n_units: int,
+    n_times: int,
+    weights: Optional[np.ndarray] = None,
+    max_iter: int = 10_000,
+    tol: float = 1e-10,
+    *,
+    method_name: str,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Two-way Gauss-Seidel FE solver on integer-coded factors via bincount.
+
+    Estimates ``y = alpha_i + beta_t + u`` by alternating projections
+    (beta from ``y - alpha``, alpha from ``y - beta_new``), the same
+    recursion as the historical per-estimator pandas loops in ImputationDiD
+    and TwoStageDiD but with each factor coded once and each sweep two O(n)
+    ``np.bincount`` passes (same engine family as ``_demean_map_numpy``;
+    same accumulation-order caveat vs pandas' compensated grouped mean, see
+    REGISTRY "Absorbed Fixed Effects"). SpilloverDiD's
+    ``_iterative_fe_subset`` is the structural sibling.
+
+    Zero-weight convention (mirrors ``spillover._iterative_fe_subset`` and
+    the SpilloverDiD REGISTRY contract): rows with ``weights == 0`` are
+    outside the WLS estimating sample, so any unit/period whose rows ALL
+    carry zero weight has no identifying contribution and surfaces as
+    ``NaN`` FE — never a silent finite ``0.0``. The iteration itself runs
+    on the positive-weight subset, which also keeps a zero-total-weight
+    group from NaN-poisoning the convergence check (the historical pandas
+    loops divided 0/0 there and could never converge).
+
+    Parameters
+    ----------
+    y : ndarray of shape (n,)
+        Outcome values (float64).
+    unit_codes, time_codes : ndarray of shape (n,)
+        Non-negative integer factor codes (``pd.factorize`` output).
+    n_units, n_times : int
+        Number of factor levels (lengths of the factorize uniques).
+    weights : ndarray of shape (n,), optional
+        Survey weights; weighted group means ``sum(w*x)/sum(w)``.
+    max_iter, tol : convergence budget; warns via ``warn_if_not_converged``
+        (labelled ``method_name``) when exhausted.
+    method_name : str
+        Caller label for the non-convergence warning (keyword-only).
+
+    Returns
+    -------
+    unit_fe_arr : ndarray of shape (n_units,)
+        Unit FE indexed by code; NaN for codes absent from the
+        (positive-weight) estimating sample.
+    time_fe_arr : ndarray of shape (n_times,)
+        Time FE indexed by code; NaN likewise.
+    """
+    if weights is not None:
+        w_arr = np.asarray(weights, dtype=np.float64)
+        keep = w_arr > 0
+        y_sub = y[keep]
+        unit_sub = unit_codes[keep]
+        time_sub = time_codes[keep]
+        w_sub: Optional[np.ndarray] = w_arr[keep]
+    else:
+        y_sub = y
+        unit_sub = unit_codes
+        time_sub = time_codes
+        w_sub = None
+
+    # Per-group denominators are invariant across iterations.
+    if w_sub is None:
+        unit_denoms = np.bincount(unit_sub, minlength=n_units).astype(np.float64)
+        time_denoms = np.bincount(time_sub, minlength=n_times).astype(np.float64)
+    else:
+        unit_denoms = np.bincount(unit_sub, weights=w_sub, minlength=n_units)
+        time_denoms = np.bincount(time_sub, weights=w_sub, minlength=n_times)
+    unit_seen = unit_denoms > 0
+    time_seen = time_denoms > 0
+    unit_safe = np.maximum(unit_denoms, 1e-300)
+    time_safe = np.maximum(time_denoms, 1e-300)
+
+    alpha = np.zeros(n_units)
+    beta = np.zeros(n_times)
+    converged = False
+    for _ in range(max_iter):
+        resid = y_sub - alpha[unit_sub]
+        wx = resid if w_sub is None else w_sub * resid
+        beta_new = np.where(
+            time_seen, np.bincount(time_sub, weights=wx, minlength=n_times) / time_safe, 0.0
+        )
+
+        resid = y_sub - beta_new[time_sub]
+        wx = resid if w_sub is None else w_sub * resid
+        alpha_new = np.where(
+            unit_seen, np.bincount(unit_sub, weights=wx, minlength=n_units) / unit_safe, 0.0
+        )
+
+        max_change = max(
+            float(np.max(np.abs(alpha_new - alpha))),
+            float(np.max(np.abs(beta_new - beta))),
+        )
+        alpha = alpha_new
+        beta = beta_new
+        if max_change < tol:
+            converged = True
+            break
+    warn_if_not_converged(converged, method_name, max_iter, tol)
+
+    unit_fe_arr = np.where(unit_seen, alpha, np.nan)
+    time_fe_arr = np.where(time_seen, beta, np.nan)
+    return unit_fe_arr, time_fe_arr
+
+
 def pre_demean_norms(
     data: pd.DataFrame,
     regressors: List[str],

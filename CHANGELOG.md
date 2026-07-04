@@ -20,6 +20,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `survey_design=SurveyDesign(psu=<cluster_col>)`. No behavior change for unclustered fits.
 
 ### Fixed
+- **ImputationDiD/TwoStageDiD covariate fits with zero-weight replicate designs (JK1/plain
+  BRR) now produce finite SEs.** Replicate weights that zero out whole PSUs reach Step 1
+  unmasked; the previous per-estimator pandas demeaning loops divided 0/0 on zero-total-weight
+  groups, NaN-poisoning the demeaned design so EVERY replicate refit failed inside
+  `solve_ols` ("All replicate refits failed. Returning NaN variance." after a
+  non-convergence warning storm — measured: 198 warnings and SE=NaN on a 350k-row panel
+  with 16 JK1 replicates, now 0 warnings and a finite SE). A main fit combining zero-weight
+  rows with covariates previously raised an opaque `ValueError`; it now fits, with the
+  zero-weight unit's FE surfacing as NaN (spillover convention — keys retained for the
+  rank-condition check, never a silent finite 0.0) and its unidentified cells NaN across
+  all inference fields. TwoStageDiD's per-replicate "non-finite imputed outcomes" warning
+  is suppressed inside replicate-refit closures only (`warn_nan=False`); the main-fit
+  warning is unchanged.
 - **Dube, Girardi, Jordà & Taylor (2025) citation corrected to *J. Applied Econometrics*
   40(**7**):741-758** (was cited as issue 5) across `docs/references.rst`,
   `docs/methodology/REGISTRY.md`, `docs/methodology/papers/dube-2025-review.md`,
@@ -28,6 +41,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Historical CHANGELOG entries (the 3.6.0 release notes) intentionally retain the
   original attribution as a record of what was claimed at release time; this entry
   supersedes it.
+
+### Changed
+- **ImputationDiD/TwoStageDiD demeaning modernized onto the shared MAP engine.** The
+  private per-estimator pandas `_iterative_demean` loops (rebuilt a
+  `pd.Series.groupby().transform()` hash table every alternating-projection iteration)
+  are deleted; the covariate and pre-trend-lead within-transformations now route through
+  `demean_by_groups` (factorize-once + `np.bincount`, optional Rust kernel, one dispatch
+  for all columns), and both `_iterative_fe` FE solvers route through a new shared
+  bincount Gauss-Seidel helper (`diff_diff.utils._iterative_fe_solve`, modeled on
+  SpilloverDiD's). `max_iter` modernized 100 → 10,000 (the R `fixest`/`pyfixest`
+  convention already used by the shared engine). Estimates are preserved: measured ATT
+  deltas ≤ 2e-15 and SE deltas ≤ 2e-12 relative across a 5-scenario before/after grid
+  (2.35M-row panels, R-parity suites unchanged at 1e-6/1e-7). Measured speedups (median
+  of 3): ImputationDiD covariate fit 4.18s → 1.72s (2.4x) and no-covariate 1.40x at
+  2.35M rows; replicate-weight survey variance 20.3s → 3.6s (5.7x, 32 replicates,
+  350k rows) and 30.3s → 1.8s on zeroed-PSU designs (17x — the old loop burned
+  `max_iter` futile iterations per replicate). TwoStageDiD fit time unchanged
+  (GMM-variance-dominated). Accumulation-order numerics documented in
+  `docs/methodology/REGISTRY.md` (both estimator sections + "Absorbed Fixed Effects").
 
 ## [3.6.2] - 2026-07-03
 

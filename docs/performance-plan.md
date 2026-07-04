@@ -170,8 +170,9 @@ copy elision is a smaller, broadly-applicable win on the TWFE-family fit path. S
 ~12.7-15.0 GB across repeats), so the table reports medians - the reduction ratios are stable.
 
 Deferred (see `TODO.md`): tiling the *stratified* survey-PSU weight generator (few PSUs, rarely
-OOMs), and vectorizing `ImputationDiD` / `TwoStageDiD` `_iterative_demean` (a speed/churn win
-that is not bit-identical on pandas 3.0).
+OOMs). The `ImputationDiD` / `TwoStageDiD` `_iterative_demean` vectorization deferred here
+shipped later as the demean-modernization PR (both estimators now route through the shared
+`demean_by_groups` MAP engine and the shared `_iterative_fe_solve` bincount FE solver).
 
 ---
 

@@ -42,7 +42,7 @@ from diff_diff.two_stage_results import (
     TwoStageBootstrapResults,  # noqa: F401
     TwoStageDiDResults,
 )  # noqa: F401 (re-export)
-from diff_diff.utils import safe_inference, warn_if_not_converged
+from diff_diff.utils import _iterative_fe_solve, demean_by_groups, safe_inference
 
 if TYPE_CHECKING:
     # Forward reference for the Wave E.1 survey-design path. Imported under
@@ -1871,6 +1871,7 @@ class TwoStageDiD(TwoStageDiDBootstrapMixin):
                     kept_cov_mask=kcm_r,
                     survey_weights=w_r_fit,
                     survey_weight_type="pweight",
+                    warn_nan=False,
                 )
                 results.append(att_r)
 
@@ -1895,6 +1896,7 @@ class TwoStageDiD(TwoStageDiDBootstrapMixin):
                         survey_weights=w_r_fit,
                         survey_weight_type="pweight",
                         survey_df=None,
+                        warn_nan=False,
                     )
                     for e in _sorted_es_periods_ts:
                         results.append(es_r[e]["effect"] if e in es_r else np.nan)
@@ -1918,6 +1920,7 @@ class TwoStageDiD(TwoStageDiDBootstrapMixin):
                         survey_weights=w_r_fit,
                         survey_weight_type="pweight",
                         survey_df=None,
+                        warn_nan=False,
                     )
                     for g in _sorted_groups_ts:
                         results.append(grp_r[g]["effect"] if g in grp_r else np.nan)
@@ -2126,18 +2129,26 @@ class TwoStageDiD(TwoStageDiDBootstrapMixin):
         unit_vals: np.ndarray,
         time_vals: np.ndarray,
         idx: pd.Index,
-        max_iter: int = 100,
+        max_iter: int = 10_000,
         tol: float = 1e-10,
         weights: Optional[np.ndarray] = None,
     ) -> Tuple[Dict[Any, float], Dict[Any, float]]:
         """
         Estimate unit and time FE via iterative alternating projection.
 
+        Thin wrapper over the shared bincount solver
+        (``diff_diff.utils._iterative_fe_solve``): factorize unit/time once,
+        solve on integer codes, map the level arrays back to dicts.
+
         Parameters
         ----------
+        idx : pd.Index
+            Unused; retained for call-site stability.
         weights : np.ndarray, optional
-            Survey weights. When provided, uses weighted group means
-            (sum(w*x)/sum(w)) instead of unweighted means.
+            Survey weights (weighted group means ``sum(w*x)/sum(w)``). A
+            unit/period whose observations ALL carry zero weight has no
+            identifying contribution and gets ``NaN`` FE (its key is kept so
+            the rank-condition membership check still sees the group).
 
         Returns
         -------
@@ -2146,111 +2157,27 @@ class TwoStageDiD(TwoStageDiDBootstrapMixin):
         time_fe : dict
             Mapping from time -> time fixed effect.
         """
-        n = len(y)
-        alpha = np.zeros(n)
-        beta = np.zeros(n)
-
-        if weights is not None:
-            w_series = pd.Series(weights, index=idx)
-            wsum_t = w_series.groupby(time_vals).transform("sum").values
-            wsum_u = w_series.groupby(unit_vals).transform("sum").values
-
-        converged = False
-        with np.errstate(invalid="ignore", divide="ignore"):
-            for iteration in range(max_iter):
-                resid_after_alpha = y - alpha
-                if weights is not None:
-                    wr_t = pd.Series(resid_after_alpha * weights, index=idx)
-                    beta_new = wr_t.groupby(time_vals).transform("sum").values / wsum_t
-                else:
-                    beta_new = (
-                        pd.Series(resid_after_alpha, index=idx)
-                        .groupby(time_vals)
-                        .transform("mean")
-                        .values
-                    )
-
-                resid_after_beta = y - beta_new
-                if weights is not None:
-                    wr_u = pd.Series(resid_after_beta * weights, index=idx)
-                    alpha_new = wr_u.groupby(unit_vals).transform("sum").values / wsum_u
-                else:
-                    alpha_new = (
-                        pd.Series(resid_after_beta, index=idx)
-                        .groupby(unit_vals)
-                        .transform("mean")
-                        .values
-                    )
-
-                max_change = max(
-                    np.max(np.abs(alpha_new - alpha)),
-                    np.max(np.abs(beta_new - beta)),
-                )
-                alpha = alpha_new
-                beta = beta_new
-                if max_change < tol:
-                    converged = True
-                    break
-        warn_if_not_converged(converged, "TwoStageDiD iterative FE solver", max_iter, tol)
-
-        unit_fe = pd.Series(alpha, index=idx).groupby(unit_vals).first().to_dict()
-        time_fe = pd.Series(beta, index=idx).groupby(time_vals).first().to_dict()
+        unit_codes, unit_uniques = pd.factorize(unit_vals, sort=False)
+        time_codes, time_uniques = pd.factorize(time_vals, sort=False)
+        if (unit_codes < 0).any() or (time_codes < 0).any():
+            raise ValueError(
+                "TwoStageDiD: unit or time column contains NaN. Drop or "
+                "impute missing group keys before fitting."
+            )
+        unit_fe_arr, time_fe_arr = _iterative_fe_solve(
+            np.asarray(y, dtype=np.float64),
+            unit_codes.astype(np.intp, copy=False),
+            time_codes.astype(np.intp, copy=False),
+            len(unit_uniques),
+            len(time_uniques),
+            weights=weights,
+            max_iter=max_iter,
+            tol=tol,
+            method_name="TwoStageDiD iterative FE solver",
+        )
+        unit_fe = dict(zip(unit_uniques, unit_fe_arr))
+        time_fe = dict(zip(time_uniques, time_fe_arr))
         return unit_fe, time_fe
-
-    @staticmethod
-    def _iterative_demean(
-        vals: np.ndarray,
-        unit_vals: np.ndarray,
-        time_vals: np.ndarray,
-        idx: pd.Index,
-        max_iter: int = 100,
-        tol: float = 1e-10,
-        weights: Optional[np.ndarray] = None,
-    ) -> np.ndarray:
-        """Demean a vector by iterative alternating projection (unit + time FE removal).
-
-        Parameters
-        ----------
-        weights : np.ndarray, optional
-            Survey weights. When provided, uses weighted group means
-            (sum(w*x)/sum(w)) instead of unweighted means.
-        """
-        result = vals.copy()
-
-        if weights is not None:
-            w_series = pd.Series(weights, index=idx)
-            wsum_t = w_series.groupby(time_vals).transform("sum").values
-            wsum_u = w_series.groupby(unit_vals).transform("sum").values
-
-        converged = False
-        with np.errstate(invalid="ignore", divide="ignore"):
-            for _ in range(max_iter):
-                if weights is not None:
-                    wr_t = pd.Series(result * weights, index=idx)
-                    time_means = wr_t.groupby(time_vals).transform("sum").values / wsum_t
-                else:
-                    time_means = (
-                        pd.Series(result, index=idx).groupby(time_vals).transform("mean").values
-                    )
-                result_after_time = result - time_means
-                if weights is not None:
-                    wr_u = pd.Series(result_after_time * weights, index=idx)
-                    unit_means = wr_u.groupby(unit_vals).transform("sum").values / wsum_u
-                else:
-                    unit_means = (
-                        pd.Series(result_after_time, index=idx)
-                        .groupby(unit_vals)
-                        .transform("mean")
-                        .values
-                    )
-                result_new = result_after_time - unit_means
-                if np.max(np.abs(result_new - result)) < tol:
-                    result = result_new
-                    converged = True
-                    break
-                result = result_new
-        warn_if_not_converged(converged, "TwoStageDiD iterative demean", max_iter, tol)
-        return result
 
     def _fit_untreated_model(
         self,
@@ -2292,15 +2219,24 @@ class TwoStageDiD(TwoStageDiDBootstrapMixin):
             X_raw = df_0[covariates].values.copy()
             units = df_0[unit].values
             times = df_0[time].values
-            n_cov = len(covariates)
 
-            y_dm = self._iterative_demean(y, units, times, df_0.index, weights=w_0)
-            X_dm = np.column_stack(
-                [
-                    self._iterative_demean(X_raw[:, j], units, times, df_0.index, weights=w_0)
-                    for j in range(n_cov)
-                ]
+            # Within-transform Y and all X columns through the shared MAP
+            # engine (factorize-once + bincount + optional Rust kernel), one
+            # dispatch for every column. within_transform pins [unit, time];
+            # [time, unit] here preserves the historical time-then-unit sweep
+            # order of the per-estimator loops.
+            narrow = df_0[[outcome, *covariates, time, unit]].copy()
+            demeaned, _ = demean_by_groups(
+                narrow,
+                [outcome, *covariates],
+                [time, unit],
+                inplace=True,
+                weights=w_0,
+                max_iter=10_000,
+                tol=1e-10,
             )
+            y_dm = demeaned[outcome].to_numpy(dtype=np.float64)
+            X_dm = demeaned[covariates].to_numpy(dtype=np.float64)
 
             result = solve_ols(
                 X_dm,
@@ -2360,22 +2296,27 @@ class TwoStageDiD(TwoStageDiDBootstrapMixin):
     # =========================================================================
 
     @staticmethod
-    def _mask_nan_ytilde(y_tilde):
+    def _mask_nan_ytilde(y_tilde, warn: bool = True):
         """Mask non-finite y_tilde values and warn if any found.
 
         Returns the boolean mask of non-finite values. Modifies y_tilde in-place
-        (sets NaN values to 0.0).
+        (sets NaN values to 0.0). ``warn=False`` suppresses the UserWarning -
+        used ONLY by the replicate-refit closures, where zero-weight replicate
+        designs (JK1/BRR) make NaN FE for zeroed-out PSUs expected mechanics
+        (the main-fit warning still fires once; per-replicate repeats would
+        emit up to ~3x n_replicates copies of the same message).
         """
         nan_mask = ~np.isfinite(y_tilde)
         if nan_mask.any():
             n_nan = int(nan_mask.sum())
-            warnings.warn(
-                f"{n_nan} observation(s) have non-finite imputed outcomes "
-                f"(y_tilde) from unidentified fixed effects. These "
-                f"observations are excluded from ATT estimation.",
-                UserWarning,
-                stacklevel=3,
-            )
+            if warn:
+                warnings.warn(
+                    f"{n_nan} observation(s) have non-finite imputed outcomes "
+                    f"(y_tilde) from unidentified fixed effects. These "
+                    f"observations are excluded from ATT estimation.",
+                    UserWarning,
+                    stacklevel=3,
+                )
             y_tilde[nan_mask] = 0.0
         return nan_mask
 
@@ -2399,6 +2340,7 @@ class TwoStageDiD(TwoStageDiDBootstrapMixin):
         resolved_survey=None,
         score_pad_mask: Optional[np.ndarray] = None,
         cluster_ids_full: Optional[np.ndarray] = None,
+        warn_nan: bool = True,
     ) -> Tuple[float, float]:
         """
         Static (simple ATT) Stage 2: OLS of y_tilde on D_it.
@@ -2406,7 +2348,7 @@ class TwoStageDiD(TwoStageDiDBootstrapMixin):
         Returns (att, se).
         """
         y_tilde = df["_y_tilde"].values.copy()
-        nan_mask = self._mask_nan_ytilde(y_tilde)
+        nan_mask = self._mask_nan_ytilde(y_tilde, warn=warn_nan)
 
         D = omega_1_mask.values.astype(float)
         # Zero out treatment indicator for NaN y_tilde obs (don't count in ATT)
@@ -2475,10 +2417,11 @@ class TwoStageDiD(TwoStageDiDBootstrapMixin):
         resolved_survey=None,
         score_pad_mask: Optional[np.ndarray] = None,
         cluster_ids_full: Optional[np.ndarray] = None,
+        warn_nan: bool = True,
     ) -> Dict[int, Dict[str, Any]]:
         """Event study Stage 2: OLS of y_tilde on relative-time dummies."""
         y_tilde = df["_y_tilde"].values.copy()
-        nan_mask = self._mask_nan_ytilde(y_tilde)
+        nan_mask = self._mask_nan_ytilde(y_tilde, warn=warn_nan)
         rel_times = df["_rel_time"].values
         n = len(df)
 
@@ -2695,10 +2638,11 @@ class TwoStageDiD(TwoStageDiDBootstrapMixin):
         resolved_survey=None,
         score_pad_mask: Optional[np.ndarray] = None,
         cluster_ids_full: Optional[np.ndarray] = None,
+        warn_nan: bool = True,
     ) -> Dict[Any, Dict[str, Any]]:
         """Group (cohort) Stage 2: OLS of y_tilde on cohort dummies."""
         y_tilde = df["_y_tilde"].values.copy()
-        nan_mask = self._mask_nan_ytilde(y_tilde)
+        nan_mask = self._mask_nan_ytilde(y_tilde, warn=warn_nan)
         n = len(df)
 
         # Build Stage 2 design: one column per cohort (no intercept)

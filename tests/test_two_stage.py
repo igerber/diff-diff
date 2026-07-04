@@ -1414,31 +1414,40 @@ class TestSilentWarningAudit:
             est._iterative_fe(y, units, times, idx)
         assert not any("did not converge" in str(x.message) for x in w)
 
-    def test_iterative_demean_warns_on_nonconvergence(self):
-        """Silent-failure audit axis B: _iterative_demean must warn when max_iter exhausts."""
+    # NOTE (intentional coverage narrowing): the direct `_iterative_demean`
+    # non-convergence warn tests were retired with the method itself - the
+    # covariate within-transform now routes through the shared MAP engine
+    # with max_iter=10_000 hardcoded at the call site, so demean
+    # non-convergence is no longer forceable THROUGH this estimator.
+    # Engine-level warning coverage lives in
+    # tests/test_utils.py::TestDemeanByGroups; the `_iterative_fe` warn
+    # tests above still exercise this estimator's FE-solver warning path.
+
+    def test_iterative_fe_zero_weight_unit_gets_nan_fe(self):
+        """A unit whose rows ALL carry zero weight surfaces as NaN FE.
+
+        Locks the shared-solver zero-weight contract (spillover precedent:
+        never a silent finite 0.0) AND clean convergence - the historical
+        pandas loop divided 0/0 there and burned max_iter iterations.
+        """
         rng = np.random.default_rng(42)
         n_units, n_periods = 8, 5
         units = np.repeat(np.arange(n_units), n_periods)
         times = np.tile(np.arange(n_periods), n_units)
-        vals = rng.standard_normal(n_units * n_periods)
-        idx = pd.RangeIndex(len(vals))
+        y = rng.standard_normal(n_units * n_periods)
+        w = np.ones(n_units * n_periods)
+        w[units == 2] = 0.0
+        idx = pd.RangeIndex(len(y))
+        est = TwoStageDiD()
 
-        with pytest.warns(UserWarning, match="did not converge"):
-            TwoStageDiD._iterative_demean(vals, units, times, idx, max_iter=1, tol=1e-15)
-
-    def test_iterative_demean_no_warning_on_convergence(self):
-        """Silent-failure audit axis B: no warning on well-behaved convergent input."""
-        rng = np.random.default_rng(42)
-        n_units, n_periods = 8, 5
-        units = np.repeat(np.arange(n_units), n_periods)
-        times = np.tile(np.arange(n_periods), n_units)
-        vals = rng.standard_normal(n_units * n_periods)
-        idx = pd.RangeIndex(len(vals))
-
-        with warnings.catch_warnings(record=True) as w:
+        with warnings.catch_warnings(record=True) as rec:
             warnings.simplefilter("always")
-            TwoStageDiD._iterative_demean(vals, units, times, idx)
-        assert not any("did not converge" in str(x.message) for x in w)
+            unit_fe, time_fe = est._iterative_fe(y, units, times, idx, weights=w)
+        assert not any("did not converge" in str(x.message) for x in rec)
+
+        assert np.isnan(unit_fe[2])  # zero-weight unit: NaN, key retained
+        assert all(np.isfinite(v) for u, v in unit_fe.items() if u != 2)
+        assert all(np.isfinite(v) for v in time_fe.values())
 
 
 # ---------------------------------------------------------------------------
@@ -2368,3 +2377,87 @@ class TestTwoStageDiDVcovType:
         # so G strictly exceeds the distinct non-NaN cluster count.
         assert r.n_clusters > n_valid
         assert r.to_dict()["n_clusters"] == expected_g
+
+
+# =============================================================================
+# TestZeroWeightGroups — shared-engine migration behavioral locks
+# =============================================================================
+
+
+class TestZeroWeightGroups:
+    """Zero-total-weight groups on the Stage-1 paths (shared-engine migration).
+
+    JK1/plain-BRR replicate weights zero whole PSUs and reach Stage 1
+    unmasked (keep_mask only drops always-treated units). Before the
+    shared-engine migration the pandas loops divided 0/0 there: with
+    covariates, y_dm/X_dm NaN-poisoned, EVERY replicate refit failed inside
+    solve_ols(check_finite=True), and the fit returned NaN SEs after a
+    non-convergence warning storm. These tests lock the fixed contract,
+    including the warn_nan=False suppression of the per-replicate
+    "non-finite imputed outcomes" warning (main-fit warning unchanged).
+    """
+
+    @staticmethod
+    def _with_covariates(data, seed=7):
+        rng = np.random.default_rng(seed)
+        d = data.copy()
+        x = rng.standard_normal((len(d), 2))
+        d["x1"], d["x2"] = x[:, 0], x[:, 1]
+        d["outcome"] = d["outcome"] + x @ np.array([0.6, -0.3])
+        return d
+
+    def test_replicate_covariates_zero_weight_psus_finite_se(self):
+        """Covariates + JK1 zeroed-PSU replicates -> finite SE, no warning storm."""
+        data, rep_cols = _add_survey_cols(generate_test_data(n_units=60, seed=21))
+        data = self._with_covariates(data)
+        design = SurveyDesign(weights="w", replicate_weights=rep_cols, replicate_method="JK1")
+        with warnings.catch_warnings(record=True) as rec:
+            warnings.simplefilter("always")
+            r = TwoStageDiD().fit(
+                data,
+                outcome="outcome",
+                unit="unit",
+                time="time",
+                first_treat="first_treat",
+                covariates=["x1", "x2"],
+                survey_design=design,
+            )
+        messages = [str(w.message) for w in rec]
+        assert not any("replicate refits failed" in m for m in messages)
+        assert not any("did not converge" in m for m in messages)
+        # Main-fit weights are all positive here, and the per-replicate
+        # nan-ytilde warning is suppressed (warn_nan=False): zero copies.
+        assert not any("non-finite imputed outcomes" in m for m in messages)
+        assert np.isfinite(r.overall_att)
+        assert np.isfinite(r.overall_se) and r.overall_se > 0
+
+    def test_main_fit_zero_weight_unit_warns_once_and_fits(self):
+        """Main-fit zero-weight treated unit: nan-ytilde warning UNCHANGED.
+
+        The warn_nan=False suppression applies ONLY inside replicate-refit
+        closures - a main fit that produces NaN y_tilde (zero-weight unit ->
+        NaN FE) must still surface the practitioner-facing warning, and the
+        fit must succeed (before the migration it raised an opaque
+        ValueError from solve_ols on the NaN-poisoned demeaned design).
+        """
+        data = self._with_covariates(generate_test_data(n_units=40, seed=22))
+        data["w"] = 1.0
+        treated_units = data.loc[data["first_treat"] > 0, "unit"].unique()
+        data.loc[data["unit"] == treated_units[0], "w"] = 0.0
+        with warnings.catch_warnings(record=True) as rec:
+            warnings.simplefilter("always")
+            r = TwoStageDiD().fit(
+                data,
+                outcome="outcome",
+                unit="unit",
+                time="time",
+                first_treat="first_treat",
+                covariates=["x1", "x2"],
+                survey_design=SurveyDesign(weights="w"),
+            )
+        nan_ytilde = [
+            m for m in (str(w.message) for w in rec) if "non-finite imputed outcomes" in m
+        ]
+        assert len(nan_ytilde) >= 1  # main-fit warning still fires
+        assert np.isfinite(r.overall_att)
+        assert np.isfinite(r.overall_se) and r.overall_se > 0

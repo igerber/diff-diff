@@ -1287,7 +1287,8 @@ def _convert_treatment_to_first_treat(
 # =============================================================================
 
 # Convergence tolerance for the iterative alternating-projection FE solver
-# (Gauss-Seidel style; mirrors `TwoStageDiD._iterative_fe`).
+# (Gauss-Seidel style; same recursion as the shared
+# `diff_diff.utils._iterative_fe_solve` used by ImputationDiD/TwoStageDiD).
 _FE_ITER_MAX = 100
 _FE_ITER_TOL = 1e-10
 
@@ -1408,8 +1409,9 @@ def _iterative_fe_subset(
     ``NaN`` at positions whose unit / time is not represented in the
     subsample (rank-deficient cells).
 
-    Mirrors ``TwoStageDiD._iterative_fe`` structurally but operates on
-    integer-coded factors via ``np.bincount`` for speed.
+    Same Gauss-Seidel-on-integer-codes recursion as the shared
+    ``diff_diff.utils._iterative_fe_solve`` (which ImputationDiD/TwoStageDiD
+    now route through), specialized here to a masked Butts subsample.
 
     **Wave E.1 weighted path** — when ``weights`` is supplied, the solver
     minimizes ``sum_i w_i * (y_i - mu_i - lambda_t)^2`` (WLS-FE under

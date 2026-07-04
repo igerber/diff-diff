@@ -20,6 +20,7 @@ from scipy import stats
 
 from diff_diff.utils import (
     _compute_outcome_changes,
+    _iterative_fe_solve,
     _project_simplex,
     check_parallel_trends,
     check_parallel_trends_robust,
@@ -1918,3 +1919,148 @@ class TestJointSpanSnapConfirmation:
             )
         assert snapped == []
         np.testing.assert_array_equal(out["xnear_dm"].values, before)
+
+
+# =============================================================================
+# TestIterativeFeSolve — shared bincount Gauss-Seidel FE solver
+# =============================================================================
+
+
+def _frozen_pandas_iterative_fe(y, unit_vals, time_vals, max_iter=10_000, tol=1e-10, weights=None):
+    """Byte-for-byte copy of the PRE-3.7 per-estimator pandas FE loop
+    (ImputationDiD/TwoStageDiD `_iterative_fe`, retired by the shared-engine
+    migration). NOT bit-identical to the bincount solver (pandas' grouped
+    mean is Kahan-compensated; bincount is naive accumulation). Kept as a
+    drift-bound guard: the shared solver must agree with this loop at
+    atol=1e-9. Positive weights only — the old loop divides 0/0 on
+    zero-total-weight groups (the bug the migration fixed).
+    """
+    idx = pd.RangeIndex(len(y))
+    n = len(y)
+    alpha = np.zeros(n)
+    beta = np.zeros(n)
+    if weights is not None:
+        w_series = pd.Series(weights, index=idx)
+        wsum_t = w_series.groupby(time_vals).transform("sum").values
+        wsum_u = w_series.groupby(unit_vals).transform("sum").values
+    with np.errstate(invalid="ignore", divide="ignore"):
+        for _ in range(max_iter):
+            resid_after_alpha = y - alpha
+            if weights is not None:
+                wr_t = pd.Series(resid_after_alpha * weights, index=idx)
+                beta_new = wr_t.groupby(time_vals).transform("sum").values / wsum_t
+            else:
+                beta_new = (
+                    pd.Series(resid_after_alpha, index=idx)
+                    .groupby(time_vals)
+                    .transform("mean")
+                    .values
+                )
+            resid_after_beta = y - beta_new
+            if weights is not None:
+                wr_u = pd.Series(resid_after_beta * weights, index=idx)
+                alpha_new = wr_u.groupby(unit_vals).transform("sum").values / wsum_u
+            else:
+                alpha_new = (
+                    pd.Series(resid_after_beta, index=idx)
+                    .groupby(unit_vals)
+                    .transform("mean")
+                    .values
+                )
+            max_change = max(np.max(np.abs(alpha_new - alpha)), np.max(np.abs(beta_new - beta)))
+            alpha = alpha_new
+            beta = beta_new
+            if max_change < tol:
+                break
+    unit_fe = pd.Series(alpha, index=idx).groupby(unit_vals).first().to_dict()
+    time_fe = pd.Series(beta, index=idx).groupby(time_vals).first().to_dict()
+    return unit_fe, time_fe
+
+
+class TestIterativeFeSolve:
+    """Drift-bound + contract tests for the shared bincount FE solver."""
+
+    @staticmethod
+    def _panel(kind, seed=42):
+        rng = np.random.default_rng(seed)
+        n_units, n_periods = 12, 7
+        units, times = [], []
+        for i in range(n_units):
+            for t in range(n_periods):
+                if kind == "unbalanced" and rng.random() < 0.25:
+                    continue
+                units.append(i)
+                times.append(t)
+        units = np.asarray(units)
+        times = np.asarray(times)
+        y = (
+            rng.standard_normal(n_units)[units]
+            + np.linspace(0, 1, n_periods)[times]
+            + rng.standard_normal(len(units)) * 0.3
+        )
+        return y, units, times
+
+    def _solve_shared(self, y, units, times, weights=None):
+        unit_codes, unit_uniques = pd.factorize(units, sort=False)
+        time_codes, time_uniques = pd.factorize(times, sort=False)
+        u_arr, t_arr = _iterative_fe_solve(
+            y,
+            unit_codes.astype(np.intp),
+            time_codes.astype(np.intp),
+            len(unit_uniques),
+            len(time_uniques),
+            weights=weights,
+            method_name="test FE solver",
+        )
+        return dict(zip(unit_uniques, u_arr)), dict(zip(time_uniques, t_arr))
+
+    @pytest.mark.parametrize("kind", ["balanced", "unbalanced"])
+    @pytest.mark.parametrize("weighted", [False, True])
+    def test_matches_frozen_pandas_loop(self, kind, weighted):
+        y, units, times = self._panel(kind)
+        rng = np.random.default_rng(7)
+        w = 0.5 + rng.exponential(0.5, len(y)) if weighted else None
+
+        u_new, t_new = self._solve_shared(y, units, times, weights=w)
+        u_old, t_old = _frozen_pandas_iterative_fe(y, units, times, weights=w)
+
+        assert set(u_new) == set(u_old) and set(t_new) == set(t_old)
+        for k in u_old:
+            np.testing.assert_allclose(u_new[k], u_old[k], rtol=0, atol=1e-9)
+        for k in t_old:
+            np.testing.assert_allclose(t_new[k], t_old[k], rtol=0, atol=1e-9)
+
+    def test_zero_weight_group_nan_fe_and_convergence(self):
+        """Zero-total-weight unit: NaN FE, key retained, clean convergence."""
+        y, units, times = self._panel("unbalanced")
+        w = np.ones(len(y))
+        w[units == 5] = 0.0
+        with warnings.catch_warnings(record=True) as rec:
+            warnings.simplefilter("always")
+            u_fe, t_fe = self._solve_shared(y, units, times, weights=w)
+        assert not any("did not converge" in str(x.message) for x in rec)
+        assert 5 in u_fe and np.isnan(u_fe[5])
+        assert all(np.isfinite(v) for k, v in u_fe.items() if k != 5)
+        assert all(np.isfinite(v) for v in t_fe.values())
+        # Positive-weight FE are unchanged by the zero-weight rows' presence
+        # (they are outside the WLS estimating sample).
+        keep = units != 5
+        u_sub, t_sub = self._solve_shared(y[keep], units[keep], times[keep])
+        for k, v in u_sub.items():
+            np.testing.assert_allclose(u_fe[k], v, rtol=0, atol=1e-12)
+
+    def test_warns_on_nonconvergence_with_label(self):
+        y, units, times = self._panel("unbalanced")
+        unit_codes, unit_uniques = pd.factorize(units, sort=False)
+        time_codes, time_uniques = pd.factorize(times, sort=False)
+        with pytest.warns(UserWarning, match="my solver label did not converge"):
+            _iterative_fe_solve(
+                y,
+                unit_codes.astype(np.intp),
+                time_codes.astype(np.intp),
+                len(unit_uniques),
+                len(time_uniques),
+                max_iter=1,
+                tol=1e-15,
+                method_name="my solver label",
+            )
