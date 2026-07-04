@@ -474,6 +474,8 @@ Prior to the bare-`cluster=` wiring fix, `CallawaySantAnna(cluster="X")` was a s
 
 The `cluster_name` and `n_clusters` fields on `CallawaySantAnnaResults` report the effective clustering level: `survey_design.psu` (canonical column) when explicit PSU is provided, `self.cluster` when bare cluster synthesizes or injects.
 
+- **Note (API decision — `cluster=` retained, NOT deprecated):** the `cluster=` → `SurveyDesign(psu=cluster)` synthesis above is an internal implementation detail, not a user-facing redundancy to be consolidated away. `cluster=` is the **canonical ergonomic single-level clustering kwarg** and is intentionally retained on `CallawaySantAnna` (and the sibling IF-based estimators `EfficientDiD` / `ImputationDiD` / `TwoStageDiD`): it matches the field's universal convention (R `fixest::feols(..., cluster = ~unit)`, Stata `vce(cluster id)`, statsmodels `cov_type="cluster"`), so users reach for `cluster=` first. `survey_design=SurveyDesign(psu=X, ...)` is the **advanced** entry point (adds strata / FPC / replicate weights / explicit weights); a bare `cluster=` is the shorthand for the common "just cluster at X" case and would be strictly less ergonomic if forced through `survey_design=`. This mirrors the HAD survey-API consolidation, which deprecated only the *redundant* `survey=` / `weights=` entry points in favor of `survey_design=` while deliberately keeping `cluster=`. Decision recorded 2026-07-04: do not deprecate `cluster=`; the former "decide whether to deprecate `CallawaySantAnna.cluster=X`" `TODO.md` row is closed as resolved (keep).
+
 *Estimator equation (as implemented):*
 
 Group-time average treatment effect:
