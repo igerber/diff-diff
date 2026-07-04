@@ -83,7 +83,14 @@ RAKE_VARS = ["age_band", "educ_cat"]
 
 
 def simulate_brfss_smoking(differential, seed=SEED, drift_start_offset=0):
-    """Duplicated verbatim from the notebook SS2 code cell. Keep in sync."""
+    """Duplicated from the notebook SS2 code cell. Keep in sync.
+
+    No arm-specific trends by construction: population parallel trends hold
+    in expectation (mean-zero PSU-year shocks add noise, not drift); the
+    planted effect is -3.0pp (realized population ATT ~-2.98pp after the
+    probability floor). All SYSTEMATIC estimator bias comes from sample
+    composition.
+    """
     rng = np.random.default_rng(seed)
 
     perm = rng.permutation(N_STATES)
