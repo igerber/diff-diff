@@ -53,6 +53,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   supersedes it.
 
 ### Changed
+- **CallawaySantAnna aggregation SE assembly rewritten to O(n_units)** (also inherited by
+  `StaggeredTripleDifference` aggregation). The combined influence-function assembly behind
+  simple/event-study/group aggregated SEs — previously ~56-85% of analytical fit time at
+  scale — replaces its per-aggregation-target full-DataFrame cohort scans, per-unit Python
+  loops, and dense `(n_units × n_gt)` weight-influence-function matrices with per-fit cohort
+  tables and a closed-form WIF (algebraically identical; details in REGISTRY). Measured
+  (medians of 3, Apple M4 Max, Rust backend): analytical fits at 100k units × 20 periods
+  (2M rows) 1.32→0.21s no-covariate (6.3x), 2.49→1.08s 5-covariate DR (2.3x); long panels
+  40p×10 cohorts 9.09→3.91s and 60p×15 cohorts 9.86→4.34s (2.3x); bootstrap-999 fits
+  1.4-1.6x (the remaining draw-loop matmul is unchanged); repeated cross-sections
+  4.17→1.50s no-covariate (2.8x) with peak memory 6.4→2.1 GB (-67%; the dense WIF matrices
+  were observation-scale in RCS mode). Point estimates are bit-identical; aggregated SEs
+  move only at floating-point reassociation level (measured ≤5e-16 relative, drift-bound
+  tested at 1e-9 against a frozen copy of the prior implementation). For scale context,
+  a full `fit(aggregate="all")` at 2M rows now runs 3-11x faster than R `did` 2.5.1
+  (equal work, analytical or bootstrap-999, single- or multi-core R; R's `pl`/`cores`
+  parallelism is BLAS-bound on this path so both R arms time identically).
 - **ImputationDiD/TwoStageDiD demeaning modernized onto the shared MAP engine.** The
   private per-estimator pandas `_iterative_demean` loops (rebuilt a
   `pd.Series.groupby().transform()` hash table every alternating-projection iteration)

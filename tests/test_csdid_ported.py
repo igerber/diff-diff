@@ -1254,3 +1254,82 @@ class TestCSDIDGoldenValues:
                     assert abs(py_att - r_att) < 0.05, (
                         f"ZeroPre {bp} ATT(g={g},t={t}): " f"Py={py_att:.4f}, R={r_att:.4f}"
                     )
+
+    def test_golden_simple_aggregation_se(self, golden_values):
+        """Simple (overall) aggregated ATT and SE match R ``aggte(type="simple")``.
+
+        Enables the previously-unasserted ``simple`` block of the
+        ``default_no_covariates_dr`` golden scenario (analytical SEs,
+        ``bstrap=FALSE``). Observed agreement is ~1e-12; the 2e-3 tolerance
+        matches the per-cell DR SE precedent above.
+        """
+        if "default_no_covariates_dr" not in golden_values:
+            pytest.skip("Scenario not in golden values")
+        scenario = golden_values["default_no_covariates_dr"]
+        data = _golden_to_df(scenario["data"])
+
+        cs = CallawaySantAnna(estimation_method="dr")
+        results = cs.fit(
+            data,
+            outcome="outcome",
+            unit="unit",
+            time="period",
+            first_treat="first_treat",
+            aggregate="simple",
+        )
+        r_simple = scenario["results"]["simple"]
+        assert (
+            abs(results.att - r_simple["att"]) < 2e-3
+        ), f"Simple ATT: Py={results.att:.6f}, R={r_simple['att']:.6f}"
+        assert (
+            abs(results.se - r_simple["se"]) < 2e-3
+        ), f"Simple SE: Py={results.se:.6f}, R={r_simple['se']:.6f}"
+
+    def test_golden_event_study_aggregation_se(self, golden_values):
+        """Event-study aggregated ATT and SE match R ``aggte(type="dynamic")``
+        under BOTH base-period modes.
+
+        Enables the previously-unasserted ``varying_dynamic`` /
+        ``universal_dynamic`` blocks of the ``varying_vs_universal`` golden
+        scenario (analytical SEs). R reports NA at the universal reference
+        period e=-1 (identically-zero estimate); NA entries are skipped -
+        this pins parity on the estimated horizons (observed agreement
+        ~7e-6).
+
+        NOT enabled (pre-existing, unrelated to the IF-assembly fast path -
+        verified byte-identical deltas on the pre-rewrite tree): the
+        ``two_period`` and ``dynamic_effects`` aggregated SEs, where the reg
+        method's aggregated SEs sit 3-20% from these R fixtures while the
+        ATTs match at 1e-11. Tracked in TODO.md.
+        """
+        if "varying_vs_universal" not in golden_values:
+            pytest.skip("Scenario not in golden values")
+        scenario = golden_values["varying_vs_universal"]
+        data = _golden_to_df(scenario["data"])
+
+        for bp in ["varying", "universal"]:
+            cs = CallawaySantAnna(estimation_method="dr", base_period=bp)
+            results = cs.fit(
+                data,
+                outcome="outcome",
+                unit="unit",
+                time="period",
+                first_treat="first_treat",
+                covariates=["X"],
+                aggregate="event_study",
+            )
+            blk = scenario["results"][f"{bp}_dynamic"]
+            n_checked = 0
+            for e, r_att, r_se in zip(blk["egt"], blk["att"], blk["se"]):
+                if r_att == "NA" or r_se == "NA":
+                    continue
+                es = results.event_study_effects.get(int(e))
+                assert es is not None, f"{bp}: missing event time e={e}"
+                assert (
+                    abs(es["effect"] - float(r_att)) < 2e-3
+                ), f"{bp} dyn ATT(e={e}): Py={es['effect']:.6f}, R={r_att}"
+                assert (
+                    abs(es["se"] - float(r_se)) < 2e-3
+                ), f"{bp} dyn SE(e={e}): Py={es['se']:.6f}, R={r_se}"
+                n_checked += 1
+            assert n_checked >= 8, f"{bp}: too few comparable horizons"

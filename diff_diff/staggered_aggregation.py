@@ -212,6 +212,178 @@ class CallawaySantAnnaAggregationMixin:
         variance = np.sum(psi_overall**2)
         return np.sqrt(variance)
 
+    @staticmethod
+    def _get_agg_cache(precomputed: "PrecomputedData") -> Dict[str, Any]:
+        """
+        Per-fit cohort tables for the combined-IF fast path, lazily memoized
+        on the precomputed dict.
+
+        The cache is validated by ARRAY IDENTITY, not dict residency:
+        StaggeredTripleDifference aggregates through a shallow copy of
+        precomputed with a replaced (eligibility-zeroed) ``unit_cohorts``,
+        so a cache keyed to the dict could serve stale tables across the
+        copy. ``cohorts_ref``/``sw_ref`` pin the exact arrays the tables
+        were built from; any mismatch rebuilds into a FRESH dict (never
+        mutated in place - the shallow copy shares the cache reference).
+        """
+        unit_cohorts = precomputed["unit_cohorts"]
+        survey_w = precomputed.get("survey_weights")
+        cache = precomputed.get("_agg_cache")
+        if (
+            cache is not None
+            and cache["cohorts_ref"] is unit_cohorts
+            and cache["sw_ref"] is survey_w
+        ):
+            return cache
+
+        cohort_values, cohort_codes = np.unique(unit_cohorts, return_inverse=True)
+        if survey_w is not None:
+            # Survey-weighted cohort masses. np.bincount accumulation order
+            # differs from the historical per-group mask-sums at the ~1 ULP
+            # level (documented drift budget; REGISTRY CallawaySantAnna SE
+            # notes).
+            cohort_masses = np.bincount(
+                cohort_codes, weights=survey_w, minlength=len(cohort_values)
+            )
+            total_weight = float(np.sum(survey_w))
+        else:
+            cohort_masses = np.bincount(cohort_codes, minlength=len(cohort_values)).astype(
+                np.float64
+            )
+            total_weight = float(len(unit_cohorts))
+
+        cache = {
+            "cohorts_ref": unit_cohorts,
+            "sw_ref": survey_w,
+            "cohort_values": cohort_values,
+            "cohort_codes": cohort_codes,
+            "cohort_masses": cohort_masses,
+            "total_weight": total_weight,
+        }
+        precomputed["_agg_cache"] = cache
+        return cache
+
+    def _combined_if_fast(
+        self,
+        gt_pairs: List[Tuple[Any, Any]],
+        weights: np.ndarray,
+        effects: np.ndarray,
+        groups_for_gt: np.ndarray,
+        influence_func_info: Dict,
+        precomputed: "PrecomputedData",
+        n_units: int,
+    ) -> Optional[Tuple[np.ndarray, None]]:
+        """
+        O(n_units) combined-IF assembly over per-fit cohort tables.
+
+        Replaces the general path's per-group full-DataFrame scans, per-unit
+        Python loops, and dense (n_units x n_gt) WIF matrices with cohort-
+        indexed lookups. The WIF uses the closed form (algebraically
+        identical to the dense ``wif_matrix @ effects``, floating-point
+        accumulation order differs - not bit-for-bit):
+
+            wif_i = w_i * (E(c_i)/S - K(c_i) * d / S**2)
+
+        where c_i is unit i's cohort, E(c) sums ``effects`` over keeper
+        (g,t) pairs with g == c, K(c) counts them, S = sum of keeper pg,
+        d = pg_keepers @ effects, and w_i is the survey weight (1 when
+        unweighted). Units whose cohort is not among the keepers get
+        exactly 0 (the old dense form realizes the same value through
+        cancelling terms).
+
+        Returns None when the cohort lookup cannot be resolved exactly
+        (non-numeric cohort dtypes, or a keeper group missing from the
+        cohort table) - the caller then falls back to the general path.
+        """
+        cache = self._get_agg_cache(precomputed)
+        cohort_values = cache["cohort_values"]
+        cohort_codes = cache["cohort_codes"]
+        cohort_masses = cache["cohort_masses"]
+        total_weight = cache["total_weight"]
+        survey_w = cache["sw_ref"]
+
+        groups_arr = np.asarray(groups_for_gt)
+        if not (
+            np.issubdtype(groups_arr.dtype, np.number)
+            and np.issubdtype(cohort_values.dtype, np.number)
+        ):
+            return None
+
+        # Unique keeper groups + exact positions in the cohort table.
+        unique_groups = np.unique(groups_arr)
+        pos = np.searchsorted(cohort_values, unique_groups)
+        if np.any(pos >= len(cohort_values)) or np.any(
+            cohort_values[np.minimum(pos, len(cohort_values) - 1)] != unique_groups
+        ):
+            return None  # keeper group absent from cohort table
+
+        # pg per keeper (same values as the general path's group_sizes /
+        # total_weight; survey masses differ only in accumulation order).
+        pg_by_group = cohort_masses[pos] / total_weight
+        kpos = np.searchsorted(unique_groups, groups_arr)
+        pg_keepers = pg_by_group[kpos]
+        sum_pg_keepers = np.sum(pg_keepers)
+
+        # Guard against zero weights (no keepers = no variance). Must stay
+        # BEFORE the psi_standard scatter - the general path returns zeros
+        # without ever accumulating the standard IF.
+        if sum_pg_keepers == 0:
+            return np.zeros(n_units), None
+
+        # Standard aggregated influence (without wif). Index arrays are
+        # unique within each cell by construction at every producer
+        # (np.where on disjoint masks), so fancy += is exact.
+        psi_standard = np.zeros(n_units)
+        for j, (g, t) in enumerate(gt_pairs):
+            if (g, t) not in influence_func_info:
+                continue
+            info = influence_func_info[(g, t)]
+            w = weights[j]
+            treated_idx = info["treated_idx"]
+            if len(treated_idx) > 0:
+                psi_standard[treated_idx] += w * info["treated_inf"]
+            control_idx = info["control_idx"]
+            if len(control_idx) > 0:
+                psi_standard[control_idx] += w * info["control_inf"]
+
+        # Closed-form WIF over per-cohort tables.
+        n_ug = len(unique_groups)
+        E_keepers = np.bincount(kpos, weights=effects, minlength=n_ug)
+        K_keepers = np.bincount(kpos, minlength=n_ug).astype(np.float64)
+        E_full = np.zeros(len(cohort_values))
+        K_full = np.zeros(len(cohort_values))
+        E_full[pos] = E_keepers
+        K_full[pos] = K_keepers
+
+        with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
+            d = pg_keepers @ effects
+            wif_contrib = E_full[cohort_codes] / sum_pg_keepers - K_full[cohort_codes] * (
+                d / sum_pg_keepers**2
+            )
+            if survey_w is not None:
+                wif_contrib = wif_contrib * survey_w
+
+        # Check for non-finite values from edge cases (same fail-closed
+        # contract as the general path: warn + all-NaN vector, before the
+        # 1/total_weight scaling).
+        if not np.all(np.isfinite(wif_contrib)):
+            import warnings
+
+            n_nonfinite = np.sum(~np.isfinite(wif_contrib))
+            warnings.warn(
+                f"Non-finite values ({n_nonfinite}/{len(wif_contrib)}) in weight influence "
+                "function computation. This may occur with very small samples or extreme "
+                "weights. Returning NaN for SE to signal invalid inference.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+            return np.full(n_units, np.nan), None
+
+        # Scale by 1/total_weight to match R's getSE formula
+        psi_wif = wif_contrib / total_weight
+
+        return psi_standard + psi_wif, None
+
     def _compute_combined_influence_function(
         self,
         gt_pairs: List[Tuple[Any, Any]],
@@ -247,6 +419,37 @@ class CallawaySantAnnaAggregationMixin:
 
         # Detect RCS mode via explicit flag. In RCS, obs indices ARE array positions.
         _is_rcs = precomputed is not None and not precomputed.get("is_panel", True)
+
+        # Fast-path dispatch: all in-package callers thread the SAME
+        # precomputed structures they index psi by, so the cohort tables can
+        # be looked up in O(n_units) instead of re-scanning the DataFrame per
+        # group and looping units in Python. Order matters: the RCS check
+        # must precede the panel identity check (for RCS both
+        # global_unit_to_idx and precomputed["unit_to_idx"] are None, so the
+        # identity guard alone would spuriously pass). Anything not exactly
+        # matched (direct callers with foreign index maps, size mismatches,
+        # non-numeric cohorts) falls through to the general path below,
+        # which is preserved unchanged.
+        if precomputed is not None and n_global_units is not None:
+            _fast_ok = False
+            if _is_rcs:
+                _fast_ok = n_global_units == len(precomputed["unit_cohorts"])
+            elif global_unit_to_idx is not None and global_unit_to_idx is precomputed.get(
+                "unit_to_idx"
+            ):
+                _fast_ok = n_global_units == len(precomputed["unit_cohorts"])
+            if _fast_ok:
+                fast = self._combined_if_fast(
+                    gt_pairs,
+                    weights,
+                    effects,
+                    groups_for_gt,
+                    influence_func_info,
+                    precomputed,
+                    n_global_units,
+                )
+                if fast is not None:
+                    return fast
 
         # Build unit index mapping (local or global)
         if _is_rcs and n_global_units is not None:

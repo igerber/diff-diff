@@ -2,7 +2,17 @@
 # Benchmark: Callaway-Sant'Anna Estimator (R `did` package)
 #
 # Usage:
-#   Rscript benchmark_did.R --data path/to/data.csv --output path/to/results.json
+#   Rscript benchmark_did.R --data path/to/data.csv --output path/to/results.json \
+#     [--method dr|ipw|reg] [--control-group nevertreated|notyettreated] \
+#     [--xformla "~ x1 + x2"] [--bstrap true|false] [--biters N] \
+#     [--cband true|false] [--pl true|false] [--cores N] \
+#     [--faster-mode true|false]
+#
+# Defaults reproduce the historical behavior (analytical SEs, no covariates,
+# single core), so existing callers (benchmarks/run_benchmarks.py) are
+# unaffected. The optional flags exist for the R-yardstick arms: bootstrap
+# inference (bstrap/biters/cband applied at BOTH att_gt and aggte), covariate
+# formulas, and did's parallel processing (pl/cores).
 
 library(did)
 library(jsonlite)
@@ -11,35 +21,73 @@ library(data.table)
 # Parse command line arguments
 args <- commandArgs(trailingOnly = TRUE)
 
+parse_bool <- function(x, flag) {
+  v <- tolower(x)
+  if (v %in% c("true", "t", "1", "yes")) return(TRUE)
+  if (v %in% c("false", "f", "0", "no")) return(FALSE)
+  stop(sprintf("Invalid boolean for %s: '%s' (use true/false)", flag, x))
+}
+
 parse_args <- function(args) {
   result <- list(
     data = NULL,
     output = NULL,
     method = "dr",
-    control_group = "nevertreated"
+    control_group = "nevertreated",
+    xformla = NULL,
+    bstrap = FALSE,
+    biters = 1000L,
+    cband = FALSE,
+    pl = FALSE,
+    cores = 1L,
+    faster_mode = NULL  # NULL -> use did's own default for this version
   )
 
   i <- 1
   while (i <= length(args)) {
-    if (args[i] == "--data") {
-      result$data <- args[i + 1]
-      i <- i + 2
-    } else if (args[i] == "--output") {
-      result$output <- args[i + 1]
-      i <- i + 2
-    } else if (args[i] == "--method") {
-      result$method <- args[i + 1]
-      i <- i + 2
-    } else if (args[i] == "--control-group") {
-      result$control_group <- args[i + 1]
-      i <- i + 2
-    } else {
-      i <- i + 1
+    flag <- args[i]
+    if (i + 1 > length(args) && flag != "") {
+      stop(sprintf("Missing value for flag: %s", flag))
     }
+    val <- args[i + 1]
+    if (flag == "--data") {
+      result$data <- val
+    } else if (flag == "--output") {
+      result$output <- val
+    } else if (flag == "--method") {
+      result$method <- val
+    } else if (flag == "--control-group") {
+      result$control_group <- val
+    } else if (flag == "--xformla") {
+      result$xformla <- as.formula(val)
+    } else if (flag == "--bstrap") {
+      result$bstrap <- parse_bool(val, flag)
+    } else if (flag == "--biters") {
+      result$biters <- as.integer(val)
+    } else if (flag == "--cband") {
+      result$cband <- parse_bool(val, flag)
+    } else if (flag == "--pl") {
+      result$pl <- parse_bool(val, flag)
+    } else if (flag == "--cores") {
+      result$cores <- as.integer(val)
+    } else if (flag == "--faster-mode") {
+      result$faster_mode <- parse_bool(val, flag)
+    } else {
+      # Unknown flags used to be silently skipped, which turned typos into
+      # silent default runs. Fail loudly instead.
+      stop(sprintf("Unknown flag: %s", flag))
+    }
+    i <- i + 2
   }
 
   if (is.null(result$data) || is.null(result$output)) {
-    stop("Usage: Rscript benchmark_did.R --data <path> --output <path> [--method dr|ipw|reg] [--control-group nevertreated|notyettreated]")
+    stop("Usage: Rscript benchmark_did.R --data <path> --output <path> [--method dr|ipw|reg] [--control-group nevertreated|notyettreated] [--xformla '~ x1 + x2'] [--bstrap true|false] [--biters N] [--cband true|false] [--pl true|false] [--cores N] [--faster-mode true|false]")
+  }
+  if (is.na(result$biters) || result$biters <= 0) {
+    stop(sprintf("--biters must be a positive integer, got '%s'", result$biters))
+  }
+  if (is.na(result$cores) || result$cores <= 0) {
+    stop(sprintf("--cores must be a positive integer, got '%s'", result$cores))
   }
 
   return(result)
@@ -66,28 +114,50 @@ message(sprintf("Never-treated units (first_treat=Inf): %d", sum(is.infinite(dat
 message("Running Callaway-Sant'Anna estimation...")
 start_time <- Sys.time()
 
-out <- att_gt(
+att_gt_args <- list(
   yname = "outcome",
   tname = "time",
   idname = "unit",
   gname = "first_treat",
-  xformla = NULL,
+  xformla = config$xformla,
   data = data,
   est_method = config$method,
   control_group = config$control_group,
-  bstrap = FALSE,  # Use analytical SEs for speed
-  cband = FALSE
+  bstrap = config$bstrap,
+  biters = config$biters,
+  cband = config$cband,
+  pl = config$pl,
+  cores = config$cores
 )
+# faster_mode exists in recent did releases only; pass it only when both
+# requested and supported, so the script still runs on older installs.
+# effective_faster_mode records what actually reached att_gt (vs the
+# requested flag) so benchmark artifacts are never mislabeled.
+effective_faster_mode <- "did-default"
+if (!is.null(config$faster_mode)) {
+  if ("faster_mode" %in% names(formals(att_gt))) {
+    att_gt_args$faster_mode <- config$faster_mode
+    effective_faster_mode <- config$faster_mode
+  } else {
+    message("faster_mode not supported by this did version; ignoring flag")
+    effective_faster_mode <- "unsupported-ignored"
+  }
+}
+out <- do.call(att_gt, att_gt_args)
 
 estimation_time <- as.numeric(difftime(Sys.time(), start_time, units = "secs"))
 
-# Aggregate results
+# Aggregate results (same inference mode as att_gt so the timing arm does
+# equal work end-to-end)
 message("Aggregating results...")
 agg_start <- Sys.time()
 
-agg_simple <- aggte(out, type = "simple", bstrap = FALSE, cband = FALSE)
-agg_dynamic <- aggte(out, type = "dynamic", bstrap = FALSE, cband = FALSE)
-agg_group <- aggte(out, type = "group", bstrap = FALSE, cband = FALSE)
+agg_simple <- aggte(out, type = "simple", bstrap = config$bstrap,
+                    biters = config$biters, cband = FALSE)
+agg_dynamic <- aggte(out, type = "dynamic", bstrap = config$bstrap,
+                     biters = config$biters, cband = config$cband)
+agg_group <- aggte(out, type = "group", bstrap = config$bstrap,
+                   biters = config$biters, cband = FALSE)
 
 aggregation_time <- as.numeric(difftime(Sys.time(), agg_start, units = "secs"))
 total_time <- estimation_time + aggregation_time
@@ -131,13 +201,22 @@ results <- list(
     total_seconds = total_time
   ),
 
-  # Metadata
+  # Metadata (records the full inference/parallelism config so every
+  # yardstick number is reproducible from its own artifact)
   metadata = list(
     r_version = R.version.string,
     did_version = as.character(packageVersion("did")),
     n_units = length(unique(data$unit)),
     n_periods = length(unique(data$time)),
-    n_obs = nrow(data)
+    n_obs = nrow(data),
+    xformla = if (is.null(config$xformla)) NULL else deparse(config$xformla),
+    bstrap = config$bstrap,
+    biters = if (config$bstrap) config$biters else NULL,
+    cband = config$cband,
+    pl = config$pl,
+    cores = config$cores,
+    faster_mode = effective_faster_mode,
+    blas = tryCatch(sessionInfo()$BLAS, error = function(e) NULL)
   )
 )
 

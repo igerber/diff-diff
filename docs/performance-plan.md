@@ -129,6 +129,60 @@ its non-convergence warning as evidence of the `max_iter=100` contract issue.
 
 ---
 
+## CallawaySantAnna aggregation IF-assembly rewrite (v3.7, 2026-07)
+
+Profiling at 2M+ rows showed `staggered_aggregation._compute_combined_influence_function`
+was 56-85% of every analytical CS fit: called once per aggregation target (38 targets at
+20 periods, 128 at 60 periods; plus 1 + N_e bootstrap-prep calls), each call re-ran
+per-group full-DataFrame scans (`df[df["first_treat"] == g][unit].nunique()` — cost scales
+with row count × frame width × cohorts × targets: 105 scans/fit at 5 cohorts, 975 at 15),
+per-unit Python dict-lookup loops, and dense `(n_units × n_gt)` WIF matrices (~76MB × 3
+arrays per call at 100k units). The rewrite: per-fit cohort tables (`np.unique` +
+`np.bincount`, identity-validated cache) + closed-form WIF + fancy-index scatter; general
+path preserved as fallback. Point estimates bit-identical; aggregated SEs ≤5e-16 relative.
+
+Measured (medians of 3, M4 Max, Rust backend, otherwise-idle machine; BEFORE = pristine
+`origin/main` worktree, AFTER = frozen branch):
+
+| Scenario | Before | After | Speedup | Peak RSS |
+|---|---:|---:|---:|---|
+| no-cov analytical, 100k units × 20p (2M rows) | 1.32s | 0.21s | **6.3x** | 960→582 MB |
+| no-cov analytical, 250k units (5M rows) | 3.57s | 0.60s | 5.9x | 2.1→1.3 GB |
+| 5-cov reg / ipw / dr (2M rows) | 1.96/2.15/2.49s | 0.56/0.73/1.08s | 3.5/2.9/2.3x | ~-20% |
+| 10/20/40-cov dr (2M rows) | 3.3/4.9/9.3s | 1.5/2.6/5.7s | 2.1/1.9/1.6x | 4.1→3.6 GB @40 |
+| 40 periods × 10 cohorts (4M rows) | 9.09s | 3.91s | 2.3x | 2.6→2.1 GB |
+| 60 periods × 15 cohorts (3M rows) | 9.86s | 4.34s | 2.3x | 2.5→1.9 GB |
+| bootstrap-999 legs (2-4M rows) | 7.2-33.6s | 4.9-24.2s | 1.4-1.6x | ~-10-25% |
+| RCS no-cov / dr / dr+boot (2M obs) | 4.2/7.3/44.0s | 1.5/4.4/39.5s | 2.8/1.7/1.1x | **6.4→2.1 / 7.0→3.2 GB** |
+
+The RCS memory drop is the headline tail-risk fix: in RCS mode the WIF matrices were
+observation-scale. Remaining CS bottlenecks after this rewrite (honest forecast, next
+targets): `_precompute_structures` pandas groupby+pivot (now #1 on analytical no-cov
+fits), the bootstrap draw-loop matmul (Phase 2 candidate; 999 × 100k × 390 cells),
+and per-cell DR/IPW nuisance solvers at high covariate counts (IRLS `lstsq`, rank-guard
+QR — Phase 3 candidate).
+
+**R `did` yardstick** (did 2.5.1 — the 2.5.0 performance release with `faster_mode` and
+the tiled-contraction bootstrap — R 4.5.2 + OpenBLAS 0.3.33; equal work: `att_gt` +
+`aggte` simple+dynamic+group vs `fit(aggregate="all")`; identical `biters`/`cband`;
+medians of 3; run configs recorded in each JSON artifact's metadata):
+
+| Scenario | diff-diff | R 1-core | R 14-core (`pl=TRUE, cores=14`) |
+|---|---:|---:|---:|
+| no-cov analytical (2M rows) | 0.21s | 2.29s | 2.29s |
+| 5-cov dr analytical | 1.09s | 3.67s | 3.74s |
+| no-cov bootstrap 999 | 5.11s | 16.33s | 16.14s |
+| 5-cov dr bootstrap 999 | 6.13s | 18.39s | 17.58s |
+| 40p × 10c, 5-cov (4M rows) | 3.88s | 13.76s | 13.72s |
+
+3-11x vs R at equal work under both R threading modes. The flat R multi-core column is
+not a rigged comparison: did 2.5's bootstrap is a tiled BLAS contraction that already
+multithreads through OpenBLAS, so fork-level `pl`/`cores` parallelism adds nothing on
+this path — both arms are effectively multithreaded R. ATTs match R exactly at displayed
+precision; analytical SEs to 5 significant digits; bootstrap SEs within ~1% (Monte Carlo).
+
+---
+
 ## Memory scaling at the millions-of-units tail (v3.x, June 2026)
 
 At the scale where the dense working arrays - not compute - are the binding constraint

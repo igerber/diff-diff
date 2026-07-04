@@ -505,6 +505,22 @@ Aggregations:
 - Bootstrap: Multiplier bootstrap with Rademacher, Mammen, or Webb weights. Bootstrap
   perturbs the combined influence function (standard IF + WIF) directly, not just fixed-weight
   re-aggregation. This correctly propagates weight estimation uncertainty.
+- **Note:** The combined-IF assembly (`_compute_combined_influence_function`) routes
+  in-package callers through an O(n_units) fast path (v3.7): per-fit cohort tables
+  (unit counts or survey-weighted masses via `np.unique` + `np.bincount`, cached on the
+  precomputed structures with array-identity validation) and a closed-form WIF
+  `wif_i = w_i * (E(c_i)/S - K(c_i) * d / S**2)` — algebraically identical to the prior
+  dense `(n_units x n_gt)` `wif_matrix @ effects` (E(c)/K(c) = per-cohort effect
+  sums/keeper counts, S = sum of keeper pg, d = pg @ effects, w_i = survey weight or 1).
+  Point estimates are unaffected (bit-identical); aggregated SEs agree with the dense
+  form only to floating-point reassociation (measured ≤ 5e-16 relative; drift-bound
+  frozen-copy tests pin ≤ 1e-9, `tests/test_staggered_aggregation.py`), not
+  bit-for-bit — same accumulation-order posture as the shared demeaning engine
+  (see "Absorbed Fixed Effects with Survey Weights"). Units whose cohort is not
+  among the keeper (g,t) groups get an exact 0 WIF contribution (the dense form
+  realized the same value through cancelling terms). The pre-rewrite general path
+  is preserved verbatim as the fallback for direct callers with foreign index maps,
+  non-numeric cohort dtypes, or absent precomputed structures.
 - Block structure preserves within-unit correlation
 - Simultaneous confidence bands (`cband=True`, default): Uses sup-t bootstrap to compute
   a uniform critical value across event times, controlling family-wise error rate. Matches

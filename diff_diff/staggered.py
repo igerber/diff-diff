@@ -1008,6 +1008,10 @@ class CallawaySantAnna(
         # Package influence function info with index arrays (positions into
         # precomputed['all_units']) for O(1) downstream lookups instead of
         # O(n) Python dict lookups.
+        # INVARIANT: treated_idx/control_idx are np.where over boolean masks,
+        # so each is duplicate-free - the aggregation fast path relies on this
+        # to scatter with fancy `psi[idx] += vals` (see
+        # staggered_aggregation._combined_if_fast).
         n_t = int(n_treated)
         all_units = precomputed["all_units"]
         treated_positions = np.where(treated_valid)[0]
@@ -1576,6 +1580,9 @@ class CallawaySantAnna(
                     "skip_reason": None,
                 }
 
+                # INVARIANT: np.where over boolean masks -> duplicate-free
+                # index arrays (fancy-+= scatter contract, see
+                # staggered_aggregation._combined_if_fast).
                 all_units = precomputed["all_units"]
                 treated_positions = np.where(treated_valid)[0]
                 control_positions = np.where(control_valid)[0]
@@ -3511,7 +3518,11 @@ class CallawaySantAnna(
             )
 
         # Build influence function info
-        # For RCS, treated_idx/control_idx combine obs from BOTH periods
+        # For RCS, treated_idx/control_idx combine obs from BOTH periods.
+        # INVARIANT: the two period masks are disjoint (obs_time == t vs
+        # == base period), so the concatenated index arrays stay
+        # duplicate-free (fancy-+= scatter contract, see
+        # staggered_aggregation._combined_if_fast).
         treated_idx = np.concatenate([np.where(treated_t)[0], np.where(treated_s)[0]])
         control_idx = np.concatenate([np.where(control_t)[0], np.where(control_s)[0]])
 

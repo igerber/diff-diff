@@ -482,6 +482,9 @@ class StaggeredTripleDifference(
                 inf_gmm_rescaled = inf_gmm * (n_units / size_gt)
                 inf_gmm_scaled = inf_gmm_rescaled / n_units
 
+                # INVARIANT: np.where over boolean masks -> duplicate-free
+                # index arrays (fancy-+= scatter contract, see
+                # staggered_aggregation._combined_if_fast).
                 treated_idx = np.where(treated_mask)[0]
                 treated_inf = inf_gmm_scaled[treated_idx]
                 nonzero_mask = (inf_gmm_scaled != 0) & ~treated_mask
