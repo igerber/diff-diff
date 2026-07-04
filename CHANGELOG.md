@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **`HeterogeneousAdoptionDiD` event-study `cluster=` support** (both designs). On
+  `aggregate="event_study"`, `cluster=` now produces cluster-robust per-horizon pointwise
+  confidence intervals AND a cluster-robust simultaneous sup-t confidence band (`cband=True`),
+  on the continuous (CCT local-linear) and mass-point (2SLS) paths, unweighted or weighted —
+  previously `cluster=` was ignored on the nonparametric event-study path (with a `UserWarning`)
+  and the weighted mass-point `cband=True` case raised `NotImplementedError`. The clustered band
+  draws cluster-level multipliers on the per-unit influence function; the variance family is
+  reconciled to each path's analytical cluster-robust SE (exact for continuous; `√(G/(G-1))` CR1
+  scaling for mass-point). `cluster=` + `survey=` is rejected — route clustering through
+  `survey_design=SurveyDesign(psu=<cluster_col>)`. No behavior change for unclustered fits.
+
 ### Fixed
 - **Dube, Girardi, Jordà & Taylor (2025) citation corrected to *J. Applied Econometrics*
   40(**7**):741-758** (was cited as issue 5) across `docs/references.rst`,

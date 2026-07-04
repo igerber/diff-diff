@@ -49,10 +49,9 @@ Unit Remains Untreated" (arXiv:2405.04465v6), which:
    - **``weights=np.ndarray`` shortcut (deprecated)** - continuous paths
      reuse the CCT-2014 SE; the mass-point path uses an analytical
      weighted 2SLS sandwich (``classical`` / ``hc1``; CR1 when
-     ``cluster=`` is supplied, except ``cluster=`` +
-     ``aggregate="event_study"`` + ``cband=True`` is rejected outright
-     regardless of ``vcov_type`` per the cluster-combination deviation
-     below; ``hc2`` / ``hc2_bm`` raise ``NotImplementedError`` pending a
+     ``cluster=`` is supplied - including ``aggregate="event_study"`` +
+     ``cband=True``, which adds a cluster-robust simultaneous band;
+     ``hc2`` / ``hc2_bm`` raise ``NotImplementedError`` pending a
      2SLS-specific leverage derivation). Yields
      ``variance_formula="pweight"`` / ``"pweight_2sls"``.
    - **``survey_design=SurveyDesign(weights="col", ...)``** (canonical;
@@ -79,16 +78,22 @@ Unit Remains Untreated" (arXiv:2405.04465v6), which:
    workflow ``did_had_pretest_workflow`` handles this by skipping QUG
    under survey/weighted dispatch and emitting a ``UserWarning``.
 
-   A simultaneous confidence band (sup-t) is available only on the
-   **weighted event-study path** via ``cband=True``. Joint cross-horizon
-   analytical covariance is not computed in this release; tracked in
-   ``TODO.md``.
+   A simultaneous confidence band (sup-t) is available on the event-study
+   path via ``cband=True`` whenever ``weights=``/``survey_design=`` **or**
+   ``cluster=`` is supplied. With ``cluster=`` the band is cluster-robust
+   (pointwise CIs are cluster-robust too), on both designs and unweighted
+   or weighted; ``cluster=`` + ``survey_design=`` is rejected (route
+   clustering through ``survey_design=SurveyDesign(psu=<cluster_col>)``).
+   Joint cross-horizon analytical covariance is not computed in this
+   release; tracked in ``TODO.md``.
 
    **Mass-point ``vcov_type="classical"`` deviation.** The mass-point
    ``survey_design=SurveyDesign(...)`` paths (static and event-study) and
    the deprecated ``weights=`` + ``aggregate="event_study"`` +
    ``cband=True`` path reject ``vcov_type="classical"`` with
-   ``NotImplementedError``. The per-unit 2SLS influence function returned
+   ``NotImplementedError`` **when ``cluster=`` is not set** (a ``cluster=``
+   fit computes the CR1 sandwich regardless of ``vcov_type``, so no
+   classical/HC1 mismatch arises). The per-unit 2SLS influence function returned
    by the mass-point fit is HC1-scaled so that
    ``compute_survey_if_variance`` and the sup-t bootstrap target
    ``V_HC1`` consistently; mixing it with a classical analytical SE
@@ -98,23 +103,20 @@ Unit Remains Untreated" (arXiv:2405.04465v6), which:
    ``vcov_type="classical"``, which triggers the guard); a
    classical-aligned IF derivation is queued for a follow-up PR.
 
-   **Mass-point cluster-combination deviation.** On
-   ``design="mass_point"``, two clustered weighted paths are rejected
-   outright regardless of ``vcov_type``:
-
-   - ``survey_design=SurveyDesign(...)`` + ``cluster=`` (static and
-     event-study): the survey path composes Binder-TSL variance, which
-     would silently override the CR1 cluster-robust sandwich.
-     Workarounds: ``cluster=`` alone (unweighted CR1), or ``weights=``
-     + ``cluster=`` (weighted-CR1 pweight sandwich), or
-     ``survey_design=`` alone (Binder-TSL). Combined cluster-robust +
-     survey inference is queued for a follow-up PR.
-   - Deprecated ``weights=`` shortcut + ``cluster=`` +
-     ``aggregate="event_study"`` + ``cband=True``: the sup-t bootstrap
-     normalizes HC1-scale perturbations by the CR1 analytical SE,
-     mixing variance families. Workarounds: pass ``cband=False`` (keeps
-     weighted-CR1 per-horizon), or drop ``cluster=`` (keeps
-     weighted-HC1 sup-t).
+   **``cluster=`` + ``survey_design=`` deviation.** On both designs,
+   ``cluster=`` + ``survey_design=SurveyDesign(...)`` (static and
+   event-study) is rejected outright regardless of ``vcov_type``: the
+   survey path composes Binder-TSL variance, which would silently
+   override the cluster-robust sandwich. Workarounds: ``cluster=`` alone
+   (unweighted cluster-robust), ``weights=`` + ``cluster=`` (weighted
+   cluster-robust, pointwise + simultaneous band), or route clustering
+   through ``survey_design=SurveyDesign(psu=<cluster_col>)``. All other
+   ``cluster=`` compositions are supported end-to-end, including the
+   ``weights=`` + ``cluster=`` + ``aggregate="event_study"`` +
+   ``cband=True`` mass-point path (formerly rejected): the clustered
+   sup-t band draws cluster-level multipliers on the per-unit influence
+   function and normalizes by the CR1 analytical SE (variance families
+   reconciled via the ``√(G/(G-1))`` CR1 scalar).
 
 .. tip::
 

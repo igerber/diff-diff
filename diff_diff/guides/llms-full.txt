@@ -738,8 +738,8 @@ HeterogeneousAdoptionDiD(
     alpha: float = 0.05,
     vcov_type: str | None = None,      # Mass-point only: "classical" (default) or "hc1"
     robust: bool = False,              # Mass-point only: HC1 robust SE shorthand
-    cluster: str | None = None,        # Mass-point only: cluster column for CR1 cluster-robust SE
-    n_bootstrap: int = 999,            # Multiplier-bootstrap iterations for sup-t bands (event-study + weighted)
+    cluster: str | None = None,        # Cluster column for cluster-robust SEs (all designs; event-study adds a cluster-robust sup-t band). cluster= + survey_design= rejected
+    n_bootstrap: int = 999,            # Multiplier-bootstrap iterations for sup-t bands (event-study, when weighted/survey OR clustered)
     seed: int | None = None,
 )
 ```
@@ -759,7 +759,7 @@ had.fit(
     aggregate: str = "overall",                # "overall" (single scalar WAS) or "event_study" (per-horizon WAS)
     survey: SurveyDesign | None = None,        # DEPRECATED alias of survey_design=
     weights: np.ndarray | None = None,         # DEPRECATED pweight shortcut alias
-    cband: bool = True,                        # Simultaneous (sup-t) confidence bands on weighted event-study fits
+    cband: bool = True,                        # Simultaneous (sup-t) confidence bands on event-study fits that are weighted/survey OR clustered
     *,
     survey_design: SurveyDesign | None = None, # Canonical survey-design kwarg (weights, strata, PSU, FPC)
     trends_lin: bool = False,                  # Eq 17 linear-trend detrending. Requires aggregate="event_study"; needs F>=3 (pre-period depth) for the regression; rejects ALL weighting entry paths (survey_design= / survey= / weights= all raise NotImplementedError under trends_lin).
@@ -799,7 +799,7 @@ es = est.fit(data_mp, outcome_col='y', unit_col='unit',
 
 **Staggered panels.** On multi-cohort panels with `aggregate="event_study"`, `fit()` auto-filters to the last treatment cohort plus never-treated units (paper Appendix B.2) and emits a `UserWarning` naming kept/dropped counts. The estimand is then a **last-cohort-only WAS**, not a multi-cohort average. For full multi-cohort staggered support, see `ChaisemartinDHaultfoeuille`.
 
-**Mass-point + survey constraint.** When fitting `design="mass_point"` with `survey_design=` (or the deprecated `survey=` alias), `vcov_type="hc1"` (or `robust=True`) is required: the survey path composes the standard error via Binder-TSL on the HC1-scale influence function, so the default classical sandwich path raises `NotImplementedError`. The same HC1 requirement also fires on the `weights=` shortcut when `aggregate="event_study"` AND `cband=True`: the per-horizon IF matrix is HC1-scale and the sup-t bootstrap normalizes by it, so mixing in a classical analytical SE would produce inconsistent variance families. Classical vcov is allowed on `weights=` + `aggregate="overall"` and on `weights=` + `aggregate="event_study"` + `cband=False`. Passing `vcov_type="hc1"` is a safe default on weighted survey + sup-t examples since `vcov_type` is unused on the continuous designs (CCT-2014 robust SE is the only formula there).
+**Mass-point + survey constraint.** When fitting `design="mass_point"` with `survey_design=` (or the deprecated `survey=` alias), `vcov_type="hc1"` (or `robust=True`) is required: the survey path composes the standard error via Binder-TSL on the HC1-scale influence function, so the default classical sandwich path raises `NotImplementedError`. The same HC1 requirement also fires on the `weights=` shortcut when `aggregate="event_study"` AND `cband=True` — UNLESS `cluster=` is set (a clustered mass-point fit resolves to the CR1 sandwich regardless of `vcov_type` and uses the clustered sup-t band, so there is no classical-vs-HC1 mismatch): the per-horizon IF matrix is HC1-scale and the sup-t bootstrap normalizes by it, so mixing in a classical analytical SE would produce inconsistent variance families. Classical vcov is allowed on `weights=` + `aggregate="overall"` and on `weights=` + `aggregate="event_study"` + `cband=False`. Passing `vcov_type="hc1"` is a safe default on weighted survey + sup-t examples since `vcov_type` is unused on the continuous designs (CCT-2014 robust SE is the only formula there).
 
 ### StackedDiD
 
@@ -1545,7 +1545,7 @@ Per-horizon event-study results container for `HeterogeneousAdoptionDiD` with `a
 | `F` | `object` | First-treatment period label |
 | `n_units` | `int` | Unique units contributing to the fit (post last-cohort filter) |
 | `inference_method` | `str` | `"analytical_nonparametric"` or `"analytical_2sls"` |
-| `vcov_type` | `str | None` | Mass-point only: `"classical"`, `"hc1"`, or `"cr1"`; `None` on continuous designs |
+| `vcov_type` | `str | None` | Mass-point: `"classical"`, `"hc1"`, or `"cr1"` (with `cluster=`). Continuous: `None`, or `"cr1"` with `cluster=` |
 | `cluster_name` | `str | None` | Cluster column name when CR1 is requested; `None` otherwise |
 | `survey_metadata` | `SurveyMetadata | None` | Populated on weighted fits |
 | `bandwidth_diagnostics` | `list[BandwidthResult | None] | None` | Per-horizon MSE-DPI selector output (continuous designs); `None` on `mass_point`; entries can be `None` on degenerate horizons |
@@ -1553,10 +1553,10 @@ Per-horizon event-study results container for `HeterogeneousAdoptionDiD` with `a
 | `filter_info` | `dict | None` | Staggered last-cohort auto-filter metadata (`F_last`, `n_kept`, `n_dropped`, `dropped_cohorts`); `None` when no filter applied |
 | `variance_formula` | `str | None` | HAD-specific SE label applied UNIFORMLY across all horizons, populated on BOTH continuous and mass-point designs: `"pweight"` (continuous, CCT 2014 weighted-robust on the `weights=` shortcut), `"survey_binder_tsl"` (continuous, Binder 1983 TSL on the `survey_design=` path), `"pweight_2sls"` (mass-point + `weights=`; label applied uniformly across vcov families — classical / HC1 / CR1 — on the weighted 2SLS path, with the actual sandwich resolved via `vcov_type`), or `"survey_binder_tsl_2sls"` (mass-point, Binder 1983 TSL on the `survey_design=` path). `None` on unweighted fits |
 | `effective_dose_mean` | `float | None` | Weighted denominator used by the β̂-scale rescaling, populated on weighted fits across all designs: weighted `sum(w·d)/sum(w)` (`continuous_at_zero`), weighted `sum(w·(d − d_lower))/sum(w)` (`continuous_near_d_lower`), or weighted Wald-IV dose gap (`mass_point`). Scalar (not per-horizon) because the β̂-scale denominator is computed once on the fit sample. `None` on unweighted fits |
-| `cband_low` | `np.ndarray | None` | Simultaneous (sup-t) band lower bounds; `None` on unweighted fits or when `cband=False` |
+| `cband_low` | `np.ndarray | None` | Simultaneous (sup-t) band lower bounds; `None` when `cband=False` or on unweighted, unclustered fits (a clustered fit produces the band even when unweighted) |
 | `cband_high` | `np.ndarray | None` | Simultaneous (sup-t) band upper bounds |
 | `cband_crit_value` | `float | None` | Sup-t critical value used for the simultaneous band |
-| `cband_method` | `str | None` | `"multiplier_bootstrap"` when populated |
+| `cband_method` | `str | None` | `"multiplier_bootstrap"` (weighted/survey band) or `"cluster_multiplier_bootstrap"` (clustered band) when populated |
 | `cband_n_bootstrap` | `int | None` | Bootstrap iterations used for the band |
 
 **Methods:** `summary()`, `print_summary()`, `to_dict()`, `to_dataframe()`

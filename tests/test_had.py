@@ -3277,7 +3277,7 @@ class TestEventStudySklearnCompat:
 
 
 class TestEventStudyWarnings:
-    """Continuous-path warnings on event-study mode (vcov/robust/cluster ignored)."""
+    """Continuous-path warnings on event-study mode (vcov/robust ignored; cluster= is now threaded)."""
 
     def _panel(self):
         rng = np.random.default_rng(0)
@@ -3297,17 +3297,30 @@ class TestEventStudyWarnings:
         ]
         assert len(vcov_warnings) == 1  # ONE per fit, not per horizon
 
-    def test_cluster_ignored_on_continuous(self):
+    def test_cluster_threaded_on_continuous_event_study(self):
+        # Phase 2b: cluster= is now threaded into the per-horizon CCT SE on
+        # the continuous event-study path (no longer ignored). No "ignored"
+        # warning; SE becomes cluster-robust; result surface labels the
+        # cluster-robust variance.
         panel = self._panel()
         panel["state"] = panel["unit"] % 20
-        est = HeterogeneousAdoptionDiD(design="auto", cluster="state")
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
-            est.fit(panel, "outcome", "dose", "period", "unit", aggregate="event_study")
+            r_cl = HeterogeneousAdoptionDiD(design="auto", cluster="state").fit(
+                panel, "outcome", "dose", "period", "unit", aggregate="event_study"
+            )
         cluster_warnings = [
-            msg for msg in w if "cluster=" in str(msg.message) and "ignored" in str(msg.message)
+            msg
+            for msg in w
+            if "cluster=" in str(msg.message) and "ignored" in str(msg.message).lower()
         ]
-        assert len(cluster_warnings) == 1
+        assert len(cluster_warnings) == 0
+        r_un = HeterogeneousAdoptionDiD(design="auto").fit(
+            panel, "outcome", "dose", "period", "unit", aggregate="event_study"
+        )
+        assert not np.allclose(r_cl.se, r_un.se)
+        assert r_cl.vcov_type == "cr1"
+        assert r_cl.cluster_name == "state"
 
 
 class TestEventStudyValidator:
@@ -4756,6 +4769,275 @@ class TestSupTReducesToNormalAtH1:
         )
         assert q1 == q2
 
+    def test_clustered_sup_t_h1_reduces_to_normal(self):
+        """Clustered branch: at H=1 the sup-t crit reduces to the Normal
+        quantile for BOTH the continuous scalar (1.0) and the mass-point
+        CR1 scalar sqrt(G/(G-1)) — the decisive variance-family check."""
+        import scipy.stats
+
+        from diff_diff.had import _sup_t_multiplier_bootstrap
+
+        rng = np.random.default_rng(3)
+        n_units, n_clusters = 300, 30
+        cluster_ids = rng.integers(0, n_clusters, size=n_units)
+        expected = float(scipy.stats.norm.ppf(0.975))
+
+        def _cluster_se(psi, scale):
+            labels = pd.unique(cluster_ids)
+            lab = {v: r for r, v in enumerate(labels)}
+            pcl = np.zeros((len(labels), psi.shape[1]))
+            for i in range(n_units):
+                pcl[lab[cluster_ids[i]]] += psi[i]
+            return np.sqrt(((scale * pcl) ** 2).sum(axis=0))
+
+        for scale in (1.0, float(np.sqrt(n_clusters / (n_clusters - 1)))):
+            psi = rng.standard_normal((n_units, 1))
+            se = _cluster_se(psi, scale)
+            q, _lo, _hi, n_valid = _sup_t_multiplier_bootstrap(
+                psi,
+                np.zeros(1),
+                se,
+                None,
+                n_bootstrap=20000,
+                alpha=0.05,
+                seed=7,
+                cluster_ids=cluster_ids,
+                cluster_if_scale=scale,
+            )
+            assert n_valid >= 18000
+            assert abs(q - expected) < 0.10, (
+                f"clustered H=1 sup-t (scale={scale:.4f}) should reduce to "
+                f"Phi^-1(0.975)={expected:.4f}; got {q:.4f} — variance-family "
+                f"drift in the clustered bootstrap branch."
+            )
+
+    def test_clustered_sup_t_single_cluster_nan(self):
+        """One cluster → NaN crit / None band (CR undefined)."""
+        from diff_diff.had import _sup_t_multiplier_bootstrap
+
+        rng = np.random.default_rng(0)
+        psi = rng.standard_normal((100, 1))
+        q, lo, hi, n_valid = _sup_t_multiplier_bootstrap(
+            psi,
+            np.zeros(1),
+            np.array([1.0]),
+            None,
+            n_bootstrap=500,
+            alpha=0.05,
+            seed=1,
+            cluster_ids=np.zeros(100, dtype=int),
+        )
+        assert np.isnan(q) and lo is None and hi is None and n_valid == 0
+
+
+class TestEventStudyClusterBand:
+    """Phase 2b: cluster-robust event-study pointwise CIs + clustered sup-t
+    simultaneous band (continuous + mass-point). The core reconciliation is
+    that the cluster-aggregated influence function reproduces the analytical
+    cluster-robust SE — exactly (continuous, scale 1.0) or after the CR1
+    sqrt(G/(G-1)) scalar (mass-point)."""
+
+    @staticmethod
+    def _clustered_panel(G=240, n_clusters=24, seed=0):
+        rng = np.random.default_rng(seed)
+        d = np.where(rng.random(G) < 0.15, 0.0, rng.uniform(0.2, 1.2, size=G))
+        d[0] = 0.0
+        state = np.repeat(np.arange(n_clusters), G // n_clusters)
+        panel = _make_multi_period_panel(
+            d, n_periods=5, F=3, seed=seed, extra_cols={"state": state}
+        )
+        return panel
+
+    def test_continuous_if_reconciliation_deterministic(self):
+        """sqrt(sum_c (sum_{i in c} IF_i)^2) == se_robust for the cluster-
+        robust CCT fit (scale 1.0) — bootstrap-free proof of the continuous
+        reconciliation on the REAL influence function."""
+        d, dy, cl = self._make_cluster_dgp(seed=1)
+        bc = bias_corrected_local_linear(d=d, y=dy, boundary=0.0, cluster=cl, return_influence=True)
+        recon = self._cluster_agg_norm(bc.influence_function, cl, scale=1.0)
+        np.testing.assert_allclose(recon, bc.se_robust, rtol=0, atol=1e-10)
+
+    def test_masspoint_if_reconciliation_deterministic(self):
+        """sqrt(sum_c (sqrt(G/(G-1)) * sum_{i in c} psi_i)^2) == se for the
+        mass-point CR1 fit — bootstrap-free proof the sqrt(G/(G-1)) scalar
+        exactly restores the CR1 finite-sample factor on the REAL IF."""
+        from diff_diff.had import _fit_mass_point_2sls
+
+        rng = np.random.default_rng(2)
+        G, d_lower = 240, 0.5
+        mass_n = G // 3
+        d = np.concatenate([np.full(mass_n, d_lower), rng.uniform(d_lower, 1.0, G - mass_n)])
+        rng.shuffle(d)
+        cl = np.arange(G) % 20
+        shock = rng.normal(scale=0.5, size=20)[cl]
+        dy = 0.3 * d + shock + 0.1 * rng.standard_normal(G)
+        _beta, se, psi = _fit_mass_point_2sls(d, dy, d_lower, cl, "hc1", return_influence=True)
+        n_cl = len(pd.unique(cl))
+        recon = self._cluster_agg_norm(psi, cl, scale=float(np.sqrt(n_cl / (n_cl - 1))))
+        np.testing.assert_allclose(recon, se, rtol=0, atol=1e-10)
+
+    def test_continuous_clustered_band_end_to_end(self):
+        import scipy.stats
+
+        panel = self._clustered_panel(seed=2)
+        r = HeterogeneousAdoptionDiD(
+            design="continuous_at_zero", cluster="state", n_bootstrap=1500, seed=11
+        ).fit(panel, "outcome", "dose", "period", "unit", aggregate="event_study", cband=True)
+        assert r.vcov_type == "cr1" and r.cluster_name == "state"
+        assert r.cband_low is not None and np.all(np.isfinite(r.cband_low))
+        assert r.cband_high is not None and np.all(np.isfinite(r.cband_high))
+        assert r.cband_method == "cluster_multiplier_bootstrap"
+        assert r.cband_crit_value >= float(scipy.stats.norm.ppf(0.975)) - 0.05
+        # Simultaneous band is at least as wide as the pointwise CI.
+        assert np.all(r.cband_low <= r.conf_int_low + 1e-9)
+        assert np.all(r.cband_high >= r.conf_int_high - 1e-9)
+
+    def test_masspoint_weighted_cluster_cband_no_longer_raises(self):
+        """Symmetry: weighted mass-point + cluster= + cband=True used to raise
+        NotImplementedError; the clustered band now reconciles it."""
+        rng = np.random.default_rng(4)
+        G, d_lower = 240, 0.5
+        mass_n = G // 3
+        d = np.concatenate([np.full(mass_n, d_lower), rng.uniform(d_lower, 1.0, G - mass_n)])
+        rng.shuffle(d)
+        state = np.arange(G) % 24
+        panel = _make_multi_period_panel(d, n_periods=5, F=3, seed=5, extra_cols={"state": state})
+        w_unit = rng.uniform(0.5, 2.0, G)
+        w_row = w_unit[panel["unit"].to_numpy()]
+        r = HeterogeneousAdoptionDiD(
+            design="mass_point", cluster="state", d_lower=d_lower, n_bootstrap=1500, seed=9
+        ).fit(
+            panel,
+            "outcome",
+            "dose",
+            "period",
+            "unit",
+            aggregate="event_study",
+            weights=w_row,
+            cband=True,
+        )
+        assert r.vcov_type == "cr1" and r.cluster_name == "state"
+        assert r.cband_low is not None and np.all(np.isfinite(r.cband_low))
+        assert r.cband_method == "cluster_multiplier_bootstrap"
+
+    def test_weighted_continuous_clustered_band_end_to_end(self):
+        """Weighted continuous event-study + cluster= + cband: finite
+        cluster-robust band (the weighted arm of the continuous path)."""
+        rng = np.random.default_rng(6)
+        G = 240
+        d = np.where(rng.random(G) < 0.15, 0.0, rng.uniform(0.2, 1.2, size=G))
+        d[0] = 0.0
+        state = np.repeat(np.arange(24), G // 24)
+        panel = _make_multi_period_panel(d, n_periods=5, F=3, seed=6, extra_cols={"state": state})
+        w_unit = rng.uniform(0.5, 2.0, G)
+        w_row = w_unit[panel["unit"].to_numpy()]
+        r = HeterogeneousAdoptionDiD(
+            design="continuous_at_zero", cluster="state", n_bootstrap=1500, seed=13
+        ).fit(
+            panel,
+            "outcome",
+            "dose",
+            "period",
+            "unit",
+            aggregate="event_study",
+            weights=w_row,
+            cband=True,
+        )
+        assert r.vcov_type == "cr1" and r.cluster_name == "state"
+        assert r.cband_low is not None and np.all(np.isfinite(r.cband_low))
+        assert r.cband_method == "cluster_multiplier_bootstrap"
+
+    def test_unweighted_masspoint_clustered_band_end_to_end(self):
+        """Unweighted mass-point event-study + cluster= + cband: finite
+        cluster-robust band (the unweighted arm of the mass-point path)."""
+        rng = np.random.default_rng(7)
+        G, d_lower = 240, 0.5
+        mass_n = G // 3
+        d = np.concatenate([np.full(mass_n, d_lower), rng.uniform(d_lower, 1.0, G - mass_n)])
+        rng.shuffle(d)
+        state = np.arange(G) % 24
+        panel = _make_multi_period_panel(d, n_periods=5, F=3, seed=7, extra_cols={"state": state})
+        r = HeterogeneousAdoptionDiD(
+            design="mass_point", cluster="state", d_lower=d_lower, n_bootstrap=1500, seed=17
+        ).fit(panel, "outcome", "dose", "period", "unit", aggregate="event_study", cband=True)
+        assert r.vcov_type == "cr1" and r.cluster_name == "state"
+        assert r.cband_low is not None and np.all(np.isfinite(r.cband_low))
+        assert r.cband_method == "cluster_multiplier_bootstrap"
+
+    def test_cluster_survey_event_study_raises(self):
+        from diff_diff.survey import SurveyDesign
+
+        panel = self._clustered_panel(seed=3)
+        panel["w"] = 1.0
+        with pytest.raises(NotImplementedError, match=r"cluster.*\+ survey="):
+            HeterogeneousAdoptionDiD(design="continuous_at_zero", cluster="state").fit(
+                panel,
+                "outcome",
+                "dose",
+                "period",
+                "unit",
+                aggregate="event_study",
+                survey_design=SurveyDesign(weights="w"),
+            )
+
+    def test_single_cluster_band_nan_and_warns(self):
+        # Dense dose (mirrors the static single-cluster test) so the local-
+        # linear fit resolves gracefully to NaN CR SEs rather than a
+        # degenerate-bandwidth error; the band guard then fires.
+        rng = np.random.default_rng(0)
+        G = 300
+        d = rng.uniform(0.0, 1.0, G)
+        d[0] = 0.0
+        panel = _make_multi_period_panel(
+            d, n_periods=5, F=3, seed=0, extra_cols={"state": np.zeros(G, dtype=int)}
+        )
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            r = HeterogeneousAdoptionDiD(
+                design="continuous_at_zero", cluster="state", n_bootstrap=500, seed=1
+            ).fit(panel, "outcome", "dose", "period", "unit", aggregate="event_study", cband=True)
+        assert r.cband_low is None and r.cband_high is None
+        assert any("single cluster" in str(x.message).lower() for x in w)
+        # "Undefined band" (crit=NaN, method/count populated), NOT "band
+        # skipped" (all None) — distinguishable by the caller.
+        assert r.cband_crit_value is not None and np.isnan(r.cband_crit_value)
+        assert r.cband_method == "cluster_multiplier_bootstrap"
+        assert r.cband_n_bootstrap == 500
+
+    def test_clustered_band_determinism(self):
+        panel = self._clustered_panel(seed=2)
+        kw = dict(design="continuous_at_zero", cluster="state", n_bootstrap=800, seed=21)
+        fit_kw = dict(aggregate="event_study", cband=True)
+        r1 = HeterogeneousAdoptionDiD(**kw).fit(
+            panel, "outcome", "dose", "period", "unit", **fit_kw
+        )
+        r2 = HeterogeneousAdoptionDiD(**kw).fit(
+            panel, "outcome", "dose", "period", "unit", **fit_kw
+        )
+        np.testing.assert_array_equal(r1.cband_low, r2.cband_low)
+        np.testing.assert_array_equal(r1.cband_high, r2.cband_high)
+        assert r1.cband_crit_value == r2.cband_crit_value
+
+    # ---- helpers ----
+    @staticmethod
+    def _make_cluster_dgp(G=200, n_clusters=20, seed=0):
+        rng = np.random.default_rng(seed)
+        d = np.where(rng.random(G) < 0.15, 0.0, rng.uniform(0.2, 1.5, size=G))
+        d[0] = 0.0
+        cl = np.repeat(np.arange(n_clusters), G // n_clusters)
+        shock = rng.normal(scale=1.0, size=n_clusters)[cl]
+        dy = 1.5 * d + shock + rng.normal(scale=0.3, size=G)
+        return d, dy, cl
+
+    @staticmethod
+    def _cluster_agg_norm(if_vec, cl, scale):
+        labels = pd.unique(cl)
+        lab = {v: r for r, v in enumerate(labels)}
+        s = np.zeros(len(labels))
+        for i in range(len(cl)):
+            s[lab[cl[i]]] += if_vec[i]
+        return float(np.sqrt(np.sum((scale * s) ** 2)))
+
 
 class TestEventStudySurveyCband:
     """Event-study + weights / survey + sup-t cband scope (Phase 4.5 B)."""
@@ -5046,9 +5328,10 @@ class TestEventStudySurveyCband:
             with pytest.raises(NotImplementedError, match="cluster"):
                 est.fit(panel, "outcome", "dose", "period", "unit", survey=sd)
 
-    def test_mass_point_survey_plus_cluster_rejected_event_study(self):
-        """Review R2 P1 (event-study arm): same rejection must fire on
-        the multi-period dispatch."""
+    def test_mass_point_weights_plus_cluster_event_study_supported(self):
+        """Phase 2b: mass-point + weights= + cluster= + cband (default True)
+        is now SUPPORTED (was rejected) — the clustered sup-t band reconciles
+        the CR1 variance family via the sqrt(G/(G-1)) scalar."""
         rng = np.random.default_rng(1)
         G, T = 150, 4
         d_mp = np.concatenate([np.full(30, 0.3), rng.uniform(0.3, 1.0, G - 30)])
@@ -5062,17 +5345,21 @@ class TestEventStudySurveyCband:
         panel = pd.DataFrame(rows, columns=["unit", "period", "dose", "outcome", "state"])
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", UserWarning)
-            est = HeterogeneousAdoptionDiD(design="mass_point", vcov_type="hc1", cluster="state")
-            with pytest.raises(NotImplementedError, match="cluster"):
-                est.fit(
-                    panel,
-                    "outcome",
-                    "dose",
-                    "period",
-                    "unit",
-                    aggregate="event_study",
-                    weights=np.ones(panel.shape[0]),
-                )
+            est = HeterogeneousAdoptionDiD(
+                design="mass_point", vcov_type="hc1", cluster="state", seed=0, n_bootstrap=500
+            )
+            r = est.fit(
+                panel,
+                "outcome",
+                "dose",
+                "period",
+                "unit",
+                aggregate="event_study",
+                weights=np.ones(panel.shape[0]),
+            )
+        assert r.vcov_type == "cr1" and r.cluster_name == "state"
+        assert r.cband_low is not None and np.all(np.isfinite(r.cband_low))
+        assert r.cband_method == "cluster_multiplier_bootstrap"
 
     def test_lonely_psu_adjust_with_singletons_rejected_on_cband(self):
         """Review R2 P1: sup-t bootstrap rejects lonely_psu='adjust'
@@ -5376,11 +5663,11 @@ class TestEventStudySurveyCband:
         assert r.variance_formula == "pweight_2sls"
         assert r.cband_crit_value is None
 
-    def test_mass_point_weights_plus_cluster_event_study_cband_true_rejected(self):
-        """Review R4 P1: event-study + weights= + cluster= + cband=True
-        IS rejected (HC1-scale bootstrap perturbations normalized by
-        CR1 analytical SE would mix variance families in the bootstrap
-        t-distribution)."""
+    def test_mass_point_weights_plus_cluster_event_study_cband_true_supported(self):
+        """Phase 2b: event-study + weights= + cluster= + cband=True is now
+        SUPPORTED (previously rejected). The clustered bootstrap draws
+        cluster-level multipliers on the per-unit IF and normalizes by the
+        CR1 analytical SE (variance families reconciled via sqrt(G/(G-1)))."""
         rng = np.random.default_rng(42)
         G, T = 180, 4
         d_mp = np.concatenate([np.full(36, 0.3), rng.uniform(0.3, 1.0, G - 36)])
@@ -5404,19 +5691,21 @@ class TestEventStudySurveyCband:
                 vcov_type="hc1",
                 cluster="state",
                 seed=0,
-                n_bootstrap=100,
+                n_bootstrap=500,
             )
-            with pytest.raises(NotImplementedError, match="cband=True"):
-                est.fit(
-                    panel,
-                    "outcome",
-                    "dose",
-                    "period",
-                    "unit",
-                    aggregate="event_study",
-                    weights=w_row,
-                    cband=True,
-                )
+            r = est.fit(
+                panel,
+                "outcome",
+                "dose",
+                "period",
+                "unit",
+                aggregate="event_study",
+                weights=w_row,
+                cband=True,
+            )
+        assert r.vcov_type == "cr1" and r.cluster_name == "state"
+        assert r.cband_low is not None and np.all(np.isfinite(r.cband_low))
+        assert r.cband_method == "cluster_multiplier_bootstrap"
 
     def test_event_study_zero_weight_units_excluded_from_n_units(self):
         """Review R4 P2: weighted event-study reports the POSITIVE-WEIGHT

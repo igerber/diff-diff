@@ -604,9 +604,10 @@ class HeterogeneousAdoptionDiDEventStudyResults:
           t-inference.
 
         Pointwise CIs are always populated; a simultaneous confidence
-        band is available only on the weighted path via ``cband_*``
-        below. Joint cross-horizon analytical covariance is not
-        computed in this release (tracked in TODO.md).
+        band (``cband_*`` below) is available on the weighted/survey path
+        OR whenever ``cluster=`` is set (the clustered band fires even on
+        an unweighted fit). Joint cross-horizon analytical covariance is
+        not computed in this release (tracked in TODO.md).
     t_stat, p_value : np.ndarray, shape (n_horizons,)
         Per-horizon inference triple element.
     conf_int_low, conf_int_high : np.ndarray, shape (n_horizons,)
@@ -645,9 +646,10 @@ class HeterogeneousAdoptionDiDEventStudyResults:
         ``"analytical_nonparametric"`` (continuous designs) or
         ``"analytical_2sls"`` (mass-point). Shared across horizons.
     vcov_type : str or None
-        Effective variance-covariance family used on the mass-point path
-        (``"classical"``, ``"hc1"``, or ``"cr1"`` when cluster supplied).
-        ``None`` on the continuous paths (they use CCT-2014 robust SE).
+        Effective variance-covariance family. Mass-point path:
+        ``"classical"``, ``"hc1"``, or ``"cr1"`` when ``cluster=`` is
+        supplied. Continuous paths: ``None`` (CCT-2014 robust SE), or
+        ``"cr1"`` when ``cluster=`` is supplied (cluster-robust CCT SE).
     cluster_name : str or None
         Column name of the cluster variable when cluster-robust SE is
         requested. ``None`` otherwise.
@@ -670,10 +672,11 @@ class HeterogeneousAdoptionDiDEventStudyResults:
         fits.
     cband_low, cband_high : np.ndarray or None, shape (n_horizons,)
         Simultaneous confidence-band endpoints constructed by the
-        multiplier-bootstrap sup-t procedure. ``None`` on unweighted
-        fits and when ``fit(..., cband=False)`` is passed. Horizons
-        with ``se <= 0`` or non-finite ``se`` are NaN (matches the
-        pointwise inference gate from ``safe_inference``).
+        multiplier-bootstrap sup-t procedure. ``None`` when
+        ``fit(..., cband=False)`` is passed or on unweighted, unclustered
+        fits; a clustered fit (``cluster=``) populates the band even when
+        unweighted. Horizons with ``se <= 0`` or non-finite ``se`` are NaN
+        (matches the pointwise inference gate from ``safe_inference``).
     cband_crit_value : float or None
         Sup-t multiplier-bootstrap critical value at level
         ``1 - alpha``. Under a trivial resolved design (no strata /
@@ -684,8 +687,9 @@ class HeterogeneousAdoptionDiDEventStudyResults:
         variance matches the analytical Binder-TSL target term-for-
         term.
     cband_method : str or None
-        ``"multiplier_bootstrap"`` on the weighted event-study path
-        with ``cband=True``, else ``None``.
+        ``"multiplier_bootstrap"`` on the weighted/survey event-study band,
+        ``"cluster_multiplier_bootstrap"`` on the clustered band, else
+        ``None``.
     cband_n_bootstrap : int or None
         Number of multiplier-bootstrap replicates used to compute the
         sup-t critical value.
@@ -739,7 +743,9 @@ class HeterogeneousAdoptionDiDEventStudyResults:
     filter_info: Optional[Dict[str, Any]]
 
     # Phase 4.5 B weighted / survey-path extras (optional so unweighted
-    # fits stay unchanged; all None on unweighted fits).
+    # fits stay unchanged). ``variance_formula`` / ``effective_dose_mean``
+    # are None on unweighted fits; the ``cband_*`` fields are also populated
+    # on unweighted CLUSTERED fits (Phase 2b clustered band).
     variance_formula: Optional[str] = None
     """Per-horizon variance family label (applied uniformly across all
     horizons in the fit). One of ``"pweight"`` / ``"pweight_2sls"`` (when
@@ -756,22 +762,25 @@ class HeterogeneousAdoptionDiDEventStudyResults:
     mass-point: weighted Wald-IV dose gap. ``None`` on unweighted fits."""
     cband_low: Optional[np.ndarray] = None
     """Simultaneous confidence-band lower endpoints, shape ``(n_horizons,)``.
-    ``None`` on unweighted fits and when ``cband=False`` on the weighted
-    event-study path. Derived from multiplier-bootstrap sup-t critical
-    value: ``cband_low[e] = att[e] − cband_crit_value * se[e]``."""
+    ``None`` when ``cband=False``, or on unweighted, unclustered fits (a
+    clustered fit populates the band even when unweighted). Derived from the
+    multiplier-bootstrap sup-t critical value:
+    ``cband_low[e] = att[e] − cband_crit_value * se[e]``."""
     cband_high: Optional[np.ndarray] = None
     """Simultaneous confidence-band upper endpoints, shape
     ``(n_horizons,)``. See ``cband_low``."""
     cband_crit_value: Optional[float] = None
     """Sup-t multiplier-bootstrap critical value at level ``1 - alpha``.
     Reduces to ``Φ⁻¹(1 − alpha/2) ≈ 1.96`` at ``H=1`` up to Monte Carlo
-    error. ``None`` on unweighted fits and when ``cband=False``."""
+    error. ``None`` when ``cband=False`` or on unweighted, unclustered fits."""
     cband_method: Optional[str] = None
-    """``"multiplier_bootstrap"`` on the weighted event-study path with
-    ``cband=True``, else ``None``."""
+    """``"multiplier_bootstrap"`` (weighted/survey band) or
+    ``"cluster_multiplier_bootstrap"`` (clustered band) when populated, else
+    ``None``."""
     cband_n_bootstrap: Optional[int] = None
     """Number of multiplier-bootstrap replicates used to compute the sup-t
-    critical value. ``None`` on unweighted fits and when ``cband=False``."""
+    critical value. ``None`` when ``cband=False`` or on unweighted,
+    unclustered fits."""
 
     def __repr__(self) -> str:
         base = (
@@ -901,10 +910,13 @@ class HeterogeneousAdoptionDiDEventStudyResults:
             "vcov_type": self.vcov_type,
             "cluster_name": self.cluster_name,
             "filter_info": _json_safe_filter_info(self.filter_info),
-            # Phase 4.5 B weighted/survey-path surfaces (None on
-            # unweighted fits). The full SurveyMetadata dataclass is
-            # carried as an object, matching the static-path ``to_dict``
-            # contract — consumers read attributes uniformly.
+            # Phase 4.5 B weighted/survey-path surfaces. survey_metadata /
+            # variance_formula / effective_dose_mean are None on unweighted
+            # fits; the cband_* fields are also populated on unweighted
+            # CLUSTERED fits (Phase 2b clustered band). The full
+            # SurveyMetadata dataclass is carried as an object, matching the
+            # static-path ``to_dict`` contract — consumers read attributes
+            # uniformly.
             "survey_metadata": self.survey_metadata,
             "variance_formula": self.variance_formula,
             "effective_dose_mean": self.effective_dose_mean,
@@ -919,9 +931,10 @@ class HeterogeneousAdoptionDiDEventStudyResults:
         """Return a tidy per-horizon DataFrame.
 
         Columns: ``event_time, att, se, t_stat, p_value, conf_int_low,
-        conf_int_high, n_obs``. One row per event-time horizon. On the
-        weighted event-study path with ``cband=True``, also includes
-        ``cband_low`` and ``cband_high`` columns.
+        conf_int_high, n_obs``. One row per event-time horizon. When a
+        simultaneous band was computed (``cband=True`` with a
+        weighted/survey OR clustered fit), also includes ``cband_low`` and
+        ``cband_high`` columns.
         """
         data: Dict[str, Any] = {
             "event_time": self.event_times,
@@ -2043,6 +2056,8 @@ def _sup_t_multiplier_bootstrap(
     alpha: float,
     seed: Optional[int],
     bootstrap_weights: str = "rademacher",
+    cluster_ids: Optional[np.ndarray] = None,
+    cluster_if_scale: float = 1.0,
 ) -> Tuple[float, Optional[np.ndarray], Optional[np.ndarray], int]:
     """Compute sup-t simultaneous CI via PSU-level multiplier bootstrap.
 
@@ -2094,6 +2109,24 @@ def _sup_t_multiplier_bootstrap(
     bootstrap_weights : str
         Passed through to the helper: ``"rademacher"``, ``"mammen"``, or
         ``"webb"``. Default ``"rademacher"`` (binary ±1 multipliers).
+    cluster_ids : np.ndarray or None, shape (n_units,)
+        Per-unit cluster labels aligned to ``influence_matrix`` rows. When
+        supplied, a dedicated CLUSTER-robust branch fires (bypassing both
+        the survey and unit-level branches): the per-unit IF is aggregated
+        to cluster level and cluster-level iid multipliers are drawn, so
+        ``Var_xi(xi @ Psi_cl) = sum_c (sum_{i in c} psi_i)^2`` — the RAW
+        cluster sandwich matching the analytical cluster-robust SE (no
+        stratum-centering / FPC / Bessel; the continuous CCT cluster meat
+        carries no ``g/(g-1)`` correction). ``resolved_survey`` must be
+        ``None`` when this is set (``cluster= + survey=`` is rejected
+        up-front). ``None`` restores the survey / unit-level dispatch.
+    cluster_if_scale : float
+        Path-specific finite-sample scalar applied to the cluster-aggregated
+        IF before the draw: ``1.0`` for the CCT continuous path (exact by
+        construction), ``sqrt(G/(G-1))`` for the mass-point CR1 path (the
+        returned mass-point IF carries ``sqrt((n-1)/(n-k))`` but not the CR1
+        ``G/(G-1)`` factor, so it is restored here). ``G`` is the full-array
+        cluster count, identical to the ``n_clusters`` this branch computes.
 
     Returns
     -------
@@ -2124,7 +2157,32 @@ def _sup_t_multiplier_bootstrap(
     # reserved for the ``weights=`` shortcut (no survey object at all).
     use_survey_bootstrap = resolved_survey is not None
 
-    if use_survey_bootstrap:
+    if cluster_ids is not None:
+        # Cluster-robust multiplier bootstrap (had.py clustered event-study
+        # band). Aggregate the per-unit IF to cluster level and draw
+        # cluster-level iid multipliers, so
+        #   Var_xi(xi @ Psi_cl) = sum_c (sum_{i in c} psi_i)^2
+        # — the RAW cluster sandwich, matching the analytical cluster-robust
+        # SE. No stratum-centering / FPC / Bessel: the continuous CCT cluster
+        # meat (lprobust_vce) carries no g/(g-1) correction, so raw Rademacher
+        # is exact (scale 1.0); the mass-point CR1 path restores its G/(G-1)
+        # factor via ``cluster_if_scale`` before the draw. ``G`` == this
+        # branch's ``n_clusters`` == the count the analytical CR uses (full
+        # array, incl. wholly-zero-weight clusters that contribute 0).
+        cluster_ids_arr = np.asarray(cluster_ids).ravel()
+        codes, cluster_labels = pd.factorize(cluster_ids_arr, sort=False)
+        n_clusters = len(cluster_labels)
+        if n_clusters < 2:
+            # Cluster-robust simultaneous band undefined with one cluster.
+            return float("nan"), None, None, 0
+        Psi_cl = np.zeros((n_clusters, n_horizons), dtype=np.float64)
+        np.add.at(Psi_cl, codes, influence_matrix)
+        Psi_cl *= float(cluster_if_scale)
+        perturbations = np.empty((n_bootstrap, n_horizons), dtype=np.float64)
+        for _cs, _w_block in iter_weight_blocks(n_bootstrap, n_clusters, bootstrap_weights, rng):
+            with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
+                perturbations[_cs : _cs + _w_block.shape[0]] = _w_block @ Psi_cl
+    elif use_survey_bootstrap:
         # Review R2 P1: lonely_psu="adjust" pools singleton strata into a
         # pseudo-stratum with NONZERO multipliers in the bootstrap helper,
         # but the analytical compute_survey_if_variance target for
@@ -2622,8 +2680,12 @@ class HeterogeneousAdoptionDiD:
         composition raises ``NotImplementedError`` (the Binder-TSL survey
         variance would override the cluster-robust SE — route clustering
         through ``survey_design=SurveyDesign(psu=<cluster_col>)`` instead).
-        Cluster must be constant within unit. Estimator-level cluster
-        threading on the event-study path (Phase 2b) remains a follow-up.
+        Cluster must be constant within unit. On the event-study path
+        (``aggregate="event_study"``, Phase 2b) ``cluster=`` provides
+        cluster-robust per-horizon pointwise CIs (both designs) AND a
+        cluster-robust simultaneous sup-t band (``cband=True``, fires even
+        on unweighted fits); ``cluster=`` + ``survey_design=`` is rejected
+        there too.
 
     Notes
     -----
@@ -2729,14 +2791,14 @@ class HeterogeneousAdoptionDiD:
         self.vcov_type = vcov_type
         self.robust = robust
         self.cluster = cluster
-        # Phase 4.5 B: event-study survey sup-t simultaneous-CI support.
-        # ``n_bootstrap`` = number of multiplier-bootstrap replicates for
-        # the sup-t band on the event-study + weighted path. ``seed`` =
-        # reproducibility seed for the multiplier draws. Both are
-        # consulted only when ``aggregate="event_study"`` AND a
-        # ``survey=`` / ``weights=`` is passed to ``fit()`` with
-        # ``cband=True`` (default). Unweighted event-study skips the
-        # bootstrap entirely — pre-Phase 4.5 B numerical output preserved.
+        # Event-study sup-t simultaneous-CI support. ``n_bootstrap`` =
+        # number of multiplier-bootstrap replicates for the sup-t band;
+        # ``seed`` = reproducibility seed for the multiplier draws. Both are
+        # consulted when ``aggregate="event_study"`` + ``cband=True``
+        # (default) AND either ``survey=`` / ``weights=`` (weighted/survey
+        # band, Phase 4.5 B) OR ``cluster=`` (cluster-robust band, Phase 2b
+        # — fires even unweighted). An unweighted, unclustered event-study
+        # skips the bootstrap entirely (pre-Phase 4.5 B output preserved).
         self.n_bootstrap = n_bootstrap
         self.seed = seed
         self._validate_constructor_args()
@@ -2978,14 +3040,16 @@ class HeterogeneousAdoptionDiD:
             with the per-row → per-unit aggregation invariant intact.
             Mutually exclusive with ``survey_design=`` and ``survey=``.
         cband : bool, default True
-            Phase 4.5 B: controls the multiplier-bootstrap simultaneous
-            confidence band on the weighted event-study path. When
-            ``True`` (default) and ``aggregate="event_study"`` AND any of
-            ``survey_design=`` / ``survey=`` / ``weights=`` is supplied,
-            the fit populates ``cband_low`` / ``cband_high`` /
-            ``cband_crit_value`` / ``cband_method`` / ``cband_n_bootstrap``
-            on the result. When ``False`` those fields stay ``None``. No
-            effect on ``aggregate="overall"`` or on unweighted event-
+            Controls the multiplier-bootstrap simultaneous confidence band
+            on the event-study path. When ``True`` (default) and
+            ``aggregate="event_study"`` AND either (a) ``survey_design=`` /
+            ``survey=`` / ``weights=`` is supplied (weighted/survey band,
+            Phase 4.5 B) OR (b) ``cluster=`` is supplied (cluster-robust
+            band — fires even on an unweighted fit, Phase 2b), the fit
+            populates ``cband_low`` / ``cband_high`` / ``cband_crit_value``
+            / ``cband_method`` / ``cband_n_bootstrap`` on the result. When
+            ``False`` those fields stay ``None``. No effect on
+            ``aggregate="overall"`` or on unweighted, unclustered event-
             study. ``n_bootstrap`` and ``seed`` (constructor params)
             control replicate count and RNG; defaults are 999 / ``None``.
         trends_lin : bool, default False, keyword-only
@@ -4054,17 +4118,21 @@ class HeterogeneousAdoptionDiD:
           (``_fit_mass_point_2sls`` HC1 / classical / CR1). Inference
           is Normal (``df=None``).
 
-        The simultaneous confidence band on the weighted path (when
-        ``cband=True``) is constructed by a shared-PSU multiplier
-        bootstrap over the stacked per-horizon β̂-scale IF matrix via
-        :func:`_sup_t_multiplier_bootstrap`. On the ``weights=``
-        shortcut, sup-t calibration is routed through a synthetic
-        trivial ``ResolvedSurveyDesign`` so the centered +
+        The simultaneous confidence band (when ``cband=True``) is
+        constructed by a multiplier bootstrap over the stacked per-horizon
+        β̂-scale IF matrix via :func:`_sup_t_multiplier_bootstrap`. On the
+        weighted/survey path it draws PSU-level multipliers; when
+        ``cluster=`` is set it takes the clustered branch (cluster-level
+        multipliers, raw cluster sandwich; fires even unweighted). On the
+        ``weights=`` shortcut, sup-t calibration is routed through a
+        synthetic trivial ``ResolvedSurveyDesign`` so the centered +
         sqrt(n/(n-1))-corrected survey-aware branch fires uniformly —
         matches the analytical HC1 variance family at the
-        compute_survey_if_variance(IF, trivial) ≈ V_HC1 invariant.
-        Unweighted event-study skips the bootstrap (pre-Phase 4.5 B
-        numerical output preserved).
+        compute_survey_if_variance(IF, trivial) ≈ V_HC1 invariant. When
+        ``cluster=`` is set the clustered branch fires instead (cluster-
+        level multipliers, raw cluster sandwich), even unweighted. An
+        unweighted, unclustered event-study skips the bootstrap (pre-Phase
+        4.5 B numerical output preserved).
         """
         # ---- Resolve effective fit-time state (local vars only,
         # feedback_fit_does_not_mutate_config). ----
@@ -4348,46 +4416,33 @@ class HeterogeneousAdoptionDiD:
 
         dose_mean = float(d_arr.mean())
 
-        # ---- Extract cluster IDs on mass-point path only ----
+        # ---- Extract cluster IDs (mass-point + continuous paths) ----
+        # cluster= threads into the per-horizon CR1 sandwich (mass-point) or
+        # the cluster-robust CCT SE (continuous, Phase 2a parity), AND into a
+        # cluster-robust sup-t simultaneous band (both designs) via the
+        # clustered branch of ``_sup_t_multiplier_bootstrap``. The one
+        # incompatible composition is cluster= + survey= (either design): the
+        # survey path composes Binder-TSL variance and would silently override
+        # the cluster-robust sandwich while metadata still reports the
+        # cluster-robust vcov. Reject it BEFORE extracting the column (mirrors
+        # the static-path guard had.py:3361) so the error is predictable even
+        # for a malformed cluster column. The former weights= + cluster= +
+        # cband=True mass-point rejection is lifted — the clustered band now
+        # reconciles the variance family (raw cluster Rademacher; mass-point
+        # sqrt(G/(G-1)) CR1 scaling).
         cluster_arr: Optional[np.ndarray] = None
-        if resolved_design == "mass_point" and cluster_arg is not None:
-            # Review R4 P1: narrow the cluster+weighted guard (mirrors
-            # the static-path narrowing). Incompatible cases on the
-            # event-study path:
-            #   (a) survey= + cluster=: Binder-TSL override would
-            #       silently overwrite CR1.
-            #   (b) weights= shortcut + cluster= + cband=True: the
-            #       sup-t bootstrap normalizes HC1-scale perturbations
-            #       by the CR1 analytical SE, producing an inconsistent
-            #       variance family in the bootstrap t-distribution.
-            # weights= shortcut + cluster= + cband=False is fine: the
-            # per-horizon CR1 sandwich is returned as-is and no IF is
-            # consumed. Unweighted + cluster= also unchanged.
-            if resolved_survey_unit_full is not None:
-                raise NotImplementedError(
-                    f"cluster={cluster_arg!r} + survey= on "
-                    f"design='mass_point' event-study is not yet "
-                    f"supported: the survey path composes Binder-TSL "
-                    f"variance per horizon and would silently override "
-                    f"the CR1 cluster-robust sandwich. Pass cluster= "
-                    f"alone (unweighted CR1), or weights= + cluster= "
-                    f"+ cband=False (weighted-CR1 per horizon), or "
-                    f"survey= alone (Binder-TSL). Combined cluster-"
-                    f"robust + survey event-study inference is deferred."
-                )
-            if weights_unit_full is not None and cband:
-                raise NotImplementedError(
-                    f"cluster={cluster_arg!r} + weights= + cband=True "
-                    f"on design='mass_point' event-study is not yet "
-                    f"supported: the sup-t bootstrap uses an HC1-scale "
-                    f"influence function and normalizes by the CR1 "
-                    f"analytical SE, mixing variance families in the "
-                    f"bootstrap t-distribution. Pass cband=False to "
-                    f"disable the simultaneous band (pointwise CIs "
-                    f"still use the weighted-CR1 sandwich per horizon), "
-                    f"or drop cluster= to use the weighted-HC1 sandwich "
-                    f"with sup-t."
-                )
+        if cluster_arg is not None and resolved_survey_unit_full is not None:
+            raise NotImplementedError(
+                f"cluster={cluster_arg!r} + survey= on "
+                f"design={resolved_design!r} event-study is not supported: "
+                f"the survey path composes Binder-TSL variance per horizon "
+                f"and would silently override the cluster-robust sandwich. "
+                f"Pass cluster= alone (unweighted cluster-robust), weights= "
+                f"+ cluster= (weighted cluster-robust, pointwise + sup-t "
+                f"band), or survey_design=SurveyDesign(psu=<cluster_col>) to "
+                f"cluster through the survey (Binder-TSL) path."
+            )
+        if cluster_arg is not None:
             _, _, cluster_arr, _, _ = _aggregate_multi_period_first_differences(
                 data_filtered,
                 outcome_col,
@@ -4427,15 +4482,9 @@ class HeterogeneousAdoptionDiD:
                     UserWarning,
                     stacklevel=3,
                 )
-            if cluster_arg is not None:
-                warnings.warn(
-                    f"cluster={cluster_arg!r} is ignored on the "
-                    f"'{resolved_design}' path in Phase 2b (estimator-"
-                    f"level cluster threading on the nonparametric path "
-                    f"is queued for a follow-up PR).",
-                    UserWarning,
-                    stacklevel=3,
-                )
+            # cluster= is now threaded into the continuous-path CCT SE and the
+            # cluster-robust sup-t band (Phase 2b parity with the static path);
+            # no "cluster ignored" warning.
 
         # ---- Resolve vcov label for mass-point ----
         if resolved_design == "mass_point":
@@ -4455,8 +4504,13 @@ class HeterogeneousAdoptionDiD:
             # give wrong t-stats). Matches the static-path rejection —
             # weighted mass-point paths use the HC1-scale IF
             # convention uniformly.
-            _uses_if_matrix = resolved_survey_unit_full is not None or (
-                weights_unit_full is not None and cband
+            # When cluster= is set, the mass-point path computes the CR1
+            # cluster-robust sandwich regardless of vcov_type (classical/hc1
+            # are ignored), and the clustered sup-t band normalizes by that
+            # CR1 SE — so there is no classical-vs-HC1 variance-family
+            # mismatch to reject. Guard on ``cluster_arg is None``.
+            _uses_if_matrix = cluster_arg is None and (
+                resolved_survey_unit_full is not None or (weights_unit_full is not None and cband)
             )
             if vcov_requested == "classical" and _uses_if_matrix:
                 raise NotImplementedError(
@@ -4480,8 +4534,11 @@ class HeterogeneousAdoptionDiD:
         else:
             vcov_requested = ""
             inference_method = "analytical_nonparametric"
-            vcov_label = None
-            cluster_label = None
+            # cluster-robust CCT SE when cluster= is set (Phase 2a static-path
+            # parity, had.py:3615); labelled "cr1" for surface consistency
+            # with the mass-point CR1 path.
+            vcov_label = "cr1" if cluster_arg is not None else None
+            cluster_label = cluster_arg if cluster_arg is not None else None
 
         # ---- Per-horizon loop ----
         # On the weighted path, every horizon uses the FULL arrays
@@ -4516,12 +4573,16 @@ class HeterogeneousAdoptionDiD:
         # compute_survey_if_variance inside _fit_continuous or the
         # mass-point override below); the STACKED (G, H) IF matrix is
         # needed only when the sup-t multiplier bootstrap runs
-        # (``cband=True`` on the weighted path). Splitting them avoids
+        # (``cband=True`` on a weighted/survey OR clustered fit). Splitting
+        # them avoids
         # allocating / filling Psi on the common opt-out path
         # ``cband=False`` + weights= shortcut, where no IF consumer
         # exists.
+        # The clustered sup-t band consumes the stacked IF too, and (unlike
+        # the survey/weights band) fires even on the UNWEIGHTED path — so the
+        # stacked-IF flag also switches on when cluster= is set.
         needs_per_horizon_if = resolved_survey_unit_full is not None or (weighted_es and cband)
-        needs_stacked_if_matrix = weighted_es and cband
+        needs_stacked_if_matrix = cband and (weighted_es or cluster_arg is not None)
         if needs_stacked_if_matrix:
             Psi = np.full((G_full, n_horizons), np.nan, dtype=np.float64)
         else:
@@ -4542,13 +4603,14 @@ class HeterogeneousAdoptionDiD:
         if resolved_survey_unit_full is not None:
             df_infer = resolved_survey_unit_full.df_survey
 
-        # On the weighted event-study path, the sup-t multiplier bootstrap
-        # operates on the per-horizon IF matrix, so we must force the IF
-        # computation even on the ``weights=`` shortcut (no survey
-        # structure → _fit_continuous normally skips IF). Pass through
-        # the actual ``resolved_survey_unit_full`` (None on shortcut) so
+        # Whenever the sup-t multiplier bootstrap runs (weighted/survey OR
+        # clustered — see ``needs_stacked_if_matrix``), it operates on the
+        # per-horizon IF matrix, so we must force the IF computation even
+        # when _fit_continuous would normally skip it (``weights=`` shortcut
+        # or unweighted clustered fit; no survey structure). Pass through
+        # the actual ``resolved_survey_unit_full`` (None on those paths) so
         # the per-horizon analytical SE still matches the static-path
-        # convention (bc_fit.se_robust on shortcut; Binder-TSL on
+        # convention (bc_fit.se_robust on shortcut/clustered; Binder-TSL on
         # survey=). IF return is gated on `force_return_influence=True`.
 
         # Track the Binder-TSL den for continuous paths so we can
@@ -4574,6 +4636,9 @@ class HeterogeneousAdoptionDiD:
                     force_return_influence=(
                         needs_stacked_if_matrix and resolved_survey_unit_full is None
                     ),
+                    # Phase 2b: cluster-robust CCT SE per horizon (static-path
+                    # parity). None on unclustered fits (byte-unchanged).
+                    cluster_arr=cluster_arr,
                 )
                 if bc_fits is not None:
                     bc_fits.append(bc_fit_e)
@@ -4605,12 +4670,12 @@ class HeterogeneousAdoptionDiD:
                     cluster_arr,
                     vcov_requested,
                     weights=weights_unit_full,
-                    # Return IF only when a consumer exists: survey=
-                    # path needs it for per-horizon Binder-TSL override;
-                    # weights= shortcut + cband=True needs it for the
-                    # bootstrap. weights= shortcut + cband=False skips
-                    # IF computation entirely (review R6 P2).
-                    return_influence=needs_per_horizon_if,
+                    # Return IF when a consumer exists: survey= path needs it
+                    # for per-horizon Binder-TSL override; the sup-t bootstrap
+                    # (weighted OR clustered) needs it for the stacked matrix.
+                    # weights= shortcut + cband=False + unclustered skips IF
+                    # computation entirely (review R6 P2).
+                    return_influence=(needs_per_horizon_if or needs_stacked_if_matrix),
                 )
                 # Survey path: override analytical sandwich SE with
                 # Binder-TSL via compute_survey_if_variance (matches
@@ -4638,13 +4703,63 @@ class HeterogeneousAdoptionDiD:
             ci_lo_arr[i] = float(conf_int_e[0])
             ci_hi_arr[i] = float(conf_int_e[1])
 
-        # ---- Sup-t simultaneous confidence band (weighted + cband only) ----
+        # ---- Sup-t simultaneous confidence band (weighted/survey OR
+        # clustered, + cband) ----
         cband_low_arr: Optional[np.ndarray] = None
         cband_high_arr: Optional[np.ndarray] = None
         cband_crit_value: Optional[float] = None
         cband_method_label: Optional[str] = None
         cband_n_bootstrap_eff: Optional[int] = None
-        if weighted_es and cband and n_horizons >= 1:
+        if cband and cluster_arg is not None and n_horizons >= 1:
+            # Cluster-robust simultaneous band (Phase 2b). Route cluster= as
+            # cluster-level multipliers on the per-unit IF: the raw cluster
+            # Rademacher variance sum_c (sum_{i in c} psi_i)^2 equals the
+            # analytical cluster-robust SE² for the continuous CCT path (no
+            # g/(g-1) correction; scale 1.0) and, for the mass-point CR1 path,
+            # matches after restoring the CR1 sqrt(G/(G-1)) factor (the
+            # returned mass-point IF already carries sqrt((n-1)/(n-k)) but not
+            # G/(G-1)). G is the full-array cluster count — identical to the
+            # bootstrap branch's own n_clusters, so scale and aggregation
+            # share one count (a wholly-zero-weight cluster contributes 0 to
+            # both yet is counted in G by both). Fires on the UNWEIGHTED path
+            # too (cluster= + survey= is rejected up-front, so no survey
+            # composition). See REGISTRY "Note (HAD clustered event-study
+            # sup-t band)".
+            _cl_G = int(len(pd.unique(np.asarray(cluster_arr))))
+            if _cl_G < 2:
+                warnings.warn(
+                    f"cluster={cluster_arg!r} yields a single cluster; the "
+                    f"cluster-robust sup-t band and pointwise SEs are "
+                    f"undefined (NaN band returned).",
+                    RuntimeWarning,
+                    stacklevel=3,
+                )
+                # Undefined band, NOT skipped: mirror the degenerate
+                # weighted-band convention (crit=NaN, method + replicate
+                # count populated, endpoints left None) so callers can tell
+                # "attempted but undefined" apart from "no band requested".
+                cband_crit_value = float("nan")
+                cband_method_label = "cluster_multiplier_bootstrap"
+                cband_n_bootstrap_eff = n_bootstrap_eff
+            else:
+                _cl_scale = (
+                    float(np.sqrt(_cl_G / (_cl_G - 1))) if resolved_design == "mass_point" else 1.0
+                )
+                q, cband_low_arr, cband_high_arr, _n_valid = _sup_t_multiplier_bootstrap(
+                    influence_matrix=Psi,
+                    att_per_horizon=att_arr,
+                    se_per_horizon=se_arr,
+                    resolved_survey=None,
+                    n_bootstrap=n_bootstrap_eff,
+                    alpha=float(self.alpha),
+                    seed=seed_eff,
+                    cluster_ids=cluster_arr,
+                    cluster_if_scale=_cl_scale,
+                )
+                cband_crit_value = q
+                cband_method_label = "cluster_multiplier_bootstrap"
+                cband_n_bootstrap_eff = n_bootstrap_eff
+        elif weighted_es and cband and n_horizons >= 1:
             # Review R7 P0: the per-unit influence function returned by
             # _fit_continuous / _fit_mass_point_2sls is HC1-scaled per
             # the PR #359 convention — compute_survey_if_variance(psi,
