@@ -30,4 +30,5 @@
       ~TwoStageDiD.alpha
       ~TwoStageDiD.seed
       ~TwoStageDiD.horizon_max
+      ~TwoStageDiD.vcov_type
 

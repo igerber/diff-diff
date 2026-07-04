@@ -25,7 +25,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (facebookresearch/balance PR #465) whose `balance[did]` extra pins `diff-diff>=3.3,<4`.
   `docs/tutorials/26_composition_drift_calibration.ipynb` is the diff-diff-side companion to
   balance's `balance_diff_diff_brfss` tutorial, telling the failure-mode half of the story: a
-  BRFSS-style smoking-ban DGP with exact population parallel trends (true ATT -3.0pp) where
+  BRFSS-style smoking-ban DGP with no systematic arm-specific trends (parallel trends hold in
+  expectation; planted ATT -3.0pp, realized -2.98pp under a rarely-binding probability floor) where
   treatment-correlated non-response drift biases the design-weight Callaway-Sant'Anna ATT to
   ~-4.1pp with *clean pre-trends*; a per-wave national rake fails (~-4.4pp - margins satisfied in
   aggregate while arm-level composition is untouched); per-state raking with balance (BRFSS's own

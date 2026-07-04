@@ -1,10 +1,10 @@
 """Drift detection for Tutorial 26
 (``docs/tutorials/26_composition_drift_calibration.ipynb``).
 
-The tutorial narrative quotes seed-specific numbers (true ATT -3.0pp;
-design-weight CS ~-4.1pp with clean pre-trends; national per-wave rake
-~-4.4pp as the "false fix"; state-year rake ~-3.2pp as the recovery;
-2024 composition shares). If library numerics drift, the prose can go
+The tutorial narrative quotes seed-specific numbers (planted ATT -3.0pp
+with realized population ATT ~-2.98pp; design-weight CS ~-4.1pp with
+clean pre-trends; national per-wave rake ~-4.4pp as the "false fix";
+state-year rake ~-3.2pp as the recovery; 2024 composition shares). If library numerics drift, the prose can go
 stale silently while ``pytest --nbmake`` still passes - it only checks
 that cells execute. These asserts re-derive the headline numbers using
 the locked T26 DGP duplicated below (verbatim from the notebook SS2 code

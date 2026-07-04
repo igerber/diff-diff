@@ -43,10 +43,7 @@
       ~SpilloverDiDResults.n_bootstrap
       ~SpilloverDiDResults.n_clusters
       ~SpilloverDiDResults.n_far_away_obs
-      ~SpilloverDiDResults.n_psu
-      ~SpilloverDiDResults.n_strata
       ~SpilloverDiDResults.n_units_ever_in_ring
-      ~SpilloverDiDResults.p_val_type
       ~SpilloverDiDResults.r_squared
       ~SpilloverDiDResults.reference_period
       ~SpilloverDiDResults.residuals

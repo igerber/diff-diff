@@ -137,7 +137,7 @@ Power-analysis decision guide for geo experiments (framed on a 50-state staggere
 
 ### 26. Composition Drift & Survey Calibration with balance (`26_composition_drift_calibration.ipynb`)
 The failure-mode companion to Meta balance's `balance_diff_diff_brfss` tutorial: when non-response drift correlates with treatment timing, the design-weight DiD itself is biased and calibration becomes essential for the *causal* estimand:
-- BRFSS-style smoking-ban DGP with exact population parallel trends (true ATT -3.0pp) and treatment-correlated non-response drift
+- BRFSS-style smoking-ban DGP with no systematic arm-specific trends (parallel trends hold in expectation; planted ATT -3.0pp, realized -2.98pp) and treatment-correlated non-response drift
 - Design-weight Callaway-Sant'Anna overstates the ATT ~35% with *clean pre-trends* (pre-trend tests are not a safety net)
 - A per-wave national rake fails (margins satisfied in aggregate, arm-level composition untouched); per-state raking - BRFSS's own granularity - recovers the truth
 - The seam both ways: native `SurveyDesign` + `aggregate_survey` 3-liner vs the `balance.interop.diff_diff` adapter (`to_panel_for_did` / `fit_did`), with an exact-parity assert

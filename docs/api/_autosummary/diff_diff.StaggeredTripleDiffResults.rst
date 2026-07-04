@@ -43,11 +43,6 @@
       ~StaggeredTripleDiffResults.group_effects
       ~StaggeredTripleDiffResults.influence_functions
       ~StaggeredTripleDiffResults.is_significant
-      ~StaggeredTripleDiffResults.overall_att_es
-      ~StaggeredTripleDiffResults.overall_conf_int_es
-      ~StaggeredTripleDiffResults.overall_p_value_es
-      ~StaggeredTripleDiffResults.overall_se_es
-      ~StaggeredTripleDiffResults.overall_t_stat_es
       ~StaggeredTripleDiffResults.p_value
       ~StaggeredTripleDiffResults.pscore_fallback
       ~StaggeredTripleDiffResults.pscore_trim
@@ -61,6 +56,11 @@
       ~StaggeredTripleDiffResults.overall_t_stat
       ~StaggeredTripleDiffResults.overall_p_value
       ~StaggeredTripleDiffResults.overall_conf_int
+      ~StaggeredTripleDiffResults.overall_att_es
+      ~StaggeredTripleDiffResults.overall_se_es
+      ~StaggeredTripleDiffResults.overall_t_stat_es
+      ~StaggeredTripleDiffResults.overall_p_value_es
+      ~StaggeredTripleDiffResults.overall_conf_int_es
       ~StaggeredTripleDiffResults.groups
       ~StaggeredTripleDiffResults.time_periods
       ~StaggeredTripleDiffResults.n_obs

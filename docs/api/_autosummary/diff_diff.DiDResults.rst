@@ -35,7 +35,6 @@
       ~DiDResults.is_significant
       ~DiDResults.n_bootstrap
       ~DiDResults.n_clusters
-      ~DiDResults.p_val_type
       ~DiDResults.r_squared
       ~DiDResults.residuals
       ~DiDResults.significance_stars

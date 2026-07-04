@@ -24,7 +24,6 @@
 
       ~WildBootstrapResults.alpha
       ~WildBootstrapResults.bootstrap_distribution
-      ~WildBootstrapResults.p_val_type
       ~WildBootstrapResults.se
       ~WildBootstrapResults.p_value
       ~WildBootstrapResults.t_stat_original

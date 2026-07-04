@@ -25,14 +25,10 @@
 
    .. autosummary::
 
-      ~PreTrendsPowerResults.covariance_source
       ~PreTrendsPowerResults.is_informative
       ~PreTrendsPowerResults.max_abs_pre_violation
-      ~PreTrendsPowerResults.nis_box_probability
       ~PreTrendsPowerResults.original_results
       ~PreTrendsPowerResults.power_adequate
-      ~PreTrendsPowerResults.pretest_form
-      ~PreTrendsPowerResults.violation_weights
       ~PreTrendsPowerResults.power
       ~PreTrendsPowerResults.mdv
       ~PreTrendsPowerResults.violation_magnitude
@@ -46,4 +42,8 @@
       ~PreTrendsPowerResults.pre_period_effects
       ~PreTrendsPowerResults.pre_period_ses
       ~PreTrendsPowerResults.vcov
+      ~PreTrendsPowerResults.pretest_form
+      ~PreTrendsPowerResults.nis_box_probability
+      ~PreTrendsPowerResults.violation_weights
+      ~PreTrendsPowerResults.covariance_source
 
