@@ -139,6 +139,14 @@ class ContinuousDiDResults:
     bootstrap_weights: str = "rademacher"
     seed: Optional[int] = None
     rank_deficient_action: str = "warn"
+    # Covariate adjustment (conditional parallel trends). ``covariates`` is None
+    # for the unconditional path; ``estimation_method`` is only meaningful when
+    # covariates are used (``"reg"`` or ``"dr"``).
+    covariates: Optional[List[str]] = field(default=None)
+    estimation_method: str = "dr"
+    pscore_trim: float = 0.01
+    epv_threshold: float = 10.0
+    pscore_fallback: str = "error"
     event_study_effects: Optional[Dict[int, Dict[str, Any]]] = field(default=None)
     # Survey design metadata (SurveyMetadata instance from diff_diff.survey)
     survey_metadata: Optional[Any] = field(default=None)
@@ -224,8 +232,11 @@ class ContinuousDiDResults:
             f"{'Interior knots:':<30} {self.num_knots:>10}",
             f"{'Base period:':<30} {self.base_period:>10}",
             f"{'Anticipation:':<30} {self.anticipation:>10}",
-            "",
         ]
+        if self.covariates:
+            lines.append(f"{'Covariates:':<30} {', '.join(self.covariates):>10}")
+            lines.append(f"{'Estimation method:':<30} {self.estimation_method:>10}")
+        lines.append("")
 
         # Add survey design info
         if self.survey_metadata is not None:

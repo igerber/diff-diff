@@ -29,7 +29,7 @@ from diff_diff.continuous_did_results import (
     ContinuousDiDResults,
     DoseResponseCurve,
 )
-from diff_diff.linalg import _rank_guarded_inv, solve_ols
+from diff_diff.linalg import _rank_guarded_inv, solve_logit, solve_ols
 from diff_diff.survey import (
     _resolve_survey_for_fit,
     _validate_unit_constant_survey,
@@ -72,6 +72,36 @@ class ContinuousDiD:
         Random seed for reproducibility.
     rank_deficient_action : str, default="warn"
         Action for rank-deficient B-spline OLS: ``"warn"``, ``"error"``, or ``"silent"``.
+    covariates : list of str, optional
+        Column names of covariates for **conditional** parallel trends
+        (``E[ΔY(0) | D=d, X] = E[ΔY(0) | D=0, X]``). When ``None`` (default) the
+        estimator uses unconditional parallel trends. Covariates enter through a
+        covariate-adjusted per-cell control counterfactual (see ``estimation_method``).
+        Covariates are read from the base period of each ``(g, t)`` comparison.
+        Not currently composable with ``survey_design=`` (raises ``NotImplementedError``).
+    estimation_method : str, default="dr"
+        Covariate-adjustment method (only used when ``covariates`` is set):
+        ``"reg"`` (outcome regression) or ``"dr"`` (doubly-robust, the default).
+        ``"ipw"`` is **not supported on the dose / event-study aggregation** — pure
+        IPW's covariate adjustment is a single scalar level shift, so it cannot
+        adjust the dose-response *shape* (ACRT(d) would be identical to the
+        unconditional fit); it raises ``NotImplementedError``. ``reg`` and ``dr``
+        share the dose-response shape and ACRT(d); ``dr`` differs only in the
+        ``overall_att`` / ATT(d) level and in its doubly-robust standard errors.
+    pscore_trim : float, default=0.01
+        Propensity-score trimming bound for the ``dr`` path (scores clipped to
+        ``[pscore_trim, 1 - pscore_trim]``).
+    epv_threshold : float, default=10.0
+        Events-per-variable threshold for the ``dr`` propensity logit diagnostics.
+    pscore_fallback : str, default="error"
+        Action when ``dr`` propensity estimation raises (the logit IRLS fails
+        with a ``LinAlgError`` / ``ValueError``, e.g. perfect separation or rank
+        deficiency): ``"error"`` (re-raise — the default, fail-closed so a `dr`
+        fit never silently degrades to a non-DR estimate) or ``"unconditional"``
+        (fall back to an unconditional propensity with a warning; the affected
+        cells are then reg-like — use only when you knowingly accept that). Note:
+        low events-per-variable emits a diagnostic warning but does not itself
+        trigger the fallback.
 
     Examples
     --------
@@ -86,6 +116,7 @@ class ContinuousDiD:
 
     _VALID_CONTROL_GROUPS = {"never_treated", "not_yet_treated"}
     _VALID_BASE_PERIODS = {"varying", "universal"}
+    _VALID_ESTIMATION_METHODS = {"reg", "dr", "ipw"}
 
     def __init__(
         self,
@@ -100,6 +131,11 @@ class ContinuousDiD:
         bootstrap_weights: str = "rademacher",
         seed: Optional[int] = None,
         rank_deficient_action: str = "warn",
+        covariates: Optional[List[str]] = None,
+        estimation_method: str = "dr",
+        pscore_trim: float = 0.01,
+        epv_threshold: float = 10.0,
+        pscore_fallback: str = "error",
     ):
         self.degree = degree
         self.num_knots = num_knots
@@ -112,10 +148,15 @@ class ContinuousDiD:
         self.bootstrap_weights = bootstrap_weights
         self.seed = seed
         self.rank_deficient_action = rank_deficient_action
+        self.covariates = covariates
+        self.estimation_method = estimation_method
+        self.pscore_trim = pscore_trim
+        self.epv_threshold = epv_threshold
+        self.pscore_fallback = pscore_fallback
         self._validate_constrained_params()
 
     def _validate_constrained_params(self) -> None:
-        """Validate control_group and base_period values."""
+        """Validate control_group, base_period, and estimation_method values."""
         if self.control_group not in self._VALID_CONTROL_GROUPS:
             raise ValueError(
                 f"Invalid control_group: '{self.control_group}'. "
@@ -125,6 +166,24 @@ class ContinuousDiD:
             raise ValueError(
                 f"Invalid base_period: '{self.base_period}'. "
                 f"Must be one of {self._VALID_BASE_PERIODS}."
+            )
+        if self.estimation_method not in self._VALID_ESTIMATION_METHODS:
+            raise ValueError(
+                f"Invalid estimation_method: '{self.estimation_method}'. "
+                f"Must be one of {self._VALID_ESTIMATION_METHODS}."
+            )
+        if self.pscore_fallback not in {"unconditional", "error"}:
+            raise ValueError(
+                f"Invalid pscore_fallback: '{self.pscore_fallback}'. "
+                "Must be 'unconditional' or 'error'."
+            )
+        if not (np.isfinite(self.pscore_trim) and 0.0 <= self.pscore_trim < 0.5):
+            raise ValueError(
+                f"Invalid pscore_trim: {self.pscore_trim}. " "Must be finite and in [0, 0.5)."
+            )
+        if not (np.isfinite(self.epv_threshold) and self.epv_threshold > 0):
+            raise ValueError(
+                f"Invalid epv_threshold: {self.epv_threshold}. Must be finite and > 0."
             )
 
     def get_params(self) -> Dict[str, Any]:
@@ -141,15 +200,29 @@ class ContinuousDiD:
             "bootstrap_weights": self.bootstrap_weights,
             "seed": self.seed,
             "rank_deficient_action": self.rank_deficient_action,
+            "covariates": self.covariates,
+            "estimation_method": self.estimation_method,
+            "pscore_trim": self.pscore_trim,
+            "epv_threshold": self.epv_threshold,
+            "pscore_fallback": self.pscore_fallback,
         }
 
     def set_params(self, **params) -> "ContinuousDiD":
-        """Set estimator parameters and return self."""
-        for key, value in params.items():
+        """Set estimator parameters and return self.
+
+        Transactional: the candidate configuration is validated against a clone
+        before any attribute on ``self`` is mutated, so an invalid update leaves
+        the estimator unchanged (no half-applied state).
+        """
+        for key in params:
             if not hasattr(self, key):
                 raise ValueError(f"Invalid parameter: {key}")
+        # Validate the candidate config on a throwaway before mutating self.
+        candidate = ContinuousDiD(**{**self.get_params(), **params})
+        # candidate.__init__ ran _validate_constrained_params() successfully.
+        del candidate
+        for key, value in params.items():
             setattr(self, key, value)
-        self._validate_constrained_params()
         return self
 
     # ------------------------------------------------------------------
@@ -215,9 +288,41 @@ class ContinuousDiD:
         # Bootstrap + survey supported via PSU-level multiplier bootstrap.
 
         df = data.copy()
-        for col in [outcome, unit, time, first_treat, dose]:
+        cov_cols = list(self.covariates) if self.covariates else []
+        for col in [outcome, unit, time, first_treat, dose, *cov_cols]:
             if col not in df.columns:
                 raise ValueError(f"Column '{col}' not found in data.")
+
+        # Covariate-path guards (conditional parallel trends).
+        if cov_cols:
+            if survey_design is not None:
+                raise NotImplementedError(
+                    "ContinuousDiD does not yet support covariates= together with "
+                    "survey_design= (weighted covariate outcome-regression / "
+                    "propensity influence functions are a follow-up). Use one or "
+                    "the other for now."
+                )
+            if self.estimation_method == "ipw":
+                raise NotImplementedError(
+                    "estimation_method='ipw' is not supported with covariates on the "
+                    "dose-response / event-study aggregation. Pure IPW's covariate "
+                    "adjustment is a single scalar (a propensity-reweighted control "
+                    "mean), which shifts only the ATT(d) level and leaves ACRT(d) "
+                    "identical to the unconditional fit — it cannot adjust the "
+                    "dose-response shape. Use estimation_method='reg' or 'dr'."
+                )
+            # Fail closed on missing/non-finite covariates: a per-cell fallback to
+            # unconditional estimation would silently mix conditional-PT and
+            # unconditional-PT cells in the aggregate (no-silent-failures).
+            cov_nonfinite = ~np.isfinite(df[cov_cols].to_numpy(dtype=float))
+            if cov_nonfinite.any():
+                n_bad = int(cov_nonfinite.any(axis=1).sum())
+                raise ValueError(
+                    f"{n_bad} row(s) have missing/non-finite covariate values. "
+                    "ContinuousDiD requires complete covariates (a per-cell fallback "
+                    "would mix conditional and unconditional estimands). Drop or "
+                    "impute the affected rows, or fit without covariates."
+                )
 
         # Verify dose is time-invariant
         dose_nunique = df.groupby(unit)[dose].nunique()
@@ -377,6 +482,7 @@ class ContinuousDiD:
             dose,
             time_periods,
             survey_weights=survey_weights,
+            covariates=self.covariates,
         )
 
         # Compute dvals (evaluation grid)
@@ -658,6 +764,16 @@ class ContinuousDiD:
                             if not b_info:
                                 continue
                             w = ws[idx_cell]
+                            # Covariate path: the binarized event-study effect is
+                            # att_glob, whose per-unit cell IF is precomputed.
+                            cov_if = b_info.get("cov_if")
+                            if cov_if is not None:
+                                np.add.at(
+                                    if_es,
+                                    cov_if["cell_indices"],
+                                    w * cov_if["if_att_glob"],
+                                )
+                                continue
                             treated_idx = b_info["treated_indices"]
                             control_idx = b_info["control_indices"]
                             n_t = b_info["n_treated"]
@@ -768,6 +884,11 @@ class ContinuousDiD:
             n_control_units=n_control,
             alpha=self.alpha,
             control_group=self.control_group,
+            covariates=self.covariates,
+            estimation_method=self.estimation_method,
+            pscore_trim=self.pscore_trim,
+            epv_threshold=self.epv_threshold,
+            pscore_fallback=self.pscore_fallback,
             degree=self.degree,
             num_knots=self.num_knots,
             base_period=self.base_period,
@@ -794,6 +915,7 @@ class ContinuousDiD:
         dose: str,
         time_periods: List[Any],
         survey_weights: Optional[np.ndarray] = None,
+        covariates: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         """Pivot to wide format and build lookup structures."""
         all_units = sorted(df[unit].unique())
@@ -808,6 +930,17 @@ class ContinuousDiD:
             i = unit_to_idx[row[unit]]
             j = period_to_col[row[time]]
             outcome_matrix[i, j] = row[outcome]
+
+        # Covariate cube: {period -> (n_units, n_cov)} read from the given
+        # period (the cell reads its base period). Covariates may be
+        # time-varying; the cell uses the base-period slice.
+        covariate_by_period = None
+        if covariates:
+            cov_cube = np.full((n_units, n_periods, len(covariates)), np.nan)
+            ui = df[unit].map(unit_to_idx).to_numpy()
+            ti = df[time].map(period_to_col).to_numpy()
+            cov_cube[ui, ti, :] = df[list(covariates)].to_numpy(dtype=float)
+            covariate_by_period = {t: cov_cube[:, period_to_col[t], :] for t in time_periods}
 
         # Per-unit cohort and dose
         unit_cohorts = np.zeros(n_units, dtype=float)
@@ -850,6 +983,211 @@ class ContinuousDiD:
             "n_units": n_units,
             "unit_survey_weights": unit_survey_weights,
             "unit_first_panel_row": unit_first_panel_row,
+            "covariate_by_period": covariate_by_period,
+        }
+
+    # ------------------------------------------------------------------
+    # Covariate adjustment (conditional parallel trends)
+    # ------------------------------------------------------------------
+
+    def _fit_covariate_adjustment(
+        self,
+        delta_y_treated: np.ndarray,
+        delta_y_control: np.ndarray,
+        X_treated_raw: np.ndarray,
+        X_control_raw: np.ndarray,
+        g: Any,
+        t: Any,
+    ) -> Optional[Dict[str, Any]]:
+        """Covariate-adjusted control counterfactual for one (g,t) cell.
+
+        Returns the per-treated counterfactual ``mu_0_vec`` and the nuisance
+        pieces the influence function needs (reg: outcome-regression only; dr:
+        + propensity and the DRDID doubly-robust per-unit IF). Missing/non-finite
+        covariate values raise ``ValueError`` (fail-closed; ``fit()`` also rejects
+        them up front — a per-cell fallback would mix conditional and
+        unconditional estimands). ``reg`` and ``dr`` share the same OLS outcome
+        regression on controls; ``dr`` adds a propensity model and a scalar
+        augmentation ``eta_cont`` (a level term).
+        """
+        if np.any(np.isnan(X_treated_raw)) or np.any(np.isnan(X_control_raw)):
+            # Defensive: fit() rejects non-finite covariates up front, so this
+            # is an internal-invariant guard (no silent per-cell fallback).
+            raise ValueError(
+                f"Missing covariate values reached cell (g={g}, t={t}). "
+                "ContinuousDiD requires complete covariates."
+            )
+
+        n_t = len(delta_y_treated)
+        n_c = len(delta_y_control)
+        Xt = np.column_stack([np.ones(n_t), X_treated_raw])
+        Xc = np.column_stack([np.ones(n_c), X_control_raw])
+
+        # Outcome regression on controls (OLS) — shared by reg and dr.
+        gamma, _, _ = solve_ols(
+            Xc,
+            delta_y_control,
+            return_vcov=False,
+            rank_deficient_action=self.rank_deficient_action,
+        )
+        gamma = np.where(np.isnan(gamma), 0.0, gamma)
+        mu_treated = Xt @ gamma
+        or_resid_c = delta_y_control - Xc @ gamma  # per-control OR residual
+
+        # OR-nuisance influence function: IF_gamma[k] = M_c^{-1} X_c[k] resid_c[k]
+        Mc = (Xc.T @ Xc) / n_c
+        Mc_inv, _, _ = _rank_guarded_inv(Mc)
+        IF_gamma = (Xc @ Mc_inv) * or_resid_c[:, np.newaxis]  # (n_c, p), Mc_inv symmetric
+        x_bar_treated = Xt.mean(axis=0)
+        n_total = n_t + n_c
+
+        eta_cont = 0.0
+        dr_inf = None
+        if self.estimation_method == "dr":
+            D = np.concatenate([np.ones(n_t), np.zeros(n_c)])
+            X_raw_all = np.vstack([X_treated_raw, X_control_raw])
+            try:
+                _, ps = solve_logit(
+                    X_raw_all,
+                    D,
+                    rank_deficient_action=self.rank_deficient_action,
+                    epv_threshold=self.epv_threshold,
+                )
+            except (np.linalg.LinAlgError, ValueError):
+                # Fail closed by default; also honor an explicit
+                # rank_deficient_action="error" request (mirrors CS).
+                if self.pscore_fallback == "error" or self.rank_deficient_action == "error":
+                    raise
+                warnings.warn(
+                    f"Propensity score estimation failed for (g={g}, t={t}); "
+                    "falling back to an unconditional propensity for this cell "
+                    "(this cell is now reg-like, not doubly-robust). "
+                    "Consider estimation_method='reg' to avoid propensity scores.",
+                    UserWarning,
+                    stacklevel=3,
+                )
+                ps = np.full(n_total, n_t / n_total)
+            ps = np.clip(ps, self.pscore_trim, 1 - self.pscore_trim)
+            odds_c = ps[n_t:] / (1 - ps[n_t:])
+            eta_cont = float(np.sum(odds_c * or_resid_c) / np.sum(odds_c))
+            dY_all = np.concatenate([delta_y_treated, delta_y_control])
+            dr_inf = self._dr_cell_inf_func(dY_all, D, np.vstack([Xt, Xc]), gamma, ps)
+
+        return {
+            "mu_0_vec": mu_treated + eta_cont,  # per-treated counterfactual
+            "Xt": Xt,  # (n_t, p) treated covariates incl. intercept
+            "IF_gamma": IF_gamma,  # (n_c, p)
+            "x_bar_treated": x_bar_treated,  # (p,)
+            "eta_cont": eta_cont,
+            "dr_inf": dr_inf,  # (n_total,) DRDID att.inf.func, treated-then-control
+            "n_total": n_total,
+        }
+
+    def _dr_cell_inf_func(
+        self,
+        dY: np.ndarray,
+        D: np.ndarray,
+        X: np.ndarray,
+        gamma: np.ndarray,
+        ps: np.ndarray,
+    ) -> np.ndarray:
+        """DRDID ``drdid_panel`` doubly-robust per-unit influence function.
+
+        Direct port of ``DRDID::drdid_panel$att.inf.func`` (unit weights = 1,
+        propensity already clipped so no drop-trimming). Units are ordered
+        treated-then-control. Validated to ~1e-13 against DRDID in the spike.
+        """
+        n = len(D)
+        out_delta = X @ gamma
+        w_treat = D
+        w_cont = ps * (1 - D) / (1 - ps)
+        dr_treat = w_treat * (dY - out_delta)
+        dr_cont = w_cont * (dY - out_delta)
+        eta_treat = dr_treat.mean() / w_treat.mean()
+        eta_cont = dr_cont.mean() / w_cont.mean()
+        weights_ols = 1.0 - D
+        wols_eX = (weights_ols * (dY - out_delta))[:, np.newaxis] * X
+        XpX = ((weights_ols[:, np.newaxis] * X).T @ X) / n
+        XpX_inv, _, _ = _rank_guarded_inv(XpX)
+        asy_wols = wols_eX @ XpX_inv
+        W = ps * (1 - ps)
+        score_ps = (D - ps)[:, np.newaxis] * X
+        Hess, _, _ = _rank_guarded_inv((X.T @ (W[:, np.newaxis] * X)) / n)
+        asy_ps = score_ps @ Hess
+        inf_treat_1 = dr_treat - w_treat * eta_treat
+        M1 = (w_treat[:, np.newaxis] * X).mean(axis=0)
+        inf_treat = (inf_treat_1 - asy_wols @ M1) / w_treat.mean()
+        inf_cont_1 = dr_cont - w_cont * eta_cont
+        M2 = (w_cont[:, np.newaxis] * (dY - out_delta - eta_cont)[:, np.newaxis] * X).mean(axis=0)
+        M3 = (w_cont[:, np.newaxis] * X).mean(axis=0)
+        inf_control = (inf_cont_1 + asy_ps @ M2 - asy_wols @ M3) / w_cont.mean()
+        return inf_treat - inf_control
+
+    def _covariate_cell_influence(
+        self,
+        cov_adj: Dict[str, Any],
+        delta_tilde_y: np.ndarray,
+        att_glob: float,
+        residuals: np.ndarray,
+        Psi: np.ndarray,
+        bread: np.ndarray,
+        Psi_eval: np.ndarray,
+        dPsi_eval: np.ndarray,
+        dpsi_bar: np.ndarray,
+        treated_indices: np.ndarray,
+        control_indices: np.ndarray,
+        n_t: int,
+        n_c: int,
+    ) -> Dict[str, Any]:
+        """Per-cell-unit influence functions for the covariate-adjusted estimands.
+
+        Returns arrays aligned to ``cell_indices = [treated_indices,
+        control_indices]`` in the 1/n convention (the aggregator scatters them
+        with the cell weight and the SE is ``sqrt(sum(IF^2))``). At p=1 (intercept
+        only) this reduces exactly to the unconditional control-IF path.
+        """
+        Xt = cov_adj["Xt"]  # (n_t, p)
+        IF_gamma = cov_adj["IF_gamma"]  # (n_c, p)
+        x_bar_treated = cov_adj["x_bar_treated"]  # (p,)
+
+        # Treated: beta perturbation from the B-spline residual score.
+        beta_if_t = (Psi * residuals[:, np.newaxis]) @ bread / n_t  # (n_t, K), bread symmetric
+        att_d_if_t = beta_if_t @ Psi_eval.T  # (n_t, n_grid)
+        acrt_d_if_t = beta_if_t @ dPsi_eval.T
+        acrt_glob_if_t = beta_if_t @ dpsi_bar  # (n_t,)
+        att_glob_if_t = (delta_tilde_y - att_glob) / n_t  # (n_t,)
+
+        # Control: enters through the outcome-regression nuisance gamma_hat.
+        # E_T[Psi X'] (K x p) replaces the scalar psi_bar; E_T[X'] the scalar 1.
+        Psi_X_bar = (Psi.T @ Xt) / n_t  # (K, p)
+        beta_if_c = -((IF_gamma @ Psi_X_bar.T) @ bread) / n_c  # (n_c, K)
+        att_d_if_c = beta_if_c @ Psi_eval.T
+        acrt_d_if_c = beta_if_c @ dPsi_eval.T
+        acrt_glob_if_c = beta_if_c @ dpsi_bar
+        att_glob_if_c = -(IF_gamma @ x_bar_treated) / n_c  # (n_c,)
+
+        if_att_glob = np.concatenate([att_glob_if_t, att_glob_if_c])
+        if_acrt_glob = np.concatenate([acrt_glob_if_t, acrt_glob_if_c])
+        if_att_d = np.vstack([att_d_if_t, att_d_if_c])  # (n_total, n_grid)
+        if_acrt_d = np.vstack([acrt_d_if_t, acrt_d_if_c])
+
+        if self.estimation_method == "dr":
+            # dr shares the reg curve shape (ACRT identical); att_glob / ATT(d)
+            # differ by the augmentation eta_cont. Ground att_glob's IF in the
+            # validated DRDID doubly-robust IF and shift ATT(d) uniformly by the
+            # augmentation IF (= reg att_glob IF - dr att_glob IF). ACRT untouched.
+            n_total = cov_adj["n_total"]
+            dr_att_glob_if = cov_adj["dr_inf"] / n_total  # (n_total,)
+            if_eta = if_att_glob - dr_att_glob_if  # augmentation IF, per unit
+            if_att_d = if_att_d - if_eta[:, np.newaxis]
+            if_att_glob = dr_att_glob_if
+
+        return {
+            "cell_indices": np.concatenate([treated_indices, control_indices]),
+            "if_att_glob": if_att_glob,
+            "if_acrt_glob": if_acrt_glob,
+            "if_att_d": if_att_d,
+            "if_acrt_d": if_acrt_d,
         }
 
     def _compute_dose_response_gt(
@@ -940,14 +1278,34 @@ class ContinuousDiD:
                     "acrt_d": np.full(len(dvals), np.nan),
                 }
 
-        # Control counterfactual (weighted mean when survey weights present)
-        if w_control is not None:
+        # Control counterfactual.
+        #   - No covariates: scalar control mean mu_0 (unconditional PT).
+        #   - Covariates (reg/dr): per-treated covariate-adjusted counterfactual
+        #     mu_0_vec = X_i'gamma_hat (+ scalar DR augmentation eta_cont for dr),
+        #     under conditional PT. `cov_adj` carries the nuisance pieces the
+        #     influence function needs. Survey weights are rejected upstream on
+        #     the covariate path, so w_control/w_treated are None here.
+        covariate_by_period = precomp.get("covariate_by_period")
+        cov_adj = None
+        if covariate_by_period is not None:
+            cov_adj = self._fit_covariate_adjustment(
+                delta_y_treated,
+                delta_y_control,
+                covariate_by_period[base_t][treated_mask],
+                covariate_by_period[base_t][control_mask],
+                g,
+                t,
+            )
+
+        if cov_adj is not None:
+            mu_0 = float(np.mean(delta_y_control))  # retained for metadata only
+            delta_tilde_y = delta_y_treated - cov_adj["mu_0_vec"]
+        elif w_control is not None:
             mu_0 = float(np.average(delta_y_control, weights=w_control))
+            delta_tilde_y = delta_y_treated - mu_0
         else:
             mu_0 = float(np.mean(delta_y_control))
-
-        # Demean
-        delta_tilde_y = delta_y_treated - mu_0
+            delta_tilde_y = delta_y_treated - mu_0
 
         # Treated doses
         treated_doses = dose_vector[treated_mask]
@@ -1015,8 +1373,12 @@ class ContinuousDiD:
         att_d = Psi_eval @ beta_pred
         acrt_d = dPsi_eval @ beta_pred
 
-        # Summary parameters
-        if w_treated is not None:
+        # Summary parameters. With covariates, att_glob = mean_T(delta_tilde_y)
+        # (reg: mean_T(dY - X'gamma); dr: additionally minus the augmentation
+        # eta_cont, already folded into delta_tilde_y via mu_0_vec).
+        if cov_adj is not None:
+            att_glob = float(np.mean(delta_tilde_y))
+        elif w_treated is not None:
             att_glob = float(np.average(delta_y_treated, weights=w_treated) - mu_0)
         else:
             att_glob = float(np.mean(delta_y_treated) - mu_0)
@@ -1090,6 +1452,29 @@ class ContinuousDiD:
         else:
             dpsi_bar = np.mean(dPsi_treated, axis=0)
 
+        # Covariate influence-function arrays (per cell unit, treated-then-control,
+        # in the 1/n "sum-of-squares SE" convention). Reg uses the p-vector OR
+        # generalization of the unconditional control IF (which is its p=1 case);
+        # dr reuses the reg curve shape and grounds att_glob + the augmentation IF
+        # in the validated DRDID doubly-robust per-unit IF. See REGISTRY.
+        cov_if = None
+        if cov_adj is not None:
+            cov_if = self._covariate_cell_influence(
+                cov_adj,
+                delta_tilde_y,
+                att_glob,
+                residuals,
+                Psi,
+                bread,
+                Psi_eval,
+                dPsi_eval,
+                dpsi_bar,
+                treated_indices,
+                control_indices,
+                n_treated,
+                n_control,
+            )
+
         bootstrap_info = {
             "bread": bread,
             "ee_treated": ee_treated,
@@ -1110,6 +1495,7 @@ class ContinuousDiD:
             "mu_0": mu_0,
             "att_glob": att_glob,
             "acrt_glob": acrt_glob,
+            "cov_if": cov_if,
         }
 
         # Store survey-weighted masses and per-unit arrays for IF linearization
@@ -1204,6 +1590,16 @@ class ContinuousDiD:
                 continue
             info = gt_bootstrap_info[gt]
             if not info:
+                continue
+            # Covariate path: scatter the pre-computed per-unit cell IFs
+            # (unconditional / survey path is untouched below).
+            cov_if = info.get("cov_if")
+            if cov_if is not None:
+                idx = cov_if["cell_indices"]
+                np.add.at(if_att_glob, idx, w * cov_if["if_att_glob"])
+                np.add.at(if_acrt_glob, idx, w * cov_if["if_acrt_glob"])
+                np.add.at(if_att_d, idx, w * cov_if["if_att_d"])
+                np.add.at(if_acrt_d, idx, w * cov_if["if_acrt_d"])
                 continue
             treated_idx = info["treated_indices"]
             control_idx = info["control_indices"]
@@ -1485,6 +1881,19 @@ class ContinuousDiD:
         # Helper to bootstrap a single (g,t) cell
         def _bootstrap_gt_cell(gt, info):
             """Returns att_glob_b array (B,) for this cell."""
+            # Covariate path: the multiplier bootstrap perturbs the same per-unit
+            # cell influence functions the analytical SE uses.
+            cov_if = info.get("cov_if")
+            if cov_if is not None:
+                xi = all_weights[:, cov_if["cell_indices"]]  # (B, n_cell)
+                beta_pred_c = info["beta_pred"]
+                cell_att_d = info["Psi_eval"] @ beta_pred_c
+                cell_acrt_d = info["dPsi_eval"] @ beta_pred_c
+                att_d_b = cell_att_d[np.newaxis, :] + xi @ cov_if["if_att_d"]
+                acrt_d_b = cell_acrt_d[np.newaxis, :] + xi @ cov_if["if_acrt_d"]
+                att_glob_b = info["att_glob"] + xi @ cov_if["if_att_glob"]
+                acrt_glob_b = xi @ cov_if["if_acrt_glob"]
+                return att_d_b, acrt_d_b, att_glob_b, acrt_glob_b, info.get("acrt_glob", 0.0)
             treated_idx = info["treated_indices"]
             control_idx = info["control_indices"]
             n_t = info["n_treated"]

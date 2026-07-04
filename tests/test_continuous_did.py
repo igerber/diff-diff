@@ -1559,8 +1559,165 @@ class TestContinuousDiDBreadRankGuard:
                     data, "outcome", "unit", "period", "first_treat", "dose"
                 )
         msgs = [str(w.message) for w in caught]
-        assert any(
-            "ContinuousDiD ACRT variance" in m and "rank-deficient" in m for m in msgs
-        ), msgs
+        assert any("ContinuousDiD ACRT variance" in m and "rank-deficient" in m for m in msgs), msgs
         # rank-reduced bread still yields finite ACRT SEs.
         assert np.all(np.isfinite(results.dose_response_acrt.se))
+
+
+# =============================================================================
+# Covariate adjustment — API, params, and fail-closed behavior
+# =============================================================================
+
+
+def _cov_data(seed=5, n_units=120):
+    """Continuous-DiD panel with one covariate column added."""
+    data = generate_continuous_did_data(n_units=n_units, n_periods=3, seed=seed, noise_sd=0.5)
+    rng = np.random.default_rng(seed)
+    # time-invariant covariate (one value per unit)
+    uc = data.groupby("unit").ngroup().to_numpy()
+    per_unit = rng.normal(size=data["unit"].nunique())
+    data["x1"] = per_unit[uc]
+    return data
+
+
+class TestCovariateAPI:
+    def test_covariates_and_method_in_params(self):
+        est = ContinuousDiD(covariates=["x1"], estimation_method="reg")
+        p = est.get_params()
+        assert p["covariates"] == ["x1"]
+        assert p["estimation_method"] == "reg"
+        assert "pscore_trim" in p and "epv_threshold" in p and "pscore_fallback" in p
+
+    def test_default_estimation_method_is_dr(self):
+        assert ContinuousDiD().estimation_method == "dr"
+
+    def test_invalid_estimation_method_raises(self):
+        with pytest.raises(ValueError, match="estimation_method"):
+            ContinuousDiD(estimation_method="bogus")
+
+    def test_set_params_transactional(self):
+        est = ContinuousDiD(estimation_method="reg")
+        with pytest.raises(ValueError):
+            est.set_params(estimation_method="nope")
+        # invalid update left the config unmutated
+        assert est.estimation_method == "reg"
+        est.set_params(estimation_method="dr")
+        assert est.estimation_method == "dr"
+
+    def test_ipw_with_covariates_raises(self):
+        data = _cov_data()
+        est = ContinuousDiD(covariates=["x1"], estimation_method="ipw")
+        with pytest.raises(NotImplementedError, match="ipw"):
+            est.fit(data, "outcome", "unit", "period", "first_treat", "dose", aggregate="dose")
+
+    def test_ipw_without_covariates_ok(self):
+        # estimation_method only matters with covariates; ipw default must not
+        # break the unconditional path.
+        data = _cov_data()
+        est = ContinuousDiD(estimation_method="ipw")
+        res = est.fit(data, "outcome", "unit", "period", "first_treat", "dose", aggregate="dose")
+        assert np.isfinite(res.overall_att)
+
+    def test_survey_with_covariates_raises(self):
+        from diff_diff.survey import SurveyDesign
+
+        data = _cov_data()
+        data["w"] = 1.0
+        est = ContinuousDiD(covariates=["x1"], estimation_method="reg")
+        with pytest.raises(NotImplementedError, match="survey_design"):
+            est.fit(
+                data,
+                "outcome",
+                "unit",
+                "period",
+                "first_treat",
+                "dose",
+                aggregate="dose",
+                survey_design=SurveyDesign(weights="w"),
+            )
+
+    def test_missing_covariate_column_raises(self):
+        data = _cov_data()
+        est = ContinuousDiD(covariates=["not_a_col"], estimation_method="reg")
+        with pytest.raises(ValueError, match="not found"):
+            est.fit(data, "outcome", "unit", "period", "first_treat", "dose", aggregate="dose")
+
+    def test_missing_covariate_values_raise(self):
+        # Fail closed: a per-cell fallback would silently mix conditional and
+        # unconditional estimands in the aggregate.
+        data = _cov_data()
+        data.loc[data.index[:4], "x1"] = np.nan
+        est = ContinuousDiD(covariates=["x1"], estimation_method="reg")
+        with pytest.raises(ValueError, match="missing/non-finite covariate"):
+            est.fit(data, "outcome", "unit", "period", "first_treat", "dose", aggregate="dose")
+
+    def test_default_pscore_fallback_is_error(self):
+        assert ContinuousDiD().pscore_fallback == "error"
+
+    def test_invalid_nuisance_params_raise(self):
+        with pytest.raises(ValueError, match="pscore_fallback"):
+            ContinuousDiD(pscore_fallback="maybe")
+        with pytest.raises(ValueError, match="pscore_trim"):
+            ContinuousDiD(pscore_trim=0.6)
+        with pytest.raises(ValueError, match="pscore_trim"):
+            ContinuousDiD(pscore_trim=-0.1)
+        with pytest.raises(ValueError, match="epv_threshold"):
+            ContinuousDiD(epv_threshold=0.0)
+
+    def test_covariate_metadata_on_results(self):
+        data = _cov_data()
+        est = ContinuousDiD(
+            covariates=["x1"],
+            estimation_method="dr",
+            pscore_trim=0.02,
+            epv_threshold=8.0,
+            pscore_fallback="unconditional",
+        )
+        res = est.fit(data, "outcome", "unit", "period", "first_treat", "dose", aggregate="dose")
+        assert res.covariates == ["x1"]
+        assert res.estimation_method == "dr"
+        assert res.pscore_trim == 0.02
+        assert res.epv_threshold == 8.0
+        assert res.pscore_fallback == "unconditional"
+        assert "Covariates" in res.summary()
+
+    def test_covariate_eventstudy_and_bootstrap(self):
+        """Covariate paths compose with aggregate='eventstudy' and n_bootstrap>0
+        (reg + dr), with finite inference and bootstrap SE near analytical."""
+        data = _cov_data(n_units=200)
+        for method in ("reg", "dr"):
+            es = ContinuousDiD(covariates=["x1"], estimation_method=method).fit(
+                data, "outcome", "unit", "period", "first_treat", "dose", aggregate="eventstudy"
+            )
+            assert np.isfinite(es.overall_att) and np.isfinite(es.overall_att_se)
+            ana = ContinuousDiD(covariates=["x1"], estimation_method=method).fit(
+                data, "outcome", "unit", "period", "first_treat", "dose", aggregate="dose"
+            )
+            boot = ContinuousDiD(
+                covariates=["x1"], estimation_method=method, n_bootstrap=199, seed=3
+            ).fit(data, "outcome", "unit", "period", "first_treat", "dose", aggregate="dose")
+            assert np.isfinite(boot.overall_att_se)
+            # bootstrap SE within ~30% of analytical (same linearized IF)
+            assert abs(boot.overall_att_se - ana.overall_att_se) / ana.overall_att_se < 0.3
+
+    def test_clone_refit_idempotent(self):
+        data = _cov_data()
+        est = ContinuousDiD(covariates=["x1"], estimation_method="dr", seed=1)
+        r1 = est.fit(data, "outcome", "unit", "period", "first_treat", "dose", aggregate="dose")
+        clone = ContinuousDiD(**est.get_params())
+        r2 = clone.fit(data, "outcome", "unit", "period", "first_treat", "dose", aggregate="dose")
+        assert abs(float(r1.overall_att) - float(r2.overall_att)) < 1e-12
+        assert abs(float(r1.overall_att_se) - float(r2.overall_att_se)) < 1e-12
+
+    def test_no_covariate_path_unchanged(self):
+        """Passing covariates=None runs the unchanged unconditional path."""
+        data = _cov_data()
+        base = ContinuousDiD(seed=1).fit(
+            data, "outcome", "unit", "period", "first_treat", "dose", aggregate="dose"
+        )
+        # estimation_method has no effect without covariates
+        alt = ContinuousDiD(estimation_method="reg", seed=1).fit(
+            data, "outcome", "unit", "period", "first_treat", "dose", aggregate="dose"
+        )
+        assert float(base.overall_att) == float(alt.overall_att)
+        assert float(base.overall_att_se) == float(alt.overall_att_se)

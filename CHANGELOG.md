@@ -8,6 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **`ContinuousDiD` covariate support** (`covariates=`, `estimation_method ∈ {"reg", "dr"}`) for
+  dose-response estimation under **conditional** parallel trends
+  (`E[ΔY(0) | D=d, X] = E[ΔY(0) | D=0, X]`). `reg` uses an outcome-regression control counterfactual;
+  `dr` (default) is doubly-robust (DRDID `drdid_panel`). The scalar `overall_att` + standard error
+  match `DRDID::reg_did_panel` / `drdid_panel` to ~1e-8; analytical, multiplier-bootstrap, and
+  event-study inference all compose with covariates. `reg` and `dr` share the dose-response *shape*
+  and `ACRT(d)`, differing only in the `overall_att` / ATT(d) level and the doubly-robust SE.
+  `estimation_method="ipw"` with covariates raises `NotImplementedError` (pure IPW's covariate
+  adjustment is a scalar level shift and cannot adjust the curve shape); `covariates=` +
+  `survey_design=` is deferred (`NotImplementedError`).
 - **`HeterogeneousAdoptionDiD` event-study `cluster=` support** (both designs). On
   `aggregate="event_study"`, `cluster=` now produces cluster-robust per-horizon pointwise
   confidence intervals AND a cluster-robust simultaneous sup-t confidence band (`cband=True`),

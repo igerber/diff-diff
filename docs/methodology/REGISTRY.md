@@ -889,6 +889,12 @@ No selection into dose groups on the basis of treatment effects.
 Implies `ATT(d|d) = ATT(d)` for all d.
 Additionally identifies: `ATT(d)`, `ACRT(d)`, `ACRT^{glob}`, and cross-dose comparisons.
 
+**Conditional Parallel Trends (with covariates).** When `covariates=` is passed the PT/SPT
+assumptions are conditional on covariates `X`:
+`E[Y_t(0) - Y_{t-1}(0) | D = d, X] = E[Y_t(0) - Y_{t-1}(0) | D = 0, X]`. The per-`(g,t)` cell's
+control counterfactual becomes a covariate-adjusted prediction instead of the unconditional control
+mean (see Key Equations and the covariate Note below).
+
 See `docs/methodology/continuous-did.md` Section 4 for full details.
 
 ### Key Equations
@@ -906,6 +912,17 @@ See `docs/methodology/continuous-did.md` Section 4 for full details.
 2. Build B-spline basis `Psi(D_i)` from treated doses
 3. OLS: `beta = (Psi'Psi)^{-1} Psi' Delta_tilde_Y`
 4. `ATT(d) = Psi(d)' beta`, `ACRT(d) = dPsi(d)/dd' beta`
+
+**Covariate-adjusted `Delta_tilde_Y` (conditional PT).** With `covariates=`, step 1's scalar control
+mean is replaced by a per-treated-unit covariate-adjusted counterfactual (`X_i` includes an intercept):
+- `reg` (outcome regression): fit `gamma_hat = (X_C'X_C)^{-1} X_C' Delta_Y_C` on controls;
+  `Delta_tilde_Y_i = Delta_Y_i - X_i' gamma_hat`.
+- `dr` (doubly-robust, DRDID `drdid_panel`): same OLS `gamma_hat`, plus a propensity model and a scalar
+  augmentation `eta_cont = odds_weighted_mean_C(Delta_Y - X' gamma_hat)`;
+  `Delta_tilde_Y_i = Delta_Y_i - X_i' gamma_hat - eta_cont`.
+Steps 2-4 are unchanged. Because the augmentation is a constant, `reg` and `dr` share the same
+`ACRT(d)` (a constant only shifts the B-spline intercept, which `dPsi` annihilates); they differ only
+in the `ATT(d)` / `ATT^{glob}` level (by `-eta_cont`) and in the doubly-robust SE.
 
 ### Edge Cases
 
@@ -939,6 +956,7 @@ labels.*
 2. **Note:** `bspline_derivative_design_matrix` derivative-failure `UserWarning` — Phase 2 axis-C #12 silent-failures audit fix. No R correspondence; `contdid` v0.1.0 does not implement an equivalent warning. Cross-references the § Edge Cases `**Note:**` bullet above (`bspline_derivative_design_matrix` entry) and `METHODOLOGY_REVIEW.md` § ContinuousDiD Deviations #2. Locked in `tests/test_continuous_did.py::TestBSplineDerivativeDegenerateBasis` (3 tests); source-level aggregate-warning block at `diff_diff/continuous_did_bspline.py:150-187`.
 3. **Note:** `+inf` → `0` never-treated recoding emits `UserWarning` reporting the affected row count; negative `first_treat` (including `-inf`) raises `ValueError`. Axis-E silent-coercion fix per Phase 2 audit. No R correspondence; `contdid` v0.1.0 silently absorbs `+inf` without a signal. Cross-references the § Implementation Checklist `**Note:**` below and `METHODOLOGY_REVIEW.md` § ContinuousDiD Deviations #3.
 4. **Note:** Zero-`first_treat` rows with nonzero `dose` are force-zeroed with `UserWarning` reporting the affected row count (axis-E silent-coercion). No R correspondence; `contdid` v0.1.0 has the same `first_treat = 0` → `D = 0` invariant but silently coerces without a warning. Cross-references the § Implementation Checklist `**Note:**` below and `METHODOLOGY_REVIEW.md` § ContinuousDiD Deviations #4.
+5. **Note (covariate support — library extension beyond `contdid` v0.1.0):** `covariates=` with `estimation_method ∈ {reg, dr}` adds conditional-parallel-trends adjustment. This is a **library extension**: `contdid` v0.1.0 hard-stops on any covariate (`stop("covariates not currently supported…")`), so there is **no external R anchor for the covariate-adjusted dose *curve***. Validation instead: (a) the **scalar `overall_att` + SE** map *exactly* onto `DRDID::reg_did_panel` (reg) / `DRDID::drdid_panel` (dr) — a tight (~1e-8) component anchor, skip-guarded since DRDID is not in CI (`tests/test_methodology_continuous_did.py::TestCovariateReg`); (b) an **R-free NumPy reconstruction** of the reg/dr `att`+SE runs *in CI* at p≥2 (`test_dr_reg_numpy_crosscheck_p2`) — the guard the p=1 reduction cannot provide (at p=1 the intercept-only propensity is constant, so `eta_cont ≡ 0` and dr collapses to reg); (c) DGP recovery + MC coverage (reg 96%, dr 95%). **`ipw` restricted:** `estimation_method="ipw"` with covariates raises `NotImplementedError` — pure IPW's covariate adjustment is a single scalar (a propensity-reweighted control mean) that shifts only the ATT(d) level and leaves `ACRT(d)` identical to the unconditional fit, so it cannot adjust the dose-response *shape*. **Deviations from DRDID:** unit weights are 1 (unweighted; `covariates=` + `survey_design=` raises `NotImplementedError`, deferred); propensity trimming uses clip semantics (`pscore_trim`) rather than DRDID's drop-trimming — identical on moderate-overlap data (the anchor regime), diverging only at extreme propensities. **Fail-closed policies (no-silent-failures):** (i) missing/non-finite covariate values raise `ValueError` up front — a per-cell fallback to unconditional estimation would silently mix conditional-PT and unconditional-PT cells in the aggregate; (ii) `dr` propensity-estimation failure raises by default (`pscore_fallback="error"`) so a `dr` fit never silently degrades to a non-DR estimate — `pscore_fallback="unconditional"` opts into the graceful (warned, reg-like) fallback. Cross-references `docs/methodology/continuous-did.md` § Covariates.
 
 ### Implementation Checklist
 
@@ -948,7 +966,7 @@ labels.*
 - [x] Multiplier bootstrap for inference
 - [x] Analytical SEs via influence functions
 - [x] Equation verification tests (linear, quadratic, multi-period)
-- [ ] Covariate support (deferred, matching R v0.1.0)
+- [x] Covariate support (reg / dr) — conditional parallel trends. **ipw restricted** (see Note below); survey × covariate deferred; discrete-saturated & Remark 3.1 still deferred.
 - [ ] Discrete treatment saturated regression
 - [ ] Lowest-dose-as-control (Remark 3.1)
 - [x] Survey design support (Phase 3): weighted B-spline OLS, TSL on influence functions; bootstrap+survey supported (Phase 6)

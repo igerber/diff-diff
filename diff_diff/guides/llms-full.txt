@@ -696,8 +696,20 @@ ContinuousDiD(
     bootstrap_weights: str = "rademacher",
     seed: int | None = None,
     rank_deficient_action: str = "warn",
+    covariates: list[str] | None = None,      # Conditional parallel trends (X). None = unconditional
+    estimation_method: str = "dr",            # "reg" or "dr" (used only with covariates); "ipw" not
+                                              #   supported on the dose curve (raises NotImplementedError)
+    pscore_trim: float = 0.01,                # dr propensity trimming
+    epv_threshold: float = 10.0,              # dr propensity events-per-variable
+    pscore_fallback: str = "error",           # dr propensity-failure action: "error" (fail-closed
+                                              #   default) or "unconditional" (opt-in reg-like fallback)
 )
 ```
+
+Covariates give conditional parallel trends: each (g,t) cell's control counterfactual becomes a
+covariate-adjusted prediction. `reg`/`dr` share the ATT(d) *shape* and ACRT(d); `dr` (doubly-robust,
+default) differs only in the overall_att/ATT(d) level and SE. `overall_att`+SE match DRDID
+reg_did_panel/drdid_panel. `covariates=` + `survey_design=` is not yet supported.
 
 **Alias:** `CDiD`
 
