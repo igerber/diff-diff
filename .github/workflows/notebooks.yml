@@ -8,6 +8,8 @@ on:
       - 'diff_diff/**'
       - 'pyproject.toml'
       - '.github/workflows/notebooks.yml'
+      # the interop drift guard runs only in this workflow (balance installed)
+      - 'tests/test_t26_composition_drift_calibration_drift.py'
   pull_request:
     branches: [main]
     types: [opened, synchronize, reopened, labeled, unlabeled]
@@ -16,6 +18,8 @@ on:
       - 'diff_diff/**'
       - 'pyproject.toml'
       - '.github/workflows/notebooks.yml'
+      # the interop drift guard runs only in this workflow (balance installed)
+      - 'tests/test_t26_composition_drift_calibration_drift.py'
   schedule:
     # Weekly Sunday 6am UTC — smoke test that notebooks still execute cleanly
     - cron: '0 6 * * 0'
@@ -58,11 +62,16 @@ jobs:
             --nbmake-timeout=600 \
             --ignore=docs/tutorials/06_power_analysis.ipynb \
             --ignore=docs/tutorials/10_trop.ipynb \
+            --ignore=docs/tutorials/26_composition_drift_calibration.ipynb \
             -v \
             --tb=short
           # Excluded notebooks (too slow for pure-Python CI without Rust backend):
           #   06_power_analysis — SyntheticDiD simulate_power Monte Carlo (>600s)
           #   10_trop — LOOCV grid search (>600s)
+          # Excluded notebooks (external interop dependency):
+          #   26_composition_drift_calibration — requires the balance package;
+          #   runs in the isolated interop-notebooks job below so this job's
+          #   minimal env keeps enforcing that tutorials add no dependencies
 
       - name: Upload failed notebook outputs
         if: failure()
@@ -70,4 +79,60 @@ jobs:
         with:
           name: failed-notebook-outputs
           path: docs/tutorials/*.ipynb
+          retention-days: 7
+
+  interop-notebooks:
+    name: Execute balance-interop notebook
+    # Same ready-for-ci label gate as execute-notebooks (keep in sync).
+    if: >-
+      github.event_name != 'pull_request'
+      || (contains(github.event.pull_request.labels.*.name, 'ready-for-ci')
+      && (github.event.action != 'labeled' && github.event.action != 'unlabeled'
+      || github.event.label.name == 'ready-for-ci'))
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          # 3.12+: balance's legacy numpy<2 / scipy<1.14 / scikit-learn<1.4
+          # pins apply only to python < 3.12
+          python-version: '3.12'
+
+      - name: Install dependencies
+        # balance is a tutorial-only dependency: it is installed ONLY in this
+        # isolated job, never in package requirements or the main notebooks
+        # job. The weekly cron on this workflow doubles as a cross-package
+        # integration smoke of diff-diff HEAD against latest PyPI balance.
+        run: |
+          pip install numpy pandas scipy matplotlib nbmake pytest ipykernel "balance>=0.21"
+          # Add repo root to Python path so Jupyter kernels can import diff_diff
+          # (pip install -e . requires the Rust/maturin toolchain; .pth avoids that)
+          python -c "import site; print(site.getsitepackages()[0])" | xargs -I{} sh -c 'echo "$PWD" > {}/diff_diff_dev.pth'
+
+      - name: Execute interop notebook
+        env:
+          DIFF_DIFF_BACKEND: python
+        run: |
+          pytest --nbmake docs/tutorials/26_composition_drift_calibration.ipynb \
+            --nbmake-timeout=600 \
+            -v \
+            --tb=short
+
+      - name: Run interop drift guard
+        # balance is present only in this job, so this is the drift test's
+        # CI home (it importorskips balance everywhere else).
+        env:
+          DIFF_DIFF_BACKEND: python
+        run: |
+          pytest tests/test_t26_composition_drift_calibration_drift.py -v --tb=short
+
+      - name: Upload failed notebook outputs
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: failed-interop-notebook-outputs
+          path: docs/tutorials/26_composition_drift_calibration.ipynb
           retention-days: 7

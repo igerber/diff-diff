@@ -846,6 +846,9 @@ sources:
         type: roadmap
       - path: docs/tutorials/16_survey_did.ipynb
         type: tutorial
+      - path: docs/tutorials/26_composition_drift_calibration.ipynb
+        type: tutorial
+        note: "balance interop: calibration handoff + composition-drift failure mode"
       - path: README.md
         section: "Survey Support"
         type: user_guide
@@ -953,6 +956,9 @@ sources:
     docs:
       - path: docs/api/prep.rst
         type: api_reference
+      - path: docs/tutorials/26_composition_drift_calibration.ipynb
+        type: tutorial
+        note: "aggregate_survey is the seam balance.interop.diff_diff wraps"
       - path: docs/practitioner_getting_started.rst
         type: user_guide
       - path: docs/practitioner_decision_tree.rst

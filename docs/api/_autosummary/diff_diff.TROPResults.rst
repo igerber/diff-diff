@@ -34,6 +34,7 @@
       ~TROPResults.n_bootstrap
       ~TROPResults.n_post_periods
       ~TROPResults.n_pre_periods
+      ~TROPResults.non_absorbing
       ~TROPResults.significance_stars
       ~TROPResults.survey_metadata
       ~TROPResults.att

@@ -106,6 +106,14 @@ Survey-Design Inference (Taylor-Series Linearization)
 
   The "when to weight" framework distinguishing precision, endogenous-sampling, and population-effect motivations for survey weights; cited in REGISTRY.md ``## Survey Data Support`` -> "Weighted Estimation".
 
+- **Deville, J.-C. & Särndal, C.-E. (1992).** "Calibration Estimators in Survey Sampling." *Journal of the American Statistical Association*, 87(418), 376-382. https://doi.org/10.1080/01621459.1992.10475217
+
+  The calibration/raking framework underlying post-stratified survey weights. diff-diff deliberately keeps calibration upstream (``SurveyDesign`` expects pre-calibrated weights); the ``docs/api/prep.rst`` "Weight calibration with balance" section and Tutorial 26 document the handoff.
+
+- **Sarig, T., Galili, T. & Eilat, R. (2023).** "balance - a Python package for balancing biased data samples." *arXiv:2307.06024* (stat.CO). https://arxiv.org/abs/2307.06024
+
+  Meta's ``balance`` package, the recommended upstream calibration companion. Its ``balance.interop.diff_diff`` adapter (balance >= 0.21) hands raked samples to diff-diff's survey-aware estimators; Tutorial 26 (``docs/tutorials/26_composition_drift_calibration.ipynb``) demonstrates the workflow, and ``tests/test_balance_interop_contract.py`` pins the consumed surface.
+
 Placebo Tests and DiD Diagnostics
 ---------------------------------
 

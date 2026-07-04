@@ -84,6 +84,7 @@ Quick Links
    tutorials/21_had_pretest_workflow
    tutorials/22_had_survey_design
    tutorials/23_spillover_tva
+   tutorials/26_composition_drift_calibration
 
 .. toctree::
    :maxdepth: 1

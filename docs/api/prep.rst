@@ -366,6 +366,41 @@ Example
    #     treatment="treated", time="post", survey_design=stage2,
    # )
 
+Weight calibration with balance
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+``SurveyDesign`` expects **pre-calibrated** weights: post-stratification,
+raking, and calibration are deliberately out of scope for diff-diff and
+remain upstream. Meta's `balance <https://import-balance.org/>`_ package
+(>= 0.21) is the recommended companion - it rakes survey samples to
+population margins and ships a dedicated adapter,
+``balance.interop.diff_diff``, that hands the calibrated sample straight
+to diff-diff (``to_survey_design`` / ``to_panel_for_did`` / ``fit_did`` /
+``as_balance_diagnostic``; installable via ``pip install "balance[did]"``).
+
+The handoff needs no adapter if you prefer the native seam - calibrated
+weights are just a column::
+
+   design = SurveyDesign(weights="raked_wt", strata="strat", psu="psu")
+   panel, stage2 = aggregate_survey(
+       microdata, by=["state", "year"], outcomes="smoking_rate",
+       survey_design=design,
+   )
+   result = CallawaySantAnna().fit(
+       panel, outcome="smoking_rate_mean", unit="state", time="year",
+       first_treat="g", survey_design=stage2,
+   )
+
+**When calibration matters for the causal estimand** (not just
+descriptives): non-response drift that is differential by treatment arm
+and time does *not* difference out of a DiD. See the
+:doc:`composition-drift tutorial <../tutorials/26_composition_drift_calibration>`
+for a worked BRFSS-style failure mode - including why raking granularity
+must match the comparison units (state-level raking, as BRFSS itself
+does, not a pooled national rake) - and the companion
+`balance tutorial <https://github.com/facebookresearch/balance/blob/main/tutorials/balance_diff_diff_brfss.ipynb>`_
+for the robust case (common drift) and descriptive-estimand repair.
+
 Data Validation
 ---------------
 

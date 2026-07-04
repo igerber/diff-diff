@@ -28,15 +28,15 @@
       ~CSBootstrapResults.group_effect_cis
       ~CSBootstrapResults.group_effect_p_values
       ~CSBootstrapResults.group_effect_ses
+      ~CSBootstrapResults.overall_att_es_ci
+      ~CSBootstrapResults.overall_att_es_p_value
+      ~CSBootstrapResults.overall_att_es_se
       ~CSBootstrapResults.n_bootstrap
       ~CSBootstrapResults.weight_type
       ~CSBootstrapResults.alpha
       ~CSBootstrapResults.overall_att_se
       ~CSBootstrapResults.overall_att_ci
       ~CSBootstrapResults.overall_att_p_value
-      ~CSBootstrapResults.overall_att_es_se
-      ~CSBootstrapResults.overall_att_es_ci
-      ~CSBootstrapResults.overall_att_es_p_value
       ~CSBootstrapResults.group_time_ses
       ~CSBootstrapResults.group_time_cis
       ~CSBootstrapResults.group_time_p_values

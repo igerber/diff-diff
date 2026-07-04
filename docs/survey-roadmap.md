@@ -109,13 +109,17 @@ Files: `benchmarks/R/benchmark_realdata_*.R`, `tests/test_survey_real_data.py`,
 
 - **Multi-stage design**: not yet documented. Single-stage (strata + PSU)
   is sufficient per Lumley (2004) Section 2.2.
-- **Post-stratification / calibration**: not yet documented. `SurveyDesign`
-  expects pre-calibrated weights. `samplics` is the most complete Python
-  option (post-stratification, raking, GREG) but is in read-only mode —
-  active development has moved to `svy`, which is not yet publicly
-  released. `weightipy` is actively maintained for raking. Weight
-  calibration is out of scope for diff-diff today, though building this
-  capability is a future possibility.
+- **Post-stratification / calibration**: DOCUMENTED (2026-07). `SurveyDesign`
+  expects pre-calibrated weights; calibration stays upstream by design. The
+  recommended companion is Meta's `balance` package (>= 0.21), which ships a
+  dedicated `balance.interop.diff_diff` adapter (`pip install "balance[did]"`).
+  The handoff is documented in `docs/api/prep.rst` ("Weight calibration with
+  balance"), demonstrated end-to-end in
+  `docs/tutorials/26_composition_drift_calibration.ipynb` (including when
+  calibration is essential for the causal estimand, not just descriptives),
+  and the consumed diff-diff surface is pinned by
+  `tests/test_balance_interop_contract.py`. `samplics` (read-only; successor
+  `svy` not yet released) and `weightipy` remain alternatives.
 
 ### Phase 10: Survey Completeness (v2.9.0–v3.0)
 

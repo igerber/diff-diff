@@ -2127,7 +2127,7 @@ class TestCiWorkflowLabelEventGuard:
     # fails the test, even in multi-job files.
     EXPECTED_JOBS = {
         "rust-test.yml": ("rust-tests", "python-tests", "python-fallback"),
-        "notebooks.yml": ("execute-notebooks",),
+        "notebooks.yml": ("execute-notebooks", "interop-notebooks"),
         "docs-tests.yml": ("doc-snippets", "sphinx-build", "docs-deps-py39-smoke"),
         # release-build-check.yml is a single reusable-workflow caller job gated on
         # ready-for-ci (it build-tests the PyPI release path on PRs); lock its guard too.

@@ -28,11 +28,15 @@
       ~WooldridgeDiDResults.anticipation
       ~WooldridgeDiDResults.att
       ~WooldridgeDiDResults.calendar_effects
+      ~WooldridgeDiDResults.cluster_name
+      ~WooldridgeDiDResults.cohort_trends
       ~WooldridgeDiDResults.conf_int
+      ~WooldridgeDiDResults.conley_lag_cutoff
       ~WooldridgeDiDResults.control_group
       ~WooldridgeDiDResults.event_study_effects
       ~WooldridgeDiDResults.group_effects
       ~WooldridgeDiDResults.method
+      ~WooldridgeDiDResults.n_clusters
       ~WooldridgeDiDResults.n_control_units
       ~WooldridgeDiDResults.n_obs
       ~WooldridgeDiDResults.n_treated_units
@@ -40,6 +44,7 @@
       ~WooldridgeDiDResults.se
       ~WooldridgeDiDResults.survey_metadata
       ~WooldridgeDiDResults.t_stat
+      ~WooldridgeDiDResults.vcov_type
       ~WooldridgeDiDResults.group_time_effects
       ~WooldridgeDiDResults.overall_att
       ~WooldridgeDiDResults.overall_se
@@ -48,4 +53,6 @@
       ~WooldridgeDiDResults.overall_conf_int
       ~WooldridgeDiDResults.groups
       ~WooldridgeDiDResults.time_periods
+      ~WooldridgeDiDResults.cohort_trend_coefs
+      ~WooldridgeDiDResults.aggregation_weights
 

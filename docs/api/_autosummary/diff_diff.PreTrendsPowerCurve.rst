@@ -22,11 +22,11 @@
 
    .. autosummary::
 
+      ~PreTrendsPowerCurve.pretest_form
       ~PreTrendsPowerCurve.M_values
       ~PreTrendsPowerCurve.powers
       ~PreTrendsPowerCurve.mdv
       ~PreTrendsPowerCurve.alpha
       ~PreTrendsPowerCurve.target_power
       ~PreTrendsPowerCurve.violation_type
-      ~PreTrendsPowerCurve.pretest_form
 

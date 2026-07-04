@@ -137,6 +137,7 @@ Most estimators accept an optional `survey_design` parameter (or `survey=` / `we
 - **Variance methods**: Taylor Series Linearization (TSL via Binder 1983), replicate weights (BRR / Fay / JK1 / JKn / SDR), survey-aware bootstrap
 - **Diagnostics**: DEFF per coefficient, effective n, subpopulation analysis, weight trimming, CV on estimates
 - **Repeated cross-sections**: `CallawaySantAnna(panel=False)` for BRFSS, ACS, CPS
+- **Weight calibration / raking**: upstream by design - pair with Meta's [balance](https://import-balance.org/) package, whose `balance.interop.diff_diff` adapter hands raked samples straight to diff-diff; see the [composition-drift tutorial](https://diff-diff.readthedocs.io/en/stable/tutorials/26_composition_drift_calibration.html)
 
 No other Python or R DiD package offers design-based variance estimation for modern heterogeneity-robust estimators.
 

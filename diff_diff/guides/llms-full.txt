@@ -1188,6 +1188,22 @@ read-throughs for compatibility with external adapters that
 the canonical names; assume the flat aliases are present on every
 staggered class unless explicitly noted otherwise.
 
+**balance interop.** Meta's `balance` package (>= 0.21) ships the
+one-way adapter `balance.interop.diff_diff` (`pip install "balance[did]"`,
+pins `diff-diff>=3.3,<4`): `to_survey_design(sample)` builds a
+`SurveyDesign` from a balance `Sample`'s active weight column plus the
+convention columns `stratum`/`psu`/`fpc`; `to_panel_for_did(sample, by=,
+outcomes=)` wraps `diff_diff.aggregate_survey` to collapse respondent
+microdata into a unit-period panel plus second-stage design;
+`fit_did(sample, estimator=, ...)` resolves any exported estimator by
+name or short alias (`CS`/`DiD`/`BJS`/`HAD`) and forwards
+`survey_design=`, attaching the source Sample to the result as
+`_balance_adjustment` for provenance; `as_balance_diagnostic(sample,
+res)` joins balance's ASMD/Kish-ESS with `res.survey_metadata`'s
+DEFF/effective-n into one flat dict. The diff-diff surface it consumes
+is pinned by `tests/test_balance_interop_contract.py`; the workflow is
+demonstrated in Tutorial 26 (composition drift & calibration).
+
 ### DiDResults
 
 Returned by `DifferenceInDifferences.fit()` and `TwoWayFixedEffects.fit()`.

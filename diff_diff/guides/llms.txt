@@ -101,6 +101,7 @@ Full practitioner guide: call `diff_diff.get_llm_guide("practitioner")`
 - [16 Survey DiD](https://diff-diff.readthedocs.io/en/stable/tutorials/16_survey_did.html): Survey-weighted DiD — SurveyDesign, strata/PSU/FPC, replicate weights, subpopulation analysis, DEFF diagnostics
 - [16 Wooldridge ETWFE](https://diff-diff.readthedocs.io/en/stable/tutorials/16_wooldridge_etwfe.html): Wooldridge (2023, 2025) ETWFE — saturated OLS, logit/Poisson (ASF-based ATT), aggregation types
 - [22 HAD Survey-Weighted Workflow](https://diff-diff.readthedocs.io/en/stable/tutorials/22_had_survey_design.html): HeterogeneousAdoptionDiD + did_had_pretest_workflow under SurveyDesign(strata, psu, weights, fpc) — BRFSS-shape panel, modest SE inflation explanation, Phase 4.5 C0 QUG-deferred verdict
+- [26 Composition Drift & Calibration](https://diff-diff.readthedocs.io/en/stable/tutorials/26_composition_drift_calibration.html): When differential non-response biases the DiD itself — per-state raking with Meta's balance package, `balance.interop.diff_diff` adapter, raking-granularity lesson (requires `pip install balance`)
 
 ## Survey Support
 
@@ -110,6 +111,7 @@ Most estimators accept an optional `survey_design` parameter (`SyntheticControl`
 - **Variance methods**: Taylor Series Linearization (TSL), replicate weights (BRR/Fay/JK1/JKn/SDR), survey-aware bootstrap
 - **Diagnostics**: DEFF per coefficient, effective n, subpopulation analysis, weight trimming, CV on estimates
 - **Repeated cross-sections**: `CallawaySantAnna(panel=False)` for BRFSS, ACS, CPS
+- **Weight calibration / raking**: upstream by design — pair with Meta's [balance](https://import-balance.org/) package (>= 0.21), whose `balance.interop.diff_diff` adapter (`to_survey_design` / `to_panel_for_did` / `fit_did` / `as_balance_diagnostic`, `pip install "balance[did]"`) hands raked samples straight to diff-diff estimators; see [Tutorial 26](https://diff-diff.readthedocs.io/en/stable/tutorials/26_composition_drift_calibration.html) for when calibration is essential for the causal estimand itself
 - **Compatibility matrix**: [Survey Design Support](https://diff-diff.readthedocs.io/en/stable/choosing_estimator.html#survey-design-support)
 
 No R or Python package offers design-based variance estimation for modern heterogeneity-robust DiD estimators. R's `did`, `fixest`, `synthdid`, and `didimputation` accept flat weight vectors only.

@@ -30,9 +30,11 @@
       ~CallawaySantAnnaResults.base_period
       ~CallawaySantAnnaResults.bootstrap_results
       ~CallawaySantAnnaResults.cband_crit_value
+      ~CallawaySantAnnaResults.cluster_name
       ~CallawaySantAnnaResults.coef_var
       ~CallawaySantAnnaResults.conf_int
       ~CallawaySantAnnaResults.control_group
+      ~CallawaySantAnnaResults.df_inference
       ~CallawaySantAnnaResults.epv_diagnostics
       ~CallawaySantAnnaResults.epv_threshold
       ~CallawaySantAnnaResults.event_study_effects
@@ -41,6 +43,7 @@
       ~CallawaySantAnnaResults.group_effects
       ~CallawaySantAnnaResults.influence_functions
       ~CallawaySantAnnaResults.is_significant
+      ~CallawaySantAnnaResults.n_clusters
       ~CallawaySantAnnaResults.p_value
       ~CallawaySantAnnaResults.panel
       ~CallawaySantAnnaResults.pscore_fallback
@@ -49,6 +52,7 @@
       ~CallawaySantAnnaResults.significance_stars
       ~CallawaySantAnnaResults.survey_metadata
       ~CallawaySantAnnaResults.t_stat
+      ~CallawaySantAnnaResults.vcov_type
       ~CallawaySantAnnaResults.group_time_effects
       ~CallawaySantAnnaResults.overall_att
       ~CallawaySantAnnaResults.overall_se

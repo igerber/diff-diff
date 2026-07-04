@@ -20,6 +20,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [3.6.2] - 2026-07-03
 
 ### Added
+- **balance interop launch: composition-drift tutorial + `interop-notebooks` CI job.** Meta's
+  `balance` package (>= 0.21) ships a one-way adapter `balance.interop.diff_diff`
+  (facebookresearch/balance PR #465) whose `balance[did]` extra pins `diff-diff>=3.3,<4`.
+  `docs/tutorials/26_composition_drift_calibration.ipynb` is the diff-diff-side companion to
+  balance's `balance_diff_diff_brfss` tutorial, telling the failure-mode half of the story: a
+  BRFSS-style smoking-ban DGP with exact population parallel trends (true ATT -3.0pp) where
+  treatment-correlated non-response drift biases the design-weight Callaway-Sant'Anna ATT to
+  ~-4.1pp with *clean pre-trends*; a per-wave national rake fails (~-4.4pp - margins satisfied in
+  aggregate while arm-level composition is untouched); per-state raking with balance (BRFSS's own
+  granularity, population-count totals) recovers ~-3.2pp. Also covers the seam both ways (native
+  `SurveyDesign` + `aggregate_survey` vs `bd.to_panel_for_did`/`bd.fit_did`, exact-parity assert),
+  a 3-estimator x 2-weighting sweep, and `as_balance_diagnostic` cross-package diagnostics.
+  `tests/test_t26_composition_drift_calibration_drift.py` re-derives every quoted number
+  (auto-skips without balance). balance stays out of package requirements: the tutorial runs in a
+  new isolated `interop-notebooks` job in `notebooks.yml` (python 3.12, installs
+  `balance>=0.21`, also the drift guard's CI home; the workflow's weekly cron doubles as a
+  cross-package integration smoke against latest PyPI balance), and the main notebooks job env is
+  unchanged.
+- **`balance.interop.diff_diff` contract tests.** `tests/test_balance_interop_contract.py` pins
+  the diff-diff surface Meta's balance adapter consumes, importing no balance code:
+  `aggregate_survey` forwarded-params superset + `(panel, SurveyDesign)` return schema, the
+  `SurveyDesign` 15-field dataclass contract (plus TSL / replicate constructions), estimator and
+  short-alias resolution (`CS`/`DiD`/`BJS`/`HAD`) with `survey_design=` accepted by all 17
+  promised `fit()` signatures, the `_balance_adjustment` setattr provenance side-channel
+  (guards against future `__slots__`), the CallawaySantAnna pweight-only guard, and the
+  `SurveyMetadata.design_effect`/`effective_n`/`sum_weights` attribute names read by
+  `as_balance_diagnostic`. Docs handoff closing the survey-roadmap Phase 8g gap: "Weight
+  calibration with balance" section in `docs/api/prep.rst`, calibration pointers in
+  `llms.txt`/`llms-full.txt`/`llms-practitioner.txt` and `README.md` Survey Support, and
+  Deville & Särndal (1992) + Sarig, Galili & Eilat (2023) in `docs/references.rst`.
 - **`SyntheticControl` ADH-2015 §4 tail diagnostics** (two opt-in `SyntheticControlResults`
   methods, closing the last two ADH-2015 §4 checklist items). `regression_weights()` reports the
   implied donor weights `W^reg = X0a'(X0a X0a')^{-1} X1a` of the regression counterfactual

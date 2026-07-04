@@ -22,6 +22,7 @@
 
       ~GroupTimeEffect.is_significant
       ~GroupTimeEffect.significance_stars
+      ~GroupTimeEffect.skip_reason
       ~GroupTimeEffect.group
       ~GroupTimeEffect.time
       ~GroupTimeEffect.effect

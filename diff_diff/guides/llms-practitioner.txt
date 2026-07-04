@@ -48,6 +48,11 @@ Key questions to answer:
   units.
 - Is there treatment effect heterogeneity you should preserve rather than
   average over?
+- If the data are a survey: are the weights calibrated (raked) at the
+  granularity of your comparison units? Non-response drift that correlates
+  with treatment timing does NOT difference out of a DiD; calibrate upstream
+  with Meta's balance package first — see Tutorial 26:
+  docs/tutorials/26_composition_drift_calibration.ipynb.
 
 ```python
 # After estimation, the target parameter is available as:

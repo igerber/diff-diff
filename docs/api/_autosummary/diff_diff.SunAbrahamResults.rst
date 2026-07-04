@@ -27,16 +27,21 @@
       ~SunAbrahamResults.anticipation
       ~SunAbrahamResults.att
       ~SunAbrahamResults.bootstrap_results
+      ~SunAbrahamResults.cluster_name
       ~SunAbrahamResults.coef_var
       ~SunAbrahamResults.cohort_effects
       ~SunAbrahamResults.conf_int
+      ~SunAbrahamResults.conley_lag_cutoff
       ~SunAbrahamResults.control_group
+      ~SunAbrahamResults.event_study_vcov
+      ~SunAbrahamResults.event_study_vcov_index
       ~SunAbrahamResults.is_significant
       ~SunAbrahamResults.p_value
       ~SunAbrahamResults.se
       ~SunAbrahamResults.significance_stars
       ~SunAbrahamResults.survey_metadata
       ~SunAbrahamResults.t_stat
+      ~SunAbrahamResults.vcov_type
       ~SunAbrahamResults.event_study_effects
       ~SunAbrahamResults.overall_att
       ~SunAbrahamResults.overall_se
