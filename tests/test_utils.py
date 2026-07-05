@@ -586,6 +586,21 @@ class TestSafeInference:
         assert np.isnan(ci_lower)
         assert np.isnan(ci_upper)
 
+    def test_nonfinite_df_returns_all_nan(self):
+        """Non-finite df (NaN/inf) produces all-NaN inference even with a valid SE.
+
+        A guard-suppressed / non-physical Bell-McCaffrey Satterthwaite DOF is
+        surfaced as NaN by `_cr2_bm_dof_inner`; a coefficient whose DOF was
+        declared unreliable must not report finite (or partially-finite) t/p/CI.
+        `df <= 0` is already rejected; this covers the non-finite case where
+        `df <= 0` is False for NaN.
+        """
+        for bad_df in (np.nan, np.inf, -np.inf):
+            t_stat, p_value, (ci_lower, ci_upper) = safe_inference(5.0, 2.0, df=bad_df)
+            assert np.isnan(t_stat), f"df={bad_df}: t_stat should be NaN"
+            assert np.isnan(p_value), f"df={bad_df}: p_value should be NaN"
+            assert np.isnan(ci_lower) and np.isnan(ci_upper), f"df={bad_df}: CI should be NaN"
+
     def test_valid_se_normal_distribution(self):
         """Test valid SE with normal distribution (df=None)."""
         effect = 5.0

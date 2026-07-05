@@ -352,8 +352,13 @@ def safe_inference(effect, se, alpha=0.05, df=None):
     """
     if not (np.isfinite(se) and se > 0):
         return np.nan, np.nan, (np.nan, np.nan)
-    if df is not None and df <= 0:
-        # Undefined degrees of freedom (e.g., rank-deficient replicate design)
+    if df is not None and not (np.isfinite(df) and df > 0):
+        # Undefined degrees of freedom: df <= 0 (e.g., rank-deficient replicate
+        # design) OR non-finite (a guard-suppressed / non-physical Bell-McCaffrey
+        # Satterthwaite DOF, which `_cr2_bm_dof_inner` returns as NaN for
+        # high-leverage nuisance contrasts). All inference fields are NaN so a
+        # coefficient whose DOF was declared unreliable never reports finite
+        # t/p/CI - preserving the joint-NaN inference contract.
         return np.nan, np.nan, (np.nan, np.nan)
     t_stat = effect / se
     p_value = compute_p_value(t_stat, df=df)

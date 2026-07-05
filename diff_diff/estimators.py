@@ -2132,11 +2132,16 @@ class MultiPeriodDiD(DifferenceInDifferences):
             idx = interaction_indices[period]
             effect = coefficients[idx]
             se = np.sqrt(vcov[idx, idx])
-            # Prefer per-coefficient BM DOF when available (hc2_bm path);
-            # otherwise fall back to the shared analytical df.
-            period_df = df
-            if _bm_dof_per_coef is not None and np.isfinite(_bm_dof_per_coef[idx]):
+            # Use the per-coefficient BM DOF when available (hc2_bm path);
+            # otherwise fall back to the shared analytical df. On the hc2_bm path
+            # the coefficient's OWN Bell-McCaffrey DOF governs its inference: a
+            # non-finite (guard-suppressed, unreliable) BM DOF makes t/p/CI
+            # undefined, so pass it through to `safe_inference` (which returns
+            # all-NaN) rather than silently falling back to the residual df.
+            if _bm_dof_per_coef is not None:
                 period_df = float(_bm_dof_per_coef[idx])
+            else:
+                period_df = df
             t_stat, p_value, conf_int = safe_inference(effect, se, alpha=self.alpha, df=period_df)
 
             period_effects[period] = PeriodEffect(

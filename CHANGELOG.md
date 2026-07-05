@@ -40,6 +40,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `survey_design=SurveyDesign(psu=<cluster_col>)`. No behavior change for unclustered fits.
 
 ### Fixed
+- **Non-finite degrees of freedom now fail closed to all-NaN inference.**
+  `safe_inference()` previously rejected `df <= 0` but let a non-finite `df` (NaN) through,
+  producing an inconsistent tuple (finite t-stat, NaN p-value/CI). It now returns all-NaN for
+  any non-finite `df`. `MultiPeriodDiD(vcov_type="hc2_bm")` likewise no longer falls back to
+  the shared residual `df` when a coefficient's Bell-McCaffrey Satterthwaite DOF is non-finite
+  (guard-suppressed) — such a coefficient's inference is now NaN rather than silently computed
+  from a different `df`, preserving the joint-NaN inference contract. Only affects coefficients
+  whose BM DOF was declared unreliable (high-leverage / collinear); well-conditioned
+  treatment / event-study / average contrasts are unchanged.
 - **Unweighted clustered CR2 / Bell-McCaffrey per-coefficient Satterthwaite DOF no
   longer returns non-physical values** for high-leverage FE-dummy / collinear nuisance
   columns. The simple `(tr B)²/tr(B²)` form could produce a garbage DOF there (float64

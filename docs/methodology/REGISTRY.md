@@ -744,14 +744,16 @@ DID_+ = sum_{t>=2} (N_{1,0,t} / sum_{t} N_{1,0,t}) * DID_{+,t}
 DID_- = sum_{t>=2} (N_{0,1,t} / sum_{t} N_{0,1,t}) * DID_{-,t}
 ```
 
-Single-lag placebo (AER 2020 placebo specification, same section as Theorem 3) — applies the same Theorem 3 logic to `Y_{g,t-1} - Y_{g,t-2}` on cells with 3-period histories:
+Single-lag placebo (AER 2020 placebo specification, same section as Theorem 3) — applies the same Theorem 3 logic to the pre-period first difference on cells with 3-period histories. Writing `d_a(cells) = mean over `cells` of (Y_{g,t-1} - Y_{g,t-2})` for the pre-period forward first difference:
 
 ```
 DID_M^pl = (1/N_S^pl) * sum_{t>=3} (
-              N_{1,0,t} * [(Y_{g,t-1} - Y_{g,t-2})_{joiners} - ...] +
-              N_{0,1,t} * [(Y_{g,t-1} - Y_{g,t-2})_{stable_1} - ...]
+              N_{1,0,t} * [ d_a(stable_0(t)) - d_a(joiners(t)) ]      # joiners side, S=+1
+            + N_{0,1,t} * [ d_a(leavers(t))  - d_a(stable_1(t)) ]     # leavers side, S=-1
           )
 ```
+
+The per-side terms are the code's `placebo_plus_t = stable0_avg - joiner_avg` and `placebo_minus_t = leaver_avg - stable1_avg` — the backward-difference × switch-direction convention of the sign Note below (equivalently, `S_g · (Y_{g,t-2} - Y_{g,t-1})_switcher` minus the same for its stable controls, matching `_compute_multi_horizon_placebos` and R).
 
 **Note (sign convention):** the reported `placebo_effect` uses the **backward-difference × switch-direction** convention of the multi-horizon placebo path (`_compute_multi_horizon_placebos`: `switcher_change - ctrl_avg` with `Y_bwd - Y_ref`, times `S_g = +1` joiners / `-1` leavers) and R `did_multiplegt_dyn`. In the phase-1 (`L_max=None`) code this is `placebo_plus_t = stable0_avg - joiner_avg` (joiners) and `placebo_minus_t = leaver_avg - stable1_avg` (leavers). Prior to this the phase-1 path used the opposite (forward-difference) order, so `placebo_effect` was **sign-flipped vs R** on pure-direction panels (magnitude bit-identical); the multi-horizon path was always correct. Pinned by `tests/test_chaisemartin_dhaultfoeuille_parity.py::TestDCDHDynRParity::test_parity_{joiners,leavers}_only`. On **mixed-direction** panels the placebo magnitude additionally carries the documented period-vs-cohort stable-control-set / equal-cell-weighting deviation (see the `**Note (deviation from R DIDmultiplegtDYN):**` above), so it is not gate-asserted against R there.
 

@@ -544,6 +544,52 @@ class TestFitBehavior:
         assert np.isfinite(post_pe.se)
         assert np.isfinite(post_pe.p_value)
 
+    def test_multi_period_hc2_bm_nonfinite_bm_dof_fails_closed(self, monkeypatch):
+        """A non-finite (guard-suppressed) Bell-McCaffrey DOF must fail closed to
+        NaN inference on user-facing MPD contrasts, not fall back to the shared
+        residual df. The `_cr2_bm_dof_inner` guard can NaN a per-coefficient DOF
+        (high-leverage / collinear column); reporting finite t/p/CI for such a
+        coefficient via the residual df would violate the joint-NaN inference
+        contract. Monkeypatches every BM DOF to NaN and asserts SEs stay finite
+        (vcov is unaffected) while all t/p/CI fields are NaN.
+        """
+        import numpy as np
+
+        import diff_diff.linalg as _linalg
+
+        rng = np.random.default_rng(2)
+        rows = []
+        for i in range(20):
+            treated = int(i >= 10)
+            for t in range(3):
+                y = rng.normal(0.0, 1.0) + 0.5 * treated * (t >= 1)
+                rows.append({"unit": i, "time": t, "treated": treated, "y": y})
+        data = pd.DataFrame(rows)
+
+        _orig = _linalg._compute_cr2_bm_vcov_and_dof
+
+        def _nan_dof(*args, **kwargs):
+            vcov, dof = _orig(*args, **kwargs)
+            return vcov, np.full(np.asarray(dof).shape, np.nan)
+
+        # MPD's hc2_bm+cluster path imports this from linalg inside fit(), so the
+        # local import binds to the patched attribute at call time.
+        monkeypatch.setattr(_linalg, "_compute_cr2_bm_vcov_and_dof", _nan_dof)
+
+        res = MultiPeriodDiD(vcov_type="hc2_bm", cluster="unit").fit(
+            data, outcome="y", treatment="treated", time="time"
+        )
+        for p, pe in res.period_effects.items():
+            assert np.isfinite(pe.se), f"period {p}: SE should remain finite"
+            assert np.isnan(pe.t_stat), f"period {p}: t_stat should be NaN"
+            assert np.isnan(pe.p_value), f"period {p}: p_value should be NaN"
+            assert np.isnan(pe.conf_int[0]) and np.isnan(pe.conf_int[1])
+        # The post-period-average contrast fails closed too.
+        assert np.isfinite(res.avg_se), "avg SE should remain finite"
+        assert np.isnan(res.avg_t_stat)
+        assert np.isnan(res.avg_p_value)
+        assert np.isnan(res.avg_conf_int[0]) and np.isnan(res.avg_conf_int[1])
+
     def test_multi_period_cluster_hc2_bm_avg_att_uses_clubsandwich_dof(self):
         """MPD(cluster=..., hc2_bm) `avg_att` inference uses the new
         cluster-aware contrast Satterthwaite DOF, not the shared n-k fallback.
