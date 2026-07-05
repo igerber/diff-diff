@@ -715,10 +715,10 @@ reg_did_panel/drdid_panel. `covariates=` + `survey_design=` is not yet supported
 
 `treatment_type="discrete"` fits a **saturated regression** for a multi-valued dose: one indicator per
 distinct dose level, so `ATT(d_j) = mean_{D=d_j}(ΔY) − control` (a per-level 2×2 DiD) and `ACRT(d_j)`
-is a finite difference (forward at the lowest level, backward elsewhere). It reuses the full inference
-stack (analytical / bootstrap / covariate / survey) and reduces to the per-level 2×2 DiD SE. Multi-
-cohort fits need a shared dose support across cohorts (else `NotImplementedError`); an off-support
-`dvals` value raises `ValueError`.
+is the paper's backward finite difference on `{0, d_1, …, d_J}` (`ACRT(d_1) = ATT(d_1)/d_1`, so binary
+`D ∈ {0,1}` gives `ACRT = ATT`). It reuses the full inference stack (analytical / bootstrap /
+covariate / survey) and reduces to the per-level 2×2 DiD SE. Multi-cohort fits need a shared dose
+support across cohorts (else `NotImplementedError`); an off-support `dvals` value raises `ValueError`.
 
 **Alias:** `CDiD`
 

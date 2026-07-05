@@ -1189,7 +1189,8 @@ def _hand_calc_discrete(df, levels):
     acrt = np.empty(len(levels))
     for j in range(len(levels)):
         if j == 0:
-            acrt[0] = (att[1] - att[0]) / (levels[1] - levels[0])
+            # Backward difference to the zero-dose baseline d_0 = 0, ATT(0) = 0.
+            acrt[0] = att[0] / levels[0]
         else:
             acrt[j] = (att[j] - att[j - 1]) / (levels[j] - levels[j - 1])
     overall = (dy[~cm] - mu0).mean()
@@ -1237,16 +1238,39 @@ class TestDiscreteSaturated:
         assert np.allclose(res.dose_response_att.se, se, atol=1e-10)
         assert np.all(np.isfinite(res.dose_response_att.se))
 
-    def test_acrt_boundary_forward_diff(self):
-        """ACRT(d_1) uses a forward difference; ACRT(d_j>=2) backward."""
+    def test_acrt_boundary_backward_to_zero(self):
+        """ACRT(d_1) = ATT(d_1)/d_1 (backward diff to d_0=0); ACRT(d_j>=2) backward."""
         levels = [1.0, 2.0, 4.0]
         df = _make_discrete_panel({1.0: 0.5, 2.0: 1.5, 4.0: 2.5}, seed=3)
         res = ContinuousDiD(treatment_type="discrete", n_bootstrap=0).fit(df, **self._KW)
         att = res.dose_response_att.effects
         acrt = res.dose_response_acrt.effects
-        assert np.isclose(acrt[0], (att[1] - att[0]) / (levels[1] - levels[0]), atol=1e-12)
+        assert np.isclose(acrt[0], att[0] / levels[0], atol=1e-12)  # ref d_0 = 0
         assert np.isclose(acrt[1], (att[1] - att[0]) / (levels[1] - levels[0]), atol=1e-12)
         assert np.isclose(acrt[2], (att[2] - att[1]) / (levels[2] - levels[1]), atol=1e-12)
+
+    def test_binary_single_dose_acrt_equals_att(self):
+        """Single positive dose (J=1): ACRT(d_1) = ATT(d_1)/d_1; binary d=1 -> ACRT=ATT."""
+        import warnings
+
+        # d_1 = 1.0 -> ACRT = ATT (documented binary identity).
+        df1 = _make_discrete_panel({1.0: 1.7}, n_per_level=60, n_control=90, seed=30)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            r1 = ContinuousDiD(treatment_type="discrete", n_bootstrap=0).fit(df1, **self._KW)
+        assert np.isclose(
+            r1.dose_response_acrt.effects[0], r1.dose_response_att.effects[0], atol=1e-12
+        )
+        assert np.isclose(r1.overall_acrt, r1.overall_att, atol=1e-12)
+        assert np.isfinite(r1.dose_response_acrt.se[0]) and r1.dose_response_acrt.se[0] > 0
+        # d_1 = 2.0 -> ACRT = ATT / 2.
+        df2 = _make_discrete_panel({2.0: 3.0}, n_per_level=60, n_control=90, seed=31)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            r2 = ContinuousDiD(treatment_type="discrete", n_bootstrap=0).fit(df2, **self._KW)
+        assert np.isclose(
+            r2.dose_response_acrt.effects[0], r2.dose_response_att.effects[0] / 2.0, atol=1e-12
+        )
 
     def test_dgp_recovery(self):
         """Recover heterogeneous per-level effects (no noise -> exact)."""
@@ -1254,8 +1278,8 @@ class TestDiscreteSaturated:
         df = _make_discrete_panel(effects, n_per_level=60, n_control=100, noise=0.0, seed=4)
         res = ContinuousDiD(treatment_type="discrete", n_bootstrap=0).fit(df, **self._KW)
         assert np.allclose(res.dose_response_att.effects, [0.5, 2.0, 1.0], atol=1e-10)
-        # ACRT steps: fwd@d1 = (2-.5)/1=1.5; bwd@d2 same; bwd@d3=(1-2)/2=-0.5
-        assert np.allclose(res.dose_response_acrt.effects, [1.5, 1.5, -0.5], atol=1e-10)
+        # ACRT steps: d1 ref 0 = 0.5/1 = 0.5; bwd@d2 = (2-.5)/1 = 1.5; bwd@d3 = (1-2)/2 = -0.5
+        assert np.allclose(res.dose_response_acrt.effects, [0.5, 1.5, -0.5], atol=1e-10)
 
     def test_staggered_shared_support(self):
         """Multi-cohort (shared dose support) discrete fit aggregates + recovers."""

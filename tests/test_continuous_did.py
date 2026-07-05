@@ -1804,8 +1804,12 @@ class TestDiscreteSaturatedAPI:
         assert est.get_params() == params
         assert np.allclose(r1.dose_response_att.effects, r2.dose_response_att.effects)
 
-    def test_dr_discrete_acrt_identical_to_reg(self):
-        """DEFAULT covariate path (dr): ACRT(d_j) point+SE == reg; only ATT differs."""
+    def test_dr_discrete_acrt_matches_reg_above_d1(self):
+        """DEFAULT covariate path (dr): ACRT(d_j) point+SE == reg for j>=2 (the uniform
+        eta_cont level shift cancels in adjacent differences); ACRT(d_1) DIFFERS because
+        it references the fixed baseline ATT(0)=0 (backward-to-zero convention). ATT levels
+        differ at all doses."""
+        levels = [1.0, 2.0, 4.0]
         df = _discrete_panel({1.0: 0.5, 2.0: 1.5, 4.0: 2.5}, seed=3)
         reg = ContinuousDiD(
             treatment_type="discrete", covariates=["x1"], estimation_method="reg", n_bootstrap=0
@@ -1813,14 +1817,36 @@ class TestDiscreteSaturatedAPI:
         dr = ContinuousDiD(
             treatment_type="discrete", covariates=["x1"], estimation_method="dr", n_bootstrap=0
         ).fit(df, **_DKW)
+        # j >= 2: ACRT point AND SE identical (constant augmentation cancels in differences).
         assert np.allclose(
-            reg.dose_response_acrt.effects, dr.dose_response_acrt.effects, atol=1e-10
+            reg.dose_response_acrt.effects[1:], dr.dose_response_acrt.effects[1:], atol=1e-10
         )
-        assert np.allclose(reg.dose_response_acrt.se, dr.dose_response_acrt.se, atol=1e-10)
-        # ATT levels differ (dr subtracts the augmentation eta_cont).
+        assert np.allclose(reg.dose_response_acrt.se[1:], dr.dose_response_acrt.se[1:], atol=1e-10)
+        # d_1: ACRT differs by exactly eta_cont / d_1 (eta_cont = the uniform ATT level shift).
+        eta = reg.dose_response_att.effects[0] - dr.dose_response_att.effects[0]
+        assert not np.isclose(
+            reg.dose_response_acrt.effects[0], dr.dose_response_acrt.effects[0], atol=1e-8
+        )
+        assert np.isclose(
+            reg.dose_response_acrt.effects[0] - dr.dose_response_acrt.effects[0],
+            eta / levels[0],
+            atol=1e-9,
+        )
+        # ATT levels differ at all doses (dr subtracts the augmentation eta_cont).
         assert not np.allclose(
             reg.dose_response_att.effects, dr.dose_response_att.effects, atol=1e-6
         )
+
+    def test_dr_discrete_acrt_analytical_matches_bootstrap(self):
+        """dr ACRT SE (incl. the augmentation variance carried at d_1 under
+        backward-to-zero) matches the multiplier bootstrap -- validates the dr
+        influence-function refinement in CI."""
+        df = _discrete_panel({1.0: 0.5, 2.0: 1.5, 4.0: 2.5}, n_per=70, n_control=120, seed=21)
+        kw = dict(treatment_type="discrete", covariates=["x1"], estimation_method="dr")
+        an = ContinuousDiD(**kw, n_bootstrap=0).fit(df, **_DKW)
+        bs = ContinuousDiD(**kw, n_bootstrap=800, seed=7).fit(df, **_DKW)
+        assert np.all(np.isfinite(an.dose_response_acrt.se))
+        np.testing.assert_allclose(an.dose_response_acrt.se, bs.dose_response_acrt.se, rtol=0.25)
 
     def test_survey_discrete_weighted_group_means(self):
         from diff_diff import SurveyDesign

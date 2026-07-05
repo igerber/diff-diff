@@ -111,9 +111,11 @@ class ContinuousDiD:
         ``"discrete"`` (saturated per-dose-level regression, CGBS 2024 Eq. 4.1).
         On the discrete path each distinct dose level gets its own effect
         coefficient — ``ATT(d_j) = mean_{D=d_j}(ΔY) − control`` (a per-level 2×2
-        DiD) — and ``ACRT(d_j)`` is a finite difference (forward at the lowest
-        level, backward elsewhere). It composes with ``covariates`` and
-        ``survey_design`` and reduces to the per-level 2×2 DiD standard error.
+        DiD) — and ``ACRT(d_j)`` is the paper's backward finite difference on the
+        grid ``{0, d_1, ..., d_J}`` (``ACRT(d_1) = ATT(d_1)/d_1``, so a binary
+        dose ``D in {0, 1}`` gives ``ACRT = ATT``). It composes with
+        ``covariates`` and ``survey_design`` and reduces to the per-level 2×2 DiD
+        standard error.
         Multi-cohort fits must share the same dose support across cohorts (else
         ``NotImplementedError``); an off-support ``dvals`` value raises
         ``ValueError``.
@@ -1285,15 +1287,31 @@ class ContinuousDiD:
         if_acrt_d = np.vstack([acrt_d_if_t, acrt_d_if_c])
 
         if self.estimation_method == "dr":
-            # dr shares the reg curve shape (ACRT identical); att_glob / ATT(d)
-            # differ by the augmentation eta_cont. Ground att_glob's IF in the
-            # validated DRDID doubly-robust IF and shift ATT(d) uniformly by the
-            # augmentation IF (= reg att_glob IF - dr att_glob IF). ACRT untouched.
+            # The DR augmentation eta_cont shifts att_glob / ATT(d) by a constant;
+            # ground att_glob's IF in the validated DRDID doubly-robust IF and
+            # shift ATT(d) uniformly by the augmentation IF (= reg att_glob IF -
+            # dr att_glob IF). eta_cont perturbs beta by a constant direction
+            # `bread @ psi_bar` (= e_intercept for the B-spline basis, ones(J)
+            # for the saturated basis), so its effect on the curve is
+            # Psi_eval/dPsi_eval applied to that direction. For ATT that is the
+            # uniform shift below. For ACRT it is dPsi_eval @ (bread @ psi_bar):
+            # zero for the B-spline path (intercept derivative is 0) and for the
+            # discrete j>=2 rows (backward differences sum to 0), but NONZERO at
+            # the lowest discrete dose, whose backward-to-zero row references the
+            # fixed baseline ATT(0)=0. There, ACRT(d_1) = ATT(d_1)/d_1 genuinely
+            # depends on the DR level, so its IF must carry the augmentation
+            # variance. Applied only on the discrete path to keep the validated
+            # B-spline covariate IF byte-identical.
             n_total = cov_adj["n_total"]
             dr_att_glob_if = cov_adj["dr_inf"] / n_total  # (n_total,)
             if_eta = if_att_glob - dr_att_glob_if  # augmentation IF, per unit
             if_att_d = if_att_d - if_eta[:, np.newaxis]
             if_att_glob = dr_att_glob_if
+            if self.treatment_type == "discrete":
+                const_dir = bread @ Psi.mean(axis=0)  # (K,), = ones(J) here
+                acrt_shift = dPsi_eval @ const_dir  # (n_grid,), = L @ 1
+                if_acrt_d = if_acrt_d - if_eta[:, np.newaxis] * acrt_shift[np.newaxis, :]
+                if_acrt_glob = if_acrt_glob - if_eta * float(dpsi_bar @ const_dir)
 
         return {
             "cell_indices": np.concatenate([treated_indices, control_indices]),
@@ -1481,8 +1499,12 @@ class ContinuousDiD:
                     "level from the dose grid."
                 )
 
-        # Check for all-same dose
-        if np.all(treated_doses == treated_doses[0]):
+        # Check for all-same dose. On the continuous (B-spline) path this
+        # collapses the basis so ACRT(d) = 0 everywhere. On the discrete path a
+        # single dose level (J=1) is a valid single-dose fit with
+        # ACRT(d_1) = ATT(d_1)/d_1 (backward difference to the zero-dose
+        # baseline), so the "ACRT will be 0" warning does not apply there.
+        if self.treatment_type != "discrete" and np.all(treated_doses == treated_doses[0]):
             warnings.warn(
                 f"All treated doses identical in (g={g}, t={t}). " "ACRT(d) will be 0 everywhere.",
                 UserWarning,

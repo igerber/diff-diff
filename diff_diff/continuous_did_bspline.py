@@ -325,15 +325,19 @@ def saturated_derivative_design_matrix(x, levels, tol=SATURATED_TOL):
     """
     Finite-difference derivative rows for the saturated (discrete) basis.
 
-    ACRT for a discrete dose is a finite difference of the level effects
-    (CGBS 2024): ``ACRT(d_j) = [ATT(d_j) - ATT(d_{j-1})] / (d_j - d_{j-1})``
-    for ``j >= 2`` (backward), with a **forward** difference at the lowest
-    level ``d_1`` (``[ATT(d_2) - ATT(d_1)] / (d_2 - d_1)``) so the ACRT curve
-    shares the ATT grid and ``ACRT^glob`` stays well-defined. This is a linear
-    operator ``L`` on ``beta`` (each row sums to 0, so a constant level/control
-    shift cancels), and ``acrt = L @ beta``. Returns the ``L`` row for each
-    ``x_i`` at its dose level. With ``J = 1`` (single dose) every row is 0
-    (``ACRT = 0``). Analogous to :func:`bspline_derivative_design_matrix`.
+    ACRT for a discrete dose is the paper's backward difference of the level
+    effects (CGBS 2024 §3.2 / §4.1) on the grid ``{d_0 = 0, d_1, ..., d_J}``,
+    where ``d_0 = 0`` is the omitted (untreated) category with ``ATT(0) = 0``:
+    ``ACRT(d_j) = [ATT(d_j) - ATT(d_{j-1})] / (d_j - d_{j-1})``. At the lowest
+    positive level this references the zero-dose baseline,
+    ``ACRT(d_1) = [ATT(d_1) - 0] / (d_1 - 0) = ATT(d_1) / d_1`` — so a single
+    positive dose (``J = 1``, e.g. binary ``D in {0, 1}``) gives
+    ``ACRT(d_1) = ATT(d_1) / d_1`` and, for ``d_1 = 1``, the documented binary
+    identity ``ACRT = ATT``. This is a linear operator ``L`` on ``beta``, and
+    ``acrt = L @ beta``. Only the lowest level's row references ``d_0 = 0`` (so
+    that row does NOT sum to 0); the ``j >= 2`` rows are ordinary adjacent
+    backward differences (rows sum to 0). Returns the ``L`` row for each ``x_i``
+    at its dose level. Analogous to :func:`bspline_derivative_design_matrix`.
 
     Parameters
     ----------
@@ -353,14 +357,12 @@ def saturated_derivative_design_matrix(x, levels, tol=SATURATED_TOL):
     idx = _match_levels(x, levels, tol)
     J = len(levels)
     L = np.zeros((J, J))
-    # Row 0: forward difference at the lowest level; rows j>=1: backward.
+    # Row 0 (lowest positive dose d_1): backward difference to the zero-dose
+    # baseline d_0 = 0, ATT(0) = 0 -> ACRT(d_1) = ATT(d_1) / d_1. Rows j >= 1:
+    # ordinary adjacent backward differences between positive doses.
     for j in range(J):
-        if J == 1:
-            break  # single dose level: derivative is 0 everywhere
         if j == 0:
-            h = levels[1] - levels[0]
-            L[0, 0] = -1.0 / h
-            L[0, 1] = 1.0 / h
+            L[0, 0] = 1.0 / levels[0]
         else:
             h = levels[j] - levels[j - 1]
             L[j, j - 1] = -1.0 / h
