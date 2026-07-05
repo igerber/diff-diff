@@ -148,7 +148,9 @@ class TestCallawaySantAnnaSEAccuracy:
         """
         Test that individual ATT(g,t) SE follows expected formula.
 
-        For simple diff-in-means: SE = sqrt(var_t/n_t + var_c/n_c)
+        For simple diff-in-means the per-cell SE is derived from the
+        influence function, sqrt(sum(IF^2)) (== the ddof=0 form of
+        sqrt(var_t/n_t + var_c/n_c)), matching DRDID::reg_did_panel.
         """
         cs = CallawaySantAnna(
             estimation_method="reg",  # outcome regression (simpler)

@@ -1611,12 +1611,16 @@ class TestRankGuardedAnalyticalSE:
             with_const.overall_att, drop_one.overall_att, rtol=1e-9
         )
 
-    def test_constant_covariate_emits_single_rank_guard_warning(self):
+    @pytest.mark.parametrize("method", ["reg", "ipw", "dr"])
+    def test_constant_covariate_emits_single_rank_guard_warning(self, method):
+        # reg/ipw now route their IF breads (OLS bread / PS Hessian) through
+        # _safe_inv like dr, so the aggregate warning fires for ALL methods
+        # on a collinear design (previously dr/survey-ipw only).
         data = generate_staggered_data_with_covariates(seed=789)
         data["xc"] = 5.0
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
-            CallawaySantAnna(estimation_method="dr").fit(
+            CallawaySantAnna(estimation_method=method).fit(
                 data, "outcome", "unit", "time", "first_treat", covariates=["x1", "xc"]
             )
         rank_guard = [
@@ -1651,11 +1655,16 @@ class TestRankGuardedAnalyticalSE:
         assert np.isfinite(res.overall_se)
         assert res.overall_se < 1.0
 
-    def test_rank0_bread_propagates_nan_not_zero(self, monkeypatch):
+    @pytest.mark.parametrize("method", ["reg", "ipw", "dr"])
+    def test_rank0_bread_propagates_nan_not_zero(self, monkeypatch, method):
         # rank-0 is unreachable through covariates alone (the always-present
         # intercept guarantees rank >= 1), so simulate an all-NaN bread to
         # exercise the NaN-masking fix: var_psi becomes NaN and must yield a NaN
-        # SE, NOT 0.0 via the old ``var_psi > 0 else 0.0`` guard.
+        # SE, NOT 0.0 via the old ``var_psi > 0 else 0.0`` guard. reg/ipw now
+        # derive their per-cell SE from _safe_inv-based IF terms too (OLS
+        # estimation-effect bread / PS Hessian), so all three methods share
+        # the contract. The point estimate does NOT depend on the bread, so
+        # it stays finite (NaN inference on an estimable cell, not _nan_gt_entry).
         from tests.conftest import assert_nan_inference
         import diff_diff.staggered as staggered_mod
 
@@ -1667,10 +1676,11 @@ class TestRankGuardedAnalyticalSE:
         data = generate_staggered_data_with_covariates(seed=7)
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            res = CallawaySantAnna(estimation_method="dr").fit(
+            res = CallawaySantAnna(estimation_method=method).fit(
                 data, "outcome", "unit", "time", "first_treat", covariates=["x1", "x2"]
             )
         for cell in res.group_time_effects.values():
+            assert np.isfinite(cell["effect"]), "point estimate is bread-independent"
             assert np.isnan(cell["se"]), "rank-0 bread must give NaN SE, not 0.0"
             assert_nan_inference(cell)
         assert np.isnan(res.overall_se)
@@ -1921,6 +1931,119 @@ class TestRankGuardedAnalyticalSE:
         assert np.isfinite(big_ab.overall_se) and big_ab.overall_se > 0
         assert np.isfinite(big_ba.overall_se) and big_ba.overall_se > 0
         np.testing.assert_allclose(big_ab.overall_se, big_ba.overall_se, rtol=1e-7)
+
+
+class TestRegIpwIFBehavior:
+    """Behavioral contracts of the DRDID-parity reg/ipw per-cell IF/SE fix
+    (estimation-effect terms + per-cell SE = sqrt(sum(IF^2)))."""
+
+    def test_ipw_pscore_fallback_uses_uncorrected_if_se(self, monkeypatch):
+        """When the per-cell logit fails and pscore_fallback="unconditional"
+        kicks in, the PS estimation-effect correction is SKIPPED (a constant
+        propensity has no estimated parameter) and the cell collapses to the
+        difference-in-means IF - i.e. per-cell effect AND se must equal the
+        no-covariate ipw fit on the same data."""
+        import diff_diff.staggered as staggered_mod
+
+        def _failing_logit(*args, **kwargs):
+            raise ValueError("forced logit failure for fallback test")
+
+        data = generate_staggered_data_with_covariates(seed=31)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            no_cov = CallawaySantAnna(estimation_method="ipw").fit(
+                data, "outcome", "unit", "time", "first_treat"
+            )
+            monkeypatch.setattr(staggered_mod, "solve_logit", _failing_logit)
+            fallback = CallawaySantAnna(
+                estimation_method="ipw", pscore_fallback="unconditional"
+            ).fit(
+                data, "outcome", "unit", "time", "first_treat", covariates=["x1", "x2"]
+            )
+        assert set(fallback.group_time_effects) == set(no_cov.group_time_effects)
+        for key, cell in fallback.group_time_effects.items():
+            ref = no_cov.group_time_effects[key]
+            np.testing.assert_allclose(cell["effect"], ref["effect"], rtol=1e-12)
+            np.testing.assert_allclose(cell["se"], ref["se"], rtol=1e-12)
+
+    def test_underdetermined_control_cell_reg_no_crash(self):
+        """Cells with fewer controls than covariate columns (n_c < k+1) fit a
+        reduced design; the rank-guarded IF bread column-drops and the
+        interpolating fit leaves ~zero control residuals, so the SE is finite
+        (treated-side variation only), never a crash or a silent 0."""
+        rng = np.random.default_rng(11)
+        n_units, k = 60, 5
+        rows = []
+        for u in range(n_units):
+            ft = 0 if u < 3 else 2  # only 3 never-treated controls
+            x = rng.normal(size=k)
+            base = rng.normal()
+            for t in (1, 2):
+                y = base + 0.4 * t + (
+                    1.0 if (ft == 2 and t >= 2) else 0.0
+                ) + rng.normal(0, 0.3)
+                rows.append(
+                    {"unit": u, "time": t, "first_treat": ft, "outcome": y,
+                     **{f"x{j}": x[j] for j in range(k)}}
+                )
+        data = pd.DataFrame(rows)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            res = CallawaySantAnna(
+                estimation_method="reg", rank_deficient_action="silent"
+            ).fit(
+                data, "outcome", "unit", "time", "first_treat",
+                covariates=[f"x{j}" for j in range(k)],
+            )
+        cell = res.group_time_effects[(2, 2)]
+        assert np.isfinite(cell["effect"])
+        assert np.isfinite(cell["se"]) and cell["se"] > 0
+
+    def test_universal_base_period_anticipation_reg_smoke(self):
+        """reg+cov under base_period="universal" + anticipation=1: every
+        produced cell has finite inference and the reference period
+        t = g-1-anticipation is excluded from the grid (no degenerate
+        zero-IF cell exists to divide by)."""
+        data = generate_staggered_data_with_covariates(seed=97)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            res = CallawaySantAnna(
+                estimation_method="reg", base_period="universal", anticipation=1
+            ).fit(
+                data, "outcome", "unit", "time", "first_treat",
+                covariates=["x1", "x2"],
+            )
+        assert len(res.group_time_effects) > 0
+        for (g, t), cell in res.group_time_effects.items():
+            assert t != g - 2, "universal reference period must be excluded"
+            if cell["skip_reason"] is None:
+                assert np.isfinite(cell["se"]), f"cell ({g},{t})"
+        assert np.isfinite(res.overall_se)
+
+    def test_uniform_survey_weights_match_unweighted_per_cell_se(self):
+        """Uniform survey weights route reg+cov through the general
+        (survey-branch) producer while the unweighted fit takes the
+        vectorized producer; both now share the same DRDID IF algebra, so
+        per-cell effects AND SEs must agree."""
+        from diff_diff.survey import SurveyDesign
+
+        data = generate_staggered_data_with_covariates(seed=53)
+        data["w_ones"] = 1.0
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            unweighted = CallawaySantAnna(estimation_method="reg").fit(
+                data, "outcome", "unit", "time", "first_treat",
+                covariates=["x1", "x2"],
+            )
+            uniform = CallawaySantAnna(estimation_method="reg").fit(
+                data, "outcome", "unit", "time", "first_treat",
+                covariates=["x1", "x2"],
+                survey_design=SurveyDesign(weights="w_ones"),
+            )
+        for key, cell in unweighted.group_time_effects.items():
+            ref = uniform.group_time_effects[key]
+            np.testing.assert_allclose(cell["effect"], ref["effect"], rtol=1e-9)
+            np.testing.assert_allclose(cell["se"], ref["se"], rtol=1e-9)
 
 
 class TestCallawaySantAnnaRankDeficiencyPaths:

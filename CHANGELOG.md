@@ -30,6 +30,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `survey_design=SurveyDesign(psu=<cluster_col>)`. No behavior change for unclustered fits.
 
 ### Fixed
+- **`CallawaySantAnna` panel reg/ipw standard errors now match `DRDID` /
+  R `did` exactly** (point estimates unchanged — the omitted terms are mean-zero,
+  which is why ATTs always matched R at ~1e-11 while SEs drifted). Two defects:
+  (1) the covariate-reg influence function omitted `DRDID::reg_did_panel`'s OLS
+  estimation-effect term (`asy.lin.rep.ols %*% M1`) — per-cell SEs were 4-13% and
+  aggregated (simple/group/event-study) SEs 3-20% from R, and **anti-conservative**
+  on some designs (0.958x on the two-period golden fixture) despite the prior
+  documentation calling the plug-in "conservative"; (2) the unweighted covariate-ipw
+  per-cell SE used a weighted *population* variance never scaled by an effective
+  sample size — **~7x inflated** — and its influence function lacked
+  `std_ipw_did_panel`'s propensity-score estimation-effect correction
+  (`asy.lin.rep.ps %*% M2`; aggregated SEs ~2.4% off). The survey ipw branch already
+  carried both corrections (Phase 7a); the fix mirrors it method-uniformly. All panel
+  reg/ipw per-cell SEs (including no-covariate, where ipw's
+  `var_c*(1-p)/(n_c*p)` plug-in equaled R only at treated-share 0.5) are now derived
+  from the same influence function that feeds aggregation: `sqrt(sum(phi^2))`, the
+  convention dr always used. Everything downstream of the per-cell IFs inherits the
+  fix: t-stats/p-values/confidence intervals, aggregated SEs, `event_study_vcov`
+  (HonestDiD input), the bare-`cluster=` CR1 per-cell override, and
+  multiplier-bootstrap SEs. The reg estimation-effect projection is evaluated in the
+  centered basis (`1/n_c + (x-x̄_c)'G^{-1}(x̄_t-x̄_c)`), which is offset-invariant;
+  reg/ipw fits with collinear covariates now fire the same aggregate rank-guard
+  warning as dr. Post-fix parity: per-cell and aggregated reg/ipw vs the R golden
+  fixtures at ~5e-12, and vs fresh R `did` 2.5.1 ipw aggregations at ~1e-10
+  (previously-unasserted golden SE blocks are now enabled, plus R-free numpy
+  reconstructions of both DRDID influence functions).
 - **ImputationDiD/TwoStageDiD covariate fits with zero-weight replicate designs (JK1/plain
   BRR) now produce finite SEs.** Replicate weights that zero out whole PSUs reach Step 1
   unmasked; the previous per-estimator pandas demeaning loops divided 0/0 on zero-total-weight

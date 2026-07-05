@@ -10,16 +10,19 @@ Reference: Callaway, B., & Sant'Anna, P.H.C. (2021). Difference-in-Differences
 with multiple time periods. Journal of Econometrics, 225(2), 200-230.
 """
 
+import json
 import subprocess
 import unittest.mock
 import warnings
-from typing import Any, Dict, Tuple
+from pathlib import Path
+from typing import Any, Dict, Optional, Tuple
 
 import numpy as np
 import pandas as pd
 import pytest
 
-from diff_diff import CallawaySantAnna
+from diff_diff import CallawaySantAnna, SurveyDesign
+from diff_diff.linalg import solve_logit
 from diff_diff.prep import generate_staggered_data
 from diff_diff.bootstrap_utils import (
     generate_bootstrap_weights_batch as _generate_bootstrap_weights_batch,
@@ -1985,3 +1988,347 @@ class TestCSCovariateScaleEquilibration:
                 assert eff["effect"] == pytest.approx(
                     shifted.group_time_effects[gt]["effect"], abs=1e-7
                 ), f"ATT{gt} not offset-invariant"
+
+
+# =============================================================================
+# DRDID panel influence-function parity (numpy cross-checks)
+# =============================================================================
+
+_GOLDEN_VALUES_PATH = (
+    Path(__file__).parents[1] / "benchmarks" / "data" / "csdid_golden_values.json"
+)
+
+
+def _reg_did_panel_ref(
+    dY: np.ndarray,
+    D: np.ndarray,
+    X: np.ndarray,
+    weights: Optional[np.ndarray] = None,
+) -> Tuple[float, float]:
+    """Independent numpy reconstruction of ``DRDID::reg_did_panel``.
+
+    Returns ``(att, se)`` where ``se`` is the analytical influence-function
+    standard error ``sd(psi) * sqrt(n-1) / n``. The control-side psi carries
+    the OLS estimation-effect term ``asy.lin.rep.ols @ M1`` (the WLS residual
+    projected through the bread and evaluated at the treated covariate mean);
+    its intercept-only collapse is ``-resid_c / n_c``.
+    """
+    n = len(D)
+    w = np.ones(n) if weights is None else weights / np.mean(weights)
+    Xi = np.column_stack([np.ones(n), X])
+    c = D == 0
+    Wc = w[c]
+    beta, *_ = np.linalg.lstsq(
+        np.sqrt(Wc)[:, None] * Xi[c], np.sqrt(Wc) * dY[c], rcond=None
+    )
+    pred = Xi @ beta
+    w_treat = w * D
+    mw_t = w_treat.mean()
+    att = float(np.sum(w_treat * (dY - pred)) / np.sum(w_treat))
+    resid_c = dY[c] - pred[c]
+    XpX_inv = np.linalg.inv(Xi[c].T @ (Wc[:, None] * Xi[c]) / n)
+    asy_lin_rep_ols = (Wc * resid_c)[:, None] * Xi[c] @ XpX_inv
+    M1 = (w_treat[:, None] * Xi).sum(axis=0) / n
+    psi = np.zeros(n)
+    psi[~c] = w_treat[~c] * (dY[~c] - pred[~c] - att) / mw_t
+    psi[c] = -(asy_lin_rep_ols @ M1) / mw_t
+    se = float(psi.std(ddof=1) * np.sqrt(n - 1) / n)
+    return att, se
+
+
+def _std_ipw_did_panel_ref(
+    dY: np.ndarray,
+    D: np.ndarray,
+    X: np.ndarray,
+    ps: np.ndarray,
+    weights: Optional[np.ndarray] = None,
+) -> Tuple[float, float]:
+    """Independent numpy reconstruction of ``DRDID::std_ipw_did_panel``.
+
+    Hajek IPW with the propensity-score estimation-effect correction
+    ``asy.lin.rep.ps @ M2``. Takes the fitted propensity scores as input so
+    the check isolates the IF algebra from the logit solver.
+    """
+    n = len(D)
+    w = np.ones(n) if weights is None else weights / np.mean(weights)
+    Xi = np.column_stack([np.ones(n), X])
+    w_t = w * D
+    w_c = w * ps * (1 - D) / (1 - ps)
+    mw_t, mw_c = w_t.mean(), w_c.mean()
+    eta_t = (w_t * dY).mean() / mw_t
+    eta_c = (w_c * dY).mean() / mw_c
+    att = float(eta_t - eta_c)
+    W_ps = ps * (1 - ps) * w
+    H_inv = np.linalg.inv(Xi.T @ (W_ps[:, None] * Xi)) * n
+    score = (w * (D - ps))[:, None] * Xi
+    asy_lin_rep_ps = score @ H_inv
+    inf_t = (w_t * dY - w_t * eta_t) / mw_t
+    inf_c1 = w_c * dY - w_c * eta_c
+    M2 = ((w_c * (dY - eta_c))[:, None] * Xi).sum(axis=0) / n
+    psi = inf_t - (inf_c1 + asy_lin_rep_ps @ M2) / mw_c
+    se = float(psi.std(ddof=1) * np.sqrt(n - 1) / n)
+    return att, se
+
+
+def _make_cov_panel(
+    seed: int,
+    n_units: int = 400,
+    n_periods: int = 2,
+    cohorts: Tuple[int, ...] = (2,),
+) -> pd.DataFrame:
+    """Two-covariate staggered panel with X-dependent selection and trends.
+
+    The selection index is bounded so every cell's fitted propensity stays
+    well inside (0.05, 0.95) - the estimator's clip at ``pscore_trim`` and
+    R's ``trim.level`` drop are both no-ops, keeping the reconstruction and
+    the estimator on identical weights.
+    """
+    rng = np.random.default_rng(seed)
+    X1 = rng.normal(size=n_units)
+    X2 = rng.uniform(-1.0, 1.0, size=n_units)
+    p_treat = 1.0 / (1.0 + np.exp(-(0.6 * X1 - 0.5 * X2)))
+    u = rng.uniform(size=n_units)
+    first_treat = np.zeros(n_units, dtype=int)
+    # Split the treated mass evenly across cohorts.
+    share = 0.55
+    for j, g in enumerate(cohorts):
+        lo = share * p_treat * j / len(cohorts)
+        hi = share * p_treat * (j + 1) / len(cohorts)
+        first_treat[(u >= lo) & (u < hi)] = g
+    alpha = rng.normal(size=n_units) + 0.5 * X1
+    weight = rng.uniform(0.5, 2.0, size=n_units)
+    rows = []
+    for t in range(1, n_periods + 1):
+        eps = rng.normal(scale=0.5, size=n_units)
+        trend = 0.5 * t + (0.3 * X1 - 0.2 * X2) * t
+        effect = np.where(
+            (first_treat > 0) & (t >= first_treat), 1.0 + 0.5 * (t - first_treat), 0.0
+        )
+        y = alpha + trend + effect + eps
+        rows.append(
+            pd.DataFrame(
+                {
+                    "unit": np.arange(n_units),
+                    "period": t,
+                    "first_treat": first_treat,
+                    "outcome": y,
+                    "X1": X1,
+                    "X2": X2,
+                    "weight": weight,
+                }
+            )
+        )
+    return pd.concat(rows, ignore_index=True)
+
+
+def _cell_arrays(
+    df: pd.DataFrame,
+    g: int,
+    t: int,
+    base: int,
+    control_cohorts: Tuple[int, ...],
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Unit-level (dY, D, X, weights) arrays for one (g, t) cell."""
+    keep = list(control_cohorts) + [g]
+    sub = df[df["first_treat"].isin(keep)]
+    wide = sub.pivot(index="unit", columns="period", values="outcome")
+    meta = sub.drop_duplicates(subset="unit").set_index("unit")
+    units = wide[[base, t]].dropna().index
+    dY = (wide.loc[units, t] - wide.loc[units, base]).to_numpy()
+    D = (meta.loc[units, "first_treat"] == g).to_numpy(dtype=float)
+    X = meta.loc[units, ["X1", "X2"]].to_numpy()
+    w = meta.loc[units, "weight"].to_numpy()
+    return dY, D, X, w
+
+
+class TestDRDIDPanelIFParity:
+    """Numpy cross-checks of CS panel reg/ipw per-cell IF standard errors
+    against independent reconstructions of ``DRDID::reg_did_panel`` and
+    ``DRDID::std_ipw_did_panel`` (the estimators R's ``did::att_gt``
+    delegates to for panel data).
+
+    These pin the estimation-effect (nuisance) IF terms: the OLS
+    ``asy.lin.rep.ols @ M1`` term for reg and the PS score correction
+    ``asy.lin.rep.ps @ M2`` for ipw - the terms whose omission left ATTs
+    exact (both are mean-zero) while per-cell/aggregated SEs diverged from
+    R by 4-13% / 3-20% (reg) and ~7x per-cell (ipw).
+    """
+
+    def _fit(
+        self, df: pd.DataFrame, method: str, survey_design: Any = None, **cs_kwargs
+    ) -> Any:
+        fit_kwargs = {"survey_design": survey_design} if survey_design is not None else {}
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            return CallawaySantAnna(estimation_method=method, **cs_kwargs).fit(
+                df,
+                outcome="outcome",
+                unit="unit",
+                time="period",
+                first_treat="first_treat",
+                covariates=["X1", "X2"],
+                **fit_kwargs,
+            )
+
+    @staticmethod
+    def _assert_ps_interior(X: np.ndarray, D: np.ndarray) -> np.ndarray:
+        """Fit the cell logit and assert the clip/trim guards are no-ops."""
+        _, ps = solve_logit(X, D)
+        assert ps.min() > 0.02 and ps.max() < 0.98, "DGP must keep ps interior"
+        return ps
+
+    def test_reg_if_crosscheck(self):
+        """Unweighted reg+cov single cell: fitted per-cell/overall SE must
+        equal the reg_did_panel reconstruction (vectorized covariate path)."""
+        df = _make_cov_panel(seed=90210)
+        res = self._fit(df, "reg")
+        dY, D, X, _ = _cell_arrays(df, g=2, t=2, base=1, control_cohorts=(0,))
+        att, se = _reg_did_panel_ref(dY, D, X)
+        cell = res.group_time_effects[(2, 2)]
+        assert cell["effect"] == pytest.approx(att, rel=1e-9)
+        assert cell["se"] == pytest.approx(se, rel=1e-9)
+        assert res.overall_se == pytest.approx(se, rel=1e-9)
+
+    def test_reg_if_crosscheck_not_yet_treated(self):
+        """not_yet_treated forces the per-pair (non-hoisted) bread branch of
+        the vectorized producer; both post cells must match reg_did_panel."""
+        df = _make_cov_panel(seed=90211, n_periods=3, cohorts=(2, 3))
+        res = self._fit(df, "reg", control_group="not_yet_treated")
+        # (2,2): controls = never-treated + cohort 3 (not yet treated at t=2)
+        dY, D, X, _ = _cell_arrays(df, g=2, t=2, base=1, control_cohorts=(0, 3))
+        att, se = _reg_did_panel_ref(dY, D, X)
+        cell = res.group_time_effects[(2, 2)]
+        assert cell["effect"] == pytest.approx(att, rel=1e-9)
+        assert cell["se"] == pytest.approx(se, rel=1e-9)
+        # (3,3): only never-treated remain
+        dY, D, X, _ = _cell_arrays(df, g=3, t=3, base=2, control_cohorts=(0,))
+        att, se = _reg_did_panel_ref(dY, D, X)
+        cell = res.group_time_effects[(3, 3)]
+        assert cell["effect"] == pytest.approx(att, rel=1e-9)
+        assert cell["se"] == pytest.approx(se, rel=1e-9)
+
+    def test_reg_if_crosscheck_survey(self):
+        """Survey-weighted reg+cov (general path): fitted per-cell SE must
+        equal the reg_did_panel reconstruction with i.weights."""
+        df = _make_cov_panel(seed=90212)
+        res = self._fit(df, "reg", survey_design=SurveyDesign(weights="weight"))
+        dY, D, X, w = _cell_arrays(df, g=2, t=2, base=1, control_cohorts=(0,))
+        att, se = _reg_did_panel_ref(dY, D, X, weights=w)
+        cell = res.group_time_effects[(2, 2)]
+        assert cell["effect"] == pytest.approx(att, rel=1e-9)
+        assert cell["se"] == pytest.approx(se, rel=1e-9)
+
+    def test_ipw_if_crosscheck(self):
+        """Unweighted ipw+cov: fitted per-cell/overall SE must equal the
+        std_ipw_did_panel reconstruction (PS estimation effect included)."""
+        df = _make_cov_panel(seed=90213)
+        res = self._fit(df, "ipw")
+        dY, D, X, _ = _cell_arrays(df, g=2, t=2, base=1, control_cohorts=(0,))
+        ps = self._assert_ps_interior(X, D)
+        att, se = _std_ipw_did_panel_ref(dY, D, X, ps)
+        cell = res.group_time_effects[(2, 2)]
+        assert cell["effect"] == pytest.approx(att, rel=1e-8)
+        assert cell["se"] == pytest.approx(se, rel=1e-8)
+        assert res.overall_se == pytest.approx(se, rel=1e-8)
+
+    def test_ipw_if_crosscheck_survey(self):
+        """Survey-weighted ipw+cov: the survey branch already carried the PS
+        correction (Phase 7a) - this pins it against the i.weights
+        reconstruction."""
+        df = _make_cov_panel(seed=90214)
+        res = self._fit(df, "ipw", survey_design=SurveyDesign(weights="weight"))
+        dY, D, X, w = _cell_arrays(df, g=2, t=2, base=1, control_cohorts=(0,))
+        _, ps = solve_logit(X, D, weights=w)
+        assert ps.min() > 0.02 and ps.max() < 0.98
+        att, se = _std_ipw_did_panel_ref(dY, D, X, ps, weights=w)
+        cell = res.group_time_effects[(2, 2)]
+        assert cell["effect"] == pytest.approx(att, rel=1e-8)
+        assert cell["se"] == pytest.approx(se, rel=1e-8)
+
+
+@pytest.fixture(scope="module")
+def golden():
+    """Golden R fixture scenarios; skip when the file is absent."""
+    if not _GOLDEN_VALUES_PATH.exists():
+        pytest.skip(
+            "Golden values file not found; "
+            "run: Rscript benchmarks/R/generate_csdid_test_values.R"
+        )
+    with open(_GOLDEN_VALUES_PATH) as f:
+        return json.load(f)["scenarios"]
+
+
+class TestDRDIDGoldenIFReconstruction:
+    """Reconstruct the DRDID per-cell IF SEs in numpy from the golden-fixture
+    data and pin BOTH directions per cell:
+
+    1. reconstruction == R's golden SEs (the ground truth; this held before
+       the fix and guards the reconstruction itself), and
+    2. fitted == reconstruction (the fix contract).
+
+    Covers pre-treatment cells and varying base periods (base = t-1 for
+    t < g, else g-1), which the DGP-based cross-checks above do not.
+    """
+
+    @staticmethod
+    def _df(scenario: dict) -> pd.DataFrame:
+        d = scenario["data"]
+        return pd.DataFrame(
+            {
+                "unit": d["unit"],
+                "period": d["period"],
+                "first_treat": d["first_treat"],
+                "outcome": d["outcome"],
+                "X": d["X"],
+            }
+        )
+
+    @staticmethod
+    def _cell(df: pd.DataFrame, g: int, t: int):
+        base = t - 1 if t < g else g - 1
+        sub = df[df["first_treat"].isin([0, g])]
+        wide = sub.pivot(index="unit", columns="period", values="outcome")
+        meta = sub.drop_duplicates(subset="unit").set_index("unit")
+        units = wide[[base, t]].dropna().index
+        dY = (wide.loc[units, t] - wide.loc[units, base]).to_numpy()
+        D = (meta.loc[units, "first_treat"] == g).to_numpy(dtype=float)
+        X = meta.loc[units, "X"].to_numpy()[:, None]
+        return dY, D, X
+
+    def _run(self, golden, name: str, method: str, ref):
+        scenario = golden[name]
+        df = self._df(scenario)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            res = CallawaySantAnna(estimation_method=method).fit(
+                df,
+                outcome="outcome",
+                unit="unit",
+                time="period",
+                first_treat="first_treat",
+                covariates=["X"],
+            )
+        gt = scenario["results"]["group_time"]
+        for g, t, r_att, r_se in zip(gt["group"], gt["time"], gt["att"], gt["se"]):
+            dY, D, X = self._cell(df, int(g), int(t))
+            if method == "ipw":
+                _, ps = solve_logit(X, D)
+                att, se = ref(dY, D, X, ps)
+            else:
+                att, se = ref(dY, D, X)
+            # Direction 1: reconstruction reproduces R's golden values.
+            assert att == pytest.approx(r_att, rel=1e-6), f"recon att ({g},{t})"
+            assert se == pytest.approx(r_se, rel=1e-6), f"recon se ({g},{t})"
+            # Direction 2: the fitted estimator matches the reconstruction.
+            cell = res.group_time_effects[(int(g), int(t))]
+            assert cell["effect"] == pytest.approx(att, rel=1e-7), f"fit att ({g},{t})"
+            assert cell["se"] == pytest.approx(se, rel=1e-7), f"fit se ({g},{t})"
+
+    def test_reg_golden_cells(self, golden):
+        self._run(golden, "with_covariates_reg", "reg", _reg_did_panel_ref)
+
+    def test_reg_golden_cells_multi_cohort(self, golden):
+        self._run(golden, "dynamic_effects", "reg", _reg_did_panel_ref)
+
+    def test_ipw_golden_cells(self, golden):
+        self._run(golden, "with_covariates_ipw", "ipw", _std_ipw_did_panel_ref)

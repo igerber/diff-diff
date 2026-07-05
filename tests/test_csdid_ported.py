@@ -966,7 +966,14 @@ class TestCSDIDGoldenValues:
                 ), f"ATT(g={g}, t={t}): Python={py_att:.6f}, R={r_att:.6f}"
 
     def test_golden_default_dgp_reg(self, golden_values):
-        """Regression method with covariates matches R."""
+        """Regression method with covariates matches R - ATT AND per-cell SE.
+
+        The SE assertion pins the ``DRDID::reg_did_panel`` influence function
+        (including the OLS estimation-effect term ``asy.lin.rep.ols @ M1``).
+        Before that term was added the per-cell SEs sat 4-13% from these
+        fixtures; observed agreement is now ~5e-12 (deterministic OLS), so
+        the 1e-8 tolerance is pure platform headroom.
+        """
         if "with_covariates_reg" not in golden_values:
             pytest.skip("Scenario not in golden values")
         results, expected = self._run_scenario(
@@ -978,14 +985,26 @@ class TestCSDIDGoldenValues:
         for i, (g, t) in enumerate(zip(r_gt["group"], r_gt["time"])):
             g, t = int(g), int(t)
             if (g, t) in results.group_time_effects:
-                py_att = results.group_time_effects[(g, t)]["effect"]
+                eff = results.group_time_effects[(g, t)]
                 r_att = r_gt["att"][i]
                 assert (
-                    abs(py_att - r_att) < 0.02
-                ), f"REG ATT(g={g}, t={t}): Py={py_att:.6f}, R={r_att:.6f}"
+                    abs(eff["effect"] - r_att) < 0.02
+                ), f"REG ATT(g={g}, t={t}): Py={eff['effect']:.6f}, R={r_att:.6f}"
+                assert (
+                    abs(eff["se"] - r_gt["se"][i]) < 1e-8
+                ), f"REG SE(g={g}, t={t}): Py={eff['se']:.10f}, R={r_gt['se'][i]:.10f}"
 
     def test_golden_default_dgp_ipw(self, golden_values):
-        """IPW method matches R."""
+        """IPW method matches R - ATT AND per-cell SE.
+
+        The SE assertion pins the ``DRDID::std_ipw_did_panel`` influence
+        function (Hajek terms + the PS estimation-effect correction
+        ``asy.lin.rep.ps @ M2``) and the IF-based per-cell SE. Before the
+        fix the per-cell SEs were ~7x these fixtures (a weighted population
+        variance was never scaled by an effective sample size). Observed
+        agreement is now ~5e-12; 1e-6 leaves headroom for IRLS-vs-glm logit
+        convergence differences across platforms/BLAS.
+        """
         if "with_covariates_ipw" not in golden_values:
             pytest.skip("Scenario not in golden values")
         results, expected = self._run_scenario(
@@ -997,11 +1016,14 @@ class TestCSDIDGoldenValues:
         for i, (g, t) in enumerate(zip(r_gt["group"], r_gt["time"])):
             g, t = int(g), int(t)
             if (g, t) in results.group_time_effects:
-                py_att = results.group_time_effects[(g, t)]["effect"]
+                eff = results.group_time_effects[(g, t)]
                 r_att = r_gt["att"][i]
                 assert (
-                    abs(py_att - r_att) < 0.05
-                ), f"IPW ATT(g={g}, t={t}): Py={py_att:.6f}, R={r_att:.6f}"
+                    abs(eff["effect"] - r_att) < 0.05
+                ), f"IPW ATT(g={g}, t={t}): Py={eff['effect']:.6f}, R={r_att:.6f}"
+                assert (
+                    abs(eff["se"] - r_gt["se"][i]) < 1e-6
+                ), f"IPW SE(g={g}, t={t}): Py={eff['se']:.10f}, R={r_gt['se'][i]:.10f}"
 
     def test_golden_default_dgp_dr_covariates(self, golden_values):
         """DR method WITH covariates matches R `did` att AND se.
@@ -1013,9 +1035,8 @@ class TestCSDIDGoldenValues:
         TripleDifference + R's ``lm()``/QR); this pins both the ATT(g,t) and the
         analytical IF SE against R. Tolerances are empirical: DR ATT(g,t) agrees
         with R to ~1e-3 (DR small-sample numerics) and the DR SE to ~1e-4.
-        (``reg``/``ipw`` SE are NOT pinned here — they have a pre-existing
-        divergence from R's ``did`` unrelated to the OR solver: ipw SE depends on
-        the propensity IF, not the OR fit.)
+        (``reg``/``ipw`` per-cell SEs are pinned in their own golden tests
+        above, now that both carry the DRDID estimation-effect IF terms.)
         """
         if "with_covariates_dr" not in golden_values:
             pytest.skip("Scenario not in golden values")
@@ -1296,11 +1317,10 @@ class TestCSDIDGoldenValues:
         this pins parity on the estimated horizons (observed agreement
         ~7e-6).
 
-        NOT enabled (pre-existing, unrelated to the IF-assembly fast path -
-        verified byte-identical deltas on the pre-rewrite tree): the
-        ``two_period`` and ``dynamic_effects`` aggregated SEs, where the reg
-        method's aggregated SEs sit 3-20% from these R fixtures while the
-        ATTs match at 1e-11. Tracked in TODO.md.
+        The ``two_period`` and ``dynamic_effects`` (reg) aggregated SEs -
+        previously 3-20% off because the reg IF lacked the OLS
+        estimation-effect term - are now enabled in
+        ``test_golden_reg_aggregation_se`` below.
         """
         if "varying_vs_universal" not in golden_values:
             pytest.skip("Scenario not in golden values")
@@ -1333,3 +1353,160 @@ class TestCSDIDGoldenValues:
                 ), f"{bp} dyn SE(e={e}): Py={es['se']:.6f}, R={r_se}"
                 n_checked += 1
             assert n_checked >= 8, f"{bp}: too few comparable horizons"
+
+    def test_golden_reg_group_time_se(self, golden_values):
+        """Per-cell reg SEs match R across the remaining reg golden scenarios.
+
+        Complements ``test_golden_default_dgp_reg``: ``two_period`` (single
+        2x2 cell) and ``dynamic_effects`` (3 cohorts x 3 periods, including
+        PRE-treatment cells whose varying base period is t-1). These pin the
+        ``DRDID::reg_did_panel`` IF on cell shapes the default scenario does
+        not cover. Observed agreement ~5e-12 (deterministic OLS); 1e-8 is
+        platform headroom.
+        """
+        for name in ("two_period", "dynamic_effects"):
+            if name not in golden_values:
+                pytest.skip("Scenario not in golden values")
+            scenario = golden_values[name]
+            data = _golden_to_df(scenario["data"])
+            cs = CallawaySantAnna(estimation_method="reg")
+            results = cs.fit(
+                data,
+                outcome="outcome",
+                unit="unit",
+                time="period",
+                first_treat="first_treat",
+                covariates=["X"],
+            )
+            r_gt = scenario["results"]["group_time"]
+            groups = np.atleast_1d(r_gt["group"])
+            times = np.atleast_1d(r_gt["time"])
+            atts = np.atleast_1d(r_gt["att"])
+            ses = np.atleast_1d(r_gt["se"])
+            for g, t, r_att, r_se in zip(groups, times, atts, ses):
+                eff = results.group_time_effects[(int(g), int(t))]
+                assert (
+                    abs(eff["effect"] - r_att) < 1e-8
+                ), f"{name} ATT(g={g},t={t}): Py={eff['effect']:.10f}, R={r_att:.10f}"
+                assert (
+                    abs(eff["se"] - r_se) < 1e-8
+                ), f"{name} SE(g={g},t={t}): Py={eff['se']:.10f}, R={r_se:.10f}"
+
+    def test_golden_reg_aggregation_se(self, golden_values):
+        """Aggregated reg ATTs and SEs match R ``aggte`` (simple/group/dynamic).
+
+        Enables the previously-unasserted aggregation blocks of the two reg
+        golden scenarios: ``two_period`` (simple + group + dynamic of a
+        single cell) and ``dynamic_effects`` (dynamic, all horizons incl.
+        pre-treatment). Before the reg IF carried the OLS estimation-effect
+        term these SEs sat 3-20% from the fixtures while the ATTs matched at
+        1e-11. Observed post-fix agreement is ~5e-12 (deterministic OLS +
+        the aggregation machinery already validated at 1e-12 on the dr
+        scenarios); 1e-8 is platform headroom.
+        """
+        if "two_period" not in golden_values or "dynamic_effects" not in golden_values:
+            pytest.skip("Scenario not in golden values")
+
+        # two_period: one (2,2) cell, so simple == group == dynamic(e=0)
+        scenario = golden_values["two_period"]
+        data = _golden_to_df(scenario["data"])
+        cs = CallawaySantAnna(estimation_method="reg")
+        results = cs.fit(
+            data,
+            outcome="outcome",
+            unit="unit",
+            time="period",
+            first_treat="first_treat",
+            covariates=["X"],
+            aggregate="all",
+        )
+        r = scenario["results"]
+        assert abs(results.overall_att - r["simple"]["att"]) < 1e-8
+        assert abs(results.overall_se - r["simple"]["se"]) < 1e-8
+        g_att = np.atleast_1d(r["group"]["att"])[0]
+        g_se = np.atleast_1d(r["group"]["se"])[0]
+        grp = results.group_effects[2]
+        assert abs(grp["effect"] - g_att) < 1e-8
+        assert abs(grp["se"] - g_se) < 1e-8
+        d_att = np.atleast_1d(r["dynamic"]["att"])[0]
+        d_se = np.atleast_1d(r["dynamic"]["se"])[0]
+        es0 = results.event_study_effects[0]
+        assert abs(es0["effect"] - d_att) < 1e-8
+        assert abs(es0["se"] - d_se) < 1e-8
+
+        # dynamic_effects: full event study, pre and post horizons
+        scenario = golden_values["dynamic_effects"]
+        data = _golden_to_df(scenario["data"])
+        cs = CallawaySantAnna(estimation_method="reg")
+        results = cs.fit(
+            data,
+            outcome="outcome",
+            unit="unit",
+            time="period",
+            first_treat="first_treat",
+            covariates=["X"],
+            aggregate="event_study",
+        )
+        r_dyn = scenario["results"]["dynamic"]
+        for i, e in enumerate(r_dyn["egt"]):
+            es = results.event_study_effects.get(int(e))
+            assert es is not None, f"missing event time e={e}"
+            assert (
+                abs(es["effect"] - r_dyn["att"][i]) < 1e-8
+            ), f"dyn ATT(e={e}): Py={es['effect']:.10f}, R={r_dyn['att'][i]:.10f}"
+            assert (
+                abs(es["se"] - r_dyn["se"][i]) < 1e-8
+            ), f"dyn SE(e={e}): Py={es['se']:.10f}, R={r_dyn['se'][i]:.10f}"
+
+    def test_golden_ipw_aggregation_se_vs_r_did_251(self, golden_values):
+        """Aggregated ipw SEs match R did 2.5.1 ``aggte`` on the golden data.
+
+        The golden JSON carries no aggregation blocks for the ipw scenario,
+        so the expected values are hardcoded from a fresh R run (did 2.5.1,
+        DRDID 1.3.0, ``bstrap=FALSE``, computed 2026-07-05 on the EXACT
+        ``with_covariates_ipw`` fixture data; see
+        benchmarks/R/generate_csdid_test_values.R which will fold these into
+        the JSON on its next regeneration). Discriminating: the pre-fix
+        Python simple SE was 0.32125722 (missing PS estimation-effect
+        correction, ~2.4% off). Observed post-fix agreement ~1e-10; 1e-6
+        covers the fixtures' 8-decimal quantization + IRLS-vs-glm headroom.
+        """
+        if "with_covariates_ipw" not in golden_values:
+            pytest.skip("Scenario not in golden values")
+        scenario = golden_values["with_covariates_ipw"]
+        data = _golden_to_df(scenario["data"])
+        cs = CallawaySantAnna(estimation_method="ipw")
+        results = cs.fit(
+            data,
+            outcome="outcome",
+            unit="unit",
+            time="period",
+            first_treat="first_treat",
+            covariates=["X"],
+            aggregate="all",
+        )
+        # R did 2.5.1: aggte(type="simple", bstrap=FALSE, cband=FALSE)
+        assert abs(results.overall_att - 0.68857256) < 1e-6
+        assert abs(results.overall_se - 0.31382230) < 1e-6
+        # aggte(type="dynamic"): (att.egt, se.egt) per event time
+        r_dynamic = {
+            -2: (-0.58336476, 0.27944371),
+            -1: (-0.40369753, 0.22022753),
+            0: (0.68317989, 0.20153325),
+            1: (0.69816671, 0.38903747),
+            2: (0.68521672, 0.64844936),
+        }
+        for e, (r_att, r_se) in r_dynamic.items():
+            es = results.event_study_effects[e]
+            assert abs(es["effect"] - r_att) < 1e-6, f"ipw dyn ATT(e={e})"
+            assert abs(es["se"] - r_se) < 1e-6, f"ipw dyn SE(e={e})"
+        # aggte(type="group"): (att.egt, se.egt) per cohort
+        r_group = {
+            2: (0.91085897, 0.44399703),
+            3: (0.60976619, 0.33782836),
+            4: (0.24708101, 0.30682305),
+        }
+        for g, (r_att, r_se) in r_group.items():
+            grp = results.group_effects[g]
+            assert abs(grp["effect"] - r_att) < 1e-6, f"ipw group ATT(g={g})"
+            assert abs(grp["se"] - r_se) < 1e-6, f"ipw group SE(g={g})"

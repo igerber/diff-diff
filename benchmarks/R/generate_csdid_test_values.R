@@ -108,6 +108,13 @@ data2_ipw <- build_sim_dataset(sp2_ipw)
 res2_ipw <- att_gt(yname = "Y", xformla = ~X, data = data2_ipw, tname = "period",
                    idname = "id", gname = "G", est_method = "ipw",
                    bstrap = FALSE, cband = FALSE)
+# Aggregations for the ipw scenario. Until the fixture is regenerated, these
+# values are hardcoded (from did 2.5.1 / DRDID 1.3.0, 2026-07-05) in
+# tests/test_csdid_ported.py::test_golden_ipw_aggregation_se_vs_r_did_251;
+# on the next regeneration the test can switch to reading them from the JSON.
+agg2_ipw_simple <- aggte(res2_ipw, type = "simple", bstrap = FALSE, cband = FALSE)
+agg2_ipw_dynamic <- aggte(res2_ipw, type = "dynamic", bstrap = FALSE, cband = FALSE)
+agg2_ipw_group <- aggte(res2_ipw, type = "group", bstrap = FALSE, cband = FALSE)
 
 scenarios$with_covariates_dr <- list(
   data = export_data(data2),
@@ -125,7 +132,12 @@ scenarios$with_covariates_ipw <- list(
   data = export_data(data2_ipw),
   params = list(est_method = "ipw", control_group = "nevertreated",
                 xformla = "~X", base_period = "varying"),
-  results = list(group_time = extract_gt(res2_ipw))
+  results = list(
+    group_time = extract_gt(res2_ipw),
+    simple = list(att = agg2_ipw_simple$overall.att, se = agg2_ipw_simple$overall.se),
+    group = extract_agg(agg2_ipw_group),
+    dynamic = extract_agg(agg2_ipw_dynamic)
+  )
 )
 
 # ---------------------------------------------------------------------------

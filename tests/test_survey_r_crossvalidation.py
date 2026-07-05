@@ -258,9 +258,10 @@ class TestCSWeighted:
     diff-diff computes design-based SEs via compute_survey_if_variance().
     Therefore we compare ATT only and verify that diff-diff's design-based
     SE is finite, positive, and differs from the naive (unweighted) SE.
-    For cs_weighted_cov, the reg+covariates SE additionally differs due to
-    the documented deviation in REGISTRY.md (conservative plug-in IF vs
-    semiparametrically efficient IF).
+    (The survey reg+covariates per-cell IF now carries the full DRDID
+    estimation-effect term — the former "conservative plug-in IF" deviation
+    is removed — but the design-based aggregated variance still differs
+    from R's survey-naive SEs by construction.)
     """
 
     def _fit_scenario(self, r_results, key):

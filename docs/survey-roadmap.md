@@ -273,6 +273,7 @@ the limitation and suggested alternative.
 **Warning/fallback (no error):** MultiPeriodDiD with `wild_bootstrap` +
 `survey_design` warns and falls back to analytical inference.
 
-**Conservative approach (no error):** CallawaySantAnna `reg`+covariates
-uses conservative plug-in IF rather than efficient DRDID nuisance IF
-correction (see REGISTRY.md).
+**Resolved (2026-07):** CallawaySantAnna `reg`+covariates (survey and
+unweighted) now carries the full `DRDID::reg_did_panel` estimation-effect
+IF correction; the former "conservative plug-in IF" deviation is removed
+(see REGISTRY.md, CallawaySantAnna standard-error notes).

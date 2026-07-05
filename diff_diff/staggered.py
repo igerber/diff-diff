@@ -1163,15 +1163,21 @@ class CallawaySantAnna(
                 )
                 sw_sum = float(np.sum(sw_t))
             else:
-                att = float(np.mean(treated_change) - np.mean(control_change))
-
-                var_t = float(np.var(treated_change, ddof=1)) if n_t > 1 else 0.0
-                var_c = float(np.var(control_change, ddof=1)) if n_c > 1 else 0.0
-                se = float(np.sqrt(var_t / n_t + var_c / n_c)) if (n_t > 0 and n_c > 0) else 0.0
+                mu_t = float(np.mean(treated_change))
+                mu_c = float(np.mean(control_change))
+                att = mu_t - mu_c
 
                 # Influence function
-                inf_treated = (treated_change - np.mean(treated_change)) / n_t
-                inf_control = -(control_change - np.mean(control_change)) / n_c
+                inf_treated = (treated_change - mu_t) / n_t
+                inf_control = -(control_change - mu_c) / n_c
+                # SE from the same IF that feeds aggregation (DRDID convention
+                # sqrt(sum(phi^2)); the prior ddof=1 plug-in deviated from R's
+                # reg_did_panel by O(1/n)).
+                se = (
+                    float(np.sqrt(np.sum(inf_treated**2) + np.sum(inf_control**2)))
+                    if (n_t > 0 and n_c > 0)
+                    else 0.0
+                )
                 sw_sum = None
 
             # A difference-in-means ATT is finite given n_t, n_c > 0, but enforce
@@ -1393,6 +1399,9 @@ class CallawaySantAnna(
                 continue
 
             X_ctrl = None
+            group_bread = None
+            group_xbar_c = None
+            group_Xc_centered = None
             if not ctrl_has_nan:
                 X_ctrl = np.column_stack([np.ones(n_c_base), X_ctrl_raw])
 
@@ -1412,6 +1421,25 @@ class CallawaySantAnna(
                         "excluded from the prediction).",
                         UserWarning,
                         stacklevel=2,
+                    )
+
+                # The IF bread is shared by every task in this group when the
+                # control design is; hoist it (rank-guarded, so collinear
+                # covariates get the column-drop generalized inverse
+                # consistent with the DR/IPW per-cell breads). It is computed
+                # in the CENTERED basis — the projection
+                # x'(X'X)^{-1}x̄_t == 1/n_c + (x - x̄_c)'G^{-1}(x̄_t - x̄_c)
+                # (G = centered control Gram) is the same quantity evaluated
+                # offset-invariantly: the raw Gram squares the design's
+                # conditioning, and a large constant covariate offset would
+                # push the equilibrated-Gram rank check below its threshold,
+                # silently truncating a genuine direction.
+                if is_balanced and self.control_group == "never_treated":
+                    group_xbar_c = X_ctrl_raw.mean(axis=0)
+                    group_Xc_centered = X_ctrl_raw - group_xbar_c
+                    group_bread = _safe_inv(
+                        group_Xc_centered.T @ group_Xc_centered,
+                        tracker=self._safe_inv_tracker,
                     )
 
             # Process each (g, t) pair in this group
@@ -1467,12 +1495,14 @@ class CallawaySantAnna(
                         UserWarning,
                         stacklevel=3,
                     )
-                    att = float(np.mean(treated_change) - np.mean(control_change))
-                    var_t = float(np.var(treated_change, ddof=1)) if n_t > 1 else 0.0
-                    var_c = float(np.var(control_change, ddof=1)) if n_c > 1 else 0.0
-                    se = float(np.sqrt(var_t / n_t + var_c / n_c))
-                    inf_treated = (treated_change - np.mean(treated_change)) / n_t
-                    inf_control = -(control_change - np.mean(control_change)) / n_c
+                    mu_t_fb = float(np.mean(treated_change))
+                    mu_c_fb = float(np.mean(control_change))
+                    att = mu_t_fb - mu_c_fb
+                    inf_treated = (treated_change - mu_t_fb) / n_t
+                    inf_control = -(control_change - mu_c_fb) / n_c
+                    # SE from the same IF that feeds aggregation (DRDID
+                    # convention sqrt(sum(phi^2)); prior ddof=1 plug-in).
+                    se = float(np.sqrt(np.sum(inf_treated**2) + np.sum(inf_control**2)))
                 else:
                     # Build per-pair X_ctrl if control_valid differs from base
                     if is_balanced and self.control_group == "never_treated" and X_ctrl is not None:
@@ -1550,11 +1580,50 @@ class CallawaySantAnna(
                     if nan_cell:
                         att = np.nan
                     else:
-                        var_t = float(np.var(treated_residuals, ddof=1)) if n_t > 1 else 0.0
-                        var_c = float(np.var(residuals, ddof=1)) if pair_n_c > 1 else 0.0
-                        se = float(np.sqrt(var_t / n_t + var_c / pair_n_c))
-                        inf_treated = (treated_residuals - np.mean(treated_residuals)) / n_t
-                        inf_control = -residuals / pair_n_c
+                        # DRDID::reg_did_panel influence function. The control
+                        # leg carries the OLS estimation-effect term: the
+                        # control residual projected through the rank-guarded
+                        # bread and evaluated at the treated covariate mean
+                        # (phi convention — every R 1/n factor cancels).
+                        # Evaluated in the CENTERED basis,
+                        # 1/n_c + (x - x̄_c)'G^{-1}(x̄_t - x̄_c), which is the
+                        # same quantity as x'(X'X)^{-1}x̄_t but offset-
+                        # invariant (see the group_bread hoist above); the
+                        # no-covariate collapse -residuals/n_c is the leading
+                        # 1/n_c term. Omitting this term left ATTs exact (it
+                        # is mean-zero by the OLS normal equations) while SEs
+                        # sat 4-13% from R per-cell.
+                        if (
+                            is_balanced
+                            and self.control_group == "never_treated"
+                            and group_bread is not None
+                        ):
+                            xbar_c = group_xbar_c
+                            Xc_centered = group_Xc_centered
+                            bread = group_bread
+                        else:
+                            xbar_c = X_control_pair.mean(axis=0)
+                            Xc_centered = X_control_pair - xbar_c
+                            bread = _safe_inv(
+                                Xc_centered.T @ Xc_centered,
+                                tracker=self._safe_inv_tracker,
+                            )
+                        d_tc = X_treated_pair.mean(axis=0) - xbar_c
+                        with np.errstate(all="ignore"):
+                            proj_c = 1.0 / pair_n_c + Xc_centered @ (bread @ d_tc)
+                            inf_treated = (treated_residuals - att) / n_t
+                            inf_control = -residuals * proj_c
+                        # Per-cell SE from the same IF that feeds aggregation
+                        # (sqrt(sum(phi^2)), the DR convention). A rank-0
+                        # bread yields NaN — safe_inference then NaNs the
+                        # full inference tuple (never a silent 0.0).
+                        var_psi = float(np.sum(inf_treated**2) + np.sum(inf_control**2))
+                        if not np.isfinite(var_psi):
+                            se = float("nan")
+                        elif var_psi > 0:
+                            se = float(np.sqrt(var_psi))
+                        else:
+                            se = 0.0
 
                 # Non-estimable (non-finite regression) cell: materialize NaN with
                 # NO influence-function entry — uniform with the missing-period /
@@ -2578,7 +2647,9 @@ class CallawaySantAnna(
         if X_treated is not None and X_control is not None and X_treated.shape[1] > 0:
             # Covariate-adjusted outcome regression
             # Fit regression on control units: E[Delta Y | X, D=0]
-            beta, residuals = _linear_regression(
+            # (residuals are recomputed below from the NaN-zeroed beta so the
+            # IF uses the same prediction convention as the ATT).
+            beta, _ = _linear_regression(
                 X_control,
                 control_change,
                 rank_deficient_action=self.rank_deficient_action,
@@ -2596,40 +2667,61 @@ class CallawaySantAnna(
             # ATT: survey-weighted mean of treated residuals
             treated_residuals = treated_change - predicted_control
 
-            if sw_treated is not None:
-                sw_t_sum = float(np.sum(sw_treated))
-                sw_c_sum = float(np.sum(sw_control))
-                sw_t_norm = sw_treated / sw_t_sum
-                sw_c_norm = sw_control / sw_c_sum
-                att = float(np.sum(sw_t_norm * treated_residuals))
-
-                # Survey-weighted OR influence function.
-                # Mirrors unweighted: inf_treated = (resid-ATT)/n_t,
-                # inf_control = -resid/n_c. Survey: w_i/sum(w_group).
-                # WLS residuals are orthogonal to W*X by construction.
-                X_c_int = np.column_stack([np.ones(n_c), X_control])
+            # DRDID::reg_did_panel influence function (survey weights map to
+            # R's i.weights; only weight RATIOS enter every term, so the
+            # normalization constant cancels and the raw sw arrays can be
+            # used directly). The control leg carries the OLS estimation-
+            # effect term: the (weighted) control residual projected through
+            # the rank-guarded WLS bread and evaluated at the (weighted)
+            # treated covariate mean. Evaluated in the CENTERED basis,
+            # 1/sum(W_c) + (x - x̄_c)'G^{-1}(x̄_t - x̄_c) with G the centered
+            # weighted control Gram — the same quantity as x'(X'WX)^{-1}x̄_t
+            # but offset-invariant (the raw Gram squares the design's
+            # conditioning; a large constant covariate offset would push the
+            # equilibrated-Gram rank check below threshold and silently
+            # truncate a genuine direction). The no-covariate collapse is the
+            # leading -resid_c/n_c term. Omitting the estimation-effect term
+            # left ATTs exact (it is mean-zero by the WLS normal equations)
+            # while per-cell SEs sat 4-13% from R. phi convention: psi_R / n.
+            X_c_int = np.column_stack([np.ones(n_c), X_control])
+            with np.errstate(all="ignore"):
                 resid_c = control_change - np.dot(X_c_int, beta)
 
+            if sw_treated is not None:
+                sw_t_sum = float(np.sum(sw_treated))
+                sw_t_norm = sw_treated / sw_t_sum
+                att = float(np.sum(sw_t_norm * treated_residuals))
+                W_c = sw_control
+                xbar_t = np.sum(sw_treated[:, None] * X_treated, axis=0) / sw_t_sum
                 inf_treated = sw_t_norm * (treated_residuals - att)
-                inf_control = -sw_c_norm * resid_c
-                inf_func = np.concatenate([inf_treated, inf_control])
-
-                # SE: survey-weighted variance matching unweighted var_t/n_t + var_c/n_c
-                var_t = float(np.sum(sw_t_norm * (treated_residuals - att) ** 2))
-                var_c = float(np.sum(sw_c_norm * resid_c**2))
-                se = float(np.sqrt(var_t + var_c)) if (n_t > 0 and n_c > 0) else 0.0
             else:
                 att = float(np.mean(treated_residuals))
+                W_c = np.ones(n_c)
+                xbar_t = X_treated.mean(axis=0)
+                inf_treated = (treated_residuals - att) / n_t
 
-                # Standard error using sandwich estimator
-                var_t = np.var(treated_residuals, ddof=1) if n_t > 1 else 0.0
-                var_c = np.var(residuals, ddof=1) if n_c > 1 else 0.0
-                se = float(np.sqrt(var_t / n_t + var_c / n_c)) if (n_t > 0 and n_c > 0) else 0.0
+            w_c_sum = float(np.sum(W_c))
+            with np.errstate(all="ignore"):
+                xbar_c = np.sum(W_c[:, None] * X_control, axis=0) / w_c_sum
+                Xc_centered = X_control - xbar_c
+                bread = _safe_inv(
+                    Xc_centered.T @ (W_c[:, None] * Xc_centered),
+                    tracker=self._safe_inv_tracker,
+                )
+                proj_c = 1.0 / w_c_sum + Xc_centered @ (bread @ (xbar_t - xbar_c))
+                inf_control = -(W_c * resid_c) * proj_c
+            inf_func = np.concatenate([inf_treated, inf_control])
 
-                # Influence function
-                inf_treated = (treated_residuals - np.mean(treated_residuals)) / n_t
-                inf_control = -residuals / n_c
-                inf_func = np.concatenate([inf_treated, inf_control])
+            # Per-cell SE from the same IF that feeds aggregation
+            # (sqrt(sum(phi^2)), the DR convention). A rank-0 bread yields
+            # NaN — safe_inference then NaNs the full inference tuple.
+            var_psi = float(np.sum(inf_func**2))
+            if not np.isfinite(var_psi):
+                se = float("nan")
+            elif var_psi > 0:
+                se = float(np.sqrt(var_psi))
+            else:
+                se = 0.0
         else:
             # Simple difference in means (no covariates)
             if sw_treated is not None:
@@ -2651,16 +2743,19 @@ class CallawaySantAnna(
                     else 0.0
                 )
             else:
-                att = float(np.mean(treated_change) - np.mean(control_change))
-
-                var_t = np.var(treated_change, ddof=1) if n_t > 1 else 0.0
-                var_c = np.var(control_change, ddof=1) if n_c > 1 else 0.0
-                se = float(np.sqrt(var_t / n_t + var_c / n_c)) if (n_t > 0 and n_c > 0) else 0.0
+                mu_t = float(np.mean(treated_change))
+                mu_c = float(np.mean(control_change))
+                att = mu_t - mu_c
 
                 # Influence function (for aggregation)
-                inf_treated = treated_change - np.mean(treated_change)
-                inf_control = control_change - np.mean(control_change)
-                inf_func = np.concatenate([inf_treated / n_t, -inf_control / n_c])
+                inf_treated = (treated_change - mu_t) / n_t
+                inf_control = -(control_change - mu_c) / n_c
+                inf_func = np.concatenate([inf_treated, inf_control])
+
+                # SE from the same IF that feeds aggregation (DRDID convention
+                # sqrt(sum(phi^2)); the prior ddof=1 plug-in deviated from R's
+                # reg_did_panel by O(1/n)).
+                se = float(np.sqrt(np.sum(inf_func**2))) if (n_t > 0 and n_c > 0) else 0.0
 
         return att, se, inf_func
 
@@ -2698,7 +2793,6 @@ class CallawaySantAnna(
         """
         n_t = len(treated_change)
         n_c = len(control_change)
-        n_total = n_treated + n_control
 
         if X_treated is not None and X_control is not None and X_treated.shape[1] > 0:
             # Covariate-adjusted IPW estimation
@@ -2843,27 +2937,67 @@ class CallawaySantAnna(
                 # IPW weights for control units: p(X) / (1 - p(X))
                 # This reweights controls to have same covariate distribution as treated
                 weights_control = pscore_control / (1 - pscore_control)
-                weights_control = weights_control / np.sum(weights_control)  # normalize
+                weights_control_norm = weights_control / np.sum(weights_control)
 
                 # ATT = mean(treated) - weighted_mean(control)
-                att = float(np.mean(treated_change) - np.sum(weights_control * control_change))
+                mu_t = float(np.mean(treated_change))
+                eta_c = float(np.sum(weights_control_norm * control_change))
+                att = mu_t - eta_c
 
-                # Compute standard error
-                var_t = np.var(treated_change, ddof=1) if n_t > 1 else 0.0
-
-                weighted_var_c = np.sum(
-                    weights_control
-                    * (control_change - np.sum(weights_control * control_change)) ** 2
-                )
-
-                se = float(np.sqrt(var_t / n_t + weighted_var_c)) if (n_t > 0 and n_c > 0) else 0.0
-
-                # Influence function
-                inf_treated = (treated_change - np.mean(treated_change)) / n_t
-                inf_control = -weights_control * (
-                    control_change - np.sum(weights_control * control_change)
-                )
+                # Influence function (Hajek leading terms; mirrors the survey
+                # branch above with unit weights)
+                inf_treated = (treated_change - mu_t) / n_t
+                inf_control = -weights_control_norm * (control_change - eta_c)
                 inf_func = np.concatenate([inf_treated, inf_control])
+
+                if not ps_fallback_used:
+                    # Propensity-score estimation-effect correction
+                    # (DRDID::std_ipw_did_panel's asy.lin.rep.ps %*% M2) —
+                    # mirrors the survey branch above with sw=None. Its
+                    # omission left ATTs exact (the logit score is mean-zero
+                    # at the MLE) while aggregated SEs sat ~2.4% from R.
+                    n_all_panel = n_t + n_c
+                    X_all_int = np.column_stack([np.ones(n_all_panel), X_all])
+                    pscore_all = np.concatenate([pscore_treated, pscore_control])
+
+                    W_ps = pscore_all * (1 - pscore_all)
+                    # R: Hessian.ps = crossprod(X * sqrt(W)) / n
+                    H_psi = X_all_int.T @ (W_ps[:, None] * X_all_int) / n_all_panel
+                    H_psi_inv = _safe_inv(H_psi, tracker=self._safe_inv_tracker)
+
+                    D_all = np.concatenate([np.ones(n_t), np.zeros(n_c)])
+
+                    # R: M2 = colMeans(w.cont * (y - att) * X) / mean(w.cont);
+                    # the normalized-weight subset sum matches R's full-sample
+                    # colMeans/mean(w) after cancellation.
+                    M2 = np.sum(
+                        (weights_control_norm * (control_change - eta_c))[:, None]
+                        * X_all_int[n_t:],
+                        axis=0,
+                    )
+
+                    # R: asy.lin.rep.ps %*% M2 with
+                    # asy.lin.rep.ps = score.ps %*% Hessian.ps — evaluated
+                    # fused as (D - ps) * (X @ (H^{-1} M2)), which avoids
+                    # materializing the (n x k) asy.lin.rep matrix (same
+                    # algebra, one O(n*k) matvec instead of an O(n*k^2)
+                    # matmul). psi-scale, converted to phi via /n_all_panel.
+                    # Subtract: R adds it to inf.control, and att = treat - control.
+                    corr = (D_all - pscore_all) * (X_all_int @ (H_psi_inv @ M2))
+                    inf_func = inf_func - corr / n_all_panel
+
+                # SE from the same IF that feeds aggregation. The prior
+                # plug-in sqrt(var_t/n_t + weighted_var_c) used a weighted
+                # POPULATION variance for the control leg — never scaled by
+                # an effective sample size — inflating per-cell SEs ~7x
+                # versus R's std_ipw_did_panel.
+                var_psi = np.sum(inf_func**2)
+                if not np.isfinite(var_psi):
+                    se = float("nan")
+                elif var_psi > 0:
+                    se = float(np.sqrt(var_psi))
+                else:
+                    se = 0.0
         else:
             # Unconditional IPW (reduces to difference in means)
             if sw_treated is not None:
@@ -2884,24 +3018,21 @@ class CallawaySantAnna(
                     else 0.0
                 )
             else:
-                p_treat = n_treated / n_total  # unconditional propensity score
-
-                att = float(np.mean(treated_change) - np.mean(control_change))
-
-                var_t = np.var(treated_change, ddof=1) if n_t > 1 else 0.0
-                var_c = np.var(control_change, ddof=1) if n_c > 1 else 0.0
-
-                # Adjusted variance for IPW
-                se = float(
-                    np.sqrt(var_t / n_t + var_c * (1 - p_treat) / (n_c * p_treat))
-                    if (n_t > 0 and n_c > 0 and p_treat > 0)
-                    else 0.0
-                )
+                mu_t = float(np.mean(treated_change))
+                mu_c = float(np.mean(control_change))
+                att = mu_t - mu_c
 
                 # Influence function (for aggregation)
-                inf_treated = (treated_change - np.mean(treated_change)) / n_t
-                inf_control = (control_change - np.mean(control_change)) / n_c
-                inf_func = np.concatenate([inf_treated, -inf_control])
+                inf_treated = (treated_change - mu_t) / n_t
+                inf_control = -(control_change - mu_c) / n_c
+                inf_func = np.concatenate([inf_treated, inf_control])
+
+                # SE from the same IF that feeds aggregation. The prior
+                # "adjusted" plug-in var_c*(1-p_treat)/(n_c*p_treat) equals
+                # R's std_ipw_did_panel analytical SE only at p_treat = 0.5;
+                # with a constant propensity the IF sum IS R's SE (no
+                # estimated PS parameter, so no correction term).
+                se = float(np.sqrt(np.sum(inf_func**2))) if (n_t > 0 and n_c > 0) else 0.0
 
         return att, se, inf_func
 
