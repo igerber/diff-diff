@@ -127,6 +127,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   supersedes it.
 
 ### Changed
+- **CallawaySantAnna multiplier bootstrap rewritten as a fused, column-tiled scatter-GEMM**
+  (EfficientDiD's bootstrap routes through the same kernel). The former loop sliced the
+  `(block × n_units)` weight matrix twice per (g,t) cell per weight block — at a 40-period,
+  10-cohort, 100k-unit panel (390 cells, 999 draws) that was ~95% of bootstrap wall time as
+  pure memory traffic. All perturbation columns (per-cell IFs, overall combined IF,
+  per-event-time combined IFs) are now scattered into a column-tiled influence matrix
+  (byte-capped tiles; each tile replays the bit-identical weight stream via RNG state
+  snapshot/restore) and consumed by one BLAS GEMM per weight block. Measured (5-rep medians,
+  rust backend + Accelerate): bootstrap fits 24.5s → 4.3s (5.7x) at the 4M-row flagship,
+  5.6s → 0.31s (18.3x) no-covariate and 6.5s → 1.2s (5.5x) dr at 2M rows, 4.2s → 1.5s (2.7x)
+  survey-PSU; peak memory flat or lower. Point estimates are bit-identical (the bootstrap
+  never feeds them); bootstrap SEs/CIs/p-values match the previous loop to BLAS
+  reassociation (≤ ~1e-15 relative — far below bootstrap Monte-Carlo error), the same
+  numerics posture as the existing draw-axis chunking. EfficientDiD's unweighted path folds
+  its `1/n` prefactor into the influence column (`W @ (eif/n)` instead of `(W @ eif)/n`) —
+  the same reassociation-level equivalence.
 - **CallawaySantAnna aggregation SE assembly rewritten to O(n_units)** (also inherited by
   `StaggeredTripleDifference` aggregation). The combined influence-function assembly behind
   simple/event-study/group aggregated SEs — previously ~56-85% of analytical fit time at

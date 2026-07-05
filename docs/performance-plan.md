@@ -183,6 +183,54 @@ precision; analytical SEs to 5 significant digits; bootstrap SEs within ~1% (Mon
 
 ---
 
+## CS multiplier-bootstrap fused tiled-GEMM rewrite (v3.7 Phase 2, 2026-07)
+
+Stage-level instrumentation of `_run_multiplier_bootstrap` at the 40p × 10c × 100k-unit
+flagship (390 cells, 72 event times, 999 draws; 20.9s of a 24.4s fit) split the loop as:
+
+| stage | time | share |
+|---|---:|---:|
+| per-cell fancy-index copies `W[:, idx_t]`, `W[:, idx_c]` | 20.45s | **95%** |
+| per-cell GEMVs | 0.73s | 3% |
+| event-study GEMVs (72 full-width) | 0.27s | 1% |
+| weight generation (rust, 1e8 draws) | 0.04s | 0.2% |
+
+Not FLOPs, not RNG — ~100GB of cache-hostile gather traffic from slicing the
+`(block × n_units)` weight matrix twice per cell (mean cell density 0.33: never-treated
+controls appear in every cell). The fix: scatter every perturbation column (per-cell IFs,
+overall combined IF, per-event-time combined IFs) into a column-tiled influence matrix
+and run one BLAS GEMM per (weight block, column tile) — `bootstrap_chunking.tiled_if_matmul`
++ `ReplayableWeightStream` (each column tile replays the bit-identical weight stream via
+RNG state snapshot/restore; byte-capped tiles keep the kernel's live intermediates bounded
+regardless of n_units or column count). A scipy-sparse cell-column variant was measured and
+rejected (27x slower than dense GEMM at 33% density). EfficientDiD's per-cell full-width
+GEMV bootstrap routes through the same kernel via lazily materialized scaled-EIF columns.
+
+Measured (5-rep medians, M4 Max, rust backend + Accelerate, otherwise-idle machine;
+BEFORE = pristine `origin/main` worktree via PYTHONPATH, AFTER = frozen branch):
+
+| Scenario | Before | After | Speedup | Peak RSS |
+|---|---:|---:|---:|---|
+| 40p × 10c, 5-cov dr, boot-999 (4M rows, 390 cells) | 24.49s | 4.28s | **5.7x** | 2.9→2.9 GB |
+| no-cov boot-999 (2M rows) | 5.64s | 0.31s | **18.3x** | 2.0→1.6 GB |
+| 5-cov dr boot-999 (2M rows) | 6.49s | 1.19s | **5.5x** | 2.3→1.9 GB |
+| survey-PSU 5-cov dr boot-999 (500 PSUs, non-identity map) | 4.22s | 1.54s | **2.7x** | 2.0→1.9 GB |
+| RCS 5-cov dr boot-999 (2M obs) | 42.15s | 40.07s | 1.1x | 3.3→3.2 GB |
+
+ATT deltas exactly 0 on every scenario (the bootstrap never feeds point estimates);
+bootstrap SE relative deltas 3e-16 to 1.2e-15 (BLAS reassociation only). The RCS scenario
+barely moves because its fit time is the analytical repeated-cross-sections path, not the
+bootstrap. EfficientDiD's bootstrap stage went 0.018s → 0.012s but is invisible inside its
+fits: EfficientDiD's **analytical** stage has a pre-existing pathological hot loop
+(339s at just 2k units × 20p with 5 covariates; sampled to a broadcasted subtract/multiply
+in a Python-level loop) — tracked in TODO.md as its own item, out of scope here.
+
+Remaining CS bottlenecks (updated forecast): `_precompute_structures` pandas
+groupby+pivot on analytical no-cov fits, and per-cell DR/IPW nuisance solvers at high
+covariate counts (IRLS `lstsq`, rank-guard QR — Phase 3 candidate).
+
+---
+
 ## Memory scaling at the millions-of-units tail (v3.x, June 2026)
 
 At the scale where the dense working arrays - not compute - are the binding constraint
