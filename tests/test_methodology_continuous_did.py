@@ -1289,14 +1289,14 @@ class TestDiscreteSaturated:
                 )
                 with warnings.catch_warnings():
                     warnings.simplefilter("ignore")
-                    res = ContinuousDiD(
-                        treatment_type="discrete", n_bootstrap=nb, seed=s
-                    ).fit(df, **self._KW)
+                    res = ContinuousDiD(treatment_type="discrete", n_bootstrap=nb, seed=s).fit(
+                        df, **self._KW
+                    )
                 lo = res.dose_response_att.conf_int_lower
                 hi = res.dose_response_att.conf_int_upper
                 for j, d in enumerate(levels):
                     cover[j] += int(lo[j] <= effects[d] <= hi[j])
             rate = cover / reps
-            assert np.all((rate >= lo_band) & (rate <= 0.995)), (
-                f"{'boot' if use_boot else 'analytic'} coverage {rate} off nominal"
-            )
+            assert np.all(
+                (rate >= lo_band) & (rate <= 0.995)
+            ), f"{'boot' if use_boot else 'analytic'} coverage {rate} off nominal"

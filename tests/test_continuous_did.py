@@ -1728,7 +1728,9 @@ class TestCovariateAPI:
 # =============================================================================
 
 
-def _discrete_panel(effects, n_per=40, n_control=70, noise=0.5, seed=0, cohorts=(1,), n_periods=None):
+def _discrete_panel(
+    effects, n_per=40, n_control=70, noise=0.5, seed=0, cohorts=(1,), n_periods=None
+):
     """Balanced discrete-dose panel with known per-level effects + covariate x1."""
     r = np.random.default_rng(seed)
     levels = sorted(effects)
@@ -1758,8 +1760,12 @@ def _discrete_panel(effects, n_per=40, n_control=70, noise=0.5, seed=0, cohorts=
 
 
 _DKW = dict(
-    outcome="outcome", unit="unit", time="period", first_treat="first_treat",
-    dose="dose", aggregate="dose",
+    outcome="outcome",
+    unit="unit",
+    time="period",
+    first_treat="first_treat",
+    dose="dose",
+    aggregate="dose",
 )
 
 
@@ -1807,7 +1813,9 @@ class TestDiscreteSaturatedAPI:
         dr = ContinuousDiD(
             treatment_type="discrete", covariates=["x1"], estimation_method="dr", n_bootstrap=0
         ).fit(df, **_DKW)
-        assert np.allclose(reg.dose_response_acrt.effects, dr.dose_response_acrt.effects, atol=1e-10)
+        assert np.allclose(
+            reg.dose_response_acrt.effects, dr.dose_response_acrt.effects, atol=1e-10
+        )
         assert np.allclose(reg.dose_response_acrt.se, dr.dose_response_acrt.se, atol=1e-10)
         # ATT levels differ (dr subtracts the augmentation eta_cont).
         assert not np.allclose(
@@ -1849,7 +1857,9 @@ class TestDiscreteSaturatedAPI:
     def test_heterogeneous_support_raises(self):
         """Multi-cohort with different dose support -> NotImplementedError."""
         # cohort 1 covers {1,2,4}; cohort 2 covers {1,2} only.
-        df1 = _discrete_panel({1.0: 0.5, 2.0: 1.5, 4.0: 2.5}, n_control=0, seed=6, cohorts=(1,), n_periods=3)
+        df1 = _discrete_panel(
+            {1.0: 0.5, 2.0: 1.5, 4.0: 2.5}, n_control=0, seed=6, cohorts=(1,), n_periods=3
+        )
         df2 = _discrete_panel({1.0: 0.5, 2.0: 1.5}, n_control=40, seed=7, cohorts=(2,), n_periods=3)
         df2["unit"] = df2["unit"] + 10_000
         df = pd.concat([df1, df2], ignore_index=True)
@@ -1859,9 +1869,9 @@ class TestDiscreteSaturatedAPI:
     def test_dvals_off_support_raises(self):
         df = _discrete_panel({1.0: 0.5, 2.0: 1.5, 4.0: 2.5}, seed=8)
         with pytest.raises(ValueError, match="level"):
-            ContinuousDiD(
-                treatment_type="discrete", dvals=np.array([1.5]), n_bootstrap=0
-            ).fit(df, **_DKW)
+            ContinuousDiD(treatment_type="discrete", dvals=np.array([1.5]), n_bootstrap=0).fit(
+                df, **_DKW
+            )
 
     def test_survey_zero_weight_level_raises(self):
         """A dose level fully zero-weighted by survey weights -> fail closed (no silent zero)."""
@@ -1872,6 +1882,25 @@ class TestDiscreteSaturatedAPI:
         # Zero out every treated unit at dose 2.0.
         df.loc[df["dose"] == 2.0, "wt"] = 0.0
         with pytest.raises(ValueError, match="positive survey weight|zero"):
+            ContinuousDiD(treatment_type="discrete", n_bootstrap=0).fit(
+                df, survey_design=SurveyDesign(weights="wt"), **_DKW
+            )
+
+    def test_survey_multicohort_percell_zero_support_raises(self):
+        """A level zero-weighted in ONE cohort's cell (positive globally) -> per-cell guard raises.
+
+        The fit-time global positive-weight check passes (cohort 2 keeps dose 2 positive),
+        so the silent-zero can only be caught by the per-(g,t)-cell support check.
+        """
+        from diff_diff import SurveyDesign
+
+        df = _discrete_panel(
+            {1.0: 0.5, 2.0: 1.5, 4.0: 2.5}, n_per=25, n_control=60, seed=11, cohorts=(1, 2)
+        )
+        df["wt"] = 1.0
+        # Zero cohort-1 units at dose 2.0; cohort-2 dose 2.0 stays positive.
+        df.loc[(df["first_treat"] == 1) & (df["dose"] == 2.0), "wt"] = 0.0
+        with pytest.raises(ValueError, match="zero effective treated mass|positive survey weight"):
             ContinuousDiD(treatment_type="discrete", n_bootstrap=0).fit(
                 df, survey_design=SurveyDesign(weights="wt"), **_DKW
             )

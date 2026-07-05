@@ -587,9 +587,7 @@ class ContinuousDiD:
             if usw is not None:
                 dv = precomp["dose_vector"]
                 empty = [
-                    float(d)
-                    for d in levels
-                    if not np.any(usw[np.abs(dv - d) <= SATURATED_TOL] > 0)
+                    float(d) for d in levels if not np.any(usw[np.abs(dv - d) <= SATURATED_TOL] > 0)
                 ]
                 if empty:
                     raise ValueError(
@@ -1452,13 +1450,36 @@ class ContinuousDiD:
                 return bspline_design_matrix(z, knots, degree, include_intercept=True)
 
             def _deriv(z: np.ndarray) -> np.ndarray:
-                return bspline_derivative_design_matrix(
-                    z, knots, degree, include_intercept=True
-                )
+                return bspline_derivative_design_matrix(z, knots, degree, include_intercept=True)
 
         # Design matrix on treated doses.
         Psi = _design(treated_doses)
         n_basis = Psi.shape[1]
+
+        # Per-cell discrete support (fail-closed). Every dose level must have
+        # positive effective treated mass in THIS (g,t) cell. A level absent
+        # here, or fully zero-weighted by survey subpopulation weights, yields
+        # an all-zero indicator column that solve_ols drops and beta_pred zeroes
+        # -> a silent-zero ATT(d_j) that would bias aggregation. The fit-time
+        # guards (shared cohort support; global positive weight) do NOT cover a
+        # level that is positive globally but empty in this cell (e.g. survey
+        # weights zero it out for one cohort while another cohort keeps it).
+        if self.treatment_type == "discrete":
+            assert levels is not None  # fit() always sets levels on the discrete path
+            level_mass = (
+                (Psi * w_treated[:, np.newaxis]).sum(axis=0)
+                if w_treated is not None
+                else Psi.sum(axis=0)
+            )
+            empty_levels = [float(levels[j]) for j in range(len(levels)) if not level_mass[j] > 0]
+            if empty_levels:
+                raise ValueError(
+                    f"treatment_type='discrete': dose level(s) {empty_levels} have "
+                    f"zero effective treated mass in cell (g={g}, t={t}); the saturated "
+                    "column is unidentified (a level with no positive survey weight in "
+                    "the cell cannot be estimated). Widen the subpopulation or drop the "
+                    "level from the dose grid."
+                )
 
         # Check for all-same dose
         if np.all(treated_doses == treated_doses[0]):
@@ -1480,9 +1501,7 @@ class ContinuousDiD:
         # effective sample size — subpopulation() can zero weights, leaving rows
         # present but the weighted regression underidentified.
         n_eff = int(np.count_nonzero(w_treated > 0)) if w_treated is not None else n_treated
-        underidentified = (
-            n_eff < n_basis if self.treatment_type == "discrete" else n_eff <= n_basis
-        )
+        underidentified = n_eff < n_basis if self.treatment_type == "discrete" else n_eff <= n_basis
         if underidentified:
             label = "positive-weight treated units" if w_treated is not None else "treated units"
             warnings.warn(
