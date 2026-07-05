@@ -1609,8 +1609,10 @@ class CallawaySantAnna(
                             inf_control = -residuals * proj_c
                         # Per-cell SE from the same IF that feeds aggregation
                         # (sqrt(sum(phi^2)), the DR convention). A rank-0
-                        # bread yields NaN — safe_inference then NaNs the
-                        # full inference tuple (never a silent 0.0).
+                        # CENTERED Gram is benign — _centered_or_bread maps it
+                        # to a zero correction (finite SE on the identified
+                        # intercept subset); the NaN guard below covers only
+                        # non-finite inputs, never a silent 0.0.
                         var_psi = float(np.sum(inf_treated**2) + np.sum(inf_control**2))
                         if not np.isfinite(var_psi):
                             se = float("nan")
@@ -2726,8 +2728,10 @@ class CallawaySantAnna(
             inf_func = np.concatenate([inf_treated, inf_control])
 
             # Per-cell SE from the same IF that feeds aggregation
-            # (sqrt(sum(phi^2)), the DR convention). A rank-0 bread yields
-            # NaN — safe_inference then NaNs the full inference tuple.
+            # (sqrt(sum(phi^2)), the DR convention). A rank-0 CENTERED Gram
+            # is benign — _centered_or_bread maps it to a zero correction
+            # (finite SE on the identified intercept subset); the NaN guard
+            # below covers only non-finite inputs.
             var_psi = float(np.sum(inf_func**2))
             if not np.isfinite(var_psi):
                 se = float("nan")
