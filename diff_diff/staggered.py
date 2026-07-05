@@ -5,6 +5,7 @@ Implements modern methods for DiD with variation in treatment timing,
 including the Callaway-Sant'Anna (2021) estimator.
 """
 
+import bisect
 import warnings
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -346,15 +347,25 @@ class CallawaySantAnna(
         - "silent": Drop columns silently without warning
     base_period : str, default="varying"
         Method for selecting the base (reference) period for computing
-        ATT(g,t). Options:
+        ATT(g,t). Base periods are selected *positionally* (by the nearest
+        observed period in the sorted panel), matching R ``did::att_gt`` -- so
+        on gapped (non-consecutive) grids the base is the nearest observed
+        period, not literal ``t-1`` / ``g-1``. The pre/post split is on the
+        current period vs the cohort (``t < g`` -> pre), independent of
+        anticipation; anticipation only shifts the post/universal base. Options:
 
-        - "varying": For pre-treatment periods (t < g - anticipation), use
-          t-1 as base (consecutive comparisons). For post-treatment, use
-          g-1-anticipation. Requires t-1 to exist in data.
-        - "universal": Always use g-1-anticipation as base period.
+        - "varying": pre-treatment (``t < g``) uses the immediately-preceding
+          observed period as base; post-treatment uses the last observed
+          pre-treatment period (largest observed ``p`` with
+          ``p + anticipation < g``).
+        - "universal": always uses that last observed pre-treatment period as
+          base.
 
+        On consecutive grids these reduce to ``t-1`` / ``g-1-anticipation``.
         Both produce identical post-treatment effects. Matches R's
-        did::att_gt() base_period parameter.
+        ``did::att_gt()`` on gapped panels (base selection, estimable ATT/SE
+        cells, the ``"universal"`` zero reference cells, and all aggregations).
+        See :func:`_select_base_period`.
     cband : bool, default=True
         Whether to compute simultaneous confidence bands (sup-t) for
         event study aggregation. Requires ``n_bootstrap > 0``.
@@ -460,8 +471,11 @@ class CallawaySantAnna(
 
     where G=g indicates treatment cohort g and C=1 indicates control units.
     This uses g-1 as the base period, which applies to post-treatment (t >= g).
-    With base_period="varying" (default), pre-treatment uses t-1 as base for
-    consecutive comparisons useful in parallel trends diagnostics.
+    With base_period="varying" (default), pre-treatment uses the immediately-
+    preceding observed period as base for the consecutive comparisons useful in
+    parallel trends diagnostics. Base periods are selected positionally (nearest
+    observed period), matching R did::att_gt on gapped grids (see
+    ``_select_base_period``).
 
     References
     ----------
@@ -801,6 +815,7 @@ class CallawaySantAnna(
             "unit_cohorts": unit_cohorts,
             "outcome_matrix": outcome_matrix,
             "period_to_col": period_to_col,
+            "observed_sorted": sorted(period_to_col),
             "cohort_masks": cohort_masks,
             "never_treated_mask": never_treated_mask,
             "covariate_by_period": covariate_by_period,
@@ -815,6 +830,71 @@ class CallawaySantAnna(
                 resolved_survey_unit.df_survey if resolved_survey_unit is not None else None
             ),
         }
+
+    def _select_base_period(self, g: Any, t: Any, observed_sorted: List) -> Optional[Any]:
+        """Select the base period for cell ``(g, t)``, matching R ``did::att_gt``.
+
+        R selects the base period by *position* in the sorted list of observed
+        periods, not by literal calendar arithmetic: on gapped (non-consecutive)
+        period grids the base is the nearest observed period, not ``t-1`` /
+        ``g-1``. This reproduces ``did`` 2.5.1 ``compute.att_gt`` exactly and is
+        byte-identical to the old ``t-1`` / ``g-1-anticipation`` rule on
+        consecutive grids (where positional == calendar).
+
+        Parameters
+        ----------
+        g, t : cohort and evaluation period (calendar values).
+        observed_sorted : ascending list of the unique observed periods.
+
+        Returns
+        -------
+        The base period value, or ``None`` when no valid earlier observed
+        period exists (a non-estimable cell, materialized by callers as a
+        ``missing_period`` NaN; R cannot estimate it either).
+
+        Notes
+        -----
+        Following R ``compute.att_gt``, the pre/post split is on the current
+        period vs the cohort (``t < g`` -> pre), **independent of
+        anticipation**; anticipation only enters the post/universal base.
+        - ``universal``, or post-treatment (``t >= g``): base is the last
+          pre-treatment observed period, i.e. the largest observed ``p`` with
+          ``p + anticipation < g``.
+        - ``varying`` pre-treatment (``t < g``): base is the immediately
+          preceding observed period, i.e. the largest observed ``p < t``.
+        """
+        if self.base_period == "universal" or t >= g:
+            threshold = g - self.anticipation
+        else:  # varying pre-treatment
+            threshold = t
+        # Largest observed period strictly below `threshold` (positional
+        # neighbor). bisect_left gives the insertion index of `threshold`; the
+        # element just before it is the largest observed value < threshold.
+        idx = bisect.bisect_left(observed_sorted, threshold)
+        return observed_sorted[idx - 1] if idx > 0 else None
+
+    def _valid_periods_for_group(self, g: Any, time_periods: List, observed_sorted: List) -> List:
+        """Evaluation periods ``t`` to attempt as ``ATT(g, t)`` for cohort ``g``.
+
+        Centralizes the per-group period filter used by every estimation path
+        (single source of truth, so the positional-base contract cannot drift):
+
+        - ``universal``: all observed periods except the (positional) base
+          reference period (which is the trivial ``ATT = 0`` cell); the base is
+          the last observed pre-treatment period, matching R -- NOT literal
+          ``g-1-anticipation`` (which on gapped grids would leave the real base
+          in and materialize a fake zero cell).
+        - ``varying``: all periods except the earliest observed one (which can
+          never be a current period -- it has no earlier base).
+
+        Cells that remain non-estimable (``_select_base_period`` returns
+        ``None``) are pruned downstream as ``missing_period`` NaNs.
+        """
+        if self.base_period == "universal":
+            universal_base = self._select_base_period(g, g, observed_sorted)
+            return [t for t in time_periods if t != universal_base]
+        min_period = observed_sorted[0]
+        return [t for t in time_periods if t >= g - self.anticipation or t > min_period]
 
     def _compute_att_gt_fast(
         self,
@@ -855,24 +935,12 @@ class CallawaySantAnna(
         unit_cohorts = precomputed["unit_cohorts"]
         covariate_by_period = precomputed["covariate_by_period"]
 
-        # Base period selection based on mode
-        if self.base_period == "universal":
-            # Universal: always use g - 1 - anticipation
-            base_period_val = g - 1 - self.anticipation
-        else:  # varying
-            if t < g - self.anticipation:
-                # Pre-treatment: use t - 1 (consecutive comparison)
-                base_period_val = t - 1
-            else:
-                # Post-treatment: use g - 1 - anticipation
-                base_period_val = g - 1 - self.anticipation
+        # Base period selection: positional (sorted-index) neighbor, matching
+        # R did::att_gt (see _select_base_period). Returns None for a
+        # non-estimable cell (no earlier observed period).
+        base_period_val = self._select_base_period(g, t, precomputed["observed_sorted"])
 
-        if base_period_val not in period_to_col:
-            # Base period must exist; no fallback to maintain methodological consistency
-            return None, 0.0, 0, 0, None, None, "missing_period"
-
-        # Check if periods exist in the data
-        if base_period_val not in period_to_col or t not in period_to_col:
+        if base_period_val is None or t not in period_to_col:
             return None, 0.0, 0, 0, None, None, "missing_period"
 
         base_col = period_to_col[base_period_val]
@@ -1063,25 +1131,16 @@ class CallawaySantAnna(
         # Collect all valid (g, t, base_col, post_col) tuples
         tasks = []
         for g in treatment_groups:
-            if self.base_period == "universal":
-                universal_base = g - 1 - self.anticipation
-                valid_periods = [t for t in time_periods if t != universal_base]
-            else:
-                valid_periods = [
-                    t for t in time_periods if t >= g - self.anticipation or t > min_period
-                ]
+            valid_periods = self._valid_periods_for_group(
+                g, time_periods, precomputed["observed_sorted"]
+            )
 
             for t in valid_periods:
-                # Base period selection
-                if self.base_period == "universal":
-                    base_period_val = g - 1 - self.anticipation
-                else:
-                    if t < g - self.anticipation:
-                        base_period_val = t - 1
-                    else:
-                        base_period_val = g - 1 - self.anticipation
+                # Base period selection: positional (sorted-index) neighbor,
+                # matching R did::att_gt (see _select_base_period).
+                base_period_val = self._select_base_period(g, t, precomputed["observed_sorted"])
 
-                if base_period_val not in period_to_col or t not in period_to_col:
+                if base_period_val is None or t not in period_to_col:
                     skipped_missing_period.append((g, t))
                     group_time_effects[(g, t)] = _nan_gt_entry(skip_reason="missing_period")
                     continue
@@ -1312,24 +1371,16 @@ class CallawaySantAnna(
         # Collect all valid (g, t) tasks with their base periods
         tasks_by_group = {}  # control_key -> list of (g, t, base_period_val, base_col, post_col)
         for g in treatment_groups:
-            if self.base_period == "universal":
-                universal_base = g - 1 - self.anticipation
-                valid_periods = [t for t in time_periods if t != universal_base]
-            else:
-                valid_periods = [
-                    t for t in time_periods if t >= g - self.anticipation or t > min_period
-                ]
+            valid_periods = self._valid_periods_for_group(
+                g, time_periods, precomputed["observed_sorted"]
+            )
 
             for t in valid_periods:
-                if self.base_period == "universal":
-                    base_period_val = g - 1 - self.anticipation
-                else:
-                    if t < g - self.anticipation:
-                        base_period_val = t - 1
-                    else:
-                        base_period_val = g - 1 - self.anticipation
+                # Base period selection: positional (sorted-index) neighbor,
+                # matching R did::att_gt (see _select_base_period).
+                base_period_val = self._select_base_period(g, t, precomputed["observed_sorted"])
 
-                if base_period_val not in period_to_col or t not in period_to_col:
+                if base_period_val is None or t not in period_to_col:
                     skipped_missing_period.append((g, t))
                     group_time_effects[(g, t)] = _nan_gt_entry(skip_reason="missing_period")
                     continue
@@ -2085,13 +2136,9 @@ class CallawaySantAnna(
             )
 
             for g in treatment_groups:
-                if self.base_period == "universal":
-                    universal_base = g - 1 - self.anticipation
-                    valid_periods = [t for t in time_periods if t != universal_base]
-                else:
-                    valid_periods = [
-                        t for t in time_periods if t >= g - self.anticipation or t > min_period
-                    ]
+                valid_periods = self._valid_periods_for_group(
+                    g, time_periods, precomputed["observed_sorted"]
+                )
 
                 for t in valid_periods:
                     rc_result = self._compute_att_gt_rc(
@@ -2207,13 +2254,9 @@ class CallawaySantAnna(
             )
 
             for g in treatment_groups:
-                if self.base_period == "universal":
-                    universal_base = g - 1 - self.anticipation
-                    valid_periods = [t for t in time_periods if t != universal_base]
-                else:
-                    valid_periods = [
-                        t for t in time_periods if t >= g - self.anticipation or t > min_period
-                    ]
+                valid_periods = self._valid_periods_for_group(
+                    g, time_periods, precomputed["observed_sorted"]
+                )
 
                 for t in valid_periods:
                     att_gt, se_gt, n_treat, n_ctrl, inf_info, sw_sum, skip_reason = (
@@ -2335,6 +2378,69 @@ class CallawaySantAnna(
                 UserWarning,
                 stacklevel=2,
             )
+
+        # Universal base period: materialize each cohort's positional base as a
+        # zero reference cell (att=0, se=NaN, zero influence function) so it
+        # appears in the group-time table AND is weighted into the dynamic
+        # event-study aggregation and the multiplier bootstrap exactly like R
+        # `did` (which lists the base as a zero att_gt cell and includes it in
+        # aggte(type="dynamic")). Injected once here — before every aggregation
+        # and the bootstrap — so all consumers see the same cells uniformly. The
+        # `group` / `simple` aggregations filter to post-treatment cells
+        # (t >= g - anticipation) and so exclude the reference (t = base is the
+        # last observed period with base + anticipation < g).
+        if self.base_period == "universal":
+            _obs_sorted = precomputed["observed_sorted"]
+            # Each cohort's reference weight is the FIXED cohort mass = R's aggte
+            # `pg` numerator: the survey-weighted sum (else the unit / observation
+            # count) over the WHOLE cohort, read straight from the cohort column.
+            # NOT a single cell's valid-treated count (which under-weights the
+            # reference on unbalanced panels). Because it needs no estimable cell,
+            # the reference is materialized for every cohort with a valid base --
+            # matching R, which materializes the base zero cell before estimating
+            # the other cells, even for a cohort whose non-reference cells are all
+            # non-estimable. RCS cells carry `agg_weight` (fixed mass); panel cells
+            # read `n_treated`; survey aggregation overrides both with the cohort
+            # survey mass.
+            _unit_cohorts = precomputed.get("unit_cohorts")
+            _survey_w = precomputed.get("survey_weights")
+            _is_panel = precomputed.get("is_panel", True)
+            for _g in treatment_groups:
+                _base = self._select_base_period(_g, _g, _obs_sorted)
+                if _base is None or (_g, _base) in group_time_effects or _unit_cohorts is None:
+                    continue
+                _cmask = np.asarray(_unit_cohorts) == _g
+                _mass = (
+                    float(np.sum(np.asarray(_survey_w)[_cmask]))
+                    if _survey_w is not None
+                    else float(np.count_nonzero(_cmask))
+                )
+                if _mass <= 0:
+                    continue  # cohort has no units -> nothing to weight
+                _ref: Dict[str, Any] = {
+                    "effect": 0.0,
+                    "se": np.nan,
+                    "t_stat": np.nan,
+                    "p_value": np.nan,
+                    "conf_int": (np.nan, np.nan),
+                    "n_treated": int(round(_mass)),
+                    "n_control": 0,
+                    "skip_reason": None,
+                    "is_reference": True,
+                }
+                if not _is_panel:
+                    _ref["agg_weight"] = _mass
+                if _survey_w is not None:
+                    _ref["survey_weight_sum"] = _mass
+                group_time_effects[(_g, _base)] = _ref
+                influence_func_info[(_g, _base)] = {
+                    "treated_idx": np.array([], dtype=int),
+                    "control_idx": np.array([], dtype=int),
+                    "treated_inf": np.array([]),
+                    "control_inf": np.array([]),
+                    "treated_units": np.array([]),
+                    "control_units": np.array([]),
+                }
 
         # Compute overall ATT (simple aggregation)
         overall_att, overall_se, overall_effective_df = self._aggregate_simple(
@@ -3447,6 +3553,7 @@ class CallawaySantAnna(
             "never_treated_mask": never_treated_mask,
             "time_periods": time_periods,
             "period_to_col": period_to_col,
+            "observed_sorted": sorted(period_to_col),
             "is_balanced": False,
             "survey_weights": survey_weights_arr,
             "resolved_survey": resolved_survey,
@@ -3506,16 +3613,11 @@ class CallawaySantAnna(
         obs_outcome = precomputed["obs_outcome"]
         period_to_col = precomputed["period_to_col"]
 
-        # Base period selection (same logic as panel)
-        if self.base_period == "universal":
-            base_period_val = g - 1 - self.anticipation
-        else:  # varying
-            if t < g - self.anticipation:
-                base_period_val = t - 1
-            else:
-                base_period_val = g - 1 - self.anticipation
+        # Base period selection: positional (sorted-index) neighbor, matching
+        # R did::att_gt (see _select_base_period). Same logic as the panel path.
+        base_period_val = self._select_base_period(g, t, precomputed["observed_sorted"])
 
-        if base_period_val not in period_to_col or t not in period_to_col:
+        if base_period_val is None or t not in period_to_col:
             return None, 0.0, 0, 0, None, None, None, "missing_period"
 
         # Treated mask = cohort g

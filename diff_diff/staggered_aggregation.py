@@ -848,6 +848,18 @@ class CallawaySantAnnaAggregationMixin:
                     )
             effects_by_e = balanced_effects
 
+        # Universal base period: each cohort's positional base is materialized in
+        # `group_time_effects` / `influence_func_info` (with a zero effect and a
+        # zero influence function) by `fit()` before aggregation, so it is already
+        # grouped into `effects_by_e` above and weighted into the dynamic horizon
+        # exactly like R `did::aggte(type="dynamic")` (a reference cell dilutes the
+        # real cells at an overlapping negative horizon). We only flag which cells
+        # are references so a reference-only horizon reports NaN (not a spurious
+        # se=0) and does not count toward `n_groups`.
+        reference_cells: Set[Tuple[Any, Any]] = {
+            (g, t) for (g, t), data in group_time_effects.items() if data.get("is_reference")
+        }
+
         # Compute aggregated effects and SEs for all relative periods
         sorted_periods = sorted(effects_by_e.items())
         agg_effects_list = []
@@ -877,10 +889,27 @@ class CallawaySantAnnaAggregationMixin:
                     # which already drops all-NaN groups.
                     continue
 
+            # Reference-only horizon (universal base): every cell is a zero
+            # reference (att=0, no influence function), so there is no estimated
+            # effect. Report att=0, se=NaN — matching R `did` (base rows carry
+            # `se = NA`) — instead of a spurious se=0 from the all-zero IF.
+            if reference_cells and all(gt in reference_cells for gt in gt_pairs):
+                agg_effects_list.append(0.0)
+                agg_ses_list.append(np.nan)
+                agg_n_groups.append(0)
+                agg_effective_dfs.append(None)
+                agg_periods.append(e)
+                # No influence-function column for a reference-only horizon (it
+                # carries no estimated effect); leaving it out of _psi_event_times
+                # keeps the VCV index aligned with the VCV columns (valid_psi).
+                continue
+
             weights = ns / np.sum(ns)
             agg_effect = np.sum(weights * effs)
 
-            # Compute SE with WIF adjustment (matching R's did::aggte)
+            # Compute SE with WIF adjustment (matching R's did::aggte). Zero-IF
+            # reference cells contribute nothing to the variance but their cohort
+            # weight dilutes the real cells, matching R's dynamic aggregation.
             groups_for_gt = np.array([g for (g, t) in gt_pairs])
             agg_se, psi_e, eff_df = self._compute_aggregated_se_with_wif(
                 gt_pairs,
@@ -896,10 +925,10 @@ class CallawaySantAnnaAggregationMixin:
 
             agg_effects_list.append(agg_effect)
             agg_ses_list.append(agg_se)
-            # Count only finite-contributing cells (gt_pairs is finite-filtered
-            # above) so materialized NaN cells don't inflate n_groups — matches
-            # the all-NaN early-return which already reports 0.
-            agg_n_groups.append(len(gt_pairs))
+            # Count only finite-contributing NON-reference cells so materialized
+            # NaN cells and zero references don't inflate n_groups — matches the
+            # all-NaN early-return which already reports 0.
+            agg_n_groups.append(sum(1 for gt in gt_pairs if gt not in reference_cells))
             agg_effective_dfs.append(eff_df)
             agg_periods.append(e)
             _psi_vectors.append(psi_e)
@@ -947,23 +976,19 @@ class CallawaySantAnnaAggregationMixin:
                 "n_groups": agg_n_groups[idx],
             }
 
-        # Add reference period for universal base period mode (matches R did package)
-        if getattr(self, "base_period", "varying") == "universal":
-            ref_period = -1 - self.anticipation
-            if event_study_effects and ref_period not in event_study_effects:
-                event_study_effects[ref_period] = {
-                    "effect": 0.0,
-                    "se": np.nan,
-                    "t_stat": np.nan,
-                    "p_value": np.nan,
-                    "conf_int": (np.nan, np.nan),
-                    "n_groups": 0,
-                }
+        # (Universal-mode zero reference rows are now materialized per cohort at
+        # their positional base event time e = base - g during the aggregation
+        # above — matching R `did::aggte(type="dynamic")` — rather than as a
+        # single fixed e = -1-anticipation display row.)
 
         # Compute full event-study VCV from per-event-time IF vectors (Phase 7d)
         # This enables HonestDiD to use the full covariance structure
         event_study_vcov = None
-        valid_psi = [p for p in _psi_vectors if len(p) > 0]
+        # Pair event times with their IF vectors and keep only non-empty psi, so
+        # the stored VCV index (below) always aligns 1:1 with the VCV columns.
+        _valid_pairs = [(et, p) for et, p in zip(_psi_event_times, _psi_vectors) if len(p) > 0]
+        valid_psi = [p for _, p in _valid_pairs]
+        valid_event_times = [et for et, _ in _valid_pairs]
         if valid_psi:
             try:
                 Psi = np.column_stack(valid_psi)  # (n_units, n_event_times)
@@ -1001,8 +1026,10 @@ class CallawaySantAnnaAggregationMixin:
                 pass  # Fall back to diagonal (None)
 
         # Store the event-time index that matches VCV columns (for subsetting
-        # in HonestDiD when some event times are filtered out)
-        self._event_study_vcov_index = _psi_event_times if event_study_vcov is not None else None
+        # in HonestDiD when some event times are filtered out). Uses the
+        # non-empty-psi event times so the index aligns 1:1 with the VCV columns
+        # (reference-only and empty-IF horizons never get a column).
+        self._event_study_vcov_index = valid_event_times if event_study_vcov is not None else None
 
         # Attach VCV to self for CallawaySantAnna to pick up
         self._event_study_vcov = event_study_vcov

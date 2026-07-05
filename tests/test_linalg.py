@@ -1095,7 +1095,15 @@ class TestLinearRegression:
         np.testing.assert_allclose(reg1.get_se(1), reg2.get_se(1), rtol=1e-10)
 
     def test_df_adjustment(self, simple_data):
-        """Test degrees of freedom adjustment parameter."""
+        """Test degrees of freedom adjustment parameter.
+
+        ``df_adjustment`` accounts for parameters not present in ``X`` (e.g.
+        absorbed fixed effects). It reduces the reported ``df_`` AND, for the
+        non-clustered classical / hc1 variance families, rescales the finite-
+        sample variance to the full parameter count ``n - k - df_adjustment``
+        (fixest full-K convention), so the SE's ``k`` agrees with the reported
+        t-``df`` instead of ignoring the absorbed parameters.
+        """
         X, y, _ = simple_data
         reg = LinearRegression().fit(X, y)
         reg_adj = LinearRegression().fit(X, y, df_adjustment=10)
@@ -1107,9 +1115,12 @@ class TestLinearRegression:
         result = reg.get_inference(1)
         result_adj = reg_adj.get_inference(1)
 
-        # Same coefficient and SE
+        # Coefficient unchanged; SE is rescaled to the full parameter count,
+        # larger by sqrt((n-k) / (n-k-df_adjustment)) = sqrt(reg.df_ / reg_adj.df_).
         assert result.coefficient == result_adj.coefficient
-        assert result.se == result_adj.se
+        expected_se = result.se * np.sqrt(reg.df_ / reg_adj.df_)
+        np.testing.assert_allclose(result_adj.se, expected_se, rtol=1e-12)
+        assert result_adj.se > result.se
 
         # Different df affects p-value and CI (though often slightly)
         assert result.df != result_adj.df

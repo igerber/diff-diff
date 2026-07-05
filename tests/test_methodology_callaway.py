@@ -493,13 +493,12 @@ class TestRBenchmarkCallaway:
         """Test individual ATT(g,t) values match R for post-treatment periods.
 
         Post-treatment effects (t >= g) should match closely since both
-        Python and R use g-1 as the base period for these.
+        Python and R use the last observed pre-treatment period as base.
 
-        Pre-treatment effects may differ due to base_period handling:
-        - Python varying: uses t-1 as base for pre-treatment
-        - R varying: may handle differently
-
-        We focus on post-treatment where alignment is expected.
+        Pre-treatment effects also match: since the positional-base fix, Python
+        selects base periods positionally (nearest observed period) exactly like
+        R did::att_gt (varying uses the immediately-preceding observed period).
+        We focus on post-treatment where alignment has always been expected.
         """
         data, csv_path = benchmark_data
 

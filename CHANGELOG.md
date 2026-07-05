@@ -40,6 +40,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `survey_design=SurveyDesign(psu=<cluster_col>)`. No behavior change for unclustered fits.
 
 ### Fixed
+- **`CallawaySantAnna` base period is now selected positionally (sorted-index), matching R
+  `did::att_gt` on gapped panels.** Previously the base period used literal calendar arithmetic
+  (`t-1` pre-treatment, `g-1-anticipation` post/universal), so on non-consecutive period grids
+  (e.g. biennial surveys, skipped years) cells whose calendar base was unobserved were NaN'd as
+  `missing_period` even though R estimates them from the nearest observed period — which also
+  corrupted the aggregated event-study / group SEs. The base is now the nearest observed period
+  (largest observed `p < t` pre-treatment; largest observed `p` with `p + anticipation < g`
+  post/universal), and the pre/post split is on `t < g` (independent of anticipation, matching a
+  deparse of `did` 2.5.1 `compute.att_gt`) — resolving the internal inconsistency with the
+  library's own dCDH estimator, which already used positional neighbors. On consecutive grids
+  this is byte-identical to the old rule (all existing goldens unchanged); on gapped panels we now
+  reproduce every R cell (e.g. `fewer_periods` {1,3,4,6} 7/15 previously-NaN cells, `reg` to
+  ~1e-11 / `dr` to ~1e-4). A single shared `_select_base_period` helper is used across all
+  estimation paths (panel fast / vectorized / covariate-reg, and repeated cross-sections). For
+  `base_period="universal"`, each cohort's positional base is now materialized as a zero reference
+  cell (`att=0`, `se=NaN`) in `group_time_effects` / `to_dataframe("group_time")` at its positional
+  base event time (`e = base - g`, which can be `-2`, `-3`, … on gapped grids), matching R's
+  `att_gt` table and `aggte(type="dynamic")` — including the overlapping-reference case where the
+  zero base dilutes another cohort's estimated pre-trend at the same event time (analytical AND
+  multiplier-bootstrap paths verified vs `did` 2.5.1 to ~1e-5). The `group` / `simple` aggregations
+  use post-treatment cells only and exclude the reference.
+- **Absorbed-FE (`absorb=`) non-clustered classical/hetero standard errors now use the full-K
+  finite-sample scale, matching `fixest`.** The within-transform variance scale (`sse/(n-k)` for
+  `classical`, `n/(n-k)` for `hc1`) counted only the *visible* regressors `k`, excluding the
+  absorbed fixed effects, so `TwoWayFixedEffects(vcov_type="classical")`,
+  `DifferenceInDifferences(absorb=..., vcov_type in {classical,hc1})`, and
+  `MultiPeriodDiD(absorb=..., vcov_type in {classical,hc1})` non-clustered SEs sat ~6.5% below
+  `fixest::feols(vcov="iid"/"hetero")` — even though the reported t-`df` already counted the
+  absorbed FE (an internal inconsistency). A single scalar rescale
+  (`(n-k)/(n-k-df_adjustment)`, fail-closed when the full-K residual dof is non-positive) now
+  aligns the SE's `k` with `K_full`, so the absorb path equals the explicit full-dummy
+  (`fixed_effects=`) path and fixest. **Clustered** SEs are unchanged (fixest's nested-FE `ssc`
+  convention already matches with `k_visible`); `hc2`/`hc2_bm` (leverage / Satterthwaite DOF) and
+  survey vcov are unaffected; `SunAbraham` `hc1` auto-clusters at unit and so keeps its documented
+  deviation.
 - **Non-finite degrees of freedom now fail closed to all-NaN inference.**
   `safe_inference()` previously rejected `df <= 0` but let a non-finite `df` (NaN) through,
   producing an inconsistent tuple (finite t-stat, NaN p-value/CI). It now returns all-NaN for

@@ -2035,9 +2035,9 @@ class TestRegIpwIFBehavior:
 
     def test_universal_base_period_anticipation_reg_smoke(self):
         """reg+cov under base_period="universal" + anticipation=1: every
-        produced cell has finite inference and the reference period
-        t = g-1-anticipation is excluded from the grid (no degenerate
-        zero-IF cell exists to divide by)."""
+        estimated cell has finite inference, and each cohort's positional base
+        period is materialized as a zero reference cell (att=0, se=NaN, matching
+        R `did`'s att_gt table) rather than omitted."""
         data = generate_staggered_data_with_covariates(seed=97)
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
@@ -2049,9 +2049,14 @@ class TestRegIpwIFBehavior:
             )
         assert len(res.group_time_effects) > 0
         for (g, t), cell in res.group_time_effects.items():
-            assert t != g - 2, "universal reference period must be excluded"
+            if cell.get("is_reference"):
+                # Zero reference cell: att=0, se=NaN by construction.
+                assert cell["effect"] == 0.0 and np.isnan(cell["se"])
+                continue
             if cell["skip_reason"] is None:
                 assert np.isfinite(cell["se"]), f"cell ({g},{t})"
+        # The reference period is now materialized as a zero cell.
+        assert any(c.get("is_reference") for c in res.group_time_effects.values())
         assert np.isfinite(res.overall_se)
 
     def test_reg_constant_only_covariate_matches_no_covariate(self):
@@ -4960,26 +4965,30 @@ class TestSilentWarningAudit:
         assert len(inf_warnings) == 0
 
     def test_item4_consolidated_skip_warning(self):
-        """Item 4: Consolidated warning when (g,t) cells are skipped."""
+        """Item 4: Consolidated warning when (g,t) cells are non-estimable.
+
+        With positional base-period selection a cell is only non-estimable when
+        no earlier observed period exists. Cohort ``g=2`` treated at the earliest
+        observed period (periods ``{2,3,4,5}``) has no pre-treatment period, so
+        R cannot estimate it either -> ``missing_period`` skips + a consolidated
+        warning. Cohort ``g=4`` (base = observed period 3) is estimable.
+        """
         import warnings
 
-        # Two cohorts: g=4 succeeds (base=3 exists), g=6 fails (base=5
-        # exists but post periods 7 need base=5 which exists — so use
-        # g=8 whose base=7 exists). Actually simplest: periods [1,2,4,5]
-        # with cohort g=4 (base=3 missing → some skips) and g=2 (base=1
-        # exists → succeeds).
         rng = np.random.default_rng(42)
         n_units = 40
         rows = []
         for u in range(n_units):
-            for t in [1, 2, 4, 5]:
-                # u < 10: never-treated; u < 25: cohort g=2; rest: cohort g=4
+            for t in [2, 3, 4, 5]:
+                # u < 10: never-treated; u < 25: cohort g=2 (treated at the
+                # earliest observed period -> no pre-period -> skipped);
+                # rest: cohort g=4 (base = observed 3 -> succeeds)
                 if u < 10:
                     ft = 0
                 elif u < 25:
-                    ft = 2  # base=1 exists → succeeds
+                    ft = 2  # no earlier observed period -> non-estimable
                 else:
-                    ft = 4  # base=3 missing → skipped
+                    ft = 4  # base=3 exists -> succeeds
                 outcome = rng.standard_normal() + (2.0 if (ft > 0 and t >= ft) else 0.0)
                 rows.append(
                     {

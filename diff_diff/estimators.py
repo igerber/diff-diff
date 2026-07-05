@@ -21,6 +21,7 @@ import pandas as pd
 
 from diff_diff.linalg import (
     LinearRegression,
+    _absorbed_fe_vcov_scale,
     _expand_vcov_with_nan,
     compute_r_squared,
     solve_ols,
@@ -1991,6 +1992,29 @@ class MultiPeriodDiD(DifferenceInDifferences):
         if survey_weights is not None and survey_weight_type == "fweight":
             n_eff_df = int(round(np.sum(survey_weights)))
         df = n_eff_df - k_effective - n_absorbed_effects
+
+        # Absorbed-FE variance scale (fixest full-K convention): the within-
+        # transform solve_ols above scales the non-clustered classical/hc1 vcov
+        # by k_visible, but the correct finite-sample count is
+        # K_full = k_effective + n_absorbed_effects (matching `df` just above and
+        # fixest feols(vcov="iid"/"hetero")). Rescale so the SE's k agrees with
+        # the t-df's. Gated exactly as LinearRegression.fit: clustered SEs keep
+        # k_visible (fixest ssc nested-FE convention), hc2/hc2_bm use
+        # leverage/Satterthwaite DOF, survey has its own df. When the full-K
+        # residual dof is non-positive the helper returns NaN and we void the
+        # vcov -> NaN inference (fail-closed, per the non-finite-df contract).
+        if (
+            n_absorbed_effects > 0
+            and effective_cluster_ids is None
+            and not _use_survey_vcov
+            and _fit_vcov_type in ("classical", "hc1")
+        ):
+            _fe_scale_mp = _absorbed_fe_vcov_scale(n_eff_df, k_effective, n_absorbed_effects)
+            if np.isnan(_fe_scale_mp):
+                vcov = np.full_like(vcov, np.nan)
+            elif _fe_scale_mp != 1.0:
+                vcov = vcov * _fe_scale_mp
+
         if resolved_survey is not None and resolved_survey.df_survey is not None:
             df = resolved_survey.df_survey
         # Replicate df: rank-deficient → NaN inference; dropped replicates → n_valid-1

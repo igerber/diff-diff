@@ -339,6 +339,26 @@ This matches the behavior of R's `fixest::feols()` with absorbed FE.
 *Standard errors:*
 - Default: Cluster-robust at unit level (accounts for serial correlation)
 - Degrees of freedom adjusted for absorbed fixed effects: `df_adjustment = n_units + n_times - 2`
+- **Note (absorbed-FE variance scale = fixest full-K):** for the *non-clustered* `classical`
+  and `hc1` (hetero) variance families, the finite-sample scale (`sse/(n-k)` / `n/(n-k)`) now
+  counts the absorbed FE in `k` -- i.e. `K_full = k_visible + df_adjustment` -- matching
+  `fixest::feols(vcov="iid"/"hetero")` and the reported t-`df` (`linalg._absorbed_fe_vcov_scale`,
+  a single scalar rescale of the `k_visible` vcov, fail-closed when `n - K_full <= 0`).
+  Previously the within-transform SE used `k_visible`, sitting ~6.5% below fixest even though
+  the t-`df` already used `K_full` (an internal inconsistency). Applies to
+  `TwoWayFixedEffects(vcov_type="classical")`, `DifferenceInDifferences(absorb=..., vcov_type in {classical,hc1})`,
+  and `MultiPeriodDiD(absorb=..., vcov_type in {classical,hc1})`. **Clustered** SEs are unchanged
+  (this fix is gated on `cluster_ids is None`): the clustered CR1 `k_visible` scale matches fixest
+  for absorbed FE **nested** in the cluster (e.g. unit FE with unit clustering, per fixest's `ssc`
+  nested-FE convention, which does not count nested FE). **Known limitation (deviation from fixest):**
+  when an absorbed FE is *not* nested in the cluster (e.g. `absorb=["unit","time"]` clustered by
+  `unit`, where the time FE are non-nested), fixest counts the non-nested FE in the CR1
+  finite-sample denominator, but the current clustered path uses only `k_visible` -- a small,
+  pre-existing deviation left out of this D4 (non-clustered) scope and tracked in `TODO.md`. This
+  is distinct from the SunAbraham / Wooldridge `hc1` deviations below (whose event-study /
+  aggregation paths auto-cluster or use a different k-convention). `hc2`/`hc2_bm` use leverage /
+  Satterthwaite DOF and are unaffected. The full-dummy (`fixed_effects=`) idiom carries
+  `df_adjustment == 0` and is unchanged (it already matched fixest).
 
 *Edge cases:*
 - Singleton units/periods are automatically dropped
@@ -485,7 +505,7 @@ ATT(g,t) = E[Y_t - Y_{g-1} | G_g=1] - E[Y_t - Y_{g-1} | C=1]
 ```
 where G_g=1 indicates units first treated in period g, and C=1 indicates never-treated.
 
-*Note:* This equation uses g-1 as the base period, which applies to post-treatment effects (t ≥ g) and `base_period="universal"`. With `base_period="varying"` (default), pre-treatment effects use t-1 as base for consecutive comparisons (see Base period selection in Edge cases).
+*Note:* This equation uses g-1 as the base period, which applies to post-treatment effects (t ≥ g) and `base_period="universal"`. With `base_period="varying"` (default), pre-treatment effects use the immediately-preceding observed period as base. Base periods are selected *positionally* (nearest observed period), so on gapped grids the base is the nearest observed period rather than literal g-1 / t-1 (see Base period selection in Edge cases).
 
 With covariates (doubly robust):
 ```
@@ -537,6 +557,19 @@ Aggregations:
   adjustment, matching R's `did::aggte()`. The WIF accounts for uncertainty in estimating
   group-size aggregation weights. Group aggregation uses equal time weights (deterministic),
   so WIF is zero.
+  - **Deviation from R (unbalanced-panel event-study weighting):** within an event-study
+    (dynamic) horizon that pools MORE THAN ONE (g,t) cell, diff-diff weights each cell by its
+    per-cell aggregation weight (`agg_weight` / valid `n_treated`), whereas R `did::aggte`
+    weights by the fixed cohort probability `pg = n_g / N` (or survey mass) computed once from
+    the group column. On **balanced** panels these coincide exactly (a cell's valid count equals
+    the cohort mass), so event-study / group / simple aggregates match R to ~1e-5 -- verified,
+    including the universal zero-reference dilution case. On **unbalanced** panels a cell can
+    carry fewer valid units than the cohort mass, so a multi-cell horizon's relative weights (and
+    thus that horizon's ATT/SE) can differ from R -- e.g. on a dropped-unit panel a two-real-cell
+    horizon was diff-diff `-0.065` vs R `-0.136`. This is a **pre-existing, general** aggregation
+    convention (it predates and is independent of the universal reference cells -- it applies to
+    any multi-cell horizon, references or not) and is tracked in `TODO.md`. Single-cell horizons
+    (the majority) normalize to weight 1 and are unaffected.
 - Bootstrap: Multiplier bootstrap with Rademacher, Mammen, or Webb weights. Bootstrap
   perturbs the combined influence function (standard IF + WIF) directly, not just fixed-weight
   re-aggregation. This correctly propagates weight estimation uncertainty.
@@ -618,20 +651,52 @@ The multiplier bootstrap uses random weights w_i with E[w]=0 and Var(w)=1:
   - Uses NaN when SE is non-finite or zero (matches per-effect and overall t_stat behavior)
   - Previous behavior (0.0 default) was inconsistent and misleading
 - Base period selection (`base_period` parameter):
-  - "varying" (default): Pre-treatment uses t-1 as base (consecutive comparisons).
-    Post-treatment uses long differences from g-1-anticipation. The parallel trends
-    assumption for treatment effects is about long-run trends, but pre-treatment tests
-    only check consecutive periods.
-  - "universal": ALL effects (pre and post) are long differences from g-1-anticipation.
-    The parallel trends assumption is about long-run trends. Pre-treatment coefficients
-    test cumulative divergence from the base period.
+  - **Positional (sorted-index) selection** (`_select_base_period`): base periods are
+    selected by *position* in the sorted list of observed periods, not by literal
+    calendar arithmetic. On consecutive grids this reduces to `t-1` / `g-1-anticipation`;
+    on **gapped (non-consecutive) grids** (e.g. biennial surveys, skipped years) the base
+    is the nearest observed period, so R-estimable cells that literal `t-1` / `g-1` would
+    NaN are estimated. The pre/post split is on the current period vs the cohort
+    (`t < g` -> pre), **independent of anticipation**; only the post/universal base uses
+    anticipation. This matches R `did::att_gt()` (verified against a deparse of `did` 2.5.1
+    `compute.att_gt`) and resolves the prior internal inconsistency with the library's own
+    dCDH estimator, which already used positional neighbors.
+  - "varying" (default): pre-treatment (`t < g`) uses the immediately-preceding observed
+    period as base (consecutive comparisons); post-treatment uses the last observed
+    pre-treatment period (largest observed `p` with `p + anticipation < g`) as a long
+    difference. Pre-treatment tests check nearest-observed-period comparisons.
+  - "universal": ALL effects (pre and post) are long differences from the last observed
+    pre-treatment period. Pre-treatment coefficients test cumulative divergence from it.
   - Both produce identical post-treatment ATT(g,t); differ only pre-treatment
-  - `anticipation` shifts the base period to g-1-anticipation, which moves it further
-    from treatment and strengthens the parallel trends assumption.
-  - Matches R `did::att_gt()` base_period parameter
-  - **Event study output**: With "universal", includes reference period (e=-1-anticipation)
-    with effect=0, se=NaN, conf_int=(NaN, NaN). Inference fields are NaN since this is
-    a normalization constraint, not an estimated effect. Only added when real effects exist.
+  - `anticipation` shifts the post/universal base to the last observed `p` with
+    `p + anticipation < g`, moving it further from treatment and strengthening the
+    parallel trends assumption (it does not change the pre/post split).
+  - Matches R `did::att_gt()` base_period parameter, including on gapped panels (base
+    selection, estimable ATT/SE cells, zero reference cells, and all aggregations).
+  - **Event study output**: With "universal", each cohort's positional base contributes a
+    zero reference row at `e = base - g` (effect=0, se=NaN, conf_int=(NaN, NaN)); on a
+    consecutive grid these coincide at `e = -1-anticipation`, on a gapped grid they can fall
+    at `e = -2, -3, …`. Inference fields are NaN since this is a normalization constraint, not
+    an estimated effect (see the full-R-parity note below).
+  - **Universal-mode zero reference cells (full R parity):** with `base_period="universal"`,
+    R `did::att_gt()` materializes each cohort's base reference period as a zero cell
+    (`att = 0`, `se = NA`) in its `att_gt` table and includes it in `aggte(type="dynamic")`.
+    diff-diff now does the same: `fit()` materializes each cohort's positional base as a zero
+    reference cell (`att = 0`, `se = NaN`, zero influence function, flagged `is_reference`) in
+    `group_time_effects` / `to_dataframe("group_time")` **at its positional base event time**
+    (`e = base - g`, which on gapped grids can be `-2`, `-3`, … not just `-1`). Because the
+    reference is a real cell, every consumer weights it uniformly — the **event-study dynamic
+    aggregation**, the **multiplier bootstrap**, and `balance_e` — matching R exactly, including
+    the overlapping-reference case where a cohort's zero base shares an event time with another
+    cohort's estimated pre-trend cell (the reference correctly dilutes that horizon; verified vs
+    `did` 2.5.1 on gapped **balanced** universal panels to ~1e-5 for the analytical AND bootstrap
+    paths). The reference weight is the fixed cohort mass (R's `pg` numerator), so on unbalanced
+    panels the general per-cell multi-cell-horizon weighting deviation documented above applies to
+    the reference exactly as it does to any real cell (the reference is not special).
+    Reference-only horizons report `att = 0, se = NaN`. The zero reference carries no influence
+    function, so it adds nothing to any variance; the `group` / `simple` aggregations use
+    post-treatment cells only (`t >= g - anticipation`) and exclude it. Regression-guarded by
+    `tests/test_csdid_ported.py::TestCSDIDPositionalBasePeriod`.
 - Base period interaction with Sun-Abraham comparison:
   - CS with `base_period="varying"` produces different pre-treatment estimates than SA
   - This is expected: CS uses consecutive comparisons, SA uses fixed reference (e=-1-anticipation)

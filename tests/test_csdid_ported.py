@@ -1086,7 +1086,16 @@ class TestCSDIDGoldenValues:
                     ), f"Dynamic e={e}: Py={py_att:.4f}, R={r_att:.4f}"
 
     def test_golden_non_consecutive_periods(self, golden_values):
-        """Non-consecutive periods event study matches R."""
+        """Non-consecutive periods {1,2,5,7} match R at the per-cell level.
+
+        R's ``did::att_gt`` selects the base period *positionally* (the nearest
+        observed period), so it estimates every (g,t) cell on a gapped grid.
+        Since the positional-base fix we reproduce all of them; the ``reg``
+        method is linear, so per-cell att AND se match R to ~machine precision
+        (measured max |dATT|~3e-11, |dSE|~6e-12). Previously we NaN'd 4/9 cells
+        (calendar t-1 base not observed) and this test only checked the loose
+        event-study aggregate at abs<0.5.
+        """
         if "non_consecutive_periods" not in golden_values:
             pytest.skip("Scenario not in golden values")
         scenario = golden_values["non_consecutive_periods"]
@@ -1102,17 +1111,21 @@ class TestCSDIDGoldenValues:
             covariates=["X"],
             aggregate="event_study",
         )
-        r_dyn = scenario["results"]["dynamic"]
-        if results.event_study_effects:
-            for i, e in enumerate(r_dyn["egt"]):
-                e = int(e)
-                if e in results.event_study_effects:
-                    py_att = results.event_study_effects[e]["effect"]
-                    r_att = r_dyn["att"][i]
-                    # Non-consecutive periods with small n have higher variance
-                    assert (
-                        abs(py_att - r_att) < 0.5
-                    ), f"Nonconsec e={e}: Py={py_att:.4f}, R={r_att:.4f}"
+        r_gt = scenario["results"]["group_time"]
+        for i, (g, t) in enumerate(zip(r_gt["group"], r_gt["time"])):
+            g, t = int(g), int(t)
+            assert (g, t) in results.group_time_effects
+            cell = results.group_time_effects[(g, t)]
+            py_att, py_se = cell["effect"], cell["se"]
+            assert np.isfinite(py_att) and np.isfinite(
+                py_se
+            ), f"Nonconsec (g={g},t={t}) should be estimable (positional base), got NaN"
+            assert (
+                abs(py_att - r_gt["att"][i]) < 1e-7
+            ), f"Nonconsec ATT(g={g},t={t}): Py={py_att:.8f}, R={r_gt['att'][i]:.8f}"
+            assert (
+                abs(py_se - r_gt["se"][i]) < 1e-7
+            ), f"Nonconsec SE(g={g},t={t}): Py={py_se:.8f}, R={r_gt['se'][i]:.8f}"
 
     def test_golden_anticipation(self, golden_values):
         """Anticipation=1 matches R."""
@@ -1211,7 +1224,18 @@ class TestCSDIDGoldenValues:
                     )
 
     def test_golden_fewer_periods(self, golden_values):
-        """Fewer-periods-than-groups matches R."""
+        """Fewer-periods-than-groups (gapped panel {1,3,4,6}) matches R.
+
+        R's ``did::att_gt`` selects the base period *positionally* (the nearest
+        observed period), so it estimates every (g,t) cell even when the
+        calendar t-1 / g-1 base is not observed. Since the positional-base fix
+        we reproduce all 15 cells (previously 7/15 were NaN'd because the
+        calendar base was absent, and this test skipped them). Assert att AND se
+        on every committed cell. The ``dr`` method's per-cell agreement with R
+        is nonlinear-propensity limited (~1e-4 on the base=1 comparisons; the
+        linear ``reg`` path matches to ~1e-11, pinned by
+        ``test_golden_non_consecutive_periods``).
+        """
         if "fewer_periods" not in golden_values:
             pytest.skip("Scenario not in golden values")
         scenario = golden_values["fewer_periods"]
@@ -1230,19 +1254,18 @@ class TestCSDIDGoldenValues:
         r_gt = scenario["results"]["group_time"]
         for i, (g, t) in enumerate(zip(r_gt["group"], r_gt["time"])):
             g, t = int(g), int(t)
-            if (g, t) in results.group_time_effects:
-                py_att = results.group_time_effects[(g, t)]["effect"]
-                # Skip cells we materialize as non-estimable (e.g. a gapped panel
-                # where the base period g-1 is not observed -> missing_period). R
-                # falls back to an available base and reports a value where our
-                # impl does not; compare only cells both estimate (R-parity on the
-                # finite cells, which is what this golden test pins).
-                if not np.isfinite(py_att):
-                    continue
-                r_att = r_gt["att"][i]
-                assert abs(py_att - r_att) < 0.05, (
-                    f"Fewer periods ATT(g={g},t={t}): " f"Py={py_att:.4f}, R={r_att:.4f}"
-                )
+            assert (g, t) in results.group_time_effects
+            cell = results.group_time_effects[(g, t)]
+            py_att, py_se = cell["effect"], cell["se"]
+            assert np.isfinite(py_att) and np.isfinite(
+                py_se
+            ), f"Fewer periods (g={g},t={t}) should be estimable (positional base), got NaN"
+            assert (
+                abs(py_att - r_gt["att"][i]) < 2e-3
+            ), f"Fewer periods ATT(g={g},t={t}): Py={py_att:.6f}, R={r_gt['att'][i]:.6f}"
+            assert (
+                abs(py_se - r_gt["se"][i]) < 5e-4
+            ), f"Fewer periods SE(g={g},t={t}): Py={py_se:.6f}, R={r_gt['se'][i]:.6f}"
 
     def test_golden_zero_pretreatment(self, golden_values):
         """Zero pre-treatment outcomes match R.
@@ -1510,3 +1533,385 @@ class TestCSDIDGoldenValues:
             grp = results.group_effects[g]
             assert abs(grp["effect"] - r_att) < 1e-6, f"ipw group ATT(g={g})"
             assert abs(grp["se"] - r_se) < 1e-6, f"ipw group SE(g={g})"
+
+
+def _make_gapped_panel(seed: int = 0, periods=(1, 3, 4, 6)) -> pd.DataFrame:
+    """Deterministic gapped (non-consecutive) panel with a unit-level covariate.
+
+    Cohorts: never-treated + treated-at-4 + treated-at-6. On {1, 3, 4, 6} the
+    calendar base ``g-1`` for cohort 6 (period 5) is unobserved, so the old
+    calendar rule NaN'd cohort 6's post cells; the positional rule uses the
+    nearest observed pre-period (4) and estimates them.
+    """
+    rng = np.random.default_rng(seed)
+    periods = list(periods)
+    rows = []
+    uid = 0
+    for cohort, n in [(0, 60), (4, 40), (6, 40)]:
+        for _ in range(n):
+            x = float(rng.normal())
+            ui = float(rng.normal())
+            for p in periods:
+                treated_now = cohort != 0 and p >= cohort
+                y = (
+                    ui
+                    + 0.3 * x
+                    + 0.5 * p
+                    + (1.5 if treated_now else 0.0)
+                    + float(rng.normal(0, 0.5))
+                )
+                rows.append({"unit": uid, "period": p, "first_treat": cohort, "outcome": y, "X": x})
+            uid += 1
+    return pd.DataFrame(rows)
+
+
+class TestCSDIDPositionalBasePeriod:
+    """Positional (sorted-index) base-period selection matching R ``did::att_gt``.
+
+    R selects the base period by *position* in the sorted list of observed
+    periods, not by literal calendar arithmetic (``t-1`` / ``g-1``). On gapped
+    (non-consecutive) grids the two differ; on consecutive grids they coincide.
+    See ``CallawaySantAnna._select_base_period``. These cases were verified
+    against a deparse of ``did`` 2.5.1 ``compute.att_gt``.
+    """
+
+    @pytest.mark.parametrize(
+        "observed, g, t, base_period, anticipation, expected",
+        [
+            # Varying, gapped {1,3,4,6}: pre = nearest observed < current;
+            # post = last observed before the cohort.
+            ([1, 3, 4, 6], 4, 3, "varying", 0, 1),  # pre (3<4): nearest <3 -> 1
+            ([1, 3, 4, 6], 4, 4, "varying", 0, 3),  # post: last <4 -> 3
+            ([1, 3, 4, 6], 4, 6, "varying", 0, 3),  # post
+            ([1, 3, 4, 6], 6, 6, "varying", 0, 4),  # post: last <6 -> 4 (calendar 5 absent)
+            # KEY anticipation>0 case: R splits pre/post on current<g (NOT
+            # current<g-anticipation); only the post base uses anticipation.
+            ([2, 5, 6, 9], 7, 5, "varying", 2, 2),  # pre (5<7): nearest <5 -> 2
+            ([2, 5, 6, 9], 7, 6, "varying", 2, 5),  # pre (6<7): nearest <6 -> 5, NOT 2
+            ([2, 5, 6, 9], 7, 9, "varying", 2, 2),  # post: last < 7-2=5 -> 2
+            # Universal: base is the last pre-treatment observed period,
+            # independent of the current period.
+            ([1, 3, 4, 6], 6, 1, "universal", 0, 4),
+            ([1, 3, 4, 6], 6, 6, "universal", 0, 4),
+            # Non-estimable: earliest observed period as current -> no base.
+            ([1, 3, 4, 6], 6, 1, "varying", 0, None),
+            # Cohort treated from the first observed period -> no pre-base.
+            ([2, 5, 6, 9], 2, 5, "varying", 0, None),
+        ],
+    )
+    def test_select_base_period_matches_r(
+        self, observed, g, t, base_period, anticipation, expected
+    ):
+        est = CallawaySantAnna(base_period=base_period, anticipation=anticipation)
+        assert est._select_base_period(g, t, sorted(observed)) == expected
+
+    @pytest.mark.parametrize("method", ["reg", "dr", "ipw"])
+    def test_gapped_panel_all_cells_estimated_with_covariates(self, method):
+        """Every cell R estimates on a gapped grid is finite (no calendar NaN).
+
+        ``reg`` + covariates routes through ``_compute_all_att_gt_covariate_reg``;
+        ``dr``/``ipw`` route through the fast/vectorized paths. All must use the
+        shared positional base. Cohort 6's post cell (t=6, calendar base 5
+        absent) was ``missing_period`` NaN pre-fix.
+        """
+        data = _make_gapped_panel()
+        cs = CallawaySantAnna(estimation_method=method)
+        res = cs.fit(
+            data,
+            outcome="outcome",
+            unit="unit",
+            time="period",
+            first_treat="first_treat",
+            covariates=["X"],
+        )
+        for g, t in [(6, 6), (6, 4), (6, 3), (4, 4), (4, 6), (4, 3)]:
+            cell = res.group_time_effects[(g, t)]
+            assert np.isfinite(cell["effect"]) and np.isfinite(
+                cell["se"]
+            ), f"{method}: (g={g},t={t}) should be estimable on the gapped grid"
+            assert (
+                cell.get("skip_reason") is None
+            ), f"{method}: (g={g},t={t}) unexpectedly skipped: {cell.get('skip_reason')}"
+
+    def test_gapped_panel_repeated_cross_section_path(self):
+        """panel=False routes through ``_compute_att_gt_rc`` (the RCS base site).
+
+        Repeated cross-sections: each row is a distinct unit sampled fresh in
+        its period, so the positional base must be selected there too.
+        """
+        rng = np.random.default_rng(1)
+        rows = []
+        uid = 0
+        for p in (1, 3, 4, 6):
+            for cohort, n in [(0, 50), (4, 40), (6, 40)]:
+                for _ in range(n):
+                    x = float(rng.normal())
+                    treated_now = cohort != 0 and p >= cohort
+                    y = (
+                        0.3 * x
+                        + 0.5 * p
+                        + (1.5 if treated_now else 0.0)
+                        + float(rng.normal(0, 0.5))
+                    )
+                    rows.append(
+                        {"unit": uid, "period": p, "first_treat": cohort, "outcome": y, "X": x}
+                    )
+                    uid += 1
+        data = pd.DataFrame(rows)
+        cs = CallawaySantAnna(estimation_method="reg", panel=False)
+        res = cs.fit(
+            data,
+            outcome="outcome",
+            unit="unit",
+            time="period",
+            first_treat="first_treat",
+            covariates=["X"],
+        )
+        cell = res.group_time_effects[(6, 6)]
+        assert np.isfinite(cell["effect"]) and np.isfinite(cell["se"])
+        assert cell.get("skip_reason") is None
+
+    def test_universal_gapped_uses_positional_base(self):
+        """Universal base on {1,3,4,6} for cohort 6 is period 4 (last observed
+        < g), not calendar 5; cohort-6 cells are estimable."""
+        data = _make_gapped_panel()
+        cs = CallawaySantAnna(estimation_method="dr", base_period="universal")
+        res = cs.fit(
+            data,
+            outcome="outcome",
+            unit="unit",
+            time="period",
+            first_treat="first_treat",
+            covariates=["X"],
+        )
+        # Every non-base observed period for cohort 6 is estimable.
+        for t in [1, 3, 6]:
+            cell = res.group_time_effects[(6, t)]
+            assert np.isfinite(cell["effect"]), f"universal (g=6,t={t}) NaN"
+        # The positional base (period 4, not calendar 5) is materialized as a
+        # zero reference cell (att=0, se=NaN), matching R `did`'s att_gt table
+        # rather than the stale-calendar-base filter.
+        ref = res.group_time_effects[(6, 4)]
+        assert ref["effect"] == 0.0 and np.isnan(ref["se"]) and ref.get("is_reference")
+
+    def test_universal_gapped_materializes_positional_base_cell(self):
+        """The universal *positional* base is materialized as a zero reference
+        cell (att=0, se=NaN) in the group-time table across every estimation path
+        -- the fast (dr/ipw), covariate-reg, and repeated-cross-section paths must
+        all place it at the positional base (period 4 for cohort 6 on {1,3,4,6}),
+        matching R `did::att_gt(base_period="universal")`, NOT the calendar base 5.
+        """
+        data = _make_gapped_panel()  # cohort 6 positional universal base = period 4
+        for method in ["dr", "ipw", "reg"]:
+            res = CallawaySantAnna(estimation_method=method, base_period="universal").fit(
+                data,
+                outcome="outcome",
+                unit="unit",
+                time="period",
+                first_treat="first_treat",
+                covariates=["X"],
+            )
+            ref = res.group_time_effects.get((6, 4))
+            assert (
+                ref is not None
+                and ref["effect"] == 0.0
+                and np.isnan(ref["se"])
+                and ref.get("is_reference")
+            ), f"{method}: (6,4) positional base must be a zero reference cell"
+            # The unobserved calendar base (period 5) is never materialized.
+            assert (6, 5) not in res.group_time_effects
+
+        # Repeated cross-sections path (unique unit per row).
+        rng = np.random.default_rng(2)
+        rows = []
+        uid = 0
+        for p in (1, 3, 4, 6):
+            for cohort, n in [(0, 50), (4, 40), (6, 40)]:
+                for _ in range(n):
+                    x = float(rng.normal())
+                    tn = cohort != 0 and p >= cohort
+                    rows.append(
+                        {
+                            "unit": uid,
+                            "period": p,
+                            "first_treat": cohort,
+                            "outcome": 0.3 * x
+                            + 0.5 * p
+                            + (1.5 if tn else 0.0)
+                            + float(rng.normal(0, 0.5)),
+                            "X": x,
+                        }
+                    )
+                    uid += 1
+        res = CallawaySantAnna(estimation_method="reg", base_period="universal", panel=False).fit(
+            pd.DataFrame(rows),
+            outcome="outcome",
+            unit="unit",
+            time="period",
+            first_treat="first_treat",
+            covariates=["X"],
+        )
+        ref = res.group_time_effects.get((6, 4))
+        assert (
+            ref is not None
+            and ref["effect"] == 0.0
+            and np.isnan(ref["se"])
+            and ref.get("is_reference")
+        ), "RCS: (6,4) positional base must be a zero reference cell"
+
+    def test_universal_gapped_event_study_reference_dilution_matches_r(self):
+        """Universal event-study dynamic aggregation materializes each cohort's
+        positional zero reference at ``e = base - g`` and weights it into the
+        horizon, matching R ``did::aggte(type="dynamic")``.
+
+        Periods {1,3,4,5,7}, equal cohorts 5 and 7: cohort 7's base is period 5
+        (``e=-2``), which OVERLAPS cohort 5's estimated cell ``(5,3)`` at
+        ``e=-2``. R dilutes that horizon by averaging the real cell with the zero
+        reference; with equal cohort sizes the dynamic ATT is exactly half the
+        real cell. (Previously diff-diff added a single fixed ``e=-1`` display row
+        that never entered any horizon's weighting, so ``e=-2`` reported the
+        undiluted real cell.) Reference-only horizons stay ``att=0, se=NaN``, and
+        the reference cells are omitted from the group-time table.
+        """
+        rng = np.random.default_rng(11)
+        rows = []
+        uid = 0
+        for cohort, n in [(0, 60), (5, 40), (7, 40)]:
+            for _ in range(n):
+                ui = float(rng.normal())
+                for p in (1, 3, 4, 5, 7):
+                    tr = cohort != 0 and p >= cohort
+                    rows.append(
+                        {
+                            "unit": uid,
+                            "period": p,
+                            "first_treat": cohort,
+                            "y": ui + 0.5 * p + (1.5 if tr else 0.0) + float(rng.normal(0, 0.5)),
+                        }
+                    )
+                uid += 1
+        res = CallawaySantAnna(estimation_method="reg", base_period="universal").fit(
+            pd.DataFrame(rows),
+            outcome="y",
+            unit="unit",
+            time="period",
+            first_treat="first_treat",
+            aggregate="event_study",
+        )
+        es = res.event_study_effects
+        gt = res.group_time_effects
+        real = gt[(5, 3)]["effect"]  # cohort 5 estimated cell at e=-2
+        real_se = gt[(5, 3)]["se"]
+        # Equal cohorts -> the zero reference (7,5) halves the e=-2 horizon.
+        assert es[-2]["effect"] == pytest.approx(0.5 * real, rel=1e-6), (
+            f"overlap horizon must be diluted by the zero reference: "
+            f"es[-2]={es[-2]['effect']:.6f} vs 0.5*real={0.5*real:.6f}"
+        )
+        # SE is meaningfully reduced (would equal real_se if the reference were
+        # missing or placed at a non-overlapping fixed e=-1).
+        assert 0.4 * real_se < es[-2]["se"] < 0.7 * real_se
+        # Reference-only horizon (cohort 5's base at e=-1): att=0, se=NaN.
+        assert es[-1]["effect"] == 0.0 and np.isnan(es[-1]["se"])
+        # Both cohorts' positional bases are materialized as zero reference cells
+        # in the group-time table (matching R's att_gt): (5,4) and (7,5).
+        for gt_key in [(5, 4), (7, 5)]:
+            r = gt[gt_key]
+            assert r["effect"] == 0.0 and np.isnan(r["se"]) and r.get("is_reference")
+
+    def test_universal_reference_weight_ignores_skipped_cells(self):
+        """A cohort's zero reference is weighted by the FIXED cohort mass (R's
+        pg = n_g/N), read from the cohort column -- never from a skipped NaN cell
+        (which carries n_treated=0). Otherwise the reference would get a zero
+        weight and fail to dilute an overlapping horizon.
+
+        Same overlap panel as the dilution test, but cohort 7's period-1 outcomes
+        are NaN'd so its first cell (7,1) is a `zero_treated_control` skip. The
+        (7,5) reference must still carry the cohort's positive fixed mass, so the
+        e=-2 horizon is still diluted to half the real cell -- for the analytical
+        AND bootstrap paths.
+        """
+        rng = np.random.default_rng(11)
+        rows = []
+        uid = 0
+        for cohort, n in [(0, 60), (5, 40), (7, 40)]:
+            for _ in range(n):
+                ui = float(rng.normal())
+                for p in (1, 3, 4, 5, 7):
+                    tr = cohort != 0 and p >= cohort
+                    y = ui + 0.5 * p + (1.5 if tr else 0.0) + float(rng.normal(0, 0.5))
+                    # NaN out cohort 7's earliest period -> (7,1) is a skipped cell.
+                    if cohort == 7 and p == 1:
+                        y = np.nan
+                    rows.append({"unit": uid, "period": p, "first_treat": cohort, "y": y})
+                uid += 1
+        data = pd.DataFrame(rows)
+        for n_boot in (0, 199):
+            res = CallawaySantAnna(
+                estimation_method="reg", base_period="universal", n_bootstrap=n_boot, seed=5
+            ).fit(
+                data,
+                outcome="y",
+                unit="unit",
+                time="period",
+                first_treat="first_treat",
+                aggregate="event_study",
+            )
+            gt = res.group_time_effects
+            # (7,1) is skipped; (7,5) reference still carries a positive weight.
+            assert gt[(7, 1)]["skip_reason"] is not None
+            assert gt[(7, 5)].get("is_reference") and gt[(7, 5)]["n_treated"] > 0
+            # e=-2 is still diluted to half the real cell (weight not zeroed by the
+            # skipped cell). Bootstrap SE differs from analytical but the POINT is
+            # the same diluted estimand.
+            assert res.event_study_effects[-2]["effect"] == pytest.approx(
+                0.5 * gt[(5, 3)]["effect"], rel=1e-6
+            )
+
+    def test_universal_reference_materialized_for_all_skipped_cohort(self):
+        """A cohort whose non-reference cells are ALL non-estimable still gets its
+        base zero reference cell (weighted by the fixed cohort mass), matching R
+        `did`, which materializes the base zero cell before estimating others.
+
+        Checked end to end through BOTH the analytical and the multiplier-bootstrap
+        paths -- the latter is where the reference-weight regression originally
+        surfaced.
+        """
+        rng = np.random.default_rng(11)
+        rows = []
+        uid = 0
+        for cohort, n in [(0, 60), (5, 40), (7, 40)]:
+            for _ in range(n):
+                ui = float(rng.normal())
+                for p in (1, 3, 4, 5, 7):
+                    tr = cohort != 0 and p >= cohort
+                    y = ui + 0.5 * p + (1.5 if tr else 0.0) + float(rng.normal(0, 0.5))
+                    # NaN out ALL of cohort 7's outcomes -> every (7,t) cell skips.
+                    if cohort == 7:
+                        y = np.nan
+                    rows.append({"unit": uid, "period": p, "first_treat": cohort, "y": y})
+                uid += 1
+        data = pd.DataFrame(rows)
+        for n_boot in (0, 199):
+            res = CallawaySantAnna(
+                estimation_method="reg", base_period="universal", n_bootstrap=n_boot, seed=5
+            ).fit(
+                data,
+                outcome="y",
+                unit="unit",
+                time="period",
+                first_treat="first_treat",
+                aggregate="event_study",
+            )
+            gt = res.group_time_effects
+            # Every non-reference cohort-7 cell is skipped, yet its base (7,5)
+            # reference is materialized with the fixed cohort mass (40), not
+            # dropped -- for the analytical AND bootstrap paths.
+            assert all(gt[(7, t)]["skip_reason"] is not None for t in (1, 3, 4, 7) if (7, t) in gt)
+            ref = gt.get((7, 5))
+            assert (
+                ref is not None
+                and ref.get("is_reference")
+                and ref["effect"] == 0.0
+                and np.isnan(ref["se"])
+                and ref["n_treated"] == 40  # cohort 7's fixed mass (40 units)
+            )

@@ -20,8 +20,9 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from diff_diff import SurveyDesign
+from diff_diff import SunAbraham, SurveyDesign
 from diff_diff.estimators import DifferenceInDifferences, MultiPeriodDiD
+from diff_diff.linalg import _absorbed_fe_vcov_scale
 from diff_diff.twfe import TwoWayFixedEffects
 
 
@@ -2490,3 +2491,225 @@ class TestMPDClusterHC2BMSharedPrecompute:
             for p in r1.period_effects:
                 assert r.period_effects[p].effect == r1.period_effects[p].effect
                 assert r.period_effects[p].se == r1.period_effects[p].se
+
+
+def _make_absorb_panel(seed: int = 11, n_units: int = 50, n_periods: int = 6) -> pd.DataFrame:
+    """Heteroskedastic multi-period panel with a unit-level covariate.
+
+    Heteroskedasticity makes hc1 differ from classical; absorbed unit + time FE
+    give a nonzero ``df_adjustment`` so the full-K vcov rescale is exercised.
+    """
+    rng = np.random.default_rng(seed)
+    rows = []
+    for u in range(n_units):
+        treated = int(u >= n_units // 2)
+        ui = float(rng.normal())
+        x = float(rng.normal())
+        for t in range(n_periods):
+            post = int(t >= n_periods // 2)
+            sd = 0.5 + 1.2 * treated + 0.25 * t
+            y = (
+                ui
+                + 0.4 * x
+                + 0.5 * t
+                + (0.8 if treated and post else 0.0)
+                + float(rng.normal(0, sd))
+            )
+            rows.append({"unit": u, "time": t, "post": post, "treated": treated, "x": x, "y": y})
+    return pd.DataFrame(rows)
+
+
+class TestAbsorbedFEFullKParity:
+    """Absorbed-FE variance scale matches the full-dummy (fixest full-K) SE.
+
+    Within-transform (``absorb=``) fits previously scaled the *non-clustered*
+    classical / hc1 vcov by ``k_visible`` (absorbed FE excluded), sitting ~6.5%
+    below ``fixest`` feols(vcov="iid"/"hetero") even though the reported t-df
+    already used ``K_full``. The absorbed-FE vcov rescale
+    (``linalg._absorbed_fe_vcov_scale``) aligns the SE's k with ``K_full`` so the
+    absorb path equals the explicit full-dummy path -- the in-repo oracle,
+    verified equal to ``fixest`` to 6 digits (iid 0.202158 / hetero 0.432290 on
+    the audit smoke panels). Clustered SEs (fixest nested-FE convention) and
+    hc2 / hc2_bm (leverage / Satterthwaite DOF) are intentionally unaffected.
+    """
+
+    @pytest.mark.parametrize("vcov", ["classical", "hc1"])
+    def test_did_absorb_matches_full_dummy_oracle(self, vcov):
+        df = _make_absorb_panel()
+        ab = DifferenceInDifferences(vcov_type=vcov).fit(
+            df,
+            outcome="y",
+            treatment="treated",
+            time="post",
+            absorb=["unit", "time"],
+            covariates=["x"],
+        )
+        fe = DifferenceInDifferences(vcov_type=vcov).fit(
+            df,
+            outcome="y",
+            treatment="treated",
+            time="post",
+            fixed_effects=["unit", "time"],
+            covariates=["x"],
+        )
+        assert np.isfinite(ab.se)
+        np.testing.assert_allclose(ab.att, fe.att, rtol=1e-9)
+        np.testing.assert_allclose(ab.se, fe.se, rtol=1e-9)
+
+    @pytest.mark.parametrize("vcov", ["classical", "hc1"])
+    def test_mpd_absorb_matches_full_dummy_oracle(self, vcov):
+        df = _make_absorb_panel()
+        ab = MultiPeriodDiD(vcov_type=vcov).fit(
+            df, outcome="y", treatment="treated", time="time", absorb=["unit"], covariates=["x"]
+        )
+        fe = MultiPeriodDiD(vcov_type=vcov).fit(
+            df,
+            outcome="y",
+            treatment="treated",
+            time="time",
+            fixed_effects=["unit"],
+            covariates=["x"],
+        )
+        assert np.isfinite(ab.avg_se)
+        np.testing.assert_allclose(ab.avg_att, fe.avg_att, rtol=1e-9)
+        np.testing.assert_allclose(ab.avg_se, fe.avg_se, rtol=1e-9)
+
+    def test_twfe_classical_matches_full_dummy_oracle(self):
+        """TWFE always within-transforms; the equivalent explicit full-dummy
+        DiD is the oracle. After the fix TWFE(classical) SE == that oracle."""
+        df = _make_absorb_panel()
+        tw = TwoWayFixedEffects(vcov_type="classical").fit(
+            df, outcome="y", treatment="treated", time="post", unit="unit"
+        )
+        fe = DifferenceInDifferences(vcov_type="classical").fit(
+            df, outcome="y", treatment="treated", time="post", fixed_effects=["unit", "post"]
+        )
+        np.testing.assert_allclose(tw.att, fe.att, rtol=1e-9)
+        np.testing.assert_allclose(tw.se, fe.se, rtol=1e-9)
+
+    def test_absorb_cluster_not_rescaled(self):
+        """The absorbed-FE full-K rescale must NOT touch clustered SEs.
+
+        The rescale is gated on ``cluster_ids is None``, so the cluster-absorb
+        SE stays at ``k_visible`` and differs from the full-dummy path here.
+        (Full fixest cluster parity is a *separate*, out-of-scope matter: fixest
+        counts non-nested absorbed FE in the CR1 denominator, so for
+        ``absorb=["unit","time"], cluster="unit"`` the non-nested time FE would
+        need counting -- a documented pre-existing limitation, see REGISTRY;
+        this test only pins that D4 does not rescale the cluster path.)
+        """
+        df = _make_absorb_panel()
+        ab = DifferenceInDifferences(vcov_type="hc1", cluster="unit").fit(
+            df,
+            outcome="y",
+            treatment="treated",
+            time="post",
+            absorb=["unit", "time"],
+            covariates=["x"],
+        )
+        fe = DifferenceInDifferences(vcov_type="hc1", cluster="unit").fit(
+            df,
+            outcome="y",
+            treatment="treated",
+            time="post",
+            fixed_effects=["unit", "time"],
+            covariates=["x"],
+        )
+        assert np.isfinite(ab.se)
+        assert not np.isclose(ab.se, fe.se, rtol=1e-6), (
+            "cluster-absorb SE must keep k_visible (nested-FE), not be rescaled to "
+            "the full-dummy K_full value"
+        )
+
+    def test_absorb_hc2_bm_not_rescaled(self):
+        """hc2_bm auto-routes absorb -> full-dummy and uses Satterthwaite DOF;
+        the classical/hc1 rescale must not touch it (absorb == full-dummy)."""
+        df = _make_absorb_panel()
+        ab = DifferenceInDifferences(vcov_type="hc2_bm").fit(
+            df,
+            outcome="y",
+            treatment="treated",
+            time="post",
+            absorb=["unit", "time"],
+            covariates=["x"],
+        )
+        fe = DifferenceInDifferences(vcov_type="hc2_bm").fit(
+            df,
+            outcome="y",
+            treatment="treated",
+            time="post",
+            fixed_effects=["unit", "time"],
+            covariates=["x"],
+        )
+        np.testing.assert_allclose(ab.se, fe.se, rtol=1e-9)
+
+    def test_sunab_hc1_autoclusters_so_gate_skips(self):
+        """SunAbraham hc1 auto-clusters at unit, so the D4 rescale (gated on
+        ``cluster_ids is None``) never fires -> its documented hc1 deviation is
+        preserved. Invariant: default hc1 == explicit unit cluster."""
+        rng = np.random.default_rng(3)
+        rows = []
+        for u in range(40):
+            cohort = 0 if u < 20 else (3 if u < 30 else 5)
+            ui = float(rng.normal())
+            for t in range(6):
+                treated_now = cohort != 0 and t >= cohort
+                rows.append(
+                    {
+                        "unit": u,
+                        "time": t,
+                        "first_treat": cohort,
+                        "y": ui
+                        + 0.5 * t
+                        + (1.2 if treated_now else 0.0)
+                        + float(rng.normal(0, 0.7)),
+                    }
+                )
+        df = pd.DataFrame(rows)
+        r_def = SunAbraham(vcov_type="hc1").fit(
+            df, outcome="y", first_treat="first_treat", time="time", unit="unit"
+        )
+        r_cl = SunAbraham(vcov_type="hc1", cluster="unit").fit(
+            df, outcome="y", first_treat="first_treat", time="time", unit="unit"
+        )
+        np.testing.assert_allclose(r_def.overall_se, r_cl.overall_se, rtol=1e-12)
+
+    def test_absorbed_fe_vcov_scale_fail_closed(self):
+        """The rescale helper is fail-closed on non-positive full-K residual dof."""
+        # Normal: (n-k)/(n-k-adj) = 7/5.
+        assert _absorbed_fe_vcov_scale(10, 3, 2) == pytest.approx(1.4)
+        # No absorbed FE -> no-op scale.
+        assert _absorbed_fe_vcov_scale(10, 3, 0) == 1.0
+        # Fail-closed: full-K residual dof <= 0 -> NaN, so the caller voids the
+        # vcov to NaN inference (rather than leaving a misleading k_visible SE).
+        assert np.isnan(_absorbed_fe_vcov_scale(10, 3, 8))  # full-K denom = -1
+        assert np.isnan(_absorbed_fe_vcov_scale(10, 2, 8))  # full-K denom = 0
+        assert np.isnan(_absorbed_fe_vcov_scale(10, 12, 2))  # visible denom < 0
+
+    def test_absorb_saturated_full_k_df_le_zero_nan_inference(self):
+        """A saturated within-transform design (full-K residual dof <= 0) yields
+        NaN SE/inference end-to-end, not a misleading finite k_visible SE.
+
+        2 units x 5 periods with ``absorb=["unit"]`` drives K_full past n, so the
+        classical full-K variance is undefined -> the rescale helper returns NaN
+        and the vcov is voided (fail-closed), even though the point estimate is
+        still computed.
+        """
+        rng = np.random.default_rng(0)
+        rows = []
+        for u in range(2):
+            tr = int(u >= 1)
+            for t in range(5):
+                rows.append(
+                    {
+                        "unit": u,
+                        "time": t,
+                        "treated": tr,
+                        "y": float(rng.normal()) + 0.5 * tr * (t >= 1),
+                    }
+                )
+        df = pd.DataFrame(rows)
+        r = MultiPeriodDiD(vcov_type="classical").fit(
+            df, outcome="y", treatment="treated", time="time", absorb=["unit"]
+        )
+        assert np.isnan(r.avg_se), "saturated full-K design must yield NaN SE (fail-closed)"

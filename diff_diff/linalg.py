@@ -267,6 +267,47 @@ def _expand_coefficients_with_nan(
     return coef_full
 
 
+def _absorbed_fe_vcov_scale(n_eff: float, k_eff: int, df_adjustment: int) -> float:
+    """Finite-sample vcov rescale for absorbed fixed effects (fixest full-K).
+
+    Within-transform (``absorb=``) fits residualize the FE out of the design, so
+    the classical ``sse/(n-k)`` and HC1 ``n/(n-k)`` variance factors use only the
+    *visible* regressor count ``k_eff = k_visible``. fixest (and the reported
+    t-``df``) count the absorbed FE too, i.e. ``K_full = k_visible +
+    df_adjustment``. This returns the scalar that maps the ``k_visible`` vcov to
+    the ``K_full`` one::
+
+        vcov_full = vcov_visible * (n_eff - k_eff) / (n_eff - k_eff - df_adjustment)
+
+    which is algebraically exact for both the classical and HC1 factors (both are
+    pure scalars in ``1/(n-k)``; the single-coefficient robust variance is
+    FWL-invariant between the demeaned and full-dummy designs, so only the
+    ``1/(n-k)`` scalar differs).
+
+    Returns:
+    - ``1.0`` when ``df_adjustment <= 0`` (no absorbed FE -- a no-op).
+    - the finite scale when the full-K residual dof
+      ``(n_eff - k_eff - df_adjustment)`` is positive.
+    - ``nan`` (fail-closed) when that full-K residual dof (or the visible dof) is
+      non-positive: the full-K variance is undefined for such a saturated
+      within-transform design, so callers void the vcov to NaN -> NaN inference
+      (per the non-finite-df fail-closed contract) rather than leaving a
+      misleading ``k_visible`` SE in place.
+
+    Callers must gate on non-clustered ``classical``/``hc1``: clustered SEs
+    follow fixest's ``ssc`` nested-FE convention (FE nested in the cluster are
+    not counted, so ``k_visible`` already matches for the nested case) and
+    ``hc2``/``hc2_bm`` use leverage / Satterthwaite DOF -- none must be rescaled.
+    """
+    denom_visible = n_eff - k_eff
+    denom_full = n_eff - k_eff - df_adjustment
+    if df_adjustment <= 0:
+        return 1.0
+    if denom_full <= 0 or denom_visible <= 0:
+        return float("nan")
+    return denom_visible / denom_full
+
+
 def _expand_vcov_with_nan(
     vcov_reduced: np.ndarray,
     k_full: int,
@@ -3897,6 +3938,29 @@ class LinearRegression:
                 n_eff_df = int(round(np.sum(_fit_weights)))
             elif np.any(_fit_weights == 0):
                 n_eff_df = int(np.count_nonzero(_fit_weights > 0))
+        # Absorbed-FE variance scale (fixest full-K convention): the classical
+        # sse/(n-k) and HC1 n/(n-k) factors computed above use k_visible, but
+        # with absorbed FE the correct finite-sample count is
+        # K_full = n_params_effective_ + df_adjustment (the t-df below already
+        # uses it). Rescale the NON-CLUSTERED iid/hetero vcov so the SE's k
+        # agrees with the t-df's and with fixest feols(vcov="iid"/"hetero").
+        # Clustered SEs keep k_visible (fixest ssc nested-FE convention already
+        # matches); hc2/hc2_bm use leverage/Satterthwaite DOF; survey has its
+        # own df; full-dummy fits carry df_adjustment == 0. When the full-K
+        # residual dof is non-positive the helper returns NaN and we void the
+        # vcov -> NaN inference (fail-closed, per the non-finite-df contract).
+        if (
+            df_adjustment > 0
+            and effective_cluster_ids is None
+            and not _use_survey_vcov
+            and _fit_vcov_type in ("classical", "hc1")
+        ):
+            _fe_scale = _absorbed_fe_vcov_scale(n_eff_df, self.n_params_effective_, df_adjustment)
+            if np.isnan(_fe_scale):
+                self.vcov_ = np.full_like(self.vcov_, np.nan)
+            elif _fe_scale != 1.0:
+                self.vcov_ = self.vcov_ * _fe_scale
+
         self.df_ = n_eff_df - self.n_params_effective_ - df_adjustment
 
         # Survey degrees of freedom: n_PSU - n_strata (overrides standard df)
