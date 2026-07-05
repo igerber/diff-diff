@@ -19,9 +19,11 @@ import pytest
 
 from diff_diff import CallawaySantAnna, EfficientDiD, HeterogeneousAdoptionDiD
 from diff_diff.bootstrap_chunking import (
+    ReplayableWeightStream,
     compute_block_size,
     iter_survey_multiplier_weight_blocks,
     iter_weight_blocks,
+    tiled_if_matmul,
 )
 from diff_diff.bootstrap_utils import (
     generate_bootstrap_weights_batch,
@@ -118,6 +120,186 @@ class TestWeightStreamBitIdentity:
         _, chunked = _stack(n_bootstrap, n_gen, weight_type, seed, block_size=n_bootstrap)
         assert chunked.shape == legacy.shape
         np.testing.assert_array_equal(chunked, legacy)
+
+
+class _CountingStream:
+    """Re-iterable wrapper that counts how many passes were made."""
+
+    def __init__(self, stream):
+        self.stream = stream
+        self.n_passes = 0
+
+    def __iter__(self):
+        self.n_passes += 1
+        return iter(self.stream)
+
+
+class TestTiledIFMatmul:
+    """Oracle + replay + tiling contracts for the fused scatter-GEMM kernel.
+
+    ``tiled_if_matmul`` replaces per-column ``W[:, idx] @ values`` GEMVs with
+    one GEMM per (weight block, column tile). The oracle below computes the OLD
+    per-column semantics on the materialized weight matrix and requires the
+    kernel to match at reassociation tolerance. Replay determinism of
+    ``ReplayableWeightStream`` is what makes multi-tile passes sound.
+    """
+
+    N_BOOT, N_UNITS, BLOCK = 61, 220, 17
+
+    def _stream(self, weight_type="rademacher", seed=42):
+        rng = np.random.default_rng(seed)
+        return ReplayableWeightStream(
+            lambda r: iter_weight_blocks(
+                self.N_BOOT, self.N_UNITS, weight_type, r, block_size=self.BLOCK
+            ),
+            rng,
+        )
+
+    def _weight_matrix(self, weight_type="rademacher", seed=42):
+        _, mat = _stack(self.N_BOOT, self.N_UNITS, weight_type, seed, block_size=self.BLOCK)
+        return mat
+
+    def _columns(self):
+        rng = np.random.default_rng(0)
+        n = self.N_UNITS
+        sparse_idx = rng.choice(n, size=40, replace=False)
+        sparse_vals = rng.standard_normal(40)
+        dense_vals = rng.standard_normal(n)
+        # two mutually disjoint contributions in one column (the CS cell shape)
+        treated_idx = np.arange(0, 30)
+        control_idx = np.arange(50, 130)
+        treated_vals = rng.standard_normal(30)
+        control_vals = rng.standard_normal(80)
+        lazy_vals = rng.standard_normal(n)
+        nan_idx = np.array([3, 7])
+        columns = [
+            [(sparse_idx, sparse_vals)],
+            [(None, dense_vals)],
+            [(treated_idx, treated_vals), (control_idx, control_vals)],
+            lambda: [(None, lazy_vals)],
+            [(nan_idx, np.array([np.nan, np.nan]))],
+            [],  # all-zero column
+        ]
+        return columns
+
+    @staticmethod
+    def _old_semantics(W, columns):
+        """The pre-rewrite per-column GEMV semantics: sum of W[:, idx] @ vals."""
+        out = np.zeros((W.shape[0], len(columns)))
+        for c, spec in enumerate(columns):
+            if callable(spec):
+                spec = spec()
+            for idx, values in spec:
+                if idx is None:
+                    out[:, c] += W @ values
+                else:
+                    out[:, c] += W[:, idx] @ values
+        return out
+
+    @pytest.mark.parametrize("weight_type", WEIGHT_TYPES)
+    def test_oracle_matches_old_gemv_semantics(self, weight_type):
+        columns = self._columns()
+        W = self._weight_matrix(weight_type)
+        ref = self._old_semantics(W, columns)
+        out = tiled_if_matmul(self._stream(weight_type), self.N_BOOT, self.N_UNITS, columns)
+        finite_cols = [0, 1, 2, 3, 5]
+        np.testing.assert_allclose(out[:, finite_cols], ref[:, finite_cols], rtol=1e-12, atol=1e-14)
+        # NaN influence values poison exactly their own column
+        assert np.all(np.isnan(out[:, 4]))
+        assert not np.any(np.isnan(out[:, finite_cols]))
+        # the empty column is exactly zero
+        np.testing.assert_array_equal(out[:, 5], np.zeros(self.N_BOOT))
+
+    def test_single_tile_equals_multi_tile(self):
+        columns = self._columns()
+        one = tiled_if_matmul(self._stream(), self.N_BOOT, self.N_UNITS, columns, tile_bytes=2**62)
+        # 2 columns per tile -> 3 tiles
+        tiny = tiled_if_matmul(
+            self._stream(),
+            self.N_BOOT,
+            self.N_UNITS,
+            columns,
+            tile_bytes=2 * self.N_UNITS * 8,
+        )
+        np.testing.assert_allclose(tiny, one, rtol=1e-12, atol=1e-14, equal_nan=True)
+
+    def test_multi_tile_actually_replays_the_stream(self):
+        # Guards against a silent single-tile no-op: the multi-tile arm must
+        # iterate the weight stream once per tile, and still match the oracle.
+        columns = self._columns()
+        counting = _CountingStream(self._stream())
+        out = tiled_if_matmul(
+            counting,
+            self.N_BOOT,
+            self.N_UNITS,
+            columns,
+            tile_bytes=2 * self.N_UNITS * 8,
+        )
+        assert counting.n_passes == 3  # 6 columns, 2 per tile
+        ref = self._old_semantics(self._weight_matrix(), columns)
+        np.testing.assert_allclose(out[:, :4], ref[:, :4], rtol=1e-12, atol=1e-14)
+
+    def test_single_pass_iterator_raises_when_tiled(self):
+        # A plain generator would silently exhaust after the first tile.
+        gen = iter_weight_blocks(self.N_BOOT, self.N_UNITS, "rademacher", np.random.default_rng(1))
+        with pytest.raises(ValueError, match="single-pass"):
+            tiled_if_matmul(
+                gen,
+                self.N_BOOT,
+                self.N_UNITS,
+                self._columns(),
+                tile_bytes=2 * self.N_UNITS * 8,
+            )
+
+    def test_empty_inputs(self):
+        out = tiled_if_matmul(self._stream(), self.N_BOOT, self.N_UNITS, [])
+        assert out.shape == (self.N_BOOT, 0)
+
+    @pytest.mark.parametrize("weight_type", WEIGHT_TYPES)
+    def test_replay_determinism(self, weight_type):
+        # Two passes over a ReplayableWeightStream yield byte-identical blocks
+        # on whichever backend is active, and the rng ends exactly where one
+        # plain pass would leave it.
+        rng = np.random.default_rng(7)
+        stream = ReplayableWeightStream(
+            lambda r: iter_weight_blocks(
+                self.N_BOOT, self.N_UNITS, weight_type, r, block_size=self.BLOCK
+            ),
+            rng,
+        )
+        first = [(cs, b.copy()) for cs, b in stream]
+        second = [(cs, b.copy()) for cs, b in stream]
+        assert [cs for cs, _ in first] == [cs for cs, _ in second]
+        for (_, a), (_, b) in zip(first, second):
+            np.testing.assert_array_equal(a, b)
+
+        # single plain pass from an identically-seeded rng: same end state
+        rng_ref = np.random.default_rng(7)
+        for _ in iter_weight_blocks(
+            self.N_BOOT, self.N_UNITS, weight_type, rng_ref, block_size=self.BLOCK
+        ):
+            pass
+        assert rng.bit_generator.state == rng_ref.bit_generator.state
+
+    def test_survey_stratified_replay_determinism(self):
+        # The stratified survey branch generates its FULL PSU matrix eagerly at
+        # factory-call time -- the riskiest replay mechanism. Recreating the
+        # factory from restored state must reproduce it bit-identically.
+        psu = np.arange(6)
+        strata = np.array([0, 0, 0, 1, 1, 1])
+        design = _design(psu=psu, strata=strata, weights=np.ones(6))
+        rng = np.random.default_rng(11)
+
+        def make_iter(r):
+            _, blocks = iter_survey_multiplier_weight_blocks(
+                50, design, "rademacher", r, block_size=9
+            )
+            return blocks
+
+        stream = ReplayableWeightStream(make_iter, rng)
+        first = np.vstack([b.copy() for _, b in stream])
+        second = np.vstack([b.copy() for _, b in stream])
+        np.testing.assert_array_equal(first, second)
 
 
 class TestCSBootstrapChunkInvariance:
@@ -270,6 +452,121 @@ class TestCSBootstrapChunkInvariance:
             np.testing.assert_allclose(t[col].to_numpy(), b[col].to_numpy(), rtol=1e-10, atol=1e-12)
 
 
+class TestCSBootstrapTileInvariance:
+    """CallawaySantAnna bootstrap output is invariant to the COLUMN tile size.
+
+    The fused perturbation GEMM tiles the influence-column axis under
+    ``_TARGET_TILE_BYTES``; each tile replays the weight stream via
+    ``ReplayableWeightStream``. Forcing one column per tile makes every fit
+    replay the stream n_cols times -- results must match the default
+    single-tile fit at reassociation tolerance on every weight path (unit,
+    non-identity cluster, survey-PSU, and STRATIFIED survey, whose per-pass
+    factory recreation regenerates the full PSU matrix from restored state).
+    """
+
+    @staticmethod
+    def _force_one_column_tiles(monkeypatch):
+        # tiled_if_matmul resolves the cap at call time, so patching the module
+        # attribute is effective (no def-time default binding).
+        monkeypatch.setattr("diff_diff.bootstrap_chunking._TARGET_TILE_BYTES", 1)
+
+    def test_unit_path_tiles_match_single_tile(self, monkeypatch):
+        fit = TestCSBootstrapChunkInvariance()._fit
+        base = fit()
+        self._force_one_column_tiles(monkeypatch)
+        tiled = fit()
+
+        assert tiled.overall_se == pytest.approx(base.overall_se, rel=1e-10, abs=1e-12)
+        assert tiled.cband_crit_value == pytest.approx(base.cband_crit_value, rel=1e-10, abs=1e-12)
+        assert tiled.overall_p_value == pytest.approx(base.overall_p_value, abs=0.02)
+        b = base.to_dataframe().sort_values(["group", "time"]).reset_index(drop=True)
+        t = tiled.to_dataframe().sort_values(["group", "time"]).reset_index(drop=True)
+        for col in ["se", "conf_int_lower", "conf_int_upper"]:
+            np.testing.assert_allclose(t[col].to_numpy(), b[col].to_numpy(), rtol=1e-10, atol=1e-12)
+        for level in ("event_study", "group"):
+            bl = base.to_dataframe(level=level).reset_index(drop=True)
+            tl = tiled.to_dataframe(level=level).reset_index(drop=True)
+            num_cols = [c for c in bl.columns if bl[c].dtype.kind in "fi" and c != "p_value"]
+            for col in num_cols:
+                np.testing.assert_allclose(
+                    tl[col].to_numpy(), bl[col].to_numpy(), rtol=1e-9, atol=1e-10
+                )
+
+    def test_cluster_path_tiles_match_single_tile(self, monkeypatch):
+        # Non-identity PSU fan-out: the per-pass expansion copy must replay too.
+        fit = TestCSBootstrapChunkInvariance()._fit_clustered
+        base = fit()
+        self._force_one_column_tiles(monkeypatch)
+        tiled = fit()
+
+        assert tiled.overall_se == pytest.approx(base.overall_se, rel=1e-10, abs=1e-12)
+        b = base.to_dataframe().sort_values(["group", "time"]).reset_index(drop=True)
+        t = tiled.to_dataframe().sort_values(["group", "time"]).reset_index(drop=True)
+        np.testing.assert_allclose(t["se"].to_numpy(), b["se"].to_numpy(), rtol=1e-10, atol=1e-12)
+
+    @staticmethod
+    def _survey_panel(stratified):
+        rng = np.random.default_rng(3)
+        n_psu, units_per_psu, nt = 12, 4, 8
+        nu = n_psu * units_per_psu
+        units = np.repeat(np.arange(nu), nt)
+        periods = np.tile(np.arange(nt), nu)
+        n = nu * nt
+        cohort = rng.integers(0, 3, nu)
+        ft_unit = np.where(cohort == 0, 0, np.where(cohort == 1, 3, 5))
+        ft = np.repeat(ft_unit, nt)
+        post = (periods >= ft) & (ft > 0)
+        y = rng.standard_normal(n) + 0.1 * periods + 2.0 * post + 0.5 * np.repeat(cohort, nt)
+        psu = np.repeat(np.repeat(np.arange(n_psu), units_per_psu), nt)
+        w = np.repeat(np.exp(rng.normal(0, 0.3, nu)), nt)
+        df = pd.DataFrame(
+            {"unit": units, "period": periods, "y": y, "first_treat": ft, "psu": psu, "w": w}
+        )
+        if stratified:
+            # 3 strata x 4 PSUs -> routes the STRATIFIED (eager full-generation)
+            # branch of iter_survey_multiplier_weight_blocks
+            df["stratum"] = df["psu"] % 3
+        return df
+
+    def _fit_survey(self, stratified):
+        from diff_diff import SurveyDesign
+
+        df = self._survey_panel(stratified)
+        design = (
+            SurveyDesign(weights="w", strata="stratum", psu="psu")
+            if stratified
+            else SurveyDesign(weights="w", psu="psu")
+        )
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            return CallawaySantAnna(
+                control_group="never_treated",
+                estimation_method="dr",
+                n_bootstrap=200,
+                seed=42,
+            ).fit(
+                df,
+                outcome="y",
+                unit="unit",
+                time="period",
+                first_treat="first_treat",
+                aggregate="all",
+                survey_design=design,
+            )
+
+    @pytest.mark.parametrize("stratified", [False, True], ids=["psu", "stratified"])
+    def test_survey_path_tiles_match_single_tile(self, monkeypatch, stratified):
+        base = self._fit_survey(stratified)
+        self._force_one_column_tiles(monkeypatch)
+        tiled = self._fit_survey(stratified)
+
+        assert tiled.overall_se == pytest.approx(base.overall_se, rel=1e-10, abs=1e-12)
+        b = base.to_dataframe().sort_values(["group", "time"]).reset_index(drop=True)
+        t = tiled.to_dataframe().sort_values(["group", "time"]).reset_index(drop=True)
+        for col in ["se", "conf_int_lower", "conf_int_upper"]:
+            np.testing.assert_allclose(t[col].to_numpy(), b[col].to_numpy(), rtol=1e-10, atol=1e-12)
+
+
 def _design(psu=None, strata=None, fpc=None, weights=None, lonely_psu="adjust"):
     """Minimal duck-typed ResolvedSurveyDesign for the survey weight generators."""
     return SimpleNamespace(psu=psu, strata=strata, fpc=fpc, weights=weights, lonely_psu=lonely_psu)
@@ -413,6 +710,46 @@ class TestEfficientDiDBootstrapChunkInvariance:
     def test_weights_only_survey_path(self, monkeypatch):
         # weights-only SurveyDesign: _use_survey_bootstrap is False (unit weight
         # generation) but unit_level_weights is set (eif_scaled perturbation).
+        from diff_diff.survey import SurveyDesign
+
+        self._run(monkeypatch, survey_design=SurveyDesign(weights="w"))
+
+
+class TestEfficientDiDBootstrapTileInvariance:
+    """EfficientDiD bootstrap output is invariant to the COLUMN tile size.
+
+    Tile-forced twins of all four ``TestEfficientDiDBootstrapChunkInvariance``
+    weight paths: one column per tile makes the fused perturbation GEMM replay
+    the weight stream once per (g,t) column (unit, cluster/expand_index,
+    survey-PSU, and weights-only survey -- the last exercising the LAZY
+    scaled-EIF columns under multi-pass replay).
+    """
+
+    def _run(self, monkeypatch, **fit_kwargs):
+        harness = TestEfficientDiDBootstrapChunkInvariance()
+        base = harness._fit(**fit_kwargs)
+        base_ses = harness._ses(base)
+        assert np.isfinite(base_ses[0]) and np.isfinite(base_ses[1:]).any()
+        # tiled_if_matmul resolves the cap at call time -> patching the module
+        # attribute forces one column per tile.
+        monkeypatch.setattr("diff_diff.bootstrap_chunking._TARGET_TILE_BYTES", 1)
+        tiled = harness._fit(**fit_kwargs)
+        np.testing.assert_allclose(
+            harness._ses(tiled), base_ses, rtol=1e-9, atol=1e-12, equal_nan=True
+        )
+
+    def test_unit_path(self, monkeypatch):
+        self._run(monkeypatch)
+
+    def test_cluster_path(self, monkeypatch):
+        self._run(monkeypatch, cluster="state")
+
+    def test_survey_psu_path(self, monkeypatch):
+        from diff_diff.survey import SurveyDesign
+
+        self._run(monkeypatch, survey_design=SurveyDesign(psu="state", weights="w"))
+
+    def test_weights_only_survey_path(self, monkeypatch):
         from diff_diff.survey import SurveyDesign
 
         self._run(monkeypatch, survey_design=SurveyDesign(weights="w"))

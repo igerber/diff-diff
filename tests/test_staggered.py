@@ -1970,6 +1970,36 @@ class TestRegIpwIFBehavior:
             np.testing.assert_allclose(cell["effect"], ref["effect"], rtol=1e-12)
             np.testing.assert_allclose(cell["se"], ref["se"], rtol=1e-12)
 
+    def test_bootstrap_nan_cell_if_poisons_only_its_own_cell(self, monkeypatch):
+        """A cell whose stored IF is non-finite (e.g. the #619 rank-0 [1,X]
+        bread semantics on ipw/dr) must NaN only its OWN bootstrap SE: in the
+        fused perturbation GEMM each cell column is an independent dot
+        product, so neighbor cells stay finite. (The overall/aggregate SEs
+        legitimately consume the poisoned cell and are not asserted here.)"""
+        from diff_diff.staggered_bootstrap import CallawaySantAnnaBootstrapMixin
+
+        orig = CallawaySantAnnaBootstrapMixin._run_multiplier_bootstrap
+        poisoned = {}
+
+        def poisoning(self, group_time_effects, influence_func_info, *args, **kwargs):
+            gt = sorted(influence_func_info)[0]
+            poisoned["gt"] = gt
+            info = influence_func_info[gt]
+            info["treated_inf"] = np.full(len(np.asarray(info["treated_inf"])), np.nan)
+            return orig(self, group_time_effects, influence_func_info, *args, **kwargs)
+
+        monkeypatch.setattr(CallawaySantAnnaBootstrapMixin, "_run_multiplier_bootstrap", poisoning)
+        data = generate_staggered_data(seed=42)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            result = CallawaySantAnna(n_bootstrap=99, seed=5).fit(
+                data, "outcome", "unit", "time", "first_treat"
+            )
+        gt = poisoned["gt"]
+        assert np.isnan(result.group_time_effects[gt]["se"])
+        neighbor_ses = [cell["se"] for key, cell in result.group_time_effects.items() if key != gt]
+        assert neighbor_ses and np.isfinite(neighbor_ses).all()
+
     def test_underdetermined_control_cell_reg_no_crash(self):
         """Cells with fewer controls than covariate columns (n_c < k+1) fit a
         reduced design; the rank-guarded IF bread column-drops and the

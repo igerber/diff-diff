@@ -13,9 +13,11 @@ from typing import Any, Dict, Iterator, List, Optional, Tuple
 import numpy as np
 
 from diff_diff.bootstrap_chunking import (
+    ReplayableWeightStream,
     compute_block_size,
     iter_survey_multiplier_weight_blocks,
     iter_weight_blocks,
+    tiled_if_matmul,
 )
 from diff_diff.bootstrap_utils import (
     compute_effect_bootstrap_stats as _compute_effect_bootstrap_stats_func,
@@ -97,7 +99,6 @@ class EfficientDiDBootstrapMixin:
         rng = np.random.default_rng(self.seed)
 
         gt_pairs = list(group_time_effects.keys())
-        n_gt = len(gt_pairs)
 
         # Original ATTs (independent of the draws; referenced per block below).
         original_atts = np.array([group_time_effects[gt]["effect"] for gt in gt_pairs])
@@ -120,13 +121,15 @@ class EfficientDiDBootstrapMixin:
             # at a time (unstratified designs tile the generation; stratified
             # designs have few PSUs and fall back to full generation + slicing).
             _block_size = compute_block_size(n_units, self.n_bootstrap)
-            psu_ids, _psu_blocks = iter_survey_multiplier_weight_blocks(
-                self.n_bootstrap,
-                resolved_survey,
-                self.bootstrap_weights,
-                rng,
-                block_size=_block_size,
-            )
+            # Resolve psu_ids WITHOUT calling the generator: the stratified
+            # branch draws from the rng eagerly at call time, and the
+            # replayable stream below must snapshot the rng state before any
+            # draw. Duplicates the rng-free resolution both generator branches
+            # use (np.unique / np.arange).
+            if resolved_survey.psu is not None:
+                psu_ids = np.unique(resolved_survey.psu)
+            else:
+                psu_ids = np.arange(len(resolved_survey.weights))
             # Single-cluster (G<2) survey-PSU multiplier bootstrap collapses
             # to constant multiplier draws → BLAS roundoff produces ≈0
             # variance (NOT NaN). Downstream zero-SE guards check exact 0 and
@@ -163,29 +166,51 @@ class EfficientDiDBootstrapMixin:
                 np.array_equal(unit_to_psu_col, np.arange(n_units))
             )
 
-            def _weight_blocks() -> Iterator[Tuple[int, np.ndarray]]:
-                for _cs, _psu_block in _psu_blocks:
-                    if _psu_is_identity:
-                        yield _cs, _psu_block
-                    else:
-                        yield _cs, _psu_block[:, unit_to_psu_col]
+            # Factory recreating the PSU generation + unit expansion per pass.
+            def _make_weight_iter(
+                rng_: np.random.Generator,
+            ) -> Iterator[Tuple[int, np.ndarray]]:
+                _, _psu_blocks = iter_survey_multiplier_weight_blocks(
+                    self.n_bootstrap,
+                    resolved_survey,
+                    self.bootstrap_weights,
+                    rng_,
+                    block_size=_block_size,
+                )
 
-            weight_blocks: Iterator[Tuple[int, np.ndarray]] = _weight_blocks()
+                def _expanded() -> Iterator[Tuple[int, np.ndarray]]:
+                    for _cs, _psu_block in _psu_blocks:
+                        if _psu_is_identity:
+                            yield _cs, _psu_block
+                        else:
+                            yield _cs, _psu_block[:, unit_to_psu_col]
+
+                return _expanded()
+
         elif cluster_indices is not None and n_clusters is not None:
             # Cluster-level weights, expanded to unit level per block via the
             # helper's expand_index (block[:, cluster_indices]).
-            weight_blocks = iter_weight_blocks(
-                self.n_bootstrap,
-                n_clusters,
-                self.bootstrap_weights,
-                rng,
-                expand_index=cluster_indices,
-            )
+            def _make_weight_iter(
+                rng_: np.random.Generator,
+            ) -> Iterator[Tuple[int, np.ndarray]]:
+                return iter_weight_blocks(
+                    self.n_bootstrap,
+                    n_clusters,
+                    self.bootstrap_weights,
+                    rng_,
+                    expand_index=cluster_indices,
+                )
+
         else:
             # Standard unit-level weights, generated one row-block at a time.
-            weight_blocks = iter_weight_blocks(
-                self.n_bootstrap, n_units, self.bootstrap_weights, rng
-            )
+            def _make_weight_iter(
+                rng_: np.random.Generator,
+            ) -> Iterator[Tuple[int, np.ndarray]]:
+                return iter_weight_blocks(self.n_bootstrap, n_units, self.bootstrap_weights, rng_)
+
+        # Re-iterable stream: each column tile of the fused perturbation GEMM
+        # below makes its own full pass over the bit-identical weight stream.
+        weight_stream = ReplayableWeightStream(_make_weight_iter, rng)
 
         # eif SCALING is a SEPARATE axis from the weight PATH: it is keyed on
         # unit_level_weights (set whenever a SurveyDesign was passed — including a
@@ -196,24 +221,32 @@ class EfficientDiDBootstrapMixin:
         _has_unit_weights = unit_level_weights is not None
         _total_w = float(np.sum(unit_level_weights)) if _has_unit_weights else 1.0
 
-        # Pre-allocate the small (n_bootstrap, n_gt) output; only this persists.
-        # Each weight block fills its rows of every column, then is discarded —
-        # peak memory is capped at O(block x n_units). The per-(g,t) scaled EIF is
-        # recomputed per block as a single O(n_units) temporary (not cached across
-        # all n_gt cells), so the perturbation adds no O(n_gt x n_units) allocation
-        # that would erode the memory win on weighted panels. The aggregations
-        # below (overall, event study, group) re-aggregate these columns and never
-        # touch the weight matrix.
-        bootstrap_atts = np.empty((self.n_bootstrap, n_gt))
-        for _chunk_start, _w_block in weight_blocks:
-            _rows = slice(_chunk_start, _chunk_start + _w_block.shape[0])
-            for j, gt in enumerate(gt_pairs):
-                with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
-                    if _has_unit_weights:
-                        perturbation = _w_block @ (unit_level_weights * eif_by_gt[gt] / _total_w)
-                    else:
-                        perturbation = (_w_block @ eif_by_gt[gt]) / n_units
-                bootstrap_atts[_rows, j] = original_atts[j] + perturbation
+        # Fused perturbation GEMM over the replayable weight stream, one column
+        # per (g,t). Columns are LAZY callables materializing each scaled EIF
+        # only when its tile is filled — one O(n_units) temporary at a time, so
+        # the perturbation still adds no O(n_gt x n_units) allocation that
+        # would erode the memory win on weighted panels (tiles are capped by
+        # _TARGET_TILE_BYTES). The unweighted path folds its 1/n prefactor into
+        # the column (W @ (eif/n) instead of (W @ eif)/n) — a pure BLAS
+        # reassociation-level change. The aggregations below (overall, event
+        # study, group) re-aggregate these columns and never touch the weight
+        # matrix.
+        def _scaled_eif_column(gt: Tuple[Any, Any]):
+            def _make() -> List[Tuple[Optional[np.ndarray], np.ndarray]]:
+                if _has_unit_weights:
+                    return [(None, unit_level_weights * eif_by_gt[gt] / _total_w)]
+                return [(None, eif_by_gt[gt] / n_units)]
+
+            return _make
+
+        perturbations = tiled_if_matmul(
+            weight_stream,
+            self.n_bootstrap,
+            n_units,
+            [_scaled_eif_column(gt) for gt in gt_pairs],
+        )
+        with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
+            bootstrap_atts = original_atts[None, :] + perturbations
 
         # Post-treatment mask — also exclude NaN effects
         post_mask = np.array(

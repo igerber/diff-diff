@@ -13,9 +13,11 @@ from typing import TYPE_CHECKING, Any, Dict, Iterator, List, Optional, Tuple
 import numpy as np
 
 from diff_diff.bootstrap_chunking import (
+    ReplayableWeightStream,
     compute_block_size,
     iter_survey_multiplier_weight_blocks,
     iter_weight_blocks,
+    tiled_if_matmul,
 )
 from diff_diff.bootstrap_utils import (
     compute_bootstrap_pvalue as _compute_bootstrap_pvalue_func,
@@ -354,13 +356,17 @@ class CallawaySantAnnaBootstrapMixin:
             # Unstratified designs tile the generation; stratified designs (few
             # PSUs) fall back to full generation + sliced blocks.
             _block_size = compute_block_size(n_units, self.n_bootstrap)
-            psu_ids, _psu_blocks = iter_survey_multiplier_weight_blocks(
-                self.n_bootstrap,
-                resolved_survey_unit,
-                self.bootstrap_weights,
-                rng,
-                block_size=_block_size,
-            )
+            # Resolve psu_ids WITHOUT calling the generator: the stratified
+            # branch of iter_survey_multiplier_weight_blocks draws from the rng
+            # eagerly at call time, and the replayable stream below must
+            # snapshot the rng state before any draw. This duplicates the
+            # rng-free resolution both generator branches use (np.unique /
+            # np.arange), so the column order of the generated PSU matrix
+            # matches unit_to_psu_col.
+            if resolved_survey_unit.psu is not None:
+                psu_ids = np.unique(resolved_survey_unit.psu)
+            else:
+                psu_ids = np.arange(len(resolved_survey_unit.weights))
             if len(psu_ids) < 2:
                 import warnings as _warnings
 
@@ -395,22 +401,40 @@ class CallawaySantAnnaBootstrapMixin:
                 np.array_equal(unit_to_psu_col, np.arange(n_units))
             )
 
-            # Expand each PSU-weight block to unit level on demand; the full
-            # (n_bootstrap, n_units) expansion is never materialized at once.
-            def _weight_blocks() -> Iterator[Tuple[int, np.ndarray]]:
-                for _cs, _psu_block in _psu_blocks:
-                    if _psu_is_identity:
-                        yield _cs, _psu_block
-                    else:
-                        yield _cs, _psu_block[:, unit_to_psu_col]
+            # Factory recreating the PSU generation + unit-level expansion per
+            # pass; the full (n_bootstrap, n_units) expansion is never
+            # materialized at once.
+            def _make_weight_iter(
+                rng_: np.random.Generator,
+            ) -> Iterator[Tuple[int, np.ndarray]]:
+                _, _psu_blocks = iter_survey_multiplier_weight_blocks(
+                    self.n_bootstrap,
+                    resolved_survey_unit,
+                    self.bootstrap_weights,
+                    rng_,
+                    block_size=_block_size,
+                )
 
-            weight_blocks: Iterator[Tuple[int, np.ndarray]] = _weight_blocks()
+                def _expanded() -> Iterator[Tuple[int, np.ndarray]]:
+                    for _cs, _psu_block in _psu_blocks:
+                        if _psu_is_identity:
+                            yield _cs, _psu_block
+                        else:
+                            yield _cs, _psu_block[:, unit_to_psu_col]
+
+                return _expanded()
+
         else:
             # Standard unit-level weights (no survey or weights-only), generated
             # one row-block at a time directly at unit width.
-            weight_blocks = iter_weight_blocks(
-                self.n_bootstrap, n_units, self.bootstrap_weights, rng
-            )
+            def _make_weight_iter(
+                rng_: np.random.Generator,
+            ) -> Iterator[Tuple[int, np.ndarray]]:
+                return iter_weight_blocks(self.n_bootstrap, n_units, self.bootstrap_weights, rng_)
+
+        # Re-iterable stream: each column tile of the fused perturbation GEMM
+        # below makes its own full pass over the bit-identical weight stream.
+        weight_stream = ReplayableWeightStream(_make_weight_iter, rng)
 
         # Pre-compute the overall combined IF once (reused across every block).
         # None exactly when the overall aggregation is skipped.
@@ -433,68 +457,65 @@ class CallawaySantAnnaBootstrapMixin:
                 n_global_units=n_units,
             )
 
-        # Pre-allocate the small bootstrap output arrays. Only these (sized in
-        # n_bootstrap, not n_units) persist; each weight block is discarded once
-        # its rows are written, capping peak memory at O(block x n_units).
-        bootstrap_atts_gt = np.empty((self.n_bootstrap, n_gt))
-        if skip_overall_aggregation:
-            bootstrap_overall = np.full(self.n_bootstrap, np.nan)
-        else:
-            bootstrap_overall = np.empty(self.n_bootstrap)
-
         rel_periods: List[int] = []
-        bootstrap_event_study: Optional[Dict[int, np.ndarray]] = None
         if event_study_info is not None:
             rel_periods = sorted(event_study_info.keys())
-            bootstrap_event_study = {e: np.empty(self.n_bootstrap) for e in rel_periods}
 
         group_list: List[Any] = []
-        bootstrap_group: Optional[Dict[Any, np.ndarray]] = None
         if group_agg_info is not None:
             group_list = sorted(group_agg_info.keys())
-            bootstrap_group = {g: np.empty(self.n_bootstrap) for g in group_list}
 
-        # Consume the weights one row-block at a time. Each block fills its rows
-        # of every output array; only the draw axis is tiled. The weight stream
-        # is bit-identical to the un-chunked path; the BLAS weights @ influence
-        # reductions may reassociate, so statistics match to within ~1 ULP (far
-        # below bootstrap Monte-Carlo error), not bit-for-bit.
-        for _chunk_start, _w_block in weight_blocks:
-            _rows = slice(_chunk_start, _chunk_start + _w_block.shape[0])
+        # Fused perturbation columns: [per-cell IFs | overall combined IF |
+        # per-event-time combined IFs]. One column-tiled GEMM over the
+        # replayable weight stream replaces the former per-cell
+        # ``W[:, idx] @ inf`` slicing loop, which was memory-bandwidth-bound
+        # (two fancy-index copies of the weight block per cell). The weight
+        # stream is bit-identical to the per-block path; the BLAS reductions
+        # may reassociate, so statistics match to within ~1 ULP (far below
+        # bootstrap Monte-Carlo error), not bit-for-bit. Treated/control index
+        # arrays are disjoint per cell, satisfying the kernel's
+        # assignment-scatter contract.
+        columns: List[Any] = [
+            [
+                (gt_treated_indices[j], gt_treated_inf[j]),
+                (gt_control_indices[j], gt_control_inf[j]),
+            ]
+            for j in range(n_gt)
+        ]
+        overall_col = -1
+        if overall_combined_if is not None:
+            overall_col = len(columns)
+            columns.append([(None, overall_combined_if)])
+        es_col0 = len(columns)
+        for e in rel_periods:
+            columns.append([(None, event_study_info[e]["combined_if"])])
 
-            # ATT(g,t)
-            for j in range(n_gt):
-                treated_weights = _w_block[:, gt_treated_indices[j]]
-                control_weights = _w_block[:, gt_control_indices[j]]
-                with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
-                    perturbations = (
-                        treated_weights @ gt_treated_inf[j] + control_weights @ gt_control_inf[j]
-                    )
-                bootstrap_atts_gt[_rows, j] = original_atts[j] + perturbations
+        perturbations = tiled_if_matmul(weight_stream, self.n_bootstrap, n_units, columns)
 
-            # Overall ATT (combined IF includes WIF); skipped when None.
-            if overall_combined_if is not None:
-                with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
-                    bootstrap_overall[_rows] = original_overall + _w_block @ overall_combined_if
+        # Reconstruct the bootstrap draws (small, n_bootstrap-sized arrays).
+        with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
+            bootstrap_atts_gt = original_atts[None, :] + perturbations[:, :n_gt]
+            if skip_overall_aggregation:
+                bootstrap_overall = np.full(self.n_bootstrap, np.nan)
+            else:
+                bootstrap_overall = original_overall + perturbations[:, overall_col]
 
-            # Event study aggregation (combined IFs)
-            if bootstrap_event_study is not None and event_study_info is not None:
-                for e in rel_periods:
-                    agg_info = event_study_info[e]
-                    with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
-                        bootstrap_event_study[e][_rows] = (
-                            agg_info["effect"] + _w_block @ agg_info["combined_if"]
-                        )
+            bootstrap_event_study: Optional[Dict[int, np.ndarray]] = None
+            if event_study_info is not None:
+                bootstrap_event_study = {
+                    e: event_study_info[e]["effect"] + perturbations[:, es_col0 + k]
+                    for k, e in enumerate(rel_periods)
+                }
 
-            # Group aggregation (reads this block's freshly written ATT(g,t) rows)
-            if bootstrap_group is not None and group_agg_info is not None:
-                for g in group_list:
-                    agg_info = group_agg_info[g]
-                    with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
-                        bootstrap_group[g][_rows] = (
-                            bootstrap_atts_gt[_rows][:, agg_info["gt_indices"]]
-                            @ agg_info["weights"]
-                        )
+            # Group aggregation: fixed-weight re-aggregation of the completed
+            # perturbed cell draws (matches at reassociation level).
+            bootstrap_group: Optional[Dict[Any, np.ndarray]] = None
+            if group_agg_info is not None:
+                bootstrap_group = {
+                    g: bootstrap_atts_gt[:, group_agg_info[g]["gt_indices"]]
+                    @ group_agg_info[g]["weights"]
+                    for g in group_list
+                }
 
         # Batch compute bootstrap statistics for ATT(g,t)
         batch_ses, batch_ci_lo, batch_ci_hi, batch_pv = _compute_effect_bootstrap_stats_batch_func(
