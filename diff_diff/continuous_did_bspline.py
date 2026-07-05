@@ -15,7 +15,17 @@ __all__ = [
     "bspline_design_matrix",
     "bspline_derivative_design_matrix",
     "default_dose_grid",
+    "saturated_dose_levels",
+    "saturated_design_matrix",
+    "saturated_derivative_design_matrix",
+    "SATURATED_TOL",
 ]
+
+# Tolerance used consistently for BOTH discrete dose-level construction and
+# level matching in the saturated (discrete-treatment) basis. Using the same
+# value in both places guarantees a dose can never fall between two
+# near-duplicate levels or double-match one.
+SATURATED_TOL = 1e-9
 
 
 def build_bspline_basis(dose, degree=3, num_knots=0):
@@ -214,3 +224,145 @@ def default_dose_grid(dose, lower_quantile=0.10, upper_quantile=0.99):
         return np.array([])
     probs = np.arange(lower_quantile, upper_quantile + 0.005, 0.01)
     return np.quantile(positive_dose, probs)
+
+
+# ----------------------------------------------------------------------
+# Saturated (discrete-treatment) basis
+#
+# For a multi-valued / discrete dose taking distinct levels d_1 < ... < d_J,
+# the dose-response is estimated by a *saturated* regression (CGBS 2024
+# Eq. 4.1): one indicator per level, so beta_j = mean_{D=d_j}(delta_tilde_Y)
+# = ATT(d_j) (a per-level 2x2 DiD). These three functions mirror the B-spline
+# trio (build_bspline_basis / bspline_design_matrix /
+# bspline_derivative_design_matrix) so ContinuousDiD can swap the basis and
+# reuse the entire linear influence-function / bootstrap / covariate / survey
+# machinery unchanged: att_d = Psi_eval @ beta, acrt_d = dPsi_eval @ beta.
+# ----------------------------------------------------------------------
+
+
+def saturated_dose_levels(dose, tol=SATURATED_TOL):
+    """
+    Distinct positive dose levels for the saturated (discrete) basis.
+
+    Sorted unique positive doses, clustered at ``tol`` (values within ``tol``
+    of an accepted level collapse to it) so level construction uses the same
+    tolerance as matching in :func:`saturated_design_matrix`. Analogous to
+    :func:`build_bspline_basis` returning the knot vector.
+
+    Parameters
+    ----------
+    dose : array-like
+        Dose values from treated units (only positive values are used).
+    tol : float, default=:data:`SATURATED_TOL`
+        Clustering tolerance.
+
+    Returns
+    -------
+    np.ndarray
+        Sorted distinct dose levels, shape ``(J,)``.
+    """
+    dose = np.asarray(dose, dtype=float)
+    positive = np.sort(dose[dose > 0])
+    levels: list = []
+    for v in positive:
+        if not levels or (v - levels[-1]) > tol:
+            levels.append(float(v))
+    return np.array(levels)
+
+
+def _match_levels(x, levels, tol):
+    """Map each ``x_i`` to the index of its dose level; raise if unmatched."""
+    x = np.asarray(x, dtype=float)
+    levels = np.asarray(levels, dtype=float)
+    if len(levels) == 0:
+        raise ValueError("saturated basis requires at least one dose level.")
+    diff = np.abs(x[:, np.newaxis] - levels[np.newaxis, :])
+    idx = np.argmin(diff, axis=1)
+    nearest = diff[np.arange(len(x)), idx]
+    if np.any(nearest > tol):
+        bad = x[nearest > tol]
+        raise ValueError(
+            f"{int(np.sum(nearest > tol))} dose value(s) match no observed dose "
+            f"level within tol={tol} (e.g. {float(bad[0])}). The saturated "
+            "(discrete) basis can only be evaluated at observed dose levels."
+        )
+    return idx
+
+
+def saturated_design_matrix(x, levels, tol=SATURATED_TOL):
+    """
+    Indicator design matrix for the saturated (discrete) basis.
+
+    Column ``j`` is ``1{x_i == levels[j]}`` (match within ``tol``). Serves both
+    the treated design (``x`` = treated doses) and the evaluation matrix
+    (``x`` = dose grid; when the grid equals ``levels`` this is the identity).
+    Fail-closed: an ``x_i`` matching no level raises ``ValueError`` (no silent
+    all-zero row). Analogous to :func:`bspline_design_matrix`.
+
+    Parameters
+    ----------
+    x : array-like
+        Evaluation points, shape ``(n,)``.
+    levels : array-like
+        Distinct dose levels (from :func:`saturated_dose_levels`), shape ``(J,)``.
+    tol : float, default=:data:`SATURATED_TOL`
+        Matching tolerance.
+
+    Returns
+    -------
+    np.ndarray
+        Indicator design matrix, shape ``(n, J)``.
+    """
+    x = np.asarray(x, dtype=float)
+    levels = np.asarray(levels, dtype=float)
+    idx = _match_levels(x, levels, tol)
+    B = np.zeros((len(x), len(levels)))
+    B[np.arange(len(x)), idx] = 1.0
+    return B
+
+
+def saturated_derivative_design_matrix(x, levels, tol=SATURATED_TOL):
+    """
+    Finite-difference derivative rows for the saturated (discrete) basis.
+
+    ACRT for a discrete dose is a finite difference of the level effects
+    (CGBS 2024): ``ACRT(d_j) = [ATT(d_j) - ATT(d_{j-1})] / (d_j - d_{j-1})``
+    for ``j >= 2`` (backward), with a **forward** difference at the lowest
+    level ``d_1`` (``[ATT(d_2) - ATT(d_1)] / (d_2 - d_1)``) so the ACRT curve
+    shares the ATT grid and ``ACRT^glob`` stays well-defined. This is a linear
+    operator ``L`` on ``beta`` (each row sums to 0, so a constant level/control
+    shift cancels), and ``acrt = L @ beta``. Returns the ``L`` row for each
+    ``x_i`` at its dose level. With ``J = 1`` (single dose) every row is 0
+    (``ACRT = 0``). Analogous to :func:`bspline_derivative_design_matrix`.
+
+    Parameters
+    ----------
+    x : array-like
+        Evaluation points, shape ``(n,)``.
+    levels : array-like
+        Distinct dose levels, shape ``(J,)``.
+    tol : float, default=:data:`SATURATED_TOL`
+        Matching tolerance.
+
+    Returns
+    -------
+    np.ndarray
+        Derivative design matrix, shape ``(n, J)``.
+    """
+    levels = np.asarray(levels, dtype=float)
+    idx = _match_levels(x, levels, tol)
+    J = len(levels)
+    L = np.zeros((J, J))
+    # Row 0: forward difference at the lowest level; rows j>=1: backward.
+    for j in range(J):
+        if J == 1:
+            break  # single dose level: derivative is 0 everywhere
+        if j == 0:
+            h = levels[1] - levels[0]
+            L[0, 0] = -1.0 / h
+            L[0, 1] = 1.0 / h
+        else:
+            h = levels[j] - levels[j - 1]
+            L[j, j - 1] = -1.0 / h
+            L[j, j] = 1.0 / h
+    return L[idx]

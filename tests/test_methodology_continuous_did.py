@@ -1124,3 +1124,179 @@ class TestCovariateReg:
             rate = cover / total
             # Wide band: MC noise at 150 reps; catches a broken (too small/large) SE.
             assert 0.88 <= rate <= 0.99, f"{method} coverage {rate:.3f} off nominal"
+
+
+# =============================================================================
+# Discrete treatment: saturated regression (treatment_type="discrete")
+# =============================================================================
+
+
+def _make_discrete_panel(
+    per_level_effect,
+    n_per_level=40,
+    n_control=80,
+    control_trend=0.3,
+    noise=0.5,
+    seed=0,
+    cohorts=(1,),
+    n_periods=None,
+):
+    """Balanced discrete-dose panel with known per-level effects.
+
+    ``per_level_effect`` maps dose level -> ATT(d). Each cohort in ``cohorts``
+    (first_treat value) gets ``n_per_level`` treated units at every level, plus
+    ``n_control`` never-treated units. Effects switch on at ``t >= first_treat``.
+    """
+    r = np.random.default_rng(seed)
+    levels = sorted(per_level_effect)
+    max_g = max(cohorts)
+    if n_periods is None:
+        n_periods = max_g + 1
+    periods = list(range(n_periods))
+    rows = []
+    uid = 0
+
+    def add_unit(ft, d):
+        nonlocal uid
+        base = r.normal(0, 1)
+        for p in periods:
+            on = ft > 0 and p >= ft
+            y = base + control_trend * p + (per_level_effect[d] if on else 0.0)
+            y += r.normal(0, noise)
+            rows.append((uid, p, y, ft, d if ft > 0 else 0.0))
+        uid += 1
+
+    for ft in cohorts:
+        for d in levels:
+            for _ in range(n_per_level):
+                add_unit(ft, d)
+    for _ in range(n_control):
+        add_unit(0, levels[0])
+    return pd.DataFrame(rows, columns=["unit", "period", "outcome", "first_treat", "dose"])
+
+
+def _hand_calc_discrete(df, levels):
+    """Independent NumPy ATT(d_j) / ACRT / overall from a 2-period panel."""
+    periods = sorted(df["period"].unique())
+    p0, p1 = periods[0], periods[-1]
+    wide = df.pivot(index="unit", columns="period", values="outcome")
+    dy = (wide[p1] - wide[p0]).to_numpy()
+    udose = df.groupby("unit")["dose"].first().to_numpy()
+    uft = df.groupby("unit")["first_treat"].first().to_numpy()
+    cm = uft == 0
+    mu0 = dy[cm].mean()
+    att = np.array([dy[udose == d].mean() - mu0 for d in levels])
+    acrt = np.empty(len(levels))
+    for j in range(len(levels)):
+        if j == 0:
+            acrt[0] = (att[1] - att[0]) / (levels[1] - levels[0])
+        else:
+            acrt[j] = (att[j] - att[j - 1]) / (levels[j] - levels[j - 1])
+    overall = (dy[~cm] - mu0).mean()
+    # Analytical per-level 2x2 SE in the sum-of-squares/n convention.
+    n_c = int(cm.sum())
+    se = np.empty(len(levels))
+    for j, d in enumerate(levels):
+        tmask = udose == d
+        n_j = int(tmask.sum())
+        it = (dy[tmask] - mu0 - att[j]) / n_j
+        ic = -(dy[cm] - mu0) / n_c
+        se[j] = np.sqrt((it**2).sum() + (ic**2).sum())
+    return att, acrt, overall, se
+
+
+class TestDiscreteSaturated:
+    """Saturated regression for discrete/multi-valued treatment (CGBS 2024 Eq 4.1)."""
+
+    _KW = dict(
+        outcome="outcome",
+        unit="unit",
+        time="period",
+        first_treat="first_treat",
+        dose="dose",
+        aggregate="dose",
+    )
+
+    def test_hand_calc_att_acrt_overall(self):
+        """ATT(d_j) = per-level 2x2 DiD; ACRT = finite diffs; overall = mean_T."""
+        levels = [1.0, 2.0, 4.0]
+        df = _make_discrete_panel({1.0: 0.5, 2.0: 1.5, 4.0: 2.5}, seed=1)
+        res = ContinuousDiD(treatment_type="discrete", n_bootstrap=0).fit(df, **self._KW)
+        att, acrt, overall, _ = _hand_calc_discrete(df, levels)
+        assert np.allclose(res.dose_response_att.dose_grid, levels)
+        assert np.allclose(res.dose_response_att.effects, att, atol=1e-12)
+        assert np.allclose(res.dose_response_acrt.effects, acrt, atol=1e-12)
+        assert np.isclose(res.overall_att, overall, atol=1e-12)
+
+    def test_hand_calc_analytical_se(self):
+        """Saturated SE reduces exactly to the per-level 2x2 DiD SE (the gate)."""
+        levels = [1.0, 2.0, 4.0]
+        df = _make_discrete_panel({1.0: 0.5, 2.0: 1.5, 4.0: 2.5}, seed=2)
+        res = ContinuousDiD(treatment_type="discrete", n_bootstrap=0).fit(df, **self._KW)
+        _, _, _, se = _hand_calc_discrete(df, levels)
+        assert np.allclose(res.dose_response_att.se, se, atol=1e-10)
+        assert np.all(np.isfinite(res.dose_response_att.se))
+
+    def test_acrt_boundary_forward_diff(self):
+        """ACRT(d_1) uses a forward difference; ACRT(d_j>=2) backward."""
+        levels = [1.0, 2.0, 4.0]
+        df = _make_discrete_panel({1.0: 0.5, 2.0: 1.5, 4.0: 2.5}, seed=3)
+        res = ContinuousDiD(treatment_type="discrete", n_bootstrap=0).fit(df, **self._KW)
+        att = res.dose_response_att.effects
+        acrt = res.dose_response_acrt.effects
+        assert np.isclose(acrt[0], (att[1] - att[0]) / (levels[1] - levels[0]), atol=1e-12)
+        assert np.isclose(acrt[1], (att[1] - att[0]) / (levels[1] - levels[0]), atol=1e-12)
+        assert np.isclose(acrt[2], (att[2] - att[1]) / (levels[2] - levels[1]), atol=1e-12)
+
+    def test_dgp_recovery(self):
+        """Recover heterogeneous per-level effects (no noise -> exact)."""
+        effects = {1.0: 0.5, 2.0: 2.0, 4.0: 1.0}  # non-monotone ACRT
+        df = _make_discrete_panel(effects, n_per_level=60, n_control=100, noise=0.0, seed=4)
+        res = ContinuousDiD(treatment_type="discrete", n_bootstrap=0).fit(df, **self._KW)
+        assert np.allclose(res.dose_response_att.effects, [0.5, 2.0, 1.0], atol=1e-10)
+        # ACRT steps: fwd@d1 = (2-.5)/1=1.5; bwd@d2 same; bwd@d3=(1-2)/2=-0.5
+        assert np.allclose(res.dose_response_acrt.effects, [1.5, 1.5, -0.5], atol=1e-10)
+
+    def test_staggered_shared_support(self):
+        """Multi-cohort (shared dose support) discrete fit aggregates + recovers."""
+        effects = {1.0: 0.5, 2.0: 1.5, 4.0: 2.5}
+        df = _make_discrete_panel(
+            effects, n_per_level=40, n_control=90, noise=0.0, seed=5, cohorts=(2, 3)
+        )
+        res = ContinuousDiD(treatment_type="discrete", n_bootstrap=0).fit(df, **self._KW)
+        # Homogeneous effects across cohorts + no noise -> exact recovery.
+        assert np.allclose(res.dose_response_att.effects, [0.5, 1.5, 2.5], atol=1e-9)
+        assert np.all(np.isfinite(res.dose_response_att.se))
+
+    @pytest.mark.slow
+    def test_coverage(self, ci_params):
+        """Analytical & bootstrap SE achieve nominal coverage for ATT(d_j)."""
+        import warnings
+
+        levels = [1.0, 2.0, 4.0]
+        effects = {1.0: 0.5, 2.0: 1.5, 4.0: 2.5}
+        reps = 150
+        for use_boot in (False, True):
+            # Bootstrap draws are scaled down in pure-Python mode; use a wider
+            # coverage band there (mirrors the conftest small-n_boot tolerance
+            # convention). Analytical SE has no such scaling.
+            nb = ci_params.bootstrap(299, min_n=99) if use_boot else 0
+            lo_band = 0.85 if (use_boot and nb < 200) else 0.88
+            cover = np.zeros(len(levels))
+            for s in range(reps):
+                df = _make_discrete_panel(
+                    effects, n_per_level=40, n_control=80, noise=1.0, seed=20_000 + s
+                )
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore")
+                    res = ContinuousDiD(
+                        treatment_type="discrete", n_bootstrap=nb, seed=s
+                    ).fit(df, **self._KW)
+                lo = res.dose_response_att.conf_int_lower
+                hi = res.dose_response_att.conf_int_upper
+                for j, d in enumerate(levels):
+                    cover[j] += int(lo[j] <= effects[d] <= hi[j])
+            rate = cover / reps
+            assert np.all((rate >= lo_band) & (rate <= 0.995)), (
+                f"{'boot' if use_boot else 'analytic'} coverage {rate} off nominal"
+            )

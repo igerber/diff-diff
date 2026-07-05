@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **`ContinuousDiD` discrete-treatment saturated regression** (`treatment_type="discrete"`) for
+  multi-valued / discrete dose (CGBS 2024 Eq. 4.1). Each distinct dose level gets its own effect
+  coefficient — `ATT(d_j) = mean_{D=d_j}(ΔY) − control` (a per-level 2×2 DiD) — instead of a B-spline
+  curve; `ACRT(d_j)` is a finite difference (forward at the lowest level, backward elsewhere). The
+  saturated fit is an exact basis swap, so analytical, multiplier-bootstrap, covariate (`reg`/`dr`),
+  and survey inference all compose and reduce analytically to the per-level 2×2 DiD standard error.
+  Multi-cohort fits with heterogeneous dose support across cohorts raise `NotImplementedError`
+  (support-aware aggregation deferred); an off-support `dvals` value raises `ValueError`. The default
+  `treatment_type="continuous"` (B-spline) path is unchanged.
 - **`ContinuousDiD` covariate support** (`covariates=`, `estimation_method ∈ {"reg", "dr"}`) for
   dose-response estimation under **conditional** parallel trends
   (`E[ΔY(0) | D=d, X] = E[ΔY(0) | D=0, X]`). `reg` uses an outcome-regression control counterfactual;

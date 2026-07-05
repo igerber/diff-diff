@@ -194,6 +194,8 @@ ACRT = ATT. Everything collapses to standard Callaway & Sant'Anna (2021).
 
 ### 5.1 Discrete treatment: saturated regression
 
+**Implemented** via `ContinuousDiD(treatment_type="discrete")`.
+
 When dose takes values d_1, ..., d_J (Eq. 4.1):
 ```
 Delta Y_i = beta_0 + sum_{j=1}^{J} 1{D_i = d_j} * beta_j + epsilon_i
@@ -202,6 +204,24 @@ Delta Y_i = beta_0 + sum_{j=1}^{J} 1{D_i = d_j} * beta_j + epsilon_i
 - beta_j estimates ATT(d_j)
 - (beta_j - beta_{j-1}) / (d_j - d_{j-1}) estimates ACRT(d_j)
 - Standard OLS inference applies
+
+**Implementation notes (diff-diff):**
+- **Intercept-free form.** The library subtracts the control counterfactual first
+  (`Delta_tilde_Y_i = Delta Y_i - mean_control(Delta Y)`, or the covariate-adjusted control
+  prediction) and then regresses `Delta_tilde_Y` on the `J` **indicator columns without an
+  intercept** (`beta_j = mean_{D=d_j}(Delta_tilde_Y) = ATT(d_j)`). The paper's `beta_0` is the
+  control-group trend `E[Delta Y | D = 0]`, which is exactly what the control-mean subtraction
+  removes — so the two formulations coincide, and each `beta_j` is a per-level 2×2 DiD.
+- **ACRT boundary convention.** The finite difference is backward for `j >= 2` (as above) with a
+  **forward** difference at the lowest level `d_1` (`[ATT(d_2) - ATT(d_1)] / (d_2 - d_1)`), so ATT
+  and ACRT share the `J`-point dose grid and `ACRT^glob` (density-weighted mean over all treated)
+  stays well-defined. There is no R/paper anchor at the boundary — R `contdid` v0.1.0 does not
+  implement the discrete path (§9, "Current limitations") — so this is a documented library
+  convention (REGISTRY § ContinuousDiD Note #6).
+- **Basis swap.** Estimation reuses the entire B-spline machinery by swapping the design /
+  evaluation / derivative trio for an indicator / identity / finite-difference trio; the analytical
+  SE reduces analytically to the per-level 2×2 DiD SE. Multi-cohort fits with heterogeneous dose
+  support across cohorts raise `NotImplementedError` (support-aware aggregation is deferred).
 
 ### 5.2 Continuous treatment: parametric (B-spline sieve)
 
@@ -444,5 +464,6 @@ can be meaningfully aggregated.
    Note #5.
 
 ### Defer
-- Discrete treatment (saturated regression — simpler, add later)
 - TWFE decomposition diagnostics
+
+*Discrete treatment (saturated regression) is now implemented — see § 5.1.*

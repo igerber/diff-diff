@@ -1721,3 +1721,176 @@ class TestCovariateAPI:
         )
         assert float(base.overall_att) == float(alt.overall_att)
         assert float(base.overall_att_se) == float(alt.overall_att_se)
+
+
+# =============================================================================
+# Discrete treatment: saturated regression API (treatment_type="discrete")
+# =============================================================================
+
+
+def _discrete_panel(effects, n_per=40, n_control=70, noise=0.5, seed=0, cohorts=(1,), n_periods=None):
+    """Balanced discrete-dose panel with known per-level effects + covariate x1."""
+    r = np.random.default_rng(seed)
+    levels = sorted(effects)
+    if n_periods is None:
+        n_periods = max(cohorts) + 1
+    periods = list(range(n_periods))
+    rows = []
+    uid = 0
+
+    def add(ft, d):
+        nonlocal uid
+        base = r.normal(0, 1)
+        x = r.normal(0, 1)
+        for p in periods:
+            on = ft > 0 and p >= ft
+            y = base + 0.3 * p + 0.4 * x + (effects[d] if on else 0.0) + r.normal(0, noise)
+            rows.append((uid, p, y, ft, d if ft > 0 else 0.0, x))
+        uid += 1
+
+    for ft in cohorts:
+        for d in levels:
+            for _ in range(n_per):
+                add(ft, d)
+    for _ in range(n_control):
+        add(0, levels[0])
+    return pd.DataFrame(rows, columns=["unit", "period", "outcome", "first_treat", "dose", "x1"])
+
+
+_DKW = dict(
+    outcome="outcome", unit="unit", time="period", first_treat="first_treat",
+    dose="dose", aggregate="dose",
+)
+
+
+class TestDiscreteSaturatedAPI:
+    """API, composition, and guard behavior for treatment_type='discrete'."""
+
+    def test_get_set_params_roundtrip_transactional(self):
+        est = ContinuousDiD(treatment_type="discrete")
+        assert est.get_params()["treatment_type"] == "discrete"
+        est2 = ContinuousDiD()
+        est2.set_params(treatment_type="discrete")
+        assert est2.treatment_type == "discrete"
+        # Transactional: an invalid update leaves config unmutated.
+        with pytest.raises(ValueError):
+            est2.set_params(treatment_type="bogus")
+        assert est2.treatment_type == "discrete"
+
+    def test_invalid_treatment_type_raises(self):
+        with pytest.raises(ValueError, match="treatment_type"):
+            ContinuousDiD(treatment_type="saturated")
+
+    def test_metadata_on_results_and_summary(self):
+        df = _discrete_panel({1.0: 0.5, 2.0: 1.5, 4.0: 2.5}, seed=1)
+        res = ContinuousDiD(treatment_type="discrete", n_bootstrap=0).fit(df, **_DKW)
+        assert res.treatment_type == "discrete"
+        text = res.summary()
+        assert "discrete" in text
+        assert "Dose levels" in text  # discrete summary shows levels, not B-spline knots
+
+    def test_clone_refit_idempotent(self):
+        df = _discrete_panel({1.0: 0.5, 2.0: 1.5, 4.0: 2.5}, seed=2)
+        est = ContinuousDiD(treatment_type="discrete", n_bootstrap=0)
+        r1 = est.fit(df, **_DKW)
+        params = est.get_params()
+        r2 = est.fit(df, **_DKW)  # refit does not mutate config
+        assert est.get_params() == params
+        assert np.allclose(r1.dose_response_att.effects, r2.dose_response_att.effects)
+
+    def test_dr_discrete_acrt_identical_to_reg(self):
+        """DEFAULT covariate path (dr): ACRT(d_j) point+SE == reg; only ATT differs."""
+        df = _discrete_panel({1.0: 0.5, 2.0: 1.5, 4.0: 2.5}, seed=3)
+        reg = ContinuousDiD(
+            treatment_type="discrete", covariates=["x1"], estimation_method="reg", n_bootstrap=0
+        ).fit(df, **_DKW)
+        dr = ContinuousDiD(
+            treatment_type="discrete", covariates=["x1"], estimation_method="dr", n_bootstrap=0
+        ).fit(df, **_DKW)
+        assert np.allclose(reg.dose_response_acrt.effects, dr.dose_response_acrt.effects, atol=1e-10)
+        assert np.allclose(reg.dose_response_acrt.se, dr.dose_response_acrt.se, atol=1e-10)
+        # ATT levels differ (dr subtracts the augmentation eta_cont).
+        assert not np.allclose(
+            reg.dose_response_att.effects, dr.dose_response_att.effects, atol=1e-6
+        )
+
+    def test_survey_discrete_weighted_group_means(self):
+        from diff_diff import SurveyDesign
+
+        df = _discrete_panel({1.0: 0.5, 2.0: 1.5, 4.0: 2.5}, seed=4)
+        rng = np.random.default_rng(4)
+        uids = sorted(df["unit"].unique())
+        wmap = dict(zip(uids, rng.uniform(0.5, 2.0, len(uids))))
+        df["wt"] = df["unit"].map(wmap)
+        res = ContinuousDiD(treatment_type="discrete", n_bootstrap=0).fit(
+            df, survey_design=SurveyDesign(weights="wt"), **_DKW
+        )
+        assert np.all(np.isfinite(res.dose_response_att.se))
+        # Hand-calc weighted ATT(d_1).
+        wide = df.pivot(index="unit", columns="period", values="outcome")
+        dy = wide[wide.columns[-1]] - wide[wide.columns[0]]
+        udose = df.groupby("unit")["dose"].first()
+        uft = df.groupby("unit")["first_treat"].first()
+        uw = df.groupby("unit")["wt"].first()
+        cm = uft == 0
+        mu0w = np.average(dy[cm], weights=uw[cm])
+        att1 = np.average(dy[udose == 1.0], weights=uw[udose == 1.0]) - mu0w
+        assert np.isclose(res.dose_response_att.effects[0], att1, atol=1e-9)
+
+    def test_exactly_identified_boundary(self):
+        """n_treated == J (one unit per level) fits (not skipped); SE finite."""
+        df = _discrete_panel({1.0: 0.5, 2.0: 1.5, 4.0: 2.5}, n_per=1, n_control=30, seed=5)
+        with pytest.warns(UserWarning):  # over-parameterization warning fires
+            res = ContinuousDiD(treatment_type="discrete", n_bootstrap=0).fit(df, **_DKW)
+        assert len(res.dose_response_att.effects) == 3
+        assert np.all(np.isfinite(res.dose_response_att.effects))
+        assert np.all(np.isfinite(res.dose_response_att.se))
+
+    def test_heterogeneous_support_raises(self):
+        """Multi-cohort with different dose support -> NotImplementedError."""
+        # cohort 1 covers {1,2,4}; cohort 2 covers {1,2} only.
+        df1 = _discrete_panel({1.0: 0.5, 2.0: 1.5, 4.0: 2.5}, n_control=0, seed=6, cohorts=(1,), n_periods=3)
+        df2 = _discrete_panel({1.0: 0.5, 2.0: 1.5}, n_control=40, seed=7, cohorts=(2,), n_periods=3)
+        df2["unit"] = df2["unit"] + 10_000
+        df = pd.concat([df1, df2], ignore_index=True)
+        with pytest.raises(NotImplementedError, match="support"):
+            ContinuousDiD(treatment_type="discrete", n_bootstrap=0).fit(df, **_DKW)
+
+    def test_dvals_off_support_raises(self):
+        df = _discrete_panel({1.0: 0.5, 2.0: 1.5, 4.0: 2.5}, seed=8)
+        with pytest.raises(ValueError, match="level"):
+            ContinuousDiD(
+                treatment_type="discrete", dvals=np.array([1.5]), n_bootstrap=0
+            ).fit(df, **_DKW)
+
+    def test_survey_zero_weight_level_raises(self):
+        """A dose level fully zero-weighted by survey weights -> fail closed (no silent zero)."""
+        from diff_diff import SurveyDesign
+
+        df = _discrete_panel({1.0: 0.5, 2.0: 1.5, 4.0: 2.5}, seed=10)
+        df["wt"] = 1.0
+        # Zero out every treated unit at dose 2.0.
+        df.loc[df["dose"] == 2.0, "wt"] = 0.0
+        with pytest.raises(ValueError, match="positive survey weight|zero"):
+            ContinuousDiD(treatment_type="discrete", n_bootstrap=0).fit(
+                df, survey_design=SurveyDesign(weights="wt"), **_DKW
+            )
+
+    def test_over_parameterization_warning(self):
+        df = _discrete_panel({1.0: 0.5, 2.0: 1.5, 4.0: 2.5}, n_per=1, n_control=30, seed=9)
+        with pytest.warns(UserWarning, match="over-parameterized"):
+            ContinuousDiD(treatment_type="discrete", n_bootstrap=0).fit(df, **_DKW)
+
+    def test_continuous_default_matches_explicit(self):
+        """Default treatment_type is 'continuous'; explicit value gives identical output."""
+        data = generate_continuous_did_data(n_units=120, n_periods=3, seed=13)
+        r_default = ContinuousDiD(n_bootstrap=0).fit(
+            data, "outcome", "unit", "period", "first_treat", "dose", aggregate="dose"
+        )
+        r_explicit = ContinuousDiD(treatment_type="continuous", n_bootstrap=0).fit(
+            data, "outcome", "unit", "period", "first_treat", "dose", aggregate="dose"
+        )
+        np.testing.assert_allclose(
+            r_default.dose_response_att.effects, r_explicit.dose_response_att.effects
+        )
+        np.testing.assert_allclose(r_default.overall_att, r_explicit.overall_att)

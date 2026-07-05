@@ -703,6 +703,8 @@ ContinuousDiD(
     epv_threshold: float = 10.0,              # dr propensity events-per-variable
     pscore_fallback: str = "error",           # dr propensity-failure action: "error" (fail-closed
                                               #   default) or "unconditional" (opt-in reg-like fallback)
+    treatment_type: str = "continuous",       # "continuous" (B-spline curve) or "discrete"
+                                              #   (saturated per-dose-level regression, CGBS Eq 4.1)
 )
 ```
 
@@ -710,6 +712,13 @@ Covariates give conditional parallel trends: each (g,t) cell's control counterfa
 covariate-adjusted prediction. `reg`/`dr` share the ATT(d) *shape* and ACRT(d); `dr` (doubly-robust,
 default) differs only in the overall_att/ATT(d) level and SE. `overall_att`+SE match DRDID
 reg_did_panel/drdid_panel. `covariates=` + `survey_design=` is not yet supported.
+
+`treatment_type="discrete"` fits a **saturated regression** for a multi-valued dose: one indicator per
+distinct dose level, so `ATT(d_j) = mean_{D=d_j}(ΔY) − control` (a per-level 2×2 DiD) and `ACRT(d_j)`
+is a finite difference (forward at the lowest level, backward elsewhere). It reuses the full inference
+stack (analytical / bootstrap / covariate / survey) and reduces to the per-level 2×2 DiD SE. Multi-
+cohort fits need a shared dose support across cohorts (else `NotImplementedError`); an off-support
+`dvals` value raises `ValueError`.
 
 **Alias:** `CDiD`
 

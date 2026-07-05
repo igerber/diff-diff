@@ -147,6 +147,10 @@ class ContinuousDiDResults:
     pscore_trim: float = 0.01
     epv_threshold: float = 10.0
     pscore_fallback: str = "error"
+    # "continuous" (B-spline sieve dose-response) or "discrete" (saturated
+    # per-dose-level regression); the ``dose_grid`` holds the distinct dose
+    # levels when discrete.
+    treatment_type: str = "continuous"
     event_study_effects: Optional[Dict[int, Dict[str, Any]]] = field(default=None)
     # Survey design metadata (SurveyMetadata instance from diff_diff.survey)
     survey_metadata: Optional[Any] = field(default=None)
@@ -228,11 +232,17 @@ class ContinuousDiDResults:
             f"{'Treatment cohorts:':<30} {len(self.groups):>10}",
             f"{'Time periods:':<30} {len(self.time_periods):>10}",
             f"{'Control group:':<30} {self.control_group:>10}",
-            f"{'B-spline degree:':<30} {self.degree:>10}",
-            f"{'Interior knots:':<30} {self.num_knots:>10}",
-            f"{'Base period:':<30} {self.base_period:>10}",
-            f"{'Anticipation:':<30} {self.anticipation:>10}",
+            f"{'Treatment type:':<30} {self.treatment_type:>10}",
         ]
+        # Basis metadata: B-spline degree/knots (continuous) or the number of
+        # saturated dose levels (discrete).
+        if self.treatment_type == "discrete":
+            lines.append(f"{'Dose levels:':<30} {len(self.dose_grid):>10}")
+        else:
+            lines.append(f"{'B-spline degree:':<30} {self.degree:>10}")
+            lines.append(f"{'Interior knots:':<30} {self.num_knots:>10}")
+        lines.append(f"{'Base period:':<30} {self.base_period:>10}")
+        lines.append(f"{'Anticipation:':<30} {self.anticipation:>10}")
         if self.covariates:
             lines.append(f"{'Covariates:':<30} {', '.join(self.covariates):>10}")
             lines.append(f"{'Estimation method:':<30} {self.estimation_method:>10}")

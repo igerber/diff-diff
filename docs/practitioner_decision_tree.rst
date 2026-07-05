@@ -249,6 +249,13 @@ appropriate identification assumptions in place.
    )
    print(f"Average lift across dose levels: {results.overall_att:.1f}")
 
+.. tip::
+
+   When spending takes a **few discrete levels** (e.g. exactly $50K / $100K / $200K)
+   rather than a continuum, pass ``ContinuousDiD(treatment_type="discrete")``. This fits
+   a *saturated* regression - one effect per spending level (each a 2x2 DiD) plus the
+   step-to-step marginal response - instead of a smoothed B-spline curve.
+
 .. warning::
 
    Dose-response curves *ATT(d)* and *ACRT(d)* require **Strong Parallel Trends (SPT)** -
