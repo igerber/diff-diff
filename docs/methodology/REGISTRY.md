@@ -523,6 +523,15 @@ Aggregations:
   DR's no-covariate per-cell SE keeps its ddof=1 plug-in (O(1/n) from R; TODO row).
   Side effect: reg/ipw fits with collinear covariates now route their IF breads
   through the rank-guarded inverse and fire the same aggregate warning as dr.
+  Rank-0 semantics of the reg CENTERED Gram: because the intercept direction is
+  handled analytically by the `1/sum(W_c)` leading term, a rank-0 centered Gram
+  (zero within-control covariate variation, e.g. a constant as the only
+  covariate) is the benign identified-subset case — the estimation-effect
+  correction is exactly zero and the fit collapses to the no-covariate reg fit
+  with finite SEs (`_centered_or_bread` maps `_safe_inv`'s all-NaN rank-0
+  sentinel to a zero correction; the aggregate rank-guard warning still fires).
+  This differs from the `[1, X]` breads (ipw PS Hessian, dr), where all-NaN is
+  a true pathology that NaN-propagates.
 - All aggregation SEs (simple, event study) include the weight influence function (WIF)
   adjustment, matching R's `did::aggte()`. The WIF accounts for uncertainty in estimating
   group-size aggregation weights. Group aggregation uses equal time weights (deterministic),

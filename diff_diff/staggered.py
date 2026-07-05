@@ -1437,10 +1437,7 @@ class CallawaySantAnna(
                 if is_balanced and self.control_group == "never_treated":
                     group_xbar_c = X_ctrl_raw.mean(axis=0)
                     group_Xc_centered = X_ctrl_raw - group_xbar_c
-                    group_bread = _safe_inv(
-                        group_Xc_centered.T @ group_Xc_centered,
-                        tracker=self._safe_inv_tracker,
-                    )
+                    group_bread = self._centered_or_bread(group_Xc_centered.T @ group_Xc_centered)
 
             # Process each (g, t) pair in this group
             for g, t, bp_val, base_col, post_col in tasks:
@@ -1604,10 +1601,7 @@ class CallawaySantAnna(
                         else:
                             xbar_c = X_control_pair.mean(axis=0)
                             Xc_centered = X_control_pair - xbar_c
-                            bread = _safe_inv(
-                                Xc_centered.T @ Xc_centered,
-                                tracker=self._safe_inv_tracker,
-                            )
+                            bread = self._centered_or_bread(Xc_centered.T @ Xc_centered)
                         d_tc = X_treated_pair.mean(axis=0) - xbar_c
                         with np.errstate(all="ignore"):
                             proj_c = 1.0 / pair_n_c + Xc_centered @ (bread @ d_tc)
@@ -2616,6 +2610,28 @@ class CallawaySantAnna(
         self.is_fitted_ = True
         return self.results_
 
+    def _centered_or_bread(self, gram: np.ndarray) -> np.ndarray:
+        """Rank-guarded inverse of the CENTERED control covariate Gram.
+
+        Unlike the ``[1, X]`` breads elsewhere, the intercept direction is
+        handled analytically here (the ``1/sum(W_c)`` leading term of the
+        reg estimation-effect projection), so a rank-0 centered Gram — zero
+        within-control covariate variation, e.g. a constant covariate as
+        the only regressor — is benign: the correction on the identified
+        (intercept-only) subset is exactly zero, and the projection
+        collapses to ``1/sum(W_c)``. Map ``_safe_inv``'s all-NaN rank-0
+        sentinel to a zero matrix so the cell keeps the finite SE on the
+        identified subset (rank-guard REGISTRY contract; equals both the
+        no-covariate fit and the pre-centered raw-Gram column-drop) instead
+        of NaN-poisoning the IF. Partial deficiency is untouched —
+        ``_safe_inv`` already returns a zero-filled column-dropped inverse,
+        and the aggregate rank-guard warning still fires via the tracker.
+        """
+        bread = _safe_inv(gram, tracker=self._safe_inv_tracker)
+        if bread.size and not np.any(np.isfinite(bread)):
+            return np.zeros_like(bread)
+        return bread
+
     def _outcome_regression(
         self,
         treated_change: np.ndarray,
@@ -2704,10 +2720,7 @@ class CallawaySantAnna(
             with np.errstate(all="ignore"):
                 xbar_c = np.sum(W_c[:, None] * X_control, axis=0) / w_c_sum
                 Xc_centered = X_control - xbar_c
-                bread = _safe_inv(
-                    Xc_centered.T @ (W_c[:, None] * Xc_centered),
-                    tracker=self._safe_inv_tracker,
-                )
+                bread = self._centered_or_bread(Xc_centered.T @ (W_c[:, None] * Xc_centered))
                 proj_c = 1.0 / w_c_sum + Xc_centered @ (bread @ (xbar_t - xbar_c))
                 inf_control = -(W_c * resid_c) * proj_c
             inf_func = np.concatenate([inf_treated, inf_control])

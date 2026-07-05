@@ -1655,16 +1655,20 @@ class TestRankGuardedAnalyticalSE:
         assert np.isfinite(res.overall_se)
         assert res.overall_se < 1.0
 
-    @pytest.mark.parametrize("method", ["reg", "ipw", "dr"])
+    @pytest.mark.parametrize("method", ["ipw", "dr"])
     def test_rank0_bread_propagates_nan_not_zero(self, monkeypatch, method):
         # rank-0 is unreachable through covariates alone (the always-present
         # intercept guarantees rank >= 1), so simulate an all-NaN bread to
         # exercise the NaN-masking fix: var_psi becomes NaN and must yield a NaN
-        # SE, NOT 0.0 via the old ``var_psi > 0 else 0.0`` guard. reg/ipw now
-        # derive their per-cell SE from _safe_inv-based IF terms too (OLS
-        # estimation-effect bread / PS Hessian), so all three methods share
-        # the contract. The point estimate does NOT depend on the bread, so
-        # it stays finite (NaN inference on an estimable cell, not _nan_gt_entry).
+        # SE, NOT 0.0 via the old ``var_psi > 0 else 0.0`` guard. ipw's PS
+        # Hessian and dr's breads are over [1, X], so all-NaN there is a true
+        # pathology that must propagate. reg is deliberately EXCLUDED: its
+        # estimation-effect bread is over the CENTERED covariate Gram (the
+        # intercept is handled analytically), where rank-0 is the benign
+        # constant-covariate case mapped to a zero correction — see
+        # test_reg_constant_only_covariate_matches_no_covariate below.
+        # The point estimate does NOT depend on the bread, so it stays
+        # finite (NaN inference on an estimable cell, not _nan_gt_entry).
         from tests.conftest import assert_nan_inference
         import diff_diff.staggered as staggered_mod
 
@@ -2019,6 +2023,73 @@ class TestRegIpwIFBehavior:
             if cell["skip_reason"] is None:
                 assert np.isfinite(cell["se"]), f"cell ({g},{t})"
         assert np.isfinite(res.overall_se)
+
+    def test_reg_constant_only_covariate_matches_no_covariate(self):
+        """A constant as the ONLY reg covariate makes the CENTERED
+        estimation-effect Gram rank-0 (all-zero). The correction on the
+        identified (intercept-only) subset is exactly zero, so effects AND
+        SEs must equal the no-covariate fit - finite, never NaN (the rank-0
+        centered bread maps to a zero correction, not an all-NaN inverse)."""
+        data = generate_staggered_data_with_covariates(seed=789)
+        data["xc"] = 5.0
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            no_cov = CallawaySantAnna(estimation_method="reg").fit(
+                data, "outcome", "unit", "time", "first_treat"
+            )
+            const_only = CallawaySantAnna(estimation_method="reg").fit(
+                data, "outcome", "unit", "time", "first_treat", covariates=["xc"]
+            )
+        assert np.isfinite(const_only.overall_se)
+        np.testing.assert_allclose(
+            const_only.overall_att, no_cov.overall_att, rtol=1e-12
+        )
+        np.testing.assert_allclose(
+            const_only.overall_se, no_cov.overall_se, rtol=1e-9
+        )
+        for key, cell in const_only.group_time_effects.items():
+            ref = no_cov.group_time_effects[key]
+            np.testing.assert_allclose(cell["effect"], ref["effect"], rtol=1e-12)
+            np.testing.assert_allclose(cell["se"], ref["se"], rtol=1e-9)
+
+    def test_reg_constant_only_covariate_matches_no_covariate_survey(self):
+        """Survey-weighted twin of the constant-only-covariate case: the
+        weighted centered Gram is also rank-0, and the general
+        (survey-branch) producer must likewise collapse to the
+        no-covariate survey fit with finite SEs."""
+        from diff_diff.survey import SurveyDesign
+
+        rng = np.random.default_rng(17)
+        data = generate_staggered_data_with_covariates(seed=789)
+        data["xc"] = 5.0
+        weights = pd.DataFrame(
+            {
+                "unit": data["unit"].unique(),
+                "weight": rng.uniform(0.5, 2.0, size=data["unit"].nunique()),
+            }
+        )
+        data = data.merge(weights, on="unit")
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            no_cov = CallawaySantAnna(estimation_method="reg").fit(
+                data, "outcome", "unit", "time", "first_treat",
+                survey_design=SurveyDesign(weights="weight"),
+            )
+            const_only = CallawaySantAnna(estimation_method="reg").fit(
+                data, "outcome", "unit", "time", "first_treat",
+                covariates=["xc"],
+                survey_design=SurveyDesign(weights="weight"),
+            )
+        assert np.isfinite(const_only.overall_se)
+        np.testing.assert_allclose(
+            const_only.overall_att, no_cov.overall_att, rtol=1e-12
+        )
+        np.testing.assert_allclose(
+            const_only.overall_se, no_cov.overall_se, rtol=1e-9
+        )
+        for key, cell in const_only.group_time_effects.items():
+            ref = no_cov.group_time_effects[key]
+            np.testing.assert_allclose(cell["se"], ref["se"], rtol=1e-9)
 
     def test_uniform_survey_weights_match_unweighted_per_cell_se(self):
         """Uniform survey weights route reg+cov through the general
