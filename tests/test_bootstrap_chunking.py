@@ -566,6 +566,47 @@ class TestCSBootstrapTileInvariance:
         for col in ["se", "conf_int_lower", "conf_int_upper"]:
             np.testing.assert_allclose(t[col].to_numpy(), b[col].to_numpy(), rtol=1e-10, atol=1e-12)
 
+    @staticmethod
+    def _rcs_frame():
+        # Repeated cross sections: every row one observation with a unique unit
+        # id; treatment timing assigned at the observation level (panel=False
+        # contract). The bootstrap then perturbs observation-level IFs through
+        # the same tiled kernel.
+        rng = np.random.default_rng(5)
+        n_obs, n_periods = 600, 6
+        t = rng.integers(1, n_periods + 1, size=n_obs)
+        never = rng.random(n_obs) < 0.4
+        g = np.where(never, 0, rng.choice([3, 5], size=n_obs))
+        treated = (g > 0) & (t >= g)
+        y = 0.2 * t + 2.0 * treated + rng.standard_normal(n_obs)
+        return pd.DataFrame({"unit": np.arange(n_obs), "period": t, "y": y, "first_treat": g})
+
+    def test_rcs_path_tiles_match_single_tile(self, monkeypatch):
+        # panel=False routes observation-level IFs through the same kernel.
+        def fit():
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                return CallawaySantAnna(
+                    estimation_method="reg", panel=False, n_bootstrap=200, seed=42
+                ).fit(
+                    self._rcs_frame(),
+                    "y",
+                    "unit",
+                    "period",
+                    "first_treat",
+                    aggregate="all",
+                )
+
+        base = fit()
+        self._force_one_column_tiles(monkeypatch)
+        tiled = fit()
+
+        assert tiled.overall_se == pytest.approx(base.overall_se, rel=1e-10, abs=1e-12)
+        b = base.to_dataframe().sort_values(["group", "time"]).reset_index(drop=True)
+        t = tiled.to_dataframe().sort_values(["group", "time"]).reset_index(drop=True)
+        for col in ["se", "conf_int_lower", "conf_int_upper"]:
+            np.testing.assert_allclose(t[col].to_numpy(), b[col].to_numpy(), rtol=1e-10, atol=1e-12)
+
 
 def _design(psu=None, strata=None, fpc=None, weights=None, lonely_psu="adjust"):
     """Minimal duck-typed ResolvedSurveyDesign for the survey weight generators."""

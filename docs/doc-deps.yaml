@@ -949,7 +949,7 @@ sources:
       - path: docs/methodology/REGISTRY.md
         section: "Bootstrap, Survey Bootstrap"
         type: methodology
-        note: "Memory-bounded multiplier-bootstrap machinery shared by CallawaySantAnna, EfficientDiD, and HAD: draw-block chunking of weight generation/consumption, plus the fused column-tiled scatter-GEMM perturbation kernel (tiled_if_matmul + ReplayableWeightStream, v3.7 Phase 2). Implementation detail — numerically equivalent (~1 ULP, BLAS reassociation) to the per-column GEMV path; weight stream bit-identical, replayable per column tile."
+        note: "Memory-bounded multiplier-bootstrap machinery: draw-block chunking of weight generation/consumption (shared by CallawaySantAnna, EfficientDiD, and HAD), plus the fused column-tiled scatter-GEMM perturbation kernel (tiled_if_matmul + ReplayableWeightStream, v3.7 Phase 2 — used by CallawaySantAnna and EfficientDiD; HAD consumes whole-matrix GEMMs directly and does not use the tiled kernel). Implementation detail — numerically equivalent (~1 ULP, BLAS reassociation) to the per-column GEMV path; weight stream bit-identical, replayable per column tile."
 
   diff_diff/prep.py:
     drift_risk: low
