@@ -1886,11 +1886,14 @@ class TestDiscreteSaturatedAPI:
                 df, survey_design=SurveyDesign(weights="wt"), **_DKW
             )
 
-    def test_survey_multicohort_percell_zero_support_raises(self):
+    @pytest.mark.parametrize("n_boot", [0, 199])
+    def test_survey_multicohort_percell_zero_support_raises(self, n_boot):
         """A level zero-weighted in ONE cohort's cell (positive globally) -> per-cell guard raises.
 
         The fit-time global positive-weight check passes (cohort 2 keeps dose 2 positive),
-        so the silent-zero can only be caught by the per-(g,t)-cell support check.
+        so the silent-zero can only be caught by the per-(g,t)-cell support check. The guard
+        runs during the initial cell pass, so it fires before inference for both the
+        analytical (n_bootstrap=0) and bootstrap (n_bootstrap>0) paths.
         """
         from diff_diff import SurveyDesign
 
@@ -1901,7 +1904,7 @@ class TestDiscreteSaturatedAPI:
         # Zero cohort-1 units at dose 2.0; cohort-2 dose 2.0 stays positive.
         df.loc[(df["first_treat"] == 1) & (df["dose"] == 2.0), "wt"] = 0.0
         with pytest.raises(ValueError, match="zero effective treated mass|positive survey weight"):
-            ContinuousDiD(treatment_type="discrete", n_bootstrap=0).fit(
+            ContinuousDiD(treatment_type="discrete", n_bootstrap=n_boot, seed=1).fit(
                 df, survey_design=SurveyDesign(weights="wt"), **_DKW
             )
 
