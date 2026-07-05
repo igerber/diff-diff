@@ -4665,7 +4665,12 @@ def _compute_placebo(
         else:
             joiner_avg = float((y_prev[joiner_mask] - y_pre_prev[joiner_mask]).mean())
             stable0_avg = float((y_prev[stable0_mask] - y_pre_prev[stable0_mask]).mean())
-            placebo_plus_t = joiner_avg - stable0_avg
+            # Backward-difference convention (pre-period minus reference,
+            # Y_{t-2} - Y_{t-1}), matching the multi-horizon placebo path
+            # `_compute_multi_horizon_placebos` (`switcher_change - ctrl_avg`
+            # with `Y_bwd - Y_ref`, times switch_direction=+1 for joiners) and
+            # R `did_multiplegt_dyn`. Equivalently `stable0_avg - joiner_avg`.
+            placebo_plus_t = stable0_avg - joiner_avg
 
         # Leavers side: symmetric A11 distinction
         if n_01 == 0:
@@ -4678,7 +4683,10 @@ def _compute_placebo(
         else:
             stable1_avg = float((y_prev[stable1_mask] - y_pre_prev[stable1_mask]).mean())
             leaver_avg = float((y_prev[leaver_mask] - y_pre_prev[leaver_mask]).mean())
-            placebo_minus_t = stable1_avg - leaver_avg
+            # Backward-difference convention times switch_direction=-1 for
+            # leavers (see the joiners-side note above): the multi-horizon path
+            # contributes `leaver_avg - stable1_avg` here.
+            placebo_minus_t = leaver_avg - stable1_avg
 
         placebo_plus_per_t.append(placebo_plus_t)
         placebo_minus_per_t.append(placebo_minus_t)

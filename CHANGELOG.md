@@ -40,6 +40,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `survey_design=SurveyDesign(psu=<cluster_col>)`. No behavior change for unclustered fits.
 
 ### Fixed
+- **Unweighted clustered CR2 / Bell-McCaffrey per-coefficient Satterthwaite DOF no
+  longer returns non-physical values** for high-leverage FE-dummy / collinear nuisance
+  columns. The simple `(tr B)²/tr(B²)` form could produce a garbage DOF there (float64
+  noise in `trace_B2` → up to ~1e61, or a finite-but-inflated value above the cluster
+  count). The unweighted path now carries the same noise-floor guard as the weighted
+  path plus a `DOF ≤ G` (cluster-count) physical bound, NaN-ing those columns with a
+  warning. The treatment / event-study / compound-average contrasts that estimators
+  actually consume are unchanged and match R clubSandwich; this only affects direct
+  `LinearRegression(vcov_type="hc2_bm", cluster_ids=...)` callers reading full
+  per-coefficient DOF vectors.
+- **`ChaisemartinDHaultfoeuille` phase-1 placebo (`DID_M^pl`) point estimate sign
+  corrected.** The single-horizon (`L_max=None`) `placebo_effect` used the opposite
+  (forward) difference order from the multi-horizon placebo path and R
+  `did_multiplegt_dyn`, so it was sign-flipped on pure-direction panels (magnitude was
+  bit-identical). It now uses the backward-difference × switch-direction convention,
+  matching R to working precision on `joiners_only` / `leavers_only`. Mixed-direction
+  panels retain the separately-documented period-vs-cohort control-set deviation. SEs
+  (NaN by design for the single-period placebo) and the multi-horizon placebo path are
+  unaffected.
+- **`HonestDiD(method="smoothness")` now returns a finite FLCI when the estimated
+  identified set is empty**, instead of silently NaN-propagating all inference. When the
+  observed pre-trend's curvature exceeds `M`, the `δ_pre = β_pre`-pinned identified-set LP
+  is infeasible (`lb`/`ub` = NaN) — but the optimal FLCI does not depend on that LP (its
+  worst-case bias is taken over `δ ∈ Δ^SD(M)` treating β as random), so it is well-defined
+  given `(Σ, M)`. R's `HonestDiD::createSensitivityResults` returns the FLCI in exactly this
+  case; previously `fit()` returned all-NaN, so smoothness sensitivity analysis yielded no
+  inference on any event study with non-trivial pre-trend curvature. The FLCI now matches R
+  to ~1e-3 at `M=0`; a known optimizer/center divergence at intermediate `M` (up to ~9% on
+  wide pre/post windows, CI *width* unaffected) is documented in `REGISTRY.md` and deferred.
 - **`CallawaySantAnna` panel reg/ipw standard errors now match `DRDID` /
   R `did` exactly** (point estimates unchanged — the omitted terms are mean-zero,
   which is why ATTs always matched R at ~1e-11 while SEs drifted). Two defects:

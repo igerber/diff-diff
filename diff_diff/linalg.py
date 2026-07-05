@@ -2055,10 +2055,14 @@ def _cr2_bm_dof_inner(
     omega_all = {g: A_g_Xbi[g] @ contrasts for g in unique_clusters}
 
     dof_vec = np.empty(m)
+    # Retain max|B_{g,h}| per contrast so we can NaN-guard noise-floor
+    # degeneracies in a second pass (mirrors `_cr2_bm_dof_inner_weighted`).
+    max_abs_B_arr = np.zeros(m)
     for j in range(m):
         q = Q[:, j]
         trace_B = float(np.sum(q * q))
         trace_B2 = 0.0
+        max_abs_B = 0.0
         omega_cache = {g: omega_all[g][:, j] for g in unique_clusters}
         for g in unique_clusters:
             idx_g = cluster_idx[g]
@@ -2069,7 +2073,84 @@ def _cr2_bm_dof_inner(
                 M_gh = M[np.ix_(idx_g, idx_h)]
                 val = float(omega_g @ M_gh @ omega_h)
                 trace_B2 += val * val
+                if abs(val) > max_abs_B:
+                    max_abs_B = abs(val)
+        max_abs_B_arr[j] = max_abs_B
         dof_vec[j] = (trace_B * trace_B) / trace_B2 if trace_B2 > 0 else np.nan
+
+    # Noise-floor NaN-guard (unweighted analogue of the guard in
+    # `_cr2_bm_dof_inner_weighted`). For a high-leverage FE-dummy / collinear
+    # nuisance column, `trace_B2 = sum_{g,h} B_{g,h}²` collapses to float64
+    # accumulation noise while `trace_B` stays O(1), so `(trace_B)²/trace_B2`
+    # blows up to a non-physical DOF (observed up to ~1e61 on the absorbed-FE
+    # golden). `trace_B2 > 0` alone does not catch this because the roundoff is
+    # positive. The Satterthwaite DOF is scale-invariant, so a contrast whose
+    # `max|B_{g,h}|` sits at the accumulation floor is unreliable and
+    # BLAS-order-dependent; we return NaN with a warning rather than ship it.
+    # Two union-wise criteria:
+    #   1. Batch-relative: a contrast's max|B| is 1e-10× below the largest
+    #      contrast's, i.e. it sits at the accumulation floor relative to a
+    #      well-conditioned column (per-coefficient sweeps, `contrasts=eye(k)`).
+    #      `B_{g,h}` scales as ‖c‖² while the Satterthwaite DOF is scale-invariant,
+    #      so the comparison is done on `max|B| / ‖c‖²` - otherwise the same
+    #      contrast passed at two scales in one batch would spuriously flag the
+    #      smaller copy (‖c‖² differs by the scale²). For `contrasts=eye(k)` every
+    #      `‖c‖²=1`, so this is a no-op on the per-coefficient path.
+    #   2. Absolute (single-contrast safe): max|B| < (EPS·n·k·bread_scale)².
+    #      Calibrated for the O(1)-scale contrasts estimators pass (per-coef unit
+    #      vectors, the averaging-weight compound contrast).
+    # The treatment / event-study / compound-average contrasts that estimators
+    # actually consume are well-conditioned and unaffected.
+    _EPS = np.finfo(np.float64).eps
+    n_obs, k_X = X.shape
+    bread_scale = float(np.max(np.abs(bread_inv))) if bread_inv.size else 1.0
+    abs_noise_floor = (_EPS * n_obs * k_X * max(bread_scale, 1.0)) ** 2
+    abs_degenerate = max_abs_B_arr < abs_noise_floor
+    if m > 1:
+        contrast_sq_norm = np.einsum("ij,ij->j", contrasts, contrasts)
+        contrast_sq_norm = np.where(contrast_sq_norm > 0, contrast_sq_norm, 1.0)
+        scaled_max_B = max_abs_B_arr / contrast_sq_norm
+        max_scaled_overall = float(np.max(scaled_max_B))
+        rel_degenerate = (
+            scaled_max_B < 1e-10 * max_scaled_overall
+            if max_scaled_overall > 0
+            else np.zeros(m, dtype=bool)
+        )
+    else:
+        rel_degenerate = np.zeros(m, dtype=bool)
+    at_noise_floor = abs_degenerate | rel_degenerate
+    # Physical-bound guard. The Bell-McCaffrey Satterthwaite DOF is
+    # `(tr B)²/tr(B²)` with `B` PSD and cluster-structured, so it is bounded by
+    # `rank(B) <= G` (the number of clusters) - it can approach G when clusters
+    # are small (few obs each), so the bound is G, NOT the residual dof `n-k`
+    # (which can be smaller than G and would wrongly flag legitimate near-G
+    # DOFs on short panels). A value above G is non-physical. The simple
+    # unweighted `(tr B)²/tr(B²)` form is numerically less faithful than
+    # clubSandwich's P-array form (used on the weighted path) for high-leverage
+    # FE-dummy columns and can return a finite-but-inflated DOF there (observed
+    # ~32.7 and ~16.3 vs R's 6 and 3 on the absorbed-FE golden, G=8) that is NOT
+    # at the noise floor. Rather than ship an impossible DOF we NaN it; exact
+    # clubSandwich reproduction of these non-user-facing nuisance DOFs would
+    # require porting the P-array form and is out of scope (estimators consume
+    # only the well-conditioned treatment / event-study / compound-average
+    # contrasts, which are unaffected).
+    n_clusters = len(unique_clusters)
+    non_physical = np.isfinite(dof_vec) & (dof_vec > n_clusters + 1e-6)
+    degenerate = at_noise_floor | non_physical
+    n_degenerate = int(np.sum(degenerate))
+    if n_degenerate > 0:
+        dof_vec[degenerate] = np.nan
+        warnings.warn(
+            f"Satterthwaite DOF for {n_degenerate} of {m} contrast(s) is "
+            f"unreliable (at the float64 noise floor, or above the cluster-count "
+            f"bound G={n_clusters}); reporting NaN. This affects high-leverage "
+            f"FE-dummy / collinear nuisance coefficients; the resulting DOF is "
+            f"BLAS-order-dependent / non-physical. The coefficient SEs remain "
+            f"valid — only the Satterthwaite DOF (and any t-test / CI depending "
+            f"on it) is suppressed.",
+            UserWarning,
+            stacklevel=3,
+        )
 
     return dof_vec
 

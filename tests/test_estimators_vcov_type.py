@@ -1559,6 +1559,109 @@ class TestDiDAbsorbedFERParity:
         # standalone field on DiDResults; the SE+ATT parity above suffices).
         _ = expected_dof_slope
 
+    def test_unweighted_cr2_bm_per_coef_dof_no_nonphysical(self):
+        """Unweighted clustered CR2-BM per-coef DOF: physical or NaN, never garbage.
+
+        Direct `_compute_cr2_bm_contrast_dof(..., weights=None)` on the full-dummy
+        absorbed-FE design. The well-conditioned contrasts estimators actually
+        consume (`treat_post`, the period dummies) match R clubSandwich; the
+        high-leverage FE-dummy / intercept nuisance columns previously returned
+        non-physical DOF (~1e61 from float64-noise `trace_B2`, and ~32.7 / ~16.3
+        vs R's 6 / 3 from the simple `(tr B)²/tr(B²)` form). The noise-floor +
+        cluster-count (`DOF <= G`) guards now NaN those instead of shipping them.
+        """
+        import numpy as np
+
+        from diff_diff.linalg import _compute_cr2_bm_contrast_dof
+
+        d = self._load_golden()
+        names = d["coef_names"]
+        n = len(d["y"])
+        treated = np.asarray(d["treated"], dtype=float)
+        post = np.asarray(d["post"], dtype=float)
+        unit = np.asarray(d["unit"])
+        period = np.asarray(d["period"])
+        tp = treated * post
+
+        def _col(nm):
+            if nm == "(Intercept)":
+                return np.ones(n)
+            if nm == "treat_post":
+                return tp
+            if nm.startswith("period"):
+                return (period == int(nm[len("period") :])).astype(float)
+            if nm.startswith("unit"):
+                return (unit == int(nm[len("unit") :])).astype(float)
+            return np.zeros(n)
+
+        X = np.column_stack([_col(nm) for nm in names])
+        k = X.shape[1]
+        G = len(np.unique(unit))
+        gold = d["dof_cr2"]
+
+        with pytest.warns(UserWarning, match="noise floor|cluster-count"):
+            dof = _compute_cr2_bm_contrast_dof(X, unit, X.T @ X, np.eye(k), weights=None)
+
+        # No finite DOF exceeds the cluster count (rigorous Satterthwaite bound).
+        finite = np.isfinite(dof)
+        assert np.all(dof[finite] <= G + 1e-6), (
+            f"non-physical DOF (> G={G}): "
+            f"{[(names[i], dof[i]) for i in range(k) if finite[i] and dof[i] > G + 1e-6]}"
+        )
+        # The user-facing / well-conditioned contrasts still match R clubSandwich.
+        for nm in ["treat_post", "period2", "period3", "period4"]:
+            i = names.index(nm)
+            assert dof[i] == pytest.approx(float(gold[i]), abs=1e-6), f"{nm} DOF vs R"
+        # The high-leverage nuisance columns are suppressed to NaN, not garbage.
+        assert np.isnan(dof[names.index("unit2")]), "collinear unit dummy DOF should be NaN"
+
+    def test_unweighted_cr2_bm_dof_scale_invariant_batch(self):
+        """The batch-relative noise-floor guard is contrast-scale invariant.
+
+        Satterthwaite DOF is scale-invariant, but the guard statistic `max|B|`
+        scales as ‖c‖². The batch-relative floor divides by ‖c‖² so the same
+        contrast passed at two scales in one batch yields identical finite DOF -
+        without the normalization the smaller-scale copy would be spuriously
+        NaN'd (its `max|B|` sits `scale²` below the larger copy's).
+        """
+        import numpy as np
+
+        from diff_diff.linalg import _compute_cr2_bm_contrast_dof
+
+        d = self._load_golden()
+        names = d["coef_names"]
+        n = len(d["y"])
+        treated = np.asarray(d["treated"], dtype=float)
+        post = np.asarray(d["post"], dtype=float)
+        unit = np.asarray(d["unit"])
+        X = np.column_stack(
+            [np.ones(n) if nm == "(Intercept)" else np.zeros(n) for nm in names]
+        )
+        # Rebuild the full design (same as the sibling test).
+        period = np.asarray(d["period"])
+        tp = treated * post
+        for j, nm in enumerate(names):
+            if nm == "treat_post":
+                X[:, j] = tp
+            elif nm.startswith("period"):
+                X[:, j] = (period == int(nm[len("period") :])).astype(float)
+            elif nm.startswith("unit"):
+                X[:, j] = (unit == int(nm[len("unit") :])).astype(float)
+        k = X.shape[1]
+        c = np.zeros(k)
+        c[names.index("treat_post")] = 1.0
+        # Same contrast direction at scale 1 and 1e6 in a single batch. Both are
+        # the well-conditioned treatment contrast, so neither is degenerate and no
+        # warning fires (the guard must not spuriously flag the smaller-scale copy).
+        contrasts = np.column_stack([c, 1e6 * c])
+        import warnings as _warnings
+
+        with _warnings.catch_warnings():
+            _warnings.simplefilter("error")  # any noise-floor warning here is a bug
+            dof = _compute_cr2_bm_contrast_dof(X, unit, X.T @ X, contrasts, weights=None)
+        assert np.all(np.isfinite(dof)), f"scale-only difference should not NaN: {dof}"
+        assert dof[0] == pytest.approx(dof[1], rel=1e-12), "DOF must be scale-invariant"
+
     def test_absorb_hc2_matches_sandwich_vcovhc(self):
         """`absorb=` + `hc2` matches `lm() + sandwich::vcovHC(type="HC2")`.
 

@@ -411,11 +411,20 @@ class TestOptimalFLCI:
             f"Infeasible LP should return NaN, got [{lb}, {ub}]"
         )
 
-    def test_infeasible_smoothness_fit_returns_nan_ci(self):
-        """Fit-level: infeasible smoothness restriction returns NaN CI."""
+    def test_infeasible_smoothness_fit_returns_flci_with_empty_idset(self):
+        """Fit-level: an empty ESTIMATED identified set still yields a finite FLCI.
+
+        When the observed pre-trend's curvature exceeds M, the identified-set LP
+        (which pins delta_pre = beta_pre) is infeasible, so ``lb``/``ub`` are NaN.
+        The FLCI does not depend on that LP - it is an affine estimator whose
+        worst-case bias is taken over delta in Delta^SD(M) treating beta as random,
+        so it is well-defined given (sigma, M). R's ``HonestDiD::createSensitivityResults``
+        returns the FLCI in exactly this case, and so do we (previously the fit
+        NaN-propagated the whole result, silently yielding no inference).
+        """
         from diff_diff.results import MultiPeriodDiDResults, PeriodEffect
 
-        # Non-linear pre-trends: inconsistent with Delta^SD(M=0.01)
+        # Non-linear pre-trends: inconsistent with Delta^SD(M=0.0)
         period_effects = {
             1: PeriodEffect(period=1, effect=1.0, se=0.1, t_stat=10.0,
                            p_value=0.0, conf_int=(0.8, 1.2)),
@@ -436,13 +445,18 @@ class TestOptimalFLCI:
 
         honest = HonestDiD(method="smoothness", M=0.0)
         r = honest.fit(results)
-        # Non-linear pre-trends should make M=0 infeasible
-        assert np.isnan(r.lb) and np.isnan(r.ub), f"Expected NaN bounds, got [{r.lb}, {r.ub}]"
-        assert np.isnan(r.ci_lb) and np.isnan(r.ci_ub), f"Expected NaN CI, got [{r.ci_lb}, {r.ci_ub}]"
-        # NaN CIs must NOT be classified as significant
-        assert not r.is_significant, "NaN CI should not be significant"
-        assert r.significance_stars == "", "NaN CI should have no significance stars"
-        assert "undefined" in repr(r).lower(), "NaN CI repr should indicate undefined"
+        # Estimated identified set is empty -> NaN bounds ...
+        assert np.isnan(r.lb) and np.isnan(r.ub), f"Expected NaN id-set bounds, got [{r.lb}, {r.ub}]"
+        # ... but the FLCI is finite and matches R createSensitivityResults(M=0):
+        # [2.082644, 2.488866] (verified against HonestDiD 0.2.6).
+        assert np.isfinite(r.ci_lb) and np.isfinite(r.ci_ub), (
+            f"Expected finite FLCI, got [{r.ci_lb}, {r.ci_ub}]"
+        )
+        assert abs(r.ci_lb - 2.082644) < 1e-3, f"ci_lb={r.ci_lb:.6f} vs R 2.082644"
+        assert abs(r.ci_ub - 2.488866) < 1e-3, f"ci_ub={r.ci_ub:.6f} vs R 2.488866"
+        # Finite CI excluding 0 -> significant, with a star.
+        assert r.is_significant, "CI [2.08, 2.49] excludes 0 -> significant"
+        assert r.significance_stars == "*"
 
     def test_smoothness_df_survey_zero_returns_nan(self):
         """Smoothness with df_survey=0 should return NaN CI."""
@@ -457,6 +471,36 @@ class TestOptimalFLCI:
             beta_pre, beta_post, sigma, np.array([1.0]), 2, 1, M=0.5, df=0
         )
         assert np.isnan(ci_lb) and np.isnan(ci_ub), "df=0 should give NaN CI"
+
+    def test_smoothness_flci_finite_across_M_grid_and_matches_r_at_zero(self):
+        """Smoothness FLCI is finite across an M grid; tight R parity at M=0.
+
+        Regression guard for the identified-set NaN-gate bug: an empty estimated
+        identified set must not suppress the FLCI (previously it did). The FLCI must
+        stay finite for every M. At M=0 the affine-estimator optimum is unambiguous
+        and matches R ``createSensitivityResults`` to <1e-3; at intermediate M there
+        is a known optimizer/center divergence from R (up to ~9% on wide pre/post
+        windows, CI width unaffected; see REGISTRY.md and TODO.md), so this test only
+        pins finiteness there.
+        """
+        from diff_diff.honest_did import _compute_optimal_flci
+
+        beta_pre = np.array([1.0, 0.0, 1.0])
+        beta_post = np.array([2.0])
+        sigma = np.eye(4) * 0.01
+        lvec = np.array([1.0])
+        for M in [0.0, 0.01, 0.02, 0.05, 0.1]:
+            ci_lb, ci_ub = _compute_optimal_flci(
+                beta_pre, beta_post, sigma, lvec, 3, 1, M=M, df=None
+            )
+            assert np.isfinite(ci_lb) and np.isfinite(ci_ub), f"M={M}: non-finite FLCI"
+            assert ci_ub > ci_lb, f"M={M}: degenerate CI"
+        # M=0: tight R parity (R HonestDiD 0.2.6: [2.082644, 2.488866]).
+        ci_lb, ci_ub = _compute_optimal_flci(
+            beta_pre, beta_post, sigma, lvec, 3, 1, M=0.0, df=None
+        )
+        assert abs(ci_lb - 2.082644) < 1e-3, f"M=0 ci_lb={ci_lb:.6f} vs R 2.082644"
+        assert abs(ci_ub - 2.488866) < 1e-3, f"M=0 ci_ub={ci_ub:.6f} vs R 2.488866"
 
 
 # =============================================================================

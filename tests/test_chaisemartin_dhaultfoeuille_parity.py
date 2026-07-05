@@ -174,6 +174,10 @@ class TestDCDHDynRParity:
         assert results.overall_se == pytest.approx(
             r_results["overall_se"], rel=self.PURE_DIRECTION_SE_RTOL
         )
+        # Phase-1 placebo DID_M^pl point estimate: backward-difference x
+        # switch_direction convention (matches the multi-horizon placebo path
+        # and R). On pure-direction panels this equals R to working precision.
+        assert results.placebo_effect == pytest.approx(r_results["placebo_effect"], abs=1e-8)
 
     def test_parity_leavers_only(self, golden_values):
         scenario = golden_values.get("leavers_only")
@@ -187,6 +191,9 @@ class TestDCDHDynRParity:
         assert results.overall_se == pytest.approx(
             r_results["overall_se"], rel=self.PURE_DIRECTION_SE_RTOL
         )
+        # Phase-1 placebo point estimate matches R on pure-direction panels
+        # (leavers side: switch_direction = -1). Guards the sign convention.
+        assert results.placebo_effect == pytest.approx(r_results["placebo_effect"], abs=1e-8)
 
     def test_parity_mixed_single_switch(self, golden_values):
         scenario = golden_values.get("mixed_single_switch")

@@ -2466,14 +2466,20 @@ class HonestDiD:
         # Construct constraints
         A_ineq, b_ineq = _construct_constraints_sd(num_pre, num_post, M)
 
-        # Solve for identified set bounds with delta_pre = beta_pre pinned
+        # Solve for the identified set bounds with delta_pre = beta_pre pinned.
+        # When the observed pre-trend's own curvature exceeds M this LP is
+        # infeasible and the ESTIMATED identified set is empty (lb/ub = NaN) - the
+        # point estimate rejects Delta^SD(M). That does NOT invalidate the FLCI: the
+        # optimal FLCI is an affine estimator whose worst-case bias is taken over
+        # delta in Delta^SD(M) treating beta as random, so it is well-defined given
+        # (sigma, M) regardless of whether the realized beta_pre lies in Delta. R's
+        # HonestDiD::createSensitivityResults returns the FLCI in exactly this case,
+        # so we compute and return it (leaving lb/ub = NaN to flag the empty
+        # estimated id-set) rather than NaN-propagating the whole result.
         lb, ub = _solve_bounds_lp(beta_pre, beta_post, l_vec, A_ineq, b_ineq, num_pre)
 
-        # Propagate infeasibility: if bounds are NaN, CI is NaN too
-        if np.isnan(lb) or np.isnan(ub):
-            return np.nan, np.nan, np.nan, np.nan
-
-        # Compute optimal FLCI (Rambachan & Roth Section 4.1)
+        # Compute optimal FLCI (Rambachan & Roth Section 4.1) - independent of the
+        # identified-set LP above.
         if sigma_full.shape[0] == num_pre + num_post:
             ci_lb, ci_ub = _compute_optimal_flci(
                 beta_pre,
@@ -2487,7 +2493,12 @@ class HonestDiD:
                 df=df,
             )
         else:
-            # Fallback to naive FLCI when full sigma unavailable
+            # The naive fallback FLCI extends the identified set by z*se, so it
+            # genuinely needs finite id-set bounds; when the LP was infeasible the
+            # naive CI is undefined (this branch is only reachable without the full
+            # covariance matrix).
+            if np.isnan(lb) or np.isnan(ub):
+                return lb, ub, np.nan, np.nan
             se = np.sqrt(l_vec @ sigma_post @ l_vec)
             ci_lb, ci_ub = _compute_flci(lb, ub, se, self.alpha, df=df)
 
