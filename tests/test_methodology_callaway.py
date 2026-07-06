@@ -331,6 +331,98 @@ class TestDoublyRobustEstimator:
             f"Estimation methods differ by {max_diff}: reg={atts[0]}, ipw={atts[1]}, dr={atts[2]}"
 
 
+class TestDRNoCovariateSEUniformity:
+    """Without covariates, doubly-robust reduces to difference in means, so its
+    per-(g,t) SE must be the same influence-function form (``sqrt(sum(phi^2))``)
+    used by the reg/ipw branches and R's ``DRDID::drdid_panel`` — not the ddof=1
+    plug-in ``sqrt(var_t/n_t + var_c/n_c)`` it historically used (O(1/n) from R).
+    Point estimates and aggregated SEs are unchanged because the same IF already
+    fed aggregation."""
+
+    @staticmethod
+    def _fit(data, method, aggregate=None):
+        cs = CallawaySantAnna(estimation_method=method, n_bootstrap=0)
+        return cs.fit(
+            data,
+            outcome="outcome",
+            unit="unit",
+            time="period",
+            first_treat="first_treat",
+            aggregate=aggregate,
+        )
+
+    def test_dr_reg_per_cell_se_identical(self):
+        """dr and reg produce bit-identical per-cell effect AND SE without covariates."""
+        data = generate_staggered_data(n_units=120, n_periods=6, never_treated_frac=0.3, seed=7)
+        reg = self._fit(data, "reg")
+        dr = self._fit(data, "dr")
+
+        assert set(reg.group_time_effects) == set(dr.group_time_effects)
+        compared = 0
+        for key, reg_cell in reg.group_time_effects.items():
+            dr_cell = dr.group_time_effects[key]
+            if not np.isfinite(reg_cell["se"]):
+                assert not np.isfinite(dr_cell["se"])
+                continue
+            # Both point AND SE match to machine precision (pre-fix the SE gapped
+            # ~1.3% via the ddof=1 plug-in; the effect always matched).
+            np.testing.assert_allclose(dr_cell["effect"], reg_cell["effect"], rtol=0, atol=1e-12)
+            np.testing.assert_allclose(dr_cell["se"], reg_cell["se"], rtol=0, atol=1e-12)
+            compared += 1
+        assert compared >= 3, f"expected several finite cells to compare, got {compared}"
+
+    def test_dr_no_cov_per_cell_se_hand_calc(self):
+        """Per-cell dr SE equals the IF form sqrt(sum(phi^2)) and is strictly
+        tighter than the old ddof=1 plug-in it replaced."""
+        # 2-period panel: base = period 1, post = period 2; cohort g=2 vs
+        # never-treated (first_treat=0). One estimated cell: (g=2, t=2).
+        treated_y = {1: (1.0, 3.0), 2: (2.0, 5.0), 3: (0.0, 1.0), 4: (1.0, 5.0)}
+        control_y = {5: (0.0, 0.5), 6: (1.0, 1.0), 7: (2.0, 3.0), 8: (0.0, 1.5)}
+        rows = []
+        for u, (y1, y2) in treated_y.items():
+            rows += [(u, 1, y1, 2), (u, 2, y2, 2)]
+        for u, (y1, y2) in control_y.items():
+            rows += [(u, 1, y1, 0), (u, 2, y2, 0)]
+        data = pd.DataFrame(rows, columns=["unit", "period", "outcome", "first_treat"])
+
+        res = self._fit(data, "dr")
+        cell = res.group_time_effects[(2, 2)]
+
+        tc = np.array([y2 - y1 for (y1, y2) in treated_y.values()])
+        cc = np.array([y2 - y1 for (y1, y2) in control_y.values()])
+        n_t, n_c = len(tc), len(cc)
+        exp_att = tc.mean() - cc.mean()
+        exp_se = np.sqrt(
+            np.sum((tc - tc.mean()) ** 2) / n_t**2 + np.sum((cc - cc.mean()) ** 2) / n_c**2
+        )
+        old_plugin = np.sqrt(np.var(tc, ddof=1) / n_t + np.var(cc, ddof=1) / n_c)
+
+        assert cell["effect"] == pytest.approx(exp_att, abs=1e-12)
+        assert cell["se"] == pytest.approx(exp_se, abs=1e-12)
+        # Direction sentinel: the IF-based SE is strictly smaller than the plug-in
+        # the fix removed (reintroducing the plug-in would trip this).
+        assert cell["se"] < old_plugin
+
+    def test_dr_no_cov_aggregated_se_matches_reg(self):
+        """Overall and event-study SEs are identical between dr and reg (both
+        consume the same per-cell IF) — guards against an accidental IF change."""
+        data = generate_staggered_data(n_units=120, n_periods=6, never_treated_frac=0.3, seed=11)
+        reg = self._fit(data, "reg", aggregate="event_study")
+        dr = self._fit(data, "dr", aggregate="event_study")
+
+        np.testing.assert_allclose(dr.overall_att, reg.overall_att, rtol=0, atol=1e-12)
+        np.testing.assert_allclose(dr.overall_se, reg.overall_se, rtol=0, atol=1e-12)
+
+        assert reg.event_study_effects is not None and dr.event_study_effects is not None
+        assert set(reg.event_study_effects) == set(dr.event_study_effects)
+        for e, reg_es in reg.event_study_effects.items():
+            dr_es = dr.event_study_effects[e]
+            if np.isnan(reg_es["se"]):
+                assert np.isnan(dr_es["se"])
+            else:
+                np.testing.assert_allclose(dr_es["se"], reg_es["se"], rtol=0, atol=1e-12)
+
+
 # =============================================================================
 # Phase 2: R Benchmark Comparison Tests
 # =============================================================================

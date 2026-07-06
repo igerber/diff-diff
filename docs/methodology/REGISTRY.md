@@ -540,8 +540,13 @@ Aggregations:
   unchanged. Residual deviations kept: propensity scores are CLIPPED at
   `pscore_trim` (R drops at `trim.level=0.995`; differs only at extreme propensities);
   no-covariate ipw is treated as unconditional (R fits an intercept-only logit whose
-  estimation effect is identically zero in the IF, so this is presentation-only);
-  DR's no-covariate per-cell SE keeps its ddof=1 plug-in (O(1/n) from R; TODO row).
+  estimation effect is identically zero in the IF, so this is presentation-only).
+  DR's no-covariate per-cell SE now also uses the IF-based `sqrt(sum(phi^2))` form (it
+  had lagged on the ddof=1 plug-in `sqrt(var_t/n_t + var_c/n_c)`, O(1/n) from R): without
+  covariates DR reduces to difference in means, so its per-cell SE is now bit-identical to
+  the no-covariate reg path and matches R's analytical SE — point estimates and aggregated
+  SEs are unchanged, since the same IF already fed aggregation
+  (`tests/test_methodology_callaway.py::TestDRNoCovariateSEUniformity`).
   Side effect: reg/ipw fits with collinear covariates now route their IF breads
   through the rank-guarded inverse and fire the same aggregate warning as dr.
   Rank-0 semantics of the reg CENTERED Gram: because the intercept direction is

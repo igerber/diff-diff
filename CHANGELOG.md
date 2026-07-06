@@ -209,6 +209,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   supersedes it.
 
 ### Changed
+- **`CallawaySantAnna` no-covariate `estimation_method="dr"` per-cell SE is now
+  influence-function-based** (`sqrt(sum(phi^2))`), matching the `reg`/`ipw` branches and R's
+  `DRDID::drdid_panel`. It was the last per-cell SE on the ddof=1 plug-in
+  `sqrt(var_t/n_t + var_c/n_c)`, which deviated by O(1/n) (and `dr` is the default method, so a
+  plain no-covariate fit was affected). Without covariates DR reduces to difference in means, so
+  the per-cell SE is now bit-identical to the `reg` path. Point estimates, aggregated SEs, and
+  event-study SEs are unchanged — the same influence function already fed aggregation.
 - **`EfficientDiD` analytical covariate path rewritten as a fused unit-tiled GEMM pass**
   (kernel-covariance tables with `(t_pre_j, t_pre_k)` dedup, per-group kernel matrices reused
   across all `(g,t)` cells, batched ridge solves replacing the per-unit SVD + pseudoinverse loop;

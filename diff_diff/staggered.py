@@ -3457,17 +3457,27 @@ class CallawaySantAnna(
                     else 0.0
                 )
             else:
-                att = float(np.mean(treated_change) - np.mean(control_change))
+                mu_t = float(np.mean(treated_change))
+                mu_c = float(np.mean(control_change))
+                att = mu_t - mu_c
 
-                var_t = np.var(treated_change, ddof=1) if n_t > 1 else 0.0
-                var_c = np.var(control_change, ddof=1) if n_c > 1 else 0.0
+                # Influence function for the DR estimator; without covariates DR
+                # reduces to difference in means, so the IF matches the vectorized
+                # no-covariate regression path (_compute_all_att_gt_vectorized).
+                inf_treated = (treated_change - mu_t) / n_t
+                inf_control = -(control_change - mu_c) / n_c
+                inf_func = np.concatenate([inf_treated, inf_control])
 
-                se = float(np.sqrt(var_t / n_t + var_c / n_c)) if (n_t > 0 and n_c > 0) else 0.0
-
-                # Influence function for DR estimator
-                inf_treated = (treated_change - np.mean(treated_change)) / n_t
-                inf_control = (control_change - np.mean(control_change)) / n_c
-                inf_func = np.concatenate([inf_treated, -inf_control])
+                # SE from the same IF that feeds aggregation (DRDID
+                # reg_did_panel/drdid_panel convention sqrt(sum(phi^2))). The
+                # prior ddof=1 plug-in sqrt(var_t/n_t + var_c/n_c) deviated from
+                # R by O(1/n) and from the reg/ipw/DR-covariate branches; the
+                # aggregation and bootstrap already consumed this same IF.
+                se = (
+                    float(np.sqrt(np.sum(inf_treated**2) + np.sum(inf_control**2)))
+                    if (n_t > 0 and n_c > 0)
+                    else 0.0
+                )
 
         return att, se, inf_func
 
