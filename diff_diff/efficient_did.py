@@ -33,6 +33,9 @@ from diff_diff.efficient_did_bootstrap import (
     EfficientDiDBootstrapMixin,
 )
 from diff_diff.efficient_did_covariates import (
+    OMEGA_RIDGE_DEFAULT,
+    _silverman_bandwidth,
+    compute_conditional_cells_tiled,
     compute_eif_cov,
     compute_generated_outcomes_cov,
     compute_omega_star_conditional,
@@ -43,6 +46,7 @@ from diff_diff.efficient_did_covariates import (
 )
 from diff_diff.efficient_did_results import EfficientDiDResults, HausmanPretestResult
 from diff_diff.efficient_did_weights import (
+    _omega_star_nocov_gram,
     compute_efficient_weights,
     compute_eif_nocov,
     compute_generated_outcomes_nocov,
@@ -284,6 +288,18 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
     kernel_bandwidth : float or None
         Bandwidth for Gaussian kernel in conditional Omega* estimation.
         None = Silverman's rule-of-thumb (automatic).
+    omega_ridge : float, default ``OMEGA_RIDGE_DEFAULT`` (1e-6)
+        Relative ridge for the Omega* inversion behind the efficient
+        weights: solves ``(Omega* + omega_ridge * max(trace/H, 0) * I) x = 1``
+        instead of inverting the numerically singular Omega* that PT-All's
+        telescoping overidentified moments produce. Stabilizes per-cell
+        ATT(g,t) against floating-point-level input/BLAS changes (1-ulp
+        stability ~1e-9 vs ~1e-4 for the legacy pseudoinverse) without
+        changing overall-ATT bias/RMSE/coverage (see REGISTRY.md).
+        ``omega_ridge=0`` restores the exact legacy inv/pinv code path
+        bit-for-bit - including its per-cell condition-number warnings and
+        the slow O(n^2 H^2) conditional-Omega* loops, so expect the legacy
+        runtime as well.
 
     Examples
     --------
@@ -309,6 +325,7 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
         sieve_criterion: str = "bic",
         ratio_clip: float = 20.0,
         kernel_bandwidth: Optional[float] = None,
+        omega_ridge: float = OMEGA_RIDGE_DEFAULT,
     ):
         self.pt_assumption = pt_assumption
         self.alpha = alpha
@@ -323,6 +340,7 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
         self.sieve_criterion = sieve_criterion
         self.ratio_clip = ratio_clip
         self.kernel_bandwidth = kernel_bandwidth
+        self.omega_ridge = omega_ridge
         self.is_fitted_ = False
         self.results_: Optional[EfficientDiDResults] = None
         self._unit_resolved_survey = None
@@ -361,6 +379,11 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
                     f"sieve_k_max must be a positive integer (or None for auto), "
                     f"got {self.sieve_k_max}"
                 )
+        if not (np.isfinite(self.omega_ridge) and self.omega_ridge >= 0):
+            raise ValueError(
+                f"omega_ridge must be finite and >= 0 (0 = legacy inv/pinv path), "
+                f"got {self.omega_ridge}"
+            )
         self._validate_vcov_type(self.vcov_type)
 
     @staticmethod
@@ -424,6 +447,7 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
             "sieve_criterion": self.sieve_criterion,
             "ratio_clip": self.ratio_clip,
             "kernel_bandwidth": self.kernel_bandwidth,
+            "omega_ridge": self.omega_ridge,
         }
 
     def set_params(self, **params: Any) -> "EfficientDiD":
@@ -819,6 +843,36 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
         eif_by_gt: Dict[Tuple[Any, Any], np.ndarray] = {}
         stored_weights: Dict[Tuple[Any, Any], np.ndarray] = {}
         stored_cond: Dict[Tuple[Any, Any], float] = {}
+        # Ridge path: ill-conditioned cells consolidate into ONE fit-level
+        # warning (legacy omega_ridge=0 keeps the per-cell pinv warnings).
+        _ill_conditioned_cells: List[Tuple[Any, Any, float]] = []
+        # Ridge-path covariate cells are deferred to a fused unit-tiled pass 2
+        # (compute_conditional_cells_tiled) after the sieve caches are fully
+        # populated; each deferred cell holds an order-preserving placeholder
+        # in group_time_effects until finalization.
+        _cond_cell_specs: List[Dict[str, Any]] = []
+
+        def _finalize_cell(g: Any, att_gt: float, eif_vals: np.ndarray) -> Dict[str, Any]:
+            """Per-cell SE + inference record, shared by the inline and
+            deferred (pass-2) paths.
+
+            Analytical SE = sqrt(mean(EIF^2) / n)  [paper p.21]; with survey:
+            TSL variance via compute_survey_vcov.
+            """
+            if self._unit_resolved_survey is not None:
+                se_gt = self._compute_survey_eif_se(eif_vals)
+            else:
+                se_gt = _compute_se_from_eif(eif_vals, n_units, unit_cluster_indices, n_clusters)
+            t_stat, p_val, ci = safe_inference(att_gt, se_gt, alpha=self.alpha, df=self._survey_df)
+            return {
+                "effect": att_gt,
+                "se": se_gt,
+                "t_stat": t_stat,
+                "p_value": p_val,
+                "conf_int": ci,
+                "n_treated": n_treated_per_g[g],
+                "n_control": n_control_count,
+            }
 
         for g in treatment_groups:
             # Under PT-Post, use per-group baseline Y_{g-1-anticipation}
@@ -881,6 +935,21 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
                         )
                         > 0
                     ]
+
+                # Ridge path: drop the degenerate same-cohort self-pair
+                # (g' = g, t_pre = t), which arises only for PRE-treatment
+                # cells (t < g). Its generated outcome telescopes to 0 = 0
+                # identically (zero-information moment; the exact-null
+                # direction of Omega*). The legacy pseudoinverse truncates
+                # that direction, spreading weight over noisy moments; a
+                # ridge would instead load ~all weight on the zero-variance
+                # moment, collapsing pre-treatment placebos to a
+                # deterministic 0 and silently disabling the pre-trend
+                # diagnostic. Dropping the pair restores data-driven
+                # placebos. NOT applied at omega_ridge=0 (bit-identical
+                # legacy behavior).
+                if self.omega_ridge > 0 and pairs:
+                    pairs = [(gp, tpre) for gp, tpre in pairs if not (gp == g and tpre == t)]
 
                 if not pairs:
                     warnings.warn(
@@ -957,6 +1026,41 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
                                     basis_cache=sieve_basis_cache,
                                 )
 
+                    # Inverse propensity estimation (algorithm step 4)
+                    # s_hat_{g'}(X) = 1/p_{g'}(X) for Eq 3.12 scaling.
+                    # Populated BEFORE the ridge-path deferral so pass 2 sees
+                    # complete caches (order swap vs the legacy sequence is
+                    # inert: gen_out does not consume s_hat and vice versa).
+                    for group_id in {g, np.inf} | {gp for gp, _ in pairs}:
+                        if group_id not in s_hat_cache:
+                            group_mask_s = (
+                                never_treated_mask if np.isinf(group_id) else cohort_masks[group_id]
+                            )
+                            s_hat_cache[group_id] = estimate_inverse_propensity_sieve(
+                                covariate_matrix,
+                                group_mask_s,
+                                k_max=self.sieve_k_max,
+                                criterion=self.sieve_criterion,
+                                unit_weights=unit_level_weights,
+                                basis_cache=sieve_basis_cache,
+                            )
+
+                    if self.omega_ridge > 0:
+                        # Fused tiled GEMM path: defer omega/weights/EIF to
+                        # pass 2; placeholder preserves results ordering.
+                        _cond_cell_specs.append(
+                            {
+                                "g": g,
+                                "t": t,
+                                "pairs": pairs,
+                                "t_col": t_col_val,
+                                "y1_col": effective_p1_col,
+                            }
+                        )
+                        group_time_effects[(g, t)] = None  # type: ignore[assignment]
+                        continue
+
+                    # ----- Legacy (omega_ridge=0) covariate path -----
                     # Per-unit DR generated outcomes: shape (n_units, H)
                     gen_out = compute_generated_outcomes_cov(
                         target_g=g,
@@ -973,22 +1077,6 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
                     )
 
                     y_hat = np.mean(gen_out, axis=0)  # shape (H,)
-
-                    # Inverse propensity estimation (algorithm step 4)
-                    # s_hat_{g'}(X) = 1/p_{g'}(X) for Eq 3.12 scaling
-                    for group_id in {g, np.inf} | {gp for gp, _ in pairs}:
-                        if group_id not in s_hat_cache:
-                            group_mask_s = (
-                                never_treated_mask if np.isinf(group_id) else cohort_masks[group_id]
-                            )
-                            s_hat_cache[group_id] = estimate_inverse_propensity_sieve(
-                                covariate_matrix,
-                                group_mask_s,
-                                k_max=self.sieve_k_max,
-                                criterion=self.sieve_criterion,
-                                unit_weights=unit_level_weights,
-                                basis_cache=sieve_basis_cache,
-                            )
 
                     # Conditional Omega*(X) with per-unit propensities (Eq 3.12)
                     omega_cond = compute_omega_star_conditional(
@@ -1008,7 +1096,7 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
                     )
 
                     # Per-unit weights: (n_units, H)
-                    per_unit_w = compute_per_unit_weights(omega_cond)
+                    per_unit_w = compute_per_unit_weights(omega_cond, omega_ridge=self.omega_ridge)
 
                     # ATT = (survey-)weighted mean of per-unit DR scores
                     if per_unit_w.shape[1] > 0:
@@ -1025,8 +1113,14 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
                     eif_vals = compute_eif_cov(per_unit_w, gen_out, att_gt, n_units)
                     eif_by_gt[(g, t)] = eif_vals
                 else:
-                    # No-covariates path (closed-form)
-                    omega = compute_omega_star_nocov(
+                    # No-covariates path (closed-form). Ridge path uses the
+                    # Gram/GEMM twin of the O(H^2) _sample_cov loop
+                    # (reassociation-level agreement); omega_ridge=0 keeps
+                    # the legacy loop verbatim.
+                    _omega_fn = (
+                        _omega_star_nocov_gram if self.omega_ridge > 0 else compute_omega_star_nocov
+                    )
+                    omega = _omega_fn(
                         target_g=g,
                         target_t=t,
                         valid_pairs=pairs,
@@ -1039,10 +1133,14 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
                         unit_weights=unit_level_weights,
                     )
 
-                    weights, _, cond_num = compute_efficient_weights(omega)
+                    weights, _, cond_num = compute_efficient_weights(
+                        omega, omega_ridge=self.omega_ridge
+                    )
                     stored_weights[(g, t)] = weights
                     if omega.size > 0:
                         stored_cond[(g, t)] = cond_num
+                        if self.omega_ridge > 0 and cond_num > 1e12:
+                            _ill_conditioned_cells.append((g, t, cond_num))
 
                     y_hat = compute_generated_outcomes_nocov(
                         target_g=g,
@@ -1074,28 +1172,53 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
                     )
                     eif_by_gt[(g, t)] = eif_vals
 
-                # Analytical SE = sqrt(mean(EIF^2) / n)  [paper p.21]
-                # With survey: use TSL variance via compute_survey_vcov
-                if self._unit_resolved_survey is not None:
-                    se_gt = self._compute_survey_eif_se(eif_vals)
-                else:
-                    se_gt = _compute_se_from_eif(
-                        eif_vals, n_units, unit_cluster_indices, n_clusters
-                    )
+                group_time_effects[(g, t)] = _finalize_cell(g, att_gt, eif_vals)
 
-                t_stat, p_val, ci = safe_inference(
-                    att_gt, se_gt, alpha=self.alpha, df=self._survey_df
-                )
+        # ----- Pass 2: fused tiled conditional path (ridge, covariates) -----
+        if _cond_cell_specs:
+            assert covariate_matrix is not None
+            bandwidth = (
+                self.kernel_bandwidth
+                if self.kernel_bandwidth is not None
+                else _silverman_bandwidth(covariate_matrix, unit_level_weights)
+            )
+            cell_estimates = compute_conditional_cells_tiled(
+                _cond_cell_specs,
+                outcome_wide=outcome_wide,
+                covariate_matrix=covariate_matrix,
+                cohort_masks=cohort_masks,
+                never_treated_mask=never_treated_mask,
+                period_to_col=period_to_col,
+                cohort_fractions=cohort_fractions,
+                m_hat_cache=m_hat_cache,
+                r_hat_cache=r_hat_cache,
+                s_hat_cache=s_hat_cache,
+                bandwidth=bandwidth,
+                omega_ridge=self.omega_ridge,
+                unit_weights=unit_level_weights,
+            )
+            for spec in _cond_cell_specs:
+                g = spec["g"]
+                t = spec["t"]
+                att_gt, eif_vals = cell_estimates[(g, t)]
+                eif_by_gt[(g, t)] = eif_vals
+                group_time_effects[(g, t)] = _finalize_cell(g, att_gt, eif_vals)
 
-                group_time_effects[(g, t)] = {
-                    "effect": att_gt,
-                    "se": se_gt,
-                    "t_stat": t_stat,
-                    "p_value": p_val,
-                    "conf_int": ci,
-                    "n_treated": int(np.sum(cohort_masks[g])),
-                    "n_control": int(np.sum(never_treated_mask)),
-                }
+        # Fit-level consolidation of ill-conditioned Omega* cells (ridge path).
+        # Legacy (omega_ridge=0) warns per cell inside compute_efficient_weights.
+        if _ill_conditioned_cells:
+            _max_g, _max_t, _max_cond = max(_ill_conditioned_cells, key=lambda r: r[2])
+            warnings.warn(
+                f"Omega* was ill-conditioned (cond > 1e12) in "
+                f"{len(_ill_conditioned_cells)} of {len(stored_cond)} (g, t) cells "
+                f"(max cond {_max_cond:.2e} at (g={_max_g}, t={_max_t})); the "
+                f"omega_ridge={self.omega_ridge:g} regularization handled these "
+                f"cells (expected under PT-All, whose overidentified moment set "
+                f"contains telescoping near-duplicate moments). Set omega_ridge=0 "
+                f"to restore the legacy pseudoinverse path.",
+                UserWarning,
+                stacklevel=2,
+            )
 
         if not group_time_effects:
             raise ValueError(
@@ -1271,6 +1394,7 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
             sieve_criterion=self.sieve_criterion,
             ratio_clip=self.ratio_clip,
             kernel_bandwidth=self.kernel_bandwidth,
+            omega_ridge=self.omega_ridge,
             survey_metadata=(
                 self._recompute_unit_survey_metadata(survey_metadata)
                 if survey_metadata is not None
@@ -1736,7 +1860,8 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
         alpha : float
             Significance level for the test.
         **nuisance_kwargs
-            Passed to both fits (e.g. ``sieve_k_max``, ``ratio_clip``).
+            Passed to both fits (e.g. ``sieve_k_max``, ``ratio_clip``,
+            ``omega_ridge``).
 
         Returns
         -------

@@ -71,8 +71,11 @@ def enumerate_valid_triples(
     # Including g'=∞ (never-treated) produces moments where the second
     # and third terms telescope: y_hat = E[Y_t-Y_1|G=g] - E[Y_t-Y_1|G=∞]
     # regardless of t_pre. These redundant moments add no information
-    # beyond the basic 2x2 DiD; Omega*'s pseudoinverse assigns them
-    # zero effective weight. Retained for implementation simplicity.
+    # beyond the basic 2x2 DiD; the default omega_ridge damps them (the
+    # legacy omega_ridge=0 pseudoinverse truncates them instead - see the
+    # Omega* ridge Note in REGISTRY.md). Retained for implementation
+    # simplicity. The estimator's ridge path additionally drops the
+    # degenerate PRE-treatment self-pair (g'=g, t_pre=t) at fit level.
     candidate_groups: List[float] = [never_treated_val]
     for gp in treatment_groups:
         candidate_groups.append(gp)
@@ -318,27 +321,177 @@ def compute_omega_star_nocov(
     return omega
 
 
+def _sample_cov_cols(
+    A: np.ndarray,
+    B: np.ndarray,
+    w: Optional[np.ndarray] = None,
+) -> np.ndarray:
+    """Column-batched :func:`_sample_cov` (identical semantics per column).
+
+    A, B : (n, m) column-matched; returns (m,) with
+    ``out[j] = _sample_cov(A[:, j], B[:, j], w)`` - including the guards:
+    fewer than 2 rows -> 0.0, and (weighted) ``sum(w) <= 1`` -> 0.0.
+    """
+    n, m = A.shape
+    if n < 2:
+        return np.zeros(m)
+    if w is None:
+        A0 = A - A.mean(axis=0)
+        B0 = B - B.mean(axis=0)
+        return np.einsum("ij,ij->j", A0, B0) / (n - 1)
+    sum_w = float(np.sum(w))
+    if sum_w <= 1.0:
+        return np.zeros(m)
+    wn = w / sum_w
+    A0 = A - wn @ A
+    B0 = B - wn @ B
+    return np.einsum("i,ij,ij->j", w, A0, B0) / (sum_w - 1.0)
+
+
+def _omega_star_nocov_gram(
+    target_g: float,
+    target_t: float,
+    valid_pairs: List[Tuple[float, float]],
+    outcome_wide: np.ndarray,
+    cohort_masks: Dict[float, np.ndarray],
+    never_treated_mask: np.ndarray,
+    period_to_col: Dict[float, int],
+    period_1_col: int,
+    cohort_fractions: Dict[float, float],
+    never_treated_val: float = np.inf,
+    unit_weights: Optional[np.ndarray] = None,
+) -> np.ndarray:
+    """Gram/GEMM form of :func:`compute_omega_star_nocov` (v3.7 fast path).
+
+    Same five-term structure and guard semantics, but the H(H+1)/2 pair loop
+    of :func:`_sample_cov` calls collapses to column-batched covariances over
+    the DISTINCT ``(t_pre_j, t_pre_k)`` combinations (Term 2/5 covariances
+    depend only on the t_pre columns, not the full pair), assembled by
+    lookup. Used by the estimator's default ridge path; ``omega_ridge=0``
+    keeps the legacy loop. Agreement with the loop is at BLAS-reassociation
+    level (~1e-15 relative).
+    """
+    H = len(valid_pairs)
+    if H == 0:
+        return np.empty((0, 0))
+
+    t_col = period_to_col[target_t]
+    y1_col = period_1_col
+
+    g_mask = cohort_masks[target_g]
+    Y_g = outcome_wide[g_mask]
+    pi_g = cohort_fractions[target_g]
+    w_g = unit_weights[g_mask] if unit_weights is not None else None
+
+    Y_inf = outcome_wide[never_treated_mask]
+    pi_inf = cohort_fractions.get(never_treated_val, 0.0)
+    w_inf = unit_weights[never_treated_mask] if unit_weights is not None else None
+
+    pcols = sorted({period_to_col[tp] for _, tp in valid_pairs})
+    pindex = {c: i for i, c in enumerate(pcols)}
+    n_p = len(pcols)
+    j_p = [pindex[period_to_col[tp]] for _, tp in valid_pairs]
+    j_gp = [gp for gp, _ in valid_pairs]
+
+    iu, ju = np.triu_indices(n_p)
+    combo_idx = np.zeros((n_p, n_p), dtype=int)
+    combo_idx[iu, ju] = np.arange(len(iu))
+    combo_idx[ju, iu] = combo_idx[iu, ju]
+
+    a_g = Y_g[:, t_col] - Y_g[:, y1_col]
+    term1 = 0.0
+    if pi_g > 0:
+        term1 = (1.0 / pi_g) * float(_sample_cov_cols(a_g[:, None], a_g[:, None], w_g)[0])
+
+    # Term 2 / Term 5 (never-treated) tables - _sample_cov_cols returns zeros
+    # for n_inf < 2, matching the legacy table-not-populated skip.
+    u_inf = Y_inf[:, [t_col]] - Y_inf[:, pcols]
+    v_inf = Y_inf[:, pcols] - Y_inf[:, [y1_col]]
+    t2 = _sample_cov_cols(u_inf[:, iu], u_inf[:, ju], w_inf)
+    t5_inf = _sample_cov_cols(v_inf[:, iu], v_inf[:, ju], w_inf)
+
+    # Term 3/4 table (same-cohort pairs only)
+    t34 = None
+    if pi_g > 0 and any(gp == target_g for gp in j_gp):
+        b_g = Y_g[:, pcols] - Y_g[:, [y1_col]]
+        t34 = _sample_cov_cols(np.repeat(a_g[:, None], n_p, axis=1), b_g, w_g)
+
+    # Term 5 tables per finite comparison cohort
+    t5: Dict[float, np.ndarray] = {}
+    for gp in set(j_gp):
+        if np.isinf(gp) or gp in t5:
+            continue
+        pi_gp = cohort_fractions.get(gp, 0.0)
+        if pi_gp <= 0 or gp not in cohort_masks:
+            continue
+        Y_c = outcome_wide[cohort_masks[gp]]
+        w_c = unit_weights[cohort_masks[gp]] if unit_weights is not None else None
+        v_c = Y_c[:, pcols] - Y_c[:, [y1_col]]
+        t5[gp] = _sample_cov_cols(v_c[:, iu], v_c[:, ju], w_c)
+
+    omega = np.empty((H, H))
+    for j in range(H):
+        pj = j_p[j]
+        gpj = j_gp[j]
+        for k in range(j, H):
+            pk = j_p[k]
+            gpk = j_gp[k]
+            val = term1
+            if pi_inf > 0:
+                val += (1.0 / pi_inf) * t2[combo_idx[pj, pk]]
+            if gpj == target_g and t34 is not None:
+                val -= (1.0 / pi_g) * t34[pj]
+            if gpk == target_g and t34 is not None:
+                val -= (1.0 / pi_g) * t34[pk]
+            if gpj == gpk:
+                if np.isinf(gpj):
+                    if pi_inf > 0:
+                        val += (1.0 / pi_inf) * t5_inf[combo_idx[pj, pk]]
+                elif gpj in t5:
+                    val += (1.0 / cohort_fractions[gpj]) * t5[gpj][combo_idx[pj, pk]]
+            omega[j, k] = val
+            if j != k:
+                omega[k, j] = val
+
+    return omega
+
+
 def compute_efficient_weights(
     omega_star: np.ndarray,
     cond_threshold: float = 1e12,
+    omega_ridge: float = 0.0,
 ) -> Tuple[np.ndarray, bool, float]:
     """Compute efficient weights from Omega* inverse (Eq 3.13 / 4.3).
 
     ``w = ones @ inv(Omega*) / (ones @ inv(Omega*) @ ones)``
+
+    With ``omega_ridge = 0`` (this helper's default), runs the legacy path:
+    exact inverse, pseudoinverse + per-cell warning when the condition number
+    exceeds ``cond_threshold``. With ``omega_ridge > 0``, solves the
+    ridge-regularized system ``(Omega* + lam * max(trace/H, 0) * I) x = 1``
+    instead - numerically stable on the singular Omega* produced by PT-All's
+    telescoping moments (see ``OMEGA_RIDGE_DEFAULT`` in
+    ``efficient_did_covariates``) - and emits no per-cell warning (the
+    estimator consolidates ill-conditioning into one fit-level warning). The
+    condition number is still computed and returned for diagnostics either
+    way.
 
     Parameters
     ----------
     omega_star : ndarray, shape (H, H)
         Covariance matrix from :func:`compute_omega_star_nocov`.
     cond_threshold : float
-        If condition number exceeds this, use pseudoinverse + warning.
+        If condition number exceeds this: legacy path uses pseudoinverse +
+        warning; ridge path only reports it via the returned cond.
+    omega_ridge : float
+        Relative ridge scale; 0 = legacy inv/pinv path.
 
     Returns
     -------
     weights : ndarray, shape (H,)
         Efficient combination weights (sum to 1).
     used_pinv : bool
-        True if pseudoinverse was used.
+        True if pseudoinverse was used (always False on the ridge path).
     cond_number : float
         Condition number of Omega* (avoids recomputation by caller).
     """
@@ -361,6 +514,24 @@ def compute_efficient_weights(
         return ones / H, False, np.inf
 
     cond = float(np.linalg.cond(omega_star))
+
+    if omega_ridge > 0:
+        scale = max(float(np.trace(omega_star)) / H, 0.0)
+        om_ridged = omega_star + omega_ridge * scale * np.eye(H)
+        try:
+            numerator = np.linalg.solve(om_ridged, ones)
+        except np.linalg.LinAlgError:
+            # Unreachable for PSD Omega* with lam > 0; minimum-norm backstop.
+            numerator = np.linalg.pinv(om_ridged) @ ones
+        denominator = float(numerator @ ones)
+        if abs(denominator) < 1e-15:
+            warnings.warn(
+                "Denominator of efficient weights is near zero; using uniform weights.",
+                UserWarning,
+                stacklevel=2,
+            )
+            return ones / H, False, cond
+        return numerator / denominator, False, cond
     if cond > cond_threshold:
         warnings.warn(
             f"Omega* condition number ({cond:.2e}) exceeds threshold "

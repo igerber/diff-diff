@@ -231,6 +231,58 @@ covariate counts (IRLS `lstsq`, rank-guard QR — Phase 3 candidate).
 
 ---
 
+## EfficientDiD analytical path: omega_ridge + fused tiled GEMM (v3.7, 2026-07)
+
+Resolves the "analytical stage pathological scaling" TODO filed during the Phase 2
+bootstrap work. Instrumented stage split at n=500/1k/2k units (20 periods, 5 cohorts,
+5 covariates, 95 cells, H=60 pairs/cell; `.bench-local/edid_analytical_*.json`):
+
+| stage | n=500 | n=1k | n=2k | mechanism |
+|---|---|---|---|---|
+| `compute_omega_star_conditional` | 23.9s | 71.3s | 289.8s | O(n^2 H^2) Python pair loop, ~4 (n x n_group) broadcast temporaries per pair |
+| `compute_per_unit_weights` | 11.9s | 23.9s | 47.7s | per-unit SVD cond + SVD pinv Python loop |
+| everything else | ~0.4s | ~0.5s | ~1.8s | sieves, gen_out, EIF |
+
+The spike also uncovered the numerical-stability story documented in REGISTRY.md
+(Omega* ridge Note): Omega* is numerically singular by construction (cond 1e17-1e22,
+100% of units), so the legacy pseudoinverse redrew per-cell values at ~1e-2 rel under
+ANY floating-point change (1-ulp input perturbation on the shipped code: 1.2e-4).
+An eigh-based pinv (2x faster) was measured and REJECTED — O(1) per-unit weight
+changes through the same cutoff cliff. The ridge (default 1e-6, trace-scaled) is both
+the stability fix and what unlocks the batched solve.
+
+Rewrite (one PR): `_kcov_batch` GEMM identity `KCov = W@(A0*B0) - (W@A0)*(W@B0)`
+(rows of the kernel matrix sum to 1, survey-weighted included; validated 28-29x per
+cell at 2e-15 rel on captured inputs), (t_pre_j, t_pre_k) dedup (1830 pairs -> ~190
+GEMM columns), fused unit-tiled pass 2 (per-group kernel matrices computed once per
+tile, reused across ALL 95 cells; omega assembled per tile; batched
+`np.linalg.solve` ridge weights; EIF centered after all tiles;
+`_TARGET_OMEGA_TILE_BYTES` = 256MB, call-time resolved), nocov Gram twin.
+
+Measured arms (3-rep medians; BEFORE = pristine main ced49e89 via baseline-worktree
+PYTHONPATH; `.bench-local/edid_arms_results.jsonl`):
+
+| scenario | BEFORE | AFTER | speedup | maxrss B->A |
+|---|---|---|---|---|
+| conditional n=500 | 35.9s | 1.83s | 19.7x | 0.18 -> 0.25 GB |
+| conditional n=1k | 95.4s | 3.48s | 27.5x | 0.25 -> 0.37 GB |
+| conditional n=2k | 337.3s | 7.81s | 43.2x | 0.37 -> 0.59 GB |
+| conditional n=10k | ~2.3h (extrapolated O(n^2)) | 57.7s | ~146x | - -> 0.71 GB |
+| conditional n=100k | memory-killed | 85.6 min (1 rep) | completes | - -> 4.0 GB |
+| nocov n=2k | 1.22s | 0.47s | 2.6x | 0.15 -> 0.15 GB |
+| survey n=1k | 95.3s | 3.34s | 28.6x | 0.25 -> 0.37 GB |
+
+Estimate deltas AFTER vs BEFORE (the documented one-time ridge redraw, shrinking
+with n as the indeterminacy band tightens): overall ATT 1.6e-2 / 4.0e-3 / 1.1e-3 rel
+at n=500/1k/2k; worst post-treatment cell <= 0.58 of its own SE; nocov path ~1e-7.
+1-ulp per-cell stability after: <= 3e-9 rel (before: 1.2e-4).
+
+Remaining lever (TODO row): cross-cell kernel-table hoisting (Term 5 tables are
+(g,t)-independent; Term 2 depends only on t) — ~10x on the intrinsic per-cell GEMM
+factor at 100k-unit scale; not needed below ~50k units.
+
+---
+
 ## Memory scaling at the millions-of-units tail (v3.x, June 2026)
 
 At the scale where the dense working arrays - not compute - are the binding constraint

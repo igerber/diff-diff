@@ -25,7 +25,11 @@ Class structure (Verified Components):
 
 - ``TestEfficientWeights`` — inverse-covariance optimal weights
   ``w = 1' Omega*^-1 / (1' Omega*^-1 1)`` (Eq 3.5 single-date / Eq 3.13 staggered),
-  the min-variance property, and the singular-``Omega*`` pseudoinverse path.
+  the min-variance property, and the legacy singular-``Omega*`` pseudoinverse
+  path (``omega_ridge=0``; the helpers default to it).
+- ``TestOmegaRidgeWeights`` / ``TestNoCovOmegaGram`` / ``TestKernelCovBatch`` —
+  the v3.7 ridge-regularized inversion and the GEMM/Gram twins of the omega
+  constructions (see the Omega* ridge Note in REGISTRY.md).
 - ``TestGeneratedOutcomeNoCov`` — the no-covariate generated outcome (Eq 3.9): the
   ``g'=g`` same-cohort pair telescopes to the per-baseline DiD
   ``E[Y_t-Y_tpre|g] - E[Y_t-Y_tpre|inf]`` (Eq 3.3); the ``g'=inf`` pairs telescope
@@ -200,6 +204,275 @@ class TestEfficientWeights:
         assert abs(w.sum() - 1.0) < 1e-8
 
 
+class TestOmegaRidgeWeights:
+    """Ridge-regularized weights ``(Omega + lam*max(trace/H,0)*I)^-1 1``
+    (normalized) - the v3.7 stabilization of the Eq 3.5/3.13 inversion on
+    numerically singular Omega*. omega_ridge=0 preserves the legacy path
+    exactly; see REGISTRY.md."""
+
+    def test_global_weights_hand_computed(self):
+        omega = np.array([[2.0, 0.5, 0.0], [0.5, 1.0, 0.2], [0.0, 0.2, 3.0]])
+        lam = 1e-3
+        w, used_pinv, _ = compute_efficient_weights(omega, omega_ridge=lam)
+        scale = np.trace(omega) / 3.0
+        num = np.linalg.solve(omega + lam * scale * np.eye(3), np.ones(3))
+        expected = num / num.sum()
+        assert not used_pinv
+        np.testing.assert_allclose(w, expected, atol=1e-12)
+        assert abs(w.sum() - 1.0) < 1e-12
+
+    def test_per_unit_weights_hand_computed(self):
+        from diff_diff.efficient_did_covariates import compute_per_unit_weights
+
+        base = np.array([[2.0, 0.5, 0.0], [0.5, 1.0, 0.2], [0.0, 0.2, 3.0]])
+        stack = np.stack([base, 2.0 * base])
+        lam = 1e-3
+        w = compute_per_unit_weights(stack, omega_ridge=lam)
+        for i in range(2):
+            scale = np.trace(stack[i]) / 3.0
+            num = np.linalg.solve(stack[i] + lam * scale * np.eye(3), np.ones(3))
+            np.testing.assert_allclose(w[i], num / num.sum(), atol=1e-12)
+        # trace-relative ridge is scale-equivariant: same weights for c*Omega
+        np.testing.assert_allclose(w[0], w[1], atol=1e-12)
+
+    def test_zero_matrix_and_indefinite_zero_trace_fall_back_to_uniform(self):
+        from diff_diff.efficient_did_covariates import compute_per_unit_weights
+
+        zero = np.zeros((2, 2))
+        # Indefinite with zero trace: scale clamps to 0 (no negative ridge)
+        # and 1'A^-1 1 = 0 exactly -> den guard -> uniform.
+        indefinite = np.array([[1.0, 0.0], [0.0, -1.0]])
+        spd = np.array([[1.0, 0.2], [0.2, 2.0]])
+        stack = np.stack([zero, indefinite, spd])
+        w = compute_per_unit_weights(stack, omega_ridge=1e-6)
+        np.testing.assert_allclose(w[0], [0.5, 0.5], atol=1e-15)
+        np.testing.assert_allclose(w[1], [0.5, 0.5], atol=1e-15)
+        assert abs(w[2].sum() - 1.0) < 1e-12
+        assert not np.allclose(w[2], [0.5, 0.5])
+
+    def test_dose_response_larger_lambda_pushes_toward_uniform(self):
+        omega = np.array([[1.0, 0.0, 0.0], [0.0, 5.0, 0.0], [0.0, 0.0, 25.0]])
+        uniform = np.ones(3) / 3.0
+        dist = []
+        for lam in (1e-8, 1e-2, 1e2, 1e6):
+            w, _, _ = compute_efficient_weights(omega, omega_ridge=lam)
+            dist.append(float(np.linalg.norm(w - uniform)))
+        assert dist == sorted(dist, reverse=True), dist
+        assert dist[-1] < 1e-4  # huge ridge ~ uniform
+
+    def test_lam_zero_is_exact_legacy(self):
+        omega = np.array([[2.0, 0.5], [0.5, 1.0]])
+        w_legacy, p1, c1 = compute_efficient_weights(omega)
+        w_zero, p2, c2 = compute_efficient_weights(omega, omega_ridge=0.0)
+        assert np.array_equal(w_legacy, w_zero)
+        assert (p1, c1) == (p2, c2)
+
+    def test_ridge_weights_remain_minimum_variance_up_to_lambda(self):
+        """For small lam on a well-conditioned Omega, ridge weights stay
+        within O(lam) of the exact minimum-variance solution."""
+        omega = np.array([[1.0, 0.3], [0.3, 2.0]])
+        w_exact, _, _ = compute_efficient_weights(omega)
+        w_ridge, _, _ = compute_efficient_weights(omega, omega_ridge=1e-8)
+        np.testing.assert_allclose(w_ridge, w_exact, atol=1e-6)
+
+
+class TestNoCovOmegaGram:
+    """Gram/GEMM twin of compute_omega_star_nocov (v3.7 ridge path): exact
+    five-term + guard-semantics parity with the _sample_cov loop, including
+    the n<2 group, sum(w)<=1 group, and zero-fraction-cohort guards."""
+
+    @staticmethod
+    def _fixture(
+        n_per_cohort=(30, 25, 1),
+        n_control=20,
+        n_periods=6,
+        seed=8,
+        weighted=False,
+        control_weight_total=None,
+    ):
+        """Wide-outcome fixture with cohorts at g=3,4 and a 1-UNIT cohort at
+        g=5 (exercises the n<2 covariance guard)."""
+        from diff_diff.efficient_did_weights import enumerate_valid_triples
+
+        rng = np.random.default_rng(seed)
+        groups = [3.0, 4.0, 5.0]
+        sizes = list(n_per_cohort) + [n_control]
+        n_units = sum(sizes)
+        wide = rng.normal(0, 1.0, (n_units, n_periods))
+        cohorts = np.concatenate(
+            [np.full(s, g) for s, g in zip(n_per_cohort, groups)] + [np.full(n_control, np.inf)]
+        )
+        cohort_masks = {g: cohorts == g for g in groups}
+        never_mask = np.isinf(cohorts)
+        cohort_masks[np.inf] = never_mask
+        time_periods = [float(p) for p in range(1, n_periods + 1)]
+        period_to_col = {p: i for i, p in enumerate(time_periods)}
+        weights = None
+        if weighted:
+            weights = np.exp(rng.normal(0, 0.5, n_units))
+            if control_weight_total is not None:
+                w_ctrl = weights[never_mask]
+                weights[never_mask] = w_ctrl * (control_weight_total / w_ctrl.sum())
+        if weights is not None:
+            total = weights.sum()
+            fractions = {g: float(weights[cohort_masks[g]].sum()) / total for g in groups}
+            fractions[np.inf] = float(weights[never_mask].sum()) / total
+        else:
+            fractions = {g: float(cohort_masks[g].sum()) / n_units for g in groups}
+            fractions[np.inf] = float(never_mask.sum()) / n_units
+        pairs = enumerate_valid_triples(3.0, groups, time_periods, 1.0, "all")
+        return dict(
+            wide=wide,
+            cohort_masks=cohort_masks,
+            never_mask=never_mask,
+            period_to_col=period_to_col,
+            fractions=fractions,
+            pairs=pairs,
+            weights=weights,
+        )
+
+    def _compare(self, fx, target_g=3.0, target_t=4.0, rtol=1e-12, atol=1e-13):
+        from diff_diff.efficient_did_weights import (
+            _omega_star_nocov_gram,
+            compute_omega_star_nocov,
+        )
+
+        kwargs = dict(
+            target_g=target_g,
+            target_t=target_t,
+            valid_pairs=fx["pairs"],
+            outcome_wide=fx["wide"],
+            cohort_masks=fx["cohort_masks"],
+            never_treated_mask=fx["never_mask"],
+            period_to_col=fx["period_to_col"],
+            period_1_col=0,
+            cohort_fractions=fx["fractions"],
+            unit_weights=fx["weights"],
+        )
+        legacy = compute_omega_star_nocov(**kwargs)
+        gram = _omega_star_nocov_gram(**kwargs)
+        assert gram.shape == legacy.shape
+        np.testing.assert_allclose(gram, legacy, rtol=rtol, atol=atol)
+
+    @pytest.mark.parametrize("weighted", [False, True])
+    def test_matches_loop_incl_one_unit_cohort(self, weighted):
+        # includes a 1-unit cohort (g=5) in the pair set -> n<2 guard parity
+        fx = self._fixture(weighted=weighted)
+        assert any(gp == 5.0 for gp, _ in fx["pairs"])
+        self._compare(fx)
+
+    def test_sub_unit_total_weight_group_guard(self):
+        # never-treated total survey weight <= 1 -> weighted Bessel guard
+        # (sum_w - 1 <= 0) returns 0.0 in _sample_cov; the batch must agree
+        fx = self._fixture(weighted=True, control_weight_total=0.9)
+        self._compare(fx)
+
+    def test_empty_pairs_shape_contract(self):
+        from diff_diff.efficient_did_weights import _omega_star_nocov_gram
+
+        fx = self._fixture()
+        out = _omega_star_nocov_gram(
+            target_g=3.0,
+            target_t=4.0,
+            valid_pairs=[],
+            outcome_wide=fx["wide"],
+            cohort_masks=fx["cohort_masks"],
+            never_treated_mask=fx["never_mask"],
+            period_to_col=fx["period_to_col"],
+            period_1_col=0,
+            cohort_fractions=fx["fractions"],
+        )
+        assert out.shape == (0, 0)
+
+    def test_fit_level_twin(self):
+        """Default-ridge nocov fit routed through the Gram omega matches the
+        same fit forced onto the legacy loop omega at rel 1e-10."""
+        import diff_diff.efficient_did as ed_mod
+        from diff_diff.efficient_did_weights import compute_omega_star_nocov
+
+        rng = np.random.default_rng(21)
+        n_units, n_periods = 240, 7
+        ft = np.full(n_units, np.inf)
+        ft[:80] = 3
+        ft[80:150] = 5
+        y = rng.normal(0, 1, (n_units, n_periods))
+        y += 2.0 * ((ft[:, None] < np.inf) & (np.arange(1, n_periods + 1)[None] >= ft[:, None]))
+        df = pd.DataFrame(
+            {
+                "unit": np.repeat(np.arange(n_units), n_periods),
+                "time": np.tile(np.arange(1, n_periods + 1), n_units),
+                "first_treat": np.repeat(ft, n_periods),
+                "y": y.ravel(),
+            }
+        )
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            r_gram = EfficientDiD().fit(df, "y", "unit", "time", "first_treat", aggregate="all")
+        orig = ed_mod._omega_star_nocov_gram
+        ed_mod._omega_star_nocov_gram = compute_omega_star_nocov
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                r_loop = EfficientDiD().fit(df, "y", "unit", "time", "first_treat", aggregate="all")
+        finally:
+            ed_mod._omega_star_nocov_gram = orig
+        assert r_gram.overall_att == pytest.approx(r_loop.overall_att, rel=1e-10)
+        for k in r_loop.group_time_effects:
+            np.testing.assert_allclose(
+                (
+                    r_gram.group_time_effects[k]["effect"],
+                    r_gram.group_time_effects[k]["se"],
+                ),
+                (
+                    r_loop.group_time_effects[k]["effect"],
+                    r_loop.group_time_effects[k]["se"],
+                ),
+                rtol=1e-8,
+                atol=1e-10,
+                err_msg=str(k),
+            )
+
+
+class TestKernelCovBatch:
+    """GEMM-form kernel covariance (v3.7 fused path) vs the dense
+    _kernel_weighted_cov loop: KCov_i(A,B) = (W@(A0*B0))_i - (W@A0)_i(W@B0)_i
+    for row-normalized W - exact identity, verified with and without survey
+    weights and on a row-tile of W."""
+
+    @staticmethod
+    def _setup(seed, weighted):
+        from diff_diff.efficient_did_covariates import _kernel_weights_matrix
+
+        rng = np.random.default_rng(seed)
+        n_all, n_group, m = 60, 25, 7
+        x_all = rng.normal(size=(n_all, 3))
+        x_group = rng.normal(size=(n_group, 3))
+        gw = np.exp(rng.normal(0, 0.5, n_group)) if weighted else None
+        W = _kernel_weights_matrix(x_all, x_group, bandwidth=0.8, group_weights=gw)
+        # offset columns exercise the global-centering cancellation guard
+        A = rng.normal(size=(n_group, m)) + 1e6
+        B = rng.normal(size=(n_group, m)) + 1e6
+        return W, A, B
+
+    @pytest.mark.parametrize("weighted", [False, True])
+    def test_matches_dense_loop(self, weighted):
+        from diff_diff.efficient_did_covariates import _kcov_batch, _kernel_weighted_cov
+
+        W, A, B = self._setup(3, weighted)
+        got = _kcov_batch(W, A, B)
+        for j in range(A.shape[1]):
+            expected = _kernel_weighted_cov(A[:, j], B[:, j], W)
+            np.testing.assert_allclose(got[:, j], expected, rtol=1e-12, atol=1e-9)
+
+    def test_row_tile_equals_full(self):
+        from diff_diff.efficient_did_covariates import _kcov_batch
+
+        W, A, B = self._setup(4, True)
+        full = _kcov_batch(W, A, B)
+        tiled = np.vstack([_kcov_batch(W[i : i + 7], A, B) for i in range(0, W.shape[0], 7)])
+        np.testing.assert_allclose(tiled, full, rtol=1e-13, atol=1e-12)
+
+
 # =============================================================================
 # Eq 3.9 — no-covariate generated outcome (telescoping)
 # =============================================================================
@@ -285,7 +558,11 @@ class TestNoCovariateClosedForm:
         )
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            w, _, _ = compute_efficient_weights(omega)
+            # Pass the shipped default ridge so this closed-form lock keeps
+            # guarding the DEFAULT fit path (the fit above uses it too).
+            from diff_diff.efficient_did_covariates import OMEGA_RIDGE_DEFAULT
+
+            w, _, _ = compute_efficient_weights(omega, omega_ridge=OMEGA_RIDGE_DEFAULT)
         y_hat = compute_generated_outcomes_nocov(
             g,
             t,

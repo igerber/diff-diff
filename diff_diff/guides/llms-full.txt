@@ -885,6 +885,7 @@ EfficientDiD(
     bootstrap_weights: str = "rademacher",   # "rademacher", "mammen", or "webb"
     seed: int | None = None,
     anticipation: int = 0,
+    omega_ridge: float = 1e-6,               # Ridge for the Omega* inversion behind the efficient weights (PT-All's overidentified moments make sample Omega* numerically singular); 0 = legacy exact-inverse/pseudoinverse path. See the Omega* ridge Note in the methodology registry.
 )
 ```
 

@@ -37,6 +37,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   survey/subpopulation design leaving `< 2` positive-weight `d_L` units all raise; multi-cohort and
   `covariates=` × `lowest_dose` raise `NotImplementedError` (deferred). The default `never_treated` /
   `not_yet_treated` paths are unchanged.
+- **`EfficientDiD` `omega_ridge` parameter** (default `1e-6`) — ridge-regularizes the Omega*
+  inversion behind the efficient weights: solves `(Omega* + omega_ridge * max(trace/H, 0) * I) x = 1`
+  instead of pseudo-inverting the numerically singular Omega* that PT-All's telescoping
+  overidentified moments produce (measured cond 1e17–1e22 for 100% of units on realistic panels).
+  Makes per-cell `ATT(g,t)` numerically well-defined and platform-stable: a 1-ulp input
+  perturbation now moves per-cell values by ≤3e-9 relative (previously ~1e-4 through the
+  pseudoinverse's rcond-cutoff cliff, meaning per-cell values silently depended on BLAS/platform).
+  Calibrated against the HRS Table 6 replication anchors (all unchanged; worst deviation
+  0.0257 SE, shift ≤ 0.0001 SE) and Monte Carlo (bias/RMSE/SE-calibration/coverage statistically
+  identical to legacy). **One-time value shift:** covariate-path per-cell and event-study values
+  move within their pre-existing indeterminacy band on upgrade (worst observed post-treatment
+  cell shift ~0.6 of its own SE at n=500, shrinking with n; overall-ATT shift 1.6e-2 → 1.1e-3
+  relative from n=500 → 2k); the no-covariates path is essentially unchanged (~1e-7).
+  `omega_ridge=0` restores the entire legacy code path bit-for-bit. The ridge path also drops the
+  degenerate pre-treatment self-pair `(g'=g, t_pre=t)` (an identically-zero moment) so
+  pre-treatment placebos stay data-driven, and consolidates the legacy per-cell
+  condition-number warnings into one fit-level warning. See the Omega* ridge Note in
+  `docs/methodology/REGISTRY.md`.
 - **`ContinuousDiD` discrete-treatment saturated regression** (`treatment_type="discrete"`) for
   multi-valued / discrete dose (CGBS 2024 Eq. 4.1). Each distinct dose level gets its own effect
   coefficient — `ATT(d_j) = mean_{D=d_j}(ΔY) − control` (a per-level 2×2 DiD) — instead of a B-spline
@@ -191,6 +209,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   supersedes it.
 
 ### Changed
+- **`EfficientDiD` analytical covariate path rewritten as a fused unit-tiled GEMM pass**
+  (kernel-covariance tables with `(t_pre_j, t_pre_k)` dedup, per-group kernel matrices reused
+  across all `(g,t)` cells, batched ridge solves replacing the per-unit SVD + pseudoinverse loop;
+  the no-covariates Omega* gets a Gram-form twin). Measured (3-rep medians, 20 periods,
+  5 cohorts, 5 covariates, `aggregate="all"`): fit 35.9s → 1.8s at 500 units (20x),
+  95.4s → 3.5s at 1k (27x), 337.3s → 7.8s at 2k (43x), ~2.3h (extrapolated O(n²)) → 58s at 10k;
+  a 100k-unit fit now completes in ~86 min at 4.0 GB peak RSS (previously memory-killed).
+  Survey-weighted: 95.3s → 3.3s at 1k units. Memory is tile-bounded
+  (`_TARGET_OMEGA_TILE_BYTES` = 256 MB). Point estimates under the default ridge differ from
+  the legacy pseudoinverse path as described under `omega_ridge` above; at `omega_ridge=0`
+  results are bit-identical to the previous release. The conditional-path scalability warning
+  now fires once per fit at n > 50,000 (previously per cell at n > 5,000).
 - **CallawaySantAnna multiplier bootstrap rewritten as a fused, column-tiled scatter-GEMM**
   (EfficientDiD's bootstrap routes through the same kernel). The former loop sliced the
   `(block × n_units)` weight matrix twice per (g,t) cell per weight block — at a 40-period,

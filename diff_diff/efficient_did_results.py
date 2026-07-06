@@ -134,6 +134,9 @@ class EfficientDiDResults:
         Clipping bound for sieve propensity ratios.
     kernel_bandwidth : float or None
         Bandwidth used for kernel-smoothed conditional Omega*.
+    omega_ridge : float
+        Relative ridge used for the Omega* inversion behind the efficient
+        weights (0 = legacy exact-inverse/pseudoinverse path).
     """
 
     group_time_effects: Dict[Tuple[Any, Any], Dict[str, Any]]
@@ -184,6 +187,7 @@ class EfficientDiDResults:
     sieve_criterion: str = "bic"
     ratio_clip: float = 20.0
     kernel_bandwidth: Optional[float] = None
+    omega_ridge: float = 0.0
     # Survey design metadata (SurveyMetadata instance from diff_diff.survey)
     survey_metadata: Optional[Any] = field(default=None)
 

@@ -28,6 +28,21 @@ from scipy.spatial.distance import cdist
 
 from diff_diff.linalg import solve_ols
 
+# Default ridge for the Omega* inversion (see ``compute_per_unit_weights`` /
+# ``compute_efficient_weights``). Under PT-All the overidentified moment set
+# contains telescoping near-duplicate moments, so sample Omega* is numerically
+# singular (cond ~1e17-1e22 on realistic panels); the legacy pseudoinverse sits
+# on the rcond-cutoff cliff, where any last-digit change to Omega* (BLAS
+# reordering, platform change, 1-ulp data perturbation) moves per-cell weights
+# and ATT(g,t) at the ~1e-2 relative level. The ridge
+# ``Omega + lam * max(trace/H, 0) * I`` damps the statistically-null
+# directions smoothly: 1-ulp per-cell stability improves from ~1e-4 to ~1e-9
+# at this default, while overall-ATT bias/RMSE/coverage are unchanged
+# (Monte Carlo, see REGISTRY.md). Calibrated 2026-07 against 1-ulp stability
+# (target <=1e-6, achieved ~3e-9) and the HRS Table 6 anchors (all within the
+# published-value tolerance at every candidate lambda).
+OMEGA_RIDGE_DEFAULT = 1e-6
+
 # ---------------------------------------------------------------------------
 # Outcome regression
 # ---------------------------------------------------------------------------
@@ -1081,26 +1096,376 @@ def compute_omega_star_conditional(
 
 
 # ---------------------------------------------------------------------------
+# Fused tiled GEMM path: conditional Omega* + ridge weights + DR scores
+# ---------------------------------------------------------------------------
+
+# Memory cap for the unit-tiled conditional path. Resolved at CALL time inside
+# compute_conditional_cells_tiled (never bound as a def-time default) so tests
+# can monkeypatch it to force multi-tile execution.
+_TARGET_OMEGA_TILE_BYTES = 256 * 1024 * 1024
+
+
+def _kcov_batch(W: np.ndarray, A: np.ndarray, B: np.ndarray) -> np.ndarray:
+    """Batched kernel-weighted local covariances via GEMM.
+
+    For row-normalized kernel weights ``W`` (each row sums to 1),
+
+        KCov_i(A, B) = sum_j W_ij (A_j - Abar_i)(B_j - Bbar_i)
+                     = (W @ (A0 * B0))_i - (W @ A0)_i * (W @ B0)_i
+
+    with ``A0 = A - mean(A)`` (global pre-centering keeps the
+    uncentered-product form cancellation-safe; any constant shift cancels in
+    the identity). Row normalization is per-row, so the identity holds for
+    survey-weighted kernels and for any row-tile of ``W``.
+
+    Parameters
+    ----------
+    W : ndarray, shape (n_rows, n_group)
+        Row-normalized kernel weight matrix (or a row-tile of one).
+    A, B : ndarray, shape (n_group, m)
+        Column-matched inputs; column ``j`` of the output is
+        ``KCov_i(A[:, j], B[:, j])``.
+
+    Returns
+    -------
+    ndarray, shape (n_rows, m)
+    """
+    A0 = A - A.mean(axis=0)
+    B0 = B - B.mean(axis=0)
+    return W @ (A0 * B0) - (W @ A0) * (W @ B0)
+
+
+def compute_conditional_cells_tiled(
+    cell_specs: List[Dict],
+    outcome_wide: np.ndarray,
+    covariate_matrix: np.ndarray,
+    cohort_masks: Dict[float, np.ndarray],
+    never_treated_mask: np.ndarray,
+    period_to_col: Dict[float, int],
+    cohort_fractions: Dict[float, float],
+    m_hat_cache: Dict[Tuple, np.ndarray],
+    r_hat_cache: Dict[Tuple[float, float], np.ndarray],
+    s_hat_cache: Dict[float, np.ndarray],
+    bandwidth: float,
+    omega_ridge: float,
+    unit_weights: Optional[np.ndarray] = None,
+    never_treated_val: float = np.inf,
+    tile_bytes: Optional[int] = None,
+) -> Dict[Tuple[float, float], Tuple[float, np.ndarray]]:
+    """Fused conditional-path estimation for all (g, t) cells, unit-tiled.
+
+    Replaces the legacy per-cell chain (dense ``compute_omega_star_conditional``
+    H^2 loop -> per-unit SVD/pinv weights -> EIF) with, per unit-tile:
+
+    1. ONE row-normalized kernel weight matrix per comparison group
+       (``_kernel_weights_matrix``), reused across ALL cells - the matrices
+       depend only on covariates/bandwidth/group, not on (g, t).
+    2. Per cell, the five Eq 3.12 terms as kernel-covariance TABLES via
+       :func:`_kcov_batch` - Term 2/5 covariances depend only on the
+       ``(t_pre_j, t_pre_k)`` column combination, so the H(H+1)/2 pair loop
+       dedups to ~T^2 GEMM columns - then a gather-assembly of the
+       ``(tile, H, H)`` Omega* block.
+    3. Ridge-regularized batched weights (:func:`_ridge_solve_weights`;
+       requires ``omega_ridge > 0`` - the legacy ``omega_ridge=0`` path never
+       reaches this function).
+    4. DR generated outcomes on the tile rows (reusing
+       :func:`compute_generated_outcomes_cov` on row-sliced views - gen_out
+       is row-separable across units) and per-unit weighted scores.
+
+    ``att_gt`` is finalized only after ALL tiles complete (survey-weighted
+    mean of the full score vector), and ``EIF = scores - att_gt`` is computed
+    once from the finalized value - never per tile.
+
+    Cells with ``H == 1`` skip kernel/omega assembly entirely (weights are
+    trivially 1); the results are omega-independent, matching the legacy path.
+
+    Parameters
+    ----------
+    cell_specs : list of dict
+        One per estimable cell: ``{"g", "t", "pairs", "t_col", "y1_col"}``
+        (``y1_col`` varies per cohort under ``pt_assumption="post"``).
+        ``pairs`` must be non-empty.
+    tile_bytes : int, optional
+        Memory budget for per-tile state; ``None`` resolves the module
+        constant ``_TARGET_OMEGA_TILE_BYTES`` at call time.
+    (remaining parameters as in ``compute_omega_star_conditional``)
+
+    Returns
+    -------
+    dict mapping ``(g, t)`` to ``(att_gt, eif_values)``.
+    """
+    n_units = outcome_wide.shape[0]
+    if not cell_specs:
+        return {}
+
+    if n_units > 50_000:
+        warnings.warn(
+            f"Conditional Omega* estimation with n={n_units} units is "
+            f"expensive (the kernel weight matrices are intrinsically "
+            f"O(n^2) in memory traffic, computed in bounded tiles).",
+            UserWarning,
+            stacklevel=2,
+        )
+
+    if tile_bytes is None:
+        tile_bytes = _TARGET_OMEGA_TILE_BYTES
+
+    h_max = max(len(spec["pairs"]) for spec in cell_specs)
+    # Per-tile-row footprint: (H, H) omega block + kernel-matrix rows across
+    # all groups (sum of group sizes <= n_units, counted twice for the cdist
+    # temp) + small per-cell vectors.
+    row_bytes = 8 * (h_max * h_max + 2 * n_units + 4 * h_max)
+    tile_units = int(max(1, min(n_units, tile_bytes // max(1, row_bytes))))
+
+    # Group-level (non-tiled) data, shared across cells and tiles
+    group_keys: set = set()
+    for spec in cell_specs:
+        group_keys.add(spec["g"])
+        group_keys.add(never_treated_val)
+        for gp, _ in spec["pairs"]:
+            group_keys.add(never_treated_val if np.isinf(gp) else gp)
+
+    def _mask_for(gkey: float) -> np.ndarray:
+        return never_treated_mask if np.isinf(gkey) else cohort_masks[gkey]
+
+    y_grp: Dict[float, np.ndarray] = {}
+    x_grp: Dict[float, np.ndarray] = {}
+    w_grp: Dict[float, Optional[np.ndarray]] = {}
+    s_all: Dict[float, np.ndarray] = {}
+    for gkey in group_keys:
+        mask = _mask_for(gkey)
+        y_grp[gkey] = outcome_wide[mask]
+        x_grp[gkey] = covariate_matrix[mask]
+        w_grp[gkey] = unit_weights[mask] if unit_weights is not None else None
+        s_all[gkey] = s_hat_cache.get(
+            gkey,
+            np.full(n_units, 1.0 / max(cohort_fractions.get(gkey, 1e-10), 1e-10)),
+        )
+
+    scores: Dict[Tuple[float, float], np.ndarray] = {
+        (spec["g"], spec["t"]): np.empty(n_units) for spec in cell_specs
+    }
+
+    for lo in range(0, n_units, tile_units):
+        hi = min(lo + tile_units, n_units)
+
+        # Kernel weight matrices for this tile, one per group, lazily built
+        # and shared across ALL cells.
+        w_tile_cache: Dict[float, np.ndarray] = {}
+
+        def _w_tile(gkey: float) -> np.ndarray:
+            if gkey not in w_tile_cache:
+                w_tile_cache[gkey] = _kernel_weights_matrix(
+                    covariate_matrix[lo:hi],
+                    x_grp[gkey],
+                    bandwidth,
+                    group_weights=w_grp[gkey],
+                )
+            return w_tile_cache[gkey]
+
+        # Row-sliced views of the nuisance caches / masks for gen_out reuse
+        masks_tile = {k: v[lo:hi] for k, v in cohort_masks.items()}
+        nt_mask_tile = never_treated_mask[lo:hi]
+        m_hat_tile = {k: v[lo:hi] for k, v in m_hat_cache.items()}
+        r_hat_tile = {k: v[lo:hi] for k, v in r_hat_cache.items()}
+        outcome_tile = outcome_wide[lo:hi]
+
+        for spec in cell_specs:
+            g = spec["g"]
+            t = spec["t"]
+            pairs = spec["pairs"]
+            t_col = spec["t_col"]
+            y1_col = spec["y1_col"]
+            H = len(pairs)
+
+            gen_out_tile = compute_generated_outcomes_cov(
+                target_g=g,
+                target_t=t,
+                valid_pairs=pairs,
+                outcome_wide=outcome_tile,
+                cohort_masks=masks_tile,
+                never_treated_mask=nt_mask_tile,
+                period_to_col=period_to_col,
+                period_1_col=y1_col,
+                cohort_fractions=cohort_fractions,
+                m_hat_cache=m_hat_tile,
+                r_hat_cache=r_hat_tile,
+                never_treated_val=never_treated_val,
+            )
+
+            if H == 1:
+                scores[(g, t)][lo:hi] = gen_out_tile[:, 0]
+                continue
+
+            pcols = sorted({period_to_col[tp] for _, tp in pairs})
+            pindex = {c: i for i, c in enumerate(pcols)}
+            n_p = len(pcols)
+            j_p = [pindex[period_to_col[tp]] for _, tp in pairs]
+            j_gp = [gp for gp, _ in pairs]
+
+            iu, ju = np.triu_indices(n_p)
+            combo_idx = np.zeros((n_p, n_p), dtype=int)
+            combo_idx[iu, ju] = np.arange(len(iu))
+            combo_idx[ju, iu] = combo_idx[iu, ju]
+
+            s_g_tile = s_all[g][lo:hi]
+            s_inf_tile = s_all[never_treated_val][lo:hi]
+            wg = _w_tile(g)
+            winf = _w_tile(never_treated_val)
+
+            y_g = y_grp[g]
+            y_inf = y_grp[never_treated_val]
+            a_g = y_g[:, t_col] - y_g[:, y1_col]
+
+            # Term 1: s_g * KCov(a, a | g) - shared by every (j, k)
+            term1 = s_g_tile * _kcov_batch(wg, a_g[:, None], a_g[:, None])[:, 0]
+
+            # Term 2 table: s_inf * KCov(Y_t - Y_pj, Y_t - Y_pk | inf)
+            u_inf = y_inf[:, [t_col]] - y_inf[:, pcols]
+            t2 = s_inf_tile[:, None] * _kcov_batch(winf, u_inf[:, iu], u_inf[:, ju])
+
+            # Term 3/4 table: s_g * KCov(a, Y_p - Y_1 | g), only if any
+            # same-cohort pair exists
+            t34 = None
+            if any(gp == g for gp in j_gp):
+                b_g = y_g[:, pcols] - y_g[:, [y1_col]]
+                t34 = s_g_tile[:, None] * _kcov_batch(wg, np.repeat(a_g[:, None], n_p, axis=1), b_g)
+
+            # Term 5 tables per distinct comparison group
+            t5: Dict[float, np.ndarray] = {}
+            for gp in set(j_gp):
+                gkey = never_treated_val if np.isinf(gp) else gp
+                if gkey in t5:
+                    continue
+                y_c = y_grp[gkey]
+                v_c = y_c[:, pcols] - y_c[:, [y1_col]]
+                t5[gkey] = s_all[gkey][lo:hi][:, None] * _kcov_batch(
+                    _w_tile(gkey), v_c[:, iu], v_c[:, ju]
+                )
+
+            omega_tile = np.empty((hi - lo, H, H))
+            for j in range(H):
+                pj = j_p[j]
+                gpj = j_gp[j]
+                for k in range(j, H):
+                    pk = j_p[k]
+                    gpk = j_gp[k]
+                    val = term1 + t2[:, combo_idx[pj, pk]]
+                    if gpj == g:
+                        val = val - t34[:, pj]
+                    if gpk == g:
+                        val = val - t34[:, pk]
+                    if gpj == gpk:
+                        gkey = never_treated_val if np.isinf(gpj) else gpj
+                        val = val + t5[gkey][:, combo_idx[pj, pk]]
+                    omega_tile[:, j, k] = val
+                    if j != k:
+                        omega_tile[:, k, j] = val
+
+            w_units = _ridge_solve_weights(omega_tile, omega_ridge)
+            scores[(g, t)][lo:hi] = np.sum(w_units * gen_out_tile, axis=1)
+
+    out: Dict[Tuple[float, float], Tuple[float, np.ndarray]] = {}
+    for spec in cell_specs:
+        gt = (spec["g"], spec["t"])
+        s = scores[gt]
+        if unit_weights is not None:
+            att_gt = float(np.average(s, weights=unit_weights))
+        else:
+            att_gt = float(np.mean(s))
+        out[gt] = (att_gt, s - att_gt)
+    return out
+
+
+# ---------------------------------------------------------------------------
 # Per-unit efficient weights from conditional Omega*
 # ---------------------------------------------------------------------------
+
+
+def _ridge_solve_weights(omega_stack: np.ndarray, omega_ridge: float) -> np.ndarray:
+    """Batched ridge-regularized efficient weights for a stack of Omega*.
+
+    Solves ``(Omega_i + lam * max(trace(Omega_i)/H, 0) * I) x = 1`` per unit
+    and normalizes ``w_i = x / (1'x)``. The trace-scaled ridge is
+    scale-equivariant and O(H) to compute (no SVD); the ``max(..., 0)`` guards
+    a machine-noise-negative trace from producing a negative ridge. Special
+    cases match the legacy path: an (approximately) all-zero matrix or a
+    near-zero denominator yields uniform weights ``1/H``.
+
+    Parameters
+    ----------
+    omega_stack : ndarray, shape (n, H, H)
+        Stack of covariance matrices (H >= 2).
+    omega_ridge : float
+        Relative ridge scale ``lam > 0``.
+
+    Returns
+    -------
+    weights : ndarray, shape (n, H)
+    """
+    n, H, _ = omega_stack.shape
+    ones = np.ones(H)
+    weights = np.full((n, H), 1.0 / H)
+
+    # np.allclose(omega_i, 0.0) == elementwise |x| <= atol (1e-8), rtol inert
+    zero_mask = np.all(np.abs(omega_stack) <= 1e-8, axis=(1, 2))
+    rest = np.flatnonzero(~zero_mask)
+    if rest.size == 0:
+        return weights
+
+    om = omega_stack[rest]
+    trace = np.trace(om, axis1=1, axis2=2)
+    scale = np.maximum(trace / H, 0.0)
+    om_ridged = om + (omega_ridge * scale)[:, None, None] * np.eye(H)[None]
+    try:
+        # gufunc solve treats a 2-D rhs as a matrix; a stack of vectors needs
+        # shape (n, H, 1)
+        num = np.linalg.solve(om_ridged, np.ones((rest.size, H, 1)))[..., 0]
+    except np.linalg.LinAlgError:
+        # Unreachable for PSD Omega* with lam > 0; kept as a per-unit
+        # minimum-norm fallback so one pathological unit cannot fail the batch.
+        num = np.empty((rest.size, H))
+        for m in range(rest.size):
+            try:
+                num[m] = np.linalg.solve(om_ridged[m], ones)
+            except np.linalg.LinAlgError:
+                num[m] = np.linalg.pinv(om_ridged[m]) @ ones
+    den = num @ ones
+    ok = np.abs(den) >= 1e-15
+    solved = np.full((rest.size, H), 1.0 / H)
+    solved[ok] = num[ok] / den[ok, None]
+    weights[rest] = solved
+    return weights
 
 
 def compute_per_unit_weights(
     omega_conditional: np.ndarray,
     cond_threshold: float = 1e12,
+    omega_ridge: float = 0.0,
 ) -> np.ndarray:
     """Per-unit efficient weights from conditional Omega* inverse.
 
     ``w(X_i) = 1' Omega*(X_i)^{-1} / (1' Omega*(X_i)^{-1} 1)``
 
-    Falls back to pseudoinverse per unit if condition number exceeds threshold.
+    With ``omega_ridge = 0`` (this helper's default), runs the legacy per-unit
+    loop: exact inverse, falling back to a pseudoinverse when the condition
+    number exceeds ``cond_threshold``. On the numerically singular Omega*
+    produced by PT-All's telescoping moments, that pseudoinverse is
+    cutoff-cliff sensitive (see ``OMEGA_RIDGE_DEFAULT``). With
+    ``omega_ridge > 0``, uses the batched ridge solve
+    ``(Omega_i + lam * max(trace/H, 0) * I) x = 1`` instead - numerically
+    stable and vectorized over units. The estimator passes its
+    ``omega_ridge`` parameter (default ``OMEGA_RIDGE_DEFAULT``); standalone
+    callers of this helper keep exact legacy behavior unless they opt in.
 
     Parameters
     ----------
     omega_conditional : ndarray, shape (n_units, H, H)
         Per-unit conditional covariance matrices.
     cond_threshold : float
-        Condition number threshold for pseudoinverse fallback.
+        Condition number threshold for pseudoinverse fallback (legacy path).
+    omega_ridge : float
+        Relative ridge scale; 0 = legacy inv/pinv path.
 
     Returns
     -------
@@ -1112,6 +1477,9 @@ def compute_per_unit_weights(
         return np.empty((n_units, 0))
     if H == 1:
         return np.ones((n_units, 1))
+
+    if omega_ridge > 0:
+        return _ridge_solve_weights(omega_conditional, omega_ridge)
 
     ones = np.ones(H)
     weights = np.zeros((n_units, H))

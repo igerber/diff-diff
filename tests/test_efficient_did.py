@@ -449,7 +449,13 @@ class TestWeightBehavior:
                     assert w.std() > 0
 
     def test_condition_number_warning(self):
-        """Near-singular Omega* should trigger a warning."""
+        """Near-singular Omega* should trigger a warning (legacy path).
+
+        Re-scoped to omega_ridge=0 with the v3.7 ridge default: this test
+        exercises the legacy inv/pinv path's per-cell warning contract, which
+        the default ridge path intentionally replaces with one aggregate
+        fit-level warning (see TestOmegaRidge).
+        """
         # Use a perfectly collinear DGP to produce near-singular Omega*
         n_units, n_periods = 100, 5
         units = np.repeat(np.arange(n_units), n_periods)
@@ -469,7 +475,7 @@ class TestWeightBehavior:
         )
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
-            EfficientDiD().fit(df, "y", "unit", "time", "first_treat")
+            EfficientDiD(omega_ridge=0.0).fit(df, "y", "unit", "time", "first_treat")
             # Should get a warning about condition number or zero matrix
             warning_msgs = [str(x.message) for x in w]
             assert any(
@@ -479,6 +485,343 @@ class TestWeightBehavior:
                 or "uniform" in m.lower()
                 for m in warning_msgs
             ), f"Expected condition/zero warning, got: {warning_msgs}"
+
+
+class TestOmegaRidge:
+    """omega_ridge parameter surface, warning contract, and engagement lock.
+
+    The v3.7 default (OMEGA_RIDGE_DEFAULT) ridge-regularizes the Omega*
+    inversion behind the efficient weights; omega_ridge=0 restores the exact
+    legacy inv/pinv code path. See REGISTRY.md (EfficientDiD, Omega* ridge
+    regularization note).
+    """
+
+    @staticmethod
+    def _duplicated_period_panel(n_units=120, seed=11):
+        """Panel where period 3 duplicates period 2 exactly.
+
+        The never-treated moments for t_pre=2 and t_pre=3 become identical,
+        so every overidentified cell's Omega* is exactly singular
+        (cond > 1e12) WITHOUT being the all-zero matrix.
+        """
+        rng = np.random.default_rng(seed)
+        n_periods = 6
+        ft = np.full(n_units, np.inf)
+        ft[: n_units // 2] = 5
+        y_wide = rng.normal(0, 1.0, (n_units, n_periods))
+        y_wide[:, 2] = y_wide[:, 1]  # period 3 == period 2
+        treated = (ft[:, None] < np.inf) & (np.arange(1, n_periods + 1)[None, :] >= ft[:, None])
+        y_wide = y_wide + 2.0 * treated
+        return pd.DataFrame(
+            {
+                "unit": np.repeat(np.arange(n_units), n_periods),
+                "time": np.tile(np.arange(1, n_periods + 1), n_units),
+                "first_treat": np.repeat(ft, n_periods),
+                "y": y_wide.ravel(),
+            }
+        )
+
+    def test_param_surface(self):
+        from diff_diff.efficient_did_covariates import OMEGA_RIDGE_DEFAULT
+
+        est = EfficientDiD()
+        assert est.get_params()["omega_ridge"] == OMEGA_RIDGE_DEFAULT
+        est.set_params(omega_ridge=0.0)
+        assert est.omega_ridge == 0.0
+        est.set_params(omega_ridge=1e-4)
+        assert est.get_params()["omega_ridge"] == 1e-4
+
+    @pytest.mark.parametrize("bad", [-1e-6, np.nan, np.inf, -np.inf])
+    def test_validation_rejects_bad_values(self, bad):
+        with pytest.raises(ValueError, match="omega_ridge"):
+            EfficientDiD(omega_ridge=bad)
+
+    def test_set_params_transactional(self):
+        from diff_diff.efficient_did_covariates import OMEGA_RIDGE_DEFAULT
+
+        est = EfficientDiD()
+        with pytest.raises(ValueError):
+            est.set_params(omega_ridge=-1.0)
+        assert est.omega_ridge == OMEGA_RIDGE_DEFAULT
+
+    def test_results_echo(self):
+        df = _make_staggered_panel()
+        res = EfficientDiD(omega_ridge=1e-5).fit(df, "y", "unit", "time", "first_treat")
+        assert res.omega_ridge == 1e-5
+
+    def test_aggregate_warning_payload_and_legacy_per_cell(self):
+        """Default ridge: ONE fit-level warning whose cell count matches the
+        number of genuinely ill-conditioned cells; omega_ridge=0: the legacy
+        per-cell pseudoinverse warnings for the same cells."""
+        import re
+
+        df = self._duplicated_period_panel()
+
+        with warnings.catch_warnings(record=True) as w_ridge:
+            warnings.simplefilter("always")
+            EfficientDiD().fit(df, "y", "unit", "time", "first_treat")
+        agg = [str(x.message) for x in w_ridge if "regularization handled" in str(x.message)]
+        assert len(agg) == 1, f"expected exactly one aggregate warning, got {agg}"
+        m = re.search(r"in (\d+) of (\d+) \(g, t\) cells", agg[0])
+        assert m is not None, agg[0]
+        n_ill, n_cells = int(m.group(1)), int(m.group(2))
+        assert 1 <= n_ill <= n_cells
+
+        with warnings.catch_warnings(record=True) as w_legacy:
+            warnings.simplefilter("always")
+            EfficientDiD(omega_ridge=0.0).fit(df, "y", "unit", "time", "first_treat")
+        legacy_msgs = [str(x.message) for x in w_legacy]
+        per_cell = [m_ for m_ in legacy_msgs if "using pseudoinverse for weights" in m_]
+        # Same pathology surfaces per-cell on the legacy path. The legacy pair
+        # set additionally contains the degenerate (g'=g, t_pre=t) self-pair
+        # for pre-treatment cells (dropped on the ridge path), so legacy may
+        # warn on MORE cells - never fewer.
+        assert len(per_cell) >= n_ill
+        assert not any("regularization handled" in m_ for m_ in legacy_msgs)
+
+    def test_ridge_engaged_and_overall_stable(self):
+        """Default vs omega_ridge=0 on an overidentified panel: overall ATT
+        agrees tightly while at least one per-cell effect differs (proves the
+        ridge path is actually engaged)."""
+        df = _make_staggered_panel(n_per_group=80, n_control=100)
+        res_r = EfficientDiD().fit(df, "y", "unit", "time", "first_treat")
+        res_l = EfficientDiD(omega_ridge=0.0).fit(df, "y", "unit", "time", "first_treat")
+        assert res_r.overall_att == pytest.approx(res_l.overall_att, rel=1e-4)
+        diffs = [
+            abs(res_r.group_time_effects[k]["effect"] - res_l.group_time_effects[k]["effect"])
+            for k in res_r.group_time_effects
+        ]
+        assert max(diffs) > 0.0
+
+    def test_degenerate_self_pair_dropped_only_on_ridge_path(self):
+        """Pre-treatment cells lose the identically-zero (g'=g, t_pre=t)
+        self-pair under ridge (stored nocov weights shrink by exactly one),
+        while post-treatment cells keep the same pair count."""
+        df = _make_staggered_panel()
+        res_r = EfficientDiD().fit(df, "y", "unit", "time", "first_treat")
+        res_l = EfficientDiD(omega_ridge=0.0).fit(df, "y", "unit", "time", "first_treat")
+        assert res_r.efficient_weights is not None
+        assert res_l.efficient_weights is not None
+        period_1 = min(res_r.time_periods)
+        for gt, w_l in res_l.efficient_weights.items():
+            g, t = gt
+            w_r = res_r.efficient_weights[gt]
+            if t < g and t != period_1:
+                assert len(w_r) == len(w_l) - 1, f"cell {gt}"
+            else:
+                assert len(w_r) == len(w_l), f"cell {gt}"
+
+    def test_pretreatment_placebos_remain_data_driven(self):
+        """Under default ridge, pre-treatment placebo cells stay data-driven
+        (nonzero noise), NOT deterministically zero - the degenerate-pair
+        drop preserves the pre-trend diagnostic."""
+        df = _make_staggered_panel(rho=0.3, seed=99)
+        res = EfficientDiD().fit(df, "y", "unit", "time", "first_treat")
+        pre = [
+            abs(v["effect"])
+            for (g, t), v in res.group_time_effects.items()
+            if t < g and np.isfinite(v["effect"])
+        ]
+        assert pre, "expected pre-treatment cells"
+        assert max(pre) > 1e-8
+
+
+class TestFusedConditionalPath:
+    """The v3.7 fused unit-tiled GEMM conditional path (default ridge):
+    semantic equivalence to the dense construction, tile invariance, and the
+    1-ulp stability contract that motivated the ridge."""
+
+    @staticmethod
+    def _cov_df(n_units=200, n_periods=9, seed=42):
+        return _make_covariate_panel(n_units=n_units, n_periods=n_periods, seed=seed)
+
+    @staticmethod
+    def _surfaces(res):
+        gt = {k: (v["effect"], v["se"]) for k, v in res.group_time_effects.items()}
+        es = (
+            {k: (v["effect"], v["se"]) for k, v in res.event_study_effects.items()}
+            if res.event_study_effects
+            else {}
+        )
+        return gt, es, (res.overall_att, res.overall_se)
+
+    @classmethod
+    def _assert_close_surfaces(cls, r1, r2, rtol, atol=1e-12):
+        gt1, es1, ov1 = cls._surfaces(r1)
+        gt2, es2, ov2 = cls._surfaces(r2)
+        np.testing.assert_allclose(ov1, ov2, rtol=rtol, atol=atol)
+        for k in gt2:
+            np.testing.assert_allclose(gt1[k], gt2[k], rtol=rtol, atol=atol, err_msg=str(k))
+        for k in es2:
+            np.testing.assert_allclose(es1[k], es2[k], rtol=rtol, atol=atol, err_msg=str(k))
+
+    def test_fused_matches_dense_reference(self):
+        """Fused tiled GEMM cells match a dense reference built from the
+        legacy compute_omega_star_conditional + the same ridge solve. The
+        residual is the omega GEMM's ~1e-15 reassociation drift amplified by
+        the ridge's bounded 1/lambda sensitivity (~1e6) - i.e. <= ~1e-8, the
+        designed stability, vs ~1e-2 under the legacy pseudoinverse."""
+        import diff_diff.efficient_did as ed_mod
+        from diff_diff.efficient_did_covariates import (
+            _ridge_solve_weights,
+            compute_generated_outcomes_cov,
+            compute_omega_star_conditional,
+        )
+
+        def dense_reference(
+            cell_specs,
+            outcome_wide,
+            covariate_matrix,
+            cohort_masks,
+            never_treated_mask,
+            period_to_col,
+            cohort_fractions,
+            m_hat_cache,
+            r_hat_cache,
+            s_hat_cache,
+            bandwidth,
+            omega_ridge,
+            unit_weights=None,
+            never_treated_val=np.inf,
+            tile_bytes=None,
+        ):
+            out = {}
+            for spec in cell_specs:
+                g, t, pairs = spec["g"], spec["t"], spec["pairs"]
+                gen_out = compute_generated_outcomes_cov(
+                    target_g=g,
+                    target_t=t,
+                    valid_pairs=pairs,
+                    outcome_wide=outcome_wide,
+                    cohort_masks=cohort_masks,
+                    never_treated_mask=never_treated_mask,
+                    period_to_col=period_to_col,
+                    period_1_col=spec["y1_col"],
+                    cohort_fractions=cohort_fractions,
+                    m_hat_cache=m_hat_cache,
+                    r_hat_cache=r_hat_cache,
+                )
+                if len(pairs) == 1:
+                    scores = gen_out[:, 0]
+                else:
+                    omega = compute_omega_star_conditional(
+                        target_g=g,
+                        target_t=t,
+                        valid_pairs=pairs,
+                        outcome_wide=outcome_wide,
+                        cohort_masks=cohort_masks,
+                        never_treated_mask=never_treated_mask,
+                        period_to_col=period_to_col,
+                        period_1_col=spec["y1_col"],
+                        cohort_fractions=cohort_fractions,
+                        covariate_matrix=covariate_matrix,
+                        s_hat_cache=s_hat_cache,
+                        bandwidth=bandwidth,
+                        unit_weights=unit_weights,
+                    )
+                    w = _ridge_solve_weights(omega, omega_ridge)
+                    scores = np.sum(w * gen_out, axis=1)
+                att = (
+                    float(np.average(scores, weights=unit_weights))
+                    if unit_weights is not None
+                    else float(np.mean(scores))
+                )
+                out[(g, t)] = (att, scores - att)
+            return out
+
+        df = self._cov_df()
+        fit_kwargs = dict(covariates=["x1", "x2"], aggregate="all")
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            r_fused = EfficientDiD().fit(df, "y", "unit", "time", "first_treat", **fit_kwargs)
+        orig = ed_mod.compute_conditional_cells_tiled
+        ed_mod.compute_conditional_cells_tiled = dense_reference
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                r_ref = EfficientDiD().fit(df, "y", "unit", "time", "first_treat", **fit_kwargs)
+        finally:
+            ed_mod.compute_conditional_cells_tiled = orig
+        self._assert_close_surfaces(r_fused, r_ref, rtol=1e-6, atol=1e-8)
+
+    def test_tile_forced_twin(self, monkeypatch):
+        """Forcing one-unit tiles must reproduce the single-tile fit
+        (rel 1e-10) - and must actually execute multi-tile."""
+        import diff_diff.efficient_did_covariates as cov_mod
+
+        df = self._cov_df(n_units=150)
+        fit_kwargs = dict(covariates=["x1", "x2"], aggregate="all")
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            r_single = EfficientDiD().fit(df, "y", "unit", "time", "first_treat", **fit_kwargs)
+
+        calls = {"n": 0}
+        orig_kwm = cov_mod._kernel_weights_matrix
+
+        def counting_kwm(*args, **kwargs):
+            calls["n"] += 1
+            return orig_kwm(*args, **kwargs)
+
+        monkeypatch.setattr(cov_mod, "_TARGET_OMEGA_TILE_BYTES", 1)
+        monkeypatch.setattr(cov_mod, "_kernel_weights_matrix", counting_kwm)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            r_tiled = EfficientDiD().fit(df, "y", "unit", "time", "first_treat", **fit_kwargs)
+        # one-unit tiles -> at least n_units kernel-matrix builds (vs ~4 for
+        # a single tile), proving the multi-tile path executed
+        assert calls["n"] >= 150, calls["n"]
+        self._assert_close_surfaces(r_tiled, r_single, rtol=1e-10, atol=1e-12)
+
+    def test_tile_forced_twin_survey_weights(self, monkeypatch):
+        """Tile invariance under survey weights (weighted kernels, weighted
+        ATT averaging)."""
+        import diff_diff.efficient_did_covariates as cov_mod
+
+        df = self._cov_df(n_units=150)
+        rng = np.random.default_rng(5)
+        n_units = df["unit"].nunique()
+        pw = np.exp(rng.normal(0, 0.4, n_units))
+        df = df.merge(pd.DataFrame({"unit": sorted(df["unit"].unique()), "pw": pw}), on="unit")
+        fit_kwargs = dict(
+            covariates=["x1", "x2"], aggregate="all", survey_design=SurveyDesign(weights="pw")
+        )
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            r_single = EfficientDiD().fit(df, "y", "unit", "time", "first_treat", **fit_kwargs)
+        monkeypatch.setattr(cov_mod, "_TARGET_OMEGA_TILE_BYTES", 1)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            r_tiled = EfficientDiD().fit(df, "y", "unit", "time", "first_treat", **fit_kwargs)
+        self._assert_close_surfaces(r_tiled, r_single, rtol=1e-10, atol=1e-12)
+
+    def test_one_ulp_stability_conditional(self):
+        """THE stability contract: a 1-ulp outcome perturbation moves
+        per-cell and event-study ATTs and SEs by <= 1e-6 relative under the
+        default ridge (the legacy pseudoinverse path moves ~1e-4)."""
+        df = self._cov_df()
+        fit_kwargs = dict(covariates=["x1", "x2"], aggregate="all")
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            r_base = EfficientDiD().fit(df, "y", "unit", "time", "first_treat", **fit_kwargs)
+        df_ulp = df.copy()
+        df_ulp["y"] = np.nextafter(df_ulp["y"].to_numpy(), np.inf)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            r_ulp = EfficientDiD().fit(df_ulp, "y", "unit", "time", "first_treat", **fit_kwargs)
+        self._assert_close_surfaces(r_ulp, r_base, rtol=1e-6, atol=1e-9)
+
+    def test_one_ulp_stability_nocov(self):
+        """Same stability contract on the no-covariates PT-All path."""
+        df = _make_staggered_panel(n_per_group=80, n_control=100)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            r_base = EfficientDiD().fit(df, "y", "unit", "time", "first_treat", aggregate="all")
+        df_ulp = df.copy()
+        df_ulp["y"] = np.nextafter(df_ulp["y"].to_numpy(), np.inf)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            r_ulp = EfficientDiD().fit(df_ulp, "y", "unit", "time", "first_treat", aggregate="all")
+        self._assert_close_surfaces(r_ulp, r_base, rtol=1e-6, atol=1e-9)
 
 
 class TestValidTriples:
