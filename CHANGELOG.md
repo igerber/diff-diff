@@ -18,8 +18,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`ACRT(d_1) = ATT(d_1)/(d_1 − d_L)`). The continuous path requires a genuine mass point at the
   minimum dose (`P(D=d_L) > 0`). Results gain a `reference_dose` field (`= d_L`). Fail-closed:
   never-treated units present, a singleton `d_L`, no treated dose above `d_L`, `dvals ≤ d_L`, or a
-  survey subpopulation zeroing the `d_L` group all raise; multi-cohort and `covariates=` ×
-  `lowest_dose` raise `NotImplementedError` (deferred). The default `never_treated` /
+  survey/subpopulation design leaving `< 2` positive-weight `d_L` units all raise; multi-cohort and
+  `covariates=` × `lowest_dose` raise `NotImplementedError` (deferred). The default `never_treated` /
   `not_yet_treated` paths are unchanged.
 - **`ContinuousDiD` discrete-treatment saturated regression** (`treatment_type="discrete"`) for
   multi-valued / discrete dose (CGBS 2024 Eq. 4.1). Each distinct dose level gets its own effect

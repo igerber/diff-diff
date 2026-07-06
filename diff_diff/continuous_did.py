@@ -640,18 +640,26 @@ class ContinuousDiD:
                         "omitted reference (ATT(d_L)=0 by construction); evaluate the "
                         "dose-response only at doses strictly above d_L."
                     )
-            # Survey subpopulation weights could zero out the entire d_L control
-            # group, leaving no reference to difference against. Fail closed.
+            # Survey subpopulation weights could reduce the d_L control group to
+            # zero or a single positive-weight unit, leaving no identified
+            # reference to difference against: with one positive-weight d_L unit,
+            # mu_0 equals that unit's dY so its ee_control = w*(dY - mu_0) = 0 and
+            # the reference contributes zero variance (understated SE). The raw
+            # >= 2 guard runs before survey weights, so enforce the same effective
+            # >= 2 positive-weight requirement here. Fail closed.
             usw0 = precomp.get("unit_survey_weights")
             if usw0 is not None:
                 dv0 = precomp["dose_vector"]
                 dL_w = usw0[np.abs(dv0 - lowest_dose) <= SATURATED_TOL]
-                if not np.any(dL_w > 0):
+                n_pos_dL = int(np.count_nonzero(dL_w > 0))
+                if n_pos_dL < 2:
                     raise ValueError(
                         f"control_group='lowest_dose': the lowest-dose group d_L="
-                        f"{lowest_dose:g} has zero positive survey weight (e.g. removed by "
-                        "a subpopulation filter); there is no reference group to compare "
-                        "against. Widen the subpopulation or use a different dose grid."
+                        f"{lowest_dose:g} has {n_pos_dL} positive-weight unit(s) after "
+                        "survey/subpopulation weighting (< 2 needed for an identified "
+                        "reference variance; a single positive-weight reference unit "
+                        "contributes zero control-side variance). Widen the subpopulation "
+                        "or use a different dose grid."
                     )
         else:
             modelled_doses = all_treated_doses

@@ -2112,14 +2112,31 @@ class TestLowestDoseAPI:
         assert pre and all(abs(v["effect"]) < 1e-9 for v in pre.values())
 
     def test_survey_zeroed_dL_group_raises(self):
-        """A survey design zeroing the entire d_L reference group fails closed (H7)."""
+        """A survey design zeroing the entire d_L reference group fails closed."""
         from diff_diff import SurveyDesign
 
         df = self._no_d0()  # doses {1, 2, 4}, d_L = 1
         # Zero the survey weight of every d_L unit -> no reference group remains.
         df["wt"] = np.where(np.abs(df["dose"] - 1.0) <= 1e-9, 0.0, 1.0)
         est = ContinuousDiD(control_group="lowest_dose", treatment_type="discrete")
-        with pytest.raises(ValueError, match="zero positive survey weight"):
+        with pytest.raises(ValueError, match="positive-weight unit"):
+            est.fit(df, survey_design=SurveyDesign(weights="wt"), **_DKW)
+
+    def test_survey_effective_singleton_dL_raises(self):
+        """Survey weights leaving only ONE positive-weight d_L unit fail closed.
+
+        The raw >= 2 guard runs before weighting; a subpopulation keeping a
+        single positive-weight d_L unit gives zero reference-side variance
+        (its ee_control = w*(dY - mu_0) = 0), so require >= 2 effective units.
+        """
+        from diff_diff import SurveyDesign
+
+        df = self._no_d0()  # doses {1, 2, 4}, d_L = 1, >= 2 raw units at d_L
+        is_dL = np.abs(df["dose"] - 1.0) <= 1e-9
+        keep = sorted(df.loc[is_dL, "unit"].unique())[0]  # keep exactly one d_L unit
+        df["wt"] = np.where(is_dL & (df["unit"] != keep), 0.0, 1.0)
+        est = ContinuousDiD(control_group="lowest_dose", treatment_type="discrete")
+        with pytest.raises(ValueError, match="positive-weight unit"):
             est.fit(df, survey_design=SurveyDesign(weights="wt"), **_DKW)
 
     def test_idempotent_refit(self):
