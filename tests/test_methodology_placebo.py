@@ -251,6 +251,12 @@ class TestPlaceboParityR:
         assert res.leave_one_out_effects is not None
         for u, att in res.leave_one_out_effects.items():
             assert att == pytest.approx(gl["per_drop_att"][str(int(u))], abs=1e-10)
+        # SE-audit C3: pin the LOO t-test degrees of freedom (= n_valid - 1).
+        # The df is baked into t_stat / p_value / conf_int (asserted above) but
+        # is not surfaced as a result field; recover it from the public
+        # leave_one_out_effects (dict unit->effect, NaN for a failed drop).
+        n_valid = sum(1 for a in res.leave_one_out_effects.values() if np.isfinite(a))
+        assert n_valid - 1 == gl["df"]
 
     def test_fake_group_matches_r(self, golden, panel):
         fg = golden["fake_group"]

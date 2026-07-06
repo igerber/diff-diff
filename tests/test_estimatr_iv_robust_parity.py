@@ -102,6 +102,43 @@ class TestEstimatrIVRobustHC1Parity:
             err_msg=f"HC1 SE mismatch on DGP {dgp_name}",
         )
 
+    @pytest.mark.parametrize(
+        "dgp_name",
+        ["uniform_n200", "mild_n500", "informative_n500", "heavy_n1000"],
+    )
+    def test_hc1_intercept_se_matches_estimatr(self, fixture, dgp_name):
+        """Intercept SE = sqrt(V[0, 0]) locks vs estimatr HC1 se_intercept.
+
+        SE-audit C4: the 2SLS sandwich already forms the full 2x2 V but
+        only the slope diagonal drove the reported SE; surfacing the
+        intercept diagonal via ``return_intercept_se=True`` pins the
+        previously-unasserted golden ``se_intercept`` (measured ~1e-15).
+        Classical is intentionally NOT locked (its DOF / projection
+        convention diverges O(1/n); see the module docstring / REGISTRY).
+        """
+        dgp = fixture["fixtures"][dgp_name]
+        d = np.asarray(dgp["d"], dtype=np.float64)
+        dy = np.asarray(dgp["dy"], dtype=np.float64)
+        w = np.asarray(dgp["w"], dtype=np.float64)
+        d_lower = float(dgp["d_lower"])
+
+        _beta, _se, _psi, se_intercept = _fit_mass_point_2sls(
+            d,
+            dy,
+            d_lower,
+            None,
+            "hc1",
+            weights=w,
+            return_intercept_se=True,
+        )
+        np.testing.assert_allclose(
+            se_intercept,
+            dgp["hc1"]["se_intercept"],
+            atol=1e-10,
+            rtol=1e-10,
+            err_msg=f"HC1 intercept SE mismatch on DGP {dgp_name}",
+        )
+
 
 class TestEstimatrIVRobustCR1Parity:
     """CR1 pweight-cluster: bit-exact match vs estimatr (se_type='stata')."""
@@ -148,6 +185,35 @@ class TestEstimatrIVRobustCR1Parity:
         np.testing.assert_allclose(
             se,
             dgp["cr1"]["se"],
+            atol=1e-10,
+            rtol=1e-10,
+        )
+
+    def test_cr1_intercept_se_matches_estimatr(self, fixture):
+        """CR1 intercept SE = sqrt(V[0, 0]) locks vs estimatr (se_type='stata').
+
+        SE-audit C4 (CR1 arm of the intercept-SE lock; the HC1 arm lives in
+        TestEstimatrIVRobustHC1Parity). Measured ~1e-15.
+        """
+        dgp = fixture["fixtures"]["informative_cluster_n600"]
+        d = np.asarray(dgp["d"], dtype=np.float64)
+        dy = np.asarray(dgp["dy"], dtype=np.float64)
+        w = np.asarray(dgp["w"], dtype=np.float64)
+        cluster = np.asarray(dgp["cluster"], dtype=np.int64)
+        d_lower = float(dgp["d_lower"])
+
+        _beta, _se, _psi, se_intercept = _fit_mass_point_2sls(
+            d,
+            dy,
+            d_lower,
+            cluster,
+            "hc1",
+            weights=w,
+            return_intercept_se=True,
+        )
+        np.testing.assert_allclose(
+            se_intercept,
+            dgp["cr1"]["se_intercept"],
             atol=1e-10,
             rtol=1e-10,
         )

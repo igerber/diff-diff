@@ -22,6 +22,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **StackedDiD** event-study coefficient point estimates; **PlaceboTests** leave-one-out
     `t_stat`/`p_value`; **DIDHAD** QUG order-statistic test (`t_stat`/`p_value`, previously
     unasserted against the golden). All at ~1e-10.
+  - **estimatr 2SLS intercept SE** (HAD mass-point path): the `HC1`/`CR1` intercept SE now
+    matches `estimatr::iv_robust` `se_intercept` to ~1e-15 (the 2×2 sandwich already computed
+    `V[0,0]`; an opt-in `return_intercept_se=` hook on the private `_fit_mass_point_2sls`
+    surfaces it — the default 3-tuple return is byte-unchanged, no public-API change). The
+    `classical` intercept is excluded (same documented `O(1/n)` projection/DOF deviation as the slope).
+  - **CR2 Satterthwaite DOF** via CI-inversion (no new result fields): `TwoWayFixedEffects(hc2_bm)`
+    `dof_hc2_bm` and `MultiPeriodDiD(hc2_bm)` per-period `dof_per_coef` are pinned by reconstructing
+    `conf_int` from the golden DOF — with ATT+SE already locked, the CI matches iff the DOF matches.
+  - **PlaceboTests** leave-one-out `df` (recovered from the public `leave_one_out_effects` count);
+    **DIDHAD** Yatchew linearity test `p_value` and both `sigma2` components (through the documented
+    `N/(N-1)` sample-vs-population convention shift). All at ~1e-10.
+  - **`fixest` cluster-robust SE band**: the DiD/TWFE cluster-at-unit SE is pinned within the
+    documented ~0.25% fixest-CR1 small-sample DOF-convention band (guards an unintended SE-formula
+    change; the machine-precision hetero/cluster lock is deferred — needs an unbalanced-DGP golden).
 
 ### Added
 - **`ContinuousDiD` lowest-dose-as-control** (`control_group="lowest_dose"`, CGBS 2024 Remark 3.1) for

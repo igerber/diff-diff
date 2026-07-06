@@ -66,7 +66,7 @@ from __future__ import annotations
 
 import warnings
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Literal, Optional, Tuple, Union, overload
 
 import numpy as np
 import pandas as pd
@@ -2326,6 +2326,34 @@ def _sup_t_multiplier_bootstrap(
 # =============================================================================
 
 
+@overload
+def _fit_mass_point_2sls(
+    d: np.ndarray,
+    dy: np.ndarray,
+    d_lower: float,
+    cluster: Optional[np.ndarray],
+    vcov_type: str,
+    *,
+    weights: Optional[np.ndarray] = ...,
+    return_influence: bool = ...,
+    return_intercept_se: Literal[False] = ...,
+) -> Tuple[float, float, Optional[np.ndarray]]: ...
+
+
+@overload
+def _fit_mass_point_2sls(
+    d: np.ndarray,
+    dy: np.ndarray,
+    d_lower: float,
+    cluster: Optional[np.ndarray],
+    vcov_type: str,
+    *,
+    weights: Optional[np.ndarray] = ...,
+    return_influence: bool = ...,
+    return_intercept_se: Literal[True],
+) -> Tuple[float, float, Optional[np.ndarray], float]: ...
+
+
 def _fit_mass_point_2sls(
     d: np.ndarray,
     dy: np.ndarray,
@@ -2335,7 +2363,11 @@ def _fit_mass_point_2sls(
     *,
     weights: Optional[np.ndarray] = None,
     return_influence: bool = False,
-) -> Tuple[float, float, Optional[np.ndarray]]:
+    return_intercept_se: bool = False,
+) -> Union[
+    Tuple[float, float, Optional[np.ndarray]],
+    Tuple[float, float, Optional[np.ndarray], float],
+]:
     """Wald-IV point estimate and structural-residual 2SLS sandwich SE.
 
     The just-identified binary instrument ``Z_g = 1{D_{g,2} > d_lower}``
@@ -2390,6 +2422,13 @@ def _fit_mass_point_2sls(
         ``compute_survey_if_variance(IF, trivial)`` ≈ ``V_HC1[1, 1]``
         at ``atol=1e-10`` (PR #359 convention; see the "IF scale
         convention" section of the Phase 4.5 B plan for derivation).
+    return_intercept_se : bool
+        When True, the returned tuple gains a 4th element: the intercept
+        standard error ``sqrt(V[0, 0])`` (``V[1, 1]`` is the slope
+        variance that drives ``se_beta``). ``NaN`` whenever ``se_beta``
+        is ``NaN`` (early-exit / singular paths). Test-only surfacing hook
+        for estimatr-parity coverage; production callers leave it False and
+        the return is the unchanged 3-tuple.
 
     Returns
     -------
@@ -2398,7 +2437,9 @@ def _fit_mass_point_2sls(
         ``return_influence=True``, else ``None``. NaN for SE when the
         dose-gap vanishes (``Dbar_{Z=1} == Dbar_{Z=0}``) or the
         sandwich is singular; in those cases ``psi`` is returned as a
-        length-``n`` zero array when ``return_influence=True``.
+        length-``n`` zero array when ``return_influence=True``. When
+        ``return_intercept_se=True`` a 4th element ``se_intercept`` is
+        appended.
     """
     d = np.asarray(d, dtype=np.float64)
     dy = np.asarray(dy, dtype=np.float64)
@@ -2443,8 +2484,25 @@ def _fit_mass_point_2sls(
 
     _null_psi = np.zeros(n, dtype=np.float64) if return_influence else None
 
+    def _pack(
+        beta: float,
+        se_b: float,
+        psi_out: Optional[np.ndarray],
+        se_int: float = float("nan"),
+    ) -> Union[
+        Tuple[float, float, Optional[np.ndarray]],
+        Tuple[float, float, Optional[np.ndarray], float],
+    ]:
+        # Centralize the optional 4th (intercept-SE) element so every one of
+        # the function's early-exit and success returns keeps a consistent
+        # arity. The @overload stubs give callers the precise per-flag type;
+        # the True branch appends se_int for the test-only surfacing hook.
+        if return_intercept_se:
+            return (beta, se_b, psi_out, se_int)
+        return (beta, se_b, psi_out)
+
     if n_above == 0 or n_at_or_below == 0:
-        return float("nan"), float("nan"), _null_psi
+        return _pack(float("nan"), float("nan"), _null_psi)
 
     # Point estimate: weighted Wald-IV ratio (reduces to unweighted at w=1).
     if weighted:
@@ -2453,7 +2511,7 @@ def _fit_mass_point_2sls(
         w_Z1 = float(w_arr[Z1_idx].sum())
         w_Z0 = float(w_arr[Z0_idx].sum())
         if w_Z1 <= 0.0 or w_Z0 <= 0.0:
-            return float("nan"), float("nan"), _null_psi
+            return _pack(float("nan"), float("nan"), _null_psi)
         dose_gap = float(
             (w_arr[Z1_idx] * d[Z1_idx]).sum() / w_Z1 - (w_arr[Z0_idx] * d[Z0_idx]).sum() / w_Z0
         )
@@ -2470,7 +2528,7 @@ def _fit_mass_point_2sls(
 
     if abs(dose_gap) < 1e-12 * max(1.0, abs(d_bar)):
         # No dose variation around d_lower -> beta undefined.
-        return float("nan"), float("nan"), _null_psi
+        return _pack(float("nan"), float("nan"), _null_psi)
 
     # dy_gap / dy_bar were computed inside the weighted/unweighted blocks above.
     beta_hat = float(dy_gap / dose_gap)
@@ -2495,7 +2553,7 @@ def _fit_mass_point_2sls(
     try:
         ZtWX_inv = np.linalg.inv(ZtWX)
     except np.linalg.LinAlgError:
-        return beta_hat, float("nan"), _null_psi
+        return _pack(beta_hat, float("nan"), _null_psi)
 
     vcov_type = vcov_type.lower()
     if vcov_type in _MASS_POINT_VCOV_UNSUPPORTED:
@@ -2525,25 +2583,25 @@ def _fit_mass_point_2sls(
         n_clusters = len(clusters_unique)
         if n_clusters < 2:
             # Cluster-robust SE undefined with a single cluster.
-            return beta_hat, float("nan"), _null_psi
+            return _pack(beta_hat, float("nan"), _null_psi)
         Omega *= (n_clusters / (n_clusters - 1)) * ((n - 1) / (n - k))
     elif vcov_type == "classical":
         if weighted:
             dof = w_sum - k
             if dof <= 0:
-                return beta_hat, float("nan"), _null_psi
+                return _pack(beta_hat, float("nan"), _null_psi)
             sigma2 = float((w_arr * w_arr * u * u).sum()) / dof
             Omega = sigma2 * (Zd.T @ ((w_arr * w_arr)[:, None] * Zd))
         else:
             dof = n - k
             if dof <= 0:
-                return beta_hat, float("nan"), _null_psi
+                return _pack(beta_hat, float("nan"), _null_psi)
             sigma2 = float((u * u).sum()) / dof
             Omega = sigma2 * (Zd.T @ Zd)
     elif vcov_type == "hc1":
         dof = n - k
         if dof <= 0:
-            return beta_hat, float("nan"), _null_psi
+            return _pack(beta_hat, float("nan"), _null_psi)
         if weighted:
             # Pweight HC1: meat = Z' diag(w² u²) Z (Wooldridge 2010 Eq 12.37,
             # matches linalg.py:1141 convention and estimatr::iv_robust
@@ -2561,11 +2619,19 @@ def _fit_mass_point_2sls(
     V = ZtWX_inv @ Omega @ ZtWX_inv.T
     var_beta = float(V[1, 1])
     if not np.isfinite(var_beta) or var_beta < 0:
-        return beta_hat, float("nan"), _null_psi
+        return _pack(beta_hat, float("nan"), _null_psi)
     se_beta = float(np.sqrt(var_beta))
+    # Intercept SE = sqrt(V[0, 0]); surfaced only when return_intercept_se
+    # (see _pack). NaN if the intercept variance is non-finite/negative.
+    var_intercept = float(V[0, 0])
+    se_intercept = (
+        float(np.sqrt(var_intercept))
+        if np.isfinite(var_intercept) and var_intercept >= 0
+        else float("nan")
+    )
 
     if not return_influence:
-        return beta_hat, se_beta, None
+        return _pack(beta_hat, se_beta, None, se_intercept)
 
     # Per-unit influence function on β̂-scale, scaled so that
     # compute_survey_if_variance(psi, trivial_resolved) ≈ V_HC1[1, 1]
@@ -2583,7 +2649,7 @@ def _fit_mass_point_2sls(
         psi0 = (Zd @ bread_row) * u
     dof_psi = max(n - k, 1)
     psi = psi0 * np.sqrt((n - 1) / dof_psi)
-    return beta_hat, se_beta, psi
+    return _pack(beta_hat, se_beta, psi, se_intercept)
 
 
 # =============================================================================

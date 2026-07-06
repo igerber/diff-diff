@@ -431,6 +431,17 @@ class TestYatchewParity:
         r_yatchew_t = _as_list(r_result["yatchew_t"])
         r_yatchew_n = _as_list(r_result["yatchew_n"])
         r_event_ids = _as_list(r_result["event_id"])
+        # SE-audit C5: also lock the yatchew p-value and both sigma^2 columns
+        # (previously only T_hr was asserted). All three carry the SAME
+        # documented N/(N-1) convention shift as T_hr: R's YatchewTest uses
+        # base-R `var()` (1/(N-1)) where our estimator uses the population
+        # (1/G, 1/2G) convention, so R = ours x G/(G-1). Measured to lock at
+        # ~1e-15 across every row (incl. the literal-2G sigma2_diff divisor).
+        r_yatchew_p = _as_list(r_result["yatchew_p"])
+        r_yatchew_s2_lin = _as_list(r_result["yatchew_sigma2_lin"])
+        r_yatchew_s2_diff = _as_list(r_result["yatchew_sigma2_diff"])
+        from scipy.stats import norm as _norm
+
         for r_idx, r_id in enumerate(r_event_ids):
             e = _r_id_to_event_time(int(r_id), trends_lin)
             if e not in dy_dict:
@@ -458,6 +469,35 @@ class TestYatchewParity:
                     f"null={null_mode!r}): T_hr mismatch "
                     f"after N/(N-1) convention shift"
                 ),
+            )
+            # p-value: shift T first, THEN evaluate the normal CDF (a p-value
+            # cannot be rescaled directly). 1 - Phi(T_hr x G/(G-1)) vs golden.
+            _fac = G_horizon / (G_horizon - 1)
+            np.testing.assert_allclose(
+                1.0 - _norm.cdf(py_t_in_r_convention),
+                float(r_yatchew_p[r_idx]),
+                atol=YATCHEW_ATOL,
+                rtol=0,
+                err_msg=(
+                    f"{dgp_name}/{combo_name}/Yatchew row {r_idx}: "
+                    f"p-value mismatch after N/(N-1) shift"
+                ),
+            )
+            # sigma^2 columns carry the same G/(G-1) convention shift as T_hr
+            # (sigma2_diff holds despite our literal-2G divisor — measured).
+            np.testing.assert_allclose(
+                float(r.sigma2_lin) * _fac,
+                float(r_yatchew_s2_lin[r_idx]),
+                atol=YATCHEW_ATOL,
+                rtol=0,
+                err_msg=(f"{dgp_name}/{combo_name}/Yatchew row {r_idx}: sigma2_lin mismatch"),
+            )
+            np.testing.assert_allclose(
+                float(r.sigma2_diff) * _fac,
+                float(r_yatchew_s2_diff[r_idx]),
+                atol=YATCHEW_ATOL,
+                rtol=0,
+                err_msg=(f"{dgp_name}/{combo_name}/Yatchew row {r_idx}: sigma2_diff mismatch"),
             )
 
 

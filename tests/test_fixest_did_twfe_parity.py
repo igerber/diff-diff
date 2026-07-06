@@ -89,3 +89,11 @@ class TestFixestDiDTWFEParity:
             np.testing.assert_allclose(
                 res.att, golden[key]["cluster_unit"]["att"], atol=1e-10, rtol=0
             )
+            # SE-audit G2: ratio-band pin on the cluster-robust SE. The exact
+            # value carries the documented ~0.25% fixest-CR1 small-sample
+            # DOF-convention deviation (SE_AUDIT.md), so it is not machine-
+            # precision lockable here; this pins that we never regress BEYOND
+            # the known band (catches an unintended CR1 SE-formula change). The
+            # machine-precision hetero/cluster lock is the deferred G2 golden
+            # regeneration (needs an unbalanced/heteroskedastic DGP).
+            assert res.se == pytest.approx(golden[key]["cluster_unit"]["se"], rel=0.005)

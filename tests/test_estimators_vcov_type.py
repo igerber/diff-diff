@@ -681,6 +681,24 @@ class TestFitBehavior:
             "would be ~39, so the contrast-DOF helper may not be wired."
         )
 
+        # SE-audit C2: lock the per-period BM Satterthwaite DOF (`dof_per_coef`)
+        # via CI-inversion. Each event-study period effect maps to R's
+        # `treated_period_p` coefficient; reconstructing that period's CI from
+        # the golden per-coef DOF and asserting equality with the reported
+        # `conf_int` pins the DOF (effect+se already fixed → the CI matches iff
+        # the DOF matches). On this fixture the post-period entries coincide
+        # with `dof_avg`, so this completes the per-PERIOD path coverage (a
+        # distinct code path from the avg-contrast DOF pinned above), not a new
+        # numeric target.
+        name_to_dof = dict(zip(d["finite_coef_names"], d["dof_per_coef"]))
+        for p in post_periods:
+            pe = res.period_effects[p]
+            gold_dof = name_to_dof.get(f"treated_period_{p}")
+            assert gold_dof is not None, f"golden dof_per_coef missing treated_period_{p}"
+            t_crit = float(stats.t.ppf(1.0 - res.alpha / 2.0, gold_dof))
+            expected_ci = (pe.effect - t_crit * pe.se, pe.effect + t_crit * pe.se)
+            np.testing.assert_allclose(pe.conf_int, expected_ci, atol=1e-8, rtol=0)
+
     def test_multi_period_fit_honors_hc2_bm(self):
         """MultiPeriodDiD.fit with vcov_type='hc2_bm' uses Bell-McCaffrey DOF.
 
@@ -1608,10 +1626,16 @@ class TestDiDAbsorbedFERParity:
         np.testing.assert_allclose(res.se, expected_se_slope, atol=1e-10)
         # ATT also bit-equal.
         np.testing.assert_allclose(res.att, float(d["coef"][treat_post_idx]), atol=1e-10)
-        # Suppress unused-local warning while keeping the constant in scope
-        # (DOF is exposed indirectly via res.p_value/conf_int but not as a
-        # standalone field on DiDResults; the SE+ATT parity above suffices).
-        _ = expected_dof_slope
+        # SE-audit C2: CI-inversion lock of `dof_hc2_bm`. res.conf_int uses a
+        # Satterthwaite t-dist with the BM DOF; with att+se already pinned above,
+        # reconstructing the CI from the golden DOF pins the DOF itself (the CI
+        # matches iff the estimator's DOF equals the golden DOF). Verified this
+        # session: matches to ~2e-16, diverging ~0.03 under the wrong n-k DOF.
+        from scipy import stats
+
+        t_crit = float(stats.t.ppf(1.0 - res.alpha / 2.0, expected_dof_slope))
+        expected_ci = (res.att - t_crit * res.se, res.att + t_crit * res.se)
+        np.testing.assert_allclose(res.conf_int, expected_ci, atol=1e-9, rtol=0)
 
     def test_unweighted_cr2_bm_per_coef_dof_no_nonphysical(self):
         """Unweighted clustered CR2-BM per-coef DOF: physical or NaN, never garbage.
