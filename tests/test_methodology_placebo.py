@@ -244,6 +244,8 @@ class TestPlaceboParityR:
         gl = golden["leave_one_out"]
         assert res.placebo_effect == pytest.approx(gl["mean"], abs=1e-10)
         assert res.se == pytest.approx(gl["se"], abs=1e-10)
+        assert res.t_stat == pytest.approx(gl["t_stat"], abs=1e-10)
+        assert res.p_value == pytest.approx(gl["p_value"], abs=1e-10)
         assert res.conf_int[0] == pytest.approx(gl["ci_lower"], abs=1e-9)
         assert res.conf_int[1] == pytest.approx(gl["ci_upper"], abs=1e-9)
         assert res.leave_one_out_effects is not None

@@ -649,6 +649,13 @@ class TestFitBehavior:
             unit="unit",
         )
         assert np.isfinite(res.avg_att) and np.isfinite(res.avg_se)
+        # SE-audit C2: pin the average-effect SE (was only checked finite). The
+        # R golden carries the contrast `c_avg` and the CR2 vcov, so the expected
+        # avg SE is sqrt(c_avg' Vcr2 c_avg).
+        c_avg = np.asarray(d["c_avg"], dtype=np.float64)
+        vcov_cr2 = np.asarray(d["vcov_cr2"]).reshape(d["vcov_cr2_shape"], order="F")
+        expected_avg_se = float(np.sqrt(c_avg @ vcov_cr2 @ c_avg))
+        np.testing.assert_allclose(res.avg_se, expected_avg_se, atol=1e-8, rtol=0)
         # Recover the implied DOF from the reported p_value:
         # avg_p_value = 2 * (1 - t.cdf(|t|, df))  ->  df = root of
         # `t.sf(|t|, df) * 2 - p` (Satterthwaite-bounded scalar bisection
@@ -1681,9 +1688,7 @@ class TestDiDAbsorbedFERParity:
         treated = np.asarray(d["treated"], dtype=float)
         post = np.asarray(d["post"], dtype=float)
         unit = np.asarray(d["unit"])
-        X = np.column_stack(
-            [np.ones(n) if nm == "(Intercept)" else np.zeros(n) for nm in names]
-        )
+        X = np.column_stack([np.ones(n) if nm == "(Intercept)" else np.zeros(n) for nm in names])
         # Rebuild the full design (same as the sibling test).
         period = np.asarray(d["period"])
         tp = treated * post

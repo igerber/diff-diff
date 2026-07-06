@@ -1296,10 +1296,20 @@ class TestTWFEHC2RParity:
         )
         y = data_local["y"].values.astype(np.float64)
         _, residuals, _ = solve_ols(X, y, vcov_type="hc2")
-        _, dof_bm_one_way = compute_robust_vcov(X, residuals, vcov_type="hc2_bm", return_dof=True)
+        vcov_ow, dof_bm_one_way = compute_robust_vcov(
+            X, residuals, vcov_type="hc2_bm", return_dof=True
+        )
         att_idx = scenario["coef_names"].index("treat_post")
         dof_R = float(scenario["dof_bm_one_way"][att_idx])
         np.testing.assert_allclose(float(dof_bm_one_way[att_idx]), dof_R, atol=1e-10, rtol=0)
+        # SE-audit C2: the one-way CR2 (HC2-BM) SE was loaded but never asserted.
+        if "vcov_cr2_one_way" in scenario:
+            n = len(scenario["coef_names"])
+            vcov_cr2_ow = np.array(scenario["vcov_cr2_one_way"]).reshape((n, n), order="F")
+            se_R = float(np.sqrt(vcov_cr2_ow[att_idx, att_idx]))
+            np.testing.assert_allclose(
+                float(np.sqrt(vcov_ow[att_idx, att_idx])), se_R, atol=1e-10, rtol=0
+            )
 
     def test_twfe_hc2_bm_clustered_at_unit_dof_matches_clubsandwich(self):
         """CR2-BM DOF clustered at unit matches clubSandwich
@@ -1350,3 +1360,23 @@ class TestTWFEHC2RParity:
         att_idx = scenario["coef_names"].index("treat_post")
         dof_R = float(scenario["dof_bm_unit"][att_idx])
         np.testing.assert_allclose(float(dof_bm_unit[att_idx]), dof_R, atol=1e-10, rtol=0)
+
+    def test_twfe_hc2_bm_se_matches_clubsandwich_cr2_unit(self):
+        """The SE ``TwoWayFixedEffects(vcov_type='hc2_bm')`` reports by default
+        (CR2 clustered at unit) matches clubSandwich ``vcovCR(type='CR2')`` at
+        atol=1e-10. SE-audit C2: the golden's ``vcov_cr2_unit`` diagonal was
+        loaded for the DOF test but its SE was never asserted."""
+        scenario = _load_twfe_golden_scenario()
+        if scenario is None:
+            pytest.skip("twfe_two_period scenario not in golden JSON.")
+        if "vcov_cr2_unit" not in scenario:
+            pytest.skip("twfe_two_period scenario does not include vcov_cr2_unit.")
+        data = self._build_panel(scenario)
+        res = TwoWayFixedEffects(vcov_type="hc2_bm").fit(
+            data, outcome="y", treatment="treated", time="post", unit="unit"
+        )
+        n = len(scenario["coef_names"])
+        vcov_cr2 = np.array(scenario["vcov_cr2_unit"]).reshape((n, n), order="F")
+        att_idx = scenario["coef_names"].index("treat_post")
+        se_R = float(np.sqrt(vcov_cr2[att_idx, att_idx]))
+        np.testing.assert_allclose(res.se, se_R, atol=1e-10, rtol=0)

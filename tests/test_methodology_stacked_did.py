@@ -240,6 +240,17 @@ class TestStackedDiDParityR:
                 "match clubSandwich CR1S contrast variance at atol=1e-10"
             ),
         )
+        # SE-audit C1: the event-study POINT estimates (`coef_es`) were loaded
+        # for the DOF recovery but never pinned to R. They are vcov-independent,
+        # so this one assertion covers both cluster levels.
+        py_coef = np.array([res.event_study_effects[h]["effect"] for h in event_times])
+        np.testing.assert_allclose(
+            py_coef,
+            goldens["unit"]["coef_es"],
+            atol=1e-10,
+            rtol=1e-10,
+            err_msg="StackedDiD event-study coefficients must match R `coef_es`.",
+        )
 
     def test_hc2_bm_se_matches_clubsandwich_cr2_unit_cluster(self, goldens, panel):
         """cluster=unit, vcov_type=hc2_bm matches R `vcovCR(type='CR2')`.

@@ -56,7 +56,7 @@ import pandas as pd
 import pytest
 
 from diff_diff import HeterogeneousAdoptionDiD
-from diff_diff.had_pretests import yatchew_hr_test
+from diff_diff.had_pretests import qug_test, yatchew_hr_test
 
 FIXTURE_PATH = Path(__file__).parent.parent / "benchmarks" / "data" / "did_had_golden.json"
 
@@ -500,3 +500,41 @@ class TestFixtureMetadata:
     def test_all_dgps_present(self, fixture):
         for name in DGP_NAMES:
             assert name in fixture["fixtures"], f"missing DGP {name!r}"
+
+
+def _golden_qug(combos):
+    """First non-NA (qug_t, qug_p) across a DGP's combos. QUG is computed once
+    on the cross-sectional dose, so every combo repeats the same value (with
+    ``"NA"`` on placebo rows)."""
+    for cd in combos.values():
+        res = cd["result"]
+        ts = res.get("qug_t")
+        ps = res.get("qug_p")
+        t_list = ts if isinstance(ts, list) else [ts]
+        p_list = ps if isinstance(ps, list) else [ps]
+        t_vals = [x for x in t_list if x not in (None, "NA")]
+        p_vals = [x for x in p_list if x not in (None, "NA")]
+        if t_vals and p_vals:
+            return float(t_vals[0]), float(p_vals[0])
+    return None, None
+
+
+@pytest.mark.parametrize("dgp_name", DGP_NAMES)
+class TestQUGParity:
+    """QUG order-statistic dose test vs R DIDHAD (SE-audit C5).
+
+    ``qug_test`` was never asserted against this golden. It depends only on the
+    cross-sectional dose vector (one dose per unit), so it is DGP-level, not
+    per-combo. Compares to the golden's ``qug_t`` (the order-statistic ratio T,
+    NOT a per-horizon treatment-effect t-stat) and ``qug_p = 1/(1+T)``.
+    """
+
+    def test_qug_t_and_p_match_r(self, fixture, dgp_name):
+        entry = fixture["fixtures"][dgp_name]
+        panel = _panel_from_fixture(entry)
+        dose = panel.groupby("g")["d"].max().to_numpy(dtype=np.float64)
+        res = qug_test(dose)
+        r_t, r_p = _golden_qug(entry["combos"])
+        assert r_t is not None, f"{dgp_name}: no non-NA qug_t in golden"
+        np.testing.assert_allclose(res.t_stat, r_t, atol=1e-10, rtol=0)
+        np.testing.assert_allclose(res.p_value, r_p, atol=1e-10, rtol=0)
