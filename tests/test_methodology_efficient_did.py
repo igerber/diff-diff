@@ -473,6 +473,203 @@ class TestKernelCovBatch:
         np.testing.assert_allclose(tiled, full, rtol=1e-13, atol=1e-12)
 
 
+class TestKcovTableHoisting:
+    """v3.8 cross-cell hoisted kernel-covariance tables: the per-group table
+    built by ``_build_group_kcov_table`` from the ``_collect_kcov_specs``
+    registry must reproduce, column by column, the per-cell ``_kcov_batch``
+    construction it dedups (every Omega* term is
+    ``s_group * KCov(Y_u1 - Y_v1, Y_u2 - Y_v2 | group)``), and the gather
+    assembly must reproduce the legacy per-entry (j, k) loop value-exactly.
+
+    The spec sets below are synthetic/defensive at the helper level: they
+    exercise key shapes (reversed orientation, per-cell ``y1_col``) beyond
+    what a production fit can currently reach, to lock the key contracts."""
+
+    T = 8
+
+    @classmethod
+    def _setup(cls, seed=0, weighted=False):
+        from diff_diff.efficient_did_covariates import _kernel_weights_matrix
+
+        rng = np.random.default_rng(seed)
+        n = 80
+        outcome = rng.normal(size=(n, cls.T)).cumsum(axis=1)
+        x = rng.normal(size=(n, 3))
+        first = np.full(n, np.inf)
+        first[:25] = 4.0
+        first[25:45] = 6.0
+        masks = {4.0: first == 4.0, 6.0: first == 6.0, np.inf: np.isinf(first)}
+        uw = np.exp(rng.normal(0, 0.4, n)) if weighted else None
+        s_full = {gk: rng.uniform(1.0, 5.0, n) for gk in masks}
+
+        def w_for(gkey):
+            gw = uw[masks[gkey]] if uw is not None else None
+            return _kernel_weights_matrix(x, x[masks[gkey]], 0.9, group_weights=gw)
+
+        return outcome, masks, s_full, w_for
+
+    @staticmethod
+    def _period_to_col():
+        return {float(p): p - 1 for p in range(1, TestKcovTableHoisting.T + 1)}
+
+    @staticmethod
+    def _default_specs():
+        # (gp, tpre) pairs mixing never-treated, same-cohort (term 3/4
+        # active), and another cohort (a second term-5 group); the two cells
+        # share t2/t5 keys, exercising the cross-cell dedup.
+        return [
+            {
+                "g": 4.0,
+                "t": 5.0,
+                "t_col": 4,
+                "y1_col": 0,
+                "pairs": [(np.inf, 2.0), (np.inf, 3.0), (4.0, 2.0), (6.0, 3.0)],
+            },
+            {
+                "g": 4.0,
+                "t": 6.0,
+                "t_col": 5,
+                "y1_col": 0,
+                "pairs": [(np.inf, 2.0), (np.inf, 3.0), (4.0, 3.0)],
+            },
+        ]
+
+    def _tables_and_oracle(self, specs, seed=0, weighted=False):
+        from diff_diff.efficient_did_covariates import (
+            _build_group_kcov_table,
+            _collect_kcov_specs,
+            _kcov_batch,
+        )
+
+        outcome, masks, s_full, w_for = self._setup(seed, weighted)
+        registry, cell_asm = _collect_kcov_specs(specs, self._period_to_col(), np.inf)
+        tables, oracles = {}, {}
+        for gkey, reg in registry.items():
+            y_g = outcome[masks[gkey]]
+            tables[gkey] = _build_group_kcov_table(w_for(gkey), y_g, reg, s_full[gkey])
+            dk = reg["diff_keys"]
+            a = y_g[:, dk[reg["prod_i"], 0]] - y_g[:, dk[reg["prod_i"], 1]]
+            b = y_g[:, dk[reg["prod_j"], 0]] - y_g[:, dk[reg["prod_j"], 1]]
+            oracles[gkey] = s_full[gkey][:, None] * _kcov_batch(w_for(gkey), a, b)
+        return registry, cell_asm, tables, oracles
+
+    @pytest.mark.parametrize("weighted", [False, True])
+    def test_group_tables_match_per_cell_construction(self, weighted):
+        registry, _, tables, oracles = self._tables_and_oracle(
+            self._default_specs(), seed=1, weighted=weighted
+        )
+        assert set(registry) == {4.0, 6.0, np.inf}
+        for gkey, reg in registry.items():
+            n_p = reg["zero_col"]
+            np.testing.assert_allclose(tables[gkey][:, :n_p], oracles[gkey], rtol=1e-12, atol=1e-12)
+            assert np.all(tables[gkey][:, n_p] == 0.0)
+
+    def test_reversed_orientation_pre_periods_straddle_t(self):
+        """Ordered-key contract (review-critical): a pre-treatment cell whose
+        pre-periods straddle t puts BOTH (t, earlier) and (t, later) columns
+        in the table; sort-canonicalizing the difference key would sign-flip
+        the mixed product KCov(Y_t - Y_2, Y_t - Y_5) at t=3."""
+        specs = [
+            {"g": 4.0, "t": 3.0, "t_col": 2, "y1_col": 0, "pairs": [(np.inf, 2.0), (np.inf, 5.0)]},
+        ]
+        registry, _, tables, oracles = self._tables_and_oracle(specs, seed=2)
+        reg = registry[np.inf]
+        keys = {tuple(k) for k in reg["diff_keys"]}
+        assert (2, 1) in keys and (2, 4) in keys  # (t_col, p_col) ordered
+        np.testing.assert_allclose(
+            tables[np.inf][:, : reg["zero_col"]],
+            oracles[np.inf],
+            rtol=1e-12,
+            atol=1e-12,
+        )
+
+    def test_multi_y1_cells_share_registry(self):
+        """Defensive/synthetic: production reaches per-cohort ``y1_col`` only
+        under pt_assumption="post" (all H == 1, no tables built), but the key
+        registry carries y1 so two cells with different baselines must dedup
+        without collision."""
+        specs = self._default_specs()
+        specs[1] = dict(specs[1], y1_col=1)
+        registry, cell_asm, tables, oracles = self._tables_and_oracle(specs, seed=3)
+        for gkey, reg in registry.items():
+            np.testing.assert_allclose(
+                tables[gkey][:, : reg["zero_col"]],
+                oracles[gkey],
+                rtol=1e-12,
+                atol=1e-12,
+            )
+        # distinct y1 -> distinct term-1 columns for the two cells
+        a0 = cell_asm[(4.0, 5.0)]
+        a1 = cell_asm[(4.0, 6.0)]
+        assert a0["t1_col"] != a1["t1_col"]
+
+    def test_assembly_matches_legacy_loop_value_exactly(self):
+        """The triu-strip gather assembly (incl. the term-1 fold, zero-column
+        masking, and the mirror write) must equal the legacy per-entry
+        (j, k) loop on identical table inputs - value-exact
+        (assert_array_equal; gather + add is not BLAS, and the op sequence
+        is preserved up to commutativity of the first add)."""
+        from diff_diff.efficient_did_covariates import _assemble_omega_tile
+
+        specs = self._default_specs()
+        registry, cell_asm, tables, _ = self._tables_and_oracle(specs, seed=4)
+
+        # key -> column lookup rebuilt from the registry (both pair orders)
+        col_of = {}
+        for gkey, reg in registry.items():
+            dk = reg["diff_keys"]
+            for c in range(reg["zero_col"]):
+                d1 = tuple(dk[reg["prod_i"][c]])
+                d2 = tuple(dk[reg["prod_j"][c]])
+                col_of[(gkey, d1, d2)] = c
+                col_of[(gkey, d2, d1)] = c
+
+        p2c = self._period_to_col()
+        for spec in specs:
+            g, t = spec["g"], spec["t"]
+            t_col, y1 = spec["t_col"], spec["y1_col"]
+            pairs = spec["pairs"]
+            H = len(pairs)
+            j_c = [p2c[tp] for _, tp in pairs]
+            j_gp = [gp for gp, _ in pairs]
+            n_rows = tables[g].shape[0]
+
+            ref = np.empty((n_rows, H, H))
+            for j in range(H):
+                for k in range(j, H):
+                    cj, ck = j_c[j], j_c[k]
+                    val = (
+                        tables[g][:, col_of[(g, (t_col, y1), (t_col, y1))]]
+                        + tables[np.inf][:, col_of[(np.inf, (t_col, cj), (t_col, ck))]]
+                    )
+                    if j_gp[j] == g:
+                        val = val - tables[g][:, col_of[(g, (t_col, y1), (cj, y1))]]
+                    if j_gp[k] == g:
+                        val = val - tables[g][:, col_of[(g, (t_col, y1), (ck, y1))]]
+                    if j_gp[j] == j_gp[k]:
+                        gk = np.inf if np.isinf(j_gp[j]) else j_gp[j]
+                        val = val + tables[gk][:, col_of[(gk, (cj, y1), (ck, y1))]]
+                    ref[:, j, k] = val
+                    if j != k:
+                        ref[:, k, j] = val
+
+            got = _assemble_omega_tile(cell_asm[(g, t)], tables, g, np.inf, n_rows)
+            np.testing.assert_array_equal(got, ref)
+
+    def test_h1_cells_contribute_no_keys(self):
+        """H == 1 cells skip Omega* entirely: a spec set of only single-pair
+        cells yields an empty registry (no tables, no kernel matrices)."""
+        from diff_diff.efficient_did_covariates import _collect_kcov_specs
+
+        specs = [
+            {"g": 4.0, "t": 5.0, "t_col": 4, "y1_col": 3, "pairs": [(np.inf, 3.0)]},
+            {"g": 6.0, "t": 7.0, "t_col": 6, "y1_col": 5, "pairs": [(np.inf, 5.0)]},
+        ]
+        registry, cell_asm = _collect_kcov_specs(specs, self._period_to_col(), np.inf)
+        assert registry == {}
+        assert cell_asm == {}
+
+
 # =============================================================================
 # Eq 3.9 — no-covariate generated outcome (telescoping)
 # =============================================================================

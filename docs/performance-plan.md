@@ -277,9 +277,56 @@ with n as the indeterminacy band tightens): overall ATT 1.6e-2 / 4.0e-3 / 1.1e-3
 at n=500/1k/2k; worst post-treatment cell <= 0.58 of its own SE; nocov path ~1e-7.
 1-ulp per-cell stability after: <= 3e-9 rel (before: 1.2e-4).
 
-Remaining lever (TODO row): cross-cell kernel-table hoisting (Term 5 tables are
-(g,t)-independent; Term 2 depends only on t) — ~10x on the intrinsic per-cell GEMM
-factor at 100k-unit scale; not needed below ~50k units.
+The lever identified at the time — cross-cell kernel-table hoisting (Term 5
+tables are (g,t)-independent; Term 2 depends only on t), estimated ~10x on the
+intrinsic per-cell GEMM factor at 100k-unit scale — was filed as a TODO row and
+is RESOLVED by the follow-up below.
+
+### Cross-cell kcov-table hoisting + per-group W lifecycle (2026-07 follow-up)
+
+Resolves the hoisting TODO row above. Instrumented stage split of the v3.7 tiled
+path (`.bench-local/edid_hoist_spike.py`; same 20p/5-cohort/5-cov scenario):
+
+| stage | n=2k | n=10k | n=30k | scaling |
+|---|---|---|---|---|
+| t5 + t2 kcov GEMMs | 0.95s | 21.2s | 217.2s | O(n^2), dominant |
+| ridge_solve | 3.5s | 16.9s | 48.5s | linear |
+| assembly (Python (j,k) loop) | 1.4s | 6.6s | 28.3s | linear x tile-count overhead |
+| fit total | 7.7s | 57.2s | 359s | |
+
+Duplication: t5 computed 108,300 kcov columns per tile where 1,140 are distinct
+(95x); t2 18,050 vs 3,610 (5x) — ~26.6x combined GEMM-traffic reduction. A
+"base-table" bilinear factorization (level covariances combined 4-term, ~90x)
+was measured and REJECTED: ~500x fp-error amplification on persistent panels
+(`.bench-local/edid_hoist_cancellation.py`), which through the ridge's 1/lambda
+sensitivity cap lands AT the 1e-6 stability contract. The shipped variant hoists
+the DIFFERENCED-column tables (numerics identical in kind to the per-cell
+construction). Assembly variants were micro-benchmarked: full (H,H) index
+gathers were memory-bandwidth-bound and SLOWER than the legacy Python loop;
+the shipped triu-strip gather through compact per-cell column slices is ~5x
+faster than the naive vectorization and faster than the loop, while preserving
+the legacy per-entry operation order value-exactly (term 1 folded into the
+compact slice pre-gather; mirror preserved at the copy level). Kernel W
+matrices are built and freed one group at a time, so the tile budget is set by
+the largest single group (~3-5x fatter tiles at 100k).
+
+Measured arms (3-rep medians; BEFORE = pristine main fcd77683 via
+baseline-worktree PYTHONPATH; `.bench-local/edid_hoist_arms_results.jsonl`):
+
+| scenario | BEFORE | AFTER | speedup | maxrss B->A |
+|---|---|---|---|---|
+| conditional n=2k | 7.71s | 6.96s | 1.11x | 0.59 -> 0.59 GB |
+| conditional n=10k | 57.2s | 35.7s | 1.60x | 0.76 -> 0.79 GB |
+| conditional n=30k | 358.4s | 128.8s | 2.78x | 0.96 -> 1.12 GB |
+| conditional n=100k | 85.6 min (v3.7 measured, 1 rep) | 17.8 min (1 rep) | ~4.8x | 4.0 -> 4.02 GB |
+| nocov n=2k (guard) | 0.44s | 0.44s | 1.00x (byte-identical) | flat |
+| survey n=1k | 3.30s | 3.03s | 1.09x | flat |
+
+The kernel-covariance stage itself: 21.2s -> 0.53s at 10k (40x). Deltas:
+post-treatment cells ~1e-12 rel (max 6e-12), overall ATT ~1e-13, nocov exactly
+0. Post-hoist the top stages at every scale are `_ridge_solve_weights` (batched
+LAPACK LU over (n x H x H) stacks; 17.2s at 10k — Rust batched-Cholesky is the
+natural follow-up, TODO row filed) and the nuisance sieves.
 
 ---
 

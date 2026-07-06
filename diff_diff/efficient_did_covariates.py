@@ -1104,6 +1104,11 @@ def compute_omega_star_conditional(
 # can monkeypatch it to force multi-tile execution.
 _TARGET_OMEGA_TILE_BYTES = 256 * 1024 * 1024
 
+# Column-chunk width for the product GEMMs inside _build_group_kcov_table.
+# Bounds the (n_group x chunk) product temporary independently of how many
+# distinct kernel-covariance columns a fit needs.
+_KCOV_PRODUCT_CHUNK = 512
+
 
 def _kcov_batch(W: np.ndarray, A: np.ndarray, B: np.ndarray) -> np.ndarray:
     """Batched kernel-weighted local covariances via GEMM.
@@ -1135,6 +1140,248 @@ def _kcov_batch(W: np.ndarray, A: np.ndarray, B: np.ndarray) -> np.ndarray:
     return W @ (A0 * B0) - (W @ A0) * (W @ B0)
 
 
+def _collect_kcov_specs(
+    cell_specs: List[Dict],
+    period_to_col: Dict[float, int],
+    never_treated_val: float,
+) -> Tuple[Dict[float, Dict], Dict[Tuple[float, float], Dict]]:
+    """Cross-cell kernel-covariance key registry + per-cell gather specs.
+
+    Every Omega* entry is a sum of ``s_group * KCov(Y_u1 - Y_v1, Y_u2 - Y_v2
+    | group)`` terms, keyed only by wide-outcome column indices - not by the
+    (g, t) cell - so the H(H+1)/2-pair tables that
+    ``compute_conditional_cells_tiled`` used to rebuild per cell dedup to one
+    table of distinct product columns per comparison group per tile.
+
+    Difference keys are ORDERED ``(minuend_col, subtrahend_col)`` and are
+    never sort-canonicalized: ``Y_u - Y_v = -(Y_v - Y_u)``, so sorting would
+    sign-flip covariances for cells whose pre-periods straddle t (possible
+    under PT-All).  Only the symmetric product-pair swap is canonicalized
+    (``KCov(A, B) = KCov(B, A)``).
+
+    Per-cell gather specs cover the UPPER TRIANGLE only; assembly builds a
+    ``(tile, H(H+1)/2)`` strip and writes it to both triangles, reproducing
+    the legacy loop's exact ``omega[k, j] = omega[j, k]`` mirror semantics
+    (computing the lower triangle independently would reassociate the
+    term-3/4 subtractions).  Gathers go through compact per-cell column
+    slices of the group tables (cache-resident, ~3x faster than gathering
+    from the full table).  Masked-out entries (no same-cohort term 3/4, no
+    matching-group term 5) resolve to an all-zero column: ``x - 0.0 == x``
+    and ``x + 0.0 == x`` value-exactly in IEEE, matching the legacy
+    conditional skips.
+
+    Returns
+    -------
+    registry : dict mapping group key to
+        ``{"diff_keys": (nD, 2) int64 array, "prod_i", "prod_j": (nP,) int64
+        arrays (indices into diff_keys), "zero_col": nP}``.
+        Only groups needed by some H >= 2 cell appear; H == 1 cells skip
+        Omega* entirely and contribute no keys (so e.g. a pure
+        pt_assumption="post" fit builds no tables and no kernel matrices).
+    cell_asm : dict mapping (g, t) of each H >= 2 cell to triu-entry specs
+        (entry order = ``np.triu_indices(H)``):
+        ``H``, ``iu``/``ju`` (triu index vectors), ``t1_col`` (group-g table
+        column), ``t2_cols``/``t2_loc`` (compact never-treated-table columns
+        + per-entry local map), ``t34_cols``/``t34_row_loc``/``t34_col_loc``
+        (compact group-g columns incl. its zero column, or ``t34_cols =
+        None`` when the cell has no same-cohort pair), ``t5_parts`` (list of
+        (gkey, compact column array) in slot order), ``t5_loc`` (per-entry
+        local map into the slot-concatenated layout whose last column is
+        zero), ``m5`` (total concat width excl. the zero column).
+    """
+    diff_index: Dict[float, Dict[Tuple[int, int], int]] = {}
+    prod_index: Dict[float, Dict[Tuple[int, int], int]] = {}
+
+    def _prod_col(gkey: float, d1: Tuple[int, int], d2: Tuple[int, int]) -> int:
+        dmap = diff_index.setdefault(gkey, {})
+        pmap = prod_index.setdefault(gkey, {})
+        i1 = dmap.setdefault(d1, len(dmap))
+        i2 = dmap.setdefault(d2, len(dmap))
+        pkey = (i1, i2) if i1 <= i2 else (i2, i1)
+        return pmap.setdefault(pkey, len(pmap))
+
+    cell_asm: Dict[Tuple[float, float], Dict] = {}
+    for spec in cell_specs:
+        pairs = spec["pairs"]
+        H = len(pairs)
+        if H < 2:
+            continue
+        g = spec["g"]
+        t_col = spec["t_col"]
+        y1_col = spec["y1_col"]
+        j_c = [period_to_col[tp] for _, tp in pairs]
+        j_gp = [gp for gp, _ in pairs]
+        j_gkey = [never_treated_val if np.isinf(gp) else gp for gp in j_gp]
+
+        t1_col = _prod_col(g, (t_col, y1_col), (t_col, y1_col))
+        has_t34 = any(gp == g for gp in j_gp)
+        iu, ju = np.triu_indices(H)
+        n_tri = iu.size
+        t2_ids = np.empty(n_tri, dtype=np.int64)
+        t34_row_ids = np.full(n_tri, -1, dtype=np.int64)
+        t34_col_ids = np.full(n_tri, -1, dtype=np.int64)
+        cell_gkeys = sorted(set(j_gkey))
+        slot_of = {gk: s for s, gk in enumerate(cell_gkeys)}
+        t5_slot = np.full(n_tri, -1, dtype=np.int64)
+        t5_ids = np.full(n_tri, -1, dtype=np.int64)
+
+        for e in range(n_tri):
+            j = int(iu[e])
+            k = int(ju[e])
+            cj, ck = j_c[j], j_c[k]
+            t2_ids[e] = _prod_col(never_treated_val, (t_col, cj), (t_col, ck))
+            if has_t34:
+                if j_gp[j] == g:
+                    t34_row_ids[e] = _prod_col(g, (t_col, y1_col), (cj, y1_col))
+                if j_gp[k] == g:
+                    t34_col_ids[e] = _prod_col(g, (t_col, y1_col), (ck, y1_col))
+            if j_gp[j] == j_gp[k]:
+                gk = j_gkey[j]
+                t5_slot[e] = slot_of[gk]
+                t5_ids[e] = _prod_col(gk, (cj, y1_col), (ck, y1_col))
+
+        cell_asm[(g, spec["t"])] = {
+            "H": H,
+            "iu": iu,
+            "ju": ju,
+            "t1_col": t1_col,
+            "has_t34": has_t34,
+            "t2_ids": t2_ids,
+            "t34_row_ids": t34_row_ids,
+            "t34_col_ids": t34_col_ids,
+            "gkeys": cell_gkeys,
+            "t5_slot": t5_slot,
+            "t5_ids": t5_ids,
+        }
+
+    registry: Dict[float, Dict] = {}
+    for gkey, dmap in diff_index.items():
+        pmap = prod_index[gkey]
+        diff_keys = np.array(sorted(dmap, key=lambda k: dmap[k]), dtype=np.int64)
+        prods = sorted(pmap, key=lambda k: pmap[k])
+        registry[gkey] = {
+            "diff_keys": diff_keys,
+            "prod_i": np.array([p[0] for p in prods], dtype=np.int64),
+            "prod_j": np.array([p[1] for p in prods], dtype=np.int64),
+            "zero_col": len(prods),
+        }
+
+    # Finalize: resolve -1 mask sentinels to each table's appended all-zero
+    # column, then convert global column ids to compact (unique columns +
+    # per-entry local map) form for cache-resident gathers at assembly time.
+    for (g, _t), asm in cell_asm.items():
+        asm["t2_cols"], asm["t2_loc"] = np.unique(asm.pop("t2_ids"), return_inverse=True)
+        rows = asm.pop("t34_row_ids")
+        cols = asm.pop("t34_col_ids")
+        if asm.pop("has_t34"):
+            zc = registry[g]["zero_col"]
+            rows[rows == -1] = zc
+            cols[cols == -1] = zc
+            both, inv = np.unique(np.concatenate([rows, cols]), return_inverse=True)
+            asm["t34_cols"] = both
+            asm["t34_row_loc"] = inv[: rows.size]
+            asm["t34_col_loc"] = inv[rows.size :]
+        else:
+            asm["t34_cols"] = None
+        t5_slot = asm.pop("t5_slot")
+        t5_ids = asm.pop("t5_ids")
+        t5_loc = np.empty(t5_slot.size, dtype=np.intp)
+        parts = []
+        offset = 0
+        for s, gk in enumerate(asm.pop("gkeys")):
+            sel = t5_slot == s
+            u, inv = np.unique(t5_ids[sel], return_inverse=True)
+            parts.append((gk, u))
+            t5_loc[sel] = offset + inv
+            offset += u.size
+        t5_loc[t5_slot == -1] = offset
+        asm["t5_parts"] = parts
+        asm["t5_loc"] = t5_loc
+        asm["m5"] = offset
+
+    return registry, cell_asm
+
+
+def _assemble_omega_tile(
+    asm: Dict,
+    tables: Dict[float, np.ndarray],
+    g: float,
+    never_treated_val: float,
+    n_rows: int,
+) -> np.ndarray:
+    """Gather one cell's ``(n_rows, H, H)`` Omega* block from group tables.
+
+    A ``(n_rows, H(H+1)/2)`` upper-triangle strip is accumulated in-place in
+    the legacy per-entry operation order (term 1 + term 2, then the term-3/4
+    subtractions, then term 5), gathered through compact per-cell column
+    slices of the group tables, then written to both triangles (the legacy
+    ``omega[k, j] = omega[j, k]`` mirror).  Masked entries hit an all-zero
+    column, matching the legacy conditional skips value-exactly; term 1 is
+    folded into the compact term-2 slice before the strip gather
+    (commutativity-exact, saves a full-width pass).
+    """
+    table_g = tables[g]
+    t2c = tables[never_treated_val][:, asm["t2_cols"]]
+    t2c += table_g[:, asm["t1_col"]][:, np.newaxis]
+    tri = t2c[:, asm["t2_loc"]]
+    if asm["t34_cols"] is not None:
+        t34c = table_g[:, asm["t34_cols"]]
+        tri -= t34c[:, asm["t34_row_loc"]]
+        tri -= t34c[:, asm["t34_col_loc"]]
+    m5 = asm["m5"]
+    a5 = np.empty((n_rows, m5 + 1))
+    off = 0
+    for gkey, cols_gk in asm["t5_parts"]:
+        a5[:, off : off + cols_gk.size] = tables[gkey][:, cols_gk]
+        off += cols_gk.size
+    a5[:, m5] = 0.0
+    tri += a5[:, asm["t5_loc"]]
+
+    H = asm["H"]
+    omega_tile = np.empty((n_rows, H, H))
+    omega_tile[:, asm["iu"], asm["ju"]] = tri
+    omega_tile[:, asm["ju"], asm["iu"]] = tri
+    return omega_tile
+
+
+def _build_group_kcov_table(
+    W: np.ndarray,
+    y_group: np.ndarray,
+    group_registry: Dict,
+    s_tile: np.ndarray,
+) -> np.ndarray:
+    """One group's kernel-covariance table for a unit tile.
+
+    Same construction as :func:`_kcov_batch` (globally pre-centered
+    differenced columns through the GEMM identity
+    ``KCov = W @ (A0 * B0) - (W @ A0) * (W @ B0)``), with the per-difference
+    ``W @ D0`` GEMM shared across all product columns and the product columns
+    chunked to ``_KCOV_PRODUCT_CHUNK`` so the (n_group x chunk) temporary is
+    bounded.  The finished table is pre-scaled by the group's own s vector
+    (every Omega* term's s factor is the table-group's s) and gets an
+    appended all-zero column for masked gather entries.
+
+    Returns shape ``(n_rows, nP + 1)``.
+    """
+    diff_keys = group_registry["diff_keys"]
+    prod_i = group_registry["prod_i"]
+    prod_j = group_registry["prod_j"]
+    n_p = prod_i.size
+
+    D = y_group[:, diff_keys[:, 0]] - y_group[:, diff_keys[:, 1]]
+    D -= D.mean(axis=0)
+    WD = W @ D
+
+    table = np.empty((W.shape[0], n_p + 1))
+    for lo in range(0, n_p, _KCOV_PRODUCT_CHUNK):
+        hi = min(lo + _KCOV_PRODUCT_CHUNK, n_p)
+        table[:, lo:hi] = W @ (D[:, prod_i[lo:hi]] * D[:, prod_j[lo:hi]])
+    table[:, :n_p] -= WD[:, prod_i] * WD[:, prod_j]
+    table[:, :n_p] *= s_tile[:, np.newaxis]
+    table[:, n_p] = 0.0
+    return table
+
+
 def compute_conditional_cells_tiled(
     cell_specs: List[Dict],
     outcome_wide: np.ndarray,
@@ -1157,14 +1404,20 @@ def compute_conditional_cells_tiled(
     Replaces the legacy per-cell chain (dense ``compute_omega_star_conditional``
     H^2 loop -> per-unit SVD/pinv weights -> EIF) with, per unit-tile:
 
-    1. ONE row-normalized kernel weight matrix per comparison group
-       (``_kernel_weights_matrix``), reused across ALL cells - the matrices
-       depend only on covariates/bandwidth/group, not on (g, t).
-    2. Per cell, the five Eq 3.12 terms as kernel-covariance TABLES via
-       :func:`_kcov_batch` - Term 2/5 covariances depend only on the
-       ``(t_pre_j, t_pre_k)`` column combination, so the H(H+1)/2 pair loop
-       dedups to ~T^2 GEMM columns - then a gather-assembly of the
-       ``(tile, H, H)`` Omega* block.
+    1. ONE kernel-covariance table per comparison group, HOISTED across all
+       cells (:func:`_collect_kcov_specs` / :func:`_build_group_kcov_table`):
+       every Eq 3.12 term is ``s_group * KCov(Y_u1 - Y_v1, Y_u2 - Y_v2 |
+       group)`` keyed only by wide-outcome columns, so the per-cell
+       H(H+1)/2-pair tables dedup to one table of distinct product columns
+       per group per tile (~26x fewer GEMM columns on a PT-All fit).  The
+       group's row-normalized kernel weight matrix
+       (``_kernel_weights_matrix``) is built and FREED one group at a time,
+       so the tile budget is governed by the largest single group rather
+       than the sum of all groups.
+    2. Per cell, a gather-assembly of the ``(tile, H, H)`` Omega* block from
+       the group tables via precomputed index arrays (upper triangle
+       mirrored at the index level, preserving the legacy loop's exact
+       per-entry operation sequence).
     3. Ridge-regularized batched weights (:func:`_ridge_solve_weights`;
        requires ``omega_ridge > 0`` - the legacy ``omega_ridge=0`` path never
        reaches this function).
@@ -1211,28 +1464,22 @@ def compute_conditional_cells_tiled(
         tile_bytes = _TARGET_OMEGA_TILE_BYTES
 
     h_max = max(len(spec["pairs"]) for spec in cell_specs)
-    # Per-tile-row footprint: (H, H) omega block + kernel-matrix rows across
-    # all groups (sum of group sizes <= n_units, counted twice for the cdist
-    # temp) + small per-cell vectors.
-    row_bytes = 8 * (h_max * h_max + 2 * n_units + 4 * h_max)
-    tile_units = int(max(1, min(n_units, tile_bytes // max(1, row_bytes))))
 
-    # Group-level (non-tiled) data, shared across cells and tiles
-    group_keys: set = set()
-    for spec in cell_specs:
-        group_keys.add(spec["g"])
-        group_keys.add(never_treated_val)
-        for gp, _ in spec["pairs"]:
-            group_keys.add(never_treated_val if np.isinf(gp) else gp)
+    # Cross-cell kcov key registry + per-cell gather specs (fit-level key
+    # bookkeeping; the tables they index are rebuilt per tile). Groups whose
+    # keys come only from H == 1 cells get no entry, no table, and no kernel
+    # matrix (e.g. a pure pt_assumption="post" fit builds none at all).
+    registry, cell_asm = _collect_kcov_specs(cell_specs, period_to_col, never_treated_val)
 
     def _mask_for(gkey: float) -> np.ndarray:
         return never_treated_mask if np.isinf(gkey) else cohort_masks[gkey]
 
+    # Group-level (non-tiled) data for the groups that need tables.
     y_grp: Dict[float, np.ndarray] = {}
     x_grp: Dict[float, np.ndarray] = {}
     w_grp: Dict[float, Optional[np.ndarray]] = {}
     s_all: Dict[float, np.ndarray] = {}
-    for gkey in group_keys:
+    for gkey in registry:
         mask = _mask_for(gkey)
         y_grp[gkey] = outcome_wide[mask]
         x_grp[gkey] = covariate_matrix[mask]
@@ -1242,6 +1489,33 @@ def compute_conditional_cells_tiled(
             np.full(n_units, 1.0 / max(cohort_fractions.get(gkey, 1e-10), 1e-10)),
         )
 
+    # Per-tile-row footprint: the (H, H) omega block plus the triu strip and
+    # one gather temporary (together <= 2 H^2), the largest single group's
+    # kernel-matrix row counted twice (cdist temp + W - groups are built and
+    # freed ONE AT A TIME, so the budget is governed by the largest group,
+    # not the sum), the held group tables (product columns + WD columns +
+    # zero column per group), the widest cell's compact slices, the
+    # (tile x chunk) product-GEMM temporary, and small per-cell vectors.
+    # The group-side product temp (n_g x chunk) is tile-independent - carve
+    # it out of the budget before dividing.
+    n_g_max = max((y.shape[0] for y in y_grp.values()), default=0)
+    sum_tables = sum(r["zero_col"] + len(r["diff_keys"]) + 1 for r in registry.values())
+    max_compact = max(
+        (
+            asm["t2_cols"].size
+            + (asm["t34_cols"].size if asm["t34_cols"] is not None else 0)
+            + asm["m5"]
+            + 1
+            for asm in cell_asm.values()
+        ),
+        default=0,
+    )
+    row_bytes = 8 * (
+        2 * h_max * h_max + 2 * n_g_max + sum_tables + max_compact + _KCOV_PRODUCT_CHUNK + 4 * h_max
+    )
+    budget = tile_bytes - 8 * _KCOV_PRODUCT_CHUNK * n_g_max
+    tile_units = int(max(1, min(n_units, budget // max(1, row_bytes))))
+
     scores: Dict[Tuple[float, float], np.ndarray] = {
         (spec["g"], spec["t"]): np.empty(n_units) for spec in cell_specs
     }
@@ -1249,19 +1523,22 @@ def compute_conditional_cells_tiled(
     for lo in range(0, n_units, tile_units):
         hi = min(lo + tile_units, n_units)
 
-        # Kernel weight matrices for this tile, one per group, lazily built
-        # and shared across ALL cells.
-        w_tile_cache: Dict[float, np.ndarray] = {}
-
-        def _w_tile(gkey: float) -> np.ndarray:
-            if gkey not in w_tile_cache:
-                w_tile_cache[gkey] = _kernel_weights_matrix(
+        # One kcov table per group for this tile, shared across ALL cells.
+        # The kernel weight matrix is an argument temporary: built for one
+        # group, released when its table returns.
+        tables: Dict[float, np.ndarray] = {}
+        for gkey in registry:
+            tables[gkey] = _build_group_kcov_table(
+                _kernel_weights_matrix(
                     covariate_matrix[lo:hi],
                     x_grp[gkey],
                     bandwidth,
                     group_weights=w_grp[gkey],
-                )
-            return w_tile_cache[gkey]
+                ),
+                y_grp[gkey],
+                registry[gkey],
+                s_all[gkey][lo:hi],
+            )
 
         # Row-sliced views of the nuisance caches / masks for gen_out reuse
         masks_tile = {k: v[lo:hi] for k, v in cohort_masks.items()}
@@ -1274,7 +1551,6 @@ def compute_conditional_cells_tiled(
             g = spec["g"]
             t = spec["t"]
             pairs = spec["pairs"]
-            t_col = spec["t_col"]
             y1_col = spec["y1_col"]
             H = len(pairs)
 
@@ -1297,71 +1573,9 @@ def compute_conditional_cells_tiled(
                 scores[(g, t)][lo:hi] = gen_out_tile[:, 0]
                 continue
 
-            pcols = sorted({period_to_col[tp] for _, tp in pairs})
-            pindex = {c: i for i, c in enumerate(pcols)}
-            n_p = len(pcols)
-            j_p = [pindex[period_to_col[tp]] for _, tp in pairs]
-            j_gp = [gp for gp, _ in pairs]
-
-            iu, ju = np.triu_indices(n_p)
-            combo_idx = np.zeros((n_p, n_p), dtype=int)
-            combo_idx[iu, ju] = np.arange(len(iu))
-            combo_idx[ju, iu] = combo_idx[iu, ju]
-
-            s_g_tile = s_all[g][lo:hi]
-            s_inf_tile = s_all[never_treated_val][lo:hi]
-            wg = _w_tile(g)
-            winf = _w_tile(never_treated_val)
-
-            y_g = y_grp[g]
-            y_inf = y_grp[never_treated_val]
-            a_g = y_g[:, t_col] - y_g[:, y1_col]
-
-            # Term 1: s_g * KCov(a, a | g) - shared by every (j, k)
-            term1 = s_g_tile * _kcov_batch(wg, a_g[:, None], a_g[:, None])[:, 0]
-
-            # Term 2 table: s_inf * KCov(Y_t - Y_pj, Y_t - Y_pk | inf)
-            u_inf = y_inf[:, [t_col]] - y_inf[:, pcols]
-            t2 = s_inf_tile[:, None] * _kcov_batch(winf, u_inf[:, iu], u_inf[:, ju])
-
-            # Term 3/4 table: s_g * KCov(a, Y_p - Y_1 | g), only if any
-            # same-cohort pair exists
-            t34 = None
-            if any(gp == g for gp in j_gp):
-                b_g = y_g[:, pcols] - y_g[:, [y1_col]]
-                t34 = s_g_tile[:, None] * _kcov_batch(wg, np.repeat(a_g[:, None], n_p, axis=1), b_g)
-
-            # Term 5 tables per distinct comparison group
-            t5: Dict[float, np.ndarray] = {}
-            for gp in set(j_gp):
-                gkey = never_treated_val if np.isinf(gp) else gp
-                if gkey in t5:
-                    continue
-                y_c = y_grp[gkey]
-                v_c = y_c[:, pcols] - y_c[:, [y1_col]]
-                t5[gkey] = s_all[gkey][lo:hi][:, None] * _kcov_batch(
-                    _w_tile(gkey), v_c[:, iu], v_c[:, ju]
-                )
-
-            omega_tile = np.empty((hi - lo, H, H))
-            for j in range(H):
-                pj = j_p[j]
-                gpj = j_gp[j]
-                for k in range(j, H):
-                    pk = j_p[k]
-                    gpk = j_gp[k]
-                    val = term1 + t2[:, combo_idx[pj, pk]]
-                    if gpj == g:
-                        val = val - t34[:, pj]
-                    if gpk == g:
-                        val = val - t34[:, pk]
-                    if gpj == gpk:
-                        gkey = never_treated_val if np.isinf(gpj) else gpj
-                        val = val + t5[gkey][:, combo_idx[pj, pk]]
-                    omega_tile[:, j, k] = val
-                    if j != k:
-                        omega_tile[:, k, j] = val
-
+            omega_tile = _assemble_omega_tile(
+                cell_asm[(g, t)], tables, g, never_treated_val, hi - lo
+            )
             w_units = _ridge_solve_weights(omega_tile, omega_ridge)
             scores[(g, t)][lo:hi] = np.sum(w_units * gen_out_tile, axis=1)
 

@@ -794,6 +794,93 @@ class TestFusedConditionalPath:
             r_tiled = EfficientDiD().fit(df, "y", "unit", "time", "first_treat", **fit_kwargs)
         self._assert_close_surfaces(r_tiled, r_single, rtol=1e-10, atol=1e-12)
 
+    def test_table_build_count_proportional_to_tiles(self, monkeypatch):
+        """v3.8 hoisting proof: the per-group kcov table is built once per
+        (group-with-keys, tile) - NOT once per cell. Forcing one-unit tiles
+        must scale the build count by exactly n_units."""
+        import diff_diff.efficient_did_covariates as cov_mod
+
+        n_units = 40
+        df = self._cov_df(n_units=n_units)
+        fit_kwargs = dict(covariates=["x1", "x2"], aggregate="all")
+
+        calls = {"n": 0}
+        orig_build = cov_mod._build_group_kcov_table
+
+        def counting_build(*args, **kwargs):
+            calls["n"] += 1
+            return orig_build(*args, **kwargs)
+
+        monkeypatch.setattr(cov_mod, "_build_group_kcov_table", counting_build)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            EfficientDiD().fit(df, "y", "unit", "time", "first_treat", **fit_kwargs)
+        single_tile_calls = calls["n"]
+        # one build per group-with-keys (2 cohorts + never-treated), far
+        # fewer than the number of H >= 2 cells
+        assert single_tile_calls == 3, single_tile_calls
+
+        calls["n"] = 0
+        monkeypatch.setattr(cov_mod, "_TARGET_OMEGA_TILE_BYTES", 1)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            EfficientDiD().fit(df, "y", "unit", "time", "first_treat", **fit_kwargs)
+        assert calls["n"] == single_tile_calls * n_units, calls["n"]
+
+    def test_pt_post_builds_no_tables(self, monkeypatch):
+        """Under pt_assumption="post" every cell has a single pair (H == 1),
+        so the hoisted path must build ZERO kcov tables and ZERO kernel
+        matrices - guarding the no-regression contract for that path."""
+        import diff_diff.efficient_did_covariates as cov_mod
+
+        df = self._cov_df(n_units=120)
+        calls = {"tables": 0, "kernels": 0}
+        orig_build = cov_mod._build_group_kcov_table
+        orig_kwm = cov_mod._kernel_weights_matrix
+
+        def counting_build(*args, **kwargs):
+            calls["tables"] += 1
+            return orig_build(*args, **kwargs)
+
+        def counting_kwm(*args, **kwargs):
+            calls["kernels"] += 1
+            return orig_kwm(*args, **kwargs)
+
+        monkeypatch.setattr(cov_mod, "_build_group_kcov_table", counting_build)
+        monkeypatch.setattr(cov_mod, "_kernel_weights_matrix", counting_kwm)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            r = EfficientDiD(pt_assumption="post").fit(
+                df,
+                "y",
+                "unit",
+                "time",
+                "first_treat",
+                covariates=["x1", "x2"],
+                aggregate="all",
+            )
+        assert calls["tables"] == 0
+        assert calls["kernels"] == 0
+        assert np.isfinite(r.att)
+
+    def test_mid_size_tile_twin_with_chunked_products(self, monkeypatch):
+        """Multi-tile execution at a realistic tile width, with the product
+        GEMM forced through multiple column chunks: results must match the
+        single-tile fit (rel 1e-10)."""
+        import diff_diff.efficient_did_covariates as cov_mod
+
+        df = self._cov_df(n_units=150)
+        fit_kwargs = dict(covariates=["x1", "x2"], aggregate="all")
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            r_single = EfficientDiD().fit(df, "y", "unit", "time", "first_treat", **fit_kwargs)
+        monkeypatch.setattr(cov_mod, "_TARGET_OMEGA_TILE_BYTES", 1_000_000)
+        monkeypatch.setattr(cov_mod, "_KCOV_PRODUCT_CHUNK", 3)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            r_tiled = EfficientDiD().fit(df, "y", "unit", "time", "first_treat", **fit_kwargs)
+        self._assert_close_surfaces(r_tiled, r_single, rtol=1e-10, atol=1e-12)
+
     def test_one_ulp_stability_conditional(self):
         """THE stability contract: a 1-ulp outcome perturbation moves
         per-cell and event-study ATTs and SEs by <= 1e-6 relative under the

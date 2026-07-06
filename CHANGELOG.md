@@ -228,6 +228,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the legacy pseudoinverse path as described under `omega_ridge` above; at `omega_ridge=0`
   results are bit-identical to the previous release. The conditional-path scalability warning
   now fires once per fit at n > 50,000 (previously per cell at n > 5,000).
+- **`EfficientDiD` conditional-path kernel-covariance tables hoisted across `(g,t)` cells**
+  (follow-up to the fused tiled pass above). Every Omega* term is a kernel covariance keyed only
+  by outcome columns, so the tables the tiled pass rebuilt per cell dedup to one table of
+  distinct product columns per comparison group per unit-tile (~26x fewer kernel GEMM columns
+  on a PT-All fit); kernel weight matrices are built and freed one group at a time, so the tile
+  memory budget is governed by the largest single group instead of the sum (proportionally
+  fatter tiles at large n); each cell's Omega* is gathered from the group tables through
+  compact per-cell column slices in the legacy per-entry operation order (value-exact, locked
+  by test). Measured (3-rep medians, 20 periods, 5 cohorts, 5 covariates, `aggregate="all"`):
+  fit 7.7s → 7.0s at 2k units, 57.2s → 35.7s at 10k (1.6x), 358s → 129s at 30k (2.8x), and
+  the 100k-unit fit drops from ~86 min to **17.8 min (~4.8x)** at the same ~4 GB peak RSS;
+  the kernel-covariance stage itself is 40x faster (21.2s → 0.5s at 10k). Results move only at
+  floating-point reassociation level (post-treatment cells ~1e-12 relative, overall ATT ~1e-13);
+  the no-covariates path is byte-identical and `omega_ridge=0` still routes the entire legacy
+  path. A `pt_assumption="post"` covariate fit builds no tables at all (all cells are
+  just-identified), keeping that path regression-free.
 - **CallawaySantAnna multiplier bootstrap rewritten as a fused, column-tiled scatter-GEMM**
   (EfficientDiD's bootstrap routes through the same kernel). The former loop sliced the
   `(block × n_units)` weight matrix twice per (g,t) cell per weight block — at a 40-period,
