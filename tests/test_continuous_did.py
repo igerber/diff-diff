@@ -2111,6 +2111,17 @@ class TestLowestDoseAPI:
         pre = {e: v for e, v in res.event_study_effects.items() if e < 0}
         assert pre and all(abs(v["effect"]) < 1e-9 for v in pre.values())
 
+    def test_survey_zeroed_dL_group_raises(self):
+        """A survey design zeroing the entire d_L reference group fails closed (H7)."""
+        from diff_diff import SurveyDesign
+
+        df = self._no_d0()  # doses {1, 2, 4}, d_L = 1
+        # Zero the survey weight of every d_L unit -> no reference group remains.
+        df["wt"] = np.where(np.abs(df["dose"] - 1.0) <= 1e-9, 0.0, 1.0)
+        est = ContinuousDiD(control_group="lowest_dose", treatment_type="discrete")
+        with pytest.raises(ValueError, match="zero positive survey weight"):
+            est.fit(df, survey_design=SurveyDesign(weights="wt"), **_DKW)
+
     def test_idempotent_refit(self):
         """fit() does not mutate config; clone + refit reproduces the fit."""
         df = self._no_d0()
