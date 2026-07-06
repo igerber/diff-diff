@@ -8,6 +8,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **`ContinuousDiD` lowest-dose-as-control** (`control_group="lowest_dose"`, CGBS 2024 Remark 3.1) for
+  settings with no untreated group (`P(D=0) = 0`): the lowest-dose group `d_L` becomes the comparison
+  and the estimand is `ATT(d) − ATT(d_L)` (with `ATT(d_L) = 0` the omitted reference). It is a
+  control-group swap — the entire linear influence-function / bootstrap / event-study / survey
+  machinery is reused unchanged (`ee_control` already carries the reference-group variance) — so both
+  the discrete (`treatment_type="discrete"`) and continuous (B-spline) paths are supported; the
+  discrete ACRT backward-difference reference shifts from `0` to `d_L`
+  (`ACRT(d_1) = ATT(d_1)/(d_1 − d_L)`). The continuous path requires a genuine mass point at the
+  minimum dose (`P(D=d_L) > 0`). Results gain a `reference_dose` field (`= d_L`). Fail-closed:
+  never-treated units present, a singleton `d_L`, no treated dose above `d_L`, `dvals ≤ d_L`, or a
+  survey subpopulation zeroing the `d_L` group all raise; multi-cohort and `covariates=` ×
+  `lowest_dose` raise `NotImplementedError` (deferred). The default `never_treated` /
+  `not_yet_treated` paths are unchanged.
 - **`ContinuousDiD` discrete-treatment saturated regression** (`treatment_type="discrete"`) for
   multi-valued / discrete dose (CGBS 2024 Eq. 4.1). Each distinct dose level gets its own effect
   coefficient — `ATT(d_j) = mean_{D=d_j}(ΔY) − control` (a per-level 2×2 DiD) — instead of a B-spline

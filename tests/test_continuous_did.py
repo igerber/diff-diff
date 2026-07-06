@@ -2,6 +2,8 @@
 Unit and integration tests for ContinuousDiD estimator.
 """
 
+import warnings
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -1952,3 +1954,169 @@ class TestDiscreteSaturatedAPI:
             r_default.dose_response_att.effects, r_explicit.dose_response_att.effects
         )
         np.testing.assert_allclose(r_default.overall_att, r_explicit.overall_att)
+
+
+class TestLowestDoseAPI:
+    """API, guards, and metadata for control_group='lowest_dose' (Remark 3.1)."""
+
+    def _no_d0(self, effects=None, **kw):
+        """Discrete panel with NO never-treated units (P(D=0)=0)."""
+        return _discrete_panel(effects or {1.0: 0.5, 2.0: 1.5, 4.0: 2.5}, n_control=0, **kw)
+
+    def test_lowest_dose_valid_in_params_transactional(self):
+        est = ContinuousDiD()
+        est.set_params(control_group="lowest_dose")
+        assert est.control_group == "lowest_dose"
+        assert est.get_params()["control_group"] == "lowest_dose"
+        # Transactional: an invalid update leaves config unmutated.
+        with pytest.raises(ValueError):
+            est.set_params(control_group="bogus")
+        assert est.control_group == "lowest_dose"
+
+    def test_never_treated_present_raises(self):
+        """lowest_dose with never-treated units present fails closed (no silent drop)."""
+        df = _discrete_panel({1.0: 0.5, 2.0: 1.5}, n_control=40)  # has D=0 units
+        est = ContinuousDiD(control_group="lowest_dose", treatment_type="discrete")
+        with pytest.raises(ValueError, match="never-treated"):
+            est.fit(df, **_DKW)
+
+    def test_singleton_dL_raises(self):
+        """A singleton minimum dose is not a lowest-dose group -> ValueError."""
+        df = self._no_d0({2.0: 1.0, 4.0: 2.0})
+        # Add a single unit at dose 1.0 (a singleton minimum).
+        extra = df[df["unit"] == df["unit"].iloc[0]].copy()
+        extra["unit"] = int(df["unit"].max()) + 1
+        extra["dose"] = 1.0
+        df = pd.concat([df, extra], ignore_index=True)
+        est = ContinuousDiD(control_group="lowest_dose", treatment_type="discrete")
+        with pytest.raises(ValueError, match="lowest-dose"):
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                est.fit(df, **_DKW)
+
+    def test_multi_cohort_raises(self):
+        """Multi-cohort lowest_dose is deferred -> NotImplementedError."""
+        df = _discrete_panel({1.0: 0.5, 2.0: 1.5}, n_control=0, cohorts=(1, 2))
+        est = ContinuousDiD(control_group="lowest_dose", treatment_type="discrete")
+        with pytest.raises(NotImplementedError, match="multiple treatment cohorts"):
+            est.fit(df, **_DKW)
+
+    def test_covariates_raises_at_init(self):
+        """covariates + lowest_dose is deferred -> NotImplementedError (config-level)."""
+        with pytest.raises(NotImplementedError, match="covariates"):
+            ContinuousDiD(control_group="lowest_dose", covariates=["x1"])
+
+    def test_dvals_below_dL_raises(self):
+        """User dvals at/below the reference d_L are rejected on both paths."""
+        df = self._no_d0()
+        est = ContinuousDiD(
+            control_group="lowest_dose", treatment_type="discrete", dvals=[1.0, 2.0]
+        )
+        with pytest.raises(ValueError, match="reference dose"):
+            est.fit(df, **_DKW)
+
+    def test_continuous_no_mass_point_raises(self):
+        """Continuous dose with a singleton minimum (no mass point) -> ValueError."""
+        rng = np.random.default_rng(3)
+        rows, uid = [], 0
+        for d in np.linspace(1.0, 5.0, 80):  # all distinct -> singleton min
+            base = rng.normal(0, 1)
+            for p in (0, 1):
+                rows.append((uid, p, base + 0.3 * p + rng.normal(0, 0.3), 1, float(d)))
+            uid += 1
+        df = pd.DataFrame(rows, columns=["unit", "period", "outcome", "first_treat", "dose"])
+        est = ContinuousDiD(control_group="lowest_dose", treatment_type="continuous", degree=2)
+        with pytest.raises(ValueError, match="mass point"):
+            est.fit(
+                df,
+                outcome="outcome",
+                unit="unit",
+                time="period",
+                first_treat="first_treat",
+                dose="dose",
+                aggregate="dose",
+            )
+
+    def test_continuous_one_dose_above_warns(self):
+        """Exactly one modelled dose above d_L: warn + valid ATT level, ACRT=0 (M3)."""
+        rng = np.random.default_rng(4)
+        rows, uid = [], 0
+        for d in [1.0] * 40 + [2.0] * 40:  # mass point at 1, one dose above
+            base = rng.normal(0, 1)
+            for p in (0, 1):
+                y = base + 0.3 * p + (0.8 * (d - 1.0) if p >= 1 else 0.0) + rng.normal(0, 0.3)
+                rows.append((uid, p, y, 1, d))
+            uid += 1
+        df = pd.DataFrame(rows, columns=["unit", "period", "outcome", "first_treat", "dose"])
+        est = ContinuousDiD(control_group="lowest_dose", treatment_type="continuous", degree=2)
+        with pytest.warns(UserWarning):
+            res = est.fit(
+                df,
+                outcome="outcome",
+                unit="unit",
+                time="period",
+                first_treat="first_treat",
+                dose="dose",
+                aggregate="dose",
+            )
+        assert np.all(np.isfinite(res.dose_response_att.se))
+        assert np.allclose(res.dose_response_acrt.effects, 0.0)
+
+    def test_threshold_boundary_no_phantom_level(self):
+        """A unit at d_L + 5e-10 clusters into the control group (no phantom level)."""
+        df = self._no_d0()  # doses {1, 2, 4}, d_L = 1
+        extra = df[df["unit"] == df["unit"].iloc[0]].copy()
+        extra["unit"] = int(df["unit"].max()) + 1
+        extra["dose"] = 1.0 + 5e-10  # within SATURATED_TOL of d_L
+        df = pd.concat([df, extra], ignore_index=True)
+        res = ContinuousDiD(control_group="lowest_dose", treatment_type="discrete").fit(df, **_DKW)
+        # No spurious level at ~1.0; modelled grid is exactly {2, 4}.
+        assert np.allclose(res.dose_response_att.dose_grid, [2.0, 4.0])
+
+    def test_metadata_and_summary(self):
+        df = self._no_d0()
+        res = ContinuousDiD(control_group="lowest_dose", treatment_type="discrete").fit(df, **_DKW)
+        assert res.reference_dose == 1.0
+        assert res.n_control_units == 40  # the d_L group (n_per=40)
+        assert res.n_treated_units == 80  # doses 2 and 4, 40 each
+        assert res.control_group == "lowest_dose"
+        s = res.summary()
+        assert "Reference dose" in s and "lowest_dose" in s
+
+    def test_reference_dose_none_on_other_paths(self):
+        """reference_dose is None for never/not-yet-treated (byte-stable metadata)."""
+        df = _discrete_panel({1.0: 0.5, 2.0: 1.5}, n_control=40)
+        res = ContinuousDiD(control_group="never_treated", treatment_type="discrete").fit(
+            df, **_DKW
+        )
+        assert res.reference_dose is None
+
+    def test_reworded_not_yet_treated_error_points_at_lowest_dose(self):
+        """The no-D=0 not_yet_treated error still raises and points at lowest_dose (L5)."""
+        df = self._no_d0()
+        est = ContinuousDiD(control_group="not_yet_treated", treatment_type="discrete")
+        with pytest.raises(ValueError, match="lowest_dose"):
+            est.fit(df, **_DKW)
+
+    def test_event_study_lowest_dose(self):
+        """Event-study aggregation composes with lowest_dose (the ES IF swaps control)."""
+        df = _discrete_panel(
+            {1.0: 0.5, 2.0: 1.5}, n_control=0, cohorts=(2,), n_periods=4, noise=0.0, seed=6
+        )
+        res = ContinuousDiD(control_group="lowest_dose", treatment_type="discrete").fit(
+            df, "outcome", "unit", "period", "first_treat", "dose", aggregate="eventstudy"
+        )
+        assert res.event_study_effects is not None
+        # Pre-period event bins (e < 0) difference out to ~0 (both groups untreated).
+        pre = {e: v for e, v in res.event_study_effects.items() if e < 0}
+        assert pre and all(abs(v["effect"]) < 1e-9 for v in pre.values())
+
+    def test_idempotent_refit(self):
+        """fit() does not mutate config; clone + refit reproduces the fit."""
+        df = self._no_d0()
+        est = ContinuousDiD(control_group="lowest_dose", treatment_type="discrete")
+        cfg = est.get_params()
+        r1 = est.fit(df, **_DKW)
+        assert est.get_params() == cfg  # config unchanged by fit
+        r2 = est.fit(df, **_DKW)
+        np.testing.assert_allclose(r1.dose_response_att.effects, r2.dose_response_att.effects)

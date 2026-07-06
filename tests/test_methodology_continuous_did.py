@@ -9,6 +9,7 @@ import json
 import os
 import subprocess
 import tempfile
+import warnings
 
 import numpy as np
 import pandas as pd
@@ -1206,6 +1207,49 @@ def _hand_calc_discrete(df, levels):
     return att, acrt, overall, se
 
 
+def _hand_calc_lowest_dose(df, all_levels):
+    """Independent NumPy lowest-dose-as-control (Remark 3.1) recomputation.
+
+    ``all_levels`` are the sorted distinct positive doses; ``d_L = all_levels[0]``
+    is the reference (control), modelled levels are ``all_levels[1:]``. Returns
+    ``(modelled_levels, att, acrt, overall, overall_acrt, se)`` where
+    ``att[j] = mean(dY | d_j) - mean(dY | d_L)`` (a per-level 2x2 DiD vs the
+    lowest-dose group), ACRT is the backward difference with base ``d_L``, and
+    ``se`` is the per-level 2x2 SE with the ``d_L`` group as control.
+    """
+    periods = sorted(df["period"].unique())
+    p0, p1 = periods[0], periods[-1]
+    wide = df.pivot(index="unit", columns="period", values="outcome")
+    dy = (wide[p1] - wide[p0]).to_numpy()
+    udose = df.groupby("unit")["dose"].first().to_numpy()
+    d_L = all_levels[0]
+    modelled = all_levels[1:]
+    cm = np.abs(udose - d_L) <= 1e-9  # d_L group = control
+    mu0 = dy[cm].mean()
+    att = np.array([dy[np.abs(udose - d) <= 1e-9].mean() - mu0 for d in modelled])
+    acrt = np.empty(len(modelled))
+    for j in range(len(modelled)):
+        if j == 0:
+            acrt[0] = att[0] / (modelled[0] - d_L)  # backward diff to d_L
+        else:
+            acrt[j] = (att[j] - att[j - 1]) / (modelled[j] - modelled[j - 1])
+    treated = udose - d_L > 1e-9
+    overall = (dy[treated] - mu0).mean()
+    # Plug-in overall ACRT: density-weighted mean over treated units' doses.
+    tdose = udose[treated]
+    acrt_by_level = {d: acrt[j] for j, d in enumerate(modelled)}
+    overall_acrt = np.mean([acrt_by_level[min(modelled, key=lambda m: abs(m - d))] for d in tdose])
+    n_c = int(cm.sum())
+    se = np.empty(len(modelled))
+    for j, d in enumerate(modelled):
+        tmask = np.abs(udose - d) <= 1e-9
+        n_j = int(tmask.sum())
+        it = (dy[tmask] - mu0 - att[j]) / n_j
+        ic = -(dy[cm] - mu0) / n_c
+        se[j] = np.sqrt((it**2).sum() + (ic**2).sum())
+    return modelled, att, acrt, overall, overall_acrt, se
+
+
 class TestDiscreteSaturated:
     """Saturated regression for discrete/multi-valued treatment (CGBS 2024 Eq 4.1)."""
 
@@ -1320,6 +1364,193 @@ class TestDiscreteSaturated:
                 hi = res.dose_response_att.conf_int_upper
                 for j, d in enumerate(levels):
                     cover[j] += int(lo[j] <= effects[d] <= hi[j])
+            rate = cover / reps
+            assert np.all(
+                (rate >= lo_band) & (rate <= 0.995)
+            ), f"{'boot' if use_boot else 'analytic'} coverage {rate} off nominal"
+
+
+class TestLowestDose:
+    """Remark 3.1 lowest-dose-as-control (CGBS 2024): estimand ATT(d) - ATT(d_L)."""
+
+    _KW = dict(
+        outcome="outcome",
+        unit="unit",
+        time="period",
+        first_treat="first_treat",
+        dose="dose",
+        aggregate="dose",
+    )
+
+    def test_dL_to_zero_exact_equivalence(self):
+        """Relabelling the D=0 group as a tiny common dose d_L=eps reproduces the
+        never_treated fit EXACTLY (same control units, same dY) — for any eps."""
+        effects = {1.0: 0.5, 2.0: 1.5, 4.0: 2.5}
+        df0 = _make_discrete_panel(effects, n_per_level=45, n_control=90, seed=11)
+        res_nt = ContinuousDiD(control_group="never_treated", treatment_type="discrete").fit(
+            df0, **self._KW
+        )
+        eps = 1e-6
+        df_re = df0.copy()
+        m = df_re["first_treat"] == 0
+        df_re.loc[m, "first_treat"] = 1
+        df_re.loc[m, "dose"] = eps
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")  # tiny-boundary-gap warning
+            res_ld = ContinuousDiD(control_group="lowest_dose", treatment_type="discrete").fit(
+                df_re, **self._KW
+            )
+        # ATT and SE are EXACTLY equal (the differencing arithmetic is identical).
+        assert np.allclose(
+            res_ld.dose_response_att.effects, res_nt.dose_response_att.effects, atol=1e-10
+        )
+        assert np.allclose(res_ld.dose_response_att.se, res_nt.dose_response_att.se, atol=1e-10)
+        assert res_ld.reference_dose == eps
+        # Boundary ACRT references d_L=eps: ACRT(d_1) = ATT(d_1)/(d_1 - eps).
+        att1 = res_ld.dose_response_att.effects[0]
+        assert np.isclose(res_ld.dose_response_acrt.effects[0], att1 / (1.0 - eps), atol=1e-10)
+
+    def test_hand_calc_att_acrt_overall(self):
+        """ATT(d)=mean(dY|d)-mean(dY|d_L); ACRT backward-to-d_L; overall = mean_T."""
+        all_levels = [1.0, 2.0, 4.0]
+        df = _make_discrete_panel({1.0: 0.5, 2.0: 1.5, 4.0: 2.5}, n_control=0, seed=12)
+        res = ContinuousDiD(control_group="lowest_dose", treatment_type="discrete").fit(
+            df, **self._KW
+        )
+        modelled, att, acrt, overall, overall_acrt, _ = _hand_calc_lowest_dose(df, all_levels)
+        assert np.allclose(res.dose_response_att.dose_grid, modelled)  # d_L excluded
+        assert np.allclose(res.dose_response_att.effects, att, atol=1e-12)
+        assert np.allclose(res.dose_response_acrt.effects, acrt, atol=1e-12)
+        assert np.isclose(res.overall_att, overall, atol=1e-12)
+        # overall_acrt (plug-in scalar) asserted explicitly, not just the rows.
+        assert np.isclose(res.overall_acrt, overall_acrt, atol=1e-12)
+
+    def test_hand_calc_analytical_se(self):
+        """Lowest-dose SE == per-level 2x2 DiD SE with the d_L group as control."""
+        all_levels = [1.0, 2.0, 4.0]
+        df = _make_discrete_panel({1.0: 0.5, 2.0: 1.5, 4.0: 2.5}, n_control=0, seed=13)
+        res = ContinuousDiD(control_group="lowest_dose", treatment_type="discrete").fit(
+            df, **self._KW
+        )
+        _, _, _, _, _, se = _hand_calc_lowest_dose(df, all_levels)
+        assert np.allclose(res.dose_response_att.se, se, atol=1e-10)
+        assert np.all(np.isfinite(res.dose_response_att.se))
+
+    def test_acrt_boundary_backward_to_dL(self):
+        """ACRT(d_1) = ATT(d_1)/(d_1 - d_L); ACRT(d_j>=2) adjacent backward diffs."""
+        df = _make_discrete_panel({1.0: 0.5, 2.0: 1.5, 4.0: 2.5}, n_control=0, seed=14)
+        res = ContinuousDiD(control_group="lowest_dose", treatment_type="discrete").fit(
+            df, **self._KW
+        )
+        att = res.dose_response_att.effects
+        acrt = res.dose_response_acrt.effects
+        modelled = res.dose_response_att.dose_grid  # [2, 4]; d_L = 1
+        assert np.isclose(acrt[0], att[0] / (modelled[0] - 1.0), atol=1e-12)
+        assert np.isclose(acrt[1], (att[1] - att[0]) / (modelled[1] - modelled[0]), atol=1e-12)
+
+    def test_binary_above_reference(self):
+        """Single modelled dose above d_L (J=1): ACRT(d_1) = ATT(d_1)/(d_1 - d_L)."""
+        df = _make_discrete_panel({1.0: 0.4, 3.0: 2.0}, n_per_level=60, n_control=0, seed=15)
+        res = ContinuousDiD(control_group="lowest_dose", treatment_type="discrete").fit(
+            df, **self._KW
+        )
+        assert res.reference_dose == 1.0
+        assert np.allclose(res.dose_response_att.dose_grid, [3.0])
+        att1 = res.dose_response_att.effects[0]
+        assert np.isclose(res.dose_response_acrt.effects[0], att1 / (3.0 - 1.0), atol=1e-12)
+
+    def test_dgp_recovery_discrete(self):
+        """Recover ATT(d) - ATT(d_L) with known effects (no noise -> exact)."""
+        effects = {1.0: 0.5, 2.0: 2.0, 4.0: 1.0}  # non-monotone
+        df = _make_discrete_panel(effects, n_per_level=60, n_control=0, noise=0.0, seed=16)
+        res = ContinuousDiD(control_group="lowest_dose", treatment_type="discrete").fit(
+            df, **self._KW
+        )
+        # d_L = 1 (effect 0.5); ATT(2)=2.0-0.5=1.5, ATT(4)=1.0-0.5=0.5.
+        assert np.allclose(res.dose_response_att.effects, [1.5, 0.5], atol=1e-10)
+        # ACRT: bwd@2 = 1.5/(2-1) = 1.5; bwd@4 = (0.5-1.5)/(4-2) = -0.5.
+        assert np.allclose(res.dose_response_acrt.effects, [1.5, -0.5], atol=1e-10)
+
+    def test_continuous_mass_point_recovery(self):
+        """Continuous B-spline with a mass point at d_L recovers a linear slope."""
+        rng = np.random.default_rng(17)
+        rows, uid = [], 0
+        beta = 0.7  # ATT(d) - ATT(d_L) = beta * (d - d_L)
+        for d in [1.0] * 70 + list(rng.uniform(1.5, 5.0, 210)):
+            base = rng.normal(0, 1)
+            for p in (0, 1):
+                y = base + 0.3 * p + (beta * (d - 1.0) if p >= 1 else 0.0)
+                rows.append((uid, p, y, 1, d))
+            uid += 1
+        df = pd.DataFrame(rows, columns=["unit", "period", "outcome", "first_treat", "dose"])
+        res = ContinuousDiD(control_group="lowest_dose", treatment_type="continuous", degree=1).fit(
+            df, **self._KW
+        )
+        assert res.reference_dose == 1.0
+        assert np.all(res.dose_response_att.dose_grid > 1.0)  # grid above d_L
+        grid = res.dose_response_att.dose_grid
+        expected = beta * (grid - 1.0)
+        # B-spline + finite sample: modest tolerance on the recovered curve.
+        assert np.allclose(res.dose_response_att.effects, expected, atol=0.15)
+
+    def test_analytical_vs_bootstrap_se(self, ci_params):
+        """Analytical and multiplier-bootstrap SE agree (both carry d_L variance)."""
+        df = _make_discrete_panel({1.0: 0.5, 2.0: 1.5, 4.0: 2.5}, n_control=0, noise=1.0, seed=18)
+        res_a = ContinuousDiD(control_group="lowest_dose", treatment_type="discrete").fit(
+            df, **self._KW
+        )
+        nb = ci_params.bootstrap(999, min_n=199)
+        res_b = ContinuousDiD(
+            control_group="lowest_dose", treatment_type="discrete", n_bootstrap=nb, seed=7
+        ).fit(df, **self._KW)
+        thr = 0.40 if nb < 200 else 0.15
+        rel = (
+            np.abs(res_b.dose_response_att.se - res_a.dose_response_att.se)
+            / res_a.dose_response_att.se
+        )
+        assert np.all(rel < thr), f"boot/analytic SE disagree: {rel}"
+
+    def test_pre_period_placebo(self):
+        """Pre-treatment cell att_glob ~ 0 (both treated and d_L control untreated)."""
+        effects = {1.0: 0.5, 2.0: 1.5, 4.0: 2.5}
+        df = _make_discrete_panel(
+            effects, n_per_level=50, n_control=0, noise=0.0, seed=19, cohorts=(2,), n_periods=3
+        )
+        res = ContinuousDiD(
+            control_group="lowest_dose", treatment_type="discrete", base_period="varying"
+        ).fit(df, **self._KW)
+        # Pre-period (t=1 < g=2) cell effects difference out to ~0.
+        pre = [v for (g, t), v in res.group_time_effects.items() if t < g]
+        assert pre, "expected a pre-period cell"
+        assert all(abs(c["att_glob"]) < 1e-9 for c in pre)
+
+    @pytest.mark.slow
+    def test_coverage(self, ci_params):
+        """Analytical & bootstrap SE achieve nominal coverage for ATT(d)-ATT(d_L)."""
+        modelled = [2.0, 4.0]
+        effects = {1.0: 0.5, 2.0: 1.5, 4.0: 2.5}
+        truth = {d: effects[d] - effects[1.0] for d in modelled}  # ATT(d) - ATT(d_L)
+        reps = 150
+        for use_boot in (False, True):
+            nb = ci_params.bootstrap(299, min_n=99) if use_boot else 0
+            lo_band = 0.85 if (use_boot and nb < 200) else 0.88
+            cover = np.zeros(len(modelled))
+            for s in range(reps):
+                df = _make_discrete_panel(
+                    effects, n_per_level=45, n_control=0, noise=1.0, seed=40_000 + s
+                )
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore")
+                    res = ContinuousDiD(
+                        control_group="lowest_dose",
+                        treatment_type="discrete",
+                        n_bootstrap=nb,
+                        seed=s,
+                    ).fit(df, **self._KW)
+                lo = res.dose_response_att.conf_int_lower
+                hi = res.dose_response_att.conf_int_upper
+                for j, d in enumerate(modelled):
+                    cover[j] += int(lo[j] <= truth[d] <= hi[j])
             rate = cover / reps
             assert np.all(
                 (rate >= lo_band) & (rate <= 0.995)

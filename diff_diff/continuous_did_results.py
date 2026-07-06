@@ -151,6 +151,10 @@ class ContinuousDiDResults:
     # per-dose-level regression); the ``dose_grid`` holds the distinct dose
     # levels when discrete.
     treatment_type: str = "continuous"
+    # Lowest-dose reference d_L for ``control_group="lowest_dose"`` (Remark 3.1);
+    # the estimand is ``ATT(d) - ATT(d_L)`` and ``ATT(d_L) = 0`` by construction.
+    # ``None`` for the never/not-yet-treated (D=0 control) paths.
+    reference_dose: Optional[float] = None
     event_study_effects: Optional[Dict[int, Dict[str, Any]]] = field(default=None)
     # Survey design metadata (SurveyMetadata instance from diff_diff.survey)
     survey_metadata: Optional[Any] = field(default=None)
@@ -234,6 +238,9 @@ class ContinuousDiDResults:
             f"{'Control group:':<30} {self.control_group:>10}",
             f"{'Treatment type:':<30} {self.treatment_type:>10}",
         ]
+        # Lowest-dose reference (Remark 3.1): show d_L when it is the control.
+        if self.reference_dose is not None:
+            lines.append(f"{'Reference dose (d_L):':<30} {self.reference_dose:>10.4g}")
         # Basis metadata: B-spline degree/knots (continuous) or the number of
         # saturated dose levels (discrete).
         if self.treatment_type == "discrete":

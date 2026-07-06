@@ -158,5 +158,5 @@ Comparison with CallawaySantAnna
      - Multiplier bootstrap (optional)
      - Multiplier bootstrap (optional)
    * - Control group
-     - never_treated / not_yet_treated
+     - never_treated / not_yet_treated / lowest_dose
      - never_treated / not_yet_treated

@@ -124,8 +124,8 @@ view. Every field below appears as a top-level key in that dict.
   Required by `SyntheticDiD`, `SunAbraham`, `EfficientDiD` under both
   `assumption="PT-All"` and `assumption="PT-Post"` (unless
   `control_group="last_cohort"` is passed), and `ContinuousDiD`
-  (which requires `P(D=0) > 0` - Remark 3.1 lowest-dose-as-control
-  is not yet implemented). Preferred-but-optional by
+  under its default `control_group` (`P(D=0) > 0`; when `P(D=0) = 0`
+  pass `control_group="lowest_dose"` for Remark 3.1). Preferred-but-optional by
   `CallawaySantAnna` and `ChaisemartinDHaultfoeuille`. Always `False`
   for `"categorical"`.
 - **`has_always_treated: bool`** - at least one binary-treatment
@@ -231,10 +231,10 @@ view. Every field below appears as a top-level key in that dict.
   this setup, so it cannot encode timing). Under the canonical
   setup, several facts on the dose column predict
   `ContinuousDiD.fit()` outcomes:
-  `has_never_treated == True` (proxy for `P(D=0) > 0` under both
-  `control_group="never_treated"` and
-  `control_group="not_yet_treated"`; Remark 3.1
-  lowest-dose-as-control is not yet implemented);
+  `has_never_treated == True` (proxy for `P(D=0) > 0` under the
+  default `control_group="never_treated"` /
+  `control_group="not_yet_treated"`; when `False`, pass
+  `control_group="lowest_dose"` for Remark 3.1);
   `treatment_varies_within_unit == False` (the actual fit-time
   gate, matching `ContinuousDiD.fit()`'s
   `df.groupby(unit)[dose].nunique() > 1` rejection at line
@@ -248,9 +248,10 @@ view. Every field below appears as a top-level key in that dict.
   `dose_min` over non-zero values is the smallest treated dose).
 
   When `has_never_treated == False` (no zero-dose controls but
-  all observed doses non-negative), `ContinuousDiD` as currently
-  implemented does not apply (Remark 3.1 lowest-dose-as-control
-  is not implemented). Routing alternatives that do not require
+  all observed doses non-negative), pass
+  `control_group="lowest_dose"` (Remark 3.1) if there is a mass
+  point at the minimum dose — the lowest-dose group becomes the
+  comparison. Otherwise routing alternatives that do not require
   `P(D=0) > 0`: `HeterogeneousAdoptionDiD` for graded-adoption
   designs (HAD's own contract requires non-negative dose, which
   this branch satisfies), or linear DiD with the treatment as a
@@ -515,9 +516,12 @@ When `has_never_treated == False`:
   (post-treatment periods at/after that cohort's adoption are
   trimmed). Distinct from CallawaySantAnna's `not_yet_treated`
   option.
-- `ContinuousDiD` requires zero-dose control units (`P(D=0) > 0`).
-  Remark 3.1 of the paper (lowest-dose-as-control) is not yet
-  implemented; `fit()` raises `ValueError` when no `D=0` units exist.
+- `ContinuousDiD` requires zero-dose control units (`P(D=0) > 0`)
+  under the default `control_group`; `fit()` raises `ValueError` when
+  no `D=0` units exist. When `P(D=0) = 0`, pass
+  `control_group="lowest_dose"` (Remark 3.1): the lowest-dose group
+  becomes the comparison (needs a mass point at the minimum dose),
+  estimand `ATT(d) - ATT(d_L)`.
 - `CallawaySantAnna` - use `control_group="not_yet_treated"` to use
   not-yet-treated units as the control pool.
 - `ChaisemartinDHaultfoeuille` - constructs switchers vs. non-switchers
@@ -574,10 +578,10 @@ When `treatment_type == "continuous"`:
   `fit()` outcomes (full discussion in the paragraph immediately
   below): (a) zero-dose control units must exist
   (`PanelProfile.has_never_treated == True`, proxying
-  `ContinuousDiD`'s `P(D=0) > 0` requirement under both
-  `control_group` options because Remark 3.1 lowest-dose-as-control
-  is not yet implemented); (b) dose must be time-invariant per unit
-  (rule out panels where
+  `ContinuousDiD`'s `P(D=0) > 0` requirement under the default
+  `control_group` options; when it is `False`, pass
+  `control_group="lowest_dose"` for Remark 3.1); (b) dose must be
+  time-invariant per unit (rule out panels where
   `PanelProfile.treatment_varies_within_unit == True`); (c) the
   panel must be balanced (`PanelProfile.is_balanced == True`);
   (d) no `duplicate_unit_time_rows` alert (the precompute path
@@ -867,8 +871,8 @@ Reasoning chain:
    column). On the dose column alone, profile_panel exposes five
    facts that predict `fit()` outcomes under that canonical
    setup: `has_never_treated == True` (proxy for `P(D=0) > 0`
-   under both `control_group` options, since Remark 3.1
-   lowest-dose-as-control is not yet implemented),
+   under the default `control_group` options; when `False`, pass
+   `control_group="lowest_dose"` for Remark 3.1),
    `treatment_varies_within_unit == False` (the actual fit-time
    gate matching `ContinuousDiD.fit()`'s
    `df.groupby(unit)[dose].nunique() > 1` rejection at line
@@ -904,12 +908,12 @@ Reasoning chain:
 4. Counter-example: had `has_never_treated == False` (every unit
    eventually treated, even if some pre-treatment rows have zero
    dose so `treatment_dose.has_zero_dose == True`),
-   `ContinuousDiD.fit()` would reject the panel under both
-   `control_group="never_treated"` and
-   `control_group="not_yet_treated"` because Remark 3.1
-   lowest-dose-as-control is not yet implemented. On this branch
-   (no never-treated controls but doses still non-negative),
-   `HeterogeneousAdoptionDiD` IS a routing alternative for
+   `ContinuousDiD.fit()` would reject the panel under
+   `control_group="never_treated"` / `control_group="not_yet_treated"`
+   (both require `P(D=0) > 0`); pass `control_group="lowest_dose"`
+   (Remark 3.1) to use the lowest-dose group as the comparison. On
+   this branch (no never-treated controls but doses still
+   non-negative), `HeterogeneousAdoptionDiD` IS a routing alternative for
    graded-adoption designs, and linear DiD with the treatment as
    a continuous covariate is another; see §2 for the full routing
    discussion.

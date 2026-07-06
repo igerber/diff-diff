@@ -321,32 +321,43 @@ def saturated_design_matrix(x, levels, tol=SATURATED_TOL):
     return B
 
 
-def saturated_derivative_design_matrix(x, levels, tol=SATURATED_TOL):
+def saturated_derivative_design_matrix(x, levels, tol=SATURATED_TOL, base=0.0):
     """
     Finite-difference derivative rows for the saturated (discrete) basis.
 
     ACRT for a discrete dose is the paper's backward difference of the level
-    effects (CGBS 2024 §3.2 / §4.1) on the grid ``{d_0 = 0, d_1, ..., d_J}``,
-    where ``d_0 = 0`` is the omitted (untreated) category with ``ATT(0) = 0``:
+    effects (CGBS 2024 §3.2 / §4.1) on the grid ``{base, d_1, ..., d_J}``, where
+    ``base`` is the omitted reference category with ``ATT(base) = 0``:
     ``ACRT(d_j) = [ATT(d_j) - ATT(d_{j-1})] / (d_j - d_{j-1})``. At the lowest
-    positive level this references the zero-dose baseline,
-    ``ACRT(d_1) = [ATT(d_1) - 0] / (d_1 - 0) = ATT(d_1) / d_1`` — so a single
-    positive dose (``J = 1``, e.g. binary ``D in {0, 1}``) gives
-    ``ACRT(d_1) = ATT(d_1) / d_1`` and, for ``d_1 = 1``, the documented binary
-    identity ``ACRT = ATT``. This is a linear operator ``L`` on ``beta``, and
-    ``acrt = L @ beta``. Only the lowest level's row references ``d_0 = 0`` (so
-    that row does NOT sum to 0); the ``j >= 2`` rows are ordinary adjacent
-    backward differences (rows sum to 0). Returns the ``L`` row for each ``x_i``
-    at its dose level. Analogous to :func:`bspline_derivative_design_matrix`.
+    modelled level this references ``base``,
+    ``ACRT(d_1) = [ATT(d_1) - 0] / (d_1 - base) = ATT(d_1) / (d_1 - base)``.
+
+    ``base = 0.0`` (default) is the untreated baseline ``d_0 = 0`` for the D=0
+    control path: ``ACRT(d_1) = ATT(d_1) / d_1`` — so a single positive dose
+    (``J = 1``, e.g. binary ``D in {0, 1}``) gives ``ACRT(d_1) = ATT(d_1) / d_1``
+    and, for ``d_1 = 1``, the documented binary identity ``ACRT = ATT``.
+    ``base = d_L`` is the lowest-dose reference for the Remark 3.1
+    (``control_group="lowest_dose"``) path, where the omitted category is the
+    lowest-dose group and ``ATT(d_L) = 0``: ``ACRT(d_1) = ATT(d_1) / (d_1 - d_L)``.
+
+    This is a linear operator ``L`` on ``beta``, and ``acrt = L @ beta``. Only
+    the lowest level's row references ``base`` (so that row does NOT sum to 0);
+    the ``j >= 2`` rows are ordinary adjacent backward differences (rows sum to
+    0). Returns the ``L`` row for each ``x_i`` at its dose level. Analogous to
+    :func:`bspline_derivative_design_matrix`.
 
     Parameters
     ----------
     x : array-like
         Evaluation points, shape ``(n,)``.
     levels : array-like
-        Distinct dose levels, shape ``(J,)``.
+        Distinct modelled dose levels (excluding ``base``), shape ``(J,)``.
     tol : float, default=:data:`SATURATED_TOL`
         Matching tolerance.
+    base : float, default=0.0
+        The omitted reference dose (``ATT(base) = 0``). ``0.0`` for the D=0
+        control path; the lowest dose ``d_L`` for the lowest-dose-as-control
+        (Remark 3.1) path.
 
     Returns
     -------
@@ -357,12 +368,12 @@ def saturated_derivative_design_matrix(x, levels, tol=SATURATED_TOL):
     idx = _match_levels(x, levels, tol)
     J = len(levels)
     L = np.zeros((J, J))
-    # Row 0 (lowest positive dose d_1): backward difference to the zero-dose
-    # baseline d_0 = 0, ATT(0) = 0 -> ACRT(d_1) = ATT(d_1) / d_1. Rows j >= 1:
-    # ordinary adjacent backward differences between positive doses.
+    # Row 0 (lowest modelled dose d_1): backward difference to the reference
+    # ``base`` with ATT(base) = 0 -> ACRT(d_1) = ATT(d_1) / (d_1 - base). Rows
+    # j >= 1: ordinary adjacent backward differences between modelled doses.
     for j in range(J):
         if j == 0:
-            L[0, 0] = 1.0 / levels[0]
+            L[0, 0] = 1.0 / (levels[0] - base)
         else:
             h = levels[j] - levels[j - 1]
             L[j, j - 1] = -1.0 / h

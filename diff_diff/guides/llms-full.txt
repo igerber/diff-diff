@@ -688,7 +688,7 @@ ContinuousDiD(
     degree: int = 3,                          # B-spline degree (3 = cubic)
     num_knots: int = 0,                       # Interior knots
     dvals: np.ndarray | None = None,          # Custom dose evaluation grid
-    control_group: str = "never_treated",     # "never_treated" or "not_yet_treated"
+    control_group: str = "never_treated",     # "never_treated", "not_yet_treated", or "lowest_dose" (Remark 3.1, P(D=0)=0)
     anticipation: int = 0,
     base_period: str = "varying",             # "varying" or "universal"
     alpha: float = 0.05,
@@ -2367,7 +2367,7 @@ DIFF_DIFF_BACKEND=rust pytest     # Force Rust (fail if unavailable)
 | Staggered treatment timing | `CallawaySantAnna`, `ImputationDiD`, or `SunAbraham` |
 | Few treated units / synthetic control | `SyntheticDiD` |
 | Interactive fixed effects / factor confounding | `TROP` |
-| Continuous treatment intensity, per-dose ATT(d) / ACRT(d) (requires never-treated controls) | `ContinuousDiD` |
+| Continuous treatment intensity, per-dose ATT(d) / ACRT(d) (needs zero-dose controls, or `control_group="lowest_dose"` for Remark 3.1 when P(D=0)=0) | `ContinuousDiD` |
 | Continuous treatment intensity, WAS at dose support boundary (compatible with universal rollout or small never-treated share) | `HeterogeneousAdoptionDiD` |
 | Two-criterion treatment, simultaneous (2x2x2 DDD) | `TripleDifference` |
 | Two-criterion treatment, staggered timing + eligibility | `StaggeredTripleDifference` |

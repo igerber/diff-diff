@@ -81,13 +81,14 @@ class TreatmentDoseShape:
 
     1. ``PanelProfile.has_never_treated == True`` (some unit has
        dose 0 in every period). Predicts the estimator's
-       ``P(D=0) > 0`` requirement under both
-       ``control_group="never_treated"`` and
-       ``control_group="not_yet_treated"`` (Remark 3.1
-       lowest-dose-as-control not yet implemented), because the
-       canonical setup ties ``first_treat == 0`` to ``D_i == 0``.
-       Failure means no never-treated controls exist on the dose
-       column; see routing notes below.
+       ``P(D=0) > 0`` requirement under the default
+       ``control_group="never_treated"`` /
+       ``control_group="not_yet_treated"`` (the canonical setup ties
+       ``first_treat == 0`` to ``D_i == 0``). When it is ``False``,
+       ``control_group="lowest_dose"`` (Remark 3.1) is the route —
+       the lowest-dose group becomes the comparison (needs a mass
+       point at the minimum dose) — so failure of (1) no longer rules
+       ``ContinuousDiD`` out; see routing notes below.
     2. ``PanelProfile.treatment_varies_within_unit == False``
        (per-unit full-path dose constancy on the dose column). This
        IS the actual fit-time gate, matching
@@ -114,12 +115,14 @@ class TreatmentDoseShape:
     Routing alternatives when (1) or (5) fails:
 
     - When (1) fails (no never-treated controls but all observed
-      doses non-negative): ``ContinuousDiD`` does not apply (Remark
-      3.1 lowest-dose-as-control is not implemented).
-      ``HeterogeneousAdoptionDiD`` IS a candidate for graded-adoption
-      designs (HAD's contract requires non-negative dose, satisfied
-      here); linear DiD with the treatment as a continuous covariate
-      is another.
+      doses non-negative): use ``control_group="lowest_dose"``
+      (Remark 3.1) if there is a mass point at the minimum dose
+      (``>= 2`` units at ``d_L``) — the lowest-dose group becomes the
+      comparison and the estimand is ``ATT(d) - ATT(d_L)``.
+      Otherwise ``HeterogeneousAdoptionDiD`` IS a candidate for
+      graded-adoption designs (HAD's contract requires non-negative
+      dose, satisfied here); linear DiD with the treatment as a
+      continuous covariate is another.
     - When (5) fails (negative treated doses):
       ``HeterogeneousAdoptionDiD`` is **not** a fallback either —
       HAD raises on negative post-period dose (``had.py:1450-1459``,

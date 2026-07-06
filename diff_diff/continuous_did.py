@@ -61,7 +61,13 @@ class ContinuousDiD:
     dvals : array-like, optional
         Custom dose evaluation grid. If None, uses quantile-based default.
     control_group : str, default="never_treated"
-        ``"never_treated"`` or ``"not_yet_treated"``.
+        ``"never_treated"``, ``"not_yet_treated"``, or ``"lowest_dose"``.
+        ``"lowest_dose"`` implements Remark 3.1 (CGBS 2024) for settings with no
+        never-treated / zero-dose units (``P(D=0) = 0``): the lowest-dose group
+        ``d_L`` becomes the comparison and the estimand is ``ATT(d) − ATT(d_L)``.
+        Requires a genuine lowest-dose group (``>= 2`` units at ``d_L``, i.e.
+        ``P(D=d_L) > 0``) and no never-treated units present. Single-cohort only
+        (multi-cohort and ``covariates=`` raise ``NotImplementedError``).
     anticipation : int, default=0
         Number of periods of treatment anticipation.
     base_period : str, default="varying"
@@ -131,7 +137,7 @@ class ContinuousDiD:
     >>> results.overall_att  # doctest: +SKIP
     """
 
-    _VALID_CONTROL_GROUPS = {"never_treated", "not_yet_treated"}
+    _VALID_CONTROL_GROUPS = {"never_treated", "not_yet_treated", "lowest_dose"}
     _VALID_BASE_PERIODS = {"varying", "universal"}
     _VALID_ESTIMATION_METHODS = {"reg", "dr", "ipw"}
     _VALID_TREATMENT_TYPES = {"continuous", "discrete"}
@@ -209,6 +215,17 @@ class ContinuousDiD:
             raise ValueError(
                 f"Invalid treatment_type: '{self.treatment_type}'. "
                 f"Must be one of {self._VALID_TREATMENT_TYPES}."
+            )
+        if self.control_group == "lowest_dose" and self.covariates is not None:
+            # The covariate estimand under lowest-dose-as-control shifts to
+            # conditional PT *relative to d_L* (E[ΔY(0)|D=d,X] = E[ΔY(0)|d_L,X]).
+            # Deferred (see TODO) rather than silently estimated with the wrong
+            # identifying assumption.
+            raise NotImplementedError(
+                "control_group='lowest_dose' does not yet compose with covariates= "
+                "(the conditional-parallel-trends estimand relative to the lowest "
+                "dose d_L is deferred). Use covariates=None for the unconditional "
+                "lowest-dose fit."
             )
 
     def get_params(self) -> Dict[str, Any]:
@@ -509,10 +526,79 @@ class ContinuousDiD:
         if self.control_group == "not_yet_treated" and n_control == 0:
             raise ValueError(
                 "No never-treated (D=0) units found. With control_group='not_yet_treated', "
-                "dose-response curve identification requires P(D=0) > 0 "
-                "(Remark 3.1 in Callaway et al. is not yet implemented). "
-                "Add never-treated units or use a dataset with D=0 observations."
+                "dose-response curve identification requires P(D=0) > 0. For settings "
+                "with no untreated group, use control_group='lowest_dose' (Remark 3.1: "
+                "the lowest-dose group becomes the comparison, estimand ATT(d)-ATT(d_L)). "
+                "Otherwise add never-treated units or use a dataset with D=0 observations."
             )
+
+        # Remark 3.1 (control_group="lowest_dose"): the lowest-dose group d_L is
+        # the comparison. Compute d_L ONCE here (from the treated unit doses,
+        # before precompute) and thread it via precomp -> every d_L-referencing
+        # consumer runs after this, and fit() stays config-idempotent (no fitted
+        # self attr). The d_L cluster (|dose - d_L| <= SATURATED_TOL) is the
+        # single source of truth for both the mask and the modelled dose set.
+        lowest_dose: Optional[float] = None
+        if self.control_group == "lowest_dose":
+            if n_control > 0:
+                raise ValueError(
+                    "control_group='lowest_dose' is for settings with no never-treated "
+                    f"units (Remark 3.1, P(D=0)=0), but {n_control} never-treated unit(s) "
+                    "were found; they would be silently dropped. Use "
+                    "control_group='never_treated' or 'not_yet_treated', or remove the "
+                    "never-treated units."
+                )
+            if len(treatment_groups) > 1:
+                # NOTE (deferred multi-cohort follow-up): a future multi-cohort
+                # lowest_dose must use a WITHIN-cohort d_L reference and a
+                # support-aware cross-cohort aggregation, and must exclude the d_L
+                # controls from the survey group/bin mass sums (which key off
+                # unit_cohorts==g and would otherwise double-count them). Harmless
+                # today because this path is fenced off here.
+                raise NotImplementedError(
+                    "control_group='lowest_dose' with multiple treatment cohorts is not "
+                    f"yet implemented ({len(treatment_groups)} cohorts found). Remark 3.1 "
+                    "is defined for a single treatment date; use a single-cohort panel "
+                    "(multi-period single-cohort is supported)."
+                )
+            dose_arr = treated_unit_doses.to_numpy(dtype=float)
+            d_L = float(np.min(dose_arr))
+            n_dL = int(np.sum(np.abs(dose_arr - d_L) <= SATURATED_TOL))
+            if n_dL < 2:
+                msg = (
+                    f"control_group='lowest_dose' requires a lowest-dose *group* — a mass "
+                    f"point at the minimum dose d_L={d_L:g} with >= 2 units (P(D=d_L) > 0), "
+                    f"but only {n_dL} unit is at d_L. The reference group must have enough "
+                    "units to form its own control variance; a singleton minimum is not a "
+                    "lowest-dose group."
+                )
+                if self.treatment_type != "discrete":
+                    msg += (
+                        " On a truly continuous dose without a mass point at the minimum, "
+                        "Remark 3.1 does not apply."
+                    )
+                raise ValueError(msg)
+            above = dose_arr[dose_arr - d_L > SATURATED_TOL]
+            if len(saturated_dose_levels(above)) < 1:
+                raise ValueError(
+                    f"control_group='lowest_dose': no treated dose above the lowest dose "
+                    f"d_L={d_L:g}. The estimand ATT(d)-ATT(d_L) needs at least one dose "
+                    "level above d_L, but all treated units share the same dose."
+                )
+            # A lowest modelled dose d_1 very close to d_L makes the boundary
+            # ACRT(d_1)=ATT(d_1)/(d_1-d_L) and its SE explode; warn (not an error).
+            d_1 = float(np.min(above))
+            dose_span = float(np.max(dose_arr) - d_L)
+            if dose_span > 0 and (d_1 - d_L) < 0.01 * dose_span:
+                warnings.warn(
+                    f"control_group='lowest_dose': the lowest modelled dose d_1={d_1:g} is "
+                    f"very close to the reference d_L={d_L:g} (gap {d_1 - d_L:g}, "
+                    f"{100 * (d_1 - d_L) / dose_span:.2g}% of the dose range); the boundary "
+                    "ACRT(d_1)=ATT(d_1)/(d_1-d_L) and its standard error may be very large.",
+                    UserWarning,
+                    stacklevel=2,
+                )
+            lowest_dose = d_L
 
         # Re-resolve survey design on filtered df if rows were dropped
         # (survey arrays must align with df, not the original data)
@@ -533,13 +619,45 @@ class ContinuousDiD:
             survey_weights=survey_weights,
             covariates=self.covariates,
         )
+        # Thread the lowest-dose reference d_L (Remark 3.1) to the per-cell
+        # dose-response so it swaps the control group and shifts the discrete
+        # ACRT reference. None on the never/not-yet-treated paths.
+        precomp["lowest_dose"] = lowest_dose
 
         # Compute dvals (evaluation grid); for discrete treatment, also the
-        # saturated dose levels (the global basis support).
+        # saturated dose levels (the global basis support). Under lowest_dose the
+        # lowest-dose group d_L is the reference (not modelled): the basis / grid
+        # / levels span only the *modelled* doses strictly above d_L.
         all_treated_doses = precomp["dose_vector"][precomp["dose_vector"] > 0]
+        if lowest_dose is not None:
+            modelled_doses = all_treated_doses[all_treated_doses - lowest_dose > SATURATED_TOL]
+            if self.dvals is not None:
+                bad = self.dvals[self.dvals <= lowest_dose + SATURATED_TOL]
+                if bad.size:
+                    raise ValueError(
+                        f"control_group='lowest_dose': dvals contain {int(bad.size)} "
+                        f"value(s) <= the reference dose d_L={lowest_dose:g}. d_L is the "
+                        "omitted reference (ATT(d_L)=0 by construction); evaluate the "
+                        "dose-response only at doses strictly above d_L."
+                    )
+            # Survey subpopulation weights could zero out the entire d_L control
+            # group, leaving no reference to difference against. Fail closed.
+            usw0 = precomp.get("unit_survey_weights")
+            if usw0 is not None:
+                dv0 = precomp["dose_vector"]
+                dL_w = usw0[np.abs(dv0 - lowest_dose) <= SATURATED_TOL]
+                if not np.any(dL_w > 0):
+                    raise ValueError(
+                        f"control_group='lowest_dose': the lowest-dose group d_L="
+                        f"{lowest_dose:g} has zero positive survey weight (e.g. removed by "
+                        "a subpopulation filter); there is no reference group to compare "
+                        "against. Widen the subpopulation or use a different dose grid."
+                    )
+        else:
+            modelled_doses = all_treated_doses
         levels: Optional[np.ndarray] = None
         if self.treatment_type == "discrete":
-            levels = saturated_dose_levels(all_treated_doses)
+            levels = saturated_dose_levels(modelled_doses)
             if self.dvals is not None:
                 # A saturated model can only be evaluated at observed dose
                 # levels; reject an off-support request (no silent snapping).
@@ -602,12 +720,13 @@ class ContinuousDiD:
         elif self.dvals is not None:
             dvals = self.dvals
         else:
-            dvals = default_dose_grid(all_treated_doses)
+            dvals = default_dose_grid(modelled_doses)
 
-        # Build B-spline knots from all treated doses (unused on the discrete
-        # branch, but harmless to construct).
+        # Build B-spline knots from the modelled treated doses (excludes the d_L
+        # reference group under lowest_dose; unused on the discrete branch, but
+        # harmless to construct).
         knots, degree = build_bspline_basis(
-            all_treated_doses, degree=self.degree, num_knots=self.num_knots
+            modelled_doses, degree=self.degree, num_knots=self.num_knots
         )
 
         # 3. Iterate over (g,t) cells
@@ -976,6 +1095,20 @@ class ContinuousDiD:
         for gt, r in gt_results.items():
             clean_gt[gt] = {k: v for k, v in r.items() if not k.startswith("_")}
 
+        # Unit-count metadata. Under lowest_dose the d_L group is the control /
+        # reference (not treated), so report the modelled-treated count (dose>d_L)
+        # and the reference-group size; reference_dose carries d_L. On the other
+        # paths the counts and reference_dose are unchanged (byte-stable).
+        if lowest_dose is not None:
+            _ud = treated_unit_doses.to_numpy(dtype=float)
+            n_treated_units_out = int(np.sum(_ud - lowest_dose > SATURATED_TOL))
+            n_control_units_out = int(np.sum(np.abs(_ud - lowest_dose) <= SATURATED_TOL))
+            reference_dose_out: Optional[float] = lowest_dose
+        else:
+            n_treated_units_out = int((unit_cohort > 0).sum())
+            n_control_units_out = n_control
+            reference_dose_out = None
+
         return ContinuousDiDResults(
             dose_response_att=dose_response_att,
             dose_response_acrt=dose_response_acrt,
@@ -994,8 +1127,9 @@ class ContinuousDiD:
             groups=treatment_groups,
             time_periods=time_periods,
             n_obs=len(df),
-            n_treated_units=int((unit_cohort > 0).sum()),
-            n_control_units=n_control,
+            n_treated_units=n_treated_units_out,
+            n_control_units=n_control_units_out,
+            reference_dose=reference_dose_out,
             alpha=self.alpha,
             control_group=self.control_group,
             covariates=self.covariates,
@@ -1347,6 +1481,7 @@ class ContinuousDiD:
         dose_vector = precomp["dose_vector"]
         never_treated_mask = precomp["never_treated_mask"]
         time_periods = precomp["time_periods"]
+        lowest_dose = precomp.get("lowest_dose")  # d_L reference (Remark 3.1) or None
 
         # Base period selection
         is_post = t >= g - self.anticipation
@@ -1369,20 +1504,35 @@ class ContinuousDiD:
         col_t = period_to_col[t]
         col_base = period_to_col[base_t]
 
-        # Treated units: first_treat == g and dose > 0
-        treated_mask = (unit_cohorts == g) & (dose_vector > 0)
+        # Treated units: first_treat == g and dose > 0. Under lowest_dose
+        # (Remark 3.1) the lowest-dose group d_L is the comparison, so treated =
+        # doses strictly above d_L and the d_L group is the control.
+        if lowest_dose is not None:
+            treated_mask = (unit_cohorts == g) & (dose_vector - lowest_dose > SATURATED_TOL)
+        else:
+            treated_mask = (unit_cohorts == g) & (dose_vector > 0)
         n_treated = int(np.sum(treated_mask))
         if n_treated == 0:
             return None
 
-        # Control units
+        # Control units (fail-closed dispatch so a new control_group value can
+        # never silently fall through to a wrong comparison group).
         if self.control_group == "never_treated":
             control_mask = never_treated_mask
-        else:
-            # Not-yet-treated: never-treated + first_treat > t
+        elif self.control_group == "not_yet_treated":
             control_mask = never_treated_mask | (
                 (unit_cohorts > t + self.anticipation) & (unit_cohorts != g)
             )
+        elif self.control_group == "lowest_dose":
+            # Within-cohort lowest-dose group (single-cohort is enforced upstream,
+            # so this equals the pooled d_L group). d_L units are themselves
+            # treated at dose d_L, so subtracting their ΔY removes ATT(d_L) ->
+            # ATT(d)-ATT(d_L).
+            control_mask = (unit_cohorts == g) & (
+                np.abs(dose_vector - lowest_dose) <= SATURATED_TOL
+            )
+        else:  # pragma: no cover - guarded by _validate_constrained_params
+            raise ValueError(f"Unhandled control_group: {self.control_group!r}")
         n_control = int(np.sum(control_mask))
         if n_control == 0:
             warnings.warn(
@@ -1459,8 +1609,13 @@ class ContinuousDiD:
             def _design(z: np.ndarray) -> np.ndarray:
                 return saturated_design_matrix(z, levels)
 
+            # Under lowest_dose the omitted reference is d_L (ATT(d_L)=0), so the
+            # backward-difference ACRT at the lowest modelled level references d_L
+            # (ACRT(d_1)=ATT(d_1)/(d_1-d_L)); base=0.0 otherwise (backward-to-zero).
+            _deriv_base = lowest_dose if lowest_dose is not None else 0.0
+
             def _deriv(z: np.ndarray) -> np.ndarray:
-                return saturated_derivative_design_matrix(z, levels)
+                return saturated_derivative_design_matrix(z, levels, base=_deriv_base)
 
         else:
 

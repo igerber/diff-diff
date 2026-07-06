@@ -293,6 +293,16 @@ When P(D=0) = 0 (all units receive some treatment), use the lowest dose group d_
 as comparison. Under PT, this recovers ATT(d|d) - ATT(d_L|d_L). Under SPT,
 recovers ATT(d) - ATT(d_L).
 
+**Implemented** via `control_group="lowest_dose"` (both `treatment_type="discrete"`
+and the continuous B-spline path). Mechanically a control-group swap: the D=0
+control pool is replaced by the d_L group, so `mu_0 = mean(ΔY | D = d_L)` and the
+per-cell estimand becomes `ATT(d) - ATT(d_L)` (with `ATT(d_L) = 0` the omitted
+reference). The continuous path requires a genuine mass point at d_L
+(`P(D=d_L) > 0`, the Remark 3.1 identification condition); a singleton minimum
+fails closed. Single-cohort only in v1 — multi-cohort (which needs a within-cohort
+reference and support-aware cross-cohort aggregation) and `covariates=` ×
+`lowest_dose` (conditional PT relative to d_L) raise `NotImplementedError`.
+
 ---
 
 ## 6. Inference
@@ -472,3 +482,4 @@ can be meaningfully aggregated.
 - TWFE decomposition diagnostics
 
 *Discrete treatment (saturated regression) is now implemented — see § 5.1.*
+*Lowest-dose-as-control (Remark 3.1) is now implemented via `control_group="lowest_dose"` — see § 5.6.*
