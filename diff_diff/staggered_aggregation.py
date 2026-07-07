@@ -169,72 +169,6 @@ class CallawaySantAnnaAggregationMixin:
 
         return overall_att, overall_se, effective_df
 
-    def _compute_aggregated_se(
-        self,
-        gt_pairs: List[Tuple[Any, Any]],
-        weights: np.ndarray,
-        influence_func_info: Dict,
-        n_units: Optional[int] = None,
-    ) -> float:
-        """
-        Compute standard error using influence function aggregation.
-
-        This properly accounts for covariances across (g,t) pairs by
-        aggregating unit-level influence functions:
-
-            ψ_i(overall) = Σ_{(g,t)} w_(g,t) × ψ_i(g,t)
-            Var(overall) = (1/n) Σ_i [ψ_i]²
-
-        This matches R's `did` package analytical SE formula.
-
-        Parameters
-        ----------
-        n_units : int, optional
-            Size of the canonical index space (len(precomputed['all_units'])).
-            When provided, influence function indices (treated_idx, control_idx)
-            index directly into this space, eliminating dict lookups.
-        """
-        if not influence_func_info:
-            return 0.0
-
-        if n_units is None:
-            # Fallback: infer size from influence function info
-            max_idx = 0
-            for g, t in gt_pairs:
-                if (g, t) in influence_func_info:
-                    info = influence_func_info[(g, t)]
-                    if len(info["treated_idx"]) > 0:
-                        max_idx = max(max_idx, info["treated_idx"].max())
-                    if len(info["control_idx"]) > 0:
-                        max_idx = max(max_idx, info["control_idx"].max())
-            n_units = max_idx + 1
-
-        if n_units == 0:
-            return 0.0
-
-        # Aggregate influence functions across (g,t) pairs
-        psi_overall = np.zeros(n_units)
-
-        for j, (g, t) in enumerate(gt_pairs):
-            if (g, t) not in influence_func_info:
-                continue
-
-            info = influence_func_info[(g, t)]
-            w = weights[j]
-
-            # Vectorized influence function aggregation using index arrays
-            treated_idx = info["treated_idx"]
-            if len(treated_idx) > 0:
-                np.add.at(psi_overall, treated_idx, w * info["treated_inf"])
-
-            control_idx = info["control_idx"]
-            if len(control_idx) > 0:
-                np.add.at(psi_overall, control_idx, w * info["control_inf"])
-
-        # Compute variance: Var(θ̄) = (1/n) Σᵢ ψᵢ²
-        variance = np.sum(psi_overall**2)
-        return np.sqrt(variance)
-
     @staticmethod
     def _get_agg_cache(precomputed: "PrecomputedData") -> Dict[str, Any]:
         """
@@ -474,8 +408,10 @@ class CallawaySantAnnaAggregationMixin:
         # global_unit_to_idx and precomputed["unit_to_idx"] are None, so the
         # identity guard alone would spuriously pass). Anything not exactly
         # matched (direct callers with foreign index maps, size mismatches,
-        # non-numeric cohorts) falls through to the general path below,
-        # which is preserved unchanged.
+        # non-numeric cohorts) falls through to the general path below
+        # (same mathematical contract; its IF scatter uses the fancy-+=
+        # form, bit-identical to np.add.at on the producers' duplicate-free
+        # index arrays).
         if precomputed is not None and n_global_units is not None:
             _fast_ok = False
             if _is_rcs:
@@ -571,14 +507,17 @@ class CallawaySantAnnaAggregationMixin:
             info = influence_func_info[(g, t)]
             w = weights[j]
 
-            # Vectorized influence function aggregation using precomputed index arrays
+            # Vectorized IF aggregation using precomputed index arrays. Index
+            # arrays are unique within each cell by construction at every
+            # producer (np.where on disjoint masks), so fancy += is exact —
+            # same scatter contract as _combined_if_fast.
             treated_idx = info["treated_idx"]
             if len(treated_idx) > 0:
-                np.add.at(psi_standard, treated_idx, w * info["treated_inf"])
+                psi_standard[treated_idx] += w * info["treated_inf"]
 
             control_idx = info["control_idx"]
             if len(control_idx) > 0:
-                np.add.at(psi_standard, control_idx, w * info["control_inf"])
+                psi_standard[control_idx] += w * info["control_inf"]
 
         # Build unit-group array: normalize iterator to (idx, uid) pairs
         unit_groups_array = np.full(n_units, -1, dtype=np.float64)

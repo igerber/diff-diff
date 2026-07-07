@@ -610,8 +610,10 @@ Aggregations:
   (see "Absorbed Fixed Effects with Survey Weights"). Units whose cohort is not
   among the keeper (g,t) groups get an exact 0 WIF contribution (the dense form
   realized the same value through cancelling terms). The pre-rewrite general path
-  is preserved verbatim as the fallback for direct callers with foreign index maps,
-  non-numeric cohort dtypes, or absent precomputed structures.
+  remains the fallback for direct callers with foreign index maps, non-numeric
+  cohort dtypes, or absent precomputed structures; its per-cell IF scatter uses
+  fancy `+=` (bit-identical to the prior `np.add.at` — index arrays are
+  duplicate-free by construction at every producer), same mathematical contract.
 - Block structure preserves within-unit correlation
 - Simultaneous confidence bands (`cband=True`, default): Uses sup-t bootstrap to compute
   a uniform critical value across event times, controlling family-wise error rate. Matches

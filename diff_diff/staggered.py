@@ -162,11 +162,16 @@ def _cluster_robust_se_from_per_gt_if(
         and (control_idx.max(initial=-1) >= n or control_idx.min(initial=0) < 0)
     ):
         return None
+    # Index arrays are unique within each cell by construction at every
+    # producer (np.where on disjoint masks), so fancy += is exact — same
+    # scatter contract as staggered_aggregation._combined_if_fast, without
+    # np.add.at's unbuffered-ufunc overhead (runs once per (g,t) cell when
+    # cluster= is set).
     psi_per_index = np.zeros(n)
     if treated_idx.size:
-        np.add.at(psi_per_index, treated_idx, treated_inf)
+        psi_per_index[treated_idx] += treated_inf
     if control_idx.size:
-        np.add.at(psi_per_index, control_idx, control_inf)
+        psi_per_index[control_idx] += control_inf
     # Route through the shared survey helper so the per-cell variance
     # gets the same G/(G-1) finite-sample correction, PSU centering,
     # FPC handling, and lonely-PSU/G<2→NaN behavior as overall +

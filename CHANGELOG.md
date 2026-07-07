@@ -398,6 +398,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (GMM-variance-dominated). Accumulation-order numerics documented in
   `docs/methodology/REGISTRY.md` (both estimator sections + "Absorbed Fixed Effects").
 
+### Performance
+- **`CallawaySantAnna` per-(g,t) IF scatters converted from `np.add.at` to fancy `+=`**
+  (`staggered.py::_cluster_robust_se_from_per_gt_if` — runs once per (g,t) cell when
+  `cluster=` is set — and the general combined-IF assembly path in
+  `staggered_aggregation.py`). The index arrays are duplicate-free by construction at
+  every producer (`np.where` on disjoint masks — the invariant the aggregation fast
+  path already relies on), so the fancy scatter is bit-identical to the unbuffered
+  `np.add.at` while avoiding its 5-20x per-element overhead. Also removed the dead
+  `_compute_aggregated_se` (zero callers; superseded by
+  `_compute_aggregated_se_with_wif` since the WIF adjustment landed).
+
 ## [3.6.2] - 2026-07-03
 
 ### Added

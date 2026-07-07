@@ -364,7 +364,8 @@ class TestSEFormulaComparison:
         V <- Matrix::t(inffunc) %*% inffunc / (n)
         se <- sqrt(Matrix::diag(V) / n)
 
-    Python formula (from staggered.py _compute_aggregated_se):
+    Python formula (staggered_aggregation.py _se_from_psi, consumed by
+    _compute_aggregated_se_with_wif):
         variance = np.sum(psi_overall ** 2)
         return np.sqrt(variance)
 
