@@ -416,3 +416,23 @@ def test_notebook_prose_aggregate_cap_is_bytes(tmp_path, monkeypatch):
     assert "--- docs/tutorials/a.ipynb ---" not in block
     assert "AGGREGATE TRUNCATION" in block
     assert "  - docs/tutorials/a.ipynb" in block
+
+
+def test_notebook_prose_built_for_git_quoted_filename(tmp_path):
+    """P1 regression: a tutorial notebook whose path git C-quotes under the
+    default core.quotePath (non-ASCII) must still get its prose block — the
+    prose builder's -z discovery is authoritative, not the quoted
+    name-status text."""
+    from adapters.ci_prompt import build_ci_prompt
+
+    nb = _make_nb([("markdown", "# quoted-path marker PLUGH")])
+    repo, base, head = _init_case_repo(tmp_path, {"docs/tutorials/tütorial-ñb.ipynb": nb})
+    prompt = build_ci_prompt(
+        worktree_dir=repo,
+        base_sha=base,
+        head_sha=head,
+        base_prompt="RULES",
+        extractor_path=_EXTRACTOR,
+    )
+    assert "PLUGH" in prompt
+    assert '<notebook-prose untrusted="true">' in prompt

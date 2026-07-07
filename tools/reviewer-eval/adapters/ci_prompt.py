@@ -332,14 +332,19 @@ def build_ci_prompt(
     """
     name_status = git_name_status(worktree_dir, base_sha, head_sha)
     unified = git_unified_diff(worktree_dir, base_sha, head_sha)
-    prose_block = ""
-    if touches_notebook(name_status):
-        if extractor_path is None:
-            # TRUSTED current-repo extractor (documented divergence from CI's
-            # base-SHA staging) — never the case worktree's copy, which is
-            # case-controlled content.
-            extractor_path = os.path.join(_HARNESS_REPO_ROOT, DEFAULT_EXTRACTOR_RELPATH)
-        prose_block = build_notebook_prose_block(worktree_dir, base_sha, head_sha, extractor_path)
+    if extractor_path is None:
+        # TRUSTED current-repo extractor (documented divergence from CI's
+        # base-SHA staging) — never the case worktree's copy, which is
+        # case-controlled content.
+        extractor_path = os.path.join(_HARNESS_REPO_ROOT, DEFAULT_EXTRACTOR_RELPATH)
+    # Unconditional: the prose builder discovers changed tutorials itself via
+    # the robust null-delimited `--name-only -z` read (returning "" when none
+    # changed). Gating on touches_notebook() would re-parse the NON-`-z`
+    # name-status text, where git's default core.quotePath C-quotes
+    # non-ASCII/special paths and the tab-split predicate silently misses
+    # them — the diff body would exclude the notebook while no prose block
+    # was ever built (CI's -z path handles those names).
+    prose_block = build_notebook_prose_block(worktree_dir, base_sha, head_sha, extractor_path)
     return assemble_prompt(
         base_prompt=base_prompt,
         name_status=name_status,
