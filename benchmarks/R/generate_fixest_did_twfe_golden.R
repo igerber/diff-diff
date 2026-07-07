@@ -7,12 +7,16 @@
 # panels and fixest's feols() ATT + SE so tests can assert machine-precision SE
 # parity WITHOUT R at test time.
 #
-# Scope (this golden): the classical / iid SE, which Python matches to machine
-# precision on both the 2x2 DiD path and the within-transform TWFE path (the
-# latter also locks the SE-audit D4 full-K rescale). The cluster-robust ATT is
-# stored too; its SE carries the documented CR1 small-sample DOF-convention
-# difference vs fixest and is left to a follow-up. (`hetero`/HC1 collapses to iid
-# on these balanced 2-group designs, so it is not a distinct target here.)
+# Scope (this golden): scenarios 1-2 are the original balanced designs — the
+# classical / iid SE locks (the TWFE one also pins the SE-audit D4 full-K
+# rescale) plus the cluster blocks. Scenarios 3-4 (G2 completion, 2026-07) are
+# heteroskedastic + unbalanced so `hetero` (HC1) is a distinct target: the
+# plain-OLS DiD path locks hetero AND cluster CR1 at machine precision (the
+# CR1 DOF-convention difference vs fixest is absorbed-FE-only); the TWFE
+# cluster SE stays band-pinned for that documented non-nested-FE ssc
+# deviation, and TWFE hetero has no public unclustered Python surface
+# (auto-cluster-at-unit convention), so scenario 4 locks iid on an
+# UNBALANCED panel.
 #
 # Regenerate:  Rscript benchmarks/R/generate_fixest_did_twfe_golden.R
 # Output:      benchmarks/data/fixest_did_twfe_golden.json
@@ -98,6 +102,84 @@ twfe_golden <- list(
 )
 
 # ---------------------------------------------------------------------------
+# Scenario 3: heteroskedastic + unbalanced 2x2 DiD (SE-audit G2 hetero lock).
+# Error sd depends on treatment arm and period (so HC1 'hetero' does NOT
+# collapse to iid) and ~15% of rows are dropped deterministically-by-draw
+# (unbalanced groups). Appended AFTER scenarios 1-2 so their RNG draws (and
+# the committed scenario 1-2 golden values) are unchanged on regeneration.
+# ---------------------------------------------------------------------------
+n_units_h <- 120
+did_h_rows <- list()
+i <- 1
+for (unit in 0:(n_units_h - 1)) {
+  is_treated <- as.integer(unit < 45)   # unequal arms: 45 treated / 75 control
+  for (period in c(0, 1)) {
+    sd_it <- 0.5 + 1.5 * is_treated + 0.8 * period   # heteroskedastic
+    y <- 10.0 + period * 2.0
+    if (is_treated == 1 && period == 1) y <- y + 3.0
+    y <- y + rnorm(1, 0, sd_it)
+    keep <- runif(1) > 0.15                          # unbalanced: drop ~15%
+    if (keep) {
+      did_h_rows[[i]] <- data.frame(unit = unit, outcome = y, treated = is_treated, post = period)
+      i <- i + 1
+    }
+  }
+}
+did_h <- do.call(rbind, did_h_rows)
+did_h_m <- feols(outcome ~ treated * post, data = did_h)
+
+did_hetero_golden <- list(
+  data = list(unit = did_h$unit, outcome = did_h$outcome, treated = did_h$treated, post = did_h$post),
+  n_obs = unbox(nrow(did_h)),
+  iid = fit_att(did_h_m, "iid"),
+  hetero = fit_att(did_h_m, "hetero"),
+  cluster_unit = fit_att(did_h_m, ~unit)
+)
+
+# ---------------------------------------------------------------------------
+# Scenario 4: heteroskedastic + unbalanced TWFE. The fixest `hetero` block is
+# stored for reference only — Python's TwoWayFixedEffects auto-clusters at
+# unit on hc1 (no public unclustered-hetero surface), so the public locks are
+# the unbalanced iid/full-K rescale plus the clustered ATT (exact) and SE
+# (band, documented non-nested-FE ssc deviation).
+# ---------------------------------------------------------------------------
+n_units_th <- 40
+n_periods_th <- 5
+twfe_h_rows <- list()
+i <- 1
+for (unit in 0:(n_units_th - 1)) {
+  is_treated <- as.integer(unit < 15)   # unequal arms
+  unit_effect <- unit * 0.2
+  for (period in 0:(n_periods_th - 1)) {
+    post <- as.integer(period >= 3)
+    sd_it <- 0.4 + 1.2 * is_treated + 0.3 * post
+    y <- 5.0 + unit_effect + period * 1.5
+    if (is_treated == 1 && post == 1) y <- y + 2.5
+    y <- y + rnorm(1, 0, sd_it)
+    keep <- runif(1) > 0.12
+    if (keep) {
+      twfe_h_rows[[i]] <- data.frame(
+        unit = unit, period = period, outcome = y, treated = is_treated, post = post
+      )
+      i <- i + 1
+    }
+  }
+}
+twfe_h <- do.call(rbind, twfe_h_rows)
+twfe_h_m <- feols(outcome ~ treated:post | unit + post, data = twfe_h)
+
+twfe_hetero_golden <- list(
+  data = list(
+    unit = twfe_h$unit, period = twfe_h$period, outcome = twfe_h$outcome,
+    treated = twfe_h$treated, post = twfe_h$post
+  ),
+  n_obs = unbox(nrow(twfe_h)),
+  iid = fit_att(twfe_h_m, "iid"),
+  hetero = fit_att(twfe_h_m, "hetero"),
+  cluster_unit = fit_att(twfe_h_m, ~unit)
+)
+
+# ---------------------------------------------------------------------------
 golden <- list(
   meta = list(
     generator = unbox("benchmarks/R/generate_fixest_did_twfe_golden.R"),
@@ -109,7 +191,9 @@ golden <- list(
     ))
   ),
   did = did_golden,
-  twfe = twfe_golden
+  twfe = twfe_golden,
+  did_hetero = did_hetero_golden,
+  twfe_hetero = twfe_hetero_golden
 )
 
 out <- "benchmarks/data/fixest_did_twfe_golden.json"

@@ -76,24 +76,98 @@ class TestFixestDiDTWFEParity:
         np.testing.assert_allclose(res.att, exp["att"], atol=1e-10, rtol=0)
         np.testing.assert_allclose(res.se, exp["se"], atol=1e-10, rtol=0)
 
-    def test_cluster_att_matches_fixest(self):
-        """The cluster-robust ATT matches fixest exactly (the SE carries the
-        documented CR1 DOF-convention difference and is deferred)."""
+    def test_did_cluster_se_matches_fixest_exactly(self):
+        """Plain-OLS CR1 == fixest CR1 to machine precision on the DiD path
+        (balanced AND heteroskedastic/unbalanced scenarios). With no absorbed
+        FE, both apply the same (G/(G-1))*((n-1)/(n-k)) small-sample factor —
+        the documented fixest-CR1 DOF-convention deviation is an absorbed-FE
+        (within-transform) phenomenon only, so the former DiD band-pin is
+        tightened to a machine-precision lock (SE-audit G2)."""
         golden = _load_golden()
-        for key, est in (
-            ("did", DifferenceInDifferences(vcov_type="hc1", cluster="unit")),
-            ("twfe", TwoWayFixedEffects(vcov_type="hc1", cluster="unit")),
-        ):
+        for key in ("did", "did_hetero"):
+            assert key in golden, f"required golden block {key!r} missing — regenerate the fixture"
             df = _build_df(golden[key])
-            res = est.fit(df, outcome="outcome", treatment="treated", time="post", unit="unit")
-            np.testing.assert_allclose(
-                res.att, golden[key]["cluster_unit"]["att"], atol=1e-10, rtol=0
+            res = DifferenceInDifferences(vcov_type="hc1", cluster="unit").fit(
+                df, outcome="outcome", treatment="treated", time="post", unit="unit"
             )
-            # SE-audit G2: ratio-band pin on the cluster-robust SE. The exact
-            # value carries the documented ~0.25% fixest-CR1 small-sample
-            # DOF-convention deviation (SE_AUDIT.md), so it is not machine-
-            # precision lockable here; this pins that we never regress BEYOND
-            # the known band (catches an unintended CR1 SE-formula change). The
-            # machine-precision hetero/cluster lock is the deferred G2 golden
-            # regeneration (needs an unbalanced/heteroskedastic DGP).
-            assert res.se == pytest.approx(golden[key]["cluster_unit"]["se"], rel=0.005)
+            exp = golden[key]["cluster_unit"]
+            np.testing.assert_allclose(res.att, exp["att"], atol=1e-10, rtol=0)
+            np.testing.assert_allclose(res.se, exp["se"], atol=1e-10, rtol=0)
+
+    def test_twfe_cluster_att_matches_fixest(self):
+        """The TWFE cluster-robust ATT matches fixest exactly; the SE stays
+        band-pinned. The residual gap is the documented fixest-CR1 ssc
+        convention for absorbed FE that are NOT nested in the cluster: with
+        ``absorb=[unit, time]`` and ``cluster=unit``, fixest counts the
+        non-nested time FE in the (n-1)/(n-k) denominator while the
+        within-transform path uses k_visible (measured ~0.25% balanced /
+        ~0.3% unbalanced; tracked in TODO under "Needs external reference").
+        The band pins that we never regress BEYOND the known deviation."""
+        golden = _load_golden()
+        for key in ("twfe", "twfe_hetero"):
+            assert key in golden, f"required golden block {key!r} missing — regenerate the fixture"
+            df = _build_df(golden[key])
+            res = TwoWayFixedEffects(vcov_type="hc1", cluster="unit").fit(
+                df, outcome="outcome", treatment="treated", time="post", unit="unit"
+            )
+            exp = golden[key]["cluster_unit"]
+            np.testing.assert_allclose(res.att, exp["att"], atol=1e-10, rtol=0)
+            assert res.se == pytest.approx(exp["se"], rel=0.005)
+
+
+@_SKIP
+class TestFixestHeteroskedasticParity:
+    """SE-audit G2 machine-precision hetero lock on an unbalanced,
+    heteroskedastic DGP (error sd varies by arm and period; ~15% of rows
+    dropped), where fixest's ``hetero`` (HC1) no longer collapses to iid.
+
+    Scope: the plain-OLS DiD path, where Python exposes an unclustered HC1
+    (``DifferenceInDifferences(vcov_type="hc1")``). ``TwoWayFixedEffects``
+    deliberately auto-clusters at unit on hc1 (documented convention), so it
+    has no public unclustered-hetero surface to lock — its scenario locks
+    iid (which also exercises the D4 full-K rescale on an UNBALANCED panel)
+    and the cluster ATT via the class above.
+    """
+
+    def test_did_hetero_hc1_matches_fixest_machine_precision(self):
+        golden = _load_golden()
+        assert (
+            "did_hetero" in golden
+        ), "required golden block 'did_hetero' missing — regenerate the fixture"
+        df = _build_df(golden["did_hetero"])
+        res = DifferenceInDifferences(vcov_type="hc1").fit(
+            df, outcome="outcome", treatment="treated", time="post", unit="unit"
+        )
+        exp = golden["did_hetero"]["hetero"]
+        np.testing.assert_allclose(res.att, exp["att"], atol=1e-10, rtol=0)
+        np.testing.assert_allclose(res.se, exp["se"], atol=1e-10, rtol=0)
+        # Discriminating: hetero must NOT collapse to iid on this DGP.
+        assert abs(exp["se"] - golden["did_hetero"]["iid"]["se"]) > 0.01
+
+    def test_did_hetero_iid_matches_fixest_machine_precision(self):
+        golden = _load_golden()
+        assert (
+            "did_hetero" in golden
+        ), "required golden block 'did_hetero' missing — regenerate the fixture"
+        df = _build_df(golden["did_hetero"])
+        res = DifferenceInDifferences(vcov_type="classical").fit(
+            df, outcome="outcome", treatment="treated", time="post", unit="unit"
+        )
+        exp = golden["did_hetero"]["iid"]
+        np.testing.assert_allclose(res.att, exp["att"], atol=1e-10, rtol=0)
+        np.testing.assert_allclose(res.se, exp["se"], atol=1e-10, rtol=0)
+
+    def test_twfe_hetero_iid_matches_fixest_machine_precision(self):
+        """Unbalanced-panel iid lock — the D4 full-K within-transform rescale
+        must hold off the balanced design too."""
+        golden = _load_golden()
+        assert (
+            "twfe_hetero" in golden
+        ), "required golden block 'twfe_hetero' missing — regenerate the fixture"
+        df = _build_df(golden["twfe_hetero"])
+        res = TwoWayFixedEffects(vcov_type="classical").fit(
+            df, outcome="outcome", treatment="treated", time="post", unit="unit"
+        )
+        exp = golden["twfe_hetero"]["iid"]
+        np.testing.assert_allclose(res.att, exp["att"], atol=1e-10, rtol=0)
+        np.testing.assert_allclose(res.se, exp["se"], atol=1e-10, rtol=0)

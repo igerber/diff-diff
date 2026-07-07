@@ -49,6 +49,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `TestHonestFLCIParityR`); the M=0 result and all existing behaviour are unchanged.
 
 ### Testing
+- **fixest hetero + cluster SE machine-precision locks on an unbalanced, heteroskedastic
+  DGP (SE-audit G2 completion).** The committed `fixest_did_twfe_golden.json` gains two
+  appended scenarios (error sd varying by arm/period, ~15% rows dropped; the original
+  balanced scenarios' RNG draws precede them and reproduce value-identically): on the
+  plain-OLS DiD path, `hetero` (HC1) no longer collapses to iid and is locked against
+  `fixest` at machine precision — and the cluster-robust CR1 SE turns out to match fixest
+  **exactly** on plain OLS (balanced and unbalanced), so the former ~0.5% DiD cluster
+  band-pin is tightened to a machine-precision lock: the documented ~0.25% fixest-CR1
+  DOF-convention deviation is an absorbed-FE (within-transform) phenomenon only. The TWFE
+  cluster band-pin is retained and re-scoped to that documented non-nested-FE ssc
+  deviation (~0.3% unbalanced); TWFE `hetero` has no public unclustered surface
+  (auto-cluster-at-unit convention), so its scenario locks iid — which also pins the D4
+  full-K rescale on an UNBALANCED panel for the first time.
 - **`CallawaySantAnna` ipw R-parity yardsticks folded into the golden fixture + no-covariate
   ipw structural-parity decision recorded.** `csdid_golden_values.json` regenerated (R 4.5.2,
   did 2.5.1, DRDID 1.3.0): all pre-existing data and result blocks reproduced byte-identically;
