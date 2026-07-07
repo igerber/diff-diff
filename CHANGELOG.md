@@ -35,6 +35,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `did_had_pretest_workflow`, ...) are unchanged in this release and removed separately.
 
 ### Testing
+- **`CallawaySantAnna` ipw R-parity yardsticks folded into the golden fixture + no-covariate
+  ipw structural-parity decision recorded.** `csdid_golden_values.json` regenerated (R 4.5.2,
+  did 2.5.1, DRDID 1.3.0): all pre-existing data and result blocks reproduced byte-identically;
+  the ipw scenario now carries the `aggte` simple/dynamic/group blocks (identical to the
+  previously hardcoded 2026-07-05 yardsticks), and
+  `test_golden_ipw_aggregation_se_vs_r_did_251` reads them from the JSON. The no-covariate ipw
+  branch's unconditional-propensity treatment is now a recorded document-only decision
+  (REGISTRY § CallawaySantAnna): R `did`'s intercept-only logit is deliberately not mirrored —
+  its estimation-effect correction is identically zero, and no-covariate ipw/reg/dr reduce to
+  the same difference-in-means IF, locked bit-identical per cell by a new
+  `TestDRNoCovariateSEUniformity::test_ipw_no_cov_per_cell_identical_to_reg`.
 - **CI-locked standard-error parity for flagship and previously-unasserted paths (SE-audit
   coverage batch).** These surfaces computed SEs matching R but had no CI assertion pinning them
   (the latent-risk pattern that once hid the CallawaySantAnna reg-method gap):

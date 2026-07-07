@@ -1484,19 +1484,22 @@ class TestCSDIDGoldenValues:
     def test_golden_ipw_aggregation_se_vs_r_did_251(self, golden_values):
         """Aggregated ipw SEs match R did 2.5.1 ``aggte`` on the golden data.
 
-        The golden JSON carries no aggregation blocks for the ipw scenario,
-        so the expected values are hardcoded from a fresh R run (did 2.5.1,
-        DRDID 1.3.0, ``bstrap=FALSE``, computed 2026-07-05 on the EXACT
-        ``with_covariates_ipw`` fixture data; see
-        benchmarks/R/generate_csdid_test_values.R which will fold these into
-        the JSON on its next regeneration). Discriminating: the pre-fix
-        Python simple SE was 0.32125722 (missing PS estimation-effect
-        correction, ~2.4% off). Observed post-fix agreement ~1e-10; 1e-6
-        covers the fixtures' 8-decimal quantization + IRLS-vs-glm headroom.
+        The expected values are read from the golden JSON's ipw aggregation
+        blocks (``simple`` / ``dynamic`` / ``group``), folded in on the
+        2026-07-07 regeneration (did 2.5.1 / DRDID 1.3.0, ``bstrap=FALSE``;
+        identical to the previously hardcoded 2026-07-05 yardsticks — see
+        benchmarks/R/generate_csdid_test_values.R). Discriminating: the
+        pre-fix Python simple SE was 0.32125722 (missing PS
+        estimation-effect correction, ~2.4% off). Observed post-fix
+        agreement ~1e-10; 1e-6 covers the fixtures' quantization +
+        IRLS-vs-glm headroom.
         """
         if "with_covariates_ipw" not in golden_values:
             pytest.skip("Scenario not in golden values")
         scenario = golden_values["with_covariates_ipw"]
+        r_results = scenario["results"]
+        if "simple" not in r_results:
+            pytest.skip("ipw aggregation blocks not in golden values (pre-2026-07 fixture)")
         data = _golden_to_df(scenario["data"])
         cs = CallawaySantAnna(estimation_method="ipw")
         results = cs.fit(
@@ -1509,28 +1512,20 @@ class TestCSDIDGoldenValues:
             aggregate="all",
         )
         # R did 2.5.1: aggte(type="simple", bstrap=FALSE, cband=FALSE)
-        assert abs(results.overall_att - 0.68857256) < 1e-6
-        assert abs(results.overall_se - 0.31382230) < 1e-6
+        assert abs(results.overall_att - r_results["simple"]["att"]) < 1e-6
+        assert abs(results.overall_se - r_results["simple"]["se"]) < 1e-6
         # aggte(type="dynamic"): (att.egt, se.egt) per event time
-        r_dynamic = {
-            -2: (-0.58336476, 0.27944371),
-            -1: (-0.40369753, 0.22022753),
-            0: (0.68317989, 0.20153325),
-            1: (0.69816671, 0.38903747),
-            2: (0.68521672, 0.64844936),
-        }
-        for e, (r_att, r_se) in r_dynamic.items():
-            es = results.event_study_effects[e]
+        r_dyn = r_results["dynamic"]
+        assert len(r_dyn["egt"]) > 0
+        for e, r_att, r_se in zip(r_dyn["egt"], r_dyn["att"], r_dyn["se"]):
+            es = results.event_study_effects[int(e)]
             assert abs(es["effect"] - r_att) < 1e-6, f"ipw dyn ATT(e={e})"
             assert abs(es["se"] - r_se) < 1e-6, f"ipw dyn SE(e={e})"
         # aggte(type="group"): (att.egt, se.egt) per cohort
-        r_group = {
-            2: (0.91085897, 0.44399703),
-            3: (0.60976619, 0.33782836),
-            4: (0.24708101, 0.30682305),
-        }
-        for g, (r_att, r_se) in r_group.items():
-            grp = results.group_effects[g]
+        r_grp = r_results["group"]
+        assert len(r_grp["egt"]) > 0
+        for g, r_att, r_se in zip(r_grp["egt"], r_grp["att"], r_grp["se"]):
+            grp = results.group_effects[int(g)]
             assert abs(grp["effect"] - r_att) < 1e-6, f"ipw group ATT(g={g})"
             assert abs(grp["se"] - r_se) < 1e-6, f"ipw group SE(g={g})"
 

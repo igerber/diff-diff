@@ -422,6 +422,38 @@ class TestDRNoCovariateSEUniformity:
             else:
                 np.testing.assert_allclose(dr_es["se"], reg_es["se"], rtol=0, atol=1e-12)
 
+    def test_ipw_no_cov_per_cell_identical_to_reg(self):
+        """No-covariate ipw is bit-identical to reg per-cell (effect AND SE).
+
+        Locks the documented decision (REGISTRY § CallawaySantAnna) that the
+        no-covariate ipw branch treats the propensity as unconditional and
+        does NOT structurally mirror R ``did``'s intercept-only logit: the
+        logit's estimation-effect correction is identically zero at the MLE,
+        so both implementations reduce to the same difference-in-means IF —
+        mirroring would add a per-cell IRLS solve (and its failure surface)
+        for zero numerical change. If this test ever breaks, the ipw no-cov
+        branch has diverged from the diff-in-means contract and the REGISTRY
+        note must be revisited."""
+        data = generate_staggered_data(n_units=120, n_periods=6, never_treated_frac=0.3, seed=7)
+        reg = self._fit(data, "reg", aggregate="event_study")
+        ipw = self._fit(data, "ipw", aggregate="event_study")
+
+        assert set(reg.group_time_effects) == set(ipw.group_time_effects)
+        compared = 0
+        for key, reg_cell in reg.group_time_effects.items():
+            ipw_cell = ipw.group_time_effects[key]
+            if not np.isfinite(reg_cell["se"]):
+                assert not np.isfinite(ipw_cell["se"])
+                continue
+            np.testing.assert_allclose(ipw_cell["effect"], reg_cell["effect"], rtol=0, atol=1e-12)
+            np.testing.assert_allclose(ipw_cell["se"], reg_cell["se"], rtol=0, atol=1e-12)
+            compared += 1
+        assert compared >= 3, f"expected several finite cells to compare, got {compared}"
+
+        # Aggregated surfaces inherit the identity (same IF feeds aggregation).
+        np.testing.assert_allclose(ipw.overall_att, reg.overall_att, rtol=0, atol=1e-12)
+        np.testing.assert_allclose(ipw.overall_se, reg.overall_se, rtol=0, atol=1e-12)
+
 
 # =============================================================================
 # Phase 2: R Benchmark Comparison Tests

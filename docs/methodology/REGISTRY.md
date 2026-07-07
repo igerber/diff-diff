@@ -541,6 +541,12 @@ Aggregations:
   `pscore_trim` (R drops at `trim.level=0.995`; differs only at extreme propensities);
   no-covariate ipw is treated as unconditional (R fits an intercept-only logit whose
   estimation effect is identically zero in the IF, so this is presentation-only).
+  **Note:** decided document-only (2026-07-07) — the intercept-only logit is deliberately
+  NOT mirrored structurally: its estimation-effect correction is identically zero at the
+  MLE, so mirroring would add a per-cell IRLS solve (and its non-convergence failure
+  surface) for zero numerical change. No-covariate ipw/reg/dr all reduce to the same
+  difference-in-means IF, bit-identical per cell (locked by
+  `tests/test_methodology_callaway.py::TestDRNoCovariateSEUniformity::test_ipw_no_cov_per_cell_identical_to_reg`).
   DR's no-covariate per-cell SE now also uses the IF-based `sqrt(sum(phi^2))` form (it
   had lagged on the ddof=1 plug-in `sqrt(var_t/n_t + var_c/n_c)`, O(1/n) from R): without
   covariates DR reduces to difference in means, so its per-cell SE is now bit-identical to
