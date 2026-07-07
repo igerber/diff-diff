@@ -247,6 +247,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   supersedes it.
 
 ### Changed
+- **Per-cell solver fast paths for covariate fits (CallawaySantAnna and every
+  estimator routing through the shared solvers).** Two pure-Python changes in
+  `diff_diff/linalg.py`: (1) `solve_logit`'s IRLS inner step — previously a full
+  SVD (`np.linalg.lstsq`) on the tall weighted design per iteration — now solves
+  equilibrated normal equations by Cholesky under an explicit
+  reciprocal-condition guard (LAPACK `dpocon`), falling back to the exact legacy
+  solve for any iteration whose normal matrix cannot be certified
+  well-conditioned; (2) `_detect_rank_deficiency` short-circuits the common
+  full-rank case with a Gram/eigenvalue certification two orders stricter than
+  the pivoted-QR boundary, so all rank counts, drop decisions, and pivot
+  selections on deficient or uncertifiable designs are unchanged. Measured
+  (3-rep medians, CallawaySantAnna, 100k units x 20 periods = 2M rows, 95 cells,
+  `aggregate="all"`): dr fits 1.5s → 1.0s at 10 covariates (1.49x), 2.6s → 1.6s
+  at 20 (1.64x), 5.7s → 3.1s at 40 (1.85x); ipw 1.8s → 0.9s (2.0x);
+  survey-weighted dr 2.7s → 1.7s (1.6x); pure-Python backend gains are equal or
+  larger. The solver stages themselves: IRLS solve 6.8x, rank detection 16.5x
+  (at 40 covariates). Estimates are unchanged beyond machine precision (overall
+  ATT/SE deltas exactly 0; per-cell max ~7e-15; the R-golden ipw SE parity at
+  1e-6 abs and the dCDH bit-identity baselines hold unmodified), the Cholesky
+  fallback fires on 0% of healthy fits (its near-separation trip path is locked
+  by tests), and memory is flat.
 - **`CallawaySantAnna` no-covariate `estimation_method="dr"` per-cell SE is now
   influence-function-based** (`sqrt(sum(phi^2))`), matching the `reg`/`ipw` branches and R's
   `DRDID::drdid_panel`. It was the last per-cell SE on the ddof=1 plug-in

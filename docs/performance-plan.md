@@ -183,6 +183,60 @@ precision; analytical SEs to 5 significant digits; bootstrap SEs within ~1% (Mon
 
 ---
 
+## CS per-cell solver fast paths (Phase 3, 2026-07)
+
+Fresh profile on main 49bbde68 (CallawaySantAnna dr, 100k units x 20 periods =
+2M rows, 95 cells) after Phase 1 removed the aggregation dominance:
+
+| item | cov10 (fit 1.56s) | cov20 (2.71s) | cov40 (5.68s) |
+|---|---|---|---|
+| `np.linalg.lstsq` in solve_logit IRLS (184 calls) | 0.39s | 0.81s | 1.99s |
+| `_detect_rank_deficiency` pivoted QR (141 calls) | 0.15s | 0.31s | 0.84s |
+| rust solve_ols SVD (out of scope, TODO row) | 0.23s | 0.46s | 1.03s |
+
+Two pure-Python fast paths in `diff_diff/linalg.py`:
+
+1. **IRLS inner solve**: per-iteration gelsd SVD on the tall weighted design
+   -> equilibrated normal equations + Cholesky, guarded by a LAPACK `dpocon`
+   reciprocal-condition estimate (guard 1e-6; cho_factor alone can succeed
+   with garbage on cond(G) ~1e10-1e16, and working weights can crush a
+   column's effective scale on near-separated subgroups). Any uncertified
+   iteration falls back to the exact legacy lstsq line. Columns are
+   equilibrated ONCE (the repo removed a prior un-equilibrated cho_solve OR
+   fast path for scale sensitivity - this addresses that removal reason);
+   IRLS state stays in the raw basis (a scaled-basis tol would be ~sqrt(n)x
+   tighter for every fit). Fallback count exposed via
+   `diagnostics_out["irls_chol_fallback_iters"]`.
+2. **Rank-detection stage-0 certification**: the always-run pivoted QR on the
+   tall design is short-circuited by a Gram/eigvalsh certification on the
+   equilibrated Gram at the `_rank_guarded_inv` 1e-10 threshold (two orders
+   stricter than the QR boundary; never certifies what QR would call
+   deficient); n < k, non-finite, looser-rcond, and uncertifiable designs
+   fall through to the existing two-stage QR verbatim.
+
+Measured arms (3-rep medians; BEFORE = pristine main 49bbde68 via
+baseline-worktree PYTHONPATH, .so rebuilt at that SHA; BLAS threads pinned;
+`.bench-local/cs_solver_arms_results.jsonl`):
+
+| scenario (@100k x 20p) | rust BEFORE -> AFTER | speedup | python pair |
+|---|---|---|---|
+| cov10_dr | 1.53 -> 1.03s | 1.49x | 1.49x |
+| cov20_dr | 2.64 -> 1.61s | 1.64x | 1.65x |
+| cov40_dr | 5.69 -> 3.07s | 1.85x | 1.95x |
+| cov20_ipw | 1.79 -> 0.90s | 1.98x | 2.03x |
+| cov20_survey_dr | 2.73 -> 1.68s | 1.63x | 1.60x |
+
+Component stages at cov40: solve_logit 2.54 -> 0.37s (6.8x),
+_detect_rank_deficiency 0.84 -> 0.05s (16.5x). Instrumented during arms:
+Cholesky fallback 0 iterations on every scenario/backend/arm; certification
+rate 100% (141 -> 0 pivoted QRs per dr fit, 46 -> 0 per ipw fit);
+rust-dispatch counts identical between arms (the solve_ols routing boolean is
+provably unchanged). Deltas: overall ATT/SE exactly 0, per-cell max ~7e-15,
+maxrss flat. After this the top per-cell item at cov40 is the rust solve_ols
+SVD (1.04s; follow-up TODO row), then pandas frame prep.
+
+---
+
 ## CS multiplier-bootstrap fused tiled-GEMM rewrite (v3.7 Phase 2, 2026-07)
 
 Stage-level instrumentation of `_run_multiplier_bootstrap` at the 40p × 10c × 100k-unit

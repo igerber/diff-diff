@@ -39,8 +39,9 @@ from typing import Any, Dict, List, Literal, Optional, Tuple, Union, overload
 import numpy as np
 import pandas as pd
 from scipy import stats
+from scipy.linalg import cho_factor, cho_solve, qr
 from scipy.linalg import lstsq as scipy_lstsq
-from scipy.linalg import qr
+from scipy.linalg.lapack import dpocon
 
 # Import Rust backend if available (from _backend to avoid circular imports)
 from diff_diff._backend import (
@@ -132,15 +133,53 @@ def _detect_rank_deficiency(
         Indices of columns that are linearly dependent (should be dropped).
         Empty if matrix is full rank.
     pivot : ndarray of int
-        Column permutation from QR decomposition.
+        Column permutation from QR decomposition. For a full-rank result the
+        pivot carries no information (no caller consumes it; the stage-0
+        certification below returns a trivial ``arange`` pivot).
     """
-    _, k = X.shape
+    n, k = X.shape
     if k == 0:
         return 0, np.array([], dtype=int), np.array([], dtype=int)
 
     # R's qr() uses tol = 1e-07 by default (sqrt(eps) ≈ 1.49e-08); we use 1e-07.
     if rcond is None:
         rcond = 1e-07
+
+    # Stage 0 — Gram full-rank CERTIFICATION (perf fast path; decisions never
+    # change). The Gram is built directly from X (no equilibrated copy of the
+    # tall matrix); diag(G) holds the squared column 2-norms, so equilibrating
+    # G symmetrically by sqrt(diag(G)) is exactly column equilibration of X —
+    # the `_rank_guarded_inv` convention. Certification threshold 1e-10 is the
+    # documented Gram constant from `_rank_guarded_inv` (a Gram squares the
+    # condition number of X, so 1e-10 on eigenvalues ~ cond(X_eq) < 1e5, two
+    # orders STRICTER than the 1e-7 QR full-rank boundary): stage 0 never
+    # reports full rank where the two-stage QR below would report a
+    # deficiency, it only declines and falls through. (A pathological
+    # Kahan-type matrix could in principle make pivoted-QR R-diagonals
+    # undershoot the singular values enough to open a gap; real DiD designs —
+    # dummies plus covariates — do not have that structure, and the
+    # characterization test documents it.) Skipped when n < k (always
+    # deficient — also keeps the sole pivot consumer, staggered.py's
+    # underdetermined pair solve, structurally on the QR path) and when a
+    # caller passes a LOOSER-than-default rcond (no caller does today; the
+    # stricter-than-QR guarantee above assumes rcond <= 1e-7). Non-finite
+    # entries poison diag(G), decline certification, and fall through so
+    # scipy's qr raises ValueError on NaN/Inf exactly as before.
+    if n >= k and rcond <= 1e-07:
+        gram = X.T @ X
+        diag = np.diag(gram)
+        if np.all(np.isfinite(diag)) and np.all(diag > 0):
+            scales = np.sqrt(diag)
+            gram_eq = gram / scales[:, None] / scales[None, :]
+            eigvals = np.linalg.eigvalsh(gram_eq)
+            eig_min, eig_max = eigvals[0], eigvals[-1]
+            if (
+                np.isfinite(eig_min)
+                and np.isfinite(eig_max)
+                and eig_max > 0.0
+                and eig_min > 1e-10 * eig_max
+            ):
+                return k, np.array([], dtype=int), np.arange(k, dtype=int)
 
     def _rank_and_pivot(M: np.ndarray) -> Tuple[int, np.ndarray]:
         # Pivoted QR: M @ P = Q @ R. The rank threshold is anchored to the
@@ -2892,6 +2931,12 @@ _LOGIT_SEPARATION_COEF_THRESHOLD = 10
 _LOGIT_SEPARATION_PROB_THRESHOLD = 1e-5
 _DEFAULT_EPV_THRESHOLD = 10
 
+# Reciprocal-condition guard for the IRLS normal-equations Cholesky fast path
+# (solve_logit): cond(G) <= 1e6 bounds the Cholesky forward error at
+# ~eps * cond ~ 2e-10 relative, consistent with the tol-bounded parity budget;
+# anything worse falls back to the legacy tall-matrix lstsq for that iteration.
+_IRLS_CHOL_RCOND_GUARD = 1e-6
+
 
 def solve_logit(
     X: np.ndarray,
@@ -2947,7 +2992,10 @@ def solve_logit(
         users identify which logit estimation triggered the warning.
     diagnostics_out : dict, optional
         If provided, populated with EPV diagnostic info:
-        ``{"epv": float, "n_events": int, "k": int, "is_low": bool}``.
+        ``{"epv": float, "n_events": int, "k": int, "is_low": bool}``, plus
+        ``"irls_chol_fallback_iters"`` - the number of IRLS iterations whose
+        normal-equations Cholesky fast path fell back to the legacy lstsq
+        solve (0 on well-conditioned fits).
 
     Returns
     -------
@@ -3097,7 +3145,31 @@ def solve_logit(
             raise ValueError(msg)
         warnings.warn(msg, UserWarning, stacklevel=2)
 
-    # IRLS (Fisher scoring)
+    # IRLS (Fisher scoring). Each weighted-least-squares step is solved via
+    # EQUILIBRATED normal equations + Cholesky with an explicit condition
+    # guard, falling back to the legacy tall-matrix lstsq (gelsd SVD) for any
+    # iteration whose normal matrix cannot be certified well-conditioned.
+    # Context: the OR path deliberately REMOVED a cho_solve(X'X) fast path
+    # because it was NOT scale-equilibrated (see the covariate-reg notes in
+    # staggered.py around `_equilibrated_lstsq`); this path differs on
+    # exactly that axis - (1) columns are equilibrated to unit 2-norm ONCE
+    # (a fixed reparameterization: X_eq @ beta_eq == X @ beta algebraically,
+    # so probabilities are unchanged and beta is unscaled per iteration);
+    # (2) cho_factor alone can SUCCEED with a garbage solution when cond(G)
+    # exceeds ~1e10, so the guard is a dpocon reciprocal-condition estimate,
+    # not just the factorization succeeding - working weights can crush a
+    # column's effective scale (a dummy on a near-separated subgroup has
+    # w_irls ~ 1e-10 on its support), so full column rank pre-loop does NOT
+    # imply a well-conditioned G; (3) the fallback reproduces the legacy
+    # computation for that iteration on the raw basis. IRLS state (beta,
+    # convergence tol, warnings) stays in the RAW basis: a scaled-basis tol
+    # would be ~sqrt(n)x tighter for every fit (the intercept column alone
+    # has 2-norm sqrt(n)), and the separation check below reads raw beta.
+    irls_col_norms = np.sqrt(np.einsum("ij,ij->j", X_solve, X_solve))
+    irls_safe_norms = np.where(irls_col_norms > 0, irls_col_norms, 1.0)
+    X_eq = X_solve / irls_safe_norms
+    chol_fallback_iters = 0
+
     beta_solve = np.zeros(X_solve.shape[1])
     converged = False
 
@@ -3120,9 +3192,33 @@ def solve_logit(
 
         # Weighted least squares: solve (X'WX) beta = X'Wz
         sqrt_w = np.sqrt(w_total)
-        Xw = X_solve * sqrt_w[:, None]
         zw = z * sqrt_w
-        beta_new, _, _, _ = np.linalg.lstsq(Xw, zw, rcond=None)
+        beta_new = None
+        Xw_eq = X_eq * sqrt_w[:, None]
+        gram = Xw_eq.T @ Xw_eq
+        # 1-norm BEFORE factorization (dpocon contract); G is symmetric so
+        # the max absolute column sum is the 1-norm.
+        anorm = float(np.max(np.sum(np.abs(gram), axis=0)))
+        if np.isfinite(anorm):
+            try:
+                chol = cho_factor(gram)
+            except np.linalg.LinAlgError:
+                chol = None
+            if chol is not None:
+                # cho_factor default lower=False pairs with dpocon's default
+                # uplo='U' (dpocon has no `lower=` kwarg).
+                rcond_gram, pocon_info = dpocon(chol[0], anorm)
+                if (
+                    pocon_info == 0
+                    and np.isfinite(rcond_gram)
+                    and rcond_gram > _IRLS_CHOL_RCOND_GUARD
+                ):
+                    beta_new = cho_solve(chol, Xw_eq.T @ zw) / irls_safe_norms
+        if beta_new is None:
+            # Guarded fallback: byte-identical to the pre-fast-path solve.
+            chol_fallback_iters += 1
+            Xw = X_solve * sqrt_w[:, None]
+            beta_new, _, _, _ = np.linalg.lstsq(Xw, zw, rcond=None)
 
         # Check convergence
         if np.max(np.abs(beta_new - beta_solve)) < tol:
@@ -3130,6 +3226,9 @@ def solve_logit(
             converged = True
             break
         beta_solve = beta_new
+
+    if diagnostics_out is not None:
+        diagnostics_out["irls_chol_fallback_iters"] = chol_fallback_iters
 
     # Final predicted probabilities
     eta_final = X_solve @ beta_solve

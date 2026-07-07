@@ -1,15 +1,19 @@
 """Tests for the unified linear algebra backend."""
 
+import warnings
+
 import numpy as np
 import pandas as pd
 import pytest
 
+from diff_diff import HAS_RUST_BACKEND
 from diff_diff.linalg import (
     InferenceResult,
     LinearRegression,
     _rank_guarded_inv,
     compute_r_squared,
     compute_robust_vcov,
+    solve_logit,
     solve_ols,
     solve_poisson,
 )
@@ -1671,6 +1675,184 @@ class TestNumericalStability:
         np.testing.assert_array_equal(coef, ref)
 
 
+class TestRankDetectionStage0Certification:
+    """Stage-0 Gram/eigvalsh full-rank certification in _detect_rank_deficiency.
+
+    Contract: certification is a pure fast path - it either certifies full
+    rank (returning (k, empty, arange)) on designs the two-stage QR would
+    ALSO call full rank, or declines and falls through to the existing QR
+    path verbatim. The cert threshold 1e-10 on equilibrated-Gram eigenvalues
+    (~ cond(X_eq) < 1e5) is two orders stricter than the QR full-rank
+    boundary (rcond=1e-7 on R-diagonals), so decisions on deficient designs
+    never change.
+    """
+
+    @staticmethod
+    def _qr_call_counter(monkeypatch):
+        import diff_diff.linalg as lmod
+
+        calls = {"n": 0}
+        orig = lmod.qr
+
+        def counting(*args, **kwargs):
+            calls["n"] += 1
+            return orig(*args, **kwargs)
+
+        monkeypatch.setattr(lmod, "qr", counting)
+        return calls
+
+    def test_certified_full_rank_runs_zero_qr(self, monkeypatch):
+        """Well-conditioned full-rank design - including a 1e8-scale
+        independent column (equilibration makes it benign) - certifies with
+        ZERO pivoted-QR calls (the perf lock) and the trivial-pivot
+        contract."""
+        from diff_diff.linalg import _detect_rank_deficiency
+
+        rng = np.random.default_rng(42)
+        X = rng.standard_normal((500, 6))
+        X[:, 3] *= 1e8
+        calls = self._qr_call_counter(monkeypatch)
+        rank, dropped, pivot = _detect_rank_deficiency(X)
+        assert calls["n"] == 0
+        assert rank == 6
+        assert dropped.shape == (0,) and np.issubdtype(dropped.dtype, np.integer)
+        np.testing.assert_array_equal(pivot, np.arange(6))
+        assert np.issubdtype(pivot.dtype, np.integer)
+
+    def test_declined_collinear_matches_legacy_qr_selection(self, monkeypatch):
+        """A genuinely collinear design declines certification (singular
+        equilibrated Gram) and the (rank, dropped, pivot) triple is the raw
+        pivoted-QR answer, exactly as before stage-0 existed."""
+        from scipy.linalg import qr as scipy_qr
+
+        from diff_diff.linalg import _detect_rank_deficiency
+
+        rng = np.random.default_rng(7)
+        X = rng.standard_normal((120, 4))
+        X[:, 3] = X[:, 0] + X[:, 1]
+        calls = self._qr_call_counter(monkeypatch)
+        rank, dropped, pivot = _detect_rank_deficiency(X)
+        assert calls["n"] >= 1  # fell through to the QR path
+        assert rank == 3
+        # reference: the raw pivoted-QR drop selection (existing contract)
+        r_ref, piv_ref = scipy_qr(X, mode="r", pivoting=True)
+        np.testing.assert_array_equal(dropped, np.sort(piv_ref[3:]))
+        np.testing.assert_array_equal(pivot, piv_ref)
+
+    def test_declined_n_less_than_k_structural(self, monkeypatch):
+        """n < k skips certification structurally (always deficient; the
+        sole pivot consumer in staggered.py lives behind this shape)."""
+        from diff_diff.linalg import _detect_rank_deficiency
+
+        rng = np.random.default_rng(3)
+        X = rng.standard_normal((3, 5))
+        calls = self._qr_call_counter(monkeypatch)
+        rank, dropped, _pivot = _detect_rank_deficiency(X)
+        assert calls["n"] >= 1
+        assert rank == 3 and len(dropped) == 2
+
+    def test_declined_zero_column(self):
+        """A zero column zeroes its Gram diagonal - certification declines
+        and the QR path drops it as before."""
+        from diff_diff.linalg import _detect_rank_deficiency
+
+        rng = np.random.default_rng(5)
+        X = rng.standard_normal((60, 3))
+        X[:, 1] = 0.0
+        rank, dropped, _ = _detect_rank_deficiency(X)
+        assert rank == 2 and 1 in dropped
+
+    def test_nan_still_raises_value_error(self):
+        """Non-finite entries decline certification (they poison diag(G))
+        and scipy's qr raises ValueError exactly as before."""
+        from diff_diff.linalg import _detect_rank_deficiency
+
+        rng = np.random.default_rng(9)
+        X = rng.standard_normal((50, 3))
+        X[0, 0] = np.nan
+        with pytest.raises(ValueError):
+            _detect_rank_deficiency(X)
+
+    def test_boundary_declines_cert_but_qr_full_rank(self, monkeypatch):
+        """cond(X_eq) ~ 1e6 sits BETWEEN the cert threshold (1e5) and the QR
+        full-rank boundary (~1e7): certification declines, stage-1 QR still
+        returns full rank - locks cert-strictly-stricter-than-QR ordering."""
+        from diff_diff.linalg import _detect_rank_deficiency
+
+        rng = np.random.default_rng(11)
+        X = rng.standard_normal((200, 3))
+        # near-dependence BETWEEN columns (a small column NORM would be
+        # repaired by equilibration and correctly certified): sv ratio of the
+        # equilibrated design ~2e-6 -> Gram eig ratio ~4e-12 < 1e-10 declines
+        # cert, while the QR R-diagonal ratio ~2e-6 > 1e-7 stays full rank.
+        X[:, 2] = X[:, 0] + 3e-6 * rng.standard_normal(200)
+        calls = self._qr_call_counter(monkeypatch)
+        rank, dropped, _ = _detect_rank_deficiency(X)
+        assert calls["n"] >= 1  # cert declined
+        assert rank == 3 and len(dropped) == 0
+
+    def test_looser_rcond_skips_certification(self, monkeypatch):
+        """A caller-supplied rcond looser than 1e-7 disables stage-0 (the
+        stricter-than-QR guarantee only holds for rcond <= 1e-7); the QR
+        path answers with the caller's threshold as before."""
+        from diff_diff.linalg import _detect_rank_deficiency
+
+        rng = np.random.default_rng(13)
+        X = rng.standard_normal((100, 3))
+        calls = self._qr_call_counter(monkeypatch)
+        rank, dropped, _ = _detect_rank_deficiency(X, rcond=1e-4)
+        assert calls["n"] >= 1
+        assert rank == 3 and len(dropped) == 0
+
+    def test_kahan_characterization_cert_never_wrong(self):
+        """Kahan-type matrices are the theoretical gap between pivoted-QR
+        R-diagonals and singular values (the R-diagonal can undershoot
+        sigma_min by up to 2^(k-1) - reachable pathology, not bounded to
+        large k). Characterization, not a behavior pin: WHENEVER stage-0
+        certifies, the SVD-based numerical rank agrees it is full rank at
+        the QR threshold - i.e. certification can disagree with legacy QR
+        only by being MORE correct (repairing a QR false-drop), never by
+        certifying a genuinely deficient design."""
+        from diff_diff.linalg import _detect_rank_deficiency
+
+        for k, theta in ((8, 0.6), (20, 0.35), (30, 0.28)):
+            s, c = np.sin(theta), np.cos(theta)
+            K = np.zeros((k, k))
+            for i in range(k):
+                K[i, i] = s**i
+                K[i, i + 1 :] = -c * s**i
+            rank, dropped, _ = _detect_rank_deficiency(K)
+            if len(dropped) == 0 and rank == k:
+                sv = np.linalg.svd(K / np.sqrt(np.einsum("ij,ij->j", K, K)), compute_uv=False)
+                assert sv[-1] > 1e-7 * sv[0], (
+                    f"cert claimed full rank on a genuinely deficient Kahan "
+                    f"matrix (k={k}, theta={theta})"
+                )
+
+    @pytest.mark.skipif(not HAS_RUST_BACKEND, reason="Rust backend not available")
+    def test_certified_design_still_dispatches_solve_ols_to_rust(self, monkeypatch):
+        """Composition lock: the stage-0-certified full-rank answer feeds the
+        solve_ols routing boolean, which must still dispatch to the Rust
+        solver (unweighted hc1 path)."""
+        import diff_diff.linalg as lmod
+        from diff_diff.linalg import solve_ols
+
+        calls = {"n": 0}
+        orig = lmod._solve_ols_rust
+
+        def counting(*args, **kwargs):
+            calls["n"] += 1
+            return orig(*args, **kwargs)
+
+        monkeypatch.setattr(lmod, "_solve_ols_rust", counting)
+        rng = np.random.default_rng(17)
+        X = rng.standard_normal((300, 5))
+        y = X @ np.arange(1.0, 6.0) + rng.standard_normal(300)
+        coeffs, _, _ = solve_ols(X, y)
+        assert calls["n"] == 1
+        assert np.all(np.isfinite(coeffs))
+
+
 class TestEstimatorIntegration:
     """Integration tests verifying estimators produce correct results."""
 
@@ -1911,6 +2093,202 @@ class TestSolveLogit:
 
         with pytest.raises(ValueError, match="Rank-deficient"):
             solve_logit(X, y, rank_deficient_action="error")
+
+
+def _legacy_irls_reference(X, y, weights=None, max_iter=25, tol=1e-8):
+    """Test-local reimplementation of the pre-fast-path IRLS inner loop:
+    per-iteration tall-matrix `np.linalg.lstsq(Xw, zw, rcond=None)` with the
+    identical working weights/response/convergence semantics. Shared by the
+    fast-path parity and convergence-semantics tests below. Assumes a
+    full-rank design (no rank/EPV handling - callers use clean fixtures).
+    Returns (beta_with_intercept, converged)."""
+    n = X.shape[0]
+    Xi = np.column_stack([np.ones(n), X])
+    beta = np.zeros(Xi.shape[1])
+    for _ in range(max_iter):
+        eta = np.clip(Xi @ beta, -500, 500)
+        mu = np.clip(1.0 / (1.0 + np.exp(-eta)), 1e-10, 1 - 1e-10)
+        w_irls = mu * (1.0 - mu)
+        z = eta + (y - mu) / w_irls
+        w_total = weights * w_irls if weights is not None else w_irls
+        sqrt_w = np.sqrt(w_total)
+        beta_new, _, _, _ = np.linalg.lstsq(Xi * sqrt_w[:, None], z * sqrt_w, rcond=None)
+        if np.max(np.abs(beta_new - beta)) < tol:
+            return beta_new, True
+        beta = beta_new
+    return beta, False
+
+
+class TestIRLSCholeskyFastPath:
+    """solve_logit's equilibrated normal-equations Cholesky inner solve.
+
+    Parity vs the legacy per-iteration lstsq is TOL-BOUNDED (atol 1e-8),
+    not bit-level: both solvers converge to the same MLE, but the iteration
+    at which the max|delta-beta| < tol check first crosses can legally shift
+    by one, moving the final beta by up to tol. Observed parity on
+    well-conditioned fits is ~1e-10..1e-12 (iteration counts match; the
+    quadratically-decaying final step dominates the difference).
+    """
+
+    @staticmethod
+    def _make_logit(n, k, seed, scale_col=None, weights_kind=None, sep=0.0):
+        rng = np.random.default_rng(seed)
+        X = rng.standard_normal((n, k))
+        if scale_col is not None:
+            X[:, scale_col % k] *= 1e4
+        beta = rng.standard_normal(k) * 0.5
+        eta = X @ beta + sep * X[:, 0]
+        p = 1.0 / (1.0 + np.exp(-np.clip(eta, -30, 30)))
+        y = (rng.random(n) < p).astype(float)
+        w = None
+        if weights_kind == "positive":
+            w = np.exp(rng.normal(0, 0.5, n))
+        elif weights_kind == "zeros":
+            w = np.exp(rng.normal(0, 0.5, n))
+            w[rng.random(n) < 0.1] = 0.0
+        elif weights_kind == "tiny":
+            w = np.exp(rng.normal(0, 0.5, n))
+            w[rng.random(n) < 0.1] = 1e-12
+        return X, y, w
+
+    def test_property_parity_vs_legacy_lstsq(self):
+        """~20 random GLM datasets (varied n/k, scale disparity, positive /
+        exact-zero / tiny-positive weights, mild separation pressure): the
+        fast-path beta matches the legacy per-iteration lstsq reimplementation
+        at atol 1e-8 (tol-bounded; see class docstring for why not tighter),
+        with zero Cholesky fallbacks on these well-conditioned fits."""
+        cases = []
+        for i in range(20):
+            cases.append(
+                dict(
+                    n=200 + 137 * i,
+                    k=2 + (i % 9),
+                    seed=100 + i,
+                    scale_col=i % 3 if i % 4 == 0 else None,
+                    weights_kind=[None, "positive", "zeros", "tiny"][i % 4],
+                    sep=0.8 if i % 5 == 0 else 0.0,
+                )
+            )
+        worst = 0.0
+        for case in cases:
+            X, y, w = self._make_logit(**case)
+            diag = {}
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                beta, probs = solve_logit(X, y, weights=w, diagnostics_out=diag)
+                ref, _ = _legacy_irls_reference(X, y, weights=w)
+            delta = float(np.nanmax(np.abs(beta - ref)))
+            worst = max(worst, delta)
+            assert delta < 1e-8, (case, delta)
+            # saturated fits legally produce probs of exactly 0.0/1.0 in
+            # float (eta clipped at +-500; exp underflows) - same as legacy
+            assert np.all((probs >= 0) & (probs <= 1))
+            assert diag["irls_chol_fallback_iters"] == 0, (case, diag)
+        # typical parity is far below the gate; record it in the assert
+        assert worst < 1e-8
+
+    def test_forced_fallback_bit_identical_to_legacy(self, monkeypatch):
+        """With cho_factor monkeypatched to ALWAYS raise, every iteration
+        takes the guarded fallback, which must be byte-identical to the
+        legacy computation (the fallback reconstructs the exact pre-fast-path
+        lstsq line on the raw basis)."""
+        import diff_diff.linalg as lmod
+
+        def always_raise(*args, **kwargs):
+            raise np.linalg.LinAlgError("forced")
+
+        X, y, _ = self._make_logit(400, 5, seed=7)
+        diag = {}
+        monkeypatch.setattr(lmod, "cho_factor", always_raise)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            beta_fb, probs_fb = solve_logit(X, y, diagnostics_out=diag)
+        monkeypatch.undo()
+        ref, _ = _legacy_irls_reference(X, y)
+        assert diag["irls_chol_fallback_iters"] > 0
+        np.testing.assert_array_equal(beta_fb, ref)
+
+    def test_natural_guard_trip_warning_equivalence(self, monkeypatch):
+        """A separation-pressure dataset trips the dpocon guard naturally in
+        late IRLS iterations (working weights collapse, G ill-conditioned).
+        The fit is tol-bounded vs legacy - NOT byte-identical, because early
+        well-conditioned iterations take the Cholesky path - so the lock is
+        warning-set EQUIVALENCE plus a positive fallback count."""
+        import diff_diff.linalg as lmod
+
+        rng = np.random.default_rng(31)
+        n = 600
+        # Quasi-separation on a DUMMY subgroup: y == 1 on every dummy row,
+        # so the dummy coefficient diverges and the working weights collapse
+        # on exactly that column's support (G's dummy diagonal shrinks ~
+        # mu*(1-mu) -> 1e-10 RELATIVE to the healthy columns - a uniform
+        # collapse across all rows would rescale G without changing its
+        # conditioning and never trip the guard).
+        dummy = np.zeros(n)
+        dummy[:60] = 1.0
+        x1 = rng.standard_normal(n)
+        X = np.column_stack([dummy, x1])
+        y = (rng.random(n) < 1.0 / (1.0 + np.exp(-x1))).astype(float)
+        y[:60] = 1.0
+
+        diag = {}
+        with warnings.catch_warnings(record=True) as caught_new:
+            warnings.simplefilter("always")
+            solve_logit(X, y, diagnostics_out=diag)
+        assert (
+            diag["irls_chol_fallback_iters"] > 0
+        ), "fixture no longer trips the dpocon guard - regenerate it"
+
+        def always_raise(*args, **kwargs):
+            raise np.linalg.LinAlgError("forced")
+
+        monkeypatch.setattr(lmod, "cho_factor", always_raise)
+        with warnings.catch_warnings(record=True) as caught_legacy:
+            warnings.simplefilter("always")
+            solve_logit(X, y)
+        monkeypatch.undo()
+
+        def warning_set(records):
+            return {(r.category.__name__, str(r.message)[:40]) for r in records}
+
+        assert warning_set(caught_new) == warning_set(caught_legacy)
+
+    def test_convergence_iteration_semantics_preserved(self, monkeypatch):
+        """The fast path must not change WHEN the IRLS loop converges on a
+        well-conditioned fit: find the minimal converging max_iter N under
+        the legacy solver (via the always-raise monkeypatch), then assert
+        the fast path converges (no warning) at N and warns at N-1. Parity
+        at ~1e-12 makes an iteration-count shift essentially impossible on
+        this fixture; if a platform ever shifts it by one, relax with an
+        in-test justification comment."""
+        import diff_diff.linalg as lmod
+
+        X, y, _ = self._make_logit(500, 4, seed=19)
+
+        def always_raise(*args, **kwargs):
+            raise np.linalg.LinAlgError("forced")
+
+        def converges(max_iter, force_legacy):
+            if force_legacy:
+                monkeypatch.setattr(lmod, "cho_factor", always_raise)
+            try:
+                with warnings.catch_warnings(record=True) as rec:
+                    warnings.simplefilter("always")
+                    solve_logit(X, y, max_iter=max_iter, check_separation=False)
+                return not any("did not converge" in str(r.message) for r in rec)
+            finally:
+                if force_legacy:
+                    monkeypatch.undo()
+
+        n_min = None
+        for m in range(1, 26):
+            if converges(m, force_legacy=True):
+                n_min = m
+                break
+        assert n_min is not None and n_min >= 2, n_min
+
+        assert converges(n_min, force_legacy=False)
+        assert not converges(n_min - 1, force_legacy=False)
 
 
 class TestCheckPropensityDiagnostics:
