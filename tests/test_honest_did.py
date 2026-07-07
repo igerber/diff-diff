@@ -389,6 +389,19 @@ class TestHonestDiD:
         assert results.M == 1.0
         assert results.method == "relative_magnitude"
 
+    def test_fit_negative_M_override_raises(self, mock_multiperiod_results):
+        """A negative M passed to fit() (bypassing constructor validation) must
+        raise, not be silently treated as +|M| by the FLCI cv abs()."""
+        honest = HonestDiD(method="smoothness", M=0.0)
+        with pytest.raises(ValueError, match="non-negative"):
+            honest.fit(mock_multiperiod_results, M=-0.1)
+
+    def test_sensitivity_analysis_negative_M_grid_raises(self, mock_multiperiod_results):
+        """A negative value in M_grid must raise (bypasses constructor validation)."""
+        honest = HonestDiD(method="smoothness")
+        with pytest.raises(ValueError, match="non-negative"):
+            honest.sensitivity_analysis(mock_multiperiod_results, M_grid=[0.0, -0.1])
+
     def test_fit_smoothness(self, mock_multiperiod_results):
         """Test fit with smoothness method."""
         honest = HonestDiD(method="smoothness", M=0.0)

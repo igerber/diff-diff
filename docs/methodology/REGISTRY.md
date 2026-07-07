@@ -3614,7 +3614,7 @@ Post-treatment consecutive first differences bounded by M̄ × max pre-treatment
 CRITICAL: δ_pre = β_pre pins pre-treatment violations to observed coefficients. Solved via LP (scipy.optimize.linprog).
 
 *Inference (Sections 3.2, 4.1):*
-- Delta^SD: Optimal FLCI — jointly optimizes affine estimator direction and half-length via folded normal quantile cv_α(bias/se) (Equation 18). When `df_survey` is present, uses folded non-central t (`scipy.stats.nct`) instead of folded normal; `df_survey=0` → NaN inference. For M=0, uses `_get_critical_value(alpha, df)` (standard t/z).
+- Delta^SD: Optimal FLCI — a nested convex program (inner: minimize worst-case bias at a fixed estimator SD `h`; outer: minimize the half-length over `h`) that matches R `HonestDiD::findOptimalFLCI`'s optimal affine estimator, using the folded-normal quantile cv_α(bias/se) (Equation 18). See the "Δ^SD FLCI optimizer" note below for the algorithm + R parity. When `df_survey` is present, uses folded non-central t (`scipy.stats.nct`) instead of folded normal; `df_survey=0` → NaN inference. For M=0, uses `_get_critical_value(alpha, df)` (standard t/z).
 - Delta^RM: Paper recommends ARP conditional/hybrid confidence sets (Equations 14-15, κ = α/10). Currently uses **naive FLCI** unconditionally (conservative — wider CIs, valid coverage). ARP infrastructure exists but is disabled.
 - **Note (deviation from R):** Delta^RM CIs use naive FLCI (`lb - z*se, ub + z*se`) instead of the paper's ARP hybrid. R's `HonestDiD` package implements full ARP conditional/hybrid. Our naive FLCI is conservative (wider, valid coverage) but does not adapt to the length of the identified set. ARP implementation deferred (see TODO.md).
 - **Note:** `method="combined"` (Delta^SDRM) uses naive FLCI on the intersection of Delta^SD and Delta^RM bounds. The paper proves FLCI is NOT consistent for Delta^SDRM (Proposition 4.2). The paper recommends ARP hybrid for non-SD restriction classes. This is a known conservative approximation; a runtime UserWarning is emitted.
@@ -3629,7 +3629,37 @@ CRITICAL: δ_pre = β_pre pins pre-treatment violations to observed coefficients
 - Breakdown point: smallest M where CI includes zero
 - Negative M: not valid (constraints become infeasible)
 - **Note:** Δ^SD **empty estimated identified set** (the observed pre-trend's curvature exceeds M, so the `δ_pre = β_pre`-pinned identified-set LP is infeasible → `lb`/`ub` = NaN) does **not** suppress the FLCI. The optimal FLCI is an affine estimator whose worst-case bias is taken over `δ ∈ Δ^SD(M)` treating β as random, so it is well-defined given (Σ, M) regardless of whether the realized `β_pre` lies in Δ; R's `HonestDiD::createSensitivityResults` returns it in exactly this case. `_compute_smoothness_bounds` therefore returns the finite FLCI with `lb`/`ub` = NaN (empty id-set), matching R (prior behavior NaN-propagated the whole result, silently yielding no inference on high-curvature pre-trends). The naive fallback FLCI (diagonal Σ only) still requires finite id-set bounds and returns NaN CI when infeasible. Guarded by `test_infeasible_smoothness_fit_returns_flci_with_empty_idset`.
-- **Note (deviation from R — Δ^SD FLCI optimizer at intermediate M):** The optimal-FLCI affine-estimator optimization (Nelder-Mead over slope weights) agrees with R `createSensitivityResults` to ~1e-3 at M=0 and at larger M, but diverges at **intermediate small M** (roughly `M ∈ [0.005, 0.02]` on wide pre/post windows): the CI **width** matches R to ~1e-3 while the **center** shifts by up to ~9% (npre=6/npost=4 event study). Not a local-minimum artifact (multi-start does not move it); the two implementations land on different affine estimators of near-equal length. Reconciliation with R's `.FLCI.computeFLCI` algorithm is deferred (see TODO.md). Coverage is unaffected (widths match); the shift is in the reported CI location.
+- **Note (Δ^SD FLCI optimizer — R-faithful nested algorithm; B2b resolved):** The optimal
+  FLCI is a faithful port of R `HonestDiD::findOptimalFLCI`'s **nested convex program**. For a
+  fixed estimator standard deviation `h`, an inner problem minimizes the worst-case bias over
+  `Δ^SD(M)` subject to `sd(estimator) ≤ h` — a smooth convex QCQP over the slope weights `w`
+  (variables `[U; w]`, `U ≥ |cumsum(w)|`, one second-order-cone `var(w) ≤ h²`, linear-trend
+  neutrality `Σw = Σ_s s·l_s`), solved with `scipy.optimize` SLSQP (no cvxpy). An outer 1-D
+  search over `h ∈ [hMin, h0]` (a warm-started grid zoom) minimizes the half-length
+  `cv_α(M·bias(h)/h)·h`. The worst-case bias uses R's exact **closed form**
+  `M·(constant + Σ_i |cumsum(w)_i|)` (a direct port of R's `.createObjectiveObjectForBias`), so
+  the inner objective is linear in the abs-linearized weights; `hMin`/`h0` are the min-variance
+  and min-bias SDs (R's `.findLowestH` / `.findHForMinimumBias`). For **nonnegative (averaging)**
+  `l_vec` — the standard case, including the default first-post-period basis vector and equal
+  weights — this closed form equals the general LP oracle `_compute_worst_case_bias` (max |v'δ|
+  over Δ^SD) to machine precision. For a **signed / contrast** `l_vec` (e.g. `[1, -1]`) R's closed
+  form is *conservative* relative to the exact LP-oracle bias (a shared R property, not a
+  diff-diff bug); the FLCI still matches R (verified to ~1e-6 for `l_vec=[1,-1]`,
+  `test_signed_contrast_lvec_matches_r`), because we port R's objective exactly. This matches R's
+  optimal FLCI **center + half-length + optimalVec** to ~1e-3 (median ~1e-5) across a stress grid
+  (`num_pre × num_post × AR(1) ρ × M`); `TestHonestFLCIParityR`, golden
+  `benchmarks/data/honest_flci_golden.json`. The prior flat Nelder-Mead optimizer drifted from
+  R's center by up to ~9% at intermediate M (widths matched, coverage unaffected); the nested
+  structure removes that drift (SE-audit B2b). A derivative-based outer solve is not viable: the
+  min-bias inner solutions are degenerate (most `cumsum(w)` components sit at the abs-value
+  kink), so the SD-constraint multiplier is not recoverable from `sign(Lw)`, and the width
+  surface is near-flat at the optimum.
+- **Deviation from R:** diff-diff uses an **analytical** folded-normal critical value
+  (`_cv_alpha`, `scipy.stats`) in place of R's Monte-Carlo `.qfoldednormal` (10⁶ draws, seed 0)
+  — strictly more accurate (noise-free). Against **override-R** (R with the MC quantile replaced
+  by the analytical one, so both solve the same deterministic outer problem) the center matches
+  to ~1e-3; against **stock** MC-R the center matches to ~1.4e-2, the residual being R's own
+  simulation noise on the near-flat width surface. The committed golden stores both tiers.
 - **Note:** Phase 7d: survey variance support. When input results carry `survey_metadata` with `df_survey`, Delta^SD smoothness uses folded non-central t critical values (`scipy.stats.nct`); Delta^RM and naive FLCI paths use `_get_critical_value(alpha, df)` (standard t-distribution). `df_survey=0` → NaN inference. CallawaySantAnnaResults stores `event_study_vcov` (full cross-event-time VCV from IF vectors), which HonestDiD uses instead of the diagonal fallback. For replicate-weight designs, the event-study VCV falls back to diagonal (multivariate replicate VCV deferred).
 - **Note (deviation from R):** When HonestDiD receives bootstrap-fitted CallawaySantAnna results (`n_bootstrap > 0`), the full event-study covariance is unavailable (cleared to prevent mixing analytical VCV with bootstrap SEs). HonestDiD falls back to `diag(se^2)` from the bootstrap SEs with a UserWarning. R's `honest_did.AGGTEobj` computes a full covariance from the influence function matrix; implementing bootstrap event-study covariance is deferred. For full covariance structure in HonestDiD, use analytical SEs (`n_bootstrap=0`).
 - **Note (deviation from R):** When CallawaySantAnna results are passed to HonestDiD, `base_period != "universal"` emits a warning but does not error. R's `honest_did::honest_did.AGGTEobj` requires universal base period. Our implementation warns because the varying-base pre-treatment coefficients use consecutive comparisons (not a common reference), which changes the parallel-trends restriction interpretation.

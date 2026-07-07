@@ -34,6 +34,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `survey=`/`weights=` kwargs on the HAD pretest helpers (`stute_test`, `qug_test`,
     `did_had_pretest_workflow`, ...) are unchanged in this release and removed separately.
 
+### Fixed
+- **`HonestDiD` Δ^SD optimal-FLCI center parity with R (SE-audit B2b).** The optimal
+  Fixed-Length CI optimizer was a flat Nelder-Mead over slope weights that landed on a
+  different affine estimator than R `HonestDiD::findOptimalFLCI` at intermediate smoothness
+  `M` — the CI **center** drifted up to ~9% (the width/coverage matched). Replaced it with a
+  faithful port of R's **nested convex program**: an inner minimum-worst-case-bias problem at a
+  fixed estimator SD `h` (a smooth convex QCQP over slope weights, solved with `scipy` SLSQP —
+  no cvxpy) and an outer 1-D search over `h`. Now matches R's optimal FLCI **center +
+  half-length + optimalVec** to ~1e-3 (median ~1e-5) across a stress grid. diff-diff's
+  **analytical** folded-normal critical value is strictly more accurate than R's Monte-Carlo
+  `.qfoldednormal`, so it also solves the deterministic version of R's problem more precisely
+  than stock R. Verified vs R HonestDiD 0.2.6 (`benchmarks/data/honest_flci_golden.json`,
+  `TestHonestFLCIParityR`); the M=0 result and all existing behaviour are unchanged.
+
 ### Testing
 - **CI-locked standard-error parity for flagship and previously-unasserted paths (SE-audit
   coverage batch).** These surfaces computed SEs matching R but had no CI assertion pinning them

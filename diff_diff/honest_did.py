@@ -1709,7 +1709,181 @@ def _compute_worst_case_bias(
         return np.inf
 
 
-def _compute_optimal_flci(
+def _flci_bias_constant(l_vec: np.ndarray, num_post: int) -> float:
+    """Constant term of the worst-case-bias objective (R's
+    ``.createObjectiveObjectForBias``): ``sum_s |sum_{k=1..s} k*l[Tbar-s+k]| -
+    sum_s s*l[s]``. For NONNEGATIVE (averaging) ``l_vec`` the closed form
+    ``M*(constant + sum_i |cumsum(w)_i|)`` equals ``_compute_worst_case_bias(w,
+    ..., M)`` (the LP oracle) to machine precision; for signed/contrast ``l_vec``
+    it intentionally follows R's conservative closed form (the FLCI still matches
+    R). See REGISTRY.md Delta^SD FLCI note.
+    """
+    c = 0.0
+    for s in range(1, num_post + 1):
+        seg = l_vec[num_post - s : num_post]
+        c += abs(float(np.dot(np.arange(1, s + 1), seg)))
+    c -= float(np.dot(np.arange(1, num_post + 1), l_vec))
+    return c
+
+
+def _flci_precompute(sigma: np.ndarray, l_vec: np.ndarray, num_pre: int, num_post: int) -> dict:
+    """Precompute the FLCI inner problem's quadratic-variance and bias pieces
+    (``sigma`` ordered ``[pre; post]``). ``D`` is the first-difference operator
+    (identical to the pre-block of ``_w_to_v``), ``L`` the cumsum operator, so the
+    estimator variance is ``var(w) = w'Qw + q'w + c0`` and the linear-trend
+    neutrality target is ``sum(w) = sum_s s*l[s]`` (R & R 2023 Eq. 17)."""
+    s_pre = sigma[:num_pre, :num_pre]
+    s_pp = sigma[:num_pre, num_pre:]
+    s_post = float(l_vec @ sigma[num_pre:, num_pre:] @ l_vec)
+    d_mat = np.eye(num_pre)
+    for col in range(num_pre - 1):
+        d_mat[col + 1, col] = -1.0
+    return {
+        "Q": d_mat.T @ s_pre @ d_mat,
+        "q": 2.0 * (d_mat.T @ s_pp @ l_vec),
+        "c0": s_post,
+        "L": np.tril(np.ones((num_pre, num_pre))),
+        "target": float(np.dot(np.arange(1, num_post + 1), l_vec)),
+        "constant": _flci_bias_constant(l_vec, num_post),
+        "num_pre": num_pre,
+    }
+
+
+def _flci_var(w: np.ndarray, P: dict) -> float:
+    return float(w @ P["Q"] @ w + P["q"] @ w + P["c0"])
+
+
+def _flci_w_min(P: dict) -> np.ndarray:
+    """Minimum-variance weights subject to ``sum(w)=target`` via the
+    equality-constrained KKT system (the abs-value constraints are non-binding for
+    the min-variance objective; verified against R's ``.findLowestH``)."""
+    k = P["num_pre"]
+    kkt = np.zeros((k + 1, k + 1))
+    kkt[:k, :k] = 2.0 * P["Q"]
+    kkt[:k, k] = 1.0
+    kkt[k, :k] = 1.0
+    rhs = np.concatenate([-P["q"], [P["target"]]])
+    try:
+        sol = np.linalg.solve(kkt, rhs)
+    except np.linalg.LinAlgError:
+        sol = np.linalg.lstsq(kkt, rhs, rcond=None)[0]
+    return sol[:k]
+
+
+def _flci_h_bounds(P: dict):
+    """FLCI bracket: ``hmin`` = minimum estimator SD (R ``.findLowestH``), ``h0`` =
+    SD at the minimum-bias weights (all mass on the boundary slope, R
+    ``.findHForMinimumBias``). Both match R's closed forms to ~1e-8."""
+    w_min = _flci_w_min(P)
+    hmin = float(np.sqrt(max(_flci_var(w_min, P), 0.0)))
+    w_hi = np.zeros(P["num_pre"])
+    w_hi[-1] = P["target"]
+    h0 = float(np.sqrt(max(_flci_var(w_hi, P), 0.0)))
+    return hmin, h0, w_min
+
+
+def _flci_min_bias_given_h(P: dict, h: float, x0_w: Optional[np.ndarray] = None):
+    """Inner solve (R's ``.findWorstCaseBiasGivenH``): minimize the worst-case bias
+    ``constant + sum_i|cumsum(w)_i|`` subject to ``sum(w)=target`` and the
+    second-order-cone ``var(w) <= h^2``, as a smooth convex QCQP over ``x=[U; w]``
+    (``U >= |Lw|``) via SLSQP. Returns ``(w, bias_unit, feasible)``.
+
+    Gating is on FEASIBILITY (``var<=h^2`` and ``sum=target``), NOT ``res.success``
+    -- SLSQP frequently reports ``success=False`` on a correct convex optimum.
+    """
+    from scipy.optimize import minimize as _sp_minimize
+
+    k = P["num_pre"]
+    L = P["L"]
+    if k == 1:
+        w = np.array([P["target"]])
+        return w, P["constant"] + float(np.abs(L @ w).sum()), True
+    if x0_w is None:
+        x0_w = _flci_w_min(P)
+    x0 = np.concatenate([np.abs(L @ x0_w), x0_w])
+    c = np.concatenate([np.ones(k), np.zeros(k)])
+    cons = [
+        {
+            "type": "ineq",
+            "fun": lambda x: x[:k] - L @ x[k:],
+            "jac": lambda x: np.hstack([np.eye(k), -L]),
+        },
+        {
+            "type": "ineq",
+            "fun": lambda x: x[:k] + L @ x[k:],
+            "jac": lambda x: np.hstack([np.eye(k), L]),
+        },
+        {
+            "type": "eq",
+            "fun": lambda x: float(np.sum(x[k:]) - P["target"]),
+            "jac": lambda x: np.concatenate([np.zeros(k), np.ones(k)]),
+        },
+        {
+            "type": "ineq",
+            "fun": lambda x: h * h - _flci_var(x[k:], P),
+            "jac": lambda x: np.concatenate([np.zeros(k), -(2.0 * P["Q"] @ x[k:] + P["q"])]),
+        },
+    ]
+    res = _sp_minimize(
+        lambda x: float(c @ x),
+        x0,
+        jac=lambda x: c,
+        constraints=cons,
+        method="SLSQP",
+        options={"ftol": 1e-12, "maxiter": 500},
+    )
+    w = res.x[k:]
+    feasible = (_flci_var(w, P) <= h * h + 1e-7) and (abs(float(np.sum(w)) - P["target"]) < 1e-6)
+    return w, P["constant"] + float(np.abs(L @ w).sum()), bool(feasible)
+
+
+def _flci_optimal_h(
+    P: dict,
+    hmin: float,
+    h0: float,
+    M: float,
+    alpha: float,
+    df: Optional[int],
+    levels=(40, 120, 120),
+) -> float:
+    """Argmin over the estimator SD ``h`` of the half-length
+    ``W(h)=cv(M*bias(h)/h)*h`` (R's ``.findOptimalCIDerivativeBisection``), by a
+    multi-level GRID ZOOM. Each level restarts from ``w_min`` and warm-starts the
+    inner solve within the level (``h`` ascending), which keeps the objective
+    smooth despite ~1e-6 SLSQP noise; zooming refines resolution.
+
+    A grid zoom (not R's derivative-bisection or an envelope-theorem derivative) is
+    used deliberately: the width surface is near-flat at the optimum AND the
+    min-bias inner solutions are degenerate (most ``cumsum(w)`` components sit at
+    the abs-value kink), so ``mu`` is not recoverable from ``sign(Lw)`` and
+    finite-difference derivatives are swamped by solver noise. Matches R's
+    (deterministic) center to <3e-4 across the validated stress grid.
+    """
+    if h0 - hmin < 1e-12:
+        return h0
+    lo, hi = hmin, h0
+    gi, grid = 0, np.array([hmin])
+    for npts in levels:
+        grid = np.linspace(lo, hi, npts)
+        seed = _flci_w_min(P)
+        vals = np.full(npts, np.inf)
+        for i, h in enumerate(grid):
+            if h <= 0.0:  # rank-deficient covariance -> hmin=0; skip (M*bias/h undefined)
+                continue
+            w, bias_unit, ok = _flci_min_bias_given_h(P, h, x0_w=seed)
+            if ok and np.isfinite(bias_unit):
+                vals[i] = _cv_alpha(M * bias_unit / h, alpha, df=df) * h
+                seed = w
+        gi = int(np.argmin(vals))
+        if not np.isfinite(vals[gi]):
+            return float("nan")
+        step = (hi - lo) / (npts - 1)
+        lo = max(grid[gi] - 2 * step, hmin)
+        hi = min(grid[gi] + 2 * step, h0)
+    return float(grid[gi])
+
+
+def _flci_solve(
     beta_pre: np.ndarray,
     beta_post: np.ndarray,
     sigma: np.ndarray,
@@ -1719,7 +1893,7 @@ def _compute_optimal_flci(
     M: float,
     alpha: float = 0.05,
     df: Optional[int] = None,
-) -> Tuple[float, float]:
+) -> Tuple[float, float, Optional[np.ndarray]]:
     """
     Compute the optimal Fixed Length Confidence Interval for Delta^SD.
 
@@ -1765,72 +1939,68 @@ def _compute_optimal_flci(
         Lower bound of FLCI.
     ci_ub : float
         Upper bound of FLCI.
+    optimal_vec : np.ndarray or None
+        The optimal affine-estimator direction ``v`` (``theta_hat = v'beta``), for
+        parity testing; ``None`` when the CI is NaN.
     """
-    T = num_pre
-    Tbar = num_post
-
-    # Survey df gating: df<=0 sentinel → NaN inference
+    # Negative smoothness is invalid (cv_alpha's abs() would silently treat it as
+    # +|M|); guard the direct helper path too (fit()/sensitivity_analysis() also
+    # validate, but tests call this directly).
+    if M < 0:
+        raise ValueError(f"M must be non-negative, got M={M}")
+    # Survey df<=0 sentinel -> NaN inference.
     if df is not None and df <= 0:
-        return np.nan, np.nan
+        return np.nan, np.nan, None
 
-    # T slopes total (s = -T+1, ..., 0), including boundary slope s=0.
-    # Linear-trend neutrality requires sum(w) = sum_j j*l_j (Eq. 17).
-    n_slopes = T
-    target_sum = float(np.dot(np.arange(1, Tbar + 1), l_vec))
-
-    def flci_half_length(w_free):
-        """Compute FLCI half-length for given free slope weights."""
-        # Reconstruct full w with constraint sum(w) = target_sum
-        if n_slopes == 1:
-            w = np.array([target_sum])
-        elif len(w_free) == n_slopes - 1:
-            w = np.concatenate([w_free, [target_sum - np.sum(w_free)]])
-        else:
-            w = w_free
-
-        # Map w -> v for variance
-        v = _w_to_v(w, l_vec, T)
-        sigma_v = np.sqrt(float(v @ sigma @ v))
-        if sigma_v <= 0:
-            return np.inf
-
-        # Compute bias in fd-space
-        bias = _compute_worst_case_bias(w, l_vec, T, Tbar, M)
-        if not np.isfinite(bias):
-            return np.inf
-
-        t = float(bias / sigma_v)
-        cv = _cv_alpha(t, alpha, df=df)
-        return float(sigma_v * cv)
-
-    from scipy.optimize import minimize as scipy_minimize
-
-    if n_slopes == 1:
-        # Only one slope weight, determined by constraint.
-        w_opt = np.array([target_sum])
-        chi = flci_half_length(w_opt)
-    else:
-        # Optimize over T-1 free parameters (last w determined by sum constraint)
-        x0 = np.full(n_slopes - 1, target_sum / n_slopes)
-
-        result = scipy_minimize(
-            flci_half_length,
-            x0=x0,
-            method="Nelder-Mead",
-            options={"maxiter": 500, "xatol": 1e-5, "fatol": 1e-6},
-        )
-        w_opt = np.concatenate([result.x, [target_sum - np.sum(result.x)]])
-        chi = flci_half_length(result.x)
-
-    # Build the estimator value: theta_hat = v'beta
+    P = _flci_precompute(sigma, l_vec, num_pre, num_post)
     beta_full = np.concatenate([beta_pre, beta_post])
-    v_opt = _w_to_v(w_opt, l_vec, T)
+
+    with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
+        if M == 0.0:
+            # Zero worst-case bias (linear trends): the FLCI estimator is simply the
+            # minimum-variance affine estimator, so this branch is unchanged from the
+            # prior optimizer's M=0 behaviour (min variance -> half-length z*sd).
+            w_opt = _flci_w_min(P)
+            hstar = float(np.sqrt(max(_flci_var(w_opt, P), 0.0)))
+            if hstar <= 0.0:
+                # Zero estimator SD (degenerate covariance) -> undefined inference.
+                return np.nan, np.nan, None
+            chi = _cv_alpha(0.0, alpha, df=df) * hstar
+        else:
+            hmin, h0, _ = _flci_h_bounds(P)
+            hstar = _flci_optimal_h(P, hmin, h0, M, alpha, df)
+            # hstar<=0 (zero SD, e.g. degenerate covariance) would divide by zero in
+            # M*bias/hstar; NaN the inference per the zero-SE convention.
+            if not np.isfinite(hstar) or hstar <= 0.0:
+                return np.nan, np.nan, None
+            w_opt, bias_unit, feasible = _flci_min_bias_given_h(P, hstar)
+            if not feasible:
+                return np.nan, np.nan, None
+            chi = _cv_alpha(M * bias_unit / hstar, alpha, df=df) * hstar
+
+    v_opt = _w_to_v(w_opt, l_vec, num_pre)
     theta_hat = float(v_opt @ beta_full)
-
     if not np.isfinite(chi):
-        return np.nan, np.nan
+        return np.nan, np.nan, None
+    return theta_hat - chi, theta_hat + chi, v_opt
 
-    return theta_hat - chi, theta_hat + chi
+
+def _compute_optimal_flci(
+    beta_pre: np.ndarray,
+    beta_post: np.ndarray,
+    sigma: np.ndarray,
+    l_vec: np.ndarray,
+    num_pre: int,
+    num_post: int,
+    M: float,
+    alpha: float = 0.05,
+    df: Optional[int] = None,
+) -> Tuple[float, float]:
+    """Optimal Delta^SD FLCI ``(ci_lb, ci_ub)`` (Rambachan & Roth 2023 §4.1).
+    Thin wrapper over :func:`_flci_solve` (which also returns the optimal affine
+    estimator direction ``v`` for parity testing)."""
+    lb, ub, _ = _flci_solve(beta_pre, beta_post, sigma, l_vec, num_pre, num_post, M, alpha, df)
+    return lb, ub
 
 
 def _setup_moment_inequalities(
@@ -2315,6 +2485,10 @@ class HonestDiD:
             Results containing bounds and robust confidence intervals.
         """
         M = M if M is not None else self.M
+        # The fit()-time M override bypasses constructor validation; re-check here
+        # (a negative M would be silently treated as +|M| via cv_alpha's abs()).
+        if M < 0:
+            raise ValueError(f"M must be non-negative, got M={M}")
 
         # Extract event study parameters
         beta_hat, sigma, num_pre, num_post, pre_periods, post_periods, df_survey = (
@@ -2690,6 +2864,8 @@ class HonestDiD:
                 M_grid = [0, 0.1, 0.2, 0.3, 0.5, 0.75, 1.0]
 
         M_values = np.array(M_grid)
+        if np.any(M_values < 0):
+            raise ValueError(f"M must be non-negative; M_grid has a negative value: {M_grid}")
         bounds_list = []
         ci_list = []
 

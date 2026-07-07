@@ -6,6 +6,8 @@ equations, known analytical cases, and expected mathematical properties.
 """
 
 
+import json
+import os
 import warnings
 
 import numpy as np
@@ -23,7 +25,6 @@ from diff_diff.honest_did import (
     _solve_bounds_lp,
     _solve_rm_bounds_union,
 )
-
 
 # =============================================================================
 # TestDeltaSDConstraintMatrix
@@ -472,16 +473,16 @@ class TestOptimalFLCI:
         )
         assert np.isnan(ci_lb) and np.isnan(ci_ub), "df=0 should give NaN CI"
 
-    def test_smoothness_flci_finite_across_M_grid_and_matches_r_at_zero(self):
-        """Smoothness FLCI is finite across an M grid; tight R parity at M=0.
+    def test_smoothness_flci_finite_and_matches_r_across_M_grid(self):
+        """Smoothness FLCI is finite AND matches R across the M grid (not just M=0).
 
-        Regression guard for the identified-set NaN-gate bug: an empty estimated
-        identified set must not suppress the FLCI (previously it did). The FLCI must
-        stay finite for every M. At M=0 the affine-estimator optimum is unambiguous
-        and matches R ``createSensitivityResults`` to <1e-3; at intermediate M there
-        is a known optimizer/center divergence from R (up to ~9% on wide pre/post
-        windows, CI width unaffected; see REGISTRY.md and TODO.md), so this test only
-        pins finiteness there.
+        Regression guard for the identified-set NaN-gate bug (an empty estimated
+        identified set must not suppress the FLCI). Also the B2b center-parity lock:
+        the nested optimizer now matches R HonestDiD's optimal FLCI CENTER at
+        intermediate M (previously the flat Nelder-Mead drifted up to ~9%). This
+        ``[1, 0, 1]`` curved pre-trend is the kink-prone case; R centers are the
+        deterministic (analytical-quantile) values, matching R's own MC output to its
+        simulation noise. See ``TestHonestFLCIParityR`` for the full stress grid.
         """
         from diff_diff.honest_did import _compute_optimal_flci
 
@@ -489,18 +490,163 @@ class TestOptimalFLCI:
         beta_post = np.array([2.0])
         sigma = np.eye(4) * 0.01
         lvec = np.array([1.0])
-        for M in [0.0, 0.01, 0.02, 0.05, 0.1]:
+        # R HonestDiD 0.2.6, deterministic (analytical .qfoldednormal) centers.
+        r_center = {0.0: 2.285755, 0.02: 2.295042, 0.05: 2.326349, 0.10: 2.474526}
+        for M in [0.0, 0.02, 0.05, 0.1]:
             ci_lb, ci_ub = _compute_optimal_flci(
                 beta_pre, beta_post, sigma, lvec, 3, 1, M=M, df=None
             )
             assert np.isfinite(ci_lb) and np.isfinite(ci_ub), f"M={M}: non-finite FLCI"
             assert ci_ub > ci_lb, f"M={M}: degenerate CI"
-        # M=0: tight R parity (R HonestDiD 0.2.6: [2.082644, 2.488866]).
+            center = (ci_lb + ci_ub) / 2
+            assert abs(center - r_center[M]) < 1e-3, (
+                f"M={M} center={center:.6f} vs R {r_center[M]:.6f}"
+            )
+        # M=0: tight R parity on the endpoints too (R 0.2.6: [2.082880, 2.488631]).
         ci_lb, ci_ub = _compute_optimal_flci(
             beta_pre, beta_post, sigma, lvec, 3, 1, M=0.0, df=None
         )
-        assert abs(ci_lb - 2.082644) < 1e-3, f"M=0 ci_lb={ci_lb:.6f} vs R 2.082644"
-        assert abs(ci_ub - 2.488866) < 1e-3, f"M=0 ci_ub={ci_ub:.6f} vs R 2.488866"
+        assert abs(ci_lb - 2.082880) < 1e-3, f"M=0 ci_lb={ci_lb:.6f} vs R 2.082880"
+        assert abs(ci_ub - 2.488631) < 1e-3, f"M=0 ci_ub={ci_ub:.6f} vs R 2.488631"
+
+    def test_zero_sd_covariance_returns_nan(self):
+        """Degenerate (zero) covariance -> zero estimator SD -> NaN inference (no
+        ZeroDivisionError in M*bias/h), for M=0 and M>0 (zero-SE convention)."""
+        from diff_diff.honest_did import _compute_optimal_flci
+
+        beta_pre = np.array([0.1, -0.05, 0.1])
+        beta_post = np.array([1.0])
+        sigma = np.zeros((4, 4))
+        lvec = np.array([1.0])
+        for M in [0.0, 0.1, 0.5]:
+            ci_lb, ci_ub = _compute_optimal_flci(beta_pre, beta_post, sigma, lvec, 3, 1, M=M)
+            assert np.isnan(ci_lb) and np.isnan(ci_ub), f"M={M}: expected NaN CI on zero SD"
+
+    def test_signed_contrast_lvec_matches_r(self):
+        """A signed contrast target (l_vec=[1, -1], a difference of post-period
+        effects) matches R HonestDiD's optimal FLCI. Our worst-case-bias objective
+        is a faithful port of R's ``.createObjectiveObjectForBias``; for signed
+        (non-averaging) l_vec that closed form is CONSERVATIVE relative to the exact
+        LP-oracle bias ``_compute_worst_case_bias`` (the two coincide only for
+        nonnegative l_vec) -- we match R either way. R HonestDiD 0.2.6 (deterministic
+        quantile): center 0.200000, half-length 4.637049.
+        """
+        from diff_diff.honest_did import _compute_optimal_flci
+
+        lb, ub = _compute_optimal_flci(
+            np.array([0.1, 0.0, 0.1]), np.array([1.2, 0.9]),
+            np.eye(5) * 0.05, np.array([1.0, -1.0]), 3, 2, M=1.0,
+        )
+        assert abs((lb + ub) / 2 - 0.200000) < 1e-3, f"center={(lb + ub) / 2:.6f} vs R 0.200000"
+        assert abs((ub - lb) / 2 - 4.637049) < 1e-3, f"half={(ub - lb) / 2:.6f} vs R 4.637049"
+
+    def test_negative_M_raises(self):
+        """Negative smoothness in the direct FLCI helper raises (cv_alpha's abs()
+        would otherwise silently treat M=-0.1 like M=0.1)."""
+        from diff_diff.honest_did import _compute_optimal_flci
+
+        with pytest.raises(ValueError, match="non-negative"):
+            _compute_optimal_flci(
+                np.array([0.1, 0.0, 0.1]), np.array([1.0]),
+                np.eye(4) * 0.01, np.array([1.0]), 3, 1, M=-0.1,
+            )
+
+
+# =============================================================================
+# TestHonestFLCIParityR - B2b optimal-FLCI parity vs R HonestDiD 0.2.6
+# =============================================================================
+
+_FLCI_GOLDEN = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "benchmarks",
+    "data",
+    "honest_flci_golden.json",
+)
+
+
+@pytest.mark.skipif(
+    not os.path.exists(_FLCI_GOLDEN),
+    reason="HonestDiD FLCI golden absent (partial checkout); "
+    "run benchmarks/R/generate_honest_flci_golden.R",
+)
+class TestHonestFLCIParityR:
+    """B2b: the nested optimal-FLCI optimizer matches R HonestDiD 0.2.6 across a
+    stress grid (num_pre x num_post x AR(1) rho x M x l_vec).
+
+    ``center``/``half_length``/``optimal_vec`` in the golden are override-R
+    (R's Monte-Carlo ``.qfoldednormal`` replaced by an analytical quantile, so R
+    solves the same deterministic outer problem as diff-diff's analytical
+    ``_cv_alpha``) -> parity to 1e-3. The same diff-diff values also match stock
+    (MC) R (``stock_center``) to ~1e-2, the residual being R's simulation noise on
+    the near-flat width surface (diff-diff is strictly more accurate).
+    """
+
+    @staticmethod
+    def _cases():
+        with open(_FLCI_GOLDEN) as fh:
+            return json.load(fh)["cases"]
+
+    @staticmethod
+    def _unpack(c):
+        npre, npost = c["num_pre"], c["num_post"]
+        beta = np.asarray(c["beta"], float)
+        sigma = np.asarray(c["sigma"], float)
+        l_vec = np.atleast_1d(np.asarray(c["l_vec"], float))  # npost==1 auto-unboxed
+        return beta[:npre], beta[npre:], sigma, l_vec, npre, npost
+
+    def test_center_and_halflength_match_override_r(self):
+        max_dc = max_dw = 0.0
+        for c in self._cases():
+            if c["center"] is None:
+                continue
+            bp, bq, sigma, l_vec, npre, npost = self._unpack(c)
+            lb, ub = _compute_optimal_flci(bp, bq, sigma, l_vec, npre, npost, c["M"], c["alpha"])
+            center, half = (lb + ub) / 2, (ub - lb) / 2
+            tag = f"npre={npre} npost={npost} M={c['M']}"
+            assert abs(center - c["center"]) < 1e-3, f"{tag}: center {center:.6f} vs R {c['center']:.6f}"
+            assert abs(half - c["half_length"]) < 1e-3, f"{tag}: half {half:.6f} vs R {c['half_length']:.6f}"
+            max_dc = max(max_dc, abs(center - c["center"]))
+            max_dw = max(max_dw, abs(half - c["half_length"]))
+        assert max_dc < 1e-3 and max_dw < 1e-3
+
+    def test_optimal_vec_matches_override_r(self):
+        from diff_diff.honest_did import _flci_solve
+
+        for c in self._cases():
+            if c["optimal_vec"] is None:
+                continue
+            bp, bq, sigma, l_vec, npre, npost = self._unpack(c)
+            _, _, v = _flci_solve(bp, bq, sigma, l_vec, npre, npost, c["M"], c["alpha"])
+            r_v = np.atleast_1d(np.asarray(c["optimal_vec"], float))
+            assert v is not None and np.max(np.abs(v - r_v)) < 3e-3, (
+                f"npre={npre} M={c['M']}: optvec gap {np.max(np.abs(v - r_v)):.2e}"
+            )
+
+    def test_center_matches_stock_r_within_mc_noise(self):
+        for c in self._cases():
+            if c["stock_center"] is None:
+                continue
+            bp, bq, sigma, l_vec, npre, npost = self._unpack(c)
+            lb, ub = _compute_optimal_flci(bp, bq, sigma, l_vec, npre, npost, c["M"], c["alpha"])
+            # Loose tier: R's MC .qfoldednormal noise reaches ~1.4e-2 on flat-surface
+            # cases (max observed 1.39e-2); the tight parity is vs override-R (1e-3).
+            assert abs((lb + ub) / 2 - c["stock_center"]) < 1.5e-2, (
+                f"npre={npre} M={c['M']}: vs stock-R {abs((lb + ub) / 2 - c['stock_center']):.2e}"
+            )
+
+    def test_inner_solve_failure_nan_consistent(self, monkeypatch):
+        """A failed / infeasible inner solve NaN-propagates the full FLCI (no silent
+        fallback to a wrong estimator), distinct from R's legitimate Inf-bias branch."""
+        import diff_diff.honest_did as hd
+
+        monkeypatch.setattr(
+            hd, "_flci_min_bias_given_h",
+            lambda P, h, x0_w=None: (np.zeros(P["num_pre"]), np.nan, False),
+        )
+        lb, ub = _compute_optimal_flci(
+            np.array([0.1, -0.05, 0.1]), np.array([1.2]), np.eye(4) * 0.01, np.array([1.0]), 3, 1, M=0.1
+        )
+        assert np.isnan(lb) and np.isnan(ub)
 
 
 # =============================================================================
