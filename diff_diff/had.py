@@ -367,9 +367,11 @@ class HeterogeneousAdoptionDiDResults:
     on BOTH continuous and mass-point designs (Phase 4.5 A / B):
     ``"survey_binder_tsl"`` (continuous, Binder 1983 TSL with PSU/strata/FPC
     under ``survey_design=SurveyDesign(...)``) or ``"survey_binder_tsl_2sls"``
-    (mass-point, Binder 1983 TSL under ``survey_design=``; label applied
-    uniformly across vcov families — classical / HC1 / CR1 — with the actual
-    sandwich resolved via ``vcov_type``). ``None`` on unweighted fits.
+    (mass-point, Binder 1983 TSL under ``survey_design=``; requires
+    ``vcov_type="hc1"`` / ``robust=True`` — the mass-point survey path rejects
+    ``vcov_type="classical"``, and ``cluster=`` + ``survey_design=`` is
+    rejected, so PSU clustering is expressed via ``SurveyDesign(psu=...)``).
+    ``None`` on unweighted fits.
     Orthogonal to ``survey_metadata`` which is the repo-standard
     :class:`diff_diff.survey.SurveyMetadata` shared with downstream
     report/diagnostic consumers (no HAD-specific leakage)."""
@@ -504,10 +506,10 @@ class HeterogeneousAdoptionDiDResults:
           continuous and mass-point designs (Phase 4.5 A / B):
           ``"survey_binder_tsl"`` (continuous, Binder 1983 TSL under
           ``survey_design=``) or ``"survey_binder_tsl_2sls"`` (mass-point,
-          Binder 1983 TSL under ``survey_design=``; label applied uniformly
-          across vcov families — classical / HC1 / CR1 — with the sandwich
-          resolved via ``vcov_type``). See the field docstring above for
-          the full contract.
+          Binder 1983 TSL under ``survey_design=``; requires
+          ``vcov_type="hc1"`` / ``robust=True`` — the mass-point survey path
+          rejects ``vcov_type="classical"``). See the field docstring above
+          for the full contract.
         - ``effective_dose_mean``: weighted denominator used by the
           beta-scale rescaling - weighted ``mean(D)`` on
           ``continuous_at_zero``, weighted ``mean(D - d_lower)`` on
