@@ -8,6 +8,7 @@ ImportError for known third-party/optional packages (comparison-page
 snippets and optional-dependency guards like matplotlib).
 """
 
+import os
 import re
 import textwrap
 from pathlib import Path
@@ -375,11 +376,20 @@ _CONTEXT_DEPENDENT_SNIPPETS = {
     [pytest.param(tid, c, s, id=tid) for tid, c, s in _CASES],
 )
 def test_doc_snippet(test_id: str, code: str, skip_reason: Optional[str]):
-    """Execute a documentation code snippet and assert no API/runtime errors."""
+    """Execute a documentation code snippet and assert no API/runtime errors.
+
+    ``os.environ`` is snapshot/restored around the exec: snippets may
+    legitimately mutate the environment (e.g. the troubleshooting
+    backend-override block sets ``DIFF_DIFF_BACKEND='python'``), and an
+    unreverted mutation leaks process state into every later test in the
+    session (it flipped the backend-arm selection of the dCDH pinned
+    bootstrap baseline under full-suite order).
+    """
     if skip_reason:
         pytest.skip(skip_reason)
 
     ns = _build_namespace()
+    env_snapshot = os.environ.copy()
     try:
         exec(compile(code, f"<{test_id}>", "exec"), ns)
     except NameError as exc:
@@ -411,3 +421,8 @@ def test_doc_snippet(test_id: str, code: str, skip_reason: Optional[str]):
             f"Snippet {test_id} raised {type(exc).__name__}: {exc}\n\n"
             f"Code:\n{textwrap.indent(code, '  ')}"
         )
+    finally:
+        # Revert any environment mutation the snippet made (pytest.fail
+        # raises, so this must be a finally, not a trailing statement).
+        os.environ.clear()
+        os.environ.update(env_snapshot)

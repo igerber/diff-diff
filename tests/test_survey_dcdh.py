@@ -1,6 +1,5 @@
 """Survey support tests for ChaisemartinDHaultfoeuille (dCDH)."""
 
-import os
 from typing import Optional
 
 import numpy as np
@@ -1865,12 +1864,30 @@ class TestBootstrapCellPeriod:
         to ULP precision. The baseline values were captured on
         `origin/main` at `ac181b7f` (the PR #329 merge) under each
         backend independently.
+
+        The baseline arm is selected from the SAME dispatch globals
+        the fit consumes (bound at import into bootstrap_utils /
+        linalg). Reading ``os.environ`` or ``diff_diff._backend`` at
+        call time is order-fragile: an env mutation after import
+        (e.g. a leaked doc-snippet backend override) flips that
+        detection without changing the already-imported dispatch,
+        selecting the wrong pinned-baseline arm under full-suite
+        order.
         """
-        from diff_diff._backend import HAS_RUST_BACKEND
-        pure_python = (
-            os.environ.get("DIFF_DIFF_BACKEND", "auto").lower() == "python"
-            or not HAS_RUST_BACKEND
+        from diff_diff import bootstrap_utils as _bu
+        from diff_diff import linalg as _la
+
+        bootstrap_rust = bool(
+            _bu.HAS_RUST_BACKEND and _bu._rust_bootstrap_weights is not None
         )
+        ols_rust = bool(_la.HAS_RUST_BACKEND and _la._rust_solve_ols is not None)
+        assert bootstrap_rust == ols_rust, (
+            "Incoherent backend dispatch state between bootstrap_utils "
+            f"(rust={bootstrap_rust}) and linalg (rust={ols_rust}) — a "
+            "leaked monkeypatch? No pinned baseline exists for a mixed "
+            "backend; refusing to compare against either arm."
+        )
+        pure_python = not bootstrap_rust
         expected = (
             self._BASELINE_OVERALL_SE_PYTHON
             if pure_python

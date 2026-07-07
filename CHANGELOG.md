@@ -63,6 +63,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **`fixest` cluster-robust SE band**: the DiD/TWFE cluster-at-unit SE is pinned within the
     documented ~0.25% fixest-CR1 small-sample DOF-convention band (guards an unintended SE-formula
     change; the machine-precision hetero/cluster lock is deferred — needs an unbalanced-DGP golden).
+- **Doc-snippet env leak fixed; dCDH pinned-baseline backend detection made order-robust.** The
+  doc-snippet runner (`tests/test_doc_snippets.py`) executed documentation code blocks without
+  sandboxing `os.environ`, so the troubleshooting page's backend-override snippet leaked
+  `DIFF_DIFF_BACKEND='python'` into every later test in a full-suite run. The only victim was
+  `test_survey_dcdh.py::test_bootstrap_se_matches_pre_pr4_baseline`, whose call-time env read then
+  selected the pure-Python baseline arm while the fit still dispatched to the already-imported Rust
+  backend (fails under full-suite order, passes standalone). The runner now snapshot/restores
+  `os.environ` around each snippet (root cause), and the dCDH test derives its baseline arm from
+  the same dispatch globals the fit consumes (`bootstrap_utils` / `linalg`), with a coherence
+  assert between the two (defense in depth).
 
 ### Added
 - **`ImputationDiD` leave-one-out conservative variance** (`leave_one_out`, default `False`) — the
