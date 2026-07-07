@@ -454,6 +454,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   memory-traffic cleanup, not a headline speedup). The `zero_mask` abs scan is retained
   (correctness); the remaining conditional-path lever is the sieve/nuisance stage
   (see TODO).
+- **`CallawaySantAnna` / `StaggeredTripleDifference` per-cell unit-label arrays no longer
+  materialized.** Every (g,t) cell's internal influence-function record carried
+  `treated_units` / `control_units` label arrays (`all_units[positions]`, two O(n_control)
+  allocations per cell) that no in-package code path ever read: the only consumers were the
+  `precomputed`-less fallbacks of the combined-IF assembly and the multiplier bootstrap,
+  which every in-package caller bypasses by threading the precomputed structures. Labels
+  remain recoverable as `all_units[treated_idx]`. The two fallbacks now raise an actionable
+  `ValueError` if a direct caller reaches them without label arrays (previously they would
+  have been reached only by external callers hand-building the internal dict). No public
+  API or numerical change — the dict is internal (`_influence_func_info` whitebox surface
+  keeps `treated_idx`/`control_idx`/`treated_inf`/`control_inf`).
 
 ## [3.6.2] - 2026-07-03
 

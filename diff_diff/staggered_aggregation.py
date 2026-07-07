@@ -442,12 +442,30 @@ class CallawaySantAnnaAggregationMixin:
             n_units = n_global_units
             all_units = None  # caller already has the unit list
         else:
+            # Local-units fallback for direct callers without precomputed /
+            # global unit ids. It needs per-cell unit-LABEL arrays, which
+            # in-package fits stopped materializing (v3.8 per-cell
+            # allocation shave — labels are always all_units[idx], and every
+            # in-package caller threads global_unit_to_idx + n_global_units,
+            # so this branch is unreachable from a fit). Direct callers must
+            # either thread the global ids or supply label arrays.
             all_units_set: Set[Any] = set()
             for g, t in gt_pairs:
                 if (g, t) in influence_func_info:
                     info = influence_func_info[(g, t)]
-                    all_units_set.update(info["treated_units"])
-                    all_units_set.update(info["control_units"])
+                    t_units = info.get("treated_units")
+                    c_units = info.get("control_units")
+                    if t_units is None or c_units is None:
+                        raise ValueError(
+                            "Combined-IF assembly without precomputed/global unit "
+                            "ids requires per-cell 'treated_units'/'control_units' "
+                            "label arrays in influence_func_info; in-package fits "
+                            "no longer materialize them. Pass global_unit_to_idx "
+                            "and n_global_units (as all in-package callers do), "
+                            "or add the label arrays to your influence_func_info."
+                        )
+                    all_units_set.update(t_units)
+                    all_units_set.update(c_units)
 
             if not all_units_set:
                 return np.zeros(0), []

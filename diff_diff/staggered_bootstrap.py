@@ -210,11 +210,27 @@ class CallawaySantAnnaBootstrapMixin:
             n_units = precomputed.get("canonical_size", len(all_units))
             unit_to_idx = precomputed["unit_to_idx"]  # None for RCS
         else:
-            # Fallback: collect units from influence functions
+            # Fallback: collect units from influence functions. Needs the
+            # per-cell unit-LABEL arrays, which in-package fits stopped
+            # materializing (v3.8 per-cell allocation shave) — every
+            # in-package caller threads `precomputed`, so this branch is
+            # unreachable from a fit. Direct callers must thread
+            # `precomputed` or supply label arrays.
             all_units_set = set()
             for (g, t), info in influence_func_info.items():
-                all_units_set.update(info["treated_units"])
-                all_units_set.update(info["control_units"])
+                t_units = info.get("treated_units")
+                c_units = info.get("control_units")
+                if t_units is None or c_units is None:
+                    raise ValueError(
+                        "Multiplier bootstrap without `precomputed` requires "
+                        "per-cell 'treated_units'/'control_units' label arrays "
+                        "in influence_func_info; in-package fits no longer "
+                        "materialize them. Thread `precomputed` (as all "
+                        "in-package callers do), or add the label arrays to "
+                        "your influence_func_info."
+                    )
+                all_units_set.update(t_units)
+                all_units_set.update(c_units)
             all_units = sorted(all_units_set)
             # Use global N from dataframe when available
             n_units = (

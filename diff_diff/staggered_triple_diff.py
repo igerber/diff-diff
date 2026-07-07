@@ -504,8 +504,6 @@ class StaggeredTripleDifference(
                 influence_func_info[(g, t)] = {
                     "treated_idx": treated_idx,
                     "control_idx": control_idx,
-                    "treated_units": all_units[treated_idx],
-                    "control_units": all_units[control_idx],
                     "treated_inf": treated_inf,
                     "control_inf": control_inf,
                 }

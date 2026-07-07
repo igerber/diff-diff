@@ -1100,20 +1100,22 @@ class CallawaySantAnna(
 
         # Package influence function info with index arrays (positions into
         # precomputed['all_units']) for O(1) downstream lookups instead of
-        # O(n) Python dict lookups.
+        # O(n) Python dict lookups. Unit-LABEL arrays are deliberately NOT
+        # materialized (labels are always recoverable as all_units[idx]);
+        # only the precomputed-None fallbacks of the combined-IF assembly
+        # and the multiplier bootstrap ever consumed them — no in-package
+        # caller reaches those — so dropping them cuts two O(n_control)
+        # allocations per (g,t) cell.
         # INVARIANT: treated_idx/control_idx are np.where over boolean masks,
         # so each is duplicate-free - the aggregation fast path relies on this
         # to scatter with fancy `psi[idx] += vals` (see
         # staggered_aggregation._combined_if_fast).
         n_t = int(n_treated)
-        all_units = precomputed["all_units"]
         treated_positions = np.where(treated_valid)[0]
         control_positions = np.where(control_valid)[0]
         inf_func_info = {
             "treated_idx": treated_positions,
             "control_idx": control_positions,
-            "treated_units": all_units[treated_positions],
-            "control_units": all_units[control_positions],
             "treated_inf": inf_func[:n_t],
             "control_inf": inf_func[n_t:],
         }
@@ -1292,14 +1294,11 @@ class CallawaySantAnna(
                 gte_entry["survey_weight_sum"] = sw_sum
             group_time_effects[(g, t)] = gte_entry
 
-            all_units = precomputed["all_units"]
             treated_positions = np.where(treated_valid)[0]
             control_positions = np.where(control_valid)[0]
             inf_info_gt = {
                 "treated_idx": treated_positions,
                 "control_idx": control_positions,
-                "treated_units": all_units[treated_positions],
-                "control_units": all_units[control_positions],
                 "treated_inf": inf_treated,
                 "control_inf": inf_control,
             }
@@ -1724,14 +1723,11 @@ class CallawaySantAnna(
                 # INVARIANT: np.where over boolean masks -> duplicate-free
                 # index arrays (fancy-+= scatter contract, see
                 # staggered_aggregation._combined_if_fast).
-                all_units = precomputed["all_units"]
                 treated_positions = np.where(treated_valid)[0]
                 control_positions = np.where(control_valid)[0]
                 inf_info_gt = {
                     "treated_idx": treated_positions,
                     "control_idx": control_positions,
-                    "treated_units": all_units[treated_positions],
-                    "control_units": all_units[control_positions],
                     "treated_inf": inf_treated,
                     "control_inf": inf_control,
                 }
@@ -2609,8 +2605,6 @@ class CallawaySantAnna(
                     "control_idx": np.array([], dtype=int),
                     "treated_inf": np.array([]),
                     "control_inf": np.array([]),
-                    "treated_units": np.array([]),
-                    "control_units": np.array([]),
                 }
 
         # Compute overall ATT (simple aggregation)
@@ -4002,8 +3996,6 @@ class CallawaySantAnna(
         inf_func_info = {
             "treated_idx": treated_idx,
             "control_idx": control_idx,
-            "treated_units": treated_idx,  # For RCS, obs indices = "units"
-            "control_units": control_idx,
             "treated_inf": inf_func_all[:n_treated_combined],
             "control_inf": inf_func_all[n_treated_combined:],
         }
