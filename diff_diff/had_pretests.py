@@ -963,16 +963,29 @@ def _validate_1d_numeric(arr: np.ndarray, name: str) -> np.ndarray:
     return a
 
 
-def _fit_ols_intercept_slope(d: np.ndarray, dy: np.ndarray) -> "tuple[float, float, np.ndarray]":
+def _fit_ols_intercept_slope(
+    d: np.ndarray,
+    dy: np.ndarray,
+    d_moments: "Optional[tuple[float, np.ndarray, float]]" = None,
+) -> "tuple[float, float, np.ndarray]":
     """Fit ``dy = a + b*d + eps`` via closed-form OLS.
 
     Returns ``(a_hat, b_hat, residuals)`` where ``residuals`` has the
     same length as ``d`` in the ORIGINAL input order (not sorted).
+
+    ``d_moments`` optionally supplies precomputed ``(d_mean, d_dev,
+    var_d)`` for callers that refit against the SAME ``d`` many times
+    (the Stute bootstrap loops). The values are deterministic functions
+    of ``d`` computed with the identical expressions below, so passing
+    them is bit-identical to recomputing per call.
     """
-    d_mean = d.mean()
+    if d_moments is not None:
+        d_mean, d_dev, var_d = d_moments
+    else:
+        d_mean = d.mean()
+        d_dev = d - d_mean
+        var_d = np.dot(d_dev, d_dev)
     dy_mean = dy.mean()
-    d_dev = d - d_mean
-    var_d = np.dot(d_dev, d_dev)
     if var_d <= 0.0:
         # Degenerate case: all dose values equal. Slope undefined.
         # Caller is responsible for gating before we reach here; if we
@@ -1061,7 +1074,36 @@ def _fit_weighted_ols_intercept_only(
     return a_hat, 0.0, residuals
 
 
-def _cvm_statistic(eps_sorted: np.ndarray, d_sorted: np.ndarray) -> float:
+def _iter_mammen_rows(
+    n_bootstrap: int,
+    G: int,
+    rng: np.random.Generator,
+    max_batch_bytes: int = 64 * 1024 * 1024,
+):
+    """Yield per-replicate Mammen weight rows drawn in memory-bounded batches.
+
+    One ``rng.choice`` call per batch: numpy fills the output in C order,
+    so consecutive batched draws consume the generator's variate stream
+    identically to ``n_bootstrap`` sequential size-``G`` draws — the
+    bootstrap law is unchanged draw-for-draw — while peak memory stays
+    bounded (a single full ``(B, G)`` batch would be ``B*G*8`` bytes,
+    ~800 MB at G=100k, B=999).
+    """
+    rows_per_batch = max(1, int(max_batch_bytes // (8 * max(G, 1))))
+    drawn = 0
+    while drawn < n_bootstrap:
+        take = min(rows_per_batch, n_bootstrap - drawn)
+        batch = _generate_mammen_weights((take, G), rng)
+        for r in range(take):
+            yield batch[r]
+        drawn += take
+
+
+def _cvm_statistic(
+    eps_sorted: np.ndarray,
+    d_sorted: np.ndarray,
+    tie_blocks: "Optional[tuple[np.ndarray, np.ndarray]]" = None,
+) -> float:
     """Compute the tie-safe Cramer-von Mises cusum statistic.
 
     Paper definition (Appendix D):
@@ -1088,6 +1130,12 @@ def _cvm_statistic(eps_sorted: np.ndarray, d_sorted: np.ndarray) -> float:
     d_sorted : np.ndarray, shape (G,)
         Regressor values sorted ascending. Must be sorted consistently
         with ``eps_sorted``.
+    tie_blocks : tuple of (np.ndarray, np.ndarray), optional
+        Precomputed ``(tie_end_idx, counts)`` for callers that evaluate
+        the statistic against the SAME ``d_sorted`` many times (the Stute
+        bootstrap loops). Deterministic functions of ``d_sorted`` computed
+        with the identical expressions below, so passing them is
+        bit-identical to recomputing per call.
 
     Returns
     -------
@@ -1101,8 +1149,11 @@ def _cvm_statistic(eps_sorted: np.ndarray, d_sorted: np.ndarray) -> float:
     # already-sorted regressor gives per-unique-value counts; the last
     # index of each tie block is `cumsum(counts) - 1`, and np.repeat
     # expands that back to per-observation.
-    _, counts = np.unique(d_sorted, return_counts=True)
-    tie_end_idx = np.cumsum(counts) - 1
+    if tie_blocks is not None:
+        tie_end_idx, counts = tie_blocks
+    else:
+        _, counts = np.unique(d_sorted, return_counts=True)
+        tie_end_idx = np.cumsum(counts) - 1
     cumsum_tie_safe = np.repeat(cumsum[tie_end_idx], counts)
     return float(np.sum(cumsum_tie_safe * cumsum_tie_safe) / (G * G))
 
@@ -1605,9 +1656,11 @@ def stute_test(
     ones(G)``, weighted helpers reduce bit-exactly to the unweighted
     versions but bootstrap p-values diverge by Monte-Carlo noise (different
     RNG consumption between batched ``generate_survey_multiplier_weights_batch``
-    and per-iteration ``_generate_mammen_weights``); use the
-    distribution-equivalence reduction test (large B) for trivial-pweight
-    parity, NOT numerical equivalence.
+    and the unweighted path's ``_generate_mammen_weights`` stream — the
+    latter is drawn in memory-bounded batches that consume the stream
+    identically to per-iteration draws); use the distribution-equivalence
+    reduction test (large B) for trivial-pweight parity, NOT numerical
+    equivalence.
 
     References
     ----------
@@ -1701,10 +1754,10 @@ def stute_test(
     if G > _STUTE_LARGE_G_THRESHOLD:
         warnings.warn(
             f"stute_test: G = {G} exceeds {_STUTE_LARGE_G_THRESHOLD}; the "
-            f"per-iteration refit is O(G) per iteration so the "
-            f"{n_bootstrap}-replication loop may take tens of seconds or "
-            f"more. Consider yatchew_hr_test() instead (paper Theorem 7 "
-            f"recommends Yatchew-HR at large G).",
+            f"per-replicate refit is O(G), so the {n_bootstrap}-replication "
+            f"bootstrap cost grows linearly in G (measured ~1.5s at G=1e5, "
+            f"B=999; ~10x that at G=1e6). Consider yatchew_hr_test() "
+            f"instead (paper Theorem 7 recommends Yatchew-HR at large G).",
             UserWarning,
             stacklevel=2,
         )
@@ -1810,12 +1863,25 @@ def stute_test(
     fitted = a_hat + b_hat * d_arr  # baseline fitted values under H_0
 
     if w_arr is None:
-        # Unweighted bit-exact path - identical to pre-PR code.
-        for b in range(n_bootstrap):
-            eta = _generate_mammen_weights(G, rng)
+        # Unweighted path: the Appendix-D per-replicate OLS refit with
+        # hoisted loop invariants. The eta draws are batched through
+        # memory-bounded rng.choice calls (identical variate stream as
+        # per-iteration size-G draws — see _iter_mammen_rows), and the
+        # d-moments and CvM tie-block indices are precomputed once (they
+        # are deterministic functions of d, recomputed identically inside
+        # the helpers). Each replicate applies the same 1-D refit/CvM
+        # operations on the same values as the literal per-iteration
+        # form, so bootstrap_S is bit-identical to pre-hoist code
+        # (verified on a seed x DGP grid; ~2.3x at G in [1e3, 5e4]).
+        d_mean_h = d_arr.mean()
+        d_dev_h = d_arr - d_mean_h
+        d_moments = (d_mean_h, d_dev_h, float(np.dot(d_dev_h, d_dev_h)))
+        _, tie_counts = np.unique(d_sorted, return_counts=True)
+        tie_blocks = (np.cumsum(tie_counts) - 1, tie_counts)
+        for b, eta in enumerate(_iter_mammen_rows(n_bootstrap, G, rng)):
             dy_b = fitted + eps * eta
-            _, _, eps_b = _fit_ols_intercept_slope(d_arr, dy_b)
-            bootstrap_S[b] = _cvm_statistic(eps_b[idx], d_sorted)
+            _, _, eps_b = _fit_ols_intercept_slope(d_arr, dy_b, d_moments=d_moments)
+            bootstrap_S[b] = _cvm_statistic(eps_b[idx], d_sorted, tie_blocks=tie_blocks)
     else:
         # Phase 4.5 C survey-aware path: PSU-level Mammen multipliers
         # (broadcast to per-obs perturbation), weighted OLS refit, weighted
@@ -3059,18 +3125,24 @@ def stute_joint_pretest(
     bootstrap_S = np.empty(n_bootstrap, dtype=np.float64)
 
     if w_arr is None:
-        # Unweighted bit-exact path (stability invariant #1).
-        for b in range(n_bootstrap):
-            # SHARED eta across horizons - preserves unit-level dependence
-            # in the vector-valued empirical process. Independent-per-horizon
-            # draws would overstate precision.
-            eta = _generate_mammen_weights(G, rng)
+        # Unweighted bit-exact path (stability invariant #1). Same hoisted
+        # invariants as stute_test's unweighted loop: the eta draws come
+        # from memory-bounded batched rng.choice calls (identical variate
+        # stream as per-iteration draws — see _iter_mammen_rows) and the
+        # CvM tie-block indices are precomputed once — bootstrap_S is
+        # bit-identical to the per-iteration form.
+        _, tie_counts = np.unique(d_sorted, return_counts=True)
+        tie_blocks = (np.cumsum(tie_counts) - 1, tie_counts)
+        # SHARED eta across horizons - preserves unit-level dependence
+        # in the vector-valued empirical process. Independent-per-horizon
+        # draws would overstate precision.
+        for b, eta in enumerate(_iter_mammen_rows(n_bootstrap, G, rng)):
             S_b = 0.0
             for k in horizon_labels:
                 dy_b = fitted_arrays[k] + residuals_arrays[k] * eta
                 beta_b = XtX_inv_Xt @ dy_b
                 eps_b = dy_b - X @ beta_b
-                S_b += _cvm_statistic(eps_b[idx], d_sorted)
+                S_b += _cvm_statistic(eps_b[idx], d_sorted, tie_blocks=tie_blocks)
             bootstrap_S[b] = S_b
     else:
         # Phase 4.5 C survey-aware path: PSU-level Mammen multipliers

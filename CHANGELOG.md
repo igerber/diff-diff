@@ -601,6 +601,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   10,000 convention (fits that previously exhausted 100 iterations and warned may now
   converge instead — strictly more accurate FE; `tol=1e-10` unchanged). REGISTRY
   SpilloverDiD section documents the routing.
+- **`stute_test` / `stute_joint_pretest` unweighted bootstrap ~2x faster, bit-identical.**
+  The Appendix-D per-replicate OLS refit loops now hoist their loop invariants: Mammen
+  multiplier draws are batched through memory-bounded `rng.choice` calls (numpy fills
+  C-order, so the variate stream — and therefore every draw — is identical to the prior
+  per-iteration draws), and the d-moments + tie-safe CvM tie-block indices are precomputed
+  once per test instead of once per replicate. Each replicate still applies the same 1-D
+  refit/CvM operations on the same values, so `bootstrap_S`, `cvm_stat`, and `p_value` are
+  **bit-identical** to the literal per-iteration form (locked by a frozen byte-copy parity
+  test + per-helper equality tests). Measured 2.5x/2.1x/1.9x at G=1e3/1e4/1e5 (B=999).
+  This resolves the Phase-3 TODO row's ~2x target without its sketched O(G²)
+  `M = I - X(X'X)^{-1}X'` materialization (which would not scale in memory) and with
+  exact — not just "functional" — identity. The paper-faithful per-replicate refit form
+  is unchanged; the large-G advisory now cites measured post-hoist timings.
 
 ## [3.6.2] - 2026-07-03
 

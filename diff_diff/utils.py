@@ -5,7 +5,7 @@ Utility functions for difference-in-differences estimation.
 import os
 import warnings
 from dataclasses import dataclass, field
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd
@@ -559,7 +559,9 @@ def _generate_webb_weights(n_clusters: int, rng: np.random.Generator) -> np.ndar
     return np.asarray(rng.choice(values, size=n_clusters))
 
 
-def _generate_mammen_weights(n_clusters: int, rng: np.random.Generator) -> np.ndarray:
+def _generate_mammen_weights(
+    n_clusters: "Union[int, Tuple[int, ...]]", rng: np.random.Generator
+) -> np.ndarray:
     """
     Generate Mammen's two-point distribution weights.
 
@@ -571,8 +573,12 @@ def _generate_mammen_weights(n_clusters: int, rng: np.random.Generator) -> np.nd
 
     Parameters
     ----------
-    n_clusters : int
-        Number of clusters.
+    n_clusters : int or tuple of int
+        Number of clusters, or an output shape. A batched draw of shape
+        ``(B, G)`` consumes the generator's variate stream identically to
+        ``B`` sequential draws of size ``G`` (``rng.choice`` fills output
+        in C order), so batching replicate draws preserves the bootstrap
+        law draw-for-draw.
     rng : np.random.Generator
         Random number generator.
 

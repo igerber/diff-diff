@@ -5831,3 +5831,135 @@ class TestStuteStratifiedSurveyBootstrap:
             f"Stratified Stute power under known alternative: "
             f"{power:.3f} (target > 0.50 at n_draws={n_draws})"
         )
+
+
+class TestStuteBootstrapHoistedInvariants:
+    """The 2026-07 loop-invariant hoist (batched Mammen draws, precomputed
+    d-moments, precomputed CvM tie blocks) must be bit-identical to the
+    literal per-iteration Appendix-D form. Locks (a) the RNG stream
+    identity of batched/chunked draws, (b) each helper's
+    precomputed-argument equality, and (c) end-to-end ``p_value``/
+    ``cvm_stat`` equality against a frozen byte-copy of the pre-hoist
+    bootstrap loop."""
+
+    @staticmethod
+    def _dgp(G=400, seed=0):
+        rng = np.random.default_rng(seed)
+        d = np.round(rng.gamma(2.0, 1.0, G), 1)  # rounding induces tie blocks
+        dy = 1.0 + 0.5 * d + 0.3 * d * d + rng.normal(0.0, 0.5, G)
+        return d, dy
+
+    def test_mammen_stream_identity_batched_and_chunked(self):
+        """A (B, G) batched draw and the memory-bounded chunked iterator
+        both consume the generator's variate stream exactly like B
+        sequential size-G draws."""
+        from diff_diff.had_pretests import _iter_mammen_rows
+        from diff_diff.utils import _generate_mammen_weights
+
+        B, G = 13, 17
+        rng_seq = np.random.default_rng(123)
+        seq = np.vstack([_generate_mammen_weights(G, rng_seq) for _ in range(B)])
+
+        rng_batch = np.random.default_rng(123)
+        batch = _generate_mammen_weights((B, G), rng_batch)
+        np.testing.assert_array_equal(seq, batch)
+
+        # Force multiple chunks: room for only 3 rows per batch.
+        rng_chunk = np.random.default_rng(123)
+        chunked = np.vstack(list(_iter_mammen_rows(B, G, rng_chunk, max_batch_bytes=3 * G * 8)))
+        np.testing.assert_array_equal(seq, chunked)
+
+    def test_fit_ols_d_moments_bit_identical(self):
+        from diff_diff.had_pretests import _fit_ols_intercept_slope
+
+        d, dy = self._dgp()
+        a0, b0, e0 = _fit_ols_intercept_slope(d, dy)
+        d_mean = d.mean()
+        d_dev = d - d_mean
+        moments = (d_mean, d_dev, float(np.dot(d_dev, d_dev)))
+        a1, b1, e1 = _fit_ols_intercept_slope(d, dy, d_moments=moments)
+        assert a0 == a1 and b0 == b1
+        np.testing.assert_array_equal(e0, e1)
+
+    def test_cvm_tie_blocks_bit_identical(self):
+        from diff_diff.had_pretests import _cvm_statistic
+
+        d, dy = self._dgp()
+        idx = np.argsort(d, kind="stable")
+        d_sorted = d[idx]
+        assert len(np.unique(d_sorted)) < len(d_sorted), "DGP must contain ties"
+        eps = dy - dy.mean()
+        s0 = _cvm_statistic(eps[idx], d_sorted)
+        _, counts = np.unique(d_sorted, return_counts=True)
+        tie_blocks = (np.cumsum(counts) - 1, counts)
+        s1 = _cvm_statistic(eps[idx], d_sorted, tie_blocks=tie_blocks)
+        assert s0 == s1
+
+    def test_stute_p_value_bit_identical_to_literal_loop(self):
+        """Frozen byte-copy of the pre-hoist unweighted bootstrap loop:
+        stute_test must reproduce its p_value/cvm_stat exactly."""
+        from diff_diff.had_pretests import (
+            _cvm_statistic,
+            _fit_ols_intercept_slope,
+            stute_test,
+        )
+        from diff_diff.utils import _generate_mammen_weights
+
+        for seed_dgp in (0, 1):
+            d, dy = self._dgp(seed=seed_dgp)
+            G = d.shape[0]
+            n_bootstrap, seed = 199, 42
+
+            r = stute_test(d, dy, n_bootstrap=n_bootstrap, seed=seed)
+
+            # Frozen pre-hoist reference (literal per-iteration form).
+            a_hat, b_hat, eps = _fit_ols_intercept_slope(d, dy)
+            idx = np.argsort(d, kind="stable")
+            d_sorted = d[idx]
+            S = _cvm_statistic(eps[idx], d_sorted)
+            rng = np.random.default_rng(seed)
+            fitted = a_hat + b_hat * d
+            boot = np.empty(n_bootstrap)
+            for b in range(n_bootstrap):
+                eta = _generate_mammen_weights(G, rng)
+                dy_b = fitted + eps * eta
+                _, _, eps_b = _fit_ols_intercept_slope(d, dy_b)
+                boot[b] = _cvm_statistic(eps_b[idx], d_sorted)
+            p_ref = float((1.0 + float(np.sum(boot >= S))) / (n_bootstrap + 1.0))
+
+            assert r.cvm_stat == float(S)
+            assert r.p_value == p_ref
+
+    def test_joint_p_value_invariant_to_per_iteration_draws(self, monkeypatch):
+        """End-to-end lock of the RNG-stream identity claim for the joint
+        loop: swapping the memory-bounded batched row iterator for literal
+        per-iteration draws must leave stute_joint_pretest's p_value and
+        joint statistic unchanged."""
+        import diff_diff.had_pretests as hp
+        from diff_diff.had_pretests import _fit_ols_intercept_slope, stute_joint_pretest
+        from diff_diff.utils import _generate_mammen_weights
+
+        d, _ = self._dgp(seed=3)
+        G = d.shape[0]
+        X = np.column_stack([np.ones(G), d])
+        rng = np.random.default_rng(11)
+        residuals_by_horizon = {}
+        fitted_by_horizon = {}
+        for k in (0, 1):
+            dy_k = 1.0 + 0.4 * d + 0.2 * d * d + rng.normal(0.0, 0.5, G)
+            a_k, b_k, eps_k = _fit_ols_intercept_slope(d, dy_k)
+            residuals_by_horizon[k] = eps_k
+            fitted_by_horizon[k] = a_k + b_k * d
+
+        kwargs = dict(alpha=0.05, n_bootstrap=199, seed=5)
+        r_batched = stute_joint_pretest(residuals_by_horizon, fitted_by_horizon, d, X, **kwargs)
+
+        def per_iteration_rows(n_bootstrap, G, rng, max_batch_bytes=None):
+            for _ in range(n_bootstrap):
+                yield _generate_mammen_weights(G, rng)
+
+        monkeypatch.setattr(hp, "_iter_mammen_rows", per_iteration_rows)
+        r_literal = stute_joint_pretest(residuals_by_horizon, fitted_by_horizon, d, X, **kwargs)
+
+        assert r_batched.p_value == r_literal.p_value
+        assert r_batched.cvm_stat_joint == r_literal.cvm_stat_joint
