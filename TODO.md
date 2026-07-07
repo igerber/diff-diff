@@ -48,7 +48,6 @@ generic sparse-FE, QR+SVD rank-detection redundancy, `check_finite` bypass — m
 | `ImputationDiD` dense `(A0'A0).toarray()` scales `O((U+T+K)^2)` — OOM risk on large panels (only triggers when the sparse solver fails). Needs an alternative dense fallback or richer sparse strategy. | `imputation.py` | #141 | Heavy | Medium |
 | CR2 Bell-McCaffrey DOF uses a naive `O(n²k)` per-coefficient loop over cluster pairs; Pustejovsky-Tipton (2018) Appendix B has a scores-based formulation avoiding the full `n×n` `M`. Switch when a user hits a large-`n` cluster-robust design. | `linalg.py::_compute_cr2_bm` | Phase 1a | Heavy | Low |
 | Rust-backend CR2 Bell-McCaffrey: falls through to NumPy (the leverage/Satterthwaite-DOF path needs `return_dof` support, which the Rust vcov dispatch excludes). The one-way HC2 kernel landed 2026-07-07 (`compute_robust_vcov_hc2`, mirrors the NumPy hc2 branch at ~1e-15; near-singular hat-diagonal sentinel + Python-side warn-and-HC1-fallback). | `rust/src/linalg.rs` | Phase 1a | Mid | Low |
-| Adopt `snap_absorbed_regressors` (FE-spanned regressor two-stage snap + LSMR confirmation) on the ImputationDiD lead-indicator path — lead columns are the most plausible FE-spanned regressors, and the truncated-MAP-iterate exposure documented at `utils.py` applies; today only `solve_ols` rank detection guards it. Behavior change beyond the demean-modernization refactor, so deferred from that PR. | `imputation.py::_compute_lead_coefficients` | demean-modernization | Mid | Low |
 
 ### Testing / docs
 

@@ -3056,3 +3056,82 @@ class TestZeroWeightGroups:
         assert np.isnan(r.group_effects[2]["effect"])
         # Cohort 3 is unaffected.
         assert np.isfinite(r.group_effects[3]["effect"])
+
+
+class TestLeadSnapAbsorbed:
+    """FE-spanned lead indicators on the pretrends path are SNAPPED to exact
+    zero (deterministic NaN coefficient + cause-specific warning) instead of
+    reaching the solver as numerical junk — the snap_absorbed_regressors
+    adoption on _compute_lead_coefficients (TODO row: lead columns are the
+    most plausible FE-spanned regressors)."""
+
+    @staticmethod
+    def _panel(never_treated_last_period):
+        rng = np.random.default_rng(5)
+        rows = []
+        for i in range(30):
+            ft = 7 if i < 15 else 0
+            periods = range(1, 8) if ft else range(1, never_treated_last_period + 1)
+            for t in periods:
+                y = (
+                    1.0
+                    + 0.1 * i
+                    + 0.2 * t
+                    + (1.0 if (ft and t >= ft) else 0.0)
+                    + rng.normal(0, 0.1)
+                )
+                rows.append({"unit": i, "time": t, "first_treat": ft, "y": y})
+        return pd.DataFrame(rows)
+
+    def test_spanned_lead_snaps_to_nan_with_cause_warning(self):
+        # Never-treated units end at t=4, so Omega_0 at t=5 contains ONLY the
+        # g=7 cohort: lead[-2] == 1{t==5} on Omega_0 — exactly in the span of
+        # the absorbed time FE.
+        df = self._panel(never_treated_last_period=4)
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            res = ImputationDiD(pretrends=True).fit(
+                df,
+                outcome="y",
+                unit="unit",
+                time="time",
+                first_treat="first_treat",
+                aggregate="event_study",
+            )
+        assert res.event_study_effects is not None
+        eff = res.event_study_effects
+        # The spanned lead is deterministically NaN (full inference tuple).
+        assert np.isnan(eff[-2]["effect"]) and np.isnan(eff[-2]["se"])
+        # Identified leads stay finite (the junk direction never reached them).
+        for h in (-6, -5, -3):
+            assert np.isfinite(eff[h]["effect"]), f"h={h}"
+            assert np.isfinite(eff[h]["se"]) and eff[h]["se"] > 0, f"h={h}"
+        # Cause-specific snap warning names the display label, not the raw column.
+        snap_msgs = [
+            str(x.message)
+            for x in w
+            if "collinear with the absorbed fixed effects" in str(x.message)
+        ]
+        assert any("lead[-2]" in m and "pretrends lead model" in m for m in snap_msgs), snap_msgs
+
+    def test_identified_leads_unchanged_no_snap_warning(self):
+        # Balanced never-treated span: every lead period has never-treated
+        # rows in Omega_0 -> nothing is FE-spanned; the snap is a no-op and
+        # no cause-specific warning fires.
+        df = self._panel(never_treated_last_period=7)
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            res = ImputationDiD(pretrends=True).fit(
+                df,
+                outcome="y",
+                unit="unit",
+                time="time",
+                first_treat="first_treat",
+                aggregate="event_study",
+            )
+        assert res.event_study_effects is not None
+        finite_leads = [
+            h for h, e in res.event_study_effects.items() if h < -1 and np.isfinite(e["effect"])
+        ]
+        assert len(finite_leads) >= 4
+        assert not any("collinear with the absorbed fixed effects" in str(x.message) for x in w)

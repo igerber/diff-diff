@@ -37,7 +37,13 @@ from diff_diff.imputation_results import (  # noqa: F401 (re-export)
     ImputationDiDResults,
 )
 from diff_diff.linalg import solve_ols
-from diff_diff.utils import _iterative_fe_solve, demean_by_groups, safe_inference
+from diff_diff.utils import (
+    _iterative_fe_solve,
+    demean_by_groups,
+    pre_demean_norms,
+    safe_inference,
+    snap_absorbed_regressors,
+)
 
 
 class _UntreatedProjection(NamedTuple):
@@ -2289,6 +2295,7 @@ class ImputationDiD(ImputationDiDBootstrapMixin):
         # per-horizon n_obs counts below. within_transform pins [unit, time];
         # [time, unit] here preserves the historical time-then-unit sweep order.
         narrow = df_0[[outcome, *all_x_cols, time, unit]].copy()
+        _pre_norms = pre_demean_norms(narrow, all_x_cols, weights=survey_weights_0)
         demeaned, _ = demean_by_groups(
             narrow,
             [outcome, *all_x_cols],
@@ -2297,6 +2304,24 @@ class ImputationDiD(ImputationDiDBootstrapMixin):
             weights=survey_weights_0,
             max_iter=10_000,
             tol=1e-10,
+        )
+        # FE-spanned regressors demean to numerical junk, not exact zero;
+        # snap them so rank handling drops them deterministically (NaN
+        # coefficient for that horizon) instead of the junk direction
+        # perturbing the identified lead coefficients. Lead indicators are
+        # the most plausible FE-spanned regressors here: with a single
+        # (balanced-restricted) cohort a lead h collapses to a calendar-time
+        # dummy on Omega_0, which lies exactly in the span of the absorbed
+        # time FE.
+        snap_absorbed_regressors(
+            demeaned,
+            all_x_cols,
+            _pre_norms,
+            absorbed_desc="unit and time fixed effects (pretrends lead model)",
+            group_vars=[time, unit],
+            rank_deficient_action=self.rank_deficient_action,
+            display_names={f"_lead_{h}": f"lead[{h}]" for h in pre_rel_times},
+            weights=survey_weights_0,
         )
         y_dm = demeaned[outcome].to_numpy(dtype=np.float64)
         X_dm = demeaned[all_x_cols].to_numpy(dtype=np.float64)

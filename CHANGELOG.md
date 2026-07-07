@@ -62,6 +62,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   NumPy's groupby order. Verified: 1 distinct value across 50 identical calls (was 3/8);
   NumPy parity unchanged (~1e-14, the normal cross-backend GEMM tolerance); bit-identity
   regression tests cover both contiguous and non-contiguous unsorted cluster ids.
+- **`ImputationDiD` pretrends lead model gains the FE-span snap guard.** The Test-1 lead
+  indicators + covariates now route through `snap_absorbed_regressors` after the
+  within-transform (the same two-stage snap + LSMR confirmation the `absorb=` estimators
+  use). A lead whose calendar period contains only its cohort's rows on the untreated
+  sample collapses to a calendar-time dummy in the span of the absorbed time FE; it now
+  snaps to exact zero — deterministic NaN coefficient + cause-specific warning naming
+  `lead[h]` — instead of relying on the raw rank check alone, which the documented
+  truncated-MAP-iterate exposure can defeat in slow-convergence regimes (junk direction
+  perturbing the identified lead coefficients). Identified leads are unchanged (the full
+  imputation suites pass unmodified); behavioral tests lock both the spanned-NaN contract
+  and the no-op case. REGISTRY ImputationDiD note added.
 - **`HonestDiD` Δ^SD optimal-FLCI center parity with R (SE-audit B2b).** The optimal
   Fixed-Length CI optimizer was a flat Nelder-Mead over slope weights that landed on a
   different affine estimator than R `HonestDiD::findOptimalFLCI` at intermediate smoothness
