@@ -80,6 +80,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   per-horizon event-study ATT and SE. Observed agreement on the reference platform:
   SE ~2e-10 (the covariate-augmented untreated `v_it` projection + clustering machinery),
   ATT ~2e-7; asserted at abs=1e-6/1e-7 for cross-platform robustness.
+- **reviewer-eval harness: tutorial-notebook cases now reviewed with CI-equivalent
+  context.** `ci_prompt` reproduces the CI workflow's `<notebook-prose>` block for changed
+  `docs/tutorials/*.ipynb` (extraction via `tools/notebook_md_extract.py` with the same
+  per-output / per-notebook / aggregate caps, fail-soft per notebook, pre-extract
+  test-then-append truncation with an omitted-notebooks marker, zero-extracted fallback,
+  close-tag sanitization, and the untrusted wrapper + out-of-wrapper warning), appended
+  after the unified diff exactly as CI does. The `verify-corpus`/`run` tutorial-case
+  rejection guards are lifted. Documented divergence (same rationale as `pr_review.md`
+  sourcing): the extractor runs from the current repo, not each case's base SHA. Covered
+  by four new adapter tests (wrapper + sanitization, zero-extracted, aggregate
+  truncation, end-to-end prompt assembly order).
 - **`CallawaySantAnna` ipw R-parity yardsticks folded into the golden fixture + no-covariate
   ipw structural-parity decision recorded.** `csdid_golden_values.json` regenerated (R 4.5.2,
   did 2.5.1, DRDID 1.3.0): all pre-existing data and result blocks reproduced byte-identically;

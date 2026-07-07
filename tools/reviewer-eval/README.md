@@ -76,13 +76,16 @@ Codex CLI version is identical across arms, so the model is the only variable.
 
 ## Known limitations
 
-- **Tutorial-notebook cases aren't supported yet.** CI special-cases only
-  `docs/tutorials/*.ipynb`: it excludes them from the diff *and* appends a sanitized
-  `<notebook-prose>` block; this harness reproduces only the exclusion, so a
-  tutorial-notebook case would be reviewed with less context than CI. `verify-corpus`
-  and `run` reject such cases until the extraction is ported (see
-  `ci_prompt.touches_notebook`). Non-tutorial `.ipynb` ride the normal diff path,
-  exactly as CI handles them.
+- **Tutorial-notebook cases are supported with CI-equivalent context.** CI
+  special-cases only `docs/tutorials/*.ipynb`: it excludes them from the diff *and*
+  appends a sanitized `<notebook-prose>` block extracted via
+  `tools/notebook_md_extract.py`. The harness reproduces both (same per-output /
+  per-notebook / aggregate caps, fail-soft extraction, truncation marker,
+  zero-extracted fallback, close-tag sanitization — see
+  `ci_prompt.build_notebook_prose_block`). Documented divergence: the extractor is
+  sourced from the current repo rather than each case's base SHA (same rationale as
+  `pr_review.md` sourcing). Non-tutorial `.ipynb` ride the normal diff path, exactly
+  as CI handles them.
 - One `run` invocation = one experiment (run `--configs A,B` together). `compare`
   reads the per-run manifest (`runs/<subdir>-manifest.json`), so rerunning into the
   same `--subdir` with a changed model **replaces** the comparison rather than

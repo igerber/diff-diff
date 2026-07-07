@@ -199,17 +199,13 @@ class CorpusLoader:
         except worktree.MaterializeError as exc:
             return f"materialize failed: {exc}"
         try:
-            from adapters.ci_prompt import git_name_status, touches_notebook
+            from adapters.ci_prompt import git_name_status
 
             name_status = git_name_status(mat.worktree_dir, mat.base_sha, mat.head_sha)
             if not name_status.strip():
                 return "empty diff (base==head or patch was a no-op)"
-            if touches_notebook(name_status):
-                return (
-                    "tutorial-notebook case unsupported: ci_prompt omits the CI workflow's "
-                    "<notebook-prose> block (docs/tutorials/*.ipynb); port that extraction "
-                    "before adding a docs/tutorials notebook case."
-                )
+            # Tutorial-notebook cases are supported: build_ci_prompt appends the
+            # CI-equivalent <notebook-prose> block (see adapters/ci_prompt.py).
             # ground_truth.file is defined on the POST-diff file, so validate against
             # post-diff paths only (rename/copy -> destination; delete -> none). Using
             # every name-status column would let a case that records the pre-rename
