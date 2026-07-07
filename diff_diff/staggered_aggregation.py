@@ -16,6 +16,35 @@ from diff_diff.utils import safe_inference_batch
 PrecomputedData = Dict[str, Any]
 
 
+def fixed_cohort_agg_weights(
+    precomputed: Optional["PrecomputedData"],
+) -> Optional[Dict[Any, float]]:
+    """Fixed per-cohort aggregation masses (R's ``pg = n_g / N`` numerator) for
+    the treated cohorts ``g > 0``, or ``None`` when the caller should fall back
+    to per-cell weights (``agg_weight`` / ``n_treated``).
+
+    Priority: unit-level ``agg_cohort_masses`` (RC-on-panel and true RC, exposed
+    by ``_precompute_structures_rc``) → per-observation survey cohort mass
+    (survey designs) → ``None`` (panel non-survey). Preferring
+    ``agg_cohort_masses`` over the raw ``survey_weights`` sum is what makes an
+    unbalanced panel routed as RC (``allow_unbalanced_panel=True``, which
+    synthesizes ``SurveyDesign(psu=unit)``) weight every aggregation — simple,
+    event-study, group, AND the multiplier bootstrap — by fixed UNIT cohort
+    mass rather than observation count. Single source of truth so the analytical
+    and bootstrap paths cannot diverge.
+    """
+    if precomputed is None:
+        return None
+    agg_masses = precomputed.get("agg_cohort_masses")
+    if agg_masses is not None:
+        return {g: m for g, m in agg_masses.items() if g > 0}
+    sw = precomputed.get("survey_weights")
+    if sw is not None:
+        unit_cohorts = precomputed["unit_cohorts"]
+        return {g: float(np.sum(sw[unit_cohorts == g])) for g in np.unique(unit_cohorts) if g > 0}
+    return None
+
+
 class CallawaySantAnnaAggregationMixin:
     """
     Mixin class providing aggregation methods for CallawaySantAnna estimator.
@@ -62,16 +91,10 @@ class CallawaySantAnnaAggregationMixin:
         gt_pairs = []
         groups_for_gt = []
 
-        # For survey: compute fixed per-cohort weight sums from the full
-        # unit-level sample (matching R's did::aggte pg = n_g / N).
-        survey_cohort_weights = None
-        if precomputed is not None and precomputed.get("survey_weights") is not None:
-            sw = precomputed["survey_weights"]
-            unit_cohorts = precomputed["unit_cohorts"]
-            survey_cohort_weights = {}
-            for g in np.unique(unit_cohorts):
-                if g > 0:  # exclude never-treated (0)
-                    survey_cohort_weights[g] = float(np.sum(sw[unit_cohorts == g]))
+        # Fixed per-cohort aggregation weights (R's did::aggte pg = n_g / N),
+        # preferring the unit-level RC mass so allow_unbalanced_panel weights the
+        # overall ATT by fixed UNIT cohort mass, not observation count.
+        survey_cohort_weights = fixed_cohort_agg_weights(precomputed)
 
         for (g, t), data in group_time_effects.items():
             # Only include post-treatment effects (t >= g - anticipation)
@@ -237,7 +260,19 @@ class CallawaySantAnnaAggregationMixin:
             return cache
 
         cohort_values, cohort_codes = np.unique(unit_cohorts, return_inverse=True)
-        if survey_w is not None:
+        agg_masses = precomputed.get("agg_cohort_masses")
+        if agg_masses is not None:
+            # RC path: pg basis is per-UNIT cohort mass (R's pg = n_g / N over
+            # units), exposed by _precompute_structures_rc. `cohort_codes` stays
+            # per-observation (the WIF scatter is per-obs, divided by
+            # obs_per_unit downstream). No-op for a true RC (per-unit ==
+            # per-obs); the fix for an unbalanced panel routed as RC.
+            cohort_masses = np.array(
+                [float(agg_masses.get(float(cv), 0.0)) for cv in cohort_values],
+                dtype=np.float64,
+            )
+            total_weight = float(precomputed.get("agg_total_weight", float(np.sum(cohort_masses))))
+        elif survey_w is not None:
             # Survey-weighted cohort masses. np.bincount accumulation order
             # differs from the historical per-group mask-sums at the ~1 ULP
             # level (documented drift budget; REGISTRY CallawaySantAnna SE
@@ -259,6 +294,9 @@ class CallawaySantAnnaAggregationMixin:
             "cohort_codes": cohort_codes,
             "cohort_masses": cohort_masses,
             "total_weight": total_weight,
+            # Per-obs unit multiplicity for the WIF over-count correction (all
+            # 1.0 on panel / true RC → the division below is a no-op there).
+            "obs_per_unit": precomputed.get("obs_per_unit"),
         }
         precomputed["_agg_cache"] = cache
         return cache
@@ -379,8 +417,16 @@ class CallawaySantAnnaAggregationMixin:
             )
             return np.full(n_units, np.nan), None
 
-        # Scale by 1/total_weight to match R's getSE formula
-        psi_wif = wif_contrib / total_weight
+        # Scale by 1/total_weight to match R's getSE formula. On a panel routed
+        # as RC, additionally divide by obs_per_unit: the WIF is a per-UNIT
+        # quantity but wif_contrib is per-observation, so the unit-clustered sum
+        # would otherwise over-count each unit's WIF by its observation count.
+        # obs_per_unit is 1.0 for panel / true RC (a no-op there).
+        obs_per_unit = cache.get("obs_per_unit")
+        if obs_per_unit is not None:
+            psi_wif = wif_contrib / (obs_per_unit * total_weight)
+        else:
+            psi_wif = wif_contrib / total_weight
 
         return psi_standard + psi_wif, None
 
@@ -790,15 +836,10 @@ class CallawaySantAnnaAggregationMixin:
         # Organize effects by relative time, keeping track of (g,t) pairs
         effects_by_e: Dict[int, List[Tuple[Tuple[Any, Any], float, float]]] = {}
 
-        # Fixed per-cohort survey weights for aggregation
-        survey_cohort_weights = None
-        if precomputed is not None and precomputed.get("survey_weights") is not None:
-            sw = precomputed["survey_weights"]
-            unit_cohorts = precomputed["unit_cohorts"]
-            survey_cohort_weights = {}
-            for g in np.unique(unit_cohorts):
-                if g > 0:
-                    survey_cohort_weights[g] = float(np.sum(sw[unit_cohorts == g]))
+        # Fixed per-cohort aggregation weights (shared with _aggregate_simple and
+        # the bootstrap): unit-level RC mass preferred so allow_unbalanced_panel
+        # weights each multi-cell horizon by fixed UNIT cohort mass, not obs count.
+        survey_cohort_weights = fixed_cohort_agg_weights(precomputed)
 
         for (g, t), data in group_time_effects.items():
             e = t - g  # Relative time

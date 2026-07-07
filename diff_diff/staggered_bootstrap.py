@@ -238,26 +238,22 @@ class CallawaySantAnnaBootstrapMixin:
         # analytical _aggregate_simple() path in staggered_aggregation.py.
         # Do NOT use per-cell survey_weight_sum (which varies by cell on
         # unbalanced panels).
-        survey_w = precomputed.get("survey_weights") if precomputed is not None else None
-        if survey_w is not None:
-            unit_cohorts = precomputed["unit_cohorts"]
-            # Precompute fixed cohort masses (same formula as _aggregate_simple)
-            _cohort_mass_cache: dict = {}
-            for gt in gt_pairs:
-                g = gt[0]
-                if g not in _cohort_mass_cache:
-                    _cohort_mass_cache[g] = float(np.sum(survey_w[unit_cohorts == g]))
-            all_n_treated = np.array([_cohort_mass_cache[gt[0]] for gt in gt_pairs], dtype=float)
-        else:
-            # Use agg_weight if available (RCS: fixed cohort mass);
-            # fall back to n_treated for panel data
-            all_n_treated = np.array(
-                [
-                    group_time_effects[gt].get("agg_weight", group_time_effects[gt]["n_treated"])
-                    for gt in gt_pairs
-                ],
-                dtype=float,
-            )
+        # Fixed per-cohort aggregation masses — the SAME single source of truth
+        # the analytical _aggregate_simple() / _aggregate_event_study() use, so
+        # the bootstrap weights an unbalanced-panel (allow_unbalanced_panel) RC
+        # aggregation by fixed UNIT cohort mass, not observation count. Returns
+        # None for panel non-survey (→ per-cell agg_weight/n_treated fallback).
+        from diff_diff.staggered_aggregation import fixed_cohort_agg_weights
+
+        _fixed_masses = fixed_cohort_agg_weights(precomputed)
+
+        def _agg_mass(gt):
+            g = gt[0]
+            if _fixed_masses is not None and g in _fixed_masses:
+                return _fixed_masses[g]
+            return group_time_effects[gt].get("agg_weight", group_time_effects[gt]["n_treated"])
+
+        all_n_treated = np.array([_agg_mass(gt) for gt in gt_pairs], dtype=float)
         post_n_treated = all_n_treated[post_treatment_mask]
 
         # Filter out NaN ATT(g,t) cells from overall aggregation (matches analytical path)
@@ -720,17 +716,17 @@ class CallawaySantAnnaBootstrapMixin:
         # Use fixed cohort survey masses (not per-cell survey_weight_sum) when
         # survey weights are present, matching the analytical
         # _aggregate_event_study() path.
-        survey_w = precomputed.get("survey_weights") if precomputed is not None else None
-        _cohort_mass: Optional[dict] = None
-        if survey_w is not None:
-            unit_cohorts = precomputed["unit_cohorts"]
-            _cohort_mass = {}
+        # Shared fixed-cohort masses (same source of truth as the analytical
+        # event-study path): unit-level RC mass preferred so the bootstrap
+        # event-study weights an unbalanced-panel (allow_unbalanced_panel)
+        # aggregation by fixed UNIT cohort mass, not observation count.
+        from diff_diff.staggered_aggregation import fixed_cohort_agg_weights
+
+        _fixed_masses = fixed_cohort_agg_weights(precomputed)
 
         def _agg_weight(g: Any, t: Any) -> float:
-            if _cohort_mass is not None:
-                if g not in _cohort_mass:
-                    _cohort_mass[g] = float(np.sum(survey_w[unit_cohorts == g]))
-                return _cohort_mass[g]
+            if _fixed_masses is not None and g in _fixed_masses:
+                return _fixed_masses[g]
             # Use agg_weight if available (RCS: fixed cohort mass)
             return group_time_effects[(g, t)].get(
                 "agg_weight", group_time_effects[(g, t)]["n_treated"]

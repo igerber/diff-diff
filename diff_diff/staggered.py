@@ -384,6 +384,18 @@ class CallawaySantAnna(
         each period (stationarity). Uses cross-sectional DRDID
         (Sant'Anna & Zhao 2020, Section 4) with per-observation influence
         functions.
+    allow_unbalanced_panel : bool, default=False
+        When ``True`` and the input panel is unbalanced (some units are not
+        observed in every period), route the pooled observations through the
+        repeated-cross-section levels estimator (matching R
+        ``did::att_gt(allow_unbalanced_panel=TRUE)`` / ``DRDID::reg_did_rc``)
+        instead of within-cell panel differencing, and cluster the influence
+        function by unit for the standard error. **Inert on a balanced panel**
+        (results are byte-identical to the default). When ``False`` (default)
+        an unbalanced panel is handled by within-cell differencing and a
+        ``UserWarning`` is emitted. ATT matches R bit-for-bit; the SE matches
+        up to the documented CR1 ``sqrt(G/(G-1))`` finite-sample factor.
+        ``survey_design=`` combined with this flag raises ``NotImplementedError``.
     epv_threshold : float, default=10
         Events Per Variable threshold for propensity score logit.
         When the ratio of minority-class observations to predictor
@@ -498,6 +510,7 @@ class CallawaySantAnna(
         cband: bool = True,
         pscore_trim: float = 0.01,
         panel: bool = True,
+        allow_unbalanced_panel: bool = False,
         epv_threshold: float = 10,
         pscore_fallback: str = "error",
         vcov_type: str = "hc1",
@@ -572,6 +585,13 @@ class CallawaySantAnna(
         self.cband = cband
         self.pscore_trim = pscore_trim
         self.panel = panel
+        # When True AND the input panel is unbalanced (some units unobserved in
+        # some periods), route through the repeated-cross-section (RC) levels
+        # estimator on the pooled observations — matching R
+        # `did::att_gt(allow_unbalanced_panel=TRUE)` (which sets panel=FALSE ->
+        # DRDID::reg_did_rc). Inert on a balanced panel (the default within-cell
+        # differencing path is byte-identical). See fit() for the routing.
+        self.allow_unbalanced_panel = allow_unbalanced_panel
         self.epv_threshold = epv_threshold
         self.pscore_fallback = pscore_fallback
 
@@ -1842,6 +1862,130 @@ class CallawaySantAnna(
         # second layer for the post-construction mutation path.
         self._validate_vcov_type(self.vcov_type)
 
+        # --- allow_unbalanced_panel routing (RC-on-panel = R's allow_unbalanced_panel) ---
+        # Detect an unbalanced panel (some units unobserved in some periods).
+        # Only meaningful for panel input; declared RC (panel=False) is handled
+        # by the branches below via `_use_rc`.
+        _is_unbalanced_panel = False
+        _finite_out = None
+        if self.panel and all(c in data.columns for c in (unit, time, outcome)):
+            # Complete-case balance (matches R `pre_process_did`, which
+            # complete-case-filters BEFORE deciding to flip to the RC path): a
+            # rectangular panel with a missing / non-finite OUTCOME in a cell is
+            # effectively unbalanced — the default panel path treats that cell as
+            # a missing panel cell (wide-pivot valid-mask) and silently does
+            # within-cell differencing. So detect unbalancedness on the
+            # finite-outcome rows, not just structural (unit, time) row presence.
+            _finite_out = np.isfinite(
+                pd.to_numeric(data[outcome], errors="coerce").to_numpy(dtype=np.float64)
+            )
+            # Assess rectangularity on the complete-case frame for BOTH the cell
+            # count AND the units x periods denominator — the same frame the RC
+            # path estimates on (below). If a whole unit or a whole period is
+            # dropped by non-finite outcomes, the remaining sample may still be
+            # rectangular (balanced) and must stay inert, matching R's
+            # complete-case preprocessing. Using the unfiltered unit/period counts
+            # in the denominator would spuriously route such a panel to RC.
+            _cc = data.loc[_finite_out]
+            _is_unbalanced_panel = (
+                int(_cc.drop_duplicates(subset=[unit, time]).shape[0])
+                < _cc[unit].nunique() * _cc[time].nunique()
+            )
+        # Route through the RC levels estimator ONLY when the flag is set AND the
+        # panel is actually unbalanced. Inert on a balanced panel (default
+        # within-cell differencing is byte-identical). This MATCHES R: R's
+        # pre_process_did recomputes `allow_unbalanced_panel` from the observed
+        # balance and only flips `panel <- FALSE` when the panel is genuinely
+        # unbalanced (verified: R keeps panel=TRUE on balanced data under the
+        # flag), so balanced-panel inertness is the R contract, not a deviation.
+        _route_as_rc = bool(self.allow_unbalanced_panel and _is_unbalanced_panel)
+        # `_use_rc` selects the RC precompute / per-cell loop / obs-level counting
+        # for BOTH declared RC (panel=False) and RC-routing (unbalanced + flag).
+        _use_rc = (not self.panel) or _route_as_rc
+        if _route_as_rc and survey_design is not None:
+            raise NotImplementedError(
+                "allow_unbalanced_panel=True is not yet supported together with "
+                "survey_design=. The RC-on-panel path carries per-observation "
+                "weights, whereas survey designs assume per-unit weights; the "
+                "combination needs a per-unit weight resolution that is not "
+                "implemented (deferred). Use a balanced panel, drop "
+                "survey_design=, or pass panel=False for genuine repeated "
+                "cross-sections."
+            )
+        if _is_unbalanced_panel and not self.allow_unbalanced_panel:
+            warnings.warn(
+                "Unbalanced panel detected (some units are unobserved in some "
+                "periods). Each ATT(g,t) is estimated by within-cell panel "
+                "differencing on the units observed at BOTH the base period and "
+                "t — a valid but different estimand than R's repeated-cross-"
+                "section handling. Pass allow_unbalanced_panel=True to match R "
+                "`did::att_gt(allow_unbalanced_panel=TRUE)` (the DRDID "
+                "reg_did_rc levels estimator on the pooled observations).",
+                UserWarning,
+                stacklevel=2,
+            )
+        if _route_as_rc:
+            warnings.warn(
+                "allow_unbalanced_panel=True: routing the unbalanced panel "
+                "through the repeated-cross-section (RC) levels estimator to "
+                "match R `did::att_gt(allow_unbalanced_panel=TRUE)`. The RC "
+                "estimator assumes the population distribution of (Y, X, G) is "
+                "stable across periods (not data-checkable); standard errors "
+                "cluster the per-observation influence function by unit.",
+                UserWarning,
+                stacklevel=2,
+            )
+            # Complete-case analysis sample: DROP non-finite-outcome rows so that
+            # survey/PSU resolution, cohort masses, the RC precompute, AND
+            # estimation all operate on the SAME rows (matches R
+            # `pre_process_did`). The RC estimator slices the outcome arrays
+            # directly (no wide-pivot valid-mask), so an unfiltered NaN outcome
+            # would spuriously materialize its 2x2 cells as non-estimable and
+            # break the bit-exact ATT parity. Reassign `data` once, up front, so
+            # every downstream consumer sees the filtered sample.
+            if _finite_out is not None and not bool(_finite_out.all()):
+                data = data.loc[_finite_out].reset_index(drop=True)
+            # Validate panel structure BEFORE routing to the RC estimator — R's
+            # pre_process_did does the same. The RC precompute reads cohort and
+            # cluster PER OBSERVATION (no wide pivot), so a duplicate (unit,
+            # period) row, a unit whose treatment cohort changes over time, or a
+            # time-varying cluster would silently corrupt the reweighting /
+            # composition. The normal panel path catches duplicates via the wide
+            # pivot; the RC route must check explicitly. Fail closed.
+            # Column-presence guards: `unit`/`time` are guaranteed present (the
+            # unbalance detection above required them); for a missing `first_treat`
+            # / `cluster` column, fall through so the canonical required-column
+            # check below raises "Missing columns: ..." rather than a KeyError.
+            _dups = int(data.duplicated(subset=[unit, time]).sum())
+            if _dups:
+                raise ValueError(
+                    f"allow_unbalanced_panel=True requires at most one observation "
+                    f"per ({unit}, {time}); found {_dups} duplicate row(s). Aggregate "
+                    f"or de-duplicate before fitting."
+                )
+            if first_treat in data.columns:
+                # Coerce to numeric first (like the normal fit path) so coercible
+                # labels such as "3" and "3.0" for the same unit are not falsely
+                # flagged as a changing cohort.
+                _ft = pd.to_numeric(data[first_treat], errors="coerce")
+                _ft_counts = _ft.groupby(data[unit].to_numpy()).nunique()
+                if (_ft_counts > 1).any():
+                    _bad = list(_ft_counts.index[_ft_counts > 1][:5])
+                    raise ValueError(
+                        f"allow_unbalanced_panel=True requires a time-invariant treatment "
+                        f"cohort ('{first_treat}') per unit; unit(s) {_bad} have a changing "
+                        f"first_treat."
+                    )
+            if self.cluster is not None and self.cluster in data.columns:
+                _cl_counts = data.groupby(unit)[self.cluster].nunique()
+                if (_cl_counts > 1).any():
+                    _bad = list(_cl_counts.index[_cl_counts > 1][:5])
+                    raise ValueError(
+                        f"allow_unbalanced_panel=True with cluster='{self.cluster}' "
+                        f"requires a time-invariant cluster per unit; unit(s) {_bad} "
+                        f"have a changing cluster value."
+                    )
+
         if not self.panel:
             warnings.warn(
                 "panel=False uses repeated cross-section DRDID estimators "
@@ -1984,10 +2128,29 @@ class CallawaySantAnna(
 
                 _resolve_effective_cluster(resolved_survey, cluster_ids, self.cluster)
 
+        # allow_unbalanced_panel (RC-routing) with NO user cluster=: cluster the
+        # per-observation RC influence function by the ORIGINAL unit so the SE
+        # accounts for within-unit correlation — matching R's unit-level IF
+        # aggregation for allow_unbalanced_panel. Synthesize SurveyDesign(psu=unit)
+        # → the same PSU-meat aggregator + PSU multiplier bootstrap used for an
+        # explicit cluster=. When the user set cluster=X the block above already
+        # synthesized psu=X (their choice); do NOT double-cluster here.
+        if _route_as_rc and self.cluster is None and resolved_survey is None:
+            _unit_psu_design = SurveyDesign(psu=unit, weight_type="pweight")
+            (
+                resolved_survey,
+                survey_weights,
+                survey_weight_type,
+                _,
+            ) = _resolve_survey_for_fit(_unit_psu_design, data, "analytical")
+            effective_survey_design = _unit_psu_design
+
         # Validate within-unit constancy for panel survey designs (uses
         # effective_survey_design so synthesized designs are validated too).
+        # Skipped under RC-routing: the RC path is observation-level and the
+        # synthesized psu=unit design is trivially unit-constant.
         if resolved_survey is not None:
-            if self.panel:
+            if self.panel and not _route_as_rc:
                 _validate_unit_constant_survey(data, unit, effective_survey_design)
             if resolved_survey.weight_type != "pweight":
                 raise ValueError(
@@ -2039,7 +2202,10 @@ class CallawaySantAnna(
         treatment_groups = sorted([g for g in df[first_treat].unique() if g > 0])
 
         if self.panel:
-            # Panel: count unique units
+            # Panel (incl. an unbalanced panel routed as RC): count unique
+            # UNITS — the units are real even when the aggregation runs the RC
+            # estimator. Only a declared repeated cross-section (panel=False)
+            # counts observations.
             unit_info = (
                 df.groupby(unit)
                 .agg({first_treat: "first", "_never_treated": "first"})
@@ -2070,7 +2236,7 @@ class CallawaySantAnna(
         # Per-cell SEs use IF-based variance; aggregated SEs use design-based
         # variance via compute_survey_if_variance() or PSU-level bootstrap.
         # Pre-compute data structures for efficient ATT(g,t) computation
-        if self.panel:
+        if not _use_rc:
             precomputed = self._precompute_structures(
                 df,
                 outcome,
@@ -2125,7 +2291,7 @@ class CallawaySantAnna(
         _skip_info = {"missing_period": [], "empty_cell": []}
         _n_skipped_other = 0
 
-        if not self.panel:
+        if _use_rc:
             # --- Repeated cross-section path ---
             # No vectorized/Cholesky fast paths (panel-only optimizations).
             # Loop using _compute_att_gt_rc() for each (g,t).
@@ -2653,6 +2819,11 @@ class CallawaySantAnna(
             cluster_name_for_results: Optional[str] = survey_design.psu
         elif self.cluster is not None:
             cluster_name_for_results = self.cluster
+        elif _route_as_rc:
+            # RC-on-panel auto-synthesizes SurveyDesign(psu=unit); surface the
+            # effective unit-level clustering so introspection / summaries don't
+            # report cluster_name=None while n_clusters is populated.
+            cluster_name_for_results = unit
         else:
             cluster_name_for_results = None
         n_clusters_for_results: Optional[int] = (
@@ -2706,6 +2877,8 @@ class CallawaySantAnna(
             event_study_vcov=event_study_vcov,
             event_study_vcov_index=event_study_vcov_index,
             panel=self.panel,
+            allow_unbalanced_panel=self.allow_unbalanced_panel,
+            used_rc_on_unbalanced_panel=_route_as_rc,
             epv_diagnostics=epv_diagnostics if epv_diagnostics else None,
             epv_threshold=self.epv_threshold,
             pscore_fallback=self.pscore_fallback,
@@ -3544,11 +3717,42 @@ class CallawaySantAnna(
         # For RCS, the resolved survey is already per-observation
         resolved_survey_rc = resolved_survey
 
-        # Fixed cohort masses: total observations per cohort across all periods.
-        # Used as aggregation weights so that n_treated is consistent with WIF.
+        # Fixed cohort masses used as aggregation weights (R's pg = n_g / N).
+        # Count UNIQUE UNITS per cohort, not observations: for a genuine repeated
+        # cross-section each obs is a distinct unit, so unique-unit-count ==
+        # observation-count (a no-op); but for an unbalanced PANEL routed as RC
+        # (allow_unbalanced_panel), a cohort's obs-count exceeds its unit-count,
+        # and R `did::aggte` weights by the fixed UNIT cohort mass — so unique
+        # units is the R-correct weight on both paths.
         rcs_cohort_masses = {}
+        _units_per_cohort = df.groupby(first_treat)[unit].nunique()
         for g in treatment_groups:
-            rcs_cohort_masses[g] = int(np.sum(unit_cohorts == g))
+            rcs_cohort_masses[g] = int(_units_per_cohort.get(g, 0))
+
+        # Per-unit aggregation cohort-mass basis for the R pg (= n_g / N over
+        # UNITS, incl. never-treated). Consumed by _get_agg_cache (fast-path pg)
+        # and _aggregate_event_study (survey_cohort_weights) so the point
+        # estimate AND the WIF weight by fixed unit cohort mass. No-op for a true
+        # RC (each obs is a distinct unit => per-unit == per-obs); the fix for an
+        # unbalanced panel routed as RC (allow_unbalanced_panel).
+        _first_pos = df.reset_index(drop=True).drop_duplicates(subset=[unit]).index.values
+        _unit_cohort_vals = unit_cohorts[_first_pos]
+        _unit_w = (
+            survey_weights_arr[_first_pos]
+            if survey_weights_arr is not None
+            else np.ones(len(_first_pos), dtype=np.float64)
+        )
+        agg_cohort_masses = {
+            float(cv): float(np.sum(_unit_w[_unit_cohort_vals == cv]))
+            for cv in np.unique(unit_cohorts)
+        }
+        agg_total_weight = float(np.sum(_unit_w))
+        # Observations per unit, aligned to the per-observation IF index space.
+        # The WIF is a per-UNIT quantity; on a panel routed as RC each of a
+        # unit's observations carries its cohort's WIF, so the unit-clustered
+        # sum over-counts by this factor unless the per-obs WIF is divided by it
+        # (see _combined_if_fast). 1 for every obs on a true RC (no-op).
+        obs_per_unit = df.groupby(unit)[unit].transform("size").to_numpy(dtype=np.float64)
 
         return {
             "all_units": all_units,
@@ -3574,6 +3778,9 @@ class CallawaySantAnna(
                 else None
             ),
             "rcs_cohort_masses": rcs_cohort_masses,
+            "agg_cohort_masses": agg_cohort_masses,
+            "agg_total_weight": agg_total_weight,
+            "obs_per_unit": obs_per_unit,
         }
 
     def _compute_att_gt_rc(
@@ -4738,6 +4945,7 @@ class CallawaySantAnna(
             "cband": self.cband,
             "pscore_trim": self.pscore_trim,
             "panel": self.panel,
+            "allow_unbalanced_panel": self.allow_unbalanced_panel,
             "epv_threshold": self.epv_threshold,
             "pscore_fallback": self.pscore_fallback,
         }

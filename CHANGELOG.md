@@ -50,6 +50,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `UserWarning`. `leave_one_out` is recorded on `ImputationDiDResults` (and `to_dict()` / `summary()`);
   replicate-weight survey designs raise `NotImplementedError` (their variance bypasses the
   influence-function path). Default `False` preserves R `didimputation` parity.
+- **`CallawaySantAnna(allow_unbalanced_panel=True)`** — parity with R
+  `did::att_gt(allow_unbalanced_panel=TRUE)` on unbalanced panels. When set and the input panel is
+  unbalanced (some units unobserved in some periods), the pooled observations are routed through the
+  repeated-cross-section levels estimator (`DRDID::reg_did_rc`), replacing the default within-cell
+  panel differencing (a different estimand on unbalanced data), and the per-observation influence
+  function is clustered by the original unit. **ATT matches R bit-for-bit** — per-cell AND dynamic
+  aggregation (fixed unit-cohort-mass `pg` reweighting + a per-unit WIF correction); the analytical
+  SE matches up to the documented CR1 `sqrt(G/(G-1))` finite-sample factor. **Inert on balanced
+  panels** (byte-identical to the default). Independently, the default path now emits a `UserWarning`
+  on unbalanced input (previously silent) pointing to the flag. `survey_design=` with the flag raises
+  `NotImplementedError` (deferred). Verified against R `did` 2.5.1
+  (`benchmarks/data/cs_unbalanced_golden.json`).
 - **`ContinuousDiD` lowest-dose-as-control** (`control_group="lowest_dose"`, CGBS 2024 Remark 3.1) for
   settings with no untreated group (`P(D=0) = 0`): the lowest-dose group `d_L` becomes the comparison
   and the estimand is `ATT(d) − ATT(d_L)` (with `ATT(d_L) = 0` the omitted reference). It is a

@@ -562,19 +562,37 @@ Aggregations:
   adjustment, matching R's `did::aggte()`. The WIF accounts for uncertainty in estimating
   group-size aggregation weights. Group aggregation uses equal time weights (deterministic),
   so WIF is zero.
-  - **Deviation from R (unbalanced-panel event-study weighting):** within an event-study
-    (dynamic) horizon that pools MORE THAN ONE (g,t) cell, diff-diff weights each cell by its
-    per-cell aggregation weight (`agg_weight` / valid `n_treated`), whereas R `did::aggte`
-    weights by the fixed cohort probability `pg = n_g / N` (or survey mass) computed once from
-    the group column. On **balanced** panels these coincide exactly (a cell's valid count equals
-    the cohort mass), so event-study / group / simple aggregates match R to ~1e-5 -- verified,
-    including the universal zero-reference dilution case. On **unbalanced** panels a cell can
-    carry fewer valid units than the cohort mass, so a multi-cell horizon's relative weights (and
-    thus that horizon's ATT/SE) can differ from R -- e.g. on a dropped-unit panel a two-real-cell
-    horizon was diff-diff `-0.065` vs R `-0.136`. This is a **pre-existing, general** aggregation
-    convention (it predates and is independent of the universal reference cells -- it applies to
-    any multi-cell horizon, references or not) and is tracked in `TODO.md`. Single-cell horizons
-    (the majority) normalize to weight 1 and are unaffected.
+  - **Unbalanced panels — default within-cell differencing vs `allow_unbalanced_panel=True`:**
+    on an unbalanced panel (some units unobserved in some periods) the **default** path estimates
+    each ATT(g,t) by within-cell panel differencing on the units observed at BOTH the base period
+    and t, and weights a multi-cell event-study horizon by per-cell valid `n_treated`. This is a
+    valid but **different estimand** than R `did::att_gt(allow_unbalanced_panel=TRUE)`, which sets
+    `panel=FALSE` and runs the repeated-cross-section levels estimator (`DRDID::reg_did_rc`) on the
+    pooled observations, weighting by the fixed cohort probability `pg = n_g / N` over UNITS. Both
+    the cell estimator AND the weighting differ from R on unbalanced data (the estimator choice
+    dominates); on **balanced** panels they coincide exactly (each cell's valid count equals the
+    cohort mass), so the default path matches R. The default path emits a `UserWarning` on
+    unbalanced input (no-silent-failures) pointing to the flag.
+  - **`allow_unbalanced_panel=True` (RC-on-panel parity with R):** routes an unbalanced panel's
+    pooled observations through diff-diff's RC estimator (bit-exact vs `reg_did_rc`) and clusters
+    the per-observation influence function by the original unit. ATT matches R **bit-for-bit** —
+    cells AND dynamic aggregation, including the fixed unit-cohort-mass `pg` reweighting and the
+    per-unit WIF (the per-observation WIF is divided by each unit's observation count so the
+    unit-clustered sum is not over-counted). Inert on balanced panels (byte-identical to the
+    default) — matching R, whose `pre_process_did` likewise recomputes balance and keeps
+    `panel=TRUE` (differencing) on balanced input, so the flag engages RC only when the panel is
+    genuinely unbalanced. Panel structure is validated before routing (no duplicate `(unit,
+    period)` rows, time-invariant treatment cohort and cluster per unit), matching R's
+    preprocessing — fail-closed since the RC precompute reads cohort/cluster per observation.
+    `survey_design=` with the flag raises `NotImplementedError` (per-obs vs per-unit weight
+    resolution deferred). Verified vs R `did` 2.5.1 in
+    `tests/test_csdid_ported.py::TestAllowUnbalancedPanel` (golden
+    `benchmarks/data/cs_unbalanced_golden.json`).
+    - **Deviation from R:** the analytical SE equals R's up to the CR1 finite-sample factor
+      `sqrt(G/(G-1))` (G = number of units): diff-diff's cluster-robust variance applies the
+      `G/(G-1)` Bessel correction that R's `att_gt` `getSE` (`sqrt(mean(inf^2)/n)`) omits. Exact
+      factor, ~0.25% at G=200, vanishing as G → ∞ — the same convention class as the fixest
+      cluster-SE band (G2).
 - Bootstrap: Multiplier bootstrap with Rademacher, Mammen, or Webb weights. Bootstrap
   perturbs the combined influence function (standard IF + WIF) directly, not just fixed-weight
   re-aggregation. This correctly propagates weight estimation uncertainty.

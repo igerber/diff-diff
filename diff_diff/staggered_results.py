@@ -155,6 +155,15 @@ class CallawaySantAnnaResults:
     # contract.
     anticipation: int = 0
     panel: bool = True
+    # allow_unbalanced_panel routing (RC-on-panel). `allow_unbalanced_panel`
+    # records the fit-time flag; `used_rc_on_unbalanced_panel` is True ONLY when
+    # the panel was actually unbalanced and the RC (repeated-cross-section)
+    # levels estimator was used (the flag is inert on a balanced panel). When
+    # True the ATT(g,t) estimand is R's `allow_unbalanced_panel=TRUE` RC-on-panel
+    # estimand, not within-cell panel differencing — and the influence function
+    # is clustered by unit (see `cluster_name`).
+    allow_unbalanced_panel: bool = False
+    used_rc_on_unbalanced_panel: bool = False
     event_study_effects: Optional[Dict[int, Dict[str, Any]]] = field(default=None)
     group_effects: Optional[Dict[Any, Dict[str, Any]]] = field(default=None)
     influence_functions: Optional["np.ndarray"] = field(default=None, repr=False)

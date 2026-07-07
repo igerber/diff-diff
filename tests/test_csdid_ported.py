@@ -1915,3 +1915,440 @@ class TestCSDIDPositionalBasePeriod:
                 and np.isnan(ref["se"])
                 and ref["n_treated"] == 40  # cohort 7's fixed mass (40 units)
             )
+
+
+# ---------------------------------------------------------------------------
+# allow_unbalanced_panel: RC-on-panel parity with R
+# did::att_gt(allow_unbalanced_panel=TRUE)  (panel=FALSE -> DRDID::reg_did_rc)
+# ---------------------------------------------------------------------------
+
+_UNBAL_GOLDEN_PATH = Path(__file__).parents[1] / "benchmarks" / "data" / "cs_unbalanced_golden.json"
+
+
+@pytest.fixture(scope="module")
+def unbalanced_golden():
+    """Load the unbalanced-panel R golden. Skip if absent."""
+    if not _UNBAL_GOLDEN_PATH.exists():
+        pytest.skip(
+            f"Golden {_UNBAL_GOLDEN_PATH} missing — regenerate via "
+            "`Rscript benchmarks/R/generate_cs_unbalanced_golden.R`."
+        )
+    with open(_UNBAL_GOLDEN_PATH) as f:
+        return json.load(f)
+
+
+def _unbal_df(golden):
+    d = golden["data"]
+    return pd.DataFrame(
+        {
+            "unit": d["unit"],
+            "period": d["period"],
+            "first_treat": d["first_treat"],
+            "outcome": d["outcome"],
+        }
+    )
+
+
+class TestAllowUnbalancedPanel:
+    """``CallawaySantAnna(allow_unbalanced_panel=True)`` matches R
+    ``did::att_gt(allow_unbalanced_panel=TRUE)`` (which sets ``panel=FALSE`` and
+    runs ``DRDID::reg_did_rc`` on the pooled observations).
+
+    ATT is bit-exact (cells AND dynamic aggregation). The analytical SE equals
+    R's up to the CR1 ``G/(G-1)`` finite-sample factor diff-diff's cluster path
+    applies (R's ``att_gt`` getSE omits it) — a documented Deviation from R. The
+    per-observation RC influence function is clustered by the original unit so
+    the SE accounts for within-unit correlation.
+    """
+
+    def _fit(self, golden):
+        return CallawaySantAnna(
+            estimation_method="reg",
+            control_group="never_treated",
+            allow_unbalanced_panel=True,
+        ).fit(
+            _unbal_df(golden),
+            outcome="outcome",
+            unit="unit",
+            time="period",
+            first_treat="first_treat",
+            aggregate="event_study",
+        )
+
+    def test_cells_match_r(self, unbalanced_golden):
+        """Per-cell ATT bit-exact; per-cell SE == R * sqrt(G/(G-1))."""
+        with pytest.warns(UserWarning, match="repeated-cross-section|allow_unbalanced"):
+            res = self._fit(unbalanced_golden)
+        c = unbalanced_golden["cells"]
+        n_units = unbalanced_golden["meta"]["n_units"]
+        fac = np.sqrt(n_units / (n_units - 1))
+        for i in range(len(c["g"])):
+            key = (int(c["g"][i]), int(c["t"][i]))
+            v = res.group_time_effects.get(key)
+            assert v is not None and not v.get("is_reference"), f"missing cell {key}"
+            assert v["effect"] == pytest.approx(c["att"][i], abs=1e-9)
+            assert v["se"] == pytest.approx(c["se"][i] * fac, abs=1e-8)
+
+    def test_event_study_matches_r(self, unbalanced_golden):
+        """Dynamic-aggregation ATT bit-exact; SE == R * sqrt(G/(G-1)).
+
+        Exercises the unit-level pg reweighting + the unit-level WIF
+        (obs_per_unit) fix: on an unbalanced panel a multi-cell horizon would
+        otherwise weight cells by observation count, not fixed unit cohort mass.
+        """
+        with pytest.warns(UserWarning):
+            res = self._fit(unbalanced_golden)
+        es = unbalanced_golden["event_study"]
+        n_units = unbalanced_golden["meta"]["n_units"]
+        fac = np.sqrt(n_units / (n_units - 1))
+        for i, e in enumerate(es["egt"]):
+            v = res.event_study_effects.get(int(e))
+            assert v is not None, f"missing event time {e}"
+            assert v["effect"] == pytest.approx(es["att"][i], abs=1e-9)
+            assert v["se"] == pytest.approx(es["se"][i] * fac, abs=1e-8)
+
+    def test_flag_inert_on_balanced_panel(self):
+        """On a balanced panel the flag is a no-op: output byte-identical."""
+        rng = np.random.default_rng(3)
+        rows = []
+        for u in range(90):
+            g = [0, 3, 4][u % 3]
+            ufe = rng.normal()
+            for t in range(1, 6):
+                post = 1.0 if (g and t >= g) else 0.0
+                rows.append(
+                    {
+                        "unit": u,
+                        "period": t,
+                        "first_treat": g,
+                        "outcome": ufe + 0.3 * t + (1.5 * post if g else 0.0) + rng.normal(0, 0.5),
+                    }
+                )
+        bal = pd.DataFrame(rows)
+        kw = dict(
+            outcome="outcome",
+            unit="unit",
+            time="period",
+            first_treat="first_treat",
+            aggregate="event_study",
+        )
+        r0 = CallawaySantAnna(estimation_method="reg").fit(bal, **kw)
+        r1 = CallawaySantAnna(estimation_method="reg", allow_unbalanced_panel=True).fit(bal, **kw)
+        for e in r0.event_study_effects:
+            assert r1.event_study_effects[e]["effect"] == pytest.approx(
+                r0.event_study_effects[e]["effect"], abs=1e-13
+            )
+            assert r1.event_study_effects[e]["se"] == pytest.approx(
+                r0.event_study_effects[e]["se"], abs=1e-13
+            )
+
+    def test_unbalanced_default_path_warns(self, unbalanced_golden):
+        """Without the flag, an unbalanced panel warns (no-silent-failures)."""
+        with pytest.warns(UserWarning, match="Unbalanced panel detected"):
+            CallawaySantAnna(estimation_method="reg").fit(
+                _unbal_df(unbalanced_golden),
+                outcome="outcome",
+                unit="unit",
+                time="period",
+                first_treat="first_treat",
+                aggregate="event_study",
+            )
+
+    def test_user_cluster_honored(self, unbalanced_golden):
+        """A user-supplied cluster= is honored (not double-clustered by unit);
+        the ATT is unaffected (still bit-exact vs R)."""
+        df = _unbal_df(unbalanced_golden)
+        df["clus"] = (df["unit"] % 12).astype(int)
+        with pytest.warns(UserWarning):
+            res = CallawaySantAnna(
+                estimation_method="reg",
+                control_group="never_treated",
+                allow_unbalanced_panel=True,
+                cluster="clus",
+            ).fit(
+                df,
+                outcome="outcome",
+                unit="unit",
+                time="period",
+                first_treat="first_treat",
+                aggregate="event_study",
+            )
+        es = unbalanced_golden["event_study"]
+        for i, e in enumerate(es["egt"]):
+            v = res.event_study_effects.get(int(e))
+            if v is not None:
+                assert v["effect"] == pytest.approx(es["att"][i], abs=1e-9)
+
+    def test_survey_design_with_flag_raises(self, unbalanced_golden):
+        """survey_design= x allow_unbalanced_panel= is fail-closed (deferred)."""
+        from diff_diff.survey import SurveyDesign
+
+        df = _unbal_df(unbalanced_golden)
+        df["w"] = 1.0
+        with pytest.raises(NotImplementedError, match="allow_unbalanced_panel"):
+            CallawaySantAnna(
+                estimation_method="reg",
+                control_group="never_treated",
+                allow_unbalanced_panel=True,
+            ).fit(
+                df,
+                outcome="outcome",
+                unit="unit",
+                time="period",
+                first_treat="first_treat",
+                survey_design=SurveyDesign(weights="w"),
+            )
+
+    def test_simple_overall_matches_r(self, unbalanced_golden):
+        """Simple `overall_att` matches R `aggte(type="simple")` — the aggregate
+        weighted by fixed UNIT cohort mass (not observation count). This is the
+        cross-surface twin of the event-study weighting: both go through the
+        shared `fixed_cohort_agg_weights`."""
+        with pytest.warns(UserWarning):
+            res = CallawaySantAnna(
+                estimation_method="reg",
+                control_group="never_treated",
+                allow_unbalanced_panel=True,
+            ).fit(
+                _unbal_df(unbalanced_golden),
+                outcome="outcome",
+                unit="unit",
+                time="period",
+                first_treat="first_treat",
+            )
+        s = unbalanced_golden["simple"]
+        n_units = unbalanced_golden["meta"]["n_units"]
+        fac = np.sqrt(n_units / (n_units - 1))
+        assert res.overall_att == pytest.approx(s["overall_att"], abs=1e-9)
+        assert res.overall_se == pytest.approx(s["overall_se"] * fac, abs=1e-8)
+
+    def test_group_effects_match_r(self, unbalanced_golden):
+        """Group (cohort) effects match R `aggte(type="group")` att.egt / se.egt."""
+        with pytest.warns(UserWarning):
+            res = CallawaySantAnna(
+                estimation_method="reg",
+                control_group="never_treated",
+                allow_unbalanced_panel=True,
+            ).fit(
+                _unbal_df(unbalanced_golden),
+                outcome="outcome",
+                unit="unit",
+                time="period",
+                first_treat="first_treat",
+                aggregate="group",
+            )
+        g = unbalanced_golden["group"]
+        n_units = unbalanced_golden["meta"]["n_units"]
+        fac = np.sqrt(n_units / (n_units - 1))
+        assert res.group_effects is not None
+        for i, gval in enumerate(g["egt"]):
+            eff = res.group_effects.get(gval) or res.group_effects.get(float(gval))
+            assert eff is not None, f"missing group {gval}"
+            assert eff["effect"] == pytest.approx(g["att"][i], abs=1e-9)
+            assert eff["se"] == pytest.approx(g["se"][i] * fac, abs=1e-8)
+
+    def test_bootstrap_event_study_uses_unit_weights(self, unbalanced_golden):
+        """The multiplier bootstrap weights the event-study aggregation by fixed
+        UNIT cohort mass (via the same shared helper), so the bootstrap event-
+        study effects equal the (unit-weighted) analytical effects exactly — not
+        the observation-weighted values the pre-fix bootstrap path produced."""
+        kw = dict(
+            outcome="outcome",
+            unit="unit",
+            time="period",
+            first_treat="first_treat",
+            aggregate="event_study",
+        )
+        df = _unbal_df(unbalanced_golden)
+        with pytest.warns(UserWarning):
+            a = CallawaySantAnna(
+                estimation_method="reg", control_group="never_treated", allow_unbalanced_panel=True
+            ).fit(df, **kw)
+        with pytest.warns(UserWarning):
+            b = CallawaySantAnna(
+                estimation_method="reg",
+                control_group="never_treated",
+                allow_unbalanced_panel=True,
+                n_bootstrap=200,
+                seed=11,
+            ).fit(df, **kw)
+        for e in a.event_study_effects:
+            assert b.event_study_effects[e]["effect"] == pytest.approx(
+                a.event_study_effects[e]["effect"], abs=1e-12
+            )
+
+    def test_result_metadata_reflects_rc_routing(self, unbalanced_golden):
+        """The result records the flag AND whether RC-on-panel actually engaged,
+        and labels the effective unit-level clustering — so downstream can tell
+        the RC-on-panel estimand from the default within-cell one."""
+        df = _unbal_df(unbalanced_golden)
+        kw = dict(outcome="outcome", unit="unit", time="period", first_treat="first_treat")
+        # RC-on-panel actually used (unbalanced + flag)
+        with pytest.warns(UserWarning):
+            rc = CallawaySantAnna(
+                estimation_method="reg", control_group="never_treated", allow_unbalanced_panel=True
+            ).fit(df, **kw)
+        assert rc.allow_unbalanced_panel is True
+        assert rc.used_rc_on_unbalanced_panel is True
+        assert rc.cluster_name == "unit"  # effective unit clustering surfaced
+        assert rc.n_clusters == unbalanced_golden["meta"]["n_units"]
+        # Default unbalanced (no flag): not routed, flag False
+        with pytest.warns(UserWarning, match="Unbalanced panel detected"):
+            d = CallawaySantAnna(estimation_method="reg").fit(df, **kw)
+        assert d.allow_unbalanced_panel is False
+        assert d.used_rc_on_unbalanced_panel is False
+        # Balanced + flag: flag set but inert (not routed)
+        rng = np.random.default_rng(4)
+        rows = []
+        for u in range(60):
+            g = [0, 3, 4][u % 3]
+            ufe = rng.normal()
+            for t in range(1, 6):
+                post = 1.0 if (g and t >= g) else 0.0
+                rows.append(
+                    {
+                        "unit": u,
+                        "period": t,
+                        "first_treat": g,
+                        "outcome": ufe + 0.3 * t + (1.5 * post if g else 0.0) + rng.normal(0, 0.5),
+                    }
+                )
+        b = CallawaySantAnna(estimation_method="reg", allow_unbalanced_panel=True).fit(
+            pd.DataFrame(rows), **kw
+        )
+        assert b.allow_unbalanced_panel is True
+        assert b.used_rc_on_unbalanced_panel is False  # inert on balanced
+
+    def test_rejects_duplicate_unit_period(self, unbalanced_golden):
+        """allow_unbalanced_panel=True fails closed on duplicate (unit, period)
+        rows — the RC route does not pivot, so it must validate explicitly."""
+        df = _unbal_df(unbalanced_golden)
+        dup = pd.concat([df, df.iloc[[0]]], ignore_index=True)  # duplicate one row
+        with pytest.raises(ValueError, match="at most one observation per"):
+            CallawaySantAnna(
+                estimation_method="reg", control_group="never_treated", allow_unbalanced_panel=True
+            ).fit(dup, outcome="outcome", unit="unit", time="period", first_treat="first_treat")
+
+    def test_rejects_changing_first_treat(self, unbalanced_golden):
+        """allow_unbalanced_panel=True fails closed when a unit's treatment
+        cohort changes over time (would contaminate cohort composition)."""
+        df = _unbal_df(unbalanced_golden).copy()
+        # Flip one treated unit's first_treat in one period.
+        u = df[df["first_treat"] == 3]["unit"].iloc[0]
+        idx = df[(df["unit"] == u)].index[0]
+        df.loc[idx, "first_treat"] = 4
+        with pytest.raises(ValueError, match="time-invariant treatment cohort"):
+            CallawaySantAnna(
+                estimation_method="reg", control_group="never_treated", allow_unbalanced_panel=True
+            ).fit(df, outcome="outcome", unit="unit", time="period", first_treat="first_treat")
+
+    def test_rejects_time_varying_cluster(self, unbalanced_golden):
+        """allow_unbalanced_panel=True with a time-varying cluster= fails closed
+        (the RC route skips the panel unit-constant survey validator)."""
+        df = _unbal_df(unbalanced_golden).copy()
+        df["clus"] = 0
+        u = df["unit"].iloc[0]
+        df.loc[df[df["unit"] == u].index[0], "clus"] = 1  # one unit's cluster changes
+        with pytest.raises(ValueError, match="time-invariant cluster"):
+            CallawaySantAnna(
+                estimation_method="reg",
+                control_group="never_treated",
+                allow_unbalanced_panel=True,
+                cluster="clus",
+            ).fit(df, outcome="outcome", unit="unit", time="period", first_treat="first_treat")
+
+    def test_nan_outcome_triggers_rc_routing(self):
+        """A RECTANGULAR panel with a non-finite OUTCOME cell is effectively
+        unbalanced (complete-case, like R): the flag must engage RC routing, not
+        stay inert. Guards the structural-vs-complete-case detection gap."""
+        rng = np.random.default_rng(6)
+        rows = []
+        for u in range(90):
+            g = [0, 3, 4][u % 3]
+            ufe = rng.normal()
+            for t in range(1, 6):
+                post = 1.0 if (g and t >= g) else 0.0
+                rows.append(
+                    {
+                        "unit": u,
+                        "period": t,
+                        "first_treat": g,
+                        "outcome": ufe + 0.3 * t + (1.5 * post if g else 0.0) + rng.normal(0, 0.5),
+                    }
+                )
+        full = pd.DataFrame(rows)  # fully rectangular / balanced
+        df_nan = full.copy()
+        df_nan.loc[full.index[10], "outcome"] = np.nan  # one missing-outcome cell
+        df_drop = full.drop(index=full.index[10]).reset_index(drop=True)  # same, row removed
+        kw = dict(
+            outcome="outcome",
+            unit="unit",
+            time="period",
+            first_treat="first_treat",
+            aggregate="event_study",
+        )
+
+        def mk():
+            return CallawaySantAnna(
+                estimation_method="reg", control_group="never_treated", allow_unbalanced_panel=True
+            )
+
+        with pytest.warns(UserWarning, match="repeated-cross-section|allow_unbalanced"):
+            res = mk().fit(df_nan, **kw)
+        assert res.used_rc_on_unbalanced_panel is True
+        assert res.cluster_name == "unit"
+        # The RC path must ESTIMATE on the complete-case sample (drop the NaN row),
+        # not materialize the NaN cell as non-estimable: the NaN-outcome fit must
+        # equal the structurally-row-removed fit bit-for-bit (att AND se).
+        ref = mk().fit(df_drop, **kw)
+        assert res.n_obs == ref.n_obs  # NaN row dropped
+        for k, v in res.group_time_effects.items():
+            if v.get("is_reference"):
+                continue
+            assert v["effect"] == pytest.approx(ref.group_time_effects[k]["effect"], abs=1e-12)
+        for e, v in res.event_study_effects.items():
+            assert v["effect"] == pytest.approx(ref.event_study_effects[e]["effect"], abs=1e-12)
+        assert res.overall_att == pytest.approx(ref.overall_att, abs=1e-12)
+
+    def test_complete_case_rectangular_stays_inert(self):
+        """When a WHOLE unit and a WHOLE period are dropped by non-finite
+        outcomes but the remaining complete-case sample is still rectangular, the
+        flag must stay inert (balance is assessed on the complete-case frame for
+        BOTH the cell count and the units x periods denominator, matching R)."""
+        rng = np.random.default_rng(3)
+        rows = []
+        for u in range(90):
+            g = [0, 3, 4][u % 3]
+            ufe = rng.normal()
+            for t in range(1, 6):
+                post = 1.0 if (g and t >= g) else 0.0
+                rows.append(
+                    {
+                        "unit": u,
+                        "period": t,
+                        "first_treat": g,
+                        "outcome": ufe + 0.3 * t + (1.5 * post if g else 0.0) + rng.normal(0, 0.5),
+                    }
+                )
+        df = pd.DataFrame(rows)
+        df.loc[df["unit"] == 0, "outcome"] = np.nan  # a whole (never-treated) unit
+        df.loc[df["period"] == 5, "outcome"] = np.nan  # a whole period
+        # complete-case sample = 89 units x 4 periods, still rectangular -> inert.
+        res = CallawaySantAnna(estimation_method="reg", allow_unbalanced_panel=True).fit(
+            df, outcome="outcome", unit="unit", time="period", first_treat="first_treat"
+        )
+        assert res.used_rc_on_unbalanced_panel is False
+
+    def test_coercible_first_treat_not_rejected(self, unbalanced_golden):
+        """A unit with coercible-equal first_treat labels ('3' vs '3.0') is NOT
+        rejected as a changing cohort (validation coerces before comparing)."""
+        df = _unbal_df(unbalanced_golden).copy()
+        df["first_treat"] = df["first_treat"].astype(object)
+        # Represent cohort-3 rows as a mix of "3" and 3.0 for the same units.
+        mask3 = df["first_treat"].isin([3, 3.0, "3", "3.0"])
+        df.loc[mask3, "first_treat"] = ["3" if i % 2 else 3.0 for i in range(int(mask3.sum()))]
+        with pytest.warns(UserWarning):
+            res = CallawaySantAnna(
+                estimation_method="reg", control_group="never_treated", allow_unbalanced_panel=True
+            ).fit(df, outcome="outcome", unit="unit", time="period", first_treat="first_treat")
+        assert res.used_rc_on_unbalanced_panel is True  # fit succeeds, not rejected
