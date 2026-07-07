@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+- **`HeterogeneousAdoptionDiD.fit()` no longer accepts the deprecated `survey=` and
+  `weights=` kwargs** (the pre-scheduled removal for the 3.7.0 minor bump; the
+  `DeprecationWarning` shipped in a prior release with "will be removed in the next minor
+  release"). Weighting is now expressed solely through the canonical `survey_design=`,
+  matching `CallawaySantAnna` / `EfficientDiD` / `ImputationDiD` / `TwoStageDiD` (which all
+  take `survey_design=` only and compute design-based Binder (1983) Taylor-linearization
+  variance via the shared `compute_survey_if_variance`).
+  - **`survey=SurveyDesign(...)`** -> **`survey_design=SurveyDesign(...)`** (pure rename; same
+    Binder-TSL path, byte-identical output).
+  - **`fit(weights=<array>)`** -> add the weights as a column on `data` and pass
+    **`survey_design=SurveyDesign(weights='col')`**. This is a variance-family change: the old
+    per-row `weights=` array produced a CCT-2014 pweight-robust / 2SLS-sandwich SE with Normal
+    inference (`variance_formula="pweight"` / `"pweight_2sls"`); the canonical path produces
+    Binder-TSL with `t(df_survey)` inference (`variance_formula="survey_binder_tsl"` /
+    `"survey_binder_tsl_2sls"`). Point estimates are unchanged; SEs move ~0.1%+.
+  - **`fit(weights=<array>, cluster=<col>)`** (the weighted-CR1 2SLS sandwich) has no drop-in
+    equivalent - migrate to **`survey_design=SurveyDesign(weights='w', psu='cluster_col')`**
+    (Binder-TSL clustered through the PSU).
+  - **`cband` is now keyword-only** on `fit()` (it previously followed the removed positional
+    `survey`/`weights` slots; keyword-only prevents a silent positional misbind).
+  - Note: this public-kwarg removal in a *minor* bump is the pre-scheduled HAD exception
+    documented since the deprecation shipped; other pending removals (e.g. `SyntheticDiD`
+    `lambda_reg`/`zeta`) remain gated on the next major (v4.0.0). The equivalent
+    `survey=`/`weights=` kwargs on the HAD pretest helpers (`stute_test`, `qug_test`,
+    `did_had_pretest_workflow`, ...) are unchanged in this release and removed separately.
+
 ### Testing
 - **CI-locked standard-error parity for flagship and previously-unasserted paths (SE-audit
   coverage batch).** These surfaces computed SEs matching R but had no CI assertion pinning them

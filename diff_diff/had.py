@@ -82,9 +82,6 @@ from diff_diff.local_linear import (
     bias_corrected_local_linear,
 )
 from diff_diff.survey import (
-    HAD_DEPRECATION_MSG_SURVEY_KWARG,
-    HAD_DEPRECATION_MSG_WEIGHTS_KWARG_HAD_FIT,
-    HAD_DUAL_KNOB_MUTEX_MSG_DATA_IN,
     SurveyMetadata,
     compute_survey_metadata,
 )
@@ -250,10 +247,9 @@ class HeterogeneousAdoptionDiDResults:
     se : float
         Standard error on the beta-scale. For continuous designs:
 
-        - Unweighted or ``weights=<array>``: CCT-2014 weighted-robust SE
-          from Phase 1c divided by ``|den|`` (``den`` = raw or weighted
-          denominator depending on fit path).
-        - ``survey=SurveyDesign(...)``: Binder (1983) Taylor-series
+        - Unweighted: CCT-2014 robust SE from Phase 1c divided by ``|den|``
+          (``den`` = raw denominator).
+        - ``survey_design=SurveyDesign(...)``: Binder (1983) Taylor-series
           linearization of the per-unit IF (bias-corrected scale,
           aligned with ``tau_bc``) routed through
           :func:`compute_survey_if_variance` for PSU-aggregated,
@@ -316,15 +312,15 @@ class HeterogeneousAdoptionDiDResults:
     survey_metadata : SurveyMetadata or None
         Repo-standard survey metadata dataclass from
         :class:`diff_diff.survey.SurveyMetadata`. ``None`` when ``fit()``
-        was called without ``survey=`` or ``weights=``; populated on the
-        continuous-dose weighted paths via
+        was called without ``survey_design=``; populated on the weighted
+        paths via
         :func:`diff_diff.survey.compute_survey_metadata`. Exposes
         ``weight_type``, ``effective_n``, ``design_effect``,
         ``sum_weights``, ``n_strata``, ``n_psu``, ``weight_range``, and
         ``df_survey`` for downstream reporting consumers (BusinessReport,
         DiagnosticReport) that read these fields via attribute access.
-        HAD-specific inference-method info (pweight vs Binder-TSL) is
-        carried on ``inference_method`` and ``variance_formula``.
+        HAD-specific inference-method info (Binder-TSL) is carried on
+        ``inference_method`` and ``variance_formula``.
     bandwidth_diagnostics : BandwidthResult or None
         Full Phase 1b MSE-DPI selector output on the continuous paths
         (when bandwidths were auto-selected). ``None`` on the mass-point
@@ -369,16 +365,14 @@ class HeterogeneousAdoptionDiDResults:
     variance_formula: Optional[str] = None
     """HAD-specific label for the SE formula on weighted fits, populated
     on BOTH continuous and mass-point designs (Phase 4.5 A / B):
-    ``"pweight"`` (continuous, weighted-robust CCT 2014 under the
-    ``weights=`` shortcut), ``"survey_binder_tsl"`` (continuous, Binder
-    1983 TSL with PSU/strata/FPC under ``survey_design=SurveyDesign(...)``),
-    ``"pweight_2sls"`` (mass-point + ``weights=``; label applied
-    uniformly across vcov families — classical / HC1 / CR1 — on the
-    weighted 2SLS path, with the actual sandwich resolved via
-    ``vcov_type``), or ``"survey_binder_tsl_2sls"`` (mass-point, Binder
-    1983 TSL under ``survey_design=``). ``None`` on unweighted fits. Orthogonal to ``survey_metadata`` which is the
-    repo-standard :class:`diff_diff.survey.SurveyMetadata` shared with
-    downstream report/diagnostic consumers (no HAD-specific leakage)."""
+    ``"survey_binder_tsl"`` (continuous, Binder 1983 TSL with PSU/strata/FPC
+    under ``survey_design=SurveyDesign(...)``) or ``"survey_binder_tsl_2sls"``
+    (mass-point, Binder 1983 TSL under ``survey_design=``; label applied
+    uniformly across vcov families — classical / HC1 / CR1 — with the actual
+    sandwich resolved via ``vcov_type``). ``None`` on unweighted fits.
+    Orthogonal to ``survey_metadata`` which is the repo-standard
+    :class:`diff_diff.survey.SurveyMetadata` shared with downstream
+    report/diagnostic consumers (no HAD-specific leakage)."""
     effective_dose_mean: Optional[float] = None
     """Weighted denominator used by the beta-scale rescaling, populated
     on weighted fits across all designs: ``sum(w_g · D_g) / sum(w_g)``
@@ -388,8 +382,8 @@ class HeterogeneousAdoptionDiDResults:
     ``Z = 1{D > d_lower}``). On the continuous designs reduces
     bit-exactly to ``dose_mean`` / ``mean(D - d_lower)`` when weights
     are uniform or absent. ``None`` when ``fit()`` was called without
-    ``survey_design=`` / ``survey=`` / ``weights=`` (use ``dose_mean``
-    there). Exists because ``dose_mean`` is the raw sample mean of the
+    ``survey_design=`` (use ``dose_mean`` there). Exists because
+    ``dose_mean`` is the raw sample mean of the
     dose column; under weighted fits the estimator's actual denominator
     is the weighted form above, and users reconstructing the β-scale
     value by hand need the weighted one."""
@@ -504,18 +498,16 @@ class HeterogeneousAdoptionDiDResults:
           :class:`diff_diff.survey.SurveyMetadata` dataclass (object, not
           dict) carrying ``weight_type`` / ``effective_n`` /
           ``design_effect`` / ``sum_weights`` / ``weight_range`` +
-          ``n_strata`` / ``n_psu`` / ``df_survey`` (latter three
-          ``None`` on the ``weights=`` shortcut).
+          ``n_strata`` / ``n_psu`` / ``df_survey`` (populated from the
+          resolved ``survey_design=``).
         - ``variance_formula``: HAD-specific SE label, populated on BOTH
           continuous and mass-point designs (Phase 4.5 A / B):
-          ``"pweight"`` (continuous, weighted-robust CCT 2014 under
-          ``weights=``), ``"survey_binder_tsl"`` (continuous, Binder
-          1983 TSL under ``survey_design=``), ``"pweight_2sls"``
-          (mass-point + ``weights=``; label applied uniformly across
-          vcov families — classical / HC1 / CR1 — with the sandwich
-          resolved via ``vcov_type``), or ``"survey_binder_tsl_2sls"``
-          (mass-point, Binder 1983 TSL under ``survey_design=``). See
-          the field docstring above for the full contract.
+          ``"survey_binder_tsl"`` (continuous, Binder 1983 TSL under
+          ``survey_design=``) or ``"survey_binder_tsl_2sls"`` (mass-point,
+          Binder 1983 TSL under ``survey_design=``; label applied uniformly
+          across vcov families — classical / HC1 / CR1 — with the sandwich
+          resolved via ``vcov_type``). See the field docstring above for
+          the full contract.
         - ``effective_dose_mean``: weighted denominator used by the
           beta-scale rescaling - weighted ``mean(D)`` on
           ``continuous_at_zero``, weighted ``mean(D - d_lower)`` on
@@ -587,16 +579,10 @@ class HeterogeneousAdoptionDiDEventStudyResults:
         Per-horizon standard error on the beta-scale. Three regimes:
 
         - **Unweighted**: per-horizon INDEPENDENT analytical sandwich
-          (continuous: CCT-2014 weighted-robust divided by ``|den|``;
+          (continuous: CCT-2014 robust divided by ``|den|``;
           mass-point: structural-residual 2SLS sandwich via
           ``_fit_mass_point_2sls``). No cross-horizon covariance.
-        - **``weights=`` shortcut**: continuous paths still use the
-          CCT-2014 weighted-robust SE from lprobust (``bc_fit.se_robust
-          / |den|``); mass-point uses the analytical weighted 2SLS
-          pweight sandwich (HC1 / classical / CR1 depending on
-          ``vcov_type`` + ``cluster=``). No Binder-TSL composition
-          on this path — inference is Normal (``df=None``).
-        - **``survey=``**: each horizon composes Binder (1983)
+        - **``survey_design=``**: each horizon composes Binder (1983)
           Taylor-series linearization via
           :func:`compute_survey_if_variance` on the per-unit β̂-scale
           IF (continuous + mass-point both route through the same
@@ -656,15 +642,14 @@ class HeterogeneousAdoptionDiDEventStudyResults:
     survey_metadata : SurveyMetadata or None
         Repo-standard survey metadata dataclass from
         :class:`diff_diff.survey.SurveyMetadata`. ``None`` when
-        ``fit()`` was called without ``survey=`` or ``weights=``;
+        ``fit()`` was called without ``survey_design=``;
         populated on the weighted event-study path (Phase 4.5 B). See
         :class:`HeterogeneousAdoptionDiDResults.survey_metadata` for
         the attribute contract.
     variance_formula : str or None
         Per-horizon variance family (applied uniformly across horizons).
-        ``"pweight"`` / ``"pweight_2sls"`` on the ``weights=`` shortcut,
         ``"survey_binder_tsl"`` / ``"survey_binder_tsl_2sls"`` on the
-        ``survey=`` path. ``None`` on unweighted fits.
+        ``survey_design=`` path. ``None`` on unweighted fits.
     effective_dose_mean : float or None
         Weighted denominator used by the β̂-scale rescaling (continuous
         paths: weighted sample mean of ``d`` or ``d - d_lower``;
@@ -748,13 +733,10 @@ class HeterogeneousAdoptionDiDEventStudyResults:
     # on unweighted CLUSTERED fits (Phase 2b clustered band).
     variance_formula: Optional[str] = None
     """Per-horizon variance family label (applied uniformly across all
-    horizons in the fit). One of ``"pweight"`` / ``"pweight_2sls"`` (when
-    a per-row weight array was supplied, including via the deprecated
-    ``weights=`` alias; continuous / mass-point), ``"survey_binder_tsl"``
-    / ``"survey_binder_tsl_2sls"`` (when a SurveyDesign was supplied via
-    ``survey_design=`` or the deprecated ``survey=`` alias), or ``None``
-    on unweighted fits. Mirrors the static-path ``variance_formula``
-    field."""
+    horizons in the fit). One of ``"survey_binder_tsl"`` /
+    ``"survey_binder_tsl_2sls"`` (when a SurveyDesign was supplied via
+    ``survey_design=``; continuous / mass-point) or ``None`` on unweighted
+    fits. Mirrors the static-path ``variance_formula`` field."""
     effective_dose_mean: Optional[float] = None
     """Weighted denominator used by the β̂-scale rescaling. For continuous
     designs: weighted ``sum(w · d)/sum(w)`` (continuous_at_zero) or
@@ -2062,8 +2044,9 @@ def _sup_t_multiplier_bootstrap(
     """Compute sup-t simultaneous CI via PSU-level multiplier bootstrap.
 
     Reuses :func:`diff_diff.bootstrap_utils.generate_survey_multiplier_weights_batch`
-    (survey path) / :func:`generate_bootstrap_weights_batch` (weights=
-    shortcut) to draw ``n_bootstrap`` replicates of multiplier weights
+    (survey path, ``resolved_survey`` not None) / :func:`generate_bootstrap_weights_batch`
+    (unit- or cluster-level Rademacher when ``resolved_survey`` is None) to draw
+    ``n_bootstrap`` replicates of multiplier weights
     shaped ``(n_bootstrap, n_units)``; the helpers handle stratum
     centering, lonely-PSU, and FPC scaling so this function only
     composes them with the per-unit influence function.
@@ -2093,8 +2076,8 @@ def _sup_t_multiplier_bootstrap(
         Per-horizon point estimates (used to assemble the simultaneous
         band: ``att ± q · se``).
     se_per_horizon : np.ndarray, shape (n_horizons,)
-        Per-horizon analytical SE (Binder-TSL on survey path, HC1
-        sandwich on weights= shortcut).
+        Per-horizon analytical SE (Binder-TSL on the survey path, HC1
+        sandwich on the unweighted path).
     resolved_survey : Optional[ResolvedSurveyDesign]
         ``None`` → unit-level Rademacher draw via
         ``generate_bootstrap_weights_batch``. Otherwise →
@@ -2118,7 +2101,7 @@ def _sup_t_multiplier_bootstrap(
         cluster sandwich matching the analytical cluster-robust SE (no
         stratum-centering / FPC / Bessel; the continuous CCT cluster meat
         carries no ``g/(g-1)`` correction). ``resolved_survey`` must be
-        ``None`` when this is set (``cluster= + survey=`` is rejected
+        ``None`` when this is set (``cluster= + survey_design=`` is rejected
         up-front). ``None`` restores the survey / unit-level dispatch.
     cluster_if_scale : float
         Path-specific finite-sample scalar applied to the cluster-aggregated
@@ -2154,7 +2137,7 @@ def _sup_t_multiplier_bootstrap(
     # also use PSU-aggregation + stratum-demeaning + sqrt(n/(n-1))
     # scaling — not raw unit-level Rademacher draws (which skip the
     # centering and small-sample factor). The unit-level branch below is
-    # reserved for the ``weights=`` shortcut (no survey object at all).
+    # reserved for the unweighted path (no survey object at all).
     use_survey_bootstrap = resolved_survey is not None
 
     if cluster_ids is not None:
@@ -2741,11 +2724,12 @@ class HeterogeneousAdoptionDiD:
         ``continuous_near_d_lower``) paths (Phase 2a) it threads the cluster
         IDs into ``bias_corrected_local_linear`` so ``se_robust`` is the
         cluster-robust CCT-2014 nonparametric SE (``β̂``-scale
-        ``se = se_robust / |den|``). Composes with the ``weights=`` shortcut
-        (weighted cluster-robust). The cluster + ``survey_design=``
+        ``se = se_robust / |den|``). A bare ``cluster=`` gives unweighted
+        cluster-robust inference; the cluster + ``survey_design=``
         composition raises ``NotImplementedError`` (the Binder-TSL survey
-        variance would override the cluster-robust SE — route clustering
-        through ``survey_design=SurveyDesign(psu=<cluster_col>)`` instead).
+        variance would override the cluster-robust SE — for weighted
+        clustering route through
+        ``survey_design=SurveyDesign(weights='<weight_col>', psu='<cluster_col>')`` instead).
         Cluster must be constant within unit. On the event-study path
         (``aggregate="event_study"``, Phase 2b) ``cluster=`` provides
         cluster-robust per-horizon pointwise CIs (both designs) AND a
@@ -2861,8 +2845,8 @@ class HeterogeneousAdoptionDiD:
         # number of multiplier-bootstrap replicates for the sup-t band;
         # ``seed`` = reproducibility seed for the multiplier draws. Both are
         # consulted when ``aggregate="event_study"`` + ``cband=True``
-        # (default) AND either ``survey=`` / ``weights=`` (weighted/survey
-        # band, Phase 4.5 B) OR ``cluster=`` (cluster-robust band, Phase 2b
+        # (default) AND either ``survey_design=`` (weighted/survey band,
+        # Phase 4.5 B) OR ``cluster=`` (cluster-robust band, Phase 2b
         # — fires even unweighted). An unweighted, unclustered event-study
         # skips the bootstrap entirely (pre-Phase 4.5 B output preserved).
         self.n_bootstrap = n_bootstrap
@@ -2992,16 +2976,8 @@ class HeterogeneousAdoptionDiD:
         unit_col: str,
         first_treat_col: Optional[str] = None,
         aggregate: str = "overall",
-        # PR #376 R4 P1: preserve pre-PR positional-or-keyword status of
-        # `survey`, `weights`, `cband` for back-compat with positional
-        # callers. `survey_design=` is the only new addition and is
-        # keyword-only. PR #389 (Phase 4 R-parity): `trends_lin=` is
-        # likewise keyword-only (additive; no positional callers can
-        # exist for it pre-PR).
-        survey: Any = None,
-        weights: Optional[np.ndarray] = None,
-        cband: bool = True,
         *,
+        cband: bool = True,
         survey_design: Any = None,
         trends_lin: bool = False,
         covariates: Any = None,
@@ -3085,31 +3061,15 @@ class HeterogeneousAdoptionDiD:
             Survey design columns (strata / PSU / FPC) must be constant
             within unit (sampling-unit-level assignment); within-unit
             variance raises ``ValueError``. Replicate-weight designs raise
-            ``NotImplementedError``. Mutually exclusive with the deprecated
-            ``survey=`` and ``weights=`` aliases. See
+            ``NotImplementedError``. See
             ``docs/methodology/REGISTRY.md`` § HeterogeneousAdoptionDiD —
             "Note (HAD survey-design API consolidation)" for the full
             dispatch matrix.
-        survey : SurveyDesign or None
-            DEPRECATED alias of ``survey_design=``. Remains positional-or-
-            keyword for one minor cycle to preserve pre-PR call shapes;
-            will be removed in the next minor release. Prefer
-            ``survey_design=``.
-        weights : np.ndarray or None
-            DEPRECATED alias for the per-row pweight shortcut. Remains
-            positional-or-keyword for one minor cycle. Prefer adding the
-            weights as a column on ``data`` and passing
-            ``survey_design=SurveyDesign(weights='col_name')`` instead.
-            Will be removed in the next minor release. Currently
-            preserved as the analytical-HC1-sandwich shortcut (continuous:
-            CCT-2014 weighted-robust; mass-point: pweight 2SLS sandwich)
-            with the per-row → per-unit aggregation invariant intact.
-            Mutually exclusive with ``survey_design=`` and ``survey=``.
         cband : bool, default True
             Controls the multiplier-bootstrap simultaneous confidence band
             on the event-study path. When ``True`` (default) and
-            ``aggregate="event_study"`` AND either (a) ``survey_design=`` /
-            ``survey=`` / ``weights=`` is supplied (weighted/survey band,
+            ``aggregate="event_study"`` AND either (a) ``survey_design=``
+            is supplied (weighted/survey band,
             Phase 4.5 B) OR (b) ``cluster=`` is supplied (cluster-robust
             band — fires even on an unweighted fit, Phase 2b), the fit
             populates ``cband_low`` / ``cband_high`` / ``cband_crit_value``
@@ -3132,9 +3092,9 @@ class HeterogeneousAdoptionDiD:
             ``ValueError`` on ``F < 3``. The "consumed" placebo at
             event time ``e=-2`` is auto-dropped (R reduces max
             placebo lag by 1 with the same effect). Mutually
-            exclusive with survey weighting (``survey_design`` /
-            ``survey`` / ``weights``); raises ``NotImplementedError``
-            if combined. Default ``False`` preserves bit-exact
+            exclusive with survey weighting (``survey_design``);
+            raises ``NotImplementedError`` if combined. Default
+            ``False`` preserves bit-exact
             backcompat with all pre-PR fits.
         covariates : array-like or None, default None, keyword-only
             NOT YET IMPLEMENTED. Reserved for the covariate-adjusted HAD
@@ -3165,15 +3125,11 @@ class HeterogeneousAdoptionDiD:
         et al. 2026, Section 2). The event-study path does not warn: it
         *requires* never-treated units per Appendix B.2.
         """
-        # ---- aggregate / survey_design / survey / weights validation ----
+        # ---- aggregate / survey_design validation ----
         if aggregate not in _VALID_AGGREGATES:
             raise ValueError(
                 f"Invalid aggregate={aggregate!r}. Must be one of " f"{_VALID_AGGREGATES}."
             )
-        # Three-way mutex on survey_design / survey / weights (data-in pattern).
-        n_set = sum(x is not None for x in (survey_design, survey, weights))
-        if n_set > 1:
-            raise ValueError(HAD_DUAL_KNOB_MUTEX_MSG_DATA_IN)
 
         # ---- covariates= future-work trap (TODO L73) ----
         # Covariate-adjusted HAD identification (de Chaisemartin et al. 2026,
@@ -3214,45 +3170,20 @@ class HeterogeneousAdoptionDiD:
                     "the same single-effect / per-effect estimates as "
                     "the overall path."
                 )
-            if survey_design is not None or survey is not None or weights is not None:
+            if survey_design is not None:
                 raise NotImplementedError(
                     "HAD.fit(trends_lin=True) is not yet supported with "
-                    "survey weighting (`survey_design=` / `survey=` / "
-                    "`weights=`). The per-group slope estimator's "
-                    "weighted variant (weighted-OLS slope? per-PSU slope?) "
-                    "is not derived from the paper. Use trends_lin=True "
-                    "WITHOUT survey weights, or use survey weights "
-                    "WITHOUT trends_lin. Tracked in TODO.md as a follow-"
-                    "up if user demand emerges."
+                    "survey weighting (`survey_design=`). The per-group slope "
+                    "estimator's weighted variant (weighted-OLS slope? per-PSU "
+                    "slope?) is not derived from the paper. Use trends_lin=True "
+                    "WITHOUT survey weights, or use survey weights WITHOUT "
+                    "trends_lin. Tracked in TODO.md as a follow-up if user "
+                    "demand emerges."
                 )
 
-        # Soft deprecation: route legacy survey=/weights= aliases to
-        # survey_design=. The internal back-end paths (legacy weights= and
-        # survey= routing below) are unchanged; only the entry signature
-        # wraps them. The bit-exact back-compat invariant is preserved
-        # because we only rebind names, not values, and the legacy `survey`
-        # / `weights` variables are re-derived from `survey_design` for
-        # downstream consumption.
-        if survey is not None:
-            warnings.warn(HAD_DEPRECATION_MSG_SURVEY_KWARG, DeprecationWarning, stacklevel=2)
-            survey_design = survey
-        elif weights is not None:
-            warnings.warn(
-                HAD_DEPRECATION_MSG_WEIGHTS_KWARG_HAD_FIT,
-                DeprecationWarning,
-                stacklevel=2,
-            )
-            # weights= shortcut preserved as-is on the back end (the
-            # downstream `if weights is not None:` branch consumes the
-            # raw array directly via _aggregate_unit_weights). Don't
-            # rebind survey_design here — the array is not a
-            # SurveyDesign and survey_design= cannot accept arrays.
-        else:
-            # Canonical path: survey_design= may be None or a SurveyDesign
-            # instance. Map back to the internal `survey` variable name
-            # so downstream code (legacy `if survey is not None:` branch)
-            # consumes the input transparently.
-            survey = survey_design
+        # `survey_design=` is the sole public weighting entry. The fit body
+        # reads the internal `survey` name for the (possibly-None) SurveyDesign.
+        survey = survey_design
 
         # Type guard on the data-in surface (PR #376 R8 P1): HAD.fit()
         # accepts a SurveyDesign that gets resolved against `data` at fit
@@ -3294,7 +3225,6 @@ class HeterogeneousAdoptionDiD:
                 unit_col=unit_col,
                 first_treat_col=first_treat_col,
                 survey=survey,
-                weights=weights,
                 cband=cband,
                 trends_lin=trends_lin,
             )
@@ -3359,29 +3289,23 @@ class HeterogeneousAdoptionDiD:
 
         # Resolve survey/weights into per-unit weights + optional
         # ResolvedSurveyDesign (for PSU/strata/FPC composition).
-        # - `weights=<array>` → per-row array, no PSU/strata composition.
-        # - `survey=SurveyDesign(weights="col", ...)` → resolve the design
+        # - `survey_design=SurveyDesign(weights="col", ...)` → resolve the design
         #   and produce a unit-level analogue for per-unit IF composition.
         # - neither → unweighted path.
         weights_unit: Optional[np.ndarray] = None
         raw_weights_unit: Optional[np.ndarray] = None
-        resolved_survey_unit: Any = None  # ResolvedSurveyDesign (G,) when survey=
-        if weights is not None:
-            weights_unit = _aggregate_unit_weights(data, weights, unit_col)
-            # On the ``weights=`` shortcut, the passed array IS the raw
-            # pre-normalization weights — no SurveyDesign.resolve() scaling.
-            raw_weights_unit = weights_unit
-        elif survey is not None:
+        resolved_survey_unit: Any = None  # ResolvedSurveyDesign (G,) when weighted
+        if survey is not None:
             if not hasattr(survey, "weights"):
                 raise TypeError(
-                    f"survey= must be a SurveyDesign-like object with a "
+                    f"survey_design= must be a SurveyDesign-like object with a "
                     f".weights attribute; got {type(survey).__name__}. "
                     f"Construct a SurveyDesign via diff_diff.survey."
                 )
             if getattr(survey, "weights", None) is None:
                 raise NotImplementedError(
-                    "survey= without weights is not yet supported. Pass "
-                    "survey=SurveyDesign(weights='<col>', ...) with a "
+                    "survey_design= without weights is not yet supported. Pass "
+                    "survey_design=SurveyDesign(weights='<col>', ...) with a "
                     "per-row weight column."
                 )
             # HAD's weighted local-linear treats ``weights`` as sampling
@@ -3395,7 +3319,7 @@ class HeterogeneousAdoptionDiD:
             weight_type = getattr(survey, "weight_type", "pweight")
             if weight_type != "pweight":
                 raise NotImplementedError(
-                    f"survey=SurveyDesign(weight_type={weight_type!r}) is "
+                    f"survey_design=SurveyDesign(weight_type={weight_type!r}) is "
                     f"not supported on HeterogeneousAdoptionDiD's "
                     f"continuous path. Only ``weight_type='pweight'`` "
                     f"(sampling / inverse-probability weights) is "
@@ -3408,8 +3332,8 @@ class HeterogeneousAdoptionDiD:
             # below so ``compute_survey_metadata`` receives raw weights
             # (per its contract — ``sum_weights`` / ``weight_range`` are
             # raw-scale quantities; passing normalized weights would make
-            # the metadata disagree with the ``weights=`` shortcut and
-            # drift from the docstring/test contract in ``survey.py``).
+            # the metadata disagree with ``compute_survey_metadata``'s
+            # raw-scale contract in ``survey.py``).
             weights_col_name = survey.weights  # known non-None from guard above
             if weights_col_name not in data.columns:
                 raise ValueError(f"survey.weights column {weights_col_name!r} not found in data.")
@@ -3498,9 +3422,8 @@ class HeterogeneousAdoptionDiD:
                 f"'{resolved_design}' path is not yet supported: the survey path "
                 f"composes Binder-TSL variance via compute_survey_if_variance and "
                 f"would silently override the cluster-robust local-linear SE. Pass "
-                f"cluster= alone (unweighted cluster-robust), weights= + cluster= "
-                f"(weighted cluster-robust), or "
-                f"survey_design=SurveyDesign(psu=<cluster_col>) to cluster through "
+                f"cluster= alone (unweighted cluster-robust), or "
+                f"survey_design=SurveyDesign(weights='<weight_col>', psu='<cluster_col>') to cluster through "
                 f"the survey (Binder-TSL) path."
             )
         # Re-run the aggregation with cluster_col so validation (missing column /
@@ -3745,29 +3668,26 @@ class HeterogeneousAdoptionDiD:
             vcov_label: Optional[str] = "cr1" if cluster_arg is not None else None
             cluster_label: Optional[str] = cluster_arg if cluster_arg is not None else None
         elif resolved_design == "mass_point":
-            # Review R4 P1: narrow the cluster+weighted rejection. Only
-            # survey= + cluster= is a silent-mismatch case (the
+            # survey_design= + cluster= is a silent-mismatch case (the
             # Binder-TSL override would overwrite the CR1 sandwich while
-            # result metadata still advertises vcov_type='cr1'). The
-            # weights= shortcut + cluster= path just returns the
-            # weighted-CR1 sandwich from _fit_mass_point_2sls directly
-            # (no survey composition) and matches estimatr::iv_robust
-            # (se_type="stata") bit-exactly — see
+            # result metadata still advertises vcov_type='cr1'), so it is
+            # rejected below. The unweighted cluster= path returns the CR1
+            # sandwich from _fit_mass_point_2sls directly and matches
+            # estimatr::iv_robust (se_type="stata") bit-exactly — see
             # tests/test_estimatr_iv_robust_parity.py::TestEstimatrIVRobustCR1Parity.
             if cluster_arg is not None and resolved_survey_unit_full is not None:
                 raise NotImplementedError(
-                    f"cluster={cluster_arg!r} + survey= on "
+                    f"cluster={cluster_arg!r} + survey_design= on "
                     f"design='mass_point' is not yet supported: the "
                     f"survey path composes Binder-TSL variance via "
                     f"compute_survey_if_variance and would silently "
                     f"override the CR1 cluster-robust sandwich while "
                     f"result metadata still advertises "
                     f"vcov_type='cr1'. Pass cluster= alone "
-                    f"(unweighted CR1), or weights= + cluster= "
-                    f"(weighted-CR1 pweight sandwich; parity-tested vs "
-                    f"estimatr::iv_robust se_type='stata'), or "
-                    f"survey= alone (Binder-TSL). Combined cluster-"
-                    f"robust + survey inference is deferred to a "
+                    f"(unweighted CR1), or "
+                    f"survey_design=SurveyDesign(weights='<col>', psu='<cluster>') "
+                    f"to cluster through the survey (Binder-TSL) path. Combined "
+                    f"cluster-robust + survey inference is deferred to a "
                     f"follow-up PR."
                 )
             # Resolve the EFFECTIVE vcov family first (vcov_type_arg,
@@ -3786,15 +3706,15 @@ class HeterogeneousAdoptionDiD:
             # an HC1-scaled influence function (IF scale convention
             # locks compute_survey_if_variance(psi, trivial) ≈ V_HC1[1,1]
             # via the sqrt((n-1)/(n-k)) factor in _fit_mass_point_2sls).
-            # On the survey= path the analytical SE is ALWAYS overwritten
+            # On the survey path the analytical SE is ALWAYS overwritten
             # with that HC1-scale Binder-TSL composition, so effective
-            # classical + survey= would silently report an HC1-target
+            # classical + survey_design= would silently report an HC1-target
             # SE under a classical label. Reject until a
             # classical-aligned IF is derived.
             if vcov_requested == "classical" and resolved_survey_unit_full is not None:
                 raise NotImplementedError(
                     "vcov_type='classical' (resolved — either explicit or "
-                    "from the default robust=False mapping) + survey= on "
+                    "from the default robust=False mapping) + survey_design= on "
                     "design='mass_point' is not yet supported: the "
                     "survey path composes Binder-TSL variance via the "
                     "HC1-scale influence function, which targets V_HC1 "
@@ -3805,10 +3725,9 @@ class HeterogeneousAdoptionDiD:
                     "aligned IF derivation is queued for a follow-up PR."
                 )
             # Phase 4.5 B: accept weights_unit (None on unweighted fits).
-            # return_influence=True only on the survey= path because
-            # Binder-TSL composition consumes the IF; the weights=
-            # shortcut and unweighted paths use the analytical sandwich
-            # SE directly. ``psi_mp`` is per-unit IF on β̂-scale or None.
+            # return_influence=True only on the survey path because
+            # Binder-TSL composition consumes the IF; the unweighted path
+            # uses the analytical sandwich SE directly. ``psi_mp`` is per-unit IF on β̂-scale or None.
             # Fit on FULL (unfiltered) arrays so the IF aligns with the
             # full survey design (subpopulation convention: zero-weight
             # units contribute 0 to all sums; IF zero-padded back to full
@@ -3853,8 +3772,8 @@ class HeterogeneousAdoptionDiD:
         # Survey path: use t-distribution with ``df_survey = n_psu -
         # n_strata`` (or replicate-QR rank − 1) so small-PSU designs
         # don't get Normal-theory inference that overstates precision.
-        # Non-survey path (``weights=`` shortcut or unweighted): use
-        # the existing Normal-theory default.
+        # Non-survey path (unweighted): use the existing
+        # Normal-theory default.
         df_infer: Optional[int] = None
         if resolved_survey_unit is not None:
             df_infer = resolved_survey_unit.df_survey
@@ -3871,7 +3790,7 @@ class HeterogeneousAdoptionDiD:
         effective_dose_mean_value: Optional[float] = None
         if weights_unit_full is not None:
             if resolved_survey_unit_full is not None:
-                # survey= path: build metadata from the FULL
+                # survey path: build metadata from the FULL
                 # ResolvedSurveyDesign (pre-zero-weight-filter), so
                 # ``n_strata`` / ``n_psu`` / ``df_survey`` / weight sums
                 # reflect the sampling frame, not the in-domain subset.
@@ -3879,9 +3798,8 @@ class HeterogeneousAdoptionDiD:
                 # (captured before survey.resolve() rescaled pweights/
                 # aweights to mean=1) so ``sum_weights`` / ``weight_range``
                 # reflect the user-supplied scale — matching both the
-                # ``weights=`` shortcut and ``compute_survey_metadata``'s
-                # contract.
-                assert raw_weights_unit_full is not None  # set in survey= branch
+                # ``compute_survey_metadata``'s contract.
+                assert raw_weights_unit_full is not None  # set in survey branch
                 survey_metadata = compute_survey_metadata(
                     resolved_survey_unit_full, raw_weights_unit_full
                 )
@@ -3891,46 +3809,6 @@ class HeterogeneousAdoptionDiD:
                     "survey_binder_tsl_2sls"
                     if resolved_design == "mass_point"
                     else "survey_binder_tsl"
-                )
-            else:
-                # weights=<array> shortcut: construct a minimal resolved
-                # SurveyDesign with the FULL user-supplied weights
-                # (including zero-weight units) so SurveyMetadata
-                # summarizes the full sample. No strata / PSU / FPC
-                # structure — the shortcut is pweight-only by contract.
-                from diff_diff.survey import ResolvedSurveyDesign
-
-                minimal_resolved = ResolvedSurveyDesign(
-                    weights=weights_unit_full,
-                    weight_type="pweight",
-                    strata=None,
-                    psu=None,
-                    fpc=None,
-                    n_strata=1,
-                    n_psu=int(weights_unit_full.shape[0]),
-                    lonely_psu="remove",
-                    combined_weights=True,
-                    mse=False,
-                )
-                # weights_unit_full is already the raw user-supplied
-                # array (no SurveyDesign.resolve() normalization here).
-                survey_metadata = compute_survey_metadata(minimal_resolved, weights_unit_full)
-                # On the ``weights=`` shortcut, inference stays Normal
-                # (df=None in safe_inference) — no PSU / strata / FPC
-                # composition. Clear the survey-only fields that
-                # ``compute_survey_metadata`` derives from the synthetic
-                # minimal design (``n_psu = G``, ``n_strata = 1``,
-                # ``df_survey = G − 1``) so ``summary()`` / BusinessReport
-                # do not misdescribe the fit as a finite-df survey
-                # result. ``weight_type``, ``effective_n``,
-                # ``design_effect``, ``sum_weights``, and
-                # ``weight_range`` stay populated — they describe the
-                # weighted sample regardless of inference family.
-                survey_metadata.n_strata = None
-                survey_metadata.n_psu = None
-                survey_metadata.df_survey = None
-                variance_formula_label = (
-                    "pweight_2sls" if resolved_design == "mass_point" else "pweight"
                 )
             # Expose the effective weighted denominator used by the
             # beta-scale rescaling. Continuous paths use a weighted sample
@@ -4095,8 +3973,8 @@ class HeterogeneousAdoptionDiD:
                 # ``se_robust`` is the cluster-robust nonparametric SE. It also
                 # filters ``cluster_arr`` by the same positive-weight mask it
                 # uses to drop zero-weight rows, so a full-length array aligns.
-                # ``cluster=`` composes with ``weights=`` (weighted cluster-
-                # robust); the ``survey_design=`` composition is rejected
+                # A bare ``cluster=`` gives unweighted cluster-robust
+                # inference; the ``cluster=`` + ``survey_design=`` composition is rejected
                 # up-front in ``fit()`` (Binder-TSL would override se_robust).
                 cluster=cluster_arr,
             )
@@ -4159,7 +4037,6 @@ class HeterogeneousAdoptionDiD:
         unit_col: str,
         first_treat_col: Optional[str],
         survey: Any = None,
-        weights: Optional[np.ndarray] = None,
         cband: bool = True,
         trends_lin: bool = False,
     ) -> HeterogeneousAdoptionDiDEventStudyResults:
@@ -4173,30 +4050,22 @@ class HeterogeneousAdoptionDiD:
 
         Per-horizon variance regimes (matches the static-path contract):
 
-        - **``survey=``**: Binder (1983) Taylor-series linearization
+        - **``survey_design=``**: Binder (1983) Taylor-series linearization
           via :func:`compute_survey_if_variance` on the per-unit
           β̂-scale influence function (continuous + mass-point both
           route through the same helper). Inference is
           t-distribution with ``df_survey``.
-        - **``weights=`` shortcut**: analytical SE — CCT-2014
-          weighted-robust for continuous paths (``bc_fit.se_robust /
-          |den|``) and weighted 2SLS pweight sandwich for mass-point
-          (``_fit_mass_point_2sls`` HC1 / classical / CR1). Inference
-          is Normal (``df=None``).
+        - **Unweighted**: per-horizon independent analytical sandwich
+          (continuous: CCT-2014 robust ``bc_fit.se_robust / |den|``;
+          mass-point: 2SLS sandwich via ``_fit_mass_point_2sls``).
+          Inference is Normal (``df=None``).
 
         The simultaneous confidence band (when ``cband=True``) is
         constructed by a multiplier bootstrap over the stacked per-horizon
         β̂-scale IF matrix via :func:`_sup_t_multiplier_bootstrap`. On the
         weighted/survey path it draws PSU-level multipliers; when
         ``cluster=`` is set it takes the clustered branch (cluster-level
-        multipliers, raw cluster sandwich; fires even unweighted). On the
-        ``weights=`` shortcut, sup-t calibration is routed through a
-        synthetic trivial ``ResolvedSurveyDesign`` so the centered +
-        sqrt(n/(n-1))-corrected survey-aware branch fires uniformly —
-        matches the analytical HC1 variance family at the
-        compute_survey_if_variance(IF, trivial) ≈ V_HC1 invariant. When
-        ``cluster=`` is set the clustered branch fires instead (cluster-
-        level multipliers, raw cluster sandwich), even unweighted. An
+        multipliers, raw cluster sandwich; fires even unweighted). An
         unweighted, unclustered event-study skips the bootstrap (pre-Phase
         4.5 B numerical output preserved).
         """
@@ -4210,36 +4079,27 @@ class HeterogeneousAdoptionDiD:
         n_bootstrap_eff = int(self.n_bootstrap)
         seed_eff = None if self.seed is None else int(self.seed)
 
-        # ---- Survey/weights mutex + contract validation (front-door).
-        # Mirrors the static-path gates at fit(): exactly one knob
-        # (survey= xor weights=); survey= without a weights column is
-        # unsupported; non-pweight SurveyDesigns are rejected with an
-        # NotImplementedError pointing at Phase 4.5 C. ----
-        if survey is not None and weights is not None:
-            raise ValueError(
-                "Pass exactly one of survey= or weights=, not both. "
-                "For SurveyDesign-composed inference (PSU, strata, FPC, "
-                "replicate weights), use survey=. For a simple pweight-"
-                "only shortcut, use weights=; it is internally equivalent "
-                "to survey=SurveyDesign(weights=w)."
-            )
+        # ---- survey_design contract validation (front-door).
+        # Mirrors the static-path gates at fit(): survey_design= without a
+        # weights column is unsupported; non-pweight SurveyDesigns are
+        # rejected with a NotImplementedError pointing at Phase 4.5 C. ----
         if survey is not None:
             if not hasattr(survey, "weights"):
                 raise TypeError(
-                    f"survey= must be a SurveyDesign-like object with a "
+                    f"survey_design= must be a SurveyDesign-like object with a "
                     f".weights attribute; got {type(survey).__name__}. "
                     f"Construct a SurveyDesign via diff_diff.survey."
                 )
             if getattr(survey, "weights", None) is None:
                 raise NotImplementedError(
-                    "survey= without weights is not yet supported. Pass "
-                    "survey=SurveyDesign(weights='<col>', ...) with a "
+                    "survey_design= without weights is not yet supported. Pass "
+                    "survey_design=SurveyDesign(weights='<col>', ...) with a "
                     "per-row weight column."
                 )
             weight_type = getattr(survey, "weight_type", "pweight")
             if weight_type != "pweight":
                 raise NotImplementedError(
-                    f"survey=SurveyDesign(weight_type={weight_type!r}) is "
+                    f"survey_design=SurveyDesign(weight_type={weight_type!r}) is "
                     f"not yet supported on HeterogeneousAdoptionDiD. "
                     f"HAD's weighted local-linear treats weights as "
                     f"sampling (probability) weights only. Replicate "
@@ -4261,35 +4121,7 @@ class HeterogeneousAdoptionDiD:
         weights_unit: Optional[np.ndarray] = None
         raw_weights_unit: Optional[np.ndarray] = None
         resolved_survey_unit: Any = None  # ResolvedSurveyDesign (G,) or None
-        if weights is not None:
-            w_full = np.asarray(weights, dtype=np.float64).ravel()
-            if w_full.shape[0] != int(data.shape[0]):
-                raise ValueError(
-                    f"weights length ({w_full.shape[0]}) does not match "
-                    f"data rows ({int(data.shape[0])})."
-                )
-            # Public ``weights`` contract is ROW-ORDER aligned with
-            # ``data``, NOT index-label aligned, so we must translate
-            # ``data_filtered``'s surviving index LABELS back to
-            # POSITIONAL offsets via ``data.index.get_indexer`` (handles
-            # custom int, string, or MultiIndex inputs uniformly; raises
-            # on duplicate labels that would make the mapping ambiguous).
-            # Review R1 P1: using ``data_filtered.index.to_numpy()`` as
-            # positions was a silent-failure vector on non-RangeIndex
-            # inputs.
-            positional_idx = data.index.get_indexer(data_filtered.index)
-            if np.any(positional_idx < 0):
-                raise ValueError(
-                    "Cannot align weights to filtered panel: some "
-                    "data_filtered rows could not be located in the "
-                    "original data.index (possible duplicate / malformed "
-                    "index labels). Pass a DataFrame with a unique index "
-                    "or reset the index before calling fit()."
-                )
-            w_filtered = w_full[positional_idx]
-            weights_unit = _aggregate_unit_weights(data_filtered, w_filtered, unit_col)
-            raw_weights_unit = weights_unit
-        elif survey is not None:
+        if survey is not None:
             from diff_diff.survey import ResolvedSurveyDesign  # noqa: F401
 
             resolved_survey_row = survey.resolve(data_filtered)
@@ -4487,25 +4319,23 @@ class HeterogeneousAdoptionDiD:
         # the cluster-robust CCT SE (continuous, Phase 2a parity), AND into a
         # cluster-robust sup-t simultaneous band (both designs) via the
         # clustered branch of ``_sup_t_multiplier_bootstrap``. The one
-        # incompatible composition is cluster= + survey= (either design): the
+        # incompatible composition is cluster= + survey_design= (either design): the
         # survey path composes Binder-TSL variance and would silently override
         # the cluster-robust sandwich while metadata still reports the
         # cluster-robust vcov. Reject it BEFORE extracting the column (mirrors
         # the static-path guard had.py:3361) so the error is predictable even
-        # for a malformed cluster column. The former weights= + cluster= +
-        # cband=True mass-point rejection is lifted — the clustered band now
-        # reconciles the variance family (raw cluster Rademacher; mass-point
-        # sqrt(G/(G-1)) CR1 scaling).
+        # for a malformed cluster column. The clustered band reconciles the
+        # variance family (raw cluster Rademacher; mass-point sqrt(G/(G-1))
+        # CR1 scaling).
         cluster_arr: Optional[np.ndarray] = None
         if cluster_arg is not None and resolved_survey_unit_full is not None:
             raise NotImplementedError(
-                f"cluster={cluster_arg!r} + survey= on "
+                f"cluster={cluster_arg!r} + survey_design= on "
                 f"design={resolved_design!r} event-study is not supported: "
                 f"the survey path composes Binder-TSL variance per horizon "
                 f"and would silently override the cluster-robust sandwich. "
-                f"Pass cluster= alone (unweighted cluster-robust), weights= "
-                f"+ cluster= (weighted cluster-robust, pointwise + sup-t "
-                f"band), or survey_design=SurveyDesign(psu=<cluster_col>) to "
+                f"Pass cluster= alone (unweighted cluster-robust), or "
+                f"survey_design=SurveyDesign(weights='<weight_col>', psu='<cluster_col>') to "
                 f"cluster through the survey (Binder-TSL) path."
             )
         if cluster_arg is not None:
@@ -4563,36 +4393,33 @@ class HeterogeneousAdoptionDiD:
             else:
                 vcov_requested = vcov_type_arg.lower()
             # Review R3/R5 P1 (event-study arm): reject effective
-            # classical when the weighted path will compute the IF
-            # (always on survey= path; on weights= shortcut when
-            # cband=True the bootstrap divides HC1-scale perturbations
-            # by per-horizon analytical SE, so classical SE would
-            # give wrong t-stats). Matches the static-path rejection —
-            # weighted mass-point paths use the HC1-scale IF
+            # classical when the survey_design= path will compute the IF
+            # (the survey path composes Binder-TSL on the HC1-scale IF, so
+            # a classical analytical SE would give wrong t-stats). Matches
+            # the static-path rejection — weighted mass-point paths use the
+            # HC1-scale IF
             # convention uniformly.
             # When cluster= is set, the mass-point path computes the CR1
             # cluster-robust sandwich regardless of vcov_type (classical/hc1
             # are ignored), and the clustered sup-t band normalizes by that
             # CR1 SE — so there is no classical-vs-HC1 variance-family
             # mismatch to reject. Guard on ``cluster_arg is None``.
-            _uses_if_matrix = cluster_arg is None and (
-                resolved_survey_unit_full is not None or (weights_unit_full is not None and cband)
-            )
+            _uses_if_matrix = cluster_arg is None and resolved_survey_unit_full is not None
             if vcov_requested == "classical" and _uses_if_matrix:
                 raise NotImplementedError(
                     "vcov_type='classical' (resolved — either explicit "
                     "or from the default robust=False mapping) + "
-                    "weights/survey= on design='mass_point' event-study "
+                    "survey_design= on design='mass_point' event-study "
                     "is not yet supported: the per-horizon IF matrix is "
                     "HC1-scale (targets V_HC1 via "
                     "compute_survey_if_variance) and mixing it with a "
-                    "classical analytical SE — either through the "
-                    "survey Binder-TSL override or the sup-t bootstrap "
-                    "normalization — would produce an inconsistent "
-                    "variance family. Use vcov_type='hc1' (or leave "
-                    "vcov_type unset with robust=True) on the weighted "
-                    "event-study path, or pass cband=False to skip the "
-                    "bootstrap on the weights= shortcut."
+                    "classical analytical SE via the survey Binder-TSL "
+                    "override would produce an inconsistent variance "
+                    "family. cband=False does not avoid this — the survey "
+                    "path consumes the HC1-scaled IF for the analytical SE "
+                    "regardless. Use vcov_type='hc1' (or leave vcov_type "
+                    "unset with robust=True) on the survey_design= "
+                    "event-study path."
                 )
             inference_method = "analytical_2sls"
             vcov_label: Optional[str] = "cr1" if cluster_arg is not None else vcov_requested
@@ -4635,17 +4462,16 @@ class HeterogeneousAdoptionDiD:
         n_obs_arr = np.full(n_horizons, n_units, dtype=np.int64)
 
         # Two IF-consumption flags (review R6 P2): the PER-HORIZON IF is
-        # needed when the survey= path composes Binder-TSL variance (via
-        # compute_survey_if_variance inside _fit_continuous or the
+        # needed when the survey_design= path composes Binder-TSL variance
+        # (via compute_survey_if_variance inside _fit_continuous or the
         # mass-point override below); the STACKED (G, H) IF matrix is
         # needed only when the sup-t multiplier bootstrap runs
-        # (``cband=True`` on a weighted/survey OR clustered fit). Splitting
-        # them avoids
-        # allocating / filling Psi on the common opt-out path
-        # ``cband=False`` + weights= shortcut, where no IF consumer
-        # exists.
+        # (``cband=True`` on a survey_design= OR clustered fit). Splitting
+        # them avoids allocating / filling Psi on the common opt-out path
+        # (``cband=False`` on an unweighted, unclustered fit), where no IF
+        # consumer exists.
         # The clustered sup-t band consumes the stacked IF too, and (unlike
-        # the survey/weights band) fires even on the UNWEIGHTED path — so the
+        # the survey band) fires even on the UNWEIGHTED path — so the
         # stacked-IF flag also switches on when cluster= is set.
         needs_per_horizon_if = resolved_survey_unit_full is not None or (weighted_es and cband)
         needs_stacked_if_matrix = cband and (weighted_es or cluster_arg is not None)
@@ -4664,7 +4490,7 @@ class HeterogeneousAdoptionDiD:
             [] if resolved_design in ("continuous_at_zero", "continuous_near_d_lower") else None
         )
 
-        # df_survey for t-inference on survey= path (mirrors static path).
+        # df_survey for t-inference on survey path (mirrors static path).
         df_infer: Optional[int] = None
         if resolved_survey_unit_full is not None:
             df_infer = resolved_survey_unit_full.df_survey
@@ -4672,12 +4498,13 @@ class HeterogeneousAdoptionDiD:
         # Whenever the sup-t multiplier bootstrap runs (weighted/survey OR
         # clustered — see ``needs_stacked_if_matrix``), it operates on the
         # per-horizon IF matrix, so we must force the IF computation even
-        # when _fit_continuous would normally skip it (``weights=`` shortcut
-        # or unweighted clustered fit; no survey structure). Pass through
+        # when _fit_continuous would normally skip it (an unweighted
+        # clustered fit; no survey structure). Pass through
         # the actual ``resolved_survey_unit_full`` (None on those paths) so
         # the per-horizon analytical SE still matches the static-path
-        # convention (bc_fit.se_robust on shortcut/clustered; Binder-TSL on
-        # survey=). IF return is gated on `force_return_influence=True`.
+        # convention (bc_fit.se_robust on unweighted/clustered; Binder-TSL on
+        # the survey_design= path). IF return is gated on
+        # `force_return_influence=True`.
 
         # Track the Binder-TSL den for continuous paths so we can
         # reconstruct the per-unit IF (psi / den) for the sup-t bootstrap
@@ -4693,11 +4520,11 @@ class HeterogeneousAdoptionDiD:
                     weights_arr=weights_unit_full,
                     resolved_survey_unit=resolved_survey_unit_full,
                     # Force IF return only when the sup-t bootstrap
-                    # needs the stacked matrix AND the survey= gate
-                    # won't already produce it. Under survey= path,
-                    # _fit_continuous returns the IF automatically
-                    # (resolved_survey_unit_full != None); under the
-                    # weights= shortcut + cband=True, force it here;
+                    # needs the stacked matrix AND the survey_design= gate
+                    # won't already produce it. Under the survey_design=
+                    # path, _fit_continuous returns the IF automatically
+                    # (resolved_survey_unit_full != None); on an unweighted
+                    # CLUSTERED fit with cband=True, force it here;
                     # otherwise skip the O(G) IF work (review R6 P2).
                     force_return_influence=(
                         needs_stacked_if_matrix and resolved_survey_unit_full is None
@@ -4736,11 +4563,11 @@ class HeterogeneousAdoptionDiD:
                     cluster_arr,
                     vcov_requested,
                     weights=weights_unit_full,
-                    # Return IF when a consumer exists: survey= path needs it
-                    # for per-horizon Binder-TSL override; the sup-t bootstrap
-                    # (weighted OR clustered) needs it for the stacked matrix.
-                    # weights= shortcut + cband=False + unclustered skips IF
-                    # computation entirely (review R6 P2).
+                    # Return IF when a consumer exists: the survey_design=
+                    # path needs it for the per-horizon Binder-TSL override;
+                    # the sup-t bootstrap (survey OR clustered) needs it for
+                    # the stacked matrix. An unweighted, unclustered fit with
+                    # cband=False skips IF computation entirely (review R6 P2).
                     return_influence=(needs_per_horizon_if or needs_stacked_if_matrix),
                 )
                 # Survey path: override analytical sandwich SE with
@@ -4788,7 +4615,7 @@ class HeterogeneousAdoptionDiD:
             # bootstrap branch's own n_clusters, so scale and aggregation
             # share one count (a wholly-zero-weight cluster contributes 0 to
             # both yet is counted in G by both). Fires on the UNWEIGHTED path
-            # too (cluster= + survey= is rejected up-front, so no survey
+            # too (cluster= + survey_design= is rejected up-front, so no survey
             # composition). See REGISTRY "Note (HAD clustered event-study
             # sup-t band)".
             _cl_G = int(len(pd.unique(np.asarray(cluster_arr))))
@@ -4826,36 +4653,14 @@ class HeterogeneousAdoptionDiD:
                 cband_method_label = "cluster_multiplier_bootstrap"
                 cband_n_bootstrap_eff = n_bootstrap_eff
         elif weighted_es and cband and n_horizons >= 1:
-            # Review R7 P0: the per-unit influence function returned by
-            # _fit_continuous / _fit_mass_point_2sls is HC1-scaled per
-            # the PR #359 convention — compute_survey_if_variance(psi,
-            # trivial_resolved) ≈ V_HC1. Routing the weights= shortcut
-            # through the unit-level ``resolved_survey=None`` branch of
-            # _sup_t_multiplier_bootstrap would normalize against raw
-            # sum(psi²) = ((n-1)/n) · V_HC1, producing silently too-
-            # narrow simultaneous bands. Construct a synthetic trivial
-            # ResolvedSurveyDesign on the weights= shortcut so the
-            # bootstrap always fires the survey-aware branch (centered
-            # + sqrt(n/(n-1))-corrected), matching the variance family
-            # of the analytical per-horizon SE.
-            if resolved_survey_unit_full is not None:
-                resolved_for_bootstrap: Any = resolved_survey_unit_full
-            else:
-                from diff_diff.survey import ResolvedSurveyDesign
-
-                assert weights_unit_full is not None  # weighted_es invariant
-                resolved_for_bootstrap = ResolvedSurveyDesign(
-                    weights=weights_unit_full,
-                    weight_type="pweight",
-                    strata=None,
-                    psu=None,
-                    fpc=None,
-                    n_strata=1,
-                    n_psu=int(weights_unit_full.shape[0]),
-                    lonely_psu="remove",
-                    combined_weights=True,
-                    mse=False,
-                )
+            # The per-unit influence function returned by _fit_continuous
+            # / _fit_mass_point_2sls is HC1-scaled per the PR #359
+            # convention — compute_survey_if_variance(psi, resolved) ≈
+            # V_HC1. The sup-t multiplier bootstrap fires the survey-aware
+            # branch on the resolved survey design (centered +
+            # sqrt(n/(n-1))-corrected), matching the variance family of the
+            # analytical per-horizon Binder-TSL SE.
+            resolved_for_bootstrap: Any = resolved_survey_unit_full
             q, cband_low_arr, cband_high_arr, _n_valid = _sup_t_multiplier_bootstrap(
                 influence_matrix=Psi,
                 att_per_horizon=att_arr,
@@ -4884,28 +4689,6 @@ class HeterogeneousAdoptionDiD:
                     "survey_binder_tsl_2sls"
                     if resolved_design == "mass_point"
                     else "survey_binder_tsl"
-                )
-            else:
-                from diff_diff.survey import ResolvedSurveyDesign
-
-                minimal_resolved = ResolvedSurveyDesign(
-                    weights=weights_unit_full,
-                    weight_type="pweight",
-                    strata=None,
-                    psu=None,
-                    fpc=None,
-                    n_strata=1,
-                    n_psu=int(weights_unit_full.shape[0]),
-                    lonely_psu="remove",
-                    combined_weights=True,
-                    mse=False,
-                )
-                survey_metadata = compute_survey_metadata(minimal_resolved, weights_unit_full)
-                survey_metadata.n_strata = None
-                survey_metadata.n_psu = None
-                survey_metadata.df_survey = None
-                variance_formula_label = (
-                    "pweight_2sls" if resolved_design == "mass_point" else "pweight"
                 )
             if resolved_design == "continuous_at_zero":
                 effective_dose_mean_value = float(np.average(d_arr_full, weights=weights_unit_full))

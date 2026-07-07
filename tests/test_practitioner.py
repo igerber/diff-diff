@@ -905,20 +905,23 @@ class TestHADDispatch:
 
         doc = HeterogeneousAdoptionDiDResults.to_dict.__doc__ or ""
         for label in (
-            "pweight",
             "survey_binder_tsl",
-            "pweight_2sls",
             "survey_binder_tsl_2sls",
         ):
             assert label in doc, (
                 f"HeterogeneousAdoptionDiDResults.to_dict() docstring "
                 f"must enumerate the {label!r} variance_formula label - "
-                f"weighted mass-point fits populate pweight_2sls / "
-                f"survey_binder_tsl_2sls per had.py:3585-3629. The "
-                f"to_dict() docstring is a public source-of-truth "
-                f"surface and must match the field docstrings + "
-                f"llms-full.txt HAD section."
+                f"weighted mass-point fits populate survey_binder_tsl_2sls "
+                f"per had.py. The to_dict() docstring is a public "
+                f"source-of-truth surface and must match the field "
+                f"docstrings + llms-full.txt HAD section."
             )
+        # The pweight / pweight_2sls labels were removed with the weights=
+        # kwarg in 3.7.0 and must not reappear.
+        assert "pweight" not in doc, (
+            "HeterogeneousAdoptionDiDResults.to_dict() docstring must not "
+            "mention the removed pweight labels after the 3.7.0 consolidation."
+        )
         # effective_dose_mean: must mention mass-point Wald-IV semantics.
         assert "mass_point" in doc or "mass-point" in doc, (
             "HeterogeneousAdoptionDiDResults.to_dict() docstring must "
@@ -954,17 +957,17 @@ class TestHADDispatch:
         # Easier: read the class source via inspect.getsource() and check
         # the field-docstring blocks we care about.
         src = inspect.getsource(HeterogeneousAdoptionDiDResults)
-        # variance_formula docstring must enumerate all 4 labels.
-        assert "pweight_2sls" in src, (
-            "HeterogeneousAdoptionDiDResults.variance_formula docstring "
-            "must mention `pweight_2sls` (weighted mass-point HC1/CR1 "
-            "label per had.py:3585-3629). Otherwise the dataclass "
-            "docstring contradicts llms-full.txt and the actual "
-            "implementation."
-        )
+        # variance_formula docstring must enumerate the 2 Binder-TSL labels
+        # (the pweight / pweight_2sls labels were removed with the weights=
+        # kwarg in the 3.7.0 consolidation).
         assert "survey_binder_tsl_2sls" in src, (
             "HeterogeneousAdoptionDiDResults.variance_formula docstring "
             "must mention `survey_binder_tsl_2sls` (weighted mass-point "
+            "Binder-TSL label)."
+        )
+        assert "survey_binder_tsl" in src, (
+            "HeterogeneousAdoptionDiDResults.variance_formula docstring "
+            "must mention `survey_binder_tsl` (weighted continuous "
             "Binder-TSL label)."
         )
         # effective_dose_mean docstring must mention mass-point Wald-IV.

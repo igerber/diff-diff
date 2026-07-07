@@ -805,9 +805,11 @@ _make_trivial_resolved = make_pweight_design
 
 
 # Three-way mutex error messages for `survey_design=` / `survey=` / `weights=`
-# kwargs across the 8 HAD surfaces (HeterogeneousAdoptionDiD.fit +
-# did_had_pretest_workflow + 5 pretest helpers + qug_test). The migration
-# target text differs between data-in surfaces (which can resolve
+# kwargs across the 7 HAD pretest helper surfaces (did_had_pretest_workflow +
+# 5 pretest helpers + qug_test). `HeterogeneousAdoptionDiD.fit` no longer uses
+# these — its `survey=`/`weights=` kwargs were removed in 3.7.0 (passing them
+# raises `TypeError`); `survey_design=` is its sole weighting entry. The
+# migration target text differs between data-in surfaces (which can resolve
 # ``SurveyDesign(weights="col_name")`` against ``data``) and array-in
 # surfaces (which take pre-resolved ``ResolvedSurveyDesign`` and use
 # ``make_pweight_design(arr)`` for the pweight-only convenience). Defined
@@ -835,28 +837,10 @@ HAD_DEPRECATION_MSG_WEIGHTS_KWARG_DATA_IN = (
     "`data` and pass `survey_design=SurveyDesign(weights='col_name')` "
     "instead. Will be removed in the next minor release."
 )
-# PR #376 R11 P3: HAD.fit-specific weights= deprecation message — the
-# generic data-in suggestion above (use `survey_design=SurveyDesign(...)`)
-# is the long-term API target, but on `HeterogeneousAdoptionDiD.fit` the
-# two paths currently produce different SE families: the deprecated
-# `weights=np.ndarray` shortcut yields `variance_formula="pweight"` /
-# `"pweight_2sls"` (CCT-2014 weighted-robust / 2SLS pweight-sandwich)
-# while `survey_design=SurveyDesign(...)` yields `"survey_binder_tsl"` /
-# `"survey_binder_tsl_2sls"`. The next-minor cleanup (TODO row 102) will
-# unify the two; until then, document the SE-family caveat explicitly so
-# users know what changes when they migrate.
-HAD_DEPRECATION_MSG_WEIGHTS_KWARG_HAD_FIT = (
-    "`weights=np.ndarray` is deprecated on HeterogeneousAdoptionDiD.fit; "
-    "the long-term API is to add the weights as a column on `data` and "
-    "pass `survey_design=SurveyDesign(weights='col_name')`. Will be "
-    "removed in the next minor release. NOTE: in the current release the "
-    "two paths produce different SE families on this surface — the "
-    "`weights=` shortcut keeps the analytical CCT-2014 / 2SLS pweight-"
-    "sandwich (`variance_formula='pweight'` or `'pweight_2sls'`), while "
-    "`survey_design=SurveyDesign(...)` composes Binder-TSL "
-    "(`'survey_binder_tsl'` or `'survey_binder_tsl_2sls'`). The "
-    "long-term unification is tracked for the next minor release."
-)
+# NOTE: the HAD.fit-specific `weights=` deprecation message was removed in
+# 3.7.0 when `HeterogeneousAdoptionDiD.fit(weights=)` was dropped (weighting
+# consolidated onto `survey_design=` / Binder-TSL). The array-in and data-in
+# pretest-helper deprecation messages above remain until their own removal.
 HAD_DEPRECATION_MSG_WEIGHTS_KWARG_ARRAY_IN = (
     "`weights=np.ndarray` is deprecated on array-in pretest helpers; use "
     "`survey_design=make_pweight_design(weights)` instead "

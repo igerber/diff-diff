@@ -5421,24 +5421,6 @@ class TestHADFitTrendsLin:
                 survey_design=SurveyDesign(weights="w"),
             )
 
-    def test_fit_with_weights_alias_and_trends_lin_raises(self):
-        from diff_diff import HeterogeneousAdoptionDiD
-
-        df = self._panel(rng_seed=26)
-        with pytest.raises(NotImplementedError, match="trends_lin=True.*survey"):
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore", DeprecationWarning)
-                HeterogeneousAdoptionDiD().fit(
-                    df,
-                    outcome_col="y",
-                    dose_col="d",
-                    time_col="time",
-                    unit_col="unit",
-                    aggregate="event_study",
-                    trends_lin=True,
-                    weights=np.ones(len(df)),
-                )
-
     def test_fit_idempotence_with_trends_lin(self):
         """Repeat-fit with the same estimator + trends_lin=True yields
         identical numbers (per feedback_fit_does_not_mutate_config)."""

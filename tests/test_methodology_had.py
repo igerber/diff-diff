@@ -67,6 +67,7 @@ from diff_diff import (
     HeterogeneousAdoptionDiD,
     HeterogeneousAdoptionDiDEventStudyResults,
     HeterogeneousAdoptionDiDResults,
+    SurveyDesign,
     joint_homogeneity_test,
     joint_pretrends_test,
     qug_test,
@@ -1041,7 +1042,7 @@ class TestHADDeviations:
         """
         rng = np.random.default_rng(_BASE_SEED_DEVIATIONS + 1)
         panel = self._make_event_study_panel(rng, G=200)
-        weights = np.ones(len(panel))  # uniform pweight (equivalent to unweighted)
+        panel = panel.assign(w=np.ones(len(panel)))  # uniform pweight (equivalent to unweighted)
         est = HeterogeneousAdoptionDiD(design="auto", n_bootstrap=99, seed=42)
         with warnings.catch_warnings():
             warnings.filterwarnings("ignore", category=UserWarning)
@@ -1053,7 +1054,7 @@ class TestHADDeviations:
                 time_col="period",
                 unit_col="unit",
                 aggregate="event_study",
-                weights=weights,
+                survey_design=SurveyDesign(weights="w"),
                 cband=False,
             )
         assert isinstance(result, HeterogeneousAdoptionDiDEventStudyResults)
@@ -1066,7 +1067,7 @@ class TestHADDeviations:
         """``aggregate="overall"`` never invokes sup-t bootstrap."""
         rng = np.random.default_rng(_BASE_SEED_DEVIATIONS + 2)
         panel = _make_two_period_panel(rng, G=300, dose_dist="uniform_0_1", was_true=0.3, sigma=0.1)
-        weights = np.ones(len(panel))
+        panel = panel.assign(w=np.ones(len(panel)))
         # Patch the bootstrap helper; should NOT be called on overall path.
         with patch("diff_diff.had._sup_t_multiplier_bootstrap") as mock_boot:
             est = HeterogeneousAdoptionDiD(design="auto")
@@ -1080,7 +1081,7 @@ class TestHADDeviations:
                     time_col="period",
                     unit_col="unit",
                     aggregate="overall",
-                    weights=weights,
+                    survey_design=SurveyDesign(weights="w"),
                     cband=True,  # request cband on overall — should be ignored
                 )
             assert mock_boot.call_count == 0

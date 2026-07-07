@@ -403,6 +403,16 @@ class TestLLMsFullHADCoverage:
                 f"document the actual HeterogeneousAdoptionDiD.fit "
                 f"signature."
             )
+        # 3.7.0: survey= / weights= were removed from HAD.fit(); the guide
+        # signature must not re-introduce them (they are no longer real
+        # parameters, so an agent copying them would hit a TypeError). The
+        # `survey:` / `weights:` forms do not collide with `survey_design:`.
+        for removed in ("survey:", "weights:"):
+            assert removed not in fit_block, (
+                f"HAD fit() guide block must not document the removed "
+                f"{removed!r} parameter (dropped in 3.7.0; survey_design= "
+                f"is the sole weighting entry)."
+            )
 
     def test_llms_full_paper_citation(self):
         # Lead-author "D'Haultfœuille" appears in the HAD section.
@@ -475,13 +485,20 @@ class TestLLMsFullHADCoverage:
             "(per had.py:3495-3507). Without this caveat the documented "
             "weighted fit example can raise NotImplementedError."
         )
+        # 3.7.0: the mass-point guidance must not reference the removed
+        # weights= shortcut (fit(weights=<array>) no longer exists).
+        assert "weights=` shortcut" not in had_text, (
+            "HAD section must not describe the removed `weights=` shortcut "
+            "(dropped in 3.7.0); the sole weighting entry is survey_design=."
+        )
 
     def test_llms_full_had_variance_formula_describes_all_designs(self):
-        # Per diff_diff/had.py:3585-3629, weighted mass-point fits populate
-        # variance_formula in {"pweight_2sls", "survey_binder_tsl_2sls"} and
-        # weighted continuous fits in {"pweight", "survey_binder_tsl"}. The
-        # documented description must cover ALL four labels (not just the
-        # two continuous ones) so agents reading the guide on a weighted
+        # After the 3.7.0 survey_design= consolidation, HAD.fit() emits only
+        # the Binder-TSL labels: weighted continuous fits populate
+        # "survey_binder_tsl" and weighted mass-point fits
+        # "survey_binder_tsl_2sls" (the pweight / pweight_2sls labels were
+        # removed with the weights= kwarg). The documented description must
+        # cover BOTH survey labels so agents reading the guide on a weighted
         # mass-point fit do not misread the available inference metadata.
         text = get_llm_guide("full")
         sp_start = text.index("### HeterogeneousAdoptionDiDResults")
@@ -491,17 +508,21 @@ class TestLLMsFullHADCoverage:
         for line in sp_block.splitlines():
             if line.startswith("| `variance_formula`"):
                 for label in (
-                    "pweight",
                     "survey_binder_tsl",
-                    "pweight_2sls",
                     "survey_binder_tsl_2sls",
                 ):
                     assert label in line, (
                         f"variance_formula row must enumerate the {label!r} "
                         f"label - weighted mass-point fits populate "
-                        f"pweight_2sls / survey_binder_tsl_2sls per "
-                        f"had.py:3585-3629. Line: {line!r}"
+                        f"survey_binder_tsl_2sls per had.py. Line: {line!r}"
                     )
+                # The pweight / pweight_2sls labels were removed with the
+                # weights= kwarg in 3.7.0 and must not reappear.
+                assert "pweight" not in line, (
+                    f"variance_formula row must not mention the removed "
+                    f"pweight labels after the 3.7.0 consolidation. "
+                    f"Line: {line!r}"
+                )
                 break
         else:
             pytest.fail("variance_formula row not found in HAD results table")
@@ -521,13 +542,14 @@ class TestLLMsFullHADCoverage:
     def test_llms_full_had_event_study_mirrors_weighted_metadata_semantics(self):
         # R9 P1 (Documentation/Tests): the event-study results table at
         # ### HeterogeneousAdoptionDiDEventStudyResults must enumerate the
-        # SAME four variance_formula labels and the SAME mass-point /
-        # Wald-IV semantics for effective_dose_mean as the single-period
-        # table; the event-study fit path populates these fields with the
-        # same labels (had.py:639-648 for variance_formula,
-        # had.py:721-734 for effective_dose_mean). Without parallel
-        # coverage, agents reading the guide on an event-study fit
-        # cannot identify the inference family.
+        # SAME variance_formula labels and the SAME mass-point / Wald-IV
+        # semantics for effective_dose_mean as the single-period table; the
+        # event-study fit path populates these fields with the same labels.
+        # After the 3.7.0 survey_design= consolidation those are the two
+        # Binder-TSL labels (the pweight / pweight_2sls labels were removed
+        # with the weights= kwarg). Without parallel coverage, agents
+        # reading the guide on an event-study fit cannot identify the
+        # inference family.
         text = get_llm_guide("full")
         es_start = text.index("### HeterogeneousAdoptionDiDEventStudyResults")
         # End at the next top-level result section (### TROPResults is the
@@ -537,17 +559,21 @@ class TestLLMsFullHADCoverage:
         for line in es_block.splitlines():
             if line.startswith("| `variance_formula`"):
                 for label in (
-                    "pweight",
                     "survey_binder_tsl",
-                    "pweight_2sls",
                     "survey_binder_tsl_2sls",
                 ):
                     assert label in line, (
                         f"event-study variance_formula row must enumerate "
                         f"{label!r} (event-study path applies the same "
-                        f"label uniformly across horizons per had.py:639-648). "
-                        f"Line: {line!r}"
+                        f"label uniformly across horizons). Line: {line!r}"
                     )
+                # The pweight / pweight_2sls labels were removed with the
+                # weights= kwarg in 3.7.0 and must not reappear.
+                assert "pweight" not in line, (
+                    f"event-study variance_formula row must not mention the "
+                    f"removed pweight labels after the 3.7.0 consolidation. "
+                    f"Line: {line!r}"
+                )
                 break
         else:
             pytest.fail(

@@ -607,10 +607,10 @@ SE path is not used here).
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 **Problem:** Calling ``HeterogeneousAdoptionDiD.fit(..., vcov_type="classical")``
-under ``survey_design=SurveyDesign(...)`` (or under the deprecated ``survey=``
-alias) raises ``NotImplementedError`` on the mass-point path. The same
-``NotImplementedError`` fires on the deprecated ``weights=`` shortcut +
-``aggregate="event_study"`` + ``cband=True``.
+under ``survey_design=SurveyDesign(...)`` raises ``NotImplementedError`` on the
+mass-point path (both the static and the event-study survey paths; the event-study
+rejection fires regardless of ``cband`` because the Binder-TSL analytical SE
+consumes the HC1-scaled influence function either way).
 
 **Cause:** The per-unit 2SLS influence function returned by the mass-point fit
 is HC1-scaled so that ``compute_survey_if_variance`` and the sup-t bootstrap

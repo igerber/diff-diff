@@ -1,8 +1,12 @@
-"""Tests for HAD survey_design= consolidation + soft deprecation cycle.
+"""Tests for HAD survey_design= consolidation + deprecation cycle.
 
-Covers all 8 HAD surfaces (HAD.fit + did_had_pretest_workflow + 4 array-in
-pretests + 2 data-in joint wrappers) per the consolidation plan
-(`whimsical-brewing-liskov.md`). Each surface gets:
+As of 3.7.0, ``HeterogeneousAdoptionDiD.fit`` no longer accepts ``survey=`` /
+``weights=`` (they raise ``TypeError``; ``survey_design=`` is the sole weighting
+entry and ``cband`` is keyword-only). The 7 pretest helpers (did_had_pretest_workflow
++ 4 array-in pretests + 2 data-in joint wrappers) still accept the deprecated
+``survey=`` / ``weights=`` aliases pending a follow-up removal.
+
+Each pretest-helper surface gets:
 
 1. survey_design= positive smoke (new kwarg accepted, finite output).
 2. weights= deprecation warning (DeprecationWarning emitted; back-compat
@@ -12,6 +16,9 @@ pretests + 2 data-in joint wrappers) per the consolidation plan
 4. Numerical parity legacy ≡ new at atol=0 (skipped on qug_test, which
    raises NotImplementedError on all paths).
 5. Three-way mutex ValueError (any 2-of-3 combo).
+
+The ``TestHADFitDeprecation`` class instead pins the fit()-surface removal
+(``survey=`` / ``weights=`` → ``TypeError``; ``cband`` keyword-only).
 
 Plus surface-spanning tests:
 - make_pweight_design importable from diff_diff top-level.
@@ -803,33 +810,32 @@ class TestHADFitDeprecation:
         r = est.fit(df, "y", "d", "time", "unit", survey_design=SurveyDesign(weights="w"))
         assert np.isfinite(r.att)
 
-    def test_weights_emits_deprecation_warning(self, two_period_panel):
+    def test_weights_kwarg_removed(self, two_period_panel):
+        """`weights=` was removed on HAD.fit() in 3.7.0 (survey_design= only)."""
         df = two_period_panel
         n = len(df)
         est = HeterogeneousAdoptionDiD(design="continuous_at_zero")
-        with pytest.warns(DeprecationWarning, match="weights=.*deprecated"):
+        with pytest.raises(TypeError, match="unexpected keyword argument 'weights'"):
             est.fit(df, "y", "d", "time", "unit", weights=np.ones(n))
 
-    def test_survey_emits_deprecation_warning(self, two_period_panel):
+    def test_survey_kwarg_removed(self, two_period_panel):
+        """`survey=` was removed on HAD.fit() in 3.7.0 (use survey_design=)."""
         df = two_period_panel
         est = HeterogeneousAdoptionDiD(design="continuous_at_zero")
-        with pytest.warns(DeprecationWarning, match="survey=.*deprecated"):
+        with pytest.raises(TypeError, match="unexpected keyword argument 'survey'"):
             est.fit(df, "y", "d", "time", "unit", survey=SurveyDesign(weights="w"))
 
-    def test_three_way_mutex_design_plus_weights(self, two_period_panel):
+    def test_cband_is_keyword_only(self, two_period_panel):
+        """`cband` became keyword-only in 3.7.0 (it followed the removed
+        positional survey/weights slots)."""
         df = two_period_panel
-        n = len(df)
         est = HeterogeneousAdoptionDiD(design="continuous_at_zero")
-        with pytest.raises(ValueError, match="at most one of"):
-            est.fit(
-                df,
-                "y",
-                "d",
-                "time",
-                "unit",
-                survey_design=SurveyDesign(weights="w"),
-                weights=np.ones(n),
-            )
+        with pytest.raises(TypeError):
+            # positional through aggregate, then a positional cband -- now
+            # keyword-only, so the 8th positional argument is rejected.
+            est.fit(df, "y", "d", "time", "unit", None, "overall", True)
+        r = est.fit(df, "y", "d", "time", "unit", cband=True)
+        assert np.isfinite(r.att)
 
     def test_fit_rejects_pre_resolved_design_overall(self, two_period_panel):
         """PR #376 R8 P1: HAD.fit() data-in surface must reject a
@@ -865,70 +871,6 @@ class TestHADFitDeprecation:
                 aggregate="event_study",
                 survey_design=make_pweight_design(np.ones(200)),
             )
-
-    def test_fit_rejects_pre_resolved_design_via_legacy_alias_overall(self, two_period_panel):
-        """PR #376 R8 P1: deprecated `survey=ResolvedSurveyDesign` (alias)
-        also raises TypeError after the alias rebinding."""
-        df = two_period_panel
-        n = len(df)
-        est = HeterogeneousAdoptionDiD(design="continuous_at_zero")
-        with pytest.raises(TypeError, match=r"`survey_design=` accepts a SurveyDesign"):
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore", DeprecationWarning)
-                est.fit(
-                    df,
-                    "y",
-                    "d",
-                    "time",
-                    "unit",
-                    survey=make_pweight_design(np.ones(n // 2)),
-                )
-
-    def test_fit_rejects_pre_resolved_design_via_legacy_alias_event_study(
-        self, event_study_continuous_panel
-    ):
-        """PR #376 R8 P1: deprecated `survey=ResolvedSurveyDesign` (alias)
-        on event-study path also raises TypeError."""
-        df = event_study_continuous_panel
-        est = HeterogeneousAdoptionDiD(design="continuous_at_zero", n_bootstrap=99, seed=0)
-        with pytest.raises(TypeError, match=r"`survey_design=` accepts a SurveyDesign"):
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore", DeprecationWarning)
-                est.fit(
-                    df,
-                    "y",
-                    "d",
-                    "time",
-                    "unit",
-                    aggregate="event_study",
-                    survey=make_pweight_design(np.ones(200)),
-                )
-
-    def test_legacy_positional_call_back_compat(self, two_period_panel):
-        """PR #376 R4 P1: pre-PR positional call shape for `survey`,
-        `weights`, `cband` MUST still work (the consolidation is additive,
-        not breaking). Tests the full positional sequence:
-        `fit(data, outcome, dose, time, unit, first_treat, aggregate,
-        survey, weights, cband)`."""
-        df = two_period_panel
-        est = HeterogeneousAdoptionDiD(design="continuous_at_zero")
-        # Pre-PR positional order: ..., first_treat_col, aggregate, survey,
-        # weights, cband. None of these should be flagged as keyword-only.
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", DeprecationWarning)
-            r = est.fit(
-                df,
-                "y",
-                "d",
-                "time",
-                "unit",
-                None,  # first_treat_col
-                "overall",  # aggregate
-                SurveyDesign(weights="w"),  # survey (positional)
-                None,  # weights (positional)
-                True,  # cband (positional)
-            )
-        assert np.isfinite(r.att)
 
 
 class TestDidHadPretestWorkflowDeprecation:
@@ -1149,23 +1091,6 @@ class TestHADFitMassPointSurveyDesign:
         assert np.isfinite(r.att)
         assert np.isfinite(r.se)
 
-    def test_legacy_alias_parity_weights(self, mass_point_panel):
-        """weights=arr (deprecated) ≡ survey_design=SurveyDesign(weights='w')
-        produce identical point estimate on mass_point overall path. SE differs
-        by variance family (weights= → HC1 sandwich; survey_design= →
-        Binder-TSL on HC1-scale IF), so we assert att-only parity."""
-        df = mass_point_panel
-        n = len(df)
-        est = HeterogeneousAdoptionDiD(design="mass_point", vcov_type="hc1")
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", DeprecationWarning)
-            warnings.simplefilter("ignore", UserWarning)
-            r_legacy = est.fit(df, "y", "d", "time", "unit", weights=np.ones(n))
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", UserWarning)
-            r_new = est.fit(df, "y", "d", "time", "unit", survey_design=SurveyDesign(weights="w"))
-        np.testing.assert_allclose(r_legacy.att, r_new.att, atol=1e-10, rtol=1e-10)
-
 
 class TestHADFitEventStudySurveyDesign:
     """PR #376 R2 P1: cover aggregate='event_study' + cband=True + survey_design=."""
@@ -1188,22 +1113,6 @@ class TestHADFitEventStudySurveyDesign:
         assert np.all(np.isfinite(r.att))
         assert r.cband_low is not None
         assert r.cband_high is not None
-
-    def test_legacy_alias_parity_survey(self, event_study_continuous_panel):
-        """survey=SurveyDesign(...) (deprecated) ≡ survey_design=SurveyDesign(...)
-        on event-study path."""
-        df = event_study_continuous_panel
-        sd = SurveyDesign(weights="w")
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", DeprecationWarning)
-            r_legacy = HeterogeneousAdoptionDiD(
-                design="continuous_at_zero", n_bootstrap=99, seed=0
-            ).fit(df, "y", "d", "time", "unit", aggregate="event_study", survey=sd, cband=True)
-        r_new = HeterogeneousAdoptionDiD(design="continuous_at_zero", n_bootstrap=99, seed=0).fit(
-            df, "y", "d", "time", "unit", aggregate="event_study", survey_design=sd, cband=True
-        )
-        np.testing.assert_array_equal(r_legacy.att, r_new.att)
-        np.testing.assert_array_equal(r_legacy.se, r_new.se)
 
 
 class TestDidHadPretestWorkflowEventStudySurveyDesign:

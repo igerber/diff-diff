@@ -95,6 +95,7 @@ class TestWeightedMCConsistency:
         This is the baseline regression lock — if this fails, the
         estimator itself is broken before any weighting question."""
         from diff_diff.had import HeterogeneousAdoptionDiD
+        from diff_diff.survey import SurveyDesign
 
         G = 500
         n_reps = ci_params.bootstrap(200, min_n=25)
@@ -112,7 +113,7 @@ class TestWeightedMCConsistency:
                     "dose",
                     "period",
                     "unit",
-                    weights=panel["w"].to_numpy(),
+                    survey_design=SurveyDesign(weights="w"),
                 )
             if np.isfinite(r_fit.att):
                 estimates[r] = r_fit.att
@@ -132,6 +133,7 @@ class TestWeightedMCConsistency:
         under survey weights — the estimator must be weight-aware in a
         statistically meaningful sense, not just plumbing-level."""
         from diff_diff.had import HeterogeneousAdoptionDiD
+        from diff_diff.survey import SurveyDesign
 
         G = 500
         n_reps = ci_params.bootstrap(200, min_n=25)
@@ -149,7 +151,7 @@ class TestWeightedMCConsistency:
                     "dose",
                     "period",
                     "unit",
-                    weights=panel["w"].to_numpy(),
+                    survey_design=SurveyDesign(weights="w"),
                 )
             if np.isfinite(r_fit.att):
                 estimates[r] = r_fit.att
@@ -167,6 +169,7 @@ class TestWeightedMCConsistency:
         wide Monte Carlo error; use a loose bar (>80%) to avoid
         false-positive CI flakiness."""
         from diff_diff.had import HeterogeneousAdoptionDiD
+        from diff_diff.survey import SurveyDesign
 
         G = 500
         n_reps = ci_params.bootstrap(200, min_n=25)
@@ -185,7 +188,7 @@ class TestWeightedMCConsistency:
                     "dose",
                     "period",
                     "unit",
-                    weights=panel["w"].to_numpy(),
+                    survey_design=SurveyDesign(weights="w"),
                 )
             if np.isfinite(r_fit.conf_int[0]) and np.isfinite(r_fit.conf_int[1]):
                 n_conclusive += 1
@@ -213,6 +216,7 @@ class TestWeightedMCConsistency:
         DGP is too weak to distinguish weighted from unweighted and the
         other tests above lack teeth too."""
         from diff_diff.had import HeterogeneousAdoptionDiD
+        from diff_diff.survey import SurveyDesign
 
         G = 500
         n_reps = ci_params.bootstrap(200, min_n=25)
@@ -250,7 +254,7 @@ class TestWeightedMCConsistency:
                     "dose",
                     "period",
                     "unit",
-                    weights=panel_w["w"].to_numpy(),
+                    survey_design=SurveyDesign(weights="w"),
                 )
             if np.isfinite(r_unw.att):
                 est_unweighted[i] = r_unw.att
