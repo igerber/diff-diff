@@ -434,6 +434,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `docs/methodology/REGISTRY.md` (both estimator sections + "Absorbed Fixed Effects").
 
 ### Performance
+- **Rust-backend HC2 vcov.** The Rust vcov path supported only HC1/CR1; one-way
+  (unclustered, unweighted) HC2 now dispatches to a new `compute_robust_vcov_hc2` kernel
+  mirroring the NumPy branch exactly — hat diagonals off the same bread,
+  `u²/max(1−h, 1e-10)` leverage meat, no n/(n−k) factor — matching NumPy at ~1e-15 on a
+  seed grid. The near-singular hat-diagonal guard stays Python-side: the kernel returns a
+  sentinel error and the documented warn-and-fall-back-to-HC1 fires in the dispatcher,
+  identical to the NumPy branch (locked by a monkeypatched-sentinel test plus an exact
+  h=1 clamp-parity test). The symbol is imported independently (mixed-version safe — a
+  stale extension degrades HC2 to NumPy without disabling older Rust accelerations).
+  `return_dof` / weighted / CR2-BM requests stay on NumPy (CR2-BM tracked in TODO).
 - **`CallawaySantAnna` per-(g,t) IF scatters converted from `np.add.at` to fancy `+=`**
   (`staggered.py::_cluster_robust_se_from_per_gt_if` — runs once per (g,t) cell when
   `cluster=` is set — and the general combined-IF assembly path in

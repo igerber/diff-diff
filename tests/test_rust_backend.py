@@ -3507,3 +3507,118 @@ class TestBatchedRidgeCholSolve:
             _batched_chol_symbol(np.zeros((2, 3, 4)), np.zeros(2))
         with pytest.raises(ValueError, match="ridge length"):
             _batched_chol_symbol(np.zeros((2, 3, 3)), np.zeros(5))
+
+
+@pytest.mark.skipif(not HAS_RUST_BACKEND, reason="Rust backend not available")
+class TestRustHC2Vcov:
+    """Rust HC2 (leverage-corrected) vcov parity with the NumPy hc2 branch.
+
+    The kernel mirrors `_compute_robust_vcov_numpy`'s unweighted `hc2` path
+    exactly (hat diagonals off the same bread, `u^2 / max(1 - h, 1e-10)` meat,
+    NO n/(n-k) factor); the near-singular hat-diagonal guard stays Python-side
+    (sentinel error -> documented warn-and-fall-back-to-HC1)."""
+
+    @staticmethod
+    def _design(n=400, k=5, seed=0):
+        rng = np.random.default_rng(seed)
+        X = np.column_stack([np.ones(n), rng.normal(size=(n, k - 1))])
+        beta = rng.normal(size=k)
+        e = rng.normal(size=n) * (1.0 + 0.5 * np.abs(X[:, 1]))  # heteroskedastic
+        y = X @ beta + e
+        resid = y - X @ np.linalg.lstsq(X, y, rcond=None)[0]
+        return X, resid
+
+    def test_hc2_matches_numpy(self):
+        from diff_diff.linalg import _compute_robust_vcov_numpy, compute_robust_vcov
+
+        for seed in (0, 1, 2):
+            X, resid = self._design(seed=seed)
+            v_rust = compute_robust_vcov(X, resid, vcov_type="hc2")
+            v_py = _compute_robust_vcov_numpy(X, resid, None, vcov_type="hc2")
+            np.testing.assert_allclose(v_rust, v_py, rtol=1e-12, atol=1e-15)
+
+    def test_hc2_kernel_direct(self):
+        from diff_diff._rust_backend import compute_robust_vcov_hc2
+
+        X, resid = self._design()
+        v = compute_robust_vcov_hc2(np.ascontiguousarray(X), np.ascontiguousarray(resid))
+        assert v.shape == (X.shape[1], X.shape[1])
+        np.testing.assert_allclose(v, v.T, rtol=0, atol=1e-12)
+        assert np.all(np.diag(v) > 0)
+
+    def test_exact_unit_leverage_clamp_parity(self):
+        """h_ii == 1 exactly (a one-obs dummy is its own perfect predictor)
+        does NOT trip the > 1 + 1e-6 guard in either backend — both take the
+        max(1 - h, 1e-10) clamp path and must agree."""
+        from diff_diff.linalg import _compute_robust_vcov_numpy, compute_robust_vcov
+
+        n = 60
+        rng = np.random.default_rng(3)
+        d = np.zeros(n)
+        d[0] = 1.0
+        X = np.column_stack([np.ones(n), d, rng.normal(size=n)])
+        y = X @ np.array([1.0, 2.0, 0.5]) + rng.normal(size=n)
+        resid = y - X @ np.linalg.lstsq(X, y, rcond=None)[0]
+
+        v_rust_path = compute_robust_vcov(X, resid, vcov_type="hc2")
+        v_numpy_path = _compute_robust_vcov_numpy(X, resid, None, vcov_type="hc2")
+        np.testing.assert_allclose(v_rust_path, v_numpy_path, rtol=1e-9, atol=1e-12)
+
+    def test_sentinel_error_falls_back_to_hc1_with_warning(self, monkeypatch):
+        """The kernel's near-singular sentinel error must reproduce the NumPy
+        branch's warn-and-fall-back-to-HC1 through the dispatcher (the guard
+        decision is Python-side; the kernel only signals)."""
+        import diff_diff.linalg as la
+
+        X, resid = self._design()
+
+        def _sentinel(*a, **k):
+            raise ValueError(
+                "Hat-matrix diagonal exceeds 1 (max=1.000010); the design is near-singular."
+            )
+
+        monkeypatch.setattr(la, "_rust_compute_robust_vcov_hc2", _sentinel)
+        with pytest.warns(UserWarning, match="Falling back to HC1"):
+            v = la.compute_robust_vcov(X, resid, vcov_type="hc2")
+        v_hc1 = la._compute_robust_vcov_numpy(X, resid, None, vcov_type="hc1")
+        np.testing.assert_allclose(v, v_hc1, rtol=1e-12, atol=1e-15)
+
+    def test_dispatch_declined_for_dof_and_weights(self):
+        """return_dof / weights / cluster requests stay on the NumPy path
+        (values equal by construction; this locks that the kernel's absence
+        of those features cannot change results)."""
+        from diff_diff.linalg import compute_robust_vcov
+
+        X, resid = self._design()
+        v, dof = compute_robust_vcov(X, resid, vcov_type="hc2", return_dof=True)
+        assert dof.shape == (X.shape[1],)
+        assert np.all(dof == X.shape[0] - X.shape[1])
+        w = np.ones(X.shape[0])
+        v_w = compute_robust_vcov(X, resid, weights=w, weight_type="pweight", vcov_type="hc2")
+        np.testing.assert_allclose(v_w, v, rtol=1e-10, atol=1e-14)
+
+    def test_kernel_rejects_length_mismatch(self):
+        """Malformed inputs must fail loudly, not silently truncate."""
+        from diff_diff._rust_backend import compute_robust_vcov_hc2
+
+        X, resid = self._design()
+        too_long = np.concatenate([resid, [1.0, 2.0]])
+        with pytest.raises(ValueError, match="must match design rows"):
+            compute_robust_vcov_hc2(np.ascontiguousarray(X), np.ascontiguousarray(too_long))
+
+    def test_numerical_instability_falls_back_to_numpy_hc2(self, monkeypatch):
+        """The HC1 dispatch's numerically-unstable fallback is mirrored: the
+        dispatcher warns and returns the NumPy HC2 result (not a hard error,
+        and not HC1)."""
+        import diff_diff.linalg as la
+
+        X, resid = self._design()
+
+        def _unstable(*a, **k):
+            raise ValueError("Matrix inversion numerically unstable (residual check failed)")
+
+        monkeypatch.setattr(la, "_rust_compute_robust_vcov_hc2", _unstable)
+        with pytest.warns(UserWarning, match="numerical instability"):
+            v = la.compute_robust_vcov(X, resid, vcov_type="hc2")
+        v_py = la._compute_robust_vcov_numpy(X, resid, None, vcov_type="hc2")
+        np.testing.assert_allclose(v, v_py, rtol=1e-12, atol=1e-15)

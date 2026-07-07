@@ -82,6 +82,17 @@ try:
 except ImportError:
     _rust_batched_ridge_chol_solve = None
 
+# HC2 (leverage-corrected) robust vcov: imported independently for the same
+# mixed-version reason as demean_map (a stale extension missing only this
+# newer symbol degrades HC2 to the NumPy path without disabling the older
+# Rust accelerations).
+try:
+    from diff_diff._rust_backend import (
+        compute_robust_vcov_hc2 as _rust_compute_robust_vcov_hc2,
+    )
+except ImportError:
+    _rust_compute_robust_vcov_hc2 = None
+
 # Determine final backend based on environment variable and availability
 if _backend_env == "python":
     # Force pure Python mode - disable Rust even if available
@@ -94,6 +105,8 @@ if _backend_env == "python":
     _rust_demean_map = None
     # Batched ridge-regularized SPD solve
     _rust_batched_ridge_chol_solve = None
+    # HC2 robust vcov
+    _rust_compute_robust_vcov_hc2 = None
     # TROP estimator acceleration (local method)
     _rust_unit_distance_matrix = None
     _rust_loocv_grid_search = None

@@ -47,6 +47,7 @@ from scipy.linalg.lapack import dpocon
 from diff_diff._backend import (
     HAS_RUST_BACKEND,
     _rust_compute_robust_vcov,
+    _rust_compute_robust_vcov_hc2,
     _rust_solve_ols,
 )
 
@@ -1711,6 +1712,68 @@ def compute_robust_vcov(
     # Validate weights before dispatching to backend
     if weights is not None:
         weights = _validate_weights(weights, weight_type, X.shape[0])
+
+    # Rust HC2 (one-way, unweighted, no DOF): mirrors the NumPy hc2 branch
+    # exactly (leverage meat, no n/(n-k) factor). The near-singular
+    # hat-diagonal guard stays Python-side: the kernel returns a sentinel
+    # error and the documented warn-and-fall-back-to-HC1 fires here,
+    # identical to the NumPy branch's behavior. Imported independently
+    # (mixed-version safe) — None on a stale extension.
+    if (
+        HAS_RUST_BACKEND
+        and _rust_compute_robust_vcov_hc2 is not None
+        and weights is None
+        and vcov_type == "hc2"
+        and cluster_ids is None
+        and not return_dof
+    ):
+        X_c = np.ascontiguousarray(X, dtype=np.float64)
+        residuals_c = np.ascontiguousarray(residuals, dtype=np.float64)
+        try:
+            return _rust_compute_robust_vcov_hc2(X_c, residuals_c)
+        except ValueError as e:
+            error_msg = str(e)
+            if "Hat-matrix diagonal exceeds 1" in error_msg:
+                warnings.warn(
+                    f"{error_msg} Falling back to HC1.",
+                    UserWarning,
+                    stacklevel=2,
+                )
+                return _compute_robust_vcov_numpy(
+                    X,
+                    residuals,
+                    cluster_ids=None,
+                    weights=None,
+                    weight_type=weight_type,
+                    vcov_type="hc1",
+                    return_dof=return_dof,
+                )
+            if "Matrix inversion failed" in error_msg:
+                raise ValueError(
+                    "Design matrix is rank-deficient (singular X'X matrix). "
+                    "This indicates perfect multicollinearity. Check your fixed effects "
+                    "and covariates for linear dependencies."
+                ) from e
+            if "numerically unstable" in error_msg.lower():
+                # Mirror the HC1 dispatch: fall back to the NumPy HC2 branch
+                # (which applies its own hat-diagonal guard semantics) rather
+                # than hard-erroring where the pre-kernel path would not.
+                warnings.warn(
+                    f"Rust backend detected numerical instability: {e}. "
+                    "Falling back to Python backend for variance computation.",
+                    UserWarning,
+                    stacklevel=2,
+                )
+                return _compute_robust_vcov_numpy(
+                    X,
+                    residuals,
+                    cluster_ids=None,
+                    weights=None,
+                    weight_type=weight_type,
+                    vcov_type="hc2",
+                    return_dof=return_dof,
+                )
+            raise
 
     # Use Rust backend if available AND no weights AND the requested path is
     # the unchanged HC1/CR1 dispatch AND the caller does not need DOF. Any

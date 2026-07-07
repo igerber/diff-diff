@@ -236,6 +236,74 @@ pub fn compute_robust_vcov<'py>(
     Ok(vcov.to_pyarray(py))
 }
 
+/// HC2 (leverage-corrected) heteroskedasticity-robust vcov, one-way only.
+///
+/// Mirrors the NumPy `_compute_robust_vcov_numpy` unweighted `hc2` branch
+/// exactly (sandwich::vcovHC type="HC2" convention):
+///   h_i    = x_i' (X'X)^{-1} x_i
+///   meat   = X' diag(u_i^2 / max(1 - h_i, 1e-10)) X
+///   vcov   = (X'X)^{-1} meat (X'X)^{-1}          (NO n/(n-k) factor)
+/// A hat diagonal exceeding 1 + 1e-6 signals a near-singular design; this
+/// returns the sentinel error "Hat-matrix diagonal exceeds 1" so the Python
+/// dispatcher can reproduce the documented warn-and-fall-back-to-HC1
+/// behavior (the guard decision stays in one place, Python-side).
+///
+/// # Arguments
+/// * `x` - Design matrix (n, k)
+/// * `residuals` - OLS residuals (n,)
+///
+/// # Returns
+/// Variance-covariance matrix (k, k)
+#[pyfunction]
+#[pyo3(signature = (x, residuals))]
+pub fn compute_robust_vcov_hc2<'py>(
+    py: Python<'py>,
+    x: PyReadonlyArray2<'py, f64>,
+    residuals: PyReadonlyArray1<'py, f64>,
+) -> PyResult<Bound<'py, PyArray2<f64>>> {
+    let x_arr = x.as_array();
+    let residuals_arr = residuals.as_array();
+
+    if residuals_arr.len() != x_arr.nrows() {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+            "residuals length ({}) must match design rows ({})",
+            residuals_arr.len(),
+            x_arr.nrows()
+        )));
+    }
+
+    let xtx = x_arr.t().dot(&x_arr);
+    let xtx_inv = invert_symmetric(&xtx)?;
+
+    // Hat diagonals h_i = x_i' (X'X)^{-1} x_i via one GEMM + rowwise dot:
+    // H_diag = rowsum((X (X'X)^{-1}) * X).
+    let x_bread = x_arr.dot(&xtx_inv); // (n, k)
+    let h_diag: Array1<f64> = (&x_bread * &x_arr).sum_axis(Axis(1));
+
+    let h_max = h_diag.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+    if h_max > 1.0 + 1e-6 {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+            "Hat-matrix diagonal exceeds 1 (max={:.6}); the design is near-singular.",
+            h_max
+        )));
+    }
+
+    // meat = X' diag(u^2 / max(1 - h, 1e-10)) X
+    let factor: Array1<f64> = residuals_arr
+        .iter()
+        .zip(h_diag.iter())
+        .map(|(u, h)| u * u / (1.0 - h).max(1e-10))
+        .collect();
+    let factor_col = factor.insert_axis(Axis(1)); // (n, 1)
+    let x_weighted = &x_arr * &factor_col; // (n, k)
+    let meat = x_arr.t().dot(&x_weighted); // (k, k)
+
+    // Sandwich WITHOUT DOF adjustment (HC2's leverage correction replaces it).
+    let temp = xtx_inv.dot(&meat);
+    let vcov = temp.dot(&xtx_inv);
+    Ok(vcov.to_pyarray(py))
+}
+
 /// Internal implementation of robust variance-covariance computation.
 fn compute_robust_vcov_internal(
     x: &ArrayView2<f64>,
