@@ -119,6 +119,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   by seven new adapter tests (wrapper + sanitization, zero-extracted, aggregate
   truncation, byte-vs-char cap parity, trusted-extractor sentinel, Git-quoted
   filename discovery, end-to-end prompt assembly order).
+- **True half-sample BRR replicate regressions per estimator family.** The
+  replicate-weight expansion tests used Fay-like 0.5/1.5 perturbations, under which every
+  unit keeps positive weight; true BRR was covered only at the vcov-helper level. A new
+  Hadamard-balanced half-sample generator (paired 2-PSU pseudo-strata; selected PSU w*2,
+  the other exactly 0 — the `survey::brrweights` full-BRR convention) now backs a
+  per-family regression class (DiD, DiD-absorb, MultiPeriodDiD, TWFE, SunAbraham,
+  StackedDiD, ImputationDiD, TwoStageDiD): finite positive replicate SEs under genuine
+  half-samples plus a base-weights point-estimate invariance check (replicate columns
+  drive only the variance). Construction sanity is itself asserted (exactly half the
+  paired PSUs zeroed per replicate, all multipliers in {0, 2}). Notably, genuine
+  half-samples CAN lose identification inside a replicate refit on some designs (the
+  staggered binary-interaction TWFE parameterization) — TWFE fails loudly there; the
+  family test uses its dedicated 2-period panel, with the behavior noted in-test.
 - **`CallawaySantAnna` ipw R-parity yardsticks folded into the golden fixture + no-covariate
   ipw structural-parity decision recorded.** `csdid_golden_values.json` regenerated (R 4.5.2,
   did 2.5.1, DRDID 1.3.0): all pre-existing data and result blocks reproduced byte-identically;

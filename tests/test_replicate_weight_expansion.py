@@ -527,6 +527,66 @@ class TestReplicateVcovTypeWarn:
     point estimates only). Previously DiD silently ignored the kwarg and
     TWFE raised NotImplementedError — the warn-and-remap contract unifies
     the twins."""
+# ---------------------------------------------------------------------------
+# TRUE half-sample BRR (Hadamard-balanced) — per-estimator-family regressions
+# ---------------------------------------------------------------------------
+
+
+def _add_true_brr_replicates(data, unit_col="unit"):
+    """Add TRUE half-sample BRR replicate columns (Hadamard-balanced).
+
+    Pairs consecutive units into 2-PSU pseudo-strata and assigns
+    half-samples from a Sylvester-Hadamard matrix: within each pair the
+    selected PSU gets ``w*2`` and the other ``0`` (Wolter 2007 ch. 3; the
+    R ``survey::brrweights`` full-BRR convention with
+    ``combined_weights=True``). Unlike :func:`_add_brr_replicates`'
+    Fay-like 0.5/1.5 perturbation — under which every unit keeps positive
+    weight — every replicate here is a genuine half-sample: half the
+    paired PSUs carry exactly zero weight, exercising the zero-weight-PSU
+    code paths (FE identification drops, zero-mass cells) through each
+    estimator's replicate refit. An odd trailing unit (if any) is kept at
+    its base weight in every replicate (certainty PSU).
+    """
+    from scipy.linalg import hadamard
+
+    units = sorted(data[unit_col].unique())
+    n_paired = len(units) - (len(units) % 2)
+    pairs = [(units[i], units[i + 1]) for i in range(0, n_paired, 2)]
+    n_strata = len(pairs)
+    # Sylvester-Hadamard column 0 is all +1, which would leave the first
+    # pseudo-stratum permanently unbalanced (the same PSU selected in every
+    # replicate); survey::brrweights skips the constant column, so strata
+    # map to columns 1..n_strata — hence R >= n_strata + 1.
+    n_rep = 4
+    while n_rep < n_strata + 1:
+        n_rep *= 2
+    H = hadamard(n_rep)
+    base = data["weight"].to_numpy(dtype=float)
+    unit_vals = data[unit_col].to_numpy()
+    rep_cols = []
+    for r in range(n_rep):
+        w_r = base.copy()
+        for h, (u1, u2) in enumerate(pairs):
+            selected, dropped = (u1, u2) if H[r, h + 1] == 1 else (u2, u1)
+            w_r[unit_vals == selected] *= 2.0
+            w_r[unit_vals == dropped] = 0.0
+        col = f"tbrr_{r}"
+        data[col] = w_r
+        rep_cols.append(col)
+    return rep_cols
+
+
+class TestTrueBRRHalfSample:
+    """TRUE half-sample BRR per estimator family (TODO row: the smoke tests
+    above use Fay-like 0.5/1.5 perturbations, which never zero a unit;
+    ``test_survey_phase6.py`` covers true BRR only at the vcov-helper level).
+
+    Each test asserts (a) finite positive replicate SE under genuine
+    half-samples — half the paired PSUs at weight 0 per replicate — and
+    (b) where checked, the point estimate is IDENTICAL to the same fit
+    without replicate columns: replicate weights drive only the variance,
+    never the point estimate (base-weights invariance contract).
+    """
 
     @staticmethod
     def _sd(rep_cols):
@@ -646,3 +706,144 @@ class TestReplicateVcovTypeWarn:
                     data, "outcome", "treated", "post", survey_design=self._sd(rep_cols)
                 )
         assert not any("has no effect with replicate-weight" in str(x.message) for x in w)
+    def test_construction_is_true_half_sample(self):
+        data = _make_simple_panel()
+        rep_cols = _add_true_brr_replicates(data)
+        units = sorted(data["unit"].unique())
+        n_paired = len(units) - (len(units) % 2)
+        base_per_unit = data.groupby("unit")["weight"].first()
+        for col in rep_cols:
+            per_unit = data.groupby("unit")[col].first()
+            zeroed = int((per_unit.loc[units[:n_paired]] == 0.0).sum())
+            assert zeroed == n_paired // 2, f"{col}: {zeroed} != {n_paired // 2}"
+            mult = per_unit.loc[units[:n_paired]] / base_per_unit.loc[units[:n_paired]]
+            assert set(np.round(mult.unique(), 12)) == {0.0, 2.0}
+        # Hadamard BALANCE: every paired PSU is selected (w*2) in exactly
+        # half the replicates — the property the constant Hadamard column
+        # would break for the first pseudo-stratum (each column 1..H of a
+        # Sylvester matrix has zero sum, so mean multiplier is exactly 1).
+        rep_mat = np.column_stack(
+            [data.groupby("unit")[c].first().loc[units[:n_paired]] for c in rep_cols]
+        )
+        base_vec = base_per_unit.loc[units[:n_paired]].to_numpy()
+        mean_mult = rep_mat.mean(axis=1) / base_vec
+        np.testing.assert_allclose(mean_mult, 1.0, rtol=0, atol=1e-12)
+
+    @staticmethod
+    def _assert_point_invariance(att_rep, att_base):
+        np.testing.assert_allclose(att_rep, att_base, rtol=0, atol=1e-12)
+
+    def test_did_true_brr(self):
+        data = _make_simple_panel()
+        rep_cols = _add_true_brr_replicates(data)
+        res = DifferenceInDifferences().fit(
+            data, "outcome", "treated", "post", survey_design=self._sd(rep_cols)
+        )
+        base = DifferenceInDifferences().fit(
+            data, "outcome", "treated", "post", survey_design=SurveyDesign(weights="weight")
+        )
+        assert np.isfinite(res.se) and res.se > 0
+        self._assert_point_invariance(res.att, base.att)
+
+    def test_did_absorb_true_brr(self):
+        data = _make_simple_panel()
+        data["group"] = (data["unit"] % 4).astype(str)
+        rep_cols = _add_true_brr_replicates(data)
+        res = DifferenceInDifferences().fit(
+            data,
+            "outcome",
+            "treated",
+            "post",
+            absorb=["group"],
+            survey_design=self._sd(rep_cols),
+        )
+        assert np.isfinite(res.att)
+        assert np.isfinite(res.se) and res.se > 0
+
+    def test_multiperiod_true_brr(self):
+        data = _make_simple_panel()
+        rep_cols = _add_true_brr_replicates(data)
+        res = MultiPeriodDiD().fit(
+            data,
+            "outcome",
+            "treated",
+            "time",
+            post_periods=[1],
+            survey_design=self._sd(rep_cols),
+        )
+        assert np.isfinite(res.avg_att)
+        assert np.isfinite(res.avg_se) and res.avg_se > 0
+
+    def test_twfe_true_brr(self):
+        # The family's dedicated 2-period panel (the staggered fixture's
+        # binary treated x post parameterization can lose identification
+        # inside a genuine half-sample replicate refit — a real behavior
+        # of true BRR that the Fay-like perturbation never exercised;
+        # TWFE fails loudly there rather than silently degrading).
+        data = TestTWFEReplicate._make_twfe_panel()
+        rep_cols = _add_true_brr_replicates(data)
+        res = TwoWayFixedEffects().fit(
+            data, "outcome", "treated", "post", "unit", survey_design=self._sd(rep_cols)
+        )
+        base = TwoWayFixedEffects().fit(
+            data,
+            "outcome",
+            "treated",
+            "post",
+            "unit",
+            survey_design=SurveyDesign(weights="weight"),
+        )
+        assert np.isfinite(res.se) and res.se > 0
+        self._assert_point_invariance(res.att, base.att)
+
+    def test_sun_abraham_true_brr(self):
+        data = _make_staggered_panel()
+        rep_cols = _add_true_brr_replicates(data)
+        res = SunAbraham(n_bootstrap=0).fit(
+            data, "outcome", "unit", "time", "first_treat", survey_design=self._sd(rep_cols)
+        )
+        base = SunAbraham(n_bootstrap=0).fit(
+            data,
+            "outcome",
+            "unit",
+            "time",
+            "first_treat",
+            survey_design=SurveyDesign(weights="weight"),
+        )
+        assert np.isfinite(res.overall_se) and res.overall_se > 0
+        self._assert_point_invariance(res.overall_att, base.overall_att)
+
+    def test_stacked_true_brr(self):
+        data = _make_staggered_panel()
+        rep_cols = _add_true_brr_replicates(data)
+        res = StackedDiD().fit(
+            data, "outcome", "unit", "time", "first_treat", survey_design=self._sd(rep_cols)
+        )
+        assert np.isfinite(res.overall_att)
+        assert np.isfinite(res.overall_se) and res.overall_se > 0
+
+    def test_imputation_true_brr(self):
+        data = _make_staggered_panel()
+        rep_cols = _add_true_brr_replicates(data)
+        res = ImputationDiD(n_bootstrap=0).fit(
+            data, "outcome", "unit", "time", "first_treat", survey_design=self._sd(rep_cols)
+        )
+        base = ImputationDiD(n_bootstrap=0).fit(
+            data,
+            "outcome",
+            "unit",
+            "time",
+            "first_treat",
+            survey_design=SurveyDesign(weights="weight"),
+        )
+        assert np.isfinite(res.overall_se) and res.overall_se > 0
+        self._assert_point_invariance(res.overall_att, base.overall_att)
+
+    def test_two_stage_true_brr(self):
+        data = _make_staggered_panel()
+        rep_cols = _add_true_brr_replicates(data)
+        res = TwoStageDiD(n_bootstrap=0).fit(
+            data, "outcome", "unit", "time", "first_treat", survey_design=self._sd(rep_cols)
+        )
+        assert np.isfinite(res.overall_att)
+        assert np.isfinite(res.overall_se) and res.overall_se > 0
