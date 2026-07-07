@@ -62,6 +62,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   deviation (~0.3% unbalanced); TWFE `hetero` has no public unclustered surface
   (auto-cluster-at-unit convention), so its scenario locks iid — which also pins the D4
   full-K rescale on an UNBALANCED panel for the first time.
+- **`ImputationDiD` covariate-path R parity anchor.** The no-covariate staggered panel was
+  the only `didimputation` R anchor; the covariate branch (first-stage imputation model
+  `y ~ x | unit + time` on the untreated sample, R `first_stage = ~ 0 + x | unit + time`
+  == diff-diff `covariates=["x"]`) now has its own golden: a time-varying, unit-correlated
+  covariate panel appended to `generate_didimputation_golden.R` (the base scenario's RNG
+  draws precede the new block, so the committed base panel and golden values reproduce
+  byte-identically) and a `TestImputationDiDCovariateParityR` class pinning overall +
+  per-horizon event-study ATT and SE. Observed agreement on the reference platform:
+  SE ~2e-10 (the covariate-augmented untreated `v_it` projection + clustering machinery),
+  ATT ~2e-7; asserted at abs=1e-6/1e-7 for cross-platform robustness.
 - **`CallawaySantAnna` ipw R-parity yardsticks folded into the golden fixture + no-covariate
   ipw structural-parity decision recorded.** `csdid_golden_values.json` regenerated (R 4.5.2,
   did 2.5.1, DRDID 1.3.0): all pre-existing data and result blocks reproduced byte-identically;

@@ -1171,3 +1171,80 @@ class TestImputationDiDParityR:
             got = res.event_study_effects[h]["se"]
             assert np.isfinite(got), f"non-finite SE at h={h}"
             assert got == pytest.approx(se, abs=1e-7), f"h={h}"
+
+
+COVARIATE_PANEL_PATH = (
+    Path(__file__).parent.parent / "benchmarks" / "data" / "didimputation_covariate_panel.csv"
+)
+
+
+@pytest.fixture(scope="module")
+def covariate_panel(golden: dict) -> pd.DataFrame:
+    if "covariate" not in golden or not COVARIATE_PANEL_PATH.is_file():
+        pytest.skip(
+            "R didimputation covariate parity fixture not present. Run "
+            "`Rscript benchmarks/R/generate_didimputation_golden.R` to regenerate "
+            "the golden JSON (covariate block) and "
+            "`benchmarks/data/didimputation_covariate_panel.csv`."
+        )
+    return pd.read_csv(COVARIATE_PANEL_PATH)
+
+
+class TestImputationDiDCovariateParityR:
+    """Pin the COVARIATE branch of ImputationDiD against R ``didimputation``.
+
+    The no-covariate class above validates the untreated ``v_it`` projection
+    and clustering on the FE-only design; this class anchors the covariate
+    path — the first-stage imputation model becomes ``y ~ x | unit + time``
+    on the untreated sample (R ``first_stage = ~ 0 + x | unit + time``,
+    diff-diff ``covariates=["x"]``) with a time-varying, unit-correlated
+    ``x``. Observed agreement on the reference platform: SE ~2e-10 (overall
+    and every horizon), ATT ~2e-7 (same platform class as the no-covariate
+    anchor); asserted at the class-wide abs=1e-6 (ATT) / abs=1e-7 (SE)
+    tolerances for cross-platform robustness. Closes the TODO row
+    "ImputationDiD covariate-path variance lacks a dedicated parity anchor".
+    """
+
+    @staticmethod
+    def _fit(panel: pd.DataFrame, **kwargs):
+        return ImputationDiD().fit(
+            panel,
+            outcome="y",
+            unit="unit",
+            time="time",
+            first_treat="first_treat",
+            covariates=["x"],
+            **kwargs,
+        )
+
+    def test_overall_att_matches_r(self, golden: dict, covariate_panel: pd.DataFrame) -> None:
+        res = self._fit(covariate_panel)
+        assert res.overall_att == pytest.approx(golden["covariate"]["overall"]["att"], abs=1e-6)
+
+    def test_overall_se_matches_r(self, golden: dict, covariate_panel: pd.DataFrame) -> None:
+        res = self._fit(covariate_panel)
+        assert res.overall_se == pytest.approx(golden["covariate"]["overall"]["se"], abs=1e-7)
+
+    def test_event_study_atts_match_r(self, golden: dict, covariate_panel: pd.DataFrame) -> None:
+        res = self._fit(covariate_panel, aggregate="event_study")
+        assert res.event_study_effects is not None
+        es = golden["covariate"]["event_study"]
+        assert len(es["horizons"]) > 0
+        for h, att in zip(es["horizons"], es["att"]):
+            assert h in res.event_study_effects, f"missing horizon {h}"
+            got = res.event_study_effects[h]["effect"]
+            assert np.isfinite(got), f"non-finite ATT at h={h}"
+            assert got == pytest.approx(att, abs=1e-6), f"h={h}"
+
+    def test_event_study_ses_match_r(self, golden: dict, covariate_panel: pd.DataFrame) -> None:
+        """Per-horizon covariate-path SEs match R (the variance machinery under
+        a covariate-augmented first stage) — ~2e-10 observed on the reference
+        platform, asserted at abs=1e-7 for cross-platform robustness."""
+        res = self._fit(covariate_panel, aggregate="event_study")
+        assert res.event_study_effects is not None
+        es = golden["covariate"]["event_study"]
+        for h, se in zip(es["horizons"], es["se"]):
+            assert h in res.event_study_effects, f"missing horizon {h}"
+            got = res.event_study_effects[h]["se"]
+            assert np.isfinite(got), f"non-finite SE at h={h}"
+            assert got == pytest.approx(se, abs=1e-7), f"h={h}"
