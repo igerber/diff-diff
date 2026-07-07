@@ -370,7 +370,8 @@ class HeterogeneousAdoptionDiDResults:
     (mass-point, Binder 1983 TSL under ``survey_design=``; requires
     ``vcov_type="hc1"`` / ``robust=True`` — the mass-point survey path rejects
     ``vcov_type="classical"``, and ``cluster=`` + ``survey_design=`` is
-    rejected, so PSU clustering is expressed via ``SurveyDesign(psu=...)``).
+    rejected, so PSU clustering is expressed via
+    ``SurveyDesign(weights='<weight_col>', psu='<cluster_col>')``).
     ``None`` on unweighted fits.
     Orthogonal to ``survey_metadata`` which is the repo-standard
     :class:`diff_diff.survey.SurveyMetadata` shared with downstream
