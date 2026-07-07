@@ -561,7 +561,7 @@ and covariate-adjusted specifications.)
 - Multiplier bootstrap on the Theorem-3 influence function (library extension, not in the paper).
 - Survey-design TSL variance on the influence function (library extension).
 - NaN inference for undefined statistics; Proposition-5 refuse-to-estimate (NaN + warning).
-- Leave-one-out variance refinement (Supplementary Appendix A.9) not implemented (finite-sample refinement; tracked as future work).
+- Leave-one-out variance refinement (Supplementary Appendix A.9) implemented as the opt-in `leave_one_out` parameter (default `False`, preserving R `didimputation` parity); efficient residual rescale `1/(1 - v_ig^2/sum_j v_jg^2)` exactly equivalent to direct leave-one-out (see REGISTRY ImputationDiD Note).
 
 **R Comparison Results** (`didimputation` v0.5.0, fixed-seed panel, `benchmarks/data/didimputation_golden.json`):
 

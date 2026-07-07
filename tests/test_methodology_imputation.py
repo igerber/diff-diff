@@ -587,6 +587,350 @@ _EQ8_COHORT_SE_PIN = 0.042000264835
 
 
 # =============================================================================
+# Supplementary Appendix A.9 — leave-one-out conservative variance
+# =============================================================================
+
+
+def _synthetic_group(a: np.ndarray, T: np.ndarray):
+    """Build (per_unit, per_group) for a single group with per-unit weight sums
+    ``a_i`` and unit effects ``T_i``, matching the layout that
+    ``_compute_auxiliary_residuals_treated`` passes to ``_leave_one_out_factor``:
+    ``per_unit`` MultiIndex (g, u) with column ``a``; ``per_group`` index g with
+    column ``den = sum_i a_i^2``.
+    """
+    idx = pd.MultiIndex.from_arrays([[0] * len(a), list(range(len(a)))], names=["g", "u"])
+    per_unit = pd.DataFrame({"a": a, "b": a * T}, index=idx)
+    per_group = pd.DataFrame(
+        {"num": [float((a**2 * T).sum())], "den": [float((a**2).sum())]},
+        index=pd.Index([0], name="g"),
+    )
+    return per_unit, per_group
+
+
+class TestB2024AppendixA9LeaveOneOut:
+    """BJS 2024 Supplementary Appendix A.9 leave-one-out conservative variance.
+
+    The efficient rescale ``eps_tilde^LO = eps_tilde / (1 - v_ig^2/sum_j v_jg^2)``
+    reproduces the direct leave-one-out aggregate ``tau_tilde_it^LO`` exactly at
+    the per-unit cluster sum ``psi_i`` (App. A.9). Source: arXiv 2108.12419v5
+    App. A.9 (the REStud Supplementary Material is canonical); see REGISTRY.
+    """
+
+    _COMMON = dict(outcome="outcome", unit="unit", time="time", first_treat="first_treat")
+
+    def test_loo_factor_reproduces_direct_leave_one_out(self):
+        """PAPER-FIDELITY GATE: the rescaled per-unit cluster sum psi_i equals the
+        direct-LOO psi_i (recomputed with the paper's tau_tilde_it^LO), exactly."""
+        a = np.array([1.3, 0.7, 2.1, 0.9, 1.6])
+        T = np.array([2.0, 3.0, 1.5, 2.5, 1.9])
+        per_unit, per_group = _synthetic_group(a, T)
+        factor, n_single = ImputationDiD._leave_one_out_factor(per_unit, per_group)
+        assert n_single == 0
+
+        N = float((a**2 * T).sum())
+        D = float((a**2).sum())
+        tau_g = N / D
+        # one obs per unit: eps_i = T_i - tau_tilde_g, psi_i = a_i * eps_i * factor_i
+        psi_rescale = a * (T - tau_g) * factor.to_numpy()
+        # direct LOO: tau_tilde_i^LO = (N - a_i^2 T_i)/(D - a_i^2)
+        psi_direct = np.array(
+            [a[i] * (T[i] - (N - a[i] ** 2 * T[i]) / (D - a[i] ** 2)) for i in range(len(a))]
+        )
+        np.testing.assert_allclose(psi_rescale, psi_direct, rtol=0, atol=1e-12)
+        # and the closed-form factor 1/(1 - a^2/D)
+        np.testing.assert_allclose(factor.to_numpy(), 1.0 / (1.0 - a**2 / D), rtol=0, atol=1e-14)
+
+    def test_loo_factor_equal_weight_is_k_over_k_minus_1(self):
+        """Equal-weight K-unit group -> per-unit factor = K/(K-1)."""
+        for K in (2, 3, 5, 10, 50):
+            a = np.ones(K)
+            T = 2.0 + 0.1 * np.arange(K)
+            per_unit, per_group = _synthetic_group(a, T)
+            factor, n_single = ImputationDiD._leave_one_out_factor(per_unit, per_group)
+            assert n_single == 0
+            np.testing.assert_allclose(
+                factor.to_numpy(), np.full(K, K / (K - 1)), rtol=0, atol=1e-12
+            )
+
+    def test_loo_factor_unit_dominated_group_keeps_large_finite_factor(self):
+        """A >=2-unit group so dominated that `D - a_i^2` cancels to 0 in float64
+        (a=[1.0, 1e-8] -> D==1.0 exactly) must keep its large FINITE factor via
+        the exact sum-of-others denominator, NOT silently fall back to non-LOO."""
+        a = np.array([1.0, 1e-8])  # D = 1 + 1e-16 rounds to 1.0; D - a_0^2 == 0.0
+        T = np.array([2.0, 3.0])
+        per_unit, per_group = _synthetic_group(a, T)
+        factor, n_single = ImputationDiD._leave_one_out_factor(per_unit, per_group)
+        assert n_single == 0  # 2 positive-weight units -> not a singleton
+        f0 = factor.to_numpy()[0]
+        assert np.isfinite(f0) and f0 > 1e10  # ~1/1e-16, NOT the fallback 1.0
+
+    def test_loo_factor_positive_near_cancellation_is_exact(self):
+        """POSITIVE near-cancellation (a=[1.0, 1e-6] -> D - a_0^2 stays > 0 but
+        loses ~4 digits) must use the exact sum-of-others denominator, not the
+        finite-but-wrong `D - a_i^2`. Exact factor = D / a_1^2."""
+        a = np.array([1.0, 1e-6])
+        T = np.array([2.0, 3.0])
+        per_unit, per_group = _synthetic_group(a, T)
+        factor, _ = ImputationDiD._leave_one_out_factor(per_unit, per_group)
+        D = float((a**2).sum())
+        exact = D / (a[1] ** 2)  # = D / sum_{j!=0} a_j^2
+        # rel=1e-9 fails against the lossy `D - a_0^2` (off ~2e-4) but passes exact.
+        assert factor.to_numpy()[0] == pytest.approx(exact, rel=1e-9)
+
+    def test_loo_factor_effective_singleton_falls_back(self):
+        """A >=2-ROW group with only one positive-weight unit (a=[1.5, 0.0]) is an
+        effective singleton (fn. 51) -> factor 1.0 and counted as single."""
+        a = np.array([1.5, 0.0])
+        T = np.array([2.0, 3.0])
+        per_unit, per_group = _synthetic_group(a, T)
+        factor, n_single = ImputationDiD._leave_one_out_factor(per_unit, per_group)
+        assert n_single == 1
+        np.testing.assert_allclose(factor.to_numpy(), [1.0, 1.0], rtol=0, atol=1e-14)
+
+    def test_loo_factor_single_unit_group_falls_back(self):
+        """Single positive-weight unit (App. A.9 fn. 51) -> factor 1.0, counted."""
+        a = np.array([1.5])
+        T = np.array([2.0])
+        per_unit, per_group = _synthetic_group(a, T)
+        factor, n_single = ImputationDiD._leave_one_out_factor(per_unit, per_group)
+        assert n_single == 1
+        np.testing.assert_allclose(factor.to_numpy(), [1.0], rtol=0, atol=1e-14)
+
+    def test_loo_se_geq_nonloo_at_unit_clustering(self):
+        """Prop. A8 direction: at the default unit clustering, LOO SE >= non-LOO;
+        strict on a multi-unit panel. ATT is unchanged."""
+        rng = np.random.default_rng(_BASE_SEED_EQ8 + 11)
+        panel = _make_staggered_panel(
+            rng, cohorts=[3, 4], n_per_cohort=40, n_periods=6, tau_constant=1.0
+        )
+        r0 = ImputationDiD(leave_one_out=False).fit(panel, **self._COMMON)
+        r1 = ImputationDiD(leave_one_out=True).fit(panel, **self._COMMON)
+        np.testing.assert_allclose(r1.overall_att, r0.overall_att, rtol=0, atol=1e-12)
+        assert r1.overall_se > r0.overall_se
+
+    def test_loo_false_is_byte_identical_to_default(self):
+        """leave_one_out=False changes nothing on the default path."""
+        rng = np.random.default_rng(_BASE_SEED_EQ8 + 12)
+        panel = _make_staggered_panel(rng, cohorts=[3], n_per_cohort=50, n_periods=5)
+        se_default = ImputationDiD().fit(panel, **self._COMMON).overall_se
+        se_loo_false = ImputationDiD(leave_one_out=False).fit(panel, **self._COMMON).overall_se
+        assert se_default == se_loo_false
+
+    def test_loo_single_unit_group_warns_and_returns_finite(self):
+        """A singleton treated cohort makes each cohort x horizon group a single
+        unit -> UserWarning + non-LOO fallback, finite SE."""
+        rng = np.random.default_rng(_BASE_SEED_EQ8 + 13)
+        rows: List[Dict[str, Any]] = []
+        uid = 0
+        for _ in range(8):  # never-treated controls
+            c_i = rng.standard_normal()
+            for t in range(1, 6):
+                rows.append(
+                    dict(
+                        unit=uid,
+                        time=t,
+                        first_treat=0,
+                        outcome=c_i + 0.5 * t + 0.1 * rng.standard_normal(),
+                    )
+                )
+            uid += 1
+        c_i = rng.standard_normal()  # ONE treated unit, cohort 3
+        for t in range(1, 6):
+            rows.append(
+                dict(
+                    unit=uid,
+                    time=t,
+                    first_treat=3,
+                    outcome=c_i + 0.5 * t + (1.0 if t >= 3 else 0.0) + 0.1 * rng.standard_normal(),
+                )
+            )
+        panel = pd.DataFrame(rows)
+        with pytest.warns(UserWarning, match="single positive-weight unit"):
+            res = ImputationDiD(leave_one_out=True).fit(panel, **self._COMMON)
+        assert np.isfinite(res.overall_se)
+
+    def test_loo_param_validation_and_roundtrip(self):
+        """leave_one_out is in get/set_params; a non-bool is rejected (TypeError)
+        in __init__ AND at fit-time (closing the naive-setattr set_params bypass)."""
+        assert ImputationDiD().get_params()["leave_one_out"] is False
+        assert ImputationDiD(leave_one_out=True).get_params()["leave_one_out"] is True
+        with pytest.raises(TypeError, match="leave_one_out must be a bool"):
+            ImputationDiD(leave_one_out="yes")  # type: ignore[arg-type]
+        # set_params is a naive setattr; the fit-time re-check must catch it
+        rng = np.random.default_rng(_BASE_SEED_EQ8 + 14)
+        panel = _make_staggered_panel(rng, cohorts=[3], n_per_cohort=20, n_periods=5)
+        est = ImputationDiD()
+        est.set_params(leave_one_out="yes")  # type: ignore[arg-type]
+        with pytest.raises(TypeError, match="leave_one_out must be a bool"):
+            est.fit(panel, **self._COMMON)
+
+    def test_loo_fit_is_idempotent_on_config(self):
+        """Repeated fits with leave_one_out=True give identical SE (no config mutation)."""
+        rng = np.random.default_rng(_BASE_SEED_EQ8 + 15)
+        panel = _make_staggered_panel(rng, cohorts=[3, 4], n_per_cohort=25, n_periods=6)
+        est = ImputationDiD(leave_one_out=True)
+        se_a = est.fit(panel, **self._COMMON).overall_se
+        se_b = est.fit(panel, **self._COMMON).overall_se
+        assert se_a == se_b
+        assert est.leave_one_out is True
+
+    def test_loo_composes_with_cluster_and_bootstrap(self):
+        """LOO applies the same residual rescale under a coarser cluster= and
+        under the multiplier bootstrap: finite SE (NOT asserting the >= direction
+        away from unit clustering)."""
+        rng = np.random.default_rng(_BASE_SEED_EQ8 + 16)
+        panel = _make_staggered_panel(rng, cohorts=[3, 4], n_per_cohort=30, n_periods=6)
+        panel["state"] = panel["unit"] % 5  # coarser cluster
+        se_cluster = (
+            ImputationDiD(leave_one_out=True, cluster="state").fit(panel, **self._COMMON).overall_se
+        )
+        assert np.isfinite(se_cluster)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            se_boot = (
+                ImputationDiD(leave_one_out=True, n_bootstrap=49, seed=7)
+                .fit(panel, **self._COMMON)
+                .overall_se
+            )
+        assert np.isfinite(se_boot)
+
+    def test_loo_replicate_weight_survey_raises(self):
+        """Replicate-weight variance bypasses the conservative IF path where LOO
+        lives, so leave_one_out=True must fail closed (not silently no-op)."""
+        from diff_diff.survey import SurveyDesign
+
+        rng = np.random.default_rng(_BASE_SEED_EQ8 + 17)
+        panel = _make_staggered_panel(rng, cohorts=[3, 4], n_per_cohort=20, n_periods=5)
+        panel["weight"] = 1.0
+        panel["rw1"] = 1.0
+        panel["rw2"] = 1.0
+        design = SurveyDesign(
+            weights="weight",
+            replicate_weights=["rw1", "rw2"],
+            replicate_method="JK1",
+            weight_type="pweight",
+        )
+        with pytest.raises(NotImplementedError, match="leave_one_out=True"):
+            ImputationDiD(leave_one_out=True).fit(panel, survey_design=design, **self._COMMON)
+
+    def test_loo_recorded_in_results_metadata(self):
+        """The result object is self-describing: leave_one_out is persisted on the
+        result, in to_dict(), and surfaced in summary() (it changes reported SEs)."""
+        rng = np.random.default_rng(_BASE_SEED_EQ8 + 18)
+        panel = _make_staggered_panel(rng, cohorts=[3, 4], n_per_cohort=20, n_periods=5)
+        r1 = ImputationDiD(leave_one_out=True).fit(panel, **self._COMMON)
+        r0 = ImputationDiD(leave_one_out=False).fit(panel, **self._COMMON)
+        assert r1.leave_one_out is True and r0.leave_one_out is False
+        assert r1.to_dict()["leave_one_out"] is True
+        assert r0.to_dict()["leave_one_out"] is False
+        assert "Leave-one-out" in r1.summary()
+        assert "Leave-one-out" not in r0.summary()
+
+    @staticmethod
+    def _assert_inference_consistent(effects):
+        """Every cell is either a genuine estimate (se > 0 -> effect/t/p/CI all
+        finite) or a degenerate/reference cell (se == 0 or NaN -> NaN t/p, per the
+        safe_inference contract), and at least one cell is a genuine estimate."""
+        assert effects is not None and len(effects) > 0
+        n_finite = 0
+        for eff in effects.values():
+            se = eff["se"]
+            if np.isfinite(se) and se > 0:
+                assert np.isfinite(eff["effect"])
+                assert np.isfinite(eff["t_stat"])
+                assert np.isfinite(eff["p_value"])
+                lo, hi = eff["conf_int"]
+                assert np.isfinite(lo) and np.isfinite(hi)
+                n_finite += 1
+            else:
+                # zero or non-finite SE -> undefined t-stat / p-value (NaN)
+                assert np.isnan(eff["t_stat"]) and np.isnan(eff["p_value"])
+        assert n_finite > 0
+
+    def test_loo_aggregate_all_analytical(self):
+        """aggregate="all": LOO routes through the event-study AND group
+        aggregators (not just overall). ATT unchanged vs non-LOO, overall LOO SE
+        >= non-LOO, and both aggregation surfaces have consistent finite inference."""
+        rng = np.random.default_rng(_BASE_SEED_EQ8 + 19)
+        panel = _make_staggered_panel(
+            rng, cohorts=[3, 4], n_per_cohort=40, n_periods=6, tau_constant=1.0
+        )
+        r0 = ImputationDiD(leave_one_out=False).fit(panel, aggregate="all", **self._COMMON)
+        r1 = ImputationDiD(leave_one_out=True).fit(panel, aggregate="all", **self._COMMON)
+        np.testing.assert_allclose(r1.overall_att, r0.overall_att, rtol=0, atol=1e-12)
+        assert r1.overall_se > r0.overall_se
+        self._assert_inference_consistent(r1.event_study_effects)
+        self._assert_inference_consistent(r1.group_effects)
+
+    def test_loo_aggregate_all_bootstrap(self):
+        """aggregate="all" under the multiplier bootstrap: event-study and group
+        inference fields are populated and consistent."""
+        rng = np.random.default_rng(_BASE_SEED_EQ8 + 20)
+        panel = _make_staggered_panel(rng, cohorts=[3, 4], n_per_cohort=30, n_periods=6)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            r = ImputationDiD(leave_one_out=True, n_bootstrap=99, seed=3).fit(
+                panel, aggregate="all", **self._COMMON
+            )
+        assert np.isfinite(r.overall_se)
+        self._assert_inference_consistent(r.event_study_effects)
+        self._assert_inference_consistent(r.group_effects)
+
+    def test_loo_aggregate_all_analytical_survey(self):
+        """aggregate="all" with an analytical survey design (weights + PSU): the
+        LOO rescale composes through the survey TSL variance with consistent
+        inference on every surface."""
+        from diff_diff.survey import SurveyDesign
+
+        rng = np.random.default_rng(_BASE_SEED_EQ8 + 21)
+        panel = _make_staggered_panel(rng, cohorts=[3, 4], n_per_cohort=40, n_periods=6)
+        panel["weight"] = 1.0 + (panel["unit"] % 3) * 0.1
+        panel["psu"] = panel["unit"] % 8
+        design = SurveyDesign(weights="weight", psu="psu")
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            r = ImputationDiD(leave_one_out=True).fit(
+                panel, aggregate="all", survey_design=design, **self._COMMON
+            )
+        assert np.isfinite(r.overall_se)
+        self._assert_inference_consistent(r.event_study_effects)
+        self._assert_inference_consistent(r.group_effects)
+
+    @pytest.mark.slow
+    def test_loo_coverage_geq_nominal(self):
+        """MC coverage: on an overfit-prone fine partition, LOO coverage is >=
+        non-LOO coverage and near/above nominal (LOO removes the downward bias)."""
+        true_att = 1.0
+        n_rep = 200
+        cov0 = cov1 = 0
+        for rep in range(n_rep):
+            rng = np.random.default_rng(20000 + rep)
+            panel = _make_staggered_panel(
+                rng,
+                cohorts=[3, 4, 5],
+                n_per_cohort=8,
+                n_periods=6,
+                tau_constant=true_att,
+                sigma=1.0,
+            )
+            r0 = ImputationDiD(leave_one_out=False).fit(panel, **self._COMMON)
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                r1 = ImputationDiD(leave_one_out=True).fit(panel, **self._COMMON)
+            for r, hit in ((r0, "cov0"), (r1, "cov1")):
+                lo = r.overall_att - 1.96 * r.overall_se
+                hi = r.overall_att + 1.96 * r.overall_se
+                if lo <= true_att <= hi:
+                    if hit == "cov0":
+                        cov0 += 1
+                    else:
+                        cov1 += 1
+        cov0f, cov1f = cov0 / n_rep, cov1 / n_rep
+        assert cov1f >= cov0f - 0.02  # LOO no worse than non-LOO
+        assert cov1f >= 0.90  # near/above nominal 95%
+
+
+# =============================================================================
 # Proposition 5 — non-identification without never-treated units
 # =============================================================================
 

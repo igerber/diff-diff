@@ -38,6 +38,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     change; the machine-precision hetero/cluster lock is deferred — needs an unbalanced-DGP golden).
 
 ### Added
+- **`ImputationDiD` leave-one-out conservative variance** (`leave_one_out`, default `False`) — the
+  Borusyak-Jaravel-Spiess (2024) Supplementary Appendix A.9 finite-sample refinement. The non-LOO
+  auxiliary aggregate `tau_tilde_g` (eq. 8) is built from the fitted `tau_hat_it` and so partially
+  overfits to the noise `epsilon_it`, biasing the conservative variance downward; `leave_one_out=True`
+  recomputes each unit's group aggregate excluding that unit (implemented efficiently by rescaling each
+  treated auxiliary residual by `1/(1 - v_ig**2/sum_j v_jg**2)`, exactly equivalent to the direct
+  leave-one-out at the per-unit cluster sum), yielding a larger, less-downward-biased SE (Prop. A8:
+  unbiased for an upper bound at the default unit clustering). Point estimates are unchanged. A group
+  with a single positive-weight unit (LOO undefined, App. A.9 fn. 51) keeps the non-LOO residual with a
+  `UserWarning`. `leave_one_out` is recorded on `ImputationDiDResults` (and `to_dict()` / `summary()`);
+  replicate-weight survey designs raise `NotImplementedError` (their variance bypasses the
+  influence-function path). Default `False` preserves R `didimputation` parity.
 - **`ContinuousDiD` lowest-dose-as-control** (`control_group="lowest_dose"`, CGBS 2024 Remark 3.1) for
   settings with no untreated group (`P(D=0) = 0`): the lowest-dose group `d_L` becomes the comparison
   and the estimand is `ATT(d) − ATT(d_L)` (with `ATT(d_L) = 0` the omitted reference). It is a

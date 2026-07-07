@@ -150,6 +150,9 @@ class ImputationDiDResults:
     vcov_type: str = field(default="hc1")
     cluster_name: Optional[str] = field(default=None)
     n_clusters: Optional[int] = field(default=None)
+    # BJS 2024 Supp. App. A.9 leave-one-out finite-sample variance refinement
+    # (opt-in). Recorded here so reported SEs are self-describing.
+    leave_one_out: bool = field(default=False)
 
     # --- Inference-field aliases (balance/external-adapter compatibility) ---
     @property
@@ -260,6 +263,8 @@ class ImputationDiDResults:
                 lines.append(f"{'Variance estimator:':<30} {vcov_label:>15}")
         if self.n_clusters is not None and self.bootstrap_results is None:
             lines.append(f"{'Number of clusters:':<30} {self.n_clusters:>15}")
+        if self.leave_one_out:
+            lines.append(f"{'Leave-one-out variance:':<30} {'A.9 (BJS 2024)':>15}")
 
         lines.append("")
 
@@ -504,6 +509,7 @@ class ImputationDiDResults:
             "alpha": self.alpha,
             "anticipation": self.anticipation,
             "vcov_type": self.vcov_type,
+            "leave_one_out": self.leave_one_out,
         }
         if self.cluster_name is not None:
             result["cluster_name"] = self.cluster_name

@@ -127,6 +127,27 @@ class ImputationDiD(ImputationDiDBootstrapMixin):
         pre-trends assessment. Pre-period effects should be ~0 under
         parallel trends. Only affects event_study aggregation; overall
         ATT and group aggregation are unchanged.
+    leave_one_out : bool, default=False
+        If True, apply the Borusyak-Jaravel-Spiess (2024) Supplementary
+        Appendix A.9 leave-one-out finite-sample refinement to the
+        conservative variance. The non-LOO auxiliary aggregate ``tau_tilde_g``
+        is built from the fitted ``tau_hat_it`` and thus partially overfits to
+        the noise ``epsilon_it``, biasing the variance downward. LOO recomputes
+        each unit's group aggregate excluding that unit -- implemented
+        efficiently by rescaling each treated auxiliary residual by
+        ``1 / (1 - v_ig**2 / sum_j v_jg**2)`` (App. A.9), which is exactly
+        equivalent to the direct leave-one-out at the per-unit cluster sum.
+        Yields a larger, less-downward-biased SE (Prop. A8: unbiased for an
+        upper bound). Default False preserves R ``didimputation`` parity; the
+        refinement is an option in the authors' Stata ``did_imputation``. LOO
+        is undefined for a group with a single positive-weight unit (App. A.9
+        footnote 51): such groups fall back to the non-LOO residual with a
+        UserWarning. The Prop. A8 direction (LOO >= non-LOO) is guaranteed at
+        the default unit clustering; coarser ``cluster=`` / analytical
+        ``survey_design=`` / ``n_bootstrap`` compositions apply the same rescale
+        but are a library extension beyond the paper's derivation.
+        Replicate-weight survey designs raise ``NotImplementedError`` (their
+        variance bypasses the influence-function path where the rescale lives).
 
     Attributes
     ----------
@@ -182,6 +203,7 @@ class ImputationDiD(ImputationDiDBootstrapMixin):
         horizon_max: Optional[int] = None,
         aux_partition: str = "cohort_horizon",
         pretrends: bool = False,
+        leave_one_out: bool = False,
     ):
         if rank_deficient_action not in ("warn", "error", "silent"):
             raise ValueError(
@@ -199,6 +221,7 @@ class ImputationDiD(ImputationDiDBootstrapMixin):
                 f"got '{aux_partition}'"
             )
         self._validate_vcov_type(vcov_type)
+        self._validate_leave_one_out(leave_one_out)
 
         self.anticipation = anticipation
         self.alpha = alpha
@@ -211,6 +234,7 @@ class ImputationDiD(ImputationDiDBootstrapMixin):
         self.horizon_max = horizon_max
         self.aux_partition = aux_partition
         self.pretrends = pretrends
+        self.leave_one_out = leave_one_out
 
         self.is_fitted_ = False
         self.results_: Optional[ImputationDiDResults] = None
@@ -275,6 +299,7 @@ class ImputationDiD(ImputationDiDBootstrapMixin):
         # mutations (e.g. set_params(vcov_type="classical")) are re-checked
         # at use rather than silently accepted by the parameter setter.
         self._validate_vcov_type(self.vcov_type)
+        self._validate_leave_one_out(self.leave_one_out)
 
         # Validate inputs
         required_cols = [outcome, unit, time, first_treat]
@@ -344,6 +369,22 @@ class ImputationDiD(ImputationDiDBootstrapMixin):
                 "estimate. Either omit cluster= (the replicate weights encode "
                 "the design structure implicitly) or use a non-replicate "
                 "survey design (with explicit strata/psu/fpc)."
+            )
+        # Reject replicate-weight + leave_one_out=: the BJS 2024 App. A.9
+        # refinement rescales the conservative influence-function auxiliary
+        # residuals, but replicate-weight variance is computed by per-replicate
+        # point-estimate refits (not the IF path), so leave_one_out would
+        # silently have no effect. Fail-closed (no-silent-failures).
+        if _uses_replicate_imp and self.leave_one_out:
+            raise NotImplementedError(
+                "ImputationDiD(leave_one_out=True) is not supported with "
+                "replicate-weight survey designs. The leave-one-out refinement "
+                "(Borusyak, Jaravel & Spiess 2024, Supp. App. A.9) rescales the "
+                "conservative influence-function residuals, but replicate-weight "
+                "variance is computed by per-replicate refits and does not use "
+                "that path — leave_one_out would silently have no effect. Use a "
+                "non-replicate (Taylor-linearization) survey design, or "
+                "leave_one_out=False."
             )
         # Validate within-unit constancy for panel survey designs
         if resolved_survey is not None:
@@ -968,6 +1009,7 @@ class ImputationDiD(ImputationDiDBootstrapMixin):
             vcov_type=self.vcov_type,
             cluster_name=_cluster_name_for_results,
             n_clusters=_n_clusters_for_results,
+            leave_one_out=self.leave_one_out,
         )
 
         self.is_fitted_ = True
@@ -1683,6 +1725,8 @@ class ImputationDiD(ImputationDiDBootstrapMixin):
         # _compute_target_weights) poison its whole group via 0 * NaN = NaN. The
         # previous observation-level pandas sum relied on skipna to drop them.
         contrib = (v_treated != 0.0) & np.isfinite(tau_hat)
+        loo_factor: Optional[pd.Series] = None
+        n_single_loo = 0
         if contrib.any():
             inner = pd.DataFrame(
                 {
@@ -1702,6 +1746,12 @@ class ImputationDiD(ImputationDiDBootstrapMixin):
             )
             den_ok = per_group["den"].abs() >= 1e-15
             tau_tilde_map = (per_group["num"] / per_group["den"]).where(den_ok)
+            # BJS 2024 App. A.9 leave-one-out refinement: rescale each treated
+            # residual by 1/(1 - v_ig^2 / sum_j v_jg^2) (== the direct-LOO tau_tilde
+            # exactly, at the per-unit cluster sum). Reuses a_{i,g} = per_unit['a']
+            # and sum_j v_jg^2 = per_group['den']; applied to epsilon_treated below.
+            if self.leave_one_out:
+                loo_factor, n_single_loo = self._leave_one_out_factor(per_unit, per_group)
         else:
             tau_tilde_map = pd.Series(dtype=float)
 
@@ -1719,6 +1769,28 @@ class ImputationDiD(ImputationDiDBootstrapMixin):
 
         # Auxiliary residuals
         epsilon_treated = tau_hat - tau_tilde
+
+        # Leave-one-out rescale (BJS 2024 App. A.9): map each treated obs to its
+        # (group, unit) factor and inflate the residual. Non-contributing rows
+        # (v_it == 0, psi == 0 anyway) and single-positive-weight-unit groups
+        # (LOO undefined, fn. 51) keep factor 1.0.
+        if self.leave_one_out and loo_factor is not None:
+            obs_index = pd.MultiIndex.from_arrays(
+                [group_codes, df_1[unit].values], names=["g", "u"]
+            )
+            factor_per_obs = loo_factor.reindex(obs_index).to_numpy(dtype=float)
+            factor_per_obs = np.where(np.isfinite(factor_per_obs), factor_per_obs, 1.0)
+            epsilon_treated = epsilon_treated * factor_per_obs
+            if n_single_loo > 0:
+                warnings.warn(
+                    f"leave_one_out=True: {n_single_loo} auxiliary group(s) have a single "
+                    f"positive-weight unit, where the leave-one-out variance is undefined "
+                    f"(Borusyak, Jaravel & Spiess 2024, Supp. App. A.9 fn. 51); those groups "
+                    f"keep the non-leave-out residual. A coarser aux_partition reduces "
+                    f"singleton groups.",
+                    UserWarning,
+                    stacklevel=2,
+                )
 
         return epsilon_treated
 
@@ -2496,6 +2568,7 @@ class ImputationDiD(ImputationDiDBootstrapMixin):
             "horizon_max": self.horizon_max,
             "aux_partition": self.aux_partition,
             "pretrends": self.pretrends,
+            "leave_one_out": self.leave_one_out,
         }
 
     def set_params(self, **params) -> "ImputationDiD":
@@ -2506,6 +2579,75 @@ class ImputationDiD(ImputationDiDBootstrapMixin):
             else:
                 raise ValueError(f"Unknown parameter: {key}")
         return self
+
+    @staticmethod
+    def _validate_leave_one_out(leave_one_out: Any) -> None:
+        """Validate ``leave_one_out`` is a strict bool.
+
+        Called from ``__init__`` AND ``fit()`` so sklearn-style
+        ``set_params(leave_one_out=...)`` mutations are re-checked at use
+        time -- the naive ``set_params`` setter would otherwise accept a
+        truthy string (e.g. "yes") and silently run the LOO refinement.
+        """
+        if not isinstance(leave_one_out, bool):
+            raise TypeError(f"leave_one_out must be a bool, got {type(leave_one_out).__name__}")
+
+    @staticmethod
+    def _leave_one_out_factor(
+        per_unit: pd.DataFrame, per_group: pd.DataFrame
+    ) -> Tuple[pd.Series, int]:
+        """Per-(group, unit) leave-one-out residual-rescale factor (BJS 2024 A.9).
+
+        ``factor_{g,i} = 1 / (1 - v_ig**2 / sum_j v_jg**2)`` with
+        ``v_ig = per_unit['a']`` and ``sum_j v_jg**2 = per_group['den']``. This
+        rescale of ``epsilon_tilde_it`` reproduces the direct leave-one-out
+        aggregate ``tau_tilde_it^LO`` exactly at the per-unit cluster sum
+        ``psi_i = sum_t v_it * epsilon_tilde_it`` (App. A.9). A group with a
+        single positive-weight unit has ``v_ig**2 == sum_j v_jg**2`` so the
+        factor diverges (LOO undefined, App. A.9 fn. 51); those groups fall back
+        to ``1.0`` (non-LOO). A genuinely unit-dominated but >=2-unit group keeps
+        its large finite factor -- that is the paper's intended inflation.
+
+        Returns
+        -------
+        (factor : pd.Series indexed like ``per_unit`` (g, u), n_single_unit_groups : int)
+        """
+        a = per_unit["a"].to_numpy(dtype=float)
+        sq = a**2
+        g_level = per_unit.index.get_level_values("g")
+        u_level = per_unit.index.get_level_values("u")
+        den = per_group["den"].reindex(g_level).to_numpy(dtype=float)  # D_g per (g,u)
+
+        # A group is "singleton" for LOO (App. A.9 fn. 51) when fewer than two
+        # units carry positive squared weight -- covers a true 1-unit group AND
+        # the effective-singleton case (>=2 rows, only one with a_ig != 0).
+        pos_per_group = pd.Series(sq > 0.0, index=per_unit.index).groupby(level="g").sum()
+        single_groups = pos_per_group.index[pos_per_group < 2]
+        is_single = pd.Index(g_level).isin(single_groups)
+
+        den_ok = np.abs(den) >= 1e-15
+        # factor = D_g / (D_g - v_ig^2) = D_g / sum_{j!=i} v_jg^2. Compute the
+        # leave-one-out denominator as the sum of the OTHER units' squared
+        # weights -- NOT as D_g - v_ig^2 after forming the ratio: for a genuinely
+        # dominated (but >=2-unit) group the subtraction loses precision (and can
+        # cancel to 0/negative) in float64 -- a finite-but-wrong or silently
+        # non-LOO factor. The fast subtraction is accurate away from the
+        # near-cancellation boundary; wherever the leave-one-out mass is a tiny
+        # fraction of D (relative loss of >~1e-6), recompute it exactly as the
+        # drop-then-sum of the OTHER units' squared weights. At most one unit per
+        # group can be that dominant, so the recompute stays O(units).
+        other_mass = den - sq
+        suspect = (~is_single) & den_ok & (other_mass <= 1e-6 * den)
+        if suspect.any():
+            sq_series = pd.Series(sq, index=per_unit.index)
+            for pos in np.nonzero(suspect)[0]:
+                grp = sq_series.xs(g_level[pos], level="g")
+                other_mass[pos] = float(grp.drop(u_level[pos]).sum())
+        # Fall back to non-LOO (factor 1.0) only where LOO is genuinely undefined:
+        # a singleton group (fn. 51), a degenerate den, or no other positive mass.
+        fallback = is_single | ~den_ok | (other_mass <= 0.0)
+        factor = np.where(fallback, 1.0, den / np.where(fallback, 1.0, other_mass))
+        return pd.Series(factor, index=per_unit.index), int(len(single_groups))
 
     @staticmethod
     def _validate_vcov_type(vcov_type: str) -> None:

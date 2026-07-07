@@ -392,6 +392,7 @@ ImputationDiD(
     horizon_max: int | None = None,              # Max event-study horizon
     aux_partition: str = "cohort_horizon",        # "cohort_horizon", "cohort", or "horizon"
     pretrends: bool = False,                     # Include pre-treatment horizons in event study
+    leave_one_out: bool = False,                 # BJS 2024 App. A.9 leave-one-out finite-sample variance (larger, less-downward-biased SE)
 )
 ```
 
