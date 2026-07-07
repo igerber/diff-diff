@@ -8856,9 +8856,7 @@ class TestSpilloverDiDBreadRankGuard:
                 warnings.simplefilter("always")
                 result = est.fit(df, outcome="y", unit="unit", time="time", treatment="D")
         msgs = [str(w.message) for w in caught]
-        assert any(
-            "SpilloverDiD Wave D bread" in m and "rank-deficient" in m for m in msgs
-        ), msgs
+        assert any("SpilloverDiD Wave D bread" in m and "rank-deficient" in m for m in msgs), msgs
         assert est.is_fitted_ and np.isfinite(result.att)
 
     def test_dropped_ring_coefficient_propagates_nan_inference(self):
@@ -8895,11 +8893,106 @@ class TestSpilloverDiDBreadRankGuard:
         eff = res.spillover_effects
         nan_rows = eff[np.isnan(eff["se"])]
         fin_rows = eff[np.isfinite(eff["se"]) & (eff["se"] > 0)]
-        assert len(nan_rows) >= 1, (
-            f"a dropped Wave D coord should NaN a ring SE; got {eff['se'].tolist()}"
-        )
+        assert (
+            len(nan_rows) >= 1
+        ), f"a dropped Wave D coord should NaN a ring SE; got {eff['se'].tolist()}"
         assert len(fin_rows) >= 1, "identified rings should keep finite SE"
         # The NaN-SE ring's FULL inference must be NaN, not just se.
         for _, r in nan_rows.iterrows():
             assert np.isnan(r["t_stat"]) and np.isnan(r["p_value"])
             assert np.isnan(r["ci_low"]) and np.isnan(r["ci_high"])
+
+
+class TestStaggeredSparseKDTreeBranch:
+    """The staggered cohort loop's sparse cKDTree branch (activated when
+    ``cutoff_km`` is set, ``n_units > _CONLEY_SPARSE_N_THRESHOLD``, and the
+    metric is a built-in string) must reproduce the dense path exactly for
+    every within-cutoff distance, and produce identical fits end-to-end —
+    every staggered ``d_it`` consumer compares against thresholds <=
+    ``_effective_d_bar``, so beyond-cutoff ``inf`` is semantics-preserving.
+    Mirrors the static helper's sparse branch (auto-activated via the same
+    threshold) and its tests above."""
+
+    def test_helper_sparse_matches_dense_within_cutoff(self, staggered_panel, monkeypatch):
+        import diff_diff.spillover as sp
+
+        df, ft = staggered_panel
+        kwargs = dict(
+            unit="unit",
+            time="time",
+            coords=("lat", "lon"),
+            metric="haversine",
+            first_treat_by_unit=ft,
+            d_bar=1200.0,
+        )
+        d_dense, ru, rt, trig_dense = sp._compute_nearest_treated_distance_staggered(df, **kwargs)
+        monkeypatch.setattr(sp, "_CONLEY_SPARSE_N_THRESHOLD", 0)
+        d_sparse, _, _, trig_sparse = sp._compute_nearest_treated_distance_staggered(
+            df, cutoff_km=1200.0, **kwargs
+        )
+        in_range = d_dense <= 1200.0 * (1 + 1e-6)
+        np.testing.assert_allclose(d_sparse[in_range], d_dense[in_range], atol=1e-8)
+        # Beyond-cutoff entries are inf on the sparse path.
+        assert np.isinf(d_sparse[~in_range]).all()
+        # The d_bar trigger consumes distances <= d_bar (== cutoff), so it
+        # must be identical between the paths (NaN pattern included).
+        np.testing.assert_array_equal(np.isnan(trig_dense), np.isnan(trig_sparse))
+        both = ~np.isnan(trig_dense)
+        np.testing.assert_array_equal(trig_dense[both], trig_sparse[both])
+
+    def test_fit_sparse_matches_dense_end_to_end(self, monkeypatch):
+        """Force the sparse branch on a small staggered fit: att, ring
+        coefficients and SEs must match the dense fit (the within-cutoff
+        distances are exact; beyond-cutoff rows land in the far-away
+        control group on both paths)."""
+        import diff_diff.spillover as sp
+
+        rng = np.random.default_rng(42)
+        rows = []
+        # 3 cohorts of treated units near the origin + controls in/beyond rings.
+        units = {}
+        uid = 0
+        for k in range(6):  # treated: onset staggered 1/2
+            units[f"T{uid}"] = (0.05 * k, 0.02 * k, 1 + (k % 2))
+            uid += 1
+        for k in range(10):  # near controls within ~40 km
+            units[f"C{uid}"] = (0.1 + 0.02 * k, 0.15 + 0.02 * k, np.inf)
+            uid += 1
+        for k in range(8):  # far controls (>5 deg away, far outside rings)
+            units[f"F{uid}"] = (6.0 + 0.1 * k, 6.0, np.inf)
+            uid += 1
+        for u, (lat, lon, ft) in units.items():
+            for t in range(4):
+                treated_now = np.isfinite(ft) and t >= ft
+                rows.append(
+                    {
+                        "unit": u,
+                        "time": t,
+                        "lat": lat,
+                        "lon": lon,
+                        "first_treat": ft if np.isfinite(ft) else 0,
+                        "y": 1.0 + 0.1 * t + (0.5 if treated_now else 0.0) + rng.normal(0, 0.05),
+                    }
+                )
+        df = pd.DataFrame(rows)
+        fit_kwargs = dict(outcome="y", unit="unit", time="time", first_treat="first_treat")
+
+        dense = SpilloverDiD(rings=[0.0, 50.0], conley_coords=("lat", "lon")).fit(df, **fit_kwargs)
+        monkeypatch.setattr(sp, "_CONLEY_SPARSE_N_THRESHOLD", 0)
+        sparse_res = SpilloverDiD(rings=[0.0, 50.0], conley_coords=("lat", "lon")).fit(
+            df, **fit_kwargs
+        )
+
+        assert sparse_res.is_staggered is True and dense.is_staggered is True
+        np.testing.assert_allclose(sparse_res.att, dense.att, rtol=0, atol=1e-12)
+        np.testing.assert_allclose(sparse_res.se, dense.se, rtol=0, atol=1e-12)
+        # spillover_effects is a per-ring DataFrame; compare its numeric columns.
+        sp_num = sparse_res.spillover_effects.select_dtypes("number")
+        de_num = dense.spillover_effects.select_dtypes("number")
+        np.testing.assert_allclose(
+            sp_num.to_numpy(dtype=float),
+            de_num.to_numpy(dtype=float),
+            rtol=0,
+            atol=1e-12,
+            equal_nan=True,
+        )

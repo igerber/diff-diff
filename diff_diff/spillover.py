@@ -341,6 +341,7 @@ def _compute_nearest_treated_distance_staggered(
     metric: SpilloverMetric,
     first_treat_by_unit: Dict[Any, Any],
     d_bar: Optional[float] = None,
+    cutoff_km: Optional[float] = None,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, Optional[np.ndarray]]:
     """Return per-row nearest-treated distance for the staggered case.
 
@@ -372,11 +373,20 @@ def _compute_nearest_treated_distance_staggered(
         duplicate cohort pass on the event-study path
         (PR #456 R6 performance fix).
 
-    Notes
-    -----
-    The staggered helper currently always uses dense pairwise distance per
-    cohort. A sparse cKDTree branch (mirroring the static helper) is queued
-    as a follow-up — see TODO.md.
+    cutoff_km : float, optional
+        When set, ``n_units > _CONLEY_SPARSE_N_THRESHOLD``, and the metric
+        is a built-in string, each cohort's nearest-treated distances are
+        computed via the sparse cKDTree helper
+        (:func:`_compute_nearest_treated_distance_sparse`) instead of the
+        dense (n_units × n_treated_by_onset) matrix. Units with no treated
+        neighbor within ``cutoff_km`` for a cohort get ``inf`` for that
+        cohort — identical downstream semantics to the dense path because
+        every consumer of the staggered ``d_it`` compares against
+        thresholds ≤ the outermost ring edge (ring membership, ``S_it``,
+        the far-away check, and the ``d_bar`` trigger), so the caller
+        passes ``cutoff_km = _effective_d_bar``. Within-cutoff distances
+        are exact (the sparse helper recomputes the true metric for
+        in-range matches).
 
     Returns
     -------
@@ -432,7 +442,25 @@ def _compute_nearest_treated_distance_staggered(
             continue
         treated_coords = all_coords[treated_positions]
         # Compute per-unit nearest distance to this cohort's treated set.
-        dists_to_cohort = _pairwise_ring_distances(all_coords, treated_coords, metric).min(axis=1)
+        # Sparse cKDTree branch (mirrors the static helper's dispatch at
+        # _compute_nearest_treated_distance_static): per-cohort tree on the
+        # treated-by-onset subset, exact metric recomputed for in-range
+        # matches; beyond-cutoff units get inf (see the cutoff_km doc above).
+        if (
+            cutoff_km is not None
+            and len(unit_index) > _CONLEY_SPARSE_N_THRESHOLD
+            and metric in ("haversine", "euclidean")
+        ):
+            dists_to_cohort = _compute_nearest_treated_distance_sparse(
+                all_coords=all_coords,
+                treated_coords=treated_coords,
+                metric=metric,  # type: ignore[arg-type]
+                cutoff_km=float(cutoff_km),
+            )
+        else:
+            dists_to_cohort = _pairwise_ring_distances(all_coords, treated_coords, metric).min(
+                axis=1
+            )
         # Update rows whose period t >= onset: take min of current d_it and the
         # newly-available cohort distance.
         affected_rows = row_time >= onset
@@ -2448,6 +2476,12 @@ class SpilloverDiD:
                     metric=self.conley_metric,
                     first_treat_by_unit=effective_onsets,
                     d_bar=self._effective_d_bar if self.event_study else None,
+                    # Sparse cKDTree auto-activates past the threshold for
+                    # built-in metrics; every staggered d_it consumer
+                    # compares against thresholds <= _effective_d_bar, so
+                    # beyond-cutoff inf is semantics-preserving (mirrors
+                    # the static call below).
+                    cutoff_km=self._effective_d_bar,
                 )
             )
         else:

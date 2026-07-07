@@ -569,6 +569,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   chunk-count-invariance regression class (`TestPrecomputeChunking`). The
   quadratic-form evaluation is a ~1-ULP reassociation of the per-call `sum(scores²)`;
   the strict-inequality tie guard absorbs sub-1e-9 shifts by design.
+- **`SpilloverDiD` staggered nearest-treated distances gain the sparse cKDTree branch.**
+  The staggered cohort loop always built a dense `(n_units, n_treated_by_onset)` distance
+  matrix per cohort; it now dispatches per cohort to the same cKDTree helper the static
+  path uses (auto-activated when `n_units` exceeds the sparse threshold, built-in metrics
+  only, `cutoff_km = ` the outermost ring edge). Within-cutoff distances are exact (the
+  helper recomputes the true great-circle/planar metric for in-range matches) and
+  beyond-cutoff units get `inf` — semantics-preserving because every staggered `d_it`
+  consumer (ring membership, `S_it`, the far-away check, the event-study `d_bar` trigger)
+  compares against thresholds at or below that cutoff. Helper- and fit-level equality
+  tests pin the sparse arm against the dense path (atol 1e-12 end-to-end).
 - **`CallawaySantAnna` per-(g,t) IF scatters converted from `np.add.at` to fancy `+=`**
   (`staggered.py::_cluster_robust_se_from_per_gt_if` — runs once per (g,t) cell when
   `cluster=` is set — and the general combined-IF assembly path in
