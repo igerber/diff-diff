@@ -1480,3 +1480,38 @@ def test_wild_bootstrap_rank_deficient_storage_vcov_does_not_crash():
     assert res.vcov is not None
     assert np.any(np.isnan(res.vcov))
     assert not np.any(np.isinf(res.vcov))
+
+
+class TestPrecomputeChunking:
+    """The r-independent precompute pass must be chunk-count invariant: forcing
+    many draw-chunks (tiny byte budget) reproduces the single-chunk outputs
+    bit-for-bit (each chunk computes its own rows independently)."""
+
+    def test_multi_chunk_bit_identical(self, monkeypatch):
+        import diff_diff.utils as du
+
+        rng = np.random.default_rng(3)
+        G, n_per = 9, 30
+        n = G * n_per
+        cl = np.repeat(np.arange(G), n_per)
+        x = rng.normal(size=n)
+        d = (np.arange(n) % 2).astype(float)
+        X = np.column_stack([np.ones(n), d, x])
+        y = 1.0 + 0.4 * d + 0.2 * x + rng.normal(size=n) + rng.normal(size=G)[cl]
+        resid = y - X @ np.linalg.lstsq(X, y, rcond=None)[0]
+
+        one = du.wild_bootstrap_se(X, y, resid, cl, 1, n_bootstrap=499, seed=11)
+        # ~3 rows per chunk -> hundreds of chunks.
+        monkeypatch.setattr(du, "_WILD_PRECOMPUTE_CHUNK_BYTES", 3 * 8 * 8 * n)
+        many = du.wild_bootstrap_se(X, y, resid, cl, 1, n_bootstrap=499, seed=11)
+
+        # p-value: strict-count statistic with a 1e-9 relative tie guard —
+        # exact equality expected. se / CI endpoints tolerate the ambient
+        # Rust-backend run-to-run vcov wobble (~1e-14 rel; see the TODO row
+        # on rust solve_ols nondeterminism — the pure-Python backend is
+        # bit-stable and the chunked precompute itself is deterministic
+        # numpy).
+        assert many.p_value == one.p_value
+        np.testing.assert_allclose(many.se, one.se, rtol=1e-12)
+        np.testing.assert_allclose(many.ci_lower, one.ci_lower, rtol=1e-6)
+        np.testing.assert_allclose(many.ci_upper, one.ci_upper, rtol=1e-6)

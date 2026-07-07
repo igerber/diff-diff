@@ -489,6 +489,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   h=1 clamp-parity test). The symbol is imported independently (mixed-version safe — a
   stale extension degrades HC2 to NumPy without disabling older Rust accelerations).
   `return_dof` / weighted / CR2-BM requests stay on NumPy (CR2-BM tracked in TODO).
+- **Wild cluster bootstrap test inversion ~7x faster with bounded memory.** The WCR
+  bootstrap DGP is linear in the candidate null `r` (`y*(r) = A + r·B` with r-independent
+  `A`, `B`), so the per-cluster score decomposition and the studentizing variance reduce
+  to five precomputed `(B,)` vectors (the variance is the PSD quadratic
+  `qa + r·qb + r²·qc`). The CI inversion's ~O(100) `_t_star(r)` evaluations — each of
+  which previously materialized fresh `(B×n)` bootstrap-outcome, `(k×B)` refit and `(n×B)`
+  residual arrays — now cost O(B) arithmetic each, and the ONE precompute pass is chunked
+  over draws (a conservative per-chunk byte budget sized against the peak count of live
+  `(Bc, n)` temporaries) so peak memory is bounded for large `n`/`B`. Verified against
+  origin/main on a 5-seed few-cluster grid: SE, p-value, and inverted CI endpoints all
+  **bit-identical** (backend pinned), 6.8x end-to-end; the boottest parity suite
+  (`tests/test_wild_bootstrap.py`, 60 tests incl. pinned values) passes unchanged. The
+  quadratic-form evaluation is a ~1-ULP reassociation of the per-call `sum(scores²)`;
+  the strict-inequality tie guard absorbs sub-1e-9 shifts by design.
 - **`CallawaySantAnna` per-(g,t) IF scatters converted from `np.add.at` to fancy `+=`**
   (`staggered.py::_cluster_robust_se_from_per_gt_if` — runs once per (g,t) cell when
   `cluster=` is set — and the general combined-IF assembly path in

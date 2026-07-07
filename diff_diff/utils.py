@@ -636,6 +636,12 @@ def _wild_weight_matrix(
     return weights
 
 
+# Per-chunk byte budget for wild_bootstrap_se's r-independent precompute
+# pass (divided by a conservative x8 peak-temporary multiplier to size the
+# draw-rows per chunk). Read at CALL time so tests can monkeypatch it.
+_WILD_PRECOMPUTE_CHUNK_BYTES = 256 * 1024 * 1024
+
+
 def wild_bootstrap_se(
     X: np.ndarray,
     y: np.ndarray,
@@ -868,20 +874,66 @@ def wild_bootstrap_se(
     # that p(r) is a stable (monotone, step) function amenable to root-finding.
     weights = _wild_weight_matrix(n_clusters, n_bootstrap, weight_type, rng)
     n_boot_eff = int(weights.shape[0])
-    weights_obs = weights[:, cl_idx]  # (B, n)
+
+    # ---- r-independent precompute for the test inversion --------------------
+    # The WCR DGP is LINEAR in the candidate null r:
+    #     u_r = m_y - r * m_xj
+    #     y*(r) = y - u_r * (1 - w_obs) = A + r * B,
+    # with A = y - m_y*(1 - w_obs) and B = m_xj*(1 - w_obs) (both (B, n) and
+    # r-independent). Everything downstream is affine in y*, so
+    #     beta_j*(r)      = alpha1 + r * beta1                    ((B,) each)
+    #     scores(r)       = SA + r * SB                           ((G, B))
+    #     se*(r)^2 / corr = qa + r * qb + r^2 * qc                ((B,) each,
+    # the PSD quadratic form sum_g (SA + r SB)^2). The CI inversion calls
+    # _t_star ~O(100) times; precomputing these five (B,) vectors turns each
+    # call from three (B x n)/(n x B) GEMM passes into O(B) arithmetic, and
+    # the ONE precompute pass is chunked over draws so peak memory stays
+    # bounded (the old code materialized fresh (B, n) intermediates on every
+    # call). Not bit-identical to the per-call form (the variance is evaluated
+    # through the expanded quadratic instead of sum(scores^2) at each r —
+    # ~1 ULP reassociation class); the strict-inequality tie guard below
+    # absorbs sub-1e-9 shifts, so the discrete outputs (p-value, CI
+    # endpoints) are unchanged on the regression grid.
+    # The cluster-level weights matrix is only (B, G); the (B, n)
+    # observation-level expansion is built PER CHUNK below so no full
+    # (B, n) array is ever materialized.
+    alpha1 = np.empty(n_boot_eff, dtype=np.float64)
+    beta1 = np.empty(n_boot_eff, dtype=np.float64)
+    qa = np.empty(n_boot_eff, dtype=np.float64)
+    qb = np.empty(n_boot_eff, dtype=np.float64)
+    qc = np.empty(n_boot_eff, dtype=np.float64)
+    # Conservative sizing: up to ~8 (Bc, n) float64 arrays/temporaries can
+    # be live around the residual + score construction (one_minus_w_blk,
+    # A_blk, B_blk, RA_blk, RB_blk, plus elementwise/GEMM temporaries), so
+    # the divisor uses that peak multiplier against the byte cap below
+    # (module constant, read at call time so tests can monkeypatch it to
+    # force the multi-chunk branch).
+    _rows_per_chunk = max(1, int(_WILD_PRECOMPUTE_CHUNK_BYTES // (8 * 8 * max(n, 1))))
+    for _cs in range(0, n_boot_eff, _rows_per_chunk):
+        blk = slice(_cs, min(_cs + _rows_per_chunk, n_boot_eff))
+        one_minus_w_blk = 1.0 - weights[blk][:, cl_idx]  # (Bc, n)
+        A_blk = y[None, :] - m_y[None, :] * one_minus_w_blk  # (Bc, n)
+        B_blk = m_xj[None, :] * one_minus_w_blk  # (Bc, n)
+        alpha1[blk] = A_blk @ a_vec
+        beta1[blk] = B_blk @ a_vec
+        # Residual-maker applied to each draw row: R = Z - (Z @ proj.T) @ X_eff.T
+        RA_blk = A_blk - (A_blk @ proj.T) @ X_eff.T  # (Bc, n)
+        RB_blk = B_blk - (B_blk @ proj.T) @ X_eff.T
+        SA_blk = (a_vec[None, :] * RA_blk) @ cluster_indicator.T  # (Bc, G)
+        SB_blk = (a_vec[None, :] * RB_blk) @ cluster_indicator.T
+        qa[blk] = np.sum(SA_blk * SA_blk, axis=1)
+        qb[blk] = 2.0 * np.sum(SA_blk * SB_blk, axis=1)
+        qc[blk] = np.sum(SB_blk * SB_blk, axis=1)
 
     def _t_star(r: float) -> np.ndarray:
         """Studentized bootstrap statistics t*(r) under H0: beta_j = r."""
-        u_r = m_y - r * m_xj  # restricted residuals at r (n,)
-        # WCR DGP: y* = fitted_restricted + u_r * w = (y - u_r) + u_r * w_obs.
-        y_star = y[None, :] - u_r[None, :] * (1.0 - weights_obs)  # (B, n)
-        beta_j_star = y_star @ a_vec  # (B,)
-        coef_full = proj @ y_star.T  # (k_eff, B)
-        resid_star = y_star.T - X_eff @ coef_full  # (n, B) bootstrap residuals
-        scores = cluster_indicator @ (a_vec[:, None] * resid_star)  # (G, B) per-cluster scores
-        se_star = np.sqrt(corr * np.sum(scores**2, axis=0))  # (B,)
+        # PSD quadratic form; roundoff can dip microscopically negative at an
+        # interior root — clamp so sqrt is defined, then the se>0 guard NaNs
+        # the degenerate draws exactly as the per-call form did.
+        var_star = corr * np.maximum(qa + r * qb + r * r * qc, 0.0)
+        se_star = np.sqrt(var_star)  # (B,)
         with np.errstate(divide="ignore", invalid="ignore"):
-            t = (beta_j_star - r) / se_star
+            t = (alpha1 + r * beta1 - r) / se_star
         t[~(se_star > 0)] = np.nan
         return t
 
