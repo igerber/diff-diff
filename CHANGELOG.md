@@ -520,6 +520,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   have been reached only by external callers hand-building the internal dict). No public
   API or numerical change — the dict is internal (`_influence_func_info` whitebox surface
   keeps `treated_idx`/`control_idx`/`treated_inf`/`control_inf`).
+### Changed
+- **`SpilloverDiD` stage-1 FE solver routed through the shared Gauss-Seidel engine.**
+  `spillover._iterative_fe_subset` is now a thin Butts-subsample wrapper over
+  `diff_diff.utils._iterative_fe_solve` (the engine ImputationDiD / TwoStageDiD already
+  use), taking the FE-solver copy count in the library from 2 to 1. The wrapper keeps the
+  SpilloverDiD front door (empty-Omega_0 / empty positive-weight-Omega_0 `ValueError`
+  gates); the shared engine owns the iteration, the zero-weight NaN-FE convention, and
+  the `warn_if_not_converged` non-convergence warning (now labelled "SpilloverDiD stage-1
+  FE (Butts Omega_0 subsample)", replacing the caller-side message). Per sweep the shared
+  engine computes the identical group means and convergence metric, so converged fits are
+  bit-identical; `max_iter` is aligned from the historical local cap of 100 to the shared
+  10,000 convention (fits that previously exhausted 100 iterations and warned may now
+  converge instead — strictly more accurate FE; `tol=1e-10` unchanged). REGISTRY
+  SpilloverDiD section documents the routing.
 
 ## [3.6.2] - 2026-07-03
 

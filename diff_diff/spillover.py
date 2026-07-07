@@ -41,7 +41,7 @@ from diff_diff.conley import (
 from diff_diff.linalg import _rank_guarded_inv, solve_ols
 from diff_diff.results import SpilloverDiDResults
 from diff_diff.two_stage import _compute_gmm_corrected_meat
-from diff_diff.utils import safe_inference
+from diff_diff.utils import _iterative_fe_solve, safe_inference
 
 # Type alias mirroring diff_diff.conley.ConleyMetric so callers can supply
 # any of the built-in identifiers or a user callable returning a pairwise
@@ -1286,10 +1286,11 @@ def _convert_treatment_to_first_treat(
 # Two-stage Gardner inline (Step 3)
 # =============================================================================
 
-# Convergence tolerance for the iterative alternating-projection FE solver
-# (Gauss-Seidel style; same recursion as the shared
+# Convergence budget for the stage-1 FE solve (delegated to the shared
 # `diff_diff.utils._iterative_fe_solve` used by ImputationDiD/TwoStageDiD).
-_FE_ITER_MAX = 100
+# max_iter aligned to the shared 10,000 convention (the R fixest/pyfixest
+# budget; historical local cap was 100 - see the SpilloverDiD REGISTRY note).
+_FE_ITER_MAX = 10_000
 _FE_ITER_TOL = 1e-10
 
 
@@ -1401,26 +1402,33 @@ def _iterative_fe_subset(
     max_iter: int = _FE_ITER_MAX,
     tol: float = _FE_ITER_TOL,
     weights: Optional[np.ndarray] = None,
-) -> Tuple[np.ndarray, np.ndarray, bool]:
-    """Stage-1 iterative-alternating-projection FE solver on the Butts subsample.
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Stage-1 FE solve on the Butts subsample via the shared Gauss-Seidel engine.
 
     Fits ``y[Omega_0] = mu_i + lambda_t + u`` on the untreated-and-unexposed
     rows (``Omega_0_mask`` True). Returns FE arrays indexed by code, with
     ``NaN`` at positions whose unit / time is not represented in the
     subsample (rank-deficient cells).
 
-    Same Gauss-Seidel-on-integer-codes recursion as the shared
-    ``diff_diff.utils._iterative_fe_solve`` (which ImputationDiD/TwoStageDiD
-    now route through), specialized here to a masked Butts subsample.
+    Thin Butts-subsample wrapper over the shared
+    ``diff_diff.utils._iterative_fe_solve`` (the same bincount Gauss-Seidel
+    recursion ImputationDiD/TwoStageDiD route through): this function owns
+    the SpilloverDiD-specific front door — the empty-Omega_0 and empty
+    positive-weight-Omega_0 ``ValueError`` gates and the subsample
+    extraction — and delegates the iteration, the zero-weight NaN-FE
+    convention, and the ``warn_if_not_converged`` non-convergence signal
+    to the shared engine. Per sweep the shared engine computes the
+    identical group means and convergence metric as the historical local
+    loop (converged fits are bit-identical); the iteration budget is the
+    shared ``max_iter=10_000`` convention (see the SpilloverDiD REGISTRY
+    note), superseding the historical local cap of 100.
 
     **Wave E.1 weighted path** — when ``weights`` is supplied, the solver
     minimizes ``sum_i w_i * (y_i - mu_i - lambda_t)^2`` (WLS-FE under
     positive weights converges to the same fixed point as the unweighted
     iteration for w == 1). The per-period mean becomes
     ``sum_{i in t} w_i * resid_i / sum_{i in t} w_i`` (weighted bincount
-    numerator over weighted bincount denominator). The ``weights is None``
-    branch is bit-identical to the pre-Wave-E.1 path so the Wave B/C/D
-    no-survey contract is unchanged.
+    numerator over weighted bincount denominator).
 
     Parameters
     ----------
@@ -1434,7 +1442,7 @@ def _iterative_fe_subset(
         True for rows in the stage-1 fit subsample (D_it=0 AND S_it=0).
     weights : ndarray of shape (n_rows,), optional
         Hájek-normalized survey weights (``sum_i w_i = n``). When provided,
-        switches the iteration to WLS-FE; when None, the original unweighted
+        switches the iteration to WLS-FE; when None, the unweighted
         bincount path applies.
 
     Returns
@@ -1443,8 +1451,6 @@ def _iterative_fe_subset(
         Unit FE indexed by code. ``NaN`` for units absent from Omega_0.
     time_fe_arr : ndarray of shape (n_times,)
         Time FE indexed by code. ``NaN`` for periods absent from Omega_0.
-    converged : bool
-        Whether the iterative solver reached ``tol`` within ``max_iter``.
     """
     if omega_0_mask.sum() == 0:
         raise ValueError(
@@ -1480,10 +1486,9 @@ def _iterative_fe_subset(
     n_times = int(time_codes_full.max()) + 1
 
     # Operate on the subset only (faster than masking each iteration).
-    y_sub = y_full[omega_0_effective]
-    unit_sub = unit_codes_full[omega_0_effective]
-    time_sub = time_codes_full[omega_0_effective]
-    n_sub = len(y_sub)
+    y_sub = np.asarray(y_full, dtype=np.float64)[omega_0_effective]
+    unit_sub = np.asarray(unit_codes_full)[omega_0_effective]
+    time_sub = np.asarray(time_codes_full)[omega_0_effective]
 
     # Wave E.1: extract weights subset once outside the iterative loop
     # (mirrors TwoStageDiD's `w_0 = weights[omega_0_mask.values]` cache
@@ -1492,57 +1497,17 @@ def _iterative_fe_subset(
     if weights is not None:
         w_sub = np.asarray(weights, dtype=np.float64)[omega_0_effective]
 
-    alpha = np.zeros(n_sub)
-    beta = np.zeros(n_sub)
-    converged = False
-    for _ in range(max_iter):
-        # beta[t] = (weighted) mean over rows in time-group t of (y - alpha)
-        resid = y_sub - alpha
-        if w_sub is None:
-            time_sums = np.bincount(time_sub, weights=resid, minlength=n_times)
-            time_denoms = np.bincount(time_sub, minlength=n_times).astype(np.float64)
-        else:
-            time_sums = np.bincount(time_sub, weights=w_sub * resid, minlength=n_times)
-            time_denoms = np.bincount(time_sub, weights=w_sub, minlength=n_times)
-        time_means = np.where(time_denoms > 0, time_sums / np.maximum(time_denoms, 1e-300), 0.0)
-        beta_new = time_means[time_sub]
-
-        # alpha[i] = (weighted) mean over rows in unit-group i of (y - beta_new)
-        resid = y_sub - beta_new
-        if w_sub is None:
-            unit_sums = np.bincount(unit_sub, weights=resid, minlength=n_units)
-            unit_denoms = np.bincount(unit_sub, minlength=n_units).astype(np.float64)
-        else:
-            unit_sums = np.bincount(unit_sub, weights=w_sub * resid, minlength=n_units)
-            unit_denoms = np.bincount(unit_sub, weights=w_sub, minlength=n_units)
-        unit_means = np.where(unit_denoms > 0, unit_sums / np.maximum(unit_denoms, 1e-300), 0.0)
-        alpha_new = unit_means[unit_sub]
-
-        max_change = max(
-            float(np.max(np.abs(alpha_new - alpha))) if n_sub > 0 else 0.0,
-            float(np.max(np.abs(beta_new - beta))) if n_sub > 0 else 0.0,
-        )
-        alpha = alpha_new
-        beta = beta_new
-        if max_change < tol:
-            converged = True
-            break
-
-    # Build FE arrays indexed by code; NaN for unseen units/periods.
-    unit_fe_arr = np.full(n_units, np.nan, dtype=np.float64)
-    time_fe_arr = np.full(n_times, np.nan, dtype=np.float64)
-    # For each code present in the subset, take any row's converged value
-    # (constant within group at convergence). Sort-by-code to make access
-    # deterministic.
-    seen_unit_codes = np.unique(unit_sub)
-    for u_code in seen_unit_codes:
-        idx = np.flatnonzero(unit_sub == u_code)[0]
-        unit_fe_arr[u_code] = alpha[idx]
-    seen_time_codes = np.unique(time_sub)
-    for t_code in seen_time_codes:
-        idx = np.flatnonzero(time_sub == t_code)[0]
-        time_fe_arr[t_code] = beta[idx]
-    return unit_fe_arr, time_fe_arr, converged
+    return _iterative_fe_solve(
+        y_sub,
+        unit_sub,
+        time_sub,
+        n_units,
+        n_times,
+        weights=w_sub,
+        max_iter=max_iter,
+        tol=tol,
+        method_name="SpilloverDiD stage-1 FE (Butts Omega_0 subsample)",
+    )
 
 
 def _residualize_butts(
@@ -2685,21 +2650,16 @@ class SpilloverDiD:
         # Step 11: stage 1 — fit FE on Omega_0. Wave E.1 threads Hájek-
         # normalized survey weights when survey_design was supplied.
         y_full = np.asarray(data[outcome].values, dtype=np.float64)
-        unit_fe_arr, time_fe_arr, converged = _iterative_fe_subset(
+        # Non-convergence surfaces via the shared engine's
+        # warn_if_not_converged (labelled with the SpilloverDiD stage-1
+        # method name), replacing the historical caller-side warning.
+        unit_fe_arr, time_fe_arr = _iterative_fe_subset(
             y_full,
             np.asarray(unit_codes_full),
             np.asarray(time_codes_full),
             omega_0_mask,
             weights=survey_weights,
         )
-        if not converged:
-            warnings.warn(
-                "SpilloverDiD stage-1 iterative FE solver did not converge "
-                f"within {_FE_ITER_MAX} iterations (tol={_FE_ITER_TOL}). "
-                "Results may be unreliable.",
-                UserWarning,
-                stacklevel=2,
-            )
         stage1_n_obs = int(omega_0_effective.sum())
 
         # Step 12: residualize ALL observations.
