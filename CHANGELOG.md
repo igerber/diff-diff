@@ -432,6 +432,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `np.add.at` while avoiding its 5-20x per-element overhead. Also removed the dead
   `_compute_aggregated_se` (zero callers; superseded by
   `_compute_aggregated_se_with_wif` since the WIF adjustment landed).
+- **`EfficientDiD` `_ridge_solve_weights` Python-prep shave.** When no row of the Omega*
+  stack is zero-masked (the common case), the batched ridge solve now consumes the stack
+  directly instead of paying the `omega_stack[rest]` fancy-index copy, and returns the
+  solved weights without the tail scatter through a preallocated uniform matrix — cutting
+  ~O(n·H²) memory traffic per tile call on both backends (the Rust kernel takes a
+  read-only borrow; the numpy chain builds its own ridged copy). Outputs are
+  **byte-identical** (function-level identity checked on common and zero-masked stacks;
+  cond-10k end-to-end ATT bit-identical, fit time 20.09s → 19.99s median — a
+  memory-traffic cleanup, not a headline speedup). The `zero_mask` abs scan is retained
+  (correctness); the remaining conditional-path lever is the sieve/nuisance stage
+  (see TODO).
 
 ## [3.6.2] - 2026-07-03
 

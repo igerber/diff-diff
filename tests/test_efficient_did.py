@@ -1061,6 +1061,30 @@ class TestRidgeSolveRustDispatch:
         expected = self._legacy_weights(om32, 1e-6)
         np.testing.assert_array_equal(got, expected)
 
+    def test_zero_mask_arms_all_zero_mixed_none(self):
+        """Zero-mask handling across all three arms after the no-copy fast
+        path (v3.7 prep shave): an all-zero stack returns uniform 1/H; a
+        mixed stack gives zero rows uniform 1/H while solved rows match a
+        standalone solve of the nonzero sub-stack byte-for-byte (each row's
+        solve is independent, so batch composition must not matter); a
+        no-zero stack takes the direct fast path, already locked
+        byte-identical to the legacy chain by
+        test_symbol_none_degrades_to_legacy_exactly."""
+        import diff_diff.efficient_did_covariates as cov_mod
+
+        H = 4
+        w0 = cov_mod._ridge_solve_weights(np.zeros((3, H, H)), 1e-6)
+        np.testing.assert_array_equal(w0, np.full((3, H), 1.0 / H))
+
+        mixed = self._spd_stack(m=5, H=H, seed=13)
+        mixed[[1, 3]] = 0.0
+        w_mixed = cov_mod._ridge_solve_weights(mixed, 1e-6)
+        np.testing.assert_array_equal(w_mixed[1], np.full(H, 1.0 / H))
+        np.testing.assert_array_equal(w_mixed[3], np.full(H, 1.0 / H))
+        keep = [0, 2, 4]
+        w_sub = cov_mod._ridge_solve_weights(mixed[keep], 1e-6)
+        np.testing.assert_array_equal(w_mixed[keep], w_sub)
+
 
 class TestValidTriples:
     """Test enumerate_valid_triples with hand-worked examples."""

@@ -1620,15 +1620,19 @@ def _ridge_solve_weights(omega_stack: np.ndarray, omega_ridge: float) -> np.ndar
     """
     n, H, _ = omega_stack.shape
     ones = np.ones(H)
-    weights = np.full((n, H), 1.0 / H)
 
     # np.allclose(omega_i, 0.0) == elementwise |x| <= atol (1e-8), rtol inert
     zero_mask = np.all(np.abs(omega_stack) <= 1e-8, axis=(1, 2))
     rest = np.flatnonzero(~zero_mask)
     if rest.size == 0:
-        return weights
+        return np.full((n, H), 1.0 / H)
 
-    om = omega_stack[rest]
+    # Common case: no row is zero-masked — solve on the stack directly
+    # instead of paying the O(n*H^2) fancy-index copy (`om` is never
+    # mutated: the Rust kernel takes a read-only borrow and adds the ridge
+    # in-kernel; the numpy chain builds its own om_ridged). Value-identical
+    # on both backends.
+    om = omega_stack if rest.size == n else omega_stack[rest]
     trace = np.trace(om, axis1=1, axis2=2)
     ridge = omega_ridge * np.maximum(trace / H, 0.0)
     if (
@@ -1653,6 +1657,9 @@ def _ridge_solve_weights(omega_stack: np.ndarray, omega_ridge: float) -> np.ndar
     ok = np.abs(den) >= 1e-15
     solved = np.full((rest.size, H), 1.0 / H)
     solved[ok] = num[ok] / den[ok, None]
+    if rest.size == n:
+        return solved
+    weights = np.full((n, H), 1.0 / H)
     weights[rest] = solved
     return weights
 
