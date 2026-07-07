@@ -16,6 +16,7 @@ use std::collections::HashMap;
 
 #[cfg(feature = "alloc-profile")]
 mod alloc_profile;
+mod batched_solve;
 mod bootstrap;
 mod demean;
 mod linalg;
@@ -52,6 +53,12 @@ fn _rust_backend(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Linear algebra operations
     m.add_function(wrap_pyfunction!(linalg::solve_ols, m)?)?;
     m.add_function(wrap_pyfunction!(linalg::compute_robust_vcov, m)?)?;
+
+    // Batched ridge-regularized SPD solve (EfficientDiD per-unit weights)
+    m.add_function(wrap_pyfunction!(
+        batched_solve::batched_ridge_chol_solve_ones,
+        m
+    )?)?;
 
     // TROP estimator acceleration (local method)
     m.add_function(wrap_pyfunction!(trop::compute_unit_distance_matrix, m)?)?;

@@ -26,6 +26,7 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 from scipy.spatial.distance import cdist
 
+from diff_diff._backend import HAS_RUST_BACKEND, _rust_batched_ridge_chol_solve
 from diff_diff.linalg import solve_ols
 
 # Default ridge for the Omega* inversion (see ``compute_per_unit_weights`` /
@@ -1629,27 +1630,57 @@ def _ridge_solve_weights(omega_stack: np.ndarray, omega_ridge: float) -> np.ndar
 
     om = omega_stack[rest]
     trace = np.trace(om, axis1=1, axis2=2)
-    scale = np.maximum(trace / H, 0.0)
-    om_ridged = om + (omega_ridge * scale)[:, None, None] * np.eye(H)[None]
-    try:
-        # gufunc solve treats a 2-D rhs as a matrix; a stack of vectors needs
-        # shape (n, H, 1)
-        num = np.linalg.solve(om_ridged, np.ones((rest.size, H, 1)))[..., 0]
-    except np.linalg.LinAlgError:
-        # Unreachable for PSD Omega* with lam > 0; kept as a per-unit
-        # minimum-norm fallback so one pathological unit cannot fail the batch.
-        num = np.empty((rest.size, H))
-        for m in range(rest.size):
-            try:
-                num[m] = np.linalg.solve(om_ridged[m], ones)
-            except np.linalg.LinAlgError:
-                num[m] = np.linalg.pinv(om_ridged[m]) @ ones
+    ridge = omega_ridge * np.maximum(trace / H, 0.0)
+    if (
+        HAS_RUST_BACKEND
+        and _rust_batched_ridge_chol_solve is not None
+        and omega_stack.dtype == np.float64
+    ):
+        # Batched Cholesky in Rust (ridge added in-kernel - no om_ridged
+        # temp). Dispatch is on availability + dtype ONLY: any batch-size
+        # cutoff would make forced-tiny-tile fits cross-algorithm vs the
+        # single-tile fit and break the tile-invariance twins. A non-finite
+        # row signals not-SPD (kernel LU fallback / NaN-poisoned exact
+        # singularity) - recompute exactly those rows via the legacy chain
+        # so their semantics (incl. the pinv arm) match the numpy path.
+        num = _rust_batched_ridge_chol_solve(om, ridge)
+        bad = np.flatnonzero(~np.isfinite(num).all(axis=1))
+        if bad.size:
+            num[bad] = _ridge_solve_numpy(om[bad], ridge[bad])
+    else:
+        num = _ridge_solve_numpy(om, ridge)
     den = num @ ones
     ok = np.abs(den) >= 1e-15
     solved = np.full((rest.size, H), 1.0 / H)
     solved[ok] = num[ok] / den[ok, None]
     weights[rest] = solved
     return weights
+
+
+def _ridge_solve_numpy(om: np.ndarray, ridge: np.ndarray) -> np.ndarray:
+    """Legacy numpy solve chain for ``(om_i + ridge_i * I) x = 1``.
+
+    Batched LU solve; on an exactly-singular batch, per-unit solve with a
+    minimum-norm pseudoinverse backstop (unreachable for PSD Omega* with
+    lam > 0, kept so one pathological unit cannot fail the batch). This is
+    both the pure-Python path and the per-row recompute target for rows the
+    Rust kernel flags as non-finite.
+    """
+    m_rows, H, _ = om.shape
+    om_ridged = om + ridge[:, None, None] * np.eye(H)[None]
+    try:
+        # gufunc solve treats a 2-D rhs as a matrix; a stack of vectors needs
+        # shape (m, H, 1)
+        return np.linalg.solve(om_ridged, np.ones((m_rows, H, 1)))[..., 0]
+    except np.linalg.LinAlgError:
+        ones = np.ones(H)
+        num = np.empty((m_rows, H))
+        for m in range(m_rows):
+            try:
+                num[m] = np.linalg.solve(om_ridged[m], ones)
+            except np.linalg.LinAlgError:
+                num[m] = np.linalg.pinv(om_ridged[m]) @ ones
+        return num
 
 
 def compute_per_unit_weights(

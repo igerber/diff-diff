@@ -73,6 +73,15 @@ try:
 except ImportError:
     _rust_demean_map = None
 
+# Batched ridge-regularized SPD solve (EfficientDiD per-unit weights):
+# imported independently for the same mixed-version reason as demean_map.
+try:
+    from diff_diff._rust_backend import (
+        batched_ridge_chol_solve_ones as _rust_batched_ridge_chol_solve,
+    )
+except ImportError:
+    _rust_batched_ridge_chol_solve = None
+
 # Determine final backend based on environment variable and availability
 if _backend_env == "python":
     # Force pure Python mode - disable Rust even if available
@@ -83,6 +92,8 @@ if _backend_env == "python":
     _rust_compute_robust_vcov = None
     # FE-absorption MAP demeaning kernel
     _rust_demean_map = None
+    # Batched ridge-regularized SPD solve
+    _rust_batched_ridge_chol_solve = None
     # TROP estimator acceleration (local method)
     _rust_unit_distance_matrix = None
     _rust_loocv_grid_search = None
@@ -136,6 +147,8 @@ __all__ = [
     "_rust_compute_robust_vcov",
     # FE-absorption MAP demeaning kernel
     "_rust_demean_map",
+    # Batched ridge-regularized SPD solve (EfficientDiD per-unit weights)
+    "_rust_batched_ridge_chol_solve",
     # TROP estimator acceleration (local method)
     "_rust_unit_distance_matrix",
     "_rust_loocv_grid_search",

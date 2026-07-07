@@ -258,6 +258,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the no-covariates path is byte-identical and `omega_ridge=0` still routes the entire legacy
   path. A `pt_assumption="post"` covariate fit builds no tables at all (all cells are
   just-identified), keeping that path regression-free.
+- **`EfficientDiD` conditional-path ridge solves dispatch to a Rust batched-Cholesky kernel**
+  (follow-up to the table hoisting above; Rust backend only). `_ridge_solve_weights`' batched
+  `np.linalg.solve` — a serial LAPACK LU sweep over the `(units × H × H)` ridged Omega* stacks
+  and the top stage at every scale post-hoisting — now routes to
+  `batched_ridge_chol_solve_ones` in the Rust backend: a hand-rolled unblocked Cholesky (the
+  ridged Omega* is SPD by construction) in a reused per-thread scratch buffer, parallelized
+  over the unit axis with rayon. Non-SPD rows (measured zero on realistic panels) fall back to
+  LU in-kernel, and any non-finite row is recomputed through the exact legacy numpy chain, so
+  the pseudoinverse edge-case semantics are unchanged. Measured (3-rep medians, 20 periods,
+  5 cohorts, 5 covariates, `aggregate="all"`): fit 7.1s → 4.3s at 2k units (1.65x),
+  36.2s → 22.7s at 10k (1.6x), 129s → 90s at 30k (1.4x), the 100k-unit fit 17.8 → 15.9 min at
+  slightly lower peak RSS; survey-weighted 3.0s → 1.7s at 1k (1.8x). The ridge-solve stage
+  itself is 4.7x faster at 10k (17.1s → 3.7s; the kernel alone is ~9.6x — the remainder is
+  shared Python-side prep, tracked in TODO.md). Results on the Rust backend move at
+  floating-point reassociation level only (post-treatment cells ~2e-12 relative, overall ATT
+  ~1e-13); the pure-Python backend is byte-identical, the no-covariates path is untouched, and
+  `omega_ridge=0` never reaches the kernel.
 - **CallawaySantAnna multiplier bootstrap rewritten as a fused, column-tiled scatter-GEMM**
   (EfficientDiD's bootstrap routes through the same kernel). The former loop sliced the
   `(block × n_units)` weight matrix twice per (g,t) cell per weight block — at a 40-period,

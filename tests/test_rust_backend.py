@@ -3369,3 +3369,141 @@ class TestDemeanChunkResolver:
 
         monkeypatch.setenv("DIFF_DIFF_DEMEAN_CHUNK_COLS", bad)
         assert utils_mod._resolve_demean_chunk_cols() is utils_mod._DEMEAN_MAP_CHUNK_COLS
+
+
+from diff_diff._backend import (  # noqa: E402
+    _rust_batched_ridge_chol_solve as _batched_chol_symbol,
+)
+
+
+@pytest.mark.skipif(
+    not HAS_RUST_BACKEND or _batched_chol_symbol is None,
+    reason="Rust backend or batched-Cholesky kernel not available",
+)
+class TestBatchedRidgeCholSolve:
+    """Rust `batched_ridge_chol_solve_ones` vs the numpy LU reference.
+
+    Contract: solves (A_i + ridge_i * I) x = 1 per matrix via hand-rolled
+    Cholesky; non-SPD rows fall back to faer LU; an exactly-singular row is
+    NaN-poisoned (so the Python dispatch recomputes it via the legacy
+    chain). Cholesky-vs-LU parity is cond*eps-bounded, NOT bit-identical:
+    ~1e-12 on well-conditioned stacks, ~1e-5 budget on the cond~1e6-1e8
+    ridged near-singular stacks production feeds it (measured ~4e-7 max on
+    real Omega* batches). Per-row op order is fixed, so results are
+    bit-deterministic across batch splits and thread counts.
+    """
+
+    @staticmethod
+    def _numpy_reference(a_stack, ridge):
+        m, h, _ = a_stack.shape
+        a_ridged = a_stack + ridge[:, None, None] * np.eye(h)[None]
+        return np.linalg.solve(a_ridged, np.ones((m, h, 1)))[..., 0]
+
+    @staticmethod
+    def _spd_stack(m, h, seed, eps=1.0):
+        rng = np.random.default_rng(seed)
+        b = rng.standard_normal((m, h, h))
+        return b @ b.transpose(0, 2, 1) + eps * np.eye(h)
+
+    @pytest.mark.parametrize("h", [2, 3, 30, 60])
+    @pytest.mark.parametrize("m", [1, 200])
+    def test_well_conditioned_parity(self, h, m):
+        a = self._spd_stack(m, h, seed=h * 1000 + m)
+        ridge = 1e-6 * np.trace(a, axis1=1, axis2=2) / h
+        got = _batched_chol_symbol(a, ridge)
+        want = self._numpy_reference(a, ridge)
+        # atol covers near-zero solution entries: Cholesky-vs-LU error scales
+        # with the solution norm (cond*eps*||x||), not per-entry.
+        np.testing.assert_allclose(got, want, rtol=1e-12, atol=1e-13)
+
+    def test_ill_conditioned_parity_cond_bounded(self):
+        """Production regime: numerically singular PSD + trace-scaled ridge
+        (floors relative eigenvalues at ~1e-8 -> cond ~1e8). Cholesky and LU
+        then differ at the cond*eps level; budget 1e-5 (~30x the measured
+        max on real Omega* stacks)."""
+        rng = np.random.default_rng(9)
+        m, h = 50, 20
+        q, _ = np.linalg.qr(rng.standard_normal((h, h)))
+        eigs = np.logspace(0, -12, h)  # exact-null tail beyond fp precision
+        a1 = (q * eigs) @ q.T
+        a = np.repeat(a1[None], m, axis=0) + 0.0
+        # jitter each matrix a little to vary the batch (stay PSD)
+        jit = rng.standard_normal((m, h, h)) * 1e-9
+        a = a + jit @ jit.transpose(0, 2, 1)
+        ridge = 1e-6 * np.trace(a, axis1=1, axis2=2) / h
+        got = _batched_chol_symbol(a, ridge)
+        want = self._numpy_reference(a, ridge)
+        assert np.isfinite(got).all()
+        np.testing.assert_allclose(got, want, rtol=1e-5, atol=1e-8)
+
+    def test_nan_row_non_finite(self):
+        a = self._spd_stack(3, 4, seed=1)
+        a[1] = np.nan
+        ridge = np.full(3, 1e-6)
+        got = _batched_chol_symbol(a, ridge)
+        assert not np.isfinite(got[1]).all()
+        np.testing.assert_allclose(got[[0, 2]], self._numpy_reference(a, ridge)[[0, 2]], rtol=1e-12)
+
+    def test_exact_singular_zero_ridge_nan_poisoned(self):
+        """diag(1, -2, 0) with zero ridge: Cholesky fails (negative pivot),
+        faer LU sees an exactly-zero U pivot -> whole row NaN (mirrors
+        LAPACK's exact-singularity signal; a finite-garbage row would
+        silently skip the dispatch's legacy pinv recompute)."""
+        a = np.zeros((1, 3, 3))
+        a[0, 0, 0] = 1.0
+        a[0, 1, 1] = -2.0
+        got = _batched_chol_symbol(a, np.zeros(1))
+        assert np.isnan(got).all()
+
+    def test_indefinite_full_rank_lu_fallback(self):
+        """diag(1, -1) with zero ridge: not SPD but invertible - the LU
+        fallback returns the exact solution [1, -1]."""
+        a = np.zeros((1, 2, 2))
+        a[0, 0, 0] = 1.0
+        a[0, 1, 1] = -1.0
+        got = _batched_chol_symbol(a, np.zeros(1))
+        np.testing.assert_array_equal(got[0], [1.0, -1.0])
+
+    def test_batch_split_bit_identity(self):
+        """Full-stack result == concatenated sub-batch results, bitwise.
+        Locks the per-row-fixed-op-order determinism the EfficientDiD
+        tile-invariance twins depend on."""
+        a = self._spd_stack(31, 12, seed=5)
+        ridge = 1e-6 * np.trace(a, axis1=1, axis2=2) / 12
+        full = _batched_chol_symbol(a, ridge)
+        parts = np.vstack(
+            [
+                _batched_chol_symbol(a[:7], ridge[:7]),
+                _batched_chol_symbol(a[7:20], ridge[7:20]),
+                _batched_chol_symbol(a[20:], ridge[20:]),
+            ]
+        )
+        np.testing.assert_array_equal(full, parts)
+
+    def test_degenerate_shapes(self):
+        """m=0 and H=0 are no-ops with the right shape; H=1 is the scalar
+        1/(a+ridge) via the 1x1 factorization (within 1 ulp)."""
+        out_m0 = _batched_chol_symbol(np.zeros((0, 4, 4)), np.zeros(0))
+        assert out_m0.shape == (0, 4)
+        out_h0 = _batched_chol_symbol(np.zeros((3, 0, 0)), np.zeros(3))
+        assert out_h0.shape == (3, 0)
+        out_h1 = _batched_chol_symbol(np.full((1, 1, 1), 4.0), np.zeros(1))
+        np.testing.assert_allclose(out_h1, [[0.25]], rtol=1e-14)
+
+    def test_strided_input_defensive(self):
+        """Non-contiguous views produce identical results to a contiguous
+        copy (defensive: the live dispatch path's fancy-indexed stacks are
+        always C-contiguous)."""
+        a = self._spd_stack(20, 5, seed=8)
+        ridge = np.full(20, 1e-6)
+        strided = a[::2]
+        assert not strided.flags["C_CONTIGUOUS"]
+        got = _batched_chol_symbol(strided, ridge[::2])
+        want = _batched_chol_symbol(np.ascontiguousarray(strided), np.ascontiguousarray(ridge[::2]))
+        np.testing.assert_array_equal(got, want)
+
+    def test_shape_validation_errors(self):
+        with pytest.raises(ValueError, match="square"):
+            _batched_chol_symbol(np.zeros((2, 3, 4)), np.zeros(2))
+        with pytest.raises(ValueError, match="ridge length"):
+            _batched_chol_symbol(np.zeros((2, 3, 3)), np.zeros(5))

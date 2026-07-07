@@ -16,6 +16,8 @@ import pytest
 from edid_dgp import make_compustat_dgp
 
 from diff_diff import CallawaySantAnna, EDiD, EfficientDiD
+from diff_diff._backend import HAS_RUST_BACKEND
+from diff_diff._backend import _rust_batched_ridge_chol_solve as _ridge_chol_symbol
 from diff_diff.efficient_did_results import EfficientDiDResults
 from diff_diff.efficient_did_weights import (
     enumerate_valid_triples,
@@ -909,6 +911,155 @@ class TestFusedConditionalPath:
             warnings.simplefilter("ignore")
             r_ulp = EfficientDiD().fit(df_ulp, "y", "unit", "time", "first_treat", aggregate="all")
         self._assert_close_surfaces(r_ulp, r_base, rtol=1e-6, atol=1e-9)
+
+
+_requires_rust_chol = pytest.mark.skipif(
+    not HAS_RUST_BACKEND or _ridge_chol_symbol is None,
+    reason="Rust batched-Cholesky kernel not available",
+)
+
+
+class TestRidgeSolveRustDispatch:
+    """v3.8: `_ridge_solve_weights` dispatches to the Rust batched-Cholesky
+    kernel (`batched_ridge_chol_solve_ones`) on the rust backend.
+
+    Dispatch is on availability + float64 dtype ONLY - no batch-size cutoff,
+    so the tile-invariance twins above (which force one-unit batches) stay
+    same-algorithm on both sides. Cholesky and LU legitimately differ at the
+    cond*eps level (~1e-7 on the near-singular ridged Omega*, cond ~1e6-1e8),
+    so cross-backend fit comparisons use loose tolerances while
+    row-level semantic contracts (legacy recompute of non-finite rows,
+    symbol-None degradation) are exact.
+    """
+
+    @staticmethod
+    def _spd_stack(m=40, H=6, seed=0):
+        rng = np.random.default_rng(seed)
+        b = rng.standard_normal((m, H, H))
+        return b @ b.transpose(0, 2, 1) + 1.0 * np.eye(H)
+
+    @staticmethod
+    def _legacy_weights(omega_stack, omega_ridge):
+        """`_ridge_solve_weights` with the rust symbol disabled."""
+        import diff_diff.efficient_did_covariates as cov_mod
+
+        orig = cov_mod._rust_batched_ridge_chol_solve
+        cov_mod._rust_batched_ridge_chol_solve = None
+        try:
+            return cov_mod._ridge_solve_weights(omega_stack, omega_ridge)
+        finally:
+            cov_mod._rust_batched_ridge_chol_solve = orig
+
+    @_requires_rust_chol
+    def test_rust_kernel_called_on_conditional_fit(self, monkeypatch):
+        """The conditional covariate fit routes its per-cell solves through
+        the rust kernel when the backend is active."""
+        import diff_diff.efficient_did_covariates as cov_mod
+
+        calls = {"n": 0}
+        orig = cov_mod._rust_batched_ridge_chol_solve
+
+        def spy(a_stack, ridge):
+            calls["n"] += 1
+            return orig(a_stack, ridge)
+
+        monkeypatch.setattr(cov_mod, "_rust_batched_ridge_chol_solve", spy)
+        df = _make_covariate_panel(n_units=80, n_periods=9, seed=42)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            EfficientDiD().fit(
+                df,
+                "y",
+                "unit",
+                "time",
+                "first_treat",
+                covariates=["x1", "x2"],
+                aggregate="all",
+            )
+        assert calls["n"] > 0, "rust kernel never dispatched on the conditional fit"
+
+    @_requires_rust_chol
+    def test_backend_ab_conditional_fit(self, monkeypatch):
+        """Rust-vs-legacy end-to-end fit A/B (in-process: the legacy arm
+        monkeypatches the dispatch symbol to None; DIFF_DIFF_BACKEND cannot
+        be flipped in-process). Tolerance is the Cholesky-vs-LU cond*eps
+        band on the ridged Omega* (~1e-7 raw, measured), NOT reassociation
+        noise - do not tighten toward the tile-twin 1e-10."""
+        import diff_diff.efficient_did_covariates as cov_mod
+
+        df = _make_covariate_panel(n_units=150, n_periods=9, seed=42)
+        fit_kwargs = dict(covariates=["x1", "x2"], aggregate="all")
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            r_rust = EfficientDiD().fit(df, "y", "unit", "time", "first_treat", **fit_kwargs)
+        monkeypatch.setattr(cov_mod, "_rust_batched_ridge_chol_solve", None)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            r_py = EfficientDiD().fit(df, "y", "unit", "time", "first_treat", **fit_kwargs)
+        TestFusedConditionalPath._assert_close_surfaces(r_rust, r_py, rtol=1e-5, atol=1e-9)
+
+    def test_symbol_none_degrades_to_legacy_exactly(self):
+        """With the dispatch symbol None (stale extension / pure-python
+        backend), `_ridge_solve_weights` must be the byte-identical legacy
+        chain - locks the mixed-version degradation contract."""
+        om = self._spd_stack(m=25, H=5, seed=3)
+        got = self._legacy_weights(om, 1e-6)
+
+        # hand-computed legacy chain (same expressions, same op order)
+        n, H, _ = om.shape
+        trace = np.trace(om, axis1=1, axis2=2)
+        ridge = 1e-6 * np.maximum(trace / H, 0.0)
+        om_ridged = om + ridge[:, None, None] * np.eye(H)[None]
+        num = np.linalg.solve(om_ridged, np.ones((n, H, 1)))[..., 0]
+        den = num @ np.ones(H)
+        expected = num / den[:, None]
+        np.testing.assert_array_equal(got, expected)
+
+    @_requires_rust_chol
+    def test_bad_row_recompute_matches_legacy_exactly(self):
+        """A row the kernel flags non-finite (all-NaN omega) is recomputed
+        via the legacy numpy chain: THAT row must equal the legacy result
+        exactly. Good rows in the same batch keep Cholesky results and
+        legitimately differ from legacy at ~1e-15..1e-10 - they are only
+        checked loosely."""
+        import diff_diff.efficient_did_covariates as cov_mod
+
+        om = self._spd_stack(m=6, H=4, seed=7)
+        om[2] = np.nan  # forces Cholesky fail -> LU NaN -> python recompute
+        w_rust = cov_mod._ridge_solve_weights(om, 1e-6)
+        w_py = self._legacy_weights(om, 1e-6)
+
+        np.testing.assert_array_equal(w_rust[2], w_py[2])
+        good = [0, 1, 3, 4, 5]
+        np.testing.assert_allclose(w_rust[good], w_py[good], rtol=1e-9, atol=1e-12)
+
+    def test_exact_singular_pinv_arm(self):
+        """diag(1, -2, 0): trace < 0 -> zero ridge; exactly singular. Legacy:
+        batched solve raises -> per-row solve raises -> pinv gives
+        num = [1, -0.5, 0], den = 0.5 -> weights [2, -1, 0]. The rust path
+        must reach the identical pinv arm via NaN-poisoning + recompute
+        (a bare batched re-solve would crash instead)."""
+        import diff_diff.efficient_did_covariates as cov_mod
+
+        om = np.zeros((1, 3, 3))
+        om[0, 0, 0] = 1.0
+        om[0, 1, 1] = -2.0
+        w = cov_mod._ridge_solve_weights(om, 1e-6)
+        w_legacy = self._legacy_weights(om, 1e-6)
+        np.testing.assert_array_equal(w, w_legacy)
+        np.testing.assert_allclose(w[0], [2.0, -1.0, 0.0], atol=1e-12)
+
+    def test_f32_stack_declines_dispatch(self):
+        """A float32 stack (reachable via the public compute_per_unit_weights)
+        must decline rust dispatch - no silent coercion - and match the
+        legacy path exactly."""
+        from diff_diff.efficient_did_covariates import compute_per_unit_weights
+
+        om64 = self._spd_stack(m=10, H=4, seed=11)
+        om32 = om64.astype(np.float32)
+        got = compute_per_unit_weights(om32, omega_ridge=1e-6)
+        expected = self._legacy_weights(om32, 1e-6)
+        np.testing.assert_array_equal(got, expected)
 
 
 class TestValidTriples:

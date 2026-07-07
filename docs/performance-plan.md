@@ -326,7 +326,53 @@ The kernel-covariance stage itself: 21.2s -> 0.53s at 10k (40x). Deltas:
 post-treatment cells ~1e-12 rel (max 6e-12), overall ATT ~1e-13, nocov exactly
 0. Post-hoist the top stages at every scale are `_ridge_solve_weights` (batched
 LAPACK LU over (n x H x H) stacks; 17.2s at 10k — Rust batched-Cholesky is the
-natural follow-up, TODO row filed) and the nuisance sieves.
+natural follow-up, resolved by the section below) and the nuisance sieves.
+
+### Rust batched-Cholesky ridge solve (2026-07 follow-up)
+
+Resolves the ridge-solve TODO row above. `_ridge_solve_weights`' batched
+`np.linalg.solve` is a LAPACK dgesv gufunc — LU (2/3 H^3 flops) and SERIAL over
+the batch — although the ridged Omega* is SPD (Cholesky = 1/3 H^3). Spike on
+real captured batches (`.bench-local/edid_ridge_solve_spike.py`, cond_10k: 570
+calls, all H=59/60, m~1300-1740): numpy stage 15.6s extrapolated vs Rust kernel
+1.6s = **9.6x kernel aggregate**; zero non-PD rows (min relative eigenvalue
+1.7e-8 = the ridge floor), so the LU/NaN-poison fallback is pure defense. Raw
+solve divergence Cholesky-vs-LU: max ~3.7e-7 per entry (cond ~6e7 x eps class)
+— but fit-level deltas land at ~1e-12 because the weight perturbations live in
+Omega*'s near-null directions (near-duplicate moments with near-identical
+generated outcomes), exactly the insensitivity the ridge Note's "any fixed
+weights summing to 1" argument predicts.
+
+Kernel-variant A/B (serial, per-H, m=1737): hand-rolled unblocked Cholesky in a
+reused per-thread scratch vs faer `Llt::new` (which allocates a fresh Mat +
+scratch per call): hand-rolled wins 10.3x at H=2 and 1.9x at H=8; faer wins
+~1.4x at H=60 (SIMD factorization). Shipped hand-rolled (user-confirmed): zero
+per-call allocation, wins where H is small, one oracle-locked code path; the
+fit-level cost of not switching at H=60 is ~2% (the win is rayon parallelism
+across the batch — Accelerate's serial dgesv is roughly at parity with the
+serial hand-rolled Cholesky per solve).
+
+Measured arms (3-rep medians; BEFORE = pristine main 81d53f59 via
+baseline-worktree PYTHONPATH; `.bench-local/edid_chol_arms_results.jsonl`):
+
+| scenario | BEFORE | AFTER | speedup | maxrss B->A |
+|---|---|---|---|---|
+| conditional n=2k | 7.08s | 4.29s | 1.65x | 0.59 -> 0.60 GB |
+| conditional n=10k | 36.2s | 22.7s | 1.60x | 0.80 -> 0.75 GB |
+| conditional n=30k | 129.0s | 90.1s | 1.43x | 1.09 -> 1.13 GB |
+| conditional n=100k | 17.76 min (#629 measured, 1 rep) | 15.92 min (1 rep) | 1.12x | 4.02 -> 3.84 GB |
+| nocov n=2k (guard) | 0.44s | 0.45s | 1.0x (path untouched) | flat |
+| survey n=1k | 3.03s | 1.68s | 1.80x | flat |
+| pure-python cond n=2k (guard) | 6.09s | 6.10s | byte-identical results | flat |
+
+Ridge stage at 10k: 17.1s -> 3.68s (4.65x; the aspirational >=5x stage gate was
+narrowly missed — the kernel is 9.6x but ~2s of the remaining stage is shared
+Python prep: the zero_mask full-stack abs scan + the `omega_stack[rest]`
+fancy-index copy, ~28 GB extra memory traffic per 10k fit; TODO row filed for
+the copy shave). Deltas: post cells max ~2e-12 rel, overall ATT ~1e-13,
+event-study max ~5e-10, all cells incl. near-zero placebos <= 1.4e-11 abs;
+pure-python arm byte-identical. After this the largest O(n) stage is the
+sieve/nuisance construction outside the tiled pass (~9s at 10k).
 
 ---
 
