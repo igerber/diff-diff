@@ -561,8 +561,8 @@ class TestDidHadPretestWorkflowDeprecation:
 # all HAD design × aggregate combinations but only directly tested on the
 # two-period continuous_at_zero / overall path. These tests cover the
 # weighted mass_point overall path, the weighted continuous event-study
-# path, and the workflow event-study path — each with both a
-# `survey_design=` smoke and a legacy-alias parity check.
+# path, and the workflow event-study path — each with a `survey_design=`
+# smoke (the legacy-alias parity checks retired with the 3.7.x removal).
 
 
 @pytest.fixture

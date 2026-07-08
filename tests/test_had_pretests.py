@@ -3721,7 +3721,7 @@ class TestJointStuteSurvey:
 
 # =============================================================================
 # Phase 4.5 C R1 review regressions: zero-weight survey, aweight/fweight
-# pweight-only guard, staggered event-study weights= subsetting.
+# pweight-only guard, staggered event-study weight-column subsetting.
 # =============================================================================
 
 
@@ -3742,7 +3742,8 @@ class TestPhase45CR1Regressions:
 
         Last-cohort filter (per HAD Appendix B.2) keeps only cohort B.
         Workflow / data-in wrappers under aggregate='event_study' must
-        subset row-level weights= to the surviving cohort (R1 P1)."""
+        resolve the SurveyDesign weight column on the surviving cohort's
+        rows (R1 P1, kept under the column form)."""
         rng = np.random.default_rng(0)
         rows = []
         for cohort, F_g in [("A", 2), ("B", 3)]:
@@ -3912,14 +3913,13 @@ class TestPhase45CR1Regressions:
         assert report.qug is None
         assert report.homogeneity_joint is not None
 
-    # --- R2 P1: direct-wrapper staggered weights= subsetting ---------------
+    # --- R2 P1: direct-wrapper staggered weight-column subsetting ----------
 
     def test_joint_pretrends_test_staggered_weights_subset(self):
-        """R2 P1: joint_pretrends_test direct call must subset row-level
-        weights= when its own _validate_had_panel_event_study filtering
-        triggers on staggered panels. Pre-fix this crashed with a length-
-        mismatch ValueError because the wrapper passed the full-panel
-        weights array into _resolve_pretest_unit_weights(data_filtered, ...)."""
+        """R2 P1 (kept under the column form): joint_pretrends_test's
+        SurveyDesign weight column must resolve on the filtered rows when
+        _validate_had_panel_event_study triggers on staggered panels
+        (the historical row-level array path crashed here pre-fix)."""
         df = self._make_staggered_panel(G_per_cohort=10)
         n_rows = 2 * 10 * 4
         weights_per_row = np.ones(n_rows) * 1.5
@@ -4098,9 +4098,9 @@ class TestPhase45CR1Regressions:
     def test_yatchew_weights_scale_invariant(self):
         """R4 P0: Yatchew test statistic must be invariant under uniform
         rescaling of weights. Pre-fix `T_hr = sqrt(sum(w)) * (...)` made
-        the stat scale as sqrt(c), so weights=w and weights=100*w gave
-        different p-values. Fix: helper normalizes pweights to mean=1
-        before any computation."""
+        the stat scale as sqrt(c), so w and 100*w gave different p-values.
+        Fix: helper normalizes pweights to mean=1 before any
+        computation."""
         d, dy = _linear_dgp(G=30, beta=2.0, sigma=0.3)
         w = np.random.default_rng(7).uniform(0.5, 2.0, size=30)
         r1 = yatchew_hr_test(d, dy, survey_design=make_pweight_design(w))
@@ -4110,8 +4110,8 @@ class TestPhase45CR1Regressions:
 
     def test_stute_weights_scale_invariant(self):
         """R4 P0 mirror: Stute is internally scale-invariant in functional
-        form, but normalization is required so weights= and survey=
-        entry paths agree numerically."""
+        form, but normalization is required so every survey_design= entry
+        form agrees numerically."""
         d, dy = _linear_dgp(G=30, beta=2.0, sigma=0.3)
         w = np.random.default_rng(7).uniform(0.5, 2.0, size=30)
         r1 = stute_test(d, dy, survey_design=make_pweight_design(w), n_bootstrap=199, seed=0)
@@ -4391,7 +4391,7 @@ class TestPhase45CR1Regressions:
 
     def test_workflow_event_study_zero_weights_on_dropped_cohort(self):
         """R6 P1 regression: previously the workflow eagerly resolved
-        weights= on the FULL panel (before _validate_multi_period_panel's
+        weights on the FULL panel (before _validate_multi_period_panel's
         last-cohort filter), so zero/invalid weights on the soon-to-be-
         dropped cohort would abort an otherwise-valid event-study run.
         Fix: resolution moved into the per-aggregate branches; the
