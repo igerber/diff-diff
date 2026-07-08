@@ -3003,10 +3003,11 @@ def _iterative_fe_solve(
     ``np.bincount`` passes (same engine family as ``_demean_map_numpy``;
     same accumulation-order caveat vs pandas' compensated grouped mean, see
     REGISTRY "Absorbed Fixed Effects"). SpilloverDiD's
-    ``_iterative_fe_subset`` is the structural sibling.
+    ``_iterative_fe_subset`` is a thin wrapper over this function (its
+    Omega_0-specific gates stay local; the recursion lives here).
 
-    Zero-weight convention (mirrors ``spillover._iterative_fe_subset`` and
-    the SpilloverDiD REGISTRY contract): rows with ``weights == 0`` are
+    Zero-weight convention (per the SpilloverDiD REGISTRY contract, whose
+    ``_iterative_fe_subset`` wrapper routes through here): rows with ``weights == 0`` are
     outside the WLS estimating sample, so any unit/period whose rows ALL
     carry zero weight has no identifying contribution and surfaces as
     ``NaN`` FE — never a silent finite ``0.0``. The iteration itself runs
