@@ -126,8 +126,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the other exactly 0 — the `survey::brrweights` full-BRR convention) now backs a
   per-family regression class (DiD, DiD-absorb, MultiPeriodDiD, TWFE, SunAbraham,
   StackedDiD, ImputationDiD, TwoStageDiD): finite positive replicate SEs under genuine
-  half-samples plus a base-weights point-estimate invariance check (replicate columns
-  drive only the variance). Construction sanity is itself asserted (exactly half the
+  half-samples plus a base-weights point-estimate invariance check on EVERY family
+  (replicate columns drive only the variance). Construction sanity is itself asserted (exactly half the
   paired PSUs zeroed per replicate, all multipliers in {0, 2}). Notably, genuine
   half-samples CAN lose identification inside a replicate refit on some designs (the
   staggered binary-interaction TWFE parameterization) — TWFE fails loudly there; the

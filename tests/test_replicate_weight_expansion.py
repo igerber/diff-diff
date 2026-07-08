@@ -583,7 +583,7 @@ class TestTrueBRRHalfSample:
 
     Each test asserts (a) finite positive replicate SE under genuine
     half-samples — half the paired PSUs at weight 0 per replicate — and
-    (b) where checked, the point estimate is IDENTICAL to the same fit
+    (b) the point estimate is IDENTICAL to the same fit
     without replicate columns: replicate weights drive only the variance,
     never the point estimate (base-weights invariance contract).
     """
@@ -757,8 +757,16 @@ class TestTrueBRRHalfSample:
             absorb=["group"],
             survey_design=self._sd(rep_cols),
         )
-        assert np.isfinite(res.att)
+        base = DifferenceInDifferences().fit(
+            data,
+            "outcome",
+            "treated",
+            "post",
+            absorb=["group"],
+            survey_design=SurveyDesign(weights="weight"),
+        )
         assert np.isfinite(res.se) and res.se > 0
+        self._assert_point_invariance(res.att, base.att)
 
     def test_multiperiod_true_brr(self):
         data = _make_simple_panel()
@@ -771,8 +779,16 @@ class TestTrueBRRHalfSample:
             post_periods=[1],
             survey_design=self._sd(rep_cols),
         )
-        assert np.isfinite(res.avg_att)
+        base = MultiPeriodDiD().fit(
+            data,
+            "outcome",
+            "treated",
+            "time",
+            post_periods=[1],
+            survey_design=SurveyDesign(weights="weight"),
+        )
         assert np.isfinite(res.avg_se) and res.avg_se > 0
+        self._assert_point_invariance(res.avg_att, base.avg_att)
 
     def test_twfe_true_brr(self):
         # The family's dedicated 2-period panel (the staggered fixture's
@@ -819,8 +835,16 @@ class TestTrueBRRHalfSample:
         res = StackedDiD().fit(
             data, "outcome", "unit", "time", "first_treat", survey_design=self._sd(rep_cols)
         )
-        assert np.isfinite(res.overall_att)
+        base = StackedDiD().fit(
+            data,
+            "outcome",
+            "unit",
+            "time",
+            "first_treat",
+            survey_design=SurveyDesign(weights="weight"),
+        )
         assert np.isfinite(res.overall_se) and res.overall_se > 0
+        self._assert_point_invariance(res.overall_att, base.overall_att)
 
     def test_imputation_true_brr(self):
         data = _make_staggered_panel()
@@ -845,5 +869,13 @@ class TestTrueBRRHalfSample:
         res = TwoStageDiD(n_bootstrap=0).fit(
             data, "outcome", "unit", "time", "first_treat", survey_design=self._sd(rep_cols)
         )
-        assert np.isfinite(res.overall_att)
+        base = TwoStageDiD(n_bootstrap=0).fit(
+            data,
+            "outcome",
+            "unit",
+            "time",
+            "first_treat",
+            survey_design=SurveyDesign(weights="weight"),
+        )
         assert np.isfinite(res.overall_se) and res.overall_se > 0
+        self._assert_point_invariance(res.overall_att, base.overall_att)
