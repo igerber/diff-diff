@@ -39,8 +39,8 @@ locked numpy default_rng) get exact pins.
 ``HADPretestReport.verdict`` terminate in ``_QUG_DEFERRED_SUFFIX``
 (``had_pretests.py:4300``: ``" (linearity-conditional verdict;
 QUG-under-survey deferred per Phase 4.5 C0)"``). The DIFFERENT message
-at ``had_pretests.py:736`` (``"(QUG step skipped - permanently deferred
-under survey/weights per Phase 4.5 C0)"``) is rendered in the
+(``"(QUG step skipped - permanently deferred under survey designs per
+Phase 4.5 C0)"``, rendered by ``HADPretestReport.summary()``) is in the
 formatted ``report.summary()`` block, NOT in ``report.verdict``. Tests
 lock each substring on the correct field.
 """
@@ -88,7 +88,7 @@ QUG_DEFERRED_SUFFIX_VERDICT = (
     "linearity-conditional verdict; QUG-under-survey deferred per Phase 4.5 C0"
 )
 QUG_SKIP_SUMMARY_NOTE = (
-    "QUG step skipped - permanently deferred under survey/weights per Phase 4.5 C0"
+    "QUG step skipped - permanently deferred under survey designs per Phase 4.5 C0"
 )
 
 
@@ -508,7 +508,7 @@ def test_event_study_cband_is_wider_or_equal_pointwise(survey_event_study_result
 
 def test_overall_report_qug_is_none_under_survey(overall_report):
     """Phase 4.5 C0 contract: QUG step is permanently deferred under
-    survey/weights; ``report.qug`` is ``None`` on the overall path."""
+    survey designs; ``report.qug`` is ``None`` on the overall path."""
     assert overall_report.qug is None
 
 

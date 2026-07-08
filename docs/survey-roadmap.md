@@ -161,7 +161,7 @@ demean + `sqrt(n_h/(n_h-1))` rescale on the PSU multipliers BEFORE
 the per-obs broadcast in the wild-residual loop. The shared helper
 `bootstrap_utils.apply_stratum_centering` backs both the new Stute
 path and the existing HAD sup-t event-study cband bootstrap. The QUG
-step remains permanently deferred under survey/weights (Phase 4.5
+step remains permanently deferred under survey designs (Phase 4.5
 C0); the workflow surfaces this in `report.qug=None` plus the
 `_QUG_DEFERRED_SUFFIX` substring on `report.verdict`. Tutorial 22
 (`docs/tutorials/22_had_survey_design.ipynb`) walks the workflow
