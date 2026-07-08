@@ -360,6 +360,7 @@ class DifferenceInDifferences:
                 "survey designs. Replicate weights provide their own variance "
                 "estimation."
             )
+        _replicate_vcov_remap = _uses_replicate and self._warn_replicate_vcov_ignored()
 
         # Handle absorbed fixed effects (within-transformation)
         working_data = data.copy()
@@ -411,7 +412,12 @@ class DifferenceInDifferences:
         # and solves WLS directly, with no within-transform step. R2 review
         # surfaced the scope mismatch (REGISTRY/CHANGELOG said "SUPPORTED" but
         # the survey guard fired first on weighted multi-absorb fits).
-        if absorb and self.vcov_type in ("hc2", "hc2_bm"):
+        # Route on the EFFECTIVE vcov family: under a replicate design the
+        # remap to hc1 must also disable this full-dummy swap, or an
+        # explicit hc2 request would still change the result surface
+        # (full-dummy coefficients vs absorbed reduced fit) despite the
+        # "has no effect" warning.
+        if absorb and not _replicate_vcov_remap and self.vcov_type in ("hc2", "hc2_bm"):
             fixed_effects = list(fixed_effects or []) + list(absorb)
             absorb = None
             absorbed_vars = []
@@ -576,7 +582,11 @@ class DifferenceInDifferences:
 
         # Remap implicit "classical" + cluster to CR1 for legacy-alias
         # backward compatibility (see `_resolve_effective_vcov_type`).
-        _fit_vcov_type = self._resolve_effective_vcov_type(effective_cluster_ids)
+        _fit_vcov_type = (
+            "hc1"
+            if _replicate_vcov_remap
+            else self._resolve_effective_vcov_type(effective_cluster_ids)
+        )
 
         # Build Conley coord/time/unit arrays when applicable. CRITICAL:
         # read from the ORIGINAL `data` frame, NOT `working_data` — `absorb`
@@ -1134,6 +1144,45 @@ class DifferenceInDifferences:
         self._vcov_type_explicit = self._vcov_type_arg is not None
         return self
 
+    def _warn_replicate_vcov_ignored(self) -> bool:
+        """Warn that an explicit ``vcov_type`` has no effect under a
+        replicate-weight survey design, and tell the caller to remap the
+        fit-time vcov to ``"hc1"``.
+
+        With ``uses_replicate_variance`` the analytical sandwich is replaced
+        wholesale by the replicate-refit variance (the per-replicate refits
+        return point estimates only), so the requested vcov family cannot
+        influence any reported number. Silently honoring the kwarg would
+        report hc1-identical output under an ``hc2``/``hc2_bm``/``classical``
+        label; remapping the (discarded) base-fit vcov to ``"hc1"`` also
+        avoids wasted CR2-BM work and one-way-only validator rejections.
+        ``conley`` is excluded — it carries its own survey-design support
+        contract and validators, which must keep firing unchanged. Returns
+        True when a remap should be applied (explicit non-hc1, non-conley
+        vcov_type).
+        """
+        if not self._vcov_type_explicit or self.vcov_type == "hc1":
+            # Explicit hc1 is exactly the remap target (and the value the
+            # old TwoWayFixedEffects NotImplementedError guidance told
+            # users to pass) — nothing is being overridden, stay quiet.
+            return False
+        if self.vcov_type == "conley":
+            # Conley keeps its own survey-design support contract (TSL via
+            # the stratified-Conley sandwich; dedicated per-design
+            # validators in diff_diff.conley) — do not warn-and-remap past
+            # those gates; let the conley validation speak for itself.
+            return False
+        warnings.warn(
+            f"vcov_type={self.vcov_type!r} has no effect with replicate-weight "
+            "survey designs: the replicate-refit variance replaces the "
+            "analytical vcov entirely (per-replicate refits return point "
+            "estimates only, identical across vcov families). Proceeding "
+            "with replicate variance; the base fit uses 'hc1'.",
+            UserWarning,
+            stacklevel=3,
+        )
+        return True
+
     def _resolve_effective_vcov_type(self, effective_cluster_ids) -> str:
         """Pick the ``vcov_type`` to use for a given fit given cluster context.
 
@@ -1555,6 +1604,7 @@ class MultiPeriodDiD(DifferenceInDifferences):
                 "survey designs. Replicate weights provide their own variance "
                 "estimation."
             )
+        _replicate_vcov_remap_mp = _uses_replicate_mp and self._warn_replicate_vcov_ignored()
 
         # Handle absorbed fixed effects (within-transformation)
         working_data = data.copy()
@@ -1605,7 +1655,8 @@ class MultiPeriodDiD(DifferenceInDifferences):
         # dimensions") doesn't apply when we're about to swap absorb for
         # fixed_effects: the fixed_effects= path builds the full-dummy
         # design and solves WLS directly, with no within-transform step.
-        if absorb and self.vcov_type in ("hc2", "hc2_bm"):
+        # Route on the EFFECTIVE vcov family (see DifferenceInDifferences).
+        if absorb and not _replicate_vcov_remap_mp and self.vcov_type in ("hc2", "hc2_bm"):
             fixed_effects = list(fixed_effects or []) + list(absorb)
             absorb = None
             n_absorbed_effects = 0
@@ -1803,7 +1854,11 @@ class MultiPeriodDiD(DifferenceInDifferences):
         _use_survey_vcov = resolved_survey is not None and resolved_survey.needs_survey_vcov
 
         # Remap implicit "classical" + cluster to CR1 (legacy backward compat).
-        _fit_vcov_type = self._resolve_effective_vcov_type(effective_cluster_ids)
+        _fit_vcov_type = (
+            "hc1"
+            if _replicate_vcov_remap_mp
+            else self._resolve_effective_vcov_type(effective_cluster_ids)
+        )
 
         # Cluster + CR2 Bell-McCaffrey (non-survey, unweighted) shares the SAME
         # expensive CR2 precomputes (per-cluster A_g eigendecompositions, S_W,

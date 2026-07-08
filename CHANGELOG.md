@@ -309,6 +309,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   supersedes it.
 
 ### Changed
+- **Explicit `vcov_type` with replicate-weight survey designs now warns and proceeds
+  (was: inconsistent raise/silent-ignore).** With replicate variance the analytical
+  sandwich is replaced wholesale — per-replicate refits return point estimates only,
+  identical across vcov families (FWL), so the requested vcov family cannot influence any
+  reported number. `TwoWayFixedEffects(vcov_type="hc2"/"hc2_bm")` previously raised
+  `NotImplementedError` while `DifferenceInDifferences` silently ignored the kwarg; both
+  (and `MultiPeriodDiD`) now share one contract: explicit non-`hc1` analytical
+  `vcov_type` (`hc2`/`hc2_bm`/`classical`) emits a `UserWarning` and the discarded base fit remaps to `hc1` (avoids wasted CR2-BM work,
+  one-way validator rejections, and the TWFE full-dummy route, which does not compose
+  with per-replicate re-demeaning). Explicit `hc1` — the old error message's own
+  workaround guidance — stays silent; `conley` keeps its own survey-design support contract and validators
+  (excluded from the remap). A per-replicate full-dummy HC2 implementation
+  (the TODO row) was investigated and rejected as a costly no-op: it cannot change the
+  replicate variance. Tests lock warn+bit-identity-to-hc1 on all three estimators.
 - **Per-cell solver fast paths for covariate fits (CallawaySantAnna and every
   estimator routing through the shared solvers).** Two pure-Python changes in
   `diff_diff/linalg.py`: (1) `solve_logit`'s IRLS inner step — previously a full

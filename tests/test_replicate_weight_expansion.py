@@ -1,5 +1,7 @@
 """Tests for replicate weight support expansion to 7 additional estimators."""
 
+import warnings
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -14,7 +16,6 @@ from diff_diff import (
     TwoWayFixedEffects,
 )
 from diff_diff.survey import SurveyDesign
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -517,3 +518,131 @@ class TestSunAbrahamCohortSEs:
         for key, eff in result.cohort_effects.items():
             se = eff["se"]
             assert np.isfinite(se), f"cohort {key}: SE is {se}"
+
+
+class TestReplicateVcovTypeWarn:
+    """Explicit non-hc1 vcov_type + replicate design warns and proceeds with
+    replicate variance, bit-identical to the hc1 request (the analytical
+    vcov family cannot influence any number: per-replicate refits return
+    point estimates only). Previously DiD silently ignored the kwarg and
+    TWFE raised NotImplementedError — the warn-and-remap contract unifies
+    the twins."""
+
+    @staticmethod
+    def _sd(rep_cols):
+        return SurveyDesign(weights="weight", replicate_weights=rep_cols, replicate_method="BRR")
+
+    def test_did_explicit_hc2_warns_and_matches_hc1(self):
+        data = _make_simple_panel()
+        rep_cols = _add_brr_replicates(data, n_rep=8)
+        with pytest.warns(UserWarning, match="has no effect with replicate-weight"):
+            res = DifferenceInDifferences(vcov_type="hc2").fit(
+                data, "outcome", "treated", "post", survey_design=self._sd(rep_cols)
+            )
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", UserWarning)
+            base = DifferenceInDifferences(vcov_type="hc1").fit(
+                data, "outcome", "treated", "post", survey_design=self._sd(rep_cols)
+            )
+        assert res.att == base.att and res.se == base.se
+
+    def test_did_default_vcov_stays_silent(self):
+        data = _make_simple_panel()
+        rep_cols = _add_brr_replicates(data, n_rep=8)
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", UserWarning)
+            res = DifferenceInDifferences().fit(
+                data, "outcome", "treated", "post", survey_design=self._sd(rep_cols)
+            )
+        assert np.isfinite(res.se) and res.se > 0
+
+    def test_multiperiod_explicit_hc2_warns_and_matches_hc1(self):
+        data = _make_simple_panel()
+        rep_cols = _add_brr_replicates(data, n_rep=8)
+        with pytest.warns(UserWarning, match="has no effect with replicate-weight"):
+            res = MultiPeriodDiD(vcov_type="hc2").fit(
+                data,
+                "outcome",
+                "treated",
+                "time",
+                post_periods=[1],
+                survey_design=self._sd(rep_cols),
+            )
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            base = MultiPeriodDiD(vcov_type="hc1").fit(
+                data,
+                "outcome",
+                "treated",
+                "time",
+                post_periods=[1],
+                survey_design=self._sd(rep_cols),
+            )
+        # explicit hc1 must NOT trigger the replicate-override warning
+        # (the fixture legitimately emits an unrelated pre-period warning).
+        assert not any("has no effect with replicate-weight" in str(x.message) for x in w)
+        assert res.avg_att == base.avg_att and res.avg_se == base.avg_se
+
+    def test_conley_keeps_own_survey_contract(self):
+        """conley is excluded from the warn-and-remap: its survey-design
+        validators keep firing unchanged (no misleading 'has no effect'
+        warning followed by a conley rejection)."""
+        data = _make_simple_panel()
+        rep_cols = _add_brr_replicates(data, n_rep=8)
+        rng = np.random.default_rng(0)
+        data["lat"] = rng.uniform(0, 10, len(data))
+        data["lon"] = rng.uniform(0, 10, len(data))
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            with pytest.raises(ValueError):
+                DifferenceInDifferences(
+                    vcov_type="conley",
+                    conley_coords=("lat", "lon"),
+                    conley_cutoff_km=100,
+                ).fit(data, "outcome", "treated", "post", survey_design=self._sd(rep_cols))
+        assert not any("has no effect with replicate-weight" in str(x.message) for x in w)
+
+    def test_did_absorb_replicate_hc2_matches_hc1_surface_and_numbers(self):
+        """CI-review P1 regression: under a replicate design the remap must
+        also disable the absorb->full-dummy swap, or explicit hc2 would still
+        change the result surface (full-dummy coefficient vector vs absorbed
+        reduced fit) despite the 'has no effect' warning."""
+        data = _make_simple_panel()
+        data["group"] = (data["unit"] % 4).astype(str)
+        rep_cols = _add_brr_replicates(data, n_rep=8)
+
+        def _fit(vc):
+            return DifferenceInDifferences(vcov_type=vc).fit(
+                data,
+                "outcome",
+                "treated",
+                "post",
+                absorb=["group"],
+                survey_design=self._sd(rep_cols),
+            )
+
+        with pytest.warns(UserWarning, match="has no effect with replicate-weight"):
+            res = _fit("hc2")
+        base = _fit("hc1")
+        assert res.att == base.att and res.se == base.se
+        # Same result surface: absorbed reduced fit, not the full-dummy swap
+        # (the swap would expose the group-dummy coefficients).
+        assert len(res.coefficients) == len(base.coefficients)
+
+    def test_wild_bootstrap_rejection_fires_before_vcov_warning(self):
+        """CI-review P3 regression: the wild_bootstrap x replicate rejection
+        must fire without first emitting a 'proceeding with replicate
+        variance' warning that the subsequent raise contradicts."""
+        data = _make_simple_panel()
+        rep_cols = _add_brr_replicates(data, n_rep=8)
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            # The survey resolver rejects wild_bootstrap x survey even before
+            # the estimator-level replicate raise; either way the contract is
+            # a clean rejection with NO preceding 'proceeding with replicate
+            # variance' warning.
+            with pytest.raises((ValueError, NotImplementedError), match="ild bootstrap"):
+                DifferenceInDifferences(vcov_type="hc2", inference="wild_bootstrap").fit(
+                    data, "outcome", "treated", "post", survey_design=self._sd(rep_cols)
+                )
+        assert not any("has no effect with replicate-weight" in str(x.message) for x in w)

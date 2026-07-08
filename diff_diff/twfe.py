@@ -242,23 +242,20 @@ class TwoWayFixedEffects(DifferenceInDifferences):
                 "survey designs. Replicate weights provide their own variance "
                 "estimation."
             )
-        # Replicate weights + HC2 / HC2-BM is incompatible with the
-        # full-dummy auto-route: the replicate path re-demeans per
-        # replicate (re-demeaning depends on the per-replicate weight
-        # vector), which doesn't compose with the full-dummy design
-        # build. A correct implementation would need to re-build the
-        # full-dummy X per replicate and recompute the HC2 leverage,
-        # which is deferred. Mirrors the
-        # ``linalg.py::_validate_vcov_args`` ``hc2_bm + weights`` gate.
-        if _uses_replicate_twfe and self.vcov_type in ("hc2", "hc2_bm"):
-            raise NotImplementedError(
-                f"TwoWayFixedEffects(vcov_type={self.vcov_type!r}) with "
-                "replicate-weight survey designs is not yet supported: the "
-                "replicate path re-demeans per replicate, which does not "
-                "compose with the full-dummy HC2/HC2-BM build (would need "
-                "per-replicate full-dummy refit). Use vcov_type='hc1' for "
-                "replicate-weight CR1, or drop to analytical inference."
-            )
+        # Replicate designs replace the analytical vcov wholesale: the
+        # per-replicate refits return point estimates only, so vcov_type
+        # cannot influence any reported number (FWL: the full-dummy and
+        # within-transformed fits give identical coefficients, hence an
+        # identical replicate variance). An explicit vcov_type therefore
+        # warns and the (discarded) base fit remaps to hc1 on the
+        # within-transformed design — this also disables the full-dummy
+        # HC2/HC2-BM auto-route, which does not compose with the
+        # per-replicate re-demeaning. Previously hc2/hc2_bm raised
+        # NotImplementedError here; the warn-and-proceed contract matches
+        # DifferenceInDifferences/MultiPeriodDiD (shared helper).
+        _replicate_vcov_remap_twfe = _uses_replicate_twfe and self._warn_replicate_vcov_ignored()
+        if _replicate_vcov_remap_twfe:
+            use_full_dummy = False
 
         # Unit-level clustering is the TWFE default when `cluster` is not
         # explicitly provided. But the one-way ``classical`` and ``hc2``
@@ -472,7 +469,11 @@ class TwoWayFixedEffects(DifferenceInDifferences):
         # Don't forward `robust=self.robust` to LinearRegression when the
         # remapped vcov_type disagrees; the remapped `vcov_type` is the
         # single source of truth.
-        _fit_vcov_type = self._resolve_effective_vcov_type(survey_cluster_ids)
+        _fit_vcov_type = (
+            "hc1"
+            if _replicate_vcov_remap_twfe
+            else self._resolve_effective_vcov_type(survey_cluster_ids)
+        )
 
         # Phase 2 panel-Conley: build coord array + row-aligned time/unit
         # vectors from the original (un-demeaned) data. FWL composability:

@@ -971,13 +971,17 @@ class TestFitBehavior:
         assert res.n_clusters == 20
 
     @pytest.mark.parametrize("vcov", ["hc2", "hc2_bm"])
-    def test_twfe_rejects_replicate_weights_under_hc2(self, vcov):
-        """TWFE + hc2/hc2_bm + replicate-weight survey design raises
-        NotImplementedError.
+    def test_twfe_replicate_weights_under_hc2_warns_and_matches_hc1(self, vcov):
+        """TWFE + hc2/hc2_bm + replicate-weight survey design warns and
+        proceeds with replicate variance, bit-identical to the hc1 request.
 
-        The replicate path re-demeans per replicate (re-demeaning depends
-        on the per-replicate weight vector), which doesn't compose with
-        the full-dummy build. Documented scope limit; tracked in TODO.md.
+        Replicate designs replace the analytical vcov wholesale (the
+        per-replicate refits return point estimates only, identical across
+        vcov families by FWL), so vcov_type cannot influence any reported
+        number. The previous NotImplementedError is replaced by the
+        warn-and-remap contract shared with DifferenceInDifferences /
+        MultiPeriodDiD; explicit hc1 (the old error's own guidance) stays
+        silent.
         """
         data = _make_did_panel(n_units=20).copy()
         # Attach full-sample weight + 4 BRR replicate-weight columns.
@@ -992,11 +996,9 @@ class TestFitBehavior:
             replicate_method="BRR",
             weight_type="pweight",
         )
-        with pytest.raises(
-            NotImplementedError,
-            match=r"replicate-weight.*not yet supported",
-        ):
-            TwoWayFixedEffects(vcov_type=vcov).fit(
+
+        def _fit(vc):
+            return TwoWayFixedEffects(vcov_type=vc).fit(
                 data,
                 outcome="y",
                 treatment="treated",
@@ -1004,6 +1006,15 @@ class TestFitBehavior:
                 unit="unit",
                 survey_design=sd,
             )
+
+        with pytest.warns(UserWarning, match="has no effect with replicate-weight"):
+            res = _fit(vcov)
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", UserWarning)
+            base = _fit("hc1")  # explicit hc1 must NOT warn
+        assert res.att == base.att
+        assert res.se == base.se
+        assert np.isfinite(res.se) and res.se > 0
 
     def test_twfe_hc2_always_treated_unit_finite_att(self):
         """Always-treated unit (D=1 in all periods) doesn't poison the ATT
