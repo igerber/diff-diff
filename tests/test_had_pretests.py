@@ -3096,12 +3096,12 @@ class TestHADPretestWorkflowSurveyGuards:
 
 
 # =============================================================================
-# Phase 4.5 C: direct-helper survey/weights tests
+# Phase 4.5 C: direct-helper survey_design= tests
 # =============================================================================
 
 
 class TestStuteTestSurvey:
-    """Phase 4.5 C survey/weights extension on stute_test."""
+    """Phase 4.5 C survey_design= extension on stute_test."""
 
     def _setup(self, G=30, seed=42):
         d, dy = _linear_dgp(G=G, beta=2.0, sigma=0.3, seed=seed)
@@ -3187,7 +3187,7 @@ class TestStuteTestSurvey:
 
 
 class TestYatchewHRTestSurvey:
-    """Phase 4.5 C survey/weights extension on yatchew_hr_test.
+    """Phase 4.5 C survey_design= extension on yatchew_hr_test.
 
     Includes the bit-exact reduction-invariant lock at w=ones(G) per
     Reviewer CRITICAL #2 + MEDIUM #1: weighted variance components reduce
@@ -3578,7 +3578,7 @@ class TestYatchewHRTestMeanIndependence:
 
 
 class TestJointStuteSurvey:
-    """Phase 4.5 C survey/weights on stute_joint_pretest +
+    """Phase 4.5 C survey_design= on stute_joint_pretest +
     joint_pretrends_test + joint_homogeneity_test."""
 
     def _make_event_study_panel(self, G=20, T_pre=2, T_post=2, seed=42):

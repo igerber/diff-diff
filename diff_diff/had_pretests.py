@@ -1638,10 +1638,10 @@ def stute_test(
             "the result."
         )
 
-    # Internal alias rebind: downstream code uses `survey` and `weights` as
-    # internal variable names (Phase 4.5 C convention). Fold the canonical
-    # survey_design into the legacy variable names so the unchanged
-    # downstream logic consumes the input transparently.
+    # Internal variable naming: downstream code uses `survey` and `weights`
+    # (Phase 4.5 C convention). Bind the canonical survey_design to the
+    # internal names so the unchanged downstream logic consumes it
+    # transparently (`weights` stays None; the raw-array entry is gone).
     survey = survey_design
     weights = None
 
@@ -2109,7 +2109,7 @@ def yatchew_hr_test(
             "FPC, pre-resolve via `SurveyDesign(...).resolve(data)`."
         )
 
-    # Internal alias rebind for back-compat with downstream code.
+    # Internal variable naming: downstream code reads `survey`/`weights`.
     survey = survey_design
     weights = None
 
@@ -2764,7 +2764,7 @@ def stute_joint_pretest(
             "FPC, pre-resolve via `SurveyDesign(...).resolve(data)`."
         )
 
-    # Internal alias rebind for back-compat with downstream code.
+    # Internal variable naming: downstream code reads `survey`/`weights`.
     survey = survey_design
     weights = None
 
@@ -3385,8 +3385,8 @@ def joint_pretrends_test(
     -------
     StuteJointResult with ``null_form = "mean_independence"``.
     """
-    # Internal alias rebind: downstream code uses `survey` and `weights` as
-    # internal variable names (Phase 4.5 C convention).
+    # Internal variable naming: downstream code reads `survey`/`weights`
+    # (Phase 4.5 C convention).
     survey = survey_design
     weights = None
 
@@ -3758,8 +3758,8 @@ def joint_homogeneity_test(
     -------
     StuteJointResult with ``null_form = "linearity"``.
     """
-    # Internal alias rebind: downstream code uses `survey` and `weights` as
-    # internal variable names (Phase 4.5 C convention).
+    # Internal variable naming: downstream code reads `survey`/`weights`
+    # (Phase 4.5 C convention).
     survey = survey_design
     weights = None
 
@@ -4020,7 +4020,7 @@ def _compose_verdict_overall_survey(
     yatchew: Optional[YatchewTestResults],
 ) -> str:
     """Build the overall-path :class:`HADPretestReport` verdict on the
-    survey/weights branch (Phase 4.5 C).
+    survey_design= branch (Phase 4.5 C).
 
     Drops the QUG step from consideration (skipped per Phase 4.5 C0)
     and composes the verdict from Stute + Yatchew alone, with the
@@ -4336,9 +4336,9 @@ def did_had_pretest_workflow(
     # per-aggregate branches: overall path resolves on the original data (no
     # filtering); event-study path lets the joint wrappers handle resolution
     # on data_filtered.
-    # Internal alias rebind: downstream code uses `survey` as its internal
-    # variable name (Phase 4.5 C convention). The bit-exact regression
-    # invariant is preserved because we only rebind names, not values.
+    # Internal variable naming: downstream code reads `survey` (Phase 4.5 C
+    # convention). The bit-exact regression invariant is preserved because
+    # we only bind names, not values.
     survey = survey_design
 
     use_survey_path = survey is not None

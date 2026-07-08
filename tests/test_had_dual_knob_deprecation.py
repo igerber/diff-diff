@@ -465,7 +465,7 @@ class TestHADFitDeprecation:
 
     def test_cband_is_keyword_only(self, two_period_panel):
         """`cband` became keyword-only in 3.7.0 (it followed the removed
-        positional survey/weights slots)."""
+        positional `survey`/`weights` slots removed in 3.7.0)."""
         df = two_period_panel
         est = HeterogeneousAdoptionDiD(design="continuous_at_zero")
         with pytest.raises(TypeError):
