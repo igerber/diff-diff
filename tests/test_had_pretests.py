@@ -184,14 +184,15 @@ class TestQUGTest:
     # Phase 4.5 C0 decision-gate guards
     # -------------------------------------------------------------------
 
-    def test_weights_kwarg_raises_not_implemented(self):
-        """Phase 4.5 C0: qug_test(weights=) raises NotImplementedError."""
+    def test_survey_design_kwarg_raises_not_implemented_resolved(self):
+        """Phase 4.5 C0: a pre-resolved design raises NotImplementedError."""
         d = np.array([0.1, 0.5, 0.9])
         with pytest.raises(NotImplementedError, match="qug_test does not support"):
             qug_test(d, survey_design=make_pweight_design(np.ones(3)))
 
-    def test_survey_kwarg_raises_not_implemented(self):
-        """Phase 4.5 C0: qug_test(survey=) raises NotImplementedError."""
+    def test_survey_design_kwarg_raises_not_implemented_with_surveydesign(self):
+        """Phase 4.5 C0: a SurveyDesign instance also raises (the C0 gate
+        fires for any non-None survey_design=)."""
         from diff_diff import SurveyDesign
 
         d = np.array([0.1, 0.5, 0.9])
@@ -2917,10 +2918,11 @@ class TestHADPretestWorkflowSurveyGuards:
     """Phase 4.5 C survey-aware workflow tests.
 
     Phase 4.5 C makes did_had_pretest_workflow functional under
-    survey=/weights=: it skips QUG with a UserWarning (per C0 deferral)
+    survey_design=: it skips QUG with a UserWarning (per C0 deferral)
     and dispatches the linearity family with the survey-aware mechanism.
-    Mutex on survey+weights still raises ValueError; replicate-weight
-    survey designs raise NotImplementedError (parallel follow-up)."""
+    The removed survey=/weights= aliases raise TypeError (3.7.x);
+    replicate-weight survey designs raise NotImplementedError (parallel
+    follow-up)."""
 
     def _make_minimal_overall_panel(self, with_weight_col: bool = False):
         """Two-period, single-cohort panel sufficient for overall workflow.
@@ -2969,9 +2971,9 @@ class TestHADPretestWorkflowSurveyGuards:
         assert report.homogeneity_joint is None
 
     def test_workflow_weights_runs_overall_path(self):
-        """Phase 4.5 C: weights= now functional. Workflow dispatches to
-        weighted Stute + Yatchew, skips QUG, returns valid report with
-        qug=None."""
+        """Phase 4.5 C: weighted workflow (weight column + SurveyDesign)
+        dispatches to weighted Stute + Yatchew, skips QUG, returns a valid
+        report with qug=None."""
         df = self._make_minimal_overall_panel()
         # 40 rows (20 units x 2 periods); per-row weights with constant-
         # within-unit invariant.
@@ -2997,7 +2999,7 @@ class TestHADPretestWorkflowSurveyGuards:
         assert np.isfinite(report.stute.p_value)
 
     def test_workflow_survey_runs_overall_path(self):
-        """Phase 4.5 C: survey= now functional via SurveyDesign(weights=col)."""
+        """Phase 4.5 C: survey_design=SurveyDesign(weights=col) is functional."""
         from diff_diff import SurveyDesign
 
         df = self._make_minimal_overall_panel(with_weight_col=True)
@@ -3115,7 +3117,7 @@ class TestStuteTestSurvey:
         assert 0.0 <= r.p_value <= 1.0
 
     def test_weights_smoke(self):
-        """weights= produces a finite, valid Stute result."""
+        """A pweight-only design produces a finite, valid Stute result."""
         d, dy = self._setup()
         w = np.random.default_rng(7).uniform(0.5, 2.0, size=30)
         r = stute_test(d, dy, survey_design=make_pweight_design(w), n_bootstrap=199, seed=0)
@@ -3123,7 +3125,7 @@ class TestStuteTestSurvey:
         assert 0.0 <= r.p_value <= 1.0
 
     def test_survey_smoke(self):
-        """survey= via trivial ResolvedSurveyDesign produces a finite result."""
+        """A trivial ResolvedSurveyDesign produces a finite result."""
         from diff_diff.survey import make_pweight_design
 
         d, dy = self._setup()
@@ -3882,13 +3884,13 @@ class TestPhase45CR1Regressions:
                 seed=0,
             )
 
-    # --- R1 P1: staggered event-study weights= subsetting ------------------
+    # --- R1 P1: staggered event-study weight subsetting --------------------
 
     def test_workflow_staggered_event_study_weights_subset_correctly(self):
-        """R1 P1: on staggered panels, _validate_multi_period_panel filters
-        to the last cohort; row-level weights= must be subset to the
-        surviving cohort BEFORE re-aggregation. Pre-fix this crashed with
-        a length-mismatch ValueError."""
+        """R1 P1 (regression kept under the column form): on staggered
+        panels, _validate_multi_period_panel filters to the last cohort;
+        the SurveyDesign weight column must resolve on the SURVIVING
+        cohort's rows (column references self-align through filtering)."""
         df = self._make_staggered_panel(G_per_cohort=10)
         n_rows = 2 * 10 * 4
         weights_per_row = np.ones(n_rows) * 1.5
@@ -4183,17 +4185,22 @@ class TestPhase45CR1Regressions:
         with pytest.raises(ValueError, match="1-dimensional"):
             yatchew_hr_test(d, dy, survey_design=make_pweight_design(w_2d))
 
-    def test_workflow_rejects_2d_weights(self):
+    def test_workflow_rejects_pre_resolved_design(self):
+        """Data-in surfaces reject a pre-resolved ResolvedSurveyDesign
+        (make_pweight_design output belongs to the array-in helpers): the
+        type guard tells users to add a weight column + SurveyDesign.
+        (Successor of the removed weights=-2D-array validation test — 2-D
+        rejection now happens inside make_pweight_design itself, which has
+        its own factory tests.)"""
         df = self._make_overall_panel()
-        w_2d = np.ones((40, 1))
-        with pytest.raises(ValueError, match="1-dimensional"):
+        with pytest.raises(TypeError, match="SurveyDesign"):
             did_had_pretest_workflow(
                 df,
                 "y",
                 "d",
                 "time",
                 "unit",
-                survey_design=make_pweight_design(w_2d),
+                survey_design=make_pweight_design(np.ones(40)),
                 n_bootstrap=199,
                 seed=0,
             )
@@ -4882,24 +4889,22 @@ class TestJointPretestsTrendsLin:
                 survey_design=SurveyDesign(weights="w"),
             )
 
-    def test_pretrends_trends_lin_with_weights_alias_raises(self):
+    def test_pretrends_trends_lin_with_pre_resolved_design_raises(self):
         df = self._panel(rng_seed=16)
         with pytest.raises(NotImplementedError, match="trends_lin=True.*survey"):
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore", DeprecationWarning)
-                joint_pretrends_test(
-                    df,
-                    "y",
-                    "d",
-                    "time",
-                    "unit",
-                    pre_periods=[1, 2],
-                    base_period=3,
-                    n_bootstrap=99,
-                    seed=42,
-                    trends_lin=True,
-                    survey_design=make_pweight_design(np.ones(len(df))),
-                )
+            joint_pretrends_test(
+                df,
+                "y",
+                "d",
+                "time",
+                "unit",
+                pre_periods=[1, 2],
+                base_period=3,
+                n_bootstrap=99,
+                seed=42,
+                trends_lin=True,
+                survey_design=make_pweight_design(np.ones(len(df))),
+            )
 
     def test_homogeneity_trends_lin_with_survey_design_raises(self):
         from diff_diff import SurveyDesign

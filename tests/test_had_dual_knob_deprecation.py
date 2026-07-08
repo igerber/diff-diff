@@ -1,30 +1,22 @@
-"""Tests for HAD survey_design= consolidation + deprecation cycle.
+"""Tests for HAD survey_design= consolidation (aliases fully removed).
 
-As of 3.7.0, ``HeterogeneousAdoptionDiD.fit`` no longer accepts ``survey=`` /
-``weights=`` (they raise ``TypeError``; ``survey_design=`` is the sole weighting
-entry and ``cband`` is keyword-only). The 7 pretest helpers (did_had_pretest_workflow
-+ 4 array-in pretests + 2 data-in joint wrappers) still accept the deprecated
-``survey=`` / ``weights=`` aliases pending a follow-up removal.
+``survey=`` / ``weights=`` were removed on ``HeterogeneousAdoptionDiD.fit``
+in 3.7.0 and on all 7 pretest helpers (did_had_pretest_workflow + 4 array-in
+pretests + 2 data-in joint wrappers) in 3.7.x — passing either raises
+``TypeError``; ``survey_design=`` is the sole weighting entry everywhere
+(``cband`` is keyword-only on fit).
 
-Each pretest-helper surface gets:
+Each surface gets:
 
-1. survey_design= positive smoke (new kwarg accepted, finite output).
-2. weights= deprecation warning (DeprecationWarning emitted; back-compat
-   numerics preserved).
-3. survey= deprecation warning (DeprecationWarning emitted; back-compat
-   numerics preserved).
-4. Numerical parity legacy ≡ new at atol=0 (skipped on qug_test, which
-   raises NotImplementedError on all paths).
-5. Three-way mutex ValueError (any 2-of-3 combo).
-
-The ``TestHADFitDeprecation`` class instead pins the fit()-surface removal
-(``survey=`` / ``weights=`` → ``TypeError``; ``cband`` keyword-only).
+1. survey_design= positive smoke (canonical kwarg accepted, finite output).
+2. weights= removal pin (``TypeError``).
+3. survey= removal pin (``TypeError``).
 
 Plus surface-spanning tests:
 - make_pweight_design importable from diff_diff top-level.
 - make_pweight_design ≡ _make_trivial_resolved (private alias).
 - Array-in helpers reject SurveyDesign (TypeError).
-- Bit-exact normalization-order invariant (scale-invariance).
+- Normalization-order invariant (scale-invariance, canonical entry).
 - qug_test surface symmetry (signature consistent with siblings).
 """
 
@@ -158,29 +150,6 @@ class TestPublicHelpers:
         with pytest.raises(ValueError, match="weights must be 1-dimensional"):
             make_pweight_design(np.ones((5, 1)))
 
-    def test_array_in_helpers_legacy_weights_scalar_raises_value_error(self, array_in_data):
-        """PR #376 R3 P1: deprecated `weights=scalar` on array-in helpers
-        also raises ValueError (the shim routes through make_pweight_design,
-        which catches scalars at its front door)."""
-        d, dy = array_in_data
-        with pytest.raises(ValueError, match="weights must be 1-dimensional"):
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore", DeprecationWarning)
-                stute_test(d, dy, weights=1.0, n_bootstrap=199, seed=0)
-        with pytest.raises(ValueError, match="weights must be 1-dimensional"):
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore", DeprecationWarning)
-                yatchew_hr_test(d, dy, weights=1.0)
-
-    def test_qug_test_legacy_weights_scalar_raises_value_error(self, array_in_doses):
-        """PR #376 R3 P1: deprecated `weights=scalar` on qug_test also raises
-        ValueError (the shim routes through make_pweight_design before the
-        NotImplementedError gate)."""
-        with pytest.raises(ValueError, match="weights must be 1-dimensional"):
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore", DeprecationWarning)
-                qug_test(array_in_doses, weights=1.0)
-
 
 class TestArrayInTypeGuard:
     """Array-in helpers reject SurveyDesign (cannot resolve column names).
@@ -195,27 +164,10 @@ class TestArrayInTypeGuard:
         with pytest.raises(TypeError, match="make_pweight_design"):
             stute_test(d, dy, survey_design=SurveyDesign(weights="w"), n_bootstrap=199, seed=0)
 
-    def test_stute_test_rejects_SurveyDesign_via_legacy_alias(self, array_in_data):
-        """PR #376 R1 P1: `survey=SurveyDesign(...)` (deprecated alias) must
-        trigger the same TypeError as `survey_design=SurveyDesign(...)`."""
-        d, dy = array_in_data
-        with pytest.raises(TypeError, match="make_pweight_design"):
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore", DeprecationWarning)
-                stute_test(d, dy, survey=SurveyDesign(weights="w"), n_bootstrap=199, seed=0)
-
     def test_yatchew_hr_test_rejects_SurveyDesign(self, array_in_data):
         d, dy = array_in_data
         with pytest.raises(TypeError, match="make_pweight_design"):
             yatchew_hr_test(d, dy, survey_design=SurveyDesign(weights="w"))
-
-    def test_yatchew_hr_test_rejects_SurveyDesign_via_legacy_alias(self, array_in_data):
-        """PR #376 R1 P1: alias parity with canonical kwarg."""
-        d, dy = array_in_data
-        with pytest.raises(TypeError, match="make_pweight_design"):
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore", DeprecationWarning)
-                yatchew_hr_test(d, dy, survey=SurveyDesign(weights="w"))
 
     def test_stute_joint_pretest_rejects_SurveyDesign(self):
         rng = np.random.default_rng(3)
@@ -235,59 +187,35 @@ class TestArrayInTypeGuard:
                 seed=0,
             )
 
-    def test_stute_joint_pretest_rejects_SurveyDesign_via_legacy_alias(self):
-        """PR #376 R1 P1: alias parity with canonical kwarg."""
-        rng = np.random.default_rng(3)
-        G = 30
-        d = rng.uniform(0, 1, size=G)
-        residuals = {0: rng.normal(0, 0.1, G)}
-        fitted = {0: np.zeros(G)}
-        X = np.column_stack([np.ones(G), d])
-        with pytest.raises(TypeError, match="make_pweight_design"):
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore", DeprecationWarning)
-                stute_joint_pretest(
-                    residuals_by_horizon=residuals,
-                    fitted_by_horizon=fitted,
-                    doses=d,
-                    design_matrix=X,
-                    survey=SurveyDesign(weights="w"),
-                    n_bootstrap=199,
-                    seed=0,
-                )
-
 
 class TestScaleInvariance:
-    """Bit-exact normalization-order invariant (Stability invariant #7).
+    """Normalization-order invariant (Stability invariant #7).
 
-    The legacy weights= deprecation shim binds
-    `survey_design = make_pweight_design(weights_unnormalized)` and lets
-    the unified survey_design= path apply the mean=1 normalization step
-    EXACTLY ONCE downstream. If the shim pre-normalized AND the unified
-    path also normalized, the test statistic would scale differently
-    under multiplicative weight rescaling.
+    `make_pweight_design` passes weights UNNORMALIZED and the unified
+    survey_design= path applies the mean=1 normalization step EXACTLY
+    ONCE downstream. If make_pweight_design pre-normalized AND the
+    unified path also normalized, the test statistic would scale
+    differently under multiplicative weight rescaling.
     """
 
-    def test_stute_weights_alias_scale_invariant(self, array_in_data):
+    def test_stute_weights_scale_invariant(self, array_in_data):
         d, dy = array_in_data
         w = np.random.default_rng(4).uniform(0.5, 1.5, size=30)
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", DeprecationWarning)
-            r1 = stute_test(d, dy, weights=w, n_bootstrap=199, seed=0)
-            r2 = stute_test(d, dy, weights=w * 100.0, n_bootstrap=199, seed=0)
+        r1 = stute_test(d, dy, survey_design=make_pweight_design(w), n_bootstrap=199, seed=0)
+        r2 = stute_test(
+            d, dy, survey_design=make_pweight_design(w * 100.0), n_bootstrap=199, seed=0
+        )
         # Use atol/rtol=1e-14 (per `feedback_assert_allclose_numerical_parity`):
         # the mean=1 normalization step `w * G/sum(w)` produces results that
         # agree to ~16 significant figures but not bit-exactly across
         # multiplicative rescaling (FP rounding in the renormalization step).
         np.testing.assert_allclose(r1.cvm_stat, r2.cvm_stat, atol=1e-14, rtol=1e-14)
 
-    def test_yatchew_weights_alias_scale_invariant(self, array_in_data):
+    def test_yatchew_weights_scale_invariant(self, array_in_data):
         d, dy = array_in_data
         w = np.random.default_rng(5).uniform(0.5, 1.5, size=30)
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", DeprecationWarning)
-            r1 = yatchew_hr_test(d, dy, weights=w)
-            r2 = yatchew_hr_test(d, dy, weights=w * 100.0)
+        r1 = yatchew_hr_test(d, dy, survey_design=make_pweight_design(w))
+        r2 = yatchew_hr_test(d, dy, survey_design=make_pweight_design(w * 100.0))
         np.testing.assert_allclose(r1.t_stat_hr, r2.t_stat_hr, atol=1e-14, rtol=1e-14)
 
 
@@ -304,40 +232,15 @@ class TestQUGTestDeprecation:
         with pytest.raises(NotImplementedError, match="QUG"):
             qug_test(array_in_doses, survey_design=make_pweight_design(np.ones(5)))
 
-    def test_weights_emits_deprecation_warning(self, array_in_doses):
-        with pytest.warns(DeprecationWarning, match="weights=.*deprecated"):
-            with pytest.raises(NotImplementedError):
-                qug_test(array_in_doses, weights=np.ones(5))
+    def test_weights_kwarg_removed(self, array_in_doses):
+        """`weights=` removed in 3.7.x (survey_design= only, itself rejected)."""
+        with pytest.raises(TypeError, match="unexpected keyword argument 'weights'"):
+            qug_test(array_in_doses, weights=np.ones(30))
 
-    def test_survey_emits_deprecation_warning(self, array_in_doses):
-        with pytest.warns(DeprecationWarning, match="survey=.*deprecated"):
-            with pytest.raises(NotImplementedError):
-                qug_test(array_in_doses, survey=SurveyDesign(weights="w"))
-
-    def test_three_way_mutex_design_plus_survey(self, array_in_doses):
-        with pytest.raises(ValueError, match="at most one of"):
-            qug_test(
-                array_in_doses,
-                survey_design=make_pweight_design(np.ones(5)),
-                survey=SurveyDesign(weights="w"),
-            )
-
-    def test_three_way_mutex_design_plus_weights(self, array_in_doses):
-        with pytest.raises(ValueError, match="at most one of"):
-            qug_test(
-                array_in_doses,
-                survey_design=make_pweight_design(np.ones(5)),
-                weights=np.ones(5),
-            )
-
-    def test_three_way_mutex_all_three(self, array_in_doses):
-        with pytest.raises(ValueError, match="at most one of"):
-            qug_test(
-                array_in_doses,
-                survey_design=make_pweight_design(np.ones(5)),
-                survey=SurveyDesign(weights="w"),
-                weights=np.ones(5),
-            )
+    def test_survey_kwarg_removed(self, array_in_doses):
+        """`survey=` removed in 3.7.x."""
+        with pytest.raises(TypeError, match="unexpected keyword argument 'survey'"):
+            qug_test(array_in_doses, survey=SurveyDesign(weights="w"))
 
 
 class TestStuteTestDeprecation:
@@ -348,69 +251,17 @@ class TestStuteTestDeprecation:
         assert np.isfinite(r.cvm_stat)
         assert 0.0 <= r.p_value <= 1.0
 
-    def test_weights_emits_deprecation_warning(self, array_in_data):
+    def test_weights_kwarg_removed(self, array_in_data):
+        """`weights=` removed in 3.7.x (use survey_design=make_pweight_design)."""
         d, dy = array_in_data
-        with pytest.warns(DeprecationWarning, match="weights=.*deprecated"):
+        with pytest.raises(TypeError, match="unexpected keyword argument 'weights'"):
             stute_test(d, dy, weights=np.ones(30), n_bootstrap=199, seed=0)
 
-    def test_survey_emits_deprecation_warning(self, array_in_data):
+    def test_survey_kwarg_removed(self, array_in_data):
+        """`survey=` removed in 3.7.x."""
         d, dy = array_in_data
-        with pytest.warns(DeprecationWarning, match="survey=.*deprecated"):
-            stute_test(
-                d,
-                dy,
-                survey=make_pweight_design(np.ones(30)),
-                n_bootstrap=199,
-                seed=0,
-            )
-
-    def test_numerical_parity_weights_legacy_eq_new(self, array_in_data):
-        d, dy = array_in_data
-        w = np.random.default_rng(7).uniform(0.5, 1.5, size=30)
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", DeprecationWarning)
-            r_legacy = stute_test(d, dy, weights=w, n_bootstrap=199, seed=0)
-        r_new = stute_test(d, dy, survey_design=make_pweight_design(w), n_bootstrap=199, seed=0)
-        assert r_legacy.cvm_stat == r_new.cvm_stat
-        assert r_legacy.p_value == r_new.p_value
-
-    def test_numerical_parity_survey_legacy_eq_new(self, array_in_data):
-        d, dy = array_in_data
-        w = np.random.default_rng(8).uniform(0.5, 1.5, size=30)
-        resolved = make_pweight_design(w)
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", DeprecationWarning)
-            r_legacy = stute_test(d, dy, survey=resolved, n_bootstrap=199, seed=0)
-        r_new = stute_test(d, dy, survey_design=resolved, n_bootstrap=199, seed=0)
-        assert r_legacy.cvm_stat == r_new.cvm_stat
-        assert r_legacy.p_value == r_new.p_value
-
-    def test_three_way_mutex_design_plus_survey(self, array_in_data):
-        d, dy = array_in_data
-        w = np.ones(30)
-        with pytest.raises(ValueError, match="at most one of"):
-            stute_test(
-                d,
-                dy,
-                survey_design=make_pweight_design(w),
-                survey=make_pweight_design(w),
-                n_bootstrap=199,
-                seed=0,
-            )
-
-    def test_three_way_mutex_all_three(self, array_in_data):
-        d, dy = array_in_data
-        w = np.ones(30)
-        with pytest.raises(ValueError, match="at most one of"):
-            stute_test(
-                d,
-                dy,
-                survey_design=make_pweight_design(w),
-                survey=make_pweight_design(w),
-                weights=w,
-                n_bootstrap=199,
-                seed=0,
-            )
+        with pytest.raises(TypeError, match="unexpected keyword argument 'survey'"):
+            stute_test(d, dy, survey=None, n_bootstrap=199, seed=0)
 
 
 class TestYatchewHRTestDeprecation:
@@ -420,35 +271,17 @@ class TestYatchewHRTestDeprecation:
         r = yatchew_hr_test(d, dy, survey_design=make_pweight_design(w))
         assert np.isfinite(r.t_stat_hr)
 
-    def test_weights_emits_deprecation_warning(self, array_in_data):
+    def test_weights_kwarg_removed(self, array_in_data):
+        """`weights=` removed in 3.7.x (use survey_design=make_pweight_design)."""
         d, dy = array_in_data
-        with pytest.warns(DeprecationWarning, match="weights=.*deprecated"):
+        with pytest.raises(TypeError, match="unexpected keyword argument 'weights'"):
             yatchew_hr_test(d, dy, weights=np.ones(30))
 
-    def test_survey_emits_deprecation_warning(self, array_in_data):
+    def test_survey_kwarg_removed(self, array_in_data):
+        """`survey=` removed in 3.7.x."""
         d, dy = array_in_data
-        with pytest.warns(DeprecationWarning, match="survey=.*deprecated"):
-            yatchew_hr_test(d, dy, survey=make_pweight_design(np.ones(30)))
-
-    def test_numerical_parity_weights_legacy_eq_new(self, array_in_data):
-        d, dy = array_in_data
-        w = np.random.default_rng(9).uniform(0.5, 1.5, size=30)
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", DeprecationWarning)
-            r_legacy = yatchew_hr_test(d, dy, weights=w)
-        r_new = yatchew_hr_test(d, dy, survey_design=make_pweight_design(w))
-        assert r_legacy.t_stat_hr == r_new.t_stat_hr
-        assert r_legacy.p_value == r_new.p_value
-
-    def test_three_way_mutex_design_plus_weights(self, array_in_data):
-        d, dy = array_in_data
-        with pytest.raises(ValueError, match="at most one of"):
-            yatchew_hr_test(
-                d,
-                dy,
-                survey_design=make_pweight_design(np.ones(30)),
-                weights=np.ones(30),
-            )
+        with pytest.raises(TypeError, match="unexpected keyword argument 'survey'"):
+            yatchew_hr_test(d, dy, survey=None)
 
 
 class TestStuteJointPretestDeprecation:
@@ -475,9 +308,10 @@ class TestStuteJointPretestDeprecation:
         )
         assert np.isfinite(r.cvm_stat_joint)
 
-    def test_weights_emits_deprecation_warning(self):
+    def test_weights_kwarg_removed(self):
+        """`weights=` removed in 3.7.x (use survey_design=make_pweight_design)."""
         d, residuals, fitted, X = self._setup()
-        with pytest.warns(DeprecationWarning, match="weights=.*deprecated"):
+        with pytest.raises(TypeError, match="unexpected keyword argument 'weights'"):
             stute_joint_pretest(
                 residuals_by_horizon=residuals,
                 fitted_by_horizon=fitted,
@@ -488,57 +322,16 @@ class TestStuteJointPretestDeprecation:
                 seed=0,
             )
 
-    def test_survey_emits_deprecation_warning(self):
+    def test_survey_kwarg_removed(self):
+        """`survey=` removed in 3.7.x."""
         d, residuals, fitted, X = self._setup()
-        with pytest.warns(DeprecationWarning, match="survey=.*deprecated"):
+        with pytest.raises(TypeError, match="unexpected keyword argument 'survey'"):
             stute_joint_pretest(
                 residuals_by_horizon=residuals,
                 fitted_by_horizon=fitted,
                 doses=d,
                 design_matrix=X,
-                survey=make_pweight_design(np.ones(30)),
-                n_bootstrap=199,
-                seed=0,
-            )
-
-    def test_numerical_parity_weights_legacy_eq_new(self):
-        d, residuals, fitted, X = self._setup()
-        w = np.random.default_rng(11).uniform(0.5, 1.5, size=30)
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", DeprecationWarning)
-            r_legacy = stute_joint_pretest(
-                residuals_by_horizon=residuals,
-                fitted_by_horizon=fitted,
-                doses=d,
-                design_matrix=X,
-                weights=w,
-                n_bootstrap=199,
-                seed=0,
-            )
-        r_new = stute_joint_pretest(
-            residuals_by_horizon=residuals,
-            fitted_by_horizon=fitted,
-            doses=d,
-            design_matrix=X,
-            survey_design=make_pweight_design(w),
-            n_bootstrap=199,
-            seed=0,
-        )
-        assert r_legacy.cvm_stat_joint == r_new.cvm_stat_joint
-        assert r_legacy.p_value == r_new.p_value
-
-    def test_three_way_mutex_all_three(self):
-        d, residuals, fitted, X = self._setup()
-        w = np.ones(30)
-        with pytest.raises(ValueError, match="at most one of"):
-            stute_joint_pretest(
-                residuals_by_horizon=residuals,
-                fitted_by_horizon=fitted,
-                doses=d,
-                design_matrix=X,
-                survey_design=make_pweight_design(w),
-                survey=make_pweight_design(w),
-                weights=w,
+                survey=None,
                 n_bootstrap=199,
                 seed=0,
             )
@@ -561,10 +354,10 @@ class TestJointPretrendsTestDeprecation:
         )
         assert np.isfinite(r.cvm_stat_joint)
 
-    def test_weights_emits_deprecation_warning(self, event_study_panel):
+    def test_weights_kwarg_removed(self, event_study_panel):
+        """`weights=` removed in 3.7.x (add a weight column + SurveyDesign)."""
         df = event_study_panel
-        n = len(df)
-        with pytest.warns(DeprecationWarning, match="weights=.*deprecated"):
+        with pytest.raises(TypeError, match="unexpected keyword argument 'weights'"):
             joint_pretrends_test(
                 df,
                 "y",
@@ -573,14 +366,15 @@ class TestJointPretrendsTestDeprecation:
                 "unit",
                 pre_periods=[0],
                 base_period=1,
-                weights=np.ones(n),
                 n_bootstrap=199,
                 seed=0,
+                weights=np.ones(len(df)),
             )
 
-    def test_survey_emits_deprecation_warning(self, event_study_panel):
+    def test_survey_kwarg_removed(self, event_study_panel):
+        """`survey=` removed in 3.7.x."""
         df = event_study_panel
-        with pytest.warns(DeprecationWarning, match="survey=.*deprecated"):
+        with pytest.raises(TypeError, match="unexpected keyword argument 'survey'"):
             joint_pretrends_test(
                 df,
                 "y",
@@ -589,98 +383,10 @@ class TestJointPretrendsTestDeprecation:
                 "unit",
                 pre_periods=[0],
                 base_period=1,
+                n_bootstrap=199,
+                seed=0,
                 survey=SurveyDesign(weights="w"),
-                n_bootstrap=199,
-                seed=0,
             )
-
-    def test_three_way_mutex_design_plus_survey(self, event_study_panel):
-        df = event_study_panel
-        n = len(df)
-        with pytest.raises(ValueError, match="at most one of"):
-            joint_pretrends_test(
-                df,
-                "y",
-                "d",
-                "time",
-                "unit",
-                pre_periods=[0],
-                base_period=1,
-                survey_design=SurveyDesign(weights="w"),
-                weights=np.ones(n),
-                n_bootstrap=199,
-                seed=0,
-            )
-
-    def test_legacy_alias_parity_survey(self, event_study_panel):
-        """PR #376 R9 P3: deprecated `survey=SurveyDesign(...)` ≡ canonical
-        `survey_design=SurveyDesign(...)` on joint_pretrends_test (locks
-        rebinding parity)."""
-        df = event_study_panel
-        sd = SurveyDesign(weights="w")
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", DeprecationWarning)
-            r_legacy = joint_pretrends_test(
-                df,
-                "y",
-                "d",
-                "time",
-                "unit",
-                pre_periods=[0],
-                base_period=1,
-                survey=sd,
-                n_bootstrap=199,
-                seed=0,
-            )
-        r_new = joint_pretrends_test(
-            df,
-            "y",
-            "d",
-            "time",
-            "unit",
-            pre_periods=[0],
-            base_period=1,
-            survey_design=sd,
-            n_bootstrap=199,
-            seed=0,
-        )
-        assert r_legacy.cvm_stat_joint == r_new.cvm_stat_joint
-        assert r_legacy.p_value == r_new.p_value
-
-    def test_legacy_alias_parity_weights(self, event_study_panel):
-        """PR #376 R10 P3: deprecated `weights=np.ones(n)` ≡ canonical
-        `survey_design=SurveyDesign(weights="w")` (uniform 1.0 column) on
-        joint_pretrends_test."""
-        df = event_study_panel
-        n = len(df)
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", DeprecationWarning)
-            r_legacy = joint_pretrends_test(
-                df,
-                "y",
-                "d",
-                "time",
-                "unit",
-                pre_periods=[0],
-                base_period=1,
-                weights=np.ones(n),
-                n_bootstrap=199,
-                seed=0,
-            )
-        r_new = joint_pretrends_test(
-            df,
-            "y",
-            "d",
-            "time",
-            "unit",
-            pre_periods=[0],
-            base_period=1,
-            survey_design=SurveyDesign(weights="w"),
-            n_bootstrap=199,
-            seed=0,
-        )
-        assert r_legacy.cvm_stat_joint == r_new.cvm_stat_joint
-        assert r_legacy.p_value == r_new.p_value
 
 
 class TestJointHomogeneityTestDeprecation:
@@ -700,10 +406,10 @@ class TestJointHomogeneityTestDeprecation:
         )
         assert np.isfinite(r.cvm_stat_joint)
 
-    def test_weights_emits_deprecation_warning(self, event_study_panel):
+    def test_weights_kwarg_removed(self, event_study_panel):
+        """`weights=` removed in 3.7.x (add a weight column + SurveyDesign)."""
         df = event_study_panel
-        n = len(df)
-        with pytest.warns(DeprecationWarning, match="weights=.*deprecated"):
+        with pytest.raises(TypeError, match="unexpected keyword argument 'weights'"):
             joint_homogeneity_test(
                 df,
                 "y",
@@ -712,14 +418,15 @@ class TestJointHomogeneityTestDeprecation:
                 "unit",
                 post_periods=[2, 3],
                 base_period=1,
-                weights=np.ones(n),
                 n_bootstrap=199,
                 seed=0,
+                weights=np.ones(len(df)),
             )
 
-    def test_survey_emits_deprecation_warning(self, event_study_panel):
+    def test_survey_kwarg_removed(self, event_study_panel):
+        """`survey=` removed in 3.7.x."""
         df = event_study_panel
-        with pytest.warns(DeprecationWarning, match="survey=.*deprecated"):
+        with pytest.raises(TypeError, match="unexpected keyword argument 'survey'"):
             joint_homogeneity_test(
                 df,
                 "y",
@@ -728,79 +435,10 @@ class TestJointHomogeneityTestDeprecation:
                 "unit",
                 post_periods=[2, 3],
                 base_period=1,
+                n_bootstrap=199,
+                seed=0,
                 survey=SurveyDesign(weights="w"),
-                n_bootstrap=199,
-                seed=0,
             )
-
-    def test_legacy_alias_parity_survey(self, event_study_panel):
-        """PR #376 R9 P3: deprecated `survey=SurveyDesign(...)` ≡ canonical
-        `survey_design=SurveyDesign(...)` on joint_homogeneity_test."""
-        df = event_study_panel
-        sd = SurveyDesign(weights="w")
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", DeprecationWarning)
-            r_legacy = joint_homogeneity_test(
-                df,
-                "y",
-                "d",
-                "time",
-                "unit",
-                post_periods=[2, 3],
-                base_period=1,
-                survey=sd,
-                n_bootstrap=199,
-                seed=0,
-            )
-        r_new = joint_homogeneity_test(
-            df,
-            "y",
-            "d",
-            "time",
-            "unit",
-            post_periods=[2, 3],
-            base_period=1,
-            survey_design=sd,
-            n_bootstrap=199,
-            seed=0,
-        )
-        assert r_legacy.cvm_stat_joint == r_new.cvm_stat_joint
-        assert r_legacy.p_value == r_new.p_value
-
-    def test_legacy_alias_parity_weights(self, event_study_panel):
-        """PR #376 R10 P3: deprecated `weights=np.ones(n)` ≡ canonical
-        `survey_design=SurveyDesign(weights="w")` on
-        joint_homogeneity_test."""
-        df = event_study_panel
-        n = len(df)
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", DeprecationWarning)
-            r_legacy = joint_homogeneity_test(
-                df,
-                "y",
-                "d",
-                "time",
-                "unit",
-                post_periods=[2, 3],
-                base_period=1,
-                weights=np.ones(n),
-                n_bootstrap=199,
-                seed=0,
-            )
-        r_new = joint_homogeneity_test(
-            df,
-            "y",
-            "d",
-            "time",
-            "unit",
-            post_periods=[2, 3],
-            base_period=1,
-            survey_design=SurveyDesign(weights="w"),
-            n_bootstrap=199,
-            seed=0,
-        )
-        assert r_legacy.cvm_stat_joint == r_new.cvm_stat_joint
-        assert r_legacy.p_value == r_new.p_value
 
 
 class TestHADFitDeprecation:
@@ -891,127 +529,28 @@ class TestDidHadPretestWorkflowDeprecation:
         assert report.qug is None  # skipped under survey path
         assert report.stute is not None
 
-    def test_weights_emits_deprecation_warning(self, two_period_panel):
+    def test_weights_kwarg_removed(self, two_period_panel):
+        """`weights=` removed in 3.7.x (add a weight column + SurveyDesign)."""
         df = two_period_panel
-        n = len(df)
-        with pytest.warns(DeprecationWarning, match="weights=.*deprecated"):
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore", UserWarning)
-                # We still need to allow the DeprecationWarning to propagate
-                # to the outer pytest.warns; only filter UserWarning.
-                warnings.simplefilter("always", DeprecationWarning)
-                did_had_pretest_workflow(
-                    df,
-                    "y",
-                    "d",
-                    "time",
-                    "unit",
-                    weights=np.ones(n),
-                    n_bootstrap=199,
-                    seed=0,
-                )
+        with pytest.raises(TypeError, match="unexpected keyword argument 'weights'"):
+            did_had_pretest_workflow(
+                df, "y", "d", "time", "unit", weights=np.ones(len(df)), n_bootstrap=199, seed=0
+            )
 
-    def test_survey_emits_deprecation_warning(self, two_period_panel):
+    def test_survey_kwarg_removed(self, two_period_panel):
+        """`survey=` removed in 3.7.x."""
         df = two_period_panel
-        with pytest.warns(DeprecationWarning, match="survey=.*deprecated"):
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore", UserWarning)
-                warnings.simplefilter("always", DeprecationWarning)
-                did_had_pretest_workflow(
-                    df,
-                    "y",
-                    "d",
-                    "time",
-                    "unit",
-                    survey=SurveyDesign(weights="w"),
-                    n_bootstrap=199,
-                    seed=0,
-                )
-
-    def test_three_way_mutex_all_three(self, two_period_panel):
-        df = two_period_panel
-        n = len(df)
-        with pytest.raises(ValueError, match="at most one of"):
+        with pytest.raises(TypeError, match="unexpected keyword argument 'survey'"):
             did_had_pretest_workflow(
                 df,
                 "y",
                 "d",
                 "time",
                 "unit",
-                survey_design=SurveyDesign(weights="w"),
                 survey=SurveyDesign(weights="w"),
-                weights=np.ones(n),
                 n_bootstrap=199,
                 seed=0,
             )
-
-    def test_legacy_alias_parity_survey_overall(self, two_period_panel):
-        """PR #376 R9 P3: deprecated `survey=SurveyDesign(...)` ≡ canonical
-        `survey_design=SurveyDesign(...)` on
-        did_had_pretest_workflow(aggregate='overall'). Locks rebinding
-        parity on the workflow's overall-path data-in surface."""
-        df = two_period_panel
-        sd = SurveyDesign(weights="w")
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", UserWarning)  # QUG-skip warning
-            warnings.simplefilter("ignore", DeprecationWarning)
-            r_legacy = did_had_pretest_workflow(
-                df,
-                "y",
-                "d",
-                "time",
-                "unit",
-                survey=sd,
-                n_bootstrap=199,
-                seed=0,
-            )
-            r_new = did_had_pretest_workflow(
-                df,
-                "y",
-                "d",
-                "time",
-                "unit",
-                survey_design=sd,
-                n_bootstrap=199,
-                seed=0,
-            )
-        assert r_legacy.stute.cvm_stat == r_new.stute.cvm_stat
-        assert r_legacy.stute.p_value == r_new.stute.p_value
-        assert r_legacy.yatchew.t_stat_hr == r_new.yatchew.t_stat_hr
-
-    def test_legacy_alias_parity_weights_overall(self, two_period_panel):
-        """PR #376 R10 P3: deprecated `weights=np.ones(n)` ≡ canonical
-        `survey_design=SurveyDesign(weights="w")` on
-        did_had_pretest_workflow(aggregate='overall'). Closes the data-in
-        rebinding-parity gap on the weights= shortcut path."""
-        df = two_period_panel
-        n = len(df)
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", UserWarning)
-            warnings.simplefilter("ignore", DeprecationWarning)
-            r_legacy = did_had_pretest_workflow(
-                df,
-                "y",
-                "d",
-                "time",
-                "unit",
-                weights=np.ones(n),
-                n_bootstrap=199,
-                seed=0,
-            )
-            r_new = did_had_pretest_workflow(
-                df,
-                "y",
-                "d",
-                "time",
-                "unit",
-                survey_design=SurveyDesign(weights="w"),
-                n_bootstrap=199,
-                seed=0,
-            )
-        assert r_legacy.stute.cvm_stat == r_new.stute.cvm_stat
-        assert r_legacy.stute.p_value == r_new.stute.p_value
-        assert r_legacy.yatchew.t_stat_hr == r_new.yatchew.t_stat_hr
 
 
 # =============================================================================
@@ -1137,85 +676,39 @@ class TestDidHadPretestWorkflowEventStudySurveyDesign:
         assert report.qug is None  # skipped under survey path
         assert report.homogeneity_joint is not None
 
-    def test_legacy_alias_parity_survey(self, event_study_panel):
-        """survey=SurveyDesign(...) (deprecated) ≡ survey_design=SurveyDesign(...)
-        on workflow event-study path."""
-        df = event_study_panel
-        sd = SurveyDesign(weights="w")
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", UserWarning)
-            warnings.simplefilter("ignore", DeprecationWarning)
-            r_legacy = did_had_pretest_workflow(
-                df,
-                "y",
-                "d",
-                "time",
-                "unit",
-                aggregate="event_study",
-                survey=sd,
-                n_bootstrap=199,
-                seed=0,
-            )
-            r_new = did_had_pretest_workflow(
-                df,
-                "y",
-                "d",
-                "time",
-                "unit",
-                aggregate="event_study",
-                survey_design=sd,
-                n_bootstrap=199,
-                seed=0,
-            )
-        # Joint Stute on the event-study path is bootstrap-driven; both calls
-        # use the same seed=0 + same survey design → identical bootstrap
-        # multiplier draws → identical p-values + statistics.
-        assert r_legacy.homogeneity_joint.cvm_stat_joint == r_new.homogeneity_joint.cvm_stat_joint
-        assert r_legacy.homogeneity_joint.p_value == r_new.homogeneity_joint.p_value
 
-    def test_legacy_alias_parity_weights(self, event_study_panel):
-        """weights=arr (deprecated) ≡ survey_design=SurveyDesign(weights='w')
-        with uniform 1.0 weights on the workflow event-study path. Locks the
-        nested-DeprecationWarning suppression: the user-facing warning fires
-        ONCE at the workflow front door, no extra warnings from the joint
-        wrappers when survey/weights are forwarded internally."""
-        df = event_study_panel
-        n = len(df)
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", UserWarning)
-            with warnings.catch_warnings(record=True) as w_record:
-                warnings.simplefilter("always", DeprecationWarning)
-                r_legacy = did_had_pretest_workflow(
-                    df,
-                    "y",
-                    "d",
-                    "time",
-                    "unit",
-                    aggregate="event_study",
-                    weights=np.ones(n),
-                    n_bootstrap=199,
-                    seed=0,
-                )
-            # PR #376 R2 P3 fix: workflow event-study weights= path emits
-            # exactly ONE DeprecationWarning (not three — joint wrappers'
-            # nested warnings are suppressed since the user-facing one
-            # already fired at the workflow's front door).
-            n_dep_warnings = sum(1 for w in w_record if issubclass(w.category, DeprecationWarning))
-            assert n_dep_warnings == 1, (
-                f"expected 1 DeprecationWarning at workflow front door, got " f"{n_dep_warnings}"
-            )
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", UserWarning)
-            r_new = did_had_pretest_workflow(
-                df,
-                "y",
-                "d",
-                "time",
-                "unit",
-                aggregate="event_study",
-                survey_design=SurveyDesign(weights="w"),
-                n_bootstrap=199,
-                seed=0,
-            )
-        assert r_legacy.homogeneity_joint.cvm_stat_joint == r_new.homogeneity_joint.cvm_stat_joint
-        assert r_legacy.homogeneity_joint.p_value == r_new.homogeneity_joint.p_value
+class TestResolvePretestUnitWeightsInternal:
+    """`_resolve_pretest_unit_weights` keeps an INTERNAL `weights` parameter
+    (public alias removed 3.7.x; every public caller passes None). This pins
+    the retained internal-plumbing branch so it stays correct while it
+    exists: per-unit aggregation + mean-1 normalization, matching what a
+    SurveyDesign weight column resolves to."""
+
+    def test_internal_weights_branch_matches_survey_column(self):
+        from diff_diff.had_pretests import _resolve_pretest_unit_weights
+
+        rng = np.random.default_rng(11)
+        G = 12
+        w_unit = rng.uniform(0.5, 2.0, size=G)
+        df = pd.DataFrame(
+            {
+                "unit": np.repeat(np.arange(G), 2),
+                "w": np.repeat(w_unit, 2),
+            }
+        )
+        weights_unit, resolved = _resolve_pretest_unit_weights(
+            df, "unit", df["w"].to_numpy(), None, "internal-test"
+        )
+        assert resolved is None
+        _, resolved_col = _resolve_pretest_unit_weights(
+            df, "unit", None, SurveyDesign(weights="w"), "internal-test"
+        )
+        np.testing.assert_allclose(
+            weights_unit, np.asarray(resolved_col.weights), rtol=0, atol=1e-14
+        )
+
+    def test_none_none_is_unweighted(self):
+        from diff_diff.had_pretests import _resolve_pretest_unit_weights
+
+        df = pd.DataFrame({"unit": [0, 0, 1, 1]})
+        assert _resolve_pretest_unit_weights(df, "unit", None, None, "x") == (None, None)

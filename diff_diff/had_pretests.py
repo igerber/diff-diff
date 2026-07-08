@@ -658,7 +658,7 @@ class HADPretestReport:
         ``pretrends_joint is not None and
         np.isfinite(pretrends_joint.p_value)``,
         ``np.isfinite(homogeneity_joint.p_value)``, AND none of the
-        three rejects. On the **survey/weights path** (Phase 4.5 C) the
+        three rejects. On the **survey_design= path** (Phase 4.5 C) the
         QUG-conclusiveness gate is dropped (``qug=None`` per C0
         deferral); the linearity-conditional rule splits by aggregate:
 
@@ -724,11 +724,11 @@ class HADPretestReport:
         # `aggregate: ...` header line is only rendered on the event-
         # study path; two-period reports produce the Phase 3 layout.
         # QUG block: rendered when self.qug is populated, else a skip note
-        # (Phase 4.5 C survey/weights path leaves qug=None; see C0 deferral).
+        # (Phase 4.5 C survey_design= path leaves qug=None; see C0 deferral).
         qug_block = (
             self.qug.summary()
             if self.qug is not None
-            else "(QUG step skipped - permanently deferred under survey/weights per Phase 4.5 C0)"
+            else "(QUG step skipped - permanently deferred under survey designs per Phase 4.5 C0)"
         )
         if self.aggregate == "event_study":
             header = [
@@ -1321,11 +1321,10 @@ def qug_test(
     ------
     ValueError
         If ``d`` is not 1D numeric or contains NaN, or if ``alpha`` is
-        not in ``(0, 1)``, or if more than one of
-        ``survey_design``/``survey``/``weights`` is non-None (mutex).
+        not in ``(0, 1)``.
     NotImplementedError
-        If any of ``survey_design``, ``survey``, ``weights`` is non-None.
-        See *Notes -- Survey/weighted data*.
+        If ``survey_design`` is non-None. See *Notes -- Survey/weighted
+        data*.
 
     Notes
     -----
@@ -1361,7 +1360,7 @@ def qug_test(
     tail-index estimation, not boundary tests; no off-the-shelf
     survey-aware QUG exists. Phase 4.5 C ships survey-aware Stute via
     :func:`did_had_pretest_workflow` (which skips the QUG step under
-    survey/weights and runs the linearity family with a PSU-level Mammen
+    ``survey_design=`` and runs the linearity family with a PSU-level Mammen
     multiplier bootstrap for Stute and weighted OLS + pweight-sandwich
     variance components for Yatchew). See ``docs/methodology/REGISTRY.md``
     § "QUG Null Test" for the full methodology note.
@@ -1399,7 +1398,7 @@ def qug_test(
             "For survey-aware HAD pretesting, use the joint Stute family "
             "via did_had_pretest_workflow(..., survey_design=..., "
             "aggregate=...) -- shipped in Phase 4.5 C. The workflow "
-            "skips the QUG step under survey/weights with a UserWarning "
+            "skips the QUG step under survey_design= with a UserWarning "
             "and runs the linearity family with a PSU-level Mammen "
             "multiplier bootstrap (Stute) + weighted OLS + pweight-"
             "sandwich variance components (Yatchew). See "
@@ -1593,7 +1592,7 @@ def stute_test(
     :func:`yatchew_hr_test`. Memory usage remains ``O(G)`` regardless
     (no G x G matrix).
 
-    Survey/weighted data (Phase 4.5 C): when ``weights`` or ``survey`` is
+    Survey/weighted data (Phase 4.5 C): when ``survey_design`` is
     supplied, the OLS baseline becomes weighted OLS
     (:func:`_fit_weighted_ols_intercept_slope`), the bootstrap multipliers
     become PSU-level Mammen draws (broadcast to per-obs perturbation), and
@@ -1713,8 +1712,8 @@ def stute_test(
         )
 
     # Phase 4.5 C: resolve effective per-unit weights (None on the
-    # unweighted path, preserves bit-exact regression). When survey= is
-    # supplied, w is taken from the resolved design.
+    # unweighted path, preserves bit-exact regression). w is taken from
+    # the resolved survey_design (rebound to `survey` above).
     # R4 P1: validate 1D explicitly so column-vector inputs (e.g.
     # df[["w"]].to_numpy()) raise instead of silently broadcasting.
     if survey is not None:
@@ -1732,26 +1731,12 @@ def stute_test(
                 "population mass; pre-filter the panel to the positive-"
                 "weight subpopulation before calling stute_test."
             )
-    elif weights is not None:
-        w_arr = _validate_1d_numeric(np.asarray(weights), "stute_test: weights")
-        if w_arr.shape[0] != G:
-            raise ValueError(
-                f"stute_test: weights length {w_arr.shape[0]} does not match " f"d/dy length {G}."
-            )
-        if (w_arr <= 0).any():
-            raise ValueError(
-                "stute_test: weights must be strictly positive (the pweight "
-                "shortcut does not support zero weights; use survey= with "
-                "explicit lonely-PSU handling for zero-mass strata)."
-            )
     else:
         w_arr = None
 
     # R4 P0: normalize pweights to mean=1 (matches SurveyDesign.resolve()
     # convention). Makes the test statistic scale-invariant under uniform
-    # rescaling of weights AND ensures weights= shortcut and
-    # survey=SurveyDesign(weights=...) produce identical results for the
-    # same design. Stute is internally scale-invariant in functional form,
+    # rescaling of weights across every survey_design= entry form. Stute is internally scale-invariant in functional form,
     # but the survey-aware bootstrap helper consumes weight values
     # directly under non-trivial PSU/strata, so normalization is required
     # for cross-path agreement.
@@ -1836,8 +1821,8 @@ def stute_test(
     else:
         # Phase 4.5 C survey-aware path: PSU-level Mammen multipliers
         # (broadcast to per-obs perturbation), weighted OLS refit, weighted
-        # CvM recompute. Routes via synthetic trivial ResolvedSurveyDesign
-        # for the weights= shortcut to share the same kernel.
+        # CvM recompute. make_pweight_design routes the pweight-only entry
+        # through the same synthetic-ResolvedSurveyDesign kernel.
         resolved_for_boot = survey if survey is not None else make_pweight_design(w_arr)
         # Stratified designs are supported via the standard stratified
         # clustered wild-bootstrap correction on the PSU multipliers
@@ -2074,7 +2059,7 @@ def yatchew_hr_test(
     with a ``UserWarning``, rather than unconditionally mapping this to
     ``p=1`` (which would flip a legitimate rejection).
 
-    Survey/weighted data (Phase 4.5 C): when ``weights`` or ``survey`` is
+    Survey/weighted data (Phase 4.5 C): when ``survey_design`` is
     supplied, all three variance components use their pweight-sandwich
     analogs:
 
@@ -2180,30 +2165,15 @@ def yatchew_hr_test(
                 "(adjacent-difference variance is undefined under contiguous "
                 "zero-weight blocks)."
             )
-    elif weights is not None:
-        w_arr = _validate_1d_numeric(np.asarray(weights), "yatchew_hr_test: weights")
-        if w_arr.shape[0] != G:
-            raise ValueError(
-                f"yatchew_hr_test: weights length {w_arr.shape[0]} does not "
-                f"match d/dy length {G}."
-            )
-        if (w_arr <= 0).any():
-            raise ValueError(
-                "yatchew_hr_test: weights must be strictly positive (the "
-                "adjacent-difference variance is undefined under contiguous "
-                "zero-weight blocks)."
-            )
     else:
         w_arr = None
 
     # R4 P0: normalize pweights to mean=1 (matches SurveyDesign.resolve()
     # convention). Yatchew uses sqrt(sum(w)) as the effective sample size,
     # which without normalization would scale as sqrt(c) under uniform
-    # rescaling weights -> w * c, producing different p-values for
-    # weights=w vs weights=100*w. Normalization makes the statistic
-    # scale-invariant AND ensures weights= and survey=SurveyDesign(...)
-    # produce identical results (the latter resolve()s to mean=1
-    # internally, the former previously did not).
+    # rescaling weights -> w * c, producing different p-values for w vs
+    # 100*w. Normalization makes the statistic scale-invariant across every
+    # survey_design= entry form (resolve() also normalizes to mean=1).
     if w_arr is not None:
         w_arr = w_arr * (float(w_arr.shape[0]) / float(np.sum(w_arr)))
 
@@ -3005,18 +2975,6 @@ def stute_joint_pretest(
                 "the variance / CvM computation while contributing zero "
                 "population mass."
             )
-    elif weights is not None:
-        w_arr = _validate_1d_numeric(np.asarray(weights), "stute_joint_pretest: weights")
-        if w_arr.shape[0] != G:
-            raise ValueError(
-                f"stute_joint_pretest: weights length {w_arr.shape[0]} does "
-                f"not match doses length {G}."
-            )
-        if (w_arr <= 0).any():
-            raise ValueError(
-                "stute_joint_pretest: weights must be strictly positive (the "
-                "pweight shortcut does not support zero weights)."
-            )
     else:
         w_arr = None
 
@@ -3232,7 +3190,7 @@ def _resolve_pretest_unit_weights(
     survey: Any,
     caller_name: str,
 ) -> "tuple[Optional[np.ndarray], Optional[Any]]":
-    """Resolve per-row ``weights`` / ``survey`` kwargs to per-unit (G,) form.
+    """Resolve the per-row ``survey_design`` input to per-unit (G,) form.
 
     Used by ``joint_pretrends_test``, ``joint_homogeneity_test``, and
     ``did_had_pretest_workflow`` (data-in entry points). Reuses the HAD
@@ -3240,15 +3198,19 @@ def _resolve_pretest_unit_weights(
     which enforce constant-within-unit invariant on weights and on every
     survey design column (strata, psu, fpc).
 
-    Mutex on ``weights`` AND ``survey`` (cannot supply both). Replicate-
-    weight survey designs raise ``NotImplementedError`` (deferred to a
-    parallel follow-up after Phase 4.5 C).
+    ``weights`` is INTERNAL LEGACY plumbing: the public ``weights=`` alias
+    was removed in 3.7.x and every current caller passes ``None``; the
+    parameter and its per-unit aggregation branch are retained only so
+    internal callers could thread a raw per-row array without a column
+    (none do today). Replicate-weight survey designs raise
+    ``NotImplementedError`` (deferred to a parallel follow-up after
+    Phase 4.5 C).
 
     Returns
     -------
     (weights_unit, resolved_unit) : Tuple[Optional[np.ndarray], Optional[ResolvedSurveyDesign]]
-        - If neither kwarg supplied: ``(None, None)`` (unweighted path).
-        - If ``weights`` supplied: ``(weights_unit, None)``.
+        - If neither input supplied: ``(None, None)`` (unweighted path).
+        - If ``weights`` supplied (internal only): ``(weights_unit, None)``.
         - If ``survey`` supplied: ``(None, resolved_unit)`` where
           ``resolved_unit.weights`` is the per-unit weight vector and
           strata/psu/fpc are also per-unit.
@@ -3256,9 +3218,7 @@ def _resolve_pretest_unit_weights(
     if weights is None and survey is None:
         return None, None
     if weights is not None and survey is not None:
-        raise ValueError(
-            f"{caller_name}: pass survey=<SurveyDesign> OR weights=<array>, " "not both."
-        )
+        raise ValueError(f"{caller_name}: internal error - weights and survey both set.")
     if weights is not None:
         weights_arr = np.asarray(weights, dtype=np.float64)
         # R4 P1: validate 1D explicitly (column-vector inputs would otherwise
@@ -3272,21 +3232,21 @@ def _resolve_pretest_unit_weights(
                 "df['w'].to_numpy() for (N,).)"
             )
         weights_unit = _aggregate_unit_weights(data, weights_arr, unit_col)
-        # R1 P0: strictly-positive weights required on the pweight shortcut
-        # (matches stute_test/yatchew_hr_test direct entry behavior; the CvM
-        # cusum + adjacent-difference variance assume all rows contribute).
+        # R1 P0: strictly-positive weights required (matches the array-in
+        # helper entry behavior; the CvM cusum + adjacent-difference
+        # variance assume all rows contribute).
         if (weights_unit <= 0).any():
             raise ValueError(
                 f"{caller_name}: weights must be strictly positive at the "
                 "per-unit level. Zero / negative weights would leave units "
                 "in the variance/CvM computation while contributing zero "
-                "mass; use survey= with explicit lonely-PSU handling for "
-                "principled subpopulation analysis."
+                "mass; use survey_design= with explicit lonely-PSU handling "
+                "for principled subpopulation analysis."
             )
         # R4 P0: normalize per-unit weights to mean=1 (matches
-        # SurveyDesign.resolve() convention so weights= and survey= entry
-        # paths produce identical statistic values; ensures Yatchew is
-        # scale-invariant under uniform rescaling).
+        # SurveyDesign.resolve() convention so every entry path produces
+        # identical statistic values; ensures Yatchew is scale-invariant
+        # under uniform rescaling).
         weights_unit = weights_unit * (float(weights_unit.shape[0]) / float(np.sum(weights_unit)))
         return weights_unit, None
     # survey is not None
@@ -3435,7 +3395,7 @@ def joint_pretrends_test(
     # Detrending under survey weighting (weighted slope? per-PSU slope?)
     # is not derived from the paper. Use trends_lin without survey weights,
     # OR survey weights without trends_lin. Tracked as TODO follow-up.
-    if trends_lin and (survey is not None or weights is not None):
+    if trends_lin and survey is not None:
         raise NotImplementedError(
             "joint_pretrends_test(trends_lin=True) is not yet supported "
             "with survey weighting (`survey_design=`). The per-group "
@@ -3806,7 +3766,7 @@ def joint_homogeneity_test(
 
     # ---- trends_lin × survey_design gate (PR #389 / Phase 4 R-parity).
     # Twin of joint_pretrends_test guard. ----
-    if trends_lin and (survey is not None or weights is not None):
+    if trends_lin and survey is not None:
         raise NotImplementedError(
             "joint_homogeneity_test(trends_lin=True) is not yet "
             "supported with survey weighting (`survey_design=`). "
@@ -4271,7 +4231,7 @@ def did_had_pretest_workflow(
         event-study path: ``pretrends_joint`` (``None`` if no earlier
         pre-period) and ``homogeneity_joint`` populated, ``stute`` /
         ``yatchew`` are ``None``. ``aggregate`` is recorded on the
-        report for serialization dispatch. On the survey/weights path,
+        report for serialization dispatch. On the survey_design= path,
         ``qug`` is ``None`` (Phase 4.5 C0 deferral); other components
         populated as on the unweighted path.
 
@@ -4387,7 +4347,7 @@ def did_had_pretest_workflow(
     if use_survey_path:
         # Phase 4.5 C0 deferral surface: skip QUG with educational warning.
         warnings.warn(
-            "did_had_pretest_workflow: QUG step skipped under survey/weights "
+            "did_had_pretest_workflow: QUG step skipped under survey_design= "
             "(permanently deferred per Phase 4.5 C0; extreme-value theory "
             "under complex sampling is not a settled toolkit). Verdict "
             "reflects the linearity family only ('linearity-conditional').",
@@ -4417,7 +4377,7 @@ def did_had_pretest_workflow(
 
         # Step 1: QUG on dose distribution at F. Doses are
         # time-invariant in HAD, so D_g at F equals max_t D_{g,t}.
-        # Phase 4.5 C: skipped under survey/weights (qug_res = None).
+        # Phase 4.5 C: skipped under survey_design= (qug_res = None).
         doses_at_F = (
             data_filtered.loc[data_filtered[time_col] == F, [unit_col, dose_col]]
             .set_index(unit_col)
@@ -4543,7 +4503,7 @@ def did_had_pretest_workflow(
 
     # aggregate == "overall" - Phase 3 behavior on the unweighted path
     # (bit-exact regression preserved); Phase 4.5 C survey path skips QUG
-    # and dispatches stute / yatchew with weights=/survey=.
+    # and dispatches stute / yatchew with the resolved survey design.
     t_pre, t_post = _validate_had_panel(
         data, outcome_col, dose_col, time_col, unit_col, first_treat_col
     )

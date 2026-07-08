@@ -761,8 +761,9 @@ def make_pweight_design(weights: np.ndarray) -> "ResolvedSurveyDesign":
         raise ``ValueError`` at the front door. Caller is responsible for
         any non-negativity / per-unit-constancy validation. Typical usage
         is positional (``make_pweight_design(arr)``); the parameter name
-        ``weights`` collides linguistically with the deprecated
-        ``weights=`` kwarg on HAD surfaces, so prefer positional form.
+        ``weights`` collides linguistically with the (removed, 3.7.x)
+        ``weights=`` kwarg the HAD surfaces once carried, so prefer the
+        positional form.
 
     Returns
     -------
