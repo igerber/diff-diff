@@ -1638,12 +1638,10 @@ def stute_test(
             "the result."
         )
 
-    # Internal variable naming: downstream code uses `survey` and `weights`
-    # (Phase 4.5 C convention). Bind the canonical survey_design to the
-    # internal names so the unchanged downstream logic consumes it
-    # transparently (`weights` stays None; the raw-array entry is gone).
+    # Internal variable naming: downstream code reads `survey` (Phase 4.5 C
+    # convention). Bind the canonical survey_design to the internal name so
+    # the unchanged downstream logic consumes it transparently.
     survey = survey_design
-    weights = None
 
     # Replicate-weight rejection: the per-replicate weight-ratio rescaling for
     # the OLS-on-residuals refit step is not covered by the multiplier-bootstrap
@@ -2109,9 +2107,8 @@ def yatchew_hr_test(
             "FPC, pre-resolve via `SurveyDesign(...).resolve(data)`."
         )
 
-    # Internal variable naming: downstream code reads `survey`/`weights`.
+    # Internal variable naming: downstream code reads `survey`.
     survey = survey_design
-    weights = None
 
     # Replicate-weight rejection.
     if survey is not None and getattr(survey, "replicate_weights", None) is not None:
@@ -2764,9 +2761,8 @@ def stute_joint_pretest(
             "FPC, pre-resolve via `SurveyDesign(...).resolve(data)`."
         )
 
-    # Internal variable naming: downstream code reads `survey`/`weights`.
+    # Internal variable naming: downstream code reads `survey`.
     survey = survey_design
-    weights = None
 
     # Replicate-weight rejection.
     if survey is not None and getattr(survey, "replicate_weights", None) is not None:
@@ -3385,10 +3381,9 @@ def joint_pretrends_test(
     -------
     StuteJointResult with ``null_form = "mean_independence"``.
     """
-    # Internal variable naming: downstream code reads `survey`/`weights`
-    # (Phase 4.5 C convention).
+    # Internal variable naming: downstream code reads `survey` (Phase 4.5 C
+    # convention).
     survey = survey_design
-    weights = None
 
     # ---- trends_lin × survey_design gate (PR #389 / Phase 4 R-parity). ----
     # Detrending under survey weighting (weighted slope? per-PSU slope?)
@@ -3758,10 +3753,9 @@ def joint_homogeneity_test(
     -------
     StuteJointResult with ``null_form = "linearity"``.
     """
-    # Internal variable naming: downstream code reads `survey`/`weights`
-    # (Phase 4.5 C convention).
+    # Internal variable naming: downstream code reads `survey` (Phase 4.5 C
+    # convention).
     survey = survey_design
-    weights = None
 
     # ---- trends_lin × survey_design gate (PR #389 / Phase 4 R-parity).
     # Twin of joint_pretrends_test guard. ----

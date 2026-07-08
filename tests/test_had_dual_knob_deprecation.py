@@ -217,13 +217,14 @@ class TestScaleInvariance:
 
 
 # =============================================================================
-# 2. Per-surface deprecation + parity tests
+# 2. Per-surface removal pins + survey_design= smokes
 # =============================================================================
 
 
 class TestQUGTestDeprecation:
-    """qug_test (array-in, gated): all paths raise NotImplementedError;
-    consolidation tests focus on the deprecation/mutex cascade."""
+    """qug_test (array-in, gated): canonical `survey_design=` raises
+    NotImplementedError (permanent C0 gate); the removed `survey=`/`weights=`
+    aliases raise TypeError at the signature."""
 
     def test_survey_design_kwarg_raises_notimpl(self, array_in_doses):
         with pytest.raises(NotImplementedError, match="QUG"):
