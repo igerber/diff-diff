@@ -2806,3 +2806,23 @@ class TestCR2BMScoresBasedDOF:
         _, dof = _compute_cr2_bm(X, resid, cl, bread)
         oracle = self._oracle_pairloop_dof(X, cl, bread, np.eye(k))
         np.testing.assert_allclose(dof, oracle, rtol=1e-10)
+
+    def test_contrast_chunking_bit_identical(self, monkeypatch):
+        """CI-review P2: the per-cluster product buffer is contrast-chunked
+        (bounded by _CR2_BM_CONTRAST_CHUNK_BYTES) instead of O(G*k*m).
+        Forcing one-contrast chunks must reproduce the single-chunk DOF
+        bit-for-bit — each contrast's B is computed independently."""
+        import diff_diff.linalg as la
+
+        rng = np.random.default_rng(23)
+        n, k, G = 200, 6, 10
+        X = np.column_stack([np.ones(n), rng.normal(size=(n, k - 1))])
+        cl = np.repeat(np.arange(G), n // G)
+        y = X @ rng.normal(size=k) + rng.normal(size=n)
+        resid = y - X @ np.linalg.lstsq(X, y, rcond=None)[0]
+        bread = X.T @ X
+
+        _, dof_one = la._compute_cr2_bm(X, resid, cl, bread)
+        monkeypatch.setattr(la, "_CR2_BM_CONTRAST_CHUNK_BYTES", G * k * 8)  # 1 contrast/chunk
+        _, dof_many = la._compute_cr2_bm(X, resid, cl, bread)
+        np.testing.assert_array_equal(dof_many, dof_one)

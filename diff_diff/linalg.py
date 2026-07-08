@@ -1917,8 +1917,8 @@ def _compute_cr2_bm_vcov_and_dof(
     Both :func:`_compute_cr2_bm` (per-coefficient vcov + DOF) and
     :func:`_compute_cr2_bm_contrast_dof` (DOF-only for arbitrary contrasts) are
     thin wrappers over this function, so the expensive precomputes
-    (``bread_inv``, ``S_W``, ``MUWTWUM``, the per-cluster ``A_g`` eigendecompositions,
-    and the unweighted residual-maker ``M``) are defined in exactly one place.
+    (``bread_inv``, ``S_W``, ``MUWTWUM``, and the per-cluster ``A_g``
+    eigendecompositions) are defined in exactly one place.
     Consolidating the two formerly-duplicated precompute blocks lets a caller
     that needs both vcov and contrast DOF (e.g. :class:`MultiPeriodDiD` under
     ``cluster + hc2_bm``) build them once instead of twice.
@@ -2149,6 +2149,16 @@ def _compute_cr2_bm(
     return vcov, dof_vec
 
 
+# Contrast-chunk byte budget for the scores-based CR2-BM DOF pass: bounds the
+# (G, k, chunk) per-cluster product buffer so a batched per-coefficient sweep
+# (contrasts=eye(k), i.e. m == k) cannot allocate O(G*k*m) at once on
+# full-dummy / absorbed-FE designs with many clusters and coefficients.
+# Results are chunk-count invariant BIT-FOR-BIT: each contrast's B matrix is
+# computed independently, so chunking never reassociates a contrast's sums.
+# Module-level so tests can monkeypatch it to force the multi-chunk path.
+_CR2_BM_CONTRAST_CHUNK_BYTES = 64 * 1024 * 1024
+
+
 def _cr2_bm_dof_inner(
     X: np.ndarray,
     A_g_matrices: Dict[Any, np.ndarray],
@@ -2185,7 +2195,8 @@ def _cr2_bm_dof_inner(
       P = X' Omega  (k, G; column g is X_g' omega_g)
 
     so ``trace_B2 = ||B||_F^2`` costs ``O(n k + G^2 k)`` per contrast with
-    ``O(G k)`` memory — the previous form materialized the dense ``n x n``
+    ``O(G k)`` memory per contrast (contrast-chunked buffers bounded by
+    ``_CR2_BM_CONTRAST_CHUNK_BYTES``, bit-identical across chunk counts) — the previous form materialized the dense ``n x n``
     ``M`` and looped cluster pairs at ``O(n^2)`` per contrast, the exact
     large-``n`` blowup the TODO row tracked. The two evaluations are
     algebraically identical; floating-point agreement is ~1e-12 relative
@@ -2213,26 +2224,35 @@ def _cr2_bm_dof_inner(
 
     # Scores-based precomputes (see docstring): per cluster g,
     # normsq[g, j] = ||omega_g^{(j)}||^2 and P_all[g, :, j] = X_g' omega_g^{(j)}.
-    normsq = np.zeros((n_g_clusters, m))
-    P_all = np.zeros((n_g_clusters, X.shape[1], m))
-    for gi, g in enumerate(unique_clusters):
-        om = omega_all[g]  # (n_g, m)
-        normsq[gi] = np.einsum("ij,ij->j", om, om)
-        P_all[gi] = X[cluster_idx[g]].T @ om
-
+    k_X = X.shape[1]
     dof_vec = np.empty(m)
     # Retain max|B_{g,h}| per contrast so we can NaN-guard noise-floor
     # degeneracies in a second pass (mirrors `_cr2_bm_dof_inner_weighted`).
     max_abs_B_arr = np.zeros(m)
-    for j in range(m):
-        q = Q[:, j]
-        trace_B = float(np.sum(q * q))
-        P_j = P_all[:, :, j]  # (G, k)
-        B_j = -(P_j @ bread_inv @ P_j.T)
-        B_j[np.diag_indices_from(B_j)] += normsq[:, j]
-        trace_B2 = float(np.sum(B_j * B_j))
-        max_abs_B_arr[j] = float(np.max(np.abs(B_j))) if B_j.size else 0.0
-        dof_vec[j] = (trace_B * trace_B) / trace_B2 if trace_B2 > 0 else np.nan
+    # Chunk the contrasts so the per-cluster product buffer is (G, k, c) with
+    # c bounded by _CR2_BM_CONTRAST_CHUNK_BYTES — a full-m buffer would be
+    # O(G*k*m), i.e. O(G*k^2) on the batched per-coefficient sweep. Each
+    # contrast's B is computed independently, so chunking is bit-identical.
+    chunk = max(1, int(_CR2_BM_CONTRAST_CHUNK_BYTES // max(n_g_clusters * k_X * 8, 1)))
+    for c0 in range(0, m, chunk):
+        c1 = min(c0 + chunk, m)
+        width = c1 - c0
+        normsq = np.zeros((n_g_clusters, width))
+        P_all = np.zeros((n_g_clusters, k_X, width))
+        for gi, g in enumerate(unique_clusters):
+            om = omega_all[g][:, c0:c1]  # (n_g, width)
+            normsq[gi] = np.einsum("ij,ij->j", om, om)
+            P_all[gi] = X[cluster_idx[g]].T @ om
+        for jj in range(width):
+            j = c0 + jj
+            q = Q[:, j]
+            trace_B = float(np.sum(q * q))
+            P_j = P_all[:, :, jj]  # (G, k)
+            B_j = -(P_j @ bread_inv @ P_j.T)
+            B_j[np.diag_indices_from(B_j)] += normsq[:, jj]
+            trace_B2 = float(np.sum(B_j * B_j))
+            max_abs_B_arr[j] = float(np.max(np.abs(B_j))) if B_j.size else 0.0
+            dof_vec[j] = (trace_B * trace_B) / trace_B2 if trace_B2 > 0 else np.nan
 
     # Noise-floor NaN-guard (unweighted analogue of the guard in
     # `_cr2_bm_dof_inner_weighted`). For a high-leverage FE-dummy / collinear
