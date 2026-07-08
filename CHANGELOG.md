@@ -89,8 +89,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   after the unified diff exactly as CI does. The `verify-corpus`/`run` tutorial-case
   rejection guards are lifted. Documented divergence (same rationale as `pr_review.md`
   sourcing): the extractor runs from the current repo, not each case's base SHA. Covered
-  by four new adapter tests (wrapper + sanitization, zero-extracted, aggregate
-  truncation, end-to-end prompt assembly order).
+  by seven new adapter tests (wrapper + sanitization, zero-extracted, aggregate
+  truncation, byte-vs-char cap parity, trusted-extractor sentinel, Git-quoted
+  filename discovery, end-to-end prompt assembly order).
 - **`CallawaySantAnna` ipw R-parity yardsticks folded into the golden fixture + no-covariate
   ipw structural-parity decision recorded.** `csdid_golden_values.json` regenerated (R 4.5.2,
   did 2.5.1, DRDID 1.3.0): all pre-existing data and result blocks reproduced byte-identically;

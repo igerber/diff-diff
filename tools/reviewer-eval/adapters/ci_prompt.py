@@ -326,9 +326,11 @@ def build_ci_prompt(
     ``base_prompt`` is the current production ``pr_review.md`` text (caller
     supplies it so both arms get byte-identical content). The diffs are computed
     in ``worktree_dir`` between the pinned ``base_sha`` and ``head_sha``.
-    Tutorial-notebook cases get the CI ``<notebook-prose>`` block appended
-    (extractor sourced from the current repo — documented divergence; falls
-    back to the worktree's own copy when the caller does not supply one).
+    Tutorial-notebook cases get the CI ``<notebook-prose>`` block appended.
+    The extractor defaults to the HARNESS repo's copy (documented divergence
+    from CI's base-SHA staging) — NEVER the case worktree's, which is
+    case-controlled content; ``extractor_path`` exists only for explicit
+    injection in tests.
     """
     name_status = git_name_status(worktree_dir, base_sha, head_sha)
     unified = git_unified_diff(worktree_dir, base_sha, head_sha)
