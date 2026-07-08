@@ -49,6 +49,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `TestHonestFLCIParityR`); the M=0 result and all existing behaviour are unchanged.
 
 ### Testing
+- **Callaway-Sant'Anna golden tolerances tightened to machine precision (SE-audit C6
+  closure).** The no-covariate DR golden asserted ATT only, within 0.02, and never
+  asserted the SE; measured agreement with R `did` is ~6e-11 ATT / ~2e-11 relative SE
+  (no-covariate DR is deterministic algebra — no propensity IRLS enters), so both are
+  now pinned at 1e-8 with the SE assertion added. The reg (0.02) and ipw (0.05) ATT
+  bands — predating the DRDID estimation-effect IF terms — are tightened to 1e-8 on
+  measured ~3e-11/~4e-11 agreement. The covariate-DR scenario keeps its documented 2e-3
+  band (~1e-3 DR small-sample numerics via the propensity nuisance).
 - **fixest hetero + cluster SE machine-precision locks on an unbalanced, heteroskedastic
   DGP (SE-audit G2 completion).** The committed `fixest_did_twfe_golden.json` gains two
   appended scenarios (error sd varying by arm/period, ~15% rows dropped; the original

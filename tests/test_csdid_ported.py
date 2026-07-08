@@ -948,7 +948,17 @@ class TestCSDIDGoldenValues:
         return results, scenario["results"]
 
     def test_golden_default_dgp_dr(self, golden_values):
-        """ATT(g,t) from default no-covariate DGP match R within 1e-2."""
+        """No-covariate DR matches R - ATT AND per-cell SE, machine precision.
+
+        SE-audit C6 (dr remainder): measured agreement on this fixture is
+        ~6e-11 ATT / ~2e-11 relative SE (no-covariate DR is deterministic
+        algebra — no propensity IRLS enters), so 1e-8 is pure platform
+        headroom. The previous 0.02 ATT band predates the DRDID
+        estimation-effect IF terms; the SE was entirely unasserted here.
+        (The covariate DR scenario keeps its documented 2e-3 band — the
+        ~1e-3 gap is DR small-sample numerics via the propensity nuisance,
+        see test_golden_default_dgp_dr_covariates.)
+        """
         results, expected = self._run_scenario(
             golden_values,
             "default_no_covariates_dr",
@@ -959,11 +969,14 @@ class TestCSDIDGoldenValues:
         for i, (g, t) in enumerate(zip(r_gt["group"], r_gt["time"])):
             g, t = int(g), int(t)
             if (g, t) in results.group_time_effects:
-                py_att = results.group_time_effects[(g, t)]["effect"]
+                eff = results.group_time_effects[(g, t)]
                 r_att = r_gt["att"][i]
                 assert (
-                    abs(py_att - r_att) < 0.02
-                ), f"ATT(g={g}, t={t}): Python={py_att:.6f}, R={r_att:.6f}"
+                    abs(eff["effect"] - r_att) < 1e-8
+                ), f"DR ATT(g={g}, t={t}): Python={eff['effect']:.10f}, R={r_att:.10f}"
+                assert (
+                    abs(eff["se"] - r_gt["se"][i]) < 1e-8
+                ), f"DR SE(g={g}, t={t}): Py={eff['se']:.10f}, R={r_gt['se'][i]:.10f}"
 
     def test_golden_default_dgp_reg(self, golden_values):
         """Regression method with covariates matches R - ATT AND per-cell SE.
@@ -987,9 +1000,10 @@ class TestCSDIDGoldenValues:
             if (g, t) in results.group_time_effects:
                 eff = results.group_time_effects[(g, t)]
                 r_att = r_gt["att"][i]
+                # Measured ~3e-11 (deterministic OLS); 1e-8 is platform headroom.
                 assert (
-                    abs(eff["effect"] - r_att) < 0.02
-                ), f"REG ATT(g={g}, t={t}): Py={eff['effect']:.6f}, R={r_att:.6f}"
+                    abs(eff["effect"] - r_att) < 1e-8
+                ), f"REG ATT(g={g}, t={t}): Py={eff['effect']:.10f}, R={r_att:.10f}"
                 assert (
                     abs(eff["se"] - r_gt["se"][i]) < 1e-8
                 ), f"REG SE(g={g}, t={t}): Py={eff['se']:.10f}, R={r_gt['se'][i]:.10f}"
@@ -1018,9 +1032,11 @@ class TestCSDIDGoldenValues:
             if (g, t) in results.group_time_effects:
                 eff = results.group_time_effects[(g, t)]
                 r_att = r_gt["att"][i]
+                # Measured ~4e-11; 1e-8 leaves the same IRLS-vs-glm headroom
+                # rationale as the SE band below (scaled to the tighter base).
                 assert (
-                    abs(eff["effect"] - r_att) < 0.05
-                ), f"IPW ATT(g={g}, t={t}): Py={eff['effect']:.6f}, R={r_att:.6f}"
+                    abs(eff["effect"] - r_att) < 1e-8
+                ), f"IPW ATT(g={g}, t={t}): Py={eff['effect']:.10f}, R={r_att:.10f}"
                 assert (
                     abs(eff["se"] - r_gt["se"][i]) < 1e-6
                 ), f"IPW SE(g={g}, t={t}): Py={eff['se']:.10f}, R={r_gt['se'][i]:.10f}"
