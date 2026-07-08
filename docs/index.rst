@@ -139,6 +139,14 @@ Quick Links
 
    api/index
 
+.. toctree::
+   :maxdepth: 1
+   :caption: Methodology
+   :hidden:
+
+   methodology/REGISTRY
+   methodology/REPORTING
+
 What is Difference-in-Differences?
 ----------------------------------
 

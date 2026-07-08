@@ -131,6 +131,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   assert between the two (defense in depth).
 
 ### Added
+- **REGISTRY.md and REPORTING.md are now published on Read the Docs.** The two
+  methodology markdown pages render as in-site Sphinx pages (MyST) under a new
+  "Methodology" toctree section, so cross-references from the API docs use `:doc:` links
+  instead of off-site `blob/main` GitHub URLs — stable-docs readers previously landed on
+  a different revision than their installed version. `myst-parser` joins the docs
+  dependency set (pyproject `docs` extra, RTD post_install, docs-tests workflow — kept in
+  sync); every other repo-internal markdown under `docs/` (performance notes, paper
+  reviews, roadmaps) is explicitly excluded from the build. Two latent doc defects
+  surfaced by the `-W` build are fixed: a broken ToC anchor in REGISTRY.md (typo'd
+  `#differenceinifferences`, broken on GitHub too) and a heading-level jump; the
+  "Diagnostics & Sensitivity" heading is retitled to "Diagnostics and Sensitivity"
+  because GitHub and docutils slug `&` differently (double vs collapsed hyphen). Full
+  local `make -C docs html SPHINXOPTS="-W"` passes with 0 warnings.
 - **`ImputationDiD` leave-one-out conservative variance** (`leave_one_out`, default `False`) — the
   Borusyak-Jaravel-Spiess (2024) Supplementary Appendix A.9 finite-sample refinement. The non-LOO
   auxiliary aggregate `tau_tilde_g` (eq. 8) is built from the fitted `tau_hat_it` and so partially

@@ -7,7 +7,7 @@ This document provides the academic foundations and key implementation requireme
 ## Table of Contents
 
 1. [Core DiD Estimators](#core-did-estimators)
-   - [DifferenceInDifferences](#differenceinifferences)
+   - [DifferenceInDifferences](#differenceindifferences)
    - [MultiPeriodDiD](#multiperioddid)
    - [TwoWayFixedEffects](#twowayfixedeffects)
 2. [Modern Staggered Estimators](#modern-staggered-estimators)
@@ -28,7 +28,7 @@ This document provides the academic foundations and key implementation requireme
    - [TROP](#trop)
    - [HeterogeneousAdoptionDiD](#heterogeneousadoptiondid)
    - [SpilloverDiD](#spilloverdid)
-4. [Diagnostics & Sensitivity](#diagnostics--sensitivity)
+4. [Diagnostics and Sensitivity](#diagnostics-and-sensitivity)
    - [PlaceboTests](#placebotests)
    - [BaconDecomposition](#bacondecomposition)
    - [HonestDiD](#honestdid)
@@ -3449,7 +3449,7 @@ Shipped in `diff_diff/had_pretests.py` as `stute_joint_pretest()` (residuals-in 
 
 ---
 
-# Diagnostics & Sensitivity
+# Diagnostics and Sensitivity
 
 ## PlaceboTests
 
@@ -4960,7 +4960,7 @@ The 8-step workflow in `diff_diff/guides/llms-practitioner.txt` is adapted from 
   covariates). Paper's Step 8 is "Keep learning." The mandatory with/without covariate
   comparison is a diff-diff convention.
 
-### Survey DGP (`generate_survey_did_data`)
+## Survey DGP (`generate_survey_did_data`)
 
 - **Note:** The `icc` parameter calibrates `psu_re_sd` using the full variance
   decomposition `Var(Y) = sigma²_psu * (1 + psu_period_factor²) + sigma²_unit +
