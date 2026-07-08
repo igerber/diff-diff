@@ -349,18 +349,22 @@ fn compute_robust_vcov_internal(
             let residuals_col = residuals.insert_axis(Axis(1)); // (n, 1)
             let scores = x * &residuals_col; // (n, k) - broadcasts residuals across columns
 
-            // Aggregate scores by cluster using HashMap
-            let mut cluster_sums: HashMap<i64, Array1<f64>> = HashMap::new();
+            // Aggregate scores by cluster DETERMINISTICALLY. HashMap
+            // iteration order is SipHash-randomized per map instance, which
+            // reordered the cluster rows on every call — mathematically
+            // identical, but the GEMM accumulation order changed, making
+            // the clustered vcov run-to-run nondeterministic at ~1e-14
+            // (distinct values across identical calls; the Python backend
+            // is bit-stable). Rows accumulate in first-appearance order
+            // instead: for the factorized 0..G-1 ids the Python dispatcher
+            // passes this is ascending id order, matching NumPy's groupby.
+            let mut cluster_index: HashMap<i64, usize> = HashMap::new();
             for i in 0..n_obs {
-                let cluster = clusters[i];
-                let row = scores.row(i).to_owned();
-                cluster_sums
-                    .entry(cluster)
-                    .and_modify(|sum| *sum = &*sum + &row)
-                    .or_insert(row);
+                let next = cluster_index.len();
+                cluster_index.entry(clusters[i]).or_insert(next);
             }
 
-            let n_clusters = cluster_sums.len();
+            let n_clusters = cluster_index.len();
 
             if n_clusters < 2 {
                 return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
@@ -369,10 +373,13 @@ fn compute_robust_vcov_internal(
                 )));
             }
 
-            // Build cluster scores matrix (G, k)
+            // Build cluster scores matrix (G, k) in first-appearance order
             let mut cluster_scores = Array2::<f64>::zeros((n_clusters, k));
-            for (idx, (_cluster_id, sum)) in cluster_sums.iter().enumerate() {
-                cluster_scores.row_mut(idx).assign(sum);
+            for i in 0..n_obs {
+                let idx = cluster_index[&clusters[i]];
+                cluster_scores
+                    .row_mut(idx)
+                    .zip_mut_with(&scores.row(i), |a, b| *a += *b);
             }
 
             // Compute meat: Σ_g (X_g' e_g)(X_g' e_g)'

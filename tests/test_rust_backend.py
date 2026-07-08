@@ -3622,3 +3622,36 @@ class TestRustHC2Vcov:
             v = la.compute_robust_vcov(X, resid, vcov_type="hc2")
         v_py = la._compute_robust_vcov_numpy(X, resid, None, vcov_type="hc2")
         np.testing.assert_allclose(v, v_py, rtol=1e-12, atol=1e-15)
+class TestClusterVcovDeterminism:
+    """Clustered vcov is bit-identical across repeated identical calls.
+
+    The cluster-score aggregation previously built rows in HashMap iteration
+    order (SipHash-randomized per call): mathematically identical, but the
+    GEMM accumulation order changed run-to-run, wobbling the vcov at ~1e-14
+    (3 distinct values observed in 8 identical calls) while the Python
+    backend was bit-stable. Rows now accumulate in first-appearance order
+    (ascending for the factorized ids the dispatcher passes)."""
+
+    def test_solve_ols_cluster_vcov_bit_identical_across_calls(self):
+        from diff_diff.linalg import solve_ols
+
+        rng = np.random.default_rng(0)
+        X = rng.normal(size=(400, 3))
+        y = rng.normal(size=400)
+        cl = np.repeat(np.arange(10), 40)
+        baseline = solve_ols(X, y, cluster_ids=cl, return_vcov=True)[2]
+        for _ in range(20):
+            v = solve_ols(X, y, cluster_ids=cl, return_vcov=True)[2]
+            np.testing.assert_array_equal(v, baseline)
+
+    def test_compute_robust_vcov_cluster_bit_identical_across_calls(self):
+        from diff_diff.linalg import compute_robust_vcov
+
+        rng = np.random.default_rng(1)
+        X = rng.normal(size=(300, 4))
+        resid = rng.normal(size=300)
+        # Non-contiguous, unsorted ids exercise the first-appearance remap.
+        cl = np.repeat(np.array([7, 3, 11, 5, 42, 3, 7, 11, 5, 42]), 30)
+        baseline = compute_robust_vcov(X, resid, cluster_ids=cl)
+        for _ in range(20):
+            np.testing.assert_array_equal(compute_robust_vcov(X, resid, cluster_ids=cl), baseline)

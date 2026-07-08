@@ -35,6 +35,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `did_had_pretest_workflow`, ...) are unchanged in this release and removed separately.
 
 ### Fixed
+- **Rust clustered vcov is now run-to-run deterministic.** The cluster-score aggregation
+  in `compute_robust_vcov` (also reached via `solve_ols(return_vcov=True)`) built its
+  (G, k) cluster-scores matrix in `HashMap` iteration order, which is SipHash-randomized
+  per call — mathematically identical, but the GEMM accumulation order changed on every
+  invocation, wobbling the vcov at ~1e-14 (3 distinct values observed across 8 identical
+  calls; the Python backend was bit-stable). Rows now accumulate in first-appearance
+  order — ascending for the factorized 0..G-1 ids the Python dispatcher passes, matching
+  NumPy's groupby order. Verified: 1 distinct value across 50 identical calls (was 3/8);
+  NumPy parity unchanged (~1e-14, the normal cross-backend GEMM tolerance); bit-identity
+  regression tests cover both contiguous and non-contiguous unsorted cluster ids.
 - **`HonestDiD` Δ^SD optimal-FLCI center parity with R (SE-audit B2b).** The optimal
   Fixed-Length CI optimizer was a flat Nelder-Mead over slope weights that landed on a
   different affine estimator than R `HonestDiD::findOptimalFLCI` at intermediate smoothness
