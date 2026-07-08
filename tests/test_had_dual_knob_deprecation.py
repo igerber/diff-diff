@@ -152,12 +152,9 @@ class TestPublicHelpers:
 
 
 class TestArrayInTypeGuard:
-    """Array-in helpers reject SurveyDesign (cannot resolve column names).
-
-    Both the canonical `survey_design=SurveyDesign(...)` form AND the
-    deprecated `survey=SurveyDesign(...)` alias trigger the same TypeError
-    (PR #376 R1 P1: alias must behave identically to the canonical kwarg).
-    """
+    """Array-in helpers reject SurveyDesign (cannot resolve column names
+    without `data`): `survey_design=SurveyDesign(...)` raises TypeError
+    pointing to `make_pweight_design(arr)` / a pre-resolved design."""
 
     def test_stute_test_rejects_SurveyDesign(self, array_in_data):
         d, dy = array_in_data

@@ -4506,7 +4506,7 @@ class TestPhase45CR1Regressions:
                 f"all_pass=True but verdict starts with 'inconclusive': " f"{report.verdict!r}"
             )
 
-    # --- R9 P1: front-door length validation on staggered weights= path ---
+    # --- R9 P1: front-door validation on the staggered weighted path ---
 
     def test_stute_test_fpc_only_survey_smoke(self):
         """R12 P3: positive smoke for FPC-only survey designs on the Stute

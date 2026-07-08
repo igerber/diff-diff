@@ -4528,9 +4528,8 @@ def did_had_pretest_workflow(
     # already aggregated to per-unit (weights_unit / resolved_unit); the
     # _aggregate_first_difference call above also collapses to per-unit
     # (one row per unit), so weights_unit and resolved_unit are aligned.
-    # Internal forwarding uses the canonical survey_design= kwarg to skip
-    # deprecation warnings; the user-facing warning has already fired at the
-    # workflow's front door.
+    # Internal forwarding uses the canonical survey_design= kwarg (the
+    # sole weighting entry on every pretest surface).
     if resolved_unit is not None:
         per_test_survey_design = resolved_unit
     elif weights_unit is not None:

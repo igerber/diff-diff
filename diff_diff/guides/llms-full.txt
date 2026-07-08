@@ -1741,7 +1741,7 @@ Individual tests:
 - `joint_pretrends_test(...)` — Assumption 7 joint pre-trends on K pre-periods (paper Section 4.2 step 2 closure on the event-study path).
 - `joint_homogeneity_test(...)` — joint linearity-and-homogeneity on K post-periods (event-study step 3 alternative).
 
-The QUG-under-survey deferral is permanent; the linearity-family pretests support `survey_design=` (pweight, PSU, FPC) per Phase 4.5 C. Stratified designs and replicate-weight designs are deferred to follow-up PRs.
+The QUG-under-survey deferral is permanent; the linearity-family pretests support `survey_design=` (pweight, PSU, FPC, strata — the stratified Stute calibration shipped with the Phase 4.5 C strata extension) per Phase 4.5 C. Replicate-weight designs and `lonely_psu='adjust'` under singleton strata remain deferred to follow-up PRs.
 
 ## Honest DiD Sensitivity Analysis
 
