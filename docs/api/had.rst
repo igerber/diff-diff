@@ -57,10 +57,10 @@ Unit Remains Untreated" (arXiv:2405.04465v6), which:
      ``hc2`` / ``hc2_bm`` raise ``NotImplementedError`` pending a
      2SLS-specific leverage derivation.
 
-   On ``HeterogeneousAdoptionDiD.fit`` the deprecated ``weights=`` and
-   ``survey=`` aliases were removed in 3.7.0; ``survey_design=`` is the sole
-   weighting entry (Binder-TSL). On the HAD pretest helpers the aliases
-   remain deprecated pending a follow-up removal: array-in helpers
+   The deprecated ``weights=`` / ``survey=`` aliases were removed on
+   ``HeterogeneousAdoptionDiD.fit`` in 3.7.0 and on all 7 pretest helpers in
+   3.7.x — passing them raises ``TypeError``; ``survey_design=`` is the sole
+   weighting entry on every HAD surface. Migration: array-in helpers
    (``stute_test``, ``yatchew_hr_test``, ``stute_joint_pretest``) take the
    pweight-only shortcut ``survey_design=make_pweight_design(weights)``;
    data-in surfaces use ``survey_design=SurveyDesign(weights="col_name",

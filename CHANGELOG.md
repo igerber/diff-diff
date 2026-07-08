@@ -8,6 +8,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Removed
+- **HAD pretest helpers: deprecated `survey=` / `weights=` kwargs removed (3.7.x).**
+  Completes the HAD survey-design API consolidation started with
+  `HeterogeneousAdoptionDiD.fit` in 3.7.0: all 7 pretest surfaces
+  (`did_had_pretest_workflow`, `qug_test`, `stute_test`, `yatchew_hr_test`,
+  `stute_joint_pretest`, `joint_pretrends_test`, `joint_homogeneity_test`) now accept
+  `survey_design=` only — passing the old aliases raises `TypeError`. Migration:
+  array-in helpers take `survey_design=make_pweight_design(arr)` (pweight-only) or a
+  pre-resolved `ResolvedSurveyDesign`; data-in surfaces add the weights as a column and
+  pass `survey_design=SurveyDesign(weights='col_name', ...)` — the former row-level
+  `weights=` array shortcut is gone (per-unit aggregation + mean-1 normalization made
+  the two forms numerically identical, so no results change under migration).
+  Surviving `survey_design=` / unweighted paths are byte-identical (no computational
+  code touched). Dead code removed with the aliases: the 3-way alias mutexes, the
+  per-surface deprecation-message constants (`diff_diff/survey.py`), the workflow's
+  internal row-level weight alignment + forwarding machinery, and the joint wrappers'
+  staggered weight-subsetting blocks (`SurveyDesign` column references self-align).
+  `qug_test` still permanently rejects `survey_design=` (Phase 4.5 C0).
 - **`HeterogeneousAdoptionDiD.fit()` no longer accepts the deprecated `survey=` and
   `weights=` kwargs** (the pre-scheduled removal for the 3.7.0 minor bump; the
   `DeprecationWarning` shipped in a prior release with "will be removed in the next minor

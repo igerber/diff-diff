@@ -13,6 +13,7 @@ from diff_diff import (
     QUGTestResults,
     StuteJointResult,
     StuteTestResults,
+    SurveyDesign,
     YatchewTestResults,
     did_had_pretest_workflow,
     joint_homogeneity_test,
@@ -26,6 +27,7 @@ from diff_diff.had_pretests import (
     _compose_verdict,
     _compose_verdict_event_study,
 )
+from diff_diff.survey import make_pweight_design
 
 # =============================================================================
 # Helpers
@@ -186,7 +188,7 @@ class TestQUGTest:
         """Phase 4.5 C0: qug_test(weights=) raises NotImplementedError."""
         d = np.array([0.1, 0.5, 0.9])
         with pytest.raises(NotImplementedError, match="qug_test does not support"):
-            qug_test(d, weights=np.ones(3))
+            qug_test(d, survey_design=make_pweight_design(np.ones(3)))
 
     def test_survey_kwarg_raises_not_implemented(self):
         """Phase 4.5 C0: qug_test(survey=) raises NotImplementedError."""
@@ -194,19 +196,19 @@ class TestQUGTest:
 
         d = np.array([0.1, 0.5, 0.9])
         with pytest.raises(NotImplementedError, match="qug_test does not support"):
-            qug_test(d, survey=SurveyDesign(weights="w"))
+            qug_test(d, survey_design=SurveyDesign(weights="w"))
 
-    def test_mutex_both_set_raises_value_error(self):
-        """Phase 4.5 C0: passing both survey= AND weights= raises ValueError
-        (mirroring HeterogeneousAdoptionDiD.fit() at had.py:2890), BEFORE the
-        NotImplementedError fires. Mutex pattern is consistent across the HAD
-        surface so users get the same error text whether they hit the
-        estimator or a pretest."""
+    def test_removed_aliases_rejected_at_signature(self):
+        """3.7.x removal: the deprecated survey=/weights= aliases are gone
+        from the signature entirely — TypeError, not the old alias mutex.
+        survey_design= remains the sole (permanently rejected) survey knob."""
         from diff_diff import SurveyDesign
 
         d = np.array([0.1, 0.5, 0.9])
-        with pytest.raises(ValueError, match="at most one of"):
-            qug_test(d, survey=SurveyDesign(weights="w"), weights=np.ones(3))
+        with pytest.raises(TypeError, match="unexpected keyword argument"):
+            qug_test(d, survey=SurveyDesign(weights="w"))
+        with pytest.raises(TypeError, match="unexpected keyword argument"):
+            qug_test(d, weights=np.ones(3))
 
     def test_methodology_pointer_in_message(self):
         """Phase 4.5 C0: the NotImplementedError must point users to (a) the
@@ -217,7 +219,7 @@ class TestQUGTest:
         message vs REGISTRY note must agree on the rationale)."""
         d = np.array([0.1, 0.5, 0.9])
         with pytest.raises(NotImplementedError) as exc_info:
-            qug_test(d, weights=np.ones(3))
+            qug_test(d, survey_design=make_pweight_design(np.ones(3)))
         msg = str(exc_info.value)
         # Methodology rationale tags
         assert "smallest order statistics" in msg
@@ -2935,20 +2937,20 @@ class TestHADPretestWorkflowSurveyGuards:
             df["w"] = df["unit"].map(dict(zip(np.arange(20), w_per_unit)))
         return df
 
-    def test_workflow_mutex_both_raises(self):
-        """Phase 4.5 C: passing both survey= AND weights= raises ValueError
-        (mutex), mirroring HeterogeneousAdoptionDiD.fit() at had.py:2890."""
+    def test_workflow_removed_weights_alias_rejected(self):
+        """3.7.x removal: the deprecated weights= alias is rejected at the
+        signature (TypeError), matching HeterogeneousAdoptionDiD.fit()."""
         from diff_diff import SurveyDesign
 
         df = self._make_minimal_overall_panel(with_weight_col=True)
-        with pytest.raises(ValueError, match="at most one of"):
+        with pytest.raises(TypeError, match="unexpected keyword argument"):
             did_had_pretest_workflow(
                 df,
                 "y",
                 "d",
                 "time",
                 "unit",
-                survey=SurveyDesign(weights="w"),
+                survey_design=SurveyDesign(weights="w"),
                 weights=np.ones(40),
             )
 
@@ -2976,6 +2978,7 @@ class TestHADPretestWorkflowSurveyGuards:
         rng = np.random.default_rng(7)
         w_per_unit = rng.uniform(0.5, 2.0, size=20)
         weights_per_row = np.tile(w_per_unit, 2)
+        df["_wcol"] = weights_per_row
         with pytest.warns(UserWarning, match="QUG step skipped"):
             report = did_had_pretest_workflow(
                 df,
@@ -2983,7 +2986,7 @@ class TestHADPretestWorkflowSurveyGuards:
                 "d",
                 "time",
                 "unit",
-                weights=weights_per_row,
+                survey_design=SurveyDesign(weights="_wcol"),
                 n_bootstrap=199,
                 seed=0,
             )
@@ -3005,7 +3008,7 @@ class TestHADPretestWorkflowSurveyGuards:
                 "d",
                 "time",
                 "unit",
-                survey=SurveyDesign(weights="w"),
+                survey_design=SurveyDesign(weights="w"),
                 n_bootstrap=199,
                 seed=0,
             )
@@ -3020,6 +3023,7 @@ class TestHADPretestWorkflowSurveyGuards:
         text used by downstream consumers."""
         df = self._make_minimal_overall_panel()
         weights_per_row = np.full(40, 1.5)  # uniform-positive
+        df["_wcol"] = weights_per_row
         with pytest.warns(UserWarning):
             report = did_had_pretest_workflow(
                 df,
@@ -3027,7 +3031,7 @@ class TestHADPretestWorkflowSurveyGuards:
                 "d",
                 "time",
                 "unit",
-                weights=weights_per_row,
+                survey_design=SurveyDesign(weights="_wcol"),
                 n_bootstrap=199,
                 seed=0,
             )
@@ -3039,6 +3043,7 @@ class TestHADPretestWorkflowSurveyGuards:
         to_dict, and to_dataframe (Reviewer CRITICAL #1 - retyped Optional)."""
         df = self._make_minimal_overall_panel()
         weights_per_row = np.full(40, 1.5)
+        df["_wcol"] = weights_per_row
         with pytest.warns(UserWarning):
             report = did_had_pretest_workflow(
                 df,
@@ -3046,7 +3051,7 @@ class TestHADPretestWorkflowSurveyGuards:
                 "d",
                 "time",
                 "unit",
-                weights=weights_per_row,
+                survey_design=SurveyDesign(weights="_wcol"),
                 n_bootstrap=199,
                 seed=0,
             )
@@ -3084,7 +3089,7 @@ class TestHADPretestWorkflowSurveyGuards:
         )
         with pytest.raises(NotImplementedError, match="replicate-weight"):
             did_had_pretest_workflow(
-                df_with_rep, "y", "d", "time", "unit", survey=sd, n_bootstrap=199, seed=0
+                df_with_rep, "y", "d", "time", "unit", survey_design=sd, n_bootstrap=199, seed=0
             )
 
 
@@ -3113,7 +3118,7 @@ class TestStuteTestSurvey:
         """weights= produces a finite, valid Stute result."""
         d, dy = self._setup()
         w = np.random.default_rng(7).uniform(0.5, 2.0, size=30)
-        r = stute_test(d, dy, weights=w, n_bootstrap=199, seed=0)
+        r = stute_test(d, dy, survey_design=make_pweight_design(w), n_bootstrap=199, seed=0)
         assert np.isfinite(r.cvm_stat)
         assert 0.0 <= r.p_value <= 1.0
 
@@ -3124,18 +3129,19 @@ class TestStuteTestSurvey:
         d, dy = self._setup()
         w = np.random.default_rng(7).uniform(0.5, 2.0, size=30)
         resolved = make_pweight_design(w)
-        r = stute_test(d, dy, survey=resolved, n_bootstrap=199, seed=0)
+        r = stute_test(d, dy, survey_design=resolved, n_bootstrap=199, seed=0)
         assert np.isfinite(r.cvm_stat)
         assert 0.0 <= r.p_value <= 1.0
 
-    def test_mutex_both_raises(self):
-        """survey + weights mutex (mirrors workflow + qug_test pattern)."""
-        from diff_diff.survey import make_pweight_design
-
+    def test_removed_aliases_rejected_at_signature(self):
+        """3.7.x removal: survey=/weights= aliases are gone (TypeError);
+        survey_design= is the sole weighting entry."""
         d, dy = self._setup()
         w = np.ones(30)
-        with pytest.raises(ValueError, match="at most one of"):
-            stute_test(d, dy, weights=w, survey=make_pweight_design(w), n_bootstrap=199, seed=0)
+        with pytest.raises(TypeError, match="unexpected keyword argument"):
+            stute_test(d, dy, weights=w, n_bootstrap=199, seed=0)
+        with pytest.raises(TypeError, match="unexpected keyword argument"):
+            stute_test(d, dy, survey=None, n_bootstrap=199, seed=0)
 
     def test_replicate_weights_raises(self):
         """Phase 4.5 C MEDIUM #4: replicate-weight survey designs raise
@@ -3160,7 +3166,7 @@ class TestStuteTestSurvey:
             n_replicates=5,
         )
         with pytest.raises(NotImplementedError, match="replicate-weight"):
-            stute_test(d, dy, survey=resolved_with_rep, n_bootstrap=199, seed=0)
+            stute_test(d, dy, survey_design=resolved_with_rep, n_bootstrap=199, seed=0)
 
     def test_negative_weights_rejected(self):
         """Strictly-positive weights required on the pweight shortcut."""
@@ -3168,12 +3174,14 @@ class TestStuteTestSurvey:
         w = np.ones(30)
         w[0] = -1.0
         with pytest.raises(ValueError, match="strictly positive"):
-            stute_test(d, dy, weights=w, n_bootstrap=199, seed=0)
+            stute_test(d, dy, survey_design=make_pweight_design(w), n_bootstrap=199, seed=0)
 
     def test_weights_length_mismatch(self):
         d, dy = self._setup()
         with pytest.raises(ValueError, match="length"):
-            stute_test(d, dy, weights=np.ones(20), n_bootstrap=199, seed=0)
+            stute_test(
+                d, dy, survey_design=make_pweight_design(np.ones(20)), n_bootstrap=199, seed=0
+            )
 
 
 class TestYatchewHRTestSurvey:
@@ -3203,8 +3211,8 @@ class TestYatchewHRTestSurvey:
         ``null_form='linearity'`` and is bit-exact with explicit linearity."""
         d, dy = self._setup()
         w = np.random.default_rng(7).uniform(0.5, 2.0, size=30)
-        r_default = yatchew_hr_test(d, dy, weights=w)
-        r_explicit = yatchew_hr_test(d, dy, weights=w, null="linearity")
+        r_default = yatchew_hr_test(d, dy, survey_design=make_pweight_design(w))
+        r_explicit = yatchew_hr_test(d, dy, survey_design=make_pweight_design(w), null="linearity")
         assert r_default.null_form == "linearity"
         assert r_explicit.null_form == "linearity"
         np.testing.assert_array_equal(r_default.t_stat_hr, r_explicit.t_stat_hr)
@@ -3215,7 +3223,9 @@ class TestYatchewHRTestSurvey:
         components reduce to the unweighted formulas EXACTLY (atol=1e-14)."""
         d, dy = self._setup()
         r_unweighted = yatchew_hr_test(d, dy, alpha=0.05)
-        r_weighted = yatchew_hr_test(d, dy, alpha=0.05, weights=np.ones(30))
+        r_weighted = yatchew_hr_test(
+            d, dy, alpha=0.05, survey_design=make_pweight_design(np.ones(30))
+        )
         # All three variance components must match bit-exactly.
         np.testing.assert_allclose(
             r_unweighted.sigma2_lin, r_weighted.sigma2_lin, atol=1e-14, rtol=1e-14
@@ -3234,7 +3244,7 @@ class TestYatchewHRTestSurvey:
     def test_weights_smoke(self):
         d, dy = self._setup()
         w = np.random.default_rng(7).uniform(0.5, 2.0, size=30)
-        r = yatchew_hr_test(d, dy, weights=w)
+        r = yatchew_hr_test(d, dy, survey_design=make_pweight_design(w))
         assert np.isfinite(r.t_stat_hr)
         assert 0.0 <= r.p_value <= 1.0
 
@@ -3243,16 +3253,17 @@ class TestYatchewHRTestSurvey:
 
         d, dy = self._setup()
         w = np.random.default_rng(7).uniform(0.5, 2.0, size=30)
-        r = yatchew_hr_test(d, dy, survey=make_pweight_design(w))
+        r = yatchew_hr_test(d, dy, survey_design=make_pweight_design(w))
         assert np.isfinite(r.t_stat_hr)
 
-    def test_mutex_both_raises(self):
-        from diff_diff.survey import make_pweight_design
-
+    def test_removed_aliases_rejected_at_signature(self):
+        """3.7.x removal: survey=/weights= aliases are gone (TypeError)."""
         d, dy = self._setup()
         w = np.ones(30)
-        with pytest.raises(ValueError, match="at most one of"):
-            yatchew_hr_test(d, dy, weights=w, survey=make_pweight_design(w))
+        with pytest.raises(TypeError, match="unexpected keyword argument"):
+            yatchew_hr_test(d, dy, weights=w)
+        with pytest.raises(TypeError, match="unexpected keyword argument"):
+            yatchew_hr_test(d, dy, survey=None)
 
     def test_zero_weight_rejected(self):
         """Per Reviewer Question #4: strictly-positive weights required
@@ -3262,7 +3273,7 @@ class TestYatchewHRTestSurvey:
         w = np.ones(30)
         w[5] = 0.0
         with pytest.raises(ValueError, match="strictly positive"):
-            yatchew_hr_test(d, dy, weights=w)
+            yatchew_hr_test(d, dy, survey_design=make_pweight_design(w))
 
     def test_replicate_weights_raises(self):
         from diff_diff.survey import ResolvedSurveyDesign
@@ -3283,7 +3294,7 @@ class TestYatchewHRTestSurvey:
             n_replicates=5,
         )
         with pytest.raises(NotImplementedError, match="replicate-weight"):
-            yatchew_hr_test(d, dy, survey=resolved_with_rep)
+            yatchew_hr_test(d, dy, survey_design=resolved_with_rep)
 
 
 class TestYatchewHRTestMeanIndependence:
@@ -3409,7 +3420,9 @@ class TestYatchewHRTestMeanIndependence:
         unweighted mean-independence (atol=1e-14)."""
         d, dy = self._setup()
         r_unw = yatchew_hr_test(d, dy, null="mean_independence")
-        r_w = yatchew_hr_test(d, dy, null="mean_independence", weights=np.ones(d.shape[0]))
+        r_w = yatchew_hr_test(
+            d, dy, null="mean_independence", survey_design=make_pweight_design(np.ones(d.shape[0]))
+        )
         np.testing.assert_allclose(r_unw.sigma2_lin, r_w.sigma2_lin, atol=1e-14, rtol=1e-14)
         np.testing.assert_allclose(r_unw.sigma2_diff, r_w.sigma2_diff, atol=1e-14, rtol=1e-14)
         np.testing.assert_allclose(r_unw.sigma2_W, r_w.sigma2_W, atol=1e-14, rtol=1e-14)
@@ -3444,7 +3457,7 @@ class TestYatchewHRTestMeanIndependence:
             np.sqrt(sum_w_eff) * (sigma2_lin_expected - sigma2_diff_expected) / sigma2_W_expected
         )
 
-        r = yatchew_hr_test(d, dy, null="mean_independence", weights=w)
+        r = yatchew_hr_test(d, dy, null="mean_independence", survey_design=make_pweight_design(w))
         np.testing.assert_allclose(r.sigma2_lin, sigma2_lin_expected, atol=1e-12)
         np.testing.assert_allclose(r.sigma2_diff, sigma2_diff_expected, atol=1e-12)
         np.testing.assert_allclose(r.sigma2_W, sigma2_W_expected, atol=1e-12)
@@ -3453,8 +3466,8 @@ class TestYatchewHRTestMeanIndependence:
     def test_default_null_under_weights_matches_explicit_linearity(self):
         d, dy = self._setup()
         w = np.random.default_rng(7).uniform(0.5, 2.0, size=d.shape[0])
-        r_default = yatchew_hr_test(d, dy, weights=w)
-        r_explicit = yatchew_hr_test(d, dy, weights=w, null="linearity")
+        r_default = yatchew_hr_test(d, dy, survey_design=make_pweight_design(w))
+        r_explicit = yatchew_hr_test(d, dy, survey_design=make_pweight_design(w), null="linearity")
         np.testing.assert_array_equal(r_default.t_stat_hr, r_explicit.t_stat_hr)
         np.testing.assert_array_equal(r_default.sigma2_lin, r_explicit.sigma2_lin)
         assert r_default.null_form == "linearity"
@@ -3509,7 +3522,7 @@ class TestYatchewHRTestMeanIndependence:
             np.sqrt(sum_w_eff) * (sigma2_lin_expected - sigma2_diff_expected) / sigma2_W_expected
         )
 
-        r = yatchew_hr_test(d, dy, weights=w, null="linearity")
+        r = yatchew_hr_test(d, dy, survey_design=make_pweight_design(w), null="linearity")
         np.testing.assert_allclose(r.sigma2_lin, sigma2_lin_expected, atol=1e-12)
         np.testing.assert_allclose(r.sigma2_diff, sigma2_diff_expected, atol=1e-12)
         np.testing.assert_allclose(r.sigma2_W, sigma2_W_expected, atol=1e-12)
@@ -3522,7 +3535,7 @@ class TestYatchewHRTestMeanIndependence:
         w = np.ones(d.shape[0])
         w[5] = 0.0
         with pytest.raises(ValueError, match="strictly positive"):
-            yatchew_hr_test(d, dy, null="mean_independence", weights=w)
+            yatchew_hr_test(d, dy, null="mean_independence", survey_design=make_pweight_design(w))
 
     def test_replicate_weights_rejected_under_mean_independence(self):
         from diff_diff.survey import ResolvedSurveyDesign
@@ -3543,7 +3556,7 @@ class TestYatchewHRTestMeanIndependence:
             n_replicates=5,
         )
         with pytest.raises(NotImplementedError, match="replicate-weight"):
-            yatchew_hr_test(d, dy, null="mean_independence", survey=resolved_with_rep)
+            yatchew_hr_test(d, dy, null="mean_independence", survey_design=resolved_with_rep)
 
     # ─── Edge case ───────────────────────────────────────────────────────────
 
@@ -3591,6 +3604,7 @@ class TestJointStuteSurvey:
         w_per_unit = np.random.default_rng(7).uniform(0.5, 2.0, size=20)
         # Constant-within-unit per HAD invariant.
         weights_per_row = df["unit"].map(dict(zip(np.arange(20), w_per_unit))).to_numpy()
+        df["_wcol"] = weights_per_row
         r = joint_pretrends_test(
             df,
             "y",
@@ -3601,7 +3615,7 @@ class TestJointStuteSurvey:
             base_period=1,
             n_bootstrap=199,
             seed=0,
-            weights=weights_per_row,
+            survey_design=SurveyDesign(weights="_wcol"),
         )
         assert np.isfinite(r.cvm_stat_joint)
         assert 0.0 <= r.p_value <= 1.0
@@ -3610,6 +3624,7 @@ class TestJointStuteSurvey:
         df = self._make_event_study_panel()
         w_per_unit = np.random.default_rng(7).uniform(0.5, 2.0, size=20)
         weights_per_row = df["unit"].map(dict(zip(np.arange(20), w_per_unit))).to_numpy()
+        df["_wcol"] = weights_per_row
         r = joint_homogeneity_test(
             df,
             "y",
@@ -3620,7 +3635,7 @@ class TestJointStuteSurvey:
             base_period=1,
             n_bootstrap=199,
             seed=0,
-            weights=weights_per_row,
+            survey_design=SurveyDesign(weights="_wcol"),
         )
         assert np.isfinite(r.cvm_stat_joint)
         assert 0.0 <= r.p_value <= 1.0
@@ -3641,16 +3656,15 @@ class TestJointStuteSurvey:
             base_period=1,
             n_bootstrap=199,
             seed=0,
-            survey=SurveyDesign(weights="w"),
+            survey_design=SurveyDesign(weights="w"),
         )
         assert np.isfinite(r.cvm_stat_joint)
 
-    def test_joint_pretrends_mutex_both_raises(self):
-        from diff_diff import SurveyDesign
-
+    def test_joint_pretrends_removed_aliases_rejected(self):
+        """3.7.x removal: weights=/survey= aliases rejected at the signature."""
         df = self._make_event_study_panel()
         df["w"] = 1.0
-        with pytest.raises(ValueError, match="at most one of"):
+        with pytest.raises(TypeError, match="unexpected keyword argument"):
             joint_pretrends_test(
                 df,
                 "y",
@@ -3662,7 +3676,6 @@ class TestJointStuteSurvey:
                 n_bootstrap=199,
                 seed=0,
                 weights=np.ones(80),
-                survey=SurveyDesign(weights="w"),
             )
 
     def test_stute_joint_pretest_replicate_weights_raises(self):
@@ -3700,7 +3713,7 @@ class TestJointStuteSurvey:
                 design_matrix=design_matrix,
                 n_bootstrap=199,
                 seed=0,
-                survey=resolved_with_rep,
+                survey_design=resolved_with_rep,
             )
 
 
@@ -3764,7 +3777,7 @@ class TestPhase45CR1Regressions:
             lonely_psu="remove",
         )
         with pytest.raises(ValueError, match="strictly positive"):
-            stute_test(d, dy, survey=resolved, n_bootstrap=199, seed=0)
+            stute_test(d, dy, survey_design=resolved, n_bootstrap=199, seed=0)
 
     def test_stute_joint_pretest_zero_survey_weight_raises(self):
         from diff_diff.survey import ResolvedSurveyDesign
@@ -3797,7 +3810,7 @@ class TestPhase45CR1Regressions:
                 design_matrix=design_matrix,
                 n_bootstrap=199,
                 seed=0,
-                survey=resolved,
+                survey_design=resolved,
             )
 
     def test_workflow_zero_survey_weight_column_rejected(self):
@@ -3812,7 +3825,7 @@ class TestPhase45CR1Regressions:
                 "d",
                 "time",
                 "unit",
-                survey=SurveyDesign(weights="w"),
+                survey_design=SurveyDesign(weights="w"),
                 n_bootstrap=199,
                 seed=0,
             )
@@ -3834,7 +3847,7 @@ class TestPhase45CR1Regressions:
             lonely_psu="remove",
         )
         with pytest.raises(ValueError, match="weight_type='pweight'"):
-            stute_test(d, dy, survey=resolved, n_bootstrap=199, seed=0)
+            stute_test(d, dy, survey_design=resolved, n_bootstrap=199, seed=0)
 
     def test_yatchew_hr_test_fweight_rejected(self):
         from diff_diff.survey import ResolvedSurveyDesign
@@ -3851,7 +3864,7 @@ class TestPhase45CR1Regressions:
             lonely_psu="remove",
         )
         with pytest.raises(ValueError, match="weight_type='pweight'"):
-            yatchew_hr_test(d, dy, survey=resolved)
+            yatchew_hr_test(d, dy, survey_design=resolved)
 
     def test_workflow_aweight_rejected_at_resolution(self):
         from diff_diff import SurveyDesign
@@ -3864,7 +3877,7 @@ class TestPhase45CR1Regressions:
                 "d",
                 "time",
                 "unit",
-                survey=SurveyDesign(weights="w", weight_type="aweight"),
+                survey_design=SurveyDesign(weights="w", weight_type="aweight"),
                 n_bootstrap=199,
                 seed=0,
             )
@@ -3879,6 +3892,7 @@ class TestPhase45CR1Regressions:
         df = self._make_staggered_panel(G_per_cohort=10)
         n_rows = 2 * 10 * 4
         weights_per_row = np.ones(n_rows) * 1.5
+        df["_wcol"] = weights_per_row
         with pytest.warns(UserWarning):
             report = did_had_pretest_workflow(
                 df,
@@ -3888,7 +3902,7 @@ class TestPhase45CR1Regressions:
                 "unit",
                 first_treat_col="F",
                 aggregate="event_study",
-                weights=weights_per_row,
+                survey_design=SurveyDesign(weights="_wcol"),
                 n_bootstrap=199,
                 seed=0,
             )
@@ -3907,6 +3921,7 @@ class TestPhase45CR1Regressions:
         df = self._make_staggered_panel(G_per_cohort=10)
         n_rows = 2 * 10 * 4
         weights_per_row = np.ones(n_rows) * 1.5
+        df["_wcol"] = weights_per_row
         with pytest.warns(UserWarning):
             r = joint_pretrends_test(
                 df,
@@ -3919,7 +3934,7 @@ class TestPhase45CR1Regressions:
                 first_treat_col="F",
                 n_bootstrap=199,
                 seed=0,
-                weights=weights_per_row,
+                survey_design=SurveyDesign(weights="_wcol"),
             )
         assert np.isfinite(r.cvm_stat_joint)
 
@@ -3927,6 +3942,7 @@ class TestPhase45CR1Regressions:
         df = self._make_staggered_panel(G_per_cohort=10)
         n_rows = 2 * 10 * 4
         weights_per_row = np.ones(n_rows) * 1.5
+        df["_wcol"] = weights_per_row
         with pytest.warns(UserWarning):
             r = joint_homogeneity_test(
                 df,
@@ -3939,7 +3955,7 @@ class TestPhase45CR1Regressions:
                 first_treat_col="F",
                 n_bootstrap=199,
                 seed=0,
-                weights=weights_per_row,
+                survey_design=SurveyDesign(weights="_wcol"),
             )
         assert np.isfinite(r.cvm_stat_joint)
 
@@ -3959,7 +3975,9 @@ class TestPhase45CR1Regressions:
         """
         d, dy = _linear_dgp(G=50, beta=2.0, sigma=0.3)
         r_unweighted = stute_test(d, dy, n_bootstrap=999, seed=0)
-        r_weighted = stute_test(d, dy, weights=np.ones(50), n_bootstrap=999, seed=0)
+        r_weighted = stute_test(
+            d, dy, survey_design=make_pweight_design(np.ones(50)), n_bootstrap=999, seed=0
+        )
         # cvm_stat: bit-exact reduction at w=1 (W=G, weighted CvM ≡ unweighted).
         np.testing.assert_allclose(
             r_unweighted.cvm_stat, r_weighted.cvm_stat, atol=1e-14, rtol=1e-14
@@ -3995,7 +4013,7 @@ class TestPhase45CR1Regressions:
             lonely_psu="remove",
         )
         with pytest.warns(UserWarning, match="variance-unidentified"):
-            r = stute_test(d, dy, survey=resolved, n_bootstrap=199, seed=0)
+            r = stute_test(d, dy, survey_design=resolved, n_bootstrap=199, seed=0)
         assert np.isnan(r.p_value)
         assert r.reject is False
         # cvm_stat is the OBSERVED value (still computed pre-guard); only
@@ -4033,7 +4051,7 @@ class TestPhase45CR1Regressions:
                 design_matrix=design_matrix,
                 n_bootstrap=199,
                 seed=0,
-                survey=resolved,
+                survey_design=resolved,
             )
         assert np.isnan(r.p_value)
         assert r.reject is False
@@ -4060,7 +4078,7 @@ class TestPhase45CR1Regressions:
                 "d",
                 "time",
                 "unit",
-                survey=SurveyDesign(weights="w", psu="psu"),
+                survey_design=SurveyDesign(weights="w", psu="psu"),
                 n_bootstrap=199,
                 seed=0,
             )
@@ -4083,8 +4101,8 @@ class TestPhase45CR1Regressions:
         before any computation."""
         d, dy = _linear_dgp(G=30, beta=2.0, sigma=0.3)
         w = np.random.default_rng(7).uniform(0.5, 2.0, size=30)
-        r1 = yatchew_hr_test(d, dy, weights=w)
-        r2 = yatchew_hr_test(d, dy, weights=100.0 * w)
+        r1 = yatchew_hr_test(d, dy, survey_design=make_pweight_design(w))
+        r2 = yatchew_hr_test(d, dy, survey_design=make_pweight_design(100.0 * w))
         np.testing.assert_allclose(r1.t_stat_hr, r2.t_stat_hr, atol=1e-12, rtol=1e-12)
         np.testing.assert_allclose(r1.p_value, r2.p_value, atol=1e-12, rtol=1e-12)
 
@@ -4094,22 +4112,22 @@ class TestPhase45CR1Regressions:
         entry paths agree numerically."""
         d, dy = _linear_dgp(G=30, beta=2.0, sigma=0.3)
         w = np.random.default_rng(7).uniform(0.5, 2.0, size=30)
-        r1 = stute_test(d, dy, weights=w, n_bootstrap=199, seed=0)
-        r2 = stute_test(d, dy, weights=100.0 * w, n_bootstrap=199, seed=0)
+        r1 = stute_test(d, dy, survey_design=make_pweight_design(w), n_bootstrap=199, seed=0)
+        r2 = stute_test(
+            d, dy, survey_design=make_pweight_design(100.0 * w), n_bootstrap=199, seed=0
+        )
         np.testing.assert_allclose(r1.cvm_stat, r2.cvm_stat, atol=1e-12, rtol=1e-12)
         np.testing.assert_allclose(r1.p_value, r2.p_value, atol=1e-12, rtol=1e-12)
 
-    def test_workflow_weights_eq_survey_at_overall_path(self):
-        """R4 P0: workflow's weights= shortcut and survey=SurveyDesign(
-        weights="w") must produce identical Yatchew/Stute results for
-        the same design. SurveyDesign.resolve() normalizes pweights to
-        mean=1; the helper now applies the same normalization on the
-        weights= path so both paths agree numerically."""
+    def test_workflow_survey_design_column_name_invariance(self):
+        """Column-name invariance (successor of the R4 P0 weights=/survey=
+        equivalence lock, whose weights= arm was removed in 3.7.x): the same
+        weight VALUES under two different column names must produce identical
+        Yatchew/Stute results — the resolution depends only on the values."""
         from diff_diff import SurveyDesign
 
         df = self._make_overall_panel(with_w_col=True)
-        # Build a per-row weights array matching df["w"] for the shortcut.
-        weights_per_row = df["w"].to_numpy()
+        df["_wcol"] = df["w"].to_numpy()
         with pytest.warns(UserWarning):
             r_weights = did_had_pretest_workflow(
                 df,
@@ -4117,7 +4135,7 @@ class TestPhase45CR1Regressions:
                 "d",
                 "time",
                 "unit",
-                weights=weights_per_row,
+                survey_design=SurveyDesign(weights="_wcol"),
                 n_bootstrap=199,
                 seed=0,
             )
@@ -4128,7 +4146,7 @@ class TestPhase45CR1Regressions:
                 "d",
                 "time",
                 "unit",
-                survey=SurveyDesign(weights="w"),
+                survey_design=SurveyDesign(weights="w"),
                 n_bootstrap=199,
                 seed=0,
             )
@@ -4157,20 +4175,27 @@ class TestPhase45CR1Regressions:
         d, dy = _linear_dgp(G=30)
         w_2d = np.ones((30, 1))  # common df[["w"]].to_numpy() pattern
         with pytest.raises(ValueError, match="1-dimensional"):
-            stute_test(d, dy, weights=w_2d, n_bootstrap=199, seed=0)
+            stute_test(d, dy, survey_design=make_pweight_design(w_2d), n_bootstrap=199, seed=0)
 
     def test_yatchew_hr_test_rejects_2d_weights(self):
         d, dy = _linear_dgp(G=30)
         w_2d = np.ones((30, 1))
         with pytest.raises(ValueError, match="1-dimensional"):
-            yatchew_hr_test(d, dy, weights=w_2d)
+            yatchew_hr_test(d, dy, survey_design=make_pweight_design(w_2d))
 
     def test_workflow_rejects_2d_weights(self):
         df = self._make_overall_panel()
         w_2d = np.ones((40, 1))
         with pytest.raises(ValueError, match="1-dimensional"):
             did_had_pretest_workflow(
-                df, "y", "d", "time", "unit", weights=w_2d, n_bootstrap=199, seed=0
+                df,
+                "y",
+                "d",
+                "time",
+                "unit",
+                survey_design=make_pweight_design(w_2d),
+                n_bootstrap=199,
+                seed=0,
             )
 
     # --- R5 P1: lonely_psu='adjust' singleton-strata rejection ------------
@@ -4210,7 +4235,7 @@ class TestPhase45CR1Regressions:
         d, dy = _linear_dgp(G=30)
         resolved = self._make_singleton_strata_resolved(G=30, lonely_psu="adjust")
         with pytest.raises(NotImplementedError, match="lonely_psu='adjust'"):
-            stute_test(d, dy, survey=resolved, n_bootstrap=199, seed=0)
+            stute_test(d, dy, survey_design=resolved, n_bootstrap=199, seed=0)
 
     def test_stute_joint_pretest_lonely_psu_adjust_singleton_still_raises(self):
         """``lonely_psu='adjust'`` + singleton-strata stays rejected on
@@ -4233,7 +4258,7 @@ class TestPhase45CR1Regressions:
                 design_matrix=design_matrix,
                 n_bootstrap=199,
                 seed=0,
-                survey=resolved,
+                survey_design=resolved,
             )
 
     # --- R6 P1: positive non-trivial PSU/strata survey coverage -----------
@@ -4293,7 +4318,7 @@ class TestPhase45CR1Regressions:
             base_period=1,
             n_bootstrap=199,
             seed=0,
-            survey=SurveyDesign(weights="w", psu="psu"),
+            survey_design=SurveyDesign(weights="w", psu="psu"),
         )
         assert np.isfinite(r.cvm_stat_joint)
         assert 0.0 <= r.p_value <= 1.0
@@ -4320,7 +4345,7 @@ class TestPhase45CR1Regressions:
             base_period=1,
             n_bootstrap=199,
             seed=0,
-            survey=SurveyDesign(weights="w", strata="stratum", psu="psu"),
+            survey_design=SurveyDesign(weights="w", strata="stratum", psu="psu"),
         )
         # Sanity: a stratified joint Stute on a linear DGP should produce
         # a finite p-value (the test exercises the survey-bootstrap path,
@@ -4346,7 +4371,7 @@ class TestPhase45CR1Regressions:
                 "time",
                 "unit",
                 aggregate="event_study",
-                survey=SurveyDesign(weights="w", psu="psu"),
+                survey_design=SurveyDesign(weights="w", psu="psu"),
                 n_bootstrap=199,
                 seed=0,
             )
@@ -4369,6 +4394,7 @@ class TestPhase45CR1Regressions:
         cohort."""
         df = self._make_staggered_panel(G_per_cohort=10)
         weights_per_row = np.array([0.0 if df.iloc[i]["F"] == 2 else 1.5 for i in range(len(df))])
+        df["_wcol"] = weights_per_row
         with pytest.warns(UserWarning):
             report = did_had_pretest_workflow(
                 df,
@@ -4378,7 +4404,7 @@ class TestPhase45CR1Regressions:
                 "unit",
                 first_treat_col="F",
                 aggregate="event_study",
-                weights=weights_per_row,
+                survey_design=SurveyDesign(weights="_wcol"),
                 n_bootstrap=199,
                 seed=0,
             )
@@ -4431,6 +4457,7 @@ class TestPhase45CR1Regressions:
         survey-aware verdict composer."""
         df = self._make_overall_panel()
         weights_per_row = np.full(40, 1.5)
+        df["_wcol"] = weights_per_row
         with pytest.warns(UserWarning):
             report = did_had_pretest_workflow(
                 df,
@@ -4438,7 +4465,7 @@ class TestPhase45CR1Regressions:
                 "d",
                 "time",
                 "unit",
-                weights=weights_per_row,
+                survey_design=SurveyDesign(weights="_wcol"),
                 n_bootstrap=199,
                 seed=0,
             )
@@ -4463,7 +4490,7 @@ class TestPhase45CR1Regressions:
                 "time",
                 "unit",
                 aggregate="event_study",
-                survey=SurveyDesign(weights="w", psu="psu"),
+                survey_design=SurveyDesign(weights="w", psu="psu"),
                 n_bootstrap=199,
                 seed=0,
             )
@@ -4473,86 +4500,6 @@ class TestPhase45CR1Regressions:
             )
 
     # --- R9 P1: front-door length validation on staggered weights= path ---
-
-    def test_workflow_event_study_oversized_weights_raises(self):
-        """R9 P1: oversized row-level weights= must raise a clean
-        ValueError BEFORE the staggered-panel pos_idx subsetting (pre-fix
-        the workflow silently truncated by slicing original weights to
-        data_filtered's row count without checking length first)."""
-        df = self._make_staggered_panel(G_per_cohort=10)
-        weights_oversized = np.ones(100) * 1.5  # 80 rows expected
-        with pytest.raises(ValueError, match="weights length 100"):
-            did_had_pretest_workflow(
-                df,
-                "y",
-                "d",
-                "time",
-                "unit",
-                first_treat_col="F",
-                aggregate="event_study",
-                weights=weights_oversized,
-                n_bootstrap=199,
-                seed=0,
-            )
-
-    def test_workflow_event_study_undersized_weights_raises(self):
-        """R9 P1: undersized weights= must raise clean ValueError, not
-        a raw IndexError from pos_idx slicing."""
-        df = self._make_staggered_panel(G_per_cohort=10)
-        weights_undersized = np.ones(60) * 1.5
-        with pytest.raises(ValueError, match="weights length 60"):
-            did_had_pretest_workflow(
-                df,
-                "y",
-                "d",
-                "time",
-                "unit",
-                first_treat_col="F",
-                aggregate="event_study",
-                weights=weights_undersized,
-                n_bootstrap=199,
-                seed=0,
-            )
-
-    def test_joint_pretrends_test_oversized_weights_raises(self):
-        """R9 P1: same length-validation contract on the direct wrapper."""
-        df = self._make_staggered_panel(G_per_cohort=10)
-        weights_oversized = np.ones(100) * 1.5
-        with pytest.raises(ValueError, match="weights length 100"):
-            joint_pretrends_test(
-                df,
-                "y",
-                "d",
-                "time",
-                "unit",
-                pre_periods=[0, 1],
-                base_period=2,
-                first_treat_col="F",
-                n_bootstrap=199,
-                seed=0,
-                weights=weights_oversized,
-            )
-
-    def test_joint_homogeneity_test_undersized_weights_raises(self):
-        """R9 P1: same on joint_homogeneity_test."""
-        df = self._make_staggered_panel(G_per_cohort=10)
-        weights_undersized = np.ones(60) * 1.5
-        with pytest.raises(ValueError, match="weights length 60"):
-            joint_homogeneity_test(
-                df,
-                "y",
-                "d",
-                "time",
-                "unit",
-                post_periods=[3],
-                base_period=2,
-                first_treat_col="F",
-                n_bootstrap=199,
-                seed=0,
-                weights=weights_undersized,
-            )
-
-    # --- R12 P3: positive FPC-only survey coverage ------------------------
 
     def test_stute_test_fpc_only_survey_smoke(self):
         """R12 P3: positive smoke for FPC-only survey designs on the Stute
@@ -4578,7 +4525,7 @@ class TestPhase45CR1Regressions:
             n_psu=30,
             lonely_psu="remove",
         )
-        r = stute_test(d, dy, survey=resolved, n_bootstrap=199, seed=0)
+        r = stute_test(d, dy, survey_design=resolved, n_bootstrap=199, seed=0)
         assert np.isfinite(r.cvm_stat)
         assert 0.0 <= r.p_value <= 1.0
 
@@ -4596,7 +4543,7 @@ class TestPhase45CR1Regressions:
                 "d",
                 "time",
                 "unit",
-                survey=SurveyDesign(weights="w", fpc="fpc"),
+                survey_design=SurveyDesign(weights="w", fpc="fpc"),
                 n_bootstrap=199,
                 seed=0,
             )
@@ -4951,7 +4898,7 @@ class TestJointPretestsTrendsLin:
                     n_bootstrap=99,
                     seed=42,
                     trends_lin=True,
-                    weights=np.ones(len(df)),
+                    survey_design=make_pweight_design(np.ones(len(df))),
                 )
 
     def test_homogeneity_trends_lin_with_survey_design_raises(self):
@@ -5746,7 +5693,7 @@ class TestStuteStratifiedSurveyBootstrap:
             design_matrix=design_matrix,
             n_bootstrap=99,
             seed=0,
-            survey=resolved,
+            survey_design=resolved,
         )
         assert calls == [1], (
             "stute_joint_pretest did not invoke apply_stratum_centering on "

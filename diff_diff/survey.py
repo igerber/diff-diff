@@ -804,51 +804,6 @@ def make_pweight_design(weights: np.ndarray) -> "ResolvedSurveyDesign":
 _make_trivial_resolved = make_pweight_design
 
 
-# Three-way mutex error messages for `survey_design=` / `survey=` / `weights=`
-# kwargs across the 7 HAD pretest helper surfaces (did_had_pretest_workflow +
-# 5 pretest helpers + qug_test). `HeterogeneousAdoptionDiD.fit` no longer uses
-# these — its `survey=`/`weights=` kwargs were removed in 3.7.0 (passing them
-# raises `TypeError`); `survey_design=` is its sole weighting entry. The
-# migration target text differs between data-in surfaces (which can resolve
-# ``SurveyDesign(weights="col_name")`` against ``data``) and array-in
-# surfaces (which take pre-resolved ``ResolvedSurveyDesign`` and use
-# ``make_pweight_design(arr)`` for the pweight-only convenience). Defined
-# here to avoid circular imports between had.py and had_pretests.py.
-HAD_DUAL_KNOB_MUTEX_MSG_DATA_IN = (
-    "Pass at most one of `survey_design=`, `survey=`, or `weights=`. "
-    "`survey=` and `weights=` are deprecated aliases of `survey_design=` "
-    "and will be removed in the next minor release. Prefer "
-    "`survey_design=SurveyDesign(weights='col_name', ...)`."
-)
-HAD_DUAL_KNOB_MUTEX_MSG_ARRAY_IN = (
-    "Pass at most one of `survey_design=`, `survey=`, or `weights=`. "
-    "`survey=` and `weights=` are deprecated aliases of `survey_design=` "
-    "and will be removed in the next minor release. Prefer "
-    "`survey_design=make_pweight_design(arr)` for pweight-only or "
-    "`survey_design=<pre-resolved ResolvedSurveyDesign>` for full "
-    "PSU/strata/FPC."
-)
-HAD_DEPRECATION_MSG_SURVEY_KWARG = (
-    "`survey=` is deprecated; use `survey_design=` instead "
-    "(same accepted types). Will be removed in the next minor release."
-)
-HAD_DEPRECATION_MSG_WEIGHTS_KWARG_DATA_IN = (
-    "`weights=np.ndarray` is deprecated; add the weights as a column on "
-    "`data` and pass `survey_design=SurveyDesign(weights='col_name')` "
-    "instead. Will be removed in the next minor release."
-)
-# NOTE: the HAD.fit-specific `weights=` deprecation message was removed in
-# 3.7.0 when `HeterogeneousAdoptionDiD.fit(weights=)` was dropped (weighting
-# consolidated onto `survey_design=` / Binder-TSL). The array-in and data-in
-# pretest-helper deprecation messages above remain until their own removal.
-HAD_DEPRECATION_MSG_WEIGHTS_KWARG_ARRAY_IN = (
-    "`weights=np.ndarray` is deprecated on array-in pretest helpers; use "
-    "`survey_design=make_pweight_design(weights)` instead "
-    "(import `make_pweight_design` from `diff_diff`). Will be removed in "
-    "the next minor release."
-)
-
-
 @dataclass
 class SurveyMetadata:
     """
