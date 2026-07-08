@@ -3172,6 +3172,32 @@ class TestLSMRFallbackParity:
         # (what the estimator consumes) must agree.
         np.testing.assert_allclose(A_0 @ z_lsmr, A_0 @ z_dense, rtol=0, atol=1e-8)
 
+    def test_weighted_singular_system_projection_matches_dense_oracle(self):
+        """Weighted variant (CI-review D1): the production path solves
+        (A_0'[W]A_0) z = rhs with survey weights W. Null-space components of
+        the weighted normal equations live in null(sqrt(W) A_0), so the
+        WEIGHTED projection W_0 A_0 z — what the weighted estimator
+        consumes — must agree across solvers even where the unweighted
+        projection A_0 z need not."""
+        import scipy.sparse as sp
+
+        from diff_diff.imputation import _lsmr_minnorm_normal_solve
+
+        rng = np.random.default_rng(9)
+        n, p = 180, 10
+        A0_dense = rng.normal(size=(n, p))
+        A0_dense[:, -1] = 2.0 * A0_dense[:, 1]  # exact collinearity
+        w = rng.uniform(0.2, 3.0, size=n)
+        w[:12] = 0.0  # zero-weight rows (subpopulation) stay inert
+        A_0 = sp.csr_matrix(A0_dense)
+        A0tWA0 = sp.csc_matrix((A_0.T.multiply(w)) @ A_0)
+        rhs = rng.normal(size=p)
+
+        z_lsmr = _lsmr_minnorm_normal_solve(A0tWA0, rhs)
+        z_dense = np.linalg.lstsq(A0tWA0.toarray(), rhs, rcond=None)[0]
+        assert np.all(np.isfinite(z_lsmr))
+        np.testing.assert_allclose(w * (A_0 @ z_lsmr), w * (A_0 @ z_dense), rtol=0, atol=1e-8)
+
     def test_no_dense_materialization_on_fallback(self, monkeypatch):
         """The singular-build fallback path must never call .toarray() on the
         normal matrix (the O((U+T+K)^2) OOM risk this closes)."""

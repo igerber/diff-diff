@@ -62,9 +62,9 @@ class _UntreatedProjection(NamedTuple):
     A_0: sparse.csr_matrix
     A_1: sparse.csr_matrix
     # solver(rhs) -> z; None when the factorization was exactly singular (the
-    # solve path then routes to a dense lstsq fallback).
+    # solve path then routes to the sparse LSMR least-squares fallback).
     solver: Optional[Callable[[np.ndarray], np.ndarray]]
-    A0tA0_csc: sparse.csc_matrix  # retained for the dense-lstsq fallback
+    A0tA0_csc: sparse.csc_matrix  # retained for the LSMR fallback
     survey_weights_0: Optional[np.ndarray]
     singular: bool
 
@@ -1595,7 +1595,9 @@ class ImputationDiD(ImputationDiDBootstrapMixin):
         Uses scipy.sparse for FE dummy columns to reduce memory from O(N*(U+T))
         to O(N) for the FE portion. An exactly singular ``A_0'[W]A_0`` makes
         ``sparse_factorized`` raise ``RuntimeError``; we emit a UserWarning (once
-        per fit) and record ``singular=True`` so the solve routes to dense lstsq.
+        per fit) and record ``singular=True`` so the solve routes to the sparse
+        LSMR least-squares fallback (no dense materialization; see
+        :func:`_lsmr_minnorm_normal_solve`).
         """
         # Exclude rank-deficient covariates from design matrices
         if kept_cov_mask is not None and not np.all(kept_cov_mask):
@@ -1663,16 +1665,16 @@ class ImputationDiD(ImputationDiDBootstrapMixin):
         # Factorize once (factorize-once / solve-many). An exactly singular
         # matrix makes sparse_factorized raise RuntimeError -- the same condition
         # that previously surfaced as spsolve's MatrixRankWarning -> non-finite
-        # solution. Mirror the TwoStageDiD GMM-sandwich pattern: warn once and
-        # fall back to dense lstsq per target. (Bit-identical to the prior
-        # per-target spsolve for a single dense RHS -- both use the SuperLU
-        # simple driver with the same defaults.)
+        # solution. Warn once and fall back to the sparse LSMR least-squares
+        # solve per target (no dense materialization). (The factorized path is
+        # bit-identical to the prior per-target spsolve for a single dense
+        # RHS -- both use the SuperLU simple driver with the same defaults.)
         try:
             solver: Optional[Callable[[np.ndarray], np.ndarray]] = sparse_factorized(A0tA0_csc)
             singular = False
         except RuntimeError as exc:
             # Silent-failure audit axis C: emit a UserWarning on fallback instead
-            # of swallowing the error. Keep the "dense lstsq" substring (asserted
+            # of swallowing the error. Keep the "sparse LSMR" substring (asserted
             # by tests).
             warnings.warn(
                 "ImputationDiD variance: sparse factorization of (A_0' [W] A_0) "
@@ -1711,7 +1713,7 @@ class ImputationDiD(ImputationDiDBootstrapMixin):
             z = ctx.solver(A1_w)
             if not np.all(np.isfinite(z)):
                 # Defensive, target-specific: a non-finite solve on an otherwise
-                # factorizable matrix routes this RHS to dense lstsq. Warn per
+                # factorizable matrix routes this RHS to the LSMR fallback. Warn per
                 # target (silent-failure audit axis C) -- distinct from the
                 # once-per-fit build-time singular warning.
                 warnings.warn(
