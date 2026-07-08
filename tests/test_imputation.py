@@ -3100,9 +3100,11 @@ class TestLeadSnapAbsorbed:
             )
         assert res.event_study_effects is not None
         eff = res.event_study_effects
-        # The spanned lead is deterministically NaN (full inference tuple) —
-        # that is the snap's contract and is platform-independent.
+        # The spanned lead is deterministically NaN — the FULL inference
+        # tuple (review P3: assert every field, not just effect/se).
         assert np.isnan(eff[-2]["effect"]) and np.isnan(eff[-2]["se"])
+        assert np.isnan(eff[-2]["t_stat"]) and np.isnan(eff[-2]["p_value"])
+        assert np.all(np.isnan(np.asarray(eff[-2]["conf_int"], dtype=float)))
         # Of the remaining leads {-6,-5,-4,-3}, the leads-sum dummy trap costs
         # exactly ONE more column — but WHICH one the rank handler drops is
         # pivoted-QR/BLAS-order dependent (observed: -4 on macOS/Accelerate,
