@@ -500,7 +500,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `(Bc, n)` temporaries) so peak memory is bounded for large `n`/`B`. Verified against
   origin/main on a 5-seed few-cluster grid: SE, p-value, and inverted CI endpoints all
   **bit-identical** (backend pinned), 6.8x end-to-end; the boottest parity suite
-  (`tests/test_wild_bootstrap.py`, 60 tests incl. pinned values) passes unchanged. The
+  (`tests/test_wild_bootstrap.py`, incl. pinned values) passes unchanged, plus a new
+  chunk-count-invariance regression class (`TestPrecomputeChunking`). The
   quadratic-form evaluation is a ~1-ULP reassociation of the per-call `sum(scores²)`;
   the strict-inequality tie guard absorbs sub-1e-9 shifts by design.
 - **`CallawaySantAnna` per-(g,t) IF scatters converted from `np.add.at` to fancy `+=`**

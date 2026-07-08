@@ -1485,9 +1485,10 @@ def test_wild_bootstrap_rank_deficient_storage_vcov_does_not_crash():
 class TestPrecomputeChunking:
     """The r-independent precompute pass must be chunk-count invariant: forcing
     many draw-chunks (tiny byte budget) reproduces the single-chunk outputs
-    bit-for-bit (each chunk computes its own rows independently)."""
+    (each chunk computes its own rows independently, so the p-value is exact;
+    se/CI carry documented ambient-backend tolerances, see in-test notes)."""
 
-    def test_multi_chunk_bit_identical(self, monkeypatch):
+    def test_multi_chunk_count_invariant(self, monkeypatch):
         import diff_diff.utils as du
 
         rng = np.random.default_rng(3)
