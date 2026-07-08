@@ -73,6 +73,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   perturbing the identified lead coefficients). Identified leads are unchanged (the full
   imputation suites pass unmodified); behavioral tests lock both the spanned-NaN contract
   and the no-op case. REGISTRY ImputationDiD note added.
+- **`ImputationDiD` singular-variance fallback no longer densifies the normal matrix.**
+  The sparse-factorization fallback called `np.linalg.lstsq((A₀'[W]A₀).toarray(), …)` —
+  an `O((U+T+K)²)` dense materialization and OOM risk on large panels (triggered only
+  when the sparse factorization fails, e.g. a rank-deficient Ω₀). Both fallback sites now
+  solve via `scipy.sparse.linalg.lsmr` with no dense materialization. Solver choice
+  provably cannot change the estimator: least-squares solutions of the singular system
+  differ only by `null(√W·A₀)` components, which the downstream projection
+  `v = −[W₀]A₀z` annihilates — locked by a dense-lstsq-oracle parity test on a genuinely
+  singular system plus a no-densify spy test through the full fit. Convergence is validated fail-closed:
+  an uncertified LSMR stop (condition-limit / max-iteration; machine-precision statuses
+  4/5 count as certified per SciPy) gets one retry with an uncapped condition limit,
+  then raises internally and the variance boundary reports a NaN SE (full NaN inference
+  tuple) — raising rather than returning NaN matters because the missing-FE
+  `nan_to_num` in the psi product would launder a NaN vector into zeros and a finite,
+  wrong variance (locked by a fit-level NaN-inference regression test). Fallback warning text
+  updated ("sparse LSMR" instead of "dense lstsq"). The analogous `TwoStageDiD` dense
+  fallbacks are multi-RHS with coefficient-level consumers where the invariance argument
+  does not transfer; tracked separately in TODO.
 - **`HonestDiD` Δ^SD optimal-FLCI center parity with R (SE-audit B2b).** The optimal
   Fixed-Length CI optimizer was a flat Nelder-Mead over slope weights that landed on a
   different affine estimator than R `HonestDiD::findOptimalFLCI` at intermediate smoothness

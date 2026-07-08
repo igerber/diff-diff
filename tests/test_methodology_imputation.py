@@ -276,9 +276,9 @@ class TestB2024Theorem3Variance:
                 first_treat="first_treat",
             )
         # The build-time RuntimeError on the singular factorization must trigger
-        # the dense-lstsq fallback (with a UserWarning carrying "dense lstsq").
-        fallback_warnings = [w for w in caught if "dense lstsq" in str(w.message)]
-        assert fallback_warnings, "expected the dense-lstsq fallback under a singular Ω₀"
+        # the sparse LSMR fallback (with a UserWarning carrying "sparse LSMR").
+        fallback_warnings = [w for w in caught if "sparse LSMR" in str(w.message)]
+        assert fallback_warnings, "expected the LSMR fallback under a singular Ω₀"
         # Factorize-once: the build-time singular warning fires a single time for
         # this single-target (overall-only) fit, not once per (g,t).
         assert len(fallback_warnings) == 1

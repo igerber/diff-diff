@@ -908,7 +908,7 @@ class TestImputationVariance:
             "diff_diff.imputation.sparse_factorized", side_effect=RuntimeError("test failure")
         ):
             with pytest.warns(
-                UserWarning, match="sparse factorization.*falling back to dense lstsq"
+                UserWarning, match="sparse factorization.*falling back to a sparse LSMR"
             ):
                 est.fit(
                     data,
@@ -3144,3 +3144,121 @@ class TestLeadSnapAbsorbed:
         ]
         assert len(finite_leads) >= 4
         assert not any("collinear with the absorbed fixed effects" in str(x.message) for x in w)
+class TestLSMRFallbackParity:
+    """The sparse LSMR fallback replaces dense lstsq on the (possibly
+    singular) normal equations. Solver choice cannot change the estimator:
+    least-squares solutions differ only by null(A_0'[W]A_0) = null(sqrt(W)A_0)
+    components, which the projection v = -[W_0] A_0 z annihilates. Lock the
+    projection parity against a dense-lstsq oracle on a genuinely singular
+    system."""
+
+    def test_singular_system_projection_matches_dense_oracle(self):
+        import scipy.sparse as sp
+
+        from diff_diff.imputation import _lsmr_minnorm_normal_solve
+
+        rng = np.random.default_rng(3)
+        n, p = 200, 12
+        A0_dense = rng.normal(size=(n, p))
+        A0_dense[:, -1] = A0_dense[:, 0]  # exact collinearity -> singular normal eqs
+        A_0 = sp.csr_matrix(A0_dense)
+        A0tA0 = sp.csc_matrix(A_0.T @ A_0)
+        rhs = rng.normal(size=p)
+
+        z_lsmr = _lsmr_minnorm_normal_solve(A0tA0, rhs)
+        z_dense = np.linalg.lstsq(A0tA0.toarray(), rhs, rcond=None)[0]
+        assert np.all(np.isfinite(z_lsmr))
+        # The z's may differ by a null-space component; the PROJECTION A_0 z
+        # (what the estimator consumes) must agree.
+        np.testing.assert_allclose(A_0 @ z_lsmr, A_0 @ z_dense, rtol=0, atol=1e-8)
+
+    def test_no_dense_materialization_on_fallback(self, monkeypatch):
+        """The singular-build fallback path must never call .toarray() on the
+        normal matrix (the O((U+T+K)^2) OOM risk this closes)."""
+        import unittest.mock
+
+        import diff_diff.imputation as imp
+
+        data = generate_test_data(n_units=60, n_periods=6, seed=7)
+
+        with unittest.mock.patch(
+            "diff_diff.imputation.sparse_factorized", side_effect=RuntimeError("forced")
+        ):
+            with warnings.catch_warnings(record=True) as w:
+                warnings.simplefilter("always")
+                orig_lsmr = imp._lsmr_minnorm_normal_solve
+                calls = []
+
+                def _spy(mat, rhs):
+                    calls.append(mat.shape)
+                    mat.toarray = None  # densifying would now raise
+                    return orig_lsmr(mat, rhs)
+
+                monkeypatch.setattr(imp, "_lsmr_minnorm_normal_solve", _spy)
+                res = ImputationDiD().fit(
+                    data, outcome="outcome", unit="unit", time="time", first_treat="first_treat"
+                )
+        assert calls, "fallback path did not route through the LSMR solver"
+        assert np.isfinite(res.overall_att)
+        assert any("sparse LSMR" in str(x.message) for x in w)
+
+    def test_unconverged_lsmr_fails_closed_to_nan(self, monkeypatch):
+        """CI-review P1 regression: a finite-but-uncertified LSMR result
+        (istop outside {0,1,2} on both attempts) must NOT feed the variance;
+        the solve returns NaN so inference degrades to NaN."""
+        import scipy.sparse as sp
+
+        import diff_diff.imputation as imp
+
+        def _fake_lsmr(A, b, **kwargs):
+            # finite vector, but istop=7 (max-iteration exhaustion)
+            return (np.ones(A.shape[0]), 7, 5, 1.0, 1.0, 1.0, 1.0, 1.0)
+
+        monkeypatch.setattr("scipy.sparse.linalg.lsmr", _fake_lsmr)
+        A0tA0 = sp.csc_matrix(np.eye(4))
+        with pytest.warns(UserWarning, match="did not converge"):
+            with pytest.raises(imp._LSMRUnconvergedError):
+                imp._lsmr_minnorm_normal_solve(A0tA0, np.ones(4))
+
+    def test_unconverged_lsmr_fit_level_nan_inference(self, monkeypatch):
+        """CI-review P0 regression: a globally failed solve must NOT be
+        laundered into finite inference by the missing-FE nan_to_num — the
+        full inference tuple degrades to NaN at the variance boundary."""
+        import unittest.mock
+
+        def _fake_lsmr(A, b, **kwargs):
+            return (np.ones(A.shape[0]), 7, 5, 1.0, 1.0, 1.0, 1.0, 1.0)
+
+        data = generate_test_data(n_units=60, n_periods=6, seed=7)
+        monkeypatch.setattr("scipy.sparse.linalg.lsmr", _fake_lsmr)
+        with unittest.mock.patch(
+            "diff_diff.imputation.sparse_factorized", side_effect=RuntimeError("forced")
+        ):
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                res = ImputationDiD().fit(
+                    data, outcome="outcome", unit="unit", time="time", first_treat="first_treat"
+                )
+        assert np.isfinite(res.overall_att)  # point estimate unaffected
+        assert np.isnan(res.overall_se)
+        assert np.isnan(res.overall_t_stat)
+        assert np.isnan(res.overall_p_value)
+        assert np.all(np.isnan(np.asarray(res.overall_conf_int, dtype=float)))
+
+    def test_machine_precision_istop_accepted(self, monkeypatch):
+        """CI-review P1 regression: istop 4/5 (machine-precision analogues of
+        1/2 per SciPy) are certified — no retry, no failure handling."""
+        import scipy.sparse as sp2
+
+        import diff_diff.imputation as imp2
+
+        calls = []
+
+        def _fake_lsmr(A, b, **kwargs):
+            calls.append(kwargs)
+            return (np.full(A.shape[0], 2.0), 4, 5, 1.0, 1.0, 1.0, 1.0, 1.0)
+
+        monkeypatch.setattr("scipy.sparse.linalg.lsmr", _fake_lsmr)
+        z = imp2._lsmr_minnorm_normal_solve(sp2.csc_matrix(np.eye(3)), np.ones(3))
+        assert len(calls) == 1  # accepted on the first attempt
+        np.testing.assert_array_equal(z, np.full(3, 2.0))
