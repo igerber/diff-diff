@@ -29,6 +29,7 @@ from diff_diff.linalg import (
 from diff_diff.results import DiDResults, MultiPeriodDiDResults, PeriodEffect
 from diff_diff.utils import (
     WildBootstrapResults,
+    build_fe_dummy_blocks,
     demean_by_groups,
     fe_dummy_names,
     pre_demean_norms,
@@ -529,13 +530,12 @@ class DifferenceInDifferences:
 
         # Add fixed effects as dummy variables
         if fixed_effects:
-            for fe in fixed_effects:
-                # Create dummies, drop first category to avoid multicollinearity
-                # Use working_data to be consistent with absorbed FE if both are used
-                dummies = pd.get_dummies(working_data[fe], prefix=fe, drop_first=True)
-                for col in dummies.columns:
-                    X = np.column_stack([X, dummies[col].values.astype(float)])
-                    var_names.append(col)
+            # Shared drop-first dummy build (names match fe_dummy_names, the
+            # reserved-name guard above). Use working_data to be consistent
+            # with absorbed FE if both are used.
+            _fe_blocks, _fe_names = build_fe_dummy_blocks(working_data, list(fixed_effects))
+            X = np.column_stack([X] + _fe_blocks)
+            var_names.extend(_fe_names)
 
         # Reject any duplicate in the FINAL term list (e.g. a fixed-effect dummy
         # colliding with a structural term) BEFORE the regression — so the fit is
@@ -1813,13 +1813,11 @@ class MultiPeriodDiD(DifferenceInDifferences):
         # collapsing the dict and breaking the coefficients-vs-vcov
         # alignment that downstream consumers rely on). Skip those FEs.
         if fixed_effects:
-            for fe in fixed_effects:
-                if fe == time:
-                    continue
-                dummies = pd.get_dummies(working_data[fe], prefix=fe, drop_first=True)
-                for col in dummies.columns:
-                    X = np.column_stack([X, dummies[col].values.astype(float)])
-                    var_names.append(col)
+            _mp_fes = [fe for fe in fixed_effects if fe != time]
+            if _mp_fes:
+                _fe_blocks, _fe_names = build_fe_dummy_blocks(working_data, _mp_fes)
+                X = np.column_stack([X] + _fe_blocks)
+                var_names.extend(_fe_names)
 
         # Reject any duplicate in the FINAL term list (e.g. a fixed-effect dummy
         # colliding with a structural period_{p} key) BEFORE the regression — so

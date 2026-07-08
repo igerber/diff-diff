@@ -2079,3 +2079,40 @@ class TestIterativeFeSolve:
                 tol=1e-15,
                 method_name="my solver label",
             )
+
+
+class TestBuildFeDummyBlocks:
+    """Shared FE-dummy design build (DiD/MPD fixed_effects= + TWFE full-dummy
+    path): names must match fe_dummy_names (the reserved-name collision
+    guard) and values must match pd.get_dummies exactly."""
+
+    def test_names_match_fe_dummy_names_contract(self):
+        from diff_diff.utils import build_fe_dummy_blocks, fe_dummy_names
+
+        df = pd.DataFrame(
+            {
+                "plain": ["b", "a", "c", "a"],
+                "cat": pd.Categorical(
+                    ["x", "z", "y", "z"], categories=["z", "y", "x"]
+                ),  # non-default order
+                "num": [3, 1, 2, 1],
+            }
+        )
+        blocks, names = build_fe_dummy_blocks(df, ["plain", "cat", "num"])
+        expected = (
+            fe_dummy_names(df["plain"], "plain")
+            + fe_dummy_names(df["cat"], "cat")
+            + fe_dummy_names(df["num"], "num")
+        )
+        assert names == expected
+        assert sum(b.shape[1] for b in blocks) == len(names)
+
+    def test_values_match_get_dummies(self):
+        from diff_diff.utils import build_fe_dummy_blocks
+
+        df = pd.DataFrame({"g": ["b", "a", "c", "a", "b"]})
+        blocks, names = build_fe_dummy_blocks(df, ["g"], prefixes=["_fe_g"])
+        ref = pd.get_dummies(df["g"], prefix="_fe_g", drop_first=True)
+        np.testing.assert_array_equal(blocks[0], ref.values.astype(np.float64))
+        assert names == list(ref.columns)
+        assert blocks[0].dtype == np.float64

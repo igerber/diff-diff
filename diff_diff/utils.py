@@ -217,6 +217,48 @@ def fe_dummy_names(col: pd.Series, prefix: str) -> List[str]:
     return [f"{prefix}_{c}" for c in cats[1:]]
 
 
+def build_fe_dummy_blocks(
+    data: pd.DataFrame,
+    fe_cols: List[str],
+    prefixes: Optional[List[str]] = None,
+) -> Tuple[List[np.ndarray], List[str]]:
+    """Materialize drop-first fixed-effect dummy blocks and their column names.
+
+    Single shared implementation of the ``pd.get_dummies(col, prefix=...,
+    drop_first=True)`` design-build used by ``DifferenceInDifferences`` /
+    ``MultiPeriodDiD`` (``fixed_effects=``) and the ``TwoWayFixedEffects``
+    HC2/HC2-BM full-dummy path — previously three inline copies whose FE
+    naming / dtype / column-order conventions could drift independently.
+    Names match :func:`fe_dummy_names` (the reserved-name collision guard)
+    exactly; values are the dense ``float64`` dummy matrix per FE, in
+    ``get_dummies`` column order.
+
+    Parameters
+    ----------
+    data : pandas.DataFrame
+        Frame holding the FE columns.
+    fe_cols : list of str
+        Fixed-effect column names, in design order.
+    prefixes : list of str, optional
+        Dummy-name prefix per FE column (defaults to the column name itself;
+        TWFE passes ``_fe_{col}`` to keep its internal-name convention).
+
+    Returns
+    -------
+    blocks : list of ndarray
+        One dense ``(n, G_j - 1)`` float64 dummy block per FE column.
+    names : list of str
+        The kept dummy column names across all FEs, in block order.
+    """
+    blocks: List[np.ndarray] = []
+    names: List[str] = []
+    for fe, prefix in zip(fe_cols, prefixes or fe_cols):
+        dummies = pd.get_dummies(data[fe], prefix=prefix, drop_first=True)
+        blocks.append(dummies.values.astype(np.float64))
+        names.extend(dummies.columns)
+    return blocks, names
+
+
 def warn_if_not_converged(
     converged: bool,
     method_name: str,

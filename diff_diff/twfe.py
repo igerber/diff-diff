@@ -15,6 +15,7 @@ from diff_diff.estimators import DifferenceInDifferences
 from diff_diff.linalg import LinearRegression
 from diff_diff.results import DiDResults
 from diff_diff.utils import (
+    build_fe_dummy_blocks,
     fe_dummy_names,
     pre_demean_norms,
     snap_absorbed_regressors,
@@ -348,14 +349,13 @@ class TwoWayFixedEffects(DifferenceInDifferences):
                 )
             y = data[outcome].values.astype(np.float64)
             cov_arrs = [data[c].values.astype(np.float64) for c in (covariates or [])]
-            unit_dummies_df = pd.get_dummies(data[unit], prefix=f"_fe_{unit}", drop_first=True)
-            time_dummies_df = pd.get_dummies(data[time], prefix=f"_fe_{time}", drop_first=True)
-            unit_dummies = unit_dummies_df.values.astype(np.float64)
-            time_dummies = time_dummies_df.values.astype(np.float64)
+            # Shared drop-first dummy build (single implementation with the
+            # DiD/MPD fixed_effects= paths; names match fe_dummy_names).
+            _fe_blocks, _fe_dummy_names = build_fe_dummy_blocks(
+                data, [unit, time], prefixes=[f"_fe_{unit}", f"_fe_{time}"]
+            )
             X = np.column_stack(
-                [np.ones(len(data)), data["_treatment_post"].values]
-                + cov_arrs
-                + [unit_dummies, time_dummies]
+                [np.ones(len(data)), data["_treatment_post"].values] + cov_arrs + _fe_blocks
             )
             # FEs are now in X explicitly; solve_ols's n - k accounting
             # already subtracts them, so the extra unit + time DOF
@@ -367,10 +367,7 @@ class TwoWayFixedEffects(DifferenceInDifferences):
             # (matching the MPD invariant
             # ``len(result.coefficients) == result.vcov.shape[0]``).
             _twfe_var_names: Optional[List[str]] = (
-                ["const", "ATT"]
-                + list(covariates or [])
-                + list(unit_dummies_df.columns)
-                + list(time_dummies_df.columns)
+                ["const", "ATT"] + list(covariates or []) + _fe_dummy_names
             )
             # Backstop: reject any duplicate in the FINAL term list (e.g. a
             # unit/time dummy colliding with a structural term or another dummy)

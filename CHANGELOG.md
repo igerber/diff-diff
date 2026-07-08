@@ -406,6 +406,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (excluded from the remap). A per-replicate full-dummy HC2 implementation
   (the TODO row) was investigated and rejected as a costly no-op: it cannot change the
   replicate variance. Tests lock warn+bit-identity-to-hc1 on all three estimators.
+- **Shared FE-dummy design build (`build_fe_dummy_blocks`).** The drop-first
+  `pd.get_dummies` design construction existed as three inline copies — the
+  `DifferenceInDifferences` and `MultiPeriodDiD` `fixed_effects=` loops and the
+  `TwoWayFixedEffects` HC2/HC2-BM full-dummy path — whose FE naming / dtype /
+  column-order conventions could drift independently (the drift risk flagged in TODO).
+  All three now delegate to one `diff_diff.utils.build_fe_dummy_blocks` helper whose
+  names match `fe_dummy_names` (the reserved-name collision guard) by construction.
+  Outputs are bit-identical (A/B against the previous implementation on DiD with a
+  non-default-order Categorical FE + covariates, TWFE hc2 + hc2_bm, and MultiPeriodDiD
+  multi-FE including the `fe == time` skip); the MPD/DiD paths also drop the
+  per-column `np.column_stack` accumulation (O(k²) copies) for one block stack.
 - **Per-cell solver fast paths for covariate fits (CallawaySantAnna and every
   estimator routing through the shared solvers).** Two pure-Python changes in
   `diff_diff/linalg.py`: (1) `solve_logit`'s IRLS inner step — previously a full
