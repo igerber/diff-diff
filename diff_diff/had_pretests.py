@@ -785,7 +785,7 @@ class HADPretestReport:
         ``pretrends_joint``, ``homogeneity_joint`` and omits the
         ``None``-valued ``stute`` / ``yatchew`` keys entirely.
         """
-        # qug serializes as None on the survey/weights path (Phase 4.5 C
+        # qug serializes as None on the survey_design= path (Phase 4.5 C
         # QUG-skip per C0 deferral); rendered as the existing dict on the
         # default unweighted path.
         qug_dict = None if self.qug is None else self.qug.to_dict()
@@ -833,7 +833,7 @@ class HADPretestReport:
         no earlier pre-period exists) are emitted with NaN statistic
         values and ``reject=False`` to preserve the 3-row shape.
         """
-        # qug row: NaN-skip when self.qug is None (Phase 4.5 C survey/weights
+        # qug row: NaN-skip when self.qug is None (Phase 4.5 C survey_design=
         # path leaves qug=None per C0 deferral). Mirrors the joint NaN-row
         # shape from `_joint_row_or_nan` so the 3-row contract is preserved.
         if self.qug is None:
@@ -3378,9 +3378,8 @@ def joint_pretrends_test(
         ``UserWarning`` fires when the filter triggers. If
         ``pre_periods`` becomes empty after the drop, raises
         ``ValueError`` (no testable placebo horizons remain).
-        Mutually exclusive with survey weighting (``survey_design`` /
-        ``survey`` / ``weights``); raises ``NotImplementedError`` if
-        combined. Default ``False`` preserves bit-exact backcompat.
+        Mutually exclusive with survey weighting (``survey_design``);
+        raises ``NotImplementedError`` if combined. Default ``False`` preserves bit-exact backcompat.
 
     Returns
     -------
@@ -4457,7 +4456,7 @@ def did_had_pretest_workflow(
 
         # Event-study `all_pass`. On the unweighted path, every implemented
         # step must be conclusive AND none reject (Phase 3 convention). On
-        # the survey/weights path, drop the QUG-conclusiveness condition
+        # the survey_design= path, drop the QUG-conclusiveness condition
         # (qug=None per Phase 4.5 C0 deferral); admissibility becomes
         # linearity-conditional.
         pretrends_ok = pretrends_joint is not None and bool(np.isfinite(pretrends_joint.p_value))

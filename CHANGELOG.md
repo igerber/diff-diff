@@ -48,8 +48,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Note: this public-kwarg removal in a *minor* bump is the pre-scheduled HAD exception
     documented since the deprecation shipped; other pending removals (e.g. `SyntheticDiD`
     `lambda_reg`/`zeta`) remain gated on the next major (v4.0.0). The equivalent
-    `survey=`/`weights=` kwargs on the HAD pretest helpers (`stute_test`, `qug_test`,
-    `did_had_pretest_workflow`, ...) are unchanged in this release and removed separately.
+    `survey=`/`weights=` kwargs on the HAD pretest helpers were removed separately —
+    completed by the pretest-helper removal entry above in this same Unreleased section.
 
 ### Fixed
 - **`HonestDiD` Δ^SD optimal-FLCI center parity with R (SE-audit B2b).** The optimal
