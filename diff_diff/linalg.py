@@ -2068,10 +2068,7 @@ def _compute_cr2_bm_vcov_and_dof(
     # `(tr B)² / tr(B²)` form (bit-equal to prior); weighted uses the full
     # clubSandwich P_array construction.
     if weights is None:
-        # Build the symmetric residual-maker M = I - H for the simple formula.
-        H = X @ M_U @ X.T
-        M = np.eye(n) - H
-        dof_vec = _cr2_bm_dof_inner(X, M, A_g_matrices, cluster_idx, M_U, contrasts)
+        dof_vec = _cr2_bm_dof_inner(X, A_g_matrices, cluster_idx, M_U, contrasts)
     else:
         dof_vec = _cr2_bm_dof_inner_weighted(
             X,
@@ -2154,7 +2151,6 @@ def _compute_cr2_bm(
 
 def _cr2_bm_dof_inner(
     X: np.ndarray,
-    M: np.ndarray,
     A_g_matrices: Dict[Any, np.ndarray],
     cluster_idx: Dict[Any, np.ndarray],
     bread_inv: np.ndarray,
@@ -2163,10 +2159,10 @@ def _cr2_bm_dof_inner(
     """Inner DOF loop, parameterized by an arbitrary contrast matrix.
 
     Computes the CR2 Bell-McCaffrey Satterthwaite DOF for each column of
-    ``contrasts`` (shape ``(k, m)``), using the precomputed residual-maker
-    ``M``, per-cluster adjustment matrices ``A_g_matrices``, cluster index
-    map ``cluster_idx``, and ``bread_inv``. The per-coefficient case is
-    recovered with ``contrasts=np.eye(k)``; compound contrasts (e.g., a
+    ``contrasts`` (shape ``(k, m)``), using the per-cluster adjustment
+    matrices ``A_g_matrices``, cluster index map ``cluster_idx``, and
+    ``bread_inv``. The per-coefficient case is recovered with
+    ``contrasts=np.eye(k)``; compound contrasts (e.g., a
     post-period-average ATT) are handled by the same algebra without
     duplication.
 
@@ -2178,6 +2174,23 @@ def _cr2_bm_dof_inner(
       trace_B2 = sum_{g, h} (omega_g' M_{g, h} omega_h)**2
       DOF(c)  = trace_B**2 / trace_B2
 
+    SCORES-BASED EVALUATION (Pustejovsky-Tipton 2018 Appendix B): the
+    cluster-pair contraction is never evaluated against an explicit
+    residual-maker. With ``Omega`` the ``(n, G)`` matrix stacking the
+    ``omega_g`` on their (disjoint) cluster supports and
+    ``M = I - X bread_inv X'``, the pairwise matrix
+    ``B[g, h] = omega_g' M_{g, h} omega_h`` collapses to
+
+      B = Omega' M Omega = diag(||omega_g||^2) - P' bread_inv P,
+      P = X' Omega  (k, G; column g is X_g' omega_g)
+
+    so ``trace_B2 = ||B||_F^2`` costs ``O(n k + G^2 k)`` per contrast with
+    ``O(G k)`` memory — the previous form materialized the dense ``n x n``
+    ``M`` and looped cluster pairs at ``O(n^2)`` per contrast, the exact
+    large-``n`` blowup the TODO row tracked. The two evaluations are
+    algebraically identical; floating-point agreement is ~1e-12 relative
+    (different accumulation order), locked by the frozen-oracle parity test.
+
     Returns
     -------
     dof_vec : ndarray of shape (m,)
@@ -2186,6 +2199,7 @@ def _cr2_bm_dof_inner(
     """
     m = contrasts.shape[1]
     unique_clusters = list(cluster_idx.keys())
+    n_g_clusters = len(unique_clusters)
     # Precompute once: q-matrix (n, m) and A_g_Xbi (n_g, k) per cluster.
     # For unit-contrast inputs (contrasts=I_k), this matches the prior
     # inline implementation exactly: q[:, j] == X_bi[:, j] == X @ bread_inv @ e_j.
@@ -2197,6 +2211,15 @@ def _cr2_bm_dof_inner(
     # Omega per cluster per contrast: (n_g, m) = A_g_Xbi[g] @ contrasts
     omega_all = {g: A_g_Xbi[g] @ contrasts for g in unique_clusters}
 
+    # Scores-based precomputes (see docstring): per cluster g,
+    # normsq[g, j] = ||omega_g^{(j)}||^2 and P_all[g, :, j] = X_g' omega_g^{(j)}.
+    normsq = np.zeros((n_g_clusters, m))
+    P_all = np.zeros((n_g_clusters, X.shape[1], m))
+    for gi, g in enumerate(unique_clusters):
+        om = omega_all[g]  # (n_g, m)
+        normsq[gi] = np.einsum("ij,ij->j", om, om)
+        P_all[gi] = X[cluster_idx[g]].T @ om
+
     dof_vec = np.empty(m)
     # Retain max|B_{g,h}| per contrast so we can NaN-guard noise-floor
     # degeneracies in a second pass (mirrors `_cr2_bm_dof_inner_weighted`).
@@ -2204,21 +2227,11 @@ def _cr2_bm_dof_inner(
     for j in range(m):
         q = Q[:, j]
         trace_B = float(np.sum(q * q))
-        trace_B2 = 0.0
-        max_abs_B = 0.0
-        omega_cache = {g: omega_all[g][:, j] for g in unique_clusters}
-        for g in unique_clusters:
-            idx_g = cluster_idx[g]
-            omega_g = omega_cache[g]
-            for h in unique_clusters:
-                idx_h = cluster_idx[h]
-                omega_h = omega_cache[h]
-                M_gh = M[np.ix_(idx_g, idx_h)]
-                val = float(omega_g @ M_gh @ omega_h)
-                trace_B2 += val * val
-                if abs(val) > max_abs_B:
-                    max_abs_B = abs(val)
-        max_abs_B_arr[j] = max_abs_B
+        P_j = P_all[:, :, j]  # (G, k)
+        B_j = -(P_j @ bread_inv @ P_j.T)
+        B_j[np.diag_indices_from(B_j)] += normsq[:, j]
+        trace_B2 = float(np.sum(B_j * B_j))
+        max_abs_B_arr[j] = float(np.max(np.abs(B_j))) if B_j.size else 0.0
         dof_vec[j] = (trace_B * trace_B) / trace_B2 if trace_B2 > 0 else np.nan
 
     # Noise-floor NaN-guard (unweighted analogue of the guard in

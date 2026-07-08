@@ -601,6 +601,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   consumer (ring membership, `S_it`, the far-away check, the event-study `d_bar` trigger)
   compares against thresholds at or below that cutoff. Helper- and fit-level equality
   tests pin the sparse arm against the dense path (atol 1e-12 end-to-end).
+- **CR2 Bell-McCaffrey Satterthwaite DOF: scores-based evaluation (PT2018 Appendix B).**
+  The unweighted per-contrast DOF previously materialized the dense `n×n` residual-maker
+  `M = I − X(X'X)⁻¹X'` and contracted it over all cluster pairs (`O(n²)` time per
+  contrast, `O(n²)` memory — 3.2 GB at n=20k). The pairwise matrix now collapses to
+  `B = diag(‖ω_g‖²) − P'M_U P` with `P = X'Ω` (disjoint cluster supports), costing
+  `O(nk + G²k)` per contrast with no `n×n` allocation: ~32x at n=5k/G=50 (0.57s→0.018s);
+  n=20k/G=100 completes in 0.12s where the old path would allocate 3.2 GB. Algebraically
+  identical — agreement with a frozen pair-loop oracle at rtol 1e-10 (balanced,
+  unbalanced, and compound-contrast designs); both NaN-reliability guards (noise floor,
+  cluster-count bound) unchanged. All 432 consumer tests pass unmodified.
 - **`CallawaySantAnna` per-(g,t) IF scatters converted from `np.add.at` to fancy `+=`**
   (`staggered.py::_cluster_robust_se_from_per_gt_if` — runs once per (g,t) cell when
   `cluster=` is set — and the general combined-IF assembly path in
