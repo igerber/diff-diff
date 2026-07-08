@@ -573,7 +573,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   The staggered cohort loop always built a dense `(n_units, n_treated_by_onset)` distance
   matrix per cohort; it now dispatches per cohort to the same cKDTree helper the static
   path uses (auto-activated when `n_units` exceeds the sparse threshold, built-in metrics
-  only, `cutoff_km = ` the outermost ring edge). Within-cutoff distances are exact (the
+  only, `cutoff_km` set to the outermost ring edge). Within-cutoff distances are exact (the
   helper recomputes the true great-circle/planar metric for in-range matches) and
   beyond-cutoff units get `inf` — semantics-preserving because every staggered `d_it`
   consumer (ring membership, `S_it`, the far-away check, the event-study `d_bar` trigger)
