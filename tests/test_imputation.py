@@ -3100,11 +3100,18 @@ class TestLeadSnapAbsorbed:
             )
         assert res.event_study_effects is not None
         eff = res.event_study_effects
-        # The spanned lead is deterministically NaN (full inference tuple).
+        # The spanned lead is deterministically NaN (full inference tuple) —
+        # that is the snap's contract and is platform-independent.
         assert np.isnan(eff[-2]["effect"]) and np.isnan(eff[-2]["se"])
-        # Identified leads stay finite (the junk direction never reached them).
-        for h in (-6, -5, -3):
-            assert np.isfinite(eff[h]["effect"]), f"h={h}"
+        # Of the remaining leads {-6,-5,-4,-3}, the leads-sum dummy trap costs
+        # exactly ONE more column — but WHICH one the rank handler drops is
+        # pivoted-QR/BLAS-order dependent (observed: -4 on macOS/Accelerate,
+        # -3 on linux-arm py3.11, -6 on the pure-python CI backend). Assert
+        # the count and the health of the survivors, not specific horizons.
+        others = [-6, -5, -4, -3]
+        finite = [h for h in others if np.isfinite(eff[h]["effect"])]
+        assert len(finite) == len(others) - 1, f"finite leads: {finite}"
+        for h in finite:
             assert np.isfinite(eff[h]["se"]) and eff[h]["se"] > 0, f"h={h}"
         # Cause-specific snap warning names the display label, not the raw column.
         snap_msgs = [
