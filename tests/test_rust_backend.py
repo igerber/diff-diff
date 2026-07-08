@@ -3622,6 +3622,8 @@ class TestRustHC2Vcov:
             v = la.compute_robust_vcov(X, resid, vcov_type="hc2")
         v_py = la._compute_robust_vcov_numpy(X, resid, None, vcov_type="hc2")
         np.testing.assert_allclose(v, v_py, rtol=1e-12, atol=1e-15)
+
+
 class TestClusterVcovDeterminism:
     """Clustered vcov is bit-identical across repeated identical calls.
 
@@ -3655,3 +3657,20 @@ class TestClusterVcovDeterminism:
         baseline = compute_robust_vcov(X, resid, cluster_ids=cl)
         for _ in range(20):
             np.testing.assert_array_equal(compute_robust_vcov(X, resid, cluster_ids=cl), baseline)
+
+    def test_raw_kernel_noncontiguous_ids_bit_identical(self):
+        """Review P3: the public wrapper factorizes cluster ids before Rust,
+        so the test above never hands the RAW kernel non-contiguous labels.
+        Exercise _rust_backend.compute_robust_vcov directly with unsorted,
+        non-contiguous int64 ids (the first-appearance remap path)."""
+        from diff_diff._rust_backend import compute_robust_vcov as raw_vcov
+
+        rng = np.random.default_rng(5)
+        X = np.ascontiguousarray(rng.normal(size=(240, 3)))
+        resid = np.ascontiguousarray(rng.normal(size=240))
+        cl = np.ascontiguousarray(
+            np.repeat(np.array([907, 3, -11, 42, 7, 3000, -1, 12], dtype=np.int64), 30)
+        )
+        baseline = raw_vcov(X, resid, cl)
+        for _ in range(20):
+            np.testing.assert_array_equal(raw_vcov(X, resid, cl), baseline)
