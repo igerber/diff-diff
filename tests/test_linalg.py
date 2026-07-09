@@ -2718,7 +2718,8 @@ class TestRankGuardedInv:
 
 class TestCR2BMScoresBasedDOF:
     """Frozen-oracle parity for the scores-based Satterthwaite DOF evaluation
-    (PT2018 Appendix B): B = diag(||omega_g||^2) - P' M_U P must agree with
+    (algebraic identity; PT2018 §3.1 Satterthwaite DOF):
+    B = diag(||omega_g||^2) - P' M_U P must agree with
     the previous explicit-residual-maker cluster-pair contraction to float64
     accumulation tolerance, without materializing the n x n M."""
 

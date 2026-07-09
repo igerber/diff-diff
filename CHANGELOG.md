@@ -601,7 +601,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   consumer (ring membership, `S_it`, the far-away check, the event-study `d_bar` trigger)
   compares against thresholds at or below that cutoff. Helper- and fit-level equality
   tests pin the sparse arm against the dense path (atol 1e-12 end-to-end).
-- **CR2 Bell-McCaffrey Satterthwaite DOF: scores-based evaluation (PT2018 Appendix B).**
+- **CR2 Bell-McCaffrey Satterthwaite DOF: scores-based evaluation (algebraic identity; PT2018 §3.1 / Eq. 13 Satterthwaite DOF).**
   The unweighted per-contrast DOF previously materialized the dense `n×n` residual-maker
   `M = I − X(X'X)⁻¹X'` and contracted it over all cluster pairs (`O(n²)` time per
   contrast, `O(n²)` memory — 3.2 GB at n=20k). The pairwise matrix now collapses to

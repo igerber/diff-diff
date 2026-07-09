@@ -2184,7 +2184,8 @@ def _cr2_bm_dof_inner(
       trace_B2 = sum_{g, h} (omega_g' M_{g, h} omega_h)**2
       DOF(c)  = trace_B**2 / trace_B2
 
-    SCORES-BASED EVALUATION (Pustejovsky-Tipton 2018 Appendix B): the
+    SCORES-BASED EVALUATION (algebraic identity; the Satterthwaite DOF
+    itself is Pustejovsky-Tipton 2018 §3.1 / Eq. 13): the
     cluster-pair contraction is never evaluated against an explicit
     residual-maker. With ``Omega`` the ``(n, G)`` matrix stacking the
     ``omega_g`` on their (disjoint) cluster supports and
