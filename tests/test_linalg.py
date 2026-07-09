@@ -2716,6 +2716,104 @@ class TestRankGuardedInv:
         assert nd0 == 3 and dropped0.all()
 
 
+class TestCR2BMLowRankAdjustment:
+    """The low-rank factored A_g apply reproduces the dense per-cluster
+    eigendecomposition path (frozen here as the oracle) at ~1e-14: vcov,
+    per-coefficient DOF, and the NaN-guard pattern. The identity: unweighted
+    G_g = I - U_g U_g' (U_g = X_g M_U^{1/2}, rank <= k), so
+    A_g = I + (U_g Q) diag(gamma) (U_g Q)' from the k x k eigenproblem of
+    U_g'U_g — O(n_g k^2) per cluster instead of the O(n_g^3) dense eigh
+    (~85% of CR2-BM runtime at n=100k pre-change)."""
+
+    @staticmethod
+    def _oracle_dense_cr2(X, residuals, cluster_ids, bread_matrix):
+        """Frozen pre-change dense evaluation: per-cluster G_g = I - H_gg,
+        A_g via _cr2_adjustment_matrix (dense eigh), meat from dense A_g @ u,
+        A_g_Xbi from dense A_g — fed to the production scores-based DOF."""
+        from diff_diff.linalg import _cr2_adjustment_matrix, _cr2_bm_dof_inner
+
+        n, k = X.shape
+        unique = np.unique(cluster_ids)
+        cluster_idx = {g: np.where(cluster_ids == g)[0] for g in unique}
+        bread_inv = np.linalg.solve(bread_matrix, np.eye(k))
+        scores = np.zeros((len(unique), k))
+        A_g_Xbi = {}
+        for gi, g in enumerate(unique):
+            idx = cluster_idx[g]
+            X_g = X[idx]
+            H = X_g @ bread_inv @ X_g.T
+            A_g = _cr2_adjustment_matrix(np.eye(len(idx)) - H)
+            scores[gi] = X_g.T @ (A_g @ residuals[idx])
+            A_g_Xbi[g] = A_g @ X_g @ bread_inv
+        vcov = bread_inv @ (scores.T @ scores) @ bread_inv
+        dof = _cr2_bm_dof_inner(X, A_g_Xbi, cluster_idx, bread_inv, np.eye(k))
+        return vcov, dof
+
+    @staticmethod
+    def _design(n, G, k, singular_cluster=False, singletons=False, seed=7):
+        rng = np.random.default_rng(seed)
+        if singletons:
+            cl = np.arange(n) % G
+        else:
+            base = np.repeat(np.arange(G), n // G)
+            cl = np.concatenate([base, np.full(n - base.size, G - 1)])
+        X = np.column_stack([np.ones(n), rng.normal(size=(n, k - 1))])
+        if singular_cluster:
+            # absorbed cluster-0 FE: cluster 0 carries within-cluster
+            # leverage 1 -> G_g eigenvalue 0 -> Moore-Penrose zeroing branch
+            X[:, 1] = (cl == 0).astype(float)
+        y = X @ rng.normal(size=k) + rng.normal(size=n)
+        resid = y - X @ np.linalg.lstsq(X, y, rcond=None)[0]
+        return X, resid, cl, X.T @ X
+
+    @pytest.mark.parametrize(
+        "kw",
+        [
+            dict(n=2000, G=20, k=10),
+            dict(n=1777, G=13, k=8),
+            dict(n=4000, G=25, k=40),
+            dict(n=2000, G=20, k=10, singular_cluster=True),
+            dict(n=300, G=300, k=5, singletons=True),
+        ],
+        ids=["balanced", "unbalanced", "k40", "leverage1-absorbed-FE", "singletons"],
+    )
+    def test_matches_frozen_dense_oracle(self, kw):
+        from diff_diff.linalg import _compute_cr2_bm
+
+        X, resid, cl, bread = self._design(**kw)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            vcov, dof = _compute_cr2_bm(X, resid, cl, bread)
+            vcov_o, dof_o = self._oracle_dense_cr2(X, resid, cl, bread)
+        np.testing.assert_allclose(vcov, vcov_o, rtol=1e-12, atol=1e-15 * np.max(np.abs(vcov_o)))
+        assert np.array_equal(np.isnan(dof), np.isnan(dof_o)), "NaN-guard pattern diverged"
+        fin = ~np.isnan(dof_o)
+        if fin.any():
+            np.testing.assert_allclose(dof[fin], dof_o[fin], rtol=1e-10)
+
+    def test_gamma_stable_near_zero_leverage(self):
+        """A near-zero-leverage cluster (tiny lam) exercises the expm1/log1p
+        evaluation of gamma; naive (1/sqrt(1-lam)-1)/lam is catastrophically
+        cancellative there. The oracle comparison pins the stable branch."""
+        from diff_diff.linalg import _compute_cr2_bm
+
+        rng = np.random.default_rng(11)
+        # one huge cluster + many tiny ones -> tiny per-cluster leverage
+        cl = np.concatenate([np.zeros(5000, dtype=int), 1 + np.arange(200) % 40])
+        n = cl.size
+        X = np.column_stack([np.ones(n), rng.normal(size=(n, 3))])
+        y = X @ rng.normal(size=4) + rng.normal(size=n)
+        resid = y - X @ np.linalg.lstsq(X, y, rcond=None)[0]
+        bread = X.T @ X
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            vcov, dof = _compute_cr2_bm(X, resid, cl, bread)
+            vcov_o, dof_o = self._oracle_dense_cr2(X, resid, cl, bread)
+        np.testing.assert_allclose(vcov, vcov_o, rtol=1e-12)
+        fin = ~np.isnan(dof_o)
+        np.testing.assert_allclose(dof[fin], dof_o[fin], rtol=1e-10)
+
+
 class TestCR2BMScoresBasedDOF:
     """Frozen-oracle parity for the scores-based Satterthwaite DOF evaluation
     (algebraic identity; PT2018 §3.1 Satterthwaite DOF):

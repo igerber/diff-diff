@@ -2438,9 +2438,11 @@ class TestMPDClusterHC2BMSharedPrecompute:
     Mechanism guard for the perf dedup: vcov and the per-coefficient +
     post-period-average contrast DOF now come from a single
     `_compute_cr2_bm_vcov_and_dof` call, so the expensive per-cluster
-    adjustment matrices (`_cr2_adjustment_matrix`) are built exactly once per
-    cluster. Before the dedup, solve_ols's vcov path and the separate
-    contrast-DOF call each built them, i.e. `2 * G`.
+    precomputes are built exactly once. Before the dedup, solve_ols's vcov
+    path and the separate contrast-DOF call each built them. (The spy
+    counts shared-core calls rather than `_cr2_adjustment_matrix` calls
+    because the unweighted path no longer materializes dense per-cluster
+    adjustment matrices at all — the low-rank factored `A_g` apply.)
 
     (Absolute SE/DOF values are pinned independently by the R/clubSandwich
     goldens in `test_multi_period_cluster_hc2_bm_avg_att_uses_clubsandwich_dof`
@@ -2473,31 +2475,31 @@ class TestMPDClusterHC2BMSharedPrecompute:
 
     @pytest.mark.parametrize("which", ["balanced", "unbalanced"])
     def test_cr2_precompute_built_once(self, which, monkeypatch):
-        """`_cr2_adjustment_matrix` is called exactly `G` times (one precompute
-        build), not `2 * G`, on the cluster+hc2_bm path."""
+        """`_compute_cr2_bm_vcov_and_dof` (the shared core, whose body builds
+        the per-cluster precomputes exactly once) is entered exactly once on
+        the cluster+hc2_bm path — not once for vcov and again for DOF."""
         import diff_diff.linalg as L
 
         data = self._balanced_panel() if which == "balanced" else self._unbalanced_panel()
-        n_clusters = data["unit"].nunique()
 
-        orig = L._cr2_adjustment_matrix
+        orig = L._compute_cr2_bm_vcov_and_dof
         calls = {"n": 0}
 
         def _counting(*args, **kwargs):
             calls["n"] += 1
             return orig(*args, **kwargs)
 
-        monkeypatch.setattr(L, "_cr2_adjustment_matrix", _counting)
+        monkeypatch.setattr(L, "_compute_cr2_bm_vcov_and_dof", _counting)
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             res = MultiPeriodDiD(vcov_type="hc2_bm", cluster="unit").fit(
                 data, outcome="y", treatment="treated", time="time", unit="unit"
             )
 
-        # One build: exactly one adjustment matrix per cluster (was 2 * G when
+        # One build: the shared core entered exactly once (was twice when
         # solve_ols's vcov and the contrast-DOF call each built the precomputes).
-        assert calls["n"] == n_clusters, (
-            f"Expected {n_clusters} _cr2_adjustment_matrix calls (one CR2 "
+        assert calls["n"] == 1, (
+            f"Expected exactly 1 _compute_cr2_bm_vcov_and_dof call (one CR2 "
             f"precompute build), got {calls['n']} — the precompute is being "
             "built more than once."
         )

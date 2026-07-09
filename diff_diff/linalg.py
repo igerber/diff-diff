@@ -1917,8 +1917,10 @@ def _compute_cr2_bm_vcov_and_dof(
     Both :func:`_compute_cr2_bm` (per-coefficient vcov + DOF) and
     :func:`_compute_cr2_bm_contrast_dof` (DOF-only for arbitrary contrasts) are
     thin wrappers over this function, so the expensive precomputes
-    (``bread_inv``, ``S_W``, ``MUWTWUM``, and the per-cluster ``A_g``
-    eigendecompositions) are defined in exactly one place.
+    (``bread_inv``; the per-cluster low-rank ``A_g`` factors on the
+    unweighted path; ``S_W``, ``MUWTWUM``, and the per-cluster dense ``A_g``
+    eigendecompositions on the weighted path) are defined in exactly one
+    place.
     Consolidating the two formerly-duplicated precompute blocks lets a caller
     that needs both vcov and contrast DOF (e.g. :class:`MultiPeriodDiD` under
     ``cluster + hc2_bm``) build them once instead of twice.
@@ -2023,8 +2025,64 @@ def _compute_cr2_bm_vcov_and_dof(
     # Per-cluster indices
     cluster_idx = {g: np.where(cluster_ids_arr == g)[0] for g in unique_clusters}
 
+    vcov: Optional[np.ndarray]
+    if weights is None:
+        # LOW-RANK FACTORED A_g (2026-07, evaluation change — algebraically
+        # identical, parity ~1e-15): unweighted G_g = I - H_gg with
+        # H_gg = X_g M_U X_g' of rank <= k, so with U_g = X_g M_U^{1/2} and
+        # U_g' U_g = Q diag(lam) Q', the adjustment operator is
+        #
+        #   A_g = (I - U_g U_g')^{-1/2}
+        #       = I + (U_g Q) diag(gamma) (U_g Q)',
+        #   gamma_i = ((1 - lam_i)^{-1/2} - 1) / lam_i          (regular)
+        #   gamma_i = -1 / lam_i                                 (1 - lam_i <= tol:
+        #                                                        Moore-Penrose zeroing,
+        #                                                        e.g. absorbed cluster FE)
+        #
+        # matching `_cr2_adjustment_matrix`'s pseudoinverse convention (its
+        # tol=1e-10 acts on G_g eigenvalues, which on span(U_g) are exactly
+        # `1 - lam_i`; the orthogonal complement carries eigenvalue 1 and is
+        # untouched by construction). Consumers only ever need A_g applied to
+        # skinny matrices (the residual vector for the meat; X_g bread_inv
+        # for the DOF omegas), so the dense (n_g, n_g) A_g — previously an
+        # O(n_g^3) eigh per cluster, ~85% of CR2-BM runtime at n=100k — is
+        # never materialized: everything is O(n_g k^2) per cluster. gamma is
+        # evaluated via expm1/log1p, stable as lam -> 0 (limit 1/2).
+        # (The unweighted S_W collapse also applies: S_W = X'X = bread_matrix
+        # and MUWTWUM = M_U, so the bias-term build is skipped entirely.)
+        wM, VM = np.linalg.eigh(0.5 * (M_U + M_U.T))
+        M_U_half = (VM * np.sqrt(np.maximum(wM, 0.0))) @ VM.T
+        cluster_scores = np.zeros((G, k)) if residuals is not None else None
+        A_g_Xbi: Dict[Any, np.ndarray] = {}
+        for gi, g in enumerate(unique_clusters):
+            idx_g = cluster_idx[g]
+            X_g = X[idx_g]
+            U_g = X_g @ M_U_half
+            lam, Q_g = np.linalg.eigh(U_g.T @ U_g)
+            lam = np.maximum(lam, 0.0)
+            s_vals = 1.0 - lam
+            gamma = np.zeros(k)
+            regular = (lam > 0) & (s_vals > 1e-10)
+            gamma[regular] = np.expm1(-0.5 * np.log1p(-lam[regular])) / lam[regular]
+            pseudo = (lam > 0) & (s_vals <= 1e-10)
+            gamma[pseudo] = -1.0 / lam[pseudo]
+            UQ = U_g @ Q_g
+            if residuals is not None:
+                u_g = residuals[idx_g]
+                # s_g = X_g' A_g u_g = X_g'u_g + (X_g'UQ) diag(gamma) (UQ'u_g)
+                cluster_scores[gi] = X_g.T @ u_g + (X_g.T @ UQ) @ (gamma * (UQ.T @ u_g))
+            B_g = X_g @ bread_inv
+            A_g_Xbi[g] = B_g + UQ @ (gamma[:, np.newaxis] * (UQ.T @ B_g))
+        if residuals is not None:
+            meat = cluster_scores.T @ cluster_scores
+            vcov = M_U @ meat @ M_U
+        else:
+            vcov = None
+        dof_vec = _cr2_bm_dof_inner(X, A_g_Xbi, cluster_idx, M_U, contrasts)
+        return vcov, dof_vec
+
+    # --- WEIGHTED PATH (clubSandwich WLS-CR2; dense per-cluster A_g) ---
     # S_W = sum_g X_g' diag(W_norm_g²) X_g (used for both vcov and DOF).
-    # For unweighted (W_norm=1): S_W = X'X = bread_matrix.
     S_W = np.zeros((k, k))
     for g in unique_clusters:
         idx_g = cluster_idx[g]
@@ -2032,14 +2090,12 @@ def _compute_cr2_bm_vcov_and_dof(
         S_W += X_g.T @ (X_g * (W_norm[idx_g] ** 2)[:, np.newaxis])
     MUWTWUM = M_U @ S_W @ M_U
 
-    # Per-cluster adjustment matrices A_g via G_g (which collapses to
-    # `I - H_gg` in the unweighted special case).
+    # Per-cluster adjustment matrices A_g via G_g.
     A_g_matrices: Dict[Any, np.ndarray] = {}
     for g in unique_clusters:
         idx_g = cluster_idx[g]
         X_g = X[idx_g]
-        # Asymmetric weighted hat block. For unweighted (W_norm=1): H_gg is the
-        # standard symmetric `X_g @ M_U @ X_g.T`.
+        # Asymmetric weighted hat block.
         H_gg = (X_g @ M_U @ X_g.T) * W_norm[idx_g][np.newaxis, :]
         I_g = np.eye(len(idx_g))
         bias_term = X_g @ MUWTWUM @ X_g.T
@@ -2049,7 +2105,6 @@ def _compute_cr2_bm_vcov_and_dof(
     # --- VCOV (meat) --- only when residuals are supplied (DOF-only callers
     # pass residuals=None and skip this).
     # Per-cluster score: s_g = X_g' diag(W_norm_g) A_g u_g.
-    vcov: Optional[np.ndarray]
     if residuals is not None:
         cluster_scores = np.zeros((G, k))
         for gi, g in enumerate(unique_clusters):
@@ -2063,24 +2118,18 @@ def _compute_cr2_bm_vcov_and_dof(
     else:
         vcov = None
 
-    # --- Per-contrast Bell-McCaffrey cluster DOF ---
-    # The inner helper branches on `weights`: unweighted uses the simple
-    # `(tr B)² / tr(B²)` form (algebraically identical to the prior
-    # pair-loop evaluation; oracle parity within floating-point tolerance);
-    # weighted uses the full clubSandwich P_array construction.
-    if weights is None:
-        dof_vec = _cr2_bm_dof_inner(X, A_g_matrices, cluster_idx, M_U, contrasts)
-    else:
-        dof_vec = _cr2_bm_dof_inner_weighted(
-            X,
-            A_g_matrices,
-            cluster_idx,
-            M_U,
-            MUWTWUM,
-            W_norm,
-            contrasts,
-            w_scale=w_scale,
-        )
+    # --- Per-contrast Bell-McCaffrey cluster DOF (weighted: the full
+    # clubSandwich P_array construction) ---
+    dof_vec = _cr2_bm_dof_inner_weighted(
+        X,
+        A_g_matrices,
+        cluster_idx,
+        M_U,
+        MUWTWUM,
+        W_norm,
+        contrasts,
+        w_scale=w_scale,
+    )
 
     return vcov, dof_vec
 
@@ -2168,7 +2217,7 @@ _CR2_BM_CONTRAST_CHUNK_BYTES = 64 * 1024 * 1024
 
 def _cr2_bm_dof_inner(
     X: np.ndarray,
-    A_g_matrices: Dict[Any, np.ndarray],
+    A_g_Xbi: Dict[Any, np.ndarray],
     cluster_idx: Dict[Any, np.ndarray],
     bread_inv: np.ndarray,
     contrasts: np.ndarray,
@@ -2176,8 +2225,10 @@ def _cr2_bm_dof_inner(
     """Inner DOF loop, parameterized by an arbitrary contrast matrix.
 
     Computes the CR2 Bell-McCaffrey Satterthwaite DOF for each column of
-    ``contrasts`` (shape ``(k, m)``), using the per-cluster adjustment
-    matrices ``A_g_matrices``, cluster index map ``cluster_idx``, and
+    ``contrasts`` (shape ``(k, m)``), using the per-cluster precomputed
+    ``A_g_Xbi[g] = A_g @ X_g @ bread_inv`` blocks (built by the shared core
+    via the low-rank factored ``A_g`` apply — the dense ``A_g`` is never
+    materialized), cluster index map ``cluster_idx``, and
     ``bread_inv``. The per-coefficient case is recovered with
     ``contrasts=np.eye(k)``; compound contrasts (e.g., a
     post-period-average ATT) are handled by the same algebra without
@@ -2231,13 +2282,10 @@ def _cr2_bm_dof_inner(
     m = contrasts.shape[1]
     unique_clusters = list(cluster_idx.keys())
     n_g_clusters = len(unique_clusters)
-    # Precompute once: q-matrix (n, m) and A_g_Xbi (n_g, k) per cluster.
-    # For unit-contrast inputs (contrasts=I_k), this matches the prior
-    # inline implementation exactly: q[:, j] == X_bi[:, j] == X @ bread_inv @ e_j.
+    # Precompute once: X_bi (the A_g_Xbi blocks arrive precomputed from the
+    # shared core's factored A_g apply). For unit-contrast inputs
+    # (contrasts=I_k): q[:, j] == X_bi[:, j] == X @ bread_inv @ e_j.
     X_bi = X @ bread_inv  # (n, k)
-    A_g_Xbi = {
-        g: A_g_matrices[g] @ X[cluster_idx[g]] @ bread_inv for g in unique_clusters
-    }  # each (n_g, k)
     # The q vectors (X_bi @ contrasts) and per-cluster omegas
     # (A_g_Xbi[g] @ contrasts) are computed per contrast chunk below, never
     # at full width m, so no O(n*m) array is ever held.

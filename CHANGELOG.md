@@ -619,6 +619,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   consumer (ring membership, `S_it`, the far-away check, the event-study `d_bar` trigger)
   compares against thresholds at or below that cutoff. Helper- and fit-level equality
   tests pin the sparse arm against the dense path (atol 1e-12 end-to-end).
+- **CR2 Bell-McCaffrey unweighted adjustment matrices: low-rank factored evaluation.**
+  After the scores-based DOF change below, ~85% of remaining CR2-BM runtime was the dense
+  per-cluster eigendecomposition `A_g = (I − H_gg)^{−1/2}` (`O(n_g³)` per cluster). In the
+  unweighted case `H_gg = X_g M_U X_g'` has rank ≤ k, so with `U_g = X_g M_U^{1/2}` and
+  `U_g'U_g = Q diag(λ) Q'`, the adjustment operator is exactly
+  `A_g = I + (U_g Q) diag(γ) (U_g Q)'` with `γ_i = ((1−λ_i)^{−1/2} − 1)/λ_i` (Moore-Penrose
+  zeroing `γ_i = −1/λ_i` when `1−λ_i ≤ 1e-10`, matching the dense path's pseudoinverse
+  convention for absorbed cluster FEs) — a k×k eigenproblem per cluster. Consumers only
+  ever apply `A_g` to skinny matrices (the residual vector for the meat; `X_g bread_inv`
+  for the DOF omegas), so the dense `(n_g, n_g)` `A_g` is never materialized: `O(n_g k²)`
+  per cluster time and `O(n k)` total memory, with `γ` evaluated via `expm1/log1p`
+  (stable as λ→0). End-to-end `_compute_cr2_bm`: 18→2.3 ms at n=5k/G=50/k=10;
+  119→5.3 ms at n=20k/G=100; 597→33 ms at n=100k/G=500; 4111→38 ms (~108x) at
+  n=100k/G=100/k=40. Algebraically identical — vcov/DOF match a frozen dense-eigh oracle
+  at rtol 1e-12/1e-10 with identical NaN-guard patterns (balanced, unbalanced, k=40,
+  leverage-1 absorbed-cluster-FE, singleton clusters, near-zero-leverage γ-stability;
+  `tests/test_linalg.py::TestCR2BMLowRankAdjustment`). The weighted (clubSandwich
+  WLS-CR2) path keeps the dense construction — its `G_g` carries the `S_W` bias term and
+  is not a rank-k identity perturbation. This obsoletes the planned Rust CR2-BM port
+  (the NumPy path is now BLAS-bound; see the re-scoped TODO row).
 - **CR2 Bell-McCaffrey Satterthwaite DOF: scores-based evaluation (algebraic identity; PT2018 scalar Satterthwaite t-test DOF — the one-row HTZ case, §3.1).**
   The unweighted per-contrast DOF previously materialized the dense `n×n` residual-maker
   `M = I − X(X'X)⁻¹X'` and contracted it over all cluster pairs (`O(n²)` time per
