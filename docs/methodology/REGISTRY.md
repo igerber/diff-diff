@@ -366,7 +366,9 @@ This matches the behavior of R's `fixest::feols()` with absorbed FE.
   p-values are close; at large |t| the tails diverge by orders of magnitude (measured on the
   live-R benchmark: |t|≈22 → Python `p≈1e-48` at t(148) vs fixest `p≈4e-27` at t(49) — both
   numerically zero, which is what `tests/test_methodology_twfe.py::test_pvalue_matches_r_twfe`
-  pins). The SE itself carries the separate ~0.25% non-nested-FE ssc band above. Whether to
+  pins; the convention itself is locked at a distinguishable moderate |t|~1.8 by
+  `tests/test_methodology_twfe.py::test_moderate_t_pins_residual_df_convention`, where the
+  t(148) and t(49) tails differ by ~5%). The SE itself carries the separate ~0.25% non-nested-FE ssc band above. Whether to
   adopt the cluster-df convention library-wide is tracked as an Actionable TODO row (it is the
   common applied recommendation, but changing it moves every clustered p-value/CI). The full-dummy (`fixed_effects=`) idiom carries
   `df_adjustment == 0` and is unchanged (it already matched fixest).

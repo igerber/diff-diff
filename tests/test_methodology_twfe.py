@@ -508,6 +508,71 @@ class TestRBenchmarkTWFE:
             err_msg=f"P-value mismatch: Python={py_results.p_value:.6f}, R={r_twfe_results['p_value']:.6f}",
         )
 
+    def test_moderate_t_pins_residual_df_convention(self):
+        """Locks WHICH df convention clustered-CR1 inference follows, in a
+        regime where the conventions are distinguishable.
+
+        The R-benchmark tests above sit at |t|~22 where both the residual-df
+        and cluster-df (G-1) p-values are numerically zero, so they cannot
+        tell the conventions apart. This fixture is tuned to a moderate
+        |t|~1.8, where t(residual df=148) and t(G-1=49) p-values differ by
+        ~5% relative: the estimator's p-value must match the residual-df
+        tail exactly AND differ measurably from the cluster-df tail — the
+        documented clustered-CR1 inference-df deviation (REGISTRY
+        §TwoWayFixedEffects). If the default convention ever flips to
+        cluster df (the planned opt-in knob's v4 default), this test fails
+        loudly and must be updated alongside the REGISTRY note."""
+        from scipy import stats as _stats
+
+        rng = np.random.default_rng(42)
+        n_units, n_periods = 50, 4
+        rows = []
+        for i in range(n_units):
+            treated_unit = i < 25
+            for t in range(n_periods):
+                post = 1 if t >= 2 else 0
+                y = (
+                    1.0
+                    + 0.3 * i / n_units
+                    + 0.2 * t
+                    + (0.25 if (treated_unit and post) else 0.0)
+                    + rng.normal(0, 1.0)
+                )
+                rows.append(
+                    {
+                        "unit": i,
+                        "post": post,
+                        "treated": int(treated_unit and post),
+                        "outcome": y,
+                    }
+                )
+        data = pd.DataFrame(rows)
+
+        res = self._run_python_twfe(data)
+
+        # Guard the regime: a data-gen drift that pushes |t| into the tails
+        # (where the two conventions converge to 0) would silently defang
+        # the convention assertions below.
+        assert 1.5 < abs(res.t_stat) < 2.5, f"|t| left the moderate regime: {res.t_stat}"
+
+        df_residual = len(data) - (n_units + 2)  # intercept + treated + post + (n_units-1) dummies
+        p_residual = 2 * _stats.t.sf(abs(res.t_stat), df_residual)
+        p_cluster = 2 * _stats.t.sf(abs(res.t_stat), n_units - 1)
+
+        np.testing.assert_allclose(
+            res.p_value,
+            p_residual,
+            rtol=1e-10,
+            err_msg="clustered-CR1 p-value no longer follows the residual-df convention",
+        )
+        rel_gap = abs(p_cluster - p_residual) / p_residual
+        assert (
+            rel_gap > 0.03
+        ), f"fixture no longer distinguishes the df conventions (rel gap {rel_gap:.4f})"
+        assert (
+            abs(res.p_value - p_cluster) / p_cluster > 0.03
+        ), "p-value matches the cluster-df convention — the documented deviation flipped"
+
     def test_ci_matches_r_twfe(self, r_twfe_results, r_benchmark_panel_data):
         """CI bounds within the documented-deviation band (measured ~1.9e-3).
 
