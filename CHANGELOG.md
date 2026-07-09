@@ -76,6 +76,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `TestHonestFLCIParityR`); the M=0 result and all existing behaviour are unchanged.
 
 ### Testing
+- **TWFE live-R fixest parity bands tightened to measured precision (SE-audit C7/C8
+  re-derivation).** The `TestRBenchmarkTWFE` assertions dated from before the D4
+  within-transform rescale: ATT was asserted at 0.1% but measures ~4e-16 relative
+  (now rtol=1e-12); the cluster-robust SE and CI bands drop 0.01 → 0.005, pinning the
+  documented ~0.25% absorbed-FE fixest-CR1 DOF-convention deviation instead of 4x
+  headroom above it; the p-value assert (atol=0.01, vacuous at |t|≈22 where Python's
+  t(residual df=148) tail is ~1e-48 vs fixest's t(cluster df G−1=49) tail ~4e-27 — the
+  clustered-CR1 inference-df convention deviation, now documented in a REGISTRY
+  Note (deviation from R) with a new Actionable TODO row on whether to adopt the
+  cluster-df convention) becomes a both-are-zero pin at atol=1e-12. All measured against live R
+  (fixest 0.14.2); docstrings record the measured gaps and deviation attributions.
 - **Callaway-Sant'Anna golden tolerances tightened to machine precision (SE-audit C6
   closure).** The no-covariate DR golden asserted ATT only, within 0.02, and never
   asserted the SE; measured agreement with R `did` is ~6e-11 ATT / ~2e-11 relative SE

@@ -357,7 +357,18 @@ This matches the behavior of R's `fixest::feols()` with absorbed FE.
   pre-existing deviation left out of this D4 (non-clustered) scope and tracked in `TODO.md`. This
   is distinct from the SunAbraham / Wooldridge `hc1` deviations below (whose event-study /
   aggregation paths auto-cluster or use a different k-convention). `hc2`/`hc2_bm` use leverage /
-  Satterthwaite DOF and are unaffected. The full-dummy (`fixed_effects=`) idiom carries
+  Satterthwaite DOF and are unaffected.
+- **Note (deviation from R — clustered CR1 inference df):** under unit clustering, Python's
+  CR1 t-statistics/p-values/CIs use the **residual df** from the fitted design
+  (`n − K_full`, e.g. 148 on the live-R benchmark panel: n=200, 50 unit FE + time + treatment),
+  while `fixest::feols(cluster=...)` uses the **cluster df** `G − 1` (49 on the same panel;
+  Stata's `min(G−1)` convention). Both sides use t-distributions. At moderate |t| the CIs and
+  p-values are close; at large |t| the tails diverge by orders of magnitude (measured on the
+  live-R benchmark: |t|≈22 → Python `p≈1e-48` at t(148) vs fixest `p≈4e-27` at t(49) — both
+  numerically zero, which is what `tests/test_methodology_twfe.py::test_pvalue_matches_r_twfe`
+  pins). The SE itself carries the separate ~0.25% non-nested-FE ssc band above. Whether to
+  adopt the cluster-df convention library-wide is tracked as an Actionable TODO row (it is the
+  common applied recommendation, but changing it moves every clustered p-value/CI). The full-dummy (`fixed_effects=`) idiom carries
   `df_adjustment == 0` and is unchanged (it already matched fixest).
 
 *Edge cases:*

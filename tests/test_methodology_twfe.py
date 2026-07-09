@@ -451,7 +451,12 @@ class TestRBenchmarkTWFE:
         return results
 
     def test_att_matches_r_twfe(self, r_twfe_results, r_benchmark_panel_data):
-        """ATT within rtol=1e-3 (0.1%) of R's fixest."""
+        """ATT matches R's fixest at machine precision.
+
+        Measured agreement is ~4e-16 relative (the point estimate is
+        deterministic algebra on both sides); rtol=1e-12 is platform
+        headroom. The prior 1e-3 band predated the D4 within-transform
+        rescale work."""
         data, _ = r_benchmark_panel_data
 
         py_results = self._run_python_twfe(data)
@@ -459,12 +464,18 @@ class TestRBenchmarkTWFE:
         np.testing.assert_allclose(
             py_results.att,
             r_twfe_results["att"],
-            rtol=1e-3,
+            rtol=1e-12,
             err_msg=f"ATT mismatch: Python={py_results.att:.6f}, R={r_twfe_results['att']:.6f}",
         )
 
     def test_se_matches_r_twfe(self, r_twfe_results, r_benchmark_panel_data):
-        """Cluster-robust SE within rtol=0.01 (1%) of R's fixest."""
+        """Cluster-robust SE within the documented fixest-CR1 band.
+
+        Measured gap is ~2.5e-3 relative — the documented ~0.25%
+        absorbed-FE CR1 DOF-convention deviation (fixest counts non-nested
+        FE in the finite-sample denominator; see SE-audit G2 + the
+        band-pin in tests/test_fixest_did_twfe_parity.py). rtol=0.005
+        pins that we never regress BEYOND the known band."""
         data, _ = r_benchmark_panel_data
 
         py_results = self._run_python_twfe(data)
@@ -472,12 +483,20 @@ class TestRBenchmarkTWFE:
         np.testing.assert_allclose(
             py_results.se,
             r_twfe_results["se"],
-            rtol=0.01,
+            rtol=0.005,
             err_msg=f"SE mismatch: Python={py_results.se:.6f}, R={r_twfe_results['se']:.6f}",
         )
 
     def test_pvalue_matches_r_twfe(self, r_twfe_results, r_benchmark_panel_data):
-        """P-value within atol=0.01 of R's fixest."""
+        """Both p-values are numerically zero at this effect size.
+
+        Python p ~1e-48 (t-dist at residual df=148) vs R ~4e-27 (fixest's
+        cluster df G-1=49): both sides use t-distributions, but the df
+        conventions differ — the documented clustered-CR1 inference-df
+        deviation (REGISTRY §TwoWayFixedEffects) — so at |t|~22 the tails
+        diverge by ~21 orders and a relative comparison is meaningless.
+        The assert pins that both are numerically zero (atol=1e-12,
+        ~15 orders of headroom above the larger tail)."""
         data, _ = r_benchmark_panel_data
 
         py_results = self._run_python_twfe(data)
@@ -485,12 +504,19 @@ class TestRBenchmarkTWFE:
         np.testing.assert_allclose(
             py_results.p_value,
             r_twfe_results["p_value"],
-            atol=0.01,
+            atol=1e-12,
             err_msg=f"P-value mismatch: Python={py_results.p_value:.6f}, R={r_twfe_results['p_value']:.6f}",
         )
 
     def test_ci_matches_r_twfe(self, r_twfe_results, r_benchmark_panel_data):
-        """CI bounds within rtol=0.01 (1%) of R's fixest."""
+        """CI bounds within the documented-deviation band (measured ~1.9e-3).
+
+        The bounds inherit BOTH documented deviations through
+        att ± crit*se: the ~0.25% CR1 SE finite-sample-scale band AND the
+        clustered inference-df convention (Python t(residual df=148)
+        critical value vs fixest t(G−1=49); REGISTRY
+        §TwoWayFixedEffects). The ATT itself matches at machine
+        precision."""
         data, _ = r_benchmark_panel_data
 
         py_results = self._run_python_twfe(data)
@@ -498,20 +524,21 @@ class TestRBenchmarkTWFE:
         np.testing.assert_allclose(
             py_results.conf_int[0],
             r_twfe_results["ci_lower"],
-            rtol=0.01,
+            rtol=0.005,
             err_msg=f"CI lower mismatch: Python={py_results.conf_int[0]:.6f}, R={r_twfe_results['ci_lower']:.6f}",
         )
         np.testing.assert_allclose(
             py_results.conf_int[1],
             r_twfe_results["ci_upper"],
-            rtol=0.01,
+            rtol=0.005,
             err_msg=f"CI upper mismatch: Python={py_results.conf_int[1]:.6f}, R={r_twfe_results['ci_upper']:.6f}",
         )
 
     def test_att_matches_r_with_covariate(
         self, r_twfe_results_with_covariate, r_benchmark_panel_data_with_covariate
     ):
-        """ATT with demeaned covariate within rtol=1e-3 of R."""
+        """ATT with demeaned covariate matches R at machine precision
+        (measured ~1e-15 relative; rtol=1e-12 is platform headroom)."""
         data, _ = r_benchmark_panel_data_with_covariate
 
         py_results = self._run_python_twfe(data, covariates=["x1"])
@@ -519,14 +546,15 @@ class TestRBenchmarkTWFE:
         np.testing.assert_allclose(
             py_results.att,
             r_twfe_results_with_covariate["att"],
-            rtol=1e-3,
+            rtol=1e-12,
             err_msg=f"ATT w/ cov mismatch: Python={py_results.att:.6f}, R={r_twfe_results_with_covariate['att']:.6f}",
         )
 
     def test_se_matches_r_with_covariate(
         self, r_twfe_results_with_covariate, r_benchmark_panel_data_with_covariate
     ):
-        """SE with covariate within rtol=0.01 of R."""
+        """SE with covariate within the documented CR1 band (measured
+        ~2.5e-3; see test_se_matches_r_twfe)."""
         data, _ = r_benchmark_panel_data_with_covariate
 
         py_results = self._run_python_twfe(data, covariates=["x1"])
@@ -534,7 +562,7 @@ class TestRBenchmarkTWFE:
         np.testing.assert_allclose(
             py_results.se,
             r_twfe_results_with_covariate["se"],
-            rtol=0.01,
+            rtol=0.005,
             err_msg=f"SE w/ cov mismatch: Python={py_results.se:.6f}, R={r_twfe_results_with_covariate['se']:.6f}",
         )
 
