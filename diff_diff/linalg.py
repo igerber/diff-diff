@@ -2110,8 +2110,10 @@ def _compute_cr2_bm(
 
     Unweighted special case (``weights=None``): ``W_norm=1``, ``S_W=X'X``,
     ``M_U @ S_W @ M_U = M_U``, so ``G_g`` collapses to ``I - H_gg`` (the
-    symmetric form). Bit-equal to the prior unweighted behavior at machine
-    precision (atol=1e-14 regression-safety).
+    symmetric form). The vcov is bit-equal to the prior unweighted behavior
+    at machine precision (atol=1e-14 regression-safety); the per-contrast
+    DOF uses the scores-based evaluation (algebraically identical, parity
+    within floating-point tolerance — see `_cr2_bm_dof_inner`).
 
     Meat = ``sum_g s_g s_g'``; VCOV = ``M_U meat M_U`` (where ``M_U`` is the
     normalized bread inverse; ``w_scale`` cancels in the final vcov).
@@ -2201,13 +2203,16 @@ def _cr2_bm_dof_inner(
       B = Omega' M Omega = diag(||omega_g||^2) - P' bread_inv P,
       P = X' Omega  (k, G; column g is X_g' omega_g)
 
-    so ``trace_B2 = ||B||_F^2`` costs ``O(n k + G^2 k)`` per contrast with
-    memory bounded by ``_CR2_BM_CONTRAST_CHUNK_BYTES`` (the per-cluster
-    product buffers are contrast-chunked AND the ``(G, G)`` pairwise matrix
-    is row-chunked — its Frobenius sum and max are row-separable — so
-    neither ``O(G k m)`` nor ``O(G^2)`` is ever held at once; chunk-count
-    invariant to ~1 ULP, BLAS kernels may accumulate a GEMM column
-    differently at different slice widths) — the previous form
+    so ``trace_B2 = ||B||_F^2`` costs ``O(n k + G^2 k)`` per contrast. Peak
+    memory = two ``O(n k)`` score precomputes (``X_bi`` and the per-cluster
+    ``A_g_Xbi`` blocks — input-scale, same order as ``X`` itself) plus
+    working buffers bounded by ``_CR2_BM_CONTRAST_CHUNK_BYTES``: the q
+    vectors, per-cluster omegas, and product buffers are contrast-chunked
+    and the ``(G, G)`` pairwise matrix is row-chunked (its Frobenius sum
+    and max are row-separable), so none of ``O(n m)``, ``O(G k m)``, or
+    ``O(G^2)`` is ever held at once (chunk-count invariant to ~1 ULP, BLAS
+    kernels may accumulate a GEMM column differently at different slice
+    widths) — the previous form
     materialized the dense ``n x n``
     ``M`` and looped cluster pairs at ``O(n^2)`` per contrast, the exact
     large-``n`` blowup the TODO row tracked. The two evaluations are
@@ -2227,12 +2232,12 @@ def _cr2_bm_dof_inner(
     # For unit-contrast inputs (contrasts=I_k), this matches the prior
     # inline implementation exactly: q[:, j] == X_bi[:, j] == X @ bread_inv @ e_j.
     X_bi = X @ bread_inv  # (n, k)
-    Q = X_bi @ contrasts  # (n, m) — q vectors as columns
     A_g_Xbi = {
         g: A_g_matrices[g] @ X[cluster_idx[g]] @ bread_inv for g in unique_clusters
     }  # each (n_g, k)
-    # Omega per cluster per contrast: (n_g, m) = A_g_Xbi[g] @ contrasts
-    omega_all = {g: A_g_Xbi[g] @ contrasts for g in unique_clusters}
+    # The q vectors (X_bi @ contrasts) and per-cluster omegas
+    # (A_g_Xbi[g] @ contrasts) are computed per contrast chunk below, never
+    # at full width m, so no O(n*m) array is ever held.
 
     # Scores-based precomputes (see docstring): per cluster g,
     # normsq[g, j] = ||omega_g^{(j)}||^2 and P_all[g, :, j] = X_g' omega_g^{(j)}.
@@ -2250,10 +2255,12 @@ def _cr2_bm_dof_inner(
     for c0 in range(0, m, chunk):
         c1 = min(c0 + chunk, m)
         width = c1 - c0
+        contrasts_c = contrasts[:, c0:c1]
+        Q_chunk = X_bi @ contrasts_c  # (n, width) — q vectors as columns
         normsq = np.zeros((n_g_clusters, width))
         P_all = np.zeros((n_g_clusters, k_X, width))
         for gi, g in enumerate(unique_clusters):
-            om = omega_all[g][:, c0:c1]  # (n_g, width)
+            om = A_g_Xbi[g] @ contrasts_c  # (n_g, width)
             normsq[gi] = np.einsum("ij,ij->j", om, om)
             P_all[gi] = X[cluster_idx[g]].T @ om
         # Row-chunk the (G, G) pairwise matrix B_j under the same byte cap:
@@ -2264,7 +2271,7 @@ def _cr2_bm_dof_inner(
         row_chunk = max(1, int(_CR2_BM_CONTRAST_CHUNK_BYTES // max(n_g_clusters * 8, 1)))
         for jj in range(width):
             j = c0 + jj
-            q = Q[:, j]
+            q = Q_chunk[:, jj]
             trace_B = float(np.sum(q * q))
             P_j = P_all[:, :, jj]  # (G, k)
             PB = P_j @ bread_inv  # (G, k)
@@ -2620,7 +2627,9 @@ def _compute_bm_dof_from_contrasts(
     matches the numerator. Allocates an ``(n, n)`` temporary for ``M`` so the
     cost is ``O(n^2 k)`` for the hat build plus ``O(n^2 m)`` for the per-
     contrast sums. Practical for ``n < 10_000``; larger designs should switch
-    to a scores-based formulation (tracked in TODO.md).
+    to a scores-based formulation like the clustered CR2-BM path
+    (`_cr2_bm_dof_inner`) now uses — tracked as its own TODO.md row (the
+    original CR2-BM row this note pointed at is resolved).
 
     **Weighted** (``weights is not None``): dispatches to the clubSandwich
     singleton-cluster CR2 reduction (each observation is its own cluster)

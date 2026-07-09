@@ -606,12 +606,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `M = I − X(X'X)⁻¹X'` and contracted it over all cluster pairs (`O(n²)` time per
   contrast, `O(n²)` memory — 3.2 GB at n=20k). The pairwise matrix now collapses to
   `B = diag(‖ω_g‖²) − P'M_U P` with `P = X'Ω` (disjoint cluster supports), costing
-  `O(nk + G²k)` per contrast with memory bounded by a 64 MB cap — the per-cluster
+  `O(nk + G²k)` per contrast; peak memory = two `O(nk)` input-scale score precomputes
+  plus working buffers bounded by a 64 MB cap — q vectors, per-cluster omegas, and
   product buffers are contrast-chunked and the `(G, G)` pairwise matrix is row-chunked
-  (its Frobenius sum and max are row-separable), so neither the `n×n` residual-maker,
-  `O(G·k·m)` product buffers, nor `O(G²)` pairwise entries are ever held at once
-  (chunk-count invariant to ~1 ULP — BLAS kernels can accumulate a GEMM column
-  differently at different slice widths): ~32x at n=5k/G=50 (0.57s→0.018s);
+  (its Frobenius sum and max are row-separable), so none of the `n×n` residual-maker,
+  `O(n·m)` score arrays, `O(G·k·m)` product buffers, or `O(G²)` pairwise entries is
+  ever held at once (chunk-count invariant to ~1 ULP — BLAS kernels can accumulate a
+  GEMM column differently at different slice widths): ~32x at n=5k/G=50 (0.57s→0.018s);
   n=20k/G=100 completes in 0.12s where the old path would allocate 3.2 GB. Algebraically
   identical — agreement with a frozen pair-loop oracle at rtol 1e-10 (balanced,
   unbalanced, and compound-contrast designs); both NaN-reliability guards (noise floor,
