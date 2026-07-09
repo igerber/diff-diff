@@ -2808,11 +2808,15 @@ class TestCR2BMScoresBasedDOF:
         oracle = self._oracle_pairloop_dof(X, cl, bread, np.eye(k))
         np.testing.assert_allclose(dof, oracle, rtol=1e-10)
 
-    def test_contrast_chunking_bit_identical(self, monkeypatch):
+    def test_contrast_chunking_invariant(self, monkeypatch):
         """CI-review P2: the per-cluster product buffer is contrast-chunked
         (bounded by _CR2_BM_CONTRAST_CHUNK_BYTES) instead of O(G*k*m).
-        Forcing one-contrast chunks must reproduce the single-chunk DOF
-        bit-for-bit — each contrast's B is computed independently."""
+        Forcing one-contrast chunks reproduces the single-chunk DOF to
+        ~1 ULP: each contrast's B is computed independently, but the
+        per-cluster GEMM runs over a width-c slice and BLAS kernels may
+        accumulate a column differently at width 1 vs width m (observed
+        exact on Accelerate, 1-ULP drift on OpenBLAS/arm + Windows CI —
+        the documented chunking-reassociation caveat)."""
         import diff_diff.linalg as la
 
         rng = np.random.default_rng(23)
@@ -2826,4 +2830,4 @@ class TestCR2BMScoresBasedDOF:
         _, dof_one = la._compute_cr2_bm(X, resid, cl, bread)
         monkeypatch.setattr(la, "_CR2_BM_CONTRAST_CHUNK_BYTES", G * k * 8)  # 1 contrast/chunk
         _, dof_many = la._compute_cr2_bm(X, resid, cl, bread)
-        np.testing.assert_array_equal(dof_many, dof_one)
+        np.testing.assert_allclose(dof_many, dof_one, rtol=1e-13)

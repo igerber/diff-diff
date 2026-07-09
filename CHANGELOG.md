@@ -607,7 +607,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   contrast, `O(n²)` memory — 3.2 GB at n=20k). The pairwise matrix now collapses to
   `B = diag(‖ω_g‖²) − P'M_U P` with `P = X'Ω` (disjoint cluster supports), costing
   `O(nk + G²k)` per contrast with no `n×n` allocation (per-cluster product buffers
-  contrast-chunked under a 64 MB cap, bit-identical across chunk counts, so the batched
+  contrast-chunked under a 64 MB cap, chunk-count invariant to ~1 ULP — BLAS kernels
+  can accumulate a GEMM column differently at different slice widths — so the batched
   per-coefficient sweep never allocates `O(G·k²)` at once): ~32x at n=5k/G=50 (0.57s→0.018s);
   n=20k/G=100 completes in 0.12s where the old path would allocate 3.2 GB. Algebraically
   identical — agreement with a frozen pair-loop oracle at rtol 1e-10 (balanced,

@@ -2153,8 +2153,12 @@ def _compute_cr2_bm(
 # (G, k, chunk) per-cluster product buffer so a batched per-coefficient sweep
 # (contrasts=eye(k), i.e. m == k) cannot allocate O(G*k*m) at once on
 # full-dummy / absorbed-FE designs with many clusters and coefficients.
-# Results are chunk-count invariant BIT-FOR-BIT: each contrast's B matrix is
-# computed independently, so chunking never reassociates a contrast's sums.
+# Each contrast's B matrix is computed independently, so chunking never
+# reassociates a contrast's OWN sums — but the per-cluster GEMM
+# `X_g' omega_g[:, c0:c1]` runs over a width-c slice, and BLAS kernels
+# (GEMV vs GEMM, platform-dependent) may accumulate a column differently at
+# different widths: chunk-count invariance holds to ~1 ULP (observed exact
+# on Accelerate, 1-ULP drift on OpenBLAS/arm + Windows), NOT bit-for-bit.
 # Module-level so tests can monkeypatch it to force the multi-chunk path.
 _CR2_BM_CONTRAST_CHUNK_BYTES = 64 * 1024 * 1024
 
@@ -2197,7 +2201,9 @@ def _cr2_bm_dof_inner(
 
     so ``trace_B2 = ||B||_F^2`` costs ``O(n k + G^2 k)`` per contrast with
     ``O(G k)`` memory per contrast (contrast-chunked buffers bounded by
-    ``_CR2_BM_CONTRAST_CHUNK_BYTES``, bit-identical across chunk counts) — the previous form materialized the dense ``n x n``
+    ``_CR2_BM_CONTRAST_CHUNK_BYTES``, chunk-count invariant to ~1 ULP — BLAS
+    kernels may accumulate a GEMM column differently at different slice
+    widths) — the previous form materialized the dense ``n x n``
     ``M`` and looped cluster pairs at ``O(n^2)`` per contrast, the exact
     large-``n`` blowup the TODO row tracked. The two evaluations are
     algebraically identical; floating-point agreement is ~1e-12 relative
@@ -2233,7 +2239,8 @@ def _cr2_bm_dof_inner(
     # Chunk the contrasts so the per-cluster product buffer is (G, k, c) with
     # c bounded by _CR2_BM_CONTRAST_CHUNK_BYTES — a full-m buffer would be
     # O(G*k*m), i.e. O(G*k^2) on the batched per-coefficient sweep. Each
-    # contrast's B is computed independently, so chunking is bit-identical.
+    # contrast's B is computed independently; chunk-count invariance holds
+    # to ~1 ULP (BLAS width-dependent column accumulation), not bit-for-bit.
     chunk = max(1, int(_CR2_BM_CONTRAST_CHUNK_BYTES // max(n_g_clusters * k_X * 8, 1)))
     for c0 in range(0, m, chunk):
         c1 = min(c0 + chunk, m)
