@@ -527,66 +527,6 @@ class TestReplicateVcovTypeWarn:
     point estimates only). Previously DiD silently ignored the kwarg and
     TWFE raised NotImplementedError — the warn-and-remap contract unifies
     the twins."""
-# ---------------------------------------------------------------------------
-# TRUE half-sample BRR (Hadamard-balanced) — per-estimator-family regressions
-# ---------------------------------------------------------------------------
-
-
-def _add_true_brr_replicates(data, unit_col="unit"):
-    """Add TRUE half-sample BRR replicate columns (Hadamard-balanced).
-
-    Pairs consecutive units into 2-PSU pseudo-strata and assigns
-    half-samples from a Sylvester-Hadamard matrix: within each pair the
-    selected PSU gets ``w*2`` and the other ``0`` (Wolter 2007 ch. 3; the
-    R ``survey::brrweights`` full-BRR convention with
-    ``combined_weights=True``). Unlike :func:`_add_brr_replicates`'
-    Fay-like 0.5/1.5 perturbation — under which every unit keeps positive
-    weight — every replicate here is a genuine half-sample: half the
-    paired PSUs carry exactly zero weight, exercising the zero-weight-PSU
-    code paths (FE identification drops, zero-mass cells) through each
-    estimator's replicate refit. An odd trailing unit (if any) is kept at
-    its base weight in every replicate (certainty PSU).
-    """
-    from scipy.linalg import hadamard
-
-    units = sorted(data[unit_col].unique())
-    n_paired = len(units) - (len(units) % 2)
-    pairs = [(units[i], units[i + 1]) for i in range(0, n_paired, 2)]
-    n_strata = len(pairs)
-    # Sylvester-Hadamard column 0 is all +1, which would leave the first
-    # pseudo-stratum permanently unbalanced (the same PSU selected in every
-    # replicate); survey::brrweights skips the constant column, so strata
-    # map to columns 1..n_strata — hence R >= n_strata + 1.
-    n_rep = 4
-    while n_rep < n_strata + 1:
-        n_rep *= 2
-    H = hadamard(n_rep)
-    base = data["weight"].to_numpy(dtype=float)
-    unit_vals = data[unit_col].to_numpy()
-    rep_cols = []
-    for r in range(n_rep):
-        w_r = base.copy()
-        for h, (u1, u2) in enumerate(pairs):
-            selected, dropped = (u1, u2) if H[r, h + 1] == 1 else (u2, u1)
-            w_r[unit_vals == selected] *= 2.0
-            w_r[unit_vals == dropped] = 0.0
-        col = f"tbrr_{r}"
-        data[col] = w_r
-        rep_cols.append(col)
-    return rep_cols
-
-
-class TestTrueBRRHalfSample:
-    """TRUE half-sample BRR per estimator family (TODO row: the smoke tests
-    above use Fay-like 0.5/1.5 perturbations, which never zero a unit;
-    ``test_survey_phase6.py`` covers true BRR only at the vcov-helper level).
-
-    Each test asserts (a) finite positive replicate SE under genuine
-    half-samples — half the paired PSUs at weight 0 per replicate — and
-    (b) the point estimate is IDENTICAL to the same fit
-    without replicate columns: replicate weights drive only the variance,
-    never the point estimate (base-weights invariance contract).
-    """
 
     @staticmethod
     def _sd(rep_cols):
@@ -706,6 +646,73 @@ class TestTrueBRRHalfSample:
                     data, "outcome", "treated", "post", survey_design=self._sd(rep_cols)
                 )
         assert not any("has no effect with replicate-weight" in str(x.message) for x in w)
+
+
+# ---------------------------------------------------------------------------
+# TRUE half-sample BRR (Hadamard-balanced) — per-estimator-family regressions
+# ---------------------------------------------------------------------------
+
+
+def _add_true_brr_replicates(data, unit_col="unit"):
+    """Add TRUE half-sample BRR replicate columns (Hadamard-balanced).
+
+    Pairs consecutive units into 2-PSU pseudo-strata and assigns
+    half-samples from a Sylvester-Hadamard matrix: within each pair the
+    selected PSU gets ``w*2`` and the other ``0`` (Wolter 2007 ch. 3; the
+    R ``survey::brrweights`` full-BRR convention with
+    ``combined_weights=True``). Unlike :func:`_add_brr_replicates`'
+    Fay-like 0.5/1.5 perturbation — under which every unit keeps positive
+    weight — every replicate here is a genuine half-sample: half the
+    paired PSUs carry exactly zero weight, exercising the zero-weight-PSU
+    code paths (FE identification drops, zero-mass cells) through each
+    estimator's replicate refit. An odd trailing unit (if any) is kept at
+    its base weight in every replicate (certainty PSU).
+    """
+    from scipy.linalg import hadamard
+
+    units = sorted(data[unit_col].unique())
+    n_paired = len(units) - (len(units) % 2)
+    pairs = [(units[i], units[i + 1]) for i in range(0, n_paired, 2)]
+    n_strata = len(pairs)
+    # Sylvester-Hadamard column 0 is all +1, which would leave the first
+    # pseudo-stratum permanently unbalanced (the same PSU selected in every
+    # replicate); survey::brrweights skips the constant column, so strata
+    # map to columns 1..n_strata — hence R >= n_strata + 1.
+    n_rep = 4
+    while n_rep < n_strata + 1:
+        n_rep *= 2
+    H = hadamard(n_rep)
+    base = data["weight"].to_numpy(dtype=float)
+    unit_vals = data[unit_col].to_numpy()
+    rep_cols = []
+    for r in range(n_rep):
+        w_r = base.copy()
+        for h, (u1, u2) in enumerate(pairs):
+            selected, dropped = (u1, u2) if H[r, h + 1] == 1 else (u2, u1)
+            w_r[unit_vals == selected] *= 2.0
+            w_r[unit_vals == dropped] = 0.0
+        col = f"tbrr_{r}"
+        data[col] = w_r
+        rep_cols.append(col)
+    return rep_cols
+
+
+class TestTrueBRRHalfSample:
+    """TRUE half-sample BRR per estimator family (TODO row: the smoke tests
+    above use Fay-like 0.5/1.5 perturbations, which never zero a unit;
+    ``test_survey_phase6.py`` covers true BRR only at the vcov-helper level).
+
+    Each test asserts (a) finite positive replicate SE under genuine
+    half-samples — half the paired PSUs at weight 0 per replicate — and
+    (b) the point estimate is IDENTICAL to the same fit
+    without replicate columns: replicate weights drive only the variance,
+    never the point estimate (base-weights invariance contract).
+    """
+
+    @staticmethod
+    def _sd(rep_cols):
+        return SurveyDesign(weights="weight", replicate_weights=rep_cols, replicate_method="BRR")
+
     def test_construction_is_true_half_sample(self):
         data = _make_simple_panel()
         rep_cols = _add_true_brr_replicates(data)
