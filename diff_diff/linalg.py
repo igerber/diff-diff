@@ -2687,7 +2687,7 @@ def _compute_bm_dof_from_contrasts(
 
     # Unweighted: keep the simple (tr B)² / tr(B²) formula — algebraically
     # identical backward compatibility with prior unweighted Bell-McCaffrey
-    # output (scores-based evaluation; floating-point-tolerance parity).
+    # output (dense prior evaluation; floating-point-tolerance parity).
     try:
         bread_inv_c = np.linalg.solve(bread_matrix, contrasts)
     except np.linalg.LinAlgError as e:
