@@ -1507,11 +1507,12 @@ class TestPrecomputeChunking:
         many = du.wild_bootstrap_se(X, y, resid, cl, 1, n_bootstrap=499, seed=11)
 
         # p-value: strict-count statistic with a 1e-9 relative tie guard —
-        # exact equality expected. se / CI endpoints tolerate the ambient
-        # Rust-backend run-to-run vcov wobble (~1e-14 rel; see the TODO row
-        # on rust solve_ols nondeterminism — the pure-Python backend is
-        # bit-stable and the chunked precompute itself is deterministic
-        # numpy).
+        # exact equality expected. se / CI endpoints keep small tolerances
+        # for historical cross-run robustness: the Rust clustered-vcov
+        # run-to-run wobble was fixed in #653 (first-appearance cluster
+        # aggregation; see the REGISTRY determinism note and
+        # tests/test_rust_backend.py::TestClusterVcovDeterminism) — the
+        # chunked precompute itself is deterministic numpy.
         assert many.p_value == one.p_value
         np.testing.assert_allclose(many.se, one.se, rtol=1e-12)
         np.testing.assert_allclose(many.ci_lower, one.ci_lower, rtol=1e-6)
