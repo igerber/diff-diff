@@ -2065,8 +2065,9 @@ def _compute_cr2_bm_vcov_and_dof(
 
     # --- Per-contrast Bell-McCaffrey cluster DOF ---
     # The inner helper branches on `weights`: unweighted uses the simple
-    # `(tr B)² / tr(B²)` form (bit-equal to prior); weighted uses the full
-    # clubSandwich P_array construction.
+    # `(tr B)² / tr(B²)` form (algebraically identical to the prior
+    # pair-loop evaluation; oracle parity within floating-point tolerance);
+    # weighted uses the full clubSandwich P_array construction.
     if weights is None:
         dof_vec = _cr2_bm_dof_inner(X, A_g_matrices, cluster_idx, M_U, contrasts)
     else:
@@ -2188,8 +2189,9 @@ def _cr2_bm_dof_inner(
       trace_B2 = sum_{g, h} (omega_g' M_{g, h} omega_h)**2
       DOF(c)  = trace_B**2 / trace_B2
 
-    SCORES-BASED EVALUATION (algebraic identity; the Satterthwaite DOF
-    itself is Pustejovsky-Tipton 2018 §3.1 / Eq. 13): the
+    SCORES-BASED EVALUATION (algebraic identity; the DOF itself is
+    Pustejovsky-Tipton 2018's scalar Satterthwaite t-test — the one-row
+    case of their HTZ small-sample correction, §3.1): the
     cluster-pair contraction is never evaluated against an explicit
     residual-maker. With ``Omega`` the ``(n, G)`` matrix stacking the
     ``omega_g`` on their (disjoint) cluster supports and
@@ -2552,8 +2554,10 @@ def _compute_cr2_bm_contrast_dof(
         ``contrasts=np.eye(k)``.
     weights : ndarray of shape (n,), optional
         Original (un-normalized) weights. ``None`` for unweighted; routes
-        through the bit-equal simple ``(tr B)² / tr(B²)`` formula. When
-        provided, routes through the clubSandwich WLS-CR2 P_array form.
+        through the simple ``(tr B)² / tr(B²)`` formula (algebraically
+        identical to the prior evaluation, parity within floating-point
+        tolerance). When provided, routes through the clubSandwich WLS-CR2
+        P_array form.
 
     Returns
     -------
@@ -2646,8 +2650,9 @@ def _compute_bm_dof_from_contrasts(
             X, cluster_ids_singleton, bread_matrix, contrasts, weights=weights
         )
 
-    # Unweighted: keep the simple (tr B)² / tr(B²) formula for bit-equal
-    # backward compatibility with prior unweighted Bell-McCaffrey output.
+    # Unweighted: keep the simple (tr B)² / tr(B²) formula — algebraically
+    # identical backward compatibility with prior unweighted Bell-McCaffrey
+    # output (scores-based evaluation; floating-point-tolerance parity).
     try:
         bread_inv_c = np.linalg.solve(bread_matrix, contrasts)
     except np.linalg.LinAlgError as e:
