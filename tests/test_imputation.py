@@ -3231,7 +3231,8 @@ class TestLSMRFallbackParity:
     def test_unconverged_lsmr_fails_closed_to_nan(self, monkeypatch):
         """CI-review P1 regression: a finite-but-uncertified LSMR result
         (istop outside {0,1,2,4,5} on both attempts) must NOT feed the
-        variance; the solve returns NaN so inference degrades to NaN."""
+        variance; the solve raises _LSMRUnconvergedError and the variance
+        boundary returns NaN, so inference degrades to NaN."""
         import scipy.sparse as sp
 
         import diff_diff.imputation as imp
