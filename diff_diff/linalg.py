@@ -2206,11 +2206,14 @@ def _cr2_bm_dof_inner(
     so ``trace_B2 = ||B||_F^2`` costs ``O(n k + G^2 k)`` per contrast. Peak
     memory = two ``O(n k)`` score precomputes (``X_bi`` and the per-cluster
     ``A_g_Xbi`` blocks — input-scale, same order as ``X`` itself) plus
-    working buffers bounded by ``_CR2_BM_CONTRAST_CHUNK_BYTES``: the q
-    vectors, per-cluster omegas, and product buffers are contrast-chunked
-    and the ``(G, G)`` pairwise matrix is row-chunked (its Frobenius sum
-    and max are row-separable), so none of ``O(n m)``, ``O(G k m)``, or
-    ``O(G^2)`` is ever held at once (chunk-count invariant to ~1 ULP, BLAS
+    working buffers capped by ``_CR2_BM_CONTRAST_CHUNK_BYTES`` subject to a
+    one-contrast lower bound (a single contrast intrinsically needs the
+    ``O(n)`` q vector and ``O(G k)`` P_j/PB buffers): the q vectors,
+    per-cluster omegas, and product buffers are contrast-chunked with all
+    width-scaled buffers counted in the chunk denominator, and the
+    ``(G, G)`` pairwise matrix is row-chunked (its Frobenius sum and max
+    are row-separable), so none of ``O(n m)``, ``O(G k m)``, or ``O(G^2)``
+    is ever held at once (chunk-count invariant to ~1 ULP, BLAS
     kernels may accumulate a GEMM column differently at different slice
     widths) — the previous form
     materialized the dense ``n x n``
@@ -2246,12 +2249,19 @@ def _cr2_bm_dof_inner(
     # Retain max|B_{g,h}| per contrast so we can NaN-guard noise-floor
     # degeneracies in a second pass (mirrors `_cr2_bm_dof_inner_weighted`).
     max_abs_B_arr = np.zeros(m)
-    # Chunk the contrasts so the per-cluster product buffer is (G, k, c) with
-    # c bounded by _CR2_BM_CONTRAST_CHUNK_BYTES — a full-m buffer would be
-    # O(G*k*m), i.e. O(G*k^2) on the batched per-coefficient sweep. Each
-    # contrast's B is computed independently; chunk-count invariance holds
-    # to ~1 ULP (BLAS width-dependent column accumulation), not bit-for-bit.
-    chunk = max(1, int(_CR2_BM_CONTRAST_CHUNK_BYTES // max(n_g_clusters * k_X * 8, 1)))
+    # Chunk the contrasts so every width-scaled working buffer stays under
+    # _CR2_BM_CONTRAST_CHUNK_BYTES: per unit of contrast width we allocate a
+    # Q_chunk column (n), a transient per-cluster omega (largest cluster
+    # n_g_max), a P_all slab (G*k), and a normsq row (G) — a full-m sweep
+    # would be O((n + G*k)*m). The cap is subject to a one-contrast lower
+    # bound: a single contrast intrinsically needs the O(n) q vector and the
+    # O(G*k) P_j / PB buffers. Each contrast's B is computed independently;
+    # chunk-count invariance holds to ~1 ULP (BLAS width-dependent column
+    # accumulation), not bit-for-bit.
+    n = X.shape[0]
+    n_g_max = max((idx.size for idx in cluster_idx.values()), default=0)
+    per_width_bytes = (n + n_g_max + n_g_clusters * k_X + n_g_clusters) * 8
+    chunk = max(1, int(_CR2_BM_CONTRAST_CHUNK_BYTES // max(per_width_bytes, 1)))
     for c0 in range(0, m, chunk):
         c1 = min(c0 + chunk, m)
         width = c1 - c0
