@@ -2202,10 +2202,13 @@ def _cr2_bm_dof_inner(
       P = X' Omega  (k, G; column g is X_g' omega_g)
 
     so ``trace_B2 = ||B||_F^2`` costs ``O(n k + G^2 k)`` per contrast with
-    ``O(G k)`` memory per contrast (contrast-chunked buffers bounded by
-    ``_CR2_BM_CONTRAST_CHUNK_BYTES``, chunk-count invariant to ~1 ULP — BLAS
-    kernels may accumulate a GEMM column differently at different slice
-    widths) — the previous form materialized the dense ``n x n``
+    memory bounded by ``_CR2_BM_CONTRAST_CHUNK_BYTES`` (the per-cluster
+    product buffers are contrast-chunked AND the ``(G, G)`` pairwise matrix
+    is row-chunked — its Frobenius sum and max are row-separable — so
+    neither ``O(G k m)`` nor ``O(G^2)`` is ever held at once; chunk-count
+    invariant to ~1 ULP, BLAS kernels may accumulate a GEMM column
+    differently at different slice widths) — the previous form
+    materialized the dense ``n x n``
     ``M`` and looped cluster pairs at ``O(n^2)`` per contrast, the exact
     large-``n`` blowup the TODO row tracked. The two evaluations are
     algebraically identical; floating-point agreement is ~1e-12 relative
@@ -2253,15 +2256,28 @@ def _cr2_bm_dof_inner(
             om = omega_all[g][:, c0:c1]  # (n_g, width)
             normsq[gi] = np.einsum("ij,ij->j", om, om)
             P_all[gi] = X[cluster_idx[g]].T @ om
+        # Row-chunk the (G, G) pairwise matrix B_j under the same byte cap:
+        # a full B_j is O(G^2) per contrast, which can dominate on
+        # many-cluster designs (G in the tens of thousands). trace_B2 is a
+        # row-separable Frobenius sum and max|B| a row-separable max, so
+        # row blocks accumulate both without ever holding all of B_j.
+        row_chunk = max(1, int(_CR2_BM_CONTRAST_CHUNK_BYTES // max(n_g_clusters * 8, 1)))
         for jj in range(width):
             j = c0 + jj
             q = Q[:, j]
             trace_B = float(np.sum(q * q))
             P_j = P_all[:, :, jj]  # (G, k)
-            B_j = -(P_j @ bread_inv @ P_j.T)
-            B_j[np.diag_indices_from(B_j)] += normsq[:, jj]
-            trace_B2 = float(np.sum(B_j * B_j))
-            max_abs_B_arr[j] = float(np.max(np.abs(B_j))) if B_j.size else 0.0
+            PB = P_j @ bread_inv  # (G, k)
+            trace_B2 = 0.0
+            max_abs_B = 0.0
+            for r0 in range(0, n_g_clusters, row_chunk):
+                r1 = min(r0 + row_chunk, n_g_clusters)
+                B_rows = -(PB[r0:r1] @ P_j.T)  # (rows, G)
+                B_rows[np.arange(r0, r1) - r0, np.arange(r0, r1)] += normsq[r0:r1, jj]
+                trace_B2 += float(np.sum(B_rows * B_rows))
+                if B_rows.size:
+                    max_abs_B = max(max_abs_B, float(np.max(np.abs(B_rows))))
+            max_abs_B_arr[j] = max_abs_B
             dof_vec[j] = (trace_B * trace_B) / trace_B2 if trace_B2 > 0 else np.nan
 
     # Noise-floor NaN-guard (unweighted analogue of the guard in

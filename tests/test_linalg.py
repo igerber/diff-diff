@@ -2816,7 +2816,10 @@ class TestCR2BMScoresBasedDOF:
         per-cluster GEMM runs over a width-c slice and BLAS kernels may
         accumulate a column differently at width 1 vs width m (observed
         exact on Accelerate, 1-ULP drift on OpenBLAS/arm + Windows CI —
-        the documented chunking-reassociation caveat)."""
+        the documented chunking-reassociation caveat). The same tiny cap
+        also forces the (G, G) pairwise matrix into multiple row blocks
+        (row_chunk = cap // (G*8) = 6 < G = 10 here), so this run covers
+        both chunk axes against the unchunked single-pass result."""
         import diff_diff.linalg as la
 
         rng = np.random.default_rng(23)
