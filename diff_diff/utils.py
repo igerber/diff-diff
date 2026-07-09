@@ -250,6 +250,12 @@ def build_fe_dummy_blocks(
     names : list of str
         The kept dummy column names across all FEs, in block order.
     """
+    if prefixes is not None and len(prefixes) != len(fe_cols):
+        raise ValueError(
+            f"build_fe_dummy_blocks: prefixes length {len(prefixes)} does not "
+            f"match fe_cols length {len(fe_cols)}; zip would silently skip "
+            "trailing FE columns."
+        )
     blocks: List[np.ndarray] = []
     names: List[str] = []
     for fe, prefix in zip(fe_cols, prefixes or fe_cols):

@@ -2116,3 +2116,12 @@ class TestBuildFeDummyBlocks:
         np.testing.assert_array_equal(blocks[0], ref.values.astype(np.float64))
         assert names == list(ref.columns)
         assert blocks[0].dtype == np.float64
+
+    def test_mismatched_prefixes_length_raises(self):
+        """Review P2: a shorter non-empty prefixes list must raise, not
+        silently zip-skip trailing FE columns."""
+        from diff_diff.utils import build_fe_dummy_blocks
+
+        df = pd.DataFrame({"a": ["x", "y"], "b": ["u", "v"]})
+        with pytest.raises(ValueError, match="prefixes length 1 does not match"):
+            build_fe_dummy_blocks(df, ["a", "b"], prefixes=["_fe_a"])
