@@ -865,8 +865,8 @@ class TestImputationVariance:
         assert np.isfinite(results.overall_se)
         assert results.overall_se > 0
 
-    def test_sparse_solver_dense_fallback(self):
-        """Test that dense fallback produces finite SE when the sparse
+    def test_sparse_solver_lsmr_fallback(self):
+        """Test that the LSMR fallback produces finite SE when the sparse
         factorization fails."""
         import unittest.mock
 
@@ -876,7 +876,7 @@ class TestImputationVariance:
 
         est = ImputationDiD()
 
-        # Monkey-patch the sparse factorization to force the dense-lstsq fallback.
+        # Monkey-patch the sparse factorization to force the LSMR fallback.
         with unittest.mock.patch(
             "diff_diff.imputation.sparse_factorized", side_effect=RuntimeError("test failure")
         ):
@@ -892,10 +892,10 @@ class TestImputationVariance:
         assert np.isfinite(results.overall_se)
         assert results.overall_se > 0
 
-    def test_sparse_solver_dense_fallback_emits_warning(self):
-        """Silent-failure audit axis C: the sparse -> dense lstsq fallback must
-        emit a UserWarning so callers are informed that variance estimates come
-        from the degraded path."""
+    def test_sparse_solver_lsmr_fallback_emits_warning(self):
+        """Silent-failure audit axis C: the sparse-factorization -> LSMR
+        fallback must emit a UserWarning so callers are informed that variance
+        estimates come from the degraded path."""
         import unittest.mock
 
         data = generate_test_data(n_units=80, n_periods=8, seed=42)
