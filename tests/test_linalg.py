@@ -2774,8 +2774,16 @@ class TestCR2BMLowRankAdjustment:
             dict(n=4000, G=25, k=40),
             dict(n=2000, G=20, k=10, singular_cluster=True),
             dict(n=300, G=300, k=5, singletons=True),
+            dict(n=600, G=300, k=12),
         ],
-        ids=["balanced", "unbalanced", "k40", "leverage1-absorbed-FE", "singletons"],
+        ids=[
+            "balanced",
+            "unbalanced",
+            "k40",
+            "leverage1-absorbed-FE",
+            "singletons",
+            "tiny-clusters-k-gt-ng",
+        ],
     )
     def test_matches_frozen_dense_oracle(self, kw):
         from diff_diff.linalg import _compute_cr2_bm

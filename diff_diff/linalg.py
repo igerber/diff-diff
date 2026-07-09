@@ -2046,8 +2046,12 @@ def _compute_cr2_bm_vcov_and_dof(
         # skinny matrices (the residual vector for the meat; X_g bread_inv
         # for the DOF omegas), so the dense (n_g, n_g) A_g — previously an
         # O(n_g^3) eigh per cluster, ~85% of CR2-BM runtime at n=100k — is
-        # never materialized: everything is O(n_g k^2) per cluster. gamma is
-        # evaluated via expm1/log1p, stable as lam -> 0 (limit 1/2).
+        # never materialized: per-cluster work is O(n_g k min(n_g, k) +
+        # min(n_g, k)^3) — the eigenproblem is solved on the SMALLER Gram
+        # side (k x k when n_g > k; the tiny n_g x n_g dense construction
+        # when n_g <= k, so small/singleton clusters never regress vs the
+        # prior dense path). gamma is evaluated via expm1/log1p, stable as
+        # lam -> 0 (limit 1/2).
         # (The unweighted S_W collapse also applies: S_W = X'X = bread_matrix
         # and MUWTWUM = M_U, so the bias-term build is skipped entirely.)
         wM, VM = np.linalg.eigh(0.5 * (M_U + M_U.T))
@@ -2058,6 +2062,20 @@ def _compute_cr2_bm_vcov_and_dof(
             idx_g = cluster_idx[g]
             X_g = X[idx_g]
             U_g = X_g @ M_U_half
+            B_g = X_g @ bread_inv
+            n_g = len(idx_g)
+            if n_g <= k:
+                # Small cluster (n_g <= k): the smaller Gram side is the
+                # n_g x n_g one, so the k x k eigenproblem would REGRESS vs
+                # the dense per-cluster construction (e.g. paired designs or
+                # singleton-heavy clusterings with many covariates). Build
+                # G_g = I - U_g U_g' directly — it is tiny — and reuse the
+                # dense pseudoinverse convention verbatim.
+                A_g_small = _cr2_adjustment_matrix(np.eye(n_g) - U_g @ U_g.T)
+                if residuals is not None:
+                    cluster_scores[gi] = X_g.T @ (A_g_small @ residuals[idx_g])
+                A_g_Xbi[g] = A_g_small @ B_g
+                continue
             lam, Q_g = np.linalg.eigh(U_g.T @ U_g)
             lam = np.maximum(lam, 0.0)
             s_vals = 1.0 - lam
@@ -2071,7 +2089,6 @@ def _compute_cr2_bm_vcov_and_dof(
                 u_g = residuals[idx_g]
                 # s_g = X_g' A_g u_g = X_g'u_g + (X_g'UQ) diag(gamma) (UQ'u_g)
                 cluster_scores[gi] = X_g.T @ u_g + (X_g.T @ UQ) @ (gamma * (UQ.T @ u_g))
-            B_g = X_g @ bread_inv
             A_g_Xbi[g] = B_g + UQ @ (gamma[:, np.newaxis] * (UQ.T @ B_g))
         if residuals is not None:
             meat = cluster_scores.T @ cluster_scores

@@ -628,8 +628,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   zeroing `γ_i = −1/λ_i` when `1−λ_i ≤ 1e-10`, matching the dense path's pseudoinverse
   convention for absorbed cluster FEs) — a k×k eigenproblem per cluster. Consumers only
   ever apply `A_g` to skinny matrices (the residual vector for the meat; `X_g bread_inv`
-  for the DOF omegas), so the dense `(n_g, n_g)` `A_g` is never materialized: `O(n_g k²)`
-  per cluster time and `O(n k)` total memory, with `γ` evaluated via `expm1/log1p`
+  for the DOF omegas), so the dense `(n_g, n_g)` `A_g` is never materialized: `O(n_g·k·min(n_g,k) + min(n_g,k)³)`
+  per cluster (the eigenproblem is solved on the smaller Gram side — k×k for large
+  clusters, the tiny dense `n_g×n_g` construction when `n_g ≤ k`, so small/singleton
+  clusters never regress vs the prior dense path) and `O(n k)` total memory, with `γ` evaluated via `expm1/log1p`
   (stable as λ→0). End-to-end `_compute_cr2_bm`: 18→2.3 ms at n=5k/G=50/k=10;
   119→5.3 ms at n=20k/G=100; 597→33 ms at n=100k/G=500; 4111→38 ms (~108x) at
   n=100k/G=100/k=40. Algebraically identical — vcov/DOF match a frozen dense-eigh oracle
