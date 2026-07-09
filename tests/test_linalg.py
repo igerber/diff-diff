@@ -2785,7 +2785,10 @@ class TestCR2BMLowRankAdjustment:
             warnings.simplefilter("ignore")
             vcov, dof = _compute_cr2_bm(X, resid, cl, bread)
             vcov_o, dof_o = self._oracle_dense_cr2(X, resid, cl, bread)
-        np.testing.assert_allclose(vcov, vcov_o, rtol=1e-12, atol=1e-15 * np.max(np.abs(vcov_o)))
+        # scale-aware atol: cross-evaluation ~1-ULP drift reads as large
+        # RELATIVE error on near-zero off-diagonals under other BLAS kernels
+        # (see test_gamma_stable_near_zero_leverage's tolerance note).
+        np.testing.assert_allclose(vcov, vcov_o, rtol=1e-12, atol=1e-13 * np.max(np.abs(vcov_o)))
         assert np.array_equal(np.isnan(dof), np.isnan(dof_o)), "NaN-guard pattern diverged"
         fin = ~np.isnan(dof_o)
         if fin.any():
@@ -2794,7 +2797,14 @@ class TestCR2BMLowRankAdjustment:
     def test_gamma_stable_near_zero_leverage(self):
         """A near-zero-leverage cluster (tiny lam) exercises the expm1/log1p
         evaluation of gamma; naive (1/sqrt(1-lam)-1)/lam is catastrophically
-        cancellative there. The oracle comparison pins the stable branch."""
+        cancellative there. The oracle comparison pins the stable branch.
+
+        Tolerance note: rtol 1e-11, not 1e-12 — the low-rank and dense
+        evaluations reduce in different GEMM orders, and on this fixture's
+        huge 5000-row cluster the ~1-ULP absolute drift (measured 1.3e-17)
+        lands on small-magnitude off-diagonals where it reads as ~1.3e-12
+        RELATIVE on OpenBLAS/linux-arm CI (exact-equal on Accelerate) — the
+        documented cross-evaluation BLAS-reassociation caveat."""
         from diff_diff.linalg import _compute_cr2_bm
 
         rng = np.random.default_rng(11)
@@ -2809,7 +2819,7 @@ class TestCR2BMLowRankAdjustment:
             warnings.simplefilter("ignore")
             vcov, dof = _compute_cr2_bm(X, resid, cl, bread)
             vcov_o, dof_o = self._oracle_dense_cr2(X, resid, cl, bread)
-        np.testing.assert_allclose(vcov, vcov_o, rtol=1e-12)
+        np.testing.assert_allclose(vcov, vcov_o, rtol=1e-11)
         fin = ~np.isnan(dof_o)
         np.testing.assert_allclose(dof[fin], dof_o[fin], rtol=1e-10)
 
