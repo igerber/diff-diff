@@ -58,7 +58,12 @@ Tolerance Thresholds
 ~~~~~~~~~~~~~~~~~~~~
 
 - **Point estimates (ATT)**: Absolute difference < 1e-4 or relative < 1%
-- **Standard errors**: Relative difference < 10%
+- **Standard errors**: Relative difference < 10%. Exception: SyntheticDiD
+  placebo SEs use a documented 35% Monte Carlo-bounded gate - both
+  implementations estimate the placebo variance by simulation and R's
+  placebo permutation is unseeded, so SEs agree in distribution rather
+  than draw-by-draw (see the SyntheticDiD methodology registry note;
+  the deterministic Frank-Wolfe ATT is gated at 1e-8)
 - **Confidence intervals**: Must overlap
 
 Benchmark Results
@@ -66,6 +71,8 @@ Benchmark Results
 
 Summary Table
 ~~~~~~~~~~~~~
+
+.. refresh-table-start: summary
 
 .. list-table::
    :header-rows: 1
@@ -97,10 +104,14 @@ Summary Table
      - Yes
      - **PASS**
 
+.. refresh-table-end: summary
+
 Basic DiD Results
 ~~~~~~~~~~~~~~~~~
 
 **Data**: 100 units, 4 periods, true ATT = 5.0 (small scale)
+
+.. refresh-table-start: accuracy_basic
 
 .. list-table::
    :header-rows: 1
@@ -126,12 +137,16 @@ Basic DiD Results
      - 0.041
      - **22x faster**
 
+.. refresh-table-end: accuracy_basic
+
 **Validation**: PASS - Results are numerically identical across all implementations.
 
 MultiPeriodDiD Results
 ~~~~~~~~~~~~~~~~~~~~~~
 
 **Data**: 200 units, 8 periods (4 pre, 4 post), true ATT = 3.0 (small scale)
+
+.. refresh-table-start: accuracy_multiperiod
 
 .. list-table::
    :header-rows: 1
@@ -162,6 +177,8 @@ MultiPeriodDiD Results
      - 0.035
      - **7x faster** (pure)
 
+.. refresh-table-end: accuracy_multiperiod
+
 **Validation**: PASS - Both average ATT and all period-level effects match R's
 ``fixest::feols(outcome ~ treated * time_f | unit)`` to machine precision. The
 regression includes unit fixed effects (absorbed via ``| unit`` in R, within-
@@ -172,6 +189,8 @@ Synthetic DiD Results
 ~~~~~~~~~~~~~~~~~~~~~
 
 **Data**: 50 units (40 control, 10 treated), 20 periods, true ATT = 4.0
+
+.. refresh-table-start: accuracy_synthdid
 
 .. list-table::
    :header-rows: 1
@@ -197,11 +216,15 @@ Synthetic DiD Results
      - 8.19
      - **2.4x faster** (pure)
 
+.. refresh-table-end: accuracy_synthdid
+
 **Validation**: PASS - ATT estimates are numerically identical across all
 implementations. Both diff-diff and R's synthdid use Frank-Wolfe optimization
 with two-pass sparsification and auto-computed regularization (``zeta_omega``,
-``zeta_lambda``), producing identical unit and time weights. Both use
-placebo-based variance estimation (Algorithm 4 from Arkhangelsky et al. 2021).
+``zeta_lambda``), producing identical unit and time weights (reproduced at
+< 1e-8 by the benchmark harness's id-aligned per-unit comparison; see the
+SyntheticDiD methodology registry note). Both use placebo-based variance
+estimation (Algorithm 4 from Arkhangelsky et al. 2021).
 
 The small SE difference (0.3% at small scale, up to ~7% at larger scales) is
 due to Monte Carlo variance in the placebo procedure, which randomly permutes
@@ -212,6 +235,8 @@ Callaway-Sant'Anna Results
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 **Data**: 200 units, 8 periods, 3 treatment cohorts, dynamic effects (small scale)
+
+.. refresh-table-start: accuracy_callaway
 
 .. list-table::
    :header-rows: 1
@@ -236,6 +261,8 @@ Callaway-Sant'Anna Results
      - 0.007 ± 0.000
      - 0.070 ± 0.001
      - **10x faster**
+
+.. refresh-table-end: accuracy_callaway
 
 **Validation**: PASS - Both point estimates and standard errors match R exactly.
 
@@ -271,6 +298,10 @@ implementations:
 - **Python (Pure)**: diff-diff with NumPy/SciPy only (no Rust backend)
 - **Python (Rust)**: diff-diff with optional Rust backend enabled
 
+.. refresh-table-start: environment
+
+.. refresh-table-end: environment
+
 .. note::
 
    **v2.0.0 Rust Backend**: diff-diff v2.0.0 introduces an optional Rust backend
@@ -290,6 +321,8 @@ Three-Way Performance Summary
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 **BasicDiD/TWFE Results:**
+
+.. refresh-table-start: perf_basic
 
 .. list-table::
    :header-rows: 1
@@ -332,7 +365,11 @@ Three-Way Performance Summary
      - **2x**
      - 0.9x
 
+.. refresh-table-end: perf_basic
+
 **CallawaySantAnna Results:**
+
+.. refresh-table-start: perf_callaway
 
 .. list-table::
    :header-rows: 1
@@ -375,7 +412,11 @@ Three-Way Performance Summary
      - **4x**
      - 1.0x
 
+.. refresh-table-end: perf_callaway
+
 **SyntheticDiD Results:**
+
+.. refresh-table-start: perf_synthdid
 
 .. list-table::
    :header-rows: 1
@@ -405,6 +446,8 @@ Three-Way Performance Summary
      - 307.5
      - **16.5x**
      - 0.1x
+
+.. refresh-table-end: perf_synthdid
 
 .. note::
 
@@ -556,6 +599,8 @@ minimum wage policy changes:
 Results Comparison
 ~~~~~~~~~~~~~~~~~~
 
+.. refresh-table-start: mpdta
+
 .. list-table::
    :header-rows: 1
    :widths: 25 25 25 25
@@ -576,6 +621,8 @@ Results Comparison
      - 0.003s ± 0.000s
      - 0.039s ± 0.006s
      - **14.4x faster**
+
+.. refresh-table-end: mpdta
 
 **Key Findings:**
 
@@ -913,8 +960,9 @@ When to Trust Results
   ATT and all period-level effects match to machine precision. Use with confidence.
 
 - **SyntheticDiD**: Point estimates are numerically identical (< 1e-10 diff) and
-  standard errors match closely (0.3% diff at small scale). Both implementations
-  use Frank-Wolfe optimization with identical weights. Use
+  standard errors agree within placebo Monte Carlo dispersion. Both
+  implementations use Frank-Wolfe optimization with identical unit and time
+  weights (verified by id-aligned comparison in the benchmark harness). Use
   ``variance_method="placebo"`` (default) to match R's inference. Results are
   fully validated.
 
@@ -932,8 +980,10 @@ Known Differences
 2. **Aggregation Weights**: Overall ATT is a weighted average of ATT(g,t).
    Weighting schemes may differ between implementations.
 
-3. **Placebo Variance**: SyntheticDiD SE estimates differ slightly (0.3-7%)
-   across implementations due to Monte Carlo variance in the placebo procedure.
-   Point estimates and unit/time weights are numerically identical since both
-   implementations use the same Frank-Wolfe optimizer.
+3. **Placebo Variance**: SyntheticDiD SE estimates differ across
+   implementations due to Monte Carlo variance in the placebo procedure
+   (R's placebo permutation is unseeded). Point estimates and unit/time
+   weights are numerically identical since both implementations use the
+   same Frank-Wolfe optimizer (weights verified by id-aligned comparison
+   in the benchmark harness).
 

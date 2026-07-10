@@ -613,9 +613,9 @@ def run_basic_did_benchmark(
     n_replications: int = 1,
     backends: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
-    """Run basic DiD / TWFE benchmarks (Python and R) with replications."""
+    """Run BasicDiD (interaction OLS) benchmarks (Python and R) with replications."""
     print(f"\n{'='*60}")
-    print(f"BASIC DID / TWFE BENCHMARK ({scale})")
+    print(f"BASIC DID BENCHMARK ({scale})")
     print(f"{'='*60}")
 
     if backends is None:
@@ -650,7 +650,7 @@ def run_basic_did_benchmark(
                     "benchmark_basic.py",
                     data_path,
                     py_output,
-                    extra_args=["--type", "twfe"],
+                    extra_args=["--type", "basic"],
                     timeout=timeouts["python"],
                     backend=backend,
                 )
@@ -688,7 +688,7 @@ def run_basic_did_benchmark(
                 "benchmark_fixest.R",
                 data_path,
                 r_output,
-                extra_args=["--type", "twfe"],
+                extra_args=["--type", "basic"],
                 timeout=timeouts["r"],
             )
             r_timings.append(r_result["timing"]["total_seconds"])
@@ -713,7 +713,7 @@ def run_basic_did_benchmark(
         comparison = compare_estimates(
             results["python"],
             results["r"],
-            "BasicDiD/TWFE",
+            "BasicDiD",
             scale=scale,
             python_pure_results=results.get("python_pure"),
             python_rust_results=results.get("python_rust"),

@@ -2342,6 +2342,31 @@ Convergence criterion: stop when objective decrease < min_decrease² (default mi
   **Validation:** (a) hand-computed 2-stratum FPC magnitude regression (`test_jackknife_full_design_fpc_reduces_se_magnitude` — asserts `SE_fpc == SE_nofpc · sqrt(1 - f)` at `rtol=1e-10`), (b) self-consistency between the returned SE and the stratum-aggregation formula applied to the returned LOO estimates, (c) single-PSU-stratum skip, (d) all-strata-skipped UserWarning + NaN, (e) unstratified single-PSU short-circuit, (f) deterministic-dispatch regression.
 
 - **Note:** P-value computation is variance-method dependent. Placebo (Algorithm 4) uses the empirical null formula `max(mean(|variance_effects| ≥ |att|), 1/(r+1))` because permuting control indices generates draws from the null distribution (centered on 0). Bootstrap (Algorithm 2) and jackknife (Algorithm 3) use the analytical p-value from `safe_inference(att, se)` (normal-theory): bootstrap draws are centered on `τ̂` (sampling distribution of the estimator) and jackknife pseudo-values are not null draws, so the empirical null formula is invalid for them. This matches R's `synthdid::vcov()` convention, where variance is returned and inference is normal-theory from the SE.
+- **Note (benchmark SE gate is Monte Carlo-bounded, 2026-07):** The public
+  benchmark refresh (`benchmarks/refresh_2026_07/`) compares placebo SEs
+  against R `synthdid` across INDEPENDENT placebo draws: R's
+  `vcov(method="placebo")` does not seed its permutation sequence, so the two
+  implementations agree draw-by-draw only when the permutation sequence is
+  threaded explicitly (verified at < 1e-8 SE tolerance in
+  `tests/test_methodology_sdid.py::TestJackknifeSERParity::test_placebo_se_matches_r`);
+  across independent draws the SEs agree in distribution, not point-by-point.
+  The benchmark harness therefore hard-gates SyntheticDiD SEs at a 35%
+  relative bound (vs the standard 10% used for analytical-SE estimators),
+  records R's rep-to-rep SE values in the committed results artifact so the
+  observed Monte Carlo dispersion is auditable, and gates the deterministic
+  Frank-Wolfe ATT at 1e-8. The generated benchmark summary table carries the
+  same footnote. **Weight-vector gates:** unit (ω) and time (λ) weight
+  vectors both reproduce R at machine precision (observed ≤ 5e-13 on the
+  benchmark small fixture) and are hard-gated at 1e-8 max abs diff, aligned
+  by unit/period id. The id alignment is load-bearing:
+  `SyntheticDiDResults.get_unit_weights_df()` returns weights sorted by
+  DESCENDING WEIGHT while R's `synthdid` emits panel control-row order, so a
+  naive positional comparison of the two vectors fabricates apparent ~1e-2
+  divergence out of pure ordering. The benchmark scripts emit id-keyed
+  vectors on both sides and the comparator aligns on ids (fail-closed on key
+  mismatch/duplicates). Per-run max-abs-diff metrics for both vectors are
+  committed with the results.
+
 - **Note (coverage Monte Carlo calibration):** `benchmarks/data/sdid_coverage.json` carries empirical rejection rates across the three variance methods on 4 representative null-panel DGPs (500 seeds × B=200, regenerable via `benchmarks/python/coverage_sdid.py`). The fourth DGP (`stratified_survey`, added in PR #355) validates the survey-bootstrap calibration; jackknife is also reported with a documented anti-conservatism caveat; placebo is N/A on this DGP because its cohort packs into a single stratum with 0 never-treated units (stratified-permutation allocator is structurally infeasible — see `test_placebo_full_design_raises_on_zero_control_stratum` / `_undersupplied_stratum` for the enforced behavior). Under H0 the nominal rejection rate at each α equals α; rates substantially above α indicate anti-conservatism, rates below indicate over-coverage.
 
     | DGP                                                       | method     | α=0.01 | α=0.05 | α=0.10 | mean SE / true SD |

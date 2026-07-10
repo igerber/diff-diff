@@ -30,11 +30,18 @@ if _requested_backend in ("python", "rust"):
 # NOW import diff_diff and other dependencies (will see the env var)
 import pandas as pd
 
-# Add parent to path for imports
-sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+# Add repo root to path for benchmarks.python.utils. When
+# DIFF_DIFF_BENCH_USE_INSTALLED=1 (isolated-venv refresh runs), APPEND so the
+# venv's installed diff-diff wheel wins over the dev tree; otherwise PREPEND
+# (historical behavior: benchmark the working tree).
+_REPO_ROOT = str(Path(__file__).parent.parent.parent)
+if os.environ.get("DIFF_DIFF_BENCH_USE_INSTALLED") == "1":
+    sys.path.append(_REPO_ROOT)
+else:
+    sys.path.insert(0, _REPO_ROOT)
 
 from diff_diff import TwoWayFixedEffects, HAS_RUST_BACKEND
-from benchmarks.python.utils import Timer
+from benchmarks.python.utils import Timer, collect_provenance
 
 
 def parse_args():
@@ -44,6 +51,10 @@ def parse_args():
     parser.add_argument(
         "--backend", default="auto", choices=["auto", "python", "rust"],
         help="Backend to use: auto (default), python (pure Python), rust (Rust backend)"
+    )
+    parser.add_argument(
+        "--warmup", action="store_true",
+        help="Run one untimed fit before the timed fit (JIT/cache warm-up)"
     )
     return parser.parse_args()
 
@@ -65,6 +76,12 @@ def main():
 
     # Run benchmark using TwoWayFixedEffects (within-transformation approach)
     print("Running TWFE estimation...")
+
+    if args.warmup:
+        print("Warm-up fit (untimed)...")
+        TwoWayFixedEffects(robust=True).fit(
+            data, outcome="outcome", treatment="treated", time="post", unit="unit"
+        )
 
     twfe = TwoWayFixedEffects(robust=True)  # auto-clusters at unit level
 
@@ -111,7 +128,10 @@ def main():
             "n_units": len(data["unit"].unique()),
             "n_periods": len(data["post"].unique()),
             "n_obs": len(data),
+            "warmup": args.warmup,
         },
+        # Wheel/backend provenance (refresh runs hard-fail on mismatch)
+        "provenance": collect_provenance(),
     }
 
     # Write output

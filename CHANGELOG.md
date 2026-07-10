@@ -7,6 +7,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [3.7.0] - 2026-07-08
 
+### Added
+- **Public benchmark refresh harness (`benchmarks/refresh_2026_07/`).** Fair,
+  fail-closed re-run machinery for the published docs benchmarks against the
+  RELEASED diff-diff wheel (isolated `uv` venv; provenance hard-fails on
+  dev-tree shadowing, wrong backend, or unexpected `DIFF_DIFF_*` knobs) vs R
+  fixest/did/synthdid: untimed in-process warm-up on both sides (R's
+  byte-compiler JIT previously sat inside the timing window), fresh
+  subprocess per replication, strictly sequential, median of counted reps,
+  thread-count env vars stripped and R run under `--vanilla` so package
+  defaults are enforced rather than assumed. Publication gates cover ATT/SE
+  tolerances per rendered arm (CI overlap enforced independently), per-period
+  / per-(g,t) / event-study / group effect surfaces, SDID id-aligned
+  unit/time weight identity (1e-8), MPDTA known-answer, replication
+  determinism and non-finite outputs, and environment fingerprints;
+  `gen_benchmark_tables.py` refuses to render any hard-gated or
+  mixed-environment artifact into `docs/benchmarks.rst` (marker-bounded
+  regions). SDID placebo-SE parity is gated at a documented 35% Monte
+  Carlo bound (R's placebo permutation is unseeded; see the SyntheticDiD
+  registry note). Benchmark scripts (both languages) gained `--warmup`,
+  strict flag parsing, and estimator-field self-identification so a
+  mislabeled cell can never publish; the legacy `--type twfe` no-op on the
+  BasicDiD scripts now fails loudly (absorbed-FE TWFE has its own dedicated
+  script pair, and the refresh benchmarks it separately from BasicDiD).
+  Regenerated page numbers land together with the committed results
+  artifact once the timed refresh run completes.
+
+### Fixed
+- **`docs/benchmarks.rst` SDID weight-parity claim now machine-verified (and
+  its earlier wording corrected).** The page's "identical unit and time
+  weights" claim was previously unenforced; the new id-aligned benchmark
+  gate verifies it at < 1e-8 (observed ≤ 5e-13 vs R). Note for anyone
+  comparing weights manually: `SyntheticDiDResults.get_unit_weights_df()`
+  returns weights sorted by descending weight while R's `synthdid` uses
+  panel control-row order — a naive positional comparison fabricates
+  apparent ~1e-2 divergence out of pure ordering (documented in the
+  SyntheticDiD registry note).
+
 ### Removed
 - **HAD pretest helpers: deprecated `survey=` / `weights=` kwargs removed (3.7.x).**
   Completes the HAD survey-design API consolidation started with

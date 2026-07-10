@@ -111,3 +111,9 @@ survey-did-paper-arxiv-v2/
 # Reviewer-eval harness — local run artifacts, detached worktrees, comparison bundles
 tools/reviewer-eval/runs/
 
+
+# Benchmark refresh (2026-07) - venvs and raw per-rep artifacts are local-only;
+# consolidated results JSON and the version-story report ARE committed.
+benchmarks/refresh_2026_07/venvs/
+benchmarks/refresh_2026_07/results/raw/
+benchmarks/refresh_2026_07/results/refresh_results_smoke.json

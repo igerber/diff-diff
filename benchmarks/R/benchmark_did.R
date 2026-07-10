@@ -40,7 +40,8 @@ parse_args <- function(args) {
     cband = FALSE,
     pl = FALSE,
     cores = 1L,
-    faster_mode = NULL  # NULL -> use did's own default for this version
+    faster_mode = NULL,  # NULL -> use did's own default for this version
+    warmup = FALSE
   )
 
   i <- 1
@@ -72,6 +73,8 @@ parse_args <- function(args) {
       result$cores <- as.integer(val)
     } else if (flag == "--faster-mode") {
       result$faster_mode <- parse_bool(val, flag)
+    } else if (flag == "--warmup") {
+      result$warmup <- parse_bool(val, flag)
     } else {
       # Unknown flags used to be silently skipped, which turned typos into
       # silent default runs. Fail loudly instead.
@@ -110,6 +113,19 @@ data[, first_treat := as.numeric(first_treat)]
 data[first_treat == 0, first_treat := Inf]
 message(sprintf("Never-treated units (first_treat=Inf): %d", sum(is.infinite(data$first_treat))))
 
+# Warm-up: run the FULL timed pipeline (att_gt + the aggte calls) once
+# untimed so byte-compiler JIT and first-call setup stay out of the window.
+run_warmup <- function(att_gt_args, config) {
+  message("Warm-up fit (untimed)...")
+  out_w <- do.call(att_gt, att_gt_args)
+  invisible(aggte(out_w, type = "simple", bstrap = config$bstrap,
+                  biters = config$biters, cband = FALSE))
+  invisible(aggte(out_w, type = "dynamic", bstrap = config$bstrap,
+                  biters = config$biters, cband = config$cband))
+  invisible(aggte(out_w, type = "group", bstrap = config$bstrap,
+                  biters = config$biters, cband = FALSE))
+}
+
 # Run benchmark
 message("Running Callaway-Sant'Anna estimation...")
 start_time <- Sys.time()
@@ -142,6 +158,11 @@ if (!is.null(config$faster_mode)) {
     message("faster_mode not supported by this did version; ignoring flag")
     effective_faster_mode <- "unsupported-ignored"
   }
+}
+if (config$warmup) {
+  run_warmup(att_gt_args, config)
+  # Reset the clock: the warm-up must stay out of the timing window.
+  start_time <- Sys.time()
 }
 out <- do.call(att_gt, att_gt_args)
 
@@ -216,6 +237,8 @@ results <- list(
     pl = config$pl,
     cores = config$cores,
     faster_mode = effective_faster_mode,
+    dt_threads = data.table::getDTthreads(),
+    warmup = config$warmup,
     blas = tryCatch(sessionInfo()$BLAS, error = function(e) NULL)
   )
 )

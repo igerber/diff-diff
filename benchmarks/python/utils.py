@@ -3,6 +3,8 @@ Common utilities for Python benchmarks.
 """
 
 import json
+import os
+import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -10,6 +12,57 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
+
+
+# DIFF_DIFF_* knobs whose VALUES are safe to persist in committed benchmark
+# artifacts. Any other DIFF_DIFF_* variable is recorded as present-but-redacted
+# so a sensitive value can never leak into results JSON.
+_BENIGN_PROVENANCE_ENV_KEYS = {
+    "DIFF_DIFF_BENCH_USE_INSTALLED",
+    "DIFF_DIFF_BACKEND",
+    "DIFF_DIFF_DEMEAN_CHUNK_COLS",
+    "DIFF_DIFF_SOLVE_OLS_FASTPATH",
+}
+
+
+def collect_provenance() -> Dict[str, Any]:
+    """
+    Collect provenance metadata for the diff_diff package actually imported.
+
+    Used by the isolated-venv benchmark refresh to hard-fail runs that
+    silently resolve diff_diff from the dev tree instead of the pinned
+    wheel. All imports are lazy and defensive so this works on older
+    released versions too.
+    """
+    import diff_diff
+
+    try:
+        from diff_diff import HAS_RUST_BACKEND
+
+        has_rust = bool(HAS_RUST_BACKEND)
+    except ImportError:
+        has_rust = None
+    try:
+        from diff_diff._backend import rust_backend_info
+
+        rbi = rust_backend_info()
+    except Exception:
+        rbi = None
+    return {
+        "diff_diff_version": getattr(diff_diff, "__version__", None),
+        "diff_diff_path": getattr(diff_diff, "__file__", None),
+        "has_rust_backend": has_rust,
+        "rust_backend_info": rbi,
+        "python_version": sys.version.split()[0],
+        "python_executable": sys.executable,
+        "numpy_version": np.__version__,
+        "pandas_version": pd.__version__,
+        "diff_diff_env": {
+            k: (v if k in _BENIGN_PROVENANCE_ENV_KEYS else "<set:redacted>")
+            for k, v in os.environ.items()
+            if k.startswith("DIFF_DIFF_")
+        },
+    }
 
 
 def compute_timing_stats(

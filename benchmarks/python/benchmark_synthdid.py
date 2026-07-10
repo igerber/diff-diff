@@ -12,6 +12,7 @@ import os
 import sys
 from pathlib import Path
 
+
 # IMPORTANT: Parse --backend and set environment variable BEFORE importing diff_diff
 # This ensures the backend configuration is respected by all modules
 def _get_backend_from_args():
@@ -21,6 +22,7 @@ def _get_backend_from_args():
     args, _ = parser.parse_known_args()
     return args.backend
 
+
 _requested_backend = _get_backend_from_args()
 if _requested_backend in ("python", "rust"):
     os.environ["DIFF_DIFF_BACKEND"] = _requested_backend
@@ -29,11 +31,18 @@ if _requested_backend in ("python", "rust"):
 import numpy as np
 import pandas as pd
 
-# Add parent to path for imports
-sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+# Add repo root to path for benchmarks.python.utils. When
+# DIFF_DIFF_BENCH_USE_INSTALLED=1 (isolated-venv refresh runs), APPEND so the
+# venv's installed diff-diff wheel wins over the dev tree; otherwise PREPEND
+# (historical behavior: benchmark the working tree).
+_REPO_ROOT = str(Path(__file__).parent.parent.parent)
+if os.environ.get("DIFF_DIFF_BENCH_USE_INSTALLED") == "1":
+    sys.path.append(_REPO_ROOT)
+else:
+    sys.path.insert(0, _REPO_ROOT)
 
 from diff_diff import SyntheticDiD, HAS_RUST_BACKEND
-from benchmarks.python.utils import Timer
+from benchmarks.python.utils import Timer, collect_provenance
 
 
 def parse_args():
@@ -44,13 +53,22 @@ def parse_args():
         "--n-bootstrap", type=int, default=200, help="Number of bootstrap iterations"
     )
     parser.add_argument(
-        "--variance-method", type=str, default="placebo",
+        "--variance-method",
+        type=str,
+        default="placebo",
         choices=["bootstrap", "jackknife", "placebo"],
-        help="Variance estimation method (default: placebo to match R)"
+        help="Variance estimation method (default: placebo to match R)",
     )
     parser.add_argument(
-        "--backend", default="auto", choices=["auto", "python", "rust"],
-        help="Backend to use: auto (default), python (pure Python), rust (Rust backend)"
+        "--backend",
+        default="auto",
+        choices=["auto", "python", "rust"],
+        help="Backend to use: auto (default), python (pure Python), rust (Rust backend)",
+    )
+    parser.add_argument(
+        "--warmup",
+        action="store_true",
+        help="Run one untimed fit before the timed fit (JIT/cache warm-up)",
     )
     return parser.parse_args()
 
@@ -77,11 +95,23 @@ def main():
 
     # Run benchmark
     print("Running Synthetic DiD estimation...")
-    sdid = SyntheticDiD(
-        n_bootstrap=args.n_bootstrap,
-        variance_method=args.variance_method,
-        seed=42
-    )
+    if args.warmup:
+        # Full pipeline warm-up: estimation + variance are both inside fit()
+        print("Warm-up fit (untimed)...")
+        SyntheticDiD(
+            n_bootstrap=args.n_bootstrap,
+            variance_method=args.variance_method,
+            seed=42,
+        ).fit(
+            data,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="time",
+            post_periods=post_periods,
+        )
+
+    sdid = SyntheticDiD(n_bootstrap=args.n_bootstrap, variance_method=args.variance_method, seed=42)
 
     with Timer() as timer:
         results = sdid.fit(
@@ -95,9 +125,11 @@ def main():
 
     total_time = timer.elapsed
 
-    # Get weights
-    unit_weights_df = results.get_unit_weights_df()
-    time_weights_df = results.get_time_weights_df()
+    # Get weights. NOTE: get_unit_weights_df() returns weights sorted by
+    # DESCENDING WEIGHT, not panel order - sort by unit/period id and emit
+    # the ids so cross-implementation comparison can align by key.
+    unit_weights_df = results.get_unit_weights_df().sort_values("unit")
+    time_weights_df = results.get_time_weights_df().sort_values("period")
 
     # Build output
     output = {
@@ -106,9 +138,11 @@ def main():
         # Point estimate and SE
         "att": float(results.att),
         "se": float(results.se),
-        # Weights (full precision)
+        # Weights (full precision, ordered by ascending unit/period id)
         "unit_weights": unit_weights_df["weight"].tolist(),
+        "unit_weight_ids": unit_weights_df["unit"].tolist(),
         "time_weights": time_weights_df["weight"].tolist(),
+        "time_weight_ids": time_weights_df["period"].tolist(),
         # Regularization parameters
         "noise_level": float(results.noise_level) if results.noise_level is not None else None,
         "zeta_omega": float(results.zeta_omega) if results.zeta_omega is not None else None,
@@ -126,7 +160,10 @@ def main():
             "n_post_periods": len(post_periods),
             "n_bootstrap": args.n_bootstrap,
             "variance_method": args.variance_method,
+            "warmup": args.warmup,
         },
+        # Wheel/backend provenance (refresh runs hard-fail on mismatch)
+        "provenance": collect_provenance(),
     }
 
     # Write output
