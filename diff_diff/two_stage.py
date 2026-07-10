@@ -55,6 +55,81 @@ if TYPE_CHECKING:
 # trades throughput for bounded memory. Keep in sync with two_stage_bootstrap.py.
 _SPARSE_DENSE_THRESHOLD = 10_000_000
 
+
+class _LSMRUnconvergedError(RuntimeError):
+    """LSMR could not certify the Stage-1 normal-equation solve; the
+    variance boundary converts this to NaN inference (fail-closed)."""
+
+
+def _lsmr_certified_normal_solve(gram_csc, rhs: np.ndarray) -> np.ndarray:
+    """Least-squares solve of the (possibly singular) sparse Stage-1 Gram
+    system ``gram @ out = rhs`` via per-column LSMR — no dense
+    materialization of the ``(p_1, p_1)`` normal matrix (`O((U+T+K)^2)`
+    OOM risk on large panels; the pattern the ImputationDiD LSMR fix
+    closed, ported here after the consumer-invariance analysis).
+
+    OUTPUT-PRESERVING despite the min-norm ambiguity on singular systems:
+    least-squares solutions differ only by a ``null(X'X) = null(X_10)``
+    component (weighted: ``null(X'WX) = null(W^{1/2}X_10)`` — zero-weight
+    rows are inert in every weighted consumer because Psi/score/residual
+    contributions carry the same ``W`` factor), and EVERY ``gamma_hat``
+    consumer is an ``X_10``-range functional. One ``theta_exact`` consumer
+    (the bootstrap exact-residual helper's ``X_1_sparse @ theta_exact``)
+    evaluates theta on TREATED rows where a ``null(X_10)`` component would
+    NOT annihilate — parity there holds for a second reason: both dense
+    ``lstsq`` (SVD) and LSMR return the MIN-NORM least-squares solution, so
+    the two solvers agree on the whole vector (to iterative tolerance), not
+    just on range functionals; the fit-level singular-design parity test
+    locks this at the V/SE level. The remaining consumers are the
+    ``X_10``-range functionals — ``Psi_stage1 = X_10 @ gamma_hat``, the GMM
+    score correction ``c_g' gamma_hat`` with ``c_g = X_{10,g}' eps_{10,g}``
+    in ``rowspace(X_10)``, and Stage-1 residuals ``y - X_10 theta`` — so
+    every null component annihilates. Locked by the singular-system parity
+    test against a dense-lstsq oracle.
+
+    CONVERGENCE IS VALIDATED (fail-closed): ``istop`` in ``{0, 1, 2, 4, 5}``
+    certifies a solution / least-squares solution within tolerance (4/5 are
+    the machine-precision analogues of 1/2 per SciPy); anything else gets
+    ONE retry with an uncapped condition limit, then raises
+    :class:`_LSMRUnconvergedError` — converted to NaN inference at the
+    variance boundary rather than feeding an unverified solution into the
+    GMM sandwich.
+    """
+    import scipy.sparse.linalg as spla
+
+    _certified = (0, 1, 2, 4, 5)
+    rhs_2d = np.atleast_2d(np.asarray(rhs, dtype=np.float64))
+    if rhs_2d.shape[0] == 1 and np.asarray(rhs).ndim == 1:
+        rhs_2d = rhs_2d.T
+    dim = gram_csc.shape[0]
+    out = np.empty((dim, rhs_2d.shape[1]))
+    for j in range(rhs_2d.shape[1]):
+        result = spla.lsmr(gram_csc, rhs_2d[:, j], atol=1e-14, btol=1e-14)
+        z, istop = result[0], int(result[1])
+        if istop not in _certified or not np.all(np.isfinite(z)):
+            result = spla.lsmr(
+                gram_csc,
+                rhs_2d[:, j],
+                atol=1e-14,
+                btol=1e-14,
+                conlim=1e16,
+                maxiter=max(50 * dim, 10_000),
+            )
+            z, istop = result[0], int(result[1])
+            if istop not in _certified or not np.all(np.isfinite(z)):
+                warnings.warn(
+                    "TwoStageDiD GMM sandwich: the LSMR fallback solve of the "
+                    f"Stage-1 normal equations did not converge (istop={istop}); "
+                    "the affected variance is reported as NaN rather than from "
+                    "an unverified solution.",
+                    UserWarning,
+                    stacklevel=3,
+                )
+                raise _LSMRUnconvergedError(f"LSMR uncertified (istop={istop})")
+        out[:, j] = z
+    return out
+
+
 # =============================================================================
 # Wave D — Gardner GMM-corrected meat for SpilloverDiD
 # =============================================================================
@@ -153,8 +228,9 @@ def _compute_gmm_corrected_meat(
 
     **`gamma_hat` solve** (mirror of `TwoStageDiD._compute_gmm_variance`
     pattern at `two_stage.py:1886-1917`): factorize ``X_10' W X_10`` via
-    ``sparse_factorized`` (fast path); fall back to dense ``lstsq`` with
-    UserWarning when factorization fails. ``W`` is the diagonal of
+    ``sparse_factorized`` (fast path); fall back to the certified sparse
+    LSMR solve (:func:`_lsmr_certified_normal_solve`) with UserWarning when
+    factorization fails. ``W`` is the diagonal of
     ``survey_weights`` when provided (Hájek-normalized, ``sum_i w_i = n``);
     identity otherwise. ``gamma_hat`` has shape ``(p_1, p_2)``.
 
@@ -269,7 +345,7 @@ def _compute_gmm_corrected_meat(
 
     # 1. gamma_hat = (X_10' W X_10)^{-1} (X_1' W X_2). Mirror the existing
     #    TwoStageDiD method at two_stage.py:1886-1917 — sparse_factorized
-    #    fast path with dense lstsq fallback + UserWarning on singular.
+    #    fast path with certified sparse-LSMR fallback + UserWarning on singular.
     #    When survey_weights is provided, X_10/X_1 cross-products use W.
     if survey_weights is not None:
         XtX_10 = X_10_sparse.T @ X_10_sparse.multiply(survey_weights[:, None])
@@ -288,15 +364,13 @@ def _compute_gmm_corrected_meat(
         warnings.warn(
             "SpilloverDiD Wave D GMM sandwich: sparse factorization of "
             f"(X_10' X_10) failed ({type(exc).__name__}); falling back to "
-            "dense lstsq. This may indicate a rank-deficient or "
+            "sparse LSMR. This may indicate a rank-deficient or "
             "near-singular Stage 1 design and SE estimates may be less "
             "reliable.",
             UserWarning,
             stacklevel=2,
         )
-        gamma_hat = np.linalg.lstsq(XtX_10.toarray(), Xt1_X2, rcond=None)[0]
-        if gamma_hat.ndim == 1:
-            gamma_hat = gamma_hat.reshape(-1, 1)
+        gamma_hat = _lsmr_certified_normal_solve(XtX_10.tocsc(), Xt1_X2)
 
     # 2. Psi = (X_10 @ gamma_hat) * eps_10[:, None] - X_2 * eps_2[:, None].
     #    Under Wave E.1 survey path, weights enter via element-wise eps
@@ -2372,23 +2446,28 @@ class TwoStageDiD(TwoStageDiDBootstrapMixin):
         att = float(coef[0])
 
         # GMM sandwich variance
-        V = self._compute_gmm_variance(
-            df=df,
-            unit=unit,
-            time=time,
-            covariates=covariates,
-            omega_0_mask=omega_0_mask,
-            unit_fe=unit_fe,
-            time_fe=time_fe,
-            delta_hat=delta_hat,
-            kept_cov_mask=kept_cov_mask,
-            X_2=X_2,
-            cluster_ids=df[cluster_var].values,
-            survey_weights=survey_weights,
-            resolved_survey=resolved_survey,
-            score_pad_mask=score_pad_mask,
-            cluster_ids_full=cluster_ids_full,
-        )
+        # An uncertified LSMR Stage-1 fallback solve fails closed:
+        # NaN vcov -> NaN SE/t/p/CI (the helper already warned).
+        try:
+            V = self._compute_gmm_variance(
+                df=df,
+                unit=unit,
+                time=time,
+                covariates=covariates,
+                omega_0_mask=omega_0_mask,
+                unit_fe=unit_fe,
+                time_fe=time_fe,
+                delta_hat=delta_hat,
+                kept_cov_mask=kept_cov_mask,
+                X_2=X_2,
+                cluster_ids=df[cluster_var].values,
+                survey_weights=survey_weights,
+                resolved_survey=resolved_survey,
+                score_pad_mask=score_pad_mask,
+                cluster_ids_full=cluster_ids_full,
+            )
+        except _LSMRUnconvergedError:
+            V = np.full((X_2.shape[1], X_2.shape[1]), np.nan)
 
         se = float(np.sqrt(max(V[0, 0], 0.0)))
         return att, se
@@ -2543,23 +2622,28 @@ class TwoStageDiD(TwoStageDiDBootstrapMixin):
         )
 
         # GMM variance for full coefficient vector
-        V = self._compute_gmm_variance(
-            df=df,
-            unit=unit,
-            time=time,
-            covariates=covariates,
-            omega_0_mask=omega_0_mask,
-            unit_fe=unit_fe,
-            time_fe=time_fe,
-            delta_hat=delta_hat,
-            kept_cov_mask=kept_cov_mask,
-            X_2=X_2,
-            cluster_ids=df[cluster_var].values,
-            survey_weights=survey_weights,
-            resolved_survey=resolved_survey,
-            score_pad_mask=score_pad_mask,
-            cluster_ids_full=cluster_ids_full,
-        )
+        # An uncertified LSMR Stage-1 fallback solve fails closed:
+        # NaN vcov -> NaN SE/t/p/CI (the helper already warned).
+        try:
+            V = self._compute_gmm_variance(
+                df=df,
+                unit=unit,
+                time=time,
+                covariates=covariates,
+                omega_0_mask=omega_0_mask,
+                unit_fe=unit_fe,
+                time_fe=time_fe,
+                delta_hat=delta_hat,
+                kept_cov_mask=kept_cov_mask,
+                X_2=X_2,
+                cluster_ids=df[cluster_var].values,
+                survey_weights=survey_weights,
+                resolved_survey=resolved_survey,
+                score_pad_mask=score_pad_mask,
+                cluster_ids_full=cluster_ids_full,
+            )
+        except _LSMRUnconvergedError:
+            V = np.full((X_2.shape[1], X_2.shape[1]), np.nan)
 
         # Build results dict
         event_study_effects: Dict[int, Dict[str, Any]] = {}
@@ -2668,23 +2752,28 @@ class TwoStageDiD(TwoStageDiDBootstrapMixin):
         )
 
         # GMM variance
-        V = self._compute_gmm_variance(
-            df=df,
-            unit=unit,
-            time=time,
-            covariates=covariates,
-            omega_0_mask=omega_0_mask,
-            unit_fe=unit_fe,
-            time_fe=time_fe,
-            delta_hat=delta_hat,
-            kept_cov_mask=kept_cov_mask,
-            X_2=X_2,
-            cluster_ids=df[cluster_var].values,
-            survey_weights=survey_weights,
-            resolved_survey=resolved_survey,
-            score_pad_mask=score_pad_mask,
-            cluster_ids_full=cluster_ids_full,
-        )
+        # An uncertified LSMR Stage-1 fallback solve fails closed:
+        # NaN vcov -> NaN SE/t/p/CI (the helper already warned).
+        try:
+            V = self._compute_gmm_variance(
+                df=df,
+                unit=unit,
+                time=time,
+                covariates=covariates,
+                omega_0_mask=omega_0_mask,
+                unit_fe=unit_fe,
+                time_fe=time_fe,
+                delta_hat=delta_hat,
+                kept_cov_mask=kept_cov_mask,
+                X_2=X_2,
+                cluster_ids=df[cluster_var].values,
+                survey_weights=survey_weights,
+                resolved_survey=resolved_survey,
+                score_pad_mask=score_pad_mask,
+                cluster_ids_full=cluster_ids_full,
+            )
+        except _LSMRUnconvergedError:
+            V = np.full((X_2.shape[1], X_2.shape[1]), np.nan)
 
         group_effects: Dict[Any, Dict[str, Any]] = {}
         for g in treatment_groups:
@@ -2908,22 +2997,22 @@ class TwoStageDiD(TwoStageDiDBootstrapMixin):
                 )
             theta_exact = np.asarray(solve_XtX(np.asarray(rhs_fe).ravel())).ravel()
         except RuntimeError as exc:
-            # Singular matrix — fall back to dense least-squares. Silent-failure
+            # Singular matrix — fall back to certified sparse LSMR. Silent-failure
             # audit axis C: emit a UserWarning on fallback instead of swallowing.
             warnings.warn(
                 "TwoStageDiD GMM sandwich: sparse factorization of "
                 f"(X'_{{10}} W X_{{10}}) failed ({type(exc).__name__}); falling "
-                "back to dense lstsq. This may indicate a rank-deficient or "
+                "back to sparse LSMR. This may indicate a rank-deficient or "
                 "near-singular Stage 1 design matrix and SE estimates may be "
                 "less reliable.",
                 UserWarning,
                 stacklevel=2,
             )
-            XtWX_10_dense = XtWX_10.toarray()
-            gamma_hat = np.linalg.lstsq(XtWX_10_dense, Xt1_WX2, rcond=None)[0]
-            if gamma_hat.ndim == 1:
-                gamma_hat = gamma_hat.reshape(-1, 1)
-            theta_exact = np.linalg.lstsq(XtWX_10_dense, np.asarray(rhs_fe).ravel(), rcond=None)[0]
+            XtWX_10_csc = XtWX_10.tocsc()
+            gamma_hat = _lsmr_certified_normal_solve(XtWX_10_csc, Xt1_WX2)
+            theta_exact = _lsmr_certified_normal_solve(
+                XtWX_10_csc, np.asarray(rhs_fe).ravel()
+            ).ravel()
 
         # Exact Stage-1 / Stage-2 residuals. The point-estimate path uses the
         # iterative alternating-projection FE solver (`_iterative_fe`), which

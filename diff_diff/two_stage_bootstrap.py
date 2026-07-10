@@ -212,17 +212,19 @@ class TwoStageDiDBootstrapMixin:
             # of swallowing the error.
             warnings.warn(
                 "TwoStageDiD bootstrap: sparse factorization of X_10' X_10 "
-                f"failed ({type(exc).__name__}); falling back to dense lstsq. "
+                f"failed ({type(exc).__name__}); falling back to sparse LSMR. "
                 "This may indicate a rank-deficient or near-singular Stage 1 "
                 "design matrix and bootstrap SE estimates may be less reliable.",
                 UserWarning,
                 stacklevel=2,
             )
-            XtX_10_dense = XtX_10.toarray()
-            gamma_hat = np.linalg.lstsq(XtX_10_dense, Xt1_X2, rcond=None)[0]
-            if gamma_hat.ndim == 1:
-                gamma_hat = gamma_hat.reshape(-1, 1)
-            theta_exact = np.linalg.lstsq(XtX_10_dense, np.asarray(rhs_fe).ravel(), rcond=None)[0]
+            from diff_diff.two_stage import _lsmr_certified_normal_solve
+
+            XtX_10_csc = XtX_10.tocsc()
+            gamma_hat = _lsmr_certified_normal_solve(XtX_10_csc, Xt1_X2)
+            theta_exact = _lsmr_certified_normal_solve(
+                XtX_10_csc, np.asarray(rhs_fe).ravel()
+            ).ravel()
 
         # Exact Stage-1 / Stage-2 residuals (shared with the analytical variance) so
         # the bootstrap influence function uses the same exact residuals as
@@ -376,6 +378,8 @@ class TwoStageDiDBootstrapMixin:
         resolved_survey: Optional[Any] = None,
     ) -> Optional[TwoStageBootstrapResults]:
         """Run multiplier bootstrap on GMM influence function."""
+        from diff_diff.two_stage import _LSMRUnconvergedError as _TS_LSMRUnconverged
+
         if self.n_bootstrap < 50:
             warnings.warn(
                 f"n_bootstrap={self.n_bootstrap} is low. Consider n_bootstrap >= 199 "
@@ -410,20 +414,25 @@ class TwoStageDiDBootstrapMixin:
 
         X_2_static = D.reshape(-1, 1)
 
-        S_static, bread_static, unique_clusters, _ = self._compute_cluster_S_scores(
-            df=df,
-            unit=unit,
-            time=time,
-            covariates=covariates,
-            omega_0_mask=omega_0_mask,
-            unit_fe=unit_fe,
-            time_fe=time_fe,
-            delta_hat=delta_hat,
-            kept_cov_mask=kept_cov_mask,
-            X_2=X_2_static,
-            cluster_ids=cluster_ids,
-            survey_weights=survey_weights,
-        )
+        # Uncertified LSMR Stage-1 fallback -> degenerate (None/NaN)
+        # bootstrap contract rather than unverified scores.
+        try:
+            S_static, bread_static, unique_clusters, _ = self._compute_cluster_S_scores(
+                df=df,
+                unit=unit,
+                time=time,
+                covariates=covariates,
+                omega_0_mask=omega_0_mask,
+                unit_fe=unit_fe,
+                time_fe=time_fe,
+                delta_hat=delta_hat,
+                kept_cov_mask=kept_cov_mask,
+                X_2=X_2_static,
+                cluster_ids=cluster_ids,
+                survey_weights=survey_weights,
+            )
+        except _TS_LSMRUnconverged:
+            return None
 
         n_clusters = len(unique_clusters)
 
@@ -559,20 +568,25 @@ class TwoStageDiDBootstrapMixin:
                         if h_int in horizon_to_col:
                             X_2_es[i, horizon_to_col[h_int]] = 1.0
 
-                S_es, bread_es, _, dropped_es = self._compute_cluster_S_scores(
-                    df=df,
-                    unit=unit,
-                    time=time,
-                    covariates=covariates,
-                    omega_0_mask=omega_0_mask,
-                    unit_fe=unit_fe,
-                    time_fe=time_fe,
-                    delta_hat=delta_hat,
-                    kept_cov_mask=kept_cov_mask,
-                    X_2=X_2_es,
-                    cluster_ids=cluster_ids,
-                    survey_weights=survey_weights,
-                )
+                # Uncertified LSMR Stage-1 fallback -> degenerate (None/NaN)
+                # bootstrap contract rather than unverified scores.
+                try:
+                    S_es, bread_es, _, dropped_es = self._compute_cluster_S_scores(
+                        df=df,
+                        unit=unit,
+                        time=time,
+                        covariates=covariates,
+                        omega_0_mask=omega_0_mask,
+                        unit_fe=unit_fe,
+                        time_fe=time_fe,
+                        delta_hat=delta_hat,
+                        kept_cov_mask=kept_cov_mask,
+                        X_2=X_2_es,
+                        cluster_ids=cluster_ids,
+                        survey_weights=survey_weights,
+                    )
+                except _TS_LSMRUnconverged:
+                    return None
 
                 # boot_coef_es: (B, k_es)
                 boot_coef_es = np.dot(np.dot(all_weights, S_es), bread_es.T)
@@ -626,20 +640,25 @@ class TwoStageDiDBootstrapMixin:
                     if g in group_to_col:
                         X_2_grp[i, group_to_col[g]] = 1.0
 
-            S_grp, bread_grp, _, dropped_grp = self._compute_cluster_S_scores(
-                df=df,
-                unit=unit,
-                time=time,
-                covariates=covariates,
-                omega_0_mask=omega_0_mask,
-                unit_fe=unit_fe,
-                time_fe=time_fe,
-                delta_hat=delta_hat,
-                kept_cov_mask=kept_cov_mask,
-                X_2=X_2_grp,
-                cluster_ids=cluster_ids,
-                survey_weights=survey_weights,
-            )
+            # Uncertified LSMR Stage-1 fallback -> degenerate (None/NaN)
+            # bootstrap contract rather than unverified scores.
+            try:
+                S_grp, bread_grp, _, dropped_grp = self._compute_cluster_S_scores(
+                    df=df,
+                    unit=unit,
+                    time=time,
+                    covariates=covariates,
+                    omega_0_mask=omega_0_mask,
+                    unit_fe=unit_fe,
+                    time_fe=time_fe,
+                    delta_hat=delta_hat,
+                    kept_cov_mask=kept_cov_mask,
+                    X_2=X_2_grp,
+                    cluster_ids=cluster_ids,
+                    survey_weights=survey_weights,
+                )
+            except _TS_LSMRUnconverged:
+                return None
 
             boot_coef_grp = np.dot(np.dot(all_weights, S_grp), bread_grp.T)
             # NaN any dropped (unidentified) group coefficient (via the explicit

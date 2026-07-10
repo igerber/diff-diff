@@ -492,11 +492,11 @@ class TestTwoStageDiDVariance:
 
     def test_sparse_factorized_dense_fallback_emits_warning(self):
         """Silent-failure audit axis C: when sparse factorization of Stage 1's
-        normal-equations matrix fails and the GMM sandwich falls back to dense
-        lstsq, a UserWarning must surface so callers know SE came from the
+        normal-equations matrix fails and the GMM sandwich falls back to sparse
+        LSMR, a UserWarning must surface so callers know SE came from the
         degraded path rather than the fast sparse path.
 
-        Also verifies the dense fallback still yields finite, usable SEs so
+        Also verifies the LSMR fallback still yields finite, usable SEs so
         that a future regression in the fallback control flow cannot keep the
         warning while breaking the degraded path."""
         import unittest.mock
@@ -508,7 +508,7 @@ class TestTwoStageDiDVariance:
             side_effect=RuntimeError("test failure"),
         ):
             with pytest.warns(
-                UserWarning, match="sparse factorization.*falling back to dense lstsq"
+                UserWarning, match="sparse factorization.*falling back to sparse LSMR"
             ):
                 results = TwoStageDiD().fit(
                     data,
@@ -518,15 +518,186 @@ class TestTwoStageDiDVariance:
                     first_treat="first_treat",
                 )
 
-        # Dense fallback must still produce a usable SE.
+        # LSMR fallback must still produce a usable SE.
         assert np.isfinite(results.overall_se)
         assert results.overall_se > 0
 
+    def test_lsmr_fallback_matches_dense_lstsq_oracle(self):
+        """Consumer-level parity on a genuinely singular Stage-1 Gram: any
+        least-squares solutions differ only by null(X'X) = null(X_10)
+        components, and every gamma_hat/theta consumer is an X_10-range
+        functional (Psi = X_10 @ gamma; score correction c_g'gamma with
+        c_g in rowspace(X_10); residuals y - X_10 theta) — so the LSMR
+        fallback and a dense-lstsq oracle must agree on X_10 @ solution
+        even where the raw coefficient vectors differ."""
+        import scipy.sparse as sp
+
+        from diff_diff.two_stage import _lsmr_certified_normal_solve
+
+        rng = np.random.default_rng(3)
+        n, p = 120, 8
+        X = rng.normal(size=(n, p))
+        X[:, p - 1] = X[:, 0] + X[:, 1]  # rank-deficient by construction
+        gram = sp.csc_matrix(X.T @ X)
+        rhs = X.T @ rng.normal(size=(n, 3))  # multi-RHS, in rowspace(X)
+        z_lsmr = _lsmr_certified_normal_solve(gram, rhs)
+        z_dense = np.linalg.lstsq(gram.toarray(), rhs, rcond=None)[0]
+        # consumer functional X @ z is invariant across LS solutions
+        np.testing.assert_allclose(X @ z_lsmr, X @ z_dense, atol=1e-8)
+        # 1-d rhs round-trips with the right shape
+        z1 = _lsmr_certified_normal_solve(gram, rhs[:, 0])
+        np.testing.assert_allclose(X @ z1.ravel(), X @ z_dense[:, 0], atol=1e-8)
+
+    def test_lsmr_fallback_never_densifies(self):
+        """The whole point of the swap: the fallback path must not call
+        .toarray() on the Stage-1 Gram (the O((U+T+K)^2) OOM risk the
+        TODO row tracked)."""
+        import unittest.mock
+
+
+        data = generate_test_data()
+
+        def _no_lstsq(*a, **k):
+            raise AssertionError(
+                "np.linalg.lstsq reached — the Stage-1 fallback must solve "
+                "via sparse LSMR, never a dense lstsq on the Gram"
+            )
+
+        with unittest.mock.patch(
+            "diff_diff.two_stage.sparse_factorized",
+            side_effect=RuntimeError("test failure"),
+        ):
+            with unittest.mock.patch("numpy.linalg.lstsq", _no_lstsq):
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore")
+                    results = TwoStageDiD().fit(
+                        data,
+                        outcome="outcome",
+                        unit="unit",
+                        time="time",
+                        first_treat="first_treat",
+                    )
+        assert np.isfinite(results.overall_se)
+
+    def test_uncertified_lsmr_fails_closed_to_nan(self):
+        """A finite-but-uncertified LSMR result (istop outside {0,1,2,4,5}
+        on both attempts) must NOT feed the GMM sandwich: the solve raises
+        _LSMRUnconvergedError and the variance boundary reports NaN
+        inference."""
+        import unittest.mock
+
+        data = generate_test_data()
+
+        def _fake_lsmr(A, b, **kwargs):
+            x = np.zeros(A.shape[1])
+            return (x, 7, 0, 0.0, 0.0, 0.0, 0.0, 0.0)
+
+        with unittest.mock.patch(
+            "diff_diff.two_stage.sparse_factorized",
+            side_effect=RuntimeError("test failure"),
+        ):
+            with unittest.mock.patch("scipy.sparse.linalg.lsmr", _fake_lsmr):
+                with pytest.warns(UserWarning, match="did not converge"):
+                    results = TwoStageDiD().fit(
+                        data,
+                        outcome="outcome",
+                        unit="unit",
+                        time="time",
+                        first_treat="first_treat",
+                    )
+        assert np.isnan(results.overall_se)
+        assert np.isnan(results.overall_p_value)
+
+    def test_weighted_survey_lsmr_fallback_no_densify(self):
+        """The weighted/survey GMM-sandwich site (X'_10 W X_10) takes the
+        same LSMR fallback: finite SEs, and no Gram densification."""
+        import unittest.mock
+
+        from diff_diff import SurveyDesign
+
+        data = generate_test_data()
+        rng = np.random.default_rng(5)
+        unit_w = {
+            u: w
+            for u, w in zip(
+                data["unit"].unique(), rng.uniform(0.5, 2.0, size=data["unit"].nunique())
+            )
+        }
+        data["w"] = data["unit"].map(unit_w)
+
+        def _no_lstsq(*a, **k):
+            raise AssertionError(
+                "np.linalg.lstsq reached — the Stage-1 fallback must solve "
+                "via sparse LSMR, never a dense lstsq on the Gram"
+            )
+
+        with unittest.mock.patch(
+            "diff_diff.two_stage.sparse_factorized",
+            side_effect=RuntimeError("test failure"),
+        ):
+            with unittest.mock.patch("numpy.linalg.lstsq", _no_lstsq):
+                with pytest.warns(UserWarning, match="falling back to sparse LSMR"):
+                    res = TwoStageDiD().fit(
+                        data,
+                        outcome="outcome",
+                        unit="unit",
+                        time="time",
+                        first_treat="first_treat",
+                        survey_design=SurveyDesign(weights="w"),
+                    )
+        assert np.isfinite(res.overall_se)
+
+    def test_forced_fallback_fit_level_lsmr_vs_dense_oracle(self):
+        """Fit-level parity on the FORCED fallback path (the fixture itself
+        is full-rank; sparse factorization is mocked to fail): LSMR vs a
+        dense-lstsq oracle must agree on overall ATT and SE. Covers the one
+        consumer the range-functional argument does not (the bootstrap
+        exact-residual helper's X_1 @ theta on treated rows) via min-norm
+        agreement — both solvers return the min-norm least-squares solution;
+        the helper-level oracle test above covers the genuinely singular
+        Gram."""
+        import unittest.mock
+
+        import diff_diff.two_stage as ts
+
+        data = generate_test_data()
+
+        def _fit():
+            return TwoStageDiD().fit(
+                data,
+                outcome="outcome",
+                unit="unit",
+                time="time",
+                first_treat="first_treat",
+            )
+
+        with unittest.mock.patch(
+            "diff_diff.two_stage.sparse_factorized",
+            side_effect=RuntimeError("test failure"),
+        ):
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                res_lsmr = _fit()
+
+            def _dense_oracle(gram_csc, rhs):
+                out = np.linalg.lstsq(
+                    gram_csc.toarray(), np.asarray(rhs, dtype=np.float64), rcond=None
+                )[0]
+                return out.reshape(gram_csc.shape[0], -1)
+
+            with unittest.mock.patch.object(ts, "_lsmr_certified_normal_solve", _dense_oracle):
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore")
+                    res_dense = _fit()
+
+        np.testing.assert_allclose(res_lsmr.overall_att, res_dense.overall_att, rtol=1e-8)
+        np.testing.assert_allclose(res_lsmr.overall_se, res_dense.overall_se, rtol=1e-6)
+
     def test_sparse_factorized_bootstrap_dense_fallback_emits_warning(self):
         """Silent-failure audit axis C: the TwoStage bootstrap path has the
-        same sparse->dense fallback and must also emit a UserWarning.
+        same sparse->LSMR fallback and must also emit a UserWarning.
 
-        Also verifies the bootstrap dense fallback still yields finite,
+        Also verifies the bootstrap LSMR fallback still yields finite,
         usable SEs."""
         import unittest.mock
 
@@ -537,7 +708,7 @@ class TestTwoStageDiDVariance:
             side_effect=RuntimeError("test failure"),
         ):
             with pytest.warns(
-                UserWarning, match="sparse factorization.*falling back to dense lstsq"
+                UserWarning, match="sparse factorization.*falling back to sparse LSMR"
             ):
                 results = TwoStageDiD(n_bootstrap=4, seed=42).fit(
                     data,
@@ -547,7 +718,7 @@ class TestTwoStageDiDVariance:
                     first_treat="first_treat",
                 )
 
-        # Bootstrap dense fallback must still produce a usable SE.
+        # Bootstrap LSMR fallback must still produce a usable SE.
         assert np.isfinite(results.overall_se)
         assert results.overall_se > 0
 

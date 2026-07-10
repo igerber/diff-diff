@@ -673,6 +673,39 @@ class TestSpilloverDiDFitBasic:
         assert result is not None
         assert est.is_fitted_
 
+    def test_meat_lsmr_fallback_and_fail_closed(self):
+        """The Wave-D GMM meat routes through two_stage's certified-LSMR
+        Stage-1 fallback: forced sparse-factorization failure takes the
+        LSMR path (finite SE + warning), and an uncertified LSMR fails
+        closed through the spillover boundary (NaN meat -> NaN SEs)."""
+        import unittest.mock
+
+        df = _make_butts_2period_dgp(seed=42, tau_total=-0.07, delta_1=-0.04)
+
+        def _fit():
+            est = SpilloverDiD(rings=[0.0, 100.0], conley_coords=("lat", "lon"))
+            return est.fit(df, outcome="y", unit="unit", time="time", treatment="D")
+
+        with unittest.mock.patch(
+            "diff_diff.two_stage.sparse_factorized",
+            side_effect=RuntimeError("test failure"),
+        ):
+            with pytest.warns(UserWarning, match="falling back to sparse LSMR"):
+                result = _fit()
+        assert np.isfinite(result.se)
+
+        def _fake_lsmr(A, b, **kwargs):
+            return (np.zeros(A.shape[1]), 7, 0, 0.0, 0.0, 0.0, 0.0, 0.0)
+
+        with unittest.mock.patch(
+            "diff_diff.two_stage.sparse_factorized",
+            side_effect=RuntimeError("test failure"),
+        ):
+            with unittest.mock.patch("scipy.sparse.linalg.lsmr", _fake_lsmr):
+                with pytest.warns(UserWarning, match="did not converge"):
+                    result = _fit()
+        assert np.isnan(result.se)
+
     def test_recovers_tau_total_within_tolerance(self):
         df = _make_butts_2period_dgp(seed=42, tau_total=-0.07, delta_1=-0.04)
         est = SpilloverDiD(rings=[0.0, 100.0], conley_coords=("lat", "lon"))

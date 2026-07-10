@@ -595,6 +595,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `docs/methodology/REGISTRY.md` (both estimator sections + "Absorbed Fixed Effects").
 
 ### Performance
+- **`TwoStageDiD` / `SpilloverDiD` Stage-1 fallback no longer densifies the normal matrix.**
+  The `RuntimeError` fallback for the sparse Stage-1 factorization called
+  `np.linalg.lstsq(XtX_10.toarray(), ...)` at four sites (analytical unweighted +
+  weighted GMM sandwich, the SpilloverDiD Wave-D meat, and the bootstrap) — an
+  `O((U+T+K)²)` dense materialization and OOM risk on large panels. All four now solve
+  via certified per-column sparse LSMR. The TODO row's caution that the ImputationDiD
+  null-space-invariance argument "does NOT transfer" was refuted by the consumer trace:
+  every `gamma_hat`/`theta_exact` consumer is an `X_10`-range functional (`Psi = X_10 γ`;
+  the GMM score correction `c_g'γ` with `c_g ∈ rowspace(X_10)`; Stage-1 residuals), and
+  `null(X'X) = null(X_10)` exactly, so the min-norm ambiguity annihilates — locked by a
+  dense-lstsq-oracle parity test on a singular Gram plus a no-densify guard through the
+  full fit. Uncertified LSMR (istop outside {0,1,2,4,5} after an uncapped retry) fails
+  closed: NaN vcov/SE on the analytical boundary, the established `None` degenerate on
+  the bootstrap boundary.
 - **Rust-backend HC2 vcov.** The Rust vcov path supported only HC1/CR1; one-way
   (unclustered, unweighted) HC2 now dispatches to a new `compute_robust_vcov_hc2` kernel
   mirroring the NumPy branch exactly — hat diagonals off the same bread,

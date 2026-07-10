@@ -40,7 +40,7 @@ from diff_diff.conley import (
 )
 from diff_diff.linalg import _rank_guarded_inv, solve_ols
 from diff_diff.results import SpilloverDiDResults
-from diff_diff.two_stage import _compute_gmm_corrected_meat
+from diff_diff.two_stage import _compute_gmm_corrected_meat, _LSMRUnconvergedError
 from diff_diff.utils import _iterative_fe_solve, safe_inference
 
 # Type alias mirroring diff_diff.conley.ConleyMetric so callers can supply
@@ -3333,25 +3333,30 @@ class SpilloverDiD:
         # arrays — survey-finite-mask subset of fit-sample inputs — plus
         # `X_*_sparse_fit` / `eps_10_fit` which are already built on
         # survey_finite_mask above).
-        meat_kept = _compute_gmm_corrected_meat(
-            X_1_sparse=X_1_sparse_fit,
-            X_10_sparse=X_10_sparse_fit,
-            eps_10=eps_10_fit,
-            X_2=X_2_kept_gamma,
-            eps_2=eps_2_fit_gamma,
-            vcov_type=_wave_d_vcov_mode,
-            cluster_ids=cluster_ids_for_meat,
-            conley_coords=conley_coords_for_meat,
-            conley_cutoff_km=_conley_cutoff_arg,
-            conley_metric=_conley_metric_arg,
-            conley_kernel="bartlett",
-            conley_time=conley_time_for_meat,
-            conley_unit=conley_unit_for_meat,
-            conley_lag_cutoff=_conley_lag_arg,
-            survey_weights=survey_weights_fit_gamma,
-            resolved_survey=resolved_survey_fit,
-            score_pad_mask=score_pad_mask_arg,
-        )
+        # An uncertified LSMR Stage-1 fallback solve inside the meat helper
+        # fails closed: NaN meat -> NaN SEs (the helper already warned).
+        try:
+            meat_kept = _compute_gmm_corrected_meat(
+                X_1_sparse=X_1_sparse_fit,
+                X_10_sparse=X_10_sparse_fit,
+                eps_10=eps_10_fit,
+                X_2=X_2_kept_gamma,
+                eps_2=eps_2_fit_gamma,
+                vcov_type=_wave_d_vcov_mode,
+                cluster_ids=cluster_ids_for_meat,
+                conley_coords=conley_coords_for_meat,
+                conley_cutoff_km=_conley_cutoff_arg,
+                conley_metric=_conley_metric_arg,
+                conley_kernel="bartlett",
+                conley_time=conley_time_for_meat,
+                conley_unit=conley_unit_for_meat,
+                conley_lag_cutoff=_conley_lag_arg,
+                survey_weights=survey_weights_fit_gamma,
+                resolved_survey=resolved_survey_fit,
+                score_pad_mask=score_pad_mask_arg,
+            )
+        except _LSMRUnconvergedError:
+            meat_kept = np.full((X_2_kept_gamma.shape[1], X_2_kept_gamma.shape[1]), np.nan)
 
         # Bread sandwich: A_22^{-1} = (X_2' W X_2)^{-1} via the shared rank-guarded
         # generalized inverse `_rank_guarded_inv` (column-drop on a near-singular
