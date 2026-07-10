@@ -222,6 +222,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the same dispatch globals the fit consumes (`bootstrap_utils` / `linalg`), with a coherence
   assert between the two (defense in depth).
 
+### Fixed
+- **Rust backend: saturated full-rank designs (`n == k`) no longer leak `Inf`
+  variance-covariance silently.** `solve_ols`'s Rust HC1/CR1 path computed the
+  `n/(n-k)` (clustered `(n-1)/(n-k)`) adjustment with zero residual degrees of
+  freedom, producing all-`Inf` vcov that bypassed the dispatcher's Python-fallback
+  check (which keyed on NaN only) and reached users without a warning. The Rust
+  kernel now returns the documented non-finite-inference contract — an all-NaN
+  vcov, matching the canonical numpy saturated guard — with the `G >= 2` cluster
+  error keeping precedence, and the dispatcher's fallback check now rejects any
+  non-finite vcov (NaN or Inf). Point estimates and residuals are unchanged;
+  only the undefined-inference sentinel changes (`Inf` → `NaN` + warning).
+  Found while building the opt-in Cholesky fast path below, which honors the
+  same contract.
+
 ### Added
 - **`SyntheticControl` conformal extensions: one-sided alternatives + covariates in the
   proxy (Chernozhukov-Wüthrich-Zhu 2021).** `conformal_test` / `conformal_confidence_intervals`
@@ -236,6 +250,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   T*-block structure. Locked by a hand-rolled signed-statistic permutation oracle, directional
   rejection/half-line/composition tests, a proxy-weight mechanism check, and a permutation-floor
   invariant; all 31 pre-existing conformal tests pass unchanged.
+- **Opt-in `DIFF_DIFF_SOLVE_OLS_FASTPATH` normal-equations Cholesky fast path for
+  `solve_ols` (both backends).** Set the env var to `1` (a positive integer; boolean
+  spellings like `true`/`on` are silently ignored per the resolver convention, mirroring
+  `DIFF_DIFF_DEMEAN_CHUNK_COLS`) to route certified-well-conditioned full-rank OLS solves
+  through an equilibrated normal-equations Cholesky instead of the default SVD/gelsd:
+  the Python twin reuses the stage-0 rank-certification Gram and gates on LAPACK `dpocon`
+  reciprocal condition > 1e-6; the Rust side is a new self-certifying faer `Llt` kernel
+  (`solve_ols_chol`, faer-only heavy ops — identical behavior across the
+  accelerate/openblas/no-BLAS wheels) whose exact 1-norm rcond inverse doubles as the
+  sandwich bread. Default OFF = byte-identical legacy behavior on both backends (locked
+  by dispatch spies, exact-equality tests, and a pristine-base-tree identity gate; sole
+  exception: the saturated n == k vcov contract fix above); any
+  certification decline falls back verbatim to the SVD path, so a knob-on decline equals
+  knob-off exactly. Within the opt-in path, parity vs the default is tol-bounded (fitted
+  ~1e-8 abs / SE ~1e-6 rel; certified forward-error budget ~eps·cond ≤ 2e-10). Measured
+  (M4 Max, medians): SunAbraham 1.13→0.63 s and 16.8→9.9 s (1.7-1.8x), CallawaySantAnna
+  dr 40-covariate 4.40→3.57 s (1.23x), `skip_rank_check` micro-solve 1.56x; rust-side
+  allocator high-water on a 2.4M×130 clustered solve 7.27→2.66 GB (no thin-SVD U
+  transient). See docs/performance-plan.md § "Opt-in solve_ols normal-equations Cholesky
+  fast path".
 - **Opt-in `df_convention="cluster"` inference-df knob (DiD / TWFE / MultiPeriodDiD +
   `LinearRegression`).** Clustered analytical fits historically compute t-statistics,
   p-values, and CIs at the fitted **residual df** (`n − K_full`), while `fixest`/Stata use

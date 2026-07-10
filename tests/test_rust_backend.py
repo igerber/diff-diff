@@ -3674,3 +3674,506 @@ class TestClusterVcovDeterminism:
         baseline = raw_vcov(X, resid, cl)
         for _ in range(20):
             np.testing.assert_array_equal(raw_vcov(X, resid, cl), baseline)
+
+
+@pytest.mark.skipif(not HAS_RUST_BACKEND, reason="Rust backend not available")
+class TestSolveOLSCholKernel:
+    """Direct tests of the opt-in Rust solve_ols_chol pyfunction.
+
+    Parity vs the numpy Cholesky twin is TOL-BOUNDED at the established
+    cross-backend bars (coef/resid decimal=8, hc1 vcov decimal=8, clustered
+    decimal=6) on unit-scale fixtures: both sides run the same certified
+    algorithm, but Gram/matvec accumulation orders differ (faer vs BLAS).
+    Never byte-identity across the twins.
+    """
+
+    @staticmethod
+    def _design(seed=42, n=800, k=6):
+        rng = np.random.default_rng(seed)
+        X = np.column_stack([np.ones(n), rng.standard_normal((n, k - 1))])
+        y = X @ rng.standard_normal(k) + rng.standard_normal(n)
+        return X, y
+
+    def test_parity_vs_numpy_twin_hc1(self):
+        from diff_diff._rust_backend import solve_ols_chol
+
+        from diff_diff.linalg import (
+            _compute_robust_vcov_numpy,
+            _solve_ols_chol_numpy,
+        )
+
+        X, y = self._design()
+        out = solve_ols_chol(X, y)
+        assert out is not None, "well-conditioned design must certify"
+        coef_r, resid_r, vcov_r = out
+
+        twin = _solve_ols_chol_numpy(X, y)
+        assert twin is not None
+        coef_p, gram = twin
+        resid_p = y - X @ coef_p
+        vcov_p = _compute_robust_vcov_numpy(X, resid_p, None, _bread_matrix=gram)
+
+        np.testing.assert_array_almost_equal(coef_r, coef_p, decimal=8)
+        np.testing.assert_array_almost_equal(resid_r, resid_p, decimal=8)
+        np.testing.assert_array_almost_equal(vcov_r, vcov_p, decimal=8)
+
+    def test_parity_vs_numpy_twin_clustered(self):
+        from diff_diff._rust_backend import solve_ols_chol
+
+        from diff_diff.linalg import (
+            _compute_robust_vcov_numpy,
+            _solve_ols_chol_numpy,
+        )
+
+        X, y = self._design(seed=7)
+        rng = np.random.default_rng(7)
+        cl = rng.integers(0, 25, X.shape[0]).astype(np.int64)
+
+        out = solve_ols_chol(X, y, cluster_ids=cl)
+        assert out is not None
+        coef_r, resid_r, vcov_r = out
+
+        twin = _solve_ols_chol_numpy(X, y)
+        assert twin is not None
+        coef_p, gram = twin
+        resid_p = y - X @ coef_p
+        vcov_p = _compute_robust_vcov_numpy(X, resid_p, cl, _bread_matrix=gram)
+
+        np.testing.assert_array_almost_equal(coef_r, coef_p, decimal=8)
+        np.testing.assert_array_almost_equal(vcov_r, vcov_p, decimal=6)
+
+    def test_returns_none_on_near_singular_and_nan(self):
+        from diff_diff._rust_backend import solve_ols_chol
+
+        rng = np.random.default_rng(11)
+        n = 400
+        x1 = rng.standard_normal(n)
+        X = np.column_stack([np.ones(n), x1, x1 + 1e-8 * rng.standard_normal(n)])
+        y = rng.standard_normal(n)
+        assert solve_ols_chol(X, y) is None
+
+        Xn, yn = self._design(seed=13, n=100, k=3)
+        Xn = Xn.copy()
+        Xn[5, 1] = np.nan
+        assert solve_ols_chol(Xn, yn) is None
+
+    def test_returns_none_underdetermined(self):
+        from diff_diff._rust_backend import solve_ols_chol
+
+        rng = np.random.default_rng(17)
+        X = rng.standard_normal((3, 5))
+        y = rng.standard_normal(3)
+        assert solve_ols_chol(X, y) is None
+
+    def test_return_vcov_false_shape(self):
+        from diff_diff._rust_backend import solve_ols_chol
+
+        X, y = self._design(seed=19)
+        out = solve_ols_chol(X, y, return_vcov=False)
+        assert out is not None
+        coef, resid, vcov = out
+        assert vcov is None
+        assert len(coef) == X.shape[1] and len(resid) == X.shape[0]
+
+    def test_too_few_clusters_raises_same_message(self):
+        from diff_diff._rust_backend import solve_ols_chol
+
+        X, y = self._design(seed=23, n=60, k=3)
+        with pytest.raises(ValueError, match="Need at least 2 clusters"):
+            solve_ols_chol(X, y, cluster_ids=np.zeros(60, dtype=np.int64))
+
+    def test_repeated_call_bit_determinism(self):
+        """Same determinism lock as the SVD path's clustered vcov: 20
+        repeated calls must be bit-identical (first-appearance cluster
+        order; sequential/faer accumulation)."""
+        from diff_diff._rust_backend import solve_ols_chol
+
+        X, y = self._design(seed=29)
+        rng = np.random.default_rng(29)
+        cl = rng.integers(0, 12, X.shape[0]).astype(np.int64)
+        base = solve_ols_chol(X, y, cluster_ids=cl)
+        assert base is not None
+        for _ in range(20):
+            rep = solve_ols_chol(X, y, cluster_ids=cl)
+            np.testing.assert_array_equal(rep[0], base[0])
+            np.testing.assert_array_equal(rep[1], base[1])
+            np.testing.assert_array_equal(rep[2], base[2])
+
+
+@pytest.mark.skipif(not HAS_RUST_BACKEND, reason="Rust backend not available")
+class TestSolveOLSFastpathDispatch:
+    """Dispatch-level locks for DIFF_DIFF_SOLVE_OLS_FASTPATH on the Rust
+    backend: default path unchanged (SVD kernel runs, chol never), opt-in
+    routes to the chol kernel, stale-symbol degradation to the numpy twin,
+    Rust-decline fallthrough verbatim, and estimator-level opt-in parity.
+
+    Estimator-level parity is TOL-BOUNDED (ATT abs 1e-8 / SE rel 1e-6), NOT
+    the demean-chunk suite's rtol=0/atol=1e-12: that suite's exactness is
+    by-construction (identical partitioned arithmetic), while this knob
+    swaps the solve algorithm; the certified error budget is ~eps*cond(G_eq)
+    <= 2e-10 relative in the equilibrated basis, leaving >= 2 orders of
+    headroom at these gates.
+    """
+
+    @staticmethod
+    def _spies(monkeypatch):
+        import diff_diff.linalg as lmod
+
+        calls = {"svd": 0, "chol": 0}
+        real_svd = lmod._solve_ols_rust
+        real_chol = lmod._solve_ols_chol_rust
+
+        def svd_spy(*a, **kw):
+            calls["svd"] += 1
+            return real_svd(*a, **kw)
+
+        def chol_spy(*a, **kw):
+            calls["chol"] += 1
+            return real_chol(*a, **kw)
+
+        monkeypatch.setattr(lmod, "_solve_ols_rust", svd_spy)
+        monkeypatch.setattr(lmod, "_solve_ols_chol_rust", chol_spy)
+        return calls
+
+    @staticmethod
+    def _staggered_panel(n_units=120, n_periods=8, seed=3):
+        rng = np.random.default_rng(seed)
+        unit = np.repeat(np.arange(n_units), n_periods)
+        time = np.tile(np.arange(n_periods), n_units)
+        first_treat = np.repeat(rng.choice([0, 3, 5], n_units), n_periods)
+        treated = (first_treat > 0) & (time >= first_treat)
+        y = (
+            np.repeat(rng.normal(0, 1, n_units), n_periods)
+            + 0.1 * time
+            + 1.5 * treated
+            + rng.normal(0, 0.5, n_units * n_periods)
+        )
+        return pd.DataFrame({"unit": unit, "time": time, "first_treat": first_treat, "y": y})
+
+    def test_default_dispatch_unchanged(self, monkeypatch):
+        monkeypatch.delenv("DIFF_DIFF_SOLVE_OLS_FASTPATH", raising=False)
+        calls = self._spies(monkeypatch)
+        from diff_diff import SunAbraham
+
+        SunAbraham().fit(
+            self._staggered_panel(),
+            outcome="y",
+            unit="unit",
+            time="time",
+            first_treat="first_treat",
+        )
+        assert calls["chol"] == 0, "chol wrapper must never run with the knob off"
+        assert calls["svd"] >= 1, "the legacy SVD kernel must have run"
+
+    def test_opt_in_dispatches_chol(self, monkeypatch):
+        monkeypatch.setenv("DIFF_DIFF_SOLVE_OLS_FASTPATH", "1")
+        calls = self._spies(monkeypatch)
+        from diff_diff import SunAbraham
+
+        SunAbraham().fit(
+            self._staggered_panel(),
+            outcome="y",
+            unit="unit",
+            time="time",
+            first_treat="first_treat",
+        )
+        assert calls["chol"] >= 1, "knob on must route through the chol wrapper"
+        assert calls["svd"] == 0, "certified fits must not fall through to SVD"
+
+    def test_stale_symbol_falls_back_to_legacy_svd(self, monkeypatch):
+        """A stale extension missing only solve_ols_chol keeps the legacy
+        Rust SVD kernel for Rust-eligible fits (the knob has no Rust
+        acceleration there); the numpy twin serves only the numpy lane."""
+        import diff_diff.linalg as lmod
+
+        monkeypatch.setenv("DIFF_DIFF_SOLVE_OLS_FASTPATH", "1")
+        monkeypatch.setattr(lmod, "_rust_solve_ols_chol", None)
+
+        rng = np.random.default_rng(31)
+        X = np.column_stack([np.ones(300), rng.standard_normal((300, 3))])
+        y = X @ rng.standard_normal(4) + rng.standard_normal(300)
+        diag = {}
+        coef, _, _ = lmod.solve_ols(X, y, diagnostics_out=diag)
+        # Rust chol unavailable -> the (unweighted, hc1, full-rank) fit
+        # dispatches to the legacy Rust SVD kernel, NOT the numpy twin;
+        # the knob simply has nothing to accelerate on this route.
+        assert diag["solve_ols_fastpath"] == "fallback_declined"
+        assert np.all(np.isfinite(coef))
+
+    def test_rust_decline_falls_through_verbatim(self, monkeypatch):
+        """Near-singular fixture: chol kernel declines in-kernel; output
+        must equal the knob-off SVD result exactly (NaN-aware)."""
+        rng = np.random.default_rng(37)
+        n = 500
+        x1 = rng.standard_normal(n)
+        X = np.column_stack([np.ones(n), x1, x1 + 1e-8 * rng.standard_normal(n)])
+        y = X @ np.array([1.0, 2.0, 3.0]) + rng.standard_normal(n)
+
+        import diff_diff.linalg as lmod
+
+        monkeypatch.setenv("DIFF_DIFF_SOLVE_OLS_FASTPATH", "1")
+        diag = {}
+        c_on, r_on, v_on = lmod.solve_ols(X, y, skip_rank_check=True, diagnostics_out=diag)
+        assert diag["solve_ols_fastpath"] == "fallback_declined"
+        monkeypatch.delenv("DIFF_DIFF_SOLVE_OLS_FASTPATH")
+        c_off, r_off, v_off = lmod.solve_ols(X, y, skip_rank_check=True)
+        np.testing.assert_array_equal(c_on, c_off)
+        np.testing.assert_array_equal(r_on, r_off)
+        # This fixture is SVD-truncated on the skip route -> NaN vcov on
+        # BOTH runs (pre-existing behavior); equal_nan makes that exact.
+        assert np.array_equal(v_on, v_off, equal_nan=True)
+
+    def test_estimator_level_opt_in_parity_sun_abraham(self, monkeypatch):
+        from diff_diff import SunAbraham
+
+        df = self._staggered_panel(n_units=200, n_periods=10, seed=41)
+        monkeypatch.delenv("DIFF_DIFF_SOLVE_OLS_FASTPATH", raising=False)
+        res_off = SunAbraham().fit(
+            df, outcome="y", unit="unit", time="time", first_treat="first_treat"
+        )
+        monkeypatch.setenv("DIFF_DIFF_SOLVE_OLS_FASTPATH", "1")
+        res_on = SunAbraham().fit(
+            df, outcome="y", unit="unit", time="time", first_treat="first_treat"
+        )
+        assert res_on.att == pytest.approx(res_off.att, abs=1e-8)
+        assert res_on.se == pytest.approx(res_off.se, rel=1e-6)
+
+    def test_estimator_level_opt_in_parity_did_absorb_cluster(self, monkeypatch):
+        from diff_diff import DifferenceInDifferences
+
+        rng = np.random.default_rng(43)
+        n_units, n_periods = 150, 6
+        unit = np.repeat(np.arange(n_units), n_periods)
+        time = np.tile(np.arange(n_periods), n_units)
+        treated = (unit < n_units // 2).astype(int)
+        post = (time >= n_periods // 2).astype(int)
+        y = (
+            np.repeat(rng.normal(0, 1, n_units), n_periods)
+            + 0.2 * time
+            + 2.0 * treated * post
+            + rng.normal(0, 0.5, n_units * n_periods)
+        )
+        df = pd.DataFrame({"unit": unit, "time": time, "treated": treated, "post": post, "y": y})
+
+        def fit():
+            return DifferenceInDifferences(cluster="unit").fit(
+                df,
+                outcome="y",
+                treatment="treated",
+                time="post",
+                absorb=["unit", "time"],
+            )
+
+        monkeypatch.delenv("DIFF_DIFF_SOLVE_OLS_FASTPATH", raising=False)
+        res_off = fit()
+        monkeypatch.setenv("DIFF_DIFF_SOLVE_OLS_FASTPATH", "1")
+        res_on = fit()
+        assert res_on.att == pytest.approx(res_off.att, abs=1e-8)
+        assert res_on.se == pytest.approx(res_off.se, rel=1e-6)
+
+    def test_cross_backend_fitted_parity_rust_vs_twin(self, monkeypatch):
+        from unittest.mock import patch
+
+        import diff_diff.linalg as lmod
+
+        rng = np.random.default_rng(47)
+        X = np.column_stack([np.ones(600), rng.standard_normal((600, 5))])
+        y = X @ rng.standard_normal(6) + rng.standard_normal(600)
+
+        monkeypatch.setenv("DIFF_DIFF_SOLVE_OLS_FASTPATH", "1")
+        d_rust = {}
+        c_rust, _, v_rust = lmod.solve_ols(X, y, diagnostics_out=d_rust)
+        assert d_rust["solve_ols_fastpath"] == "chol_rust"
+
+        d_twin = {}
+        with (
+            patch.object(lmod, "HAS_RUST_BACKEND", False),
+            patch.object(lmod, "_rust_solve_ols", None),
+            patch.object(lmod, "_rust_solve_ols_chol", None),
+        ):
+            c_twin, _, v_twin = lmod.solve_ols(X, y, diagnostics_out=d_twin)
+        assert d_twin["solve_ols_fastpath"] == "chol_numpy"
+
+        np.testing.assert_allclose(X @ c_rust, X @ c_twin, rtol=1e-6, atol=1e-8)
+        np.testing.assert_array_almost_equal(v_rust, v_twin, decimal=6)
+
+
+@pytest.mark.skipif(not HAS_RUST_BACKEND, reason="Rust backend not available")
+class TestSolveOLSCholSaturatedContract:
+    """Saturated n == k designs must honor the documented
+    non-finite-inference contract on EVERY path: all-NaN vcov, never Inf
+    (the numpy saturated guard is the canonical behavior; the legacy Rust
+    SVD kernel's former silent-Inf leak was fixed alongside the opt-in
+    Cholesky path)."""
+
+    @staticmethod
+    def _saturated_design(seed=61, k=6):
+        rng = np.random.default_rng(seed)
+        X = np.column_stack([np.ones(k), rng.standard_normal((k, k - 1))])
+        y = rng.standard_normal(k)
+        return X, y
+
+    def test_direct_kernel_saturated_nan_vcov(self):
+        from diff_diff._rust_backend import solve_ols_chol
+
+        X, y = self._saturated_design()
+        two_clusters = (np.arange(X.shape[0]) % 2).astype(np.int64)
+        out = solve_ols_chol(X, y, cluster_ids=two_clusters)
+        assert out is not None, "saturated full-rank design must certify"
+        coef, resid, vcov = out
+        assert np.all(np.isfinite(coef))
+        assert np.all(np.isnan(vcov)), "saturated vcov must be all-NaN, never Inf"
+
+        out_hc1 = solve_ols_chol(X, y)
+        assert np.all(np.isnan(out_hc1[2]))
+
+    def test_dispatch_saturated_nan_vcov(self, monkeypatch):
+        import diff_diff.linalg as lmod
+
+        X, y = self._saturated_design(seed=67)
+        monkeypatch.setenv("DIFF_DIFF_SOLVE_OLS_FASTPATH", "1")
+        diag = {}
+        coef, resid, vcov = lmod.solve_ols(X, y, diagnostics_out=diag)
+        assert diag["solve_ols_fastpath"] == "chol_rust"
+        assert np.all(np.isfinite(coef))
+        assert np.all(np.isnan(vcov))
+
+        # The numpy twin lane honors the same contract via the shared
+        # saturated guard in _compute_robust_vcov_numpy.
+        from unittest.mock import patch
+
+        diag2 = {}
+        with (
+            patch.object(lmod, "HAS_RUST_BACKEND", False),
+            patch.object(lmod, "_rust_solve_ols", None),
+            patch.object(lmod, "_rust_solve_ols_chol", None),
+        ):
+            _, _, v_twin = lmod.solve_ols(X, y, diagnostics_out=diag2)
+        assert diag2["solve_ols_fastpath"] == "chol_numpy"
+        assert np.all(np.isnan(v_twin))
+
+    def test_saturated_one_cluster_still_raises(self, monkeypatch):
+        from diff_diff._rust_backend import solve_ols_chol
+
+        X, y = self._saturated_design(seed=71)
+        with pytest.raises(ValueError, match="Need at least 2 clusters"):
+            solve_ols_chol(X, y, cluster_ids=np.zeros(X.shape[0], dtype=np.int64))
+
+
+@pytest.mark.skipif(not HAS_RUST_BACKEND, reason="Rust backend not available")
+class TestSolveOLSSaturatedDefaultPath:
+    """Default (knob-off) saturated n == k contract: the legacy Rust SVD
+    vcov path formerly leaked all-Inf vcov silently (its (n-k) adjustment
+    divides by zero and the dispatcher's fallback check keyed on NaN only).
+    It now returns the canonical all-NaN contract, and the dispatcher
+    rejects ANY non-finite Rust vcov."""
+
+    @staticmethod
+    def _saturated_design(seed=73, k=5):
+        rng = np.random.default_rng(seed)
+        X = np.column_stack([np.ones(k), rng.standard_normal((k, k - 1))])
+        y = rng.standard_normal(k)
+        return X, y
+
+    def test_raw_svd_kernel_saturated_nan_vcov(self):
+        from diff_diff._rust_backend import solve_ols as rust_svd
+
+        X, y = self._saturated_design()
+        coef, resid, vcov = rust_svd(X, y, None, True)
+        assert np.all(np.isfinite(np.asarray(coef)))
+        assert np.all(np.isnan(np.asarray(vcov))), "saturated vcov must be all-NaN, never Inf"
+
+        two_clusters = (np.arange(X.shape[0]) % 2).astype(np.int64)
+        _, _, vcov_cl = rust_svd(X, y, two_clusters, True)
+        assert np.all(np.isnan(np.asarray(vcov_cl)))
+
+    def test_public_solve_ols_saturated_nan_vcov(self, monkeypatch):
+        import diff_diff.linalg as lmod
+
+        monkeypatch.delenv("DIFF_DIFF_SOLVE_OLS_FASTPATH", raising=False)
+        X, y = self._saturated_design(seed=79)
+        with pytest.warns(UserWarning, match="non-finite"):
+            coef, resid, vcov = lmod.solve_ols(X, y)
+        assert np.all(np.isfinite(coef))
+        assert np.all(np.isnan(vcov))
+
+        two_clusters = (np.arange(X.shape[0]) % 2).astype(np.int64)
+        with pytest.warns(UserWarning, match="non-finite"):
+            _, _, vcov_cl = lmod.solve_ols(X, y, cluster_ids=two_clusters)
+        assert np.all(np.isnan(vcov_cl))
+
+    def test_saturated_one_cluster_precedence(self):
+        from diff_diff._rust_backend import solve_ols as rust_svd
+
+        X, y = self._saturated_design(seed=83)
+        with pytest.raises(ValueError, match="Need at least 2 clusters"):
+            rust_svd(X, y, np.zeros(X.shape[0], dtype=np.int64), True)
+
+    def test_dispatcher_rejects_inf_vcov(self, monkeypatch):
+        """Any non-finite Rust vcov (not just NaN) must trigger the Python
+        re-run, which applies the canonical numpy contracts."""
+        import diff_diff.linalg as lmod
+
+        monkeypatch.delenv("DIFF_DIFF_SOLVE_OLS_FASTPATH", raising=False)
+        rng = np.random.default_rng(89)
+        X = np.column_stack([np.ones(50), rng.standard_normal((50, 2))])
+        y = X @ np.array([1.0, 2.0, 3.0]) + rng.standard_normal(50)
+
+        def inf_vcov_rust(Xa, ya, *, cluster_ids=None, return_vcov=True, return_fitted=False):
+            coef = np.linalg.lstsq(Xa, ya, rcond=None)[0]
+            resid = ya - Xa @ coef
+            vcov = np.full((Xa.shape[1], Xa.shape[1]), np.inf)
+            if return_fitted:
+                return coef, resid, Xa @ coef, vcov
+            return coef, resid, vcov
+
+        monkeypatch.setattr(lmod, "_solve_ols_rust", inf_vcov_rust)
+        with pytest.warns(UserWarning, match="non-finite"):
+            coef, resid, vcov = lmod.solve_ols(X, y)
+        assert np.all(np.isfinite(vcov)), "numpy re-run must replace the Inf vcov"
+
+    def test_dispatcher_rejects_inf_vcov_skip_rank_check(self, monkeypatch):
+        """The Inf-rejection guard applies on the skip_rank_check route too
+        (same silent-corruption class as the rank-checked route)."""
+        import diff_diff.linalg as lmod
+
+        monkeypatch.delenv("DIFF_DIFF_SOLVE_OLS_FASTPATH", raising=False)
+        rng = np.random.default_rng(97)
+        X = np.column_stack([np.ones(50), rng.standard_normal((50, 2))])
+        y = X @ np.array([1.0, 2.0, 3.0]) + rng.standard_normal(50)
+
+        def inf_vcov_rust(Xa, ya, *, cluster_ids=None, return_vcov=True, return_fitted=False):
+            coef = np.linalg.lstsq(Xa, ya, rcond=None)[0]
+            resid = ya - Xa @ coef
+            vcov = np.full((Xa.shape[1], Xa.shape[1]), np.inf)
+            if return_fitted:
+                return coef, resid, Xa @ coef, vcov
+            return coef, resid, vcov
+
+        monkeypatch.setattr(lmod, "_solve_ols_rust", inf_vcov_rust)
+        with pytest.warns(UserWarning, match="non-finite"):
+            coef, resid, vcov = lmod.solve_ols(X, y, skip_rank_check=True)
+        assert np.all(np.isfinite(vcov)), "numpy re-run must replace the Inf vcov"
+
+    def test_skip_rank_check_nan_sentinel_passes_through(self, monkeypatch):
+        """On the skip route an all-NaN vcov remains the DOCUMENTED sentinel
+        for what the caller asserted away (rank deficiency / saturation) and
+        must pass through unchanged: rerouting it to a numpy path that
+        assumes full rank could raise on a singular bread where users
+        previously received the safe NaN answer."""
+        import warnings as _warnings
+
+        import diff_diff.linalg as lmod
+
+        monkeypatch.delenv("DIFF_DIFF_SOLVE_OLS_FASTPATH", raising=False)
+        rng = np.random.default_rng(101)
+        x1 = rng.standard_normal(60)
+        # Exactly collinear: the rust SVD kernel truncates (rank < k) and
+        # returns its all-NaN vcov sentinel.
+        X = np.column_stack([np.ones(60), x1, 2.0 * x1])
+        y = x1 + rng.standard_normal(60)
+
+        with _warnings.catch_warnings():
+            _warnings.simplefilter("error")  # no warning may fire
+            coef, resid, vcov = lmod.solve_ols(X, y, skip_rank_check=True)
+        assert np.all(np.isnan(vcov)), "NaN sentinel must pass through on the skip route"

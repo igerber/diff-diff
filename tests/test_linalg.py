@@ -3026,3 +3026,340 @@ class TestCR2BMScoresBasedDOF:
         monkeypatch.setattr(la, "_CR2_BM_CONTRAST_CHUNK_BYTES", G * k * 8)  # 1 contrast/chunk
         _, dof_many = la._compute_cr2_bm(X, resid, cl, bread)
         np.testing.assert_allclose(dof_many, dof_one, rtol=1e-13)
+
+
+class TestSolveOLSFastpathResolver:
+    """DIFF_DIFF_SOLVE_OLS_FASTPATH env resolver conventions.
+
+    Mirrors TestDemeanChunkResolver: unset -> module default (OFF), positive
+    integer enables, invalid values fall back silently to the module default.
+    """
+
+    def test_default_when_unset_is_off(self, monkeypatch):
+        import diff_diff.linalg as lmod
+
+        monkeypatch.delenv("DIFF_DIFF_SOLVE_OLS_FASTPATH", raising=False)
+        assert lmod._SOLVE_OLS_FASTPATH is False
+        assert lmod._resolve_solve_ols_fastpath() is False
+
+    @pytest.mark.parametrize("val", ["1", "2", "10"])
+    def test_valid_override_honored(self, monkeypatch, val):
+        import diff_diff.linalg as lmod
+
+        monkeypatch.setenv("DIFF_DIFF_SOLVE_OLS_FASTPATH", val)
+        assert lmod._resolve_solve_ols_fastpath() is True
+
+    @pytest.mark.parametrize("bad", ["abc", "0", "-4", "", "3.5"])
+    def test_invalid_values_fall_back_to_default(self, monkeypatch, bad):
+        import diff_diff.linalg as lmod
+
+        monkeypatch.setenv("DIFF_DIFF_SOLVE_OLS_FASTPATH", bad)
+        assert lmod._resolve_solve_ols_fastpath() is False
+
+    def test_module_default_is_monkeypatch_seam(self, monkeypatch):
+        import diff_diff.linalg as lmod
+
+        monkeypatch.delenv("DIFF_DIFF_SOLVE_OLS_FASTPATH", raising=False)
+        monkeypatch.setattr(lmod, "_SOLVE_OLS_FASTPATH", True)
+        assert lmod._resolve_solve_ols_fastpath() is True
+
+
+class TestSolveOLSCholFastPath:
+    """Opt-in normal-equations Cholesky fast path (numpy twin).
+
+    Parity posture is TOL-BOUNDED, not bit-level: the fast path swaps the
+    solve algorithm (certified Cholesky on the equilibrated Gram vs gelsd
+    SVD), so outputs differ at the numerical-error level. The dpocon guard
+    rcond > _SOLVE_OLS_CHOL_RCOND_GUARD (1e-6) bounds cond(G_eq) < 1e6 and
+    hence the Cholesky forward error at ~eps*cond ~ 2e-10 relative in the
+    equilibrated basis (same budget as _IRLS_CHOL_RCOND_GUARD); the gelsd
+    reference carries its own ~eps*cond(X_eq) error. Parity fixtures use
+    unit-scale y and designs a decade or more inside the guard, so the
+    fitted rtol=1e-6/atol=1e-8 and SE rtol=1e-6 gates have >= 2 orders of
+    headroom. SEs are compared RELATIVELY via sqrt(diag(vcov)) — never
+    absolute-decimal — because coefficient scales vary across fixtures.
+
+    Byte-identity IS asserted wherever the gelsd path actually ran (forced
+    or natural certification decline, knob off, rank-deficient designs):
+    a decline falls through the verbatim legacy lines.
+    """
+
+    @staticmethod
+    def _force_python(monkeypatch):
+        import diff_diff.linalg as lmod
+
+        monkeypatch.setattr(lmod, "HAS_RUST_BACKEND", False)
+        monkeypatch.setattr(lmod, "_rust_solve_ols", None)
+
+    @staticmethod
+    def _make_design(seed, n=400, k=5, scale_col=False, add_cluster=False):
+        rng = np.random.default_rng(seed)
+        X = np.column_stack([np.ones(n), rng.standard_normal((n, k - 1))])
+        if scale_col:
+            X[:, k - 1] *= 1e8  # equilibration absorbs raw scale
+        beta = rng.standard_normal(k) / np.maximum(1.0, np.abs(X).max(axis=0) / 10.0)
+        y = X @ beta + rng.standard_normal(n)
+        cluster_ids = rng.integers(0, 25, n) if add_cluster else None
+        return X, y, cluster_ids
+
+    def _run_pair(self, monkeypatch, X, y, diag=None, **kwargs):
+        """Run solve_ols knob-on then knob-off (both forced-python)."""
+        self._force_python(monkeypatch)
+        monkeypatch.setenv("DIFF_DIFF_SOLVE_OLS_FASTPATH", "1")
+        res_on = solve_ols(X, y, diagnostics_out=diag, **kwargs)
+        monkeypatch.delenv("DIFF_DIFF_SOLVE_OLS_FASTPATH")
+        res_off = solve_ols(X, y, **kwargs)
+        return res_on, res_off
+
+    def test_property_parity_vs_default(self, monkeypatch):
+        cases = []
+        for seed in range(10):
+            cases.append(dict(seed=seed, n=200 + 40 * seed, k=3 + seed % 5))
+        for seed in range(10, 15):
+            cases.append(dict(seed=seed, n=500, k=6, scale_col=True))
+        for seed in range(15, 20):
+            cases.append(dict(seed=seed, n=600, k=4, add_cluster=True))
+
+        for case in cases:
+            add_cluster = case.pop("add_cluster", False)
+            X, y, cl = self._make_design(**case, add_cluster=add_cluster)
+            diag = {}
+            (c_on, r_on, v_on), (c_off, r_off, v_off) = self._run_pair(
+                monkeypatch, X, y, diag=diag, cluster_ids=cl
+            )
+            assert diag["solve_ols_fastpath"] == "chol_numpy", case
+            np.testing.assert_allclose(c_on, c_off, rtol=0, atol=1e-8, err_msg=str(case))
+            np.testing.assert_allclose(X @ c_on, X @ c_off, rtol=1e-6, atol=1e-8, err_msg=str(case))
+            np.testing.assert_allclose(
+                np.sqrt(np.diag(v_on)), np.sqrt(np.diag(v_off)), rtol=1e-6, err_msg=str(case)
+            )
+
+    def test_return_fitted_and_no_vcov_shapes(self, monkeypatch):
+        X, y, _ = self._make_design(31)
+        on4, off4 = self._run_pair(monkeypatch, X, y, return_fitted=True, return_vcov=False)
+        assert len(on4) == 4 and len(off4) == 4
+        assert on4[3] is None and off4[3] is None
+        np.testing.assert_allclose(on4[2], off4[2], rtol=1e-6, atol=1e-8)
+
+    def test_forced_fallback_byte_identical(self, monkeypatch):
+        import diff_diff.linalg as lmod
+
+        X, y, _ = self._make_design(7)
+
+        def _always_raise(*args, **kwargs):
+            raise np.linalg.LinAlgError("forced")
+
+        self._force_python(monkeypatch)
+        monkeypatch.setattr(lmod, "cho_factor", _always_raise)
+        monkeypatch.setenv("DIFF_DIFF_SOLVE_OLS_FASTPATH", "1")
+        diag = {}
+        c_on, r_on, v_on = solve_ols(X, y, diagnostics_out=diag)
+        assert diag["solve_ols_fastpath"] == "fallback_declined"
+        # cho_factor stays patched for the off run: the gelsd path never
+        # calls it, which is itself part of the byte-identity claim.
+        monkeypatch.delenv("DIFF_DIFF_SOLVE_OLS_FASTPATH")
+        c_off, r_off, v_off = solve_ols(X, y)
+        np.testing.assert_array_equal(c_on, c_off)
+        np.testing.assert_array_equal(r_on, r_off)
+        np.testing.assert_array_equal(v_on, v_off)
+
+    def test_natural_guard_trip_between_fixture(self, monkeypatch):
+        """Design that PASSES stage-0 rank cert (1e-10) but FAILS the solve
+        guard (1e-6): the twin must decline and fall through verbatim."""
+        import diff_diff.linalg as lmod
+
+        rng = np.random.default_rng(11)
+        n = 500
+        x0 = rng.standard_normal(n)
+        X = np.column_stack([np.ones(n), x0, x0 + 1e-4 * rng.standard_normal(n)])
+        y = X @ np.array([1.0, 2.0, 3.0]) + rng.standard_normal(n)
+
+        # Fixture self-check (regenerate if either bound drifts): eig ratio of
+        # the equilibrated Gram must sit BETWEEN the two thresholds with a
+        # decade of margin on each side.
+        gram = X.T @ X
+        scales = np.sqrt(np.diag(gram))
+        gram_eq = gram / scales[:, None] / scales[None, :]
+        eigvals = np.linalg.eigvalsh(gram_eq)
+        ratio = eigvals[0] / eigvals[-1]
+        assert 1e-9 < ratio < 1e-7, (
+            f"BETWEEN fixture drifted (eig ratio {ratio:.2e}); regenerate so it "
+            "sits between the 1e-10 stage-0 cert and the 1e-6 solve guard"
+        )
+
+        # Certified full rank by stage 0 (no QR, no warning)...
+        rank, dropped, _ = lmod._detect_rank_deficiency(X)
+        assert rank == X.shape[1] and dropped.size == 0
+
+        diag = {}
+        (c_on, r_on, v_on), (c_off, r_off, v_off) = self._run_pair(monkeypatch, X, y, diag=diag)
+        # ...but the solve guard declines and the gelsd line runs verbatim.
+        assert diag["solve_ols_fastpath"] == "fallback_declined"
+        np.testing.assert_array_equal(c_on, c_off)
+        np.testing.assert_array_equal(r_on, r_off)
+        np.testing.assert_array_equal(v_on, v_off)
+
+    def test_default_path_byte_identity_and_no_twin(self, monkeypatch):
+        import diff_diff.linalg as lmod
+
+        X, y, _ = self._make_design(13)
+        self._force_python(monkeypatch)
+        monkeypatch.delenv("DIFF_DIFF_SOLVE_OLS_FASTPATH", raising=False)
+
+        calls = {"twin": 0, "gelsd": 0}
+        real_twin = lmod._solve_ols_chol_numpy
+        real_lstsq = lmod._equilibrated_lstsq
+
+        def _twin(*a, **kw):
+            calls["twin"] += 1
+            return real_twin(*a, **kw)
+
+        def _lstsq(*a, **kw):
+            calls["gelsd"] += 1
+            return real_lstsq(*a, **kw)
+
+        monkeypatch.setattr(lmod, "_solve_ols_chol_numpy", _twin)
+        monkeypatch.setattr(lmod, "_equilibrated_lstsq", _lstsq)
+
+        diag = {}
+        c1, r1, v1 = solve_ols(X, y, diagnostics_out=diag)
+        assert calls == {"twin": 0, "gelsd": 1}
+        assert diag["solve_ols_fastpath"] == "off"
+
+        # env set to an invalid value (0) is also OFF and byte-identical
+        monkeypatch.setenv("DIFF_DIFF_SOLVE_OLS_FASTPATH", "0")
+        c2, r2, v2 = solve_ols(X, y)
+        assert calls == {"twin": 0, "gelsd": 2}
+        np.testing.assert_array_equal(c1, c2)
+        np.testing.assert_array_equal(r1, r2)
+        np.testing.assert_array_equal(v1, v2)
+
+    def test_cert_out_is_pure_out_param(self):
+        import diff_diff.linalg as lmod
+
+        X, _, _ = self._make_design(17)
+        r1 = lmod._detect_rank_deficiency(X)
+        cert = {}
+        r2 = lmod._detect_rank_deficiency(X, _cert_out=cert)
+        assert r1[0] == r2[0]
+        np.testing.assert_array_equal(r1[1], r2[1])
+        np.testing.assert_array_equal(r1[2], r2[2])
+        assert cert.get("certified") is True
+        np.testing.assert_array_equal(cert["gram"], X.T @ X)
+
+    def test_twin_reuse_equals_self_build(self):
+        import diff_diff.linalg as lmod
+
+        X, y, _ = self._make_design(19)
+        cert = {}
+        lmod._detect_rank_deficiency(X, _cert_out=cert)
+        reused = lmod._solve_ols_chol_numpy(X, y, cert_info=cert)
+        built = lmod._solve_ols_chol_numpy(X, y, cert_info=None)
+        assert reused is not None and built is not None
+        np.testing.assert_array_equal(reused[0], built[0])
+        np.testing.assert_array_equal(reused[1], built[1])
+
+    def test_twin_declines_on_uncertified_artifacts(self):
+        import diff_diff.linalg as lmod
+
+        rng = np.random.default_rng(23)
+        n = 300
+        x0 = rng.standard_normal(n)
+        X = np.column_stack([np.ones(n), x0, 2.0 * x0])  # exactly collinear
+        y = rng.standard_normal(n)
+        cert = {}
+        lmod._detect_rank_deficiency(X, _cert_out=cert)
+        assert "gram_eq" in cert and cert.get("certified") is not True
+        assert lmod._solve_ols_chol_numpy(X, y, cert_info=cert) is None
+
+    def test_skip_rank_check_self_cert_declines_near_singular(self, monkeypatch):
+        """skip_rank_check has no stage-0 cert; the twin must SELF-certify.
+        cho_factor succeeding is not a certificate: this fixture has
+        cond(G_eq) ~ 1e12 where Cholesky succeeds with a garbage solution."""
+        rng = np.random.default_rng(29)
+        n = 400
+        x1 = rng.standard_normal(n)
+        X = np.column_stack([np.ones(n), x1, x1 + 1e-6 * rng.standard_normal(n)])
+        y = X @ np.array([1.0, 2.0, 3.0]) + rng.standard_normal(n)
+
+        diag = {}
+        (c_on, r_on, v_on), (c_off, r_off, v_off) = self._run_pair(
+            monkeypatch, X, y, diag=diag, skip_rank_check=True
+        )
+        assert diag["solve_ols_fastpath"] == "fallback_declined"
+        np.testing.assert_array_equal(c_on, c_off)
+        np.testing.assert_array_equal(r_on, r_off)
+        np.testing.assert_array_equal(v_on, v_off)
+
+    def test_skip_rank_check_well_conditioned_takes_twin(self, monkeypatch):
+        X, y, _ = self._make_design(37)
+        diag = {}
+        (c_on, _, _), (c_off, _, _) = self._run_pair(
+            monkeypatch, X, y, diag=diag, skip_rank_check=True
+        )
+        assert diag["solve_ols_fastpath"] == "chol_numpy"
+        np.testing.assert_allclose(c_on, c_off, rtol=0, atol=1e-8)
+
+    @pytest.mark.parametrize("zero_weights", [False, True])
+    def test_wls_parity(self, monkeypatch, zero_weights):
+        rng = np.random.default_rng(41)
+        X, y, _ = self._make_design(41, n=500)
+        w = rng.uniform(0.5, 2.0, 500)
+        if zero_weights:
+            w[::17] = 0.0
+        diag = {}
+        (c_on, _, v_on), (c_off, _, v_off) = self._run_pair(monkeypatch, X, y, diag=diag, weights=w)
+        assert diag["solve_ols_fastpath"] == "chol_numpy"
+        np.testing.assert_allclose(c_on, c_off, rtol=0, atol=1e-8)
+        np.testing.assert_allclose(np.sqrt(np.diag(v_on)), np.sqrt(np.diag(v_off)), rtol=1e-6)
+
+    def test_rank_deficient_interplay(self, monkeypatch):
+        """Fast path is structurally skipped on rank-deficient designs:
+        warning, NaN pattern, and outputs are byte-identical to knob-off."""
+        rng = np.random.default_rng(43)
+        n = 300
+        x0 = rng.standard_normal(n)
+        X = np.column_stack([np.ones(n), x0, 2.0 * x0, rng.standard_normal(n)])
+        y = rng.standard_normal(n)
+
+        self._force_python(monkeypatch)
+        monkeypatch.setenv("DIFF_DIFF_SOLVE_OLS_FASTPATH", "1")
+        with pytest.warns(UserWarning, match="Rank-deficient"):
+            c_on, r_on, v_on = solve_ols(X, y)
+        monkeypatch.delenv("DIFF_DIFF_SOLVE_OLS_FASTPATH")
+        with pytest.warns(UserWarning, match="Rank-deficient"):
+            c_off, r_off, v_off = solve_ols(X, y)
+        np.testing.assert_array_equal(np.isnan(c_on), np.isnan(c_off))
+        np.testing.assert_array_equal(c_on, c_off)
+        np.testing.assert_array_equal(v_on, v_off)
+
+    @pytest.mark.parametrize("vcov_type", ["classical", "hc2"])
+    def test_non_hc1_vcov_spot_checks(self, monkeypatch, vcov_type):
+        """The twin changes beta for ALL vcov types reaching the full-rank
+        branch; spot-check the parity claim beyond the hc1 gate."""
+        X, y, _ = self._make_design(47)
+        diag = {}
+        (c_on, _, v_on), (c_off, _, v_off) = self._run_pair(
+            monkeypatch, X, y, diag=diag, vcov_type=vcov_type
+        )
+        assert diag["solve_ols_fastpath"] == "chol_numpy"
+        np.testing.assert_allclose(c_on, c_off, rtol=0, atol=1e-8)
+        np.testing.assert_allclose(np.sqrt(np.diag(v_on)), np.sqrt(np.diag(v_off)), rtol=1e-6)
+
+    def test_conley_vcov_spot_check(self, monkeypatch):
+        rng = np.random.default_rng(53)
+        n = 120
+        X = np.column_stack([np.ones(n), rng.standard_normal((n, 2))])
+        y = X @ np.array([1.0, 0.5, -0.5]) + rng.standard_normal(n)
+        coords = rng.uniform(0.0, 10.0, (n, 2))
+        kwargs = dict(
+            vcov_type="conley",
+            conley_coords=coords,
+            conley_cutoff_km=2.0,
+            conley_metric="euclidean",
+        )
+        diag = {}
+        (c_on, _, v_on), (c_off, _, v_off) = self._run_pair(monkeypatch, X, y, diag=diag, **kwargs)
+        assert diag["solve_ols_fastpath"] == "chol_numpy"
+        np.testing.assert_allclose(c_on, c_off, rtol=0, atol=1e-8)
+        np.testing.assert_allclose(np.sqrt(np.diag(v_on)), np.sqrt(np.diag(v_off)), rtol=1e-6)

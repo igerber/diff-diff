@@ -4,6 +4,76 @@ This document outlines the strategy for improving diff-diff's performance on lar
 
 ---
 
+## Opt-in solve_ols normal-equations Cholesky fast path (v3.7, 2026-07)
+
+`solve_ols` is the universal OLS entry point; both backends run an equilibrated
+thin SVD (gelsd-parity) by default — deliberate defense-in-depth (the SVD's
+singular-value truncation is a second, independent near-collinearity detector).
+After the Phase 3 stage-0 Gram certification removed the pivoted-QR cost, the
+SVD solve itself became the dominant stage on solver-bound fits (2026-07-10
+attribution, M4 Max, rust+Accelerate):
+
+| Scenario | Fit (median) | rust `solve_ols` | share |
+|---|---|---|---|
+| county (SunAbraham, 177k rows, ~100 cols) | 1.12 s | 0.65 s | 58% |
+| firm (SunAbraham, 2.4M rows, ~130 cols) | 17.6 s | 9.07 s | 54% |
+| scanner (TWFE, 3.25M rows) | 0.52 s | 0.12 s | 25% |
+| cs_cov40 (CS dr, 2M rows, 40 cov, 95 cells) | 4.28 s | 1.66 s | 40% |
+
+**The lever (opt-in only, per the 2026-07 correctness-first decision):**
+`DIFF_DIFF_SOLVE_OLS_FASTPATH=1` (set to a positive integer; read per call so a
+process can A/B) routes certified-well-conditioned full-rank solves through an
+equilibrated normal-equations Cholesky instead of the SVD:
+
+- **Python twin**: reuses the stage-0 rank-certification artifacts (the Gram is
+  already built to certify rank — the marginal solve cost is X'y + a k×k
+  `cho_factor`/`cho_solve`), gated by LAPACK `dpocon` at reciprocal condition
+  1e-6 on the equilibrated Gram (the `_IRLS_CHOL_RCOND_GUARD` budget: forward
+  error ~eps·cond ≈ 2e-10). Self-builds and self-certifies on the
+  `skip_rank_check` route (no stage-0 artifacts exist there — factorization
+  success alone is NOT a certificate).
+- **Rust kernel** (`solve_ols_chol`, separate pyfunction so a stale extension
+  degrades gracefully): self-certifying faer `Llt` with the exact 1-norm rcond,
+  whose inverse byproduct doubles as the sandwich bread; one owned n×k buffer
+  (the equilibrated copy, reused in place for the vcov scores — no thin-SVD U
+  transient); faer-only heavy ops, so the accelerate/openblas/no-BLAS wheel
+  variants behave identically.
+- **Fallback contract**: any certification decline falls through the UNCHANGED
+  legacy chain (Rust SVD, then gelsd), so knob-on-decline output equals
+  knob-off exactly; the knob-off default is byte-identical to the pre-change
+  tree (pinned by a pristine-base-tree identity gate in the benchmark lane and
+  spy + exact-equality tests) with one deliberate exception: the saturated
+  n == k silent-Inf vcov leak on the legacy Rust path was fixed alongside
+  (CHANGELOG Fixed entry; the sentinel changes Inf -> NaN + warning — no
+  benchmark scenario is saturated, so the identity gate is unaffected).
+
+**Measured** (`benchmarks/speed_review/bench_solve_ols_fastpath.py`,
+subprocess-per-scenario, medians; deltas are knob-on vs knob-off):
+
+| Scenario | off | on | speedup | max deltas |
+|---|---|---|---|---|
+| county_policy (SunAbraham) | 1.13 s | 0.63 s | **1.80x** | dATT 5e-16, dSE/SE 9e-14 |
+| firm_churn (SunAbraham) | 16.77 s | 9.89 s | **1.70x** | dATT 9e-15, dSE/SE 3e-12 |
+| scanner_twfe (TWFE) | 0.58 s | 0.57 s | 1.01x | demean-bound |
+| cs_cov40 (CS dr per-cell) | 4.40 s | 3.57 s | **1.23x** | dATT = 0 (bit-stable) |
+| survey_absorb (WLS -> numpy twin) | 2.77 s | 2.59 s | 1.07x | dATT = 0 |
+| skiprank_micro (2.4M×130 direct) | 6.88 s | 4.42 s | **1.56x** | dATT 1e-12 |
+
+Memory: rust-side allocator high-water on the 2.4M×130 clustered solve
+(alloc-profile build) drops **7.27 GB -> 2.66 GB** knob-on — the fast path's
+working set is essentially the single equilibrated buffer, sidestepping the
+SVD residual memory floor documented below (that floor still governs the
+default path).
+
+**Why opt-in and not default**: the default path's byte-stability is load-bearing
+(benchmark identity conventions, golden pins at 1e-8) and the SVD truncation is
+deliberate defense-in-depth. Within the opt-in path, parity is tol-bounded
+(fitted ~1e-8 abs, SE ~1e-6 rel), never bit-level. A default-on flip is tracked
+as a TODO follow-up (needs golden recapture + certification-rate telemetry +
+the staged default-flip protocol).
+
+---
+
 ## FE-absorption baseline: the MAP demeaning hot path (v3.6.x, July 2026)
 
 A measured head-to-head against pyfixest 0.60 (Rust demeaner core), prompted by

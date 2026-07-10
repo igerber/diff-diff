@@ -12,6 +12,7 @@ use std::collections::HashMap;
 
 // faer for pure Rust linear algebra (no external BLAS/LAPACK dependencies)
 use faer::linalg::solvers::{PartialPivLu, Solve};
+use faer::Side;
 
 /// Solve OLS regression: β = (X'X)^{-1} X'y
 ///
@@ -312,6 +313,32 @@ fn compute_robust_vcov_internal(
     n: usize,
     k: usize,
 ) -> PyResult<Array2<f64>> {
+    // Saturated design (n <= k): zero residual degrees of freedom make the
+    // HC1/CR1 (n - k) adjustment undefined. The documented non-finite
+    // inference contract — and the numpy backend, which is canonical (its
+    // saturated guard fires before any bread inversion) — is an all-NaN
+    // vcov; the previous behavior silently leaked Inf through the n/(n-k)
+    // division. Placed BEFORE the bread inversion to mirror the numpy
+    // guard order, so direct compute_robust_vcov calls with a singular
+    // saturated Gram get the NaN sentinel rather than an inversion error.
+    // The G >= 2 cluster contract keeps precedence (evaluated here only in
+    // the saturated case, where n is tiny; the general path's in-arm check
+    // below is unchanged).
+    if n <= k {
+        if let Some(clusters) = cluster_ids {
+            let (_, n_clusters) = cluster_first_appearance_index(clusters, n);
+            if n_clusters < 2 {
+                return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                    "Need at least 2 clusters for cluster-robust SEs, got {}",
+                    n_clusters
+                )));
+            }
+        }
+        let mut nan_vcov = Array2::<f64>::zeros((k, k));
+        nan_vcov.fill(f64::NAN);
+        return Ok(nan_vcov);
+    }
+
     // Compute X'X
     let xtx = x.t().dot(x);
 
@@ -358,13 +385,10 @@ fn compute_robust_vcov_internal(
             // is bit-stable). Rows accumulate in first-appearance order
             // instead: for the factorized 0..G-1 ids the Python dispatcher
             // passes this is ascending id order, matching NumPy's groupby.
-            let mut cluster_index: HashMap<i64, usize> = HashMap::new();
-            for i in 0..n_obs {
-                let next = cluster_index.len();
-                cluster_index.entry(clusters[i]).or_insert(next);
-            }
-
-            let n_clusters = cluster_index.len();
+            // Index construction is shared with the Cholesky fast-path
+            // kernel (cluster_first_appearance_index) so the ordering
+            // contract cannot drift between the two vcov paths.
+            let (cluster_index, n_clusters) = cluster_first_appearance_index(clusters, n_obs);
 
             if n_clusters < 2 {
                 return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
@@ -510,6 +534,321 @@ fn invert_symmetric(a: &Array2<f64>) -> PyResult<Array2<f64>> {
     Ok(result)
 }
 
+/// Build the deterministic first-appearance-order cluster index shared by
+/// the SVD-path vcov (`compute_robust_vcov_internal`) and the Cholesky
+/// fast-path kernel. Returns the id -> row map and the cluster count; the
+/// caller enforces its own G >= 2 contract so the two paths raise the same
+/// error through their own channels.
+fn cluster_first_appearance_index(
+    clusters: &Array1<i64>,
+    n_obs: usize,
+) -> (HashMap<i64, usize>, usize) {
+    let mut cluster_index: HashMap<i64, usize> = HashMap::new();
+    for i in 0..n_obs {
+        let next = cluster_index.len();
+        cluster_index.entry(clusters[i]).or_insert(next);
+    }
+    let n_clusters = cluster_index.len();
+    (cluster_index, n_clusters)
+}
+
+/// Kernel error that must surface as a Python exception, as opposed to a
+/// certification decline (which returns `None` so the dispatcher falls
+/// through to the SVD path).
+pub(crate) enum CholKernelError {
+    /// Cluster-robust vcov requested with fewer than 2 clusters. Message
+    /// parity with `compute_robust_vcov_internal` matters: the Python
+    /// dispatcher re-raises unless the text mentions instability.
+    TooFewClusters(usize),
+}
+
+/// Reciprocal-1-norm-condition guard for the Cholesky fast path. Same 1e-6
+/// bound as the Python twin's `_SOLVE_OLS_CHOL_RCOND_GUARD` (dpocon):
+/// cond(G_eq) <= 1e6 bounds the Cholesky forward error at ~eps*cond
+/// ~ 2e-10 relative in the equilibrated basis. The exact 1-norm computed
+/// here is >= dpocon's lower-bound estimate, so this rcond is <= the
+/// twin's and the guard is marginally STRICTER — a disagreement near the
+/// boundary only flips to the verbatim-correct SVD fallback.
+const CHOL_RCOND_GUARD: f64 = 1e-6;
+
+/// Output of the certified normal-equations Cholesky solve.
+pub(crate) struct CholSolveOutput {
+    pub(crate) coefficients: Array1<f64>,
+    pub(crate) residuals: Array1<f64>,
+    pub(crate) vcov: Option<Array2<f64>>,
+}
+
+/// Certified equilibrated normal-equations Cholesky OLS (opt-in fast path).
+///
+/// Self-certifying: returns `Ok(None)` (the dispatcher then falls through
+/// VERBATIM to the SVD `solve_ols`) on any of: k == 0, n < k, zero or
+/// non-finite column norm, Llt factorization failure, exact 1-norm
+/// rcond(G_eq) <= 1e-6, or a non-finite coefficient. Every heavy operation
+/// on this path is faer matmul or a hand-rolled sequential loop — never a
+/// BLAS-feature-gated ndarray `.dot()` — so results and performance are
+/// uniform across the accelerate/openblas/no-BLAS wheel variants.
+///
+/// Memory discipline: ONE owned n x k buffer (the equilibrated copy),
+/// reused in place for the vcov scores; unlike the SVD path there is no
+/// U-factor transient, so the allocator high-water is strictly lower.
+///
+/// vcov (hc1 / CR1 only, matching the SVD kernel's scope) fuses the bread
+/// from the certification byproduct: the rcond computation solves
+/// G_eq * Z = I, and (X'X)^{-1} = D^{-1} Z D^{-1} with D = diag(col norms).
+/// Adjustment factors, the G >= 2 contract, and the saturated n == k
+/// all-NaN vcov contract replicate `compute_robust_vcov_internal`
+/// (both paths honor the documented non-finite-inference contract;
+/// the SVD path's former silent-Inf leak was fixed alongside this
+/// kernel).
+pub(crate) fn solve_ols_chol_core(
+    x: &ArrayView2<f64>,
+    y: &ArrayView1<f64>,
+    cluster_ids: Option<&Array1<i64>>,
+    return_vcov: bool,
+) -> Result<Option<CholSolveOutput>, CholKernelError> {
+    let n = x.nrows();
+    let k = x.ncols();
+    if k == 0 || n < k {
+        return Ok(None);
+    }
+
+    // Column 2-norms in the legacy j-outer/i-inner order. Unlike the SVD
+    // path (which substitutes 1.0 and lets truncation absorb zero columns),
+    // a zero norm here means a structurally deficient design and a
+    // non-finite norm means NaN/Inf in X (any non-finite entry poisons its
+    // own column's norm) — both are certification declines.
+    let mut norms = Array1::<f64>::zeros(k);
+    for j in 0..k {
+        let mut acc = 0.0_f64;
+        for i in 0..n {
+            let v = x[[i, j]];
+            acc += v * v;
+        }
+        let norm = acc.sqrt();
+        if !norm.is_finite() || !(norm > 0.0) {
+            return Ok(None);
+        }
+        norms[j] = norm;
+    }
+
+    // The single owned n x k buffer: equilibrated copy (unit 2-norm
+    // columns, entries bounded by 1, so the Gram below is finite by
+    // construction given the finite-norm gate above).
+    let mut x_eq = faer::Mat::from_fn(n, k, |i, j| x[[i, j]] / norms[j]);
+
+    // Equilibrated Gram and its Cholesky factor. Factorization failure
+    // (not numerically PD) declines.
+    let gram_eq = x_eq.as_ref().transpose() * x_eq.as_ref();
+    let llt = match gram_eq.llt(Side::Lower) {
+        Ok(f) => f,
+        Err(_) => return Ok(None),
+    };
+
+    // Certification: exact 1-norm reciprocal condition number via the full
+    // inverse Z = G_eq^{-1} (a k x k solve against I — same O(k^3) order as
+    // the factorization, microseconds at the k this library sees). Z
+    // doubles as the vcov bread below, so certification is not wasted work.
+    let identity = faer::Mat::<f64>::from_fn(k, k, |i, j| if i == j { 1.0 } else { 0.0 });
+    let z = llt.solve(&identity);
+    let mut anorm = 0.0_f64; // ||G_eq||_1
+    let mut znorm = 0.0_f64; // ||G_eq^{-1}||_1
+    for j in 0..k {
+        let mut col_a = 0.0_f64;
+        let mut col_z = 0.0_f64;
+        for i in 0..k {
+            col_a += gram_eq[(i, j)].abs();
+            col_z += z[(i, j)].abs();
+        }
+        anorm = anorm.max(col_a);
+        znorm = znorm.max(col_z);
+    }
+    let denom = anorm * znorm;
+    let rcond = if denom > 0.0 && denom.is_finite() {
+        1.0 / denom
+    } else {
+        0.0
+    };
+    if !(rcond > CHOL_RCOND_GUARD) {
+        return Ok(None);
+    }
+
+    // beta_eq = G_eq^{-1} (X_eq' y); X_eq'y via sequential column-order
+    // accumulation off the col-major faer buffer (deterministic bits, like
+    // the SVD path's uty loop).
+    let mut xty_eq = faer::Mat::<f64>::zeros(k, 1);
+    for j in 0..k {
+        let mut acc = 0.0_f64;
+        for i in 0..n {
+            acc += x_eq[(i, j)] * y[i];
+        }
+        xty_eq[(j, 0)] = acc;
+    }
+    let beta_eq = llt.solve(&xty_eq);
+    let mut coefficients = Array1::<f64>::zeros(k);
+    for j in 0..k {
+        let b = beta_eq[(j, 0)] / norms[j];
+        if !b.is_finite() {
+            return Ok(None);
+        }
+        coefficients[j] = b;
+    }
+
+    // fitted = X beta = X_eq beta_eq exactly (equilibration is a column
+    // reparameterization), so the matvec reuses the owned equilibrated
+    // buffer through faer instead of a BLAS-gated dot on the raw view.
+    let fitted = x_eq.as_ref() * beta_eq.as_ref();
+    let mut residuals = Array1::<f64>::zeros(n);
+    for i in 0..n {
+        residuals[i] = y[i] - fitted[(i, 0)];
+    }
+
+    let vcov = if return_vcov {
+        // Saturated design (n == k; n < k already declined above): zero
+        // residual degrees of freedom, so the sandwich's (n - k) adjustment
+        // is undefined. The documented non-finite-inference contract is an
+        // all-NaN vcov (matching the numpy saturated guard and the SVD
+        // path's guard in compute_robust_vcov_internal).
+        // Cluster-contract precedence: the G >= 2 check fires first.
+        if let Some(clusters) = cluster_ids {
+            let (_, n_clusters) = cluster_first_appearance_index(clusters, n);
+            if n_clusters < 2 {
+                return Err(CholKernelError::TooFewClusters(n_clusters));
+            }
+        }
+        if n == k {
+            let mut nan_vcov = Array2::<f64>::zeros((k, k));
+            nan_vcov.fill(f64::NAN);
+            return Ok(Some(CholSolveOutput {
+                coefficients,
+                residuals,
+                vcov: Some(nan_vcov),
+            }));
+        }
+
+        // Overwrite the equilibrated buffer in place with the RAW scores
+        // x_ij * u_i (undo the column scaling while folding in the
+        // residual) — the memory-floor trick: no second n x k allocation.
+        for j in 0..k {
+            let nj = norms[j];
+            for i in 0..n {
+                x_eq[(i, j)] *= nj * residuals[i];
+            }
+        }
+
+        let (meat, adjustment) = match cluster_ids {
+            None => {
+                // HC1 meat: S'S with S = diag(u) X.
+                let m = x_eq.as_ref().transpose() * x_eq.as_ref();
+                (m, n as f64 / (n - k) as f64)
+            }
+            Some(clusters) => {
+                let (cluster_index, n_clusters) = cluster_first_appearance_index(clusters, n);
+                // Unreachable when n == k (early return above), but the
+                // G >= 2 contract is kept here too for the general path.
+                if n_clusters < 2 {
+                    return Err(CholKernelError::TooFewClusters(n_clusters));
+                }
+                let mut cluster_scores = faer::Mat::<f64>::zeros(n_clusters, k);
+                for i in 0..n {
+                    let idx = cluster_index[&clusters[i]];
+                    for j in 0..k {
+                        cluster_scores[(idx, j)] += x_eq[(i, j)];
+                    }
+                }
+                let g = n_clusters as f64;
+                let adjustment = (g / (g - 1.0)) * ((n - 1) as f64 / (n - k) as f64);
+                let m = cluster_scores.as_ref().transpose() * cluster_scores.as_ref();
+                (m, adjustment)
+            }
+        };
+
+        // Bread on the raw scale from the certification byproduct:
+        // (X'X)^{-1} = D^{-1} G_eq^{-1} D^{-1}.
+        let bread = faer::Mat::<f64>::from_fn(k, k, |i, j| z[(i, j)] / (norms[i] * norms[j]));
+        let half = bread.as_ref() * meat.as_ref();
+        let sandwich = half.as_ref() * bread.as_ref();
+        let mut vcov_arr = Array2::<f64>::zeros((k, k));
+        for i in 0..k {
+            for j in 0..k {
+                vcov_arr[[i, j]] = sandwich[(i, j)] * adjustment;
+            }
+        }
+        Some(vcov_arr)
+    } else {
+        None
+    };
+
+    Ok(Some(CholSolveOutput {
+        coefficients,
+        residuals,
+        vcov,
+    }))
+}
+
+/// Opt-in certified normal-equations Cholesky OLS (see
+/// `solve_ols_chol_core`). Returns Python `None` when certification
+/// declines — the dispatcher then falls through verbatim to the SVD
+/// `solve_ols` — and the same "Need at least 2 clusters" ValueError as the
+/// SVD path's vcov when clustered vcov is requested with G < 2.
+///
+/// Registered as a SEPARATE pyfunction (not a new parameter on
+/// `solve_ols`) so a stale installed extension missing this symbol
+/// degrades gracefully via the independent-import pattern in
+/// `_backend.py` instead of raising TypeError at call time.
+#[pyfunction]
+#[pyo3(signature = (x, y, cluster_ids=None, return_vcov=true))]
+#[allow(clippy::type_complexity)]
+pub fn solve_ols_chol<'py>(
+    py: Python<'py>,
+    x: PyReadonlyArray2<'py, f64>,
+    y: PyReadonlyArray1<'py, f64>,
+    cluster_ids: Option<PyReadonlyArray1<'py, i64>>,
+    return_vcov: bool,
+) -> PyResult<
+    Option<(
+        Bound<'py, PyArray1<f64>>,
+        Bound<'py, PyArray1<f64>>,
+        Option<Bound<'py, PyArray2<f64>>>,
+    )>,
+> {
+    let x_arr = x.as_array();
+    let y_arr = y.as_array();
+    // Shape contract up front: the Python dispatcher always passes matched
+    // shapes, but direct pyfunction misuse should raise a clean ValueError
+    // instead of a low-level index panic from the core.
+    if y_arr.len() != x_arr.nrows() {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+            "y length ({}) must match X rows ({})",
+            y_arr.len(),
+            x_arr.nrows()
+        )));
+    }
+    let cluster_arr = cluster_ids.as_ref().map(|c| c.as_array().to_owned());
+    if let Some(cl) = cluster_arr.as_ref() {
+        if cl.len() != x_arr.nrows() {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                "cluster_ids length ({}) must match X rows ({})",
+                cl.len(),
+                x_arr.nrows()
+            )));
+        }
+    }
+    match solve_ols_chol_core(&x_arr, &y_arr, cluster_arr.as_ref(), return_vcov) {
+        Ok(Some(out)) => Ok(Some((
+            out.coefficients.to_pyarray(py),
+            out.residuals.to_pyarray(py),
+            out.vcov.map(|v| v.to_pyarray(py)),
+        ))),
+        Ok(None) => Ok(None),
+        Err(CholKernelError::TooFewClusters(g)) => {
+            Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                "Need at least 2 clusters for cluster-robust SEs, got {}",
+                g
+            )))
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -568,6 +907,221 @@ mod tests {
 
         // This is the key fix: s_inv_uty must have dimension s.len()=min(n,k),
         // not k, otherwise vt.t().dot(&s_inv_uty) will have mismatched dimensions
+    }
+
+    /// Deterministic pseudo-random design for the chol-kernel tests (no
+    /// rand dependency in tests; simple LCG, values in roughly [-1, 1]).
+    fn lcg_design(n: usize, k: usize, seed: u64) -> (Array2<f64>, Array1<f64>) {
+        let mut state = seed
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        let mut next = || {
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            ((state >> 33) as f64) / ((1u64 << 31) as f64) - 1.0
+        };
+        let mut x = Array2::<f64>::zeros((n, k));
+        for i in 0..n {
+            x[[i, 0]] = 1.0; // intercept
+            for j in 1..k {
+                x[[i, j]] = next();
+            }
+        }
+        let mut y = Array1::<f64>::zeros(n);
+        for i in 0..n {
+            let mut acc = 0.0;
+            for j in 0..k {
+                acc += x[[i, j]] * (j as f64 + 0.5);
+            }
+            y[i] = acc + 0.1 * next();
+        }
+        (x, y)
+    }
+
+    #[test]
+    fn test_chol_core_matches_lu_oracle() {
+        // Well-conditioned design: chol beta must match the LU
+        // normal-equations oracle to ~1e-12 (both exact to ~eps*cond).
+        let (x, y) = lcg_design(200, 5, 7);
+        let out = solve_ols_chol_core(&x.view(), &y.view(), None, true)
+            .ok()
+            .flatten()
+            .expect("well-conditioned design must certify");
+
+        let xtx = x.t().dot(&x);
+        let xty = x.t().dot(&y);
+        let xtx_inv = invert_symmetric(&xtx).expect("oracle inverse");
+        let beta_oracle = xtx_inv.dot(&xty);
+        for j in 0..5 {
+            assert!(
+                (out.coefficients[j] - beta_oracle[j]).abs() < 1e-12,
+                "beta[{}]: chol {} vs oracle {}",
+                j,
+                out.coefficients[j],
+                beta_oracle[j]
+            );
+        }
+
+        // Bread-from-factor must match the LU-inverse HC1 sandwich to 1e-12.
+        let u2: Array1<f64> = out.residuals.mapv(|r| r * r);
+        let xw = &x * &u2.insert_axis(ndarray::Axis(1));
+        let meat = x.t().dot(&xw);
+        let adj = 200.0 / (200.0 - 5.0);
+        let vcov_oracle = xtx_inv.dot(&meat).dot(&xtx_inv) * adj;
+        let vcov = out.vcov.expect("vcov requested");
+        for i in 0..5 {
+            for j in 0..5 {
+                assert!(
+                    (vcov[[i, j]] - vcov_oracle[[i, j]]).abs() < 1e-12,
+                    "vcov[{},{}]: {} vs {}",
+                    i,
+                    j,
+                    vcov[[i, j]],
+                    vcov_oracle[[i, j]]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_chol_core_declines_near_singular() {
+        // x2 = x1 + 1e-8 * noise: cond(G_eq) far beyond the 1e-6 guard.
+        let (x0, y) = lcg_design(300, 2, 11);
+        let mut x = Array2::<f64>::zeros((300, 3));
+        let mut state = 12345u64;
+        for i in 0..300 {
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            let noise = ((state >> 33) as f64) / ((1u64 << 31) as f64) - 1.0;
+            x[[i, 0]] = x0[[i, 0]];
+            x[[i, 1]] = x0[[i, 1]];
+            x[[i, 2]] = x0[[i, 1]] + 1e-8 * noise;
+        }
+        let result = solve_ols_chol_core(&x.view(), &y.view(), None, true)
+            .ok()
+            .flatten();
+        assert!(result.is_none(), "near-singular design must decline");
+    }
+
+    #[test]
+    fn test_chol_core_declines_on_nan_and_zero_column() {
+        let (mut x, y) = lcg_design(50, 3, 13);
+        x[[7, 1]] = f64::NAN;
+        assert!(
+            solve_ols_chol_core(&x.view(), &y.view(), None, false)
+                .ok()
+                .flatten()
+                .is_none(),
+            "NaN in X poisons its column norm and must decline"
+        );
+
+        let (mut x2, y2) = lcg_design(50, 3, 17);
+        for i in 0..50 {
+            x2[[i, 2]] = 0.0;
+        }
+        assert!(
+            solve_ols_chol_core(&x2.view(), &y2.view(), None, false)
+                .ok()
+                .flatten()
+                .is_none(),
+            "zero column must decline (structural deficiency)"
+        );
+    }
+
+    #[test]
+    fn test_chol_core_declines_underdetermined() {
+        let (x, y) = lcg_design(3, 5, 19);
+        assert!(
+            solve_ols_chol_core(&x.view(), &y.view(), None, false)
+                .ok()
+                .flatten()
+                .is_none(),
+            "n < k must decline"
+        );
+    }
+
+    #[test]
+    fn test_chol_core_saturated_design_nan_vcov() {
+        // n == k full rank: zero residual df makes the sandwich adjustment
+        // undefined; the contract is all-NaN vcov (never Inf). Coefficients
+        // and residuals stay finite. Cluster precedence: G < 2 still errors
+        // BEFORE the saturated guard.
+        let (x, y) = lcg_design(4, 4, 31);
+        let out = solve_ols_chol_core(&x.view(), &y.view(), None, true)
+            .ok()
+            .flatten()
+            .expect("saturated full-rank design must certify");
+        assert!(out.coefficients.iter().all(|v| v.is_finite()));
+        let vcov = out.vcov.expect("vcov requested");
+        assert!(
+            vcov.iter().all(|v| v.is_nan()),
+            "saturated vcov must be all-NaN, got {:?}",
+            vcov
+        );
+
+        let mut clusters = Array1::<i64>::zeros(4);
+        for i in 0..4 {
+            clusters[i] = (i % 2) as i64;
+        }
+        let out2 = solve_ols_chol_core(&x.view(), &y.view(), Some(&clusters), true)
+            .ok()
+            .flatten()
+            .expect("clustered saturated design must certify");
+        assert!(out2.vcov.expect("vcov").iter().all(|v| v.is_nan()));
+
+        let one_cluster = Array1::<i64>::zeros(4);
+        let res = solve_ols_chol_core(&x.view(), &y.view(), Some(&one_cluster), true);
+        assert!(
+            matches!(res, Err(CholKernelError::TooFewClusters(1))),
+            "G < 2 must take precedence over the saturated guard"
+        );
+    }
+
+    #[test]
+    fn test_chol_core_too_few_clusters_errors() {
+        let (x, y) = lcg_design(60, 3, 23);
+        let clusters = Array1::<i64>::zeros(60); // single cluster
+        let result = solve_ols_chol_core(&x.view(), &y.view(), Some(&clusters), true);
+        assert!(
+            matches!(result, Err(CholKernelError::TooFewClusters(1))),
+            "G < 2 with vcov must error, not decline"
+        );
+        // ...but with return_vcov=false the cluster contract never fires,
+        // matching the SVD path (its check lives inside the vcov build).
+        let no_vcov = solve_ols_chol_core(&x.view(), &y.view(), Some(&clusters), false);
+        assert!(matches!(no_vcov, Ok(Some(_))));
+    }
+
+    #[test]
+    fn test_chol_core_clustered_matches_lu_oracle() {
+        let (x, y) = lcg_design(120, 4, 29);
+        let mut clusters = Array1::<i64>::zeros(120);
+        for i in 0..120 {
+            clusters[i] = (i % 8) as i64;
+        }
+        let out = solve_ols_chol_core(&x.view(), &y.view(), Some(&clusters), true)
+            .ok()
+            .flatten()
+            .expect("well-conditioned design must certify");
+        let vcov = out.vcov.expect("vcov requested");
+
+        let oracle =
+            compute_robust_vcov_internal(&x.view(), &out.residuals.view(), Some(&clusters), 120, 4)
+                .expect("oracle vcov");
+        for i in 0..4 {
+            for j in 0..4 {
+                assert!(
+                    (vcov[[i, j]] - oracle[[i, j]]).abs() < 1e-12,
+                    "clustered vcov[{},{}]: {} vs {}",
+                    i,
+                    j,
+                    vcov[[i, j]],
+                    oracle[[i, j]]
+                );
+            }
+        }
     }
 
     // Note: Singular and near-singular matrix tests removed because:

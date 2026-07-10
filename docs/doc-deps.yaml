@@ -880,6 +880,7 @@ sources:
         type: methodology
       - path: docs/performance-plan.md
         type: performance
+        note: "Opt-in DIFF_DIFF_SOLVE_OLS_FASTPATH normal-equations Cholesky fast path (certified twin + stage-0 Gram reuse)"
       - path: docs/benchmarks.rst
         type: performance
       - path: docs/api/utils.rst
@@ -1021,4 +1022,4 @@ sources:
     docs:
       - path: docs/performance-plan.md
         type: performance
-        note: "Rust backend detection"
+        note: "Rust backend detection; independently-imported solve_ols_chol symbol (stale-extension degradation)"

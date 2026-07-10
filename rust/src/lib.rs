@@ -52,6 +52,7 @@ fn _rust_backend(m: &Bound<'_, PyModule>) -> PyResult<()> {
 
     // Linear algebra operations
     m.add_function(wrap_pyfunction!(linalg::solve_ols, m)?)?;
+    m.add_function(wrap_pyfunction!(linalg::solve_ols_chol, m)?)?;
     m.add_function(wrap_pyfunction!(linalg::compute_robust_vcov, m)?)?;
     m.add_function(wrap_pyfunction!(linalg::compute_robust_vcov_hc2, m)?)?;
 

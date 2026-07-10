@@ -93,6 +93,17 @@ try:
 except ImportError:
     _rust_compute_robust_vcov_hc2 = None
 
+# Opt-in normal-equations Cholesky OLS fast path: imported independently
+# for the same mixed-version reason as demean_map. A stale extension
+# missing only this symbol keeps every older Rust acceleration: Rust-eligible
+# fits fall back to the legacy SVD solve_ols kernel (the knob simply has no
+# Rust acceleration there), while numpy-lane fits (weighted, non-hc1,
+# forced-python) still use the numpy Cholesky twin.
+try:
+    from diff_diff._rust_backend import solve_ols_chol as _rust_solve_ols_chol
+except ImportError:
+    _rust_solve_ols_chol = None
+
 # Determine final backend based on environment variable and availability
 if _backend_env == "python":
     # Force pure Python mode - disable Rust even if available
@@ -107,6 +118,8 @@ if _backend_env == "python":
     _rust_batched_ridge_chol_solve = None
     # HC2 robust vcov
     _rust_compute_robust_vcov_hc2 = None
+    # Opt-in normal-equations Cholesky OLS fast path
+    _rust_solve_ols_chol = None
     # TROP estimator acceleration (local method)
     _rust_unit_distance_matrix = None
     _rust_loocv_grid_search = None
@@ -158,6 +171,8 @@ __all__ = [
     "_rust_project_simplex",
     "_rust_solve_ols",
     "_rust_compute_robust_vcov",
+    # Opt-in normal-equations Cholesky OLS fast path
+    "_rust_solve_ols_chol",
     # FE-absorption MAP demeaning kernel
     "_rust_demean_map",
     # Batched ridge-regularized SPD solve (EfficientDiD per-unit weights)

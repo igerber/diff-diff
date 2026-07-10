@@ -32,6 +32,7 @@ This is controlled by the `rank_deficient_action` parameter:
 - "silent": No warning, but still set NA for dropped coefficients
 """
 
+import os
 import warnings
 from dataclasses import dataclass
 from typing import Any, Dict, List, Literal, Optional, Tuple, Union, overload
@@ -49,6 +50,7 @@ from diff_diff._backend import (
     _rust_compute_robust_vcov,
     _rust_compute_robust_vcov_hc2,
     _rust_solve_ols,
+    _rust_solve_ols_chol,
 )
 
 # Conley (1999) spatial HAC helpers live in diff_diff.conley to keep this
@@ -96,6 +98,8 @@ def _factorize_cluster_ids(cluster_ids: np.ndarray) -> np.ndarray:
 def _detect_rank_deficiency(
     X: np.ndarray,
     rcond: Optional[float] = None,
+    *,
+    _cert_out: Optional[dict] = None,
 ) -> Tuple[int, np.ndarray, np.ndarray]:
     """
     Detect rank deficiency using pivoted QR decomposition.
@@ -137,6 +141,16 @@ def _detect_rank_deficiency(
         Column permutation from QR decomposition. For a full-rank result the
         pivot carries no information (no caller consumes it; the stage-0
         certification below returns a trivial ``arange`` pivot).
+
+    Other Parameters
+    ----------------
+    _cert_out : dict, optional
+        Private out-parameter for the opt-in solve_ols Cholesky fast path.
+        When a dict is passed and stage-0 certification runs, it is populated
+        with the stage-0 artifacts (``gram``, ``scales``, ``gram_eq``,
+        ``eig_min``, ``eig_max`` and, on the certified branch, ``certified``)
+        so the caller can reuse the Gram work instead of rebuilding it. Pure
+        out-parameter: the return value and every rank decision are unchanged.
     """
     n, k = X.shape
     if k == 0:
@@ -174,12 +188,22 @@ def _detect_rank_deficiency(
             gram_eq = gram / scales[:, None] / scales[None, :]
             eigvals = np.linalg.eigvalsh(gram_eq)
             eig_min, eig_max = eigvals[0], eigvals[-1]
+            if _cert_out is not None:
+                _cert_out.update(
+                    gram=gram,
+                    scales=scales,
+                    gram_eq=gram_eq,
+                    eig_min=eig_min,
+                    eig_max=eig_max,
+                )
             if (
                 np.isfinite(eig_min)
                 and np.isfinite(eig_max)
                 and eig_max > 0.0
                 and eig_min > 1e-10 * eig_max
             ):
+                if _cert_out is not None:
+                    _cert_out["certified"] = True
                 return k, np.array([], dtype=int), np.arange(k, dtype=int)
 
     def _rank_and_pivot(M: np.ndarray) -> Tuple[int, np.ndarray]:
@@ -408,6 +432,109 @@ def _equilibrated_lstsq(X: np.ndarray, y: np.ndarray) -> np.ndarray:
         overwrite_a=True,
     )[0]
     return coef_scaled / safe_norms
+
+
+# Reciprocal-condition guard for the opt-in solve_ols normal-equations Cholesky
+# fast path. Same 1e-6 bound and rationale as _IRLS_CHOL_RCOND_GUARD (see the
+# solve_logit IRLS inner solve): cond(G_eq) <= 1e6 bounds the Cholesky forward
+# error at ~eps*cond ~ 2e-10 relative in the equilibrated basis. Kept as a
+# separate constant so the two paths can be tuned independently.
+_SOLVE_OLS_CHOL_RCOND_GUARD = 1e-6
+
+# Module default for the opt-in fast path (OFF = byte-identical legacy
+# behavior). The env var is read PER CALL (see resolver below) so benchmarks
+# and tests can A/B within one process; this constant is the monkeypatch seam
+# and the fallback for unset/invalid env values.
+_SOLVE_OLS_FASTPATH: bool = False
+
+
+def _resolve_solve_ols_fastpath() -> bool:
+    """Resolve the DIFF_DIFF_SOLVE_OLS_FASTPATH opt-in knob.
+
+    Set to a positive integer (``1``) to enable the certification-gated
+    normal-equations Cholesky fast path in ``solve_ols``. Read PER CALL, not
+    at import, so a single process can A/B the two paths. Unset or invalid
+    values (non-integer strings, zero, negatives) fall back silently to the
+    module default, mirroring ``_resolve_demean_chunk_cols``'s convention.
+    """
+    raw = os.environ.get("DIFF_DIFF_SOLVE_OLS_FASTPATH")
+    if raw is None:
+        return _SOLVE_OLS_FASTPATH
+    try:
+        value = int(raw)
+    except ValueError:
+        return _SOLVE_OLS_FASTPATH
+    return True if value > 0 else _SOLVE_OLS_FASTPATH
+
+
+def _solve_ols_chol_numpy(
+    X: np.ndarray,
+    y: np.ndarray,
+    *,
+    cert_info: Optional[dict] = None,
+) -> Optional[Tuple[np.ndarray, np.ndarray]]:
+    """Certified equilibrated normal-equations Cholesky solve (opt-in path).
+
+    Returns ``(coefficients, gram_raw)`` on success, or ``None`` when
+    certification declines — the caller then falls back VERBATIM to the gelsd
+    path, so a decline is always output-identical to the fast path being off.
+    ``gram_raw`` is exactly the ``X.T @ X`` expression on the same array, so
+    the caller may reuse it as the robust-vcov bread matrix bit-for-bit.
+
+    Guard chain mirrors the solve_logit IRLS inner solve: symmetric
+    equilibration of the Gram (== column equilibration of X), ``cho_factor``,
+    then an explicit ``dpocon`` reciprocal-condition estimate gated at
+    ``_SOLVE_OLS_CHOL_RCOND_GUARD`` — factorization success alone is NOT a
+    certificate (cho_factor can succeed with a garbage solution at
+    cond ~ 1e10+). Stage-0 artifacts from ``_detect_rank_deficiency`` are
+    reused when supplied (``cert_info``); the self-build branch exists for the
+    ``skip_rank_check`` route where no stage-0 certification ran. Artifacts
+    present but uncertified mean the design already failed the (looser)
+    stage-0 rank gate, so the solve gate cannot pass: decline immediately.
+    """
+    n, k = X.shape
+    if k == 0 or n < k:
+        return None
+
+    if cert_info is not None:
+        if "gram_eq" not in cert_info or not cert_info.get("certified", False):
+            return None
+        gram = cert_info["gram"]
+        scales = cert_info["scales"]
+        gram_eq = cert_info["gram_eq"]
+    else:
+        # Self-build (skip_rank_check route). Same expressions and guards as
+        # stage-0: decline unless diag is finite AND strictly positive (zero
+        # diag = zero/underflowed column; non-finite diag = NaN/Inf in X —
+        # any non-finite entry poisons its own column's diagonal).
+        with np.errstate(divide="ignore", over="ignore", invalid="ignore"):
+            gram = X.T @ X
+        diag = np.diag(gram)
+        if not (np.all(np.isfinite(diag)) and np.all(diag > 0)):
+            return None
+        scales = np.sqrt(diag)
+        gram_eq = gram / scales[:, None] / scales[None, :]
+
+    # 1-norm BEFORE factorization (dpocon contract).
+    anorm = float(np.max(np.sum(np.abs(gram_eq), axis=0)))
+    if not np.isfinite(anorm):
+        return None
+    try:
+        chol = cho_factor(gram_eq)
+    except (np.linalg.LinAlgError, ValueError):
+        return None
+    rcond_gram, pocon_info = dpocon(chol[0], anorm)
+    if not (
+        pocon_info == 0 and np.isfinite(rcond_gram) and rcond_gram > _SOLVE_OLS_CHOL_RCOND_GUARD
+    ):
+        return None
+
+    with np.errstate(divide="ignore", over="ignore", invalid="ignore"):
+        xty = X.T @ y
+    coefficients = cho_solve(chol, xty / scales) / scales
+    if not np.all(np.isfinite(coefficients)):
+        return None
+    return coefficients, gram
 
 
 @overload
@@ -660,6 +787,88 @@ def _solve_ols_rust(
         return coefficients, residuals, vcov
 
 
+def _solve_ols_chol_rust(
+    X: np.ndarray,
+    y: np.ndarray,
+    *,
+    cluster_ids: Optional[np.ndarray] = None,
+    return_vcov: bool = True,
+    return_fitted: bool = False,
+) -> Optional[
+    Union[
+        Tuple[np.ndarray, np.ndarray, Optional[np.ndarray]],
+        Tuple[np.ndarray, np.ndarray, np.ndarray, Optional[np.ndarray]],
+    ]
+]:
+    """Rust certified normal-equations Cholesky solve (opt-in fast path).
+
+    Mirrors ``_solve_ols_rust``'s wrapper contract. The kernel is
+    self-certifying and returns Python ``None`` on a certification decline
+    (zero/non-finite column norm, non-PD Gram, exact 1-norm rcond <= 1e-6,
+    n < k, non-finite coefficient); this wrapper propagates the ``None`` so
+    the dispatcher falls through VERBATIM to the SVD kernel and then the
+    numpy path. The "Need at least 2 clusters" ValueError from clustered
+    vcov re-raises exactly as on the SVD path (its message names neither
+    instability nor singularity).
+    """
+    if cluster_ids is not None:
+        _validate_cluster_ids(cluster_ids)
+        cluster_ids = _factorize_cluster_ids(cluster_ids)
+
+    try:
+        result = _rust_solve_ols_chol(X, y, cluster_ids=cluster_ids, return_vcov=return_vcov)
+    except ValueError as e:
+        error_msg = str(e).lower()
+        if "numerically unstable" in error_msg or "singular" in error_msg:
+            warnings.warn(
+                f"Rust backend detected numerical instability: {e}. "
+                "Falling back to Python backend.",
+                UserWarning,
+                stacklevel=3,
+            )
+            return None
+        raise
+
+    if result is None:
+        return None  # certification declined — caller falls through verbatim
+
+    coefficients, residuals, vcov = result
+    coefficients = np.asarray(coefficients)
+    residuals = np.asarray(residuals)
+    if vcov is not None:
+        vcov = np.asarray(vcov)
+
+    if return_fitted:
+        fitted = np.dot(X, coefficients)
+        return coefficients, residuals, fitted, vcov
+    return coefficients, residuals, vcov
+
+
+def _nonfinite_vcov_needs_python_rerun(
+    vcov: Optional[np.ndarray], *, nan_is_sentinel: bool
+) -> bool:
+    """Shared guard: should a Rust-backend vcov be rejected in favor of the
+    canonical numpy re-run?
+
+    On the rank-checked route (``nan_is_sentinel=False``) any non-finite
+    entry (NaN or Inf) reroutes: the design was certified full rank, so the
+    numpy re-run safely applies the canonical contracts (rank handling,
+    saturated all-NaN guard).
+
+    On the ``skip_rank_check`` route (``nan_is_sentinel=True``) an all-NaN
+    vcov is the DOCUMENTED sentinel for what the caller asserted away
+    (rank deficiency / saturation) and passes through unchanged — rerouting
+    it to a numpy path that assumes full rank could raise on a singular
+    bread where users previously received the safe NaN answer. Only Inf
+    (e.g. numerical overflow, the silent-corruption class) reroutes there.
+    """
+    if vcov is None:
+        return False
+    if nan_is_sentinel:
+        return bool(np.any(np.isinf(vcov)))
+    return not bool(np.all(np.isfinite(vcov)))
+
+
 @overload
 def solve_ols(
     X: np.ndarray,
@@ -682,6 +891,7 @@ def solve_ols(
     conley_time: Optional[np.ndarray] = ...,
     conley_unit: Optional[np.ndarray] = ...,
     conley_lag_cutoff: Optional[int] = ...,
+    diagnostics_out: Optional[dict] = ...,
 ) -> Tuple[np.ndarray, np.ndarray, Optional[np.ndarray]]: ...
 
 
@@ -707,6 +917,7 @@ def solve_ols(
     conley_time: Optional[np.ndarray] = ...,
     conley_unit: Optional[np.ndarray] = ...,
     conley_lag_cutoff: Optional[int] = ...,
+    diagnostics_out: Optional[dict] = ...,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, Optional[np.ndarray]]: ...
 
 
@@ -732,6 +943,7 @@ def solve_ols(
     conley_time: Optional[np.ndarray] = ...,
     conley_unit: Optional[np.ndarray] = ...,
     conley_lag_cutoff: Optional[int] = ...,
+    diagnostics_out: Optional[dict] = ...,
 ) -> Union[
     Tuple[np.ndarray, np.ndarray, Optional[np.ndarray]],
     Tuple[np.ndarray, np.ndarray, np.ndarray, Optional[np.ndarray]],
@@ -793,6 +1005,7 @@ def solve_ols(
     conley_time: Optional[np.ndarray] = None,
     conley_unit: Optional[np.ndarray] = None,
     conley_lag_cutoff: Optional[int] = None,
+    diagnostics_out: Optional[dict] = None,
 ) -> Union[
     Tuple[np.ndarray, np.ndarray, Optional[np.ndarray]],
     Tuple[np.ndarray, np.ndarray, np.ndarray, Optional[np.ndarray]],
@@ -891,6 +1104,17 @@ def solve_ols(
         a ``UserWarning`` if the resulting meat is materially indefinite;
         the radial 1-D Bartlett (matching R ``conleyreg``) is not formally
         PSD-guaranteed — see :func:`compute_robust_vcov`.
+    diagnostics_out : dict, optional
+        Observability sink (zero-cost when None). Populated with
+        ``"solve_ols_fastpath"`` ∈ {``"off"``, ``"chol_numpy"``,
+        ``"chol_rust"``, ``"fallback_declined"``} recording which solve
+        branch produced the coefficients under the opt-in
+        ``DIFF_DIFF_SOLVE_OLS_FASTPATH`` normal-equations Cholesky fast
+        path (``"off"`` when the knob is unset; ``"fallback_declined"``
+        when the knob is on but the fast path did not produce the result —
+        certification declined, the design was rank-deficient/structurally
+        ineligible, or the Rust fast-path symbol was unavailable — and the
+        verbatim legacy chain ran instead).
 
     Returns
     -------
@@ -1014,12 +1238,42 @@ def solve_ols(
     _weighted_vcov_external = weights is not None
     _backend_return_vcov = return_vcov and not _weighted_vcov_external
 
+    # Opt-in normal-equations Cholesky fast path (DIFF_DIFF_SOLVE_OLS_FASTPATH).
+    # Resolved per call so a single process can A/B; OFF (the default) leaves
+    # every line below byte-identical to the legacy path. On a certification
+    # decline the fast path returns None and execution falls through the
+    # UNCHANGED legacy chain (Rust SVD, then gelsd), so knob-on-decline output
+    # equals knob-off output exactly.
+    fastpath = _resolve_solve_ols_fastpath()
+    if diagnostics_out is not None:
+        # Pessimistic default; overwritten with the branch actually taken.
+        diagnostics_out["solve_ols_fastpath"] = "fallback_declined" if fastpath else "off"
+
     # Fast path: skip rank check and use Rust directly when requested
     # This saves O(nk²) QR overhead but won't detect rank-deficient matrices
     result = None  # Will hold the tuple from backend functions
 
     if skip_rank_check:
         if (
+            fastpath
+            and HAS_RUST_BACKEND
+            and _rust_solve_ols_chol is not None
+            and weights is None
+            and vcov_type == "hc1"
+        ):
+            # Self-certifying Rust Cholesky kernel (no stage-0 cert exists
+            # on this route). None = certification declined; fall through
+            # to the UNCHANGED legacy chain (Rust SVD, then numpy).
+            result = _solve_ols_chol_rust(
+                X,
+                y,
+                cluster_ids=cluster_ids,
+                return_vcov=_backend_return_vcov,
+                return_fitted=return_fitted,
+            )
+            if result is not None and diagnostics_out is not None:
+                diagnostics_out["solve_ols_fastpath"] = "chol_rust"
+        if result is None and (
             HAS_RUST_BACKEND
             and _rust_solve_ols is not None
             and weights is None
@@ -1033,6 +1287,18 @@ def solve_ols(
                 return_fitted=return_fitted,
             )
             # result is None on numerical instability → fall through
+            if result is not None and _nonfinite_vcov_needs_python_rerun(
+                result[-1] if _backend_return_vcov else None,
+                nan_is_sentinel=True,
+            ):
+                warnings.warn(
+                    "Rust backend detected ill-conditioned matrix (non-finite "
+                    "variance-covariance). Re-running with Python backend for "
+                    "proper rank detection.",
+                    UserWarning,
+                    stacklevel=2,
+                )
+                result = None  # Force Python fallback below
         if result is None:
             result = _solve_ols_numpy(
                 X,
@@ -1043,6 +1309,8 @@ def solve_ols(
                 rank_deficient_action=rank_deficient_action,
                 column_names=column_names,
                 _skip_rank_check=True,
+                _fastpath=fastpath,
+                _diagnostics_out=diagnostics_out,
                 vcov_type=vcov_type,
                 conley_coords=conley_coords,
                 conley_cutoff_km=conley_cutoff_km,
@@ -1055,8 +1323,13 @@ def solve_ols(
     else:
         # Check for rank deficiency using fast pivoted QR decomposition.
         # Rank detection operates on (possibly weighted) X since collinearity
-        # depends on the weighted column space.
-        rank, dropped_cols, pivot = _detect_rank_deficiency(X)
+        # depends on the weighted column space. When the fast path is on,
+        # collect the stage-0 certification artifacts (Gram, scales,
+        # eigenvalues) so the Cholesky solve can reuse them instead of
+        # rebuilding the Gram — the artifacts are of the (possibly weighted)
+        # X, which is exactly the matrix being solved.
+        cert_out: Optional[dict] = {} if fastpath else None
+        rank, dropped_cols, pivot = _detect_rank_deficiency(X, _cert_out=cert_out)
         is_rank_deficient = len(dropped_cols) > 0
 
         # Routing strategy:
@@ -1064,6 +1337,27 @@ def solve_ols(
         # - Weighted or rank-deficient or non-HC1 vcov_type → Python backend
         # - Rust numerical instability → Python fallback (via None return)
         if (
+            fastpath
+            and HAS_RUST_BACKEND
+            and _rust_solve_ols_chol is not None
+            and not is_rank_deficient
+            and weights is None
+            and vcov_type == "hc1"
+        ):
+            # Self-certifying Rust Cholesky kernel (rebuilds its own
+            # equilibrated Gram; the stage-0 artifacts stay with the numpy
+            # twin). None = certification declined; fall through to the
+            # UNCHANGED legacy chain below.
+            result = _solve_ols_chol_rust(
+                X,
+                y,
+                cluster_ids=cluster_ids,
+                return_vcov=_backend_return_vcov,
+                return_fitted=return_fitted,
+            )
+            if result is not None and diagnostics_out is not None:
+                diagnostics_out["solve_ols_fastpath"] = "chol_rust"
+        if result is None and (
             HAS_RUST_BACKEND
             and _rust_solve_ols is not None
             and not is_rank_deficient
@@ -1079,11 +1373,15 @@ def solve_ols(
             )
 
             if result is not None:
-                vcov_check = result[-1]
-                if _backend_return_vcov and vcov_check is not None and np.any(np.isnan(vcov_check)):
+                vcov_check = result[-1] if _backend_return_vcov else None
+                if _nonfinite_vcov_needs_python_rerun(vcov_check, nan_is_sentinel=False):
+                    # Non-finite covers both the NaN rank-deficiency sentinel
+                    # and Inf leakage (e.g. numerical overflow); the Python
+                    # backend re-run applies the canonical numpy contracts.
                     warnings.warn(
-                        "Rust backend detected ill-conditioned matrix (NaN in variance-covariance). "
-                        "Re-running with Python backend for proper rank detection.",
+                        "Rust backend detected ill-conditioned matrix (non-finite "
+                        "variance-covariance). Re-running with Python backend for "
+                        "proper rank detection.",
                         UserWarning,
                         stacklevel=2,
                     )
@@ -1099,6 +1397,9 @@ def solve_ols(
                 rank_deficient_action=rank_deficient_action,
                 column_names=column_names,
                 _precomputed_rank_info=(rank, dropped_cols, pivot),
+                _fastpath=fastpath,
+                _cert_info=cert_out,
+                _diagnostics_out=diagnostics_out,
                 vcov_type=vcov_type,
                 conley_coords=conley_coords,
                 conley_cutoff_km=conley_cutoff_km,
@@ -1187,6 +1488,9 @@ def _solve_ols_numpy(
     column_names: Optional[List[str]] = ...,
     _precomputed_rank_info: Optional[Tuple[int, np.ndarray, np.ndarray]] = ...,
     _skip_rank_check: bool = ...,
+    _fastpath: bool = ...,
+    _cert_info: Optional[dict] = ...,
+    _diagnostics_out: Optional[dict] = ...,
     vcov_type: str = ...,
     conley_coords: Optional[np.ndarray] = ...,
     conley_cutoff_km: Optional[float] = ...,
@@ -1210,6 +1514,9 @@ def _solve_ols_numpy(
     column_names: Optional[List[str]] = ...,
     _precomputed_rank_info: Optional[Tuple[int, np.ndarray, np.ndarray]] = ...,
     _skip_rank_check: bool = ...,
+    _fastpath: bool = ...,
+    _cert_info: Optional[dict] = ...,
+    _diagnostics_out: Optional[dict] = ...,
     vcov_type: str = ...,
     conley_coords: Optional[np.ndarray] = ...,
     conley_cutoff_km: Optional[float] = ...,
@@ -1233,6 +1540,9 @@ def _solve_ols_numpy(
     column_names: Optional[List[str]] = ...,
     _precomputed_rank_info: Optional[Tuple[int, np.ndarray, np.ndarray]] = ...,
     _skip_rank_check: bool = ...,
+    _fastpath: bool = ...,
+    _cert_info: Optional[dict] = ...,
+    _diagnostics_out: Optional[dict] = ...,
     vcov_type: str = ...,
     conley_coords: Optional[np.ndarray] = ...,
     conley_cutoff_km: Optional[float] = ...,
@@ -1258,6 +1568,9 @@ def _solve_ols_numpy(
     column_names: Optional[List[str]] = None,
     _precomputed_rank_info: Optional[Tuple[int, np.ndarray, np.ndarray]] = None,
     _skip_rank_check: bool = False,
+    _fastpath: bool = False,
+    _cert_info: Optional[dict] = None,
+    _diagnostics_out: Optional[dict] = None,
     vcov_type: str = "hc1",
     conley_coords: Optional[np.ndarray] = None,
     conley_cutoff_km: Optional[float] = None,
@@ -1299,6 +1612,17 @@ def _solve_ols_numpy(
     _skip_rank_check : bool, default False
         If True, skip rank detection entirely and assume full rank.
         Used when caller has already determined matrix is full rank.
+    _fastpath : bool, default False
+        Opt-in normal-equations Cholesky fast path (resolved from
+        DIFF_DIFF_SOLVE_OLS_FASTPATH by solve_ols). Only the full-rank
+        branch is affected; a certification decline falls back verbatim
+        to the gelsd solve.
+    _cert_info : dict, optional
+        Stage-0 certification artifacts from _detect_rank_deficiency
+        (Gram reuse). None on the _skip_rank_check route — the fast path
+        then self-builds and self-certifies its Gram.
+    _diagnostics_out : dict, optional
+        solve_ols's diagnostics sink; records which solve branch ran.
 
     Returns
     -------
@@ -1400,7 +1724,21 @@ def _solve_ols_numpy(
         # Full-rank case: proceed normally. Equilibrate columns before the lstsq
         # so a large-scale column cannot truncate the genuine small-scale
         # direction (cond=1e-07 is relative to the largest singular value).
-        coefficients = _equilibrated_lstsq(X, y)
+        #
+        # Opt-in fast path (DIFF_DIFF_SOLVE_OLS_FASTPATH): try the certified
+        # normal-equations Cholesky solve first; a None return (certification
+        # declined) falls through to the verbatim gelsd line below, so the
+        # decline case is output-identical to the fast path being off.
+        coefficients = None
+        gram_bread = None
+        if _fastpath:
+            fast = _solve_ols_chol_numpy(X, y, cert_info=_cert_info)
+            if fast is not None:
+                coefficients, gram_bread = fast
+                if _diagnostics_out is not None:
+                    _diagnostics_out["solve_ols_fastpath"] = "chol_numpy"
+        if coefficients is None:
+            coefficients = _equilibrated_lstsq(X, y)
 
         # Compute residuals and fitted values
         fitted = np.dot(X, coefficients)
@@ -1421,6 +1759,7 @@ def _solve_ols_numpy(
                 conley_time=conley_time,
                 conley_unit=conley_unit,
                 conley_lag_cutoff=conley_lag_cutoff,
+                _bread_matrix=gram_bread,
             )
 
     if return_fitted:
@@ -2882,11 +3221,18 @@ def _compute_robust_vcov_numpy(
     conley_time: Optional[np.ndarray] = None,
     conley_unit: Optional[np.ndarray] = None,
     conley_lag_cutoff: Optional[int] = None,
+    _bread_matrix: Optional[np.ndarray] = None,
 ) -> Union[np.ndarray, Tuple[np.ndarray, np.ndarray]]:
     """
     NumPy fallback implementation of compute_robust_vcov.
 
     See :func:`compute_robust_vcov` for parameter and return semantics.
+
+    ``_bread_matrix`` is a private reuse seam for the opt-in solve_ols
+    Cholesky fast path: the caller passes its already-built ``X.T @ X``
+    (the exact same expression on the same array, so the bread is
+    byte-identical to building it here). Honored only for unweighted calls;
+    every vcov formula downstream is unchanged.
     """
     # Re-run the shared validation here too. The public wrapper validates
     # before dispatch, but solve_ols / _solve_ols_numpy call this function
@@ -2905,6 +3251,8 @@ def _compute_robust_vcov_numpy(
         if weights is not None:
             XtWX = X.T @ (X * weights[:, np.newaxis])
             bread_matrix = XtWX
+        elif _bread_matrix is not None:
+            bread_matrix = _bread_matrix
         else:
             bread_matrix = X.T @ X
 
