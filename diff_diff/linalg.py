@@ -2780,7 +2780,8 @@ def _compute_bm_dof_from_contrasts(
     Returns
     -------
     ndarray of shape (m,) of Satterthwaite DOF per contrast column. NaN when
-    ``den <= 0`` (degenerate case).
+    the denominator is non-positive or at/below the cancellation noise
+    floor (degenerate / extreme-leverage case; see the inline guard note).
     """
     n, k = X.shape
     if contrasts.ndim != 2 or contrasts.shape[0] != k:
