@@ -2690,6 +2690,11 @@ class DiagnosticReport:
                 "scheme": ci_summary.get("scheme"),
                 "n_perms": _to_python_scalar(ci_summary.get("n_perms")),
                 "n_post": _to_python_scalar(ci_summary.get("n_post")),
+                # One-sided / covariate-proxy runs are uninterpretable without
+                # these two — a one-sided p-value or half-line CI reads wrong
+                # under the default two-sided assumption.
+                "alternative": ci_summary.get("alternative", "two-sided"),
+                "covariates": ci_summary.get("covariates"),
             }
             if kind == "joint":
                 block["q"] = ci_summary.get("q")

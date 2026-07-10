@@ -2607,11 +2607,101 @@ class SyntheticControlResults:
         pre_scale = max(float(np.linalg.norm(y1[:n_pre])), 1e-12)
         return y1, Y0, n_pre, n_post, pre_scale, donors
 
+    @staticmethod
+    def _coerce_alternative(alternative: str, q: Any = 1) -> str:
+        """Validate ``alternative`` and its interaction with ``q``.
+
+        One-sided alternatives use the SIGNED average-effect statistic (CWZ
+        Remark 1 — the permutation framework is statistic-agnostic; the paper
+        has no dedicated one-sided section), for which the ``S_q`` norm order
+        does not apply: ``q`` must be left at its default 1.
+        """
+        if alternative not in ("two-sided", "greater", "less"):
+            raise ValueError(
+                "alternative must be 'two-sided', 'greater', or 'less', " f"got {alternative!r}"
+            )
+        if alternative != "two-sided" and q != 1:
+            raise ValueError(
+                "q applies only to the two-sided S_q statistic; one-sided "
+                "alternatives use the signed average-effect statistic "
+                f"(CWZ Remark 1). Got q={q!r} with alternative={alternative!r}."
+            )
+        return alternative
+
+    def _conformal_covariate_rows(
+        self, covariates: Optional[List[str]], cal_periods: List[Any]
+    ) -> Tuple[Optional[np.ndarray], Optional[np.ndarray]]:
+        """Build stacked covariate-matching rows for the CWZ proxy (eq 4 note).
+
+        ``covariates`` names variables retained in the fit snapshot's pivots
+        (any variable the estimator pivoted — predictors or additional
+        columns). For each variable the treated column and donor columns over
+        ``cal_periods`` are stacked as extra matching rows. Rows are stacked
+        RAW — the paper's "(transformations of) covariates" delegates scaling
+        to the caller, so pre-scale variables of very different magnitudes.
+        Returns ``(None, None)`` when ``covariates`` is None/empty.
+        """
+        if not covariates:
+            return None, None
+        # CWZ builds Z(θ0) by null-imputing ONLY the outcome; covariates
+        # enter as their NO-INTERVENTION values. Pulling observed pivot
+        # values is therefore only valid for covariates unaffected by the
+        # policy — a policy-affected covariate leaks treated post-period
+        # intervention information into the proxy weights and the p-value
+        # silently conditions on it. Warn on every covariate run so the
+        # assumption is on the record (no-silent-failures contract).
+        warnings.warn(
+            "conformal covariate matching assumes the covariates are "
+            "UNAFFECTED by the intervention (their observed post-period "
+            "values are used as no-intervention values in Z(theta0); only "
+            "the outcome is null-imputed). A policy-affected covariate "
+            "leaks treatment information into the proxy. Pass only "
+            "exogenous covariates.",
+            UserWarning,
+            stacklevel=3,
+        )
+        snap = self._fit_snapshot
+        assert snap is not None
+        donors = list(snap.donor_ids)
+        x1_parts: List[np.ndarray] = []
+        X0_parts: List[np.ndarray] = []
+        for var in covariates:
+            if var == snap.outcome:
+                raise ValueError(
+                    f"covariates must not include the outcome ({var!r}); the "
+                    "outcome rows are always in the proxy objective."
+                )
+            if var not in snap.pivots:
+                raise ValueError(
+                    f"covariate {var!r} is not in the fit snapshot's pivoted "
+                    f"variables {sorted(snap.pivots.keys())!r}. Pass a variable "
+                    "the SyntheticControl fit pivoted (e.g. a predictor)."
+                )
+            piv = snap.pivots[var]
+            missing = [c for c in cal_periods if c not in piv.index]
+            if missing:
+                raise ValueError(
+                    f"covariate {var!r} is missing periods {missing[:5]!r} in the " "fitted panel."
+                )
+            x1 = piv.loc[cal_periods, snap.treated_id].to_numpy(dtype=float)
+            X0 = piv.loc[cal_periods, donors].to_numpy(dtype=float)
+            if not (np.all(np.isfinite(x1)) and np.all(np.isfinite(X0))):
+                raise ValueError(
+                    f"covariate {var!r} has non-finite cells over the requested "
+                    "periods; conformal covariate matching requires a complete "
+                    "finite panel."
+                )
+            x1_parts.append(x1)
+            X0_parts.append(X0)
+        return np.concatenate(x1_parts), np.vstack(X0_parts)
+
     def conformal_test(
         self,
         effect: Any,
         *,
         q: Any = 1,
+        alternative: str = "two-sided",
+        covariates: Optional[List[str]] = None,
         scheme: str = "moving_block",
         n_iid: int = 10000,
         seed: Optional[int] = None,
@@ -2639,7 +2729,33 @@ class SyntheticControlResults:
         q : {1, 2, inf}, default 1
             The ``S_q`` norm order. ``1`` (robust to heavy tails — the paper's
             application default), ``2`` (permanent effects), ``inf`` (= ``max|û_t|``,
-            large temporary effects).
+            large temporary effects). Two-sided only; one-sided alternatives
+            fix ``q=1`` (signed statistic).
+        alternative : {"two-sided", "greater", "less"}, default "two-sided"
+            ``"two-sided"`` uses the paper's ``S_q`` magnitude statistic.
+            One-sided alternatives use the SIGNED average-effect statistic
+            ``S(û) = T_*^{-1/2}·Σ_{t>T0} û_t`` (CWZ Remark 1 — the
+            permutation framework is valid for any statistic; the paper has
+            no dedicated one-sided section): ``"greater"`` rejects when the
+            treated outcomes sit ABOVE the counterfactual proxy (``θ > θ0``),
+            ``"less"`` mirrors it. Requires ``q=1``. On the CI surfaces the
+            inversion yields half-lines: ``[lower, +inf)`` for
+            ``"greater"``, ``(-inf, upper]`` for ``"less"``.
+        covariates : list of str, optional
+            Variable names (pivoted by the fit — e.g. ``predictors``) whose
+            treated/donor series are stacked as covariate-matching rows in
+            the CWZ proxy objective (the paper after eq 6: "straightforward
+            to incorporate (transformations of) covariates X_jt into the
+            estimation problems (4) and (6)"). Rows are stacked RAW — no
+            internal standardization; pre-scale covariates of very different
+            magnitudes. Residuals and the permutation p-value remain
+            outcome-only, so exactness is preserved (covariate rows are
+            fixed features of every permuted dataset). **Exogeneity
+            assumption (warned on every run):** ``Z(θ0)`` null-imputes ONLY
+            the outcome — covariate values enter as observed, i.e. as
+            no-intervention paths, so covariates must be unaffected by the
+            policy; a policy-affected covariate leaks treated post-period
+            information into the proxy.
         scheme : {"moving_block", "iid"}, default "moving_block"
             The permutation set. ``"moving_block"`` (``Π_→``, ``T`` cyclic shifts) is
             valid under serially-dependent / stationary weakly-dependent errors
@@ -2668,11 +2784,16 @@ class SyntheticControlResults:
         from diff_diff.conformal import _INF, _make_perms, _single_null_pvalue
 
         q = self._coerce_q(q)
+        alternative = self._coerce_alternative(alternative, q)
         if scheme not in ("moving_block", "iid"):
             raise ValueError(f"scheme must be 'moving_block' or 'iid', got {scheme!r}")
         if not isinstance(n_iid, (int, np.integer)) or n_iid < 1:
             raise ValueError(f"n_iid must be a positive integer, got {n_iid!r}")
         y1, Y0, n_pre, n_post, pre_scale, _ = self._conformal_panel()
+        snap0 = self._fit_snapshot
+        assert snap0 is not None
+        cal = list(snap0.pre_periods) + list(snap0.post_periods)
+        x1_rows, X0_rows = self._conformal_covariate_rows(covariates, cal)
         f_post = self._coerce_effect_path(effect, n_post)
         if n_post >= n_pre:
             warnings.warn(
@@ -2698,6 +2819,9 @@ class SyntheticControlResults:
             q,
             max_iter=snap.inner_max_iter,
             min_decrease=snap.inner_min_decrease * pre_scale,
+            alternative=alternative,
+            x1_rows=x1_rows,
+            X0_rows=X0_rows,
         )
         if not res["converged"]:
             warnings.warn(
@@ -2712,6 +2836,8 @@ class SyntheticControlResults:
             "kind": "joint",
             "scheme": scheme,
             "q": q_out,
+            "alternative": alternative,
+            "covariates": list(covariates) if covariates else None,
             "alpha": None,
             "n_perms": int(res["n_perms"]),
             "n_post": int(n_post),
@@ -2724,6 +2850,7 @@ class SyntheticControlResults:
                 "p_value": float(res["p_value"]),
                 "S_observed": float(res["s_observed"]),
                 "q": q_out,
+                "alternative": alternative,
                 "scheme": scheme,
                 "n_perms": int(res["n_perms"]),
                 "n_post": int(n_post),
@@ -2735,6 +2862,8 @@ class SyntheticControlResults:
         self,
         *,
         alpha: float = 0.1,
+        alternative: str = "two-sided",
+        covariates: Optional[List[str]] = None,
         scheme: str = "moving_block",
         n_iid: int = 10000,
         bounds: Optional[Tuple[float, float]] = None,
@@ -2760,6 +2889,14 @@ class SyntheticControlResults:
         ----------
         alpha : float, default 0.1
             The confidence level is ``1 − alpha``; membership is ``p^θ̄0 > alpha``.
+        alternative : {"two-sided", "greater", "less"}, default "two-sided"
+            One-sided alternatives use the signed statistic (CWZ Remark 1)
+            and invert to a HALF-LINE: ``[lower, +inf)`` for ``"greater"``,
+            ``(-inf, upper]`` for ``"less"`` (the infinite side is genuinely
+            accepted, not grid-limited). See :meth:`conformal_test`.
+        covariates : list of str, optional
+            Covariate-matching rows stacked into the CWZ proxy objective
+            (raw — pre-scale as needed). See :meth:`conformal_test`.
         scheme : {"moving_block", "iid"}, default "moving_block"
             Permutation set over the collapsed blocks.
         n_iid : int, default 10000
@@ -2787,7 +2924,12 @@ class SyntheticControlResults:
             If ``alpha`` / ``scheme`` / ``n_iid`` / ``n_grid`` / ``bounds`` are invalid,
             ``T0 < T*`` (no full pre-block), or the fit snapshot is unavailable.
         """
-        from diff_diff.conformal import _block_collapse, _invert_single_post, _make_perms
+        from diff_diff.conformal import (
+            _apply_one_sided_endpoints,
+            _block_collapse,
+            _invert_single_post,
+            _make_perms,
+        )
 
         if scheme not in ("moving_block", "iid"):
             raise ValueError(f"scheme must be 'moving_block' or 'iid', got {scheme!r}")
@@ -2797,6 +2939,7 @@ class SyntheticControlResults:
             raise ValueError(f"alpha must be in (0, 1), got {alpha!r}")
         if not isinstance(n_grid, (int, np.integer)) or n_grid < 2:
             raise ValueError(f"n_grid must be an integer >= 2, got {n_grid!r}")
+        alternative = self._coerce_alternative(alternative)
         grid = _validate_conformal_bounds(bounds, int(n_grid))
         y1, Y0, n_pre, n_post, _, _ = self._conformal_panel()
         if n_pre < n_post:
@@ -2813,6 +2956,27 @@ class SyntheticControlResults:
                 stacklevel=2,
             )
         y1b, Y0b, n_dropped = _block_collapse(y1, Y0, n_pre, n_post)
+        x1b_rows: Optional[np.ndarray] = None
+        X0b_rows: Optional[np.ndarray] = None
+        if covariates:
+            snap_cov = self._fit_snapshot
+            assert snap_cov is not None
+            cal_cov = list(snap_cov.pre_periods) + list(snap_cov.post_periods)
+            x1_rows, X0_rows = self._conformal_covariate_rows(covariates, cal_cov)
+            # Covariate rows collapse with the SAME T*-block structure so the
+            # collapsed panel remains a coherent Z (each block-averaged
+            # covariate row enters the proxy like a block-averaged outcome).
+            n_vars = x1_rows.shape[0] // len(cal_cov)
+            xb_parts, Xb_parts = [], []
+            T_cal = len(cal_cov)
+            for v in range(n_vars):
+                xv = x1_rows[v * T_cal : (v + 1) * T_cal]
+                Xv = X0_rows[v * T_cal : (v + 1) * T_cal]
+                xvb, Xvb, _ = _block_collapse(xv, Xv, n_pre, n_post)
+                xb_parts.append(xvb)
+                Xb_parts.append(Xvb)
+            x1b_rows = np.concatenate(xb_parts)
+            X0b_rows = np.vstack(Xb_parts)
         if n_dropped:
             warnings.warn(
                 f"conformal_average_effect: T0={n_pre} is not a multiple of T*={n_post}; "
@@ -2847,12 +3011,18 @@ class SyntheticControlResults:
             min_decrease=snap.inner_min_decrease * block_scale,
             grid=grid,
             n_grid=int(n_grid),
+            alternative=alternative,
+            x1_rows=x1b_rows,
+            X0_rows=X0b_rows,
         )
+        res = _apply_one_sided_endpoints(res, alternative)
         _warn_conformal_ci_status(res, "conformal_average_effect")
         self.conformal_inference = {
             "kind": "average",
             "scheme": scheme,
             "alpha": float(alpha),
+            "alternative": alternative,
+            "covariates": list(covariates) if covariates else None,
             "n_perms": n_perms,
             "n_post": int(n_post),
             "n_blocks": n_blocks,
@@ -2907,6 +3077,8 @@ class SyntheticControlResults:
         self,
         *,
         alpha: float = 0.1,
+        alternative: str = "two-sided",
+        covariates: Optional[List[str]] = None,
         scheme: str = "moving_block",
         n_iid: int = 10000,
         bounds: Optional[Tuple[float, float]] = None,
@@ -2930,6 +3102,14 @@ class SyntheticControlResults:
         ----------
         alpha : float, default 0.1
             The confidence level is ``1 − alpha``; membership is ``p^c > alpha``.
+        alternative : {"two-sided", "greater", "less"}, default "two-sided"
+            One-sided alternatives use the signed statistic (CWZ Remark 1)
+            and invert to a HALF-LINE: ``[lower, +inf)`` for ``"greater"``,
+            ``(-inf, upper]`` for ``"less"`` (the infinite side is genuinely
+            accepted, not grid-limited). See :meth:`conformal_test`.
+        covariates : list of str, optional
+            Covariate-matching rows stacked into the CWZ proxy objective
+            (raw — pre-scale as needed). See :meth:`conformal_test`.
         scheme : {"moving_block", "iid"}, default "moving_block"
             Permutation set over the ``(T0+1)``-length sub-series.
         n_iid : int, default 10000
@@ -2957,7 +3137,11 @@ class SyntheticControlResults:
             If ``alpha`` / ``scheme`` / ``n_iid`` / ``n_grid`` / ``bounds`` are invalid
             or the fit snapshot is unavailable.
         """
-        from diff_diff.conformal import _invert_single_post, _make_perms
+        from diff_diff.conformal import (
+            _apply_one_sided_endpoints,
+            _invert_single_post,
+            _make_perms,
+        )
 
         if scheme not in ("moving_block", "iid"):
             raise ValueError(f"scheme must be 'moving_block' or 'iid', got {scheme!r}")
@@ -2967,6 +3151,7 @@ class SyntheticControlResults:
             raise ValueError(f"alpha must be in (0, 1), got {alpha!r}")
         if not isinstance(n_grid, (int, np.integer)) or n_grid < 2:
             raise ValueError(f"n_grid must be an integer >= 2, got {n_grid!r}")
+        alternative = self._coerce_alternative(alternative)
         grid_template = _validate_conformal_bounds(bounds, int(n_grid))
         y1, Y0, n_pre, n_post, pre_scale, _ = self._conformal_panel()
         if n_pre <= 1:
@@ -2997,8 +3182,15 @@ class SyntheticControlResults:
         grid_rows: List[Dict[str, Any]] = []
         statuses: List[str] = []
         any_noncontig = False
+        snap_cov = self._fit_snapshot
+        assert snap_cov is not None
+        pre_list = list(snap_cov.pre_periods)
+        post_list = list(snap_cov.post_periods)
         for k, period in enumerate(post_periods):
             sub_idx = list(range(n_pre)) + [n_pre + k]
+            # Covariate rows subset to the SAME sub-series periods (Z for the
+            # pointwise test is (Z_1..Z_T0, Z_t) — covariates ride along).
+            x1_rows, X0_rows = self._conformal_covariate_rows(covariates, pre_list + [post_list[k]])
             res = _invert_single_post(
                 y1[sub_idx],
                 Y0[sub_idx],
@@ -3009,7 +3201,11 @@ class SyntheticControlResults:
                 min_decrease=md,
                 grid=grid_template,
                 n_grid=int(n_grid),
+                alternative=alternative,
+                x1_rows=x1_rows,
+                X0_rows=X0_rows,
             )
+            res = _apply_one_sided_endpoints(res, alternative)
             ci_rows.append(
                 {
                     "period": period,
@@ -3066,6 +3262,8 @@ class SyntheticControlResults:
         self.conformal_inference = {
             "kind": "pointwise",
             "scheme": scheme,
+            "alternative": alternative,
+            "covariates": list(covariates) if covariates else None,
             "alpha": float(alpha),
             "n_perms": n_perms,
             "n_post": int(n_post),

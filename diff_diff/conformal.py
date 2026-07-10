@@ -21,8 +21,10 @@ automatically (there is NO extra ``+1`` — distinct from the cross-unit placebo
 **Proxy.** The proxy is the canonical CWZ constrained-LS synthetic control
 (eqs 3–4): simplex weights minimising ``Σ_{t}(Y^N_{1t} − Σ_j w_j Y^N_{jt})²``
 over **all** periods under the null, ``w ≥ 0, Σ w = 1``, **no V-matrix, no
-intercept, outcomes-only** (footnote 9: "we estimate w under the null based on
-all the data"). This is DISTINCT from the headline ADH V-matrix weights — CWZ's
+intercept, outcomes by default** (footnote 9: "we estimate w under the null
+based on all the data"); optional RAW covariate-matching rows stack into the
+same objective when ``covariates=`` is supplied (the paper's note after eq 6),
+with outcome-only residuals. This is DISTINCT from the headline ADH V-matrix weights — CWZ's
 exactness theory (Lemma 1, Appendix D exchangeability) requires a time-symmetric
 proxy, which the ADH pre-period V-fit is not. Reuses the Frank-Wolfe simplex
 solver :func:`diff_diff.utils._sc_weight_fw`.
@@ -53,6 +55,8 @@ def _cwz_proxy_fit(
     max_iter: int,
     min_decrease: float,
     init_weights: Optional[np.ndarray] = None,
+    x1_rows: Optional[np.ndarray] = None,
+    X0_rows: Optional[np.ndarray] = None,
 ) -> Tuple[np.ndarray, np.ndarray, bool]:
     """Fit the canonical CWZ constrained-LS SC proxy over ALL given periods (eq 4).
 
@@ -67,16 +71,38 @@ def _cwz_proxy_fit(
     caller must pass a θ0-invariant scale (e.g. the pre-window outcome norm) so CI
     membership does not drift with the grid value via the tolerance.
 
+    **Covariates (CWZ §2.3.2, after eq 6):** "it is straightforward to
+    incorporate (transformations of) covariates X_jt into the estimation
+    problems (4) and (6)." ``x1_rows`` ``(R,)`` / ``X0_rows`` ``(R, J)`` are
+    OPTIONAL covariate-matching rows stacked under the outcome rows in the
+    same simplex LS objective — each row enters exactly like an outcome
+    period, so the stacked objective remains invariant under time
+    permutations of the outcome rows (exchangeability preserved; the
+    covariate rows are fixed features of every permuted dataset). The
+    RESIDUALS returned are OUTCOME rows only — the statistic and the
+    permutation p-value are unchanged in form. Covariates are stacked RAW
+    (no internal standardization): the paper's "(transformations of)"
+    delegates scaling to the caller, and a covariate on a large scale
+    dominates the fit exactly as it would in eq 4 — pre-scale accordingly.
+
     Returns ``(w (J,), resid = y1 − Y0 @ w (T,), converged)``. ``J == 1`` is the
     degenerate single-donor case ``w = [1]`` (no optimisation).
     """
     y1 = np.asarray(y1, dtype=float)
     Y0 = np.asarray(Y0, dtype=float)
+    n_out = y1.shape[0]
+    if x1_rows is not None:
+        x1_rows = np.asarray(x1_rows, dtype=float)
+        X0_rows = np.asarray(X0_rows, dtype=float)
+        y1_fit = np.concatenate([y1, x1_rows])
+        Y0_fit = np.vstack([Y0, X0_rows])
+    else:
+        y1_fit, Y0_fit = y1, Y0
     _, J = Y0.shape
     if J == 1:
         w = np.array([1.0], dtype=float)
         return w, y1 - Y0 @ w, True
-    packed = np.column_stack([Y0, y1])  # (T, J+1); last column is the target
+    packed = np.column_stack([Y0_fit, y1_fit])  # (T+R, J+1); last column is the target
     with warnings.catch_warnings():
         warnings.filterwarnings("ignore", message=r".*did not converge.*", category=UserWarning)
         w, converged = _sc_weight_fw(
@@ -89,7 +115,7 @@ def _cwz_proxy_fit(
             return_convergence=True,
         )
     w = np.asarray(w, dtype=float)
-    return w, y1 - Y0 @ w, bool(converged)
+    return w, y1[:n_out] - Y0[:n_out] @ w, bool(converged)
 
 
 # =============================================================================
@@ -160,7 +186,11 @@ def _make_perms(m: int, scheme: str, n_iid: int, rng: np.random.Generator) -> np
 
 
 def _cwz_pvalue(
-    u: np.ndarray, post_mask: np.ndarray, perms: np.ndarray, q: Any
+    u: np.ndarray,
+    post_mask: np.ndarray,
+    perms: np.ndarray,
+    q: Any,
+    alternative: str = "two-sided",
 ) -> Tuple[float, float, int]:
     """CWZ eq (2) permutation p-value for residuals ``u``.
 
@@ -169,15 +199,34 @@ def _cwz_pvalue(
     identity ``π`` is in ``perms`` so ``p̂ ≥ 1/|Π|`` automatically (no extra ``+1``).
     Ties (``≥``) are counted conservatively. ``perms`` is the ``(|Π|, len(u))``
     integer index array from :func:`_make_perms`. Returns ``(p, S_observed, |Π|)``.
+
+    **One-sided alternatives (CWZ Remark 1).** The permutation argument is
+    statistic-agnostic ("other test statistics can be used as well"), so
+    ``alternative="greater"`` uses the SIGNED average-effect statistic
+    ``S(û) = T_*^{-1/2}·Σ_{t>T0} û_t`` — large positive residuals (treated
+    outcome above the counterfactual proxy, i.e. ``θ > θ0``) reject;
+    ``"less"`` negates the residuals and applies the same rule. NOTE the
+    paper has NO §7 and no named one-sided section — the variants ground in
+    Remark 1's statistic freedom + eq 2. ``q`` applies only to the two-sided
+    ``S_q`` family and must be 1 for one-sided alternatives (enforced by the
+    callers).
     """
-    s_obs = _cwz_statistic(u, post_mask, q)
-    post_perm = np.abs(u[perms][:, post_mask])  # (|Π|, T*)
-    n_star = post_perm.shape[1]
-    if q == _INF:
-        s_perm = post_perm.max(axis=1)
+    if alternative == "less":
+        u = -u
+    if alternative in ("greater", "less"):
+        post = u[post_mask]
+        n_star = post.size
+        s_obs = float(np.sum(post) / np.sqrt(n_star))
+        s_perm = u[perms][:, post_mask].sum(axis=1) / np.sqrt(n_star)
     else:
-        s_perm = (post_perm**q).sum(axis=1) / np.sqrt(n_star)
-        s_perm = s_perm ** (1.0 / q)
+        s_obs = _cwz_statistic(u, post_mask, q)
+        post_perm = np.abs(u[perms][:, post_mask])  # (|Π|, T*)
+        n_star = post_perm.shape[1]
+        if q == _INF:
+            s_perm = post_perm.max(axis=1)
+        else:
+            s_perm = (post_perm**q).sum(axis=1) / np.sqrt(n_star)
+            s_perm = s_perm ** (1.0 / q)
     n = perms.shape[0]
     tol = 1e-12 * max(abs(s_obs), 1.0)
     n_ge = int(np.sum(s_perm >= s_obs - tol))
@@ -200,6 +249,9 @@ def _single_null_pvalue(
     max_iter: int,
     min_decrease: float,
     init_weights: Optional[np.ndarray] = None,
+    alternative: str = "two-sided",
+    x1_rows: Optional[np.ndarray] = None,
+    X0_rows: Optional[np.ndarray] = None,
 ) -> Dict[str, Any]:
     """Build ``Z(θ0)``, fit the proxy under the null, and return the p-value.
 
@@ -211,9 +263,15 @@ def _single_null_pvalue(
     y1n = np.asarray(y1_obs, dtype=float).copy()
     y1n[post_mask] = y1n[post_mask] - np.asarray(effect_on_post, dtype=float)
     w, resid, conv = _cwz_proxy_fit(
-        y1n, Y0, max_iter=max_iter, min_decrease=min_decrease, init_weights=init_weights
+        y1n,
+        Y0,
+        max_iter=max_iter,
+        min_decrease=min_decrease,
+        init_weights=init_weights,
+        x1_rows=x1_rows,
+        X0_rows=X0_rows,
     )
-    p, s_obs, n = _cwz_pvalue(resid, post_mask, perms, q)
+    p, s_obs, n = _cwz_pvalue(resid, post_mask, perms, q, alternative=alternative)
     return {"p_value": p, "s_observed": s_obs, "n_perms": n, "converged": conv, "weights": w}
 
 
@@ -292,6 +350,9 @@ def _invert_single_post(
     min_decrease: float,
     grid: Optional[np.ndarray] = None,
     n_grid: int = 100,
+    alternative: str = "two-sided",
+    x1_rows: Optional[np.ndarray] = None,
+    X0_rows: Optional[np.ndarray] = None,
 ) -> Dict[str, Any]:
     """Invert a single-post-slot conformal test over a grid (CWZ Algorithm 1).
 
@@ -301,8 +362,13 @@ def _invert_single_post(
     (``y1[post_idx] − θ``), the proxy refit (warm-started across the grid — FW is
     convex so warm-starting only affects speed, not the optimum), and the
     permutation p-value recomputed. With one post slot ``S_q`` reduces to
-    ``|û_post|`` for every ``q``, so ``q`` is inert here (fixed to 1). Returns the CI
-    summary plus the ``grid`` table of ``(θ, p, in_set, converged)`` rows.
+    ``|û_post|`` for every ``q``, so ``q`` is inert here (fixed to 1); under
+    ``alternative="greater"``/``"less"`` the single-slot statistic is the SIGNED
+    ``û_post`` (resp. ``−û_post``), and the inversion yields a ONE-SIDED
+    confidence set — a half-line whose finite endpoint is the reported bound
+    (the infinite side is genuinely accepted, not grid-limited; the caller
+    overrides the edge-touch status accordingly). Returns the CI summary plus
+    the ``grid`` table of ``(θ, p, in_set, converged)`` rows.
 
     When ``alpha < 1/|Π|`` every candidate has ``p ≥ 1/|Π| > alpha`` (the identity is
     in ``Π``), so NO value is ever rejected and the confidence set is the whole line:
@@ -323,7 +389,12 @@ def _invert_single_post(
     # relying on that naive residual). ``spread`` is the pre-fit residual noise scale.
     pre_sel = ~post_mask
     w_pre, resid_pre, _ = _cwz_proxy_fit(
-        y1_obs[pre_sel], Y0[pre_sel], max_iter=max_iter, min_decrease=min_decrease
+        y1_obs[pre_sel],
+        Y0[pre_sel],
+        max_iter=max_iter,
+        min_decrease=min_decrease,
+        x1_rows=x1_rows,
+        X0_rows=X0_rows,
     )
     point_est = float(y1_obs[post_idx] - Y0[post_idx] @ w_pre)
     spread = float(np.std(resid_pre)) if resid_pre.size else 1.0
@@ -354,10 +425,16 @@ def _invert_single_post(
         y1n = y1_obs.copy()
         y1n[post_idx] = y1n[post_idx] - float(theta)
         w, resid, conv = _cwz_proxy_fit(
-            y1n, Y0, max_iter=max_iter, min_decrease=min_decrease, init_weights=w_prev
+            y1n,
+            Y0,
+            max_iter=max_iter,
+            min_decrease=min_decrease,
+            init_weights=w_prev,
+            x1_rows=x1_rows,
+            X0_rows=X0_rows,
         )
         w_prev = w
-        p, _, _ = _cwz_pvalue(resid, post_mask, perms, 1)
+        p, _, _ = _cwz_pvalue(resid, post_mask, perms, 1, alternative=alternative)
         pvals[i] = p
         converged[i] = conv
 
@@ -366,6 +443,73 @@ def _invert_single_post(
     out["grid"] = list(zip(grid.tolist(), pvals.tolist(), in_set.tolist(), converged.tolist()))
     out["n_perms"] = n_perms
     return out
+
+
+def _apply_one_sided_endpoints(res: Dict[str, Any], alternative: str) -> Dict[str, Any]:
+    """Convert a one-sided inversion's accepted half-line into ±inf endpoints.
+
+    Under ``alternative="greater"`` (H1: θ > θ0) small candidates are rejected
+    and the accepted region extends to the grid's upper edge, so the upper
+    endpoint becomes ``+inf`` and only a LOWER-edge touch keeps
+    ``status="grid_limited"``. ``"less"`` is the mirror image. No-op for
+    ``"two-sided"`` or for unbounded results (everything accepted).
+
+    **Hull convention (no monotonicity guarantee).** Algorithm 1 accepts any
+    candidate with ``p > α`` after REFITTING the proxy at that candidate; a
+    monotone p-curve is typical but NOT guaranteed, so an
+    accepted/rejected/accepted pattern is possible. Exactly as in the
+    two-sided convention, the reported endpoints are then the HULL of the
+    accepted set (with the infinite side attached) and ``contiguous`` is
+    RECOMPUTED against the final reported ray — any rejected scanned point
+    strictly inside it (including between the finite hull edge and the
+    attached infinity) flips ``contiguous=False``, so a rejected pocket is
+    disclosed, not hidden (callers warn on it).
+    An all-rejected grid (the scan missed the ray — narrow user ``bounds``)
+    reports the infinite side + an UNCERTIFIED (NaN) finite endpoint with
+    ``grid_limited`` status: the ray always exists beyond the grid on the
+    accepted side (``p → 1`` as ``θ0`` walks into the accepted direction).
+    """
+    if alternative == "two-sided" or res["status"] == "unbounded":
+        return res
+    if res["status"] == "empty":
+        # Every scanned grid point rejected. Under a one-sided alternative
+        # the accepted ray ALWAYS exists beyond the grid in the accepted
+        # direction (as θ0 → ±∞ on that side, the signed statistic walks
+        # into the permutation distribution's far tail and p → 1), so an
+        # all-rejected grid means the scan missed it — typically narrow
+        # user-supplied bounds. Report the infinite side with the finite
+        # endpoint UNCERTIFIED (NaN) and grid_limited status rather than a
+        # (false) empty confidence set.
+        if alternative == "greater":
+            res["upper"] = float("inf")
+        else:
+            res["lower"] = -float("inf")
+        res["status"] = "grid_limited"
+        return res
+    grid = res.get("grid") or []
+    if not grid:
+        return res
+    in_first = bool(grid[0][2])
+    in_last = bool(grid[-1][2])
+    if alternative == "greater":
+        res["upper"] = float("inf")
+        res["status"] = "grid_limited" if in_first else "ran"
+        # Recompute contiguity against the FINAL reported ray: the
+        # underlying flag only covered the finite accepted hull, so a
+        # rejected scanned point ABOVE the hull (inside [lower, +inf) after
+        # the rewrite) must flip it (REGISTRY hull-disclosure contract).
+        lower = res["lower"]
+        res["contiguous"] = bool(res["contiguous"]) and all(
+            bool(row[2]) for row in grid if row[0] > lower
+        )
+    else:  # "less"
+        res["lower"] = -float("inf")
+        res["status"] = "grid_limited" if in_last else "ran"
+        upper = res["upper"]
+        res["contiguous"] = bool(res["contiguous"]) and all(
+            bool(row[2]) for row in grid if row[0] < upper
+        )
+    return res
 
 
 # =============================================================================

@@ -4563,3 +4563,304 @@ def test_sparse_non_integer_sizes_raise():
     # A valid numpy-int size still works.
     tab = res.sparse_synthetic_control(sizes=[np.int64(2)])
     assert set(tab[tab["status"] == "ran"]["size"]) == {2}
+
+
+# ===========================================================================
+# CWZ conformal extensions — one-sided alternatives (Remark 1) + covariates
+# in the proxy (eq 4 note: "straightforward to incorporate (transformations
+# of) covariates X_jt into the estimation problems (4) and (6)")
+# ===========================================================================
+
+
+class TestConformalOneSided:
+    """One-sided alternatives use the SIGNED average-effect statistic
+    S(u) = T*^{-1/2} sum_{t>T0} u_t — grounded in CWZ Remark 1's statistic
+    freedom (the paper has NO section 7; the prior TODO/REGISTRY "(§7)"
+    citation was a Firpo-Possebom cross-contamination, fixed in this PR)."""
+
+    def test_signed_pvalue_matches_hand_rolled_oracle(self):
+        """Paper-formula oracle: eq 2 with the signed statistic, full
+        moving-block enumeration, computed by hand."""
+        from diff_diff.conformal import _cwz_pvalue, _make_perms
+
+        rng = np.random.default_rng(7)
+        T, T_star = 12, 3
+        u = rng.normal(size=T)
+        post_mask = np.zeros(T, dtype=bool)
+        post_mask[-T_star:] = True
+        perms = _make_perms(T, "moving_block", 0, rng)
+        p, s_obs, n = _cwz_pvalue(u, post_mask, perms, 1, alternative="greater")
+        # hand-rolled: all T cyclic shifts, signed sum over the FIXED post slots
+        stats = []
+        for j in range(T):
+            u_pi = u[(np.arange(T) + j) % T]
+            stats.append(u_pi[post_mask].sum() / np.sqrt(T_star))
+        s0 = u[post_mask].sum() / np.sqrt(T_star)
+        p_oracle = np.mean(np.array(stats) >= s0 - 1e-12 * max(abs(s0), 1))
+        assert n == T
+        np.testing.assert_allclose(s_obs, s0, rtol=1e-12)
+        np.testing.assert_allclose(p, p_oracle, rtol=1e-12)
+        # "less" is the mirrored statistic
+        p_less, s_less, _ = _cwz_pvalue(u, post_mask, perms, 1, alternative="less")
+        np.testing.assert_allclose(s_less, -s0, rtol=1e-12)
+
+    def test_directional_rejection_and_q_guard(self):
+        """A strongly positive true effect: H1 'greater' rejects at the
+        two-sided level or better; H1 'less' never rejects. q != 1 with a
+        one-sided alternative raises (the signed statistic has no norm
+        order)."""
+        res = _fit_for_conformal(effect=4.0)
+        p2 = float(res.conformal_test(0.0)["p_value"])
+        pg = float(res.conformal_test(0.0, alternative="greater")["p_value"])
+        pl = float(res.conformal_test(0.0, alternative="less")["p_value"])
+        assert pg <= p2 + 1e-12
+        assert pl > 0.5
+        with pytest.raises(ValueError, match="one-sided"):
+            res.conformal_test(0.0, q=2, alternative="greater")
+        with pytest.raises(ValueError, match="alternative"):
+            res.conformal_test(0.0, alternative="bogus")
+
+    def test_one_sided_average_ci_is_half_line(self):
+        """'greater' inverts to [lower, +inf) and 'less' to (-inf, upper];
+        the finite endpoints bracket the two-sided interval."""
+        res = _fit_for_conformal(effect=4.0)
+        kw = dict(alpha=0.2, scheme="iid", n_iid=400, seed=3)
+        two = res.conformal_average_effect(**kw)
+        hi = res.conformal_average_effect(alternative="greater", **kw)
+        lo = res.conformal_average_effect(alternative="less", **kw)
+        assert np.isinf(hi["upper"]) and hi["upper"] > 0
+        assert np.isinf(lo["lower"]) and lo["lower"] < 0
+        assert hi["lower"] >= two["lower"] - 1e-9
+        assert lo["upper"] <= two["upper"] + 1e-9
+        assert hi["status"] in ("ran", "grid_limited")
+
+    def test_one_sided_missed_ray_is_not_empty(self):
+        """Round-1 P1: an all-rejected one-sided grid (narrow bounds= that
+        miss the accepted ray) must NOT report a false empty set — the ray
+        always exists beyond the grid on the accepted side, so the result is
+        the infinite side + an UNCERTIFIED (NaN) finite endpoint with
+        grid_limited status. Both directions, both CI surfaces."""
+        # T*=2 with T0=16 -> 9 collapsed blocks: the single-post-slot tie
+        # structure floors p at 1/n_blocks, so a 4-block fixture can never
+        # reject at alpha=0.2 — this one can (floor 1/9).
+        res = _fit_for_conformal(T=18, T0=16, effect=4.0)
+        kw = dict(alpha=0.2, scheme="iid", n_iid=400, seed=3)
+        # true average effect ~4: mild bounds below the accepted ray (still
+        # within FW convergence range — non-converged points are
+        # indeterminate-KEPT, which would mask the empty-grid path)
+        hi = res.conformal_average_effect(alternative="greater", bounds=(0.5, 1.5), **kw)
+        assert np.isinf(hi["upper"]) and hi["upper"] > 0
+        assert np.isnan(hi["lower"])
+        assert hi["status"] == "grid_limited"
+        lo = res.conformal_average_effect(alternative="less", bounds=(6.5, 7.5), **kw)
+        assert np.isinf(lo["lower"]) and lo["lower"] < 0
+        assert np.isnan(lo["upper"])
+        assert lo["status"] == "grid_limited"
+        cis = res.conformal_confidence_intervals(alternative="greater", bounds=(0.5, 1.5), **kw)
+        assert bool(np.isinf(cis["upper"]).all())
+        assert bool(np.isnan(cis["lower"]).all())
+        assert set(cis["status"]) == {"grid_limited"}
+        # pointwise metadata echoes the new params (round-1 P2)
+        assert res.conformal_inference["alternative"] == "greater"
+        assert res.conformal_inference["covariates"] is None
+
+    def test_one_sided_noncontiguous_pattern_keeps_flag(self):
+        """Round-2 P1: Algorithm 1 has no monotonicity guarantee, so an
+        accepted/rejected/accepted one-sided grid must keep the hull
+        convention WITH contiguous=False preserved (a rejected pocket inside
+        the reported ray is disclosed, not hidden). Deterministic via a
+        crafted p-sequence."""
+        import unittest.mock
+
+        import diff_diff.conformal as cf
+
+        res = _fit_for_conformal(T=18, T0=16, effect=4.0)
+        # p pattern over the 40-point grid: accepted / rejected pocket / accepted
+        pattern = [0.5] * 10 + [0.01] * 5 + [0.5] * 25
+        calls = {"i": 0}
+        real = cf._cwz_pvalue
+
+        def _scripted(u, post_mask, perms, q, alternative="two-sided"):
+            _, s_obs, n = real(u, post_mask, perms, q, alternative=alternative)
+            p = pattern[min(calls["i"], len(pattern) - 1)]
+            calls["i"] += 1
+            return p, s_obs, n
+
+        with unittest.mock.patch.object(cf, "_cwz_pvalue", _scripted):
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                out = res.conformal_average_effect(
+                    alpha=0.2,
+                    alternative="greater",
+                    scheme="iid",
+                    n_iid=400,
+                    seed=3,
+                    bounds=(0.0, 8.0),
+                    n_grid=40,
+                )
+        assert np.isinf(out["upper"])
+        assert np.isfinite(out["lower"])
+        assert out["contiguous"] is False or out["contiguous"] == False  # noqa: E712
+
+    def test_one_sided_rejected_toward_infinity_flips_contiguous(self):
+        """Round-3 P1: rejected scanned points BETWEEN the finite hull edge
+        and the attached infinity are inside the final reported ray — the
+        contiguous flag must be recomputed against that ray, not the finite
+        hull. Accepted-pocket-then-rejected-to-the-edge, both directions."""
+        import unittest.mock
+
+        import diff_diff.conformal as cf
+
+        res = _fit_for_conformal(T=18, T0=16, effect=4.0)
+        real = cf._cwz_pvalue
+
+        def run(pattern, alternative):
+            calls = {"i": 0}
+
+            def _scripted(u, post_mask, perms, q, alternative="two-sided"):
+                _, s_obs, n = real(u, post_mask, perms, q, alternative=alternative)
+                pv = pattern[min(calls["i"], len(pattern) - 1)]
+                calls["i"] += 1
+                return pv, s_obs, n
+
+            with unittest.mock.patch.object(cf, "_cwz_pvalue", _scripted):
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore")
+                    return res.conformal_average_effect(
+                        alpha=0.2,
+                        alternative=alternative,
+                        scheme="iid",
+                        n_iid=400,
+                        seed=3,
+                        bounds=(0.0, 8.0),
+                        n_grid=40,
+                    )
+
+        # "greater": accepted pocket at the low end, rejected all the way to
+        # the upper edge -> ray [lower, +inf) contains rejected points
+        out = run([0.5] * 10 + [0.01] * 30, "greater")
+        assert np.isinf(out["upper"]) and np.isfinite(out["lower"])
+        assert not out["contiguous"]
+        # "less": mirrored
+        out = run([0.01] * 30 + [0.5] * 10, "less")
+        assert np.isinf(out["lower"]) and np.isfinite(out["upper"])
+        assert not out["contiguous"]
+
+    def test_report_propagates_alternative_and_covariates(self):
+        """Round-2 P1: DiagnosticReport's conformal block must carry
+        alternative + covariates — a one-sided p-value is uninterpretable
+        under the default two-sided assumption."""
+        res = _fit_for_conformal(effect=4.0)
+        res.conformal_test(0.0, alternative="greater")
+        block = res.conformal_inference
+        assert block["alternative"] == "greater"
+        from diff_diff.diagnostic_report import DiagnosticReport
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            native = DiagnosticReport(res).to_dict()["estimator_native_diagnostics"]
+        ci = native["conformal_inference"]
+        assert ci["alternative"] == "greater"
+        assert ci["covariates"] is None
+
+    def test_one_sided_pointwise_cis(self):
+        res = _fit_for_conformal(effect=4.0)
+        cis = res.conformal_confidence_intervals(
+            alpha=0.2, scheme="iid", n_iid=400, seed=3, alternative="greater"
+        )
+        assert bool(np.isinf(cis["upper"]).all())
+        assert np.isfinite(cis["lower"]).all()
+
+
+class TestConformalCovariates:
+    """Covariate-matching rows stack into the CWZ proxy objective, raw
+    (the paper's "(transformations of)" delegates scaling to the caller);
+    residuals and the permutation p-value stay outcome-only."""
+
+    @staticmethod
+    def _fit_with_covariate(effect=4.0, seed=2, cov_signal=True):
+        df, years, T0 = _make_panel(n_donors=5, T=18, T0=14, effect=effect, seed=seed)
+        rng = np.random.default_rng(seed + 100)
+        # EXOGENOUS covariate: unit-level structure + common trend, NOT
+        # derived from the (effect-carrying) outcome — the CWZ covariate
+        # assumption is that X is unaffected by the intervention (round-4
+        # review P1: a y-derived fixture would bless post-treatment leakage).
+        if cov_signal:
+            unit_level = {
+                u: h for u, h in zip(df["unit"].unique(), rng.normal(0, 1.0, df["unit"].nunique()))
+            }
+            df["z"] = (
+                df["unit"].map(unit_level)
+                + 0.1 * df["year"].astype(float)
+                + rng.normal(0, 0.05, len(df))
+            )
+        else:
+            df["z"] = rng.normal(0, 1.0, len(df))
+        res = SyntheticControl(**_FAST).fit(
+            df,
+            "y",
+            "treated",
+            "unit",
+            "year",
+            post_periods=years[T0:],
+            treated_unit="treated",
+            predictors=["z"],
+        )
+        return res
+
+    def test_covariate_rows_change_the_proxy_weights(self):
+        """Mechanism check: a covariate with independent signal must be able
+        to move the proxy weights (the stacked rows enter the objective)."""
+        from diff_diff.conformal import _cwz_proxy_fit
+
+        rng = np.random.default_rng(11)
+        T, J = 20, 4
+        Y0 = rng.normal(size=(T, J))
+        y1 = Y0[:, 0] * 0.7 + Y0[:, 1] * 0.3 + rng.normal(0, 0.05, T)
+        # covariate says the target matches donor 2 instead
+        X0 = rng.normal(size=(T, J))
+        x1 = X0[:, 2] + rng.normal(0, 0.01, T)
+        w_plain, resid_plain, _ = _cwz_proxy_fit(y1, Y0, max_iter=2000, min_decrease=1e-10)
+        w_cov, resid_cov, _ = _cwz_proxy_fit(
+            y1, Y0, max_iter=2000, min_decrease=1e-10, x1_rows=x1 * 10, X0_rows=X0 * 10
+        )
+        assert np.max(np.abs(w_cov - w_plain)) > 0.05
+        assert w_cov[2] > w_plain[2]
+        # residuals are OUTCOME rows only (length T, not T + covariate rows)
+        assert resid_cov.shape == (T,)
+        np.testing.assert_allclose(resid_cov, y1 - Y0 @ w_cov, rtol=1e-12)
+
+    def test_covariate_surface_and_validation(self):
+        res = self._fit_with_covariate()
+        with pytest.warns(UserWarning, match="UNAFFECTED by the intervention"):
+            s = res.conformal_test(0.0, covariates=["z"])
+        assert 0.0 < float(s["p_value"]) <= 1.0
+        assert res.conformal_inference["covariates"] == ["z"]
+        with pytest.raises(ValueError, match="not in the fit snapshot"):
+            res.conformal_test(0.0, covariates=["nope"])
+        with pytest.raises(ValueError, match="outcome"):
+            res.conformal_test(0.0, covariates=["y"])
+
+    @pytest.mark.filterwarnings("ignore::UserWarning")
+    def test_covariates_compose_with_one_sided_and_cis(self):
+        res = self._fit_with_covariate(effect=4.0)
+        pg = float(res.conformal_test(0.0, alternative="greater", covariates=["z"])["p_value"])
+        assert 0.0 < pg <= 1.0
+        avg = res.conformal_average_effect(
+            alpha=0.2, scheme="iid", n_iid=300, seed=3, alternative="greater", covariates=["z"]
+        )
+        assert np.isinf(avg["upper"])
+        cis = res.conformal_confidence_intervals(
+            alpha=0.2, scheme="iid", n_iid=300, seed=3, covariates=["z"]
+        )
+        assert np.isfinite(cis["lower"]).all() and np.isfinite(cis["upper"]).all()
+
+    def test_permutation_floor_still_holds_with_covariates(self):
+        """The p-value floor 1/|Pi| (identity in Pi) is statistic- and
+        proxy-independent — exchangeability is preserved because covariate
+        rows are fixed features of every permuted dataset."""
+        res = self._fit_with_covariate(effect=0.0)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            s = res.conformal_test(0.0, covariates=["z"], scheme="moving_block")
+        assert float(s["p_value"]) >= 1.0 / float(s["n_perms"]) - 1e-12

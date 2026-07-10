@@ -223,6 +223,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   assert between the two (defense in depth).
 
 ### Added
+- **`SyntheticControl` conformal extensions: one-sided alternatives + covariates in the
+  proxy (Chernozhukov-Wüthrich-Zhu 2021).** `conformal_test` / `conformal_confidence_intervals`
+  / `conformal_average_effect` gain `alternative={"two-sided","greater","less"}` — one-sided
+  tests use the SIGNED average-effect statistic `S(û)=T_*^{-1/2}·Σ û_t` (grounded in Remark 1's
+  statistic freedom; **the paper has no §7** — this PR also fixes the prior "(§7 signed-t)"
+  citation, a cross-contamination from the Firpo-Possebom scope note), `q=1` enforced, and CI
+  inversion yields half-lines with the infinite side genuinely accepted. `covariates=[...]`
+  stacks pivoted-variable matching rows into the constrained-LS proxy objective per the paper's
+  note after eq 6; rows stack raw (pre-scale as needed), residuals/statistic stay outcome-only,
+  exchangeability preserved; block-collapsed average-effect covariates collapse with the same
+  T*-block structure. Locked by a hand-rolled signed-statistic permutation oracle, directional
+  rejection/half-line/composition tests, a proxy-weight mechanism check, and a permutation-floor
+  invariant; all 31 pre-existing conformal tests pass unchanged.
 - **Opt-in `df_convention="cluster"` inference-df knob (DiD / TWFE / MultiPeriodDiD +
   `LinearRegression`).** Clustered analytical fits historically compute t-statistics,
   p-values, and CIs at the fitted **residual df** (`n − K_full`), while `fixest`/Stata use
