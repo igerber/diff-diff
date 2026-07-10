@@ -133,6 +133,19 @@ class DifferenceInDifferences:
         path — absent ``cluster=``, pure Conley spatial HAC applies.
         ``survey_design=`` + Conley and ``inference='wild_bootstrap'`` +
         Conley both raise ``NotImplementedError``.
+    df_convention : str, default "residual"
+        Degrees-of-freedom convention for t-statistics, p-values, and CIs on
+        clustered analytical fits. ``"residual"`` (default) uses the fitted
+        residual df (``n − K_full``); ``"cluster"`` uses the Stata/fixest
+        cluster df ``G − 1``. Applies only at the fallback level of the df
+        resolution: survey df and per-coefficient Bell-McCaffrey DOF
+        (``vcov_type="hc2_bm"``) are more refined small-sample corrections
+        and always take precedence. Point estimates, SEs, and t-statistics
+        are unaffected — only the reference t-distribution changes. Has no
+        effect on unclustered fits or on ``vcov_type="conley"`` (the combined
+        Conley+cluster product kernel has no documented ``G − 1`` df
+        reference and keeps the residual df). The default flips to ``"cluster"`` at
+        v4 (see the REGISTRY clustered-CR1 inference-df deviation note).
 
     Attributes
     ----------
@@ -198,10 +211,16 @@ class DifferenceInDifferences:
         conley_metric: str = "haversine",
         conley_kernel: str = "bartlett",
         conley_lag_cutoff: Optional[int] = None,
+        df_convention: str = "residual",
     ):
         # Resolve vcov_type from the legacy `robust` alias via the shared
         # helper so __init__ and set_params use identical validation logic.
         from diff_diff.linalg import resolve_vcov_type
+
+        if df_convention not in ("residual", "cluster"):
+            raise ValueError(
+                f"df_convention must be 'residual' or 'cluster', got {df_convention!r}"
+            )
 
         self.robust = robust
         self.cluster = cluster
@@ -233,6 +252,13 @@ class DifferenceInDifferences:
         # arrays are auto-derived from data[time].values + data[unit].values
         # at fit-time (panel estimators already take time/unit as column names).
         self.conley_lag_cutoff = conley_lag_cutoff
+        # Inference df convention for clustered analytical fits: "residual"
+        # (default; t/p/CI at the fitted residual df) or "cluster" (the
+        # Stata/fixest G-1 convention). Survey df and per-coefficient
+        # Bell-McCaffrey DOF always take precedence over either. The default
+        # flips to "cluster" at v4 (REGISTRY clustered-CR1 inference-df
+        # deviation note).
+        self.df_convention = df_convention
 
         self.is_fitted_ = False
         self.results_ = None
@@ -637,6 +663,7 @@ class DifferenceInDifferences:
             conley_time=_conley_time_arr,
             conley_unit=_conley_unit_arr,
             conley_lag_cutoff=self.conley_lag_cutoff,
+            df_convention=self.df_convention,
         ).fit(X, y, df_adjustment=n_absorbed_effects)
 
         coefficients = reg.coefficients_
@@ -714,8 +741,12 @@ class DifferenceInDifferences:
             if survey_metadata is not None:
                 survey_metadata.df_survey = _df_rep if _df_rep > 0 else None
             t_stat, p_value, conf_int = safe_inference(att, se, alpha=self.alpha, df=_df_rep)
+            _inference_df_used = float(_df_rep) if _df_rep is not None and _df_rep > 0 else None
         elif self.inference == "wild_bootstrap" and self.cluster is not None:
-            # Override with wild cluster bootstrap inference
+            # Override with wild cluster bootstrap inference (bootstrap
+            # test-inversion based; no reference t-distribution, so no
+            # effective inference df).
+            _inference_df_used = None
             se, p_value, conf_int, t_stat, vcov, _ = self._run_wild_bootstrap_inference(
                 X, y, residuals, cluster_ids, att_idx
             )
@@ -728,6 +759,9 @@ class DifferenceInDifferences:
             t_stat = inference.t_stat
             p_value = inference.p_value
             conf_int = inference.conf_int
+            _inference_df_used = (
+                float(inference.df) if inference.df is not None and inference.df > 0 else None
+            )
 
         r_squared = compute_r_squared(y, residuals)
 
@@ -776,6 +810,8 @@ class DifferenceInDifferences:
             vcov_type=_fit_vcov_type,
             cluster_name=self.cluster,
             conley_lag_cutoff=(self.conley_lag_cutoff if _fit_vcov_type == "conley" else None),
+            df_convention=self.df_convention,
+            inference_df=_inference_df_used,
         )
 
         self._coefficients = coefficients
@@ -1080,6 +1116,7 @@ class DifferenceInDifferences:
             "conley_metric": self.conley_metric,
             "conley_kernel": self.conley_kernel,
             "conley_lag_cutoff": self.conley_lag_cutoff,
+            "df_convention": self.df_convention,
         }
 
     def set_params(self, **params) -> "DifferenceInDifferences":
@@ -1110,6 +1147,11 @@ class DifferenceInDifferences:
         # `vcov_type` on local variables, then apply all mutations atomically.
         pending_robust = params.get("robust", self.robust)
         pending_vcov_type = params.get("vcov_type", self.vcov_type)
+        pending_df_convention = params.get("df_convention", self.df_convention)
+        if pending_df_convention not in ("residual", "cluster"):
+            raise ValueError(
+                "df_convention must be 'residual' or 'cluster', " f"got {pending_df_convention!r}"
+            )
 
         # First pass: validate that every incoming key is a known attribute
         # so we don't partially apply a batch that ends in "Unknown parameter".
@@ -2045,6 +2087,41 @@ class MultiPeriodDiD(DifferenceInDifferences):
         if survey_weights is not None and survey_weight_type == "fweight":
             n_eff_df = int(round(np.sum(survey_weights)))
         df = n_eff_df - k_effective - n_absorbed_effects
+        _df_cluster_knob_invalid = False
+        # Opt-in Stata/fixest cluster-df convention (df_convention="cluster"):
+        # the shared analytical df becomes G - 1 on a clustered fit. Placed
+        # BEFORE the survey/replicate overrides below (which overwrite df, so
+        # survey df keeps precedence) and upstream of the per-period BM-DOF
+        # branch (which wins per coefficient on the hc2_bm path). Mirrors
+        # LinearRegression's resolution: only positive-weight clusters count
+        # on a weighted fit.
+        if (
+            self.df_convention == "cluster"
+            and effective_cluster_ids is not None
+            and _fit_vcov_type != "conley"
+        ):
+            # conley is excluded: the combined Conley+cluster product kernel is
+            # a diff-diff convention with no documented G-1 df reference (see
+            # the REGISTRY Conley section); its inference keeps the residual df.
+            from diff_diff.linalg import effective_cluster_count
+
+            _g_eff_mp = effective_cluster_count(effective_cluster_ids, survey_weights)
+            if _g_eff_mp <= 1:
+                # Cluster df G - 1 undefined: fail closed with NaN inference
+                # (df=0 forces NaN through safe_inference), mirroring
+                # LinearRegression.get_inference's guard. Unreachable via the
+                # CR1 vcov path (its validator now counts positive-weight
+                # clusters for all weight types and raises) — defense-in-depth.
+                warnings.warn(
+                    "df_convention='cluster' requires at least 2 effective "
+                    f"clusters; got {_g_eff_mp}. Inference fields will be NaN.",
+                    UserWarning,
+                    stacklevel=2,
+                )
+                _df_cluster_knob_invalid = True
+                df = 0
+            else:
+                df = _g_eff_mp - 1
 
         # Absorbed-FE variance scale (fixest full-K convention): the within-
         # transform solve_ols above scales the non-clustered classical/hc1 vcov
@@ -2081,7 +2158,7 @@ class MultiPeriodDiD(DifferenceInDifferences):
 
         # Guard: fall back to normal distribution if df is non-positive
         # Skip for replicate designs — df=0 is intentional for NaN inference
-        if df is not None and df <= 0 and not _uses_replicate_mp:
+        if df is not None and df <= 0 and not _uses_replicate_mp and not _df_cluster_knob_invalid:
             warnings.warn(
                 f"Degrees of freedom is non-positive (df={df}). "
                 "Using normal distribution instead of t-distribution for inference.",
@@ -2238,6 +2315,7 @@ class MultiPeriodDiD(DifferenceInDifferences):
         # R-style NA propagation: if ANY post-period effect is NaN, average is undefined
         effect_arr = np.array(post_effect_values)
 
+        _avg_df = None
         if np.any(np.isnan(effect_arr)):
             # Some period effects are NaN (unidentified) - cannot compute valid average
             # This follows R's default behavior where mean(c(1, 2, NA)) returns NA
@@ -2308,6 +2386,12 @@ class MultiPeriodDiD(DifferenceInDifferences):
                 len(np.unique(effective_cluster_ids)) if effective_cluster_ids is not None else None
             ),
             conley_lag_cutoff=(self.conley_lag_cutoff if _fit_vcov_type == "conley" else None),
+            df_convention=self.df_convention,
+            inference_df=(
+                float(_avg_df)
+                if _avg_df is not None and np.isfinite(_avg_df) and _avg_df > 0
+                else None
+            ),
         )
 
         self._coefficients = coefficients

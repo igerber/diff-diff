@@ -56,6 +56,12 @@ class TwoWayFixedEffects(DifferenceInDifferences):
         auto-cluster is also preserved (routes to CR2-BM at unit).
     alpha : float, default=0.05
         Significance level for confidence intervals.
+    df_convention : str, default "residual"
+        Inherited from :class:`DifferenceInDifferences`: df convention for
+        t/p/CI on clustered analytical fits — ``"residual"`` (fitted
+        residual df, default) or ``"cluster"`` (Stata/fixest ``G − 1``).
+        Survey df and per-coefficient Bell-McCaffrey DOF keep precedence;
+        inert on unclustered and Conley fits. Default flips at v4.
 
     Notes
     -----
@@ -525,6 +531,7 @@ class TwoWayFixedEffects(DifferenceInDifferences):
                 conley_time=_conley_time_arr,
                 conley_unit=_conley_unit_arr,
                 conley_lag_cutoff=self.conley_lag_cutoff,
+                df_convention=self.df_convention,
             ).fit(X, y, df_adjustment=df_adjustment)
         else:
             # Suppress generic warning, TWFE provides context-specific messages below
@@ -546,6 +553,7 @@ class TwoWayFixedEffects(DifferenceInDifferences):
                     conley_time=_conley_time_arr,
                     conley_unit=_conley_unit_arr,
                     conley_lag_cutoff=self.conley_lag_cutoff,
+                    df_convention=self.df_convention,
                 ).fit(X, y, df_adjustment=df_adjustment)
 
         coefficients = reg.coefficients_
@@ -662,8 +670,12 @@ class TwoWayFixedEffects(DifferenceInDifferences):
             if survey_metadata is not None:
                 survey_metadata.df_survey = _df_rep if _df_rep > 0 else None
             t_stat, p_value, conf_int = _safe_inf(att, se, alpha=self.alpha, df=_df_rep)
+            _inference_df_used = float(_df_rep) if _df_rep is not None and _df_rep > 0 else None
         elif self.inference == "wild_bootstrap":
-            # Override with wild cluster bootstrap inference
+            # Override with wild cluster bootstrap inference (bootstrap
+            # test-inversion based; no reference t-distribution, so no
+            # effective inference df).
+            _inference_df_used = None
             se, p_value, conf_int, t_stat, vcov, _ = self._run_wild_bootstrap_inference(
                 X, y, residuals, cluster_ids, att_idx
             )
@@ -675,6 +687,9 @@ class TwoWayFixedEffects(DifferenceInDifferences):
             t_stat = inference.t_stat
             p_value = inference.p_value
             conf_int = inference.conf_int
+            _inference_df_used = (
+                float(inference.df) if inference.df is not None and inference.df > 0 else None
+            )
 
         # Count observations
         treated_units = data[data[treatment] == 1][unit].unique()
@@ -754,6 +769,8 @@ class TwoWayFixedEffects(DifferenceInDifferences):
             vcov_type=_fit_vcov_type,
             cluster_name=_twfe_cluster_label,
             conley_lag_cutoff=(self.conley_lag_cutoff if _fit_vcov_type == "conley" else None),
+            df_convention=self.df_convention,
+            inference_df=_inference_df_used,
         )
 
         self.is_fitted_ = True

@@ -223,6 +223,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   assert between the two (defense in depth).
 
 ### Added
+- **Opt-in `df_convention="cluster"` inference-df knob (DiD / TWFE / MultiPeriodDiD +
+  `LinearRegression`).** Clustered analytical fits historically compute t-statistics,
+  p-values, and CIs at the fitted **residual df** (`n − K_full`), while `fixest`/Stata use
+  the **cluster df** `G − 1` (the documented clustered-CR1 inference-df deviation, REGISTRY
+  §TwoWayFixedEffects). `df_convention="cluster"` opts into the Stata/fixest convention:
+  only the reference t-distribution changes — point estimates, SEs, and t-statistics are
+  untouched; survey df and per-coefficient Bell-McCaffrey DOF (`hc2_bm`) keep precedence;
+  unclustered fits are unaffected. Default remains `"residual"`; **the default flips at
+  v4** (major-version change — it moves every clustered p-value/CI). sklearn-compatible:
+  `get_params`/`set_params` round-trip with transactional validation. Locked by
+  `TestDfConvention` (exact `t(G−1)` tail match, precedence ordering, no-op default).
 - **REGISTRY.md and REPORTING.md are now published on Read the Docs.** The two
   methodology markdown pages render as in-site Sphinx pages (MyST) under a new
   "Methodology" toctree section, so cross-references from the API docs use `:doc:` links

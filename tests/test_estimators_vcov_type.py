@@ -2755,3 +2755,344 @@ class TestAbsorbedFEFullKParity:
             df, outcome="y", treatment="treated", time="time", absorb=["unit"]
         )
         assert np.isnan(r.avg_se), "saturated full-K design must yield NaN SE (fail-closed)"
+
+
+class TestDfConvention:
+    """`df_convention="cluster"` (opt-in Stata/fixest G-1 inference df on
+    clustered analytical fits; REGISTRY clustered-CR1 inference-df deviation
+    note). The knob changes ONLY the reference t-distribution for t/p/CI —
+    never the point estimate, SE, or t-statistic — and sits at the fallback
+    level of the df resolution (survey df and per-coefficient Bell-McCaffrey
+    DOF always win). Default stays "residual" until the v4 flip."""
+
+    @staticmethod
+    def _clustered_panel(n_units=50, seed=42):
+        rng = np.random.default_rng(seed)
+        rows = []
+        for i in range(n_units):
+            group = int(i < n_units // 2)
+            for t in range(4):
+                post = int(t >= 2)
+                rows.append(
+                    {
+                        "unit": i,
+                        "post": post,
+                        "group": group,
+                        "time": t,
+                        "y": 1
+                        + 0.3 * i / n_units
+                        + 0.2 * t
+                        + 0.25 * (group * post)
+                        + rng.normal(0, 1.0),
+                    }
+                )
+        return pd.DataFrame(rows)
+
+    def test_default_residual_is_noop(self):
+        """Explicit df_convention="residual" is byte-identical to the default."""
+        from scipy import stats
+
+        data = self._clustered_panel()
+        r0 = DifferenceInDifferences(cluster="unit").fit(
+            data, outcome="y", treatment="group", time="post", unit="unit"
+        )
+        r1 = DifferenceInDifferences(cluster="unit", df_convention="residual").fit(
+            data, outcome="y", treatment="group", time="post", unit="unit"
+        )
+        assert (r0.att, r0.se, r0.t_stat, r0.p_value, r0.conf_int) == (
+            r1.att,
+            r1.se,
+            r1.t_stat,
+            r1.p_value,
+            r1.conf_int,
+        )
+        # and the default really is the residual-df tail, not G-1
+        assert abs(r0.p_value - 2 * stats.t.sf(abs(r0.t_stat), 49)) > 1e-4
+
+    @pytest.mark.parametrize("estimator_cls", [DifferenceInDifferences])
+    def test_cluster_convention_matches_g_minus_1(self, estimator_cls):
+        """Knob on: p/CI follow t(G-1) exactly; att/SE/t unchanged."""
+        from scipy import stats
+
+        data = self._clustered_panel()
+        kw = dict(outcome="y", treatment="group", time="post", unit="unit")
+        r0 = estimator_cls(cluster="unit").fit(data, **kw)
+        r1 = estimator_cls(cluster="unit", df_convention="cluster").fit(data, **kw)
+        assert r0.att == r1.att and r0.se == r1.se and r0.t_stat == r1.t_stat
+        G = data["unit"].nunique()
+        np.testing.assert_allclose(r1.p_value, 2 * stats.t.sf(abs(r1.t_stat), G - 1), rtol=1e-12)
+        crit = stats.t.ppf(0.975, G - 1)
+        np.testing.assert_allclose(
+            r1.conf_int, (r1.att - crit * r1.se, r1.att + crit * r1.se), rtol=1e-12
+        )
+        assert r0.p_value != r1.p_value
+
+    def test_twfe_inherits_knob(self):
+        from scipy import stats
+
+        from diff_diff import TwoWayFixedEffects
+
+        data = self._clustered_panel()
+        data["treated"] = data["group"] * data["post"]
+        kw = dict(outcome="y", treatment="treated", time="post", unit="unit")
+        r0 = TwoWayFixedEffects(robust=True).fit(data, **kw)
+        r1 = TwoWayFixedEffects(robust=True, df_convention="cluster").fit(data, **kw)
+        assert r0.se == r1.se and r0.t_stat == r1.t_stat
+        G = data["unit"].nunique()
+        np.testing.assert_allclose(r1.p_value, 2 * stats.t.sf(abs(r1.t_stat), G - 1), rtol=1e-12)
+
+    def test_mpd_period_effects_follow_convention(self):
+        from scipy import stats
+
+        data = self._clustered_panel()
+        data["treated"] = data["group"]
+        kw = dict(outcome="y", treatment="treated", time="time", unit="unit")
+        m0 = MultiPeriodDiD(cluster="unit").fit(data, **kw)
+        m1 = MultiPeriodDiD(cluster="unit", df_convention="cluster").fit(data, **kw)
+        G = data["unit"].nunique()
+        for period, pe1 in m1.period_effects.items():
+            pe0 = m0.period_effects[period]
+            assert pe0.se == pe1.se
+            if np.isfinite(pe1.p_value):
+                np.testing.assert_allclose(
+                    pe1.p_value,
+                    2 * stats.t.sf(abs(pe1.effect / pe1.se), G - 1),
+                    rtol=1e-12,
+                )
+
+    def test_mpd_avg_att_follows_convention(self):
+        """MPD's headline avg_att p-value/CI route through the shared df,
+        so the knob moves them to t(G-1); avg_att/avg_se/avg_t_stat are
+        unchanged. Also locks the new inference_df/df_convention metadata."""
+        from scipy import stats
+
+        data = self._clustered_panel()
+        data["treated"] = data["group"]
+        kw = dict(outcome="y", treatment="treated", time="time", unit="unit")
+        m0 = MultiPeriodDiD(cluster="unit").fit(data, **kw)
+        m1 = MultiPeriodDiD(cluster="unit", df_convention="cluster").fit(data, **kw)
+        G = data["unit"].nunique()
+        assert m0.avg_att == m1.avg_att
+        assert m0.avg_se == m1.avg_se
+        assert m0.avg_t_stat == m1.avg_t_stat
+        np.testing.assert_allclose(
+            m1.avg_p_value, 2 * stats.t.sf(abs(m1.avg_t_stat), G - 1), rtol=1e-12
+        )
+        crit = stats.t.ppf(0.975, G - 1)
+        np.testing.assert_allclose(
+            m1.avg_conf_int,
+            (m1.avg_att - crit * m1.avg_se, m1.avg_att + crit * m1.avg_se),
+            rtol=1e-12,
+        )
+        assert m0.avg_p_value != m1.avg_p_value
+        # result metadata
+        assert m1.df_convention == "cluster" and m1.inference_df == G - 1
+        assert m0.df_convention == "residual" and m0.inference_df > G - 1
+        assert m1.to_dict()["inference_df"] == G - 1
+
+    def test_results_metadata_did_twfe(self):
+        """DiDResults carries df_convention + the effective inference_df,
+        included in to_dict() only when set."""
+        data = self._clustered_panel()
+        r1 = DifferenceInDifferences(cluster="unit", df_convention="cluster").fit(
+            data, outcome="y", treatment="group", time="post", unit="unit"
+        )
+        G = data["unit"].nunique()
+        assert r1.df_convention == "cluster" and r1.inference_df == G - 1
+        d = r1.to_dict()
+        assert d["df_convention"] == "cluster" and d["inference_df"] == G - 1
+
+    def test_conley_fits_excluded_from_knob(self):
+        """vcov_type="conley" + explicit cluster keeps the residual df even
+        with the knob on (no documented G-1 reference for the product
+        kernel) — inference identical with the knob on and off."""
+        rng = np.random.default_rng(9)
+        data = self._clustered_panel()
+        units = data["unit"].unique()
+        lat = {u: 40 + rng.uniform(-2, 2) for u in units}
+        lon = {u: -100 + rng.uniform(-2, 2) for u in units}
+        data["lat"] = data["unit"].map(lat)
+        data["lon"] = data["unit"].map(lon)
+        kw = dict(outcome="y", treatment="group", time="post", unit="unit")
+        common = dict(
+            vcov_type="conley",
+            cluster="unit",
+            conley_coords=("lat", "lon"),
+            conley_cutoff_km=100.0,
+            conley_lag_cutoff=0,
+        )
+        r0 = DifferenceInDifferences(**common).fit(data, **kw)
+        r1 = DifferenceInDifferences(**common, df_convention="cluster").fit(data, **kw)
+        assert (r0.p_value, r0.conf_int) == (r1.p_value, r1.conf_int)
+
+    def test_bm_dof_precedence_over_knob(self):
+        """hc2_bm's per-coefficient Satterthwaite DOF beats the knob: the
+        knob is fallback-level only, so hc2_bm inference is IDENTICAL with
+        the knob on and off."""
+        data = self._clustered_panel(n_units=20)
+        kw = dict(outcome="y", treatment="group", time="post", unit="unit")
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            r0 = DifferenceInDifferences(cluster="unit", vcov_type="hc2_bm").fit(data, **kw)
+            r1 = DifferenceInDifferences(
+                cluster="unit", vcov_type="hc2_bm", df_convention="cluster"
+            ).fit(data, **kw)
+        assert (r0.se, r0.p_value, r0.conf_int) == (r1.se, r1.p_value, r1.conf_int)
+
+    def test_linalg_survey_df_precedence(self):
+        """LinearRegression level: a survey df on the fit wins over the knob."""
+        from diff_diff.linalg import LinearRegression
+
+        rng = np.random.default_rng(3)
+        X = np.column_stack([np.ones(120), rng.normal(size=(120, 2))])
+        y = X @ np.array([1.0, 0.4, 2.0]) + rng.normal(size=120)
+        cl = np.repeat(np.arange(12), 10)
+        reg = LinearRegression(
+            cluster_ids=cl, include_intercept=False, df_convention="cluster"
+        ).fit(X, y)
+        assert reg.n_clusters_ == 12
+        # simulate a survey fit: survey_df_ set -> must win over G-1
+        reg.survey_df_ = 7
+        inf = reg.get_inference(1)
+        assert inf.df == 7
+
+    def test_one_effective_cluster_fweight_fit_raises(self):
+        """Weighted CR1 fit where only ONE cluster carries positive weight
+        must fail at the vcov layer for ALL weight types: a zero-frequency
+        fweight cluster is as inert as a subpopulation-zeroed pweight
+        cluster, so the prior fweight carve-out let a degenerate
+        one-effective-cluster CR1 SE through (local-review round-3 P1)."""
+        from diff_diff.linalg import LinearRegression
+
+        rng = np.random.default_rng(5)
+        n = 60
+        X = np.column_stack([np.ones(n), rng.normal(size=(n, 2))])
+        y = X @ np.array([1.0, 0.5, 2.0]) + rng.normal(size=n)
+        cl = np.repeat(np.arange(3), 20)
+        w = np.where(cl == 0, 2.0, 0.0)  # only cluster 0 has positive weight
+        for wt in ("fweight", "pweight", "aweight"):
+            with pytest.raises(ValueError, match="at least 2 clusters"):
+                LinearRegression(
+                    cluster_ids=cl,
+                    include_intercept=False,
+                    weights=w,
+                    weight_type=wt,
+                    df_convention="cluster",
+                ).fit(X, y)
+
+    def test_get_inference_guard_fails_closed_at_one_cluster(self):
+        """Defense-in-depth: if a fit ever surfaces n_clusters_ <= 1 (all
+        supported routes now raise at the vcov layer), the knob's
+        get_inference branch returns all-NaN t/p/CI with a warning instead
+        of degrading to normal-theory inference via the non-positive-df
+        fallback (local-review round-2 P1)."""
+        from diff_diff.linalg import LinearRegression
+
+        rng = np.random.default_rng(5)
+        n = 60
+        X = np.column_stack([np.ones(n), rng.normal(size=(n, 2))])
+        y = X @ np.array([1.0, 0.5, 2.0]) + rng.normal(size=n)
+        cl = np.repeat(np.arange(3), 20)
+        reg = LinearRegression(
+            cluster_ids=cl, include_intercept=False, df_convention="cluster"
+        ).fit(X, y)
+        reg.n_clusters_ = 1  # simulate the degenerate state directly
+        with pytest.warns(UserWarning, match="at least 2 effective"):
+            inf = reg.get_inference(1)
+        assert np.isnan(inf.t_stat) and np.isnan(inf.p_value)
+        assert np.isnan(inf.conf_int[0]) and np.isnan(inf.conf_int[1])
+        assert np.isfinite(inf.se)  # SE reported; only the reference-
+        # distribution-dependent fields are NaN
+
+    def test_mpd_one_effective_cluster_fails_closed(self):
+        """MPD twin of the guard: a one-effective-cluster fit fails at the
+        CR1 vcov layer (the estimator surface has no raw weights= kwarg, so
+        the weighted one-positive-cluster route is exercised at the linalg
+        level above; here a single cluster label locks the MPD route)."""
+        data = self._clustered_panel(n_units=4)
+        data["treated"] = data["group"]
+        data["one_cluster"] = 0
+        with pytest.raises(ValueError, match="at least 2 clusters"):
+            MultiPeriodDiD(cluster="one_cluster", df_convention="cluster").fit(
+                data, outcome="y", treatment="treated", time="time", unit="unit"
+            )
+
+    def test_nan_cluster_labels_rejected(self):
+        """Missing cluster labels are REJECTED before any clustered CR1
+        computation (round-5 P0): the meat's pandas groupby drops
+        NaN-labelled rows, so any NaN-inclusive count (np.unique keeps a
+        NaN group) would disagree with the sandwich's partition — silently
+        wrong SEs. R fixest / Stata error on missing cluster values too.
+        Both the vcov layer and effective_cluster_count fail loud."""
+        from diff_diff.linalg import LinearRegression, effective_cluster_count
+
+        rng = np.random.default_rng(7)
+        n = 80
+        cl = np.repeat(np.arange(4).astype(float), 20)
+        cl[cl == 3] = np.nan
+        with pytest.raises(ValueError, match="missing values"):
+            effective_cluster_count(cl)
+        with pytest.raises(ValueError, match="missing values"):
+            effective_cluster_count(cl, np.ones(n))
+        X = np.column_stack([np.ones(n), rng.normal(size=(n, 2))])
+        y = X @ np.array([1.0, 0.5, 2.0]) + rng.normal(size=n)
+        with pytest.raises(ValueError, match="missing values"):
+            LinearRegression(cluster_ids=cl, include_intercept=False, df_convention="cluster").fit(
+                X, y
+            )
+        # default convention rejects too — the contract is the vcov layer's
+        with pytest.raises(ValueError, match="missing values"):
+            LinearRegression(cluster_ids=cl, include_intercept=False).fit(X, y)
+
+    def test_nan_cluster_labels_rejected_all_backends(self):
+        """Round-6 P0: every clustered backend route shares the front-door
+        rejection — solve_ols(return_vcov=True) (the Rust HC1/CR1 dispatch
+        when available), CR2-BM (hc2_bm + cluster), and the MPD estimator
+        route (which calls solve_ols directly)."""
+        from diff_diff.linalg import compute_robust_vcov, solve_ols
+
+        rng = np.random.default_rng(7)
+        n = 80
+        cl = np.repeat(np.arange(4).astype(float), 20)
+        cl[cl == 3] = np.nan
+        X = np.column_stack([np.ones(n), rng.normal(size=(n, 2))])
+        y = X @ np.array([1.0, 0.5, 2.0]) + rng.normal(size=n)
+        with pytest.raises(ValueError, match="missing values"):
+            solve_ols(X, y, cluster_ids=cl, return_vcov=True)
+        resid = y - X @ np.linalg.lstsq(X, y, rcond=None)[0]
+        with pytest.raises(ValueError, match="missing values"):
+            compute_robust_vcov(X, resid, cluster_ids=cl)  # rust or numpy HC1
+        with pytest.raises(ValueError, match="missing values"):
+            compute_robust_vcov(X, resid, cluster_ids=cl, vcov_type="hc2_bm")
+        data = self._clustered_panel(n_units=4)
+        data["treated"] = data["group"]
+        data.loc[data["unit"] == 0, "unit"] = np.nan
+        with pytest.raises(ValueError, match="missing values"):
+            MultiPeriodDiD(cluster="unit").fit(
+                data, outcome="y", treatment="treated", time="time", unit="unit"
+            )
+
+    def test_validation_and_transactional_set_params(self):
+        with pytest.raises(ValueError, match="df_convention"):
+            DifferenceInDifferences(df_convention="bogus")
+        est = DifferenceInDifferences()
+        with pytest.raises(ValueError, match="df_convention"):
+            est.set_params(df_convention="bogus")
+        assert est.df_convention == "residual"  # unchanged after failed set
+        est.set_params(df_convention="cluster")
+        assert est.df_convention == "cluster"
+
+    def test_get_params_roundtrip(self):
+        est = DifferenceInDifferences(cluster="unit", df_convention="cluster")
+        params = est.get_params()
+        assert params["df_convention"] == "cluster"
+        clone = DifferenceInDifferences(**params)
+        assert clone.df_convention == "cluster"
+
+    def test_unclustered_fit_knob_is_inert(self):
+        """No cluster -> n_clusters_ is None -> knob has zero effect."""
+        data = self._clustered_panel()
+        kw = dict(outcome="y", treatment="group", time="post")
+        r0 = DifferenceInDifferences().fit(data, **kw)
+        r1 = DifferenceInDifferences(df_convention="cluster").fit(data, **kw)
+        assert (r0.p_value, r0.conf_int) == (r1.p_value, r1.conf_int)

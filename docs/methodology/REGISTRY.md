@@ -369,9 +369,16 @@ This matches the behavior of R's `fixest::feols()` with absorbed FE.
   numerically zero, which is what `tests/test_methodology_twfe.py::test_pvalue_matches_r_twfe`
   pins; the convention itself is locked at a distinguishable moderate |t|~1.8 by
   `tests/test_methodology_twfe.py::test_moderate_t_pins_residual_df_convention`, where the
-  t(148) and t(49) tails differ by ~5%). The SE itself carries the separate ~0.25% non-nested-FE ssc band above. Whether to
-  adopt the cluster-df convention library-wide is tracked as an Actionable TODO row (it is the
-  common applied recommendation, but changing it moves every clustered p-value/CI). The full-dummy (`fixed_effects=`) idiom carries
+  t(148) and t(49) tails differ by ~5%). The SE itself carries the separate ~0.25% non-nested-FE ssc band above. **Opt-in knob (2026-07):**
+  `df_convention="cluster"` on `DifferenceInDifferences` / `TwoWayFixedEffects` / `MultiPeriodDiD`
+  (and the `LinearRegression` linalg surface) switches clustered analytical t/p/CI to the
+  Stata/fixest `G − 1` convention — fallback-level only (survey df and per-coefficient
+  Bell-McCaffrey DOF keep precedence), point estimates/SEs/t-statistics unchanged, inert on
+  unclustered fits. The default remains `"residual"` and flips at v4 (tracked in TODO Deferred →
+  Parked; flipping moves every clustered p-value/CI, so it is a major-version change). Standalone
+  estimators (CS, SA, imputation-family, etc.) carry their own inference stacks and are out of the
+  knob's scope. Locked by
+  `tests/test_estimators_vcov_type.py::TestDfConvention` (G−1 tail match, precedence, no-op default). The full-dummy (`fixed_effects=`) idiom carries
   `df_adjustment == 0` and is unchanged (it already matched fixest).
 
 *Edge cases:*

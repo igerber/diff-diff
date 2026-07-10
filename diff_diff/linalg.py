@@ -626,6 +626,7 @@ def _solve_ols_rust(
     """
     # Convert cluster_ids to int64 for Rust (handles string/categorical IDs)
     if cluster_ids is not None:
+        _validate_cluster_ids(cluster_ids)
         cluster_ids = _factorize_cluster_ids(cluster_ids)
 
     # Call Rust backend with fallback on numerical instability
@@ -1510,6 +1511,50 @@ def _validate_vcov_args(
             )
 
 
+def _validate_cluster_ids(cluster_ids: np.ndarray) -> None:
+    """Front-door check shared by every clustered vcov backend: missing
+    (NaN/None) cluster labels are rejected outright. The pandas groupby
+    aggregating cluster scores drops NaN-labelled rows while np.unique /
+    factorize-based counts keep (or sentinel) them, so no count can agree
+    with the meat's partition — silently wrong CR1 SEs. Matches R fixest /
+    Stata, which error on missing cluster values. Called by
+    ``compute_robust_vcov``, ``_solve_ols_rust``, and the CR2-BM shared
+    core so NumPy, Rust, and CR2 routes all fail closed identically."""
+    if pd.isna(np.asarray(cluster_ids)).any():
+        raise ValueError(
+            "cluster_ids contain missing values (NaN/None). Drop or "
+            "impute those rows before requesting cluster-robust SEs."
+        )
+
+
+def effective_cluster_count(cluster_ids: np.ndarray, weights: Optional[np.ndarray] = None) -> int:
+    """Effective cluster count for clustered inference metadata.
+
+    Unweighted: the number of unique cluster labels. Weighted: only clusters
+    with positive total weight count (zero-weight rows are inert per the
+    linalg contract). The positive-total-weight definition applies to ALL
+    weight types (pweight/aweight/fweight alike — an all-zero-weight cluster
+    contributes nothing to any weighted sandwich), which can be STRICTER
+    than the raw-unique count some vcov validators use; consumers that need
+    a defined cluster df must fail closed when this count is < 2 (see
+    ``get_inference``'s df_convention="cluster" guard). Grouped reduction
+    via factorize + bincount, O(n).
+
+    Missing (NaN/None) cluster labels raise ``ValueError`` — the CR1 meat
+    aggregation (a pandas groupby) drops NaN-labelled rows, so no count
+    can agree with the sandwich's partition; the vcov validation rejects
+    them for the same reason (matching R fixest / Stata, which error on
+    missing cluster values).
+    """
+    arr = np.asarray(cluster_ids)
+    _validate_cluster_ids(arr)
+    codes, uniques = pd.factorize(arr, sort=False)
+    if weights is None:
+        return int(len(uniques))
+    sums = np.bincount(codes, weights=np.asarray(weights, dtype=np.float64))
+    return int(np.sum(sums > 0))
+
+
 def resolve_vcov_type(
     robust: bool = True,
     vcov_type: Optional[str] = None,
@@ -1784,6 +1829,7 @@ def compute_robust_vcov(
 
         cluster_ids_int = None
         if cluster_ids is not None:
+            _validate_cluster_ids(cluster_ids)
             cluster_ids_int = pd.factorize(cluster_ids)[0].astype(np.int64)
 
         try:
@@ -1950,6 +1996,7 @@ def _compute_cr2_bm_vcov_and_dof(
     """
     n, k = X.shape
     cluster_ids_arr = np.asarray(cluster_ids)
+    _validate_cluster_ids(cluster_ids_arr)
     unique_clusters = np.unique(cluster_ids_arr)
     # When weights are provided, enforce subpopulation invariance: zero-weight
     # rows must contribute nothing to the sandwich. The earlier "drop zero-
@@ -3049,8 +3096,14 @@ def _compute_robust_vcov_numpy(
         # weighted groupby below cannot index-align a pandas Series grouper
         # against the freshly-created Series(weights) and miscount clusters.
         cluster_ids_arr = np.asarray(cluster_ids)
+        _validate_cluster_ids(cluster_ids_arr)
         n_clusters_check = len(np.unique(cluster_ids_arr))
-        if weights is not None and weight_type != "fweight" and np.any(weights == 0):
+        # Zero-total-weight clusters are inert for ALL weight types (a
+        # zero-frequency fweight cluster contributes nothing to the sandwich,
+        # exactly like a subpopulation-zeroed pweight cluster) — the prior
+        # fweight carve-out let a one-effective-cluster fweight fit through
+        # to a degenerate CR1 SE.
+        if weights is not None and np.any(weights == 0):
             cluster_weight_sums = pd.Series(weights).groupby(cluster_ids_arr).sum()
             n_clusters_check = int((cluster_weight_sums > 0).sum())
         if n_clusters_check < 2:
@@ -3097,8 +3150,9 @@ def _compute_robust_vcov_numpy(
         unique_clusters = np.unique(cluster_ids)
         n_clusters = len(unique_clusters)
 
-        # Exclude clusters with zero total weight (subpopulation-zeroed)
-        if weights is not None and weight_type != "fweight" and np.any(weights == 0):
+        # Exclude clusters with zero total weight (subpopulation-zeroed
+        # pweight/aweight AND zero-frequency fweight alike — inert either way)
+        if weights is not None and np.any(weights == 0):
             cluster_weights = pd.Series(weights).groupby(cluster_ids).sum()
             n_clusters = int((cluster_weights > 0).sum())
 
@@ -3754,6 +3808,15 @@ class LinearRegression:
         neither is formally PSD-guaranteed in the radial pairwise form
         (Conley 1999's explicit PSD Bartlett formula is the 2-D separable
         product window, Eq 3.14, not the 1-D radial pairwise form).
+    df_convention : {"residual", "cluster"}, default "residual"
+        Degrees-of-freedom convention for ``get_inference`` t/p/CI on
+        clustered fits. ``"residual"`` uses the fitted residual df;
+        ``"cluster"`` uses the Stata/fixest cluster df ``G − 1`` (from
+        ``n_clusters_``). Fallback-level only: survey df and per-coefficient
+        Bell-McCaffrey DOF always take precedence. No effect on
+        coefficients, SEs, unclustered fits, or ``vcov_type="conley"`` (no
+        documented ``G − 1`` reference for the Conley+cluster product
+        kernel). Default flips at v4.
 
     Attributes
     ----------
@@ -3772,6 +3835,10 @@ class LinearRegression:
     n_params_effective_ : int
         Effective number of parameters after dropping linearly dependent columns.
         Equals n_params_ for full-rank matrices (available after fit).
+    n_clusters_ : int or None
+        Effective cluster count on a clustered fit (positive-weight clusters
+        only when weighted); None on unclustered fits. Feeds the
+        ``df_convention="cluster"`` inference df (available after fit).
     df_ : int
         Degrees of freedom (n - n_params_effective) (available after fit).
 
@@ -3820,7 +3887,12 @@ class LinearRegression:
         conley_time: Optional[np.ndarray] = None,
         conley_unit: Optional[np.ndarray] = None,
         conley_lag_cutoff: Optional[int] = None,
+        df_convention: str = "residual",
     ):
+        if df_convention not in ("residual", "cluster"):
+            raise ValueError(
+                f"df_convention must be 'residual' or 'cluster', got {df_convention!r}"
+            )
         self.include_intercept = include_intercept
         self.robust = robust
         self.cluster_ids = cluster_ids
@@ -3839,6 +3911,15 @@ class LinearRegression:
         self.conley_time = conley_time
         self.conley_unit = conley_unit
         self.conley_lag_cutoff = conley_lag_cutoff
+        # Inference df convention for clustered analytical fits:
+        # "residual" (default) keeps the fitted residual df `n - K_full` for
+        # t/p/CI; "cluster" uses the Stata/fixest cluster df `G - 1` instead.
+        # Applies ONLY at the fallback level of the `get_inference` df
+        # resolution: survey df and per-coefficient Bell-McCaffrey DOF (which
+        # are more refined small-sample corrections) always take precedence.
+        # The default flips to "cluster" at v4 (see REGISTRY clustered-CR1
+        # inference-df deviation note).
+        self.df_convention = df_convention
         # Resolve vcov_type from the legacy `robust` alias via the shared helper.
         self.vcov_type = resolve_vcov_type(robust, vcov_type)
         # Preserve the raw constructor arg (possibly None) so `fit()` can
@@ -3864,6 +3945,9 @@ class LinearRegression:
         self.n_params_effective_: Optional[int] = None
         self.df_: Optional[int] = None
         self.survey_df_: Optional[int] = None
+        # Effective cluster count on a clustered fit (None otherwise);
+        # feeds the df_convention="cluster" G-1 inference df.
+        self.n_clusters_: Optional[int] = None
         # Per-coefficient Bell-McCaffrey DOF vector when vcov_type="hc2_bm".
         # None for all other vcov_types; preserves df_ as the fallback.
         self._bm_dof: Optional[np.ndarray] = None
@@ -4271,6 +4355,14 @@ class LinearRegression:
 
         self.df_ = n_eff_df - self.n_params_effective_ - df_adjustment
 
+        # Effective cluster count for the df_convention="cluster" inference
+        # df (G - 1). Mirrors the vcov path's convention: on a weighted fit
+        # only clusters with positive total weight count (zero-weight rows
+        # are inert per the linalg contract).
+        self.n_clusters_ = None
+        if effective_cluster_ids is not None:
+            self.n_clusters_ = effective_cluster_count(effective_cluster_ids, _fit_weights)
+
         # Survey degrees of freedom: n_PSU - n_strata (overrides standard df)
         self.survey_df_ = None
         if _effective_survey_design is not None:
@@ -4496,6 +4588,43 @@ class LinearRegression:
                 stacklevel=2,
             )
             effective_df = 0  # Forces NaN from t-distribution
+        elif (
+            self.df_convention == "cluster"
+            and self.n_clusters_ is not None
+            and self.vcov_type != "conley"
+        ):
+            # Opt-in Stata/fixest cluster-df convention for clustered
+            # analytical fits: t/p/CI at df = G - 1 instead of the residual
+            # df. conley is excluded: the combined Conley+cluster product
+            # kernel is a diff-diff convention with no documented G-1 df
+            # reference (REGISTRY Conley section); it keeps the residual df.
+            # Deliberately the LAST branch before the residual fallback:
+            # survey df and per-coefficient Bell-McCaffrey DOF are more
+            # refined small-sample corrections and always win. Default flips
+            # at v4 (REGISTRY clustered-CR1 inference-df deviation note).
+            if self.n_clusters_ <= 1:
+                # Cluster df G - 1 is undefined for an effectively
+                # one-cluster fit (e.g. weighted fit where only one cluster
+                # carries positive weight). Fail closed with NaN inference
+                # (df=0 forces NaN through safe_inference) instead of
+                # silently degrading to normal-theory inference.
+                warnings.warn(
+                    "df_convention='cluster' requires at least 2 effective "
+                    f"clusters; got {self.n_clusters_}. Inference fields "
+                    "will be NaN.",
+                    UserWarning,
+                    stacklevel=2,
+                )
+                return InferenceResult(
+                    coefficient=coef,
+                    se=se,
+                    t_stat=float("nan"),
+                    p_value=float("nan"),
+                    conf_int=(float("nan"), float("nan")),
+                    df=None,
+                    alpha=effective_alpha,
+                )
+            effective_df = self.n_clusters_ - 1
         else:
             effective_df = self.df_
 

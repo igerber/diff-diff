@@ -60,6 +60,7 @@ DifferenceInDifferences(
     bootstrap_weights: str = "rademacher",  # "rademacher", "webb", or "mammen"
     seed: int | None = None,                # Random seed
     rank_deficient_action: str = "warn",    # "warn", "error", or "silent"
+    df_convention: str = "residual",        # Clustered t/p/CI df: "residual" (n-K, default) or "cluster" (Stata/fixest G-1); survey df + hc2_bm BM-DOF keep precedence; default flips at v4
 )
 ```
 
@@ -106,6 +107,7 @@ TwoWayFixedEffects(
     robust: bool = True,
     cluster: str | None = None,   # Auto-clusters at unit level if None
     alpha: float = 0.05,
+    df_convention: str = "residual",  # Clustered t/p/CI df: "residual" (default) or "cluster" (G-1); flips at v4
 )
 ```
 
@@ -145,6 +147,7 @@ MultiPeriodDiD(
     robust: bool = True,
     cluster: str | None = None,
     alpha: float = 0.05,
+    df_convention: str = "residual",  # Clustered t/p/CI df: "residual" (default) or "cluster" (G-1); flips at v4
 )
 ```
 

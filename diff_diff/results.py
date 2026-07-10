@@ -150,6 +150,15 @@ class DiDResults:
     vcov_type: Optional[str] = field(default=None)
     cluster_name: Optional[str] = field(default=None)
     conley_lag_cutoff: Optional[int] = field(default=None)
+    # Inference df metadata: the df convention the estimator was configured
+    # with ("residual" | "cluster") and the effective df the reported t/p/CI
+    # actually used. Set only when finite and strictly positive — None under
+    # wild bootstrap (test-inversion), normal-distribution fallback, and NaN
+    # inference (incl. the df=0 replicate / invalid-cluster-df sentinels).
+    # Lets consumers audit which reference distribution produced the
+    # p-value/CI without refitting.
+    df_convention: Optional[str] = field(default=None)
+    inference_df: Optional[float] = field(default=None)
 
     def __repr__(self) -> str:
         """Concise string representation."""
@@ -308,6 +317,10 @@ class DiDResults:
             result["n_clusters"] = self.n_clusters
         if self.p_val_type is not None:
             result["p_val_type"] = self.p_val_type
+        if self.df_convention is not None:
+            result["df_convention"] = self.df_convention
+        if self.inference_df is not None:
+            result["inference_df"] = self.inference_df
         if self.survey_metadata is not None:
             sm = self.survey_metadata
             result["weight_type"] = sm.weight_type
@@ -689,6 +702,15 @@ class MultiPeriodDiDResults:
     vcov_type: Optional[str] = field(default=None)
     cluster_name: Optional[str] = field(default=None)
     conley_lag_cutoff: Optional[int] = field(default=None)
+    # Inference df metadata: the df convention the estimator was configured
+    # with ("residual" | "cluster") and the effective df the reported t/p/CI
+    # actually used. Set only when finite and strictly positive — None under
+    # wild bootstrap (test-inversion), normal-distribution fallback, and NaN
+    # inference (incl. the df=0 replicate / invalid-cluster-df sentinels).
+    # Lets consumers audit which reference distribution produced the
+    # p-value/CI without refitting.
+    df_convention: Optional[str] = field(default=None)
+    inference_df: Optional[float] = field(default=None)
 
     # --- Inference-field aliases (balance/external-adapter compatibility) ---
     @property
@@ -949,6 +971,10 @@ class MultiPeriodDiDResults:
             result["cluster_name"] = self.cluster_name
         if self.conley_lag_cutoff is not None:
             result["conley_lag_cutoff"] = self.conley_lag_cutoff
+        if self.df_convention is not None:
+            result["df_convention"] = self.df_convention
+        if self.inference_df is not None:
+            result["inference_df"] = self.inference_df
 
         # Add period-specific effects
         for period, pe in self.period_effects.items():
