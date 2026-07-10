@@ -131,14 +131,18 @@ def compare_weight_vectors(
     atol: float = 1e-8,
     py_ids: Any = None,
     r_ids: Any = None,
+    require_ids: bool = False,
 ) -> Dict[str, Any]:
     """
     Compare SDID unit/time weight vectors, aligning by unit/period id when
     both sides provide ids (ordering-robust: Python's
     get_unit_weights_df() sorts by descending weight, R emits panel order).
-    Falls back to positional comparison when ids are absent. Enforces the
-    docs' identical-weights claim with an auditable committed metric;
-    fail-closed on length/key mismatch, duplicates, or non-finite entries.
+    With require_ids=True (the SDID publication gate), missing ids on
+    either side FAILS the comparison - the documented id-alignment contract
+    can never silently degrade to positional order if a benchmark script
+    regresses. Without it, positional comparison is a permitted fallback
+    for legacy artifacts. Fail-closed on length/key mismatch, duplicates,
+    or non-finite entries; metrics are committed for audit.
     """
     py = list(py_weights or [])
     r = list(r_weights or [])
@@ -149,6 +153,8 @@ def compare_weight_vectors(
         "aligned_by_ids": False,
         "ok": False,
     }
+    if require_ids and (py_ids is None or r_ids is None):
+        return metrics
     if not py or len(py) != len(r):
         return metrics
 
@@ -847,9 +853,12 @@ def ensure_mpdta() -> Path:
             "first.treat": "first_treat",
         }
     )[["unit", "time", "outcome", "first_treat"]]
-    assert len(df) == 2500, f"MPDTA rows: {len(df)} != 2500"
-    assert df["unit"].nunique() == 500, "MPDTA counties != 500"
-    assert set(df["first_treat"].unique()) == {0, 2004, 2006, 2007}, "MPDTA cohorts unexpected"
+    if len(df) != 2500:
+        raise RuntimeError(f"MPDTA rows: {len(df)} != 2500")
+    if df["unit"].nunique() != 500:
+        raise RuntimeError("MPDTA counties != 500")
+    if set(df["first_treat"].unique()) != {0, 2004, 2006, 2007}:
+        raise RuntimeError("MPDTA cohorts unexpected")
     save_benchmark_data(df, path)
     return path
 

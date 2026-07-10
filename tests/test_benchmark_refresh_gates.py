@@ -428,6 +428,27 @@ class TestWeightVectorComparison:
         m = rc.compare_weight_vectors([0.6, 0.4], [0.4, 0.6], py_ids=[10, 3], r_ids=["3", "10"])
         assert m["aligned_by_ids"] and m["ok"]
 
+    def test_missing_ids_fail_closed_when_required(self):
+        # The SDID publication gate documents id alignment; positionally
+        # identical weights must still FAIL if either side stops emitting
+        # ids (a script regression cannot silently weaken the contract).
+        m = rc.compare_weight_vectors([0.5, 0.5], [0.5, 0.5], require_ids=True)
+        assert not m["ok"] and not m["aligned_by_ids"]
+        m2 = rc.compare_weight_vectors(
+            [0.5, 0.5], [0.5, 0.5], py_ids=[1, 2], r_ids=None, require_ids=True
+        )
+        assert not m2["ok"]
+
+    def test_require_ids_passes_with_valid_ids(self):
+        m = rc.compare_weight_vectors(
+            [0.5, 0.5], [0.5, 0.5], py_ids=[1, 2], r_ids=[1, 2], require_ids=True
+        )
+        assert m["ok"] and m["aligned_by_ids"]
+
+    def test_positional_fallback_still_allowed_when_not_required(self):
+        m = rc.compare_weight_vectors([0.5, 0.5], [0.5, 0.5])
+        assert m["ok"] and not m["aligned_by_ids"]
+
     def test_mismatched_id_sets_fail_closed(self):
         m = rc.compare_weight_vectors([0.5, 0.5], [0.5, 0.5], py_ids=[1, 2], r_ids=[1, 3])
         assert not m["ok"] and m["max_abs_diff"] is None

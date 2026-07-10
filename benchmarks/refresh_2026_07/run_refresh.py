@@ -368,6 +368,9 @@ def run_cell(
                     atol=1e-8,
                     py_ids=py_res.get(id_field),
                     r_ids=r_res.get(id_field),
+                    # Documented contract: the publication gate is id-aligned
+                    # and may never silently degrade to positional order.
+                    require_ids=True,
                 )
                 weight_detail[f"{surface}:{py_arm}"] = metrics
                 if not metrics["ok"]:
