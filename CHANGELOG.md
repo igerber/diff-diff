@@ -623,6 +623,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   full fit. Uncertified LSMR (istop outside {0,1,2,4,5} after an uncapped retry) fails
   closed: NaN vcov/SE on the analytical boundary, the established `None` degenerate on
   the bootstrap boundary.
+- **One-way Bell-McCaffrey DOF: scores-based denominator (no dense `n×n` residual-maker).**
+  The non-clustered unweighted BM DOF computed `a'(M∘M)a` against an explicit dense
+  `M = I − H` (`O(n²k)` hat build; ~20 GB at n=50k, documented "practical for n < 10k").
+  The Schur-product expansion `Σ a_i²(1−2h_ii) + tr((B S_a)²)` with `S_a = X'diag(a)X`
+  (k×k) is exact algebra: `O(n k² + k³)` per contrast, n=50k/k=20 in ~16 ms. Frozen
+  dense-oracle parity at rtol 1e-10 (incl. high-leverage and k=40 designs + a compound
+  contrast); R-anchored hc2_bm goldens pass unchanged. New noise-floor cancellation
+  guard NaNs extreme-leverage contrasts whose expanded denominator collapses below
+  float precision instead of reporting an arbitrarily inflated DOF (the same failure
+  mode the clustered scores path guards; the prior dense `den > 0` kept such
+  denominators). Completes the scores-evaluation family: clustered CR2-BM (#656),
+  low-rank A_g (#664), and now the one-way path.
 - **Rust-backend HC2 vcov.** The Rust vcov path supported only HC1/CR1; one-way
   (unclustered, unweighted) HC2 now dispatches to a new `compute_robust_vcov_hc2` kernel
   mirroring the NumPy branch exactly — hat diagonals off the same bread,

@@ -2746,12 +2746,13 @@ def _compute_bm_dof_from_contrasts(
 
     where ``q = X (X'X)^{-1} c``, ``M = I - H``, ``a(i) = q(i)^2 / (1 - h_ii)``.
     Using the idempotent identity ``M^2 = M``, ``trace(B) = sum_i q(i)^2``
-    matches the numerator. Allocates an ``(n, n)`` temporary for ``M`` so the
-    cost is ``O(n^2 k)`` for the hat build plus ``O(n^2 m)`` for the per-
-    contrast sums. Practical for ``n < 10_000``; larger designs should switch
-    to a scores-based formulation like the clustered CR2-BM path
-    (`_cr2_bm_dof_inner`) now uses — tracked as its own TODO.md row (the
-    original CR2-BM row this note pointed at is resolved).
+    matches the numerator. The denominator ``a'(M∘M)a`` is evaluated via the
+    Schur-product expansion (see the inline derivation) at ``O(n k^2 + k^3)``
+    per contrast with NO dense ``n×n`` residual-maker — the prior form's
+    ``O(n^2 k)`` hat build limited it to ``n < 10_000``. A noise-floor
+    cancellation guard NaNs extreme-leverage contrasts whose expanded
+    denominator collapses below float precision (mirrors the clustered
+    scores path's guard).
 
     **Weighted** (``weights is not None``): dispatches to the clubSandwich
     singleton-cluster CR2 reduction (each observation is its own cluster)
@@ -2811,18 +2812,41 @@ def _compute_bm_dof_from_contrasts(
         raise
     # q has shape (n, m); column j is X @ (bread_inv @ contrasts[:, j]).
     q = X @ bread_inv_c
-    H = X @ np.linalg.solve(bread_matrix, X.T)
-    M = np.eye(n) - H
-    M_sq = M * M  # elementwise square
     one_minus_h = np.maximum(1.0 - h_diag, 1e-10)
+    one_minus_2h = 1.0 - 2.0 * h_diag
     m = contrasts.shape[1]
     dof = np.empty(m)
     for j in range(m):
         qj_sq = q[:, j] * q[:, j]
         num = qj_sq.sum() ** 2
         a_j = qj_sq / one_minus_h
-        den = float(a_j @ M_sq @ a_j)
-        dof[j] = num / den if den > 0 else np.nan
+        # SCORES-BASED EVALUATION (2026-07, evaluation change — exact
+        # algebra): den = a'(M∘M)a with M = I − XBX' expands via the Schur
+        # product as
+        #
+        #   den = sum_i a_i^2 (1 − 2 h_ii) + tr((B S_a)^2),
+        #   S_a = X' diag(a) X   (k x k),
+        #
+        # because (M∘M)_{il} = δ_{il}(1 − 2 h_ii) + (x_i'B x_l)^2 and
+        # sum_{i,l} a_i a_l (x_i'B x_l)^2 = tr(B S_a B S_a). O(n k^2 + k^3)
+        # per contrast, never materializing the dense n×n residual-maker
+        # (the prior form's O(n^2 k) hat build + O(n^2) per contrast).
+        term_diag = float(np.sum(a_j * a_j * one_minus_2h))
+        S_a = X.T @ (X * a_j[:, np.newaxis])
+        BS = np.linalg.solve(bread_matrix, S_a)
+        term_tr = float(np.sum(BS * BS.T))
+        den = term_diag + term_tr
+        # Cancellation guard: the dense den = a'(M∘M)a is >= 0 exactly
+        # (M∘M is PSD — Schur product of the PSD M with itself), but the
+        # expanded difference of same-magnitude terms can collapse to the
+        # float64 noise floor for extreme-leverage contrasts. A den at or
+        # below the floor would inflate the DOF arbitrarily (the same
+        # failure mode the clustered scores path NaN-guards); report NaN
+        # instead of a non-physical DOF. The prior dense path's `den > 0`
+        # kept such noise-floor denominators; on well-conditioned contrasts
+        # the two evaluations agree to ~1e-12 (frozen-oracle parity test).
+        noise_floor = np.finfo(float).eps * (abs(term_diag) + abs(term_tr)) * n
+        dof[j] = num / den if den > noise_floor else np.nan
     return dof
 
 

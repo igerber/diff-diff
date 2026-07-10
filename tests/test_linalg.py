@@ -2716,6 +2716,60 @@ class TestRankGuardedInv:
         assert nd0 == 3 and dropped0.all()
 
 
+class TestOneWayBMScoresDOF:
+    """The one-way (non-clustered) unweighted Bell-McCaffrey DOF denominator
+    a'(M∘M)a is evaluated via the Schur-product expansion
+    sum a_i^2(1-2h_ii) + tr((B S_a)^2), S_a = X'diag(a)X — never
+    materializing the dense n×n residual-maker (frozen here as the oracle).
+    Exact algebra; parity ~1e-12."""
+
+    @staticmethod
+    def _oracle_dense_dof(X, bread, h_diag, contrasts):
+        """Frozen pre-change dense evaluation (O(n²) M∘M quadratic form)."""
+        n = X.shape[0]
+        bread_inv_c = np.linalg.solve(bread, contrasts)
+        q = X @ bread_inv_c
+        H = X @ np.linalg.solve(bread, X.T)
+        M = np.eye(n) - H
+        M_sq = M * M
+        one_minus_h = np.maximum(1.0 - h_diag, 1e-10)
+        m = contrasts.shape[1]
+        dof = np.empty(m)
+        for j in range(m):
+            qj_sq = q[:, j] * q[:, j]
+            num = qj_sq.sum() ** 2
+            a_j = qj_sq / one_minus_h
+            den = float(a_j @ M_sq @ a_j)
+            dof[j] = num / den if den > 0 else np.nan
+        return dof
+
+    @pytest.mark.parametrize(
+        "kw",
+        [
+            dict(n=300, k=5, seed=3),
+            dict(n=200, k=8, seed=5, high_leverage=True),
+            dict(n=400, k=40, seed=7),
+        ],
+        ids=["basic", "high-leverage", "k40"],
+    )
+    def test_matches_frozen_dense_oracle(self, kw):
+        from diff_diff.linalg import _compute_bm_dof_from_contrasts
+
+        rng = np.random.default_rng(kw["seed"])
+        n, k = kw["n"], kw["k"]
+        X = np.column_stack([np.ones(n), rng.normal(size=(n, k - 1))])
+        if kw.get("high_leverage"):
+            X[0, 1] = 30.0
+        bread = X.T @ X
+        h_diag = np.einsum("ij,ij->i", X @ np.linalg.inv(bread), X)
+        contrasts = np.column_stack([np.eye(k), np.full(k, 1.0 / k)])  # + compound
+        dof = _compute_bm_dof_from_contrasts(X, bread, h_diag, contrasts)
+        oracle = self._oracle_dense_dof(X, bread, h_diag, contrasts)
+        fin = ~np.isnan(oracle)
+        assert fin.all(), "oracle produced NaN on a well-conditioned design"
+        np.testing.assert_allclose(dof[fin], oracle[fin], rtol=1e-10)
+
+
 class TestCR2BMLowRankAdjustment:
     """The low-rank factored A_g apply reproduces the dense per-cluster
     eigendecomposition path (frozen here as the oracle) at ~1e-14: vcov,
