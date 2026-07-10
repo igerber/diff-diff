@@ -525,11 +525,13 @@ class TestTwoStageDiDVariance:
     def test_lsmr_fallback_matches_dense_lstsq_oracle(self):
         """Consumer-level parity on a genuinely singular Stage-1 Gram: any
         least-squares solutions differ only by null(X'X) = null(X_10)
-        components, and every gamma_hat/theta consumer is an X_10-range
+        components, and every gamma_hat consumer is an X_10-range
         functional (Psi = X_10 @ gamma; score correction c_g'gamma with
-        c_g in rowspace(X_10); residuals y - X_10 theta) — so the LSMR
-        fallback and a dense-lstsq oracle must agree on X_10 @ solution
-        even where the raw coefficient vectors differ."""
+        c_g in rowspace(X_10)) — so the LSMR fallback and a dense-lstsq
+        oracle must agree on X_10 @ solution even where the raw
+        coefficient vectors differ. (theta_exact's treated-row consumer is
+        covered separately by min-norm agreement; see the forced-fallback
+        fit-level test.)"""
         import scipy.sparse as sp
 
         from diff_diff.two_stage import _lsmr_certified_normal_solve
@@ -653,9 +655,11 @@ class TestTwoStageDiDVariance:
         dense-lstsq oracle must agree on overall ATT and SE. Covers the one
         consumer the range-functional argument does not (the bootstrap
         exact-residual helper's X_1 @ theta on treated rows) via min-norm
-        agreement — both solvers return the min-norm least-squares solution;
-        the helper-level oracle test above covers the genuinely singular
-        Gram."""
+        agreement — both solvers return the min-norm least-squares solution.
+        This test does NOT construct a singular fit-level design; the
+        genuinely singular Gram is covered by the helper-level oracle test
+        above, and the singular fit-level path by the methodology suite's
+        singular-Omega_0 regression."""
         import unittest.mock
 
         import diff_diff.two_stage as ts

@@ -602,9 +602,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `O((U+T+K)²)` dense materialization and OOM risk on large panels. All four now solve
   via certified per-column sparse LSMR. The TODO row's caution that the ImputationDiD
   null-space-invariance argument "does NOT transfer" was refuted by the consumer trace:
-  every `gamma_hat`/`theta_exact` consumer is an `X_10`-range functional (`Psi = X_10 γ`;
-  the GMM score correction `c_g'γ` with `c_g ∈ rowspace(X_10)`; Stage-1 residuals), and
-  `null(X'X) = null(X_10)` exactly, so the min-norm ambiguity annihilates — locked by a
+  every `gamma_hat` consumer is an `X_10`-range functional (`Psi = X_10 γ`; the GMM score
+  correction `c_g'γ` with `c_g ∈ rowspace(X_10)`), where `null(X'X) = null(X_10)` exactly
+  annihilates the min-norm ambiguity; the one `theta_exact` consumer outside that argument
+  (the bootstrap exact-residual helper's `X_1 @ theta` on treated rows) is covered by
+  min-norm agreement — both dense lstsq (SVD) and LSMR return the min-norm LS solution —
+  locked by a
   dense-lstsq-oracle parity test on a singular Gram plus a no-densify guard through the
   full fit. Uncertified LSMR (istop outside {0,1,2,4,5} after an uncapped retry) fails
   closed: NaN vcov/SE on the analytical boundary, the established `None` degenerate on
