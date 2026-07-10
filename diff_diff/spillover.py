@@ -1589,7 +1589,7 @@ def _build_butts_fe_design_csr(
     -----
     Rank-deficient ``X_10' X_10`` (e.g. warn-and-drop units with no
     Omega_0 rows) is detected downstream by ``_compute_gmm_corrected_meat``
-    via ``sparse_factorized`` failure → ``np.linalg.lstsq`` fallback with
+    via ``sparse_factorized`` failure → certified sparse-LSMR fallback with
     a documented ``UserWarning``.
 
     **Re-factorization on entry:** when callers pass pre-mask integer
@@ -3178,7 +3178,7 @@ class SpilloverDiD:
         # / time code; if the dropped unit sorts first, the fit-length and
         # full-length builds produce DIFFERENT column spaces (an all-zero
         # X_10 column for the dropped unit in the full-length build →
-        # rank-deficient `X_10' W X_10` → lstsq fallback → different
+        # rank-deficient `X_10' W X_10` → LSMR fallback → different
         # `gamma_hat`). The zero-pad invariant is preserved by zero-padding
         # the constructed Psi inside `_compute_gmm_corrected_meat` AFTER
         # the fit-sample gamma_hat / Psi build, NOT by rebuilding the FE

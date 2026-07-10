@@ -221,9 +221,11 @@ class TwoStageDiDBootstrapMixin:
             from diff_diff.two_stage import _lsmr_certified_normal_solve
 
             XtX_10_csc = XtX_10.tocsc()
-            gamma_hat = _lsmr_certified_normal_solve(XtX_10_csc, Xt1_X2)
+            gamma_hat = _lsmr_certified_normal_solve(
+                XtX_10_csc, Xt1_X2, context="TwoStageDiD bootstrap"
+            )
             theta_exact = _lsmr_certified_normal_solve(
-                XtX_10_csc, np.asarray(rhs_fe).ravel()
+                XtX_10_csc, np.asarray(rhs_fe).ravel(), context="TwoStageDiD bootstrap"
             ).ravel()
 
         # Exact Stage-1 / Stage-2 residuals (shared with the analytical variance) so

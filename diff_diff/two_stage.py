@@ -61,7 +61,9 @@ class _LSMRUnconvergedError(RuntimeError):
     variance boundary converts this to NaN inference (fail-closed)."""
 
 
-def _lsmr_certified_normal_solve(gram_csc, rhs: np.ndarray) -> np.ndarray:
+def _lsmr_certified_normal_solve(
+    gram_csc, rhs: np.ndarray, context: str = "TwoStageDiD GMM sandwich"
+) -> np.ndarray:
     """Least-squares solve of the (possibly singular) sparse Stage-1 Gram
     system ``gram @ out = rhs`` via per-column LSMR — no dense
     materialization of the ``(p_1, p_1)`` normal matrix (`O((U+T+K)^2)`
@@ -118,7 +120,7 @@ def _lsmr_certified_normal_solve(gram_csc, rhs: np.ndarray) -> np.ndarray:
             z, istop = result[0], int(result[1])
             if istop not in _certified or not np.all(np.isfinite(z)):
                 warnings.warn(
-                    "TwoStageDiD GMM sandwich: the LSMR fallback solve of the "
+                    f"{context}: the LSMR fallback solve of the "
                     f"Stage-1 normal equations did not converge (istop={istop}); "
                     "the affected variance is reported as NaN rather than from "
                     "an unverified solution.",
@@ -370,7 +372,9 @@ def _compute_gmm_corrected_meat(
             UserWarning,
             stacklevel=2,
         )
-        gamma_hat = _lsmr_certified_normal_solve(XtX_10.tocsc(), Xt1_X2)
+        gamma_hat = _lsmr_certified_normal_solve(
+            XtX_10.tocsc(), Xt1_X2, context="SpilloverDiD Wave-D GMM meat"
+        )
 
     # 2. Psi = (X_10 @ gamma_hat) * eps_10[:, None] - X_2 * eps_2[:, None].
     #    Under Wave E.1 survey path, weights enter via element-wise eps
