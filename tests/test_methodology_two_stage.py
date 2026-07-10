@@ -409,8 +409,8 @@ class TestGardner2022Section33GMMVariance:
         """A rank-deficient Stage-1 design (a period observed only among treated
         obs -> its time FE is unidentified in Omega_0 -> X_10'X_10 singular) makes
         the sparse factorization in the GMM variance fail; the code must emit a
-        UserWarning and route to the dense lstsq fallback, still returning a
-        finite SE."""
+        UserWarning and route to the certified sparse-LSMR fallback, still
+        returning a finite SE."""
         rng = np.random.default_rng(_BASE_SEED_VAR + 9)
         rows: List[Dict[str, Any]] = []
         uid = 0
@@ -432,8 +432,8 @@ class TestGardner2022Section33GMMVariance:
                 panel, outcome="outcome", unit="unit", time="time", first_treat="first_treat"
             )
         assert any(
-            "lstsq" in str(w.message) for w in caught
-        ), "expected the dense-lstsq fallback warning under a singular Omega_0"
+            "falling back to sparse LSMR" in str(w.message) for w in caught
+        ), "expected the sparse-LSMR fallback warning under a singular Omega_0"
         assert np.isfinite(res.overall_se)
 
     def test_bootstrap_scores_use_exact_residuals(self) -> None:

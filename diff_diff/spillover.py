@@ -1597,9 +1597,8 @@ def _build_butts_fe_design_csr(
     supported warn-and-drop fit), the input code arrays can be sparse —
     e.g. ``unit_codes = [0, 1, 3, 4]`` with code 2 dropped. Building
     ``X_10`` on the raw codes would materialize an all-zero FE column at
-    index 2, forcing ``sparse_factorized`` onto the dense
-    ``lstsq``/``XtX_10.toarray()`` fallback unnecessarily (large-memory
-    path on big panels). To avoid this, re-factorize via
+    index 2, forcing ``sparse_factorized`` onto the certified sparse-LSMR
+    fallback unnecessarily (a warned degraded path). To avoid this, re-factorize via
     :func:`pd.factorize` on entry to compact the code space to
     ``0..n_unique-1`` (no-op when codes are already contiguous; mirrors
     the column-space convention of ``TwoStageDiD._build_fe_design``).
