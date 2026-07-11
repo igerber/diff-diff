@@ -4612,7 +4612,8 @@ class CallawaySantAnna(
         ps_ct = pscore[n_gt + n_gs : n_gt + n_gs + n_ct]
         ps_cs = pscore[n_gt + n_gs + n_ct :]
         # The symmetric treated slices ps_gt and ps_gs are intentionally not
-        # materialized: only control propensity slices feed IPW control weights.
+        # materialized: only control propensity slices feed IPW control weights
+        # (the propensity-estimation IF correction consumes the full pscore array directly).
 
         # =====================================================================
         # 3. Group weights and R-convention means
