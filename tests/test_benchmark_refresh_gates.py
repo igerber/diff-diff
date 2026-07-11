@@ -15,7 +15,16 @@ from pathlib import Path
 
 import pytest
 
+# The refresh harness is repo tooling, not wheel content: CI's Python-test
+# jobs copy tests/ to a temp directory and run against the installed wheel,
+# where benchmarks/ does not exist. Skip the whole module there (same
+# convention as the benchmarks/data golden-file skips).
 REFRESH_DIR = Path(__file__).parent.parent / "benchmarks" / "refresh_2026_07"
+if not (REFRESH_DIR / "refresh_common.py").exists():
+    pytest.skip(
+        "benchmark refresh harness not present (installed-wheel test layout)",
+        allow_module_level=True,
+    )
 sys.path.insert(0, str(REFRESH_DIR))
 
 import gen_benchmark_tables as gen  # noqa: E402
