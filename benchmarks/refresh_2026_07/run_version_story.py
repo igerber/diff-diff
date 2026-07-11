@@ -231,6 +231,51 @@ def write_report(payload: Dict[str, Any]) -> None:
         for k, fls in flagged.items():
             lines.append(f"> - `{k}`: {', '.join(fls)}")
         lines.append("")
+    # Headline only when EVERY CallawaySantAnna cell is clean - a partially
+    # flagged run must not lead with "at every measured scale". The flag
+    # banner (below) also renders before the headline.
+    cs_all = {k: c for k, c in payload["cells"].items() if k.startswith("callaway/")}
+    cs = {
+        k: c
+        for k, c in cs_all.items()
+        if not c.get("flags")
+        and not c.get("3.5.3", {}).get("dropped")
+        and not c.get("3.7.0", {}).get("dropped")
+        and c.get("3.5.3")
+        and c.get("3.7.0")
+    }
+    if cs and len(cs) == len(cs_all):
+        speedups = []
+        for c in cs.values():
+            t_old = c["3.5.3"]["timing"]["stats"]["median"]
+            t_new = c["3.7.0"]["timing"]["stats"]["median"]
+            if t_new:
+                speedups.append(t_old / t_new)
+        rows_seen = []
+        for c in cs.values():
+            n_obs = c["3.5.3"]["result"].get("metadata", {}).get("n_obs")
+            if n_obs:
+                rows_seen.append(int(n_obs))
+        if speedups and rows_seen:
+            lo, hi = min(speedups), max(speedups)
+            rng = f"{lo:.1f}x" if abs(hi - lo) < 0.25 else f"{lo:.1f}-{hi:.1f}x"
+            scale_txt = (
+                f"({min(rows_seen):,} through {max(rows_seen):,} rows)"
+                if len(rows_seen) > 1
+                else f"({rows_seen[0]:,} rows)"
+            )
+            lines += [
+                f"**Headline: CallawaySantAnna runs ~{rng} faster on the",
+                "3.7.0 wheel than on 3.5.3** at every measured scale",
+                f"{scale_txt}, with identical estimates. This is the",
+                "flagship staggered-adoption estimator and the primary target",
+                "of the June-July 2026 scaling arc (O(n_units) aggregation",
+                "influence functions, fused bootstrap, per-cell solver work).",
+                "The BasicDiD/MultiPeriodDiD rows below are supporting",
+                "context: those paths were already fast and saw incremental",
+                "gains at these benchmark shapes.",
+                "",
+            ]
     lines += [
         "Internal benchmark artifact (NOT part of the docs site). Same",
         "benchmark scripts, same seed-42 data, two pinned PyPI wheels in",
@@ -250,7 +295,11 @@ def write_report(payload: Dict[str, Any]) -> None:
         "| Estimator | Scale | Rows | 3.5.3 median (s) | 3.7.0 median (s) " "| Speedup |",
         "|---|---|---|---|---|---|",
     ]
-    for key, cell in payload["cells"].items():
+    ordered = sorted(
+        payload["cells"].items(),
+        key=lambda kv: (0 if kv[0].startswith("callaway/") else 1, kv[0]),
+    )
+    for key, cell in ordered:
         old = cell.get("3.5.3", {})
         new = cell.get("3.7.0", {})
         if old.get("dropped") or new.get("dropped") or not old or not new:

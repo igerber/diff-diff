@@ -30,8 +30,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   mislabeled cell can never publish; the legacy `--type twfe` no-op on the
   BasicDiD scripts now fails loudly (absorbed-FE TWFE has its own dedicated
   script pair, and the refresh benchmarks it separately from BasicDiD).
-  Regenerated page numbers land together with the committed results
-  artifact once the timed refresh run completes.
+  The full gated run is committed (`results/refresh_results.json`) and
+  `docs/benchmarks.rst` is regenerated from it: CallawaySantAnna is
+  4.6-15.5x faster than R `did` with the advantage GROWING with scale
+  (15.5x at 10k units / 150k observations, 14.8x at 20k units / 360k
+  observations; the previously published numbers showed the advantage
+  shrinking); SyntheticDiD's Rust backend is
+  18-55x faster than R `synthdid` at matched 200-replication placebo
+  variance (the previously published table - captured before the current
+  Frank-Wolfe kernels and at unequal bootstrap counts - showed Rust
+  SLOWER than pure Python); MPDTA real-data validation is ~5x faster with
+  exact ATT match. Honest regressions from the fairness fixes are
+  published as-is: warmed-up fixest now beats the sub-35ms BasicDiD/TWFE
+  interaction-OLS cells at 10k-20k (0.6-0.9x), and pure-Python
+  SyntheticDiD at equal bootstrap counts is 0.5-4.4x vs R (the old
+  2.4-16.5x claim reflected a 50-vs-200 replication asymmetry). All
+  20 cells pass every publication gate with zero flags.
 
 ### Fixed
 - **`docs/benchmarks.rst` SDID weight-parity claim now machine-verified (and

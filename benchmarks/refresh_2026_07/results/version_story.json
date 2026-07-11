@@ -1,0 +1,808 @@
+{
+  "cells": {
+    "basic/20k": {
+      "estimator": "BasicDiD (interaction OLS)",
+      "scale": "20k",
+      "data_file": "basic_20k.csv",
+      "data_sha256": "d6cc69f43243a68d4d766d035fdbef6144af8270e5ded249ebcabae750dbd17f",
+      "flags": [],
+      "3.5.3": {
+        "result": {
+          "estimator": "diff_diff.DifferenceInDifferences",
+          "backend": "rust",
+          "cluster": "unit",
+          "att": 5.008751329243487,
+          "se": 0.011026349548399405,
+          "pvalue": 0.0,
+          "ci_lower": 4.987139972255768,
+          "ci_upper": 5.030362686231205,
+          "model_stats": {
+            "n_obs": 240000,
+            "n_units": 20000,
+            "n_periods": 12
+          },
+          "timing": {
+            "estimation_seconds": 0.028716624990920536,
+            "total_seconds": 0.028716624990920536
+          },
+          "metadata": {
+            "n_units": 20000,
+            "n_periods": 12,
+            "n_obs": 240000,
+            "warmup": true
+          },
+          "provenance": {
+            "diff_diff_version": "3.5.3",
+            "diff_diff_path": ".../python3.14/site-packages/diff_diff/__init__.py",
+            "has_rust_backend": true,
+            "rust_backend_info": {
+              "accelerate": true,
+              "openblas": false,
+              "blas": true
+            },
+            "python_version": "3.14.4",
+            "python_executable": ".../venvs/dd353/bin/python",
+            "numpy_version": "2.5.1",
+            "pandas_version": "3.0.3",
+            "diff_diff_env": {
+              "DIFF_DIFF_BENCH_USE_INSTALLED": "1"
+            }
+          }
+        },
+        "timing": {
+          "raw_timings": [
+            0.029212541005108505,
+            0.028526540991151705,
+            0.028537124991999008,
+            0.026203291999991052,
+            0.02685291599482298,
+            0.028716624990920536
+          ],
+          "n_reps": 5,
+          "first_run_excluded": true,
+          "first_run_seconds": 0.029212541005108505,
+          "stats": {
+            "mean": 0.027767299793777057,
+            "std": 0.0011567750939954708,
+            "median": 0.028526540991151705,
+            "min": 0.026203291999991052,
+            "max": 0.028716624990920536
+          }
+        },
+        "cv": 0.041659617700915814,
+        "att_spread": 0.0,
+        "n_nonfinite_att": 0,
+        "n_nonfinite_se": 0,
+        "se_values": [
+          0.011026349548399232,
+          0.011026349548400005,
+          0.011026349548396586,
+          0.011026349548401048,
+          0.011026349548402406,
+          0.011026349548399405
+        ],
+        "flags": []
+      },
+      "3.7.0": {
+        "result": {
+          "estimator": "diff_diff.DifferenceInDifferences",
+          "backend": "rust",
+          "cluster": "unit",
+          "att": 5.00875132924342,
+          "se": 0.011026349548403383,
+          "pvalue": 0.0,
+          "ci_lower": 4.987139972255694,
+          "ci_upper": 5.030362686231147,
+          "model_stats": {
+            "n_obs": 240000,
+            "n_units": 20000,
+            "n_periods": 12
+          },
+          "timing": {
+            "estimation_seconds": 0.021731207991251722,
+            "total_seconds": 0.021731207991251722
+          },
+          "metadata": {
+            "n_units": 20000,
+            "n_periods": 12,
+            "n_obs": 240000,
+            "warmup": true
+          },
+          "provenance": {
+            "diff_diff_version": "3.7.0",
+            "diff_diff_path": ".../python3.14/site-packages/diff_diff/__init__.py",
+            "has_rust_backend": true,
+            "rust_backend_info": {
+              "openblas": false,
+              "accelerate": true,
+              "blas": true
+            },
+            "python_version": "3.14.4",
+            "python_executable": ".../venvs/dd370/bin/python",
+            "numpy_version": "2.5.1",
+            "pandas_version": "3.0.3",
+            "diff_diff_env": {
+              "DIFF_DIFF_BENCH_USE_INSTALLED": "1"
+            }
+          }
+        },
+        "timing": {
+          "raw_timings": [
+            0.02164379101304803,
+            0.023181124997790903,
+            0.021780541996122338,
+            0.02055691700661555,
+            0.020867041996098123,
+            0.021731207991251722
+          ],
+          "n_reps": 5,
+          "first_run_excluded": true,
+          "first_run_seconds": 0.02164379101304803,
+          "stats": {
+            "mean": 0.021623366797575726,
+            "std": 0.0010213088096161704,
+            "median": 0.021731207991251722,
+            "min": 0.02055691700661555,
+            "max": 0.023181124997790903
+          }
+        },
+        "cv": 0.047231720165366343,
+        "att_spread": 0.0,
+        "n_nonfinite_att": 0,
+        "n_nonfinite_se": 0,
+        "se_values": [
+          0.011026349548403383,
+          0.011026349548403383,
+          0.011026349548403383,
+          0.011026349548403383,
+          0.011026349548403383,
+          0.011026349548403383
+        ],
+        "flags": []
+      },
+      "att_gap_old_new": 6.661338147750939e-14
+    },
+    "multiperiod/20k": {
+      "estimator": "MultiPeriodDiD (absorbed FE)",
+      "scale": "20k",
+      "data_file": "multiperiod_20k.csv",
+      "data_sha256": "3ccf68202f94a877a48943801f833628e35a70e9487663ec33cd3280b2a0a4aa",
+      "flags": [],
+      "3.5.3": {
+        "result": {
+          "estimator": "diff_diff.MultiPeriodDiD",
+          "backend": "rust",
+          "cluster": "unit",
+          "att": 3.0157941407125173,
+          "se": 0.014944730357489262,
+          "pvalue": 0.0,
+          "ci_lower": 2.9865028892643752,
+          "ci_upper": 3.0450853921606593,
+          "reference_period": 8,
+          "timing": {
+            "estimation_seconds": 0.44411375001072884,
+            "total_seconds": 0.44411375001072884
+          },
+          "metadata": {
+            "n_units": 20000,
+            "n_periods": 16,
+            "n_obs": 320000,
+            "n_pre": 8,
+            "n_post": 8,
+            "warmup": true
+          },
+          "provenance": {
+            "diff_diff_version": "3.5.3",
+            "diff_diff_path": ".../python3.14/site-packages/diff_diff/__init__.py",
+            "has_rust_backend": true,
+            "rust_backend_info": {
+              "accelerate": true,
+              "blas": true,
+              "openblas": false
+            },
+            "python_version": "3.14.4",
+            "python_executable": ".../venvs/dd353/bin/python",
+            "numpy_version": "2.5.1",
+            "pandas_version": "3.0.3",
+            "diff_diff_env": {
+              "DIFF_DIFF_BENCH_USE_INSTALLED": "1"
+            }
+          },
+          "n_period_effects": 15
+        },
+        "timing": {
+          "raw_timings": [
+            0.39936116700118873,
+            0.44584554100583773,
+            0.43885074999707285,
+            0.4169779160001781,
+            0.4251095420040656,
+            0.44411375001072884
+          ],
+          "n_reps": 5,
+          "first_run_excluded": true,
+          "first_run_seconds": 0.39936116700118873,
+          "stats": {
+            "mean": 0.4341794998035766,
+            "std": 0.012597271953796686,
+            "median": 0.43885074999707285,
+            "min": 0.4169779160001781,
+            "max": 0.44584554100583773
+          }
+        },
+        "cv": 0.02901397223843067,
+        "att_spread": 0.0,
+        "n_nonfinite_att": 0,
+        "n_nonfinite_se": 0,
+        "se_values": [
+          0.014944730357489262,
+          0.014944730357489262,
+          0.014944730357489262,
+          0.014944730357489262,
+          0.014944730357489262,
+          0.014944730357489262
+        ],
+        "flags": []
+      },
+      "3.7.0": {
+        "result": {
+          "estimator": "diff_diff.MultiPeriodDiD",
+          "backend": "rust",
+          "cluster": "unit",
+          "att": 3.0157941407125173,
+          "se": 0.014944730357489262,
+          "pvalue": 0.0,
+          "ci_lower": 2.9865028892643752,
+          "ci_upper": 3.0450853921606593,
+          "reference_period": 8,
+          "timing": {
+            "estimation_seconds": 0.38319237499672454,
+            "total_seconds": 0.38319237499672454
+          },
+          "metadata": {
+            "n_units": 20000,
+            "n_periods": 16,
+            "n_obs": 320000,
+            "n_pre": 8,
+            "n_post": 8,
+            "warmup": true
+          },
+          "provenance": {
+            "diff_diff_version": "3.7.0",
+            "diff_diff_path": ".../python3.14/site-packages/diff_diff/__init__.py",
+            "has_rust_backend": true,
+            "rust_backend_info": {
+              "openblas": false,
+              "blas": true,
+              "accelerate": true
+            },
+            "python_version": "3.14.4",
+            "python_executable": ".../venvs/dd370/bin/python",
+            "numpy_version": "2.5.1",
+            "pandas_version": "3.0.3",
+            "diff_diff_env": {
+              "DIFF_DIFF_BENCH_USE_INSTALLED": "1"
+            }
+          },
+          "n_period_effects": 15
+        },
+        "timing": {
+          "raw_timings": [
+            0.38222958298865706,
+            0.35897879100230057,
+            0.3809415830037324,
+            0.3831693329993868,
+            0.36742087500169873,
+            0.38319237499672454
+          ],
+          "n_reps": 5,
+          "first_run_excluded": true,
+          "first_run_seconds": 0.38222958298865706,
+          "stats": {
+            "mean": 0.3747405914007686,
+            "std": 0.010987961909666572,
+            "median": 0.3809415830037324,
+            "min": 0.35897879100230057,
+            "max": 0.38319237499672454
+          }
+        },
+        "cv": 0.02932151510086995,
+        "att_spread": 0.0,
+        "n_nonfinite_att": 0,
+        "n_nonfinite_se": 0,
+        "se_values": [
+          0.014944730357489262,
+          0.014944730357489262,
+          0.014944730357489262,
+          0.014944730357489262,
+          0.014944730357489262,
+          0.014944730357489262
+        ],
+        "flags": []
+      },
+      "att_gap_old_new": 0.0
+    },
+    "callaway/20k": {
+      "estimator": "CallawaySantAnna",
+      "scale": "20k",
+      "data_file": "staggered_20k.csv",
+      "data_sha256": "14ab5c1d69d7837e22b9e89728e92257a73ca5f020e5ad8cb25d6fc78eeb95fb",
+      "flags": [],
+      "3.5.3": {
+        "result": {
+          "estimator": "diff_diff.CallawaySantAnna",
+          "backend": "rust",
+          "method": "dr",
+          "control_group": "never_treated",
+          "overall_att": 3.229686875919222,
+          "overall_se": 0.005402042186917525,
+          "timing": {
+            "estimation_seconds": 0.22801658300159033,
+            "total_seconds": 0.22801658300159033
+          },
+          "metadata": {
+            "n_units": 20000,
+            "n_periods": 18,
+            "n_obs": 360000,
+            "warmup": true
+          },
+          "provenance": {
+            "diff_diff_version": "3.5.3",
+            "diff_diff_path": ".../python3.14/site-packages/diff_diff/__init__.py",
+            "has_rust_backend": true,
+            "rust_backend_info": {
+              "blas": true,
+              "openblas": false,
+              "accelerate": true
+            },
+            "python_version": "3.14.4",
+            "python_executable": ".../venvs/dd353/bin/python",
+            "numpy_version": "2.5.1",
+            "pandas_version": "3.0.3",
+            "diff_diff_env": {
+              "DIFF_DIFF_BENCH_USE_INSTALLED": "1"
+            }
+          },
+          "n_group_time_effects": 119,
+          "n_event_study": 23,
+          "n_group_effects": 7
+        },
+        "timing": {
+          "raw_timings": [
+            0.24915508400590625,
+            0.23097062500892207,
+            0.24222987500252202,
+            0.24595949999638833,
+            0.24306725000496954,
+            0.22801658300159033
+          ],
+          "n_reps": 5,
+          "first_run_excluded": true,
+          "first_run_seconds": 0.24915508400590625,
+          "stats": {
+            "mean": 0.23804876660287846,
+            "std": 0.007999864720166769,
+            "median": 0.24222987500252202,
+            "min": 0.22801658300159033,
+            "max": 0.24595949999638833
+          }
+        },
+        "cv": 0.03360599105103717,
+        "att_spread": 0.0,
+        "n_nonfinite_att": 0,
+        "n_nonfinite_se": 0,
+        "se_values": [
+          0.005402042186917525,
+          0.005402042186917525,
+          0.005402042186917525,
+          0.005402042186917525,
+          0.005402042186917525,
+          0.005402042186917525
+        ],
+        "flags": []
+      },
+      "3.7.0": {
+        "result": {
+          "estimator": "diff_diff.CallawaySantAnna",
+          "backend": "rust",
+          "method": "dr",
+          "control_group": "never_treated",
+          "overall_att": 3.229686875919222,
+          "overall_se": 0.005402042186917523,
+          "timing": {
+            "estimation_seconds": 0.04824612499214709,
+            "total_seconds": 0.04824612499214709
+          },
+          "metadata": {
+            "n_units": 20000,
+            "n_periods": 18,
+            "n_obs": 360000,
+            "warmup": true
+          },
+          "provenance": {
+            "diff_diff_version": "3.7.0",
+            "diff_diff_path": ".../python3.14/site-packages/diff_diff/__init__.py",
+            "has_rust_backend": true,
+            "rust_backend_info": {
+              "blas": true,
+              "openblas": false,
+              "accelerate": true
+            },
+            "python_version": "3.14.4",
+            "python_executable": ".../venvs/dd370/bin/python",
+            "numpy_version": "2.5.1",
+            "pandas_version": "3.0.3",
+            "diff_diff_env": {
+              "DIFF_DIFF_BENCH_USE_INSTALLED": "1"
+            }
+          },
+          "n_group_time_effects": 119,
+          "n_event_study": 23,
+          "n_group_effects": 7
+        },
+        "timing": {
+          "raw_timings": [
+            0.04495320899877697,
+            0.044461833997047506,
+            0.044290125006227754,
+            0.048689417002606206,
+            0.04940691700903699,
+            0.04824612499214709
+          ],
+          "n_reps": 5,
+          "first_run_excluded": true,
+          "first_run_seconds": 0.04495320899877697,
+          "stats": {
+            "mean": 0.04701888360141311,
+            "std": 0.0024486798985139113,
+            "median": 0.04824612499214709,
+            "min": 0.044290125006227754,
+            "max": 0.04940691700903699
+          }
+        },
+        "cv": 0.0520786482144446,
+        "att_spread": 0.0,
+        "n_nonfinite_att": 0,
+        "n_nonfinite_se": 0,
+        "se_values": [
+          0.005402042186917523,
+          0.005402042186917523,
+          0.005402042186917523,
+          0.005402042186917523,
+          0.005402042186917523,
+          0.005402042186917523
+        ],
+        "flags": []
+      },
+      "att_gap_old_new": 0.0
+    },
+    "multiperiod/story2m": {
+      "estimator": "MultiPeriodDiD (absorbed FE)",
+      "scale": "story2m",
+      "data_file": "multiperiod_story2m.csv",
+      "data_sha256": "b008534ecf08c9848627509c8ad63d0e820f74dabecd8068e321f3cb015678f8",
+      "flags": [],
+      "3.5.3": {
+        "result": {
+          "estimator": "diff_diff.MultiPeriodDiD",
+          "backend": "rust",
+          "cluster": "unit",
+          "att": 3.008600615793982,
+          "se": 0.006636122895643467,
+          "pvalue": 0.0,
+          "ci_lower": 2.9955940456357455,
+          "ci_upper": 3.0216071859522184,
+          "reference_period": 10,
+          "timing": {
+            "estimation_seconds": 3.6028128750040196,
+            "total_seconds": 3.6028128750040196
+          },
+          "metadata": {
+            "n_units": 100000,
+            "n_periods": 20,
+            "n_obs": 2000000,
+            "n_pre": 10,
+            "n_post": 10,
+            "warmup": true
+          },
+          "provenance": {
+            "diff_diff_version": "3.5.3",
+            "diff_diff_path": ".../python3.14/site-packages/diff_diff/__init__.py",
+            "has_rust_backend": true,
+            "rust_backend_info": {
+              "blas": true,
+              "accelerate": true,
+              "openblas": false
+            },
+            "python_version": "3.14.4",
+            "python_executable": ".../venvs/dd353/bin/python",
+            "numpy_version": "2.5.1",
+            "pandas_version": "3.0.3",
+            "diff_diff_env": {
+              "DIFF_DIFF_BENCH_USE_INSTALLED": "1"
+            }
+          },
+          "n_period_effects": 19
+        },
+        "timing": {
+          "raw_timings": [
+            3.5373423749988433,
+            3.441547249996802,
+            3.5420220000087284,
+            3.6028128750040196
+          ],
+          "n_reps": 3,
+          "first_run_excluded": true,
+          "first_run_seconds": 3.5373423749988433,
+          "stats": {
+            "mean": 3.52879404166985,
+            "std": 0.0814425233744846,
+            "median": 3.5420220000087284,
+            "min": 3.441547249996802,
+            "max": 3.6028128750040196
+          }
+        },
+        "cv": 0.023079421018276668,
+        "att_spread": 0.0,
+        "n_nonfinite_att": 0,
+        "n_nonfinite_se": 0,
+        "se_values": [
+          0.006636122895643467,
+          0.006636122895643467,
+          0.006636122895643467,
+          0.006636122895643467
+        ],
+        "flags": []
+      },
+      "3.7.0": {
+        "result": {
+          "estimator": "diff_diff.MultiPeriodDiD",
+          "backend": "rust",
+          "cluster": "unit",
+          "att": 3.008600615793982,
+          "se": 0.006636122895643467,
+          "pvalue": 0.0,
+          "ci_lower": 2.9955940456357455,
+          "ci_upper": 3.0216071859522184,
+          "reference_period": 10,
+          "timing": {
+            "estimation_seconds": 2.995273000007728,
+            "total_seconds": 2.995273000007728
+          },
+          "metadata": {
+            "n_units": 100000,
+            "n_periods": 20,
+            "n_obs": 2000000,
+            "n_pre": 10,
+            "n_post": 10,
+            "warmup": true
+          },
+          "provenance": {
+            "diff_diff_version": "3.7.0",
+            "diff_diff_path": ".../python3.14/site-packages/diff_diff/__init__.py",
+            "has_rust_backend": true,
+            "rust_backend_info": {
+              "blas": true,
+              "openblas": false,
+              "accelerate": true
+            },
+            "python_version": "3.14.4",
+            "python_executable": ".../venvs/dd370/bin/python",
+            "numpy_version": "2.5.1",
+            "pandas_version": "3.0.3",
+            "diff_diff_env": {
+              "DIFF_DIFF_BENCH_USE_INSTALLED": "1"
+            }
+          },
+          "n_period_effects": 19
+        },
+        "timing": {
+          "raw_timings": [
+            2.9768296669935808,
+            2.963059458998032,
+            3.0497124169924064,
+            2.995273000007728
+          ],
+          "n_reps": 3,
+          "first_run_excluded": true,
+          "first_run_seconds": 2.9768296669935808,
+          "stats": {
+            "mean": 3.002681625332722,
+            "std": 0.04379896778690467,
+            "median": 2.995273000007728,
+            "min": 2.963059458998032,
+            "max": 3.0497124169924064
+          }
+        },
+        "cv": 0.014586617314798194,
+        "att_spread": 0.0,
+        "n_nonfinite_att": 0,
+        "n_nonfinite_se": 0,
+        "se_values": [
+          0.006636122895643467,
+          0.006636122895643467,
+          0.006636122895643467,
+          0.006636122895643467
+        ],
+        "flags": []
+      },
+      "att_gap_old_new": 0.0
+    },
+    "callaway/story2m": {
+      "estimator": "CallawaySantAnna",
+      "scale": "story2m",
+      "data_file": "staggered_story2m.csv",
+      "data_sha256": "2013657d9afdff7ef0d81b618adf5364d842c0af8e4955aa025c1b70d346447f",
+      "flags": [],
+      "3.5.3": {
+        "result": {
+          "estimator": "diff_diff.CallawaySantAnna",
+          "backend": "rust",
+          "method": "dr",
+          "control_group": "never_treated",
+          "overall_att": 3.384769412682571,
+          "overall_se": 0.0024002541143586186,
+          "timing": {
+            "estimation_seconds": 1.3185443330003181,
+            "total_seconds": 1.3185443330003181
+          },
+          "metadata": {
+            "n_units": 100000,
+            "n_periods": 20,
+            "n_obs": 2000000,
+            "warmup": true
+          },
+          "provenance": {
+            "diff_diff_version": "3.5.3",
+            "diff_diff_path": ".../python3.14/site-packages/diff_diff/__init__.py",
+            "has_rust_backend": true,
+            "rust_backend_info": {
+              "blas": true,
+              "accelerate": true,
+              "openblas": false
+            },
+            "python_version": "3.14.4",
+            "python_executable": ".../venvs/dd353/bin/python",
+            "numpy_version": "2.5.1",
+            "pandas_version": "3.0.3",
+            "diff_diff_env": {
+              "DIFF_DIFF_BENCH_USE_INSTALLED": "1"
+            }
+          },
+          "n_group_time_effects": 152,
+          "n_event_study": 26,
+          "n_group_effects": 8
+        },
+        "timing": {
+          "raw_timings": [
+            1.3341362079954706,
+            1.3351893340004608,
+            1.3502373329974944,
+            1.3185443330003181
+          ],
+          "n_reps": 3,
+          "first_run_excluded": true,
+          "first_run_seconds": 1.3341362079954706,
+          "stats": {
+            "mean": 1.3346569999994244,
+            "std": 0.015853204623095852,
+            "median": 1.3351893340004608,
+            "min": 1.3185443330003181,
+            "max": 1.3502373329974944
+          }
+        },
+        "cv": 0.011878111472163026,
+        "att_spread": 0.0,
+        "n_nonfinite_att": 0,
+        "n_nonfinite_se": 0,
+        "se_values": [
+          0.0024002541143586186,
+          0.0024002541143586186,
+          0.0024002541143586186,
+          0.0024002541143586186
+        ],
+        "flags": []
+      },
+      "3.7.0": {
+        "result": {
+          "estimator": "diff_diff.CallawaySantAnna",
+          "backend": "rust",
+          "method": "dr",
+          "control_group": "never_treated",
+          "overall_att": 3.384769412682571,
+          "overall_se": 0.002400254114358619,
+          "timing": {
+            "estimation_seconds": 0.28190691699273884,
+            "total_seconds": 0.28190691699273884
+          },
+          "metadata": {
+            "n_units": 100000,
+            "n_periods": 20,
+            "n_obs": 2000000,
+            "warmup": true
+          },
+          "provenance": {
+            "diff_diff_version": "3.7.0",
+            "diff_diff_path": ".../python3.14/site-packages/diff_diff/__init__.py",
+            "has_rust_backend": true,
+            "rust_backend_info": {
+              "accelerate": true,
+              "blas": true,
+              "openblas": false
+            },
+            "python_version": "3.14.4",
+            "python_executable": ".../venvs/dd370/bin/python",
+            "numpy_version": "2.5.1",
+            "pandas_version": "3.0.3",
+            "diff_diff_env": {
+              "DIFF_DIFF_BENCH_USE_INSTALLED": "1"
+            }
+          },
+          "n_group_time_effects": 152,
+          "n_event_study": 26,
+          "n_group_effects": 8
+        },
+        "timing": {
+          "raw_timings": [
+            0.2766472499934025,
+            0.27416658400034066,
+            0.2570516670093639,
+            0.28190691699273884
+          ],
+          "n_reps": 3,
+          "first_run_excluded": true,
+          "first_run_seconds": 0.2766472499934025,
+          "stats": {
+            "mean": 0.2710417226674811,
+            "std": 0.012718861257841276,
+            "median": 0.27416658400034066,
+            "min": 0.2570516670093639,
+            "max": 0.28190691699273884
+          }
+        },
+        "cv": 0.04692584275464116,
+        "att_spread": 0.0,
+        "n_nonfinite_att": 0,
+        "n_nonfinite_se": 0,
+        "se_values": [
+          0.002400254114358619,
+          0.002400254114358619,
+          0.002400254114358619,
+          0.002400254114358619
+        ],
+        "flags": []
+      },
+      "att_gap_old_new": 0.0
+    }
+  },
+  "run_metadata": {
+    "date_utc": "2026-07-11T00:59:47+00:00",
+    "hardware": {
+      "cpu": "Apple M4 Max",
+      "memory_gb": 36,
+      "os": "macOS 26.5.2",
+      "arch": "arm64"
+    },
+    "orchestrator_python": "3.14.4",
+    "repo_git_sha": "a30765632c7770bcbf6aba83ca206b9bb539102e",
+    "r_version": "R version 4.5.2 (2025-10-31)",
+    "r_packages": {
+      "did": "2.5.1",
+      "fixest": "0.14.2",
+      "synthdid": "0.0.9",
+      "jsonlite": "2.0.0",
+      "data.table": "1.18.0"
+    },
+    "thread_policy": "No arm is thread-restricted: R runs at fixest/data.table defaults; diff-diff wheels run at Accelerate/rayon defaults. Thread-count env vars (RAYON/OMP/OPENBLAS/VECLIB/MKL/data.table) are stripped from every benchmark subprocess and R runs under --vanilla (no user/site .Rprofile/.Renviron), so package defaults are enforced, not assumed. Per-arm thread counts are recorded in each result's metadata.",
+    "loadavg_at_start": [
+      3.78515625,
+      3.63916015625,
+      3.51708984375
+    ],
+    "protocol": "Each replication is a fresh subprocess run strictly sequentially (one benchmark process on the machine at a time) with an untimed in-process warm-up fit before the timed fit. The first replication is additionally excluded from statistics. Published statistic: median of the counted replications. Arms with CV > 10% are rerun once and flagged if still noisy."
+  },
+  "pins": {
+    "dd353": "3.5.3",
+    "dd370": "3.7.0"
+  }
+}

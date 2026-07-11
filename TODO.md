@@ -45,13 +45,6 @@ generic sparse-FE, QR+SVD rank-detection redundancy, `check_finite` bypass — m
 
 ### Testing / docs
 
-| Issue | Location | Origin | Effort | Priority |
-|-------|----------|--------|--------|----------|
-| Benchmark refresh phase 2 (same PR #672): run the gated timed refresh on an idle machine, commit `benchmarks/refresh_2026_07/results/refresh_results.json`, regenerate the marker-bounded regions of `docs/benchmarks.rst` via `gen_benchmark_tables.py`, and reconcile the remaining pre-refresh prose (protocol bullets "3 replications / mean ± std", combined BasicDiD/TWFE wording, SDID note under the perf table, Key Observations, "Reproducing Benchmarks" section, `llms.txt` speedup cross-references). Row removed by the phase-2 push itself. | `benchmarks/refresh_2026_07/`, `docs/benchmarks.rst` | #672 | Mid | Medium |
-
-| Issue | Location | Origin | Effort | Priority |
-|-------|----------|--------|--------|----------|
-
 ---
 
 ## Deferred / Documented
