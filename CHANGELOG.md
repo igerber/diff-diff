@@ -38,12 +38,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   shrinking); SyntheticDiD's Rust backend is
   18-55x faster than R `synthdid` at matched 200-replication placebo
   variance (the previously published table - captured before the current
-  Frank-Wolfe kernels and at unequal bootstrap counts - showed Rust
+  Frank-Wolfe kernels and at unequal placebo-replication counts - showed Rust
   SLOWER than pure Python); MPDTA real-data validation is ~5x faster with
   exact ATT match. Honest regressions from the fairness fixes are
   published as-is: warmed-up fixest now beats the sub-35ms BasicDiD/TWFE
   interaction-OLS cells at 10k-20k (0.6-0.9x), and pure-Python
-  SyntheticDiD at equal bootstrap counts is 0.5-4.4x vs R (the old
+  SyntheticDiD at equal placebo-replication counts is 0.5-4.4x vs R (the old
   2.4-16.5x claim reflected a 50-vs-200 replication asymmetry). All
   20 cells pass every publication gate with zero flags.
 

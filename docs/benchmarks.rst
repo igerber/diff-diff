@@ -534,7 +534,7 @@ Three-Way Performance Summary
    wheels) is **18-55x faster than R's synthdid** at matched 200-replication
    placebo variance - at 5k scale R takes ~7.8 minutes while Rust completes
    in 25 seconds. Pure Python ranges from 0.5x (small scale - slower than R)
-   to 4.4x (5k) at the same matched bootstrap counts; earlier versions of this
+   to 4.4x (5k) at the same matched placebo-replication counts; earlier versions of this
    page compared a 50-replication Python arm against R's 200 and overstated
    the pure-Python advantage. ATT estimates are numerically identical
    (< 1e-10) and unit/time weights reproduce R at < 1e-8 (id-aligned
@@ -616,7 +616,7 @@ Key Observations
    CallawaySantAnna, whose hot paths are already BLAS-bound in NumPy/SciPy.
    Released wheels bundle Rust, so no toolchain is needed.
 
-4. **SyntheticDiD pure Python vs R at equal bootstrap counts**: 0.5x (small,
+4. **SyntheticDiD pure Python vs R at equal placebo-replication counts**: 0.5x (small,
    slower than R) to 4.4x (5k). Earlier versions of this page compared
    unequal placebo-replication counts and overstated the pure-Python
    advantage; install the default wheel and the Rust backend makes the
