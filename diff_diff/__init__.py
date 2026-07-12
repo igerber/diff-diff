@@ -47,6 +47,10 @@ from diff_diff.chaisemartin_dhaultfoeuille import (
     chaisemartin_dhaultfoeuille,
     twowayfeweights,
 )
+from diff_diff.chaisemartin_dhaultfoeuille_results import (
+    ChaisemartinDHaultfoeuilleResults,
+    DCDHBootstrapResults,
+)
 from diff_diff.changes_in_changes import (
     ChangesInChanges,
     QDiD,
@@ -54,10 +58,6 @@ from diff_diff.changes_in_changes import (
 from diff_diff.changes_in_changes_results import (
     ChangesInChangesResults,
     QDiDResults,
-)
-from diff_diff.chaisemartin_dhaultfoeuille_results import (
-    ChaisemartinDHaultfoeuilleResults,
-    DCDHBootstrapResults,
 )
 from diff_diff.continuous_did import (
     ContinuousDiD,
