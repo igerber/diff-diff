@@ -28,7 +28,9 @@ This document provides the academic foundations and key implementation requireme
    - [TROP](#trop)
    - [HeterogeneousAdoptionDiD](#heterogeneousadoptiondid)
    - [SpilloverDiD](#spilloverdid)
-4. [Diagnostics and Sensitivity](#diagnostics-and-sensitivity)
+4. [Regression Discontinuity](#regression-discontinuity)
+   - [RegressionDiscontinuity](#regressiondiscontinuity)
+5. [Diagnostics and Sensitivity](#diagnostics-and-sensitivity)
    - [PlaceboTests](#placebotests)
    - [BaconDecomposition](#bacondecomposition)
    - [HonestDiD](#honestdid)
@@ -3495,6 +3497,84 @@ Shipped in `diff_diff/had_pretests.py` as `stute_joint_pretest()` (residuals-in 
 - [x] Documentation of non-testability of Assumptions 5 and 6. **Closed 2026-05-20:** `HeterogeneousAdoptionDiD` class docstring carries a "Non-testable assumptions (paper Section 3.1.2)" Notes block; `qug_test` / `stute_test` / `yatchew_hr_test` / `did_had_pretest_workflow` Notes sections carry "Scope (what this test does NOT cover)" clauses explicitly stating they verify ADJACENT identifying conditions (QUG: support-infimum null `d_lower = 0`; Stute / Yatchew: Assumption 8 linearity; `joint_pretrends_test`: Assumption 7 mean-independence) and CANNOT test Assumptions 5 or 6. The composite workflow verdict string does NOT mention Assumptions 5 or 6 — it only flags the Assumption 7 step-2 gap on the two-period `aggregate="overall"` path. The Assumption 5/6 non-testability caveat is surfaced separately by (a) `HAD.fit()`'s fit-time `UserWarning` in `diff_diff/had.py` (search for "---- Assumption 5/6 warning on Design 1 paths ----") which fires whenever the resolved design is Design 1 family (`continuous_near_d_lower` or `mass_point`), and (b) T21 (HAD pretest workflow tutorial) tutorial prose.
 - [x] Warnings for staggered treatment timing (redirect to `ChaisemartinDHaultfoeuille`). **Closed 2026-05-20:** fail-closed `ValueError` at `diff_diff/had.py:1511` (see Deviations § "Library extension: Staggered-timing fail-closed" for the rationale on raising vs warning).
 - [x] `NotImplementedError` phase pointer when `covariates=` is passed (Theorem 6 future work). **Closed 2026-06-01:** `HAD.fit()` now takes an explicit keyword-only `covariates=None` param and raises `NotImplementedError` (with the Appendix B.1 / Theorem 6 multivariate-covariate-extension pointer + a pre-residualization workaround) when it is not None, replacing the prior bare `TypeError` from the absent kwarg. See the `- **Note:**` ("`covariates=` is reserved but NOT implemented") above and `diff_diff/had.py::HeterogeneousAdoptionDiD.fit`; locked by `tests/test_methodology_had.py::TestHADDeviations::test_covariates_not_implemented_is_documented`.
+
+---
+
+# Regression Discontinuity
+
+## RegressionDiscontinuity
+
+**Status: in progress.** This PR ships the private sharp-RD bandwidth-selection
+machinery (`diff_diff/_rdrobust_port.py`: `rdbwselect_sharp` and its
+primitives) with R golden-file parity; the public `RegressionDiscontinuity`
+estimator, robust bias-corrected inference, and the full methodology section
+land in the follow-up PR. No public API is exported yet.
+
+**Primary sources (paper reviews on file):**
+`docs/methodology/papers/calonico-cattaneo-titiunik-2014-review.md` (CCT 2014,
+Econometrica - robust bias-corrected RD inference),
+`calonico-cattaneo-farrell-titiunik-2017-review.md` (Stata Journal - the
+rdrobust software reference this port parity-targets),
+`calonico-cattaneo-farrell-2018-review.md` (JASA - CER-optimal bandwidths),
+`calonico-cattaneo-farrell-titiunik-2019-review.md` (REStat - covariate
+adjustment, deferred).
+
+**Parity target and port-level notes:**
+
+- **Note (parity pin):** the port targets the installed CRAN release
+  `rdrobust` 4.0.0, pinned by source-tarball sha256
+  (`78f0d6b4...d613a36f` in `diff_diff/_rdrobust_port.py`). The GitHub
+  development tree (4.1.0-dev) is NOT the parity source: it adds an
+  `nn_tol` nearest-neighbor tie tolerance, flips the `stdvars` default to
+  TRUE, and drops 4.0.0's `+1e-8` bwcheck floor. The port implements the
+  4.0.0 behaviors: EXACT nearest-neighbor distance comparison, `stdvars`
+  standardization ported but fixed to the 4.0.0 default (off), and the
+  `+1e-8` floor (rdbwselect.R:374-375).
+- **Deviation from R:** the port rejects non-finite `y`/`x` with a targeted
+  `ValueError` instead of R's silent `complete.cases` row drop
+  (rdbwselect.R:72-95); the public estimator will warn-and-drop
+  (no-silent-failures policy). Golden files are generated on complete-case
+  data, so parity is unaffected.
+- **Deviation from R:** `N < 20` raises `ValueError` in the port where R's
+  `rdbwselect` warns and aborts without output (rdbwselect.R:237-239); the
+  estimator-level warn-plus-full-range-bandwidth fallback (rdrobust.R
+  behavior) ships with the estimator PR. Empty-side and zero-variance
+  inputs likewise raise targeted `ValueError`s where R would fail with
+  opaque downstream errors.
+- **Note:** `qrXXinv`'s Cholesky-failure fallback maps `MASS::ginv(G)` to
+  `numpy.linalg.pinv(G, rcond=sqrt(eps))` - the same Moore-Penrose
+  pseudo-inverse with the same default singular-value cutoff; reachable
+  only on rank-deficient kernel windows. The fallback IS the 4.0.0
+  behavior - verified against both the sha256-pinned CRAN tarball source
+  (functions.R:128-132: `try(chol(G))` -> `ginv(G)` on failure) and
+  `deparse(getFromNamespace("qrXXinv", "rdrobust"))` of the installed
+  package - so the port reproduces R's output on degenerate windows
+  rather than erroring. Identification/rank-support guards (enough
+  distinct support points per side for the requested polynomial order,
+  per the CCT 2014 review's assumption checklist) are an ESTIMATOR-level
+  `fit()` responsibility and ship with the public class in the follow-up
+  PR, not inside the parity port.
+- **Note:** only `vce="nn"` (rdrobust's default) is implemented;
+  `hc0`-`hc3` and cluster variance modes raise `NotImplementedError`
+  (documented seam, mirroring the HAD Phase 1c surface-restriction
+  pattern).
+- **Note (cross-implementation float tolerance):** R's sample SD
+  accumulates sequentially while numpy sums pairwise, seeding a ~2-ULP
+  difference in the pilot constant `BWp` that the chained d->b->h
+  bandwidth stages amplify to an observed worst-case ~6e-12 relative
+  disagreement (darwin-arm64). Golden parity therefore asserts
+  rtol=1e-9 on bandwidths - far below methodological materiality - with
+  bit-level agreement asserted on the pre-linalg intermediates (type-2
+  IQR, unique counts).
+
+**Reference implementation:** R `rdrobust::rdbwselect()` 4.0.0. Golden
+fixtures: `benchmarks/data/rdrobust_golden.json` (generator
+`benchmarks/R/generate_rdrobust_golden.R`; 17 configurations over three
+seeded synthetic DGPs and the vendored Senate data
+`benchmarks/data/rdrobust_senate.csv`, spanning kernels, p/q orders,
+deriv, masspoints modes, stdvars, bwrestrict, scaleregul, and nnmatch),
+validated in `tests/test_rdrobust_port.py` including the 2017 Stata
+Journal published Senate anchors under `masspoints="off"`.
 
 ---
 

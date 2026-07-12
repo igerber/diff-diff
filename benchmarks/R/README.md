@@ -129,3 +129,54 @@ flatten misaligns when reshaped row-major.
   R's default toolchain, the `OpenMP not detected` warning is normal —
   the package falls back to single-threaded mode without affecting
   numerical output.
+
+---
+
+# R `rdrobust` bandwidth-selection golden fixtures
+
+`benchmarks/R/generate_rdrobust_golden.R` produces
+`benchmarks/data/rdrobust_golden.json`, consumed by
+`tests/test_rdrobust_port.py` to verify that
+`diff_diff._rdrobust_port.rdbwselect_sharp` matches R `rdrobust::rdbwselect`
+(Calonico, Cattaneo, Farrell & Titiunik) across all 10 bandwidth selectors at
+rtol ≤ 1e-9.
+
+## Version pin
+
+The parity target is the **CRAN 4.0.0 release** (source tarball sha256
+`78f0d6b4bdec4091cc8f42f6f1598704747f95926446d3aaee381ea1d613a36f`), the
+version users install. Do NOT regenerate with the GitHub development tree
+(4.1.0-dev): it changes nearest-neighbor tie handling (`nn_tol`), the
+`stdvars` default, and the bwcheck floor, and its bandwidths differ from the
+released package. The generator hard-fails unless
+`packageVersion("rdrobust") == "4.0.0"`.
+
+## Senate data provenance
+
+`benchmarks/data/rdrobust_senate.csv` (56KB) is the canonical rdrobust
+example dataset: U.S. Senate election vote shares and Democratic victory
+margins, 1914-2010, from Cattaneo, Frandsen & Titiunik (2015, *Journal of
+Causal Inference* 3(1), 1-24). It is distributed publicly by the rdrobust
+authors with their software (https://rdpackages.github.io/rdrobust/) and is
+vendored here as a real-data parity anchor: its 38 tied margin values
+exercise the mass-points machinery, and `masspoints="off"` reproduces the
+bandwidths printed in Calonico, Cattaneo, Farrell & Titiunik (2017, *Stata
+Journal* 17(2), 372-404) exactly, anchoring the golden files against
+published numbers independent of our own R invocation.
+
+## Regenerating
+
+The generator hard-requires exactly 4.0.0. If CRAN's current release has
+moved on, install the pinned version from the archive and verify the
+tarball hash first:
+
+```sh
+# Verify the source of record (must print the sha256 below):
+curl -sfLO https://cran.r-project.org/src/contrib/Archive/rdrobust/rdrobust_4.0.0.tar.gz \
+  || curl -sfLO https://cran.r-project.org/src/contrib/rdrobust_4.0.0.tar.gz
+shasum -a 256 rdrobust_4.0.0.tar.gz
+# expected: 78f0d6b4bdec4091cc8f42f6f1598704747f95926446d3aaee381ea1d613a36f
+
+R CMD INSTALL rdrobust_4.0.0.tar.gz
+Rscript benchmarks/R/generate_rdrobust_golden.R
+```

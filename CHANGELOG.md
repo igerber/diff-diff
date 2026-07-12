@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Internal: rdrobust sharp-RD bandwidth-selection port (`diff_diff/_rdrobust_port.py`).**
+  Step-1 machinery for the upcoming `RegressionDiscontinuity` estimator: a faithful
+  pure-Python NumPy/SciPy port of R `rdrobust` 4.0.0's `rdbwselect` sharp-RD path (all 10 data-driven
+  selectors - mserd default, msetwo/msesum/comb and the CER-optimal variants -
+  triangular/epanechnikov/uniform kernels, `masspoints` adjust/check/off, IK-style
+  regularization, bwrestrict/bwcheck clamps, nearest-neighbor variance residuals with
+  4.0.0's exact tie semantics). Parity pin: CRAN 4.0.0 source tarball (sha256 in the
+  module; the GitHub 4.1.0-dev tree diverges and is not the target). R golden fixtures at
+  `benchmarks/data/rdrobust_golden.json` (generator `benchmarks/R/generate_rdrobust_golden.R`;
+  three seeded synthetic DGPs + the vendored Senate data `benchmarks/data/rdrobust_senate.csv`,
+  Cattaneo-Frandsen-Titiunik 2015) validated at rtol=1e-9 across 17 configurations x 10
+  selectors in `tests/test_rdrobust_port.py` (kernels, p/q orders, deriv, masspoints
+  modes, stdvars, bwrestrict, scaleregul, nnmatch), including the 2017 Stata Journal
+  published Senate anchors under `masspoints="off"`. **No public API change** - the module is private;
+  the estimator, robust bias-corrected inference, and docs surfaces land in the follow-up PR.
+  Port-level deviations documented in `docs/methodology/REGISTRY.md` (new
+  RegressionDiscontinuity section stub).
+
 ### Changed
 - **Internal: repo-wide lint normalization + pinned tooling.** black/ruff/mypy are now
   pinned exactly in the `dev` extra (`black==26.3.1`, `ruff==0.15.13`, `mypy==2.1.0`;
