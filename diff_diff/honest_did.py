@@ -17,8 +17,8 @@ See Also
 https://github.com/asheshrambachan/HonestDiD - R package implementation
 """
 
-from dataclasses import dataclass, field
 import warnings
+from dataclasses import dataclass, field
 from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 
 import numpy as np
@@ -2194,7 +2194,7 @@ def _compute_arp_test(
     reject : bool
         True if H0 is rejected.
     """
-    from scipy.stats import norm, truncnorm
+    from scipy.stats import truncnorm
 
     if kappa is None:
         kappa = alpha / 10.0

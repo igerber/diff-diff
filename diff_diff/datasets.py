@@ -17,7 +17,6 @@ from urllib.request import urlopen
 import numpy as np
 import pandas as pd
 
-
 # Cache directory for downloaded datasets
 _CACHE_DIR = Path.home() / ".cache" / "diff_diff" / "datasets"
 

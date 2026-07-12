@@ -1405,7 +1405,6 @@ class TROPLocalMixin:
         Tuple[float, np.ndarray]
             (se, bootstrap_estimates).
         """
-        import warnings
 
         from diff_diff.bootstrap_utils import generate_rao_wu_weights
         from diff_diff.linalg import _factorize_cluster_ids

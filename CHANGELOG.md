@@ -8,6 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **Internal: repo-wide lint normalization + pinned tooling.** black/ruff/mypy are now
+  pinned exactly in the `dev` extra (`black==26.3.1`, `ruff==0.15.13`, `mypy==2.1.0`;
+  the tools require Python >= 3.10 — the library floor stays 3.9); full `black` +
+  `ruff --fix` pass over source and tests; scoped `per-file-ignores` for deliberate
+  patterns (trop logger-before-imports E402, honest_did math-notation E741, `__init__`
+  re-export F401); ~24 audited unused-local test fixes, two upgraded to real assertions.
+  No public API or numerical behavior change.
 - **Internal: cleaned package-source Ruff static-analysis findings** across forward-reference,
   stale f-string, invalid `noqa`, and audited unused-local sites. No public API or numerical
   behavior change.

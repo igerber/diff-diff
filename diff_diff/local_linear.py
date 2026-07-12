@@ -1088,17 +1088,14 @@ def bias_corrected_local_linear(
         # boundary with the same messages the port raises downstream.
         if weights.shape[0] != d_np.shape[0]:
             raise ValueError(
-                f"weights length ({weights.shape[0]}) does not match "
-                f"d/y ({d_np.shape[0]})."
+                f"weights length ({weights.shape[0]}) does not match " f"d/y ({d_np.shape[0]})."
             )
         if not np.all(np.isfinite(weights)):
             raise ValueError("weights contains non-finite values (NaN or Inf).")
         if np.any(weights < 0):
             raise ValueError("weights must be non-negative.")
         if np.sum(weights) <= 0:
-            raise ValueError(
-                "weights sum to zero — no observations have positive weight."
-            )
+            raise ValueError("weights sum to zero — no observations have positive weight.")
         if weights.shape[0] == d_np.shape[0]:
             _positive_mask_full = weights > 0.0
             if not bool(_positive_mask_full.all()):
@@ -1303,11 +1300,7 @@ def bias_corrected_local_linear(
     # / df_survey structure of the full design — the correct
     # subpopulation / domain-analysis convention.
     if_out = result.influence_function
-    if (
-        if_out is not None
-        and _positive_mask_full is not None
-        and _n_full_for_if is not None
-    ):
+    if if_out is not None and _positive_mask_full is not None and _n_full_for_if is not None:
         if_full = np.zeros(_n_full_for_if, dtype=np.float64)
         if_full[_positive_mask_full] = if_out
         if_out = if_full

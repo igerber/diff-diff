@@ -18,27 +18,59 @@ _backend_env = os.environ.get("DIFF_DIFF_BACKEND", "auto").lower()
 # Try to import Rust backend for accelerated operations
 try:
     from diff_diff._rust_backend import (
-        generate_bootstrap_weights_batch as _rust_bootstrap_weights,
-        project_simplex as _rust_project_simplex,
-        solve_ols as _rust_solve_ols,
-        compute_robust_vcov as _rust_compute_robust_vcov,
-        # TROP estimator acceleration (local method)
-        compute_unit_distance_matrix as _rust_unit_distance_matrix,
-        loocv_grid_search as _rust_loocv_grid_search,
         bootstrap_trop_variance as _rust_bootstrap_trop_variance,
-        # TROP estimator acceleration (global method)
-        loocv_grid_search_global as _rust_loocv_grid_search_global,
+    )
+    from diff_diff._rust_backend import (
         bootstrap_trop_variance_global as _rust_bootstrap_trop_variance_global,
+    )
+    from diff_diff._rust_backend import (
+        compute_noise_level as _rust_compute_noise_level,
+    )
+    from diff_diff._rust_backend import (
+        compute_robust_vcov as _rust_compute_robust_vcov,
+    )
+    from diff_diff._rust_backend import (
         # SDID weights (Frank-Wolfe matching R's synthdid)
         compute_sdid_unit_weights as _rust_sdid_unit_weights,
+    )
+    from diff_diff._rust_backend import (
         compute_time_weights as _rust_compute_time_weights,
-        compute_noise_level as _rust_compute_noise_level,
-        sc_weight_fw as _rust_sc_weight_fw,
-        sc_weight_fw_with_convergence as _rust_sc_weight_fw_with_convergence,
-        sc_weight_fw_weighted as _rust_sc_weight_fw_weighted,
-        sc_weight_fw_weighted_with_convergence as _rust_sc_weight_fw_weighted_with_convergence,
+    )
+    from diff_diff._rust_backend import (
+        # TROP estimator acceleration (local method)
+        compute_unit_distance_matrix as _rust_unit_distance_matrix,
+    )
+    from diff_diff._rust_backend import (
+        generate_bootstrap_weights_batch as _rust_bootstrap_weights,
+    )
+    from diff_diff._rust_backend import (
+        loocv_grid_search as _rust_loocv_grid_search,
+    )
+    from diff_diff._rust_backend import (
+        # TROP estimator acceleration (global method)
+        loocv_grid_search_global as _rust_loocv_grid_search_global,
+    )
+    from diff_diff._rust_backend import (
+        project_simplex as _rust_project_simplex,
+    )
+    from diff_diff._rust_backend import (
         # Diagnostics
         rust_backend_info as _rust_backend_info,
+    )
+    from diff_diff._rust_backend import (
+        sc_weight_fw as _rust_sc_weight_fw,
+    )
+    from diff_diff._rust_backend import (
+        sc_weight_fw_weighted as _rust_sc_weight_fw_weighted,
+    )
+    from diff_diff._rust_backend import (
+        sc_weight_fw_weighted_with_convergence as _rust_sc_weight_fw_weighted_with_convergence,
+    )
+    from diff_diff._rust_backend import (
+        sc_weight_fw_with_convergence as _rust_sc_weight_fw_with_convergence,
+    )
+    from diff_diff._rust_backend import (
+        solve_ols as _rust_solve_ols,
     )
 
     _rust_available = True

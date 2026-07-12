@@ -60,9 +60,13 @@ dev = [
     "pytest>=7.0",
     "pytest-xdist>=3.0",
     "pytest-cov>=4.0",
-    "black>=23.0",
-    "ruff>=0.1.0",
-    "mypy>=1.0",
+    # Lint/format/type tools are pinned exactly so local results match the
+    # Lint CI workflow (.github/workflows/lint.yml) — update both together.
+    # NOTE: black/mypy require Python >= 3.10 (dev tooling only; the library
+    # floor stays 3.9).
+    "black==26.3.1",
+    "ruff==0.15.13",
+    "mypy==2.1.0",
     "maturin>=1.4,<2.0",
     "matplotlib>=3.5",
     "nbmake>=1.5",
@@ -128,6 +132,22 @@ target-version = "py39"
 [tool.ruff.lint]
 select = ["E", "F", "I", "W"]
 ignore = ["E501"]
+
+[tool.ruff.lint.per-file-ignores]
+# Package __init__ deliberately re-exports backend symbols (implicit re-export
+# surface; mirrors mypy implicit_reexport = true).
+"diff_diff/__init__.py" = ["F401"]
+# The trop modules configure the module logger before intra-package imports on
+# purpose; import order is load-bearing.
+"diff_diff/trop.py" = ["E402"]
+"diff_diff/trop_global.py" = ["E402"]
+"diff_diff/trop_local.py" = ["E402"]
+# Rambachan-Roth / FLCI math notation uses `l` for the linear-combination vector.
+"diff_diff/honest_did.py" = ["E741"]
+# conftest sets sys.path and MPLBACKEND before imports (order-sensitive).
+"tests/conftest.py" = ["E402"]
+# CdH event-study horizon notation `l` is quoted in the tutorial narrative.
+"tests/test_t19_marketing_pulse_drift.py" = ["E741"]
 
 [tool.mypy]
 python_version = "3.9"

@@ -1380,9 +1380,7 @@ class TripleDifference:
         # suppressed under rank_deficient_action="silent".
         if self._lstsq_fallback_tracker and self.rank_deficient_action != "silent":
             n_cells = len(self._lstsq_fallback_tracker)
-            finite_conds = [
-                c for c in self._lstsq_fallback_tracker if np.isfinite(c)
-            ]
+            finite_conds = [c for c in self._lstsq_fallback_tracker if np.isfinite(c)]
             max_cond = max(finite_conds) if finite_conds else float("inf")
             warnings.warn(
                 f"Rank-deficient covariate design encountered {n_cells} time(s) "

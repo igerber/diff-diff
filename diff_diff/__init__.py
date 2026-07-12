@@ -28,12 +28,47 @@ from diff_diff._backend import (
     _rust_project_simplex,
     _rust_solve_ols,
 )
-
+from diff_diff._guides_api import get_llm_guide
+from diff_diff.agent_workflow import agent_workflow
 from diff_diff.bacon import (
     BaconDecomposition,
     BaconDecompositionResults,
     Comparison2x2,
     bacon_decompose,
+)
+from diff_diff.business_report import (
+    BUSINESS_REPORT_SCHEMA_VERSION,
+    BusinessContext,
+    BusinessReport,
+)
+from diff_diff.chaisemartin_dhaultfoeuille import (
+    ChaisemartinDHaultfoeuille,
+    TWFEWeightsResult,
+    chaisemartin_dhaultfoeuille,
+    twowayfeweights,
+)
+from diff_diff.chaisemartin_dhaultfoeuille_results import (
+    ChaisemartinDHaultfoeuilleResults,
+    DCDHBootstrapResults,
+)
+from diff_diff.continuous_did import (
+    ContinuousDiD,
+    ContinuousDiDResults,
+    DoseResponseCurve,
+)
+from diff_diff.datasets import (
+    clear_cache,
+    list_datasets,
+    load_card_krueger,
+    load_castle_doctrine,
+    load_dataset,
+    load_divorce_laws,
+    load_mpdta,
+)
+from diff_diff.diagnostic_report import (
+    DIAGNOSTIC_REPORT_SCHEMA_VERSION,
+    DiagnosticReport,
+    DiagnosticReportResults,
 )
 from diff_diff.diagnostics import (
     PlaceboTestResults,
@@ -44,22 +79,16 @@ from diff_diff.diagnostics import (
     run_all_placebo_tests,
     run_placebo_test,
 )
-from diff_diff.linalg import (
-    InferenceResult,
-    LinearRegression,
+from diff_diff.efficient_did import (
+    EDiDBootstrapResults,
+    EfficientDiD,
+    EfficientDiDResults,
 )
-from diff_diff.local_linear import (
-    KERNELS,
-    BandwidthResult,
-    BiasCorrectedFit,
-    LocalLinearFit,
-    bias_corrected_local_linear,
-    epanechnikov_kernel,
-    kernel_moments,
-    local_linear_fit,
-    mse_optimal_bandwidth,
-    triangular_kernel,
-    uniform_kernel,
+from diff_diff.estimators import (
+    DifferenceInDifferences,
+    MultiPeriodDiD,
+    SyntheticDiD,
+    TwoWayFixedEffects,
 )
 from diff_diff.had import (
     HeterogeneousAdoptionDiD,
@@ -80,12 +109,6 @@ from diff_diff.had_pretests import (
     stute_test,
     yatchew_hr_test,
 )
-from diff_diff.estimators import (
-    DifferenceInDifferences,
-    MultiPeriodDiD,
-    SyntheticDiD,
-    TwoWayFixedEffects,
-)
 from diff_diff.honest_did import (
     DeltaRM,
     DeltaSD,
@@ -96,6 +119,31 @@ from diff_diff.honest_did import (
     compute_honest_did,
     sensitivity_plot,
 )
+from diff_diff.imputation import (
+    ImputationBootstrapResults,
+    ImputationDiD,
+    ImputationDiDResults,
+    imputation_did,
+)
+from diff_diff.linalg import (
+    InferenceResult,
+    LinearRegression,
+)
+from diff_diff.local_linear import (
+    KERNELS,
+    BandwidthResult,
+    BiasCorrectedFit,
+    LocalLinearFit,
+    bias_corrected_local_linear,
+    epanechnikov_kernel,
+    kernel_moments,
+    local_linear_fit,
+    mse_optimal_bandwidth,
+    triangular_kernel,
+    uniform_kernel,
+)
+from diff_diff.lpdid import LPDiD
+from diff_diff.lpdid_results import LPDiDResults
 from diff_diff.power import (
     PowerAnalysis,
     PowerResults,
@@ -110,22 +158,16 @@ from diff_diff.power import (
     simulate_power,
     simulate_sample_size,
 )
-from diff_diff.pretrends import (
-    PreTrendsPower,
-    PreTrendsPowerCurve,
-    PreTrendsPowerResults,
-    compute_mdv,
-    compute_pretrends_power,
-)
+from diff_diff.practitioner import practitioner_next_steps
 from diff_diff.prep import (
     aggregate_survey,
     aggregate_to_cohorts,
     balance_panel,
     create_event_time,
     generate_continuous_did_data,
-    generate_did_data,
     generate_ddd_data,
     generate_ddd_panel_data,
+    generate_did_data,
     generate_event_study_data,
     generate_factor_data,
     generate_panel_data,
@@ -142,11 +184,51 @@ from diff_diff.prep import (
     validate_did_data,
     wide_to_long,
 )
+from diff_diff.pretrends import (
+    PreTrendsPower,
+    PreTrendsPowerCurve,
+    PreTrendsPowerResults,
+    compute_mdv,
+    compute_pretrends_power,
+)
+from diff_diff.profile import (
+    Alert,
+    OutcomeShape,
+    PanelProfile,
+    TreatmentDoseShape,
+    profile_panel,
+)
 from diff_diff.results import (
     DiDResults,
     MultiPeriodDiDResults,
     PeriodEffect,
+    SpilloverDiDResults,  # re-export
     SyntheticDiDResults,
+)
+from diff_diff.spillover import (
+    SpilloverDiD,
+)
+from diff_diff.stacked_did import (
+    StackedDiD,
+    StackedDiDResults,
+    stacked_did,
+)
+from diff_diff.staggered import (
+    CallawaySantAnna,
+    CallawaySantAnnaResults,
+    CSBootstrapResults,
+    GroupTimeEffect,
+)
+from diff_diff.staggered_triple_diff import (
+    StaggeredTripleDifference,
+)
+from diff_diff.staggered_triple_diff_results import (
+    StaggeredTripleDiffResults,
+)
+from diff_diff.sun_abraham import (
+    SABootstrapResults,
+    SunAbraham,
+    SunAbrahamResults,
 )
 from diff_diff.survey import (
     DEFFDiagnostics,
@@ -155,17 +237,20 @@ from diff_diff.survey import (
     compute_deff_diagnostics,
     make_pweight_design,
 )
-from diff_diff.staggered import (
-    CallawaySantAnna,
-    CallawaySantAnnaResults,
-    CSBootstrapResults,
-    GroupTimeEffect,
+from diff_diff.synthetic_control import (
+    SyntheticControl,
+    synthetic_control,
 )
-from diff_diff.imputation import (
-    ImputationBootstrapResults,
-    ImputationDiD,
-    ImputationDiDResults,
-    imputation_did,
+from diff_diff.synthetic_control_results import SyntheticControlResults
+from diff_diff.triple_diff import (
+    TripleDifference,
+    TripleDifferenceResults,
+    triple_difference,
+)
+from diff_diff.trop import (
+    TROP,
+    TROPResults,
+    trop,
 )
 from diff_diff.two_stage import (
     TwoStageBootstrapResults,
@@ -173,65 +258,6 @@ from diff_diff.two_stage import (
     TwoStageDiDResults,
     two_stage_did,
 )
-from diff_diff.spillover import (
-    SpilloverDiD,
-)
-from diff_diff.results import SpilloverDiDResults  # re-export
-from diff_diff.stacked_did import (
-    StackedDiD,
-    StackedDiDResults,
-    stacked_did,
-)
-from diff_diff.sun_abraham import (
-    SABootstrapResults,
-    SunAbraham,
-    SunAbrahamResults,
-)
-from diff_diff.triple_diff import (
-    TripleDifference,
-    TripleDifferenceResults,
-    triple_difference,
-)
-from diff_diff.staggered_triple_diff import (
-    StaggeredTripleDifference,
-)
-from diff_diff.staggered_triple_diff_results import (
-    StaggeredTripleDiffResults,
-)
-from diff_diff.continuous_did import (
-    ContinuousDiD,
-    ContinuousDiDResults,
-    DoseResponseCurve,
-)
-from diff_diff.efficient_did import (
-    EfficientDiD,
-    EfficientDiDResults,
-    EDiDBootstrapResults,
-)
-from diff_diff.chaisemartin_dhaultfoeuille import (
-    ChaisemartinDHaultfoeuille,
-    TWFEWeightsResult,
-    chaisemartin_dhaultfoeuille,
-    twowayfeweights,
-)
-from diff_diff.chaisemartin_dhaultfoeuille_results import (
-    ChaisemartinDHaultfoeuilleResults,
-    DCDHBootstrapResults,
-)
-from diff_diff.trop import (
-    TROP,
-    TROPResults,
-    trop,
-)
-from diff_diff.synthetic_control import (
-    SyntheticControl,
-    synthetic_control,
-)
-from diff_diff.synthetic_control_results import SyntheticControlResults
-from diff_diff.wooldridge import WooldridgeDiD
-from diff_diff.wooldridge_results import WooldridgeDiDResults
-from diff_diff.lpdid import LPDiD
-from diff_diff.lpdid_results import LPDiDResults
 from diff_diff.utils import (
     WildBootstrapResults,
     check_parallel_trends,
@@ -252,35 +278,8 @@ from diff_diff.visualization import (
     plot_staircase,
     plot_synth_weights,
 )
-from diff_diff.practitioner import practitioner_next_steps
-from diff_diff.business_report import (
-    BUSINESS_REPORT_SCHEMA_VERSION,
-    BusinessContext,
-    BusinessReport,
-)
-from diff_diff.diagnostic_report import (
-    DIAGNOSTIC_REPORT_SCHEMA_VERSION,
-    DiagnosticReport,
-    DiagnosticReportResults,
-)
-from diff_diff._guides_api import get_llm_guide
-from diff_diff.agent_workflow import agent_workflow
-from diff_diff.profile import (
-    Alert,
-    OutcomeShape,
-    PanelProfile,
-    TreatmentDoseShape,
-    profile_panel,
-)
-from diff_diff.datasets import (
-    clear_cache,
-    list_datasets,
-    load_card_krueger,
-    load_castle_doctrine,
-    load_dataset,
-    load_divorce_laws,
-    load_mpdta,
-)
+from diff_diff.wooldridge import WooldridgeDiD
+from diff_diff.wooldridge_results import WooldridgeDiDResults
 
 # Estimator aliases — short names for convenience
 DiD = DifferenceInDifferences

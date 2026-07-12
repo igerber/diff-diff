@@ -38,8 +38,8 @@ from diff_diff.trop_local import (
 )
 from diff_diff.trop_results import (
     _LAMBDA_INF,
-    _PrecomputedStructures,
     TROPResults,
+    _PrecomputedStructures,
 )
 from diff_diff.utils import safe_inference, warn_if_not_converged
 
