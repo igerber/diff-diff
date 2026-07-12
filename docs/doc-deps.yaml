@@ -65,6 +65,9 @@ groups:
   lpdid:
     - diff_diff/lpdid.py
     - diff_diff/lpdid_results.py
+  changes_in_changes:
+    - diff_diff/changes_in_changes.py
+    - diff_diff/changes_in_changes_results.py
   visualization:
     - diff_diff/visualization/__init__.py
     - diff_diff/visualization/_common.py
@@ -617,6 +620,34 @@ sources:
       - path: docs/choosing_estimator.rst
         type: user_guide
       - path: docs/survey-roadmap.md
+        type: user_guide
+
+  # ── ChangesInChanges + QDiD (changes_in_changes group) ────────────
+
+  diff_diff/changes_in_changes.py:
+    drift_risk: medium
+    docs:
+      - path: docs/methodology/REGISTRY.md
+        section: "ChangesInChanges (CiC)"
+        type: methodology
+      - path: docs/methodology/papers/athey-imbens-2006-review.md
+        type: methodology
+      - path: docs/api/changes_in_changes.rst
+        type: api_reference
+      - path: README.md
+        section: "Estimators (one-line catalog entry)"
+        type: user_guide
+      - path: docs/references.rst
+        type: user_guide
+      - path: diff_diff/guides/llms-full.txt
+        section: "ChangesInChanges"
+        type: user_guide
+      - path: diff_diff/guides/llms.txt
+        section: "Estimators"
+        type: user_guide
+      - path: docs/choosing_estimator.rst
+        type: user_guide
+      - path: docs/r_comparison.rst
         type: user_guide
 
   # ── TROP (trop group) ──────────────────────────────────────────────

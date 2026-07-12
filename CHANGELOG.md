@@ -30,6 +30,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   main — no `ready-for-ci` label needed; the aggregate `Lint Gate` job is the single
   required-check name. Plus `.git-blame-ignore-revs` covering the 2026-07 bulk
   normalization commits, and lint sections in CONTRIBUTING.md / CLAUDE.md.
+- **ChangesInChanges (Athey & Imbens 2006) + QDiD estimators.** Distributional
+  DiD for the canonical 2x2 design with continuous outcomes: `ChangesInChanges`
+  (alias `CiC`) recovers the treated group's full counterfactual outcome
+  distribution and quantile treatment effects via the CDF transformation
+  `F_10(F_00^{-1}(F_01(y)))`, invariant to monotone outcome rescaling; `QDiD`
+  is the paper's additive quantile-DiD comparison estimator. Point estimation
+  matches R `qte` 1.3.1 exactly (CiC via an exact port of R's type-1 quantile
+  arithmetic incl. its fuzz handling - bit-exact golden parity; QDiD via qte's
+  type-7 form, documented in REGISTRY.md as a finite-sample deviation from the
+  paper's transformation, population-equivalent). Bootstrap-only inference
+  (panel unit-block or pooled repeated-cross-section resampling per qte's
+  schemes; seedable, `n_bootstrap=200` default; replicate-SD SEs, normal
+  intervals, sup-t uniform bands at qte's fixed 95% level). Diagnostics:
+  interior-range guard (eq. 17) with NaN inference outside, support-violation /
+  heavy-ties / QDiD-non-monotonicity warnings. Deferred and documented:
+  covariates, discrete-outcome bounds, analytical SEs, staggered designs.
+  Golden fixtures: `benchmarks/R/generate_qte_golden.R` (qte pinned 1.3.1) ->
+  `benchmarks/data/qte_golden.json`.
 
 ### Changed
 - **Internal: repo-wide lint normalization + pinned tooling.** black/ruff/mypy are now

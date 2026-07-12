@@ -31,6 +31,8 @@ Core estimator classes for DiD analysis:
    diff_diff.SpilloverDiD
    diff_diff.WooldridgeDiD
    diff_diff.LPDiD
+   diff_diff.ChangesInChanges
+   diff_diff.QDiD
    diff_diff.BaconDecomposition
    diff_diff.StaggeredTripleDifference
 
@@ -72,6 +74,7 @@ Result containers returned by estimators:
    diff_diff.BaconDecompositionResults
    diff_diff.wooldridge_results.WooldridgeDiDResults
    diff_diff.lpdid_results.LPDiDResults
+   diff_diff.changes_in_changes_results.ChangesInChangesResults
    diff_diff.Comparison2x2
    diff_diff.StaggeredTripleDiffResults
    diff_diff.TWFEWeightsResult
@@ -321,6 +324,7 @@ Estimators
    spillover
    wooldridge_etwfe
    lpdid
+   changes_in_changes
    bacon
 
 Infrastructure

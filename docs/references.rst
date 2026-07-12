@@ -275,6 +275,13 @@ Local Projections DiD
 
   Origin of the local-projections method that LP-DiD adapts to the difference-in-differences setting.
 
+Changes-in-Changes / Distributional DiD
+---------------------------------------
+
+- **Athey, S., & Imbens, G. W. (2006).** "Identification and Inference in Nonlinear Difference-in-Differences Models." *Econometrica*, 74(2), 431-497. https://doi.org/10.1111/j.1468-0262.2006.00668.x
+
+  Primary source for the ``ChangesInChanges`` (alias ``CiC``) and ``QDiD`` estimators: nonlinear DiD recovering the treated group's full counterfactual outcome distribution and quantile treatment effects in the 2x2 design, with the quantile-DiD comparison estimator the paper formalizes alongside it. Point estimation matches the R ``qte`` package (v1.3.1, Callaway) exactly; bootstrap inference follows the same package's conventions. Paper review on file at ``docs/methodology/papers/athey-imbens-2006-review.md``; companion reviews for deferred extensions: ``callaway-li-oka-2018-review.md`` (panel QTT), ``melly-santangelo-2015-review.md`` (covariates), ``ciaccio-2024-review.md`` (staggered).
+
 Continuous Treatment DiD
 ------------------------
 

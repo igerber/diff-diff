@@ -972,6 +972,70 @@ print(results.event_study)   # per-horizon coefficients
 print(results.pooled)        # pooled pre (placebo) / post (ATT) rows
 ```
 
+### ChangesInChanges
+
+Changes-in-Changes (Athey & Imbens 2006) for the canonical 2x2 design with continuous outcomes. Recovers the treated group's full counterfactual outcome distribution `F_10(F_00^{-1}(F_01(y)))` and reports the ATT plus quantile treatment effects on a grid (default 0.05-0.95 by 0.05, matching R `qte`). The model is invariant to monotone transformations of the outcome and, with continuous data, places no testable restrictions. Point estimation matches `qte::CiC()` (v1.3.1) exactly: R type-1 (ceiling-order-statistic) quantiles - the paper's empirical-inverse convention - throughout, no smoothing anywhere. Inference is bootstrap-only in this release: panel mode resamples units (both periods together), repeated cross-section mode draws a pooled row resample; SEs are replicate SDs with symmetric normal-approximation CIs, plus a sup-t critical value for uniform bands at a FIXED 95% level (qte parity - does not follow `alpha`). Quantile effects outside the point-identified interior range keep their point estimates but report NaN inference with a warning. Deferred (documented in REGISTRY.md): covariates, discrete-outcome bounds (a ties warning fires on discrete-looking outcomes), analytical SEs, staggered designs, treatment-on-controls. Note: additive random group-time shocks BIAS CiC (not just its inference) and are undetectable in a 2x2 design (Athey-Imbens p. 476).
+
+```python
+ChangesInChanges(
+    quantiles: array-like | None = None,  # Quantile grid strictly inside (0,1); None -> 0.05..0.95 step 0.05 (qte default)
+    n_bootstrap: int = 200,               # Bootstrap replicates; 0 disables inference (NaN se/t/p/CI)
+    alpha: float = 0.05,                  # Pointwise CI level (uniform bands stay fixed at 95%)
+    panel: bool = False,                  # True: same units both periods (requires unit=); affects resampling only
+    seed: int | None = None,              # Bootstrap RNG seed (numpy default_rng)
+)
+```
+
+**fit() parameters:**
+
+```python
+cic.fit(
+    data: pd.DataFrame,
+    outcome: str = None,       # Continuous outcome column
+    treatment: str = None,     # Binary group indicator (1 = treated group in BOTH periods)
+    time: str = None,          # Binary post-period indicator
+    formula: str = None,       # Alternative: "y ~ treated * post" (covariate terms raise)
+    unit: str = None,          # Unit id; required when panel=True, ignored (documented) otherwise
+) -> ChangesInChangesResults
+```
+
+**Alias:** `CiC`
+
+**Usage:**
+
+```python
+from diff_diff import ChangesInChanges
+
+cic = ChangesInChanges(n_bootstrap=200, seed=42)
+results = cic.fit(data, outcome='y', treatment='treated', time='post')
+results.print_summary()
+print(results.quantile_effects)   # per-quantile QTE table
+print(results.uniform_bands())    # sup-t simultaneous bands (fixed 95%)
+```
+
+### QDiD
+
+Quantile Difference-in-Differences comparison estimator (Athey & Imbens 2006, Section 3.3) for the 2x2 design: `QTE(tau) = Q(y11,tau) - [Q(y10,tau) + Q(y01,tau) - Q(y00,tau)]` with R type-7 linear-interpolation quantiles, matching `qte::QDiD()` (v1.3.1) exactly - including its ATT formula (control-group quantile functions evaluated at treated pre-period own-sample ranks; population-equivalent to the paper's k^QDID transformation but a different finite-sample estimator, see the REGISTRY.md Note). The paper recommends ChangesInChanges over QDiD: QDiD's justifying model is not scale-invariant, forces identical unobservable distributions in all four cells, and places testable restrictions on the data (a warning fires when the implied counterfactual quantile function is non-monotone). QDiD's mean effect equals standard DiD's ATT in population. Constructor, fit signature, bootstrap machinery, and results container are identical to ChangesInChanges (no interior-range guard; `q_lower`/`q_upper` are NaN).
+
+```python
+QDiD(
+    quantiles: array-like | None = None,  # Same defaults as ChangesInChanges
+    n_bootstrap: int = 200,
+    alpha: float = 0.05,
+    panel: bool = False,
+    seed: int | None = None,
+)
+```
+
+**Usage:**
+
+```python
+from diff_diff import QDiD
+
+qdid = QDiD(n_bootstrap=200, seed=42)
+results = qdid.fit(data, outcome='y', treatment='treated', time='post')
+```
+
 ### TROP
 
 Triply Robust Panel estimator (Athey, Imbens, Qu & Viviano 2025). Combines nuclear norm regularization, distance-based unit weights, and time decay weights.
@@ -1601,6 +1665,10 @@ Per-horizon event-study results container for `HeterogeneousAdoptionDiD` with `a
 
 **Methods:** `summary()`, `print_summary()`, `to_dict()`, `to_dataframe()`
 
+### ChangesInChangesResults
+
+Results container shared by `ChangesInChanges` and `QDiD` (the `estimator` field is `"cic"` or `"qdid"`; `QDiDResults` is an alias of this class). Flat-native headline fields `att`, `se`, `t_stat`, `p_value`, `conf_int`; `quantile_effects` is a DataFrame with columns `quantile`, `qte`, `se`, `t_stat`, `p_value`, `conf_low`, `conf_high`. `q_lower`/`q_upper` bound the CiC point-identified interior quantile range (NaN for QDiD); `sup_t_crit` is the qte sup-t critical value backing `uniform_bands()` (fixed 95% level). Also carries `n_obs`, `cell_sizes`, `n_bootstrap`, `n_bootstrap_valid`, `panel`, `quantiles`, `alpha`. Methods: `summary()`, `print_summary()`, `to_dict()`, `to_dataframe(level="quantiles"|"att")`, `uniform_bands()`. All inference flows through `safe_inference`/`safe_inference_batch` (joint-NaN contract; `n_bootstrap=0` yields NaN inference everywhere).
+
 ### TROPResults
 
 | Attribute | Type | Description |
@@ -2160,7 +2228,7 @@ sd_female, data_female = sd.subpopulation(data, mask=lambda df: df['sex'] == 'F'
 
 **Key features:**
 - Taylor Series Linearization (TSL) variance with strata + PSU + FPC
-- Replicate weight variance: BRR, Fay's BRR, JK1, JKn, SDR (13 of 20 estimators, including dCDH)
+- Replicate weight variance: BRR, Fay's BRR, JK1, JKn, SDR (13 of 22 estimators, including dCDH)
 - Survey-aware bootstrap: multiplier at PSU (Hall-Mammen wild; dCDH, staggered) or Rao-Wu rescaled (SunAbraham, SyntheticDiD, TROP). SyntheticDiD bootstrap composes Rao-Wu rescaled per-draw weights with the weighted Frank-Wolfe variant of `_sc_weight_fw` (PR #355): each draw solves `min ||A·diag(rw)·ω - b||² + ζ²·Σ rw_i ω_i²` and composes `ω_eff = rw·ω/Σ(rw·ω)` for the SDID estimator. Pweight-only fits use constant `rw = w_control`; full designs use Rao-Wu. SDID's placebo (stratified permutation + weighted FW) and jackknife (PSU-level LOO with stratum aggregation, Rust & Rao 1996) paths also support pweight-only and full strata/PSU/FPC designs
 - DEFF diagnostics, subpopulation analysis, weight trimming (`trim_weights`)
 - Repeated cross-sections: `CallawaySantAnna(panel=False)`

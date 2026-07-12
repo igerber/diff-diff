@@ -18,6 +18,7 @@ required_packages <- c(
   "YatchewTest",   # Yatchew (1997) linearity test (HAD yatchew R-parity)
   "nprobust",      # Calonico-Cattaneo-Farrell local-linear (DIDHAD dependency)
   "Synth",         # Abadie-Diamond-Hainmueller (2010) synthetic control (SyntheticControl R-parity; ships data(basque))
+  "qte",           # Callaway qte package (Athey-Imbens CiC + QDiD R-parity; ships data(lalonde))
 
   # Utilities
   "jsonlite",      # JSON output for Python interop
@@ -71,7 +72,9 @@ install_pinned_version <- function(pkg, version) {
 pinned_versions <- list(
   DIDHAD = "2.0.0",
   YatchewTest = "1.1.1",
-  nprobust = "0.5.0"
+  nprobust = "0.5.0",
+  # CiC/QDiD R-parity (generate_qte_golden.R + tests/test_changes_in_changes_parity.py)
+  qte = "1.3.1"
 )
 
 install_github_if_missing <- function(pkg, repo) {

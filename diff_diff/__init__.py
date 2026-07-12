@@ -47,6 +47,14 @@ from diff_diff.chaisemartin_dhaultfoeuille import (
     chaisemartin_dhaultfoeuille,
     twowayfeweights,
 )
+from diff_diff.changes_in_changes import (
+    ChangesInChanges,
+    QDiD,
+)
+from diff_diff.changes_in_changes_results import (
+    ChangesInChangesResults,
+    QDiDResults,
+)
 from diff_diff.chaisemartin_dhaultfoeuille_results import (
     ChaisemartinDHaultfoeuilleResults,
     DCDHBootstrapResults,
@@ -299,6 +307,7 @@ EDiD = EfficientDiD
 ETWFE = WooldridgeDiD
 DCDH = ChaisemartinDHaultfoeuille
 HAD = HeterogeneousAdoptionDiD
+CiC = ChangesInChanges
 
 __version__ = "3.7.0"
 __all__ = [
@@ -309,6 +318,8 @@ __all__ = [
     "SyntheticDiD",
     "CallawaySantAnna",
     "ChaisemartinDHaultfoeuille",
+    "ChangesInChanges",
+    "QDiD",
     "ContinuousDiD",
     "SunAbraham",
     "ImputationDiD",
@@ -326,6 +337,7 @@ __all__ = [
     "CS",
     "CDiD",
     "DCDH",
+    "CiC",
     "SA",
     "BJS",
     "Gardner",
@@ -346,6 +358,8 @@ __all__ = [
     "CallawaySantAnnaResults",
     "CSBootstrapResults",
     "GroupTimeEffect",
+    "ChangesInChangesResults",
+    "QDiDResults",
     "ContinuousDiDResults",
     "DoseResponseCurve",
     "SunAbrahamResults",

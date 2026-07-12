@@ -17,6 +17,7 @@ def test_alias_identity():
     assert diff_diff.DDD is diff_diff.TripleDifference
     assert diff_diff.Stacked is diff_diff.StackedDiD
     assert diff_diff.Bacon is diff_diff.BaconDecomposition
+    assert diff_diff.CiC is diff_diff.ChangesInChanges
 
 
 def test_aliases_in_all():
@@ -34,6 +35,7 @@ def test_aliases_in_all():
         "DDD",
         "Stacked",
         "Bacon",
+        "CiC",
     ]
     for alias in aliases:
         assert alias in diff_diff.__all__, f"{alias} missing from __all__"

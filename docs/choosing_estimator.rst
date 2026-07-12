@@ -39,6 +39,7 @@ Start here and follow the questions:
 4. **Do you have panel data?** (Multiple observations per unit over time)
 
    - **No** → Use :class:`~diff_diff.DifferenceInDifferences` (basic 2x2)
+   - **No, and you care about effect heterogeneity across the outcome distribution** → Use :class:`~diff_diff.ChangesInChanges` (2x2 quantile treatment effects, invariant to monotone outcome rescaling; works with panel data too - ``panel=True`` changes only the bootstrap). :class:`~diff_diff.QDiD` is the quantile-DiD comparison estimator; Athey & Imbens (2006) recommend CiC over it
    - **Yes** → Go to question 5
 
 5. **Do you need period-specific effects?** (Event study design)
@@ -133,6 +134,14 @@ Quick Reference
      - Fast staggered (absorbing) event studies without negative weighting
      - Parallel trends, no anticipation; absorbing treatment
      - Event-study path + pooled pre/post ATT
+   * - ``ChangesInChanges``
+     - 2x2 distributional effects (which quantiles moved, not just the mean)
+     - h(u, t) monotone in a scalar unobservable; U time-invariant within groups
+     - ATT + quantile treatment effects (bootstrap inference)
+   * - ``QDiD``
+     - 2x2 quantile-DiD comparison alongside ChangesInChanges
+     - Additive quantile model (scale-dependent, testable restrictions)
+     - ATT + quantile treatment effects (bootstrap inference)
    * - ``BaconDecomposition``
      - TWFE diagnostic
      - (diagnostic tool)
@@ -891,6 +900,11 @@ estimation. The depth of support varies by estimator and variance method:
    * - ``LPDiD``
      - pweight only
      - Full (Binder TSL)
+     - --
+     - --
+   * - ``ChangesInChanges`` / ``QDiD``
+     - --
+     - --
      - --
      - --
    * - ``SpilloverDiD``

@@ -434,6 +434,8 @@ Feature Comparison Table
    Stacked DiD requires manual implementation or the ``stackedev`` package;
    Continuous DiD is available via the ``did`` package continuous extension;
    Triple Difference requires manual implementation in R.
+   Changes-in-Changes and QDiD are available via the ``qte`` package
+   (``qte::CiC()`` / ``qte::QDiD()``, the diff-diff parity target).
    TROP and Efficient DiD have no direct R equivalents.
    HeterogeneousAdoptionDiD (dCDH 2026) overlaps with the dedicated R
    package ``DIDHAD`` (de Chaisemartin et al., 2025), which covers the
