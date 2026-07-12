@@ -263,7 +263,7 @@ class TestSolveOLS:
         assert np.all(np.isfinite(vcov_kept)), "VCoV for kept coefficients should be finite"
 
         # Residuals should be finite (computed using only identified coefficients)
-        assert np.all(np.isfinite(resid)), f"Residuals contain non-finite values"
+        assert np.all(np.isfinite(resid)), "Residuals contain non-finite values"
 
     def test_rank_deficient_error_mode(self):
         """Test that rank_deficient_action='error' raises ValueError."""
@@ -319,8 +319,8 @@ class TestSolveOLS:
         When skip_rank_check=True, the function should skip QR decomposition
         and go directly to SVD solving, even in Python backend.
         """
-        import warnings
         import os
+        import warnings
 
         np.random.seed(42)
         n = 100
@@ -408,7 +408,7 @@ class TestSolveOLS:
 
         # If no rank deficiency, all coefficients should be finite
         if len(rank_warnings) == 0:
-            assert np.all(np.isfinite(coef)), f"Full-rank matrix: coefficients should be finite"
+            assert np.all(np.isfinite(coef)), "Full-rank matrix: coefficients should be finite"
             assert np.all(np.abs(coef) < 1e6), f"Coefficients are unreasonably large: {coef}"
             # The treatment effect coefficient (last one) should be close to true effect
             assert (
@@ -417,7 +417,7 @@ class TestSolveOLS:
         else:
             # If rank-deficient, check that identified coefficients are valid
             finite_coef = coef[~np.isnan(coef)]
-            assert np.all(np.isfinite(finite_coef)), f"Identified coefficients should be finite"
+            assert np.all(np.isfinite(finite_coef)), "Identified coefficients should be finite"
             # If treatment effect is identified, check it
             if not np.isnan(coef[-1]):
                 assert (
@@ -489,7 +489,6 @@ class TestComputeRobustVcov:
         np.random.seed(42)
         n = 200
         X = np.column_stack([np.ones(n), np.random.randn(n)])
-        beta = np.array([1.0, 2.0])
         residuals = np.random.randn(n)
         return X, residuals
 
@@ -573,8 +572,8 @@ class TestComputeRobustVcov:
 
     def test_numerical_instability_fallback_warns(self, ols_data):
         """Test that numerical instability in Rust backend triggers warning and fallback."""
-        from unittest.mock import patch
         import warnings
+        from unittest.mock import patch
 
         from diff_diff import HAS_RUST_BACKEND
 
@@ -1192,6 +1191,7 @@ class TestLinearRegression:
     def test_rank_deficient_inference_uses_correct_df(self):
         """Test that p-values and CIs use the correct df for rank-deficient matrices."""
         import warnings
+
         from scipy import stats
 
         np.random.seed(42)
@@ -1528,7 +1528,6 @@ class TestNumericalStability:
     def test_solve_ols_rank_zero_returns_nan_not_indexerror(self):
         """A design that collapses to rank 0 returns all-NaN coefficients with a
         warning, not a cryptic IndexError (empty float index array)."""
-        import warnings
 
         n = 50
         X = np.zeros((n, 3))  # rank 0
@@ -2296,9 +2295,9 @@ class TestCheckPropensityDiagnostics:
 
     def test_no_warning_normal_scores(self):
         """No warning when all scores are within bounds."""
-        from diff_diff.linalg import _check_propensity_diagnostics
-
         import warnings
+
+        from diff_diff.linalg import _check_propensity_diagnostics
 
         pscore = np.array([0.3, 0.5, 0.7, 0.4, 0.6])
         with warnings.catch_warnings(record=True) as w:

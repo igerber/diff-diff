@@ -113,7 +113,9 @@ def _should_skip(code: str) -> Optional[str]:
         if re.search(pat, code, re.MULTILINE):
             return f"matches skip pattern: {pat}"
     # Skip if no actual Python statements (just comments / blank)
-    lines = [l.strip() for l in code.splitlines() if l.strip() and not l.strip().startswith("#")]
+    lines = [
+        ln.strip() for ln in code.splitlines() if ln.strip() and not ln.strip().startswith("#")
+    ]
     if not lines:
         return "no executable statements"
     return None
@@ -338,6 +340,7 @@ def _build_namespace() -> dict:
 def _restore_datasets_module():
     """Restore diff_diff.datasets after each test to prevent mock leaking."""
     import sys as _sys
+
     import diff_diff as _dd
 
     orig_mod = _sys.modules.get("diff_diff.datasets")

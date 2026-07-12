@@ -1604,12 +1604,8 @@ class TestRankGuardedAnalyticalSE:
         assert np.isfinite(with_const.overall_se)
         assert with_const.overall_se < 1.0
         # Dropping the redundant covariate is equivalent to never adding it.
-        np.testing.assert_allclose(
-            with_const.overall_se, drop_one.overall_se, rtol=1e-9
-        )
-        np.testing.assert_allclose(
-            with_const.overall_att, drop_one.overall_att, rtol=1e-9
-        )
+        np.testing.assert_allclose(with_const.overall_se, drop_one.overall_se, rtol=1e-9)
+        np.testing.assert_allclose(with_const.overall_att, drop_one.overall_att, rtol=1e-9)
 
     @pytest.mark.parametrize("method", ["reg", "ipw", "dr"])
     def test_constant_covariate_emits_single_rank_guard_warning(self, method):
@@ -1623,9 +1619,7 @@ class TestRankGuardedAnalyticalSE:
             CallawaySantAnna(estimation_method=method).fit(
                 data, "outcome", "unit", "time", "first_treat", covariates=["x1", "xc"]
             )
-        rank_guard = [
-            w for w in caught if "rank-guarded inverse" in str(w.message)
-        ]
+        rank_guard = [w for w in caught if "rank-guarded inverse" in str(w.message)]
         # The per-fit aggregate warning fires exactly once, not per cell.
         assert len(rank_guard) == 1
 
@@ -1669,8 +1663,8 @@ class TestRankGuardedAnalyticalSE:
         # test_reg_constant_only_covariate_matches_no_covariate below.
         # The point estimate does NOT depend on the bread, so it stays
         # finite (NaN inference on an estimable cell, not _nan_gt_entry).
-        from tests.conftest import assert_nan_inference
         import diff_diff.staggered as staggered_mod
+        from tests.conftest import assert_nan_inference
 
         def _all_nan_inv(A, tracker=None):
             k = A.shape[0]
@@ -1710,9 +1704,7 @@ class TestRankGuardedAnalyticalSE:
                     + (1.5 if (ft > 0 and t >= ft) else 0.0)
                     + rng.normal(0, 0.5)
                 )
-                rows.append(
-                    {"unit": unit, "time": t, "first_treat": ft, "outcome": y, "x1": x1}
-                )
+                rows.append({"unit": unit, "time": t, "first_treat": ft, "outcome": y, "x1": x1})
                 unit += 1
         data = pd.DataFrame(rows)
         data_const = data.copy()
@@ -1723,15 +1715,16 @@ class TestRankGuardedAnalyticalSE:
                 data, "outcome", "unit", "time", "first_treat", covariates=["x1"]
             )
             with_const = CallawaySantAnna(estimation_method=method, panel=False).fit(
-                data_const, "outcome", "unit", "time", "first_treat",
+                data_const,
+                "outcome",
+                "unit",
+                "time",
+                "first_treat",
                 covariates=["x1", "xc"],
             )
         assert np.isfinite(with_const.overall_se)
         assert with_const.overall_se < 1.0
-        np.testing.assert_allclose(
-            with_const.overall_se, drop_one.overall_se, rtol=1e-9
-        )
-
+        np.testing.assert_allclose(with_const.overall_se, drop_one.overall_se, rtol=1e-9)
 
     @pytest.mark.parametrize("method", ["reg", "dr"])
     def test_control_cell_aliasing_close_to_drop_one(self, method):
@@ -1754,13 +1747,15 @@ class TestRankGuardedAnalyticalSE:
                 d, "outcome", "unit", "time", "first_treat", covariates=["x1"]
             )
             with_deg = CallawaySantAnna(estimation_method=method).fit(
-                d, "outcome", "unit", "time", "first_treat",
+                d,
+                "outcome",
+                "unit",
+                "time",
+                "first_treat",
                 covariates=["x1", "x2_deg"],
             )
         assert np.isfinite(with_deg.overall_se) and with_deg.overall_se > 0
-        np.testing.assert_allclose(
-            with_deg.overall_se, drop_one.overall_se, rtol=5e-2
-        )
+        np.testing.assert_allclose(with_deg.overall_se, drop_one.overall_se, rtol=5e-2)
 
     @pytest.mark.parametrize("method", ["reg", "ipw", "dr"])
     def test_survey_weighted_constant_covariate_finite_se(self, method):
@@ -1780,18 +1775,26 @@ class TestRankGuardedAnalyticalSE:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             drop_one = CallawaySantAnna(estimation_method=method).fit(
-                data, "outcome", "unit", "time", "first_treat",
-                covariates=["x1"], survey_design=sd,
+                data,
+                "outcome",
+                "unit",
+                "time",
+                "first_treat",
+                covariates=["x1"],
+                survey_design=sd,
             )
             with_const = CallawaySantAnna(estimation_method=method).fit(
-                data_const, "outcome", "unit", "time", "first_treat",
-                covariates=["x1", "xc"], survey_design=sd,
+                data_const,
+                "outcome",
+                "unit",
+                "time",
+                "first_treat",
+                covariates=["x1", "xc"],
+                survey_design=sd,
             )
         assert np.isfinite(with_const.overall_se)
         assert with_const.overall_se < 1.0
-        np.testing.assert_allclose(
-            with_const.overall_se, drop_one.overall_se, rtol=1e-9
-        )
+        np.testing.assert_allclose(with_const.overall_se, drop_one.overall_se, rtol=1e-9)
 
     def test_aggregated_se_wif_contract(self, monkeypatch):
         # Locks the _compute_aggregated_se_with_wif arity + fail-closed contract
@@ -1835,10 +1838,12 @@ class TestRankGuardedAnalyticalSE:
         data = generate_staggered_data_with_covariates(seed=789)
         data["x2c"] = 2.0 * data["x1"]  # exactly collinear with x1
         with pytest.raises(ValueError, match="(?i)rank-deficient"):
-            CallawaySantAnna(
-                estimation_method=method, rank_deficient_action="error"
-            ).fit(
-                data, "outcome", "unit", "time", "first_treat",
+            CallawaySantAnna(estimation_method=method, rank_deficient_action="error").fit(
+                data,
+                "outcome",
+                "unit",
+                "time",
+                "first_treat",
                 covariates=["x1", "x2c"],
             )
 
@@ -1875,9 +1880,7 @@ class TestRankGuardedAnalyticalSE:
                 d, "outcome", "unit", "time", "first_treat", covariates=["xbig", "x1"]
             )
         # Well-scaled exact duplicate == dropping it (clean column-drop).
-        np.testing.assert_allclose(
-            well.overall_se, drop_one.overall_se, rtol=1e-9
-        )
+        np.testing.assert_allclose(well.overall_se, drop_one.overall_se, rtol=1e-9)
         # Mixed-scale exact duplicate: finite for every method.
         assert np.isfinite(big_ab.overall_se) and big_ab.overall_se > 0
         assert np.isfinite(big_ba.overall_se) and big_ba.overall_se > 0
@@ -1885,9 +1888,7 @@ class TestRankGuardedAnalyticalSE:
         # rank-guarded inverse, and reg via the equilibrated point-estimate OR
         # solve (post OR scale-equilibration change) — mixed-scale exact-duplicate
         # columns become identical after equilibration, so the SE is order-invariant.
-        np.testing.assert_allclose(
-            big_ab.overall_se, big_ba.overall_se, rtol=1e-9
-        )
+        np.testing.assert_allclose(big_ab.overall_se, big_ba.overall_se, rtol=1e-9)
 
     @pytest.mark.parametrize("method", ["reg", "ipw", "dr"])
     def test_exact_duplicate_covariate_survey_weighted(self, method):
@@ -1911,20 +1912,40 @@ class TestRankGuardedAnalyticalSE:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             drop_one = CallawaySantAnna(estimation_method=method).fit(
-                d, "outcome", "unit", "time", "first_treat",
-                covariates=["x1"], survey_design=sd,
+                d,
+                "outcome",
+                "unit",
+                "time",
+                "first_treat",
+                covariates=["x1"],
+                survey_design=sd,
             )
             well = CallawaySantAnna(estimation_method=method).fit(
-                d, "outcome", "unit", "time", "first_treat",
-                covariates=["x1", "xdup"], survey_design=sd,
+                d,
+                "outcome",
+                "unit",
+                "time",
+                "first_treat",
+                covariates=["x1", "xdup"],
+                survey_design=sd,
             )
             big_ab = CallawaySantAnna(estimation_method=method).fit(
-                d, "outcome", "unit", "time", "first_treat",
-                covariates=["x1", "xbig"], survey_design=sd,
+                d,
+                "outcome",
+                "unit",
+                "time",
+                "first_treat",
+                covariates=["x1", "xbig"],
+                survey_design=sd,
             )
             big_ba = CallawaySantAnna(estimation_method=method).fit(
-                d, "outcome", "unit", "time", "first_treat",
-                covariates=["xbig", "x1"], survey_design=sd,
+                d,
+                "outcome",
+                "unit",
+                "time",
+                "first_treat",
+                covariates=["xbig", "x1"],
+                survey_design=sd,
             )
         # Well-scaled exact duplicate == dropping it, under survey weighting.
         np.testing.assert_allclose(well.overall_se, drop_one.overall_se, rtol=1e-7)
@@ -1961,9 +1982,7 @@ class TestRegIpwIFBehavior:
             monkeypatch.setattr(staggered_mod, "solve_logit", _failing_logit)
             fallback = CallawaySantAnna(
                 estimation_method="ipw", pscore_fallback="unconditional"
-            ).fit(
-                data, "outcome", "unit", "time", "first_treat", covariates=["x1", "x2"]
-            )
+            ).fit(data, "outcome", "unit", "time", "first_treat", covariates=["x1", "x2"])
         assert set(fallback.group_time_effects) == set(no_cov.group_time_effects)
         for key, cell in fallback.group_time_effects.items():
             ref = no_cov.group_time_effects[key]
@@ -2013,20 +2032,25 @@ class TestRegIpwIFBehavior:
             x = rng.normal(size=k)
             base = rng.normal()
             for t in (1, 2):
-                y = base + 0.4 * t + (
-                    1.0 if (ft == 2 and t >= 2) else 0.0
-                ) + rng.normal(0, 0.3)
+                y = base + 0.4 * t + (1.0 if (ft == 2 and t >= 2) else 0.0) + rng.normal(0, 0.3)
                 rows.append(
-                    {"unit": u, "time": t, "first_treat": ft, "outcome": y,
-                     **{f"x{j}": x[j] for j in range(k)}}
+                    {
+                        "unit": u,
+                        "time": t,
+                        "first_treat": ft,
+                        "outcome": y,
+                        **{f"x{j}": x[j] for j in range(k)},
+                    }
                 )
         data = pd.DataFrame(rows)
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            res = CallawaySantAnna(
-                estimation_method="reg", rank_deficient_action="silent"
-            ).fit(
-                data, "outcome", "unit", "time", "first_treat",
+            res = CallawaySantAnna(estimation_method="reg", rank_deficient_action="silent").fit(
+                data,
+                "outcome",
+                "unit",
+                "time",
+                "first_treat",
                 covariates=[f"x{j}" for j in range(k)],
             )
         cell = res.group_time_effects[(2, 2)]
@@ -2044,7 +2068,11 @@ class TestRegIpwIFBehavior:
             res = CallawaySantAnna(
                 estimation_method="reg", base_period="universal", anticipation=1
             ).fit(
-                data, "outcome", "unit", "time", "first_treat",
+                data,
+                "outcome",
+                "unit",
+                "time",
+                "first_treat",
                 covariates=["x1", "x2"],
             )
         assert len(res.group_time_effects) > 0
@@ -2076,12 +2104,8 @@ class TestRegIpwIFBehavior:
                 data, "outcome", "unit", "time", "first_treat", covariates=["xc"]
             )
         assert np.isfinite(const_only.overall_se)
-        np.testing.assert_allclose(
-            const_only.overall_att, no_cov.overall_att, rtol=1e-12
-        )
-        np.testing.assert_allclose(
-            const_only.overall_se, no_cov.overall_se, rtol=1e-9
-        )
+        np.testing.assert_allclose(const_only.overall_att, no_cov.overall_att, rtol=1e-12)
+        np.testing.assert_allclose(const_only.overall_se, no_cov.overall_se, rtol=1e-9)
         for key, cell in const_only.group_time_effects.items():
             ref = no_cov.group_time_effects[key]
             np.testing.assert_allclose(cell["effect"], ref["effect"], rtol=1e-12)
@@ -2107,21 +2131,25 @@ class TestRegIpwIFBehavior:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             no_cov = CallawaySantAnna(estimation_method="reg").fit(
-                data, "outcome", "unit", "time", "first_treat",
+                data,
+                "outcome",
+                "unit",
+                "time",
+                "first_treat",
                 survey_design=SurveyDesign(weights="weight"),
             )
             const_only = CallawaySantAnna(estimation_method="reg").fit(
-                data, "outcome", "unit", "time", "first_treat",
+                data,
+                "outcome",
+                "unit",
+                "time",
+                "first_treat",
                 covariates=["xc"],
                 survey_design=SurveyDesign(weights="weight"),
             )
         assert np.isfinite(const_only.overall_se)
-        np.testing.assert_allclose(
-            const_only.overall_att, no_cov.overall_att, rtol=1e-12
-        )
-        np.testing.assert_allclose(
-            const_only.overall_se, no_cov.overall_se, rtol=1e-9
-        )
+        np.testing.assert_allclose(const_only.overall_att, no_cov.overall_att, rtol=1e-12)
+        np.testing.assert_allclose(const_only.overall_se, no_cov.overall_se, rtol=1e-9)
         for key, cell in const_only.group_time_effects.items():
             ref = no_cov.group_time_effects[key]
             np.testing.assert_allclose(cell["se"], ref["se"], rtol=1e-9)
@@ -2138,11 +2166,19 @@ class TestRegIpwIFBehavior:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             unweighted = CallawaySantAnna(estimation_method="reg").fit(
-                data, "outcome", "unit", "time", "first_treat",
+                data,
+                "outcome",
+                "unit",
+                "time",
+                "first_treat",
                 covariates=["x1", "x2"],
             )
             uniform = CallawaySantAnna(estimation_method="reg").fit(
-                data, "outcome", "unit", "time", "first_treat",
+                data,
+                "outcome",
+                "unit",
+                "time",
+                "first_treat",
                 covariates=["x1", "x2"],
                 survey_design=SurveyDesign(weights="w_ones"),
             )
@@ -3589,7 +3625,7 @@ class TestCallawaySantAnnaPreTreatment:
             # Should have warning about no post-treatment effects
             warning_messages = [str(warning.message) for warning in w]
             has_warning = any("No post-treatment effects" in msg for msg in warning_messages)
-            assert has_warning, f"Expected warning about no post-treatment effects"
+            assert has_warning, "Expected warning about no post-treatment effects"
 
         # Verify overall ATT is NaN
         assert np.isnan(results.overall_att), "overall_att should be NaN"
@@ -3785,12 +3821,9 @@ class TestCallawaySantAnnaAnticipation:
 
             # There should be effects at t = g - anticipation = g - 2
             # (if the data has that period)
-            min_period = data["time"].min()
-            if g - 2 >= min_period:
-                # Period g-2 should be computed as an ATT(g,t)
-                has_antic_period = any(t == g - 2 for _, t in gt_for_group)
-                # Note: may not always have this period depending on base_period
-                # but post-treatment periods (t >= g - anticipation) should exist
+            # Note: the anticipation period t = g - 2 may or may not be
+            # present depending on base_period, so it is not asserted here;
+            # post-treatment periods (t >= g - anticipation) should exist.
 
             # Verify post-treatment periods t >= g are included
             post_treatment = [t for (gg, t) in gt_for_group if t >= g]
@@ -4501,7 +4534,7 @@ class TestIRLSPropensityScore:
 
         import warnings
 
-        with warnings.catch_warnings(record=True) as w:
+        with warnings.catch_warnings(record=True):
             warnings.simplefilter("always")
             results = cs.fit(
                 data,
@@ -4906,7 +4939,6 @@ class TestSilentWarningAudit:
 
     def test_item8_inf_to_zero_warning_in_fit(self):
         """Item 8: Warn when first_treat=inf is recoded to 0 in fit()."""
-        import warnings
 
         data = generate_staggered_data(seed=42)
         # Set some units to inf (never-treated encoding)
@@ -4927,7 +4959,6 @@ class TestSilentWarningAudit:
 
     def test_item8_inf_to_zero_warning_in_diagnose_propensity(self):
         """Item 8: Warn when first_treat=inf is recoded in diagnose_propensity()."""
-        import warnings
 
         data = generate_staggered_data_with_covariates(seed=42)
         # Cast to float first for pandas >=2.0 compatibility
@@ -5150,8 +5181,7 @@ class TestCallawaySantAnnaSafeInvFallback:
         fallback_warnings = [
             w
             for w in caught
-            if "analytical SE paths" in str(w.message)
-            and "rank-guarded inverse" in str(w.message)
+            if "analytical SE paths" in str(w.message) and "rank-guarded inverse" in str(w.message)
         ]
         assert len(fallback_warnings) == 1, (
             f"Expected exactly one aggregate _safe_inv rank-guard warning; "
@@ -6091,9 +6121,7 @@ class TestCallawaySantAnnaClusterSafetyGates:
 
         # Grouped SEs must differ under cluster vs unit-level (at least
         # one group)
-        common_groups = set(res_unit.group_effects.keys()) & set(
-            res_cluster.group_effects.keys()
-        )
+        common_groups = set(res_unit.group_effects.keys()) & set(res_cluster.group_effects.keys())
         assert common_groups, "expected overlapping groups"
 
         diffs = []
@@ -6110,16 +6138,12 @@ class TestCallawaySantAnnaClusterSafetyGates:
         )
 
         # Bare cluster vs explicit SurveyDesign must agree on grouped surface
-        common = set(res_cluster.group_effects.keys()) & set(
-            res_explicit.group_effects.keys()
-        )
+        common = set(res_cluster.group_effects.keys()) & set(res_explicit.group_effects.keys())
         for g in common:
             se_bare = res_cluster.group_effects[g]["se"]
             se_explicit = res_explicit.group_effects[g]["se"]
             if np.isfinite(se_bare) and np.isfinite(se_explicit):
-                assert se_bare == pytest.approx(
-                    se_explicit, rel=1e-10, abs=1e-12
-                ), (
+                assert se_bare == pytest.approx(se_explicit, rel=1e-10, abs=1e-12), (
                     f"Grouped SE divergence at g={g}: bare cluster=state "
                     f"({se_bare}) vs explicit SurveyDesign(psu=state) "
                     f"({se_explicit})."

@@ -7,12 +7,12 @@ auto-regularization, sparsification, and correct bootstrap/placebo SE.
 """
 
 import warnings
+from typing import Any, Dict
 from unittest.mock import patch
 
 import numpy as np
-import pytest
-
 import pandas as pd
+import pytest
 
 from diff_diff.synthetic_did import SyntheticDiD
 from diff_diff.utils import (
@@ -30,14 +30,12 @@ from diff_diff.utils import (
     safe_inference,
 )
 
-
 # =============================================================================
 # Test Helpers
 # =============================================================================
 
 
-def _make_panel(n_control=20, n_treated=3, n_pre=5, n_post=3,
-                att=5.0, seed=42):
+def _make_panel(n_control=20, n_treated=3, n_pre=5, n_post=3, att=5.0, seed=42):
     """Create a simple panel dataset for testing."""
     rng = np.random.default_rng(seed)
     data = []
@@ -48,13 +46,16 @@ def _make_panel(n_control=20, n_treated=3, n_pre=5, n_post=3,
             y = 10.0 + unit_fe + t * 0.3 + rng.normal(0, 0.5)
             if is_treated and t >= n_pre:
                 y += att
-            data.append({
-                "unit": unit,
-                "period": t,
-                "treated": int(is_treated),
-                "outcome": y,
-            })
+            data.append(
+                {
+                    "unit": unit,
+                    "period": t,
+                    "treated": int(is_treated),
+                    "outcome": y,
+                }
+            )
     import pandas as pd
+
     return pd.DataFrame(data)
 
 
@@ -72,9 +73,7 @@ class TestNoiseLevel:
         # Unit 0: [1, 3, 6] -> diffs: [2, 3]
         # Unit 1: [2, 2, 5] -> diffs: [0, 3]
         # All diffs: [2, 3, 0, 3], sd(ddof=1) = std([2,3,0,3], ddof=1)
-        Y = np.array([[1.0, 2.0],
-                       [3.0, 2.0],
-                       [6.0, 5.0]])
+        Y = np.array([[1.0, 2.0], [3.0, 2.0], [6.0, 5.0]])
         expected = np.std([2.0, 3.0, 0.0, 3.0], ddof=1)
         result = _compute_noise_level(Y)
         assert abs(result - expected) < 1e-10
@@ -86,8 +85,7 @@ class TestNoiseLevel:
 
     def test_two_periods(self):
         """Two periods -> one diff per unit."""
-        Y = np.array([[1.0, 4.0],
-                       [3.0, 7.0]])
+        Y = np.array([[1.0, 4.0], [3.0, 7.0]])
         # Diffs: [2.0, 3.0], sd(ddof=1)
         expected = np.std([2.0, 3.0], ddof=1)
         assert abs(_compute_noise_level(Y) - expected) < 1e-10
@@ -99,9 +97,7 @@ class TestRegularization:
     def test_formula(self):
         """Check zeta_omega = (N1*T1)^0.25 * sigma, zeta_lambda = 1e-6 * sigma."""
         # Use a simple Y_pre_control where sigma is easy to compute
-        Y = np.array([[1.0, 2.0],
-                       [3.0, 4.0],
-                       [6.0, 7.0]])
+        Y = np.array([[1.0, 2.0], [3.0, 4.0], [6.0, 7.0]])
         sigma = _compute_noise_level(Y)
         n_treated, n_post = 2, 3
 
@@ -115,9 +111,7 @@ class TestRegularization:
 
     def test_zero_noise(self):
         """Constant outcomes -> zero noise -> zero regularization."""
-        Y = np.array([[5.0, 5.0],
-                       [5.0, 5.0],
-                       [5.0, 5.0]])
+        Y = np.array([[5.0, 5.0], [5.0, 5.0], [5.0, 5.0]])
         zo, zl = _compute_regularization(Y, 2, 3)
         assert zo == 0.0
         assert zl == 0.0
@@ -142,7 +136,7 @@ class TestFrankWolfe:
         N, T0 = 10, 5
         A = rng.standard_normal((N, T0))
         b = rng.standard_normal(N)
-        eta = N * 0.1 ** 2  # eta = N * zeta^2 matching R's formulation
+        eta = N * 0.1**2  # eta = N * zeta^2 matching R's formulation
 
         x = np.ones(T0) / T0
 
@@ -309,7 +303,7 @@ class TestSumNormalize:
         """Zero-sum vector -> uniform weights."""
         v = np.array([0.0, 0.0, 0.0])
         result = _sum_normalize(v)
-        np.testing.assert_allclose(result, [1.0/3, 1.0/3, 1.0/3])
+        np.testing.assert_allclose(result, [1.0 / 3, 1.0 / 3, 1.0 / 3])
 
 
 # =============================================================================
@@ -414,13 +408,15 @@ class TestATTFullPipeline:
 
     def test_estimation_produces_reasonable_att(self, ci_params):
         """Full estimation on canonical data should produce reasonable ATT."""
-        df = _make_panel(n_control=20, n_treated=3, n_pre=6, n_post=3,
-                         att=5.0, seed=42)
+        df = _make_panel(n_control=20, n_treated=3, n_pre=6, n_post=3, att=5.0, seed=42)
         n_boot = ci_params.bootstrap(50)
         sdid = SyntheticDiD(n_bootstrap=n_boot, seed=42, variance_method="placebo")
         results = sdid.fit(
-            df, outcome="outcome", treatment="treated",
-            unit="unit", time="period",
+            df,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="period",
             post_periods=list(range(6, 9)),
         )
 
@@ -433,8 +429,11 @@ class TestATTFullPipeline:
         df = _make_panel(seed=42)
         sdid = SyntheticDiD(variance_method="placebo", seed=42)
         results = sdid.fit(
-            df, outcome="outcome", treatment="treated",
-            unit="unit", time="period",
+            df,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="period",
             post_periods=list(range(5, 8)),
         )
 
@@ -448,13 +447,13 @@ class TestATTFullPipeline:
     def test_user_override_regularization(self):
         """User-specified zeta_omega/zeta_lambda should be used instead of auto."""
         df = _make_panel(seed=42)
-        sdid = SyntheticDiD(
-            zeta_omega=99.0, zeta_lambda=0.5,
-            variance_method="placebo", seed=42
-        )
+        sdid = SyntheticDiD(zeta_omega=99.0, zeta_lambda=0.5, variance_method="placebo", seed=42)
         results = sdid.fit(
-            df, outcome="outcome", treatment="treated",
-            unit="unit", time="period",
+            df,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="period",
             post_periods=list(range(5, 8)),
         )
 
@@ -473,12 +472,13 @@ class TestPlaceboSE:
     def test_placebo_se_formula(self):
         """SE should be sqrt((r-1)/r) * sd(estimates, ddof=1)."""
         df = _make_panel(n_control=15, n_treated=2, seed=42)
-        sdid = SyntheticDiD(
-            variance_method="placebo", n_bootstrap=100, seed=42
-        )
+        sdid = SyntheticDiD(variance_method="placebo", n_bootstrap=100, seed=42)
         results = sdid.fit(
-            df, outcome="outcome", treatment="treated",
-            unit="unit", time="period",
+            df,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="period",
             post_periods=list(range(5, 8)),
         )
 
@@ -510,12 +510,13 @@ class TestBootstrapSE:
         """Bootstrap SE should be positive."""
         df = _make_panel(n_control=20, n_treated=3, seed=42)
         n_boot = ci_params.bootstrap(50)
-        sdid = SyntheticDiD(
-            variance_method="bootstrap", n_bootstrap=n_boot, seed=42
-        )
+        sdid = SyntheticDiD(variance_method="bootstrap", n_bootstrap=n_boot, seed=42)
         results = sdid.fit(
-            df, outcome="outcome", treatment="treated",
-            unit="unit", time="period",
+            df,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="period",
             post_periods=list(range(5, 8)),
         )
 
@@ -528,12 +529,18 @@ class TestBootstrapSE:
         df = _make_panel(n_control=20, n_treated=3, seed=42)
         n_boot = ci_params.bootstrap(50)
         sdid = SyntheticDiD(
-            variance_method="bootstrap", n_bootstrap=n_boot,
-            zeta_omega=99.0, zeta_lambda=0.5, seed=42,
+            variance_method="bootstrap",
+            n_bootstrap=n_boot,
+            zeta_omega=99.0,
+            zeta_lambda=0.5,
+            seed=42,
         )
         results = sdid.fit(
-            df, outcome="outcome", treatment="treated",
-            unit="unit", time="period",
+            df,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="period",
             post_periods=list(range(5, 8)),
         )
 
@@ -574,17 +581,21 @@ class TestBootstrapSE:
         n_boot = ci_params.bootstrap(200, min_n=100)
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", UserWarning)
-            r_placebo = SyntheticDiD(
-                variance_method="placebo", n_bootstrap=n_boot, seed=1
-            ).fit(
-                df, outcome="outcome", treatment="treated",
-                unit="unit", time="period", post_periods=[5, 6, 7],
+            r_placebo = SyntheticDiD(variance_method="placebo", n_bootstrap=n_boot, seed=1).fit(
+                df,
+                outcome="outcome",
+                treatment="treated",
+                unit="unit",
+                time="period",
+                post_periods=[5, 6, 7],
             )
-            r_boot = SyntheticDiD(
-                variance_method="bootstrap", n_bootstrap=n_boot, seed=1
-            ).fit(
-                df, outcome="outcome", treatment="treated",
-                unit="unit", time="period", post_periods=[5, 6, 7],
+            r_boot = SyntheticDiD(variance_method="bootstrap", n_bootstrap=n_boot, seed=1).fit(
+                df,
+                outcome="outcome",
+                treatment="treated",
+                unit="unit",
+                time="period",
+                post_periods=[5, 6, 7],
             )
         rel_diff = abs(r_boot.se - r_placebo.se) / r_placebo.se
         # Tolerance chosen for B=100–200 with MC noise floor ~7–10% on the
@@ -603,13 +614,15 @@ class TestBootstrapSE:
         finite, SE is positive, variance_method is preserved.
         """
         from diff_diff.survey import SurveyDesign
+
         df = _make_panel(n_control=20, n_treated=3, seed=42)
         df["wt"] = 1.0
-        result = SyntheticDiD(
-            variance_method="bootstrap", n_bootstrap=50, seed=1
-        ).fit(
-            df, outcome="outcome", treatment="treated",
-            unit="unit", time="period",
+        result = SyntheticDiD(variance_method="bootstrap", n_bootstrap=50, seed=1).fit(
+            df,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="period",
             post_periods=[5, 6, 7],
             survey_design=SurveyDesign(weights="wt"),
         )
@@ -627,17 +640,19 @@ class TestBootstrapSE:
         records the strata/PSU layout.
         """
         from diff_diff.survey import SurveyDesign
+
         df = _make_panel(n_control=20, n_treated=3, seed=42)
         df["wt"] = 1.0
         df["stratum"] = df["unit"] % 2
         # Globally unique PSU labels (avoids needing nest=True). Each unit
         # gets its own PSU id; stratum partitions the PSUs into two groups.
         df["psu"] = df["unit"]
-        result = SyntheticDiD(
-            variance_method="bootstrap", n_bootstrap=50, seed=1
-        ).fit(
-            df, outcome="outcome", treatment="treated",
-            unit="unit", time="period",
+        result = SyntheticDiD(variance_method="bootstrap", n_bootstrap=50, seed=1).fit(
+            df,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="period",
             post_periods=[5, 6, 7],
             survey_design=SurveyDesign(weights="wt", strata="stratum", psu="psu"),
         )
@@ -660,11 +675,12 @@ class TestBootstrapSE:
         n_boot = ci_params.bootstrap(50)
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", UserWarning)
-            r = SyntheticDiD(
-                variance_method="bootstrap", n_bootstrap=n_boot, seed=1
-            ).fit(
-                df, outcome="outcome", treatment="treated",
-                unit="unit", time="period",
+            r = SyntheticDiD(variance_method="bootstrap", n_bootstrap=n_boot, seed=1).fit(
+                df,
+                outcome="outcome",
+                treatment="treated",
+                unit="unit",
+                time="period",
                 post_periods=[5, 6, 7],
             )
         summary = r.summary()
@@ -690,17 +706,19 @@ class TestBootstrapSE:
         zero-mass condition are retried rather than getting a wrong τ.
         """
         from diff_diff.survey import SurveyDesign
+
         df = _make_panel(n_control=25, n_treated=3, seed=42)
         # Give one treated unit weight 0 and the other two weight 1.
         # Control units get unit weights (any positive). Treated_idx 25,
         # 26, 27; set 25 → weight 0, 26 and 27 → weight 1.
         df["wt"] = 1.0
         df.loc[df["unit"] == 25, "wt"] = 0.0
-        result = SyntheticDiD(
-            variance_method="bootstrap", n_bootstrap=100, seed=1
-        ).fit(
-            df, outcome="outcome", treatment="treated",
-            unit="unit", time="period",
+        result = SyntheticDiD(variance_method="bootstrap", n_bootstrap=100, seed=1).fit(
+            df,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="period",
             post_periods=[5, 6, 7],
             survey_design=SurveyDesign(weights="wt"),
         )
@@ -721,14 +739,16 @@ class TestBootstrapSE:
         could run. The helper now returns ones for this configuration.
         """
         from diff_diff.survey import SurveyDesign
+
         df = _make_panel(n_control=20, n_treated=3, seed=42)
         df["stratum"] = df["unit"] % 2
         df["psu"] = df["unit"]
-        result = SyntheticDiD(
-            variance_method="bootstrap", n_bootstrap=50, seed=1
-        ).fit(
-            df, outcome="outcome", treatment="treated",
-            unit="unit", time="period",
+        result = SyntheticDiD(variance_method="bootstrap", n_bootstrap=50, seed=1).fit(
+            df,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="period",
             post_periods=[5, 6, 7],
             survey_design=SurveyDesign(strata="stratum", psu="psu"),  # weights=None
         )
@@ -758,8 +778,8 @@ class TestBootstrapSE:
         boot_idx slicing, or the rw-then-slice order gets swapped to
         slice-then-rw). Both would silently produce wrong bootstrap SE.
         """
-        from diff_diff import utils as dd_utils
         from diff_diff import synthetic_did as sdid_mod
+        from diff_diff import utils as dd_utils
         from diff_diff.survey import SurveyDesign
 
         df = _make_panel(n_control=15, n_treated=3, seed=42)
@@ -786,16 +806,19 @@ class TestBootstrapSE:
             captured.append(np.array(rw, copy=True))
             return real_helper(Y_pre_c, Y_pre_t_mean, rw, *args, **kwargs)
 
-        monkeypatch.setattr(
-            sdid_mod, "compute_sdid_unit_weights_survey", capturing_helper
-        )
+        monkeypatch.setattr(sdid_mod, "compute_sdid_unit_weights_survey", capturing_helper)
 
         bootstrap_seed = 1
         SyntheticDiD(
-            variance_method="bootstrap", n_bootstrap=10, seed=bootstrap_seed,
+            variance_method="bootstrap",
+            n_bootstrap=10,
+            seed=bootstrap_seed,
         ).fit(
-            df, outcome="outcome", treatment="treated",
-            unit="unit", time="period",
+            df,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="period",
             post_periods=[5, 6, 7],
             survey_design=SurveyDesign(weights="wt", strata="stratum", psu="psu"),
         )
@@ -828,9 +851,7 @@ class TestBootstrapSE:
             expected_slices.append(known_rw[:n_control][boot_idx[boot_is_control]])
 
         assert len(captured) >= 1, "no FW calls captured — survey dispatch broken"
-        for i, (rw_captured, rw_expected) in enumerate(
-            zip(captured, expected_slices)
-        ):
+        for i, (rw_captured, rw_expected) in enumerate(zip(captured, expected_slices)):
             np.testing.assert_array_equal(
                 rw_captured,
                 rw_expected,
@@ -862,8 +883,11 @@ class TestBootstrapSE:
         df["wt"] = np.where(df["treated"] == 1, 0.0, 1.0)
         with pytest.raises(ValueError, match=r"treated arm has zero total mass"):
             SyntheticDiD(variance_method="bootstrap", n_bootstrap=20, seed=1).fit(
-                df, outcome="outcome", treatment="treated",
-                unit="unit", time="period",
+                df,
+                outcome="outcome",
+                treatment="treated",
+                unit="unit",
+                time="period",
                 post_periods=[5, 6, 7],
                 survey_design=SurveyDesign(weights="wt"),
             )
@@ -881,8 +905,11 @@ class TestBootstrapSE:
         df["wt"] = np.where(df["treated"] == 0, 0.0, 1.0)
         with pytest.raises(ValueError, match=r"control arm has zero total mass"):
             SyntheticDiD(variance_method="bootstrap", n_bootstrap=20, seed=1).fit(
-                df, outcome="outcome", treatment="treated",
-                unit="unit", time="period",
+                df,
+                outcome="outcome",
+                treatment="treated",
+                unit="unit",
+                time="period",
                 post_periods=[5, 6, 7],
                 survey_design=SurveyDesign(weights="wt"),
             )
@@ -903,8 +930,11 @@ class TestBootstrapSE:
         df["psu"] = df["unit"]
         with pytest.raises(ValueError, match=r"treated arm has zero total mass"):
             SyntheticDiD(variance_method="bootstrap", n_bootstrap=20, seed=1).fit(
-                df, outcome="outcome", treatment="treated",
-                unit="unit", time="period",
+                df,
+                outcome="outcome",
+                treatment="treated",
+                unit="unit",
+                time="period",
                 post_periods=[5, 6, 7],
                 survey_design=SurveyDesign(weights="wt", strata="stratum", psu="psu"),
             )
@@ -954,14 +984,15 @@ class TestBootstrapSE:
             w[0] = 1.0
             return w
 
-        monkeypatch.setattr(
-            sdid_mod, "compute_sdid_unit_weights", sparse_unit_weights
-        )
+        monkeypatch.setattr(sdid_mod, "compute_sdid_unit_weights", sparse_unit_weights)
 
         with pytest.raises(ValueError, match=r"unidentified|zero survey weight"):
             SyntheticDiD(variance_method="placebo", n_bootstrap=20, seed=1).fit(
-                df, outcome="outcome", treatment="treated",
-                unit="unit", time="period",
+                df,
+                outcome="outcome",
+                treatment="treated",
+                unit="unit",
+                time="period",
                 post_periods=[5, 6, 7],
                 survey_design=SurveyDesign(weights="wt"),
             )
@@ -992,14 +1023,15 @@ class TestBootstrapSE:
             w[0] = 1.0
             return w
 
-        monkeypatch.setattr(
-            sdid_mod, "compute_sdid_unit_weights", sparse_unit_weights
-        )
+        monkeypatch.setattr(sdid_mod, "compute_sdid_unit_weights", sparse_unit_weights)
 
         with pytest.raises(ValueError, match=r"unidentified|zero survey weight"):
             SyntheticDiD(variance_method="bootstrap", n_bootstrap=20, seed=1).fit(
-                df, outcome="outcome", treatment="treated",
-                unit="unit", time="period",
+                df,
+                outcome="outcome",
+                treatment="treated",
+                unit="unit",
+                time="period",
                 post_periods=[5, 6, 7],
                 survey_design=SurveyDesign(weights="wt", strata="stratum", psu="psu"),
             )
@@ -1026,8 +1058,11 @@ class TestBootstrapSE:
         df["fpc_pop"] = 5.0
         with pytest.raises(ValueError, match=r"FPC.*less than the number of units"):
             SyntheticDiD(variance_method="bootstrap", n_bootstrap=20, seed=1).fit(
-                df, outcome="outcome", treatment="treated",
-                unit="unit", time="period",
+                df,
+                outcome="outcome",
+                treatment="treated",
+                unit="unit",
+                time="period",
                 post_periods=[5, 6, 7],
                 survey_design=SurveyDesign(weights="wt", fpc="fpc_pop"),
             )
@@ -1047,11 +1082,16 @@ class TestBootstrapSE:
         df["fpc_pop"] = 3.0
         with pytest.raises(ValueError, match=r"FPC.*less than the number of units in that stratum"):
             SyntheticDiD(variance_method="bootstrap", n_bootstrap=20, seed=1).fit(
-                df, outcome="outcome", treatment="treated",
-                unit="unit", time="period",
+                df,
+                outcome="outcome",
+                treatment="treated",
+                unit="unit",
+                time="period",
                 post_periods=[5, 6, 7],
                 survey_design=SurveyDesign(
-                    weights="wt", strata="stratum", fpc="fpc_pop",
+                    weights="wt",
+                    strata="stratum",
+                    fpc="fpc_pop",
                 ),
             )
 
@@ -1092,28 +1132,43 @@ class TestBootstrapSE:
         df["wt_scaled"] = df["wt"] * 10.0
 
         kwargs = dict(
-            outcome="outcome", treatment="treated",
-            unit="unit", time="period",
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="period",
             post_periods=[5, 6, 7],
         )
         result_base = SyntheticDiD(
-            variance_method="bootstrap", n_bootstrap=50, seed=1,
+            variance_method="bootstrap",
+            n_bootstrap=50,
+            seed=1,
         ).fit(df, survey_design=SurveyDesign(weights="wt"), **kwargs)
         result_scaled = SyntheticDiD(
-            variance_method="bootstrap", n_bootstrap=50, seed=1,
+            variance_method="bootstrap",
+            n_bootstrap=50,
+            seed=1,
         ).fit(df, survey_design=SurveyDesign(weights="wt_scaled"), **kwargs)
 
         assert np.isfinite(result_base.se) and result_base.se > 0
         np.testing.assert_allclose(
-            result_scaled.se, result_base.se, rtol=1e-13, atol=0,
+            result_scaled.se,
+            result_base.se,
+            rtol=1e-13,
+            atol=0,
             err_msg="bootstrap SE is not invariant to pweight global rescaling",
         )
         np.testing.assert_allclose(
-            result_scaled.p_value, result_base.p_value, rtol=1e-12, atol=1e-14,
+            result_scaled.p_value,
+            result_base.p_value,
+            rtol=1e-12,
+            atol=1e-14,
             err_msg="bootstrap p-value is not invariant to pweight global rescaling",
         )
         np.testing.assert_allclose(
-            result_scaled.conf_int, result_base.conf_int, rtol=1e-13, atol=0,
+            result_scaled.conf_int,
+            result_base.conf_int,
+            rtol=1e-13,
+            atol=0,
             err_msg="bootstrap CI is not invariant to pweight global rescaling",
         )
 
@@ -1127,18 +1182,23 @@ class TestBootstrapSE:
         #351 fixed-weight Rao-Wu branch (commit 91082e5).
         """
         from diff_diff.survey import SurveyDesign
+
         df = _make_panel(n_control=20, n_treated=3, seed=42)
         df["wt"] = 1.0
         df["psu_single"] = 0  # all units in the same PSU; no strata
         sdid = SyntheticDiD(variance_method="bootstrap", n_bootstrap=50, seed=1)
         result = sdid.fit(
-            df, outcome="outcome", treatment="treated",
-            unit="unit", time="period",
+            df,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="period",
             post_periods=[5, 6, 7],
             survey_design=SurveyDesign(weights="wt", psu="psu_single"),
         )
-        assert np.isnan(result.se), \
-            f"single-PSU unstratified bootstrap should return NaN SE, got {result.se}"
+        assert np.isnan(
+            result.se
+        ), f"single-PSU unstratified bootstrap should return NaN SE, got {result.se}"
 
     def test_bootstrap_fw_nonconvergence_warning_fires_under_rust(self, monkeypatch):
         """Aggregate FW non-convergence warning surfaces on the Rust backend.
@@ -1169,9 +1229,7 @@ class TestBootstrapSE:
             weights, _ = real_rust(Y, zeta, intercept, init, min_decrease, max_iter)
             return weights, False
 
-        monkeypatch.setattr(
-            dd_utils, "_rust_sc_weight_fw_with_convergence", _always_not_converged
-        )
+        monkeypatch.setattr(dd_utils, "_rust_sc_weight_fw_with_convergence", _always_not_converged)
 
         df = _make_panel(n_control=20, n_treated=3, seed=42)
         sdid = SyntheticDiD(variance_method="bootstrap", n_bootstrap=50, seed=42)
@@ -1179,13 +1237,17 @@ class TestBootstrapSE:
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
             sdid.fit(
-                df, outcome="outcome", treatment="treated",
-                unit="unit", time="period",
+                df,
+                outcome="outcome",
+                treatment="treated",
+                unit="unit",
+                time="period",
                 post_periods=list(range(5, 8)),
             )
 
         fw_warnings = [
-            w for w in caught
+            w
+            for w in caught
             if issubclass(w.category, UserWarning)
             and "Frank-Wolfe did not converge" in str(w.message)
         ]
@@ -1211,8 +1273,11 @@ class TestJackknifeSE:
         df = _make_panel(n_control=20, n_treated=3, seed=42)
         sdid = SyntheticDiD(variance_method="jackknife", seed=42)
         results = sdid.fit(
-            df, outcome="outcome", treatment="treated",
-            unit="unit", time="period",
+            df,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="period",
             post_periods=list(range(5, 8)),
         )
         assert results.se > 0
@@ -1222,13 +1287,19 @@ class TestJackknifeSE:
         """Jackknife should produce identical results regardless of seed."""
         df = _make_panel(n_control=15, n_treated=3, seed=42)
         results1 = SyntheticDiD(variance_method="jackknife", seed=1).fit(
-            df, outcome="outcome", treatment="treated",
-            unit="unit", time="period",
+            df,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="period",
             post_periods=list(range(5, 8)),
         )
         results2 = SyntheticDiD(variance_method="jackknife", seed=999).fit(
-            df, outcome="outcome", treatment="treated",
-            unit="unit", time="period",
+            df,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="period",
             post_periods=list(range(5, 8)),
         )
         # ATT should be identical (same weights, no randomness in point est)
@@ -1241,8 +1312,11 @@ class TestJackknifeSE:
         df = _make_panel(n_control=15, n_treated=3, seed=42)
         sdid = SyntheticDiD(variance_method="jackknife", seed=42)
         results = sdid.fit(
-            df, outcome="outcome", treatment="treated",
-            unit="unit", time="period",
+            df,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="period",
             post_periods=list(range(5, 8)),
         )
         assert results.variance_effects is not None
@@ -1258,8 +1332,11 @@ class TestJackknifeSE:
         df = _make_panel(n_control=n_co, n_treated=n_tr, seed=42)
         sdid = SyntheticDiD(variance_method="jackknife", seed=42)
         results = sdid.fit(
-            df, outcome="outcome", treatment="treated",
-            unit="unit", time="period",
+            df,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="period",
             post_periods=list(range(5, 8)),
         )
         assert results.variance_effects is not None
@@ -1272,8 +1349,11 @@ class TestJackknifeSE:
             warnings.simplefilter("ignore")
             sdid = SyntheticDiD(variance_method="jackknife", seed=42)
             results = sdid.fit(
-                df, outcome="outcome", treatment="treated",
-                unit="unit", time="period",
+                df,
+                outcome="outcome",
+                treatment="treated",
+                unit="unit",
+                time="period",
                 post_periods=list(range(5, 7)),
             )
         assert np.isnan(results.se)
@@ -1287,8 +1367,11 @@ class TestJackknifeSE:
         df = _make_panel(n_control=20, n_treated=3, seed=42)
         sdid = SyntheticDiD(variance_method="jackknife", seed=42)
         results = sdid.fit(
-            df, outcome="outcome", treatment="treated",
-            unit="unit", time="period",
+            df,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="period",
             post_periods=list(range(5, 8)),
         )
         if np.isfinite(results.t_stat):
@@ -1299,13 +1382,19 @@ class TestJackknifeSE:
         """Jackknife should produce the same point estimate as placebo."""
         df = _make_panel(n_control=15, n_treated=3, seed=42)
         res_jk = SyntheticDiD(variance_method="jackknife", seed=42).fit(
-            df, outcome="outcome", treatment="treated",
-            unit="unit", time="period",
+            df,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="period",
             post_periods=list(range(5, 8)),
         )
         res_pl = SyntheticDiD(variance_method="placebo", seed=42, n_bootstrap=50).fit(
-            df, outcome="outcome", treatment="treated",
-            unit="unit", time="period",
+            df,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="period",
             post_periods=list(range(5, 8)),
         )
         assert abs(res_jk.att - res_pl.att) < 1e-10
@@ -1321,8 +1410,11 @@ class TestJackknifeSE:
         df = _make_panel(n_control=15, n_treated=3, seed=42)
         sdid = SyntheticDiD(variance_method="jackknife", seed=42)
         results = sdid.fit(
-            df, outcome="outcome", treatment="treated",
-            unit="unit", time="period",
+            df,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="period",
             post_periods=list(range(5, 8)),
         )
         assert results.n_bootstrap is None
@@ -1338,8 +1430,11 @@ class TestJackknifeSE:
 
         sdid = SyntheticDiD(variance_method="jackknife", seed=42)
         results = sdid.fit(
-            df, outcome="outcome", treatment="treated",
-            unit="unit", time="period",
+            df,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="period",
             post_periods=list(range(5, 8)),
             survey_design=SurveyDesign(weights="weight"),
         )
@@ -1368,8 +1463,11 @@ class TestJackknifeSE:
             warnings.simplefilter("ignore")
             sdid = SyntheticDiD(variance_method="jackknife", seed=42)
             results = sdid.fit(
-                df, outcome="outcome", treatment="treated",
-                unit="unit", time="period",
+                df,
+                outcome="outcome",
+                treatment="treated",
+                unit="unit",
+                time="period",
                 post_periods=list(range(5, 7)),
                 survey_design=SurveyDesign(weights="weight"),
             )
@@ -1394,8 +1492,11 @@ class TestJackknifeSE:
             warnings.simplefilter("ignore")
             sdid = SyntheticDiD(variance_method="jackknife", seed=42)
             results = sdid.fit(
-                df, outcome="outcome", treatment="treated",
-                unit="unit", time="period",
+                df,
+                outcome="outcome",
+                treatment="treated",
+                unit="unit",
+                time="period",
                 post_periods=list(range(5, 7)),
                 survey_design=SurveyDesign(weights="weight"),
             )
@@ -1430,67 +1531,189 @@ class TestJackknifeSERParity:
 
     # R's Y matrix (23 units x 8 periods), row-major
     Y_FLAT = [
-        12.459567808595292, 13.223481099962006, 13.658348196773856,
-        13.844051055863837, 13.888854636247594, 14.997677893012806,
-        14.494587375086788, 15.851128751231856, 10.527006629006900,
-        11.317894498245712, 9.780141451338988, 10.635177418486473,
-        11.007911133698329, 11.692547000930196, 11.532445341187122,
-        10.646344091442769, 5.779122815714058, 5.265746845809725,
-        4.828411925858962, 5.933107464969151, 6.926403492435262,
-        7.566662873481445, 6.703831577045862, 7.090431451464497,
-        6.703722507026075, 6.453676391630379, 7.301398891231049,
-        7.726092498224848, 8.191225590595401, 7.669210641906834,
-        8.526151391259425, 7.715169490073769, 8.005628186152748,
-        7.523978158267692, 9.049143286687135, 9.434081283341134,
-        9.450553333966674, 10.310163601090766, 9.867729569702721,
-        9.846941461031360, 10.459939463684098, 11.887686682638062,
-        11.249912950470762, 12.093459993478538, 12.226598684379407,
-        11.973716581337246, 13.453499811673423, 13.287085704636093,
-        10.317796666844943, 10.819165701226847, 10.824437736488752,
-        9.582976251622744, 11.521962769964540, 11.495903971828724,
-        12.072136575632017, 12.570433156881965, 12.435827624848123,
-        13.750744970607428, 13.567397714461393, 14.218726703934166,
-        14.459837938730677, 14.659912736018788, 14.077914185301429,
-        14.854380461280002, 10.770274645112915, 11.275621916712160,
-        12.137534572839927, 12.531125692916383, 12.678920118269170,
-        12.304148175294246, 12.497145874675160, 14.103389828901550,
-        10.560062989643855, 10.755394606294518, 10.518678427483797,
-        11.721841324084256, 11.607272952190801, 11.924464521898100,
-        12.782516039349641, 13.026729430318186, 12.546145790341205,
-        13.409407032231695, 14.079787980063543, 13.128838312144593,
-        13.553836458429620, 13.718363411441658, 13.854625752117343,
-        14.924224028489123, 11.906891367097627, 12.128784222882244,
-        11.404804355878456, 13.130649630134753, 12.173021974919472,
-        12.859165585526416, 12.895280738363951, 13.345233593320895,
-        10.435966548001499, 10.663839793569295, 11.030422432974012,
-        11.033668451079661, 11.324277503659044, 11.045836529045589,
-        11.985219205566086, 12.220060940064094, 14.722723885094736,
-        15.772410109968900, 15.256969467031452, 15.568564129971197,
-        16.666133193788099, 16.405462433247578, 17.202870693537243,
-        17.289652559976691, 7.760317864391456, 8.460282811921017,
-        9.462415007659978, 9.956467084312777, 9.726218110324272,
-        10.272688229133685, 11.134101608790994, 11.592584658589104,
-        7.747112683063268, 8.706521663648207, 8.170907672905205,
-        8.679537720718859, 8.962718814069811, 8.861932954235140,
-        9.383430460745986, 9.891050023644237, 9.728955313568255,
-        9.231765881057163, 9.555677785583788, 10.420693590160205,
-        9.844078095298698, 10.651913064308546, 10.196489890710358,
-        11.855847076501993, 9.218785934915712, 9.133582433258733,
-        10.048827580363175, 9.952567508276010, 10.385962432276619,
-        11.596546220044132, 11.164945662130776, 11.016817405176500,
-        10.145044557120791, 10.921420538928436, 11.642624728800259,
-        10.730067509380019, 11.753738913724906, 11.868862794274008,
-        12.574196556067037, 12.311524695461632, 10.800710206252880,
-        12.817967597577915, 12.705627126180516, 12.497850142478354,
-        12.148734571851643, 13.494742486942219, 13.714835068828613,
-        13.770060323710533, 10.010857300549947, 10.787315152039971,
-        11.050238955584605, 11.063282099053561, 10.834793458278272,
-        17.153286194944865, 17.380010096861866, 16.984758489324143,
-        6.913302966281331, 6.938279687001069, 7.537129527669741,
-        7.063822443245238, 7.531238453797332, 13.853711102827464,
-        13.812711128345372, 14.204067444347162, 13.694867606609098,
-        12.929992273442151, 14.397345491024691, 15.116119455987304,
-        15.860226513457558, 19.442026093187646, 19.855029109494353,
+        12.459567808595292,
+        13.223481099962006,
+        13.658348196773856,
+        13.844051055863837,
+        13.888854636247594,
+        14.997677893012806,
+        14.494587375086788,
+        15.851128751231856,
+        10.527006629006900,
+        11.317894498245712,
+        9.780141451338988,
+        10.635177418486473,
+        11.007911133698329,
+        11.692547000930196,
+        11.532445341187122,
+        10.646344091442769,
+        5.779122815714058,
+        5.265746845809725,
+        4.828411925858962,
+        5.933107464969151,
+        6.926403492435262,
+        7.566662873481445,
+        6.703831577045862,
+        7.090431451464497,
+        6.703722507026075,
+        6.453676391630379,
+        7.301398891231049,
+        7.726092498224848,
+        8.191225590595401,
+        7.669210641906834,
+        8.526151391259425,
+        7.715169490073769,
+        8.005628186152748,
+        7.523978158267692,
+        9.049143286687135,
+        9.434081283341134,
+        9.450553333966674,
+        10.310163601090766,
+        9.867729569702721,
+        9.846941461031360,
+        10.459939463684098,
+        11.887686682638062,
+        11.249912950470762,
+        12.093459993478538,
+        12.226598684379407,
+        11.973716581337246,
+        13.453499811673423,
+        13.287085704636093,
+        10.317796666844943,
+        10.819165701226847,
+        10.824437736488752,
+        9.582976251622744,
+        11.521962769964540,
+        11.495903971828724,
+        12.072136575632017,
+        12.570433156881965,
+        12.435827624848123,
+        13.750744970607428,
+        13.567397714461393,
+        14.218726703934166,
+        14.459837938730677,
+        14.659912736018788,
+        14.077914185301429,
+        14.854380461280002,
+        10.770274645112915,
+        11.275621916712160,
+        12.137534572839927,
+        12.531125692916383,
+        12.678920118269170,
+        12.304148175294246,
+        12.497145874675160,
+        14.103389828901550,
+        10.560062989643855,
+        10.755394606294518,
+        10.518678427483797,
+        11.721841324084256,
+        11.607272952190801,
+        11.924464521898100,
+        12.782516039349641,
+        13.026729430318186,
+        12.546145790341205,
+        13.409407032231695,
+        14.079787980063543,
+        13.128838312144593,
+        13.553836458429620,
+        13.718363411441658,
+        13.854625752117343,
+        14.924224028489123,
+        11.906891367097627,
+        12.128784222882244,
+        11.404804355878456,
+        13.130649630134753,
+        12.173021974919472,
+        12.859165585526416,
+        12.895280738363951,
+        13.345233593320895,
+        10.435966548001499,
+        10.663839793569295,
+        11.030422432974012,
+        11.033668451079661,
+        11.324277503659044,
+        11.045836529045589,
+        11.985219205566086,
+        12.220060940064094,
+        14.722723885094736,
+        15.772410109968900,
+        15.256969467031452,
+        15.568564129971197,
+        16.666133193788099,
+        16.405462433247578,
+        17.202870693537243,
+        17.289652559976691,
+        7.760317864391456,
+        8.460282811921017,
+        9.462415007659978,
+        9.956467084312777,
+        9.726218110324272,
+        10.272688229133685,
+        11.134101608790994,
+        11.592584658589104,
+        7.747112683063268,
+        8.706521663648207,
+        8.170907672905205,
+        8.679537720718859,
+        8.962718814069811,
+        8.861932954235140,
+        9.383430460745986,
+        9.891050023644237,
+        9.728955313568255,
+        9.231765881057163,
+        9.555677785583788,
+        10.420693590160205,
+        9.844078095298698,
+        10.651913064308546,
+        10.196489890710358,
+        11.855847076501993,
+        9.218785934915712,
+        9.133582433258733,
+        10.048827580363175,
+        9.952567508276010,
+        10.385962432276619,
+        11.596546220044132,
+        11.164945662130776,
+        11.016817405176500,
+        10.145044557120791,
+        10.921420538928436,
+        11.642624728800259,
+        10.730067509380019,
+        11.753738913724906,
+        11.868862794274008,
+        12.574196556067037,
+        12.311524695461632,
+        10.800710206252880,
+        12.817967597577915,
+        12.705627126180516,
+        12.497850142478354,
+        12.148734571851643,
+        13.494742486942219,
+        13.714835068828613,
+        13.770060323710533,
+        10.010857300549947,
+        10.787315152039971,
+        11.050238955584605,
+        11.063282099053561,
+        10.834793458278272,
+        17.153286194944865,
+        17.380010096861866,
+        16.984758489324143,
+        6.913302966281331,
+        6.938279687001069,
+        7.537129527669741,
+        7.063822443245238,
+        7.531238453797332,
+        13.853711102827464,
+        13.812711128345372,
+        14.204067444347162,
+        13.694867606609098,
+        12.929992273442151,
+        14.397345491024691,
+        15.116119455987304,
+        15.860226513457558,
+        19.442026093187646,
+        19.855029109494353,
         20.377546194927845,
     ]
     N0, N1, T0, T1 = 20, 3, 5, 3
@@ -1506,20 +1729,25 @@ class TestJackknifeSERParity:
         rows = []
         for i in range(N):
             for t in range(T):
-                rows.append({
-                    "unit": i,
-                    "time": t,
-                    "outcome": Y[i, t],
-                    "treated": int(i >= self.N0),
-                })
+                rows.append(
+                    {
+                        "unit": i,
+                        "time": t,
+                        "outcome": Y[i, t],
+                        "treated": int(i >= self.N0),
+                    }
+                )
         return pd.DataFrame(rows)
 
     def test_att_matches_r(self, r_panel_df):
         """ATT should match R's synthdid_estimate to machine precision."""
         sdid = SyntheticDiD(variance_method="jackknife", seed=42)
         results = sdid.fit(
-            r_panel_df, outcome="outcome", treatment="treated",
-            unit="unit", time="time",
+            r_panel_df,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="time",
             post_periods=[5, 6, 7],
         )
         assert abs(results.att - self.R_ATT) < 1e-10
@@ -1528,8 +1756,11 @@ class TestJackknifeSERParity:
         """Jackknife SE should match R's vcov(method='jackknife')."""
         sdid = SyntheticDiD(variance_method="jackknife", seed=42)
         results = sdid.fit(
-            r_panel_df, outcome="outcome", treatment="treated",
-            unit="unit", time="time",
+            r_panel_df,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="time",
             post_periods=[5, 6, 7],
         )
         assert abs(results.se - self.R_JACKKNIFE_SE) < 1e-10
@@ -1563,10 +1794,7 @@ class TestJackknifeSERParity:
         import json
         import pathlib
 
-        fixture_path = (
-            pathlib.Path(__file__).parent
-            / "data" / "sdid_placebo_indices_r.json"
-        )
+        fixture_path = pathlib.Path(__file__).parent / "data" / "sdid_placebo_indices_r.json"
         if not fixture_path.exists():
             pytest.skip(
                 f"Missing R-parity fixture {fixture_path}; regenerate via "
@@ -1594,8 +1822,11 @@ class TestJackknifeSERParity:
 
         sdid._placebo_variance_se = capture_then_call  # type: ignore[assignment]
         sdid.fit(
-            r_panel_df, outcome="outcome", treatment="treated",
-            unit="unit", time="time",
+            r_panel_df,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="time",
             post_periods=[5, 6, 7],
         )
         sdid._placebo_variance_se = original_method  # type: ignore[assignment]
@@ -1608,18 +1839,16 @@ class TestJackknifeSERParity:
         kwargs = dict(captured["kwargs"])
         kwargs["replications"] = replications
         kwargs["_placebo_indices"] = r_perms
-        se_n, placebo_effects_n = sdid._placebo_variance_se(
-            *captured["args"], **kwargs
-        )
+        se_n, placebo_effects_n = sdid._placebo_variance_se(*captured["args"], **kwargs)
         Y_scale = sdid.results_.zeta_omega / kwargs["zeta_omega"]
         py_se = se_n * Y_scale
         py_taus = np.asarray(placebo_effects_n) * Y_scale
         # Match R within cross-library FW tolerance (Rust vs R BLAS
         # reductions differ at sub-ULP; 1e-8 absorbs that without
         # masking a real divergence).
-        assert abs(py_se - r_se) < 1e-8, (
-            f"Python placebo SE {py_se} != R {r_se} (delta {py_se - r_se})"
-        )
+        assert (
+            abs(py_se - r_se) < 1e-8
+        ), f"Python placebo SE {py_se} != R {r_se} (delta {py_se - r_se})"
         # Per-draw τ regression: equal-SE doesn't imply equal sample, and
         # the placebo τ vector is user-visible through ``variance_effects``
         # and feeds the empirical placebo p-value (synthetic_did.py
@@ -1627,11 +1856,14 @@ class TestJackknifeSERParity:
         # diverged at a single draw — but happened to leave sd() unchanged
         # — still trips the regression.
         r_taus = np.asarray(payload["R_PLACEBO_TAUS"], dtype=float)
-        assert r_taus.shape == py_taus.shape == (replications,), (
-            f"shape mismatch: r {r_taus.shape}, py {py_taus.shape}"
-        )
+        assert (
+            r_taus.shape == py_taus.shape == (replications,)
+        ), f"shape mismatch: r {r_taus.shape}, py {py_taus.shape}"
         np.testing.assert_allclose(
-            py_taus, r_taus, atol=1e-8, rtol=1e-8,
+            py_taus,
+            r_taus,
+            atol=1e-8,
+            rtol=1e-8,
             err_msg="Per-draw placebo τ diverges from R despite SE match",
         )
 
@@ -1656,13 +1888,15 @@ class TestEdgeCases:
 
     def test_single_treated_unit(self, ci_params):
         """Estimation should work with a single treated unit."""
-        df = _make_panel(n_control=10, n_treated=1, n_pre=5, n_post=2,
-                         att=3.0, seed=42)
+        df = _make_panel(n_control=10, n_treated=1, n_pre=5, n_post=2, att=3.0, seed=42)
         n_boot = ci_params.bootstrap(30)
         sdid = SyntheticDiD(n_bootstrap=n_boot, seed=42)
         results = sdid.fit(
-            df, outcome="outcome", treatment="treated",
-            unit="unit", time="period",
+            df,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="period",
             post_periods=[5, 6],
         )
         assert np.isfinite(results.att)
@@ -1675,8 +1909,11 @@ class TestEdgeCases:
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
             results = sdid.fit(
-                df, outcome="outcome", treatment="treated",
-                unit="unit", time="period",
+                df,
+                outcome="outcome",
+                treatment="treated",
+                unit="unit",
+                time="period",
                 post_periods=[5, 6],
             )
             user_warnings = [x for x in w if issubclass(x.category, UserWarning)]
@@ -1693,8 +1930,11 @@ class TestEdgeCases:
         with warnings.catch_warnings(record=True):
             warnings.simplefilter("always")
             results = sdid.fit(
-                df, outcome="outcome", treatment="treated",
-                unit="unit", time="period",
+                df,
+                outcome="outcome",
+                treatment="treated",
+                unit="unit",
+                time="period",
                 post_periods=[5, 6],
             )
 
@@ -1733,12 +1973,17 @@ class TestEdgeCases:
 
         sdid = SyntheticDiD(n_bootstrap=20, seed=42)
 
-        with patch('diff_diff.synthetic_did.compute_sdid_estimator',
-                   side_effect=mock_estimator), \
-             patch('diff_diff._backend.HAS_RUST_BACKEND', False):
+        with (
+            patch("diff_diff.synthetic_did.compute_sdid_estimator", side_effect=mock_estimator),
+            patch("diff_diff._backend.HAS_RUST_BACKEND", False),
+        ):
             se, estimates = sdid._bootstrap_se(
-                Y_pre_c, Y_post_c, Y_pre_t, Y_post_t,
-                unit_weights, time_weights,
+                Y_pre_c,
+                Y_post_c,
+                Y_pre_t,
+                Y_post_t,
+                unit_weights,
+                time_weights,
             )
 
         # All retained estimates must be finite (non-finite never leaks).
@@ -1747,9 +1992,9 @@ class TestEdgeCases:
         assert len(estimates) == 20
         # Retry fired: estimator was called more than B times because every
         # third call returned inf and triggered another attempt.
-        assert call_count[0] > 20, (
-            f"expected retry path to fire (call_count > 20); got {call_count[0]}"
-        )
+        assert (
+            call_count[0] > 20
+        ), f"expected retry path to fire (call_count > 20); got {call_count[0]}"
 
     def test_nonfinite_tau_filtered_in_placebo(self):
         """Non-finite tau values are filtered in Python placebo path (matches Rust)."""
@@ -1770,15 +2015,22 @@ class TestEdgeCases:
 
         sdid = SyntheticDiD(seed=42)
 
-        with patch('diff_diff.synthetic_did.compute_sdid_estimator',
-                   side_effect=mock_estimator), \
-             patch('diff_diff.synthetic_did.compute_sdid_unit_weights',
-                   return_value=np.ones(n_control - n_treated) / (n_control - n_treated)), \
-             patch('diff_diff.synthetic_did.compute_time_weights',
-                   return_value=np.ones(n_pre) / n_pre), \
-             patch('diff_diff._backend.HAS_RUST_BACKEND', False):
+        with (
+            patch("diff_diff.synthetic_did.compute_sdid_estimator", side_effect=mock_estimator),
+            patch(
+                "diff_diff.synthetic_did.compute_sdid_unit_weights",
+                return_value=np.ones(n_control - n_treated) / (n_control - n_treated),
+            ),
+            patch(
+                "diff_diff.synthetic_did.compute_time_weights", return_value=np.ones(n_pre) / n_pre
+            ),
+            patch("diff_diff._backend.HAS_RUST_BACKEND", False),
+        ):
             se, estimates = sdid._placebo_variance_se(
-                Y_pre_c, Y_post_c, Y_pre_t_mean, Y_post_t_mean,
+                Y_pre_c,
+                Y_post_c,
+                Y_pre_t_mean,
+                Y_post_t_mean,
                 n_treated=n_treated,
                 replications=20,
             )
@@ -1794,12 +2046,16 @@ class TestEdgeCases:
         sdid = SyntheticDiD(variance_method="bootstrap", n_bootstrap=10, seed=42)
 
         with patch.object(
-            SyntheticDiD, '_bootstrap_se',
+            SyntheticDiD,
+            "_bootstrap_se",
             return_value=(np.inf, np.array([1.0, 2.0, 3.0])),
         ):
             results = sdid.fit(
-                df, outcome="outcome", treatment="treated",
-                unit="unit", time="period",
+                df,
+                outcome="outcome",
+                treatment="treated",
+                unit="unit",
+                time="period",
                 post_periods=[5, 6],
             )
 
@@ -2027,8 +2283,7 @@ class TestPlaceboReestimation:
         # Need enough controls for placebo to work (n_control > n_treated)
         # and enough variation for weights to differ between re-estimation
         # and renormalization.
-        df = _make_panel(n_control=15, n_treated=2, n_pre=6, n_post=3,
-                         att=5.0, seed=123)
+        df = _make_panel(n_control=15, n_treated=2, n_pre=6, n_post=3, att=5.0, seed=123)
         post_periods = list(range(6, 9))
 
         # Fit SDID to get original weights and matrices
@@ -2063,8 +2318,9 @@ class TestPlaceboReestimation:
 
         # Extract numpy arrays from result dicts (ordered by control unit)
         unit_weights_arr = np.array([results.unit_weights[u] for u in control_units])
-        time_weights_arr = np.array([results.time_weights[t]
-                                     for t in sorted(results.time_weights.keys())])
+        time_weights_arr = np.array(
+            [results.time_weights[t] for t in sorted(results.time_weights.keys())]
+        )
 
         n_control = len(control_idx)
         n_treated_count = len(treated_idx)
@@ -2087,9 +2343,12 @@ class TestPlaceboReestimation:
 
             try:
                 tau = compute_sdid_estimator(
-                    Y_pre_pc, Y_post_pc,
-                    Y_pre_pt_mean, Y_post_pt_mean,
-                    fixed_omega, fixed_lambda,
+                    Y_pre_pc,
+                    Y_post_pc,
+                    Y_pre_pt_mean,
+                    Y_post_pt_mean,
+                    fixed_omega,
+                    fixed_lambda,
                 )
                 fixed_estimates.append(tau)
             except (ValueError, np.linalg.LinAlgError):
@@ -2097,8 +2356,7 @@ class TestPlaceboReestimation:
 
         if len(fixed_estimates) >= 2:
             n_s = len(fixed_estimates)
-            fixed_se = (np.sqrt((n_s - 1) / n_s)
-                        * np.std(fixed_estimates, ddof=1))
+            fixed_se = np.sqrt((n_s - 1) / n_s) * np.std(fixed_estimates, ddof=1)
             # The two SEs should differ because re-estimation produces
             # different weights than renormalization
             assert actual_se != pytest.approx(fixed_se, rel=0.01), (
@@ -2119,18 +2377,24 @@ class TestTreatmentValidation:
     def test_varying_treatment_within_unit_raises(self):
         """Unit whose treatment switches over time should raise ValueError."""
         np.random.seed(42)
-        data = pd.DataFrame({
-            "unit": [1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3],
-            "time": [1, 2, 3, 4, 1, 2, 3, 4, 1, 2, 3, 4],
-            "outcome": np.random.randn(12),
-            # Unit 1: treatment turns on at time 3 (staggered)
-            "treated": [0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0],
-        })
+        data = pd.DataFrame(
+            {
+                "unit": [1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3],
+                "time": [1, 2, 3, 4, 1, 2, 3, 4, 1, 2, 3, 4],
+                "outcome": np.random.randn(12),
+                # Unit 1: treatment turns on at time 3 (staggered)
+                "treated": [0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0],
+            }
+        )
         sdid = SyntheticDiD()
         with pytest.raises(ValueError, match="Treatment indicator varies within"):
             sdid.fit(
-                data, outcome="outcome", treatment="treated",
-                unit="unit", time="time", post_periods=[3, 4],
+                data,
+                outcome="outcome",
+                treatment="treated",
+                unit="unit",
+                time="time",
+                post_periods=[3, 4],
             )
 
     def test_constant_treatment_passes(self):
@@ -2141,16 +2405,23 @@ class TestTreatmentValidation:
         for u in range(n_units):
             is_treated = 1 if u < 3 else 0
             for t in range(n_periods):
-                rows.append({
-                    "unit": u, "time": t,
-                    "outcome": np.random.randn() + (2.0 if is_treated and t >= 5 else 0),
-                    "treated": is_treated,
-                })
+                rows.append(
+                    {
+                        "unit": u,
+                        "time": t,
+                        "outcome": np.random.randn() + (2.0 if is_treated and t >= 5 else 0),
+                        "treated": is_treated,
+                    }
+                )
         data = pd.DataFrame(rows)
         sdid = SyntheticDiD()
         result = sdid.fit(
-            data, outcome="outcome", treatment="treated",
-            unit="unit", time="time", post_periods=[5, 6, 7],
+            data,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="time",
+            post_periods=[5, 6, 7],
         )
         assert result is not None
 
@@ -2170,11 +2441,14 @@ class TestBalancedPanelValidation:
         for u in range(6):
             is_treated = 1 if u < 2 else 0
             for t in range(5):
-                rows.append({
-                    "unit": u, "time": t,
-                    "outcome": np.random.randn(),
-                    "treated": is_treated,
-                })
+                rows.append(
+                    {
+                        "unit": u,
+                        "time": t,
+                        "outcome": np.random.randn(),
+                        "treated": is_treated,
+                    }
+                )
         data = pd.DataFrame(rows)
         # Drop one observation to make panel unbalanced
         data = data[~((data["unit"] == 3) & (data["time"] == 2))].reset_index(drop=True)
@@ -2182,8 +2456,12 @@ class TestBalancedPanelValidation:
         sdid = SyntheticDiD()
         with pytest.raises(ValueError, match="Panel is not balanced"):
             sdid.fit(
-                data, outcome="outcome", treatment="treated",
-                unit="unit", time="time", post_periods=[3, 4],
+                data,
+                outcome="outcome",
+                treatment="treated",
+                unit="unit",
+                time="time",
+                post_periods=[3, 4],
             )
 
     def test_balanced_panel_passes(self):
@@ -2193,16 +2471,23 @@ class TestBalancedPanelValidation:
         for u in range(8):
             is_treated = 1 if u < 2 else 0
             for t in range(6):
-                rows.append({
-                    "unit": u, "time": t,
-                    "outcome": np.random.randn() + (1.5 if is_treated and t >= 4 else 0),
-                    "treated": is_treated,
-                })
+                rows.append(
+                    {
+                        "unit": u,
+                        "time": t,
+                        "outcome": np.random.randn() + (1.5 if is_treated and t >= 4 else 0),
+                        "treated": is_treated,
+                    }
+                )
         data = pd.DataFrame(rows)
         sdid = SyntheticDiD()
         result = sdid.fit(
-            data, outcome="outcome", treatment="treated",
-            unit="unit", time="time", post_periods=[4, 5],
+            data,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="time",
+            post_periods=[4, 5],
         )
         assert result is not None
 
@@ -2224,23 +2509,30 @@ class TestPreTreatmentFitWarning:
             # Large level difference: treated ~100, control ~10
             level = 100.0 if is_treated else 10.0
             for t in range(8):
-                rows.append({
-                    "unit": u, "time": t,
-                    "outcome": level + np.random.randn() * 0.5,
-                    "treated": is_treated,
-                })
+                rows.append(
+                    {
+                        "unit": u,
+                        "time": t,
+                        "outcome": level + np.random.randn() * 0.5,
+                        "treated": is_treated,
+                    }
+                )
         data = pd.DataFrame(rows)
         sdid = SyntheticDiD()
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
             sdid.fit(
-                data, outcome="outcome", treatment="treated",
-                unit="unit", time="time", post_periods=[6, 7],
+                data,
+                outcome="outcome",
+                treatment="treated",
+                unit="unit",
+                time="time",
+                post_periods=[6, 7],
             )
             fit_warnings = [x for x in w if "Pre-treatment fit is poor" in str(x.message)]
-            assert len(fit_warnings) >= 1, (
-                "Expected warning about poor pre-treatment fit but none was raised"
-            )
+            assert (
+                len(fit_warnings) >= 1
+            ), "Expected warning about poor pre-treatment fit but none was raised"
 
     def test_good_fit_no_warning(self):
         """Parallel trends data with similar levels should not warn."""
@@ -2250,23 +2542,32 @@ class TestPreTreatmentFitWarning:
             is_treated = 1 if u < 3 else 0
             for t in range(8):
                 # Same level, parallel trends, treatment effect only in post
-                rows.append({
-                    "unit": u, "time": t,
-                    "outcome": t + np.random.randn() * 0.3 + (2.0 if is_treated and t >= 5 else 0),
-                    "treated": is_treated,
-                })
+                rows.append(
+                    {
+                        "unit": u,
+                        "time": t,
+                        "outcome": t
+                        + np.random.randn() * 0.3
+                        + (2.0 if is_treated and t >= 5 else 0),
+                        "treated": is_treated,
+                    }
+                )
         data = pd.DataFrame(rows)
         sdid = SyntheticDiD()
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
             sdid.fit(
-                data, outcome="outcome", treatment="treated",
-                unit="unit", time="time", post_periods=[5, 6, 7],
+                data,
+                outcome="outcome",
+                treatment="treated",
+                unit="unit",
+                time="time",
+                post_periods=[5, 6, 7],
             )
             fit_warnings = [x for x in w if "Pre-treatment fit is poor" in str(x.message)]
-            assert len(fit_warnings) == 0, (
-                f"Unexpected pre-treatment fit warning: {fit_warnings[0].message}"
-            )
+            assert (
+                len(fit_warnings) == 0
+            ), f"Unexpected pre-treatment fit warning: {fit_warnings[0].message}"
 
 
 class TestMinDecreaseFloor:
@@ -2279,13 +2580,15 @@ class TestMinDecreaseFloor:
         np.random.seed(42)
         Y = np.tile(np.array([1.0, 2.0, 3.0, 4.0]), (5, 1))
 
-        w_floor = _sc_weight_fw(Y, zeta=0.0, intercept=True,
-                                min_decrease=1e-5, max_iter=10000)
-        w_zero = _sc_weight_fw(Y, zeta=0.0, intercept=True,
-                               min_decrease=0.0, max_iter=10000)
+        w_floor = _sc_weight_fw(Y, zeta=0.0, intercept=True, min_decrease=1e-5, max_iter=10000)
+        w_zero = _sc_weight_fw(Y, zeta=0.0, intercept=True, min_decrease=0.0, max_iter=10000)
 
-        np.testing.assert_allclose(w_floor, w_zero, atol=1e-10,
-                                   err_msg="Floor min_decrease should give same weights as 0.0")
+        np.testing.assert_allclose(
+            w_floor,
+            w_zero,
+            atol=1e-10,
+            err_msg="Floor min_decrease should give same weights as 0.0",
+        )
         # Both should be valid simplex weights
         assert np.all(w_floor >= -1e-12), "Weights should be non-negative"
         assert abs(w_floor.sum() - 1.0) < 1e-10, "Weights should sum to 1"
@@ -2306,76 +2609,70 @@ class TestBackendSEConsistency:
         """
         import sys
 
-        df = _make_panel(n_control=20, n_treated=3, n_pre=5, n_post=3,
-                         att=5.0, seed=42)
+        df = _make_panel(n_control=20, n_treated=3, n_pre=5, n_post=3, att=5.0, seed=42)
         post_periods = list(range(5, 8))
 
         # Run with default backend (Rust-accelerated inner calls if available)
-        sdid_default = SyntheticDiD(
-            variance_method="placebo", n_bootstrap=50, seed=42
-        )
-        results_default = sdid_default.fit(
-            df, "outcome", "treated", "unit", "period", post_periods
-        )
+        sdid_default = SyntheticDiD(variance_method="placebo", n_bootstrap=50, seed=42)
+        results_default = sdid_default.fit(df, "outcome", "treated", "unit", "period", post_periods)
 
         # Run with pure Python backend
         utils_mod = sys.modules["diff_diff.utils"]
         with patch.object(utils_mod, "HAS_RUST_BACKEND", False):
-            sdid_py = SyntheticDiD(
-                variance_method="placebo", n_bootstrap=50, seed=42
-            )
+            sdid_py = SyntheticDiD(variance_method="placebo", n_bootstrap=50, seed=42)
             results_py = sdid_py.fit(
                 df.copy(), "outcome", "treated", "unit", "period", post_periods
             )
 
         # ATT must be identical (same data, same algorithm)
         np.testing.assert_allclose(
-            results_default.att, results_py.att, rtol=1e-6,
-            err_msg="ATT should match between backends"
+            results_default.att,
+            results_py.att,
+            rtol=1e-6,
+            err_msg="ATT should match between backends",
         )
 
         # SE must match within tolerance (faer vs NumPy in FW inner loop)
         np.testing.assert_allclose(
-            results_default.se, results_py.se, rtol=1e-4,
-            err_msg="Placebo SE should match between backends"
+            results_default.se,
+            results_py.se,
+            rtol=1e-4,
+            err_msg="Placebo SE should match between backends",
         )
 
     def test_bootstrap_se_matches_across_backends(self):
         """SyntheticDiD bootstrap SE is identical regardless of backend."""
         import sys
 
-        df = _make_panel(n_control=20, n_treated=3, n_pre=5, n_post=3,
-                         att=5.0, seed=42)
+        df = _make_panel(n_control=20, n_treated=3, n_pre=5, n_post=3, att=5.0, seed=42)
         post_periods = list(range(5, 8))
 
         # Run with default backend
-        sdid_default = SyntheticDiD(
-            variance_method="bootstrap", n_bootstrap=50, seed=42
-        )
-        results_default = sdid_default.fit(
-            df, "outcome", "treated", "unit", "period", post_periods
-        )
+        sdid_default = SyntheticDiD(variance_method="bootstrap", n_bootstrap=50, seed=42)
+        results_default = sdid_default.fit(df, "outcome", "treated", "unit", "period", post_periods)
 
         # Run with pure Python backend
         utils_mod = sys.modules["diff_diff.utils"]
         with patch.object(utils_mod, "HAS_RUST_BACKEND", False):
-            sdid_py = SyntheticDiD(
-                variance_method="bootstrap", n_bootstrap=50, seed=42
-            )
+            sdid_py = SyntheticDiD(variance_method="bootstrap", n_bootstrap=50, seed=42)
             results_py = sdid_py.fit(
                 df.copy(), "outcome", "treated", "unit", "period", post_periods
             )
 
         # ATT must match
         np.testing.assert_allclose(
-            results_default.att, results_py.att, rtol=1e-6,
-            err_msg="ATT should match between backends"
+            results_default.att,
+            results_py.att,
+            rtol=1e-6,
+            err_msg="ATT should match between backends",
         )
 
         # Bootstrap SE must match (same RNG, same loop, only inner FW differs)
         np.testing.assert_allclose(
-            results_default.se, results_py.se, rtol=1e-4,
-            err_msg="Bootstrap SE should match between backends"
+            results_default.se,
+            results_py.se,
+            rtol=1e-4,
+            err_msg="Bootstrap SE should match between backends",
         )
 
 
@@ -2384,8 +2681,8 @@ class TestEmptyPostGuard:
 
     def test_empty_post_raises(self):
         """compute_time_weights raises ValueError when Y_post_control has 0 rows."""
-        Y_pre = np.random.randn(4, 5)   # 4 pre-periods, 5 controls
-        Y_post = np.empty((0, 5))        # 0 post-periods
+        Y_pre = np.random.randn(4, 5)  # 4 pre-periods, 5 controls
+        Y_post = np.empty((0, 5))  # 0 post-periods
 
         with pytest.raises(ValueError, match="Y_post_control has no rows"):
             compute_time_weights(Y_pre, Y_post, zeta_lambda=0.0)
@@ -2403,9 +2700,14 @@ class TestFitSnapshot:
     def test_shapes_and_ordering(self):
         df = _make_panel(n_control=10, n_treated=2, n_pre=5, n_post=3, seed=42)
         sdid = SyntheticDiD(variance_method="jackknife", seed=42)
-        res = sdid.fit(df, outcome="outcome", treatment="treated",
-                       unit="unit", time="period",
-                       post_periods=list(range(5, 8)))
+        res = sdid.fit(
+            df,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="period",
+            post_periods=list(range(5, 8)),
+        )
         snap = res._fit_snapshot
         assert snap is not None
         assert snap.Y_pre_control.shape == (5, 10)
@@ -2422,8 +2724,7 @@ class TestFitSnapshot:
     def test_matrices_are_read_only(self):
         df = _make_panel(seed=7)
         sdid = SyntheticDiD(variance_method="jackknife", seed=7)
-        res = sdid.fit(df, outcome="outcome", treatment="treated",
-                       unit="unit", time="period")
+        res = sdid.fit(df, outcome="outcome", treatment="treated", unit="unit", time="period")
         snap = res._fit_snapshot
         assert not snap.Y_pre_control.flags.writeable
         assert not snap.Y_post_control.flags.writeable
@@ -2439,19 +2740,15 @@ class TestTrajectories:
     def test_synthetic_pre_matches_weighted_sum(self):
         df = _make_panel(seed=11)
         sdid = SyntheticDiD(variance_method="jackknife", seed=11)
-        res = sdid.fit(df, outcome="outcome", treatment="treated",
-                       unit="unit", time="period")
-        omega_eff = np.array(
-            [res.unit_weights[u] for u in res._fit_snapshot.control_unit_ids]
-        )
+        res = sdid.fit(df, outcome="outcome", treatment="treated", unit="unit", time="period")
+        omega_eff = np.array([res.unit_weights[u] for u in res._fit_snapshot.control_unit_ids])
         expected = res._fit_snapshot.Y_pre_control @ omega_eff
         assert np.allclose(res.synthetic_pre_trajectory, expected, atol=1e-12)
 
     def test_treated_trajectory_matches_mean(self):
         df = _make_panel(seed=13)
         sdid = SyntheticDiD(variance_method="jackknife", seed=13)
-        res = sdid.fit(df, outcome="outcome", treatment="treated",
-                       unit="unit", time="period")
+        res = sdid.fit(df, outcome="outcome", treatment="treated", unit="unit", time="period")
         assert np.allclose(
             res.treated_pre_trajectory,
             np.mean(res._fit_snapshot.Y_pre_treated, axis=1),
@@ -2475,8 +2772,11 @@ class TestTrajectories:
         df = df.assign(weight=df["unit"].map(w_by_unit))
         sdid = SyntheticDiD(variance_method="placebo", n_bootstrap=50, seed=83)
         res = sdid.fit(
-            df, outcome="outcome", treatment="treated",
-            unit="unit", time="period",
+            df,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="period",
             survey_design=SurveyDesign(weights="weight", weight_type="pweight"),
         )
         snap = res._fit_snapshot
@@ -2486,19 +2786,14 @@ class TestTrajectories:
         assert np.allclose(res.treated_pre_trajectory, expected_pre, atol=1e-12)
         assert np.allclose(res.treated_post_trajectory, expected_post, atol=1e-12)
 
-        omega_eff = np.array(
-            [res.unit_weights[u] for u in snap.control_unit_ids]
-        )
+        omega_eff = np.array([res.unit_weights[u] for u in snap.control_unit_ids])
         expected_synth_pre = snap.Y_pre_control @ omega_eff
-        assert np.allclose(
-            res.synthetic_pre_trajectory, expected_synth_pre, atol=1e-12
-        )
+        assert np.allclose(res.synthetic_pre_trajectory, expected_synth_pre, atol=1e-12)
 
     def test_public_trajectory_arrays_are_read_only(self):
         df = _make_panel(seed=87)
         sdid = SyntheticDiD(variance_method="jackknife", seed=87)
-        res = sdid.fit(df, outcome="outcome", treatment="treated",
-                       unit="unit", time="period")
+        res = sdid.fit(df, outcome="outcome", treatment="treated", unit="unit", time="period")
         for arr in (
             res.synthetic_pre_trajectory,
             res.synthetic_post_trajectory,
@@ -2511,14 +2806,9 @@ class TestTrajectories:
     def test_pre_fit_rmse_recoverable(self):
         df = _make_panel(seed=17)
         sdid = SyntheticDiD(variance_method="jackknife", seed=17)
-        res = sdid.fit(df, outcome="outcome", treatment="treated",
-                       unit="unit", time="period")
+        res = sdid.fit(df, outcome="outcome", treatment="treated", unit="unit", time="period")
         rmse = float(
-            np.sqrt(
-                np.mean(
-                    (res.treated_pre_trajectory - res.synthetic_pre_trajectory) ** 2
-                )
-            )
+            np.sqrt(np.mean((res.treated_pre_trajectory - res.synthetic_pre_trajectory) ** 2))
         )
         assert abs(rmse - res.pre_treatment_fit) < 1e-10
 
@@ -2527,12 +2817,16 @@ class TestLooEffectsDf:
     """get_loo_effects_df joins jackknife pseudo-values to unit identities."""
 
     def _fit_jackknife(self, seed=42, **kwargs):
-        df = _make_panel(n_control=10, n_treated=3, n_pre=5, n_post=3,
-                         seed=seed, **kwargs)
+        df = _make_panel(n_control=10, n_treated=3, n_pre=5, n_post=3, seed=seed, **kwargs)
         sdid = SyntheticDiD(variance_method="jackknife", seed=seed)
-        res = sdid.fit(df, outcome="outcome", treatment="treated",
-                       unit="unit", time="period",
-                       post_periods=list(range(5, 8)))
+        res = sdid.fit(
+            df,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="period",
+            post_periods=list(range(5, 8)),
+        )
         return res
 
     def test_columns_and_roles(self):
@@ -2542,9 +2836,7 @@ class TestLooEffectsDf:
         assert set(loo["role"]) == {"control", "treated"}
         assert (loo["role"] == "control").sum() == res.n_control
         assert (loo["role"] == "treated").sum() == res.n_treated
-        assert set(loo["unit"]) == set(res.unit_weights) | set(
-            res._fit_snapshot.treated_unit_ids
-        )
+        assert set(loo["unit"]) == set(res.unit_weights) | set(res._fit_snapshot.treated_unit_ids)
 
     def test_delta_from_full_matches_math(self):
         res = self._fit_jackknife()
@@ -2561,16 +2853,14 @@ class TestLooEffectsDf:
     def test_placebo_raises_value_error(self):
         df = _make_panel(seed=21)
         sdid = SyntheticDiD(variance_method="placebo", n_bootstrap=50, seed=21)
-        res = sdid.fit(df, outcome="outcome", treatment="treated",
-                       unit="unit", time="period")
+        res = sdid.fit(df, outcome="outcome", treatment="treated", unit="unit", time="period")
         with pytest.raises(ValueError, match="variance_method='jackknife'"):
             res.get_loo_effects_df()
 
     def test_bootstrap_raises_value_error(self):
         df = _make_panel(seed=23)
         sdid = SyntheticDiD(variance_method="bootstrap", n_bootstrap=50, seed=23)
-        res = sdid.fit(df, outcome="outcome", treatment="treated",
-                       unit="unit", time="period")
+        res = sdid.fit(df, outcome="outcome", treatment="treated", unit="unit", time="period")
         with pytest.raises(ValueError, match="variance_method='jackknife'"):
             res.get_loo_effects_df()
 
@@ -2604,10 +2894,18 @@ class TestWeightConcentration:
 
         uniform = {f"u{i}": 0.1 for i in range(10)}
         res = SyntheticDiDResults(
-            att=0.0, se=0.0, t_stat=0.0, p_value=1.0, conf_int=(0.0, 0.0),
-            n_obs=100, n_treated=1, n_control=10,
-            unit_weights=uniform, time_weights={},
-            pre_periods=[], post_periods=[],
+            att=0.0,
+            se=0.0,
+            t_stat=0.0,
+            p_value=1.0,
+            conf_int=(0.0, 0.0),
+            n_obs=100,
+            n_treated=1,
+            n_control=10,
+            unit_weights=uniform,
+            time_weights={},
+            pre_periods=[],
+            post_periods=[],
         )
         c = res.get_weight_concentration()
         assert abs(c["effective_n"] - 10.0) < 1e-10
@@ -2619,10 +2917,18 @@ class TestWeightConcentration:
         from diff_diff.results import SyntheticDiDResults
 
         res = SyntheticDiDResults(
-            att=0.0, se=0.0, t_stat=0.0, p_value=1.0, conf_int=(0.0, 0.0),
-            n_obs=10, n_treated=1, n_control=1,
-            unit_weights={"only": 1.0}, time_weights={},
-            pre_periods=[], post_periods=[],
+            att=0.0,
+            se=0.0,
+            t_stat=0.0,
+            p_value=1.0,
+            conf_int=(0.0, 0.0),
+            n_obs=10,
+            n_treated=1,
+            n_control=1,
+            unit_weights={"only": 1.0},
+            time_weights={},
+            pre_periods=[],
+            post_periods=[],
         )
         c = res.get_weight_concentration()
         assert abs(c["effective_n"] - 1.0) < 1e-10
@@ -2632,10 +2938,18 @@ class TestWeightConcentration:
         from diff_diff.results import SyntheticDiDResults
 
         res = SyntheticDiDResults(
-            att=0.0, se=0.0, t_stat=0.0, p_value=1.0, conf_int=(0.0, 0.0),
-            n_obs=30, n_treated=1, n_control=3,
-            unit_weights={"a": 0.5, "b": 0.3, "c": 0.2}, time_weights={},
-            pre_periods=[], post_periods=[],
+            att=0.0,
+            se=0.0,
+            t_stat=0.0,
+            p_value=1.0,
+            conf_int=(0.0, 0.0),
+            n_obs=30,
+            n_treated=1,
+            n_control=3,
+            unit_weights={"a": 0.5, "b": 0.3, "c": 0.2},
+            time_weights={},
+            pre_periods=[],
+            post_periods=[],
         )
         c = res.get_weight_concentration(top_k=10)
         assert c["top_k"] == 3
@@ -2645,10 +2959,18 @@ class TestWeightConcentration:
         from diff_diff.results import SyntheticDiDResults
 
         res = SyntheticDiDResults(
-            att=0.0, se=0.0, t_stat=0.0, p_value=1.0, conf_int=(0.0, 0.0),
-            n_obs=30, n_treated=1, n_control=3,
-            unit_weights={"a": 0.5, "b": 0.3, "c": 0.2}, time_weights={},
-            pre_periods=[], post_periods=[],
+            att=0.0,
+            se=0.0,
+            t_stat=0.0,
+            p_value=1.0,
+            conf_int=(0.0, 0.0),
+            n_obs=30,
+            n_treated=1,
+            n_control=3,
+            unit_weights={"a": 0.5, "b": 0.3, "c": 0.2},
+            time_weights={},
+            pre_periods=[],
+            post_periods=[],
         )
         with pytest.raises(ValueError, match="top_k must be non-negative"):
             res.get_weight_concentration(top_k=-1)
@@ -2656,7 +2978,6 @@ class TestWeightConcentration:
     def test_uses_composed_weights_under_survey(self):
         """Metrics come from self.unit_weights which stores composed ω_eff
         for survey fits."""
-        import pandas as pd
         from diff_diff.survey import SurveyDesign
 
         df = _make_panel(n_control=8, n_treated=2, n_pre=4, n_post=2, seed=29)
@@ -2666,8 +2987,11 @@ class TestWeightConcentration:
         df = df.assign(weight=df["unit"].map(w_by_unit))
         sdid = SyntheticDiD(variance_method="placebo", n_bootstrap=50, seed=29)
         res = sdid.fit(
-            df, outcome="outcome", treatment="treated",
-            unit="unit", time="period",
+            df,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="period",
             survey_design=SurveyDesign(weights="weight", weight_type="pweight"),
         )
         c = res.get_weight_concentration()
@@ -2675,7 +2999,7 @@ class TestWeightConcentration:
         import numpy as np
 
         weights = np.array(list(res.unit_weights.values()))
-        expected_effective_n = 1.0 / np.sum(weights ** 2)
+        expected_effective_n = 1.0 / np.sum(weights**2)
         assert abs(c["effective_n"] - expected_effective_n) < 1e-10
 
 
@@ -2683,29 +3007,40 @@ class TestInTimePlacebo:
     """in_time_placebo re-estimates on shifted fake dates."""
 
     def test_default_sweep_shape(self):
-        df = _make_panel(n_control=10, n_treated=2, n_pre=8, n_post=3,
-                         att=0.0, seed=31)
+        df = _make_panel(n_control=10, n_treated=2, n_pre=8, n_post=3, att=0.0, seed=31)
         sdid = SyntheticDiD(variance_method="jackknife", seed=31)
-        res = sdid.fit(df, outcome="outcome", treatment="treated",
-                       unit="unit", time="period",
-                       post_periods=list(range(8, 11)))
+        res = sdid.fit(
+            df,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="period",
+            post_periods=list(range(8, 11)),
+        )
         placebo = res.in_time_placebo()
         # Feasible positions: i in [2, n_pre - 1] = [2, 7] -> 6 rows
         assert len(placebo) == 6
         assert list(placebo.columns) == [
-            "fake_treatment_period", "att", "pre_fit_rmse",
-            "n_pre_fake", "n_post_fake",
+            "fake_treatment_period",
+            "att",
+            "pre_fit_rmse",
+            "n_pre_fake",
+            "n_post_fake",
         ]
 
     def test_no_effect_dgp_gives_small_placebo_atts(self):
         """On a clean no-effect DGP, placebo ATTs should be small vs the
         DGP's noise level."""
-        df = _make_panel(n_control=20, n_treated=3, n_pre=8, n_post=3,
-                         att=0.0, seed=33)
+        df = _make_panel(n_control=20, n_treated=3, n_pre=8, n_post=3, att=0.0, seed=33)
         sdid = SyntheticDiD(variance_method="jackknife", seed=33)
-        res = sdid.fit(df, outcome="outcome", treatment="treated",
-                       unit="unit", time="period",
-                       post_periods=list(range(8, 11)))
+        res = sdid.fit(
+            df,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="period",
+            post_periods=list(range(8, 11)),
+        )
         placebo = res.in_time_placebo()
         median_abs = float(placebo["att"].abs().median())
         # Noise sd in _make_panel is 0.5; ATTs should be well under that at
@@ -2715,9 +3050,14 @@ class TestInTimePlacebo:
     def test_explicit_list_overrides_sweep(self):
         df = _make_panel(n_control=10, n_treated=2, n_pre=8, n_post=3, seed=37)
         sdid = SyntheticDiD(variance_method="jackknife", seed=37)
-        res = sdid.fit(df, outcome="outcome", treatment="treated",
-                       unit="unit", time="period",
-                       post_periods=list(range(8, 11)))
+        res = sdid.fit(
+            df,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="period",
+            post_periods=list(range(8, 11)),
+        )
         placebo = res.in_time_placebo(fake_treatment_periods=[4, 6])
         assert len(placebo) == 2
         assert set(placebo["fake_treatment_period"]) == {4, 6}
@@ -2725,18 +3065,28 @@ class TestInTimePlacebo:
     def test_post_period_raises(self):
         df = _make_panel(n_control=10, n_treated=2, n_pre=6, n_post=3, seed=41)
         sdid = SyntheticDiD(variance_method="jackknife", seed=41)
-        res = sdid.fit(df, outcome="outcome", treatment="treated",
-                       unit="unit", time="period",
-                       post_periods=list(range(6, 9)))
+        res = sdid.fit(
+            df,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="period",
+            post_periods=list(range(6, 9)),
+        )
         with pytest.raises(ValueError, match="post_periods"):
             res.in_time_placebo(fake_treatment_periods=[6])
 
     def test_missing_period_raises(self):
         df = _make_panel(n_control=10, n_treated=2, n_pre=6, n_post=3, seed=43)
         sdid = SyntheticDiD(variance_method="jackknife", seed=43)
-        res = sdid.fit(df, outcome="outcome", treatment="treated",
-                       unit="unit", time="period",
-                       post_periods=list(range(6, 9)))
+        res = sdid.fit(
+            df,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="period",
+            post_periods=list(range(6, 9)),
+        )
         with pytest.raises(ValueError, match="not found in pre_periods"):
             res.in_time_placebo(fake_treatment_periods=[999])
 
@@ -2745,22 +3095,35 @@ class TestInTimePlacebo:
         still carry the documented columns."""
         df = _make_panel(n_control=10, n_treated=2, n_pre=2, n_post=3, seed=50)
         sdid = SyntheticDiD(variance_method="jackknife", seed=50)
-        res = sdid.fit(df, outcome="outcome", treatment="treated",
-                       unit="unit", time="period",
-                       post_periods=list(range(2, 5)))
+        res = sdid.fit(
+            df,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="period",
+            post_periods=list(range(2, 5)),
+        )
         placebo = res.in_time_placebo()
         assert len(placebo) == 0
         assert list(placebo.columns) == [
-            "fake_treatment_period", "att", "pre_fit_rmse",
-            "n_pre_fake", "n_post_fake",
+            "fake_treatment_period",
+            "att",
+            "pre_fit_rmse",
+            "n_pre_fake",
+            "n_post_fake",
         ]
 
     def test_zeta_override_changes_result(self):
         df = _make_panel(n_control=10, n_treated=2, n_pre=8, n_post=3, seed=47)
         sdid = SyntheticDiD(variance_method="jackknife", seed=47)
-        res = sdid.fit(df, outcome="outcome", treatment="treated",
-                       unit="unit", time="period",
-                       post_periods=list(range(8, 11)))
+        res = sdid.fit(
+            df,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="period",
+            post_periods=list(range(8, 11)),
+        )
         default_ = res.in_time_placebo(fake_treatment_periods=[5])
         override_ = res.in_time_placebo(
             fake_treatment_periods=[5],
@@ -2778,12 +3141,16 @@ class TestSensitivityToZetaOmega:
     """sensitivity_to_zeta_omega sweeps regularization values."""
 
     def test_multiplier_one_reproduces_original_att(self):
-        df = _make_panel(n_control=12, n_treated=2, n_pre=6, n_post=3,
-                         att=2.0, seed=53)
+        df = _make_panel(n_control=12, n_treated=2, n_pre=6, n_post=3, att=2.0, seed=53)
         sdid = SyntheticDiD(variance_method="jackknife", seed=53)
-        res = sdid.fit(df, outcome="outcome", treatment="treated",
-                       unit="unit", time="period",
-                       post_periods=list(range(6, 9)))
+        res = sdid.fit(
+            df,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="period",
+            post_periods=list(range(6, 9)),
+        )
         sens = res.sensitivity_to_zeta_omega()
         # Row where zeta_omega == self.zeta_omega (multiplier 1.0)
         match = sens.loc[np.isclose(sens["zeta_omega"], res.zeta_omega)]
@@ -2793,8 +3160,7 @@ class TestSensitivityToZetaOmega:
     def test_grid_length_matches_default_multipliers(self):
         df = _make_panel(seed=59)
         sdid = SyntheticDiD(variance_method="jackknife", seed=59)
-        res = sdid.fit(df, outcome="outcome", treatment="treated",
-                       unit="unit", time="period")
+        res = sdid.fit(df, outcome="outcome", treatment="treated", unit="unit", time="period")
         sens = res.sensitivity_to_zeta_omega()
         assert len(sens) == 5
 
@@ -2803,8 +3169,7 @@ class TestSensitivityToZetaOmega:
         so the contract cannot drift unnoticed."""
         df = _make_panel(seed=60)
         sdid = SyntheticDiD(variance_method="jackknife", seed=60)
-        res = sdid.fit(df, outcome="outcome", treatment="treated",
-                       unit="unit", time="period")
+        res = sdid.fit(df, outcome="outcome", treatment="treated", unit="unit", time="period")
         sens = res.sensitivity_to_zeta_omega()
         expected = np.array([0.25, 0.5, 1.0, 2.0, 4.0]) * res.zeta_omega
         assert np.allclose(sens["zeta_omega"].to_numpy(), expected, atol=1e-12)
@@ -2812,8 +3177,7 @@ class TestSensitivityToZetaOmega:
     def test_explicit_grid_overrides_multipliers(self):
         df = _make_panel(seed=61)
         sdid = SyntheticDiD(variance_method="jackknife", seed=61)
-        res = sdid.fit(df, outcome="outcome", treatment="treated",
-                       unit="unit", time="period")
+        res = sdid.fit(df, outcome="outcome", treatment="treated", unit="unit", time="period")
         sens = res.sensitivity_to_zeta_omega(zeta_grid=[0.1, 1.0, 10.0])
         assert len(sens) == 3
         assert np.allclose(sens["zeta_omega"], [0.1, 1.0, 10.0])
@@ -2823,9 +3187,14 @@ class TestSensitivityToZetaOmega:
         should be monotone non-decreasing across the default grid."""
         df = _make_panel(n_control=15, n_treated=2, n_pre=8, n_post=3, seed=67)
         sdid = SyntheticDiD(variance_method="jackknife", seed=67)
-        res = sdid.fit(df, outcome="outcome", treatment="treated",
-                       unit="unit", time="period",
-                       post_periods=list(range(8, 11)))
+        res = sdid.fit(
+            df,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="period",
+            post_periods=list(range(8, 11)),
+        )
         sens = res.sensitivity_to_zeta_omega()
         eff_n = sens["effective_n"].to_numpy()
         # Allow tiny wobble from solver tolerance
@@ -2834,36 +3203,42 @@ class TestSensitivityToZetaOmega:
     def test_columns_shape(self):
         df = _make_panel(seed=71)
         sdid = SyntheticDiD(variance_method="jackknife", seed=71)
-        res = sdid.fit(df, outcome="outcome", treatment="treated",
-                       unit="unit", time="period")
+        res = sdid.fit(df, outcome="outcome", treatment="treated", unit="unit", time="period")
         sens = res.sensitivity_to_zeta_omega()
         assert list(sens.columns) == [
-            "zeta_omega", "att", "pre_fit_rmse",
-            "max_unit_weight", "effective_n",
+            "zeta_omega",
+            "att",
+            "pre_fit_rmse",
+            "max_unit_weight",
+            "effective_n",
         ]
 
     def test_empty_zeta_grid_preserves_schema(self):
         df = _make_panel(seed=91)
         sdid = SyntheticDiD(variance_method="jackknife", seed=91)
-        res = sdid.fit(df, outcome="outcome", treatment="treated",
-                       unit="unit", time="period")
+        res = sdid.fit(df, outcome="outcome", treatment="treated", unit="unit", time="period")
         sens = res.sensitivity_to_zeta_omega(zeta_grid=[])
         assert sens.shape == (0, 5)
         assert list(sens.columns) == [
-            "zeta_omega", "att", "pre_fit_rmse",
-            "max_unit_weight", "effective_n",
+            "zeta_omega",
+            "att",
+            "pre_fit_rmse",
+            "max_unit_weight",
+            "effective_n",
         ]
 
     def test_empty_multipliers_preserves_schema(self):
         df = _make_panel(seed=93)
         sdid = SyntheticDiD(variance_method="jackknife", seed=93)
-        res = sdid.fit(df, outcome="outcome", treatment="treated",
-                       unit="unit", time="period")
+        res = sdid.fit(df, outcome="outcome", treatment="treated", unit="unit", time="period")
         sens = res.sensitivity_to_zeta_omega(multipliers=())
         assert sens.shape == (0, 5)
         assert list(sens.columns) == [
-            "zeta_omega", "att", "pre_fit_rmse",
-            "max_unit_weight", "effective_n",
+            "zeta_omega",
+            "att",
+            "pre_fit_rmse",
+            "max_unit_weight",
+            "effective_n",
         ]
 
 
@@ -2878,8 +3253,7 @@ class TestPractitionerSdidReferences:
 
         df = _make_panel(seed=73)
         sdid = SyntheticDiD(variance_method="jackknife", seed=73)
-        res = sdid.fit(df, outcome="outcome", treatment="treated",
-                       unit="unit", time="period")
+        res = sdid.fit(df, outcome="outcome", treatment="treated", unit="unit", time="period")
         steps, _ = _handle_synthetic(res)
         expected_methods = [
             "get_weight_concentration",
@@ -2889,9 +3263,7 @@ class TestPractitionerSdidReferences:
         ]
         joined_code = "\n".join(step["code"] for step in steps)
         for method in expected_methods:
-            assert method in joined_code, (
-                f"Expected {method}() referenced in practitioner guidance"
-            )
+            assert method in joined_code, f"Expected {method}() referenced in practitioner guidance"
             assert hasattr(SyntheticDiDResults, method), (
                 f"Practitioner guidance references {method}() but it's not "
                 "on SyntheticDiDResults"
@@ -2900,12 +3272,12 @@ class TestPractitionerSdidReferences:
     def test_snippets_parse_as_python(self):
         """Each snippet in _handle_synthetic should be syntactically valid."""
         import ast
+
         from diff_diff.practitioner import _handle_synthetic
 
         df = _make_panel(seed=77)
         sdid = SyntheticDiD(variance_method="jackknife", seed=77)
-        res = sdid.fit(df, outcome="outcome", treatment="treated",
-                       unit="unit", time="period")
+        res = sdid.fit(df, outcome="outcome", treatment="treated", unit="unit", time="period")
         steps, _ = _handle_synthetic(res)
         for step in steps:
             ast.parse(step["code"])
@@ -2920,19 +3292,23 @@ class TestPractitionerSdidReferences:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             sdid = SyntheticDiD(variance_method="jackknife", seed=97)
-            res = sdid.fit(df, outcome="outcome", treatment="treated",
-                           unit="unit", time="period",
-                           post_periods=list(range(5, 8)))
+            res = sdid.fit(
+                df,
+                outcome="outcome",
+                treatment="treated",
+                unit="unit",
+                time="period",
+                post_periods=list(range(5, 8)),
+            )
         assert res.variance_method == "jackknife"
         assert res._loo_unit_ids is None  # LOO intentionally unavailable
 
         steps, _ = _handle_synthetic(res)
-        loo_snippet = next(
-            s["code"] for s in steps if "get_loo_effects_df" in s["code"]
-        )
+        loo_snippet = next(s["code"] for s in steps if "get_loo_effects_df" in s["code"])
         # Executing the snippet against this result must not raise.
-        import io
         import contextlib
+        import io
+
         captured = io.StringIO()
         with contextlib.redirect_stdout(captured):
             exec(loo_snippet, {"results": res})
@@ -2946,8 +3322,7 @@ class TestSyntheticDiDResultsPickle:
     def _fit(self, seed=101):
         df = _make_panel(seed=seed)
         sdid = SyntheticDiD(variance_method="jackknife", seed=seed)
-        return sdid.fit(df, outcome="outcome", treatment="treated",
-                        unit="unit", time="period")
+        return sdid.fit(df, outcome="outcome", treatment="treated", unit="unit", time="period")
 
     def test_snapshot_dropped_on_pickle(self):
         import pickle
@@ -2960,9 +3335,7 @@ class TestSyntheticDiDResultsPickle:
         # Public fields survive
         assert restored.att == res.att
         assert restored.se == res.se
-        assert np.allclose(
-            restored.synthetic_pre_trajectory, res.synthetic_pre_trajectory
-        )
+        assert np.allclose(restored.synthetic_pre_trajectory, res.synthetic_pre_trajectory)
 
     def test_legacy_pickle_state_maps_placebo_effects(self):
         """A result pickled before the placebo_effects → variance_effects
@@ -3071,7 +3444,7 @@ class TestScaleEquivariance:
         # protection moves to ``test_placebo_se_matches_r``, which
         # bypasses the platform-divergent fit-time path through a test
         # seam. Pinned value is the Linux/OpenBLAS capture.
-        "placebo":   (4.603349837478791,   0.2938403592163006, 0.004975124378109453, 200),
+        "placebo": (4.603349837478791, 0.2938403592163006, 0.004975124378109453, 200),
         # bootstrap = paper-faithful refit with R-default warm-start: FW is
         # initialized with ``sum_normalize(unit_weights[boot_control_idx])``
         # for ω and with the fit-time ``time_weights`` for λ on each draw,
@@ -3082,8 +3455,8 @@ class TestScaleEquivariance:
         # init; strict-convexity of the FW objective means the converged
         # answer is unique, so the warm-start matches R more faithfully on
         # problems where the pre-sparsify budget is tight.
-        "bootstrap": (4.6033498374787865,  0.21427381053829253, 2.2215821875845446e-102, 200),
-        "jackknife": (4.603349837478791,   0.19908075946622925, 2.716551077849484e-118,   23),
+        "bootstrap": (4.6033498374787865, 0.21427381053829253, 2.2215821875845446e-102, 200),
+        "jackknife": (4.603349837478791, 0.19908075946622925, 2.716551077849484e-118, 23),
     }
 
     # (a, b) pairs. Includes extreme scales where pre-fix SDID loses
@@ -3191,19 +3564,24 @@ class TestScaleEquivariance:
                 y = baseline_level + unit_fe + t * 3e5 + rng.normal(0, 5e5)
                 if is_treated and t >= n_pre:
                     y += true_att
-                rows.append({
-                    "unit": unit, "period": t,
-                    "treated": int(is_treated), "outcome": y,
-                })
+                rows.append(
+                    {
+                        "unit": unit,
+                        "period": t,
+                        "treated": int(is_treated),
+                        "outcome": y,
+                    }
+                )
         data = pd.DataFrame(rows)
 
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", UserWarning)
-            r = SyntheticDiD(
-                variance_method=variance_method, n_bootstrap=200, seed=7
-            ).fit(
-                data, outcome="outcome", treatment="treated",
-                unit="unit", time="period",
+            r = SyntheticDiD(variance_method=variance_method, n_bootstrap=200, seed=7).fit(
+                data,
+                outcome="outcome",
+                treatment="treated",
+                unit="unit",
+                time="period",
                 post_periods=list(range(n_pre, n_pre + n_post)),
             )
 
@@ -3248,14 +3626,17 @@ class TestPValueSemantics:
             r = SyntheticDiD(
                 variance_method="bootstrap", n_bootstrap=ci_params.bootstrap(200), seed=1
             ).fit(
-                df, outcome="outcome", treatment="treated",
-                unit="unit", time="period",
+                df,
+                outcome="outcome",
+                treatment="treated",
+                unit="unit",
+                time="period",
                 post_periods=[5, 6, 7],
             )
         _, expected_p, _ = safe_inference(r.att, r.se, alpha=0.05)
-        assert abs(r.p_value - expected_p) < 1e-12, (
-            f"bootstrap p_value={r.p_value} != analytical {expected_p}"
-        )
+        assert (
+            abs(r.p_value - expected_p) < 1e-12
+        ), f"bootstrap p_value={r.p_value} != analytical {expected_p}"
 
     def test_placebo_p_value_uses_empirical_formula(self, ci_params):
         """Placebo p-value must equal max(mean(|draws| >= |att|), 1/(r+1))."""
@@ -3267,16 +3648,19 @@ class TestPValueSemantics:
             r = SyntheticDiD(
                 variance_method="placebo", n_bootstrap=ci_params.bootstrap(200), seed=1
             ).fit(
-                df, outcome="outcome", treatment="treated",
-                unit="unit", time="period",
+                df,
+                outcome="outcome",
+                treatment="treated",
+                unit="unit",
+                time="period",
                 post_periods=[5, 6, 7],
             )
         variance_effects = np.asarray(r.variance_effects)
         empirical_p = float(np.mean(np.abs(variance_effects) >= np.abs(r.att)))
         expected_p = max(empirical_p, 1.0 / (len(variance_effects) + 1))
-        assert abs(r.p_value - expected_p) < 1e-12, (
-            f"placebo p_value={r.p_value} != empirical {expected_p}"
-        )
+        assert (
+            abs(r.p_value - expected_p) < 1e-12
+        ), f"placebo p_value={r.p_value} != empirical {expected_p}"
 
     def test_bootstrap_p_value_detects_large_effect(self):
         """Bootstrap p-value must reject decisively when z is large.
@@ -3288,18 +3672,17 @@ class TestPValueSemantics:
         df = _make_panel(att=5.0, seed=123)
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", UserWarning)
-            r = SyntheticDiD(
-                variance_method="bootstrap", n_bootstrap=200, seed=1
-            ).fit(
-                df, outcome="outcome", treatment="treated",
-                unit="unit", time="period",
+            r = SyntheticDiD(variance_method="bootstrap", n_bootstrap=200, seed=1).fit(
+                df,
+                outcome="outcome",
+                treatment="treated",
+                unit="unit",
+                time="period",
                 post_periods=[5, 6, 7],
             )
         z = abs(r.att / r.se)
         assert z > 6, f"setup error: z={z} too small to test rejection"
-        assert r.p_value < 1e-6, (
-            f"bootstrap p_value={r.p_value} too large at z={z}"
-        )
+        assert r.p_value < 1e-6, f"bootstrap p_value={r.p_value} too large at z={z}"
 
     @pytest.mark.slow
     def test_bootstrap_p_value_null_dispersion(self):
@@ -3331,10 +3714,15 @@ class TestPValueSemantics:
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore", UserWarning)
                 r = SyntheticDiD(
-                    variance_method="bootstrap", n_bootstrap=200, seed=seed,
+                    variance_method="bootstrap",
+                    n_bootstrap=200,
+                    seed=seed,
                 ).fit(
-                    df, outcome="outcome", treatment="treated",
-                    unit="unit", time="period",
+                    df,
+                    outcome="outcome",
+                    treatment="treated",
+                    unit="unit",
+                    time="period",
                     post_periods=[5, 6, 7],
                 )
             if np.isfinite(r.p_value):
@@ -3376,8 +3764,11 @@ class TestDiagnosticScaleParity:
     @staticmethod
     def _fit(data, seed=1):
         return SyntheticDiD(variance_method="jackknife", seed=seed).fit(
-            data, outcome="outcome", treatment="treated",
-            unit="unit", time="period",
+            data,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="period",
             post_periods=[5, 6, 7],
         )
 
@@ -3400,15 +3791,13 @@ class TestDiagnosticScaleParity:
             placebo = r.in_time_placebo(fake_treatment_periods=fake_periods)
 
             assert list(placebo["fake_treatment_period"]) == fake_periods
-            for row0, row in zip(placebo0.to_dict("records"),
-                                 placebo.to_dict("records")):
+            for row0, row in zip(placebo0.to_dict("records"), placebo.to_dict("records")):
                 if np.isnan(row0["att"]):
                     assert np.isnan(row["att"]), f"att at (a={a}, b={b})"
                     assert np.isnan(row["pre_fit_rmse"])
                     continue
                 assert row["att"] / a == pytest.approx(row0["att"], rel=1e-6), (
-                    f"att at (a={a}, b={b}), "
-                    f"fake_period={row0['fake_treatment_period']}"
+                    f"att at (a={a}, b={b}), " f"fake_period={row0['fake_treatment_period']}"
                 )
                 assert row["pre_fit_rmse"] / abs(a) == pytest.approx(
                     row0["pre_fit_rmse"], rel=1e-6
@@ -3433,24 +3822,15 @@ class TestDiagnosticScaleParity:
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore", UserWarning)
                 r = self._fit(scaled)
-            sens = r.sensitivity_to_zeta_omega(
-                zeta_grid=[a * z for z in zeta_grid]
-            )
-            for row0, row in zip(sens0.to_dict("records"),
-                                 sens.to_dict("records")):
-                assert row["att"] / a == pytest.approx(row0["att"], rel=1e-6), (
-                    f"att at (a={a}, b={b}), zeta={row0['zeta_omega']}"
-                )
-                assert row["pre_fit_rmse"] / abs(a) == pytest.approx(
-                    row0["pre_fit_rmse"], rel=1e-6
-                )
+            sens = r.sensitivity_to_zeta_omega(zeta_grid=[a * z for z in zeta_grid])
+            for row0, row in zip(sens0.to_dict("records"), sens.to_dict("records")):
+                assert row["att"] / a == pytest.approx(
+                    row0["att"], rel=1e-6
+                ), f"att at (a={a}, b={b}), zeta={row0['zeta_omega']}"
+                assert row["pre_fit_rmse"] / abs(a) == pytest.approx(row0["pre_fit_rmse"], rel=1e-6)
                 # omega-derived diagnostics are scale-invariant.
-                assert row["max_unit_weight"] == pytest.approx(
-                    row0["max_unit_weight"], rel=1e-6
-                )
-                assert row["effective_n"] == pytest.approx(
-                    row0["effective_n"], rel=1e-6
-                )
+                assert row["max_unit_weight"] == pytest.approx(row0["max_unit_weight"], rel=1e-6)
+                assert row["effective_n"] == pytest.approx(row0["effective_n"], rel=1e-6)
 
     def test_in_time_placebo_detectable_at_extreme_scale(self):
         """Pre-fix regression: at Y~1e9 the placebo re-fit corrupted ATTs via
@@ -3465,8 +3845,9 @@ class TestDiagnosticScaleParity:
             unit_fe = rng.normal(0, 2e6)
             for t in range(n_pre + n_post):
                 y = baseline_level + unit_fe + t * 3e5 + rng.normal(0, 5e5)
-                rows.append({"unit": unit, "period": t,
-                             "treated": int(unit >= n_control), "outcome": y})
+                rows.append(
+                    {"unit": unit, "period": t, "treated": int(unit >= n_control), "outcome": y}
+                )
         data = pd.DataFrame(rows)
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", UserWarning)
@@ -3496,8 +3877,11 @@ class TestDiagnosticSnapshotBackwardCompat:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", UserWarning)
             r = SyntheticDiD(variance_method="jackknife", seed=1).fit(
-                data, outcome="outcome", treatment="treated",
-                unit="unit", time="period",
+                data,
+                outcome="outcome",
+                treatment="treated",
+                unit="unit",
+                time="period",
                 post_periods=[5, 6, 7],
             )
 
@@ -3555,8 +3939,11 @@ class TestHeterogeneousAndRampingScale:
     @staticmethod
     def _fit(data, seed=1):
         return SyntheticDiD(variance_method="jackknife", seed=seed).fit(
-            data, outcome="outcome", treatment="treated",
-            unit="unit", time="period",
+            data,
+            outcome="outcome",
+            treatment="treated",
+            unit="unit",
+            time="period",
             post_periods=[5, 6, 7],
         )
 
@@ -3575,8 +3962,7 @@ class TestHeterogeneousAndRampingScale:
                 y = unit_level * (1 + 0.02 * t) + rng.normal(0, unit_level * 0.01)
                 if is_treated and t >= n_pre:
                     y += 0.05 * unit_level
-                rows.append({"unit": unit, "period": t,
-                             "treated": int(is_treated), "outcome": y})
+                rows.append({"unit": unit, "period": t, "treated": int(is_treated), "outcome": y})
         data = pd.DataFrame(rows)
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", UserWarning)
@@ -3606,8 +3992,7 @@ class TestHeterogeneousAndRampingScale:
                 y = trend + unit_fe * trend * 0.01 + rng.normal(0, trend * 0.005)
                 if is_treated and t >= n_pre:
                     y += 0.01 * trend
-                rows.append({"unit": unit, "period": t,
-                             "treated": int(is_treated), "outcome": y})
+                rows.append({"unit": unit, "period": t, "treated": int(is_treated), "outcome": y})
         data = pd.DataFrame(rows)
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", UserWarning)
@@ -3649,8 +4034,7 @@ class TestCoverageMCArtifact:
         import pathlib
 
         artifact = (
-            pathlib.Path(__file__).parent.parent
-            / "benchmarks" / "data" / "sdid_coverage.json"
+            pathlib.Path(__file__).parent.parent / "benchmarks" / "data" / "sdid_coverage.json"
         )
         if not artifact.exists():
             pytest.skip(
@@ -3664,8 +4048,15 @@ class TestCoverageMCArtifact:
             assert key in payload, f"missing top-level key: {key}"
 
         meta = payload["metadata"]
-        for key in ("n_seeds", "n_bootstrap", "library_version", "backend",
-                    "generated_at", "methods", "alphas"):
+        for key in (
+            "n_seeds",
+            "n_bootstrap",
+            "library_version",
+            "backend",
+            "generated_at",
+            "methods",
+            "alphas",
+        ):
             assert key in meta, f"missing metadata key: {key}"
         assert meta["n_seeds"] >= 100, (
             f"n_seeds={meta['n_seeds']} too small; the REGISTRY calibration "
@@ -3682,19 +4073,20 @@ class TestCoverageMCArtifact:
             assert dgp in payload["per_dgp"], f"missing DGP block: {dgp}"
             per_method = payload["per_dgp"][dgp]
             for method in ("placebo", "bootstrap", "jackknife"):
-                assert method in per_method, (
-                    f"missing method block {method!r} under DGP {dgp!r}"
-                )
+                assert method in per_method, f"missing method block {method!r} under DGP {dgp!r}"
                 block = per_method[method]
-                for field in ("rejection_rate", "mean_se", "true_sd_tau_hat",
-                              "se_over_truesd", "n_successful_fits"):
-                    assert field in block, (
-                        f"missing field {field!r} in {dgp}/{method}"
-                    )
+                for field in (
+                    "rejection_rate",
+                    "mean_se",
+                    "true_sd_tau_hat",
+                    "se_over_truesd",
+                    "n_successful_fits",
+                ):
+                    assert field in block, f"missing field {field!r} in {dgp}/{method}"
                 for alpha_key in ("0.01", "0.05", "0.10"):
-                    assert alpha_key in block["rejection_rate"], (
-                        f"missing alpha {alpha_key} in {dgp}/{method} rejection_rate"
-                    )
+                    assert (
+                        alpha_key in block["rejection_rate"]
+                    ), f"missing alpha {alpha_key} in {dgp}/{method} rejection_rate"
 
         # Post-PR #365: stratified_survey runs bootstrap (validation
         # gate) + jackknife (anti-conservative but reported for
@@ -3736,4 +4128,3 @@ class TestCoverageMCArtifact:
             "the PSU-level LOO + stratum aggregation path is broken if "
             "this drops to 0."
         )
-

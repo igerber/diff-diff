@@ -1891,8 +1891,12 @@ class TestMultiHorizon:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             r = est.fit(
-                data, outcome="outcome", group="group", time="period",
-                treatment="treatment", L_max=1,
+                data,
+                outcome="outcome",
+                group="group",
+                time="period",
+                treatment="treatment",
+                L_max=1,
             )
         es1 = r.event_study_effects[1]
         assert r.overall_att == es1["effect"]
@@ -1910,8 +1914,12 @@ class TestMultiHorizon:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             r = est.fit(
-                data, outcome="outcome", group="group", time="period",
-                treatment="treatment", L_max=1,
+                data,
+                outcome="outcome",
+                group="group",
+                time="period",
+                treatment="treatment",
+                L_max=1,
             )
         # Joiners/leavers suppressed for L_max=1
         assert r.joiners_available is False
@@ -1936,8 +1944,12 @@ class TestMultiHorizon:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             r = est.fit(
-                data, outcome="outcome", group="group", time="period",
-                treatment="treatment", L_max=1,
+                data,
+                outcome="outcome",
+                group="group",
+                time="period",
+                treatment="treatment",
+                L_max=1,
             )
         br = r.bootstrap_results
         assert br is not None
@@ -2147,9 +2159,7 @@ class TestMultiHorizonPlacebos:
     def test_placebo_bootstrap_se_multi_horizon(self, data, ci_params):
         """Multi-horizon placebo bootstrap SE should be finite."""
         n_boot = ci_params.bootstrap(199)
-        est = ChaisemartinDHaultfoeuille(
-            twfe_diagnostic=False, n_bootstrap=n_boot, seed=42
-        )
+        est = ChaisemartinDHaultfoeuille(twfe_diagnostic=False, n_bootstrap=n_boot, seed=42)
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             r = est.fit(
@@ -2365,9 +2375,7 @@ class TestCovariateAdjustment:
                 # Outcome depends on group FE, time trend, covariate,
                 # and treatment effect
                 y = group_fe + 2.0 * t + 3.0 * x + 5.0 * d + rng.normal(0, 0.5)
-                rows.append(
-                    {"group": g, "period": t, "treatment": d, "outcome": y, "X1": x}
-                )
+                rows.append({"group": g, "period": t, "treatment": d, "outcome": y, "X1": x})
         return pd.DataFrame(rows)
 
     def test_controls_requires_lmax(self):
@@ -2383,8 +2391,13 @@ class TestCovariateAdjustment:
         df = self._make_panel_with_covariates()
         with pytest.raises(ValueError, match="not found in data"):
             ChaisemartinDHaultfoeuille(seed=1).fit(
-                df, "outcome", "group", "period", "treatment",
-                controls=["nonexistent"], L_max=1,
+                df,
+                "outcome",
+                "group",
+                "period",
+                "treatment",
+                controls=["nonexistent"],
+                L_max=1,
             )
 
     def test_covariate_residualization_basic(self):
@@ -2396,8 +2409,13 @@ class TestCovariateAdjustment:
         r_plain = est.fit(df, "outcome", "group", "period", "treatment", L_max=1)
         # Covariate-adjusted
         r_x = est.fit(
-            df, "outcome", "group", "period", "treatment",
-            controls=["X1"], L_max=1,
+            df,
+            "outcome",
+            "group",
+            "period",
+            "treatment",
+            controls=["X1"],
+            L_max=1,
         )
 
         # Results should differ (covariate is confounding)
@@ -2416,8 +2434,13 @@ class TestCovariateAdjustment:
         df["X2"] = np.random.RandomState(99).normal(0, 1, len(df))
         est = ChaisemartinDHaultfoeuille(seed=1)
         r = est.fit(
-            df, "outcome", "group", "period", "treatment",
-            controls=["X1", "X2"], L_max=1,
+            df,
+            "outcome",
+            "group",
+            "period",
+            "treatment",
+            controls=["X1", "X2"],
+            L_max=1,
         )
         assert r.covariate_residuals is not None
         # Should have rows for each (baseline, covariate) combination
@@ -2427,8 +2450,13 @@ class TestCovariateAdjustment:
         """Diagnostics DataFrame has expected structure."""
         df = self._make_panel_with_covariates()
         r = ChaisemartinDHaultfoeuille(seed=1).fit(
-            df, "outcome", "group", "period", "treatment",
-            controls=["X1"], L_max=2,
+            df,
+            "outcome",
+            "group",
+            "period",
+            "treatment",
+            controls=["X1"],
+            L_max=2,
         )
         diag = r.covariate_residuals
         assert diag is not None
@@ -2459,8 +2487,13 @@ class TestCovariateAdjustment:
                 rows.append({"group": g, "period": t, "treatment": d, "outcome": y, "X1": x})
         df = pd.DataFrame(rows)
         r = ChaisemartinDHaultfoeuille(seed=1).fit(
-            df, "outcome", "group", "period", "treatment",
-            controls=["X1"], L_max=1,
+            df,
+            "outcome",
+            "group",
+            "period",
+            "treatment",
+            controls=["X1"],
+            L_max=1,
         )
         assert np.isfinite(r.overall_att)
         assert np.isfinite(r.overall_se)
@@ -2469,8 +2502,13 @@ class TestCovariateAdjustment:
         """Covariates work with L_max > 1 event study."""
         df = self._make_panel_with_covariates()
         r = ChaisemartinDHaultfoeuille(seed=1).fit(
-            df, "outcome", "group", "period", "treatment",
-            controls=["X1"], L_max=2,
+            df,
+            "outcome",
+            "group",
+            "period",
+            "treatment",
+            controls=["X1"],
+            L_max=2,
         )
         assert r.event_study_effects is not None
         assert 1 in r.event_study_effects
@@ -2489,8 +2527,13 @@ class TestCovariateAdjustment:
         r_raw = est.fit(df, "outcome", "group", "period", "treatment")
         # Fit with controls
         r_x = est.fit(
-            df, "outcome", "group", "period", "treatment",
-            controls=["X1"], L_max=1,
+            df,
+            "outcome",
+            "group",
+            "period",
+            "treatment",
+            controls=["X1"],
+            L_max=1,
         )
 
         # per_period_effects should be UNADJUSTED (raw Phase 1 DID_M)
@@ -2504,9 +2547,7 @@ class TestCovariateAdjustment:
                 ), f"per_period_effects should be unadjusted at period {period_key}"
 
         # overall_att should come from event_study_effects[1] (DID^X_1)
-        assert r_x.overall_att == pytest.approx(
-            r_x.event_study_effects[1]["effect"], abs=1e-10
-        )
+        assert r_x.overall_att == pytest.approx(r_x.event_study_effects[1]["effect"], abs=1e-10)
         # and should differ from the raw overall_att (covariate effect)
         assert r_x.overall_att != r_raw.overall_att
 
@@ -2541,7 +2582,11 @@ class TestLinearTrends:
         df = self._make_panel_with_trends()
         with pytest.raises(ValueError, match="requires L_max >= 1"):
             ChaisemartinDHaultfoeuille(seed=1).fit(
-                df, "outcome", "group", "period", "treatment",
+                df,
+                "outcome",
+                "group",
+                "period",
+                "treatment",
                 trends_linear=True,
             )
 
@@ -2551,8 +2596,13 @@ class TestLinearTrends:
         est = ChaisemartinDHaultfoeuille(seed=1)
         r_plain = est.fit(df, "outcome", "group", "period", "treatment", L_max=2)
         r_fd = est.fit(
-            df, "outcome", "group", "period", "treatment",
-            L_max=2, trends_linear=True,
+            df,
+            "outcome",
+            "group",
+            "period",
+            "treatment",
+            L_max=2,
+            trends_linear=True,
         )
         # Results should differ (group-specific trends confound unadjusted)
         assert r_fd.overall_att != r_plain.overall_att
@@ -2564,8 +2614,13 @@ class TestLinearTrends:
         """Cumulated delta^{fd}_l = sum DID^{fd}_{l'} for l'=1..l."""
         df = self._make_panel_with_trends()
         r = ChaisemartinDHaultfoeuille(seed=1).fit(
-            df, "outcome", "group", "period", "treatment",
-            L_max=3, trends_linear=True,
+            df,
+            "outcome",
+            "group",
+            "period",
+            "treatment",
+            L_max=3,
+            trends_linear=True,
         )
         assert r.linear_trends_effects is not None
         # Check cumulation: delta^{fd}_1 = DID^{fd}_1
@@ -2593,8 +2648,13 @@ class TestLinearTrends:
         df = pd.DataFrame(rows)
         with pytest.warns(UserWarning, match="F_g < 3"):
             ChaisemartinDHaultfoeuille(seed=1).fit(
-                df, "outcome", "group", "period", "treatment",
-                L_max=2, trends_linear=True,
+                df,
+                "outcome",
+                "group",
+                "period",
+                "treatment",
+                L_max=2,
+                trends_linear=True,
             )
 
     def test_trends_with_covariates(self):
@@ -2602,8 +2662,14 @@ class TestLinearTrends:
         df = self._make_panel_with_trends()
         df["X1"] = np.random.RandomState(77).normal(0, 1, len(df))
         r = ChaisemartinDHaultfoeuille(seed=1).fit(
-            df, "outcome", "group", "period", "treatment",
-            controls=["X1"], L_max=2, trends_linear=True,
+            df,
+            "outcome",
+            "group",
+            "period",
+            "treatment",
+            controls=["X1"],
+            L_max=2,
+            trends_linear=True,
         )
         # overall_att is NaN for trends + L_max>=2 (no aggregate)
         assert np.isnan(r.overall_att)
@@ -2619,8 +2685,13 @@ class TestLinearTrends:
         """
         df = self._make_panel_with_trends()
         r = ChaisemartinDHaultfoeuille(seed=1).fit(
-            df, "outcome", "group", "period", "treatment",
-            L_max=3, trends_linear=True,
+            df,
+            "outcome",
+            "group",
+            "period",
+            "treatment",
+            L_max=3,
+            trends_linear=True,
         )
         # overall_* should be NaN (not computed in trends mode)
         assert np.isnan(r.overall_att)
@@ -2654,8 +2725,13 @@ class TestLinearTrends:
                 rows.append({"group": g, "period": t, "treatment": d, "outcome": y})
         df = pd.DataFrame(rows)
         r = ChaisemartinDHaultfoeuille(seed=1).fit(
-            df, "outcome", "group", "period", "treatment",
-            L_max=2, trends_linear=True,
+            df,
+            "outcome",
+            "group",
+            "period",
+            "treatment",
+            L_max=2,
+            trends_linear=True,
         )
         # If SE at horizon 1 is finite but horizon 2 is NaN,
         # cumulated h=2 SE must be NaN (not 0.0)
@@ -2664,8 +2740,7 @@ class TestLinearTrends:
             es = r.event_study_effects
             if es and 2 in es and not np.isfinite(es[2]["se"]):
                 assert not np.isfinite(cum_se), (
-                    f"Cumulated SE should be NaN when component h=2 SE is NaN, "
-                    f"got {cum_se}"
+                    f"Cumulated SE should be NaN when component h=2 SE is NaN, " f"got {cum_se}"
                 )
 
 
@@ -2684,17 +2759,26 @@ class TestStateSetTrends:
             for t in range(n_periods):
                 d = 1 if (switches and t >= 3) else 0
                 y = group_fe + 2.0 * t + 5.0 * d + rng.normal(0, 0.5)
-                rows.append({
-                    "group": g, "period": t, "treatment": d,
-                    "outcome": y, "state": state,
-                })
+                rows.append(
+                    {
+                        "group": g,
+                        "period": t,
+                        "treatment": d,
+                        "outcome": y,
+                        "state": state,
+                    }
+                )
         return pd.DataFrame(rows)
 
     def test_trends_nonparam_requires_lmax(self):
         df = self._make_panel_with_sets()
         with pytest.raises(ValueError, match="requires L_max >= 1"):
             ChaisemartinDHaultfoeuille(seed=1).fit(
-                df, "outcome", "group", "period", "treatment",
+                df,
+                "outcome",
+                "group",
+                "period",
+                "treatment",
                 trends_nonparam="state",
             )
 
@@ -2704,11 +2788,18 @@ class TestStateSetTrends:
         est = ChaisemartinDHaultfoeuille(seed=1)
         r_plain = est.fit(df, "outcome", "group", "period", "treatment", L_max=1)
         r_set = est.fit(
-            df, "outcome", "group", "period", "treatment",
-            L_max=1, trends_nonparam="state",
+            df,
+            "outcome",
+            "group",
+            "period",
+            "treatment",
+            L_max=1,
+            trends_nonparam="state",
         )
         # With set-restricted controls, results may differ
         # (both should be finite and reasonable)
+        assert np.isfinite(r_plain.overall_att)
+        assert np.isfinite(r_plain.overall_se)
         assert np.isfinite(r_set.overall_att)
         assert np.isfinite(r_set.overall_se)
 
@@ -2719,16 +2810,26 @@ class TestStateSetTrends:
         df.loc[(df["group"] == 0) & (df["period"] == 3), "state"] = 99
         with pytest.raises(ValueError, match="time-invariant"):
             ChaisemartinDHaultfoeuille(seed=1).fit(
-                df, "outcome", "group", "period", "treatment",
-                L_max=1, trends_nonparam="state",
+                df,
+                "outcome",
+                "group",
+                "period",
+                "treatment",
+                L_max=1,
+                trends_nonparam="state",
             )
 
     def test_missing_set_column_raises(self):
         df = self._make_panel_with_sets()
         with pytest.raises(ValueError, match="not found in data"):
             ChaisemartinDHaultfoeuille(seed=1).fit(
-                df, "outcome", "group", "period", "treatment",
-                L_max=1, trends_nonparam="nonexistent",
+                df,
+                "outcome",
+                "group",
+                "period",
+                "treatment",
+                L_max=1,
+                trends_nonparam="nonexistent",
             )
 
     def test_group_level_set_rejected(self):
@@ -2737,8 +2838,13 @@ class TestStateSetTrends:
         # Use group column itself as set (each group is its own set)
         with pytest.raises(ValueError, match="coarser than group"):
             ChaisemartinDHaultfoeuille(seed=1).fit(
-                df, "outcome", "group", "period", "treatment",
-                L_max=1, trends_nonparam="group",
+                df,
+                "outcome",
+                "group",
+                "period",
+                "treatment",
+                L_max=1,
+                trends_nonparam="group",
             )
 
     def test_nan_set_membership_rejected(self):
@@ -2747,8 +2853,13 @@ class TestStateSetTrends:
         df.loc[df["group"] == 0, "state"] = np.nan
         with pytest.raises(ValueError, match="NaN/missing"):
             ChaisemartinDHaultfoeuille(seed=1).fit(
-                df, "outcome", "group", "period", "treatment",
-                L_max=1, trends_nonparam="state",
+                df,
+                "outcome",
+                "group",
+                "period",
+                "treatment",
+                L_max=1,
+                trends_nonparam="state",
             )
 
     def test_nonparam_with_covariates(self):
@@ -2756,8 +2867,14 @@ class TestStateSetTrends:
         df = self._make_panel_with_sets()
         df["X1"] = np.random.RandomState(77).normal(0, 1, len(df))
         r = ChaisemartinDHaultfoeuille(seed=1).fit(
-            df, "outcome", "group", "period", "treatment",
-            controls=["X1"], L_max=1, trends_nonparam="state",
+            df,
+            "outcome",
+            "group",
+            "period",
+            "treatment",
+            controls=["X1"],
+            L_max=1,
+            trends_nonparam="state",
         )
         assert np.isfinite(r.overall_att)
         assert r.covariate_residuals is not None
@@ -2778,25 +2895,40 @@ class TestStateSetTrends:
             for t in range(n_periods):
                 d = 1 if (switches and t >= 3) else 0
                 y = 10 + 2.0 * t + 5.0 * d + rng.normal(0, 0.5)
-                rows.append({
-                    "group": g, "period": t, "treatment": d,
-                    "outcome": y, "state": "A",
-                })
+                rows.append(
+                    {
+                        "group": g,
+                        "period": t,
+                        "treatment": d,
+                        "outcome": y,
+                        "state": "A",
+                    }
+                )
         # State B: groups 8-9 (both switch at t=3, NO controls in this set)
         for g in range(8, 10):
             for t in range(n_periods):
                 d = 1 if t >= 3 else 0
                 y = 10 + 2.0 * t + 5.0 * d + rng.normal(0, 0.5)
-                rows.append({
-                    "group": g, "period": t, "treatment": d,
-                    "outcome": y, "state": "B",
-                })
+                rows.append(
+                    {
+                        "group": g,
+                        "period": t,
+                        "treatment": d,
+                        "outcome": y,
+                        "state": "B",
+                    }
+                )
         df = pd.DataFrame(rows)
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             r = ChaisemartinDHaultfoeuille(seed=1).fit(
-                df, "outcome", "group", "period", "treatment",
-                L_max=2, trends_nonparam="state",
+                df,
+                "outcome",
+                "group",
+                "period",
+                "treatment",
+                L_max=2,
+                trends_nonparam="state",
             )
         # Should not error; State A groups contribute, State B excluded
         assert np.isfinite(r.overall_att)
@@ -2819,18 +2951,28 @@ class TestHeterogeneityTesting:
             for t in range(n_periods):
                 d = 1 if (switches and t >= 3) else 0
                 y = group_fe + 2.0 * t + effect * d + rng.normal(0, 0.5)
-                rows.append({
-                    "group": g, "period": t, "treatment": d,
-                    "outcome": y, "het_x": x_g,
-                })
+                rows.append(
+                    {
+                        "group": g,
+                        "period": t,
+                        "treatment": d,
+                        "outcome": y,
+                        "het_x": x_g,
+                    }
+                )
         return pd.DataFrame(rows)
 
     def test_heterogeneity_basic(self):
         """Detect heterogeneous effects with binary covariate."""
         df = self._make_panel_with_het()
         r = ChaisemartinDHaultfoeuille(seed=1).fit(
-            df, "outcome", "group", "period", "treatment",
-            L_max=1, heterogeneity="het_x",
+            df,
+            "outcome",
+            "group",
+            "period",
+            "treatment",
+            L_max=1,
+            heterogeneity="het_x",
         )
         assert r.heterogeneity_effects is not None
         assert 1 in r.heterogeneity_effects
@@ -2850,14 +2992,24 @@ class TestHeterogeneityTesting:
             for t in range(6):
                 d = 1 if (switches and t >= 3) else 0
                 y = 10 + 2 * t + 5 * d + rng.normal(0, 0.5)
-                rows.append({
-                    "group": g, "period": t, "treatment": d,
-                    "outcome": y, "het_x": x_g,
-                })
+                rows.append(
+                    {
+                        "group": g,
+                        "period": t,
+                        "treatment": d,
+                        "outcome": y,
+                        "het_x": x_g,
+                    }
+                )
         df = pd.DataFrame(rows)
         r = ChaisemartinDHaultfoeuille(seed=1).fit(
-            df, "outcome", "group", "period", "treatment",
-            L_max=1, heterogeneity="het_x",
+            df,
+            "outcome",
+            "group",
+            "period",
+            "treatment",
+            L_max=1,
+            heterogeneity="het_x",
         )
         het = r.heterogeneity_effects[1]
         # Not significantly different from zero
@@ -2867,8 +3019,13 @@ class TestHeterogeneityTesting:
         """Heterogeneity test at multiple horizons."""
         df = self._make_panel_with_het()
         r = ChaisemartinDHaultfoeuille(seed=1).fit(
-            df, "outcome", "group", "period", "treatment",
-            L_max=2, heterogeneity="het_x",
+            df,
+            "outcome",
+            "group",
+            "period",
+            "treatment",
+            L_max=2,
+            heterogeneity="het_x",
         )
         assert 1 in r.heterogeneity_effects
         assert 2 in r.heterogeneity_effects
@@ -2891,8 +3048,13 @@ class TestHeterogeneityTesting:
         """
         df = self._make_panel_with_het()
         r = ChaisemartinDHaultfoeuille(seed=1).fit(
-            df, "outcome", "group", "period", "treatment",
-            L_max=2, heterogeneity="het_x",
+            df,
+            "outcome",
+            "group",
+            "period",
+            "treatment",
+            L_max=2,
+            heterogeneity="het_x",
         )
         assert r.heterogeneity_effects is not None
         checked = 0
@@ -2901,20 +3063,16 @@ class TestHeterogeneityTesting:
                 continue
             expected_t = het["beta"] / het["se"]
             assert het["t_stat"] == pytest.approx(expected_t, rel=1e-12), (
-                f"l={l_h} t_stat: stored={het['t_stat']} vs "
-                f"beta/se={expected_t}"
+                f"l={l_h} t_stat: stored={het['t_stat']} vs " f"beta/se={expected_t}"
             )
             half_low = het["beta"] - het["conf_int"][0]
             half_high = het["conf_int"][1] - het["beta"]
             assert half_low > 0, f"l={l_h} conf_int_lower not below beta"
             assert half_high > 0, f"l={l_h} conf_int_upper not above beta"
             assert half_low == pytest.approx(half_high, rel=1e-12), (
-                f"l={l_h} conf_int asymmetric: "
-                f"below={half_low} above={half_high}"
+                f"l={l_h} conf_int asymmetric: " f"below={half_low} above={half_high}"
             )
-            assert 0.0 <= het["p_value"] <= 1.0, (
-                f"l={l_h} p_value out of [0, 1]: {het['p_value']}"
-            )
+            assert 0.0 <= het["p_value"] <= 1.0, f"l={l_h} p_value out of [0, 1]: {het['p_value']}"
             checked += 1
         assert checked >= 1, "Expected at least one populated heterogeneity horizon"
 
@@ -2922,8 +3080,13 @@ class TestHeterogeneityTesting:
         df = self._make_panel_with_het()
         with pytest.raises(ValueError, match="not found"):
             ChaisemartinDHaultfoeuille(seed=1).fit(
-                df, "outcome", "group", "period", "treatment",
-                L_max=1, heterogeneity="nonexistent",
+                df,
+                "outcome",
+                "group",
+                "period",
+                "treatment",
+                L_max=1,
+                heterogeneity="nonexistent",
             )
 
     def test_heterogeneity_rejects_controls(self):
@@ -2932,8 +3095,14 @@ class TestHeterogeneityTesting:
         df["X1"] = np.random.RandomState(42).normal(0, 1, len(df))
         with pytest.raises(ValueError, match="cannot be combined with controls"):
             ChaisemartinDHaultfoeuille(seed=1).fit(
-                df, "outcome", "group", "period", "treatment",
-                L_max=1, heterogeneity="het_x", controls=["X1"],
+                df,
+                "outcome",
+                "group",
+                "period",
+                "treatment",
+                L_max=1,
+                heterogeneity="het_x",
+                controls=["X1"],
             )
 
     def test_heterogeneity_requires_lmax(self):
@@ -2941,7 +3110,11 @@ class TestHeterogeneityTesting:
         df = self._make_panel_with_het()
         with pytest.raises(ValueError, match="requires L_max >= 1"):
             ChaisemartinDHaultfoeuille(seed=1).fit(
-                df, "outcome", "group", "period", "treatment",
+                df,
+                "outcome",
+                "group",
+                "period",
+                "treatment",
                 heterogeneity="het_x",
             )
 
@@ -2950,8 +3123,14 @@ class TestHeterogeneityTesting:
         df = self._make_panel_with_het()
         with pytest.raises(ValueError, match="cannot be combined with trends_linear"):
             ChaisemartinDHaultfoeuille(seed=1).fit(
-                df, "outcome", "group", "period", "treatment",
-                L_max=2, heterogeneity="het_x", trends_linear=True,
+                df,
+                "outcome",
+                "group",
+                "period",
+                "treatment",
+                L_max=2,
+                heterogeneity="het_x",
+                trends_linear=True,
             )
 
     def test_heterogeneity_rejects_trends_nonparam(self):
@@ -2960,8 +3139,14 @@ class TestHeterogeneityTesting:
         df["state"] = df["group"] % 3
         with pytest.raises(ValueError, match="cannot be combined with trends_nonparam"):
             ChaisemartinDHaultfoeuille(seed=1).fit(
-                df, "outcome", "group", "period", "treatment",
-                L_max=1, heterogeneity="het_x", trends_nonparam="state",
+                df,
+                "outcome",
+                "group",
+                "period",
+                "treatment",
+                L_max=1,
+                heterogeneity="het_x",
+                trends_nonparam="state",
             )
 
 
@@ -2994,8 +3179,13 @@ class TestDesign2:
         df = self._make_join_then_leave_panel()
         # drop_larger_lower=False to keep the 2-switch groups
         r = ChaisemartinDHaultfoeuille(seed=1, drop_larger_lower=False).fit(
-            df, "outcome", "group", "period", "treatment",
-            L_max=1, design2=True,
+            df,
+            "outcome",
+            "group",
+            "period",
+            "treatment",
+            L_max=1,
+            design2=True,
         )
         assert r.design2_effects is not None
         assert r.design2_effects["n_design2_groups"] == 10
@@ -3016,8 +3206,13 @@ class TestDesign2:
         df = pd.DataFrame(rows)
         # drop_larger_lower=False required for design2=True
         r = ChaisemartinDHaultfoeuille(seed=1, drop_larger_lower=False).fit(
-            df, "outcome", "group", "period", "treatment",
-            L_max=1, design2=True,
+            df,
+            "outcome",
+            "group",
+            "period",
+            "treatment",
+            L_max=1,
+            design2=True,
         )
         assert r.design2_effects is None
 
@@ -3025,7 +3220,12 @@ class TestDesign2:
         """design2=False (default) produces no design2_effects."""
         df = self._make_join_then_leave_panel()
         r = ChaisemartinDHaultfoeuille(seed=1, drop_larger_lower=False).fit(
-            df, "outcome", "group", "period", "treatment", L_max=1,
+            df,
+            "outcome",
+            "group",
+            "period",
+            "treatment",
+            L_max=1,
         )
         assert r.design2_effects is None
 
@@ -3034,8 +3234,13 @@ class TestDesign2:
         df = self._make_join_then_leave_panel()
         with pytest.raises(ValueError, match="drop_larger_lower=False"):
             ChaisemartinDHaultfoeuille(seed=1).fit(
-                df, "outcome", "group", "period", "treatment",
-                L_max=1, design2=True,
+                df,
+                "outcome",
+                "group",
+                "period",
+                "treatment",
+                L_max=1,
+                design2=True,
             )
 
 
@@ -3060,8 +3265,12 @@ class TestNonBinaryTreatment:
             warnings.simplefilter("ignore")
             # Non-binary treatment requires L_max (multi-horizon path)
             r = est.fit(
-                df, outcome="outcome", group="group", time="period",
-                treatment="treatment", L_max=2,
+                df,
+                outcome="outcome",
+                group="group",
+                time="period",
+                treatment="treatment",
+                L_max=2,
             )
         assert np.isfinite(r.overall_att)
 
@@ -3099,8 +3308,12 @@ class TestNonBinaryTreatment:
             warnings.simplefilter("ignore")
             # Non-binary treatment requires L_max >= 1 (multi-horizon path)
             r = est.fit(
-                df, outcome="outcome", group="group", time="period",
-                treatment="treatment", L_max=1,
+                df,
+                outcome="outcome",
+                group="group",
+                time="period",
+                treatment="treatment",
+                L_max=1,
             )
         # All 20 switcher groups should be kept (0 dropped as multi-switch)
         assert r.n_groups_dropped_crossers == 0
@@ -3183,8 +3396,12 @@ class TestNonBinaryTreatment:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             r = est.fit(
-                df, outcome="outcome", group="group", time="period",
-                treatment="treatment", L_max=1,
+                df,
+                outcome="outcome",
+                group="group",
+                time="period",
+                treatment="treatment",
+                L_max=1,
             )
         # overall_att should be from per-group path (includes both 0->1 and 0->2)
         assert np.isfinite(r.overall_att)
@@ -3206,8 +3423,12 @@ class TestNonBinaryTreatment:
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
                 est.fit(
-                    df, outcome="outcome", group="group", time="period",
-                    treatment="treatment", L_max=1,
+                    df,
+                    outcome="outcome",
+                    group="group",
+                    time="period",
+                    treatment="treatment",
+                    L_max=1,
                 )
 
     def test_nonbinary_bootstrap(self, ci_params):
@@ -3226,14 +3447,16 @@ class TestNonBinaryTreatment:
                 y = 10 + t + np.random.randn() * 0.3
                 rows.append({"group": g, "period": t, "treatment": 0, "outcome": y})
         df = pd.DataFrame(rows)
-        est = ChaisemartinDHaultfoeuille(
-            twfe_diagnostic=False, n_bootstrap=n_boot, seed=42
-        )
+        est = ChaisemartinDHaultfoeuille(twfe_diagnostic=False, n_bootstrap=n_boot, seed=42)
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             r = est.fit(
-                df, outcome="outcome", group="group", time="period",
-                treatment="treatment", L_max=1,
+                df,
+                outcome="outcome",
+                group="group",
+                time="period",
+                treatment="treatment",
+                L_max=1,
             )
         assert r.bootstrap_results is not None
         assert r.bootstrap_results.event_study_ses is not None
@@ -3264,8 +3487,12 @@ class TestNonBinaryTreatment:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             r = est.fit(
-                df, outcome="outcome", group="group", time="period",
-                treatment="treatment", L_max=1,
+                df,
+                outcome="outcome",
+                group="group",
+                time="period",
+                treatment="treatment",
+                L_max=1,
             )
         # __repr__ should say DID_1
         assert "DID_1" in repr(r)
@@ -3304,8 +3531,12 @@ class TestNonBinaryTreatment:
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
             r = est.fit(
-                df, outcome="outcome", group="group", time="period",
-                treatment="treatment", L_max=1,
+                df,
+                outcome="outcome",
+                group="group",
+                time="period",
+                treatment="treatment",
+                L_max=1,
             )
         twfe_warnings = [x for x in w if "TWFE diagnostic" in str(x.message)]
         assert len(twfe_warnings) >= 1
@@ -3331,8 +3562,12 @@ class TestNonBinaryTreatment:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             r = est.fit(
-                df, outcome="outcome", group="group", time="period",
-                treatment="treatment", L_max=3,
+                df,
+                outcome="outcome",
+                group="group",
+                time="period",
+                treatment="treatment",
+                L_max=3,
             )
         if r.normalized_effects is not None and 1 in r.normalized_effects:
             # For dose 0->2: denominator at l=1 should be ~2 (not 1)
@@ -3350,9 +3585,7 @@ class TestHonestDiDIntegration:
 
     @staticmethod
     def _make_data(n_groups=40, n_periods=6, seed=42):
-        return generate_reversible_did_data(
-            n_groups=n_groups, n_periods=n_periods, seed=seed
-        )
+        return generate_reversible_did_data(n_groups=n_groups, n_periods=n_periods, seed=seed)
 
     def test_honest_did_basic(self):
         """honest_did=True with L_max>=2 produces HonestDiDResults."""
@@ -3362,8 +3595,13 @@ class TestHonestDiDIntegration:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             r = ChaisemartinDHaultfoeuille(seed=1).fit(
-                df, "outcome", "group", "period", "treatment",
-                L_max=2, honest_did=True,
+                df,
+                "outcome",
+                "group",
+                "period",
+                "treatment",
+                L_max=2,
+                honest_did=True,
             )
         assert r.honest_did_results is not None
         assert isinstance(r.honest_did_results, HonestDiDResults)
@@ -3375,7 +3613,11 @@ class TestHonestDiDIntegration:
         df = self._make_data()
         with pytest.raises(ValueError, match="honest_did=True requires L_max"):
             ChaisemartinDHaultfoeuille(seed=1).fit(
-                df, "outcome", "group", "period", "treatment",
+                df,
+                "outcome",
+                "group",
+                "period",
+                "treatment",
                 honest_did=True,
             )
 
@@ -3384,8 +3626,13 @@ class TestHonestDiDIntegration:
         df = self._make_data()
         with pytest.raises(ValueError, match="placebo=False"):
             ChaisemartinDHaultfoeuille(seed=1, placebo=False).fit(
-                df, "outcome", "group", "period", "treatment",
-                L_max=2, honest_did=True,
+                df,
+                "outcome",
+                "group",
+                "period",
+                "treatment",
+                L_max=2,
+                honest_did=True,
             )
 
     def test_honest_did_standalone(self):
@@ -3396,23 +3643,26 @@ class TestHonestDiDIntegration:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             r_auto = ChaisemartinDHaultfoeuille(seed=1).fit(
-                df, "outcome", "group", "period", "treatment",
-                L_max=2, honest_did=True,
+                df,
+                "outcome",
+                "group",
+                "period",
+                "treatment",
+                L_max=2,
+                honest_did=True,
             )
             r_plain = ChaisemartinDHaultfoeuille(seed=1).fit(
-                df, "outcome", "group", "period", "treatment",
+                df,
+                "outcome",
+                "group",
+                "period",
+                "treatment",
                 L_max=2,
             )
-            r_manual = compute_honest_did(
-                r_plain, method="relative_magnitude", M=1.0
-            )
+            r_manual = compute_honest_did(r_plain, method="relative_magnitude", M=1.0)
         # Deterministic - bitwise identical
-        np.testing.assert_allclose(
-            r_auto.honest_did_results.ci_lb, r_manual.ci_lb, rtol=0
-        )
-        np.testing.assert_allclose(
-            r_auto.honest_did_results.ci_ub, r_manual.ci_ub, rtol=0
-        )
+        np.testing.assert_allclose(r_auto.honest_did_results.ci_lb, r_manual.ci_lb, rtol=0)
+        np.testing.assert_allclose(r_auto.honest_did_results.ci_ub, r_manual.ci_ub, rtol=0)
 
     def test_honest_did_with_controls(self):
         """HonestDiD runs on DID^X placebos."""
@@ -3421,8 +3671,14 @@ class TestHonestDiDIntegration:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             r = ChaisemartinDHaultfoeuille(seed=1).fit(
-                df, "outcome", "group", "period", "treatment",
-                controls=["X1"], L_max=2, honest_did=True,
+                df,
+                "outcome",
+                "group",
+                "period",
+                "treatment",
+                controls=["X1"],
+                L_max=2,
+                honest_did=True,
             )
         assert r.honest_did_results is not None
         assert np.isfinite(r.honest_did_results.ci_lb)
@@ -3433,8 +3689,14 @@ class TestHonestDiDIntegration:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             r = ChaisemartinDHaultfoeuille(seed=1).fit(
-                df, "outcome", "group", "period", "treatment",
-                trends_linear=True, L_max=2, honest_did=True,
+                df,
+                "outcome",
+                "group",
+                "period",
+                "treatment",
+                trends_linear=True,
+                L_max=2,
+                honest_did=True,
             )
         # Bounds should be computed on second-differenced estimand
         assert r.honest_did_results is not None
@@ -3448,13 +3710,15 @@ class TestHonestDiDIntegration:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             r = ChaisemartinDHaultfoeuille(seed=1).fit(
-                df, "outcome", "group", "period", "treatment",
+                df,
+                "outcome",
+                "group",
+                "period",
+                "treatment",
                 L_max=2,
             )
         honest = HonestDiD(method="relative_magnitude")
-        sens = honest.sensitivity_analysis(
-            r, M_grid=list(np.linspace(0, 2, 5))
-        )
+        sens = honest.sensitivity_analysis(r, M_grid=list(np.linspace(0, 2, 5)))
         assert sens.breakdown_M is not None or len(sens.bounds) == 5
 
     def test_honest_did_smoothness(self):
@@ -3465,7 +3729,11 @@ class TestHonestDiDIntegration:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             r = ChaisemartinDHaultfoeuille(seed=1).fit(
-                df, "outcome", "group", "period", "treatment",
+                df,
+                "outcome",
+                "group",
+                "period",
+                "treatment",
                 L_max=2,
             )
         rm_bounds = compute_honest_did(r, method="relative_magnitude", M=1.0)
@@ -3479,8 +3747,13 @@ class TestHonestDiDIntegration:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             r = ChaisemartinDHaultfoeuille(seed=1).fit(
-                df, "outcome", "group", "period", "treatment",
-                L_max=2, honest_did=True,
+                df,
+                "outcome",
+                "group",
+                "period",
+                "treatment",
+                L_max=2,
+                honest_did=True,
             )
         hd = r.honest_did_results
         assert hd is not None
@@ -3497,7 +3770,11 @@ class TestHonestDiDIntegration:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             r = ChaisemartinDHaultfoeuille(seed=1).fit(
-                df, "outcome", "group", "period", "treatment",
+                df,
+                "outcome",
+                "group",
+                "period",
+                "treatment",
                 L_max=2,
             )
         # l_vec=[1, 0] targets only DID_1 (on-impact, R's default)
@@ -3514,8 +3791,13 @@ class TestHonestDiDIntegration:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             r = ChaisemartinDHaultfoeuille(seed=1, alpha=0.10).fit(
-                df, "outcome", "group", "period", "treatment",
-                L_max=2, honest_did=True,
+                df,
+                "outcome",
+                "group",
+                "period",
+                "treatment",
+                L_max=2,
+                honest_did=True,
             )
         assert r.honest_did_results is not None
         assert r.honest_did_results.alpha == 0.10
@@ -3526,8 +3808,13 @@ class TestHonestDiDIntegration:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             r = ChaisemartinDHaultfoeuille(seed=1).fit(
-                df, "outcome", "group", "period", "treatment",
-                L_max=2, honest_did=True,
+                df,
+                "outcome",
+                "group",
+                "period",
+                "treatment",
+                L_max=2,
+                honest_did=True,
             )
         hd = r.honest_did_results
         assert hd.pre_periods_used is not None
@@ -3546,13 +3833,15 @@ class TestHonestDiDIntegration:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             r = ChaisemartinDHaultfoeuille(seed=1).fit(
-                df, "outcome", "group", "period", "treatment",
+                df,
+                "outcome",
+                "group",
+                "period",
+                "treatment",
                 L_max=2,
             )
         # Attach custom-target HonestDiD to results
-        r.honest_did_results = compute_honest_did(
-            r, l_vec=np.array([1.0, 0.0])
-        )
+        r.honest_did_results = compute_honest_did(r, l_vec=np.array([1.0, 0.0]))
         text = r.summary()
         assert "on-impact" in text.lower()
         assert "Equal-weight" not in text
@@ -3567,16 +3856,27 @@ class TestHonestDiDIntegration:
             for t in range(7):
                 d = 1 if (switches and t >= 3) else 0
                 y = 10 + 2.0 * t + 5.0 * d + rng.normal(0, 0.5)
-                rows.append({
-                    "group": g, "period": t, "treatment": d,
-                    "outcome": y, "state": state,
-                })
+                rows.append(
+                    {
+                        "group": g,
+                        "period": t,
+                        "treatment": d,
+                        "outcome": y,
+                        "state": state,
+                    }
+                )
         df = pd.DataFrame(rows)
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             r = ChaisemartinDHaultfoeuille(seed=1).fit(
-                df, "outcome", "group", "period", "treatment",
-                L_max=2, trends_nonparam="state", honest_did=True,
+                df,
+                "outcome",
+                "group",
+                "period",
+                "treatment",
+                L_max=2,
+                trends_nonparam="state",
+                honest_did=True,
             )
         assert r.honest_did_results is not None
         assert np.isfinite(r.honest_did_results.ci_lb)
@@ -3599,28 +3899,44 @@ class TestHonestDiDIntegration:
             switches = g < 3
             for t in range(n_periods):
                 d = 1 if (switches and t >= 5) else 0
-                y = 10 + 2.0*t + 5.0*d + rng.normal(0, 0.3)
-                rows.append({
-                    "group": g, "period": t, "treatment": d,
-                    "outcome": y, "state": "A",
-                })
+                y = 10 + 2.0 * t + 5.0 * d + rng.normal(0, 0.3)
+                rows.append(
+                    {
+                        "group": g,
+                        "period": t,
+                        "treatment": d,
+                        "outcome": y,
+                        "state": "A",
+                    }
+                )
         # State B: 4 switch at t=2, 2 "controls" switch at t=3
         for g in range(7, 13):
             switch_t = 2 if g < 11 else 3
             for t in range(n_periods):
                 d = 1 if t >= switch_t else 0
-                y = 10 + 2.0*t + 5.0*d + rng.normal(0, 0.3)
-                rows.append({
-                    "group": g, "period": t, "treatment": d,
-                    "outcome": y, "state": "B",
-                })
+                y = 10 + 2.0 * t + 5.0 * d + rng.normal(0, 0.3)
+                rows.append(
+                    {
+                        "group": g,
+                        "period": t,
+                        "treatment": d,
+                        "outcome": y,
+                        "state": "B",
+                    }
+                )
         df = pd.DataFrame(rows)
 
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
             r = ChaisemartinDHaultfoeuille(seed=1).fit(
-                df, "outcome", "group", "period", "treatment",
-                L_max=3, trends_nonparam="state", honest_did=True,
+                df,
+                "outcome",
+                "group",
+                "period",
+                "treatment",
+                L_max=3,
+                trends_nonparam="state",
+                honest_did=True,
             )
         # h=3 and h=-3 should be NaN (N_l=0 from support trimming)
         assert r.event_study_effects[3]["n_obs"] == 0
@@ -3635,8 +3951,9 @@ class TestHonestDiDIntegration:
         assert hd.post_periods_used == [1, 2]
         # The placebo-based pre-period warning should have been emitted
         placebo_warns = [
-            x for x in w if "placebo" in str(x.message).lower()
-            and "pre-period" in str(x.message).lower()
+            x
+            for x in w
+            if "placebo" in str(x.message).lower() and "pre-period" in str(x.message).lower()
         ]
         assert len(placebo_warns) >= 1
 
@@ -3646,8 +3963,13 @@ class TestHonestDiDIntegration:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             r = ChaisemartinDHaultfoeuille(seed=1, n_bootstrap=49).fit(
-                df, "outcome", "group", "period", "treatment",
-                L_max=2, honest_did=True,
+                df,
+                "outcome",
+                "group",
+                "period",
+                "treatment",
+                L_max=2,
+                honest_did=True,
             )
         assert r.honest_did_results is not None
         assert np.isfinite(r.honest_did_results.ci_lb)
@@ -3664,9 +3986,7 @@ class TestSummaryPhase3:
 
     @staticmethod
     def _make_data(n_groups=40, n_periods=6, seed=42):
-        return generate_reversible_did_data(
-            n_groups=n_groups, n_periods=n_periods, seed=seed
-        )
+        return generate_reversible_did_data(n_groups=n_groups, n_periods=n_periods, seed=seed)
 
     def test_summary_renders_covariate_diagnostics(self):
         """Covariate Adjustment section appears in summary()."""
@@ -3675,8 +3995,13 @@ class TestSummaryPhase3:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             r = ChaisemartinDHaultfoeuille(seed=1).fit(
-                df, "outcome", "group", "period", "treatment",
-                controls=["X1"], L_max=1,
+                df,
+                "outcome",
+                "group",
+                "period",
+                "treatment",
+                controls=["X1"],
+                L_max=1,
             )
         text = r.summary()
         assert "Covariate Adjustment" in text
@@ -3687,8 +4012,13 @@ class TestSummaryPhase3:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             r = ChaisemartinDHaultfoeuille(seed=1).fit(
-                df, "outcome", "group", "period", "treatment",
-                trends_linear=True, L_max=2,
+                df,
+                "outcome",
+                "group",
+                "period",
+                "treatment",
+                trends_linear=True,
+                L_max=2,
             )
         text = r.summary()
         assert "Cumulated Level Effects" in text
@@ -3703,16 +4033,26 @@ class TestSummaryPhase3:
             for t in range(6):
                 d = 1 if (switches and t >= 3) else 0
                 y = 10 + 2.0 * t + 5.0 * d + 3.0 * x_g * d + rng.normal(0, 0.5)
-                rows.append({
-                    "group": g, "period": t, "treatment": d,
-                    "outcome": y, "het_x": x_g,
-                })
+                rows.append(
+                    {
+                        "group": g,
+                        "period": t,
+                        "treatment": d,
+                        "outcome": y,
+                        "het_x": x_g,
+                    }
+                )
         df = pd.DataFrame(rows)
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             r = ChaisemartinDHaultfoeuille(seed=1).fit(
-                df, "outcome", "group", "period", "treatment",
-                L_max=1, heterogeneity="het_x",
+                df,
+                "outcome",
+                "group",
+                "period",
+                "treatment",
+                L_max=1,
+                heterogeneity="het_x",
             )
         text = r.summary()
         assert "Heterogeneity Test" in text
@@ -3730,17 +4070,25 @@ class TestSummaryPhase3:
                 else:
                     d = 0  # never switch
                 y = 10 + t + 5.0 * d + rng.normal(0, 0.5)
-                rows.append({
-                    "group": g, "period": t, "treatment": d, "outcome": y,
-                })
+                rows.append(
+                    {
+                        "group": g,
+                        "period": t,
+                        "treatment": d,
+                        "outcome": y,
+                    }
+                )
         df = pd.DataFrame(rows)
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            r = ChaisemartinDHaultfoeuille(
-                seed=1, drop_larger_lower=False
-            ).fit(
-                df, "outcome", "group", "period", "treatment",
-                L_max=1, design2=True,
+            r = ChaisemartinDHaultfoeuille(seed=1, drop_larger_lower=False).fit(
+                df,
+                "outcome",
+                "group",
+                "period",
+                "treatment",
+                L_max=1,
+                design2=True,
             )
         text = r.summary()
         assert "Design-2" in text
@@ -3751,8 +4099,13 @@ class TestSummaryPhase3:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             r = ChaisemartinDHaultfoeuille(seed=1).fit(
-                df, "outcome", "group", "period", "treatment",
-                L_max=2, honest_did=True,
+                df,
+                "outcome",
+                "group",
+                "period",
+                "treatment",
+                L_max=2,
+                honest_did=True,
             )
         text = r.summary()
         assert "HonestDiD Sensitivity" in text
@@ -4153,9 +4506,7 @@ class TestByPathEdgeCases:
         assert results.path_effects == {}
 
         # Fit-time warning surfaced
-        empty_warnings = [
-            w for w in caught if "no observed treatment path" in str(w.message)
-        ]
+        empty_warnings = [w for w in caught if "no observed treatment path" in str(w.message)]
         assert empty_warnings, (
             "Expected a UserWarning when by_path is requested but no "
             "observed path has a complete window"
@@ -4208,10 +4559,18 @@ class TestByPathEdgeCases:
                 "period": [0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2],
                 "treatment": [0, 1, 1, 1, 1, 0, 0, 0, 0, 1, 1, 1],
                 "outcome": [
-                    10.0, 13.0, 14.0,
-                    10.0, 11.0, 9.0,
-                    10.0, 11.0, 12.0,
-                    10.0, 11.0, 12.0,
+                    10.0,
+                    13.0,
+                    14.0,
+                    10.0,
+                    11.0,
+                    9.0,
+                    10.0,
+                    11.0,
+                    12.0,
+                    10.0,
+                    11.0,
+                    12.0,
                 ],
             }
         )
@@ -4239,8 +4598,7 @@ class TestByPathEdgeCases:
         degenerate_warnings = [
             w
             for w in caught
-            if "unidentified for path=" in str(w.message)
-            and "horizon l=" in str(w.message)
+            if "unidentified for path=" in str(w.message) and "horizon l=" in str(w.message)
         ]
         assert degenerate_warnings, (
             "Expected a per-(path, horizon) degenerate-cohort UserWarning "
@@ -4314,9 +4672,7 @@ class TestByPathBootstrap:
         bit-identical to the analytical fit."""
         data = _by_path_three_path_data()
         _est_a, res_a = _fit_by_path(data, by_path=3, L_max=3)
-        _est_b, res_b = self._fit_with_bootstrap(
-            data, by_path=3, L_max=3, n_bootstrap=100, seed=42
-        )
+        _est_b, res_b = self._fit_with_bootstrap(data, by_path=3, L_max=3, n_bootstrap=100, seed=42)
         assert res_a.path_effects is not None and res_b.path_effects is not None
         assert set(res_a.path_effects.keys()) == set(res_b.path_effects.keys())
         for path, entry_a in res_a.path_effects.items():
@@ -4327,7 +4683,10 @@ class TestByPathBootstrap:
                     assert np.isnan(h_b["effect"])
                 else:
                     np.testing.assert_allclose(
-                        h_b["effect"], h_a["effect"], atol=1e-14, rtol=1e-14,
+                        h_b["effect"],
+                        h_a["effect"],
+                        atol=1e-14,
+                        rtol=1e-14,
                         err_msg=f"path={path} l={l_h}: bootstrap changed effect",
                     )
 
@@ -4335,9 +4694,7 @@ class TestByPathBootstrap:
         """On the hand-built 3-path panel, every non-degenerate (path, horizon)
         produces a positive finite bootstrap SE."""
         data = _by_path_three_path_data()
-        _est, res = self._fit_with_bootstrap(
-            data, by_path=3, L_max=3, n_bootstrap=200, seed=42
-        )
+        _est, res = self._fit_with_bootstrap(data, by_path=3, L_max=3, n_bootstrap=200, seed=42)
         assert res.path_effects is not None
         any_finite = False
         for path, entry in res.path_effects.items():
@@ -4349,8 +4706,7 @@ class TestByPathBootstrap:
                     )
                     if np.isfinite(h["se"]):
                         assert h["se"] > 0, (
-                            f"path={path} l={l_h}: bootstrap SE is not "
-                            f"positive: {h['se']}"
+                            f"path={path} l={l_h}: bootstrap SE is not " f"positive: {h['se']}"
                         )
                         any_finite = True
         assert any_finite, "No (path, horizon) produced a finite bootstrap SE"
@@ -4365,10 +4721,7 @@ class TestByPathBootstrap:
         extra panel construction is required.
         """
         golden_path = (
-            Path(__file__).parents[1]
-            / "benchmarks"
-            / "data"
-            / "dcdh_dynr_golden_values.json"
+            Path(__file__).parents[1] / "benchmarks" / "data" / "dcdh_dynr_golden_values.json"
         )
         if not golden_path.exists():
             pytest.skip(
@@ -4420,16 +4773,22 @@ class TestByPathBootstrap:
                 "period": [0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2],
                 "treatment": [0, 1, 1, 1, 1, 0, 0, 0, 0, 1, 1, 1],
                 "outcome": [
-                    10.0, 13.0, 14.0,
-                    10.0, 11.0, 9.0,
-                    10.0, 11.0, 12.0,
-                    10.0, 11.0, 12.0,
+                    10.0,
+                    13.0,
+                    14.0,
+                    10.0,
+                    11.0,
+                    9.0,
+                    10.0,
+                    11.0,
+                    12.0,
+                    10.0,
+                    11.0,
+                    12.0,
                 ],
             }
         )
-        _est, res = self._fit_with_bootstrap(
-            panel, by_path=2, L_max=1, n_bootstrap=100, seed=42
-        )
+        _est, res = self._fit_with_bootstrap(panel, by_path=2, L_max=1, n_bootstrap=100, seed=42)
         assert res.path_effects is not None
         any_nan = False
         for entry in res.path_effects.values():
@@ -4442,8 +4801,7 @@ class TestByPathBootstrap:
                     assert np.isnan(lo) and np.isnan(hi)
                     assert np.isfinite(h["effect"])
         assert any_nan, (
-            "Expected at least one NaN-SE (path, horizon) entry under "
-            "singleton-cohort panel"
+            "Expected at least one NaN-SE (path, horizon) entry under " "singleton-cohort panel"
         )
 
     @pytest.mark.parametrize("weights", ["rademacher", "mammen", "webb"])
@@ -4452,8 +4810,12 @@ class TestByPathBootstrap:
         3-path hand-built panel."""
         data = _by_path_three_path_data()
         _est, res = self._fit_with_bootstrap(
-            data, by_path=3, L_max=3, n_bootstrap=100,
-            bootstrap_weights=weights, seed=42,
+            data,
+            by_path=3,
+            L_max=3,
+            n_bootstrap=100,
+            bootstrap_weights=weights,
+            seed=42,
         )
         assert res.path_effects is not None
         any_finite = False
@@ -4461,19 +4823,25 @@ class TestByPathBootstrap:
             for h in entry["horizons"].values():
                 if np.isfinite(h["se"]) and h["se"] > 0:
                     any_finite = True
-        assert any_finite, (
-            f"bootstrap_weights={weights!r} produced no finite per-path SE"
-        )
+        assert any_finite, f"bootstrap_weights={weights!r} produced no finite per-path SE"
 
     def test_bootstrap_seed_reproducibility(self):
         """Two fits with the same seed must produce bit-identical
         per-(path, horizon) bootstrap SE."""
         data = _by_path_three_path_data()
         _est1, res1 = self._fit_with_bootstrap(
-            data, by_path=3, L_max=3, n_bootstrap=100, seed=2026,
+            data,
+            by_path=3,
+            L_max=3,
+            n_bootstrap=100,
+            seed=2026,
         )
         _est2, res2 = self._fit_with_bootstrap(
-            data, by_path=3, L_max=3, n_bootstrap=100, seed=2026,
+            data,
+            by_path=3,
+            L_max=3,
+            n_bootstrap=100,
+            seed=2026,
         )
         assert res1.path_effects is not None and res2.path_effects is not None
         for path, entry1 in res1.path_effects.items():
@@ -4484,7 +4852,8 @@ class TestByPathBootstrap:
                     assert np.isnan(h2["se"])
                 else:
                     np.testing.assert_array_equal(
-                        h1["se"], h2["se"],
+                        h1["se"],
+                        h2["se"],
                         err_msg=f"path={path} l={l_h}: seed reproducibility broke",
                     )
 
@@ -4499,7 +4868,11 @@ class TestByPathBootstrap:
         data = _by_path_three_path_data()
         _est_a, res_a = _fit_by_path(data, by_path=3, L_max=3)
         _est_b, res_b = self._fit_with_bootstrap(
-            data, by_path=3, L_max=3, n_bootstrap=200, seed=42,
+            data,
+            by_path=3,
+            L_max=3,
+            n_bootstrap=200,
+            seed=42,
         )
         assert res_a.path_effects is not None
         assert res_b.path_effects is not None
@@ -4547,7 +4920,10 @@ class TestByPathBootstrap:
                 if np.isfinite(h_b["se"]) and h_b["se"] > 0:
                     expected_t = h_b["effect"] / h_b["se"]
                     np.testing.assert_allclose(
-                        h_b["t_stat"], expected_t, atol=1e-10, rtol=1e-10,
+                        h_b["t_stat"],
+                        expected_t,
+                        atol=1e-10,
+                        rtol=1e-10,
                         err_msg=(
                             f"path={path} l={l_h}: t_stat should be "
                             f"SE-derived per anti-pattern rule"
@@ -4575,7 +4951,11 @@ class TestByPathBootstrap:
         """
         data = _by_path_three_path_data()
         _est, res = self._fit_with_bootstrap(
-            data, by_path=3, L_max=3, n_bootstrap=200, seed=42,
+            data,
+            by_path=3,
+            L_max=3,
+            n_bootstrap=200,
+            seed=42,
         )
         assert res.path_effects is not None
         br = res.bootstrap_results
@@ -4594,14 +4974,16 @@ class TestByPathBootstrap:
                     continue
                 if np.isfinite(se_br):
                     np.testing.assert_array_equal(
-                        h["se"], se_br,
+                        h["se"],
+                        se_br,
                         err_msg=(
                             f"path={path} l={l_h}: path_effects se "
                             f"{h['se']} != bootstrap_results.path_ses {se_br}"
                         ),
                     )
                     np.testing.assert_array_equal(
-                        h["p_value"], p_br if p_br is not None else np.nan,
+                        h["p_value"],
+                        p_br if p_br is not None else np.nan,
                         err_msg=(
                             f"path={path} l={l_h}: path_effects p_value "
                             f"{h['p_value']} != "
@@ -4612,7 +4994,8 @@ class TestByPathBootstrap:
                     assert ci_br is not None
                     lo_br, hi_br = ci_br
                     np.testing.assert_array_equal(
-                        [lo_e, hi_e], [lo_br, hi_br],
+                        [lo_e, hi_e],
+                        [lo_br, hi_br],
                         err_msg=(
                             f"path={path} l={l_h}: path_effects conf_int "
                             f"{(lo_e, hi_e)} != "
@@ -4657,7 +5040,8 @@ class TestByPathBootstrap:
                 L_max=3,
             )
         overflow_warnings = [
-            w for w in caught
+            w
+            for w in caught
             if "exceeds the number of observed paths" in str(w.message)
             or "more than the observed number of paths" in str(w.message)
             or "requested but only" in str(w.message)
@@ -4824,8 +5208,7 @@ class TestByPathBootstrap:
         df_es = res.to_dataframe(level="event_study")
         negative_rows = df_es[df_es["horizon"] < 0]
         if len(negative_rows) > 0:
-            for col in ("se", "t_stat", "p_value",
-                        "conf_int_lower", "conf_int_upper"):
+            for col in ("se", "t_stat", "p_value", "conf_int_lower", "conf_int_upper"):
                 assert negative_rows[col].isna().all(), (
                     f"to_dataframe(level='event_study') negative-horizon "
                     f"column {col!r} must be NaN under n_bootstrap=1; "
@@ -4850,15 +5233,17 @@ class TestByPathBootstrap:
         """
         data = _by_path_three_path_data()
         _est, res = self._fit_with_bootstrap(
-            data, by_path=3, L_max=3, n_bootstrap=200, seed=42,
+            data,
+            by_path=3,
+            L_max=3,
+            n_bootstrap=200,
+            seed=42,
         )
         # Sanity: healthy fit has finite overall and path SEs.
         assert np.isfinite(res.overall_se)
         assert res.path_effects is not None
         any_finite_path = any(
-            np.isfinite(h["se"])
-            for e in res.path_effects.values()
-            for h in e["horizons"].values()
+            np.isfinite(h["se"]) for e in res.path_effects.values() for h in e["horizons"].values()
         )
         assert any_finite_path
 
@@ -4889,10 +5274,7 @@ class TestByPathBootstrap:
         # percentile).
         assert "multiplier-bootstrap percentile inference" not in summary_text
         # Must mention "per-path bootstrap inference is populated"
-        assert (
-            "per-path" in summary_text
-            and "bootstrap inference is populated" in summary_text
-        ), (
+        assert "per-path" in summary_text and "bootstrap inference is populated" in summary_text, (
             "Footer must surface which targets retain finite bootstrap "
             "inference when overall/event-study degenerates. Summary "
             "tail:\n"
@@ -4933,8 +5315,7 @@ class TestByPathBootstrap:
             )
 
         assert np.isnan(res.overall_se), (
-            f"n_bootstrap=1: overall_se must be NaN (bootstrap "
-            f"contract), got {res.overall_se}"
+            f"n_bootstrap=1: overall_se must be NaN (bootstrap " f"contract), got {res.overall_se}"
         )
         assert np.isnan(res.overall_t_stat)
         assert np.isnan(res.overall_p_value)
@@ -4957,8 +5338,7 @@ class TestByPathBootstrap:
         assert res.event_study_effects is not None
         for l_h, entry in res.event_study_effects.items():
             assert np.isnan(entry["se"]), (
-                f"n_bootstrap=1: event_study_effects[{l_h}].se must be "
-                f"NaN, got {entry['se']}"
+                f"n_bootstrap=1: event_study_effects[{l_h}].se must be " f"NaN, got {entry['se']}"
             )
             assert np.isnan(entry["t_stat"])
             assert np.isnan(entry["p_value"])
@@ -5187,8 +5567,7 @@ class TestByPathPlacebo:
                 g_to_F_g[int(g)] = int(treated["period"].iloc[0])
 
         outcome_lookup = {
-            (int(r["group"]), int(r["period"])): float(r["outcome"])
-            for _, r in data.iterrows()
+            (int(r["group"]), int(r["period"])): float(r["outcome"]) for _, r in data.iterrows()
         }
         # Per-group path tuple
         g_to_path = {}
@@ -5221,22 +5600,16 @@ class TestByPathPlacebo:
                     # switchers in this fixture share baseline 0), not
                     # switched by forward, observed at ref+backward+forward
                     ctrl_groups = [
-                        gc
-                        for gc in g_to_F_g
-                        if gc != g and g_to_F_g[gc] > forward
+                        gc for gc in g_to_F_g if gc != g and g_to_F_g[gc] > forward
                     ] + never_treated
                     if not ctrl_groups:
                         continue
-                    switcher_change = (
-                        outcome_lookup[(g, backward)] - outcome_lookup[(g, F_g - 1)]
-                    )
+                    switcher_change = outcome_lookup[(g, backward)] - outcome_lookup[(g, F_g - 1)]
                     ctrl_changes = [
                         outcome_lookup[(int(gc), backward)] - outcome_lookup[(int(gc), F_g - 1)]
                         for gc in ctrl_groups
                     ]
-                    contributions.append(
-                        switcher_change - sum(ctrl_changes) / len(ctrl_changes)
-                    )
+                    contributions.append(switcher_change - sum(ctrl_changes) / len(ctrl_changes))
                 if contributions:
                     expected_mean = sum(contributions) / len(contributions)
                     np.testing.assert_allclose(
@@ -5266,9 +5639,7 @@ class TestByPathPlacebo:
                 if np.isfinite(se):
                     assert se > 0, f"path={path} lag={lag_key}: SE={se} not positive"
                 else:
-                    assert np.isnan(se), (
-                        f"path={path} lag={lag_key}: SE={se} not NaN-finite"
-                    )
+                    assert np.isnan(se), f"path={path} lag={lag_key}: SE={se} not NaN-finite"
 
     def test_switcher_subset_mask_default_preserves_legacy_placebo_if(self):
         """``_compute_per_group_if_placebo_horizon(switcher_subset_mask=None)``
@@ -5331,9 +5702,7 @@ class TestByPathPlacebo:
             for lag_key, entry in lag_dict.items():
                 if not np.isfinite(entry["se"]):
                     continue
-                expected_t = safe_inference(
-                    entry["effect"], entry["se"], alpha=0.05, df=None
-                )[0]
+                expected_t = safe_inference(entry["effect"], entry["se"], alpha=0.05, df=None)[0]
                 np.testing.assert_allclose(
                     entry["t_stat"],
                     expected_t,
@@ -5355,9 +5724,9 @@ class TestByPathPlacebo:
         data = _by_path_placebo_data()
         _est, res = _fit_by_path_with_placebo(data, by_path=3, L_max=3)
         df = res.to_dataframe(level="by_path")
-        assert (df["horizon"] < 0).any(), (
-            "to_dataframe(level='by_path') did not emit any negative-horizon rows"
-        )
+        assert (
+            df["horizon"] < 0
+        ).any(), "to_dataframe(level='by_path') did not emit any negative-horizon rows"
 
     def test_empty_path_placebo_surface_when_no_complete_window(self):
         """``path_placebo_event_study`` empty-state contract: ``{}`` (NOT
@@ -5452,8 +5821,7 @@ class TestByPathPlacebo:
                             atol=1e-14,
                             rtol=1e-14,
                             err_msg=(
-                                f"path={path} lag={lag_key}: bootstrap "
-                                f"changed point estimate"
+                                f"path={path} lag={lag_key}: bootstrap " f"changed point estimate"
                             ),
                         )
 
@@ -5481,9 +5849,7 @@ class TestByPathPlacebo:
             PR #364 three rounds in a row.
             """
             data = _by_path_placebo_data()
-            _est, res = _fit_by_path_with_placebo(
-                data, by_path=3, L_max=3, n_bootstrap=1, seed=42
-            )
+            _est, res = _fit_by_path_with_placebo(data, by_path=3, L_max=3, n_bootstrap=1, seed=42)
             assert res.path_placebo_event_study is not None
             br = res.bootstrap_results
             assert br is not None
@@ -5663,9 +6029,7 @@ class TestByPathSupTBands:
         # a finite crit; otherwise it should be absent.
         for path, entry in res.path_effects.items():
             n_valid = sum(
-                1
-                for h in entry["horizons"].values()
-                if np.isfinite(h["se"]) and h["se"] > 0
+                1 for h in entry["horizons"].values() if np.isfinite(h["se"]) and h["se"] > 0
             )
             if n_valid >= 2:
                 # Must be present (assuming gate also passes); if it's
@@ -5800,17 +6164,12 @@ class TestByPathSupTBands:
         single_horizon_paths = [
             path
             for path, entry in res.path_effects.items()
-            if sum(
-                1
-                for h in entry["horizons"].values()
-                if np.isfinite(h["se"]) and h["se"] > 0
-            )
+            if sum(1 for h in entry["horizons"].values() if np.isfinite(h["se"]) and h["se"] > 0)
             < 2
         ]
         for path in single_horizon_paths:
             assert path not in res.path_sup_t_bands, (
-                f"path={path} has <2 valid horizons; should be absent "
-                f"from path_sup_t_bands"
+                f"path={path} has <2 valid horizons; should be absent " f"from path_sup_t_bands"
             )
             # And no horizon should have cband_conf_int populated.
             for l_h, h in res.path_effects[path]["horizons"].items():
@@ -5929,14 +6288,10 @@ class TestByPathSupTBands:
         for g in (1, 2, 3, 4):
             for t in range(4):
                 d = 1 if t >= 3 else 0
-                rows.append(
-                    {"group": g, "period": t, "treatment": d, "outcome": rng.normal()}
-                )
+                rows.append({"group": g, "period": t, "treatment": d, "outcome": rng.normal()})
         for g in (5, 6):
             for t in range(4):
-                rows.append(
-                    {"group": g, "period": t, "treatment": 0, "outcome": rng.normal()}
-                )
+                rows.append({"group": g, "period": t, "treatment": 0, "outcome": rng.normal()})
         data = pd.DataFrame(rows)
 
         with warnings.catch_warnings():
@@ -5960,8 +6315,7 @@ class TestByPathSupTBands:
 
         # Empty-state contract: requested but empty -> {} not None.
         assert res.path_effects == {}, (
-            f"Expected path_effects == {{}} on no-complete-window panel; "
-            f"got {res.path_effects}"
+            f"Expected path_effects == {{}} on no-complete-window panel; " f"got {res.path_effects}"
         )
         assert res.path_sup_t_bands == {}, (
             f"Expected path_sup_t_bands == {{}} (not None) when "
@@ -6001,9 +6355,7 @@ class TestByPathSupTBands:
             horizon = int(row["horizon"])
             if horizon > 0 and path in res.path_sup_t_bands:
                 # Should match the horizon's cband_conf_int.
-                expected_cband = res.path_effects[path]["horizons"][horizon].get(
-                    "cband_conf_int"
-                )
+                expected_cband = res.path_effects[path]["horizons"][horizon].get("cband_conf_int")
                 if expected_cband is not None:
                     np.testing.assert_allclose(row["cband_lower"], expected_cband[0])
                     np.testing.assert_allclose(row["cband_upper"], expected_cband[1])
@@ -6023,14 +6375,10 @@ class TestByPathSupTBands:
         for g in (1, 2, 3, 4):
             for t in range(4):
                 d = 1 if t >= 3 else 0
-                rows.append(
-                    {"group": g, "period": t, "treatment": d, "outcome": rng.normal()}
-                )
+                rows.append({"group": g, "period": t, "treatment": d, "outcome": rng.normal()})
         for g in (5, 6):
             for t in range(4):
-                rows.append(
-                    {"group": g, "period": t, "treatment": 0, "outcome": rng.normal()}
-                )
+                rows.append({"group": g, "period": t, "treatment": 0, "outcome": rng.normal()})
         data = pd.DataFrame(rows)
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", UserWarning)
@@ -6076,9 +6424,7 @@ class TestByPathSupTBands:
 
         original_generator = bs_mod._generate_psu_or_group_weights
 
-        def fake_generator(
-            n_bootstrap, n_groups_target, weight_type, rng, group_to_psu_map
-        ):
+        def fake_generator(n_bootstrap, n_groups_target, weight_type, rng, group_to_psu_map):
             # Call the original to get a sane base, then inject NaN into
             # exactly half of the bootstrap rows. The NaN propagates
             # through `weights @ u_centered` -> NaN deviations -> NaN
@@ -6147,9 +6493,7 @@ class TestByPathSupTBands:
 # ---------------------------------------------------------------------------
 
 
-def _by_path_three_path_data_with_controls(
-    seed: int = 42, x_effect: float = 3.0
-) -> pd.DataFrame:
+def _by_path_three_path_data_with_controls(seed: int = 42, x_effect: float = 3.0) -> pd.DataFrame:
     """Three-path panel with confounding covariate X1.
 
     Extends ``_by_path_three_path_data``: same 8-group / 4-period
@@ -6195,12 +6539,7 @@ def _load_by_path_controls_scenario():
     file is missing (CI's isolated-install job ships only tests/, not
     benchmarks/, per ``feedback_golden_file_pytest_skip.md``).
     """
-    golden_path = (
-        Path(__file__).parents[1]
-        / "benchmarks"
-        / "data"
-        / "dcdh_dynr_golden_values.json"
-    )
+    golden_path = Path(__file__).parents[1] / "benchmarks" / "data" / "dcdh_dynr_golden_values.json"
     if not golden_path.exists():
         pytest.skip(
             f"dCDH golden values file not found at {golden_path}; "
@@ -6325,9 +6664,7 @@ class TestByPathControls:
         data = _by_path_three_path_data_with_controls()
         # Add a second covariate
         rng = np.random.default_rng(99)
-        data = data.assign(
-            X2=lambda d: 0.5 * d["X1"] + rng.normal(0, 0.5, size=len(d))
-        )
+        data = data.assign(X2=lambda d: 0.5 * d["X1"] + rng.normal(0, 0.5, size=len(d)))
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", UserWarning)
             est = ChaisemartinDHaultfoeuille(drop_larger_lower=False, by_path=3)
@@ -6343,9 +6680,9 @@ class TestByPathControls:
         assert res.path_effects is not None
         for path, entry in res.path_effects.items():
             for l_h, vals in entry["horizons"].items():
-                assert np.isfinite(vals["effect"]), (
-                    f"path={path} l={l_h}: effect not finite under multi-covariate"
-                )
+                assert np.isfinite(
+                    vals["effect"]
+                ), f"path={path} l={l_h}: effect not finite under multi-covariate"
 
     # Bootstrap SE inheritance ------------------------------------------
     @pytest.mark.slow
@@ -6383,9 +6720,7 @@ class TestByPathControls:
         data = _load_by_path_controls_scenario()
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", UserWarning)
-            est_a = ChaisemartinDHaultfoeuille(
-                drop_larger_lower=False, by_path=3, seed=42
-            )
+            est_a = ChaisemartinDHaultfoeuille(drop_larger_lower=False, by_path=3, seed=42)
             res_a = est_a.fit(
                 data,
                 outcome="outcome",
@@ -6448,8 +6783,7 @@ class TestByPathControls:
                     any_finite = True
                     break
         assert any_finite, (
-            "No per-path placebo lag produced a finite effect under "
-            "controls + by_path + placebo"
+            "No per-path placebo lag produced a finite effect under " "controls + by_path + placebo"
         )
 
     @pytest.mark.slow
@@ -6483,9 +6817,7 @@ class TestByPathControls:
                 if np.isfinite(se) and se > 0:
                     any_finite_se = True
                     break
-        assert any_finite_se, (
-            "No per-path placebo lag produced a finite > 0 bootstrap SE"
-        )
+        assert any_finite_se, "No per-path placebo lag produced a finite > 0 bootstrap SE"
 
     # Per-path sup-t bands inheritance ----------------------------------
     @pytest.mark.slow
@@ -6512,8 +6844,7 @@ class TestByPathControls:
         assert res.path_sup_t_bands is not None
         # At least one path should pass both gates
         any_finite = any(
-            np.isfinite(entry.get("crit_value", np.nan))
-            and entry.get("crit_value", -1) > 0
+            np.isfinite(entry.get("crit_value", np.nan)) and entry.get("crit_value", -1) > 0
             for entry in res.path_sup_t_bands.values()
         )
         assert any_finite, (
@@ -6553,9 +6884,9 @@ class TestByPathControls:
         if res_no.per_period_effects is not None:
             assert res_yes.per_period_effects is not None
             for t in res_no.per_period_effects:
-                assert t in res_yes.per_period_effects, (
-                    f"per_period_effects period {t} missing under controls"
-                )
+                assert (
+                    t in res_yes.per_period_effects
+                ), f"per_period_effects period {t} missing under controls"
                 for field in ("did_plus_t", "did_minus_t"):
                     np.testing.assert_allclose(
                         res_no.per_period_effects[t][field],
@@ -6618,9 +6949,7 @@ class TestByPathControls:
         assert "cband_lower" in df_long.columns
         assert "cband_upper" in df_long.columns
         # At least one row must have a finite cband
-        any_finite_cband = (
-            df_long["cband_lower"].notna() & df_long["cband_upper"].notna()
-        ).any()
+        any_finite_cband = (df_long["cband_lower"].notna() & df_long["cband_upper"].notna()).any()
         assert any_finite_cband, (
             "to_dataframe(level='by_path') produced no rows with finite "
             "cband columns under controls + bootstrap"
@@ -6646,9 +6975,7 @@ class TestByPathControls:
             for t, d in enumerate(treatment_path):
                 x = 0.05 * group + 0.15 * t + rng.normal(0, 0.1)
                 y = d * 2.0 + 1.0 * x + rng.normal(0, 0.1)
-                rows.append(
-                    {"group": group, "period": t, "treatment": d, "outcome": y, "X1": x}
-                )
+                rows.append({"group": group, "period": t, "treatment": d, "outcome": y, "X1": x})
 
         for g in (1, 2, 3):
             _add(g, [0, 0, 1, 1, 1, 1])  # joiner-late path 0,0,1,1,1,1
@@ -6670,9 +6997,7 @@ class TestByPathControls:
 
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
-            est = ChaisemartinDHaultfoeuille(
-                drop_larger_lower=False, by_path=2
-            )
+            est = ChaisemartinDHaultfoeuille(drop_larger_lower=False, by_path=2)
             est.fit(
                 data,
                 outcome="outcome",
@@ -6689,10 +7014,7 @@ class TestByPathControls:
             if issubclass(w.category, UserWarning)
             and "+ controls" in str(w.message)
             and "multi-baseline" not in str(w.message).lower()
-            or (
-                issubclass(w.category, UserWarning)
-                and "switcher baselines" in str(w.message)
-            )
+            or (issubclass(w.category, UserWarning) and "switcher baselines" in str(w.message))
         ]
         assert deviation_msgs, (
             "Expected a UserWarning mentioning 'by_path + controls' and "
@@ -6721,8 +7043,7 @@ class TestByPathControls:
         deviation_msgs = [
             str(w.message)
             for w in caught
-            if issubclass(w.category, UserWarning)
-            and "switcher baselines" in str(w.message)
+            if issubclass(w.category, UserWarning) and "switcher baselines" in str(w.message)
         ]
         assert not deviation_msgs, (
             "Multi-baseline deviation warning fired on a single-baseline "
@@ -6774,9 +7095,7 @@ class TestByPathControls:
             f"single value, got {sorted(switcher_baselines.unique())}"
         )
         first_treat = (
-            data[
-                (data["treatment"] == 1) & data["group"].isin(switcher_groups)
-            ]
+            data[(data["treatment"] == 1) & data["group"].isin(switcher_groups)]
             .groupby("group")["period"]
             .min()
         )
@@ -6801,8 +7120,7 @@ class TestByPathControls:
         deviation_msgs = [
             str(w.message)
             for w in caught
-            if issubclass(w.category, UserWarning)
-            and "switcher baselines" in str(w.message)
+            if issubclass(w.category, UserWarning) and "switcher baselines" in str(w.message)
         ]
         assert not deviation_msgs, (
             "Multi-baseline deviation warning fired on a single-baseline "
@@ -6849,9 +7167,12 @@ def _by_path_data_with_trends_linear(seed: int = 42) -> pd.DataFrame:
         (0, 1, 0, 0),  # path 3, on briefly
     ]
     fg_path_counts = [
-        (4, 0, 20), (5, 0, 18),  # path 1 = 38
-        (6, 1, 13), (7, 1, 11),  # path 2 = 24
-        (8, 2, 11), (9, 2, 7),   # path 3 = 18
+        (4, 0, 20),
+        (5, 0, 18),  # path 1 = 38
+        (6, 1, 13),
+        (7, 1, 11),  # path 2 = 24
+        (8, 2, 11),
+        (9, 2, 7),  # path 3 = 18
     ]
     rows = []
     g_id = 0
@@ -6908,17 +7229,22 @@ def _by_path_data_with_trends_nonparam(seed: int = 43) -> pd.DataFrame:
     ]
     # F_g 2/3 -> path 1 (40), F_g 4/5 -> path 2 (25), F_g 6 -> path 3 (10)
     fg_path_counts = [
-        (2, 0, 20), (3, 0, 20),
-        (4, 1, 15), (5, 1, 10),
+        (2, 0, 20),
+        (3, 0, 20),
+        (4, 1, 15),
+        (5, 1, 10),
         (6, 2, 10),
         (7, 2, 5),  # rank 4-equivalent absorbed into path 3 cluster (kept by path 3 by frequency)
     ]
     # Adjust to ensure top 3 paths have unique counts:
     # path 1 = 40, path 2 = 25, path 3 = 15
     fg_path_counts = [
-        (2, 0, 20), (3, 0, 20),
-        (4, 1, 15), (5, 1, 10),
-        (6, 2, 8), (7, 2, 7),
+        (2, 0, 20),
+        (3, 0, 20),
+        (4, 1, 15),
+        (5, 1, 10),
+        (6, 2, 8),
+        (7, 2, 7),
     ]
     rows = []
     g_id = 0
@@ -6958,49 +7284,31 @@ def _by_path_data_with_trends_nonparam(seed: int = 43) -> pd.DataFrame:
 
 def _load_by_path_trends_lin_scenario():
     """Load golden-value scenario for by_path + trends_linear."""
-    golden_path = (
-        Path(__file__).parents[1]
-        / "benchmarks"
-        / "data"
-        / "dcdh_dynr_golden_values.json"
-    )
+    golden_path = Path(__file__).parents[1] / "benchmarks" / "data" / "dcdh_dynr_golden_values.json"
     if not golden_path.exists():
         pytest.skip(
             f"dCDH golden values file not found at {golden_path}; "
             "run: Rscript benchmarks/R/generate_dcdh_dynr_test_values.R"
         )
     with open(golden_path) as f:
-        sc = json.load(f)["scenarios"].get(
-            "single_baseline_multi_path_by_path_trends_lin"
-        )
+        sc = json.load(f)["scenarios"].get("single_baseline_multi_path_by_path_trends_lin")
     if sc is None:
-        pytest.skip(
-            "scenario 'single_baseline_multi_path_by_path_trends_lin' absent"
-        )
+        pytest.skip("scenario 'single_baseline_multi_path_by_path_trends_lin' absent")
     return pd.DataFrame(sc["data"])
 
 
 def _load_by_path_trends_nonparam_scenario():
     """Load golden-value scenario for by_path + trends_nonparam."""
-    golden_path = (
-        Path(__file__).parents[1]
-        / "benchmarks"
-        / "data"
-        / "dcdh_dynr_golden_values.json"
-    )
+    golden_path = Path(__file__).parents[1] / "benchmarks" / "data" / "dcdh_dynr_golden_values.json"
     if not golden_path.exists():
         pytest.skip(
             f"dCDH golden values file not found at {golden_path}; "
             "run: Rscript benchmarks/R/generate_dcdh_dynr_test_values.R"
         )
     with open(golden_path) as f:
-        sc = json.load(f)["scenarios"].get(
-            "multi_path_reversible_by_path_trends_nonparam"
-        )
+        sc = json.load(f)["scenarios"].get("multi_path_reversible_by_path_trends_nonparam")
     if sc is None:
-        pytest.skip(
-            "scenario 'multi_path_reversible_by_path_trends_nonparam' absent"
-        )
+        pytest.skip("scenario 'multi_path_reversible_by_path_trends_nonparam' absent")
     return pd.DataFrame(sc["data"])
 
 
@@ -7056,9 +7364,7 @@ class TestByPathTrendsLinear:
         assert res.path_effects is not None and len(res.path_effects) > 0
         for path, entry in res.path_effects.items():
             for l_h, vals in entry["horizons"].items():
-                assert np.isfinite(vals["effect"]), (
-                    f"path={path} l={l_h}: DID^{{fd}}_l not finite"
-                )
+                assert np.isfinite(vals["effect"]), f"path={path} l={l_h}: DID^{{fd}}_l not finite"
 
     def test_path_cumulated_event_study_present(self):
         """path_cumulated_event_study populated under trends_linear=True."""
@@ -7076,17 +7382,17 @@ class TestByPathTrendsLinear:
                 L_max=3,
             )
         assert res.path_cumulated_event_study is not None
-        assert set(res.path_cumulated_event_study.keys()) == set(
-            res.path_effects.keys()
-        )
+        assert set(res.path_cumulated_event_study.keys()) == set(res.path_effects.keys())
         for path, h_dict in res.path_cumulated_event_study.items():
-            assert set(h_dict.keys()) == {1, 2, 3}, (
-                f"path={path}: expected horizons 1..3, got {sorted(h_dict.keys())}"
-            )
+            assert set(h_dict.keys()) == {
+                1,
+                2,
+                3,
+            }, f"path={path}: expected horizons 1..3, got {sorted(h_dict.keys())}"
             for l_h, vals in h_dict.items():
-                assert np.isfinite(vals["effect"]), (
-                    f"path={path} l={l_h}: cumulated effect not finite"
-                )
+                assert np.isfinite(
+                    vals["effect"]
+                ), f"path={path} l={l_h}: cumulated effect not finite"
 
     def test_path_cumulated_is_none_without_trends_linear(self):
         """path_cumulated_event_study is None when trends_linear=False."""
@@ -7266,9 +7572,9 @@ class TestByPathTrendsLinear:
             f"vs bp={bp_pp is not None})"
         )
         if no_bp_pp is not None and bp_pp is not None:
-            assert set(no_bp_pp.keys()) == set(bp_pp.keys()), (
-                f"per_period_effects horizon set differs"
-            )
+            assert set(no_bp_pp.keys()) == set(
+                bp_pp.keys()
+            ), "per_period_effects horizon set differs"
             for t_h in no_bp_pp:
                 for field_name in ("did_plus_t", "did_minus_t"):
                     if field_name not in no_bp_pp[t_h]:
@@ -7310,9 +7616,7 @@ class TestByPathTrendsLinear:
             )
         for path, entry in res.path_effects.items():
             for l_h, vals in entry["horizons"].items():
-                assert np.isfinite(vals["se"]), (
-                    f"path={path} l={l_h}: bootstrap SE not finite"
-                )
+                assert np.isfinite(vals["se"]), f"path={path} l={l_h}: bootstrap SE not finite"
 
     def test_per_path_placebos_with_trends_linear_present(self):
         """``path_placebo_event_study`` populated under ``by_path +
@@ -7327,9 +7631,7 @@ class TestByPathTrendsLinear:
         data = _by_path_data_with_trends_linear()
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", UserWarning)
-            est = ChaisemartinDHaultfoeuille(
-                drop_larger_lower=False, by_path=3, placebo=True
-            )
+            est = ChaisemartinDHaultfoeuille(drop_larger_lower=False, by_path=3, placebo=True)
             res = est.fit(
                 data,
                 outcome="outcome",
@@ -7346,9 +7648,9 @@ class TestByPathTrendsLinear:
         # keys mirror the placebo_event_study convention.
         any_finite = False
         for path, lag_dict in res.path_placebo_event_study.items():
-            assert all(k < 0 for k in lag_dict.keys()), (
-                f"path={path}: placebo lag keys must be negative ints"
-            )
+            assert all(
+                k < 0 for k in lag_dict.keys()
+            ), f"path={path}: placebo lag keys must be negative ints"
             for lag_k, vals in lag_dict.items():
                 if np.isfinite(vals["effect"]):
                     any_finite = True
@@ -7379,9 +7681,7 @@ class TestByPathTrendsLinear:
         data = _by_path_data_with_trends_linear()
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", UserWarning)
-            est_a = ChaisemartinDHaultfoeuille(
-                drop_larger_lower=False, by_path=3, placebo=True
-            )
+            est_a = ChaisemartinDHaultfoeuille(drop_larger_lower=False, by_path=3, placebo=True)
             res_a = est_a.fit(
                 data,
                 outcome="outcome",
@@ -7470,9 +7770,9 @@ class TestByPathTrendsLinear:
                     f"path={path} lag={lag_k}: SE finite ({vals['se']}) "
                     "under n_bootstrap=1; expected NaN"
                 )
-                assert not np.isfinite(vals["p_value"]), (
-                    f"path={path} lag={lag_k}: p_value finite under n_bootstrap=1"
-                )
+                assert not np.isfinite(
+                    vals["p_value"]
+                ), f"path={path} lag={lag_k}: p_value finite under n_bootstrap=1"
 
     @pytest.mark.slow
     def test_sup_t_bands_with_trends_linear_finite_crit(self):
@@ -7506,14 +7806,12 @@ class TestByPathTrendsLinear:
                 any_finite = True
                 break
         assert any_finite, (
-            "No path produced a finite sup-t crit value under "
-            "trends_linear + bootstrap"
+            "No path produced a finite sup-t crit value under " "trends_linear + bootstrap"
         )
         df_bp = res.to_dataframe(level="by_path")
         positive = df_bp[df_bp["horizon"] > 0]
         assert positive["cband_lower"].notna().any(), (
-            "No positive-horizon cband rows populated under "
-            "trends_linear + bootstrap"
+            "No positive-horizon cband rows populated under " "trends_linear + bootstrap"
         )
 
     @pytest.mark.slow
@@ -7584,9 +7882,7 @@ class TestByPathTrendsLinear:
         def _add(group, treatment_path):
             for t, d in enumerate(treatment_path):
                 y = d * 2.0 + rng.normal(0, 0.1) + 0.1 * t
-                rows.append(
-                    {"group": group, "period": t, "treatment": d, "outcome": y}
-                )
+                rows.append({"group": group, "period": t, "treatment": d, "outcome": y})
 
         # F_g=3 joiners (path 0,0,1,1,1,1)
         for g in (1, 2, 3):
@@ -7604,11 +7900,7 @@ class TestByPathTrendsLinear:
 
         # Sanity: switchers have both D_{g,1}=0 and D_{g,1}=1 baselines
         switcher_ids = data[data["group"].isin([1, 2, 3, 4, 5, 6])]
-        baselines = (
-            switcher_ids[switcher_ids["period"] == 0]
-            .groupby("group")["treatment"]
-            .first()
-        )
+        baselines = switcher_ids[switcher_ids["period"] == 0].groupby("group")["treatment"].first()
         assert sorted(baselines.unique()) == [0, 1]
 
         with warnings.catch_warnings(record=True) as caught:
@@ -7685,9 +7977,7 @@ class TestByPathTrendsLinear:
         def _add(group, treatment_path):
             for t, d in enumerate(treatment_path):
                 y = d * 2.0 + 0.05 * group + rng.normal(0, 0.1)
-                rows.append(
-                    {"group": group, "period": t, "treatment": d, "outcome": y}
-                )
+                rows.append({"group": group, "period": t, "treatment": d, "outcome": y})
 
         for g in (1, 2, 3, 4):
             _add(g, [0, 0, 1, 1, 1, 1, 1, 1])  # F_g=3 path
@@ -7735,12 +8025,8 @@ class TestByPathTrendsLinear:
         # across 3 paths; all switchers have D_{g,1}=0.
         data = _by_path_data_with_trends_linear()
         # Sanity: F_g varies across switchers
-        switcher_first_treat = (
-            data[data["treatment"] == 1].groupby("group")["period"].min()
-        )
-        all_groups_first_treat = (
-            data.groupby("group")["treatment"].agg(lambda x: x.iloc[0])
-        )
+        switcher_first_treat = data[data["treatment"] == 1].groupby("group")["period"].min()
+        all_groups_first_treat = data.groupby("group")["treatment"].agg(lambda x: x.iloc[0])
         # Drop always-treated (D_{g,1}=1) groups to isolate switchers
         switcher_groups = all_groups_first_treat[all_groups_first_treat == 0].index
         switcher_F_g = switcher_first_treat[switcher_first_treat.index.isin(switcher_groups)]
@@ -7748,8 +8034,7 @@ class TestByPathTrendsLinear:
         # treated, 20 never-treated; switchers all have D_{g,1}=0 and
         # F_g spans {4,5,6,7,8,9} (6 distinct values)
         assert switcher_F_g.nunique() >= 2, (
-            "Test fixture pre-condition violated: F_g should be heterogeneous "
-            "across switchers"
+            "Test fixture pre-condition violated: F_g should be heterogeneous " "across switchers"
         )
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
@@ -7770,9 +8055,7 @@ class TestByPathTrendsLinear:
             and "+ trends_linear" in str(w.message)
             and "switcher baselines" in str(w.message)
         ]
-        assert not deviation_msgs, (
-            f"Heterogeneous F_g triggered the warning: {deviation_msgs}"
-        )
+        assert not deviation_msgs, f"Heterogeneous F_g triggered the warning: {deviation_msgs}"
         # Sanity: fit produced finite per-path effects
         assert res.path_effects is not None and len(res.path_effects) >= 1
 
@@ -7813,16 +8096,16 @@ class TestByPathTrendsLinear:
                     f"({vals['se']}) under n_bootstrap=1; expected NaN per "
                     "the NaN-on-invalid bootstrap contract"
                 )
-                assert not np.isfinite(vals["t_stat"]), (
-                    f"path={path} l={l_h}: cumulated t_stat not NaN"
-                )
-                assert not np.isfinite(vals["p_value"]), (
-                    f"path={path} l={l_h}: cumulated p_value not NaN"
-                )
+                assert not np.isfinite(
+                    vals["t_stat"]
+                ), f"path={path} l={l_h}: cumulated t_stat not NaN"
+                assert not np.isfinite(
+                    vals["p_value"]
+                ), f"path={path} l={l_h}: cumulated p_value not NaN"
                 ci_lo, ci_hi = vals["conf_int"]
-                assert not (np.isfinite(ci_lo) and np.isfinite(ci_hi)), (
-                    f"path={path} l={l_h}: cumulated conf_int not NaN"
-                )
+                assert not (
+                    np.isfinite(ci_lo) and np.isfinite(ci_hi)
+                ), f"path={path} l={l_h}: cumulated conf_int not NaN"
 
 
 class TestByPathTrendsNonparam:
@@ -7859,9 +8142,7 @@ class TestByPathTrendsNonparam:
         data = _by_path_data_with_trends_nonparam()
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", UserWarning)
-            est_no_set = ChaisemartinDHaultfoeuille(
-                drop_larger_lower=False, by_path=3
-            )
+            est_no_set = ChaisemartinDHaultfoeuille(drop_larger_lower=False, by_path=3)
             res_no = est_no_set.fit(
                 data,
                 outcome="outcome",
@@ -7870,9 +8151,7 @@ class TestByPathTrendsNonparam:
                 treatment="treatment",
                 L_max=3,
             )
-            est_set = ChaisemartinDHaultfoeuille(
-                drop_larger_lower=False, by_path=3
-            )
+            est_set = ChaisemartinDHaultfoeuille(drop_larger_lower=False, by_path=3)
             res_set = est_set.fit(
                 data,
                 outcome="outcome",
@@ -7920,9 +8199,9 @@ class TestByPathTrendsNonparam:
             )
         for path, entry in res.path_effects.items():
             for l_h, vals in entry["horizons"].items():
-                assert np.isfinite(vals["se"]) and vals["se"] > 0, (
-                    f"path={path} l={l_h}: SE not positive-finite"
-                )
+                assert (
+                    np.isfinite(vals["se"]) and vals["se"] > 0
+                ), f"path={path} l={l_h}: SE not positive-finite"
 
     def test_time_varying_set_with_by_path_raises(self):
         """time-varying set assignment still rejected."""
@@ -7980,9 +8259,7 @@ class TestByPathTrendsNonparam:
             )
         for path, entry in res.path_effects.items():
             for l_h, vals in entry["horizons"].items():
-                assert np.isfinite(vals["se"]), (
-                    f"path={path} l={l_h}: bootstrap SE not finite"
-                )
+                assert np.isfinite(vals["se"]), f"path={path} l={l_h}: bootstrap SE not finite"
 
     def test_per_period_effects_unaffected_by_trends_nonparam_by_path(self):
         """``per_period_effects`` is unaffected by the by_path +
@@ -8029,7 +8306,9 @@ class TestByPathTrendsNonparam:
                         bp_v = bp_v["effect"]
                     if no_v is not None and np.isfinite(no_v):
                         np.testing.assert_allclose(
-                            bp_v, no_v, rtol=1e-12,
+                            bp_v,
+                            no_v,
+                            rtol=1e-12,
                             err_msg=(
                                 f"per_period_effects[{t_h}][{field_name}] "
                                 f"differs under by_path + trends_nonparam"
@@ -8082,8 +8361,7 @@ class TestByPathTrendsNonparam:
         assert "cband_upper" in df_bp.columns
         positive = df_bp[df_bp["horizon"] > 0]
         assert positive["cband_lower"].notna().any(), (
-            "No positive-horizon cband rows populated under "
-            "trends_nonparam + bootstrap"
+            "No positive-horizon cband rows populated under " "trends_nonparam + bootstrap"
         )
 
     @pytest.mark.slow
@@ -8145,9 +8423,7 @@ class TestByPathTrendsNonparam:
                 if not np.isfinite(vals_set["se"]):
                     continue
                 any_finite = True
-                vals_no = res_no.path_placebo_event_study.get(path, {}).get(
-                    lag_k
-                )
+                vals_no = res_no.path_placebo_event_study.get(path, {}).get(lag_k)
                 if vals_no is None or not np.isfinite(vals_no["se"]):
                     continue
                 # Set restriction shrinks the control pool; with the
@@ -8191,9 +8467,12 @@ def _by_path_data_with_non_binary_treatment(seed: int = 44) -> pd.DataFrame:
         (0, 1, 2, 2),  # path 3, ramp-up
     ]
     fg_path_counts = [
-        (4, 0, 18), (5, 0, 14),  # path 1 = 32
-        (6, 1, 14), (7, 1, 12),  # path 2 = 26
-        (8, 2, 12), (9, 2, 8),   # path 3 = 20
+        (4, 0, 18),
+        (5, 0, 14),  # path 1 = 32
+        (6, 1, 14),
+        (7, 1, 12),  # path 2 = 26
+        (8, 2, 12),
+        (9, 2, 8),  # path 3 = 20
     ]
     rows = []
     g_id = 0
@@ -8248,8 +8527,12 @@ class TestByPathNonBinary:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", UserWarning)
             res = est.fit(
-                df, outcome="outcome", group="group", time="period",
-                treatment="treatment", L_max=3,
+                df,
+                outcome="outcome",
+                group="group",
+                time="period",
+                treatment="treatment",
+                L_max=3,
             )
         assert res.path_effects is not None
         assert len(res.path_effects) == 2
@@ -8272,8 +8555,12 @@ class TestByPathNonBinary:
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore", UserWarning)
                 est.fit(
-                    df, outcome="outcome", group="group", time="period",
-                    treatment="treatment", L_max=3,
+                    df,
+                    outcome="outcome",
+                    group="group",
+                    time="period",
+                    treatment="treatment",
+                    L_max=3,
                 )
 
     def test_negative_integer_D_supported(self):
@@ -8309,8 +8596,12 @@ class TestByPathNonBinary:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", UserWarning)
             res = est.fit(
-                df, outcome="outcome", group="group", time="period",
-                treatment="treatment", L_max=3,
+                df,
+                outcome="outcome",
+                group="group",
+                time="period",
+                treatment="treatment",
+                L_max=3,
             )
         assert res.path_effects is not None
         path_keys = set(res.path_effects.keys())
@@ -8369,19 +8660,29 @@ class TestByPathNonBinary:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", UserWarning)
             res = est.fit(
-                df, outcome="outcome", group="group", time="period",
-                treatment="treatment", L_max=3,
+                df,
+                outcome="outcome",
+                group="group",
+                time="period",
+                treatment="treatment",
+                L_max=3,
             )
         assert res.path_effects is not None
         path_keys = set(res.path_effects.keys())
         # Both negative-baseline paths must appear with full negative
         # baseline preserved in the tuple key.
-        assert (-1, 0, 0, 0) in path_keys, (
-            f"Expected (-1, 0, 0, 0) in path keys; got {sorted(path_keys)}"
-        )
-        assert (-1, 1, 1, 1) in path_keys, (
-            f"Expected (-1, 1, 1, 1) in path keys; got {sorted(path_keys)}"
-        )
+        assert (
+            -1,
+            0,
+            0,
+            0,
+        ) in path_keys, f"Expected (-1, 0, 0, 0) in path keys; got {sorted(path_keys)}"
+        assert (
+            -1,
+            1,
+            1,
+            1,
+        ) in path_keys, f"Expected (-1, 1, 1, 1) in path keys; got {sorted(path_keys)}"
 
     def test_path_effects_present_under_non_binary(self):
         """path_effects populated; tuple keys are non-binary."""
@@ -8392,8 +8693,12 @@ class TestByPathNonBinary:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", UserWarning)
             res = est.fit(
-                df, outcome="outcome", group="group", time="period",
-                treatment="treatment", L_max=3,
+                df,
+                outcome="outcome",
+                group="group",
+                time="period",
+                treatment="treatment",
+                L_max=3,
             )
         assert res.path_effects is not None
         assert len(res.path_effects) == 3
@@ -8405,9 +8710,7 @@ class TestByPathNonBinary:
         )
         for path, entry in res.path_effects.items():
             for l_h, vals in entry["horizons"].items():
-                assert np.isfinite(vals["effect"]), (
-                    f"path={path} l={l_h}: effect not finite"
-                )
+                assert np.isfinite(vals["effect"]), f"path={path} l={l_h}: effect not finite"
 
     def test_per_period_effects_unaffected_by_non_binary_by_path(self):
         """per_period_effects is unchanged by the by_path lift."""
@@ -8421,12 +8724,20 @@ class TestByPathNonBinary:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", UserWarning)
             res_no = est_no.fit(
-                df, outcome="outcome", group="group", time="period",
-                treatment="treatment", L_max=3,
+                df,
+                outcome="outcome",
+                group="group",
+                time="period",
+                treatment="treatment",
+                L_max=3,
             )
             res_bp = est_bp.fit(
-                df, outcome="outcome", group="group", time="period",
-                treatment="treatment", L_max=3,
+                df,
+                outcome="outcome",
+                group="group",
+                time="period",
+                treatment="treatment",
+                L_max=3,
             )
         # per_period_effects is computed before path enumeration; bit-identical.
         for t in res_no.per_period_effects.keys():
@@ -8435,9 +8746,9 @@ class TestByPathNonBinary:
                 v_bp = res_bp.per_period_effects[t].get(k)
                 if v_no is None or not np.isfinite(v_no):
                     continue
-                assert np.isclose(v_no, v_bp, atol=1e-14, rtol=1e-14), (
-                    f"per_period_effects[{t}][{k}]: {v_no} != {v_bp}"
-                )
+                assert np.isclose(
+                    v_no, v_bp, atol=1e-14, rtol=1e-14
+                ), f"per_period_effects[{t}][{k}]: {v_no} != {v_bp}"
 
     def test_to_dataframe_by_path_with_non_binary(self):
         """level='by_path' DataFrame includes non-binary path-tuple labels."""
@@ -8448,8 +8759,12 @@ class TestByPathNonBinary:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", UserWarning)
             res = est.fit(
-                df, outcome="outcome", group="group", time="period",
-                treatment="treatment", L_max=3,
+                df,
+                outcome="outcome",
+                group="group",
+                time="period",
+                treatment="treatment",
+                L_max=3,
             )
         out = res.to_dataframe(level="by_path")
         assert len(out) > 0
@@ -8477,15 +8792,17 @@ class TestByPathNonBinary:
             + 2.0 * df["treatment"].values
             + rng.normal(0, 0.5, size=len(df))
         )
-        est = ChaisemartinDHaultfoeuille(
-            drop_larger_lower=False, twfe_diagnostic=False, seed=42
-        )
+        est = ChaisemartinDHaultfoeuille(drop_larger_lower=False, twfe_diagnostic=False, seed=42)
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", UserWarning)
             # No by_path; the new D-integer validation does not fire.
             res = est.fit(
-                df, outcome="outcome", group="group", time="period",
-                treatment="treatment", L_max=2,
+                df,
+                outcome="outcome",
+                group="group",
+                time="period",
+                treatment="treatment",
+                L_max=2,
             )
         assert np.isfinite(res.overall_att)
 
@@ -8494,34 +8811,46 @@ class TestByPathNonBinary:
         """Bootstrap SE finite on every path under non-binary D."""
         df = _by_path_data_with_non_binary_treatment()
         est = ChaisemartinDHaultfoeuille(
-            drop_larger_lower=False, by_path=3, n_bootstrap=200,
-            twfe_diagnostic=False, seed=42,
+            drop_larger_lower=False,
+            by_path=3,
+            n_bootstrap=200,
+            twfe_diagnostic=False,
+            seed=42,
         )
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", UserWarning)
             res = est.fit(
-                df, outcome="outcome", group="group", time="period",
-                treatment="treatment", L_max=3,
+                df,
+                outcome="outcome",
+                group="group",
+                time="period",
+                treatment="treatment",
+                L_max=3,
             )
         for path, entry in res.path_effects.items():
             for l_h, vals in entry["horizons"].items():
-                assert np.isfinite(vals["se"]), (
-                    f"path={path} l={l_h}: bootstrap SE not finite"
-                )
+                assert np.isfinite(vals["se"]), f"path={path} l={l_h}: bootstrap SE not finite"
 
     @pytest.mark.slow
     def test_per_path_placebos_with_non_binary_present(self):
         """path_placebo_event_study populated under non-binary + placebo."""
         df = _by_path_data_with_non_binary_treatment()
         est = ChaisemartinDHaultfoeuille(
-            drop_larger_lower=False, by_path=3, placebo=True,
-            twfe_diagnostic=False, seed=42,
+            drop_larger_lower=False,
+            by_path=3,
+            placebo=True,
+            twfe_diagnostic=False,
+            seed=42,
         )
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", UserWarning)
             res = est.fit(
-                df, outcome="outcome", group="group", time="period",
-                treatment="treatment", L_max=3,
+                df,
+                outcome="outcome",
+                group="group",
+                time="period",
+                treatment="treatment",
+                L_max=3,
             )
         assert res.path_placebo_event_study is not None
         assert len(res.path_placebo_event_study) > 0
@@ -8541,14 +8870,21 @@ class TestByPathNonBinary:
         """Per-path sup-t crit_value finite under non-binary D."""
         df = _by_path_data_with_non_binary_treatment()
         est = ChaisemartinDHaultfoeuille(
-            drop_larger_lower=False, by_path=3, n_bootstrap=400,
-            twfe_diagnostic=False, seed=42,
+            drop_larger_lower=False,
+            by_path=3,
+            n_bootstrap=400,
+            twfe_diagnostic=False,
+            seed=42,
         )
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", UserWarning)
             res = est.fit(
-                df, outcome="outcome", group="group", time="period",
-                treatment="treatment", L_max=3,
+                df,
+                outcome="outcome",
+                group="group",
+                time="period",
+                treatment="treatment",
+                L_max=3,
             )
         assert res.path_sup_t_bands is not None
         # At least one path passed the strict-majority gate.
@@ -8557,9 +8893,9 @@ class TestByPathNonBinary:
             for entry in res.path_sup_t_bands.values()
             if np.isfinite(entry["crit_value"])
         ]
-        assert len(finite_crits) > 0, (
-            "Expected at least one finite crit_value under non-binary D + bootstrap"
-        )
+        assert (
+            len(finite_crits) > 0
+        ), "Expected at least one finite crit_value under non-binary D + bootstrap"
 
 
 # ---------------------------------------------------------------------------
@@ -8590,26 +8926,18 @@ class TestPathsOfInterest:
 
     def test_non_int_element_raises(self):
         with pytest.raises(ValueError, match="must be an int"):
-            ChaisemartinDHaultfoeuille(
-                paths_of_interest=[(0, "a", 1, 1)]
-            )
+            ChaisemartinDHaultfoeuille(paths_of_interest=[(0, "a", 1, 1)])
 
     def test_bool_element_raises(self):
         with pytest.raises(ValueError, match="must be an int"):
-            ChaisemartinDHaultfoeuille(
-                paths_of_interest=[(False, True, True, True)]
-            )
+            ChaisemartinDHaultfoeuille(paths_of_interest=[(False, True, True, True)])
 
     def test_np_bool_element_raises(self):
         with pytest.raises(ValueError, match="must be an int"):
-            ChaisemartinDHaultfoeuille(
-                paths_of_interest=[(np.bool_(True), 0, 0, 0)]
-            )
+            ChaisemartinDHaultfoeuille(paths_of_interest=[(np.bool_(True), 0, 0, 0)])
 
     def test_np_integer_accepted_canonicalized(self):
-        est = ChaisemartinDHaultfoeuille(
-            paths_of_interest=[(np.int64(0), np.int32(1), 1, 1)]
-        )
+        est = ChaisemartinDHaultfoeuille(paths_of_interest=[(np.int64(0), np.int32(1), 1, 1)])
         # Canonicalized to Python int tuples.
         assert est.paths_of_interest == [(0, 1, 1, 1)]
         for v in est.paths_of_interest[0]:
@@ -8617,15 +8945,11 @@ class TestPathsOfInterest:
 
     def test_mixed_lengths_raise(self):
         with pytest.raises(ValueError, match="mixed lengths"):
-            ChaisemartinDHaultfoeuille(
-                paths_of_interest=[(0, 1), (0, 1, 1, 1)]
-            )
+            ChaisemartinDHaultfoeuille(paths_of_interest=[(0, 1), (0, 1, 1, 1)])
 
     def test_mutex_with_by_path_raises(self):
         with pytest.raises(ValueError, match="mutually exclusive"):
-            ChaisemartinDHaultfoeuille(
-                by_path=2, paths_of_interest=[(0, 1, 1, 1)]
-            )
+            ChaisemartinDHaultfoeuille(by_path=2, paths_of_interest=[(0, 1, 1, 1)])
 
     def test_set_params_re_validates_mutex_by_path_added(self):
         est = ChaisemartinDHaultfoeuille(paths_of_interest=[(0, 1, 1, 1)])
@@ -8662,9 +8986,7 @@ class TestPathsOfInterest:
         assert params["paths_of_interest"] is None
 
     def test_get_params_includes_paths_of_interest(self):
-        est = ChaisemartinDHaultfoeuille(
-            paths_of_interest=[(0, 1, 1, 1), (0, 1, 0, 0)]
-        )
+        est = ChaisemartinDHaultfoeuille(paths_of_interest=[(0, 1, 1, 1), (0, 1, 0, 0)])
         params = est.get_params()
         assert "paths_of_interest" in params
         assert params["paths_of_interest"] == [(0, 1, 1, 1), (0, 1, 0, 0)]
@@ -8687,8 +9009,12 @@ class TestPathsOfInterest:
             with warnings.catch_warnings():
                 warnings.simplefilter("default", UserWarning)
                 est.fit(
-                    df, outcome="outcome", group="group", time="period",
-                    treatment="treatment", L_max=3,
+                    df,
+                    outcome="outcome",
+                    group="group",
+                    time="period",
+                    treatment="treatment",
+                    L_max=3,
                 )
 
     # ---- fit-time validation ----
@@ -8705,8 +9031,12 @@ class TestPathsOfInterest:
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore", UserWarning)
                 est.fit(
-                    df, outcome="outcome", group="group", time="period",
-                    treatment="treatment", L_max=3,
+                    df,
+                    outcome="outcome",
+                    group="group",
+                    time="period",
+                    treatment="treatment",
+                    L_max=3,
                 )
 
     def test_paths_of_interest_requires_L_max(self):
@@ -8721,7 +9051,10 @@ class TestPathsOfInterest:
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore", UserWarning)
                 est.fit(
-                    df, outcome="outcome", group="group", time="period",
+                    df,
+                    outcome="outcome",
+                    group="group",
+                    time="period",
                     treatment="treatment",
                 )
 
@@ -8736,8 +9069,12 @@ class TestPathsOfInterest:
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore", UserWarning)
                 est.fit(
-                    df, outcome="outcome", group="group", time="period",
-                    treatment="treatment", L_max=3,
+                    df,
+                    outcome="outcome",
+                    group="group",
+                    time="period",
+                    treatment="treatment",
+                    L_max=3,
                 )
 
     # ---- behavior ----
@@ -8753,8 +9090,12 @@ class TestPathsOfInterest:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", UserWarning)
             res = est.fit(
-                df, outcome="outcome", group="group", time="period",
-                treatment="treatment", L_max=3,
+                df,
+                outcome="outcome",
+                group="group",
+                time="period",
+                treatment="treatment",
+                L_max=3,
             )
         assert set(res.path_effects.keys()) == {(0, 1, 1, 1), (0, 1, 0, 0)}
 
@@ -8771,8 +9112,12 @@ class TestPathsOfInterest:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", UserWarning)
             res = est.fit(
-                df, outcome="outcome", group="group", time="period",
-                treatment="treatment", L_max=3,
+                df,
+                outcome="outcome",
+                group="group",
+                time="period",
+                treatment="treatment",
+                L_max=3,
             )
         # Insertion order preserved.
         assert list(res.path_effects.keys()) == user_order
@@ -8794,8 +9139,12 @@ class TestPathsOfInterest:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", UserWarning)
             res = est.fit(
-                df, outcome="outcome", group="group", time="period",
-                treatment="treatment", L_max=3,
+                df,
+                outcome="outcome",
+                group="group",
+                time="period",
+                treatment="treatment",
+                L_max=3,
             )
         out = res.to_dataframe(level="by_path")
         # First-occurrence order of the path column matches user order.
@@ -8822,8 +9171,12 @@ class TestPathsOfInterest:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", UserWarning)
             res = est.fit(
-                df, outcome="outcome", group="group", time="period",
-                treatment="treatment", L_max=3,
+                df,
+                outcome="outcome",
+                group="group",
+                time="period",
+                treatment="treatment",
+                L_max=3,
             )
         text = res.summary()
         # Find the ordering of the user paths as they appear in summary.
@@ -8853,8 +9206,12 @@ class TestPathsOfInterest:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", UserWarning)
             res = est.fit(
-                df, outcome="outcome", group="group", time="period",
-                treatment="treatment", L_max=3,
+                df,
+                outcome="outcome",
+                group="group",
+                time="period",
+                treatment="treatment",
+                L_max=3,
             )
         # (0,1,1,1) has higher frequency → rank 1
         # (0,1,0,0) has lower frequency → rank 2
@@ -8877,8 +9234,12 @@ class TestPathsOfInterest:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", UserWarning)
             res = est.fit(
-                df, outcome="outcome", group="group", time="period",
-                treatment="treatment", L_max=3,
+                df,
+                outcome="outcome",
+                group="group",
+                time="period",
+                treatment="treatment",
+                L_max=3,
             )
         text = res.summary()
         assert "Every path in paths_of_interest was unobserved" in text, (
@@ -8903,8 +9264,12 @@ class TestPathsOfInterest:
         with warnings.catch_warnings(record=True) as recorded:
             warnings.simplefilter("always", UserWarning)
             res = est.fit(
-                df, outcome="outcome", group="group", time="period",
-                treatment="treatment", L_max=3,
+                df,
+                outcome="outcome",
+                group="group",
+                time="period",
+                treatment="treatment",
+                L_max=3,
             )
         # The summary empty-state warning mentions paths_of_interest, not by_path
         empty_state_warnings = [
@@ -8934,8 +9299,12 @@ class TestPathsOfInterest:
             with warnings.catch_warnings():
                 warnings.simplefilter("default", UserWarning)
                 res = est.fit(
-                    df, outcome="outcome", group="group", time="period",
-                    treatment="treatment", L_max=3,
+                    df,
+                    outcome="outcome",
+                    group="group",
+                    time="period",
+                    treatment="treatment",
+                    L_max=3,
                 )
         assert (1, 1, 1, 1) not in res.path_effects
         assert (0, 1, 1, 1) in res.path_effects
@@ -8952,8 +9321,12 @@ class TestPathsOfInterest:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", UserWarning)
             res = est.fit(
-                df, outcome="outcome", group="group", time="period",
-                treatment="treatment", L_max=3,
+                df,
+                outcome="outcome",
+                group="group",
+                time="period",
+                treatment="treatment",
+                L_max=3,
             )
         assert set(res.path_effects.keys()) == {(0, 2, 2, 2)}
         for l_h, vals in res.path_effects[(0, 2, 2, 2)]["horizons"].items():
@@ -8975,8 +9348,13 @@ class TestPathsOfInterest:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", UserWarning)
             res = est.fit(
-                df, outcome="outcome", group="group", time="period",
-                treatment="treatment", L_max=3, controls=["X1"],
+                df,
+                outcome="outcome",
+                group="group",
+                time="period",
+                treatment="treatment",
+                L_max=3,
+                controls=["X1"],
             )
         assert len(res.path_effects) == 2
         for path, entry in res.path_effects.items():
@@ -8995,8 +9373,13 @@ class TestPathsOfInterest:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", UserWarning)
             res = est.fit(
-                df, outcome="outcome", group="group", time="period",
-                treatment="treatment", L_max=3, trends_linear=True,
+                df,
+                outcome="outcome",
+                group="group",
+                time="period",
+                treatment="treatment",
+                L_max=3,
+                trends_linear=True,
             )
         assert len(res.path_effects) == 2
         # path_cumulated_event_study populated under trends_linear.
@@ -9015,8 +9398,12 @@ class TestPathsOfInterest:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", UserWarning)
             res = est.fit(
-                df, outcome="outcome", group="group", time="period",
-                treatment="treatment", L_max=3,
+                df,
+                outcome="outcome",
+                group="group",
+                time="period",
+                treatment="treatment",
+                L_max=3,
                 trends_nonparam="state",
             )
         assert len(res.path_effects) == 2
@@ -9044,8 +9431,12 @@ class TestPathsOfInterest:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", UserWarning)
             res = est.fit(
-                df, outcome="outcome", group="group", time="period",
-                treatment="treatment", L_max=3,
+                df,
+                outcome="outcome",
+                group="group",
+                time="period",
+                treatment="treatment",
+                L_max=3,
             )
         assert set(res.path_effects.keys()) == {(0, 2, 2, 2), (0, 1, 1, 1)}
         # 1. analytical / bootstrap on path_effects (SE finite)
@@ -9074,14 +9465,11 @@ class TestPathsOfInterest:
         # cband_conf_int populated for positive horizons of finite-crit paths.
         for path in finite_crit_paths:
             for l_h in range(1, 4):
-                cband = res.path_effects[path]["horizons"][l_h].get(
-                    "cband_conf_int"
-                )
+                cband = res.path_effects[path]["horizons"][l_h].get("cband_conf_int")
                 assert cband is not None, f"path={path} l={l_h}: cband missing"
                 lo, hi = cband
                 assert np.isfinite(lo) and np.isfinite(hi), (
-                    f"path={path} l={l_h}: cband endpoints not finite "
-                    f"(lo={lo}, hi={hi})"
+                    f"path={path} l={l_h}: cband endpoints not finite " f"(lo={lo}, hi={hi})"
                 )
 
     @pytest.mark.slow
@@ -9106,17 +9494,20 @@ class TestPathsOfInterest:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", UserWarning)
             res = est.fit(
-                df, outcome="outcome", group="group", time="period",
-                treatment="treatment", L_max=3, trends_linear=True,
+                df,
+                outcome="outcome",
+                group="group",
+                time="period",
+                treatment="treatment",
+                L_max=3,
+                trends_linear=True,
             )
         # (i) selector restricts the path set
         assert set(res.path_effects.keys()) == set(user_paths)
         # (ii) per-path bootstrap SE finite on event study
         for path in res.path_effects:
             for l_h, vals in res.path_effects[path]["horizons"].items():
-                assert np.isfinite(vals["se"]), (
-                    f"path={path} l={l_h}: bootstrap SE not finite"
-                )
+                assert np.isfinite(vals["se"]), f"path={path} l={l_h}: bootstrap SE not finite"
         # (iii) post-bootstrap path_cumulated_event_study populated for
         # the same paths AND derived from the post-bootstrap per-horizon
         # SEs (cumulated SE = sum of post-bootstrap component SEs).
@@ -9125,12 +9516,10 @@ class TestPathsOfInterest:
         for path in user_paths:
             assert len(res.path_cumulated_event_study[path]) > 0
             for l_h, vals in res.path_cumulated_event_study[path].items():
-                assert np.isfinite(vals["effect"]), (
-                    f"path={path} l={l_h}: cumulated effect not finite"
-                )
-                assert np.isfinite(vals["se"]), (
-                    f"path={path} l={l_h}: cumulated SE not finite"
-                )
+                assert np.isfinite(
+                    vals["effect"]
+                ), f"path={path} l={l_h}: cumulated effect not finite"
+                assert np.isfinite(vals["se"]), f"path={path} l={l_h}: cumulated SE not finite"
         # (iv) per-path placebo populated
         assert res.path_placebo_event_study is not None
         assert set(res.path_placebo_event_study.keys()) == set(user_paths)
@@ -9157,8 +9546,12 @@ class TestPathsOfInterest:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", UserWarning)
             res = est.fit(
-                df, outcome="outcome", group="group", time="period",
-                treatment="treatment", L_max=3,
+                df,
+                outcome="outcome",
+                group="group",
+                time="period",
+                treatment="treatment",
+                L_max=3,
                 trends_nonparam="state",
             )
         # Selector restriction
@@ -9201,8 +9594,12 @@ class TestPathsOfInterest:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", UserWarning)
             res = est.fit(
-                df, outcome="outcome", group="group", time="period",
-                treatment="treatment", L_max=3,
+                df,
+                outcome="outcome",
+                group="group",
+                time="period",
+                treatment="treatment",
+                L_max=3,
             )
         for path, entry in res.path_effects.items():
             for l_h, vals in entry["horizons"].items():
@@ -9221,8 +9618,12 @@ class TestPathsOfInterest:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", UserWarning)
             res = est.fit(
-                df, outcome="outcome", group="group", time="period",
-                treatment="treatment", L_max=3,
+                df,
+                outcome="outcome",
+                group="group",
+                time="period",
+                treatment="treatment",
+                L_max=3,
             )
         assert res.path_placebo_event_study is not None
         assert len(res.path_placebo_event_study) == 2
@@ -9258,19 +9659,33 @@ def _by_path_survey_data(seed: int = 44) -> pd.DataFrame:
             else:
                 d = 0
             y = 0.5 * d + rng.normal(0, 0.5)
-            rows.append({
-                "group": g, "period": t, "treatment": d, "outcome": y,
-                "survey_weights": weight, "strata": stratum, "psu": g,
-            })
+            rows.append(
+                {
+                    "group": g,
+                    "period": t,
+                    "treatment": d,
+                    "outcome": y,
+                    "survey_weights": weight,
+                    "strata": stratum,
+                    "psu": g,
+                }
+            )
     for g in range(30, 60):
         stratum = (g - 30) % 4
         weight = 1.0 + 0.1 * ((g - 30) % 5)
         for t in range(n_periods):
             y = rng.normal(0, 0.5)
-            rows.append({
-                "group": g, "period": t, "treatment": 0, "outcome": y,
-                "survey_weights": weight, "strata": stratum, "psu": g,
-            })
+            rows.append(
+                {
+                    "group": g,
+                    "period": t,
+                    "treatment": 0,
+                    "outcome": y,
+                    "survey_weights": weight,
+                    "strata": stratum,
+                    "psu": g,
+                }
+            )
     return pd.DataFrame(rows)
 
 
@@ -9297,19 +9712,33 @@ def _by_path_survey_data_single_path(seed: int = 44) -> pd.DataFrame:
             else:
                 d = 0
             y = 0.5 * d + rng.normal(0, 0.5)
-            rows.append({
-                "group": g, "period": t, "treatment": d, "outcome": y,
-                "survey_weights": weight, "strata": stratum, "psu": g,
-            })
+            rows.append(
+                {
+                    "group": g,
+                    "period": t,
+                    "treatment": d,
+                    "outcome": y,
+                    "survey_weights": weight,
+                    "strata": stratum,
+                    "psu": g,
+                }
+            )
     for g in range(30, 60):
         stratum = (g - 30) % 4
         weight = 1.0 + 0.1 * ((g - 30) % 5)
         for t in range(n_periods):
             y = rng.normal(0, 0.5)
-            rows.append({
-                "group": g, "period": t, "treatment": 0, "outcome": y,
-                "survey_weights": weight, "strata": stratum, "psu": g,
-            })
+            rows.append(
+                {
+                    "group": g,
+                    "period": t,
+                    "treatment": 0,
+                    "outcome": y,
+                    "survey_weights": weight,
+                    "strata": stratum,
+                    "psu": g,
+                }
+            )
     return pd.DataFrame(rows)
 
 
@@ -9334,8 +9763,13 @@ class TestByPathSurveyDesignAnalytical:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", UserWarning)
             res = est.fit(
-                df, outcome="outcome", group="group", time="period",
-                treatment="treatment", L_max=3, survey_design=sd,
+                df,
+                outcome="outcome",
+                group="group",
+                time="period",
+                treatment="treatment",
+                L_max=3,
+                survey_design=sd,
             )
         assert res.path_effects is not None
         assert len(res.path_effects) >= 1
@@ -9352,8 +9786,13 @@ class TestByPathSurveyDesignAnalytical:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", UserWarning)
             res = est.fit(
-                df, outcome="outcome", group="group", time="period",
-                treatment="treatment", L_max=3, survey_design=sd,
+                df,
+                outcome="outcome",
+                group="group",
+                time="period",
+                treatment="treatment",
+                L_max=3,
+                survey_design=sd,
             )
         assert res.path_effects is not None
         assert (0, 1, 1, 1) in res.path_effects
@@ -9371,8 +9810,13 @@ class TestByPathSurveyDesignAnalytical:
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore", UserWarning)
                 est.fit(
-                    df, outcome="outcome", group="group", time="period",
-                    treatment="treatment", L_max=3, survey_design=sd,
+                    df,
+                    outcome="outcome",
+                    group="group",
+                    time="period",
+                    treatment="treatment",
+                    L_max=3,
+                    survey_design=sd,
                 )
 
     def test_survey_design_plus_paths_of_interest_plus_n_bootstrap_raises(self):
@@ -9390,8 +9834,13 @@ class TestByPathSurveyDesignAnalytical:
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore", UserWarning)
                 est.fit(
-                    df, outcome="outcome", group="group", time="period",
-                    treatment="treatment", L_max=3, survey_design=sd,
+                    df,
+                    outcome="outcome",
+                    group="group",
+                    time="period",
+                    treatment="treatment",
+                    L_max=3,
+                    survey_design=sd,
                 )
 
     def test_global_survey_plus_n_bootstrap_still_works(self):
@@ -9414,8 +9863,13 @@ class TestByPathSurveyDesignAnalytical:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", UserWarning)
             res = est.fit(
-                df, outcome="outcome", group="group", time="period",
-                treatment="treatment", L_max=3, survey_design=sd,
+                df,
+                outcome="outcome",
+                group="group",
+                time="period",
+                treatment="treatment",
+                L_max=3,
+                survey_design=sd,
             )
         assert np.isfinite(res.overall_se)
         assert res.path_effects is None
@@ -9431,8 +9885,13 @@ class TestByPathSurveyDesignAnalytical:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", UserWarning)
             res = est.fit(
-                df, outcome="outcome", group="group", time="period",
-                treatment="treatment", L_max=3, survey_design=sd,
+                df,
+                outcome="outcome",
+                group="group",
+                time="period",
+                treatment="treatment",
+                L_max=3,
+                survey_design=sd,
             )
         assert res.path_effects is not None
         for path, entry in res.path_effects.items():
@@ -9460,12 +9919,22 @@ class TestByPathSurveyDesignAnalytical:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", UserWarning)
             res_g = est_g.fit(
-                df, outcome="outcome", group="group", time="period",
-                treatment="treatment", L_max=3, survey_design=sd,
+                df,
+                outcome="outcome",
+                group="group",
+                time="period",
+                treatment="treatment",
+                L_max=3,
+                survey_design=sd,
             )
             res_p = est_p.fit(
-                df, outcome="outcome", group="group", time="period",
-                treatment="treatment", L_max=3, survey_design=sd,
+                df,
+                outcome="outcome",
+                group="group",
+                time="period",
+                treatment="treatment",
+                L_max=3,
+                survey_design=sd,
             )
         assert res_p.path_effects is not None
         assert len(res_p.path_effects) == 1
@@ -9510,12 +9979,21 @@ class TestByPathSurveyDesignAnalytical:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", UserWarning)
             res_survey = est_p.fit(
-                df, outcome="outcome", group="group", time="period",
-                treatment="treatment", L_max=3, survey_design=sd,
+                df,
+                outcome="outcome",
+                group="group",
+                time="period",
+                treatment="treatment",
+                L_max=3,
+                survey_design=sd,
             )
             res_plain = est_p_no_survey.fit(
-                df, outcome="outcome", group="group", time="period",
-                treatment="treatment", L_max=3,
+                df,
+                outcome="outcome",
+                group="group",
+                time="period",
+                treatment="treatment",
+                L_max=3,
             )
         assert res_survey.path_effects is not None and res_plain.path_effects is not None
         any_se_compared = False
@@ -9534,7 +10012,9 @@ class TestByPathSurveyDesignAnalytical:
                 se_plain = res_plain.path_effects[path]["horizons"][l_h]["se"]
                 if np.isfinite(se_survey) and np.isfinite(se_plain):
                     np.testing.assert_allclose(
-                        se_survey, se_plain, rtol=0.10,
+                        se_survey,
+                        se_plain,
+                        rtol=0.10,
                         err_msg=(
                             f"path={path} l={l_h}: survey SE outside 10% "
                             f"rtol envelope of plug-in SE"
@@ -9570,8 +10050,13 @@ class TestByPathSurveyDesignAnalytical:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", UserWarning)
             res = est.fit(
-                df, outcome="outcome", group="group", time="period",
-                treatment="treatment", L_max=3, survey_design=sd,
+                df,
+                outcome="outcome",
+                group="group",
+                time="period",
+                treatment="treatment",
+                L_max=3,
+                survey_design=sd,
             )
         assert res.path_effects is not None
         any_finite = False
@@ -9644,18 +10129,28 @@ class TestByPathSurveyDesignAnalytical:
                 return se, forced_low_n_valid
             return se, n_valid
 
-        with _mock.patch.object(
-            _cd_mod, "_compute_path_effects",
-            side_effect=wrapped_path_effects,
-        ), _mock.patch.object(
-            _cd_mod, "_compute_se",
-            side_effect=wrapped_compute_se,
+        with (
+            _mock.patch.object(
+                _cd_mod,
+                "_compute_path_effects",
+                side_effect=wrapped_path_effects,
+            ),
+            _mock.patch.object(
+                _cd_mod,
+                "_compute_se",
+                side_effect=wrapped_compute_se,
+            ),
         ):
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore", UserWarning)
                 res = est.fit(
-                    df, outcome="outcome", group="group", time="period",
-                    treatment="treatment", L_max=3, survey_design=sd,
+                    df,
+                    outcome="outcome",
+                    group="group",
+                    time="period",
+                    treatment="treatment",
+                    L_max=3,
+                    survey_design=sd,
                 )
 
         # The forced low n_valid (5) at later IF sites bounds the final
@@ -9682,22 +10177,30 @@ class TestByPathSurveyDesignAnalytical:
                 if vals["n_obs"] == 0 or not np.isfinite(vals["se"]):
                     continue
                 t_final, p_final, ci_final = safe_inference(
-                    vals["effect"], vals["se"],
-                    alpha=est.alpha, df=expected_low_df,
+                    vals["effect"],
+                    vals["se"],
+                    alpha=est.alpha,
+                    df=expected_low_df,
                 )
                 np.testing.assert_allclose(
-                    vals["t_stat"], t_final, atol=1e-12,
+                    vals["t_stat"],
+                    t_final,
+                    atol=1e-12,
                     err_msg=(
                         f"path={path} l={l_h}: t_stat reflects stale "
                         f"snapshot df, not final df={expected_low_df}"
                     ),
                 )
                 np.testing.assert_allclose(
-                    vals["p_value"], p_final, atol=1e-12,
+                    vals["p_value"],
+                    p_final,
+                    atol=1e-12,
                     err_msg=f"path={path} l={l_h}: p_value stale",
                 )
                 np.testing.assert_allclose(
-                    vals["conf_int"], ci_final, atol=1e-12,
+                    vals["conf_int"],
+                    ci_final,
+                    atol=1e-12,
                     err_msg=f"path={path} l={l_h}: conf_int stale",
                 )
                 any_compared = True
@@ -9763,8 +10266,13 @@ class TestByPathSurveyDesignAnalytical:
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore", UserWarning)
                 res = est.fit(
-                    df, outcome="outcome", group="group", time="period",
-                    treatment="treatment", L_max=3, survey_design=sd,
+                    df,
+                    outcome="outcome",
+                    group="group",
+                    time="period",
+                    treatment="treatment",
+                    L_max=3,
+                    survey_design=sd,
                 )
 
         # Helper called exactly once from the final R2 P1b block.
@@ -9822,14 +10330,17 @@ class TestByPathSurveyDesignAnalytical:
             replicate_method="JK1",
             replicate_scale=1.0,
         )
-        est = ChaisemartinDHaultfoeuille(
-            by_path=2, drop_larger_lower=False, placebo=True
-        )
+        est = ChaisemartinDHaultfoeuille(by_path=2, drop_larger_lower=False, placebo=True)
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", UserWarning)
             res = est.fit(
-                df, outcome="outcome", group="group", time="period",
-                treatment="treatment", L_max=3, survey_design=sd,
+                df,
+                outcome="outcome",
+                group="group",
+                time="period",
+                treatment="treatment",
+                L_max=3,
+                survey_design=sd,
             )
         assert res.survey_metadata is not None
         df_final = res.survey_metadata.df_survey
@@ -9843,18 +10354,27 @@ class TestByPathSurveyDesignAnalytical:
                 if vals["n_obs"] == 0 or not np.isfinite(vals["se"]):
                     continue
                 t_exp, p_exp, ci_exp = safe_inference(
-                    vals["effect"], vals["se"], alpha=est.alpha, df=df_final,
+                    vals["effect"],
+                    vals["se"],
+                    alpha=est.alpha,
+                    df=df_final,
                 )
                 np.testing.assert_allclose(
-                    vals["t_stat"], t_exp, atol=1e-12,
+                    vals["t_stat"],
+                    t_exp,
+                    atol=1e-12,
                     err_msg=f"path={path} l={l_h} t_stat stale",
                 )
                 np.testing.assert_allclose(
-                    vals["p_value"], p_exp, atol=1e-12,
+                    vals["p_value"],
+                    p_exp,
+                    atol=1e-12,
                     err_msg=f"path={path} l={l_h} p_value stale",
                 )
                 np.testing.assert_allclose(
-                    vals["conf_int"], ci_exp, atol=1e-12,
+                    vals["conf_int"],
+                    ci_exp,
+                    atol=1e-12,
                     err_msg=f"path={path} l={l_h} conf_int stale",
                 )
                 any_checked = True
@@ -9865,7 +10385,10 @@ class TestByPathSurveyDesignAnalytical:
                     if vals["n_obs"] == 0 or not np.isfinite(vals["se"]):
                         continue
                     t_exp, p_exp, ci_exp = safe_inference(
-                        vals["effect"], vals["se"], alpha=est.alpha, df=df_final,
+                        vals["effect"],
+                        vals["se"],
+                        alpha=est.alpha,
+                        df=df_final,
                     )
                     np.testing.assert_allclose(vals["t_stat"], t_exp, atol=1e-12)
                     np.testing.assert_allclose(vals["p_value"], p_exp, atol=1e-12)
@@ -9897,8 +10420,13 @@ class TestByPathSurveyDesignAnalytical:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", UserWarning)
             res = est.fit(
-                df, outcome="outcome", group="group", time="period",
-                treatment="treatment", L_max=3, survey_design=sd,
+                df,
+                outcome="outcome",
+                group="group",
+                time="period",
+                treatment="treatment",
+                L_max=3,
+                survey_design=sd,
             )
         # df_survey reflects replicate columns; cap is 15 - 1 = 14.
         assert res.survey_metadata is not None
@@ -9913,14 +10441,17 @@ class TestByPathSurveyDesignAnalytical:
 
         df = _by_path_survey_data()
         sd = SurveyDesign(weights="survey_weights", strata="strata", psu="psu")
-        est = ChaisemartinDHaultfoeuille(
-            by_path=2, drop_larger_lower=False, placebo=True
-        )
+        est = ChaisemartinDHaultfoeuille(by_path=2, drop_larger_lower=False, placebo=True)
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", UserWarning)
             res = est.fit(
-                df, outcome="outcome", group="group", time="period",
-                treatment="treatment", L_max=3, survey_design=sd,
+                df,
+                outcome="outcome",
+                group="group",
+                time="period",
+                treatment="treatment",
+                L_max=3,
+                survey_design=sd,
             )
         assert res.path_placebo_event_study is not None
         any_finite = False
@@ -9953,28 +10484,47 @@ class TestByPathSurveyDesignAnalytical:
                 else:
                     d = 0
                 y = 0.5 * d + trend * t + rng.normal(0, 0.5)
-                rows.append({
-                    "group": g, "period": t, "treatment": d, "outcome": y,
-                    "survey_weights": weight, "strata": stratum, "psu": g,
-                })
+                rows.append(
+                    {
+                        "group": g,
+                        "period": t,
+                        "treatment": d,
+                        "outcome": y,
+                        "survey_weights": weight,
+                        "strata": stratum,
+                        "psu": g,
+                    }
+                )
         for g in range(30, 60):
             stratum = (g - 30) % 4
             weight = 1.0 + 0.1 * ((g - 30) % 5)
             trend = 0.05 * g
             for t in range(n_periods):
                 y = trend * t + rng.normal(0, 0.5)
-                rows.append({
-                    "group": g, "period": t, "treatment": 0, "outcome": y,
-                    "survey_weights": weight, "strata": stratum, "psu": g,
-                })
+                rows.append(
+                    {
+                        "group": g,
+                        "period": t,
+                        "treatment": 0,
+                        "outcome": y,
+                        "survey_weights": weight,
+                        "strata": stratum,
+                        "psu": g,
+                    }
+                )
         df = pd.DataFrame(rows)
         sd = SurveyDesign(weights="survey_weights", strata="strata", psu="psu")
         est = ChaisemartinDHaultfoeuille(by_path=2, drop_larger_lower=False)
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", UserWarning)
             res = est.fit(
-                df, outcome="outcome", group="group", time="period",
-                treatment="treatment", L_max=3, survey_design=sd,
+                df,
+                outcome="outcome",
+                group="group",
+                time="period",
+                treatment="treatment",
+                L_max=3,
+                survey_design=sd,
                 trends_linear=True,
             )
         # path_cumulated_event_study should populate under trends_linear
@@ -9995,16 +10545,20 @@ class TestByPathSurveyDesignAnalytical:
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always", UserWarning)
             res = est.fit(
-                df, outcome="outcome", group="group", time="period",
-                treatment="treatment", L_max=3, survey_design=sd,
+                df,
+                outcome="outcome",
+                group="group",
+                time="period",
+                treatment="treatment",
+                L_max=3,
+                survey_design=sd,
             )
         assert res.path_effects is not None
         assert (0, 1, 1, 1) in res.path_effects
         assert (0, 9, 9, 9) not in res.path_effects
         # Unobserved-path warning must have fired
         assert any(
-            "zero observed" in str(w.message) and "(0, 9, 9, 9)" in str(w.message)
-            for w in caught
+            "zero observed" in str(w.message) and "(0, 9, 9, 9)" in str(w.message) for w in caught
         )
 
     @pytest.mark.slow
@@ -10185,12 +10739,22 @@ class TestByPathSurveyDesignTelescope:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", UserWarning)
             res_g = est_g.fit(
-                df, outcome="outcome", group="group", time="period",
-                treatment="treatment", L_max=3, survey_design=sd,
+                df,
+                outcome="outcome",
+                group="group",
+                time="period",
+                treatment="treatment",
+                L_max=3,
+                survey_design=sd,
             )
             res_p = est_p.fit(
-                df, outcome="outcome", group="group", time="period",
-                treatment="treatment", L_max=3, survey_design=sd,
+                df,
+                outcome="outcome",
+                group="group",
+                time="period",
+                treatment="treatment",
+                L_max=3,
+                survey_design=sd,
             )
         assert res_p.path_effects is not None
         path = next(iter(res_p.path_effects.keys()))
@@ -10236,20 +10800,30 @@ def _by_path_het_data(seed=44, n_switchers=90, n_controls=30, n_periods=10):
             else:
                 d = 0
             y = 0.5 * t + effect * d + rng.normal(0, 0.5)
-            rows.append({
-                "group": g, "period": t, "treatment": d,
-                "outcome": y, "het_x": het_x,
-            })
+            rows.append(
+                {
+                    "group": g,
+                    "period": t,
+                    "treatment": d,
+                    "outcome": y,
+                    "het_x": het_x,
+                }
+            )
     # Never-treated controls (D=0 throughout), het_x balanced
     for k in range(n_controls):
         het_x = 1 if k < n_controls // 2 else 0
         g = n_switchers + k
         for t in range(n_periods):
             y = 0.5 * t + rng.normal(0, 0.5)
-            rows.append({
-                "group": g, "period": t, "treatment": 0,
-                "outcome": y, "het_x": het_x,
-            })
+            rows.append(
+                {
+                    "group": g,
+                    "period": t,
+                    "treatment": 0,
+                    "outcome": y,
+                    "het_x": het_x,
+                }
+            )
     return pd.DataFrame(rows)
 
 
@@ -10271,8 +10845,13 @@ class TestByPathHeterogeneity:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", UserWarning)
             res = est.fit(
-                df, outcome="outcome", group="group", time="period",
-                treatment="treatment", L_max=3, heterogeneity="het_x",
+                df,
+                outcome="outcome",
+                group="group",
+                time="period",
+                treatment="treatment",
+                L_max=3,
+                heterogeneity="het_x",
             )
         assert res.path_heterogeneity_effects is not None
 
@@ -10286,8 +10865,13 @@ class TestByPathHeterogeneity:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", UserWarning)
             res = est.fit(
-                df, outcome="outcome", group="group", time="period",
-                treatment="treatment", L_max=3, heterogeneity="het_x",
+                df,
+                outcome="outcome",
+                group="group",
+                time="period",
+                treatment="treatment",
+                L_max=3,
+                heterogeneity="het_x",
             )
         assert res.path_heterogeneity_effects is not None
 
@@ -10296,41 +10880,46 @@ class TestByPathHeterogeneity:
         df = _by_path_het_data()
         df["X1"] = np.random.RandomState(42).normal(0, 1, len(df))
         with pytest.raises(ValueError, match="cannot be combined with controls"):
-            ChaisemartinDHaultfoeuille(
-                drop_larger_lower=False, by_path=2
-            ).fit(
-                df, outcome="outcome", group="group", time="period",
-                treatment="treatment", L_max=3,
-                heterogeneity="het_x", controls=["X1"],
+            ChaisemartinDHaultfoeuille(drop_larger_lower=False, by_path=2).fit(
+                df,
+                outcome="outcome",
+                group="group",
+                time="period",
+                treatment="treatment",
+                L_max=3,
+                heterogeneity="het_x",
+                controls=["X1"],
             )
 
     def test_heterogeneity_still_rejects_trends_linear_under_by_path(self):
         """``heterogeneity + trends_linear`` mutex still fires under by_path."""
         df = _by_path_het_data()
-        with pytest.raises(
-            ValueError, match="cannot be combined with trends_linear"
-        ):
-            ChaisemartinDHaultfoeuille(
-                drop_larger_lower=False, by_path=2
-            ).fit(
-                df, outcome="outcome", group="group", time="period",
-                treatment="treatment", L_max=3,
-                heterogeneity="het_x", trends_linear=True,
+        with pytest.raises(ValueError, match="cannot be combined with trends_linear"):
+            ChaisemartinDHaultfoeuille(drop_larger_lower=False, by_path=2).fit(
+                df,
+                outcome="outcome",
+                group="group",
+                time="period",
+                treatment="treatment",
+                L_max=3,
+                heterogeneity="het_x",
+                trends_linear=True,
             )
 
     def test_heterogeneity_still_rejects_trends_nonparam_under_by_path(self):
         """``heterogeneity + trends_nonparam`` mutex still fires under by_path."""
         df = _by_path_het_data()
         df["state"] = df["group"] % 3
-        with pytest.raises(
-            ValueError, match="cannot be combined with trends_nonparam"
-        ):
-            ChaisemartinDHaultfoeuille(
-                drop_larger_lower=False, by_path=2
-            ).fit(
-                df, outcome="outcome", group="group", time="period",
-                treatment="treatment", L_max=3,
-                heterogeneity="het_x", trends_nonparam="state",
+        with pytest.raises(ValueError, match="cannot be combined with trends_nonparam"):
+            ChaisemartinDHaultfoeuille(drop_larger_lower=False, by_path=2).fit(
+                df,
+                outcome="outcome",
+                group="group",
+                time="period",
+                treatment="treatment",
+                L_max=3,
+                heterogeneity="het_x",
+                trends_nonparam="state",
             )
 
     # Behavior
@@ -10343,8 +10932,13 @@ class TestByPathHeterogeneity:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", UserWarning)
             res = est.fit(
-                df, outcome="outcome", group="group", time="period",
-                treatment="treatment", L_max=3, heterogeneity="het_x",
+                df,
+                outcome="outcome",
+                group="group",
+                time="period",
+                treatment="treatment",
+                L_max=3,
+                heterogeneity="het_x",
             )
         assert res.path_heterogeneity_effects
         # At horizon 1 every path has switchers; heterogeneity beta should
@@ -10376,8 +10970,13 @@ class TestByPathHeterogeneity:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", UserWarning)
             res = est.fit(
-                df, outcome="outcome", group="group", time="period",
-                treatment="treatment", L_max=3, heterogeneity="het_x",
+                df,
+                outcome="outcome",
+                group="group",
+                time="period",
+                treatment="treatment",
+                L_max=3,
+                heterogeneity="het_x",
             )
         assert res.path_heterogeneity_effects
         checked = 0
@@ -10392,22 +10991,14 @@ class TestByPathHeterogeneity:
                 )
                 half_low = het["beta"] - het["conf_int"][0]
                 half_high = het["conf_int"][1] - het["beta"]
-                assert half_low > 0, (
-                    f"path={path} l={l_h} conf_int_lower not below beta"
-                )
-                assert half_high > 0, (
-                    f"path={path} l={l_h} conf_int_upper not above beta"
-                )
-                assert half_low == pytest.approx(half_high, rel=1e-12), (
-                    f"path={path} l={l_h} conf_int asymmetric"
-                )
-                assert 0.0 <= het["p_value"] <= 1.0, (
-                    f"path={path} l={l_h} p_value out of [0, 1]"
-                )
+                assert half_low > 0, f"path={path} l={l_h} conf_int_lower not below beta"
+                assert half_high > 0, f"path={path} l={l_h} conf_int_upper not above beta"
+                assert half_low == pytest.approx(
+                    half_high, rel=1e-12
+                ), f"path={path} l={l_h} conf_int asymmetric"
+                assert 0.0 <= het["p_value"] <= 1.0, f"path={path} l={l_h} p_value out of [0, 1]"
                 checked += 1
-        assert checked >= 1, (
-            "Expected at least one populated (path, horizon) heterogeneity entry"
-        )
+        assert checked >= 1, "Expected at least one populated (path, horizon) heterogeneity entry"
 
     def test_per_path_heterogeneity_telescope_to_global_on_single_path(self):
         """On a single-path panel, per-path == global heterogeneity.
@@ -10429,35 +11020,53 @@ class TestByPathHeterogeneity:
                     d = path[-1]
                 else:
                     d = 0
-                rows.append({
-                    "group": g, "period": t, "treatment": d,
-                    "outcome": 0.5 * t + effect * d + rng.normal(0, 0.5),
-                    "het_x": het_x,
-                })
+                rows.append(
+                    {
+                        "group": g,
+                        "period": t,
+                        "treatment": d,
+                        "outcome": 0.5 * t + effect * d + rng.normal(0, 0.5),
+                        "het_x": het_x,
+                    }
+                )
         for k in range(n_controls):
             het_x = 1 if k < n_controls // 2 else 0
             for t in range(10):
-                rows.append({
-                    "group": n_switchers + k, "period": t, "treatment": 0,
-                    "outcome": 0.5 * t + rng.normal(0, 0.5),
-                    "het_x": het_x,
-                })
+                rows.append(
+                    {
+                        "group": n_switchers + k,
+                        "period": t,
+                        "treatment": 0,
+                        "outcome": 0.5 * t + rng.normal(0, 0.5),
+                        "het_x": het_x,
+                    }
+                )
         df = pd.DataFrame(rows)
         # Run with by_path=1 (path is observed)
         est_p = ChaisemartinDHaultfoeuille(drop_larger_lower=False, by_path=1)
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", UserWarning)
             res_p = est_p.fit(
-                df, outcome="outcome", group="group", time="period",
-                treatment="treatment", L_max=3, heterogeneity="het_x",
+                df,
+                outcome="outcome",
+                group="group",
+                time="period",
+                treatment="treatment",
+                L_max=3,
+                heterogeneity="het_x",
             )
         # Run global (no by_path)
         est_g = ChaisemartinDHaultfoeuille(drop_larger_lower=False)
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", UserWarning)
             res_g = est_g.fit(
-                df, outcome="outcome", group="group", time="period",
-                treatment="treatment", L_max=3, heterogeneity="het_x",
+                df,
+                outcome="outcome",
+                group="group",
+                time="period",
+                treatment="treatment",
+                L_max=3,
+                heterogeneity="het_x",
             )
         assert res_p.path_heterogeneity_effects
         path_key = (0, 1, 1, 1)
@@ -10469,11 +11078,17 @@ class TestByPathHeterogeneity:
                 assert not np.isfinite(py_global["beta"])
                 continue
             np.testing.assert_allclose(
-                py_path["beta"], py_global["beta"], atol=1e-14, rtol=1e-14,
+                py_path["beta"],
+                py_global["beta"],
+                atol=1e-14,
+                rtol=1e-14,
                 err_msg=f"l={l_h}: per-path beta != global beta (telescope failed)",
             )
             np.testing.assert_allclose(
-                py_path["se"], py_global["se"], atol=1e-14, rtol=1e-14,
+                py_path["se"],
+                py_global["se"],
+                atol=1e-14,
+                rtol=1e-14,
                 err_msg=f"l={l_h}: per-path se != global se (telescope failed)",
             )
 
@@ -10497,27 +11112,40 @@ class TestByPathHeterogeneity:
                 else:
                     d = 0
                 # Effect is constant 5.0 — no heterogeneity by het_x
-                rows.append({
-                    "group": g, "period": t, "treatment": d,
-                    "outcome": 0.5 * t + 5.0 * d + rng.normal(0, 0.5),
-                    "het_x": het_x,
-                })
+                rows.append(
+                    {
+                        "group": g,
+                        "period": t,
+                        "treatment": d,
+                        "outcome": 0.5 * t + 5.0 * d + rng.normal(0, 0.5),
+                        "het_x": het_x,
+                    }
+                )
         for k in range(n_controls):
             # Draw het_x ONCE per group (must be time-invariant)
             het_x = rng.normal(0, 1)
             for t in range(10):
-                rows.append({
-                    "group": n_switchers + k, "period": t, "treatment": 0,
-                    "outcome": 0.5 * t + rng.normal(0, 0.5),
-                    "het_x": het_x,
-                })
+                rows.append(
+                    {
+                        "group": n_switchers + k,
+                        "period": t,
+                        "treatment": 0,
+                        "outcome": 0.5 * t + rng.normal(0, 0.5),
+                        "het_x": het_x,
+                    }
+                )
         df = pd.DataFrame(rows)
         est = ChaisemartinDHaultfoeuille(drop_larger_lower=False, by_path=3)
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", UserWarning)
             res = est.fit(
-                df, outcome="outcome", group="group", time="period",
-                treatment="treatment", L_max=3, heterogeneity="het_x",
+                df,
+                outcome="outcome",
+                group="group",
+                time="period",
+                treatment="treatment",
+                L_max=3,
+                heterogeneity="het_x",
             )
         assert res.path_heterogeneity_effects
         for path, horizons in res.path_heterogeneity_effects.items():
@@ -10549,11 +11177,15 @@ class TestByPathHeterogeneity:
                     d = path[-1]
                 else:
                     d = 0
-                rows.append({
-                    "group": g, "period": t, "treatment": d,
-                    "outcome": 0.5 * t + 5.0 * d + rng.normal(0, 0.5),
-                    "het_x": het_x,
-                })
+                rows.append(
+                    {
+                        "group": g,
+                        "period": t,
+                        "treatment": d,
+                        "outcome": 0.5 * t + 5.0 * d + rng.normal(0, 0.5),
+                        "het_x": het_x,
+                    }
+                )
         # 2 switchers on the rare path — under-eligible
         for g in range(30, 32):
             F_g = 3
@@ -10566,18 +11198,27 @@ class TestByPathHeterogeneity:
                     d = path[-1]
                 else:
                     d = 0
-                rows.append({
-                    "group": g, "period": t, "treatment": d,
-                    "outcome": 0.5 * t + 5.0 * d + rng.normal(0, 0.5),
-                    "het_x": het_x,
-                })
+                rows.append(
+                    {
+                        "group": g,
+                        "period": t,
+                        "treatment": d,
+                        "outcome": 0.5 * t + 5.0 * d + rng.normal(0, 0.5),
+                        "het_x": het_x,
+                    }
+                )
         # Controls
         for k in range(15):
             for t in range(10):
-                rows.append({
-                    "group": 32 + k, "period": t, "treatment": 0,
-                    "outcome": 0.5 * t + rng.normal(0, 0.5), "het_x": 0,
-                })
+                rows.append(
+                    {
+                        "group": 32 + k,
+                        "period": t,
+                        "treatment": 0,
+                        "outcome": 0.5 * t + rng.normal(0, 0.5),
+                        "het_x": 0,
+                    }
+                )
         df = pd.DataFrame(rows)
         est = ChaisemartinDHaultfoeuille(
             drop_larger_lower=False,
@@ -10586,16 +11227,19 @@ class TestByPathHeterogeneity:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", UserWarning)
             res = est.fit(
-                df, outcome="outcome", group="group", time="period",
-                treatment="treatment", L_max=3, heterogeneity="het_x",
+                df,
+                outcome="outcome",
+                group="group",
+                time="period",
+                treatment="treatment",
+                L_max=3,
+                heterogeneity="het_x",
             )
         assert res.path_heterogeneity_effects
         rare = res.path_heterogeneity_effects[(0, 1, 0, 0)]
         # All horizons for the rare path should have NaN inference (n_obs < 3)
         for l_h, vals in rare.items():
-            assert vals["n_obs"] < 3, (
-                f"rare path l={l_h}: expected n_obs < 3, got {vals['n_obs']}"
-            )
+            assert vals["n_obs"] < 3, f"rare path l={l_h}: expected n_obs < 3, got {vals['n_obs']}"
             assert not np.isfinite(vals["beta"])
             assert not np.isfinite(vals["se"])
             assert not np.isfinite(vals["t_stat"])
@@ -10630,8 +11274,7 @@ class TestByPathHeterogeneity:
                 else:
                     d = 0
                 y = 0.5 * t + effect * d + rng.normal(0, 0.5)
-                rows.append({"group": g, "period": t, "treatment": d,
-                             "outcome": y, "het_x": het_x})
+                rows.append({"group": g, "period": t, "treatment": d, "outcome": y, "het_x": het_x})
         # Leavers: baseline=1, path (1,0,0,0)
         for g_offset in range(n_per_baseline):
             g = n_per_baseline + g_offset
@@ -10647,8 +11290,7 @@ class TestByPathHeterogeneity:
                 else:
                     d = 1  # baseline=1 — treated pre-window
                 y = 0.5 * t + effect * d + rng.normal(0, 0.5)
-                rows.append({"group": g, "period": t, "treatment": d,
-                             "outcome": y, "het_x": het_x})
+                rows.append({"group": g, "period": t, "treatment": d, "outcome": y, "het_x": het_x})
         return pd.DataFrame(rows)
 
     def test_per_path_heterogeneity_no_multi_baseline_warning(self):
@@ -10670,9 +11312,10 @@ class TestByPathHeterogeneity:
         df = self._multi_baseline_het_data()
         # Sanity check: panel actually has both baselines among switchers
         baselines = df.groupby("group")["treatment"].first().unique()
-        assert set(baselines) >= {0, 1}, (
-            f"fixture must include both baselines; got {sorted(baselines)}"
-        )
+        assert set(baselines) >= {
+            0,
+            1,
+        }, f"fixture must include both baselines; got {sorted(baselines)}"
 
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
@@ -10699,12 +11342,10 @@ class TestByPathHeterogeneity:
         for path in [(0, 1, 1, 1), (1, 0, 0, 0)]:
             horizons = res.path_heterogeneity_effects[path]
             finite_count = sum(
-                1 for v in horizons.values()
-                if np.isfinite(v["beta"]) and np.isfinite(v["se"])
+                1 for v in horizons.values() if np.isfinite(v["beta"]) and np.isfinite(v["se"])
             )
             assert finite_count >= 1, (
-                f"path={path}: expected ≥1 finite per-(path, l) entry, "
-                f"got {finite_count}"
+                f"path={path}: expected ≥1 finite per-(path, l) entry, " f"got {finite_count}"
             )
 
         # No multi-baseline UserWarning. Match the controls / trends_lin
@@ -10712,9 +11353,9 @@ class TestByPathHeterogeneity:
         # paths_of_interest + controls/trends_linear" R-divergence text).
         # Be strict — both fragments must appear in the same warning.
         multi_baseline = [
-            w for w in caught
-            if "baseline" in str(w.message).lower()
-            and "multi" in str(w.message).lower()
+            w
+            for w in caught
+            if "baseline" in str(w.message).lower() and "multi" in str(w.message).lower()
         ]
         assert not multi_baseline, (
             f"Unexpected multi-baseline warning(s) under heterogeneity: "
@@ -10723,7 +11364,8 @@ class TestByPathHeterogeneity:
 
         # Also check no controls/trends-linear divergence verbatim text
         controls_divergence = [
-            w for w in caught
+            w
+            for w in caught
             if "by_path / paths_of_interest + controls" in str(w.message)
             or "by_path / paths_of_interest + trends_linear" in str(w.message)
         ]
@@ -10749,11 +11391,7 @@ class TestByPathHeterogeneity:
         rng = np.random.RandomState(seed)
         n_switchers, n_controls, n_periods = 90, 30, 10
         n_groups_total = n_switchers + n_controls
-        H = (
-            rng.choice([-1, 1], size=(n_groups_total, n_replicates))
-            if n_replicates > 0
-            else None
-        )
+        H = rng.choice([-1, 1], size=(n_groups_total, n_replicates)) if n_replicates > 0 else None
         rows = []
         paths = [(0, 1, 1, 1), (0, 1, 0, 0), (0, 1, 1, 0)]
         for g in range(n_switchers):
@@ -10838,16 +11476,14 @@ class TestByPathHeterogeneity:
         for path, horizons in res.path_heterogeneity_effects.items():
             for l_h, vals in horizons.items():
                 if vals["n_obs"] >= 3:
-                    assert np.isfinite(vals["beta"]), (
-                        f"path={path} l={l_h}: beta is NaN under survey TSL"
-                    )
-                    assert np.isfinite(vals["se"]) and vals["se"] > 0, (
-                        f"path={path} l={l_h}: se non-positive under survey TSL"
-                    )
+                    assert np.isfinite(
+                        vals["beta"]
+                    ), f"path={path} l={l_h}: beta is NaN under survey TSL"
+                    assert (
+                        np.isfinite(vals["se"]) and vals["se"] > 0
+                    ), f"path={path} l={l_h}: se non-positive under survey TSL"
                     finite_count += 1
-        assert finite_count >= 4, (
-            f"Expected ≥4 finite (path, l) entries, got {finite_count}"
-        )
+        assert finite_count >= 4, f"Expected ≥4 finite (path, l) entries, got {finite_count}"
 
     @pytest.mark.slow
     def test_per_path_heterogeneity_replicate_weights_propagates_n_valid(self):
@@ -10888,21 +11524,18 @@ class TestByPathHeterogeneity:
         # df_survey ≤ n_replicates - 1 per Rao-Wu replicate convention.
         # With well-formed BRR weights and n_obs >= 3 per (path, l), we
         # expect every replicate fit to produce finite SE → df = 7.
-        assert res.survey_metadata.df_survey is not None, (
-            "df_survey must be populated under replicate-weight survey"
-        )
+        assert (
+            res.survey_metadata.df_survey is not None
+        ), "df_survey must be populated under replicate-weight survey"
         assert res.survey_metadata.df_survey == n_replicates - 1, (
-            f"df_survey={res.survey_metadata.df_survey}, "
-            f"expected {n_replicates - 1}"
+            f"df_survey={res.survey_metadata.df_survey}, " f"expected {n_replicates - 1}"
         )
         # Every populated (path, l) should have finite inference under
         # replicate weights too.
         for path, horizons in res.path_heterogeneity_effects.items():
             for l_h, vals in horizons.items():
                 if vals["n_obs"] >= 3:
-                    assert np.isfinite(vals["se"]), (
-                        f"path={path} l={l_h}: replicate SE non-finite"
-                    )
+                    assert np.isfinite(vals["se"]), f"path={path} l={l_h}: replicate SE non-finite"
 
         # Verify the final df_survey is actually USED to refresh the
         # inference fields on path_heterogeneity_effects (not the
@@ -10922,16 +11555,12 @@ class TestByPathHeterogeneity:
                     expected_t, expected_p, expected_ci = safe_inference(
                         vals["beta"], vals["se"], df=df_final
                     )
-                    assert vals["t_stat"] == pytest.approx(
-                        expected_t, rel=1e-12, nan_ok=True
-                    ), (
+                    assert vals["t_stat"] == pytest.approx(expected_t, rel=1e-12, nan_ok=True), (
                         f"path={path} l={l_h}: t_stat not refreshed at "
                         f"df={df_final} (have {vals['t_stat']}, expected "
                         f"{expected_t})"
                     )
-                    assert vals["p_value"] == pytest.approx(
-                        expected_p, rel=1e-12, nan_ok=True
-                    ), (
+                    assert vals["p_value"] == pytest.approx(expected_p, rel=1e-12, nan_ok=True), (
                         f"path={path} l={l_h}: p_value not refreshed at "
                         f"df={df_final} (have {vals['p_value']}, expected "
                         f"{expected_p})"
@@ -10989,9 +11618,10 @@ class TestByPathHeterogeneity:
         # Selector keys are preserved in the user-specified order
         # (not frequency-ranked like by_path).
         keys = list(res.path_heterogeneity_effects.keys())
-        assert keys == [(0, 1, 1, 0), (0, 1, 1, 1)], (
-            f"paths_of_interest order not preserved: got {keys}"
-        )
+        assert keys == [
+            (0, 1, 1, 0),
+            (0, 1, 1, 1),
+        ], f"paths_of_interest order not preserved: got {keys}"
         # Every populated (path, l) entry yields finite analytical SE.
         for path, horizons in res.path_heterogeneity_effects.items():
             for l_h, vals in horizons.items():
@@ -11046,9 +11676,7 @@ class TestByPathHeterogeneity:
 
         df = self._by_path_het_data_with_survey()
         sd = SurveyDesign(weights="survey_weights", strata="strata", psu="psu")
-        est = ChaisemartinDHaultfoeuille(
-            drop_larger_lower=False, by_path=2, n_bootstrap=10, seed=1
-        )
+        est = ChaisemartinDHaultfoeuille(drop_larger_lower=False, by_path=2, n_bootstrap=10, seed=1)
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", UserWarning)
             with pytest.raises(NotImplementedError, match="multiplier"):
@@ -11071,14 +11699,17 @@ class TestByPathHeterogeneity:
         ``placebo=True`` and ``heterogeneity=`` are both set
         (post-2026-05-15 #422)."""
         df = _by_path_het_data()
-        est = ChaisemartinDHaultfoeuille(
-            drop_larger_lower=False, by_path=2, placebo=True
-        )
+        est = ChaisemartinDHaultfoeuille(drop_larger_lower=False, by_path=2, placebo=True)
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", UserWarning)
             res = est.fit(
-                df, outcome="outcome", group="group", time="period",
-                treatment="treatment", L_max=3, heterogeneity="het_x",
+                df,
+                outcome="outcome",
+                group="group",
+                time="period",
+                treatment="treatment",
+                L_max=3,
+                heterogeneity="het_x",
             )
         out = res.to_dataframe(level="by_path")
         assert "het_beta" in out.columns
@@ -11113,13 +11744,18 @@ class TestByPathHeterogeneity:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", UserWarning)
             res = est.fit(
-                df, outcome="outcome", group="group", time="period",
-                treatment="treatment", L_max=3, heterogeneity="het_x",
+                df,
+                outcome="outcome",
+                group="group",
+                time="period",
+                treatment="treatment",
+                L_max=3,
+                heterogeneity="het_x",
             )
         report = res.summary()
-        assert "Heterogeneity Test (Section 1.5, partial)" in report, (
-            "summary() must render the per-path heterogeneity sub-block"
-        )
+        assert (
+            "Heterogeneity Test (Section 1.5, partial)" in report
+        ), "summary() must render the per-path heterogeneity sub-block"
         # The header appears in BOTH the global and per-path blocks; check
         # that at least one populated path's beta value is rendered. We
         # use a small float comparison rather than a full string match
@@ -11155,15 +11791,20 @@ class TestByPathHeterogeneity:
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
             res = est.fit(
-                df, outcome="outcome", group="group", time="period",
-                treatment="treatment", L_max=3, heterogeneity="het_x",
+                df,
+                outcome="outcome",
+                group="group",
+                time="period",
+                treatment="treatment",
+                L_max=3,
+                heterogeneity="het_x",
             )
         # Unobserved path warning should have fired (at least once;
         # may fire from path_effects + path_heterogeneity_effects)
         unobs = [
-            w for w in caught
-            if "(1, 1, 1, 0)" in str(w.message)
-            and "zero observed groups" in str(w.message)
+            w
+            for w in caught
+            if "(1, 1, 1, 0)" in str(w.message) and "zero observed groups" in str(w.message)
         ]
         assert unobs, "expected unobserved-path UserWarning"
         assert res.path_heterogeneity_effects is not None
@@ -11194,19 +11835,29 @@ def _single_path_het_data(seed=44, n_switchers=30, n_controls=15, n_periods=10):
             else:
                 d = 0
             y = 0.5 * t + effect * d + rng.normal(0, 0.5)
-            rows.append({
-                "group": g, "period": t, "treatment": d,
-                "outcome": y, "het_x": het_x,
-            })
+            rows.append(
+                {
+                    "group": g,
+                    "period": t,
+                    "treatment": d,
+                    "outcome": y,
+                    "het_x": het_x,
+                }
+            )
     for k in range(n_controls):
         het_x = 1 if k < n_controls // 2 else 0
         g = n_switchers + k
         for t in range(n_periods):
             y = 0.5 * t + rng.normal(0, 0.5)
-            rows.append({
-                "group": g, "period": t, "treatment": 0,
-                "outcome": y, "het_x": het_x,
-            })
+            rows.append(
+                {
+                    "group": g,
+                    "period": t,
+                    "treatment": 0,
+                    "outcome": y,
+                    "het_x": het_x,
+                }
+            )
     return pd.DataFrame(rows)
 
 
@@ -11227,14 +11878,17 @@ class TestByPathPredictHetPlacebo:
     def test_to_dataframe_by_path_emits_het_columns_on_placebo_rows(self):
         """`to_dataframe(level="by_path")` placebo rows now have het_*."""
         df = _by_path_het_data()
-        est = ChaisemartinDHaultfoeuille(
-            drop_larger_lower=False, by_path=3, placebo=True
-        )
+        est = ChaisemartinDHaultfoeuille(drop_larger_lower=False, by_path=3, placebo=True)
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", UserWarning)
             res = est.fit(
-                df, outcome="outcome", group="group", time="period",
-                treatment="treatment", L_max=3, heterogeneity="het_x",
+                df,
+                outcome="outcome",
+                group="group",
+                time="period",
+                treatment="treatment",
+                L_max=3,
+                heterogeneity="het_x",
             )
         out = res.to_dataframe(level="by_path")
         placebo_rows = out[out["horizon"] < 0]
@@ -11268,22 +11922,26 @@ class TestByPathPredictHetPlacebo:
         df["stratum"] = df["group"] % 4
         df["psu_id"] = df["group"]
         sd = SurveyDesign(
-            weights="sw", strata="stratum", psu="psu_id",
+            weights="sw",
+            strata="stratum",
+            psu="psu_id",
         )
-        est = ChaisemartinDHaultfoeuille(
-            drop_larger_lower=False, by_path=3, placebo=True
-        )
+        est = ChaisemartinDHaultfoeuille(drop_larger_lower=False, by_path=3, placebo=True)
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
             res = est.fit(
-                df, outcome="outcome", group="group", time="period",
-                treatment="treatment", L_max=3,
-                heterogeneity="het_x", survey_design=sd,
+                df,
+                outcome="outcome",
+                group="group",
+                time="period",
+                treatment="treatment",
+                L_max=3,
+                heterogeneity="het_x",
+                survey_design=sd,
             )
         # Warning fired with the expected substring
         het_warnings = [
-            w for w in caught
-            if "backward-horizon (placebo) predict_het" in str(w.message)
+            w for w in caught if "backward-horizon (placebo) predict_het" in str(w.message)
         ]
         assert het_warnings, (
             "Expected UserWarning about backward-horizon survey gate. "
@@ -11293,16 +11951,16 @@ class TestByPathPredictHetPlacebo:
         assert res.heterogeneity_effects is not None
         # Only positive-int keys (forward); no negative (placebo) keys
         het_keys = sorted(res.heterogeneity_effects.keys())
-        assert all(h > 0 for h in het_keys), (
-            f"Expected only positive horizons under survey gate, got: {het_keys}"
-        )
+        assert all(
+            h > 0 for h in het_keys
+        ), f"Expected only positive horizons under survey gate, got: {het_keys}"
         # Per-path heterogeneity also forward-only
         assert res.path_heterogeneity_effects is not None
         for path, horizons in res.path_heterogeneity_effects.items():
             path_keys = sorted(horizons.keys())
-            assert all(h > 0 for h in path_keys), (
-                f"path={path}: expected only positive horizons, got {path_keys}"
-            )
+            assert all(
+                h > 0 for h in path_keys
+            ), f"path={path}: expected only positive horizons, got {path_keys}"
 
     def test_compute_heterogeneity_test_direct_call_raises_on_backward_survey(
         self,
@@ -11325,7 +11983,9 @@ class TestByPathPredictHetPlacebo:
         df["stratum"] = df["group"] % 4
         df["psu_id"] = df["group"]
         sd = SurveyDesign(
-            weights="sw", strata="stratum", psu="psu_id",
+            weights="sw",
+            strata="stratum",
+            psu="psu_id",
         )
         # Build a minimal valid obs_survey_info dict matching the
         # function's contract. SurveyDesign.resolve() takes only the
@@ -11376,25 +12036,29 @@ class TestByPathPredictHetPlacebo:
         df["stratum"] = df["group"] % 4
         df["psu_id"] = df["group"]
         sd = SurveyDesign(
-            weights="sw", strata="stratum", psu="psu_id",
+            weights="sw",
+            strata="stratum",
+            psu="psu_id",
         )
-        est = ChaisemartinDHaultfoeuille(
-            drop_larger_lower=False, by_path=3, placebo=False
-        )
+        est = ChaisemartinDHaultfoeuille(drop_larger_lower=False, by_path=3, placebo=False)
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", UserWarning)
             res = est.fit(
-                df, outcome="outcome", group="group", time="period",
-                treatment="treatment", L_max=3,
-                heterogeneity="het_x", survey_design=sd,
+                df,
+                outcome="outcome",
+                group="group",
+                time="period",
+                treatment="treatment",
+                L_max=3,
+                heterogeneity="het_x",
+                survey_design=sd,
             )
         assert res.path_heterogeneity_effects is not None
         for path, horizons in res.path_heterogeneity_effects.items():
             for h in [1, 2, 3]:
                 if h in horizons:
                     assert np.isfinite(horizons[h]["beta"]), (
-                        f"path={path} h={h} beta non-finite under "
-                        f"forward+survey path"
+                        f"path={path} h={h} beta non-finite under " f"forward+survey path"
                     )
 
     def test_predict_het_placebo_eligible_filter(self):
@@ -11422,30 +12086,46 @@ class TestByPathPredictHetPlacebo:
                 else:
                     d = 0
                 y = 0.5 * t + effect * d + rng.normal(0, 0.5)
-                rows.append({
-                    "group": g, "period": t, "treatment": d,
-                    "outcome": y, "het_x": het_x,
-                })
+                rows.append(
+                    {
+                        "group": g,
+                        "period": t,
+                        "treatment": d,
+                        "outcome": y,
+                        "het_x": het_x,
+                    }
+                )
         for k in range(n_controls):
             het_x = 1 if k < n_controls // 2 else 0
             g = n_switchers + k
             for t in range(n_periods):
                 y = 0.5 * t + rng.normal(0, 0.5)
-                rows.append({
-                    "group": g, "period": t, "treatment": 0,
-                    "outcome": y, "het_x": het_x,
-                })
+                rows.append(
+                    {
+                        "group": g,
+                        "period": t,
+                        "treatment": 0,
+                        "outcome": y,
+                        "het_x": het_x,
+                    }
+                )
         df = pd.DataFrame(rows)
 
         est = ChaisemartinDHaultfoeuille(
-            drop_larger_lower=False, paths_of_interest=[(0, 1, 1, 1)],
+            drop_larger_lower=False,
+            paths_of_interest=[(0, 1, 1, 1)],
             placebo=True,
         )
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", UserWarning)
             res = est.fit(
-                df, outcome="outcome", group="group", time="period",
-                treatment="treatment", L_max=3, heterogeneity="het_x",
+                df,
+                outcome="outcome",
+                group="group",
+                time="period",
+                treatment="treatment",
+                L_max=3,
+                heterogeneity="het_x",
             )
 
         assert res.path_heterogeneity_effects is not None
@@ -11455,8 +12135,7 @@ class TestByPathPredictHetPlacebo:
         # -3 has out_idx=-2 → all groups filtered, n_obs=0, NaN-consistent
         if -2 in path_het:
             assert path_het[-2]["n_obs"] == 0, (
-                f"placebo -2 should be filtered (out_idx<0): "
-                f"got n_obs={path_het[-2]['n_obs']}"
+                f"placebo -2 should be filtered (out_idx<0): " f"got n_obs={path_het[-2]['n_obs']}"
             )
             assert np.isnan(path_het[-2]["beta"])
             assert np.isnan(path_het[-2]["se"])
@@ -11476,14 +12155,17 @@ class TestByPathPredictHetPlacebo:
         the global regression.
         """
         df = _single_path_het_data()
-        est_g = ChaisemartinDHaultfoeuille(
-            drop_larger_lower=False, placebo=True
-        )
+        est_g = ChaisemartinDHaultfoeuille(drop_larger_lower=False, placebo=True)
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", UserWarning)
             res_g = est_g.fit(
-                df, outcome="outcome", group="group", time="period",
-                treatment="treatment", L_max=3, heterogeneity="het_x",
+                df,
+                outcome="outcome",
+                group="group",
+                time="period",
+                treatment="treatment",
+                L_max=3,
+                heterogeneity="het_x",
             )
         est_p = ChaisemartinDHaultfoeuille(
             drop_larger_lower=False,
@@ -11493,8 +12175,13 @@ class TestByPathPredictHetPlacebo:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", UserWarning)
             res_p = est_p.fit(
-                df, outcome="outcome", group="group", time="period",
-                treatment="treatment", L_max=3, heterogeneity="het_x",
+                df,
+                outcome="outcome",
+                group="group",
+                time="period",
+                treatment="treatment",
+                L_max=3,
+                heterogeneity="het_x",
             )
         path_het = res_p.path_heterogeneity_effects[(0, 1, 1, 1)]
         global_het = res_g.heterogeneity_effects
@@ -11507,11 +12194,17 @@ class TestByPathPredictHetPlacebo:
                 assert not np.isfinite(p_h["beta"])
                 continue
             np.testing.assert_allclose(
-                p_h["beta"], g_h["beta"], atol=1e-14, rtol=1e-14,
+                p_h["beta"],
+                g_h["beta"],
+                atol=1e-14,
+                rtol=1e-14,
                 err_msg=f"horizon {h} beta telescope failed",
             )
             np.testing.assert_allclose(
-                p_h["se"], g_h["se"], atol=1e-14, rtol=1e-14,
+                p_h["se"],
+                g_h["se"],
+                atol=1e-14,
+                rtol=1e-14,
                 err_msg=f"horizon {h} se telescope failed",
             )
             assert int(p_h["n_obs"]) == int(g_h["n_obs"])
@@ -11519,14 +12212,17 @@ class TestByPathPredictHetPlacebo:
     def test_summary_renders_placebo_het_rows(self):
         """`result.summary()` renders without error after #422."""
         df = _by_path_het_data()
-        est = ChaisemartinDHaultfoeuille(
-            drop_larger_lower=False, by_path=3, placebo=True
-        )
+        est = ChaisemartinDHaultfoeuille(drop_larger_lower=False, by_path=3, placebo=True)
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", UserWarning)
             res = est.fit(
-                df, outcome="outcome", group="group", time="period",
-                treatment="treatment", L_max=3, heterogeneity="het_x",
+                df,
+                outcome="outcome",
+                group="group",
+                time="period",
+                treatment="treatment",
+                L_max=3,
+                heterogeneity="het_x",
             )
         s = res.summary()
         assert isinstance(s, str)
@@ -11611,35 +12307,39 @@ class TestByPathPredictHetPlacebo:
         assert n_obs == 5, f"expected n_obs=5, got {n_obs}"
         # df = n_obs - rank = 5 - 4 = 1. safe_inference at df=1
         # reproduces stored t/p/CI bit-exactly.
-        expected_t, expected_p, expected_ci = safe_inference(
-            h["beta"], h["se"], df=1
-        )
+        expected_t, expected_p, expected_ci = safe_inference(h["beta"], h["se"], df=1)
         np.testing.assert_allclose(
-            h["t_stat"], expected_t, atol=1e-12, rtol=1e-12,
+            h["t_stat"],
+            expected_t,
+            atol=1e-12,
+            rtol=1e-12,
             err_msg="t_stat does not match safe_inference(df=1)",
         )
         np.testing.assert_allclose(
-            h["p_value"], expected_p, atol=1e-12, rtol=1e-12,
+            h["p_value"],
+            expected_p,
+            atol=1e-12,
+            rtol=1e-12,
             err_msg="p_value does not match safe_inference(df=1)",
         )
         np.testing.assert_allclose(
-            h["conf_int"], expected_ci, atol=1e-12, rtol=1e-12,
+            h["conf_int"],
+            expected_ci,
+            atol=1e-12,
+            rtol=1e-12,
             err_msg="conf_int does not match safe_inference(df=1)",
         )
         # safe_inference(df=n_obs - n_params=0) would produce different
         # p_value/conf_int. Pin the asymmetry so a regression that
         # reverts to pre-drop n_params is caught here.
-        wrong_t, wrong_p, wrong_ci = safe_inference(
-            h["beta"], h["se"], df=n_obs - 5
-        )
+        wrong_t, wrong_p, wrong_ci = safe_inference(h["beta"], h["se"], df=n_obs - 5)
         if np.isfinite(wrong_p):
             # When df=0, safe_inference NaN-fills; the asymmetry check
             # only fires when wrong_p is finite (which it isn't at df=0).
             # We still pin that the stored p_value is NOT equal to the
             # pre-drop result.
             assert not np.isclose(h["p_value"], wrong_p, atol=1e-10), (
-                "stored p_value matches pre-drop n_params df; "
-                "rank-threading may have reverted"
+                "stored p_value matches pre-drop n_params df; " "rank-threading may have reverted"
             )
 
     def test_heterogeneity_underidentified_nan_fills(self):
@@ -11681,9 +12381,7 @@ class TestByPathPredictHetPlacebo:
         )
         assert 1 in result
         h = result[1]
-        assert np.isnan(h["beta"]), (
-            f"beta should be NaN when n_obs <= rank; got {h}"
-        )
+        assert np.isnan(h["beta"]), f"beta should be NaN when n_obs <= rank; got {h}"
         assert np.isnan(h["se"])
         assert np.isnan(h["t_stat"])
         assert np.isnan(h["p_value"])

@@ -674,7 +674,6 @@ class TestImputationDiDResults:
         data = generate_test_data(seed=88, n_units=200)
 
         # Add a pre-treatment trend for treated units
-        rng = np.random.default_rng(88)
         for idx in data.index:
             if data.loc[idx, "first_treat"] > 0:
                 t = data.loc[idx, "time"]
@@ -1415,7 +1414,7 @@ class TestImputationEdgeCases:
         data = generate_test_data(never_treated_frac=0.0, seed=42)
 
         est = ImputationDiD()
-        with warnings.catch_warnings(record=True) as w:
+        with warnings.catch_warnings(record=True):
             warnings.simplefilter("always")
             results = est.fit(
                 data,
@@ -1527,38 +1526,10 @@ class TestImputationEdgeCases:
         n_periods = 6
 
         units = np.repeat(np.arange(n_units), n_periods)
-        times = np.tile(np.arange(n_periods), n_units)
 
-        first_treat = np.zeros(n_units, dtype=int)
-        first_treat[10:20] = 0  # period 0 = always treated
-        first_treat[20:] = 3  # treated at period 3
-
-        # Make some units treated in all periods
-        first_treat[10:20] = 0  # Never treated (actually)
-        # To make always-treated: first_treat <= min_time (0)
-        first_treat[0:5] = 0  # These are never-treated
-        first_treat[5:10] = -1  # Treated before panel starts!
-
-        first_treat_exp = np.repeat(first_treat, n_periods)
-        post = (times >= first_treat_exp) & (first_treat_exp > 0) & (first_treat_exp != np.inf)
-
-        outcomes = (
-            np.repeat(rng.standard_normal(n_units) * 2, n_periods)
-            + 2.0 * post
-            + rng.standard_normal(len(units)) * 0.5
-        )
-
-        # Fix: first_treat with -1 won't trigger the never_treated check properly
-        # Let's use first_treat = 0 for some units to trigger always-treated
-        first_treat_2 = np.zeros(n_units, dtype=int)
-        first_treat_2[:10] = 0  # never treated
-        first_treat_2[10:15] = 0  # also never treated (we need >= 1 always-treated)
-        first_treat_2[15:] = 3
-        # Actually, to trigger always-treated, we need first_treat <= min(time) = 0
-        # But first_treat == 0 means never-treated in the code
-        # We need first_treat > 0 but <= min(time)
-        # min(time) = 0, so first_treat must be <= 0 and > 0, impossible
-        # Let's start times at 1
+        # To trigger the always-treated check we need first_treat > 0 but
+        # <= min(time). first_treat == 0 means never-treated in the code, so
+        # with times starting at 0 that is impossible — start times at 1.
         times_shifted = np.tile(np.arange(1, n_periods + 1), n_units)
 
         first_treat_3 = np.zeros(n_units, dtype=int)
@@ -1587,7 +1558,7 @@ class TestImputationEdgeCases:
         est = ImputationDiD()
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
-            results = est.fit(
+            est.fit(
                 data,
                 outcome="outcome",
                 unit="unit",
@@ -3144,6 +3115,8 @@ class TestLeadSnapAbsorbed:
         ]
         assert len(finite_leads) >= 4
         assert not any("collinear with the absorbed fixed effects" in str(x.message) for x in w)
+
+
 class TestLSMRFallbackParity:
     """The sparse LSMR fallback replaces dense lstsq on the (possibly
     singular) normal equations. Solver choice cannot change the estimator:

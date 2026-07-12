@@ -259,7 +259,7 @@ class TestDifferenceInDifferences:
 
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
-            results = did.fit(
+            did.fit(
                 data,
                 outcome="outcome",
                 treatment="treated",
@@ -1043,6 +1043,7 @@ class TestTwoWayFixedEffects:
     def test_rank_deficient_action_silent_no_warning(self, twfe_panel_data):
         """Test that rank_deficient_action='silent' produces no warning."""
         import warnings
+
         from diff_diff.estimators import TwoWayFixedEffects
 
         # Add a covariate that is perfectly collinear with another
@@ -3976,7 +3977,6 @@ class TestJointSpanCovariateSnap:
         from diff_diff import SunAbraham
 
         df = self._frame(seed=8)
-        rng = np.random.default_rng(9)
         first = np.where(np.arange(df["unit"].nunique()) % 3 == 0, 0, 15)[
             df["unit"].values % df["unit"].nunique()
         ]

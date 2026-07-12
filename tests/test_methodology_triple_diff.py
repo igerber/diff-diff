@@ -1421,7 +1421,7 @@ class TestParameterFunctionality:
         ddd = TripleDifference(estimation_method="reg")
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
-            result = ddd.fit(
+            ddd.fit(
                 data,
                 outcome="outcome",
                 group="group",
@@ -1444,9 +1444,7 @@ class TestParameterFunctionality:
 
         monkeypatch.setattr(td_module, "solve_logit", _failing_lr)
 
-        ddd = TripleDifference(
-            estimation_method=method, pscore_fallback="unconditional"
-        )
+        ddd = TripleDifference(estimation_method=method, pscore_fallback="unconditional")
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
             result = ddd.fit(
@@ -1601,12 +1599,20 @@ class TestRankGuardedAnalyticalSE:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             drop_one = TripleDifference(estimation_method=method).fit(
-                data, outcome="outcome", group="group", partition="partition",
-                time="time", covariates=["age"],
+                data,
+                outcome="outcome",
+                group="group",
+                partition="partition",
+                time="time",
+                covariates=["age"],
             )
             with_const = TripleDifference(estimation_method=method).fit(
-                data_const, outcome="outcome", group="group", partition="partition",
-                time="time", covariates=["age", "xc"],
+                data_const,
+                outcome="outcome",
+                group="group",
+                partition="partition",
+                time="time",
+                covariates=["age", "xc"],
             )
 
         assert np.isfinite(with_const.se)
@@ -1620,8 +1626,12 @@ class TestRankGuardedAnalyticalSE:
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
             TripleDifference(estimation_method="reg").fit(
-                data, outcome="outcome", group="group", partition="partition",
-                time="time", covariates=["age", "xc"],
+                data,
+                outcome="outcome",
+                group="group",
+                partition="partition",
+                time="time",
+                covariates=["age", "xc"],
             )
         rank_guard = [w for w in caught if "rank-guarded inverse" in str(w.message)]
         # The per-fit aggregate warning fires exactly once, not per comparison.
@@ -1632,8 +1642,12 @@ class TestRankGuardedAnalyticalSE:
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
             res = TripleDifference(estimation_method="dr").fit(
-                data, outcome="outcome", group="group", partition="partition",
-                time="time", covariates=["age", "education"],
+                data,
+                outcome="outcome",
+                group="group",
+                partition="partition",
+                time="time",
+                covariates=["age", "education"],
             )
         assert not any("rank-guarded inverse" in str(w.message) for w in caught)
         assert np.isfinite(res.se)
@@ -1652,12 +1666,22 @@ class TestRankGuardedAnalyticalSE:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             drop_one = TripleDifference(estimation_method=method).fit(
-                data, outcome="outcome", group="group", partition="partition",
-                time="time", covariates=["age"], survey_design=sd,
+                data,
+                outcome="outcome",
+                group="group",
+                partition="partition",
+                time="time",
+                covariates=["age"],
+                survey_design=sd,
             )
             with_const = TripleDifference(estimation_method=method).fit(
-                data_const, outcome="outcome", group="group", partition="partition",
-                time="time", covariates=["age", "xc"], survey_design=sd,
+                data_const,
+                outcome="outcome",
+                group="group",
+                partition="partition",
+                time="time",
+                covariates=["age", "xc"],
+                survey_design=sd,
             )
         assert np.isfinite(with_const.se)
         assert with_const.se < 1.0
@@ -1675,11 +1699,13 @@ class TestRankGuardedAnalyticalSE:
         data = generate_ddd_data(n_per_cell=200, seed=42, add_covariates=True)
         data["agec"] = 2.0 * data["age"]  # exactly collinear with age
         with pytest.raises(ValueError, match="(?i)rank-deficient"):
-            TripleDifference(
-                estimation_method=method, rank_deficient_action="error"
-            ).fit(
-                data, outcome="outcome", group="group", partition="partition",
-                time="time", covariates=["age", "agec"],
+            TripleDifference(estimation_method=method, rank_deficient_action="error").fit(
+                data,
+                outcome="outcome",
+                group="group",
+                partition="partition",
+                time="time",
+                covariates=["age", "agec"],
             )
 
     @pytest.mark.parametrize("method", ["reg", "dr"])
@@ -1706,36 +1732,49 @@ class TestRankGuardedAnalyticalSE:
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
                 drop_one = TripleDifference(estimation_method=method).fit(
-                    data, outcome="outcome", group="group", partition="partition",
-                    time="time", covariates=["age"],
+                    data,
+                    outcome="outcome",
+                    group="group",
+                    partition="partition",
+                    time="time",
+                    covariates=["age"],
                 )
                 with_deg = TripleDifference(estimation_method=method).fit(
-                    data, outcome="outcome", group="group", partition="partition",
-                    time="time", covariates=["age", "aged"],
+                    data,
+                    outcome="outcome",
+                    group="group",
+                    partition="partition",
+                    time="time",
+                    covariates=["age", "aged"],
                 )
             assert np.isfinite(with_deg.se) and with_deg.se > 0
             np.testing.assert_allclose(with_deg.se, drop_one.se, rtol=5e-2)
         else:  # treated-pre cell: compare to the near-collinear (full-rank) limit
-            mask = (
-                (data["group"] == 1) & (data["partition"] == 1) & (data["time"] == 0)
-            )
+            mask = (data["group"] == 1) & (data["partition"] == 1) & (data["time"] == 0)
             base = np.where(mask, 2.0 * data["age"], rng.normal(size=len(data)))
             data["aged_exact"] = base
             near = base.copy()
-            near[mask.to_numpy()] = (
-                2.0 * data.loc[mask, "age"].to_numpy()
-                + 1e-6 * rng.standard_normal(int(mask.sum()))
-            )
+            near[mask.to_numpy()] = 2.0 * data.loc[
+                mask, "age"
+            ].to_numpy() + 1e-6 * rng.standard_normal(int(mask.sum()))
             data["aged_near"] = near
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
                 r_guard = TripleDifference(estimation_method=method).fit(
-                    data, outcome="outcome", group="group", partition="partition",
-                    time="time", covariates=["age", "aged_exact"],
+                    data,
+                    outcome="outcome",
+                    group="group",
+                    partition="partition",
+                    time="time",
+                    covariates=["age", "aged_exact"],
                 )
                 r_full = TripleDifference(estimation_method=method).fit(
-                    data, outcome="outcome", group="group", partition="partition",
-                    time="time", covariates=["age", "aged_near"],
+                    data,
+                    outcome="outcome",
+                    group="group",
+                    partition="partition",
+                    time="time",
+                    covariates=["age", "aged_near"],
                 )
             assert np.isfinite(r_guard.se) and r_guard.se > 0  # not 1e17 garbage
             np.testing.assert_allclose(r_guard.se, r_full.se, rtol=1e-3)

@@ -11,7 +11,6 @@ from diff_diff import (
     compute_deff_diagnostics,
 )
 
-
 # =============================================================================
 # Shared Fixtures
 # =============================================================================
@@ -36,11 +35,18 @@ def basic_did_data():
             if treated and t >= 3:
                 y += 2.0
             y += np.random.normal(0, 0.5)
-            rows.append({
-                "unit": unit, "time": t, "first_treat": ft,
-                "outcome": y, "stratum": stratum, "psu": psu,
-                "weight": wt, "fpc": 200.0,
-            })
+            rows.append(
+                {
+                    "unit": unit,
+                    "time": t,
+                    "first_treat": ft,
+                    "outcome": y,
+                    "stratum": stratum,
+                    "psu": psu,
+                    "weight": wt,
+                    "fpc": 200.0,
+                }
+            )
     return pd.DataFrame(rows)
 
 
@@ -77,7 +83,10 @@ class TestSubpopulationAnalysis:
     def test_subpopulation_preserves_design_structure(self, basic_did_data):
         """PSU/strata structure is preserved even when some PSUs are zeroed."""
         sd = SurveyDesign(
-            weights="weight", strata="stratum", psu="psu", nest=True,
+            weights="weight",
+            strata="stratum",
+            psu="psu",
+            nest=True,
         )
         # Exclude all units in stratum 0
         mask = basic_did_data["stratum"] != 0
@@ -99,7 +108,10 @@ class TestSubpopulationAnalysis:
         new_data["post"] = (new_data["time"] >= 3).astype(int)
         est = DifferenceInDifferences()
         result = est.fit(
-            new_data, outcome="outcome", treatment="treated", time="post",
+            new_data,
+            outcome="outcome",
+            treatment="treated",
+            time="post",
             survey_design=new_sd,
         )
         assert np.isfinite(result.att)
@@ -109,7 +121,10 @@ class TestSubpopulationAnalysis:
     def test_subpopulation_preserves_more_psus_than_subset(self, basic_did_data):
         """Subpopulation retains all PSUs in the design; subset drops them."""
         sd = SurveyDesign(
-            weights="weight", strata="stratum", psu="psu", nest=True,
+            weights="weight",
+            strata="stratum",
+            psu="psu",
+            nest=True,
         )
         mask = basic_did_data["unit"] < 60
 
@@ -136,7 +151,8 @@ class TestSubpopulationAnalysis:
         """Mask can be a callable."""
         sd = SurveyDesign(weights="weight")
         new_sd, new_data = sd.subpopulation(
-            basic_did_data, lambda df: df["unit"] < 60,
+            basic_did_data,
+            lambda df: df["unit"] < 60,
         )
         excluded = new_data[basic_did_data["unit"] >= 60]
         assert (excluded["_subpop_weight"] == 0.0).all()
@@ -176,10 +192,12 @@ class TestSubpopulationAnalysis:
 
     def test_zero_weights_allowed_in_resolve(self):
         """resolve() should accept zero weights (no longer strictly positive)."""
-        data = pd.DataFrame({
-            "w": [1.0, 2.0, 0.0, 1.5],
-            "y": [1, 2, 3, 4],
-        })
+        data = pd.DataFrame(
+            {
+                "w": [1.0, 2.0, 0.0, 1.5],
+                "y": [1, 2, 3, 4],
+            }
+        )
         sd = SurveyDesign(weights="w")
         resolved = sd.resolve(data)
         assert resolved.weights[2] == 0.0  # Zero preserved after normalization
@@ -208,15 +226,19 @@ class TestDEFFDiagnostics:
 
         resolved, sw, swt, sm = _resolve_survey_for_fit(sd, data, "analytical")
         y = data["outcome"].values
-        X = np.column_stack([
-            np.ones(len(data)),
-            data["treated"].values,
-            data["post"].values,
-            (data["treated"] * data["post"]).values,
-        ])
+        X = np.column_stack(
+            [
+                np.ones(len(data)),
+                data["treated"].values,
+                data["post"].values,
+                (data["treated"] * data["post"]).values,
+            ]
+        )
         reg = LinearRegression(
-            include_intercept=False, weights=sw,
-            weight_type=swt, survey_design=resolved,
+            include_intercept=False,
+            weights=sw,
+            weight_type=swt,
+            survey_design=resolved,
         )
         reg.fit(X, y)
         return reg
@@ -244,7 +266,10 @@ class TestDEFFDiagnostics:
         data["post"] = (data["time"] >= 3).astype(int)
 
         sd = SurveyDesign(
-            weights="weight", strata="stratum", psu="psu", nest=True,
+            weights="weight",
+            strata="stratum",
+            psu="psu",
+            nest=True,
         )
         reg = self._fit_lr_with_survey(data, sd)
         deff = reg.compute_deff()
@@ -265,8 +290,10 @@ class TestDEFFDiagnostics:
 
         # Manually compute SRS SE
         srs_vcov = compute_robust_vcov(
-            reg._X, reg.residuals_,
-            cluster_ids=None, weights=reg.weights,
+            reg._X,
+            reg.residuals_,
+            cluster_ids=None,
+            weights=reg.weights,
             weight_type=reg.weight_type,
         )
         expected_srs_se = np.sqrt(np.diag(srs_vcov))
@@ -281,8 +308,11 @@ class TestDEFFDiagnostics:
         sd = SurveyDesign(weights="weight", strata="stratum", psu="psu")
         reg = self._fit_lr_with_survey(data, sd)
         deff = compute_deff_diagnostics(
-            reg._X, reg.residuals_, reg.vcov_,
-            reg.weights, weight_type=reg.weight_type,
+            reg._X,
+            reg.residuals_,
+            reg.vcov_,
+            reg.weights,
+            weight_type=reg.weight_type,
             coefficient_names=["intercept", "treated", "post", "treated:post"],
         )
         assert deff.coefficient_names is not None
@@ -301,9 +331,7 @@ class TestDEFFDiagnostics:
         n = reg.n_obs_
         for i in range(len(deff.deff)):
             if np.isfinite(deff.deff[i]) and deff.deff[i] > 0:
-                assert deff.effective_n[i] == pytest.approx(
-                    n / deff.deff[i], rel=1e-10
-                )
+                assert deff.effective_n[i] == pytest.approx(n / deff.deff[i], rel=1e-10)
 
     def test_compute_deff_no_survey_raises(self, basic_did_data):
         """compute_deff() without survey should raise."""
@@ -372,35 +400,43 @@ class TestReplicateWeightVariance:
         """Fay requires rho in (0, 1)."""
         with pytest.raises(ValueError, match="fay_rho"):
             SurveyDesign(
-                weights="w", replicate_weights=["r1", "r2"],
-                replicate_method="Fay", fay_rho=0.0,
+                weights="w",
+                replicate_weights=["r1", "r2"],
+                replicate_method="Fay",
+                fay_rho=0.0,
             )
         with pytest.raises(ValueError, match="fay_rho"):
             SurveyDesign(
-                weights="w", replicate_weights=["r1", "r2"],
-                replicate_method="BRR", fay_rho=0.5,
+                weights="w",
+                replicate_weights=["r1", "r2"],
+                replicate_method="BRR",
+                fay_rho=0.5,
             )
 
     def test_replicate_strata_mutual_exclusion(self):
         """Replicate weights cannot be combined with strata/psu/fpc."""
         with pytest.raises(ValueError, match="cannot be combined"):
             SurveyDesign(
-                weights="w", strata="s",
-                replicate_weights=["r1", "r2"], replicate_method="BRR",
+                weights="w",
+                strata="s",
+                replicate_weights=["r1", "r2"],
+                replicate_method="BRR",
             )
 
     def test_replicate_requires_weights(self):
         """Full-sample weights required alongside replicates."""
         with pytest.raises(ValueError, match="Full-sample weights"):
             SurveyDesign(
-                replicate_weights=["r1", "r2"], replicate_method="BRR",
+                replicate_weights=["r1", "r2"],
+                replicate_method="BRR",
             )
 
     def test_jk1_resolve(self, replicate_data):
         """JK1 replicates resolve correctly."""
         data, rep_cols = replicate_data
         sd = SurveyDesign(
-            weights="weight", replicate_weights=rep_cols,
+            weights="weight",
+            replicate_weights=rep_cols,
             replicate_method="JK1",
         )
         resolved = sd.resolve(data)
@@ -416,7 +452,8 @@ class TestReplicateWeightVariance:
 
         data, rep_cols = replicate_data
         sd = SurveyDesign(
-            weights="weight", replicate_weights=rep_cols,
+            weights="weight",
+            replicate_weights=rep_cols,
             replicate_method="JK1",
         )
         resolved = sd.resolve(data)
@@ -424,8 +461,10 @@ class TestReplicateWeightVariance:
         X = np.column_stack([np.ones(len(data)), data["x"].values])
 
         reg = LinearRegression(
-            include_intercept=False, weights=resolved.weights,
-            weight_type="pweight", survey_design=resolved,
+            include_intercept=False,
+            weights=resolved.weights,
+            weight_type="pweight",
+            survey_design=resolved,
         )
         reg.fit(X, y)
 
@@ -441,7 +480,8 @@ class TestReplicateWeightVariance:
 
         data, rep_cols = replicate_data
         sd = SurveyDesign(
-            weights="weight", replicate_weights=rep_cols,
+            weights="weight",
+            replicate_weights=rep_cols,
             replicate_method="BRR",
         )
         resolved = sd.resolve(data)
@@ -449,8 +489,12 @@ class TestReplicateWeightVariance:
         X = np.column_stack([np.ones(len(data)), data["x"].values])
 
         from diff_diff.linalg import solve_ols
+
         coef, _, _ = solve_ols(
-            X, y, weights=resolved.weights, weight_type="pweight",
+            X,
+            y,
+            weights=resolved.weights,
+            weight_type="pweight",
         )
 
         vcov, _nv = compute_replicate_vcov(X, y, coef, resolved)
@@ -458,15 +502,16 @@ class TestReplicateWeightVariance:
 
     def test_fay_inflates_over_brr(self, replicate_data):
         """Fay's BRR with rho > 0 produces larger variance than BRR."""
-        from diff_diff.survey import compute_replicate_vcov
         from diff_diff.linalg import solve_ols
+        from diff_diff.survey import compute_replicate_vcov
 
         data, rep_cols = replicate_data
         y = data["y"].values
         X = np.column_stack([np.ones(len(data)), data["x"].values])
 
         sd_brr = SurveyDesign(
-            weights="weight", replicate_weights=rep_cols,
+            weights="weight",
+            replicate_weights=rep_cols,
             replicate_method="BRR",
         )
         resolved_brr = sd_brr.resolve(data)
@@ -474,8 +519,10 @@ class TestReplicateWeightVariance:
         vcov_brr, _nv = compute_replicate_vcov(X, y, coef, resolved_brr)
 
         sd_fay = SurveyDesign(
-            weights="weight", replicate_weights=rep_cols,
-            replicate_method="Fay", fay_rho=0.5,
+            weights="weight",
+            replicate_weights=rep_cols,
+            replicate_method="Fay",
+            fay_rho=0.5,
         )
         resolved_fay = sd_fay.resolve(data)
         vcov_fay, _nv = compute_replicate_vcov(X, y, coef, resolved_fay)
@@ -489,7 +536,8 @@ class TestReplicateWeightVariance:
 
         data, rep_cols = replicate_data
         sd = SurveyDesign(
-            weights="weight", replicate_weights=rep_cols,
+            weights="weight",
+            replicate_weights=rep_cols,
             replicate_method="JK1",
         )
         resolved = sd.resolve(data)
@@ -507,11 +555,15 @@ class TestReplicateWeightVariance:
         data["outcome"] = data["y"] + 1.5 * data["treated"] * data["post"]
 
         sd = SurveyDesign(
-            weights="weight", replicate_weights=rep_cols,
+            weights="weight",
+            replicate_weights=rep_cols,
             replicate_method="JK1",
         )
         result = DifferenceInDifferences().fit(
-            data, outcome="outcome", treatment="treated", time="post",
+            data,
+            outcome="outcome",
+            treatment="treated",
+            time="post",
             survey_design=sd,
         )
         assert np.isfinite(result.att)
@@ -523,7 +575,8 @@ class TestReplicateWeightVariance:
 
         data, rep_cols = replicate_data
         sd = SurveyDesign(
-            weights="weight", replicate_weights=rep_cols,
+            weights="weight",
+            replicate_weights=rep_cols,
             replicate_method="JK1",
         )
         resolved = sd.resolve(data)
@@ -538,7 +591,8 @@ class TestReplicateWeightVariance:
         """Need at least 2 replicate columns."""
         data, _ = replicate_data
         sd = SurveyDesign(
-            weights="weight", replicate_weights=["rep_0"],
+            weights="weight",
+            replicate_weights=["rep_0"],
             replicate_method="BRR",
         )
         with pytest.raises(ValueError, match="At least 2"):
@@ -548,7 +602,8 @@ class TestReplicateWeightVariance:
         """JKn must have replicate_strata."""
         with pytest.raises(ValueError, match="replicate_strata is required"):
             SurveyDesign(
-                weights="w", replicate_weights=["r1", "r2"],
+                weights="w",
+                replicate_weights=["r1", "r2"],
                 replicate_method="JKn",
             )
 
@@ -556,14 +611,16 @@ class TestReplicateWeightVariance:
         """replicate_strata length must match replicate_weights."""
         with pytest.raises(ValueError, match="length"):
             SurveyDesign(
-                weights="w", replicate_weights=["r1", "r2"],
-                replicate_method="JKn", replicate_strata=[0],
+                weights="w",
+                replicate_weights=["r1", "r2"],
+                replicate_method="JKn",
+                replicate_strata=[0],
             )
 
     def test_jkn_variance(self, replicate_data):
         """JKn with per-stratum scaling produces finite results."""
-        from diff_diff.survey import compute_replicate_vcov
         from diff_diff.linalg import solve_ols
+        from diff_diff.survey import compute_replicate_vcov
 
         data, rep_cols = replicate_data
         # Assign first half of replicates to stratum 0, second half to stratum 1
@@ -571,8 +628,10 @@ class TestReplicateWeightVariance:
         strata = [0] * (n_rep // 2) + [1] * (n_rep - n_rep // 2)
 
         sd = SurveyDesign(
-            weights="weight", replicate_weights=rep_cols,
-            replicate_method="JKn", replicate_strata=strata,
+            weights="weight",
+            replicate_weights=rep_cols,
+            replicate_method="JKn",
+            replicate_strata=strata,
         )
         resolved = sd.resolve(data)
         y = data["y"].values
@@ -603,7 +662,9 @@ class TestReplicateWeightVariance:
             rep_cols.append(col)
 
         sd = SurveyDesign(
-            weights="w", replicate_weights=rep_cols, replicate_method="JK1",
+            weights="w",
+            replicate_weights=rep_cols,
+            replicate_method="JK1",
         )
         resolved = sd.resolve(data)
 
@@ -612,17 +673,16 @@ class TestReplicateWeightVariance:
 
         # JK1 gives (n-1)/n * sum(...) which should approximate sum(psi^2)
         assert v_rep == pytest.approx(v_analytical, rel=0.05), (
-            f"Replicate IF variance {v_rep:.6f} does not match analytical "
-            f"{v_analytical:.6f}"
+            f"Replicate IF variance {v_rep:.6f} does not match analytical " f"{v_analytical:.6f}"
         )
 
     def test_replicate_if_matches_survey_if_variance(self):
         """Replicate IF variance should approximate compute_survey_if_variance
         when JK1 replicates match the PSU structure."""
         from diff_diff.survey import (
+            ResolvedSurveyDesign,
             compute_replicate_if_variance,
             compute_survey_if_variance,
-            ResolvedSurveyDesign,
         )
 
         np.random.seed(123)
@@ -634,9 +694,14 @@ class TestReplicateWeightVariance:
 
         # TSL variance with PSU clustering
         resolved_tsl = ResolvedSurveyDesign(
-            weights=weights, weight_type="pweight",
-            strata=None, psu=psu, fpc=None,
-            n_strata=0, n_psu=n_psu, lonely_psu="remove",
+            weights=weights,
+            weight_type="pweight",
+            strata=None,
+            psu=psu,
+            fpc=None,
+            n_strata=0,
+            n_psu=n_psu,
+            lonely_psu="remove",
         )
         v_tsl = compute_survey_if_variance(psi, resolved_tsl)
 
@@ -654,9 +719,14 @@ class TestReplicateWeightVariance:
                 rep_arr[:, c] *= n / cs
 
         resolved_rep = ResolvedSurveyDesign(
-            weights=weights, weight_type="pweight",
-            strata=None, psu=None, fpc=None,
-            n_strata=0, n_psu=0, lonely_psu="remove",
+            weights=weights,
+            weight_type="pweight",
+            strata=None,
+            psu=None,
+            fpc=None,
+            n_strata=0,
+            n_psu=0,
+            lonely_psu="remove",
             replicate_weights=rep_arr,
             replicate_method="JK1",
             n_replicates=n_psu,
@@ -766,7 +836,7 @@ class TestReplicateWeightVariance:
 
     def test_scale_invariance_combined_weights(self):
         """Multiplying all replicate columns by a constant should not change SE."""
-        from diff_diff.survey import compute_replicate_if_variance, ResolvedSurveyDesign
+        from diff_diff.survey import ResolvedSurveyDesign, compute_replicate_if_variance
 
         np.random.seed(42)
         n = 40
@@ -786,50 +856,66 @@ class TestReplicateWeightVariance:
             rep_arr[:, r] = w_r
 
         resolved1 = ResolvedSurveyDesign(
-            weights=weights, weight_type="pweight",
-            strata=None, psu=None, fpc=None,
-            n_strata=0, n_psu=0, lonely_psu="remove",
+            weights=weights,
+            weight_type="pweight",
+            strata=None,
+            psu=None,
+            fpc=None,
+            n_strata=0,
+            n_psu=0,
+            lonely_psu="remove",
             replicate_weights=rep_arr,
-            replicate_method="JK1", n_replicates=R,
+            replicate_method="JK1",
+            n_replicates=R,
             combined_weights=True,
         )
         v1, _ = compute_replicate_if_variance(psi, resolved1)
 
         # Scale all replicate columns by 3x
         resolved2 = ResolvedSurveyDesign(
-            weights=weights * 3, weight_type="pweight",
-            strata=None, psu=None, fpc=None,
-            n_strata=0, n_psu=0, lonely_psu="remove",
+            weights=weights * 3,
+            weight_type="pweight",
+            strata=None,
+            psu=None,
+            fpc=None,
+            n_strata=0,
+            n_psu=0,
+            lonely_psu="remove",
             replicate_weights=rep_arr * 3,
-            replicate_method="JK1", n_replicates=R,
+            replicate_method="JK1",
+            n_replicates=R,
             combined_weights=True,
         )
         v2, _ = compute_replicate_if_variance(psi, resolved2)
 
-        assert v1 == pytest.approx(v2, rel=1e-10), (
-            f"Scale invariance violated: v1={v1:.8f} vs v2={v2:.8f}"
-        )
+        assert v1 == pytest.approx(
+            v2, rel=1e-10
+        ), f"Scale invariance violated: v1={v1:.8f} vs v2={v2:.8f}"
 
     def test_combined_weights_false(self):
         """combined_weights=False treats replicate cols as perturbation factors."""
         sd = SurveyDesign(
-            weights="w", replicate_weights=["r1", "r2"],
-            replicate_method="BRR", combined_weights=False,
+            weights="w",
+            replicate_weights=["r1", "r2"],
+            replicate_method="BRR",
+            combined_weights=False,
         )
         assert sd.combined_weights is False
 
     def test_custom_scale(self):
         """Custom replicate_scale overrides default factor."""
         sd = SurveyDesign(
-            weights="w", replicate_weights=["r1", "r2"],
-            replicate_method="BRR", replicate_scale=0.5,
+            weights="w",
+            replicate_weights=["r1", "r2"],
+            replicate_method="BRR",
+            replicate_scale=0.5,
         )
         assert sd.replicate_scale == 0.5
 
     def test_scale_rscales_multiplicative(self):
         """scale and rscales are applied multiplicatively for JK1."""
-        from diff_diff.survey import compute_replicate_vcov, ResolvedSurveyDesign
         from diff_diff.linalg import solve_ols
+        from diff_diff.survey import ResolvedSurveyDesign, compute_replicate_vcov
 
         np.random.seed(42)
         n, R = 100, 5
@@ -851,11 +937,17 @@ class TestReplicateWeightVariance:
         # rscales only
         rscales = np.array([0.5, 1.0, 1.5, 1.0, 0.5])
         resolved_rscales = ResolvedSurveyDesign(
-            weights=w, weight_type="pweight",
-            strata=None, psu=None, fpc=None,
-            n_strata=0, n_psu=0, lonely_psu="remove",
+            weights=w,
+            weight_type="pweight",
+            strata=None,
+            psu=None,
+            fpc=None,
+            n_strata=0,
+            n_psu=0,
+            lonely_psu="remove",
             replicate_weights=rep_arr,
-            replicate_method="JK1", n_replicates=R,
+            replicate_method="JK1",
+            n_replicates=R,
             replicate_rscales=rscales,
         )
         vcov_rscales, _ = compute_replicate_vcov(X, y, coef, resolved_rscales)
@@ -863,12 +955,19 @@ class TestReplicateWeightVariance:
         # scale * rscales should multiply
         scale_val = 2.0
         resolved_both = ResolvedSurveyDesign(
-            weights=w, weight_type="pweight",
-            strata=None, psu=None, fpc=None,
-            n_strata=0, n_psu=0, lonely_psu="remove",
+            weights=w,
+            weight_type="pweight",
+            strata=None,
+            psu=None,
+            fpc=None,
+            n_strata=0,
+            n_psu=0,
+            lonely_psu="remove",
             replicate_weights=rep_arr,
-            replicate_method="JK1", n_replicates=R,
-            replicate_scale=scale_val, replicate_rscales=rscales,
+            replicate_method="JK1",
+            n_replicates=R,
+            replicate_scale=scale_val,
+            replicate_rscales=rscales,
         )
         vcov_both, _ = compute_replicate_vcov(X, y, coef, resolved_both)
 
@@ -878,8 +977,9 @@ class TestReplicateWeightVariance:
     def test_brr_ignores_custom_scaling(self):
         """BRR ignores custom scale/rscales with a warning."""
         import warnings
-        from diff_diff.survey import compute_replicate_vcov, ResolvedSurveyDesign
+
         from diff_diff.linalg import solve_ols
+        from diff_diff.survey import ResolvedSurveyDesign, compute_replicate_vcov
 
         np.random.seed(42)
         n, R = 100, 5
@@ -893,21 +993,33 @@ class TestReplicateWeightVariance:
 
         # Default BRR
         resolved_default = ResolvedSurveyDesign(
-            weights=w, weight_type="pweight",
-            strata=None, psu=None, fpc=None,
-            n_strata=0, n_psu=0, lonely_psu="remove",
+            weights=w,
+            weight_type="pweight",
+            strata=None,
+            psu=None,
+            fpc=None,
+            n_strata=0,
+            n_psu=0,
+            lonely_psu="remove",
             replicate_weights=rep_arr,
-            replicate_method="BRR", n_replicates=R,
+            replicate_method="BRR",
+            n_replicates=R,
         )
         vcov_default, _ = compute_replicate_vcov(X, y, coef, resolved_default)
 
         # BRR with custom scale (should be ignored with warning)
         resolved_custom = ResolvedSurveyDesign(
-            weights=w, weight_type="pweight",
-            strata=None, psu=None, fpc=None,
-            n_strata=0, n_psu=0, lonely_psu="remove",
+            weights=w,
+            weight_type="pweight",
+            strata=None,
+            psu=None,
+            fpc=None,
+            n_strata=0,
+            n_psu=0,
+            lonely_psu="remove",
             replicate_weights=rep_arr,
-            replicate_method="BRR", n_replicates=R,
+            replicate_method="BRR",
+            n_replicates=R,
             replicate_scale=99.0,
         )
         with warnings.catch_warnings(record=True) as caught:
@@ -918,7 +1030,7 @@ class TestReplicateWeightVariance:
 
     def test_replicate_if_no_divide_by_zero_warning(self):
         """compute_replicate_if_variance should not warn on zero weights."""
-        from diff_diff.survey import compute_replicate_if_variance, ResolvedSurveyDesign
+        from diff_diff.survey import ResolvedSurveyDesign, compute_replicate_if_variance
 
         n = 20
         psi = np.random.randn(n)
@@ -933,13 +1045,20 @@ class TestReplicateWeightVariance:
                 rep_arr[:, r] *= n / cs
 
         resolved = ResolvedSurveyDesign(
-            weights=weights, weight_type="pweight",
-            strata=None, psu=None, fpc=None,
-            n_strata=0, n_psu=0, lonely_psu="remove",
+            weights=weights,
+            weight_type="pweight",
+            strata=None,
+            psu=None,
+            fpc=None,
+            n_strata=0,
+            n_psu=0,
+            lonely_psu="remove",
             replicate_weights=rep_arr,
-            replicate_method="JK1", n_replicates=5,
+            replicate_method="JK1",
+            n_replicates=5,
         )
         import warnings
+
         with warnings.catch_warnings():
             warnings.simplefilter("error", RuntimeWarning)
             # Should NOT raise RuntimeWarning for divide by zero
@@ -962,17 +1081,24 @@ class TestReplicateEdgeCases:
         rep_factors = np.random.uniform(0.8, 1.2, (n, R))
 
         resolved = ResolvedSurveyDesign(
-            weights=weights, weight_type="pweight",
-            strata=None, psu=None, fpc=None,
-            n_strata=0, n_psu=0, lonely_psu="remove",
+            weights=weights,
+            weight_type="pweight",
+            strata=None,
+            psu=None,
+            fpc=None,
+            n_strata=0,
+            n_psu=0,
+            lonely_psu="remove",
             replicate_weights=rep_factors,
-            replicate_method="BRR", n_replicates=R,
+            replicate_method="BRR",
+            n_replicates=R,
             combined_weights=False,
         )
         # df should match pivoted QR rank of analysis weights
         analysis_weights = rep_factors * weights[:, np.newaxis]
         from scipy.linalg import qr as scipy_qr
-        _, R_mat, _ = scipy_qr(analysis_weights, pivoting=True, mode='economic')
+
+        _, R_mat, _ = scipy_qr(analysis_weights, pivoting=True, mode="economic")
         diag_abs = np.abs(np.diag(R_mat))
         expected_rank = int(np.sum(diag_abs > 1e-5 * diag_abs.max()))
         expected_df = expected_rank - 1 if expected_rank > 1 else None
@@ -983,15 +1109,21 @@ class TestReplicateEdgeCases:
         weights_with_zeros = weights.copy()
         weights_with_zeros[:10] = 0.0  # subpopulation-zeroed
         resolved2 = ResolvedSurveyDesign(
-            weights=weights_with_zeros, weight_type="pweight",
-            strata=None, psu=None, fpc=None,
-            n_strata=0, n_psu=0, lonely_psu="remove",
+            weights=weights_with_zeros,
+            weight_type="pweight",
+            strata=None,
+            psu=None,
+            fpc=None,
+            n_strata=0,
+            n_psu=0,
+            lonely_psu="remove",
             replicate_weights=rep_factors,
-            replicate_method="BRR", n_replicates=R,
+            replicate_method="BRR",
+            n_replicates=R,
             combined_weights=False,
         )
         analysis_z = rep_factors * weights_with_zeros[:, np.newaxis]
-        _, R_z, _ = scipy_qr(analysis_z, pivoting=True, mode='economic')
+        _, R_z, _ = scipy_qr(analysis_z, pivoting=True, mode="economic")
         diag_z = np.abs(np.diag(R_z))
         z_rank = int(np.sum(diag_z > 1e-5 * diag_z.max())) if diag_z.max() > 0 else 0
         z_df = z_rank - 1 if z_rank > 1 else None
@@ -999,8 +1131,8 @@ class TestReplicateEdgeCases:
 
     def test_rscales_zero_centering_vcov(self):
         """mse=False with zero rscales: center only on rscales > 0 replicates."""
-        from diff_diff.survey import compute_replicate_vcov, ResolvedSurveyDesign
         from diff_diff.linalg import solve_ols
+        from diff_diff.survey import ResolvedSurveyDesign, compute_replicate_vcov
 
         np.random.seed(42)
         n = 100
@@ -1019,8 +1151,7 @@ class TestReplicateEdgeCases:
             rep_arr[start:end, :] = 0.0
             # Correct column r only
             rep_arr[:, r] = np.where(
-                (np.arange(n) >= start) & (np.arange(n) < end), 0.0,
-                R / (R - 1)
+                (np.arange(n) >= start) & (np.arange(n) < end), 0.0, R / (R - 1)
             )
 
         # rscales with one zero entry
@@ -1029,12 +1160,19 @@ class TestReplicateEdgeCases:
         coef, _, _ = solve_ols(X, y, weights=w)
 
         resolved = ResolvedSurveyDesign(
-            weights=w, weight_type="pweight",
-            strata=None, psu=None, fpc=None,
-            n_strata=0, n_psu=0, lonely_psu="remove",
+            weights=w,
+            weight_type="pweight",
+            strata=None,
+            psu=None,
+            fpc=None,
+            n_strata=0,
+            n_psu=0,
+            lonely_psu="remove",
             replicate_weights=rep_arr,
-            replicate_method="JK1", n_replicates=R,
-            replicate_rscales=rscales, mse=False,
+            replicate_method="JK1",
+            n_replicates=R,
+            replicate_rscales=rscales,
+            mse=False,
         )
         vcov, _nv = compute_replicate_vcov(X, y, coef, resolved)
 
@@ -1055,7 +1193,7 @@ class TestReplicateEdgeCases:
 
     def test_rscales_zero_centering_if(self):
         """mse=False with zero rscales: IF path centers only on rscales > 0."""
-        from diff_diff.survey import compute_replicate_if_variance, ResolvedSurveyDesign
+        from diff_diff.survey import ResolvedSurveyDesign, compute_replicate_if_variance
 
         np.random.seed(42)
         n = 50
@@ -1070,28 +1208,35 @@ class TestReplicateEdgeCases:
             end = min((r + 1) * (n // R), n)
             rep_arr[start:end, r] = 0.0
             rep_arr[:, r] = np.where(
-                (np.arange(n) >= start) & (np.arange(n) < end), 0.0,
-                R / (R - 1)
+                (np.arange(n) >= start) & (np.arange(n) < end), 0.0, R / (R - 1)
             )
 
         rscales = np.array([1.0, 0.0, 1.0, 1.0, 1.0])
 
         resolved = ResolvedSurveyDesign(
-            weights=w, weight_type="pweight",
-            strata=None, psu=None, fpc=None,
-            n_strata=0, n_psu=0, lonely_psu="remove",
+            weights=w,
+            weight_type="pweight",
+            strata=None,
+            psu=None,
+            fpc=None,
+            n_strata=0,
+            n_psu=0,
+            lonely_psu="remove",
             replicate_weights=rep_arr,
-            replicate_method="JK1", n_replicates=R,
-            replicate_rscales=rscales, mse=False,
+            replicate_method="JK1",
+            n_replicates=R,
+            replicate_rscales=rscales,
+            mse=False,
         )
         var, _nv = compute_replicate_if_variance(psi, resolved)
 
         # Manual: theta_r = sum((w_r/w) * psi), center on rscales > 0 only
-        theta_full = float(np.sum(psi))
-        theta_reps = np.array([
-            float(np.sum(np.divide(rep_arr[:, r], w, out=np.zeros(n), where=w > 0) * psi))
-            for r in range(R)
-        ])
+        theta_reps = np.array(
+            [
+                float(np.sum(np.divide(rep_arr[:, r], w, out=np.zeros(n), where=w > 0) * psi))
+                for r in range(R)
+            ]
+        )
         pos_mask = rscales > 0
         center = float(np.mean(theta_reps[pos_mask]))
         diffs = theta_reps - center
@@ -1113,11 +1258,17 @@ class TestReplicateEdgeCases:
         rep_arr = np.column_stack([col, col, col])
 
         resolved = ResolvedSurveyDesign(
-            weights=weights, weight_type="pweight",
-            strata=None, psu=None, fpc=None,
-            n_strata=0, n_psu=0, lonely_psu="remove",
+            weights=weights,
+            weight_type="pweight",
+            strata=None,
+            psu=None,
+            fpc=None,
+            n_strata=0,
+            n_psu=0,
+            lonely_psu="remove",
             replicate_weights=rep_arr,
-            replicate_method="JK1", n_replicates=R,
+            replicate_method="JK1",
+            n_replicates=R,
         )
         # Rank-1 → df_survey should be None
         assert resolved.df_survey is None
@@ -1156,10 +1307,15 @@ class TestEstimatorReplicateWeights:
                 if ft > 0 and t >= ft:
                     y += 2.0
                 y += np.random.normal(0, 0.5)
-                rows.append({
-                    "unit": unit, "time": t, "first_treat": ft,
-                    "outcome": y, "weight": wt,
-                })
+                rows.append(
+                    {
+                        "unit": unit,
+                        "time": t,
+                        "first_treat": ft,
+                        "outcome": y,
+                        "weight": wt,
+                    }
+                )
         data = pd.DataFrame(rows)
         # Generate JK1 replicates (delete-cluster jackknife)
         cluster_size = n_units // n_rep
@@ -1182,11 +1338,16 @@ class TestEstimatorReplicateWeights:
 
         data, rep_cols = self._make_staggered_replicate_data()
         sd = SurveyDesign(
-            weights="weight", replicate_weights=rep_cols,
+            weights="weight",
+            replicate_weights=rep_cols,
             replicate_method="JK1",
         )
         result = CallawaySantAnna(estimation_method="reg", n_bootstrap=0).fit(
-            data, "outcome", "unit", "time", "first_treat",
+            data,
+            "outcome",
+            "unit",
+            "time",
+            "first_treat",
             survey_design=sd,
         )
         assert np.isfinite(result.overall_att)
@@ -1199,11 +1360,16 @@ class TestEstimatorReplicateWeights:
 
         data, rep_cols = self._make_staggered_replicate_data()
         sd = SurveyDesign(
-            weights="weight", replicate_weights=rep_cols,
+            weights="weight",
+            replicate_weights=rep_cols,
             replicate_method="JK1",
         )
         result = EfficientDiD(n_bootstrap=0).fit(
-            data, "outcome", "unit", "time", "first_treat",
+            data,
+            "outcome",
+            "unit",
+            "time",
+            "first_treat",
             survey_design=sd,
         )
         assert np.isfinite(result.overall_att)
@@ -1214,7 +1380,8 @@ class TestEstimatorReplicateWeights:
         """subpopulation() should preserve replicate design fields."""
         data, rep_cols = self._make_staggered_replicate_data()
         sd = SurveyDesign(
-            weights="weight", replicate_weights=rep_cols,
+            weights="weight",
+            replicate_weights=rep_cols,
             replicate_method="JK1",
         )
         mask = data["unit"] < 40
@@ -1234,12 +1401,18 @@ class TestEstimatorReplicateWeights:
         data, rep_cols = self._make_staggered_replicate_data()
         data["dose"] = np.where(data["first_treat"] > 0, 1.0 + 0.5 * data["unit"] % 3, 0.0)
         sd = SurveyDesign(
-            weights="weight", replicate_weights=rep_cols,
+            weights="weight",
+            replicate_weights=rep_cols,
             replicate_method="JK1",
         )
         with pytest.raises(NotImplementedError, match="not supported"):
             ContinuousDiD(n_bootstrap=30, seed=42).fit(
-                data, "outcome", "unit", "time", "first_treat", "dose",
+                data,
+                "outcome",
+                "unit",
+                "time",
+                "first_treat",
+                "dose",
                 survey_design=sd,
             )
 
@@ -1257,9 +1430,15 @@ class TestEstimatorReplicateWeights:
         y = 1.0 + 0.5 * d1 + 0.3 * d2 + 2.0 * d1 * d2 * post + np.random.randn(n) * 0.5
         w = 1.0 + np.random.exponential(0.3, n)
 
-        data = pd.DataFrame({
-            "y": y, "d1": d1, "d2": d2, "post": post, "weight": w,
-        })
+        data = pd.DataFrame(
+            {
+                "y": y,
+                "d1": d1,
+                "d2": d2,
+                "post": post,
+                "weight": w,
+            }
+        )
         # Build JK1 replicates
         cluster_size = n // n_rep
         rep_cols = []
@@ -1274,12 +1453,17 @@ class TestEstimatorReplicateWeights:
             rep_cols.append(col)
 
         sd = SurveyDesign(
-            weights="weight", replicate_weights=rep_cols,
+            weights="weight",
+            replicate_weights=rep_cols,
             replicate_method="JK1",
         )
         result = TripleDifference(estimation_method=est_method).fit(
-            data, outcome="y", group="d1", partition="d2",
-            time="post", survey_design=sd,
+            data,
+            outcome="y",
+            group="d1",
+            partition="d2",
+            time="post",
+            survey_design=sd,
         )
         assert np.isfinite(result.att)
         assert np.isfinite(result.se)
@@ -1291,11 +1475,16 @@ class TestEstimatorReplicateWeights:
 
         data, rep_cols = self._make_staggered_replicate_data()
         sd = SurveyDesign(
-            weights="weight", replicate_weights=rep_cols,
+            weights="weight",
+            replicate_weights=rep_cols,
             replicate_method="JK1",
         )
         result = SunAbraham(n_bootstrap=0).fit(
-            data, "outcome", "unit", "time", "first_treat",
+            data,
+            "outcome",
+            "unit",
+            "time",
+            "first_treat",
             survey_design=sd,
         )
         assert np.isfinite(result.overall_att)
@@ -1334,12 +1523,17 @@ class TestSubpopulationMaskValidation:
 
         data, rep_cols = TestEstimatorReplicateWeights._make_staggered_replicate_data()
         sd = SurveyDesign(
-            weights="weight", replicate_weights=rep_cols,
+            weights="weight",
+            replicate_weights=rep_cols,
             replicate_method="JK1",
         )
         with pytest.raises(NotImplementedError, match="not supported"):
             EfficientDiD(n_bootstrap=30, seed=42).fit(
-                data, "outcome", "unit", "time", "first_treat",
+                data,
+                "outcome",
+                "unit",
+                "time",
+                "first_treat",
                 survey_design=sd,
             )
 
@@ -1349,12 +1543,17 @@ class TestSubpopulationMaskValidation:
 
         data, rep_cols = TestEstimatorReplicateWeights._make_staggered_replicate_data()
         sd = SurveyDesign(
-            weights="weight", replicate_weights=rep_cols,
+            weights="weight",
+            replicate_weights=rep_cols,
             replicate_method="JK1",
         )
         with pytest.raises(NotImplementedError, match="not supported"):
             CallawaySantAnna(estimation_method="reg", n_bootstrap=30, seed=42).fit(
-                data, "outcome", "unit", "time", "first_treat",
+                data,
+                "outcome",
+                "unit",
+                "time",
+                "first_treat",
                 survey_design=sd,
             )
 
@@ -1373,10 +1572,16 @@ class TestSubpopulationMaskValidation:
                 if treated and t == 1:
                     y += 2.0
                 y += np.random.normal(0, 0.3)
-                rows.append({
-                    "unit": i, "time": t, "treated": treated,
-                    "post": t, "outcome": y, "weight": wt,
-                })
+                rows.append(
+                    {
+                        "unit": i,
+                        "time": t,
+                        "treated": treated,
+                        "post": t,
+                        "outcome": y,
+                        "weight": wt,
+                    }
+                )
         data = pd.DataFrame(rows)
         # Use BRR to avoid zero-weight units breaking within-transform
         rng = np.random.RandomState(42)
@@ -1389,12 +1594,17 @@ class TestSubpopulationMaskValidation:
             data[f"brr_{r}"] = np.maximum(data["weight"].values * (1.0 + 0.5 * p), 0.0)
             rep_cols.append(f"brr_{r}")
         sd = SurveyDesign(
-            weights="weight", replicate_weights=rep_cols,
+            weights="weight",
+            replicate_weights=rep_cols,
             replicate_method="BRR",
         )
         result = TwoWayFixedEffects().fit(
-            data, outcome="outcome", treatment="treated",
-            time="post", unit="unit", survey_design=sd,
+            data,
+            outcome="outcome",
+            treatment="treated",
+            time="post",
+            unit="unit",
+            survey_design=sd,
         )
         assert np.isfinite(result.att)
         assert np.isfinite(result.se) and result.se > 0
@@ -1405,12 +1615,17 @@ class TestSubpopulationMaskValidation:
 
         data, rep_cols = TestEstimatorReplicateWeights._make_staggered_replicate_data()
         sd = SurveyDesign(
-            weights="weight", replicate_weights=rep_cols,
+            weights="weight",
+            replicate_weights=rep_cols,
             replicate_method="JK1",
         )
         result = StackedDiD().fit(
-            data, outcome="outcome", unit="unit", time="time",
-            first_treat="first_treat", survey_design=sd,
+            data,
+            outcome="outcome",
+            unit="unit",
+            time="time",
+            first_treat="first_treat",
+            survey_design=sd,
         )
         assert np.isfinite(result.overall_att)
 
@@ -1418,27 +1633,34 @@ class TestSubpopulationMaskValidation:
         """Negative or zero replicate_scale should be rejected."""
         with pytest.raises(ValueError, match="positive finite"):
             SurveyDesign(
-                weights="w", replicate_weights=["r1", "r2"],
-                replicate_method="JK1", replicate_scale=-1.0,
+                weights="w",
+                replicate_weights=["r1", "r2"],
+                replicate_method="JK1",
+                replicate_scale=-1.0,
             )
         with pytest.raises(ValueError, match="positive finite"):
             SurveyDesign(
-                weights="w", replicate_weights=["r1", "r2"],
-                replicate_method="JK1", replicate_scale=0.0,
+                weights="w",
+                replicate_weights=["r1", "r2"],
+                replicate_method="JK1",
+                replicate_scale=0.0,
             )
 
     def test_invalid_replicate_rscales_rejected(self):
         """Negative replicate_rscales should be rejected."""
         with pytest.raises(ValueError, match="non-negative"):
             SurveyDesign(
-                weights="w", replicate_weights=["r1", "r2"],
-                replicate_method="JK1", replicate_rscales=[-1.0, 1.0],
+                weights="w",
+                replicate_weights=["r1", "r2"],
+                replicate_method="JK1",
+                replicate_rscales=[-1.0, 1.0],
             )
 
     def _replicate_sd_and_data(self):
         data, rep_cols = TestEstimatorReplicateWeights._make_staggered_replicate_data()
         sd = SurveyDesign(
-            weights="weight", replicate_weights=rep_cols,
+            weights="weight",
+            replicate_weights=rep_cols,
             replicate_method="JK1",
         )
         return data, sd
@@ -1446,66 +1668,95 @@ class TestSubpopulationMaskValidation:
     def test_multi_period_did_replicate_accepted(self):
         """MultiPeriodDiD now supports replicate-weight designs."""
         from diff_diff.estimators import MultiPeriodDiD
+
         data, sd = self._replicate_sd_and_data()
         data["treated"] = (data["first_treat"] > 0).astype(int)
         data["post"] = (data["time"] >= 3).astype(int)
         result = MultiPeriodDiD().fit(
-            data, outcome="outcome", treatment="treated",
-            time="post", survey_design=sd,
+            data,
+            outcome="outcome",
+            treatment="treated",
+            time="post",
+            survey_design=sd,
         )
         assert np.isfinite(result.avg_att)
 
     def test_imputation_did_replicate_accepted(self):
         """ImputationDiD now supports replicate-weight designs."""
         from diff_diff.imputation import ImputationDiD
+
         data, sd = self._replicate_sd_and_data()
         result = ImputationDiD(n_bootstrap=0).fit(
-            data, outcome="outcome", unit="unit", time="time",
-            first_treat="first_treat", survey_design=sd,
+            data,
+            outcome="outcome",
+            unit="unit",
+            time="time",
+            first_treat="first_treat",
+            survey_design=sd,
         )
         assert np.isfinite(result.overall_att)
 
     def test_two_stage_did_replicate_accepted(self):
         """TwoStageDiD now supports replicate-weight designs."""
         from diff_diff.two_stage import TwoStageDiD
+
         data, sd = self._replicate_sd_and_data()
         result = TwoStageDiD(n_bootstrap=0).fit(
-            data, outcome="outcome", unit="unit", time="time",
-            first_treat="first_treat", survey_design=sd,
+            data,
+            outcome="outcome",
+            unit="unit",
+            time="time",
+            first_treat="first_treat",
+            survey_design=sd,
         )
         assert np.isfinite(result.overall_att)
 
     def test_bacon_replicate_rejected(self):
         """BaconDecomposition rejects replicate-weight designs."""
         from diff_diff.bacon import BaconDecomposition
+
         data, sd = self._replicate_sd_and_data()
         with pytest.raises(NotImplementedError):
             BaconDecomposition().fit(
-                data, outcome="outcome", unit="unit", time="time",
-                first_treat="first_treat", survey_design=sd,
+                data,
+                outcome="outcome",
+                unit="unit",
+                time="time",
+                first_treat="first_treat",
+                survey_design=sd,
             )
 
     def test_synthetic_did_replicate_rejected(self):
         """SyntheticDiD rejects replicate-weight designs."""
         from diff_diff.synthetic_did import SyntheticDiD
+
         data, sd = self._replicate_sd_and_data()
         data["treated"] = (data["first_treat"] > 0).astype(int)
         with pytest.raises(NotImplementedError):
             SyntheticDiD().fit(
-                data, outcome="outcome", unit="unit", time="time",
-                treatment="treated", survey_design=sd,
+                data,
+                outcome="outcome",
+                unit="unit",
+                time="time",
+                treatment="treated",
+                survey_design=sd,
             )
 
     @pytest.mark.slow
     def test_trop_replicate_rejected(self):
         """TROP rejects replicate-weight designs."""
         from diff_diff.trop import TROP
+
         data, sd = self._replicate_sd_and_data()
         data["treated"] = (data["first_treat"] > 0).astype(int)
         with pytest.raises(NotImplementedError):
             TROP().fit(
-                data, outcome="outcome", unit="unit", time="time",
-                treatment="treated", survey_design=sd,
+                data,
+                outcome="outcome",
+                unit="unit",
+                time="time",
+                treatment="treated",
+                survey_design=sd,
             )
 
 
@@ -1516,7 +1767,8 @@ class TestCSReplicateMethodCoverage:
     def _make_cs_replicate_data():
         data, rep_cols = TestEstimatorReplicateWeights._make_staggered_replicate_data()
         sd = SurveyDesign(
-            weights="weight", replicate_weights=rep_cols,
+            weights="weight",
+            replicate_weights=rep_cols,
             replicate_method="JK1",
         )
         return data, sd
@@ -1525,11 +1777,17 @@ class TestCSReplicateMethodCoverage:
     def test_cs_replicate_ipw_dr_no_covariates(self, method):
         """CS replicate weights work for ipw/dr without covariates."""
         from diff_diff import CallawaySantAnna
+
         data, sd = self._make_cs_replicate_data()
         result = CallawaySantAnna(
-            estimation_method=method, n_bootstrap=0,
+            estimation_method=method,
+            n_bootstrap=0,
         ).fit(
-            data, "outcome", "unit", "time", "first_treat",
+            data,
+            "outcome",
+            "unit",
+            "time",
+            "first_treat",
             survey_design=sd,
         )
         assert np.isfinite(result.overall_att)
@@ -1548,6 +1806,7 @@ class TestEffectiveSampleAndDfConsistency:
     def test_continuous_did_positive_weight_gate(self):
         """ContinuousDiD skips cells where positive-weight count < n_basis."""
         import warnings
+
         from diff_diff import ContinuousDiD
 
         np.random.seed(42)
@@ -1568,10 +1827,16 @@ class TestEffectiveSampleAndDfConsistency:
                 if ft > 0 and t >= ft:
                     y += 2.0 * dose
                 y += np.random.normal(0, 0.5)
-                rows.append({
-                    "unit": unit, "time": t, "first_treat": ft,
-                    "outcome": y, "weight": wt, "dose": dose,
-                })
+                rows.append(
+                    {
+                        "unit": unit,
+                        "time": t,
+                        "first_treat": ft,
+                        "outcome": y,
+                        "weight": wt,
+                        "dose": dose,
+                    }
+                )
         data = pd.DataFrame(rows)
 
         # Build replicate columns
@@ -1589,7 +1854,8 @@ class TestEffectiveSampleAndDfConsistency:
             rep_cols.append(col)
 
         sd = SurveyDesign(
-            weights="weight", replicate_weights=rep_cols,
+            weights="weight",
+            replicate_weights=rep_cols,
             replicate_method="JK1",
         )
 
@@ -1605,13 +1871,15 @@ class TestEffectiveSampleAndDfConsistency:
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
             result = ContinuousDiD(n_bootstrap=0, num_knots=2).fit(
-                new_data, "outcome", "unit", "time", "first_treat", "dose",
+                new_data,
+                "outcome",
+                "unit",
+                "time",
+                "first_treat",
+                "dose",
                 survey_design=new_sd,
             )
-        weight_warnings = [
-            w for w in caught
-            if "positive-weight" in str(w.message)
-        ]
+        weight_warnings = [w for w in caught if "positive-weight" in str(w.message)]
         assert len(weight_warnings) > 0, "Expected warning about insufficient positive-weight units"
         # Result should still be finite (from the valid cohort-3 cells)
         assert result is not None
@@ -1641,17 +1909,30 @@ class TestEffectiveSampleAndDfConsistency:
         for idx in cell_indices[2:]:
             w[idx] = 0.0
 
-        data = pd.DataFrame({
-            "y": y, "d1": d1, "d2": d2, "post": post,
-            "weight": w, "x1": x1, "x2": x2, "x3": x3,
-        })
+        data = pd.DataFrame(
+            {
+                "y": y,
+                "d1": d1,
+                "d2": d2,
+                "post": post,
+                "weight": w,
+                "x1": x1,
+                "x2": x2,
+                "x3": x3,
+            }
+        )
 
         sd = SurveyDesign(weights="weight")
 
         # Should not crash — falls back to weighted mean for the thin cell
         result = TripleDifference(estimation_method="reg").fit(
-            data, outcome="y", group="d1", partition="d2",
-            time="post", covariates=["x1", "x2", "x3"], survey_design=sd,
+            data,
+            outcome="y",
+            group="d1",
+            partition="d2",
+            time="post",
+            covariates=["x1", "x2", "x3"],
+            survey_design=sd,
         )
         assert result is not None
         assert np.isfinite(result.att)
@@ -1663,11 +1944,16 @@ class TestEffectiveSampleAndDfConsistency:
         data, rep_cols = TestEstimatorReplicateWeights._make_staggered_replicate_data()
         n_rep = len(rep_cols)
         sd = SurveyDesign(
-            weights="weight", replicate_weights=rep_cols,
+            weights="weight",
+            replicate_weights=rep_cols,
             replicate_method="JK1",
         )
         result = CallawaySantAnna(estimation_method="reg", n_bootstrap=0).fit(
-            data, "outcome", "unit", "time", "first_treat",
+            data,
+            "outcome",
+            "unit",
+            "time",
+            "first_treat",
             survey_design=sd,
         )
         sm = result.survey_metadata
@@ -1692,9 +1978,15 @@ class TestEffectiveSampleAndDfConsistency:
         y = 1.0 + 0.5 * d1 + 0.3 * d2 + 2.0 * d1 * d2 * post + np.random.randn(n) * 0.5
         w = 1.0 + np.random.exponential(0.3, n)
 
-        data = pd.DataFrame({
-            "y": y, "d1": d1, "d2": d2, "post": post, "weight": w,
-        })
+        data = pd.DataFrame(
+            {
+                "y": y,
+                "d1": d1,
+                "d2": d2,
+                "post": post,
+                "weight": w,
+            }
+        )
         cluster_size = n // n_rep
         rep_cols = []
         for r in range(n_rep):
@@ -1708,12 +2000,17 @@ class TestEffectiveSampleAndDfConsistency:
             rep_cols.append(col)
 
         sd = SurveyDesign(
-            weights="weight", replicate_weights=rep_cols,
+            weights="weight",
+            replicate_weights=rep_cols,
             replicate_method="JK1",
         )
         result = TripleDifference(estimation_method="reg").fit(
-            data, outcome="y", group="d1", partition="d2",
-            time="post", survey_design=sd,
+            data,
+            outcome="y",
+            group="d1",
+            partition="d2",
+            time="post",
+            survey_design=sd,
         )
         sm = result.survey_metadata
         assert sm is not None

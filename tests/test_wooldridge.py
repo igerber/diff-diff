@@ -1107,7 +1107,6 @@ class TestUnbalancedOLS:
         y = sample["y"].values
 
         coefs_dummy, _, _ = solve_ols(X_full, y)
-        n_int = X_int.shape[1]
 
         for i, (g, t) in enumerate(gt_keys):
             if (g, t) in r.group_time_effects:
@@ -1193,7 +1192,6 @@ class TestNonlinearNeverTreated:
     def test_interaction_matrix_fewer_cols_for_nonlinear(self):
         """For never_treated, nonlinear methods get fewer interaction columns
         than OLS (no pre-treatment cells)."""
-        rng = np.random.RandomState(42)
         rows = []
         for u in range(20):
             g = 3 if u < 10 else 0

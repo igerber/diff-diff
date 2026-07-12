@@ -853,7 +853,7 @@ class TestRegression:
         )
 
         # Should not raise
-        summary = results.summary()
+        results.summary()
         results.print_summary()
 
     def test_repr_does_not_raise(self, simple_ddd_data):

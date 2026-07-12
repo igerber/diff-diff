@@ -8,7 +8,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from diff_diff.sun_abraham import SABootstrapResults, SunAbraham, SunAbrahamResults
+from diff_diff.sun_abraham import SunAbraham, SunAbrahamResults
 
 
 def generate_staggered_data(
@@ -1242,9 +1242,7 @@ class TestSunAbrahamMethodology:
 
         sa = SunAbraham(n_bootstrap=0)
         with patch.object(LinearRegression, "fit", capturing_fit):
-            results = sa.fit(
-                data, outcome="outcome", unit="unit", time="time", first_treat="first_treat"
-            )
+            sa.fit(data, outcome="outcome", unit="unit", time="time", first_treat="first_treat")
 
         # Verify df_adjustment was passed and applied
         n_units = data["unit"].nunique()

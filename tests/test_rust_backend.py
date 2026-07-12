@@ -14,6 +14,7 @@ import pandas as pd
 import pytest
 
 from diff_diff import HAS_RUST_BACKEND
+from diff_diff._backend import _rust_demean_map as _demean_map_symbol
 
 
 @pytest.mark.skipif(not HAS_RUST_BACKEND, reason="Rust backend not available")
@@ -335,7 +336,6 @@ class TestRustBackend:
         3. Results match NumPy implementation
         """
         from diff_diff._rust_backend import solve_ols
-        from scipy.linalg import lstsq
 
         np.random.seed(42)
         n = 100
@@ -522,6 +522,7 @@ class TestRustVsNumpy:
     def test_solve_ols_coefficients_match(self):
         """Test Rust and NumPy OLS coefficients match."""
         from diff_diff._rust_backend import solve_ols as rust_fn
+
         from diff_diff.linalg import _solve_ols_numpy as numpy_fn
 
         np.random.seed(42)
@@ -546,6 +547,7 @@ class TestRustVsNumpy:
         direct-kernel test - the PUBLIC solve_ols rejects n < k outright -
         asserting the engines' shared residual/exact-fit contract."""
         from diff_diff._rust_backend import solve_ols as rust_fn
+
         from diff_diff.linalg import _solve_ols_numpy as numpy_fn
 
         np.random.seed(7)
@@ -581,6 +583,7 @@ class TestRustVsNumpy:
     def test_solve_ols_with_clusters_match(self):
         """Test Rust and NumPy OLS with cluster SEs match."""
         from diff_diff._rust_backend import solve_ols as rust_fn
+
         from diff_diff.linalg import _solve_ols_numpy as numpy_fn
 
         np.random.seed(42)
@@ -613,7 +616,9 @@ class TestRustVsNumpy:
         But both produce the same fitted values and residuals.
         """
         import warnings
+
         from diff_diff._rust_backend import solve_ols as rust_fn
+
         from diff_diff.linalg import _solve_ols_numpy as numpy_fn
 
         np.random.seed(42)
@@ -660,7 +665,9 @@ class TestRustVsNumpy:
         The design matrix in this test is typically full-rank.
         """
         import warnings
+
         from diff_diff._rust_backend import solve_ols as rust_fn
+
         from diff_diff.linalg import _solve_ols_numpy as numpy_fn
 
         np.random.seed(42)
@@ -730,6 +737,7 @@ class TestRustVsNumpy:
     def test_robust_vcov_hc1_match(self):
         """Test Rust and NumPy HC1 robust VCoV match."""
         from diff_diff._rust_backend import compute_robust_vcov as rust_fn
+
         from diff_diff.linalg import _compute_robust_vcov_numpy as numpy_fn
 
         np.random.seed(42)
@@ -747,6 +755,7 @@ class TestRustVsNumpy:
     def test_robust_vcov_clustered_match(self):
         """Test Rust and NumPy cluster-robust VCoV match."""
         from diff_diff._rust_backend import compute_robust_vcov as rust_fn
+
         from diff_diff.linalg import _compute_robust_vcov_numpy as numpy_fn
 
         np.random.seed(42)
@@ -829,6 +838,7 @@ class TestRustVsNumpy:
     def test_simplex_projection_match(self):
         """Test Rust and NumPy simplex projection match exactly."""
         from diff_diff._rust_backend import project_simplex as rust_fn
+
         from diff_diff.utils import _project_simplex as numpy_fn
 
         # Test various input vectors
@@ -865,6 +875,7 @@ class TestRustVsNumpy:
         3. R-style handling is applied: NaN coefficients for dropped columns
         """
         import warnings
+
         from diff_diff.linalg import solve_ols
 
         # Create an ill-conditioned matrix that might cause QR/SVD disagreement.
@@ -982,6 +993,7 @@ class TestTROPRustBackend:
     def test_unit_distance_matrix_matches_numpy(self):
         """Test Rust distance matrix matches NumPy implementation."""
         from diff_diff._rust_backend import compute_unit_distance_matrix
+
         from diff_diff.trop import TROP
 
         np.random.seed(42)
@@ -1244,6 +1256,7 @@ class TestTROPRustVsNumpy:
     def test_distance_matrix_matches_numpy(self):
         """Test Rust distance matrix matches NumPy implementation exactly."""
         from diff_diff._rust_backend import compute_unit_distance_matrix
+
         from diff_diff.trop import TROP
 
         np.random.seed(42)
@@ -1268,6 +1281,7 @@ class TestTROPRustVsNumpy:
     def test_trop_produces_valid_results(self):
         """Test TROP with Rust backend produces valid estimation results."""
         import pandas as pd
+
         from diff_diff import TROP
 
         np.random.seed(42)
@@ -1571,6 +1585,7 @@ class TestTROPGlobalRustVsNumpy:
     def test_trop_global_produces_valid_results(self):
         """Test TROP global with Rust backend produces valid results."""
         import pandas as pd
+
         from diff_diff import TROP
 
         np.random.seed(42)
@@ -1625,6 +1640,7 @@ class TestTROPGlobalRustVsNumpy:
     def test_trop_global_and_local_agree_in_direction(self):
         """Test global and local methods agree on treatment effect direction."""
         import pandas as pd
+
         from diff_diff import TROP
 
         np.random.seed(42)
@@ -1681,6 +1697,7 @@ class TestTROPGlobalRustVsNumpy:
     def test_trop_global_handles_nan_outcomes(self):
         """Test TROP global method handles NaN outcome values gracefully."""
         import pandas as pd
+
         from diff_diff import TROP
 
         np.random.seed(42)
@@ -1751,6 +1768,7 @@ class TestTROPGlobalRustVsNumpy:
         instead of dist=inf -> delta_unit=exp(-inf)=0.0 (zero weight).
         """
         import pandas as pd
+
         from diff_diff import TROP
 
         np.random.seed(42)
@@ -1825,8 +1843,8 @@ class TestTROPGlobalRustVsNumpy:
 
         This tests the fix for PR #113 Round 3 feedback (P2-1).
         """
-        import os
         import pandas as pd
+
         from diff_diff import TROP
 
         np.random.seed(42)
@@ -1881,8 +1899,8 @@ class TestTROPGlobalRustVsNumpy:
 
         # Run with Python-only backend using mock.patch to avoid module reload issues
         # (Module reload breaks isinstance() checks in other tests due to class identity)
-        from unittest.mock import patch
         import sys
+        from unittest.mock import patch
 
         trop_global_module = sys.modules["diff_diff.trop_global"]
 
@@ -1920,8 +1938,8 @@ class TestTROPGlobalRustVsNumpy:
 
         This tests the fix for PR #113 Round 5 feedback (P2).
         """
-        import os
         import pandas as pd
+
         from diff_diff import TROP
 
         np.random.seed(42)
@@ -1977,8 +1995,8 @@ class TestTROPGlobalRustVsNumpy:
 
         # Run with Python-only backend using mock.patch to avoid module reload issues
         # (Module reload breaks isinstance() checks in other tests due to class identity)
-        from unittest.mock import patch
         import sys
+        from unittest.mock import patch
 
         trop_global_module = sys.modules["diff_diff.trop_global"]
 
@@ -2008,10 +2026,12 @@ class TestTROPGlobalRustVsNumpy:
         Both backends should produce matching (mu, alpha, beta) at atol=1e-6.
         This validates the convergence criterion fix (checking all params, not just mu).
         """
-        import pandas as pd
-        from diff_diff import TROP
-        from unittest.mock import patch
         import sys
+        from unittest.mock import patch
+
+        import pandas as pd
+
+        from diff_diff import TROP
 
         np.random.seed(42)
         n_units, n_periods = 15, 8
@@ -2088,10 +2108,12 @@ class TestTROPGlobalRustVsNumpy:
         The with-lowrank solver calls no-lowrank as its inner step, so the
         convergence fix cascades here too.
         """
-        import pandas as pd
-        from diff_diff import TROP
-        from unittest.mock import patch
         import sys
+        from unittest.mock import patch
+
+        import pandas as pd
+
+        from diff_diff import TROP
 
         np.random.seed(42)
         n_units, n_periods = 15, 8
@@ -2162,6 +2184,7 @@ class TestSDIDRustBackend:
     def test_noise_level_matches_numpy(self):
         """Test Rust noise level matches NumPy implementation."""
         from diff_diff._rust_backend import compute_noise_level as rust_fn
+
         from diff_diff.utils import _compute_noise_level_numpy as numpy_fn
 
         np.random.seed(42)
@@ -2193,6 +2216,7 @@ class TestSDIDRustBackend:
     def test_sc_weight_fw_matches_numpy(self):
         """Test Rust Frank-Wolfe matches Python implementation."""
         from diff_diff._rust_backend import sc_weight_fw as rust_fn
+
         from diff_diff.utils import _sc_weight_fw_numpy as numpy_fn
 
         np.random.seed(42)
@@ -2206,6 +2230,7 @@ class TestSDIDRustBackend:
     def test_sc_weight_fw_with_init_weights(self):
         """Test Frank-Wolfe with initial weights."""
         from diff_diff._rust_backend import sc_weight_fw as rust_fn
+
         from diff_diff.utils import _sc_weight_fw_numpy as numpy_fn
 
         np.random.seed(42)
@@ -2232,6 +2257,7 @@ class TestSDIDRustBackend:
     def test_time_weights_match_numpy(self):
         """Test Rust and NumPy time weights match (2-pass with sparsification)."""
         from diff_diff._rust_backend import compute_time_weights as rust_fn
+
         from diff_diff.utils import _sc_weight_fw_numpy, _sparsify
 
         np.random.seed(42)
@@ -2281,6 +2307,7 @@ class TestSDIDRustBackend:
     def test_unit_weights_match_numpy(self):
         """Test Rust and NumPy unit weights match."""
         from diff_diff._rust_backend import compute_sdid_unit_weights as rust_fn
+
         from diff_diff.utils import _sc_weight_fw_numpy, _sparsify
 
         np.random.seed(42)
@@ -2318,6 +2345,7 @@ class TestSDIDRustBackend:
         that the Gram precomputation optimization produces identical weights.
         """
         from diff_diff._rust_backend import sc_weight_fw as rust_fn
+
         from diff_diff.utils import _sc_weight_fw_numpy as numpy_fn
 
         np.random.seed(42)
@@ -2342,6 +2370,7 @@ class TestSDIDRustBackend:
         then verifies the Rust result matches pure Python exactly.
         """
         from diff_diff._rust_backend import sc_weight_fw as rust_fn
+
         from diff_diff.utils import _sc_weight_fw_numpy as numpy_fn
 
         np.random.seed(42)
@@ -2365,6 +2394,7 @@ class TestSDIDRustBackend:
         (no column centering applied).
         """
         from diff_diff._rust_backend import sc_weight_fw as rust_fn
+
         from diff_diff.utils import _sc_weight_fw_numpy as numpy_fn
 
         np.random.seed(42)
@@ -2393,9 +2423,11 @@ class TestSDIDRustBackend:
 
     def test_full_sdid_rust_vs_python(self):
         """Test full SDID estimation produces same results with Rust and Python."""
-        import pandas as pd
-        from unittest.mock import patch
         import sys
+        from unittest.mock import patch
+
+        import pandas as pd
+
         from diff_diff import SyntheticDiD
 
         np.random.seed(42)
@@ -2491,7 +2523,7 @@ class TestSolveOLSSkipRankCheckParity:
         """Full-rank X with column-norm ratio > 1e6. Both SVD backends
         should truncate the same singular values."""
         rng = np.random.default_rng(11)
-        n, k = 80, 3
+        n = 80
         X = np.column_stack(
             [
                 rng.normal(0, 1, n),  # unit scale
@@ -2938,7 +2970,7 @@ class TestFallbackWhenNoRust:
 
     def test_linalg_works_without_rust(self):
         """linalg functions should work with NumPy fallback."""
-        from diff_diff.linalg import compute_robust_vcov, solve_ols
+        from diff_diff.linalg import solve_ols
 
         np.random.seed(42)
         n, k = 50, 3
@@ -2949,9 +2981,6 @@ class TestFallbackWhenNoRust:
         assert coeffs.shape == (k,)
         assert residuals.shape == (n,)
         assert vcov.shape == (k, k)
-
-
-from diff_diff._backend import _rust_demean_map as _demean_map_symbol
 
 
 @pytest.mark.skipif(

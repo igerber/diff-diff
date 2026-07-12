@@ -518,7 +518,6 @@ class TestConsistencyInvariance:
         # TSL with implicit per-observation PSUs:
         # meat = sum_i (s_i - s_bar)(s_i - s_bar)' * n/(n-1)
         # where s_i = w_i * X_i * e_i
-        k = X.shape[1]
         XtWX = X.T @ (X * weights[:, np.newaxis])
         XtWX_inv = np.linalg.inv(XtWX)
         scores = X * (weights * resid)[:, np.newaxis]
@@ -1492,7 +1491,6 @@ class TestWeightedRankDeficiency:
 
         # Oracle: TSL with implicit per-observation PSUs
         # scores = w_i * X_i * e_i, meat = n/(n-1) * (scores - mean)' (scores - mean)
-        k = X_base.shape[1]
         XtWX = X_base.T @ (X_base * freq[:, np.newaxis])
         XtWX_inv = np.linalg.inv(XtWX)
         scores = X_base * (freq * resid_fw)[:, np.newaxis]
@@ -2690,7 +2688,6 @@ class TestRound10Fixes:
         psu = np.tile(np.arange(5), 12)  # 5 PSUs per stratum
 
         X = np.column_stack([np.ones(n), np.random.randn(n)])
-        y = np.random.randn(n)
         residuals = np.random.randn(n)
         weights = np.ones(n)
 
@@ -2718,7 +2715,6 @@ class TestRound10Fixes:
         psu = np.repeat(np.arange(6), 5)  # 6 PSUs
 
         X = np.column_stack([np.ones(n), np.random.randn(n)])
-        y = np.random.randn(n)
         residuals = np.random.randn(n)
         weights = np.ones(n)
 
