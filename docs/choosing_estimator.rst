@@ -704,6 +704,9 @@ differences helps interpret results and choose appropriate inference.
    * - ``HeterogeneousAdoptionDiD``
      - Path-dependent (CCT-2014 / 2SLS / Binder TSL)
      - Two SE regimes per :doc:`api/had`. **Unweighted**: continuous-dose paths use the CCT-2014 robust SE from the in-house ``lprobust`` port; mass-point uses a 2SLS sandwich. **``survey_design=SurveyDesign(weights="col", ...)``** (the sole weighting entry as of the 3.7.0 ``survey=`` / ``weights=`` removal): both paths compose Binder (1983) Taylor-series linearization (``variance_formula="survey_binder_tsl"`` / ``"survey_binder_tsl_2sls"``); the mass-point survey path rejects ``vcov_type="classical"`` (requires ``hc1`` / ``robust=True``), and ``survey_design=`` + ``cluster=`` is rejected outright (route weighted clustering via ``SurveyDesign(weights=, psu=)``; a bare ``cluster=`` gives unweighted CR1). Per-horizon CIs are pointwise; sup-t bands available on the event-study path via ``cband=True`` whenever ``survey_design=`` or ``cluster=`` is supplied.
+   * - ``RegressionDiscontinuity``
+     - Robust bias-corrected (CCT 2014, NN variance)
+     - Sharp RD with rdrobust-4.0.0-parity inference. Canonical ``att``/``se``/``conf_int`` are the ROBUST bias-corrected row (``att`` = bias-corrected estimate, CI centered on it); the conventional estimate rdrobust prints as its headline is ``att_conventional`` with its own inference row. Only ``vcov_type="nn"`` in this release; cluster-robust RD variance is a documented follow-up.
    * - ``SunAbraham``
      - Cluster-robust (unit level)
      - Clusters at unit level by default. Specify ``cluster`` to override. Use ``n_bootstrap`` for pairs bootstrap inference.
@@ -872,6 +875,11 @@ estimation. The depth of support varies by estimator and variance method:
      - Full (Binder TSL)
      - --
      - Multiplier (event-study, ``cband=True`` only)
+   * - ``RegressionDiscontinuity``
+     - N/A (no survey support)
+     - N/A
+     - --
+     - --
    * - ``EfficientDiD``
      - Full
      - Full

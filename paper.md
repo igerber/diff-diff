@@ -21,7 +21,7 @@ bibliography: paper.bib
 # Summary
 
 `diff-diff` is a Python library for Difference-in-Differences (DiD) causal inference
-analysis. It provides 22 estimators covering the full modern DiD toolkit - from classic
+analysis. It provides 23 estimators covering the full modern DiD toolkit - from classic
 two-group/two-period designs through heterogeneity-robust staggered adoption methods,
 synthetic control hybrids, and sensitivity analysis - under a consistent scikit-learn-style
 API. Most estimators accept an optional `SurveyDesign` object for design-based variance
@@ -47,7 +47,7 @@ industry settings for marketing measurement, product experimentation, and policy
 evaluation - must either context-switch to another language, reimplement methods from
 scratch, or rely on partial implementations scattered across unrelated packages.
 
-`diff-diff` fills this gap by providing a single-import library that covers 22 estimators
+`diff-diff` fills this gap by providing a single-import library that covers 23 estimators
 with a consistent API, survey-weighted inference, and numerical validation against R. It
 is also the companion software for the design-based variance framework of @Gerber2026,
 which establishes design-consistent standard errors for modern DiD estimators under
@@ -79,7 +79,7 @@ both, validated against the R reference implementations where they exist.
 
 # Key Features
 
-**Breadth of methods.** `diff-diff` implements 22 estimators organized across the modern
+**Breadth of methods.** `diff-diff` implements 23 estimators organized across the modern
 DiD taxonomy. Classic designs include two-group/two-period DiD, two-way fixed effects, and
 event-study estimation with period-specific effects. Heterogeneity-robust staggered-adoption
 estimators include Callaway-Sant'Anna [@Callaway2021], Sun-Abraham [@Sun2021], imputation
@@ -92,9 +92,10 @@ designs include triple-difference and staggered triple-difference estimators
 [@OrtizVillavicencio2025], continuous-treatment DiD with dose-response curves
 [@Callaway2024], heterogeneous-adoption designs where no unit remains untreated
 [@deChaisemartin2026], nonlinear ETWFE [@Wooldridge2025; @Wooldridge2023], distributional effects via
-changes-in-changes and quantile DiD [@Athey2006], and triply
-robust panel estimation [@Athey2025]. Separate diagnostic and sensitivity tools - outside
-the 22 estimators - include Goodman-Bacon decomposition [@GoodmanBacon2021], Honest DiD
+changes-in-changes and quantile DiD [@Athey2006], triply robust
+panel estimation [@Athey2025], and sharp regression-discontinuity estimation with
+robust bias-corrected inference [@Calonico2014]. Separate diagnostic and sensitivity tools - outside
+the 23 estimators - include Goodman-Bacon decomposition [@GoodmanBacon2021], Honest DiD
 sensitivity analysis [@Rambachan2023], placebo tests, and pre-trends power analysis
 [@Roth2022].
 

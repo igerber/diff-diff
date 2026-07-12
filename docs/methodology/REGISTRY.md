@@ -3505,13 +3505,157 @@ Shipped in `diff_diff/had_pretests.py` as `stute_joint_pretest()` (residuals-in 
 
 ## RegressionDiscontinuity
 
-**Status: in progress.** This PR ships the private sharp-RD bandwidth-selection
-machinery (`diff_diff/_rdrobust_port.py`: `rdbwselect_sharp` and its
-primitives) with R golden-file parity; the public `RegressionDiscontinuity`
-estimator, robust bias-corrected inference, and the full methodology section
-land in the follow-up PR. No public API is exported yet.
+**Primary source:** Calonico, S., Cattaneo, M. D., & Titiunik, R. (2014).
+Robust Nonparametric Confidence Intervals for Regression-Discontinuity
+Designs. *Econometrica*, 82(6), 2295-2326. https://doi.org/10.3982/ECTA11757.
+Software/parity reference: Calonico, Cattaneo, Farrell & Titiunik (2017),
+*Stata Journal* 17(2), 372-404 (rdrobust); CER-optimal bandwidth theory:
+Calonico, Cattaneo & Farrell (2018), *JASA* 113(522), 767-779.
 
-**Primary sources (paper reviews on file):**
+**Estimand and estimator (sharp RD):** with running variable `X`, known
+cutoff `c`, and treatment `T = 1(X >= c)` (units exactly at the cutoff are
+TREATED, matching rdrobust), the estimand is
+`tau_SRD = E[Y(1) - Y(0) | X = c] = mu_+ - mu_-` (Hahn-Todd-van der Klaauw
+2001 identification). Point estimation: order-`p` kernel-weighted local
+polynomials on each side at bandwidth `h` (`tau_cl` = difference in
+intercepts); bias correction via order-`q > p` fits at pilot bandwidth `b`
+(`tau_bc = tau_cl - h^{p+1} B_hat`, computed through the `Q_q` score-matrix
+formulation of rdrobust); robust bias-corrected variance per CCT 2014
+Theorem 1 / Theorem A.1(V) (the `Q_q` sandwich with same-side
+nearest-neighbor residuals shared with the conventional sandwich).
+Defaults reproduce `rdrobust(y, x)`: `p=1`, `q=2`, triangular kernel,
+`bwselect="mserd"`, `vcov_type="nn"` (J=3), `masspoints="adjust"`,
+normal-quantile CIs.
+
+**Bandwidth selection:** all 10 rdrobust data-driven selectors (`mserd`
+default; `msetwo`/`msesum`/`msecomb1`/`msecomb2`; CER-optimal `cer*`
+variants = the matching MSE selector's `h` shrunk by
+`N^(-p/((3+p)(3+2p)))` with `b` inherited unchanged), via the faithful
+4.0.0 port in `diff_diff/_rdrobust_port.py` (three-stage d->b->h pilot
+chain, per-kernel pilot constants, IK-style regularization,
+bwrestrict/bwcheck clamps, masspoints unique-count adjustment). Manual
+`h`/`b`/`rho` semantics mirror rdrobust exactly: `h` alone -> `b = h`;
+`h`+`rho` -> `b = h/rho` (overriding a supplied `b`, with a warning);
+`rho` without `h` applies to the SELECTED bandwidths.
+
+- **Note (canonical inference binding; deviation from R's printed
+  output):** the result's canonical `att`/`se`/`t_stat`/`p_value`/
+  `conf_int` are ONE coherent row - the ROBUST row: `att = tau_bc`
+  (bias-corrected), `se = se_robust`, with `t_stat == att/se` and
+  `conf_int` centered on `att`, preserving the library-wide field
+  identities. rdrobust instead PRINTS the conventional `tau_cl` as its
+  headline coefficient while taking inference from the robust row (whose
+  CI is centered at `tau_bc`, not `tau_cl`). `tau_cl` is first-class as
+  `att_conventional` with a full inference row, the middle
+  (bias-corrected, conventional-SE) row is exposed as
+  `*_bias_corrected` fields, and `summary()` prints the three-row
+  rdrobust table verbatim. Golden tests pin every row against R.
+- **Note (parity pin):** the port targets the installed CRAN release
+  `rdrobust` 4.0.0, pinned by source-tarball sha256
+  (`78f0d6b4...d613a36f` in `diff_diff/_rdrobust_port.py`). The GitHub
+  development tree (4.1.0-dev) is NOT the parity source: it adds an
+  `nn_tol` nearest-neighbor tie tolerance, flips the `stdvars` default
+  to TRUE, and drops 4.0.0's `+1e-8` bwcheck floor. The port implements
+  the 4.0.0 behaviors: EXACT nearest-neighbor distance comparison,
+  standardization machinery present but fixed to the 4.0.0 default
+  (off), and the `+1e-8` floor (rdbwselect.R:374-375).
+- **Deviation from R:** missing/non-numeric rows are dropped WITH a
+  `UserWarning` naming the count (`fit()`), where R's `complete.cases`
+  filter drops silently (no-silent-failures policy). The private port
+  layer rejects non-finite inputs outright.
+- **Deviation from R:** `b=` without `h=` is ignored WITH a warning
+  (R ignores it silently). `h`+`b`+`rho` warns that rho takes precedence
+  (R applies `b = h/rho` silently).
+- **Note (N < 20, R-exact):** fewer than 20 complete-case observations
+  triggers rdrobust.R:303-307's behavior exactly - warn and estimate on
+  the entire sample (`h = b = max` distance to the cutoff), OVERRIDING
+  even a user-supplied `h` (the R block runs after manual-bandwidth
+  resolution); `bwselect` reports "Manual".
+- **Deviation from R:** degenerate designs fail closed with targeted
+  `ValueError`s where R propagates NaN, errors opaquely, or silently
+  returns a pseudo-inverse fit: a non-finite pilot bandwidth from a
+  degenerate MSE objective (e.g. constant outcome under data-driven
+  selection), non-finite/non-positive bandwidths reaching estimation,
+  one-sided data, a cutoff outside the observed support, zero-variance
+  running variable, and - per side, per window - a main (`h`) or bias
+  (`b`) window whose positive-weight support has fewer than `p+1`
+  (resp. `q+1`) DISTINCT running-variable values. The distinct-support
+  count is the exact rank condition for a weighted Vandermonde design,
+  so this guard catches empty windows (e.g. manual `b` far smaller than
+  `h`, or a huge `rho` collapsing `b = h/rho`) and mass-point-only
+  support, where R's `ginv` fallback would silently collapse the
+  bias-correction score `Q_q` to the conventional one or report a
+  zeroed fit. A constant outcome under MANUAL bandwidths yields
+  `se = 0` and the standard joint-NaN inference gate via
+  `safe_inference()` (att = 0 is well defined; all three rows' triples
+  gate independently).
+- **Note:** `qrXXinv`'s Cholesky-failure fallback maps `MASS::ginv(G)`
+  to `numpy.linalg.pinv(G, rcond=sqrt(eps))` - the same Moore-Penrose
+  pseudo-inverse with the same default cutoff. The fallback IS the 4.0.0
+  behavior (verified against both the pinned tarball source,
+  functions.R:128-132, and `deparse` of the installed namespace);
+  rank/support protection for identification is provided by the
+  per-window distinct-support guards above (in the estimation port,
+  ahead of any Gram inversion), not by changing `qrXXinv`'s parity
+  behavior.
+- **Note (v1 scope seams):** only `vcov_type="nn"` (rdrobust's default)
+  ships; `hc0`-`hc3` and cluster modes raise `NotImplementedError`.
+  Fuzzy designs, covariate adjustment (CCFT 2019 - review on file),
+  weights, kink estimands (`deriv`), `scalepar`, `stdvars`, per-side
+  manual bandwidths, and the rdplot/density diagnostics are documented
+  follow-ups; fuzzy/covariates/cluster/weights are not constructor
+  parameters at all. The port's `deriv` machinery is golden-covered for
+  `deriv in {0, 1}` only.
+- **Note (p/q surface, R-exact):** public `p`/`q` validation mirrors
+  rdrobust.R:47-57 exactly - integers in 0:20 with `q > p`; `p=0` is R's
+  local-constant fit and is accepted. R resolves a NULL `q` to `p + 1`
+  BEFORE its `q` validation and never re-checks the default
+  (rdrobust.R:53-57), so `p=20` with `q=None` yields `q=21` in both R
+  and diff-diff while an EXPLICIT `q=21` is rejected - the asymmetry is
+  mirrored deliberately (locked by
+  `test_p20_default_q_resolution_matches_r_quirk`). Golden-anchored at
+  `p in {0, 1, 2}` (`p0q1`, default `p1q2`, `p2q3` configs); the
+  Remark-7 identity additionally anchors the `p=0 -> p=1` and
+  `p=1 -> p=2` steps R-free. All 10 public `bwselect` routings are
+  locked end-to-end against the bandwidth goldens
+  (`test_rdd_parity.py::TestPublicSelectorRouting`).
+- **Note (cross-implementation float tolerance):** R's sample SD
+  accumulates sequentially while numpy sums pairwise, seeding a ~2-ULP
+  difference in the pilot constant `BWp` that the chained d->b->h
+  bandwidth stages amplify to an observed worst-case ~5e-11 relative
+  disagreement (p=2/q=3 config, darwin-arm64). Golden parity asserts
+  rtol=1e-9 on bandwidths and estimates; pre-linalg intermediates
+  (type-2 quantile IQR, unique counts) agree at float64 identity.
+
+**Edge cases:**
+- Mass points (CCT 2014 Remark 1): `masspoints="adjust"` (default)
+  substitutes unique-value counts into the pilot bandwidth and floors
+  the window at 10 unique support points when >= 20% mass is detected;
+  "check" warns and suggests adjust; "off" reproduces the
+  pre-masspoints package (and the published 2017 Stata Journal Senate
+  numbers exactly). Adjust == off on tie-free data (tested).
+- CCT 2014 Remark 7 (internal consistency, tested): with `b = h` and
+  the same kernel, `tau_bc(p, q=p+1)` is numerically identical to the
+  order-`(p+1)` conventional estimate, and the robust variance equals
+  the order-`(p+1)` conventional variance (verified at rel 1e-10 across
+  all three kernels).
+
+**Reference implementation(s):**
+- R: `rdrobust::rdrobust()`, `rdrobust::rdbwselect()` 4.0.0 (CRAN).
+- Stata: `rdrobust` (Calonico-Cattaneo-Farrell-Titiunik 2017).
+
+**Validation:** bandwidth goldens `benchmarks/data/rdrobust_golden.json`
+(17 configs x 10 selectors, `tests/test_rdrobust_port.py`); estimation
+goldens `benchmarks/data/rdrobust_estimates_golden.json` (16 configs,
+full three-row blocks + counts + per-side coefficients,
+`tests/test_rdd_parity.py`); vendored Senate data
+(`benchmarks/data/rdrobust_senate.csv`, Cattaneo-Frandsen-Titiunik 2015)
+anchoring the published 2017 Stata Journal numbers under
+`masspoints="off"`; R-free methodology anchors in
+`tests/test_rdd_methodology.py` (Remark 7 equivalence, invariances,
+NaN/degenerate contracts).
+
+**Paper reviews on file:**
 `docs/methodology/papers/calonico-cattaneo-titiunik-2014-review.md` (CCT 2014,
 Econometrica - robust bias-corrected RD inference),
 `calonico-cattaneo-farrell-titiunik-2017-review.md` (Stata Journal - the
@@ -3520,62 +3664,7 @@ rdrobust software reference this port parity-targets),
 `calonico-cattaneo-farrell-titiunik-2019-review.md` (REStat - covariate
 adjustment, deferred).
 
-**Parity target and port-level notes:**
 
-- **Note (parity pin):** the port targets the installed CRAN release
-  `rdrobust` 4.0.0, pinned by source-tarball sha256
-  (`78f0d6b4...d613a36f` in `diff_diff/_rdrobust_port.py`). The GitHub
-  development tree (4.1.0-dev) is NOT the parity source: it adds an
-  `nn_tol` nearest-neighbor tie tolerance, flips the `stdvars` default to
-  TRUE, and drops 4.0.0's `+1e-8` bwcheck floor. The port implements the
-  4.0.0 behaviors: EXACT nearest-neighbor distance comparison, `stdvars`
-  standardization ported but fixed to the 4.0.0 default (off), and the
-  `+1e-8` floor (rdbwselect.R:374-375).
-- **Deviation from R:** the port rejects non-finite `y`/`x` with a targeted
-  `ValueError` instead of R's silent `complete.cases` row drop
-  (rdbwselect.R:72-95); the public estimator will warn-and-drop
-  (no-silent-failures policy). Golden files are generated on complete-case
-  data, so parity is unaffected.
-- **Deviation from R:** `N < 20` raises `ValueError` in the port where R's
-  `rdbwselect` warns and aborts without output (rdbwselect.R:237-239); the
-  estimator-level warn-plus-full-range-bandwidth fallback (rdrobust.R
-  behavior) ships with the estimator PR. Empty-side and zero-variance
-  inputs likewise raise targeted `ValueError`s where R would fail with
-  opaque downstream errors.
-- **Note:** `qrXXinv`'s Cholesky-failure fallback maps `MASS::ginv(G)` to
-  `numpy.linalg.pinv(G, rcond=sqrt(eps))` - the same Moore-Penrose
-  pseudo-inverse with the same default singular-value cutoff; reachable
-  only on rank-deficient kernel windows. The fallback IS the 4.0.0
-  behavior - verified against both the sha256-pinned CRAN tarball source
-  (functions.R:128-132: `try(chol(G))` -> `ginv(G)` on failure) and
-  `deparse(getFromNamespace("qrXXinv", "rdrobust"))` of the installed
-  package - so the port reproduces R's output on degenerate windows
-  rather than erroring. Identification/rank-support guards (enough
-  distinct support points per side for the requested polynomial order,
-  per the CCT 2014 review's assumption checklist) are an ESTIMATOR-level
-  `fit()` responsibility and ship with the public class in the follow-up
-  PR, not inside the parity port.
-- **Note:** only `vce="nn"` (rdrobust's default) is implemented;
-  `hc0`-`hc3` and cluster variance modes raise `NotImplementedError`
-  (documented seam, mirroring the HAD Phase 1c surface-restriction
-  pattern).
-- **Note (cross-implementation float tolerance):** R's sample SD
-  accumulates sequentially while numpy sums pairwise, seeding a ~2-ULP
-  difference in the pilot constant `BWp` that the chained d->b->h
-  bandwidth stages amplify to an observed worst-case ~6e-12 relative
-  disagreement (darwin-arm64). Golden parity therefore asserts
-  rtol=1e-9 on bandwidths - far below methodological materiality - with
-  bit-level agreement asserted on the pre-linalg intermediates (type-2
-  IQR, unique counts).
-
-**Reference implementation:** R `rdrobust::rdbwselect()` 4.0.0. Golden
-fixtures: `benchmarks/data/rdrobust_golden.json` (generator
-`benchmarks/R/generate_rdrobust_golden.R`; 17 configurations over three
-seeded synthetic DGPs and the vendored Senate data
-`benchmarks/data/rdrobust_senate.csv`, spanning kernels, p/q orders,
-deriv, masspoints modes, stdvars, bwrestrict, scaleregul, and nnmatch),
-validated in `tests/test_rdrobust_port.py` including the 2017 Stata
-Journal published Senate anchors under `masspoints="off"`.
 
 ---
 
@@ -4168,6 +4257,7 @@ should be a deliberate user choice.
 | QDiD | qte | `QDiD()` |
 | BaconDecomposition | bacondecomp | `bacon()` |
 | HonestDiD | HonestDiD | `createSensitivityResults()` |
+| RegressionDiscontinuity | rdrobust | `rdrobust()` + `rdbwselect()` (4.0.0; sharp/nn path) |
 | PreTrendsPower | pretrends | `pretrends()` |
 | PowerAnalysis | pwr / DeclareDesign / pcpanel | `pwr::pwr.norm.test` (analytical, normal-based — D1) + `pcpanel` (Burlig 2020 panel, equicorrelated case) + simulation. The analytical multiplier is normal (z), so `pwr.t.test` is **not** the faithful parity target. |
 

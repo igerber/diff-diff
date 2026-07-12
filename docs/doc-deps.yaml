@@ -397,6 +397,39 @@ sources:
 
   # ── HeterogeneousAdoptionDiD (HAD) ──────────────────────────────────
 
+  diff_diff/rdd.py:
+    drift_risk: medium
+    docs:
+      - path: docs/methodology/REGISTRY.md
+        section: "RegressionDiscontinuity"
+        type: methodology
+      - path: docs/api/regression_discontinuity.rst
+        type: api_reference
+      - path: README.md
+        section: "Estimators (one-line catalog entry)"
+        type: user_guide
+      - path: docs/references.rst
+        type: user_guide
+      - path: diff_diff/guides/llms.txt
+        section: "Estimators"
+        type: user_guide
+      - path: diff_diff/guides/llms-full.txt
+        section: "RegressionDiscontinuity"
+        type: user_guide
+      - path: diff_diff/guides/llms-autonomous.txt
+        section: "Estimator-support matrix + out-of-scope list"
+        type: user_guide
+        note: "Sharp RD is IN scope as of the RegressionDiscontinuity release; the out-of-scope bullet routes only fuzzy RD elsewhere. Keep both in sync with the estimator's v1 seams."
+      - path: docs/choosing_estimator.rst
+        section: "SE methodology + Survey Design Support tables"
+        type: user_guide
+  diff_diff/_rdrobust_port.py:
+    drift_risk: high
+    docs:
+      - path: docs/methodology/REGISTRY.md
+        section: "RegressionDiscontinuity"
+        type: methodology
+        note: "Parity pin (CRAN 4.0.0 tarball sha256), deviation labels, and float-tolerance rationale live in the registry section; any port change must re-run both golden suites (tests/test_rdrobust_port.py, tests/test_rdd_parity.py) and re-verify against the installed 4.0.0 namespace, NOT the GitHub 4.1.0-dev tree."
   diff_diff/had.py:
     drift_risk: medium
     docs:

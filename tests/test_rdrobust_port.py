@@ -28,6 +28,7 @@ from diff_diff._rdrobust_port import (
     qrXXinv,
     quantile_type2,
     rdbwselect_sharp,
+    rdrobust_fit_sharp,
     rdrobust_kweight,
     rdrobust_res_nn,
     rdrobust_vander,
@@ -473,3 +474,47 @@ class TestValidationAndWarnings:
             b = rdbwselect_sharp(y[perm], x[perm])
         for sel in BWSELECT_OPTIONS:
             np.testing.assert_allclose(a.bws[sel], b.bws[sel], rtol=1e-12)
+
+
+class TestRdrobustFitSharpValidation:
+    """rdrobust_fit_sharp shares rdbwselect_sharp's input contract; direct
+    (non-estimator) callers get targeted errors, not opaque NumPy ones."""
+
+    def _yx(self, n=200, seed=11):
+        rng = np.random.default_rng(seed)
+        x = rng.uniform(-1, 1, n)
+        y = 0.3 * x + 0.5 * (x >= 0) + rng.normal(0, 0.1, n)
+        return y, x
+
+    def test_two_dim_input_rejected(self):
+        y, x = self._yx()
+        with pytest.raises(ValueError, match="1-D vector"):
+            rdrobust_fit_sharp(y.reshape(50, 4), x, 0.0, 0.5, 0.5, 0.5, 0.5)
+
+    def test_unequal_lengths_rejected(self):
+        y, x = self._yx()
+        with pytest.raises(ValueError, match="equal length"):
+            rdrobust_fit_sharp(y[:-5], x, 0.0, 0.5, 0.5, 0.5, 0.5)
+
+    def test_non_integer_orders_rejected(self):
+        y, x = self._yx()
+        with pytest.raises(ValueError, match="p must be an integer"):
+            rdrobust_fit_sharp(y, x, 0.0, 0.5, 0.5, 0.5, 0.5, p=1.0)
+
+    def test_order_inequality_enforced(self):
+        y, x = self._yx()
+        with pytest.raises(ValueError, match="0 <= deriv <= p < q"):
+            rdrobust_fit_sharp(y, x, 0.0, 0.5, 0.5, 0.5, 0.5, p=2, q=2)
+        with pytest.raises(ValueError, match="0 <= deriv <= p < q"):
+            rdrobust_fit_sharp(y, x, 0.0, 0.5, 0.5, 0.5, 0.5, deriv=2, p=1, q=2)
+
+    def test_nnmatch_validated(self):
+        y, x = self._yx()
+        with pytest.raises(ValueError, match="nnmatch must be an integer >= 1"):
+            rdrobust_fit_sharp(y, x, 0.0, 0.5, 0.5, 0.5, 0.5, nnmatch=0)
+
+    def test_column_vector_accepted(self):
+        y, x = self._yx()
+        a = rdrobust_fit_sharp(y, x, 0.0, 0.5, 0.5, 0.5, 0.5)
+        b = rdrobust_fit_sharp(y.reshape(-1, 1), x.reshape(-1, 1), 0.0, 0.5, 0.5, 0.5, 0.5)
+        assert a.tau_bc == b.tau_bc and a.se_rb == b.se_rb

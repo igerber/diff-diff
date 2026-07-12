@@ -824,6 +824,62 @@ es = est.fit(data_mp, outcome_col='y', unit_col='unit',
 
 **Mass-point + survey constraint.** When fitting `design="mass_point"` with `survey_design=SurveyDesign(...)`, `vcov_type="hc1"` (or `robust=True`) is required: the survey path composes the standard error via Binder-TSL on the HC1-scale influence function, so the default classical sandwich path raises `NotImplementedError` — on both the static path and the event-study path (the event-study rejection fires regardless of `cband`, since the Binder-TSL analytical SE consumes the HC1-scaled IF either way). The one exception is `cluster=`: a clustered mass-point fit resolves to the CR1 sandwich regardless of `vcov_type` (and uses the clustered sup-t band), so there is no classical-vs-HC1 mismatch. Passing `vcov_type="hc1"` is a safe default on weighted survey + sup-t examples since `vcov_type` is unused on the continuous designs (CCT-2014 robust SE is the only formula there).
 
+### RegressionDiscontinuity
+
+Sharp regression discontinuity estimator (Calonico, Cattaneo & Titiunik 2014), parity-targeting R rdrobust 4.0.0. Treatment is assigned by a known threshold of an observed running variable (`running >= cutoff`; units exactly at the cutoff are treated). Point estimation via kernel-weighted local polynomials on each side; data-driven MSE/CER-optimal bandwidths (all 10 rdrobust selectors); robust bias-corrected inference. Cross-sectional - no panel/time dimension and no treatment column (sharp design derives treatment from the running variable).
+
+```python
+RegressionDiscontinuity(
+    cutoff: float = 0.0,               # Known threshold c of the running variable
+    p: int = 1,                        # Local-polynomial order, 0..20 (1 = local linear, 0 = local constant)
+    q: int | None = None,              # Bias-regression order; explicit q needs p < q <= 20; None -> p + 1 unvalidated (R-exact: p=20 yields q=21)
+    kernel: str = "triangular",        # triangular / epanechnikov / uniform ("tri"/"epa"/"uni" accepted)
+    bwselect: str = "mserd",           # 10-option rdrobust menu: mserd/msetwo/msesum/msecomb1/msecomb2 + cer* variants
+    h: float | None = None,            # Manual main bandwidth (both sides); h alone -> b = h
+    b: float | None = None,            # Manual bias bandwidth (requires h; ignored with a warning otherwise)
+    rho: float | None = None,          # h/b ratio; with h -> b = h/rho; without h applies to SELECTED bandwidths
+    vcov_type: str = "nn",             # Only "nn" in this release (same-side nearest-neighbor variance)
+    nnmatch: int = 3,                  # Minimum NN matches for the variance
+    masspoints: str = "adjust",        # "adjust" (rdrobust default) / "check" / "off"
+    bwcheck: int | None = None,        # Force >= this many unique support points into the window
+    bwrestrict: bool = True,           # Clamp bandwidths to the observed running-variable range
+    scaleregul: float = 1.0,           # IK-style regularization scale (0 removes)
+    alpha: float = 0.05,               # rdrobust level = 100*(1-alpha)
+)
+```
+
+**Alias:** `RDD`
+
+**fit() parameters:**
+
+```python
+rd.fit(
+    data: pd.DataFrame,
+    outcome_col: str,
+    running_col: str,
+) -> RegressionDiscontinuityResults
+```
+
+```python
+from diff_diff import RegressionDiscontinuity
+
+rd = RegressionDiscontinuity(cutoff=0.0)
+results = rd.fit(df, outcome_col="y", running_col="score")
+results.att        # ROBUST bias-corrected estimate (canonical binding: t_stat == att/se, conf_int centered on att)
+results.att_conventional  # rdrobust's printed headline coefficient (conventional local-polynomial estimate)
+results.conf_int   # robust bias-corrected CI
+results.h_left, results.b_left  # selected bandwidths
+print(results.summary())  # three-row Conventional / Bias-Corrected / Robust table, as in rdrobust
+```
+
+Canonical fields are ONE coherent row (the robust row): att = bias-corrected
+estimate, se = robust SE. rdrobust prints the conventional estimate as its
+headline - that is att_conventional here, with a full inference row of its own.
+Sharp designs only in this release: fuzzy RD, covariates, cluster-robust
+variance, weights, and kink estimands are documented follow-ups; missing
+rows are dropped WITH a warning (R drops silently); N < 20 falls back to
+full-range bandwidths exactly as rdrobust does (overriding manual h).
+
 ### StackedDiD
 
 Stacked DiD estimator (Wing, Freedman & Hollingsworth 2024). Addresses TWFE bias with corrective Q-weights.
@@ -2228,7 +2284,7 @@ sd_female, data_female = sd.subpopulation(data, mask=lambda df: df['sex'] == 'F'
 
 **Key features:**
 - Taylor Series Linearization (TSL) variance with strata + PSU + FPC
-- Replicate weight variance: BRR, Fay's BRR, JK1, JKn, SDR (13 of 22 estimators, including dCDH)
+- Replicate weight variance: BRR, Fay's BRR, JK1, JKn, SDR (13 of 23 estimators, including dCDH)
 - Survey-aware bootstrap: multiplier at PSU (Hall-Mammen wild; dCDH, staggered) or Rao-Wu rescaled (SunAbraham, SyntheticDiD, TROP). SyntheticDiD bootstrap composes Rao-Wu rescaled per-draw weights with the weighted Frank-Wolfe variant of `_sc_weight_fw` (PR #355): each draw solves `min ||A·diag(rw)·ω - b||² + ζ²·Σ rw_i ω_i²` and composes `ω_eff = rw·ω/Σ(rw·ω)` for the SDID estimator. Pweight-only fits use constant `rw = w_control`; full designs use Rao-Wu. SDID's placebo (stratified permutation + weighted FW) and jackknife (PSU-level LOO with stratum aggregation, Rust & Rao 1996) paths also support pweight-only and full strata/PSU/FPC designs
 - DEFF diagnostics, subpopulation analysis, weight trimming (`trim_weights`)
 - Repeated cross-sections: `CallawaySantAnna(panel=False)`

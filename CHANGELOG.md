@@ -8,6 +8,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **`RegressionDiscontinuity` - sharp regression discontinuity estimation with robust
+  bias-corrected inference (alias `RDD`).** Local-polynomial sharp RD per Calonico,
+  Cattaneo & Titiunik (2014), parity-targeting R `rdrobust` 4.0.0 end-to-end: all 10
+  data-driven bandwidth selectors (`mserd` default, `msetwo`/`msesum`/comb and the
+  CER-optimal variants), triangular/epanechnikov/uniform kernels, `masspoints`
+  adjust/check/off, manual `h`/`b`/`rho` with R-exact resolution semantics (including
+  `rho`-without-`h` applying to selected bandwidths and the unconditional N<20
+  full-range fallback), and the three-row Conventional / Bias-Corrected / Robust
+  output. **Canonical binding:** `att`/`se`/`t_stat`/`p_value`/`conf_int` are ONE
+  coherent row - the robust bias-corrected row (`att = tau_bc`, CI centered on it,
+  `t_stat == att/se`), preserving the library-wide field identities; rdrobust's
+  printed headline coefficient is exposed as `att_conventional` with a full inference
+  row, and `summary()` prints the familiar three-row table. Estimation-path port
+  (`rdrobust_fit_sharp`: Q_q bias-correction score matrix, conventional/robust NN
+  sandwiches) validated against a new estimates golden
+  (`benchmarks/data/rdrobust_estimates_golden.json`, 16 configurations incl. the
+  Senate anchors) at rtol=1e-9 in `tests/test_rdd_parity.py`; R-free methodology
+  anchors (CCT 2014 Remark 7 bias-corrected == local-quadratic equivalence at rel
+  1e-10 across all kernels, invariances, joint-NaN degenerate contracts) in
+  `tests/test_rdd_methodology.py`; API/validation suite in `tests/test_rdd.py`.
+  Deviations from R (each labeled in the REGISTRY section): warn-instead-of-silent
+  NaN drops, warn-and-ignore `b`-without-`h`, fail-closed targeted errors on
+  degenerate designs, and the canonical-binding note above. Sharp designs only:
+  fuzzy RD, covariates (CCFT 2019 - review on file), cluster-robust variance,
+  weights, kink estimands, and rdplot/density diagnostics are documented follow-ups.
 - **Internal: mypy enforced at zero errors.** Triaged the 184 pre-existing
   `mypy diff_diff` errors to an enforceable zero and added a blocking Mypy job to
   the Lint CI workflow (pinned `mypy==2.1.0` + pinned numpy/pandas/scipy for stub
@@ -24,7 +49,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   already-stale ignores were removed. Tightening tracked in TODO.md. No public
   API or numerical behavior change.
 - **Internal: rdrobust sharp-RD bandwidth-selection port (`diff_diff/_rdrobust_port.py`).**
-  Step-1 machinery for the upcoming `RegressionDiscontinuity` estimator: a faithful
+  Step-1 machinery for the `RegressionDiscontinuity` estimator above: a faithful
   pure-Python NumPy/SciPy port of R `rdrobust` 4.0.0's `rdbwselect` sharp-RD path (all 10 data-driven
   selectors - mserd default, msetwo/msesum/comb and the CER-optimal variants -
   triangular/epanechnikov/uniform kernels, `masspoints` adjust/check/off, IK-style
@@ -36,10 +61,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Cattaneo-Frandsen-Titiunik 2015) validated at rtol=1e-9 across 17 configurations x 10
   selectors in `tests/test_rdrobust_port.py` (kernels, p/q orders, deriv, masspoints
   modes, stdvars, bwrestrict, scaleregul, nnmatch), including the 2017 Stata Journal
-  published Senate anchors under `masspoints="off"`. **No public API change** - the module is private;
-  the estimator, robust bias-corrected inference, and docs surfaces land in the follow-up PR.
-  Port-level deviations documented in `docs/methodology/REGISTRY.md` (new
-  RegressionDiscontinuity section stub).
+  published Senate anchors under `masspoints="off"`. The module is private; the public
+  estimator, robust bias-corrected inference, and docs surfaces are the
+  `RegressionDiscontinuity` entry above. Port-level deviations documented in
+  `docs/methodology/REGISTRY.md` (RegressionDiscontinuity section).
 - **Internal: ungated `Lint` CI workflow.** Check-only `ruff check` + `black --check`
   (at the versions pinned in the `dev` extra) run on every PR push and on pushes to
   main — no `ready-for-ci` label needed; the aggregate `Lint Gate` job is the single
@@ -65,6 +90,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `benchmarks/data/qte_golden.json`.
 
 ### Changed
+- `diff_diff/guides/llms-autonomous.txt` no longer lists regression discontinuity as
+  out of scope: sharp RD routes to `RegressionDiscontinuity`; only fuzzy RD is
+  referred to external tooling.
 - **Internal: repo-wide lint normalization + pinned tooling.** black/ruff/mypy are now
   pinned exactly in the `dev` extra (`black==26.3.1`, `ruff==0.15.13`, `mypy==2.1.0`;
   the tools require Python >= 3.10 — the library floor stays 3.9); full `black` +

@@ -83,6 +83,14 @@ Nonparametric Bias-Corrected Inference
 
   CCF (2018, 2019) is the underlying ``nprobust`` machinery (MSE-optimal bandwidth selection and robust bias-corrected CIs) that ``HeterogeneousAdoptionDiD`` ports in-house for the continuous-dose paths.
 
+- **Calonico, S., Cattaneo, M. D., Farrell, M. H., & Titiunik, R. (2017).** "rdrobust: Software for regression-discontinuity designs." *The Stata Journal*, 17(2), 372-404. https://doi.org/10.1177/1536867X1701700208
+
+  The rdrobust software reference that :class:`diff_diff.RegressionDiscontinuity` parity-targets (CRAN 4.0.0): the 10-selector bandwidth menu, mass-point handling, and the three-row conventional / bias-corrected / robust output.
+
+- **Calonico, S., Cattaneo, M. D., Farrell, M. H., & Titiunik, R. (2019).** "Regression Discontinuity Designs Using Covariates." *The Review of Economics and Statistics*, 101(3), 442-451. https://doi.org/10.1162/rest_a_00760
+
+  Covariate-adjusted RD (additive common-coefficient specification and its consistency conditions) - the documented fast-follow for :class:`diff_diff.RegressionDiscontinuity`; review on file.
+
 Survey-Design Inference (Taylor-Series Linearization)
 -----------------------------------------------------
 

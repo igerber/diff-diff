@@ -206,6 +206,10 @@ from diff_diff.profile import (
     TreatmentDoseShape,
     profile_panel,
 )
+from diff_diff.rdd import (
+    RegressionDiscontinuity,
+    RegressionDiscontinuityResults,
+)
 from diff_diff.results import (
     DiDResults,
     MultiPeriodDiDResults,
@@ -308,6 +312,7 @@ ETWFE = WooldridgeDiD
 DCDH = ChaisemartinDHaultfoeuille
 HAD = HeterogeneousAdoptionDiD
 CiC = ChangesInChanges
+RDD = RegressionDiscontinuity
 
 __version__ = "3.7.0"
 __all__ = [
@@ -508,6 +513,10 @@ __all__ = [
     "HeterogeneousAdoptionDiDResults",
     "HeterogeneousAdoptionDiDEventStudyResults",
     "HAD",
+    # RegressionDiscontinuity (sharp RD, rdrobust parity)
+    "RegressionDiscontinuity",
+    "RegressionDiscontinuityResults",
+    "RDD",
     # HeterogeneousAdoptionDiD pre-test diagnostics (Phase 3)
     "qug_test",
     "stute_test",

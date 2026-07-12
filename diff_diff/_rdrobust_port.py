@@ -43,6 +43,9 @@ section):
   ``ValueError`` rather than propagating R's opaque downstream errors.
 * Only ``vce="nn"`` is implemented; ``hc0``-``hc3`` and cluster modes raise
   ``NotImplementedError`` (documented v1 seam).
+* ``deriv`` is machinery-supported for any ``0 <= deriv <= p`` but golden-
+  covered only for ``deriv in {0, 1}``; the public estimator does not expose
+  it (sharp levels only).
 * ``qrXXinv``'s Cholesky-failure fallback maps ``MASS::ginv(G)`` to
   ``numpy.linalg.pinv(G, rcond=sqrt(eps))`` - both are Moore-Penrose
   pseudo-inverses with the same default singular-value cutoff. Reachable
@@ -56,6 +59,7 @@ independent upstream version pins. Parity trumps DRY.
 
 from __future__ import annotations
 
+import math
 import warnings
 from dataclasses import dataclass, field
 from typing import Dict, Optional, Tuple
@@ -78,6 +82,8 @@ __all__ = [
     "rdrobust_bw",
     "rdbwselect_sharp",
     "quantile_type2",
+    "RdFitSharpResult",
+    "rdrobust_fit_sharp",
 ]
 
 # Upstream pin: CRAN source tarball of record. rdrobust has no git SHA on
@@ -613,6 +619,27 @@ def rdbwselect_sharp(
             vcache_r,
         )
 
+    def _stage_bw(num, den, rate, clamp_max=None, floors=()):
+        """One MSE-stage bandwidth: (num/den)^rate with R division
+        semantics (0/0 -> NaN, x/0 -> inf), bwrestrict clamp, bwcheck
+        floor, and a fail-closed finiteness check. R propagates NaN into
+        the next pilot fit and fails opaquely; we raise a targeted error
+        (documented deviation)."""
+        with np.errstate(divide="ignore", invalid="ignore"):
+            val = float(np.float64(num) / np.float64(den)) ** rate
+        if not np.isnan(val):
+            if clamp_max is not None:
+                val = min(val, clamp_max)  # absorbs +inf under bwrestrict
+            if floors:
+                val = max(val, *floors)
+        if not np.isfinite(val):
+            raise ValueError(
+                "Bandwidth selection produced a non-finite pilot bandwidth "
+                "(degenerate MSE objective, e.g. a constant outcome or no "
+                "curvature signal); supply manual bandwidths h=/b= instead."
+            )
+        return val
+
     # --- d-stage pilots (rdbwselect.R:386-387): o=q+1, nu=q+1, o_B=q+2,
     # h_B = full per-side range, UNregularized (scale=0). ---
     C_d_l = _bw("l", q + 1, q + 1, q + 2, range_l, 0.0)
@@ -629,26 +656,33 @@ def rdbwselect_sharp(
         "C_d_r_B": C_d_r.B,
     }
 
+    _global_max = bw_max if bwrestrict else None
+    _d_floors = (bw_min_l, bw_min_r) if bwcheck_effective is not None else ()
+
     # ============ mserd chain (rdbwselect.R:444-462) ============
-    d_bw_d = ((C_d_l.V + C_d_r.V) / (C_d_r.B - C_d_l.B) ** 2) ** rate_d
-    if bwrestrict:
-        d_bw_d = min(d_bw_d, bw_max)
-    if bwcheck_effective is not None:
-        d_bw_d = max(d_bw_d, bw_min_l, bw_min_r)  # rdbwselect.R:449
+    d_bw_d = _stage_bw(
+        C_d_l.V + C_d_r.V,
+        (C_d_r.B - C_d_l.B) ** 2,
+        rate_d,
+        clamp_max=_global_max,
+        floors=_d_floors,
+    )
     C_b_l = _bw("l", q, p + 1, q + 1, d_bw_d, scaleregul)
     C_b_r = _bw("r", q, p + 1, q + 1, d_bw_d, scaleregul)
-    b_bw_d = (
-        (C_b_l.V + C_b_r.V) / ((C_b_r.B - C_b_l.B) ** 2 + scaleregul * (C_b_r.R + C_b_l.R))
-    ) ** C_b_l.rate
-    if bwrestrict:
-        b_bw_d = min(b_bw_d, bw_max)
+    b_bw_d = _stage_bw(
+        C_b_l.V + C_b_r.V,
+        (C_b_r.B - C_b_l.B) ** 2 + scaleregul * (C_b_r.R + C_b_l.R),
+        C_b_l.rate,
+        clamp_max=_global_max,
+    )
     C_h_l = _bw("l", p, deriv, q, b_bw_d, scaleregul)
     C_h_r = _bw("r", p, deriv, q, b_bw_d, scaleregul)
-    h_bw_d = (
-        (C_h_l.V + C_h_r.V) / ((C_h_r.B - C_h_l.B) ** 2 + scaleregul * (C_h_r.R + C_h_l.R))
-    ) ** C_h_l.rate
-    if bwrestrict:
-        h_bw_d = min(h_bw_d, bw_max)
+    h_bw_d = _stage_bw(
+        C_h_l.V + C_h_r.V,
+        (C_h_r.B - C_h_l.B) ** 2 + scaleregul * (C_h_r.R + C_h_l.R),
+        C_h_l.rate,
+        clamp_max=_global_max,
+    )
     diagnostics.update(
         d_bw_d=d_bw_d,
         b_bw_d=b_bw_d,
@@ -670,50 +704,46 @@ def rdbwselect_sharp(
     # ============ msetwo chain (rdbwselect.R:389-420) ============
     # Per-side clamps throughout; bwcheck floor applies at the d-stage only
     # (rdbwselect.R:396-399); b/h stages clamp with bwrestrict only.
-    d_bw_l = (C_d_l.V / C_d_l.B**2) ** rate_d
-    d_bw_r = (C_d_r.V / C_d_r.B**2) ** rate_d
-    if bwrestrict:
-        d_bw_l = min(d_bw_l, bw_max_l)
-        d_bw_r = min(d_bw_r, bw_max_r)
-    if bwcheck_effective is not None:
-        d_bw_l = max(d_bw_l, bw_min_l)
-        d_bw_r = max(d_bw_r, bw_min_r)
+    _max_l = bw_max_l if bwrestrict else None
+    _max_r = bw_max_r if bwrestrict else None
+    _fl_l = (bw_min_l,) if bwcheck_effective is not None else ()
+    _fl_r = (bw_min_r,) if bwcheck_effective is not None else ()
+    d_bw_l = _stage_bw(C_d_l.V, C_d_l.B**2, rate_d, clamp_max=_max_l, floors=_fl_l)
+    d_bw_r = _stage_bw(C_d_r.V, C_d_r.B**2, rate_d, clamp_max=_max_r, floors=_fl_r)
     C_b_l2 = _bw("l", q, p + 1, q + 1, d_bw_l, scaleregul)
-    b_bw_l = (C_b_l2.V / (C_b_l2.B**2 + scaleregul * C_b_l2.R)) ** C_b_l2.rate
+    b_bw_l = _stage_bw(C_b_l2.V, C_b_l2.B**2 + scaleregul * C_b_l2.R, C_b_l2.rate, clamp_max=_max_l)
     C_b_r2 = _bw("r", q, p + 1, q + 1, d_bw_r, scaleregul)
-    b_bw_r = (C_b_r2.V / (C_b_r2.B**2 + scaleregul * C_b_r2.R)) ** C_b_r2.rate
-    if bwrestrict:
-        b_bw_l = min(b_bw_l, bw_max_l)
-        b_bw_r = min(b_bw_r, bw_max_r)
+    b_bw_r = _stage_bw(C_b_r2.V, C_b_r2.B**2 + scaleregul * C_b_r2.R, C_b_r2.rate, clamp_max=_max_r)
     C_h_l2 = _bw("l", p, deriv, q, b_bw_l, scaleregul)
-    h_bw_l = (C_h_l2.V / (C_h_l2.B**2 + scaleregul * C_h_l2.R)) ** C_h_l2.rate
+    h_bw_l = _stage_bw(C_h_l2.V, C_h_l2.B**2 + scaleregul * C_h_l2.R, C_h_l2.rate, clamp_max=_max_l)
     C_h_r2 = _bw("r", p, deriv, q, b_bw_r, scaleregul)
-    h_bw_r = (C_h_r2.V / (C_h_r2.B**2 + scaleregul * C_h_r2.R)) ** C_h_r2.rate
-    if bwrestrict:
-        h_bw_l = min(h_bw_l, bw_max_l)
-        h_bw_r = min(h_bw_r, bw_max_r)
+    h_bw_r = _stage_bw(C_h_r2.V, C_h_r2.B**2 + scaleregul * C_h_r2.R, C_h_r2.rate, clamp_max=_max_r)
 
     # ============ msesum chain (rdbwselect.R:422-441) ============
     # Sum expansion: (B_r + B_l)^2 in the denominator; global clamps.
-    d_bw_s = ((C_d_l.V + C_d_r.V) / (C_d_r.B + C_d_l.B) ** 2) ** rate_d
-    if bwrestrict:
-        d_bw_s = min(d_bw_s, bw_max)
-    if bwcheck_effective is not None:
-        d_bw_s = max(d_bw_s, bw_min_l, bw_min_r)
+    d_bw_s = _stage_bw(
+        C_d_l.V + C_d_r.V,
+        (C_d_r.B + C_d_l.B) ** 2,
+        rate_d,
+        clamp_max=_global_max,
+        floors=_d_floors,
+    )
     C_b_ls = _bw("l", q, p + 1, q + 1, d_bw_s, scaleregul)
     C_b_rs = _bw("r", q, p + 1, q + 1, d_bw_s, scaleregul)
-    b_bw_s = (
-        (C_b_ls.V + C_b_rs.V) / ((C_b_rs.B + C_b_ls.B) ** 2 + scaleregul * (C_b_rs.R + C_b_ls.R))
-    ) ** C_b_ls.rate
-    if bwrestrict:
-        b_bw_s = min(b_bw_s, bw_max)
+    b_bw_s = _stage_bw(
+        C_b_ls.V + C_b_rs.V,
+        (C_b_rs.B + C_b_ls.B) ** 2 + scaleregul * (C_b_rs.R + C_b_ls.R),
+        C_b_ls.rate,
+        clamp_max=_global_max,
+    )
     C_h_ls = _bw("l", p, deriv, q, b_bw_s, scaleregul)
     C_h_rs = _bw("r", p, deriv, q, b_bw_s, scaleregul)
-    h_bw_s = (
-        (C_h_ls.V + C_h_rs.V) / ((C_h_rs.B + C_h_ls.B) ** 2 + scaleregul * (C_h_rs.R + C_h_ls.R))
-    ) ** C_h_ls.rate
-    if bwrestrict:
-        h_bw_s = min(h_bw_s, bw_max)
+    h_bw_s = _stage_bw(
+        C_h_ls.V + C_h_rs.V,
+        (C_h_rs.B + C_h_ls.B) ** 2 + scaleregul * (C_h_rs.R + C_h_ls.R),
+        C_h_ls.rate,
+        clamp_max=_global_max,
+    )
 
     # ============ Rescale + assemble (rdbwselect.R:464-546) ============
     h_mserd, b_mserd = x_sd * h_bw_d, x_sd * b_bw_d
@@ -769,4 +799,223 @@ def rdbwselect_sharp(
         masspoints=masspoints,
         bwcheck_effective=bwcheck_effective,
         diagnostics=diagnostics,
+    )
+
+
+@dataclass
+class RdFitSharpResult:
+    """Sharp-RD point estimates and variances (rdrobust.R estimation body).
+
+    ``tau_cl`` is the conventional local-polynomial RD estimate,
+    ``tau_bc`` the bias-corrected estimate; ``se_cl``/``se_rb`` are the
+    conventional and robust bias-corrected standard errors. rdrobust's
+    three output rows map as Conventional = (tau_cl, se_cl),
+    Bias-Corrected = (tau_bc, se_cl), Robust = (tau_bc, se_rb)
+    (rdrobust.R:854-863). ``beta_p_l``/``beta_p_r`` are the per-side
+    order-p coefficient vectors (rdplot seam); ``bias_l``/``bias_r`` the
+    per-side estimated biases (rdrobust.R:629-630).
+    """
+
+    tau_cl: float
+    tau_bc: float
+    se_cl: float
+    se_rb: float
+    bias_l: float
+    bias_r: float
+    beta_p_l: np.ndarray
+    beta_p_r: np.ndarray
+    N_h_l: int
+    N_h_r: int
+    N_b_l: int
+    N_b_r: int
+
+
+def rdrobust_fit_sharp(
+    y: np.ndarray,
+    x: np.ndarray,
+    c: float,
+    h_l: float,
+    h_r: float,
+    b_l: float,
+    b_r: float,
+    p: int = 1,
+    q: int = 2,
+    deriv: int = 0,
+    kernel: str = "triangular",
+    vce: str = "nn",
+    nnmatch: int = 3,
+) -> RdFitSharpResult:
+    """Sharp-RD estimation at known bandwidths (rdrobust.R:533-800, sharp
+    no-covariate/no-cluster path with ``scalepar = 1``).
+
+    Inputs must be complete-case 1-D arrays (same contract as
+    :func:`rdbwselect_sharp`); sorting, side-splitting, and NN tie blocks
+    are handled internally. Per-side bandwidths follow rdrobust's
+    ``bws = [[h_l, b_l], [h_r, b_r]]`` layout. Steps:
+
+    1. Effective window per side = observations with positive kernel weight
+       inside the WIDER of h and b (rdrobust.R:541-549); observations inside
+       the b-window but outside the h-window carry ``W_h = 0`` and drop out
+       of the p-regression through the weights.
+    2. Point estimates: order-p WLS per side at h (``beta_p``); the
+       bias-corrected coefficient vector uses the ``Q_q`` score matrix
+       (rdrobust.R:577-578, 609-618).
+    3. Variances: conventional sandwiches ``R_p * W_h`` with same-side NN
+       residuals; robust sandwiches ``Q_q`` with the SAME residuals
+       (``res_b = res_h`` for vce="nn", rdrobust.R:753-754; the h==b
+       special branches at rdrobust.R:773-786 are cluster-only and never
+       taken on this path).
+    """
+    y = np.asarray(y, dtype=np.float64)
+    x = np.asarray(x, dtype=np.float64)
+    for name, arr in (("y", y), ("x", x)):
+        # Same input contract as rdbwselect_sharp: 1-D vectors or explicit
+        # (n, 1) columns only.
+        if not (arr.ndim == 1 or (arr.ndim == 2 and arr.shape[1] == 1)):
+            raise ValueError(
+                f"{name} must be a 1-D vector or an (n, 1) column; got shape {arr.shape}."
+            )
+    y = y.reshape(-1)
+    x = x.reshape(-1)
+    if y.shape[0] != x.shape[0]:
+        raise ValueError(f"y and x must have equal length; got {y.shape[0]} vs {x.shape[0]}.")
+    if vce != "nn":
+        raise NotImplementedError(
+            "Only vce='nn' is ported in v1 (rdrobust default); hc0-hc3 and "
+            "cluster variance modes are a documented seam."
+        )
+    kernel = _normalize_kernel(kernel)
+    for name, val in (("p", p), ("q", q), ("deriv", deriv)):
+        if not isinstance(val, (int, np.integer)):
+            raise ValueError(f"{name} must be an integer; got {val!r}.")
+    if not (0 <= deriv <= p < q):
+        raise ValueError(
+            f"Orders must satisfy 0 <= deriv <= p < q; got deriv={deriv}, " f"p={p}, q={q}."
+        )
+    if not (isinstance(nnmatch, (int, np.integer)) and nnmatch >= 1):
+        raise ValueError(f"nnmatch must be an integer >= 1; got {nnmatch!r}.")
+    for name, val in (("h_l", h_l), ("h_r", h_r), ("b_l", b_l), ("b_r", b_r)):
+        # Fail-closed: a non-finite or non-positive bandwidth (e.g. from a
+        # degenerate selector run) must not reach the kernel weights.
+        if not (np.isfinite(val) and val > 0):
+            raise ValueError(f"{name} must be finite and positive; got {val!r}.")
+    if not (np.all(np.isfinite(y)) and np.all(np.isfinite(x))):
+        raise ValueError(
+            "y and x must be finite and complete-case; drop or impute "
+            "missing values before estimation."
+        )
+
+    # Sort + side split, mirroring the rdbwselect preamble (X == c treated).
+    order_x = np.argsort(x, kind="stable")
+    x = x[order_x]
+    y = y[order_x]
+    ind_l = x < c
+    ind_r = x >= c
+    X_l, X_r = x[ind_l], x[ind_r]
+    Y_l, Y_r = y[ind_l], y[ind_r]
+    if X_l.shape[0] == 0 or X_r.shape[0] == 0:
+        raise ValueError(
+            "All observations fall on one side of the cutoff; sharp RD "
+            "requires data on both sides."
+        )
+    dups_l, dupsid_l = compute_dups_dupsid(X_l)
+    dups_r, dupsid_r = compute_dups_dupsid(X_r)
+
+    def _side(
+        X: np.ndarray,
+        Y: np.ndarray,
+        h: float,
+        b: float,
+        dups: np.ndarray,
+        dupsid: np.ndarray,
+        side: str,
+    ):
+        # Weights + effective window (rdrobust.R:533-549)
+        w_h = rdrobust_kweight(X, c, h, kernel)
+        w_b = rdrobust_kweight(X, c, b, kernel)
+        ind_h = w_h > 0
+        ind_b = w_b > 0
+        N_h = int(np.sum(ind_h))
+        N_b = int(np.sum(ind_b))
+        ind = ind_b
+        if h > b:
+            ind = ind_h
+        eY = Y[ind]
+        eX = X[ind]
+        W_h = w_h[ind]
+        W_b = w_b[ind]
+        edups = dups[ind]
+        edupsid = dupsid[ind]
+        # Per-window identification guards (documented deviation: fail closed
+        # where 4.0.0's ginv fallback would silently return a degenerate fit,
+        # e.g. an empty b-window collapsing Q_q back to the conventional
+        # score). A weighted Vandermonde Gram matrix is nonsingular iff its
+        # positive-weight window holds at least order+1 distinct
+        # running-variable values, so the distinct count IS the exact rank
+        # condition - no numerical rank estimate is needed.
+        for w_label, w_vec, order_needed in (
+            ("main", W_h, p),
+            ("bias", W_b, q),
+        ):
+            support = eX[w_vec > 0]
+            n_distinct = int(np.unique(support).size)
+            if n_distinct <= order_needed:
+                raise ValueError(
+                    f"Too few observations inside the {side} {w_label} "
+                    f"bandwidth window to identify the order-{order_needed} "
+                    f"local polynomial fit ({support.size} observations, "
+                    f"{n_distinct} distinct running-variable values; need "
+                    f">= {order_needed + 1} distinct)."
+                )
+        # Design matrices (rdrobust.R:569-578)
+        u = (eX - c) / h
+        R_q = rdrobust_vander(eX - c, q)
+        R_p = R_q[:, : p + 1]
+        L = (R_p * W_h[:, None]).T @ (u ** (p + 1))  # (p+1,)
+        invG_q = qrXXinv(np.sqrt(W_b)[:, None] * R_q)
+        invG_p = qrXXinv(np.sqrt(W_h)[:, None] * R_p)
+        # Q_q = R_p*W_h - h^(p+1) * outer(M[:, p+1], L) with
+        # M = (R_q @ invG_q) * W_b  (rdrobust.R:577, algebraically identical
+        # to the nested-transpose R expression; e_p1 selects column p+2
+        # 1-based = p+1 0-based).
+        M = (R_q @ invG_q) * W_b[:, None]
+        Q_q = R_p * W_h[:, None] - h ** (p + 1) * np.outer(M[:, p + 1], L)
+        # Point estimates (rdrobust.R:609-614)
+        beta_p = invG_p @ (R_p * W_h[:, None]).T @ eY
+        beta_bc = invG_p @ Q_q.T @ eY
+        # NN residuals shared by both variances (rdrobust.R:750-754)
+        res_h = rdrobust_res_nn(eX, eY, nnmatch, edups, edupsid)
+        # Conventional / robust meats (rdrobust.R:762-764, 789-798)
+        V_cl = invG_p @ rdrobust_vce_sharp(R_p * W_h[:, None], res_h) @ invG_p
+        V_rb = invG_p @ rdrobust_vce_sharp(Q_q, res_h) @ invG_p
+        return beta_p, beta_bc, V_cl, V_rb, N_h, N_b
+
+    beta_p_l, beta_bc_l, V_cl_l, V_rb_l, N_h_l, N_b_l = _side(
+        X_l, Y_l, h_l, b_l, dups_l, dupsid_l, "left"
+    )
+    beta_p_r, beta_bc_r, V_cl_r, V_rb_r, N_h_r, N_b_r = _side(
+        X_r, Y_r, h_r, b_r, dups_r, dupsid_r, "right"
+    )
+
+    # factorial(deriv) scaling per rdrobust.R:621-622 (deriv=0 -> 1).
+    fact = float(math.factorial(deriv))
+    tau_cl = fact * float(beta_p_r[deriv] - beta_p_l[deriv])
+    tau_bc = fact * float(beta_bc_r[deriv] - beta_bc_l[deriv])
+    bias_l = fact * float(beta_p_l[deriv]) - fact * float(beta_bc_l[deriv])
+    bias_r = fact * float(beta_p_r[deriv]) - fact * float(beta_bc_r[deriv])
+    V_tau_cl = fact**2 * float((V_cl_l + V_cl_r)[deriv, deriv])
+    V_tau_rb = fact**2 * float((V_rb_l + V_rb_r)[deriv, deriv])
+    return RdFitSharpResult(
+        tau_cl=tau_cl,
+        tau_bc=tau_bc,
+        se_cl=float(np.sqrt(V_tau_cl)),
+        se_rb=float(np.sqrt(V_tau_rb)),
+        bias_l=bias_l,
+        bias_r=bias_r,
+        beta_p_l=beta_p_l,
+        beta_p_r=beta_p_r,
+        N_h_l=N_h_l,
+        N_h_r=N_h_r,
+        N_b_l=N_b_l,
+        N_b_r=N_b_r,
     )

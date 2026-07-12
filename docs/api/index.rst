@@ -319,6 +319,7 @@ Estimators
    synthetic_control
    continuous_did
    had
+   regression_discontinuity
    efficient_did
    two_stage
    spillover
