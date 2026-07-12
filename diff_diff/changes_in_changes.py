@@ -46,8 +46,34 @@ from diff_diff.bootstrap_utils import warn_bootstrap_failure_rate
 from diff_diff.changes_in_changes_results import ChangesInChangesResults
 from diff_diff.utils import safe_inference, safe_inference_batch, validate_binary
 
-# Default quantile grid: matches qte's ``probs = seq(0.05, 0.95, 0.05)`` (19 points).
-_DEFAULT_QUANTILES = np.arange(0.05, 0.96, 0.05)
+# Default quantile grid: qte's ``probs = seq(0.05, 0.95, 0.05)`` (19 points), pinned to
+# R's EXACT seq() doubles. ``np.arange(0.05, 0.96, 0.05)`` differs from R at 5 of the 19
+# indices by one ulp, and type-1 order-statistic selection is sensitive to those ulps on
+# n*p integer boundaries - so the default is hardcoded rather than computed. Locked
+# against the golden fixture's stored probs by tests/test_changes_in_changes_parity.py.
+_DEFAULT_QUANTILES = np.array(
+    [
+        0.05,
+        0.1,
+        0.15000000000000002,
+        0.2,
+        0.25,
+        0.3,
+        0.35000000000000003,
+        0.4,
+        0.45,
+        0.5,
+        0.55,
+        0.6000000000000001,
+        0.6500000000000001,
+        0.7000000000000001,
+        0.7500000000000001,
+        0.8,
+        0.8500000000000001,
+        0.9000000000000001,
+        0.95,
+    ]
+)
 
 # Duplicate-share threshold above which the discrete-outcome warning fires. Library
 # choice: the paper's continuous machinery (Assumption 5.1(iii)) has no finite-sample
@@ -234,12 +260,15 @@ def _parse_2x2_formula(formula: str, data: pd.DataFrame) -> Tuple[str, str, str]
         pair = [p.strip() for p in interaction.split(":")]
         if len(pair) != 2:
             raise ValueError("Interaction term must involve exactly two variables")
-        treatment, time = pair
         if sorted(mains) != sorted(pair):
             raise ValueError(
                 "Covariates are not supported by ChangesInChanges/QDiD (deferred from v1; "
                 "the formula must be 'outcome ~ treatment + time + treatment:time')."
             )
+        # Roles come from the MAIN-EFFECT order, not the interaction-term order:
+        # CiC/QDiD are not symmetric in (treatment, time), and 'treated:post' vs
+        # 'post:treated' must not silently swap semantics.
+        treatment, time = mains[0], mains[1]
     else:
         raise ValueError(
             "Formula must include an interaction term (treatment * time or treatment:time)"
@@ -466,6 +495,15 @@ def _fit_distributional(
     if len(frame) == 0:
         raise ValueError("No observations remain after dropping missing values")
 
+    y_check = frame[outcome].to_numpy(dtype=float)
+    if not np.all(np.isfinite(y_check)):
+        n_nonfinite = int(np.count_nonzero(~np.isfinite(y_check)))
+        raise ValueError(
+            f"Outcome column '{outcome}' contains {n_nonfinite} non-finite value(s) "
+            "(inf/-inf). Clean or drop these observations before fitting - they would "
+            "silently corrupt the empirical CDFs, quantiles, and bootstrap."
+        )
+
     validate_binary(frame[treatment].to_numpy(dtype=float), "treatment")
     validate_binary(frame[time].to_numpy(dtype=float), "time")
 
@@ -542,6 +580,12 @@ def _fit_distributional(
         sup_t_crit = np.nan
 
     # ---- inference assembly ---------------------------------------------------
+    # Joint-NaN contract: an invalid SE (non-finite or <= 0, e.g. a degenerate
+    # bootstrap column with zero spread) must NaN the STORED se too, not only the
+    # t/p/CI that safe_inference_batch masks - otherwise uniform_bands() would
+    # build finite zero-width bands from a 0.0 se while pointwise inference is NaN.
+    att_se = att_se if (np.isfinite(att_se) and att_se > 0) else np.nan
+    qte_ses = np.where(np.isfinite(qte_ses) & (qte_ses > 0), qte_ses, np.nan)
     t_stat, p_value, conf_int = safe_inference(att, att_se, est.alpha)
     t_stats, p_values, ci_lo, ci_hi = safe_inference_batch(qte, qte_ses, est.alpha)
 
@@ -578,7 +622,7 @@ def _fit_distributional(
 
     results = ChangesInChangesResults(
         att=att,
-        se=att_se if (np.isfinite(att_se) and att_se > 0) else np.nan,
+        se=att_se,
         t_stat=t_stat,
         p_value=p_value,
         conf_int=conf_int,
@@ -731,8 +775,13 @@ class ChangesInChanges:
         self.is_fitted_ = False
         self.results_: Optional[ChangesInChangesResults] = None
 
-    def get_params(self) -> Dict[str, Any]:
-        """Return constructor hyperparameters (raw values, round-trips ``__init__``)."""
+    def get_params(self, deep: bool = True) -> Dict[str, Any]:
+        """Return constructor hyperparameters (raw values, round-trips ``__init__``).
+
+        ``deep`` is accepted for sklearn compatibility (``sklearn.base.clone``
+        calls ``get_params(deep=False)``) and is ignored - there are no nested
+        estimators.
+        """
         return {
             "quantiles": self.quantiles,
             "n_bootstrap": self.n_bootstrap,
@@ -833,8 +882,13 @@ class QDiD:
         self.is_fitted_ = False
         self.results_: Optional[ChangesInChangesResults] = None
 
-    def get_params(self) -> Dict[str, Any]:
-        """Return constructor hyperparameters (raw values, round-trips ``__init__``)."""
+    def get_params(self, deep: bool = True) -> Dict[str, Any]:
+        """Return constructor hyperparameters (raw values, round-trips ``__init__``).
+
+        ``deep`` is accepted for sklearn compatibility (``sklearn.base.clone``
+        calls ``get_params(deep=False)``) and is ignored - there are no nested
+        estimators.
+        """
         return {
             "quantiles": self.quantiles,
             "n_bootstrap": self.n_bootstrap,

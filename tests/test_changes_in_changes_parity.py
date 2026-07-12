@@ -85,6 +85,37 @@ def test_metadata_versions_match(fixture):
     assert fixture["metadata"]["qte_version"] == QTE_VERSION
 
 
+def test_default_grid_is_r_seq_bit_exact(fixture, probs):
+    """_DEFAULT_QUANTILES is pinned to R's exact seq(0.05, 0.95, 0.05) doubles.
+
+    np.arange(0.05, 0.96, 0.05) differs from R at 5 of 19 indices by one ulp,
+    and type-1 selection is ulp-sensitive on n*p integer boundaries - so the
+    default is hardcoded and locked here against the R-stored fixture probs
+    (local review P1).
+    """
+    from diff_diff.changes_in_changes import _DEFAULT_QUANTILES
+
+    np.testing.assert_array_equal(_DEFAULT_QUANTILES, probs)
+
+
+def test_default_grid_parity_end_to_end(fixture, probs):
+    """quantiles=None reproduces the golden qte-default results exactly."""
+    scenario = fixture["scenarios"].get("smalln_2x2_n60")
+    if scenario is None:
+        pytest.skip("smalln_2x2_n60 missing from fixture")
+    df = _scenario_df(scenario)
+    est = ChangesInChanges(n_bootstrap=0)  # default grid
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        res = est.fit(df, outcome="y", treatment="treat", time="period")
+    np.testing.assert_allclose(
+        res.quantile_effects["qte"].to_numpy(),
+        np.asarray(scenario["results"]["cic_rcs"]["qte"], dtype=float),
+        atol=POINT_ATOL,
+        rtol=0,
+    )
+
+
 SCENARIOS = ["normal_2x2_n500", "lognormal_2x2_n300", "smalln_2x2_n60", "lalonde_psid"]
 RESULT_KEYS = ["cic_panel", "cic_rcs", "qdid_panel", "qdid_rcs"]
 
@@ -154,7 +185,7 @@ class TestSEStatisticalParity:
     qte's bootstrap is unseeded through its public API, so the R draws cannot
     be replicated; both sides estimate the SD of the same resampling scheme)."""
 
-    @pytest.mark.parametrize("block_key", ["cic_panel", "cic_rcs", "qdid_panel"])
+    @pytest.mark.parametrize("block_key", ["cic_panel", "cic_rcs", "qdid_panel", "qdid_rcs"])
     def test_se_parity(self, fixture, probs, ci_params, block_key):
         block = fixture["se_block"].get(block_key)
         if block is None:

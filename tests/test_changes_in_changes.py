@@ -130,12 +130,19 @@ class TestParamSurface:
         with pytest.raises(ValueError, match="alpha"):
             fit_quiet(est, make_2x2())
 
+    def test_get_params_deep_flag(self, cls):
+        # sklearn.base.clone calls get_params(deep=False); the flag is accepted
+        # and ignored (no nested estimators) - HAD precedent.
+        est = cls(n_bootstrap=9)
+        assert est.get_params() == est.get_params(deep=True) == est.get_params(deep=False)
+
     def test_sklearn_clone_if_available(self, cls):
-        sklearn = pytest.importorskip("sklearn")
+        sklearn_base = pytest.importorskip("sklearn.base")
         est = cls(quantiles=[0.5], n_bootstrap=7, alpha=0.1, panel=True, seed=11)
-        clone = sklearn.base.clone(est)
+        clone = sklearn_base.clone(est)
         assert clone is not est
         assert clone.get_params() == est.get_params()
+        assert type(clone) is type(est)
 
 
 # =============================================================================
@@ -160,6 +167,21 @@ class TestFitValidation:
         assert r_f2.att == r_kw.att
         np.testing.assert_array_equal(
             r_f.quantile_effects["qte"].to_numpy(), r_kw.quantile_effects["qte"].to_numpy()
+        )
+
+    def test_formula_interaction_order_invariant(self, cls):
+        # 'treated:post' and 'post:treated' are algebraically the same formula;
+        # roles come from the main-effect order, so both must give identical
+        # results (CiC/QDiD are NOT symmetric in treatment/time).
+        df = make_2x2(seed=6)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            r_a = cls(n_bootstrap=0).fit(df, formula="y ~ treated + post + treated:post")
+            r_b = cls(n_bootstrap=0).fit(df, formula="y ~ treated + post + post:treated")
+            r_kw = cls(n_bootstrap=0).fit(df, outcome="y", treatment="treated", time="post")
+        assert r_a.att == r_b.att == r_kw.att
+        np.testing.assert_array_equal(
+            r_a.quantile_effects["qte"].to_numpy(), r_b.quantile_effects["qte"].to_numpy()
         )
 
     def test_formula_covariates_rejected(self, cls):
@@ -191,6 +213,15 @@ class TestFitValidation:
         df = make_2x2()
         df = df[~((df["treated"] == 1) & (df["post"] == 0))]
         with pytest.raises(ValueError, match="Assumption 5.1"):
+            fit_quiet(cls(n_bootstrap=0), df)
+
+    @pytest.mark.parametrize("bad", [np.inf, -np.inf])
+    def test_nonfinite_outcome_raises(self, cls, bad):
+        # dropna() keeps inf; it must be rejected explicitly, never silently
+        # corrupt CDFs/quantiles/bootstrap (local review P1).
+        df = make_2x2()
+        df.loc[3, "y"] = bad
+        with pytest.raises(ValueError, match="non-finite"):
             fit_quiet(cls(n_bootstrap=0), df)
 
     def test_na_rows_dropped_with_warning(self, cls):
@@ -403,6 +434,31 @@ class TestWarnings:
         with warnings.catch_warnings():
             warnings.simplefilter("error")
             ChangesInChanges(n_bootstrap=0).fit(df, outcome="y", treatment="treated", time="post")
+
+
+class TestDegenerateBootstrap:
+    def test_zero_spread_replicates_nan_everywhere(self):
+        # Constant outcome within every cell: every bootstrap replicate is
+        # identical, so replicate SDs are exactly 0. The joint-NaN contract
+        # requires the STORED se to be NaN too (not 0.0) so that
+        # uniform_bands() cannot emit finite zero-width bands while pointwise
+        # inference is NaN (local review P0).
+        n = 40
+        df = pd.DataFrame(
+            {
+                "post": np.repeat([0, 1], n),
+                "treated": np.tile(np.repeat([1, 0], n // 2), 2),
+            }
+        )
+        df["y"] = 1.0 * df["treated"] + 2.0 * df["post"]  # constant within each cell
+        res = fit_quiet(QDiD(n_bootstrap=50, seed=3), df)
+        qe = res.quantile_effects
+        assert qe["se"].isna().all()
+        assert qe["t_stat"].isna().all()
+        assert np.isnan(res.se)
+        bands = res.uniform_bands()
+        assert bands["band_low"].isna().all()
+        assert bands["band_high"].isna().all()
 
 
 class TestBootstrapFailureGate:

@@ -150,7 +150,8 @@ run_se <- function(df, method, panel, seed) {
 se_block <- list(
   cic_panel = run_se(dgps$normal_2x2_n500, "cic", TRUE, seed = 42),
   cic_rcs = run_se(dgps$normal_2x2_n500, "cic", FALSE, seed = 42),
-  qdid_panel = run_se(dgps$normal_2x2_n500, "qdid", TRUE, seed = 42)
+  qdid_panel = run_se(dgps$normal_2x2_n500, "qdid", TRUE, seed = 42),
+  qdid_rcs = run_se(dgps$normal_2x2_n500, "qdid", FALSE, seed = 42)
 )
 message("SE block done.")
 
