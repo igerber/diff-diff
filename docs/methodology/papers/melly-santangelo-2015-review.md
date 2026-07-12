@@ -288,6 +288,8 @@ phi'_{F,G}(h_1, h_2) = h_1 o G^{-1} - ( f o G^{-1} / g o G^{-1} ) * h_2 o G^{-1}
 phi'_{F,G}(h_1, h_2) = -( h_1 / f ) o F^{-1} o G - ( h_2 / (f o F^{-1}) ) o G
 ```
 
+(as printed - the sign of the `h_2` term is suspect; see the suspected-typos block in Gaps and Uncertainties)
+
 *Ingredient 4 - counterfactual operator (p. 15).* Lemma D.1 of Chernozhukov, Fernandez-Val, and Melly (2013): `phi^C(F, G) = INT F(y, x) dG(x)` is Hadamard-differentiable with derivative map
 
 ```
@@ -504,6 +506,7 @@ All quantiles and covariate values must be considered to detect deviations; Kolm
 - eq. (8) (p. 12): both right-hand quantile functions are printed with argument `(y)` although the process is indexed by the quantile level; both sides are (generalized) inverses of the integrated CDF estimators.
 - p. 8: the intuition sentence below the Proposition 1 proof swaps group labels relative to the displayed identification formula; this review transcribes consistently with the displays.
 - eq. (10) (p. 13): the limit process is printed with index `(u, x)` where the display is a process in `(y, x)`, and the scaling prints `sqrt(n*alpha_gt)` where (9) uses `sqrt(n)` - transcribed as printed.
+- Lemma 3 (p. 14): the derivative map for `phi^{PP}(F, G) = F^{-1} o G` prints a NEGATIVE sign on the `h_2` term, `- (h_2/(f o F^{-1})) o G`. Standard inverse-map calculus (Van der Vaart-Wellner Lemma 3.9.23(ii) plus the chain rule) gives a POSITIVE `h_2` term: the G-perturbation enters through `(F^{-1})' = 1/(f o F^{-1})` with no sign flip; only the `h_1` term (through inverting F) is negative. The printed proof also cites Hadamard differentiability of "the inverse map G^{-1}" although the PP map inverts F - both oddities are consistent with a copy-paste slip from Lemma 2 (the QQ map, whose proof genuinely inverts G). Re-derive this derivative before any analytical covariance implementation that composes these maps; the bootstrap-based inference path does not depend on it.
 - `V^Q_gt` covariance (p. 13): the evaluation point of the second Jacobian is hard to resolve at print resolution; transcribed as `J_gt(u~)^{-1}`, the standard QR-process covariance form.
 - p. 20 bootstrap display: typographically dense, with the same missing mesh-weight issue as the p. 12 displays; the structure is the Condition-BW-weighted empirical analog of the QQ/PP composition over the S-point u-grid.
 - Sign-convention asymmetry (as printed, identically in both extraction passes): eq. (10) defines `Z^F_gt` with a leading minus (`-f * Z(F(y), x)`) while the Theorem 7 proof defines `Z^F_N` with a plus (`+f * Z^Q_N(F(y), x)`). Immaterial for the limit laws (zero-mean Gaussian processes are sign-symmetric), but confusing if the formulas are transplanted into covariance code - re-derive signs if analytical variances are ever implemented.

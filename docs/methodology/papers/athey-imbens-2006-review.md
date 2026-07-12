@@ -167,7 +167,7 @@ Equation (20) is k^CIC with the roles of groups 0 and 1 reversed; implement by e
 ```
 
   p captures estimation error from F_hat_Y,00, q from F_hat_Y,01^{-1}, r sampling variation of the transformed Y_10 draws, s the Y_11 mean. Asymptotically linear representation (p. 463): `tau_hat = tau + (1/N_00) sum p(Y_00,i) + (1/N_01) sum q(Y_01,i) + (1/N_10) sum r(Y_10,i) + (1/N_11) sum s(Y_11,i) + o_p(N^{-1/2})`.
-- Variance estimation (Theorem 5.2, pp. 463-464): plug in empirical CDFs/inverses and ANY uniformly consistent nonparametric density estimator (uniform consistency must include the boundary, footnote 31); `p_hat(y) = (1/N_10) sum_j P_hat(y, Y_10,j)`, `q_hat(y) = (1/N_10) sum_j Q_hat(y, Y_10,j)`, then `V_hat^p = (1/N_00) sum_i p_hat(Y_00,i)^2` (and analogously q, r, s), `alpha_hat_gt = N_gt/N`; all converge in probability to their targets. Footnote 31's concrete density estimator: one-sided difference quotient of the EDF with bandwidth `N^{-1/3}`, forward difference on the lower half of the support and backward on the upper half (split at the support midpoint `Y_tilde_gt = (y_upper_gt - y_lower_gt)/2`), guaranteeing boundary-uniform consistency:
+- Variance estimation (Theorem 5.2, pp. 463-464): plug in empirical CDFs/inverses and ANY uniformly consistent nonparametric density estimator (uniform consistency must include the boundary, footnote 31); `p_hat(y) = (1/N_10) sum_j P_hat(y, Y_10,j)`, `q_hat(y) = (1/N_10) sum_j Q_hat(y, Y_10,j)`, then `V_hat^p = (1/N_00) sum_i p_hat(Y_00,i)^2` (and analogously q, r, s), `alpha_hat_gt = N_gt/N`; all converge in probability to their targets. Footnote 31's (p. 463) concrete density estimator: one-sided difference quotient of the EDF with bandwidth `N^{-1/3}`, forward difference below the split point `Y_tilde_gt` and backward above it, guaranteeing boundary-uniform consistency. As printed the footnote calls `Y_tilde_gt` "the midpoint of the support" but defines `Y_tilde_gt = (y_upper_gt - y_lower_gt)/2`, which is the half-range, not the midpoint `(y_upper_gt + y_lower_gt)/2` - see the suspected-typos block in Gaps and Uncertainties; an implementation should split at the true midpoint:
 
 ```
 f_hat_Y,gt(y) = ( F_hat_Y,gt(y + N^{-1/3}) - F_hat_Y,gt(y) ) / N^{-1/3}     if y <= Y_tilde_gt
@@ -208,7 +208,7 @@ C^pq = E[p(Y_00)*q(Y_01)],   C^rs = E[r(Y_10)*s(Y_11)] = Cov( k(Y_10), Y_11 )
 *Algorithm (no numbered algorithm in the paper; assembled from eqs. 34-36, Section 5.1, pp. 461-462):*
 1. Validate the 2x2 design; split the sample into the four (g,t) cells.
 2. Compute the empirical CDFs `F_hat_Y,gt` (eq. 34) for cells (0,0), (0,1), (1,0), and the sample mean of the (1,1) cell.
-3. Transform every treated pre-period observation: `y_i -> F_hat_Y,01^{-1}( F_hat_Y,00(Y_10,i) )`, using exactly the eq. (35)/(A.1) inverse (ceiling order statistic `Y_(ceil(Nq))`, `F_hat^{-1}(0) = ` sample minimum).
+3. Transform every treated pre-period observation: `y_i -> F_hat_Y,01^{-1}( F_hat_Y,00(Y_10,i) )`, using exactly the eq. (35)/(A.1) inverse (ceiling order statistic `Y_(ceil(Nq))`, with `F_hat^{-1}(0)` = sample minimum).
 4. `tau_hat^CIC = mean(Y_11) - mean(transformed Y_10)` (eq. 36).
 5. Quantile effects at requested q ∈ (q_lower, q_upper): `tau_hat_q^CIC = F_hat_Y,11^{-1}(q) - F_hat_Y,01^{-1}(F_hat_Y,00(F_hat_Y,10^{-1}(q)))`.
 6. Inference: v1 bootstrap (units in panel mode, within-cell in repeated cross-section mode); paper's analytical variance (Theorems 5.1-5.3, 5.5-5.6) deferred.
@@ -319,12 +319,12 @@ Setup: groups `G = {1,...,N_G}`, periods `T = {1,...,N_T}`; `I` = set of treated
 tau_hat^CIC_I = (A' V_hat_J^(-) A)^{-1} (A' V_hat_J^(-) kappa_hat_J)            [Theorem 6.3: sqrt(N)-normal, variance (A' V_J^(-) A)^{-1}]
 ```
 
-Aggregation `tau_Lambda = Lambda' tau^CIC_I` (columns of Lambda sum to 1): sample-size weights `Lambda_{g,t} = N_{g,t}/sum N_{g,t}` are the natural default; variance-minimizing weights are appropriate only under constant effects (p. 475). Tests: **Theorem 6.4** overidentification/specification statistic `N (kappa_hat_J - A tau_hat_I)' V_hat_J^(-) (kappa_hat_J - A tau_hat_I) -->d Chi2(rank(V_J) - N_I)` - has power against violations of `U ⊥ T | G`, including additive random group-time effects (p. 476); equality-of-effects statistic `-->d Chi2(N_I - 1)` under `tau_{g,t} = tau` for all treated pairs (GLS-weighted pooled estimate; p. 476). diff-diff defers this section (Ciaccio / `ecic` staggered event-study CiC is the reference for the extension).
+Aggregation `tau_Lambda = Lambda' tau^CIC_I` (columns of Lambda sum to 1): sample-size weights `Lambda_{g,t} = N_{g,t}/sum N_{g,t}` are the natural default; variance-minimizing weights are appropriate only under constant effects (p. 475). Tests: **Theorem 6.4** overidentification/specification statistic `N (kappa_hat_J - A tau_hat_I)' V_hat_J^(-) (kappa_hat_J - A tau_hat_I) -->d Chi2(rank(V_J) - N_I)` - has power against violations of `U ⊥ T | G`, including additive random group-time effects (p. 476); equality-of-effects statistic `-->d Chi2(N_I - 1)` under `tau_{g,t} = tau` for all treated pairs (GLS-weighted pooled estimate; p. 476). diff-diff defers this section. Two distinct follow-on threads exist and must not be conflated: the R `ecic` package (Kluser) implements a staggered event-study extension of the CiC transformation itself (the natural descendant of this Section 6 machinery), while Ciaccio's staggered distributional DiD (reviewed separately in `ciaccio-2024-review.md`) is a copula-based Callaway-Li-style QTT method with different identifying assumptions - not an implementation of Section 6.
 
 **Reference implementation(s):**
 - R: `qte::CiC()` and `qte::QDiD()` (Callaway's qte package - the project's chosen parity target; bootstrap inference, panel and repeated cross-section support)
 - Stata: `cic` (Kranker) - implements the analytical SEs (Theorems 5.1-5.3) and the discrete-outcome bounds
-- R: `ecic` (Kluser) - staggered event-study CiC (relevant to the deferred Section 6 extension)
+- R: `ecic` (Kluser) - staggered event-study CiC, i.e. the CiC transformation applied per cohort-period (the implementation lineage closest to the deferred Section 6 extension). Not to be conflated with Ciaccio's copula-based staggered distributional DiD, which is a distinct method reviewed separately
 - The paper itself points to the Econometrica supplement for the empirical application (Meyer-Viscusi-Durbin (1995) injury-duration data; headline finding: CiC vs standard DiD results can differ in both magnitude and significance, p. 477)
 
 **Requirements checklist:**
@@ -345,7 +345,7 @@ Aggregation `tau_Lambda = Lambda' tau^CIC_I` (columns of Lambda sum to 1): sampl
 
 **Planned diff-diff v1 scope (2026-07-12):**
 - Ship: `ChangesInChanges` + `QDiD`, 2x2 design, continuous outcomes, bootstrap inference, panel + repeated cross-section modes.
-- Deferred: covariates (Theorems 4.3-4.4 and the Section 5.1 residual route; Melly-Santangelo is the modern reference), discrete-outcome bounds (Section 4 identification / Section 5.2 inference, incl. Imbens-Manski intervals), analytical SEs (Theorems 5.1-5.3, 5.5-5.7; Appendix B covariances), multiple groups/periods (Section 6; Ciaccio / `ecic`).
+- Deferred: covariates (Theorems 4.3-4.4 and the Section 5.1 residual route; Melly-Santangelo is the modern reference), discrete-outcome bounds (Section 4 identification / Section 5.2 inference, incl. Imbens-Manski intervals), analytical SEs (Theorems 5.1-5.3, 5.5-5.7; Appendix B covariances), multiple groups/periods (Section 6; `ecic` for the staggered event-study CiC lineage - Ciaccio's copula-based staggered distributional DiD is a distinct method, reviewed separately).
 - All deferred material is reviewed in this document so the deferral is documented, not silent.
 
 ### Data Structure Requirements
@@ -388,6 +388,7 @@ Aggregation `tau_Lambda = Lambda' tau^CIC_I` (columns of Lambda sum to 1): sampl
 - Theorem 5.7, second display (p. 469): the `V_upper^r` term's denominator prints as `alpha_10` where the panel notation elsewhere in the theorem uses `alpha_1`. Likely a typo; an implementation should use `alpha_1`.
 - Lemma A.4 (pp. 479-480): the printed oscillation modulus reads `F_hat_Y(y+x) - F_hat_Y(x)` where the standard Stute (1982) modulus has `F_hat_Y(y+x) - F_hat_Y(y)`, matching the population term `F_Y(y+x) - F_Y(y)`. Likely a typesetting slip.
 - Appendix B, case 2 (p. 493): printed with explicit argument notation `(Y_{g0,t0})` and a division by `alpha_{g0,t0}`, unlike every other case; the two readings are numerically equivalent (`N*E[mu_hat mu_hat'] = E[infl-fn product]/alpha_gt` for same-cell averages). Treat the per-shared-cell `N*E[mu_hat mu_hat']` pattern as the intended formula.
+- Footnote 31 (p. 463): the split point of the one-sided density estimator is described as "the midpoint of the support" but printed as `Y_tilde_gt = (y_upper_gt - y_lower_gt)/2` - the half-range, not the midpoint `(y_upper_gt + y_lower_gt)/2` (the two coincide only when `y_lower_gt = 0`). An implementation of the deferred analytical-SE path should split at the true midpoint; the printed half-range can fall outside the support (e.g. negative-valued outcomes), which would apply the wrong one-sided difference near a boundary.
 - Theorem 5.4 proof (p. 492): the final estimation-error term's summand sign is printed inconsistently with the preceding line's decomposition (`k_lower_hat - k_lower` vs `k_lower - k_lower_hat`); immaterial since the term converges to zero (Lemma A.13).
 - Equality-of-effects test (p. 476): typeset ambiguity between `A` and `A_I` in the weight matrix `Lambda = (iota' A_I' V_J^(-) A iota)^{-1} iota' A' V_J^(-) A` and in the test statistic's sandwich; the structure (GLS weighting with the generalized inverse) is clear, but consult p. 476 before implementing.
 
