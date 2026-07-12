@@ -31,10 +31,7 @@ import numpy as np
 import pytest
 
 GOLDEN_PATH = (
-    Path(__file__).resolve().parents[1]
-    / "benchmarks"
-    / "data"
-    / "np_npreg_weighted_golden.json"
+    Path(__file__).resolve().parents[1] / "benchmarks" / "data" / "np_npreg_weighted_golden.json"
 )
 
 
@@ -72,9 +69,7 @@ class TestWeightedLocalLinearCrossLanguageParity:
             kernel="epanechnikov",
             weights=w,
         )
-        np.testing.assert_allclose(
-            fit.intercept, g["mu_hat"], atol=1e-12, rtol=1e-12
-        )
+        np.testing.assert_allclose(fit.intercept, g["mu_hat"], atol=1e-12, rtol=1e-12)
 
     @pytest.mark.parametrize("dgp_name", ["dgp1", "dgp2", "dgp3", "dgp4"])
     def test_slope_parity(self, weighted_golden, dgp_name):
@@ -130,7 +125,5 @@ class TestWeightedLocalLinearCrossLanguageParity:
             boundary=float(g["eval_point"]),
             kernel="epanechnikov",
         )
-        np.testing.assert_allclose(
-            fit_w.intercept, fit_nw.intercept, atol=1e-14, rtol=1e-14
-        )
+        np.testing.assert_allclose(fit_w.intercept, fit_nw.intercept, atol=1e-14, rtol=1e-14)
         np.testing.assert_allclose(fit_w.slope, fit_nw.slope, atol=1e-14, rtol=1e-14)

@@ -3705,9 +3705,7 @@ class TestConleyBreadRankGuard:
         dropped_idx = int(np.flatnonzero(nan_diag)[0])
         assert np.all(np.isnan(V[dropped_idx, :])) and np.all(np.isnan(V[:, dropped_idx]))
         msgs = [str(w.message) for w in caught]
-        assert any(
-            "Conley spatial HAC variance" in m and "rank-deficient" in m for m in msgs
-        ), msgs
+        assert any("Conley spatial HAC variance" in m and "rank-deficient" in m for m in msgs), msgs
 
     def test_rank_zero_gram_returns_nan(self):
         X, resid, coords = self._cross_section(1, dup="indep")

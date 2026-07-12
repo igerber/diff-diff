@@ -22,10 +22,7 @@ from diff_diff.local_linear import (
 )
 
 GOLDEN_PATH = (
-    Path(__file__).resolve().parents[1]
-    / "benchmarks"
-    / "data"
-    / "nprobust_lprobust_golden.json"
+    Path(__file__).resolve().parents[1] / "benchmarks" / "data" / "nprobust_lprobust_golden.json"
 )
 
 
@@ -51,7 +48,7 @@ class TestReturnShape:
         rng = np.random.default_rng(seed)
         G = 800
         d = rng.uniform(0.0, 1.0, G)
-        y = d + d ** 2 + rng.normal(0, 0.4, G)
+        y = d + d**2 + rng.normal(0, 0.4, G)
         return d, y
 
     def test_returns_bias_corrected_fit(self):
@@ -124,52 +121,34 @@ class TestParity:
         d, y, g = self._dgp(golden, "dgp1")
         fit = bias_corrected_local_linear(d, y, boundary=0.0, kernel="epanechnikov")
         # DGP 1 hits bit-parity through the Cholesky path for tau_cl / se_cl.
-        np.testing.assert_allclose(fit.estimate_classical, g["tau_cl"],
-                                   atol=1e-12, rtol=1e-12)
-        np.testing.assert_allclose(fit.se_classical, g["se_cl"],
-                                   atol=1e-12, rtol=1e-12)
-        np.testing.assert_allclose(fit.estimate_bias_corrected, g["tau_bc"],
-                                   atol=1e-12, rtol=1e-12)
-        np.testing.assert_allclose(fit.se_robust, g["se_rb"],
-                                   atol=1e-12, rtol=1e-12)
-        np.testing.assert_allclose(fit.ci_low, g["ci_low"],
-                                   atol=1e-13, rtol=1e-13)
-        np.testing.assert_allclose(fit.ci_high, g["ci_high"],
-                                   atol=1e-13, rtol=1e-13)
+        np.testing.assert_allclose(fit.estimate_classical, g["tau_cl"], atol=1e-12, rtol=1e-12)
+        np.testing.assert_allclose(fit.se_classical, g["se_cl"], atol=1e-12, rtol=1e-12)
+        np.testing.assert_allclose(fit.estimate_bias_corrected, g["tau_bc"], atol=1e-12, rtol=1e-12)
+        np.testing.assert_allclose(fit.se_robust, g["se_rb"], atol=1e-12, rtol=1e-12)
+        np.testing.assert_allclose(fit.ci_low, g["ci_low"], atol=1e-13, rtol=1e-13)
+        np.testing.assert_allclose(fit.ci_high, g["ci_high"], atol=1e-13, rtol=1e-13)
         # Bandwidth also should match (Phase 1b bit-parity path).
         np.testing.assert_allclose(fit.h, g["h"], atol=1e-12, rtol=1e-12)
 
     def test_dgp2_all_six_outputs(self, golden):
         d, y, g = self._dgp(golden, "dgp2")
         fit = bias_corrected_local_linear(d, y, boundary=0.0, kernel="epanechnikov")
-        np.testing.assert_allclose(fit.estimate_classical, g["tau_cl"],
-                                   atol=1e-12, rtol=1e-12)
-        np.testing.assert_allclose(fit.estimate_bias_corrected, g["tau_bc"],
-                                   atol=1e-12, rtol=1e-12)
-        np.testing.assert_allclose(fit.se_classical, g["se_cl"],
-                                   atol=1e-12, rtol=1e-12)
-        np.testing.assert_allclose(fit.se_robust, g["se_rb"],
-                                   atol=1e-12, rtol=1e-12)
-        np.testing.assert_allclose(fit.ci_low, g["ci_low"],
-                                   atol=1e-12, rtol=1e-12)
-        np.testing.assert_allclose(fit.ci_high, g["ci_high"],
-                                   atol=1e-12, rtol=1e-12)
+        np.testing.assert_allclose(fit.estimate_classical, g["tau_cl"], atol=1e-12, rtol=1e-12)
+        np.testing.assert_allclose(fit.estimate_bias_corrected, g["tau_bc"], atol=1e-12, rtol=1e-12)
+        np.testing.assert_allclose(fit.se_classical, g["se_cl"], atol=1e-12, rtol=1e-12)
+        np.testing.assert_allclose(fit.se_robust, g["se_rb"], atol=1e-12, rtol=1e-12)
+        np.testing.assert_allclose(fit.ci_low, g["ci_low"], atol=1e-12, rtol=1e-12)
+        np.testing.assert_allclose(fit.ci_high, g["ci_high"], atol=1e-12, rtol=1e-12)
 
     def test_dgp3_all_six_outputs(self, golden):
         d, y, g = self._dgp(golden, "dgp3")
         fit = bias_corrected_local_linear(d, y, boundary=0.0, kernel="epanechnikov")
-        np.testing.assert_allclose(fit.estimate_classical, g["tau_cl"],
-                                   atol=1e-12, rtol=1e-12)
-        np.testing.assert_allclose(fit.estimate_bias_corrected, g["tau_bc"],
-                                   atol=1e-12, rtol=1e-12)
-        np.testing.assert_allclose(fit.se_classical, g["se_cl"],
-                                   atol=1e-12, rtol=1e-12)
-        np.testing.assert_allclose(fit.se_robust, g["se_rb"],
-                                   atol=1e-12, rtol=1e-12)
-        np.testing.assert_allclose(fit.ci_low, g["ci_low"],
-                                   atol=1e-12, rtol=1e-12)
-        np.testing.assert_allclose(fit.ci_high, g["ci_high"],
-                                   atol=1e-12, rtol=1e-12)
+        np.testing.assert_allclose(fit.estimate_classical, g["tau_cl"], atol=1e-12, rtol=1e-12)
+        np.testing.assert_allclose(fit.estimate_bias_corrected, g["tau_bc"], atol=1e-12, rtol=1e-12)
+        np.testing.assert_allclose(fit.se_classical, g["se_cl"], atol=1e-12, rtol=1e-12)
+        np.testing.assert_allclose(fit.se_robust, g["se_rb"], atol=1e-12, rtol=1e-12)
+        np.testing.assert_allclose(fit.ci_low, g["ci_low"], atol=1e-12, rtol=1e-12)
+        np.testing.assert_allclose(fit.ci_high, g["ci_high"], atol=1e-12, rtol=1e-12)
 
     def test_clustered_parity_dgp_4(self, golden):
         """DGP 4 uses manual h=b=0.3 to sidestep an nprobust-internal
@@ -179,26 +158,25 @@ class TestParity:
         y = np.asarray(g["y"], dtype=np.float64)
         cluster = np.asarray(g["cluster"])
         fit = bias_corrected_local_linear(
-            d, y, boundary=0.0, kernel="epanechnikov",
-            h=g["h"], b=g["b"], cluster=cluster,
+            d,
+            y,
+            boundary=0.0,
+            kernel="epanechnikov",
+            h=g["h"],
+            b=g["b"],
+            cluster=cluster,
         )
         # Cluster IDs are sequential (1..50), so np.unique order matches R's
         # unique(); bit-parity is achievable.
-        np.testing.assert_allclose(fit.estimate_classical, g["tau_cl"],
-                                   atol=1e-14, rtol=1e-14)
-        np.testing.assert_allclose(fit.estimate_bias_corrected, g["tau_bc"],
-                                   atol=1e-14, rtol=1e-14)
-        np.testing.assert_allclose(fit.se_classical, g["se_cl"],
-                                   atol=1e-14, rtol=1e-14)
-        np.testing.assert_allclose(fit.se_robust, g["se_rb"],
-                                   atol=1e-14, rtol=1e-14)
+        np.testing.assert_allclose(fit.estimate_classical, g["tau_cl"], atol=1e-14, rtol=1e-14)
+        np.testing.assert_allclose(fit.estimate_bias_corrected, g["tau_bc"], atol=1e-14, rtol=1e-14)
+        np.testing.assert_allclose(fit.se_classical, g["se_cl"], atol=1e-14, rtol=1e-14)
+        np.testing.assert_allclose(fit.se_robust, g["se_rb"], atol=1e-14, rtol=1e-14)
         # CI bounds at bit-parity too (Python's scipy ppf and R's qnorm
         # agree to ULP; the remaining drift is pure tau.bc +/- z * se.rb
         # floating-point arithmetic).
-        np.testing.assert_allclose(fit.ci_low, g["ci_low"],
-                                   atol=1e-14, rtol=1e-14)
-        np.testing.assert_allclose(fit.ci_high, g["ci_high"],
-                                   atol=1e-14, rtol=1e-14)
+        np.testing.assert_allclose(fit.ci_low, g["ci_low"], atol=1e-14, rtol=1e-14)
+        np.testing.assert_allclose(fit.ci_high, g["ci_high"], atol=1e-14, rtol=1e-14)
 
     def test_shifted_boundary_parity_dgp_5(self, golden):
         """Design 1 continuous-near-d_lower: boundary = d.min() > 0."""
@@ -207,22 +185,19 @@ class TestParity:
         y = np.asarray(g["y"], dtype=np.float64)
         eval_point = float(g["eval_point_override"])
         fit = bias_corrected_local_linear(
-            d, y, boundary=eval_point, kernel="epanechnikov",
+            d,
+            y,
+            boundary=eval_point,
+            kernel="epanechnikov",
         )
-        np.testing.assert_allclose(fit.estimate_classical, g["tau_cl"],
-                                   atol=1e-12, rtol=1e-12)
-        np.testing.assert_allclose(fit.estimate_bias_corrected, g["tau_bc"],
-                                   atol=1e-12, rtol=1e-12)
-        np.testing.assert_allclose(fit.se_classical, g["se_cl"],
-                                   atol=1e-12, rtol=1e-12)
-        np.testing.assert_allclose(fit.se_robust, g["se_rb"],
-                                   atol=1e-12, rtol=1e-12)
+        np.testing.assert_allclose(fit.estimate_classical, g["tau_cl"], atol=1e-12, rtol=1e-12)
+        np.testing.assert_allclose(fit.estimate_bias_corrected, g["tau_bc"], atol=1e-12, rtol=1e-12)
+        np.testing.assert_allclose(fit.se_classical, g["se_cl"], atol=1e-12, rtol=1e-12)
+        np.testing.assert_allclose(fit.se_robust, g["se_rb"], atol=1e-12, rtol=1e-12)
         # CI bounds at the same tolerance (Python scipy ppf vs R qnorm
         # agree to ULP; tau.bc +/- z * se.rb inherits se_rb's drift).
-        np.testing.assert_allclose(fit.ci_low, g["ci_low"],
-                                   atol=1e-12, rtol=1e-12)
-        np.testing.assert_allclose(fit.ci_high, g["ci_high"],
-                                   atol=1e-12, rtol=1e-12)
+        np.testing.assert_allclose(fit.ci_low, g["ci_low"], atol=1e-12, rtol=1e-12)
+        np.testing.assert_allclose(fit.ci_high, g["ci_high"], atol=1e-12, rtol=1e-12)
 
 
 # =============================================================================
@@ -242,7 +217,10 @@ class TestCI:
         fit = bias_corrected_local_linear(d, y, boundary=0.0, h=0.2, b=0.2)
         midpoint = 0.5 * (fit.ci_low + fit.ci_high)
         np.testing.assert_allclose(
-            midpoint, fit.estimate_bias_corrected, atol=1e-14, rtol=1e-14,
+            midpoint,
+            fit.estimate_bias_corrected,
+            atol=1e-14,
+            rtol=1e-14,
         )
 
     def test_alpha_01_wider_than_alpha_05(self):
@@ -310,9 +288,7 @@ class TestInputContract:
     def test_mass_point_raises(self):
         # d.min() > 0 with > 2% at the mode.
         rng = np.random.default_rng(3)
-        d = np.concatenate(
-            [np.full(100, 0.1), rng.uniform(0.1, 1.0, 400)]
-        )
+        d = np.concatenate([np.full(100, 0.1), rng.uniform(0.1, 1.0, 400)])
         y = d + rng.normal(0, 0.3, 500)
         with pytest.raises(NotImplementedError, match="mass-point"):
             bias_corrected_local_linear(d, y, boundary=0.1)
@@ -350,9 +326,7 @@ class TestInputContract:
         catches it (CI review PR #340 follow-up P1)."""
         d = np.linspace(0.0, 1.0, 100)
         y = d.copy()
-        cluster = np.array(
-            [i // 10 if i != 5 else None for i in range(100)], dtype=object
-        )
+        cluster = np.array([i // 10 if i != 5 else None for i in range(100)], dtype=object)
         with pytest.raises(ValueError, match="cluster contains missing"):
             bias_corrected_local_linear(d, y, h=0.3, cluster=cluster)
 
@@ -360,9 +334,7 @@ class TestInputContract:
         """Object-dtype cluster with np.nan is rejected."""
         d = np.linspace(0.0, 1.0, 100)
         y = d.copy()
-        cluster = np.array(
-            [i // 10 if i != 5 else np.nan for i in range(100)], dtype=object
-        )
+        cluster = np.array([i // 10 if i != 5 else np.nan for i in range(100)], dtype=object)
         with pytest.raises(ValueError, match="cluster contains missing"):
             bias_corrected_local_linear(d, y, h=0.3, cluster=cluster)
 
@@ -387,7 +359,11 @@ class TestParameterInteractions:
         y = d + rng.normal(0, 0.3, G)
         cluster = np.repeat(np.arange(20), 20)
         fit = bias_corrected_local_linear(
-            d, y, h=0.3, b=0.3, cluster=cluster,
+            d,
+            y,
+            h=0.3,
+            b=0.3,
+            cluster=cluster,
         )
         assert np.isfinite(fit.estimate_bias_corrected)
         assert fit.se_robust > 0
@@ -498,7 +474,7 @@ class TestAutoBandwidthForwardsParameters:
         rng = np.random.default_rng(seed)
         G = 600
         d = rng.uniform(0.0, 1.0, G)
-        y = d + d ** 2 + rng.normal(0, 0.3, G)
+        y = d + d**2 + rng.normal(0, 0.3, G)
         return d, y
 
     def test_auto_cluster_returns_finite(self):
@@ -591,11 +567,7 @@ class TestWeightedBiasCorrectedLocalLinear:
     def _panel(self, seed=42, G=300, boundary=0.0):
         rng = np.random.default_rng(seed)
         d = rng.uniform(boundary, boundary + 1.0, G)
-        y = (
-            2.0 * (d - boundary)
-            + 0.3 * (d - boundary) ** 2
-            + rng.normal(0, 0.2, G)
-        )
+        y = 2.0 * (d - boundary) + 0.3 * (d - boundary) ** 2 + rng.normal(0, 0.2, G)
         return d, y
 
     def test_uniform_weights_bit_parity_full_struct(self):
@@ -603,22 +575,18 @@ class TestWeightedBiasCorrectedLocalLinear:
 
         d, y = self._panel()
         base = bias_corrected_local_linear(d, y, boundary=0.0, h=0.3, b=0.3)
-        w1 = bias_corrected_local_linear(
-            d, y, boundary=0.0, h=0.3, b=0.3, weights=np.ones(d.size)
-        )
+        w1 = bias_corrected_local_linear(d, y, boundary=0.0, h=0.3, b=0.3, weights=np.ones(d.size))
         np.testing.assert_allclose(
             w1.estimate_classical, base.estimate_classical, atol=1e-14, rtol=1e-14
         )
         np.testing.assert_allclose(
-            w1.estimate_bias_corrected, base.estimate_bias_corrected,
-            atol=1e-14, rtol=1e-14,
+            w1.estimate_bias_corrected,
+            base.estimate_bias_corrected,
+            atol=1e-14,
+            rtol=1e-14,
         )
-        np.testing.assert_allclose(
-            w1.se_classical, base.se_classical, atol=1e-14, rtol=1e-14
-        )
-        np.testing.assert_allclose(
-            w1.se_robust, base.se_robust, atol=1e-14, rtol=1e-14
-        )
+        np.testing.assert_allclose(w1.se_classical, base.se_classical, atol=1e-14, rtol=1e-14)
+        np.testing.assert_allclose(w1.se_robust, base.se_robust, atol=1e-14, rtol=1e-14)
         np.testing.assert_allclose(w1.ci_low, base.ci_low, atol=1e-14, rtol=1e-14)
         np.testing.assert_allclose(w1.ci_high, base.ci_high, atol=1e-14, rtol=1e-14)
         assert w1.n_used == base.n_used
@@ -632,14 +600,14 @@ class TestWeightedBiasCorrectedLocalLinear:
 
         d, y = self._panel()
         base = bias_corrected_local_linear(d, y, boundary=0.0)
-        w1 = bias_corrected_local_linear(
-            d, y, boundary=0.0, weights=np.ones(d.size)
-        )
+        w1 = bias_corrected_local_linear(d, y, boundary=0.0, weights=np.ones(d.size))
         np.testing.assert_allclose(w1.h, base.h, atol=1e-14, rtol=1e-14)
         np.testing.assert_allclose(w1.b, base.b, atol=1e-14, rtol=1e-14)
         np.testing.assert_allclose(
-            w1.estimate_bias_corrected, base.estimate_bias_corrected,
-            atol=1e-14, rtol=1e-14,
+            w1.estimate_bias_corrected,
+            base.estimate_bias_corrected,
+            atol=1e-14,
+            rtol=1e-14,
         )
 
     def test_nontrivial_weights_change_estimate(self):
@@ -648,12 +616,8 @@ class TestWeightedBiasCorrectedLocalLinear:
         d, y = self._panel()
         base = bias_corrected_local_linear(d, y, boundary=0.0, h=0.3, b=0.3)
         w = np.exp(-d * 3.0)  # informative: concentrate near boundary
-        r_w = bias_corrected_local_linear(
-            d, y, boundary=0.0, h=0.3, b=0.3, weights=w
-        )
-        assert not np.isclose(
-            r_w.estimate_bias_corrected, base.estimate_bias_corrected, atol=1e-6
-        )
+        r_w = bias_corrected_local_linear(d, y, boundary=0.0, h=0.3, b=0.3, weights=w)
+        assert not np.isclose(r_w.estimate_bias_corrected, base.estimate_bias_corrected, atol=1e-6)
 
     def test_negative_weights_reject(self):
         from diff_diff.local_linear import bias_corrected_local_linear
@@ -662,9 +626,7 @@ class TestWeightedBiasCorrectedLocalLinear:
         w = np.ones(d.size)
         w[0] = -0.5
         with pytest.raises(ValueError, match="non-negative"):
-            bias_corrected_local_linear(
-                d, y, boundary=0.0, h=0.3, b=0.3, weights=w
-            )
+            bias_corrected_local_linear(d, y, boundary=0.0, h=0.3, b=0.3, weights=w)
 
     def test_nan_weights_reject(self):
         from diff_diff.local_linear import bias_corrected_local_linear
@@ -673,18 +635,14 @@ class TestWeightedBiasCorrectedLocalLinear:
         w = np.ones(d.size)
         w[0] = np.nan
         with pytest.raises(ValueError, match="non-finite"):
-            bias_corrected_local_linear(
-                d, y, boundary=0.0, h=0.3, b=0.3, weights=w
-            )
+            bias_corrected_local_linear(d, y, boundary=0.0, h=0.3, b=0.3, weights=w)
 
     def test_zero_sum_weights_reject(self):
         from diff_diff.local_linear import bias_corrected_local_linear
 
         d, y = self._panel()
         with pytest.raises(ValueError, match="sum to zero"):
-            bias_corrected_local_linear(
-                d, y, boundary=0.0, h=0.3, b=0.3, weights=np.zeros(d.size)
-            )
+            bias_corrected_local_linear(d, y, boundary=0.0, h=0.3, b=0.3, weights=np.zeros(d.size))
 
     def test_weights_length_mismatch_reject(self):
         from diff_diff.local_linear import bias_corrected_local_linear

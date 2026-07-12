@@ -641,8 +641,7 @@ class TestStaggeredTripleDiffORSolveFallback:
             w for w in caught if "outcome-regression influence-function step" in str(w.message)
         ]
         assert len(or_warnings) == 1, (
-            f"Expected exactly one aggregate OR rank-guard warning, "
-            f"got {len(or_warnings)}."
+            f"Expected exactly one aggregate OR rank-guard warning, " f"got {len(or_warnings)}."
         )
         msg = str(or_warnings[0].message)
         assert "(g, g_c, t) pair(s)" in msg

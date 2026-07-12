@@ -299,7 +299,7 @@ class TestParameterExtraction:
 
     def test_extract_from_multiperiod(self, mock_multiperiod_results):
         """Test extraction from MultiPeriodDiDResults."""
-        (beta_hat, sigma, num_pre, num_post, pre_periods, post_periods, _df) = (
+        beta_hat, sigma, num_pre, num_post, pre_periods, post_periods, _df = (
             _extract_event_study_params(mock_multiperiod_results)
         )
 
@@ -687,7 +687,7 @@ class TestIntegration:
             reference_period=3,
         )
 
-        (beta_hat, sigma, num_pre, num_post, pre_periods, post_periods, _df) = (
+        beta_hat, sigma, num_pre, num_post, pre_periods, post_periods, _df = (
             _extract_event_study_params(results)
         )
 
@@ -1363,13 +1363,15 @@ class TestDCDHIntegration:
         from diff_diff import ChaisemartinDHaultfoeuille
         from diff_diff.prep import generate_reversible_did_data
 
-        df = generate_reversible_did_data(
-            n_groups=n_groups, n_periods=n_periods, seed=seed
-        )
+        df = generate_reversible_did_data(n_groups=n_groups, n_periods=n_periods, seed=seed)
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             return ChaisemartinDHaultfoeuille(seed=1).fit(
-                df, "outcome", "group", "period", "treatment",
+                df,
+                "outcome",
+                "group",
+                "period",
+                "treatment",
                 L_max=L_max,
             )
 
@@ -1385,9 +1387,7 @@ class TestDCDHIntegration:
     def test_dcdh_extraction(self):
         """_extract_event_study_params returns correct shapes for dCDH."""
         results = self._fit_dcdh()
-        beta_hat, sigma, n_pre, n_post, pre_t, post_t, df_s = (
-            _extract_event_study_params(results)
-        )
+        beta_hat, sigma, n_pre, n_post, pre_t, post_t, df_s = _extract_event_study_params(results)
         assert n_pre >= 1
         assert n_post >= 1
         assert beta_hat.shape == (n_pre + n_post,)
@@ -1407,7 +1407,11 @@ class TestDCDHIntegration:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             r = ChaisemartinDHaultfoeuille(seed=1, placebo=False).fit(
-                df, "outcome", "group", "period", "treatment",
+                df,
+                "outcome",
+                "group",
+                "period",
+                "treatment",
             )
         with pytest.raises(ValueError, match="placebo_event_study"):
             compute_honest_did(r)
@@ -1421,13 +1425,13 @@ class TestDCDHIntegration:
             warnings.simplefilter("always")
             compute_honest_did(results)
         placebo_warnings = [
-            x for x in w
-            if "placebo" in str(x.message).lower()
-            and "pre-period" in str(x.message).lower()
+            x
+            for x in w
+            if "placebo" in str(x.message).lower() and "pre-period" in str(x.message).lower()
         ]
-        assert len(placebo_warnings) >= 1, (
-            "Expected a UserWarning about placebo-based pre-period inputs"
-        )
+        assert (
+            len(placebo_warnings) >= 1
+        ), "Expected a UserWarning about placebo-based pre-period inputs"
 
     def test_dcdh_empty_consecutive_block_raises(self):
         """ValueError when all placebos have NaN SE (no valid pre-periods)."""
@@ -1472,13 +1476,8 @@ class TestDCDHIntegration:
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
             bounds = compute_honest_did(results)
-        trim_warns = [
-            x for x in w
-            if "dropping non-consecutive" in str(x.message).lower()
-        ]
-        assert len(trim_warns) >= 1, (
-            "Expected a warning about dropping non-consecutive horizons"
-        )
+        trim_warns = [x for x in w if "dropping non-consecutive" in str(x.message).lower()]
+        assert len(trim_warns) >= 1, "Expected a warning about dropping non-consecutive horizons"
         # Retained pre should be [-1] only (h=-3 dropped due to gap at -2)
         assert bounds.pre_periods_used == [-1]
 

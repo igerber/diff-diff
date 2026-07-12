@@ -162,7 +162,9 @@ class TestPlotEventStudy:
         )
 
         # Verify _extract_plot_data returns cband overrides
-        result = _extract_plot_data(df, periods=None, pre_periods=None, post_periods=None, reference_period=0)
+        result = _extract_plot_data(
+            df, periods=None, pre_periods=None, post_periods=None, reference_period=0
+        )
         ci_lo = result[7]
         ci_hi = result[8]
         assert ci_lo is not None, "ci_lower_override should not be None with cband columns"
@@ -191,7 +193,9 @@ class TestPlotEventStudy:
         )
 
         # All-NaN cband columns should not produce overrides
-        result = _extract_plot_data(df, periods=None, pre_periods=None, post_periods=None, reference_period=0)
+        result = _extract_plot_data(
+            df, periods=None, pre_periods=None, post_periods=None, reference_period=0
+        )
         ci_lo = result[7]
         ci_hi = result[8]
         assert ci_lo is None, "ci_lower_override should be None when cband is all-NaN"
@@ -314,6 +318,7 @@ class TestPlotEventStudy:
         """
         pytest.importorskip("matplotlib")
         import matplotlib.pyplot as plt
+
         from diff_diff import generate_staggered_data
 
         data = generate_staggered_data(n_units=200, n_periods=10, seed=42)
@@ -344,6 +349,7 @@ class TestPlotEventStudy:
         """
         pytest.importorskip("matplotlib")
         import matplotlib.pyplot as plt
+
         from diff_diff import generate_staggered_data
 
         data = generate_staggered_data(n_units=200, n_periods=10, seed=42)
@@ -657,6 +663,7 @@ class TestPlotEventStudyCband:
         """Test that cband CIs are used by default when available."""
         pytest.importorskip("matplotlib")
         import matplotlib.pyplot as plt
+
         from diff_diff.visualization import _extract_plot_data
 
         # Verify plot succeeds
@@ -664,7 +671,7 @@ class TestPlotEventStudyCband:
         assert ax is not None
 
         # Verify cband CIs are extracted
-        (_, _, _, _, _, _, _, ci_lower_override, ci_upper_override) = _extract_plot_data(
+        _, _, _, _, _, _, _, ci_lower_override, ci_upper_override = _extract_plot_data(
             cs_cband_results, None, None, None, None
         )
         assert ci_lower_override is not None

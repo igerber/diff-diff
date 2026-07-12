@@ -1887,6 +1887,7 @@ class TestGenerateSurveyDidData:
     def test_jk1_minimum_psu_guard(self):
         """Test that JK1 replicates require at least 2 PSUs."""
         import pytest
+
         from diff_diff.prep import generate_survey_did_data
 
         # Configured count: 1 PSU total
@@ -1901,6 +1902,7 @@ class TestGenerateSurveyDidData:
     def test_jk1_one_populated_psu_guard(self):
         """Test JK1 guard fires when only one PSU is populated."""
         import pytest
+
         from diff_diff.prep import generate_survey_did_data
 
         # 2 configured PSUs but only 1 unit -> only 1 populated PSU
@@ -1934,6 +1936,7 @@ class TestGenerateSurveyDidData:
     def test_invalid_weight_variation(self):
         """Test that invalid weight_variation raises ValueError."""
         import pytest
+
         from diff_diff.prep import generate_survey_did_data
 
         with pytest.raises(ValueError, match="weight_variation must be"):
@@ -1942,6 +1945,7 @@ class TestGenerateSurveyDidData:
     def test_empty_cohort_periods(self):
         """Test that empty cohort_periods raises ValueError."""
         import pytest
+
         from diff_diff.prep import generate_survey_did_data
 
         with pytest.raises(ValueError, match="cohort_periods must be"):
@@ -1950,6 +1954,7 @@ class TestGenerateSurveyDidData:
     def test_cohort_period_out_of_range(self):
         """Test that out-of-range cohort periods raise ValueError."""
         import pytest
+
         from diff_diff.prep import generate_survey_did_data
 
         # g=1 is invalid: no pre-treatment period (must be >= 2)
@@ -1965,6 +1970,7 @@ class TestGenerateSurveyDidData:
     def test_cohort_period_non_integer(self):
         """Test that non-integer cohort periods raise ValueError."""
         import pytest
+
         from diff_diff.prep import generate_survey_did_data
 
         with pytest.raises(ValueError, match="must contain integers"):
@@ -2000,6 +2006,7 @@ class TestGenerateSurveyDidData:
     def test_default_cohort_periods_too_small(self):
         """Test that n_periods < 4 with default cohort_periods raises."""
         import pytest
+
         from diff_diff.prep import generate_survey_did_data
 
         with pytest.raises(ValueError, match="too small"):
@@ -2008,6 +2015,7 @@ class TestGenerateSurveyDidData:
     def test_parameter_validation(self):
         """Test upfront validation for invalid parameter values."""
         import pytest
+
         from diff_diff.prep import generate_survey_did_data
 
         with pytest.raises(ValueError, match="n_units must be positive"):
@@ -2042,7 +2050,6 @@ class TestGenerateSurveyDidData:
         import warnings
 
         from diff_diff import (
-            CallawaySantAnna,
             DifferenceInDifferences,
             SurveyDesign,
         )

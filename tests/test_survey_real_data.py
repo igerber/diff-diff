@@ -154,13 +154,11 @@ class TestApiSchoolAccountability:
 
         _assert_close(result.att, r["att"], ATT_RTOL, ATT_ATOL, "A1 ATT")
         _assert_close(result.se, r["se"], SE_RTOL, SE_ATOL, "A1 SE")
-        assert result.survey_metadata.df_survey == r["df"], (
-            f"A1 df: Python={result.survey_metadata.df_survey}, R={r['df']}"
-        )
-        _assert_close(result.conf_int[0], r["ci_lower"], CI_RTOL, CI_ATOL,
-                       "A1 CI lower")
-        _assert_close(result.conf_int[1], r["ci_upper"], CI_RTOL, CI_ATOL,
-                       "A1 CI upper")
+        assert (
+            result.survey_metadata.df_survey == r["df"]
+        ), f"A1 df: Python={result.survey_metadata.df_survey}, R={r['df']}"
+        _assert_close(result.conf_int[0], r["ci_lower"], CI_RTOL, CI_ATOL, "A1 CI lower")
+        _assert_close(result.conf_int[1], r["ci_upper"], CI_RTOL, CI_ATOL, "A1 CI upper")
 
     def test_a2_strata_no_fpc(self, api_results):
         """A2: TSL with strata + weights, no FPC."""
@@ -173,13 +171,11 @@ class TestApiSchoolAccountability:
 
         _assert_close(result.att, r["att"], ATT_RTOL, ATT_ATOL, "A2 ATT")
         _assert_close(result.se, r["se"], SE_RTOL, SE_ATOL, "A2 SE")
-        assert result.survey_metadata.df_survey == r["df"], (
-            f"A2 df: Python={result.survey_metadata.df_survey}, R={r['df']}"
-        )
-        _assert_close(result.conf_int[0], r["ci_lower"], CI_RTOL, CI_ATOL,
-                       "A2 CI lower")
-        _assert_close(result.conf_int[1], r["ci_upper"], CI_RTOL, CI_ATOL,
-                       "A2 CI upper")
+        assert (
+            result.survey_metadata.df_survey == r["df"]
+        ), f"A2 df: Python={result.survey_metadata.df_survey}, R={r['df']}"
+        _assert_close(result.conf_int[0], r["ci_lower"], CI_RTOL, CI_ATOL, "A2 CI lower")
+        _assert_close(result.conf_int[1], r["ci_upper"], CI_RTOL, CI_ATOL, "A2 CI upper")
 
     def test_a3_weights_only(self, api_results):
         """A3: Weighted OLS baseline (no strata or FPC)."""
@@ -192,10 +188,8 @@ class TestApiSchoolAccountability:
 
         _assert_close(result.att, r["att"], ATT_RTOL, ATT_ATOL, "A3 ATT")
         _assert_close(result.se, r["se"], SE_RTOL, SE_ATOL, "A3 SE")
-        _assert_close(result.conf_int[0], r["ci_lower"], CI_RTOL, CI_ATOL,
-                       "A3 CI lower")
-        _assert_close(result.conf_int[1], r["ci_upper"], CI_RTOL, CI_ATOL,
-                       "A3 CI upper")
+        _assert_close(result.conf_int[0], r["ci_lower"], CI_RTOL, CI_ATOL, "A3 CI lower")
+        _assert_close(result.conf_int[1], r["ci_upper"], CI_RTOL, CI_ATOL, "A3 CI upper")
 
     def test_a4_twfe(self, api_results):
         """A4: TWFE plumbing with strata + FPC + weights."""
@@ -205,7 +199,11 @@ class TestApiSchoolAccountability:
         sd = SurveyDesign(weights="pw", strata="stype", fpc="fpc")
         est = TwoWayFixedEffects()
         result = est.fit(
-            data, "outcome", "treated", "period", "school_id",
+            data,
+            "outcome",
+            "treated",
+            "period",
+            "school_id",
             survey_design=sd,
         )
 
@@ -224,12 +222,17 @@ class TestApiSchoolAccountability:
         # Use subpopulation approach: zero out weights for non-elementary
         sd_full = SurveyDesign(weights="pw", strata="stype", fpc="fpc")
         sd_sub, data_sub = sd_full.subpopulation(
-            data, lambda df: df["stype"] == "E",
+            data,
+            lambda df: df["stype"] == "E",
         )
 
         est = DifferenceInDifferences()
         result = est.fit(
-            data_sub, "outcome", "treated", "post", survey_design=sd_sub,
+            data_sub,
+            "outcome",
+            "treated",
+            "post",
+            survey_design=sd_sub,
         )
 
         _assert_close(result.att, r["att"], ATT_RTOL, ATT_ATOL, "A5 subpop ATT")
@@ -247,20 +250,21 @@ class TestApiSchoolAccountability:
         sd = SurveyDesign(weights="pw", strata="stype", fpc="fpc")
         est = DifferenceInDifferences()
         result = est.fit(
-            data, "outcome", "treated", "post",
+            data,
+            "outcome",
+            "treated",
+            "post",
             covariates=["meals", "ell"],
             survey_design=sd,
         )
 
         _assert_close(result.att, r["att"], ATT_RTOL, ATT_ATOL, "A6 cov ATT")
         _assert_close(result.se, r["se"], SE_RTOL, SE_ATOL, "A6 cov SE")
-        assert result.survey_metadata.df_survey == r["df"], (
-            f"A6 df: Python={result.survey_metadata.df_survey}, R={r['df']}"
-        )
-        _assert_close(result.conf_int[0], r["ci_lower"], CI_RTOL, CI_ATOL,
-                       "A6 CI lower")
-        _assert_close(result.conf_int[1], r["ci_upper"], CI_RTOL, CI_ATOL,
-                       "A6 CI upper")
+        assert (
+            result.survey_metadata.df_survey == r["df"]
+        ), f"A6 df: Python={result.survey_metadata.df_survey}, R={r['df']}"
+        _assert_close(result.conf_int[0], r["ci_lower"], CI_RTOL, CI_ATOL, "A6 CI lower")
+        _assert_close(result.conf_int[1], r["ci_upper"], CI_RTOL, CI_ATOL, "A6 CI upper")
 
     def test_a7_fay_brr_replicates(self, api_results):
         """A7: Fay's BRR replicate weights from real stratified design."""
@@ -285,21 +289,19 @@ class TestApiSchoolAccountability:
 
         _assert_close(result.att, r["att"], ATT_RTOL, ATT_ATOL, "A7 Fay ATT")
         _assert_close(result.se, r["se"], REP_SE_RTOL, REP_SE_ATOL, "A7 Fay SE")
-        assert result.survey_metadata.df_survey == r["df"], (
-            f"A7 df: Python={result.survey_metadata.df_survey}, R={r['df']}"
-        )
-        _assert_close(result.conf_int[0], r["ci_lower"], REP_CI_RTOL, REP_CI_ATOL,
-                       "A7 CI lower")
-        _assert_close(result.conf_int[1], r["ci_upper"], REP_CI_RTOL, REP_CI_ATOL,
-                       "A7 CI upper")
+        assert (
+            result.survey_metadata.df_survey == r["df"]
+        ), f"A7 df: Python={result.survey_metadata.df_survey}, R={r['df']}"
+        _assert_close(result.conf_int[0], r["ci_lower"], REP_CI_RTOL, REP_CI_ATOL, "A7 CI lower")
+        _assert_close(result.conf_int[1], r["ci_upper"], REP_CI_RTOL, REP_CI_ATOL, "A7 CI upper")
 
     def test_fpc_reduces_se(self, api_results):
         """FPC should reduce SE vs no-FPC (A1 SE < A2 SE)."""
         r_fpc = api_results["a1_strata_fpc_weights"]
         r_nofpc = api_results["a2_strata_weights"]
-        assert r_fpc["se"] < r_nofpc["se"], (
-            f"FPC SE ({r_fpc['se']:.4f}) should be < no-FPC SE ({r_nofpc['se']:.4f})"
-        )
+        assert (
+            r_fpc["se"] < r_nofpc["se"]
+        ), f"FPC SE ({r_fpc['se']:.4f}) should be < no-FPC SE ({r_nofpc['se']:.4f})"
 
 
 # ============================================================================
@@ -340,20 +342,21 @@ class TestNhanesAcaCoverage:
         data = self._load_nhanes_data(nhanes_results)
 
         sd = SurveyDesign(
-            weights="WTMEC2YR", strata="SDMVSTRA", psu="SDMVPSU", nest=True,
+            weights="WTMEC2YR",
+            strata="SDMVSTRA",
+            psu="SDMVPSU",
+            nest=True,
         )
         est = DifferenceInDifferences()
         result = est.fit(data, "outcome", "treated", "post", survey_design=sd)
 
         _assert_close(result.att, r["att"], ATT_RTOL, ATT_ATOL, "B1 ATT")
         _assert_close(result.se, r["se"], SE_RTOL, SE_ATOL, "B1 SE")
-        assert result.survey_metadata.df_survey == r["df"], (
-            f"B1 df: Python={result.survey_metadata.df_survey}, R={r['df']}"
-        )
-        _assert_close(result.conf_int[0], r["ci_lower"], CI_RTOL, CI_ATOL,
-                       "B1 CI lower")
-        _assert_close(result.conf_int[1], r["ci_upper"], CI_RTOL, CI_ATOL,
-                       "B1 CI upper")
+        assert (
+            result.survey_metadata.df_survey == r["df"]
+        ), f"B1 df: Python={result.survey_metadata.df_survey}, R={r['df']}"
+        _assert_close(result.conf_int[0], r["ci_lower"], CI_RTOL, CI_ATOL, "B1 CI lower")
+        _assert_close(result.conf_int[1], r["ci_upper"], CI_RTOL, CI_ATOL, "B1 CI upper")
 
     def test_b2_covariates(self, nhanes_results):
         """B2: Covariate-adjusted TSL with strata + PSU."""
@@ -362,24 +365,28 @@ class TestNhanesAcaCoverage:
         data = data.dropna(subset=r.get("covariates", [])).reset_index(drop=True)
 
         sd = SurveyDesign(
-            weights="WTMEC2YR", strata="SDMVSTRA", psu="SDMVPSU", nest=True,
+            weights="WTMEC2YR",
+            strata="SDMVSTRA",
+            psu="SDMVPSU",
+            nest=True,
         )
         est = DifferenceInDifferences()
         result = est.fit(
-            data, "outcome", "treated", "post",
+            data,
+            "outcome",
+            "treated",
+            "post",
             covariates=r.get("covariates", []),
             survey_design=sd,
         )
 
         _assert_close(result.att, r["att"], ATT_RTOL, ATT_ATOL, "B2 cov ATT")
         _assert_close(result.se, r["se"], SE_RTOL, SE_ATOL, "B2 cov SE")
-        assert result.survey_metadata.df_survey == r["df"], (
-            f"B2 df: Python={result.survey_metadata.df_survey}, R={r['df']}"
-        )
-        _assert_close(result.conf_int[0], r["ci_lower"], CI_RTOL, CI_ATOL,
-                       "B2 CI lower")
-        _assert_close(result.conf_int[1], r["ci_upper"], CI_RTOL, CI_ATOL,
-                       "B2 CI upper")
+        assert (
+            result.survey_metadata.df_survey == r["df"]
+        ), f"B2 df: Python={result.survey_metadata.df_survey}, R={r['df']}"
+        _assert_close(result.conf_int[0], r["ci_lower"], CI_RTOL, CI_ATOL, "B2 CI lower")
+        _assert_close(result.conf_int[1], r["ci_upper"], CI_RTOL, CI_ATOL, "B2 CI upper")
 
     def test_b3_weights_only(self, nhanes_results):
         """B3: Weighted OLS (no clustering), baseline comparison."""
@@ -392,13 +399,11 @@ class TestNhanesAcaCoverage:
 
         _assert_close(result.att, r["att"], ATT_RTOL, ATT_ATOL, "B3 ATT")
         _assert_close(result.se, r["se"], SE_RTOL, SE_ATOL, "B3 SE")
-        assert result.survey_metadata.df_survey == r["df"], (
-            f"B3 df: Python={result.survey_metadata.df_survey}, R={r['df']}"
-        )
-        _assert_close(result.conf_int[0], r["ci_lower"], CI_RTOL, CI_ATOL,
-                       "B3 CI lower")
-        _assert_close(result.conf_int[1], r["ci_upper"], CI_RTOL, CI_ATOL,
-                       "B3 CI upper")
+        assert (
+            result.survey_metadata.df_survey == r["df"]
+        ), f"B3 df: Python={result.survey_metadata.df_survey}, R={r['df']}"
+        _assert_close(result.conf_int[0], r["ci_lower"], CI_RTOL, CI_ATOL, "B3 CI lower")
+        _assert_close(result.conf_int[1], r["ci_upper"], CI_RTOL, CI_ATOL, "B3 CI upper")
 
     def test_b4_subpop_female(self, nhanes_results):
         """B4: Subpopulation — female respondents only."""
@@ -406,26 +411,32 @@ class TestNhanesAcaCoverage:
         data = self._load_nhanes_data(nhanes_results)
 
         sd_full = SurveyDesign(
-            weights="WTMEC2YR", strata="SDMVSTRA", psu="SDMVPSU", nest=True,
+            weights="WTMEC2YR",
+            strata="SDMVSTRA",
+            psu="SDMVPSU",
+            nest=True,
         )
         # Subpopulation: female (RIAGENDR == 2)
         sd_sub, data_sub = sd_full.subpopulation(
-            data, lambda df: df["RIAGENDR"] == 2,
+            data,
+            lambda df: df["RIAGENDR"] == 2,
         )
         est = DifferenceInDifferences()
         result = est.fit(
-            data_sub, "outcome", "treated", "post", survey_design=sd_sub,
+            data_sub,
+            "outcome",
+            "treated",
+            "post",
+            survey_design=sd_sub,
         )
 
         _assert_close(result.att, r["att"], ATT_RTOL, ATT_ATOL, "B4 subpop ATT")
         _assert_close(result.se, r["se"], SE_RTOL, SE_ATOL, "B4 subpop SE")
-        assert result.survey_metadata.df_survey == r["df"], (
-            f"B4 df: Python={result.survey_metadata.df_survey}, R={r['df']}"
-        )
-        _assert_close(result.conf_int[0], r["ci_lower"], CI_RTOL, CI_ATOL,
-                       "B4 CI lower")
-        _assert_close(result.conf_int[1], r["ci_upper"], CI_RTOL, CI_ATOL,
-                       "B4 CI upper")
+        assert (
+            result.survey_metadata.df_survey == r["df"]
+        ), f"B4 df: Python={result.survey_metadata.df_survey}, R={r['df']}"
+        _assert_close(result.conf_int[0], r["ci_lower"], CI_RTOL, CI_ATOL, "B4 CI lower")
+        _assert_close(result.conf_int[1], r["ci_upper"], CI_RTOL, CI_ATOL, "B4 CI upper")
 
     # B5 (CallawaySantAnna RC-DiD) was removed: R's did::att_gt cannot produce
     # golden values for a 2-period repeated cross-section, and the time-scale
@@ -455,8 +466,7 @@ class TestRecsReplicateWeights:
             if col in df.columns:
                 df[col] = pd.to_numeric(df[col], errors="coerce")
         # Identify replicate weight columns
-        rep_cols = sorted([c for c in df.columns if c.startswith("NWEIGHT")
-                           and c != "NWEIGHT"])
+        rep_cols = sorted([c for c in df.columns if c.startswith("NWEIGHT") and c != "NWEIGHT"])
         for col in rep_cols:
             df[col] = pd.to_numeric(df[col], errors="coerce")
         return df, rep_cols
@@ -465,9 +475,7 @@ class TestRecsReplicateWeights:
         """C1: Simple regression TOTALBTU ~ KOWNRENT with JK1 replicate SEs."""
         r = recs_results["c1_simple"]
         data, rep_cols = self._load_recs_data(recs_results)
-        data = data.dropna(subset=["TOTALBTU", "KOWNRENT", "NWEIGHT"]).reset_index(
-            drop=True
-        )
+        data = data.dropna(subset=["TOTALBTU", "KOWNRENT", "NWEIGHT"]).reset_index(drop=True)
 
         # Build design matrix: intercept + KOWNRENT
         from diff_diff.linalg import LinearRegression as LR
@@ -491,18 +499,15 @@ class TestRecsReplicateWeights:
 
         _assert_close(py_coef, r["coef"], ATT_RTOL, ATT_ATOL, "C1 coef")
         _assert_close(py_se, r["se"], REP_SE_RTOL, REP_SE_ATOL, "C1 SE")
-        assert reg.survey_df_ == r["df"], (
-            f"C1 df: Python={reg.survey_df_}, R={r['df']}"
-        )
+        assert reg.survey_df_ == r["df"], f"C1 df: Python={reg.survey_df_}, R={r['df']}"
         # Compute CI from coef, SE, and survey df
         from scipy.stats import t as t_dist
+
         t_crit = t_dist.ppf(0.975, reg.survey_df_)
         py_ci_lower = py_coef - t_crit * py_se
         py_ci_upper = py_coef + t_crit * py_se
-        _assert_close(py_ci_lower, r["ci_lower"], REP_CI_RTOL, REP_CI_ATOL,
-                       "C1 CI lower")
-        _assert_close(py_ci_upper, r["ci_upper"], REP_CI_RTOL, REP_CI_ATOL,
-                       "C1 CI upper")
+        _assert_close(py_ci_lower, r["ci_lower"], REP_CI_RTOL, REP_CI_ATOL, "C1 CI lower")
+        _assert_close(py_ci_upper, r["ci_upper"], REP_CI_RTOL, REP_CI_ATOL, "C1 CI upper")
 
     def test_c2_full_regression(self, recs_results):
         """C2: Full regression TOTALBTU ~ KOWNRENT + TYPEHUQ + REGIONC."""
@@ -540,21 +545,16 @@ class TestRecsReplicateWeights:
         py_coef = reg.coefficients_[1]
         py_se = np.sqrt(reg.vcov_[1, 1])
 
-        _assert_close(py_coef, r["coef_kownrent"], ATT_RTOL, ATT_ATOL,
-                       "C2 KOWNRENT coef")
-        _assert_close(py_se, r["se_kownrent"], REP_SE_RTOL, REP_SE_ATOL,
-                       "C2 KOWNRENT SE")
-        assert reg.survey_df_ == r["df"], (
-            f"C2 df: Python={reg.survey_df_}, R={r['df']}"
-        )
+        _assert_close(py_coef, r["coef_kownrent"], ATT_RTOL, ATT_ATOL, "C2 KOWNRENT coef")
+        _assert_close(py_se, r["se_kownrent"], REP_SE_RTOL, REP_SE_ATOL, "C2 KOWNRENT SE")
+        assert reg.survey_df_ == r["df"], f"C2 df: Python={reg.survey_df_}, R={r['df']}"
         from scipy.stats import t as t_dist
+
         t_crit = t_dist.ppf(0.975, reg.survey_df_)
         py_ci_lower = py_coef - t_crit * py_se
         py_ci_upper = py_coef + t_crit * py_se
-        _assert_close(py_ci_lower, r["ci_lower_kownrent"], REP_CI_RTOL, REP_CI_ATOL,
-                       "C2 CI lower")
-        _assert_close(py_ci_upper, r["ci_upper_kownrent"], REP_CI_RTOL, REP_CI_ATOL,
-                       "C2 CI upper")
+        _assert_close(py_ci_lower, r["ci_lower_kownrent"], REP_CI_RTOL, REP_CI_ATOL, "C2 CI lower")
+        _assert_close(py_ci_upper, r["ci_upper_kownrent"], REP_CI_RTOL, REP_CI_ATOL, "C2 CI upper")
 
     def test_c3_deff_diagnostics(self, recs_results):
         """C3: DEFF diagnostics from real JK1 replicate SEs.
@@ -565,9 +565,7 @@ class TestRecsReplicateWeights:
         finite, positive, and > 1 (expected for a complex survey design).
         """
         data, rep_cols = self._load_recs_data(recs_results)
-        data = data.dropna(subset=["TOTALBTU", "KOWNRENT", "NWEIGHT"]).reset_index(
-            drop=True
-        )
+        data = data.dropna(subset=["TOTALBTU", "KOWNRENT", "NWEIGHT"]).reset_index(drop=True)
 
         from diff_diff.linalg import LinearRegression as LR
 
@@ -601,6 +599,6 @@ class TestRecsReplicateWeights:
         assert all(deff.effective_n > 0), "Effective n should be positive"
 
         # DEFF > 1 expected for a complex survey with unequal weights
-        assert deff.deff[1] > 1.0, (
-            f"DEFF(KOWNRENT) = {deff.deff[1]:.4f}, expected > 1.0 for survey data"
-        )
+        assert (
+            deff.deff[1] > 1.0
+        ), f"DEFF(KOWNRENT) = {deff.deff[1]:.4f}, expected > 1.0 for survey data"

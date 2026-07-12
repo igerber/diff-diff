@@ -556,7 +556,6 @@ class TestTwoStageDiDVariance:
         TODO row tracked)."""
         import unittest.mock
 
-
         data = generate_test_data()
 
         def _no_lstsq(*a, **k):
@@ -1815,7 +1814,7 @@ class TestTwoStageStage2BreadWarning:
         fin_h = [h for h, e in es.items() if np.isfinite(e["se"]) and e["se"] > 0]
         assert nan_h, (
             "a dropped Stage-2 coordinate should yield a NaN-se bootstrap horizon; "
-            f"got {{h: e['se'] for h, e in es.items()}}"
+            "got {h: e['se'] for h, e in es.items()}"
         )
         assert fin_h, "identified bootstrap horizons should keep finite SE"
 

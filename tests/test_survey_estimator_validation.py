@@ -117,25 +117,18 @@ class TestSurveyEstimatorValidation:
         # Build Omega_0 (untreated observations)
         # Matches imputation.py line 341: omega_0_mask = ~df["_treated"]
         omega_0 = data[
-            (np.isinf(data["first_treat"]))
-            | (data["period"] < data["first_treat"])
+            (np.isinf(data["first_treat"])) | (data["period"] < data["first_treat"])
         ].copy()
         omega_0 = omega_0.reset_index(drop=True)
 
-        sd = SurveyDesign(
-            weights="weight", strata="stratum", psu="psu", fpc="fpc"
-        )
+        sd = SurveyDesign(weights="weight", strata="stratum", psu="psu", fpc="fpc")
         resolved = sd.resolve(omega_0)
         survey_weights = omega_0["weight"].values.astype(float)
 
         # Build design matrix: unit + time dummies + covariates
         # Algebraically equivalent to within-transformation for covariate coefs
-        unit_dummies = pd.get_dummies(
-            omega_0["unit"].astype(str), prefix="u", drop_first=True
-        )
-        time_dummies = pd.get_dummies(
-            omega_0["period"].astype(str), prefix="t", drop_first=True
-        )
+        unit_dummies = pd.get_dummies(omega_0["unit"].astype(str), prefix="u", drop_first=True)
+        time_dummies = pd.get_dummies(omega_0["period"].astype(str), prefix="t", drop_first=True)
         X = np.column_stack(
             [
                 unit_dummies.values.astype(float),
@@ -187,9 +180,7 @@ class TestSurveyEstimatorValidation:
     def test_s1_imputation_end_to_end(self, golden):
         """Smoke test: ImputationDiD.fit() with survey weights produces finite ATT."""
         data = self._load_staggered_data(golden)
-        sd = SurveyDesign(
-            weights="weight", strata="stratum", psu="psu", fpc="fpc"
-        )
+        sd = SurveyDesign(weights="weight", strata="stratum", psu="psu", fpc="fpc")
         est = ImputationDiD()
         result = est.fit(
             data,
@@ -213,9 +204,7 @@ class TestSurveyEstimatorValidation:
         r = golden["s2_stacked_did"]
         data = self._load_staggered_data(golden)
 
-        sd = SurveyDesign(
-            weights="weight", strata="stratum", psu="psu", fpc="fpc"
-        )
+        sd = SurveyDesign(weights="weight", strata="stratum", psu="psu", fpc="fpc")
         est = StackedDiD(
             kappa_pre=1,
             kappa_post=1,
@@ -232,12 +221,8 @@ class TestSurveyEstimatorValidation:
             survey_design=sd,
         )
 
-        _assert_close(
-            result.overall_att, r["att"], COEF_RTOL, COEF_ATOL, "S2 ATT"
-        )
-        _assert_close(
-            result.overall_se, r["se"], SE_RTOL, SE_ATOL, "S2 SE"
-        )
+        _assert_close(result.overall_att, r["att"], COEF_RTOL, COEF_ATOL, "S2 ATT")
+        _assert_close(result.overall_se, r["se"], SE_RTOL, SE_ATOL, "S2 SE")
 
         # Compare individual event-study coefficients and SEs
         if "event_study" in r:
@@ -269,9 +254,7 @@ class TestSurveyEstimatorValidation:
         r = golden["s3_sun_abraham"]
         data = self._load_staggered_data(golden)
 
-        sd = SurveyDesign(
-            weights="weight", strata="stratum", psu="psu", fpc="fpc"
-        )
+        sd = SurveyDesign(weights="weight", strata="stratum", psu="psu", fpc="fpc")
         est = SunAbraham()
         result = est.fit(
             data,
@@ -283,12 +266,8 @@ class TestSurveyEstimatorValidation:
         )
 
         # Compare overall IW-aggregated ATT
-        _assert_close(
-            result.overall_att, r["att"], COEF_RTOL, COEF_ATOL, "S3 ATT"
-        )
-        _assert_close(
-            result.overall_se, r["se"], SE_RTOL, SE_ATOL, "S3 SE"
-        )
+        _assert_close(result.overall_att, r["att"], COEF_RTOL, COEF_ATOL, "S3 ATT")
+        _assert_close(result.overall_se, r["se"], SE_RTOL, SE_ATOL, "S3 SE")
 
         # Compare individual cohort x rel-time effects and SEs (post-treatment only)
         if "cohort_effects" in r:
@@ -320,9 +299,7 @@ class TestSurveyEstimatorValidation:
         r = golden["s4_triple_diff"]
         data = self._load_ddd_data(golden)
 
-        sd = SurveyDesign(
-            weights="weight", strata="stratum", psu="psu", fpc="fpc"
-        )
+        sd = SurveyDesign(weights="weight", strata="stratum", psu="psu", fpc="fpc")
         est = TripleDifference(estimation_method="reg")
         result = est.fit(
             data,
@@ -333,16 +310,8 @@ class TestSurveyEstimatorValidation:
             survey_design=sd,
         )
 
-        _assert_close(
-            result.att, r["att"], COEF_RTOL, COEF_ATOL, "S4 DDD coef"
-        )
+        _assert_close(result.att, r["att"], COEF_RTOL, COEF_ATOL, "S4 DDD coef")
         _assert_close(result.se, r["se"], SE_RTOL, SE_ATOL, "S4 DDD SE")
-        _assert_close(
-            result.t_stat, r["t_stat"], SE_RTOL, SE_ATOL, "S4 t_stat"
-        )
-        _assert_close(
-            result.conf_int[0], r["ci_lower"], SE_RTOL, SE_ATOL, "S4 CI lower"
-        )
-        _assert_close(
-            result.conf_int[1], r["ci_upper"], SE_RTOL, SE_ATOL, "S4 CI upper"
-        )
+        _assert_close(result.t_stat, r["t_stat"], SE_RTOL, SE_ATOL, "S4 t_stat")
+        _assert_close(result.conf_int[0], r["ci_lower"], SE_RTOL, SE_ATOL, "S4 CI lower")
+        _assert_close(result.conf_int[1], r["ci_upper"], SE_RTOL, SE_ATOL, "S4 CI upper")

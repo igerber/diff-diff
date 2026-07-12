@@ -931,20 +931,24 @@ class TestEfficientDiDCovSurvey:
 
         result_survey = EfficientDiD(n_bootstrap=0).fit(
             cov_survey_data,
-            "outcome", "unit", "time", "first_treat",
+            "outcome",
+            "unit",
+            "time",
+            "first_treat",
             covariates=["x1"],
             survey_design=sd,
         )
         result_nosurv = EfficientDiD(n_bootstrap=0).fit(
             cov_survey_data,
-            "outcome", "unit", "time", "first_treat",
+            "outcome",
+            "unit",
+            "time",
+            "first_treat",
             covariates=["x1"],
         )
         assert result_survey.estimation_path == "dr"
         assert result_nosurv.estimation_path == "dr"
-        np.testing.assert_allclose(
-            result_survey.overall_att, result_nosurv.overall_att, atol=1e-8
-        )
+        np.testing.assert_allclose(result_survey.overall_att, result_nosurv.overall_att, atol=1e-8)
 
     def test_scale_invariance(self, cov_survey_data):
         """Multiplying all weights by a constant doesn't change ATT."""
@@ -953,7 +957,10 @@ class TestEfficientDiDCovSurvey:
         sd1 = SurveyDesign(weights="weight")
         result1 = EfficientDiD(n_bootstrap=0).fit(
             cov_survey_data,
-            "outcome", "unit", "time", "first_treat",
+            "outcome",
+            "unit",
+            "time",
+            "first_treat",
             covariates=["x1"],
             survey_design=sd1,
         )
@@ -962,13 +969,14 @@ class TestEfficientDiDCovSurvey:
         sd2 = SurveyDesign(weights="weight_scaled")
         result2 = EfficientDiD(n_bootstrap=0).fit(
             cov_survey_data,
-            "outcome", "unit", "time", "first_treat",
+            "outcome",
+            "unit",
+            "time",
+            "first_treat",
             covariates=["x1"],
             survey_design=sd2,
         )
-        np.testing.assert_allclose(
-            result1.overall_att, result2.overall_att, atol=1e-8
-        )
+        np.testing.assert_allclose(result1.overall_att, result2.overall_att, atol=1e-8)
 
     def test_nontrivial_weight_effect(self, cov_survey_data):
         """Heterogeneous weights produce different ATT from unweighted."""
@@ -977,13 +985,19 @@ class TestEfficientDiDCovSurvey:
         sd = SurveyDesign(weights="weight")
         result_survey = EfficientDiD(n_bootstrap=0).fit(
             cov_survey_data,
-            "outcome", "unit", "time", "first_treat",
+            "outcome",
+            "unit",
+            "time",
+            "first_treat",
             covariates=["x1"],
             survey_design=sd,
         )
         result_nosurv = EfficientDiD(n_bootstrap=0).fit(
             cov_survey_data,
-            "outcome", "unit", "time", "first_treat",
+            "outcome",
+            "unit",
+            "time",
+            "first_treat",
             covariates=["x1"],
         )
         # Non-uniform weights (1.0 + 0.3*stratum) should produce different ATT
@@ -994,12 +1008,18 @@ class TestEfficientDiDCovSurvey:
         from diff_diff import EfficientDiD
 
         sd = SurveyDesign(
-            weights="weight", strata="stratum", psu="psu", fpc="fpc",
+            weights="weight",
+            strata="stratum",
+            psu="psu",
+            fpc="fpc",
             nest=True,
         )
         result = EfficientDiD(n_bootstrap=0).fit(
             cov_survey_data,
-            "outcome", "unit", "time", "first_treat",
+            "outcome",
+            "unit",
+            "time",
+            "first_treat",
             covariates=["x1"],
             survey_design=sd,
         )
@@ -1015,7 +1035,10 @@ class TestEfficientDiDCovSurvey:
         sd = SurveyDesign(weights="weight")
         result = EfficientDiD(n_bootstrap=0).fit(
             cov_survey_data,
-            "outcome", "unit", "time", "first_treat",
+            "outcome",
+            "unit",
+            "time",
+            "first_treat",
             covariates=["x1"],
             aggregate="all",
             survey_design=sd,
@@ -1036,7 +1059,10 @@ class TestEfficientDiDCovSurvey:
         sd = SurveyDesign(weights="weight")
         result = EfficientDiD(n_bootstrap=30, seed=42).fit(
             cov_survey_data,
-            "outcome", "unit", "time", "first_treat",
+            "outcome",
+            "unit",
+            "time",
+            "first_treat",
             covariates=["x1"],
             survey_design=sd,
         )
@@ -1051,13 +1077,19 @@ class TestEfficientDiDCovSurvey:
         sd = SurveyDesign(weights="weight")
         result_survey = EfficientDiD(n_bootstrap=0).fit(
             cov_survey_data,
-            "outcome", "unit", "time", "first_treat",
+            "outcome",
+            "unit",
+            "time",
+            "first_treat",
             covariates=["x1"],
             survey_design=sd,
         )
         result_nosurv = EfficientDiD(n_bootstrap=0).fit(
             cov_survey_data,
-            "outcome", "unit", "time", "first_treat",
+            "outcome",
+            "unit",
+            "time",
+            "first_treat",
             covariates=["x1"],
         )
         # Non-uniform weights (1.0 + 0.3*stratum) should produce different SEs
@@ -1072,20 +1104,24 @@ class TestEfficientDiDCovSurvey:
         sd = SurveyDesign(weights="weight")
         result_analytical = EfficientDiD(n_bootstrap=0).fit(
             cov_survey_data,
-            "outcome", "unit", "time", "first_treat",
+            "outcome",
+            "unit",
+            "time",
+            "first_treat",
             covariates=["x1"],
             survey_design=sd,
         )
         result_boot = EfficientDiD(n_bootstrap=199, seed=42).fit(
             cov_survey_data,
-            "outcome", "unit", "time", "first_treat",
+            "outcome",
+            "unit",
+            "time",
+            "first_treat",
             covariates=["x1"],
             survey_design=sd,
         )
         ratio = result_boot.overall_se / result_analytical.overall_se
-        assert 0.3 < ratio < 3.0, (
-            f"Bootstrap/analytical SE ratio {ratio:.2f} outside [0.3, 3.0]"
-        )
+        assert 0.3 < ratio < 3.0, f"Bootstrap/analytical SE ratio {ratio:.2f} outside [0.3, 3.0]"
 
     def test_zero_weight_cohort_skipped(self, cov_survey_data):
         """Zero-weight treated cohort should be skipped with a warning."""
@@ -1098,7 +1134,10 @@ class TestEfficientDiDCovSurvey:
         with pytest.warns(UserWarning, match="zero survey weight"):
             result = EfficientDiD(n_bootstrap=0).fit(
                 cov_survey_data,
-                "outcome", "unit", "time", "first_treat",
+                "outcome",
+                "unit",
+                "time",
+                "first_treat",
                 covariates=["x1"],
                 survey_design=sd,
             )
@@ -1115,7 +1154,10 @@ class TestEfficientDiDCovSurvey:
         with pytest.raises(ValueError, match="zero survey weight"):
             EfficientDiD(n_bootstrap=0).fit(
                 cov_survey_data,
-                "outcome", "unit", "time", "first_treat",
+                "outcome",
+                "unit",
+                "time",
+                "first_treat",
                 covariates=["x1"],
                 survey_design=sd,
             )
@@ -1130,7 +1172,10 @@ class TestEfficientDiDCovSurvey:
         with pytest.raises(ValueError, match="zero survey weight"):
             EfficientDiD(n_bootstrap=0).fit(
                 cov_survey_data,
-                "outcome", "unit", "time", "first_treat",
+                "outcome",
+                "unit",
+                "time",
+                "first_treat",
                 survey_design=sd,
             )
 
@@ -1146,8 +1191,7 @@ class TestEfficientDiDCovSurvey:
         for unit in range(n_units):
             wt = 1.0 + 0.3 * (unit % 5)
             unit_repwts[unit] = {
-                f"repwt_{r}": wt * (0.5 + np.random.random())
-                for r in range(n_rep)
+                f"repwt_{r}": wt * (0.5 + np.random.random()) for r in range(n_rep)
             }
         rows = []
         for unit in range(n_units):
@@ -1159,20 +1203,32 @@ class TestEfficientDiDCovSurvey:
                 if ft > 0 and t >= ft:
                     y += 2.0
                 y += np.random.normal(0, 0.5)
-                row = {"unit": unit, "time": t, "first_treat": ft,
-                       "outcome": y, "weight": wt, "x1": x1}
+                row = {
+                    "unit": unit,
+                    "time": t,
+                    "first_treat": ft,
+                    "outcome": y,
+                    "weight": wt,
+                    "x1": x1,
+                }
                 row.update(unit_repwts[unit])
                 rows.append(row)
         import pandas as pd
+
         data = pd.DataFrame(rows)
         rep_cols = [f"repwt_{r}" for r in range(n_rep)]
 
         sd = SurveyDesign(
-            weights="weight", replicate_weights=rep_cols,
+            weights="weight",
+            replicate_weights=rep_cols,
             replicate_method="JK1",
         )
         result = EfficientDiD(n_bootstrap=0).fit(
-            data, "outcome", "unit", "time", "first_treat",
+            data,
+            "outcome",
+            "unit",
+            "time",
+            "first_treat",
             covariates=["x1"],
             aggregate="event_study",
             survey_design=sd,
@@ -1540,11 +1596,18 @@ class TestSurveyEdgeCases:
             data.loc[mask, "fpc"] = float(n_psu_h)
 
         sd = SurveyDesign(
-            weights="weight", strata="stratum", psu="psu", fpc="fpc",
+            weights="weight",
+            strata="stratum",
+            psu="psu",
+            fpc="fpc",
             nest=True,
         )
         result = StackedDiD().fit(
-            data, "outcome", "unit", "time", "first_treat",
+            data,
+            "outcome",
+            "unit",
+            "time",
+            "first_treat",
             survey_design=sd,
         )
         assert result.overall_se == pytest.approx(0.0, abs=1e-10)
@@ -1558,12 +1621,18 @@ class TestSurveyEdgeCases:
         data["single_psu"] = data["stratum"]
 
         sd = SurveyDesign(
-            weights="weight", strata="stratum", psu="single_psu",
+            weights="weight",
+            strata="stratum",
+            psu="single_psu",
             lonely_psu="remove",
         )
         with pytest.warns(UserWarning, match="only 1 PSU"):
             result = SunAbraham().fit(
-                data, "outcome", "unit", "time", "first_treat",
+                data,
+                "outcome",
+                "unit",
+                "time",
+                "first_treat",
                 survey_design=sd,
             )
         # All strata removed -> NaN SE
@@ -1579,7 +1648,12 @@ class TestSurveyEdgeCases:
 
         sd = SurveyDesign(weights="weight", strata="stratum")
         result = ContinuousDiD(n_bootstrap=30, seed=42).fit(
-            data, "outcome", "unit", "time", "first_treat", "dose",
+            data,
+            "outcome",
+            "unit",
+            "time",
+            "first_treat",
+            "dose",
             survey_design=sd,
         )
         assert np.isfinite(result.overall_att)
@@ -1592,7 +1666,11 @@ class TestSurveyEdgeCases:
 
         sd = SurveyDesign(weights="weight", strata="stratum")
         result = EfficientDiD(n_bootstrap=30, seed=42).fit(
-            staggered_survey_data, "outcome", "unit", "time", "first_treat",
+            staggered_survey_data,
+            "outcome",
+            "unit",
+            "time",
+            "first_treat",
             survey_design=sd,
         )
         assert np.isfinite(result.overall_att)

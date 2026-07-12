@@ -387,9 +387,7 @@ def _golden_to_df_with_covariates(data_dict: dict) -> pd.DataFrame:
     return pd.DataFrame(cols)
 
 
-def _golden_to_df_with_extra(
-    data_dict: dict, extra_cols: List[str]
-) -> pd.DataFrame:
+def _golden_to_df_with_extra(data_dict: dict, extra_cols: List[str]) -> pd.DataFrame:
     """Reconstruct a panel DataFrame including arbitrary extra columns.
 
     Used for scenarios that ship non-covariate side columns (e.g.,
@@ -423,12 +421,18 @@ class TestDCDHDynRParityPhase3:
     # Trends-only: exact (0.0000%) at both horizons after cumulation fix.
     # Combined: observed gap 0.30%-0.59% (from OLS residualization only).
     # SE: 3-5% from cell-count weighting; 12-18% for cumulated SEs.
-    POINT_RTOL = 0.01    # 1% for controls (observed: 0.26%)
-    SE_RTOL = 0.20       # 20% for SE (cell-count weighting + cumulation)
+    POINT_RTOL = 0.01  # 1% for controls (observed: 0.26%)
+    SE_RTOL = 0.20  # 20% for SE (cell-count weighting + cumulation)
 
     def _check_phase3_scenario(
-        self, golden_values, scenario_name, L_max, controls=None,
-        trends_linear=None, point_rtol=None, se_rtol=None,
+        self,
+        golden_values,
+        scenario_name,
+        L_max,
+        controls=None,
+        trends_linear=None,
+        point_rtol=None,
+        se_rtol=None,
     ):
         scenario = golden_values.get(scenario_name)
         if scenario is None:
@@ -437,9 +441,14 @@ class TestDCDHDynRParityPhase3:
         df = _golden_to_df_with_covariates(scenario["data"])
         est = ChaisemartinDHaultfoeuille()
         results = est.fit(
-            df, outcome="outcome", group="group", time="period",
-            treatment="treatment", L_max=L_max,
-            controls=controls, trends_linear=trends_linear,
+            df,
+            outcome="outcome",
+            group="group",
+            time="period",
+            treatment="treatment",
+            L_max=L_max,
+            controls=controls,
+            trends_linear=trends_linear,
         )
         r_results = scenario["results"]
         rtol = point_rtol or self.POINT_RTOL
@@ -458,9 +467,7 @@ class TestDCDHDynRParityPhase3:
         # Check per-horizon effects
         for h_str, r_eff in r_results.get("effects", {}).items():
             h = int(h_str)
-            assert h in py_effects, (
-                f"Horizon {h} missing from Python results"
-            )
+            assert h in py_effects, f"Horizon {h} missing from Python results"
             py_eff = py_effects[h]["effect"]
             assert py_eff == pytest.approx(
                 r_eff["overall_att"], rel=rtol
@@ -482,7 +489,9 @@ class TestDCDHDynRParityPhase3:
         vs obs-count weighting deviation in REGISTRY.md.
         """
         self._check_phase3_scenario(
-            golden_values, "joiners_only_controls", L_max=2,
+            golden_values,
+            "joiners_only_controls",
+            L_max=2,
             controls=["X1"],
             point_rtol=self.POINT_RTOL,
         )
@@ -493,7 +502,9 @@ class TestDCDHDynRParityPhase3:
         Exact match (0.0000%) at both horizons after per-group cumulation fix.
         """
         self._check_phase3_scenario(
-            golden_values, "joiners_only_trends_lin", L_max=2,
+            golden_values,
+            "joiners_only_trends_lin",
+            L_max=2,
             trends_linear=True,
             point_rtol=1e-4,  # exact match
         )
@@ -505,8 +516,11 @@ class TestDCDHDynRParityPhase3:
         the trends cumulation is now exact after per-group cumulation fix).
         """
         self._check_phase3_scenario(
-            golden_values, "joiners_only_controls_trends_lin", L_max=2,
-            controls=["X1"], trends_linear=True,
+            golden_values,
+            "joiners_only_controls_trends_lin",
+            L_max=2,
+            controls=["X1"],
+            trends_linear=True,
             point_rtol=self.POINT_RTOL,
         )
 
@@ -623,8 +637,7 @@ class TestDCDHDynRParityByPath:
                 )
 
                 assert py_h["effect"] == pytest.approx(r_h["effect"], rel=point_rtol), (
-                    f"path={path_key} h={h}: "
-                    f"py={py_h['effect']:.4f} vs r={r_h['effect']:.4f}"
+                    f"path={path_key} h={h}: " f"py={py_h['effect']:.4f} vs r={r_h['effect']:.4f}"
                 )
 
                 # Assert matching finite/missing state BEFORE the numeric
@@ -646,8 +659,7 @@ class TestDCDHDynRParityByPath:
                 )
                 if py_finite_positive and r_finite_positive:
                     assert py_se == pytest.approx(r_se, rel=se_rtol), (
-                        f"path={path_key} h={h} SE: "
-                        f"py={py_se:.4f} vs r={r_se:.4f}"
+                        f"path={path_key} h={h} SE: " f"py={py_se:.4f} vs r={r_se:.4f}"
                     )
 
     def test_parity_mixed_single_switch_by_path(self, golden_values):
@@ -720,14 +732,10 @@ class TestDCDHDynRParityByPathPlacebo:
 
         scenario = golden_values.get("multi_path_reversible_by_path_placebo")
         if scenario is None:
-            pytest.skip(
-                "scenario 'multi_path_reversible_by_path_placebo' not in golden values"
-            )
+            pytest.skip("scenario 'multi_path_reversible_by_path_placebo' not in golden values")
 
         df = _golden_to_df(scenario["data"])
-        est = ChaisemartinDHaultfoeuille(
-            drop_larger_lower=False, by_path=3, placebo=True
-        )
+        est = ChaisemartinDHaultfoeuille(drop_larger_lower=False, by_path=3, placebo=True)
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", UserWarning)
             results = est.fit(
@@ -776,11 +784,8 @@ class TestDCDHDynRParityByPathPlacebo:
                     f"before comparing SE."
                 )
 
-                assert py_h["effect"] == pytest.approx(
-                    r_h["effect"], rel=self.POINT_RTOL
-                ), (
-                    f"path={path_key} lag={h}: "
-                    f"py={py_h['effect']:.4f} vs r={r_h['effect']:.4f}"
+                assert py_h["effect"] == pytest.approx(r_h["effect"], rel=self.POINT_RTOL), (
+                    f"path={path_key} lag={h}: " f"py={py_h['effect']:.4f} vs r={r_h['effect']:.4f}"
                 )
 
                 py_se = py_h["se"]
@@ -793,8 +798,7 @@ class TestDCDHDynRParityByPathPlacebo:
                 )
                 if py_finite_positive and r_finite_positive:
                     assert py_se == pytest.approx(r_se, rel=self.SE_RTOL), (
-                        f"path={path_key} lag={h} placebo SE: "
-                        f"py={py_se:.4f} vs r={r_se:.4f}"
+                        f"path={path_key} lag={h} placebo SE: " f"py={py_se:.4f} vs r={r_se:.4f}"
                     )
 
 
@@ -849,9 +853,7 @@ class TestDCDHDynRParityByPathControls:
 
         scenario = golden_values.get("multi_path_reversible_by_path_controls")
         if scenario is None:
-            pytest.skip(
-                "scenario 'multi_path_reversible_by_path_controls' not in golden values"
-            )
+            pytest.skip("scenario 'multi_path_reversible_by_path_controls' not in golden values")
 
         df = _golden_to_df_with_covariates(scenario["data"])
         est = ChaisemartinDHaultfoeuille(drop_larger_lower=False, by_path=3)
@@ -899,11 +901,8 @@ class TestDCDHDynRParityByPathControls:
                     f"py={py_h['n_obs']} vs r={int(r_h['n_switchers'])}"
                 )
 
-                assert py_h["effect"] == pytest.approx(
-                    r_h["effect"], rel=self.POINT_RTOL
-                ), (
-                    f"path={path_key} h={h}: "
-                    f"py={py_h['effect']:.4f} vs r={r_h['effect']:.4f}"
+                assert py_h["effect"] == pytest.approx(r_h["effect"], rel=self.POINT_RTOL), (
+                    f"path={path_key} h={h}: " f"py={py_h['effect']:.4f} vs r={r_h['effect']:.4f}"
                 )
 
                 py_se = py_h["se"]
@@ -911,13 +910,11 @@ class TestDCDHDynRParityByPathControls:
                 py_finite_positive = math.isfinite(py_se) and py_se > 0.0
                 r_finite_positive = math.isfinite(r_se) and r_se > 0.0
                 assert py_finite_positive == r_finite_positive, (
-                    f"path={path_key} h={h} SE state mismatch "
-                    f"(py_se={py_se}, r_se={r_se})"
+                    f"path={path_key} h={h} SE state mismatch " f"(py_se={py_se}, r_se={r_se})"
                 )
                 if py_finite_positive and r_finite_positive:
                     assert py_se == pytest.approx(r_se, rel=self.SE_RTOL), (
-                        f"path={path_key} h={h} SE: "
-                        f"py={py_se:.4f} vs r={r_se:.4f}"
+                        f"path={path_key} h={h} SE: " f"py={py_se:.4f} vs r={r_se:.4f}"
                     )
 
 
@@ -992,19 +989,14 @@ class TestDCDHDynRParityByPathTrendsLinear:
         import math
         import warnings
 
-        scenario = golden_values.get(
-            "single_baseline_multi_path_by_path_trends_lin"
-        )
+        scenario = golden_values.get("single_baseline_multi_path_by_path_trends_lin")
         if scenario is None:
             pytest.skip(
-                "scenario 'single_baseline_multi_path_by_path_trends_lin' "
-                "not in golden values"
+                "scenario 'single_baseline_multi_path_by_path_trends_lin' " "not in golden values"
             )
 
         df = _golden_to_df(scenario["data"])
-        est = ChaisemartinDHaultfoeuille(
-            drop_larger_lower=False, by_path=3, placebo=True
-        )
+        est = ChaisemartinDHaultfoeuille(drop_larger_lower=False, by_path=3, placebo=True)
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", UserWarning)
             results = est.fit(
@@ -1019,8 +1011,7 @@ class TestDCDHDynRParityByPathTrendsLinear:
 
         r_by_path = scenario["results"]["by_path"]
         assert results.path_cumulated_event_study is not None, (
-            "path_cumulated_event_study should be populated under "
-            "by_path + trends_linear=True"
+            "path_cumulated_event_study should be populated under " "by_path + trends_linear=True"
         )
         py_cum = results.path_cumulated_event_study
 
@@ -1043,8 +1034,7 @@ class TestDCDHDynRParityByPathTrendsLinear:
                 if h <= 0:
                     continue
                 assert h in py_path_cum, (
-                    f"path={path_key}: horizon {h} missing from "
-                    f"path_cumulated_event_study"
+                    f"path={path_key}: horizon {h} missing from " f"path_cumulated_event_study"
                 )
                 py_h = py_path_cum[h]
 
@@ -1065,15 +1055,11 @@ class TestDCDHDynRParityByPathTrendsLinear:
                 py_finite_positive = math.isfinite(py_se) and py_se > 0.0
                 r_finite_positive = math.isfinite(r_se) and r_se > 0.0
                 assert py_finite_positive == r_finite_positive, (
-                    f"path={path_key} h={h} SE state mismatch "
-                    f"(py_se={py_se}, r_se={r_se})"
+                    f"path={path_key} h={h} SE state mismatch " f"(py_se={py_se}, r_se={r_se})"
                 )
                 if py_finite_positive and r_finite_positive:
-                    assert py_se == pytest.approx(
-                        r_se, rel=self.CUM_SE_RTOL
-                    ), (
-                        f"path={path_key} h={h} cumulated SE: "
-                        f"py={py_se:.4f} vs r={r_se:.4f}"
+                    assert py_se == pytest.approx(r_se, rel=self.CUM_SE_RTOL), (
+                        f"path={path_key} h={h} cumulated SE: " f"py={py_se:.4f} vs r={r_se:.4f}"
                     )
 
 
@@ -1113,26 +1099,19 @@ class TestDCDHDynRParityByPathTrendsNonparam:
     def _path_key_from_r_label(self, r_label: str):
         return tuple(int(x) for x in r_label.split(","))
 
-    def test_parity_multi_path_reversible_by_path_trends_nonparam(
-        self, golden_values
-    ):
+    def test_parity_multi_path_reversible_by_path_trends_nonparam(self, golden_values):
         """3-path case with state-set trends: by_path=3, trends_nonparam='state'."""
         import math
         import warnings
 
-        scenario = golden_values.get(
-            "multi_path_reversible_by_path_trends_nonparam"
-        )
+        scenario = golden_values.get("multi_path_reversible_by_path_trends_nonparam")
         if scenario is None:
             pytest.skip(
-                "scenario 'multi_path_reversible_by_path_trends_nonparam' "
-                "not in golden values"
+                "scenario 'multi_path_reversible_by_path_trends_nonparam' " "not in golden values"
             )
 
         df = _golden_to_df_with_extra(scenario["data"], extra_cols=["state"])
-        est = ChaisemartinDHaultfoeuille(
-            drop_larger_lower=False, by_path=3, placebo=True
-        )
+        est = ChaisemartinDHaultfoeuille(drop_larger_lower=False, by_path=3, placebo=True)
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", UserWarning)
             results = est.fit(
@@ -1174,8 +1153,7 @@ class TestDCDHDynRParityByPathTrendsNonparam:
                 h = int(h_str)
                 if h > 0:
                     assert h in py_path["horizons"], (
-                        f"path={path_key}: horizon {h} missing from "
-                        f"Python path_effects"
+                        f"path={path_key}: horizon {h} missing from " f"Python path_effects"
                     )
                     py_h = py_path["horizons"][h]
                 else:
@@ -1190,11 +1168,8 @@ class TestDCDHDynRParityByPathTrendsNonparam:
                     f"py={py_h['n_obs']} vs r={int(r_h['n_switchers'])}"
                 )
 
-                assert py_h["effect"] == pytest.approx(
-                    r_h["effect"], rel=self.POINT_RTOL
-                ), (
-                    f"path={path_key} h={h}: "
-                    f"py={py_h['effect']:.6f} vs r={r_h['effect']:.6f}"
+                assert py_h["effect"] == pytest.approx(r_h["effect"], rel=self.POINT_RTOL), (
+                    f"path={path_key} h={h}: " f"py={py_h['effect']:.6f} vs r={r_h['effect']:.6f}"
                 )
 
                 py_se = py_h["se"]
@@ -1202,13 +1177,11 @@ class TestDCDHDynRParityByPathTrendsNonparam:
                 py_finite_positive = math.isfinite(py_se) and py_se > 0.0
                 r_finite_positive = math.isfinite(r_se) and r_se > 0.0
                 assert py_finite_positive == r_finite_positive, (
-                    f"path={path_key} h={h} SE state mismatch "
-                    f"(py_se={py_se}, r_se={r_se})"
+                    f"path={path_key} h={h} SE state mismatch " f"(py_se={py_se}, r_se={r_se})"
                 )
                 if py_finite_positive and r_finite_positive:
                     assert py_se == pytest.approx(r_se, rel=self.SE_RTOL), (
-                        f"path={path_key} h={h} SE: "
-                        f"py={py_se:.4f} vs r={r_se:.4f}"
+                        f"path={path_key} h={h} SE: " f"py={py_se:.4f} vs r={r_se:.4f}"
                     )
 
 
@@ -1248,26 +1221,19 @@ class TestDCDHDynRParityByPathNonBinary:
     def _path_key_from_r_label(self, r_label: str):
         return tuple(int(x) for x in r_label.split(","))
 
-    def test_parity_multi_path_reversible_by_path_non_binary(
-        self, golden_values
-    ):
+    def test_parity_multi_path_reversible_by_path_non_binary(self, golden_values):
         """3-path case with D in {0, 1, 2}: by_path=3, placebo=1."""
         import math
         import warnings
 
-        scenario = golden_values.get(
-            "multi_path_reversible_by_path_non_binary"
-        )
+        scenario = golden_values.get("multi_path_reversible_by_path_non_binary")
         if scenario is None:
             pytest.skip(
-                "scenario 'multi_path_reversible_by_path_non_binary' "
-                "not in golden values"
+                "scenario 'multi_path_reversible_by_path_non_binary' " "not in golden values"
             )
 
         df = _golden_to_df(scenario["data"])
-        est = ChaisemartinDHaultfoeuille(
-            drop_larger_lower=False, by_path=3, placebo=True
-        )
+        est = ChaisemartinDHaultfoeuille(drop_larger_lower=False, by_path=3, placebo=True)
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", UserWarning)
             results = est.fit(
@@ -1308,8 +1274,7 @@ class TestDCDHDynRParityByPathNonBinary:
                 h = int(h_str)
                 if h > 0:
                     assert h in py_path["horizons"], (
-                        f"path={path_key}: horizon {h} missing from "
-                        f"Python path_effects"
+                        f"path={path_key}: horizon {h} missing from " f"Python path_effects"
                     )
                     py_h = py_path["horizons"][h]
                 else:
@@ -1326,23 +1291,18 @@ class TestDCDHDynRParityByPathNonBinary:
 
                 assert py_h["effect"] == pytest.approx(
                     r_h["effect"], rel=self.POINT_RTOL, abs=self.POINT_ATOL
-                ), (
-                    f"path={path_key} h={h}: "
-                    f"py={py_h['effect']:.6f} vs r={r_h['effect']:.6f}"
-                )
+                ), (f"path={path_key} h={h}: " f"py={py_h['effect']:.6f} vs r={r_h['effect']:.6f}")
 
                 py_se = py_h["se"]
                 r_se = r_h["se"]
                 py_finite_positive = math.isfinite(py_se) and py_se > 0.0
                 r_finite_positive = math.isfinite(r_se) and r_se > 0.0
                 assert py_finite_positive == r_finite_positive, (
-                    f"path={path_key} h={h} SE state mismatch "
-                    f"(py_se={py_se}, r_se={r_se})"
+                    f"path={path_key} h={h} SE state mismatch " f"(py_se={py_se}, r_se={r_se})"
                 )
                 if py_finite_positive and r_finite_positive:
                     assert py_se == pytest.approx(r_se, rel=self.SE_RTOL), (
-                        f"path={path_key} h={h} SE: "
-                        f"py={py_se:.4f} vs r={r_se:.4f}"
+                        f"path={path_key} h={h} SE: " f"py={py_se:.4f} vs r={r_se:.4f}"
                     )
 
 
@@ -1373,10 +1333,7 @@ class TestDCDHDynRParityHeterogeneity:
 
         scenario = golden_values.get("multi_path_reversible_predict_het")
         if scenario is None:
-            pytest.skip(
-                "scenario 'multi_path_reversible_predict_het' not in "
-                "golden values"
-            )
+            pytest.skip("scenario 'multi_path_reversible_predict_het' not in " "golden values")
 
         df = _golden_to_df_with_extra(scenario["data"], extra_cols=["het_x"])
         est = ChaisemartinDHaultfoeuille(drop_larger_lower=False)
@@ -1397,25 +1354,25 @@ class TestDCDHDynRParityHeterogeneity:
 
         for h_str, r_h in r_predict_het.items():
             h = int(h_str)
-            assert h in results.heterogeneity_effects, (
-                f"horizon {h} missing from Python heterogeneity_effects"
-            )
+            assert (
+                h in results.heterogeneity_effects
+            ), f"horizon {h} missing from Python heterogeneity_effects"
             py_h = results.heterogeneity_effects[h]
             assert py_h["beta"] == pytest.approx(
                 r_h["beta"], rel=self.BETA_RTOL, abs=self.BETA_ATOL
             ), f"h={h} beta: py={py_h['beta']:.6f} vs r={r_h['beta']:.6f}"
-            assert py_h["se"] == pytest.approx(r_h["se"], rel=self.SE_RTOL), (
-                f"h={h} se: py={py_h['se']:.6f} vs r={r_h['se']:.6f}"
-            )
+            assert py_h["se"] == pytest.approx(
+                r_h["se"], rel=self.SE_RTOL
+            ), f"h={h} se: py={py_h['se']:.6f} vs r={r_h['se']:.6f}"
             # `t_stat = beta / se` is invariant to the Wald-test
             # critical-value distribution; pin it at SE_RTOL so a
             # regression in beta or se surfaces here too.
-            assert py_h["t_stat"] == pytest.approx(r_h["t"], rel=self.SE_RTOL), (
-                f"h={h} t_stat: py={py_h['t_stat']:.6f} vs r={r_h['t']:.6f}"
-            )
-            assert int(py_h["n_obs"]) == int(r_h["n_obs"]), (
-                f"h={h} n_obs: py={py_h['n_obs']} vs r={r_h['n_obs']}"
-            )
+            assert py_h["t_stat"] == pytest.approx(
+                r_h["t"], rel=self.SE_RTOL
+            ), f"h={h} t_stat: py={py_h['t_stat']:.6f} vs r={r_h['t']:.6f}"
+            assert int(py_h["n_obs"]) == int(
+                r_h["n_obs"]
+            ), f"h={h} n_obs: py={py_h['n_obs']} vs r={r_h['n_obs']}"
             # `p_value` and `conf_int` parity (post-2026-05-15 df threading).
             # `_compute_heterogeneity_test` now passes
             # `df = n_obs - rank(design)` to `safe_inference`, matching
@@ -1427,17 +1384,11 @@ class TestDCDHDynRParityHeterogeneity:
             assert py_h["p_value"] == pytest.approx(
                 r_h["p_value"], rel=self.INFERENCE_RTOL
             ), f"h={h} p_value: py={py_h['p_value']:.6e} vs r={r_h['p_value']:.6e}"
-            assert py_h["conf_int"][0] == pytest.approx(
-                r_h["ci_lo"], rel=self.INFERENCE_RTOL
-            ), (
-                f"h={h} ci_lo: py={py_h['conf_int'][0]:.6f} "
-                f"vs r={r_h['ci_lo']:.6f}"
+            assert py_h["conf_int"][0] == pytest.approx(r_h["ci_lo"], rel=self.INFERENCE_RTOL), (
+                f"h={h} ci_lo: py={py_h['conf_int'][0]:.6f} " f"vs r={r_h['ci_lo']:.6f}"
             )
-            assert py_h["conf_int"][1] == pytest.approx(
-                r_h["ci_hi"], rel=self.INFERENCE_RTOL
-            ), (
-                f"h={h} ci_hi: py={py_h['conf_int'][1]:.6f} "
-                f"vs r={r_h['ci_hi']:.6f}"
+            assert py_h["conf_int"][1] == pytest.approx(r_h["ci_hi"], rel=self.INFERENCE_RTOL), (
+                f"h={h} ci_hi: py={py_h['conf_int'][1]:.6f} " f"vs r={r_h['ci_hi']:.6f}"
             )
 
 
@@ -1466,19 +1417,14 @@ class TestDCDHDynRParityByPathHeterogeneity:
     def _path_key_from_r_label(self, r_label: str):
         return tuple(int(x) for x in r_label.split(","))
 
-    def test_parity_multi_path_reversible_by_path_predict_het(
-        self, golden_values
-    ):
+    def test_parity_multi_path_reversible_by_path_predict_het(self, golden_values):
         """Per-path heterogeneity coefficient parity per (path, horizon)."""
         import warnings
 
-        scenario = golden_values.get(
-            "multi_path_reversible_by_path_predict_het"
-        )
+        scenario = golden_values.get("multi_path_reversible_by_path_predict_het")
         if scenario is None:
             pytest.skip(
-                "scenario 'multi_path_reversible_by_path_predict_het' "
-                "not in golden values"
+                "scenario 'multi_path_reversible_by_path_predict_het' " "not in golden values"
             )
 
         df = _golden_to_df_with_extra(scenario["data"], extra_cols=["het_x"])
@@ -1519,33 +1465,21 @@ class TestDCDHDynRParityByPathHeterogeneity:
                 py_h = py_horizons[h]
                 assert py_h["beta"] == pytest.approx(
                     r_h["beta"], rel=self.BETA_RTOL, abs=self.BETA_ATOL
-                ), (
-                    f"path={path_key} h={h} beta: "
-                    f"py={py_h['beta']:.6f} vs r={r_h['beta']:.6f}"
-                )
-                assert py_h["se"] == pytest.approx(
-                    r_h["se"], rel=self.SE_RTOL
-                ), (
-                    f"path={path_key} h={h} se: "
-                    f"py={py_h['se']:.6f} vs r={r_h['se']:.6f}"
+                ), (f"path={path_key} h={h} beta: " f"py={py_h['beta']:.6f} vs r={r_h['beta']:.6f}")
+                assert py_h["se"] == pytest.approx(r_h["se"], rel=self.SE_RTOL), (
+                    f"path={path_key} h={h} se: " f"py={py_h['se']:.6f} vs r={r_h['se']:.6f}"
                 )
                 # `t_stat = beta / se` is invariant to the Wald-test
                 # critical-value distribution; pin at SE_RTOL.
-                assert py_h["t_stat"] == pytest.approx(
-                    r_h["t"], rel=self.SE_RTOL
-                ), (
-                    f"path={path_key} h={h} t_stat: "
-                    f"py={py_h['t_stat']:.6f} vs r={r_h['t']:.6f}"
+                assert py_h["t_stat"] == pytest.approx(r_h["t"], rel=self.SE_RTOL), (
+                    f"path={path_key} h={h} t_stat: " f"py={py_h['t_stat']:.6f} vs r={r_h['t']:.6f}"
                 )
                 assert int(py_h["n_obs"]) == int(r_h["n_obs"]), (
-                    f"path={path_key} h={h} n_obs: "
-                    f"py={py_h['n_obs']} vs r={r_h['n_obs']}"
+                    f"path={path_key} h={h} n_obs: " f"py={py_h['n_obs']} vs r={r_h['n_obs']}"
                 )
                 # `p_value` and `conf_int` parity — same df-threading
                 # rationale as the global heterogeneity class.
-                assert py_h["p_value"] == pytest.approx(
-                    r_h["p_value"], rel=self.INFERENCE_RTOL
-                ), (
+                assert py_h["p_value"] == pytest.approx(r_h["p_value"], rel=self.INFERENCE_RTOL), (
                     f"path={path_key} h={h} p_value: "
                     f"py={py_h['p_value']:.6e} vs r={r_h['p_value']:.6e}"
                 )
@@ -1594,19 +1528,14 @@ class TestDCDHDynRParityByPathHeterogeneityWithPlacebo:
     def _path_key_from_r_label(self, r_label: str):
         return tuple(int(x) for x in r_label.split(","))
 
-    def test_parity_multi_path_reversible_predict_het_with_placebo(
-        self, golden_values
-    ):
+    def test_parity_multi_path_reversible_predict_het_with_placebo(self, golden_values):
         """Per-path heterogeneity on forward + backward horizons."""
         import warnings
 
-        scenario = golden_values.get(
-            "multi_path_reversible_predict_het_with_placebo"
-        )
+        scenario = golden_values.get("multi_path_reversible_predict_het_with_placebo")
         if scenario is None:
             pytest.skip(
-                "scenario 'multi_path_reversible_predict_het_with_placebo' "
-                "not in golden values"
+                "scenario 'multi_path_reversible_predict_het_with_placebo' " "not in golden values"
             )
 
         df = _golden_to_df_with_extra(scenario["data"], extra_cols=["het_x"])
@@ -1615,9 +1544,7 @@ class TestDCDHDynRParityByPathHeterogeneityWithPlacebo:
         # subset (placebo=2 in scenario 22 -> backward horizons -1, -2).
         # Python's extra backward horizons (e.g., -3 if eligible) are
         # allowed and not parity-checked.
-        est = ChaisemartinDHaultfoeuille(
-            drop_larger_lower=False, by_path=3, placebo=True
-        )
+        est = ChaisemartinDHaultfoeuille(drop_larger_lower=False, by_path=3, placebo=True)
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", UserWarning)
             results = est.fit(
@@ -1649,18 +1576,14 @@ class TestDCDHDynRParityByPathHeterogeneityWithPlacebo:
             for h_str, r_h in r_path_entry["horizons"].items():
                 h = int(h_str)
                 assert h > 0
-                assert h in py_horizons, (
-                    f"path={path_key}: forward horizon {h} missing"
-                )
+                assert h in py_horizons, f"path={path_key}: forward horizon {h} missing"
                 py_h = py_horizons[h]
                 self._assert_horizon_parity(path_key, h, py_h, r_h)
 
             # Placebo horizons (negative int keys). R-verified: scenario 22
             # has 2 placebo rows per path (-1, -2); Python mirrors with
             # negative-int keys in path_heterogeneity_effects.
-            for h_str, r_h in _as_dict(
-                r_path_entry.get("placebo_horizons")
-            ).items():
+            for h_str, r_h in _as_dict(r_path_entry.get("placebo_horizons")).items():
                 h = int(h_str)
                 assert h < 0
                 assert h in py_horizons, (
@@ -1672,43 +1595,26 @@ class TestDCDHDynRParityByPathHeterogeneityWithPlacebo:
 
     def _assert_horizon_parity(self, path_key, h, py_h, r_h):
         """Pin all 6 inference fields against R."""
-        assert py_h["beta"] == pytest.approx(
-            r_h["beta"], rel=self.BETA_RTOL, abs=self.BETA_ATOL
-        ), (
-            f"path={path_key} h={h} beta: "
-            f"py={py_h['beta']:.6f} vs r={r_h['beta']:.6f}"
+        assert py_h["beta"] == pytest.approx(r_h["beta"], rel=self.BETA_RTOL, abs=self.BETA_ATOL), (
+            f"path={path_key} h={h} beta: " f"py={py_h['beta']:.6f} vs r={r_h['beta']:.6f}"
         )
         assert py_h["se"] == pytest.approx(r_h["se"], rel=self.SE_RTOL), (
-            f"path={path_key} h={h} se: "
-            f"py={py_h['se']:.6f} vs r={r_h['se']:.6f}"
+            f"path={path_key} h={h} se: " f"py={py_h['se']:.6f} vs r={r_h['se']:.6f}"
         )
-        assert py_h["t_stat"] == pytest.approx(
-            r_h["t"], rel=self.SE_RTOL
-        ), (
-            f"path={path_key} h={h} t_stat: "
-            f"py={py_h['t_stat']:.6f} vs r={r_h['t']:.6f}"
+        assert py_h["t_stat"] == pytest.approx(r_h["t"], rel=self.SE_RTOL), (
+            f"path={path_key} h={h} t_stat: " f"py={py_h['t_stat']:.6f} vs r={r_h['t']:.6f}"
         )
         assert int(py_h["n_obs"]) == int(r_h["n_obs"]), (
-            f"path={path_key} h={h} n_obs: "
-            f"py={py_h['n_obs']} vs r={r_h['n_obs']}"
+            f"path={path_key} h={h} n_obs: " f"py={py_h['n_obs']} vs r={r_h['n_obs']}"
         )
-        assert py_h["p_value"] == pytest.approx(
-            r_h["p_value"], rel=self.INFERENCE_RTOL
-        ), (
-            f"path={path_key} h={h} p_value: "
-            f"py={py_h['p_value']:.6e} vs r={r_h['p_value']:.6e}"
+        assert py_h["p_value"] == pytest.approx(r_h["p_value"], rel=self.INFERENCE_RTOL), (
+            f"path={path_key} h={h} p_value: " f"py={py_h['p_value']:.6e} vs r={r_h['p_value']:.6e}"
         )
-        assert py_h["conf_int"][0] == pytest.approx(
-            r_h["ci_lo"], rel=self.INFERENCE_RTOL
-        ), (
-            f"path={path_key} h={h} ci_lo: "
-            f"py={py_h['conf_int'][0]:.6f} vs r={r_h['ci_lo']:.6f}"
+        assert py_h["conf_int"][0] == pytest.approx(r_h["ci_lo"], rel=self.INFERENCE_RTOL), (
+            f"path={path_key} h={h} ci_lo: " f"py={py_h['conf_int'][0]:.6f} vs r={r_h['ci_lo']:.6f}"
         )
-        assert py_h["conf_int"][1] == pytest.approx(
-            r_h["ci_hi"], rel=self.INFERENCE_RTOL
-        ), (
-            f"path={path_key} h={h} ci_hi: "
-            f"py={py_h['conf_int'][1]:.6f} vs r={r_h['ci_hi']:.6f}"
+        assert py_h["conf_int"][1] == pytest.approx(r_h["ci_hi"], rel=self.INFERENCE_RTOL), (
+            f"path={path_key} h={h} ci_hi: " f"py={py_h['conf_int'][1]:.6f} vs r={r_h['ci_hi']:.6f}"
         )
 
 
@@ -1736,15 +1642,11 @@ class TestDCDHDynRParityHeterogeneityWithPlacebo:
     SE_RTOL = 1e-5
     INFERENCE_RTOL = 1e-4
 
-    def test_parity_multi_path_reversible_predict_het_with_placebo_global(
-        self, golden_values
-    ):
+    def test_parity_multi_path_reversible_predict_het_with_placebo_global(self, golden_values):
         """Global heterogeneity on forward + backward horizons."""
         import warnings
 
-        scenario = golden_values.get(
-            "multi_path_reversible_predict_het_with_placebo_global"
-        )
+        scenario = golden_values.get("multi_path_reversible_predict_het_with_placebo_global")
         if scenario is None:
             pytest.skip(
                 "scenario 'multi_path_reversible_predict_het_with_placebo_global' "
@@ -1757,9 +1659,7 @@ class TestDCDHDynRParityHeterogeneityWithPlacebo:
         # R's emitted subset (placebo=2 in scenario 23 -> backward
         # horizons -1, -2). Python's extra backward horizons (e.g., -3
         # if eligible) are allowed and not parity-checked.
-        est = ChaisemartinDHaultfoeuille(
-            drop_larger_lower=False, placebo=True
-        )
+        est = ChaisemartinDHaultfoeuille(drop_larger_lower=False, placebo=True)
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", UserWarning)
             results = est.fit(
@@ -1788,9 +1688,7 @@ class TestDCDHDynRParityHeterogeneityWithPlacebo:
         for h_str, r_h in r_placebo_het.items():
             h = int(h_str)
             assert h < 0
-            assert h in py_het, (
-                f"placebo horizon {h} missing from Python heterogeneity_effects"
-            )
+            assert h in py_het, f"placebo horizon {h} missing from Python heterogeneity_effects"
             self._assert_horizon_parity(h, py_het[h], r_h)
 
     def _assert_horizon_parity(self, h, py_h, r_h):
@@ -1798,20 +1696,18 @@ class TestDCDHDynRParityHeterogeneityWithPlacebo:
         assert py_h["beta"] == pytest.approx(
             r_h["beta"], rel=self.BETA_RTOL, abs=self.BETA_ATOL
         ), f"h={h} beta: py={py_h['beta']:.6f} vs r={r_h['beta']:.6f}"
-        assert py_h["se"] == pytest.approx(r_h["se"], rel=self.SE_RTOL), (
-            f"h={h} se: py={py_h['se']:.6f} vs r={r_h['se']:.6f}"
-        )
-        assert py_h["t_stat"] == pytest.approx(r_h["t"], rel=self.SE_RTOL), (
-            f"h={h} t_stat: py={py_h['t_stat']:.6f} vs r={r_h['t']:.6f}"
-        )
-        assert int(py_h["n_obs"]) == int(r_h["n_obs"]), (
-            f"h={h} n_obs: py={py_h['n_obs']} vs r={r_h['n_obs']}"
-        )
+        assert py_h["se"] == pytest.approx(
+            r_h["se"], rel=self.SE_RTOL
+        ), f"h={h} se: py={py_h['se']:.6f} vs r={r_h['se']:.6f}"
+        assert py_h["t_stat"] == pytest.approx(
+            r_h["t"], rel=self.SE_RTOL
+        ), f"h={h} t_stat: py={py_h['t_stat']:.6f} vs r={r_h['t']:.6f}"
+        assert int(py_h["n_obs"]) == int(
+            r_h["n_obs"]
+        ), f"h={h} n_obs: py={py_h['n_obs']} vs r={r_h['n_obs']}"
         assert py_h["p_value"] == pytest.approx(
             r_h["p_value"], rel=self.INFERENCE_RTOL
-        ), (
-            f"h={h} p_value: py={py_h['p_value']:.6e} vs r={r_h['p_value']:.6e}"
-        )
+        ), f"h={h} p_value: py={py_h['p_value']:.6e} vs r={r_h['p_value']:.6e}"
         assert py_h["conf_int"][0] == pytest.approx(
             r_h["ci_lo"], rel=self.INFERENCE_RTOL
         ), f"h={h} ci_lo: py={py_h['conf_int'][0]:.6f} vs r={r_h['ci_lo']:.6f}"

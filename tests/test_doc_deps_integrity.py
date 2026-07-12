@@ -172,7 +172,8 @@ def test_group_primaries_have_sources_entry():
     """Each ``groups:`` block must be non-empty and its primary (first) member must have a
     ``sources:`` entry. Group members resolve to the primary module for doc lookup, so a group
     whose primary lacks a ``sources:`` entry dead-ends — /docs-impact would yield no docs for the
-    whole group even though every member is nominally 'mapped' by ``test_all_public_sources_mapped``."""
+    whole group even though every member is nominally 'mapped' by ``test_all_public_sources_mapped``.
+    """
     broken = []
     for name, members in _GROUPS.items():
         if not members:

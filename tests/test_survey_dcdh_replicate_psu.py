@@ -19,7 +19,6 @@ import pytest
 from diff_diff import ChaisemartinDHaultfoeuille, SurveyDesign
 from diff_diff.chaisemartin_dhaultfoeuille import twowayfeweights
 
-
 # ── Fixtures ────────────────────────────────────────────────────────
 
 
@@ -181,6 +180,7 @@ class TestReplicateClassA:
         pre-process the panel. Locks this user-facing failure mode.
         """
         import warnings as _w
+
         rows = []
         for g in range(10):
             if g < 5:
@@ -216,7 +216,8 @@ class TestReplicateClassA:
         with _w.catch_warnings():
             _w.simplefilter("ignore")  # terminal-missingness UserWarning
             with pytest.raises(
-                ValueError, match="no positive-weight observations",
+                ValueError,
+                match="no positive-weight observations",
             ):
                 ChaisemartinDHaultfoeuille(seed=1).fit(
                     df_,
@@ -229,7 +230,10 @@ class TestReplicateClassA:
                 )
 
     def test_att_cell_allocator_with_varying_replicate_ratios(
-        self, base_panel, replicate_design, monkeypatch,
+        self,
+        base_panel,
+        replicate_design,
+        monkeypatch,
     ):
         """Class A ATT replicate contract: `_survey_se_from_group_if`
         dispatches replicate fits through the cell-period allocator
@@ -252,6 +256,7 @@ class TestReplicateClassA:
               the fit's SE.
         """
         import numpy as _np
+
         import diff_diff.survey as _survey_mod
 
         R = 20
@@ -268,9 +273,7 @@ class TestReplicateClassA:
             captured_psi.append(_np.asarray(psi).copy())
             return original_repvar(psi, resolved)
 
-        monkeypatch.setattr(
-            _survey_mod, "compute_replicate_if_variance", _spy
-        )
+        monkeypatch.setattr(_survey_mod, "compute_replicate_if_variance", _spy)
 
         res = ChaisemartinDHaultfoeuille(seed=1).fit(
             df,
@@ -313,20 +316,19 @@ class TestReplicateClassA:
         for i in range(n_obs):
             gi = g_to_idx[obs_group[i]]
             if W_g[gi] > 0:
-                psi_obs_legacy[i] = (
-                    U_centered_recon[gi] * w[i] / W_g[gi]
-                )
+                psi_obs_legacy[i] = U_centered_recon[gi] * w[i] / W_g[gi]
 
         # (a) Fit's overall_se^2 must match the variance recomputed
         # from the captured psi_obs. Trivial sanity check — the fit
         # computed it from this exact psi_obs via the spy pass-through.
         var_cell_recompute, _ = original_repvar(psi_obs_actual, resolved)
         assert float(res.overall_se) ** 2 == pytest.approx(
-            var_cell_recompute, rel=1e-12,
+            var_cell_recompute,
+            rel=1e-12,
         ), (
-            f"Fit's overall_se^2 does not match the recomputed "
-            f"variance on the captured psi_obs — spy / dispatch "
-            f"misalignment."
+            "Fit's overall_se^2 does not match the recomputed "
+            "variance on the captured psi_obs — spy / dispatch "
+            "misalignment."
         )
 
         # (b) Legacy-reconstructed psi_obs yields a different Rao-Wu
@@ -337,7 +339,9 @@ class TestReplicateClassA:
         # this assertion would fail, surfacing the regression.
         var_legacy, _ = original_repvar(psi_obs_legacy, resolved)
         assert not _np.isclose(
-            var_cell_recompute, var_legacy, rtol=1e-6,
+            var_cell_recompute,
+            var_legacy,
+            rtol=1e-6,
         ), (
             f"Expected cell-allocator variance to differ from legacy "
             f"group-level variance on this fixture (per-row "
@@ -420,9 +424,7 @@ class TestReplicateClassA:
         )
 
     @pytest.mark.parametrize("method", ["BRR", "JK1"])
-    def test_multi_horizon_under_replicate(
-        self, replicate_design, method
-    ):
+    def test_multi_horizon_under_replicate(self, replicate_design, method):
         """Multi-horizon DID_l inherits the Class A dispatch — horizon 1
         (always identifiable on this panel) should produce a finite
         replicate-based SE."""
@@ -464,8 +466,7 @@ class TestReplicateClassA:
             L_max=1,
         )
         assert res.placebo_event_study, (
-            "Expected placebo_event_study to be populated for L_max=1 "
-            "reversible panel"
+            "Expected placebo_event_study to be populated for L_max=1 " "reversible panel"
         )
         # Negative key convention: placebo horizon l → key -l.
         assert -1 in res.placebo_event_study, (
@@ -559,9 +560,7 @@ class TestReplicateClassB:
         # present but don't change the aggregated diagnostics.
         assert res_rep.beta_fe == pytest.approx(res_plain.beta_fe, rel=1e-10)
         assert res_rep.sigma_fe == pytest.approx(res_plain.sigma_fe, rel=1e-10)
-        assert res_rep.fraction_negative == pytest.approx(
-            res_plain.fraction_negative, rel=1e-10
-        )
+        assert res_rep.fraction_negative == pytest.approx(res_plain.fraction_negative, rel=1e-10)
 
 
 # ── 3. PSU-level Hall-Mammen wild bootstrap ─────────────────────────
@@ -632,8 +631,7 @@ class TestPSUBootstrap:
                 survey_design=sd,
             )
         assert not any(
-            "Hall-Mammen wild" in str(w.message)
-            or "group-level multiplier" in str(w.message)
+            "Hall-Mammen wild" in str(w.message) or "group-level multiplier" in str(w.message)
             for w in caught
         ), (
             "Bootstrap-PSU warning should not fire under auto-inject psu=group, "
@@ -878,9 +876,7 @@ class TestInvariants:
         assert np.array_equal(W_identity, W_plain)
 
     @pytest.mark.parametrize("method", ["BRR", "JK1"])
-    def test_honest_did_under_replicate(
-        self, base_panel, replicate_design, method
-    ):
+    def test_honest_did_under_replicate(self, base_panel, replicate_design, method):
         """HonestDiD bounds should flow through replicate SE and the
         reduced df_survey (df = min(n_valid) - 1)."""
         R = 20
@@ -928,15 +924,19 @@ class TestInvariants:
         resolved = sd.resolve(df)
         design_df = resolved.df_survey
         assert design_df is not None and design_df < R - 1, (
-            f"Expected rank deficiency: design df={design_df} "
-            f"should be < {R - 1}"
+            f"Expected rank deficiency: design df={design_df} " f"should be < {R - 1}"
         )
         with warnings.catch_warnings():
             warnings.filterwarnings("ignore")
             res = ChaisemartinDHaultfoeuille(seed=1).fit(
-                df, outcome="outcome", group="group",
-                time="period", treatment="treatment",
-                survey_design=sd, L_max=1, honest_did=True,
+                df,
+                outcome="outcome",
+                group="group",
+                time="period",
+                treatment="treatment",
+                survey_design=sd,
+                L_max=1,
+                honest_did=True,
             )
         # survey_metadata carries the final (reduced) df — not R - 1.
         assert res.survey_metadata.df_survey == design_df, (
@@ -969,15 +969,18 @@ class TestInvariants:
         resolved = sd.resolve(df)
         design_df = resolved.df_survey
         assert design_df is not None and design_df <= R - 3, (
-            f"Expected zero-column rank deficiency: design df={design_df} "
-            f"should be <= {R - 3}"
+            f"Expected zero-column rank deficiency: design df={design_df} " f"should be <= {R - 3}"
         )
         with warnings.catch_warnings():
             warnings.filterwarnings("ignore")
             res = ChaisemartinDHaultfoeuille(seed=1).fit(
-                df, outcome="outcome", group="group",
-                time="period", treatment="treatment",
-                survey_design=sd, L_max=1,
+                df,
+                outcome="outcome",
+                group="group",
+                time="period",
+                treatment="treatment",
+                survey_design=sd,
+                L_max=1,
             )
         # Persisted df must be capped by the design df, not R - 1.
         assert res.survey_metadata.df_survey is not None
@@ -1012,15 +1015,17 @@ class TestInvariants:
             df[f"rep{r}"] = rep_col_shared
         sd = _build_replicate_design(R, "BRR")
         resolved = sd.resolve(df)
-        assert resolved.df_survey is None, (
-            "Rank-1 replicate matrix must have undefined design df"
-        )
+        assert resolved.df_survey is None, "Rank-1 replicate matrix must have undefined design df"
         with warnings.catch_warnings():
             warnings.filterwarnings("ignore")
             res = ChaisemartinDHaultfoeuille(seed=1).fit(
-                df, outcome="outcome", group="group",
-                time="period", treatment="treatment",
-                survey_design=sd, L_max=1,
+                df,
+                outcome="outcome",
+                group="group",
+                time="period",
+                treatment="treatment",
+                survey_design=sd,
+                L_max=1,
             )
         # survey_metadata.df_survey stays None — the honest undefined
         # signal for downstream consumers.
@@ -1038,7 +1043,8 @@ class TestInvariants:
             assert np.isnan(info["p_value"])
 
     def test_heterogeneity_replicate_cross_surface_df_consistency(
-        self, base_panel,
+        self,
+        base_panel,
     ):
         """With ``heterogeneity=`` active under a rank-deficient
         replicate design, every public surface — top-level dCDH,
@@ -1067,9 +1073,13 @@ class TestInvariants:
         with warnings.catch_warnings():
             warnings.filterwarnings("ignore")
             res = ChaisemartinDHaultfoeuille(seed=1).fit(
-                df, outcome="outcome", group="group",
-                time="period", treatment="treatment",
-                survey_design=sd, L_max=1,
+                df,
+                outcome="outcome",
+                group="group",
+                time="period",
+                treatment="treatment",
+                survey_design=sd,
+                L_max=1,
                 heterogeneity="x_het",
                 honest_did=True,
             )
@@ -1089,16 +1099,16 @@ class TestInvariants:
             if np.isfinite(het_info["se"]):
                 het_t = het_info["beta"] / het_info["se"]
                 expected_het_p = 2 * _stats.t.sf(abs(het_t), df=final_df)
-                assert het_info["p_value"] == pytest.approx(
-                    expected_het_p, rel=1e-6
-                )
+                assert het_info["p_value"] == pytest.approx(expected_het_p, rel=1e-6)
         # HonestDiD bounds were computed from the same survey_metadata;
         # asserting the result attribute is populated confirms the df
         # flow-through was exercised.
         assert res.honest_did_results is not None
 
     def test_heterogeneity_late_nvalid_propagates_to_all_surfaces(
-        self, base_panel, monkeypatch,
+        self,
+        base_panel,
+        monkeypatch,
     ):
         """Regression for PR #311 CI review R4 P2.
 
@@ -1116,6 +1126,7 @@ class TestInvariants:
         `survey_metadata.df_survey`) must reflect the reduced df.
         """
         from scipy import stats as _stats
+
         from diff_diff import survey as _survey_mod
 
         R = 20
@@ -1136,15 +1147,17 @@ class TestInvariants:
             main_counter["n"] += 1
             return original(psi, resolved_arg)
 
-        monkeypatch.setattr(
-            _survey_mod, "compute_replicate_if_variance", count_only
-        )
+        monkeypatch.setattr(_survey_mod, "compute_replicate_if_variance", count_only)
         with warnings.catch_warnings():
             warnings.filterwarnings("ignore")
             ChaisemartinDHaultfoeuille(seed=1).fit(
-                df, outcome="outcome", group="group",
-                time="period", treatment="treatment",
-                survey_design=sd, L_max=1,
+                df,
+                outcome="outcome",
+                group="group",
+                time="period",
+                treatment="treatment",
+                survey_design=sd,
+                L_max=1,
             )
         main_call_count = main_counter["n"]
         monkeypatch.undo()
@@ -1161,15 +1174,20 @@ class TestInvariants:
             return var, n_valid
 
         monkeypatch.setattr(
-            _survey_mod, "compute_replicate_if_variance",
+            _survey_mod,
+            "compute_replicate_if_variance",
             reduce_after_main,
         )
         with warnings.catch_warnings():
             warnings.filterwarnings("ignore")
             res = ChaisemartinDHaultfoeuille(seed=1).fit(
-                df, outcome="outcome", group="group",
-                time="period", treatment="treatment",
-                survey_design=sd, L_max=1,
+                df,
+                outcome="outcome",
+                group="group",
+                time="period",
+                treatment="treatment",
+                survey_design=sd,
+                L_max=1,
                 heterogeneity="x_het",
             )
 
@@ -1185,7 +1203,8 @@ class TestInvariants:
         t_stat = res.overall_att / res.overall_se
         expected_p_overall = 2 * _stats.t.sf(abs(t_stat), df=expected_df)
         assert res.overall_p_value == pytest.approx(
-            expected_p_overall, rel=1e-6,
+            expected_p_overall,
+            rel=1e-6,
         ), (
             "overall_p_value should reflect heterogeneity's late "
             "n_valid via the post-recompute block"
@@ -1198,7 +1217,8 @@ class TestInvariants:
                 t_l = info["effect"] / info["se"]
                 expected_p_l = 2 * _stats.t.sf(abs(t_l), df=expected_df)
                 assert info["p_value"] == pytest.approx(
-                    expected_p_l, rel=1e-6,
+                    expected_p_l,
+                    rel=1e-6,
                 )
 
         # Placebo event study surface (NEGATIVE keys). This is the
@@ -1210,10 +1230,12 @@ class TestInvariants:
                 if np.isfinite(pl_info["se"]) and pl_info["se"] > 0:
                     t_pl = pl_info["effect"] / pl_info["se"]
                     expected_p_pl = 2 * _stats.t.sf(
-                        abs(t_pl), df=expected_df,
+                        abs(t_pl),
+                        df=expected_df,
                     )
                     assert pl_info["p_value"] == pytest.approx(
-                        expected_p_pl, rel=1e-6,
+                        expected_p_pl,
+                        rel=1e-6,
                     ), (
                         f"placebo_event_study[{_lag_neg}] p-value "
                         f"must reflect the reduced df "
@@ -1228,10 +1250,12 @@ class TestInvariants:
             if np.isfinite(het_info["se"]) and het_info["se"] > 0:
                 het_t = het_info["beta"] / het_info["se"]
                 expected_het_p = 2 * _stats.t.sf(
-                    abs(het_t), df=expected_df,
+                    abs(het_t),
+                    df=expected_df,
                 )
                 assert het_info["p_value"] == pytest.approx(
-                    expected_het_p, rel=1e-6,
+                    expected_het_p,
+                    rel=1e-6,
                 )
 
         # Normalized effects surface. This is a DERIVED dict built
@@ -1245,10 +1269,12 @@ class TestInvariants:
                 if np.isfinite(norm_info["se"]) and norm_info["se"] > 0:
                     norm_t = norm_info["effect"] / norm_info["se"]
                     expected_norm_p = 2 * _stats.t.sf(
-                        abs(norm_t), df=expected_df,
+                        abs(norm_t),
+                        df=expected_df,
                     )
                     assert norm_info["p_value"] == pytest.approx(
-                        expected_norm_p, rel=1e-6,
+                        expected_norm_p,
+                        rel=1e-6,
                     ), (
                         f"normalized_effects[{_lag}] p-value must "
                         f"reflect the reduced df ({expected_df}); got "
@@ -1257,7 +1283,9 @@ class TestInvariants:
                     )
 
     def test_late_nvalid_below_two_forces_all_surfaces_nan(
-        self, base_panel, monkeypatch,
+        self,
+        base_panel,
+        monkeypatch,
     ):
         """Regression for R4 P2 follow-up: when heterogeneity's late
         replicate failures drive the final `n_valid` to 1 (reduced df
@@ -1285,15 +1313,17 @@ class TestInvariants:
             main_counter["n"] += 1
             return original(psi, resolved_arg)
 
-        monkeypatch.setattr(
-            _survey_mod, "compute_replicate_if_variance", count_only
-        )
+        monkeypatch.setattr(_survey_mod, "compute_replicate_if_variance", count_only)
         with warnings.catch_warnings():
             warnings.filterwarnings("ignore")
             ChaisemartinDHaultfoeuille(seed=1).fit(
-                df, outcome="outcome", group="group",
-                time="period", treatment="treatment",
-                survey_design=sd, L_max=1,
+                df,
+                outcome="outcome",
+                group="group",
+                time="period",
+                treatment="treatment",
+                survey_design=sd,
+                L_max=1,
             )
         main_call_count = main_counter["n"]
         monkeypatch.undo()
@@ -1309,15 +1339,17 @@ class TestInvariants:
                 return var, 1
             return var, n_valid
 
-        monkeypatch.setattr(
-            _survey_mod, "compute_replicate_if_variance", reduce_to_one
-        )
+        monkeypatch.setattr(_survey_mod, "compute_replicate_if_variance", reduce_to_one)
         with warnings.catch_warnings():
             warnings.filterwarnings("ignore")
             res = ChaisemartinDHaultfoeuille(seed=1).fit(
-                df, outcome="outcome", group="group",
-                time="period", treatment="treatment",
-                survey_design=sd, L_max=1,
+                df,
+                outcome="outcome",
+                group="group",
+                time="period",
+                treatment="treatment",
+                survey_design=sd,
+                L_max=1,
                 heterogeneity="x_het",
             )
         # Final effective df is None (reduced_df = 0 < 1 guard).

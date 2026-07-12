@@ -92,9 +92,7 @@ def event_study_results(panel):
             message=r"Assumption 7 .* is violated: leavers present",
             category=UserWarning,
         )
-        model = DCDH(
-            twfe_diagnostic=False, placebo=True, n_bootstrap=199, seed=42
-        )
+        model = DCDH(twfe_diagnostic=False, placebo=True, n_bootstrap=199, seed=42)
         return model.fit(
             panel,
             outcome="sessions",
@@ -197,9 +195,7 @@ def test_assumption7_warning_fires_as_expected(panel):
     with warnings.catch_warnings(record=True) as ws:
         warnings.simplefilter("always")
         with np.errstate(divide="ignore", over="ignore", invalid="ignore"):
-            model = DCDH(
-                twfe_diagnostic=False, placebo=True, n_bootstrap=49, seed=42
-            )
+            model = DCDH(twfe_diagnostic=False, placebo=True, n_bootstrap=49, seed=42)
             model.fit(
                 panel,
                 outcome="sessions",
@@ -236,9 +232,7 @@ def test_event_study_warning_policy_matches_notebook(panel):
             message=r".*encountered in matmul",
             category=RuntimeWarning,
         )
-        model = DCDH(
-            twfe_diagnostic=False, placebo=True, n_bootstrap=199, seed=42
-        )
+        model = DCDH(twfe_diagnostic=False, placebo=True, n_bootstrap=199, seed=42)
         model.fit(
             panel,
             outcome="sessions",
@@ -297,8 +291,6 @@ def test_a11_warning_does_not_fire():
                 treatment="promo_on",
             )
     a11_warnings = [
-        w
-        for w in ws
-        if w.category is UserWarning and "Assumption 11" in str(w.message)
+        w for w in ws if w.category is UserWarning and "Assumption 11" in str(w.message)
     ]
     assert len(a11_warnings) == 0, [str(w.message)[:80] for w in a11_warnings]

@@ -48,13 +48,15 @@ def panel_data_parallel_trends():
 
             y += np.random.normal(0, 0.5)
 
-            data.append({
-                "unit": unit,
-                "period": period,
-                "treated": int(is_treated),
-                "post": int(period >= 3),
-                "outcome": y,
-            })
+            data.append(
+                {
+                    "unit": unit,
+                    "period": period,
+                    "treated": int(is_treated),
+                    "post": int(period >= 3),
+                    "outcome": y,
+                }
+            )
 
     return pd.DataFrame(data)
 
@@ -88,13 +90,15 @@ def panel_data_violated_trends():
 
             y += np.random.normal(0, 0.5)
 
-            data.append({
-                "unit": unit,
-                "period": period,
-                "treated": int(is_treated),
-                "post": int(period >= 3),
-                "outcome": y,
-            })
+            data.append(
+                {
+                    "unit": unit,
+                    "period": period,
+                    "treated": int(is_treated),
+                    "post": int(period >= 3),
+                    "outcome": y,
+                }
+            )
 
     return pd.DataFrame(data)
 
@@ -117,13 +121,15 @@ def simple_panel_data():
             if is_treated and period >= 2:
                 y += 5.0  # Treatment effect
 
-            data.append({
-                "unit": unit,
-                "period": period,
-                "treated": int(is_treated),
-                "post": int(period >= 2),
-                "outcome": y,
-            })
+            data.append(
+                {
+                    "unit": unit,
+                    "period": period,
+                    "treated": int(is_treated),
+                    "post": int(period >= 2),
+                    "outcome": y,
+                }
+            )
 
     return pd.DataFrame(data)
 
@@ -215,15 +221,27 @@ class TestPlaceboTestResults:
         """Test significance stars property."""
         # Very significant
         r1 = PlaceboTestResults(
-            test_type="test", placebo_effect=0, se=1, t_stat=0,
-            p_value=0.0001, conf_int=(0, 0), n_obs=100, is_significant=True
+            test_type="test",
+            placebo_effect=0,
+            se=1,
+            t_stat=0,
+            p_value=0.0001,
+            conf_int=(0, 0),
+            n_obs=100,
+            is_significant=True,
         )
         assert r1.significance_stars == "***"
 
         # Not significant
         r2 = PlaceboTestResults(
-            test_type="test", placebo_effect=0, se=1, t_stat=0,
-            p_value=0.5, conf_int=(0, 0), n_obs=100, is_significant=False
+            test_type="test",
+            placebo_effect=0,
+            se=1,
+            t_stat=0,
+            p_value=0.5,
+            conf_int=(0, 0),
+            n_obs=100,
+            is_significant=False,
         )
         assert r2.significance_stars == ""
 
@@ -319,9 +337,7 @@ class TestPlaceboGroupTest:
     def test_basic_fake_group(self, simple_panel_data):
         """Test basic fake group test."""
         # Use some control units as fake treated
-        control_units = simple_panel_data[
-            simple_panel_data["treated"] == 0
-        ]["unit"].unique()
+        control_units = simple_panel_data[simple_panel_data["treated"] == 0]["unit"].unique()
         fake_treated = list(control_units[:3])
 
         results = placebo_group_test(
@@ -428,8 +444,7 @@ class TestPermutationTest:
 
         assert results1.p_value == results2.p_value
         np.testing.assert_array_equal(
-            results1.permutation_distribution,
-            results2.permutation_distribution
+            results1.permutation_distribution, results2.permutation_distribution
         )
 
     def test_permutation_detects_true_effect(self, simple_panel_data):
@@ -482,9 +497,7 @@ class TestLeaveOneOutTest:
         )
 
         # Get number of treated units
-        n_treated = simple_panel_data[
-            simple_panel_data["treated"] == 1
-        ]["unit"].nunique()
+        n_treated = simple_panel_data[simple_panel_data["treated"] == 1]["unit"].nunique()
 
         assert len(results.leave_one_out_effects) == n_treated
 
@@ -509,13 +522,15 @@ class TestLeaveOneOutTest:
                     else:
                         y += 2.0  # Normal treatment effect
 
-                data.append({
-                    "unit": unit,
-                    "period": period,
-                    "treated": int(is_treated),
-                    "post": period,
-                    "outcome": y,
-                })
+                data.append(
+                    {
+                        "unit": unit,
+                        "period": period,
+                        "treated": int(is_treated),
+                        "post": period,
+                        "outcome": y,
+                    }
+                )
 
         df = pd.DataFrame(data)
 
@@ -581,12 +596,14 @@ class TestLeaveOneOutTest:
 
         # Only 1 valid LOO effect → SE should be NaN (not 0.0)
         assert np.isnan(result.se), f"SE should be NaN with 1 valid effect, got {result.se}"
-        assert_nan_inference({
-            "se": result.se,
-            "t_stat": result.t_stat,
-            "p_value": result.p_value,
-            "conf_int": result.conf_int,
-        })
+        assert_nan_inference(
+            {
+                "se": result.se,
+                "t_stat": result.t_stat,
+                "p_value": result.p_value,
+                "conf_int": result.conf_int,
+            }
+        )
 
 
 # =============================================================================
@@ -730,16 +747,19 @@ class TestDiagnosticsTStatNaN:
                 y = 5.0
                 if is_treated and post == 1:
                     y += 2.0
-                data.append({
-                    "unit": unit,
-                    "post": post,
-                    "outcome": y,
-                    "treated": int(is_treated),
-                })
+                data.append(
+                    {
+                        "unit": unit,
+                        "post": post,
+                        "outcome": y,
+                        "treated": int(is_treated),
+                    }
+                )
 
         df = pd.DataFrame(data)
 
         import warnings
+
         with warnings.catch_warnings(record=True):
             warnings.simplefilter("always")
             result = permutation_test(
@@ -756,14 +776,11 @@ class TestDiagnosticsTStatNaN:
         t_stat = result.t_stat
 
         if not np.isfinite(se) or se == 0:
-            assert np.isnan(t_stat), (
-                f"permutation t_stat should be NaN when SE={se}, got {t_stat}"
-            )
+            assert np.isnan(t_stat), f"permutation t_stat should be NaN when SE={se}, got {t_stat}"
         else:
             expected = result.original_effect / se
             assert np.isclose(t_stat, expected), (
-                f"permutation t_stat should be effect/SE, "
-                f"expected {expected}, got {t_stat}"
+                f"permutation t_stat should be effect/SE, " f"expected {expected}, got {t_stat}"
             )
 
     def test_leave_one_out_tstat_nan_when_se_zero(self):
@@ -780,16 +797,19 @@ class TestDiagnosticsTStatNaN:
                 y = 5.0
                 if is_treated and post == 1:
                     y += 2.0
-                data.append({
-                    "unit": unit,
-                    "post": post,
-                    "outcome": y,
-                    "treated": int(is_treated),
-                })
+                data.append(
+                    {
+                        "unit": unit,
+                        "post": post,
+                        "outcome": y,
+                        "treated": int(is_treated),
+                    }
+                )
 
         df = pd.DataFrame(data)
 
         import warnings
+
         with warnings.catch_warnings(record=True):
             warnings.simplefilter("always")
             result = leave_one_out_test(
@@ -804,13 +824,11 @@ class TestDiagnosticsTStatNaN:
         t_stat = result.t_stat
 
         if not np.isfinite(se) or se == 0:
-            assert np.isnan(t_stat), (
-                f"LOO t_stat should be NaN when SE={se}, got {t_stat}"
-            )
+            assert np.isnan(t_stat), f"LOO t_stat should be NaN when SE={se}, got {t_stat}"
             ci = result.conf_int
-            assert np.isnan(ci[0]) and np.isnan(ci[1]), (
-                f"LOO conf_int should be (NaN, NaN) when SE={se}, got {ci}"
-            )
+            assert np.isnan(ci[0]) and np.isnan(
+                ci[1]
+            ), f"LOO conf_int should be (NaN, NaN) when SE={se}, got {ci}"
 
     def test_permutation_tstat_consistency(self, simple_panel_data):
         """permutation_test t_stat = effect/SE when SE is valid."""
@@ -828,11 +846,9 @@ class TestDiagnosticsTStatNaN:
         t_stat = result.t_stat
 
         if not np.isfinite(se) or se == 0:
-            assert np.isnan(t_stat), (
-                f"t_stat should be NaN when SE={se}, got {t_stat}"
-            )
+            assert np.isnan(t_stat), f"t_stat should be NaN when SE={se}, got {t_stat}"
         else:
             expected = result.original_effect / se
-            assert np.isclose(t_stat, expected), (
-                f"t_stat should be effect/SE, expected {expected}, got {t_stat}"
-            )
+            assert np.isclose(
+                t_stat, expected
+            ), f"t_stat should be effect/SE, expected {expected}, got {t_stat}"

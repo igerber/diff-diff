@@ -665,21 +665,29 @@ class TestRankGuardedAnalyticalSE:
             drop_one = StaggeredTripleDifference(
                 estimation_method=method, control_group="nevertreated"
             ).fit(
-                data, "outcome", "unit", "period", "first_treat", "eligibility",
+                data,
+                "outcome",
+                "unit",
+                "period",
+                "first_treat",
+                "eligibility",
                 covariates=["x1"],
             )
             with_const = StaggeredTripleDifference(
                 estimation_method=method, control_group="nevertreated"
             ).fit(
-                data_const, "outcome", "unit", "period", "first_treat", "eligibility",
+                data_const,
+                "outcome",
+                "unit",
+                "period",
+                "first_treat",
+                "eligibility",
                 covariates=["x1", "xc"],
             )
 
         assert np.isfinite(with_const.overall_se)
         assert with_const.overall_se < 1.0  # was 30-100x inflated
-        np.testing.assert_allclose(
-            with_const.overall_se, drop_one.overall_se, rtol=1e-9
-        )
+        np.testing.assert_allclose(with_const.overall_se, drop_one.overall_se, rtol=1e-9)
 
     def test_constant_covariate_emits_rank_guard_warning(self):
         # reg uses the OR bread only -> exactly one OR-path rank-guard warning.
@@ -687,10 +695,13 @@ class TestRankGuardedAnalyticalSE:
         data["xc"] = 5.0
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
-            StaggeredTripleDifference(
-                estimation_method="reg", control_group="nevertreated"
-            ).fit(
-                data, "outcome", "unit", "period", "first_treat", "eligibility",
+            StaggeredTripleDifference(estimation_method="reg", control_group="nevertreated").fit(
+                data,
+                "outcome",
+                "unit",
+                "period",
+                "first_treat",
+                "eligibility",
                 covariates=["x1", "xc"],
             )
         rank_guard = [w for w in caught if "rank-guarded inverse" in str(w.message)]
@@ -703,7 +714,12 @@ class TestRankGuardedAnalyticalSE:
             res = StaggeredTripleDifference(
                 estimation_method="dr", control_group="nevertreated"
             ).fit(
-                data, "outcome", "unit", "period", "first_treat", "eligibility",
+                data,
+                "outcome",
+                "unit",
+                "period",
+                "first_treat",
+                "eligibility",
                 covariates=["x1", "x2"],
             )
         assert not any("rank-guarded inverse" in str(w.message) for w in caught)
@@ -728,20 +744,30 @@ class TestRankGuardedAnalyticalSE:
             drop_one = StaggeredTripleDifference(
                 estimation_method=method, control_group="nevertreated"
             ).fit(
-                data, "outcome", "unit", "period", "first_treat", "eligibility",
-                covariates=["x1"], survey_design=sd,
+                data,
+                "outcome",
+                "unit",
+                "period",
+                "first_treat",
+                "eligibility",
+                covariates=["x1"],
+                survey_design=sd,
             )
             with_const = StaggeredTripleDifference(
                 estimation_method=method, control_group="nevertreated"
             ).fit(
-                data_const, "outcome", "unit", "period", "first_treat", "eligibility",
-                covariates=["x1", "xc"], survey_design=sd,
+                data_const,
+                "outcome",
+                "unit",
+                "period",
+                "first_treat",
+                "eligibility",
+                covariates=["x1", "xc"],
+                survey_design=sd,
             )
         assert np.isfinite(with_const.overall_se)
         assert with_const.overall_se < 1.0
-        np.testing.assert_allclose(
-            with_const.overall_se, drop_one.overall_se, rtol=1e-9
-        )
+        np.testing.assert_allclose(with_const.overall_se, drop_one.overall_se, rtol=1e-9)
 
     @pytest.mark.parametrize("method", ["reg", "ipw", "dr"])
     def test_notyettreated_silent_constant_covariate(self, method):
@@ -758,7 +784,12 @@ class TestRankGuardedAnalyticalSE:
                 control_group="notyettreated",
                 rank_deficient_action="silent",
             ).fit(
-                data, "outcome", "unit", "period", "first_treat", "eligibility",
+                data,
+                "outcome",
+                "unit",
+                "period",
+                "first_treat",
+                "eligibility",
                 covariates=["x1", "xc"],
             )
         assert np.isfinite(res.overall_se)
@@ -782,7 +813,12 @@ class TestRankGuardedAnalyticalSE:
                 control_group="nevertreated",
                 rank_deficient_action="error",
             ).fit(
-                data, "outcome", "unit", "period", "first_treat", "eligibility",
+                data,
+                "outcome",
+                "unit",
+                "period",
+                "first_treat",
+                "eligibility",
                 covariates=["x1", "x1c"],
             )
 
@@ -800,27 +836,33 @@ class TestRankGuardedAnalyticalSE:
         rng = np.random.default_rng(0)
         nt = (data["first_treat"] == 0).to_numpy()
         x2d = np.where(nt, 2.0 * data["x1"].to_numpy(), rng.normal(size=len(data)))
-        data["x2d"] = pd.Series(x2d, index=data.index).groupby(
-            data["unit"]
-        ).transform("first")
+        data["x2d"] = pd.Series(x2d, index=data.index).groupby(data["unit"]).transform("first")
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             drop_one = StaggeredTripleDifference(
                 estimation_method=method, control_group="nevertreated"
             ).fit(
-                data, "outcome", "unit", "period", "first_treat", "eligibility",
+                data,
+                "outcome",
+                "unit",
+                "period",
+                "first_treat",
+                "eligibility",
                 covariates=["x1"],
             )
             with_deg = StaggeredTripleDifference(
                 estimation_method=method, control_group="nevertreated"
             ).fit(
-                data, "outcome", "unit", "period", "first_treat", "eligibility",
+                data,
+                "outcome",
+                "unit",
+                "period",
+                "first_treat",
+                "eligibility",
                 covariates=["x1", "x2d"],
             )
         assert np.isfinite(with_deg.overall_se) and with_deg.overall_se > 0
-        np.testing.assert_allclose(
-            with_deg.overall_se, drop_one.overall_se, rtol=5e-2
-        )
+        np.testing.assert_allclose(with_deg.overall_se, drop_one.overall_se, rtol=5e-2)
 
 
 class TestStaggeredTripleDiffCovariateScaleEquilibration:

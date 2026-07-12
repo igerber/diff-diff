@@ -118,6 +118,7 @@ class TestSunAbrahamRParity:
         output (p-values, CIs) without changing SEs; this test guards that.
         """
         import pandas as pd
+
         from diff_diff.linalg import LinearRegression
 
         # Reconstruct the full-dummy design SA's Part G builds (same shape

@@ -60,21 +60,17 @@ def _simulate_panel(
             # trivially satisfied.
             psu_id = int(g) * 2 + parity
             d = 1 if (treated[g] and t >= first_treated_period) else 0
-            y = (
-                group_fe[g]
-                + 0.1 * t
-                + tau * d
-                + psu_fe[g, parity]
-                + rng.normal(0.0, obs_sigma)
+            y = group_fe[g] + 0.1 * t + tau * d + psu_fe[g, parity] + rng.normal(0.0, obs_sigma)
+            rows.append(
+                {
+                    "group": int(g),
+                    "period": int(t),
+                    "treatment": int(d),
+                    "outcome": float(y),
+                    "psu": psu_id,
+                    "pw": 1.0,
+                }
             )
-            rows.append({
-                "group": int(g),
-                "period": int(t),
-                "treatment": int(d),
-                "outcome": float(y),
-                "psu": psu_id,
-                "pw": 1.0,
-            })
     return pd.DataFrame(rows)
 
 
@@ -111,9 +107,12 @@ def test_cell_period_allocator_coverage_within_group_varying_psu():
                 warnings.simplefilter("ignore")
                 res = ChaisemartinDHaultfoeuille(seed=r + 1).fit(
                     df,
-                    outcome="outcome", group="group",
-                    time="period", treatment="treatment",
-                    survey_design=sd, L_max=1,
+                    outcome="outcome",
+                    group="group",
+                    time="period",
+                    treatment="treatment",
+                    survey_design=sd,
+                    L_max=1,
                 )
         except Exception:
             failed += 1
@@ -129,8 +128,7 @@ def test_cell_period_allocator_coverage_within_group_varying_psu():
 
     completed = n_reps - failed
     assert completed >= int(0.95 * n_reps), (
-        f"MC simulation had {failed}/{n_reps} fit failures, above "
-        f"the 5% tolerance."
+        f"MC simulation had {failed}/{n_reps} fit failures, above " f"the 5% tolerance."
     )
     coverage = covered / completed
     assert 0.925 <= coverage <= 0.975, (

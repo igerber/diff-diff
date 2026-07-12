@@ -21,6 +21,7 @@ from diff_diff.survey import SurveyDesign
 # Fixtures
 # ---------------------------------------------------------------------------
 
+
 def _make_simple_panel():
     """2-period panel for DiD/MultiPeriodDiD (treatment/post binary columns)."""
     np.random.seed(123)
@@ -34,10 +35,16 @@ def _make_simple_panel():
             if treated and t == 1:
                 y += 2.0  # ATT = 2
             y += np.random.normal(0, 0.3)
-            rows.append({
-                "unit": i, "time": t, "treated": treated, "post": t,
-                "outcome": y, "weight": wt,
-            })
+            rows.append(
+                {
+                    "unit": i,
+                    "time": t,
+                    "treated": treated,
+                    "post": t,
+                    "outcome": y,
+                    "weight": wt,
+                }
+            )
     data = pd.DataFrame(rows)
     return data
 
@@ -60,12 +67,17 @@ def _make_staggered_panel():
             if ft > 0 and t >= ft:
                 y += 2.0
             y += np.random.normal(0, 0.4)
-            rows.append({
-                "unit": i, "time": t, "first_treat": ft,
-                "outcome": y, "weight": wt,
-                "treated": 1 if ft > 0 else 0,
-                "post": 1 if ft > 0 and t >= ft else 0,
-            })
+            rows.append(
+                {
+                    "unit": i,
+                    "time": t,
+                    "first_treat": ft,
+                    "outcome": y,
+                    "weight": wt,
+                    "treated": 1 if ft > 0 else 0,
+                    "post": 1 if ft > 0 and t >= ft else 0,
+                }
+            )
     data = pd.DataFrame(rows)
     return data
 
@@ -112,6 +124,7 @@ def _add_brr_replicates(data, n_rep=16, unit_col="unit"):
 # Smoke tests — each estimator × {JK1, BRR}
 # ---------------------------------------------------------------------------
 
+
 class TestDiDReplicate:
     """DifferenceInDifferences with replicate weights."""
 
@@ -120,7 +133,11 @@ class TestDiDReplicate:
         rep_cols = _add_jk1_replicates(data, n_rep=10)
         sd = SurveyDesign(weights="weight", replicate_weights=rep_cols, replicate_method="JK1")
         result = DifferenceInDifferences().fit(
-            data, "outcome", "treated", "post", survey_design=sd,
+            data,
+            "outcome",
+            "treated",
+            "post",
+            survey_design=sd,
         )
         assert np.isfinite(result.att)
         assert np.isfinite(result.se) and result.se > 0
@@ -132,7 +149,11 @@ class TestDiDReplicate:
         rep_cols = _add_brr_replicates(data, n_rep=16)
         sd = SurveyDesign(weights="weight", replicate_weights=rep_cols, replicate_method="BRR")
         result = DifferenceInDifferences().fit(
-            data, "outcome", "treated", "post", survey_design=sd,
+            data,
+            "outcome",
+            "treated",
+            "post",
+            survey_design=sd,
         )
         assert np.isfinite(result.att)
         assert np.isfinite(result.se) and result.se > 0
@@ -144,7 +165,11 @@ class TestDiDReplicate:
         sd = SurveyDesign(weights="weight", replicate_weights=rep_cols, replicate_method="JK1")
         with pytest.raises((ValueError, NotImplementedError)):
             DifferenceInDifferences(inference="wild_bootstrap", cluster="unit").fit(
-                data, "outcome", "treated", "post", survey_design=sd,
+                data,
+                "outcome",
+                "treated",
+                "post",
+                survey_design=sd,
             )
 
 
@@ -159,7 +184,12 @@ class TestDiDAbsorbReplicate:
         rep_cols = _add_brr_replicates(data, n_rep=16)
         sd = SurveyDesign(weights="weight", replicate_weights=rep_cols, replicate_method="BRR")
         result = DifferenceInDifferences().fit(
-            data, "outcome", "treated", "post", absorb=["group"], survey_design=sd,
+            data,
+            "outcome",
+            "treated",
+            "post",
+            absorb=["group"],
+            survey_design=sd,
         )
         assert np.isfinite(result.att)
         assert np.isfinite(result.se) and result.se > 0
@@ -173,7 +203,12 @@ class TestMultiPeriodDiDReplicate:
         rep_cols = _add_jk1_replicates(data, n_rep=10)
         sd = SurveyDesign(weights="weight", replicate_weights=rep_cols, replicate_method="JK1")
         result = MultiPeriodDiD().fit(
-            data, "outcome", "treated", "time", post_periods=[1], survey_design=sd,
+            data,
+            "outcome",
+            "treated",
+            "time",
+            post_periods=[1],
+            survey_design=sd,
         )
         assert np.isfinite(result.avg_att)
         assert np.isfinite(result.avg_se) and result.avg_se > 0
@@ -185,7 +220,12 @@ class TestMultiPeriodDiDReplicate:
         rep_cols = _add_brr_replicates(data, n_rep=16)
         sd = SurveyDesign(weights="weight", replicate_weights=rep_cols, replicate_method="BRR")
         result = MultiPeriodDiD().fit(
-            data, "outcome", "treated", "time", post_periods=[1], survey_design=sd,
+            data,
+            "outcome",
+            "treated",
+            "time",
+            post_periods=[1],
+            survey_design=sd,
         )
         assert np.isfinite(result.avg_att)
         assert np.isfinite(result.avg_se) and result.avg_se > 0
@@ -208,10 +248,16 @@ class TestTWFEReplicate:
                 if treated and t == 1:
                     y += 2.0
                 y += np.random.normal(0, 0.3)
-                rows.append({
-                    "unit": i, "time": t, "treated": treated,
-                    "post": t, "outcome": y, "weight": wt,
-                })
+                rows.append(
+                    {
+                        "unit": i,
+                        "time": t,
+                        "treated": treated,
+                        "post": t,
+                        "outcome": y,
+                        "weight": wt,
+                    }
+                )
         return pd.DataFrame(rows)
 
     def test_twfe_brr(self):
@@ -220,7 +266,12 @@ class TestTWFEReplicate:
         rep_cols = _add_brr_replicates(data, n_rep=16)
         sd = SurveyDesign(weights="weight", replicate_weights=rep_cols, replicate_method="BRR")
         result = TwoWayFixedEffects().fit(
-            data, "outcome", "treated", "post", "unit", survey_design=sd,
+            data,
+            "outcome",
+            "treated",
+            "post",
+            "unit",
+            survey_design=sd,
         )
         assert np.isfinite(result.att)
         assert np.isfinite(result.se) and result.se > 0
@@ -233,7 +284,12 @@ class TestTWFEReplicate:
         rep_cols = _add_brr_replicates(data, n_rep=20)
         sd = SurveyDesign(weights="weight", replicate_weights=rep_cols, replicate_method="BRR")
         result = TwoWayFixedEffects().fit(
-            data, "outcome", "treated", "post", "unit", survey_design=sd,
+            data,
+            "outcome",
+            "treated",
+            "post",
+            "unit",
+            survey_design=sd,
         )
         assert np.isfinite(result.att)
         assert np.isfinite(result.se) and result.se > 0
@@ -248,7 +304,12 @@ class TestSunAbrahamReplicate:
         rep_cols = _add_brr_replicates(data, n_rep=16)
         sd = SurveyDesign(weights="weight", replicate_weights=rep_cols, replicate_method="BRR")
         result = SunAbraham(n_bootstrap=0).fit(
-            data, "outcome", "unit", "time", "first_treat", survey_design=sd,
+            data,
+            "outcome",
+            "unit",
+            "time",
+            "first_treat",
+            survey_design=sd,
         )
         assert np.isfinite(result.overall_att)
         assert np.isfinite(result.overall_se) and result.overall_se > 0
@@ -261,7 +322,12 @@ class TestSunAbrahamReplicate:
         sd = SurveyDesign(weights="weight", replicate_weights=rep_cols, replicate_method="BRR")
         with pytest.raises(ValueError, match="n_bootstrap"):
             SunAbraham(n_bootstrap=100).fit(
-                data, "outcome", "unit", "time", "first_treat", survey_design=sd,
+                data,
+                "outcome",
+                "unit",
+                "time",
+                "first_treat",
+                survey_design=sd,
             )
 
 
@@ -273,7 +339,12 @@ class TestStackedDiDReplicate:
         rep_cols = _add_jk1_replicates(data)
         sd = SurveyDesign(weights="weight", replicate_weights=rep_cols, replicate_method="JK1")
         result = StackedDiD().fit(
-            data, "outcome", "unit", "time", "first_treat", survey_design=sd,
+            data,
+            "outcome",
+            "unit",
+            "time",
+            "first_treat",
+            survey_design=sd,
         )
         assert np.isfinite(result.overall_att)
         assert np.isfinite(result.overall_se) and result.overall_se > 0
@@ -285,7 +356,12 @@ class TestStackedDiDReplicate:
         rep_cols = _add_brr_replicates(data)
         sd = SurveyDesign(weights="weight", replicate_weights=rep_cols, replicate_method="BRR")
         result = StackedDiD().fit(
-            data, "outcome", "unit", "time", "first_treat", survey_design=sd,
+            data,
+            "outcome",
+            "unit",
+            "time",
+            "first_treat",
+            survey_design=sd,
         )
         assert np.isfinite(result.overall_att)
         assert np.isfinite(result.overall_se) and result.overall_se > 0
@@ -299,7 +375,12 @@ class TestImputationDiDReplicate:
         rep_cols = _add_jk1_replicates(data)
         sd = SurveyDesign(weights="weight", replicate_weights=rep_cols, replicate_method="JK1")
         result = ImputationDiD(n_bootstrap=0).fit(
-            data, "outcome", "unit", "time", "first_treat", survey_design=sd,
+            data,
+            "outcome",
+            "unit",
+            "time",
+            "first_treat",
+            survey_design=sd,
         )
         assert np.isfinite(result.overall_att)
         assert np.isfinite(result.overall_se) and result.overall_se > 0
@@ -313,14 +394,20 @@ class TestImputationDiDReplicate:
         rep_cols = _add_brr_replicates(data, n_rep=16)
         sd = SurveyDesign(weights="weight", replicate_weights=rep_cols, replicate_method="BRR")
         result = ImputationDiD(n_bootstrap=0).fit(
-            data, "outcome", "unit", "time", "first_treat",
-            aggregate="event_study", survey_design=sd,
+            data,
+            "outcome",
+            "unit",
+            "time",
+            "first_treat",
+            aggregate="event_study",
+            survey_design=sd,
         )
         assert np.isfinite(result.overall_se) and result.overall_se > 0
         assert result.event_study_effects is not None
         # At least some identified periods should have finite SE
         finite_ses = [
-            e for e, eff in result.event_study_effects.items()
+            e
+            for e, eff in result.event_study_effects.items()
             if np.isfinite(eff["effect"]) and np.isfinite(eff["se"]) and eff["se"] > 0
         ]
         assert len(finite_ses) > 0, "No event-study periods have finite replicate SE"
@@ -331,8 +418,13 @@ class TestImputationDiDReplicate:
         rep_cols = _add_jk1_replicates(data)
         sd = SurveyDesign(weights="weight", replicate_weights=rep_cols, replicate_method="JK1")
         result = ImputationDiD(n_bootstrap=0).fit(
-            data, "outcome", "unit", "time", "first_treat",
-            aggregate="group", survey_design=sd,
+            data,
+            "outcome",
+            "unit",
+            "time",
+            "first_treat",
+            aggregate="group",
+            survey_design=sd,
         )
         assert result.group_effects is not None
         for g, eff in result.group_effects.items():
@@ -344,7 +436,12 @@ class TestImputationDiDReplicate:
         sd = SurveyDesign(weights="weight", replicate_weights=rep_cols, replicate_method="JK1")
         with pytest.raises(ValueError, match="n_bootstrap"):
             ImputationDiD(n_bootstrap=100).fit(
-                data, "outcome", "unit", "time", "first_treat", survey_design=sd,
+                data,
+                "outcome",
+                "unit",
+                "time",
+                "first_treat",
+                survey_design=sd,
             )
 
 
@@ -356,7 +453,12 @@ class TestTwoStageDiDReplicate:
         rep_cols = _add_jk1_replicates(data)
         sd = SurveyDesign(weights="weight", replicate_weights=rep_cols, replicate_method="JK1")
         result = TwoStageDiD(n_bootstrap=0).fit(
-            data, "outcome", "unit", "time", "first_treat", survey_design=sd,
+            data,
+            "outcome",
+            "unit",
+            "time",
+            "first_treat",
+            survey_design=sd,
         )
         assert np.isfinite(result.overall_att)
         assert np.isfinite(result.overall_se) and result.overall_se > 0
@@ -369,8 +471,13 @@ class TestTwoStageDiDReplicate:
         rep_cols = _add_jk1_replicates(data)
         sd = SurveyDesign(weights="weight", replicate_weights=rep_cols, replicate_method="JK1")
         result = TwoStageDiD(n_bootstrap=0).fit(
-            data, "outcome", "unit", "time", "first_treat",
-            aggregate="event_study", survey_design=sd,
+            data,
+            "outcome",
+            "unit",
+            "time",
+            "first_treat",
+            aggregate="event_study",
+            survey_design=sd,
         )
         assert result.event_study_effects is not None
         non_ref = {e: eff for e, eff in result.event_study_effects.items() if eff["effect"] != 0.0}
@@ -398,16 +505,35 @@ class TestTwoStageDiDReplicate:
         # Add always-treated units (first_treat <= min time)
         for i in range(50, 55):
             for t in range(1, 9):
-                data = pd.concat([data, pd.DataFrame([{
-                    "unit": i, "time": t, "first_treat": 1,
-                    "outcome": 12.0 + rng.normal(0, 0.3),
-                    "weight": 1.5, "treated": 1, "post": 1,
-                }])], ignore_index=True)
+                data = pd.concat(
+                    [
+                        data,
+                        pd.DataFrame(
+                            [
+                                {
+                                    "unit": i,
+                                    "time": t,
+                                    "first_treat": 1,
+                                    "outcome": 12.0 + rng.normal(0, 0.3),
+                                    "weight": 1.5,
+                                    "treated": 1,
+                                    "post": 1,
+                                }
+                            ]
+                        ),
+                    ],
+                    ignore_index=True,
+                )
         rep_cols = _add_jk1_replicates(data, n_rep=10, unit_col="unit")
         sd = SurveyDesign(weights="weight", replicate_weights=rep_cols, replicate_method="JK1")
         # Should not crash despite always-treated unit exclusion
         result = TwoStageDiD(n_bootstrap=0).fit(
-            data, "outcome", "unit", "time", "first_treat", survey_design=sd,
+            data,
+            "outcome",
+            "unit",
+            "time",
+            "first_treat",
+            survey_design=sd,
         )
         # ATT comes from the main fit (always finite once always-treated drop runs)
         assert np.isfinite(result.overall_att)
@@ -440,16 +566,35 @@ class TestTwoStageDiDReplicate:
         data = _make_staggered_panel()
         for i in range(50, 55):
             for t in range(1, 9):
-                data = pd.concat([data, pd.DataFrame([{
-                    "unit": i, "time": t, "first_treat": 1,
-                    "outcome": 12.0 + rng.normal(0, 0.3),
-                    "weight": 1.5, "treated": 1, "post": 1,
-                }])], ignore_index=True)
+                data = pd.concat(
+                    [
+                        data,
+                        pd.DataFrame(
+                            [
+                                {
+                                    "unit": i,
+                                    "time": t,
+                                    "first_treat": 1,
+                                    "outcome": 12.0 + rng.normal(0, 0.3),
+                                    "weight": 1.5,
+                                    "treated": 1,
+                                    "post": 1,
+                                }
+                            ]
+                        ),
+                    ],
+                    ignore_index=True,
+                )
         rep_cols = _add_jk1_replicates(data, n_rep=10, unit_col="unit")
         sd = SurveyDesign(weights="weight", replicate_weights=rep_cols, replicate_method="JK1")
         result = TwoStageDiD(n_bootstrap=0).fit(
-            data, "outcome", "unit", "time", "first_treat",
-            aggregate="all", survey_design=sd,
+            data,
+            "outcome",
+            "unit",
+            "time",
+            "first_treat",
+            aggregate="all",
+            survey_design=sd,
         )
         # Event-study surface: at least one non-reference horizon must have
         # replicate-derived finite SE / p_value / conf_int (the replicate
@@ -458,7 +603,8 @@ class TestTwoStageDiDReplicate:
         # _refit_ts callback, so all four fields must be locked).
         assert result.event_study_effects is not None
         non_ref_es = {
-            e: eff for e, eff in result.event_study_effects.items()
+            e: eff
+            for e, eff in result.event_study_effects.items()
             if eff["effect"] != 0.0 and np.isfinite(eff["effect"])
         }
         assert len(non_ref_es) > 0, "no non-reference event-study effects"
@@ -467,31 +613,27 @@ class TestTwoStageDiDReplicate:
                 f"event-study horizon {e}: replicate SE must be finite "
                 f"under always-treated drop"
             )
-            assert np.isfinite(eff["p_value"]), (
-                f"event-study horizon {e}: replicate p_value must be finite"
-            )
-            assert eff["conf_int"] is not None and np.all(np.isfinite(eff["conf_int"])), (
-                f"event-study horizon {e}: replicate conf_int bounds must be finite"
-            )
+            assert np.isfinite(
+                eff["p_value"]
+            ), f"event-study horizon {e}: replicate p_value must be finite"
+            assert eff["conf_int"] is not None and np.all(
+                np.isfinite(eff["conf_int"])
+            ), f"event-study horizon {e}: replicate conf_int bounds must be finite"
         # Group surface: at least one cohort with finite replicate SE /
         # p_value / conf_int (same override path applies to group effects).
         assert result.group_effects is not None
         finite_groups = {
-            g: eff for g, eff in result.group_effects.items()
-            if np.isfinite(eff["effect"])
+            g: eff for g, eff in result.group_effects.items() if np.isfinite(eff["effect"])
         }
         assert len(finite_groups) > 0, "no finite group effects"
         for g, eff in finite_groups.items():
             assert np.isfinite(eff["se"]) and eff["se"] > 0, (
-                f"cohort {g}: replicate SE must be finite under "
-                f"always-treated drop"
+                f"cohort {g}: replicate SE must be finite under " f"always-treated drop"
             )
-            assert np.isfinite(eff["p_value"]), (
-                f"cohort {g}: replicate p_value must be finite"
-            )
-            assert eff["conf_int"] is not None and np.all(np.isfinite(eff["conf_int"])), (
-                f"cohort {g}: replicate conf_int bounds must be finite"
-            )
+            assert np.isfinite(eff["p_value"]), f"cohort {g}: replicate p_value must be finite"
+            assert eff["conf_int"] is not None and np.all(
+                np.isfinite(eff["conf_int"])
+            ), f"cohort {g}: replicate conf_int bounds must be finite"
 
     def test_two_stage_bootstrap_rejected(self):
         data = _make_staggered_panel()
@@ -499,7 +641,12 @@ class TestTwoStageDiDReplicate:
         sd = SurveyDesign(weights="weight", replicate_weights=rep_cols, replicate_method="JK1")
         with pytest.raises(ValueError, match="n_bootstrap"):
             TwoStageDiD(n_bootstrap=100).fit(
-                data, "outcome", "unit", "time", "first_treat", survey_design=sd,
+                data,
+                "outcome",
+                "unit",
+                "time",
+                "first_treat",
+                survey_design=sd,
             )
 
 
@@ -512,7 +659,12 @@ class TestSunAbrahamCohortSEs:
         rep_cols = _add_brr_replicates(data, n_rep=16)
         sd = SurveyDesign(weights="weight", replicate_weights=rep_cols, replicate_method="BRR")
         result = SunAbraham(n_bootstrap=0).fit(
-            data, "outcome", "unit", "time", "first_treat", survey_design=sd,
+            data,
+            "outcome",
+            "unit",
+            "time",
+            "first_treat",
+            survey_design=sd,
         )
         assert result.cohort_effects is not None
         for key, eff in result.cohort_effects.items():

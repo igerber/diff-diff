@@ -5,9 +5,6 @@ These tests verify that the dataset loading functions work correctly,
 including both the download/cache mechanism and the fallback data generation.
 """
 
-import os
-import tempfile
-from pathlib import Path
 from unittest.mock import patch
 
 import numpy as np
@@ -15,7 +12,6 @@ import pandas as pd
 import pytest
 
 from diff_diff.datasets import (
-    _CACHE_DIR,
     _construct_card_krueger_data,
     _construct_castle_doctrine_data,
     _construct_divorce_laws_data,
@@ -23,10 +19,7 @@ from diff_diff.datasets import (
     clear_cache,
     list_datasets,
     load_card_krueger,
-    load_castle_doctrine,
     load_dataset,
-    load_divorce_laws,
-    load_mpdta,
 )
 
 
@@ -263,9 +256,7 @@ class TestDatasetIntegration:
 
         # Should be able to fit DiD
         did = DifferenceInDifferences()
-        results = did.fit(
-            df_long, outcome="employment", treatment="treated", time="post"
-        )
+        results = did.fit(df_long, outcome="employment", treatment="treated", time="post")
 
         assert hasattr(results, "att")
         assert hasattr(results, "se")

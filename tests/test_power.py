@@ -3036,9 +3036,7 @@ class TestSurveyPowerConfigDesignStaleness:
         initialization must fall back to the default construction."""
         from diff_diff.survey import SurveyDesign
 
-        initial = SurveyDesign(
-            weights="w0", strata="s0", psu="p0", fpc="f0"
-        )
+        initial = SurveyDesign(weights="w0", strata="s0", psu="p0", fpc="f0")
         cfg = SurveyPowerConfig(survey_design=initial)
         first = cfg._build_survey_design()
         assert first is initial

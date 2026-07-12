@@ -16,7 +16,6 @@ from diff_diff.local_linear import (
     uniform_kernel,
 )
 
-
 # =============================================================================
 # Kernel support and shape
 # =============================================================================
@@ -67,7 +66,7 @@ def _numeric_kappa(kernel_name: str, k: int) -> float:
     kfun = KERNELS[kernel_name]
 
     def integrand(t: float) -> float:
-        return (t ** k) * kfun(np.array([t]))[0]
+        return (t**k) * kfun(np.array([t]))[0]
 
     val, _ = integrate.quad(integrand, 0.0, 1.0, limit=200)
     return val
@@ -114,9 +113,9 @@ class TestKernelMoments:
     def test_C_matches_formula(self, kernel):
         """C = (kappa_2^2 - kappa_1 kappa_3) / (kappa_0 kappa_2 - kappa_1^2)."""
         moms = kernel_moments(kernel)
-        expected = (
-            moms["kappa_2"] ** 2 - moms["kappa_1"] * moms["kappa_3"]
-        ) / (moms["kappa_0"] * moms["kappa_2"] - moms["kappa_1"] ** 2)
+        expected = (moms["kappa_2"] ** 2 - moms["kappa_1"] * moms["kappa_3"]) / (
+            moms["kappa_0"] * moms["kappa_2"] - moms["kappa_1"] ** 2
+        )
         assert moms["C"] == pytest.approx(expected, abs=1e-15)
 
     def test_kstar_L2_norm_matches_direct_integration(self):
@@ -128,7 +127,7 @@ class TestKernelMoments:
         def integrand(t: float) -> float:
             kt = epanechnikov_kernel(np.array([t]))[0]
             w = (k2 - k1 * t) / denom
-            return (w ** 2) * (kt ** 2)
+            return (w**2) * (kt**2)
 
         expected, _ = integrate.quad(integrand, 0.0, 1.0, limit=200)
         assert moms["kstar_L2_norm"] == pytest.approx(expected, abs=1e-12)
@@ -153,9 +152,7 @@ class TestLocalLinearFit:
         d = rng.uniform(0.0, 1.0, size=n)
         y = a_true + b_true * d + rng.normal(0.0, 0.01, size=n)
 
-        fit = local_linear_fit(
-            d, y, bandwidth=0.3, boundary=0.0, kernel="epanechnikov"
-        )
+        fit = local_linear_fit(d, y, bandwidth=0.3, boundary=0.0, kernel="epanechnikov")
         # Tolerance is several noise-sigmas given the effective sample size.
         assert fit.intercept == pytest.approx(a_true, abs=0.01)
         assert fit.slope == pytest.approx(b_true, abs=0.05)
@@ -168,9 +165,7 @@ class TestLocalLinearFit:
         """With noiseless linear data, local-linear recovers intercept exactly."""
         d = np.linspace(0.01, 0.5, 50)
         y = 1.5 + 2.0 * d
-        fit = local_linear_fit(
-            d, y, bandwidth=0.4, boundary=0.0, kernel="epanechnikov"
-        )
+        fit = local_linear_fit(d, y, bandwidth=0.4, boundary=0.0, kernel="epanechnikov")
         assert fit.intercept == pytest.approx(1.5, abs=1e-10)
         assert fit.slope == pytest.approx(2.0, abs=1e-10)
 
@@ -186,9 +181,7 @@ class TestLocalLinearFit:
         fit = local_linear_fit(d, y, bandwidth=h, boundary=0.0, kernel="uniform")
 
         retain = (d >= 0.0) & (d <= h)
-        X_manual = np.column_stack(
-            [np.ones(retain.sum()), d[retain] - 0.0]
-        )
+        X_manual = np.column_stack([np.ones(retain.sum()), d[retain] - 0.0])
         w_manual = np.ones(retain.sum())
         coef_manual, _, _ = solve_ols(  # type: ignore[call-overload]
             X_manual,
@@ -209,7 +202,11 @@ class TestLocalLinearFit:
         y = 1.0 + 0.5 * d + rng.normal(0.0, 0.05, size=n)
         user_w = rng.uniform(0.5, 2.0, size=n)
         fit = local_linear_fit(
-            d, y, bandwidth=0.4, boundary=0.0, kernel="epanechnikov",
+            d,
+            y,
+            bandwidth=0.4,
+            boundary=0.0,
+            kernel="epanechnikov",
             weights=user_w,
         )
         # Just a smoke test that weights don't error and produce a close-to-1
@@ -221,16 +218,12 @@ class TestLocalLinearFit:
     def test_returns_dataclass_fields(self):
         d = np.linspace(0.01, 0.5, 30)
         y = np.random.default_rng(0).normal(size=30)
-        fit = local_linear_fit(
-            d, y, bandwidth=0.4, boundary=0.0, kernel="triangular"
-        )
+        fit = local_linear_fit(d, y, bandwidth=0.4, boundary=0.0, kernel="triangular")
         # Dataclass invariants
         assert fit.n_effective == len(fit.residuals) == len(fit.kernel_weights)
         assert fit.design_matrix.shape == (fit.n_effective, 2)
         # The first column of the design is the intercept column.
-        np.testing.assert_array_equal(
-            fit.design_matrix[:, 0], np.ones(fit.n_effective)
-        )
+        np.testing.assert_array_equal(fit.design_matrix[:, 0], np.ones(fit.n_effective))
 
     def test_n_effective_counts_positive_kernel_weights(self):
         """Observations outside [d0, d0 + h] are excluded."""
@@ -238,9 +231,7 @@ class TestLocalLinearFit:
         d = np.array([0.1, 0.2, 0.3, 0.4, 0.5, 1.5, 2.0, 2.5, 3.0, 3.5])
         y = np.zeros_like(d)
         y[:5] = 1.0
-        fit = local_linear_fit(
-            d, y, bandwidth=0.6, boundary=0.0, kernel="uniform"
-        )
+        fit = local_linear_fit(d, y, bandwidth=0.6, boundary=0.0, kernel="uniform")
         assert fit.n_effective == 5
 
     def test_bandwidth_too_narrow_raises(self):
@@ -261,25 +252,19 @@ class TestLocalLinearFit:
         d = np.array([0.1, 0.2])
         y = np.array([1.0, 2.0])
         with pytest.raises(ValueError, match="bandwidth must be positive"):
-            local_linear_fit(
-                d, y, bandwidth=-0.1, boundary=0.0, kernel="uniform"
-            )
+            local_linear_fit(d, y, bandwidth=-0.1, boundary=0.0, kernel="uniform")
 
     def test_zero_bandwidth_raises(self):
         d = np.array([0.1, 0.2])
         y = np.array([1.0, 2.0])
         with pytest.raises(ValueError, match="bandwidth must be positive"):
-            local_linear_fit(
-                d, y, bandwidth=0.0, boundary=0.0, kernel="uniform"
-            )
+            local_linear_fit(d, y, bandwidth=0.0, boundary=0.0, kernel="uniform")
 
     def test_unknown_kernel_raises(self):
         d = np.array([0.1, 0.2])
         y = np.array([1.0, 2.0])
         with pytest.raises(ValueError, match="Unknown kernel"):
-            local_linear_fit(
-                d, y, bandwidth=0.5, boundary=0.0, kernel="my_kernel"
-            )
+            local_linear_fit(d, y, bandwidth=0.5, boundary=0.0, kernel="my_kernel")
 
     def test_mismatched_shapes_raise(self):
         d = np.array([0.1, 0.2, 0.3])
@@ -292,18 +277,14 @@ class TestLocalLinearFit:
         y = np.array([1.0, 2.0, 3.0])
         w = np.array([1.0, 1.0])  # wrong length
         with pytest.raises(ValueError, match="weights must have"):
-            local_linear_fit(
-                d, y, bandwidth=0.5, boundary=0.0, weights=w
-            )
+            local_linear_fit(d, y, bandwidth=0.5, boundary=0.0, weights=w)
 
     def test_negative_weights_raise(self):
         d = np.array([0.1, 0.2, 0.3])
         y = np.array([1.0, 2.0, 3.0])
         w = np.array([1.0, -0.5, 1.0])
         with pytest.raises(ValueError, match="nonnegative"):
-            local_linear_fit(
-                d, y, bandwidth=0.5, boundary=0.0, weights=w
-            )
+            local_linear_fit(d, y, bandwidth=0.5, boundary=0.0, weights=w)
 
     def test_non_finite_d_raises(self):
         d = np.array([0.1, np.nan, 0.3, 0.4])
@@ -331,9 +312,7 @@ class TestLocalLinearFit:
         d = rng.uniform(1.0, 2.0, size=n)  # Support starts at d_lower = 1.0
         y = 3.0 + 0.4 * (d - 1.0) + rng.normal(0.0, 0.02, size=n)
 
-        fit = local_linear_fit(
-            d, y, bandwidth=0.3, boundary=1.0, kernel="epanechnikov"
-        )
+        fit = local_linear_fit(d, y, bandwidth=0.3, boundary=1.0, kernel="epanechnikov")
         # Boundary estimate should recover the intercept at d0=1.0.
         assert fit.intercept == pytest.approx(3.0, abs=0.02)
         assert fit.boundary == 1.0

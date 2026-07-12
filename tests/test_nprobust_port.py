@@ -346,9 +346,7 @@ class TestLpbwselectMseDpiValidation:
         rng = np.random.default_rng(0)
         x = rng.uniform(0.0, 1.0, size=10)
         y = rng.normal(size=10)
-        cluster = np.array(
-            [1, 2, None, 3, 4, 5, 6, 7, 8, 9], dtype=object
-        )
+        cluster = np.array([1, 2, None, 3, 4, 5, 6, 7, 8, 9], dtype=object)
         with pytest.raises(ValueError, match="missing values"):
             lpbwselect_mse_dpi(y, x, cluster=cluster, eval_point=0.0)
 
@@ -412,8 +410,14 @@ class TestLprobustVceClustered:
         # 50 clusters, balanced.
         cluster = np.repeat(np.arange(50), G // 50)
         res = lpbwselect_mse_dpi(
-            y, d, cluster=cluster, eval_point=0.0,
-            p=1, deriv=0, kernel="epa", vce="nn",
+            y,
+            d,
+            cluster=cluster,
+            eval_point=0.0,
+            p=1,
+            deriv=0,
+            kernel="epa",
+            vce="nn",
         )
         assert np.isfinite(res.h_mse_dpi)
         assert res.h_mse_dpi > 0.0
@@ -436,7 +440,12 @@ def _load_lprobust_golden():
     import json
     from pathlib import Path
 
-    path = Path(__file__).resolve().parents[1] / "benchmarks" / "data" / "nprobust_lprobust_golden.json"
+    path = (
+        Path(__file__).resolve().parents[1]
+        / "benchmarks"
+        / "data"
+        / "nprobust_lprobust_golden.json"
+    )
     if not path.exists():
         pytest.skip(
             "Golden values file not found; "
@@ -475,8 +484,16 @@ class TestLprobustSingleEval:
 
         d, y, g = self._dgp(lprobust_golden, "dgp1")
         res = lprobust(
-            y, d, eval_point=0.0, h=g["h"], b=g["b"], p=1, q=2, deriv=0,
-            kernel="epa", vce="nn",
+            y,
+            d,
+            eval_point=0.0,
+            h=g["h"],
+            b=g["b"],
+            p=1,
+            q=2,
+            deriv=0,
+            kernel="epa",
+            vce="nn",
         )
         # Tiered tolerances per plan commit criterion #1.
         np.testing.assert_allclose(res.tau_cl, g["tau_cl"], atol=1e-14, rtol=1e-14)
@@ -490,8 +507,16 @@ class TestLprobustSingleEval:
 
         d, y, g = self._dgp(lprobust_golden, "dgp2")
         res = lprobust(
-            y, d, eval_point=0.0, h=g["h"], b=g["b"], p=1, q=2, deriv=0,
-            kernel="epa", vce="nn",
+            y,
+            d,
+            eval_point=0.0,
+            h=g["h"],
+            b=g["b"],
+            p=1,
+            q=2,
+            deriv=0,
+            kernel="epa",
+            vce="nn",
         )
         np.testing.assert_allclose(res.tau_cl, g["tau_cl"], atol=1e-12, rtol=1e-12)
         np.testing.assert_allclose(res.se_cl, g["se_cl"], atol=1e-12, rtol=1e-12)
@@ -503,8 +528,16 @@ class TestLprobustSingleEval:
 
         d, y, g = self._dgp(lprobust_golden, "dgp3")
         res = lprobust(
-            y, d, eval_point=0.0, h=g["h"], b=g["b"], p=1, q=2, deriv=0,
-            kernel="epa", vce="nn",
+            y,
+            d,
+            eval_point=0.0,
+            h=g["h"],
+            b=g["b"],
+            p=1,
+            q=2,
+            deriv=0,
+            kernel="epa",
+            vce="nn",
         )
         np.testing.assert_allclose(res.tau_cl, g["tau_cl"], atol=1e-14, rtol=1e-14)
         np.testing.assert_allclose(res.se_cl, g["se_cl"], atol=1e-14, rtol=1e-14)
@@ -518,9 +551,10 @@ class TestLprobustSingleEval:
         rng = np.random.default_rng(20260420)
         G = 1000
         d = rng.uniform(0.0, 1.0, G)
-        y = d + d ** 2 + rng.normal(0, 0.5, G)
-        res = lprobust(y, d, eval_point=0.0, h=0.3, b=0.3, p=1, q=2, deriv=0,
-                       kernel="epa", vce="nn")
+        y = d + d**2 + rng.normal(0, 0.5, G)
+        res = lprobust(
+            y, d, eval_point=0.0, h=0.3, b=0.3, p=1, q=2, deriv=0, kernel="epa", vce="nn"
+        )
         assert np.isfinite(res.tau_cl)
         assert np.isfinite(res.tau_bc)
         assert res.se_cl > 0
@@ -539,8 +573,17 @@ class TestLprobustSingleEval:
         y = np.asarray(g["y"], dtype=np.float64)
         cluster = np.asarray(g["cluster"])
         res = lprobust(
-            y, d, eval_point=0.0, h=g["h"], b=g["b"], p=1, q=2, deriv=0,
-            kernel="epa", vce="nn", cluster=cluster,
+            y,
+            d,
+            eval_point=0.0,
+            h=g["h"],
+            b=g["b"],
+            p=1,
+            q=2,
+            deriv=0,
+            kernel="epa",
+            vce="nn",
+            cluster=cluster,
         )
         # Cluster IDs happen to match R's first-appearance order here (IDs
         # are already sequential 1..50), so bit-parity is achievable.
@@ -560,8 +603,17 @@ class TestLprobustSingleEval:
         y = d + rng.normal(0, 0.5, G)
         # Very small h; bwcheck should float it up.
         res = lprobust(
-            y, d, eval_point=0.0, h=0.001, b=0.001, p=1, q=2, deriv=0,
-            kernel="epa", vce="nn", bwcheck=21,
+            y,
+            d,
+            eval_point=0.0,
+            h=0.001,
+            b=0.001,
+            p=1,
+            q=2,
+            deriv=0,
+            kernel="epa",
+            vce="nn",
+            bwcheck=21,
         )
         # Bandwidth must have been floored — original 0.001 will not hold.
         assert res.h > 0.001
@@ -572,16 +624,23 @@ class TestLprobustSingleEval:
         assert res.h == pytest.approx(expected_floor, rel=1e-14)
 
     def test_lprobust_shifted_boundary_dgp5(self, lprobust_golden):
-        """Parity at a non-zero boundary (Design 1 continuous-near-d_lower).
-        """
+        """Parity at a non-zero boundary (Design 1 continuous-near-d_lower)."""
         from diff_diff._nprobust_port import lprobust
 
         g = lprobust_golden["dgp5"]
         d = np.asarray(g["d"], dtype=np.float64)
         y = np.asarray(g["y"], dtype=np.float64)
         res = lprobust(
-            y, d, eval_point=g["eval_point_override"], h=g["h"], b=g["b"],
-            p=1, q=2, deriv=0, kernel="epa", vce="nn",
+            y,
+            d,
+            eval_point=g["eval_point_override"],
+            h=g["h"],
+            b=g["b"],
+            p=1,
+            q=2,
+            deriv=0,
+            kernel="epa",
+            vce="nn",
         )
         np.testing.assert_allclose(res.tau_cl, g["tau_cl"], atol=1e-12, rtol=1e-12)
         np.testing.assert_allclose(res.tau_bc, g["tau_bc"], atol=1e-12, rtol=1e-12)
@@ -599,9 +658,7 @@ class TestLprobustSingleEval:
         G = 200
         d = rng.uniform(0.0, 1.0, G)
         y = d + rng.normal(0, 0.3, G)
-        cluster = np.array(
-            [i // 10 if i != 5 else None for i in range(G)], dtype=object
-        )
+        cluster = np.array([i // 10 if i != 5 else None for i in range(G)], dtype=object)
         with pytest.raises(ValueError, match="cluster contains missing"):
             lprobust(y, d, eval_point=0.0, h=0.3, b=0.3, cluster=cluster)
 
@@ -613,9 +670,7 @@ class TestLprobustSingleEval:
         G = 200
         d = rng.uniform(0.0, 1.0, G)
         y = d + rng.normal(0, 0.3, G)
-        cluster = np.array(
-            [i // 10 if i != 5 else np.nan for i in range(G)], dtype=object
-        )
+        cluster = np.array([i // 10 if i != 5 else np.nan for i in range(G)], dtype=object)
         with pytest.raises(ValueError, match="cluster contains missing"):
             lprobust(y, d, eval_point=0.0, h=0.3, b=0.3, cluster=cluster)
 
@@ -633,8 +688,9 @@ class TestLprobustSingleEval:
         # which for epa is 0 <= (d - 0)/h <= 1 => 0 <= d <= h.
         h = 0.4
         b = 0.2
-        res = lprobust(y, d, eval_point=0.0, h=h, b=b, p=1, q=2, deriv=0,
-                       kernel="epa", vce="nn", bwcheck=None)
+        res = lprobust(
+            y, d, eval_point=0.0, h=h, b=b, p=1, q=2, deriv=0, kernel="epa", vce="nn", bwcheck=None
+        )
         # Post-sort d; ind.h = (|d|/h <= 1) & (d <= h) => d in [0, h].
         sorted_d = np.sort(d)
         # Relaxed: assert n_used > sum of b-window (which is smaller).
@@ -687,7 +743,12 @@ class TestWeightedLprobust:
         x, y = self._panel()
         base = lprobust(y, x, eval_point=0.0, h=0.4, b=0.4, vce="hc1")
         w1 = lprobust(
-            y, x, eval_point=0.0, h=0.4, b=0.4, vce="hc1",
+            y,
+            x,
+            eval_point=0.0,
+            h=0.4,
+            b=0.4,
+            vce="hc1",
             weights=np.ones(x.size),
         )
         np.testing.assert_allclose(w1.tau_bc, base.tau_bc, atol=1e-14, rtol=1e-14)
@@ -736,16 +797,14 @@ class TestWeightedLprobust:
 
         x, y = self._panel()
         with pytest.raises(ValueError, match="sum to zero"):
-            lprobust(y, x, eval_point=0.0, h=0.4, b=0.4,
-                     weights=np.zeros(x.size))
+            lprobust(y, x, eval_point=0.0, h=0.4, b=0.4, weights=np.zeros(x.size))
 
     def test_weights_length_mismatch(self):
         from diff_diff._nprobust_port import lprobust
 
         x, y = self._panel()
         with pytest.raises(ValueError, match="weights length"):
-            lprobust(y, x, eval_point=0.0, h=0.4, b=0.4,
-                     weights=np.ones(x.size - 1))
+            lprobust(y, x, eval_point=0.0, h=0.4, b=0.4, weights=np.ones(x.size - 1))
 
     def test_zero_weight_observations_drop_from_window(self):
         """Observations with weights[i]=0 filter out via combined ``w>0``
@@ -772,8 +831,7 @@ class TestWeightedLprobust:
         rng = np.random.default_rng(7)
         cluster = rng.integers(0, 20, x.size)
         w = rng.uniform(0.5, 1.5, x.size)
-        r = lprobust(y, x, eval_point=0.0, h=0.4, b=0.4,
-                     cluster=cluster, weights=w)
+        r = lprobust(y, x, eval_point=0.0, h=0.4, b=0.4, cluster=cluster, weights=w)
         assert np.isfinite(r.tau_bc) and np.isfinite(r.se_rb) and r.se_rb > 0
 
     def test_uniform_weights_bit_parity_with_cluster(self):
@@ -783,7 +841,6 @@ class TestWeightedLprobust:
         rng = np.random.default_rng(7)
         cluster = rng.integers(0, 20, x.size)
         base = lprobust(y, x, eval_point=0.0, h=0.4, b=0.4, cluster=cluster)
-        w1 = lprobust(y, x, eval_point=0.0, h=0.4, b=0.4,
-                      cluster=cluster, weights=np.ones(x.size))
+        w1 = lprobust(y, x, eval_point=0.0, h=0.4, b=0.4, cluster=cluster, weights=np.ones(x.size))
         np.testing.assert_allclose(w1.tau_bc, base.tau_bc, atol=1e-14, rtol=1e-14)
         np.testing.assert_allclose(w1.se_rb, base.se_rb, atol=1e-14, rtol=1e-14)

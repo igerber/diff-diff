@@ -37,8 +37,7 @@ def golden():
     not copied alongside tests/)."""
     if not GOLDEN_PATH.exists():
         pytest.skip(
-            "Golden values file not found; "
-            "run: Rscript benchmarks/R/generate_nprobust_golden.R"
+            "Golden values file not found; " "run: Rscript benchmarks/R/generate_nprobust_golden.R"
         )
     with GOLDEN_PATH.open() as f:
         return json.load(f)
@@ -139,9 +138,9 @@ class TestStageDiagnosticsParity:
         if expected == 0:
             assert actual == pytest.approx(0, abs=1e-10), f"{name} {stage}"
         else:
-            assert actual == pytest.approx(expected, rel=_PARITY_TOL), (
-                f"{name} {stage}: py={actual!r} R={expected!r}"
-            )
+            assert actual == pytest.approx(
+                expected, rel=_PARITY_TOL
+            ), f"{name} {stage}: py={actual!r} R={expected!r}"
 
 
 # =============================================================================
@@ -257,9 +256,7 @@ class TestInputValidation:
         G = 2000
         d = rng.uniform(0, 1, size=G)
         y = d + d**2 + rng.normal(0, 0.5, size=G)
-        via_wrapper = mse_optimal_bandwidth(
-            d, y, kernel="epanechnikov", return_diagnostics=True
-        )
+        via_wrapper = mse_optimal_bandwidth(d, y, kernel="epanechnikov", return_diagnostics=True)
         via_port_nn = lpbwselect_mse_dpi(
             y,
             d,
@@ -477,9 +474,7 @@ class TestInputValidation:
         # 0.3, 0.4). The B1 design matrix has o_B+1 = 5 columns but
         # only 4 independent rows -> rank-deficient X'X -> Cholesky
         # fails in qrXXinv.
-        d = np.concatenate(
-            [[0.1], np.full(50, 0.15), np.full(50, 0.3), np.full(50, 0.4)]
-        )
+        d = np.concatenate([[0.1], np.full(50, 0.15), np.full(50, 0.3), np.full(50, 0.4)])
         y = d + rng.normal(0, 0.01, size=d.size)
         with pytest.raises(ValueError, match="qrXXinv"):
             mse_optimal_bandwidth(d, y, boundary=float(d.min()))

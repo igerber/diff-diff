@@ -51,13 +51,19 @@ class TestSCWeightFWWeighted:
 
     def test_reg_weights_none_matches_unweighted(self, small_panel):
         """reg_weights=None must be bit-identical to the unweighted call."""
-        Y = np.column_stack([
-            small_panel["Y_pre_control"],
-            small_panel["Y_pre_treated_mean"].reshape(-1, 1),
-        ])
+        Y = np.column_stack(
+            [
+                small_panel["Y_pre_control"],
+                small_panel["Y_pre_treated_mean"].reshape(-1, 1),
+            ]
+        )
         unweighted = _sc_weight_fw(Y, zeta=0.3, max_iter=10000, min_decrease=1e-7)
         weighted_none = _sc_weight_fw(
-            Y, zeta=0.3, max_iter=10000, min_decrease=1e-7, reg_weights=None,
+            Y,
+            zeta=0.3,
+            max_iter=10000,
+            min_decrease=1e-7,
+            reg_weights=None,
         )
         np.testing.assert_allclose(weighted_none, unweighted, rtol=1e-14, atol=0)
 
@@ -70,14 +76,19 @@ class TestSCWeightFWWeighted:
         uses Σ rw·ω² while the unweighted loop uses np.sum(ω²) — different
         reduction orders).
         """
-        Y = np.column_stack([
-            small_panel["Y_pre_control"],
-            small_panel["Y_pre_treated_mean"].reshape(-1, 1),
-        ])
+        Y = np.column_stack(
+            [
+                small_panel["Y_pre_control"],
+                small_panel["Y_pre_treated_mean"].reshape(-1, 1),
+            ]
+        )
         rw_uniform = np.ones(small_panel["n_control"])
         unweighted = _sc_weight_fw(Y, zeta=0.3, max_iter=10000, min_decrease=1e-7)
         weighted_uniform = _sc_weight_fw(
-            Y, zeta=0.3, max_iter=10000, min_decrease=1e-7,
+            Y,
+            zeta=0.3,
+            max_iter=10000,
+            min_decrease=1e-7,
             reg_weights=rw_uniform,
         )
         np.testing.assert_allclose(weighted_uniform, unweighted, rtol=1e-12, atol=1e-13)
@@ -89,44 +100,65 @@ class TestSCWeightFWWeighted:
         weighted objective is strictly convex on the simplex so both
         backends converge to the same minimizer.
         """
-        Y = np.column_stack([
-            small_panel["Y_pre_control"],
-            small_panel["Y_pre_treated_mean"].reshape(-1, 1),
-        ])
+        Y = np.column_stack(
+            [
+                small_panel["Y_pre_control"],
+                small_panel["Y_pre_treated_mean"].reshape(-1, 1),
+            ]
+        )
         rw = np.array([1.5, 0.5, 1.0, 2.0, 0.7, 1.3, 0.9, 1.8, 0.6, 1.1, 1.4, 0.8])
         rust_w = _sc_weight_fw(
-            Y, zeta=0.3, max_iter=20000, min_decrease=1e-9, reg_weights=rw,
+            Y,
+            zeta=0.3,
+            max_iter=20000,
+            min_decrease=1e-9,
+            reg_weights=rw,
         )
         numpy_w = _sc_weight_fw_numpy(
-            Y, zeta=0.3, max_iter=20000, min_decrease=1e-9, reg_weights=rw,
+            Y,
+            zeta=0.3,
+            max_iter=20000,
+            min_decrease=1e-9,
+            reg_weights=rw,
         )
         np.testing.assert_allclose(numpy_w, rust_w, rtol=1e-9, atol=1e-10)
 
     def test_simplex_invariants_under_arbitrary_rw(self, small_panel):
         """For any positive rw, ω sums to 1 and is non-negative."""
-        Y = np.column_stack([
-            small_panel["Y_pre_control"],
-            small_panel["Y_pre_treated_mean"].reshape(-1, 1),
-        ])
+        Y = np.column_stack(
+            [
+                small_panel["Y_pre_control"],
+                small_panel["Y_pre_treated_mean"].reshape(-1, 1),
+            ]
+        )
         rw = np.array([0.3, 0.5, 1.0, 2.0, 1.5, 0.8, 1.2, 0.6, 1.7, 0.9, 1.4, 1.1])
         omega = _sc_weight_fw(
-            Y, zeta=0.4, max_iter=10000, min_decrease=1e-6, reg_weights=rw,
+            Y,
+            zeta=0.4,
+            max_iter=10000,
+            min_decrease=1e-6,
+            reg_weights=rw,
         )
         assert omega.shape == (small_panel["n_control"],)
-        assert np.isclose(omega.sum(), 1.0, atol=1e-6), \
-            f"weights must sum to 1, got {omega.sum()}"
+        assert np.isclose(omega.sum(), 1.0, atol=1e-6), f"weights must sum to 1, got {omega.sum()}"
         assert np.all(omega >= -1e-9), "weights must be non-negative"
 
     def test_return_convergence_tuple_shape(self, small_panel):
         """return_convergence=True returns (weights, bool) under weighted reg."""
-        Y = np.column_stack([
-            small_panel["Y_pre_control"],
-            small_panel["Y_pre_treated_mean"].reshape(-1, 1),
-        ])
+        Y = np.column_stack(
+            [
+                small_panel["Y_pre_control"],
+                small_panel["Y_pre_treated_mean"].reshape(-1, 1),
+            ]
+        )
         rw = np.linspace(0.5, 2.0, small_panel["n_control"])
         result = _sc_weight_fw(
-            Y, zeta=0.3, max_iter=10000, min_decrease=1e-6,
-            return_convergence=True, reg_weights=rw,
+            Y,
+            zeta=0.3,
+            max_iter=10000,
+            min_decrease=1e-6,
+            return_convergence=True,
+            reg_weights=rw,
         )
         assert isinstance(result, tuple)
         assert len(result) == 2
@@ -146,15 +178,20 @@ class TestSCWeightFWWeighted:
         wrong-shape call must raise ``ValueError`` with a message naming
         the expected dimension.
         """
-        Y = np.column_stack([
-            small_panel["Y_pre_control"],
-            small_panel["Y_pre_treated_mean"].reshape(-1, 1),
-        ])
+        Y = np.column_stack(
+            [
+                small_panel["Y_pre_control"],
+                small_panel["Y_pre_treated_mean"].reshape(-1, 1),
+            ]
+        )
         expected_t0 = Y.shape[1] - 1
         bad_rw = np.ones(expected_t0 + 3)
         with pytest.raises(ValueError, match=r"reg_weights"):
             _sc_weight_fw(
-                Y, zeta=0.3, max_iter=100, min_decrease=1e-6,
+                Y,
+                zeta=0.3,
+                max_iter=100,
+                min_decrease=1e-6,
                 reg_weights=bad_rw,
             )
 
@@ -180,11 +217,18 @@ class TestComputeSDIDUnitWeightsSurvey:
         Y_pre_c = small_panel["Y_pre_control"]
         Y_pre_t = small_panel["Y_pre_treated_mean"]
         unweighted = compute_sdid_unit_weights(
-            Y_pre_c, Y_pre_t, zeta_omega=0.3, min_decrease=1e-6,
+            Y_pre_c,
+            Y_pre_t,
+            zeta_omega=0.3,
+            min_decrease=1e-6,
         )
         rw_uniform = np.ones(small_panel["n_control"])
         weighted = compute_sdid_unit_weights_survey(
-            Y_pre_c, Y_pre_t, rw_uniform, zeta_omega=0.3, min_decrease=1e-6,
+            Y_pre_c,
+            Y_pre_t,
+            rw_uniform,
+            zeta_omega=0.3,
+            min_decrease=1e-6,
         )
         np.testing.assert_allclose(weighted, unweighted, rtol=1e-6, atol=1e-6)
 
@@ -194,7 +238,11 @@ class TestComputeSDIDUnitWeightsSurvey:
         rng = np.random.default_rng(7)
         rw = rng.uniform(0.3, 2.5, size=small_panel["n_control"])
         omega = compute_sdid_unit_weights_survey(
-            Y_pre_c, Y_pre_t, rw, zeta_omega=0.3, min_decrease=1e-6,
+            Y_pre_c,
+            Y_pre_t,
+            rw,
+            zeta_omega=0.3,
+            min_decrease=1e-6,
         )
         assert omega.shape == (small_panel["n_control"],)
         assert np.isclose(omega.sum(), 1.0, atol=1e-6)
@@ -206,7 +254,10 @@ class TestComputeSDIDUnitWeightsSurvey:
         wrong_rw = np.ones(small_panel["n_control"] + 1)
         with pytest.raises(ValueError, match="rw_control shape"):
             compute_sdid_unit_weights_survey(
-                Y_pre_c, Y_pre_t, wrong_rw, zeta_omega=0.3,
+                Y_pre_c,
+                Y_pre_t,
+                wrong_rw,
+                zeta_omega=0.3,
             )
 
     def test_return_convergence_propagates_AND_of_passes(self, small_panel):
@@ -215,8 +266,13 @@ class TestComputeSDIDUnitWeightsSurvey:
         rw = np.linspace(0.5, 2.0, small_panel["n_control"])
         # Tight tolerance + few iterations to force non-convergence
         omega, converged = compute_sdid_unit_weights_survey(
-            Y_pre_c, Y_pre_t, rw, zeta_omega=0.3,
-            min_decrease=1e-15, max_iter_pre_sparsify=5, max_iter=5,
+            Y_pre_c,
+            Y_pre_t,
+            rw,
+            zeta_omega=0.3,
+            min_decrease=1e-15,
+            max_iter_pre_sparsify=5,
+            max_iter=5,
             return_convergence=True,
         )
         assert isinstance(converged, bool)
@@ -236,11 +292,18 @@ class TestComputeTimeWeightsSurvey:
         Y_pre_c = small_panel["Y_pre_control"]
         Y_post_c = small_panel["Y_post_control"]
         unweighted = compute_time_weights(
-            Y_pre_c, Y_post_c, zeta_lambda=0.05, min_decrease=1e-6,
+            Y_pre_c,
+            Y_post_c,
+            zeta_lambda=0.05,
+            min_decrease=1e-6,
         )
         rw_uniform = np.ones(small_panel["n_control"])
         weighted = compute_time_weights_survey(
-            Y_pre_c, Y_post_c, rw_uniform, zeta_lambda=0.05, min_decrease=1e-6,
+            Y_pre_c,
+            Y_post_c,
+            rw_uniform,
+            zeta_lambda=0.05,
+            min_decrease=1e-6,
         )
         np.testing.assert_allclose(weighted, unweighted, rtol=1e-6, atol=1e-6)
 
@@ -250,7 +313,11 @@ class TestComputeTimeWeightsSurvey:
         rng = np.random.default_rng(11)
         rw = rng.uniform(0.3, 2.5, size=small_panel["n_control"])
         lam = compute_time_weights_survey(
-            Y_pre_c, Y_post_c, rw, zeta_lambda=0.05, min_decrease=1e-6,
+            Y_pre_c,
+            Y_post_c,
+            rw,
+            zeta_lambda=0.05,
+            min_decrease=1e-6,
         )
         assert lam.shape == (small_panel["n_pre"],)
         assert np.isclose(lam.sum(), 1.0, atol=1e-6)
@@ -262,7 +329,10 @@ class TestComputeTimeWeightsSurvey:
         wrong_rw = np.ones(small_panel["n_control"] + 1)
         with pytest.raises(ValueError, match="rw_control shape"):
             compute_time_weights_survey(
-                Y_pre_c, Y_post_c, wrong_rw, zeta_lambda=0.05,
+                Y_pre_c,
+                Y_post_c,
+                wrong_rw,
+                zeta_lambda=0.05,
             )
 
     def test_non_uniform_rw_beats_unweighted_centering_variant(self, small_panel):
@@ -287,7 +357,9 @@ class TestComputeTimeWeightsSurvey:
 
         # Correct path: what compute_time_weights_survey actually does.
         lam_correct = compute_time_weights_survey(
-            Y_pre_c, Y_post_c, rw,
+            Y_pre_c,
+            Y_post_c,
+            rw,
             zeta_lambda=0.05,
             min_decrease=1e-8,
             max_iter=10000,
@@ -300,15 +372,23 @@ class TestComputeTimeWeightsSurvey:
         sqrt_rw = np.sqrt(np.maximum(rw, 0.0))
         Y_weighted_unweighted_center = Y_time_raw * sqrt_rw[:, None]
         lam_buggy = _sc_weight_fw(
-            Y_weighted_unweighted_center, zeta=0.05, intercept=True,
-            min_decrease=1e-8, max_iter=10000,
+            Y_weighted_unweighted_center,
+            zeta=0.05,
+            intercept=True,
+            min_decrease=1e-8,
+            max_iter=10000,
         )
         # Sparsify + refit second pass to match the two-pass shape.
         from diff_diff.utils import _sparsify
+
         lam_buggy = _sparsify(lam_buggy)
         lam_buggy = _sc_weight_fw(
-            Y_weighted_unweighted_center, zeta=0.05, intercept=True,
-            init_weights=lam_buggy, min_decrease=1e-8, max_iter=10000,
+            Y_weighted_unweighted_center,
+            zeta=0.05,
+            intercept=True,
+            init_weights=lam_buggy,
+            min_decrease=1e-8,
+            max_iter=10000,
         )
 
         # Compute the canonical (weighted-centered) objective on both.
@@ -319,7 +399,7 @@ class TestComputeTimeWeightsSurvey:
 
         def weighted_ssr(lam_val: np.ndarray) -> float:
             resid = A_wc @ lam_val - b_wc
-            return float(np.sum(rw * resid ** 2))
+            return float(np.sum(rw * resid**2))
 
         ssr_correct = weighted_ssr(lam_correct)
         ssr_buggy = weighted_ssr(lam_buggy)
@@ -339,7 +419,11 @@ class TestComputeTimeWeightsSurvey:
         rw = np.ones(small_panel["n_control"])
         rw[:3] = 0.0  # zero out first 3 controls (e.g., undrawn PSU)
         lam = compute_time_weights_survey(
-            Y_pre_c, Y_post_c, rw, zeta_lambda=0.05, min_decrease=1e-6,
+            Y_pre_c,
+            Y_post_c,
+            rw,
+            zeta_lambda=0.05,
+            min_decrease=1e-6,
         )
         assert lam.shape == (small_panel["n_pre"],)
         assert np.isclose(lam.sum(), 1.0, atol=1e-6)
@@ -369,15 +453,25 @@ class TestSurveyHelperBackendParity:
 
         # Rust path (default)
         rust_omega = compute_sdid_unit_weights_survey(
-            Y_pre_c, Y_pre_t, rw, zeta_omega=0.3,
-            max_iter_pre_sparsify=200, max_iter=20000, min_decrease=1e-9,
+            Y_pre_c,
+            Y_pre_t,
+            rw,
+            zeta_omega=0.3,
+            max_iter_pre_sparsify=200,
+            max_iter=20000,
+            min_decrease=1e-9,
         )
 
         # Force pure-Python path
         monkeypatch.setattr(dd_utils, "HAS_RUST_BACKEND", False)
         py_omega = compute_sdid_unit_weights_survey(
-            Y_pre_c, Y_pre_t, rw, zeta_omega=0.3,
-            max_iter_pre_sparsify=200, max_iter=20000, min_decrease=1e-9,
+            Y_pre_c,
+            Y_pre_t,
+            rw,
+            zeta_omega=0.3,
+            max_iter_pre_sparsify=200,
+            max_iter=20000,
+            min_decrease=1e-9,
         )
 
         # Sparsify path is identical, weighted FW is strictly convex; the
@@ -394,14 +488,24 @@ class TestSurveyHelperBackendParity:
         rw = rng.uniform(0.5, 2.0, size=small_panel["n_control"])
 
         rust_lam = compute_time_weights_survey(
-            Y_pre_c, Y_post_c, rw, zeta_lambda=0.05,
-            max_iter_pre_sparsify=200, max_iter=20000, min_decrease=1e-9,
+            Y_pre_c,
+            Y_post_c,
+            rw,
+            zeta_lambda=0.05,
+            max_iter_pre_sparsify=200,
+            max_iter=20000,
+            min_decrease=1e-9,
         )
 
         monkeypatch.setattr(dd_utils, "HAS_RUST_BACKEND", False)
         py_lam = compute_time_weights_survey(
-            Y_pre_c, Y_post_c, rw, zeta_lambda=0.05,
-            max_iter_pre_sparsify=200, max_iter=20000, min_decrease=1e-9,
+            Y_pre_c,
+            Y_post_c,
+            rw,
+            zeta_lambda=0.05,
+            max_iter_pre_sparsify=200,
+            max_iter=20000,
+            min_decrease=1e-9,
         )
 
         np.testing.assert_allclose(py_lam, rust_lam, rtol=1e-7, atol=1e-7)

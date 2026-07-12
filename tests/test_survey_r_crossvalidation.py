@@ -61,12 +61,7 @@ def r_results():
 def _load_scenario_data(scenario):
     """Extract DataFrame from a scenario's embedded data dict."""
     data = scenario["data"]
-    df = pd.DataFrame(
-        {
-            col: vals
-            for col, vals in data.items()
-        }
-    )
+    df = pd.DataFrame({col: vals for col, vals in data.items()})
     # Handle R's Inf serialization (jsonlite writes Inf as "Inf" string)
     if "first_treat" in df.columns:
         raw = df["first_treat"]
@@ -98,7 +93,9 @@ def _build_survey_design(design_type, has_fpc=True):
     """Construct the SurveyDesign for a given design type."""
     if design_type == "strata_psu_fpc":
         return SurveyDesign(
-            weights="weight", strata="stratum", psu="psu",
+            weights="weight",
+            strata="stratum",
+            psu="psu",
             fpc="fpc" if has_fpc else None,
         )
     elif design_type == "strata_psu_nofpc":
@@ -144,7 +141,10 @@ class TestSvyglmDiD:
 
         est = DifferenceInDifferences()
         result = est.fit(
-            data, "outcome", "treated", "post",
+            data,
+            "outcome",
+            "treated",
+            "post",
             covariates=covariates,
             survey_design=sd,
         )
@@ -153,31 +153,25 @@ class TestSvyglmDiD:
     @pytest.mark.parametrize("key", TIER1_SCENARIOS)
     def test_att_matches_r(self, r_results, key):
         result, r = self._fit_scenario(r_results, key)
-        _assert_close(result.att, r["att"], ATT_RTOL, ATT_ATOL,
-                       f"{key} ATT")
+        _assert_close(result.att, r["att"], ATT_RTOL, ATT_ATOL, f"{key} ATT")
 
     @pytest.mark.parametrize("key", TIER1_SCENARIOS)
     def test_se_matches_r(self, r_results, key):
         result, r = self._fit_scenario(r_results, key)
-        _assert_close(result.se, r["se"], SE_RTOL, SE_ATOL,
-                       f"{key} SE")
+        _assert_close(result.se, r["se"], SE_RTOL, SE_ATOL, f"{key} SE")
 
     @pytest.mark.parametrize("key", TIER1_SCENARIOS)
     def test_df_matches_r(self, r_results, key):
         result, r = self._fit_scenario(r_results, key)
         py_df = result.survey_metadata.df_survey
         r_df = r["df"]
-        assert py_df == r_df, (
-            f"{key} df: Python={py_df}, R={r_df}"
-        )
+        assert py_df == r_df, f"{key} df: Python={py_df}, R={r_df}"
 
     @pytest.mark.parametrize("key", TIER1_SCENARIOS)
     def test_ci_matches_r(self, r_results, key):
         result, r = self._fit_scenario(r_results, key)
-        _assert_close(result.conf_int[0], r["ci_lower"], CI_RTOL, CI_ATOL,
-                       f"{key} CI lower")
-        _assert_close(result.conf_int[1], r["ci_upper"], CI_RTOL, CI_ATOL,
-                       f"{key} CI upper")
+        _assert_close(result.conf_int[0], r["ci_lower"], CI_RTOL, CI_ATOL, f"{key} CI lower")
+        _assert_close(result.conf_int[1], r["ci_upper"], CI_RTOL, CI_ATOL, f"{key} CI upper")
 
     @pytest.mark.parametrize("key", TIER1_SCENARIOS)
     def test_fpc_reduces_se(self, r_results, key):
@@ -186,14 +180,15 @@ class TestSvyglmDiD:
             pytest.skip("Only applies to strata_psu_fpc_s42")
         r_fpc = r_results["strata_psu_fpc_s42"]
         r_nofpc = r_results["strata_psu_nofpc_s42"]
-        assert r_fpc["se"] < r_nofpc["se"], (
-            f"FPC SE ({r_fpc['se']:.6f}) should be < non-FPC SE ({r_nofpc['se']:.6f})"
-        )
+        assert (
+            r_fpc["se"] < r_nofpc["se"]
+        ), f"FPC SE ({r_fpc['se']:.6f}) should be < non-FPC SE ({r_nofpc['se']:.6f})"
 
 
 # ---------------------------------------------------------------------------
 # Tier 1b: TWFE plumbing test
 # ---------------------------------------------------------------------------
+
 
 class TestSvyglmTWFE:
     """Verify TWFE survey plumbing produces correct results.
@@ -208,8 +203,7 @@ class TestSvyglmTWFE:
         sd = SurveyDesign(weights="weight", strata="stratum", psu="psu", fpc="fpc")
 
         est = TwoWayFixedEffects()
-        result = est.fit(data, "outcome", "treated", "period", "unit",
-                         survey_design=sd)
+        result = est.fit(data, "outcome", "treated", "period", "unit", survey_design=sd)
 
         assert np.isfinite(result.att), "TWFE ATT should be finite"
         assert np.isfinite(result.se), "TWFE SE should be finite"
@@ -221,12 +215,11 @@ class TestSvyglmTWFE:
         sd = SurveyDesign(weights="weight", strata="stratum", psu="psu", fpc="fpc")
 
         est = TwoWayFixedEffects()
-        result = est.fit(data, "outcome", "treated", "period", "unit",
-                         survey_design=sd)
+        result = est.fit(data, "outcome", "treated", "period", "unit", survey_design=sd)
 
-        assert result.survey_metadata.df_survey == r["df"], (
-            f"TWFE df: Python={result.survey_metadata.df_survey}, expected={r['df']}"
-        )
+        assert (
+            result.survey_metadata.df_survey == r["df"]
+        ), f"TWFE df: Python={result.survey_metadata.df_survey}, expected={r['df']}"
 
     def test_twfe_att_close_to_pooled(self, r_results):
         """In balanced 2x2, TWFE ATT ≈ pooled DiD ATT (FWL equivalence)."""
@@ -234,13 +227,12 @@ class TestSvyglmTWFE:
         data = _load_scenario_data(r)
         sd = SurveyDesign(weights="weight", strata="stratum", psu="psu", fpc="fpc")
 
-        pooled = DifferenceInDifferences().fit(
-            data, "outcome", "treated", "post", survey_design=sd)
+        pooled = DifferenceInDifferences().fit(data, "outcome", "treated", "post", survey_design=sd)
         twfe = TwoWayFixedEffects().fit(
-            data, "outcome", "treated", "period", "unit", survey_design=sd)
+            data, "outcome", "treated", "period", "unit", survey_design=sd
+        )
 
-        _assert_close(twfe.att, pooled.att, rtol=1e-3, atol=0.01,
-                       label="TWFE vs pooled ATT")
+        _assert_close(twfe.att, pooled.att, rtol=1e-3, atol=0.01, label="TWFE vs pooled ATT")
 
 
 # ---------------------------------------------------------------------------
@@ -281,7 +273,11 @@ class TestCSWeighted:
             n_bootstrap=0,
         )
         result = est.fit(
-            data, "outcome", "unit", "period", "first_treat",
+            data,
+            "outcome",
+            "unit",
+            "period",
+            "first_treat",
             covariates=covariates,
             aggregate="simple",
             survey_design=sd,
@@ -299,19 +295,20 @@ class TestCSWeighted:
 
         # Build R (group, time) -> ATT mapping, sorted for stable comparison
         r_gt = {
-            (int(g), int(t)): att
-            for g, t, att in zip(r["gt_groups"], r["gt_periods"], r["gt_att"])
+            (int(g), int(t)): att for g, t, att in zip(r["gt_groups"], r["gt_periods"], r["gt_att"])
         }
 
-        assert len(py_gt) == len(r_gt), (
-            f"{key}: Python has {len(py_gt)} GT cells, R has {len(r_gt)}"
-        )
+        assert len(py_gt) == len(
+            r_gt
+        ), f"{key}: Python has {len(py_gt)} GT cells, R has {len(r_gt)}"
 
         for (g, t), r_att in sorted(r_gt.items()):
             assert (g, t) in py_gt, f"{key}: missing Python GT cell ({g},{t})"
             _assert_close(
-                py_gt[(g, t)]["effect"], r_att,
-                rtol=1e-3, atol=0.05,
+                py_gt[(g, t)]["effect"],
+                r_att,
+                rtol=1e-3,
+                atol=0.05,
                 label=f"{key} ATT(g={g},t={t})",
             )
 
@@ -323,8 +320,10 @@ class TestCSWeighted:
         result, r = self._fit_scenario(r_results, key)
 
         _assert_close(
-            result.overall_att, r["overall_att"],
-            rtol=1e-3, atol=0.05,
+            result.overall_att,
+            r["overall_att"],
+            rtol=1e-3,
+            atol=0.05,
             label=f"{key} overall ATT",
         )
 
@@ -351,22 +350,37 @@ class TestCSWeighted:
         # With survey weights
         sd = SurveyDesign(weights="weight")
         est_survey = CallawaySantAnna(
-            estimation_method="reg", control_group="never_treated",
-            base_period="varying", n_bootstrap=0,
+            estimation_method="reg",
+            control_group="never_treated",
+            base_period="varying",
+            n_bootstrap=0,
         )
         result_survey = est_survey.fit(
-            data, "outcome", "unit", "period", "first_treat",
-            covariates=covariates, aggregate="simple", survey_design=sd,
+            data,
+            "outcome",
+            "unit",
+            "period",
+            "first_treat",
+            covariates=covariates,
+            aggregate="simple",
+            survey_design=sd,
         )
 
         # Without survey weights
         est_naive = CallawaySantAnna(
-            estimation_method="reg", control_group="never_treated",
-            base_period="varying", n_bootstrap=0,
+            estimation_method="reg",
+            control_group="never_treated",
+            base_period="varying",
+            n_bootstrap=0,
         )
         result_naive = est_naive.fit(
-            data, "outcome", "unit", "period", "first_treat",
-            covariates=covariates, aggregate="simple",
+            data,
+            "outcome",
+            "unit",
+            "period",
+            "first_treat",
+            covariates=covariates,
+            aggregate="simple",
         )
 
         assert result_survey.overall_se != result_naive.overall_se, (
@@ -378,6 +392,7 @@ class TestCSWeighted:
 # ---------------------------------------------------------------------------
 # Tier 3: BRR replicate weights
 # ---------------------------------------------------------------------------
+
 
 class TestReplicateWeights:
     """Cross-validate BRR replicate weight variance vs R svrepdesign."""
@@ -402,11 +417,13 @@ class TestReplicateWeights:
         # Build design matrix manually (no intercept — LR adds it)
         from diff_diff.linalg import LinearRegression
 
-        X = np.column_stack([
-            data["treated"].values.astype(float),
-            data["post"].values.astype(float),
-            (data["treated"] * data["post"]).values.astype(float),
-        ])
+        X = np.column_stack(
+            [
+                data["treated"].values.astype(float),
+                data["post"].values.astype(float),
+                (data["treated"] * data["post"]).values.astype(float),
+            ]
+        )
         y = data["outcome"].values.astype(float)
 
         reg = LinearRegression(
@@ -424,8 +441,7 @@ class TestReplicateWeights:
         reg, r = self._fit_brr(r_results)
 
         py_att = reg.coefficients_[3]
-        _assert_close(py_att, r["att"], ATT_RTOL, ATT_ATOL,
-                       "BRR ATT")
+        _assert_close(py_att, r["att"], ATT_RTOL, ATT_ATOL, "BRR ATT")
 
     def test_se_matches_svrepglm(self, r_results):
         if "brr_replicate" not in r_results:
@@ -434,14 +450,11 @@ class TestReplicateWeights:
 
         py_se = np.sqrt(reg.vcov_[3, 3])
         # Wider tolerance for replicate variance (approximate method)
-        _assert_close(py_se, r["se"], rtol=0.05, atol=0.1,
-                       label="BRR SE")
+        _assert_close(py_se, r["se"], rtol=0.05, atol=0.1, label="BRR SE")
 
     def test_df_matches_svrepglm(self, r_results):
         if "brr_replicate" not in r_results:
             pytest.skip("BRR scenario not in R results")
         reg, r = self._fit_brr(r_results)
 
-        assert reg.survey_df_ == r["df"], (
-            f"BRR df: Python={reg.survey_df_}, R={r['df']}"
-        )
+        assert reg.survey_df_ == r["df"], f"BRR df: Python={reg.survey_df_}, R={r['df']}"

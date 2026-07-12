@@ -9,7 +9,6 @@ import pytest
 from diff_diff import ChaisemartinDHaultfoeuille, SurveyDesign
 from diff_diff.prep_dgp import generate_reversible_did_data
 
-
 # ── Fixtures ────────────────────────────────────────────────────────
 
 
@@ -89,9 +88,7 @@ class TestUniformWeights:
             survey_design=sd,
         )
         # Point estimates should match exactly (uniform weights = unweighted mean)
-        assert result_plain.overall_att == pytest.approx(
-            result_survey.overall_att, abs=1e-10
-        )
+        assert result_plain.overall_att == pytest.approx(result_survey.overall_att, abs=1e-10)
 
 
 # ── Test: Non-uniform weights change estimate ───────────────────────
@@ -115,7 +112,7 @@ class TestNonUniformWeights:
         multi["pw"] = multi["group"].map(g_weights)
         # Make second copy have different weights (still constant within group)
         # by giving rows from the second batch higher weight via a multiplier
-        multi.loc[len(df):, "pw"] = multi.loc[len(df):, "pw"] * 2.0
+        multi.loc[len(df) :, "pw"] = multi.loc[len(df) :, "pw"] * 2.0
 
         # Since weights now vary within group (first copy vs second copy),
         # we need per-observation weights. But dCDH requires group-constant
@@ -147,9 +144,7 @@ class TestNonUniformWeights:
         # weight). The ATTs should match. This confirms the equal-cell
         # contract: survey weights don't change the cross-group aggregation.
         # The SE will differ because the survey variance accounts for design.
-        assert result_plain.overall_att == pytest.approx(
-            result_survey.overall_att, abs=1e-8
-        )
+        assert result_plain.overall_att == pytest.approx(result_survey.overall_att, abs=1e-8)
         # But the SEs should differ when strata/PSU are present
         # (tested separately in TestSurveySE)
 
@@ -194,9 +189,7 @@ class TestSurveySE:
     def test_strata_psu_changes_se(self, data_with_survey):
         """Strata + PSU should produce a different SE than weights-only."""
         sd_weights_only = SurveyDesign(weights="pw")
-        sd_full = SurveyDesign(
-            weights="pw", strata="stratum", psu="cluster", nest=True
-        )
+        sd_full = SurveyDesign(weights="pw", strata="stratum", psu="cluster", nest=True)
 
         r_w = ChaisemartinDHaultfoeuille(seed=1).fit(
             data_with_survey,
@@ -305,19 +298,23 @@ class TestValidation:
         multi["pw"] = np.where(np.arange(len(multi)) < len(df), 1.0, 10.0)
         sd = SurveyDesign(weights="pw")
         result_plain = ChaisemartinDHaultfoeuille(seed=1).fit(
-            multi, outcome="outcome", group="group",
-            time="period", treatment="treatment",
+            multi,
+            outcome="outcome",
+            group="group",
+            time="period",
+            treatment="treatment",
         )
         result_survey = ChaisemartinDHaultfoeuille(seed=1).fit(
-            multi, outcome="outcome", group="group",
-            time="period", treatment="treatment",
+            multi,
+            outcome="outcome",
+            group="group",
+            time="period",
+            treatment="treatment",
             survey_design=sd,
         )
         # Weighted cell means with time-varying noise produce different
         # first differences -> different ATT
-        assert result_plain.overall_att != pytest.approx(
-            result_survey.overall_att, abs=0.01
-        )
+        assert result_plain.overall_att != pytest.approx(result_survey.overall_att, abs=0.01)
 
     def test_rejects_replicate_weights_with_bootstrap(self, base_data):
         """Replicate weights combined with n_bootstrap > 0 is rejected.
@@ -392,15 +389,9 @@ class TestBootstrapSurveyWarning:
         with _w.catch_warnings():
             _w.simplefilter("error", UserWarning)
             # Ignore warnings unrelated to the bootstrap-PSU contract.
-            _w.filterwarnings(
-                "ignore", message="Single-period placebo SE"
-            )
-            _w.filterwarnings(
-                "ignore", message="pweight weights normalized"
-            )
-            _w.filterwarnings(
-                "ignore", message="Assumption 11"
-            )
+            _w.filterwarnings("ignore", message="Single-period placebo SE")
+            _w.filterwarnings("ignore", message="pweight weights normalized")
+            _w.filterwarnings("ignore", message="Assumption 11")
             ChaisemartinDHaultfoeuille(n_bootstrap=50, seed=1).fit(
                 data_with_survey,
                 outcome="outcome",
@@ -432,21 +423,25 @@ class TestSEScalePinning:
         sd = SurveyDesign(weights="pw", psu="group")
 
         r_plain = ChaisemartinDHaultfoeuille(seed=1).fit(
-            base_data, outcome="outcome", group="group",
-            time="period", treatment="treatment",
+            base_data,
+            outcome="outcome",
+            group="group",
+            time="period",
+            treatment="treatment",
         )
         r_survey = ChaisemartinDHaultfoeuille(seed=1).fit(
-            df, outcome="outcome", group="group",
-            time="period", treatment="treatment",
+            df,
+            outcome="outcome",
+            group="group",
+            time="period",
+            treatment="treatment",
             survey_design=sd,
         )
         # With PSU=group and uniform weights, survey SE should be
         # close to plug-in SE (both assume group-level independence).
         # Small-sample corrections (n/(n-1)) cause minor differences.
         if np.isfinite(r_plain.overall_se) and np.isfinite(r_survey.overall_se):
-            assert r_plain.overall_se == pytest.approx(
-                r_survey.overall_se, rel=0.15
-            ), (
+            assert r_plain.overall_se == pytest.approx(r_survey.overall_se, rel=0.15), (
                 f"Survey SE ({r_survey.overall_se:.6f}) should be close to "
                 f"plug-in SE ({r_plain.overall_se:.6f}) with uniform weights "
                 f"and PSU=group"
@@ -471,8 +466,11 @@ class TestZeroWeightCells:
 
         # Should not raise; the zero-weight cell is just absent
         result = ChaisemartinDHaultfoeuille(seed=1).fit(
-            df, outcome="outcome", group="group",
-            time="period", treatment="treatment",
+            df,
+            outcome="outcome",
+            group="group",
+            time="period",
+            treatment="treatment",
             survey_design=sd,
         )
         assert np.isfinite(result.overall_att)
@@ -489,23 +487,22 @@ class TestSurveyDeltaInference:
         t-distribution inference with df=df_survey (not z-inference)."""
         from scipy import stats
 
-        sd = SurveyDesign(
-            weights="pw", strata="stratum", psu="cluster", nest=True
-        )
+        sd = SurveyDesign(weights="pw", strata="stratum", psu="cluster", nest=True)
         r = ChaisemartinDHaultfoeuille(seed=1).fit(
             data_with_survey,
-            outcome="outcome", group="group",
-            time="period", treatment="treatment",
-            L_max=2, survey_design=sd,
+            outcome="outcome",
+            group="group",
+            time="period",
+            treatment="treatment",
+            L_max=2,
+            survey_design=sd,
         )
         if not (np.isfinite(r.overall_se) and r.overall_se > 0):
             pytest.skip("delta not estimable on this fixture")
 
         assert r.survey_metadata is not None
         df_s = r.survey_metadata.df_survey
-        assert df_s is not None and df_s > 0, (
-            f"expected positive df_survey, got {df_s}"
-        )
+        assert df_s is not None and df_s > 0, f"expected positive df_survey, got {df_s}"
 
         t_stat = r.overall_att / r.overall_se
         p_t = 2.0 * (1.0 - stats.t.cdf(abs(t_stat), df=df_s))
@@ -526,31 +523,32 @@ class TestSurveyDeltaInference:
         psu_map = {g: i // (n_g // 6) for i, g in enumerate(groups)}
         df_["stratum"] = df_["group"].map(strata_map)
         df_["cluster"] = df_["group"].map(psu_map)
-        sd = SurveyDesign(
-            weights="pw", strata="stratum", psu="cluster", nest=True
-        )
+        sd = SurveyDesign(weights="pw", strata="stratum", psu="cluster", nest=True)
         r = ChaisemartinDHaultfoeuille(seed=1).fit(
             df_,
-            outcome="outcome", group="group",
-            time="period", treatment="treatment",
-            L_max=2, survey_design=sd,
+            outcome="outcome",
+            group="group",
+            time="period",
+            treatment="treatment",
+            L_max=2,
+            survey_design=sd,
         )
         if not (np.isfinite(r.overall_se) and r.overall_se > 0):
             pytest.skip("delta not estimable on this fixture")
         assert r.survey_metadata is not None
         df_s = r.survey_metadata.df_survey
-        assert df_s is not None and df_s < 30, (
-            f"expected small df_survey for t-vs-z gap, got {df_s}"
-        )
+        assert (
+            df_s is not None and df_s < 30
+        ), f"expected small df_survey for t-vs-z gap, got {df_s}"
 
         t_stat = r.overall_att / r.overall_se
         p_t = 2.0 * (1.0 - stats.t.cdf(abs(t_stat), df=df_s))
         p_z = 2.0 * (1.0 - stats.norm.cdf(abs(t_stat)))
         # Threaded p-value must match t, not z
         assert r.overall_p_value == pytest.approx(p_t, abs=1e-10)
-        assert abs(r.overall_p_value - p_z) > 1e-6, (
-            "overall_p_value must differ from z-inference when df_survey is small"
-        )
+        assert (
+            abs(r.overall_p_value - p_z) > 1e-6
+        ), "overall_p_value must differ from z-inference when df_survey is small"
 
 
 # ── Test: Survey + controls (DID^X) ─────────────────────────────────
@@ -564,14 +562,16 @@ class TestSurveyControls:
         rng = np.random.default_rng(7)
         df_ = data_with_survey.copy()
         df_["x"] = rng.normal(0, 1.0, size=len(df_))
-        sd = SurveyDesign(
-            weights="pw", strata="stratum", psu="cluster", nest=True
-        )
+        sd = SurveyDesign(weights="pw", strata="stratum", psu="cluster", nest=True)
         r = ChaisemartinDHaultfoeuille(seed=1).fit(
             df_,
-            outcome="outcome", group="group",
-            time="period", treatment="treatment",
-            controls=["x"], L_max=1, survey_design=sd,
+            outcome="outcome",
+            group="group",
+            time="period",
+            treatment="treatment",
+            controls=["x"],
+            L_max=1,
+            survey_design=sd,
         )
         assert np.isfinite(r.overall_att)
         assert r.survey_metadata is not None
@@ -588,17 +588,19 @@ class TestSurveyHonestDiD:
         results.survey_metadata.df_survey (non-None propagation)."""
         import warnings
 
-        sd = SurveyDesign(
-            weights="pw", strata="stratum", psu="cluster", nest=True
-        )
+        sd = SurveyDesign(weights="pw", strata="stratum", psu="cluster", nest=True)
         with warnings.catch_warnings():
             # dCDH HonestDiD emits a methodology-deviation warning
             warnings.simplefilter("ignore")
             r = ChaisemartinDHaultfoeuille(seed=1).fit(
                 data_with_survey,
-                outcome="outcome", group="group",
-                time="period", treatment="treatment",
-                L_max=2, honest_did=True, survey_design=sd,
+                outcome="outcome",
+                group="group",
+                time="period",
+                treatment="treatment",
+                L_max=2,
+                honest_did=True,
+                survey_design=sd,
             )
         if r.honest_did_results is None:
             pytest.skip("HonestDiD computation returned None on this fixture")
@@ -627,16 +629,23 @@ class TestSurveyHeterogeneity:
 
         r_plain = ChaisemartinDHaultfoeuille(seed=1).fit(
             df_,
-            outcome="outcome", group="group",
-            time="period", treatment="treatment",
-            L_max=1, heterogeneity="x_het",
+            outcome="outcome",
+            group="group",
+            time="period",
+            treatment="treatment",
+            L_max=1,
+            heterogeneity="x_het",
         )
         sd = SurveyDesign(weights="pw")
         r_survey = ChaisemartinDHaultfoeuille(seed=1).fit(
             df_,
-            outcome="outcome", group="group",
-            time="period", treatment="treatment",
-            L_max=1, heterogeneity="x_het", survey_design=sd,
+            outcome="outcome",
+            group="group",
+            time="period",
+            treatment="treatment",
+            L_max=1,
+            heterogeneity="x_het",
+            survey_design=sd,
         )
         assert r_plain.heterogeneity_effects is not None
         assert r_survey.heterogeneity_effects is not None
@@ -659,15 +668,22 @@ class TestSurveyHeterogeneity:
 
         r_plain = ChaisemartinDHaultfoeuille(seed=1).fit(
             df_,
-            outcome="outcome", group="group",
-            time="period", treatment="treatment",
-            L_max=1, heterogeneity="x_het",
+            outcome="outcome",
+            group="group",
+            time="period",
+            treatment="treatment",
+            L_max=1,
+            heterogeneity="x_het",
         )
         r_survey = ChaisemartinDHaultfoeuille(seed=1).fit(
             df_,
-            outcome="outcome", group="group",
-            time="period", treatment="treatment",
-            L_max=1, heterogeneity="x_het", survey_design=sd,
+            outcome="outcome",
+            group="group",
+            time="period",
+            treatment="treatment",
+            L_max=1,
+            heterogeneity="x_het",
+            survey_design=sd,
         )
         assert r_plain.heterogeneity_effects is not None
         assert r_survey.heterogeneity_effects is not None
@@ -675,9 +691,9 @@ class TestSurveyHeterogeneity:
         b_survey = r_survey.heterogeneity_effects[1]["beta"]
         if np.isfinite(b_plain) and np.isfinite(b_survey):
             # WLS with non-uniform weights differs from unweighted OLS
-            assert b_plain != pytest.approx(b_survey, abs=1e-6), (
-                f"plain={b_plain} survey={b_survey} should differ with varying weights"
-            )
+            assert b_plain != pytest.approx(
+                b_survey, abs=1e-6
+            ), f"plain={b_plain} survey={b_survey} should differ with varying weights"
 
     def test_survey_het_uses_survey_df(self, data_with_survey):
         """Reported p_value must match t-distribution inference with df_survey."""
@@ -688,14 +704,16 @@ class TestSurveyHeterogeneity:
         groups = sorted(df_["group"].unique())
         het_map = {g: rng.uniform(-1, 1) for g in groups}
         df_["x_het"] = df_["group"].map(het_map)
-        sd = SurveyDesign(
-            weights="pw", strata="stratum", psu="cluster", nest=True
-        )
+        sd = SurveyDesign(weights="pw", strata="stratum", psu="cluster", nest=True)
         r = ChaisemartinDHaultfoeuille(seed=1).fit(
             df_,
-            outcome="outcome", group="group",
-            time="period", treatment="treatment",
-            L_max=1, heterogeneity="x_het", survey_design=sd,
+            outcome="outcome",
+            group="group",
+            time="period",
+            treatment="treatment",
+            L_max=1,
+            heterogeneity="x_het",
+            survey_design=sd,
         )
         assert r.heterogeneity_effects is not None
         entry = r.heterogeneity_effects[1]
@@ -720,28 +738,28 @@ class TestSurveyTWFEParity:
         """fit and twowayfeweights() produce identical TWFE output under survey."""
         from diff_diff.chaisemartin_dhaultfoeuille import twowayfeweights
 
-        sd = SurveyDesign(
-            weights="pw", strata="stratum", psu="cluster", nest=True
-        )
+        sd = SurveyDesign(weights="pw", strata="stratum", psu="cluster", nest=True)
         r = ChaisemartinDHaultfoeuille(seed=1).fit(
             data_with_survey,
-            outcome="outcome", group="group",
-            time="period", treatment="treatment",
+            outcome="outcome",
+            group="group",
+            time="period",
+            treatment="treatment",
             survey_design=sd,
         )
         helper = twowayfeweights(
             data_with_survey,
-            outcome="outcome", group="group",
-            time="period", treatment="treatment",
+            outcome="outcome",
+            group="group",
+            time="period",
+            treatment="treatment",
             survey_design=sd,
         )
         # fit() twfe_* may be None if non-binary treatment; this fixture is binary
         assert r.twfe_fraction_negative is not None
         assert r.twfe_sigma_fe is not None
         assert r.twfe_beta_fe is not None
-        assert r.twfe_fraction_negative == pytest.approx(
-            helper.fraction_negative, abs=1e-12
-        )
+        assert r.twfe_fraction_negative == pytest.approx(helper.fraction_negative, abs=1e-12)
         assert r.twfe_sigma_fe == pytest.approx(helper.sigma_fe, abs=1e-12)
         assert r.twfe_beta_fe == pytest.approx(helper.beta_fe, abs=1e-12)
 
@@ -755,8 +773,10 @@ class TestSurveyTWFEParity:
         with pytest.raises(ValueError, match="pweight"):
             twowayfeweights(
                 df_,
-                outcome="outcome", group="group",
-                time="period", treatment="treatment",
+                outcome="outcome",
+                group="group",
+                time="period",
+                treatment="treatment",
                 survey_design=sd,
             )
 
@@ -778,8 +798,10 @@ class TestSurveyTWFEParity:
         )
         result = twowayfeweights(
             df_,
-            outcome="outcome", group="group",
-            time="period", treatment="treatment",
+            outcome="outcome",
+            group="group",
+            time="period",
+            treatment="treatment",
             survey_design=sd,
         )
         assert np.isfinite(result.beta_fe)
@@ -801,8 +823,10 @@ class TestSurveyTWFEOracle:
         sd = SurveyDesign(weights="pw")
         helper = twowayfeweights(
             data_with_survey,
-            outcome="outcome", group="group",
-            time="period", treatment="treatment",
+            outcome="outcome",
+            group="group",
+            time="period",
+            treatment="treatment",
             survey_design=sd,
         )
         assert np.isfinite(helper.beta_fe)
@@ -831,8 +855,10 @@ class TestSurveyTWFEOracle:
         w_obs = df_["pw"].to_numpy().astype(float)
 
         coef, _, _ = solve_ols(
-            X_obs, y_obs,
-            weights=w_obs, weight_type="pweight",
+            X_obs,
+            y_obs,
+            weights=w_obs,
+            weight_type="pweight",
             return_vcov=False,
         )
         beta_oracle = float(coef[-1])
@@ -874,8 +900,10 @@ class TestZeroWeightSubpopulation:
         # Must succeed (not raise fuzzy-DiD ValueError)
         result = ChaisemartinDHaultfoeuille(seed=1).fit(
             df_,
-            outcome="outcome", group="group",
-            time="period", treatment="treatment",
+            outcome="outcome",
+            group="group",
+            time="period",
+            treatment="treatment",
             survey_design=sd,
         )
         assert np.isfinite(result.overall_att)
@@ -893,8 +921,10 @@ class TestZeroWeightSubpopulation:
         # Must succeed — zero-weight row with NaN outcome is out-of-sample
         result = ChaisemartinDHaultfoeuille(seed=1).fit(
             df_,
-            outcome="outcome", group="group",
-            time="period", treatment="treatment",
+            outcome="outcome",
+            group="group",
+            time="period",
+            treatment="treatment",
             survey_design=sd,
         )
         assert np.isfinite(result.overall_att)
@@ -913,8 +943,11 @@ class TestZeroWeightSubpopulation:
         sd = SurveyDesign(weights="pw")
         # Must succeed — zero-weight row's NaN group id is out-of-sample
         result = ChaisemartinDHaultfoeuille(seed=1).fit(
-            df_, outcome="outcome", group="group",
-            time="period", treatment="treatment",
+            df_,
+            outcome="outcome",
+            group="group",
+            time="period",
+            treatment="treatment",
             survey_design=sd,
         )
         assert np.isfinite(result.overall_att)
@@ -935,9 +968,13 @@ class TestZeroWeightSubpopulation:
         sd = SurveyDesign(weights="pw")
         result = ChaisemartinDHaultfoeuille(seed=1).fit(
             df_,
-            outcome="outcome", group="group",
-            time="period", treatment="treatment",
-            L_max=1, controls=["x"], survey_design=sd,
+            outcome="outcome",
+            group="group",
+            time="period",
+            treatment="treatment",
+            L_max=1,
+            controls=["x"],
+            survey_design=sd,
         )
         assert np.isfinite(result.overall_att)
 
@@ -959,9 +996,13 @@ class TestZeroWeightSubpopulation:
         # Must succeed — zero-weight row with NaN het is out-of-sample
         result = ChaisemartinDHaultfoeuille(seed=1).fit(
             df_,
-            outcome="outcome", group="group",
-            time="period", treatment="treatment",
-            L_max=1, heterogeneity="x_het", survey_design=sd,
+            outcome="outcome",
+            group="group",
+            time="period",
+            treatment="treatment",
+            L_max=1,
+            heterogeneity="x_het",
+            survey_design=sd,
         )
         assert result.heterogeneity_effects is not None
 
@@ -976,21 +1017,26 @@ class TestSurveyTrendsLinear:
         sd = SurveyDesign(weights="pw")
         r = ChaisemartinDHaultfoeuille(seed=1).fit(
             data_with_survey,
-            outcome="outcome", group="group",
-            time="period", treatment="treatment",
-            L_max=2, trends_linear=True, survey_design=sd,
+            outcome="outcome",
+            group="group",
+            time="period",
+            treatment="treatment",
+            L_max=2,
+            trends_linear=True,
+            survey_design=sd,
         )
         assert r.survey_metadata is not None
         # linear_trends_effects populated per REGISTRY line 614 contract
         assert r.linear_trends_effects is not None
         # At least one horizon should be estimable with finite value
         finite_horizons = [
-            h for h, entry in r.linear_trends_effects.items()
+            h
+            for h, entry in r.linear_trends_effects.items()
             if np.isfinite(entry.get("effect", np.nan))
         ]
-        assert len(finite_horizons) > 0, (
-            "expected at least one horizon with finite linear_trends_effect"
-        )
+        assert (
+            len(finite_horizons) > 0
+        ), "expected at least one horizon with finite linear_trends_effect"
 
 
 # ── Test: Survey + trends_nonparam ──────────────────────────────────
@@ -1004,9 +1050,13 @@ class TestSurveyTrendsNonparam:
         sd = SurveyDesign(weights="pw")
         r = ChaisemartinDHaultfoeuille(seed=1).fit(
             data_with_survey,
-            outcome="outcome", group="group",
-            time="period", treatment="treatment",
-            L_max=2, trends_nonparam="stratum", survey_design=sd,
+            outcome="outcome",
+            group="group",
+            time="period",
+            treatment="treatment",
+            L_max=2,
+            trends_nonparam="stratum",
+            survey_design=sd,
         )
         assert r.survey_metadata is not None
         assert r.event_study_effects is not None
@@ -1045,22 +1095,22 @@ class TestSurveyDesign2:
                 else:
                     d = 0
                 y = group_fe + 2.0 * t + 5.0 * d + rng.normal(0, 0.3)
-                rows.append(
-                    {"group": g, "period": t, "treatment": d, "outcome": y, "pw": 1.0}
-                )
+                rows.append({"group": g, "period": t, "treatment": d, "outcome": y, "pw": 1.0})
         return pd.DataFrame(rows)
 
     def test_survey_design2_runs(self):
         df_ = self._make_join_then_leave_panel()
         sd = SurveyDesign(weights="pw")
         # drop_larger_lower=False keeps the 2-switch groups
-        r = ChaisemartinDHaultfoeuille(
-            seed=1, drop_larger_lower=False
-        ).fit(
+        r = ChaisemartinDHaultfoeuille(seed=1, drop_larger_lower=False).fit(
             df_,
-            outcome="outcome", group="group",
-            time="period", treatment="treatment",
-            L_max=1, design2=True, survey_design=sd,
+            outcome="outcome",
+            group="group",
+            time="period",
+            treatment="treatment",
+            L_max=1,
+            design2=True,
+            survey_design=sd,
         )
         assert r.survey_metadata is not None
         assert r.design2_effects is not None
@@ -1099,9 +1149,13 @@ class TestSurveyWithinGroupValidation:
         df_["psu"] = df_["period"] % 2
         sd = SurveyDesign(weights="pw", strata="stratum", psu="psu")
         result = ChaisemartinDHaultfoeuille(seed=1).fit(
-            df_, outcome="outcome", group="group",
-            time="period", treatment="treatment",
-            survey_design=sd, L_max=2,
+            df_,
+            outcome="outcome",
+            group="group",
+            time="period",
+            treatment="treatment",
+            survey_design=sd,
+            L_max=2,
         )
         assert np.isfinite(result.overall_att)
         assert np.isfinite(result.overall_se)
@@ -1113,9 +1167,13 @@ class TestSurveyWithinGroupValidation:
         df_const["psu"] = 0  # constant-within-group PSU baseline
         sd_const = SurveyDesign(weights="pw", strata="stratum", psu="psu")
         r_const = ChaisemartinDHaultfoeuille(seed=1).fit(
-            df_const, outcome="outcome", group="group",
-            time="period", treatment="treatment",
-            survey_design=sd_const, L_max=2,
+            df_const,
+            outcome="outcome",
+            group="group",
+            time="period",
+            treatment="treatment",
+            survey_design=sd_const,
+            L_max=2,
         )
         assert result.overall_se != r_const.overall_se, (
             "Cell-period allocator must produce a different SE when PSU "
@@ -1136,9 +1194,13 @@ class TestSurveyWithinGroupValidation:
         df_["psu"] = df_["group"]
         sd = SurveyDesign(weights="pw", strata="stratum", psu="psu", nest=True)
         result = ChaisemartinDHaultfoeuille(seed=1).fit(
-            df_, outcome="outcome", group="group",
-            time="period", treatment="treatment",
-            survey_design=sd, L_max=2,
+            df_,
+            outcome="outcome",
+            group="group",
+            time="period",
+            treatment="treatment",
+            survey_design=sd,
+            L_max=2,
         )
         assert np.isfinite(result.overall_att)
         assert np.isfinite(result.overall_se)
@@ -1160,9 +1222,13 @@ class TestSurveyWithinGroupValidation:
         df_["psu"] = df_["group"].astype(int) * 2 + (df_["period"].astype(int) % 2)
         sd = SurveyDesign(weights="pw", psu="psu")
         res = ChaisemartinDHaultfoeuille(seed=1).fit(
-            df_, outcome="outcome", group="group",
-            time="period", treatment="treatment",
-            heterogeneity="x_het", L_max=1,
+            df_,
+            outcome="outcome",
+            group="group",
+            time="period",
+            treatment="treatment",
+            heterogeneity="x_het",
+            L_max=1,
             survey_design=sd,
         )
         assert res.heterogeneity_effects is not None
@@ -1190,9 +1256,13 @@ class TestSurveyWithinGroupValidation:
         df_["psu"] = df_["group"].astype(int) * 2 + (df_["period"].astype(int) % 2)
         sd = SurveyDesign(weights="pw", psu="psu")
         res = ChaisemartinDHaultfoeuille(n_bootstrap=200, seed=1).fit(
-            df_, outcome="outcome", group="group",
-            time="period", treatment="treatment",
-            survey_design=sd, L_max=2,
+            df_,
+            outcome="outcome",
+            group="group",
+            time="period",
+            treatment="treatment",
+            survey_design=sd,
+            L_max=2,
         )
         assert res.bootstrap_results is not None
         assert np.isfinite(res.bootstrap_results.overall_se)
@@ -1224,30 +1294,36 @@ class TestSurveyWithinGroupValidation:
         df_["stratum"] = df_["period"] % 2
         sd_auto = SurveyDesign(weights="pw", strata="stratum", nest=True)
         sd_explicit = SurveyDesign(
-            weights="pw", strata="stratum", psu="group", nest=True,
+            weights="pw",
+            strata="stratum",
+            psu="group",
+            nest=True,
         )
         r_auto = ChaisemartinDHaultfoeuille(seed=1).fit(
-            df_, outcome="outcome", group="group",
-            time="period", treatment="treatment",
-            survey_design=sd_auto, L_max=2,
+            df_,
+            outcome="outcome",
+            group="group",
+            time="period",
+            treatment="treatment",
+            survey_design=sd_auto,
+            L_max=2,
         )
         r_explicit = ChaisemartinDHaultfoeuille(seed=1).fit(
-            df_, outcome="outcome", group="group",
-            time="period", treatment="treatment",
-            survey_design=sd_explicit, L_max=2,
+            df_,
+            outcome="outcome",
+            group="group",
+            time="period",
+            treatment="treatment",
+            survey_design=sd_explicit,
+            L_max=2,
         )
         assert np.isfinite(r_auto.overall_att)
         assert np.isfinite(r_auto.overall_se)
         if np.isfinite(r_auto.overall_se) and np.isfinite(r_explicit.overall_se):
-            assert r_auto.overall_se == pytest.approx(
-                r_explicit.overall_se, rel=1e-6
-            )
+            assert r_auto.overall_se == pytest.approx(r_explicit.overall_se, rel=1e-6)
         assert r_auto.survey_metadata is not None
         assert r_explicit.survey_metadata is not None
-        assert (
-            r_auto.survey_metadata.df_survey
-            == r_explicit.survey_metadata.df_survey
-        )
+        assert r_auto.survey_metadata.df_survey == r_explicit.survey_metadata.df_survey
 
     def test_heterogeneity_auto_inject_with_varying_strata_nest_true_succeeds(self, base_data):
         """PR 3 unblocks heterogeneity + SurveyDesign(strata, nest=True)
@@ -1263,9 +1339,13 @@ class TestSurveyWithinGroupValidation:
         df_["x_het"] = (df_["group"].astype(int) % 2).astype(float)
         sd = SurveyDesign(weights="pw", strata="stratum", nest=True)
         res = ChaisemartinDHaultfoeuille(seed=1).fit(
-            df_, outcome="outcome", group="group",
-            time="period", treatment="treatment",
-            heterogeneity="x_het", L_max=1,
+            df_,
+            outcome="outcome",
+            group="group",
+            time="period",
+            treatment="treatment",
+            heterogeneity="x_het",
+            L_max=1,
             survey_design=sd,
         )
         assert res.heterogeneity_effects is not None
@@ -1288,9 +1368,13 @@ class TestSurveyWithinGroupValidation:
         df_["psu"] = df_["group"].astype(int) * 2 + (df_["period"].astype(int) % 2)
         sd = SurveyDesign(weights="pw", psu="psu")
         res = ChaisemartinDHaultfoeuille(seed=1).fit(
-            df_, outcome="outcome", group="group",
-            time="period", treatment="treatment",
-            heterogeneity="x_het", L_max=2,
+            df_,
+            outcome="outcome",
+            group="group",
+            time="period",
+            treatment="treatment",
+            heterogeneity="x_het",
+            L_max=2,
             survey_design=sd,
         )
         assert res.heterogeneity_effects is not None
@@ -1316,8 +1400,11 @@ class TestSurveyWithinGroupValidation:
         sd = SurveyDesign(weights="pw", strata="stratum")
         with pytest.raises(ValueError, match=r"psu=<col>"):
             ChaisemartinDHaultfoeuille(seed=1).fit(
-                df_, outcome="outcome", group="group",
-                time="period", treatment="treatment",
+                df_,
+                outcome="outcome",
+                group="group",
+                time="period",
+                treatment="treatment",
                 survey_design=sd,
             )
 
@@ -1338,8 +1425,11 @@ class TestSurveyWithinGroupValidation:
         sd = SurveyDesign(weights="pw", strata="stratum", psu="psu")
         with pytest.raises(ValueError, match="PSU to be constant within each"):
             ChaisemartinDHaultfoeuille(seed=1).fit(
-                df_, outcome="outcome", group="group",
-                time="period", treatment="treatment",
+                df_,
+                outcome="outcome",
+                group="group",
+                time="period",
+                treatment="treatment",
                 survey_design=sd,
             )
 
@@ -1358,8 +1448,11 @@ class TestSurveyWithinGroupValidation:
         sd = SurveyDesign(weights="pw", strata="stratum", psu="psu")
         with pytest.raises(ValueError, match="strata to be constant within each"):
             ChaisemartinDHaultfoeuille(seed=1).fit(
-                df_, outcome="outcome", group="group",
-                time="period", treatment="treatment",
+                df_,
+                outcome="outcome",
+                group="group",
+                time="period",
+                treatment="treatment",
                 survey_design=sd,
             )
 
@@ -1371,8 +1464,11 @@ class TestSurveyWithinGroupValidation:
         df_["pw"] = rng.uniform(0.5, 2.0, size=len(df_))
         sd = SurveyDesign(weights="pw")
         result = ChaisemartinDHaultfoeuille(seed=1).fit(
-            df_, outcome="outcome", group="group",
-            time="period", treatment="treatment",
+            df_,
+            outcome="outcome",
+            group="group",
+            time="period",
+            treatment="treatment",
             survey_design=sd,
         )
         assert np.isfinite(result.overall_att)
@@ -1384,28 +1480,27 @@ class TestSurveyWithinGroupValidation:
         df_ = base_data.copy()
         df_["pw"] = 1.0
         r_no_psu = ChaisemartinDHaultfoeuille(seed=1).fit(
-            df_, outcome="outcome", group="group",
-            time="period", treatment="treatment",
+            df_,
+            outcome="outcome",
+            group="group",
+            time="period",
+            treatment="treatment",
             survey_design=SurveyDesign(weights="pw"),
         )
         r_explicit = ChaisemartinDHaultfoeuille(seed=1).fit(
-            df_, outcome="outcome", group="group",
-            time="period", treatment="treatment",
+            df_,
+            outcome="outcome",
+            group="group",
+            time="period",
+            treatment="treatment",
             survey_design=SurveyDesign(weights="pw", psu="group"),
         )
-        assert r_no_psu.overall_att == pytest.approx(
-            r_explicit.overall_att, abs=1e-10
-        )
+        assert r_no_psu.overall_att == pytest.approx(r_explicit.overall_att, abs=1e-10)
         if np.isfinite(r_no_psu.overall_se) and np.isfinite(r_explicit.overall_se):
-            assert r_no_psu.overall_se == pytest.approx(
-                r_explicit.overall_se, rel=1e-6
-            )
+            assert r_no_psu.overall_se == pytest.approx(r_explicit.overall_se, rel=1e-6)
         assert r_no_psu.survey_metadata is not None
         assert r_explicit.survey_metadata is not None
-        assert (
-            r_no_psu.survey_metadata.df_survey
-            == r_explicit.survey_metadata.df_survey
-        )
+        assert r_no_psu.survey_metadata.df_survey == r_explicit.survey_metadata.df_survey
 
     def test_degenerate_cohort_survey_se_is_nan(self):
         """When every variance-eligible group is its own singleton
@@ -1421,35 +1516,38 @@ class TestSurveyWithinGroupValidation:
             for t in range(5):
                 d = 1 if t >= f_switch else 0
                 y = float(g) + 0.5 * t + float(d)
-                rows.append({
-                    "group": g,
-                    "period": t,
-                    "treatment": d,
-                    "outcome": y,
-                    "pw": 1.0,
-                })
+                rows.append(
+                    {
+                        "group": g,
+                        "period": t,
+                        "treatment": d,
+                        "outcome": y,
+                        "pw": 1.0,
+                    }
+                )
         df_ = pd.DataFrame(rows)
         sd = SurveyDesign(weights="pw")
 
         import warnings as _warnings
+
         with _warnings.catch_warnings(record=True) as w:
             _warnings.simplefilter("always")
             result = ChaisemartinDHaultfoeuille(seed=1).fit(
                 df_,
-                outcome="outcome", group="group",
-                time="period", treatment="treatment",
+                outcome="outcome",
+                group="group",
+                time="period",
+                treatment="treatment",
                 survey_design=sd,
             )
 
         # overall_se must be NaN on degenerate cohorts (not 0.0)
         assert np.isnan(result.overall_se), (
-            f"Degenerate-cohort survey overall_se must be NaN, "
-            f"got {result.overall_se}"
+            f"Degenerate-cohort survey overall_se must be NaN, " f"got {result.overall_se}"
         )
         # Degenerate-cohort warning must fire
         assert any(
-            "cohort" in str(wi.message).lower()
-            and "identically zero" in str(wi.message).lower()
+            "cohort" in str(wi.message).lower() and "identically zero" in str(wi.message).lower()
             for wi in w
         ), "Expected degenerate-cohort warning to fire under survey path"
 
@@ -1469,24 +1567,27 @@ class TestSurveyWithinGroupValidation:
 
         sd = SurveyDesign(weights="pw")
         r_subpop = ChaisemartinDHaultfoeuille(seed=1).fit(
-            df_, outcome="outcome", group="group",
-            time="period", treatment="treatment",
+            df_,
+            outcome="outcome",
+            group="group",
+            time="period",
+            treatment="treatment",
             survey_design=sd,
         )
         # Reference: explicit psu='group' preserves the full-design
         # PSU count because the resolver sees all groups (even those
         # entirely zero-weighted). The auto-inject path must match this.
         r_explicit = ChaisemartinDHaultfoeuille(seed=1).fit(
-            df_, outcome="outcome", group="group",
-            time="period", treatment="treatment",
+            df_,
+            outcome="outcome",
+            group="group",
+            time="period",
+            treatment="treatment",
             survey_design=SurveyDesign(weights="pw", psu="group"),
         )
         assert r_subpop.survey_metadata is not None
         assert r_explicit.survey_metadata is not None
-        assert (
-            r_subpop.survey_metadata.df_survey
-            == r_explicit.survey_metadata.df_survey
-        ), (
+        assert r_subpop.survey_metadata.df_survey == r_explicit.survey_metadata.df_survey, (
             f"Auto-inject df_survey={r_subpop.survey_metadata.df_survey} "
             f"must match explicit psu='group' df_survey="
             f"{r_explicit.survey_metadata.df_survey} "
@@ -1503,9 +1604,13 @@ class TestSurveyWithinGroupValidation:
         sd = SurveyDesign(weights="pw")
 
         r_base = ChaisemartinDHaultfoeuille(seed=1).fit(
-            df_, outcome="outcome", group="group",
-            time="period", treatment="treatment",
-            L_max=2, survey_design=sd,
+            df_,
+            outcome="outcome",
+            group="group",
+            time="period",
+            treatment="treatment",
+            L_max=2,
+            survey_design=sd,
         )
 
         # Duplicate the first row: cell mean y_gt stays the same
@@ -1515,14 +1620,16 @@ class TestSurveyWithinGroupValidation:
         dup = df_.iloc[0].copy()
         df_dup = pd.concat([df_, pd.DataFrame([dup])], ignore_index=True)
         r_dup = ChaisemartinDHaultfoeuille(seed=1).fit(
-            df_dup, outcome="outcome", group="group",
-            time="period", treatment="treatment",
-            L_max=2, survey_design=sd,
+            df_dup,
+            outcome="outcome",
+            group="group",
+            time="period",
+            treatment="treatment",
+            L_max=2,
+            survey_design=sd,
         )
         if np.isfinite(r_base.overall_se) and np.isfinite(r_dup.overall_se):
-            assert r_base.overall_se == pytest.approx(
-                r_dup.overall_se, rel=1e-6
-            ), (
+            assert r_base.overall_se == pytest.approx(r_dup.overall_se, rel=1e-6), (
                 f"Row duplication changed SE ({r_base.overall_se} vs "
                 f"{r_dup.overall_se}) — auto-inject psu=group is not active."
             )
@@ -1539,9 +1646,9 @@ class TestSurveyWithinGroupValidation:
         at ``t = 2``.
         """
         from diff_diff.chaisemartin_dhaultfoeuille import (
-            _compute_full_per_group_contributions,
             _cohort_recenter,
             _cohort_recenter_per_period,
+            _compute_full_per_group_contributions,
         )
 
         # D_mat, Y_mat, N_mat shaped (n_groups=4, n_periods=3).
@@ -1575,9 +1682,13 @@ class TestSurveyWithinGroupValidation:
         a11_minus_zeroed = np.array([True, True], dtype=bool)
 
         U, U_pp = _compute_full_per_group_contributions(
-            D_mat=D_mat, Y_mat=Y_mat, N_mat=N_mat,
-            n_10_t_arr=n_10_t_arr, n_00_t_arr=n_00_t_arr,
-            n_01_t_arr=n_01_t_arr, n_11_t_arr=n_11_t_arr,
+            D_mat=D_mat,
+            Y_mat=Y_mat,
+            N_mat=N_mat,
+            n_10_t_arr=n_10_t_arr,
+            n_00_t_arr=n_00_t_arr,
+            n_01_t_arr=n_01_t_arr,
+            n_11_t_arr=n_11_t_arr,
             a11_plus_zeroed_arr=a11_plus_zeroed,
             a11_minus_zeroed_arr=a11_minus_zeroed,
             side="overall",
@@ -1628,8 +1739,11 @@ class TestSurveyWithinGroupValidation:
         df_ = pd.concat([df_, pd.DataFrame([sample])], ignore_index=True)
         sd = SurveyDesign(weights="pw", strata="stratum", psu="psu")
         result = ChaisemartinDHaultfoeuille(seed=1).fit(
-            df_, outcome="outcome", group="group",
-            time="period", treatment="treatment",
+            df_,
+            outcome="outcome",
+            group="group",
+            time="period",
+            treatment="treatment",
             survey_design=sd,
         )
         assert np.isfinite(result.overall_att)
@@ -1664,11 +1778,13 @@ class TestHeterogeneityCellPeriod:
         rows = []
         for g in range(n_groups):
             for t in range(n_periods):
-                rows.append({
-                    "group": int(g),
-                    "period": int(t),
-                    "pw": 1.0,
-                })
+                rows.append(
+                    {
+                        "group": int(g),
+                        "period": int(t),
+                        "pw": 1.0,
+                    }
+                )
         df_ = pd.DataFrame(rows)
         sd = SurveyDesign(weights="pw", psu="group")
         resolved = sd.resolve(df_)
@@ -1749,17 +1865,19 @@ class TestHeterogeneityCellPeriod:
         rows = []
         for g in range(2):
             for t in range(2):
-                rows.append({
-                    "group": int(g),
-                    "period": int(t),
-                    "pw": 1.0,
-                    # Non-PSU-aligned replicate columns: vary within
-                    # each group so sum_i ratio_ir * psi_i sees a
-                    # different weighted average of psi mass under
-                    # the two allocators.
-                    "rep0": 0.5 if t == 0 else 1.5,
-                    "rep1": 1.5 if t == 0 else 0.5,
-                })
+                rows.append(
+                    {
+                        "group": int(g),
+                        "period": int(t),
+                        "pw": 1.0,
+                        # Non-PSU-aligned replicate columns: vary within
+                        # each group so sum_i ratio_ir * psi_i sees a
+                        # different weighted average of psi mass under
+                        # the two allocators.
+                        "rep0": 0.5 if t == 0 else 1.5,
+                        "rep1": 1.5 if t == 0 else 0.5,
+                    }
+                )
         df_ = pd.DataFrame(rows)
         sd = SurveyDesign(
             weights="pw",
@@ -1781,9 +1899,7 @@ class TestHeterogeneityCellPeriod:
         psi_legacy = np.zeros_like(w)
         for i in range(len(w)):
             if W_g[obs_group[i]] > 0:
-                psi_legacy[i] = psi_g[obs_group[i]] * (
-                    w[i] / W_g[obs_group[i]]
-                )
+                psi_legacy[i] = psi_g[obs_group[i]] * (w[i] / W_g[obs_group[i]])
 
         # New cell-period single-cell expansion (what the Binder TSL
         # branch uses). All mass lands on obs at t == 1.
@@ -1848,13 +1964,15 @@ class TestBootstrapCellPeriod:
             for t in range(n_periods):
                 d = 1 if (f is not None and t >= f) else 0
                 y = float(g) + 0.3 * t + 1.5 * d + float(rng.normal(0.0, 0.5))
-                rows.append({
-                    "group": int(g),
-                    "period": int(t),
-                    "treatment": int(d),
-                    "outcome": y,
-                    "pw": 1.0,
-                })
+                rows.append(
+                    {
+                        "group": int(g),
+                        "period": int(t),
+                        "treatment": int(d),
+                        "outcome": y,
+                        "pw": 1.0,
+                    }
+                )
         return pd.DataFrame(rows)
 
     def test_bootstrap_se_matches_pre_pr4_baseline(self):
@@ -1877,9 +1995,7 @@ class TestBootstrapCellPeriod:
         from diff_diff import bootstrap_utils as _bu
         from diff_diff import linalg as _la
 
-        bootstrap_rust = bool(
-            _bu.HAS_RUST_BACKEND and _bu._rust_bootstrap_weights is not None
-        )
+        bootstrap_rust = bool(_bu.HAS_RUST_BACKEND and _bu._rust_bootstrap_weights is not None)
         ols_rust = bool(_la.HAS_RUST_BACKEND and _la._rust_solve_ols is not None)
         assert bootstrap_rust == ols_rust, (
             "Incoherent backend dispatch state between bootstrap_utils "
@@ -1889,22 +2005,25 @@ class TestBootstrapCellPeriod:
         )
         pure_python = not bootstrap_rust
         expected = (
-            self._BASELINE_OVERALL_SE_PYTHON
-            if pure_python
-            else self._BASELINE_OVERALL_SE_RUST
+            self._BASELINE_OVERALL_SE_PYTHON if pure_python else self._BASELINE_OVERALL_SE_RUST
         )
         df_ = self._make_baseline_fixture()
         sd = SurveyDesign(weights="pw", psu="group")
         res = ChaisemartinDHaultfoeuille(n_bootstrap=500, seed=42).fit(
-            df_, outcome="outcome", group="group",
-            time="period", treatment="treatment",
+            df_,
+            outcome="outcome",
+            group="group",
+            time="period",
+            treatment="treatment",
             survey_design=sd,
         )
         assert res.bootstrap_results is not None
         observed_se = float(res.bootstrap_results.overall_se)
         backend_label = "pure-python" if pure_python else "rust"
         assert observed_se == pytest.approx(
-            expected, rel=0.0, abs=1e-15,
+            expected,
+            rel=0.0,
+            abs=1e-15,
         ), (
             f"Bootstrap SE drifted from pre-PR-4 baseline "
             f"(backend={backend_label}). expected={expected!r}, "
@@ -1927,7 +2046,8 @@ class TestBootstrapCellPeriod:
         group_id_to_psu_code = {0: 0, 1: 1}
         # Varying PSU: row 0 has two distinct PSU codes.
         psu_codes_per_cell = np.array(
-            [[0, 1], [0, 0]], dtype=np.int64,
+            [[0, 1], [0, 0]],
+            dtype=np.int64,
         )
         with pytest.raises(ValueError, match="u_per_period_overall"):
             est._compute_dcdh_bootstrap(
@@ -1951,11 +2071,13 @@ class TestBootstrapCellPeriod:
         eligible_group_ids = np.array([0, 1])
         group_id_to_psu_code = {0: 0, 1: 1}
         psu_codes_per_cell = np.array(
-            [[0, 1], [0, 0]], dtype=np.int64,
+            [[0, 1], [0, 0]],
+            dtype=np.int64,
         )
         # Wrong shape — 3 columns instead of 2.
         u_pp_wrong = np.array(
-            [[0.25, 0.25, 0.0], [-0.15, -0.15, 0.0]], dtype=np.float64,
+            [[0.25, 0.25, 0.0], [-0.15, -0.15, 0.0]],
+            dtype=np.float64,
         )
         with pytest.raises(ValueError, match="shape mismatch"):
             est._compute_dcdh_bootstrap(
@@ -1983,7 +2105,8 @@ class TestBootstrapCellPeriod:
         # whose PSU code is -1 (simulating terminal missingness
         # after cohort-recentering leaks mass to a missing cell).
         psu_codes_per_cell = np.array(
-            [[0, 1, -1], [0, 1, 0]], dtype=np.int64,
+            [[0, 1, -1], [0, 1, 0]],
+            dtype=np.int64,
         )
         u_pp_overall_with_leak = np.array(
             [[0.25, 0.25, -0.15], [-0.15, -0.15, 0.15]],
@@ -2012,12 +2135,14 @@ class TestBootstrapCellPeriod:
         est = ChaisemartinDHaultfoeuille(n_bootstrap=50, seed=1)
         u_overall = np.array([0.5, -0.3], dtype=np.float64)
         u_pp_overall = np.array(
-            [[0.25, 0.25], [-0.15, -0.15]], dtype=np.float64,
+            [[0.25, 0.25], [-0.15, -0.15]],
+            dtype=np.float64,
         )
         eligible_group_ids = np.array([0, 1])
         group_id_to_psu_code = {0: 0, 1: 1}
         psu_codes_per_cell = np.array(
-            [[0, 1], [0, 0]], dtype=np.int64,
+            [[0, 1], [0, 0]],
+            dtype=np.int64,
         )
         # Horizon tuple missing its per-cell tensor (4th slot = None).
         u_h = np.array([0.4, -0.2], dtype=np.float64)
@@ -2051,19 +2176,24 @@ class TestBootstrapCellPeriod:
                 pw = 0.0 if g == n_groups - 1 else 1.0
                 d = 1 if (f is not None and t >= f) else 0
                 y = float(g) + 0.1 * t + 1.0 * d
-                rows.append({
-                    "group": int(g),
-                    "period": int(t),
-                    "treatment": int(d),
-                    "outcome": y,
-                    "pw": pw,
-                    "psu": int(g) * 2 + (int(t) % 2),  # varying PSU
-                })
+                rows.append(
+                    {
+                        "group": int(g),
+                        "period": int(t),
+                        "treatment": int(d),
+                        "outcome": y,
+                        "pw": pw,
+                        "psu": int(g) * 2 + (int(t) % 2),  # varying PSU
+                    }
+                )
         df_ = pd.DataFrame(rows)
         sd = SurveyDesign(weights="pw", psu="psu")
         res = ChaisemartinDHaultfoeuille(n_bootstrap=50, seed=1).fit(
-            df_, outcome="outcome", group="group",
-            time="period", treatment="treatment",
+            df_,
+            outcome="outcome",
+            group="group",
+            time="period",
+            treatment="treatment",
             survey_design=sd,
         )
         assert res.bootstrap_results is not None
@@ -2088,6 +2218,7 @@ class TestBootstrapCellPeriod:
         correct paths collapse to the same identity-draw structure
         under PSU=group — we deliberately use varying PSU here.
         """
+
         def _make(include_zero_group: bool) -> pd.DataFrame:
             rows = []
             n_groups = 9 if include_zero_group else 8
@@ -2100,27 +2231,33 @@ class TestBootstrapCellPeriod:
                     # Within-group-varying PSU (period parity per
                     # group) — exercises the cell-level dispatcher.
                     psu = int(g) * 2 + (int(t) % 2)
-                    rows.append({
-                        "group": int(g),
-                        "period": int(t),
-                        "treatment": int(d),
-                        "outcome": y,
-                        "pw": pw,
-                        "psu": psu,
-                    })
+                    rows.append(
+                        {
+                            "group": int(g),
+                            "period": int(t),
+                            "treatment": int(d),
+                            "outcome": y,
+                            "pw": pw,
+                            "psu": psu,
+                        }
+                    )
             return pd.DataFrame(rows)
 
         sd = SurveyDesign(weights="pw", psu="psu")
         res_a = ChaisemartinDHaultfoeuille(n_bootstrap=200, seed=7).fit(
             _make(include_zero_group=True),
-            outcome="outcome", group="group",
-            time="period", treatment="treatment",
+            outcome="outcome",
+            group="group",
+            time="period",
+            treatment="treatment",
             survey_design=sd,
         )
         res_b = ChaisemartinDHaultfoeuille(n_bootstrap=200, seed=7).fit(
             _make(include_zero_group=False),
-            outcome="outcome", group="group",
-            time="period", treatment="treatment",
+            outcome="outcome",
+            group="group",
+            time="period",
+            treatment="treatment",
             survey_design=sd,
         )
         assert res_a.bootstrap_results is not None
@@ -2178,19 +2315,22 @@ class TestBootstrapCellPeriod:
                     continue
                 d = d_pattern[t]
                 y = float(g) + 0.1 * t + 1.0 * d
-                rows.append({
-                    "group": int(g),
-                    "period": int(t),
-                    "treatment": int(d),
-                    "outcome": y,
-                    "pw": 1.0,
-                    # Within-group-varying PSU: period parity per group.
-                    "psu": int(g) * 2 + (int(t) % 2),
-                })
+                rows.append(
+                    {
+                        "group": int(g),
+                        "period": int(t),
+                        "treatment": int(d),
+                        "outcome": y,
+                        "pw": 1.0,
+                        # Within-group-varying PSU: period parity per group.
+                        "psu": int(g) * 2 + (int(t) % 2),
+                    }
+                )
         df_ = pd.DataFrame(rows)
         sd = SurveyDesign(weights="pw", psu="psu")
 
         import warnings as _w
+
         # Analytical path (n_bootstrap=0): the sentinel-mass guard in
         # `_survey_se_from_group_if` raises on the same leakage the
         # bootstrap guard rejects — both paths use the cell-period
@@ -2199,12 +2339,17 @@ class TestBootstrapCellPeriod:
         with _w.catch_warnings():
             _w.simplefilter("ignore")  # terminal-missingness UserWarning
             with pytest.raises(
-                ValueError, match="no positive-weight observations",
+                ValueError,
+                match="no positive-weight observations",
             ):
                 ChaisemartinDHaultfoeuille(n_bootstrap=0, seed=1).fit(
-                    df_, outcome="outcome", group="group",
-                    time="period", treatment="treatment",
-                    survey_design=sd, L_max=1,
+                    df_,
+                    outcome="outcome",
+                    group="group",
+                    time="period",
+                    treatment="treatment",
+                    survey_design=sd,
+                    L_max=1,
                 )
 
         # Bootstrap path (n_bootstrap > 0): same sentinel-mass guard
@@ -2212,12 +2357,17 @@ class TestBootstrapCellPeriod:
         with _w.catch_warnings():
             _w.simplefilter("ignore")
             with pytest.raises(
-                ValueError, match="no positive-weight observations",
+                ValueError,
+                match="no positive-weight observations",
             ):
                 ChaisemartinDHaultfoeuille(n_bootstrap=50, seed=1).fit(
-                    df_, outcome="outcome", group="group",
-                    time="period", treatment="treatment",
-                    survey_design=sd, L_max=1,
+                    df_,
+                    outcome="outcome",
+                    group="group",
+                    time="period",
+                    treatment="treatment",
+                    survey_design=sd,
+                    L_max=1,
                 )
 
     def test_fit_succeeds_on_terminal_missingness_with_psu_group(self):
@@ -2245,27 +2395,35 @@ class TestBootstrapCellPeriod:
                     continue
                 d = d_pattern[t]
                 y = float(g) + 0.1 * t + 1.0 * d
-                rows.append({
-                    "group": int(g),
-                    "period": int(t),
-                    "treatment": int(d),
-                    "outcome": y,
-                    "pw": 1.0,
-                })
+                rows.append(
+                    {
+                        "group": int(g),
+                        "period": int(t),
+                        "treatment": int(d),
+                        "outcome": y,
+                        "pw": 1.0,
+                    }
+                )
         df_ = pd.DataFrame(rows)
         # Auto-inject: no explicit `psu` → `SurveyDesign` falls back to
         # `psu=<group_col>` at fit() time. Within-group-constant.
         sd = SurveyDesign(weights="pw")
         import warnings as _w
+
         for n_boot in (0, 50):
             with _w.catch_warnings():
                 _w.simplefilter("ignore")
                 res = ChaisemartinDHaultfoeuille(
-                    n_bootstrap=n_boot, seed=1,
+                    n_bootstrap=n_boot,
+                    seed=1,
                 ).fit(
-                    df_, outcome="outcome", group="group",
-                    time="period", treatment="treatment",
-                    survey_design=sd, L_max=1,
+                    df_,
+                    outcome="outcome",
+                    group="group",
+                    time="period",
+                    treatment="treatment",
+                    survey_design=sd,
+                    L_max=1,
                 )
             assert np.isfinite(res.overall_att), (
                 f"n_bootstrap={n_boot}: overall_att must be finite "
@@ -2303,14 +2461,16 @@ class TestBootstrapCellPeriod:
                     d = 1 if t >= 3 else 0  # joiners at period 3
                     # Groups 1, 2 share PSU=200; groups 3, 4 share PSU=300.
                     psu = 200 if g in (1, 2) else 300
-                rows.append({
-                    "group": int(g),
-                    "period": int(t),
-                    "treatment": int(d),
-                    "outcome": float(g) + 0.1 * t + 0.5 * d,
-                    "pw": 1.0,
-                    "psu": psu,
-                })
+                rows.append(
+                    {
+                        "group": int(g),
+                        "period": int(t),
+                        "treatment": int(d),
+                        "outcome": float(g) + 0.1 * t + 0.5 * d,
+                        "pw": 1.0,
+                        "psu": psu,
+                    }
+                )
         df_ = pd.DataFrame(rows)
         sd = SurveyDesign(weights="pw", psu="psu")
 
@@ -2320,19 +2480,21 @@ class TestBootstrapCellPeriod:
         original_bootstrap = est._compute_dcdh_bootstrap
 
         def _spy(**kwargs):
-            captured["group_id_to_psu_code"] = kwargs.get(
-                "group_id_to_psu_code"
-            )
+            captured["group_id_to_psu_code"] = kwargs.get("group_id_to_psu_code")
             return original_bootstrap(**kwargs)
 
         est._compute_dcdh_bootstrap = _spy  # type: ignore[method-assign]
 
         import warnings as _w
+
         with _w.catch_warnings():
             _w.simplefilter("ignore")  # singleton-baseline warning
             est.fit(
-                df_, outcome="outcome", group="group",
-                time="period", treatment="treatment",
+                df_,
+                outcome="outcome",
+                group="group",
+                time="period",
+                treatment="treatment",
                 survey_design=sd,
             )
 
@@ -2360,10 +2522,8 @@ class TestBootstrapCellPeriod:
             "dense code under correct densification."
         )
         assert dict_passed[3] == dict_passed[4], (
-            "Groups 3 and 4 share PSU=300 and must receive the same "
-            "dense code."
+            "Groups 3 and 4 share PSU=300 and must receive the same " "dense code."
         )
         assert dict_passed[1] != dict_passed[3], (
-            "Groups in PSU=200 and PSU=300 must receive distinct "
-            "dense codes."
+            "Groups in PSU=200 and PSU=300 must receive distinct " "dense codes."
         )

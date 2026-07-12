@@ -5,7 +5,6 @@ These tests verify the corrected implementation against the paper's
 equations, known analytical cases, and expected mathematical properties.
 """
 
-
 import json
 import os
 import warnings
@@ -15,7 +14,6 @@ import pytest
 
 from diff_diff.honest_did import (
     HonestDiD,
-    _compute_flci,
     _compute_optimal_flci,
     _compute_pre_first_differences,
     _construct_A_sd,
@@ -39,19 +37,22 @@ class TestDeltaSDConstraintMatrix:
         for T, Tbar in [(2, 2), (3, 3), (4, 2), (1, 1), (3, 1), (1, 3)]:
             A = _construct_A_sd(T, Tbar)
             expected_rows = T + Tbar - 1
-            assert A.shape == (expected_rows, T + Tbar), (
-                f"T={T}, Tbar={Tbar}: expected {expected_rows} rows, got {A.shape[0]}"
-            )
+            assert A.shape == (
+                expected_rows,
+                T + Tbar,
+            ), f"T={T}, Tbar={Tbar}: expected {expected_rows} rows, got {A.shape[0]}"
 
     def test_2pre_2post_hand_computed(self):
         """Hand-computed matrix for 2 pre + 2 post periods."""
         # delta = [d_{-2}, d_{-1}, d_1, d_2]
         A = _construct_A_sd(2, 2)
-        expected = np.array([
-            [1, -2, 0, 0],   # t=-1: d_{-2} - 2*d_{-1} + 0
-            [0,  1, 1, 0],   # t= 0: d_{-1} + d_1 (bridge)
-            [0,  0, -2, 1],  # t= 1: 0 - 2*d_1 + d_2
-        ])
+        expected = np.array(
+            [
+                [1, -2, 0, 0],  # t=-1: d_{-2} - 2*d_{-1} + 0
+                [0, 1, 1, 0],  # t= 0: d_{-1} + d_1 (bridge)
+                [0, 0, -2, 1],  # t= 1: 0 - 2*d_1 + d_2
+            ]
+        )
         np.testing.assert_array_equal(A, expected)
 
     def test_bridge_constraint_present(self):
@@ -63,8 +64,8 @@ class TestDeltaSDConstraintMatrix:
             for row in A:
                 if row[T - 1] != 0 and row[T] != 0:
                     # This should be [0, ..., 1, 1, ..., 0]
-                    assert row[T - 1] == 1, f"Bridge row should have 1 at delta_{{-1}}"
-                    assert row[T] == 1, f"Bridge row should have 1 at delta_1"
+                    assert row[T - 1] == 1, "Bridge row should have 1 at delta_{-1}"
+                    assert row[T] == 1, "Bridge row should have 1 at delta_1"
                     bridge_found = True
             assert bridge_found, f"Bridge constraint not found for T={T}, Tbar={Tbar}"
 
@@ -112,9 +113,9 @@ class TestIdentifiedSetLP:
             A, b = _construct_constraints_sd(3, 1, M=M)
             lb, ub = _solve_bounds_lp(beta_pre, beta_post, l_vec, A, b, 3)
             width = ub - lb
-            assert width >= prev_width - 1e-10, (
-                f"Width should increase: M={M}, width={width}, prev={prev_width}"
-            )
+            assert (
+                width >= prev_width - 1e-10
+            ), f"Width should increase: M={M}, width={width}, prev={prev_width}"
             prev_width = width
 
     def test_three_period_analytical(self):
@@ -134,10 +135,8 @@ class TestIdentifiedSetLP:
             lb, ub = _solve_bounds_lp(beta_pre, beta_post, np.array([1.0]), A, b, 1)
             expected_lb = 3.0 + 0.5 - M
             expected_ub = 3.0 + 0.5 + M
-            np.testing.assert_allclose(lb, expected_lb, atol=1e-6,
-                                       err_msg=f"M={M}: lb mismatch")
-            np.testing.assert_allclose(ub, expected_ub, atol=1e-6,
-                                       err_msg=f"M={M}: ub mismatch")
+            np.testing.assert_allclose(lb, expected_lb, atol=1e-6, err_msg=f"M={M}: lb mismatch")
+            np.testing.assert_allclose(ub, expected_ub, atol=1e-6, err_msg=f"M={M}: ub mismatch")
 
 
 # =============================================================================
@@ -176,12 +175,12 @@ class TestDeltaRMFirstDifferences:
         assert A.shape[1] == 5  # 2 pre + 3 post
 
         # First pair: d_1 <= 0.1 and -d_1 <= 0.1
-        assert A[0, 2] == 1   # d_1
+        assert A[0, 2] == 1  # d_1
         assert A[1, 2] == -1  # -d_1
 
         # Second pair: d_2 - d_1 <= 0.1
-        assert A[2, 3] == 1 and A[2, 2] == -1   # d_2 - d_1
-        assert A[3, 3] == -1 and A[3, 2] == 1   # -(d_2 - d_1)
+        assert A[2, 3] == 1 and A[2, 2] == -1  # d_2 - d_1
+        assert A[3, 3] == -1 and A[3, 2] == 1  # -(d_2 - d_1)
 
     def test_mbar0_gives_point_estimate(self):
         """Mbar=0: all post first diffs = 0, theta = l'beta_post."""
@@ -220,6 +219,7 @@ class TestOptimalFLCI:
     def test_cv_alpha_at_zero(self):
         """cv_alpha(0, alpha) = z_{alpha/2} (standard normal quantile)."""
         from scipy.stats import norm
+
         np.testing.assert_allclose(_cv_alpha(0, 0.05), norm.ppf(0.975), atol=1e-4)
         np.testing.assert_allclose(_cv_alpha(0, 0.01), norm.ppf(0.995), atol=1e-4)
 
@@ -264,9 +264,7 @@ class TestOptimalFLCI:
         l_vec = np.array([1.0])
 
         with patch("diff_diff.honest_did.optimize.linprog") as mock_linprog:
-            ci_lb, ci_ub = _compute_optimal_flci(
-                beta_pre, beta_post, sigma, l_vec, 3, 1, M=0.0
-            )
+            ci_lb, ci_ub = _compute_optimal_flci(beta_pre, beta_post, sigma, l_vec, 3, 1, M=0.0)
 
         assert mock_linprog.call_count == 0, (
             f"M=0 must skip the LP solver (fast path at "
@@ -274,9 +272,9 @@ class TestOptimalFLCI:
             f"{mock_linprog.call_count} linprog call(s)."
         )
         # End-to-end correctness: M=0 CI is still well-defined.
-        assert np.isfinite(ci_lb) and np.isfinite(ci_ub), (
-            f"M=0 CI must be finite; got [{ci_lb}, {ci_ub}]"
-        )
+        assert np.isfinite(ci_lb) and np.isfinite(
+            ci_ub
+        ), f"M=0 CI must be finite; got [{ci_lb}, {ci_ub}]"
         assert ci_lb <= ci_ub, f"M=0 CI must be ordered; got [{ci_lb}, {ci_ub}]"
 
     def test_smoothness_flci_with_survey_df(self):
@@ -295,34 +293,34 @@ class TestOptimalFLCI:
         )
         width_norm = ci_ub_norm - ci_lb_norm
         width_t = ci_ub_t - ci_lb_t
-        assert width_t > width_norm, (
-            f"Survey df=2 should widen CI: norm={width_norm:.4f}, t={width_t:.4f}"
-        )
+        assert (
+            width_t > width_norm
+        ), f"Survey df=2 should widen CI: norm={width_norm:.4f}, t={width_t:.4f}"
 
     def test_m0_se_includes_pre_period_variance(self):
         """M=0 SE should account for pre-period variance, not just post."""
         # Use off-diagonal covariance to make pre-period SE matter
-        sigma = np.array([
-            [0.04, 0.02, 0.01],  # pre-1 has high variance
-            [0.02, 0.01, 0.005],
-            [0.01, 0.005, 0.01],
-        ])
+        sigma = np.array(
+            [
+                [0.04, 0.02, 0.01],  # pre-1 has high variance
+                [0.02, 0.01, 0.005],
+                [0.01, 0.005, 0.01],
+            ]
+        )
         beta_pre = np.array([0.2, 0.1])  # linear pre-trend
         beta_post = np.array([2.0])
         l_vec = np.array([1.0])
 
-        ci_lb, ci_ub = _compute_optimal_flci(
-            beta_pre, beta_post, sigma, l_vec, 2, 1, M=0.0
-        )
+        ci_lb, ci_ub = _compute_optimal_flci(beta_pre, beta_post, sigma, l_vec, 2, 1, M=0.0)
         # CI should be finite and the width should reflect pre-period variance
         assert np.isfinite(ci_lb) and np.isfinite(ci_ub), "M=0 CI should be finite"
         width = ci_ub - ci_lb
 
         # Compare to post-only SE: sqrt(l'Sigma_post l) = sqrt(0.01) = 0.1
         post_only_width = 2 * 1.96 * np.sqrt(sigma[2, 2])
-        assert width > post_only_width, (
-            f"M=0 width ({width:.4f}) should exceed post-only ({post_only_width:.4f})"
-        )
+        assert (
+            width > post_only_width
+        ), f"M=0 width ({width:.4f}) should exceed post-only ({post_only_width:.4f})"
 
     def test_optimal_flci_width_increases_with_m_positive(self):
         """Regression for P0: smoothness CI width must increase with M for M > 0."""
@@ -368,8 +366,12 @@ class TestOptimalFLCI:
         )
         center = (ci_lb + ci_ub) / 2
         expected_center = 3.0 + 0.5  # beta_1 + beta_{-1}
-        np.testing.assert_allclose(center, expected_center, atol=1e-4,
-                                   err_msg="M=0 FLCI should be centered on beta_1 + beta_{-1}")
+        np.testing.assert_allclose(
+            center,
+            expected_center,
+            atol=1e-4,
+            err_msg="M=0 FLCI should be centered on beta_1 + beta_{-1}",
+        )
 
     def test_multi_post_m0_finite(self):
         """Default l_vec with Tbar>1: M=0 gives finite CI."""
@@ -378,12 +380,10 @@ class TestOptimalFLCI:
         sigma = np.eye(5) * 0.01
         l_vec = np.array([0.5, 0.5])  # average of 2 post periods
 
-        ci_lb, ci_ub = _compute_optimal_flci(
-            beta_pre, beta_post, sigma, l_vec, 3, 2, M=0.0
-        )
-        assert np.isfinite(ci_lb) and np.isfinite(ci_ub), (
-            f"Multi-post M=0 should give finite CI, got [{ci_lb}, {ci_ub}]"
-        )
+        ci_lb, ci_ub = _compute_optimal_flci(beta_pre, beta_post, sigma, l_vec, 3, 2, M=0.0)
+        assert np.isfinite(ci_lb) and np.isfinite(
+            ci_ub
+        ), f"Multi-post M=0 should give finite CI, got [{ci_lb}, {ci_ub}]"
 
     def test_multi_post_m_positive_finite(self):
         """Default l_vec with Tbar>1: M>0 gives finite CI."""
@@ -392,12 +392,10 @@ class TestOptimalFLCI:
         sigma = np.eye(5) * 0.01
         l_vec = np.array([0.5, 0.5])
 
-        ci_lb, ci_ub = _compute_optimal_flci(
-            beta_pre, beta_post, sigma, l_vec, 3, 2, M=0.5
-        )
-        assert np.isfinite(ci_lb) and np.isfinite(ci_ub), (
-            f"Multi-post M=0.5 should give finite CI, got [{ci_lb}, {ci_ub}]"
-        )
+        ci_lb, ci_ub = _compute_optimal_flci(beta_pre, beta_post, sigma, l_vec, 3, 2, M=0.5)
+        assert np.isfinite(ci_lb) and np.isfinite(
+            ci_ub
+        ), f"Multi-post M=0.5 should give finite CI, got [{ci_lb}, {ci_ub}]"
 
     def test_infeasible_lp_returns_nan(self):
         """Regression for P1: infeasible LP should return NaN, not [-inf, inf]."""
@@ -408,9 +406,7 @@ class TestOptimalFLCI:
 
         lb, ub = _solve_bounds_lp(beta_pre, beta_post, np.array([1.0]), A, b, 3)
         # M=0 with non-linear pre-trends: should be infeasible
-        assert np.isnan(lb) and np.isnan(ub), (
-            f"Infeasible LP should return NaN, got [{lb}, {ub}]"
-        )
+        assert np.isnan(lb) and np.isnan(ub), f"Infeasible LP should return NaN, got [{lb}, {ub}]"
 
     def test_infeasible_smoothness_fit_returns_flci_with_empty_idset(self):
         """Fit-level: an empty ESTIMATED identified set still yields a finite FLCI.
@@ -427,19 +423,31 @@ class TestOptimalFLCI:
 
         # Non-linear pre-trends: inconsistent with Delta^SD(M=0.0)
         period_effects = {
-            1: PeriodEffect(period=1, effect=1.0, se=0.1, t_stat=10.0,
-                           p_value=0.0, conf_int=(0.8, 1.2)),
-            2: PeriodEffect(period=2, effect=0.0, se=0.1, t_stat=0.0,
-                           p_value=1.0, conf_int=(-0.2, 0.2)),
-            3: PeriodEffect(period=3, effect=1.0, se=0.1, t_stat=10.0,
-                           p_value=0.0, conf_int=(0.8, 1.2)),
-            5: PeriodEffect(period=5, effect=2.0, se=0.1, t_stat=20.0,
-                           p_value=0.0, conf_int=(1.8, 2.2)),
+            1: PeriodEffect(
+                period=1, effect=1.0, se=0.1, t_stat=10.0, p_value=0.0, conf_int=(0.8, 1.2)
+            ),
+            2: PeriodEffect(
+                period=2, effect=0.0, se=0.1, t_stat=0.0, p_value=1.0, conf_int=(-0.2, 0.2)
+            ),
+            3: PeriodEffect(
+                period=3, effect=1.0, se=0.1, t_stat=10.0, p_value=0.0, conf_int=(0.8, 1.2)
+            ),
+            5: PeriodEffect(
+                period=5, effect=2.0, se=0.1, t_stat=20.0, p_value=0.0, conf_int=(1.8, 2.2)
+            ),
         }
         results = MultiPeriodDiDResults(
-            avg_att=2.0, avg_se=0.1, avg_t_stat=20.0, avg_p_value=0.0,
-            avg_conf_int=(1.8, 2.2), n_obs=500, n_treated=250, n_control=250,
-            period_effects=period_effects, pre_periods=[1, 2, 3], post_periods=[5],
+            avg_att=2.0,
+            avg_se=0.1,
+            avg_t_stat=20.0,
+            avg_p_value=0.0,
+            avg_conf_int=(1.8, 2.2),
+            n_obs=500,
+            n_treated=250,
+            n_control=250,
+            period_effects=period_effects,
+            pre_periods=[1, 2, 3],
+            post_periods=[5],
             vcov=np.eye(4) * 0.01,
             interaction_indices={1: 0, 2: 1, 3: 2, 5: 3},
         )
@@ -447,12 +455,14 @@ class TestOptimalFLCI:
         honest = HonestDiD(method="smoothness", M=0.0)
         r = honest.fit(results)
         # Estimated identified set is empty -> NaN bounds ...
-        assert np.isnan(r.lb) and np.isnan(r.ub), f"Expected NaN id-set bounds, got [{r.lb}, {r.ub}]"
+        assert np.isnan(r.lb) and np.isnan(
+            r.ub
+        ), f"Expected NaN id-set bounds, got [{r.lb}, {r.ub}]"
         # ... but the FLCI is finite and matches R createSensitivityResults(M=0):
         # [2.082644, 2.488866] (verified against HonestDiD 0.2.6).
-        assert np.isfinite(r.ci_lb) and np.isfinite(r.ci_ub), (
-            f"Expected finite FLCI, got [{r.ci_lb}, {r.ci_ub}]"
-        )
+        assert np.isfinite(r.ci_lb) and np.isfinite(
+            r.ci_ub
+        ), f"Expected finite FLCI, got [{r.ci_lb}, {r.ci_ub}]"
         assert abs(r.ci_lb - 2.082644) < 1e-3, f"ci_lb={r.ci_lb:.6f} vs R 2.082644"
         assert abs(r.ci_ub - 2.488866) < 1e-3, f"ci_ub={r.ci_ub:.6f} vs R 2.488866"
         # Finite CI excluding 0 -> significant, with a star.
@@ -499,13 +509,11 @@ class TestOptimalFLCI:
             assert np.isfinite(ci_lb) and np.isfinite(ci_ub), f"M={M}: non-finite FLCI"
             assert ci_ub > ci_lb, f"M={M}: degenerate CI"
             center = (ci_lb + ci_ub) / 2
-            assert abs(center - r_center[M]) < 1e-3, (
-                f"M={M} center={center:.6f} vs R {r_center[M]:.6f}"
-            )
+            assert (
+                abs(center - r_center[M]) < 1e-3
+            ), f"M={M} center={center:.6f} vs R {r_center[M]:.6f}"
         # M=0: tight R parity on the endpoints too (R 0.2.6: [2.082880, 2.488631]).
-        ci_lb, ci_ub = _compute_optimal_flci(
-            beta_pre, beta_post, sigma, lvec, 3, 1, M=0.0, df=None
-        )
+        ci_lb, ci_ub = _compute_optimal_flci(beta_pre, beta_post, sigma, lvec, 3, 1, M=0.0, df=None)
         assert abs(ci_lb - 2.082880) < 1e-3, f"M=0 ci_lb={ci_lb:.6f} vs R 2.082880"
         assert abs(ci_ub - 2.488631) < 1e-3, f"M=0 ci_ub={ci_ub:.6f} vs R 2.488631"
 
@@ -534,8 +542,13 @@ class TestOptimalFLCI:
         from diff_diff.honest_did import _compute_optimal_flci
 
         lb, ub = _compute_optimal_flci(
-            np.array([0.1, 0.0, 0.1]), np.array([1.2, 0.9]),
-            np.eye(5) * 0.05, np.array([1.0, -1.0]), 3, 2, M=1.0,
+            np.array([0.1, 0.0, 0.1]),
+            np.array([1.2, 0.9]),
+            np.eye(5) * 0.05,
+            np.array([1.0, -1.0]),
+            3,
+            2,
+            M=1.0,
         )
         assert abs((lb + ub) / 2 - 0.200000) < 1e-3, f"center={(lb + ub) / 2:.6f} vs R 0.200000"
         assert abs((ub - lb) / 2 - 4.637049) < 1e-3, f"half={(ub - lb) / 2:.6f} vs R 4.637049"
@@ -547,8 +560,13 @@ class TestOptimalFLCI:
 
         with pytest.raises(ValueError, match="non-negative"):
             _compute_optimal_flci(
-                np.array([0.1, 0.0, 0.1]), np.array([1.0]),
-                np.eye(4) * 0.01, np.array([1.0]), 3, 1, M=-0.1,
+                np.array([0.1, 0.0, 0.1]),
+                np.array([1.0]),
+                np.eye(4) * 0.01,
+                np.array([1.0]),
+                3,
+                1,
+                M=-0.1,
             )
 
 
@@ -603,8 +621,12 @@ class TestHonestFLCIParityR:
             lb, ub = _compute_optimal_flci(bp, bq, sigma, l_vec, npre, npost, c["M"], c["alpha"])
             center, half = (lb + ub) / 2, (ub - lb) / 2
             tag = f"npre={npre} npost={npost} M={c['M']}"
-            assert abs(center - c["center"]) < 1e-3, f"{tag}: center {center:.6f} vs R {c['center']:.6f}"
-            assert abs(half - c["half_length"]) < 1e-3, f"{tag}: half {half:.6f} vs R {c['half_length']:.6f}"
+            assert (
+                abs(center - c["center"]) < 1e-3
+            ), f"{tag}: center {center:.6f} vs R {c['center']:.6f}"
+            assert (
+                abs(half - c["half_length"]) < 1e-3
+            ), f"{tag}: half {half:.6f} vs R {c['half_length']:.6f}"
             max_dc = max(max_dc, abs(center - c["center"]))
             max_dw = max(max_dw, abs(half - c["half_length"]))
         assert max_dc < 1e-3 and max_dw < 1e-3
@@ -618,9 +640,9 @@ class TestHonestFLCIParityR:
             bp, bq, sigma, l_vec, npre, npost = self._unpack(c)
             _, _, v = _flci_solve(bp, bq, sigma, l_vec, npre, npost, c["M"], c["alpha"])
             r_v = np.atleast_1d(np.asarray(c["optimal_vec"], float))
-            assert v is not None and np.max(np.abs(v - r_v)) < 3e-3, (
-                f"npre={npre} M={c['M']}: optvec gap {np.max(np.abs(v - r_v)):.2e}"
-            )
+            assert (
+                v is not None and np.max(np.abs(v - r_v)) < 3e-3
+            ), f"npre={npre} M={c['M']}: optvec gap {np.max(np.abs(v - r_v)):.2e}"
 
     def test_center_matches_stock_r_within_mc_noise(self):
         for c in self._cases():
@@ -630,9 +652,9 @@ class TestHonestFLCIParityR:
             lb, ub = _compute_optimal_flci(bp, bq, sigma, l_vec, npre, npost, c["M"], c["alpha"])
             # Loose tier: R's MC .qfoldednormal noise reaches ~1.4e-2 on flat-surface
             # cases (max observed 1.39e-2); the tight parity is vs override-R (1e-3).
-            assert abs((lb + ub) / 2 - c["stock_center"]) < 1.5e-2, (
-                f"npre={npre} M={c['M']}: vs stock-R {abs((lb + ub) / 2 - c['stock_center']):.2e}"
-            )
+            assert (
+                abs((lb + ub) / 2 - c["stock_center"]) < 1.5e-2
+            ), f"npre={npre} M={c['M']}: vs stock-R {abs((lb + ub) / 2 - c['stock_center']):.2e}"
 
     def test_inner_solve_failure_nan_consistent(self, monkeypatch):
         """A failed / infeasible inner solve NaN-propagates the full FLCI (no silent
@@ -640,11 +662,18 @@ class TestHonestFLCIParityR:
         import diff_diff.honest_did as hd
 
         monkeypatch.setattr(
-            hd, "_flci_min_bias_given_h",
+            hd,
+            "_flci_min_bias_given_h",
             lambda P, h, x0_w=None: (np.zeros(P["num_pre"]), np.nan, False),
         )
         lb, ub = _compute_optimal_flci(
-            np.array([0.1, -0.05, 0.1]), np.array([1.2]), np.eye(4) * 0.01, np.array([1.0]), 3, 1, M=0.1
+            np.array([0.1, -0.05, 0.1]),
+            np.array([1.2]),
+            np.eye(4) * 0.01,
+            np.array([1.0]),
+            3,
+            1,
+            M=0.1,
         )
         assert np.isnan(lb) and np.isnan(ub)
 
@@ -663,17 +692,28 @@ class TestBreakdownValueMethodology:
 
         # Use a weak effect so breakdown is reachable at moderate M
         period_effects = {
-            1: PeriodEffect(period=1, effect=0.1, se=0.05, t_stat=2.0,
-                           p_value=0.05, conf_int=(0.0, 0.2)),
-            2: PeriodEffect(period=2, effect=0.05, se=0.05, t_stat=1.0,
-                           p_value=0.32, conf_int=(-0.05, 0.15)),
-            4: PeriodEffect(period=4, effect=0.15, se=0.05, t_stat=3.0,
-                           p_value=0.003, conf_int=(0.05, 0.25)),
+            1: PeriodEffect(
+                period=1, effect=0.1, se=0.05, t_stat=2.0, p_value=0.05, conf_int=(0.0, 0.2)
+            ),
+            2: PeriodEffect(
+                period=2, effect=0.05, se=0.05, t_stat=1.0, p_value=0.32, conf_int=(-0.05, 0.15)
+            ),
+            4: PeriodEffect(
+                period=4, effect=0.15, se=0.05, t_stat=3.0, p_value=0.003, conf_int=(0.05, 0.25)
+            ),
         }
         results = MultiPeriodDiDResults(
-            avg_att=0.15, avg_se=0.05, avg_t_stat=3.0, avg_p_value=0.003,
-            avg_conf_int=(0.05, 0.25), n_obs=500, n_treated=250, n_control=250,
-            period_effects=period_effects, pre_periods=[1, 2], post_periods=[4],
+            avg_att=0.15,
+            avg_se=0.05,
+            avg_t_stat=3.0,
+            avg_p_value=0.003,
+            avg_conf_int=(0.05, 0.25),
+            n_obs=500,
+            n_treated=250,
+            n_control=250,
+            period_effects=period_effects,
+            pre_periods=[1, 2],
+            post_periods=[4],
             vcov=np.eye(3) * 0.0025,
             interaction_indices={1: 0, 2: 1, 4: 2},
         )
@@ -739,7 +779,8 @@ class TestARPVertexEnumeration:
             warnings.simplefilter("always", RuntimeWarning)
             vertices = _enumerate_vertices(X_tilde, sigma_tilde_diag, n_moments=4)
         diag_warnings = [
-            w for w in caught
+            w
+            for w in caught
             if "exhausted" in str(w.message) or "heavily constrained" in str(w.message)
         ]
         assert not diag_warnings, (

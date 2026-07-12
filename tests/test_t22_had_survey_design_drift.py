@@ -409,6 +409,7 @@ def test_event_study_plot_uses_stored_pointwise_ci_endpoints():
     ``nbformat`` is not in the runtime deps (per
     ``feedback_golden_file_pytest_skip``)."""
     from pathlib import Path
+
     nbformat = pytest.importorskip("nbformat")
 
     nb_path = (

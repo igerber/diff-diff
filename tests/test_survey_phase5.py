@@ -246,9 +246,7 @@ class TestSyntheticDiDSurvey:
         summary = result.summary()
         assert "Survey Design" in summary
 
-    def test_full_design_jackknife_succeeds(
-        self, sdid_survey_data_jk_well_formed
-    ):
+    def test_full_design_jackknife_succeeds(self, sdid_survey_data_jk_well_formed):
         """Jackknife variance with full design now succeeds (restored capability).
 
         PSU-level LOO with stratum aggregation (Rust & Rao 1996):
@@ -279,9 +277,7 @@ class TestSyntheticDiDSurvey:
         summary = result.summary()
         assert "Survey Design" in summary
 
-    def test_placebo_with_pweight_only_full_design_stripped_att_match(
-        self, sdid_survey_data
-    ):
+    def test_placebo_with_pweight_only_full_design_stripped_att_match(self, sdid_survey_data):
         """Placebo ATT with pweight-only is unchanged when stratum/psu
         columns are physically dropped from the input DataFrame.
 
@@ -378,9 +374,7 @@ class TestSyntheticDiDSurvey:
         assert "Survey Design" in summary
         assert "pweight" in summary
 
-    def test_bootstrap_with_pweight_only_succeeds(
-        self, sdid_survey_data, survey_design_weights
-    ):
+    def test_bootstrap_with_pweight_only_succeeds(self, sdid_survey_data, survey_design_weights):
         """variance_method='bootstrap' with pweight-only survey succeeds (PR #352).
 
         Restored capability: the bootstrap loop dispatches to the
@@ -404,9 +398,7 @@ class TestSyntheticDiDSurvey:
         assert result.se > 0
         assert result.variance_method == "bootstrap"
 
-    def test_bootstrap_full_design_se_differs_from_pweight_only(
-        self, sdid_survey_data
-    ):
+    def test_bootstrap_full_design_se_differs_from_pweight_only(self, sdid_survey_data):
         """Full-design bootstrap SE differs from pweight-only bootstrap SE.
 
         Resurrects the test_full_design_se_differs_from_weights_only
@@ -632,9 +624,7 @@ def sdid_survey_data_full_design():
 
     unit_weight = 1.0 + np.arange(n_units) * 0.05
     unit_stratum = np.array([0] * 15 + [1] * 15)
-    unit_psu = np.array(
-        [0] * 5 + [1] * 5 + [2] * 5 + [3] * 5 + [4] * 5 + [5] * 5
-    )
+    unit_psu = np.array([0] * 5 + [1] * 5 + [2] * 5 + [3] * 5 + [4] * 5 + [5] * 5)
     unit_map = {u: i for i, u in enumerate(units)}
     idx = data["unit"].map(unit_map).values
 
@@ -702,10 +692,10 @@ def sdid_survey_data_jk_well_formed():
     # stratum-1 units across PSU 3/4/5). Treated units 0-4 straddle
     # PSU 0 (units 0-1) and PSU 1 (units 2-4).
     unit_psu = np.zeros(n_units, dtype=int)
-    unit_psu[0:2] = 0   # PSU 0: treated 0, 1
-    unit_psu[2:5] = 1   # PSU 1: treated 2, 3, 4
-    unit_psu[5:7] = 0   # PSU 0: control 5, 6
-    unit_psu[7:9] = 1   # PSU 1: control 7, 8
+    unit_psu[0:2] = 0  # PSU 0: treated 0, 1
+    unit_psu[2:5] = 1  # PSU 1: treated 2, 3, 4
+    unit_psu[5:7] = 0  # PSU 0: control 5, 6
+    unit_psu[7:9] = 1  # PSU 1: control 7, 8
     unit_psu[9:13] = 2  # PSU 2: control 9-12
     unit_psu[13:18] = 3  # PSU 3: control 13-17
     unit_psu[18:23] = 4  # PSU 4: control 18-22
@@ -759,9 +749,7 @@ class TestSDIDSurveyPlaceboFullDesign:
         # 0-4 + controls 5-14, stratum 1 has controls 15-29.
         treated_units = list(range(5))
         control_units = list(range(5, 30))
-        unit_to_stratum = (
-            sdid_survey_data_full_design.groupby("unit")["stratum"].first().to_dict()
-        )
+        unit_to_stratum = sdid_survey_data_full_design.groupby("unit")["stratum"].first().to_dict()
         strata_control = np.array([unit_to_stratum[u] for u in control_units])
         treated_strata_set = set(unit_to_stratum[u] for u in treated_units)
 
@@ -818,9 +806,7 @@ class TestSDIDSurveyPlaceboFullDesign:
                 f"treated_strata_set {treated_strata_set}"
             )
 
-    def test_placebo_full_design_raises_on_zero_control_stratum(
-        self, sdid_survey_data_full_design
-    ):
+    def test_placebo_full_design_raises_on_zero_control_stratum(self, sdid_survey_data_full_design):
         """Case B: stratum with treated units but zero controls → ValueError."""
         df = sdid_survey_data_full_design.copy()
         # Move all controls out of stratum 0; treated stays in stratum 0.
@@ -828,9 +814,7 @@ class TestSDIDSurveyPlaceboFullDesign:
 
         sd = SurveyDesign(weights="weight", strata="stratum", psu="psu")
         est = SyntheticDiD(variance_method="placebo", n_bootstrap=30, seed=7)
-        with pytest.raises(
-            ValueError, match=r"at least one control per stratum.*has 0 controls"
-        ):
+        with pytest.raises(ValueError, match=r"at least one control per stratum.*has 0 controls"):
             est.fit(
                 df,
                 outcome="outcome",
@@ -966,9 +950,7 @@ class TestSDIDSurveyPlaceboFullDesign:
         # ``nest=True`` so the shifted PSUs stay unique-within-stratum.
         df.loc[df["unit"].isin(range(7, 15)), "stratum"] = 1
 
-        sd = SurveyDesign(
-            weights="weight", strata="stratum", psu="psu", nest=True
-        )
+        sd = SurveyDesign(weights="weight", strata="stratum", psu="psu", nest=True)
         est = SyntheticDiD(variance_method="placebo", n_bootstrap=30, seed=7)
         with pytest.raises(
             ValueError,
@@ -984,9 +966,7 @@ class TestSDIDSurveyPlaceboFullDesign:
                 survey_design=sd,
             )
 
-    def test_placebo_full_design_se_differs_from_pweight_only(
-        self, sdid_survey_data_full_design
-    ):
+    def test_placebo_full_design_se_differs_from_pweight_only(self, sdid_survey_data_full_design):
         """Full-design placebo SE differs from pweight-only placebo SE.
 
         Pweight-only path permutes across ALL controls (unstratified);
@@ -1078,9 +1058,7 @@ class TestSDIDSurveyPlaceboFullDesign:
         assert r_fpc.se == pytest.approx(r_pw.se, rel=1e-12)
         assert r_fpc.att == pytest.approx(r_pw.att, abs=1e-12)
 
-    def test_placebo_typo_fpc_column_still_raises(
-        self, sdid_survey_data_full_design
-    ):
+    def test_placebo_typo_fpc_column_still_raises(self, sdid_survey_data_full_design):
         """R13 P3 fix: typoed FPC column name must still raise on placebo.
 
         The FPC pre-resolve drop on placebo (R11 P1) bypasses
@@ -1131,9 +1109,7 @@ class TestSDIDSurveyPlaceboFullDesign:
         # is below the 3-PSU threshold per stratum.
         df["fpc_low"] = 2.0
 
-        sd_low_fpc_psu = SurveyDesign(
-            weights="weight", strata="stratum", psu="psu", fpc="fpc_low"
-        )
+        sd_low_fpc_psu = SurveyDesign(weights="weight", strata="stratum", psu="psu", fpc="fpc_low")
         sd_no_fpc = SurveyDesign(weights="weight", strata="stratum", psu="psu")
 
         est_fpc = SyntheticDiD(variance_method="placebo", n_bootstrap=50, seed=42)
@@ -1183,9 +1159,7 @@ class TestSDIDSurveyPlaceboFullDesign:
                 survey_design=sd_low_fpc_psu,
             )
 
-    def test_placebo_low_fpc_no_psu_warns_no_validator_block(
-        self, sdid_survey_data_full_design
-    ):
+    def test_placebo_low_fpc_no_psu_warns_no_validator_block(self, sdid_survey_data_full_design):
         """R10 P1 fix: implicit-PSU FPC validator skipped on placebo.
 
         The implicit-PSU FPC validator (PR #355 R8 P1) rejects designs
@@ -1387,9 +1361,7 @@ class TestSDIDSurveyJackknifeFullDesign:
         expected_se = np.sqrt(factor * (ss0 + ss1))
         assert result.se == pytest.approx(expected_se, rel=1e-12)
 
-    def test_jackknife_full_design_fpc_reduces_se_magnitude(
-        self, sdid_survey_data_jk_well_formed
-    ):
+    def test_jackknife_full_design_fpc_reduces_se_magnitude(self, sdid_survey_data_jk_well_formed):
         """With FPC, SE is reduced by the (1-f_h) multiplier per stratum.
 
         Two fits: one without FPC (f_h=0 so (1-f_h)=1); one with FPC set
@@ -1402,9 +1374,7 @@ class TestSDIDSurveyJackknifeFullDesign:
         df_fpc["fpc_col"] = 6.0  # n_h=3 per stratum, f_h = 3/6 = 0.5
 
         sd_no_fpc = SurveyDesign(weights="weight", strata="stratum", psu="psu")
-        sd_fpc = SurveyDesign(
-            weights="weight", strata="stratum", psu="psu", fpc="fpc_col"
-        )
+        sd_fpc = SurveyDesign(weights="weight", strata="stratum", psu="psu", fpc="fpc_col")
 
         est1 = SyntheticDiD(variance_method="jackknife", seed=42)
         result_no_fpc = est1.fit(
@@ -1427,9 +1397,7 @@ class TestSDIDSurveyJackknifeFullDesign:
             survey_design=sd_fpc,
         )
         # Expected magnitude ratio: SE_fpc/SE_no_fpc = sqrt(1 - 0.5) = 1/sqrt(2)
-        assert result_fpc.se == pytest.approx(
-            result_no_fpc.se / np.sqrt(2), rel=1e-10
-        )
+        assert result_fpc.se == pytest.approx(result_no_fpc.se / np.sqrt(2), rel=1e-10)
 
     def test_jackknife_full_design_se_differs_from_pweight_only(
         self, sdid_survey_data_jk_well_formed
@@ -1466,9 +1434,7 @@ class TestSDIDSurveyJackknifeFullDesign:
         assert result_pw.att == pytest.approx(result_full.att, abs=1e-10)
         assert result_pw.se != pytest.approx(result_full.se, abs=1e-6)
 
-    def test_get_loo_effects_df_raises_on_survey_jackknife(
-        self, sdid_survey_data_jk_well_formed
-    ):
+    def test_get_loo_effects_df_raises_on_survey_jackknife(self, sdid_survey_data_jk_well_formed):
         """R1 P1 fix: get_loo_effects_df blocks only on full-design survey
         jackknife (PSU-level replicates), not on pweight-only jackknife.
 
@@ -1607,9 +1573,7 @@ class TestSDIDSurveyJackknifeFullDesign:
         assert np.isfinite(result.se)
         assert result.se == 0.0
 
-    def test_jackknife_full_design_lonely_psu_adjust_raises(
-        self, sdid_survey_data_jk_well_formed
-    ):
+    def test_jackknife_full_design_lonely_psu_adjust_raises(self, sdid_survey_data_jk_well_formed):
         """R5 P1 fix: ``SurveyDesign(lonely_psu='adjust')`` on the jackknife
         survey path raises NotImplementedError rather than silently being
         treated as ``"remove"``.
@@ -1693,9 +1657,7 @@ class TestSDIDSurveyJackknifeFullDesign:
 
         # Under "remove": same design returns SE=NaN with the "every
         # stratum was skipped" warning (no contributing stratum).
-        sd_remove = SurveyDesign(
-            weights="weight", strata="stratum", psu="psu", lonely_psu="remove"
-        )
+        sd_remove = SurveyDesign(weights="weight", strata="stratum", psu="psu", lonely_psu="remove")
         est_rem = SyntheticDiD(variance_method="jackknife", seed=42)
         with pytest.warns(UserWarning, match=r"every stratum was skipped"):
             result_rem = est_rem.fit(
@@ -1716,9 +1678,7 @@ class TestSDIDSurveyJackknifeFullDesign:
         as ``lonely_psu='remove'`` (both contribute 0 for singleton
         strata on the jackknife path).
         """
-        sd_remove = SurveyDesign(
-            weights="weight", strata="stratum", psu="psu", lonely_psu="remove"
-        )
+        sd_remove = SurveyDesign(weights="weight", strata="stratum", psu="psu", lonely_psu="remove")
         sd_certainty = SurveyDesign(
             weights="weight", strata="stratum", psu="psu", lonely_psu="certainty"
         )
@@ -1776,9 +1736,7 @@ class TestSDIDSurveyJackknifeFullDesign:
             )
         assert np.isnan(result.se)
 
-    def test_jackknife_full_design_single_psu_stratum_skipped(
-        self, sdid_survey_data_full_design
-    ):
+    def test_jackknife_full_design_single_psu_stratum_skipped(self, sdid_survey_data_full_design):
         """Stratum with only 1 PSU contributes 0 to total variance.
 
         Degenerate stratum: relabel stratum-0 PSU 1+2 to a new stratum 2
@@ -1808,9 +1766,7 @@ class TestSDIDSurveyJackknifeFullDesign:
         assert np.isfinite(result.se)
         assert result.se > 0
 
-    def test_jackknife_full_design_unstratified_short_circuit(
-        self, sdid_survey_data_full_design
-    ):
+    def test_jackknife_full_design_unstratified_short_circuit(self, sdid_survey_data_full_design):
         """No strata + single PSU → SE=NaN (unidentified variance)."""
         df = sdid_survey_data_full_design.copy()
         df["psu"] = 0  # all units in a single PSU
@@ -2321,15 +2277,27 @@ class TestTROPRaoWuEquivalence:
         data["unit_psu"] = data["unit"]
 
         sd_rw = SurveyDesign(
-            weights="weight", strata="single_stratum", psu="unit_psu",
+            weights="weight",
+            strata="single_stratum",
+            psu="unit_psu",
         )
         sd_block = SurveyDesign(weights="weight")
 
         result_rw = TROP(method="local", n_bootstrap=99, seed=42, max_iter=5).fit(
-            data, "outcome", "D", "unit", "time", survey_design=sd_rw,
+            data,
+            "outcome",
+            "D",
+            "unit",
+            "time",
+            survey_design=sd_rw,
         )
         result_block = TROP(method="local", n_bootstrap=99, seed=42, max_iter=5).fit(
-            data, "outcome", "D", "unit", "time", survey_design=sd_block,
+            data,
+            "outcome",
+            "D",
+            "unit",
+            "time",
+            survey_design=sd_block,
         )
 
         # Point estimates identical (same weights)

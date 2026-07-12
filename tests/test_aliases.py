@@ -22,8 +22,18 @@ def test_alias_identity():
 def test_aliases_in_all():
     """All aliases are listed in __all__."""
     aliases = [
-        "DiD", "TWFE", "EventStudy", "SDiD", "CS", "CDiD",
-        "SA", "BJS", "Gardner", "DDD", "Stacked", "Bacon",
+        "DiD",
+        "TWFE",
+        "EventStudy",
+        "SDiD",
+        "CS",
+        "CDiD",
+        "SA",
+        "BJS",
+        "Gardner",
+        "DDD",
+        "Stacked",
+        "Bacon",
     ]
     for alias in aliases:
         assert alias in diff_diff.__all__, f"{alias} missing from __all__"
