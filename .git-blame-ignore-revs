@@ -1,0 +1,12 @@
+# Commits to skip in `git blame` attribution (bulk mechanical changes).
+# One-time setup: git config blame.ignoreRevsFile .git-blame-ignore-revs
+#
+# 2026-07-12 repo-wide lint normalization at the pinned toolchain
+# (black==26.3.1, ruff==0.15.13). Note: the #677 squash also contains the
+# small hand fixes bundled with that PR (never-asserted test assertions,
+# typing imports) — accepted trade-off of the squash-merge convention.
+
+# chore: pin lint tooling + normalize source and hand-fixed test files (#677)
+faf10b35de5f34b2e89cf4c4ce3567077058cb42
+# test(lint): mechanical black/ruff normalization of remaining test files (#679)
+590d56832a97e5a68bcacee69770a0b64ba30a19

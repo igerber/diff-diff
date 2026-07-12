@@ -1,0 +1,66 @@
+name: Lint
+
+# Check-only lint enforcement (ruff + black). This workflow never modifies
+# code — it reads the tree and passes or fails.
+#
+# Deliberately UNGATED (no ready-for-ci label check; precedent:
+# ai_pr_review.yml): these are cheap static checks that should give feedback
+# on every PR push. The push-to-main run catches merge-skew between two
+# individually-green PRs.
+#
+# IMPORTANT: never add a `paths:` filter here. The "Lint Gate" job below is a
+# required status check; a required check whose workflow does not trigger
+# leaves the PR blocked forever on "Expected — waiting for status".
+#
+# Tool versions are pinned and MUST stay in sync with the `dev` extra in
+# pyproject.toml — update both together.
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lint-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  format-lint:
+    name: Ruff + Black
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.14'
+      - name: Install pinned linters (keep in sync with pyproject [dev])
+        run: pip install ruff==0.15.13 black==26.3.1
+      - name: Ruff
+        run: ruff check diff_diff tests
+      - name: Black
+        run: black --check diff_diff tests
+
+  # Single stable required-check name so branch protection is configured once.
+  # Later additions (e.g. a mypy job) extend `needs` without any protection
+  # change. `if: always()` is load-bearing: without it a failed upstream job
+  # would leave this job SKIPPED, and GitHub treats a skipped required check
+  # as satisfied.
+  lint-gate:
+    name: Lint Gate
+    runs-on: ubuntu-latest
+    needs: [format-lint]
+    if: always()
+    steps:
+      - name: All lint jobs must succeed
+        run: |
+          for r in ${{ join(needs.*.result, ' ') }}; do
+            if [ "$r" != "success" ]; then
+              echo "::error::A lint job did not succeed (result: $r)"
+              exit 1
+            fi
+          done

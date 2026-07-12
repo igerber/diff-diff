@@ -25,6 +25,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the estimator, robust bias-corrected inference, and docs surfaces land in the follow-up PR.
   Port-level deviations documented in `docs/methodology/REGISTRY.md` (new
   RegressionDiscontinuity section stub).
+- **Internal: ungated `Lint` CI workflow.** Check-only `ruff check` + `black --check`
+  (at the versions pinned in the `dev` extra) run on every PR push and on pushes to
+  main — no `ready-for-ci` label needed; the aggregate `Lint Gate` job is the single
+  required-check name. Plus `.git-blame-ignore-revs` covering the 2026-07 bulk
+  normalization commits, and lint sections in CONTRIBUTING.md / CLAUDE.md.
 
 ### Changed
 - **Internal: repo-wide lint normalization + pinned tooling.** black/ruff/mypy are now

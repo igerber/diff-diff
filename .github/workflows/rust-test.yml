@@ -21,6 +21,10 @@ on:
       - '.github/workflows/notebooks.yml'
       - '.github/workflows/ci-gate.yml'
       - '.github/workflows/release-build-check.yml'
+      # lint.yml carries the ruff/black pin-sync contract locked by
+      # TestLintWorkflowPinSync in tests/test_openai_review.py; include it so
+      # a lint.yml-only edit triggers the suite that locks that contract.
+      - '.github/workflows/lint.yml'
       # The AI-review surfaces below are tested by
       # tests/test_openai_review.py (TestWorkflowPromptHardening,
       # TestAdaptReviewCriteria, etc.). Without these path filters, a
@@ -49,6 +53,10 @@ on:
       - '.github/workflows/notebooks.yml'
       - '.github/workflows/ci-gate.yml'
       - '.github/workflows/release-build-check.yml'
+      # lint.yml carries the ruff/black pin-sync contract locked by
+      # TestLintWorkflowPinSync in tests/test_openai_review.py; include it so
+      # a lint.yml-only edit triggers the suite that locks that contract.
+      - '.github/workflows/lint.yml'
       - '.github/workflows/ai_pr_review.yml'
       - '.github/codex/prompts/pr_review.md'
       - '.claude/scripts/openai_review.py'

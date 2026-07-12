@@ -1,5 +1,34 @@
 # Contributing to diff-diff
 
+## Linting and Formatting
+
+Run before pushing — the ungated `Lint` workflow enforces these on every PR
+push, and its `Lint Gate` job is a required status check:
+
+```bash
+ruff check diff_diff tests
+black diff_diff tests
+```
+
+- Tool versions are **pinned exactly** in the `dev` extra of `pyproject.toml`
+  (`black`, `ruff`, `mypy`). The Lint workflow currently mirrors the `ruff`
+  and `black` pins (`.github/workflows/lint.yml`; the sync is enforced by
+  `TestLintWorkflowPinSync`) — `mypy` is pinned in `pyproject.toml` only,
+  until the planned type-check CI job lands. A version bump is a deliberate
+  PR updating both surfaces together. Refresh with `pip install -e ".[dev]"`.
+  The pinned tools require Python >= 3.10 (dev tooling only; the library
+  itself still supports Python 3.9).
+- `[tool.ruff.lint.per-file-ignores]` entries are deliberate (trop
+  logger-before-imports E402, honest_did math-notation `l` E741, `__init__`
+  re-export F401, conftest import ordering E402). Do not "fix" those patterns
+  or remove the ignores.
+- The 2026-07 repo-wide normalization commits are listed in
+  `.git-blame-ignore-revs`; run
+  `git config blame.ignoreRevsFile .git-blame-ignore-revs` once so
+  `git blame` attributes lines to their real authors.
+- Branches created before the normalization commits: rebase onto main, then
+  run `ruff check --fix` + `black` on your touched files before pushing.
+
 ## Documentation Requirements
 
 When implementing new functionality, **always include accompanying documentation updates**.

@@ -2203,6 +2203,29 @@ class TestRustTestWorkflowPathFilter:
                 f"workflow must still run TestCiWorkflowLabelEventGuard."
             )
 
+    # lint.yml carries the ruff/black pin-sync contract locked by
+    # TestLintWorkflowPinSync in this file. Same rationale: a lint.yml-only
+    # edit must still trigger the suite that locks its contract.
+    PIN_SYNC_WORKFLOWS = (".github/workflows/lint.yml",)
+
+    def test_rust_test_yml_push_filter_covers_pin_sync_workflows(self, workflow_paths):
+        push_section, _ = workflow_paths
+        for path in self.PIN_SYNC_WORKFLOWS:
+            assert path in push_section, (
+                f"rust-test.yml `push.paths:` must include {path!r} so an edit "
+                f"to that workflow triggers the suite whose "
+                f"TestLintWorkflowPinSync locks its tool-pin sync contract."
+            )
+
+    def test_rust_test_yml_pr_filter_covers_pin_sync_workflows(self, workflow_paths):
+        _, pr_section = workflow_paths
+        for path in self.PIN_SYNC_WORKFLOWS:
+            assert path in pr_section, (
+                f"rust-test.yml `pull_request.paths:` must include {path!r} "
+                f"(same rationale as push.paths): a PR that only edits that "
+                f"workflow must still run TestLintWorkflowPinSync."
+            )
+
 
 class TestCiWorkflowLabelEventGuard:
     """The expensive CI matrices — rust-test.yml, notebooks.yml,
@@ -4640,3 +4663,45 @@ class TestCallOpenAIPayload:
         }
         with pytest.raises(SystemExit):
             review_mod.call_openai("test", "gpt-5.4", "fake-key")
+
+
+class TestLintWorkflowPinSync:
+    """The Lint workflow installs ruff/black by explicit version pin, and the
+    same versions are pinned in pyproject.toml's `dev` extra. The two surfaces
+    are documented as a sync contract (CONTRIBUTING.md "Linting and
+    Formatting"); this guard makes the contract executable so a bump to one
+    surface without the other fails fast instead of silently letting local
+    dev results diverge from CI.
+    """
+
+    LINT_WORKFLOW = pathlib.Path(__file__).resolve().parent.parent / ".github/workflows/lint.yml"
+    PYPROJECT = pathlib.Path(__file__).resolve().parent.parent / "pyproject.toml"
+
+    def _workflow_pins(self) -> "dict[str, str]":
+        text = self.LINT_WORKFLOW.read_text()
+        install_lines = [line for line in text.splitlines() if "pip install" in line]
+        assert install_lines, "lint.yml must contain a pip install step for the linters"
+        pins = dict(re.findall(r"\b(ruff|black)==([0-9][\w.]*)", "\n".join(install_lines)))
+        assert set(pins) == {
+            "ruff",
+            "black",
+        }, f"lint.yml must pip-install pinned ruff and black; found pins for {sorted(pins)}"
+        return pins
+
+    def _pyproject_pins(self) -> "dict[str, str]":
+        text = self.PYPROJECT.read_text()
+        pins = dict(re.findall(r'"(ruff|black)==([0-9][\w.]*)"', text))
+        assert set(pins) == {
+            "ruff",
+            "black",
+        }, f"pyproject dev extra must pin ruff and black exactly; found {sorted(pins)}"
+        return pins
+
+    def test_lint_workflow_pins_match_pyproject(self):
+        wf = self._workflow_pins()
+        py = self._pyproject_pins()
+        assert wf == py, (
+            f"Pinned lint tool versions diverged: lint.yml has {wf}, pyproject.toml "
+            f"dev extra has {py}. Update both together (see CONTRIBUTING.md "
+            f"'Linting and Formatting')."
+        )

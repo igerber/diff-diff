@@ -31,6 +31,17 @@ ruff check diff_diff tests
 mypy diff_diff
 ```
 
+Lint/format/type tool versions are **pinned exactly** in the `dev` extra of
+`pyproject.toml`; the `ruff`/`black` pins are mirrored in
+`.github/workflows/lint.yml` (the ungated `Lint Gate` check runs `ruff check`
++ `black --check` on every PR push; sync enforced by `TestLintWorkflowPinSync`),
+while `mypy` is pinned in `pyproject.toml` only until the type-check CI job
+lands — update both surfaces together on any bump. Refresh local tools with `pip install -e ".[dev]"`
+(the pinned tools need Python >= 3.10; the library floor stays 3.9). Some
+ruff rules are deliberately ignored per-file (`[tool.ruff.lint.per-file-ignores]`)
+— don't "fix" those patterns. One-time setup so `git blame` skips the 2026-07
+bulk-normalization commits: `git config blame.ignoreRevsFile .git-blame-ignore-revs`.
+
 ### Rust Backend Commands
 
 ```bash
