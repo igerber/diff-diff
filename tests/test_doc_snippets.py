@@ -287,11 +287,51 @@ def _build_namespace() -> dict:
             }
         )
 
+    def _mock_load_prop99(**kwargs):
+        states = ["California"] + [f"State{i:02d}" for i in range(2, 11)]
+        years = list(range(1980, 1996))
+        rows = [(s, y) for s in states for y in years]
+        fy = [1989 if r[0] == "California" else 0 for r in rows]
+        return pd.DataFrame(
+            {
+                "state": [r[0] for r in rows],
+                "year": [r[1] for r in rows],
+                "first_year": fy,
+                "lcigsale": rng.normal(4.6, 0.1, len(rows)),
+                "treated": [1 if f and r[1] >= f else 0 for f, r in zip(fy, rows)],
+                "cohort": fy,
+            }
+        )
+
+    def _mock_load_walmart(**kwargs):
+        counties = list(range(1, 21))
+        years = list(range(1985, 1996))
+        rows = [(c, y) for c in counties for y in years]
+        n = len(rows)
+        cohort_of = {c: (0 if c <= 8 else [1988, 1990, 1992][c % 3]) for c in counties}
+        fy = [cohort_of[r[0]] for r in rows]
+        return pd.DataFrame(
+            {
+                "cid": [r[0] for r in rows],
+                "year": [r[1] for r in rows],
+                "first_year": fy,
+                "log_retail_emp": rng.normal(7.5, 0.5, n),
+                "log_wholesale_emp": rng.normal(6.5, 0.5, n),
+                "x1": rng.uniform(0.05, 0.3, n),
+                "x2": rng.uniform(0.5, 0.85, n),
+                "x3": rng.uniform(0.05, 0.4, n),
+                "treated": [1 if f and r[1] >= f else 0 for f, r in zip(fy, rows)],
+                "cohort": fy,
+            }
+        )
+
     _dataset_dispatch = {
         "card_krueger": _mock_load_card_krueger,
         "castle_doctrine": _mock_load_castle_doctrine,
         "divorce_laws": _mock_load_divorce_laws,
         "mpdta": _mock_load_mpdta,
+        "prop99": _mock_load_prop99,
+        "walmart": _mock_load_walmart,
     }
 
     def _mock_load_dataset(name, **kwargs):
@@ -305,6 +345,8 @@ def _build_namespace() -> dict:
             "castle_doctrine": "Castle Doctrine laws - staggered adoption",
             "divorce_laws": "Unilateral divorce laws - staggered adoption",
             "mpdta": "Minimum wage panel data - simulated CS example",
+            "prop99": "California Prop 99 smoking panel - single treated unit",
+            "walmart": "Walmart entry county panel - staggered adoption",
         }
 
     # Inject mocks into namespace so `from diff_diff.datasets import ...` works
@@ -315,6 +357,8 @@ def _build_namespace() -> dict:
     mock_datasets_mod.load_castle_doctrine = _mock_load_castle_doctrine
     mock_datasets_mod.load_divorce_laws = _mock_load_divorce_laws
     mock_datasets_mod.load_mpdta = _mock_load_mpdta
+    mock_datasets_mod.load_prop99 = _mock_load_prop99
+    mock_datasets_mod.load_walmart = _mock_load_walmart
     mock_datasets_mod.load_dataset = _mock_load_dataset
     mock_datasets_mod.list_datasets = _mock_list_datasets
     import sys
@@ -327,6 +371,8 @@ def _build_namespace() -> dict:
     ns["load_castle_doctrine"] = _mock_load_castle_doctrine
     ns["load_divorce_laws"] = _mock_load_divorce_laws
     ns["load_mpdta"] = _mock_load_mpdta
+    ns["load_prop99"] = _mock_load_prop99
+    ns["load_walmart"] = _mock_load_walmart
     ns["load_dataset"] = _mock_load_dataset
     ns["list_datasets"] = _mock_list_datasets
 

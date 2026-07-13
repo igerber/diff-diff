@@ -828,8 +828,7 @@ def load_prop99(force_download: bool = False) -> pd.DataFrame:
         Panel dataset with columns:
         - state : str - State name
         - year : int - Year (1970-2000)
-        - first_year : int - Year treatment began (1989 for California,
-          0 = never treated)
+        - first_year : int - Treatment start year (1989 for California, 0 = never)
         - lcigsale : float - Log per capita cigarette sales (packs)
         - treated : int - 1 if treatment in effect, 0 otherwise
         - cohort : int - Alias for first_year
