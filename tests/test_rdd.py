@@ -80,6 +80,17 @@ class TestConstructor:
         with pytest.raises(ValueError, match="q must be None"):
             RegressionDiscontinuity(p=20, q=21)
 
+    def test_bool_rejected_for_integer_knobs(self):
+        # bool is an int subclass; p=True must not silently fit p=1.
+        for kwargs in (
+            {"p": True},
+            {"p": 0, "q": True},
+            {"nnmatch": True},
+            {"bwcheck": True},
+        ):
+            with pytest.raises(ValueError):
+                RegressionDiscontinuity(**kwargs)
+
     def test_non_numeric_scalars_raise_value_error(self):
         # Strings (even numeric-looking ones) and other non-real types must
         # fail with the estimator's ValueError, not NumPy's TypeError.

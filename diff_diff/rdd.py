@@ -412,16 +412,19 @@ class RegressionDiscontinuity:
             val, (bool, np.bool_)
         )
 
+    @staticmethod
+    def _is_int_scalar(val: Any) -> bool:
+        # bool is an int subclass; p=True must not silently become p=1.
+        return isinstance(val, (int, np.integer)) and not isinstance(val, (bool, np.bool_))
+
     def _validate_constructor_args(self) -> None:
         if not (self._is_real_scalar(self.cutoff) and np.isfinite(self.cutoff)):
             raise ValueError(f"cutoff must be finite; got {self.cutoff!r}.")
         # p/q bounds mirror rdrobust.R:47-57 exactly: integers in 0:20 with
         # q > p (p=0 is R's local-constant fit; q caps at 20 like p).
-        if not (isinstance(self.p, (int, np.integer)) and 0 <= self.p <= 20):
+        if not (self._is_int_scalar(self.p) and 0 <= self.p <= 20):
             raise ValueError(f"p must be an integer in 0..20; got {self.p!r}.")
-        if self.q is not None and not (
-            isinstance(self.q, (int, np.integer)) and self.p < self.q <= 20
-        ):
+        if self.q is not None and not (self._is_int_scalar(self.q) and self.p < self.q <= 20):
             raise ValueError(
                 f"q must be None (-> p+1) or an integer > p and <= 20; got {self.q!r}."
             )
@@ -437,14 +440,14 @@ class RegressionDiscontinuity:
                 "variance) is implemented in this release; 'hc0'-'hc3' and "
                 "cluster-robust modes are a documented seam."
             )
-        if not (isinstance(self.nnmatch, (int, np.integer)) and self.nnmatch >= 1):
+        if not (self._is_int_scalar(self.nnmatch) and self.nnmatch >= 1):
             raise ValueError(f"nnmatch must be an integer >= 1; got {self.nnmatch!r}.")
         if self.masspoints not in ("adjust", "check", "off"):
             raise ValueError(
                 f"masspoints must be 'adjust', 'check', or 'off'; got {self.masspoints!r}."
             )
         if self.bwcheck is not None and not (
-            isinstance(self.bwcheck, (int, np.integer)) and self.bwcheck >= 1
+            self._is_int_scalar(self.bwcheck) and self.bwcheck >= 1
         ):
             raise ValueError(f"bwcheck must be None or an integer >= 1; got {self.bwcheck!r}.")
         if not isinstance(self.bwrestrict, (bool, np.bool_)):
@@ -543,11 +546,35 @@ class RegressionDiscontinuity:
         q = int(self.q) if self.q is not None else p + 1
         kernel = _normalize_kernel(self.kernel)
 
+        # --- Mass points (rdrobust.R:365-380) ---
+        # R's rdrobust() runs this detection ITSELF, before the manual-vs-
+        # data-driven bandwidth branch, so the warning fires on manual-h
+        # fits too (verified against installed 4.0.0). The port's
+        # rdbwselect-level copy is silenced below (warn_masspoints=False)
+        # to mirror R's single warning from the estimation call.
+        n_left_pre = int(np.sum(x < c))
+        n_right_pre = int(np.sum(x >= c))
+        n_unique_left = int(np.unique(x[x < c]).shape[0])
+        n_unique_right = int(np.unique(x[x >= c]).shape[0])
+        if self.masspoints in ("check", "adjust") and n_left_pre > 0 and n_right_pre > 0:
+            mass_l = 1.0 - n_unique_left / n_left_pre
+            mass_r = 1.0 - n_unique_right / n_right_pre
+            if mass_l >= 0.2 or mass_r >= 0.2:
+                warnings.warn(
+                    "Mass points detected in the running variable.",
+                    UserWarning,
+                    stacklevel=2,
+                )
+                if self.masspoints == "check":
+                    warnings.warn(
+                        "Try using option masspoints='adjust'.",
+                        UserWarning,
+                        stacklevel=2,
+                    )
+
         # --- Bandwidth resolution (rdrobust.R:295-307, 501-504) ---
         h_user, b_user, rho = self.h, self.b, self.rho
         bwselect_label = self.bwselect
-        n_unique_left = int(np.unique(x[x < c]).shape[0])
-        n_unique_right = int(np.unique(x[x >= c]).shape[0])
         if b_user is not None and h_user is None:
             # R silently ignores b without h; we warn (documented deviation).
             warnings.warn(
@@ -605,6 +632,7 @@ class RegressionDiscontinuity:
                 bwcheck=None if self.bwcheck is None else int(self.bwcheck),
                 bwrestrict=bool(self.bwrestrict),
                 scaleregul=float(self.scaleregul),
+                warn_masspoints=False,  # fit() already warned (rdrobust.R:365-380)
             )
             h_l, h_r, b_l, b_r = bw.bws[self.bwselect]
             n_unique_left = bw.M_l if self.masspoints != "off" else n_unique_left

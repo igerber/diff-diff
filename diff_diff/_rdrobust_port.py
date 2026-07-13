@@ -412,6 +412,7 @@ def rdbwselect_sharp(
     bwrestrict: bool = True,
     scaleregul: float = 1.0,
     stdvars: bool = False,
+    warn_masspoints: bool = True,
 ) -> RdBwselectResult:
     """Sharp-RD data-driven bandwidth selection, all 10 selectors
     (rdbwselect.R main flow at the anchors cited inline).
@@ -537,17 +538,24 @@ def rdbwselect_sharp(
         mass_l = 1.0 - M_l / N_l
         mass_r = 1.0 - M_r / N_r
         if mass_l >= 0.2 or mass_r >= 0.2:
-            warnings.warn(
-                "Mass points detected in the running variable.",
-                UserWarning,
-                stacklevel=2,
-            )
-            if masspoints == "check":
+            # warn_masspoints=False silences ONLY the warnings (the
+            # bwcheck floor below still applies): R's rdrobust() runs the
+            # detection itself before its inline selection (rdrobust.R:
+            # 365-380), so the estimator warns once at fit() level and
+            # passes False here to avoid a stacked duplicate. Direct
+            # callers keep rdbwselect.R:139-159's own warning behavior.
+            if warn_masspoints:
                 warnings.warn(
-                    "Try using option masspoints='adjust'.",
+                    "Mass points detected in the running variable.",
                     UserWarning,
                     stacklevel=2,
                 )
+                if masspoints == "check":
+                    warnings.warn(
+                        "Try using option masspoints='adjust'.",
+                        UserWarning,
+                        stacklevel=2,
+                    )
             if bwcheck is None and masspoints == "adjust":
                 bwcheck_effective = 10  # rdbwselect.R:157
 

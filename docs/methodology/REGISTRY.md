@@ -3633,7 +3633,14 @@ bwrestrict/bwcheck clamps, masspoints unique-count adjustment). Manual
   the window at 10 unique support points when >= 20% mass is detected;
   "check" warns and suggests adjust; "off" reproduces the
   pre-masspoints package (and the published 2017 Stata Journal Senate
-  numbers exactly). Adjust == off on tie-free data (tested).
+  numbers exactly). Adjust == off on tie-free data (tested). Detection
+  runs in `fit()` BEFORE the manual-vs-data-driven bandwidth branch,
+  exactly where R's rdrobust() runs it (rdrobust.R:365-380), so the
+  warning fires on manual-`h` fits too; the port's rdbwselect-level
+  copy of the warning is suppressed on the estimator path
+  (`warn_masspoints=False`) to mirror R's single warning per fit
+  (R's estimation-path selection is inline, so its rdbwselect warning
+  never stacks; verified against installed 4.0.0 on both paths).
 - CCT 2014 Remark 7 (internal consistency, tested): with `b = h` and
   the same kernel, `tau_bc(p, q=p+1)` is numerically identical to the
   order-`(p+1)` conventional estimate, and the robust variance equals

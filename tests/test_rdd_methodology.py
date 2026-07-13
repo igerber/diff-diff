@@ -70,6 +70,32 @@ class TestMasspoints:
             RegressionDiscontinuity(masspoints="check").fit(df, "y", "x")
         messages = [str(w.message) for w in record]
         assert any("Mass points detected" in m for m in messages)
+        # R warns ONCE from rdrobust() itself (rdrobust.R:365-380; its
+        # selection is inline, so rdbwselect's copy never stacks) - the
+        # estimator must not emit a duplicate through the port.
+        assert sum("Mass points detected" in m for m in messages) == 1
+
+    def test_check_warns_on_ties_with_manual_h(self):
+        # rdrobust.R:365-380 runs BEFORE the manual-bandwidth branch, so
+        # the mass-point warning fires even when h= is supplied (verified
+        # against installed R 4.0.0: manual h + masspoints="check" emits
+        # both warning lines).
+        df = _df(600, seed=1)
+        df["x"] = df["x"].round(2)
+        with pytest.warns(UserWarning) as record:
+            RegressionDiscontinuity(h=0.5, masspoints="check").fit(df, "y", "x")
+        messages = [str(w.message) for w in record]
+        assert any("Mass points detected" in m for m in messages)
+        assert any("masspoints='adjust'" in m for m in messages)
+
+    def test_adjust_warns_on_ties_with_manual_h(self):
+        # adjust warns too (without the "try adjust" hint); the default
+        # masspoints="adjust" must not silently swallow the detection on
+        # manual-bandwidth fits.
+        df = _df(600, seed=1)
+        df["x"] = df["x"].round(2)
+        with pytest.warns(UserWarning, match="Mass points detected"):
+            RegressionDiscontinuity(h=0.5, masspoints="adjust").fit(df, "y", "x")
 
 
 class TestInvariances:
@@ -172,8 +198,12 @@ class TestDegenerates:
                 "y": rng.normal(0.0, 1.0, 100),
             }
         )
-        with pytest.raises(ValueError, match="distinct running-variable"):
-            RegressionDiscontinuity(h=1.0).fit(df, "y", "x")
+        # The fit-level mass-point detection (rdrobust.R:365-380) fires
+        # first - one distinct value per side is extreme mass - then the
+        # identification guard raises.
+        with pytest.warns(UserWarning, match="Mass points detected"):
+            with pytest.raises(ValueError, match="distinct running-variable"):
+                RegressionDiscontinuity(h=1.0).fit(df, "y", "x")
 
     def test_huge_rho_empty_selected_b_fails_closed(self):
         # rho without h applies b = h_selected/rho (rdrobust.R:501-504); a
