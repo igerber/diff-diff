@@ -3527,6 +3527,35 @@ Defaults reproduce `rdrobust(y, x)`: `p=1`, `q=2`, triangular kernel,
 `bwselect="mserd"`, `vcov_type="nn"` (J=3), `masspoints="adjust"`,
 normal-quantile CIs.
 
+**Estimand and estimator (fuzzy RD; `fit(..., treatment_col=...)`):**
+crossing the cutoff shifts OBSERVED take-up `T` instead of determining
+it; the estimand is the local Wald ratio
+`tau_FRD = tau_Y,SRD / tau_T,SRD` (CCT 2014 Section 3.2; identification
+requires `tau_T,SRD != 0`, Theorem 3). For binary take-up under
+monotonicity this is the LATE for compliers at the cutoff; for
+non-binary (dose) take-up - accepted, matching R's `fuzzy=` - it is the
+ratio-of-jumps estimand without the complier-LATE reading. The
+`estimand` results field is DATA-DEPENDENT accordingly: binary take-up
+(values in {0, 1}) reports "fuzzy (LATE for compliers at the cutoff)";
+anything else reports "fuzzy (local Wald ratio at the cutoff;
+non-binary take-up)" so the label never overclaims. Implementation stacks `T` as a second response column
+through the SAME local-polynomial fits (rdrobust.R:581-591); the bias
+correction is the LINEARIZATION of the ratio via the delta vector
+`s_Y = [1/tau_T_cl, -tau_Y_cl/tau_T_cl^2]`:
+`tau_bc = tau_cl - s_Y . B_F` with
+`B_F = [tau_Y_cl - tau_Y_bc, tau_T_cl - tau_T_bc]` (rdrobust.R:636-657)
+- NOT a per-component bias-corrected ratio, per CCT 2014's "bias-correct
+the first-order linear approximation of the ratio". Variances reuse the
+same sandwiches with the (n, 2) residual matrix collapsed by `s_Y`
+(ratio) or `sV_T = [0, 1]` (first stage); the Y-T covariance is the
+cross term of `res @ s` (functions.R:379-385). The per-side biases are
+the linearized `s_Y . B_F_side` (rdrobust.R:649-652). The first stage is
+exposed as a full three-row mirror (`first_stage*` fields, robust-row
+canonical binding like `att`) and `summary()` prints a first-stage block
+above the treatment effects, as R does. A take-up column deterministic
+in `X` reproduces the sharp fit (first stage == 1, ULP-level agreement -
+the ratio divides by a float-solved 1).
+
 **Bandwidth selection:** all 10 rdrobust data-driven selectors (`mserd`
 default; `msetwo`/`msesum`/`msecomb1`/`msecomb2`; CER-optimal `cer*`
 variants = the matching MSE selector's `h` shrunk by
@@ -3536,7 +3565,18 @@ chain, per-kernel pilot constants, IK-style regularization,
 bwrestrict/bwcheck clamps, masspoints unique-count adjustment). Manual
 `h`/`b`/`rho` semantics mirror rdrobust exactly: `h` alone -> `b = h`;
 `h`+`rho` -> `b = h/rho` (overriding a supplied `b`, with a warning);
-`rho` without `h` applies to the SELECTED bandwidths.
+`rho` without `h` applies to the SELECTED bandwidths. Fuzzy bandwidth
+logic (CCFT 2017 Section 6, R-exact): by default bandwidths are selected
+for the FUZZY RATIO objective - `T` is stacked into every pilot fit and
+the pilot ratio + delta vector feed the V/B constants (approach 2);
+`sharpbw=True` forces the sharp reduced-form-on-`Y` objective
+(approach 1); and ONE-SIDED PERFECT COMPLIANCE (zero take-up variance on
+either side) auto-switches to approach 1 regardless of the flag
+(`perf_comp`, rdrobust.R:164-185 / rdbwselect.R:334-346) - selection
+only; estimation always remains fuzzy. In the port, `T` threads through
+the shared `_bw` closure so all three selector chains (mserd, msetwo,
+msesum - 14 pilot call sites) receive it; the `msetwo` fuzzy golden
+config pins the per-side chains.
 
 - **Note (canonical inference binding; deviation from R's printed
   output):** the result's canonical `att`/`se`/`t_stat`/`p_value`/
@@ -3598,14 +3638,53 @@ bwrestrict/bwcheck clamps, masspoints unique-count adjustment). Manual
   per-window distinct-support guards above (in the estimation port,
   ahead of any Gram inversion), not by changing `qrXXinv`'s parity
   behavior.
+- **Deviation from R (weak first stage):** rdrobust is SILENT when the
+  take-up jump is statistically indistinguishable from zero (verified
+  live on installed 4.0.0: a near-zero first stage returns a wildly
+  inflated ratio with no message). The estimator emits a `UserWarning`
+  when the first-stage ROBUST confidence interval at the fit's own
+  `alpha` is FINITE and contains 0 - a parameter-free gate (no imported
+  F-statistic threshold) backed by CCT 2014's Theorem 3 requirement
+  `tau_T,SRD != 0` and its weak-identification "guard and warn"
+  discussion citing Feir-Lemieux-Marmer. The finite-CI gate means
+  NaN-gated first stages (see next Note) never fire the warning.
+  Weak-IV-ROBUST fuzzy inference (Feir-Lemieux-Marmer 2016) is a
+  documented seam.
+- **Note (first-stage `se = 0`, deviation from R's `Inf`):** perfect
+  compliance (take-up deterministic in the running variable) gives
+  exactly-zero first-stage NN residuals, so `se_T = 0` and the
+  first-stage inference triples NaN-gate via `safe_inference()` where R
+  prints `z_T = Inf, pv_T = 0`. The first-stage point estimate itself
+  (== 1) is reported. A DEGENERATE-ZERO first stage under manual
+  bandwidths (no take-up variation inside the window despite variation
+  in the sample) follows R's Inf/NaN arithmetic flow-on: the ratio rows
+  come out non-finite and joint-NaN-gate - loud, not silent. Under
+  DATA-DRIVEN bandwidths the same degeneracy hits the pilot ratio
+  (`tau_T == 0` in a pilot window) and fails closed with the targeted
+  "non-finite pilot bandwidth" error (documented deviation; R flows
+  Inf/NaN through selection into opaque downstream errors).
+- **Deviation from R:** `sharpbw=True` on a SHARP fit warns and is
+  ignored (R ignores it silently); on manual-bandwidth fuzzy fits it is
+  a silent no-op in both implementations (selection is skipped).
+- **Note (fuzzy identification guard, R-exact):** a take-up variable
+  with zero variance on BOTH sides and no mean jump at the cutoff raises
+  R's exact error ("Fuzzy RD: first-stage variable has no variation and
+  no jump at the cutoff...") in both entry points, and the check runs
+  BEFORE mass-point detection, matching R's rdrobust ordering
+  (rdrobust.R:175 precedes :365-380; live-verified that R raises with no
+  mass-point warning on degenerate fuzzy + tied data). One-sided zero
+  variance is a legitimate design and routes to the `perf_comp`
+  bandwidth switch instead. The R `var(T_side) == 0` test is implemented
+  as exact constancy (R's two-pass `mean()` makes its variance of a
+  constant vector exactly zero; numpy's single-pass mean does not).
 - **Note (v1 scope seams):** only `vcov_type="nn"` (rdrobust's default)
   ships; `hc0`-`hc3` and cluster modes raise `NotImplementedError`.
-  Fuzzy designs, covariate adjustment (CCFT 2019 - review on file),
-  weights, kink estimands (`deriv`), `scalepar`, `stdvars`, per-side
-  manual bandwidths, and the rdplot/density diagnostics are documented
-  follow-ups; fuzzy/covariates/cluster/weights are not constructor
-  parameters at all. The port's `deriv` machinery is golden-covered for
-  `deriv in {0, 1}` only.
+  Covariate adjustment (CCFT 2019 - review on file), weights, kink
+  estimands (`deriv`), `scalepar`, `stdvars`, per-side manual
+  bandwidths, weak-IV-robust fuzzy inference (Feir-Lemieux-Marmer), and
+  the rdplot/density diagnostics are documented follow-ups;
+  covariates/cluster/weights are not constructor parameters at all. The
+  port's `deriv` machinery is golden-covered for `deriv in {0, 1}` only.
 - **Note (p/q surface, R-exact):** public `p`/`q` validation mirrors
   rdrobust.R:47-57 exactly - integers in 0:20 with `q > p`; `p=0` is R's
   local-constant fit and is accepted. R resolves a NULL `q` to `p + 1`
@@ -3653,14 +3732,18 @@ bwrestrict/bwcheck clamps, masspoints unique-count adjustment). Manual
 
 **Validation:** bandwidth goldens `benchmarks/data/rdrobust_golden.json`
 (17 configs x 10 selectors, `tests/test_rdrobust_port.py`); estimation
-goldens `benchmarks/data/rdrobust_estimates_golden.json` (16 configs,
-full three-row blocks + counts + per-side coefficients,
-`tests/test_rdd_parity.py`); vendored Senate data
-(`benchmarks/data/rdrobust_senate.csv`, Cattaneo-Frandsen-Titiunik 2015)
-anchoring the published 2017 Stata Journal numbers under
-`masspoints="off"`; R-free methodology anchors in
+goldens `benchmarks/data/rdrobust_estimates_golden.json` (23 configs
+incl. 7 fuzzy - default/sharpbw/manual-h/epa/msetwo/one-sided-perf_comp/
+ties - with full first-stage three-row blocks; the per-side LINEARIZED
+fuzzy biases are pinned at port level in
+`tests/test_rdrobust_port.py::TestFuzzyPortGoldenParity`;
+`tests/test_rdd_parity.py` pins everything the public results expose);
+vendored Senate data (`benchmarks/data/rdrobust_senate.csv`,
+Cattaneo-Frandsen-Titiunik 2015) anchoring the published 2017 Stata
+Journal numbers under `masspoints="off"`; R-free methodology anchors in
 `tests/test_rdd_methodology.py` (Remark 7 equivalence, invariances,
-NaN/degenerate contracts).
+perfect-compliance == sharp, perf_comp/sharpbw bandwidth switches,
+weak-first-stage warning gate, NaN/degenerate contracts).
 
 **Paper reviews on file:**
 `docs/methodology/papers/calonico-cattaneo-titiunik-2014-review.md` (CCT 2014,
@@ -4264,7 +4347,7 @@ should be a deliberate user choice.
 | QDiD | qte | `QDiD()` |
 | BaconDecomposition | bacondecomp | `bacon()` |
 | HonestDiD | HonestDiD | `createSensitivityResults()` |
-| RegressionDiscontinuity | rdrobust | `rdrobust()` + `rdbwselect()` (4.0.0; sharp/nn path) |
+| RegressionDiscontinuity | rdrobust | `rdrobust()` + `rdbwselect()` (4.0.0; sharp + fuzzy, nn path; `treatment_col` = R's `fuzzy=`) |
 | PreTrendsPower | pretrends | `pretrends()` |
 | PowerAnalysis | pwr / DeclareDesign / pcpanel | `pwr::pwr.norm.test` (analytical, normal-based — D1) + `pcpanel` (Burlig 2020 panel, equicorrelated case) + simulation. The analytical multiplier is normal (z), so `pwr.t.test` is **not** the faithful parity target. |
 

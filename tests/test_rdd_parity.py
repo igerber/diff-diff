@@ -36,7 +36,7 @@ def golden():
         return json.load(f)
 
 
-def _frame(golden, dgp_name):
+def _frame(golden, dgp_name, cfg_name=None):
     entry = golden[dgp_name]
     if dgp_name == "senate":
         csv_path = Path(__file__).resolve().parents[1] / entry["csv"]
@@ -44,6 +44,13 @@ def _frame(golden, dgp_name):
             pytest.skip(f"Vendored Senate CSV not found at {csv_path}")
         df = pd.read_csv(csv_path)[["vote", "margin"]].dropna()
         return df.rename(columns={"vote": "y", "margin": "x"})
+    if dgp_name == "dgp_fuzzy":
+        # Config-specific variants share the same seeded base draw:
+        # ties_adjust rounds x to 2dp; one_sided zeroes take-up left of
+        # the cutoff (perf_comp path).
+        x = entry["x_ties"] if cfg_name == "ties_adjust" else entry["x"]
+        t = entry["t_one"] if cfg_name == "one_sided" else entry["t"]
+        return pd.DataFrame({"x": x, "y": entry["y"], "t": t})
     return pd.DataFrame({"x": entry["x"], "y": entry["y"]})
 
 
@@ -55,6 +62,7 @@ def _kwargs_from_config(cfg):
         kernel=cfg["kernel"],
         bwselect=cfg["bwselect"],
         masspoints=cfg["masspoints"],
+        sharpbw=bool(cfg["sharpbw"]),
         alpha=1 - cfg["level"] / 100.0,
     )
     if cfg["h_in"] is not None:
@@ -66,11 +74,14 @@ def _kwargs_from_config(cfg):
     return kwargs
 
 
-def _fit(golden, dgp_name, cfg):
-    df = _frame(golden, dgp_name)
+def _fit(golden, dgp_name, cfg, cfg_name=None):
+    df = _frame(golden, dgp_name, cfg_name)
+    treatment_col = "t" if cfg.get("fuzzy_in") else None
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        return RegressionDiscontinuity(**_kwargs_from_config(cfg)).fit(df, "y", "x")
+        return RegressionDiscontinuity(**_kwargs_from_config(cfg)).fit(
+            df, "y", "x", treatment_col=treatment_col
+        )
 
 
 class TestEstimateGoldenParity:
@@ -81,7 +92,7 @@ class TestEstimateGoldenParity:
                 continue
             for cfg_name, cfg in entry["configs"].items():
                 label = f"{dgp_name}/{cfg_name}"
-                r = _fit(golden, dgp_name, cfg)
+                r = _fit(golden, dgp_name, cfg, cfg_name)
                 pairs = [
                     ("tau_cl", r.att_conventional, cfg["tau_cl"]),
                     ("tau_bc", r.att, cfg["tau_bc"]),
@@ -104,6 +115,43 @@ class TestEstimateGoldenParity:
                     ("ci_rb_lo", r.conf_int[0], cfg["ci_lower"][2]),
                     ("ci_rb_hi", r.conf_int[1], cfg["ci_upper"][2]),
                 ]
+                if cfg.get("fuzzy_in"):
+                    # First-stage three-row block (R's tau_T/se_T/z_T/pv_T/
+                    # ci_T layout: rows = Conventional/Bias-Corrected/Robust).
+                    pairs += [
+                        ("fs_cl", r.first_stage_conventional, cfg["tau_T"][0]),
+                        ("fs_bc", r.first_stage, cfg["tau_T"][1]),
+                        ("fs_se_cl", r.first_stage_se_conventional, cfg["se_T"][0]),
+                        ("fs_se_rb", r.first_stage_se, cfg["se_T"][2]),
+                        ("fs_z_cl", r.first_stage_t_stat_conventional, cfg["z_T"][0]),
+                        ("fs_z_bc", r.first_stage_t_stat_bias_corrected, cfg["z_T"][1]),
+                        ("fs_z_rb", r.first_stage_t_stat, cfg["z_T"][2]),
+                        ("fs_pv_cl", r.first_stage_p_value_conventional, cfg["pv_T"][0]),
+                        ("fs_pv_bc", r.first_stage_p_value_bias_corrected, cfg["pv_T"][1]),
+                        ("fs_pv_rb", r.first_stage_p_value, cfg["pv_T"][2]),
+                        (
+                            "fs_ci_cl_lo",
+                            r.first_stage_conf_int_conventional[0],
+                            cfg["ci_T_lower"][0],
+                        ),
+                        (
+                            "fs_ci_cl_hi",
+                            r.first_stage_conf_int_conventional[1],
+                            cfg["ci_T_upper"][0],
+                        ),
+                        (
+                            "fs_ci_bc_lo",
+                            r.first_stage_conf_int_bias_corrected[0],
+                            cfg["ci_T_lower"][1],
+                        ),
+                        (
+                            "fs_ci_bc_hi",
+                            r.first_stage_conf_int_bias_corrected[1],
+                            cfg["ci_T_upper"][1],
+                        ),
+                        ("fs_ci_rb_lo", r.first_stage_conf_int[0], cfg["ci_T_lower"][2]),
+                        ("fs_ci_rb_hi", r.first_stage_conf_int[1], cfg["ci_T_upper"][2]),
+                    ]
                 for name, got, want in pairs:
                     assert got == pytest.approx(
                         want, rel=RTOL, abs=1e-12
@@ -114,9 +162,16 @@ class TestEstimateGoldenParity:
                 np.testing.assert_allclose(
                     r.beta_p_right, cfg["beta_p_r"], rtol=RTOL, err_msg=label
                 )
+                if cfg.get("fuzzy_in"):
+                    np.testing.assert_allclose(
+                        r.beta_t_p_left, cfg["beta_t_p_l"], rtol=RTOL, err_msg=label
+                    )
+                    np.testing.assert_allclose(
+                        r.beta_t_p_right, cfg["beta_t_p_r"], rtol=RTOL, err_msg=label
+                    )
                 n_checked += 1
-        # 16 configurations; fail loudly if the golden shrinks.
-        assert n_checked == 16
+        # 23 configurations; fail loudly if the golden shrinks.
+        assert n_checked == 23
 
 
 class TestSenatePublished2017:

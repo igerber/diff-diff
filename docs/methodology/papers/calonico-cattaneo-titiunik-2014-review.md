@@ -137,7 +137,7 @@ with `V_{nu,p} = (sigma_-^2 + sigma_+^2) nu!^2 e_nu' Gamma_p^{-1} Psi_p Gamma_p^
 - [ ] `rho = h/b` reporting; support user-specified `h`, `b`, and `b = h`
 - [ ] Mass-point detection warning for discrete running variables (Remark 1)
 - [ ] Optional different bandwidths per side (Remark 9)
-- [ ] (Deferred, fuzzy) linearization-based bias correction, denominator guard (Theorems 3-4)
+- [x] (Fuzzy) linearization-based bias correction (shipped: `tau_bc = tau_cl - s_Y·B_F`), denominator guard (Theorems 3-4; identification error + weak-first-stage warning shipped; FLM weak-IV-robust inference remains a documented seam)
 - [ ] (Deferred, kink) `nu = 1` estimands via the general `(nu, p, q)` machinery (Theorem 2)
 
 ---

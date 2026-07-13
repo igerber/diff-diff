@@ -419,7 +419,7 @@ sources:
       - path: diff_diff/guides/llms-autonomous.txt
         section: "Estimator-support matrix + out-of-scope list"
         type: user_guide
-        note: "Sharp RD is IN scope as of the RegressionDiscontinuity release; the out-of-scope bullet routes only fuzzy RD elsewhere. Keep both in sync with the estimator's v1 seams."
+        note: "Sharp AND fuzzy RD are IN scope; the out-of-scope bullet routes only kink designs / covariate-adjusted / cluster-robust RD elsewhere. Keep both in sync with the estimator's v1 seams."
       - path: docs/choosing_estimator.rst
         section: "SE methodology + Survey Design Support tables"
         type: user_guide

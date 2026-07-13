@@ -826,7 +826,7 @@ es = est.fit(data_mp, outcome_col='y', unit_col='unit',
 
 ### RegressionDiscontinuity
 
-Sharp regression discontinuity estimator (Calonico, Cattaneo & Titiunik 2014), parity-targeting R rdrobust 4.0.0. Treatment is assigned by a known threshold of an observed running variable (`running >= cutoff`; units exactly at the cutoff are treated). Point estimation via kernel-weighted local polynomials on each side; data-driven MSE/CER-optimal bandwidths (all 10 rdrobust selectors); robust bias-corrected inference. Cross-sectional - no panel/time dimension and no treatment column (sharp design derives treatment from the running variable).
+Regression discontinuity estimator - sharp and fuzzy (Calonico, Cattaneo & Titiunik 2014), parity-targeting R rdrobust 4.0.0. SHARP (default): treatment is assigned by a known threshold of an observed running variable (`running >= cutoff`; units exactly at the cutoff are treated); no treatment column. FUZZY: pass the OBSERVED take-up column via `fit(..., treatment_col=...)` (R's `fuzzy=`) - the estimand becomes the local Wald ratio (complier LATE at the cutoff under monotonicity) with a linearized bias correction, and the results gain a full `first_stage*` three-row block. Point estimation via kernel-weighted local polynomials on each side; data-driven MSE/CER-optimal bandwidths (all 10 rdrobust selectors; fuzzy selects on the ratio objective by default, with a sharp-on-Y switch under one-sided perfect compliance or `sharpbw=True`); robust bias-corrected inference. Cross-sectional - no panel/time dimension.
 
 ```python
 RegressionDiscontinuity(
@@ -844,6 +844,7 @@ RegressionDiscontinuity(
     bwcheck: int | None = None,        # Force >= this many unique support points into the window
     bwrestrict: bool = True,           # Clamp bandwidths to the observed running-variable range
     scaleregul: float = 1.0,           # IK-style regularization scale (0 removes)
+    sharpbw: bool = False,             # Fuzzy only: select bandwidths on the sharp reduced form (R's sharpbw); auto under one-sided perfect compliance
     alpha: float = 0.05,               # rdrobust level = 100*(1-alpha)
 )
 ```
@@ -857,6 +858,7 @@ rd.fit(
     data: pd.DataFrame,
     outcome_col: str,
     running_col: str,
+    treatment_col: str | None = None,  # None = sharp; a column name = fuzzy (observed take-up; any numeric, typically binary)
 ) -> RegressionDiscontinuityResults
 ```
 
@@ -870,15 +872,23 @@ results.att_conventional  # rdrobust's printed headline coefficient (conventiona
 results.conf_int   # robust bias-corrected CI
 results.h_left, results.b_left  # selected bandwidths
 print(results.summary())  # three-row Conventional / Bias-Corrected / Robust table, as in rdrobust
+
+fuzzy = rd.fit(df, "y", "score", treatment_col="takeup")  # fuzzy RD
+fuzzy.att          # complier LATE at the cutoff (linearized bias-corrected ratio, robust row)
+fuzzy.first_stage  # take-up jump (bias-corrected; full three-row first_stage* mirror available)
+fuzzy.estimand     # "fuzzy (LATE for compliers at the cutoff)" (binary take-up) / "fuzzy (local Wald ratio at the cutoff; non-binary take-up)" / "sharp (ATE at the cutoff)"
 ```
 
 Canonical fields are ONE coherent row (the robust row): att = bias-corrected
 estimate, se = robust SE. rdrobust prints the conventional estimate as its
 headline - that is att_conventional here, with a full inference row of its own.
-Sharp designs only in this release: fuzzy RD, covariates, cluster-robust
-variance, weights, and kink estimands are documented follow-ups; missing
-rows are dropped WITH a warning (R drops silently); N < 20 falls back to
-full-range bandwidths exactly as rdrobust does (overriding manual h).
+Fuzzy fits warn when the first-stage robust CI contains zero (weak
+identification; R is silent) and raise R's exact error when the take-up
+variable has no variation and no jump. Covariates, cluster-robust variance,
+weights, kink estimands, and weak-IV-robust fuzzy inference are documented
+follow-ups; missing rows are dropped WITH a warning (R drops silently);
+N < 20 falls back to full-range bandwidths exactly as rdrobust does
+(overriding manual h).
 
 ### StackedDiD
 

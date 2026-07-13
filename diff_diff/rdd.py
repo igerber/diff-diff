@@ -1,46 +1,61 @@
 """
-Sharp regression discontinuity design (RDD) estimation with robust
-bias-corrected inference, parity-targeting R ``rdrobust`` 4.0.0.
+Regression discontinuity design (RDD) estimation - sharp and fuzzy - with
+robust bias-corrected inference, parity-targeting R ``rdrobust`` 4.0.0.
 
-Implements the local-polynomial sharp-RD estimator of Calonico, Cattaneo &
-Titiunik (2014): treatment is assigned by ``running >= cutoff``; the effect
-is the jump in the conditional expectation of the outcome at the cutoff,
-estimated by kernel-weighted polynomial regressions on each side with
-data-driven MSE/CER-optimal bandwidths, and reported with robust
-bias-corrected (RBC) inference.
+Implements the local-polynomial RD estimators of Calonico, Cattaneo &
+Titiunik (2014). SHARP (default): treatment is assigned by
+``running >= cutoff``; the effect is the jump in the conditional
+expectation of the outcome at the cutoff. FUZZY (pass
+``fit(..., treatment_col=...)`` with the OBSERVED take-up column):
+crossing the cutoff shifts take-up rather than determining it, and the
+estimand is the local Wald ratio - the outcome jump divided by the
+take-up jump - which under monotonicity is the LATE for compliers at the
+cutoff. Both designs use kernel-weighted polynomial regressions on each
+side with data-driven MSE/CER-optimal bandwidths and robust
+bias-corrected (RBC) inference; the fuzzy bias correction is the
+linearization of the ratio (not per-component), matching CCT 2014
+Section 3.2 and rdrobust exactly.
 
 Canonical inference binding
 ---------------------------
 ``RegressionDiscontinuityResults`` binds the library-canonical fields to ONE
 internally coherent inference row - the ROBUST row of rdrobust's output:
-``att`` is the bias-corrected point estimate ``tau_bc``, ``se`` its robust
-standard error, and ``t_stat``/``p_value``/``conf_int`` are computed from
-that same pair, so the library-wide identities hold (``t_stat == att/se``,
-``conf_int`` centered on ``att``). This deliberately differs from rdrobust's
+``att`` is the bias-corrected point estimate ``tau_bc`` (the linearized
+bias-corrected RATIO on fuzzy fits), ``se`` its robust standard error, and
+``t_stat``/``p_value``/``conf_int`` are computed from that same pair, so
+the library-wide identities hold (``t_stat == att/se``, ``conf_int``
+centered on ``att``). The ``estimand`` results field names what ``att``
+measures for the fit at hand. This deliberately differs from rdrobust's
 PRINTED headline, which reports the conventional estimate ``tau_cl`` in the
 coefficient column while taking inference from the robust row; ``tau_cl`` is
 first-class here as ``att_conventional`` (with its own full inference row),
-and ``summary()`` prints the familiar three-row rdrobust table.
+and ``summary()`` prints the familiar three-row rdrobust table. Fuzzy fits
+additionally expose the first stage (take-up jump) as a full three-row
+mirror (``first_stage*`` fields) and print it above the treatment effects,
+as R does.
 
 rdrobust equivalents
 --------------------
-=====================  ==========================================
-diff-diff              R rdrobust
-=====================  ==========================================
-``cutoff``             ``c``
-``vcov_type``          ``vce``
-``alpha``              ``1 - level/100``
-``h``, ``b``, ``rho``  ``h``, ``b``, ``rho`` (same semantics)
-``p``, ``q``           ``p``, ``q``
-``bwselect``           ``bwselect`` (same 10-option menu)
-``kernel``             ``kernel`` (accepts "tri"/"epa"/"uni" too)
-``masspoints``         ``masspoints`` ("adjust"/"check"/"off")
-``nnmatch``            ``nnmatch``
-=====================  ==========================================
+=======================  ==========================================
+diff-diff                R rdrobust
+=======================  ==========================================
+``cutoff``               ``c``
+``vcov_type``            ``vce``
+``alpha``                ``1 - level/100``
+``h``, ``b``, ``rho``    ``h``, ``b``, ``rho`` (same semantics)
+``p``, ``q``             ``p``, ``q``
+``bwselect``             ``bwselect`` (same 10-option menu)
+``kernel``               ``kernel`` (accepts "tri"/"epa"/"uni" too)
+``masspoints``           ``masspoints`` ("adjust"/"check"/"off")
+``nnmatch``              ``nnmatch``
+``treatment_col`` (fit)  ``fuzzy`` (observed take-up variable)
+``sharpbw``              ``sharpbw`` (same default and semantics)
+=======================  ==========================================
 
-Not in v1 (documented seams, see REGISTRY.md): fuzzy designs, covariate
-adjustment, cluster-robust variance, weights, ``deriv``/kink estimands,
-``scalepar``, ``stdvars``, hc0-hc3 variance modes.
+Not in v1 (documented seams, see REGISTRY.md): covariate adjustment,
+cluster-robust variance, weights, ``deriv``/kink estimands, ``scalepar``,
+``stdvars``, hc0-hc3 variance modes, weak-IV-robust fuzzy inference
+(Feir-Lemieux-Marmer).
 
 References
 ----------
@@ -66,9 +81,10 @@ import pandas as pd
 
 from diff_diff._rdrobust_port import (
     BWSELECT_OPTIONS,
+    _fuzzy_identification_stop,
     _normalize_kernel,
-    rdbwselect_sharp,
-    rdrobust_fit_sharp,
+    rdbwselect,
+    rdrobust_fit,
 )
 from diff_diff.utils import safe_inference
 
@@ -86,7 +102,9 @@ def _json_safe(value: Any) -> Any:
 
 @dataclass
 class RegressionDiscontinuityResults:
-    """Results of a sharp regression discontinuity fit.
+    """Results of a regression discontinuity fit (sharp or fuzzy; the
+    ``estimand`` field names which one, and ``first_stage*`` fields are
+    populated on fuzzy fits only).
 
     Canonical inference fields (``att``, ``se``, ``t_stat``, ``p_value``,
     ``conf_int``) all describe the ROBUST bias-corrected row: ``att`` is the
@@ -167,11 +185,46 @@ class RegressionDiscontinuityResults:
     h_input: Optional[float]
     b_input: Optional[float]
     rho_input: Optional[float]
+    # Design echoes: ``estimand`` names what ``att`` measures for THIS fit
+    # - "sharp (ATE at the cutoff)"; "fuzzy (LATE for compliers at the
+    # cutoff)" for BINARY take-up; or "fuzzy (local Wald ratio at the
+    # cutoff; non-binary take-up)" when the take-up column is not {0, 1}
+    # (the complier-LATE reading does not apply to dose take-up).
+    # ``treatment_col`` is the fit-time take-up column name
+    # (None on sharp fits; no ``_input`` suffix - that convention is
+    # reserved for constructor arguments); ``sharpbw`` echoes the
+    # constructor flag.
+    estimand: str
+    sharpbw: bool
+    treatment_col: Optional[str]
 
-    # Per-side order-p coefficient vectors (rdplot seam); always populated
-    # by fit(), so typed non-Optional despite the dataclass default.
+    # First-stage (take-up jump) three-row mirror - fuzzy fits only, all
+    # None on sharp fits. Same binding rule as the main estimate: the
+    # unsuffixed quintet is the coherent ROBUST row (first_stage = the
+    # bias-corrected first-stage estimate tau_T_bc, first_stage_se = its
+    # robust SE); the conventional row and the bias-corrected middle-row
+    # inference triple mirror the main fields' suffix scheme.
+    first_stage: Optional[float] = None
+    first_stage_se: Optional[float] = None
+    first_stage_t_stat: Optional[float] = None
+    first_stage_p_value: Optional[float] = None
+    first_stage_conf_int: Optional[Tuple[float, float]] = None
+    first_stage_conventional: Optional[float] = None
+    first_stage_se_conventional: Optional[float] = None
+    first_stage_t_stat_conventional: Optional[float] = None
+    first_stage_p_value_conventional: Optional[float] = None
+    first_stage_conf_int_conventional: Optional[Tuple[float, float]] = None
+    first_stage_t_stat_bias_corrected: Optional[float] = None
+    first_stage_p_value_bias_corrected: Optional[float] = None
+    first_stage_conf_int_bias_corrected: Optional[Tuple[float, float]] = None
+
+    # Per-side order-p coefficient vectors (rdplot seam); the outcome pair
+    # is always populated by fit(), so typed non-Optional despite the
+    # dataclass default; the take-up pair is fuzzy-only.
     beta_p_left: np.ndarray = field(repr=False, default=None)
     beta_p_right: np.ndarray = field(repr=False, default=None)
+    beta_t_p_left: Optional[np.ndarray] = field(repr=False, default=None)
+    beta_t_p_right: Optional[np.ndarray] = field(repr=False, default=None)
 
     def summary(self) -> str:
         """Human-readable summary with the three-row rdrobust table."""
@@ -179,9 +232,11 @@ class RegressionDiscontinuityResults:
         conf_level = 100 * (1 - self.alpha)
         lines = []
         lines.append("=" * width)
-        lines.append("Sharp Regression Discontinuity (rdrobust parity)".center(width))
+        design = "Fuzzy" if self.first_stage is not None else "Sharp"
+        lines.append(f"{design} Regression Discontinuity (rdrobust parity)".center(width))
         lines.append("=" * width)
         lines.append(f"Cutoff:               {self.cutoff:g}")
+        lines.append(f"Estimand:             {self.estimand}")
         lines.append(f"Kernel: {self.kernel:<14} Bandwidth selector: {self.bwselect}")
         lines.append(
             f"Order (p, q): ({self.p}, {self.q})       VCE: {self.vcov_type} "
@@ -201,6 +256,47 @@ class RegressionDiscontinuityResults:
             f"{'Method':<16}{'Coef.':>11}{'Std. Err.':>11}{'z':>9}"
             f"{'P>|z|':>9}{'[' + f'{conf_level:g}% Conf. Int.]':>16}"
         )
+        if self.first_stage is not None:
+            # Fuzzy: R prints a first-stage block above the treatment
+            # effects (print.summary.rdrobust); same three-row structure.
+            lines.append("First-stage estimates (treatment take-up jump)".center(width))
+            lines.append(header)
+            lines.append("-" * width)
+            fs_rows = [
+                (
+                    "Conventional",
+                    self.first_stage_conventional,
+                    self.first_stage_se_conventional,
+                    self.first_stage_t_stat_conventional,
+                    self.first_stage_p_value_conventional,
+                    self.first_stage_conf_int_conventional,
+                ),
+                (
+                    "Bias-Corrected",
+                    self.first_stage,
+                    self.first_stage_se_conventional,
+                    self.first_stage_t_stat_bias_corrected,
+                    self.first_stage_p_value_bias_corrected,
+                    self.first_stage_conf_int_bias_corrected,
+                ),
+                (
+                    "Robust",
+                    self.first_stage,
+                    self.first_stage_se,
+                    self.first_stage_t_stat,
+                    self.first_stage_p_value,
+                    self.first_stage_conf_int,
+                ),
+            ]
+            for name, coef, se, z, pv, ci in fs_rows:
+                assert coef is not None and se is not None and ci is not None
+                assert z is not None and pv is not None
+                lines.append(
+                    f"{name:<16}{coef:>11.4f}{se:>11.4f}{z:>9.3f}{pv:>9.3f}"
+                    f"  [{ci[0]:>7.4f}, {ci[1]:>7.4f}]"
+                )
+            lines.append("-" * width)
+            lines.append("Treatment effect estimates".center(width))
         lines.append(header)
         lines.append("-" * width)
         rows = [
@@ -293,7 +389,28 @@ class RegressionDiscontinuityResults:
             "h_input": self.h_input,
             "b_input": self.b_input,
             "rho_input": self.rho_input,
+            "estimand": self.estimand,
+            "sharpbw": self.sharpbw,
+            "treatment_col": self.treatment_col,
+            "first_stage": self.first_stage,
+            "first_stage_se": self.first_stage_se,
+            "first_stage_t_stat": self.first_stage_t_stat,
+            "first_stage_p_value": self.first_stage_p_value,
+            "first_stage_conventional": self.first_stage_conventional,
+            "first_stage_se_conventional": self.first_stage_se_conventional,
+            "first_stage_t_stat_conventional": self.first_stage_t_stat_conventional,
+            "first_stage_p_value_conventional": self.first_stage_p_value_conventional,
+            "first_stage_t_stat_bias_corrected": self.first_stage_t_stat_bias_corrected,
+            "first_stage_p_value_bias_corrected": self.first_stage_p_value_bias_corrected,
         }
+        # First-stage CIs are None on sharp fits - guard the tuple splits.
+        for key, ci in (
+            ("first_stage_conf_int", self.first_stage_conf_int),
+            ("first_stage_conf_int_conventional", self.first_stage_conf_int_conventional),
+            ("first_stage_conf_int_bias_corrected", self.first_stage_conf_int_bias_corrected),
+        ):
+            out[f"{key}_lower"] = None if ci is None else ci[0]
+            out[f"{key}_upper"] = None if ci is None else ci[1]
         return {k: _json_safe(v) for k, v in out.items()}
 
     def to_dataframe(self) -> pd.DataFrame:
@@ -301,14 +418,19 @@ class RegressionDiscontinuityResults:
 
 
 class RegressionDiscontinuity:
-    """Sharp regression discontinuity estimator (rdrobust 4.0.0 parity).
+    """Regression discontinuity estimator, sharp and fuzzy (rdrobust
+    4.0.0 parity).
 
-    Treatment is defined by the running variable crossing a known cutoff
-    (``running >= cutoff`` treated, matching rdrobust: units exactly at the
-    cutoff are treated). Point estimation uses kernel-weighted local
-    polynomials of order ``p`` on each side; inference is robust
-    bias-corrected per Calonico, Cattaneo & Titiunik (2014). Defaults
-    reproduce ``rdrobust(y, x)``: ``p=1``, ``q=2``, triangular kernel,
+    SHARP (default): treatment is defined by the running variable crossing
+    a known cutoff (``running >= cutoff`` treated, matching rdrobust:
+    units exactly at the cutoff are treated). FUZZY: pass the observed
+    take-up column via ``fit(..., treatment_col=...)`` - the estimand
+    becomes the local Wald ratio (complier LATE at the cutoff under
+    monotonicity) and the results gain a first-stage block. Point
+    estimation uses kernel-weighted local polynomials of order ``p`` on
+    each side; inference is robust bias-corrected per Calonico, Cattaneo &
+    Titiunik (2014). Defaults reproduce ``rdrobust(y, x)`` /
+    ``rdrobust(y, x, fuzzy=t)``: ``p=1``, ``q=2``, triangular kernel,
     ``bwselect="mserd"``, nearest-neighbor variance with 3 matches,
     ``masspoints="adjust"``.
 
@@ -356,6 +478,15 @@ class RegressionDiscontinuity:
     scaleregul : float, default 1.0
         Scale of the IK-style regularization in bandwidth selection
         (0 removes it).
+    sharpbw : bool, default False
+        Fuzzy fits only (``fit(..., treatment_col=...)``): when True,
+        bandwidths are selected for the SHARP reduced-form estimator on
+        the outcome (rdrobust's "approach 1") instead of the default
+        fuzzy-ratio objective. Automatically in effect - regardless of
+        this flag - under one-sided perfect compliance (zero take-up
+        variance on either side), exactly as in R. On sharp fits the flag
+        has no effect and a warning is emitted (R ignores it silently -
+        documented deviation).
     alpha : float, default 0.05
         Significance level (rdrobust ``level = 100*(1-alpha)``).
 
@@ -364,6 +495,8 @@ class RegressionDiscontinuity:
     >>> rd = RegressionDiscontinuity(cutoff=0.0)
     >>> results = rd.fit(df, outcome_col="y", running_col="x")
     >>> results.att, results.conf_int  # robust bias-corrected inference
+    >>> fuzzy = rd.fit(df, "y", "x", treatment_col="takeup")  # fuzzy RD
+    >>> fuzzy.att, fuzzy.first_stage  # complier LATE + take-up jump
     """
 
     def __init__(
@@ -382,6 +515,7 @@ class RegressionDiscontinuity:
         bwcheck: Optional[int] = None,
         bwrestrict: bool = True,
         scaleregul: float = 1.0,
+        sharpbw: bool = False,
         alpha: float = 0.05,
     ):
         self.cutoff = cutoff
@@ -398,6 +532,7 @@ class RegressionDiscontinuity:
         self.bwcheck = bwcheck
         self.bwrestrict = bwrestrict
         self.scaleregul = scaleregul
+        self.sharpbw = sharpbw
         self.alpha = alpha
         self._validate_constructor_args()
 
@@ -455,6 +590,8 @@ class RegressionDiscontinuity:
             # No silent truthiness: a string like "False" must not coerce
             # to bandwidth-restriction ON.
             raise ValueError(f"bwrestrict must be a bool; got {self.bwrestrict!r}.")
+        if not isinstance(self.sharpbw, (bool, np.bool_)):
+            raise ValueError(f"sharpbw must be a bool; got {self.sharpbw!r}.")
         if not (
             self._is_real_scalar(self.scaleregul)
             and np.isfinite(self.scaleregul)
@@ -482,6 +619,7 @@ class RegressionDiscontinuity:
             "bwcheck": self.bwcheck,
             "bwrestrict": self.bwrestrict,
             "scaleregul": self.scaleregul,
+            "sharpbw": self.sharpbw,
             "alpha": self.alpha,
         }
 
@@ -506,34 +644,73 @@ class RegressionDiscontinuity:
         data: pd.DataFrame,
         outcome_col: str,
         running_col: str,
+        treatment_col: Optional[str] = None,
     ) -> RegressionDiscontinuityResults:
-        """Estimate the sharp RD effect at the cutoff.
+        """Estimate the RD effect at the cutoff (sharp or fuzzy).
 
         Parameters
         ----------
         data : pd.DataFrame
-            Cross-sectional data. Treatment is derived as
-            ``running >= cutoff`` (no treatment column - sharp design).
+            Cross-sectional data.
         outcome_col, running_col : str
             Column names of the outcome and the running variable.
+        treatment_col : str or None, default None
+            ``None`` (sharp design): treatment is derived as
+            ``running >= cutoff``; no treatment column is needed. A column
+            name activates the FUZZY design: the column holds the OBSERVED
+            treatment take-up (typically binary, any numeric accepted,
+            matching R's ``fuzzy=``), the estimand becomes the local Wald
+            ratio, and the results gain the ``first_stage*`` block. The
+            ``estimand`` label is data-dependent: for BINARY take-up it
+            reads "fuzzy (LATE for compliers at the cutoff)" (the
+            monotonicity-based complier reading); for non-binary (dose)
+            take-up it reads "fuzzy (local Wald ratio at the cutoff;
+            non-binary take-up)" - the complier-LATE interpretation does
+            not apply there. A take-up column that is deterministic in
+            the running variable reproduces the sharp fit exactly
+            (first stage == 1).
         """
-        for col in (outcome_col, running_col):
+        cols = [outcome_col, running_col]
+        if treatment_col is not None:
+            cols.append(treatment_col)
+        for col in cols:
             if col not in data.columns:
                 raise ValueError(f"Column {col!r} not found in data.")
+        fuzzy_fit = treatment_col is not None
+        if self.sharpbw and not fuzzy_fit:
+            # Deviation from R, which silently ignores sharpbw on sharp
+            # fits (no-silent-failures policy; same pattern as b-without-h).
+            warnings.warn(
+                "sharpbw has no effect without treatment_col (sharp design) " "and is ignored.",
+                UserWarning,
+                stacklevel=2,
+            )
         y_raw = np.asarray(pd.to_numeric(data[outcome_col], errors="coerce"), dtype=np.float64)
         x_raw = np.asarray(pd.to_numeric(data[running_col], errors="coerce"), dtype=np.float64)
         ok = np.isfinite(y_raw) & np.isfinite(x_raw)
+        t_raw: Optional[np.ndarray] = None
+        if fuzzy_fit:
+            # R's complete.cases filter includes the fuzzy column
+            # (rdrobust.R:86-89) - the joint drop must too.
+            t_raw = np.asarray(
+                pd.to_numeric(data[treatment_col], errors="coerce"), dtype=np.float64
+            )
+            ok = ok & np.isfinite(t_raw)
         n_dropped = int(y_raw.shape[0] - np.sum(ok))
         if n_dropped > 0:
             # Deviation from R (which drops silently via complete.cases):
+            dropped_cols = f"{outcome_col!r}/{running_col!r}"
+            if fuzzy_fit:
+                dropped_cols += f"/{treatment_col!r}"
             warnings.warn(
                 f"Dropping {n_dropped} row(s) with missing or non-numeric "
-                f"values in {outcome_col!r}/{running_col!r}.",
+                f"values in {dropped_cols}.",
                 UserWarning,
                 stacklevel=2,
             )
         y = y_raw[ok]
         x = x_raw[ok]
+        t = t_raw[ok] if t_raw is not None else None
         N = int(y.shape[0])
         if N == 0:
             raise ValueError("No complete-case observations to fit on.")
@@ -546,6 +723,14 @@ class RegressionDiscontinuity:
         p = int(self.p)
         q = int(self.q) if self.q is not None else p + 1
         kernel = _normalize_kernel(self.kernel)
+
+        # --- Fuzzy identification check (rdrobust.R:164-185) ---
+        # Hoisted to run immediately after the NaN drop and BEFORE
+        # mass-point detection, matching R's rdrobust ordering exactly
+        # (live-verified: R raises this with NO mass-point warning on
+        # degenerate fuzzy + tied data). The port re-checks defensively.
+        if t is not None:
+            _fuzzy_identification_stop(t[x < c], t[x >= c])
 
         # --- Mass points (rdrobust.R:365-380) ---
         # R's rdrobust() runs this detection ITSELF, before the manual-vs-
@@ -620,7 +805,7 @@ class RegressionDiscontinuity:
             h_l = h_r = float(h_user)
             b_l = b_r = float(b_resolved)
         else:
-            bw = rdbwselect_sharp(
+            bw = rdbwselect(
                 y,
                 x,
                 c=c,
@@ -634,6 +819,8 @@ class RegressionDiscontinuity:
                 bwrestrict=bool(self.bwrestrict),
                 scaleregul=float(self.scaleregul),
                 warn_masspoints=False,  # fit() already warned (rdrobust.R:365-380)
+                fuzzy=t,
+                sharpbw=bool(self.sharpbw),
             )
             h_l, h_r, b_l, b_r = bw.bws[self.bwselect]
             n_unique_left = bw.M_l if self.masspoints != "off" else n_unique_left
@@ -644,7 +831,7 @@ class RegressionDiscontinuity:
                 b_r = h_r / rho
 
         # --- Estimation (port validates h/b finite and positive) ---
-        fit = rdrobust_fit_sharp(
+        fit = rdrobust_fit(
             y,
             x,
             c,
@@ -657,7 +844,19 @@ class RegressionDiscontinuity:
             kernel=kernel,
             vce=self.vcov_type,
             nnmatch=int(self.nnmatch),
+            t=t,
         )
+
+        # Estimand label: the complier-LATE reading requires BINARY
+        # take-up (plus monotonicity); non-binary (dose) take-up - accepted,
+        # matching R's fuzzy= - is the ratio-of-jumps estimand and must not
+        # be labeled a LATE (the label is what `att` claims to measure).
+        if not fuzzy_fit:
+            estimand = "sharp (ATE at the cutoff)"
+        elif t is not None and bool(np.all(np.isin(t, (0.0, 1.0)))):
+            estimand = "fuzzy (LATE for compliers at the cutoff)"
+        else:
+            estimand = "fuzzy (local Wald ratio at the cutoff; non-binary take-up)"
 
         alpha = float(self.alpha)
         # Three inference rows (rdrobust.R:854-863), each through the
@@ -665,6 +864,53 @@ class RegressionDiscontinuity:
         t_rb, p_rb, ci_rb = safe_inference(fit.tau_bc, fit.se_rb, alpha=alpha)
         t_cl, p_cl, ci_cl = safe_inference(fit.tau_cl, fit.se_cl, alpha=alpha)
         t_bcm, p_bcm, ci_bcm = safe_inference(fit.tau_bc, fit.se_cl, alpha=alpha)
+
+        # --- First-stage rows + weak-identification warning (fuzzy) ---
+        fs: Dict[str, Any] = {}
+        if fuzzy_fit:
+            assert fit.tau_T_bc is not None and fit.tau_T_cl is not None
+            assert fit.se_T_rb is not None and fit.se_T_cl is not None
+            fs_t_rb, fs_p_rb, fs_ci_rb = safe_inference(fit.tau_T_bc, fit.se_T_rb, alpha=alpha)
+            fs_t_cl, fs_p_cl, fs_ci_cl = safe_inference(fit.tau_T_cl, fit.se_T_cl, alpha=alpha)
+            fs_t_bcm, fs_p_bcm, fs_ci_bcm = safe_inference(fit.tau_T_bc, fit.se_T_cl, alpha=alpha)
+            fs = dict(
+                first_stage=fit.tau_T_bc,
+                first_stage_se=fit.se_T_rb,
+                first_stage_t_stat=fs_t_rb,
+                first_stage_p_value=fs_p_rb,
+                first_stage_conf_int=fs_ci_rb,
+                first_stage_conventional=fit.tau_T_cl,
+                first_stage_se_conventional=fit.se_T_cl,
+                first_stage_t_stat_conventional=fs_t_cl,
+                first_stage_p_value_conventional=fs_p_cl,
+                first_stage_conf_int_conventional=fs_ci_cl,
+                first_stage_t_stat_bias_corrected=fs_t_bcm,
+                first_stage_p_value_bias_corrected=fs_p_bcm,
+                first_stage_conf_int_bias_corrected=fs_ci_bcm,
+                beta_t_p_left=fit.beta_t_p_l,
+                beta_t_p_right=fit.beta_t_p_r,
+            )
+            # Deviation from R (verified silent): warn when the take-up
+            # jump is not distinguishable from zero at the fit's own alpha
+            # - the ratio is then unreliable (CCT 2014 Theorem 3 requires
+            # tau_T != 0; weak-IV-robust inference per Feir-Lemieux-Marmer
+            # is a documented seam). Gate: FINITE robust CI containing 0,
+            # so NaN-gated first stages (e.g. perfect compliance's se=0)
+            # correctly do not fire.
+            if (
+                np.isfinite(fs_ci_rb[0])
+                and np.isfinite(fs_ci_rb[1])
+                and fs_ci_rb[0] <= 0.0 <= fs_ci_rb[1]
+            ):
+                warnings.warn(
+                    "Weak first stage: the take-up discontinuity "
+                    f"({fit.tau_T_bc:.4g}, robust CI [{fs_ci_rb[0]:.4g}, "
+                    f"{fs_ci_rb[1]:.4g}]) is not distinguishable from zero "
+                    f"at alpha={alpha:g}; the fuzzy (ratio) estimates are "
+                    "unreliable under weak identification.",
+                    UserWarning,
+                    stacklevel=2,
+                )
 
         return RegressionDiscontinuityResults(
             att=fit.tau_bc,
@@ -710,6 +956,10 @@ class RegressionDiscontinuity:
             h_input=None if self.h is None else float(self.h),
             b_input=None if self.b is None else float(self.b),
             rho_input=None if self.rho is None else float(self.rho),
+            estimand=estimand,
+            sharpbw=bool(self.sharpbw),
+            treatment_col=treatment_col,
             beta_p_left=fit.beta_p_l,
             beta_p_right=fit.beta_p_r,
+            **fs,
         )

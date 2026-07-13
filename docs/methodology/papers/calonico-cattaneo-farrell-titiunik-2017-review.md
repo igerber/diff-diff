@@ -188,7 +188,7 @@ Output structure (pp. 392-399): two inference rows — `Conventional` (point est
 - [ ] `rho()` computes `h` only and sets `b = h/rho`
 - [ ] IK-style regularization on by default; `scaleregul(0)` removes it
 - [ ] NN variance uses ALL equidistant neighbors under ties (minimum-J semantics)
-- [ ] Fuzzy bandwidth approach auto-switches to sharp under one-sided perfect compliance
+- [x] Fuzzy bandwidth approach auto-switches to sharp under one-sided perfect compliance (shipped: `perf_comp` in the port, golden-locked by the one-sided config)
 - [ ] Senate worked-example smoke-test targets reproduced (see below)
 
 ---

@@ -1,7 +1,9 @@
-"""In-house port of rdrobust's sharp-RD bandwidth-selection machinery.
+"""In-house port of rdrobust's RD bandwidth-selection and estimation
+machinery - sharp and fuzzy paths.
 
-Faithful Python translation of the sharp-RD branch (no fuzzy / covariates /
-cluster / weights) of ``rdbwselect`` from the R package ``rdrobust`` 4.0.0,
+Faithful Python translation of the sharp and fuzzy no-covariate/no-cluster
+``nn`` branches of ``rdbwselect`` and ``rdrobust`` from the R package
+``rdrobust`` 4.0.0,
 ported from the CRAN source tarball (sha256 below), cross-checked against
 ``deparse(getFromNamespace(<fn>, "rdrobust"))`` of the installed 4.0.0
 package. The unreleased GitHub development tree (4.1.0-dev) differs from
@@ -21,11 +23,11 @@ Python                                      R (rdrobust 4.0.0)
 ``compute_dups_dupsid(x_sorted)``           rle blocks (rdbwselect.R:322-327)
 ``rdrobust_res_nn(...)``                    ``rdrobust_res`` vce="nn" branch
                                             (functions.R:146-181)
-``rdrobust_vce_sharp(RX, res)``             ``rdrobust_vce`` null-cluster d==0
+``rdrobust_vce(RX, res)``             ``rdrobust_vce`` null-cluster d==0
                                             branch (functions.R:374-378)
 ``rdrobust_bw(...)``                        ``rdrobust_bw`` sharp path
                                             (functions.R:207-355)
-``rdbwselect_sharp(...)``                   ``rdbwselect`` main flow
+``rdbwselect(...)``                   ``rdbwselect`` main flow
                                             (rdbwselect.R; anchors inline)
 ==========================================  ===================================
 
@@ -78,12 +80,12 @@ __all__ = [
     "rdrobust_vander",
     "compute_dups_dupsid",
     "rdrobust_res_nn",
-    "rdrobust_vce_sharp",
+    "rdrobust_vce",
     "rdrobust_bw",
-    "rdbwselect_sharp",
+    "rdbwselect",
     "quantile_type2",
-    "RdFitSharpResult",
-    "rdrobust_fit_sharp",
+    "RdFitResult",
+    "rdrobust_fit",
 ]
 
 # Upstream pin: CRAN source tarball of record. rdrobust has no git SHA on
@@ -212,19 +214,25 @@ def rdrobust_res_nn(
     matches: int,
     dups: np.ndarray,
     dupsid: np.ndarray,
+    t: Optional[np.ndarray] = None,
 ) -> np.ndarray:
-    """Nearest-neighbor variance residuals, sharp outcome-only case
-    (functions.R:146-181, ``vce == "nn"`` branch).
+    """Nearest-neighbor variance residuals (functions.R:146-181,
+    ``vce == "nn"`` branch).
 
     Abadie-Imbens NN sigma via same-side neighbors on the SORTED ``x``.
     Ties are matched as whole ``dups``/``dupsid`` blocks; distances compare
     EXACTLY (4.0.0 semantics - the 4.1.0-dev ``nn_tol`` tolerance is
     deliberately absent). Equal left/right distances expand BOTH directions
     (functions.R:162-165). Returns the (n,) residual vector
-    ``sqrt(J/(J+1)) * (y_i - mean(y_neighbors))``.
+    ``sqrt(J/(J+1)) * (y_i - mean(y_neighbors))`` for the sharp
+    outcome-only case, or the (n, 2) residual matrix with the fuzzy
+    take-up column ``sqrt(J/(J+1)) * (t_i - mean(t_neighbors))`` appended
+    when ``t`` is supplied (functions.R:171-174; T shares Y's neighbor
+    sets exactly - both depend only on ``x``).
     """
     n = y.shape[0]
-    res = np.empty(n, dtype=np.float64)
+    fuzzy = t is not None
+    res = np.empty((n, 2) if fuzzy else n, dtype=np.float64)
     limit = min(matches, n - 1)
     for pos in range(n):  # R pos is 1-based; comments track R indices
         rpos = int(dups[pos] - dupsid[pos])
@@ -255,15 +263,70 @@ def rdrobust_res_nn(
         # subset; the effective window is [lo, hi] inclusive around pos.
         y_J = float(np.sum(y[lo : hi + 1])) - float(y[pos])
         Ji = (hi - lo + 1) - 1
-        res[pos] = np.sqrt(Ji / (Ji + 1)) * (y[pos] - y_J / Ji)
+        r_y = np.sqrt(Ji / (Ji + 1)) * (y[pos] - y_J / Ji)
+        if fuzzy:
+            assert t is not None
+            t_J = float(np.sum(t[lo : hi + 1])) - float(t[pos])  # functions.R:172
+            res[pos, 0] = r_y
+            res[pos, 1] = np.sqrt(Ji / (Ji + 1)) * (t[pos] - t_J / Ji)
+        else:
+            res[pos] = r_y
     return res
 
 
-def rdrobust_vce_sharp(RX: np.ndarray, res: np.ndarray) -> np.ndarray:
-    """Variance meat, sharp no-cluster case (functions.R:374-378, d==0):
-    ``M = crossprod(res * RX)``."""
-    scaled = res[:, None] * RX
+def rdrobust_vce(RX: np.ndarray, res: np.ndarray, s: Optional[np.ndarray] = None) -> np.ndarray:
+    """Variance meat, no-cluster case (functions.R:374-385).
+
+    Sharp (``s=None``, d==0): ``M = crossprod(res * RX)`` with the (n,)
+    residual vector. Fuzzy (d>0): the (n, 1+d) residual matrix is collapsed
+    by the linear-combination vector first, ``r_comb = res %*% s``, then
+    ``M = crossprod(r_comb * RX)`` - the Y-T covariance materializes in the
+    ``2*s[0]*s[1]*res_Y*res_T`` cross term (functions.R:379-385). ``s`` is
+    the delta-method vector ``s_Y`` for the ratio variance or the selector
+    ``sV_T = [0, 1]`` for the first-stage variance.
+    """
+    if s is None:
+        scaled = res[:, None] * RX
+    else:
+        r_comb = res @ s
+        scaled = r_comb[:, None] * RX
     return scaled.T @ scaled
+
+
+def _var0(v: np.ndarray) -> bool:
+    """R's exact ``var(T_side) == 0`` check (rdrobust.R:179). A
+    single-element side is treated as no-variation: R's ``var()`` would be
+    NA there and crash the ``if()`` opaquely; zero variation is the
+    semantically correct fail-closed reading and feeds the same
+    perf_comp/identification logic. Implemented as exact constancy rather
+    than ``np.var(...) == 0.0``: R's two-pass ``mean()`` makes its var of
+    a constant vector exactly zero, while numpy's single-pass mean leaves
+    ~1e-32 roundoff for constants like 0.7 - the exact-constancy test is
+    the faithful translation (var == 0 iff constant)."""
+    return v.shape[0] < 2 or bool(np.all(v == v[0]))
+
+
+def _fuzzy_identification_stop(t_l: np.ndarray, t_r: np.ndarray) -> None:
+    """Fuzzy identification guard, R-exact condition and message
+    (rdrobust.R:175-177 == rdbwselect.R:339-341): reject only the FULLY
+    degenerate first stage - zero variance on BOTH sides AND no mean jump
+    at the cutoff. One-sided zero variance is a legitimate design
+    (one-sided perfect compliance -> perf_comp bandwidth switch)."""
+    if t_l.shape[0] == 0 or t_r.shape[0] == 0:
+        # An empty side is the one-sided-data failure, not a first-stage
+        # identification failure - defer to the targeted one-sided error
+        # downstream instead of np.mean-ing an empty array here.
+        return
+    if (
+        _var0(t_l)
+        and _var0(t_r)
+        and abs(float(np.mean(t_l)) - float(np.mean(t_r)))
+        < float(np.sqrt(np.finfo(np.float64).eps))
+    ):
+        raise ValueError(
+            "Fuzzy RD: first-stage variable has no variation and no jump "
+            "at the cutoff. The fuzzy estimator is not identified."
+        )
 
 
 @dataclass
@@ -292,15 +355,27 @@ def rdrobust_bw(
     kernel: str,
     dups: np.ndarray,
     dupsid: np.ndarray,
-    vcache: Optional[Dict[str, Tuple[float, float]]] = None,
+    t: Optional[np.ndarray] = None,
+    vcache: Optional[Dict[str, Tuple[float, float, Optional[np.ndarray]]]] = None,
 ) -> _BwPilot:
-    """Per-side pilot V/B(/R) block (functions.R:207-355, sharp path).
+    """Per-side pilot V/B(/R) block (functions.R:207-355, no-covariate
+    sharp and fuzzy paths).
 
-    Sharp specialization: T = Z = C = W = NULL so the fuzzy/covariate
-    combination vector ``s`` is the scalar 1 (functions.R:234) and the
-    response matrix is the outcome column alone. ``vcache`` shares the
-    fixed-``h_V`` V-fit across pilot calls keyed on ``(o, nu)``
-    (functions.R:216-222), matching R's per-side environment cache.
+    Sharp (``t=None``): Z = C = W = NULL so the combination vector ``s``
+    is the scalar 1 (functions.R:234) and the response is the outcome
+    column alone. Fuzzy: T is stacked as a second response column into
+    BOTH the V-fit and B-fit designs (functions.R:236-240, 315-318) and
+    the pilot ratio + delta vector ``s = [1/tau_T, -tau_Y/tau_T^2]`` is
+    computed from the V-fit coefficients (functions.R:264-268), then
+    threaded into the V/B variance meats and the bias constant
+    ``t(s) %*% beta_B[o+2,]`` (functions.R:294, 346, 349). A pilot window
+    with no take-up variation makes ``tau_T == 0``; the division follows
+    R's Inf/NaN flow-on (numpy float under ``errstate``) and the
+    downstream stage assembly fails closed on the non-finite bandwidth.
+    ``vcache`` shares the fixed-``h_V`` V-fit across pilot calls keyed on
+    ``(o, nu)`` (functions.R:216-222) and stores ``(V_V, BConst, s)`` -
+    the cached ``V_V`` embeds the fuzzy ``s``, so ``s`` must be reused on
+    cache hits exactly as R's environment cache does.
     """
     if vce != "nn":
         raise NotImplementedError(
@@ -308,8 +383,9 @@ def rdrobust_bw(
             "variance modes are a documented seam."
         )
     key = f"{o}_{nu}"
+    s: Optional[np.ndarray]
     if vcache is not None and key in vcache:
-        V_V, BConst = vcache[key]  # functions.R:218-222
+        V_V, BConst, s = vcache[key]  # functions.R:218-222
     else:
         # --- V-fit at (o, nu), bandwidth h_V (functions.R:226-299) ---
         w = rdrobust_kweight(x, c, h_V, kernel)
@@ -319,17 +395,35 @@ def rdrobust_bw(
         eW = w[ind_V]
         R_V = rdrobust_vander(eX - c, o)
         invG_V = qrXXinv(R_V * np.sqrt(eW)[:, None])
-        # R computes beta_V here (functions.R:263) but the sharp/nn path
-        # never consumes it (it feeds the fuzzy ratio and hc predictions);
-        # omitted - no numeric effect on V, B, or R.
-        res_V = rdrobust_res_nn(eX, eY, nnmatch, dups[ind_V], dupsid[ind_V])  # functions.R:293
-        aux = rdrobust_vce_sharp(R_V * eW[:, None], res_V)  # functions.R:294
+        if t is None:
+            # R computes beta_V here (functions.R:263) but the sharp/nn
+            # path never consumes it (it feeds the fuzzy ratio and hc
+            # predictions); omitted - no numeric effect on V, B, or R.
+            s = None
+            res_V = rdrobust_res_nn(eX, eY, nnmatch, dups[ind_V], dupsid[ind_V])  # functions.R:293
+        else:
+            eT = t[ind_V]  # functions.R:236-240
+            D_V = np.column_stack([eY, eT])
+            beta_V = invG_V @ (R_V * eW[:, None]).T @ D_V  # functions.R:263
+            # Fuzzy pilot ratio + delta vector (functions.R:264-268); R row
+            # nu+1 (1-based) is 0-based nu.
+            tau_Y = float(math.factorial(nu)) * float(beta_V[nu, 0])
+            tau_T = float(math.factorial(nu)) * float(beta_V[nu, 1])
+            with np.errstate(divide="ignore", invalid="ignore"):
+                s = np.array(
+                    [
+                        float(np.float64(1.0) / np.float64(tau_T)),
+                        float(-(np.float64(tau_Y) / np.float64(tau_T) ** 2)),
+                    ]
+                )
+            res_V = rdrobust_res_nn(eX, eY, nnmatch, dups[ind_V], dupsid[ind_V], t=eT)
+        aux = rdrobust_vce(R_V * eW[:, None], res_V, s)  # functions.R:294
         V_V = float((invG_V @ aux @ invG_V)[nu, nu])  # functions.R:295
         v = (R_V * eW[:, None]).T @ ((eX - c) / h_V) ** (o + 1)  # :296
         Hp = h_V ** np.arange(o + 1, dtype=np.float64)  # functions.R:297-298
         BConst = float((Hp * (invG_V @ v))[nu])  # functions.R:299
         if vcache is not None:
-            vcache[key] = (V_V, BConst)
+            vcache[key] = (V_V, BConst, s)
     # --- B-fit at o_B, bandwidth h_B (functions.R:306-348) ---
     w = rdrobust_kweight(x, c, h_B, kernel)
     ind = w > 0
@@ -338,17 +432,28 @@ def rdrobust_bw(
     eW = w[ind]
     R_B = rdrobust_vander(eX - c, o_B)
     invG_B = qrXXinv(R_B * np.sqrt(eW)[:, None])
-    beta_B = invG_B @ (R_B * eW[:, None]).T @ eY  # functions.R:326
+    if t is None:
+        beta_B = invG_B @ (R_B * eW[:, None]).T @ eY  # functions.R:326
+        # functions.R:349-353 with sharp s == 1: t(s) %*% beta_B[o+2,] is
+        # the scalar coefficient (R row o+2 1-based = 0-based o+1).
+        beta_B_comb = float(beta_B[o + 1])
+    else:
+        eT_B = t[ind]  # functions.R:315-318
+        D_B = np.column_stack([eY, eT_B])
+        beta_B = invG_B @ (R_B * eW[:, None]).T @ D_B  # functions.R:326
+        assert s is not None
+        beta_B_comb = float(s @ beta_B[o + 1, :])  # functions.R:349
     BWreg = 0.0
     if scale > 0:  # functions.R:328-348
-        res_B = rdrobust_res_nn(eX, eY, nnmatch, dups[ind], dupsid[ind])
+        if t is None:
+            res_B = rdrobust_res_nn(eX, eY, nnmatch, dups[ind], dupsid[ind])
+        else:
+            res_B = rdrobust_res_nn(eX, eY, nnmatch, dups[ind], dupsid[ind], t=t[ind])
         V_B = float(
-            (invG_B @ rdrobust_vce_sharp(R_B * eW[:, None], res_B) @ invG_B)[o + 1, o + 1]
+            (invG_B @ rdrobust_vce(R_B * eW[:, None], res_B, s) @ invG_B)[o + 1, o + 1]
         )  # functions.R:346 - R row/col o+2 is 0-based (o+1, o+1)
         BWreg = 3.0 * BConst**2 * V_B  # functions.R:347
-    # functions.R:349-353. R row o+2 (1-based) of beta_B is 0-based o+1;
-    # sharp s == 1 so t(s) %*% beta_B[o+2,] is the scalar coefficient.
-    B = float(np.sqrt(2.0 * (o + 1 - nu)) * BConst * beta_B[o + 1])
+    B = float(np.sqrt(2.0 * (o + 1 - nu)) * BConst * beta_B_comb)
     V = float((2.0 * nu + 1.0) * h_V ** (2 * nu + 1) * V_V)
     R_reg = float(scale * (2.0 * (o + 1 - nu)) * BWreg)
     return _BwPilot(V=V, B=B, R=R_reg, rate=1.0 / (2.0 * o + 3.0))
@@ -397,7 +502,7 @@ class RdBwselectResult:
     diagnostics: Dict[str, float] = field(default_factory=dict)
 
 
-def rdbwselect_sharp(
+def rdbwselect(
     y: np.ndarray,
     x: np.ndarray,
     c: float = 0.0,
@@ -413,19 +518,39 @@ def rdbwselect_sharp(
     scaleregul: float = 1.0,
     stdvars: bool = False,
     warn_masspoints: bool = True,
+    fuzzy: Optional[np.ndarray] = None,
+    sharpbw: bool = False,
 ) -> RdBwselectResult:
-    """Sharp-RD data-driven bandwidth selection, all 10 selectors
-    (rdbwselect.R main flow at the anchors cited inline).
+    """RD data-driven bandwidth selection, all 10 selectors
+    (rdbwselect.R main flow at the anchors cited inline; sharp and fuzzy
+    no-covariate paths).
 
     Always computes the full selector matrix (R's ``all=TRUE``): the ten
     selectors share the same six per-side pilot blocks, so the marginal
     cost is a handful of scalar operations. Inputs must be complete-case
     1-D arrays (see module docstring for the deviation from R's silent
     ``complete.cases`` drop).
+
+    Fuzzy (``fuzzy`` = observed take-up variable): bandwidths are selected
+    on the FUZZY RATIO objective - T is threaded into every pilot call of
+    all three chains so the pilot V/B constants are those of the ratio
+    estimator (rdbwselect.R:386-457; the port computes the mserd, msetwo,
+    AND msesum chains unconditionally, so T must reach all 14
+    ``rdrobust_bw`` call sites, not just R's default single chain). When
+    ``sharpbw=True`` OR either side has zero take-up variance
+    (``perf_comp``, one-sided perfect compliance), T is nulled for
+    SELECTION ONLY and the sharp reduced-form objective on Y is used
+    (rdbwselect.R:334-346); estimation always remains fuzzy. Standardize
+    note: R's ``stdvars`` scales y and x only - the fuzzy column is never
+    standardized (rdbwselect.R:120-129).
     """
     y = np.asarray(y, dtype=np.float64)
     x = np.asarray(x, dtype=np.float64)
-    for name, arr in (("y", y), ("x", x)):
+    arrs = [("y", y), ("x", x)]
+    if fuzzy is not None:
+        fuzzy = np.asarray(fuzzy, dtype=np.float64)
+        arrs.append(("fuzzy", fuzzy))
+    for name, arr in arrs:
         # Accept true 1-D vectors or explicit (n, 1) columns; reject any
         # other shape rather than silently flattening a 2-D array onto
         # unintended (y, x) pairings.
@@ -437,6 +562,19 @@ def rdbwselect_sharp(
     x = x.reshape(-1)
     if y.shape[0] != x.shape[0]:
         raise ValueError(f"y and x must have equal length; got {y.shape[0]} vs {x.shape[0]}.")
+    if fuzzy is not None:
+        fuzzy = fuzzy.reshape(-1)
+        if fuzzy.shape[0] != x.shape[0]:
+            raise ValueError(
+                f"fuzzy must have length equal to x; got {fuzzy.shape[0]} vs {x.shape[0]}."
+            )
+        if not np.all(np.isfinite(fuzzy)):
+            raise ValueError(
+                "fuzzy must be finite and complete-case; drop or impute "
+                "missing values before bandwidth selection (the public "
+                "estimator warns-and-drops; R's complete.cases filter "
+                "includes the fuzzy column)."
+            )
     if not (np.all(np.isfinite(y)) and np.all(np.isfinite(x))):
         raise ValueError(
             "y and x must be finite and complete-case; drop or impute "
@@ -466,6 +604,10 @@ def rdbwselect_sharp(
         raise ValueError(f"bwcheck must be None or an integer >= 1; got {bwcheck!r}.")
     if not (np.isfinite(scaleregul) and scaleregul >= 0):
         raise ValueError(f"scaleregul must be a finite value >= 0; got {scaleregul!r}.")
+    if not isinstance(sharpbw, (bool, np.bool_)):
+        # Same strict-bool contract as the estimator: a truthy non-bool
+        # must not silently flip the bandwidth objective.
+        raise ValueError(f"sharpbw must be a bool; got {sharpbw!r}.")
     N = y.shape[0]
     if N < 20:
         # rdbwselect.R:237-239 warns and aborts (exit = 1). The estimator's
@@ -481,6 +623,8 @@ def rdbwselect_sharp(
         order_x = np.argsort(x, kind="stable")
         x = x[order_x]
         y = y[order_x]
+        if fuzzy is not None:
+            fuzzy = fuzzy[order_x]  # rdbwselect.R:112 (fuzzy = fuzzy[order_x,])
 
     # --- Degeneracy guards BEFORE any standardization division: a constant
     # running variable must surface as the assumption failure it is, not as
@@ -583,14 +727,32 @@ def rdbwselect_sharp(
         bw_min_r = float(np.abs(X_uniq_r - c)[bwcheck_r - 1]) + 1e-8
         c_bw = max(c_bw, bw_min_l, bw_min_r)
 
+    # --- Fuzzy first-stage split + identification + perf_comp
+    # (rdbwselect.R:334-346; runs after the masspoints block, mirroring
+    # R's rdbwselect ordering - R's rdrobust() checks identification
+    # FIRST, which the estimator mirrors at fit() level). ---
+    T_sel_l: Optional[np.ndarray] = None
+    T_sel_r: Optional[np.ndarray] = None
+    if fuzzy is not None:
+        T_l_full = fuzzy[ind_l]
+        T_r_full = fuzzy[ind_r]
+        _fuzzy_identification_stop(T_l_full, T_r_full)
+        perf_comp = _var0(T_l_full) or _var0(T_r_full)  # rdbwselect.R:343
+        if not (perf_comp or sharpbw):  # rdbwselect.R:344-346 null-out
+            T_sel_l, T_sel_r = T_l_full, T_r_full
+
     # --- NN tie blocks (rdbwselect.R:322-327) ---
     dups_l, dupsid_l = compute_dups_dupsid(X_l)
     dups_r, dupsid_r = compute_dups_dupsid(X_r)
 
-    vcache_l: Dict[str, Tuple[float, float]] = {}
-    vcache_r: Dict[str, Tuple[float, float]] = {}
+    vcache_l: Dict[str, Tuple[float, float, Optional[np.ndarray]]] = {}
+    vcache_r: Dict[str, Tuple[float, float, Optional[np.ndarray]]] = {}
 
     def _bw(side: str, o: int, nu: int, o_B: int, h_B: float, scale: float) -> _BwPilot:
+        # Single funnel for ALL 14 pilot calls across the mserd, msetwo,
+        # and msesum chains: threading T here guarantees every chain's
+        # pilots receive the fuzzy column (R passes T_l/T_r into each
+        # chain's calls individually, rdbwselect.R:386-457).
         if side == "l":
             return rdrobust_bw(
                 Y_l,
@@ -607,7 +769,8 @@ def rdbwselect_sharp(
                 kernel,
                 dups_l,
                 dupsid_l,
-                vcache_l,
+                t=T_sel_l,
+                vcache=vcache_l,
             )
         return rdrobust_bw(
             Y_r,
@@ -624,7 +787,8 @@ def rdbwselect_sharp(
             kernel,
             dups_r,
             dupsid_r,
-            vcache_r,
+            t=T_sel_r,
+            vcache=vcache_r,
         )
 
     def _stage_bw(num, den, rate, clamp_max=None, floors=()):
@@ -811,17 +975,26 @@ def rdbwselect_sharp(
 
 
 @dataclass
-class RdFitSharpResult:
-    """Sharp-RD point estimates and variances (rdrobust.R estimation body).
+class RdFitResult:
+    """RD point estimates and variances (rdrobust.R estimation body,
+    sharp and fuzzy no-covariate paths).
 
-    ``tau_cl`` is the conventional local-polynomial RD estimate,
-    ``tau_bc`` the bias-corrected estimate; ``se_cl``/``se_rb`` are the
+    ``tau_cl`` is the conventional RD estimate (the fuzzy ratio
+    ``tau_Y_cl/tau_T_cl`` on fuzzy fits), ``tau_bc`` the bias-corrected
+    estimate (linearized on fuzzy fits); ``se_cl``/``se_rb`` are the
     conventional and robust bias-corrected standard errors. rdrobust's
     three output rows map as Conventional = (tau_cl, se_cl),
     Bias-Corrected = (tau_bc, se_cl), Robust = (tau_bc, se_rb)
     (rdrobust.R:854-863). ``beta_p_l``/``beta_p_r`` are the per-side
-    order-p coefficient vectors (rdplot seam); ``bias_l``/``bias_r`` the
-    per-side estimated biases (rdrobust.R:629-630).
+    order-p outcome coefficient vectors (rdplot seam);
+    ``bias_l``/``bias_r`` the per-side estimated biases (sharp:
+    rdrobust.R:629-630; fuzzy: the LINEARIZED ``s_Y . B_F_side``,
+    rdrobust.R:649-652 - a different formula, not the per-component
+    difference). Fuzzy-only fields (None on sharp fits): the first-stage
+    ``tau_T_cl/tau_T_bc/se_T_cl/se_T_rb`` (rdrobust.R:637-638, 800-822)
+    and per-side take-up coefficient vectors ``beta_t_p_l/beta_t_p_r``
+    (raw, like ``beta_p_*``; R applies ``scalepar*factorial(deriv)`` to
+    both - identical at the public deriv=0/scalepar=1 surface).
     """
 
     tau_cl: float
@@ -836,9 +1009,15 @@ class RdFitSharpResult:
     N_h_r: int
     N_b_l: int
     N_b_r: int
+    tau_T_cl: Optional[float] = None
+    tau_T_bc: Optional[float] = None
+    se_T_cl: Optional[float] = None
+    se_T_rb: Optional[float] = None
+    beta_t_p_l: Optional[np.ndarray] = None
+    beta_t_p_r: Optional[np.ndarray] = None
 
 
-def rdrobust_fit_sharp(
+def rdrobust_fit(
     y: np.ndarray,
     x: np.ndarray,
     c: float,
@@ -852,12 +1031,13 @@ def rdrobust_fit_sharp(
     kernel: str = "triangular",
     vce: str = "nn",
     nnmatch: int = 3,
-) -> RdFitSharpResult:
-    """Sharp-RD estimation at known bandwidths (rdrobust.R:533-800, sharp
-    no-covariate/no-cluster path with ``scalepar = 1``).
+    t: Optional[np.ndarray] = None,
+) -> RdFitResult:
+    """RD estimation at known bandwidths (rdrobust.R:533-822, sharp and
+    fuzzy no-covariate/no-cluster paths with ``scalepar = 1``).
 
     Inputs must be complete-case 1-D arrays (same contract as
-    :func:`rdbwselect_sharp`); sorting, side-splitting, and NN tie blocks
+    :func:`rdbwselect`); sorting, side-splitting, and NN tie blocks
     are handled internally. Per-side bandwidths follow rdrobust's
     ``bws = [[h_l, b_l], [h_r, b_r]]`` layout. Steps:
 
@@ -867,17 +1047,31 @@ def rdrobust_fit_sharp(
        of the p-regression through the weights.
     2. Point estimates: order-p WLS per side at h (``beta_p``); the
        bias-corrected coefficient vector uses the ``Q_q`` score matrix
-       (rdrobust.R:577-578, 609-618).
+       (rdrobust.R:577-578, 609-618). Fuzzy (``t`` = observed take-up):
+       T is stacked as a second response column through the SAME fits
+       (rdrobust.R:581-591), the point estimate is the ratio
+       ``tau_Y_cl/tau_T_cl`` and the bias correction is LINEARIZED via
+       the delta vector ``s_Y = [1/tau_T_cl, -tau_Y_cl/tau_T_cl^2]``:
+       ``tau_bc = tau_cl - s_Y . B_F`` (rdrobust.R:636-657). The
+       identification guard (both-sides-constant T with no jump) raises
+       here too, covering manual-bandwidth fits that skip selection.
     3. Variances: conventional sandwiches ``R_p * W_h`` with same-side NN
        residuals; robust sandwiches ``Q_q`` with the SAME residuals
        (``res_b = res_h`` for vce="nn", rdrobust.R:753-754; the h==b
        special branches at rdrobust.R:773-786 are cluster-only and never
-       taken on this path).
+       taken on this path). Fuzzy: the (n, 2) residual matrix is collapsed
+       by ``s_Y`` for the ratio variance and by ``sV_T = [0, 1]`` for the
+       first-stage variance (rdrobust.R:769-822); a zero first-stage jump
+       follows R's Inf/NaN flow-on (numpy float under ``errstate``).
     """
     y = np.asarray(y, dtype=np.float64)
     x = np.asarray(x, dtype=np.float64)
-    for name, arr in (("y", y), ("x", x)):
-        # Same input contract as rdbwselect_sharp: 1-D vectors or explicit
+    arrs = [("y", y), ("x", x)]
+    if t is not None:
+        t = np.asarray(t, dtype=np.float64)
+        arrs.append(("t", t))
+    for name, arr in arrs:
+        # Same input contract as rdbwselect: 1-D vectors or explicit
         # (n, 1) columns only.
         if not (arr.ndim == 1 or (arr.ndim == 2 and arr.shape[1] == 1)):
             raise ValueError(
@@ -887,6 +1081,15 @@ def rdrobust_fit_sharp(
     x = x.reshape(-1)
     if y.shape[0] != x.shape[0]:
         raise ValueError(f"y and x must have equal length; got {y.shape[0]} vs {x.shape[0]}.")
+    if t is not None:
+        t = t.reshape(-1)
+        if t.shape[0] != x.shape[0]:
+            raise ValueError(f"t must have length equal to x; got {t.shape[0]} vs {x.shape[0]}.")
+        if not np.all(np.isfinite(t)):
+            raise ValueError(
+                "t must be finite and complete-case; drop or impute missing "
+                "values before estimation."
+            )
     if vce != "nn":
         raise NotImplementedError(
             "Only vce='nn' is ported in v1 (rdrobust default); hc0-hc3 and "
@@ -917,6 +1120,8 @@ def rdrobust_fit_sharp(
     order_x = np.argsort(x, kind="stable")
     x = x[order_x]
     y = y[order_x]
+    if t is not None:
+        t = t[order_x]  # rdrobust.R:115
     ind_l = x < c
     ind_r = x >= c
     X_l, X_r = x[ind_l], x[ind_r]
@@ -926,12 +1131,20 @@ def rdrobust_fit_sharp(
             "All observations fall on one side of the cutoff; sharp RD "
             "requires data on both sides."
         )
+    T_l = t[ind_l] if t is not None else None
+    T_r = t[ind_r] if t is not None else None
+    if T_l is not None and T_r is not None:
+        # rdrobust.R:164-185: the identification guard lives in the
+        # estimation entry point too, so manual-bandwidth fuzzy fits that
+        # never touch bandwidth selection still fail closed.
+        _fuzzy_identification_stop(T_l, T_r)
     dups_l, dupsid_l = compute_dups_dupsid(X_l)
     dups_r, dupsid_r = compute_dups_dupsid(X_r)
 
     def _side(
         X: np.ndarray,
         Y: np.ndarray,
+        T: Optional[np.ndarray],
         h: float,
         b: float,
         dups: np.ndarray,
@@ -950,6 +1163,7 @@ def rdrobust_fit_sharp(
             ind = ind_h
         eY = Y[ind]
         eX = X[ind]
+        eT = T[ind] if T is not None else None  # rdrobust.R:588-590
         W_h = w_h[ind]
         W_b = w_b[ind]
         edups = dups[ind]
@@ -988,42 +1202,130 @@ def rdrobust_fit_sharp(
         # 1-based = p+1 0-based).
         M = (R_q @ invG_q) * W_b[:, None]
         Q_q = R_p * W_h[:, None] - h ** (p + 1) * np.outer(M[:, p + 1], L)
-        # Point estimates (rdrobust.R:609-614)
-        beta_p = invG_p @ (R_p * W_h[:, None]).T @ eY
-        beta_bc = invG_p @ Q_q.T @ eY
-        # NN residuals shared by both variances (rdrobust.R:750-754)
-        res_h = rdrobust_res_nn(eX, eY, nnmatch, edups, edupsid)
-        # Conventional / robust meats (rdrobust.R:762-764, 789-798)
-        V_cl = invG_p @ rdrobust_vce_sharp(R_p * W_h[:, None], res_h) @ invG_p
-        V_rb = invG_p @ rdrobust_vce_sharp(Q_q, res_h) @ invG_p
-        return beta_p, beta_bc, V_cl, V_rb, N_h, N_b
+        # Point estimates (rdrobust.R:609-614). Fuzzy stacks T as the
+        # second response column (rdrobust.R:588-591); the sharp branch
+        # keeps the original vector products verbatim (bit-identity).
+        if eT is None:
+            beta_p = invG_p @ (R_p * W_h[:, None]).T @ eY
+            beta_bc = invG_p @ Q_q.T @ eY
+            res_h = rdrobust_res_nn(eX, eY, nnmatch, edups, edupsid)
+        else:
+            eD = np.column_stack([eY, eT])
+            beta_p = invG_p @ (R_p * W_h[:, None]).T @ eD
+            beta_bc = invG_p @ Q_q.T @ eD
+            # NN residual matrix, T sharing Y's neighbor sets
+            # (rdrobust.R:750-754; functions.R:171-174).
+            res_h = rdrobust_res_nn(eX, eY, nnmatch, edups, edupsid, t=eT)
+        return beta_p, beta_bc, invG_p, R_p * W_h[:, None], Q_q, res_h, N_h, N_b
 
-    beta_p_l, beta_bc_l, V_cl_l, V_rb_l, N_h_l, N_b_l = _side(
-        X_l, Y_l, h_l, b_l, dups_l, dupsid_l, "left"
+    beta_p_l, beta_bc_l, invG_p_l, RX_cl_l, Q_q_l, res_l, N_h_l, N_b_l = _side(
+        X_l, Y_l, T_l, h_l, b_l, dups_l, dupsid_l, "left"
     )
-    beta_p_r, beta_bc_r, V_cl_r, V_rb_r, N_h_r, N_b_r = _side(
-        X_r, Y_r, h_r, b_r, dups_r, dupsid_r, "right"
+    beta_p_r, beta_bc_r, invG_p_r, RX_cl_r, Q_q_r, res_r, N_h_r, N_b_r = _side(
+        X_r, Y_r, T_r, h_r, b_r, dups_r, dupsid_r, "right"
     )
 
     # factorial(deriv) scaling per rdrobust.R:621-622 (deriv=0 -> 1).
     fact = float(math.factorial(deriv))
-    tau_cl = fact * float(beta_p_r[deriv] - beta_p_l[deriv])
-    tau_bc = fact * float(beta_bc_r[deriv] - beta_bc_l[deriv])
-    bias_l = fact * float(beta_p_l[deriv]) - fact * float(beta_bc_l[deriv])
-    bias_r = fact * float(beta_p_r[deriv]) - fact * float(beta_bc_r[deriv])
-    V_tau_cl = fact**2 * float((V_cl_l + V_cl_r)[deriv, deriv])
-    V_tau_rb = fact**2 * float((V_rb_l + V_rb_r)[deriv, deriv])
-    return RdFitSharpResult(
+
+    def _v(invG_p, RX, res, s):
+        # Conventional / robust meats (rdrobust.R:762-764, 789-798); the
+        # fuzzy s collapses the residual matrix (functions.R:379-385).
+        return invG_p @ rdrobust_vce(RX, res, s) @ invG_p
+
+    if t is None:
+        tau_cl = fact * float(beta_p_r[deriv] - beta_p_l[deriv])
+        tau_bc = fact * float(beta_bc_r[deriv] - beta_bc_l[deriv])
+        bias_l = fact * float(beta_p_l[deriv]) - fact * float(beta_bc_l[deriv])
+        bias_r = fact * float(beta_p_r[deriv]) - fact * float(beta_bc_r[deriv])
+        V_cl_l = _v(invG_p_l, RX_cl_l, res_l, None)
+        V_cl_r = _v(invG_p_r, RX_cl_r, res_r, None)
+        V_rb_l = _v(invG_p_l, Q_q_l, res_l, None)
+        V_rb_r = _v(invG_p_r, Q_q_r, res_r, None)
+        V_tau_cl = fact**2 * float((V_cl_l + V_cl_r)[deriv, deriv])
+        V_tau_rb = fact**2 * float((V_rb_l + V_rb_r)[deriv, deriv])
+        return RdFitResult(
+            tau_cl=tau_cl,
+            tau_bc=tau_bc,
+            se_cl=float(np.sqrt(V_tau_cl)),
+            se_rb=float(np.sqrt(V_tau_rb)),
+            bias_l=bias_l,
+            bias_r=bias_r,
+            beta_p_l=beta_p_l,
+            beta_p_r=beta_p_r,
+            N_h_l=N_h_l,
+            N_h_r=N_h_r,
+            N_b_l=N_b_l,
+            N_b_r=N_b_r,
+        )
+
+    # ---- Fuzzy assembly (rdrobust.R:636-657, 769-822; scalepar = 1) ----
+    tau_Y_cl = fact * float(beta_p_r[deriv, 0] - beta_p_l[deriv, 0])
+    tau_Y_bc = fact * float(beta_bc_r[deriv, 0] - beta_bc_l[deriv, 0])
+    tau_T_cl = fact * float(beta_p_r[deriv, 1] - beta_p_l[deriv, 1])
+    tau_T_bc = fact * float(beta_bc_r[deriv, 1] - beta_bc_l[deriv, 1])
+    with np.errstate(divide="ignore", invalid="ignore"):
+        # R flows Inf/NaN through a zero first-stage jump (no guard at
+        # rdrobust.R:639-642); numpy-float division mirrors that instead
+        # of raising ZeroDivisionError. Non-finite results NaN-gate the
+        # downstream inference (estimator contract).
+        tau_cl = float(np.float64(tau_Y_cl) / np.float64(tau_T_cl))
+        s_Y = np.array(
+            [
+                float(np.float64(1.0) / np.float64(tau_T_cl)),
+                float(-(np.float64(tau_Y_cl) / np.float64(tau_T_cl) ** 2)),
+            ]
+        )
+    B_F = np.array([tau_Y_cl - tau_Y_bc, tau_T_cl - tau_T_bc])  # rdrobust.R:641
+    tau_bc = float(tau_cl - s_Y @ B_F)  # rdrobust.R:642 (linearized)
+    sV_T = np.array([0.0, 1.0])  # rdrobust.R:643
+    # Fuzzy per-side biases are the LINEARIZED s_Y . B_F_side
+    # (rdrobust.R:645-652), not the sharp per-component differences.
+    B_F_l = np.array(
+        [
+            fact * float(beta_p_l[deriv, 0] - beta_bc_l[deriv, 0]),
+            fact * float(beta_p_l[deriv, 1] - beta_bc_l[deriv, 1]),
+        ]
+    )
+    B_F_r = np.array(
+        [
+            fact * float(beta_p_r[deriv, 0] - beta_bc_r[deriv, 0]),
+            fact * float(beta_p_r[deriv, 1] - beta_bc_r[deriv, 1]),
+        ]
+    )
+    bias_l = float(s_Y @ B_F_l)
+    bias_r = float(s_Y @ B_F_r)
+    # Ratio variance with s_Y; first-stage variance with sV_T
+    # (rdrobust.R:769-798 and 800-822, no-cluster branches).
+    V_tau_cl = fact**2 * float(
+        (_v(invG_p_l, RX_cl_l, res_l, s_Y) + _v(invG_p_r, RX_cl_r, res_r, s_Y))[deriv, deriv]
+    )
+    V_tau_rb = fact**2 * float(
+        (_v(invG_p_l, Q_q_l, res_l, s_Y) + _v(invG_p_r, Q_q_r, res_r, s_Y))[deriv, deriv]
+    )
+    V_T_cl = fact**2 * float(
+        (_v(invG_p_l, RX_cl_l, res_l, sV_T) + _v(invG_p_r, RX_cl_r, res_r, sV_T))[deriv, deriv]
+    )
+    V_T_rb = fact**2 * float(
+        (_v(invG_p_l, Q_q_l, res_l, sV_T) + _v(invG_p_r, Q_q_r, res_r, sV_T))[deriv, deriv]
+    )
+    return RdFitResult(
         tau_cl=tau_cl,
         tau_bc=tau_bc,
         se_cl=float(np.sqrt(V_tau_cl)),
         se_rb=float(np.sqrt(V_tau_rb)),
         bias_l=bias_l,
         bias_r=bias_r,
-        beta_p_l=beta_p_l,
-        beta_p_r=beta_p_r,
+        beta_p_l=beta_p_l[:, 0],
+        beta_p_r=beta_p_r[:, 0],
         N_h_l=N_h_l,
         N_h_r=N_h_r,
         N_b_l=N_b_l,
         N_b_r=N_b_r,
+        tau_T_cl=tau_T_cl,
+        tau_T_bc=tau_T_bc,
+        se_T_cl=float(np.sqrt(V_T_cl)),
+        se_T_rb=float(np.sqrt(V_T_rb)),
+        beta_t_p_l=beta_p_l[:, 1],
+        beta_t_p_r=beta_p_r[:, 1],
     )

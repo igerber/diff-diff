@@ -27,8 +27,8 @@ from diff_diff._rdrobust_port import (
     compute_dups_dupsid,
     qrXXinv,
     quantile_type2,
-    rdbwselect_sharp,
-    rdrobust_fit_sharp,
+    rdbwselect,
+    rdrobust_fit,
     rdrobust_kweight,
     rdrobust_res_nn,
     rdrobust_vander,
@@ -272,7 +272,7 @@ class TestRdbwselectGoldenParity:
                 kwargs["bwcheck"] = int(cfg["bwcheck"])
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
-                out = rdbwselect_sharp(y, x, **kwargs)
+                out = rdbwselect(y, x, **kwargs)
             assert out.N == cfg["N"], label
             if cfg["masspoints"] == "off" and cfg["bwcheck"] is None:
                 # Under masspoints='off' without an explicit bwcheck, R never
@@ -298,8 +298,8 @@ class TestRdbwselectGoldenParity:
         entry = golden["dgp_lee_smooth"]
         x = np.asarray(entry["x"], dtype=np.float64)
         y = np.asarray(entry["y"], dtype=np.float64)
-        a = rdbwselect_sharp(y, x, masspoints="adjust")
-        o = rdbwselect_sharp(y, x, masspoints="off")
+        a = rdbwselect(y, x, masspoints="adjust")
+        o = rdbwselect(y, x, masspoints="off")
         for sel in BWSELECT_OPTIONS:
             np.testing.assert_array_equal(a.bws[sel], o.bws[sel])
 
@@ -308,7 +308,7 @@ class TestRdbwselectGoldenParity:
         entry = golden["dgp_lee_smooth"]
         x = np.asarray(entry["x"], dtype=np.float64)
         y = np.asarray(entry["y"], dtype=np.float64)
-        out = rdbwselect_sharp(y, x)
+        out = rdbwselect(y, x)
         for mse, cer in [
             ("mserd", "cerrd"),
             ("msesum", "cersum"),
@@ -329,7 +329,7 @@ class TestSenatePublished2017:
 
     def test_masspoints_off_matches_stata_journal_2017(self, golden):
         y, x = _senate_xy(golden)
-        out = rdbwselect_sharp(y, x, masspoints="off")
+        out = rdbwselect(y, x, masspoints="off")
         assert out.bws["mserd"][0] == pytest.approx(17.708, abs=1e-3)
         assert out.bws["mserd"][2] == pytest.approx(27.984, abs=1e-3)
         # rdbwselect ..., all output table (Stata Journal 2017, p. 400)
@@ -349,94 +349,94 @@ class TestValidationAndWarnings:
     def test_n_below_20_raises(self):
         y, x = self._xy(19)
         with pytest.raises(ValueError, match="Not enough observations"):
-            rdbwselect_sharp(y, x)
+            rdbwselect(y, x)
 
     def test_one_sided_data_raises(self):
         y, x = self._xy(50)
         with pytest.raises(ValueError, match="one side of the cutoff"):
-            rdbwselect_sharp(y, np.abs(x) + 1.0)
+            rdbwselect(y, np.abs(x) + 1.0)
 
     def test_non_finite_raises(self):
         y, x = self._xy(50)
         y[3] = np.nan
         with pytest.raises(ValueError, match="finite and complete-case"):
-            rdbwselect_sharp(y, x)
+            rdbwselect(y, x)
 
     def test_length_mismatch_raises(self):
         y, x = self._xy(50)
         with pytest.raises(ValueError, match="equal length"):
-            rdbwselect_sharp(y[:-1], x)
+            rdbwselect(y[:-1], x)
 
     def test_zero_variance_running_var_raises(self):
         y, _ = self._xy(50)
         with pytest.raises(ValueError, match="zero variance"):
-            rdbwselect_sharp(y, np.zeros(50))
+            rdbwselect(y, np.zeros(50))
 
     def test_zero_variance_running_var_raises_under_stdvars(self):
         # Guard must fire BEFORE the stdvars division, not surface as a
         # divide-by-zero or a misleading one-sided-data error.
         y, _ = self._xy(50)
         with pytest.raises(ValueError, match="zero variance"):
-            rdbwselect_sharp(y, np.zeros(50), stdvars=True)
+            rdbwselect(y, np.zeros(50), stdvars=True)
 
     def test_zero_variance_outcome_raises_under_stdvars(self):
         _, x = self._xy(50)
         with pytest.raises(ValueError, match="outcome has zero variance"):
-            rdbwselect_sharp(np.ones(50), x, stdvars=True)
+            rdbwselect(np.ones(50), x, stdvars=True)
 
     def test_two_dimensional_input_rejected(self):
         y, x = self._xy(50)
         with pytest.raises(ValueError, match="1-D vector"):
-            rdbwselect_sharp(y.reshape(10, 5), x.reshape(10, 5))
+            rdbwselect(y.reshape(10, 5), x.reshape(10, 5))
 
     def test_column_vector_input_accepted(self):
         y, x = self._xy(50)
-        a = rdbwselect_sharp(y, x)
-        b = rdbwselect_sharp(y.reshape(-1, 1), x.reshape(-1, 1))
+        a = rdbwselect(y, x)
+        b = rdbwselect(y.reshape(-1, 1), x.reshape(-1, 1))
         for sel in BWSELECT_OPTIONS:
             np.testing.assert_array_equal(a.bws[sel], b.bws[sel])
 
     def test_vce_hc_raises_not_implemented(self):
         y, x = self._xy(50)
         with pytest.raises(NotImplementedError, match="vce='nn'"):
-            rdbwselect_sharp(y, x, vce="hc1")
+            rdbwselect(y, x, vce="hc1")
 
     def test_invalid_masspoints_raises(self):
         y, x = self._xy(50)
         with pytest.raises(ValueError, match="masspoints"):
-            rdbwselect_sharp(y, x, masspoints="on")
+            rdbwselect(y, x, masspoints="on")
 
     def test_invalid_orders_raise(self):
         y, x = self._xy(50)
         with pytest.raises(ValueError, match="deriv <= p < q"):
-            rdbwselect_sharp(y, x, p=2, q=2)
+            rdbwselect(y, x, p=2, q=2)
 
     def test_nnmatch_below_one_raises(self):
         y, x = self._xy(50)
         with pytest.raises(ValueError, match="nnmatch"):
-            rdbwselect_sharp(y, x, nnmatch=0)
+            rdbwselect(y, x, nnmatch=0)
 
     def test_bwcheck_below_one_raises(self):
         y, x = self._xy(50)
         with pytest.raises(ValueError, match="bwcheck"):
-            rdbwselect_sharp(y, x, bwcheck=0)
+            rdbwselect(y, x, bwcheck=0)
 
     def test_negative_scaleregul_raises(self):
         y, x = self._xy(50)
         with pytest.raises(ValueError, match="scaleregul"):
-            rdbwselect_sharp(y, x, scaleregul=-1.0)
+            rdbwselect(y, x, scaleregul=-1.0)
 
     def test_non_integer_orders_raise(self):
         y, x = self._xy(50)
         with pytest.raises(ValueError, match="must be an integer"):
-            rdbwselect_sharp(y, x, p=1.5, q=2.5)  # type: ignore[arg-type]
+            rdbwselect(y, x, p=1.5, q=2.5)  # type: ignore[arg-type]
 
     def test_mass_warning_fires_on_ties(self, golden):
         entry = golden["dgp_ties_moderate"]
         x = np.asarray(entry["x"], dtype=np.float64)
         y = np.asarray(entry["y"], dtype=np.float64)
         with pytest.warns(UserWarning, match="Mass points detected"):
-            rdbwselect_sharp(y, x, masspoints="adjust")
+            rdbwselect(y, x, masspoints="adjust")
 
     def test_check_mode_suggests_adjust(self, golden):
         entry = golden["dgp_ties_moderate"]
@@ -446,7 +446,7 @@ class TestValidationAndWarnings:
         # suggestion); capture the full record so neither leaks into the
         # pytest warning summary.
         with pytest.warns(UserWarning) as record:
-            rdbwselect_sharp(y, x, masspoints="check")
+            rdbwselect(y, x, masspoints="check")
         messages = [str(w.message) for w in record]
         assert any("Mass points detected" in m for m in messages)
         assert any("masspoints='adjust'" in m for m in messages)
@@ -457,8 +457,8 @@ class TestValidationAndWarnings:
         y = np.asarray(entry["y"], dtype=np.float64)
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            out = rdbwselect_sharp(y, x, masspoints="adjust")
-            out_off = rdbwselect_sharp(y, x, masspoints="off")
+            out = rdbwselect(y, x, masspoints="adjust")
+            out_off = rdbwselect(y, x, masspoints="off")
         assert out.bwcheck_effective == 10
         assert out_off.bwcheck_effective is None
 
@@ -470,14 +470,14 @@ class TestValidationAndWarnings:
         perm = rng.permutation(x.shape[0])
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            a = rdbwselect_sharp(y, x)
-            b = rdbwselect_sharp(y[perm], x[perm])
+            a = rdbwselect(y, x)
+            b = rdbwselect(y[perm], x[perm])
         for sel in BWSELECT_OPTIONS:
             np.testing.assert_allclose(a.bws[sel], b.bws[sel], rtol=1e-12)
 
 
 class TestRdrobustFitSharpValidation:
-    """rdrobust_fit_sharp shares rdbwselect_sharp's input contract; direct
+    """rdrobust_fit shares rdbwselect's input contract; direct
     (non-estimator) callers get targeted errors, not opaque NumPy ones."""
 
     def _yx(self, n=200, seed=11):
@@ -489,32 +489,134 @@ class TestRdrobustFitSharpValidation:
     def test_two_dim_input_rejected(self):
         y, x = self._yx()
         with pytest.raises(ValueError, match="1-D vector"):
-            rdrobust_fit_sharp(y.reshape(50, 4), x, 0.0, 0.5, 0.5, 0.5, 0.5)
+            rdrobust_fit(y.reshape(50, 4), x, 0.0, 0.5, 0.5, 0.5, 0.5)
 
     def test_unequal_lengths_rejected(self):
         y, x = self._yx()
         with pytest.raises(ValueError, match="equal length"):
-            rdrobust_fit_sharp(y[:-5], x, 0.0, 0.5, 0.5, 0.5, 0.5)
+            rdrobust_fit(y[:-5], x, 0.0, 0.5, 0.5, 0.5, 0.5)
 
     def test_non_integer_orders_rejected(self):
         y, x = self._yx()
         with pytest.raises(ValueError, match="p must be an integer"):
-            rdrobust_fit_sharp(y, x, 0.0, 0.5, 0.5, 0.5, 0.5, p=1.0)
+            rdrobust_fit(y, x, 0.0, 0.5, 0.5, 0.5, 0.5, p=1.0)
 
     def test_order_inequality_enforced(self):
         y, x = self._yx()
         with pytest.raises(ValueError, match="0 <= deriv <= p < q"):
-            rdrobust_fit_sharp(y, x, 0.0, 0.5, 0.5, 0.5, 0.5, p=2, q=2)
+            rdrobust_fit(y, x, 0.0, 0.5, 0.5, 0.5, 0.5, p=2, q=2)
         with pytest.raises(ValueError, match="0 <= deriv <= p < q"):
-            rdrobust_fit_sharp(y, x, 0.0, 0.5, 0.5, 0.5, 0.5, deriv=2, p=1, q=2)
+            rdrobust_fit(y, x, 0.0, 0.5, 0.5, 0.5, 0.5, deriv=2, p=1, q=2)
 
     def test_nnmatch_validated(self):
         y, x = self._yx()
         with pytest.raises(ValueError, match="nnmatch must be an integer >= 1"):
-            rdrobust_fit_sharp(y, x, 0.0, 0.5, 0.5, 0.5, 0.5, nnmatch=0)
+            rdrobust_fit(y, x, 0.0, 0.5, 0.5, 0.5, 0.5, nnmatch=0)
 
     def test_column_vector_accepted(self):
         y, x = self._yx()
-        a = rdrobust_fit_sharp(y, x, 0.0, 0.5, 0.5, 0.5, 0.5)
-        b = rdrobust_fit_sharp(y.reshape(-1, 1), x.reshape(-1, 1), 0.0, 0.5, 0.5, 0.5, 0.5)
+        a = rdrobust_fit(y, x, 0.0, 0.5, 0.5, 0.5, 0.5)
+        b = rdrobust_fit(y.reshape(-1, 1), x.reshape(-1, 1), 0.0, 0.5, 0.5, 0.5, 0.5)
         assert a.tau_bc == b.tau_bc and a.se_rb == b.se_rb
+
+
+ESTIMATES_GOLDEN_PATH = (
+    Path(__file__).resolve().parents[1] / "benchmarks" / "data" / "rdrobust_estimates_golden.json"
+)
+
+
+@pytest.fixture(scope="module")
+def estimates_golden():
+    if not ESTIMATES_GOLDEN_PATH.exists():
+        pytest.skip(
+            "Estimates golden file not found; run: "
+            "Rscript benchmarks/R/generate_rdrobust_estimates_golden.R"
+        )
+    with open(ESTIMATES_GOLDEN_PATH) as f:
+        return json.load(f)
+
+
+class TestFuzzyPortGoldenParity:
+    """Port-level fuzzy parity incl. the per-side LINEARIZED biases
+    (bias_side = s_Y . B_F_side, rdrobust.R:649-652), which the public
+    results object does not expose - pinned here so the fuzzy bias formula
+    cannot silently regress to the sharp per-component difference."""
+
+    def test_fuzzy_configs_with_bias(self, estimates_golden):
+        entry = estimates_golden["dgp_fuzzy"]
+        y = np.array(entry["y"])
+        n_checked = 0
+        for name, cfg in entry["configs"].items():
+            x = np.array(entry["x_ties"] if name == "ties_adjust" else entry["x"])
+            t = np.array(entry["t_one"] if name == "one_sided" else entry["t"], dtype=np.float64)
+            if cfg["h_in"] is not None:
+                h_l = h_r = b_l = b_r = float(cfg["h_in"])  # h alone -> b = h
+            else:
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore")
+                    bw = rdbwselect(
+                        y,
+                        x,
+                        kernel=cfg["kernel"],
+                        masspoints=cfg["masspoints"],
+                        fuzzy=t,
+                        sharpbw=bool(cfg["sharpbw"]),
+                    )
+                h_l, h_r, b_l, b_r = bw.bws[cfg["bwselect"]]
+            fit = rdrobust_fit(y, x, 0.0, h_l, h_r, b_l, b_r, kernel=cfg["kernel"], t=t)
+            for label, got, want in (
+                ("h_l", h_l, cfg["h_l"]),
+                ("b_l", b_l, cfg["b_l"]),
+                ("tau_cl", fit.tau_cl, cfg["tau_cl"]),
+                ("tau_bc", fit.tau_bc, cfg["tau_bc"]),
+                ("se_cl", fit.se_cl, cfg["se_cl"]),
+                ("se_rb", fit.se_rb, cfg["se_rb"]),
+                ("tau_T_cl", fit.tau_T_cl, cfg["tau_T"][0]),
+                ("tau_T_bc", fit.tau_T_bc, cfg["tau_T"][1]),
+                ("se_T_cl", fit.se_T_cl, cfg["se_T"][0]),
+                ("se_T_rb", fit.se_T_rb, cfg["se_T"][2]),
+                ("bias_l", fit.bias_l, cfg["bias"][0]),
+                ("bias_r", fit.bias_r, cfg["bias"][1]),
+            ):
+                assert got == pytest.approx(
+                    want, rel=1e-9, abs=1e-12
+                ), f"{name}:{label}: {got} vs {want}"
+            n_checked += 1
+        assert n_checked == 7
+
+
+class TestFuzzyPortValidation:
+    def _yxt(self, n=200, seed=13):
+        rng = np.random.default_rng(seed)
+        x = rng.uniform(-1, 1, n)
+        t = (rng.uniform(size=n) < np.where(x >= 0, 0.8, 0.2)).astype(float)
+        y = 0.3 * x + t + rng.normal(0, 0.1, n)
+        return y, x, t
+
+    def test_two_dim_t_rejected(self):
+        y, x, t = self._yxt()
+        with pytest.raises(ValueError, match="1-D vector"):
+            rdrobust_fit(y, x, 0.0, 0.5, 0.5, 0.5, 0.5, t=t.reshape(50, 4))
+        with pytest.raises(ValueError, match="1-D vector"):
+            rdbwselect(y, x, fuzzy=t.reshape(50, 4))
+
+    def test_t_length_mismatch_rejected(self):
+        y, x, t = self._yxt()
+        with pytest.raises(ValueError, match="length equal to x"):
+            rdrobust_fit(y, x, 0.0, 0.5, 0.5, 0.5, 0.5, t=t[:-3])
+        with pytest.raises(ValueError, match="length equal to x"):
+            rdbwselect(y, x, fuzzy=t[:-3])
+
+    def test_identification_stop_reachable_directly(self):
+        y, x, _ = self._yxt()
+        const = np.full_like(x, 0.7)
+        with pytest.raises(ValueError, match="no variation and no jump"):
+            rdrobust_fit(y, x, 0.0, 0.5, 0.5, 0.5, 0.5, t=const)
+        with pytest.raises(ValueError, match="no variation and no jump"):
+            rdbwselect(y, x, fuzzy=const)
+
+    def test_column_vector_t_accepted(self):
+        y, x, t = self._yxt()
+        a = rdrobust_fit(y, x, 0.0, 0.5, 0.5, 0.5, 0.5, t=t)
+        b = rdrobust_fit(y, x, 0.0, 0.5, 0.5, 0.5, 0.5, t=t.reshape(-1, 1))
+        assert a.tau_bc == b.tau_bc and a.se_T_rb == b.se_T_rb

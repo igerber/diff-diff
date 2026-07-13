@@ -1,6 +1,8 @@
-# Golden-value generator for the diff-diff sharp-RD ESTIMATION port
-# (diff_diff/_rdrobust_port.py::rdrobust_fit_sharp and the public
-# RegressionDiscontinuity estimator).
+# Golden-value generator for the diff-diff RD ESTIMATION port - sharp AND
+# fuzzy (diff_diff/_rdrobust_port.py::rdrobust_fit and the public
+# RegressionDiscontinuity estimator; 23 configs across four synthetic DGPs
+# + the Senate data, incl. 7 fuzzy configs with full first-stage
+# tau_T/se_T/z_T/pv_T/ci_T blocks and per-side take-up coefficients).
 #
 # Deliberately a SEPARATE file/JSON from generate_rdrobust_golden.R so the
 # bandwidth fixtures reviewed in the machinery PR are never regenerated.
@@ -24,16 +26,20 @@ TARBALL_SHA256 <- "78f0d6b4bdec4091cc8f42f6f1598704747f95926446d3aaee381ea1d613a
 
 run_estimate <- function(y, x, c = 0, masspoints = "adjust", kernel = "tri",
                          p = 1, q = 2, h = NULL, b = NULL, rho = NULL,
-                         level = 95, bwselect = "mserd") {
+                         level = 95, bwselect = "mserd",
+                         fuzzy = NULL, sharpbw = FALSE) {
   args <- list(y = y, x = x, c = c, masspoints = masspoints, kernel = kernel,
-               p = p, q = q, level = level, bwselect = bwselect)
+               p = p, q = q, level = level, bwselect = bwselect,
+               sharpbw = sharpbw)
   if (!is.null(h)) args$h <- h
   if (!is.null(b)) args$b <- b
   if (!is.null(rho)) args$rho <- rho
+  if (!is.null(fuzzy)) args$fuzzy <- fuzzy
   r <- suppressWarnings(do.call(rdrobust, args))
-  list(
+  out <- list(
     c = c, masspoints = masspoints, kernel = kernel, p = p, q = q,
     bwselect = bwselect,
+    fuzzy_in = !is.null(fuzzy), sharpbw = sharpbw,
     h_in = if (is.null(h)) NA else h,
     b_in = if (is.null(b)) NA else b,
     rho_in = if (is.null(rho)) NA else rho,
@@ -49,6 +55,18 @@ run_estimate <- function(y, x, c = 0, masspoints = "adjust", kernel = "tri",
     beta_p_l = unname(as.vector(r$beta_Y_p_l)),
     beta_p_r = unname(as.vector(r$beta_Y_p_r))
   )
+  if (!is.null(fuzzy)) {
+    # First-stage three-row block (Conventional / Bias-Corrected / Robust)
+    out$tau_T <- unname(r$tau_T)
+    out$se_T <- unname(r$se_T)
+    out$z_T <- unname(r$z_T)
+    out$pv_T <- unname(r$pv_T)
+    out$ci_T_lower <- unname(r$ci_T[, 1])
+    out$ci_T_upper <- unname(r$ci_T[, 2])
+    out$beta_t_p_l <- unname(as.vector(r$beta_T_p_l))
+    out$beta_t_p_r <- unname(as.vector(r$beta_T_p_r))
+  }
+  out
 }
 
 golden <- list()
@@ -57,12 +75,14 @@ golden$metadata <- list(
   rdrobust_version = as.character(packageVersion("rdrobust")),
   rdrobust_tarball_sha256 = TARBALL_SHA256,
   seeds = list(dgp_lee_smooth = 42L, dgp_ties_moderate = 123L,
-               dgp_asymmetric_scaled = 777L),
+               dgp_asymmetric_scaled = 777L, dgp_fuzzy = 314L),
   generator = "benchmarks/R/generate_rdrobust_estimates_golden.R",
   algorithm = paste(
-    "rdrobust() sharp-RD estimation blocks (three-row coef/se/z/pv/ci,",
-    "counts, per-side beta_p) for the vce='nn' no-covariate path,",
-    "complementing the bandwidth fixtures in rdrobust_golden.json."
+    "rdrobust() sharp AND fuzzy estimation blocks (three-row coef/se/z/pv/ci,",
+    "counts, per-side beta_p; fuzzy configs add the first-stage",
+    "tau_T/se_T/z_T/pv_T/ci_T rows and per-side beta_T_p) for the vce='nn'",
+    "no-covariate path, complementing the bandwidth fixtures in",
+    "rdrobust_golden.json."
   ),
   r_version = R.version.string
 )
@@ -113,6 +133,32 @@ golden$dgp_asymmetric_scaled <- list(
   x = x3, y = y3,
   configs = list(
     default = run_estimate(y3, x3, c = 28)
+  )
+)
+
+# Fuzzy DGP: two-sided imperfect compliance (take-up jumps 0.15 -> 0.75).
+set.seed(314)
+n4 <- 1500
+x4 <- 2 * rbeta(n4, 2, 4) - 1
+t4 <- rbinom(n4, 1, ifelse(x4 >= 0, 0.75, 0.15))
+y4 <- 0.5 * x4 + 1.2 * t4 + rnorm(n4, sd = 0.3)
+# One-sided perfect compliance variant (T == 0 left of the cutoff):
+# exercises the perf_comp bandwidth auto-switch (rdbwselect.R:334-346).
+t4_one <- ifelse(x4 >= 0, t4, 0)
+# Tied running variable variant (2dp rounding; keeps all masspoints modes
+# runnable in R per the sharp-golden lesson).
+x4_ties <- round(x4, 2)
+
+golden$dgp_fuzzy <- list(
+  x = x4, y = y4, t = t4, t_one = t4_one, x_ties = x4_ties,
+  configs = list(
+    default      = run_estimate(y4, x4, fuzzy = t4),
+    sharpbw_true = run_estimate(y4, x4, fuzzy = t4, sharpbw = TRUE),
+    manual_h     = run_estimate(y4, x4, fuzzy = t4, h = 0.2),
+    epa          = run_estimate(y4, x4, fuzzy = t4, kernel = "epa"),
+    msetwo       = run_estimate(y4, x4, fuzzy = t4, bwselect = "msetwo"),
+    one_sided    = run_estimate(y4, x4, fuzzy = t4_one),
+    ties_adjust  = run_estimate(y4, x4_ties, fuzzy = t4)
   )
 )
 

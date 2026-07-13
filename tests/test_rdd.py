@@ -36,6 +36,7 @@ class TestConstructor:
             "bwcheck": None,
             "bwrestrict": True,
             "scaleregul": 1.0,
+            "sharpbw": False,
             "alpha": 0.05,
         }
 
@@ -113,6 +114,12 @@ class TestConstructor:
             RegressionDiscontinuity(bwrestrict="False")
         with pytest.raises(ValueError, match="bwrestrict must be a bool"):
             RegressionDiscontinuity(bwrestrict=1)
+
+    def test_non_bool_sharpbw_raises(self):
+        with pytest.raises(ValueError, match="sharpbw must be a bool"):
+            RegressionDiscontinuity(sharpbw="True")
+        with pytest.raises(ValueError, match="sharpbw must be a bool"):
+            RegressionDiscontinuity(sharpbw=1)
 
     def test_nonpositive_h_raises(self):
         with pytest.raises(ValueError, match="h must be None or finite"):
@@ -357,3 +364,116 @@ class TestAliasAndExports:
         for name in ("RegressionDiscontinuity", "RegressionDiscontinuityResults", "RDD"):
             assert name in diff_diff.__all__
             assert hasattr(diff_diff, name)
+
+
+def _fuzzy_df(n=1200, seed=5):
+    # Strong first stage (0.15 -> 0.85 take-up at n=1200): the weak-ID
+    # warning must not fire on this fixture, keeping API tests
+    # warning-clean.
+    rng = np.random.default_rng(seed)
+    x = rng.uniform(-1, 1, n)
+    t = (rng.uniform(size=n) < np.where(x >= 0, 0.85, 0.15)).astype(float)
+    y = 0.5 * x + 1.0 * t + rng.standard_normal(n) * 0.2
+    return pd.DataFrame({"x": x, "y": y, "t": t})
+
+
+class TestFuzzyAPI:
+    def test_missing_treatment_col_raises(self):
+        with pytest.raises(ValueError, match="not found"):
+            RegressionDiscontinuity().fit(_fuzzy_df(), "y", "x", treatment_col="takeup")
+
+    def test_nan_in_treatment_counted_in_drop(self):
+        df = _fuzzy_df(200)
+        df.loc[3, "t"] = np.nan
+        df.loc[7, "y"] = np.nan
+        with pytest.warns(UserWarning, match="Dropping 2 row"):
+            r = RegressionDiscontinuity().fit(df, "y", "x", treatment_col="t")
+        assert r.n_obs == 198
+        assert r.n_dropped == 2
+
+    def test_estimand_echo(self):
+        df = _fuzzy_df()
+        sharp = RegressionDiscontinuity().fit(df, "y", "x")
+        fz = RegressionDiscontinuity().fit(df, "y", "x", treatment_col="t")
+        assert sharp.estimand == "sharp (ATE at the cutoff)"
+        assert fz.estimand == "fuzzy (LATE for compliers at the cutoff)"
+        assert sharp.treatment_col is None
+        assert fz.treatment_col == "t"
+
+    def test_estimand_label_non_binary_takeup(self):
+        # Dose take-up is accepted (R's fuzzy= semantics) but must NOT be
+        # labeled a complier LATE - the label is data-dependent so it
+        # never overclaims what att measures.
+        df = _fuzzy_df(400)
+        rng = np.random.default_rng(6)
+        df["dose"] = df["t"] * rng.uniform(0.5, 2.0, size=len(df))
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            r = RegressionDiscontinuity().fit(df, "y", "x", treatment_col="dose")
+        assert r.estimand == "fuzzy (local Wald ratio at the cutoff; non-binary take-up)"
+        assert r.first_stage is not None
+
+    def test_first_stage_fields_none_on_sharp(self):
+        r = RegressionDiscontinuity().fit(_fuzzy_df(), "y", "x")
+        for name in (
+            "first_stage",
+            "first_stage_se",
+            "first_stage_t_stat",
+            "first_stage_p_value",
+            "first_stage_conf_int",
+            "first_stage_conventional",
+            "first_stage_se_conventional",
+            "first_stage_t_stat_conventional",
+            "first_stage_p_value_conventional",
+            "first_stage_conf_int_conventional",
+            "first_stage_t_stat_bias_corrected",
+            "first_stage_p_value_bias_corrected",
+            "first_stage_conf_int_bias_corrected",
+            "beta_t_p_left",
+            "beta_t_p_right",
+        ):
+            assert getattr(r, name) is None, name
+        d = r.to_dict()
+        assert d["first_stage"] is None
+        assert d["first_stage_conf_int_lower"] is None  # None-safe CI split
+
+    def test_first_stage_populated_and_coherent_on_fuzzy(self):
+        r = RegressionDiscontinuity().fit(_fuzzy_df(), "y", "x", treatment_col="t")
+        assert r.first_stage is not None and r.first_stage_se is not None
+        assert r.first_stage_t_stat == pytest.approx(r.first_stage / r.first_stage_se, rel=1e-14)
+        lo, hi = r.first_stage_conf_int
+        assert (lo + hi) / 2 == pytest.approx(r.first_stage, rel=1e-12)
+        d = r.to_dict()
+        assert d["first_stage_conf_int_lower"] == lo
+
+    def test_sharpbw_on_sharp_fit_warns_and_ignored(self):
+        df = _fuzzy_df()
+        with pytest.warns(UserWarning, match="sharpbw has no effect"):
+            r = RegressionDiscontinuity(sharpbw=True).fit(df, "y", "x")
+        ref = RegressionDiscontinuity().fit(df, "y", "x")
+        assert r.att == ref.att and r.h_left == ref.h_left
+
+    def test_summary_first_stage_block_fuzzy_only(self):
+        df = _fuzzy_df()
+        fz = RegressionDiscontinuity().fit(df, "y", "x", treatment_col="t")
+        sharp = RegressionDiscontinuity().fit(df, "y", "x")
+        assert "First-stage estimates" in fz.summary()
+        assert "Fuzzy Regression Discontinuity" in fz.summary()
+        assert "First-stage estimates" not in sharp.summary()
+        assert "Sharp Regression Discontinuity" in sharp.summary()
+        assert "Estimand:" in sharp.summary()
+
+    def test_canonical_identities_hold_on_fuzzy(self):
+        r = RegressionDiscontinuity().fit(_fuzzy_df(), "y", "x", treatment_col="t")
+        assert r.t_stat == pytest.approx(r.att / r.se, rel=1e-14)
+        lo, hi = r.conf_int
+        assert (lo + hi) / 2 == pytest.approx(r.att, rel=1e-12)
+        assert r.se == r.se_robust
+
+    def test_sharpbw_set_params_roundtrip(self):
+        rd = RegressionDiscontinuity()
+        rd.set_params(sharpbw=True)
+        assert rd.sharpbw is True
+        with pytest.raises(ValueError):
+            rd.set_params(sharpbw="yes")
+        assert rd.sharpbw is True  # transactional: unchanged after failure

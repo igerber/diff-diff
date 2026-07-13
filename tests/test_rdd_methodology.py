@@ -211,3 +211,195 @@ class TestDegenerates:
         df = _df(500, seed=9)
         with pytest.raises(ValueError, match="bias bandwidth window"):
             RegressionDiscontinuity(rho=1e12).fit(df, "y", "x")
+
+
+def _fuzzy_df(n=1500, seed=9, lo=0.15, hi=0.75, effect=1.2):
+    rng = np.random.default_rng(seed)
+    x = 2 * rng.beta(2, 4, n) - 1
+    t = (rng.uniform(size=n) < np.where(x >= 0, hi, lo)).astype(float)
+    y = 0.5 * x + effect * t + rng.standard_normal(n) * 0.3
+    return pd.DataFrame({"x": x, "y": y, "t": t})
+
+
+class TestFuzzy:
+    def test_perfect_compliance_reproduces_sharp_exactly(self):
+        # T deterministic in the running variable: the first stage is
+        # EXACTLY 1 (constant-0 left fit, constant-1 right fit), the ratio
+        # collapses to the sharp estimate, and R selects the sharp
+        # bandwidths via perf_comp - verified equal on installed 4.0.0.
+        df = _fuzzy_df(800, seed=11)
+        df["t"] = (df["x"] >= 0).astype(float)
+        with warnings.catch_warnings(record=True) as rec:
+            warnings.simplefilter("always")
+            fz = RegressionDiscontinuity().fit(df, "y", "x", treatment_col="t")
+        sharp = RegressionDiscontinuity().fit(df, "y", "x")
+        # Bandwidths are BIT-identical (perf_comp nulls T, so selection is
+        # the same sharp arithmetic); the estimates agree to the ULP - the
+        # ratio divides by a first stage of 1 - O(eps) from the float
+        # solve, in R exactly as here.
+        assert fz.h_left == sharp.h_left and fz.b_left == sharp.b_left
+        assert fz.att == pytest.approx(sharp.att, rel=1e-12)
+        assert fz.se == pytest.approx(sharp.se, rel=1e-12)
+        assert fz.first_stage == pytest.approx(1.0, rel=1e-12)
+        assert fz.first_stage_conventional == pytest.approx(1.0, rel=1e-12)
+        # Zero first-stage NN residuals -> se_T = 0 -> the first-stage
+        # inference triple NaN-gates (documented deviation from R's
+        # z_T = Inf, pv_T = 0)...
+        assert fz.first_stage_se == 0.0
+        assert_nan_inference(
+            {
+                "se": np.nan,  # gate is on the triple below, se itself is 0
+                "t_stat": fz.first_stage_t_stat,
+                "p_value": fz.first_stage_p_value,
+                "conf_int": fz.first_stage_conf_int,
+            }
+        )
+        # ...and the weak-first-stage warning must NOT fire (a perfect
+        # first stage is the opposite of weak; the finite-CI gate holds).
+        assert not any("Weak first stage" in str(w.message) for w in rec)
+
+    def test_one_sided_compliance_selects_sharp_bandwidths(self):
+        # var(T) == 0 on one side -> perf_comp -> bandwidth selection runs
+        # on the sharp reduced-form objective (rdbwselect.R:334-346);
+        # estimation stays fuzzy.
+        df = _fuzzy_df(1200, seed=12)
+        df.loc[df["x"] < 0, "t"] = 0.0
+        fz = RegressionDiscontinuity().fit(df, "y", "x", treatment_col="t")
+        sharp = RegressionDiscontinuity().fit(df, "y", "x")
+        assert fz.h_left == sharp.h_left and fz.b_right == sharp.b_right
+        assert fz.first_stage is not None and fz.first_stage > 0
+        assert fz.att != sharp.att  # estimation is still the fuzzy ratio
+
+    def test_sharpbw_true_selects_sharp_bandwidths(self):
+        df = _fuzzy_df(1200, seed=14)
+        fz_sbw = RegressionDiscontinuity(sharpbw=True).fit(df, "y", "x", treatment_col="t")
+        fz_def = RegressionDiscontinuity().fit(df, "y", "x", treatment_col="t")
+        sharp = RegressionDiscontinuity().fit(df, "y", "x")
+        assert fz_sbw.h_left == sharp.h_left
+        assert fz_sbw.h_left != fz_def.h_left  # fuzzy objective differs
+
+    def test_outcome_scaling_scales_ratio_not_first_stage(self):
+        df = _fuzzy_df(900, seed=15)
+        scaled = df.assign(y=df.y * 7.0)
+        a = RegressionDiscontinuity(h=0.3).fit(df, "y", "x", treatment_col="t")
+        b = RegressionDiscontinuity(h=0.3).fit(scaled, "y", "x", treatment_col="t")
+        assert b.att == pytest.approx(7.0 * a.att, rel=1e-12)
+        assert b.se == pytest.approx(7.0 * a.se, rel=1e-12)
+        # The take-up fits never see y: bit-identical first stage.
+        assert b.first_stage == a.first_stage
+        assert b.first_stage_se == a.first_stage_se
+
+    def test_no_variation_no_jump_raises(self):
+        # R-exact message; and the identification stop is hoisted BEFORE
+        # mass-point detection (rdrobust.R:175 precedes :365-380), so no
+        # mass-point warning precedes the raise even on tied data.
+        df = _fuzzy_df(600, seed=16)
+        df["x"] = df["x"].round(2)  # heavy ties
+        df["t"] = 0.7
+        with warnings.catch_warnings(record=True) as rec:
+            warnings.simplefilter("always")
+            with pytest.raises(ValueError, match="no variation and no jump"):
+                RegressionDiscontinuity(masspoints="check").fit(df, "y", "x", treatment_col="t")
+        assert not any("Mass points detected" in str(w.message) for w in rec)
+
+    def test_weak_first_stage_warns(self):
+        # Take-up independent of the running variable: the jump is not
+        # distinguishable from zero and R is verified SILENT - we warn
+        # (documented deviation; CCT 2014 Theorem 3 / FLM weak-ID).
+        rng = np.random.default_rng(17)
+        df = _fuzzy_df(800, seed=17)
+        df["t"] = (rng.uniform(size=800) < 0.4).astype(float)
+        with pytest.warns(UserWarning, match="Weak first stage"):
+            RegressionDiscontinuity().fit(df, "y", "x", treatment_col="t")
+
+    def test_strong_first_stage_no_warning(self):
+        df = _fuzzy_df(1500, seed=18)
+        with warnings.catch_warnings(record=True) as rec:
+            warnings.simplefilter("always")
+            RegressionDiscontinuity().fit(df, "y", "x", treatment_col="t")
+        assert not any("Weak first stage" in str(w.message) for w in rec)
+
+    def test_degenerate_pilot_first_stage_fails_closed(self):
+        # Take-up varies only far from the cutoff (identification passes,
+        # no perf_comp) but pilot windows hold zero take-up variation ->
+        # pilot tau_T == 0 -> R flows Inf/NaN; the port fails closed on
+        # the non-finite pilot bandwidth (documented deviation).
+        rng = np.random.default_rng(21)
+        n = 1000
+        x = rng.uniform(-1, 1, n)
+        t = np.where(np.abs(x) > 0.8, (rng.uniform(size=n) < 0.5).astype(float), 0.0)
+        y = 0.4 * x + 0.9 * t + rng.standard_normal(n) * 0.2
+        df = pd.DataFrame({"x": x, "y": y, "t": t})
+        with pytest.raises(ValueError, match="non-finite pilot bandwidth"):
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                RegressionDiscontinuity().fit(df, "y", "x", treatment_col="t")
+
+    def test_manual_h_zero_first_stage_nan_gates(self):
+        # Same construction with a manual h: estimation-time tau_T == 0
+        # follows R's Inf/NaN flow-on and the main rows joint-NaN gate
+        # (loud, not silent); the first stage itself is exactly 0 with a
+        # zero SE (NaN-gated triple), so the weak-ID warning cannot fire.
+        rng = np.random.default_rng(21)
+        n = 1000
+        x = rng.uniform(-1, 1, n)
+        t = np.where(np.abs(x) > 0.8, (rng.uniform(size=n) < 0.5).astype(float), 0.0)
+        y = 0.4 * x + 0.9 * t + rng.standard_normal(n) * 0.2
+        df = pd.DataFrame({"x": x, "y": y, "t": t})
+        with warnings.catch_warnings(record=True) as rec:
+            warnings.simplefilter("always")
+            r = RegressionDiscontinuity(h=0.3).fit(df, "y", "x", treatment_col="t")
+        assert np.isnan(r.att)
+        assert_nan_inference(
+            {"se": r.se, "t_stat": r.t_stat, "p_value": r.p_value, "conf_int": r.conf_int}
+        )
+        assert r.first_stage == 0.0
+        assert not any("Weak first stage" in str(w.message) for w in rec)
+
+    def test_n_below_20_fuzzy_estimates_fuzzy(self):
+        # The full-range fallback still produces a FUZZY fit (first-stage
+        # fields populated, resolved label "Manual").
+        rng = np.random.default_rng(19)
+        x = np.linspace(-1, 1, 15)
+        t = np.array([0, 0, 1, 0, 0, 1, 0, 1, 1, 1, 0, 1, 1, 1, 1], dtype=float)
+        y = 0.5 * x + 1.0 * t + rng.standard_normal(15) * 0.1
+        df = pd.DataFrame({"x": x, "y": y, "t": t})
+        with pytest.warns(UserWarning, match="entire sample"):
+            r = RegressionDiscontinuity().fit(df, "y", "x", treatment_col="t")
+        assert r.bwselect == "Manual"
+        assert r.first_stage is not None
+        assert r.estimand.startswith("fuzzy")
+
+    def test_manual_h_sharpbw_is_silent_noop(self):
+        # Manual bandwidths skip selection entirely, so sharpbw is inert
+        # on fuzzy fits - and silently so, matching R (the sharp-fit
+        # warning is only for treatment_col=None).
+        df = _fuzzy_df(900, seed=20)
+        with warnings.catch_warnings(record=True) as rec:
+            warnings.simplefilter("always")
+            a = RegressionDiscontinuity(h=0.3, sharpbw=True).fit(df, "y", "x", treatment_col="t")
+        b = RegressionDiscontinuity(h=0.3).fit(df, "y", "x", treatment_col="t")
+        assert a.att == b.att and a.se == b.se
+        assert not any("sharpbw" in str(w.message) for w in rec)
+
+    def test_constant_outcome_fuzzy_manual_h(self):
+        # Constant y: unlike the sharp case (exact zero residuals -> se = 0
+        # -> NaN gate), the fuzzy ratio's delta vector carries a
+        # tiny-but-nonzero -tau_Y/tau_T^2 component from float solve
+        # roundoff, so the main rows report an O(eps) estimate with an
+        # O(eps) SE - the semantically correct "no effect" conclusion, not
+        # a gate (R's arithmetic behaves identically). The FIRST-STAGE
+        # rows are unaffected by y and stay properly finite.
+        rng = np.random.default_rng(22)
+        n = 400
+        x = rng.uniform(-1, 1, n)
+        t = (rng.uniform(size=n) < np.where(x >= 0, 0.8, 0.2)).astype(float)
+        df = pd.DataFrame({"x": x, "y": np.ones(n), "t": t})
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            r = RegressionDiscontinuity(h=0.5).fit(df, "y", "x", treatment_col="t")
+        assert r.att == pytest.approx(0.0, abs=1e-12)
+        assert abs(r.se) < 1e-12  # O(eps) scale, may not be exactly zero
+        assert np.isfinite(r.first_stage) and np.isfinite(r.first_stage_se)
+        assert r.first_stage_se > 0
+        assert np.isfinite(r.first_stage_t_stat)

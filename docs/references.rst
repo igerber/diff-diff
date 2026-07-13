@@ -91,6 +91,10 @@ Nonparametric Bias-Corrected Inference
 
   Covariate-adjusted RD (additive common-coefficient specification and its consistency conditions) - the documented fast-follow for :class:`diff_diff.RegressionDiscontinuity`; review on file.
 
+- **Feir, D., Lemieux, T., & Marmer, V. (2016).** "Weak Identification in Fuzzy Regression Discontinuity Designs." *Journal of Business & Economic Statistics*, 34(2), 185-196. https://doi.org/10.1080/07350015.2015.1024836
+
+  The weak-identification analysis behind :class:`diff_diff.RegressionDiscontinuity`'s fuzzy weak-first-stage warning (CCT 2014 cites the working-paper version); FLM's weak-IV-robust confidence sets are a documented follow-up seam.
+
 Survey-Design Inference (Taylor-Series Linearization)
 -----------------------------------------------------
 
