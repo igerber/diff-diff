@@ -137,7 +137,7 @@ flatten misaligns when reshaped row-major.
 `benchmarks/R/generate_rdrobust_golden.R` produces
 `benchmarks/data/rdrobust_golden.json`, consumed by
 `tests/test_rdrobust_port.py` to verify that
-`diff_diff._rdrobust_port.rdbwselect_sharp` matches R `rdrobust::rdbwselect`
+`diff_diff._rdrobust_port.rdbwselect` (sharp and fuzzy RD bandwidth paths) matches R `rdrobust::rdbwselect`
 (Calonico, Cattaneo, Farrell & Titiunik) across all 10 bandwidth selectors at
 rtol ≤ 1e-9.
 
