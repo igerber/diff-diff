@@ -10,8 +10,10 @@ cutoff are treated, matching rdrobust). The effect is the jump in the
 conditional expectation of the outcome at the cutoff. **Fuzzy** (pass the
 observed take-up column via ``fit(..., treatment_col=...)``): crossing
 the cutoff shifts take-up instead of determining it, and the estimand is
-the local Wald ratio - under monotonicity, the LATE for compliers at the
-cutoff - with the first stage exposed as a full ``first_stage*`` block.
+the local Wald ratio - for binary take-up under monotonicity, the LATE
+for compliers at the cutoff; for non-binary take-up, the ratio of jumps
+(the ``estimand`` field says which) - with the first stage exposed as a
+full ``first_stage*`` block.
 Both designs use kernel-weighted local polynomials on each side with
 data-driven MSE/CER-optimal bandwidths (all 10 rdrobust selectors) and
 robust bias-corrected inference per Calonico, Cattaneo & Titiunik (2014).

@@ -826,7 +826,7 @@ es = est.fit(data_mp, outcome_col='y', unit_col='unit',
 
 ### RegressionDiscontinuity
 
-Regression discontinuity estimator - sharp and fuzzy (Calonico, Cattaneo & Titiunik 2014), parity-targeting R rdrobust 4.0.0. SHARP (default): treatment is assigned by a known threshold of an observed running variable (`running >= cutoff`; units exactly at the cutoff are treated); no treatment column. FUZZY: pass the OBSERVED take-up column via `fit(..., treatment_col=...)` (R's `fuzzy=`) - the estimand becomes the local Wald ratio (complier LATE at the cutoff under monotonicity) with a linearized bias correction, and the results gain a full `first_stage*` three-row block. Point estimation via kernel-weighted local polynomials on each side; data-driven MSE/CER-optimal bandwidths (all 10 rdrobust selectors; fuzzy selects on the ratio objective by default, with a sharp-on-Y switch under one-sided perfect compliance or `sharpbw=True`); robust bias-corrected inference. Cross-sectional - no panel/time dimension.
+Regression discontinuity estimator - sharp and fuzzy (Calonico, Cattaneo & Titiunik 2014), parity-targeting R rdrobust 4.0.0. SHARP (default): treatment is assigned by a known threshold of an observed running variable (`running >= cutoff`; units exactly at the cutoff are treated); no treatment column. FUZZY: pass the OBSERVED take-up column via `fit(..., treatment_col=...)` (R's `fuzzy=`) - the estimand becomes the local Wald ratio (complier LATE at the cutoff for BINARY take-up under monotonicity; ratio-of-jumps otherwise - the `estimand` field says which) with a linearized bias correction, and the results gain a full `first_stage*` three-row block. Point estimation via kernel-weighted local polynomials on each side; data-driven MSE/CER-optimal bandwidths (all 10 rdrobust selectors; fuzzy selects on the ratio objective by default, with a sharp-on-Y switch under one-sided perfect compliance or `sharpbw=True`); robust bias-corrected inference. Cross-sectional - no panel/time dimension.
 
 ```python
 RegressionDiscontinuity(
@@ -874,7 +874,7 @@ results.h_left, results.b_left  # selected bandwidths
 print(results.summary())  # three-row Conventional / Bias-Corrected / Robust table, as in rdrobust
 
 fuzzy = rd.fit(df, "y", "score", treatment_col="takeup")  # fuzzy RD
-fuzzy.att          # complier LATE at the cutoff (linearized bias-corrected ratio, robust row)
+fuzzy.att          # linearized bias-corrected local Wald ratio, robust row (complier LATE for binary take-up)
 fuzzy.first_stage  # take-up jump (bias-corrected; full three-row first_stage* mirror available)
 fuzzy.estimand     # "fuzzy (LATE for compliers at the cutoff)" (binary take-up) / "fuzzy (local Wald ratio at the cutoff; non-binary take-up)" / "sharp (ATE at the cutoff)"
 ```

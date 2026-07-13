@@ -9,9 +9,11 @@ expectation of the outcome at the cutoff. FUZZY (pass
 ``fit(..., treatment_col=...)`` with the OBSERVED take-up column):
 crossing the cutoff shifts take-up rather than determining it, and the
 estimand is the local Wald ratio - the outcome jump divided by the
-take-up jump - which under monotonicity is the LATE for compliers at the
-cutoff. Both designs use kernel-weighted polynomial regressions on each
-side with data-driven MSE/CER-optimal bandwidths and robust
+take-up jump - which for BINARY take-up under monotonicity is the LATE
+for compliers at the cutoff (non-binary take-up keeps the ratio-of-jumps
+reading; the ``estimand`` results field says which applies). Both designs
+use kernel-weighted polynomial regressions on each side with data-driven
+MSE/CER-optimal bandwidths and robust
 bias-corrected (RBC) inference; the fuzzy bias correction is the
 linearization of the ratio (not per-component), matching CCT 2014
 Section 3.2 and rdrobust exactly.
