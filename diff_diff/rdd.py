@@ -427,8 +427,9 @@ class RegressionDiscontinuity:
     a known cutoff (``running >= cutoff`` treated, matching rdrobust:
     units exactly at the cutoff are treated). FUZZY: pass the observed
     take-up column via ``fit(..., treatment_col=...)`` - the estimand
-    becomes the local Wald ratio (complier LATE at the cutoff under
-    monotonicity) and the results gain a first-stage block. Point
+    becomes the local Wald ratio (complier LATE at the cutoff for binary
+    take-up under monotonicity; the ``estimand`` results field says which
+    reading applies) and the results gain a first-stage block. Point
     estimation uses kernel-weighted local polynomials of order ``p`` on
     each side; inference is robust bias-corrected per Calonico, Cattaneo &
     Titiunik (2014). Defaults reproduce ``rdrobust(y, x)`` /
@@ -498,7 +499,7 @@ class RegressionDiscontinuity:
     >>> results = rd.fit(df, outcome_col="y", running_col="x")
     >>> results.att, results.conf_int  # robust bias-corrected inference
     >>> fuzzy = rd.fit(df, "y", "x", treatment_col="takeup")  # fuzzy RD
-    >>> fuzzy.att, fuzzy.first_stage  # complier LATE + take-up jump
+    >>> fuzzy.att, fuzzy.first_stage  # local Wald ratio + take-up jump
     """
 
     def __init__(

@@ -18,7 +18,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   applying to selected bandwidths and the unconditional N<20 full-range fallback),
   and the three-row Conventional / Bias-Corrected / Robust output. **Fuzzy designs**
   via `fit(..., treatment_col=...)` (R's `fuzzy=`): the estimand is the local Wald
-  ratio (complier LATE at the cutoff under monotonicity) with the LINEARIZED
+  ratio (complier LATE at the cutoff for binary take-up under monotonicity;
+  ratio-of-jumps otherwise, with a data-dependent `estimand` label) with the LINEARIZED
   bias correction and delta-method variance of rdrobust (T stacked as a second
   response column; Y-T covariance via the `res @ s_Y` collapse); bandwidths select
   on the fuzzy-ratio objective by default with R's exact `sharpbw`/one-sided
