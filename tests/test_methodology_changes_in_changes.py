@@ -291,3 +291,152 @@ def test_interior_range_construction():
     q_lower, q_upper = _interior_range(cells)
     assert q_lower == 0.25
     assert q_upper == 0.75
+
+
+# =============================================================================
+# Covariate path (qte xformla parity route - Melly-Santangelo QR pipeline)
+# =============================================================================
+
+
+class TestCovariateMethodology:
+    """Methodology checks for the conditional (quantile-regression) path.
+
+    Deliberate non-test: monotone-transform equivariance does NOT extend to
+    the covariate branch (linear-in-covariates quantile regression is not
+    equivariant to nonlinear monotone transforms of the outcome), so the
+    unconditional equivariance test has no covariate analogue - documented in
+    the REGISTRY covariate Note rather than asserted here.
+    """
+
+    @staticmethod
+    def _make_shift_dgp(n_per_cell=299, seed=0, effect=1.0, shift=0.8, trend_slope=0.6):
+        """Covariate-composition confounding: x distributions differ by group
+        and the time trend depends on x, so unconditional CiC/QDiD are biased
+        while the conditional versions recover the constant effect.
+
+        Cell size is coprime to 100 (see the parity-test header): avoids QR
+        vertex degeneracy so the test isn't sensitive to solver tie-breaking.
+        """
+        rng = np.random.default_rng(seed)
+        frames = []
+        for g in (0, 1):
+            for t in (0, 1):
+                x = rng.uniform(0, 2, n_per_cell) + shift * g
+                u = rng.normal(0, 0.4, n_per_cell)
+                # The x -> LEVEL link is deliberately weak (0.15) while the
+                # x -> TREND link is strong: unconditional CiC absorbs any
+                # time change expressible as a monotone transformation of the
+                # outcome, so a trend strongly correlated with the outcome
+                # level would be (correctly!) soaked up even without
+                # covariates. Decoupling trend from level makes the
+                # unconditional estimator genuinely biased while the
+                # conditional one stays valid (within x, the period change is
+                # an additive shift).
+                y = 0.5 + 0.15 * x + trend_slope * x * t + u + effect * g * t
+                frames.append(pd.DataFrame({"treated": g, "post": t, "x": x, "y": y}))
+        return pd.concat(frames, ignore_index=True)
+
+    @pytest.mark.parametrize("cls", [ChangesInChanges, QDiD], ids=["cic", "qdid"])
+    def test_irrelevant_covariate_matches_unconditional(self, cls):
+        # x independent of group, period, and outcome: the conditional
+        # estimator adds only QR estimation noise and must agree with the
+        # unconditional one at moderate N.
+        rng = np.random.default_rng(1)
+        n = 251  # coprime to 100
+        frames = []
+        for g in (0, 1):
+            for t in (0, 1):
+                y = rng.normal(0.3 * t + 0.5 * g * t, 1.0, n)
+                frames.append(
+                    pd.DataFrame({"treated": g, "post": t, "x": rng.uniform(0, 1, n), "y": y})
+                )
+        df = pd.concat(frames, ignore_index=True)
+        r_cov = fit_quiet(cls(n_bootstrap=0), df, covariates=["x"])
+        r_unc = fit_quiet(cls(n_bootstrap=0), df)
+        assert r_cov.att == pytest.approx(r_unc.att, abs=0.1)
+        # Loose atol: tail-quantile QR estimates are noisy at this N (the
+        # 0.05/0.90 grid points drive the worst deviations); a composition
+        # bug would err at O(0.5-1).
+        np.testing.assert_allclose(
+            r_cov.quantile_effects["qte"].to_numpy(),
+            r_unc.quantile_effects["qte"].to_numpy(),
+            atol=0.35,
+        )
+
+    @pytest.mark.parametrize("cls", [ChangesInChanges, QDiD], ids=["cic", "qdid"])
+    def test_covariates_correct_compositional_confounding(self, cls):
+        # The Melly-Santangelo motivation (their Figures 1-2 analysis): when
+        # group covariate compositions differ AND trends vary with x, the
+        # unconditional estimator is biased; conditioning on x restores the
+        # constant effect. Bias magnitude ~ trend_slope * E[x_treated - x_control].
+        df = self._make_shift_dgp(seed=2)
+        r_cov = fit_quiet(cls(n_bootstrap=0), df, covariates=["x"])
+        r_unc = fit_quiet(cls(n_bootstrap=0), df)
+        # Measured across seeds: cov bias <= 0.14, unc bias >= 0.33.
+        assert abs(r_cov.att - 1.0) < 0.2
+        assert abs(r_unc.att - 1.0) > 0.25
+        assert abs(r_cov.att - 1.0) < abs(r_unc.att - 1.0)
+
+    def test_constant_covariate_reduces_to_order_statistics(self):
+        # Hand-check via the constant-covariate reduction: with x constant,
+        # each per-cell QR collapses to an intercept-only fit whose fitted
+        # value at tau is the check-loss minimizer - the ceiling order
+        # statistic y_(ceil(n*tau)) (unique here because no grid tau puts
+        # n*tau on an integer when n = 7). From those known predictions the
+        # whole CiC composition is hand-derivable with the module's own
+        # step-function helpers, so the full fit must reproduce it.
+        from diff_diff.changes_in_changes import (
+            _QR_TAU_GRID,
+            _design_matrix,
+            _fhat_eval,
+            _qhat_eval,
+            _rq_fit,
+        )
+
+        rng = np.random.default_rng(3)
+        n = 7
+        cells_y = {
+            (0, 0): np.sort(rng.normal(0.0, 1.0, n)),
+            (0, 1): np.sort(rng.normal(0.5, 1.2, n)),
+            (1, 0): np.sort(rng.normal(0.2, 0.9, n)),
+            (1, 1): np.sort(rng.normal(1.1, 1.1, n)),
+        }
+        frames = [
+            pd.DataFrame({"treated": g, "post": t, "x": 2.0, "y": y})
+            for (g, t), y in cells_y.items()
+        ]
+        df = pd.concat(frames, ignore_index=True)
+
+        # 1. The LP's fitted values equal the ceiling order statistics.
+        x_const = np.full(n, 2.0)
+        for y_cell in cells_y.values():
+            coefs = _rq_fit(y_cell, x_const[:, None], _QR_TAU_GRID)
+            assert coefs is not None
+            fitted = _design_matrix(x_const[:1, None] * 0 + 2.0) @ coefs.T  # 1 x 99
+            expected = np.array([y_cell[int(np.ceil(n * tau)) - 1] for tau in _QR_TAU_GRID])
+            np.testing.assert_allclose(fitted[0], expected, atol=1e-7)
+
+        # 2. End-to-end CiC equals the hand-derived composition.
+        def order_stat_preds(y_cell):
+            row = np.array([y_cell[int(np.ceil(n * tau)) - 1] for tau in _QR_TAU_GRID])
+            return np.tile(row, (n, 1))
+
+        y10 = cells_y[(1, 0)]
+        ranks = _fhat_eval(order_stat_preds(cells_y[(0, 0)]), _QR_TAU_GRID, y10)
+        y0t = _qhat_eval(order_stat_preds(cells_y[(0, 1)]), _QR_TAU_GRID, ranks)
+        expected_att = float(np.mean(cells_y[(1, 1)]) - np.mean(y0t))
+
+        res = fit_quiet(ChangesInChanges(n_bootstrap=0), df, covariates=["x"])
+        assert res.att == pytest.approx(expected_att, abs=1e-6)
+
+        # 3. QDiD analogue: own-cell ranks, additive imputation, and the
+        #    asymmetric Q7/Q1 quantile-type pair ported from qte.
+        ranks_q = _fhat_eval(order_stat_preds(y10), _QR_TAU_GRID, y10)
+        y0t_q = (
+            y10
+            + _qhat_eval(order_stat_preds(cells_y[(0, 1)]), _QR_TAU_GRID, ranks_q)
+            - _qhat_eval(order_stat_preds(cells_y[(0, 0)]), _QR_TAU_GRID, ranks_q)
+        )
+        expected_att_q = float(np.mean(cells_y[(1, 1)]) - np.mean(y0t_q))
+        res_q = fit_quiet(QDiD(n_bootstrap=0), df, covariates=["x"])
+        assert res_q.att == pytest.approx(expected_att_q, abs=1e-6)

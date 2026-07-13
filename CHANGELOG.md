@@ -91,12 +91,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   paper's transformation, population-equivalent). Bootstrap-only inference
   (panel unit-block or pooled repeated-cross-section resampling per qte's
   schemes; seedable, `n_bootstrap=200` default; replicate-SD SEs, normal
-  intervals, sup-t uniform bands at qte's fixed 95% level). Diagnostics:
-  interior-range guard (eq. 17) with NaN inference outside, support-violation /
-  heavy-ties / QDiD-non-monotonicity warnings. Deferred and documented:
-  covariates, discrete-outcome bounds, analytical SEs, staggered designs.
-  Golden fixtures: `benchmarks/R/generate_qte_golden.R` (qte pinned 1.3.1) ->
-  `benchmarks/data/qte_golden.json`.
+  intervals, sup-t uniform bands at qte's fixed 95% level). Covariates are
+  supported on both estimators (`covariates=[...]` or trailing formula terms),
+  porting qte's `xformla` branch exactly: per-cell linear quantile regressions
+  (Koenker-Bassett LP via scipy HiGHS) on qte's fixed internal 0.01-0.99 tau
+  grid, quantreg `predict.rqs` Fhat/Qhat step-function conventions verbatim,
+  per-observation conditional-rank imputation, QR refits inside every
+  bootstrap replicate, and a conditional-envelope support diagnostic
+  (Melly-Santangelo 2015, Assumption 4); the unconditional interior-range
+  guard applies to covariate-free fits only. Diagnostics: interior-range
+  guard (eq. 17) with NaN inference outside, support-violation / heavy-ties /
+  QDiD-non-monotonicity warnings (the latter two scoped as documented in
+  REGISTRY.md under covariates). Deferred and documented: the full
+  Melly-Santangelo covariate estimator, discrete-outcome bounds, analytical
+  SEs, staggered designs. Golden fixtures:
+  `benchmarks/R/generate_qte_golden.R` (qte pinned 1.3.1, quantreg 6.1) ->
+  `benchmarks/data/qte_golden.json`, with covariate scenarios, atol=0
+  convention micro-fixtures (`qr_cases`), and deterministic seeded SE blocks
+  (`cores=1`; qte's default forked bootstrap is not reproducible even seeded).
+  Cross-language covariate parity is layered - conventions bit-exact given R
+  inputs, LP solver proven optimal per tau, end-to-end results gated at
+  documented exact-tie selection bounds (see the REGISTRY Deviation note).
 
 ### Changed
 - `diff_diff/guides/llms-autonomous.txt` no longer lists regression discontinuity as

@@ -73,8 +73,11 @@ pinned_versions <- list(
   DIDHAD = "2.0.0",
   YatchewTest = "1.1.1",
   nprobust = "0.5.0",
-  # CiC/QDiD R-parity (generate_qte_golden.R + tests/test_changes_in_changes_parity.py)
-  qte = "1.3.1"
+  # CiC/QDiD R-parity (generate_qte_golden.R + tests/test_changes_in_changes_parity.py).
+  # quantreg is pinned too: the covariate (xformla) golden fixtures embed
+  # quantreg's rq/predict.rqs behavior, not just qte's.
+  qte = "1.3.1",
+  quantreg = "6.1"
 )
 
 install_github_if_missing <- function(pkg, repo) {

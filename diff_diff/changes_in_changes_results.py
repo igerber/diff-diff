@@ -1,7 +1,7 @@
 """Results container for the ChangesInChanges (CiC) and QDiD estimators."""
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -26,9 +26,13 @@ class ChangesInChangesResults:
     is NaN.
 
     ``q_lower``/``q_upper`` bound the point-identified interior quantile range
-    for CiC (Athey-Imbens eq. 17; NaN for QDiD). ``sup_t_crit`` is the qte
-    package's sup-t critical value for uniform bands - computed at a FIXED 95%
-    level regardless of ``alpha`` (qte parity); see :meth:`uniform_bands`.
+    for unconditional CiC fits (Athey-Imbens eq. 17; NaN for QDiD and for
+    covariate fits, where the unconditional bounds are not the relevant
+    objects). ``sup_t_crit`` is the qte package's sup-t critical value for
+    uniform bands - computed at a FIXED 95% level regardless of ``alpha`` (qte
+    parity); see :meth:`uniform_bands`. ``covariates`` records the covariate
+    columns used by the conditional (quantile-regression) fit, or ``None``
+    for unconditional fits.
     """
 
     att: float
@@ -48,6 +52,7 @@ class ChangesInChangesResults:
     estimator: str
     quantiles: np.ndarray = field(repr=False)
     alpha: float = 0.05
+    covariates: Optional[List[str]] = None
 
     # ------------------------------------------------------------------
     # convenience properties
@@ -73,8 +78,8 @@ class ChangesInChangesResults:
         ``qte +/- sup_t_crit * se`` per quantile, using the qte package's
         IQR-scaled sup-t critical value at its hard-coded 95% level - the band
         level does NOT follow ``alpha`` (qte parity). Rows whose ``se`` is NaN
-        (no bootstrap, failed replicate gate, or outside the CiC interior
-        range) get NaN bands.
+        (no bootstrap, failed replicate gate, or outside the interior range in
+        an unconditional CiC fit) get NaN bands.
         """
         qe = self.quantile_effects
         bands = pd.DataFrame(
@@ -109,6 +114,7 @@ class ChangesInChangesResults:
             "panel": self.panel,
             "estimator": self.estimator,
             "alpha": self.alpha,
+            "covariates": list(self.covariates) if self.covariates else None,
             "inference_method": "bootstrap" if self.n_bootstrap > 0 else "none",
         }
 
@@ -172,6 +178,11 @@ class ChangesInChangesResults:
                 f"treated post={cs.get('treated_post')}"
             ),
         ]
+        if self.covariates:
+            lines.append(
+                f"Covariates: {', '.join(self.covariates)} (conditional ranks via "
+                "per-cell linear quantile regression, 99-tau grid; qte xformla parity)"
+            )
         if self.n_bootstrap > 0:
             lines.append(
                 f"Inference: bootstrap ({self.n_bootstrap_valid}/{self.n_bootstrap} "

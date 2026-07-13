@@ -38,6 +38,7 @@ RST_FILES = [
     "api/honest_did.rst",
     "api/pretrends.rst",
     "api/power.rst",
+    "api/changes_in_changes.rst",
     "python_comparison.rst",
     "r_comparison.rst",
 ]

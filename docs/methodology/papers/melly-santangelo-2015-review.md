@@ -13,7 +13,7 @@
 
 ## CiC with Covariates (Melly-Santangelo)
 
-**Status: NOT shipping in diff-diff CiC/QDiD v1 (scope decision 2026-07-12).** Covariates are explicitly deferred from v1; this review documents the covariate extension so the deferral is informed and any future covariates PR starts from a reviewed scope.
+**Status: the qte-style SIMPLIFIED form of this pipeline SHIPPED in the covariates PR (2026-07-13)** - per-cell linear quantile regressions on qte's fixed 99-tau grid, raw (un-rearranged) `predict.rqs` conditional CDF/quantile step functions, per-observation imputation integrated over the treated PRE-period covariates, and qte's bootstrap. The FULL estimator this paper develops (monotonized integrated-indicator CDFs, `F_{X|11}` treated-post integration, exchangeable bootstrap with variance-weighted KS bands, tail trimming, specification test) remains unimplemented; this review is its scoped reference.
 
 **Primary source:** Melly, B., & Santangelo, G. (2015). The Changes-in-Changes Model with Covariates. *Working paper*, Bern University and European Commission - JRC. Distributed via https://sites.google.com/site/blaisemelly/home/computer-programs/cic_stata.
 - Layout: Sections 1 (Introduction, pp. 2-3), 2 (Model and identification, pp. 4-9), 3 (Estimation, pp. 10-12), 4 (Asymptotic results, pp. 12-21; 4.4 "Inference" pp. 19-21 includes the time-invariance specification test), 5 (Application, pp. 21-24), 6 (Conclusion, pp. 24-25); Figures 1-5 on pp. 26-30; References pp. 31-32.
@@ -437,7 +437,7 @@ All quantiles and covariate values must be considered to detect deviations; Kolm
 
 - Stata: Blaise Melly's website (https://sites.google.com/site/blaisemelly/home/computer-programs/cic_stata) distributes a Stata implementation accompanying this paper. The paper's Conclusion says only "we provide codes that implement the estimation and inference procedures developed in this paper" (p. 24) and names no command on the reviewed pages - the command-name attribution comes from the website, not the paper.
 - **IMPORTANT disambiguation:** this is DISTINCT from Kranker's SSC `cic` Stata module, which implements Athey-Imbens 2006 (unconditional CiC with analytical SEs and discrete bounds). Verify the provenance of any Stata artifact before using it as a parity reference in a future covariates PR.
-- No R implementation is known to the initiative for covariate CiC. A future PR would need simulation-based validation - this motivated deferring covariates from v1.
+- ~~No R implementation is known to the initiative for covariate CiC.~~ **Correction (2026-07-13):** this was wrong - qte 1.3.1's `CiC()`/`QDiD()` support covariates via `xformla`, implementing a simplified form of this paper's QR pipeline (fixed 99-tau grid, per-observation imputation, treated-PRE integration, no monotonization). That branch is now diff-diff's R parity target for covariates (see REGISTRY). The FULL Melly-Santangelo estimator still has no R implementation and would need simulation-based validation.
 
 **Requirements checklist (for the future covariates PR, not v1):**
 - [ ] Four per-cell QR coefficient processes on a fine mesh `u_1..u_S` with `delta*sqrt(n) -> 0`; Koenker-Bassett check-function objective per (g,t) cell
@@ -451,7 +451,7 @@ All quantiles and covariate values must be considered to detect deviations; Kolm
 - [ ] Support diagnostic: test `Y_10x subset Y_00x` (Assumption 4's observable implication); warn and restrict to the overlap if violated
 - [ ] Staggered adoption: pairwise-period estimates averaged with weights representative of treated units; pooled QR with period and group dummies when covariates are interacted with trends (Section 5 strategy - application-level, no general theorem)
 - [ ] Error on discrete outcomes (authors advise against; only partial identification)
-- [ ] Validation strategy: simulation-based (no R reference exists); verify any Stata parity artifact is Melly's covariate-CiC code, NOT Kranker's SSC `cic` (Athey-Imbens unconditional)
+- [ ] Validation strategy for the FULL estimator: simulation-based (no R reference exists for the full pipeline; qte's `xformla` branch anchors only the simplified form and is already parity-tested); verify any Stata parity artifact is Melly's covariate-CiC code, NOT Kranker's SSC `cic` (Athey-Imbens unconditional)
 
 ---
 

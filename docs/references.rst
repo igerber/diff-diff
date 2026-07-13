@@ -299,7 +299,15 @@ Changes-in-Changes / Distributional DiD
 
 - **Athey, S., & Imbens, G. W. (2006).** "Identification and Inference in Nonlinear Difference-in-Differences Models." *Econometrica*, 74(2), 431-497. https://doi.org/10.1111/j.1468-0262.2006.00668.x
 
-  Primary source for the ``ChangesInChanges`` (alias ``CiC``) and ``QDiD`` estimators: nonlinear DiD recovering the treated group's full counterfactual outcome distribution and quantile treatment effects in the 2x2 design, with the quantile-DiD comparison estimator the paper formalizes alongside it. Point estimation matches the R ``qte`` package (v1.3.1, Callaway) exactly; bootstrap inference follows the same package's conventions. Paper review on file at ``docs/methodology/papers/athey-imbens-2006-review.md``; companion reviews for deferred extensions: ``callaway-li-oka-2018-review.md`` (panel QTT), ``melly-santangelo-2015-review.md`` (covariates), ``ciaccio-2024-review.md`` (staggered).
+  Primary source for the ``ChangesInChanges`` (alias ``CiC``) and ``QDiD`` estimators: nonlinear DiD recovering the treated group's full counterfactual outcome distribution and quantile treatment effects in the 2x2 design, with the quantile-DiD comparison estimator the paper formalizes alongside it. Point estimation matches the R ``qte`` package (v1.3.1, Callaway) exactly; bootstrap inference follows the same package's conventions. Paper review on file at ``docs/methodology/papers/athey-imbens-2006-review.md``; companion reviews: ``melly-santangelo-2015-review.md`` (covariates - implemented in qte's simplified form, see below), ``callaway-li-oka-2018-review.md`` (panel QTT, deferred), ``ciaccio-2024-review.md`` (staggered, deferred).
+
+- **Melly, B., & Santangelo, G. (2015).** "The Changes-in-Changes Model with Covariates." *Working paper*, Bern University and European Commission - JRC. https://sites.google.com/site/blaisemelly/home/computer-programs/cic_stata
+
+  Reference for conditional (covariate) changes-in-changes: per-cell quantile-regression conditional CDFs composed into a conditional CiC and integrated over the treated covariate distribution. ``ChangesInChanges``/``QDiD`` implement the simplified form of this pipeline that the R ``qte`` package ships as ``xformla`` (fixed 99-tau grid, per-observation imputation, treated pre-period integration); the paper's full estimator (monotonized CDFs, exchangeable bootstrap, uniform bands, specification test) is documented-deferred. The conditional-support diagnostic warning cites this paper's Assumption 4. Paper review on file at ``docs/methodology/papers/melly-santangelo-2015-review.md``.
+
+- **Koenker, R., & Bassett, G. (1978).** "Regression Quantiles." *Econometrica*, 46(1), 33-50. https://doi.org/10.2307/1913643
+
+  Source of the linear quantile-regression check-function objective that the covariate CiC/QDiD branch solves (as a linear program via ``scipy.optimize.linprog``/HiGHS, matching R ``quantreg::rq``'s Barrodale-Roberts solutions; see the solver Note in ``docs/methodology/REGISTRY.md``).
 
 Continuous Treatment DiD
 ------------------------

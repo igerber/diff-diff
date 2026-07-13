@@ -84,12 +84,6 @@ Extends DiD to duration / survival outcomes where standard methods fail (hazard 
 
 **Reference**: Deaner & Ku (2025), *AEA Conference Paper*.
 
-### Quantile / Distributional DiD
-
-Recover the full counterfactual distribution and quantile treatment effects (QTT), not just mean ATT. Changes-in-Changes (CiC) identification strategy.
-
-**Reference**: Athey & Imbens (2006), *Econometrica*. (Ciaccio 2024 extension listed under Under Consideration.)
-
 ### CATT Meta-Learner for Heterogeneous Effects
 
 ML-powered conditional ATT, using a doubly robust meta-learner to discover which units benefit most from treatment.

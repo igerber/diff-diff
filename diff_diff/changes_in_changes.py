@@ -27,12 +27,22 @@ project's parity target, exactly:
   variance is deferred): panel mode resamples units (both periods travel
   together); repeated cross-section mode draws a single pooled row resample.
   SEs are SDs over replicates with symmetric normal-approximation intervals.
+- Covariates (``covariates=`` or trailing formula terms) port qte's ``xformla``
+  branch exactly - the Melly-Santangelo (2015) quantile-regression pipeline in
+  qte's simplified form: per-cell linear quantile regressions on the fixed
+  99-tau grid ``seq(0.01, 0.99, 0.01)``, quantreg ``predict.rqs``
+  ``Fhat``/``Qhat`` step-function conventions (verbatim, including their
+  boundary behavior; no rearrangement), per-observation conditional-rank
+  imputation integrated over the treated pre-period covariate distribution,
+  and quantile regressions refit inside every bootstrap replicate.
 
-Scope (v1, per docs/methodology/papers/athey-imbens-2006-review.md): 2x2
-design, continuous outcomes, no covariates. Deferred and documented in the
-methodology registry: covariates (Melly-Santangelo 2015), discrete-outcome
-bounds (Section 4), analytical standard errors (Theorems 5.1-5.7), multiple
-groups/periods (Section 6), and treatment-on-the-controls (Theorem 3.2).
+Scope (per docs/methodology/papers/athey-imbens-2006-review.md): 2x2 design,
+continuous outcomes, numeric covariates. Deferred and documented in the
+methodology registry: the full Melly-Santangelo (2015) covariate estimator
+(monotonized integrated-indicator CDFs, treated-post covariate integration,
+exchangeable bootstrap), discrete-outcome bounds (Section 4), analytical
+standard errors (Theorems 5.1-5.7), multiple groups/periods (Section 6), and
+treatment-on-the-controls (Theorem 3.2).
 """
 
 import warnings
@@ -41,10 +51,16 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 from scipy import stats
+from scipy.optimize import linprog
 
 from diff_diff.bootstrap_utils import warn_bootstrap_failure_rate
 from diff_diff.changes_in_changes_results import ChangesInChangesResults
-from diff_diff.utils import safe_inference, safe_inference_batch, validate_binary
+from diff_diff.utils import (
+    safe_inference,
+    safe_inference_batch,
+    validate_binary,
+    validate_covariate_names,
+)
 
 # Default quantile grid: qte's ``probs = seq(0.05, 0.95, 0.05)`` (19 points), pinned to
 # R's EXACT seq() doubles. ``np.arange(0.05, 0.96, 0.05)`` differs from R at 5 of the 19
@@ -75,11 +91,129 @@ _DEFAULT_QUANTILES = np.array(
     ]
 )
 
+# Covariate-path quantile-regression tau grid: qte hardcodes ``seq(0.01, 0.99, 0.01)``
+# inside compute.CiC/compute.QDiD (99 taus, not user-configurable). Pinned to R's EXACT
+# seq() doubles for the same reason as _DEFAULT_QUANTILES: natural numpy constructions
+# differ at 15-25 of the 99 indices by one ulp, the Fhat rank values are drawn FROM this
+# grid, and the Qhat step function has its knots ON it - exact-knot searchsorted
+# comparisons are ulp-sensitive. Locked against the golden fixture's stored qr_taus by
+# tests/test_changes_in_changes_parity.py.
+_QR_TAU_GRID = np.array(
+    [
+        0.01,
+        0.02,
+        0.03,
+        0.04,
+        0.05,
+        0.060000000000000005,
+        0.06999999999999999,
+        0.08,
+        0.09,
+        0.09999999999999999,
+        0.11,
+        0.12,
+        0.13,
+        0.14,
+        0.15000000000000002,
+        0.16,
+        0.17,
+        0.18000000000000002,
+        0.19,
+        0.2,
+        0.21000000000000002,
+        0.22,
+        0.23,
+        0.24000000000000002,
+        0.25,
+        0.26,
+        0.27,
+        0.28,
+        0.29000000000000004,
+        0.3,
+        0.31,
+        0.32,
+        0.33,
+        0.34,
+        0.35000000000000003,
+        0.36000000000000004,
+        0.37,
+        0.38,
+        0.39,
+        0.4,
+        0.41000000000000003,
+        0.42000000000000004,
+        0.43,
+        0.44,
+        0.45,
+        0.46,
+        0.47000000000000003,
+        0.48000000000000004,
+        0.49,
+        0.5,
+        0.51,
+        0.52,
+        0.53,
+        0.54,
+        0.55,
+        0.56,
+        0.5700000000000001,
+        0.5800000000000001,
+        0.59,
+        0.6,
+        0.61,
+        0.62,
+        0.63,
+        0.64,
+        0.65,
+        0.66,
+        0.67,
+        0.68,
+        0.6900000000000001,
+        0.7000000000000001,
+        0.7100000000000001,
+        0.72,
+        0.73,
+        0.74,
+        0.75,
+        0.76,
+        0.77,
+        0.78,
+        0.79,
+        0.8,
+        0.81,
+        0.8200000000000001,
+        0.8300000000000001,
+        0.8400000000000001,
+        0.85,
+        0.86,
+        0.87,
+        0.88,
+        0.89,
+        0.9,
+        0.91,
+        0.92,
+        0.93,
+        0.9400000000000001,
+        0.9500000000000001,
+        0.9600000000000001,
+        0.97,
+        0.98,
+        0.99,
+    ]
+)
+
 # Duplicate-share threshold above which the discrete-outcome warning fires. Library
 # choice: the paper's continuous machinery (Assumption 5.1(iii)) has no finite-sample
 # ties rule, and applying it to discrete data silently returns one endpoint of the
 # Section 4 bounds rather than a point estimate.
 _TIE_SHARE_WARN = 0.10
+
+# Share of treated pre-period observations outside their conditional quantile envelope
+# (the span of the 99 predicted per-observation quantiles) above which the covariate
+# support warning fires. ~2% outside is EXPECTED under correct specification - the
+# envelope only spans taus 0.01-0.99 - so the threshold sits well above that; 10%
+# signals genuine conditional support/overlap failure (Melly-Santangelo Assumption 4).
+_ENVELOPE_SHARE_WARN = 0.10
 
 # Minimum share of finite bootstrap replicate rows required to report SEs
 # (bootstrap_utils convention).
@@ -98,22 +232,38 @@ _CELL_LABELS = {
 # =============================================================================
 
 
-def _build_cells(y: np.ndarray, g: np.ndarray, t: np.ndarray) -> Optional[Dict[str, np.ndarray]]:
+def _build_cells(
+    y: np.ndarray, g: np.ndarray, t: np.ndarray, X: Optional[np.ndarray] = None
+) -> Optional[Dict[str, np.ndarray]]:
     """Split outcomes into the four sorted (group, period) cells.
 
     Returns ``None`` if any cell is empty (bootstrap replicates use this to
     signal a failed draw; ``fit`` raises instead via :func:`_split_cells`).
+
+    With covariates, each ``y..`` cell gains a row-aligned ``x..`` design block
+    via a PAIRED stable argsort: the sorted outcome values are identical to the
+    no-covariate ``np.sort`` (so every sorted-y invariant is preserved), while
+    the ``(y_i, x_i)`` pairing the quantile-regression path depends on stays
+    intact. ``x11`` is stored for symmetry but unused by both estimators.
     """
     cells = {}
     for key, (gv, tv) in {"y00": (0, 0), "y01": (0, 1), "y10": (1, 0), "y11": (1, 1)}.items():
-        cell = y[(g == gv) & (t == tv)]
+        mask = (g == gv) & (t == tv)
+        cell = y[mask]
         if cell.size == 0:
             return None
-        cells[key] = np.sort(cell)
+        if X is None:
+            cells[key] = np.sort(cell)
+        else:
+            order = np.argsort(cell, kind="stable")
+            cells[key] = cell[order]
+            cells["x" + key[1:]] = X[mask][order]
     return cells
 
 
-def _split_cells(y: np.ndarray, g: np.ndarray, t: np.ndarray) -> Dict[str, np.ndarray]:
+def _split_cells(
+    y: np.ndarray, g: np.ndarray, t: np.ndarray, X: Optional[np.ndarray] = None
+) -> Dict[str, np.ndarray]:
     """Like :func:`_build_cells` but raises on empty cells (Assumption 5.1(ii))."""
     for key, (gv, tv) in {"y00": (0, 0), "y01": (0, 1), "y10": (1, 0), "y11": (1, 1)}.items():
         if not np.any((g == gv) & (t == tv)):
@@ -121,7 +271,7 @@ def _split_cells(y: np.ndarray, g: np.ndarray, t: np.ndarray) -> Dict[str, np.nd
                 f"Empty (group, period) cell: no observations in the {_CELL_LABELS[key]} cell. "
                 "All four 2x2 cells must be non-empty (Athey-Imbens Assumption 5.1(ii))."
             )
-    cells = _build_cells(y, g, t)
+    cells = _build_cells(y, g, t, X)
     assert cells is not None
     return cells
 
@@ -161,6 +311,78 @@ def _quantile_type7(sorted_sample: np.ndarray, probs: np.ndarray) -> np.ndarray:
     """R ``quantile(x, probs)`` default type-7 == numpy's default ``linear`` method."""
     p = np.clip(np.asarray(probs, dtype=float), 0.0, 1.0)
     return np.quantile(sorted_sample, p, method="linear")
+
+
+def _rq_fit(y: np.ndarray, X: np.ndarray, taus: np.ndarray) -> Optional[np.ndarray]:
+    """Linear quantile regression via the Koenker-Bassett LP, one solve per tau.
+
+    Matches R ``quantreg::rq(y ~ X, tau=taus)`` (default Barrodale-Roberts
+    simplex): both solvers return an exact-vertex solution, and with a
+    continuous outcome the optimum is generically unique, so coefficients
+    agree to ~1e-13. Primal formulation: variables ``[beta (free), u+ >= 0,
+    u- >= 0]`` with ``X_design @ beta + u+ - u- = y`` and objective
+    ``tau * sum(u+) + (1 - tau) * sum(u-)``, solved by HiGHS.
+
+    Returns the ``(len(taus), k+1)`` coefficient matrix (intercept first,
+    matching R's ``(Intercept)`` row), or ``None`` if any tau's LP fails -
+    bootstrap replicates turn that into a NaN row; ``fit`` raises.
+    """
+    n = y.shape[0]
+    X_design = np.column_stack([np.ones(n), X])
+    p = X_design.shape[1]
+    A_eq = np.hstack([X_design, np.eye(n), -np.eye(n)])
+    bounds = [(None, None)] * p + [(0.0, None)] * (2 * n)
+    coefs = np.empty((taus.shape[0], p))
+    for j, tau in enumerate(taus):
+        c = np.concatenate([np.zeros(p), np.full(n, tau), np.full(n, 1.0 - tau)])
+        res = linprog(c, A_eq=A_eq, b_eq=y, bounds=bounds, method="highs")
+        if res.status != 0 or res.x is None or not np.all(np.isfinite(res.x[:p])):
+            return None
+        coefs[j] = res.x[:p]
+    return coefs
+
+
+def _design_matrix(x_cell: np.ndarray) -> np.ndarray:
+    """Prepend the intercept column to a cell's covariate block."""
+    return np.column_stack([np.ones(x_cell.shape[0]), x_cell])
+
+
+def _fhat_eval(preds: np.ndarray, taus: np.ndarray, y: np.ndarray) -> np.ndarray:
+    """quantreg ``predict.rqs(type="Fhat", stepfun=TRUE)`` evaluated at ``y``.
+
+    Verbatim port of the R construction (per observation): sort the 99
+    predicted quantiles (``o = order(pred)``, stable), build
+    ``stepfun(pred[o], taus_ext[c(1, o)])`` with ``taus_ext = c(taus[1],
+    taus)``, and evaluate right-continuously. The floor is ``taus[0]`` (never
+    0), and the convention carries a deliberate one-step lag relative to the
+    "natural" CDF assignment - do not "fix" it; ranks must land exactly on the
+    values qte produces because the downstream Qhat lookup is knot-exact.
+    """
+    n_obs = y.shape[0]
+    taus_ext = np.concatenate([taus[:1], taus])
+    ranks = np.empty(n_obs)
+    for i in range(n_obs):
+        o = np.argsort(preds[i], kind="stable")
+        yvals = np.concatenate([taus_ext[:1], taus_ext[o]])
+        ranks[i] = yvals[np.searchsorted(preds[i][o], y[i], side="right")]
+    return ranks
+
+
+def _qhat_eval(preds: np.ndarray, taus: np.ndarray, ranks: np.ndarray) -> np.ndarray:
+    """quantreg ``predict.rqs(type="Qhat", stepfun=TRUE)`` evaluated at ``ranks``.
+
+    Verbatim port: ``stepfun(taus, c(pred[1], pred))`` per observation - NO
+    sorting of the predicted quantiles (unlike Fhat) - evaluated
+    right-continuously. The ranks land exactly ON the tau knots by
+    construction, so the ``side="right"`` exact-knot semantics is the
+    parity-critical detail (bit-exact against R in the smoke spike).
+    """
+    n_obs = ranks.shape[0]
+    out = np.empty(n_obs)
+    for i in range(n_obs):
+        yvals = np.concatenate([preds[i, :1], preds[i]])
+        out[i] = yvals[np.searchsorted(taus, ranks[i], side="right")]
+    return out
 
 
 def _cic_point(
@@ -207,6 +429,76 @@ def _qdid_point(cells: Dict[str, np.ndarray], quantiles: np.ndarray) -> Tuple[fl
     return att, q1 - q0
 
 
+def _cic_point_cov(
+    cells: Dict[str, np.ndarray], quantiles: np.ndarray
+) -> Optional[Tuple[float, np.ndarray, np.ndarray, np.ndarray]]:
+    """CiC with covariates - exact port of qte::CiC()'s ``xformla`` branch.
+
+    Per-cell linear quantile regressions on the fixed 99-tau grid in the
+    control cells; each treated pre-period observation gets its conditional
+    rank ``Fhat_{00|X_i}(Y_i)`` and imputed counterfactual
+    ``y0t_i = Qhat_{01|X_i}(rank_i)``; the counterfactual distribution is the
+    empirical distribution of the imputations (integration over the treated
+    PRE-period covariate distribution - qte's convention; Melly-Santangelo
+    integrate over treated-post, see the REGISTRY Note). ATT and QTEs then
+    follow the unconditional arithmetic with type-1 quantiles on both sides.
+
+    Returns ``(att, qte, y0t_sorted, envelope_flags)`` - the flags mark
+    observations outside their conditional quantile envelope for the
+    fit-level support diagnostic (ignored by the bootstrap) - or ``None``
+    when any quantile-regression LP fails.
+    """
+    coefs00 = _rq_fit(cells["y00"], cells["x00"], _QR_TAU_GRID)
+    coefs01 = _rq_fit(cells["y01"], cells["x01"], _QR_TAU_GRID)
+    if coefs00 is None or coefs01 is None:
+        return None
+    x10_design = _design_matrix(cells["x10"])
+    preds00 = x10_design @ coefs00.T
+    preds01 = x10_design @ coefs01.T
+    ranks = _fhat_eval(preds00, _QR_TAU_GRID, cells["y10"])
+    y0t = _qhat_eval(preds01, _QR_TAU_GRID, ranks)
+    att = float(np.mean(cells["y11"]) - np.mean(y0t))
+    y0t_sorted = np.sort(y0t)
+    qte = _quantile_type1(cells["y11"], quantiles) - _quantile_type1(y0t_sorted, quantiles)
+    envelope_flags = (cells["y10"] < preds00.min(axis=1)) | (cells["y10"] >= preds00.max(axis=1))
+    return att, qte, y0t_sorted, envelope_flags
+
+
+def _qdid_point_cov(
+    cells: Dict[str, np.ndarray], quantiles: np.ndarray
+) -> Optional[Tuple[float, np.ndarray]]:
+    """QDiD with covariates - exact port of qte::QDiD()'s ``xformla`` branch.
+
+    Quantile regressions in THREE cells; the conditional rank comes from the
+    treated pre-period cell's OWN conditional distribution, and the imputation
+    is additive: ``y0t_i = Y_i + Qhat_{01|X_i}(rank_i) - Qhat_{00|X_i}(rank_i)``.
+
+    Asymmetric quantile types, ported verbatim (qte wart, REGISTRY Note):
+    ``q1`` uses R's DEFAULT type-7 on the treated post-period sample while
+    ``q0`` is the type-1 quantile of the imputed sample (via ``quantile.ecdf``
+    in R, which reconstructs the sample exactly).
+    """
+    coefs00 = _rq_fit(cells["y00"], cells["x00"], _QR_TAU_GRID)
+    coefs01 = _rq_fit(cells["y01"], cells["x01"], _QR_TAU_GRID)
+    coefs10 = _rq_fit(cells["y10"], cells["x10"], _QR_TAU_GRID)
+    if coefs00 is None or coefs01 is None or coefs10 is None:
+        return None
+    x10_design = _design_matrix(cells["x10"])
+    preds10 = x10_design @ coefs10.T
+    preds01 = x10_design @ coefs01.T
+    preds00 = x10_design @ coefs00.T
+    ranks = _fhat_eval(preds10, _QR_TAU_GRID, cells["y10"])
+    y0t = (
+        cells["y10"]
+        + _qhat_eval(preds01, _QR_TAU_GRID, ranks)
+        - _qhat_eval(preds00, _QR_TAU_GRID, ranks)
+    )
+    att = float(np.mean(cells["y11"]) - np.mean(y0t))
+    q1 = _quantile_type7(cells["y11"], quantiles)
+    q0 = _quantile_type1(np.sort(y0t), quantiles)
+    return att, q1 - q0
+
+
 def _interior_range(cells: Dict[str, np.ndarray]) -> Tuple[float, float]:
     """Eq. (17) plug-in interior range for CiC quantile effects.
 
@@ -220,17 +512,27 @@ def _interior_range(cells: Dict[str, np.ndarray]) -> Tuple[float, float]:
     return q_lower, q_upper
 
 
-def _parse_2x2_formula(formula: str, data: pd.DataFrame) -> Tuple[str, str, str]:
-    """Parse ``"outcome ~ treatment * time"`` style 2x2 formulas.
+def _parse_2x2_formula(
+    formula: str, data: pd.DataFrame
+) -> Tuple[str, str, str, Optional[List[str]]]:
+    """Parse ``"outcome ~ treatment * time [+ covariates]"`` style 2x2 formulas.
 
     Mirrors the DifferenceInDifferences formula grammar for the interaction
-    forms; covariate terms are rejected (covariates are deferred from v1).
+    forms, with TRAILING covariate terms. Deliberate deviations from the DiD
+    parser: in the ``:`` form, BOTH interaction-pair members must appear as
+    main effects and roles come from the MAIN-EFFECT order (not the
+    interaction-term order) - CiC/QDiD are not symmetric in (treatment, time),
+    and ``treated:post`` vs ``post:treated`` must not silently swap semantics.
+    Leading covariates (``"y ~ x1 + treat * post"``) are unsupported and
+    surface as a column-not-found error on the malformed term - list
+    covariates after the interaction.
     """
     if "~" not in formula:
         raise ValueError("Formula must contain '~' to separate outcome from predictors")
     lhs, rhs = formula.split("~", 1)
     outcome = lhs.strip()
     rhs = rhs.strip()
+    covariates: Optional[List[str]] = None
 
     if "*" in rhs:
         parts = [p.strip() for p in rhs.split("*")]
@@ -238,10 +540,9 @@ def _parse_2x2_formula(formula: str, data: pd.DataFrame) -> Tuple[str, str, str]
             raise ValueError("Currently only supports single interaction (treatment * time)")
         treatment, time = parts
         if "+" in time:
-            raise ValueError(
-                "Covariates are not supported by ChangesInChanges/QDiD (deferred from v1; "
-                "see the Melly-Santangelo covariate route in the methodology registry)."
-            )
+            time_parts = [p.strip() for p in time.split("+")]
+            time = time_parts[0]
+            covariates = time_parts[1:]
     elif ":" in rhs:
         terms = [t.strip() for t in rhs.split("+")]
         interaction = None
@@ -260,24 +561,33 @@ def _parse_2x2_formula(formula: str, data: pd.DataFrame) -> Tuple[str, str, str]
         pair = [p.strip() for p in interaction.split(":")]
         if len(pair) != 2:
             raise ValueError("Interaction term must involve exactly two variables")
-        if sorted(mains) != sorted(pair):
+        if pair[0] == pair[1]:
+            raise ValueError("Interaction term must involve two distinct variables")
+        if pair[0] not in mains or pair[1] not in mains:
             raise ValueError(
-                "Covariates are not supported by ChangesInChanges/QDiD (deferred from v1; "
-                "the formula must be 'outcome ~ treatment + time + treatment:time')."
+                "Both variables in the interaction term must also appear as main effects "
+                "('outcome ~ treatment + time + treatment:time [+ covariates]'); roles are "
+                "taken from the main-effect order."
             )
-        # Roles come from the MAIN-EFFECT order, not the interaction-term order:
-        # CiC/QDiD are not symmetric in (treatment, time), and 'treated:post' vs
-        # 'post:treated' must not silently swap semantics.
-        treatment, time = mains[0], mains[1]
+        # Roles come from the MAIN-EFFECT order, not the interaction-term order;
+        # remaining main effects are covariates. First occurrences only, so a
+        # duplicated main effect cannot corrupt the role assignment.
+        role_mains: List[str] = []
+        for m in mains:
+            if m in pair and m not in role_mains:
+                role_mains.append(m)
+        treatment, time = role_mains[0], role_mains[1]
+        extras = [m for m in mains if m not in pair]
+        covariates = extras if extras else None
     else:
         raise ValueError(
             "Formula must include an interaction term (treatment * time or treatment:time)"
         )
 
-    for name in (outcome, treatment, time):
+    for name in (outcome, treatment, time, *(covariates or [])):
         if name not in data.columns:
             raise ValueError(f"Column '{name}' from formula not found in data")
-    return outcome, treatment, time
+    return outcome, treatment, time, covariates
 
 
 # =============================================================================
@@ -299,10 +609,39 @@ def _check_support(cells: Dict[str, np.ndarray]) -> None:
         )
 
 
+def _check_conditional_support(envelope_flags: np.ndarray) -> None:
+    """Warn on conditional support failure under covariates (CiC).
+
+    ``envelope_flags`` marks treated pre-period observations whose outcome
+    falls outside the conditional quantile envelope spanned by their 99
+    predicted control pre-period quantiles - exactly the observations whose
+    conditional rank is the extrapolated floor/ceiling plateau of the Fhat
+    step function. The check covers the rank cell only (control pre-period QR
+    at the treated observation's covariates) - a documented design choice; see
+    the REGISTRY Note. ~2% outside is expected under correct specification
+    (the envelope spans taus 0.01-0.99), hence the 10% threshold.
+    """
+    share = float(np.mean(envelope_flags))
+    if share > _ENVELOPE_SHARE_WARN:
+        n_out = int(np.count_nonzero(envelope_flags))
+        warnings.warn(
+            f"{n_out} of {envelope_flags.size} treated pre-period outcomes ({share:.0%}) fall "
+            "outside their conditional quantile envelope (the span of the 99 predicted "
+            "control pre-period grid quantiles, taus 0.01-0.99, at their own covariates). "
+            "This suggests the conditional support/overlap condition "
+            "(Melly-Santangelo 2015, Assumption 4 - the covariate analogue of Athey-Imbens "
+            "Assumption 3.4) fails: conditional ranks for these observations are extrapolated "
+            "tail plateaus, and the counterfactual involves out-of-support extrapolation.",
+            UserWarning,
+            stacklevel=2,
+        )
+
+
 def _check_ties(cells: Dict[str, np.ndarray]) -> None:
-    """Warn on heavy ties (discrete-looking outcomes) in any cell."""
+    """Warn on heavy ties (discrete-looking outcomes) in any outcome cell."""
     max_share = 0.0
-    for cell in cells.values():
+    for key in ("y00", "y01", "y10", "y11"):
+        cell = cells[key]
         share = 1.0 - np.unique(cell).size / cell.size
         max_share = max(max_share, share)
     if max_share > _TIE_SHARE_WARN:
@@ -343,7 +682,7 @@ def _check_qdid_monotonicity(cells: Dict[str, np.ndarray], quantiles: np.ndarray
 
 
 def _bootstrap_replicates(
-    point_fn: Callable[[Dict[str, np.ndarray], np.ndarray], Tuple[float, np.ndarray]],
+    point_fn: Callable[[Dict[str, np.ndarray], np.ndarray], Optional[Tuple[Any, ...]]],
     y: np.ndarray,
     g: np.ndarray,
     t: np.ndarray,
@@ -352,14 +691,21 @@ def _bootstrap_replicates(
     n_bootstrap: int,
     quantiles: np.ndarray,
     rng: np.random.Generator,
+    X: Optional[np.ndarray] = None,
 ) -> np.ndarray:
     """Bootstrap replicate matrix, shape ``(n_bootstrap, 1 + K)`` (col 0 = ATT).
 
     Resampling matches qte 1.3.1: panel mode samples unit ids with replacement
     (each unit's two periods travel together); repeated cross-section mode
     draws one pooled row resample of the stacked two-period data (unstratified,
-    so cell sizes vary across draws). Replicates with an empty cell produce a
-    NaN row rather than an exception.
+    so cell sizes vary across draws). Covariates travel with the resampled
+    rows, and the covariate point functions refit every per-cell quantile
+    regression inside each replicate (qte's ``bootiter`` re-runs the whole
+    estimator). Replicates with an empty cell - or, on the covariate path, a
+    failed quantile-regression LP - produce a NaN row rather than an
+    exception. The RNG draw sequence is identical with and without covariates
+    (the quantile regressions consume no randomness), preserving seed
+    determinism.
     """
     n_cols = 1 + quantiles.shape[0]
     out = np.full((n_bootstrap, n_cols), np.nan)
@@ -369,11 +715,14 @@ def _bootstrap_replicates(
         # Pre-pivot to unit-level arrays: one (y_pre, y_post, group) triple per unit.
         order = np.argsort(unit_ids, kind="stable")
         uid, y_o, g_o, t_o = unit_ids[order], y[order], g[order], t[order]
+        X_o = X[order] if X is not None else None
         pre_mask = t_o == 0
         # Balanced panel (enforced in fit): each unit has exactly one pre and one post row.
         y_pre = y_o[pre_mask]
         y_post = y_o[~pre_mask]
         g_unit = g_o[pre_mask]
+        X_pre = X_o[pre_mask] if X_o is not None else None
+        X_post = X_o[~pre_mask] if X_o is not None else None
         # uid is sorted, so pre/post slices align unit-by-unit.
         assert np.array_equal(uid[pre_mask], uid[~pre_mask])
         n_units = y_pre.shape[0]
@@ -382,22 +731,33 @@ def _bootstrap_replicates(
             gb = g_unit[idx]
             yb = np.concatenate([y_pre[idx], y_post[idx]])
             tb = np.concatenate([np.zeros(n_units), np.ones(n_units)])
-            cells = _build_cells(yb, np.concatenate([gb, gb]), tb)
+            # Stacking order matches yb: pre-period rows first, then post.
+            Xb = (
+                np.vstack([X_pre[idx], X_post[idx]])
+                if X_pre is not None and X_post is not None
+                else None
+            )
+            cells = _build_cells(yb, np.concatenate([gb, gb]), tb, Xb)
             if cells is None:
                 continue
-            att_b, qte_b = point_fn(cells, quantiles)[:2]
-            out[b, 0] = att_b
-            out[b, 1:] = qte_b
+            res_b = point_fn(cells, quantiles)
+            if res_b is None:
+                continue
+            out[b, 0] = res_b[0]
+            out[b, 1:] = res_b[1]
     else:
         n_rows = y.shape[0]
         for b in range(n_bootstrap):
             idx = rng.integers(0, n_rows, n_rows)
-            cells = _build_cells(y[idx], g[idx], t[idx])
+            Xb = X[idx] if X is not None else None
+            cells = _build_cells(y[idx], g[idx], t[idx], Xb)
             if cells is None:
                 continue
-            att_b, qte_b = point_fn(cells, quantiles)[:2]
-            out[b, 0] = att_b
-            out[b, 1:] = qte_b
+            res_b = point_fn(cells, quantiles)
+            if res_b is None:
+                continue
+            out[b, 0] = res_b[0]
+            out[b, 1:] = res_b[1]
     return out
 
 
@@ -455,6 +815,7 @@ def _fit_distributional(
     treatment: Optional[str],
     time: Optional[str],
     formula: Optional[str],
+    covariates: Optional[List[str]],
     unit: Optional[str],
     kind: str,
 ) -> ChangesInChangesResults:
@@ -464,15 +825,61 @@ def _fit_distributional(
     quantiles = np.sort(
         np.asarray(_DEFAULT_QUANTILES if est.quantiles is None else est.quantiles, dtype=float)
     )
+    estimator_name = "ChangesInChanges" if kind == "cic" else "QDiD"
 
     # ---- column resolution -------------------------------------------------
     if formula is not None:
-        outcome, treatment, time = _parse_2x2_formula(formula, data)
+        # Uniform strictness (deliberately stricter than DifferenceInDifferences,
+        # which silently lets the formula win over explicit kwargs): mixing
+        # formula with explicit column arguments is ambiguous - reject it.
+        supplied = [
+            name
+            for name, value in (
+                ("outcome", outcome),
+                ("treatment", treatment),
+                ("time", time),
+                ("covariates", covariates),
+            )
+            if value is not None
+        ]
+        if supplied:
+            raise ValueError(
+                "Provide either 'formula' or explicit column arguments, not both "
+                f"(got formula= together with {supplied})."
+            )
+        outcome, treatment, time, covariates = _parse_2x2_formula(formula, data)
     elif outcome is None or treatment is None or time is None:
         raise ValueError(
             "Must provide either 'formula' or all of 'outcome', 'treatment', and 'time'"
         )
-    used_cols = [outcome, treatment, time]
+
+    # ---- covariate validation ------------------------------------------------
+    if isinstance(covariates, (str, bytes)):
+        # A bare string would iterate character-wise ("x1" -> ["x", "1"]) and
+        # could silently fit the wrong covariate set if such columns exist.
+        raise ValueError(
+            f"covariates must be a list of column names, got the bare string "
+            f"{covariates!r} - did you mean covariates=[{covariates!r}]?"
+        )
+    if covariates is not None and len(covariates) == 0:
+        covariates = None
+    if covariates is not None:
+        covariates = [str(c) for c in covariates]
+        reserved = {outcome, treatment, time}
+        if est.panel and unit is not None:
+            reserved.add(unit)
+        validate_covariate_names(covariates, reserved, estimator=estimator_name)
+        for col in covariates:
+            if col not in data.columns:
+                raise ValueError(f"Covariate column '{col}' not found in data")
+            if not pd.api.types.is_numeric_dtype(data[col]):
+                raise ValueError(
+                    f"Covariate column '{col}' is not numeric. {estimator_name} accepts "
+                    "numeric covariates only - dummy-encode categorical variables first "
+                    "(e.g. pd.get_dummies(data, columns=[...]))."
+                )
+
+    used_cols = [outcome, treatment, time] + (covariates or [])
     if est.panel:
         if unit is None:
             raise ValueError("'unit' is required when panel=True (unit identifier column)")
@@ -503,6 +910,15 @@ def _fit_distributional(
             "(inf/-inf). Clean or drop these observations before fitting - they would "
             "silently corrupt the empirical CDFs, quantiles, and bootstrap."
         )
+    if covariates is not None:
+        x_check = frame[covariates].to_numpy(dtype=float)
+        if not np.all(np.isfinite(x_check)):
+            n_nonfinite = int(np.count_nonzero(~np.isfinite(x_check)))
+            raise ValueError(
+                f"Covariate column(s) {covariates} contain {n_nonfinite} non-finite "
+                "value(s) (inf/-inf). Clean or drop these observations before fitting - "
+                "they would silently corrupt the quantile regressions and bootstrap."
+            )
 
     validate_binary(frame[treatment].to_numpy(dtype=float), "treatment")
     validate_binary(frame[time].to_numpy(dtype=float), "time")
@@ -540,25 +956,71 @@ def _fit_distributional(
     y = frame[outcome].to_numpy(dtype=float)
     g = frame[treatment].to_numpy(dtype=float).astype(np.int64)
     t = frame[time].to_numpy(dtype=float).astype(np.int64)
+    # Extracted AFTER panel balancing so dropped-unit rows leave X consistently.
+    X = frame[covariates].to_numpy(dtype=float) if covariates is not None else None
 
     # ---- cells + diagnostics -----------------------------------------------
-    cells = _split_cells(y, g, t)
+    cells = _split_cells(y, g, t, X)
+    if X is not None:
+        # Fail closed at fit: below k+2 rows the quantile-regression LP has
+        # exact-fit degeneracy (rq produces garbage or errors there too).
+        # Bootstrap replicates instead NaN-row on LP failure, matching qte,
+        # which has no size guard.
+        k = X.shape[1]
+        qr_cells = ("y00", "y01") if kind == "cic" else ("y00", "y01", "y10")
+        for key in qr_cells:
+            if cells[key].size < k + 2:
+                raise ValueError(
+                    f"Too few observations for quantile regression in the "
+                    f"{_CELL_LABELS[key]} cell: {cells[key].size} row(s) with {k} "
+                    f"covariate(s) (need at least k + 2 = {k + 2})."
+                )
     _check_ties(cells)
     if kind == "cic":
-        _check_support(cells)
-        q_lower, q_upper = _interior_range(cells)
+        if covariates is None:
+            _check_support(cells)
+            q_lower, q_upper = _interior_range(cells)
+        else:
+            # The eq. (17) interior range is an unconditional-distribution
+            # object; under covariates it is not the relevant bound (and qte
+            # applies no guard). The conditional-envelope diagnostic below is
+            # the covariate-path support check.
+            q_lower, q_upper = np.nan, np.nan
     else:
-        _check_qdid_monotonicity(cells, quantiles)
+        if covariates is None:
+            # Under covariates the check is moot: the covariate-path q0 is a
+            # type-1 quantile of the imputed sample, monotone by construction.
+            _check_qdid_monotonicity(cells, quantiles)
         q_lower, q_upper = np.nan, np.nan
 
     # ---- point estimation ---------------------------------------------------
+    qr_failure_msg = (
+        "Quantile regression failed in at least one (group, period) cell (the LP "
+        "solver did not converge). This typically indicates degenerate or collinear "
+        "covariates; check the covariate design within each 2x2 cell."
+    )
     if kind == "cic":
-        att, qte, _ = _cic_point(cells, quantiles)
-        point_fn: Callable[..., Any] = _cic_point
+        if covariates is None:
+            att, qte, _ = _cic_point(cells, quantiles)
+            point_fn: Callable[..., Any] = _cic_point
+        else:
+            cic_cov = _cic_point_cov(cells, quantiles)
+            if cic_cov is None:
+                raise ValueError(qr_failure_msg)
+            att, qte, _, envelope_flags = cic_cov
+            _check_conditional_support(envelope_flags)
+            point_fn = _cic_point_cov
         context = "ChangesInChanges bootstrap"
     else:
-        att, qte = _qdid_point(cells, quantiles)
-        point_fn = _qdid_point
+        if covariates is None:
+            att, qte = _qdid_point(cells, quantiles)
+            point_fn = _qdid_point
+        else:
+            qdid_cov = _qdid_point_cov(cells, quantiles)
+            if qdid_cov is None:
+                raise ValueError(qr_failure_msg)
+            att, qte = qdid_cov
+            point_fn = _qdid_point_cov
         context = "QDiD bootstrap"
 
     # ---- bootstrap ----------------------------------------------------------
@@ -566,7 +1028,7 @@ def _fit_distributional(
     if est.n_bootstrap > 0:
         rng = np.random.default_rng(est.seed)
         replicates = _bootstrap_replicates(
-            point_fn, y, g, t, unit_ids, est.panel, est.n_bootstrap, quantiles, rng
+            point_fn, y, g, t, unit_ids, est.panel, est.n_bootstrap, quantiles, rng, X=X
         )
         # sup_t_crit is computed over ALL grid columns BEFORE the interior-range
         # NaN overwrite below (qte has no interior guard; excluding guarded
@@ -589,7 +1051,11 @@ def _fit_distributional(
     t_stat, p_value, conf_int = safe_inference(att, att_se, est.alpha)
     t_stats, p_values, ci_lo, ci_hi = safe_inference_batch(qte, qte_ses, est.alpha)
 
-    if kind == "cic":
+    # The covariates-is-None guard is load-bearing: with covariates active,
+    # q_lower = q_upper = NaN and the exterior mask below would evaluate
+    # ALL-TRUE (NaN comparisons are False), silently NaN-ing every quantile's
+    # inference. qte applies no interior guard on the covariate path.
+    if kind == "cic" and covariates is None:
         exterior = ~((quantiles > q_lower) & (quantiles < q_upper))
         if np.any(exterior):
             warnings.warn(
@@ -643,6 +1109,7 @@ def _fit_distributional(
         estimator=kind,
         quantiles=quantiles,
         alpha=est.alpha,
+        covariates=list(covariates) if covariates is not None else None,
     )
     est.results_ = results
     est.is_fitted_ = True
@@ -736,7 +1203,21 @@ class ChangesInChanges:
     -----
     Quantile effects are point-identified only on the eq. (17) interior range
     ``(q_lower, q_upper)``; effects outside it keep their point estimates (qte
-    parity) but report NaN inference with a warning.
+    parity) but report NaN inference with a warning. This guard applies to
+    unconditional (no-covariate) fits only: with covariates the eq. (17)
+    bounds are not the relevant objects (``q_lower``/``q_upper`` are NaN) and
+    a conditional support diagnostic replaces the unconditional one.
+
+    Covariates (``covariates=`` at fit time, or trailing formula terms) port
+    qte's ``xformla`` branch exactly: linear quantile regressions of the
+    outcome on the covariates within the control pre- and post-period cells on
+    qte's fixed internal 0.01-0.99 tau grid (99 points, not user-configurable),
+    conditional-rank imputation per treated pre-period observation, and the
+    same bootstrap schemes with every quantile regression refit inside each
+    replicate. Covariates must be numeric (dummy-encode categoricals). Runtime
+    note: a covariate fit solves roughly ``2 x 99 x (1 + n_bootstrap)`` small
+    linear programs (~40k at the default ``n_bootstrap=200``) - typically tens
+    of seconds at moderate cell sizes, the same cost profile as ``qte::CiC``.
 
     Additive random group-time shocks (random effects at the group x period
     level) BIAS the CiC estimator - unlike linear DiD, where they only
@@ -744,8 +1225,10 @@ class ChangesInChanges:
     Imbens 2006, p. 476). With more than two groups/periods they are testable
     (Theorem 6.4), but that extension is deferred.
 
-    Covariates, discrete-outcome bounds, and analytical standard errors are
-    deferred from v1 and documented in docs/methodology/REGISTRY.md.
+    The full Melly-Santangelo (2015) covariate estimator (monotonized
+    integrated-indicator CDFs, treated-post covariate integration,
+    exchangeable bootstrap), discrete-outcome bounds, and analytical standard
+    errors remain deferred and documented in docs/methodology/REGISTRY.md.
     """
 
     def __init__(
@@ -808,6 +1291,7 @@ class ChangesInChanges:
         treatment: Optional[str] = None,
         time: Optional[str] = None,
         formula: Optional[str] = None,
+        covariates: Optional[List[str]] = None,
         unit: Optional[str] = None,
     ) -> ChangesInChangesResults:
         """Fit the CiC estimator on a 2x2 dataset.
@@ -821,13 +1305,25 @@ class ChangesInChanges:
             treated group in BOTH periods), binary post-period indicator.
             Required unless ``formula`` is given.
         formula : str, optional
-            R-style 2x2 formula, e.g. ``"y ~ treated * post"``. Covariate
-            terms raise (deferred from v1).
+            R-style 2x2 formula, e.g. ``"y ~ treated * post"`` or
+            ``"y ~ treated * post + x1 + x2"`` (trailing terms are
+            covariates). Mixing ``formula`` with any explicit column argument
+            raises - deliberately stricter than ``DifferenceInDifferences``,
+            which silently lets the formula win.
+        covariates : list of str, optional
+            Numeric covariate columns for the conditional (quantile-
+            regression) CiC - qte's ``xformla``. Fit-time argument only (not a
+            hyperparameter; absent from ``get_params()``, like ``unit``).
+            Dummy-encode categorical covariates first. In panel mode,
+            covariates may be time-varying: each (group, period) cell uses its
+            own rows' covariate values, exactly like qte.
         unit : str, optional
             Unit identifier column. Required when ``panel=True``; ignored
             (documented) when ``panel=False``, matching qte's ``idname``.
         """
-        return _fit_distributional(self, data, outcome, treatment, time, formula, unit, "cic")
+        return _fit_distributional(
+            self, data, outcome, treatment, time, formula, covariates, unit, "cic"
+        )
 
 
 class QDiD:
@@ -845,10 +1341,19 @@ class QDiD:
     p. 447): QDiD's justifying model is not invariant to monotone
     transformations of the outcome, forces the unobservable distribution to be
     identical across all four cells, and places testable restrictions on the
-    data (a warning fires when the implied counterfactual quantile function is
-    non-monotone). QDiD's mean effect matches standard DiD's ATT in
+    data (in unconditional fits, a warning fires when the implied
+    counterfactual quantile function is non-monotone; with covariates the
+    check is moot - the imputed counterfactual's quantile curve is monotone by
+    construction). QDiD's mean effect matches standard DiD's ATT in
     population; the paper provides no asymptotic theory for QDiD, so inference
     is a bootstrap convention shared with the qte package.
+
+    Covariates port qte's ``xformla`` branch exactly: quantile regressions in
+    THREE cells (both control cells plus treated-pre), conditional ranks from
+    the treated pre-period cell's own conditional distribution, and an
+    additive imputation. qte's covariate QDiD mixes quantile types - type-7
+    for the treated post-period quantiles, type-1 for the imputed
+    counterfactual - and that asymmetry is ported verbatim (REGISTRY Note).
 
     Constructor parameters, fit signature, bootstrap behavior, and the results
     container are identical to :class:`ChangesInChanges` (no interior-range
@@ -915,7 +1420,10 @@ class QDiD:
         treatment: Optional[str] = None,
         time: Optional[str] = None,
         formula: Optional[str] = None,
+        covariates: Optional[List[str]] = None,
         unit: Optional[str] = None,
     ) -> ChangesInChangesResults:
         """Fit the QDiD estimator on a 2x2 dataset (see ChangesInChanges.fit)."""
-        return _fit_distributional(self, data, outcome, treatment, time, formula, unit, "qdid")
+        return _fit_distributional(
+            self, data, outcome, treatment, time, formula, covariates, unit, "qdid"
+        )

@@ -39,7 +39,7 @@ Start here and follow the questions:
 4. **Do you have panel data?** (Multiple observations per unit over time)
 
    - **No** → Use :class:`~diff_diff.DifferenceInDifferences` (basic 2x2)
-   - **No, and you care about effect heterogeneity across the outcome distribution** → Use :class:`~diff_diff.ChangesInChanges` (2x2 quantile treatment effects, invariant to monotone outcome rescaling; works with panel data too - ``panel=True`` changes only the bootstrap). :class:`~diff_diff.QDiD` is the quantile-DiD comparison estimator; Athey & Imbens (2006) recommend CiC over it
+   - **No, and you care about effect heterogeneity across the outcome distribution** → Use :class:`~diff_diff.ChangesInChanges` (2x2 quantile treatment effects, invariant to monotone outcome rescaling; optional numeric covariates via quantile-regression conditioning; works with panel data too - ``panel=True`` changes only the bootstrap). :class:`~diff_diff.QDiD` is the quantile-DiD comparison estimator; Athey & Imbens (2006) recommend CiC over it
    - **Yes** → Go to question 5
 
 5. **Do you need period-specific effects?** (Event study design)

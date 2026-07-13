@@ -665,6 +665,9 @@ sources:
         type: methodology
       - path: docs/methodology/papers/athey-imbens-2006-review.md
         type: methodology
+      - path: docs/methodology/papers/melly-santangelo-2015-review.md
+        section: "covariate branch (qte xformla simplified form)"
+        type: methodology
       - path: docs/api/changes_in_changes.rst
         type: api_reference
       - path: README.md

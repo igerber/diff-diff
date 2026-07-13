@@ -345,15 +345,16 @@ Aggregation `tau_Lambda = Lambda' tau^CIC_I` (columns of Lambda sum to 1): sampl
 
 **Planned diff-diff v1 scope (2026-07-12):**
 - Ship: `ChangesInChanges` + `QDiD`, 2x2 design, continuous outcomes, bootstrap inference, panel + repeated cross-section modes.
-- Deferred: covariates (Theorems 4.3-4.4 and the Section 5.1 residual route; Melly-Santangelo is the modern reference), discrete-outcome bounds (Section 4 identification / Section 5.2 inference, incl. Imbens-Manski intervals), analytical SEs (Theorems 5.1-5.3, 5.5-5.7; Appendix B covariances), multiple groups/periods (Section 6; `ecic` for the staggered event-study CiC lineage - Ciaccio's copula-based staggered distributional DiD is a distinct method, reviewed separately).
+- Deferred: discrete-outcome bounds (Section 4 identification / Section 5.2 inference, incl. Imbens-Manski intervals), analytical SEs (Theorems 5.1-5.3, 5.5-5.7; Appendix B covariances), multiple groups/periods (Section 6; `ecic` for the staggered event-study CiC lineage - Ciaccio's copula-based staggered distributional DiD is a distinct method, reviewed separately).
 - All deferred material is reviewed in this document so the deferral is documented, not silent.
+- **Update (2026-07-13, covariates PR):** covariates now SHIP via qte 1.3.1's `xformla` branch (per-cell linear quantile regression - the Melly-Santangelo pipeline in qte's simplified form; see the REGISTRY covariates block). What remains deferred on the covariate front: the paper's Theorems 4.3-4.4 bound route, the Section 5.1 parametric residual route, and the full Melly-Santangelo estimator (monotonized CDFs, treated-post integration, exchangeable bootstrap).
 
 ### Data Structure Requirements
 - Long format: one row per observation with outcome, group indicator (0/1), and period indicator (0/1); all four (g,t) cells non-empty (Assumption 5.1(ii)).
 - Repeated cross-section mode: four independent samples, one per cell, sizes `N_00, N_01, N_10, N_11` (Assumption 5.1(i)).
 - Panel mode: unit identifier required; each unit observed in both periods; per-group iid draws of the pair `(Y_i0, Y_i1)` (Assumption 5.3); the point estimator ignores the pairing (identical to repeated cross-section), but inference must respect it (resample units).
 - Continuous outcomes; heavy ties trigger the discrete-outcome warning.
-- Covariates: not accepted in v1 (deferred routes documented above).
+- Covariates: numeric covariates accepted since the covariates PR (qte `xformla` parity route; dummy-encode categoricals). The Section 5.1 residual route and Theorems 4.3-4.4 bounds remain unimplemented.
 
 ### Computational Considerations
 - Sorting the four cells dominates: O(N log N). The transformation `F_hat_01^{-1}(F_hat_00(y))` evaluates via two `searchsorted` passes over sorted arrays - O(N_10 log N) for all treated-pre points. Memory: O(N).

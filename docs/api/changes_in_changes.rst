@@ -17,8 +17,8 @@ restrictions on continuous data.
 ``QDiD`` is the quantile-by-quantile DiD comparison estimator the same paper
 formalizes: it adds the control group's over-time quantile change to the
 treated pre-period quantile. Athey & Imbens recommend CiC over QDiD - QDiD's
-justifying model is not scale-invariant and imposes testable restrictions (a
-warning fires when they appear violated).
+justifying model is not scale-invariant and imposes testable restrictions (in
+unconditional fits, a warning fires when they appear violated).
 
 .. note::
 
@@ -31,9 +31,20 @@ warning fires when they appear violated).
    both periods together, repeated cross-section mode draws a pooled row
    resample; SEs are replicate SDs with symmetric normal-approximation
    intervals, plus qte's sup-t critical value for uniform bands at a fixed
-   95% level (independent of ``alpha``). Covariates, discrete-outcome bounds,
-   analytical standard errors, and staggered designs are deferred - see
-   ``docs/methodology/REGISTRY.md`` for the documented scope.
+   95% level (independent of ``alpha``).
+
+   Covariates are supported via qte's ``xformla``-parity route
+   (``covariates=[...]`` or trailing formula terms): per-cell linear quantile
+   regressions on qte's fixed internal 0.01-0.99 tau grid impute each treated
+   pre-period observation's conditional counterfactual (the Melly-Santangelo
+   2015 pipeline in qte's simplified form). Covariates must be numeric
+   (dummy-encode categoricals), and every bootstrap replicate refits the
+   quantile regressions - a covariate fit at the default ``n_bootstrap=200``
+   solves ~40k small linear programs (typically tens of seconds; the same cost
+   profile as ``qte::CiC``). Discrete-outcome bounds, analytical standard
+   errors, staggered designs, and the full Melly-Santangelo covariate
+   estimator remain deferred - see ``docs/methodology/REGISTRY.md`` for the
+   documented scope.
 
 **When to use ChangesInChanges:**
 
@@ -41,9 +52,13 @@ warning fires when they appear violated).
   effect heterogeneity across the outcome distribution (which quantiles moved,
   not just the mean)
 - You want results invariant to monotone rescaling of the outcome
+  (unconditional fits; the covariate branch's linear quantile regressions are
+  not equivariant to nonlinear monotone transforms)
 - CiC quantile effects are point-identified on the interior range where the
   treated pre-period distribution overlaps the control pre-period support;
   effects outside it keep their point estimates but report NaN inference
+  (unconditional fits only - with covariates a conditional-envelope support
+  diagnostic applies instead and ``q_lower``/``q_upper`` are NaN)
 
 **Reference:** Athey, S., & Imbens, G. W. (2006). Identification and Inference
 in Nonlinear Difference-in-Differences Models. *Econometrica*, 74(2), 431-497.
@@ -142,6 +157,23 @@ Estimate quantile treatment effects in a 2x2 design::
 
 Panel mode (same units in both periods) changes only the bootstrap::
 
+    import numpy as np
+    import pandas as pd
+    from diff_diff import ChangesInChanges
+
+    rng = np.random.default_rng(0)
+    n = 400
+    treated = np.repeat([1, 0], n // 2)
+    u = rng.normal(0, 1, n)
+    data = pd.DataFrame({
+        "unit": np.tile(np.arange(n), 2),
+        "post": np.repeat([0, 1], n),
+        "treated": np.tile(treated, 2),
+        "y": np.concatenate(
+            [u + rng.normal(0, 0.3, n), u + 0.5 + rng.normal(0, 0.3, n) + treated]
+        ),
+    })
+
     cic_panel = ChangesInChanges(n_bootstrap=200, seed=42, panel=True)
     results_panel = cic_panel.fit(
         data, outcome="y", treatment="treated", time="post", unit="unit"
@@ -153,6 +185,34 @@ QDiD as a comparison estimator::
 
     qdid = QDiD(n_bootstrap=200, seed=42)
     results_qdid = qdid.fit(data, outcome="y", treatment="treated", time="post")
+
+Covariates (conditional CiC via per-cell quantile regression, matching qte's
+``xformla``; a small ``n_bootstrap`` keeps the example fast - every replicate
+refits the quantile regressions)::
+
+    import numpy as np
+    import pandas as pd
+    from diff_diff import ChangesInChanges
+
+    rng = np.random.default_rng(1)
+    n = 120
+    treated = np.repeat([1, 0], n // 2)
+    x1 = rng.uniform(0, 2, n) + 0.3 * treated
+    y_pre = 0.5 + 0.8 * x1 + rng.normal(0, 0.4, n)
+    y_post = 0.8 + 1.1 * x1 + rng.normal(0, 0.4, n) + treated * 0.7
+    data = pd.DataFrame({
+        "post": np.repeat([0, 1], n),
+        "treated": np.tile(treated, 2),
+        "x1": np.tile(x1, 2),
+        "y": np.concatenate([y_pre, y_post]),
+    })
+
+    cic_cov = ChangesInChanges(n_bootstrap=10, seed=42)
+    results_cov = cic_cov.fit(
+        data, outcome="y", treatment="treated", time="post", covariates=["x1"]
+    )
+    # Equivalent formula route: "y ~ treated * post + x1"
+    print(results_cov.covariates)  # ['x1']
 
 Comparison with related estimators
 ----------------------------------
