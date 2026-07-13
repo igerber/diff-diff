@@ -168,9 +168,10 @@ class RegressionDiscontinuityResults:
     b_input: Optional[float]
     rho_input: Optional[float]
 
-    # Per-side order-p coefficient vectors (rdplot seam)
-    beta_p_left: np.ndarray = field(repr=False, default=None)  # type: ignore[assignment]
-    beta_p_right: np.ndarray = field(repr=False, default=None)  # type: ignore[assignment]
+    # Per-side order-p coefficient vectors (rdplot seam); always populated
+    # by fit(), so typed non-Optional despite the dataclass default.
+    beta_p_left: np.ndarray = field(repr=False, default=None)
+    beta_p_right: np.ndarray = field(repr=False, default=None)
 
     def summary(self) -> str:
         """Human-readable summary with the three-row rdrobust table."""
