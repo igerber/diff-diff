@@ -137,9 +137,14 @@ flatten misaligns when reshaped row-major.
 `benchmarks/R/generate_rdrobust_golden.R` produces
 `benchmarks/data/rdrobust_golden.json`, consumed by
 `tests/test_rdrobust_port.py` to verify that
-`diff_diff._rdrobust_port.rdbwselect` (sharp and fuzzy RD bandwidth paths) matches R `rdrobust::rdbwselect`
-(Calonico, Cattaneo, Farrell & Titiunik) across all 10 bandwidth selectors at
-rtol ≤ 1e-9.
+`diff_diff._rdrobust_port.rdbwselect` matches R `rdrobust::rdbwselect`
+(Calonico, Cattaneo, Farrell & Titiunik) on SHARP bandwidth selection
+across all 10 selectors at rtol ≤ 1e-9 (17 configs; this fixture predates
+fuzzy support and is deliberately never regenerated). Fuzzy bandwidth and
+estimation parity lives in `benchmarks/data/rdrobust_estimates_golden.json`
+(generator `generate_rdrobust_estimates_golden.R`), pinned by
+`tests/test_rdrobust_port.py::TestFuzzyPortGoldenParity` and
+`tests/test_rdd_parity.py`.
 
 ## Version pin
 
