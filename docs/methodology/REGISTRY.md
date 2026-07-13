@@ -2144,6 +2144,7 @@ Exact reviewed artifacts (PDF SHA-256) and live-verified SSRN metadata are pinne
 Full maintainer paper reviews (equation-level detail, replication targets): `docs/methodology/papers/lee-wooldridge-2025-review.md`, `docs/methodology/papers/lee-wooldridge-2026-review.md`.
 
 - **Note:** Registry entry authored with the paper reviews ahead of the implementation (PR #588, third-party contribution under maintainer revision). Checklist boxes are unchecked until the implementation lands; implementation-specific edge-case notes will be finalized in that PR.
+- **Note:** Maintainer validation suite: `tests/test_methodology_lwdid.py` (import-skip-gated until `diff_diff.lwdid` exists; xfail markers encode PR #588's outstanding acceptance criteria; replication goldens in `benchmarks/data/lwdid_walmart_eventstudy_golden.json` and `benchmarks/data/real/castle_lw_subset.csv`).
 
 **Key implementation requirements:**
 
