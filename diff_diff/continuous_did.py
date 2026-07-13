@@ -10,7 +10,7 @@ inference.
 """
 
 import warnings
-from typing import Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -41,6 +41,10 @@ from diff_diff.survey import (
     compute_survey_vcov,
 )
 from diff_diff.utils import safe_inference
+
+if TYPE_CHECKING:
+    from diff_diff.survey import ResolvedSurveyDesign, SurveyDesign
+
 
 __all__ = ["ContinuousDiD", "ContinuousDiDResults", "DoseResponseCurve"]
 
@@ -281,7 +285,7 @@ class ContinuousDiD:
         first_treat: str,
         dose: str,
         aggregate: Optional[str] = None,
-        survey_design: object = None,
+        survey_design: Optional["SurveyDesign"] = None,
     ) -> ContinuousDiDResults:
         """
         Fit the continuous DiD estimator.
@@ -1472,7 +1476,7 @@ class ContinuousDiD:
         degree: int,
         dvals: np.ndarray,
         survey_weights: Optional[np.ndarray] = None,
-        resolved_survey: object = None,
+        resolved_survey: Optional["ResolvedSurveyDesign"] = None,
         levels: Optional[np.ndarray] = None,
     ) -> Optional[Dict[str, Any]]:
         """Compute dose-response for a single (g,t) cell.
@@ -1930,7 +1934,7 @@ class ContinuousDiD:
         dvals: np.ndarray,
         agg_att_d: np.ndarray,
         agg_acrt_d: np.ndarray,
-        resolved_survey: object = None,
+        resolved_survey: Optional["ResolvedSurveyDesign"] = None,
     ) -> Dict[str, Any]:
         """Compute analytical SEs using influence functions."""
         n_units = precomp["n_units"]
@@ -2130,7 +2134,7 @@ class ContinuousDiD:
         original_att_d: np.ndarray,
         original_acrt_d: np.ndarray,
         event_study_effects: Optional[Dict[int, Dict]],
-        resolved_survey: object = None,
+        resolved_survey: Optional["ResolvedSurveyDesign"] = None,
     ) -> Dict[str, Any]:
         """Run multiplier bootstrap inference."""
         if self.n_bootstrap < 50:
@@ -2178,6 +2182,8 @@ class ContinuousDiD:
                 generate_survey_multiplier_weights_batch,
             )
 
+            # The survey bootstrap branch always has a resolved design.
+            assert unit_resolved is not None
             psu_weights, psu_ids = generate_survey_multiplier_weights_batch(
                 self.n_bootstrap, unit_resolved, self.bootstrap_weights, rng
             )

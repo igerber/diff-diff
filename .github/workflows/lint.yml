@@ -1,7 +1,7 @@
 name: Lint
 
-# Check-only lint enforcement (ruff + black). This workflow never modifies
-# code — it reads the tree and passes or fails.
+# Check-only lint + type enforcement (ruff + black + mypy). This workflow
+# never modifies code — it reads the tree and passes or fails.
 #
 # Deliberately UNGATED (no ready-for-ci label check; precedent:
 # ai_pr_review.yml): these are cheap static checks that should give feedback
@@ -45,15 +45,33 @@ jobs:
       - name: Black
         run: black --check diff_diff tests
 
+  typecheck:
+    name: Mypy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.14'
+      # Runtime deps MUST be installed: with ignore_missing_imports=true an
+      # absent numpy silently becomes Any and most errors vanish — CI would
+      # go green while local runs stay red. Pinning them freezes stub drift.
+      # The package itself is NOT installed (mypy analyzes source directly;
+      # no maturin/Rust build ever enters this workflow).
+      - name: Install mypy + runtime deps for their type stubs (pinned)
+        run: pip install mypy==2.1.0 numpy==2.4.5 pandas==3.0.3 scipy==1.17.1
+      - name: Mypy
+        run: mypy diff_diff
+
   # Single stable required-check name so branch protection is configured once.
-  # Later additions (e.g. a mypy job) extend `needs` without any protection
-  # change. `if: always()` is load-bearing: without it a failed upstream job
-  # would leave this job SKIPPED, and GitHub treats a skipped required check
-  # as satisfied.
+  # New jobs extend `needs` without any protection change. `if: always()` is
+  # load-bearing: without it a failed upstream job would leave this job
+  # SKIPPED, and GitHub treats a skipped required check as satisfied.
   lint-gate:
     name: Lint Gate
     runs-on: ubuntu-latest
-    needs: [format-lint]
+    needs: [format-lint, typecheck]
     if: always()
     steps:
       - name: All lint jobs must succeed

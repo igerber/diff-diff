@@ -924,8 +924,8 @@ class SyntheticDiD(DifferenceInDifferences):
             _strata_control_eff: np.ndarray = np.zeros(len(control_units), dtype=np.int64)
             _strata_treated_eff: np.ndarray = np.zeros(len(treated_units), dtype=np.int64)
         else:
-            _strata_control_eff = _strata_control  # type: ignore[assignment]
-            _strata_treated_eff = _strata_treated  # type: ignore[assignment]
+            _strata_control_eff = _strata_control
+            _strata_treated_eff = _strata_treated
 
         # Fit-time feasibility guard for stratified-permutation placebo
         # (per `feedback_front_door_over_retry_swallow.md`). Case B / Case C
@@ -1280,6 +1280,8 @@ class SyntheticDiD(DifferenceInDifferences):
             treated_post_trajectory=treated_post_trajectory,
             time_weights_array=time_weights,
         )
+        # results_ was just constructed above.
+        assert self.results_ is not None
         # Explicit LOO granularity flag for ``get_loo_effects_df``. The
         # non-survey and pweight-only jackknife paths run unit-level LOO
         # (one estimate per unit, matching ``control_unit_ids +
@@ -1507,11 +1509,14 @@ class SyntheticDiD(DifferenceInDifferences):
                 # rw is the constant per-control survey weight.
                 if _use_rao_wu:
                     boot_rw = generate_rao_wu_weights(resolved_survey, rng)
+                    assert boot_rw is not None
                     rw_control_full = boot_rw[:n_control]
                     rw_treated_full = boot_rw[n_control:]
                     rw_control_draw = rw_control_full[boot_idx[boot_is_control]]
                     rw_treated_draw = rw_treated_full[boot_idx[~boot_is_control] - n_control]
                 elif _pweight_only:
+                    # pweight-only flag implies control weights exist.
+                    assert w_control is not None
                     rw_control_draw = w_control[boot_idx[boot_is_control]]
                     rw_treated_draw = (
                         w_treated[boot_idx[~boot_is_control] - n_control]
@@ -2079,6 +2084,8 @@ class SyntheticDiD(DifferenceInDifferences):
                 pseudo_control_idx = np.where(pseudo_control_mask)[0]
 
                 # Pseudo-panel
+                # This survey pseudo-panel branch requires control weights.
+                assert w_control is not None
                 Y_pre_pseudo_control = Y_pre_control[:, pseudo_control_idx]
                 Y_post_pseudo_control = Y_post_control[:, pseudo_control_idx]
                 pseudo_w_tr = w_control[pseudo_treated_idx]

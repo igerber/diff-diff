@@ -11,12 +11,15 @@ regression with cohort × relative-time interactions.
 
 import warnings
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Tuple, Union, overload
 
 import numpy as np
 import pandas as pd
 
 from diff_diff.bootstrap_utils import compute_effect_bootstrap_stats
+
+if TYPE_CHECKING:
+    from diff_diff.survey import ResolvedSurveyDesign, SurveyDesign
 from diff_diff.linalg import LinearRegression
 from diff_diff.results import _format_survey_block, _get_significance_stars
 from diff_diff.utils import (
@@ -620,7 +623,7 @@ class SunAbraham:
         time: str,
         first_treat: str,
         covariates: Optional[List[str]] = None,
-        survey_design: object = None,
+        survey_design: Optional["SurveyDesign"] = None,
     ) -> SunAbrahamResults:
         """
         Fit the Sun-Abraham estimator using saturated regression.
@@ -890,6 +893,8 @@ class SunAbraham:
 
             resolved_survey = _inject_cluster_as_psu(resolved_survey, effective_cluster_ids)
             if resolved_survey.psu is not None and survey_metadata is not None:
+                # resolved_survey non-None implies survey_design was passed.
+                assert survey_design is not None
                 raw_w = (
                     data[survey_design.weights].values.astype(np.float64)
                     if survey_design.weights
@@ -1180,6 +1185,8 @@ class SunAbraham:
             )
 
             # Override df if replicates dropped
+            # Replicate-refit path is only reached with a resolved design.
+            assert resolved_survey is not None
             if _n_valid_rep_sa < resolved_survey.n_replicates:
                 _sa_survey_df = _n_valid_rep_sa - 1 if _n_valid_rep_sa > 1 else 0
             if survey_metadata is not None:
@@ -1339,7 +1346,7 @@ class SunAbraham:
         cluster_var: Optional[str],
         survey_weights: Optional[np.ndarray] = None,
         survey_weight_type: str = "pweight",
-        resolved_survey: object = None,
+        resolved_survey: Optional["ResolvedSurveyDesign"] = None,
         vcov_type: str = "hc1",
     ) -> Tuple[
         Dict[Tuple[Any, int], float],
@@ -1698,6 +1705,35 @@ class SunAbraham:
 
         return event_study_effects, cohort_weights
 
+    @overload
+    def _compute_overall_att(
+        self,
+        df: pd.DataFrame,
+        first_treat: str,
+        event_study_effects: Dict[int, Dict[str, Any]],
+        cohort_effects: Dict[Tuple[Any, int], float],
+        cohort_weights: Dict[int, Dict[Any, float]],
+        vcov_cohort: np.ndarray,
+        coef_index_map: Dict[Tuple[Any, int], int],
+        survey_weight_col: Optional[str] = None,
+        return_overall_weights: Literal[False] = False,
+    ) -> Tuple[float, float]: ...
+
+    @overload
+    def _compute_overall_att(
+        self,
+        df: pd.DataFrame,
+        first_treat: str,
+        event_study_effects: Dict[int, Dict[str, Any]],
+        cohort_effects: Dict[Tuple[Any, int], float],
+        cohort_weights: Dict[int, Dict[Any, float]],
+        vcov_cohort: np.ndarray,
+        coef_index_map: Dict[Tuple[Any, int], int],
+        survey_weight_col: Optional[str] = None,
+        *,
+        return_overall_weights: Literal[True],
+    ) -> Tuple[float, float, Optional[Dict[Tuple[Any, int], float]]]: ...
+
     def _compute_overall_att(
         self,
         df: pd.DataFrame,
@@ -1709,7 +1745,10 @@ class SunAbraham:
         coef_index_map: Dict[Tuple[Any, int], int],
         survey_weight_col: Optional[str] = None,
         return_overall_weights: bool = False,
-    ) -> Tuple[float, float]:
+    ) -> Union[
+        Tuple[float, float],
+        Tuple[float, float, Optional[Dict[Tuple[Any, int], float]]],
+    ]:
         """
         Compute overall ATT as weighted average of post-treatment effects.
 
@@ -1808,7 +1847,7 @@ class SunAbraham:
         cluster_var: Optional[str],
         original_event_study: Dict[int, Dict[str, Any]],
         original_overall_att: float,
-        resolved_survey: object = None,
+        resolved_survey: Optional["ResolvedSurveyDesign"] = None,
         survey_weights: Optional[np.ndarray] = None,
         survey_weight_type: str = "pweight",
         survey_weight_col: Optional[str] = None,
@@ -2010,7 +2049,7 @@ class SunAbraham:
         cluster_var: Optional[str],
         original_event_study: Dict[int, Dict[str, Any]],
         original_overall_att: float,
-        resolved_survey: object,
+        resolved_survey: "ResolvedSurveyDesign",
         survey_weight_type: str,
         survey_weight_col: Optional[str],
         rng: np.random.Generator,

@@ -1428,7 +1428,7 @@ def _describe_assumption(estimator_name: str, results: Any = None) -> Dict[str, 
                 "event's post-window, so future-treated units can serve "
                 "as controls for earlier events)"
             )
-        block: Dict[str, Any] = {
+        block = {
             "parallel_trends_variant": "stacked_sub_experiment",
             "no_anticipation": True,
             "description": (

@@ -529,7 +529,7 @@ class WooldridgeDiD:
     def results_(self) -> WooldridgeDiDResults:
         if not self.is_fitted_:
             raise RuntimeError("Call fit() before accessing results_")
-        return self._results  # type: ignore[return-value]
+        return self._results
 
     def get_params(self) -> Dict[str, Any]:
         """Return estimator parameters (sklearn-compatible)."""
@@ -1252,7 +1252,7 @@ class WooldridgeDiD:
         else:
             _cl_coords = _cl_time = _cl_unit = None
 
-        coefs, resids, vcov = solve_ols(
+        coefs, resids, vcov = solve_ols(  # type: ignore[call-overload]  # mypy union-explosion limitation at this many Optional args
             X,
             y,
             cluster_ids=cluster_ids,

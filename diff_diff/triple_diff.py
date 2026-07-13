@@ -29,7 +29,7 @@ Reference:
 
 import warnings
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -37,6 +37,10 @@ import pandas as pd
 from diff_diff.linalg import _rank_guarded_inv, solve_logit, solve_ols
 from diff_diff.results import _format_survey_block, _get_significance_stars
 from diff_diff.utils import safe_inference
+
+if TYPE_CHECKING:
+    from diff_diff.survey import SurveyDesign
+
 
 _MIN_CELL_SIZE = 10
 
@@ -2134,7 +2138,7 @@ def triple_difference(
     rank_deficient_action: str = "warn",
     epv_threshold: float = 10,
     pscore_fallback: str = "error",
-    survey_design: object = None,
+    survey_design: Optional["SurveyDesign"] = None,
 ) -> TripleDifferenceResults:
     """
     Estimate Triple Difference (DDD) treatment effect.

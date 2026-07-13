@@ -2239,7 +2239,7 @@ class ChaisemartinDHaultfoeuille(ChaisemartinDHaultfoeuilleBootstrapMixin):
                 set_ids=set_ids_arr,
             )
             # Surface A11 warnings from multi-horizon computation
-            mh_a11 = multi_horizon_dids.pop("_a11_warnings", None)
+            mh_a11 = multi_horizon_dids.pop("_a11_warnings", None)  # type: ignore[call-overload]  # sentinel str key in int-keyed dict
             if mh_a11:
                 warnings.warn(
                     f"Multi-horizon control-availability violations in "
@@ -2301,6 +2301,8 @@ class ChaisemartinDHaultfoeuille(ChaisemartinDHaultfoeuilleBootstrapMixin):
             # tensor is None and the bootstrap has no cell-level path
             # to take).
             _mh_pp_cache: Dict[int, np.ndarray] = {}
+            # multi_horizon_if is computed unconditionally in this branch.
+            assert multi_horizon_if is not None
             # Compute inference for ALL horizons 1..L_max (including l=1)
             # so the event_study_effects dict uses a consistent estimand
             # (per-group DID_{g,l}) across all horizons.
@@ -2461,7 +2463,7 @@ class ChaisemartinDHaultfoeuille(ChaisemartinDHaultfoeuilleBootstrapMixin):
                     set_ids=set_ids_arr,
                 )
                 # Surface placebo A11 warnings
-                pl_a11 = multi_horizon_placebos.pop("_a11_warnings", None)
+                pl_a11 = multi_horizon_placebos.pop("_a11_warnings", None)  # type: ignore[call-overload]  # sentinel str key in int-keyed dict
                 if pl_a11:
                     warnings.warn(
                         f"Multi-horizon placebo control-availability "
@@ -2490,8 +2492,10 @@ class ChaisemartinDHaultfoeuille(ChaisemartinDHaultfoeuilleBootstrapMixin):
                 )
                 # Per-placebo-horizon analytical SE via cohort recentering
                 # (same pattern as positive-horizon SE at Step 12c).
-                placebo_horizon_se: Dict[int, float] = {}
-                placebo_horizon_inference: Dict[int, Dict[str, Any]] = {}
+                placebo_horizon_se = {}
+                placebo_horizon_inference = {}
+                # placebo_horizon_if is computed unconditionally in this branch.
+                assert placebo_horizon_if is not None
                 singleton_baseline_set_pl = set(singleton_baseline_groups)
                 eligible_mask_pl = np.array(
                     [g not in singleton_baseline_set_pl for g in all_groups],
@@ -3951,7 +3955,7 @@ class ChaisemartinDHaultfoeuille(ChaisemartinDHaultfoeuilleBootstrapMixin):
             # predict_het + survey continues to work via the existing
             # _compute_path_heterogeneity_test → _compute_heterogeneity_test
             # forward path.
-            _path_het_placebo = L_max if self.placebo else 0
+            _path_het_placebo = L_max if (self.placebo and L_max is not None) else 0
             if _path_het_placebo > 0 and _obs_survey_info is not None:
                 _path_het_placebo = 0
             path_heterogeneity_effects = _compute_path_heterogeneity_test(
@@ -4758,7 +4762,7 @@ def _compute_covariate_residualization(
     n_groups, n_periods = Y_mat.shape
     n_covariates = X_cell.shape[2]
     Y_resid = Y_mat.copy()
-    diagnostics: Dict[str, Any] = {}
+    diagnostics: Dict[float, Dict[str, Any]] = {}
     failed_baselines: set = set()
 
     # Pre-compute observation validity masks for first-differencing.
@@ -5078,6 +5082,8 @@ def _compute_heterogeneity_test(
     # the explicit raise.
     use_survey = obs_survey_info is not None and group_ids_order is not None
     if use_survey:
+        # The flag definition above guarantees these (mypy can't track it).
+        assert obs_survey_info is not None and group_ids_order is not None
         from diff_diff.survey import (
             compute_replicate_if_variance,
             compute_survey_if_variance,
@@ -5375,6 +5381,8 @@ def _compute_heterogeneity_test(
                 else:
                     df_s_local = min(int(df_s), int(n_valid_het) - 1)
             else:
+                # Survey heterogeneity path: obs-level info is present.
+                assert obs_survey_info is not None
                 obs_tids = np.asarray(obs_survey_info["time_ids"])
                 periods_arr = np.asarray(obs_survey_info["periods"])
                 psi_obs = np.zeros(len(obs_w_raw), dtype=np.float64)
@@ -5781,7 +5789,7 @@ def _compute_multi_horizon_dids(
 
     # Attach A11 warnings to the results for the caller to surface
     if a11_multi_warnings:
-        results["_a11_warnings"] = a11_multi_warnings  # type: ignore[assignment]
+        results["_a11_warnings"] = a11_multi_warnings  # type: ignore[index]  # sentinel str key in int-keyed dict
 
     return results
 
@@ -7272,7 +7280,7 @@ def _compute_multi_horizon_placebos(
         }
 
     if a11_placebo_warnings:
-        results["_a11_warnings"] = a11_placebo_warnings  # type: ignore[assignment]
+        results["_a11_warnings"] = a11_placebo_warnings  # type: ignore[index]  # sentinel str key in int-keyed dict
 
     return results
 
@@ -8340,6 +8348,8 @@ def _survey_se_from_group_if(
                 use_cell_allocator = False
 
     if use_cell_allocator:
+        # The flag definition above guarantees these (mypy can't track it).
+        assert U_centered_per_period is not None and time_ids is not None and periods is not None
         tids_eff = np.asarray(time_ids)[pos_mask]
         # Map row's group to an index in eligible_groups (−1 when the
         # group is ineligible — singleton-baseline exclusion drops it).

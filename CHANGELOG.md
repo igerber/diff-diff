@@ -8,6 +8,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Internal: mypy enforced at zero errors.** Triaged the 184 pre-existing
+  `mypy diff_diff` errors to an enforceable zero and added a blocking Mypy job to
+  the Lint CI workflow (pinned `mypy==2.1.0` + pinned numpy/pandas/scipy for stub
+  stability; the package itself is not installed). Real fixes include: 19 survey
+  parameters typed `object` across 13 estimator files (now properly typed via
+  `TYPE_CHECKING` imports), four stale return-arity annotations, a helper that
+  broke the `solve_ols` overload chain, a float-keyed diagnostics dict annotated
+  str-keyed, duplicate conflicting local annotations, a missing bootstrap-mixin
+  attribute stub, and ~50 explicit `assert ... is not None` narrowings at
+  flag-guarded blocks (documenting real invariants). Residual noise is contained
+  by documented suppressions (`prep_dgp` per-module `[index]` override,
+  `matplotlib`/`plotly` `follow_imports = "skip"`, a handful of reasoned inline
+  ignores) with `warn_unused_ignores = true` to keep them from going stale — 23
+  already-stale ignores were removed. Tightening tracked in TODO.md. No public
+  API or numerical behavior change.
 - **Internal: rdrobust sharp-RD bandwidth-selection port (`diff_diff/_rdrobust_port.py`).**
   Step-1 machinery for the upcoming `RegressionDiscontinuity` estimator: a faithful
   pure-Python NumPy/SciPy port of R `rdrobust` 4.0.0's `rdbwselect` sharp-RD path (all 10 data-driven

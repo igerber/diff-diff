@@ -48,6 +48,7 @@ generic sparse-FE, QR+SVD rank-detection redundancy, `check_finite` bypass — m
 | Issue | Location | Origin | Effort | Priority |
 |-------|----------|--------|--------|----------|
 | ChangesInChanges/QDiD tutorial notebook (2x2 distributional walkthrough: QTE grid, interior range, uniform bands, CiC-vs-QDiD comparison) - deferred from the implementation PR as a documented decision. | `docs/tutorials/` | #682 | Mid | Low |
+| Tighten the mypy suppressions that back the enforced-zero posture: burn down `prep_dgp`'s per-module `[index]` override (needs a None-vs-array restructure that preserves the seeded RNG stream), and evaluate re-enabling the globally disabled codes (`arg-type`, `return-value`, `var-annotated`, `assignment`) one at a time — `assignment` alone hid several real annotation drifts found during the 2026-07 triage. | `pyproject.toml` `[tool.mypy]`, `diff_diff/prep_dgp.py` | lint-CI | Mid | Low |
 | `practitioner_next_steps()` dedicated handler for `ChangesInChangesResults` (currently falls back to `_handle_generic`, which is safe; a dedicated handler is the established full-integration step, cf. HAD Phase 5). | `diff_diff/practitioner.py` | #682 | Quick | Low |
 
 ---
@@ -173,46 +174,53 @@ For survey-specific limitations (NotImplementedError paths), see the
 
 Target: ideally < 1000 lines per module; modules ≥3000 lines are candidates for splitting,
 2000-3000 are monitored, 1000-2000 are accepted as a cohesion / scope trade-off. Updated
-2026-05-15.
+2026-07-13.
 
 | File | Lines | Action |
 |------|-------|--------|
-| `chaisemartin_dhaultfoeuille.py` | 8636 | Consider splitting (per-path / placebos / survey IF / aggregation) |
-| `had_pretests.py` | 4951 | Consider splitting (Stute / Yatchew / QUG / joint pretests) |
-| `had.py` | 4593 | Consider splitting (continuous / mass-point / event-study / survey paths) |
-| `staggered.py` | 3963 | Consider splitting — grew through survey + aggregation features |
-| `linalg.py` | 3601 | Consider splitting (vcov surfaces) only if cohesion preserved — unified backend; vcov / solver paths tightly coupled |
-| `diagnostic_report.py` | 3380 | Consider splitting (per-method renderers + provenance) |
-| `power.py` | 3196 | Consider splitting (power analysis + MDE + sample size) |
-| `synthetic_did.py` | 2819 | Monitor — variance methods + survey paths |
-| `honest_did.py` | 2785 | Monitor |
-| `business_report.py` | 2653 | Monitor — per-method narrative renderers |
-| `imputation.py` | 2475 | Monitor |
-| `survey.py` | 2466 | Monitor — grew with Phase 6 features |
-| `utils.py` | 2396 | Monitor |
-| `prep_dgp.py` | 2057 | Monitor |
-| `triple_diff.py` | 2053 | Monitor |
-| `estimators.py` | 1991 | Acceptable |
-| `two_stage.py` | 1985 | Acceptable |
-| `chaisemartin_dhaultfoeuille_results.py` | 1981 | Acceptable |
-| `prep.py` | 1876 | Acceptable |
-| `efficient_did.py` | 1793 | Acceptable |
-| `sun_abraham.py` | 1713 | Acceptable |
-| `continuous_did.py` | 1682 | Acceptable |
-| `results.py` | 1676 | Acceptable |
-| `staggered_triple_diff.py` | 1619 | Acceptable |
-| `_nprobust_port.py` | 1412 | Acceptable |
-| `practitioner.py` | 1402 | Acceptable |
-| `trop_global.py` | 1350 | Acceptable |
-| `trop_local.py` | 1339 | Acceptable |
-| `local_linear.py` | 1332 | Acceptable |
-| `wooldridge.py` | 1305 | Acceptable |
+| `chaisemartin_dhaultfoeuille.py` | 8812 | Consider splitting (per-path / placebos / survey IF / aggregation) |
+| `linalg.py` | 5424 | Consider splitting (vcov surfaces) only if cohesion preserved — unified backend; vcov / solver paths tightly coupled |
+| `staggered.py` | 4992 | Consider splitting — grew through survey + aggregation features |
+| `had.py` | 4748 | Consider splitting (continuous / mass-point / event-study / survey paths) |
+| `had_pretests.py` | 4664 | Consider splitting (Stute / Yatchew / QUG / joint pretests) |
+| `diagnostic_report.py` | 4135 | Consider splitting (per-method renderers + provenance) |
+| `spillover.py` | 3655 | Consider splitting |
+| `two_stage.py` | 3512 | Consider splitting |
+| `power.py` | 3488 | Consider splitting (power analysis + MDE + sample size) |
+| `utils.py` | 3483 | Consider splitting |
+| `synthetic_control_results.py` | 3294 | Consider splitting |
+| `honest_did.py` | 3068 | Consider splitting |
+| `imputation.py` | 2898 | Monitor |
+| `synthetic_did.py` | 2826 | Monitor — variance methods + survey paths |
+| `business_report.py` | 2728 | Monitor — per-method narrative renderers |
+| `survey.py` | 2681 | Monitor — grew with Phase 6 features |
+| `synthetic_control.py` | 2526 | Monitor |
+| `prep_dgp.py` | 2524 | Monitor |
+| `estimators.py` | 2441 | Monitor |
+| `continuous_did.py` | 2431 | Monitor |
+| `sun_abraham.py` | 2314 | Monitor |
+| `triple_diff.py` | 2231 | Monitor |
+| `wooldridge.py` | 2192 | Monitor |
+| `efficient_did.py` | 2083 | Monitor |
+| `chaisemartin_dhaultfoeuille_results.py` | 2004 | Monitor |
+| `results.py` | 1948 | Acceptable |
+| `pretrends.py` | 1879 | Acceptable |
+| `prep.py` | 1878 | Acceptable |
+| `efficient_did_covariates.py` | 1818 | Acceptable |
+| `staggered_triple_diff.py` | 1680 | Acceptable |
+| `trop_local.py` | 1662 | Acceptable |
+| `lpdid.py` | 1607 | Acceptable |
+| `stacked_did.py` | 1589 | Acceptable |
+| `practitioner.py` | 1511 | Acceptable |
+| `_nprobust_port.py` | 1425 | Acceptable |
+| `bacon.py` | 1376 | Acceptable |
+| `local_linear.py` | 1325 | Acceptable |
+| `trop_global.py` | 1298 | Acceptable |
+| `staggered_aggregation.py` | 1204 | Acceptable |
 | `chaisemartin_dhaultfoeuille_bootstrap.py` | 1175 | Acceptable |
-| `bacon.py` | 1144 | Acceptable |
-| `pretrends.py` | 1133 | Acceptable |
-| `stacked_did.py` | 1050 | Acceptable |
-| `conley.py` | 1006 | Acceptable |
-| `visualization/` | 4316 | Subpackage (split across 7 files) — OK |
+| `conley.py` | 1140 | Acceptable |
+| `trop.py` | 1026 | Acceptable |
+| `profile.py` | 1001 | Acceptable |
 
 ### Standard Error Consistency
 
@@ -233,8 +241,23 @@ IF/GMM estimators are tracked in
 
 ### Type Annotations
 
-Mypy reports 0 errors. All mixin `attr-defined` errors resolved via `TYPE_CHECKING`-guarded
-method stubs in the bootstrap mixin classes.
+`mypy diff_diff` is **enforced at zero errors** by the Lint CI workflow's Mypy job at the
+pinned `mypy==2.1.0` (ungated, every PR push; pins synced with the `dev` extra via
+`TestLintWorkflowPinSync`). Zero is reached with documented suppressions — tightening them
+is tracked in Actionable Backlog → Testing / docs:
+
+- Global `disable_error_code = ["arg-type", "return-value", "var-annotated", "assignment"]`
+  (numpy-stub compatibility, long-standing).
+- Per-module override: `diff_diff.prep_dgp` disables `[index]` (seeded-DGP Optional
+  covariate arrays; see the comment in `pyproject.toml`).
+- `matplotlib.*` / `plotly.*` use `follow_imports = "skip"` so local and CI runs see
+  identical `Any` surfaces regardless of what plotting stubs are installed.
+- A handful of reasoned inline `# type: ignore[code]` comments, each with a why-comment;
+  `warn_unused_ignores = true` prevents them from going stale.
+
+Mixin cross-class attribute access uses `TYPE_CHECKING`-guarded attribute/method stubs in
+the bootstrap mixin classes; keep stubs in sync with implementations (stub drift shows up
+as `[misc]` unpack-arity errors).
 
 ### Test Coverage
 

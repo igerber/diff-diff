@@ -24,7 +24,7 @@ IF-vs-sandwich taxonomy.
 """
 
 import warnings
-from typing import Any, Callable, Dict, List, NamedTuple, Optional, Set, Tuple
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, NamedTuple, Optional, Set, Tuple
 
 import numpy as np
 import pandas as pd
@@ -44,6 +44,9 @@ from diff_diff.utils import (
     safe_inference,
     snap_absorbed_regressors,
 )
+
+if TYPE_CHECKING:
+    from diff_diff.survey import SurveyDesign
 
 
 class _UntreatedProjection(NamedTuple):
@@ -322,7 +325,7 @@ class ImputationDiD(ImputationDiDBootstrapMixin):
         covariates: Optional[List[str]] = None,
         aggregate: Optional[str] = None,
         balance_e: Optional[int] = None,
-        survey_design: object = None,
+        survey_design: Optional["SurveyDesign"] = None,
     ) -> ImputationDiDResults:
         """
         Fit the imputation DiD estimator.
@@ -583,6 +586,8 @@ class ImputationDiD(ImputationDiDBootstrapMixin):
             if resolved_survey.psu is not None and survey_metadata is not None:
                 from diff_diff.survey import compute_survey_metadata
 
+                # resolved_survey non-None implies survey_design was passed.
+                assert survey_design is not None
                 raw_w = (
                     data[survey_design.weights].values.astype(np.float64)
                     if survey_design.weights
@@ -784,14 +789,15 @@ class ImputationDiD(ImputationDiDBootstrapMixin):
             _cohorts_treated = df.loc[omega_1_mask, first_treat].values
 
             # Derive keys from actual outputs (excludes filtered/Prop5/ref)
+            _es_effects = event_study_effects or {}
+            _grp_effects = group_effects or {}
             _sorted_rel_times = sorted(
                 e
-                for e in (event_study_effects or {}).keys()
-                if np.isfinite(event_study_effects[e]["effect"])
-                and event_study_effects[e].get("n_obs", 1) > 0
+                for e in _es_effects.keys()
+                if np.isfinite(_es_effects[e]["effect"]) and _es_effects[e].get("n_obs", 1) > 0
             )
             _sorted_groups = sorted(
-                g for g in (group_effects or {}).keys() if np.isfinite(group_effects[g]["effect"])
+                g for g in _grp_effects.keys() if np.isfinite(_grp_effects[g]["effect"])
             )
             _n_es = len(_sorted_rel_times)
 
@@ -858,8 +864,8 @@ class ImputationDiD(ImputationDiDBootstrapMixin):
 
             # Build full-sample estimate from actual effects
             _full_est = [overall_att]
-            _full_est.extend([event_study_effects[e]["effect"] for e in _sorted_rel_times])
-            _full_est.extend([group_effects[g]["effect"] for g in _sorted_groups])
+            _full_est.extend([_es_effects[e]["effect"] for e in _sorted_rel_times])
+            _full_est.extend([_grp_effects[g]["effect"] for g in _sorted_groups])
 
             _vcov_rep_imp, _n_valid_rep_imp = compute_replicate_refit_variance(
                 _refit_imp, np.array(_full_est), resolved_survey
@@ -867,6 +873,8 @@ class ImputationDiD(ImputationDiDBootstrapMixin):
             overall_se = float(np.sqrt(max(_vcov_rep_imp[0, 0], 0.0)))
 
             # Override df if replicates were dropped
+            # Replicate-refit path is only reached with a resolved design.
+            assert resolved_survey is not None
             if _n_valid_rep_imp < resolved_survey.n_replicates:
                 _survey_df = _n_valid_rep_imp - 1 if _n_valid_rep_imp > 1 else 0
             if survey_metadata is not None:
@@ -1383,7 +1391,7 @@ class ImputationDiD(ImputationDiDBootstrapMixin):
         kept_cov_mask: Optional[np.ndarray] = None,
         survey_weights_0: Optional[np.ndarray] = None,
         proj_cache: Optional[Dict[Any, _UntreatedProjection]] = None,
-    ) -> Tuple[np.ndarray, np.ndarray]:
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         """
         Compute cluster-level influence function sums (Theorem 3).
 
@@ -2464,6 +2472,8 @@ class ImputationDiD(ImputationDiDBootstrapMixin):
             # Zero-pad to full panel length (subpopulation approach):
             # observations outside Omega_0 contribute zero to the score,
             # but preserve PSU/strata structure for design-based variance.
+            # The survey full-design path always supplies the full obs count.
+            assert n_obs_full is not None
             n_full_obs = n_obs_full
             k_vcov = X_for_vcov.shape[1]
             X_full = np.zeros((n_full_obs, k_vcov), dtype=np.float64)
@@ -2817,7 +2827,7 @@ def imputation_did(
     covariates: Optional[List[str]] = None,
     aggregate: Optional[str] = None,
     balance_e: Optional[int] = None,
-    survey_design: object = None,
+    survey_design: Optional["SurveyDesign"] = None,
     vcov_type: str = "hc1",
     **kwargs,
 ) -> ImputationDiDResults:

@@ -23,7 +23,7 @@ estimators vs analytical-sandwich estimators" for the structural rationale.
 """
 
 import warnings
-from typing import Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -32,6 +32,9 @@ from diff_diff.efficient_did_bootstrap import (
     EDiDBootstrapResults,
     EfficientDiDBootstrapMixin,
 )
+
+if TYPE_CHECKING:
+    from diff_diff.survey import ResolvedSurveyDesign
 from diff_diff.efficient_did_covariates import (
     OMEGA_RIDGE_DEFAULT,
     _silverman_bandwidth,
@@ -343,7 +346,7 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
         self.omega_ridge = omega_ridge
         self.is_fitted_ = False
         self.results_: Optional[EfficientDiDResults] = None
-        self._unit_resolved_survey = None
+        self._unit_resolved_survey: Optional["ResolvedSurveyDesign"] = None
         self._validate_params()
 
     def _validate_params(self) -> None:
@@ -744,6 +747,7 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
         if resolved_survey is not None:
             # Use the resolved survey's weights (already normalized per weight_type)
             # subset to unit level via _unit_first_panel_row (aligned to all_units)
+            assert self._unit_resolved_survey is not None
             unit_level_weights = self._unit_resolved_survey.weights
         self._unit_level_weights = unit_level_weights
 
@@ -1057,7 +1061,7 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
                                 "y1_col": effective_p1_col,
                             }
                         )
-                        group_time_effects[(g, t)] = None  # type: ignore[assignment]
+                        group_time_effects[(g, t)] = None
                         continue
 
                     # ----- Legacy (omega_ridge=0) covariate path -----
@@ -1433,6 +1437,8 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
         once in ``fit()``, ensuring consistent unit-level arrays and
         avoiding repeated subsetting of panel-level survey data.
         """
+        # Built once in fit() before any call lands here (see docstring).
+        assert self._unit_resolved_survey is not None
         if self._unit_resolved_survey.uses_replicate_variance:
             from diff_diff.survey import compute_replicate_if_variance
 
@@ -1595,6 +1601,8 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
         # the survey-weighted WIF term). Dispatch replicate vs TSL.
         if self._unit_resolved_survey is not None:
             uw = self._unit_level_weights
+            # Set together with _unit_resolved_survey in fit().
+            assert uw is not None
             total_w = float(np.sum(uw))
             psi_total = uw * agg_eif / total_w + wif / total_w
 
@@ -1713,6 +1721,8 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
 
             if self._unit_resolved_survey is not None:
                 uw = self._unit_level_weights
+                # Set together with _unit_resolved_survey in fit().
+                assert uw is not None
                 total_w = float(np.sum(uw))
                 psi_total = uw * agg_eif / total_w + wif_e / total_w
 

@@ -629,7 +629,7 @@ class WooldridgeDiDResults:
                 lines.append("-" * 70)
 
         def _fmt_row(label: str, att: float, se: float, t: float, p: float, ci: Tuple) -> str:
-            from diff_diff.results import _get_significance_stars  # type: ignore
+            from diff_diff.results import _get_significance_stars
 
             stars = _get_significance_stars(p) if not np.isnan(p) else ""
             ci_lo = f"{ci[0]:.4f}" if not np.isnan(ci[0]) else "NaN"
@@ -816,7 +816,7 @@ class WooldridgeDiDResults:
         # cohort_share→cell (or any cross-scheme) stale-cache bugs.
         self.aggregate("event", weights=weights)
 
-        from diff_diff.visualization import plot_event_study  # type: ignore
+        from diff_diff.visualization import plot_event_study
 
         effects = {k: v["att"] for k, v in (self.event_study_effects or {}).items()}
         if weights == "cohort_share":

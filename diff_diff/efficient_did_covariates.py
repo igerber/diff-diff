@@ -644,6 +644,8 @@ def estimate_inverse_propensity_sieve(
         # Unweighted: (Psi_gp' Psi_gp) beta = Psi_all.sum(axis=0)
         # Weighted:   (Psi_gp' W_group Psi_gp) beta = (w_all * Psi_all).sum(axis=0)
         if w_group is not None:
+            # w_group and unit_weights are supplied together (survey path).
+            assert unit_weights is not None
             A = Psi_gp.T @ (w_group[:, None] * Psi_gp)
             b = (unit_weights[:, None] * basis_all).sum(axis=0)
         else:

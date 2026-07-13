@@ -4677,25 +4677,42 @@ class TestLintWorkflowPinSync:
     LINT_WORKFLOW = pathlib.Path(__file__).resolve().parent.parent / ".github/workflows/lint.yml"
     PYPROJECT = pathlib.Path(__file__).resolve().parent.parent / "pyproject.toml"
 
+    TOOLS = ("ruff", "black", "mypy")
+
     def _workflow_pins(self) -> "dict[str, str]":
         text = self.LINT_WORKFLOW.read_text()
         install_lines = [line for line in text.splitlines() if "pip install" in line]
         assert install_lines, "lint.yml must contain a pip install step for the linters"
-        pins = dict(re.findall(r"\b(ruff|black)==([0-9][\w.]*)", "\n".join(install_lines)))
-        assert set(pins) == {
-            "ruff",
-            "black",
-        }, f"lint.yml must pip-install pinned ruff and black; found pins for {sorted(pins)}"
+        pins = dict(re.findall(r"\b(ruff|black|mypy)==([0-9][\w.]*)", "\n".join(install_lines)))
+        assert set(pins) == set(
+            self.TOOLS
+        ), f"lint.yml must pip-install pinned {self.TOOLS}; found pins for {sorted(pins)}"
         return pins
 
     def _pyproject_pins(self) -> "dict[str, str]":
         text = self.PYPROJECT.read_text()
-        pins = dict(re.findall(r'"(ruff|black)==([0-9][\w.]*)"', text))
-        assert set(pins) == {
-            "ruff",
-            "black",
-        }, f"pyproject dev extra must pin ruff and black exactly; found {sorted(pins)}"
+        pins = dict(re.findall(r'"(ruff|black|mypy)==([0-9][\w.]*)"', text))
+        assert set(pins) == set(
+            self.TOOLS
+        ), f"pyproject dev extra must pin {self.TOOLS} exactly; found {sorted(pins)}"
         return pins
+
+    def test_mypy_job_stub_deps_exact_pinned(self):
+        """The Mypy job installs numpy/pandas/scipy so mypy sees real stubs
+        (an absent numpy silently becomes Any under ignore_missing_imports and
+        CI would go green while local runs stay red). Those stub pins are
+        CI-only (pyproject keeps runtime floors), so exactness is asserted
+        here rather than synced to pyproject."""
+        text = self.LINT_WORKFLOW.read_text()
+        install_lines = [line for line in text.splitlines() if "pip install" in line]
+        stub_pins = dict(
+            re.findall(r"\b(numpy|pandas|scipy)==([0-9][\w.]*)", "\n".join(install_lines))
+        )
+        assert set(stub_pins) == {"numpy", "pandas", "scipy"}, (
+            f"lint.yml's Mypy job must exact-pin numpy, pandas, and scipy for "
+            f"stub stability; found pins for {sorted(stub_pins)}. See the "
+            f"comment above the install step in lint.yml."
+        )
 
     def test_lint_workflow_pins_match_pyproject(self):
         wf = self._workflow_pins()

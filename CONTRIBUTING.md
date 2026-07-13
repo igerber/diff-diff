@@ -8,16 +8,17 @@ push, and its `Lint Gate` job is a required status check:
 ```bash
 ruff check diff_diff tests
 black diff_diff tests
+mypy diff_diff
 ```
 
 - Tool versions are **pinned exactly** in the `dev` extra of `pyproject.toml`
-  (`black`, `ruff`, `mypy`). The Lint workflow currently mirrors the `ruff`
-  and `black` pins (`.github/workflows/lint.yml`; the sync is enforced by
-  `TestLintWorkflowPinSync`) — `mypy` is pinned in `pyproject.toml` only,
-  until the planned type-check CI job lands. A version bump is a deliberate
-  PR updating both surfaces together. Refresh with `pip install -e ".[dev]"`.
-  The pinned tools require Python >= 3.10 (dev tooling only; the library
-  itself still supports Python 3.9).
+  (`black`, `ruff`, `mypy`) and mirrored in `.github/workflows/lint.yml`
+  (all three; the sync is enforced by `TestLintWorkflowPinSync`). `mypy
+  diff_diff` is enforced at zero errors by the Lint workflow's Mypy job.
+  A version bump is a deliberate PR updating both surfaces together.
+  Refresh with `pip install -e ".[dev]"`. The pinned tools require
+  Python >= 3.10 (dev tooling only; the library itself still supports
+  Python 3.9).
 - `[tool.ruff.lint.per-file-ignores]` entries are deliberate (trop
   logger-before-imports E402, honest_did math-notation `l` E741, `__init__`
   re-export F401, conftest import ordering E402). Do not "fix" those patterns

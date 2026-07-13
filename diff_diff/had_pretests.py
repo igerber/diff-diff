@@ -4104,10 +4104,14 @@ def _compose_verdict_overall_survey(
          no rejection -> fail-to-reject string.
     All branches end with `_QUG_DEFERRED_SUFFIX`.
     """
-    stute_ok = stute is not None and bool(np.isfinite(stute.p_value))
-    yatchew_ok = yatchew is not None and bool(np.isfinite(yatchew.p_value))
-    stute_rej = stute_ok and bool(stute.reject)
-    yatchew_rej = yatchew_ok and bool(yatchew.reject)
+    if stute is not None and bool(np.isfinite(stute.p_value)):
+        stute_ok, stute_rej = True, bool(stute.reject)
+    else:
+        stute_ok, stute_rej = False, False
+    if yatchew is not None and bool(np.isfinite(yatchew.p_value)):
+        yatchew_ok, yatchew_rej = True, bool(yatchew.reject)
+    else:
+        yatchew_ok, yatchew_rej = False, False
 
     reasons = []
     if stute_rej:
@@ -4541,6 +4545,8 @@ def did_had_pretest_workflow(
             # starting with "inconclusive" even when all_pass=True).
             verdict = _compose_verdict_event_study_survey(pretrends_joint, homogeneity_joint)
         else:
+            # use_survey_path=False branch: qug_res was computed above.
+            assert qug_res is not None
             qug_ok = bool(np.isfinite(qug_res.p_value))
             all_pass = bool(
                 qug_ok
@@ -4639,6 +4645,8 @@ def did_had_pretest_workflow(
         # R7 P1 fix: explicit survey-aware verdict composer.
         verdict = _compose_verdict_overall_survey(stute_res, yatchew_res)
     else:
+        # use_survey_path=False branch: qug_res was computed above.
+        assert qug_res is not None
         qug_conclusive = bool(np.isfinite(qug_res.p_value))
         any_reject = qug_res.reject or stute_res.reject or yatchew_res.reject
         all_pass = bool(qug_conclusive and linearity_conclusive and not any_reject)

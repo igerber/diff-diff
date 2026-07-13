@@ -26,7 +26,7 @@ identification argument (Proposition 2.3 + Section 3.1 subsample logic).
 """
 
 import warnings
-from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Literal, Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd
@@ -42,6 +42,9 @@ from diff_diff.linalg import _rank_guarded_inv, solve_ols
 from diff_diff.results import SpilloverDiDResults
 from diff_diff.two_stage import _compute_gmm_corrected_meat, _LSMRUnconvergedError
 from diff_diff.utils import _iterative_fe_solve, safe_inference
+
+if TYPE_CHECKING:
+    from diff_diff.survey import SurveyDesign
 
 # Type alias mirroring diff_diff.conley.ConleyMetric so callers can supply
 # any of the built-in identifiers or a user callable returning a pairwise
@@ -221,7 +224,7 @@ def _compute_nearest_treated_distance_static(
         d_i = _compute_nearest_treated_distance_sparse(
             all_coords=all_coords,
             treated_coords=treated_coords,
-            metric=metric,  # type: ignore[arg-type]
+            metric=metric,
             cutoff_km=float(cutoff_km),
         )
     else:
@@ -454,7 +457,7 @@ def _compute_nearest_treated_distance_staggered(
             dists_to_cohort = _compute_nearest_treated_distance_sparse(
                 all_coords=all_coords,
                 treated_coords=treated_coords,
-                metric=metric,  # type: ignore[arg-type]
+                metric=metric,
                 cutoff_km=float(cutoff_km),
             )
         else:
@@ -2090,9 +2093,9 @@ class SpilloverDiD:
                     "is all 0/NaN). SpilloverDiD requires at least one treated unit."
                 )
         else:
-            ft_finite = np.isfinite(data[first_treat].astype(float).values)  # type: ignore[arg-type]
+            ft_finite = np.isfinite(data[first_treat].astype(float).values)
             n_treated_units = int(
-                pd.Series(ft_finite & (data[first_treat].astype(float).values != 0)).any()  # type: ignore[index]
+                pd.Series(ft_finite & (data[first_treat].astype(float).values != 0)).any()
             )
             if not n_treated_units:
                 raise ValueError(
@@ -2151,7 +2154,7 @@ class SpilloverDiD:
         treatment: Optional[str] = None,
         first_treat: Optional[str] = None,
         covariates: Optional[List[str]] = None,
-        survey_design: object = None,
+        survey_design: Optional["SurveyDesign"] = None,
     ) -> SpilloverDiDResults:
         """Fit the two-stage Gardner DiD with ring-indicator covariates.
 
@@ -2968,7 +2971,11 @@ class SpilloverDiD:
                 # `df_survey`, and meat — even though the same labels passed
                 # via `survey_design.psu=` would be rejected by the panel-
                 # survey validator at `survey.py:1015`.
-                if self.cluster is not None and resolved_survey.psu is None:
+                if (
+                    self.cluster is not None
+                    and resolved_survey is not None
+                    and resolved_survey.psu is None
+                ):
                     cluster_arr = np.asarray(effective_cluster_ids)
                     unit_arr_full = np.asarray(data[unit].values)
                     # Wave E.3: cluster_arr and the validation unit array
@@ -3043,9 +3050,11 @@ class SpilloverDiD:
             # n_control below). On no-survey path this is bit-identical
             # to pre-E.3 since survey_weights_fit is None.
             if survey_weights_fit is not None:
+                # survey_weights_fit derives from survey_weights (same resolution).
+                assert survey_weights is not None
                 # Project survey_finite_mask back into the fit-sample (finite_mask) frame
                 survey_finite_in_fit = (
-                    survey_finite_mask[finite_mask] if n_nan > 0 else (survey_weights > 0)
+                    survey_finite_mask[finite_mask] if (n_nan or 0) > 0 else (survey_weights > 0)
                 )
                 X_2_fit_active = X_2_fit[survey_finite_in_fit]
                 event_study_meta["n_obs_per_col"] = (
@@ -3081,7 +3090,7 @@ class SpilloverDiD:
         if survey_weights_fit is not None:
             solve_kwargs["weights"] = survey_weights_fit
             solve_kwargs["weight_type"] = "pweight"
-        coef, residuals, _ = solve_ols(X_2_fit, y_tilde_fit, **solve_kwargs)  # type: ignore[misc]
+        coef, residuals, _ = solve_ols(X_2_fit, y_tilde_fit, **solve_kwargs)
 
         # Wave D: Gardner GMM first-stage uncertainty correction.
         #
@@ -3158,6 +3167,7 @@ class SpilloverDiD:
         if survey_weights is not None and n_nan_or_zero > n_nan:
             # Project survey_finite_mask into the fit-sample (finite_mask)
             # frame: True for fit-sample rows that ALSO have weight > 0.
+            assert survey_weights_fit is not None
             survey_finite_in_fit = survey_finite_mask[finite_mask]
             X_2_kept_gamma = X_2_kept[survey_finite_in_fit]
             eps_2_fit_gamma = eps_2_fit[survey_finite_in_fit]

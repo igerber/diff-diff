@@ -630,6 +630,8 @@ class DifferenceInDifferences:
         # binary `time` column is integer 0/1 by convention and is unaffected
         # by the normalization.
         if _fit_vcov_type == "conley":
+            # Validated by the conley front-door (_validate_conley_estimator_inputs).
+            assert self.conley_coords is not None
             _conley_coords_arr: Optional[np.ndarray] = np.column_stack(
                 [
                     data[self.conley_coords[0]].values.astype(np.float64),
@@ -736,6 +738,8 @@ class DifferenceInDifferences:
                 if survey_metadata and survey_metadata.df_survey
                 else 0  # rank-deficient replicate → NaN inference
             )
+            # Replicate-refit path is only reached with a resolved design.
+            assert resolved_survey is not None
             if _n_valid_rep < resolved_survey.n_replicates:
                 _df_rep = _n_valid_rep - 1 if _n_valid_rep > 1 else 0
             if survey_metadata is not None:
@@ -1934,6 +1938,8 @@ class MultiPeriodDiD(DifferenceInDifferences):
         # coords + time/unit). When vcov_type != "conley", these are silently
         # ignored downstream (Phase 1 / 2 convention).
         if _fit_vcov_type == "conley":
+            # Validated by the conley front-door (_validate_conley_estimator_inputs).
+            assert self.conley_coords is not None
             _conley_coords_arr: Optional[np.ndarray] = np.column_stack(
                 [
                     data[self.conley_coords[0]].values.astype(np.float64),
@@ -1953,7 +1959,7 @@ class MultiPeriodDiD(DifferenceInDifferences):
 
         # Note: Wild bootstrap for multi-period effects is complex (multiple coefficients)
         # For now, we use analytical inference even if inference="wild_bootstrap"
-        coefficients, residuals, fitted, vcov = solve_ols(
+        coefficients, residuals, fitted, vcov = solve_ols(  # type: ignore[call-overload, misc]  # mypy gives up on the Optional-arg union explosion ("Not all union combinations were tried")
             X,
             y,
             return_fitted=True,
@@ -2149,6 +2155,8 @@ class MultiPeriodDiD(DifferenceInDifferences):
             df = resolved_survey.df_survey
         # Replicate df: rank-deficient → NaN inference; dropped replicates → n_valid-1
         if _uses_replicate_mp:
+            # The flag definition above guarantees this (mypy can't track it).
+            assert resolved_survey is not None
             if resolved_survey.df_survey is None:
                 df = 0  # rank-deficient replicate → NaN inference
             if _n_valid_rep_mp is not None and _n_valid_rep_mp < resolved_survey.n_replicates:

@@ -1232,7 +1232,16 @@ def _extract_unit_survey_weights(data, unit_col, survey_design, unit_order):
     return np.array([unit_w[u] for u in unit_order], dtype=np.float64)
 
 
-def _resolve_survey_for_fit(survey_design, data, inference_mode="analytical"):
+def _resolve_survey_for_fit(
+    survey_design: Optional["SurveyDesign"],
+    data: pd.DataFrame,
+    inference_mode: str = "analytical",
+) -> Tuple[
+    Optional["ResolvedSurveyDesign"],
+    Optional[np.ndarray],
+    str,
+    Optional["SurveyMetadata"],
+]:
     """
     Shared helper: validate and resolve a SurveyDesign for an estimator fit() call.
 
@@ -1759,6 +1768,8 @@ def _compute_if_variance_fast(
         return meat_scalar
 
     if scaffolding.mode == "no_strata_no_psu":
+        # Mode invariant: the scaffolding builder fills this field for this mode.
+        assert scaffolding.adjustment_direct is not None
         if scaffolding.n < 2:
             return float("nan")
         psi_mean = psi.mean()
@@ -1767,6 +1778,8 @@ def _compute_if_variance_fast(
         return _finalize(meat)
 
     if scaffolding.mode == "psu_only":
+        # Mode invariant: the scaffolding builder fills these fields for this mode.
+        assert scaffolding.n_psu_only is not None and scaffolding.adjustment_only is not None
         if scaffolding.n_psu_only < 2:
             if scaffolding.legitimate_zero_count > 0:
                 return 0.0
@@ -1783,6 +1796,8 @@ def _compute_if_variance_fast(
     S = len(scaffolding.n_psu_per_stratum)
     P = len(scaffolding.psu_stratum)
 
+    # Mode invariant: the stratified scaffolding builder fills these fields.
+    assert scaffolding.n_psu_per_stratum is not None and scaffolding.adjustment_h is not None
     psu_sums = np.bincount(scaffolding.psu_codes, weights=psi, minlength=P)
     sum_by_h = np.bincount(scaffolding.psu_stratum, weights=psu_sums, minlength=S)
     sum2_by_h = np.bincount(scaffolding.psu_stratum, weights=psu_sums * psu_sums, minlength=S)
@@ -2237,6 +2252,8 @@ def compute_replicate_vcov(
     from diff_diff.linalg import solve_ols
 
     rep_weights = resolved.replicate_weights
+    # Replicate-variance entry points are only reached on replicate designs.
+    assert rep_weights is not None
     method = resolved.replicate_method
     R = resolved.n_replicates
     k = X.shape[1]
@@ -2380,6 +2397,8 @@ def compute_replicate_if_variance(
     """
     psi = np.asarray(psi, dtype=np.float64).ravel()
     rep_weights = resolved.replicate_weights
+    # Replicate-variance entry points are only reached on replicate designs.
+    assert rep_weights is not None
     method = resolved.replicate_method
     R = resolved.n_replicates
 
@@ -2518,6 +2537,8 @@ def compute_replicate_refit_variance(
     full_sample_estimate = np.asarray(full_sample_estimate, dtype=np.float64).ravel()
     k = len(full_sample_estimate)
     rep_weights = resolved.replicate_weights
+    # Replicate-variance entry points are only reached on replicate designs.
+    assert rep_weights is not None
     method = resolved.replicate_method
     R = resolved.n_replicates
 

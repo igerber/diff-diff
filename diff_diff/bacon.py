@@ -12,7 +12,7 @@ Reference:
 
 import warnings
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -20,6 +20,9 @@ import pandas as pd
 from diff_diff.results import _format_survey_block
 from diff_diff.utils import pre_demean_norms, snap_absorbed_regressors
 from diff_diff.utils import within_transform as _within_transform_util
+
+if TYPE_CHECKING:
+    from diff_diff.survey import SurveyDesign
 
 
 @dataclass
@@ -1253,7 +1256,7 @@ def bacon_decompose(
     time: str,
     first_treat: str,
     weights: str = "exact",
-    survey_design: object = None,
+    survey_design: Optional["SurveyDesign"] = None,
 ) -> BaconDecompositionResults:
     """
     Convenience function for Goodman-Bacon decomposition.

@@ -43,12 +43,25 @@ reassociation, same as the draw-axis chunking above.
 from __future__ import annotations
 
 from collections import abc
-from typing import Callable, Iterable, Iterator, List, Optional, Sequence, Tuple, Union
+from typing import (
+    TYPE_CHECKING,
+    Callable,
+    Iterable,
+    Iterator,
+    List,
+    Optional,
+    Sequence,
+    Tuple,
+    Union,
+)
 
 import numpy as np
 
 from diff_diff._backend import HAS_RUST_BACKEND, _rust_bootstrap_weights
 from diff_diff.bootstrap_utils import generate_bootstrap_weights_batch_numpy
+
+if TYPE_CHECKING:
+    from diff_diff.survey import ResolvedSurveyDesign
 
 # Byte ceiling for a single ``(B, n_units)`` float64 weight block. 256 MB keeps
 # the live intermediate small at millions of units while staying large enough
@@ -118,7 +131,7 @@ def iter_weight_blocks(
 
 def iter_survey_multiplier_weight_blocks(
     n_bootstrap: int,
-    resolved_survey: object,
+    resolved_survey: Optional["ResolvedSurveyDesign"],
     weight_type: str,
     rng: np.random.Generator,
     *,
@@ -147,10 +160,12 @@ def iter_survey_multiplier_weight_blocks(
     if block_size < 1:
         raise ValueError(f"block_size must be >= 1, got {block_size}")
 
+    # Callers only reach the survey-multiplier path with a resolved design.
+    assert resolved_survey is not None
     psu = getattr(resolved_survey, "psu", None)
     strata = getattr(resolved_survey, "strata", None)
     if psu is None:
-        n_psu = len(resolved_survey.weights)  # type: ignore[attr-defined]
+        n_psu = len(resolved_survey.weights)
         psu_ids = np.arange(n_psu)
     else:
         psu_ids = np.unique(psu)

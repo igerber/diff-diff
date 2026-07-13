@@ -2896,7 +2896,7 @@ def _demean_map_rust(
     for start, stop in zip(bounds, bounds[1:]):
         x_mat = np.ascontiguousarray(np.column_stack(x_cols[start:stop]), dtype=np.float64)
         try:
-            out, iters = _rust_demean_map(  # type: ignore[misc]
+            out, iters = _rust_demean_map(
                 x_mat,
                 codes_mat,
                 n_groups,

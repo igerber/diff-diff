@@ -2873,7 +2873,7 @@ class DiagnosticReport:
                 return []
         else:
             try:
-                values = list(mapping)  # type: ignore[arg-type]
+                values = list(mapping)
             except Exception:  # noqa: BLE001
                 return []
         for val in values:
@@ -3787,6 +3787,8 @@ def _render_overall_interpretation(schema: Dict[str, Any], labels: Dict[str, str
             "or a survey-design collapse before interpreting."
         )
     elif val_finite:
+        # val_finite includes the isinstance check (mypy can't track flags).
+        assert isinstance(val, (int, float))
         direction = "increased" if val > 0 else "decreased" if val < 0 else "did not change"
         # Use the headline's own alpha rather than hardcoding 95 so prose
         # stays consistent with the rendered interval when alpha != 0.05.
@@ -3800,7 +3802,11 @@ def _render_overall_interpretation(schema: Dict[str, Any], labels: Dict[str, str
             and len(ci) == 2
             and all(isinstance(v, (int, float)) and np.isfinite(v) for v in ci)
         )
-        ci_str = f" ({ci_level}% CI: {ci[0]:.3g} to {ci[1]:.3g})" if ci_finite else ""
+        ci_str = (
+            f" ({ci_level}% CI: {ci[0]:.3g} to {ci[1]:.3g})"
+            if ci_finite and isinstance(ci, (list, tuple))
+            else ""
+        )
         p_str = f", p = {p:.3g}" if isinstance(p, (int, float)) and np.isfinite(p) else ""
         sentences.append(
             f"On {est}, {treatment} {direction} {outcome} by {val:.3g}{ci_str}{p_str}."

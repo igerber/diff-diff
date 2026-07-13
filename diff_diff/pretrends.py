@@ -64,7 +64,7 @@ def _compute_nis_acceptance_prob(
     accept_prob: float
     try:
         accept_prob = float(
-            stats.multivariate_normal.cdf(  # type: ignore[arg-type]
+            stats.multivariate_normal.cdf(
                 upper,
                 lower_limit=lower,
                 mean=np.zeros(len(weights)),

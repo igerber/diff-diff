@@ -8,7 +8,7 @@ of ATT(g,t) and aggregated parameters.
 
 import warnings
 from dataclasses import dataclass, field
-from typing import Any, Dict, Iterator, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, Iterator, List, Optional, Tuple
 
 import numpy as np
 
@@ -22,6 +22,9 @@ from diff_diff.bootstrap_chunking import (
 from diff_diff.bootstrap_utils import (
     compute_effect_bootstrap_stats as _compute_effect_bootstrap_stats_func,
 )
+
+if TYPE_CHECKING:
+    from diff_diff.survey import ResolvedSurveyDesign
 
 
 @dataclass
@@ -66,7 +69,7 @@ class EfficientDiDBootstrapMixin:
         cohort_fractions: Dict[float, float],
         cluster_indices: Optional[np.ndarray] = None,
         n_clusters: Optional[int] = None,
-        resolved_survey: object = None,
+        resolved_survey: Optional["ResolvedSurveyDesign"] = None,
         unit_level_weights: Optional[np.ndarray] = None,
     ) -> EDiDBootstrapResults:
         """Run multiplier bootstrap on stored EIF values.
@@ -117,6 +120,8 @@ class EfficientDiDBootstrapMixin:
         )
 
         if _use_survey_bootstrap:
+            # The flag definition above guarantees this (mypy can't track it).
+            assert resolved_survey is not None
             # PSU-level multiplier weights, generated and expanded one draw-block
             # at a time (unstratified designs tile the generation; stratified
             # designs have few PSUs and fall back to full generation + slicing).

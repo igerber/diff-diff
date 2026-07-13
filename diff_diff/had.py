@@ -3220,7 +3220,7 @@ class HeterogeneousAdoptionDiD:
         # narrow via isinstance (or by the aggregate they passed) to
         # access aggregate-specific fields.
         if aggregate == "event_study":
-            return self._fit_event_study(  # type: ignore[return-value]
+            return self._fit_event_study(
                 data=data,
                 outcome_col=outcome_col,
                 dose_col=dose_col,

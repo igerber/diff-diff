@@ -774,9 +774,9 @@ def apply_stratum_centering(
                 # the contribution is zero by construction). Skip to
                 # avoid a divide-by-zero on sqrt(n_h / 0).
                 continue
-            slc = [slice(None)] * tensor.ndim
-            slc[psu_axis] = mask_h
-            slc = tuple(slc)
+            slc_list: list = [slice(None)] * tensor.ndim
+            slc_list[psu_axis] = mask_h
+            slc = tuple(slc_list)
             tensor[slc] -= tensor[slc].mean(axis=psu_axis, keepdims=True)
             tensor[slc] *= np.sqrt(n_h / (n_h - 1))
     else:

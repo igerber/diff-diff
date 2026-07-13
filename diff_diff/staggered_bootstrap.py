@@ -360,6 +360,8 @@ class CallawaySantAnnaBootstrapMixin:
         _bootstrap_cluster_variance_unidentified = False
 
         if _use_survey_bootstrap:
+            # The flag definition above guarantees this (mypy can't track it).
+            assert resolved_survey_unit is not None
             # PSU-level multiplier weights, generated AND expanded one draw-block
             # at a time so the (n_bootstrap, n_units) matrix is never built in
             # full. This is the dominant allocation at large n_units, including
@@ -499,7 +501,10 @@ class CallawaySantAnnaBootstrapMixin:
             overall_col = len(columns)
             columns.append([(None, overall_combined_if)])
         es_col0 = len(columns)
+        # rel_periods is non-empty only when event-study info was built.
+        assert event_study_info is not None or not rel_periods
         for e in rel_periods:
+            assert event_study_info is not None
             columns.append([(None, event_study_info[e]["combined_if"])])
 
         perturbations = tiled_if_matmul(weight_stream, self.n_bootstrap, n_units, columns)
@@ -684,10 +689,13 @@ class CallawaySantAnnaBootstrapMixin:
             gt_cis = {gt: (np.nan, np.nan) for gt in gt_cis} if gt_cis else gt_cis
             gt_p_values = {gt: np.nan for gt in gt_p_values} if gt_p_values else gt_p_values
             if event_study_ses:
+                # ses/cis/p_values are populated together upstream.
+                assert event_study_cis is not None and event_study_p_values is not None
                 event_study_ses = {k: np.nan for k in event_study_ses}
                 event_study_cis = {k: (np.nan, np.nan) for k in event_study_cis}
                 event_study_p_values = {k: np.nan for k in event_study_p_values}
             if group_effect_ses:
+                assert group_effect_cis is not None and group_effect_p_values is not None
                 group_effect_ses = {k: np.nan for k in group_effect_ses}
                 group_effect_cis = {k: (np.nan, np.nan) for k in group_effect_cis}
                 group_effect_p_values = {k: np.nan for k in group_effect_p_values}

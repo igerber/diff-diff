@@ -2963,6 +2963,8 @@ class SyntheticControlResults:
             assert snap_cov is not None
             cal_cov = list(snap_cov.pre_periods) + list(snap_cov.post_periods)
             x1_rows, X0_rows = self._conformal_covariate_rows(covariates, cal_cov)
+            # covariates is non-None on this branch, so rows were built.
+            assert x1_rows is not None and X0_rows is not None
             # Covariate rows collapse with the SAME T*-block structure so the
             # collapsed panel remains a coherent Z (each block-averaged
             # covariate row enters the proxy like a block-averaged outcome).

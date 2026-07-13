@@ -43,6 +43,7 @@ class TwoStageDiDBootstrapMixin:
     alpha: float
     seed: Optional[int]
     horizon_max: Optional[int]
+    pretrends: bool
 
     if TYPE_CHECKING:
         from scipy import sparse

@@ -5,7 +5,7 @@ This module provides the mixin class containing methods for aggregating
 group-time average treatment effects into summary measures.
 """
 
-from typing import Any, Dict, List, Optional, Set, Tuple, Union
+from typing import Any, Dict, List, Literal, Optional, Set, Tuple, Union, overload
 
 import numpy as np
 import pandas as pd
@@ -70,7 +70,7 @@ class CallawaySantAnnaAggregationMixin:
         df: pd.DataFrame,
         unit: str,
         precomputed: Optional["PrecomputedData"] = None,
-    ) -> Tuple[float, float]:
+    ) -> Tuple[float, float, Optional[int]]:
         """
         Compute simple weighted average of ATT(g,t).
 
@@ -86,10 +86,10 @@ class CallawaySantAnnaAggregationMixin:
         in the overall ATT. Pre-treatment effects are computed for parallel
         trends assessment but are not aggregated into the overall ATT.
         """
-        effects = []
+        effects_list: List[Any] = []
         weights_list = []
         gt_pairs = []
-        groups_for_gt = []
+        groups_list: List[Any] = []
 
         # Fixed per-cohort aggregation weights (R's did::aggte pg = n_g / N),
         # preferring the unit-level RC mass so allow_unbalanced_panel weights the
@@ -101,7 +101,7 @@ class CallawaySantAnnaAggregationMixin:
             # Pre-treatment effects are for parallel trends, not overall ATT
             if t < g - self.anticipation:
                 continue
-            effects.append(data["effect"])
+            effects_list.append(data["effect"])
             # Use fixed cohort-level survey weight sum for aggregation.
             # For RCS, data["agg_weight"] holds the fixed cohort mass;
             # for panel, fallback to data["n_treated"].
@@ -110,10 +110,10 @@ class CallawaySantAnnaAggregationMixin:
             else:
                 weights_list.append(data.get("agg_weight", data["n_treated"]))
             gt_pairs.append((g, t))
-            groups_for_gt.append(g)
+            groups_list.append(g)
 
         # Guard against empty post-treatment set
-        if len(effects) == 0:
+        if len(effects_list) == 0:
             import warnings
 
             warnings.warn(
@@ -124,9 +124,9 @@ class CallawaySantAnnaAggregationMixin:
             )
             return np.nan, np.nan, None
 
-        effects = np.array(effects)
+        effects = np.array(effects_list)
         weights = np.array(weights_list, dtype=float)
-        groups_for_gt = np.array(groups_for_gt)
+        groups_for_gt = np.array(groups_list)
 
         # Exclude NaN effects from aggregation (R's aggte() convention).
         # No warning here — fit() emits a consolidated skip warning covering
@@ -486,6 +486,8 @@ class CallawaySantAnnaAggregationMixin:
         # With survey weights: pg[g] = sum(sw_g) / sum(sw_all)
         group_sizes = {}
         if survey_w is not None:
+            # Survey weights come from precomputed, so it is present here.
+            assert precomputed is not None
             # Survey-weighted group sizes
             precomputed_cohorts = precomputed["unit_cohorts"]
             for g in unique_groups:
@@ -493,6 +495,8 @@ class CallawaySantAnnaAggregationMixin:
                 group_sizes[g] = float(np.sum(survey_w[mask_g]))
             total_weight = float(np.sum(survey_w))
         elif _is_rcs:
+            # The RCS path always builds precomputed (obs-level bookkeeping).
+            assert precomputed is not None
             # RCS without survey: count observations per cohort
             precomputed_cohorts = precomputed["unit_cohorts"]
             for g in unique_groups:
@@ -541,6 +545,8 @@ class CallawaySantAnnaAggregationMixin:
         unit_groups_array = np.full(n_units, -1, dtype=np.float64)
 
         if _is_rcs:
+            # The RCS path always builds precomputed (obs-level bookkeeping).
+            assert precomputed is not None
             # RCS: direct vectorized assignment — obs indices are positions
             precomputed_cohorts = precomputed["unit_cohorts"]
             for g in unique_groups:
@@ -637,6 +643,35 @@ class CallawaySantAnnaAggregationMixin:
         psi_total = psi_standard + psi_wif
 
         return psi_total, all_units
+
+    @overload
+    def _compute_aggregated_se_with_wif(
+        self,
+        gt_pairs: List[Tuple[Any, Any]],
+        weights: np.ndarray,
+        effects: np.ndarray,
+        groups_for_gt: np.ndarray,
+        influence_func_info: Dict,
+        df: pd.DataFrame,
+        unit: str,
+        precomputed: Optional["PrecomputedData"] = None,
+        return_psi: Literal[False] = False,
+    ) -> Tuple[float, Optional[int]]: ...
+
+    @overload
+    def _compute_aggregated_se_with_wif(
+        self,
+        gt_pairs: List[Tuple[Any, Any]],
+        weights: np.ndarray,
+        effects: np.ndarray,
+        groups_for_gt: np.ndarray,
+        influence_func_info: Dict,
+        df: pd.DataFrame,
+        unit: str,
+        precomputed: Optional["PrecomputedData"] = None,
+        *,
+        return_psi: Literal[True],
+    ) -> Tuple[float, np.ndarray, Optional[int]]: ...
 
     def _compute_aggregated_se_with_wif(
         self,
@@ -909,6 +944,8 @@ class CallawaySantAnnaAggregationMixin:
             # reference cells contribute nothing to the variance but their cohort
             # weight dilutes the real cells, matching R's dynamic aggregation.
             groups_for_gt = np.array([g for (g, t) in gt_pairs])
+            # The wif-SE path requires the fit-time frame (callers pass it).
+            assert df is not None and unit is not None
             agg_se, psi_e, eff_df = self._compute_aggregated_se_with_wif(
                 gt_pairs,
                 weights,
@@ -963,7 +1000,7 @@ class CallawaySantAnnaAggregationMixin:
             df=df_survey_val,
         )
 
-        event_study_effects = {}
+        event_study_effects: Dict[Any, Dict[str, Any]] = {}
         for idx, e in enumerate(agg_periods):
             event_study_effects[e] = {
                 "effect": agg_effects_list[idx],

@@ -35,7 +35,7 @@ This is controlled by the `rank_deficient_action` parameter:
 import os
 import warnings
 from dataclasses import dataclass
-from typing import Any, Dict, List, Literal, Optional, Tuple, Union, overload
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Tuple, Union, overload
 
 import numpy as np
 import pandas as pd
@@ -62,6 +62,10 @@ from diff_diff.conley import (
     _compute_conley_vcov,
     _validate_conley_kwargs,
 )
+
+if TYPE_CHECKING:
+    from diff_diff.survey import ResolvedSurveyDesign, SurveyDesign
+
 
 # =============================================================================
 # Utility Functions
@@ -869,6 +873,40 @@ def _nonfinite_vcov_needs_python_rerun(
     return not bool(np.all(np.isfinite(vcov)))
 
 
+_VALID_WEIGHT_TYPES = {"pweight", "fweight", "aweight"}
+
+
+def _validate_weights(weights, weight_type, n):
+    """Validate weights array and weight_type for solve_ols/LinearRegression."""
+    if weight_type not in _VALID_WEIGHT_TYPES:
+        raise ValueError(
+            f"weight_type must be one of {_VALID_WEIGHT_TYPES}, " f"got '{weight_type}'"
+        )
+    if weights is not None:
+        weights = np.asarray(weights, dtype=np.float64)
+        if weights.shape[0] != n:
+            raise ValueError(f"weights length ({weights.shape[0]}) must match " f"X rows ({n})")
+        if np.any(np.isnan(weights)):
+            raise ValueError("Weights contain NaN values")
+        if np.any(np.isinf(weights)):
+            raise ValueError("Weights contain Inf values")
+        if np.any(weights < 0):
+            raise ValueError("Weights must be non-negative")
+        if np.sum(weights) <= 0:
+            raise ValueError(
+                "Weights sum to zero — no observations have positive weight. "
+                "Cannot fit a model on an empty effective sample."
+            )
+        if weight_type == "fweight":
+            fractional = weights - np.round(weights)
+            if np.any(np.abs(fractional) > 1e-10):
+                raise ValueError(
+                    "Frequency weights (fweight) must be non-negative integers. "
+                    "Fractional values detected. Use pweight for non-integer weights."
+                )
+    return weights
+
+
 @overload
 def solve_ols(
     X: np.ndarray,
@@ -948,40 +986,6 @@ def solve_ols(
     Tuple[np.ndarray, np.ndarray, Optional[np.ndarray]],
     Tuple[np.ndarray, np.ndarray, np.ndarray, Optional[np.ndarray]],
 ]: ...
-
-
-_VALID_WEIGHT_TYPES = {"pweight", "fweight", "aweight"}
-
-
-def _validate_weights(weights, weight_type, n):
-    """Validate weights array and weight_type for solve_ols/LinearRegression."""
-    if weight_type not in _VALID_WEIGHT_TYPES:
-        raise ValueError(
-            f"weight_type must be one of {_VALID_WEIGHT_TYPES}, " f"got '{weight_type}'"
-        )
-    if weights is not None:
-        weights = np.asarray(weights, dtype=np.float64)
-        if weights.shape[0] != n:
-            raise ValueError(f"weights length ({weights.shape[0]}) must match " f"X rows ({n})")
-        if np.any(np.isnan(weights)):
-            raise ValueError("Weights contain NaN values")
-        if np.any(np.isinf(weights)):
-            raise ValueError("Weights contain Inf values")
-        if np.any(weights < 0):
-            raise ValueError("Weights must be non-negative")
-        if np.sum(weights) <= 0:
-            raise ValueError(
-                "Weights sum to zero — no observations have positive weight. "
-                "Cannot fit a model on an empty effective sample."
-            )
-        if weight_type == "fweight":
-            fractional = weights - np.round(weights)
-            if np.any(np.abs(fractional) > 1e-10):
-                raise ValueError(
-                    "Frequency weights (fweight) must be non-negative integers. "
-                    "Fractional values detected. Use pweight for non-integer weights."
-                )
-    return weights
 
 
 def solve_ols(
@@ -1415,8 +1419,10 @@ def solve_ols(
     # be computed on original X and residuals with weights applied exactly once.
     if _original_X is not None and _original_y is not None:
         if return_fitted:
+            assert len(result) == 4
             coefficients, _resid_w, _fitted_w, vcov_out = result
         else:
+            assert len(result) == 3
             coefficients, _resid_w, vcov_out = result
 
         # Handle rank-deficient case: use only identified columns for fitted values
@@ -2459,6 +2465,7 @@ def _compute_cr2_bm_vcov_and_dof(
                 # dense pseudoinverse convention verbatim.
                 A_g_small = _cr2_adjustment_matrix(np.eye(n_g) - U_g @ U_g.T)
                 if residuals is not None:
+                    assert cluster_scores is not None
                     cluster_scores[gi] = X_g.T @ (A_g_small @ residuals[idx_g])
                 A_g_Xbi[g] = A_g_small @ B_g
                 continue
@@ -2472,11 +2479,13 @@ def _compute_cr2_bm_vcov_and_dof(
             gamma[pseudo] = -1.0 / lam[pseudo]
             UQ = U_g @ Q_g
             if residuals is not None:
+                assert cluster_scores is not None
                 u_g = residuals[idx_g]
                 # s_g = X_g' A_g u_g = X_g'u_g + (X_g'UQ) diag(gamma) (UQ'u_g)
                 cluster_scores[gi] = X_g.T @ u_g + (X_g.T @ UQ) @ (gamma * (UQ.T @ u_g))
             A_g_Xbi[g] = B_g + UQ @ (gamma[:, np.newaxis] * (UQ.T @ B_g))
         if residuals is not None:
+            assert cluster_scores is not None
             meat = cluster_scores.T @ cluster_scores
             vcov = M_U @ meat @ M_U
         else:
@@ -3292,7 +3301,7 @@ def _compute_robust_vcov_numpy(
             X,
             residuals,
             np.asarray(conley_coords, dtype=np.float64),
-            float(conley_cutoff_km),  # type: ignore[arg-type]
+            float(conley_cutoff_km),
             conley_metric,
             conley_kernel,
             bread_matrix,
@@ -4251,7 +4260,7 @@ class LinearRegression:
         rank_deficient_action: str = "warn",
         weights: Optional[np.ndarray] = None,
         weight_type: str = "pweight",
-        survey_design: object = None,
+        survey_design: Optional[Union["SurveyDesign", "ResolvedSurveyDesign"]] = None,
         vcov_type: Optional[str] = None,
         conley_coords: Optional[np.ndarray] = None,
         conley_cutoff_km: Optional[float] = None,
@@ -4626,6 +4635,9 @@ class LinearRegression:
             )
 
             if _uses_rep:
+                # The flag definition above guarantees this (mypy can't
+                # propagate isinstance narrowing through the flag variable).
+                assert isinstance(_effective_survey_design, _RSD)
                 from diff_diff.survey import compute_replicate_vcov
 
                 nan_mask = np.isnan(coefficients)
@@ -4721,6 +4733,8 @@ class LinearRegression:
             and _fit_vcov_type in ("classical", "hc1")
         ):
             _fe_scale = _absorbed_fe_vcov_scale(n_eff_df, self.n_params_effective_, df_adjustment)
+            # vcov_ was computed above on every path reaching this scale-fix.
+            assert self.vcov_ is not None
             if np.isnan(_fe_scale):
                 self.vcov_ = np.full_like(self.vcov_, np.nan)
             elif _fe_scale != 1.0:

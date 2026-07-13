@@ -10,6 +10,7 @@ import pandas as pd
 
 if TYPE_CHECKING:
     from diff_diff.bacon import BaconDecompositionResults
+    from diff_diff.survey import SurveyDesign
 
 from diff_diff.estimators import DifferenceInDifferences
 from diff_diff.linalg import LinearRegression
@@ -131,7 +132,7 @@ class TwoWayFixedEffects(DifferenceInDifferences):
         time: str,
         unit: str,
         covariates: Optional[List[str]] = None,
-        survey_design: object = None,
+        survey_design: Optional["SurveyDesign"] = None,
     ) -> DiDResults:
         """
         Fit Two-Way Fixed Effects model.
@@ -450,6 +451,8 @@ class TwoWayFixedEffects(DifferenceInDifferences):
 
             resolved_survey = _inject_cluster_as_psu(resolved_survey, survey_cluster_ids)
             if resolved_survey.psu is not None and survey_metadata is not None:
+                # resolved_survey non-None implies survey_design was passed.
+                assert survey_design is not None
                 raw_w = (
                     data[survey_design.weights].values.astype(np.float64)
                     if survey_design.weights
@@ -484,6 +487,8 @@ class TwoWayFixedEffects(DifferenceInDifferences):
         # on demeaned scores but the kernel grid uses the original space
         # (coords) and time/unit indexing.
         if _fit_vcov_type == "conley":
+            # Validated by the conley front-door (_validate_conley_estimator_inputs).
+            assert self.conley_coords is not None
             _conley_coords_arr: Optional[np.ndarray] = np.column_stack(
                 [
                     data[self.conley_coords[0]].values.astype(np.float64),
@@ -665,6 +670,8 @@ class TwoWayFixedEffects(DifferenceInDifferences):
                 if survey_metadata and survey_metadata.df_survey
                 else 0  # rank-deficient replicate → NaN inference
             )
+            # Replicate-refit path is only reached with a resolved design.
+            assert resolved_survey is not None
             if _n_valid_rep_twfe < resolved_survey.n_replicates:
                 _df_rep = _n_valid_rep_twfe - 1 if _n_valid_rep_twfe > 1 else 0
             if survey_metadata is not None:

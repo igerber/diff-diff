@@ -2031,7 +2031,7 @@ def generate_survey_did_data(
         elif panel and t == 1:
             _panel_unit_fe = unit_fe  # save for reuse
         elif panel and t > 1:
-            unit_fe = _panel_unit_fe  # type: ignore[possibly-undefined]
+            unit_fe = _panel_unit_fe
 
         # Cross-section informative sampling: re-rank weights each period
         if informative_sampling and not panel:
@@ -2041,7 +2041,7 @@ def generate_survey_did_data(
                 if conditional_pt != 0.0:
                     x1[unit_cohort > 0] += 1.0
                 x2 = rng.choice([0, 1], size=n_units)
-            unit_weight = _base_weight.copy()  # type: ignore[possibly-undefined]
+            unit_weight = _base_weight.copy()
             y0_t = unit_fe + psu_re[unit_psu] + psu_period_re[unit_psu, t - 1] + 0.5 * t
             if add_covariates:
                 y0_t = y0_t + _beta1 * x1 + _beta2 * x2
@@ -2064,8 +2064,8 @@ def generate_survey_did_data(
             x1 = None
             x2 = None
         if not informative_sampling and panel and t > 1 and add_covariates:
-            x1 = _panel_x1  # type: ignore[possibly-undefined]
-            x2 = _panel_x2  # type: ignore[possibly-undefined]
+            x1 = _panel_x1
+            x2 = _panel_x2
         elif not informative_sampling and panel and t == 1 and add_covariates:
             _panel_x1 = x1
             _panel_x2 = x2

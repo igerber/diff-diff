@@ -48,7 +48,7 @@ if TYPE_CHECKING:
     # Forward reference for the Wave E.1 survey-design path. Imported under
     # TYPE_CHECKING to keep the runtime cost zero and avoid any future
     # circular-import surprises with diff_diff.survey.
-    from diff_diff.survey import ResolvedSurveyDesign
+    from diff_diff.survey import ResolvedSurveyDesign, SurveyDesign
 
 # Maximum number of elements before falling back to per-column sparse aggregation.
 # 10M float64 elements ≈ 80 MB peak allocation. Above this, per-column .getcol()
@@ -331,7 +331,7 @@ def _compute_gmm_corrected_meat(
         _validate_conley_kwargs(
             conley_coords,
             conley_cutoff_km,
-            conley_metric,  # type: ignore[arg-type]  # validator raises ValueError if None
+            conley_metric,  # validator raises ValueError if None
             conley_kernel,
             n_for_conley,
             time=conley_time,
@@ -1435,7 +1435,7 @@ class TwoStageDiD(TwoStageDiDBootstrapMixin):
         covariates: Optional[List[str]] = None,
         aggregate: Optional[str] = None,
         balance_e: Optional[int] = None,
-        survey_design: object = None,
+        survey_design: Optional["SurveyDesign"] = None,
     ) -> TwoStageDiDResults:
         """
         Fit the two-stage DiD estimator.
@@ -1699,6 +1699,8 @@ class TwoStageDiD(TwoStageDiDBootstrapMixin):
             if resolved_survey.psu is not None and survey_metadata is not None:
                 from diff_diff.survey import compute_survey_metadata
 
+                # resolved_survey non-None implies survey_design was passed.
+                assert survey_design is not None
                 raw_w = (
                     np.asarray(data[survey_design.weights].values, dtype=np.float64)
                     if survey_design.weights
@@ -1879,21 +1881,21 @@ class TwoStageDiD(TwoStageDiDBootstrapMixin):
             from diff_diff.survey import compute_replicate_refit_variance
 
             # Derive keys from actual outputs (excludes filtered/Prop5 horizons)
+            _es_effects_ts = event_study_effects or {}
+            _grp_effects_ts = group_effects or {}
             _sorted_es_periods_ts = sorted(
-                e
-                for e in (event_study_effects or {}).keys()
-                if np.isfinite(event_study_effects[e]["effect"])
+                e for e in _es_effects_ts.keys() if np.isfinite(_es_effects_ts[e]["effect"])
             )
             _sorted_groups_ts = sorted(
-                g for g in (group_effects or {}).keys() if np.isfinite(group_effects[g]["effect"])
+                g for g in _grp_effects_ts.keys() if np.isfinite(_grp_effects_ts[g]["effect"])
             )
             _n_es_ts = len(_sorted_es_periods_ts)
             _n_grp_ts = len(_sorted_groups_ts)
 
             # Build full-sample estimate from actual outputs
             _full_est_ts = [overall_att]
-            _full_est_ts.extend([event_study_effects[e]["effect"] for e in _sorted_es_periods_ts])
-            _full_est_ts.extend([group_effects[g]["effect"] for g in _sorted_groups_ts])
+            _full_est_ts.extend([_es_effects_ts[e]["effect"] for e in _sorted_es_periods_ts])
+            _full_est_ts.extend([_grp_effects_ts[g]["effect"] for g in _sorted_groups_ts])
 
             def _refit_ts(w_r):
                 # Wave E.3 parity (PR #482 SpilloverDiD precedent): the main fit
@@ -2011,6 +2013,8 @@ class TwoStageDiD(TwoStageDiDBootstrapMixin):
             overall_se = float(np.sqrt(max(_vcov_rep_ts[0, 0], 0.0)))
 
             # Override df if replicates were dropped
+            # Replicate-refit path is only reached with a resolved design.
+            assert resolved_survey is not None
             if _n_valid_rep_ts < resolved_survey.n_replicates:
                 _survey_df = _n_valid_rep_ts - 1 if _n_valid_rep_ts > 1 else 0
             if survey_metadata is not None:
@@ -3440,7 +3444,7 @@ def two_stage_did(
     covariates: Optional[List[str]] = None,
     aggregate: Optional[str] = None,
     balance_e: Optional[int] = None,
-    survey_design: object = None,
+    survey_design: Optional["SurveyDesign"] = None,
     vcov_type: str = "hc1",
     **kwargs,
 ) -> TwoStageDiDResults:

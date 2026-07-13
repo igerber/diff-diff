@@ -7,7 +7,7 @@ including the Callaway-Sant'Anna (2021) estimator.
 
 import bisect
 import warnings
-from typing import Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -35,6 +35,9 @@ from diff_diff.staggered_results import (
     GroupTimeEffect,
 )
 from diff_diff.utils import safe_inference, safe_inference_batch
+
+if TYPE_CHECKING:
+    from diff_diff.survey import SurveyDesign
 
 # Re-export for backward compatibility
 __all__ = [
@@ -1794,7 +1797,7 @@ class CallawaySantAnna(
         covariates: Optional[List[str]] = None,
         aggregate: Optional[str] = None,
         balance_e: Optional[int] = None,
-        survey_design: object = None,
+        survey_design: Optional["SurveyDesign"] = None,
     ) -> CallawaySantAnnaResults:
         """
         Fit the Callaway-Sant'Anna estimator.
@@ -2108,11 +2111,15 @@ class CallawaySantAnna(
                     compute_survey_metadata,
                 )
 
+                # This branch is only reached with a survey design present.
+                assert survey_design is not None
                 effective_survey_design = replace(survey_design, psu=self.cluster)
                 resolved_survey = _inject_cluster_as_psu(resolved_survey, cluster_ids)
                 # Recompute survey_metadata to reflect the new effective PSU
                 # (so n_psu / df_survey on Results reflect the injected
                 # cluster, not the no-PSU pre-injection state).
+                # resolved_survey non-None implies survey_design was passed.
+                assert survey_design is not None
                 raw_w = (
                     data[survey_design.weights].values.astype(np.float64)
                     if survey_design.weights
@@ -2987,6 +2994,8 @@ class CallawaySantAnna(
                 sw_t_sum = float(np.sum(sw_treated))
                 sw_t_norm = sw_treated / sw_t_sum
                 att = float(np.sum(sw_t_norm * treated_residuals))
+                # sw_treated/sw_control are supplied together by all callers.
+                assert sw_control is not None
                 W_c = sw_control
                 xbar_t = np.sum(sw_treated[:, None] * X_treated, axis=0) / sw_t_sum
                 inf_treated = sw_t_norm * (treated_residuals - att)
@@ -3891,6 +3900,8 @@ class CallawaySantAnna(
         has_covariates = covariates is not None and obs_covariates is not None
 
         if has_covariates:
+            # The flag definition above guarantees this (mypy can't track it).
+            assert obs_covariates is not None
             X_gt = obs_covariates[treated_t]
             X_gs = obs_covariates[treated_s]
             X_ct = obs_covariates[control_t]

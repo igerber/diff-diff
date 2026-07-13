@@ -160,3 +160,23 @@ strict_optional = true
 implicit_reexport = true
 # Disable errors for numpy type compatibility issues
 disable_error_code = ["arg-type", "return-value", "var-annotated", "assignment"]
+# Stale-ignore hygiene: versions are pinned (dev extra + lint.yml), so
+# unused-ignore warnings can't churn with tool upgrades.
+warn_unused_ignores = true
+
+# Third-party plotting stubs: matplotlib ships py.typed but is not installed
+# in the typecheck CI job (and plotly has partial stubs). Skip both so local
+# and CI runs see identical Any surfaces regardless of what is installed.
+[[tool.mypy.overrides]]
+module = ["matplotlib.*", "plotly.*"]
+follow_imports = "skip"
+
+# prep_dgp builds seeded synthetic panels with Optional covariate arrays that
+# are constructed and consumed under the same `add_covariates` flag. The
+# None-vs-array shape is load-bearing for the seeded RNG stream (drawing
+# unconditionally would shift every downstream draw), so per-site narrowing
+# is not worth the regression risk in a test-data generator. Tightening is
+# tracked in TODO.md (Testing / docs).
+[[tool.mypy.overrides]]
+module = ["diff_diff.prep_dgp"]
+disable_error_code = ["index"]

@@ -812,16 +812,16 @@ class ChaisemartinDHaultfoeuilleBootstrapMixin:
 
             for path_key, horizon_inputs in path_bootstrap_inputs.items():
                 bs_ses_for_path = results.path_ses.get(path_key, {})
-                valid_horizons = []
+                valid_horizon_stats = []
                 for l_h, (u_h, n_h, eff_h, _u_pp_h) in sorted(horizon_inputs.items()):
                     if u_h.size == 0 or n_h <= 0:
                         continue
                     bs_se = bs_ses_for_path.get(l_h, np.nan)
                     if not np.isfinite(bs_se) or bs_se <= 0:
                         continue
-                    valid_horizons.append((l_h, u_h, n_h, eff_h, bs_se))
+                    valid_horizon_stats.append((l_h, u_h, n_h, eff_h, bs_se))
 
-                if len(valid_horizons) < 2:
+                if len(valid_horizon_stats) < 2:
                     continue
 
                 # All horizons within a path use the same n_eligible
@@ -829,7 +829,7 @@ class ChaisemartinDHaultfoeuilleBootstrapMixin:
                 # _collect_path_bootstrap_inputs's use of
                 # eligible_mask_var for cohort-recentering); use the
                 # first valid horizon's IF size as the shared dim.
-                n_dim = valid_horizons[0][1].size
+                n_dim = valid_horizon_stats[0][1].size
                 map_path = _map_for_target(
                     n_dim,
                     group_id_to_psu_code,
@@ -844,12 +844,12 @@ class ChaisemartinDHaultfoeuilleBootstrapMixin:
                         group_to_psu_map=map_path,
                     )
                     es_dists_path = []
-                    for _l_h, u_h, n_h, eff_h, _bs_se in valid_horizons:
+                    for _l_h, u_h, n_h, eff_h, _bs_se in valid_horizon_stats:
                         deviations = (shared_weights @ u_h) / n_h
                         es_dists_path.append(eff_h + deviations)
                     boot_matrix = np.asarray(es_dists_path)
-                    effects_vec = np.array([v[3] for v in valid_horizons])
-                    ses_vec = np.array([v[4] for v in valid_horizons])
+                    effects_vec = np.array([v[3] for v in valid_horizon_stats])
+                    ses_vec = np.array([v[4] for v in valid_horizon_stats])
                     t_stats = np.abs((boot_matrix - effects_vec[:, None]) / ses_vec[:, None])
                     sup_t_dist = np.max(t_stats, axis=0)
                     finite_mask = np.isfinite(sup_t_dist)
@@ -861,7 +861,7 @@ class ChaisemartinDHaultfoeuilleBootstrapMixin:
                     continue
 
                 path_cband_crits[path_key] = crit_p
-                path_cband_n_valid[path_key] = len(valid_horizons)
+                path_cband_n_valid[path_key] = len(valid_horizon_stats)
 
             results.path_cband_crit_values = path_cband_crits
             results.path_cband_n_valid_horizons = path_cband_n_valid

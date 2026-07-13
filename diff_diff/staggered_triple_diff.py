@@ -10,7 +10,7 @@ Core pairwise DiD computation matches R's triplediff::compute_did() exactly
 """
 
 import warnings
-from typing import Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -28,6 +28,9 @@ from diff_diff.staggered_bootstrap import (
 )
 from diff_diff.staggered_triple_diff_results import StaggeredTripleDiffResults
 from diff_diff.utils import safe_inference
+
+if TYPE_CHECKING:
+    from diff_diff.survey import SurveyDesign
 
 __all__ = [
     "StaggeredTripleDifference",
@@ -203,7 +206,7 @@ class StaggeredTripleDifference(
         covariates: Optional[List[str]] = None,
         aggregate: Optional[str] = None,
         balance_e: Optional[int] = None,
-        survey_design: object = None,
+        survey_design: Optional["SurveyDesign"] = None,
     ) -> StaggeredTripleDiffResults:
         """
         Fit the staggered triple difference estimator.
@@ -761,6 +764,11 @@ class StaggeredTripleDifference(
                 if event_study_effects and bootstrap_results.event_study_ses:
                     for e_key in event_study_effects:
                         if e_key in bootstrap_results.event_study_ses:
+                            # ses/cis/p_values are populated together.
+                            assert (
+                                bootstrap_results.event_study_cis is not None
+                                and bootstrap_results.event_study_p_values is not None
+                            )
                             event_study_effects[e_key]["se"] = bootstrap_results.event_study_ses[
                                 e_key
                             ]
@@ -1320,6 +1328,8 @@ class StaggeredTripleDifference(
         # Build covariate matrix with intercept for the pair
         covX = None
         if has_covariates:
+            # The flag definition above guarantees this (mypy can't track it).
+            assert covariate_matrix is not None
             X_pair = covariate_matrix[pair_idx]
             covX = np.column_stack([np.ones(n_pair), X_pair])
 
