@@ -340,9 +340,13 @@ jobs:
             echo "Unified diff (context=5):"
             # Exclude large generated/data files from the full diff to stay
             # within the model's input limit. The --name-status above still
-            # lists them. Narrowed to real-data assets and notebook outputs.
+            # lists them. Narrowed to real-data assets, notebook outputs, and
+            # the qte golden fixture (generated single-line JSON, ~700KB - a
+            # regeneration blew the input limit at PR #688; the reviewable
+            # artifact is benchmarks/R/generate_qte_golden.R).
             git --no-pager diff --unified=5 "$BASE_SHA" "$HEAD_SHA" \
               -- . ':!benchmarks/data/real/*.json' ':!benchmarks/data/real/*.csv' \
+                   ':!benchmarks/data/qte_golden.json' \
                    ':!docs/tutorials/*.ipynb'
           } >> "$PROMPT"
 
