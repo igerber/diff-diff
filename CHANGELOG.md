@@ -48,6 +48,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ignores) with `warn_unused_ignores = true` to keep them from going stale — 23
   already-stale ignores were removed. Tightening tracked in TODO.md. No public
   API or numerical behavior change.
+- **`load_prop99` + `load_walmart` dataset loaders.** California Proposition 99
+  smoking panel (39 states, single treated unit, Lee-Wooldridge cohort format) and
+  the Walmart entry county panel (1,277 counties, staggered 1986-1999 openings,
+  Brown & Butts CBP construction), downloaded with local caching from the
+  MIT-licensed ancillary data of the authors' Stata `lwdid` package (SSC).
+  Every byte-load is verified against a pinned SHA-256 and the parsed panels are
+  validated against their source invariants; if the real data cannot be obtained,
+  a seeded same-schema synthetic fallback is returned with an explicit
+  `UserWarning` and `df.attrs["source"] = "synthetic_fallback"`.
 - **Internal: rdrobust sharp-RD bandwidth-selection port (`diff_diff/_rdrobust_port.py`).**
   Step-1 machinery for the `RegressionDiscontinuity` estimator above: a faithful
   pure-Python NumPy/SciPy port of R `rdrobust` 4.0.0's `rdbwselect` sharp-RD path (all 10 data-driven

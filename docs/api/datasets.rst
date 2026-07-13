@@ -122,6 +122,61 @@ Example
        first_treat="first_treat"
    )
 
+load_prop99
+~~~~~~~~~~~
+
+California Proposition 99 tobacco program study (Lee--Wooldridge cohort format
+of the Abadie--Diamond--Hainmueller 2010 data). Log per capita cigarette sales
+for 39 states (1970--2000) with a single treated unit (California, treated from
+1989) -- the canonical small-sample DiD and synthetic control setting.
+
+.. autofunction:: diff_diff.load_prop99
+
+Example
+^^^^^^^
+
+.. code-block:: python
+
+   from diff_diff.datasets import load_prop99
+   from diff_diff import DifferenceInDifferences
+
+   prop99 = load_prop99()
+   prop99["treated_state"] = (prop99["first_year"] > 0).astype(int)
+   prop99["post"] = (prop99["year"] >= 1989).astype(int)
+
+   did = DifferenceInDifferences()
+   results = did.fit(
+       prop99, outcome="lcigsale", treatment="treated_state", time="post"
+   )
+
+load_walmart
+~~~~~~~~~~~~
+
+Walmart entry county panel (Lee & Wooldridge 2025 sample, derived from County
+Business Patterns data as constructed by Brown & Butts). Log retail and
+wholesale employment for 1,277 counties (1977--1999) with staggered first
+store openings (1986--1999) and 391 never-treated counties.
+
+.. autofunction:: diff_diff.load_walmart
+
+Example
+^^^^^^^
+
+.. code-block:: python
+
+   from diff_diff.datasets import load_walmart
+   from diff_diff import CallawaySantAnna
+
+   walmart = load_walmart()
+   cs = CallawaySantAnna(control_group="never_treated")
+   results = cs.fit(
+       walmart,
+       outcome="log_retail_emp",
+       unit="cid",
+       time="year",
+       first_treat="first_year"
+   )
+
 Utility Functions
 -----------------
 

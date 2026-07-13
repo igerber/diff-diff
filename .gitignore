@@ -74,6 +74,9 @@ target/
 .claude/paper-review/
 .claude/scheduled_tasks.lock
 
+# Playwright MCP browser-session artifacts
+.playwright-mcp/
+
 # MCP configuration (may contain tokens)
 .mcp.json
 

@@ -2,7 +2,8 @@
 
 **Authors:** Soo Jeong Lee (Southern Illinois University Carbondale), Jeffrey M. Wooldridge (Michigan State University)
 **Citation:** Lee, S.J., & Wooldridge, J.M. (2025). A Simple Transformation Approach to Difference-in-Differences Estimation for Panel Data. SSRN Working Paper No. 4516518. First posted 27 Jul 2023; version reviewed dated April 26, 2026, last revised June 8, 2026. https://ssrn.com/abstract=4516518
-**PDF reviewed:** /private/tmp/claude-501/-Users-igerber-diff-diff-LWDiD/fa768cf3-1977-474a-9ddf-b98c87817229/scratchpad/ssrn-4516518.pdf
+**PDF reviewed:** SSRN download of abstract 4516518 (61 pages; cover page dated June 8, 2026; SHA-256 `78460841def3f15fdac6a2c6b04bc0c80ecc192493b9aa441e465a81f6846ea0`). https://ssrn.com/abstract=4516518 | DOI: https://doi.org/10.2139/ssrn.4516518
+**SSRN metadata (verified live 2026-07-13):** 61 pages; Posted: 27 Jul 2023; Last revised: 8 Jun 2026; Date Written: April 26, 2026. Note: stale caches/mirrors of the SSRN page may still show the superseded December 25, 2025 revision (52 pages).
 **Review date:** 2026-07-11
 
 ---
@@ -87,7 +88,7 @@ ATT(g,t) = coefficient on `D_{i,g}` (`theta_hat_{g,t} = e_2' eta_hat_{g,t}`). IP
 
     WATT(r) = sum_{g in G_r} w(g,r) * ATT(g, g+r),   w(g,r) = N_g / N_{G_r},   N_{G_r} = sum_{g in G_r} N_g
 
-cohort-size-weighted average over cohorts `G_r` for which `ATT(g, g+r)` is identified at event time `r = t - g` (Appendix E.1 phrases the weight as the number of treated units in cohort g contributing at event time r over the total treated units contributing at that event time). Estimable event times: `r = -1` excluded under demeaning; `r = -2, -1` excluded under detrending. Aggregated IF: `IF_{i,r} = sum_g omega_{g,r} IF_{i,g,g+r}`.
+contributing-treated-unit weighted average over cohorts `G_r` for which `ATT(g, g+r)` is identified at event time `r = t - g`: the operative weight (Appendix E.1) is the number of treated units in cohort g contributing at event time r over the total treated units contributing at that event time, which simplifies to the cohort-size form `N_g / N_{G_r}` above in balanced panels. Estimable event times: `r = -1` excluded under demeaning; `r = -2, -1` excluded under detrending. Aggregated IF: `IF_{i,r} = sum_g omega_{g,r} IF_{i,g,g+r}`.
 
 *Edge cases:*
 - Cohort with zero pre-treatment periods (demeaning) or fewer than two (detrending): transformation undefined -> cell not estimable; detrending rank condition `(J'_{g-1} J_{g-1})` invertible iff >= 2 distinct pre-treatment time points (Appendix B, Equations (B.1)-(B.3)).
@@ -138,7 +139,7 @@ Algorithm 1 (Multiplier Bootstrap for Simultaneous Inference on WATT_hat(r); App
 - [ ] RA estimator (E.1) with treated-cohort-centered covariate interactions `D_{i,g}(X_i - Xbar_g)`
 - [ ] IPWRA: logit PS by ML per cell + WLS of (E.1) with weights `w_{i,g,t}`; IPW special case
 - [ ] Influence functions per E.2 (RA, exact), E.3 (IPWRA), E.4 (IPW) including first-stage logit-score corrections
-- [ ] WATT(r) cohort-size-weighted aggregation over identified (g, g+r) cells
+- [ ] WATT(r) contributing-treated-unit weighted aggregation over identified (g, g+r) cells (cohort-size weights in balanced panels)
 - [ ] Multiplier bootstrap (Algorithm 1): unit-level Rademacher draws, centered IFs, sup-t simultaneous bands; anchor periods excluded
 - [ ] Anchor-period exclusion: r = -1 (demeaning); r = -2, -1 (detrending)
 - [ ] Section 4.3 support: all-eventually-treated panels (drop D_infinity; last cohort as control at r = T; no effect for last cohort)

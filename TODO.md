@@ -50,6 +50,7 @@ generic sparse-FE, QR+SVD rank-detection redundancy, `check_finite` bypass — m
 | ChangesInChanges/QDiD tutorial notebook (2x2 distributional walkthrough: QTE grid, interior range, uniform bands, CiC-vs-QDiD comparison) - deferred from the implementation PR as a documented decision. | `docs/tutorials/` | #682 | Mid | Low |
 | Tighten the mypy suppressions that back the enforced-zero posture: burn down `prep_dgp`'s per-module `[index]` override (needs a None-vs-array restructure that preserves the seeded RNG stream), and evaluate re-enabling the globally disabled codes (`arg-type`, `return-value`, `var-annotated`, `assignment`) one at a time — `assignment` alone hid several real annotation drifts found during the 2026-07 triage. | `pyproject.toml` `[tool.mypy]`, `diff_diff/prep_dgp.py` | lint-CI | Mid | Low |
 | `practitioner_next_steps()` dedicated handler for `ChangesInChangesResults` (currently falls back to `_handle_generic`, which is safe; a dedicated handler is the established full-integration step, cf. HAD Phase 5). | `diff_diff/practitioner.py` | #682 | Quick | Low |
+| Align the four legacy dataset loaders (`load_card_krueger`, `load_castle_doctrine`, `load_divorce_laws`, `load_mpdta`) with the loud-fallback pattern of `load_prop99`/`load_walmart`: `UserWarning` + `df.attrs["source"]` marker on synthetic fallback (currently silent), plus optional checksum pinning for the CSV downloads. | `diff_diff/datasets.py` | LWDiD precursor | Quick | Low |
 
 ---
 

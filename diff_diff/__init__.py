@@ -72,6 +72,8 @@ from diff_diff.datasets import (
     load_dataset,
     load_divorce_laws,
     load_mpdta,
+    load_prop99,
+    load_walmart,
 )
 from diff_diff.diagnostic_report import (
     DIAGNOSTIC_REPORT_SCHEMA_VERSION,
@@ -537,6 +539,8 @@ __all__ = [
     "load_castle_doctrine",
     "load_divorce_laws",
     "load_mpdta",
+    "load_prop99",
+    "load_walmart",
     "load_dataset",
     "list_datasets",
     "clear_cache",

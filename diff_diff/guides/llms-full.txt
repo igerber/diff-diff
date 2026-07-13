@@ -2215,6 +2215,7 @@ data = generate_synthetic_control_data(n_donors=20, n_pre=60, n_post=5,
 
 ```python
 from diff_diff import load_card_krueger, load_castle_doctrine, load_divorce_laws, load_mpdta
+from diff_diff import load_prop99, load_walmart
 from diff_diff import load_dataset, list_datasets, clear_cache
 
 # List available datasets
@@ -2229,6 +2230,8 @@ ck = load_card_krueger()          # Card & Krueger (1994) minimum wage
 castle = load_castle_doctrine()    # Castle Doctrine / Stand Your Ground laws
 divorce = load_divorce_laws()      # Unilateral divorce laws (staggered)
 mpdta = load_mpdta()              # Minimum wage panel (simulated, from R did package)
+prop99 = load_prop99()            # California Prop 99 smoking (single treated unit)
+walmart = load_walmart()          # Walmart entry county panel (staggered, 1,277 counties)
 
 # Force re-download
 data = load_card_krueger(force_download=True)

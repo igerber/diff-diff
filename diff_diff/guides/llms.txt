@@ -122,6 +122,6 @@ No R or Python package offers design-based variance estimation for modern hetero
 ## Optional
 
 - [Rust Backend](https://diff-diff.readthedocs.io/en/stable/benchmarks.html): Rust backend (bundled in released wheels; `maturin develop --release` for source builds) for order-of-magnitude speedups on compute-intensive estimators - 18-55x vs R synthdid on Synthetic DiD in the published benchmarks - plus TROP and bootstrap acceleration
-- [Built-in Datasets](https://diff-diff.readthedocs.io/en/stable/api/datasets.html): Real-world datasets — Card & Krueger (1994), Castle Doctrine, divorce laws, MPDTA
+- [Built-in Datasets](https://diff-diff.readthedocs.io/en/stable/api/datasets.html): Real-world datasets — Card & Krueger (1994), Castle Doctrine, divorce laws, MPDTA, California Prop 99 smoking (single treated unit), Walmart entry county panel (staggered)
 - [Visualization](https://diff-diff.readthedocs.io/en/stable/api/visualization.html): Event study plots, group effects, sensitivity plots, Bacon decomposition plots, power curves
 - [Data Preparation](https://diff-diff.readthedocs.io/en/stable/api/prep.html): Data generation, panel balancing, wide-to-long conversion, treatment/post indicator creation

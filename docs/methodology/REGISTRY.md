@@ -20,6 +20,7 @@ This document provides the academic foundations and key implementation requireme
    - [StackedDiD](#stackeddid)
    - [WooldridgeDiD (ETWFE)](#wooldridgedid-etwfe)
    - [LPDiD](#lpdid)
+   - [LWDiD](#lwdid)
 3. [Advanced Estimators](#advanced-estimators)
    - [SyntheticDiD](#syntheticdid)
    - [SyntheticControl](#syntheticcontrol)
@@ -2129,6 +2130,94 @@ The paper specifies no standard-error formula (Section 1 defers to "standard, we
 - [ ] Non-absorbing exit-event dynamics (Appendix C `eta_h`) + the Stata canonical RA/SE - deferred
 - [x] Survey-design support (PR-D1): pweight + stratified-PSU Taylor-linearization (Binder TSL) variance on the variance-weighted default path; per-sample design re-resolution + unit-as-PSU injection; reweight (incl. RA), replicate-weight, and non-pweight designs rejected; pure-Python invariants (reduction/unit-clustering, FPC-shrinks-SE, stratification, lonely-PSU, NaN-consistency, metadata) (PR-D1)
 - [x] Survey-design R-parity (PR-D2): all three survey paths (VW strata+PSU+FPC, weights-only inject, direct-covariate) validated end-to-end vs `survey::svyglm` - per-horizon point/SE/df + pooled (point ~1e-6, SE ~1e-5, df exact); clean sample independently `alexCardazzi`-cross-checked (<1e-8); dedicated survey panel keeps the absorbing / non-absorbing goldens byte-identical (PR-D2)
+
+---
+
+## LWDiD
+
+**Primary sources:**
+- [Lee, S.J. & Wooldridge, J.M. (2025). A Simple Transformation Approach to Difference-in-Differences Estimation for Panel Data. SSRN Working Paper No. 4516518 (61-page revision, cover page June 8, 2026; SSRN "last revised" 8 Jun 2026).](https://ssrn.com/abstract=4516518) — estimation core (rolling transformations, RA/IPW/IPWRA, multiplier bootstrap). DOI: 10.2139/ssrn.4516518.
+- [Lee, S.J. & Wooldridge, J.M. (2026). Simple Approaches to Inference with Difference-in-Differences Estimators with Small Cross-Sectional Sample Sizes. SSRN Working Paper No. 5325686 (36 pages, cover page February 3, 2026; SSRN "last revised" 13 Jun 2026).](https://ssrn.com/abstract=5325686) — exact small-sample inference layer. DOI: 10.2139/ssrn.5325686.
+
+Exact reviewed artifacts (PDF SHA-256) and live-verified SSRN metadata are pinned in the paper-review headers below; stale SSRN caches/mirrors may still show the superseded December 2025 / January 2026 revisions.
+
+Full maintainer paper reviews (equation-level detail, replication targets): `docs/methodology/papers/lee-wooldridge-2025-review.md`, `docs/methodology/papers/lee-wooldridge-2026-review.md`.
+
+- **Note:** Registry entry authored with the paper reviews ahead of the implementation (PR #588, third-party contribution under maintainer revision). Checklist boxes are unchecked until the implementation lands; implementation-specific edge-case notes will be finalized in that PR.
+
+**Key implementation requirements:**
+
+*Assumption checks / warnings:*
+- Treatment is absorbing (no reversibility), common timing (`1 < S <= T`) or staggered (cohorts `g in {S,...,T,infinity}`, mutually exclusive and exhaustive); at least one pre-treatment period.
+- Common timing: **NAC** (no anticipation, eq. (2.7)), **CPTC** (conditional parallel trends, eq. (2.10)), **OVLC** (overlap, eqs. (2.14)-(2.15)); Theorem 2.1 identifies `tau_r`, `r = S,...,T`.
+- Staggered: **CNAS** (eq. (4.4); X-conditioning droppable with NT-only controls), **CPTS** (eq. (4.6)), **OVLS** (eq. (4.10), control pool `A_{r+1} = D_{r+1} + ... + D_T + D_infinity`); Theorem 4.1.
+- Heterogeneous linear trends: **CHT** (eq. (5.3)) — demeaning inconsistent under CHT; unit-specific detrending (Procedure 5.1) restores consistency under CNAS + CHT + OVLS.
+- Minimum pre-periods: >= 1 per cohort for demeaning, >= 2 for detrending (rank condition, Appendix B); failing cells not estimable.
+- Small-sample (exact) inference layer: classical linear model assumptions — conditional normality AND homoskedasticity of the collapsed cross-sectional error (2026 paper eqs. (2.7)-(2.9); with controls (2.18)-(2.19)). Sample-size guards: `N0 >= 1`, `N1 >= 1`, `N >= 3`; `N > K + 2` with K controls; interacted controls need `N0 > K + 1` AND `N1 > K + 1`; NT-only controls in the staggered case need `N_infinity >= 2`.
+- IPWRA is doubly robust: consistent if either the propensity-score model or the outcome model is correct.
+
+*Transformations (LW 2025 eqs. (3.2)/(4.11), (5.6); as specified for implementation):*
+
+    Demeaning:   Y_dot_irg  = Y_ir - (1/(g-1)) * sum_{s=1}^{g-1} Y_is
+    Detrending:  Yddot_irg  = Y_ir - Yhat_irg,  Yhat from unit OLS of Y_it on (1, t), t < g  (out-of-sample residuals)
+
+Event-study/placebo transformations over ALL periods (Appendix D): demeaning (D.1) excludes `t = g-1`; detrending (D.2) excludes `t in {g-2, g-1}` (anchor periods, event times `r = -1` / `r = -2, -1`).
+
+*Estimation (per (g, t) cell; LW 2025 eq. (E.1)):*
+- Cross-sectional RA regression on the cell sample `A_{g,t}`: `Y_dot on 1, D_g, X, D_g (X - Xbar_g)`; ATT(g,t) = coefficient on `D_g`. No-covariate case reduces to plain DiD (eq. (3.4)); Theorem 3.1: common-timing per-period regressions are numerically equivalent to pooled OLS (3.6) (r = g reproduces the ETWFE estimand; `r > g` does not).
+- IPWRA (workhorse): logit propensity score per cell + WLS with weights `w = D + (1-D) p/(1-p)`; IPW = special case without the outcome-regression component.
+- Control pool at (g, r): `A_{r+1} = 1` (never-treated + not-yet-treated) by default; NT-only optional. Pre-treatment placebo cells use the Appendix D.3 rule `A_{g,t} = {G = g} ∪ {G = 0} ∪ {G > max(g,t)}`.
+
+*Aggregation:*
+- Event-study: `WATT(r) = sum_{g in G_r} omega_{g,r} ATT(g, g+r)` with `omega_{g,r}` = (treated units of cohort g contributing at event time r) / (total treated units contributing at event time r) - the operative definition per LW 2025 Appendix E.1, required under unbalanced panels where a cohort's contributing count at r can differ from `N_g`. In balanced panels this simplifies to `N_g / N_{G_r}` (Sec. 6.2/D.3). Aggregated influence function `IF_{i,r} = sum_g omega_{g,r} IF_{i,g,g+r}`.
+- Overall: composite-outcome single regression (LW 2026 eqs. (7.18)-(7.19)) — `tau_omega` with cohort-share weights `omega_g = N_g / N_treat`; automatically accounts for correlation among per-cohort effects and supports exact small-N inference.
+
+*Standard errors:*
+- Large-N default: influence-function **multiplier bootstrap** (LW 2025 Algorithm 1): IFs per (g,t) from E.2 (RA, finite-sample exact), E.3 (IPWRA, stacked M-estimator with logit-score correction), E.4 (IPW, `psi - Gamma' IF_gamma` correction); centered IFs; **unit-level Rademacher multipliers** (one draw per unit across all cells — unit clustering by construction); sup-t simultaneous bands over the event-study path; B = 999 in the paper's application; anchor periods excluded.
+- Small-N exact (LW 2026): usual OLS SE on the collapsed cross-sectional regression with exact `T_{N-2}` / `T_{N-K-2}` reference distribution; valid down to `N = 3` and a single treated unit (`N1 = 1` — the t statistic is the studentized residual; same for `N_g = 1` per cohort in (7.8)/(7.10)).
+- Alternatives: HC3 when there are "at least a handful" of treated units; randomization inference for the sharp null (two-sided p = c / #permutations; Stata `lwdid` `ri` option); higher-level clustering and Conley SHAC SEs for larger cross sections (LW 2026 Sec. 8.2, citing Abadie-Athey-Imbens-Wooldridge 2023).
+
+*Edge cases:*
+- Anchor periods: event-study omits `r = -1` (demeaning) / `r = -2, -1` (detrending); bootstrap excludes them.
+- All units eventually treated (LW 2025 Sec. 4.3): drop `D_infinity`; effects defined relative to the last cohort; no effect estimable for the last cohort.
+- Unbalanced panels (Sec. 4.4): transform observed data; per-cell observability requirements (1 pre-period demeaning / 2 detrending + outcome observed at r); selection may correlate with unit heterogeneity (and trends, under detrending) but not with shocks.
+- Anticipation: drop periods just prior to the intervention from the pre-average/trend (LW 2025 Sec. 4.4; LW 2026 eq. (2.22) anchor `Ybar_{i,S0}`, `S0 < S-1`).
+- Periods with no newly-treated units: no effects estimated there.
+- Seasonality: seasonal dummies in the transformation step (LW 2026, p12).
+- Complex nonlinear pre-trends: linear detrending may be inadequate — authors' caveat that the method "will not always work better than existing alternatives"; higher-order trend terms possible at a power cost.
+- Per-period effect combinations: SEs for linear combinations of per-period estimates are NOT easily obtained (serial dependence); the composite regression (7.19) is the paper's device for valid aggregate SEs.
+- CS normalization: rolling event studies are deviations from own pre-treatment averages, NOT normalized to `r = -1` as in Callaway-Sant'Anna — event-study points are not numerically comparable across the two.
+- No incidental-parameters problem from unit-specific trend regressions with small T.
+
+*Procedures (verbatim transcriptions in the paper reviews):*
+- LW 2026 Procedure 2.1 (unit demeaning, common timing) / Procedure 3.1 (unit detrending) — collapse to `{(Ybar_dot_i, D_i)}` and run the exact-t cross-sectional regression.
+- LW 2025 Procedure 3.1 (rolling, common timing) / Procedure 4.1 (rolling, staggered; control pool `A_{r+1}`) / Procedure 5.1 (staggered detrending).
+- LW 2025 Algorithm 1 (multiplier bootstrap, 7 steps): compute per-cell IFs -> aggregate WATT(r) -> center IFs -> B unit-level Rademacher draws -> bootstrap SEs -> sup statistics -> sup-t bands.
+
+**Reference implementation(s):**
+- Stata: user-written `lwdid` (Hur, Lee and Wooldridge 2026; SSC) — implements the full procedure, multiplier-bootstrap inference, and randomization inference (`ri` option); ancillary datasets `lw_smoking.dta` / `lw_walmart.dta` (MIT) are the sources for `load_prop99()` / `load_walmart()`.
+- R: none.
+
+**Replication targets (from the papers; datasets available via `diff_diff.datasets`):**
+- Prop 99 (LW 2026 Table 3, 38-state donor pool): demeaning ATT = -0.422 (SE 0.121); detrending ATT = -0.227 (SE 0.094), exact p = 0.021 vs randomization-inference p = 0.020.
+- Castle laws (LW 2026 Sec. 7): `tau_omega` = 0.092 (demeaning; OLS SE 0.057), 0.067 (detrending).
+- Walmart entry (LW 2025 Tables A4/A5, 1,277 counties): per-relative-period WATT(r) with SEs for r = 0..13.
+
+**Requirements checklist:**
+- [ ] Rolling demeaning (3.2)/(4.11) using ALL pre-g periods; detrending (5.6)/(D.2) via unit OLS with out-of-sample residuals
+- [ ] Minimum pre-period enforcement (>= 1 demeaning / >= 2 detrending); failing cells dropped with warning
+- [ ] Control pools: NT + NYT (`A_{r+1} = 1`) default, NT-only option (`N_infinity >= 2` guard); placebo cells per D.3 rule `G > max(g,t)`
+- [ ] RA (E.1) with treated-cohort-centered interactions; IPWRA (logit + WLS); IPW special case
+- [ ] Influence functions per E.2/E.3/E.4 including first-stage logit-score corrections; IFs centered
+- [ ] WATT(r) event-study aggregation with contributing-treated-unit weights (E.1 definition; cohort-size weights `N_g / N_{G_r}` only as the balanced-panel simplification); anchor periods excluded (r = -1 / r = -2,-1)
+- [ ] Algorithm 1 multiplier bootstrap: unit-level Rademacher, sup-t simultaneous bands
+- [ ] Composite-outcome overall aggregation (7.18)/(7.19) with cohort-share weights
+- [ ] Exact-t inference: `T_{N-2}` / `T_{N-K-2}`, valid to `N = 3`, `N1 = 1`, `N_g = 1`; sample-size guards enforced
+- [ ] HC3 alternative; randomization inference (two-sided p = c / #permutations); higher-level clustering / SHAC for larger N
+- [ ] Anticipation-robustness period dropping; seasonal dummies in the transformation step
+- [ ] All-eventually-treated (Sec. 4.3) and unbalanced-panel (Sec. 4.4) support
+- [ ] Common-timing no-covariate case reproduces plain DiD (3.4); Theorem 3.1 pooled-OLS equivalence (cross-estimator test vs `DifferenceInDifferences` / ETWFE at r = g)
+- [ ] Prop 99 / castle-laws / Walmart replication targets pinned as tests
 
 ---
 

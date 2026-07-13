@@ -8,9 +8,11 @@ All datasets are downloaded from public sources and cached locally
 for subsequent use.
 """
 
-from io import StringIO
+import hashlib
+import warnings
+from io import BytesIO, StringIO
 from pathlib import Path
-from typing import Dict
+from typing import Dict, cast
 from urllib.error import HTTPError, URLError
 from urllib.request import urlopen
 
@@ -53,11 +55,65 @@ def _download_with_cache(
         ) from e
 
 
+def _get_cache_path_binary(name: str) -> Path:
+    """Get the cache path for a binary (Stata .dta) dataset."""
+    _CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    return _CACHE_DIR / f"{name}.dta"
+
+
+def _download_with_cache_binary(
+    url: str,
+    name: str,
+    sha256: str,
+    force_download: bool = False,
+) -> bytes:
+    """Download a binary file (e.g. Stata .dta), verify its checksum, and cache it.
+
+    The source host serves plain HTTP, so every byte-load (cache or fresh
+    download) is verified against a pinned SHA-256. A stale/corrupt cache
+    triggers one re-download; a checksum mismatch on freshly downloaded
+    bytes raises.
+    """
+    cache_path = _get_cache_path_binary(name)
+
+    if cache_path.exists() and not force_download:
+        content = cache_path.read_bytes()
+        if hashlib.sha256(content).hexdigest() == sha256:
+            return content
+        # Cached copy is stale or corrupt: fall through to re-download
+
+    try:
+        with urlopen(url, timeout=30) as response:
+            content = response.read()
+    except (HTTPError, URLError) as e:
+        if cache_path.exists():
+            content = cache_path.read_bytes()
+            if hashlib.sha256(content).hexdigest() == sha256:
+                # Use cached version if download fails
+                return content
+        raise RuntimeError(
+            f"Failed to download dataset '{name}' from {url}: {e}\n"
+            "Check your internet connection or try again later."
+        ) from e
+
+    if hashlib.sha256(content).hexdigest() != sha256:
+        raise RuntimeError(
+            f"Checksum mismatch for dataset '{name}' downloaded from {url}.\n"
+            "The upstream file differs from the pinned SHA-256. If the lwdid "
+            "Stata package published a new data revision, verify the new file "
+            "and update the pinned checksum; otherwise treat the download as "
+            "untrusted."
+        )
+    cache_path.write_bytes(content)
+    return content
+
+
 def clear_cache() -> None:
     """Clear the local dataset cache."""
     if _CACHE_DIR.exists():
-        for f in _CACHE_DIR.glob("*.csv"):
-            f.unlink()
+        for pattern in ("*.csv", "*.dta"):
+            for f in _CACHE_DIR.glob(pattern):
+                f.unlink()
         print(f"Cleared cache at {_CACHE_DIR}")
 
 
@@ -750,6 +806,357 @@ def _construct_mpdta_data() -> pd.DataFrame:
     return df
 
 
+def load_prop99(force_download: bool = False) -> pd.DataFrame:
+    """
+    Load the California Proposition 99 smoking dataset (Lee-Wooldridge format).
+
+    This dataset tracks per capita cigarette sales across 39 U.S. states
+    (California plus 38 never-treated donor states) from 1970 to 2000.
+    California passed Proposition 99, a large tobacco tax and control
+    program, effective in 1989. With a single treated unit, it is the
+    canonical setting for small-sample DiD inference and synthetic
+    control comparisons.
+
+    Parameters
+    ----------
+    force_download : bool, default=False
+        If True, re-download the dataset even if cached.
+
+    Returns
+    -------
+    pd.DataFrame
+        Panel dataset with columns:
+        - state : str - State name
+        - year : int - Year (1970-2000)
+        - first_year : int - Year treatment began (1989 for California,
+          0 = never treated)
+        - lcigsale : float - Log per capita cigarette sales (packs)
+        - treated : int - 1 if treatment in effect, 0 otherwise
+        - cohort : int - Alias for first_year
+
+    Notes
+    -----
+    This is the cohort-format version of the Abadie, Diamond &
+    Hainmueller (2010) California tobacco data distributed (MIT license)
+    with the authors' Stata ``lwdid`` package by Hur, Lee and Wooldridge.
+    The donor pool excludes states with their own tobacco programs,
+    leaving exactly one treated state and 38 controls.
+
+    Downloads are verified against a pinned SHA-256 and validated against
+    the source invariants (39 states, 1970-2000, single 1989 cohort). If
+    the real data cannot be obtained, a SYNTHETIC same-schema fallback is
+    returned with a ``UserWarning``; check ``df.attrs["source"]``
+    (``"lwdid_ssc_ancillary"`` = real data, ``"synthetic_fallback"`` =
+    synthetic - never use the fallback for replication).
+
+    References
+    ----------
+    Lee, S. J., & Wooldridge, J. M. (2026). Simple Approaches to Inference
+    with Difference-in-Differences Estimators with Small Cross-Sectional
+    Sample Sizes. SSRN Working Paper No. 5325686.
+
+    Abadie, A., Diamond, A., & Hainmueller, J. (2010). Synthetic Control
+    Methods for Comparative Case Studies: Estimating the Effect of
+    California's Tobacco Control Program. *Journal of the American
+    Statistical Association*, 105(490), 493-505.
+
+    Examples
+    --------
+    >>> from diff_diff.datasets import load_prop99
+    >>> from diff_diff import DifferenceInDifferences
+    >>>
+    >>> prop99 = load_prop99()
+    >>> prop99["treated_state"] = (prop99["first_year"] > 0).astype(int)
+    >>> prop99["post"] = (prop99["year"] >= 1989).astype(int)
+    >>>
+    >>> did = DifferenceInDifferences()
+    >>> results = did.fit(
+    ...     prop99, outcome="lcigsale", treatment="treated_state", time="post"
+    ... )
+    """
+    url = "http://fmwww.bc.edu/repec/bocode/l/lw_smoking.dta"
+    sha256 = "16c3ac1da351788817433fc890ec2f502a8bdfcb46cbc8d693653330e71d5a65"
+
+    source = "lwdid_ssc_ancillary"
+    try:
+        content = _download_with_cache_binary(url, "prop99", sha256, force_download)
+        df = cast(pd.DataFrame, pd.read_stata(BytesIO(content)))
+    except RuntimeError as e:
+        # Fallback: construct synthetic data from documented patterns - NOT the
+        # real Prop 99 data; unsuitable for replication.
+        warnings.warn(
+            f"Could not obtain the real Prop 99 dataset ({e}). Returning a "
+            "SYNTHETIC fallback panel with the same schema. Do not use it for "
+            "replication; check `df.attrs['source']`.",
+            UserWarning,
+            stacklevel=2,
+        )
+        source = "synthetic_fallback"
+        df = _construct_prop99_data()
+
+    # Normalize dtypes (the .dta stores first_year as float32, 0 = never treated)
+    df["state"] = df["state"].astype(str)
+    df["year"] = df["year"].astype(int)
+    df["first_year"] = df["first_year"].astype(int)
+    df["lcigsale"] = df["lcigsale"].astype(float)
+
+    if source == "lwdid_ssc_ancillary":
+        _validate_prop99(df)
+
+    # Add convenience columns
+    if "cohort" not in df.columns:
+        df["cohort"] = df["first_year"]
+
+    if "treated" not in df.columns:
+        df["treated"] = ((df["first_year"] > 0) & (df["year"] >= df["first_year"])).astype(int)
+
+    df.attrs["source"] = source
+    return df
+
+
+def _validate_prop99(df: pd.DataFrame) -> None:
+    """Validate the downloaded Prop 99 data against its source invariants."""
+    problems = []
+    if df.shape != (1209, 4):
+        problems.append(f"shape {df.shape} != (1209, 4)")
+    if df["state"].nunique() != 39:
+        problems.append(f"{df['state'].nunique()} states != 39")
+    if (df["year"].min(), df["year"].max()) != (1970, 2000):
+        problems.append("year range != 1970-2000")
+    if df.duplicated(["state", "year"]).any():
+        problems.append("duplicate (state, year) rows")
+    if not (df.groupby("state")["first_year"].nunique() == 1).all():
+        problems.append("first_year not constant within state")
+    if set(df.loc[df["first_year"] > 0, "first_year"].unique()) != {1989}:
+        problems.append("treated cohort != {1989}")
+    if df.loc[df["first_year"] > 0, "state"].nunique() != 1:
+        problems.append("treated state count != 1")
+    if df.loc[df["first_year"] == 0, "state"].nunique() != 38:
+        problems.append("never-treated state count != 38")
+    if problems:
+        raise RuntimeError(
+            "Downloaded Prop 99 data failed source validation: "
+            + "; ".join(problems)
+            + ". The upstream file may have changed - please report this."
+        )
+
+
+def _construct_prop99_data() -> pd.DataFrame:
+    """
+    Construct a synthetic Prop 99-style dataset from documented patterns.
+
+    This is a fallback when the online source is unavailable.
+    """
+    rng = np.random.default_rng(2010)  # Abadie-Diamond-Hainmueller publication year
+
+    states = ["California"] + [f"State{i:02d}" for i in range(2, 40)]
+
+    data = []
+    for state in states:
+        first_year = 1989 if state == "California" else 0
+        base = rng.uniform(4.3, 4.9)  # log packs per capita
+        trend = rng.uniform(-0.020, -0.010)  # secular decline
+
+        for year in range(1970, 2001):
+            lcigsale = base + trend * (year - 1970) + rng.normal(0, 0.04)
+            # Treatment effect: gradual decline after 1989 (~ -0.4 by 2000)
+            if first_year > 0 and year >= first_year:
+                lcigsale -= 0.04 * min(year - first_year + 1, 10)
+
+            data.append(
+                {
+                    "state": state,
+                    "year": year,
+                    "first_year": first_year,
+                    "lcigsale": round(lcigsale, 6),
+                }
+            )
+
+    return pd.DataFrame(data)
+
+
+def load_walmart(force_download: bool = False) -> pd.DataFrame:
+    """
+    Load the Walmart entry county panel (Lee-Wooldridge sample).
+
+    This dataset tracks log retail and wholesale employment for 1,277
+    U.S. counties from 1977 to 1999, with staggered first Walmart store
+    openings between 1986 and 1999 and 391 counties never receiving a
+    store. It is used to study the local labor-market effects of Walmart
+    entry under staggered treatment adoption.
+
+    Parameters
+    ----------
+    force_download : bool, default=False
+        If True, re-download the dataset even if cached.
+
+    Returns
+    -------
+    pd.DataFrame
+        Panel dataset with columns:
+        - cid : int - County identifier
+        - year : int - Year (1977-1999)
+        - first_year : int - Year of first Walmart opening (0 = never)
+        - log_retail_emp : float - Log county retail employment (outcome)
+        - log_wholesale_emp : float - Log county wholesale employment
+        - x1 : float - County poverty rate
+        - x2 : float - Share with high-school education
+        - x3 : float - Manufacturing employment share
+        - treated : int - 1 if a Walmart has opened, 0 otherwise
+        - cohort : int - Alias for first_year
+
+    Notes
+    -----
+    The panel derives from County Business Patterns data as constructed
+    by Brown & Butts, and is distributed (MIT license) with the authors'
+    Stata ``lwdid`` package by Hur, Lee and Wooldridge. The covariate
+    labels follow the Lee & Wooldridge application.
+
+    Downloads are verified against a pinned SHA-256 and validated against
+    the source invariants (1,277 counties, 1977-1999, cohorts 1986-1999,
+    391 never-treated). If the real data cannot be obtained, a SYNTHETIC
+    same-schema fallback (200 counties) is returned with a
+    ``UserWarning``; check ``df.attrs["source"]``
+    (``"lwdid_ssc_ancillary"`` = real data, ``"synthetic_fallback"`` =
+    synthetic - never use the fallback for replication).
+
+    References
+    ----------
+    Lee, S. J., & Wooldridge, J. M. (2025). A Simple Transformation
+    Approach to Difference-in-Differences Estimation for Panel Data.
+    SSRN Working Paper No. 4516518.
+
+    Brown, N., & Butts, K. (2025). Dynamic Treatment Effect Estimation
+    with Interactive Fixed Effects and Short Panels. *Journal of
+    Econometrics*.
+
+    Examples
+    --------
+    >>> from diff_diff.datasets import load_walmart
+    >>> from diff_diff import CallawaySantAnna
+    >>>
+    >>> walmart = load_walmart()
+    >>> cs = CallawaySantAnna(control_group="never_treated")
+    >>> results = cs.fit(
+    ...     walmart,
+    ...     outcome="log_retail_emp",
+    ...     unit="cid",
+    ...     time="year",
+    ...     first_treat="first_year",
+    ... )
+    """
+    url = "http://fmwww.bc.edu/repec/bocode/l/lw_walmart.dta"
+    sha256 = "410885572143dceb9daa643a8097768f1bc3493f9437451a9e4d1d5dc1e18d14"
+
+    source = "lwdid_ssc_ancillary"
+    try:
+        content = _download_with_cache_binary(url, "walmart", sha256, force_download)
+        df = cast(pd.DataFrame, pd.read_stata(BytesIO(content)))
+    except RuntimeError as e:
+        # Fallback: construct synthetic data from documented patterns - NOT the
+        # real Walmart panel (and much smaller: 200 counties vs 1,277);
+        # unsuitable for replication.
+        warnings.warn(
+            f"Could not obtain the real Walmart dataset ({e}). Returning a "
+            "SYNTHETIC fallback panel (200 counties, not the real 1,277) with "
+            "the same schema. Do not use it for replication; check "
+            "`df.attrs['source']`.",
+            UserWarning,
+            stacklevel=2,
+        )
+        source = "synthetic_fallback"
+        df = _construct_walmart_data()
+
+    # Normalize dtypes (the .dta stores identifiers as float32, 0 = never treated)
+    df["cid"] = df["cid"].astype(int)
+    df["year"] = df["year"].astype(int)
+    df["first_year"] = df["first_year"].astype(int)
+    for col in ("log_retail_emp", "log_wholesale_emp", "x1", "x2", "x3"):
+        df[col] = df[col].astype(float)
+
+    if source == "lwdid_ssc_ancillary":
+        _validate_walmart(df)
+
+    # Add convenience columns
+    if "cohort" not in df.columns:
+        df["cohort"] = df["first_year"]
+
+    if "treated" not in df.columns:
+        df["treated"] = ((df["first_year"] > 0) & (df["year"] >= df["first_year"])).astype(int)
+
+    df.attrs["source"] = source
+    return df
+
+
+def _validate_walmart(df: pd.DataFrame) -> None:
+    """Validate the downloaded Walmart data against its source invariants."""
+    problems = []
+    if df.shape != (29371, 8):
+        problems.append(f"shape {df.shape} != (29371, 8)")
+    if df["cid"].nunique() != 1277:
+        problems.append(f"{df['cid'].nunique()} counties != 1277")
+    if (df["year"].min(), df["year"].max()) != (1977, 1999):
+        problems.append("year range != 1977-1999")
+    if df.duplicated(["cid", "year"]).any():
+        problems.append("duplicate (cid, year) rows")
+    if not (df.groupby("cid")["first_year"].nunique() == 1).all():
+        problems.append("first_year not constant within county")
+    cohorts = set(df.loc[df["first_year"] > 0, "first_year"].unique())
+    if cohorts != set(range(1986, 2000)):
+        problems.append("treated cohorts != {1986, ..., 1999}")
+    if df.loc[df["first_year"] == 0, "cid"].nunique() != 391:
+        problems.append("never-treated county count != 391")
+    if problems:
+        raise RuntimeError(
+            "Downloaded Walmart data failed source validation: "
+            + "; ".join(problems)
+            + ". The upstream file may have changed - please report this."
+        )
+
+
+def _construct_walmart_data() -> pd.DataFrame:
+    """
+    Construct a synthetic Walmart-entry-style county panel.
+
+    This is a fallback when the online source is unavailable.
+    """
+    rng = np.random.default_rng(2025)  # Brown-Butts publication year, for reproducibility
+
+    n_counties = 200
+    years = range(1977, 2000)
+    # Roughly 30% never treated; the rest staggered over 1986-1999
+    cohorts = [0] + list(range(1986, 2000))
+    cohort_probs = [0.30] + [0.05] * 14
+
+    data = []
+    for cid in range(1, n_counties + 1):
+        first_year = int(rng.choice(cohorts, p=cohort_probs))
+        base_retail = rng.normal(7.5, 0.8)
+        base_wholesale = base_retail - rng.uniform(0.8, 1.5)
+        x1 = rng.uniform(0.05, 0.30)  # poverty rate
+        x2 = rng.uniform(0.50, 0.85)  # HS education share
+        x3 = rng.uniform(0.05, 0.40)  # manufacturing share
+
+        for year in years:
+            trend = (year - 1977) * 0.01
+            te = 0.03 if (first_year > 0 and year >= first_year) else 0.0
+
+            data.append(
+                {
+                    "cid": cid,
+                    "year": year,
+                    "first_year": first_year,
+                    "log_retail_emp": round(base_retail + trend + te + rng.normal(0, 0.05), 6),
+                    "log_wholesale_emp": round(base_wholesale + trend + rng.normal(0, 0.05), 6),
+                    "x1": round(x1, 6),
+                    "x2": round(x2, 6),
+                    "x3": round(x3, 6),
+                }
+            )
+
+    return pd.DataFrame(data)
+
+
 def list_datasets() -> Dict[str, str]:
     """
     List available real-world datasets.
@@ -770,6 +1177,8 @@ def list_datasets() -> Dict[str, str]:
         "castle_doctrine": "Castle Doctrine laws - staggered adoption across states",
         "divorce_laws": "Unilateral divorce laws - staggered adoption (Stevenson-Wolfers)",
         "mpdta": "Minimum wage panel data - simulated CS example from R `did` package",
+        "prop99": "California Prop 99 smoking panel - single treated unit (Lee-Wooldridge format)",
+        "walmart": "Walmart entry county panel - staggered adoption (Lee-Wooldridge sample)",
     }
 
 
@@ -805,6 +1214,8 @@ def load_dataset(name: str, force_download: bool = False) -> pd.DataFrame:
         "castle_doctrine": load_castle_doctrine,
         "divorce_laws": load_divorce_laws,
         "mpdta": load_mpdta,
+        "prop99": load_prop99,
+        "walmart": load_walmart,
     }
 
     if name not in loaders:

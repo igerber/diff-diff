@@ -2,7 +2,8 @@
 
 **Authors:** Soo Jeong Lee (Southern Illinois University Carbondale), Jeffrey M. Wooldridge (Michigan State University)
 **Citation:** Lee, S.J., & Wooldridge, J.M. (2026). Simple Approaches to Inference with Difference-in-Differences Estimators with Small Cross-Sectional Sample Sizes. SSRN Working Paper No. 5325686, dated February 3, 2026. https://ssrn.com/abstract=5325686
-**PDF reviewed:** /private/tmp/claude-501/-Users-igerber-diff-diff-LWDiD/fa768cf3-1977-474a-9ddf-b98c87817229/scratchpad/ssrn-5325686.pdf
+**PDF reviewed:** SSRN download of abstract 5325686 (36 pages; cover page dated February 3, 2026; SHA-256 `30b2b9bcd09ce63981671624daccc04deed9350cd98e06a6b402325c2eccc145`). https://ssrn.com/abstract=5325686 | DOI: https://doi.org/10.2139/ssrn.5325686
+**SSRN metadata (verified live 2026-07-13):** 36 pages; Posted: 27 Jun 2025; Last revised: 13 Jun 2026; SSRN "Date Written" field: January 03, 2026 (the author-entered metadata field lags the delivered PDF's cover date of February 3, 2026 - cite the cover date).
 **Review date:** 2026-07-11
 
 ---

@@ -296,6 +296,8 @@ Built-in datasets for examples and testing:
    diff_diff.load_castle_doctrine
    diff_diff.load_divorce_laws
    diff_diff.load_mpdta
+   diff_diff.load_prop99
+   diff_diff.load_walmart
    diff_diff.load_dataset
    diff_diff.list_datasets
    diff_diff.clear_cache
