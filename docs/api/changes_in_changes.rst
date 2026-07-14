@@ -11,8 +11,10 @@ treatment effects on the treated alongside the ATT.
 ``F_10(F_00^{-1}(F_01(y)))``: each treated pre-period outcome is ranked in the
 control pre-period distribution and pushed through the control post-period
 quantile function. The model is invariant to monotone transformations of the
-outcome (levels vs logs give consistent answers) and places no testable
-restrictions on continuous data.
+outcome (levels vs logs give consistent answers - a property the estimator
+inherits exactly in unconditional fits; the covariate branch's linear
+quantile regressions are not equivariant to nonlinear monotone transforms)
+and places no testable restrictions on continuous data.
 
 ``QDiD`` is the quantile-by-quantile DiD comparison estimator the same paper
 formalizes: it adds the control group's over-time quantile change to the

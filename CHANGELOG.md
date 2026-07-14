@@ -83,7 +83,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   DiD for the canonical 2x2 design with continuous outcomes: `ChangesInChanges`
   (alias `CiC`) recovers the treated group's full counterfactual outcome
   distribution and quantile treatment effects via the CDF transformation
-  `F_10(F_00^{-1}(F_01(y)))`, invariant to monotone outcome rescaling; `QDiD`
+  `F_10(F_00^{-1}(F_01(y)))`, invariant to monotone outcome rescaling
+  (unconditional fits; the covariate QR branch is not); `QDiD`
   is the paper's additive quantile-DiD comparison estimator. Point estimation
   matches R `qte` 1.3.1 exactly (CiC via an exact port of R's type-1 quantile
   arithmetic incl. its fuzz handling - bit-exact golden parity; QDiD via qte's
