@@ -327,6 +327,41 @@ class TestQRCases:
                 err_msg=f"QDiD imputations mismatch in '{name}'",
             )
 
+    def test_micro_end_to_end_consistent_with_stored_qte_outputs(self, fixture):
+        # Guards against qte's internals diverging from raw predict.rqs usage:
+        # composing R's STORED imputations into ATT/QTE with the module's
+        # quantile helpers must reproduce the stored qte::CiC()/QDiD() outputs
+        # (R-vs-R consistency - no solver or tie-selection freedom involved,
+        # so the tolerance is arithmetic-tight).
+        for name, case in fixture["qr_cases"].items():
+            cells = self._cells(case)
+            y11_sorted = np.sort(cells["c11"]["y"])
+            y0t_cic = np.asarray(case["cic_y0t"], dtype=float)
+            att_cic = float(np.mean(cells["c11"]["y"]) - np.mean(y0t_cic))
+            probs = np.asarray(fixture["metadata"]["probs"], dtype=float)
+            qte_cic = _quantile_type1(y11_sorted, probs) - _quantile_type1(np.sort(y0t_cic), probs)
+            np.testing.assert_allclose(att_cic, case["cic_ate"], atol=1e-12, rtol=0)
+            np.testing.assert_allclose(
+                qte_cic,
+                np.asarray(case["cic_qte"], dtype=float),
+                atol=1e-12,
+                rtol=0,
+                err_msg=f"CiC micro end-to-end inconsistency in '{name}'",
+            )
+            y0t_qdid = np.asarray(case["qdid_y0t"], dtype=float)
+            att_qdid = float(np.mean(cells["c11"]["y"]) - np.mean(y0t_qdid))
+            qte_qdid = _quantile_type7(y11_sorted, probs) - _quantile_type1(
+                np.sort(y0t_qdid), probs
+            )
+            np.testing.assert_allclose(att_qdid, case["qdid_ate"], atol=1e-12, rtol=0)
+            np.testing.assert_allclose(
+                qte_qdid,
+                np.asarray(case["qdid_qte"], dtype=float),
+                atol=1e-12,
+                rtol=0,
+                err_msg=f"QDiD micro end-to-end inconsistency in '{name}'",
+            )
+
     def test_rq_fit_exactly_optimal_per_tau(self, fixture):
         # Two-sided optimality criterion: at every tau, either the
         # coefficients match R's (unique-vertex case, ~1e-14 observed) or the
