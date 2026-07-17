@@ -88,13 +88,13 @@ where `P^bc_+/-` are computable from the data and the only unknowns are the `n(1
 - Stata: `rdrobust ..., covs(z1 z2 ...)`
 
 **Requirements checklist:**
-- [ ] `covariates=` accepting continuous/discrete/mixed columns; additive-with-common-gamma specification ONLY (Equation 2)
-- [ ] Covariate-aware MSE-optimal bandwidth constants (NOT the no-covariate constants with covariates bolted on)
-- [ ] Joint `(Y, Z)` NN / plug-in-residual variance for the `s' ⊗ P^bc` sandwich; heteroskedastic + cluster forms
-- [ ] Partial-out identity test: `tau_tilde = tau_hat - gamma_tilde' tau_hat_Z` (up to the WLS algebra) as an internal consistency check
-- [ ] Covariate balance placebo diagnostic + warning on rejection
-- [ ] CER rescaling `n^{-1/20}` (p = 1) applies unchanged to the covariate-adjusted bandwidth
-- [ ] Head Start numbers as parity smoke test: standard `tau_hat = -2.41` (h = 6.81, b = 10.72, n- = 234, n+ = 180); covariate-adjusted with covariate-aware bandwidths `tau_tilde = -2.47`, robust 95% CI `[-5.21, -0.37]`, h = 6.98, b = 11.64, n- = 240, n+ = 184 (Table 1; triangular kernel, NN het-robust variance, 9 Census covariates)
+- [x] `covariates=` accepting continuous/discrete/mixed columns; additive-with-common-gamma specification ONLY (Equation 2)
+- [x] Covariate-aware MSE-optimal bandwidth constants (NOT the no-covariate constants with covariates bolted on)
+- [x] Joint `(Y, Z)` NN / plug-in-residual variance for the `s' ⊗ P^bc` sandwich (heteroskedastic NN form; cluster variance remains a documented v1 seam alongside the RD estimator's other cluster paths)
+- [x] Partial-out identity test: `tau_tilde = tau_hat - gamma_tilde' tau_hat_Z` (up to the WLS algebra) as an internal consistency check (`tests/test_rdd_methodology.py::TestCovariates::test_partial_out_identity_exact` - exact at common manual (h, b), both conventional and bias-corrected rows)
+- [x] Covariate balance placebo diagnostic + warning on rejection - the RECIPE is documented (module docstring + REGISTRY: fit each covariate as `outcome_col`); a packaged `covariate_balance` helper with automatic warning stays a named follow-up (diagnostics wave), matching rdrobust's scope (R does not auto-test balance either)
+- [x] CER rescaling `n^{-1/20}` (p = 1) applies unchanged to the covariate-adjusted bandwidth (the `cer*` selectors rescale the covariate-aware MSE `h`; `covs_cercomb2` golden config)
+- [ ] Head Start numbers as parity smoke test: standard `tau_hat = -2.41` (h = 6.81, b = 10.72, n- = 234, n+ = 180); covariate-adjusted with covariate-aware bandwidths `tau_tilde = -2.47`, robust 95% CI `[-5.21, -0.37]`, h = 6.98, b = 11.64, n- = 240, n+ = 184 (Table 1; triangular kernel, NN het-robust variance, 9 Census covariates) - NOT shipped: needs the external replication dataset; the library's parity policy prefers live-R end-to-end goldens (9 covariate configs vs installed rdrobust 4.0.0) over published-number replication
 
 ---
 

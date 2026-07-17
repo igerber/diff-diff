@@ -89,7 +89,7 @@ Nonparametric Bias-Corrected Inference
 
 - **Calonico, S., Cattaneo, M. D., Farrell, M. H., & Titiunik, R. (2019).** "Regression Discontinuity Designs Using Covariates." *The Review of Economics and Statistics*, 101(3), 442-451. https://doi.org/10.1162/rest_a_00760
 
-  Covariate-adjusted RD (additive common-coefficient specification and its consistency conditions) - the documented fast-follow for :class:`diff_diff.RegressionDiscontinuity`; review on file.
+  Covariate-adjusted RD (additive common-coefficient specification and its consistency conditions) - the methodology behind :class:`diff_diff.RegressionDiscontinuity`'s ``fit(..., covariates=[...])`` adjustment (same estimand, covariate-aware bandwidths, balance as the operative testable condition).
 
 - **Feir, D., Lemieux, T., & Marmer, V. (2016).** "Weak Identification in Fuzzy Regression Discontinuity Designs." *Journal of Business & Economic Statistics*, 34(2), 185-196. https://doi.org/10.1080/07350015.2015.1024836
 

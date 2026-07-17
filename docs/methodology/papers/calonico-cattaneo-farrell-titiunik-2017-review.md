@@ -182,8 +182,8 @@ Output structure (pp. 392-399): two inference rows — `Conventional` (point est
 - [ ] Units at exactly the cutoff are treated (`X_i >= x̄`)
 - [ ] Conventional, bias-corrected, and robust bias-corrected inference all computed; Robust row reports z/p/CI only
 - [ ] `p = 1`, `q = 2`, triangular kernel, `mserd`, `vce(nn 3)` defaults reproduced
-- [ ] Covariate adjustment uses the single joint regression with common `gamma`; recovers the unadjusted estimator exactly when `d = 0`
-- [ ] Covariates, clustering, and weights propagate into bandwidth selection, not just variance
+- [x] Covariate adjustment uses the single joint regression with common `gamma`; recovers the unadjusted estimator exactly when `d = 0` (shipped: pooled partialled gamma in the port; `covariates=[]`/`None` is bit-identical to the unadjusted fit, tested)
+- [x] Covariates, clustering, and weights propagate into bandwidth selection, not just variance (shipped for COVARIATES: Z stacks into every pilot with a per-pilot gamma, `covs_msetwo`/`covs_cercomb2` goldens; clustering and weights remain documented v1 seams)
 - [ ] CER selectors shrink `h` only and reuse the corresponding MSE selector's `b`
 - [ ] `rho()` computes `h` only and sets `b = h/rho`
 - [ ] IK-style regularization on by default; `scaleregul(0)` removes it

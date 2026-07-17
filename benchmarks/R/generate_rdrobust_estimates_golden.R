@@ -1,8 +1,11 @@
-# Golden-value generator for the diff-diff RD ESTIMATION port - sharp AND
-# fuzzy (diff_diff/_rdrobust_port.py::rdrobust_fit and the public
-# RegressionDiscontinuity estimator; 23 configs across four synthetic DGPs
-# + the Senate data, incl. 7 fuzzy configs with full first-stage
-# tau_T/se_T/z_T/pv_T/ci_T blocks and per-side take-up coefficients).
+# Golden-value generator for the diff-diff RD ESTIMATION port - sharp,
+# fuzzy, AND covariate-adjusted (diff_diff/_rdrobust_port.py::rdrobust_fit
+# and the public RegressionDiscontinuity estimator; 32 configs across five
+# synthetic DGPs + the Senate data, incl. 7 fuzzy configs with full
+# first-stage tau_T/se_T/z_T/pv_T/ci_T blocks and 9 covariate configs with
+# coef_covs (gamma) pins; covariate names deliberately differ in length
+# and are passed UNSORTED so every covariate config also pins rdrobust's
+# order(nchar(colnames)) column sort, rdrobust.R:131).
 #
 # Deliberately a SEPARATE file/JSON from generate_rdrobust_golden.R so the
 # bandwidth fixtures reviewed in the machinery PR are never regenerated.
@@ -27,19 +30,24 @@ TARBALL_SHA256 <- "78f0d6b4bdec4091cc8f42f6f1598704747f95926446d3aaee381ea1d613a
 run_estimate <- function(y, x, c = 0, masspoints = "adjust", kernel = "tri",
                          p = 1, q = 2, h = NULL, b = NULL, rho = NULL,
                          level = 95, bwselect = "mserd",
-                         fuzzy = NULL, sharpbw = FALSE) {
+                         fuzzy = NULL, sharpbw = FALSE,
+                         covs = NULL, covs_drop = TRUE) {
   args <- list(y = y, x = x, c = c, masspoints = masspoints, kernel = kernel,
                p = p, q = q, level = level, bwselect = bwselect,
-               sharpbw = sharpbw)
+               sharpbw = sharpbw, covs_drop = covs_drop)
   if (!is.null(h)) args$h <- h
   if (!is.null(b)) args$b <- b
   if (!is.null(rho)) args$rho <- rho
   if (!is.null(fuzzy)) args$fuzzy <- fuzzy
+  if (!is.null(covs)) args$covs <- covs
   r <- suppressWarnings(do.call(rdrobust, args))
   out <- list(
     c = c, masspoints = masspoints, kernel = kernel, p = p, q = q,
     bwselect = bwselect,
     fuzzy_in = !is.null(fuzzy), sharpbw = sharpbw,
+    covs_in = !is.null(covs),
+    covs_names = if (is.null(covs)) NA else colnames(covs),
+    covs_drop = covs_drop,
     h_in = if (is.null(h)) NA else h,
     b_in = if (is.null(b)) NA else b,
     rho_in = if (is.null(rho)) NA else rho,
@@ -66,6 +74,12 @@ run_estimate <- function(y, x, c = 0, masspoints = "adjust", kernel = "tri",
     out$beta_t_p_l <- unname(as.vector(r$beta_T_p_l))
     out$beta_t_p_r <- unname(as.vector(r$beta_T_p_r))
   }
+  if (!is.null(covs)) {
+    # Common projection coefficients gamma (dZ_kept x 1 sharp, x 2 fuzzy)
+    # over the covariates KEPT after covs_drop, in R's nchar-sorted column
+    # order; the row count pins WHICH columns survived the drop.
+    out$coef_covs <- unname(as.matrix(r$coef_covs))
+  }
   out
 }
 
@@ -75,14 +89,15 @@ golden$metadata <- list(
   rdrobust_version = as.character(packageVersion("rdrobust")),
   rdrobust_tarball_sha256 = TARBALL_SHA256,
   seeds = list(dgp_lee_smooth = 42L, dgp_ties_moderate = 123L,
-               dgp_asymmetric_scaled = 777L, dgp_fuzzy = 314L),
+               dgp_asymmetric_scaled = 777L, dgp_fuzzy = 314L,
+               dgp_covs = 2718L),
   generator = "benchmarks/R/generate_rdrobust_estimates_golden.R",
   algorithm = paste(
-    "rdrobust() sharp AND fuzzy estimation blocks (three-row coef/se/z/pv/ci,",
-    "counts, per-side beta_p; fuzzy configs add the first-stage",
-    "tau_T/se_T/z_T/pv_T/ci_T rows and per-side beta_T_p) for the vce='nn'",
-    "no-covariate path, complementing the bandwidth fixtures in",
-    "rdrobust_golden.json."
+    "rdrobust() sharp, fuzzy, AND covariate-adjusted estimation blocks",
+    "(three-row coef/se/z/pv/ci, counts, per-side beta_p; fuzzy configs add",
+    "the first-stage tau_T/se_T/z_T/pv_T/ci_T rows and per-side beta_T_p;",
+    "covariate configs add the coef_covs gamma matrix) for the vce='nn'",
+    "path, complementing the bandwidth fixtures in rdrobust_golden.json."
   ),
   r_version = R.version.string
 )
@@ -159,6 +174,42 @@ golden$dgp_fuzzy <- list(
     msetwo       = run_estimate(y4, x4, fuzzy = t4, bwselect = "msetwo"),
     one_sided    = run_estimate(y4, x4, fuzzy = t4_one),
     ties_adjust  = run_estimate(y4, x4_ties, fuzzy = t4)
+  )
+)
+
+# Covariate DGP: two informative covariates with NAME LENGTHS that differ
+# and are passed UNSORTED (c("zlong", "zb")) so R's order(nchar) column
+# sort (rdrobust.R:131) is exercised by every config; zdup is an EXACT
+# linear combination for the covs_drop config. covs_ties reuses the
+# 2dp-rounded running variable (masspoints machinery x covariates).
+set.seed(2718)
+n5 <- 1200
+x5 <- 2 * rbeta(n5, 2, 4) - 1
+zlong <- 0.5 * x5 + rnorm(n5, sd = 0.8)
+zb <- rbinom(n5, 1, 0.4)
+y5 <- 0.4 * x5 + 0.9 * (x5 >= 0) + 0.7 * zlong + 0.3 * zb + rnorm(n5, sd = 0.3)
+t5 <- rbinom(n5, 1, ifelse(x5 >= 0, 0.75, 0.2))
+zdup <- 1.5 * zlong - 0.5 * zb
+x5_ties <- round(x5, 2)
+covs2 <- cbind(zlong = zlong, zb = zb)
+covs3 <- cbind(zlong = zlong, zb = zb, zdup = zdup)
+
+golden$dgp_covs <- list(
+  x = x5, y = y5, t = t5, zlong = zlong, zb = zb, zdup = zdup,
+  x_ties = x5_ties,
+  configs = list(
+    covs_default        = run_estimate(y5, x5, covs = covs2),
+    covs_manual_h       = run_estimate(y5, x5, covs = covs2, h = 0.2),
+    covs_msetwo         = run_estimate(y5, x5, covs = covs2,
+                                       bwselect = "msetwo"),
+    covs_cercomb2       = run_estimate(y5, x5, covs = covs2,
+                                       bwselect = "cercomb2"),
+    covs_epa            = run_estimate(y5, x5, covs = covs2, kernel = "epa"),
+    covs_drop_collinear = run_estimate(y5, x5, covs = covs3),
+    covs_ties           = run_estimate(y5, x5_ties, covs = covs2),
+    fuzzy_covs          = run_estimate(y5, x5, covs = covs2, fuzzy = t5),
+    fuzzy_covs_sharpbw  = run_estimate(y5, x5, covs = covs2, fuzzy = t5,
+                                       sharpbw = TRUE)
   )
 )
 

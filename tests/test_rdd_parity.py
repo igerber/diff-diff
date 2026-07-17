@@ -51,6 +51,20 @@ def _frame(golden, dgp_name, cfg_name=None):
         x = entry["x_ties"] if cfg_name == "ties_adjust" else entry["x"]
         t = entry["t_one"] if cfg_name == "one_sided" else entry["t"]
         return pd.DataFrame({"x": x, "y": entry["y"], "t": t})
+    if dgp_name == "dgp_covs":
+        # Covariate DGP: covs_ties reuses the 2dp-rounded running
+        # variable; the covariate columns ride along for every config.
+        x = entry["x_ties"] if cfg_name == "covs_ties" else entry["x"]
+        return pd.DataFrame(
+            {
+                "x": x,
+                "y": entry["y"],
+                "t": entry["t"],
+                "zlong": entry["zlong"],
+                "zb": entry["zb"],
+                "zdup": entry["zdup"],
+            }
+        )
     return pd.DataFrame({"x": entry["x"], "y": entry["y"]})
 
 
@@ -77,10 +91,17 @@ def _kwargs_from_config(cfg):
 def _fit(golden, dgp_name, cfg, cfg_name=None):
     df = _frame(golden, dgp_name, cfg_name)
     treatment_col = "t" if cfg.get("fuzzy_in") else None
+    # covs_names records the columns AS PASSED to R (unsorted, so R's
+    # order(nchar) column sort is part of what parity pins).
+    covariates = list(cfg["covs_names"]) if cfg.get("covs_in") else None
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         return RegressionDiscontinuity(**_kwargs_from_config(cfg)).fit(
-            df, "y", "x", treatment_col=treatment_col
+            df,
+            "y",
+            "x",
+            treatment_col=treatment_col,
+            covariates=covariates,
         )
 
 
@@ -169,9 +190,33 @@ class TestEstimateGoldenParity:
                     np.testing.assert_allclose(
                         r.beta_t_p_right, cfg["beta_t_p_r"], rtol=RTOL, err_msg=label
                     )
+                if cfg.get("covs_in"):
+                    # coef_covs = R's gamma over the KEPT covariates in
+                    # nchar-sorted order; our name-keyed dicts preserve
+                    # model order (Python dicts are insertion-ordered), so
+                    # values() aligns row-for-row. Row count pins WHICH
+                    # columns survived covs_drop.
+                    gamma = np.asarray(cfg["coef_covs"], dtype=float)
+                    gamma = gamma.reshape(gamma.shape[0], -1)
+                    assert r.covariate_coefficients is not None, label
+                    assert len(r.covariate_coefficients) == gamma.shape[0], label
+                    np.testing.assert_allclose(
+                        list(r.covariate_coefficients.values()),
+                        gamma[:, 0],
+                        rtol=RTOL,
+                        err_msg=label,
+                    )
+                    if cfg.get("fuzzy_in"):
+                        assert r.first_stage_covariate_coefficients is not None, label
+                        np.testing.assert_allclose(
+                            list(r.first_stage_covariate_coefficients.values()),
+                            gamma[:, 1],
+                            rtol=RTOL,
+                            err_msg=label,
+                        )
                 n_checked += 1
-        # 23 configurations; fail loudly if the golden shrinks.
-        assert n_checked == 23
+        # 32 configurations; fail loudly if the golden shrinks.
+        assert n_checked == 32
 
 
 class TestSenatePublished2017:

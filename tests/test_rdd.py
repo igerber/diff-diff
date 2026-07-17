@@ -37,6 +37,7 @@ class TestConstructor:
             "bwrestrict": True,
             "scaleregul": 1.0,
             "sharpbw": False,
+            "covs_drop": True,
             "alpha": 0.05,
         }
 
@@ -477,3 +478,112 @@ class TestFuzzyAPI:
         with pytest.raises(ValueError):
             rd.set_params(sharpbw="yes")
         assert rd.sharpbw is True  # transactional: unchanged after failure
+
+
+def _covs_df(n=600, seed=8):
+    rng = np.random.default_rng(seed)
+    x = rng.uniform(-1, 1, n)
+    zlong = 0.5 * x + rng.normal(size=n)
+    zb = rng.binomial(1, 0.4, n).astype(float)
+    y = 0.4 * x + 0.9 * (x >= 0) + 0.6 * zlong + 0.3 * zb + rng.standard_normal(n) * 0.2
+    return pd.DataFrame({"x": x, "y": y, "zlong": zlong, "zb": zb})
+
+
+class TestCovariatesAPI:
+    def test_missing_covariate_col_raises(self):
+        with pytest.raises(ValueError, match="not found"):
+            RegressionDiscontinuity().fit(_covs_df(), "y", "x", covariates=["nope"])
+
+    def test_bare_string_covariates_rejected(self):
+        # A bare string would silently iterate characters.
+        with pytest.raises(ValueError, match="list of column names"):
+            RegressionDiscontinuity().fit(_covs_df(), "y", "x", covariates="zlong")
+
+    def test_non_string_entry_rejected(self):
+        with pytest.raises(ValueError, match="list of column names"):
+            RegressionDiscontinuity().fit(_covs_df(), "y", "x", covariates=["zlong", 3])
+
+    def test_generator_covariates_materialized_not_swallowed(self):
+        # A generator must behave exactly like the equivalent list - the
+        # validation pass must not consume it into a silent no-adjustment
+        # fit (local-review P2).
+        df = _covs_df()
+        gen = (name for name in ["zlong", "zb"])
+        r_gen = RegressionDiscontinuity().fit(df, "y", "x", covariates=gen)
+        r_list = RegressionDiscontinuity().fit(df, "y", "x", covariates=["zlong", "zb"])
+        assert r_gen.covariates == ["zlong", "zb"]
+        assert r_gen.att == r_list.att and r_gen.se == r_list.se
+
+    def test_duplicate_covariate_rejected(self):
+        with pytest.raises(ValueError, match="[Dd]uplicate"):
+            RegressionDiscontinuity().fit(_covs_df(), "y", "x", covariates=["zlong", "zlong"])
+
+    def test_collision_with_structural_columns_rejected(self):
+        df = _covs_df()
+        df["t"] = (df["x"] >= 0).astype(float)
+        for clash in ("y", "x"):
+            with pytest.raises(ValueError, match="collide"):
+                RegressionDiscontinuity().fit(df, "y", "x", covariates=[clash])
+        with pytest.raises(ValueError, match="collide"):
+            RegressionDiscontinuity().fit(df, "y", "x", treatment_col="t", covariates=["t"])
+
+    def test_echo_fields_adjusted_fit(self):
+        df = _covs_df()
+        r = RegressionDiscontinuity().fit(df, "y", "x", covariates=["zlong", "zb"])
+        assert r.covariates == ["zlong", "zb"]  # as passed, not sorted
+        assert r.covariates_dropped == []
+        assert r.covs_drop is True
+        assert set(r.covariate_coefficients) == {"zlong", "zb"}
+        assert all(np.isfinite(v) for v in r.covariate_coefficients.values())
+        assert r.first_stage_covariate_coefficients is None  # sharp fit
+        # estimand label NEVER changes under adjustment
+        assert r.estimand == "sharp (ATE at the cutoff)"
+
+    def test_echo_fields_unadjusted_fit_none_safe(self):
+        r = RegressionDiscontinuity().fit(_covs_df(), "y", "x")
+        assert r.covariates is None
+        assert r.covariates_dropped is None
+        assert r.covariate_coefficients is None
+        assert r.first_stage_covariate_coefficients is None
+        d = r.to_dict()
+        assert d["covariates"] is None
+        assert d["covariate_coefficients"] is None
+        assert d["covs_drop"] is True
+
+    def test_to_dict_adjusted(self):
+        r = RegressionDiscontinuity().fit(_covs_df(), "y", "x", covariates=["zlong"])
+        d = r.to_dict()
+        assert d["covariates"] == ["zlong"]
+        assert d["covariates_dropped"] == []
+        assert set(d["covariate_coefficients"]) == {"zlong"}
+
+    def test_summary_covariate_lines_only_when_adjusted(self):
+        df = _covs_df()
+        plain = RegressionDiscontinuity().fit(df, "y", "x").summary()
+        adj = RegressionDiscontinuity().fit(df, "y", "x", covariates=["zlong", "zb"]).summary()
+        assert "Covariate-adjusted" not in plain
+        assert "Covariates" not in plain
+        assert "Covariate-adjusted Sharp" in adj
+        assert "Covariates (2): zlong, zb" in adj
+
+    def test_canonical_identities_on_adjusted_fit(self):
+        r = RegressionDiscontinuity().fit(_covs_df(), "y", "x", covariates=["zlong", "zb"])
+        assert r.t_stat == pytest.approx(r.att / r.se, rel=1e-14)
+        mid = 0.5 * (r.conf_int[0] + r.conf_int[1])
+        assert mid == pytest.approx(r.att, rel=1e-12)
+
+    def test_covs_drop_strict_bool(self):
+        with pytest.raises(ValueError, match="covs_drop must be a bool"):
+            RegressionDiscontinuity(covs_drop=1)
+        with pytest.raises(ValueError, match="covs_drop must be a bool"):
+            RegressionDiscontinuity(covs_drop="yes")
+
+    def test_covs_drop_set_params_roundtrip(self):
+        est = RegressionDiscontinuity()
+        assert est.get_params()["covs_drop"] is True
+        est.set_params(covs_drop=False)
+        assert est.get_params()["covs_drop"] is False
+        with pytest.raises(ValueError, match="covs_drop must be a bool"):
+            est.set_params(covs_drop="no")
+        # failed set_params must not have mutated
+        assert est.get_params()["covs_drop"] is False

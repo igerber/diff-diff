@@ -25,6 +25,7 @@ from diff_diff._rdrobust_port import (
     RDROBUST_TARBALL_SHA256,
     RDROBUST_VERSION,
     compute_dups_dupsid,
+    covs_drop_fun,
     qrXXinv,
     quantile_type2,
     rdbwselect,
@@ -620,3 +621,275 @@ class TestFuzzyPortValidation:
         a = rdrobust_fit(y, x, 0.0, 0.5, 0.5, 0.5, 0.5, t=t)
         b = rdrobust_fit(y, x, 0.0, 0.5, 0.5, 0.5, 0.5, t=t.reshape(-1, 1))
         assert a.tau_bc == b.tau_bc and a.se_T_rb == b.se_T_rb
+
+
+class TestCovsPortGoldenParity:
+    """Port-level covariate parity incl. the per-side biases and the gamma
+    matrix (R's coef_covs). The covs_msetwo / covs_cercomb2 configs pin Z
+    threading through ALL THREE selector chains (the port always computes
+    mserd+msetwo+msesum; partial threading would silently ship
+    non-covariate-aware bandwidths for 8 of the 10 selectors), and
+    covs_cercomb2 additionally locks CER-rescaling of the covariate-aware
+    h. Golden covariate columns were passed to R with UNSORTED names of
+    differing lengths, so parity also pins rdrobust's order(nchar) column
+    sort (reproduced here by sorting the name list by length before
+    building the matrix)."""
+
+    def test_covs_configs_with_bias_and_gamma(self, estimates_golden):
+        entry = estimates_golden["dgp_covs"]
+        y = np.array(entry["y"])
+        t_all = np.array(entry["t"], dtype=np.float64)
+        cols = {
+            "zlong": np.array(entry["zlong"]),
+            "zb": np.array(entry["zb"], dtype=np.float64),
+            "zdup": np.array(entry["zdup"]),
+        }
+        n_checked = 0
+        for name, cfg in entry["configs"].items():
+            x = np.array(entry["x_ties"] if name == "covs_ties" else entry["x"])
+            t = t_all if cfg["fuzzy_in"] else None
+            names_sorted = sorted(cfg["covs_names"], key=len)
+            z = np.column_stack([cols[c] for c in names_sorted])
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                if cfg["h_in"] is not None:
+                    h_l = h_r = b_l = b_r = float(cfg["h_in"])  # h alone -> b = h
+                else:
+                    bw = rdbwselect(
+                        y,
+                        x,
+                        kernel=cfg["kernel"],
+                        masspoints=cfg["masspoints"],
+                        fuzzy=t,
+                        sharpbw=bool(cfg["sharpbw"]),
+                        covs=z,
+                    )
+                    h_l, h_r, b_l, b_r = bw.bws[cfg["bwselect"]]
+                fit = rdrobust_fit(y, x, 0.0, h_l, h_r, b_l, b_r, kernel=cfg["kernel"], t=t, covs=z)
+            pairs = [
+                ("h_l", h_l, cfg["h_l"]),
+                ("h_r", h_r, cfg["h_r"]),
+                ("b_l", b_l, cfg["b_l"]),
+                ("tau_cl", fit.tau_cl, cfg["tau_cl"]),
+                ("tau_bc", fit.tau_bc, cfg["tau_bc"]),
+                ("se_cl", fit.se_cl, cfg["se_cl"]),
+                ("se_rb", fit.se_rb, cfg["se_rb"]),
+                ("bias_l", fit.bias_l, cfg["bias"][0]),
+                ("bias_r", fit.bias_r, cfg["bias"][1]),
+            ]
+            if cfg["fuzzy_in"]:
+                pairs += [
+                    ("tau_T_cl", fit.tau_T_cl, cfg["tau_T"][0]),
+                    ("tau_T_bc", fit.tau_T_bc, cfg["tau_T"][1]),
+                    ("se_T_cl", fit.se_T_cl, cfg["se_T"][0]),
+                    ("se_T_rb", fit.se_T_rb, cfg["se_T"][2]),
+                ]
+            for label, got, want in pairs:
+                assert got == pytest.approx(
+                    want, rel=1e-9, abs=1e-12
+                ), f"{name}:{label}: {got} vs {want}"
+            gamma = np.asarray(cfg["coef_covs"], dtype=float)
+            gamma = gamma.reshape(gamma.shape[0], -1)
+            assert fit.gamma_p is not None
+            # Row count pins WHICH columns survived the entry-point drop
+            # (covs_drop_collinear: 3 passed, 2 kept).
+            assert fit.gamma_p.shape == gamma.shape, f"{name}: gamma shape"
+            np.testing.assert_allclose(fit.gamma_p, gamma, rtol=1e-9, err_msg=name)
+            # Adjusted per-side coefficient vectors (R's beta_Y_p_*).
+            np.testing.assert_allclose(
+                fit.beta_p_l, np.ravel(cfg["beta_p_l"]), rtol=1e-9, err_msg=name
+            )
+            np.testing.assert_allclose(
+                fit.beta_p_r, np.ravel(cfg["beta_p_r"]), rtol=1e-9, err_msg=name
+            )
+            n_checked += 1
+        assert n_checked == 9
+
+
+class TestCovsPortValidation:
+    def _yxz(self, n=200, seed=17):
+        rng = np.random.default_rng(seed)
+        x = rng.uniform(-1, 1, n)
+        z1 = 0.5 * x + rng.normal(size=n)
+        z2 = rng.binomial(1, 0.4, n).astype(float)
+        y = 0.3 * x + 0.8 * (x >= 0) + 0.6 * z1 + 0.2 * z2 + rng.normal(0, 0.2, n)
+        return y, x, np.column_stack([z1, z2])
+
+    def test_three_dim_covs_rejected(self):
+        y, x, z = self._yxz()
+        with pytest.raises(ValueError, match="1-D vector or"):
+            rdrobust_fit(y, x, 0.0, 0.5, 0.5, 0.5, 0.5, covs=z.reshape(20, 10, 2))
+        with pytest.raises(ValueError, match="1-D vector or"):
+            rdbwselect(y, x, covs=z.reshape(20, 10, 2))
+
+    def test_covs_length_mismatch_rejected(self):
+        y, x, z = self._yxz()
+        with pytest.raises(ValueError, match="rows to match x"):
+            rdrobust_fit(y, x, 0.0, 0.5, 0.5, 0.5, 0.5, covs=z[:-3])
+        with pytest.raises(ValueError, match="rows to match x"):
+            rdbwselect(y, x, covs=z[:-3])
+
+    def test_nonfinite_covs_rejected(self):
+        y, x, z = self._yxz()
+        z_bad = z.copy()
+        z_bad[5, 0] = np.nan
+        with pytest.raises(ValueError, match="finite and complete-case"):
+            rdrobust_fit(y, x, 0.0, 0.5, 0.5, 0.5, 0.5, covs=z_bad)
+        with pytest.raises(ValueError, match="finite and complete-case"):
+            rdbwselect(y, x, covs=z_bad)
+
+    def test_covs_drop_strict_bool(self):
+        y, x, z = self._yxz()
+        with pytest.raises(ValueError, match="covs_drop must be a bool"):
+            rdrobust_fit(y, x, 0.0, 0.5, 0.5, 0.5, 0.5, covs=z, covs_drop=1)
+        with pytest.raises(ValueError, match="covs_drop must be a bool"):
+            rdbwselect(y, x, covs=z, covs_drop="yes")
+
+    def test_rank_zero_covs_fails_closed(self):
+        # Deviation from R: an all-zero covariate matrix would make R
+        # index a nonexistent column downstream (opaque error); the port
+        # raises a targeted ValueError from both entry points.
+        y, x, _ = self._yxz()
+        zeros = np.zeros((y.shape[0], 2))
+        with pytest.raises(ValueError, match="rank-0"):
+            rdrobust_fit(y, x, 0.0, 0.5, 0.5, 0.5, 0.5, covs=zeros)
+        with pytest.raises(ValueError, match="rank-0"):
+            rdbwselect(y, x, covs=zeros)
+
+    def test_entry_drop_warns_with_r_message_and_matches_reduced(self):
+        y, x, z = self._yxz()
+        z_dup = np.column_stack([z, z[:, 0]])  # exact duplicate appended
+        with pytest.warns(UserWarning, match="Multicollinearity issue detected"):
+            fit_dup = rdrobust_fit(y, x, 0.0, 0.5, 0.5, 0.5, 0.5, covs=z_dup)
+        fit_red = rdrobust_fit(y, x, 0.0, 0.5, 0.5, 0.5, 0.5, covs=z)
+        # The appended duplicate is cycled out by the pivoted QR, leaving
+        # the ORIGINAL columns - bit-identical fit.
+        assert fit_dup.tau_bc == fit_red.tau_bc
+        assert fit_dup.se_rb == fit_red.se_rb
+
+    def test_covs_drop_false_collinear_raises(self):
+        y, x, z = self._yxz()
+        z_dup = np.column_stack([z, z[:, 0]])
+        with pytest.raises(ValueError, match="covs_drop=True"):
+            rdrobust_fit(y, x, 0.0, 0.5, 0.5, 0.5, 0.5, covs=z_dup, covs_drop=False)
+
+    def test_column_vector_covs_accepted(self):
+        y, x, z = self._yxz()
+        a = rdrobust_fit(y, x, 0.0, 0.5, 0.5, 0.5, 0.5, covs=z[:, 0])
+        b = rdrobust_fit(y, x, 0.0, 0.5, 0.5, 0.5, 0.5, covs=z[:, 0].reshape(-1, 1))
+        assert a.tau_bc == b.tau_bc and a.se_rb == b.se_rb
+
+
+class TestCovsDropFun:
+    """Unit pins for the LINPACK dqrdc2 rank/pivot port against live-R
+    ``qr(z, tol=1e-7)`` results (values captured from R 4.5.2 during the
+    pre-implementation smoke; deterministic given the constructions).
+
+    The load-bearing property is dqrdc2's PER-COLUMN relative rule (a
+    column is negligible when its reduced norm falls below tol times its
+    OWN original norm) - a small-but-independent column must never be
+    dropped, while exact and near (1e-8) linear combinations must be."""
+
+    def _base(self, n=50, seed=42):
+        rng = np.random.default_rng(seed)
+        return rng.normal(size=n), rng.normal(size=n), rng.normal(size=n)
+
+    def test_exact_duplicate_dropped(self):
+        a, b, _ = self._base()
+        keep, rank = covs_drop_fun(np.column_stack([a, b, a]))
+        assert rank == 2 and keep.tolist() == [0, 1]
+
+    def test_exact_combination_dropped(self):
+        a, b, _ = self._base()
+        keep, rank = covs_drop_fun(np.column_stack([a, b, 2 * a - 3 * b]))
+        assert rank == 2 and keep.tolist() == [0, 1]
+
+    def test_near_collinear_dropped_at_tol(self):
+        a, b, noise = self._base()
+        keep, rank = covs_drop_fun(np.column_stack([a, b, a + 1e-8 * noise]))
+        assert rank == 2 and keep.tolist() == [0, 1]
+
+    def test_tiny_scaled_independent_column_kept(self):
+        # The |R[0,0]|-relative rule (LAPACK-style) would wrongly drop
+        # this column; dqrdc2's own-norm rule keeps it, as R does.
+        a, b, noise = self._base()
+        keep, rank = covs_drop_fun(np.column_stack([a, b, 1e-9 * noise]))
+        assert rank == 3 and keep.tolist() == [0, 1, 2]
+
+    def test_constant_column_kept_by_qr(self):
+        # No intercept in the covariate-only QR, so a constant nonzero
+        # column is full-rank HERE; its collinearity with the polynomial
+        # design surfaces later, in the guarded gamma solve.
+        a, _, b = self._base()
+        keep, rank = covs_drop_fun(np.column_stack([a, np.full(50, 0.7), b]))
+        assert rank == 3 and keep.tolist() == [0, 1, 2]
+
+    def test_zero_matrix_rank_zero(self):
+        # dqrdc2's zero-norm fixup (work(j,2) = 1) makes all-zero columns
+        # negligible: R gives rank 0, pivot 1:3 (verified live).
+        keep, rank = covs_drop_fun(np.zeros((5, 3)))
+        assert rank == 0 and keep.size == 0
+
+    def test_zero_column_cycled_to_end(self):
+        # R: qr(cbind(a, 0, b))$rank == 2, pivot == c(1, 3, 2).
+        rng = np.random.default_rng(3)
+        a, b = rng.normal(size=5), rng.normal(size=5)
+        keep, rank = covs_drop_fun(np.column_stack([a, np.zeros(5), b]))
+        assert rank == 2 and keep.tolist() == [0, 2]
+
+
+class TestCovsDegenerateGuard:
+    """The guarded gamma solve (documented Deviation from R): R's
+    ginv(tol=1e-20) INVERTS a float-noise singular value on
+    exactly-degenerate partialled systems, making its output
+    platform-noise (observed 28% cross-implementation gamma spread and
+    ~0.5% tau shifts in the pre-implementation smoke). The port excludes
+    per-column degeneracies, cuts set-level noise directions with an
+    equilibrated (scale-invariant) pseudo-inverse, and warns."""
+
+    def _data(self, n=400, seed=11):
+        rng = np.random.default_rng(seed)
+        x = rng.uniform(-1, 1, n)
+        z1 = 0.4 * x + rng.normal(size=n)
+        y = 0.3 * x + 0.8 * (x >= 0) + 0.6 * z1 + rng.normal(0, 0.2, n)
+        return y, x, z1, rng
+
+    def test_constant_covariate_excluded_equals_fit_without_it(self):
+        y, x, z1, _ = self._data()
+        z = np.column_stack([z1, np.full_like(x, 0.7)])
+        with pytest.warns(UserWarning, match="collinear with the local polynomial"):
+            fit_c = rdrobust_fit(y, x, 0.0, 0.4, 0.4, 0.4, 0.4, covs=z)
+        fit_1 = rdrobust_fit(y, x, 0.0, 0.4, 0.4, 0.4, 0.4, covs=z1)
+        assert fit_c.covs_excluded is not None
+        assert fit_c.covs_excluded.tolist() == [False, True]
+        # gamma row zeroed -> the constant contributes exactly nothing.
+        assert fit_c.gamma_p is not None and fit_c.gamma_p[1, 0] == 0.0
+        assert fit_c.tau_bc == fit_1.tau_bc
+        assert fit_c.se_rb == fit_1.se_rb
+
+    def test_dummy_set_stabilized_equals_drop_one(self):
+        # A full one-hot set passes the intercept-free QR (rank 3) but the
+        # partialled system is rank-deficient; the stabilized cut must
+        # give the SAME tau as any identified reparametrization of the
+        # same span (drop one category) - the span-invariance property R's
+        # noise-inverting solve does not have.
+        y, x, _z1, rng = self._data()
+        cat = rng.integers(0, 3, size=x.shape[0])
+        dummies = np.column_stack([(cat == k).astype(float) for k in range(3)])
+        with pytest.warns(UserWarning, match="rank-deficient after partialling"):
+            fit3 = rdrobust_fit(y, x, 0.0, 0.4, 0.4, 0.4, 0.4, covs=dummies)
+        fit2 = rdrobust_fit(y, x, 0.0, 0.4, 0.4, 0.4, 0.4, covs=dummies[:, :2])
+        assert fit3.covs_set_degenerate
+        assert fit3.tau_bc == pytest.approx(fit2.tau_bc, rel=1e-9)
+        assert fit3.se_rb == pytest.approx(fit2.se_rb, rel=1e-9)
+
+    def test_tiny_scaled_covariate_not_flagged(self):
+        # Scale-invariance of the guard: a genuinely independent covariate
+        # scaled to 1e-9 must go through the R-exact solve untouched.
+        y, x, z1, rng = self._data()
+        z = np.column_stack([z1, 1e-9 * rng.normal(size=x.shape[0])])
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            fit = rdrobust_fit(y, x, 0.0, 0.4, 0.4, 0.4, 0.4, covs=z)
+        assert fit.covs_excluded is not None and not fit.covs_excluded.any()
+        assert not fit.covs_set_degenerate

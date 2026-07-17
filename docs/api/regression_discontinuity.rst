@@ -1,8 +1,9 @@
 Regression Discontinuity
 ========================
 
-Regression discontinuity estimation - sharp and fuzzy - with robust
-bias-corrected inference, parity-targeting R ``rdrobust`` 4.0.0.
+Regression discontinuity estimation - sharp and fuzzy, with optional
+covariate adjustment - and robust bias-corrected inference,
+parity-targeting R ``rdrobust`` 4.0.0.
 
 **Sharp** (default): treatment is assigned by a known threshold of an
 observed running variable (``running >= cutoff``; units exactly at the
@@ -17,6 +18,14 @@ full ``first_stage*`` block.
 Both designs use kernel-weighted local polynomials on each side with
 data-driven MSE/CER-optimal bandwidths (all 10 rdrobust selectors) and
 robust bias-corrected inference per Calonico, Cattaneo & Titiunik (2014).
+**Covariate adjustment** (``fit(..., covariates=[...])``; R's ``covs=``,
+per Calonico, Cattaneo, Farrell & Titiunik 2019): additive
+common-coefficient adjustment that leaves the estimand UNCHANGED -
+unlike the DiD estimators' conditional-parallel-trends role, RD
+covariates buy precision only, and require covariate balance at the
+cutoff (testable by fitting each covariate as the outcome). Bandwidths
+are covariate-aware; collinear covariates are dropped with a warning
+naming them (``covs_drop=True``, R's default).
 
 .. note::
 
@@ -34,12 +43,12 @@ robust bias-corrected inference per Calonico, Cattaneo & Titiunik (2014).
 
 .. note::
 
-   **Scope of this release.** Sharp and fuzzy designs with the
-   nearest-neighbor variance estimator (rdrobust's default). Covariate
-   adjustment, cluster-robust variance, weights, kink estimands,
-   weak-IV-robust fuzzy inference, and the rdplot/density-test
-   diagnostics are documented follow-ups - see the methodology registry
-   for the full deviations and seams list.
+   **Scope of this release.** Sharp, fuzzy, and covariate-adjusted
+   designs with the nearest-neighbor variance estimator (rdrobust's
+   default). Cluster-robust variance, weights, kink estimands,
+   weak-IV-robust fuzzy inference, a packaged covariate-balance helper,
+   and the rdplot/density-test diagnostics are documented follow-ups -
+   see the methodology registry for the full deviations and seams list.
 
 RegressionDiscontinuity
 -----------------------

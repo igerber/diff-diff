@@ -826,7 +826,7 @@ es = est.fit(data_mp, outcome_col='y', unit_col='unit',
 
 ### RegressionDiscontinuity
 
-Regression discontinuity estimator - sharp and fuzzy (Calonico, Cattaneo & Titiunik 2014), parity-targeting R rdrobust 4.0.0. SHARP (default): treatment is assigned by a known threshold of an observed running variable (`running >= cutoff`; units exactly at the cutoff are treated); no treatment column. FUZZY: pass the OBSERVED take-up column via `fit(..., treatment_col=...)` (R's `fuzzy=`) - the estimand becomes the local Wald ratio (complier LATE at the cutoff for BINARY take-up under monotonicity; ratio-of-jumps otherwise - the `estimand` field says which) with a linearized bias correction, and the results gain a full `first_stage*` three-row block. Point estimation via kernel-weighted local polynomials on each side; data-driven MSE/CER-optimal bandwidths (all 10 rdrobust selectors; fuzzy selects on the ratio objective by default, with a sharp-on-Y switch under one-sided perfect compliance or `sharpbw=True`); robust bias-corrected inference. Cross-sectional - no panel/time dimension.
+Regression discontinuity estimator - sharp and fuzzy, with optional covariate adjustment (Calonico, Cattaneo & Titiunik 2014; covariates per Calonico, Cattaneo, Farrell & Titiunik 2019), parity-targeting R rdrobust 4.0.0. SHARP (default): treatment is assigned by a known threshold of an observed running variable (`running >= cutoff`; units exactly at the cutoff are treated); no treatment column. FUZZY: pass the OBSERVED take-up column via `fit(..., treatment_col=...)` (R's `fuzzy=`) - the estimand becomes the local Wald ratio (complier LATE at the cutoff for BINARY take-up under monotonicity; ratio-of-jumps otherwise - the `estimand` field says which) with a linearized bias correction, and the results gain a full `first_stage*` three-row block. Point estimation via kernel-weighted local polynomials on each side; data-driven MSE/CER-optimal bandwidths (all 10 rdrobust selectors; fuzzy selects on the ratio objective by default, with a sharp-on-Y switch under one-sided perfect compliance or `sharpbw=True`); robust bias-corrected inference. COVARIATE ADJUSTMENT: pass `fit(..., covariates=[...])` (R's `covs=`) for the CCFT 2019 additive common-coefficient adjustment - the estimand is UNCHANGED (precision only, unlike the DiD estimators' conditional-parallel-trends role); requires covariate BALANCE at the cutoff (testable: fit each covariate as the outcome and inspect its RD p-value); bandwidths are covariate-aware. Cross-sectional - no panel/time dimension.
 
 ```python
 RegressionDiscontinuity(
@@ -845,6 +845,7 @@ RegressionDiscontinuity(
     bwrestrict: bool = True,           # Clamp bandwidths to the observed running-variable range
     scaleregul: float = 1.0,           # IK-style regularization scale (0 removes)
     sharpbw: bool = False,             # Fuzzy only: select bandwidths on the sharp reduced form (R's sharpbw); auto under one-sided perfect compliance
+    covs_drop: bool = True,            # Covariate fits only: drop collinear covariates with a warning naming them (R default); False = strict error
     alpha: float = 0.05,               # rdrobust level = 100*(1-alpha)
 )
 ```
@@ -859,6 +860,7 @@ rd.fit(
     outcome_col: str,
     running_col: str,
     treatment_col: str | None = None,  # None = sharp; a column name = fuzzy (observed take-up; any numeric, typically binary)
+    covariates: list[str] | None = None,  # Pre-determined covariate columns (R's covs=); additive common-coefficient adjustment, SAME estimand
 ) -> RegressionDiscontinuityResults
 ```
 
@@ -877,6 +879,10 @@ fuzzy = rd.fit(df, "y", "score", treatment_col="takeup")  # fuzzy RD
 fuzzy.att          # linearized bias-corrected local Wald ratio, robust row (complier LATE for binary take-up)
 fuzzy.first_stage  # take-up jump (bias-corrected; full three-row first_stage* mirror available)
 fuzzy.estimand     # "fuzzy (LATE for compliers at the cutoff)" (binary take-up) / "fuzzy (local Wald ratio at the cutoff; non-binary take-up)" / "sharp (ATE at the cutoff)"
+
+adj = rd.fit(df, "y", "score", covariates=["age", "income"])  # covariate-adjusted (estimand unchanged, shorter CIs)
+adj.covariate_coefficients  # {"age": ..., "income": ...} - nuisance projection gammas, NOT causal effects
+balance = rd.fit(df, "age", "score")  # balance placebo: covariate as outcome; small p-value = imbalance, do not adjust
 ```
 
 Canonical fields are ONE coherent row (the robust row): att = bias-corrected
@@ -884,11 +890,15 @@ estimate, se = robust SE. rdrobust prints the conventional estimate as its
 headline - that is att_conventional here, with a full inference row of its own.
 Fuzzy fits warn when the first-stage robust CI contains zero (weak
 identification; R is silent) and raise R's exact error when the take-up
-variable has no variation and no jump. Covariates, cluster-robust variance,
-weights, kink estimands, and weak-IV-robust fuzzy inference are documented
-follow-ups; missing rows are dropped WITH a warning (R drops silently);
-N < 20 falls back to full-range bandwidths exactly as rdrobust does
-(overriding manual h).
+variable has no variation and no jump. Covariate-adjusted fits drop collinear
+covariates with a warning naming them (covs_drop=True, R's default; False =
+strict error) and guard degenerate adjustments (constant covariates are
+excluded, full dummy sets take a stabilized cut - both warned; R silently
+returns platform-dependent noise there). Cluster-robust variance, weights,
+kink estimands, weak-IV-robust fuzzy inference, and a packaged
+covariate-balance helper are documented follow-ups; missing rows are dropped
+WITH a warning (R drops silently); N < 20 falls back to full-range bandwidths
+exactly as rdrobust does (overriding manual h).
 
 ### StackedDiD
 

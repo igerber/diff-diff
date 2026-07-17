@@ -1,6 +1,7 @@
 """
-Regression discontinuity design (RDD) estimation - sharp and fuzzy - with
-robust bias-corrected inference, parity-targeting R ``rdrobust`` 4.0.0.
+Regression discontinuity design (RDD) estimation - sharp and fuzzy, with
+optional covariate adjustment - and robust bias-corrected inference,
+parity-targeting R ``rdrobust`` 4.0.0.
 
 Implements the local-polynomial RD estimators of Calonico, Cattaneo &
 Titiunik (2014). SHARP (default): treatment is assigned by
@@ -17,6 +18,30 @@ MSE/CER-optimal bandwidths and robust
 bias-corrected (RBC) inference; the fuzzy bias correction is the
 linearization of the ratio (not per-component), matching CCT 2014
 Section 3.2 and rdrobust exactly.
+
+Covariate adjustment (``fit(..., covariates=[...])``; Calonico, Cattaneo,
+Farrell & Titiunik 2019, R's ``covs=``): covariates enter ADDITIVELY with
+a common coefficient pooled across sides (CCFT 2019 Equation 2 - the only
+specification with a clean guarantee; treatment-interacted and demeaned
+variants are documented as inconsistent-or-inferior there). UNLIKE the
+library's DiD estimators, where ``covariates`` switches identification to
+conditional parallel trends, RD covariates DO NOT change the estimand -
+the ``att`` still measures the same cutoff jump/ratio and the
+``estimand`` label is unchanged; adjustment buys precision (shorter CIs)
+when covariates predict the outcome near the cutoff. The operative
+requirement is covariate BALANCE at the cutoff (zero RD effect on each
+covariate); imbalanced covariates make the adjusted estimator
+inconsistent, and adjusting "for" imbalance cannot restore
+identification. Balance is testable with the estimator itself::
+
+    balance = RegressionDiscontinuity().fit(df, outcome_col="z1",
+                                            running_col="x")
+    balance.p_value  # small p = imbalance; do not adjust for z1
+
+Bandwidths are covariate-AWARE (covariates propagate into selection, not
+just estimation, as in R). Collinear covariates are dropped with a
+warning under ``covs_drop=True`` (R's default; the warning names the
+dropped columns).
 
 Canonical inference binding
 ---------------------------
@@ -52,12 +77,14 @@ diff-diff                R rdrobust
 ``nnmatch``              ``nnmatch``
 ``treatment_col`` (fit)  ``fuzzy`` (observed take-up variable)
 ``sharpbw``              ``sharpbw`` (same default and semantics)
+``covariates`` (fit)     ``covs`` (column names instead of a matrix)
+``covs_drop``            ``covs_drop`` (same default and semantics)
 =======================  ==========================================
 
-Not in v1 (documented seams, see REGISTRY.md): covariate adjustment,
-cluster-robust variance, weights, ``deriv``/kink estimands, ``scalepar``,
-``stdvars``, hc0-hc3 variance modes, weak-IV-robust fuzzy inference
-(Feir-Lemieux-Marmer).
+Not in v1 (documented seams, see REGISTRY.md): cluster-robust variance,
+weights, ``deriv``/kink estimands, ``scalepar``, ``stdvars``, hc0-hc3
+variance modes, weak-IV-robust fuzzy inference (Feir-Lemieux-Marmer),
+and a packaged covariate-balance helper (the recipe above covers it).
 
 References
 ----------
@@ -70,13 +97,16 @@ References
 - Calonico, S., Cattaneo, M. D., & Farrell, M. H. (2018). On the Effect of
   Bias Estimation on Coverage Accuracy in Nonparametric Inference. *JASA*,
   113(522), 767-779.
+- Calonico, S., Cattaneo, M. D., Farrell, M. H., & Titiunik, R. (2019).
+  Regression Discontinuity Designs Using Covariates. *Review of Economics
+  and Statistics*, 101(3), 442-451.
 """
 
 from __future__ import annotations
 
 import warnings
 from dataclasses import dataclass, field
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -85,10 +115,11 @@ from diff_diff._rdrobust_port import (
     BWSELECT_OPTIONS,
     _fuzzy_identification_stop,
     _normalize_kernel,
+    covs_drop_fun,
     rdbwselect,
     rdrobust_fit,
 )
-from diff_diff.utils import safe_inference
+from diff_diff.utils import safe_inference, validate_covariate_names
 
 __all__ = [
     "RegressionDiscontinuity",
@@ -194,11 +225,14 @@ class RegressionDiscontinuityResults:
     # (the complier-LATE reading does not apply to dose take-up).
     # ``treatment_col`` is the fit-time take-up column name
     # (None on sharp fits; no ``_input`` suffix - that convention is
-    # reserved for constructor arguments); ``sharpbw`` echoes the
-    # constructor flag.
+    # reserved for constructor arguments); ``sharpbw`` and ``covs_drop``
+    # echo the constructor flags. The estimand label deliberately does NOT
+    # change under covariate adjustment: CCFT 2019 covariates target the
+    # SAME estimand (precision only) - see ``covariates`` below.
     estimand: str
     sharpbw: bool
     treatment_col: Optional[str]
+    covs_drop: bool
 
     # First-stage (take-up jump) three-row mirror - fuzzy fits only, all
     # None on sharp fits. Same binding rule as the main estimate: the
@@ -220,9 +254,26 @@ class RegressionDiscontinuityResults:
     first_stage_p_value_bias_corrected: Optional[float] = None
     first_stage_conf_int_bias_corrected: Optional[Tuple[float, float]] = None
 
+    # Covariate adjustment (CCFT 2019) - all None on unadjusted fits.
+    # ``covariates`` echoes the fit-time column names AS PASSED;
+    # ``covariates_dropped`` lists columns removed as collinear by
+    # covs_drop ([] when nothing was dropped); ``covariate_coefficients``
+    # maps each RETAINED covariate name to its common (pooled across
+    # sides) outcome-equation projection coefficient gamma - these are
+    # nuisance coefficients for the adjustment, NOT causal effects of the
+    # covariates. Fuzzy fits add ``first_stage_covariate_coefficients``
+    # (the take-up-equation gamma). Name-keyed dicts make R's internal
+    # name-length column sort invisible to users.
+    covariates: Optional[List[str]] = None
+    covariates_dropped: Optional[List[str]] = None
+    covariate_coefficients: Optional[Dict[str, float]] = None
+    first_stage_covariate_coefficients: Optional[Dict[str, float]] = None
+
     # Per-side order-p coefficient vectors (rdplot seam); the outcome pair
     # is always populated by fit(), so typed non-Optional despite the
-    # dataclass default; the take-up pair is fuzzy-only.
+    # dataclass default; the take-up pair is fuzzy-only. On
+    # covariate-adjusted fits these are the ADJUSTED vectors (gamma
+    # combination applied), matching R's beta_Y_p_* / beta_T_p_*.
     beta_p_left: np.ndarray = field(repr=False, default=None)
     beta_p_right: np.ndarray = field(repr=False, default=None)
     beta_t_p_left: Optional[np.ndarray] = field(repr=False, default=None)
@@ -235,10 +286,20 @@ class RegressionDiscontinuityResults:
         lines = []
         lines.append("=" * width)
         design = "Fuzzy" if self.first_stage is not None else "Sharp"
+        if self.covariates:
+            # Mirrors R's rdmodel string ("Covariate-adjusted ... RD
+            # estimates"); the estimand line below is deliberately
+            # UNCHANGED - covariates buy precision, not a new estimand.
+            design = f"Covariate-adjusted {design}"
         lines.append(f"{design} Regression Discontinuity (rdrobust parity)".center(width))
         lines.append("=" * width)
         lines.append(f"Cutoff:               {self.cutoff:g}")
         lines.append(f"Estimand:             {self.estimand}")
+        if self.covariates:
+            cov_line = f"Covariates ({len(self.covariates)}): " + ", ".join(self.covariates)
+            if self.covariates_dropped:
+                cov_line += "  [dropped: " + ", ".join(self.covariates_dropped) + "]"
+            lines.append(cov_line)
         lines.append(f"Kernel: {self.kernel:<14} Bandwidth selector: {self.bwselect}")
         lines.append(
             f"Order (p, q): ({self.p}, {self.q})       VCE: {self.vcov_type} "
@@ -394,6 +455,13 @@ class RegressionDiscontinuityResults:
             "estimand": self.estimand,
             "sharpbw": self.sharpbw,
             "treatment_col": self.treatment_col,
+            "covs_drop": self.covs_drop,
+            # List/dict-valued covariate echoes (None on unadjusted fits;
+            # the lpdid/continuous_did echo convention).
+            "covariates": self.covariates,
+            "covariates_dropped": self.covariates_dropped,
+            "covariate_coefficients": self.covariate_coefficients,
+            "first_stage_covariate_coefficients": self.first_stage_covariate_coefficients,
             "first_stage": self.first_stage,
             "first_stage_se": self.first_stage_se,
             "first_stage_t_stat": self.first_stage_t_stat,
@@ -420,8 +488,8 @@ class RegressionDiscontinuityResults:
 
 
 class RegressionDiscontinuity:
-    """Regression discontinuity estimator, sharp and fuzzy (rdrobust
-    4.0.0 parity).
+    """Regression discontinuity estimator - sharp and fuzzy, with
+    optional covariate adjustment (rdrobust 4.0.0 parity).
 
     SHARP (default): treatment is defined by the running variable crossing
     a known cutoff (``running >= cutoff`` treated, matching rdrobust:
@@ -429,13 +497,19 @@ class RegressionDiscontinuity:
     take-up column via ``fit(..., treatment_col=...)`` - the estimand
     becomes the local Wald ratio (complier LATE at the cutoff for binary
     take-up under monotonicity; the ``estimand`` results field says which
-    reading applies) and the results gain a first-stage block. Point
+    reading applies) and the results gain a first-stage block.
+    COVARIATE ADJUSTMENT: pass ``fit(..., covariates=[...])`` (R's
+    ``covs=``) for the CCFT 2019 additive common-coefficient adjustment -
+    the estimand is UNCHANGED (precision only; requires covariate balance
+    at the cutoff, see the module docstring), bandwidths become
+    covariate-aware, and collinear columns are dropped with a warning
+    under ``covs_drop=True``. Point
     estimation uses kernel-weighted local polynomials of order ``p`` on
     each side; inference is robust bias-corrected per Calonico, Cattaneo &
     Titiunik (2014). Defaults reproduce ``rdrobust(y, x)`` /
-    ``rdrobust(y, x, fuzzy=t)``: ``p=1``, ``q=2``, triangular kernel,
-    ``bwselect="mserd"``, nearest-neighbor variance with 3 matches,
-    ``masspoints="adjust"``.
+    ``rdrobust(y, x, fuzzy=t)`` / ``rdrobust(y, x, covs=Z)``: ``p=1``,
+    ``q=2``, triangular kernel, ``bwselect="mserd"``, nearest-neighbor
+    variance with 3 matches, ``masspoints="adjust"``, ``covs_drop=True``.
 
     Parameters
     ----------
@@ -489,7 +563,17 @@ class RegressionDiscontinuity:
         this flag - under one-sided perfect compliance (zero take-up
         variance on either side), exactly as in R. On sharp fits the flag
         has no effect and a warning is emitted (R ignores it silently -
-        documented deviation).
+        documented deviation). Never drops covariates from selection -
+        with ``covariates`` it selects on the covariate-adjusted sharp
+        objective, as in R.
+    covs_drop : bool, default True
+        Covariate-adjusted fits only (``fit(..., covariates=[...])``):
+        when True (R's default), redundant (collinear) covariate columns
+        are dropped with a warning naming them before fitting, and the
+        covariate projection uses a pseudo-inverse; when False the solve
+        is strict and collinear covariates raise a clear error. Without
+        ``covariates`` the flag has no effect and setting it to False
+        emits a warning (same pattern as ``sharpbw`` on sharp fits).
     alpha : float, default 0.05
         Significance level (rdrobust ``level = 100*(1-alpha)``).
 
@@ -519,6 +603,7 @@ class RegressionDiscontinuity:
         bwrestrict: bool = True,
         scaleregul: float = 1.0,
         sharpbw: bool = False,
+        covs_drop: bool = True,
         alpha: float = 0.05,
     ):
         self.cutoff = cutoff
@@ -536,6 +621,7 @@ class RegressionDiscontinuity:
         self.bwrestrict = bwrestrict
         self.scaleregul = scaleregul
         self.sharpbw = sharpbw
+        self.covs_drop = covs_drop
         self.alpha = alpha
         self._validate_constructor_args()
 
@@ -595,6 +681,8 @@ class RegressionDiscontinuity:
             raise ValueError(f"bwrestrict must be a bool; got {self.bwrestrict!r}.")
         if not isinstance(self.sharpbw, (bool, np.bool_)):
             raise ValueError(f"sharpbw must be a bool; got {self.sharpbw!r}.")
+        if not isinstance(self.covs_drop, (bool, np.bool_)):
+            raise ValueError(f"covs_drop must be a bool; got {self.covs_drop!r}.")
         if not (
             self._is_real_scalar(self.scaleregul)
             and np.isfinite(self.scaleregul)
@@ -623,6 +711,7 @@ class RegressionDiscontinuity:
             "bwrestrict": self.bwrestrict,
             "scaleregul": self.scaleregul,
             "sharpbw": self.sharpbw,
+            "covs_drop": self.covs_drop,
             "alpha": self.alpha,
         }
 
@@ -648,8 +737,10 @@ class RegressionDiscontinuity:
         outcome_col: str,
         running_col: str,
         treatment_col: Optional[str] = None,
+        covariates: Optional[List[str]] = None,
     ) -> RegressionDiscontinuityResults:
-        """Estimate the RD effect at the cutoff (sharp or fuzzy).
+        """Estimate the RD effect at the cutoff (sharp or fuzzy, optionally
+        covariate-adjusted).
 
         Parameters
         ----------
@@ -672,10 +763,45 @@ class RegressionDiscontinuity:
             not apply there. A take-up column that is deterministic in
             the running variable reproduces the sharp fit exactly
             (first stage == 1).
+        covariates : list of str or None, default None
+            Column names of pre-determined covariates for the additive
+            common-coefficient adjustment of CCFT (2019) (R's ``covs=``).
+            The estimand is UNCHANGED - unlike the DiD estimators'
+            conditional-parallel-trends role, RD covariates buy precision
+            only, and require covariate BALANCE at the cutoff (zero RD
+            effect on each covariate; testable by fitting each covariate
+            as the outcome - imbalanced covariates make the adjusted
+            estimator inconsistent). Continuous, discrete, or mixed
+            columns are accepted; covariates propagate into bandwidth
+            selection (covariate-aware, as in R). Collinear columns are
+            dropped with a warning under ``covs_drop=True``; see the
+            ``covariates*`` results fields for the echo and the fitted
+            projection coefficients.
         """
         cols = [outcome_col, running_col]
         if treatment_col is not None:
             cols.append(treatment_col)
+        if covariates is not None:
+            if isinstance(covariates, str):
+                # A bare string would iterate characters; fail closed.
+                raise ValueError(f"covariates must be a list of column names; got {covariates!r}.")
+            # Materialize BEFORE validating: a generator would be consumed
+            # by the all() check and then silently collapse to an empty
+            # list (disabling adjustment without a whisper).
+            covariates = list(covariates)
+            if not all(isinstance(name, str) for name in covariates):
+                raise ValueError(f"covariates must be a list of column names; got {covariates!r}.")
+            if not covariates:
+                covariates = None  # empty list == no adjustment
+        if covariates is not None:
+            # Duplicate names and collisions with the fit's structural
+            # columns corrupt the name-keyed coefficient dict.
+            validate_covariate_names(
+                covariates,
+                cols,
+                estimator="RegressionDiscontinuity",
+            )
+            cols.extend(covariates)
         for col in cols:
             if col not in data.columns:
                 raise ValueError(f"Column {col!r} not found in data.")
@@ -685,6 +811,14 @@ class RegressionDiscontinuity:
             # fits (no-silent-failures policy; same pattern as b-without-h).
             warnings.warn(
                 "sharpbw has no effect without treatment_col (sharp design) " "and is ignored.",
+                UserWarning,
+                stacklevel=2,
+            )
+        if not self.covs_drop and covariates is None:
+            # Same pattern as sharpbw-on-sharp: a non-default knob that
+            # cannot apply must not pass silently.
+            warnings.warn(
+                "covs_drop=False has no effect without covariates and is ignored.",
                 UserWarning,
                 stacklevel=2,
             )
@@ -699,12 +833,26 @@ class RegressionDiscontinuity:
                 pd.to_numeric(data[treatment_col], errors="coerce"), dtype=np.float64
             )
             ok = ok & np.isfinite(t_raw)
+        z_raw: Optional[np.ndarray] = None
+        if covariates is not None:
+            # R's complete.cases filter includes the covariate columns
+            # (rdrobust.R:80-84) - the joint drop must too. Column order
+            # here is AS PASSED; the R name-length sort applies below.
+            z_raw = np.column_stack(
+                [
+                    np.asarray(pd.to_numeric(data[name], errors="coerce"), dtype=np.float64)
+                    for name in covariates
+                ]
+            )
+            ok = ok & np.all(np.isfinite(z_raw), axis=1)
         n_dropped = int(y_raw.shape[0] - np.sum(ok))
         if n_dropped > 0:
             # Deviation from R (which drops silently via complete.cases):
             dropped_cols = f"{outcome_col!r}/{running_col!r}"
             if fuzzy_fit:
                 dropped_cols += f"/{treatment_col!r}"
+            if covariates is not None:
+                dropped_cols += "/covariates"
             warnings.warn(
                 f"Dropping {n_dropped} row(s) with missing or non-numeric "
                 f"values in {dropped_cols}.",
@@ -714,6 +862,7 @@ class RegressionDiscontinuity:
         y = y_raw[ok]
         x = x_raw[ok]
         t = t_raw[ok] if t_raw is not None else None
+        z = z_raw[ok] if z_raw is not None else None
         N = int(y.shape[0])
         if N == 0:
             raise ValueError("No complete-case observations to fit on.")
@@ -726,6 +875,57 @@ class RegressionDiscontinuity:
         p = int(self.p)
         q = int(self.q) if self.q is not None else p + 1
         kernel = _normalize_kernel(self.kernel)
+
+        # --- Covariate column sort + redundant-column drop (hoisted from
+        # rdrobust.R:121-140, like the fuzzy identification hoist below;
+        # R's order: NaN drop -> covs_drop -> fuzzy stop -> mass points).
+        # Under covs_drop=True R first sorts columns by NAME LENGTH
+        # (order(nchar), stable - rdrobust.R:131); the sort decides which
+        # of a collinear set survives, and all user-facing surfaces are
+        # name-keyed so the internal order never leaks. The QR runs on
+        # x-SORTED rows - the row order R (and the port entry points) use
+        # - so near-threshold rank decisions cannot diverge from the
+        # downstream calls. Passing the already-reduced matrix down means
+        # the port's own entry-point drop finds full rank and stays
+        # silent (no double warning).
+        model_covariates: Optional[List[str]] = None
+        covariates_dropped: Optional[List[str]] = None
+        if covariates is not None:
+            assert z is not None
+            model_covariates = list(covariates)
+            covariates_dropped = []
+            if self.covs_drop:
+                model_covariates = sorted(model_covariates, key=len)
+                z = np.column_stack([z[:, covariates.index(name)] for name in model_covariates])
+                keep_idx, rank = covs_drop_fun(z[np.argsort(x, kind="stable")])
+                if rank == 0:
+                    raise ValueError(
+                        "All covariates are numerically zero (rank-0 "
+                        "covariate matrix); remove the covariates instead."
+                    )
+                if rank < len(model_covariates):
+                    covariates_dropped = [
+                        name
+                        for i, name in enumerate(model_covariates)
+                        if i not in set(keep_idx.tolist())
+                    ]
+                    # R's warning is a generic "Multicollinearity issue
+                    # detected in covs." - naming the dropped columns is a
+                    # documented enhancement.
+                    warnings.warn(
+                        "Multicollinearity detected in covariates: "
+                        f"dropped redundant column(s) {covariates_dropped} "
+                        "(covs_drop=True; set covs_drop=False for a strict "
+                        "error instead).",
+                        UserWarning,
+                        stacklevel=2,
+                    )
+                    model_covariates = [
+                        name
+                        for i, name in enumerate(model_covariates)
+                        if i in set(keep_idx.tolist())
+                    ]
+                    z = z[:, keep_idx]
 
         # --- Fuzzy identification check (rdrobust.R:164-185) ---
         # Hoisted to run immediately after the NaN drop and BEFORE
@@ -824,6 +1024,8 @@ class RegressionDiscontinuity:
                 warn_masspoints=False,  # fit() already warned (rdrobust.R:365-380)
                 fuzzy=t,
                 sharpbw=bool(self.sharpbw),
+                covs=z,
+                covs_drop=bool(self.covs_drop),
             )
             h_l, h_r, b_l, b_r = bw.bws[self.bwselect]
             n_unique_left = bw.M_l if self.masspoints != "off" else n_unique_left
@@ -848,7 +1050,42 @@ class RegressionDiscontinuity:
             vce=self.vcov_type,
             nnmatch=int(self.nnmatch),
             t=t,
+            covs=z,
+            covs_drop=bool(self.covs_drop),
+            # The estimator owns the degeneracy warning (with column
+            # names) - same plumbing pattern as warn_masspoints.
+            warn_covs_degenerate=False,
         )
+
+        # --- Degenerate covariate adjustment warning (estimator-level,
+        # with column names; deviation from R, which silently inverts a
+        # noise singular value on these systems - see the port's
+        # _covs_gamma for the guard) ---
+        if model_covariates is not None and fit.covs_excluded is not None:
+            excluded_names = [
+                name for name, flag in zip(model_covariates, fit.covs_excluded) if bool(flag)
+            ]
+            parts = []
+            if excluded_names:
+                parts.append(
+                    f"covariate(s) {excluded_names} are numerically "
+                    "collinear with the local polynomial design (e.g. "
+                    "constant near the cutoff) and were excluded from "
+                    "the adjustment"
+                )
+            if fit.covs_set_degenerate:
+                parts.append(
+                    "the covariate set is numerically rank-deficient "
+                    "after partialling (e.g. a full dummy set); a "
+                    "stabilized pseudo-inverse cut was used - consider "
+                    "dropping a reference category"
+                )
+            if parts:
+                warnings.warn(
+                    "Degenerate covariate adjustment: " + "; ".join(parts) + ".",
+                    UserWarning,
+                    stacklevel=2,
+                )
 
         # Estimand label: the complier-LATE reading requires BINARY
         # take-up (plus monotonicity); non-binary (dose) take-up - accepted,
@@ -962,6 +1199,19 @@ class RegressionDiscontinuity:
             estimand=estimand,
             sharpbw=bool(self.sharpbw),
             treatment_col=treatment_col,
+            covs_drop=bool(self.covs_drop),
+            covariates=None if covariates is None else list(covariates),
+            covariates_dropped=covariates_dropped,
+            covariate_coefficients=(
+                None
+                if model_covariates is None or fit.gamma_p is None
+                else {name: float(fit.gamma_p[i, 0]) for i, name in enumerate(model_covariates)}
+            ),
+            first_stage_covariate_coefficients=(
+                None
+                if not fuzzy_fit or model_covariates is None or fit.gamma_p is None
+                else {name: float(fit.gamma_p[i, 1]) for i, name in enumerate(model_covariates)}
+            ),
             beta_p_left=fit.beta_p_l,
             beta_p_right=fit.beta_p_r,
             **fs,

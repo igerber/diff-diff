@@ -403,3 +403,211 @@ class TestFuzzy:
         assert np.isfinite(r.first_stage) and np.isfinite(r.first_stage_se)
         assert r.first_stage_se > 0
         assert np.isfinite(r.first_stage_t_stat)
+
+
+class TestCovariates:
+    """CCFT 2019 covariate adjustment: internal-consistency anchors that
+    require no R (the R-parity pins live in test_rdd_parity.py /
+    test_rdrobust_port.py)."""
+
+    @staticmethod
+    def _cov_df(n=900, seed=7):
+        rng = np.random.default_rng(seed)
+        x = 2 * rng.beta(2, 4, n) - 1
+        zlong = 0.5 * x + rng.normal(size=n)
+        zb = rng.binomial(1, 0.4, n).astype(float)
+        y = 0.4 * x + 0.9 * (x >= 0) + 0.7 * zlong + 0.3 * zb + rng.normal(0, 0.3, n)
+        t = rng.binomial(1, np.where(x >= 0, 0.8, 0.15)).astype(float)
+        return pd.DataFrame({"x": x, "y": y, "t": t, "zlong": zlong, "zb": zb})
+
+    def test_partial_out_identity_exact(self):
+        # CCFT 2019 Section IV representation, exact at common manual
+        # (h, b) by Frisch-Waugh: tau_adjusted == tau_unadjusted -
+        # gamma' tau_Z, where tau_Z stacks the SAME RD estimator applied
+        # to each covariate as the outcome. Holds row-by-row for the
+        # conventional AND bias-corrected estimates.
+        df = self._cov_df()
+        h0 = 0.3
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            adj = RegressionDiscontinuity(h=h0).fit(df, "y", "x", covariates=["zlong", "zb"])
+            unadj = RegressionDiscontinuity(h=h0).fit(df, "y", "x")
+            placebo = {
+                name: RegressionDiscontinuity(h=h0).fit(df, name, "x") for name in ("zlong", "zb")
+            }
+        gamma = adj.covariate_coefficients
+        assert gamma is not None
+        tau_cl = unadj.att_conventional - sum(
+            gamma[name] * placebo[name].att_conventional for name in gamma
+        )
+        tau_bc = unadj.att - sum(gamma[name] * placebo[name].att for name in gamma)
+        assert adj.att_conventional == pytest.approx(tau_cl, rel=1e-12)
+        assert adj.att == pytest.approx(tau_bc, rel=1e-12)
+
+    def test_empty_and_none_covariates_identical_to_unadjusted(self):
+        df = self._cov_df()
+        plain = RegressionDiscontinuity().fit(df, "y", "x")
+        empty = RegressionDiscontinuity().fit(df, "y", "x", covariates=[])
+        assert empty.att == plain.att and empty.se == plain.se
+        assert empty.covariates is None and empty.covariate_coefficients is None
+
+    def test_irrelevant_covariate_small_change(self):
+        # CCFT 2019 Section V.B model 1: an irrelevant covariate "hardly
+        # changes empirical results" - same estimand, small perturbation.
+        df = self._cov_df()
+        rng = np.random.default_rng(99)
+        df["noise"] = rng.normal(size=len(df))
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            plain = RegressionDiscontinuity(h=0.3).fit(df, "y", "x")
+            adj = RegressionDiscontinuity(h=0.3).fit(df, "y", "x", covariates=["noise"])
+        assert adj.att == pytest.approx(plain.att, rel=0.05)
+        assert adj.estimand == plain.estimand  # label NEVER changes
+
+    def test_informative_covariates_shrink_robust_ci(self):
+        # The point of the adjustment: covariates in the outcome DGP
+        # reduce residual variance at the cutoff -> shorter robust CI
+        # (CCFT 2019 Section V; ~10% in their Head Start application).
+        df = self._cov_df()
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            plain = RegressionDiscontinuity(h=0.3).fit(df, "y", "x")
+            adj = RegressionDiscontinuity(h=0.3).fit(df, "y", "x", covariates=["zlong", "zb"])
+        width = lambda r: r.conf_int[1] - r.conf_int[0]  # noqa: E731
+        assert width(adj) < width(plain)
+
+    def test_collinear_dropped_equals_reduced_fit(self):
+        # zdup = exact combination; after the name-length sort the QR
+        # keeps the FIRST spanning subset in sorted order and the fit
+        # equals the reduced one (span invariance of the projection).
+        df = self._cov_df()
+        df["zdup"] = 1.5 * df["zlong"] - 0.5 * df["zb"]
+        with pytest.warns(UserWarning, match="Multicollinearity"):
+            full = RegressionDiscontinuity(h=0.3).fit(
+                df, "y", "x", covariates=["zlong", "zb", "zdup"]
+            )
+        reduced = RegressionDiscontinuity(h=0.3).fit(df, "y", "x", covariates=["zlong", "zb"])
+        # Sorted order (zb, zdup, zlong) keeps (zb, zdup) - the same SPAN
+        # as (zb, zlong), so tau/se agree to float noise.
+        assert full.covariates_dropped == ["zlong"]
+        assert sorted(full.covariate_coefficients) == ["zb", "zdup"]
+        assert full.att == pytest.approx(reduced.att, rel=1e-10)
+        assert full.se == pytest.approx(reduced.se, rel=1e-10)
+
+    def test_covs_drop_false_collinear_raises(self):
+        df = self._cov_df()
+        df["zdup"] = 1.5 * df["zlong"] - 0.5 * df["zb"]
+        with pytest.raises(ValueError, match="covs_drop"):
+            RegressionDiscontinuity(h=0.3, covs_drop=False).fit(
+                df, "y", "x", covariates=["zlong", "zb", "zdup"]
+            )
+
+    def test_covs_drop_false_without_covariates_warns(self):
+        df = self._cov_df()
+        with pytest.warns(UserWarning, match="covs_drop=False has no effect"):
+            RegressionDiscontinuity(covs_drop=False).fit(df, "y", "x")
+
+    def test_constant_covariate_excluded_warns(self):
+        # Deviation from R (which silently inverts a noise singular value
+        # and returns platform-dependent estimates here): the constant
+        # column is excluded with a warning and the fit is BIT-IDENTICAL
+        # to the fit without it.
+        df = self._cov_df()
+        df["zconst"] = 0.7
+        with pytest.warns(UserWarning, match="Degenerate covariate adjustment"):
+            fit_c = RegressionDiscontinuity(h=0.3).fit(df, "y", "x", covariates=["zlong", "zconst"])
+        fit_1 = RegressionDiscontinuity(h=0.3).fit(df, "y", "x", covariates=["zlong"])
+        assert fit_c.covariate_coefficients["zconst"] == 0.0
+        assert fit_c.att == fit_1.att
+        assert fit_c.se == fit_1.se
+
+    def test_dummy_set_stabilized_equals_drop_one(self):
+        # A full one-hot set passes the covariate-only QR but is
+        # rank-deficient after partialling on the (intercept-carrying)
+        # local polynomial design. The stabilized cut must reproduce any
+        # identified reparametrization of the same span - here, dropping
+        # a reference category - which R's noise-inverting ginv does not.
+        df = self._cov_df()
+        rng = np.random.default_rng(5)
+        cat = rng.integers(0, 3, size=len(df))
+        for k in range(3):
+            df[f"d{k}"] = (cat == k).astype(float)
+        with pytest.warns(UserWarning, match="rank-deficient after partialling"):
+            full = RegressionDiscontinuity(h=0.3).fit(df, "y", "x", covariates=["d0", "d1", "d2"])
+        reduced = RegressionDiscontinuity(h=0.3).fit(df, "y", "x", covariates=["d0", "d1"])
+        assert full.att == pytest.approx(reduced.att, rel=1e-9)
+        assert full.se == pytest.approx(reduced.se, rel=1e-9)
+
+    def test_all_covariates_dropped_raises(self):
+        df = self._cov_df()
+        df["z0"] = 0.0
+        with pytest.raises(ValueError, match="rank-0"):
+            RegressionDiscontinuity(h=0.3).fit(df, "y", "x", covariates=["z0"])
+
+    def test_name_order_invariance(self):
+        # The internal name-length sort must never leak: results are
+        # identical whichever order the user lists the columns in.
+        df = self._cov_df()
+        a = RegressionDiscontinuity().fit(df, "y", "x", covariates=["zlong", "zb"])
+        b = RegressionDiscontinuity().fit(df, "y", "x", covariates=["zb", "zlong"])
+        assert a.att == b.att and a.se == b.se
+        assert a.covariate_coefficients == b.covariate_coefficients
+        assert a.h_left == b.h_left
+
+    def test_fuzzy_covs_canonical_identities_and_first_stage(self):
+        df = self._cov_df()
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            r = RegressionDiscontinuity().fit(
+                df, "y", "x", treatment_col="t", covariates=["zlong", "zb"]
+            )
+        assert r.t_stat == pytest.approx(r.att / r.se, rel=1e-14)
+        mid = 0.5 * (r.conf_int[0] + r.conf_int[1])
+        assert mid == pytest.approx(r.att, rel=1e-12)
+        assert r.first_stage_covariate_coefficients is not None
+        assert set(r.first_stage_covariate_coefficients) == {"zlong", "zb"}
+        assert np.isfinite(r.first_stage) and 0 < r.first_stage < 1.2
+        assert r.estimand == "fuzzy (LATE for compliers at the cutoff)"
+
+    def test_perfect_compliance_covs_reproduces_adjusted_sharp(self):
+        # T deterministic in x: the covariate-adjusted fuzzy fit must
+        # reproduce the covariate-adjusted SHARP fit (first stage == 1);
+        # bandwidths are bit-equal via the perf_comp selection switch
+        # (T nulled, Z kept), estimates equal to the ratio's last ULP.
+        df = self._cov_df()
+        df["t_det"] = (df["x"] >= 0).astype(float)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            fz = RegressionDiscontinuity().fit(
+                df, "y", "x", treatment_col="t_det", covariates=["zlong", "zb"]
+            )
+            sh = RegressionDiscontinuity().fit(df, "y", "x", covariates=["zlong", "zb"])
+        assert fz.h_left == sh.h_left and fz.b_left == sh.b_left
+        assert fz.att == pytest.approx(sh.att, rel=1e-12)
+        assert fz.se == pytest.approx(sh.se, rel=1e-12)
+        assert fz.first_stage_conventional == pytest.approx(1.0, rel=1e-12)
+
+    def test_sharpbw_covs_keeps_covariates_in_selection(self):
+        # sharpbw nulls ONLY the take-up column in selection; with
+        # covariates it must select the covariate-adjusted SHARP
+        # bandwidths - i.e. exactly the bandwidths of the adjusted sharp
+        # fit, not the unadjusted ones.
+        df = self._cov_df()
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            fz = RegressionDiscontinuity(sharpbw=True).fit(
+                df, "y", "x", treatment_col="t", covariates=["zlong", "zb"]
+            )
+            sh_adj = RegressionDiscontinuity().fit(df, "y", "x", covariates=["zlong", "zb"])
+            sh_plain = RegressionDiscontinuity().fit(df, "y", "x")
+        assert fz.h_left == sh_adj.h_left
+        assert fz.h_left != sh_plain.h_left
+
+    def test_nan_in_covariate_joins_drop_count(self):
+        df = self._cov_df()
+        df.loc[3, "zlong"] = np.nan
+        df.loc[10, "zb"] = np.nan
+        with pytest.warns(UserWarning, match="Dropping 2 row"):
+            r = RegressionDiscontinuity().fit(df, "y", "x", covariates=["zlong", "zb"])
+        assert r.n_dropped == 2
+        assert r.n_obs == len(df) - 2

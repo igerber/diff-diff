@@ -1,9 +1,9 @@
 """In-house port of rdrobust's RD bandwidth-selection and estimation
-machinery - sharp and fuzzy paths.
+machinery - sharp, fuzzy, and covariate-adjusted paths.
 
-Faithful Python translation of the sharp and fuzzy no-covariate/no-cluster
-``nn`` branches of ``rdbwselect`` and ``rdrobust`` from the R package
-``rdrobust`` 4.0.0,
+Faithful Python translation of the sharp, fuzzy, and covariate-adjusted
+no-cluster ``nn`` branches of ``rdbwselect`` and ``rdrobust`` from the R
+package ``rdrobust`` 4.0.0,
 ported from the CRAN source tarball (sha256 below), cross-checked against
 ``deparse(getFromNamespace(<fn>, "rdrobust"))`` of the installed 4.0.0
 package. The unreleased GitHub development tree (4.1.0-dev) differs from
@@ -23,12 +23,15 @@ Python                                      R (rdrobust 4.0.0)
 ``compute_dups_dupsid(x_sorted)``           rle blocks (rdbwselect.R:322-327)
 ``rdrobust_res_nn(...)``                    ``rdrobust_res`` vce="nn" branch
                                             (functions.R:146-181)
-``rdrobust_vce(RX, res)``             ``rdrobust_vce`` null-cluster d==0
-                                            branch (functions.R:374-378)
-``rdrobust_bw(...)``                        ``rdrobust_bw`` sharp path
+``rdrobust_vce(RX, res)``             ``rdrobust_vce`` null-cluster
+                                            branches (functions.R:374-385)
+``rdrobust_bw(...)``                        ``rdrobust_bw``
                                             (functions.R:207-355)
 ``rdbwselect(...)``                   ``rdbwselect`` main flow
                                             (rdbwselect.R; anchors inline)
+``covs_drop_fun(z)``                        ``covs_drop_fun``
+                                            (functions.R:683-688) via
+                                            LINPACK dqrdc2 rank/pivot
 ==========================================  ===================================
 
 Deviations from rdrobust (documented; see REGISTRY.md RegressionDiscontinuity
@@ -52,6 +55,13 @@ section):
   ``numpy.linalg.pinv(G, rcond=sqrt(eps))`` - both are Moore-Penrose
   pseudo-inverses with the same default singular-value cutoff. Reachable
   only on degenerate (rank-deficient) kernel windows.
+* Degenerate covariate adjustment is GUARDED instead of reproduced: R's
+  ``ginv(ZWZ, tol=1e-20)`` inverts a float-noise singular value on
+  exactly-degenerate partialled systems (constant covariate, full dummy
+  set), making its output platform-noise. See :func:`_covs_gamma` for the
+  guard (per-column exclusion + scale-invariant stabilized cut + warning);
+  well-posed systems reproduce R exactly. Rank-0 covariate matrices fail
+  closed with a clear error.
 
 Nothing in this module is shared with ``diff_diff._nprobust_port``:
 the corresponding nprobust primitives differ in kernel scaling (``/h``),
@@ -81,6 +91,7 @@ __all__ = [
     "compute_dups_dupsid",
     "rdrobust_res_nn",
     "rdrobust_vce",
+    "covs_drop_fun",
     "rdrobust_bw",
     "rdbwselect",
     "quantile_type2",
@@ -215,6 +226,7 @@ def rdrobust_res_nn(
     dups: np.ndarray,
     dupsid: np.ndarray,
     t: Optional[np.ndarray] = None,
+    z: Optional[np.ndarray] = None,
 ) -> np.ndarray:
     """Nearest-neighbor variance residuals (functions.R:146-181,
     ``vce == "nn"`` branch).
@@ -225,14 +237,17 @@ def rdrobust_res_nn(
     deliberately absent). Equal left/right distances expand BOTH directions
     (functions.R:162-165). Returns the (n,) residual vector
     ``sqrt(J/(J+1)) * (y_i - mean(y_neighbors))`` for the sharp
-    outcome-only case, or the (n, 2) residual matrix with the fuzzy
-    take-up column ``sqrt(J/(J+1)) * (t_i - mean(t_neighbors))`` appended
-    when ``t`` is supplied (functions.R:171-174; T shares Y's neighbor
-    sets exactly - both depend only on ``x``).
+    outcome-only case, or the (n, 1+dT+dZ) residual matrix with the fuzzy
+    take-up column (functions.R:171-174) and covariate columns
+    (functions.R:175-180) appended when ``t`` / ``z`` are supplied - the
+    extra responses share Y's neighbor sets exactly (all depend only on
+    ``x``). Column order matches R's response stack: [Y, T, Z...].
     """
     n = y.shape[0]
     fuzzy = t is not None
-    res = np.empty((n, 2) if fuzzy else n, dtype=np.float64)
+    dZ = 0 if z is None else z.shape[1]
+    ncol = 1 + (1 if fuzzy else 0) + dZ
+    res = np.empty((n, ncol) if ncol > 1 else n, dtype=np.float64)
     limit = min(matches, n - 1)
     for pos in range(n):  # R pos is 1-based; comments track R indices
         rpos = int(dups[pos] - dupsid[pos])
@@ -264,13 +279,20 @@ def rdrobust_res_nn(
         y_J = float(np.sum(y[lo : hi + 1])) - float(y[pos])
         Ji = (hi - lo + 1) - 1
         r_y = np.sqrt(Ji / (Ji + 1)) * (y[pos] - y_J / Ji)
+        if ncol == 1:
+            res[pos] = r_y
+            continue
+        res[pos, 0] = r_y
+        col = 1
         if fuzzy:
             assert t is not None
             t_J = float(np.sum(t[lo : hi + 1])) - float(t[pos])  # functions.R:172
-            res[pos, 0] = r_y
-            res[pos, 1] = np.sqrt(Ji / (Ji + 1)) * (t[pos] - t_J / Ji)
-        else:
-            res[pos] = r_y
+            res[pos, col] = np.sqrt(Ji / (Ji + 1)) * (t[pos] - t_J / Ji)
+            col += 1
+        for i in range(dZ):  # functions.R:175-180
+            assert z is not None
+            z_J = float(np.sum(z[lo : hi + 1, i])) - float(z[pos, i])
+            res[pos, col + i] = np.sqrt(Ji / (Ji + 1)) * (z[pos, i] - z_J / Ji)
     return res
 
 
@@ -329,6 +351,198 @@ def _fuzzy_identification_stop(t_l: np.ndarray, t_r: np.ndarray) -> None:
         )
 
 
+def covs_drop_fun(z: np.ndarray, tol: float = 1e-7) -> Tuple[np.ndarray, int]:
+    """Redundant-covariate detection: R's ``covs_drop_fun``
+    (functions.R:683-688) = ``qr(z, tol=1e-7)`` rank/pivot, keep
+    ``sort(pivot[1:rank])``.
+
+    R's default ``qr()`` is LINPACK ``dqrdc2``, whose limited pivoting
+    cycles a column to the right edge when its REDUCED norm falls below
+    ``tol`` times that column's OWN original norm (zero-norm columns take
+    an original norm of 1.0, dqrdc2.f:8) - a per-column relative rule, so
+    small-but-independent covariates are never dropped. LAPACK's ``geqp3``
+    pivots differently (greedy by current norm), so the dqrdc2 loop is
+    ported directly rather than approximated; pivot order decides WHICH of
+    a collinear set survives. Returns ``(keep, rank)`` with ``keep`` the
+    sorted 0-based indices of retained columns.
+    """
+    x = np.array(z, dtype=np.float64, copy=True)
+    n, p = x.shape
+    jpvt = np.arange(p)
+    qraux = np.sqrt((x * x).sum(axis=0))
+    work1 = qraux.copy()  # dqrdc2 work(j,1): recompute reference norm
+    work2 = qraux.copy()  # dqrdc2 work(j,2): original norm for the tol test
+    work2[work2 == 0.0] = 1.0  # dqrdc2.f:8 zero-norm fixup
+    k = p + 1
+    rank = 0
+    for ll in range(min(n, p)):
+        # Cycle negligible columns to the right edge (dqrdc2.f:80-120);
+        # the ll < k-1 guard prevents infinite cycling.
+        while ll < k - 1 and qraux[ll] < work2[ll] * tol:
+            x[:, ll:p] = np.roll(x[:, ll:p], -1, axis=1)
+            jpvt[ll:p] = np.roll(jpvt[ll:p], -1)
+            qraux[ll:p] = np.roll(qraux[ll:p], -1)
+            work1[ll:p] = np.roll(work1[ll:p], -1)
+            work2[ll:p] = np.roll(work2[ll:p], -1)
+            k -= 1
+        rank = ll + 1
+        # Householder for column ll + LINPACK norm downdate with the
+        # 0.05-heuristic recompute (dqrdc2.f main loop).
+        nrmxl = float(np.sqrt((x[ll:, ll] ** 2).sum()))
+        if nrmxl == 0.0:
+            continue
+        if x[ll, ll] != 0.0:
+            nrmxl = float(np.copysign(nrmxl, x[ll, ll]))
+        x[ll:, ll] /= nrmxl
+        x[ll, ll] += 1.0
+        for j in range(ll + 1, p):
+            tval = -(x[ll:, ll] @ x[ll:, j]) / x[ll, ll]
+            x[ll:, j] += tval * x[ll:, ll]
+            if qraux[j] != 0.0:
+                tt = 1.0 - (abs(x[ll, j]) / qraux[j]) ** 2
+                tt = max(tt, 0.0)
+                t_keep = tt
+                tt = 1.0 + 0.05 * tt * (qraux[j] / work1[j]) ** 2
+                if tt != 1.0:
+                    qraux[j] *= float(np.sqrt(t_keep))
+                else:
+                    qraux[j] = float(np.sqrt((x[ll + 1 :, j] ** 2).sum()))
+                    work1[j] = qraux[j]
+        qraux[ll] = 0.0
+    rank = min(rank, k - 1)
+    keep = np.sort(jpvt[:rank])
+    return keep, int(rank)
+
+
+def _covs_gamma(
+    ZWZ: np.ndarray,
+    ZWY: np.ndarray,
+    diag_pre: np.ndarray,
+    covs_drop: bool,
+) -> Tuple[np.ndarray, np.ndarray, bool]:
+    """Covariate-projection solve ``gamma`` from the partialled normal
+    equations (rdrobust.R:659-671 / functions.R:246-257).
+
+    ``covs_drop=False``: R's ``chol2inv(chol(ZWZ))`` - a strict Cholesky
+    solve that fails hard on a collinear system (clear ``ValueError``
+    here instead of R's opaque ``chol()`` error).
+
+    ``covs_drop=True``: R uses ``MASS::ginv(ZWZ, tol=1e-20)``. On a
+    well-posed system that equals ``np.linalg.pinv(rcond=1e-20)`` and is
+    reproduced exactly. On an EXACTLY-degenerate system (covariates
+    collinear with the local polynomial design after partialling: a
+    constant covariate, or a full dummy set - both pass the intercept-free
+    ``covs_drop_fun`` QR check) R inverts a FLOAT-NOISE singular value
+    (~1e-16 * sv_max > 1e-20 * sv_max), making its gamma platform-noise
+    and shifting tau silently. Documented deviation from R - guarded
+    instead of reproduced:
+
+    * per-column: ``diag(ZWZ)_j / (z_j' W z_j) < 1e-14`` means column j is
+      numerically fully explained by the design -> excluded (gamma row 0;
+      a constant covariate then contributes exactly nothing, matching the
+      fit without it bit-for-bit);
+    * set-level: equilibrated (scale-invariant) singular values of the
+      remaining block with ``sv_min < 1e-12 * sv_max`` -> stabilized
+      equilibrated pseudo-inverse with the noise directions cut
+      (``rcond=1e-12``); tau then equals any identified reparametrization
+      of the same covariate span (e.g. dropping one dummy category);
+    * otherwise the raw ``pinv(rcond=1e-20)`` solve, R-identical
+      (tiny-SCALED independent covariates stay on this path - the
+      equilibration makes the check scale-invariant).
+
+    Returns ``(gamma, excluded_mask, set_degenerate)``.
+    """
+    dZ = ZWZ.shape[0]
+    n_rhs = ZWY.shape[1]
+    with np.errstate(divide="ignore", invalid="ignore"):
+        ratio = np.diag(ZWZ) / diag_pre
+    excluded = ratio < 1e-14  # NaN (0/0) compares False -> handled below
+    excluded |= ~np.isfinite(ratio)
+    keep = np.flatnonzero(~excluded)
+    set_degenerate = False
+    zwz_k = dvec = eq = None
+    if keep.size > 0:
+        zwz_k = ZWZ[np.ix_(keep, keep)]
+        dvec = np.sqrt(np.diag(zwz_k))
+        eq = zwz_k / np.outer(dvec, dvec)
+        sv = np.linalg.svd(eq, compute_uv=False)
+        set_degenerate = bool(sv[-1] < 1e-12 * sv[0])
+    if not covs_drop:
+        # Strict mode: fail DETERMINISTICALLY on any degeneracy. (R's
+        # covs_drop=FALSE relies on chol() erroring, which on an
+        # exactly-singular float matrix is roundoff-dependent - it can
+        # "succeed" through a tiny positive pivot and return noise; the
+        # explicit check makes the strict contract reliable.)
+        if excluded.any() or set_degenerate or keep.size == 0:
+            raise ValueError(
+                "Covariates are collinear with each other or with the "
+                "local polynomial design (the partialled covariate Gram "
+                "matrix is singular) and covs_drop=False requests a "
+                "strict solve. Remove the redundant covariates or use "
+                "covs_drop=True."
+            )
+        try:
+            cf = _scipy_linalg.cho_factor(ZWZ, lower=False)
+            gamma = _scipy_linalg.cho_solve(cf, ZWY)
+        except _scipy_linalg.LinAlgError:
+            raise ValueError(
+                "Covariates are collinear (the partialled covariate Gram "
+                "matrix is not positive definite) and covs_drop=False "
+                "requests a strict solve. Remove the redundant covariates "
+                "or use covs_drop=True."
+            ) from None
+        return gamma, np.zeros(dZ, dtype=bool), False
+    gamma = np.zeros((dZ, n_rhs))
+    if keep.size == 0:
+        return gamma, excluded, True
+    assert zwz_k is not None and dvec is not None and eq is not None
+    zwy = ZWY[keep]
+    if set_degenerate:
+        gamma_k = np.linalg.pinv(eq, rcond=1e-12) @ (zwy / dvec[:, None])
+        gamma_k /= dvec[:, None]
+    else:
+        gamma_k = np.linalg.pinv(zwz_k, rcond=1e-20) @ zwy
+    gamma[keep] = gamma_k
+    return gamma, excluded, set_degenerate
+
+
+def _covs_entry_drop(
+    covs: np.ndarray, covs_drop: bool, warn: bool = True
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Entry-point redundant-covariate drop, shared by :func:`rdbwselect`
+    and :func:`rdrobust_fit` (rdbwselect.R:164-181 == rdrobust.R:121-140,
+    minus the name-length column sort - the port takes an unnamed matrix,
+    for which R's ``order(nchar(...))`` sort is a stable no-op; the
+    estimator applies the name sort before building the matrix).
+
+    Returns ``(reduced_covs, dropped_indices)``. Rank 0 fails closed with
+    a clear error (R would index a nonexistent column downstream).
+    """
+    dZ = covs.shape[1]
+    if not covs_drop:
+        return covs, np.array([], dtype=np.int64)
+    keep, rank = covs_drop_fun(covs)
+    if rank == 0:
+        raise ValueError(
+            "All covariates are numerically zero (rank-0 covariate "
+            "matrix); remove the covariates instead."
+        )
+    if rank < dZ:
+        dropped = np.setdiff1d(np.arange(dZ), keep)
+        if warn:
+            # R's message (rdrobust.R:138) with the dropped 0-based column
+            # indices appended; the estimator maps indices to column names
+            # and warns itself instead.
+            warnings.warn(
+                "Multicollinearity issue detected in covs. Redundant "
+                f"covariates dropped (column indices {dropped.tolist()}).",
+                UserWarning,
+                stacklevel=3,
+            )
+        return covs[:, keep], dropped
+    return covs, np.array([], dtype=np.int64)
+
+
 @dataclass
 class _BwPilot:
     """Per-side pilot block returned by :func:`rdrobust_bw`
@@ -356,26 +570,33 @@ def rdrobust_bw(
     dups: np.ndarray,
     dupsid: np.ndarray,
     t: Optional[np.ndarray] = None,
+    z: Optional[np.ndarray] = None,
+    covs_drop: bool = True,
     vcache: Optional[Dict[str, Tuple[float, float, Optional[np.ndarray]]]] = None,
 ) -> _BwPilot:
-    """Per-side pilot V/B(/R) block (functions.R:207-355, no-covariate
-    sharp and fuzzy paths).
+    """Per-side pilot V/B(/R) block (functions.R:207-355, sharp, fuzzy,
+    and covariate-adjusted paths).
 
-    Sharp (``t=None``): Z = C = W = NULL so the combination vector ``s``
-    is the scalar 1 (functions.R:234) and the response is the outcome
-    column alone. Fuzzy: T is stacked as a second response column into
-    BOTH the V-fit and B-fit designs (functions.R:236-240, 315-318) and
-    the pilot ratio + delta vector ``s = [1/tau_T, -tau_Y/tau_T^2]`` is
-    computed from the V-fit coefficients (functions.R:264-268), then
-    threaded into the V/B variance meats and the bias constant
+    Sharp (``t=None, z=None``): C = W = NULL so the combination vector
+    ``s`` is the scalar 1 (functions.R:234) and the response is the
+    outcome column alone. Fuzzy: T is stacked as a second response column
+    into BOTH the V-fit and B-fit designs (functions.R:236-240, 315-318)
+    and the pilot ratio + delta vector ``s = [1/tau_T, -tau_Y/tau_T^2]``
+    is computed from the V-fit coefficients (functions.R:264-268).
+    Covariates: Z stacks after T; a PER-PILOT gamma comes from the
+    partialled normal equations inside the V-window (functions.R:241-258;
+    degenerate systems take the silent stabilized solve documented at
+    :func:`_covs_gamma`), giving ``s = [1, -gamma[,1]]`` (sharp+covs) or
+    the length-(2+dZ) fuzzy+covs vector of functions.R:269-274. ``s``
+    threads into the V/B variance meats and the bias constant
     ``t(s) %*% beta_B[o+2,]`` (functions.R:294, 346, 349). A pilot window
     with no take-up variation makes ``tau_T == 0``; the division follows
     R's Inf/NaN flow-on (numpy float under ``errstate``) and the
     downstream stage assembly fails closed on the non-finite bandwidth.
     ``vcache`` shares the fixed-``h_V`` V-fit across pilot calls keyed on
     ``(o, nu)`` (functions.R:216-222) and stores ``(V_V, BConst, s)`` -
-    the cached ``V_V`` embeds the fuzzy ``s``, so ``s`` must be reused on
-    cache hits exactly as R's environment cache does.
+    the cached ``V_V`` embeds the fuzzy/covariate ``s``, so ``s`` must be
+    reused on cache hits exactly as R's environment cache does.
     """
     if vce != "nn":
         raise NotImplementedError(
@@ -395,28 +616,69 @@ def rdrobust_bw(
         eW = w[ind_V]
         R_V = rdrobust_vander(eX - c, o)
         invG_V = qrXXinv(R_V * np.sqrt(eW)[:, None])
-        if t is None:
+        eT = t[ind_V] if t is not None else None  # functions.R:236-240
+        eZ = z[ind_V] if z is not None else None  # functions.R:241-244
+        if eT is None and eZ is None:
             # R computes beta_V here (functions.R:263) but the sharp/nn
             # path never consumes it (it feeds the fuzzy ratio and hc
             # predictions); omitted - no numeric effect on V, B, or R.
             s = None
             res_V = rdrobust_res_nn(eX, eY, nnmatch, dups[ind_V], dupsid[ind_V])  # functions.R:293
         else:
-            eT = t[ind_V]  # functions.R:236-240
-            D_V = np.column_stack([eY, eT])
-            beta_V = invG_V @ (R_V * eW[:, None]).T @ D_V  # functions.R:263
-            # Fuzzy pilot ratio + delta vector (functions.R:264-268); R row
-            # nu+1 (1-based) is 0-based nu.
-            tau_Y = float(math.factorial(nu)) * float(beta_V[nu, 0])
-            tau_T = float(math.factorial(nu)) * float(beta_V[nu, 1])
-            with np.errstate(divide="ignore", invalid="ignore"):
-                s = np.array(
-                    [
-                        float(np.float64(1.0) / np.float64(tau_T)),
-                        float(-(np.float64(tau_Y) / np.float64(tau_T) ** 2)),
-                    ]
+            dT = 0 if eT is None else 1
+            resp = [eY] + ([eT] if eT is not None else [])
+            D_V = np.column_stack(resp + ([eZ] if eZ is not None else []))
+            s = None
+            gamma = None
+            if eZ is not None:
+                # Per-pilot partialled gamma (functions.R:245-257).
+                U = (R_V * eW[:, None]).T @ D_V
+                ZWD = (eZ * eW[:, None]).T @ D_V
+                colsZ = slice(1 + dT, D_V.shape[1])
+                UiGU = U[:, colsZ].T @ (invG_V @ U)
+                gamma, _, _ = _covs_gamma(
+                    ZWD[:, colsZ] - UiGU[:, colsZ],
+                    ZWD[:, : 1 + dT] - UiGU[:, : 1 + dT],
+                    np.diag(ZWD[:, colsZ]).copy(),
+                    covs_drop,
                 )
-            res_V = rdrobust_res_nn(eX, eY, nnmatch, dups[ind_V], dupsid[ind_V], t=eT)
+                s = np.concatenate([[1.0], -gamma[:, 0]])  # functions.R:257
+            beta_V = invG_V @ (R_V * eW[:, None]).T @ D_V  # functions.R:263
+            if eT is not None and eZ is None:
+                # Fuzzy pilot ratio + delta vector (functions.R:264-268); R
+                # row nu+1 (1-based) is 0-based nu.
+                tau_Y = float(math.factorial(nu)) * float(beta_V[nu, 0])
+                tau_T = float(math.factorial(nu)) * float(beta_V[nu, 1])
+                with np.errstate(divide="ignore", invalid="ignore"):
+                    s = np.array(
+                        [
+                            float(np.float64(1.0) / np.float64(tau_T)),
+                            float(-(np.float64(tau_Y) / np.float64(tau_T) ** 2)),
+                        ]
+                    )
+            elif eT is not None and eZ is not None:
+                # Fuzzy + covariates (functions.R:269-274): adjusted ratio
+                # from the covariate-combined coefficients, then the
+                # extended delta vector.
+                assert gamma is not None and s is not None
+                s_T = np.concatenate([[1.0], -gamma[:, 1]])
+                colsZ = slice(2, D_V.shape[1])
+                tau_Y = float(math.factorial(nu)) * float(
+                    s @ np.concatenate([[beta_V[nu, 0]], beta_V[nu, colsZ]])
+                )
+                tau_T = float(math.factorial(nu)) * float(
+                    s_T @ np.concatenate([[beta_V[nu, 1]], beta_V[nu, colsZ]])
+                )
+                with np.errstate(divide="ignore", invalid="ignore"):
+                    inv_tT = float(np.float64(1.0) / np.float64(tau_T))
+                    ratio2 = float(np.float64(tau_Y) / np.float64(tau_T) ** 2)
+                    s = np.concatenate(
+                        [
+                            [inv_tT, -ratio2],
+                            -inv_tT * gamma[:, 0] + ratio2 * gamma[:, 1],
+                        ]
+                    )
+            res_V = rdrobust_res_nn(eX, eY, nnmatch, dups[ind_V], dupsid[ind_V], t=eT, z=eZ)
         aux = rdrobust_vce(R_V * eW[:, None], res_V, s)  # functions.R:294
         V_V = float((invG_V @ aux @ invG_V)[nu, nu])  # functions.R:295
         v = (R_V * eW[:, None]).T @ ((eX - c) / h_V) ** (o + 1)  # :296
@@ -432,23 +694,22 @@ def rdrobust_bw(
     eW = w[ind]
     R_B = rdrobust_vander(eX - c, o_B)
     invG_B = qrXXinv(R_B * np.sqrt(eW)[:, None])
-    if t is None:
+    eT_B = t[ind] if t is not None else None  # functions.R:315-318
+    eZ_B = z[ind] if z is not None else None  # functions.R:319-322
+    if eT_B is None and eZ_B is None:
         beta_B = invG_B @ (R_B * eW[:, None]).T @ eY  # functions.R:326
         # functions.R:349-353 with sharp s == 1: t(s) %*% beta_B[o+2,] is
         # the scalar coefficient (R row o+2 1-based = 0-based o+1).
         beta_B_comb = float(beta_B[o + 1])
     else:
-        eT_B = t[ind]  # functions.R:315-318
-        D_B = np.column_stack([eY, eT_B])
+        resp_B = [eY] + ([eT_B] if eT_B is not None else [])
+        D_B = np.column_stack(resp_B + ([eZ_B] if eZ_B is not None else []))
         beta_B = invG_B @ (R_B * eW[:, None]).T @ D_B  # functions.R:326
         assert s is not None
         beta_B_comb = float(s @ beta_B[o + 1, :])  # functions.R:349
     BWreg = 0.0
     if scale > 0:  # functions.R:328-348
-        if t is None:
-            res_B = rdrobust_res_nn(eX, eY, nnmatch, dups[ind], dupsid[ind])
-        else:
-            res_B = rdrobust_res_nn(eX, eY, nnmatch, dups[ind], dupsid[ind], t=t[ind])
+        res_B = rdrobust_res_nn(eX, eY, nnmatch, dups[ind], dupsid[ind], t=eT_B, z=eZ_B)
         V_B = float(
             (invG_B @ rdrobust_vce(R_B * eW[:, None], res_B, s) @ invG_B)[o + 1, o + 1]
         )  # functions.R:346 - R row/col o+2 is 0-based (o+1, o+1)
@@ -520,10 +781,12 @@ def rdbwselect(
     warn_masspoints: bool = True,
     fuzzy: Optional[np.ndarray] = None,
     sharpbw: bool = False,
+    covs: Optional[np.ndarray] = None,
+    covs_drop: bool = True,
 ) -> RdBwselectResult:
     """RD data-driven bandwidth selection, all 10 selectors
-    (rdbwselect.R main flow at the anchors cited inline; sharp and fuzzy
-    no-covariate paths).
+    (rdbwselect.R main flow at the anchors cited inline; sharp, fuzzy,
+    and covariate-adjusted paths).
 
     Always computes the full selector matrix (R's ``all=TRUE``): the ten
     selectors share the same six per-side pilot blocks, so the marginal
@@ -540,9 +803,17 @@ def rdbwselect(
     ``sharpbw=True`` OR either side has zero take-up variance
     (``perf_comp``, one-sided perfect compliance), T is nulled for
     SELECTION ONLY and the sharp reduced-form objective on Y is used
-    (rdbwselect.R:334-346); estimation always remains fuzzy. Standardize
-    note: R's ``stdvars`` scales y and x only - the fuzzy column is never
-    standardized (rdbwselect.R:120-129).
+    (rdbwselect.R:334-346); estimation always remains fuzzy.
+
+    Covariates (``covs`` = (n, dZ) matrix): bandwidths are
+    COVARIATE-AWARE - after the entry-point redundant-column drop
+    (rdbwselect.R:164-181, ``covs_drop``), Z is threaded into every pilot
+    of all three chains alongside T (rdbwselect.R:330-332, 386-457), so
+    the pilot V/B constants are those of the covariate-adjusted estimator.
+    ``perf_comp``/``sharpbw`` null ONLY T - Z always stays in selection
+    (rdbwselect.R:343-345). Standardize note: R's ``stdvars`` scales y and
+    x only - the fuzzy and covariate columns are never standardized
+    (rdbwselect.R:120-129).
     """
     y = np.asarray(y, dtype=np.float64)
     x = np.asarray(x, dtype=np.float64)
@@ -574,6 +845,25 @@ def rdbwselect(
                 "missing values before bandwidth selection (the public "
                 "estimator warns-and-drops; R's complete.cases filter "
                 "includes the fuzzy column)."
+            )
+    if not isinstance(covs_drop, (bool, np.bool_)):
+        raise ValueError(f"covs_drop must be a bool; got {covs_drop!r}.")
+    if covs is not None:
+        covs = np.asarray(covs, dtype=np.float64)
+        if covs.ndim == 1:
+            covs = covs.reshape(-1, 1)
+        if covs.ndim != 2:
+            raise ValueError(
+                f"covs must be a 1-D vector or (n, dZ) matrix; got shape {covs.shape}."
+            )
+        if covs.shape[0] != x.shape[0]:
+            raise ValueError(f"covs must have {x.shape[0]} rows to match x; got {covs.shape[0]}.")
+        if not np.all(np.isfinite(covs)):
+            raise ValueError(
+                "covs must be finite and complete-case; drop or impute "
+                "missing values before bandwidth selection (the public "
+                "estimator warns-and-drops; R's complete.cases filter "
+                "includes the covariate columns)."
             )
     if not (np.all(np.isfinite(y)) and np.all(np.isfinite(x))):
         raise ValueError(
@@ -625,6 +915,14 @@ def rdbwselect(
         y = y[order_x]
         if fuzzy is not None:
             fuzzy = fuzzy[order_x]  # rdbwselect.R:112 (fuzzy = fuzzy[order_x,])
+        if covs is not None:
+            covs = covs[order_x]  # rdbwselect.R:110
+
+    # --- Entry-point redundant-covariate drop (rdbwselect.R:164-181),
+    # after the row sort so near-threshold QR rank decisions see the same
+    # row order as R (and as rdrobust_fit). ---
+    if covs is not None:
+        covs, _ = _covs_entry_drop(covs, covs_drop)
 
     # --- Degeneracy guards BEFORE any standardization division: a constant
     # running variable must surface as the assumption failure it is, not as
@@ -741,6 +1039,16 @@ def rdbwselect(
         if not (perf_comp or sharpbw):  # rdbwselect.R:344-346 null-out
             T_sel_l, T_sel_r = T_l_full, T_r_full
 
+    # --- Covariate split (rdbwselect.R:330-332). Z is NEVER nulled by
+    # perf_comp/sharpbw - those switches drop only T (rdbwselect.R:344),
+    # so sharpbw-with-covariates selects on the covariate-adjusted sharp
+    # objective. ---
+    Z_sel_l: Optional[np.ndarray] = None
+    Z_sel_r: Optional[np.ndarray] = None
+    if covs is not None:
+        Z_sel_l = covs[ind_l]
+        Z_sel_r = covs[ind_r]
+
     # --- NN tie blocks (rdbwselect.R:322-327) ---
     dups_l, dupsid_l = compute_dups_dupsid(X_l)
     dups_r, dupsid_r = compute_dups_dupsid(X_r)
@@ -750,9 +1058,10 @@ def rdbwselect(
 
     def _bw(side: str, o: int, nu: int, o_B: int, h_B: float, scale: float) -> _BwPilot:
         # Single funnel for ALL 14 pilot calls across the mserd, msetwo,
-        # and msesum chains: threading T here guarantees every chain's
-        # pilots receive the fuzzy column (R passes T_l/T_r into each
-        # chain's calls individually, rdbwselect.R:386-457).
+        # and msesum chains: threading T and Z here guarantees every
+        # chain's pilots receive the fuzzy and covariate columns (R passes
+        # T_l/T_r, Z_l/Z_r into each chain's calls individually,
+        # rdbwselect.R:386-457).
         if side == "l":
             return rdrobust_bw(
                 Y_l,
@@ -770,6 +1079,8 @@ def rdbwselect(
                 dups_l,
                 dupsid_l,
                 t=T_sel_l,
+                z=Z_sel_l,
+                covs_drop=bool(covs_drop),
                 vcache=vcache_l,
             )
         return rdrobust_bw(
@@ -788,6 +1099,8 @@ def rdbwselect(
             dups_r,
             dupsid_r,
             t=T_sel_r,
+            z=Z_sel_r,
+            covs_drop=bool(covs_drop),
             vcache=vcache_r,
         )
 
@@ -977,7 +1290,7 @@ def rdbwselect(
 @dataclass
 class RdFitResult:
     """RD point estimates and variances (rdrobust.R estimation body,
-    sharp and fuzzy no-covariate paths).
+    sharp, fuzzy, and covariate-adjusted paths).
 
     ``tau_cl`` is the conventional RD estimate (the fuzzy ratio
     ``tau_Y_cl/tau_T_cl`` on fuzzy fits), ``tau_bc`` the bias-corrected
@@ -986,15 +1299,25 @@ class RdFitResult:
     three output rows map as Conventional = (tau_cl, se_cl),
     Bias-Corrected = (tau_bc, se_cl), Robust = (tau_bc, se_rb)
     (rdrobust.R:854-863). ``beta_p_l``/``beta_p_r`` are the per-side
-    order-p outcome coefficient vectors (rdplot seam);
-    ``bias_l``/``bias_r`` the per-side estimated biases (sharp:
-    rdrobust.R:629-630; fuzzy: the LINEARIZED ``s_Y . B_F_side``,
-    rdrobust.R:649-652 - a different formula, not the per-component
-    difference). Fuzzy-only fields (None on sharp fits): the first-stage
-    ``tau_T_cl/tau_T_bc/se_T_cl/se_T_rb`` (rdrobust.R:637-638, 800-822)
-    and per-side take-up coefficient vectors ``beta_t_p_l/beta_t_p_r``
-    (raw, like ``beta_p_*``; R applies ``scalepar*factorial(deriv)`` to
-    both - identical at the public deriv=0/scalepar=1 surface).
+    order-p outcome coefficient vectors (rdplot seam; on
+    covariate-adjusted fits these are the ADJUSTED vectors ``s_Y``
+    applied across the response columns, matching R's ``beta_Y_p_*``,
+    rdrobust.R:685-686/706-709); ``bias_l``/``bias_r`` the per-side
+    estimated biases (sharp: rdrobust.R:629-630; fuzzy: the LINEARIZED
+    ``s_Y . B_F_side``, rdrobust.R:649-652 - a different formula, not the
+    per-component difference). Fuzzy-only fields (None on sharp fits):
+    the first-stage ``tau_T_cl/tau_T_bc/se_T_cl/se_T_rb``
+    (rdrobust.R:637-638, 800-822) and per-side take-up coefficient
+    vectors ``beta_t_p_l/beta_t_p_r`` (raw, like ``beta_p_*``; R applies
+    ``scalepar*factorial(deriv)`` to both - identical at the public
+    deriv=0/scalepar=1 surface). Covariate-only fields (None otherwise):
+    ``gamma_p`` = R's ``coef_covs``, the (dZ, 1+dT) common projection
+    coefficients over the covariates KEPT by the entry-point drop
+    (column 0 = outcome equation, column 1 = first-stage equation on
+    fuzzy fits, rdrobust.R:907); ``covs_excluded`` = per-kept-column
+    bool mask of covariates excluded by the degeneracy guard (see
+    :func:`_covs_gamma`); ``covs_set_degenerate`` = True when the
+    set-level stabilized cut engaged.
     """
 
     tau_cl: float
@@ -1015,6 +1338,9 @@ class RdFitResult:
     se_T_rb: Optional[float] = None
     beta_t_p_l: Optional[np.ndarray] = None
     beta_t_p_r: Optional[np.ndarray] = None
+    gamma_p: Optional[np.ndarray] = None
+    covs_excluded: Optional[np.ndarray] = None
+    covs_set_degenerate: bool = False
 
 
 def rdrobust_fit(
@@ -1032,9 +1358,12 @@ def rdrobust_fit(
     vce: str = "nn",
     nnmatch: int = 3,
     t: Optional[np.ndarray] = None,
+    covs: Optional[np.ndarray] = None,
+    covs_drop: bool = True,
+    warn_covs_degenerate: bool = True,
 ) -> RdFitResult:
-    """RD estimation at known bandwidths (rdrobust.R:533-822, sharp and
-    fuzzy no-covariate/no-cluster paths with ``scalepar = 1``).
+    """RD estimation at known bandwidths (rdrobust.R:533-822, sharp,
+    fuzzy, and covariate-adjusted no-cluster paths with ``scalepar = 1``).
 
     Inputs must be complete-case 1-D arrays (same contract as
     :func:`rdbwselect`); sorting, side-splitting, and NN tie blocks
@@ -1055,14 +1384,30 @@ def rdrobust_fit(
        ``tau_bc = tau_cl - s_Y . B_F`` (rdrobust.R:636-657). The
        identification guard (both-sides-constant T with no jump) raises
        here too, covering manual-bandwidth fits that skip selection.
+       Covariates (``covs`` = (n, dZ) matrix): after the entry-point
+       redundant-column drop (rdrobust.R:121-140, ``covs_drop``), Z
+       stacks after T through the SAME fits (rdrobust.R:593-598); a
+       common POOLED-ACROSS-SIDES gamma comes from the per-side
+       partialled normal equations summed (rdrobust.R:659-671; degenerate
+       systems take the guarded solve documented at :func:`_covs_gamma` -
+       ``warn_covs_degenerate=False`` lets the estimator own that warning
+       with column names, the masspoints pattern), and the adjusted
+       estimates apply ``s_Y = [1, -gamma[,1]]`` across the response
+       columns (rdrobust.R:672-686; the R branch omits
+       ``factorial(deriv)`` present in the no-covariate branch -
+       identical at the fixed deriv=0 surface, replicated verbatim).
+       Fuzzy + covariates composes both: adjusted Y and T jumps, their
+       ratio, and the extended delta vectors of rdrobust.R:688-723.
     3. Variances: conventional sandwiches ``R_p * W_h`` with same-side NN
        residuals; robust sandwiches ``Q_q`` with the SAME residuals
        (``res_b = res_h`` for vce="nn", rdrobust.R:753-754; the h==b
        special branches at rdrobust.R:773-786 are cluster-only and never
-       taken on this path). Fuzzy: the (n, 2) residual matrix is collapsed
-       by ``s_Y`` for the ratio variance and by ``sV_T = [0, 1]`` for the
-       first-stage variance (rdrobust.R:769-822); a zero first-stage jump
-       follows R's Inf/NaN flow-on (numpy float under ``errstate``).
+       taken on this path). Fuzzy/covariates: the (n, 1+dT+dZ) residual
+       matrix is collapsed by the delta vector for the main variance and
+       by ``sV_T`` (``[0, 1]``, or ``[0, 1, -gamma[,2]]`` with
+       covariates) for the first-stage variance (rdrobust.R:769-822); a
+       zero first-stage jump follows R's Inf/NaN flow-on (numpy float
+       under ``errstate``).
     """
     y = np.asarray(y, dtype=np.float64)
     x = np.asarray(x, dtype=np.float64)
@@ -1089,6 +1434,23 @@ def rdrobust_fit(
             raise ValueError(
                 "t must be finite and complete-case; drop or impute missing "
                 "values before estimation."
+            )
+    if not isinstance(covs_drop, (bool, np.bool_)):
+        raise ValueError(f"covs_drop must be a bool; got {covs_drop!r}.")
+    if covs is not None:
+        covs = np.asarray(covs, dtype=np.float64)
+        if covs.ndim == 1:
+            covs = covs.reshape(-1, 1)
+        if covs.ndim != 2:
+            raise ValueError(
+                f"covs must be a 1-D vector or (n, dZ) matrix; got shape {covs.shape}."
+            )
+        if covs.shape[0] != x.shape[0]:
+            raise ValueError(f"covs must have {x.shape[0]} rows to match x; got {covs.shape[0]}.")
+        if not np.all(np.isfinite(covs)):
+            raise ValueError(
+                "covs must be finite and complete-case; drop or impute "
+                "missing values before estimation."
             )
     if vce != "nn":
         raise NotImplementedError(
@@ -1122,6 +1484,12 @@ def rdrobust_fit(
     y = y[order_x]
     if t is not None:
         t = t[order_x]  # rdrobust.R:115
+    if covs is not None:
+        covs = covs[order_x]  # rdrobust.R:114
+        # Entry-point redundant-covariate drop (rdrobust.R:121-140), after
+        # the row sort so near-threshold QR rank decisions see the same
+        # row order as R (and as rdbwselect).
+        covs, _ = _covs_entry_drop(covs, covs_drop)
     ind_l = x < c
     ind_r = x >= c
     X_l, X_r = x[ind_l], x[ind_r]
@@ -1138,6 +1506,8 @@ def rdrobust_fit(
         # estimation entry point too, so manual-bandwidth fuzzy fits that
         # never touch bandwidth selection still fail closed.
         _fuzzy_identification_stop(T_l, T_r)
+    Z_l = covs[ind_l] if covs is not None else None  # rdrobust.R:190-193
+    Z_r = covs[ind_r] if covs is not None else None
     dups_l, dupsid_l = compute_dups_dupsid(X_l)
     dups_r, dupsid_r = compute_dups_dupsid(X_r)
 
@@ -1145,6 +1515,7 @@ def rdrobust_fit(
         X: np.ndarray,
         Y: np.ndarray,
         T: Optional[np.ndarray],
+        Z: Optional[np.ndarray],
         h: float,
         b: float,
         dups: np.ndarray,
@@ -1164,6 +1535,7 @@ def rdrobust_fit(
         eY = Y[ind]
         eX = X[ind]
         eT = T[ind] if T is not None else None  # rdrobust.R:588-590
+        eZ = Z[ind] if Z is not None else None  # rdrobust.R:594-596
         W_h = w_h[ind]
         W_b = w_b[ind]
         edups = dups[ind]
@@ -1203,27 +1575,100 @@ def rdrobust_fit(
         M = (R_q @ invG_q) * W_b[:, None]
         Q_q = R_p * W_h[:, None] - h ** (p + 1) * np.outer(M[:, p + 1], L)
         # Point estimates (rdrobust.R:609-614). Fuzzy stacks T as the
-        # second response column (rdrobust.R:588-591); the sharp branch
-        # keeps the original vector products verbatim (bit-identity).
-        if eT is None:
+        # second response column (rdrobust.R:588-591), covariates stack
+        # after T (rdrobust.R:593-598); the sharp branch keeps the
+        # original vector products verbatim (bit-identity).
+        if eT is None and eZ is None:
             beta_p = invG_p @ (R_p * W_h[:, None]).T @ eY
             beta_bc = invG_p @ Q_q.T @ eY
             res_h = rdrobust_res_nn(eX, eY, nnmatch, edups, edupsid)
+            zblocks = None
         else:
-            eD = np.column_stack([eY, eT])
+            resp = [eY] + ([eT] if eT is not None else [])
+            eD = np.column_stack(resp + ([eZ] if eZ is not None else []))
             beta_p = invG_p @ (R_p * W_h[:, None]).T @ eD
             beta_bc = invG_p @ Q_q.T @ eD
-            # NN residual matrix, T sharing Y's neighbor sets
-            # (rdrobust.R:750-754; functions.R:171-174).
-            res_h = rdrobust_res_nn(eX, eY, nnmatch, edups, edupsid, t=eT)
-        return beta_p, beta_bc, invG_p, R_p * W_h[:, None], Q_q, res_h, N_h, N_b
+            # NN residual matrix, T and Z sharing Y's neighbor sets
+            # (rdrobust.R:750-754; functions.R:171-180).
+            res_h = rdrobust_res_nn(eX, eY, nnmatch, edups, edupsid, t=eT, z=eZ)
+            zblocks = None
+            if eZ is not None:
+                # Per-side partialled normal-equation blocks
+                # (rdrobust.R:597, 659-667); summed across sides by the
+                # caller for the POOLED gamma.
+                dT_loc = 0 if eT is None else 1
+                U_p = (R_p * W_h[:, None]).T @ eD
+                ZWD_p = (eZ * W_h[:, None]).T @ eD
+                colsZ = slice(1 + dT_loc, eD.shape[1])
+                UiGU = U_p[:, colsZ].T @ (invG_p @ U_p)
+                zblocks = (
+                    ZWD_p[:, colsZ] - UiGU[:, colsZ],
+                    ZWD_p[:, : 1 + dT_loc] - UiGU[:, : 1 + dT_loc],
+                    np.diag(ZWD_p[:, colsZ]).copy(),
+                )
+        return beta_p, beta_bc, invG_p, R_p * W_h[:, None], Q_q, res_h, N_h, N_b, zblocks
 
-    beta_p_l, beta_bc_l, invG_p_l, RX_cl_l, Q_q_l, res_l, N_h_l, N_b_l = _side(
-        X_l, Y_l, T_l, h_l, b_l, dups_l, dupsid_l, "left"
-    )
-    beta_p_r, beta_bc_r, invG_p_r, RX_cl_r, Q_q_r, res_r, N_h_r, N_b_r = _side(
-        X_r, Y_r, T_r, h_r, b_r, dups_r, dupsid_r, "right"
-    )
+    (
+        beta_p_l,
+        beta_bc_l,
+        invG_p_l,
+        RX_cl_l,
+        Q_q_l,
+        res_l,
+        N_h_l,
+        N_b_l,
+        zblocks_l,
+    ) = _side(X_l, Y_l, T_l, Z_l, h_l, b_l, dups_l, dupsid_l, "left")
+    (
+        beta_p_r,
+        beta_bc_r,
+        invG_p_r,
+        RX_cl_r,
+        Q_q_r,
+        res_r,
+        N_h_r,
+        N_b_r,
+        zblocks_r,
+    ) = _side(X_r, Y_r, T_r, Z_r, h_r, b_r, dups_r, dupsid_r, "right")
+
+    # ---- Pooled covariate projection gamma (rdrobust.R:659-671) ----
+    gamma_p: Optional[np.ndarray] = None
+    covs_excluded: Optional[np.ndarray] = None
+    covs_set_degenerate = False
+    if covs is not None:
+        assert zblocks_l is not None and zblocks_r is not None
+        gamma_p, covs_excluded, covs_set_degenerate = _covs_gamma(
+            zblocks_l[0] + zblocks_r[0],
+            zblocks_l[1] + zblocks_r[1],
+            zblocks_l[2] + zblocks_r[2],
+            covs_drop,
+        )
+        if warn_covs_degenerate and (covs_excluded.any() or covs_set_degenerate):
+            # Deviation from R (which silently inverts a noise singular
+            # value here, making the result platform-dependent); the
+            # estimator passes warn_covs_degenerate=False and re-warns
+            # with column names.
+            parts = []
+            if covs_excluded.any():
+                parts.append(
+                    "covariate column(s) at index "
+                    f"{np.flatnonzero(covs_excluded).tolist()} are "
+                    "numerically collinear with the local polynomial "
+                    "design (e.g. constant near the cutoff) and were "
+                    "excluded from the adjustment"
+                )
+            if covs_set_degenerate:
+                parts.append(
+                    "the covariate set is numerically rank-deficient "
+                    "after partialling (e.g. a full dummy set); a "
+                    "stabilized pseudo-inverse cut was used - consider "
+                    "dropping a reference category"
+                )
+            warnings.warn(
+                "Degenerate covariate adjustment: " + "; ".join(parts) + ".",
+                UserWarning,
+                stacklevel=2,
+            )
 
     # factorial(deriv) scaling per rdrobust.R:621-622 (deriv=0 -> 1).
     fact = float(math.factorial(deriv))
@@ -1233,7 +1678,7 @@ def rdrobust_fit(
         # fuzzy s collapses the residual matrix (functions.R:379-385).
         return invG_p @ rdrobust_vce(RX, res, s) @ invG_p
 
-    if t is None:
+    if t is None and covs is None:
         tau_cl = fact * float(beta_p_r[deriv] - beta_p_l[deriv])
         tau_bc = fact * float(beta_bc_r[deriv] - beta_bc_l[deriv])
         bias_l = fact * float(beta_p_l[deriv]) - fact * float(beta_bc_l[deriv])
@@ -1257,6 +1702,140 @@ def rdrobust_fit(
             N_h_r=N_h_r,
             N_b_l=N_b_l,
             N_b_r=N_b_r,
+        )
+
+    if t is None:
+        # ---- Covariate-adjusted sharp assembly (rdrobust.R:672-686,
+        # scalepar = 1). NOTE: R's covariate branch applies NO
+        # factorial(deriv) to the point estimates/biases (unlike the
+        # no-covariate branch at rdrobust.R:621-630) while the VARIANCES
+        # keep factorial^2 (rdrobust.R:796-797) - identical at the fixed
+        # deriv=0 surface; replicated verbatim, not "fixed". ----
+        assert gamma_p is not None
+        s_Y = np.concatenate([[1.0], -gamma_p[:, 0]])  # rdrobust.R:672
+        tau_cl = float(s_Y @ (beta_p_r[deriv, :] - beta_p_l[deriv, :]))
+        tau_bc = float(s_Y @ (beta_bc_r[deriv, :] - beta_bc_l[deriv, :]))
+        # Per-side adjusted taus -> biases (rdrobust.R:678-683).
+        bias_l = float(s_Y @ beta_p_l[deriv, :]) - float(s_Y @ beta_bc_l[deriv, :])
+        bias_r = float(s_Y @ beta_p_r[deriv, :]) - float(s_Y @ beta_bc_r[deriv, :])
+        # Adjusted per-side coefficient vectors (rdrobust.R:685-686).
+        beta_Y_p_l = s_Y @ beta_p_l.T
+        beta_Y_p_r = s_Y @ beta_p_r.T
+        V_tau_cl = fact**2 * float(
+            (_v(invG_p_l, RX_cl_l, res_l, s_Y) + _v(invG_p_r, RX_cl_r, res_r, s_Y))[deriv, deriv]
+        )
+        V_tau_rb = fact**2 * float(
+            (_v(invG_p_l, Q_q_l, res_l, s_Y) + _v(invG_p_r, Q_q_r, res_r, s_Y))[deriv, deriv]
+        )
+        return RdFitResult(
+            tau_cl=tau_cl,
+            tau_bc=tau_bc,
+            se_cl=float(np.sqrt(V_tau_cl)),
+            se_rb=float(np.sqrt(V_tau_rb)),
+            bias_l=bias_l,
+            bias_r=bias_r,
+            beta_p_l=beta_Y_p_l,
+            beta_p_r=beta_Y_p_r,
+            N_h_l=N_h_l,
+            N_h_r=N_h_r,
+            N_b_l=N_b_l,
+            N_b_r=N_b_r,
+            gamma_p=gamma_p,
+            covs_excluded=covs_excluded,
+            covs_set_degenerate=covs_set_degenerate,
+        )
+
+    if covs is not None:
+        # ---- Fuzzy + covariates assembly (rdrobust.R:688-723, 769-822;
+        # scalepar = 1): covariate-adjusted Y and T jumps via
+        # s_Y = [1, -gamma[,1]] / s_T = [1, -gamma[,2]], their ratio,
+        # the linearized bias correction, and the EXTENDED delta vector
+        # for the variance collapse. ----
+        assert gamma_p is not None
+        s_Y0 = np.concatenate([[1.0], -gamma_p[:, 0]])  # rdrobust.R:672
+        s_T0 = np.concatenate([[1.0], -gamma_p[:, 1]])  # rdrobust.R:689
+        colsZ = slice(2, beta_p_l.shape[1])
+
+        def _adj(bmat: np.ndarray, srow: np.ndarray, col: int) -> float:
+            # rdrobust.R:691-704: s applied to [response col, covariate
+            # cols] of the (deriv+1) coefficient row.
+            return float(srow @ np.concatenate([[bmat[deriv, col]], bmat[deriv, colsZ]]))
+
+        tau_Y_cl = fact * float(_adj(beta_p_r, s_Y0, 0) - _adj(beta_p_l, s_Y0, 0))
+        tau_Y_bc = fact * float(_adj(beta_bc_r, s_Y0, 0) - _adj(beta_bc_l, s_Y0, 0))
+        tau_T_cl = fact * float(_adj(beta_p_r, s_T0, 1) - _adj(beta_p_l, s_T0, 1))
+        tau_T_bc = fact * float(_adj(beta_bc_r, s_T0, 1) - _adj(beta_bc_l, s_T0, 1))
+        with np.errstate(divide="ignore", invalid="ignore"):
+            tau_cl = float(np.float64(tau_Y_cl) / np.float64(tau_T_cl))
+            inv_tT = float(np.float64(1.0) / np.float64(tau_T_cl))
+            ratio2 = float(np.float64(tau_Y_cl) / np.float64(tau_T_cl) ** 2)
+            s_ratio = np.array([inv_tT, -ratio2])  # rdrobust.R:716
+            # Extended variance delta vector (rdrobust.R:722).
+            s_V = np.concatenate([s_ratio, -inv_tT * gamma_p[:, 0] + ratio2 * gamma_p[:, 1]])
+        B_F = np.array([tau_Y_cl - tau_Y_bc, tau_T_cl - tau_T_bc])  # :712
+        tau_bc = float(tau_cl - s_ratio @ B_F)  # rdrobust.R:717
+        sV_T = np.concatenate([[0.0, 1.0], -gamma_p[:, 1]])  # rdrobust.R:690
+        # Per-side linearized biases from the ADJUSTED per-side taus
+        # (rdrobust.R:696-704, 713-720).
+        B_F_l = np.array(
+            [
+                fact * (_adj(beta_p_l, s_Y0, 0) - _adj(beta_bc_l, s_Y0, 0)),
+                fact * (_adj(beta_p_l, s_T0, 1) - _adj(beta_bc_l, s_T0, 1)),
+            ]
+        )
+        B_F_r = np.array(
+            [
+                fact * (_adj(beta_p_r, s_Y0, 0) - _adj(beta_bc_r, s_Y0, 0)),
+                fact * (_adj(beta_p_r, s_T0, 1) - _adj(beta_bc_r, s_T0, 1)),
+            ]
+        )
+        bias_l = float(s_ratio @ B_F_l)
+        bias_r = float(s_ratio @ B_F_r)
+        # Adjusted per-side coefficient vectors (rdrobust.R:706-709; the
+        # fuzzy-covariate branch DOES carry factorial(deriv), unlike the
+        # sharp-covariate one - deriv=0 either way).
+
+        def _adj_vec(bmat: np.ndarray, srow: np.ndarray, col: int) -> np.ndarray:
+            return fact * (srow @ np.vstack([bmat[:, col][None, :], bmat[:, colsZ].T]))
+
+        beta_Y_p_l = _adj_vec(beta_p_l, s_Y0, 0)
+        beta_Y_p_r = _adj_vec(beta_p_r, s_Y0, 0)
+        beta_T_p_l = _adj_vec(beta_p_l, s_T0, 1)
+        beta_T_p_r = _adj_vec(beta_p_r, s_T0, 1)
+        V_tau_cl = fact**2 * float(
+            (_v(invG_p_l, RX_cl_l, res_l, s_V) + _v(invG_p_r, RX_cl_r, res_r, s_V))[deriv, deriv]
+        )
+        V_tau_rb = fact**2 * float(
+            (_v(invG_p_l, Q_q_l, res_l, s_V) + _v(invG_p_r, Q_q_r, res_r, s_V))[deriv, deriv]
+        )
+        V_T_cl = fact**2 * float(
+            (_v(invG_p_l, RX_cl_l, res_l, sV_T) + _v(invG_p_r, RX_cl_r, res_r, sV_T))[deriv, deriv]
+        )
+        V_T_rb = fact**2 * float(
+            (_v(invG_p_l, Q_q_l, res_l, sV_T) + _v(invG_p_r, Q_q_r, res_r, sV_T))[deriv, deriv]
+        )
+        return RdFitResult(
+            tau_cl=tau_cl,
+            tau_bc=tau_bc,
+            se_cl=float(np.sqrt(V_tau_cl)),
+            se_rb=float(np.sqrt(V_tau_rb)),
+            bias_l=bias_l,
+            bias_r=bias_r,
+            beta_p_l=beta_Y_p_l,
+            beta_p_r=beta_Y_p_r,
+            N_h_l=N_h_l,
+            N_h_r=N_h_r,
+            N_b_l=N_b_l,
+            N_b_r=N_b_r,
+            tau_T_cl=tau_T_cl,
+            tau_T_bc=tau_T_bc,
+            se_T_cl=float(np.sqrt(V_T_cl)),
+            se_T_rb=float(np.sqrt(V_T_rb)),
+            beta_t_p_l=beta_T_p_l,
+            beta_t_p_r=beta_T_p_r,
+            gamma_p=gamma_p,
+            covs_excluded=covs_excluded,
+            covs_set_degenerate=covs_set_degenerate,
         )
 
     # ---- Fuzzy assembly (rdrobust.R:636-657, 769-822; scalepar = 1) ----

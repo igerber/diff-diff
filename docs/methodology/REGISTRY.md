@@ -3600,7 +3600,9 @@ Robust Nonparametric Confidence Intervals for Regression-Discontinuity
 Designs. *Econometrica*, 82(6), 2295-2326. https://doi.org/10.3982/ECTA11757.
 Software/parity reference: Calonico, Cattaneo, Farrell & Titiunik (2017),
 *Stata Journal* 17(2), 372-404 (rdrobust); CER-optimal bandwidth theory:
-Calonico, Cattaneo & Farrell (2018), *JASA* 113(522), 767-779.
+Calonico, Cattaneo & Farrell (2018), *JASA* 113(522), 767-779; covariate
+adjustment: Calonico, Cattaneo, Farrell & Titiunik (2019), *REStat*
+101(3), 442-451. https://doi.org/10.1162/rest_a_00760.
 
 **Estimand and estimator (sharp RD):** with running variable `X`, known
 cutoff `c`, and treatment `T = 1(X >= c)` (units exactly at the cutoff are
@@ -3646,6 +3648,49 @@ above the treatment effects, as R does. A take-up column deterministic
 in `X` reproduces the sharp fit (first stage == 1, ULP-level agreement -
 the ratio divides by a float-solved 1).
 
+**Covariate adjustment (`fit(..., covariates=[...])`; CCFT 2019, R's
+`covs=`):** covariates enter ADDITIVELY with a COMMON coefficient pooled
+across sides - CCFT 2019 Equation 2, the paper's recommended (and only
+implemented) specification. Lemma 1 derives the probability limits of the
+five candidate specifications: the treatment-interacted variant
+(equivalent to separate per-side fits) needs the strictly stronger
+condition `mu'_Z+ gamma_Y+ = mu'_Z- gamma_Y-` and the three
+demeaning-based variants have slower rates and extra misspecification
+bias - all four are deliberately NOT implemented. The ESTIMAND IS
+UNCHANGED (`tau_SRD`/`tau_FRD` as above): adjustment buys precision, and
+the `estimand` label deliberately does not change (unlike the DiD
+estimators, where `covariates` switches identification to conditional
+parallel trends). The operative consistency condition is covariate
+BALANCE at the cutoff (`tau_Z = 0`, the testable sufficient condition of
+Lemma 1: the plim shifts by `[mu_Z+ - mu_Z-]' gamma_Y` under imbalance,
+and adjusting "for" imbalance cannot restore identification without
+functional-form assumptions). The balance placebo is the estimator
+itself - fit each covariate as `outcome_col` and inspect its RD p-value
+- documented in the module docstring; a packaged `covariate_balance`
+helper is a named follow-up (diagnostics wave). Implementation stacks
+`Z` after `(Y, T)` as extra response columns through the SAME
+local-polynomial fits (rdrobust.R:593-598); the common gamma solves the
+PARTIALLED normal equations with per-side blocks summed
+(`ZWZ = sum_side [Z'W D - U' invG U]`, rdrobust.R:659-671), and the
+adjusted estimates are the delta-vector combinations
+`s_Y = [1, -gamma[,1]]` (sharp; rdrobust.R:672-686 - the R branch omits
+`factorial(deriv)` present in the no-covariate branch, identical at the
+fixed `deriv=0` surface and replicated verbatim) or the fuzzy+covariates
+system of rdrobust.R:688-723 (adjusted Y and T jumps via
+`s_Y`/`s_T = [1, -gamma[,2]]`, their ratio, linearized bias correction,
+and the EXTENDED length-`(2+dZ)` variance vector
+`[1/tau_T, -tau_Y/tau_T^2, -(1/tau_T)gamma[,1] + (tau_Y/tau_T^2)gamma[,2]]`;
+first-stage selector `sV_T = [0, 1, -gamma[,2]]`). Variances reuse the
+same sandwiches with the `(n, 1+dT+dZ)` NN residual matrix collapsed by
+the corresponding vector (functions.R:146-204, 374-385). The partial-out
+identity `tau_adj = tau_unadj - gamma' tau_Z` (each covariate fit as an
+outcome) holds EXACTLY at common manual `(h, b)` by Frisch-Waugh and is
+locked for both the conventional and bias-corrected rows
+(`test_partial_out_identity_exact`). Fitted gammas are exposed
+name-keyed (`covariate_coefficients`, and
+`first_stage_covariate_coefficients` on fuzzy fits) as NUISANCE
+coefficients, not causal effects.
+
 **Bandwidth selection:** all 10 rdrobust data-driven selectors (`mserd`
 default; `msetwo`/`msesum`/`msecomb1`/`msecomb2`; CER-optimal `cer*`
 variants = the matching MSE selector's `h` shrunk by
@@ -3663,10 +3708,18 @@ the pilot ratio + delta vector feed the V/B constants (approach 2);
 (approach 1); and ONE-SIDED PERFECT COMPLIANCE (zero take-up variance on
 either side) auto-switches to approach 1 regardless of the flag
 (`perf_comp`, rdrobust.R:164-185 / rdbwselect.R:334-346) - selection
-only; estimation always remains fuzzy. In the port, `T` threads through
-the shared `_bw` closure so all three selector chains (mserd, msetwo,
-msesum - 14 pilot call sites) receive it; the `msetwo` fuzzy golden
-config pins the per-side chains.
+only; estimation always remains fuzzy. Covariate-adjusted bandwidths are
+COVARIATE-AWARE (CCFT 2019 Theorem 1: the bias/variance constants differ
+from the no-covariate case, so selecting `h` unadjusted and then adding
+covariates is not MSE-optimal): `Z` is stacked into every pilot fit with
+a PER-PILOT partialled gamma and the extended `s` vector
+(functions.R:241-274, 349). `perf_comp`/`sharpbw` null ONLY `T` - `Z`
+always stays in selection (rdbwselect.R:343-345), so `sharpbw` with
+covariates selects on the covariate-adjusted sharp objective. In the
+port, `T` and `Z` thread through the shared `_bw` closure so all three
+selector chains (mserd, msetwo, msesum - 14 pilot call sites) receive
+them; the `msetwo`/`cercomb2` fuzzy and covariate golden configs pin the
+per-side and comb chains.
 
 - **Note (canonical inference binding; deviation from R's printed
   output):** the result's canonical `att`/`se`/`t_stat`/`p_value`/
@@ -3767,14 +3820,58 @@ config pins the per-side chains.
   bandwidth switch instead. The R `var(T_side) == 0` test is implemented
   as exact constancy (R's two-pass `mean()` makes its variance of a
   constant vector exactly zero; numpy's single-pass mean does not).
+- **Note (covariate redundancy pipeline, R-exact under `covs_drop=True`):**
+  R first sorts covariate columns by NAME LENGTH (`order(nchar)`, stable
+  - rdrobust.R:131; the sort decides WHICH of a collinear set survives),
+  then drops redundant columns via a rank-revealing pivoted QR
+  (`qr(z, tol=1e-7)`, LINPACK dqrdc2's per-column relative rule: a
+  column is negligible when its reduced norm falls below tol times its
+  OWN original norm, so small-but-independent covariates are never
+  dropped; `covs_drop_fun`, functions.R:683-688). Both are replicated
+  exactly - the port implements the dqrdc2 loop directly (LAPACK
+  pivoting differs on near-ties) and the estimator applies the name sort
+  before building the matrix; the sort never leaks because every
+  user-facing covariate surface is name-keyed (order-invariance tested).
+  The drop runs hoisted in `fit()` on x-sorted rows - the same rows R's
+  QR sees - immediately after the NaN drop and before the fuzzy
+  identification stop, matching rdrobust.R:121-140's ordering.
+  **Deviation from R:** the drop warning NAMES the dropped columns
+  (`covariates_dropped` echoes them) where R's message is generic, and a
+  rank-0 covariate matrix fails closed with a targeted `ValueError`
+  where R would error opaquely downstream. `covs_drop=False` (strict
+  mode) rejects ANY covariate degeneracy - mutual collinearity or
+  collinearity with the local polynomial design - with a deterministic
+  `ValueError`; R's `covs_drop=FALSE` relies on `chol()` erroring, which
+  on an exactly-singular float matrix is roundoff-dependent.
+- **Deviation from R (degenerate covariate adjustment is guarded, not
+  reproduced):** R solves the partialled system with
+  `MASS::ginv(ZWZ, tol=1e-20)`; on an EXACTLY-degenerate system -
+  covariates collinear with the local polynomial design after
+  partialling, e.g. a constant covariate or a full one-hot dummy set
+  (both pass the intercept-free QR check above) - that tolerance INVERTS
+  a float-noise singular value, making R's gamma platform-noise
+  (observed 28% cross-implementation spread) and silently shifting tau
+  (~0.5% in the smoke). The port instead (a) EXCLUDES per-column
+  degeneracies - explained-ratio `diag(ZWZ)_j/(z_j'Wz_j) < 1e-14` -
+  zeroing their gamma rows, so a constant covariate reproduces the fit
+  without it bit-for-bit; (b) cuts SET-level noise directions with an
+  equilibrated (scale-invariant) pseudo-inverse (`sv_min < 1e-12 *
+  sv_max` -> `rcond=1e-12` cut), so a full dummy set reproduces the
+  drop-one-category fit (span invariance, tested at rel 1e-9); and (c)
+  warns once per fit naming the affected columns. Well-posed systems
+  take `np.linalg.pinv(rcond=1e-20)` - the same semantics as R's ginv -
+  and match R at machine precision (a 1e-9-scaled independent covariate
+  stays on this path untouched; scale-invariance tested). Bandwidth
+  pilots apply the same guard silently (per-window transients would
+  otherwise warn dozens of times per fit).
 - **Note (v1 scope seams):** only `vcov_type="nn"` (rdrobust's default)
   ships; `hc0`-`hc3` and cluster modes raise `NotImplementedError`.
-  Covariate adjustment (CCFT 2019 - review on file), weights, kink
-  estimands (`deriv`), `scalepar`, `stdvars`, per-side manual
-  bandwidths, weak-IV-robust fuzzy inference (Feir-Lemieux-Marmer), and
-  the rdplot/density diagnostics are documented follow-ups;
-  covariates/cluster/weights are not constructor parameters at all. The
-  port's `deriv` machinery is golden-covered for `deriv in {0, 1}` only.
+  Weights, kink estimands (`deriv`), `scalepar`, `stdvars`, per-side
+  manual bandwidths, weak-IV-robust fuzzy inference
+  (Feir-Lemieux-Marmer), the rdplot/density diagnostics, and a packaged
+  covariate-balance helper are documented follow-ups; cluster/weights
+  are not parameters at all. The port's `deriv` machinery is
+  golden-covered for `deriv in {0, 1}` only.
 - **Note (p/q surface, R-exact):** public `p`/`q` validation mirrors
   rdrobust.R:47-57 exactly - integers in 0:20 with `q > p`; `p=0` is R's
   local-constant fit and is accepted. R resolves a NULL `q` to `p + 1`
@@ -3822,18 +3919,26 @@ config pins the per-side chains.
 
 **Validation:** bandwidth goldens `benchmarks/data/rdrobust_golden.json`
 (17 configs x 10 selectors, `tests/test_rdrobust_port.py`); estimation
-goldens `benchmarks/data/rdrobust_estimates_golden.json` (23 configs
+goldens `benchmarks/data/rdrobust_estimates_golden.json` (32 configs
 incl. 7 fuzzy - default/sharpbw/manual-h/epa/msetwo/one-sided-perf_comp/
-ties - with full first-stage three-row blocks; the per-side LINEARIZED
-fuzzy biases are pinned at port level in
-`tests/test_rdrobust_port.py::TestFuzzyPortGoldenParity`;
+ties - with full first-stage three-row blocks, and 9 covariate configs -
+default/manual-h/msetwo/cercomb2/epa/collinear-drop/ties/fuzzy/
+fuzzy-sharpbw - with `coef_covs` gamma pins and UNSORTED
+differing-length names so every config also pins the nchar column sort;
+the per-side LINEARIZED fuzzy biases and the covariate gamma matrices
+are pinned at port level in
+`tests/test_rdrobust_port.py::TestFuzzyPortGoldenParity` /
+`::TestCovsPortGoldenParity`, with `covs_drop_fun` unit-pinned against
+live-R `qr()` rank/pivot results in `::TestCovsDropFun`;
 `tests/test_rdd_parity.py` pins everything the public results expose);
 vendored Senate data (`benchmarks/data/rdrobust_senate.csv`,
 Cattaneo-Frandsen-Titiunik 2015) anchoring the published 2017 Stata
 Journal numbers under `masspoints="off"`; R-free methodology anchors in
 `tests/test_rdd_methodology.py` (Remark 7 equivalence, invariances,
 perfect-compliance == sharp, perf_comp/sharpbw bandwidth switches,
-weak-first-stage warning gate, NaN/degenerate contracts).
+weak-first-stage warning gate, NaN/degenerate contracts, and the
+covariate partial-out identity / span-invariance / order-invariance /
+CI-shrinkage anchors).
 
 **Paper reviews on file:**
 `docs/methodology/papers/calonico-cattaneo-titiunik-2014-review.md` (CCT 2014,
@@ -3842,7 +3947,7 @@ Econometrica - robust bias-corrected RD inference),
 rdrobust software reference this port parity-targets),
 `calonico-cattaneo-farrell-2018-review.md` (JASA - CER-optimal bandwidths),
 `calonico-cattaneo-farrell-titiunik-2019-review.md` (REStat - covariate
-adjustment, deferred).
+adjustment, implemented).
 
 
 
@@ -4447,7 +4552,7 @@ should be a deliberate user choice.
 | QDiD | qte | `QDiD()` |
 | BaconDecomposition | bacondecomp | `bacon()` |
 | HonestDiD | HonestDiD | `createSensitivityResults()` |
-| RegressionDiscontinuity | rdrobust | `rdrobust()` + `rdbwselect()` (4.0.0; sharp + fuzzy, nn path; `treatment_col` = R's `fuzzy=`) |
+| RegressionDiscontinuity | rdrobust | `rdrobust()` + `rdbwselect()` (4.0.0; sharp + fuzzy + covariate-adjusted, nn path; `treatment_col` = R's `fuzzy=`, `covariates` = R's `covs=`) |
 | PreTrendsPower | pretrends | `pretrends()` |
 | PowerAnalysis | pwr / DeclareDesign / pcpanel | `pwr::pwr.norm.test` (analytical, normal-based — D1) + `pcpanel` (Burlig 2020 panel, equicorrelated case) + simulation. The analytical multiplier is normal (z), so `pwr.t.test` is **not** the faithful parity target. |
 

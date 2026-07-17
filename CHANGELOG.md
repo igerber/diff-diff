@@ -8,8 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- **`RegressionDiscontinuity` - sharp AND fuzzy regression discontinuity estimation
-  with robust bias-corrected inference (alias `RDD`).** Local-polynomial RD per
+- **`RegressionDiscontinuity` - sharp, fuzzy, AND covariate-adjusted regression
+  discontinuity estimation with robust bias-corrected inference (alias `RDD`).** Local-polynomial RD per
   Calonico, Cattaneo & Titiunik (2014), parity-targeting R `rdrobust` 4.0.0
   end-to-end: all 10 data-driven bandwidth selectors (`mserd` default,
   `msetwo`/`msesum`/comb and the CER-optimal variants),
@@ -29,6 +29,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   robust CI contains zero (documented deviation - R is silent; CCT 2014 Theorem 3
   "guard and warn", Feir-Lemieux-Marmer weak-IV inference a documented seam); R's
   exact no-variation-no-jump identification error is raised on both entry points.
+  **Covariate adjustment** via `fit(..., covariates=[...])` (R's `covs=`; CCFT 2019):
+  additive common-coefficient adjustment with a pooled-across-sides gamma that
+  leaves the estimand UNCHANGED (precision only - explicitly unlike the DiD
+  estimators' conditional-parallel-trends `covariates` role; the operative,
+  testable requirement is covariate balance at the cutoff, and the placebo recipe
+  - fit each covariate as the outcome - is documented); bandwidths are
+  covariate-aware (Z stacked into every pilot with a per-pilot gamma); collinear
+  columns are dropped with a warning NAMING them under `covs_drop=True` (R's
+  default and its exact dqrdc2 rank/pivot semantics incl. the name-length column
+  sort, ported directly; `covs_drop=False` = deterministic strict error); fitted
+  gammas are exposed name-keyed (`covariate_coefficients`, fuzzy
+  `first_stage_covariate_coefficients`) and `covariates`/`covariates_dropped`/
+  `covs_drop` echo on the results. Degenerate adjustments are GUARDED, not
+  reproduced (documented deviation): R's `ginv(tol=1e-20)` inverts a float-noise
+  singular value on constant covariates / full dummy sets, silently returning
+  platform-dependent estimates; diff-diff excludes degenerate columns, applies a
+  scale-invariant stabilized cut for rank-deficient sets (a full dummy set
+  reproduces the drop-one-category fit exactly), and warns naming the columns.
   **Canonical binding:** `att`/`se`/`t_stat`/`p_value`/`conf_int` are ONE
   coherent row - the robust bias-corrected row (`att = tau_bc`, CI centered on it,
   `t_stat == att/se`), preserving the library-wide field identities; the new
@@ -37,20 +55,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   row, and `summary()` prints the familiar three-row table. Estimation-path port
   (`rdrobust_fit`: Q_q bias-correction score matrix, conventional/robust NN
   sandwiches, fuzzy ratio/first-stage variances) validated against a new estimates
-  golden (`benchmarks/data/rdrobust_estimates_golden.json`, 23 configurations incl.
-  the Senate anchors and 7 fuzzy configs - default/sharpbw/manual-h/epa/msetwo/
-  one-sided-compliance/ties) at rtol=1e-9 in `tests/test_rdd_parity.py` (+ port-level
-  linearized-bias pins in `tests/test_rdrobust_port.py`); R-free methodology
-  anchors (CCT 2014 Remark 7 bias-corrected == local-quadratic equivalence at rel
-  1e-10 across all kernels, perfect-compliance == sharp reproduction, bandwidth
-  auto-switch locks, invariances, joint-NaN degenerate contracts) in
+  golden (`benchmarks/data/rdrobust_estimates_golden.json`, 32 configurations incl.
+  the Senate anchors, 7 fuzzy configs - default/sharpbw/manual-h/epa/msetwo/
+  one-sided-compliance/ties - and 9 covariate configs - default/manual-h/msetwo/
+  cercomb2/epa/collinear-drop/ties/fuzzy/fuzzy-sharpbw with `coef_covs` gamma
+  pins) at rtol=1e-9 in `tests/test_rdd_parity.py` (+ port-level linearized-bias,
+  gamma-matrix, and dqrdc2 rank/pivot pins in `tests/test_rdrobust_port.py`);
+  R-free methodology anchors (CCT 2014 Remark 7 bias-corrected == local-quadratic
+  equivalence at rel 1e-10 across all kernels, perfect-compliance == sharp
+  reproduction, bandwidth auto-switch locks, invariances, joint-NaN degenerate
+  contracts, and the CCFT 2019 partial-out identity - exact at common manual
+  bandwidths - plus covariate span-/order-invariance and CI-shrinkage anchors) in
   `tests/test_rdd_methodology.py`; API/validation suite in `tests/test_rdd.py`.
   Deviations from R (each labeled in the REGISTRY section): warn-instead-of-silent
   NaN drops, warn-and-ignore `b`-without-`h`, the weak-first-stage warning,
-  warn-and-ignore `sharpbw` on sharp fits, fail-closed targeted errors on
-  degenerate designs, and the canonical-binding note above. Covariates (CCFT 2019 -
-  review on file), cluster-robust variance, weights, kink estimands, weak-IV-robust
-  fuzzy inference, and rdplot/density diagnostics are documented follow-ups.
+  warn-and-ignore `sharpbw` on sharp fits (and `covs_drop=False` without
+  covariates), fail-closed targeted errors on degenerate designs, the guarded
+  degenerate covariate adjustment, and the canonical-binding note above.
+  Cluster-robust variance, weights, kink estimands, weak-IV-robust fuzzy
+  inference, a packaged covariate-balance helper, and rdplot/density diagnostics
+  are documented follow-ups.
 - **Internal: mypy enforced at zero errors.** Triaged the 184 pre-existing
   `mypy diff_diff` errors to an enforceable zero and added a blocking Mypy job to
   the Lint CI workflow (pinned `mypy==2.1.0` + pinned numpy/pandas/scipy for stub
@@ -134,9 +158,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - `diff_diff/guides/llms-autonomous.txt` no longer lists regression discontinuity as
-  out of scope: sharp AND fuzzy RD route to `RegressionDiscontinuity`; only kink
-  designs and the covariate-adjusted / cluster-robust RD variants are referred to
-  external tooling.
+  out of scope: sharp, fuzzy, AND covariate-adjusted RD route to
+  `RegressionDiscontinuity`; only kink designs and the cluster-robust RD variant
+  are referred to external tooling.
 - **Internal: repo-wide lint normalization + pinned tooling.** black/ruff/mypy are now
   pinned exactly in the `dev` extra (`black==26.3.1`, `ruff==0.15.13`, `mypy==2.1.0`;
   the tools require Python >= 3.10 — the library floor stays 3.9); full `black` +

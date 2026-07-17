@@ -355,7 +355,7 @@ supported / out of scope; `warn` supported but with documented caveats;
 | `StaggeredTripleDifference` | ✓ | ✓ | ✗ | ✓ | ✗ | ✓ | ✗ | ✗ | ✓ |
 | `ContinuousDiD` | ✗ | ✓ | ✓ | ✗ | ✓ | ✗ | ✗ | ✗ | ✓ |
 | `HeterogeneousAdoptionDiD` | ✗ | partial | partial | ✗ | ✗ | ✗ | ✗ | ✓ | warn |
-| `RegressionDiscontinuity` | ✗ (cross-sectional; sharp: treatment = running >= cutoff; fuzzy: observed take-up via `treatment_col=`) | ✗ | ✗ | ✗ | ✗ | ✗ (follow-up) | ✗ | ✗ | ✗ (follow-up) |
+| `RegressionDiscontinuity` | ✗ (cross-sectional; sharp: treatment = running >= cutoff; fuzzy: observed take-up via `treatment_col=`) | ✗ | ✗ | ✗ | ✗ | ✓ (precision only - estimand unchanged, unlike the DiD conditional-PT role; `covariates=`) | ✗ | ✗ | ✗ (follow-up) |
 
 **Footnotes.**
 - `TwoWayFixedEffects` + staggered: fits but mixes positive and negative
@@ -1299,13 +1299,15 @@ This guide does **not**:
 - Cover methods outside diff-diff's estimator suite (e.g., instrumental
   variables, regression KINK designs, synthetic control for a single
   treated unit). When those apply, point the user at dedicated
-  libraries. Regression discontinuity IS in scope - BOTH sharp and
-  fuzzy: route running-variable/threshold designs to
+  libraries. Regression discontinuity IS in scope - sharp, fuzzy, AND
+  covariate-adjusted: route running-variable/threshold designs to
   `RegressionDiscontinuity` (alias `RDD`); imperfect compliance at the
   threshold is the fuzzy design (`fit(..., treatment_col=...)`, local
-  Wald ratio with a first-stage block). Covariate adjustment,
-  cluster-robust RD variance, and weak-IV-robust fuzzy inference are
-  documented follow-ups, so point users needing those at R rdrobust.
+  Wald ratio with a first-stage block); precision covariates go in via
+  `fit(..., covariates=[...])` (same estimand - check covariate balance
+  first by fitting each covariate as the outcome). Cluster-robust RD
+  variance and weak-IV-robust fuzzy inference are documented follow-ups,
+  so point users needing those at R rdrobust.
 
 **If in doubt, consult the primary references in §8 and use
 `get_llm_guide("practitioner")` for the Baker et al. workflow.**
