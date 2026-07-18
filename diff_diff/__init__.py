@@ -316,7 +316,7 @@ HAD = HeterogeneousAdoptionDiD
 CiC = ChangesInChanges
 RDD = RegressionDiscontinuity
 
-__version__ = "3.7.0"
+__version__ = "3.8.0"
 __all__ = [
     # Estimators
     "DifferenceInDifferences",
