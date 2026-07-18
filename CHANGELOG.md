@@ -8,6 +8,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Reviewer-eval harness: N-arm matrix, blinded grading, corpus grown 2 -> 11
+  (`tools/reviewer-eval/`, prep for the GPT-5.6 reviewer evaluation).**
+  `config/configs.json` moves from the two-arm `control`/`candidate` shape to an
+  `arms` list (exactly one `role: control`; fail-closed loading rejects duplicate
+  ids, unknown per-arm keys, missing model/effort, and zero-or-multiple controls)
+  plus a declared `treatment_fields` list; the runner replaces the hardcoded
+  all-arms effort/sandbox/action_version identity assert with three
+  declared-treatment rules (undeclared confounds identical; distinct treatment
+  tuples; every arm in a single-field contrast with some other selected arm -
+  jointly-confounded subsets like a model+effort pair without a bridging arm are
+  refused), applying only to multi-arm runs (single-arm smokes stay exempt).
+  `run --k-per "C=1,D=1"` adds per-config repeat overrides inside ONE
+  invocation/manifest (fail-closed parse), with `k`/`k_per` recorded in the
+  success manifest. `compare --blinded` emits `comparison.blinded.md` +
+  a sealed `blinding.json`: arm ids remapped to `M*` labels via a permutation
+  salted from the manifest's run_ids (stable across re-renders, unlearnable
+  across experiments), model/CLI/latency metadata redacted (latency is a real
+  side channel for a higher-effort arm), and model self-references scrubbed from
+  reviews and case notes (configured names + `gpt-5.x` family/tier/bare-version
+  patterns); refuses `--allow-mixed` and manifest-less subdirs. Production
+  `openai_review.py` gains `effort=`/`timeout_s=` parameters on
+  `_build_codex_cmd`/`call_codex` with byte-identical defaults (xhigh, no
+  timeout; fail-closed effort allowlist verified live against codex-cli 0.144.5
+  on 2026-07-18 - `ultra` deliberately excluded), and the eval adapter passes
+  `SUPPORTED_EFFORTS = ("xhigh", "max")` plus a 60-min per-run ceiling so a hung
+  run becomes a resumable INFRA_ERROR. `RunResult` records the arm's `effort`
+  (old artifacts load unchanged; unblinded bundles label multi-effort arms
+  `@ max`). Corpus grows 2 -> 11 verified cases: +1 S1 synthetic revert
+  (CS no-covariate DR per-cell SE plug-in vs returned IF, PR #627 fix), +4 S2
+  historical replays of rounds where the CI reviewer caught a real P0/P1
+  (non-finite BM-DOF fail-open #620, HAD missing cluster-count guard #596,
+  discrete-treatment ACRT=0 estimand #618, CiC/QDiD practitioner mis-framed
+  parallel-trends screen #692), +1 S3 documented-deviation negative control
+  (WCR p-floor comment-only diff; `allow_severities: ["P3"]` probes severity
+  calibration), +3 S4 missed-bug probes replaying rounds the reviewer passed
+  while a later-flagged P1 was already present (#590 survey sandwich on the
+  unreduced design, #631 NaN-outcome unbalanced-panel routing, #546 two latent
+  vcov-guard P1s incl. a tutorial notebook exercising the notebook-prose path).
+  The GO/NO-GO gates, blinded multi-grader protocol, and corpus floor are
+  pre-registered in `tools/reviewer-eval/DECISION_RULE.md` BEFORE any campaign
+  run. Tests: +21 across the eval suites (fail-closed configs/treatments/k-per,
+  blinding determinism + no-identity-leak, effort plumb-through incl. codex argv
+  byte-identity and timeout kill) with the CLI-pin literals now read from
+  `configs.json` (a future CLI bump can't silently break the stubs).
 - **New tutorial: `docs/tutorials/27_cic_distributional_effects.ipynb` - "When the
   Average Hides the Action: Distributional DiD with Changes-in-Changes".** A
   business-framed walkthrough of `ChangesInChanges`/`QDiD` on a seed-locked loyalty-

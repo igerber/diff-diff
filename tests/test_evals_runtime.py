@@ -30,6 +30,19 @@ if _EVAL_ROOT.exists() and str(_EVAL_ROOT) not in sys.path:
 # --------------------------------------------------------------------------- #
 
 
+def _pinned_cli_version():
+    """The cli_version pin from config/configs.json (single source of truth).
+
+    Stub reviewers must report this exact string or run_matrix's CLI-equality
+    assert fires before the behavior under test; reading it from the live config
+    means a CLI bump never breaks these stubs again.
+    """
+    import json
+
+    raw = json.loads((_EVAL_ROOT / "config" / "configs.json").read_text())
+    return raw["arms"][0]["cli_version"]
+
+
 def _make_reviewer(monkeypatch, review_md="## Overall Assessment\n✅ Looks good\n"):
     """A CodexReviewer with call_codex + worktree stubbed (no codex, no git)."""
     from adapters import codex_reviewer as cr
@@ -44,7 +57,10 @@ def _make_reviewer(monkeypatch, review_md="## Overall Assessment\n✅ Looks good
     monkeypatch.setattr(
         r._mod,
         "call_codex",
-        lambda prompt, model, repo_root: (review_md, {"backend": "codex"}),
+        lambda prompt, model, repo_root, effort="xhigh", timeout_s=None: (
+            review_md,
+            {"backend": "codex"},
+        ),
         raising=True,
     )
     monkeypatch.setattr(
@@ -626,7 +642,7 @@ class _InfraBoom:
     # cli_version must match config/configs.json's pin so the A/B CLI-equality
     # assert doesn't fire before we reach the infra path.
     def cli_version(self):
-        return "codex-cli 0.130.0"
+        return _pinned_cli_version()
 
     def experiment_tag(self, config):
         return "tag"
@@ -687,7 +703,7 @@ def test_smoke_cli_default_limits_to_one_case(tmp_path, monkeypatch):
 
     class _Rev:
         def cli_version(self):
-            return "codex-cli 0.130.0"
+            return _pinned_cli_version()
 
     monkeypatch.setattr(run_eval, "_build_reviewer", lambda repo_root: _Rev(), raising=True)
 
@@ -766,7 +782,7 @@ def test_failed_rerun_invalidates_stale_manifest(tmp_path, monkeypatch):
 
     class _Ok:
         def cli_version(self):
-            return "codex-cli 0.130.0"
+            return _pinned_cli_version()
 
         def experiment_tag(self, config):
             return "tag"
@@ -780,7 +796,7 @@ def test_failed_rerun_invalidates_stale_manifest(tmp_path, monkeypatch):
         def review(self, case, config, repeat_idx):
             return ReviewOutput(
                 review_markdown="## ok",
-                cli_version="codex-cli 0.130.0",
+                cli_version=_pinned_cli_version(),
                 latency_s=0.0,
                 usage={"prompt_sha": "psha"},
             )
@@ -1005,7 +1021,7 @@ def test_run_early_abort_writes_failure_marker(tmp_path, monkeypatch):
 
     class _Rev:
         def cli_version(self):
-            return "codex-cli 0.130.0"
+            return _pinned_cli_version()
 
     monkeypatch.setattr(run_eval, "_build_reviewer", lambda repo_root: _Rev(), raising=True)
 
@@ -1156,7 +1172,7 @@ def test_run_matrix_fails_closed_when_pinned_cli_unavailable(monkeypatch):
     monkeypatch.setattr(
         r, "cli_version", lambda: (_ for _ in ()).throw(RuntimeError("codex missing")), raising=True
     )
-    cfg = [Config(id="A", model="gpt-5.4", cli_version="codex-cli 0.130.0")]
+    cfg = [Config(id="A", model="gpt-5.4", cli_version=_pinned_cli_version())]
     store = RunStore("/tmp/reviewer-eval-test/runs-clidown")
     with pytest.raises(CLIVersionMismatch):
         run_matrix([_case()], cfg, r, store, k=1, max_parallel=1)
@@ -1513,7 +1529,7 @@ def test_smoke_clears_cache_for_live_run(tmp_path, monkeypatch):
 
     class _Rev:
         def cli_version(self):
-            return "codex-cli 0.130.0"
+            return _pinned_cli_version()
 
     monkeypatch.setattr(run_eval, "_build_reviewer", lambda repo_root: _Rev(), raising=True)
     monkeypatch.setattr("engine.runner.run_matrix", lambda *a, **k: [], raising=True)
@@ -1635,4 +1651,450 @@ def test_load_cases_distinguishes_none_from_empty_strata():
     loader = CorpusLoader(str(_EVAL_ROOT / "corpus"), str(_REPO))
     assert len(loader.load_cases(None)) >= 2, "None (no flag) loads all strata"
     assert loader.load_cases([]) == [], "bare --strata ([]) must select nothing"
-    assert {c.id for c in loader.load_cases(["s3_negative"])} == {"s3-changelog-prose"}
+    s3_ids = {c.id for c in loader.load_cases(["s3_negative"])}
+    assert "s3-changelog-prose" in s3_ids, "stratum selection must load the s3 cases"
+    assert all(c.startswith("s3-") for c in s3_ids), "stratum selection must not leak other strata"
+
+
+# --------------------------------------------------------------------------- #
+# N-arm configs.json (gpt-5.6 eval): fail-closed loading + declared treatments.
+# --------------------------------------------------------------------------- #
+
+
+def _write_configs(tmp_path, payload):
+    import json as _json
+
+    (tmp_path / "configs.json").write_text(_json.dumps(payload))
+    return str(tmp_path)
+
+
+def _arm(id_, model="m", effort="xhigh", role=None, **kw):
+    d = {"id": id_, "model": model, "effort": effort}
+    if role:
+        d["role"] = role
+    d.update(kw)
+    return d
+
+
+def test_make_configs_resolves_four_arms_in_order():
+    """The live configs.json defines the 4-arm gpt-5.6 matrix; ids resolve in the
+    requested order and unknown ids still fail closed."""
+    import run_eval
+
+    cfgs = run_eval._make_configs(["A", "B", "C", "D"])
+    assert [c.id for c in cfgs] == ["A", "B", "C", "D"]
+    assert run_eval._resolve_configs("A,B,C,D") is not None
+    assert run_eval._resolve_configs("A,Z") is None, "unknown id must still fail closed"
+    # Exactly one declared control, and every pairwise contrast the runner will
+    # accept is single-field: B-A={model}, C-B={model}, D-B={effort}.
+    by_id = {c.id: c for c in cfgs}
+    assert by_id["A"].model != by_id["B"].model
+    assert by_id["A"].effort == by_id["B"].effort == by_id["C"].effort
+    assert by_id["D"].model == by_id["B"].model and by_id["D"].effort != by_id["B"].effort
+
+
+def test_make_configs_fails_closed_on_malformed(tmp_path, monkeypatch):
+    """A malformed configs.json must abort, never quietly run a different
+    experiment than the file describes."""
+    import run_eval
+
+    bad_payloads = [
+        {},  # no arms at all
+        {"arms": []},  # empty arms
+        {"arms": [_arm("A", role="control"), _arm("A")]},  # duplicate id
+        {"arms": [_arm("A", role="control"), _arm("B", extra="nope")]},  # unknown key
+        {"arms": [_arm("A", role="control"), _arm("B", model="")]},  # missing model
+        {"arms": [_arm("A", role="control"), _arm("B", effort="")]},  # missing effort
+        {"arms": [_arm("A"), _arm("B")]},  # zero controls
+        {"arms": [_arm("A", role="control"), _arm("B", role="control")]},  # two controls
+    ]
+    for payload in bad_payloads:
+        monkeypatch.setattr(run_eval, "CONFIG_DIR", _write_configs(tmp_path, payload))
+        with pytest.raises(ValueError):
+            run_eval._make_configs(["A"])
+
+
+def test_treatment_fields_validated(tmp_path, monkeypatch):
+    """treatment_fields must be a clean subset of the contrastable Config fields;
+    absent -> the classic model-only default."""
+    import run_eval
+
+    assert run_eval._treatment_fields() == ("model", "effort"), "live configs.json declaration"
+
+    ok = {"arms": [_arm("A", role="control"), _arm("B", model="m2")]}
+    monkeypatch.setattr(run_eval, "CONFIG_DIR", _write_configs(tmp_path, ok))
+    assert run_eval._treatment_fields() == ("model",), "absent -> default model-only"
+
+    for bad in (["model", "typo"], [], "model", ["model", "model"]):
+        payload = dict(ok)
+        payload["treatment_fields"] = bad
+        monkeypatch.setattr(run_eval, "CONFIG_DIR", _write_configs(tmp_path, payload))
+        with pytest.raises(ValueError):
+            run_eval._treatment_fields()
+
+
+def test_run_matrix_allows_declared_effort_treatment(monkeypatch):
+    """With effort DECLARED as a treatment, a model-identical effort contrast
+    (arm B vs D) must run — while sandbox drift still aborts."""
+    from engine.models import Config
+    from engine.runner import ConfoundMismatch, run_matrix
+    from engine.store import RunStore
+
+    r = _make_reviewer(monkeypatch)
+    store = RunStore("/tmp/reviewer-eval-test/runs-effort-treatment")
+    cfgs = [
+        Config(id="B", model="gpt-5.6-sol", effort="xhigh"),
+        Config(id="D", model="gpt-5.6-sol", effort="max"),
+    ]
+    results = run_matrix(
+        [_case()], cfgs, r, store, k=1, max_parallel=1, treatment_fields=("model", "effort")
+    )
+    assert len(results) == 2 and all(rr.ok for rr in results)
+    assert {rr.effort for rr in results} == {"xhigh", "max"}, "effort recorded per arm"
+
+    drift = [
+        Config(id="B", model="gpt-5.6-sol", sandbox="read-only"),
+        Config(id="X", model="gpt-5.5", sandbox="workspace-write"),
+    ]
+    with pytest.raises(ConfoundMismatch):
+        run_matrix(
+            [_case()], drift, r, store, k=1, max_parallel=1, treatment_fields=("model", "effort")
+        )
+
+
+def test_run_matrix_rejects_duplicate_treatment_tuple(monkeypatch):
+    from engine.models import Config
+    from engine.runner import ConfoundMismatch, run_matrix
+    from engine.store import RunStore
+
+    r = _make_reviewer(monkeypatch)
+    store = RunStore("/tmp/reviewer-eval-test/runs-dup-treatment")
+    cfgs = [
+        Config(id="A", model="gpt-5.6-sol", effort="xhigh"),
+        Config(id="B", model="gpt-5.6-sol", effort="xhigh"),
+    ]
+    with pytest.raises(ConfoundMismatch):
+        run_matrix(
+            [_case()], cfgs, r, store, k=1, max_parallel=1, treatment_fields=("model", "effort")
+        )
+
+
+def test_run_matrix_rejects_jointly_confounded_pair(monkeypatch):
+    """A,D alone differ in model AND effort with no bridging arm -> a confounded
+    2-arm contrast the runner must refuse (the full matrix decomposes fine)."""
+    from engine.models import Config
+    from engine.runner import ConfoundMismatch, run_matrix
+    from engine.store import RunStore
+
+    r = _make_reviewer(monkeypatch)
+    store = RunStore("/tmp/reviewer-eval-test/runs-joint-confound")
+    cfgs = [
+        Config(id="A", model="gpt-5.5", effort="xhigh"),
+        Config(id="D", model="gpt-5.6-sol", effort="max"),
+    ]
+    with pytest.raises(ConfoundMismatch):
+        run_matrix(
+            [_case()], cfgs, r, store, k=1, max_parallel=1, treatment_fields=("model", "effort")
+        )
+
+
+def test_run_matrix_full_matrix_decomposes(monkeypatch):
+    """The 4-arm matrix satisfies the single-field-contrast rule: every arm has a
+    one-field neighbor (B-A model, C-B model, D-B effort)."""
+    from engine.models import Config
+    from engine.runner import run_matrix
+    from engine.store import RunStore
+
+    r = _make_reviewer(monkeypatch)
+    store = RunStore("/tmp/reviewer-eval-test/runs-full-matrix")
+    cfgs = [
+        Config(id="A", model="gpt-5.5", effort="xhigh"),
+        Config(id="B", model="gpt-5.6-sol", effort="xhigh"),
+        Config(id="C", model="gpt-5.6-terra", effort="xhigh"),
+        Config(id="D", model="gpt-5.6-sol", effort="max"),
+    ]
+    results = run_matrix(
+        [_case()], cfgs, r, store, k=1, max_parallel=1, treatment_fields=("model", "effort")
+    )
+    assert len(results) == 4 and all(rr.ok for rr in results)
+
+
+def test_run_matrix_single_arm_exempt_from_treatment_rules(monkeypatch):
+    """One arm can't be confounded: a lone max-effort arm (the D smoke) must run."""
+    from engine.models import Config
+    from engine.runner import run_matrix
+    from engine.store import RunStore
+
+    r = _make_reviewer(monkeypatch)
+    store = RunStore("/tmp/reviewer-eval-test/runs-single-max")
+    results = run_matrix(
+        [_case()],
+        [Config(id="D", model="gpt-5.6-sol", effort="max")],
+        r,
+        store,
+        k=1,
+        max_parallel=1,
+        treatment_fields=("model", "effort"),
+    )
+    assert len(results) == 1 and results[0].ok
+
+
+def test_experiment_tag_differs_by_effort(monkeypatch):
+    """Effort is part of experiment identity: a D run can never alias a B run."""
+    from engine.models import Config
+
+    r = _make_reviewer(monkeypatch)
+    tag_b = r.experiment_tag(Config(id="X", model="gpt-5.6-sol", effort="xhigh"))
+    tag_d = r.experiment_tag(Config(id="X", model="gpt-5.6-sol", effort="max"))
+    assert tag_b != tag_d, "same model + different effort must yield distinct tags"
+
+
+def test_review_passes_effort_and_timeout_to_call_codex(monkeypatch):
+    """review() must execute the DECLARED effort (recorded == executed) and pass
+    the harness's per-run timeout ceiling."""
+    from adapters.codex_reviewer import CodexReviewer
+    from engine.models import Config
+
+    r = _make_reviewer(monkeypatch)
+    captured = {}
+
+    def _capture(prompt, model, repo_root, effort="xhigh", timeout_s=None):
+        captured["effort"] = effort
+        captured["timeout_s"] = timeout_s
+        return "## ok", {"backend": "codex"}
+
+    monkeypatch.setattr(r._mod, "call_codex", _capture, raising=True)
+    out = r.review(_case(), Config(id="D", model="gpt-5.6-sol", effort="max"), 0)
+    assert out.review_markdown == "## ok"
+    assert captured["effort"] == "max"
+    assert captured["timeout_s"] == CodexReviewer.CALL_TIMEOUT_S
+
+
+def test_review_rejects_unverified_effort(monkeypatch):
+    """Levels outside SUPPORTED_EFFORTS fail closed — never silently run a
+    different level than recorded."""
+    from engine.models import Config
+
+    r = _make_reviewer(monkeypatch)
+    with pytest.raises(NotImplementedError, match="SUPPORTED_EFFORTS|supports"):
+        r.review(_case(), Config(id="E", model="gpt-5.6-sol", effort="high"), 0)
+
+
+# --------------------------------------------------------------------------- #
+# Per-config repeats (--k-per): k=2 on the primary arms, k=1 probes, ONE
+# invocation = one manifest.
+# --------------------------------------------------------------------------- #
+
+
+def test_plan_runs_k_overrides():
+    from engine.models import STRATUM_SYNTHETIC, Case, Config
+    from engine.runner import _plan_runs
+
+    cases = [Case(id="c1", stratum=STRATUM_SYNTHETIC), Case(id="c2", stratum=STRATUM_SYNTHETIC)]
+    cfgs = [Config(id=i, model="m") for i in ("A", "B", "C")]
+    jobs = _plan_runs(cases, cfgs, k=2, k_overrides={"C": 1})
+    per_config = {}
+    for _case_, cfg, _r in jobs:
+        per_config[cfg.id] = per_config.get(cfg.id, 0) + 1
+    assert per_config == {"A": 4, "B": 4, "C": 2}, "2 cases x (A2/B2/C1) repeats"
+
+
+def test_parse_k_per_fail_closed():
+    import run_eval
+
+    cfgs = run_eval._make_configs(["A", "B", "C", "D"])
+    assert run_eval._parse_k_per("", cfgs) == {}, "absent flag -> no overrides"
+    assert run_eval._parse_k_per("C=1,D=1", cfgs) == {"C": 1, "D": 1}
+    for bad in ("C", "C=", "=1", "C=0", "C=-1", "C=x", "C=1,C=2", "Z=1", "C=1,,D=1"):
+        assert run_eval._parse_k_per(bad, cfgs) is None, f"{bad!r} must fail closed"
+
+
+def test_cmd_run_k_per_end_to_end(tmp_path, monkeypatch):
+    """cmd_run with --k 2 --k-per B=1 must execute A twice and B once per case,
+    record k/k_per in the manifest, and refuse a bad --k-per up front."""
+    import json as _json
+
+    import run_eval
+    from engine.models import STRATUM_SYNTHETIC, Case, ReviewOutput
+
+    monkeypatch.setattr(run_eval, "RUNS_DIR", str(tmp_path / "runs"))
+    monkeypatch.setattr(
+        run_eval.CorpusLoader,
+        "load_cases",
+        lambda self, strata: [Case(id="c", stratum=STRATUM_SYNTHETIC)],
+        raising=True,
+    )
+    monkeypatch.setattr(run_eval.CorpusLoader, "verify", lambda self, case: None, raising=True)
+
+    counts = {}
+
+    class _Counting:
+        def cli_version(self):
+            return _pinned_cli_version()
+
+        def experiment_tag(self, config):
+            return f"tag-{config.id}"
+
+        def case_tag(self, case):
+            return "ctag"
+
+        def prompt_sha_for(self, case):
+            return "psha"
+
+        def review(self, case, config, repeat_idx):
+            counts[config.id] = counts.get(config.id, 0) + 1
+            return ReviewOutput(
+                review_markdown="## ok",
+                cli_version=_pinned_cli_version(),
+                latency_s=0.0,
+                usage={"prompt_sha": "psha"},
+            )
+
+    monkeypatch.setattr(run_eval, "_build_reviewer", lambda repo_root: _Counting(), raising=True)
+    rc = run_eval.cmd_run(
+        _ns(
+            configs="A,B",
+            strata=["s1_synthetic"],
+            subdir="kper",
+            k=2,
+            k_per="B=1",
+            max_parallel=1,
+        )
+    )
+    assert rc == 0
+    assert counts == {"A": 2, "B": 1}, "per-config repeat overrides must drive the plan"
+    manifest = _json.loads((tmp_path / "runs" / "kper-manifest.json").read_text())
+    assert manifest.get("k") == 2 and manifest.get("k_per") == {"B": 1}
+
+    counts.clear()
+    rc_bad = run_eval.cmd_run(
+        _ns(
+            configs="A,B",
+            strata=["s1_synthetic"],
+            subdir="kper2",
+            k=2,
+            k_per="Z=1",
+            max_parallel=1,
+        )
+    )
+    assert rc_bad != 0 and not counts, "a bad --k-per must abort before any review"
+
+
+# --------------------------------------------------------------------------- #
+# compare --blinded: identity-stripped bundle + sealed mapping.
+# --------------------------------------------------------------------------- #
+
+
+def _run_ok_experiment(tmp_path, monkeypatch, subdir="blind"):
+    """Drive a real cmd_run (stubbed reviewer) so cmd_compare sees a valid
+    manifest; returns the runs dir."""
+    import run_eval
+    from engine.models import STRATUM_SYNTHETIC, Case, ReviewOutput
+
+    monkeypatch.setattr(run_eval, "RUNS_DIR", str(tmp_path / "runs"))
+    monkeypatch.setattr(
+        run_eval.CorpusLoader,
+        "load_cases",
+        lambda self, strata: [Case(id="c", stratum=STRATUM_SYNTHETIC)],
+        raising=True,
+    )
+    monkeypatch.setattr(run_eval.CorpusLoader, "verify", lambda self, case: None, raising=True)
+
+    class _Ok:
+        def cli_version(self):
+            return _pinned_cli_version()
+
+        def experiment_tag(self, config):
+            return f"tag-{config.id}"
+
+        def case_tag(self, case):
+            return "ctag"
+
+        def prompt_sha_for(self, case):
+            return "psha"
+
+        def review(self, case, config, repeat_idx):
+            return ReviewOutput(
+                review_markdown=f"As {config.model}, I see no issues.",
+                cli_version=_pinned_cli_version(),
+                latency_s=0.0,
+                usage={"prompt_sha": "psha"},
+            )
+
+    monkeypatch.setattr(run_eval, "_build_reviewer", lambda repo_root: _Ok(), raising=True)
+    rc = run_eval.cmd_run(
+        _ns(configs="A,B", strata=["s1_synthetic"], subdir=subdir, k=1, max_parallel=1)
+    )
+    assert rc == 0
+    return tmp_path / "runs"
+
+
+def test_cmd_compare_blinded_writes_sealed_bundle(tmp_path, monkeypatch):
+    import json as _json
+
+    import run_eval
+
+    runs_dir = _run_ok_experiment(tmp_path, monkeypatch)
+    rc = run_eval.cmd_compare(_ns(subdir="blind", allow_mixed=False, blinded=True))
+    assert rc == 0
+    blinded_md = (runs_dir / "blind" / "comparison.blinded.md").read_text()
+    blinding = _json.loads((runs_dir / "blind" / "blinding.json").read_text())
+    # Neutral labels present; real ids and every model identity absent.
+    assert sorted(blinding["mapping"].keys()) == ["A", "B"]
+    assert sorted(blinding["mapping"].values()) == ["M1", "M2"]
+    for label in blinding["mapping"].values():
+        assert f"### {label} — review" in blinded_md
+    lowered = blinded_md.lower()
+    assert "gpt-" not in lowered, "no model family string may survive blinding"
+    assert "gpt-5.5" not in lowered and "sol" not in lowered
+    assert "### A " not in blinded_md and "### B " not in blinded_md
+    assert "latency" not in lowered, "latency is a side channel and must be redacted"
+    # The unblinded bundle is still written and still names models.
+    unblinded = (runs_dir / "blind" / "comparison.md").read_text()
+    assert "gpt-5.5" in unblinded
+
+
+def test_cmd_compare_blinded_mapping_stable_across_rerenders(tmp_path, monkeypatch):
+    import json as _json
+
+    import run_eval
+
+    runs_dir = _run_ok_experiment(tmp_path, monkeypatch, subdir="stable")
+    assert run_eval.cmd_compare(_ns(subdir="stable", allow_mixed=False, blinded=True)) == 0
+    first = _json.loads((runs_dir / "stable" / "blinding.json").read_text())
+    assert run_eval.cmd_compare(_ns(subdir="stable", allow_mixed=False, blinded=True)) == 0
+    second = _json.loads((runs_dir / "stable" / "blinding.json").read_text())
+    assert first["mapping"] == second["mapping"], "same experiment -> same permutation"
+
+
+def test_cmd_compare_blinded_refusals(tmp_path, monkeypatch):
+    """--blinded is manifest-scoped by construction: refuse --allow-mixed and
+    refuse when the manifest is missing."""
+    import run_eval
+
+    runs_dir = _run_ok_experiment(tmp_path, monkeypatch, subdir="refuse")
+    assert (
+        run_eval.cmd_compare(_ns(subdir="refuse", allow_mixed=True, blinded=True)) != 0
+    ), "--blinded + --allow-mixed must refuse"
+    (runs_dir / "refuse-manifest.json").unlink()
+    assert (
+        run_eval.cmd_compare(_ns(subdir="refuse", allow_mixed=False, blinded=True)) != 0
+    ), "--blinded without a manifest must refuse"
+
+
+def test_run_matrix_holds_model_constant_when_not_a_treatment(monkeypatch):
+    """An effort-only experiment must hold MODEL constant: arms differing in both
+    model and effort under treatment_fields=("effort",) are silently confounded
+    and must abort (local review R1 P1)."""
+    from engine.models import Config
+    from engine.runner import ConfoundMismatch, run_matrix
+    from engine.store import RunStore
+
+    r = _make_reviewer(monkeypatch)
+    store = RunStore("/tmp/reviewer-eval-test/runs-model-confound")
+    cfgs = [
+        Config(id="A", model="gpt-5.6-sol", effort="xhigh"),
+        Config(id="B", model="gpt-5.5", effort="max"),
+    ]
+    with pytest.raises(ConfoundMismatch):
+        run_matrix([_case()], cfgs, r, store, k=1, max_parallel=1, treatment_fields=("effort",))

@@ -183,3 +183,114 @@ def test_build_bundle_renders_only_cases_with_runs():
     out = build_bundle([_run("only", "A", "R", _snap(title="Only"))])
     assert "## only" in out
     assert "_(no runs for this case)_" not in out
+
+
+# --------------------------------------------------------------------------- #
+# Blinded grading support (gpt-5.6 eval): deterministic mapping + sanitization.
+# --------------------------------------------------------------------------- #
+
+
+def test_derive_blind_mapping_deterministic_and_salt_dependent():
+    from engine.compare import derive_blind_mapping
+
+    ids = ["A", "B", "C", "D"]
+    m1 = derive_blind_mapping(ids, salt="s1")
+    m2 = derive_blind_mapping(ids, salt="s1")
+    assert m1 == m2, "same (ids, salt) must yield the same permutation"
+    assert sorted(m1.keys()) == ids
+    assert sorted(m1.values()) == ["M1", "M2", "M3", "M4"], "M* namespace, disjoint from ids"
+    # A different experiment (salt) should not be forced onto the same permutation:
+    # across a handful of salts at least one must differ (probabilistic but with
+    # 4! = 24 permutations and 8 salts, a collision of ALL is astronomically unlikely).
+    others = [derive_blind_mapping(ids, salt=f"s{i}") for i in range(2, 10)]
+    assert any(o != m1 for o in others), "salt must be able to reshuffle the mapping"
+
+
+def test_sanitize_model_refs_scrubs_names_tiers_and_versions():
+    from engine.compare import sanitize_model_refs
+
+    text = (
+        "As GPT-5.6-Sol I disagree with gpt-5.5; Sol and Terra differ, "
+        "and 5.5 missed this. But we solved the solution in solver.py."
+    )
+    out = sanitize_model_refs(text, ["gpt-5.5", "gpt-5.6-sol"])
+    low = out.lower()
+    assert "gpt" not in low
+    assert "[model-redacted]" in out
+    # Word-boundary tier scrub: bare Sol/Terra go, but ordinary words survive.
+    assert " sol " not in f" {low} ".replace("[model-redacted]", "X")
+    assert "solved" in out and "solution" in out and "solver.py" in out
+    assert " 5.5 " not in f" {out} "
+
+
+def test_apply_blinding_strips_identity_and_preserves_originals():
+    from engine.compare import apply_blinding
+
+    snap = _snap(notes="gpt-5.5 missed this in PR #600", previous_review="gpt-5.5 said fine")
+    rr = _run(
+        "c1",
+        "B",
+        "As gpt-5.6-sol, I found the bug.",
+        snap,
+        model="gpt-5.6-sol",
+        effort="max",
+        cli_version="codex-cli 0.144.5",
+        latency_s=123.0,
+    )
+    blinded = apply_blinding([rr], {"B": "M2"}, ["gpt-5.6-sol", "gpt-5.5"])[0]
+    assert blinded.config_id == "M2"
+    assert blinded.model == "" and blinded.effort == "" and blinded.cli_version == ""
+    assert blinded.latency_s == 0.0
+    assert "gpt" not in blinded.review_markdown.lower()
+    assert "gpt" not in blinded.case_snapshot["notes"].lower()
+    assert "gpt" not in blinded.case_snapshot["previous_review"].lower()
+    # Original untouched (dataclasses.replace copies).
+    assert rr.config_id == "B" and rr.model == "gpt-5.6-sol" and "gpt" in rr.review_markdown
+
+
+def test_blinded_bundle_has_no_identity_leaks():
+    from engine.compare import apply_blinding, build_bundle, derive_blind_mapping
+
+    snap = _snap()
+    runs = [
+        _run("c1", "A", "A-model output", snap, model="gpt-5.5", effort="xhigh", latency_s=60.0),
+        _run("c1", "B", "B-model output", snap, model="gpt-5.6-sol", effort="max", latency_s=600.0),
+    ]
+    mapping = derive_blind_mapping(["A", "B"], salt="x")
+    out = build_bundle(apply_blinding(runs, mapping, ["gpt-5.5", "gpt-5.6-sol"]), redact_meta=True)
+    low = out.lower()
+    assert "gpt" not in low
+    assert "latency" not in low and "cli " not in low
+    assert "### A " not in out and "### B " not in out
+    for label in mapping.values():
+        assert f"### {label} — review" in out
+
+
+def test_build_bundle_labels_effort_when_recorded():
+    """Unblinded bundles label multi-effort arms (e.g. `@ max`) so graders can
+    tell B from D; artifacts without a recorded effort render exactly as before."""
+    from engine.compare import build_bundle
+
+    snap = _snap()
+    with_effort = build_bundle([_run("c", "D", "x", snap, model="gpt-5.6-sol", effort="max")])
+    assert "### D (gpt-5.6-sol @ max) — review" in with_effort
+    without = build_bundle([_run("c", "A", "x", snap, model="gpt-5.4")])
+    assert "### A (gpt-5.4) — review" in without, "legacy artifacts render unchanged"
+
+
+def test_negative_control_render_matches_allow_severities():
+    """The FP rule in the rendered bundle must derive from the case's
+    allow_severities — a P3-only control must not read as 'P2 acceptable'
+    (local review R1 P3)."""
+    from engine.compare import build_bundle
+
+    snap = _snap(
+        stratum="s3_negative",
+        title="",
+        ground_truth=[],
+        expect_no_blockers=True,
+        allow_severities=["P3"],
+    )
+    out = build_bundle([_run("c", "A", "ok", snap, model="m")])
+    assert "outside the allowed set (P3) is a FALSE POSITIVE" in out
+    assert "any P0/P1 finding is a FALSE POSITIVE" not in out

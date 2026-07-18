@@ -1,21 +1,43 @@
 {
-  "_comment": "The two reviewer arms. model is the ONLY field intended to differ; effort/sandbox/action_version/cli_version are confounds the runner pins and asserts identical across arms (plan C2). cli_version pinned to codex-cli 0.130.0, confirmed 2026-05-30 to accept gpt-5.5 @ xhigh (the candidate) AND gpt-5.4 (control) — so the same CLI serves both arms and the runner asserts the live `codex --version` matches.",
-  "control": {
-    "id": "A",
-    "model": "gpt-5.4",
-    "effort": "xhigh",
-    "sandbox": "read-only",
-    "action_version": "v1",
-    "cli_version": "codex-cli 0.130.0",
-    "label": "control / current production"
-  },
-  "candidate": {
-    "id": "B",
-    "model": "gpt-5.5",
-    "effort": "xhigh",
-    "sandbox": "read-only",
-    "action_version": "v1",
-    "cli_version": "codex-cli 0.130.0",
-    "label": "candidate / proposed upgrade"
-  }
+  "_comment": "Reviewer arms for the gpt-5.5 -> gpt-5.6 evaluation. treatment_fields declares which Config fields are the experimental treatment; every other confound (sandbox / action_version / cli_version, plus effort when not declared) is pinned and asserted identical across arms, and every selected multi-arm subset must decompose into single-field contrasts (see engine.runner). cli_version pinned to codex-cli 0.144.5, verified live 2026-07-18 to accept gpt-5.5 @ xhigh (control), gpt-5.6-sol @ xhigh AND @ max, and gpt-5.6-terra @ xhigh (invalid efforts are rejected with a 400 enum error, so accepted == executed) - one CLI serves all arms and the runner asserts the live `codex --version` matches.",
+  "treatment_fields": ["model", "effort"],
+  "arms": [
+    {
+      "id": "A",
+      "role": "control",
+      "model": "gpt-5.5",
+      "effort": "xhigh",
+      "sandbox": "read-only",
+      "action_version": "v1",
+      "cli_version": "codex-cli 0.144.5",
+      "label": "control / current production"
+    },
+    {
+      "id": "B",
+      "model": "gpt-5.6-sol",
+      "effort": "xhigh",
+      "sandbox": "read-only",
+      "action_version": "v1",
+      "cli_version": "codex-cli 0.144.5",
+      "label": "primary candidate / proposed production default"
+    },
+    {
+      "id": "C",
+      "model": "gpt-5.6-terra",
+      "effort": "xhigh",
+      "sandbox": "read-only",
+      "action_version": "v1",
+      "cli_version": "codex-cli 0.144.5",
+      "label": "cost-fallback probe (Terra claimed ~= gpt-5.5 at half cost)"
+    },
+    {
+      "id": "D",
+      "model": "gpt-5.6-sol",
+      "effort": "max",
+      "sandbox": "read-only",
+      "action_version": "v1",
+      "cli_version": "codex-cli 0.144.5",
+      "label": "effort probe (max is new with GPT-5.6; isolates effort vs arm B)"
+    }
+  ]
 }

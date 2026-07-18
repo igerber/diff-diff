@@ -8,9 +8,10 @@ codex itself — it calls the injected ``reviewer`` (duck-typed: must provide
 RunResult (never a missed bug). Completed runs are skipped on resume via the
 content-hash key in ``engine.store``.
 
-The runner ASSERTS the Codex CLI version is identical across arms: the model is
-the only intended variable, so a CLI drift between A and B would confound the
-comparison and must abort the run.
+The runner ASSERTS the Codex CLI version is identical across arms, and that the
+arms differ ONLY in the declared ``treatment_fields`` (default: model), each in
+single-field contrasts — any other drift would confound the comparison and must
+abort the run.
 """
 
 from __future__ import annotations
@@ -22,27 +23,37 @@ from typing import Callable, Optional
 from engine.models import INFRA_ERROR, Case, Config, RunResult, to_jsonable
 from engine.store import RunStore, run_key
 
+# Config fields that are held-constant confounds unless declared as treatments.
+# `model` IS in this list: an effort-only experiment must hold model constant, or
+# the arms are silently confounded — the exact failure the harness exists to stop.
+CONFOUND_FIELDS = ("model", "effort", "sandbox", "action_version")
+
 
 class CLIVersionMismatch(RuntimeError):
     """Raised when arms would run under different reviewer CLI versions."""
 
 
 class ConfoundMismatch(RuntimeError):
-    """Raised when arms differ in a held-constant confound (effort / sandbox /
-    action_version). The model must be the ONLY variable across arms; any other
-    drift would silently confound the A/B and is aborted up front."""
+    """Raised when the selected arms don't form a clean experiment: they drift in
+    a held-constant confound (any of ``CONFOUND_FIELDS`` not declared as a
+    treatment), duplicate a treatment tuple, or differ from every other arm in
+    more than one treatment field at once (a confounded contrast). Aborted up
+    front — a confounded comparison is exactly what the harness exists to avoid."""
 
 
 def _plan_runs(
     cases: list[Case],
     configs: list[Config],
     k: int,
+    k_overrides: Optional[dict] = None,
 ) -> list[tuple[Case, Config, int]]:
-    """Enumerate (case, config, repeat) triples — uniform ``k`` per case."""
+    """Enumerate (case, config, repeat) triples — ``k`` per case, with optional
+    per-config overrides (e.g. full repeats on the primary arms, k=1 probes)."""
     jobs: list[tuple[Case, Config, int]] = []
     for case in cases:
         for config in configs:
-            for r in range(max(1, k)):
+            reps = max(1, (k_overrides or {}).get(config.id, k))
+            for r in range(reps):
                 jobs.append((case, config, r))
     return jobs
 
@@ -77,11 +88,17 @@ def run_matrix(
     k: int = 1,
     max_parallel: int = 5,
     progress: Optional[Callable[[str], None]] = None,
+    treatment_fields: tuple = ("model",),
+    k_overrides: Optional[dict] = None,
 ) -> list[RunResult]:
     """Execute the full matrix, resuming completed runs, returning all results.
 
-    ``progress`` (if given) is called with a short status string per completed
-    run. Reviewer errors are captured as INFRA_ERROR results, not raised.
+    ``treatment_fields`` declares which Config fields are the experimental
+    treatment (default: model only — the classic A/B); everything else in
+    ``CONFOUND_FIELDS`` stays a held-constant confound. ``k_overrides`` maps
+    config ids to per-config repeat counts (others use ``k``). ``progress`` (if
+    given) is called with a short status string per completed run. Reviewer
+    errors are captured as INFRA_ERROR results, not raised.
     """
 
     def log(msg: str) -> None:
@@ -118,18 +135,43 @@ def run_matrix(
                 f"pinned CLI (fidelity / unconfounded A/B)."
             )
 
-    # The model is the ONLY intended variable. Abort a multi-arm comparison that
-    # drifts in any held-constant confound (effort/sandbox/action_version) — these
-    # are recorded/hashed but a divergence would silently confound the A/B, which
-    # is exactly what the harness exists to avoid. (One arm can't be confounded.)
+    # Only the DECLARED treatment fields may vary across arms. All three checks
+    # apply to multi-arm comparisons only (one arm can't be confounded — the
+    # single-arm exemption the per-arm smokes rely on):
+    #   1. any confound not declared as a treatment must be identical across arms;
+    #   2. no two arms may share the same treatment tuple (they'd alias);
+    #   3. every arm must differ from at least one other selected arm in EXACTLY
+    #      one treatment field — so the selection decomposes into clean
+    #      single-factor contrasts, and a jointly-confounded pair (e.g. model AND
+    #      effort both changed, with no bridging arm) is refused.
     if len(configs) >= 2:
-        for field in ("effort", "sandbox", "action_version"):
+        for field in CONFOUND_FIELDS:
+            if field in treatment_fields:
+                continue
             values = {getattr(c, field) for c in configs}
             if len(values) > 1:
                 raise ConfoundMismatch(
-                    f"configs differ in {field!r} ({sorted(values)}); the model must "
-                    f"be the only variable across arms — aborting to avoid a "
-                    f"confounded A/B comparison."
+                    f"configs differ in {field!r} ({sorted(values)}), which is not a "
+                    f"declared treatment field ({sorted(treatment_fields)}) — aborting "
+                    f"to avoid a confounded comparison."
+                )
+        treatments = {c.id: tuple(getattr(c, f) for f in treatment_fields) for c in configs}
+        if len(set(treatments.values())) != len(configs):
+            raise ConfoundMismatch(
+                f"two or more configs share the same treatment tuple over "
+                f"{sorted(treatment_fields)}; arms must be distinct experiments."
+            )
+
+        def _n_diffs(a: Config, b: Config) -> int:
+            return sum(1 for f in treatment_fields if getattr(a, f) != getattr(b, f))
+
+        for c in configs:
+            if not any(_n_diffs(c, other) == 1 for other in configs if other.id != c.id):
+                raise ConfoundMismatch(
+                    f"config {c.id} differs from every other selected arm in more than "
+                    f"one treatment field ({sorted(treatment_fields)}); each arm needs a "
+                    f"single-field contrast partner — select a bridging arm (e.g. the "
+                    f"full matrix) instead of a jointly-confounded subset."
                 )
 
     # Experiment identity per config: folds in model/effort/prompt/cli so a
@@ -164,7 +206,7 @@ def run_matrix(
 
     case_tags = {case.id: _case_tag(case) for case in cases}
 
-    jobs = _plan_runs(cases, configs, k)
+    jobs = _plan_runs(cases, configs, k, k_overrides)
     results: list[RunResult] = []
     pending: list[tuple[Case, Config, int]] = []
 
@@ -222,6 +264,7 @@ def run_matrix(
                 review_markdown=out.review_markdown,
                 cli_version=out.cli_version or cli_version,
                 model=config.model,
+                effort=config.effort,
                 latency_s=out.latency_s or (time.monotonic() - t0),
                 usage=out.usage,
                 prompt_sha=str((out.usage or {}).get("prompt_sha", "")),
@@ -235,6 +278,7 @@ def run_matrix(
                 repeat_idx=r,
                 cli_version=cli_version,
                 model=config.model,
+                effort=config.effort,
                 latency_s=time.monotonic() - t0,
                 run_id=key,
                 case_snapshot=snap,

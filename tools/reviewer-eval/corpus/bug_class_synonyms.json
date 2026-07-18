@@ -1,12 +1,142 @@
 {
-  "_comment": "Maps a ground-truth bug_class to keyword phrases that are surfaced in the side-by-side comparison bundle (under each bug's 'keywords') so the LLM/human grader has diff-diff's vocabulary for judging whether a review named this class of defect. The carved-back harness has no auto-scorer — these are read context, not a match rule. Keep phrases short (1-2 tokens) and lowercase. The engine treats them as opaque; only this corpus file knows diff-diff's bug vocabulary.",
-  "dummy_name_collision": ["collision", "duplicate", "collide", "coef_dict", "dummy", "alignment", "rank"],
-  "fail_closed_nan": ["nan", "noise floor", "spurious", "finite", "degrees of freedom", "dof", "fail closed"],
-  "full_domain_gate": ["active sample", "subpop", "full domain", "support", "treated", "mask", "rank-deficient"],
-  "dense_blowup": ["dense", "densif", "toarray", "memory", "sparse"],
-  "cluster_silent_noop": ["cluster", "silent", "no-op", "ignored", "not used"],
-  "partial_nan_guard": ["nan", "guard", "se", "inference", "p-value", "confidence interval", "misleading"],
-  "inline_inference": ["safe_inference", "inline", "t_stat", "t-stat", "p_value"],
-  "missing_param_propagation": ["param", "propagat", "get_params", "not threaded", "ignored", "downstream"],
-  "semantic_contract": ["semantic", "contract", "units", "scale", "normaliz", "index", "alignment"]
+  "_comment": "Maps a ground-truth bug_class to keyword phrases that are surfaced in the side-by-side comparison bundle (under each bug's 'keywords') so the LLM/human grader has diff-diff's vocabulary for judging whether a review named this class of defect. The carved-back harness has no auto-scorer \u2014 these are read context, not a match rule. Keep phrases short (1-2 tokens) and lowercase. The engine treats them as opaque; only this corpus file knows diff-diff's bug vocabulary.",
+  "dummy_name_collision": [
+    "collision",
+    "duplicate",
+    "collide",
+    "coef_dict",
+    "dummy",
+    "alignment",
+    "rank"
+  ],
+  "fail_closed_nan": [
+    "nan",
+    "noise floor",
+    "spurious",
+    "finite",
+    "degrees of freedom",
+    "dof",
+    "fail closed"
+  ],
+  "full_domain_gate": [
+    "active sample",
+    "subpop",
+    "full domain",
+    "support",
+    "treated",
+    "mask",
+    "rank-deficient"
+  ],
+  "dense_blowup": [
+    "dense",
+    "densif",
+    "toarray",
+    "memory",
+    "sparse"
+  ],
+  "cluster_silent_noop": [
+    "cluster",
+    "silent",
+    "no-op",
+    "ignored",
+    "not used"
+  ],
+  "partial_nan_guard": [
+    "nan",
+    "guard",
+    "se",
+    "inference",
+    "p-value",
+    "confidence interval",
+    "misleading"
+  ],
+  "inline_inference": [
+    "safe_inference",
+    "inline",
+    "t_stat",
+    "t-stat",
+    "p_value"
+  ],
+  "missing_param_propagation": [
+    "param",
+    "propagat",
+    "get_params",
+    "not threaded",
+    "ignored",
+    "downstream"
+  ],
+  "semantic_contract": [
+    "semantic",
+    "contract",
+    "units",
+    "scale",
+    "normaliz",
+    "index",
+    "alignment"
+  ],
+  "cluster_identification": [
+    "cluster",
+    "single cluster",
+    "n_clusters",
+    "guard",
+    "degenerate",
+    "unidentified"
+  ],
+  "estimand_math": [
+    "estimand",
+    "paper",
+    "equation",
+    "acrt",
+    "derivative",
+    "zero",
+    "omitted"
+  ],
+  "methodology_guidance": [
+    "guidance",
+    "practitioner",
+    "assumption",
+    "screen",
+    "parallel trends",
+    "necessary"
+  ],
+  "rank_deficient_vcov": [
+    "rank",
+    "deficient",
+    "nan",
+    "sandwich",
+    "unreduced",
+    "dropped column"
+  ],
+  "sample_construction": [
+    "missing",
+    "nan",
+    "outcome",
+    "routing",
+    "unbalanced",
+    "dropped"
+  ],
+  "se_if_inconsistency": [
+    "influence function",
+    "plug-in",
+    "se",
+    "inconsistent",
+    "aggregation",
+    "drdid"
+  ],
+  "rank_deficient_crash": [
+    "rank",
+    "deficient",
+    "raise",
+    "crash",
+    "dummy",
+    "vcov"
+  ],
+  "guard_order": [
+    "guard",
+    "order",
+    "saturated",
+    "cluster",
+    "precede",
+    "masked"
+  ]
 }

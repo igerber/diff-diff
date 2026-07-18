@@ -2883,6 +2883,26 @@ class TestBuildCodexCmd:
         cmd = review_mod._build_codex_cmd("gpt-5.4", "/r", "/o")
         assert cmd[-2:] == ["-o", "/o"]
 
+    def test_effort_param_flows_to_argv(self, review_mod):
+        """The reviewer-eval harness passes non-default efforts (e.g. max, new
+        with GPT-5.6); the -c token must carry exactly the requested level."""
+        cmd = review_mod._build_codex_cmd("gpt-5.6-sol", "/r", "/o", effort="max")
+        assert "model_reasoning_effort=max" in cmd
+        assert "model_reasoning_effort=xhigh" not in cmd
+
+    def test_effort_default_keeps_argv_byte_identical(self, review_mod):
+        """Production callers pass no effort; their argv must equal the explicit
+        xhigh form (the pre-parameterization CI-parity contract)."""
+        assert review_mod._build_codex_cmd("m", "/r", "/o") == review_mod._build_codex_cmd(
+            "m", "/r", "/o", effort="xhigh"
+        )
+
+    def test_unknown_effort_raises(self, review_mod):
+        """Fail closed on levels outside the verified enum (codex would 400
+        anyway, but a clear local error beats a mid-run API rejection)."""
+        with pytest.raises(ValueError, match="model_reasoning_effort"):
+            review_mod._build_codex_cmd("m", "/r", "/o", effort="bogus")
+
 
 class TestCallCodex:
     """`call_codex` invokes the codex subprocess, streams stderr, and reads
@@ -2918,7 +2938,7 @@ class TestCallCodex:
                 self.stdout = _io.StringIO("")
                 self.stderr = _io.StringIO(captured.get("stderr_text", ""))
 
-            def wait(self):
+            def wait(self, timeout=None):
                 return self.returncode
 
             def terminate(self):
@@ -2936,6 +2956,96 @@ class TestCallCodex:
         assert cmd[0] == "codex"
         assert cmd[1] == "exec"
         assert "model_reasoning_effort=xhigh" in cmd
+
+    def test_effort_passthrough_e2e(self, review_mod, fake_subprocess):
+        review_mod.call_codex("p", "gpt-5.6-sol", "/r", effort="max")
+        assert "model_reasoning_effort=max" in fake_subprocess["cmd"]
+
+    def test_timeout_kills_process_and_raises(self, review_mod, monkeypatch):
+        """timeout_s must kill the codex process and raise a RuntimeError (the
+        eval harness turns it into a resumable INFRA_ERROR) — never propagate a
+        raw TimeoutExpired or hang."""
+        import io as _io
+        import subprocess as _sp
+
+        state = {"killed": False}
+
+        class HangingPopen:
+            def __init__(self, cmd, **kwargs):
+                self.returncode = None
+                self.stdin = _io.StringIO()
+                self.stdout = _io.StringIO("")
+                self.stderr = _io.StringIO("still working...\n")
+
+            def wait(self, timeout=None):
+                if timeout is not None and not state["killed"]:
+                    raise _sp.TimeoutExpired(cmd="codex", timeout=timeout)
+                self.returncode = -9
+                return self.returncode
+
+            def terminate(self):
+                pass
+
+            def kill(self):
+                state["killed"] = True
+
+        monkeypatch.setattr(review_mod.subprocess, "Popen", HangingPopen)
+        with pytest.raises(RuntimeError, match="timed out after"):
+            review_mod.call_codex("p", "gpt-5.6-sol", "/r", effort="max", timeout_s=1)
+        assert state["killed"], "an expired timeout must kill the codex process"
+
+    def test_timeout_covers_blocking_stdin_write(self, review_mod, monkeypatch):
+        """A codex that stops READING stdin must not defeat timeout_s: the prompt
+        feed happens off-thread so wait(timeout) is armed immediately, and kill()
+        unblocks the writer. Before the off-thread feed, a full stdin pipe would
+        block call_codex before the timeout ever started."""
+        import io as _io
+        import subprocess as _sp
+        import threading as _th
+        import time as _time
+
+        unblock = _th.Event()
+        state = {"killed": False}
+
+        class BlockingStdin:
+            def write(self, x):
+                # Simulates a full pipe with a hung reader: blocks until kill()
+                # (capped so a regression fails the elapsed assert, not the suite).
+                unblock.wait(timeout=10)
+
+            def close(self):
+                pass
+
+        class HungReaderPopen:
+            def __init__(self, cmd, **kwargs):
+                self.returncode = None
+                self.stdin = BlockingStdin()
+                self.stdout = _io.StringIO("")
+                self.stderr = _io.StringIO("")
+
+            def wait(self, timeout=None):
+                if timeout is not None and not state["killed"]:
+                    raise _sp.TimeoutExpired(cmd="codex", timeout=timeout)
+                self.returncode = -9
+                return self.returncode
+
+            def terminate(self):
+                pass
+
+            def kill(self):
+                state["killed"] = True
+                unblock.set()
+
+        monkeypatch.setattr(review_mod.subprocess, "Popen", HungReaderPopen)
+        t0 = _time.monotonic()
+        with pytest.raises(RuntimeError, match="timed out after"):
+            review_mod.call_codex("X" * 4096, "gpt-5.6-sol", "/r", timeout_s=1)
+        elapsed = _time.monotonic() - t0
+        assert state["killed"]
+        assert elapsed < 8, (
+            f"call_codex took {elapsed:.1f}s - the stdin write blocked before the "
+            f"timeout was armed (must be fed off-thread)"
+        )
 
     def test_passes_prompt_via_stdin(self, review_mod, fake_subprocess):
         review_mod.call_codex("hello prompt", "gpt-5.4", "/r")
@@ -3001,7 +3111,7 @@ class TestCallCodex:
                 self.stdout = _io.StringIO("")
                 self.stderr = _io.StringIO("auth failed: invalid token\n")
 
-            def wait(self):
+            def wait(self, timeout=None):
                 return self.returncode
 
             def terminate(self):

@@ -1,0 +1,1054 @@
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index 75e05f9c..088cb6f8 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -131,6 +131,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
+   Cross-language covariate parity is layered - conventions bit-exact given R
+   inputs, LP solver proven optimal per tau, end-to-end results gated at
+   documented exact-tie selection bounds (see the REGISTRY Deviation note).
++- **Dedicated `practitioner_next_steps()` handler for ChangesInChanges / QDiD.**
++  `ChangesInChangesResults` no longer falls through to the generic handler
++  (which recommends mean parallel-trends checks and HonestDiD - neither fits a
++  distributional 2x2 estimator with no event-study effects). The new handler
++  branches on the shared results class's `estimator` field and covariate
++  status: distributional identification screen (monotone-model /
++  time-invariance assumptions, not mean parallel trends), interior-range
++  guidance (unconditional CiC), conditional-envelope support guidance
++  (covariate CiC), the paper's CiC-over-QDiD recommendation (QDiD fits),
++  two-pre-period distributional placebo, sup-t uniform-band reading of the
++  QTE profile, with/without-covariates comparison, and cross-estimator
++  anchoring against mean DiD. Adds bootstrap-health warnings the shared
++  NaN-ATT check cannot see (inference disabled at `n_bootstrap=0`; replicate
++  failure above the 5% fit-time materiality threshold) and per-instance
++  display names ("ChangesInChanges (CiC)" vs "QDiD") for the shared results
++  class. Guidance-only change - no estimation or inference behavior touched.
+ 
+ ### Changed
+ - `diff_diff/guides/llms-autonomous.txt` no longer lists regression discontinuity as
+diff --git a/TODO.md b/TODO.md
+index 6e46762d..9df95552 100644
+--- a/TODO.md
++++ b/TODO.md
+@@ -50,7 +50,6 @@ generic sparse-FE, QR+SVD rank-detection redundancy, `check_finite` bypass — m
+ |-------|----------|--------|--------|----------|
+ | ChangesInChanges/QDiD tutorial notebook (2x2 distributional walkthrough: QTE grid, interior range, uniform bands, CiC-vs-QDiD comparison) - deferred from the implementation PR as a documented decision. | `docs/tutorials/` | #682 | Mid | Low |
+ | Tighten the mypy suppressions that back the enforced-zero posture: burn down `prep_dgp`'s per-module `[index]` override (needs a None-vs-array restructure that preserves the seeded RNG stream), and evaluate re-enabling the globally disabled codes (`arg-type`, `return-value`, `var-annotated`, `assignment`) one at a time — `assignment` alone hid several real annotation drifts found during the 2026-07 triage. | `pyproject.toml` `[tool.mypy]`, `diff_diff/prep_dgp.py` | lint-CI | Mid | Low |
+-| `practitioner_next_steps()` dedicated handler for `ChangesInChangesResults` (currently falls back to `_handle_generic`, which is safe; a dedicated handler is the established full-integration step, cf. HAD Phase 5). | `diff_diff/practitioner.py` | #682 | Quick | Low |
+ | Align the four legacy dataset loaders (`load_card_krueger`, `load_castle_doctrine`, `load_divorce_laws`, `load_mpdta`) with the loud-fallback pattern of `load_prop99`/`load_walmart`: `UserWarning` + `df.attrs["source"]` marker on synthetic fallback (currently silent), plus optional checksum pinning for the CSV downloads. **Upgraded to a live defect 2026-07-13: the `causaldata/causal_datasets` GitHub repo backing castle/card_krueger/divorce is dead (404), so those loaders silently serve synthetic data everywhere - needs loud fallback + replacement sources.** | `diff_diff/datasets.py` | LWDiD precursor | Quick | Medium |
+ | Real-data CI canary for dataset-backed replication tests: `test_methodology_lwdid.py`'s Prop 99 / Walmart goldens skip (visibly) when loaders fall back to synthetic; add a lane or canary asserting `df.attrs["source"] == "lwdid_ssc_ancillary"` in CI so network regressions cannot silently de-gate the replication tests. Pairs with the loader-fallback repair row above. | `tests/test_methodology_lwdid.py`, `.github/workflows/` | LWDiD validation suite | Quick | Low |
+ 
+diff --git a/diff_diff/practitioner.py b/diff_diff/practitioner.py
+index 54780379..fd5a62c8 100644
+--- a/diff_diff/practitioner.py
++++ b/diff_diff/practitioner.py
+@@ -45,9 +45,27 @@ _ESTIMATOR_NAMES: Dict[str, str] = {
+     "BaconDecompositionResults": "BaconDecomposition",
+     "HeterogeneousAdoptionDiDResults": "HeterogeneousAdoptionDiD (HAD)",
+     "HeterogeneousAdoptionDiDEventStudyResults": "HeterogeneousAdoptionDiD (Event Study)",
++    "ChangesInChangesResults": "ChangesInChanges / QDiD",
+ }
+ 
+ 
++def _estimator_display(type_name: str, results: Any) -> str:
++    """Per-instance display name.
++
++    ``ChangesInChangesResults`` is shared by CiC and QDiD (``QDiDResults``
++    is an alias), so the static per-type map cannot distinguish them; the
++    ``estimator`` field ("cic"/"qdid") does. Defensive: mock results may
++    lack the field, in which case the static entry is the fallback.
++    """
++    if type_name == "ChangesInChangesResults":
++        kind = getattr(results, "estimator", None)
++        if kind == "cic":
++            return "ChangesInChanges (CiC)"
++        if kind == "qdid":
++            return "QDiD"
++    return _ESTIMATOR_NAMES.get(type_name, type_name)
++
++
+ # ---------------------------------------------------------------------------
+ # Public API
+ # ---------------------------------------------------------------------------
+@@ -125,13 +143,20 @@ def practitioner_next_steps(
+             step_name="assumptions",
+         ),
+     ]
++    # ChangesInChangesResults: the generic Step 2 asks for a
++    # parallel-trends variant, contradicting CiC/QDiD's distributional
++    # identification - swap in the distributional assumptions statement
++    # (same step_name, so completed_steps filtering is unchanged).
++    if type_name == "ChangesInChangesResults":
++        pre_estimation[1] = _cic_assumptions_step(results)
++
+     steps = pre_estimation + steps
+ 
+     # Filter out completed steps
+     steps = _filter_steps(steps, completed)
+ 
+     output = {
+-        "estimator": _ESTIMATOR_NAMES.get(type_name, type_name),
++        "estimator": _estimator_display(type_name, results),
+         "completed": sorted(completed),
+         "next_steps": steps,
+         "warnings": warnings,
+@@ -1363,6 +1388,512 @@ def _handle_had_event_study(results: Any):
+     return steps, warnings
+ 
+ 
++def _cic_assumptions_step(results: Any) -> Dict[str, Any]:
++    """Step-2 (assumptions) override for ``ChangesInChangesResults``.
++
++    The generic Step 2 asks the user to name a parallel-trends variant,
++    which contradicts the CiC/QDiD guidance that identification is
++    distributional, not mean parallel trends. Same baker_step/step_name,
++    so ``completed_steps`` filtering is unchanged.
++    """
++    if getattr(results, "estimator", None) == "qdid":
++        why = (
++            "Name the distributional assumptions you are invoking - not a "
++            "mean parallel-trends variant. QDiD's justifying model "
++            "requires the scalar unobservable's distribution to be "
++            "identical in all FOUR (group, period) cells (U independent "
++            "of group AND period) and is not invariant to monotone "
++            "transformations of the outcome (Athey-Imbens 2006, p. 447); "
++            "add no-anticipation and the continuous-outcome scope."
++        )
++    else:
++        why = (
++            "Name the distributional assumptions you are invoking - not a "
++            "mean parallel-trends variant. CiC (Athey-Imbens 2006, "
++            "Assumptions 3.1-3.4) requires a monotone outcome model "
++            "h(U, T) strictly increasing in a scalar unobservable U, "
++            "time-invariance of U within groups (U independent of T "
++            "given G), and support inclusion; add no-anticipation and "
++            "the continuous-outcome scope."
++        )
++    return _step(
++        baker_step=2,
++        label="State identification assumptions (distributional)",
++        why=why,
++        code="# Which distributional assumptions? Monotonicity in U? Time-invariance? Support?",
++        priority="high",
++        step_name="assumptions",
++    )
++
++
++def _cic_fit_snippet(
++    est_name: str,
++    results: Any,
++    var: str,
++    data_var: str = "data",
++    covariates: str = "same",
++) -> str:
++    """Render a CiC/QDiD constructor+fit snippet preserving the fit's design.
++
++    Refit snippets must mirror the original specification: ``panel=True``
++    changes the bootstrap resampling scheme (unit-block vs pooled rows)
++    and ``covariates`` selects the conditional QR estimator - silently
++    dropping either would make copied guidance run a different
++    specification with different SEs/bands. ``covariates`` modes:
++    ``"same"`` mirrors the original fit's covariate list, ``"none"`` is
++    an explicitly unconditional refit, ``"add"`` inserts placeholder
++    covariate names. Reads are defensive (mock results may lack fields).
++
++    Inference settings are deliberately NORMALIZED to defaults
++    (``n_bootstrap=200, seed=42``) and custom ``quantiles``/``alpha``
++    are not mirrored - a 19-value quantile grid inlined into guidance
++    would be unreadable, and neither setting changes the identifying
++    specification. The emitted snippet says so on its last line.
++    """
++    panel = bool(getattr(results, "panel", False))
++    covs = list(getattr(results, "covariates", None) or []) if covariates == "same" else []
++    ctor_args = "n_bootstrap=200, seed=42"
++    if panel:
++        ctor_args += ", panel=True"
++    extras = []
++    if covariates == "add":
++        extras.append("covariates=['x1', 'x2']")
++    elif covs:
++        extras.append(f"covariates={covs!r}")
++    if panel:
++        extras.append("unit='unit_id'")
++    body = f"    {data_var}, outcome='y', treatment='treated', time='post'"
++    if extras:
++        body += ",\n    " + ", ".join(extras) + ")"
++    else:
++        body += ")"
++    snippet = f"{var} = {est_name}({ctor_args}).fit(\n" + body
++    if panel:
++        snippet += (
++            "\n# panel=True + unit= mirror the original unit-block bootstrap (use your unit column)"
++        )
++    snippet += "\n# n_bootstrap/seed shown are defaults; carry over quantiles=/alpha= if customized"
++    return snippet
++
++
++def _did_anchor_snippet(results: Any) -> str:
++    """Render the mean-DiD anchor fit, mirroring the fit's covariates.
++
++    For covariate CiC/QDiD results the anchor is covariate-adjusted mean
++    DiD (``DifferenceInDifferences`` accepts ``covariates=``) - anchoring
++    a conditional fit against a raw unadjusted mean would compare across
++    two specification changes at once.
++    """
++    covs = list(getattr(results, "covariates", None) or [])
++    args = "    data, outcome='y', treatment='treated', time='post'"
++    if covs:
++        args += f",\n    covariates={covs!r}"
++    return "did_results = DifferenceInDifferences().fit(\n" + args + ")"
++
++
++def _handle_cic(results: Any):
++    """ChangesInChanges / QDiD guidance (shared results class).
++
++    CiC and QDiD share ``ChangesInChangesResults`` (``QDiDResults`` is an
++    alias), so this single handler branches on the ``estimator`` field
++    ("cic"/"qdid"; unknown or missing kinds fall to the CiC branch - the
++    paper-primary, safe-voiced default) and on covariate status
++    (truthiness, not ``is not None``: fit() normalizes ``covariates=[]``
++    to None but hand-built results may not). HonestDiD is deliberately
++    never recommended here - it requires event-study effects, which this
++    results type does not carry. The conditional-envelope support step is
++    CiC-covariate-only: the QDiD covariate path has no support diagnostic
++    (``_check_conditional_support`` is invoked on the CiC path only).
++    """
++    is_qdid = getattr(results, "estimator", None) == "qdid"
++    has_cov = bool(getattr(results, "covariates", None))
++    est_name = "QDiD" if is_qdid else "ChangesInChanges"
++
++    if is_qdid:
++        s3_why = (
++            "QDiD does not identify off mean parallel trends. Its "
++            "justifying model is stronger than CiC's: the scalar "
++            "unobservable's distribution must be identical in all FOUR "
++            "(group, period) cells, and the model is not invariant to "
++            "monotone transformations of the outcome (Athey-Imbens 2006, "
++            "p. 447). Beyond the counterfactual-monotonicity check the "
++            "fit already runs on unconditional fits, none of this is "
++            "directly testable in a 2x2 design. If the source panel has "
++            "extra pre-periods, check_parallel_trends() on pre-period "
++            "MEANS is a necessary-but-insufficient screen: a mean-trend "
++            "break undermines the model, but passing it does not "
++            "validate the distributional assumptions."
++        )
++    else:
++        s3_why = (
++            "CiC does not identify off mean parallel trends. "
++            "Identification (Athey-Imbens 2006, Assumptions 3.1-3.4) "
++            "needs a monotone outcome model h(U, T) strictly increasing "
++            "in a scalar unobservable U, time-invariance of U within "
++            "groups (U independent of T given G), and support inclusion "
++            "- none directly testable in a 2x2 design. If the source "
++            "panel has extra pre-periods, check_parallel_trends() on "
++            "pre-period MEANS is a necessary-but-insufficient screen: a "
++            "mean-trend break undermines the time-invariance story, but "
++            "passing it does not validate the distributional "
++            "assumptions. Also note additive random group-time shocks "
++            "bias CiC - unlike linear DiD, where they only complicate "
++            "inference - and are undetectable in a 2x2 (p. 476)."
++        )
++
++    steps = [
++        _step(
++            baker_step=3,
++            label=(
++                "Assess the distributional identifying assumptions " "(not mean parallel trends)"
++            ),
++            why=s3_why,
++            code=(
++                "# Necessary-but-insufficient MEANS screen. Needs extra\n"
++                "# pre-periods in the SOURCE panel - the 2x2 itself has\n"
++                "# none by definition:\n"
++                "from diff_diff import check_parallel_trends\n"
++                "pt = check_parallel_trends(source_panel, outcome='y',\n"
++                "                           time='period',\n"
++                "                           treatment_group='treated')"
++            ),
++            step_name="parallel_trends",
++        ),
++    ]
++
++    if is_qdid:
++        steps.append(
++            _step(
++                baker_step=4,
++                label="Prefer ChangesInChanges over QDiD (Athey-Imbens 2006, p. 447)",
++                why=(
++                    "Athey-Imbens recommend CiC over QDiD: QDiD's "
++                    "justifying model is not invariant to monotone "
++                    "transformations of the outcome, forces identical "
++                    "unobservable distributions across all four cells, and "
++                    "places testable restrictions on the data - "
++                    "unconditional fits warn when the implied "
++                    "counterfactual quantile function is non-monotone "
++                    "(footnote 21; with covariates the check is moot, "
++                    "since the imputed counterfactual's quantile curve is "
++                    "monotone by construction). Use QDiD as a comparison "
++                    "estimator alongside CiC, not as the primary."
++                ),
++                code=(
++                    "from diff_diff import ChangesInChanges\n"
++                    + _cic_fit_snippet("ChangesInChanges", results, "cic_results")
++                    + "\nprint(cic_results.summary())"
++                ),
++                step_name="estimator_selection",
++            )
++        )
++    else:
++        steps.append(
++            _step(
++                baker_step=4,
++                label="Confirm the 2x2 distributional design fits the question",
++                why=(
++                    "CiC in diff-diff is 2x2-only (the Athey-Imbens "
++                    "Section 6 multi-group/multi-period extension is "
++                    "deferred; REGISTRY ChangesInChanges). Collapsing a "
++                    "staggered panel to a 2x2 discards timing variation - "
++                    "for staggered mean effects use CallawaySantAnna or "
++                    "another heterogeneity-robust estimator. If the fit "
++                    "warned about heavy ties (>10% duplicate outcome "
++                    "values within a cell), the outcome looks discrete: "
++                    "the continuous machinery silently delivers one "
++                    "endpoint of the Athey-Imbens Section 4 bounds, not a "
++                    "point estimate (discrete-outcome bounds are "
++                    "deferred) - interpret accordingly."
++                ),
++                code=(
++                    "# 2x2-only. For staggered mean effects switch estimators:\n"
++                    "# from diff_diff import CallawaySantAnna\n"
++                    "# Ties warning at fit? Point estimates are one endpoint\n"
++                    "# of the Athey-Imbens Section 4 bounds (discrete\n"
++                    "# outcomes; deferred), not point identification."
++                ),
++                priority="medium",
++                step_name="estimator_selection",
++            )
++        )
++
++    if not is_qdid and not has_cov:
++        steps.append(
++            _step(
++                baker_step=6,
++                label="Respect the interior point-identification range (eq. 17)",
++                why=(
++                    "Unconditional CiC quantile effects are "
++                    "point-identified only strictly inside the open "
++                    "interval (q_lower, q_upper) (Athey-Imbens eq. 17 / "
++                    "Theorem 5.3). Quantiles at or outside the bounds "
++                    "keep their point estimates (qte parity) but report "
++                    "NaN inference. If the fit also warned about support "
++                    "(Assumption 3.4), the counterfactual distribution is "
++                    "only partially identified (Corollary 3.1) and the "
++                    "ATT involves extrapolation at the support edges. "
++                    "Report the interior range (summary() prints it) and "
++                    "read tail quantiles as partially identified."
++                ),
++                code=(
++                    "print(f'interior range: ({results.q_lower:.3f}, '\n"
++                    "      f'{results.q_upper:.3f})')\n"
++                    "qe = results.quantile_effects\n"
++                    "outside = qe[(qe['quantile'] <= results.q_lower) |\n"
++                    "             (qe['quantile'] >= results.q_upper)]\n"
++                    "print(outside)  # point estimates kept, inference NaN by design"
++                ),
++                priority="medium",
++                step_name="sensitivity",
++            )
++        )
++    if not is_qdid and has_cov:
++        steps.append(
++            _step(
++                baker_step=6,
++                label="Verify conditional support/overlap (envelope diagnostic)",
++                why=(
++                    "With covariates the eq. 17 unconditional bounds are "
++                    "not the relevant objects (q_lower/q_upper are NaN by "
++                    "design); the support check is the "
++                    "conditional-envelope diagnostic, which warns at fit "
++                    "when more than 10% of treated pre-period outcomes "
++                    "fall outside the span of their 99 predicted control "
++                    "pre-period grid quantiles at their own covariates "
++                    "(Melly-Santangelo 2015, Assumption 4 - the covariate "
++                    "analogue of Athey-Imbens Assumption 3.4). Roughly 2% "
++                    "outside is expected under correct specification (the "
++                    "envelope spans taus 0.01-0.99). If the warning "
++                    "fired, those conditional ranks are extrapolated tail "
++                    "plateaus and the counterfactual involves "
++                    "out-of-support extrapolation: simplify the covariate "
++                    "set, trim non-overlap regions, refit, and compare."
++                ),
++                code=(
++                    "# The envelope diagnostic fires at fit time (UserWarning).\n"
++                    "# If it fired: inspect covariate overlap between the\n"
++                    "# treated-pre and control-pre cells, simplify or trim,\n"
++                    "# then refit and compare the QTE profile."
++                ),
++                priority="medium",
++                step_name="sensitivity",
++            )
++        )
++
++    steps.extend(
++        [
++            _step(
++                baker_step=6,
++                label=f"Placebo {est_name} on two pre-periods",
++                why=(
++                    "The 2x2 design has no extra pre-periods by "
++                    "definition, but if the source panel has two or more "
++                    "pre-treatment periods, refit the same estimator on "
++                    "two of them with the later relabeled as post. QTE "
++                    "and ATT should be near zero - systematic placebo "
++                    "'effects' flag a time-invariance violation. Note "
++                    "run_all_placebo_tests() vets the MEAN DiD only; the "
++                    "distributional placebo is this refit."
++                ),
++                code=(
++                    "# Requires >= 2 pre-periods in the SOURCE panel:\n"
++                    f"from diff_diff import {est_name}\n"
++                    "pre = source_panel[source_panel['period'].isin([p0, p1])].copy()\n"
++                    "pre['post'] = (pre['period'] == p1).astype(int)\n"
++                    + _cic_fit_snippet(est_name, results, "placebo", data_var="pre")
++                    + "\nprint(placebo.summary())  # QTE/ATT should be ~ 0"
++                ),
++                priority="medium",
++                step_name="placebo",
++            ),
++            _step(
++                baker_step=7,
++                label="Read the full QTE profile with uniform bands",
++                why=(
++                    "Distributional heterogeneity is the point of the "
++                    "estimator - report quantile_effects, not just the "
++                    "headline ATT. When reading the profile jointly "
++                    "across quantiles, pointwise CIs over-reject; "
++                    "uniform_bands() gives sup-t simultaneous bands over "
++                    "the quantile grid at a FIXED 95% level (qte parity - "
++                    "the band level does not follow alpha; the pointwise "
++                    "CIs do). Rows with NaN se (no bootstrap, failed "
++                    "replicate gate, or outside the interior range in an "
++                    "unconditional CiC fit) get NaN bands."
++                ),
++                code=(
++                    "print(results.quantile_effects)  # per-quantile QTE + "
++                    "pointwise inference\n"
++                    "print(results.uniform_bands())   # sup-t simultaneous "
++                    "bands (fixed 95%)"
++                ),
++                step_name="heterogeneity",
++            ),
++        ]
++    )
++
++    if has_cov:
++        if is_qdid:
++            s8b_why = (
++                "Shows whether conditioning drives the results. No "
++                "interior-range guard applies either way (eq. 17 has no "
++                "QDiD analogue), but the unconditional refit re-activates "
++                "the footnote-21 counterfactual-monotonicity check, which "
++                "is moot on the covariate path."
++            )
++        else:
++            s8b_why = (
++                "Shows whether conditioning drives the results. The "
++                "comparison is not like-for-like in the tails: the "
++                "unconditional refit re-enables the eq. 17 interior-range "
++                "guard (quantiles at or outside (q_lower, q_upper) get "
++                "NaN inference) and the unconditional support check, "
++                "while the covariate fit reports NaN q_lower/q_upper. "
++                "Compare point profiles everywhere; compare inference "
++                "only on the shared interior."
++            )
++        steps.append(
++            _step(
++                baker_step=8,
++                label="Report with and without covariates",
++                why=s8b_why,
++                code=(
++                    f"from diff_diff import {est_name}\n"
++                    "# Explicitly UNCONDITIONAL refit (covariates dropped by design):\n"
++                    + _cic_fit_snippet(est_name, results, "results_nocov", covariates="none")
++                    + "\nprint(results.att, results_nocov.att)"
++                ),
++                priority="medium",
++                step_name="robustness",
++            )
++        )
++    else:
++        steps.append(
++            _step(
++                baker_step=8,
++                label="Re-estimate with covariates if composition changed",
++                why=(
++                    "In repeated cross-sections especially, composition "
++                    "change across periods undermines the time-invariance "
++                    "assumption; the conditional fit assumes invariance "
++                    "conditional on the covariates instead. It ports "
++                    "qte's xformla branch: per-cell linear quantile "
++                    "regressions on a fixed internal 99-tau grid with "
++                    "conditional ranks, integrating over treated "
++                    "PRE-period covariates (qte parity; the full "
++                    "Melly-Santangelo treated-post integration is a "
++                    "documented deferral). Numeric covariates only - "
++                    "dummy-encode categoricals first. Runtime note: every "
++                    "bootstrap replicate refits every per-cell quantile "
++                    "regression, so covariate fits cost tens of seconds "
++                    "at moderate cell sizes."
++                ),
++                code=(
++                    f"from diff_diff import {est_name}\n"
++                    + _cic_fit_snippet(est_name, results, "results_cov", covariates="add")
++                    + "\nprint(results.att, results_cov.att)  # compare ATT + QTE profiles"
++                ),
++                priority="medium",
++                step_name="robustness",
++            )
++        )
++
++    if is_qdid and not has_cov:
++        steps.append(
++            _step(
++                baker_step=8,
++                label="Anchor against mean DiD (population equivalence)",
++                why=(
++                    "Unconditional QDiD's mean effect matches standard "
++                    "DiD's ATT in population (Athey-Imbens 2006, p. 447; "
++                    "the implemented qte finite-sample form deviates from "
++                    "the paper's transformation - see the REGISTRY Note). "
++                    "A large finite-sample gap between the QDiD ATT and "
++                    "the linear-DiD ATT therefore flags small cells, "
++                    "heavy ties, or specification problems rather than a "
++                    "distributional discovery."
++                ),
++                code=(
++                    "from diff_diff import DifferenceInDifferences\n"
++                    + _did_anchor_snippet(results)
++                    + "\nprint(results.att, did_results.att)  # population-equal "
++                    "mean effect"
++                ),
++                priority="medium",
++                step_name="robustness",
++            )
++        )
++    elif is_qdid:
++        steps.append(
++            _step(
++                baker_step=8,
++                label="Anchor against covariate-adjusted mean DiD (descriptive)",
++                why=(
++                    "The p. 447 population equivalence between QDiD's "
++                    "mean effect and standard DiD's ATT is established "
++                    "for the unconditional estimator; the covariate "
++                    "branch imputes via conditional ranks and per-cell "
++                    "quantile regression, and no analogous equivalence is "
++                    "documented for it. Compare against a "
++                    "covariate-adjusted mean DiD as a descriptive anchor "
++                    "only - the two adjust for covariates differently "
++                    "(linear regression adjustment vs conditional-rank "
++                    "QR), so a gap is not by itself evidence of a problem "
++                    "or a discovery."
++                ),
++                code=(
++                    "from diff_diff import DifferenceInDifferences\n"
++                    + _did_anchor_snippet(results)
++                    + "\nprint(results.att, did_results.att)  # descriptive anchor only"
++                ),
++                priority="medium",
++                step_name="robustness",
++            )
++        )
++    else:
++        if has_cov:
++            s8c_why_tail = (
++                "The covariate-adjusted mean-DiD ATT is a useful "
++                "descriptive anchor, with the caveat that the two adjust "
++                "for covariates differently (linear regression adjustment "
++                "vs conditional-rank QR) - report both, and read gaps as "
++                "descriptive rather than diagnostic."
++            )
++        else:
++            s8c_why_tail = (
++                "The linear-DiD ATT is a useful anchor: CiC's ATT can "
++                "differ from it when the outcome model is nonlinear, so a "
++                "gap is informative about nonlinearity rather than a red "
++                "flag on its own - report both."
++            )
++        steps.append(
++            _step(
++                baker_step=8,
++                label="Compare with QDiD and mean DiD",
++                why=(
++                    "QDiD is the natural comparison estimator (same 2x2 "
++                    "cells, different justifying model); broadly agreeing "
++                    "QTE profiles strengthen the distributional "
++                    "conclusions, with CiC remaining the recommended "
++                    "primary (p. 447). " + s8c_why_tail
++                ),
++                code=(
++                    "from diff_diff import QDiD, DifferenceInDifferences\n"
++                    + _cic_fit_snippet("QDiD", results, "qdid_results")
++                    + "\n"
++                    + _did_anchor_snippet(results)
++                    + "\nprint(results.att, qdid_results.att, did_results.att)"
++                ),
++                priority="medium",
++                step_name="robustness",
++            )
++        )
++
++    warnings = _check_nan_att(results) + _cic_bootstrap_warnings(results)
++    return steps, warnings
++
++
+ def _handle_generic(results: Any):
+     """Fallback for unknown result types."""
+     steps = [
+@@ -1416,6 +1947,7 @@ _HANDLERS = {
+     "BaconDecompositionResults": _handle_bacon,
+     "HeterogeneousAdoptionDiDResults": _handle_had,
+     "HeterogeneousAdoptionDiDEventStudyResults": _handle_had_event_study,
++    "ChangesInChangesResults": _handle_cic,
+ }
+ 
+ 
+@@ -1469,6 +2001,40 @@ def _check_nan_att(results: Any) -> List[str]:
+     return []
+ 
+ 
++def _cic_bootstrap_warnings(results: Any) -> List[str]:
++    """Bootstrap-health warnings for ``ChangesInChangesResults``.
++
++    ``_check_nan_att`` misses both conditions flagged here: with
++    ``n_bootstrap=0`` or a failed replicate gate the point estimates stay
++    finite while every inference field is NaN. Reads are defensive (mock
++    results may lack the fields). The 5% materiality threshold mirrors
++    the fit-time ``warn_bootstrap_failure_rate`` threshold so the two
++    surfaces never disagree about what counts as a notable failure rate.
++    """
++    nb = getattr(results, "n_bootstrap", None)
++    nv = getattr(results, "n_bootstrap_valid", None)
++    if not isinstance(nb, (int, float)):
++        return []
++    if nb == 0:
++        return [
++            "Inference is disabled (n_bootstrap=0): every SE/t/p/CI field "
++            "and the uniform bands are NaN. Refit with n_bootstrap > 0 "
++            "(default 200) and a seed for reproducible bootstrap inference."
++        ]
++    if isinstance(nv, (int, float)) and 0 <= nv < nb and (nb - nv) / nb > 0.05:
++        return [
++            f"Only {int(nv)} of {int(nb)} bootstrap replicates were valid "
++            f"({(nb - nv) / nb:.0%} failed). With fewer than half (minimum "
++            "2) valid replicates, all SEs and the sup-t critical value are "
++            "already NaN; above that gate, SEs rest on fewer replicates "
++            "than requested. Replicates whose resample empties a (group, "
++            "period) cell - or, under covariates, whose quantile "
++            "regression fails - are invalid; investigate cell sizes before "
++            "trusting the inference."
++        ]
++    return []
++
++
+ def _filter_steps(steps: List[Dict[str, Any]], completed: Set[str]) -> List[Dict[str, Any]]:
+     """Remove steps whose _step_name is in the completed set."""
+     filtered = []
+diff --git a/docs/doc-deps.yaml b/docs/doc-deps.yaml
+index eca260c5..45ce4475 100644
+--- a/docs/doc-deps.yaml
++++ b/docs/doc-deps.yaml
+@@ -1064,7 +1064,7 @@ sources:
+       - path: diff_diff/guides/llms-full.txt
+         section: "Practitioner Workflow"
+         type: user_guide
+-        note: "HAD handlers (_handle_had / _handle_had_event_study) emit did_had_pretest_workflow + bandwidth_diagnostics references; symmetric Step-4 routing in _handle_continuous"
++        note: "HAD handlers (_handle_had / _handle_had_event_study) emit did_had_pretest_workflow + bandwidth_diagnostics references; symmetric Step-4 routing in _handle_continuous; _handle_cic branches on ChangesInChangesResults.estimator/covariates and restates the CiC/QDiD fit-time diagnostics (interior range, envelope, footnote-21, bootstrap health)"
+ 
+   # ── Visualization (visualization group) ────────────────────────────
+ 
+diff --git a/tests/test_practitioner.py b/tests/test_practitioner.py
+index cf855492..9fa225c0 100644
+--- a/tests/test_practitioner.py
++++ b/tests/test_practitioner.py
+@@ -6,13 +6,16 @@ import pytest
+ from diff_diff import (
+     BaconDecomposition,
+     CallawaySantAnna,
++    ChangesInChanges,
+     DifferenceInDifferences,
+     HeterogeneousAdoptionDiDEventStudyResults,
+     HeterogeneousAdoptionDiDResults,
+     MultiPeriodDiD,
++    QDiD,
+     generate_did_data,
+     generate_staggered_data,
+ )
++from diff_diff.changes_in_changes_results import ChangesInChangesResults
+ from diff_diff.continuous_did_results import ContinuousDiDResults
+ from diff_diff.efficient_did_results import EfficientDiDResults
+ from diff_diff.imputation_results import ImputationDiDResults
+@@ -1144,3 +1147,364 @@ class TestHADDispatch:
+             "agents reading the guidance must not assume the workflow "
+             "covers what it does not cover."
+         )
++
++
++# ---------------------------------------------------------------------------
++# ChangesInChanges / QDiD handler fixtures
++# ---------------------------------------------------------------------------
++def _make_cic_2x2_panel(n=60, seed=42):
++    """Balanced 2x2 panel designed to fit warning-free.
++
++    Continuous draws (no ties); treated pre-period outcomes strictly
++    inside the INTERIOR (6%-94% quantiles) of the control pre-period
++    distribution, so both the unconditional support check and the
++    conditional 99-tau envelope check (which spans conditional quantiles
++    0.01-0.99 only) pass; the control post-period is an exact +0.3 shift
++    of the pre-period, so the QDiD counterfactual quantile curve
++    Q7(y10) + Q7(y01) - Q7(y00) = Q7(y10) + 0.3 is monotone by
++    construction. One independent numeric covariate for the
++    conditional-fit fixtures.
++    """
++    rng = np.random.default_rng(seed)
++    import pandas as pd
++
++    y00 = rng.normal(0.0, 1.0, n)
++    y01 = y00 + 0.3
++    lo, hi = np.quantile(y00, [0.06, 0.94])
++    y10 = np.linspace(lo, hi, n)
++    y11 = np.linspace(lo, hi, n) + 0.5
++    rows = []
++    for i in range(n):
++        rows.append({"unit": i, "treated": 0, "post": 0, "y": y00[i]})
++        rows.append({"unit": i, "treated": 0, "post": 1, "y": y01[i]})
++        rows.append({"unit": 1000 + i, "treated": 1, "post": 0, "y": y10[i]})
++        rows.append({"unit": 1000 + i, "treated": 1, "post": 1, "y": y11[i]})
++    df = pd.DataFrame(rows)
++    df["x1"] = rng.normal(0.0, 1.0, len(df))
++    return df
++
++
++@pytest.fixture(scope="module")
++def cic_2x2_data():
++    return _make_cic_2x2_panel()
++
++
++@pytest.fixture(scope="module")
++def cic_fit_results(cic_2x2_data):
++    # Panel unit-resampling cannot empty a (group, period) cell, so all
++    # 20 seeded replicates are valid and the fixture is warning-free.
++    est = ChangesInChanges(n_bootstrap=20, panel=True, seed=42)
++    return est.fit(cic_2x2_data, outcome="y", treatment="treated", time="post", unit="unit")
++
++
++@pytest.fixture(scope="module")
++def qdid_fit_results(cic_2x2_data):
++    est = QDiD(n_bootstrap=20, panel=True, seed=42)
++    return est.fit(cic_2x2_data, outcome="y", treatment="treated", time="post", unit="unit")
++
++
++@pytest.fixture(scope="module")
++def cic_cov_fit_results(cic_2x2_data):
++    # n_bootstrap=0 keeps the ~4k bootstrap quantile-regression LPs out
++    # of the default suite (only the ~200 point-fit LPs run); the
++    # disabled-inference practitioner warning is expected and asserted.
++    est = ChangesInChanges(n_bootstrap=0)
++    return est.fit(cic_2x2_data, outcome="y", treatment="treated", time="post", covariates=["x1"])
++
++
++@pytest.fixture(scope="module")
++def qdid_cov_fit_results(cic_2x2_data):
++    est = QDiD(n_bootstrap=0)
++    return est.fit(cic_2x2_data, outcome="y", treatment="treated", time="post", covariates=["x1"])
++
++
++def _mock_cic(**fields):
++    r = ChangesInChangesResults.__new__(ChangesInChangesResults)
++    for k, v in fields.items():
++        setattr(r, k, v)
++    return r
++
++
++class TestCiCHandler:
++    """Dedicated ChangesInChanges / QDiD handler (shared results class)."""
++
++    def _labels(self, output):
++        return [s["label"] for s in output["next_steps"]]
++
++    def _all_text(self, output):
++        return " ".join(
++            s["label"] + " " + s["why"] + " " + s.get("code", "") for s in output["next_steps"]
++        )
++
++    def test_cic_dispatch_and_display(self, cic_fit_results):
++        output = practitioner_next_steps(cic_fit_results, verbose=False)
++        assert output["estimator"] == "ChangesInChanges (CiC)"
++        assert any("distributional identifying assumptions" in lbl for lbl in self._labels(output))
++
++    def test_qdid_dispatch_and_display(self, qdid_fit_results):
++        output = practitioner_next_steps(qdid_fit_results, verbose=False)
++        assert output["estimator"] == "QDiD"
++
++    def test_bare_mock_falls_to_cic_unconditional_branch(self):
++        # Unknown/missing `estimator` kind: display falls to the static
++        # map entry and the step set defaults to the CiC-unconditional
++        # branch (locked via its marker step - the interior-range step
++        # exists on no other branch).
++        r = ChangesInChangesResults.__new__(ChangesInChangesResults)
++        output = practitioner_next_steps(r, verbose=False)
++        assert output["estimator"] == "ChangesInChanges / QDiD"
++        assert any("interior point-identification range" in lbl for lbl in self._labels(output))
++
++    def test_interior_range_step_only_on_unconditional_cic(
++        self, cic_fit_results, cic_cov_fit_results, qdid_fit_results, qdid_cov_fit_results
++    ):
++        marker = "interior point-identification range"
++        assert any(
++            marker in lbl
++            for lbl in self._labels(practitioner_next_steps(cic_fit_results, verbose=False))
++        )
++        for other in (cic_cov_fit_results, qdid_fit_results, qdid_cov_fit_results):
++            output = practitioner_next_steps(other, verbose=False)
++            assert not any(marker in lbl for lbl in self._labels(output))
++
++    def test_envelope_step_only_on_covariate_cic(
++        self, cic_fit_results, cic_cov_fit_results, qdid_fit_results, qdid_cov_fit_results
++    ):
++        # The conditional-envelope diagnostic exists on the CiC covariate
++        # path only - the QDiD covariate path has no support diagnostic,
++        # so its guidance must not claim one.
++        marker = "envelope diagnostic"
++        assert any(
++            marker in lbl
++            for lbl in self._labels(practitioner_next_steps(cic_cov_fit_results, verbose=False))
++        )
++        for other in (cic_fit_results, qdid_fit_results, qdid_cov_fit_results):
++            output = practitioner_next_steps(other, verbose=False)
++            assert not any(marker in lbl for lbl in self._labels(output))
++
++    def test_prefer_cic_step_only_on_qdid(
++        self, cic_fit_results, cic_cov_fit_results, qdid_fit_results, qdid_cov_fit_results
++    ):
++        marker = "Prefer ChangesInChanges over QDiD"
++        for qdid_res in (qdid_fit_results, qdid_cov_fit_results):
++            output = practitioner_next_steps(qdid_res, verbose=False)
++            assert any(marker in lbl for lbl in self._labels(output))
++        for cic_res in (cic_fit_results, cic_cov_fit_results):
++            output = practitioner_next_steps(cic_res, verbose=False)
++            assert not any(marker in lbl for lbl in self._labels(output))
++
++    def test_qdid_monotonicity_moot_clause_present_under_covariates(self, qdid_cov_fit_results):
++        # The footnote-21 check is unconditional-only; the covariate
++        # branch guidance must say the check is moot there, not imply
++        # it ran.
++        output = practitioner_next_steps(qdid_cov_fit_results, verbose=False)
++        assert "moot" in self._all_text(output)
++
++    def test_covariate_comparison_direction(
++        self, cic_fit_results, cic_cov_fit_results, qdid_fit_results, qdid_cov_fit_results
++    ):
++        # Covariate fits get "drop the covariates and compare";
++        # unconditional fits get "add covariates if composition changed".
++        for cov_res in (cic_cov_fit_results, qdid_cov_fit_results):
++            labels = self._labels(practitioner_next_steps(cov_res, verbose=False))
++            assert any("Report with and without covariates" in lbl for lbl in labels)
++            assert not any("Re-estimate with covariates" in lbl for lbl in labels)
++        for uncond_res in (cic_fit_results, qdid_fit_results):
++            labels = self._labels(practitioner_next_steps(uncond_res, verbose=False))
++            assert any("Re-estimate with covariates" in lbl for lbl in labels)
++            assert not any("Report with and without covariates" in lbl for lbl in labels)
++
++    def test_honest_did_never_recommended(
++        self, cic_fit_results, cic_cov_fit_results, qdid_fit_results, qdid_cov_fit_results
++    ):
++        # compute_honest_did requires event-study effects, which this
++        # results type does not carry - recommending it would send users
++        # into a TypeError.
++        for res in (cic_fit_results, cic_cov_fit_results, qdid_fit_results, qdid_cov_fit_results):
++            text = self._all_text(practitioner_next_steps(res, verbose=False))
++            assert "HonestDiD" not in text
++            assert "compute_honest_did" not in text
++
++    def test_snippets_are_valid_python_syntax(
++        self, cic_fit_results, cic_cov_fit_results, qdid_fit_results, qdid_cov_fit_results
++    ):
++        import ast
++
++        for res in (cic_fit_results, cic_cov_fit_results, qdid_fit_results, qdid_cov_fit_results):
++            output = practitioner_next_steps(res, verbose=False)
++            for step in output["next_steps"]:
++                code = step.get("code", "")
++                if not code.strip():
++                    continue
++                try:
++                    ast.parse(code)
++                except SyntaxError as e:
++                    pytest.fail(
++                        f"Step {step['baker_step']} ({step['label']!r}) "
++                        f"emits a code snippet that does not parse as "
++                        f"valid Python: {e}\n\nSnippet:\n{code}"
++                    )
++
++    def test_healthy_fit_no_warnings(self, cic_fit_results):
++        output = practitioner_next_steps(cic_fit_results, verbose=False)
++        assert output["warnings"] == []
++
++    def test_n_bootstrap_zero_warning(self, cic_cov_fit_results):
++        output = practitioner_next_steps(cic_cov_fit_results, verbose=False)
++        assert len(output["warnings"]) == 1
++        assert "n_bootstrap=0" in output["warnings"][0]
++
++    def test_failed_replicates_warning(self):
++        r = _mock_cic(
++            att=0.5, estimator="cic", covariates=None, n_bootstrap=200, n_bootstrap_valid=100
++        )
++        output = practitioner_next_steps(r, verbose=False)
++        joined = " ".join(output["warnings"])
++        assert "100 of 200" in joined
++        assert "50%" in joined
++
++    def test_minor_replicate_failures_below_threshold_no_warning(self):
++        # 4/200 = 2% failed, below the 5% fit-time materiality threshold
++        # (warn_bootstrap_failure_rate) that this surface mirrors.
++        r = _mock_cic(
++            att=0.5, estimator="cic", covariates=None, n_bootstrap=200, n_bootstrap_valid=196
++        )
++        output = practitioner_next_steps(r, verbose=False)
++        assert output["warnings"] == []
++
++    def test_nan_att_warning(self):
++        r = _mock_cic(
++            att=float("nan"),
++            estimator="cic",
++            covariates=None,
++            n_bootstrap=200,
++            n_bootstrap_valid=200,
++        )
++        output = practitioner_next_steps(r, verbose=False)
++        assert any("NaN ATT" in w for w in output["warnings"])
++
++    def test_completed_placebo_filters_placebo_step(self, cic_fit_results):
++        output = practitioner_next_steps(
++            cic_fit_results, completed_steps=["placebo"], verbose=False
++        )
++        assert not any("Placebo" in lbl for lbl in self._labels(output))
++        # Other steps survive the filter
++        assert any("interior point-identification range" in lbl for lbl in self._labels(output))
++
++    def test_empty_list_covariates_mock_takes_unconditional_branch(self):
++        # fit() normalizes covariates=[] to None, but hand-built results
++        # may carry the empty list - the branch predicate is truthiness.
++        r = _mock_cic(
++            att=0.5, estimator="cic", covariates=[], n_bootstrap=200, n_bootstrap_valid=200
++        )
++        output = practitioner_next_steps(r, verbose=False)
++        labels = [s["label"] for s in output["next_steps"]]
++        assert any("interior point-identification range" in lbl for lbl in labels)
++        assert not any("envelope diagnostic" in lbl for lbl in labels)
++
++
++@pytest.fixture(scope="module")
++def cic_cov_panel_fit_results(cic_2x2_data):
++    # Panel AND covariates together: locks the combined snippet path
++    # (panel=True + unit= + covariates= all mirrored). n_bootstrap=0
++    # keeps the LP cost to the point fit.
++    est = ChangesInChanges(n_bootstrap=0, panel=True)
++    return est.fit(
++        cic_2x2_data,
++        outcome="y",
++        treatment="treated",
++        time="post",
++        unit="unit",
++        covariates=["x1"],
++    )
++
++
++class TestCiCHandlerSpecificationPropagation:
++    """Refit snippets and Step 2 must mirror the fit's actual design."""
++
++    def _steps(self, results, **kwargs):
++        return practitioner_next_steps(results, verbose=False, **kwargs)["next_steps"]
++
++    def _step_by_label(self, results, label_fragment):
++        matches = [s for s in self._steps(results) if label_fragment in s["label"]]
++        assert matches, f"no step with label containing {label_fragment!r}"
++        return matches[0]
++
++    def test_step2_override_cic(self, cic_fit_results):
++        step2 = [s for s in self._steps(cic_fit_results) if s["baker_step"] == 2][0]
++        assert "distributional" in step2["label"]
++        assert "not a mean parallel-trends variant" in step2["why"]
++        assert "monotone outcome model" in step2["why"]
++        assert "parallel trends variant you are invoking" not in step2["why"]
++
++    def test_step2_override_qdid(self, qdid_fit_results):
++        step2 = [s for s in self._steps(qdid_fit_results) if s["baker_step"] == 2][0]
++        assert "not a mean parallel-trends variant" in step2["why"]
++        assert "FOUR" in step2["why"]
++
++    def test_step2_generic_untouched_for_other_estimators(self, did_results):
++        step2 = [s for s in self._steps(did_results) if s["baker_step"] == 2][0]
++        assert "parallel trends variant" in step2["why"]
++
++    def test_step2_override_still_filterable(self, cic_fit_results):
++        steps = self._steps(cic_fit_results, completed_steps=["assumptions"])
++        assert not any(s["baker_step"] == 2 for s in steps)
++
++    def test_placebo_snippet_mirrors_covariates(self, cic_cov_fit_results):
++        code = self._step_by_label(cic_cov_fit_results, "Placebo")["code"]
++        assert "covariates=['x1']" in code
++
++    def test_placebo_snippet_mirrors_panel(self, cic_fit_results):
++        code = self._step_by_label(cic_fit_results, "Placebo")["code"]
++        assert "panel=True" in code
++        assert "unit=" in code
++
++    def test_placebo_snippet_rcs_unconditional_has_neither(self, cic_cov_fit_results):
++        # The covariate fixture is repeated cross-section: no panel args.
++        code = self._step_by_label(cic_cov_fit_results, "Placebo")["code"]
++        assert "panel=True" not in code
++
++    def test_placebo_snippet_mirrors_panel_and_covariates_together(self, cic_cov_panel_fit_results):
++        code = self._step_by_label(cic_cov_panel_fit_results, "Placebo")["code"]
++        assert "covariates=['x1']" in code
++        assert "panel=True" in code
++        assert "unit=" in code
++
++    def test_prefer_cic_snippet_mirrors_specification(self, qdid_cov_fit_results):
++        # "Fit CiC as the primary" must run the SAME specification the
++        # QDiD fit ran, not silently drop the covariates.
++        code = self._step_by_label(qdid_cov_fit_results, "Prefer ChangesInChanges")["code"]
++        assert "covariates=['x1']" in code
++
++    def test_with_without_covariates_snippet_is_unconditional_by_design(self, cic_cov_fit_results):
++        code = self._step_by_label(cic_cov_fit_results, "Report with and without")["code"]
++        assert "covariates=" not in code
++        assert "UNCONDITIONAL" in code
++
++    def test_cross_estimator_snippet_mirrors_covariates(self, cic_cov_fit_results):
++        code = self._step_by_label(cic_cov_fit_results, "Compare with QDiD")["code"]
++        # Both the QDiD leg and the mean-DiD anchor carry the covariates.
++        assert code.count("covariates=['x1']") == 2
++
++    def test_qdid_uncond_anchor_keeps_population_equivalence(self, qdid_fit_results):
++        step = self._step_by_label(qdid_fit_results, "Anchor against mean DiD")
++        assert "population equivalence" in step["label"]
++        assert "matches standard" in step["why"]
++
++    def test_qdid_cov_anchor_drops_population_equivalence_claim(self, qdid_cov_fit_results):
++        # The p. 447 equivalence is established for the unconditional
++        # estimator only - the covariate branch must not inherit it.
++        labels = [s["label"] for s in self._steps(qdid_cov_fit_results)]
++        assert not any("population equivalence" in lbl for lbl in labels)
++        step = self._step_by_label(qdid_cov_fit_results, "covariate-adjusted mean DiD")
++        assert "descriptive anchor" in step["why"]
++        assert "covariates=['x1']" in step["code"]
++        assert "flags small cells" not in step["why"]
++
++    def test_snippets_document_inference_normalization(self, cic_fit_results):
++        # quantiles=/alpha= are intentionally NOT mirrored into refit
++        # snippets (a 19-value grid inlined into guidance is unreadable;
++        # neither changes the identifying specification) - the snippet
++        # must SAY so rather than silently normalize.
++        code = self._step_by_label(cic_fit_results, "Placebo")["code"]
++        assert "carry over quantiles=/alpha= if customized" in code

@@ -1,6 +1,6 @@
-"""Core data model for the minimal Codex-reviewer A/B comparison harness.
+"""Core data model for the minimal Codex-reviewer comparison harness.
 
-Plain stdlib dataclasses describing one reviewer-comparison experiment: the two
+Plain stdlib dataclasses describing one reviewer-comparison experiment: the
 arms (``Config``), a corpus case + its ground truth (``Case`` /
 ``GroundTruthBug``), and the persisted output of one review run (``ReviewOutput``
 / ``RunResult``). Scoring is NOT modeled here — both raw reviews are bundled
@@ -44,15 +44,17 @@ INFRA_ERROR = "INFRA_ERROR"
 
 @dataclass
 class Config:
-    """One reviewer configuration arm (A = control, B = candidate).
+    """One reviewer configuration arm (e.g. A = control, B..D = candidates).
 
-    ``model`` is the ONLY field intended to differ between arms; ``effort``,
-    ``sandbox``, ``action_version``, and ``cli_version`` are confounds the
-    experiment pins and the runner asserts identical across arms.
+    Only the fields configs.json declares as ``treatment_fields`` (default:
+    ``model``) may differ between arms; everything else (``sandbox``,
+    ``action_version``, ``cli_version``, and ``effort`` when not declared) is a
+    confound the experiment pins and the runner asserts identical across arms
+    (see ``engine.runner`` for the single-field-contrast rules).
     """
 
-    id: str  # "A" or "B"
-    model: str  # e.g. "gpt-5.4" / "gpt-5.5"
+    id: str  # "A", "B", ...
+    model: str  # e.g. "gpt-5.5" / "gpt-5.6-sol"
     effort: str = "xhigh"
     sandbox: str = "read-only"
     action_version: str = "v1"  # openai/codex-action@<version>
@@ -89,9 +91,10 @@ class Case:
 
     The runner/reviewer treat ``fixture`` as an opaque dict — only
     ``adapters/worktree.py`` knows how to materialize it. ``expect_no_blockers``
-    marks a clean negative control (any P0/P1 the reviewer raises is a false
-    positive); ``allow_severities`` / ``known_fp_topics`` document what is
-    acceptable there.
+    marks a clean negative control: any finding OUTSIDE that case's
+    ``allow_severities`` (default ``["P2", "P3"]``; a calibration probe may allow
+    only ``["P3"]``) is a false positive, and ``known_fp_topics`` documents
+    topics that must not be flagged at all.
     """
 
     id: str
@@ -148,6 +151,10 @@ class RunResult:
     review_markdown: str = ""
     cli_version: str = ""
     model: str = ""
+    # The arm's reasoning effort, recorded so multi-effort experiments stay
+    # readable in the (unblinded) bundle. "" on pre-effort artifacts — loading
+    # old runs stays compatible.
+    effort: str = ""
     latency_s: float = 0.0
     usage: dict[str, Any] = field(default_factory=dict)
     prompt_sha: str = ""  # content hash of the exact prompt the reviewer saw
@@ -192,6 +199,7 @@ def run_result_from_dict(d: dict[str, Any]) -> RunResult:
         review_markdown=d.get("review_markdown", ""),
         cli_version=d.get("cli_version", ""),
         model=d.get("model", ""),
+        effort=d.get("effort", ""),
         latency_s=d.get("latency_s", 0.0),
         usage=d.get("usage", {}),
         prompt_sha=d.get("prompt_sha", ""),

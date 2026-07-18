@@ -9,6 +9,7 @@ it top-to-bottom and fills the caught/missed/false-positive table. Stdlib-only.
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import json
 import re
@@ -61,9 +62,10 @@ Rules:
   `.github/codex/prompts/pr_review.md` — the exact rubric every config was given.
 - A finding "catches" a bug if it names the same defect at the same
   location/symbol, regardless of wording or output format.
-- On a **negative-control** case (marked "NO known bugs" below), any P0/P1
-  finding is a FALSE POSITIVE; only the severities in that case's "Allowed
-  severities" line (plus its listed known-FP topics) are acceptable.
+- On a **negative-control** case (marked "NO known bugs" below), any finding
+  whose severity is OUTSIDE that case's "Allowed severities" line is a FALSE
+  POSITIVE (severities inside the line, plus its listed known-FP topics, are
+  acceptable — note some cases allow only P3).
 - Note any bug that ALL configs miss (a shared blind spot) and any bug only one
   config catches (the signal that matters for the upgrade decision).{repeat_note}
 """
@@ -82,9 +84,11 @@ def _fence_for(text: str) -> str:
 def _render_ground_truth(snap: dict) -> str:
     """Render a case's ground truth from its run-time snapshot (a plain dict)."""
     if snap.get("expect_no_blockers"):
+        allowed = ", ".join(snap.get("allow_severities") or []) or "none"
         lines = [
-            "**NO known bugs** (negative control) — any P0/P1 finding is a FALSE " "POSITIVE.",
-            f"- Allowed severities: {', '.join(snap.get('allow_severities') or []) or 'none'}",
+            "**NO known bugs** (negative control) — any finding whose severity is "
+            f"outside the allowed set ({allowed}) is a FALSE POSITIVE.",
+            f"- Allowed severities: {allowed}",
         ]
         for topic in snap.get("known_fp_topics") or []:
             desc = topic.get("topic") or topic.get("description") or str(topic)
@@ -141,16 +145,109 @@ def _render_grading_context(snap: dict) -> str:
     return "\n".join(lines)
 
 
-def _render_review(rr: RunResult) -> str:
-    label = f"### {rr.config_id} ({rr.model or 'model?'}) — review"
+def _render_review(rr: RunResult, redact_meta: bool = False) -> str:
+    if redact_meta:
+        # Blinded rendering: no model name, no latency (a real side channel — the
+        # max-effort arm is visibly slower), no CLI string.
+        label = f"### {rr.config_id} — review"
+    else:
+        effort = f" @ {rr.effort}" if getattr(rr, "effort", "") else ""
+        label = f"### {rr.config_id} ({rr.model or 'model?'}{effort}) — review"
     if rr.repeat_idx:
         label += f" (repeat {rr.repeat_idx})"
     if not rr.ok:
         return f"{label}\n\n> INFRA_ERROR — excluded: `{rr.infra_error}`"
     md = rr.review_markdown.strip() or "_(empty review)_"
-    meta = f"latency {rr.latency_s:.0f}s · cli {rr.cli_version or '?'}"
     fence = _fence_for(md)
+    if redact_meta:
+        return f"{label}\n\n{fence}markdown\n{md}\n{fence}"
+    meta = f"latency {rr.latency_s:.0f}s · cli {rr.cli_version or '?'}"
     return f"{label}\n\n_{meta}_\n\n{fence}markdown\n{md}\n{fence}"
+
+
+# --------------------------------------------------------------------------- #
+# Blinded grading support
+# --------------------------------------------------------------------------- #
+
+# Family patterns scrubbed from blinded text in ADDITION to the configured model
+# names: any gpt-5.x-style token, the GPT-5.6 tier names as standalone words, and
+# bare major.minor version shorthand ("5.5", "5.6"). Over-redaction is safe (a
+# stray [model-redacted] doesn't change whether a defect was named at a location);
+# under-redaction breaks the blind.
+_MODEL_FAMILY_PATTERNS = (
+    r"gpt[\s._-]?5(?:\.\d+)?(?:-[a-z0-9]+)*",
+    r"\b(?:sol|terra|luna)\b",
+    r"\b5\.[0-9]\b",
+)
+
+
+def derive_blind_mapping(config_ids: list[str], salt: str) -> dict[str, str]:
+    """Deterministic config_id -> blind-label permutation (labels ``M1..Mn``).
+
+    Assignment order sorts ids by ``sha256(salt|id)``: stable across re-renders
+    of the SAME experiment (the salt derives from the manifest's content-hash
+    run_ids, not wall clock), different across experiments — so a grader can
+    never learn "B is always M3". The ``M*`` namespace is deliberately disjoint
+    from the real arm ids.
+    """
+    ordered = sorted(
+        config_ids,
+        key=lambda cid: hashlib.sha256(f"{salt}|{cid}".encode("utf-8")).hexdigest(),
+    )
+    return {cid: f"M{i + 1}" for i, cid in enumerate(ordered)}
+
+
+def sanitize_model_refs(text: str, model_names: Iterable[str]) -> str:
+    """Replace model identities in ``text`` with ``[model-redacted]``.
+
+    Case-insensitive; configured names first (longest first, so "gpt-5.6-sol"
+    wins over any "gpt-5.6" family match), then the family patterns. Reviews
+    occasionally self-reference their model, and s4_missed case notes routinely
+    name the model that missed the bug — both would unblind a grader.
+    """
+    out = text
+    for name in sorted({n for n in model_names if n}, key=len, reverse=True):
+        out = re.sub(re.escape(name), "[model-redacted]", out, flags=re.IGNORECASE)
+    for pat in _MODEL_FAMILY_PATTERNS:
+        out = re.sub(pat, "[model-redacted]", out, flags=re.IGNORECASE)
+    return out
+
+
+def apply_blinding(
+    runs: Iterable[RunResult], mapping: dict[str, str], model_names: Iterable[str]
+) -> list[RunResult]:
+    """Return blinded copies of ``runs``: config ids swapped for blind labels and
+    every identity-bearing field cleared or sanitized.
+
+    Cleared: ``model``, ``effort``, ``cli_version``, ``latency_s`` (the
+    max-effort arm is visibly slower — a real side channel). Sanitized:
+    ``review_markdown``, ``infra_error``, and the snapshot's ``notes`` /
+    ``previous_review`` (the surfaces that can name models). The originals are
+    never mutated.
+    """
+    names = list(model_names)
+    blinded: list[RunResult] = []
+    for rr in runs:
+        snap = dict(rr.case_snapshot or {})
+        for field in ("notes", "previous_review"):
+            if snap.get(field):
+                snap[field] = sanitize_model_refs(str(snap[field]), names)
+        blinded.append(
+            dataclasses.replace(
+                rr,
+                config_id=mapping[rr.config_id],
+                model="",
+                effort="",
+                cli_version="",
+                latency_s=0.0,
+                review_markdown=sanitize_model_refs(rr.review_markdown, names),
+                infra_error=(
+                    sanitize_model_refs(rr.infra_error, names) if rr.infra_error else None
+                ),
+                case_snapshot=snap,
+            )
+        )
+    return blinded
 
 
 def _snapshot_key(snap: dict) -> str:
@@ -161,7 +258,7 @@ def _snapshot_key(snap: dict) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:8]
 
 
-def build_bundle(runs: Iterable[RunResult]) -> str:
+def build_bundle(runs: Iterable[RunResult], redact_meta: bool = False) -> str:
     """Render the full comparison bundle from the stored run artifacts.
 
     Each run carries its own ``case_snapshot`` (the case AS REVIEWED), so the
@@ -171,6 +268,10 @@ def build_bundle(runs: Iterable[RunResult]) -> str:
     keyed by ``(case_id, snapshot)`` and ordered by stratum: under a normal
     manifest-scoped compare there's one snapshot per case_id, but ``--allow-mixed``
     can surface two versions of the same case_id, which MUST be graded separately.
+
+    ``redact_meta`` drops the per-review model/latency/cli meta (used for blinded
+    bundles — pass runs through ``apply_blinding`` first; this flag only controls
+    the renderer's own meta line and label).
     """
     runs_by_group: dict[tuple[str, str], list[RunResult]] = {}
     for rr in runs:
@@ -211,10 +312,10 @@ def build_bundle(runs: Iterable[RunResult]) -> str:
             parts.append(ctx)
         parts.append("")
         for rr in case_runs:
-            parts.append(_render_review(rr))
+            parts.append(_render_review(rr, redact_meta=redact_meta))
             parts.append("")
 
     return "\n".join(parts).rstrip() + "\n"
 
 
-__all__ = ["build_bundle"]
+__all__ = ["build_bundle", "derive_blind_mapping", "sanitize_model_refs", "apply_blinding"]
