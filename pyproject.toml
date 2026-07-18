@@ -150,7 +150,11 @@ ignore = ["E501"]
 "tests/test_t19_marketing_pulse_drift.py" = ["E741"]
 
 [tool.mypy]
-python_version = "3.9"
+# mypy >= 2.2 cannot target Python 3.9 (python_version must be >= 3.10), so
+# static checking runs against 3.10 even though the library floor stays 3.9.
+# The floor is guarded at runtime instead: the gated test matrix carries a
+# dedicated Python 3.9 leg (.github/workflows/rust-test.yml).
+python_version = "3.10"
 warn_return_any = false
 warn_unused_configs = true
 ignore_missing_imports = true

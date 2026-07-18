@@ -39,7 +39,7 @@ jobs:
         with:
           python-version: '3.14'
       - name: Install pinned linters (keep in sync with pyproject [dev])
-        run: pip install ruff==0.15.13 black==26.3.1
+        run: pip install ruff==0.15.21 black==26.5.1
       - name: Ruff
         run: ruff check diff_diff tests
       - name: Black
@@ -60,7 +60,7 @@ jobs:
       # The package itself is NOT installed (mypy analyzes source directly;
       # no maturin/Rust build ever enters this workflow).
       - name: Install mypy + runtime deps for their type stubs (pinned)
-        run: pip install mypy==2.1.0 numpy==2.4.5 pandas==3.0.3 scipy==1.17.1
+        run: pip install mypy==2.3.0 numpy==2.4.5 pandas==3.0.3 scipy==1.17.1
       - name: Mypy
         run: mypy diff_diff
 

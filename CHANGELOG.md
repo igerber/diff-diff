@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **Internal: dev tooling pins bumped** (Dependabot group + manual lint.yml sync):
+  `black==26.5.1`, `ruff==0.15.21`, `mypy==2.3.0` in both the `dev` extra and the
+  Lint CI workflow. mypy >= 2.2 can no longer target Python 3.9, so
+  `[tool.mypy] python_version` moves to `"3.10"` (the library floor stays 3.9);
+  as a compensating floor guard the gated test matrix gains a dedicated
+  Python 3.9 Linux leg.
 - **CI + local AI PR-reviewer model upgraded `gpt-5.5` -> `gpt-5.6-sol` (effort stays
   `xhigh`).** Validated empirically before the swap via the `tools/reviewer-eval/`
   4-arm blinded campaign (66 runs over 11 cases; three independent identity-blind

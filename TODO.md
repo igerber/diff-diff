@@ -243,8 +243,10 @@ IF/GMM estimators are tracked in
 ### Type Annotations
 
 `mypy diff_diff` is **enforced at zero errors** by the Lint CI workflow's Mypy job at the
-pinned `mypy==2.1.0` (ungated, every PR push; pins synced with the `dev` extra via
-`TestLintWorkflowPinSync`). Zero is reached with documented suppressions — tightening them
+pinned `mypy==2.3.0` (ungated, every PR push; pins synced with the `dev` extra via
+`TestLintWorkflowPinSync`). `[tool.mypy] python_version` targets `"3.10"` (mypy >= 2.2
+cannot target 3.9); the Python 3.9 library floor is covered by a dedicated runtime leg in
+the gated test matrix instead. Zero is reached with documented suppressions — tightening them
 is tracked in Actionable Backlog → Testing / docs:
 
 - Global `disable_error_code = ["arg-type", "return-value", "var-annotated", "assignment"]`
