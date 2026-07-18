@@ -56,13 +56,17 @@ When reviewing new features or code paths, specifically check:
 
 ## Deferred Work Acceptance
 
-This project tracks deferred technical debt in `TODO.md` under "Deferred / Documented"
-(blocked items, sub-grouped by blocker) and shippable items under "Actionable Backlog."
+This project tracks shippable technical debt in `TODO.md` ("Actionable Backlog") and
+deferred/blocked items in `DEFERRED.md` (sub-grouped by blocker: paper-gated, needs
+external reference, parked, version-gated, plus a decision record). A row in EITHER
+file counts as tracked.
 
-- If a limitation is already tracked in `TODO.md` with a PR reference, it is NOT a blocker.
-- If a PR ADDS a new `TODO.md` entry for deferred work, that counts as properly tracking
-  deferrable items (test gaps, documentation, performance). Classify those as
-  P3-informational ("tracked in TODO.md"), not P1/P2.
+- If a limitation is already tracked in `TODO.md` or `DEFERRED.md` with a PR reference,
+  it is NOT a blocker.
+- If a PR ADDS a new `TODO.md` or `DEFERRED.md` entry for deferred work, that counts
+  as properly tracking deferrable items (test gaps, documentation, performance).
+  Classify those as P3-informational ("tracked in TODO.md" / "tracked in DEFERRED.md"),
+  not P1/P2.
 - Only flag deferred work as P1+ if it introduces a SILENT correctness bug (wrong numbers
   with no warning/error) that is NOT tracked anywhere.
 - Test gaps, documentation gaps, and performance improvements are deferrable. Missing NaN guards
@@ -97,15 +101,15 @@ Apply the assessment based on the HIGHEST severity of UNMITIGATED findings:
 
 A finding is MITIGATED (does not count toward assessment) if:
 - The deviation is documented in `docs/methodology/REGISTRY.md` with a Note/Deviation label
-- The limitation is tracked in `TODO.md` under "Deferred / Documented" or "Actionable Backlog"
-- The PR itself adds a TODO.md entry or REGISTRY.md note for the issue
+- The limitation is tracked as a row in `TODO.md` or `DEFERRED.md`
+- The PR itself adds a TODO.md or DEFERRED.md entry or a REGISTRY.md note for the issue
 - The finding is about an implementation choice between valid numerical approaches
 
-A finding is NEVER mitigated by TODO.md tracking if it is:
+A finding is NEVER mitigated by TODO.md/DEFERRED.md tracking if it is:
 - A P0: silent correctness bug, NaN/inference inconsistency, data corruption, or security issue
 - A P1: missing assumption check, incorrect variance/SE, or undocumented methodology deviation
 Only P2/P3 findings (code quality, test gaps, documentation, performance) can be downgraded
-by tracking in TODO.md.
+by tracking in TODO.md or DEFERRED.md.
 
 When the assessment is ⚠️ or ⛔, include a "Path to Approval" section listing specific,
 enumerated changes that would move the assessment to ✅. Each item must be concrete and

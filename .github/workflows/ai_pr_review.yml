@@ -113,7 +113,8 @@ jobs:
       # the `dismissed_comment` field on alert #14. The guard test
       # is belt-and-suspenders for accidental regressions, not a
       # complete adversarial parser.
-      # See TODO.md for the long-term tracking of this gap.
+      # See DEFERRED.md (deferral registry; TODO.md until the split
+      # lands) for the long-term tracking of this gap.
       # ─────────────────────────────────────────────────────────────────
       - name: Resolve PR number + metadata
         id: pr
@@ -249,10 +250,11 @@ jobs:
           # Source the review prompt from base_sha rather than the PR head.
           # The prompt defines HOW the reviewer reviews; sourcing it from
           # base prevents a PR from modifying its own review rules. (Note:
-          # docs/methodology/REGISTRY.md and TODO.md remain from the PR
-          # head intentionally - the prompt instructs the reviewer to
-          # recognize PR-added Note/Deviation labels and tracked TODOs as
-          # mitigations, so those must reflect the PR's edits.)
+          # docs/methodology/REGISTRY.md, TODO.md, and DEFERRED.md remain
+          # from the PR head intentionally - the prompt instructs the
+          # reviewer to recognize PR-added Note/Deviation labels and
+          # tracked rows as mitigations, so those must reflect the PR's
+          # edits.)
           git show "${BASE_SHA}":.github/codex/prompts/pr_review.md > "$PROMPT"
 
           # Stage the notebook extractor from BASE_SHA (not the PR head) so a
