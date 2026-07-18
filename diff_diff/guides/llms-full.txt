@@ -900,6 +900,70 @@ covariate-balance helper are documented follow-ups; missing rows are dropped
 WITH a warning (R drops silently); N < 20 falls back to full-range bandwidths
 exactly as rdrobust does (overriding manual h).
 
+### RDPlot
+
+RD plot diagnostic (Calonico, Cattaneo & Titiunik 2015), parity-targeting R
+rdrobust 4.0.0's `rdplot()`. NOT a treatment-effect estimator: builds the
+standard exploratory RD plot - per-side global order-p polynomial fits
+(default p=4, uniform kernel over each side's full range; deliberately
+different defaults from estimation) plus binned local sample means with a
+DATA-DRIVEN number of bins per side. All 8 `binselect` selectors =
+{evenly (es) / quantile (qs) spaced} x {IMSE-optimal / mimicking variance
+(mv)} x {spacings / polynomial-regression (pr) variance estimators}; the
+result reports `J`, `J_IMSE`, `J_MV`, the implied scale `rscale = J/J_IMSE`,
+and the CCT 2015 Supplement S.1 WIMSE weights (variance `1/(1+rscale^3)`,
+bias `rscale^3/(1+rscale^3)`), matching R's `summary.rdplot`.
+
+```python
+RDPlot(
+    cutoff: float = 0.0,               # Known threshold of the running variable
+    p: int = 4,                        # Global polynomial order (R's rdplot default)
+    nbins: int | tuple | None = None,  # Manual bins per side (overrides the selector)
+    binselect: str = "esmv",           # es/espr/esmv/esmvpr/qs/qspr/qsmv/qsmvpr
+    scale: float | tuple | None = None,  # Multiplies the selected J (fractional products take CCT 2015 Eq 2's ceiling; R crashes there)
+    kernel: str = "uniform",           # Weighting for the global fit within h
+    h: float | tuple | None = None,    # Global-fit window; default = full per-side range
+    support: tuple | None = None,      # (lower, upper); only WIDENS the observed range
+    masspoints: str = "adjust",        # >= 20% ties: warn + switch spacings binselect to its *pr sibling ("check" warns only; "off" disables)
+    ci: float | None = None,           # Per-bin CI level for plotted error bars (CI columns are ALWAYS computed, at 95 when None)
+    covs_drop: bool = True,            # Drop collinear covariates with a warning; False = strict error
+)
+```
+
+**fit() parameters:**
+
+```python
+rp.fit(
+    data: pd.DataFrame,
+    outcome_col: str,
+    running_col: str,
+    covariates: list[str] | None = None,  # Covariate-adjusted plot (R's covs=, covs_eval="mean"); gammas exposed as covariate_coefficients
+) -> RDPlotResult
+```
+
+```python
+from diff_diff import RDPlot
+
+rp = RDPlot(cutoff=0.0)
+res = rp.fit(df, outcome_col="y", running_col="score")
+res.J, res.J_IMSE, res.J_MV     # selected / IMSE-optimal / mimicking-variance bins per side
+res.rscale                       # implied scale; WIMSE weights via res.wimse_variance_weight / res.wimse_bias_weight
+res.to_dataframe()               # vars_bins: R-named per-bin columns (rdplot_mean_bin/mean_x/mean_y/min_bin/max_bin/se_y/N/ci_l/ci_r)
+res.vars_poly                    # 500-point global-fit curve per side
+print(res.summary())             # R summary.rdplot layout incl. implied scale + WIMSE weights
+res.plot()                       # optional matplotlib rendering (matplotlib NOT a dependency; ImportError if absent)
+```
+
+Empty bins are dropped from vars_bins (R's tapply) while bin_avg/bin_med
+cover all partition cells; single-observation bins get se = 0 (R's NA -> 0
+fixup); n < 20 raises outright (R behavior - no fallback); a side with
+zero outcome variance pins its J to 1 with a warning and echoes R's Inf
+J_IMSE. With empty LEFT-side bins, R's own rdplot_min_bin/rdplot_max_bin
+come from mirrored grid slots and can disagree with rdplot_mean_bin - an
+R quirk replicated for parity (rdplot_mean_bin is the reliable bin
+identity). Sampling weights and R's subset= are documented seams (filter
+the DataFrame instead).
+
 ### StackedDiD
 
 Stacked DiD estimator (Wing, Freedman & Hollingsworth 2024). Addresses TWFE bias with corrective Q-weights.

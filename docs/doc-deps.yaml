@@ -423,6 +423,26 @@ sources:
       - path: docs/choosing_estimator.rst
         section: "SE methodology + Survey Design Support tables"
         type: user_guide
+  diff_diff/rdplot.py:
+    drift_risk: medium
+    docs:
+      - path: docs/methodology/REGISTRY.md
+        section: "RDPlot"
+        type: methodology
+        note: "rdplot() parity pin (same CRAN 4.0.0 tarball as the estimator port), the deviation labels (fractional/pair scale ceiling, covs message), and the replicated left-edge slot-reflection quirk live here; any change must re-run the golden suite (tests/test_rdplot.py) against benchmarks/data/rdplot_golden.json."
+      - path: docs/api/regression_discontinuity.rst
+        type: api_reference
+      - path: README.md
+        section: "Diagnostics & Sensitivity (one-line catalog entry)"
+        type: user_guide
+      - path: docs/references.rst
+        type: user_guide
+      - path: diff_diff/guides/llms.txt
+        section: "Diagnostics and Sensitivity Analysis"
+        type: user_guide
+      - path: diff_diff/guides/llms-full.txt
+        section: "RDPlot"
+        type: user_guide
   diff_diff/_rdrobust_port.py:
     drift_risk: high
     docs:

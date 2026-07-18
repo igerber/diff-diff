@@ -45,10 +45,20 @@ naming them (``covs_drop=True``, R's default).
 
    **Scope of this release.** Sharp, fuzzy, and covariate-adjusted
    designs with the nearest-neighbor variance estimator (rdrobust's
-   default). Cluster-robust variance, weights, kink estimands,
-   weak-IV-robust fuzzy inference, a packaged covariate-balance helper,
-   and the rdplot/density-test diagnostics are documented follow-ups -
-   see the methodology registry for the full deviations and seams list.
+   default), plus the ``RDPlot`` diagnostic below. Cluster-robust
+   variance, weights, kink estimands, weak-IV-robust fuzzy inference, a
+   packaged covariate-balance helper, and the density-test diagnostic
+   are documented follow-ups - see the methodology registry for the full
+   deviations and seams list.
+
+**RD plots** (``RDPlot``; Calonico, Cattaneo & Titiunik 2015, parity with
+R's ``rdplot()``): the standard exploratory companion - per-side global
+polynomial fits plus binned local means with a data-driven number of bins
+(all 8 ``binselect`` selectors: evenly/quantile spaced, IMSE-optimal or
+mimicking-variance, spacings or polynomial-regression variance estimators),
+implied-scale/WIMSE-weight reporting, optional covariate adjustment, and an
+optional matplotlib rendering via ``RDPlotResult.plot()`` (matplotlib is
+not a dependency; the numbers are the parity surface).
 
 RegressionDiscontinuity
 -----------------------
@@ -63,6 +73,24 @@ RegressionDiscontinuityResults
 ------------------------------
 
 .. autoclass:: diff_diff.RegressionDiscontinuityResults
+   :no-index:
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+RDPlot
+------
+
+.. autoclass:: diff_diff.RDPlot
+   :no-index:
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+RDPlotResult
+------------
+
+.. autoclass:: diff_diff.RDPlotResult
    :no-index:
    :members:
    :undoc-members:

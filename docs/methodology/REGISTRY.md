@@ -32,6 +32,7 @@ This document provides the academic foundations and key implementation requireme
    - [SpilloverDiD](#spilloverdid)
 4. [Regression Discontinuity](#regression-discontinuity)
    - [RegressionDiscontinuity](#regressiondiscontinuity)
+   - [RDPlot](#rdplot)
 5. [Diagnostics and Sensitivity](#diagnostics-and-sensitivity)
    - [PlaceboTests](#placebotests)
    - [BaconDecomposition](#bacondecomposition)
@@ -3871,9 +3872,10 @@ per-side and comb chains.
   ships; `hc0`-`hc3` and cluster modes raise `NotImplementedError`.
   Weights, kink estimands (`deriv`), `scalepar`, `stdvars`, per-side
   manual bandwidths, weak-IV-robust fuzzy inference
-  (Feir-Lemieux-Marmer), the rdplot/density diagnostics, and a packaged
-  covariate-balance helper are documented follow-ups; cluster/weights
-  are not parameters at all. The port's `deriv` machinery is
+  (Feir-Lemieux-Marmer), the density/manipulation-test diagnostic, and a
+  packaged covariate-balance helper are documented follow-ups (the
+  rdplot diagnostic ships as `RDPlot` - see its section below);
+  cluster/weights are not parameters at all. The port's `deriv` machinery is
   golden-covered for `deriv in {0, 1}` only.
 - **Note (p/q surface, R-exact):** public `p`/`q` validation mirrors
   rdrobust.R:47-57 exactly - integers in 0:20 with `q > p`; `p=0` is R's
@@ -3947,12 +3949,158 @@ CI-shrinkage anchors).
 `docs/methodology/papers/calonico-cattaneo-titiunik-2014-review.md` (CCT 2014,
 Econometrica - robust bias-corrected RD inference),
 `calonico-cattaneo-titiunik-2015-review.md` (JASA - optimal data-driven RD
-plots; bin-count selector formulas for the planned rdplot diagnostic),
+plots; bin-count selector formulas, implemented as `RDPlot`),
 `calonico-cattaneo-farrell-titiunik-2017-review.md` (Stata Journal - the
 rdrobust software reference this port parity-targets),
 `calonico-cattaneo-farrell-2018-review.md` (JASA - CER-optimal bandwidths),
 `calonico-cattaneo-farrell-titiunik-2019-review.md` (REStat - covariate
 adjustment, implemented).
+
+## RDPlot
+
+**Primary source:** Calonico, S., Cattaneo, M. D., & Titiunik, R. (2015).
+Optimal Data-Driven Regression Discontinuity Plots. *JASA*, 110(512),
+1753-1769. https://doi.org/10.1080/01621459.2015.1017578 (+ Supplemental
+Appendix). Full formula extraction in
+`docs/methodology/papers/calonico-cattaneo-titiunik-2015-review.md`.
+
+**What it is:** the exploratory/graphical companion to
+`RegressionDiscontinuity` (`diff_diff/rdplot.py`) - NOT a treatment-effect
+estimator. Two ingredients (CCT 2015 Section 2.1): per-side global order-`p`
+polynomial fits (default `p=4`, uniform kernel over each side's full range -
+R's rdplot defaults, deliberately different from estimation), and binned
+local sample means of the outcome over a per-side partition with a
+data-driven number of bins. Parity target: `rdplot()` in CRAN rdrobust 4.0.0
+(same tarball as the estimator port), golden-tested end-to-end
+(`benchmarks/data/rdplot_golden.json`, 24 configs incl. the vendored Senate
+data; the supplement's Figures SA-1/SA-2 selector outputs on that dataset -
+esmv J=(15,35), es (8,9), qs (21,16), qsmv (28,49) - are asserted as
+JSON-independent paper anchors in `tests/test_rdplot.py`).
+
+**Bin selectors (rdplot.R:276-447):** all 8 `binselect` values =
+{ES, QS partition} x {IMSE-optimal, mimicking-variance target} x
+{spacings (`hat`), polynomial-regression (`chk`, the `*pr` names) variance
+estimator}. The bias estimator is SHARED between the spacings and `pr`
+families (main-text Eq 8/10 raw-observation form - the source read resolved
+the paper review's Gap #3); only the variance estimator differs. Selector
+fits use `k=4` raw-power Vandermonde regressions of `y` and `y^2`
+(unweighted, full samples, NOT centered at the cutoff) with a `k=4 -> 3 -> 2`
+fallback ladder that fires ONLY when `qrXXinv` itself raises (non-finite
+Gram from `x^8` overflow / SVD failure); finite singular Grams are absorbed
+inside `qrXXinv`'s pseudo-inverse fallback at unchanged `k`, mirroring R's
+internal `ginv` fallback exactly. `J = ceil(((2B/V) n)^(1/3))` (IMSE) or
+`ceil((var(y_side)/V) n / log(n)^2)` (mimicking variance); the result
+reports the selected pair alongside `J_IMSE`, `J_MV`, the implied scale
+`rscale = J/J_IMSE`, and the Supplement-S.1 WIMSE weights
+`(1/(1+rscale^3), rscale^3/(1+rscale^3))`, matching R's `summary.rdplot`.
+
+**Edge cases (R-verified):**
+- **`n < 20` hard error** (rdplot.R:190-193) - unlike the estimator's
+  small-sample bandwidth fallback, rdplot refuses outright; replicated.
+- **Mass points** (rdplot.R:116-137): >= 20% duplicate running values on
+  either side warns; `masspoints="adjust"` remaps a spacings `binselect` to
+  its `*pr` sibling (spacings degenerate under ties); `"check"` warns
+  without remapping; explicit `*pr` picks are untouched.
+- **Zero outcome variance on a side**: R propagates `Inf`/`NaN` through the
+  selectors (`J_IMSE = Inf`) and rescues `J = 1` with a warning; replicated
+  including the `Inf` echo (numpy division semantics, no exception).
+- **Negative variance-function values** in the `chk` estimators are floored
+  to the side's sample variance (rdplot.R:356-371; an R-source fact absent
+  from the paper).
+- **Empty bins** are dropped from `vars_bins` (R's `tapply`), while
+  `bin_avg`/`bin_med` summarize ALL partition cells; per-bin CI columns are
+  ALWAYS computed (level 95 when `ci` unset - the flag only turns on plotted
+  error bars, matching R), and single-observation bins get `se = 0` via R's
+  `NA -> 0` sd fixup.
+- **Note (left-edge slot reflection, R quirk replicated):** R indexes the
+  left side's `rdplot_min_bin`/`rdplot_max_bin` by `rev(-bins)` - the
+  ascending-sorted ABSOLUTE bin ids, i.e. the occupied slots reflected
+  around the side's center - while `rdplot_mean_bin` uses the true slots
+  (rdplot.R:503-508 vs 551-552). With any empty left-side bin the reported
+  left edges therefore disagree with `rdplot_mean_bin` (live-verified: 10 of
+  20 left rows on the Senate `esmvpr` config have
+  `mean_bin != (min+max)/2` in R itself). Replicated exactly for parity;
+  `rdplot_mean_bin` is the reliable per-row bin identity.
+- **Note (defensive guard):** `n >= 20` can still leave a side with < 2
+  observations, where R degenerates opaquely (`NA` variance poisoning an
+  `if`); a clear `ValueError` naming the side is raised instead.
+- **Note (defensive guard, zero-weight global fit):** a manual `h` smaller
+  than the nearest observation's distance zeroes every kernel weight; R
+  silently fits the zero-weight design (`ginv` of a zero Gram) and returns
+  an all-zero "curve" that used no data. A clear `ValueError` naming the
+  side is raised instead.
+- **Note (defensive guard, single-support-point side):** a side whose
+  running variable has only ONE distinct value cannot be partitioned -
+  every spacing is zero, the variance components collapse, `J` becomes
+  `Inf`, and R crashes opaquely inside `seq()` on the zero jump. A clear
+  `ValueError` naming the side is raised instead (>= 2 distinct running
+  values per side required).
+- **Note (missing rows warned; deviation from R):** rows with missing or
+  non-numeric outcome/running/covariate values are dropped WITH a
+  `UserWarning` reporting the count (R's `complete.cases` drops silently) -
+  the same contract as `RegressionDiscontinuity.fit()`.
+- **Note (defensive warning, noncontinuous outcomes):** the
+  spacings/concomitant selectors assume a CONTINUOUSLY distributed outcome
+  (CCT 2015 Theorems 3-4; Remarks 1-2 route noncontinuous outcomes to the
+  series estimators), but R runs them on any `y` without comment. When a
+  spacings `binselect` is active and either side's outcome has >= 20%
+  duplicates (the masspoints criterion applied to `y` - e.g. a binary
+  first-stage plot), a `UserWarning` recommends the `*pr` sibling. No
+  auto-remap (R does not remap; numbers stay golden-comparable).
+- **Note (QS cutpoints, R deviates from the paper):** CCT 2015 defines the
+  QS partition through the empirical generalized inverse
+  `Fhat^{-1}(y) = inf{x : Fhat(x) >= y}`, but R's rdplot builds the QS
+  jumps with `quantile()` at its default TYPE-7 (linearly interpolated)
+  quantiles (rdplot.R:477-478). The port follows R (numpy's default
+  `np.quantile` is the same type-7 estimator), so QS bin edges are
+  interpolated values rather than order statistics; golden-locked.
+- **Deviation from R (fractional / pair scale):** R 4.0.0 crashes on a
+  fractional `scale * J` product ("arguments imply differing number of
+  rows", a vector-indexing accident) and rejects a length-2 `scale` outright
+  on R >= 4.2 (vectorized-`if` error at rdplot.R:178). CCT 2015 Equation 2
+  places the ceiling over the rescaled product, so `RDPlot` applies that
+  paper-faithful ceiling and supports per-side scale pairs; integer-product
+  configs remain golden-identical to R.
+- **Deviation from R (covs message):** R prints an unconditional `message()`
+  whenever `covs=` is used with the global fit; that caveat lives in the
+  `fit()` docstring instead of an unavoidable runtime warning.
+- **`nbins` label quirk (replicated):** a manual `nbins` sets the
+  description string to "manually evenly spaced" even when `binselect`
+  chose quantile spacing - the bins themselves stay quantile-spaced
+  (rdplot.R:452-456; locked by test).
+
+**Covariate adjustment (`fit(..., covariates=...)`; rdplot.R:139-159,
+223-270, 492-499):** the global fit partials covariates out with the SAME
+pooled-across-sides partialled-normal-equations gamma as the estimator
+(nchar-sorted `covs_drop` pipeline, degenerate-system guard, and
+`covs_drop=False` strict-error contract all REUSED from the #691 machinery -
+including its documented Deviation from R's noise-singular-value `ginv`);
+the plotted curve adds the scalar `colMeans(Z) @ gamma` (R's
+`covs_eval="mean"`, the only mode in v1), and bin means use per-side fitted
+values of `y ~ 1 + Z + bin dummies` (R's `lm(y ~ z + factor(bin))`;
+computed via least-squares projection, which reproduces R's pivoted-QR
+fitted values exactly even under rank deficiency). Gammas are exposed
+name-keyed as `covariate_coefficients` - nuisance coefficients, not causal
+effects.
+
+**Scope seams (documented):** sampling weights and R's `subset=` are not
+parameters (filter the DataFrame; consistent with the estimator's weights
+seam); `covs_eval` variants beyond `"mean"`; rendering is an optional lazy
+matplotlib `.plot(ax=...)` on the result (numbers are the parity surface -
+no ggplot cosmetic parity is claimed). Manual `nbins`/`scale` accept any
+positive value (R permissiveness); very large bin counts allocate
+proportional jump grids and - with covariates - a dense per-side bin-dummy
+matrix (performance seam, no cap imposed). `covariate_coefficients` key
+order follows R's processing order: nchar-sorted under `covs_drop=True`,
+user-given under `covs_drop=False` (R sorts only inside the drop pipeline;
+identical per-name values on full-rank covariates - locked by test).
+
+**Regression tests:** `tests/test_rdplot.py` (24-config golden parity at
+rtol=1e-9, paper anchors, quirk locks incl. the reflection quirk via the
+esmvpr golden, masspoints remap/check, zero-variance rescue, fallback-ladder
+overflow config with integer-only assertions plus a finite-singular
+no-downgrade companion, deviation locks for fractional/pair scale, API
+contracts, and the matplotlib ImportError path).
 
 
 

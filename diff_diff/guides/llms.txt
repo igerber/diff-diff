@@ -77,6 +77,7 @@ Full practitioner guide: call `diff_diff.get_llm_guide("practitioner")`
 
 ## Diagnostics and Sensitivity Analysis
 
+- [RD Plots](https://diff-diff.readthedocs.io/en/stable/api/regression_discontinuity.html): Calonico, Cattaneo & Titiunik (2015) optimal data-driven RD plots (`RDPlot`), parity with R rdrobust 4.0.0's `rdplot()` - all 8 `binselect` bin-count selectors (evenly/quantile spaced x IMSE-optimal/mimicking-variance x spacings/polynomial-regression), implied scale + WIMSE weights per Supplement S.1, optional covariate adjustment reusing the RD estimator's pipeline, optional lazy-matplotlib rendering (matplotlib not a dependency)
 - [Parallel Trends Testing](https://diff-diff.readthedocs.io/en/stable/api/diagnostics.html): Simple and Wasserstein-robust parallel trends tests, equivalence testing (TOST)
 - [Placebo Tests](https://diff-diff.readthedocs.io/en/stable/api/diagnostics.html): Placebo timing, group, permutation, and leave-one-out diagnostics
 - [Honest DiD](https://diff-diff.readthedocs.io/en/stable/api/honest_did.html): Rambachan & Roth (2023) sensitivity analysis — robust CI under parallel trends violations, breakdown values

@@ -77,6 +77,10 @@ Nonparametric Bias-Corrected Inference
 
   Source of the bias-combined design matrix used by the in-house ``lprobust`` port that backs ``HeterogeneousAdoptionDiD`` Phase 1c (continuous-dose paths) for the bias-corrected weighted-robust SE.
 
+- **Calonico, S., Cattaneo, M. D., & Titiunik, R. (2015).** "Optimal Data-Driven Regression Discontinuity Plots." *Journal of the American Statistical Association*, 110(512), 1753-1769. https://doi.org/10.1080/01621459.2015.1017578
+
+  Source of the :class:`diff_diff.RDPlot` diagnostic: IMSE-optimal and mimicking-variance bin-count selectors for evenly- and quantile-spaced RD plots (spacings and polynomial-regression implementations), and the WIMSE implied-weights map behind the reported scale factors.
+
 - **Calonico, S., Cattaneo, M. D., & Farrell, M. H. (2018).** "On the Effect of Bias Estimation on Coverage Accuracy in Nonparametric Inference." *Journal of the American Statistical Association*, 113(522), 767-779. https://doi.org/10.1080/01621459.2017.1285776
 
 - **Calonico, S., Cattaneo, M. D., & Farrell, M. H. (2019).** "nprobust: Nonparametric Kernel-Based Estimation and Robust Bias-Corrected Inference." *Journal of Statistical Software*, 91(8), 1-33. https://doi.org/10.18637/jss.v091.i08

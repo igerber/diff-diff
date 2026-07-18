@@ -31,6 +31,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   bootstrap re-derivation (T24 precedent). Registered in the RTD toctree (Business
   Applications), the tutorials catalog (also backfilling the missing Tutorial 25
   entry), and `docs/doc-deps.yaml`.
+- **`RDPlot` - optimal data-driven regression discontinuity plots (Calonico,
+  Cattaneo & Titiunik 2015), parity-targeting R `rdrobust` 4.0.0's `rdplot()`.**
+  Per-side global polynomial fits (default p=4, uniform kernel) plus binned
+  local means with data-driven bin counts: all 8 `binselect` selectors
+  (evenly/quantile-spaced x IMSE-optimal/mimicking-variance x
+  spacings/polynomial-regression variance estimators), manual
+  `nbins`/`scale`/`h`/`support` knobs, masspoints detection with the
+  spacings-to-`pr` adjust remap, per-bin means/SEs/CIs (`vars_bins` with R's
+  column names), the 500-point-per-side global-fit curve (`vars_poly`), and
+  implied-scale/WIMSE-weight reporting per the paper's Supplement S.1.
+  Covariate-adjusted plots (`fit(..., covariates=...)`, R's `covs=` with
+  `covs_eval="mean"`) reuse the RD estimator's partialled-gamma machinery
+  including its collinearity pipeline and degenerate-adjustment guards.
+  Rendering is an optional `RDPlotResult.plot(ax=...)` (matplotlib is NOT a
+  dependency). Golden-tested against R on 24 configs incl. the vendored
+  Senate data, with the paper's own figure numbers as JSON-independent
+  anchors. Documented deviations: fractional/pair `scale` products take CCT
+  2015 Eq 2's ceiling where R 4.0.0 crashes by accident; R's left-side
+  bin-edge slot-reflection quirk under empty bins is replicated for parity
+  and documented.
 
 ## [3.8.0] - 2026-07-18
 
