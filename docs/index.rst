@@ -85,6 +85,7 @@ Quick Links
    tutorials/22_had_survey_design
    tutorials/23_spillover_tva
    tutorials/26_composition_drift_calibration
+   tutorials/27_cic_distributional_effects
 
 .. toctree::
    :maxdepth: 1

@@ -5,6 +5,33 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **New tutorial: `docs/tutorials/27_cic_distributional_effects.ipynb` - "When the
+  Average Hides the Action: Distributional DiD with Changes-in-Changes".** A
+  business-framed walkthrough of `ChangesInChanges`/`QDiD` on a seed-locked loyalty-
+  program 2x2 (repeated cross-sections) where mean DiD reads $0.22 (p = 0.90) while
+  the known truth is a $3.01 mean effect concentrated in the bottom half of the spend
+  distribution: reading the QTE profile, joint "which quantiles moved" claims via
+  sup-t uniform bands (excluding zero for exactly tau = 0.05-0.50), a live interior-
+  range guardrail demo on a short-support control sample (the Assumption-3.4 and
+  interior-range warnings render in the committed output - no warning filters
+  anywhere in the notebook), the scale-equivariance centerpiece (levels-vs-logs flips
+  mean DiD's verdict and shifts QDiD's profile by dollars while CiC's counterfactual
+  quantiles agree to floating-point precision on unconditional fits - the concrete
+  form of the Athey-Imbens p. 447 CiC-over-QDiD recommendation), covariate-
+  composition confounding fixed with `covariates=['tenure']` (confidently-wrong 9.38
+  -> truth-covering 6.53 on a design ported from the calibrated methodology-test
+  DGP), and a `practitioner_next_steps()` close. Committed WITH executed outputs
+  (nbsphinx renders them on RTD; figures are the payload). Companion drift test
+  `tests/test_t27_cic_distributional_effects_drift.py` (19 tests) re-derives every
+  prose-quoted number from the public API, locks the no-filters/no-asserts notebook
+  contract, cross-checks the rendered surface, and slow-marks the ~1-minute covariate
+  bootstrap re-derivation (T24 precedent). Registered in the RTD toctree (Business
+  Applications), the tutorials catalog (also backfilling the missing Tutorial 25
+  entry), and `docs/doc-deps.yaml`.
+
 ## [3.8.0] - 2026-07-18
 
 ### Added

@@ -670,6 +670,9 @@ sources:
         type: methodology
       - path: docs/api/changes_in_changes.rst
         type: api_reference
+      - path: docs/tutorials/27_cic_distributional_effects.ipynb
+        type: tutorial
+        note: "committed outputs quote seed-locked numbers; companion drift test test_t27_cic_distributional_effects_drift.py re-derives them"
       - path: README.md
         section: "Estimators (one-line catalog entry)"
         type: user_guide

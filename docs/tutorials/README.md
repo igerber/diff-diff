@@ -135,6 +135,13 @@ Power-analysis decision guide for geo experiments (framed on a 50-state staggere
 - When a clean-tail 2×2 is unbiased, the small-holdout and few-clusters caveats, and a CS-vs-2×2 decision guide
 - Fully self-contained: runs live (no committed data files)
 
+### 25. Synthetic Control for a Policy Evaluation: Two Routes to Inference (`25_synthetic_control_policy.ipynb`)
+A single state adopts a clean-energy standard and no other state is a clean control - `SyntheticControl` builds a weighted donor-blend counterfactual, and with one treated unit the analytical inference fields are NaN by design, so the tutorial walks both genuine inference routes:
+- Philosophy A - compare across regions: the ADH (2010) in-space placebo permutation (`in_space_placebo()`, RMSPE-ratio rank p-value) and the Firpo-Possebom (2018) confidence set
+- Philosophy B - compare across time: Chernozhukov-Wuthrich-Zhu (2021) conformal inference, inverting a permutation-over-time test into a p-value for a hypothesized effect path and per-post-period confidence intervals
+- The two philosophies side by side: what each does and does not protect against, and how to report them together
+- Fully self-contained: runs live (no committed data files)
+
 ### 26. Composition Drift & Survey Calibration with balance (`26_composition_drift_calibration.ipynb`)
 The failure-mode companion to Meta balance's `balance_diff_diff_brfss` tutorial: when non-response drift correlates with treatment timing, the design-weight DiD itself is biased and calibration becomes essential for the *causal* estimand:
 - BRFSS-style smoking-ban DGP with no systematic arm-specific trends (parallel trends hold in expectation; planted ATT -3.0pp, realized -2.98pp) and treatment-correlated non-response drift
@@ -143,6 +150,14 @@ The failure-mode companion to Meta balance's `balance_diff_diff_brfss` tutorial:
 - The seam both ways: native `SurveyDesign` + `aggregate_survey` 3-liner vs the `balance.interop.diff_diff` adapter (`to_panel_for_did` / `fit_did`), with an exact-parity assert
 - Estimator sweep (CS / SunAbraham / ImputationDiD), `survey_metadata` DEFF diagnostics, and `as_balance_diagnostic` cross-package diagnostics
 - Requires `pip install "balance>=0.21"` (this tutorial only); fully self-contained data
+
+### 27. When the Average Hides the Action: Distributional DiD with Changes-in-Changes (`27_cic_distributional_effects.ipynb`)
+A loyalty program looks dead on mean DiD ($0.22, p = 0.90) but in truth lifted the bottom half of the spend distribution - `ChangesInChanges` (Athey & Imbens 2006) recovers the full quantile-treatment-effect profile:
+- Reading a QTE profile, and making joint "which quantiles moved" claims with sup-t uniform bands (they exclude zero for exactly tau = 0.05-0.50 here)
+- The interior-range guardrail live: a short-support control sample triggers loud warnings and NaN tail inference instead of silent extrapolation
+- The scale-equivariance centerpiece: levels-vs-logs flips mean DiD's verdict and shifts QDiD's profile by dollars, while CiC's counterfactual quantiles agree to floating-point precision (unconditional fits)
+- Covariate-composition confounding fixed with `covariates=` (quantile-regression conditioning, qte `xformla` parity), and the `practitioner_next_steps()` close
+- Companion drift-test file (`tests/test_t27_cic_distributional_effects_drift.py`); fully self-contained (runs live, no committed data files)
 
 ## Running the Notebooks
 
