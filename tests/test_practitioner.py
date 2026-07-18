@@ -6,13 +6,16 @@ import pytest
 from diff_diff import (
     BaconDecomposition,
     CallawaySantAnna,
+    ChangesInChanges,
     DifferenceInDifferences,
     HeterogeneousAdoptionDiDEventStudyResults,
     HeterogeneousAdoptionDiDResults,
     MultiPeriodDiD,
+    QDiD,
     generate_did_data,
     generate_staggered_data,
 )
+from diff_diff.changes_in_changes_results import ChangesInChangesResults
 from diff_diff.continuous_did_results import ContinuousDiDResults
 from diff_diff.efficient_did_results import EfficientDiDResults
 from diff_diff.imputation_results import ImputationDiDResults
@@ -1144,3 +1147,364 @@ class TestHADDispatch:
             "agents reading the guidance must not assume the workflow "
             "covers what it does not cover."
         )
+
+
+# ---------------------------------------------------------------------------
+# ChangesInChanges / QDiD handler fixtures
+# ---------------------------------------------------------------------------
+def _make_cic_2x2_panel(n=60, seed=42):
+    """Balanced 2x2 panel designed to fit warning-free.
+
+    Continuous draws (no ties); treated pre-period outcomes strictly
+    inside the INTERIOR (6%-94% quantiles) of the control pre-period
+    distribution, so both the unconditional support check and the
+    conditional 99-tau envelope check (which spans conditional quantiles
+    0.01-0.99 only) pass; the control post-period is an exact +0.3 shift
+    of the pre-period, so the QDiD counterfactual quantile curve
+    Q7(y10) + Q7(y01) - Q7(y00) = Q7(y10) + 0.3 is monotone by
+    construction. One independent numeric covariate for the
+    conditional-fit fixtures.
+    """
+    rng = np.random.default_rng(seed)
+    import pandas as pd
+
+    y00 = rng.normal(0.0, 1.0, n)
+    y01 = y00 + 0.3
+    lo, hi = np.quantile(y00, [0.06, 0.94])
+    y10 = np.linspace(lo, hi, n)
+    y11 = np.linspace(lo, hi, n) + 0.5
+    rows = []
+    for i in range(n):
+        rows.append({"unit": i, "treated": 0, "post": 0, "y": y00[i]})
+        rows.append({"unit": i, "treated": 0, "post": 1, "y": y01[i]})
+        rows.append({"unit": 1000 + i, "treated": 1, "post": 0, "y": y10[i]})
+        rows.append({"unit": 1000 + i, "treated": 1, "post": 1, "y": y11[i]})
+    df = pd.DataFrame(rows)
+    df["x1"] = rng.normal(0.0, 1.0, len(df))
+    return df
+
+
+@pytest.fixture(scope="module")
+def cic_2x2_data():
+    return _make_cic_2x2_panel()
+
+
+@pytest.fixture(scope="module")
+def cic_fit_results(cic_2x2_data):
+    # Panel unit-resampling cannot empty a (group, period) cell, so all
+    # 20 seeded replicates are valid and the fixture is warning-free.
+    est = ChangesInChanges(n_bootstrap=20, panel=True, seed=42)
+    return est.fit(cic_2x2_data, outcome="y", treatment="treated", time="post", unit="unit")
+
+
+@pytest.fixture(scope="module")
+def qdid_fit_results(cic_2x2_data):
+    est = QDiD(n_bootstrap=20, panel=True, seed=42)
+    return est.fit(cic_2x2_data, outcome="y", treatment="treated", time="post", unit="unit")
+
+
+@pytest.fixture(scope="module")
+def cic_cov_fit_results(cic_2x2_data):
+    # n_bootstrap=0 keeps the ~4k bootstrap quantile-regression LPs out
+    # of the default suite (only the ~200 point-fit LPs run); the
+    # disabled-inference practitioner warning is expected and asserted.
+    est = ChangesInChanges(n_bootstrap=0)
+    return est.fit(cic_2x2_data, outcome="y", treatment="treated", time="post", covariates=["x1"])
+
+
+@pytest.fixture(scope="module")
+def qdid_cov_fit_results(cic_2x2_data):
+    est = QDiD(n_bootstrap=0)
+    return est.fit(cic_2x2_data, outcome="y", treatment="treated", time="post", covariates=["x1"])
+
+
+def _mock_cic(**fields):
+    r = ChangesInChangesResults.__new__(ChangesInChangesResults)
+    for k, v in fields.items():
+        setattr(r, k, v)
+    return r
+
+
+class TestCiCHandler:
+    """Dedicated ChangesInChanges / QDiD handler (shared results class)."""
+
+    def _labels(self, output):
+        return [s["label"] for s in output["next_steps"]]
+
+    def _all_text(self, output):
+        return " ".join(
+            s["label"] + " " + s["why"] + " " + s.get("code", "") for s in output["next_steps"]
+        )
+
+    def test_cic_dispatch_and_display(self, cic_fit_results):
+        output = practitioner_next_steps(cic_fit_results, verbose=False)
+        assert output["estimator"] == "ChangesInChanges (CiC)"
+        assert any("distributional identifying assumptions" in lbl for lbl in self._labels(output))
+
+    def test_qdid_dispatch_and_display(self, qdid_fit_results):
+        output = practitioner_next_steps(qdid_fit_results, verbose=False)
+        assert output["estimator"] == "QDiD"
+
+    def test_bare_mock_falls_to_cic_unconditional_branch(self):
+        # Unknown/missing `estimator` kind: display falls to the static
+        # map entry and the step set defaults to the CiC-unconditional
+        # branch (locked via its marker step - the interior-range step
+        # exists on no other branch).
+        r = ChangesInChangesResults.__new__(ChangesInChangesResults)
+        output = practitioner_next_steps(r, verbose=False)
+        assert output["estimator"] == "ChangesInChanges / QDiD"
+        assert any("interior point-identification range" in lbl for lbl in self._labels(output))
+
+    def test_interior_range_step_only_on_unconditional_cic(
+        self, cic_fit_results, cic_cov_fit_results, qdid_fit_results, qdid_cov_fit_results
+    ):
+        marker = "interior point-identification range"
+        assert any(
+            marker in lbl
+            for lbl in self._labels(practitioner_next_steps(cic_fit_results, verbose=False))
+        )
+        for other in (cic_cov_fit_results, qdid_fit_results, qdid_cov_fit_results):
+            output = practitioner_next_steps(other, verbose=False)
+            assert not any(marker in lbl for lbl in self._labels(output))
+
+    def test_envelope_step_only_on_covariate_cic(
+        self, cic_fit_results, cic_cov_fit_results, qdid_fit_results, qdid_cov_fit_results
+    ):
+        # The conditional-envelope diagnostic exists on the CiC covariate
+        # path only - the QDiD covariate path has no support diagnostic,
+        # so its guidance must not claim one.
+        marker = "envelope diagnostic"
+        assert any(
+            marker in lbl
+            for lbl in self._labels(practitioner_next_steps(cic_cov_fit_results, verbose=False))
+        )
+        for other in (cic_fit_results, qdid_fit_results, qdid_cov_fit_results):
+            output = practitioner_next_steps(other, verbose=False)
+            assert not any(marker in lbl for lbl in self._labels(output))
+
+    def test_prefer_cic_step_only_on_qdid(
+        self, cic_fit_results, cic_cov_fit_results, qdid_fit_results, qdid_cov_fit_results
+    ):
+        marker = "Prefer ChangesInChanges over QDiD"
+        for qdid_res in (qdid_fit_results, qdid_cov_fit_results):
+            output = practitioner_next_steps(qdid_res, verbose=False)
+            assert any(marker in lbl for lbl in self._labels(output))
+        for cic_res in (cic_fit_results, cic_cov_fit_results):
+            output = practitioner_next_steps(cic_res, verbose=False)
+            assert not any(marker in lbl for lbl in self._labels(output))
+
+    def test_qdid_monotonicity_moot_clause_present_under_covariates(self, qdid_cov_fit_results):
+        # The footnote-21 check is unconditional-only; the covariate
+        # branch guidance must say the check is moot there, not imply
+        # it ran.
+        output = practitioner_next_steps(qdid_cov_fit_results, verbose=False)
+        assert "moot" in self._all_text(output)
+
+    def test_covariate_comparison_direction(
+        self, cic_fit_results, cic_cov_fit_results, qdid_fit_results, qdid_cov_fit_results
+    ):
+        # Covariate fits get "drop the covariates and compare";
+        # unconditional fits get "add covariates if composition changed".
+        for cov_res in (cic_cov_fit_results, qdid_cov_fit_results):
+            labels = self._labels(practitioner_next_steps(cov_res, verbose=False))
+            assert any("Report with and without covariates" in lbl for lbl in labels)
+            assert not any("Re-estimate with covariates" in lbl for lbl in labels)
+        for uncond_res in (cic_fit_results, qdid_fit_results):
+            labels = self._labels(practitioner_next_steps(uncond_res, verbose=False))
+            assert any("Re-estimate with covariates" in lbl for lbl in labels)
+            assert not any("Report with and without covariates" in lbl for lbl in labels)
+
+    def test_honest_did_never_recommended(
+        self, cic_fit_results, cic_cov_fit_results, qdid_fit_results, qdid_cov_fit_results
+    ):
+        # compute_honest_did requires event-study effects, which this
+        # results type does not carry - recommending it would send users
+        # into a TypeError.
+        for res in (cic_fit_results, cic_cov_fit_results, qdid_fit_results, qdid_cov_fit_results):
+            text = self._all_text(practitioner_next_steps(res, verbose=False))
+            assert "HonestDiD" not in text
+            assert "compute_honest_did" not in text
+
+    def test_snippets_are_valid_python_syntax(
+        self, cic_fit_results, cic_cov_fit_results, qdid_fit_results, qdid_cov_fit_results
+    ):
+        import ast
+
+        for res in (cic_fit_results, cic_cov_fit_results, qdid_fit_results, qdid_cov_fit_results):
+            output = practitioner_next_steps(res, verbose=False)
+            for step in output["next_steps"]:
+                code = step.get("code", "")
+                if not code.strip():
+                    continue
+                try:
+                    ast.parse(code)
+                except SyntaxError as e:
+                    pytest.fail(
+                        f"Step {step['baker_step']} ({step['label']!r}) "
+                        f"emits a code snippet that does not parse as "
+                        f"valid Python: {e}\n\nSnippet:\n{code}"
+                    )
+
+    def test_healthy_fit_no_warnings(self, cic_fit_results):
+        output = practitioner_next_steps(cic_fit_results, verbose=False)
+        assert output["warnings"] == []
+
+    def test_n_bootstrap_zero_warning(self, cic_cov_fit_results):
+        output = practitioner_next_steps(cic_cov_fit_results, verbose=False)
+        assert len(output["warnings"]) == 1
+        assert "n_bootstrap=0" in output["warnings"][0]
+
+    def test_failed_replicates_warning(self):
+        r = _mock_cic(
+            att=0.5, estimator="cic", covariates=None, n_bootstrap=200, n_bootstrap_valid=100
+        )
+        output = practitioner_next_steps(r, verbose=False)
+        joined = " ".join(output["warnings"])
+        assert "100 of 200" in joined
+        assert "50%" in joined
+
+    def test_minor_replicate_failures_below_threshold_no_warning(self):
+        # 4/200 = 2% failed, below the 5% fit-time materiality threshold
+        # (warn_bootstrap_failure_rate) that this surface mirrors.
+        r = _mock_cic(
+            att=0.5, estimator="cic", covariates=None, n_bootstrap=200, n_bootstrap_valid=196
+        )
+        output = practitioner_next_steps(r, verbose=False)
+        assert output["warnings"] == []
+
+    def test_nan_att_warning(self):
+        r = _mock_cic(
+            att=float("nan"),
+            estimator="cic",
+            covariates=None,
+            n_bootstrap=200,
+            n_bootstrap_valid=200,
+        )
+        output = practitioner_next_steps(r, verbose=False)
+        assert any("NaN ATT" in w for w in output["warnings"])
+
+    def test_completed_placebo_filters_placebo_step(self, cic_fit_results):
+        output = practitioner_next_steps(
+            cic_fit_results, completed_steps=["placebo"], verbose=False
+        )
+        assert not any("Placebo" in lbl for lbl in self._labels(output))
+        # Other steps survive the filter
+        assert any("interior point-identification range" in lbl for lbl in self._labels(output))
+
+    def test_empty_list_covariates_mock_takes_unconditional_branch(self):
+        # fit() normalizes covariates=[] to None, but hand-built results
+        # may carry the empty list - the branch predicate is truthiness.
+        r = _mock_cic(
+            att=0.5, estimator="cic", covariates=[], n_bootstrap=200, n_bootstrap_valid=200
+        )
+        output = practitioner_next_steps(r, verbose=False)
+        labels = [s["label"] for s in output["next_steps"]]
+        assert any("interior point-identification range" in lbl for lbl in labels)
+        assert not any("envelope diagnostic" in lbl for lbl in labels)
+
+
+@pytest.fixture(scope="module")
+def cic_cov_panel_fit_results(cic_2x2_data):
+    # Panel AND covariates together: locks the combined snippet path
+    # (panel=True + unit= + covariates= all mirrored). n_bootstrap=0
+    # keeps the LP cost to the point fit.
+    est = ChangesInChanges(n_bootstrap=0, panel=True)
+    return est.fit(
+        cic_2x2_data,
+        outcome="y",
+        treatment="treated",
+        time="post",
+        unit="unit",
+        covariates=["x1"],
+    )
+
+
+class TestCiCHandlerSpecificationPropagation:
+    """Refit snippets and Step 2 must mirror the fit's actual design."""
+
+    def _steps(self, results, **kwargs):
+        return practitioner_next_steps(results, verbose=False, **kwargs)["next_steps"]
+
+    def _step_by_label(self, results, label_fragment):
+        matches = [s for s in self._steps(results) if label_fragment in s["label"]]
+        assert matches, f"no step with label containing {label_fragment!r}"
+        return matches[0]
+
+    def test_step2_override_cic(self, cic_fit_results):
+        step2 = [s for s in self._steps(cic_fit_results) if s["baker_step"] == 2][0]
+        assert "distributional" in step2["label"]
+        assert "not a mean parallel-trends variant" in step2["why"]
+        assert "monotone outcome model" in step2["why"]
+        assert "parallel trends variant you are invoking" not in step2["why"]
+
+    def test_step2_override_qdid(self, qdid_fit_results):
+        step2 = [s for s in self._steps(qdid_fit_results) if s["baker_step"] == 2][0]
+        assert "not a mean parallel-trends variant" in step2["why"]
+        assert "FOUR" in step2["why"]
+
+    def test_step2_generic_untouched_for_other_estimators(self, did_results):
+        step2 = [s for s in self._steps(did_results) if s["baker_step"] == 2][0]
+        assert "parallel trends variant" in step2["why"]
+
+    def test_step2_override_still_filterable(self, cic_fit_results):
+        steps = self._steps(cic_fit_results, completed_steps=["assumptions"])
+        assert not any(s["baker_step"] == 2 for s in steps)
+
+    def test_placebo_snippet_mirrors_covariates(self, cic_cov_fit_results):
+        code = self._step_by_label(cic_cov_fit_results, "Placebo")["code"]
+        assert "covariates=['x1']" in code
+
+    def test_placebo_snippet_mirrors_panel(self, cic_fit_results):
+        code = self._step_by_label(cic_fit_results, "Placebo")["code"]
+        assert "panel=True" in code
+        assert "unit=" in code
+
+    def test_placebo_snippet_rcs_unconditional_has_neither(self, cic_cov_fit_results):
+        # The covariate fixture is repeated cross-section: no panel args.
+        code = self._step_by_label(cic_cov_fit_results, "Placebo")["code"]
+        assert "panel=True" not in code
+
+    def test_placebo_snippet_mirrors_panel_and_covariates_together(self, cic_cov_panel_fit_results):
+        code = self._step_by_label(cic_cov_panel_fit_results, "Placebo")["code"]
+        assert "covariates=['x1']" in code
+        assert "panel=True" in code
+        assert "unit=" in code
+
+    def test_prefer_cic_snippet_mirrors_specification(self, qdid_cov_fit_results):
+        # "Fit CiC as the primary" must run the SAME specification the
+        # QDiD fit ran, not silently drop the covariates.
+        code = self._step_by_label(qdid_cov_fit_results, "Prefer ChangesInChanges")["code"]
+        assert "covariates=['x1']" in code
+
+    def test_with_without_covariates_snippet_is_unconditional_by_design(self, cic_cov_fit_results):
+        code = self._step_by_label(cic_cov_fit_results, "Report with and without")["code"]
+        assert "covariates=" not in code
+        assert "UNCONDITIONAL" in code
+
+    def test_cross_estimator_snippet_mirrors_covariates(self, cic_cov_fit_results):
+        code = self._step_by_label(cic_cov_fit_results, "Compare with QDiD")["code"]
+        # Both the QDiD leg and the mean-DiD anchor carry the covariates.
+        assert code.count("covariates=['x1']") == 2
+
+    def test_qdid_uncond_anchor_keeps_population_equivalence(self, qdid_fit_results):
+        step = self._step_by_label(qdid_fit_results, "Anchor against mean DiD")
+        assert "population equivalence" in step["label"]
+        assert "matches standard" in step["why"]
+
+    def test_qdid_cov_anchor_drops_population_equivalence_claim(self, qdid_cov_fit_results):
+        # The p. 447 equivalence is established for the unconditional
+        # estimator only - the covariate branch must not inherit it.
+        labels = [s["label"] for s in self._steps(qdid_cov_fit_results)]
+        assert not any("population equivalence" in lbl for lbl in labels)
+        step = self._step_by_label(qdid_cov_fit_results, "covariate-adjusted mean DiD")
+        assert "descriptive anchor" in step["why"]
+        assert "covariates=['x1']" in step["code"]
+        assert "flags small cells" not in step["why"]
+
+    def test_snippets_document_inference_normalization(self, cic_fit_results):
+        # quantiles=/alpha= are intentionally NOT mirrored into refit
+        # snippets (a 19-value grid inlined into guidance is unreadable;
+        # neither changes the identifying specification) - the snippet
+        # must SAY so rather than silently normalize.
+        code = self._step_by_label(cic_fit_results, "Placebo")["code"]
+        assert "carry over quantiles=/alpha= if customized" in code

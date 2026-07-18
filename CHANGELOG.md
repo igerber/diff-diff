@@ -131,6 +131,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Cross-language covariate parity is layered - conventions bit-exact given R
   inputs, LP solver proven optimal per tau, end-to-end results gated at
   documented exact-tie selection bounds (see the REGISTRY Deviation note).
+- **Dedicated `practitioner_next_steps()` handler for ChangesInChanges / QDiD.**
+  `ChangesInChangesResults` no longer falls through to the generic handler
+  (which recommends mean parallel-trends checks and HonestDiD - neither fits a
+  distributional 2x2 estimator with no event-study effects). The new handler
+  branches on the shared results class's `estimator` field and covariate
+  status: distributional identification screen (monotone-model /
+  time-invariance assumptions, not mean parallel trends), interior-range
+  guidance (unconditional CiC), conditional-envelope support guidance
+  (covariate CiC), the paper's CiC-over-QDiD recommendation (QDiD fits),
+  two-pre-period distributional placebo, sup-t uniform-band reading of the
+  QTE profile, with/without-covariates comparison, and cross-estimator
+  anchoring against mean DiD. Adds bootstrap-health warnings the shared
+  NaN-ATT check cannot see (inference disabled at `n_bootstrap=0`; replicate
+  failure above the 5% fit-time materiality threshold) and per-instance
+  display names ("ChangesInChanges (CiC)" vs "QDiD") for the shared results
+  class. Guidance-only change - no estimation or inference behavior touched.
 
 ### Changed
 - `diff_diff/guides/llms-autonomous.txt` no longer lists regression discontinuity as
