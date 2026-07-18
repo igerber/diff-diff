@@ -3946,6 +3946,8 @@ CI-shrinkage anchors).
 **Paper reviews on file:**
 `docs/methodology/papers/calonico-cattaneo-titiunik-2014-review.md` (CCT 2014,
 Econometrica - robust bias-corrected RD inference),
+`calonico-cattaneo-titiunik-2015-review.md` (JASA - optimal data-driven RD
+plots; bin-count selector formulas for the planned rdplot diagnostic),
 `calonico-cattaneo-farrell-titiunik-2017-review.md` (Stata Journal - the
 rdrobust software reference this port parity-targets),
 `calonico-cattaneo-farrell-2018-review.md` (JASA - CER-optimal bandwidths),
