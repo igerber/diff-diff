@@ -1444,11 +1444,12 @@ def _cic_fit_snippet(
     an explicitly unconditional refit, ``"add"`` inserts placeholder
     covariate names. Reads are defensive (mock results may lack fields).
 
-    Inference settings are deliberately NORMALIZED to defaults
-    (``n_bootstrap=200, seed=42``) and custom ``quantiles``/``alpha``
-    are not mirrored - a 19-value quantile grid inlined into guidance
-    would be unreadable, and neither setting changes the identifying
-    specification. The emitted snippet says so on its last line.
+    Inference settings are deliberately NORMALIZED: ``n_bootstrap=200``
+    is the constructor default, ``seed=42`` is illustrative (the default
+    is ``seed=None``), and custom ``quantiles``/``alpha`` are not
+    mirrored - a 19-value quantile grid inlined into guidance would be
+    unreadable, and none of these settings changes the identifying
+    specification. The emitted snippet says so on its last lines.
     """
     panel = bool(getattr(results, "panel", False))
     covs = list(getattr(results, "covariates", None) or []) if covariates == "same" else []
@@ -1472,7 +1473,10 @@ def _cic_fit_snippet(
         snippet += (
             "\n# panel=True + unit= mirror the original unit-block bootstrap (use your unit column)"
         )
-    snippet += "\n# n_bootstrap/seed shown are defaults; carry over quantiles=/alpha= if customized"
+    snippet += (
+        "\n# n_bootstrap=200 is the default; seed=42 is illustrative (default seed=None)"
+        "\n# carry over quantiles=/alpha= if you customized them"
+    )
     return snippet
 
 
@@ -1511,34 +1515,62 @@ def _handle_cic(results: Any):
 
     if is_qdid:
         s3_why = (
-            "QDiD does not identify off mean parallel trends. Its "
+            "QDiD does not identify off mean parallel trends alone. Its "
             "justifying model is stronger than CiC's: the scalar "
             "unobservable's distribution must be identical in all FOUR "
             "(group, period) cells, and the model is not invariant to "
             "monotone transformations of the outcome (Athey-Imbens 2006, "
-            "p. 447). Beyond the counterfactual-monotonicity check the "
-            "fit already runs on unconditional fits, none of this is "
-            "directly testable in a 2x2 design. If the source panel has "
-            "extra pre-periods, check_parallel_trends() on pre-period "
-            "MEANS is a necessary-but-insufficient screen: a mean-trend "
-            "break undermines the model, but passing it does not "
-            "validate the distributional assumptions."
+            "p. 447). Because that additive quantile model moves every "
+            "quantile - and hence the cell means - additively (QDiD's "
+            "mean effect equals standard DiD's ATT in population), a "
+            "pre-period mean-trend break IS evidence against QDiD's "
+            "model: with extra pre-periods in the source panel, "
+            "check_parallel_trends() on pre-period MEANS is a meaningful "
+            "screen, though passing it does not validate the "
+            "distributional restrictions - the two-pre-period "
+            "distributional placebo (see the Placebo step) is the "
+            "sharper exercise. Beyond the counterfactual-monotonicity "
+            "check the fit already runs on unconditional fits, none of "
+            "this is directly testable in a 2x2 design."
+        )
+        s3_code = (
+            "# Meaningful MEANS screen for QDiD's additive model. Needs\n"
+            "# extra pre-periods in the SOURCE panel - the 2x2 itself\n"
+            "# has none by definition:\n"
+            "from diff_diff import check_parallel_trends\n"
+            "pt = check_parallel_trends(source_panel, outcome='y',\n"
+            "                           time='period',\n"
+            "                           treatment_group='treated')"
         )
     else:
         s3_why = (
-            "CiC does not identify off mean parallel trends. "
-            "Identification (Athey-Imbens 2006, Assumptions 3.1-3.4) "
-            "needs a monotone outcome model h(U, T) strictly increasing "
-            "in a scalar unobservable U, time-invariance of U within "
-            "groups (U independent of T given G), and support inclusion "
-            "- none directly testable in a 2x2 design. If the source "
-            "panel has extra pre-periods, check_parallel_trends() on "
-            "pre-period MEANS is a necessary-but-insufficient screen: a "
-            "mean-trend break undermines the time-invariance story, but "
-            "passing it does not validate the distributional "
-            "assumptions. Also note additive random group-time shocks "
-            "bias CiC - unlike linear DiD, where they only complicate "
-            "inference - and are undetectable in a 2x2 (p. 476)."
+            "CiC does not identify off mean parallel trends - and does "
+            "not require them. Identification (Athey-Imbens 2006, "
+            "Assumptions 3.1-3.4) needs a monotone outcome model "
+            "h(U, T) strictly increasing in a scalar unobservable U, "
+            "time-invariance of U within groups (U independent of T "
+            "given G), and support inclusion - none directly testable "
+            "in a 2x2 design. Under a nonlinear h, group mean trends "
+            "need not be parallel in a valid CiC design, so a "
+            "pre-period mean-trend break is NOT by itself evidence "
+            "against CiC; check_parallel_trends() on pre-period means "
+            "is at most a descriptive mean-DiD anchor, and the relevant "
+            "falsification exercise is the two-pre-period distributional "
+            "placebo (see the Placebo step). Also note additive random "
+            "group-time shocks bias CiC - unlike linear DiD, where they "
+            "only complicate inference - and are undetectable in a 2x2 "
+            "(p. 476)."
+        )
+        s3_code = (
+            "# CiC does not require mean parallel trends - the relevant\n"
+            "# falsification is the two-pre-period distributional placebo\n"
+            "# (see the Placebo step). Optional DESCRIPTIVE mean anchor\n"
+            "# (needs extra pre-periods in the SOURCE panel):\n"
+            "from diff_diff import check_parallel_trends\n"
+            "pt = check_parallel_trends(source_panel, outcome='y',\n"
+            "                           time='period',\n"
+            "                           treatment_group='treated')\n"
+            "# a mean-trend break here is NOT by itself evidence against CiC"
         )
 
     steps = [
@@ -1548,15 +1580,7 @@ def _handle_cic(results: Any):
                 "Assess the distributional identifying assumptions " "(not mean parallel trends)"
             ),
             why=s3_why,
-            code=(
-                "# Necessary-but-insufficient MEANS screen. Needs extra\n"
-                "# pre-periods in the SOURCE panel - the 2x2 itself has\n"
-                "# none by definition:\n"
-                "from diff_diff import check_parallel_trends\n"
-                "pt = check_parallel_trends(source_panel, outcome='y',\n"
-                "                           time='period',\n"
-                "                           treatment_group='treated')"
-            ),
+            code=s3_code,
             step_name="parallel_trends",
         ),
     ]
@@ -2004,16 +2028,21 @@ def _check_nan_att(results: Any) -> List[str]:
 def _cic_bootstrap_warnings(results: Any) -> List[str]:
     """Bootstrap-health warnings for ``ChangesInChangesResults``.
 
-    ``_check_nan_att`` misses both conditions flagged here: with
-    ``n_bootstrap=0`` or a failed replicate gate the point estimates stay
-    finite while every inference field is NaN. Reads are defensive (mock
-    results may lack the fields). The 5% materiality threshold mirrors
-    the fit-time ``warn_bootstrap_failure_rate`` threshold so the two
-    surfaces never disagree about what counts as a notable failure rate.
+    ``_check_nan_att`` misses the conditions flagged here: with
+    ``n_bootstrap=0``, ``n_bootstrap=1``, or a failed replicate gate the
+    point estimates stay finite while every inference field is NaN.
+    Reads are defensive (mock results may lack the fields) and accept
+    numpy integer/float scalars alongside Python numbers. The 5%
+    materiality threshold mirrors the fit-time
+    ``warn_bootstrap_failure_rate`` threshold so the two surfaces never
+    disagree about what counts as a notable failure rate.
     """
+    import numpy as np
+
+    numeric = (int, float, np.integer, np.floating)
     nb = getattr(results, "n_bootstrap", None)
     nv = getattr(results, "n_bootstrap_valid", None)
-    if not isinstance(nb, (int, float)):
+    if not isinstance(nb, numeric):
         return []
     if nb == 0:
         return [
@@ -2021,7 +2050,14 @@ def _cic_bootstrap_warnings(results: Any) -> List[str]:
             "and the uniform bands are NaN. Refit with n_bootstrap > 0 "
             "(default 200) and a seed for reproducible bootstrap inference."
         ]
-    if isinstance(nv, (int, float)) and 0 <= nv < nb and (nb - nv) / nb > 0.05:
+    if 0 < nb < 2:
+        return [
+            "n_bootstrap=1 cannot produce inference: the SE gate requires "
+            "at least 2 valid replicates, so every SE/t/p/CI field and the "
+            "uniform bands are NaN. Refit with n_bootstrap >= 2 (default "
+            "200)."
+        ]
+    if isinstance(nv, numeric) and 0 <= nv < nb and (nb - nv) / nb > 0.05:
         return [
             f"Only {int(nv)} of {int(nb)} bootstrap replicates were valid "
             f"({(nb - nv) / nb:.0%} failed). With fewer than half (minimum "

@@ -1505,6 +1505,48 @@ class TestCiCHandlerSpecificationPropagation:
         # quantiles=/alpha= are intentionally NOT mirrored into refit
         # snippets (a 19-value grid inlined into guidance is unreadable;
         # neither changes the identifying specification) - the snippet
-        # must SAY so rather than silently normalize.
+        # must SAY so rather than silently normalize, and must not call
+        # seed=42 a "default" (the constructor default is seed=None).
         code = self._step_by_label(cic_fit_results, "Placebo")["code"]
-        assert "carry over quantiles=/alpha= if customized" in code
+        assert "carry over quantiles=/alpha= if you customized them" in code
+        assert "seed=42 is illustrative" in code
+
+    def test_cic_step3_does_not_require_mean_parallel_trends(self, cic_fit_results):
+        # CI review R1 P1 lock: under a nonlinear outcome model, group
+        # mean trends need NOT be parallel in a valid CiC design - the
+        # guidance must not frame a means check as a screen CiC has to
+        # pass.
+        step3 = self._step_by_label(cic_fit_results, "distributional identifying assumptions")
+        text = step3["why"] + " " + step3["code"]
+        assert "necessary" not in text.lower()
+        assert "NOT by itself evidence against CiC" in step3["why"]
+        assert "descriptive" in step3["why"]
+
+    def test_qdid_step3_keeps_meaningful_means_screen(self, qdid_fit_results):
+        # QDiD's additive quantile model moves cell means additively
+        # (population mean equivalence with DiD), so for QDiD a
+        # pre-period mean-trend break IS evidence against the model.
+        step3 = self._step_by_label(qdid_fit_results, "distributional identifying assumptions")
+        assert "IS evidence against QDiD's model" in step3["why"]
+        assert "meaningful" in step3["why"]
+
+    def test_n_bootstrap_one_warning(self):
+        # n_bootstrap=1 passes the disabled-inference check but cannot
+        # clear the >= 2 valid-replicate SE gate: all inference is NaN.
+        r = _mock_cic(att=0.5, estimator="cic", covariates=None, n_bootstrap=1, n_bootstrap_valid=1)
+        output = practitioner_next_steps(r, verbose=False)
+        assert any("n_bootstrap=1 cannot produce inference" in w for w in output["warnings"])
+
+    def test_bootstrap_warnings_accept_numpy_scalars(self):
+        r = _mock_cic(
+            att=0.5,
+            estimator="cic",
+            covariates=None,
+            n_bootstrap=np.int64(200),
+            n_bootstrap_valid=np.int64(100),
+        )
+        output = practitioner_next_steps(r, verbose=False)
+        assert any("100 of 200" in w for w in output["warnings"])
+        r0 = _mock_cic(att=0.5, estimator="cic", covariates=None, n_bootstrap=np.int64(0))
+        output0 = practitioner_next_steps(r0, verbose=False)
+        assert any("n_bootstrap=0" in w for w in output0["warnings"])
