@@ -438,10 +438,12 @@ class TestCloseAndSurface:
         # The guardrail-variant warnings render in the committed output by
         # design, but the machine-specific checkout prefix is normalized
         # away before committing - rendered docs must not leak local
-        # usernames/paths.
+        # usernames/paths, whichever platform executed the notebook.
         from tests._tutorial_drift import notebook_output_text
 
-        assert "/Users/" not in notebook_output_text(NB)
+        text = notebook_output_text(NB)
+        for prefix in ("/Users/", "/home/", "/private/", "C:\\Users", "/tmp/"):
+            assert prefix not in text, f"committed output leaks a local path: {prefix!r}"
 
     def test_headline_claims_present_in_prose(self):
         md = notebook_markdown(NB)
