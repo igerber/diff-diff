@@ -39,6 +39,7 @@ from scipy import stats
 from ._rdrobust_port import (
     _covs_gamma,
     _normalize_kernel,
+    _var0,
     covs_drop_fun,
     qrXXinv,
     rdrobust_kweight,
@@ -854,8 +855,15 @@ class RDPlot:
         drk_i_l = _pow_outer(x_bar_i_l, k - 1) * j_arange
         drk_i_r = _pow_outer(x_bar_i_r, k - 1) * j_arange
 
-        var_y_l = float(np.var(y_l, ddof=1))
-        var_y_r = float(np.var(y_r, ddof=1))
+        # R's two-pass var() is EXACTLY zero on a constant vector; numpy's
+        # single-pass mean leaves ~1e-32 roundoff for constants like 0.7,
+        # which would skip the var==0 rescue below and crash the bin grid on
+        # a zero jump (J_MV = Inf). Route through the port's exact-constancy
+        # helper (_var0, the #686-ported R semantics) so constant sides give
+        # var_y = 0.0 exactly, reproducing R's rescue and its 0/0 -> NaN
+        # selector echoes.
+        var_y_l = 0.0 if _var0(y_l) else float(np.var(y_l, ddof=1))
+        var_y_r = 0.0 if _var0(y_r) else float(np.var(y_r, ddof=1))
 
         mu0_i_l = rk_i_l @ gamma_k1_l
         mu0_i_r = rk_i_r @ gamma_k1_r

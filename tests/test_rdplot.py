@@ -350,6 +350,27 @@ class TestRQuirkLocks:
         with pytest.raises(ValueError, match="zero effective observations"):
             RDPlot(h=0.1).fit(df, "y", "x")
 
+    def test_constant_float_outcome_side_rescued_exactly(self):
+        # np.var of a constant 0.7 vector is ~1.3e-32, NOT 0 (single-pass
+        # mean roundoff), while R's two-pass var() is exactly 0 - without
+        # the _var0 exact-constancy routing the var==0 rescue is skipped
+        # and the zero jump crashes bin construction (ZeroDivisionError;
+        # caught by CI codex on the rebased head). R fires the rescue:
+        # J=1 with the variability warning, Inf J_IMSE, NaN J_MV.
+        rng = np.random.default_rng(7)
+        x = np.concatenate([-rng.uniform(0.1, 1, 15), rng.uniform(0.1, 1, 15)])
+        y = np.where(x < 0, 0.7, rng.normal(size=30))
+        df = pd.DataFrame({"y": y, "x": x})
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            r = RDPlot().fit(df, "y", "x")
+        messages = [str(w.message) for w in caught]
+        assert any("variability" in m and "below" in m for m in messages)
+        assert r.J[0] == 1.0
+        assert np.isinf(r.J_IMSE[0])
+        assert np.isnan(r.J_MV[0])  # 0/0 through the MV selector, as in R
+        assert np.isfinite(r.J[1]) and r.J[1] >= 1
+
     def test_finite_singular_selector_gram_does_not_downgrade(self):
         # Companion to the overflow-ladder golden: a finite rank-deficient
         # k=4 Gram (4 distinct x values per side) is absorbed inside
