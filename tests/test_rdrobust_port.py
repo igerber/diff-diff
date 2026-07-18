@@ -864,8 +864,12 @@ class TestCovsDegenerateGuard:
         assert fit_c.covs_excluded.tolist() == [False, True]
         # gamma row zeroed -> the constant contributes exactly nothing.
         assert fit_c.gamma_p is not None and fit_c.gamma_p[1, 0] == 0.0
-        assert fit_c.tau_bc == fit_1.tau_bc
-        assert fit_c.se_rb == fit_1.se_rb
+        # Mathematically identical; numerically only to float roundoff -
+        # the (n, 3) vs (n, 2) response shapes route through different
+        # BLAS matmul kernels on some platforms (CI round 1: last-ULP
+        # diffs on OpenBLAS/Windows, bit-equal on Accelerate).
+        assert fit_c.tau_bc == pytest.approx(fit_1.tau_bc, rel=1e-12)
+        assert fit_c.se_rb == pytest.approx(fit_1.se_rb, rel=1e-12)
 
     def test_dummy_set_stabilized_equals_drop_one(self):
         # A full one-hot set passes the intercept-free QR (rank 3) but the

@@ -44,9 +44,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `covs_drop` echo on the results. Degenerate adjustments are GUARDED, not
   reproduced (documented deviation): R's `ginv(tol=1e-20)` inverts a float-noise
   singular value on constant covariates / full dummy sets, silently returning
-  platform-dependent estimates; diff-diff excludes degenerate columns, applies a
+  platform-dependent estimates; diff-diff excludes degenerate columns (a constant
+  covariate reproduces the fit without it to numerical precision), applies a
   scale-invariant stabilized cut for rank-deficient sets (a full dummy set
-  reproduces the drop-one-category fit exactly), and warns naming the columns.
+  reproduces the drop-one-category fit to numerical precision), and warns
+  naming the columns.
   **Canonical binding:** `att`/`se`/`t_stat`/`p_value`/`conf_int` are ONE
   coherent row - the robust bias-corrected row (`att = tau_bc`, CI centered on it,
   `t_stat == att/se`), preserving the library-wide field identities; the new

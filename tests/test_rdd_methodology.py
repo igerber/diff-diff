@@ -518,8 +518,13 @@ class TestCovariates:
             fit_c = RegressionDiscontinuity(h=0.3).fit(df, "y", "x", covariates=["zlong", "zconst"])
         fit_1 = RegressionDiscontinuity(h=0.3).fit(df, "y", "x", covariates=["zlong"])
         assert fit_c.covariate_coefficients["zconst"] == 0.0
-        assert fit_c.att == fit_1.att
-        assert fit_c.se == fit_1.se
+        # Equality holds mathematically (the excluded column's gamma is
+        # exactly 0) but only to float roundoff numerically: the response
+        # matrix still carries the constant column, and BLAS matmul
+        # kernels differ with matrix SHAPE across platforms (bit-equal on
+        # Accelerate, last-ULP off on OpenBLAS/Windows - CI round 1).
+        assert fit_c.att == pytest.approx(fit_1.att, rel=1e-12)
+        assert fit_c.se == pytest.approx(fit_1.se, rel=1e-12)
 
     def test_dummy_set_stabilized_equals_drop_one(self):
         # A full one-hot set passes the covariate-only QR but is

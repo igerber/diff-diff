@@ -3854,7 +3854,10 @@ per-side and comb chains.
   (~0.5% in the smoke). The port instead (a) EXCLUDES per-column
   degeneracies - explained-ratio `diag(ZWZ)_j/(z_j'Wz_j) < 1e-14` -
   zeroing their gamma rows, so a constant covariate reproduces the fit
-  without it bit-for-bit; (b) cuts SET-level noise directions with an
+  without it to floating-point roundoff (tested at rel 1e-12; not
+  bit-for-bit - the response matrix still carries the excluded column
+  and BLAS matmul kernels differ with matrix shape across platforms);
+  (b) cuts SET-level noise directions with an
   equilibrated (scale-invariant) pseudo-inverse (`sv_min < 1e-12 *
   sv_max` -> `rcond=1e-12` cut), so a full dummy set reproduces the
   drop-one-category fit (span invariance, tested at rel 1e-9); and (c)

@@ -439,8 +439,11 @@ def _covs_gamma(
 
     * per-column: ``diag(ZWZ)_j / (z_j' W z_j) < 1e-14`` means column j is
       numerically fully explained by the design -> excluded (gamma row 0;
-      a constant covariate then contributes exactly nothing, matching the
-      fit without it bit-for-bit);
+      a constant covariate then contributes exactly nothing and the fit
+      matches the one without it to floating-point roundoff - not
+      bit-for-bit, because the response matrix still carries the excluded
+      column and BLAS matmul kernels differ with matrix SHAPE on some
+      platforms);
     * set-level: equilibrated (scale-invariant) singular values of the
       remaining block with ``sv_min < 1e-12 * sv_max`` -> stabilized
       equilibrated pseudo-inverse with the noise directions cut
