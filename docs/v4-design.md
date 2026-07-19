@@ -91,7 +91,7 @@ Derived from `diff_diff.__all__` at v3.8.0. 24 estimator classes -> 21.
 | ChangesInChanges | Keep + absorbs QDiD via `method=` [M-015] |
 | QDiD | Removed 4.0 [M-015] |
 | SyntheticDiD, SyntheticControl, TROP, ContinuousDiD, HeterogeneousAdoptionDiD, RegressionDiscontinuity, SpilloverDiD, ChaisemartinDHaultfoeuille | Keep |
-| BaconDecomposition | Keep (documented as a diagnostic, not an estimator, in the API docs and alias-table grouping) |
+| BaconDecomposition | Keep - moves into the diagnostic family (section 3.5) |
 
 ### 3.2 Final alias table
 
@@ -147,6 +147,72 @@ signatures. Lifecycle facts live in the cited rows.
 - `robust` constructor param dropped everywhere it exists
   [M-045]..[M-047] - fully redundant with `vcov_type`, and its default even
   differed across estimators (True/True/False).
+
+### 3.5 The diagnostic family
+
+diff-diff 4.0 formalizes a THIRD object kind alongside estimators and
+results: **diagnostics** (locked with the maintainer 2026-07-19). Exactly
+ONE bit is load-bearing: an estimator's result carries a causal-effect
+inference row (the section 5 quintet); a diagnostic's result does NOT -
+it assesses a design, an identifying assumption, or robustness (a
+decomposition table, binned plot data, a pre-trends p-value, sensitivity
+bounds, a power curve).
+
+**Membership = the library's EXISTING "Diagnostics & Sensitivity" docs
+family, formalized** - not a new taxonomy: BaconDecomposition, RDPlot,
+parallel-trends testing, the placebo suite, HonestDiD, PreTrendsPower,
+PowerAnalysis, `twowayfeweights`, the HAD pretests, and the upcoming
+CJM 2020 density test (born into the family). (A narrower classes-only
+tier with separate categories for HonestDiD/PowerAnalysis was drafted and
+REJECTED 2026-07-19: the boundary needed adjudication, and the docs
+family already draws the right line.)
+
+**Mechanics - the marker lives on RESULT containers.** Consumers hold
+results, not entry points, so the `Diagnostic` marker base (shipping
+ADDITIVELY in Phase 2 [M-091]) attaches to the class-backed diagnostic
+RESULT types: `BaconDecompositionResults`, `RDPlotResult`,
+`HonestDiDResults` + `SensitivityResults`, `PreTrendsPowerResults` +
+`PreTrendsPowerCurve`, `PowerResults` + the `Simulation*Results` family,
+`PlaceboTestResults`, the HAD pretest containers (`QUGTestResults`,
+`StuteTestResults`, `YatchewTestResults`, `StuteJointResult`,
+`HADPretestReport` - all already exposing the serialization pair), and
+`DiagnosticReportResults` (whose `summary()`/`to_dataframe()` live on the
+BUILDER today - Phase 2 moves or delegates them onto the container to meet
+the contract; BusinessReport exports no result container, so nothing to
+mark there) - plus every future diagnostic's result type (the density
+test's first). Entry-point classes are NOT marked (one
+marker, one meaning). Contract: marked results expose `summary()` /
+`to_dataframe()` and are exempt from the section 5 quintet BY TYPE
+(isinstance-checkable, so BusinessReport / DiagnosticReport /
+practitioner routing stop special-casing by result-class name). The
+family's entry points keep their existing shapes - data-in (Bacon,
+RDPlot) and results-in (HonestDiD, PreTrendsPower) both belong; the
+marker does not constrain them. NARROWING: function-shaped members that
+return raw dicts (`check_parallel_trends` and variants,
+`equivalence_test_trends`) and `TWFEWeightsResult` (no
+`summary()`/`to_dataframe()` today) participate in the DOCS family only,
+not the type contract; upgrading them to marked containers is optional
+Phase 2 follow-up work, not part of this contract. The Phase 2 gate
+[M-091] requires a dedicated roster test: every enumerated result type is
+`isinstance(result, Diagnostic)` and exposes the serialization pair, and
+representative ESTIMATOR results are NOT. Import paths do NOT move - the
+flat top-level namespace is kept (rejected: `diff_diff.diagnostics.*`
+moves). Zero new classes beyond the single marker.
+
+**4.0 reorganization [M-090].** At 4.0 the public surface claims split
+into "estimators + diagnostics": Bacon is re-homed OUT of the API
+estimator roster (where it is misfiled today); RDPlot - already
+documented under Diagnostics & Sensitivity - is consolidated under the
+unified family grouping; README catalog, llms.txt, API reference and
+alias-table groupings, and estimator-count claims on JOSS-adjacent
+surfaces all split accordingly. Tracked as a behavior row so the cut
+sweep cannot miss it.
+
+**RDPlot contract compliance [M-088] [M-089].** `RDPlot.fit()` shipped
+with `outcome_col` / `running_col` after the ledger froze - the section 8
+missed-rename clause applies, and the params migrate to bare `outcome` /
+`running` on the standard 3.9-shim / 4.0-removal path (matching
+RegressionDiscontinuity's [M-040] [M-041]).
 
 ## 4. The three merges
 
@@ -272,9 +338,11 @@ removed [M-015] [M-061].
 
 **Canonical quintet.** `att`, `se`, `t_stat`, `p_value`, `conf_int` - bound to
 ONE coherent inference row (locked library principle: uniform names never
-carry altered meaning). As of v3.8.0 every results class already exposes the
-full quintet as properties (verified 2026-07-18), so 3.9 needs no additive
-property work. At 4.0 the STORAGE flips [M-050]..[M-058]: the canonical names
+carry altered meaning). The quintet contract applies to ESTIMATOR results;
+diagnostic-family results (section 3.5) are exempt BY TYPE - they expose
+`summary()` / `to_dataframe()` but no inference row. As of v3.8.0 every
+ESTIMATOR result class already exposes the full quintet as properties
+(verified 2026-07-18), so 3.9 needs no additive property work. At 4.0 the STORAGE flips [M-050]..[M-058]: the canonical names
 become the native dataclass fields; `overall_att` (and sibling `overall_*`
 inference fields, plus ContinuousDiD's deviant `overall_att_*` family
 [M-058]) become FutureWarning properties, removed 5.0. MultiPeriodDiD's
@@ -409,10 +477,10 @@ above; anything only one PR cares about stays in that PR's plan.**
 | Phase | Ships in | PRs (each: dedicated shim/removal tests + matrix flips + CHANGELOG naming flipped row ids) |
 |---|---|---|
 | 1 (this PR) | - | Spec + matrix + enforcement test + support edits |
-| 2: contract foundations | 3.9 | (a) results base + unified event-study representation + to_dict completion; (b) `aggregate()` + fit(aggregate=) shims [M-020..M-027]; (c) param renames [M-030..M-047] + BaseEstimator mixin + ContinuousDiD covariates move; (d) alias introductions [M-062] [M-063] + wrapper deprecations [M-070..M-077] + n_bootstrap docs [M-081] |
+| 2: contract foundations | 3.9 | (a) results base + unified event-study representation + to_dict completion + the Diagnostic marker base on the diagnostic result roster [M-091] (section 3.5); (b) `aggregate()` + fit(aggregate=) shims [M-020..M-027]; (c) param renames [M-030..M-047] + BaseEstimator mixin + ContinuousDiD covariates move; (d) alias introductions [M-062] [M-063] + wrapper deprecations [M-070..M-077] + n_bootstrap docs [M-081] |
 | 3: merges | 3.9 | (a) TWFE event-study mode [M-010] + EventStudy warn [M-060] (gates: section 4.1's equivalence/divergence/pooled-parity test triple); (b) TripleDifference facade [M-013]; (c) CiC method= [M-015] |
 | 4: release + soak | 3.9 cut | Migration guide written (skeleton: section 10); maintainer cuts 3.9; maint/3.8 rule active |
-| 5: enforcement | 4.0 | Removals [M-010..M-016, M-030..M-047 old names, M-060, M-061, M-070..M-077, M-001..M-003]; storage flips [M-050..M-058]; default policies [M-004..M-006, M-080]; warning retirement [M-007]; fastpath go/no-go [M-008]; docs/llms.txt/README refresh |
+| 5: enforcement | 4.0 | Removals [M-010..M-016, M-030..M-047 old names, M-060, M-061, M-070..M-077, M-001..M-003]; storage flips [M-050..M-058]; default policies [M-004..M-006, M-080]; warning retirement [M-007]; fastpath go/no-go [M-008]; diagnostic-family docs/roster reorganization [M-090]; docs/llms.txt/README refresh |
 | 6: front door | 4.1 | `event_study(data, outcome, unit, time, first_treat, estimator=...)` comparison entry point over the staggered family (sketch only; specified in its own plan) |
 
 **4.0-cut checklist (final item):** the due-row sweep is AUTOMATED -
@@ -505,8 +573,9 @@ forever - a removed symbol resurrecting is a test failure.
   `removed_in` (symbol/alias rows), flip version (`deprecated_in` on
   default-flip/warning-retirement/behavior rows), or `decision_due`
   (env-default rows), the status must be terminal; a due `introduced_in`
-  means the row may no longer be `planned` (the new surface must have
-  shipped - this is what gates introduce-only aliases); symbol rows with a
+  means the row may no longer be `planned` OR `evaluate` (the new surface
+  must have shipped; evaluate cannot satisfy an introduction - this is what
+  gates introduce-only aliases and the Phase 2 marker); symbol rows with a
   due `deprecated_in` and a declared `warning` may no longer be `planned`.
   The gate is two-sided: an EARLY-removal guard fails any row that goes
   terminal while its scheduled version is still in the future (the shim
@@ -527,7 +596,7 @@ forever - a removed symbol resurrecting is a test failure.
   the same object as its target, so the deprecation warning rides the parent
   class row (schema-enforced). Top-level `diff_diff:Name` class/function rows
   and alias rows also assert `__all__` membership consistent with their
-  status (stale `import *` entries fail). The initial 71 row ids are a
+  status (stale `import *` entries fail). The initial 75 row ids are a
   committed snapshot in the enforcement test: ids are never deleted or
   reused, and the test fails if any snapshot id disappears.
 

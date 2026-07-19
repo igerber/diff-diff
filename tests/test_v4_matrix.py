@@ -109,14 +109,14 @@ _ROW_START_RE = re.compile(r"^  - id:\s*(\S+)\s*$")
 _FIELD_RE = re.compile(r"^    ([a-z_]+):\s*(.*?)\s*$")
 _MD_TOKEN_RE = re.compile(r"\[(M-\d{3})\]")
 
-# Row-count floor: exactly the 71 rows shipped at Phase 1. Ids are never reused and terminal
+# Row-count floor: exactly the 75 rows shipped by the Phase 1 spec (incl. the diagnostic-family amendment). Ids are never reused and terminal
 # rows are never deleted, so the ledger only grows - raise the floor when rows are added; a
 # lower parse count means scanner/format drift or an illegal row deletion.
-ROW_COUNT_FLOOR = 71
+ROW_COUNT_FLOOR = 75
 
 # Committed snapshot of the Phase 1 id set ("ids are never deleted or reused" contract - a
 # delete-one-add-one edit keeps the count above the floor but trips this). Extend, never edit.
-_INITIAL_ID_RANGES = [(1, 8), (10, 16), (20, 27), (30, 47), (50, 58), (60, 64), (70, 77), (80, 87)]
+_INITIAL_ID_RANGES = [(1, 8), (10, 16), (20, 27), (30, 47), (50, 58), (60, 64), (70, 77), (80, 91)]
 EXPECTED_INITIAL_IDS = frozenset(
     f"M-{n:03d}" for lo, hi in _INITIAL_ID_RANGES for n in range(lo, hi + 1)
 )
@@ -467,10 +467,18 @@ def collect_due_problems(rows, current):
                     "(record the go/no-go either way)"
                 )
         introduced_in = row.get("introduced_in")
-        if introduced_in and current >= _version_tuple(introduced_in) and status == "planned":
+        if (
+            introduced_in
+            and current >= _version_tuple(introduced_in)
+            and status
+            in (
+                "planned",
+                "evaluate",
+            )
+        ):
             problems.append(
-                f"{rid}: introduced_in {introduced_in} is due but status is still 'planned' "
-                "(new surface not shipped?)"
+                f"{rid}: introduced_in {introduced_in} is due but status is '{status}' - the "
+                "new surface must have shipped (evaluate cannot satisfy an introduction)"
             )
         if (
             kind in LIFECYCLE_KINDS
@@ -505,7 +513,7 @@ def test_initial_ids_never_deleted():
     ROW_COUNT_FLOOR alone would let a delete-one-add-one edit pass; this snapshot cannot."""
     missing = sorted(EXPECTED_INITIAL_IDS - set(_ROW_IDS))
     assert not missing, f"ledger rows deleted (ids are permanent): {missing}"
-    assert len(EXPECTED_INITIAL_IDS) == 71
+    assert len(EXPECTED_INITIAL_IDS) == 75
 
 
 def test_version_tuple_pads_to_three_components():
@@ -589,6 +597,23 @@ def test_all_membership_helper_semantics():
             "removed_in 4.0 is due",
             (3, 9, 0),
         ),
+        # introduced_in cannot be dodged via 'evaluate' (behavior-row bypass regression)
+        (
+            {
+                "id": "M-907",
+                "kind": "behavior",
+                "old": "diff_diff:BaconDecompositionResults",
+                "new": None,
+                "introduced_in": "3.9",
+                "deprecated_in": None,
+                "removed_in": None,
+                "status": "evaluate",
+                "phase": 2,
+            },
+            (3, 9, 0),
+            "evaluate cannot satisfy an introduction",
+            (3, 8, 0),
+        ),
         # overdue param-value removal: value migrations are due-gated like symbol rows
         (
             {
@@ -626,6 +651,7 @@ def test_all_membership_helper_semantics():
         "overdue-introduce-only-alias",
         "overdue-env-default-decision",
         "overdue-removal",
+        "introduced-in-evaluate-bypass",
         "overdue-param-value-removal",
         "early-removal-before-schedule",
     ],

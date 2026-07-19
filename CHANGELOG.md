@@ -26,6 +26,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   purpose-phrasing, restoring the case as a genuinely clean negative control.
 
 ### Added
+- **Internal: 4.0 diagnostic-family amendment to the design spec.** `docs/v4-design.md`
+  gains section 3.5 formalizing a third object kind - diagnostics: the library's
+  existing "Diagnostics & Sensitivity" family (parallel-trends testing, placebo
+  suite, HonestDiD, pre-trends power, power analysis) made checkable, with
+  `BaconDecomposition` and `RDPlot` re-homed into it at 4.0 and the upcoming
+  density test born into it. One load-bearing bit: estimator results carry the
+  canonical inference quintet, diagnostic results do not (exempt BY TYPE via a
+  single `Diagnostic` marker base on the diagnostic RESULT containers, shipping
+  additively in Phase 2 with a ledger-gated roster test (M-091) - zero new
+  classes beyond the base, no import-path moves; raw-dict diagnostic functions
+  participate in the docs family only). The 4.0 docs/roster
+  reorganization is ledger-tracked (M-090) so the release cut cannot miss it,
+  and `RDPlot.fit()`'s post-freeze `outcome_col`/`running_col` params get their
+  standard rename rows (M-088/M-089) under the spec's missed-rename clause.
+  Docs + ledger + test-count updates only - **no public API or numerical behavior
+  change.**
 - **Reviewer-eval harness: N-arm matrix, blinded grading, corpus grown 2 -> 11
   (`tools/reviewer-eval/`, prep for the GPT-5.6 reviewer evaluation).**
   `config/configs.json` moves from the two-arm `control`/`candidate` shape to an

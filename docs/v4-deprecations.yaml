@@ -869,6 +869,56 @@ rows:
     code_refs: [diff_diff/wooldridge_results.py]
     notes: "summary() unifies to the library-wide summary(alpha=None) signature (spec section 5); aggregation selection lives on aggregate(). The alpha param arrives additively in the same PR."
 
+  - id: M-088
+    kind: param
+    group: renames-col-suffix
+    old: "diff_diff:RDPlot.fit[outcome_col]"
+    new: "diff_diff:RDPlot.fit[outcome]"
+    introduced_in: "3.9"
+    deprecated_in: "3.9"
+    removed_in: "4.0"
+    status: planned
+    phase: 2
+    warning: FutureWarning
+    code_refs: [diff_diff/rdplot.py]
+    notes: "RDPlot shipped post-ledger-freeze with _col suffixes; the spec section 8 missed-rename clause applies (matches RegressionDiscontinuity [M-040])."
+  - id: M-089
+    kind: param
+    group: renames-col-suffix
+    old: "diff_diff:RDPlot.fit[running_col]"
+    new: "diff_diff:RDPlot.fit[running]"
+    introduced_in: "3.9"
+    deprecated_in: "3.9"
+    removed_in: "4.0"
+    status: planned
+    phase: 2
+    warning: FutureWarning
+    code_refs: [diff_diff/rdplot.py]
+    notes: "Companion to [M-088]; matches [M-041]."
+  - id: M-090
+    kind: behavior
+    group: diagnostic-family
+    old: "diff_diff:BaconDecomposition"
+    new: null
+    deprecated_in: "4.0"
+    removed_in: null
+    status: planned
+    phase: 5
+    code_refs: [README.md, diff_diff/guides/llms.txt, diff_diff/bacon.py]
+    notes: "4.0 diagnostic-family docs/roster reorganization (spec section 3.5): Bacon re-homed OUT of the API estimator roster (misfiled today); RDPlot (already documented as a diagnostic) consolidated under the unified family grouping; README/llms.txt/API/alias groupings and estimator-count claims split into estimators + diagnostics. The Phase 2 marker introduction is gated separately by [M-091]."
+  - id: M-091
+    kind: behavior
+    group: diagnostic-family
+    old: "diff_diff:BaconDecompositionResults"
+    new: null
+    introduced_in: "3.9"
+    deprecated_in: null
+    removed_in: null
+    status: planned
+    phase: 2
+    code_refs: [diff_diff/bacon.py, diff_diff/rdplot.py, diff_diff/honest_did.py, diff_diff/pretrends.py, diff_diff/power.py, diff_diff/diagnostics.py, diff_diff/had_pretests.py, diff_diff/diagnostic_report.py]
+    notes: "Phase 2 Diagnostic marker base on the RESULT roster (spec section 3.5): BaconDecompositionResults, RDPlotResult, HonestDiDResults + SensitivityResults, PreTrendsPowerResults + PreTrendsPowerCurve, PowerResults + Simulation*Results, PlaceboTestResults, and the HAD pretest containers (QUGTestResults, StuteTestResults, YatchewTestResults, StuteJointResult, HADPretestReport), and DiagnosticReportResults (serialization pair moves/delegates from the builder onto the container). Flip to done requires the dedicated roster test (isinstance + summary/to_dataframe on every member; estimator results NOT marked). Raw-dict functions and TWFEWeightsResult are docs-family only (narrowed, spec section 3.5). introduced_in gates the 3.9 cut: the marker cannot be silently skipped."
+
   # ---- Behavior policies (schema-tracked, spec-governed; no reality probe) -
   - id: M-080
     kind: behavior
