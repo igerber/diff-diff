@@ -204,9 +204,12 @@ enumerated result type is `isinstance(result, Diagnostic)` and exposes
 the serialization pair, representative ESTIMATOR results are NOT, and the
 CONSUMERS actually switch to the marker - BusinessReport rejects marked
 diagnostics as its primary estimator input by type (today it
-special-cases only Bacon by name), and `practitioner_next_steps()` routes
+special-cases only Bacon by name), `practitioner_next_steps()` routes
 marked diagnostics through diagnostic-specific handling instead of its
-unknown-result estimator fallback. Import paths do NOT move - the
+unknown-result estimator fallback, and DiagnosticReport itself routes by
+the marker: at least one non-Bacon marked result is handled as a
+diagnostic (never through estimator fallback) while Bacon's existing
+read-out behavior is retained and tested. Import paths do NOT move - the
 flat top-level namespace is kept (rejected: `diff_diff.diagnostics.*`
 moves). Zero new classes beyond the single marker.
 
