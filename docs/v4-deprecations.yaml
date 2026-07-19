@@ -904,8 +904,8 @@ rows:
     removed_in: null
     status: planned
     phase: 5
-    code_refs: [README.md, diff_diff/guides/llms.txt, diff_diff/bacon.py]
-    notes: "4.0 diagnostic-family docs/roster reorganization (spec section 3.5): Bacon re-homed OUT of the API estimator roster (misfiled today); RDPlot (already documented as a diagnostic) consolidated under the unified family grouping; README/llms.txt/API/alias groupings and estimator-count claims split into estimators + diagnostics. The Phase 2 marker introduction is gated separately by [M-091]."
+    code_refs: [README.md, diff_diff/guides/llms.txt, docs/api/index.rst, diff_diff/bacon.py]
+    notes: "4.0 diagnostic-family docs/roster reorganization (spec section 3.5): Bacon re-homed OUT of the API estimator roster (misfiled today); RDPlot (already documented as a diagnostic) consolidated under the unified family grouping; README/llms.txt/API/alias groupings (incl. docs/api/index.rst, which lists Bacon as an estimator today) and estimator-count claims split into estimators + diagnostics; the flip's terminal test asserts the estimator/diagnostic grouping on the named surfaces. The Phase 2 marker introduction is gated separately by [M-091]."
   - id: M-091
     kind: behavior
     group: diagnostic-family
@@ -916,8 +916,8 @@ rows:
     removed_in: null
     status: planned
     phase: 2
-    code_refs: [diff_diff/bacon.py, diff_diff/rdplot.py, diff_diff/honest_did.py, diff_diff/pretrends.py, diff_diff/power.py, diff_diff/diagnostics.py, diff_diff/had_pretests.py, diff_diff/diagnostic_report.py]
-    notes: "Phase 2 Diagnostic marker base on the RESULT roster (spec section 3.5): BaconDecompositionResults, RDPlotResult, HonestDiDResults + SensitivityResults, PreTrendsPowerResults + PreTrendsPowerCurve, PowerResults + Simulation*Results, PlaceboTestResults, and the HAD pretest containers (QUGTestResults, StuteTestResults, YatchewTestResults, StuteJointResult, HADPretestReport), and DiagnosticReportResults (serialization pair moves/delegates from the builder onto the container). Flip to done requires the dedicated roster test (isinstance + summary/to_dataframe on every member; estimator results NOT marked). Raw-dict functions and TWFEWeightsResult are docs-family only (narrowed, spec section 3.5). introduced_in gates the 3.9 cut: the marker cannot be silently skipped."
+    code_refs: [diff_diff/bacon.py, diff_diff/rdplot.py, diff_diff/honest_did.py, diff_diff/pretrends.py, diff_diff/power.py, diff_diff/diagnostics.py, diff_diff/had_pretests.py, diff_diff/diagnostic_report.py, diff_diff/business_report.py, diff_diff/practitioner.py, diff_diff/_reporting_helpers.py, diff_diff/__init__.py]
+    notes: "Phase 2 Diagnostic marker base on the RESULT roster (spec section 3.5): BaconDecompositionResults, RDPlotResult, HonestDiDResults + SensitivityResults, PreTrendsPowerResults + PreTrendsPowerCurve, PowerResults + Simulation*Results, PlaceboTestResults, and the HAD pretest containers (QUGTestResults, StuteTestResults, YatchewTestResults, StuteJointResult, HADPretestReport), and DiagnosticReportResults (serialization pair moves/delegates from the builder onto the container). Flip to done ALSO requires consumer-propagation tests: BusinessReport rejects marked diagnostics as primary estimator input BY TYPE (not by name), and practitioner_next_steps routes marked diagnostics through diagnostic handling (not the unknown-result estimator fallback). Flip to done requires the dedicated roster test (isinstance + summary/to_dataframe on every member; estimator results NOT marked). Raw-dict functions and TWFEWeightsResult are docs-family only (narrowed, spec section 3.5). introduced_in gates the 3.9 cut: the marker cannot be silently skipped."
 
   # ---- Behavior policies (schema-tracked, spec-governed; no reality probe) -
   - id: M-080

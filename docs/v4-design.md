@@ -158,14 +158,20 @@ it assesses a design, an identifying assumption, or robustness (a
 decomposition table, binned plot data, a pre-trends p-value, sensitivity
 bounds, a power curve).
 
-**Membership = the library's EXISTING "Diagnostics & Sensitivity" docs
-family, formalized** - not a new taxonomy: BaconDecomposition, RDPlot,
-parallel-trends testing, the placebo suite, HonestDiD, PreTrendsPower,
-PowerAnalysis, `twowayfeweights`, the HAD pretests, and the upcoming
-CJM 2020 density test (born into the family). (A narrower classes-only
-tier with separate categories for HonestDiD/PowerAnalysis was drafted and
-REJECTED 2026-07-19: the boundary needed adjudication, and the docs
-family already draws the right line.)
+**Membership: a NEW CANONICAL CONSOLIDATION anchored on the
+"Diagnostics & Sensitivity" docs family** (which today is close but not
+identical - the consolidation is the source of truth from 4.0):
+BaconDecomposition (reclassified OUT of the README/API estimator lists),
+RDPlot (consolidated from the RD grouping), parallel-trends testing, the
+placebo suite, HonestDiD, PreTrendsPower, PowerAnalysis,
+`twowayfeweights`, the HAD pretests, DiagnosticReport's results, and the
+upcoming CJM 2020 density test (born into the family). Explicit
+NON-members despite current docs placement: Conley spatial-HAC (an
+embedded inference method on estimators, not a diagnostic object) and
+other design elements listed under the README section. (A narrower
+classes-only tier with separate categories for HonestDiD/PowerAnalysis
+was drafted and REJECTED 2026-07-19: the boundary needed adjudication,
+and the family line above is the decided one.)
 
 **Mechanics - the marker lives on RESULT containers.** Consumers hold
 results, not entry points, so the `Diagnostic` marker base (shipping
@@ -193,9 +199,14 @@ return raw dicts (`check_parallel_trends` and variants,
 `summary()`/`to_dataframe()` today) participate in the DOCS family only,
 not the type contract; upgrading them to marked containers is optional
 Phase 2 follow-up work, not part of this contract. The Phase 2 gate
-[M-091] requires a dedicated roster test: every enumerated result type is
-`isinstance(result, Diagnostic)` and exposes the serialization pair, and
-representative ESTIMATOR results are NOT. Import paths do NOT move - the
+[M-091] requires a dedicated roster test AND consumer propagation: every
+enumerated result type is `isinstance(result, Diagnostic)` and exposes
+the serialization pair, representative ESTIMATOR results are NOT, and the
+CONSUMERS actually switch to the marker - BusinessReport rejects marked
+diagnostics as its primary estimator input by type (today it
+special-cases only Bacon by name), and `practitioner_next_steps()` routes
+marked diagnostics through diagnostic-specific handling instead of its
+unknown-result estimator fallback. Import paths do NOT move - the
 flat top-level namespace is kept (rejected: `diff_diff.diagnostics.*`
 moves). Zero new classes beyond the single marker.
 
