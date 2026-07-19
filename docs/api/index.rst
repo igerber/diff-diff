@@ -6,7 +6,7 @@ This section provides complete API documentation for all diff-diff modules.
 Estimators
 ----------
 
-Core estimator classes for DiD analysis:
+Core causal-inference estimator classes (the DiD family plus regression discontinuity):
 
 .. autosummary::
    :toctree: _autosummary
@@ -85,7 +85,7 @@ Result containers returned by estimators:
 Visualization
 -------------
 
-Plotting functions for results:
+Plotting functions and plot builders:
 
 .. autosummary::
    :toctree: _autosummary
