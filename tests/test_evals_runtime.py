@@ -2098,3 +2098,43 @@ def test_run_matrix_holds_model_constant_when_not_a_treatment(monkeypatch):
     ]
     with pytest.raises(ConfoundMismatch):
         run_matrix([_case()], cfgs, r, store, k=1, max_parallel=1, treatment_fields=("effort",))
+
+
+def test_smoke_default_selects_control_arm(tmp_path, monkeypatch):
+    """Bare `smoke` (no --configs) must exercise the sole role=control arm from
+    configs.json - a control flip must never leave the default smoking a stale
+    arm (local review P2 on the gpt-5.6 swap)."""
+    import json as _json
+
+    import run_eval
+    from engine.models import STRATUM_SYNTHETIC, Case
+
+    monkeypatch.setattr(run_eval, "RUNS_DIR", str(tmp_path / "runs"))
+    monkeypatch.setattr(
+        run_eval.CorpusLoader,
+        "load_cases",
+        lambda self, strata: [Case(id="c", stratum=STRATUM_SYNTHETIC)],
+        raising=True,
+    )
+    monkeypatch.setattr(run_eval.CorpusLoader, "verify", lambda self, case: None, raising=True)
+
+    class _Rev:
+        def cli_version(self):
+            return _pinned_cli_version()
+
+    monkeypatch.setattr(run_eval, "_build_reviewer", lambda repo_root: _Rev(), raising=True)
+
+    captured = {}
+
+    def _capture_run_matrix(cases, configs, *a, **k):
+        captured["config_ids"] = [c.id for c in configs]
+        return []
+
+    monkeypatch.setattr("engine.runner.run_matrix", _capture_run_matrix, raising=True)
+    rc = run_eval.cmd_smoke(_ns(configs=None, strata=None, k=1, limit=1, max_parallel=2))
+    assert rc == 0
+
+    live = _json.loads((_EVAL_ROOT / "config" / "configs.json").read_text())
+    control = [c["id"] for c in live["arms"] if c.get("role") == "control"]
+    assert captured["config_ids"] == control, "bare smoke must run exactly the control arm"
+    assert run_eval._control_id() == control[0]

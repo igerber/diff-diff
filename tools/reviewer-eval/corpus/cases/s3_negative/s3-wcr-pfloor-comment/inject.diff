@@ -1,5 +1,5 @@
 diff --git a/diff_diff/utils.py b/diff_diff/utils.py
-index a250873f..f3901b6e 100644
+index a250873f..45514929 100644
 --- a/diff_diff/utils.py
 +++ b/diff_diff/utils.py
 @@ -1019,14 +1019,15 @@ def wild_bootstrap_se(
@@ -14,8 +14,8 @@ index a250873f..f3901b6e 100644
 -    # p-vs-CI contradiction this estimator fixes. When the floor would cross
 -    # alpha we report the raw p-value (which is < alpha in exactly those cases),
 -    # so the significance verdict always agrees with the inverted CI.
-+    # Floor the reported p-value at the bootstrap resolution 1/(n_valid+1) so an
-+    # exact zero is never reported (a documented departure from boottest, which
++    # Floor the reported p-value at the bootstrap resolution 1/(n_valid+1) to
++    # avoid reporting an exact zero (a documented departure from boottest, which
 +    # can return p == 0) — but NEVER let the floor reach the significance level.
 +    # With very few valid draws the resolution floor can exceed alpha, and
 +    # flooring there would flip a bootstrap-significant result (0 outside the

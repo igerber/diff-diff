@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **CI + local AI PR-reviewer model upgraded `gpt-5.5` -> `gpt-5.6-sol` (effort stays
+  `xhigh`).** Validated empirically before the swap via the `tools/reviewer-eval/`
+  4-arm blinded campaign (66 runs over 11 cases; three independent identity-blind
+  graders; pre-registered gates in `DECISION_RULE.md`): gpt-5.6-sol@xhigh reliably
+  caught 7/10 ground-truth bugs vs gpt-5.5@xhigh's 2/10 (+2 unstable), with zero
+  catch regressions and three strict improvements including an S4 missed-bug probe;
+  gpt-5.6-sol@max showed no decisive gain over xhigh at ~1.5-2x latency (default
+  stays xhigh); gpt-5.6-terra tracked ~gpt-5.5. Touched pins: `ai_pr_review.yml`
+  `model:`, `openai_review.py` `DEFAULT_MODEL` / `_is_reasoning_model` / `PRICING`
+  (+gpt-5.6-sol 5/30, -terra 2.50/15, -luna 1/6 per 1M), `ai-review-local.md` doc
+  refs, and `configs.json` (control arm flipped to gpt-5.6-sol@xhigh; gpt-5.5
+  retained as the previous-production arm). Also fixes the `s3-wcr-pfloor-comment`
+  corpus fixture: the campaign's winning arms correctly flagged a comment overclaim
+  the fixture itself introduced ("an exact zero is never reported" vs the
+  floor >= alpha branch returning the raw p-value) - the reworded comment now uses
+  purpose-phrasing, restoring the case as a genuinely clean negative control.
+
 ### Added
 - **Reviewer-eval harness: N-arm matrix, blinded grading, corpus grown 2 -> 11
   (`tools/reviewer-eval/`, prep for the GPT-5.6 reviewer evaluation).**

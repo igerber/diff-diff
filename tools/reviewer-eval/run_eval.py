@@ -17,7 +17,7 @@ Pipeline:
 
 Usage:
   python tools/reviewer-eval/run_eval.py verify-corpus
-  python tools/reviewer-eval/run_eval.py smoke --configs A
+  python tools/reviewer-eval/run_eval.py smoke   # smokes the role=control arm
   python tools/reviewer-eval/run_eval.py run --configs A,B,C,D --k 2 --k-per C=1,D=1
   python tools/reviewer-eval/run_eval.py compare --subdir full --blinded
 """
@@ -151,6 +151,24 @@ def _make_configs(which: list) -> list:
     return [by_id[i] for i in which if i in by_id]
 
 
+def _control_id() -> str:
+    """The id of the sole ``role='control'`` arm (current production config).
+
+    ``smoke`` defaults to this arm, DERIVED at run time so a control flip in
+    configs.json can never leave the bare smoke command exercising a stale arm.
+    Fail-closed like ``_make_configs`` (exactly one control required).
+    """
+    raw = _load_configs()
+    arms = raw.get("arms") or []
+    controls = [c.get("id") for c in arms if isinstance(c, dict) and c.get("role") == "control"]
+    if len(controls) != 1 or not controls[0]:
+        raise ValueError(
+            f"configs.json must declare exactly one arm with role='control' "
+            f"(found {len(controls)})"
+        )
+    return controls[0]
+
+
 def _treatment_fields() -> tuple:
     """The declared treatment fields from configs.json (default: model only).
 
@@ -264,9 +282,12 @@ def cmd_smoke(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         return 1
-    configs = _resolve_configs(args.configs)
+    # Bare `smoke` exercises the CURRENT production arm (the sole role=control
+    # entry), derived at run time so a control flip can't drift the default.
+    configs_arg = args.configs if args.configs is not None else _control_id()
+    configs = _resolve_configs(configs_arg)
     if configs is None:
-        print(_bad_configs_msg(args.configs), file=sys.stderr)
+        print(_bad_configs_msg(configs_arg), file=sys.stderr)
         return 1
     if _verify_cases(loader, cases):
         return 1
@@ -571,7 +592,11 @@ def main() -> int:
     pv.set_defaults(func=cmd_verify_corpus)
 
     ps = sub.add_parser("smoke", help="tiny end-to-end run (1 case; first codex call)")
-    ps.add_argument("--configs", default="A")
+    ps.add_argument(
+        "--configs",
+        default=None,
+        help="arm ids to smoke (default: the role=control arm from configs.json)",
+    )
     ps.add_argument("--strata", nargs="*", default=None)
     ps.add_argument("--k", type=int, default=1)
     ps.add_argument(

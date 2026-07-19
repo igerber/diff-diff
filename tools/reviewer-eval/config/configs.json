@@ -1,25 +1,25 @@
 {
-  "_comment": "Reviewer arms for the gpt-5.5 -> gpt-5.6 evaluation. treatment_fields declares which Config fields are the experimental treatment; every other confound (sandbox / action_version / cli_version, plus effort when not declared) is pinned and asserted identical across arms, and every selected multi-arm subset must decompose into single-field contrasts (see engine.runner). cli_version pinned to codex-cli 0.144.5, verified live 2026-07-18 to accept gpt-5.5 @ xhigh (control), gpt-5.6-sol @ xhigh AND @ max, and gpt-5.6-terra @ xhigh (invalid efforts are rejected with a 400 enum error, so accepted == executed) - one CLI serves all arms and the runner asserts the live `codex --version` matches.",
+  "_comment": "Reviewer arms. The 2026-07 gpt-5.5 -> gpt-5.6 evaluation ran with A as control; after the GO verdict (66-run blinded 4-arm campaign, runs/gpt56/VERDICT.md) gpt-5.6-sol @ xhigh became production, so B now carries role=control and A is retained as the previous-production arm for future back-comparisons. treatment_fields declares which Config fields are the experimental treatment; every other confound (sandbox / action_version / cli_version, plus effort when not declared) is pinned and asserted identical across arms, and every selected multi-arm subset must decompose into single-field contrasts (see engine.runner). cli_version pinned to codex-cli 0.144.5, verified live 2026-07-18 to accept gpt-5.5 @ xhigh, gpt-5.6-sol @ xhigh AND @ max, and gpt-5.6-terra @ xhigh (invalid efforts are rejected with a 400 enum error, so accepted == executed) - one CLI serves all arms and the runner asserts the live `codex --version` matches.",
   "treatment_fields": ["model", "effort"],
   "arms": [
     {
       "id": "A",
-      "role": "control",
       "model": "gpt-5.5",
       "effort": "xhigh",
       "sandbox": "read-only",
       "action_version": "v1",
       "cli_version": "codex-cli 0.144.5",
-      "label": "control / current production"
+      "label": "previous production (pre-2026-07 swap)"
     },
     {
       "id": "B",
+      "role": "control",
       "model": "gpt-5.6-sol",
       "effort": "xhigh",
       "sandbox": "read-only",
       "action_version": "v1",
       "cli_version": "codex-cli 0.144.5",
-      "label": "primary candidate / proposed production default"
+      "label": "control / current production"
     },
     {
       "id": "C",

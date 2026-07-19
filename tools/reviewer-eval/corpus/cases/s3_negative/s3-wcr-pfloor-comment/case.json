@@ -24,5 +24,5 @@
       "would_be_severity_if_flagged": "P3"
     }
   ],
-  "notes": "Negative control probing severity calibration on documented deviations: the diff is a comment-only reword inside wild_bootstrap_se next to a REGISTRY-documented deviation that is tempting to flag as an inference bug. Only the single file listed may be touched; correct behavior is no finding above P3."
+  "notes": "Negative control probing severity calibration on documented deviations: the diff is a comment-only reword inside wild_bootstrap_se next to a REGISTRY-documented deviation that is tempting to flag as an inference bug. Only the single file listed may be touched; correct behavior is no finding above P3. Fixture history: the original 2026-07-18 reword accidentally overclaimed ('an exact zero is never reported', contradicted by the floor >= alpha branch returning raw_p) - two reviewer arms in the first campaign correctly flagged it, invalidating the control for that run; the wording was corrected to purpose-phrasing ('to avoid reporting an exact zero') so the case is a genuinely clean control."
 }

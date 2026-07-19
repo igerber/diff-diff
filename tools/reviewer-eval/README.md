@@ -36,9 +36,10 @@ tools/reviewer-eval/
 # 1. Verify the corpus materializes (no codex; fast)
 python tools/reviewer-eval/run_eval.py verify-corpus
 
-# 2. Smoke test (1 case, control arm, first real codex call); smoke each
-#    candidate arm too — `smoke --configs D` live-proves the max effort level
-python tools/reviewer-eval/run_eval.py smoke --configs A
+# 2. Smoke test (1 case, first real codex call). Bare `smoke` exercises the
+#    role=control arm (current production, derived from configs.json); smoke
+#    each candidate arm too — `smoke --configs D` live-proves the max effort
+python tools/reviewer-eval/run_eval.py smoke
 
 # 3. Full matrix — k=2 repeats on the primary A/B, single-shot probe arms
 python tools/reviewer-eval/run_eval.py run --subdir gpt56 --configs A,B,C,D --k 2 --k-per C=1,D=1
