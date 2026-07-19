@@ -427,8 +427,9 @@ def collect_due_problems(rows, current):
     - default-flip / warning-retirement / behavior rows past their flip version
       (``deprecated_in``) must be ``done``;
     - env-default rows past ``decision_due`` must be ``done`` (go/no-go recorded either way);
-    - ANY row past ``introduced_in`` may no longer be ``planned`` (the new surface must have
-      shipped - this is what gates introduce-only aliases);
+    - ANY row past ``introduced_in`` may no longer be ``planned`` OR ``evaluate`` (the new
+      surface must have shipped - this is what gates introduce-only aliases and the Phase 2
+      marker; evaluate cannot satisfy an introduction);
     - symbol rows that declare a ``warning`` and are past ``deprecated_in`` must no longer
       be ``planned`` (their shim must have shipped);
     - EARLY-REMOVAL GUARD: a row must NOT be terminal while its scheduled version
