@@ -1653,6 +1653,26 @@ class TestIncludeFilesConfinement:
 
 
 class TestIsReasoningModel:
+    def test_gpt56_family_is_reasoning(self, review_mod):
+        """The production default (gpt-5.6-sol) and its siblings must classify as
+        reasoning models - this drives the 900s timeout and token limits."""
+        for m in ("gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"):
+            assert review_mod._is_reasoning_model(m) is True
+
+    def test_gpt56_sol_timeout_resolves_to_reasoning(self, review_mod):
+        assert review_mod._resolve_timeout(None, "gpt-5.6-sol") == review_mod.REASONING_TIMEOUT
+
+    def test_gpt56_pricing_entries_present(self, review_mod):
+        """The three GPT-5.6 tiers priced per the 2026-07 OpenAI table (per 1M)."""
+        assert review_mod.PRICING["gpt-5.6-sol"] == (5.00, 30.00)
+        assert review_mod.PRICING["gpt-5.6-terra"] == (2.50, 15.00)
+        assert review_mod.PRICING["gpt-5.6-luna"] == (1.00, 6.00)
+
+    def test_default_model_is_gpt56_sol(self, review_mod):
+        """DEFAULT_MODEL is the production reviewer pin (kept in lockstep with the
+        CI workflow's model: input; the eval harness validated this pairing)."""
+        assert review_mod.DEFAULT_MODEL == "gpt-5.6-sol"
+
     def test_o3_is_reasoning(self, review_mod):
         assert review_mod._is_reasoning_model("o3") is True
 
