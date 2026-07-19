@@ -198,8 +198,7 @@ When adding new functionality, the source of truth is:
 | `docs/methodology/REGISTRY.md` | Academic foundations, equations, edge cases — **consult before methodology changes** |
 | `docs/v4-design.md` + `docs/v4-deprecations.yaml` | 4.0 program design spec + CI-enforced deprecation ledger — **consult before any 4.0-program PR**; deviations must edit both in the same diff |
 | `docs/doc-deps.yaml` | Source-to-documentation dependency map — **consult when any source file changes** |
-| `CONTRIBUTING.md` | Documentation requirements, test writing guidelines |
-| `.claude/commands/dev-checklists.md` | Checklists for params, methodology, warnings, reviews, bugs (run `/dev-checklists`) |
+| `CONTRIBUTING.md` | Documentation requirements, test writing guidelines, implementation guidelines |
 | `.claude/memory.md` | Debugging patterns, tolerances, API conventions (git-tracked) |
 | `diff_diff/guides/llms-practitioner.txt` | Baker et al. (2025) 8-step practitioner workflow for AI agents (accessible at runtime via `diff_diff.get_llm_guide("practitioner")`) |
 | `docs/performance-plan.md` | Performance optimization details |
@@ -220,8 +219,8 @@ When adding new functionality, the source of truth is:
   pending on the user.
 - For non-trivial tasks, use `EnterPlanMode`. Consult `docs/methodology/REGISTRY.md` for methodology changes.
 - When modifying source files in `diff_diff/`, consult `docs/doc-deps.yaml` to identify impacted documentation. Run `/docs-impact` to see the full list.
-- For bug fixes, grep for the pattern across all files before fixing.
-- Follow the relevant development checklists (run `/dev-checklists`).
+- For bug fixes, grep for the pattern across all files before fixing, and fix every
+  occurrence in the same PR (see CONTRIBUTING.md "Implementation Guidelines").
 - Before submitting: run `/pre-merge-check`, then `/ai-review-local` for pre-PR AI review.
 - Submit with `/submit-pr`.
 

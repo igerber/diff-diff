@@ -21,93 +21,77 @@ git ls-files --others --exclude-standard
 ```
 
 Categorize files into:
-- **Methodology files**: `diff_diff/*.py` (excluding `__init__.py`)
+- **Methodology files**: `diff_diff/**/*.py` (excluding `__init__.py`) — match
+  **recursively**. `diff_diff/` contains real packages (`visualization/`, `guides/`),
+  and a non-recursive `diff_diff/*.py` glob silently skips every file inside them,
+  so their pattern checks and test lookups never run.
 - **Test files**: `tests/*.py`
 - **Documentation files**: `*.md`, `*.rst`, `docs/**`
+- **Notebooks**: `docs/tutorials/*.ipynb`
 
-### 2. Run Automated Pattern Checks
+For a nested file, the name used for test discovery in Section 2.2 is the
+**package directory**, not the module: `diff_diff/visualization/_event_study.py`
+resolves on `visualization`.
 
-#### 2.1 Inference & Parameter Pattern Checks (for methodology files)
+### 2. Run Automated Pattern Checks (via the argv-safe helper)
 
-> **Canonical definitions** — This section is referenced by `/submit-pr` and `/push-pr-update`. Keep it as the single source of truth for methodology pattern checks.
+#### 2.1 Methodology pattern checks + test resolution — `premerge_scan.py`
 
-If any methodology files changed, run these pattern checks on the **changed methodology files only**:
+> **Canonical** — This section is referenced by `/submit-pr` and `/push-pr-update`.
+> The single source of truth for the methodology pattern checks is
+> `.claude/scripts/premerge_scan.py`. Do NOT hand-run greps over changed filenames.
 
-**Check A — Inline inference computation**:
+**Why a helper, not prose greps.** A filename is git-controlled data: git permits
+`$()`, backticks, quotes, spaces, and newlines in a path, so `grep pattern <files>` or
+`pytest <files>` over a changed path executes a payload like `diff_diff/$(touch x).py`.
+Prose "screens" leak (untracked paths, argument-vs-assignment forms, other commands).
+`premerge_scan.py` closes this structurally: it discovers changed files via
+`git … -z` through a subprocess **argv array** (never a shell), runs the pattern checks
+(A–D below) as **pure-Python regex over file content** (opening a file by path cannot
+execute a filename), resolves test coverage by matching names in Python, and **screens
+every path** — emitting only validated-safe run-lists. It is unit-tested
+(`tests/test_premerge_scan.py`) with staged *and* untracked `$(touch sentinel)`
+filenames asserting nothing executes.
+
+Run it:
+
 ```bash
-grep -n "t_stat[[:space:]]*=[[:space:]]*[^#]*/ *se" <changed-methodology-files> | grep -v "safe_inference"
+SCRATCH="$(git rev-parse --git-path premerge-scan)"; mkdir -p "$SCRATCH"
+python3 .claude/scripts/premerge_scan.py --scratch "$SCRATCH"
 ```
-Flag each match: "Consider using `safe_inference()` from `diff_diff.utils` instead of inline t_stat computation."
 
-**Check B — Zero-SE fallback to 0.0 instead of NaN**:
-```bash
-grep -En "if.*(se|SE).*>.*0.*else[[:space:]]+(0\.0|0)" <changed-methodology-files>
-```
-Flag each match: "SE=0 should produce NaN, not 0.0, for inference fields."
+- If it **exits 3**, it found a changed path containing shell metacharacters. It has
+  already excluded that path; surface the reported path(s) for manual review — a
+  methodology filename with `$()`/backticks is itself a red flag — and do not improvise
+  a shell command over it.
+- Report its pattern findings (file:line) to the user.
+- The safe, NUL-delimited test/notebook run-lists it writes
+  (`$SCRATCH/run-tests.z`, `$SCRATCH/run-notebooks.z`) are consumed argv-safely in
+  Section 4 — never re-derive filenames into a shell command yourself.
 
-**Check C — New `self.X` in `__init__` not in `get_params()`**:
-```bash
-# Extract new self.X assignments from diff
-git diff HEAD -- <changed-methodology-files> | grep "^+" | grep "self\.\w\+ = \w\+" | sed 's/.*self\.\(\w\+\).*/\1/' | sort -u
-# For each extracted param name, check if it appears in get_params()
-grep "get_params" <changed-methodology-files> -A 30 | grep "<param_name>"
-```
-Flag missing params: "New parameter `X` stored in `__init__` but not found in `get_params()` return dict."
+The checks the helper performs (kept here as the human-readable spec; the helper is the
+executable source of truth):
 
-**Check D — `compute_confidence_interval` called without NaN guard**:
-```bash
-grep -n "compute_confidence_interval" <changed-methodology-files> | grep -v "safe_inference\|if.*isfinite\|if.*se.*>"
-```
-Flag each match: "Verify CI computation handles non-finite SE (use `safe_inference()` or add guard)."
-
-**Report findings**: If matches found, list each with file:line and the recommended fix.
-
-#### 2.2 Test Existence Check
-
-For each changed methodology file, check if corresponding test file was also changed:
-
-| Methodology File | Expected Test File |
-|------------------|-------------------|
-| `diff_diff/staggered.py` | `tests/test_staggered.py` |
-| `diff_diff/estimators.py` | `tests/test_estimators.py` |
-| `diff_diff/twfe.py` | `tests/test_estimators.py` |
-| `diff_diff/synthetic_did.py` | `tests/test_estimators.py` |
-| `diff_diff/sun_abraham.py` | `tests/test_sun_abraham.py` |
-| `diff_diff/triple_diff.py` | `tests/test_triple_diff.py` |
-| `diff_diff/trop.py` | `tests/test_trop.py` |
-| `diff_diff/bacon.py` | `tests/test_bacon.py` |
-| `diff_diff/linalg.py` | `tests/test_linalg.py` |
-| `diff_diff/utils.py` | `tests/test_utils.py` |
-| `diff_diff/diagnostics.py` | `tests/test_diagnostics.py` |
-| `diff_diff/prep.py` | `tests/test_prep.py` |
-| `diff_diff/visualization.py` | `tests/test_visualization.py` |
-| `diff_diff/honest_did.py` | `tests/test_honest_did.py` |
-| `diff_diff/power.py` | `tests/test_power.py` |
-| `diff_diff/pretrends.py` | `tests/test_pretrends.py` |
-
-**Report**: List any methodology files without corresponding test changes.
+- **Check A** — inline inference: a line matching `t_stat = … / se` without
+  `safe_inference`. Fix: use `safe_inference()` from `diff_diff.utils`.
+- **Check B** — zero-SE fallback: `if se > 0 … else 0.0`. Fix: SE=0 → NaN, not 0.0.
+- **Check C** — a new `self.X` (from the diff) absent from `get_params()`.
+- **Check D** — `compute_confidence_interval` without a `safe_inference`/`isfinite`/
+  `if se >` guard.
+- **Test resolution** — for each changed methodology file, the test files whose name
+  contains its stem (leading underscore stripped) or its `doc-deps.yaml` group name;
+  reports any with no resolved suite so coverage is confirmed by hand rather than
+  silently skipped.
 
 #### 2.3 Docstring Check (heuristic)
 
-For changed `.py` files, run a quick check for functions without docstrings:
-```bash
-# Find public function definitions (heuristic check)
-grep -n "^def [^_]" <changed-py-files> | head -10
-grep -n "^    def [^_]" <changed-py-files> | head -10
-```
-
-Note: This is a heuristic. Verify docstrings exist for new public functions.
-
-#### 2.4 Docstring Staleness Check (for changed .py files)
-
-For functions with changed signatures, verify their docstrings are up to date:
-
-```bash
-# Find functions with changed signatures
-git diff HEAD -- <changed-py-files> | grep "^+.*def " | head -10
-```
-
-For each changed function, flag: "Verify docstring Parameters section matches updated signature for: `<function_name>`"
+Public functions in the changed `.py` files should have docstrings, and functions with
+changed signatures should have up-to-date `Parameters` sections. This is a heuristic —
+do **not** grep changed filenames in a shell (a path like `diff_diff/$(touch x).py`
+would execute). Read each changed methodology file (the safe list from Section 2.1)
+with the Read tool and scan for public `def`s lacking a docstring, and for `+`-added
+`def` lines in the diff whose docstring may be stale. Flag those for the user to
+confirm. Reading a file by path never executes its name.
 
 #### 2.5 Documentation Impact Check
 
@@ -202,26 +186,83 @@ Based on your changes to: <list of changed files>
 
 ### 4. Ask About Running Tests
 
-Use AskUserQuestion to offer test options:
+Use AskUserQuestion. **Targeted is the default** — run tests for the touched code
+areas, not the whole suite:
 
 ```
 Would you like to run tests now?
 
 Options:
-1. Yes - run full test suite (pytest)
-2. Yes - run only tests for changed files
-3. No - skip tests for now
+1. Yes - tests for changed files only (recommended)
+2. No - skip tests for now
+3. Yes - full test suite (slow; only when the change is broad)
 ```
 
-If user chooses option 1:
+For option 1, run the resolved suites `premerge_scan.py` wrote to
+`$SCRATCH/run-tests.z` (Section 2.1) — **argv-safe via `xargs -0`**, so a hostile test
+filename is passed as an argument, never reparsed by the shell:
+
 ```bash
-pytest
+SCRATCH="$(git rev-parse --git-path premerge-scan)"
+if [ -s "$SCRATCH/run-tests.z" ]; then
+  xargs -0 pytest < "$SCRATCH/run-tests.z"
+else
+  echo "No test files resolved for the changed modules."
+  # Offer: run the full suite (explicitly), name the tests to run, or skip.
+  # Do NOT run a bare `pytest` — it discovers and runs the ENTIRE suite, the opposite
+  # of the targeted run requested.
+fi
 ```
 
-If user chooses option 2, run targeted tests based on changed files:
+The list already includes every changed `tests/test_*.py` and the module-resolved
+suites (helper's job). Never run more than one pytest process at a time.
+
+### 4b. Validate Notebooks (only if notebooks changed)
+
+Skip this section entirely when no `docs/tutorials/*.ipynb` files changed.
+
+CI runs `pytest --nbmake docs/tutorials/` but is gated behind the `ready-for-ci`
+label, and the branch is frozen once that label is on — so notebook breakage has to
+be caught *here*, before submitting. Two notebooks are additionally excluded from
+the main CI job as too slow and are only ever executed locally:
+`06_power_analysis.ipynb` and `10_trop.ipynb`.
+
+Run the changed notebooks from the helper's safe list — **argv-safe via `xargs -0`**,
+never a filename pasted into the command:
+
 ```bash
-pytest tests/test_staggered.py tests/test_estimators.py  # (example)
+SCRATCH="$(git rev-parse --git-path premerge-scan)"
+[ -s "$SCRATCH/run-notebooks.z" ] && \
+  xargs -0 pytest --nbmake --nbmake-timeout=600 < "$SCRATCH/run-notebooks.z"
 ```
+
+`run-notebooks.z` already contains **every** changed notebook, `06_power_analysis.ipynb`
+and `10_trop.ipynb` included — so this one command covers them; do **not** run those two
+again separately. The point about 06/10 is only *why* local validation matters (CI skips
+them), not that they need a second invocation.
+
+**Exception — `26_composition_drift_calibration.ipynb` needs a dependency the dev
+extra does not provide.** It imports `balance`, which is not in `[dev]`; CI runs it
+in a separate interop job that installs `balance>=0.21`. Running it in a normal dev
+environment fails on the import, which is an environment problem masquerading as a
+notebook regression.
+
+If that notebook is among the changed set, check first and ask before installing:
+
+```bash
+python -c "import balance" 2>/dev/null && echo "balance: present" || echo "balance: MISSING"
+```
+
+If missing, offer to `pip install "balance>=0.21"` or to skip that one notebook and
+let the CI interop job cover it. Do not install it silently — it is a heavy
+dependency that is deliberately absent from `[dev]`.
+
+`nbmake` executes notebooks **without writing outputs back**, so there is no
+clear-outputs cleanup step and nothing dirty can reach a commit. Use it rather than
+`jupyter nbconvert --execute --inplace`, which mutates files in place and is not a
+dependency of this project.
+
+Notebook runs take minutes. Ask before starting, and report per-notebook pass/fail.
 
 ### 5. Report Summary
 
@@ -246,7 +287,11 @@ Review the checklist items above before running /submit-pr
 
 ## Notes
 
-- This skill is read-only - it only analyzes and reports, doesn't modify files
+- Non-mutating: analyses and reports only. Running tests and `--nbmake` does not
+  modify tracked files.
 - Run this BEFORE `/submit-pr` to catch issues early
 - Pattern checks are heuristics - review flagged items manually to confirm
 - If pattern checks find issues, fix them before submitting
+- Check B (zero-SE fallback) currently matches nothing repo-wide. That is the point:
+  it is a regression guard against reintroducing an anti-pattern that was eradicated,
+  not a dead check. Keep it.

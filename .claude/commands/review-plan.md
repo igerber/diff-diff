@@ -79,9 +79,10 @@ Read the project's `CLAUDE.md` file to understand:
 - Key design patterns (sklearn-like API, formula interface, results objects, etc.)
 - Estimator inheritance map
 - Testing conventions
-- Key reference file pointers (methodology registry, development checklists, etc.)
+- Key reference file pointers (methodology registry, etc.)
 
-Also read `.claude/commands/dev-checklists.md` for development checklists.
+Also read `CONTRIBUTING.md` for documentation requirements, test writing
+guidelines, and implementation guidelines.
 
 If the plan modifies estimator math, standard error formulas, inference logic, or edge-case handling, also read `docs/methodology/REGISTRY.md` to understand the academic foundations and reference implementations for the affected estimator(s).
 
@@ -353,11 +354,16 @@ Present the review in the following format. Number each issue sequentially withi
 
 ---
 
-## Checklist Gaps
+## Convention Gaps
 
-Cross-reference against the relevant development checklists in `.claude/commands/dev-checklists.md`. List which checklist items are not addressed by the plan.
+Cross-reference against `CLAUDE.md` and `CONTRIBUTING.md`. List project conventions
+the plan does not account for.
 
-[Identify which checklist applies (e.g., "Adding a New Parameter to Estimators", "Implementing Methodology-Critical Code", "Fixing Bugs Across Multiple Locations") and list any items from that checklist that the plan doesn't cover.]
+[Draw on the conventions that actually apply to this plan — e.g. the estimator
+inheritance map and `get_params`/`set_params` propagation for a new parameter;
+`safe_inference()` for inference fields; the deviation-labelling rules for
+methodology changes; grep-all-sites-then-fix-in-one-PR for pattern bugs; the
+documentation surfaces in "README discipline". List only what the plan misses.]
 
 **Registry Alignment** (if methodology files changed):
 - [ ] Plan equations match REGISTRY.md (or deviations documented)

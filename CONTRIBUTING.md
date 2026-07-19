@@ -145,3 +145,44 @@ Example format (RST):
 
 Use `assert_nan_inference()` from conftest.py to validate ALL inference fields are
 NaN-consistent. Don't check individual fields separately.
+
+## Implementation Guidelines
+
+### Adding an estimator parameter
+
+Storing a parameter is the easy half. Before implementing, grep for every place it
+will have to be honoured:
+
+```bash
+grep -rn "self\.<param>" diff_diff/<module>.py
+```
+
+A new parameter is only complete when it is:
+
+- stored on `self` and returned by `get_params()` (and accepted by `set_params()`)
+- applied in **every** aggregation mode — `simple`, `event_study`, and `group`
+- applied in the **bootstrap/inference** paths, not just the analytical one
+- reflected on the result object, so `to_dict()`/`summary()` do not misreport it
+- propagated to the estimators that inherit it (see the inheritance map in
+  `CLAUDE.md` — subclasses of `DifferenceInDifferences` inherit automatically,
+  standalone estimators must each be updated)
+
+The recurring bug is a parameter that works in the default aggregation and is
+silently ignored in one of the others. The same trace applies when adding a new
+*mode* or code path: follow it through aggregation, bootstrap, and results before
+declaring it done.
+
+### Protecting arithmetic
+
+Wrap **all** related operations in `np.errstate()`, not just the one that raised.
+A guard around the final division still lets an upstream matrix multiply or
+subtraction emit the warning. Include division, matrix multiplication, and any
+operation that can overflow or underflow.
+
+### Fixing a pattern that appears in more than one place
+
+Grep for every occurrence **before** fixing any of them, and fix them all in the
+same PR. Incremental fixes across review rounds are how a pattern bug survives:
+each round looks resolved, and the next reviewer finds the sibling you missed.
+If the same class of finding comes back a third time, stop patching sites and
+name the invariant instead.
