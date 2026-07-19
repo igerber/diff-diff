@@ -5677,7 +5677,7 @@ Domain estimation preserving full design structure.
   estimator path does so (domain padding goes through the zero-padded
   full-design cell variance in `prep.py`, which retains the real PSU layout).
   A former TODO proposed counting only positive-weight PSUs to force SE
-  invariance; that was waived (TODO § "Won't-fix / waived") because it would
+  invariance; that was waived (DEFERRED.md § "Decision record — won't-fix / waived") because it would
   break this documented R parity.
 - **Deviation from R:** `subpopulation()` preserves all strata in df
   computation even when a stratum has no positive-weight observations,

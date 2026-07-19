@@ -2153,8 +2153,8 @@ class TestZeroWeightPsuConventionWaiver:
     ``(1 - f_h)*n_PSU_h/(n_PSU_h - 1)`` and PSU-mean centering — the full-design
     domain estimator of Lumley (2004 §3.4) / R ``survey::svyrecvar(subset())``.
     A former TODO proposed "count only positive-weight PSUs" to force the survey
-    SE to be invariant to zero-weight rows; that was **waived** (TODO
-    § "Won't-fix / waived"; REGISTRY § "Subpopulation Analysis") because it would
+    SE to be invariant to zero-weight rows; that was **waived** (DEFERRED.md
+    § "Decision record — won't-fix / waived"; REGISTRY § "Subpopulation Analysis") because it would
     break the documented R parity. These tests trip if that change is ever made:
     the proposed fix would collapse the subpopulation SE onto the naive-subset SE.
     """
@@ -2250,7 +2250,7 @@ class TestZeroWeightPsuConventionWaiver:
         assert rel_gap > 1e-3, (
             f"survey SE became invariant to subpopulation zeroing "
             f"(rel_gap={rel_gap:.2e}); the full-design Lumley convention "
-            f"(TODO § Won't-fix / waived) appears to have been reverted."
+            f"(DEFERRED.md § Decision record — won't-fix / waived) appears to have been reverted."
         )
 
     def test_stratified_meat_counts_zero_score_psu_in_full_design(self):
