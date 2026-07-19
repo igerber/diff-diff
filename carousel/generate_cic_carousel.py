@@ -663,19 +663,38 @@ class CiCCarouselPDF(FPDF):
         ax.set_xlim(0, 1)
         ax.set_ylim(0, 1)
 
-        ax.text(
-            0.5,
-            0.80,
-            r"$F^{N}_{11}(y) \;=\; F_{10}\left(F_{00}^{-1}\left(F_{01}(y)\right)\right)$",
-            fontsize=31,
-            ha="center",
-            va="center",
-            color=OCEAN_HEX,
-        )
-        # Step annotations, inside-out (coral -> amber -> teal).
+        eq_y = 0.80
+        fs = 31
+        full = r"$F^{N}_{11}(y) \;=\; F_{10}(F_{00}^{-1}(F_{01}(y)))$"
+        ax.text(0.5, eq_y, full, fontsize=fs, ha="center", va="center", color=OCEAN_HEX)
+
+        # Measure sub-expression anchors so each arrow lands on the piece it
+        # names (hand-tuned coordinates drifted - arrow 3 pointed at the "=").
+        fig.canvas.draw()
+        renderer = fig.canvas.get_renderer()
+
+        def _width(s):
+            t = ax.text(0, -5, s, fontsize=fs, alpha=0)
+            w = t.get_window_extent(renderer).width
+            t.remove()
+            return w
+
+        w_full = _width(full)
+        x_left_disp = ax.transAxes.transform((0.5, eq_y))[0] - w_full / 2.0
+        inv = ax.transAxes.inverted()
+
+        def _anchor(prefix, comp):
+            xa = x_left_disp + _width(prefix) + _width(comp) / 2.0
+            return float(inv.transform((xa, 0.0))[0])
+
+        x_f10 = _anchor(r"$F^{N}_{11}(y) \;=\; $", r"$F_{10}$")
+        x_f00 = _anchor(r"$F^{N}_{11}(y) \;=\; F_{10}($", r"$F_{00}^{-1}$")
+        x_f01 = _anchor(r"$F^{N}_{11}(y) \;=\; F_{10}(F_{00}^{-1}($", r"$F_{01}(y)$")
+        tip_y = eq_y - 0.065
+
         ax.annotate(
             "1. the rank of y among\ncontrol-post outcomes",
-            xy=(0.685, 0.72),
+            xy=(x_f01, tip_y),
             xytext=(0.83, 0.44),
             fontsize=13.5,
             color=CORAL_HEX,
@@ -685,7 +704,7 @@ class CiCCarouselPDF(FPDF):
         )
         ax.annotate(
             "2. the same rank's outcome\nin control-pre",
-            xy=(0.545, 0.72),
+            xy=(x_f00, tip_y),
             xytext=(0.5, 0.40),
             fontsize=13.5,
             color=AMBER_HEX,
@@ -695,7 +714,7 @@ class CiCCarouselPDF(FPDF):
         )
         ax.annotate(
             "3. how many treated-pre\ncustomers sit below it",
-            xy=(0.40, 0.76),
+            xy=(x_f10, tip_y),
             xytext=(0.17, 0.44),
             fontsize=13.5,
             color=TEAL_HEX,
@@ -1255,14 +1274,17 @@ class CiCCarouselPDF(FPDF):
         self.multi_cell(
             WIDTH - 70,
             7.8,
-            "Want the full walkthrough? Tutorial 27 in the docs reproduces this"
-            " example end to end - and every number in this deck is locked by"
-            " drift tests in CI.",
+            "Want the full walkthrough? Tutorial 27 reproduces this example" " end to end:",
             align="C",
         )
+        self.centered_text(
+            216,
+            "diff-diff.readthedocs.io/en/latest/tutorials/27_cic_distributional_effects.html",
+            size=12.5,
+            color=TEAL_DARK,
+        )
 
-        self.centered_text(238, "github.com/igerber/diff-diff", size=16, color=OCEAN)
-        self.centered_text(256, "diff-diff.readthedocs.io", size=16, color=OCEAN)
+        self.centered_text(244, "github.com/igerber/diff-diff", size=16, color=OCEAN)
 
         self.set_xy(0, 280)
         self.set_font("Helvetica", "I", 12)
