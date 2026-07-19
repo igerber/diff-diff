@@ -2,6 +2,8 @@
    :description: Get started with diff-diff for Difference-in-Differences analysis in Python. Step-by-step tutorial covering basic DiD, formulas, covariates, and robust inference.
    :keywords: difference-in-differences tutorial, DiD python getting started, causal inference quickstart
 
+.. _getting-started:
+
 Quickstart
 ==========
 

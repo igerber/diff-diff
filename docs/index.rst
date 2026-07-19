@@ -173,6 +173,8 @@ Supported Estimators
      - Wooldridge (2023, 2025) extended TWFE (ETWFE) via saturated OLS or QMLE
    * - :class:`~diff_diff.ChangesInChanges`
      - Athey & Imbens (2006) distributional DiD with quantile treatment effects
+   * - :class:`~diff_diff.QDiD`
+     - Quantile DiD comparison estimator applying DiD quantile-by-quantile
    * - :class:`~diff_diff.RegressionDiscontinuity`
      - Calonico, Cattaneo & Titiunik (2014) sharp/fuzzy RD with robust bias-corrected inference
    * - :class:`~diff_diff.TROP`
