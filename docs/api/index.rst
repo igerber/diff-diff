@@ -6,7 +6,8 @@ This section provides complete API documentation for all diff-diff modules.
 Estimators
 ----------
 
-Core causal-inference estimator classes (the DiD family plus regression discontinuity):
+Core causal-inference estimator classes - the DiD family plus synthetic control,
+regression discontinuity, and the Goodman-Bacon decomposition diagnostic:
 
 .. autosummary::
    :toctree: _autosummary
