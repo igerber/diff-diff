@@ -149,7 +149,10 @@ When adding new functionality, the source of truth is:
 - **`diff_diff/guides/llms.txt`** for the AI-agent contract (one-line catalog entry per estimator with paper citation + RTD link). This file is bundled in the wheel and published on RTD via `docs/conf.py` `html_extra_path`.
 - **`docs/api/*.rst`** for full API reference.
 - **`docs/references.rst`** for scholarly citations.
-- **`docs/tutorials/*.ipynb`** for hands-on examples.
+- **`docs/tutorials/*.ipynb`** for hands-on examples. New notebooks are registered in
+  `docs/tutorials/index.rst` (toctree entry with a short display label + a card in the
+  matching group), NOT in `docs/index.rst` - the root toctree lists only the 5 section
+  landing pages so the navbar stays at 5 links.
 - **`CHANGELOG.md`** for release notes.
 - **`README.md`** for ONE LINE in the `## Estimators` flat catalog (or `## Diagnostics & Sensitivity` for diagnostic-class features). Do NOT add usage examples, parameter tables, per-estimator sections, or full bibliographies.
 

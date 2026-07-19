@@ -31,6 +31,7 @@ extensions = [
     "sphinx_sitemap",
     "nbsphinx",
     "myst_parser",
+    "sphinx_design",
 ]
 
 # MyST renders the two in-site methodology markdown pages (REGISTRY.md,
@@ -93,7 +94,10 @@ napoleon_attr_annotations = True
 # -- Options for HTML output -------------------------------------------------
 html_theme = "pydata_sphinx_theme"
 html_static_path = ["_static"]
-html_title = "diff-diff: Difference-in-Differences Causal Inference for Python"
+html_title = "diff-diff documentation"
+# The homepage is a full-width card-grid landing page; suppress the (empty)
+# primary sidebar rail there. Matches only the root docname.
+html_sidebars = {"index": []}
 # Use RTD's canonical URL when available; fall back to stable for local builds.
 _canonical_url = os.environ.get(
     "READTHEDOCS_CANONICAL_URL",

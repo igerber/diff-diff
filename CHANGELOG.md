@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **Documentation site restructured around 5 top-level sections** (Getting Started /
+  Practitioner Guide / Tutorials / User Guide / API Reference). The previous flat
+  navigation put 40 pages into the pydata-sphinx-theme header, leaving most of the
+  site (including the API reference) reachable only through an oversized "More"
+  dropdown; the navbar now shows exactly the 5 sections, each with a card-grid
+  landing page (new `sphinx-design` docs dependency). Tutorials get a grouped index
+  at `tutorials/index.html` with short sidebar labels, and tutorial pages now show
+  their sibling notebooks in the left sidebar. All existing page URLs are unchanged.
 - **Internal: dev tooling pins bumped** (Dependabot group + manual lint.yml sync):
   `black==26.5.1`, `ruff==0.15.21`, `mypy==2.3.0` in both the `dev` extra and the
   Lint CI workflow. mypy >= 2.2 can no longer target Python 3.9, so

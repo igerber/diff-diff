@@ -54,99 +54,56 @@ Quick Links
 - :doc:`r_comparison` - Coming from R?
 - :doc:`api/index` - Full API reference
 
-.. toctree::
-   :maxdepth: 2
-   :caption: For Data Scientists
-   :hidden:
+Explore the Documentation
+-------------------------
 
-   Practitioner Guide <practitioner_getting_started>
-   Decision Tree <practitioner_decision_tree>
+.. grid:: 1 2 2 3
+   :gutter: 3
 
-.. toctree::
-   :maxdepth: 2
-   :caption: Getting Started
-   :hidden:
+   .. grid-item-card:: Getting Started
+      :link: getting_started
+      :link-type: doc
 
-   quickstart
-   Estimator Guide <choosing_estimator>
-   troubleshooting
-   references
+      Install, run your first DiD analysis, and pick the right estimator
+      for your design.
 
-.. toctree::
-   :maxdepth: 1
-   :caption: Tutorials: Business Applications
-   :hidden:
+   .. grid-item-card:: Practitioner Guide
+      :link: practitioners
+      :link-type: doc
 
-   tutorials/17_brand_awareness_survey
-   tutorials/18_geo_experiments
-   tutorials/19_dcdh_marketing_pulse
-   tutorials/20_had_brand_campaign
-   tutorials/21_had_pretest_workflow
-   tutorials/22_had_survey_design
-   tutorials/23_spillover_tva
-   tutorials/26_composition_drift_calibration
-   tutorials/27_cic_distributional_effects
+      Measuring campaign impact? A business-first path through DiD, no
+      econometrics background required.
 
-.. toctree::
-   :maxdepth: 1
-   :caption: Tutorials: Fundamentals
-   :hidden:
+   .. grid-item-card:: Tutorials
+      :link: tutorials/index
+      :link-type: doc
 
-   tutorials/01_basic_did
-   tutorials/02_staggered_did
-   tutorials/03_synthetic_did
-   tutorials/08_triple_diff
-   tutorials/09_real_world_examples
+      28 hands-on notebooks, from basic 2x2 DiD to survey-weighted and
+      spillover-aware designs.
 
-.. toctree::
-   :maxdepth: 1
-   :caption: Tutorials: Advanced Methods
-   :hidden:
+   .. grid-item-card:: User Guide
+      :link: user_guide
+      :link-type: doc
 
-   tutorials/10_trop
-   tutorials/11_imputation_did
-   tutorials/12_two_stage_did
-   tutorials/13_stacked_did
-   tutorials/14_continuous_did
-   tutorials/15_efficient_did
-   tutorials/16_survey_did
-   tutorials/16_wooldridge_etwfe
-   tutorials/25_synthetic_control_policy
+      References, R and Python comparisons, benchmarks, and the
+      methodology registry.
 
-.. toctree::
-   :maxdepth: 1
-   :caption: Tutorials: Study Design
-   :hidden:
+   .. grid-item-card:: API Reference
+      :link: api/index
+      :link-type: doc
 
-   tutorials/04_parallel_trends
-   tutorials/05_honest_did
-   tutorials/06_power_analysis
-   tutorials/07_pretrends_power
-   tutorials/24_staggered_vs_collapsed_power
-
-.. toctree::
-   :maxdepth: 1
-   :caption: Comparisons & Benchmarks
-   :hidden:
-
-   r_comparison
-   python_comparison
-   benchmarks
+      Complete reference for all estimators, results classes, diagnostics,
+      and utilities.
 
 .. toctree::
    :maxdepth: 2
-   :caption: API Reference
    :hidden:
 
-   api/index
-
-.. toctree::
-   :maxdepth: 1
-   :caption: Methodology
-   :hidden:
-
-   methodology/REGISTRY
-   methodology/REPORTING
+   Getting Started <getting_started>
+   Practitioner Guide <practitioners>
+   Tutorials <tutorials/index>
+   User Guide <user_guide>
+   API Reference <api/index>
 
 What is Difference-in-Differences?
 ----------------------------------

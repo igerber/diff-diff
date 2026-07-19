@@ -118,7 +118,7 @@ jobs:
         # docs/conf.py imports diff_diff via sys.path from checked-out source.
         # ipython provides the 'ipython3' Pygments lexer that nbsphinx uses
         # for notebook code cells; without it -W fires highlighting_failure.
-        run: pip install "numpy>=1.20.0" "pandas>=1.3.0" "scipy>=1.10" "sphinx>=6.0" "pydata-sphinx-theme>=0.16.1" "sphinxext-opengraph>=0.9" "sphinx-sitemap>=2.5" "nbsphinx>=0.9" "myst-parser>=2.0" "matplotlib>=3.5" "ipython>=8.0"
+        run: pip install "numpy>=1.20.0" "pandas>=1.3.0" "scipy>=1.10" "sphinx>=6.0" "pydata-sphinx-theme>=0.16.1" "sphinxext-opengraph>=0.9" "sphinx-sitemap>=2.5" "nbsphinx>=0.9" "myst-parser>=2.0" "sphinx-design>=0.6.1" "matplotlib>=3.5" "ipython>=8.0"
 
       - name: Build docs with warnings as errors
         # SPHINXOPTS="-W" turns every Sphinx warning into a build failure.
@@ -154,7 +154,7 @@ jobs:
         # not run a Sphinx build (sphinx-build covers full rendering on 3.11).
         # Failure here means the docs floor declared in pyproject.toml /
         # .readthedocs.yaml / above is not installable on Python 3.9.
-        run: pip install "numpy>=1.20.0" "pandas>=1.3.0" "scipy>=1.10" "sphinx>=6.0" "pydata-sphinx-theme>=0.16.1" "sphinxext-opengraph>=0.9" "sphinx-sitemap>=2.5" "nbsphinx>=0.9" "myst-parser>=2.0" "matplotlib>=3.5" "ipython>=8.0"
+        run: pip install "numpy>=1.20.0" "pandas>=1.3.0" "scipy>=1.10" "sphinx>=6.0" "pydata-sphinx-theme>=0.16.1" "sphinxext-opengraph>=0.9" "sphinx-sitemap>=2.5" "nbsphinx>=0.9" "myst-parser>=2.0" "sphinx-design>=0.6.1" "matplotlib>=3.5" "ipython>=8.0"
 
       - name: Confirm pydata-sphinx-theme version
         # Surface the resolved version in the log for future debugging.

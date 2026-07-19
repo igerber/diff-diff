@@ -82,6 +82,9 @@ docs = [
     "sphinx-sitemap>=2.5",
     "nbsphinx>=0.9",
     "myst-parser>=2.0",
+    # sphinx-design floor stays at 0.6.1: 0.7.0 requires Python >=3.11 and
+    # the docs dep set must still resolve on the 3.9 CI smoke job.
+    "sphinx-design>=0.6.1",
     "matplotlib>=3.5",
     # ipython provides the 'ipython3' Pygments lexer used by nbsphinx for
     # notebook code cells; without it Sphinx emits highlighting_failure

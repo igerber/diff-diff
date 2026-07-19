@@ -61,6 +61,10 @@ If you find yourself adding a usage example, a parameter table, or a multi-parag
 3. **`docs/tutorials/*.ipynb`** - Update relevant tutorial or create new one:
    - Working code examples
    - Explanation of when/why to use the feature
+   - New notebooks are registered in `docs/tutorials/index.rst` (NOT `docs/index.rst`):
+     add a toctree entry with a short display label to the matching group
+     (Business Applications / Fundamentals / Advanced Methods / Study Design)
+     plus a `grid-item-card` in that group's card grid
 
 4. **`docs/references.rst`** (bibliography source of truth) - Add:
    - Full citation under the appropriate sub-section (matches the `### Subsection` headings already in that file)
