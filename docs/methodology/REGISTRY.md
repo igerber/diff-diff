@@ -1876,6 +1876,7 @@ The paper text states a stricter bound (T_min + 1) but the R code by the co-auth
 - [x] Anticipation parameter support
 - [x] Never-treated encoding (0 and inf)
 - [x] Survey design support (Phase 3): Q-weights compose multiplicatively with survey weights; TSL vcov on composed weights; survey design columns propagated through sub-experiments. Replicate weights supported via estimator-level refit with Q-weight composition (see Replicate Weight Variance section).
+- **Note (intercept SEs excluded from R parity):** for the base StackedDiD `clubSandwich` parity fixture (not the CBWSDID `cbwsdid` fixture below), stacked event-study *interaction* SEs match R at ~2e-13, but the regression *intercept* SE differs from R by a measured ~0.3% — a nuisance-parameter reference-cell/parameterization gap, not machine-precision lockable. Surfacing `se_cr1_intercept`/`se_cr2_intercept` would add an unasserted, R-divergent public field, so intercept SEs are deliberately not exposed and are excluded from the parity lock (`tests/test_methodology_stacked_did.py`; SE-audit C1/(c) decision, 2026-07-09).
 - **Note:** Survey weights compose multiplicatively with Q-weights for StackedDiD; only `weight_type="pweight"` (default) is supported — `fweight` and `aweight` are rejected because Q-weight composition changes weight semantics (non-integer for fweight, non-inverse-variance for aweight)
 
 ### Covariate balancing (CBWSDID)
