@@ -10,7 +10,7 @@ Parity targets:
 - hc2_bm → R clubSandwich::vcovCR(cluster=..., type="CR2") + coef_test$df_Satt at atol=1e-10 (full-dummy)
 - hc1 event-study e=0 → R fixest::sunab + cluster=~unit at atol=5e-3
   (within-transform; documented HC1 finite-sample-correction deviation,
-  see REGISTRY.md SunAbraham section and TODO.md row tracking the gap)
+  see REGISTRY.md SunAbraham section and DEFERRED.md row tracking the gap)
 """
 
 import json
@@ -243,7 +243,7 @@ class TestSunAbrahamRParity:
         within-transformed design columns (n / (n - k_dm)) — the SE values
         differ by ~1-2% (typically ~2e-3 in absolute terms on this panel).
         The IW aggregation step is otherwise identical. Tolerance set to
-        atol=5e-3 (matches REGISTRY.md deviation note and the TODO.md
+        atol=5e-3 (matches REGISTRY.md deviation note and the DEFERRED.md
         follow-up row that tracks harmonizing the finite-sample correction).
 
         Tests the IW-aggregated event-study coefficient (matches fixest's
@@ -256,7 +256,7 @@ class TestSunAbrahamRParity:
         if r_se is None or (isinstance(r_se, float) and np.isnan(r_se)):
             pytest.skip("fixest::sunab parity SE missing from golden")
         # Absolute tolerance pin matching the documented deviation; harmonized
-        # with REGISTRY.md SunAbraham deviation note and TODO.md row.
+        # with REGISTRY.md SunAbraham deviation note and DEFERRED.md row.
         assert abs(sa_se - r_se) < 5e-3, (
             f"SA hc1 event-study e=0 SE {sa_se:.6f} diverges from fixest::sunab "
             f"event-study SE {r_se:.6f} by {abs(sa_se - r_se):.2e} > 5e-3. "

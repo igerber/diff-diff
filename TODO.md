@@ -1,0 +1,47 @@
+# Development TODO
+
+The actionable backlog: work with a clear implementation path and no external blocker.
+**Pull from here, top row first** — rows are priority-ordered (higher priority first)
+within each section. Effort (`Quick` ≤1 day · `Mid` 3-10 CI rounds · `Heavy`
+derivation-free but large) is noted per row; `Priority` is carried from the originating
+PR review; the `Origin` column points to the originating PR number or review tag.
+
+Related tracking surfaces:
+
+- [ROADMAP.md](ROADMAP.md) — the public feature roadmap.
+- [DEFERRED.md](DEFERRED.md) — the deferral & decision registry: blocked / parked work
+  and decisions on the record. **Do not pull from there without first clearing the named
+  blocker.**
+- [docs/dev-status.md](docs/dev-status.md) — monitoring and current-state notes
+  (module sizes, SE / typing posture, platform quirks).
+
+## Actionable Backlog
+
+### Methodology / correctness
+
+| Issue | Location | Origin | Effort | Priority |
+|-------|----------|--------|--------|----------|
+| `SyntheticControl` conformal (CWZ 2021) AR / innovation-permutation path (Lemmas 5-7) for time-series proxies — the residual-permutation shortcut is only valid for time-permutation-invariant proxies (SC/Lasso/DiD); an AR proxy needs innovation permutation. One-sided alternatives (Remark 1 signed statistic) and proxy covariates (eq 4/6 note) SHIPPED 2026-07. | `diff_diff/conformal.py`, `diff_diff/synthetic_control_results.py` | CWZ-2021 | Heavy | Low |
+| `ContinuousDiD` CGBS-2024 extensions. (a) `covariates=` kwarg — **DONE (reg/dr)**; (b) discrete-treatment saturated regression (`treatment_type="discrete"`) — **DONE**; (c) lowest-dose-as-control per Remark 3.1 when `P(D=0)=0` (`control_group="lowest_dose"`) — **DONE** (discrete + continuous mass-point, single-cohort; estimand `ATT(d)−ATT(d_L)`; see REGISTRY Note #7). Remaining (all deferred `NotImplementedError`, documented): `estimation_method="ipw"` on the dose curve (scalar-adjustment / degenerate); `covariates=` × `survey_design=` (weighted OR + weighted nuisance IF); multi-cohort **heterogeneous-support** discrete aggregation (support-aware: average each dose only over the cohorts that observe it); **multi-cohort `lowest_dose`** (within-cohort `d_L` reference + support-aware cross-cohort aggregation); and **`covariates=` × `lowest_dose`** (conditional-PT-relative-to-`d_L` estimand). Single-cohort / 2-period / shared-support multi-cohort are supported. | `continuous_did.py` | CGBS-2024 | Heavy | Low |
+
+### Performance
+
+Consolidates the former `#### Performance` tech-debt table and the standalone
+`## Performance Optimizations` section. (Speculative / low-value perf notes — numba JIT,
+generic sparse-FE, QR+SVD rank-detection redundancy, `check_finite` bypass — moved to
+[DEFERRED.md → Parked](DEFERRED.md#parked--pending-user-demand--out-of-scope).)
+
+| Issue | Location | Origin | Effort | Priority |
+|-------|----------|--------|--------|----------|
+| `EfficientDiD` conditional path: the largest remaining O(n) stage is the sieve/nuisance construction outside the tiled pass (~9s at 10k). (The `_ridge_solve_weights` Python-prep shave landed 2026-07-07 — the `omega_stack[rest]` fancy-index copy and tail scatter are skipped when no row is zero-masked, byte-identical outputs; the `zero_mask` abs scan itself remains, needed for correctness.) | `efficient_did_covariates.py` | CS-scaling | Mid | Low |
+| `_rq_fit` LP assembly is dense (`A_eq = [X, I, -I]` with dense identity blocks, rebuilt per cell fit): a `scipy.sparse` construction would cut memory and likely HiGHS time for large cells / bootstrap-heavy covariate CiC/QDiD fits. CAVEAT before doing it: a different matrix representation can change HiGHS's vertex selection at degenerate/tied QR optima - end-to-end covariate goldens are tie-selection-gated (fine), but the `qr_cases` tight coefficient matches may shift to the equal-loss branch; re-run the parity suite and re-calibrate if needed. | `diff_diff/changes_in_changes.py::_rq_fit` | covariates PR | Quick | Low |
+| Evaluate flipping `DIFF_DIFF_SOLVE_OLS_FASTPATH` default-ON after an opt-in soak (the 2026-07 certified normal-equations Cholesky fast path, both backends). A flip needs: golden/parity-suite recapture at the tol-bounded posture (fitted ~1e-8 abs / SE ~1e-6 rel — the default today is byte-pinned in several benchmark conventions), certification-rate telemetry across real workloads (any decline is silent-correct but forfeits the speedup), and the staged default-flip protocol used for `df_convention` (v4-class change). Lifecycle tracked in docs/v4-deprecations.yaml (M-008). | `diff_diff/linalg.py::_resolve_solve_ols_fastpath`, `rust/src/linalg.rs::solve_ols_chol` | CS-scaling | Mid | Low |
+
+### Testing / docs
+
+| Issue | Location | Origin | Effort | Priority |
+|-------|----------|--------|--------|----------|
+| Align the four legacy dataset loaders (`load_card_krueger`, `load_castle_doctrine`, `load_divorce_laws`, `load_mpdta`) with the loud-fallback pattern of `load_prop99`/`load_walmart`: `UserWarning` + `df.attrs["source"]` marker on synthetic fallback (currently silent), plus optional checksum pinning for the CSV downloads. **Upgraded to a live defect 2026-07-13: the `causaldata/causal_datasets` GitHub repo backing castle/card_krueger/divorce is dead (404), so those loaders silently serve synthetic data everywhere - needs loud fallback + replacement sources.** | `diff_diff/datasets.py` | LWDiD precursor | Quick | Medium |
+| Tighten the mypy suppressions that back the enforced-zero posture: burn down `prep_dgp`'s per-module `[index]` override (needs a None-vs-array restructure that preserves the seeded RNG stream), and evaluate re-enabling the globally disabled codes (`arg-type`, `return-value`, `var-annotated`, `assignment`) one at a time — `assignment` alone hid several real annotation drifts found during the 2026-07 triage. | `pyproject.toml` `[tool.mypy]`, `diff_diff/prep_dgp.py` | lint-CI | Mid | Low |
+| Tracking-file contract guard test: reject NEW active deferred-work pointers at `TODO.md` (deferred rows live in `DEFERRED.md`; allowlist for historical/past-tense prose and actionable-row pointers) and assert rows cross-linking a `docs/v4-deprecations.yaml` `M-xxx` id don't restate ledger status. Origin: tracking-split local review R2. | `tests/`, `TODO.md`, `DEFERRED.md` | tracking-split | Quick | Low |
+| Real-data CI canary for dataset-backed replication tests: `test_methodology_lwdid.py`'s Prop 99 / Walmart goldens skip (visibly) when loaders fall back to synthetic; add a lane or canary asserting `df.attrs["source"] == "lwdid_ssc_ancillary"` in CI so network regressions cannot silently de-gate the replication tests. Pairs with the loader-fallback repair row above. | `tests/test_methodology_lwdid.py`, `.github/workflows/` | LWDiD validation suite | Quick | Low |

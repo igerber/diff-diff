@@ -2791,7 +2791,7 @@ class ImputationDiD(ImputationDiDBootstrapMixin):
                 f"ImputationDiD(vcov_type={vcov_type!r}) is not yet "
                 "supported: spatial-HAC composition with Theorem 3 "
                 "per-unit IF aggregation has no reference implementation "
-                "today. See TODO.md for the deferred follow-up row. Use "
+                "today. See DEFERRED.md for the deferred follow-up row. Use "
                 "vcov_type='hc1' (the default) with cluster=<col> for "
                 "cluster-robust inference."
             )

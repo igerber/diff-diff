@@ -8,6 +8,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **Internal tracking docs reorganized (no library behavior change).** `TODO.md` is now
+  the actionable backlog only; blocked / parked work and won't-fix decisions moved to the
+  new root-level `DEFERRED.md` (deferral & decision registry, same blocker sections plus
+  a decision record); monitoring and current-state notes (module-size watch, SE / typing
+  posture, the Apple-Silicon M4 BLAS note) moved to the repo-internal
+  `docs/dev-status.md`. Version-gated v4 lifecycle items are canonically tracked in
+  `docs/v4-deprecations.yaml` (the former "Deprecated Code" section is folded into ledger
+  ids M-001/M-002). The AI-review contract credits tracked rows in either `TODO.md` or
+  `DEFERRED.md` (landed ahead of this split in #698); ~55 cross-references in source
+  docstrings, error messages, REGISTRY.md, and docs were repointed. Two previously
+  untracked follow-ups referenced by docs now have registry rows (SpilloverDiD Wave E.3
+  `finite_mask` parity; HAD `covariates=` kwarg-trap).
 - **Documentation site restructured around 5 top-level sections** (Getting Started /
   Practitioner Guide / Tutorials / User Guide / API Reference). The previous flat
   navigation put 40 pages into the pydata-sphinx-theme header, leaving most of the

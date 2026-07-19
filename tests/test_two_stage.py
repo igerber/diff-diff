@@ -1901,7 +1901,7 @@ class TestTwoStageDiDWaveE3ParityAlwaysTreated:
     public API — stratified-PSU meat via `_compute_stratified_meat_from_psu_scores`
     (with or without FPC) and unstratified `S.T @ S`. TwoStageDiD does NOT
     currently expose `vcov_type="conley"`; that follow-up is tracked
-    separately at TODO.md.
+    separately at DEFERRED.md.
     """
 
     def test_a_no_always_treated_baseline_survey_path(self):

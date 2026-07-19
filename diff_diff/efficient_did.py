@@ -398,7 +398,7 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
         the semiparametric efficiency bound. The per-unit EIF aggregation has no
         equivalent single design matrix, so analytical-sandwich families
         (``classical``, ``hc2``, ``hc2_bm``) cannot be defined; ``conley`` is
-        deferred (see TODO.md). Mirrors the narrow-contract pattern in
+        deferred (see DEFERRED.md). Mirrors the narrow-contract pattern in
         :class:`ImputationDiD`, :class:`CallawaySantAnna`, and
         :class:`TripleDifference`.
         """
@@ -422,7 +422,7 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
             raise ValueError(
                 f"EfficientDiD(vcov_type={vcov_type!r}) is not yet supported: "
                 f"spatial-HAC composition with EIF aggregation has no reference "
-                f"implementation today. See TODO.md for the deferred follow-up row. "
+                f"implementation today. See DEFERRED.md for the deferred follow-up row. "
                 f"Use vcov_type='hc1' (the default) with cluster=<col> for "
                 f"cluster-robust inference."
             )

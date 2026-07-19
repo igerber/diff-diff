@@ -393,7 +393,7 @@ The Python-vs-Rust gap is the primary input to the Rust-expansion decision in
 scenario, that scenario is a weak Rust-port candidate; if Python is 10x+
 slower, it is a strong candidate.
 
-Apple Silicon M4 note per `TODO.md`: a spurious numpy `RuntimeWarning` on
+Apple Silicon M4 note per `docs/dev-status.md`: a spurious numpy `RuntimeWarning` on
 `matmul` for N > 260 does not affect correctness but can clutter profile
 output. Scripts filter this warning so profiles stay clean.
 

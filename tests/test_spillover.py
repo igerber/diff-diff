@@ -4690,7 +4690,7 @@ class TestSpilloverDiDWaveE1SurveyDesignHc1:
         and test_o drift goldens cover that surface from different angles.
         Full estimator-level vcov reconstruction would require exposing
         `X_2_kept` arrays the estimator doesn't currently surface; tracked
-        as informational follow-up (see TODO.md).
+        as informational follow-up (see DEFERRED.md).
         """
         from diff_diff import SurveyDesign
         from diff_diff.survey import _compute_stratified_meat_from_psu_scores
@@ -4746,7 +4746,7 @@ class TestSpilloverDiDWaveE1SurveyDesignHc1:
         `test_n2_event_study_distinguishes_survey_share_from_sample_share`
         (manual lincom reconstruction at rtol=1e-6) and the cross-rule
         distinguishability assertion there. End-to-end vcov reconstruction
-        on this path is tracked in TODO.md (requires exposing the
+        on this path is tracked in DEFERRED.md (requires exposing the
         estimator's internal X_2_kept arrays).
         """
         from diff_diff import SurveyDesign
@@ -8477,7 +8477,7 @@ class TestSpilloverDiDWaveE3SubpopulationFullDesign:
     # `two_stage.py:294-336` differs from SpilloverDiD's per-unit Omega_0
     # rank-deficiency check), so the expected df_survey divergence does not
     # materialize as a load-bearing assertion. The TwoStageDiD parity
-    # follow-up is tracked in TODO.md; when that work lands it should add
+    # follow-up is tracked in DEFERRED.md; when that work lands it should add
     # its own targeted regression test on a fixture that actually exercises
     # the TwoStageDiD finite_mask subset path under subpopulation.
 

@@ -600,8 +600,8 @@ and covariate-adjusted specifications.)
 **Deviations from the reference / library extensions** (see `REGISTRY.md` `## TwoStageDiD`):
 - **Deviation from R:** the `did2s` analytical GMM sandwich uses **no finite-sample multiplier** (meat `= S'S`); the rendered `CR1` label carries no Stata `(n-1)/(n-p)` or `G/(G-1)` factor (matches `did2s`; same FSA-free convention as ImputationDiD's Theorem-3 variance).
 - Multiplier bootstrap on the GMM influence function (library extension; Gardner prescribes analytical GMM SEs only; `did2s` defaults `bootstrap=FALSE`).
-- ⚠️ Paper-permitted but **not exposed**: the Eq. (5) P̄-period-average estimand and the fn. 8 full-sample first-stage variant (tracked in `TODO.md`).
-- `vcov_type` narrowed to the GMM sandwich (`{classical, hc2, hc2_bm}` rejected); `vcov_type="conley"` deferred (TODO).
+- ⚠️ Paper-permitted but **not exposed**: the Eq. (5) P̄-period-average estimand and the fn. 8 full-sample first-stage variant (tracked in `DEFERRED.md`).
+- `vcov_type` narrowed to the GMM sandwich (`{classical, hc2, hc2_bm}` rejected); `vcov_type="conley"` deferred (DEFERRED.md).
 
 **R Comparison Results** (`did2s` v1.2.1, fixed-seed panel, `benchmarks/data/did2s_golden.json`):
 
@@ -636,7 +636,7 @@ and covariate-adjusted specifications.)
 - **Section 10 unbalanced panels + time-varying covariates (Eq. 10.1-10.6):** `TestW2025Section10UnbalancedPanels`
 
 **Test Coverage:**
-- `tests/test_methodology_wooldridge.py` — 10 test classes (6 paper-equation-numbered Theorem/Proposition/Section walk-throughs + `TestW2025LibraryDeviations` consolidating 5 surviving deviations + `TestWooldridgeParityR` vcov_type R-parity from PR #483 + `TestWooldridgeParityRPoisson` / `TestWooldridgeParityRLogit` surface tests with log-link goldens; numerical R-parity for nonlinear paths deferred per TODO row)
+- `tests/test_methodology_wooldridge.py` — 10 test classes (6 paper-equation-numbered Theorem/Proposition/Section walk-throughs + `TestW2025LibraryDeviations` consolidating 5 surviving deviations + `TestWooldridgeParityR` vcov_type R-parity from PR #483 + `TestWooldridgeParityRPoisson` / `TestWooldridgeParityRLogit` surface tests with log-link goldens; numerical R-parity for nonlinear paths deferred per DEFERRED.md row)
 - `tests/test_wooldridge.py` — unit-level test suite covering OLS / logit / Poisson + four aggregations + survey support + vcov_type variants + cluster/bootstrap interactions
 - `benchmarks/R/generate_wooldridge_golden.R` — clubSandwich + sandwich + etwfe goldens at `benchmarks/data/wooldridge_golden.json`
 
@@ -650,9 +650,9 @@ and covariate-adjusted specifications.)
 **Deviations from the paper / from R / library extensions:** See REGISTRY.md `## WooldridgeDiD (ETWFE)` → `### Deviations from the paper / from R / library extensions` block for the consolidated list (HC1 finite-sample factor, QMLE sandwich `(n-1)/(n-k)` term, nonlinear-vs-fixest direct QMLE, logit cohort+time additive dummies, anticipation + aggregation, cell-count default with opt-in cohort-share).
 
 **Outstanding Concerns:**
-- **Stata `jwdid` golden values** (TODO "Stata `jwdid` golden value tests" row): Stata-side parity infrastructure deferred until Stata install is available; R `etwfe` side covered in PR-B Stage D.
-- **Response-scale APE / log-link bridge for Poisson + logit R parity** (new TODO row added in PR-B): direct cell-level numerical parity between diff-diff's response-scale ATT and R `etwfe` log-link coefficients requires either `emfx()`-based APE extraction on the R side or link-function inversion with baseline-mean adjustment.
-- **QMLE sandwich Stata-parity `qmle` weight type** (TODO row 94): diff-diff's `(G/(G-1)) × ((n-1)/(n-k))` is conservative vs Stata's `G/(G-1)` only; awaiting Stata golden values to confirm material difference.
+- **Stata `jwdid` golden values** (DEFERRED.md WooldridgeDiD follow-up cluster row): Stata-side parity infrastructure deferred until Stata install is available; R `etwfe` side covered in PR-B Stage D.
+- **Response-scale APE / log-link bridge for Poisson + logit R parity** (DEFERRED.md WooldridgeDiD follow-up cluster row, added in PR-B): direct cell-level numerical parity between diff-diff's response-scale ATT and R `etwfe` log-link coefficients requires either `emfx()`-based APE extraction on the R side or link-function inversion with baseline-mean adjustment.
+- **QMLE sandwich Stata-parity `qmle` weight type** (DEFERRED.md WooldridgeDiD follow-up cluster row): diff-diff's `(G/(G-1)) × ((n-1)/(n-k))` is conservative vs Stata's `G/(G-1)` only; awaiting Stata golden values to confirm material difference.
 - **Repeated cross-sections** (paper p. 2581 → Deb et al. 2024): not in 2025 paper's main body; future PR.
 - **Treatment exit / non-absorbing treatment** (2023 paper Section 7.2 sketch): not in 2025 paper; future PR.
 - **`cohort_trends` polynomial extension** (`"quadratic"`, `"cubic"`): PR-B ships binary `True/False` for linear `dg_i · t`; forward-extensibility deferred.
@@ -863,10 +863,10 @@ These three are feature deferrals (paper-supported extensions that the library h
 6. **Eq. 18 linear-trend-detrended joint Stute SHIPPED** (PR #389) and R-parity-locked against `DIDHAD::did_had(..., trends_lin=TRUE)` v2.0.0 in `tests/test_did_had_parity.py` (3 DGPs × 5 method combos at `atol=1e-8`). The `tests/test_methodology_had.py::TestHADJointStute` walkthrough deliberately covers only the un-detrended mean-independence and linearity variants (no coverage duplication with the R-parity surface). The Pierce-Schott (2016) NUMERICAL replication against the published p=0.51 anchor on the LBD-restricted PNTR panel is what's waived (Deviations Note #3).
 
 **Outstanding Concerns:**
-- Module split (`had.py` ~4593 LoC, `had_pretests.py` ~4951 LoC) — tracked in TODO.md as tech debt, not a methodology gap.
-- Bandwidth selector multi-eval, cross-horizon covariance on joint event-study — tracked as Phase follow-ups in TODO.md.
+- Module split (`had.py`, `had_pretests.py`) — tracked in docs/dev-status.md (Large Module Files), not a methodology gap.
+- Bandwidth selector multi-eval, cross-horizon covariance on joint event-study — tracked as Phase follow-ups in DEFERRED.md.
 - Replicate-weight designs (BRR / Fay / JK1 / JKn / SDR) on HAD continuous path remain `NotImplementedError` (Phase 4.5 D follow-up).
-- `covariates=` kwarg with Theorem 6 multivariate-covariate extension not implemented; currently a Python `TypeError` (kwarg absent from the `fit()` signature). Adding an explicit `**kwargs`-trap with `NotImplementedError` and a Theorem 6 pointer is tracked as a Low-priority follow-up in TODO.md.
+- `covariates=` kwarg with Theorem 6 multivariate-covariate extension not implemented. The explicit future-work trap (`fit(covariates=...)` raises `NotImplementedError` with a Theorem 6 pointer) has since shipped (locked by the L73 tests); the extension itself is tracked as a Low-priority follow-up in DEFERRED.md.
 
 ---
 
@@ -1021,7 +1021,7 @@ These three are feature deferrals (paper-supported extensions that the library h
 The paper-equation-anchored Verified Components above are deterministic and run without R.
 The R cross-validation in this table runs only when local `R` + `triplediff` are available
 (it skips otherwise — the fixtures are gitignored); making those fixtures deterministic in
-CI and extending covariate-adjusted R parity are tracked follow-ups in `TODO.md`.
+CI and extending covariate-adjusted R parity are tracked follow-ups in `DEFERRED.md`.
 
 **Documented deviations (verified non-masking; REGISTRY `## StaggeredTripleDifference`):** comparison-cohort admissibility (matches R `triplediff`, base-period/anticipation-aware; paper uses `g_c > max(g,t)`); aggregation weights `P(S=g,Q=1)` (matches paper Eq. 4.13 where `G_i` is defined only for `Q=1`, not R's `P(S=g)`) — drives the 25% aggregation tolerance; per-cohort group-effect WIF (conservative vs R `wif=NULL`); default `overall_att` is the CS-simple post-treatment average (paper Eq. 4.14 available opt-in as `overall_att_es`); cluster-robust analytical SEs accepted-but-deferred (multiplier bootstrap provides unit-level clustering).
 
@@ -1095,7 +1095,7 @@ CI and extending covariate-adjusted R parity are tracked follow-ups in `TODO.md`
 - Cross-language parity anchor against R's default `synthdid::vcov(method="bootstrap")`
   or Julia `Synthdid.jl::src/vcov.jl::bootstrap_se` is desirable to bolster the
   methodology contract. Same-library validation (placebo-SE tracking, AER §6.3 MC truth)
-  is in place; cross-language anchor tracked in TODO.md. The R-parity fixture from the
+  is in place; cross-language anchor tracked in DEFERRED.md. The R-parity fixture from the
   previous release was deleted because it pinned the now-removed fixed-weight path.
 
 **Deviations from R's synthdid::synthdid_estimate():**
@@ -1230,7 +1230,7 @@ CI and extending covariate-adjusted R parity are tracked follow-ups in `TODO.md`
 **Outstanding Concerns:**
 - **Delta^RM CI**: uses naive FLCI (conservative) instead of the paper's ARP conditional/hybrid
   confidence sets. ARP infrastructure exists but moment inequality transformation needs
-  calibration. Tracked in TODO.md.
+  calibration. Tracked in DEFERRED.md.
 - R benchmark comparison not yet run (Python benchmark needs API update)
 - Combined method uses single M for both SD and RM (DeltaSDRM dataclass has separate M/Mbar)
 
@@ -1528,5 +1528,7 @@ more graceful handling of edge cases while still signaling invalid inference to 
 - [docs/methodology/survey-theory.md](docs/methodology/survey-theory.md) — Design-based variance estimation for modern DiD estimators
 - [docs/methodology/REPORTING.md](docs/methodology/REPORTING.md) — Reporting conventions across estimators
 - [ROADMAP.md](ROADMAP.md) — Feature roadmap
-- [TODO.md](TODO.md) — Technical debt tracking, including deferred methodology items from code reviews
+- [TODO.md](TODO.md) — Actionable technical-debt backlog
+- [DEFERRED.md](DEFERRED.md) — Deferral & decision registry (incl. deferred methodology items from code reviews)
+- [docs/dev-status.md](docs/dev-status.md) — Monitoring / current-state notes
 - [CLAUDE.md](CLAUDE.md) — Development guidelines

@@ -2768,7 +2768,7 @@ class TestTROPRustEdgeCaseParity:
 
         Follow-up to tighten to ``atol=1e-14``: unify Rust
         ``estimate_model`` to use ``solve_wls_svd`` (the same SVD path
-        used by global-method since PR #348). Tracked in ``TODO.md``.
+        used by global-method since PR #348). Tracked in ``DEFERRED.md``.
         """
         import sys
         from unittest.mock import patch

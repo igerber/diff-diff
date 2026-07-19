@@ -2046,7 +2046,7 @@ class TripleDifference:
                 "influence-function decomposition could conceptually "
                 "apply (spatial aggregation of per-unit IFs) but requires "
                 "separate methodology work; no reference implementation "
-                "exists today. Tracked as a follow-up TODO row. Use "
+                "exists today. Tracked as a follow-up row in DEFERRED.md. Use "
                 "vcov_type='hc1' (the default) with cluster=<col> for "
                 "cluster-robust inference today."
             )

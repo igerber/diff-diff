@@ -437,7 +437,7 @@ domain vocabulary, not drift.
   p-value/CI; the flip PR updates `TestDfConvention` /
   `test_moderate_t_pins_residual_df_convention` expectations, adds the
   migration-guide entry, and evaluates extending the knob to standalone CR1-t
-  estimators (TODO row).
+  estimators (DEFERRED.md row).
 - Constructor hygiene rides Phase 2: ContinuousDiD's `covariates` moves from
   `__init__` to `fit()` [M-084] (the one estimator with a data column in the
   constructor), and the shared `BaseEstimator` mixin replaces the 24

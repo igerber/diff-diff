@@ -69,7 +69,7 @@ default path).
 (benchmark identity conventions, golden pins at 1e-8) and the SVD truncation is
 deliberate defense-in-depth. Within the opt-in path, parity is tol-bounded
 (fitted ~1e-8 abs, SE ~1e-6 rel), never bit-level. A default-on flip is tracked
-as a TODO follow-up (needs golden recapture + certification-rate telemetry +
+as a TODO.md follow-up (needs golden recapture + certification-rate telemetry +
 the staged default-flip protocol).
 
 ---
@@ -173,7 +173,7 @@ rust -2%; python-arm estimates bit-identical (identity deltas exactly
 0.0). Remaining floor is inherent to SVD-based lstsq (fused input copy +
 thin-SVD U transient + vcov scores block + LAPACK gelsd internals);
 further reduction = the tall-skinny-QR path parked with the QR-reuse row
-in TODO.md. `DIFF_DIFF_BACKEND=python` remains an escape hatch, and the
+in DEFERRED.md. `DIFF_DIFF_BACKEND=python` remains an escape hatch, and the
 opt-in `DIFF_DIFF_DEMEAN_CHUNK_COLS` knob (PR-D) still caps the demean
 dispatch transients.
 
@@ -262,7 +262,7 @@ Fresh profile on main 49bbde68 (CallawaySantAnna dr, 100k units x 20 periods =
 |---|---|---|---|
 | `np.linalg.lstsq` in solve_logit IRLS (184 calls) | 0.39s | 0.81s | 1.99s |
 | `_detect_rank_deficiency` pivoted QR (141 calls) | 0.15s | 0.31s | 0.84s |
-| rust solve_ols SVD (out of scope, TODO row) | 0.23s | 0.46s | 1.03s |
+| rust solve_ols SVD (out of scope, DEFERRED.md row) | 0.23s | 0.46s | 1.03s |
 
 Two pure-Python fast paths in `diff_diff/linalg.py`:
 
@@ -303,7 +303,7 @@ rate 100% (141 -> 0 pivoted QRs per dr fit, 46 -> 0 per ipw fit);
 rust-dispatch counts identical between arms (the solve_ols routing boolean is
 provably unchanged). Deltas: overall ATT/SE exactly 0, per-cell max ~7e-15,
 maxrss flat. After this the top per-cell item at cov40 is the rust solve_ols
-SVD (1.04s; follow-up TODO row), then pandas frame prep.
+SVD (1.04s; follow-up DEFERRED.md row), then pandas frame prep.
 
 ---
 
@@ -540,7 +540,7 @@ copy elision is a smaller, broadly-applicable win on the TWFE-family fit path. S
 `ru_maxrss` on these transient-heavy paths is allocator-dependent (the un-chunked 1M run varied
 ~12.7-15.0 GB across repeats), so the table reports medians - the reduction ratios are stable.
 
-Deferred (see `TODO.md`): tiling the *stratified* survey-PSU weight generator (few PSUs, rarely
+Deferred (see `DEFERRED.md`): tiling the *stratified* survey-PSU weight generator (few PSUs, rarely
 OOMs). The `ImputationDiD` / `TwoStageDiD` `_iterative_demean` vectorization deferred here
 shipped later as the demean-modernization PR (both estimators now route through the shared
 `demean_by_groups` MAP engine and the shared `_iterative_fe_solve` bincount FE solver).

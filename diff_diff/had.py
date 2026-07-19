@@ -596,7 +596,7 @@ class HeterogeneousAdoptionDiDEventStudyResults:
         band (``cband_*`` below) is available on the weighted/survey path
         OR whenever ``cluster=`` is set (the clustered band fires even on
         an unweighted fit). Joint cross-horizon analytical covariance is
-        not computed in this release (tracked in TODO.md).
+        not computed in this release (tracked in DEFERRED.md).
     t_stat, p_value : np.ndarray, shape (n_horizons,)
         Per-horizon inference triple element.
     conf_int_low, conf_int_high : np.ndarray, shape (n_horizons,)
@@ -3003,7 +3003,7 @@ class HeterogeneousAdoptionDiD:
         Repeated-cross-section inputs (disjoint unit IDs between
         periods) are rejected by the balanced-panel validator.
         Repeated-cross-section support is queued for a follow-up PR
-        (tracked in ``TODO.md``); it requires a separate identification
+        (tracked in ``DEFERRED.md``); it requires a separate identification
         path based on pre/post cell means rather than unit-level
         differences.
 
@@ -3180,7 +3180,7 @@ class HeterogeneousAdoptionDiD:
                     "estimator's weighted variant (weighted-OLS slope? per-PSU "
                     "slope?) is not derived from the paper. Use trends_lin=True "
                     "WITHOUT survey weights, or use survey weights WITHOUT "
-                    "trends_lin. Tracked in TODO.md as a follow-up if user "
+                    "trends_lin. Tracked in DEFERRED.md as a follow-up if user "
                     "demand emerges."
                 )
 

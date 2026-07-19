@@ -113,8 +113,8 @@ jobs:
       # the `dismissed_comment` field on alert #14. The guard test
       # is belt-and-suspenders for accidental regressions, not a
       # complete adversarial parser.
-      # See DEFERRED.md (deferral registry; TODO.md until the split
-      # lands) for the long-term tracking of this gap.
+      # See DEFERRED.md (deferral registry) for the long-term
+      # tracking of this gap.
       # ─────────────────────────────────────────────────────────────────
       - name: Resolve PR number + metadata
         id: pr

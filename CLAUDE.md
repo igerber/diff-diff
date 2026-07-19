@@ -116,25 +116,38 @@ wording will cause a P1 finding ("undocumented methodology deviation").
 | `- **Deviation from R:** <text>` | Intentional differences from R packages | `- **Deviation from R:** R's fixest uses t-distribution at all levels` |
 | `**Note (deviation from R):** <text>` | Combined form, inline within edge case bullets | See SyntheticDiD section in REGISTRY.md |
 
-**TODO.md format** — for deferring P2/P3 items only (P0/P1 cannot be deferred):
+**Tracking-file map** — for deferring P2/P3 items only (P0/P1 cannot be deferred):
 
-Add a row to `TODO.md`. If the item is genuinely shippable (clear path, no external
-blocker), put it under **Actionable Backlog** in the appropriate sub-section
-(`Methodology / correctness`, `Performance`, or `Testing / docs`). If it is blocked, put it
-under **Deferred / Documented** in the matching blocker sub-section (`Paper-gated / needs
-methodology derivation`, `Needs external reference (R / Stata / Julia)`, `Parked — pending
-user demand / out of scope`, or `Won't-fix / waived`). Either way the AI reviewer's
-deviation-grep resolves on the row's `Location` + reason text. The two buckets use
-different table shapes — Actionable rows carry an `Effort` column, Deferred rows a `PR`
-column:
+- **Shippable** (clear path, no external blocker) → a row in `TODO.md` under
+  **Actionable Backlog**, in the matching sub-section (`Methodology / correctness`,
+  `Performance`, or `Testing / docs`).
+- **Blocked** → a row in `DEFERRED.md` under the matching blocker section
+  (`Paper-gated / needs methodology derivation`, `Needs external reference
+  (R / Stata / Julia)`, `Parked — pending user demand / out of scope`, or
+  `Version-gated (v4)`).
+- **Decisions** (won't-fix / waived): if the decision pins **user-visible behavior or
+  methodology**, record it as a REGISTRY.md Note using the labels above; if it is
+  **internal engineering** (refactor waiver, perf trade-off, test-infrastructure call),
+  add it to `DEFERRED.md` → **Decision record — won't-fix / waived**.
+- **Version-gated lifecycle items** (deprecated-kwarg removals, v4 default flips):
+  `docs/v4-deprecations.yaml` (CI-enforced) is the lifecycle authority — never restate
+  ledger status/targets in a row. A row carrying real implementation work (e.g. a soak
+  or recapture protocol) may exist in TODO.md/DEFERRED.md but must cross-link its
+  `M-xxx` id.
+- **Monitoring / current-state notes** (module sizes, tooling posture, platform quirks)
+  go in `docs/dev-status.md`, not a backlog row.
 
-Actionable Backlog:
+The AI reviewer's deviation-grep resolves on a row's `Location` + reason text in EITHER
+`TODO.md` or `DEFERRED.md`. The two files use different table shapes — Actionable rows
+carry an `Effort` column, DEFERRED rows a `PR` column:
+
+TODO.md → Actionable Backlog:
 
 | Issue | Location | Origin | Effort | Priority |
 |-------|----------|--------|--------|----------|
 | Description of the work item | `file.py` | #NNN | Quick/Mid/Heavy | Medium/Low |
 
-Deferred / Documented:
+DEFERRED.md (blocker sections):
 
 | Issue | Location | PR | Priority |
 |-------|----------|----|----------|

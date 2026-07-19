@@ -98,7 +98,7 @@ rows:
     old_default: "'residual'"
     new_default: "'cluster'"
     code_refs: [diff_diff/linalg.py]
-    notes: "Evaluate extending the knob to standalone CR1-t estimators in the same PR (TODO.md row)."
+    notes: "Evaluate extending the knob to standalone CR1-t estimators in the same PR (DEFERRED.md row)."
   - id: M-007
     kind: warning-retirement
     group: obligation-warning-retirements

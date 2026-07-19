@@ -223,7 +223,7 @@ class ContinuousDiD:
         if self.control_group == "lowest_dose" and self.covariates is not None:
             # The covariate estimand under lowest-dose-as-control shifts to
             # conditional PT *relative to d_L* (E[ΔY(0)|D=d,X] = E[ΔY(0)|d_L,X]).
-            # Deferred (see TODO) rather than silently estimated with the wrong
+            # Deferred (see the TODO.md ContinuousDiD row) rather than silently estimated with the wrong
             # identifying assumption.
             raise NotImplementedError(
                 "control_group='lowest_dose' does not yet compose with covariates= "

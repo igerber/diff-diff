@@ -51,8 +51,10 @@ When implementing or modifying code that affects statistical methodology (estima
          (see CLAUDE.md "Documenting Deviations" for full format reference)
    - [ ] Include rationale (e.g., "defensive enhancement", "R errors here")
    - [ ] Ensure the deviation is an improvement, not a bug
-   - [ ] If deferring P2/P3 work: add row to `TODO.md` table under "Tech Debt from Code
-         Reviews" with columns `Issue | Location | PR | Priority`
+   - [ ] If deferring P2/P3 work: shippable items get a row in `TODO.md` (Actionable
+         Backlog; columns `Issue | Location | Origin | Effort | Priority`); blocked
+         items get a row in `DEFERRED.md` under the matching blocker section (columns
+         `Issue | Location | PR | Priority`) — see CLAUDE.md "Tracking-file map"
 
 4. **Testing methodology-aligned behavior**:
    - [ ] Test that edge cases produce documented behavior (NaN, warning, etc.)

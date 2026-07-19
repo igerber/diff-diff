@@ -1385,9 +1385,9 @@ class TestTripleDifferenceVcovType:
         with pytest.raises(ValueError, match="spatial-HAC"):
             TripleDifference(vcov_type="conley")
 
-    def test_reject_conley_at_init_todo_pointer(self):
-        """Conley rejection cites the TODO follow-up row."""
-        with pytest.raises(ValueError, match="TODO"):
+    def test_reject_conley_at_init_deferred_pointer(self):
+        """Conley rejection cites the DEFERRED.md follow-up row."""
+        with pytest.raises(ValueError, match="DEFERRED"):
             TripleDifference(vcov_type="conley")
 
     def test_reject_unknown_vcov_type(self):

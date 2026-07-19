@@ -382,7 +382,7 @@ class WooldridgeDiD:
         ``method`` in ``{"logit","poisson"}`` + ``vcov_type != "hc1"`` is
         REJECTED at ``__init__``: the GLM QMLE sandwich path uses pseudo-
         residuals, and CR2-BM composition with QMLE on canonical-link pseudo-
-        residuals needs derivation + R parity (tracked in TODO.md). Survey
+        residuals needs derivation + R parity (tracked in DEFERRED.md). Survey
         designs combined with ``vcov_type != "hc1"`` raise
         ``NotImplementedError`` at ``fit()`` because the survey TSL / replicate-
         refit variance overrides the analytical sandwich.
@@ -511,7 +511,7 @@ class WooldridgeDiD:
                 "weights); composing HC2 leverage and Bell-McCaffrey "
                 "Satterthwaite DOF with QMLE on canonical-link pseudo-"
                 "residuals needs derivation + R parity against "
-                "clubSandwich::vcovCR(glm(...)). Tracked in TODO.md "
+                "clubSandwich::vcovCR(glm(...)). Tracked in DEFERRED.md "
                 "(WooldridgeDiD logit/poisson vcov_type follow-up row). "
                 "Use vcov_type='hc1' (default) for non-OLS methods."
             )
@@ -665,7 +665,7 @@ class WooldridgeDiD:
                 "composition with the survey TSL variance has not been "
                 "validated against R-parity goldens. Use "
                 "cohort_trends=False (default) for survey designs, or "
-                "wait for the deferred follow-up tracked in TODO."
+                "wait for the deferred follow-up tracked in DEFERRED.md."
             )
 
         # 0d.ii Reject cohort_trends=True + control_group="never_treated".
@@ -692,7 +692,7 @@ class WooldridgeDiD:
                 "trend specification is unidentified on this branch. Use "
                 "control_group='not_yet_treated' (the default) for "
                 "cohort_trends=True, or wait for the deferred follow-up "
-                "tracked in TODO."
+                "tracked in DEFERRED.md."
             )
 
         # 0d. Reject survey_design + non-hc1 analytical family. The survey-

@@ -409,7 +409,7 @@ class WooldridgeDiDResults:
         # not paper W2025 Section 7's design-population cohort-share form.
         # Design-consistent cohort totals (survey-weighted unit totals per
         # cohort) require additional plumbing — fail-closed for now,
-        # tracked in TODO follow-up.
+        # tracked in DEFERRED.md follow-up.
         if weights == "cohort_share" and self.survey_metadata is not None:
             raise ValueError(
                 "aggregate(weights='cohort_share') is not yet supported on "
@@ -435,7 +435,7 @@ class WooldridgeDiDResults:
         # ``se`` (conditional-on-shares delta method) are still computed
         # and returned for reference, but the inferential machinery is
         # nulled out until proper APE/GMM-style aggregate inference is
-        # derived (tracked in TODO).
+        # derived (tracked in DEFERRED.md).
         cohort_share_inference_fail_closed = weights == "cohort_share"
         if cohort_share_inference_fail_closed:
             warnings.warn(
@@ -447,7 +447,7 @@ class WooldridgeDiDResults:
                 "unconditional sampling uncertainty per paper W2025 "
                 "Section 7.5. The library fail-closes the t-stat / p-value "
                 "/ conf-int fields to NaN until proper APE/GMM-style "
-                "aggregate inference is derived (tracked in TODO). The "
+                "aggregate inference is derived (tracked in DEFERRED.md). The "
                 "POINT estimate and conditional-on-shares SE are computed "
                 "and returned for reference; use weights='cell' (default) "
                 "for the analytical aggregation with full inference.",
@@ -463,7 +463,7 @@ class WooldridgeDiDResults:
             # inference). The opt-in ``weights="cohort_share"`` path is not
             # bootstrapped — re-fit with ``n_bootstrap=0`` to use the
             # analytical cohort-share inference, or wait for the deferred
-            # bootstrap-cohort-share follow-up (tracked in TODO).
+            # bootstrap-cohort-share follow-up (tracked in DEFERRED.md).
             if self._bootstrap_used:
                 if weights == "cell":
                     return self

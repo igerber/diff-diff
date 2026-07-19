@@ -108,7 +108,7 @@ class StackedDiD:
         - ``"conley"`` is REJECTED at ``__init__`` for a **methodology** reason
           (NOT plumbing): the stacked design replicates units across
           sub-experiments, so Conley would see same-unit copies at distance 0;
-          no ``conleyreg`` anchor; paper-gated. Tracked in TODO.md.
+          no ``conleyreg`` anchor; paper-gated. Tracked in DEFERRED.md.
 
         Survey-design precedence: when ``survey_design=`` is supplied to
         ``fit()`` with ``vcov_type != "hc1"``, a ``NotImplementedError`` is
@@ -239,7 +239,7 @@ class StackedDiD:
                 "the stacking-replication device with real spatial correlation, "
                 "and there is no `conleyreg` analogue for stacked DiD to anchor "
                 "parity. A correct treatment needs a per-stack spatial identifier "
-                "and is paper-gated (see TODO.md). Use vcov_type='hc1' (default, "
+                "and is paper-gated (see DEFERRED.md). Use vcov_type='hc1' (default, "
                 "CR1) or 'hc2_bm' (CR2 Bell-McCaffrey)."
             )
         if vcov_type not in ("classical", "hc1", "hc2", "hc2_bm"):

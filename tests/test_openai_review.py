@@ -3439,7 +3439,7 @@ class TestWorkflowDoesNotExecutePRHeadCode:
       `author_association` gating
 
     SCOPE — what this test does NOT model (residuals tracked in
-    TODO.md, accepted as the cost of static-shell-parsing limits):
+    DEFERRED.md, accepted as the cost of static-shell-parsing limits):
     - bash <script> / sh <script> / ./<script> / source <script> /
       . <script> direct shell-script execution
     - Multi-line `python3 -c` bodies (line-by-line shlex can't
@@ -3453,7 +3453,7 @@ class TestWorkflowDoesNotExecutePRHeadCode:
     on alert #14, NOT this test. The test catches accidental
     regressions of common forms; it is not a complete adversarial
     parser, and would require modeling more shell semantics than is
-    productive in a unit test to become one. See TODO.md for the
+    productive in a unit test to become one. See DEFERRED.md for the
     long-term tracking of unmodeled paths and PR #436's review
     history (rounds R0–R10) for the rationale of where the line
     was drawn."""

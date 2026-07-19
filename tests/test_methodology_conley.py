@@ -1670,7 +1670,7 @@ class TestConleyDeferrals:
     def test_synthetic_did_conley_typeerror(self):
         """`SyntheticDiD(vcov_type='conley')` raises `TypeError` —
         SyntheticDiD uses bootstrap / jackknife / placebo variance, not
-        the analytical sandwich. Tracked in TODO.md."""
+        the analytical sandwich. Tracked in DEFERRED.md."""
         from diff_diff.synthetic_did import SyntheticDiD
 
         with pytest.raises(TypeError, match=r"(?i)conley|vcov_type"):

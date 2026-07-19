@@ -7657,7 +7657,7 @@ def _cohort_recenter_per_period(
     within-group-varying PSU that follows the library's post-period
     convention (see the REGISTRY.md Note on survey IF expansion — a
     formal derivation from the observation-level survey linearization
-    is still open, tracked in ``TODO.md``).
+    is still open, tracked in ``DEFERRED.md``).
     """
     U_centered = U_per_period.astype(float).copy()
     if U_per_period.size == 0:
@@ -7854,7 +7854,7 @@ def _compute_cohort_recentered_inputs(
     # identical to the old allocator). Under within-group-varying PSU
     # the per-cell attribution follows the library's post-period
     # convention — a formal derivation from the observation-level
-    # survey linearization is an open question tracked in TODO.md.
+    # survey linearization is an open question tracked in DEFERRED.md.
     # Skip entirely when the 2D tensor was not computed.
     if U_per_period_overall_full is not None:
         U_centered_pp_overall: Optional[np.ndarray] = _cohort_recenter_per_period(

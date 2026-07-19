@@ -109,7 +109,7 @@ When all units are treated at the same time `g`, the model simplifies to:
 - **Calendar time:** weighted average across cohorts for each calendar period
 - **Group:** weighted average across periods for each cohort
 - SEs for all aggregations via delta method or panel bootstrap
-- **Note (current implementation deviation):** the shipped `WooldridgeDiD` aggregations use cell-level observation-count weights `n_{g,t}` (matching Stata `jwdid_estat`) rather than the cohort-share weights described conceptually in Section 3.1. The 2023 paper does not provide explicit aggregation-weight equations; the formal cohort-share equations referenced in `docs/methodology/REGISTRY.md` ("W2025 Eqs. 7.2-7.4") are from a later Wooldridge ETWFE source. See `docs/methodology/REGISTRY.md` "Aggregations" under WooldridgeDiD and the corresponding line in `TODO.md` ("Deferred / Documented" → WooldridgeDiD follow-up cluster) for the tracked deviation.
+- **Note (current implementation deviation):** the shipped `WooldridgeDiD` aggregations use cell-level observation-count weights `n_{g,t}` (matching Stata `jwdid_estat`) rather than the cohort-share weights described conceptually in Section 3.1. The 2023 paper does not provide explicit aggregation-weight equations; the formal cohort-share equations referenced in `docs/methodology/REGISTRY.md` ("W2025 Eqs. 7.2-7.4") are from a later Wooldridge ETWFE source. See `docs/methodology/REGISTRY.md` "Aggregations" under WooldridgeDiD and the corresponding line in `DEFERRED.md` ("Needs external reference (R / Stata / Julia)" → WooldridgeDiD follow-up cluster) for the tracked deviation.
 
 *Testing parallel trends (Section 4):*
 

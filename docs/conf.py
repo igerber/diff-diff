@@ -53,6 +53,7 @@ exclude_patterns = [
     "Thumbs.db",
     ".DS_Store",
     "business-strategy.md",
+    "dev-status.md",
     "performance-plan.md",
     "performance-scenarios.md",
     "practitioner-guide-evaluation.md",
@@ -181,6 +182,7 @@ if rtd_version == "latest" or rtd_version_type == "branch":
         "It may describe features not yet available in the latest PyPI release. "
         'Use the version selector to switch to <a href="/en/stable/">stable</a>.'
     )
+
 
 # -- Custom CSS --------------------------------------------------------------
 def setup(app):

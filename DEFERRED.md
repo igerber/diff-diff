@@ -1,70 +1,26 @@
-# Development TODO
+# Deferral & Decision Registry
 
-Internal tracking for technical debt, known limitations, and maintenance tasks.
+Blocked, parked, and version-gated work, plus decisions on the record. **Not a backlog —
+do not pull from here without first clearing the named blocker.** Rows are retained for
+provenance and AI-review deviation-documentation: a row here (or in
+[TODO.md](TODO.md)'s Actionable Backlog) marks a limitation as tracked for the PR reviewer.
 
-For the public feature roadmap, see [ROADMAP.md](ROADMAP.md).
-
-## How this file is organized
-
-- **[Actionable Backlog](#actionable-backlog)** — work with a clear implementation path and
-  no external blocker. **Pull from here.** Effort (`Quick` ≤1 day · `Mid` 3-10 CI rounds ·
-  `Heavy` derivation-free but large) is noted per row; `Priority` is carried from the
-  originating PR review.
-- **[Deferred / Documented](#deferred--documented)** — known gaps that are **not currently
-  actionable**: blocked on a methodology derivation, on external tooling (R / Stata / Julia)
-  absent from CI, parked pending user demand / out of paper scope, or explicitly won't-fix.
-  Retained for provenance and AI-review deviation-documentation — **do not pull from here
-  without first clearing the named blocker.**
-- **[Reference / Status](#reference--status)** — not backlog: user-facing limitations,
-  module-size monitoring, deprecations, and current-state notes.
-
-The `Origin` column (Actionable tables) and the `PR` column (Deferred tables) both point to the originating PR number or review tag.
+- Shippable work lives in [TODO.md](TODO.md); the public feature roadmap in
+  [ROADMAP.md](ROADMAP.md); monitoring and current-state notes in
+  [docs/dev-status.md](docs/dev-status.md).
+- Version-gated lifecycle items (deprecated-kwarg removals, v4 default flips such as
+  `SyntheticDiD` `lambda_reg`/`zeta` and the clustered-df convention) are canonically
+  tracked in the CI-enforced ledger `docs/v4-deprecations.yaml`; rows here cross-link
+  their `M-xxx` ids where applicable.
+- The `PR` column points to the originating PR number or review tag.
 
 ---
 
-## Actionable Backlog
-
-### Methodology / correctness
-
-| Issue | Location | Origin | Effort | Priority |
-|-------|----------|--------|--------|----------|
-| `SyntheticControl` conformal (CWZ 2021) AR / innovation-permutation path (Lemmas 5-7) for time-series proxies — the residual-permutation shortcut is only valid for time-permutation-invariant proxies (SC/Lasso/DiD); an AR proxy needs innovation permutation. One-sided alternatives (Remark 1 signed statistic) and proxy covariates (eq 4/6 note) SHIPPED 2026-07. | `diff_diff/conformal.py`, `diff_diff/synthetic_control_results.py` | CWZ-2021 | Heavy | Low |
-| `ContinuousDiD` CGBS-2024 extensions. (a) `covariates=` kwarg — **DONE (reg/dr)**; (b) discrete-treatment saturated regression (`treatment_type="discrete"`) — **DONE**; (c) lowest-dose-as-control per Remark 3.1 when `P(D=0)=0` (`control_group="lowest_dose"`) — **DONE** (discrete + continuous mass-point, single-cohort; estimand `ATT(d)−ATT(d_L)`; see REGISTRY Note #7). Remaining (all deferred `NotImplementedError`, documented): `estimation_method="ipw"` on the dose curve (scalar-adjustment / degenerate); `covariates=` × `survey_design=` (weighted OR + weighted nuisance IF); multi-cohort **heterogeneous-support** discrete aggregation (support-aware: average each dose only over the cohorts that observe it); **multi-cohort `lowest_dose`** (within-cohort `d_L` reference + support-aware cross-cohort aggregation); and **`covariates=` × `lowest_dose`** (conditional-PT-relative-to-`d_L` estimand). Single-cohort / 2-period / shared-support multi-cohort are supported. | `continuous_did.py` | CGBS-2024 | Heavy | Low |
-
-### Performance
-
-Consolidates the former `#### Performance` tech-debt table and the standalone
-`## Performance Optimizations` section. (Speculative / low-value perf notes — numba JIT,
-generic sparse-FE, QR+SVD rank-detection redundancy, `check_finite` bypass — moved to
-[Deferred → Parked](#parked--pending-user-demand--out-of-scope).)
-
-| Issue | Location | Origin | Effort | Priority |
-|-------|----------|--------|--------|----------|
-| `EfficientDiD` conditional path: the largest remaining O(n) stage is the sieve/nuisance construction outside the tiled pass (~9s at 10k). (The `_ridge_solve_weights` Python-prep shave landed 2026-07-07 — the `omega_stack[rest]` fancy-index copy and tail scatter are skipped when no row is zero-masked, byte-identical outputs; the `zero_mask` abs scan itself remains, needed for correctness.) | `efficient_did_covariates.py` | CS-scaling | Mid | Low |
-| `_rq_fit` LP assembly is dense (`A_eq = [X, I, -I]` with dense identity blocks, rebuilt per cell fit): a `scipy.sparse` construction would cut memory and likely HiGHS time for large cells / bootstrap-heavy covariate CiC/QDiD fits. CAVEAT before doing it: a different matrix representation can change HiGHS's vertex selection at degenerate/tied QR optima - end-to-end covariate goldens are tie-selection-gated (fine), but the `qr_cases` tight coefficient matches may shift to the equal-loss branch; re-run the parity suite and re-calibrate if needed. | `diff_diff/changes_in_changes.py::_rq_fit` | covariates PR | Quick | Low |
-| Evaluate flipping `DIFF_DIFF_SOLVE_OLS_FASTPATH` default-ON after an opt-in soak (the 2026-07 certified normal-equations Cholesky fast path, both backends). A flip needs: golden/parity-suite recapture at the tol-bounded posture (fitted ~1e-8 abs / SE ~1e-6 rel — the default today is byte-pinned in several benchmark conventions), certification-rate telemetry across real workloads (any decline is silent-correct but forfeits the speedup), and the staged default-flip protocol used for `df_convention` (v4-class change). Lifecycle tracked in docs/v4-deprecations.yaml (M-008). | `diff_diff/linalg.py::_resolve_solve_ols_fastpath`, `rust/src/linalg.rs::solve_ols_chol` | CS-scaling | Mid | Low |
-
-### Testing / docs
-
-| Issue | Location | Origin | Effort | Priority |
-|-------|----------|--------|--------|----------|
-| Tighten the mypy suppressions that back the enforced-zero posture: burn down `prep_dgp`'s per-module `[index]` override (needs a None-vs-array restructure that preserves the seeded RNG stream), and evaluate re-enabling the globally disabled codes (`arg-type`, `return-value`, `var-annotated`, `assignment`) one at a time — `assignment` alone hid several real annotation drifts found during the 2026-07 triage. | `pyproject.toml` `[tool.mypy]`, `diff_diff/prep_dgp.py` | lint-CI | Mid | Low |
-| Align the four legacy dataset loaders (`load_card_krueger`, `load_castle_doctrine`, `load_divorce_laws`, `load_mpdta`) with the loud-fallback pattern of `load_prop99`/`load_walmart`: `UserWarning` + `df.attrs["source"]` marker on synthetic fallback (currently silent), plus optional checksum pinning for the CSV downloads. **Upgraded to a live defect 2026-07-13: the `causaldata/causal_datasets` GitHub repo backing castle/card_krueger/divorce is dead (404), so those loaders silently serve synthetic data everywhere - needs loud fallback + replacement sources.** | `diff_diff/datasets.py` | LWDiD precursor | Quick | Medium |
-| Real-data CI canary for dataset-backed replication tests: `test_methodology_lwdid.py`'s Prop 99 / Walmart goldens skip (visibly) when loaders fall back to synthetic; add a lane or canary asserting `df.attrs["source"] == "lwdid_ssc_ancillary"` in CI so network regressions cannot silently de-gate the replication tests. Pairs with the loader-fallback repair row above. | `tests/test_methodology_lwdid.py`, `.github/workflows/` | LWDiD validation suite | Quick | Low |
-
----
-
-## Deferred / Documented
-
-Not currently actionable. Retained for provenance + AI-review deviation-documentation.
-
-### Paper-gated / needs methodology derivation
+## Paper-gated / needs methodology derivation
 
 | Issue | Location | PR | Priority |
 |-------|----------|----|----------|
 | `PlaceboTests` `boundary_gap` — a permutation randomization-inference margin (SE-audit item (b)); NOT computed anywhere in code today, so this is a new feature + result field, not a coverage lock. **User-locked 2026-07-09: defer until a derivation/paper source exists** — do not design or implement from scratch. | `tests/test_methodology_placebo.py`, `diff_diff/diagnostics.py` | SE-audit | Low |
-| `SyntheticControl` fit-snapshot residency (`_SyntheticControlFitSnapshot`) — **investigated 2026-07-07, parked**: the snapshot ALIASES the fit's own working pivots (zero extra construction cost); the retained residency implements the documented freeze contract (post-fit mutation of estimator inputs must not change `in_space_placebo()` / `leave_one_out()` / conformal output on an already-returned results object, and `__getstate__` already excludes it from pickles). A compact array representation saves only pandas overhead (the float panel dominates); releasing residency needs new API surface (`release`/opt-out flag) or a freeze-contract change. Revisit on user demand for very large donor panels. | `synthetic_control.py`, `synthetic_control_results.py` | follow-up | Low |
-| Stratified survey-PSU multiplier-weight draw-tiling — **investigated 2026-07-07, parked**: the stratified generator (`generate_survey_multiplier_weights_batch`) consumes ONE sequential rng stream stratum-major (`rng.choice(size=(n_bootstrap, n_h))` per stratum, then lonely-PSU pooling), so draw-chunked assembly CANNOT reproduce the stream bit-identically (contra the old row's parenthetical) — it would need per-stratum generator state skipping (PCG64.advance + per-weight-type variate accounting; fragile) or a stream-layout change (MC-level SE changes → baseline/golden recapture + REGISTRY note). Stratified designs have few PSUs, so the full `(n_bootstrap × n_psu)` matrix rarely matters; unstratified (the large-`n_units` case) is already tiled. Revisit only if a large-PSU stratified design hits memory, as a documented stream change. | `diff_diff/bootstrap_chunking.py::iter_survey_multiplier_weight_blocks` | follow-up | Low |
 | CBWSDID covariate balancing (`StackedDiD(balance="entropy")`) v1 supports only balanced event windows + `weighting="aggregate"`; unbalanced/ragged panels fail closed (unit-count vs observation-count corrector convention unresolved off balanced panels). Matching-based balancing and the repeated `0→1`/`1→0` episode extension are also deferred. Documented in REGISTRY StackedDiD "Covariate balancing (CBWSDID)" Notes. | `stacked_did.py`, `balancing.py`, REGISTRY | follow-up | Low |
 | dCDH: Phase-1 per-period placebo `DID_M^pl` has NaN SE (no IF derivation for the per-period aggregation path). Multi-horizon placebos (`L_max ≥ 1`) have valid SE. | `chaisemartin_dhaultfoeuille.py` | #294 | Low |
 | dCDH: survey cell-period allocator's post-period attribution is a library convention, not derived from the observation-level survey linearization. MC coverage is empirically close to nominal; a formal derivation (or covariance-aware two-cell alternative) is deferred. Documented in REGISTRY survey IF expansion Note. | `chaisemartin_dhaultfoeuille.py`, REGISTRY | #408 | Medium |
@@ -80,7 +36,7 @@ Not currently actionable. Retained for provenance + AI-review deviation-document
 | **`LPDiD` non-absorbing exit-event dynamics** (Dube et al. 2025 online Appendix C `eta_h^{g,n}`): the shipped `non_absorbing` modes estimate the **entry-effect** estimands (Eq. 12/13) only; separate dynamic event-studies for treatment switch-*offs* are not implemented. Needs the exit-event clean-sample derivation + estimand contract. | `lpdid.py`, REGISTRY | PR-C follow-up | Low |
 | **`LPDiD` non-absorbing interior-gap support**: non-absorbing modes require a gap-free panel within each unit's observed span and raise on interior time gaps (the `[t-L, t+h]` window conditions can't be verified across a gap). The absorbing path already reindexes interior gaps to the calendar grid; extending that fail-closed handling (per-window gap masking) to non-absorbing is deferred. | `lpdid.py::_prepare_panel` | PR-C follow-up | Low |
 
-### Needs external reference (R / Stata / Julia)
+## Needs external reference (R / Stata / Julia)
 
 Blocked on tooling absent from CI (no workflow installs R/Stata/Julia). A clear path
 exists but parity can't be verified without a local toolchain.
@@ -106,19 +62,22 @@ exists but parity can't be verified without a local toolchain.
 | **`LPDiD` non-absorbing R-parity - DONE (PR-C2)** via an independent `fixest::feols` Eq. 12/13 reconstruction (point+SE ~1e-13/~1e-15 vw; `effect_stabilization` reweighted point + pinned SE). `alexCardazzi/lpdid`'s `nonabsorbing_lag` proved NOT a faithful Eq. 13 (off-switch clamp + non-paper boundary/placebo window; diverges ~0.01-0.05 even on a monotone panel), so it is recorded as a divergent reference, not a gate. **Residual external-reference gap:** the authors' canonical non-absorbing SE/RA is Stata `lpdid`/`teffects` only (no faithful R analogue) - same class as the absorbing RA-SE row above; revisit if a Stata toolchain or a corrected R package appears. | `benchmarks/R/generate_lpdid_golden.R`, `tests/test_methodology_lpdid.py` | PR-C2 | Low |
 | `HeterogeneousAdoptionDiD` Phase-3 R-parity: ships coverage-rate validation on synthetic DGPs, not tight point parity vs `chaisemartin::stute_test` / `yatchew_test` (needs bootstrap-seed-semantics + `B` alignment across numpy/R). | `tests/test_had_pretests.py` | Phase 3 | Low |
 
-### Parked — pending user demand / out of scope
+## Parked — pending user demand / out of scope
 
 Doable in principle, but no current caller and/or explicitly out of paper scope.
+For survey-specific limitations (`NotImplementedError` paths), see the
+[Current Limitations](docs/survey-roadmap.md#current-limitations) section of survey-roadmap.md.
 
 | Issue | Location | PR | Priority |
 |-------|----------|----|----------|
+| `SyntheticControl` fit-snapshot residency (`_SyntheticControlFitSnapshot`) — **investigated 2026-07-07, parked**: the snapshot ALIASES the fit's own working pivots (zero extra construction cost); the retained residency implements the documented freeze contract (post-fit mutation of estimator inputs must not change `in_space_placebo()` / `leave_one_out()` / conformal output on an already-returned results object, and `__getstate__` already excludes it from pickles). A compact array representation saves only pandas overhead (the float panel dominates); releasing residency needs new API surface (`release`/opt-out flag) or a freeze-contract change. Revisit on user demand for very large donor panels. | `synthetic_control.py`, `synthetic_control_results.py` | follow-up | Low |
+| Stratified survey-PSU multiplier-weight draw-tiling — **investigated 2026-07-07, parked**: the stratified generator (`generate_survey_multiplier_weights_batch`) consumes ONE sequential rng stream stratum-major (`rng.choice(size=(n_bootstrap, n_h))` per stratum, then lonely-PSU pooling), so draw-chunked assembly CANNOT reproduce the stream bit-identically (contra the old row's parenthetical) — it would need per-stratum generator state skipping (PCG64.advance + per-weight-type variate accounting; fragile) or a stream-layout change (MC-level SE changes → baseline/golden recapture + REGISTRY note). Stratified designs have few PSUs, so the full `(n_bootstrap × n_psu)` matrix rarely matters; unstratified (the large-`n_units` case) is already tiled. Revisit only if a large-PSU stratified design hits memory, as a documented stream change. | `diff_diff/bootstrap_chunking.py::iter_survey_multiplier_weight_blocks` | follow-up | Low |
 | ChangesInChanges FULL Melly-Santangelo covariate estimator (monotonized integrated-indicator conditional CDFs, treated-post `F_{X|11}` integration, exchangeable bootstrap with variance-weighted KS bands, tail trimming, pre-period specification test). The qte-`xformla` simplified form of the MS pipeline SHIPPED in the covariates PR (`covariates=` on both estimators, parity-tested vs qte 1.3.1); this row's earlier "No R parity target exists" claim was WRONG and is corrected in the MS review doc. The full estimator has no reference implementation (the MS Stata code is the only one; distinct from Kranker's `cic`) and would need simulation-based validation. Reviewed: `docs/methodology/papers/melly-santangelo-2015-review.md`. | `diff_diff/changes_in_changes.py` | #682 | Low |
 | ChangesInChanges discrete-outcome bounds + DCIC point identification (Athey-Imbens Sections 4/5.2 incl. Imbens-Manski intervals; Kranker's Stata `cic` is the reference). The shipped ties warning marks the boundary of the continuous scope. | `diff_diff/changes_in_changes.py` | #682 | Low |
 | ChangesInChanges analytical SEs (Athey-Imbens Theorems 5.1-5.3 influence functions, panel 5.5-5.7, Appendix B covariances; needs the footnote-31 boundary density estimator - note the review's suspected half-range/midpoint typo). Bootstrap is the shipped inference. | `diff_diff/changes_in_changes.py` | #682 | Low |
 | Staggered/multi-period distributional DiD (Athey-Imbens Section 6 / Ciaccio arXiv:2408.01208v2; `ecic` is the staggered event-study CiC lineage - a distinct method from Ciaccio's copula approach, do not conflate). Reviewed: `docs/methodology/papers/ciaccio-2024-review.md`; ROADMAP row is reviewed-deferred pending demand. | `diff_diff/changes_in_changes.py` | #682 | Low |
 | ChangesInChanges treatment-on-the-controls (Athey-Imbens Theorem 3.2: group-label exchange + negation; no qte equivalent to anchor parity). | `diff_diff/changes_in_changes.py` | #682 | Low |
 | Rust-backend CR2 Bell-McCaffrey port (`return_dof` in the Rust vcov dispatch + CR2 algebra) — **premise re-scoped 2026-07-09**: the scores-based DOF + low-rank factored `A_g` changes made the NumPy CR2-BM path BLAS-bound (`O(n_g k²)` per cluster; 4.1s→38ms at n=100k/k=40), so a Rust port buys ~nothing and adds a parity surface. Revisit only if profiling shows CR2-BM hot again. | `rust/src/linalg.rs` | — | Low |
-| Clustered-CR1 inference df **default flip to `"cluster"` (G−1) at v4** — the opt-in `df_convention=` knob landed 2026-07 (DiD/TWFE/MPD + LinearRegression; REGISTRY §TwoWayFixedEffects deviation note); the remaining work is the major-version default change (moves every clustered p-value/CI) + migration note + flipping `TestDfConvention`/`test_moderate_t_pins_residual_df_convention` expectations. Also evaluate extending the knob to standalone estimators with CR1-t inference at that time. Lifecycle tracked in docs/v4-deprecations.yaml (M-004..M-006). | `diff_diff/linalg.py::LinearRegression`, `diff_diff/estimators.py`, `diff_diff/twfe.py` | — | Medium |
 | CallawaySantAnna **unbalanced-panel R parity — LANDED** via `allow_unbalanced_panel=True` (matches R `did::att_gt(allow_unbalanced_panel=TRUE)` / `DRDID::reg_did_rc`: ATT bit-exact on cells AND dynamic aggregation via fixed unit-cohort-mass `pg` + a per-unit WIF; SE up to the documented CR1 `sqrt(G/(G-1))` factor). The earlier "weighting" framing was a mis-diagnosis — on unbalanced panels the dominant divergence from R is the *estimator* (within-cell differencing vs RC-on-pooled-obs), not only the weighting; both are resolved by the flag. The DEFAULT path keeps within-cell differencing as a documented design choice and now emits a `UserWarning` on unbalanced input (no-silent-failures). **Remaining deferred:** `survey_design=` × `allow_unbalanced_panel=` (per-obs vs per-unit weight resolution — currently fail-closed `NotImplementedError`); and covariate / ipw / dr × the flag R-parity verification (the RC path supports them; the committed golden covers `reg` no-cov). | `staggered.py`, `staggered_aggregation.py` | SE-audit D3 | Low |
 | CallawaySantAnna event-study bucket/weight construction is duplicated between the analytical aggregator (`staggered_aggregation.py::_aggregate_event_study`) and the multiplier bootstrap (`staggered_bootstrap.py`): both group (g,t) by `e = t - g`, apply the finite/NaN/reference masks, and read cohort weights. Both already consume the same source-materialized universal reference cells (so they agree), but the bucket logic is copy-pasted. Extract one shared helper returning per-event-time buckets (finite cells, NaN cells, reference flags, cohort weights, combined-IF inputs) used by both. Pure refactor; gate on byte-identical analytical + bootstrap output. | `staggered_aggregation.py`, `staggered_bootstrap.py` | SE-audit D3 | Low |
 | `StackedDiD` survey re-resolution intra-file dedup (raw-weight extraction ×3, compose-normalize ×3, resolve-on-stacked ×2). The cross-estimator ContinuousDiD/EfficientDiD panel-to-unit collapse consolidation LANDED (#226 shared helpers `ResolvedSurveyDesign.subset_to_units_by_row_idx` / `build_unit_first_row_index`); StackedDiD is deliberately NOT on that path (control units are duplicated across sub-experiments, so it re-resolves at stacked granularity rather than collapsing to one row per unit). The residual is stacked-specific, low value, and touches the numerically-sensitive composed-weight renormalization. Post-filter re-resolution / metadata-recompute unification across the three estimators was assessed and is not warranted — they use genuinely different mechanisms and already delegate to shared `_resolve_survey_for_fit` / `compute_survey_metadata`. | `stacked_did.py` | #226 | Low |
@@ -141,8 +100,29 @@ Doable in principle, but no current caller and/or explicitly out of paper scope.
 | `TestWorkflowDoesNotExecutePRHeadCode` (CodeQL #14 guard) doesn't model `bash/sh/./source <script>` execution, multi-line `python3 -c` bodies, shell-var indirection, `eval`, `find -exec`, `xargs -I`. Catches common accidental regressions (16 forms); closing the residuals needs multi-line shell parsing + script-exec allowlists — diminishing return given the documented threat model. | `tests/test_openai_review.py`, `.github/workflows/ai_pr_review.yml` | #436 | Low |
 | Calendar-time aggregation (R `did` feature gap) — blocks 1 ported test in `test-att_gt.R`. | — | — | Low |
 | **Speculative / low-value performance notes** (relocated from the old `## Performance Optimizations`): numba JIT for bootstrap loops — **blocked by the numpy/pandas/scipy-only dependency policy**; generic sparse-matrix handling for large FE; QR+SVD rank-detection redundancy in `solve_ols` (QR overhead is minimal vs the SVD solve — correctness over micro-opt; `skip_rank_check` already exists for known-full-rank hot paths); incomplete `check_finite=False` bypass (scipy's QR in `_detect_rank_deficiency()` still validates; edge-case only). All `Low`, none correctness-affecting. | `linalg.py::solve_ols` | — | Low |
+| `SpilloverDiD` `covariates=` support (Wave B MVP scope cut): the full covariate path mirroring `TwoStageDiD._fit_untreated_model` (stage-1 residualization on the untreated-and-unexposed subsample, then subtraction before stage 2) — appending covariates only at stage 2 would silently bias `tau_total`/`delta_j`; rejected at `fit()` with `NotImplementedError`. | `spillover.py` | Wave B | Low |
+| `SpilloverDiD` estimator-level end-to-end vcov reconstruction tests (`bread @ meat @ bread` against `res.vcov`): requires exposing the estimator's internal `X_2_kept` design arrays; the surface is currently pinned from different angles (uniform-weight bit-identity, drift goldens, manual lincom reconstruction at rtol=1e-6). | `spillover.py`, `tests/test_spillover.py` | follow-up | Low |
+| `SpilloverDiD` Wave E.3 `finite_mask + design-subset` hygiene not yet adopted for TwoStageDiD's analogous pattern (`two_stage.py:567-601`) — separate parity follow-up noted in the `docs/api/spillover.rst` Restrictions block. | `two_stage.py` | Wave E.3 | Low |
+| `HeterogeneousAdoptionDiD` `covariates=` (Theorem 6 multivariate-covariate extension) not implemented — `fit(covariates=...)` raises `NotImplementedError` via the shipped future-work trap (locked by the `test_had.py` / `test_methodology_had.py` L73 tests); the deferred work is the Theorem 6 extension itself. | `had.py` | Phase 2a | Low |
+| MultiPeriodDiD wild bootstrap not supported (falls back to analytical) — user-facing edge-case limitation. | `estimators.py:1647` | — | Low |
+| `predict()` raises `NotImplementedError` — rarely needed; user-facing limitation. | `estimators.py:890-911` | — | Low |
 
-### Won't-fix / waived (decisions on the record)
+## Version-gated (v4)
+
+Gated on the next major version, not on demand or derivation. Lifecycle state and
+removal/flip targets live ONLY in the CI-enforced `docs/v4-deprecations.yaml`; rows
+here carry the remaining implementation work and cross-link their `M-xxx` ids.
+
+| Issue | Location | PR | Priority |
+|-------|----------|----|----------|
+| Clustered-CR1 inference df **default flip to `"cluster"` (G−1) at v4** — the opt-in `df_convention=` knob landed 2026-07 (DiD/TWFE/MPD + LinearRegression; REGISTRY §TwoWayFixedEffects deviation note); the remaining work is the major-version default change (moves every clustered p-value/CI) + migration note + flipping `TestDfConvention`/`test_moderate_t_pins_residual_df_convention` expectations. Also evaluate extending the knob to standalone estimators with CR1-t inference at that time. Lifecycle tracked in docs/v4-deprecations.yaml (M-004..M-006). | `diff_diff/linalg.py::LinearRegression`, `diff_diff/estimators.py`, `diff_diff/twfe.py` | — | Medium |
+
+## Decision record — won't-fix / waived
+
+Decisions on the record, kept to stop re-litigation. Convention going forward: decisions
+that pin **user-visible behavior or methodology** are recorded as Notes in
+`docs/methodology/REGISTRY.md` (the reviewer-recognized labels); **internal-engineering**
+decisions (refactor waivers, perf trade-offs, test-infrastructure calls) are recorded here.
 
 | Decision | Location | Verified |
 |----------|----------|----------|
@@ -154,138 +134,3 @@ Doable in principle, but no current caller and/or explicitly out of paper scope.
 | **`ImputationDiD` SE vcov is already rank-guarded upstream.** Excluded from the structural rank-guard sweep: the lead/effect vcov comes from `solve_ols(..., return_vcov=True, rank_deficient_action=...)` at the OLS fit (`imputation.py:~2316`), which already drops rank-deficient columns. The only raw inverse (`solve(V_gamma, gamma)`, `imputation.py:~2530`) is the pretrends **Wald F-test statistic** with a safe `NaN` fallback — a test statistic, not a sandwich bread — so there is no garbage-SE exposure. No structural rank-guard needed. | `imputation.py` | structural-rank-guard / 2026-06-28 |
 | **TWFE HC2/HC2-BM full-dummy dedup: drift-prone duplication already resolved by the shared builder; full delegation waived.** The former Actionable row (origin: follow-up review, citing pre-#655 line numbers) asked to extract a shared dummy-construction helper or delegate TWFE's HC2/HC2-BM path to DiD's `fixed_effects=` branch. The shared-helper half SHIPPED in #655: both sites now delegate dummy construction, drop-first convention, FE column naming, and the duplicate-term backstop to the single `build_fe_dummy_blocks` (`utils.py`) + `validate_design_term_names` implementation (`twfe.py::fit` full-dummy branch; `estimators.py::DifferenceInDifferences.fit` `fixed_effects=` branch) — the FE-naming / survey-behavior drift risk the row targeted is gone. What remains per site is ~4 lines of genuinely estimator-specific design-matrix assembly (TWFE stacks `const`/`ATT`/covariates; DiD stacks its formula terms), which is not drift-prone duplication. The remaining full-delegation option — routing `TWFE.fit` through DiD machinery with TWFE-specific cluster-default threading — would touch TWFE's user-visible result surface (coefficient-dict keys, cluster-label conventions, warning text) for near-zero residual benefit; waived on cost/benefit. | `twfe.py::fit`, `estimators.py::DifferenceInDifferences.fit`, `utils.py::build_fe_dummy_blocks` | #655 / 2026-07-10 |
 | **Survey TSL SE intentionally counts genuine-subpopulation zero-weight PSUs (matches R, NOT a bug).** Re-examined the former "count only positive-weight PSUs in the correction" item (origin PR-B). `_compute_stratified_psu_meat`'s finite-sample correction `(1-f_h)·n_{PSU,h}/(n_{PSU,h}-1)` and PSU-mean centering keep zero-weight PSUs — this is the **full-design domain-estimation convention** (Lumley 2004 §3.4; R `survey::svyrecvar(subset())`), already documented in REGISTRY § "Subpopulation Analysis" (the survey-vcov path deliberately differs from the positive-weight invariance applied *outside* it). The ATT is exactly invariant; the SE is intentionally NOT invariant to genuine-subpopulation zeroing (it *should* differ from a naive physical subset — that is the whole point of `subpopulation()`). Repro (`scratchpad`): zeroing a full PSU vs physically dropping it differs ~5e-3 rel — the Lumley-correct gap, and R's `svyrecvar(subset())` produces the matching SE (only `df` differs; see the § "Subpopulation Analysis" Deviation note). The only truly invariance-violating shape — appending *synthetic new* all-zero PSUs — does not arise in any estimator path (real padding reuses existing PSU labels and is already bit-invariant, or is genuine domain estimation via `prep.py`'s zero-padded full-design cell variance). "Fixing" the meat to positive-weight-only would break the documented Lumley/R parity. Regression-locked by `tests/test_survey.py::TestZeroWeightPsuConventionWaiver`. | `survey.py` (`_compute_stratified_psu_meat`) | PR-B / 2026-06-30 |
-
----
-
-## Reference / Status
-
-Not backlog — current-state notes, monitoring, and scheduled removals.
-
-### Known Limitations (user-facing)
-
-| Issue | Location | Priority | Notes |
-|-------|----------|----------|-------|
-| MultiPeriodDiD wild bootstrap not supported (falls back to analytical) | `estimators.py:1647` | Low | Edge case |
-| `predict()` raises NotImplementedError | `estimators.py:890-911` | Low | Rarely needed |
-
-For survey-specific limitations (NotImplementedError paths), see the
-[Current Limitations](docs/survey-roadmap.md#current-limitations) section of survey-roadmap.md.
-
-### Large Module Files
-
-Target: ideally < 1000 lines per module; modules ≥3000 lines are candidates for splitting,
-2000-3000 are monitored, 1000-2000 are accepted as a cohesion / scope trade-off. Updated
-2026-07-13.
-
-| File | Lines | Action |
-|------|-------|--------|
-| `chaisemartin_dhaultfoeuille.py` | 8812 | Consider splitting (per-path / placebos / survey IF / aggregation) |
-| `linalg.py` | 5424 | Consider splitting (vcov surfaces) only if cohesion preserved — unified backend; vcov / solver paths tightly coupled |
-| `staggered.py` | 4992 | Consider splitting — grew through survey + aggregation features |
-| `had.py` | 4748 | Consider splitting (continuous / mass-point / event-study / survey paths) |
-| `had_pretests.py` | 4664 | Consider splitting (Stute / Yatchew / QUG / joint pretests) |
-| `diagnostic_report.py` | 4135 | Consider splitting (per-method renderers + provenance) |
-| `spillover.py` | 3655 | Consider splitting |
-| `two_stage.py` | 3512 | Consider splitting |
-| `power.py` | 3488 | Consider splitting (power analysis + MDE + sample size) |
-| `utils.py` | 3483 | Consider splitting |
-| `synthetic_control_results.py` | 3294 | Consider splitting |
-| `honest_did.py` | 3068 | Consider splitting |
-| `imputation.py` | 2898 | Monitor |
-| `synthetic_did.py` | 2826 | Monitor — variance methods + survey paths |
-| `business_report.py` | 2728 | Monitor — per-method narrative renderers |
-| `survey.py` | 2681 | Monitor — grew with Phase 6 features |
-| `synthetic_control.py` | 2526 | Monitor |
-| `prep_dgp.py` | 2524 | Monitor |
-| `estimators.py` | 2441 | Monitor |
-| `continuous_did.py` | 2431 | Monitor |
-| `sun_abraham.py` | 2314 | Monitor |
-| `triple_diff.py` | 2231 | Monitor |
-| `wooldridge.py` | 2192 | Monitor |
-| `efficient_did.py` | 2083 | Monitor |
-| `chaisemartin_dhaultfoeuille_results.py` | 2004 | Monitor |
-| `results.py` | 1948 | Acceptable |
-| `pretrends.py` | 1879 | Acceptable |
-| `prep.py` | 1878 | Acceptable |
-| `efficient_did_covariates.py` | 1818 | Acceptable |
-| `staggered_triple_diff.py` | 1680 | Acceptable |
-| `trop_local.py` | 1662 | Acceptable |
-| `lpdid.py` | 1607 | Acceptable |
-| `stacked_did.py` | 1589 | Acceptable |
-| `practitioner.py` | 1511 | Acceptable |
-| `_nprobust_port.py` | 1425 | Acceptable |
-| `bacon.py` | 1376 | Acceptable |
-| `local_linear.py` | 1325 | Acceptable |
-| `trop_global.py` | 1298 | Acceptable |
-| `staggered_aggregation.py` | 1204 | Acceptable |
-| `chaisemartin_dhaultfoeuille_bootstrap.py` | 1175 | Acceptable |
-| `conley.py` | 1140 | Acceptable |
-| `trop.py` | 1026 | Acceptable |
-| `profile.py` | 1001 | Acceptable |
-
-### Standard Error Consistency
-
-`vcov_type` has subsumed the previously-proposed `se_type` knob. `DifferenceInDifferences`
-and `TwoWayFixedEffects` accept `vcov_type ∈ {classical, hc1, hc2, hc2_bm, conley}`
-(the validated set in `linalg.py::_VALID_VCOV_TYPES`); cluster-robust variance comes from
-`cluster=` alongside the heteroscedasticity kind (`hc1+cluster` ⇒ CR1 Liang-Zeger;
-`hc2_bm+cluster` ⇒ CR2 Bell-McCaffrey, including the weighted WLS-CR2 port; the N>1
-absorbed-FE + weights composition is supported via iterative alternating-projection demeaning, #586);
-wild cluster bootstrap is the separate `inference="wild_bootstrap"` path. Threading
-`vcov_type` through the 8 standalone estimators is **complete** (Phase 1b); four
-(`CallawaySantAnna`, `TripleDifference`, `ImputationDiD`, `EfficientDiD`) are permanently
-narrow to `{hc1}` per their influence-function variance, and `TwoStageDiD` is likewise
-narrow (Gardner GMM meat has no single cross-stage hat matrix). The per-estimator
-`vcov_type="conley"` extensions: SunAbraham + WooldridgeDiD-OLS are **shipped**; the
-IF/GMM estimators are tracked in
-[Deferred → Paper-gated](#paper-gated--needs-methodology-derivation).
-
-### Type Annotations
-
-`mypy diff_diff` is **enforced at zero errors** by the Lint CI workflow's Mypy job at the
-pinned `mypy==2.3.0` (ungated, every PR push; pins synced with the `dev` extra via
-`TestLintWorkflowPinSync`). `[tool.mypy] python_version` targets `"3.10"` (mypy >= 2.2
-cannot target 3.9); the Python 3.9 library floor is covered by a dedicated runtime leg in
-the gated test matrix instead. Zero is reached with documented suppressions — tightening them
-is tracked in Actionable Backlog → Testing / docs:
-
-- Global `disable_error_code = ["arg-type", "return-value", "var-annotated", "assignment"]`
-  (numpy-stub compatibility, long-standing).
-- Per-module override: `diff_diff.prep_dgp` disables `[index]` (seeded-DGP Optional
-  covariate arrays; see the comment in `pyproject.toml`).
-- `matplotlib.*` / `plotly.*` use `follow_imports = "skip"` so local and CI runs see
-  identical `Any` surfaces regardless of what plotting stubs are installed.
-- A handful of reasoned inline `# type: ignore[code]` comments, each with a why-comment;
-  `warn_unused_ignores = true` prevents them from going stale.
-
-Mixin cross-class attribute access uses `TYPE_CHECKING`-guarded attribute/method stubs in
-the bootstrap mixin classes; keep stubs in sync with implementations (stub drift shows up
-as `[misc]` unpack-arity errors).
-
-### Test Coverage
-
-Visualization tests skip when matplotlib / plotly are not installed (see
-`pytest.importorskip` markers in `tests/test_visualization*.py`).
-
-### Deprecated Code
-
-- `lambda_reg` and `zeta` in `SyntheticDiD` (`synthetic_did.py`) — deprecated in favor of
-  `zeta_omega` / `zeta_lambda`; remove in v4.0.0 (public kwarg removal requires a major bump).
-
-### RuntimeWarnings — Apple Silicon M4 BLAS bug (numpy < 2.3)
-
-Spurious RuntimeWarnings ("divide by zero", "overflow", "invalid value") are emitted by
-`np.matmul`/`@` on Apple Silicon M4 + macOS Sequoia with numpy < 2.3, for matrices with
-≥260 rows. They **do not affect correctness** (coefficients/fitted values are valid, designs
-full rank). Root cause: Apple's BLAS SME kernels corrupt the FP status register
-([numpy#28687](https://github.com/numpy/numpy/issues/28687),
-[#29820](https://github.com/numpy/numpy/issues/29820); fixed in numpy ≥ 2.3 via
-[PR #29223](https://github.com/numpy/numpy/pull/29223)). Not reproducible on M3, Intel, or
-Linux.
-
-- `linalg.py:162` — warnings in fitted-value computation (`X @ coefficients`); seen in
-  `test_prep.py` during treatment-effect recovery (n > 260).
-- `triple_diff.py:307,323` — warnings in propensity-score computation (IPW/DR with
-  covariates); logistic-regression overflow in edge cases (separate from the BLAS bug).
-- **Long-term:** revert to the `@` operator when numpy ≥ 2.3 becomes the minimum supported
-  version.

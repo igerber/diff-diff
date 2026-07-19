@@ -3384,7 +3384,7 @@ class TwoStageDiD(TwoStageDiDBootstrapMixin):
                 f"TwoStageDiD(vcov_type={vcov_type!r}) is not yet supported: "
                 "TwoStageDiD's GMM sandwich (_compute_gmm_variance) has no "
                 "spatial-HAC path today (the Conley machinery lives in the "
-                "separate SpilloverDiD helper). See TODO.md for the deferred "
+                "separate SpilloverDiD helper). See DEFERRED.md for the deferred "
                 "follow-up row. Use vcov_type='hc1' (the default) with "
                 "cluster=<col> for cluster-robust inference."
             )

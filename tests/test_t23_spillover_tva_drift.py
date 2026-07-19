@@ -127,7 +127,8 @@ def _silence_spillover_matmul_warnings():
     ``RuntimeWarning`` filter. The three matmul warnings ("divide by
     zero" / "overflow" / "invalid value") are an Apple Silicon M4 +
     macOS Sequoia + numpy<2.3 Accelerate BLAS artifact documented at
-    ``TODO.md`` under "RuntimeWarnings in Linear Algebra Operations"
+    ``docs/dev-status.md`` under "RuntimeWarnings — Apple Silicon M4 BLAS
+    bug"
     (root cause: Apple BLAS SME kernels corrupt the FP status register;
     tracked as numpy#28687, fixed in numpy>=2.3). They DO NOT fire on
     M3 / Intel / Linux or numpy>=2.3 — so this filter is a no-op there,
@@ -622,8 +623,8 @@ def _assert_post_filter_warning_surface_is_clean(captured) -> None:
     `_silence_spillover_matmul_warnings`) silences three Apple Silicon
     M4 + numpy<2.3 Accelerate BLAS warnings that are emitted on the
     affected platform but DO NOT fire on M3 / Intel / Linux or
-    numpy>=2.3 (per ``TODO.md`` "RuntimeWarnings in Linear Algebra
-    Operations"). The drift contract this assertion locks is
+    numpy>=2.3 (per ``docs/dev-status.md`` "RuntimeWarnings — Apple
+    Silicon M4 BLAS bug"). The drift contract this assertion locks is
     platform-agnostic:
 
     - on platforms where the matmul warnings fire, they get filtered

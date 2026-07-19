@@ -409,7 +409,7 @@ and planned follow-up enhancements:
     ``NotImplementedError`` post-resolution at ``SpilloverDiD.fit``
     because the pseudo-PSU = obs-index fallback would silently zero
     the serial sum (each pseudo-PSU appears in exactly one period).
-    Tracked as a follow-up in ``TODO.md``.
+    Tracked as a follow-up in ``DEFERRED.md``.
   - Replicate-weight variance (BRR / Fay / JK1 / JKn / SDR) raises
     ``NotImplementedError`` (inherits Wave E.1 gate).
   - DiagnosticReport routing for the panel-block case is queued for the
@@ -485,7 +485,7 @@ and planned follow-up enhancements:
     (``spillover.py:2400``).
   - TwoStageDiD's analogous ``finite_mask + design-subset`` pattern at
     ``two_stage.py:567-601`` is NOT yet adopted to Wave E.3 — separate
-    parity follow-up tracked in ``TODO.md``.
+    parity follow-up tracked in ``DEFERRED.md``.
 - **Count-of-treated-in-ring** — only the "nearest-treated ring"
   specification is implemented. The "count" form re-introduces
   functional-form dependence (paper Section 3.2 end) and is queued.

@@ -80,7 +80,7 @@ Unit Remains Untreated" (arXiv:2405.04465v6), which:
    ``survey_design=SurveyDesign(weights='<weight_col>', psu='<cluster_col>')``
    (which takes the survey Binder-TSL branch, not the bare-cluster branch).
    Joint cross-horizon analytical covariance is not computed in this
-   release; tracked in ``TODO.md``.
+   release; tracked in ``DEFERRED.md``.
 
    **Mass-point ``vcov_type="classical"`` deviation.** The mass-point
    ``survey_design=SurveyDesign(...)`` paths (static and event-study)

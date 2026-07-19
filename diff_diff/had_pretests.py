@@ -61,7 +61,7 @@ application) shipped in PR #389 (Phase 4 R-parity) as the
 :meth:`HeterogeneousAdoptionDiD.fit` (event-study path). Mirrors R
 ``DIDHAD::did_had(..., trends_lin=TRUE)``. Survey-weighted variant is
 not yet derived from the paper and raises ``NotImplementedError``;
-tracked in ``TODO.md`` if user demand emerges. See
+tracked in ``DEFERRED.md`` if user demand emerges. See
 ``docs/methodology/REGISTRY.md`` for the full algorithm narrative,
 invariants, and deviation notes.
 """
@@ -3460,7 +3460,7 @@ def joint_pretrends_test(
     # ---- trends_lin × survey_design gate (PR #389 / Phase 4 R-parity). ----
     # Detrending under survey weighting (weighted slope? per-PSU slope?)
     # is not derived from the paper. Use trends_lin without survey weights,
-    # OR survey weights without trends_lin. Tracked as TODO follow-up.
+    # OR survey weights without trends_lin. Tracked as DEFERRED.md follow-up.
     if trends_lin and survey is not None:
         raise NotImplementedError(
             "joint_pretrends_test(trends_lin=True) is not yet supported "
@@ -3468,7 +3468,7 @@ def joint_pretrends_test(
             "slope estimator's weighted "
             "variant is not derived from the paper. Use trends_lin=True "
             "WITHOUT survey weights, or use survey weights WITHOUT "
-            "trends_lin. Tracked in TODO.md as a follow-up if user "
+            "trends_lin. Tracked in DEFERRED.md as a follow-up if user "
             "demand emerges."
         )
 
@@ -3838,7 +3838,7 @@ def joint_homogeneity_test(
             "The per-group slope estimator's "
             "weighted variant is not derived from the paper. Use "
             "trends_lin=True WITHOUT survey weights, or use survey "
-            "weights WITHOUT trends_lin. Tracked in TODO.md as a "
+            "weights WITHOUT trends_lin. Tracked in DEFERRED.md as a "
             "follow-up if user demand emerges."
         )
 

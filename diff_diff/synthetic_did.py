@@ -156,7 +156,7 @@ class SyntheticDiD(DifferenceInDifferences):
     Algorithms 2–4), not the sandwich identity Conley plugs into. Adding
     Conley support would require either an analytical SDID sandwich path
     or a spatial-block bootstrap (Politis-Romano 1994 territory). Tracked
-    as a follow-up in ``TODO.md``.
+    as a follow-up in ``DEFERRED.md``.
 
     References
     ----------
@@ -181,7 +181,7 @@ class SyntheticDiD(DifferenceInDifferences):
         # literal `super().__init__(robust=True, cluster=None, alpha=alpha)`,
         # so any user-passed `vcov_type=` or `conley_*=` would be silently
         # dropped. Per `feedback_no_silent_failures`, raise loudly. Tracked
-        # in TODO.md for a follow-up that wires Conley to a non-bootstrap
+        # in DEFERRED.md for a follow-up that wires Conley to a non-bootstrap
         # variance path on SyntheticDiD.
         vcov_type: Optional[str] = None,
         conley_coords: Optional[Tuple[str, str]] = None,
@@ -204,7 +204,7 @@ class SyntheticDiD(DifferenceInDifferences):
                 "SyntheticDiD does not yet support vcov_type='conley' or any "
                 "conley_* kwargs. SyntheticDiD uses bootstrap/jackknife/placebo "
                 "variance (variance_method=...), not the analytical sandwich "
-                "routed through compute_robust_vcov. Tracked in TODO.md as "
+                "routed through compute_robust_vcov. Tracked in DEFERRED.md as "
                 "a follow-up."
             )
         if vcov_type is not None and vcov_type != "conley":
@@ -2758,7 +2758,7 @@ class SyntheticDiD(DifferenceInDifferences):
         ``conley_*`` non-None values: SyntheticDiD uses bootstrap/jackknife/
         placebo variance, not the analytical sandwich, so any Conley kwarg
         would be silently ignored otherwise (forbidden by
-        ``feedback_no_silent_failures``). Tracked in TODO.md for a follow-up
+        ``feedback_no_silent_failures``). Tracked in DEFERRED.md for a follow-up
         that wires Conley to a non-bootstrap variance path.
         """
         # Reject Conley kwargs / non-None vcov_type before any mutation —
@@ -2784,7 +2784,7 @@ class SyntheticDiD(DifferenceInDifferences):
                 "SyntheticDiD does not yet support vcov_type='conley' or any "
                 "conley_* kwargs. SyntheticDiD uses bootstrap/jackknife/placebo "
                 "variance (variance_method=...), not the analytical sandwich "
-                "routed through compute_robust_vcov. Tracked in TODO.md as "
+                "routed through compute_robust_vcov. Tracked in DEFERRED.md as "
                 "a follow-up."
             )
         # Deprecated parameter names — emit warning and ignore

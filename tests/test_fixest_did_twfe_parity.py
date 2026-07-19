@@ -101,7 +101,7 @@ class TestFixestDiDTWFEParity:
         ``absorb=[unit, time]`` and ``cluster=unit``, fixest counts the
         non-nested time FE in the (n-1)/(n-k) denominator while the
         within-transform path uses k_visible (measured ~0.25% balanced /
-        ~0.3% unbalanced; tracked in TODO under "Needs external reference").
+        ~0.3% unbalanced; tracked in DEFERRED.md under "Needs external reference").
         The band pins that we never regress BEYOND the known deviation."""
         golden = _load_golden()
         for key in ("twfe", "twfe_hetero"):

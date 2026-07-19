@@ -2284,7 +2284,7 @@ class SpilloverDiD:
                 "residualization) would silently bias tau_total / delta_j on "
                 "panels with time-varying covariates. The full covariate "
                 "path mirroring TwoStageDiD._fit_untreated_model is queued as "
-                "a follow-up extension. See TODO.md."
+                "a follow-up extension. See DEFERRED.md."
             )
         if self.vcov_type in ("hc2", "hc2_bm"):
             raise NotImplementedError(
@@ -2400,7 +2400,7 @@ class SpilloverDiD:
                     "the IF-reweighting shortcut does not apply because gamma_hat "
                     "is weight-sensitive; correct support requires per-replicate "
                     "full re-fit of stage 1 and stage 2. Queued as a follow-up. "
-                    "See TODO.md."
+                    "See DEFERRED.md."
                 )
 
         # Step 2: convert binary treatment to per-unit first_treat if needed.
@@ -2930,7 +2930,7 @@ class SpilloverDiD:
         #
         # Replaces the Wave E.1 design-subset block that mirrored the
         # `two_stage.py:567-601` pattern. TwoStageDiD parity is a deferred
-        # follow-up (TODO.md).
+        # follow-up (DEFERRED.md).
         if n_nan > 0:
             survey_weights_fit = survey_weights[finite_mask] if survey_weights is not None else None
         else:
