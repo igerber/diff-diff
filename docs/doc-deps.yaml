@@ -908,6 +908,27 @@ sources:
         section: "DiagnosticReport"
         type: user_guide
 
+  diff_diff/mmm.py:
+    drift_risk: medium
+    docs:
+      - path: docs/methodology/REGISTRY.md
+        section: "MMM Calibration Export (interop)"
+        type: methodology
+        note: "Lift-test scaling semantics, spend-weighted pooling, lognormal closed form (pinned to Meridian 1.7.0), sign/positivity policies."
+      - path: docs/api/mmm.rst
+        type: api_reference
+      - path: README.md
+        section: "Diagnostics & Sensitivity (one-line mention)"
+        type: user_guide
+      - path: docs/references.rst
+        type: user_guide
+      - path: diff_diff/guides/llms.txt
+        section: "Diagnostics and Sensitivity Analysis"
+        type: user_guide
+      - path: diff_diff/guides/llms-full.txt
+        section: "MMM Calibration Export"
+        type: user_guide
+
   diff_diff/power.py:
     drift_risk: low
     docs:

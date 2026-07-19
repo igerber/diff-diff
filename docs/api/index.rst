@@ -246,6 +246,20 @@ result objects:
    diff_diff.DiagnosticReport
    diff_diff.DiagnosticReportResults
 
+MMM Calibration Export
+----------------------
+
+Convert experiment results into Marketing Mix Model calibration inputs
+(PyMC-Marketing lift tests, Google Meridian ROI priors):
+
+.. autosummary::
+   :toctree: _autosummary
+   :nosignatures:
+
+   diff_diff.to_pymc_marketing_lift_test
+   diff_diff.to_meridian_roi_prior
+   diff_diff.MeridianROIPrior
+
 Boundary Local-Linear Estimators
 --------------------------------
 
@@ -370,6 +384,7 @@ Reporting
 
    business_report
    diagnostic_report
+   mmm
 
 Results & Visualization
 ~~~~~~~~~~~~~~~~~~~~~~~

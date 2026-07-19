@@ -350,6 +350,21 @@ Power Analysis
 
   Establishes the power gains from multiple pre/post periods in panel experiments (the ``(m+r)/(mr)`` period factor); the ψ = 0 special case of Burlig, Preonas & Woerman (2020) Eq. 2.
 
+MMM Calibration Interop
+-----------------------
+
+- **PyMC Labs.** "Lift Test Calibration." *PyMC-Marketing documentation*. https://www.pymc-marketing.io/en/stable/notebooks/mmm/mmm_lift_test.html
+
+  Defines the lift-test DataFrame schema (``channel``/dims/``x``/``delta_x``/``delta_y``/``sigma``) and the saturation-curve likelihood consumed by ``MMM.add_lift_test_measurements``, which ``to_pymc_marketing_lift_test`` targets.
+
+- **Google.** "Set Custom Prior Distributions Using Past Experiments." *Google Meridian documentation*. https://developers.google.com/meridian/docs/advanced-modeling/set-custom-priors-past-experiments
+
+  Documents the experiment-to-ROI-prior calibration workflow and caveats; the lognormal ``(mu, sigma)`` closed form emitted by ``to_meridian_roi_prior`` matches Meridian's ``prior_distribution.lognormal_dist_from_mean_std`` (verified against Meridian 1.7.0 source).
+
+- **Zhou, G., Choe, Y., & Hetrakul, C. (2023).** "Calibrated MMM Better Predicts True ROAS." *Meta Marketing Science*. https://medium.com/@gufengzhou/calibrated-mmm-better-predicts-true-roas-d5adfc8abdc4
+
+  Empirical motivation for experiment calibration: calibrating MMMs against lift experiments substantially reduces ROAS prediction error.
+
 General Causal Inference
 ------------------------
 

@@ -130,6 +130,7 @@ Full guide: `diff_diff.get_llm_guide("practitioner")`.
 - [Honest DiD](https://diff-diff.readthedocs.io/en/stable/api/honest_did.html) - Rambachan & Roth (2023) sensitivity analysis: robust CI under PT violations, breakdown values
 - [Pre-Trends Power Analysis](https://diff-diff.readthedocs.io/en/stable/api/pretrends.html) - Roth (2022) minimum detectable violation and power curves
 - [Power Analysis](https://diff-diff.readthedocs.io/en/stable/api/power.html) - analytical and simulation-based MDE, sample size, power curves for study design
+- [MMM Calibration Export](https://diff-diff.readthedocs.io/en/stable/api/mmm.html) - convert experiment results into MMM calibration inputs: PyMC-Marketing lift-test frames and Google Meridian lognormal ROI priors
 - Conley spatial HAC SE (`vcov_type="conley"`) on cross-sectional `LinearRegression` / `compute_robust_vcov` plus panel `DifferenceInDifferences` / `MultiPeriodDiD` / `TwoWayFixedEffects` (with `conley_lag_cutoff` for within-unit Bartlett temporal HAC) - Conley (1999) spatial-correlation-aware SEs with parity vs R `conleyreg` on cross-sectional + panel fixtures, optional combined spatial + cluster product kernel via explicit `cluster=`, auto-activating sparse k-d-tree fast path for `n > 5_000`
 
 ## Survey Support

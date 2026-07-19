@@ -78,6 +78,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   standard rename rows (M-088/M-089) under the spec's missed-rename clause.
   Docs + ledger + test-count updates only - **no public API or numerical behavior
   change.**
+- **MMM calibration export (`diff_diff.mmm`)** - interop builders that assemble
+  Marketing Mix Model calibration inputs from experiment results, with no MMM
+  package dependency and no result introspection (purely additive). Design is
+  explicit-in / validated-out: the caller supplies the already-scoped
+  incremental outcome and its SE (aggregated to the population and window one
+  MMM row represents), and diff-diff assembles the schema, enforces each
+  consumer's guards, and converts to the target parameterization - it does not
+  rescale a headline ATT, because that reconciliation needs the MMM's row
+  structure and outcome scale it cannot see.
+  `to_pymc_marketing_lift_test(channel, x, delta_x, delta_y, sigma, dims=,
+  on_wrong_sign=)` builds the PyMC-Marketing/prophetverse lift-test DataFrame
+  with sign/zero (Gamma-likelihood)/positivity guards.
+  `to_meridian_roi_prior(incremental_outcome, incremental_outcome_se, spend,
+  parameter="roi_m"|"mroi_m", se_widening=)` builds Google Meridian lognormal
+  ROI/mROI priors (`MeridianROIPrior` with `mu`/`sigma` matching Meridian's
+  `lognormal_dist_from_mean_std`, spend-weighted multi-experiment pooling, and a
+  channel- and time-scoped `.to_code()` snippet that sets `media_prior_type`).
+  Deriving totals directly from a fitted result is deferred to the post-4.0
+  `results.aggregate()` layer.
+
 - **Reviewer-eval harness: N-arm matrix, blinded grading, corpus grown 2 -> 11
   (`tools/reviewer-eval/`, prep for the GPT-5.6 reviewer evaluation).**
   `config/configs.json` moves from the two-arm `control`/`candidate` shape to an

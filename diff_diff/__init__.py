@@ -154,6 +154,11 @@ from diff_diff.local_linear import (
 )
 from diff_diff.lpdid import LPDiD
 from diff_diff.lpdid_results import LPDiDResults
+from diff_diff.mmm import (
+    MeridianROIPrior,
+    to_meridian_roi_prior,
+    to_pymc_marketing_lift_test,
+)
 from diff_diff.power import (
     PowerAnalysis,
     PowerResults,
@@ -566,6 +571,10 @@ __all__ = [
     "Alert",
     "OutcomeShape",
     "TreatmentDoseShape",
+    # MMM calibration export (interop)
+    "to_pymc_marketing_lift_test",
+    "to_meridian_roi_prior",
+    "MeridianROIPrior",
     # LLM guide accessor
     "get_llm_guide",
 ]

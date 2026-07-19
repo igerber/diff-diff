@@ -5768,6 +5768,33 @@ estimator-focused:
 
 ---
 
+## MMM Calibration Export (interop)
+
+**Primary sources:** [PyMC-Marketing lift-test calibration](https://www.pymc-marketing.io/en/stable/notebooks/mmm/mmm_lift_test.html) (`MMM.add_lift_test_measurements` schema); [Google Meridian, "Set custom prior distributions using past experiments"](https://developers.google.com/meridian/docs/advanced-modeling/set-custom-priors-past-experiments) and the closed-form lognormal conversion in `meridian/model/prior_distribution.py` (`lognormal_dist_from_mean_std`, Meridian 1.7.0); the roi_m/mroi_m estimand definitions in [Meridian's ROI parameterization docs](https://developers.google.com/meridian/docs/advanced-modeling/roi-mroi-contribution-parameterizations).
+
+**Module:** `diff_diff/mmm.py`
+
+**Scope:** Interop builders (not estimators), **explicit in / validated out**. Reconciling an experiment's estimate to a calibration input requires context diff-diff cannot see - the target MMM's row granularity (per-geo vs national), its time window, and the outcome's scale (additive levels vs log/rate/share) - so the module does NOT rescale a result's headline ATT. The caller supplies the already-scoped incremental outcome and its SE (the numbers read off `summary()`, aggregated to the population and window their MMM row represents); diff-diff assembles the target schema, enforces each consumer's guards, converts to the lognormal parameterization, pools, and emits snippets. Pure numpy/pandas; no MMM package imported; no result introspection, so the module is purely additive (does not touch any estimator). Deriving totals from a fitted result is deferred to the post-4.0 `results.aggregate()` layer, where the estimator - which owns its aggregation weights, balance, and survey masses - can compute its own total effect and SE.
+
+**Key implementation requirements:**
+
+*Lift-test frame (`to_pymc_marketing_lift_test`):*
+- Assembles one row per experiment with the exact schema `[channel, *dims, x, delta_x, delta_y, sigma]` from caller-supplied values. `delta_y`/`sigma` are the scoped incremental outcome and its SE; all four numeric columns must describe the SAME calibration observation (same channel, population, period span, additive-level outcome) - stated in the docstring, not machine-checkable, since spend and scope are user input.
+- Sign/zero policy (`on_wrong_sign={raise,drop,keep}`, default raise): PyMC-Marketing rejects `sign(delta_y) != sign(delta_x)` with `NonMonotonicError`; `delta_y == 0` is a distinct class (degenerate for its strictly-positive Gamma lift likelihood, which its own monotonicity check does not catch). Both share one disposition; `drop` raises rather than emit an empty frame; `keep` warns the frame is not valid PyMC-Marketing input.
+- Guards: `sigma > 0` and finite; `delta_x` finite and nonzero; `x >= 0` finite; `x + delta_x >= 0` (post-test spend cannot be negative - the saturation curve is evaluated there); `delta_y` finite; go-dark tests (`delta_x < 0` with sign-consistent negative lift) pass. `dims` keys must not collide with reserved schema columns and must share one key set across rows; non-mapping dims raise `TypeError`.
+
+*Meridian ROI prior (`to_meridian_roi_prior`):*
+- Per experiment `roi = incremental_outcome / spend`, `roi_sd = incremental_outcome_se / spend * se_widening`. Multiple experiments pooled spend-weighted - the spend-weighted average ROI the [Meridian FAQ](https://developers.google.com/meridian/docs/faqs) suggests (citing sec 3.4 of Google's MMM calibration whitepaper): `roi_mean = sum(w_i * roi_i)`, `w_i = spend_i / sum(spend)`.
+- **Estimand (`parameter={roi_m,mroi_m}`, default roi_m):** `roi_m` is the return on the channel's full spend (a zero-spend/full-holdout estimand; `spend` = total channel spend); `mroi_m` is the marginal return of a spend change (`spend` = the spend change). Under saturation these differ, so the caller declares which their `incremental_outcome` measures; the returned prior and `.to_code()` target that parameter with its own Meridian default for non-experiment channels (roi_m `LogNormal(0.2, 0.9)`, mroi_m `LogNormal(0.0, 0.5)`, both verified at 1.7.0). Sign, aggregation, and population are the caller's responsibility - a go-dark contract's numerator is `Y_exposed - Y_zero`, which the caller supplies with the correct sign.
+- Lognormal conversion matches Meridian's `lognormal_dist_from_mean_std` exactly: `sigma = sqrt(log1p((s/m)^2))`, `mu = ln(m) - log1p((s/m)^2)/2` (`log1p` keeps a ~1e-8 relative SE from rounding `sigma` to 0).
+- A non-positive pooled ROI mean raises (lognormal positivity), pointing to pooling, wider priors, or Meridian's contribution/coefficient parameterizations. `spend`, `incremental_outcome_se`, and `se_widening` must be finite and positive; `incremental_outcome` finite.
+- **Note:** Pooled `roi_sd = sqrt(sum((w_i * sd_i)^2))` treats experiments as independent (no covariance term). Experiments sharing control units or overlapping windows are positively correlated and the pooled sd is then anti-conservative; the docstring instructs users to widen via `se_widening`.
+- **Channel scope in `.to_code()`**: roi_m/mroi_m have batch shape `n_media_channels` and a scalar distribution broadcasts to EVERY channel, so the snippet helper requires explicit scope - `channel=`+`media_channels=` emits a vector prior in model channel order (non-experiment channels keep the parameter's Meridian default), `single_channel=True` emits a scalar snippet marked single-channel-only, and neither raises. It also requires the prior's TIME scope (`roi_calibration_period=<mask expr>` or `full_model_window=True`), because Meridian's default applies an experiment-window prior over all model times; and it sets `media_prior_type="roi"`/`"mroi"` on `ModelSpec` (Meridian ignores a supplied `roi_m`/`mroi_m` unless the matching prior type is selected). Snippets use the TensorFlow substrate; a comment points JAX users at `tensorflow_probability.substrates.jax`.
+
+*Outputs:* All scaled and pooled values (`roi`, `roi_sd`, pooled moments, lognormal `mu`/`sigma`) are validated finite-and-positive after arithmetic; overflow/underflow raises rather than emitting non-finite or zero-uncertainty calibration data.
+
+---
+
 # Version History
 
 - **v1.3** (2026-03-26): Added Replicate Weight Variance, DEFF Diagnostics,

@@ -2042,7 +2042,6 @@ sample_result = compute_sample_size(effect_size=0.5, sigma=1.0)
 
 # Simulation-based power
 sim_result = simulate_power(
-    n_units=200, n_periods=8, treatment_period=4,
     effect_sizes=[0.1, 0.5, 1.0, 2.0],
     n_simulations=500, seed=42,
 )
@@ -2731,3 +2730,85 @@ cross-period aggregations are enumerated in
 current release; see that document for phrasing rules, the
 no-traffic-light decision, unit-translation policy, and schema
 stability policy.
+
+## MMM Calibration Export
+
+Interop builders converting experiment results into Marketing Mix Model
+(MMM) calibration inputs. Pure numpy/pandas - no MMM package is imported,
+no result object is introspected (the module is purely additive). Design:
+EXPLICIT IN, VALIDATED OUT. Reconciling an experiment estimate to a
+calibration input needs the target MMM's row granularity (per-geo vs
+national), its time window, and the outcome scale (additive levels vs
+log/rate/share) - none of which diff-diff can see - so the CALLER supplies
+the already-scoped incremental outcome and its SE (read off summary(),
+aggregated to the population/window one MMM row represents). diff-diff
+assembles the schema, enforces each consumer's guards, converts to the
+lognormal parameterization, pools, and emits snippets. Deriving totals
+from a fit is deferred to the post-4.0 results.aggregate() layer, where
+the estimator owns its aggregation weights/balance/survey masses.
+
+```python
+from diff_diff import (
+    SyntheticDiD,
+    to_pymc_marketing_lift_test,
+    to_meridian_roi_prior,
+)
+
+# Single-treated-geo experiment: with exactly ONE treated geo the SDID ATT
+# is that geo's lift, so a geo-labelled row is sound. For MULTIPLE treated
+# geos the pooled ATT is an average - export each geo's own effect or omit
+# the geo dim and match an aggregate lift to aggregate spend.
+result = SyntheticDiD().fit(panel, outcome="revenue", treatment="treated",
+                            unit="geo", time="week")
+
+# PyMC-Marketing / prophetverse lift-test frame. Pass the scoped effect.
+df_lift = to_pymc_marketing_lift_test(
+    channel="tv",              # must match the MMM's channel_columns
+    x=50_000.0,                # baseline spend for this row's scope
+    delta_x=20_000.0,          # spend change (nonzero; negative go-dark,
+                               # with x + delta_x >= 0)
+    delta_y=result.att,        # measured lift, scoped to this row
+    sigma=result.se,           # its SE (finite, > 0)
+    dims={"geo": "US-CA"},     # optional model-dim coordinate (one treated geo)
+    on_wrong_sign="raise",     # raise|drop|keep - PyMC rejects
+                               # sign(delta_y)!=sign(delta_x) AND delta_y==0
+                               # (degenerate for its Gamma lift likelihood)
+)
+
+# Google Meridian lognormal prior. Caller aggregates the ATT to a total
+# incremental outcome over the treated population/window and its SE.
+prior = to_meridian_roi_prior(
+    incremental_outcome=180_000.0,     # total incremental revenue
+    incremental_outcome_se=45_000.0,   # its SE
+    spend=200_000.0,                   # channel spend the outcome is over
+    parameter="roi_m",                 # roi_m (full-spend/zero-spend return)
+                                       # | mroi_m (marginal return)
+    se_widening=1.5,                   # >=1 for transferability skepticism
+)
+prior.roi_mean, prior.roi_sd          # pooled ROI moments
+prior.mu, prior.sigma                 # LogNormal params (match Google's
+                                      # lognormal_dist_from_mean_std)
+prior.to_dict()                       # JSON-ready
+print(prior.to_code(                  # ready-to-paste PriorDistribution +
+    channel="tv",                     # ModelSpec; roi_m/mroi_m is per-channel
+    media_channels=["search", "tv"],  # so channel scope is required (vector
+                                      # prior in model channel order; other
+                                      # channels keep the Meridian default),
+    roi_calibration_period="mask",    # AND time scope (mask expr) or
+                                      # full_model_window=True; sets
+))                                    # media_prior_type accordingly.
+```
+
+Key points:
+- Lift frame: one row per experiment, columns [channel, *dims, x, delta_x,
+  delta_y, sigma]; guards on sigma>0, delta_x!=0, x>=0, x+delta_x>=0,
+  finite delta_y; dims must not collide with reserved columns and must
+  share one key set. on_wrong_sign governs wrong-sign AND zero-lift rows
+  (drop-all raises; keep warns the frame is not valid PyMC input).
+- Meridian: roi = incremental_outcome/spend, spend-weighted pooling,
+  roi_sd = sqrt(sum((w_i*sd_i)^2)) (independence assumed - widen via
+  se_widening); non-positive pooled ROI raises (lognormal positivity);
+  all scaled/pooled outputs re-validated finite-positive.
+- parameter="roi_m" vs "mroi_m" picks the Meridian estimand + its default
+  for non-experiment channels (LogNormal(0.2,0.9) vs LogNormal(0.0,0.5))
+  and the emitted media_prior_type ("roi" vs "mroi").
