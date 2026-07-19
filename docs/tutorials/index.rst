@@ -233,17 +233,17 @@ Modern estimators for designs the basic toolkit cannot handle.
 Study Design
 ------------
 
-Validate assumptions and size your study before you commit to it.
+Assess identifying assumptions and size your study before committing to it.
 
 .. grid:: 1 2 2 3
    :gutter: 3
 
-   .. grid-item-card:: Parallel Trends Testing
+   .. grid-item-card:: Parallel Trends Diagnostics
       :link: 04_parallel_trends
       :link-type: doc
 
-      Test the key identifying assumption and run the full diagnostic
-      suite.
+      Assess pre-treatment evidence relevant to parallel trends, check
+      test power, and run the full diagnostic suite.
 
    .. grid-item-card:: Honest DiD Sensitivity
       :link: 05_honest_did
@@ -277,7 +277,7 @@ Validate assumptions and size your study before you commit to it.
    :caption: Study Design
    :hidden:
 
-   Parallel Trends Testing <04_parallel_trends>
+   Parallel Trends Diagnostics <04_parallel_trends>
    Honest DiD Sensitivity <05_honest_did>
    Power Analysis <06_power_analysis>
    Pre-Trends Power <07_pretrends_power>
