@@ -34,6 +34,7 @@ import pandas as pd
 from scipy import optimize, stats
 
 from diff_diff.results import MultiPeriodDiDResults
+from diff_diff.results_base import Diagnostic
 
 
 def _compute_nis_acceptance_prob(
@@ -243,7 +244,7 @@ def _extract_event_study_vcov_subblock(
 
 
 @dataclass
-class PreTrendsPowerResults:
+class PreTrendsPowerResults(Diagnostic):
     """
     Results from pre-trends power analysis.
 
@@ -614,7 +615,7 @@ class PreTrendsPowerResults:
 
 
 @dataclass
-class PreTrendsPowerCurve:
+class PreTrendsPowerCurve(Diagnostic):
     """
     Power curve across violation magnitudes.
 
@@ -649,6 +650,25 @@ class PreTrendsPowerCurve:
 
     def __repr__(self) -> str:
         return f"PreTrendsPowerCurve(n_points={len(self.M_values)}, " f"mdv={self.mdv:.4f})"
+
+    def summary(self) -> str:
+        """Return a formatted summary of the power curve."""
+        lines = [
+            "Pre-Trends Power Curve",
+            "=" * 60,
+            f"{'Grid points:':<28} {len(self.M_values)}",
+            f"{'Violation type:':<28} {self.violation_type}",
+            f"{'Pretest form:':<28} {self.pretest_form}",
+            f"{'Significance level (alpha):':<28} {self.alpha}",
+            f"{'Target power:':<28} {self.target_power}",
+            f"{'Minimum detectable violation:':<28} {self.mdv:.4f}",
+            "-" * 60,
+            f"{'M':>12} {'Power':>10}",
+        ]
+        for m, p in zip(self.M_values, self.powers):
+            lines.append(f"{m:>12.4f} {p:>10.4f}")
+        lines.append("=" * 60)
+        return "\n".join(lines)
 
     def to_dataframe(self) -> pd.DataFrame:
         """Convert to DataFrame with M, power, and pretest_form columns."""

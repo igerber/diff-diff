@@ -109,14 +109,29 @@ _ROW_START_RE = re.compile(r"^  - id:\s*(\S+)\s*$")
 _FIELD_RE = re.compile(r"^    ([a-z_]+):\s*(.*?)\s*$")
 _MD_TOKEN_RE = re.compile(r"\[(M-\d{3})\]")
 
-# Row-count floor: exactly the 75 rows shipped by the Phase 1 spec (incl. the diagnostic-family amendment). Ids are never reused and terminal
-# rows are never deleted, so the ledger only grows - raise the floor when rows are added; a
-# lower parse count means scanner/format drift or an illegal row deletion.
-ROW_COUNT_FLOOR = 75
+# Row-count floor: 75 rows from the Phase 1 spec + diagnostic-family amendment,
+# plus the 2 Phase 2a results-contract rows (M-092/M-093) = 77. Ids are never
+# reused and terminal rows are never deleted, so the ledger only grows - raise
+# the floor when rows are added; a lower parse count means scanner/format drift
+# or an illegal row deletion.
+ROW_COUNT_FLOOR = 77
 
-# Committed snapshot of the Phase 1 id set ("ids are never deleted or reused" contract - a
-# delete-one-add-one edit keeps the count above the floor but trips this). Extend, never edit.
-_INITIAL_ID_RANGES = [(1, 8), (10, 16), (20, 27), (30, 47), (50, 58), (60, 64), (70, 77), (80, 91)]
+# Committed snapshot of the shipped id set ("ids are never deleted or reused"
+# contract - a delete-one-add-one edit keeps the count above the floor but trips
+# this). Extend with a NEW tuple, never edit an existing one. Ranges:
+# (1,8)/(10,16)/(20,27)/(30,47)/(50,58)/(60,64)/(70,77)/(80,91) = Phase 1 + the
+# diagnostic-family amendment; (92,93) = Phase 2a results-contract rows.
+_INITIAL_ID_RANGES = [
+    (1, 8),
+    (10, 16),
+    (20, 27),
+    (30, 47),
+    (50, 58),
+    (60, 64),
+    (70, 77),
+    (80, 91),
+    (92, 93),
+]
 EXPECTED_INITIAL_IDS = frozenset(
     f"M-{n:03d}" for lo, hi in _INITIAL_ID_RANGES for n in range(lo, hi + 1)
 )
@@ -509,12 +524,13 @@ def test_due_rows_are_terminal():
 
 
 def test_initial_ids_never_deleted():
-    """The Phase 1 id set is immutable: ids are never deleted or reused (spec section 11).
+    """The shipped id set is immutable: ids are never deleted or reused (spec section 11).
 
-    ROW_COUNT_FLOOR alone would let a delete-one-add-one edit pass; this snapshot cannot."""
+    ROW_COUNT_FLOOR alone would let a delete-one-add-one edit pass; this snapshot cannot.
+    Extends as rows ship (77 as of Phase 2a: Phase 1 + diagnostic-family + M-092/M-093)."""
     missing = sorted(EXPECTED_INITIAL_IDS - set(_ROW_IDS))
     assert not missing, f"ledger rows deleted (ids are permanent): {missing}"
-    assert len(EXPECTED_INITIAL_IDS) == 75
+    assert len(EXPECTED_INITIAL_IDS) == 77
 
 
 def test_version_tuple_pads_to_three_components():

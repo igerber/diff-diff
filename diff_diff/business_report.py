@@ -44,6 +44,7 @@ import numpy as np
 
 from diff_diff._reporting_helpers import describe_target_parameter
 from diff_diff.diagnostic_report import DiagnosticReport, DiagnosticReportResults
+from diff_diff.results_base import Diagnostic
 
 BUSINESS_REPORT_SCHEMA_VERSION = "2.0"
 
@@ -92,9 +93,11 @@ class BusinessReport:
     Parameters
     ----------
     results : Any
-        A fitted diff-diff results object. Any of the 16 result types is
-        accepted. ``BaconDecompositionResults`` is not a valid input — Bacon
-        is a diagnostic, not an estimator; use ``DiagnosticReport`` for that.
+        A fitted diff-diff ESTIMATOR results object. Diagnostic results
+        (anything subclassing ``diff_diff.Diagnostic``, e.g.
+        ``BaconDecompositionResults``, ``HonestDiDResults``) are rejected
+        by type — pass diagnostics via ``diagnostics=`` or
+        ``DiagnosticReport(precomputed=...)`` instead.
     outcome_label : str, optional
         Stakeholder-friendly outcome name (e.g. ``"Revenue per user"``).
     outcome_unit : str, optional
@@ -174,11 +177,22 @@ class BusinessReport:
         survey_design: Optional[Any] = None,
         precomputed: Optional[Dict[str, Any]] = None,
     ):
-        if type(results).__name__ == "BaconDecompositionResults":
+        # Marked diagnostic results are rejected BY TYPE (spec section
+        # 3.5, ledger row M-091): BusinessReport's primary input is a
+        # fitted ESTIMATOR result carrying the canonical inference row.
+        if isinstance(results, Diagnostic):
+            if type(results).__name__ == "BaconDecompositionResults":
+                raise TypeError(
+                    "BaconDecompositionResults is a diagnostic, not an estimator; "
+                    "wrap the underlying estimator with BusinessReport and pass the "
+                    "Bacon object to DiagnosticReport(precomputed={'bacon': ...})."
+                )
             raise TypeError(
-                "BaconDecompositionResults is a diagnostic, not an estimator; "
-                "wrap the underlying estimator with BusinessReport and pass the "
-                "Bacon object to DiagnosticReport(precomputed={'bacon': ...})."
+                f"{type(results).__name__} is a diagnostic result, not an "
+                "estimator result; BusinessReport takes the fitted "
+                "estimator's results as its primary input. Pass diagnostic "
+                "objects via the diagnostics= parameter (as a "
+                "DiagnosticReport) or interpret them alongside the report."
             )
 
         if diagnostics is not None and not isinstance(

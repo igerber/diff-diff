@@ -44,6 +44,7 @@ from ._rdrobust_port import (
     qrXXinv,
     rdrobust_kweight,
 )
+from .results_base import Diagnostic
 from .utils import validate_covariate_names
 
 __all__ = ["RDPlot", "RDPlotResult"]
@@ -142,7 +143,7 @@ def _resolve_pair(
 
 
 @dataclass
-class RDPlotResult:
+class RDPlotResult(Diagnostic):
     """Quantities of a data-driven RD plot (field names follow R's rdplot
     return list; ``vars_bins`` columns carry R's ``rdplot_*`` names).
 

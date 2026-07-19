@@ -18,8 +18,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   7 event-study horizons, confirming the no-finite-sample-factor convention (REGISTRY
   LPDiD Deviation 2). This is the repo's first Stata parity arm — `teffects` is native
   (no SSC dependency) and goldens are committed, so CI needs no Stata.
+- **4.0 API-unification program, Phase 2 results-contract foundation.** Three new
+  public symbols in `diff_diff.results_base`: `BaseResults` (shared estimator-results
+  base, behaviorally inert in 3.9), `Diagnostic` (marker base applied to the diagnostic
+  result roster - Bacon, RDPlot, HonestDiD, pre-trends/power, placebo, HAD pretests,
+  DiagnosticReport results - which carry no inference row), and `EventStudyResults` (the
+  unified per-event-time representation, with package-internal builders over all 14
+  event-study producers; public exposure rides `aggregate(type="event_study")` in a
+  later Phase 2 PR). Seven estimator results classes gained `to_dict()`
+  (CallawaySantAnna, StackedDiD, ContinuousDiD, SunAbraham, Wooldridge,
+  ChaisemartinDHaultfoeuille, Bacon). Ledger row M-091 flips to `done`; M-092 (unified
+  event-study surface) and M-093 (4.0 sentinel retirement, phase 5) are added.
+  **Estimator equations, weighting, variance, and numerical output are unchanged.**
 
 ### Changed
+- **Diagnostic input validation in the report consumers (4.0 program Phase 2).**
+  `BusinessReport`, `practitioner_next_steps`, and `DiagnosticReport` now route
+  diagnostics by the new `Diagnostic` marker instead of by result-class name. Passing a
+  marked non-Bacon diagnostic (e.g. `HonestDiDResults`, `PlaceboTestResults`) as the
+  primary estimator input now raises `TypeError` - previously `BusinessReport`
+  special-cased only Bacon by name, and `DiagnosticReport` silently produced a
+  zero-check report. Estimator results are unaffected; Bacon's existing read-out is
+  retained.
 - **Internal tracking docs reorganized (no library behavior change).** `TODO.md` is now
   the actionable backlog only; blocked / parked work and won't-fix decisions moved to the
   new root-level `DEFERRED.md` (deferral & decision registry, same blocker sections plus

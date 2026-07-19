@@ -82,6 +82,9 @@ Result containers returned by estimators:
    diff_diff.TWFEWeightsResult
    diff_diff.RegressionDiscontinuityResults
    diff_diff.RDPlotResult
+   diff_diff.BaseResults
+   diff_diff.Diagnostic
+   diff_diff.EventStudyResults
 
 Visualization
 -------------

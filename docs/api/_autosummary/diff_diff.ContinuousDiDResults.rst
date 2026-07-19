@@ -15,6 +15,7 @@
       ~ContinuousDiDResults.print_summary
       ~ContinuousDiDResults.summary
       ~ContinuousDiDResults.to_dataframe
+      ~ContinuousDiDResults.to_dict
 
 
 

@@ -18,6 +18,7 @@ import numpy as np
 import pandas as pd
 
 from diff_diff.results import _format_survey_block
+from diff_diff.results_base import Diagnostic
 from diff_diff.utils import pre_demean_norms, snap_absorbed_regressors
 from diff_diff.utils import within_transform as _within_transform_util
 
@@ -76,7 +77,7 @@ class Comparison2x2:
 
 
 @dataclass
-class BaconDecompositionResults:
+class BaconDecompositionResults(Diagnostic):
     """
     Results from Goodman-Bacon decomposition of TWFE.
 
@@ -269,6 +270,36 @@ class BaconDecompositionResults:
     def _total_weight(self) -> float:
         """Calculate total weight (should be 1.0)."""
         return sum(c.weight for c in self.comparisons)
+
+    def to_dict(self) -> Dict[str, Any]:
+        """
+        Convert the decomposition headline to a dictionary.
+
+        Returns
+        -------
+        Dict[str, Any]
+            TWFE estimate, per-comparison-type weights and averages, and
+            counts. This is a diagnostic container - there is no causal
+            inference row. The per-comparison table is available via
+            ``to_dataframe()``.
+        """
+        result = {
+            "twfe_estimate": self.twfe_estimate,
+            "total_weight_treated_vs_never": self.total_weight_treated_vs_never,
+            "total_weight_earlier_vs_later": self.total_weight_earlier_vs_later,
+            "total_weight_later_vs_earlier": self.total_weight_later_vs_earlier,
+            "weighted_avg_treated_vs_never": self.weighted_avg_treated_vs_never,
+            "weighted_avg_earlier_vs_later": self.weighted_avg_earlier_vs_later,
+            "weighted_avg_later_vs_earlier": self.weighted_avg_later_vs_earlier,
+            "n_timing_groups": self.n_timing_groups,
+            "n_never_treated": self.n_never_treated,
+            "n_obs": self.n_obs,
+            "n_comparisons": len(self.comparisons),
+            "decomposition_error": self.decomposition_error,
+        }
+        if self.n_always_treated_remapped:
+            result["n_always_treated_remapped"] = self.n_always_treated_remapped
+        return result
 
     def to_dataframe(self) -> pd.DataFrame:
         """

@@ -28,6 +28,8 @@ import numpy as np
 import pandas as pd
 from scipy import stats
 
+from diff_diff.results_base import Diagnostic
+
 # Maximum sample size returned when effect is too small to detect
 # (e.g., zero effect or extremely small relative to noise)
 MAX_SAMPLE_SIZE = 2**31 - 1
@@ -980,7 +982,7 @@ def _ddd_panel_profile() -> "_EstimatorProfile":
 
 
 @dataclass
-class PowerResults:
+class PowerResults(Diagnostic):
     """
     Results from analytical power analysis.
 
@@ -1126,7 +1128,7 @@ class PowerResults:
 
 
 @dataclass
-class SimulationPowerResults:
+class SimulationPowerResults(Diagnostic):
     """
     Results from simulation-based power analysis.
 
@@ -2597,7 +2599,7 @@ def simulate_power(
 
 
 @dataclass
-class SimulationMDEResults:
+class SimulationMDEResults(Diagnostic):
     """
     Results from simulation-based minimum detectable effect search.
 
@@ -2694,7 +2696,7 @@ class SimulationMDEResults:
 
 
 @dataclass
-class SimulationSampleSizeResults:
+class SimulationSampleSizeResults(Diagnostic):
     """
     Results from simulation-based sample size search.
 

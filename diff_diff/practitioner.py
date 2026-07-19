@@ -10,6 +10,8 @@ structured set of recommended next steps.
 import math
 from typing import Any, Dict, List, Optional, Set
 
+from diff_diff.results_base import Diagnostic
+
 # ---------------------------------------------------------------------------
 # Valid step names (Baker et al. 8-step framework)
 # ---------------------------------------------------------------------------
@@ -108,15 +110,27 @@ def practitioner_next_steps(
     if unknown:
         raise ValueError(f"Unknown step names: {unknown}. Valid names: {sorted(STEPS)}")
 
-    # Estimation is always complete if we have a results object
-    completed.add("estimation")
-
     type_name = type(results).__name__
-    handler = _HANDLERS.get(type_name, _handle_generic)
+    # Marked diagnostic results route through diagnostic-specific
+    # handling (spec section 3.5, ledger row M-091) instead of the
+    # unknown-result estimator fallback. Bacon stays on its name-keyed
+    # handler with its existing framing.
+    diagnostic_input = isinstance(results, Diagnostic) and type_name not in _HANDLERS
+
+    if not diagnostic_input:
+        # Estimation is always complete if we have an estimator results
+        # object; a diagnostic input carries no estimation of its own.
+        completed.add("estimation")
+
+    handler = _HANDLERS.get(type_name)
+    if handler is None:
+        handler = _handle_diagnostic if diagnostic_input else _handle_generic
     steps, warnings = handler(results)
 
     # Prepend Steps 1-2 (pre-estimation reasoning) to every handler's output.
     # These are always relevant and filterable via completed_steps.
+    # Diagnostic inputs skip the estimator framing entirely - Steps 1-2
+    # define an estimation target the diagnostic does not carry.
     pre_estimation = [
         _step(
             baker_step=1,
@@ -150,13 +164,18 @@ def practitioner_next_steps(
     if type_name == "ChangesInChangesResults":
         pre_estimation[1] = _cic_assumptions_step(results)
 
-    steps = pre_estimation + steps
+    if not diagnostic_input:
+        steps = pre_estimation + steps
 
     # Filter out completed steps
     steps = _filter_steps(steps, completed)
 
     output = {
-        "estimator": _estimator_display(type_name, results),
+        "estimator": (
+            f"{type_name} (diagnostic result)"
+            if diagnostic_input
+            else _estimator_display(type_name, results)
+        ),
         "completed": sorted(completed),
         "next_steps": steps,
         "warnings": warnings,
@@ -1916,6 +1935,44 @@ def _handle_cic(results: Any):
 
     warnings = _check_nan_att(results) + _cic_bootstrap_warnings(results)
     return steps, warnings
+
+
+def _handle_diagnostic(results: Any):
+    """Marked diagnostic results (``diff_diff.Diagnostic``).
+
+    Diagnostic containers assess a design, an assumption, or robustness
+    and carry no causal inference row, so the estimator-style fallback
+    (parallel-trends test, sensitivity, estimator comparison) does not
+    apply. Route the user to interpreting the diagnostic alongside the
+    primary estimator fit.
+    """
+    name = type(results).__name__
+    steps = [
+        _step(
+            baker_step=2,
+            label="Interpret the diagnostic alongside the primary fit",
+            why=(
+                f"{name} is a diagnostic result - it assesses a design, an "
+                "identifying assumption, or robustness, and carries no "
+                "causal-effect estimate. Read its summary() next to the "
+                "primary estimator's results before drawing conclusions."
+            ),
+            code="print(diagnostic.summary())\ndiagnostic.to_dataframe()",
+            step_name="assumptions",
+        ),
+        _step(
+            baker_step=8,
+            label="Get next steps from the estimator result",
+            why=(
+                "practitioner_next_steps() tailors its checklist to the "
+                "ESTIMATOR result; pass the fitted estimator's results "
+                "object for estimator-specific guidance."
+            ),
+            code="practitioner_next_steps(results)  # the estimator's results",
+            step_name="estimation",
+        ),
+    ]
+    return steps, []
 
 
 def _handle_generic(results: Any):

@@ -90,3 +90,28 @@ Results from SyntheticDiD estimation.
       ~SyntheticDiDResults.att
       ~SyntheticDiDResults.unit_weights
       ~SyntheticDiDResults.time_weights
+
+Results-contract foundations
+----------------------------
+
+Shared bases introduced by the 4.0 API-unification program.
+``BaseResults`` is the estimator-results base;
+``Diagnostic`` marks diagnostic result containers (which carry no
+inference row); ``EventStudyResults`` is the unified per-event-time
+representation.
+
+.. autoclass:: diff_diff.BaseResults
+   :no-index:
+   :members:
+   :show-inheritance:
+
+.. autoclass:: diff_diff.Diagnostic
+   :no-index:
+   :members:
+   :show-inheritance:
+
+.. autoclass:: diff_diff.EventStudyResults
+   :no-index:
+   :members:
+   :undoc-members:
+   :show-inheritance:

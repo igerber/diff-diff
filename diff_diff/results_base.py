@@ -1,0 +1,936 @@
+"""Shared result-contract foundations (4.0 program, Phase 2 PR (a)).
+
+This module is a deliberate LEAF: it imports numpy/pandas only, never other
+``diff_diff`` modules, so every results/diagnostic/consumer module can import
+it without cycles.
+
+Three public symbols (see ``docs/v4-design.md``):
+
+- :class:`BaseResults` - the shared base for estimator result containers
+  (spec section 5, results contract).
+- :class:`Diagnostic` - the marker base for diagnostic result containers
+  (spec section 3.5, ledger row M-091).
+- :class:`EventStudyResults` - the unified event-study representation
+  (spec section 5, ledger row M-092).
+
+``build_event_study_surface`` is package-internal: Phase 2 PR (b) wires it
+into ``results.aggregate(type="event_study")``, and the Phase 3 merged
+TwoWayFixedEffects event-study mode returns the container natively.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Optional, Tuple
+
+import numpy as np
+import pandas as pd
+
+__all__ = ["BaseResults", "Diagnostic", "EventStudyResults"]
+
+
+class Diagnostic:
+    """Marker base for diagnostic RESULT containers (spec section 3.5).
+
+    diff-diff distinguishes three object kinds: estimators, estimator
+    results, and diagnostics. Exactly one bit is load-bearing: an
+    estimator's result carries a causal-effect inference row (the canonical
+    quintet ``att``/``se``/``t_stat``/``p_value``/``conf_int``); a
+    diagnostic's result does NOT - it assesses a design, an identifying
+    assumption, or robustness.
+
+    Marked classes expose ``summary()`` and ``to_dataframe()`` and are
+    exempt from the quintet BY TYPE, so consumers route with
+    ``isinstance(result, Diagnostic)`` instead of result-class-name
+    special-casing. The contract is enforced by the roster test in
+    ``tests/test_diagnostic_marker.py`` (ledger row M-091), not by the type
+    system - this class intentionally has no methods.
+    """
+
+    __slots__ = ()
+
+
+class BaseResults:
+    """Shared base for ESTIMATOR result containers (spec section 5).
+
+    Behaviorally inert in 3.9 - a TRANSITIONAL marker base that makes the
+    results contract checkable and anchors the 4.0 storage flip. It does not
+    yet enforce a uniform runtime protocol: most subclasses are scalar
+    estimator results (one canonical quintet), but :class:`EventStudyResults`
+    is intentionally vector-valued, and a few inherited classes still expose
+    ``summary()`` without an ``alpha`` argument. Full protocol uniformity
+    (uniform ``summary(alpha=None)``, native canonical storage) is enforced in
+    later Phase 2 / 4.0 PRs. The target contract every ESTIMATOR-results
+    subclass converges to:
+
+    - **Canonical quintet.** ``att``, ``se``, ``t_stat``, ``p_value``,
+      ``conf_int`` bound to ONE coherent inference row (native fields or
+      property aliases over legacy ``overall_*``/``avg_*`` storage; the
+      storage flips to native canonical fields at 4.0, ledger rows
+      M-050..M-058, with legacy names living on as FutureWarning
+      properties until 5.0).
+    - **Serialization.** ``summary(alpha=None)``, ``to_dict()`` (canonical
+      key names only - deprecated names never leak into serialized
+      output), and ``to_dataframe(level=...)`` where multiple views exist.
+    - **Pickle migration.** Classes whose stored field names change ship
+      ``__setstate__`` migration following the
+      ``SyntheticDiDResults.__setstate__`` precedent
+      (``diff_diff/results.py``) so 3.x pickles load under 4.0.
+    - **Planned estimand self-description hook.** The per-class headline
+      semantics (name / definition / aggregation / headline attribute)
+      currently live in ``_reporting_helpers.describe_target_parameter``,
+      keyed by result-class name. A later PR lifts that block onto this
+      base so results self-describe their target parameter (the MMM
+      exporter's verified allowlist is the first consumer); nothing here
+      constrains that lift.
+
+    Diagnostic result containers (spec section 3.5) do NOT inherit this
+    base - they are marked with :class:`Diagnostic` and are exempt from the
+    quintet by type.
+    """
+
+    __slots__ = ()
+
+
+def _json_safe_label(value: Any) -> Any:
+    """Convert an event-time label to a JSON-serializable form.
+
+    Calendar labels may be ``pandas.Timestamp`` / ``Period`` / ``datetime``;
+    ``.tolist()`` preserves those objects, which ``json.dumps`` cannot
+    serialize. Datetimes become ISO strings, pandas ``Period`` its ``str``,
+    numpy scalars their Python value; everything else passes through.
+    """
+    if value is None:
+        return None
+    if type(value).__name__ == "Period":  # pandas.Period (no isoformat)
+        return str(value)
+    if hasattr(value, "isoformat"):  # datetime / date / pandas.Timestamp
+        return value.isoformat()
+    if hasattr(value, "item"):  # numpy scalar
+        return value.item()
+    return value
+
+
+#: Pinned column schema of ``EventStudyResults.to_dataframe()`` - identical
+#: for every producer (spec section 5; enforced by
+#: ``tests/test_event_study_surface.py``, ledger row M-092).
+EVENT_STUDY_SCHEMA: Tuple[str, ...] = (
+    "event_time",
+    "att",
+    "se",
+    "t_stat",
+    "p_value",
+    "conf_int_lower",
+    "conf_int_upper",
+    "cband_lower",
+    "cband_upper",
+    "n",
+    "is_reference",
+)
+
+
+@dataclass
+class EventStudyResults(BaseResults):
+    """Unified event-study representation (spec section 5, row M-092).
+
+    ONE representation for per-event-time effects across all estimators.
+    Columnar numpy arrays index-aligned to ``event_time`` (the
+    ``HeterogeneousAdoptionDiDEventStudyResults`` precedent). Values are
+    copied bit-exactly from each estimator's native surface - never
+    recomputed - except the mandated reference-row normalization
+    (``att=0.0``, inference NaN).
+
+    Parameters
+    ----------
+    event_time : np.ndarray
+        Sorted estimator-native event-time labels, NEVER renumbered.
+        Relative producers use their own origin (see
+        ``event_time_convention``); the pre-4.0 MultiPeriodDiD surface is
+        calendar-keyed (``time_scale="calendar"``) and may carry object
+        dtype (str/datetime period labels).
+    att, se, t_stat, p_value : np.ndarray
+        Canonical per-event-time inference columns. On the reference row
+        (if any): ``att == 0.0`` and ``se``/``t_stat``/``p_value`` are NaN.
+    conf_int_lower, conf_int_upper : np.ndarray
+        Confidence-interval bounds at ``alpha`` (NaN on the reference row).
+    is_reference : np.ndarray
+        Boolean; the EXPLICIT reference-period marking. This column - not
+        any count sentinel - is the sole consumer-facing signal. Usually one
+        True entry, but MULTIPLE are legal (CallawaySantAnna universal base
+        on a gapped grid carries one per cohort's positional base), and ZERO
+        when the estimator omits no baseline (e.g. HAD, Wooldridge). Use
+        ``reference_periods`` for the general case; ``reference_period`` is
+        the single-reference convenience scalar.
+    n : np.ndarray
+        Per-event-time count as float, NaN where the producer records none
+        (and on the reference row - no estimation happened there).
+    n_kind : str or None
+        Semantic of ``n`` for this producer: ``"groups"`` (cohorts, e.g.
+        CallawaySantAnna), ``"obs"`` (observations), ``"clusters"``, or
+        None when no count is recorded.
+    reference_period : Any or None
+        Convenience scalar echo of the marked row's ``event_time`` label when
+        there is EXACTLY ONE reference row; None when there are zero or
+        several. Use ``is_reference`` (or the ``reference_periods`` property)
+        for the general case - some estimators (CallawaySantAnna universal
+        base on a gapped grid) carry multiple reference-only horizons.
+    time_scale : str
+        ``"relative"`` or ``"calendar"``.
+    event_time_convention : str or None
+        Origin documentation for relative scales: ``"e0_first_treated"``
+        (e = t - g; first treated period at e=0) or ``"l1_first_switch"``
+        (de Chaisemartin-D'Haultfoeuille: instantaneous effect at l=1,
+        placebos at negative keys). Horizons are documented, not
+        renumbered.
+    vcov : np.ndarray or None
+        Full event-study variance-covariance matrix where the RESULT
+        CONTAINER exposes one (today: CallawaySantAnna, SunAbraham,
+        MultiPeriodDiD), ordered by ``vcov_index``. StackedDiD and
+        TwoStageDiD compute a full VCV internally but retain only marginal
+        SEs on their result containers, so their surfaces carry ``vcov=None``
+        until that retention is added (tracked in TODO.md).
+    vcov_index : np.ndarray or None
+        ``event_time`` labels labelling ``vcov``'s rows/columns (explicit
+        ordering for HonestDiD / PreTrendsPower consumption).
+    cband_lower, cband_upper : np.ndarray or None
+        Simultaneous confidence-band bounds where computed; None when the
+        producer has none (``to_dataframe`` then emits NaN columns - the
+        schema never changes).
+    cband_crit_value : float or None
+        Critical value of the simultaneous band, where computed.
+    alpha : float
+        Significance level of the stored intervals.
+    source : str or None
+        Producing results-class name (provenance).
+    df : float or None
+        Inference degrees of freedom threaded from the source, where the
+        producer exposes one.
+    """
+
+    event_time: np.ndarray
+    att: np.ndarray
+    se: np.ndarray
+    t_stat: np.ndarray
+    p_value: np.ndarray
+    conf_int_lower: np.ndarray
+    conf_int_upper: np.ndarray
+    is_reference: np.ndarray
+    n: np.ndarray
+    n_kind: Optional[str] = None
+    reference_period: Optional[Any] = None
+    time_scale: str = "relative"
+    event_time_convention: Optional[str] = None
+    vcov: Optional[np.ndarray] = field(default=None, repr=False)
+    vcov_index: Optional[np.ndarray] = field(default=None, repr=False)
+    cband_lower: Optional[np.ndarray] = None
+    cband_upper: Optional[np.ndarray] = None
+    cband_crit_value: Optional[float] = None
+    alpha: float = 0.05
+    source: Optional[str] = None
+    df: Optional[float] = None
+
+    _ARRAY_FIELDS = (
+        "att",
+        "se",
+        "t_stat",
+        "p_value",
+        "conf_int_lower",
+        "conf_int_upper",
+        "n",
+    )
+
+    def __post_init__(self) -> None:
+        # Coerce with a COPY (np.array, not np.asarray): reference-row
+        # normalization below writes in place, so the container must never
+        # mutate a caller-owned buffer (and read-only inputs must not fail).
+        # event_time keeps its native dtype (object labels legal in calendar
+        # mode - no numeric assumptions anywhere below).
+        self.event_time = np.array(self.event_time)
+        for name in self._ARRAY_FIELDS:
+            setattr(self, name, np.array(getattr(self, name), dtype=float))
+        self.is_reference = np.array(self.is_reference, dtype=bool)
+
+        if self.event_time.ndim != 1:
+            raise ValueError(
+                f"EventStudyResults event_time must be one-dimensional; "
+                f"got ndim={self.event_time.ndim}."
+            )
+        # A zero-row surface is legal: an event study that was REQUESTED but
+        # has no estimable horizons (e.g. EfficientDiD's balance_e removing
+        # every cohort) is a valid degenerate result, distinct from one that
+        # was never requested (which raises upstream in the builder).
+        n_rows = self.event_time.shape[0]
+        for name in self._ARRAY_FIELDS + ("is_reference",):
+            arr = getattr(self, name)
+            if arr.shape != (n_rows,):
+                raise ValueError(
+                    f"EventStudyResults field '{name}' has shape {arr.shape}; "
+                    f"expected ({n_rows},) to align with event_time."
+                )
+
+        # Multiple reference rows are legal: CallawaySantAnna with
+        # base_period="universal" on a gapped period grid materializes each
+        # cohort's positional base as its own reference-only horizon (all
+        # n_groups==0), so a valid surface can carry several. `is_reference`
+        # is the general marker; `reference_period` is a convenience scalar
+        # DERIVED from it - authoritative only when there is exactly one
+        # reference, None otherwise - so a caller-supplied value can never
+        # disagree with `is_reference` / `reference_periods`.
+        n_ref = int(self.is_reference.sum())
+        if n_ref == 1:
+            ref_label = self.event_time[self.is_reference][0]
+            # Plain Python scalar so to_dict() stays JSON-serializable.
+            self.reference_period = ref_label.item() if hasattr(ref_label, "item") else ref_label
+        else:
+            self.reference_period = None
+
+        # Simultaneous-band bounds are all-or-nothing (a lower without an upper
+        # is meaningless).
+        if (self.cband_lower is None) != (self.cband_upper is None):
+            raise ValueError(
+                "EventStudyResults requires cband_lower and cband_upper together, " "or neither."
+            )
+        for name in ("cband_lower", "cband_upper"):
+            arr = getattr(self, name)
+            if arr is not None:
+                arr = np.array(arr, dtype=float)  # copy: normalized in place below
+                if arr.shape != (n_rows,):
+                    raise ValueError(
+                        f"EventStudyResults field '{name}' has shape {arr.shape}; "
+                        f"expected ({n_rows},)."
+                    )
+                setattr(self, name, arr)
+
+        # Reference rows are normalization anchors: att is exactly 0.0 and all
+        # inference / count / band fields are undefined (NaN). Enforce this on
+        # EVERY container, not just builder output, so a direct public
+        # construction can never expose finite inference on a reference row.
+        if self.is_reference.any():
+            self.att[self.is_reference] = 0.0
+            for name in ("se", "t_stat", "p_value", "conf_int_lower", "conf_int_upper", "n"):
+                getattr(self, name)[self.is_reference] = np.nan
+            for name in ("cband_lower", "cband_upper"):
+                arr = getattr(self, name)
+                if arr is not None:
+                    arr[self.is_reference] = np.nan
+
+        if (self.vcov is None) != (self.vcov_index is None):
+            raise ValueError(
+                "EventStudyResults requires vcov and vcov_index together "
+                "(explicit ordering) or neither."
+            )
+        if self.vcov is not None:
+            self.vcov = np.asarray(self.vcov, dtype=float)
+            self.vcov_index = np.asarray(self.vcov_index)
+            k = self.vcov_index.shape[0]
+            if self.vcov.shape != (k, k):
+                raise ValueError(
+                    f"EventStudyResults vcov has shape {self.vcov.shape}; "
+                    f"expected ({k}, {k}) to match vcov_index."
+                )
+            event_labels = set(self.event_time.tolist())
+            missing = [lbl for lbl in self.vcov_index.tolist() if lbl not in event_labels]
+            if missing:
+                raise ValueError(
+                    f"EventStudyResults vcov_index entries {missing} are not " "event_time labels."
+                )
+
+        if not 0.0 < self.alpha < 1.0:
+            raise ValueError(f"alpha must be in (0, 1); got {self.alpha}.")
+
+    @property
+    def reference_periods(self) -> List[Any]:
+        """All reference-row ``event_time`` labels (JSON-safe scalars).
+
+        The general accessor for the normalization anchors: one entry for the
+        common single-reference case, several for CallawaySantAnna universal
+        base on a gapped grid, empty when the estimator omits no baseline.
+        """
+        return [_json_safe_label(v) for v in self.event_time[self.is_reference].tolist()]
+
+    # ------------------------------------------------------------------
+    # Serialization contract
+    # ------------------------------------------------------------------
+    def to_dataframe(self) -> pd.DataFrame:
+        """Return the pinned per-event-time table (``EVENT_STUDY_SCHEMA``).
+
+        The column schema is identical for every producer; band columns are
+        NaN-filled when the producer computes no simultaneous band.
+        """
+        n_rows = self.event_time.shape[0]
+        nan_col = np.full(n_rows, np.nan)
+        return pd.DataFrame(
+            {
+                "event_time": self.event_time,
+                "att": self.att,
+                "se": self.se,
+                "t_stat": self.t_stat,
+                "p_value": self.p_value,
+                "conf_int_lower": self.conf_int_lower,
+                "conf_int_upper": self.conf_int_upper,
+                "cband_lower": self.cband_lower if self.cband_lower is not None else nan_col,
+                "cband_upper": self.cband_upper if self.cband_upper is not None else nan_col,
+                "n": self.n,
+                "is_reference": self.is_reference,
+            },
+            columns=list(EVENT_STUDY_SCHEMA),
+        )
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Return a JSON-friendly dict (columns as lists, plus metadata).
+
+        Calendar event-time labels (``pandas.Timestamp`` / ``Period`` /
+        ``datetime``) are converted to ISO strings so the result is
+        JSON-serializable; relative-time integer labels pass through.
+        """
+        out: Dict[str, Any] = {
+            "event_time": [_json_safe_label(v) for v in self.event_time.tolist()],
+            "att": self.att.tolist(),
+            "se": self.se.tolist(),
+            "t_stat": self.t_stat.tolist(),
+            "p_value": self.p_value.tolist(),
+            "conf_int_lower": self.conf_int_lower.tolist(),
+            "conf_int_upper": self.conf_int_upper.tolist(),
+            "cband_lower": self.cband_lower.tolist() if self.cband_lower is not None else None,
+            "cband_upper": self.cband_upper.tolist() if self.cband_upper is not None else None,
+            "n": self.n.tolist(),
+            "is_reference": self.is_reference.tolist(),
+            "n_kind": self.n_kind,
+            "reference_period": _json_safe_label(self.reference_period),
+            "reference_periods": self.reference_periods,
+            "time_scale": self.time_scale,
+            "event_time_convention": self.event_time_convention,
+            # Full event-study vcov + its ordered index (labels JSON-safed),
+            # so covariance-aware consumers (HonestDiD / PreTrendsPower) can
+            # round-trip through the serialized surface.
+            "vcov": self.vcov.tolist() if self.vcov is not None else None,
+            "vcov_index": (
+                [_json_safe_label(v) for v in self.vcov_index.tolist()]
+                if self.vcov_index is not None
+                else None
+            ),
+            "cband_crit_value": self.cband_crit_value,
+            "alpha": self.alpha,
+            "source": self.source,
+            "df": self.df,
+        }
+        return out
+
+    def summary(self, alpha: Optional[float] = None) -> str:
+        """Return a formatted event-study table.
+
+        Parameters
+        ----------
+        alpha : float, optional
+            Accepted for signature uniformity (spec section 5). The stored
+            confidence columns were computed at fit time; passing a value
+            different from the stored ``alpha`` raises rather than silently
+            recomputing or mislabeling - re-aggregate at the desired level
+            instead.
+        """
+        if alpha is not None and alpha != self.alpha:
+            raise ValueError(
+                f"This event-study surface stores intervals computed at "
+                f"alpha={self.alpha}; re-aggregate to obtain alpha={alpha} "
+                "intervals (summary() never recomputes stored inference)."
+            )
+        ci_pct = int(round((1 - self.alpha) * 100))
+        lines = [
+            "Event-Study Effects",
+            "=" * 78,
+        ]
+        meta_bits = []
+        if self.source:
+            meta_bits.append(f"source: {self.source}")
+        meta_bits.append(f"time scale: {self.time_scale}")
+        if self.event_time_convention:
+            meta_bits.append(f"convention: {self.event_time_convention}")
+        if self.n_kind:
+            meta_bits.append(f"n counts: {self.n_kind}")
+        lines.append("  ".join(meta_bits))
+        lines.append("-" * 78)
+        lines.append(
+            f"{'Event time':>12} {'ATT':>10} {'SE':>10} {'t':>8} "
+            f"{'P>|t|':>8} {f'[{ci_pct}% CI]':>21}"
+        )
+        for i in range(self.event_time.shape[0]):
+            label = f"{self.event_time[i]}"
+            if self.is_reference[i]:
+                lines.append(f"{label:>12} {0.0:>10.4f} {'(reference)':>{50}}")
+                continue
+            lines.append(
+                f"{label:>12} {self.att[i]:>10.4f} {self.se[i]:>10.4f} "
+                f"{self.t_stat[i]:>8.3f} {self.p_value[i]:>8.3f} "
+                f"[{self.conf_int_lower[i]:>9.4f}, {self.conf_int_upper[i]:>9.4f}]"
+            )
+        lines.append("=" * 78)
+        return "\n".join(lines)
+
+
+# ----------------------------------------------------------------------
+# Builders: native representation -> EventStudyResults (package-internal)
+# ----------------------------------------------------------------------
+
+#: Per-producer remediation for an absent event-study surface.
+_ABSENT_SURFACE_HINTS: Dict[str, str] = {
+    "CallawaySantAnnaResults": "refit with aggregate='event_study' (or 'all')",
+    "ImputationDiDResults": "refit with aggregate='event_study' (or 'all')",
+    "TwoStageDiDResults": "refit with aggregate='event_study' (or 'all')",
+    "StackedDiDResults": "refit with aggregate='event_study'",
+    "StaggeredTripleDiffResults": "refit with aggregate='event_study' (or 'all')",
+    "EfficientDiDResults": "refit with aggregate='event_study' (or 'all')",
+    "ContinuousDiDResults": "refit with aggregate='eventstudy' (or 'all')",
+    "WooldridgeDiDResults": "call results.aggregate('event') first",
+    "SpilloverDiDResults": "refit with event_study=True",
+    "ChaisemartinDHaultfoeuilleResults": "refit with L_max >= 1",
+    "LPDiDResults": "refit with only_pooled=False",
+}
+
+
+def _absent(results: Any) -> ValueError:
+    name = type(results).__name__
+    hint = _ABSENT_SURFACE_HINTS.get(name, "request event-study aggregation at fit")
+    return ValueError(f"{name} carries no event-study surface - {hint}.")
+
+
+def _empty_surface(results: Any) -> EventStudyResults:
+    """Zero-row surface for a requested-but-empty event study."""
+    empty_f = np.empty(0, dtype=float)
+    return EventStudyResults(
+        event_time=np.empty(0),
+        att=empty_f.copy(),
+        se=empty_f.copy(),
+        t_stat=empty_f.copy(),
+        p_value=empty_f.copy(),
+        conf_int_lower=empty_f.copy(),
+        conf_int_upper=empty_f.copy(),
+        is_reference=np.empty(0, dtype=bool),
+        n=empty_f.copy(),
+        time_scale="relative",
+        alpha=getattr(results, "alpha", 0.05),
+        source=type(results).__name__,
+    )
+
+
+def _materialize_cband(
+    pairs: Dict[int, Tuple[float, float]], n_rows: int
+) -> Tuple[Optional[np.ndarray], Optional[np.ndarray]]:
+    """Turn sparse per-row band tuples into aligned arrays (None if empty)."""
+    if not pairs:
+        return None, None
+    lo = np.full(n_rows, np.nan)
+    hi = np.full(n_rows, np.nan)
+    for i, (lo_i, hi_i) in pairs.items():
+        lo[i] = lo_i
+        hi[i] = hi_i
+    return lo, hi
+
+
+def _from_relative_dict(results: Any) -> EventStudyResults:
+    """Adapter for ``event_study_effects: Dict[int, Dict]`` producers.
+
+    Covers CallawaySantAnna, SunAbraham, ImputationDiD, TwoStageDiD,
+    StackedDiD, SpilloverDiD, ContinuousDiD, EfficientDiD, Wooldridge
+    (``att`` inner key normalized here), and StaggeredTripleDiff.
+
+    Reference resolution is PRODUCER-AWARE, because a zero count is not a
+    universal reference marker:
+
+    1. If the producer names a ``reference_period`` that is PRESENT in the
+       effects dict (SpilloverDiD materializes a zero row), that row is THE
+       reference. Other zero-count rows - SpilloverDiD emits genuinely
+       non-estimable rectangular horizons with ``n_obs == 0`` and NaN
+       inference - are preserved as NON-reference NaN rows.
+    2. If the producer names a ``reference_period`` that is ABSENT (an
+       OMITTED baseline, e.g. SunAbraham's ``e = -1 - anticipation``), the
+       anchor row is synthesized ONLY when the estimator reports it was
+       genuinely observed (``reference_observed``) - never invented on a
+       gapped grid where that period was never in the data.
+    3. Otherwise the in-band zero-count sentinel marks the reference: a
+       zero-count row is a reference iff its effect is exactly 0 (the
+       normalization anchor). A NaN-effect zero-count row is a genuinely
+       non-estimable horizon (TwoStageDiD emits effect=NaN, n_obs=0 for a
+       horizon whose observations are all filtered) - preserved, never
+       normalized. CallawaySantAnna universal base can mark several such
+       rows; ContinuousDiD / Wooldridge carry no count key and yield none.
+    """
+    effects = getattr(results, "event_study_effects", None)
+    if effects is None:
+        raise _absent(results)  # not requested
+    if len(effects) == 0:
+        # Requested but no estimable horizons (e.g. EfficientDiD balance_e
+        # eliminated every cohort). A zero-row surface, not an error.
+        return _empty_surface(results)
+
+    explicit_ref = getattr(results, "reference_period", None)
+
+    # Synthesize an OMITTED-but-OBSERVED baseline before building arrays.
+    effects = dict(effects)
+    synthesized_ref = None
+    if (
+        explicit_ref is not None
+        and explicit_ref not in effects
+        and getattr(results, "reference_observed", False)
+    ):
+        synthesized_ref = explicit_ref
+        effects[explicit_ref] = {
+            "effect": 0.0,
+            "se": np.nan,
+            "t_stat": np.nan,
+            "p_value": np.nan,
+            "conf_int": (np.nan, np.nan),
+        }
+
+    keys = sorted(effects.keys())
+    n_rows = len(keys)
+    att = np.empty(n_rows)
+    se = np.empty(n_rows)
+    t_stat = np.empty(n_rows)
+    p_value = np.empty(n_rows)
+    ci_lo = np.empty(n_rows)
+    ci_hi = np.empty(n_rows)
+    n = np.full(n_rows, np.nan)
+    zero_count = np.zeros(n_rows, dtype=bool)
+    cband_pairs: Dict[int, Tuple[float, float]] = {}
+
+    n_kind: Optional[str] = None
+    for i, k in enumerate(keys):
+        row = effects[k]
+        att[i] = row["att"] if "att" in row else row["effect"]
+        se[i] = row.get("se", np.nan)
+        t_stat[i] = row.get("t_stat", np.nan)
+        p_value[i] = row.get("p_value", np.nan)
+        ci = row.get("conf_int")
+        if ci is not None:
+            ci_lo[i], ci_hi[i] = float(ci[0]), float(ci[1])
+        else:
+            ci_lo[i] = ci_hi[i] = np.nan
+        if "n_groups" in row:
+            n_kind = "groups"
+            n[i] = float(row["n_groups"])
+            zero_count[i] = row["n_groups"] == 0
+        elif "n_obs" in row:
+            n_kind = "obs"
+            n[i] = float(row["n_obs"])
+            zero_count[i] = row["n_obs"] == 0
+
+        cband = row.get("cband_conf_int")
+        if cband is not None:
+            cband_pairs[i] = (float(cband[0]), float(cband[1]))
+
+    event_time = np.asarray(keys)
+    ref_present = explicit_ref is not None and (
+        synthesized_ref is not None or explicit_ref in set(event_time.tolist())
+    )
+    if ref_present:
+        # Named reference that is materialized (Spillover) or synthesized
+        # (SunAbraham observed): mark exactly that row.
+        is_ref = event_time == explicit_ref
+    elif explicit_ref is not None:
+        # Named reference that is absent and NOT synthesized (SunAbraham on a
+        # gapped grid where the anchor was never observed): no reference row.
+        is_ref = np.zeros(n_rows, dtype=bool)
+    else:
+        # In-band zero-count sentinel. A zero-count row is the REFERENCE only
+        # when its effect is exactly 0 (the normalization anchor). A NaN-effect
+        # zero-count row is a genuinely non-estimable horizon - preserved. A
+        # zero-count row with a finite NONZERO effect is malformed - fail
+        # loudly rather than silently rewrite it.
+        finite = np.isfinite(att)
+        bad = zero_count & finite & (att != 0.0)
+        if bad.any():
+            raise ValueError(
+                f"{type(results).__name__} event-study surface has a zero-count "
+                f"row with a finite nonzero effect at {event_time[bad].tolist()}; "
+                "a reference/normalization row must have effect 0.0."
+            )
+        is_ref = zero_count & finite
+
+    cband_lo, cband_hi = _materialize_cband(cband_pairs, n_rows)
+
+    vcov = getattr(results, "event_study_vcov", None)
+    vcov_index = getattr(results, "event_study_vcov_index", None)
+    if vcov is None or vcov_index is None:
+        vcov = vcov_index = None
+
+    return EventStudyResults(
+        event_time=event_time,
+        att=att,
+        se=se,
+        t_stat=t_stat,
+        p_value=p_value,
+        conf_int_lower=ci_lo,
+        conf_int_upper=ci_hi,
+        is_reference=is_ref,
+        n=n,
+        n_kind=n_kind,
+        time_scale="relative",
+        event_time_convention="e0_first_treated",
+        vcov=np.asarray(vcov, dtype=float) if vcov is not None else None,
+        vcov_index=np.asarray(vcov_index) if vcov_index is not None else None,
+        cband_lower=cband_lo,
+        cband_upper=cband_hi,
+        cband_crit_value=getattr(results, "cband_crit_value", None),
+        alpha=getattr(results, "alpha", 0.05),
+        source=type(results).__name__,
+        df=getattr(results, "df_inference", None),
+    )
+
+
+def _from_mpd(results: Any) -> EventStudyResults:
+    """Adapter for MultiPeriodDiD's calendar-keyed ``period_effects``.
+
+    The reference period is omitted from the native dict and recorded on
+    ``results.reference_period``; the marked row is synthesized here
+    (``att=0.0``, NaN inference). The event-study vcov is the sub-block of
+    ``results.vcov`` selected by ``results.interaction_indices`` - pure
+    indexing of stored entries, no recomputation.
+    """
+    period_effects = getattr(results, "period_effects", None)
+    if not period_effects:
+        raise _absent(results)
+
+    ref = getattr(results, "reference_period", None)
+    periods = sorted(period_effects.keys())
+    all_periods = sorted(periods + [ref]) if ref is not None else periods
+
+    n_rows = len(all_periods)
+    att = np.full(n_rows, np.nan)
+    se = np.full(n_rows, np.nan)
+    t_stat = np.full(n_rows, np.nan)
+    p_value = np.full(n_rows, np.nan)
+    ci_lo = np.full(n_rows, np.nan)
+    ci_hi = np.full(n_rows, np.nan)
+    n = np.full(n_rows, np.nan)
+    is_ref = np.zeros(n_rows, dtype=bool)
+
+    for i, p in enumerate(all_periods):
+        if ref is not None and p == ref:
+            is_ref[i] = True
+            continue
+        pe = period_effects[p]
+        att[i] = pe.effect
+        se[i] = pe.se
+        t_stat[i] = pe.t_stat
+        p_value[i] = pe.p_value
+        ci_lo[i], ci_hi[i] = float(pe.conf_int[0]), float(pe.conf_int[1])
+
+    vcov_sub: Optional[np.ndarray] = None
+    vcov_index_arr: Optional[np.ndarray] = None
+    full_vcov = getattr(results, "vcov", None)
+    interaction_indices = getattr(results, "interaction_indices", None)
+    if full_vcov is not None and interaction_indices:
+        covered = [p for p in periods if p in interaction_indices]
+        if covered:
+            idx = [interaction_indices[p] for p in covered]
+            vcov_sub = np.asarray(full_vcov, dtype=float)[np.ix_(idx, idx)]
+            vcov_index_arr = np.asarray(covered)
+
+    return EventStudyResults(
+        event_time=np.asarray(all_periods),
+        att=att,
+        se=se,
+        t_stat=t_stat,
+        p_value=p_value,
+        conf_int_lower=ci_lo,
+        conf_int_upper=ci_hi,
+        is_reference=is_ref,
+        n=n,
+        n_kind=None,
+        reference_period=ref,
+        time_scale="calendar",
+        event_time_convention=None,
+        vcov=vcov_sub,
+        vcov_index=vcov_index_arr,
+        alpha=getattr(results, "alpha", 0.05),
+        source=type(results).__name__,
+    )
+
+
+def _from_lpdid(results: Any) -> EventStudyResults:
+    """Adapter for LPDiD's per-horizon ``event_study`` DataFrame.
+
+    Native columns ``horizon``/``coefficient``/``conf_low``/``conf_high``
+    map onto the canonical names; the materialized ``horizon == -1`` base
+    row (coefficient 0.0, NaN inference) translates to the marked
+    reference row. The per-horizon ``n_clusters`` column stays on the
+    native frame only (``n_kind="obs"``).
+    """
+    frame = getattr(results, "event_study", None)
+    if frame is None or len(frame) == 0:
+        raise _absent(results)
+
+    frame = frame.sort_values("horizon")
+    horizons = frame["horizon"].to_numpy()
+    # copy=True: pandas may hand back a read-only view, and the reference
+    # normalization writes into these arrays.
+    att = np.array(frame["coefficient"], dtype=float)
+    se = np.array(frame["se"], dtype=float)
+    t_stat = np.array(frame["t_stat"], dtype=float)
+    p_value = np.array(frame["p_value"], dtype=float)
+    ci_lo = np.array(frame["conf_low"], dtype=float)
+    ci_hi = np.array(frame["conf_high"], dtype=float)
+    n = np.array(frame["n_obs"], dtype=float)
+    is_ref = horizons == -1
+
+    return EventStudyResults(
+        event_time=horizons,
+        att=att,
+        se=se,
+        t_stat=t_stat,
+        p_value=p_value,
+        conf_int_lower=ci_lo,
+        conf_int_upper=ci_hi,
+        is_reference=is_ref,
+        n=n,
+        n_kind="obs",
+        time_scale="relative",
+        event_time_convention="e0_first_treated",
+        alpha=getattr(results, "alpha", 0.05),
+        source=type(results).__name__,
+    )
+
+
+def _from_dcdh(results: Any) -> EventStudyResults:
+    """Adapter for de Chaisemartin-D'Haultfoeuille's split dicts.
+
+    Merges ``placebo_event_study`` (negative keys), a synthesized
+    reference at 0, and ``event_study_effects`` (post horizons l >= 1,
+    l=1 = instantaneous effect) - the same merge the event-study plotter
+    performs. Horizons keep the paper's convention
+    (``event_time_convention="l1_first_switch"``); they are documented,
+    never renumbered.
+    """
+    effects = getattr(results, "event_study_effects", None)
+    if not effects:
+        raise _absent(results)
+    placebos = getattr(results, "placebo_event_study", None) or {}
+
+    keys: List[Any] = sorted(placebos.keys()) + [0] + sorted(effects.keys())
+    n_rows = len(keys)
+    att = np.full(n_rows, np.nan)
+    se = np.full(n_rows, np.nan)
+    t_stat = np.full(n_rows, np.nan)
+    p_value = np.full(n_rows, np.nan)
+    ci_lo = np.full(n_rows, np.nan)
+    ci_hi = np.full(n_rows, np.nan)
+    n = np.full(n_rows, np.nan)
+    is_ref = np.zeros(n_rows, dtype=bool)
+    cband_pairs: Dict[int, Tuple[float, float]] = {}
+
+    for i, k in enumerate(keys):
+        if k == 0:
+            is_ref[i] = True
+            continue
+        row = placebos[k] if k < 0 else effects[k]
+        att[i] = row["effect"]
+        se[i] = row.get("se", np.nan)
+        t_stat[i] = row.get("t_stat", np.nan)
+        p_value[i] = row.get("p_value", np.nan)
+        ci = row.get("conf_int")
+        if ci is not None:
+            ci_lo[i], ci_hi[i] = float(ci[0]), float(ci[1])
+        if "n_obs" in row:
+            n[i] = float(row["n_obs"])
+        cband = row.get("cband_conf_int")
+        if cband is not None:
+            cband_pairs[i] = (float(cband[0]), float(cband[1]))
+
+    cband_lo, cband_hi = _materialize_cband(cband_pairs, n_rows)
+
+    # Simultaneous-band critical value lives on sup_t_bands (populated only on
+    # a bootstrap fit); carry it so the band's provenance is not lost.
+    sup_t = getattr(results, "sup_t_bands", None)
+    cband_crit = sup_t.get("crit_value") if isinstance(sup_t, dict) else None
+
+    return EventStudyResults(
+        event_time=np.asarray(keys),
+        att=att,
+        se=se,
+        t_stat=t_stat,
+        p_value=p_value,
+        conf_int_lower=ci_lo,
+        conf_int_upper=ci_hi,
+        is_reference=is_ref,
+        n=n,
+        n_kind="obs",
+        time_scale="relative",
+        event_time_convention="l1_first_switch",
+        cband_lower=cband_lo,
+        cband_upper=cband_hi,
+        cband_crit_value=cband_crit,
+        alpha=getattr(results, "alpha", 0.05),
+        source=type(results).__name__,
+    )
+
+
+def _from_had(results: Any) -> EventStudyResults:
+    """Adapter for HAD's columnar event-study container (near-passthrough).
+
+    The anchor horizon e = -1 is excluded from the native surface by
+    design (trivially zero, WAS not identified there), so this producer
+    legitimately has no reference row.
+    """
+    event_times = getattr(results, "event_times", None)
+    if event_times is None or len(event_times) == 0:
+        raise _absent(results)
+
+    n_rows = len(event_times)
+    n_obs = getattr(results, "n_obs_per_horizon", None)
+    cband_lo = getattr(results, "cband_low", None)
+    cband_hi = getattr(results, "cband_high", None)
+
+    return EventStudyResults(
+        event_time=np.array(event_times),
+        att=np.array(results.att, dtype=float),
+        se=np.array(results.se, dtype=float),
+        t_stat=np.array(results.t_stat, dtype=float),
+        p_value=np.array(results.p_value, dtype=float),
+        conf_int_lower=np.array(results.conf_int_low, dtype=float),
+        conf_int_upper=np.array(results.conf_int_high, dtype=float),
+        is_reference=np.zeros(n_rows, dtype=bool),
+        n=(np.asarray(n_obs, dtype=float) if n_obs is not None else np.full(n_rows, np.nan)),
+        n_kind="obs" if n_obs is not None else None,
+        time_scale="relative",
+        event_time_convention="e0_first_treated",
+        cband_lower=np.asarray(cband_lo, dtype=float) if cband_lo is not None else None,
+        cband_upper=np.asarray(cband_hi, dtype=float) if cband_hi is not None else None,
+        cband_crit_value=getattr(results, "cband_crit_value", None),
+        alpha=getattr(results, "alpha", 0.05),
+        source=type(results).__name__,
+    )
+
+
+def build_event_study_surface(results: Any) -> EventStudyResults:
+    """Build the unified event-study surface from a fitted results object.
+
+    Package-internal (spec section 5 / row M-092): public exposure rides
+    ``results.aggregate(type="event_study")`` (Phase 2 PR (b)); the Phase 3
+    merged TwoWayFixedEffects event-study mode returns the container
+    natively. Values are copied bit-exactly from the native surface;
+    an absent surface raises ``ValueError`` naming the call that produces
+    it (never a silent empty container).
+    """
+    # Order matters: dCDH carries both event_study_effects and the split
+    # placebo dict; HAD's columnar container and MPD's period_effects have
+    # unique attributes; LPDiD's surface is a DataFrame field.
+    if hasattr(results, "placebo_event_study") and hasattr(results, "event_study_effects"):
+        return _from_dcdh(results)
+    if hasattr(results, "event_times") and hasattr(results, "n_obs_per_horizon"):
+        return _from_had(results)
+    if hasattr(results, "period_effects") and hasattr(results, "interaction_indices"):
+        return _from_mpd(results)
+    if hasattr(results, "pooled") and hasattr(results, "event_study"):
+        return _from_lpdid(results)
+    if hasattr(results, "event_study_effects"):
+        # SunAbraham (omitted-but-observed baseline) and SpilloverDiD
+        # (materialized reference) both flow through here via reference_period.
+        return _from_relative_dict(results)
+    raise TypeError(
+        f"{type(results).__name__} does not expose an event-study surface. "
+        "Supported producers: CallawaySantAnna, SunAbraham, ImputationDiD, "
+        "TwoStageDiD, StackedDiD, SpilloverDiD, ContinuousDiD, EfficientDiD, "
+        "WooldridgeDiD, StaggeredTripleDifference, MultiPeriodDiD, LPDiD, "
+        "ChaisemartinDHaultfoeuille, and HeterogeneousAdoptionDiD "
+        "event-study results."
+    )

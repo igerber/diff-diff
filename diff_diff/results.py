@@ -11,6 +11,8 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
+from diff_diff.results_base import BaseResults
+
 
 def _format_survey_block(sm, width: int) -> list:
     """Format survey design metadata block for summary() output.
@@ -91,7 +93,7 @@ def _format_vcov_label(
 
 
 @dataclass
-class DiDResults:
+class DiDResults(BaseResults):
     """
     Results from a Difference-in-Differences estimation.
 
@@ -627,7 +629,7 @@ class PeriodEffect:
 
 
 @dataclass
-class MultiPeriodDiDResults:
+class MultiPeriodDiDResults(BaseResults):
     """
     Results from a Multi-Period Difference-in-Differences estimation.
 
@@ -1073,7 +1075,7 @@ class _SyntheticDiDFitSnapshot:
 
 
 @dataclass
-class SyntheticDiDResults:
+class SyntheticDiDResults(BaseResults):
     """
     Results from a Synthetic Difference-in-Differences estimation.
 

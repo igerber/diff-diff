@@ -228,6 +228,11 @@ from diff_diff.results import (
     SpilloverDiDResults,  # re-export
     SyntheticDiDResults,
 )
+from diff_diff.results_base import (
+    BaseResults,
+    Diagnostic,
+    EventStudyResults,
+)
 from diff_diff.spillover import (
     SpilloverDiD,
 )
@@ -577,6 +582,10 @@ __all__ = [
     "MeridianROIPrior",
     # LLM guide accessor
     "get_llm_guide",
+    # Results-contract foundations (4.0 program Phase 2, spec sections 3.5/5)
+    "BaseResults",
+    "Diagnostic",
+    "EventStudyResults",
 ]
 
 # Agent-facing entrypoints surface first in dir(diff_diff). LLM agents

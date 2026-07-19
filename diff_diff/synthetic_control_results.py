@@ -22,6 +22,7 @@ import numpy as np
 import pandas as pd
 
 from diff_diff.results import _format_survey_block, _get_significance_stars
+from diff_diff.results_base import BaseResults
 
 __all__ = ["SyntheticControlResults"]
 
@@ -126,7 +127,7 @@ def _warn_conformal_ci_status(res: Dict[str, Any], method_name: str) -> None:
 
 
 @dataclass
-class SyntheticControlResults:
+class SyntheticControlResults(BaseResults):
     """
     Results from a classic Synthetic Control Method (SCM) estimation.
 

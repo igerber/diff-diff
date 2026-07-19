@@ -39,6 +39,7 @@ import numpy as np
 import pandas as pd
 
 from diff_diff._reporting_helpers import describe_target_parameter  # noqa: E402 (top-level import)
+from diff_diff.results_base import Diagnostic
 
 DIAGNOSTIC_REPORT_SCHEMA_VERSION = "2.0"
 
@@ -253,7 +254,7 @@ _PT_METHOD: Dict[str, str] = {
 
 
 @dataclass(frozen=True)
-class DiagnosticReportResults:
+class DiagnosticReportResults(Diagnostic):
     """Frozen container holding the outcome of a ``DiagnosticReport.run_all()`` call.
 
     Attributes
@@ -277,6 +278,30 @@ class DiagnosticReportResults:
     skipped_checks: Dict[str, str] = field(default_factory=dict)
     warnings: Tuple[str, ...] = ()
 
+    def to_dict(self) -> Dict[str, Any]:
+        """Return the AI-legible structured schema."""
+        return self.schema
+
+    def summary(self) -> str:
+        """Return a short plain-English paragraph."""
+        return self.interpretation
+
+    def to_dataframe(self) -> pd.DataFrame:
+        """Return one row per check with status and headline metric."""
+        rows = []
+        for check in _CHECK_NAMES:
+            section_key = "estimator_native_diagnostics" if check == "estimator_native" else check
+            section = self.schema.get(section_key, {})
+            rows.append(
+                {
+                    "check": check,
+                    "status": section.get("status"),
+                    "headline": _check_headline(check, section),
+                    "reason": section.get("reason"),
+                }
+            )
+        return pd.DataFrame(rows)
+
 
 class DiagnosticReport:
     """Run the standard diff-diff diagnostic battery on a fitted result.
@@ -284,9 +309,14 @@ class DiagnosticReport:
     Parameters
     ----------
     results : Any
-        A fitted diff-diff results object (e.g. ``CallawaySantAnnaResults``,
-        ``DiDResults``, ``SyntheticDiDResults``). Any registered result type
-        in the library is accepted.
+        A fitted diff-diff ESTIMATOR results object (e.g.
+        ``CallawaySantAnnaResults``, ``DiDResults``,
+        ``SyntheticDiDResults``). ``BaconDecompositionResults`` is also
+        accepted (its dedicated Bacon read-out). Any OTHER marked
+        diagnostic result (subclassing ``diff_diff.Diagnostic``, e.g.
+        ``HonestDiDResults``, ``PlaceboTestResults``) is rejected with
+        ``TypeError`` — supply such objects via ``precomputed=`` where
+        supported, or interpret them directly.
     data : pandas.DataFrame, optional
         The underlying panel. Required for checks that need raw data
         (2x2 parallel-trends check on ``DiDResults``; Bacon-from-scratch when
@@ -375,6 +405,22 @@ class DiagnosticReport:
         outcome_label: Optional[str] = None,
         treatment_label: Optional[str] = None,
     ):
+        # Marked diagnostic results (spec section 3.5, ledger row M-091)
+        # are rejected BY TYPE — except Bacon, whose dedicated read-out
+        # is retained. Before the marker, such inputs silently produced
+        # a zero-check report (empty applicability); now they raise.
+        if (
+            isinstance(results, Diagnostic)
+            and type(results).__name__ != "BaconDecompositionResults"
+        ):
+            raise TypeError(
+                f"{type(results).__name__} is a diagnostic result, not an "
+                "estimator result; DiagnosticReport runs its battery on a "
+                "fitted estimator's results. Pass the estimator result "
+                "here and supply diagnostic objects via precomputed= where "
+                "supported (e.g. precomputed={'bacon': ...}), or interpret "
+                "the diagnostic directly via its summary()/to_dataframe()."
+            )
         self._results = results
         self._data = data
         self._outcome = outcome
@@ -521,11 +567,11 @@ class DiagnosticReport:
 
     def to_dict(self) -> Dict[str, Any]:
         """Return the AI-legible structured schema."""
-        return self.run_all().schema
+        return self.run_all().to_dict()
 
     def summary(self) -> str:
         """Return a short plain-English paragraph."""
-        return self.run_all().interpretation
+        return self.run_all().summary()
 
     def full_report(self) -> str:
         """Return the multi-section markdown report."""
@@ -537,20 +583,7 @@ class DiagnosticReport:
 
     def to_dataframe(self) -> pd.DataFrame:
         """Return one row per check with status and headline metric."""
-        schema = self.to_dict()
-        rows = []
-        for check in _CHECK_NAMES:
-            section_key = "estimator_native_diagnostics" if check == "estimator_native" else check
-            section = schema.get(section_key, {})
-            rows.append(
-                {
-                    "check": check,
-                    "status": section.get("status"),
-                    "headline": _check_headline(check, section),
-                    "reason": section.get("reason"),
-                }
-            )
-        return pd.DataFrame(rows)
+        return self.run_all().to_dataframe()
 
     @property
     def applicable_checks(self) -> Tuple[str, ...]:

@@ -16,6 +16,7 @@
       ~BaconDecompositionResults.print_summary
       ~BaconDecompositionResults.summary
       ~BaconDecompositionResults.to_dataframe
+      ~BaconDecompositionResults.to_dict
       ~BaconDecompositionResults.weight_by_type
 
 

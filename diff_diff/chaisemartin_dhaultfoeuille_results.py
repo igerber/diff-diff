@@ -32,6 +32,7 @@ import numpy as np
 import pandas as pd
 
 from diff_diff.results import _get_significance_stars
+from diff_diff.results_base import BaseResults
 
 __all__ = [
     "ChaisemartinDHaultfoeuilleResults",
@@ -180,7 +181,7 @@ class DCDHBootstrapResults:
 
 
 @dataclass
-class ChaisemartinDHaultfoeuilleResults:
+class ChaisemartinDHaultfoeuilleResults(BaseResults):
     """
     Results from de Chaisemartin-D'Haultfoeuille (dCDH) Phase 1 estimation.
 
@@ -1503,6 +1504,42 @@ class ChaisemartinDHaultfoeuilleResults:
     # ------------------------------------------------------------------
     # to_dataframe
     # ------------------------------------------------------------------
+
+    def to_dict(self) -> Dict[str, Any]:
+        """
+        Convert headline results to a dictionary.
+
+        Returns
+        -------
+        Dict[str, Any]
+            Canonical inference row plus scalar metadata; joiner / leaver /
+            placebo decompositions are included only when available.
+            Detailed tables are available via ``to_dataframe(level=...)``.
+        """
+        result = {
+            "att": self.att,
+            "se": self.se,
+            "t_stat": self.t_stat,
+            "p_value": self.p_value,
+            "conf_int_lower": self.overall_conf_int[0],
+            "conf_int_upper": self.overall_conf_int[1],
+            "n_obs": self.n_obs,
+            "n_treated_obs": self.n_treated_obs,
+            "n_switcher_cells": self.n_switcher_cells,
+            "n_cohorts": self.n_cohorts,
+            "L_max": self.L_max,
+            "alpha": self.alpha,
+        }
+        if self.joiners_available:
+            result["joiners_att"] = self.joiners_att
+            result["joiners_se"] = self.joiners_se
+        if self.leavers_available:
+            result["leavers_att"] = self.leavers_att
+            result["leavers_se"] = self.leavers_se
+        if self.placebo_available:
+            result["placebo_effect"] = self.placebo_effect
+            result["placebo_se"] = self.placebo_se
+        return result
 
     def to_dataframe(self, level: str = "overall") -> pd.DataFrame:
         """

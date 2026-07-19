@@ -15,6 +15,7 @@
       ~StackedDiDResults.print_summary
       ~StackedDiDResults.summary
       ~StackedDiDResults.to_dataframe
+      ~StackedDiDResults.to_dict
 
 
 

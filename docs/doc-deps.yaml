@@ -1047,6 +1047,16 @@ sources:
         type: methodology
         note: "SyntheticDiDResults hosts validation diagnostics (LOO, weight concentration, in-time placebo, zeta sensitivity)"
 
+  diff_diff/results_base.py:
+    drift_risk: low
+    docs:
+      - path: docs/api/results.rst
+        type: api_reference
+      - path: docs/v4-design.md
+        section: "5. Results contract"
+        type: design_spec
+        note: "BaseResults / Diagnostic marker / EventStudyResults contract (4.0 program Phase 2; ledger rows M-091/M-092/M-093)"
+
   diff_diff/bootstrap_utils.py:
     drift_risk: medium
     docs:

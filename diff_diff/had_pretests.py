@@ -88,6 +88,7 @@ from diff_diff.had import (
     _validate_had_panel,
     _validate_had_panel_event_study,
 )
+from diff_diff.results_base import Diagnostic
 from diff_diff.survey import (
     SurveyDesign,
     make_pweight_design,
@@ -144,7 +145,7 @@ _EXACT_LINEAR_RELATIVE_TOL = 1e-24
 
 
 @dataclass
-class QUGTestResults:
+class QUGTestResults(Diagnostic):
     """Result of :func:`qug_test` (paper Theorem 4).
 
     The QUG test rejects ``H_0: d_lower = 0`` when the order-statistic
@@ -238,7 +239,7 @@ class QUGTestResults:
 
 
 @dataclass
-class StuteTestResults:
+class StuteTestResults(Diagnostic):
     """Result of :func:`stute_test` (paper Appendix D).
 
     The Stute test rejects the null that ``E[ΔY | D_2]`` is linear in
@@ -323,7 +324,7 @@ class StuteTestResults:
 
 
 @dataclass
-class YatchewTestResults:
+class YatchewTestResults(Diagnostic):
     """Result of :func:`yatchew_hr_test` (paper Theorem 7 / Equation 29).
 
     Heteroskedasticity-robust specification test using Yatchew's
@@ -446,7 +447,7 @@ class YatchewTestResults:
 
 
 @dataclass
-class StuteJointResult:
+class StuteJointResult(Diagnostic):
     """Result of :func:`stute_joint_pretest` (joint Cramer-von Mises across horizons).
 
     Aggregates the per-horizon Stute (1997) CvM statistic into a joint
@@ -610,7 +611,7 @@ class StuteJointResult:
 
 
 @dataclass
-class HADPretestReport:
+class HADPretestReport(Diagnostic):
     """Composite output of :func:`did_had_pretest_workflow`.
 
     Two dispatch shapes, distinguished by :attr:`aggregate`:

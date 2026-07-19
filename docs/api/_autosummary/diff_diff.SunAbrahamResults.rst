@@ -15,6 +15,7 @@
       ~SunAbrahamResults.print_summary
       ~SunAbrahamResults.summary
       ~SunAbrahamResults.to_dataframe
+      ~SunAbrahamResults.to_dict
 
 
 

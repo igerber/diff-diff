@@ -12,6 +12,7 @@ import numpy as np
 import pandas as pd
 
 from diff_diff.results import _format_survey_block, _get_significance_stars
+from diff_diff.results_base import BaseResults
 
 __all__ = [
     "ImputationBootstrapResults",
@@ -74,7 +75,7 @@ class ImputationBootstrapResults:
 
 
 @dataclass
-class ImputationDiDResults:
+class ImputationDiDResults(BaseResults):
     """
     Results from Borusyak-Jaravel-Spiess (2024) imputation DiD estimation.
 

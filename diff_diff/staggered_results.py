@@ -12,6 +12,7 @@ import numpy as np
 import pandas as pd
 
 from diff_diff.results import _format_survey_block, _get_significance_stars
+from diff_diff.results_base import BaseResults
 
 if TYPE_CHECKING:
     from diff_diff.staggered_bootstrap import CSBootstrapResults
@@ -66,7 +67,7 @@ class GroupTimeEffect:
 
 
 @dataclass
-class CallawaySantAnnaResults:
+class CallawaySantAnnaResults(BaseResults):
     """
     Results from Callaway-Sant'Anna (2021) staggered DiD estimation.
 
@@ -421,6 +422,40 @@ class CallawaySantAnnaResults:
     def print_summary(self, alpha: Optional[float] = None) -> None:
         """Print summary to stdout."""
         print(self.summary(alpha))
+
+    def to_dict(self) -> Dict[str, Any]:
+        """
+        Convert headline results to a dictionary.
+
+        Returns
+        -------
+        Dict[str, Any]
+            Canonical inference row plus scalar metadata. Detailed
+            group-time / event-study tables are available via
+            ``to_dataframe(level=...)``.
+        """
+        result = {
+            "att": self.att,
+            "se": self.se,
+            "t_stat": self.t_stat,
+            "p_value": self.p_value,
+            "conf_int_lower": self.overall_conf_int[0],
+            "conf_int_upper": self.overall_conf_int[1],
+            "n_obs": self.n_obs,
+            "n_treated_units": self.n_treated_units,
+            "n_control_units": self.n_control_units,
+            "control_group": self.control_group,
+            "base_period": self.base_period,
+            "anticipation": self.anticipation,
+            "panel": self.panel,
+            "alpha": self.alpha,
+            "vcov_type": self.vcov_type,
+        }
+        if self.cluster_name is not None:
+            result["cluster_name"] = self.cluster_name
+        if self.n_clusters is not None:
+            result["n_clusters"] = self.n_clusters
+        return result
 
     def to_dataframe(self, level: str = "group_time") -> pd.DataFrame:
         """

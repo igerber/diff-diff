@@ -13,6 +13,7 @@
 
       ~PreTrendsPowerCurve.__init__
       ~PreTrendsPowerCurve.plot
+      ~PreTrendsPowerCurve.summary
       ~PreTrendsPowerCurve.to_dataframe
 
 

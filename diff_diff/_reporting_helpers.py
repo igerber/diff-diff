@@ -21,6 +21,8 @@ from __future__ import annotations
 
 from typing import Any, Dict
 
+from diff_diff.results_base import Diagnostic
+
 
 def describe_target_parameter(results: Any) -> Dict[str, Any]:
     """Return the target-parameter block for a fitted result.
@@ -653,6 +655,26 @@ def describe_target_parameter(results: Any) -> Dict[str, Any]:
             "aggregation": "spillover",
             "headline_attribute": "att",
             "reference": "Butts (2021); REGISTRY.md Sec. SpilloverDiD",
+        }
+
+    # Marked diagnostic results (spec section 3.5): no causal-effect
+    # inference row exists, so no ATT-style target parameter applies.
+    # The named ``BaconDecompositionResults`` branch above returns first
+    # (its block documents the TWFE coefficient being decomposed). This
+    # branch is defensive depth for direct callers: BR / DR reject
+    # marked non-Bacon diagnostics before ever calling this helper.
+    if isinstance(results, Diagnostic):
+        return {
+            "name": f"Diagnostic result ({name})",
+            "definition": (
+                f"``{name}`` is a diagnostic result: it assesses a design, "
+                "an identifying assumption, or robustness, and carries no "
+                "causal-effect inference row. There is no target parameter; "
+                "interpret it alongside the primary estimator's results."
+            ),
+            "aggregation": "diagnostic",
+            "headline_attribute": "",
+            "reference": "docs/v4-design.md Sec. 3.5",
         }
 
     # Default: unrecognized result class. Fall through with a neutral

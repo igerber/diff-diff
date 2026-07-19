@@ -81,6 +81,7 @@ from diff_diff.local_linear import (
     BiasCorrectedFit,
     bias_corrected_local_linear,
 )
+from diff_diff.results_base import BaseResults
 from diff_diff.survey import (
     SurveyMetadata,
     compute_survey_metadata,
@@ -197,7 +198,7 @@ def _json_safe_filter_info(
 
 
 @dataclass
-class HeterogeneousAdoptionDiDResults:
+class HeterogeneousAdoptionDiDResults(BaseResults):
     """Estimator output for :class:`HeterogeneousAdoptionDiD`.
 
     NaN-safe inference: the three downstream fields ``t_stat``,
@@ -547,7 +548,7 @@ class HeterogeneousAdoptionDiDResults:
 
 
 @dataclass
-class HeterogeneousAdoptionDiDEventStudyResults:
+class HeterogeneousAdoptionDiDEventStudyResults(BaseResults):
     """Event-study results for :class:`HeterogeneousAdoptionDiD` (Phase 2b).
 
     Per-horizon arrays align with ``event_times`` by index; all per-horizon

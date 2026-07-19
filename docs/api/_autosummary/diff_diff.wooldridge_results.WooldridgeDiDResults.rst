@@ -16,6 +16,7 @@
       ~WooldridgeDiDResults.plot_event_study
       ~WooldridgeDiDResults.summary
       ~WooldridgeDiDResults.to_dataframe
+      ~WooldridgeDiDResults.to_dict
 
 
 

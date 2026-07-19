@@ -16,6 +16,7 @@
       ~CallawaySantAnnaResults.print_summary
       ~CallawaySantAnnaResults.summary
       ~CallawaySantAnnaResults.to_dataframe
+      ~CallawaySantAnnaResults.to_dict
 
 
 

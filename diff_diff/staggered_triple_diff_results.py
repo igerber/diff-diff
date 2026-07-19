@@ -12,13 +12,14 @@ import numpy as np
 import pandas as pd
 
 from diff_diff.results import _format_survey_block, _get_significance_stars
+from diff_diff.results_base import BaseResults
 
 if TYPE_CHECKING:
     from diff_diff.staggered_bootstrap import CSBootstrapResults
 
 
 @dataclass
-class StaggeredTripleDiffResults:
+class StaggeredTripleDiffResults(BaseResults):
     """
     Results from Staggered Triple Difference (DDD) estimation.
 

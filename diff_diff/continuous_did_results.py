@@ -12,6 +12,7 @@ import numpy as np
 import pandas as pd
 
 from diff_diff.results import _format_survey_block, _get_significance_stars
+from diff_diff.results_base import BaseResults
 
 __all__ = ["ContinuousDiDResults", "DoseResponseCurve"]
 
@@ -78,7 +79,7 @@ class DoseResponseCurve:
 
 
 @dataclass
-class ContinuousDiDResults:
+class ContinuousDiDResults(BaseResults):
     """
     Results from Continuous Difference-in-Differences estimation.
 
@@ -368,6 +369,44 @@ class ContinuousDiDResults:
     def print_summary(self, alpha: Optional[float] = None) -> None:
         """Print summary to stdout."""
         print(self.summary(alpha))
+
+    def to_dict(self) -> Dict[str, Any]:
+        """
+        Convert headline results to a dictionary.
+
+        Returns
+        -------
+        Dict[str, Any]
+            Canonical ATT inference row, the ACRT companion estimand, and
+            scalar metadata. Detailed dose-response / event-study tables
+            are available via ``to_dataframe(level=...)``.
+        """
+        return {
+            "att": self.att,
+            "se": self.se,
+            "t_stat": self.t_stat,
+            "p_value": self.p_value,
+            "conf_int_lower": self.overall_att_conf_int[0],
+            "conf_int_upper": self.overall_att_conf_int[1],
+            "acrt": self.overall_acrt,
+            "acrt_se": self.overall_acrt_se,
+            "acrt_t_stat": self.overall_acrt_t_stat,
+            "acrt_p_value": self.overall_acrt_p_value,
+            "acrt_conf_int_lower": self.overall_acrt_conf_int[0],
+            "acrt_conf_int_upper": self.overall_acrt_conf_int[1],
+            "n_obs": self.n_obs,
+            "n_treated_units": self.n_treated_units,
+            "n_control_units": self.n_control_units,
+            "control_group": self.control_group,
+            "treatment_type": self.treatment_type,
+            "estimation_method": self.estimation_method,
+            "degree": self.degree,
+            "num_knots": self.num_knots,
+            "base_period": self.base_period,
+            "anticipation": self.anticipation,
+            "n_bootstrap": self.n_bootstrap,
+            "alpha": self.alpha,
+        }
 
     def to_dataframe(self, level: str = "dose_response") -> pd.DataFrame:
         """

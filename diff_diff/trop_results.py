@@ -17,6 +17,7 @@ except ImportError:
     from typing_extensions import TypedDict
 
 from diff_diff.results import _format_survey_block, _get_significance_stars
+from diff_diff.results_base import BaseResults
 
 __all__ = [
     "_LAMBDA_INF",
@@ -64,7 +65,7 @@ class _PrecomputedStructures(TypedDict):
 
 
 @dataclass
-class TROPResults:
+class TROPResults(BaseResults):
     """
     Results from a Triply Robust Panel (TROP) estimation.
 

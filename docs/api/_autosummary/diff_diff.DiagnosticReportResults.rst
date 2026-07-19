@@ -12,6 +12,9 @@
    .. autosummary::
 
       ~DiagnosticReportResults.__init__
+      ~DiagnosticReportResults.summary
+      ~DiagnosticReportResults.to_dataframe
+      ~DiagnosticReportResults.to_dict
 
 
 

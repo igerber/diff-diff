@@ -371,14 +371,17 @@ the seven classes currently missing `to_dict()` gain it in Phase 2
 (additive).
 
 **Unified event-study representation.** ONE representation for event-study
-effects across all estimators (today there are five). The unified surface is
-specified in the Phase 2 results-base PR plan (per the section 9 boundary
-rule - only that PR cares about the container's internals); this document
-pins the requirements it must satisfy: per-event-time canonical quintet rows,
-explicit reference-period marking (no sentinel-value conventions - the
-n_groups==0 / n_obs==0 sentinels are retired), the event-study vcov exposed
-uniformly where computed, and `to_dataframe(level="event_study")` emitting
-identical column schemas from every estimator.
+effects across all estimators (today the fourteen event-study producers use
+four incompatible native container shapes). The `EventStudyResults`
+container plus its per-producer builders ship additively in Phase 2 [M-092]
+(the builder is package-internal; public exposure rides
+`aggregate(type="event_study")` in the same phase, and the merged TWFE returns
+it natively in Phase 3). This document pins the requirements it satisfies:
+per-event-time canonical quintet rows, explicit reference-period marking (via
+an `is_reference` column - no sentinel-value conventions; the
+n_groups==0 / n_obs==0 sentinels are retired at 4.0 [M-093]), the event-study
+vcov exposed uniformly where computed, and `to_dataframe(level="event_study")`
+emitting identical column schemas from every estimator.
 
 **Pickle migration.** Renamed-field classes ship `__setstate__` migration
 following the existing `SyntheticDiDResults.__setstate__` precedent
@@ -610,9 +613,12 @@ forever - a removed symbol resurrecting is a test failure.
   the same object as its target, so the deprecation warning rides the parent
   class row (schema-enforced). Top-level `diff_diff:Name` class/function rows
   and alias rows also assert `__all__` membership consistent with their
-  status (stale `import *` entries fail). The initial 75 row ids are a
-  committed snapshot in the enforcement test: ids are never deleted or
-  reused, and the test fails if any snapshot id disappears.
+  status (stale `import *` entries fail). The shipped row ids are a
+  committed snapshot in the enforcement test (77 as of Phase 2a: Phase 1 +
+  the diagnostic-family amendment + the M-092/M-093 results-contract rows;
+  the snapshot extends by a new id range in the same diff that appends
+  rows): ids are never deleted or reused, and the test fails if any
+  snapshot id disappears.
 
 **Cross-row migration rule.** Removing a symbol requires migrating, in the
 same diff, every other row whose locators or `code_refs` reference it (e.g.

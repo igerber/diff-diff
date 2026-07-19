@@ -15,6 +15,7 @@
       ~ChaisemartinDHaultfoeuilleResults.print_summary
       ~ChaisemartinDHaultfoeuilleResults.summary
       ~ChaisemartinDHaultfoeuilleResults.to_dataframe
+      ~ChaisemartinDHaultfoeuilleResults.to_dict
 
 
 

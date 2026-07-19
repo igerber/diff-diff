@@ -119,6 +119,7 @@ from diff_diff._rdrobust_port import (
     rdbwselect,
     rdrobust_fit,
 )
+from diff_diff.results_base import BaseResults
 from diff_diff.utils import safe_inference, validate_covariate_names
 
 __all__ = [
@@ -134,7 +135,7 @@ def _json_safe(value: Any) -> Any:
 
 
 @dataclass
-class RegressionDiscontinuityResults:
+class RegressionDiscontinuityResults(BaseResults):
     """Results of a regression discontinuity fit (sharp or fuzzy; the
     ``estimand`` field names which one, and ``first_stage*`` fields are
     populated on fuzzy fits only).

@@ -19,11 +19,12 @@ import pandas as pd
 
 from diff_diff.estimators import DifferenceInDifferences
 from diff_diff.results import _get_significance_stars
+from diff_diff.results_base import Diagnostic
 from diff_diff.utils import safe_inference, validate_binary
 
 
 @dataclass
-class PlaceboTestResults:
+class PlaceboTestResults(Diagnostic):
     """
     Results from a placebo test for DiD assumption validation.
 

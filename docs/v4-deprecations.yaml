@@ -904,7 +904,7 @@ rows:
     removed_in: null
     status: planned
     phase: 5
-    code_refs: [README.md, diff_diff/guides/llms.txt, docs/api/index.rst, docs/index.rst, diff_diff/bacon.py]
+    code_refs: [README.md, diff_diff/guides/llms.txt, docs/api/index.rst, docs/index.rst, diff_diff/bacon.py, tests/test_docs_ia.py]
     notes: "4.0 diagnostic-family docs/roster reorganization (spec section 3.5): Bacon re-homed OUT of the API estimator roster (misfiled today); RDPlot (already documented as a diagnostic) consolidated under the unified family grouping; README/llms.txt/API/alias groupings (incl. docs/api/index.rst AND the docs homepage docs/index.rst, both listing Bacon as an estimator today) and estimator-count claims split into estimators + diagnostics; the flip's terminal test asserts the estimator/diagnostic grouping on the named surfaces. The Phase 2 marker introduction is gated separately by [M-091]."
   - id: M-091
     kind: behavior
@@ -914,10 +914,35 @@ rows:
     introduced_in: "3.9"
     deprecated_in: null
     removed_in: null
-    status: planned
+    status: done
     phase: 2
-    code_refs: [diff_diff/bacon.py, diff_diff/rdplot.py, diff_diff/honest_did.py, diff_diff/pretrends.py, diff_diff/power.py, diff_diff/diagnostics.py, diff_diff/had_pretests.py, diff_diff/diagnostic_report.py, diff_diff/business_report.py, diff_diff/practitioner.py, diff_diff/_reporting_helpers.py, diff_diff/__init__.py]
-    notes: "Phase 2 Diagnostic marker base on the RESULT roster (spec section 3.5): BaconDecompositionResults, RDPlotResult, HonestDiDResults + SensitivityResults, PreTrendsPowerResults + PreTrendsPowerCurve, PowerResults + Simulation*Results, PlaceboTestResults, and the HAD pretest containers (QUGTestResults, StuteTestResults, YatchewTestResults, StuteJointResult, HADPretestReport), and DiagnosticReportResults (serialization pair moves/delegates from the builder onto the container). Flip to done ALSO requires consumer-propagation tests: BusinessReport rejects marked diagnostics as primary estimator input BY TYPE (not by name); practitioner_next_steps routes marked diagnostics through diagnostic handling (not the unknown-result estimator fallback); and DiagnosticReport routes by the marker - at least one non-Bacon marked result handled as a diagnostic, never via estimator fallback, with Bacon's existing read-out retained and tested. Flip to done requires the dedicated roster test (isinstance + summary/to_dataframe on every member; estimator results NOT marked). Raw-dict functions and TWFEWeightsResult are docs-family only (narrowed, spec section 3.5). introduced_in gates the 3.9 cut: the marker cannot be silently skipped."
+    test_ref: tests/test_diagnostic_marker.py
+    code_refs: [diff_diff/results_base.py, diff_diff/bacon.py, diff_diff/rdplot.py, diff_diff/honest_did.py, diff_diff/pretrends.py, diff_diff/power.py, diff_diff/diagnostics.py, diff_diff/had_pretests.py, diff_diff/diagnostic_report.py, diff_diff/business_report.py, diff_diff/practitioner.py, diff_diff/_reporting_helpers.py, diff_diff/__init__.py]
+    notes: "Phase 2 Diagnostic marker base on the RESULT roster (spec section 3.5): BaconDecompositionResults, RDPlotResult, HonestDiDResults + SensitivityResults, PreTrendsPowerResults + PreTrendsPowerCurve, PowerResults + Simulation*Results, PlaceboTestResults, and the HAD pretest containers (QUGTestResults, StuteTestResults, YatchewTestResults, StuteJointResult, HADPretestReport), and DiagnosticReportResults (serialization pair moved from the builder onto the container). Flip to done ALSO requires consumer-propagation tests: BusinessReport rejects marked diagnostics as primary estimator input BY TYPE (not by name); practitioner_next_steps routes marked diagnostics through diagnostic handling (not the unknown-result estimator fallback); and DiagnosticReport routes by the marker - at least one non-Bacon marked result handled as a diagnostic, never via estimator fallback, with Bacon's existing read-out retained and tested. Flip to done requires the dedicated roster test (isinstance + summary/to_dataframe on every member; estimator results NOT marked). Raw-dict functions and TWFEWeightsResult are docs-family only (narrowed, spec section 3.5). introduced_in gates the 3.9 cut: the marker cannot be silently skipped. Marker lives in diff_diff/results_base.py; done in this introducing diff."
+  - id: M-092
+    kind: behavior
+    group: results-contract
+    old: "diff_diff:EventStudyResults"
+    new: null
+    introduced_in: "3.9"
+    deprecated_in: null
+    removed_in: null
+    status: done
+    phase: 2
+    test_ref: tests/test_event_study_surface.py
+    code_refs: [diff_diff/results_base.py, diff_diff/__init__.py]
+    notes: "Phase 2 unified event-study representation (spec section 5): EventStudyResults container + builders for the 14 producers (CallawaySantAnna, SunAbraham, ImputationDiD, TwoStageDiD, StackedDiD, SpilloverDiD, ContinuousDiD, EfficientDiD, WooldridgeDiD, StaggeredTripleDifference, MultiPeriodDiD, LPDiD, ChaisemartinDHaultfoeuille, HeterogeneousAdoptionDiD). Canonical quintet columns, explicit is_reference marking (successor to the retiring sentinels [M-093]), vcov+vcov_index ordering, cband columns, event_time_convention metadata. Public exposure rides aggregate(type='event_study') in Phase 2 PR (b); merged TWFE returns it in Phase 3 [M-010]. introduced_in gates the 3.9 cut, mirroring [M-091]. Born done in this introducing diff (builder is package-internal; the class is exported)."
+  - id: M-093
+    kind: behavior
+    group: results-contract
+    old: "diff_diff:CallawaySantAnnaResults.event_study_effects"
+    new: "diff_diff:EventStudyResults"
+    deprecated_in: "4.0"
+    removed_in: null
+    status: planned
+    phase: 5
+    code_refs: [diff_diff/staggered_results.py, diff_diff/sun_abraham.py, diff_diff/imputation_results.py, diff_diff/two_stage_results.py, diff_diff/stacked_did_results.py, diff_diff/efficient_did_results.py, diff_diff/continuous_did_results.py, diff_diff/wooldridge_results.py, diff_diff/chaisemartin_dhaultfoeuille_results.py, diff_diff/lpdid_results.py, diff_diff/staggered_triple_diff_results.py, diff_diff/results.py, diff_diff/had.py, diff_diff/visualization/_event_study.py]
+    notes: "4.0 sentinel retirement + schema enforcement (spec section 5): the n_groups==0 / n_obs==0 reference-row sentinels retire; every estimator's to_dataframe(level='event_study') emits the [M-092] column schema; the plotter / HonestDiD / PreTrendsPower consume the unified surface. Thirteen ES-carrying source modules enumerated file-by-file (results.py covers MultiPeriodDiD + SpilloverDiD) plus the plotter. behavior-at-done requires test_ref."
 
   # ---- Behavior policies (schema-tracked, spec-governed; no reality probe) -
   - id: M-080

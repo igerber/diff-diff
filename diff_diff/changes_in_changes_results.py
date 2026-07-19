@@ -6,6 +6,8 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
+from diff_diff.results_base import BaseResults
+
 _ESTIMATOR_TITLES = {
     "cic": "Changes-in-Changes (Athey & Imbens 2006) Results",
     "qdid": "Quantile Difference-in-Differences (QDiD) Results",
@@ -13,7 +15,7 @@ _ESTIMATOR_TITLES = {
 
 
 @dataclass
-class ChangesInChangesResults:
+class ChangesInChangesResults(BaseResults):
     """Results for :class:`~diff_diff.changes_in_changes.ChangesInChanges` and
     :class:`~diff_diff.changes_in_changes.QDiD`.
 

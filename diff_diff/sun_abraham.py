@@ -22,6 +22,7 @@ if TYPE_CHECKING:
     from diff_diff.survey import ResolvedSurveyDesign, SurveyDesign
 from diff_diff.linalg import LinearRegression
 from diff_diff.results import _format_survey_block, _get_significance_stars
+from diff_diff.results_base import BaseResults
 from diff_diff.utils import (
     pre_demean_norms,
     safe_inference,
@@ -33,7 +34,7 @@ from diff_diff.utils import (
 
 
 @dataclass
-class SunAbrahamResults:
+class SunAbrahamResults(BaseResults):
     """
     Results from Sun-Abraham (2021) interaction-weighted estimation.
 
@@ -127,6 +128,17 @@ class SunAbrahamResults:
     # summary label). Both None on non-conley fits.
     conley_lag_cutoff: Optional[int] = None
     cluster_name: Optional[str] = None
+    # The normalization reference relative time (e = -1 - anticipation, the
+    # omitted category of the saturated regression) and whether it was
+    # GENUINELY OBSERVED in the panel. The reference is excluded from
+    # event_study_effects either because it is the omitted baseline (observed)
+    # OR because no cohort has an observation there (unobserved, on a gapped
+    # grid) - the two are indistinguishable from the estimated keys alone, so
+    # the unified event-study surface synthesizes the anchor row only when
+    # reference_observed is True. Defaults are conservative (no synthesis) for
+    # externally / legacy-constructed results.
+    reference_period: Optional[int] = None
+    reference_observed: bool = False
 
     # --- Inference-field aliases (balance/external-adapter compatibility) ---
     @property
@@ -279,6 +291,38 @@ class SunAbrahamResults:
     def print_summary(self, alpha: Optional[float] = None) -> None:
         """Print summary to stdout."""
         print(self.summary(alpha))
+
+    def to_dict(self) -> Dict[str, Any]:
+        """
+        Convert headline results to a dictionary.
+
+        Returns
+        -------
+        Dict[str, Any]
+            Canonical inference row plus scalar metadata. Detailed
+            event-study / cohort tables are available via
+            ``to_dataframe(level=...)``.
+        """
+        result = {
+            "att": self.att,
+            "se": self.se,
+            "t_stat": self.t_stat,
+            "p_value": self.p_value,
+            "conf_int_lower": self.overall_conf_int[0],
+            "conf_int_upper": self.overall_conf_int[1],
+            "n_obs": self.n_obs,
+            "n_treated_units": self.n_treated_units,
+            "n_control_units": self.n_control_units,
+            "control_group": self.control_group,
+            "anticipation": self.anticipation,
+            "alpha": self.alpha,
+            "vcov_type": self.vcov_type,
+        }
+        if self.cluster_name is not None:
+            result["cluster_name"] = self.cluster_name
+        if self.conley_lag_cutoff is not None:
+            result["conley_lag_cutoff"] = self.conley_lag_cutoff
+        return result
 
     def to_dataframe(self, level: str = "event_study") -> pd.DataFrame:
         """
@@ -835,6 +879,10 @@ class SunAbraham:
 
         # Reference period: last pre-treatment period (typically -1)
         self._reference_period = -1 - self.anticipation
+        # Whether that anchor was GENUINELY OBSERVED (vs a gap on an
+        # unbalanced grid). The unified event-study surface synthesizes the
+        # reference row only when it was observed.
+        self._reference_observed = self._reference_period in all_rel_times
 
         # Get relative periods to estimate (excluding reference)
         rel_periods_to_estimate = [
@@ -1328,6 +1376,8 @@ class SunAbraham:
             event_study_vcov_index=es_vcov_index,
             conley_lag_cutoff=(self.conley_lag_cutoff if self.vcov_type == "conley" else None),
             cluster_name=(self.cluster if self.vcov_type == "conley" else None),
+            reference_period=self._reference_period,
+            reference_observed=self._reference_observed,
         )
 
         self.is_fitted_ = True

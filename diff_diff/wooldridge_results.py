@@ -9,11 +9,12 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
+from diff_diff.results_base import BaseResults
 from diff_diff.utils import safe_inference
 
 
 @dataclass
-class WooldridgeDiDResults:
+class WooldridgeDiDResults(BaseResults):
     """Results from WooldridgeDiD.fit().
 
     Core output is ``group_time_effects``: a dict keyed by (cohort_g, time_t)
@@ -706,6 +707,41 @@ class WooldridgeDiDResults:
 
         lines.append("=" * 70)
         return "\n".join(lines)
+
+    def to_dict(self) -> Dict[str, Any]:
+        """
+        Convert headline results to a dictionary.
+
+        Returns
+        -------
+        Dict[str, Any]
+            Canonical inference row plus scalar metadata. Detailed
+            group-time / aggregated tables are available via
+            ``to_dataframe(aggregation=...)``.
+        """
+        result = {
+            "att": self.att,
+            "se": self.se,
+            "t_stat": self.t_stat,
+            "p_value": self.p_value,
+            "conf_int_lower": self.overall_conf_int[0],
+            "conf_int_upper": self.overall_conf_int[1],
+            "method": self.method,
+            "control_group": self.control_group,
+            "n_obs": self.n_obs,
+            "n_treated_units": self.n_treated_units,
+            "n_control_units": self.n_control_units,
+            "anticipation": self.anticipation,
+            "alpha": self.alpha,
+            "vcov_type": self.vcov_type,
+        }
+        if self.cluster_name is not None:
+            result["cluster_name"] = self.cluster_name
+        if self.n_clusters is not None:
+            result["n_clusters"] = self.n_clusters
+        if self.conley_lag_cutoff is not None:
+            result["conley_lag_cutoff"] = self.conley_lag_cutoff
+        return result
 
     def to_dataframe(self, aggregation: str = "event") -> pd.DataFrame:
         """Export aggregated effects to a DataFrame.

@@ -12,6 +12,7 @@ import numpy as np
 import pandas as pd
 
 from diff_diff.results import _format_survey_block, _get_significance_stars
+from diff_diff.results_base import BaseResults
 
 if TYPE_CHECKING:
     from diff_diff.efficient_did_bootstrap import EDiDBootstrapResults
@@ -52,7 +53,7 @@ class HausmanPretestResult:
 
 
 @dataclass
-class EfficientDiDResults:
+class EfficientDiDResults(BaseResults):
     """
     Results from Efficient DiD (Chen, Sant'Anna & Xie 2025) estimation.
 

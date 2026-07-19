@@ -28,6 +28,7 @@ from scipy import optimize
 from diff_diff.results import (
     MultiPeriodDiDResults,
 )
+from diff_diff.results_base import Diagnostic
 from diff_diff.utils import _get_critical_value
 
 # =============================================================================
@@ -156,7 +157,7 @@ DeltaType = Union[DeltaSD, DeltaRM, DeltaSDRM]
 
 
 @dataclass
-class HonestDiDResults:
+class HonestDiDResults(Diagnostic):
     """
     Results from Honest DiD sensitivity analysis.
 
@@ -377,7 +378,7 @@ class HonestDiDResults:
 
 
 @dataclass
-class SensitivityResults:
+class SensitivityResults(Diagnostic):
     """
     Results from sensitivity analysis over a grid of M values.
 

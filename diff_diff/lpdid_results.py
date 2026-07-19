@@ -4,9 +4,11 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 import numpy as np
 import pandas as pd
 
+from diff_diff.results_base import BaseResults
+
 
 @dataclass
-class LPDiDResults:
+class LPDiDResults(BaseResults):
     """Results container for the :class:`~diff_diff.lpdid.LPDiD` estimator.
 
     Holds the per-horizon ``event_study`` table and the ``pooled`` pre/post

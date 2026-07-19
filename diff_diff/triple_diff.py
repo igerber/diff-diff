@@ -36,6 +36,7 @@ import pandas as pd
 
 from diff_diff.linalg import _rank_guarded_inv, solve_logit, solve_ols
 from diff_diff.results import _format_survey_block, _get_significance_stars
+from diff_diff.results_base import BaseResults
 from diff_diff.utils import safe_inference
 
 if TYPE_CHECKING:
@@ -50,7 +51,7 @@ _MIN_CELL_SIZE = 10
 
 
 @dataclass
-class TripleDifferenceResults:
+class TripleDifferenceResults(BaseResults):
     """
     Results from Triple Difference (DDD) estimation.
 
