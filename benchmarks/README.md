@@ -43,6 +43,21 @@ Required R packages:
 - `jsonlite` - JSON interchange
 - `data.table` - Fast data manipulation
 
+### Stata
+
+A few goldens are anchored against Stata where no runnable R reference exists.
+Stata is node-locked single-user, so — like the R arm — the goldens are committed
+and CI never needs Stata. Generators live in `stata/` and are run headless:
+
+```bash
+# macOS, StataSE 19 (binary is not on PATH by default)
+/Applications/Stata/StataSE.app/Contents/MacOS/stata-se -b do \
+    benchmarks/stata/generate_lpdid_ra_golden.do
+```
+
+Current arm uses only **native** Stata commands (`teffects`) — no SSC packages —
+so `version 19` pins behavior. See `stata/README.md`.
+
 ## Directory Structure
 
 ```
@@ -56,6 +71,9 @@ benchmarks/
 │   ├── benchmark_synthdid.R  # Synthetic DiD
 │   ├── benchmark_honest.R    # HonestDiD
 │   └── benchmark_fixest.R    # Basic DiD / TWFE
+├── stata/
+│   ├── README.md                       # Stata arm docs
+│   └── generate_lpdid_ra_golden.do     # LPDiD RA SE vs teffects ra
 ├── python/
 │   ├── utils.py              # Common utilities
 │   ├── benchmark_callaway.py # CallawaySantAnna
@@ -72,11 +90,12 @@ benchmarks/
 
 ## Estimator Comparisons
 
-| diff-diff | R Package | Reference | Status |
+| diff-diff | Reference Package | Reference | Status |
 |-----------|-----------|-----------|--------|
 | `CallawaySantAnna` | `did::att_gt` | Callaway & Sant'Anna (2021) | ✓ Integrated |
 | `SyntheticDiD` | `synthdid::synthdid_estimate` | Arkhangelsky et al. (2021) | ✓ Integrated |
 | `DifferenceInDifferences` | `fixest::feols` | Standard DiD | ✓ Integrated |
+| `LPDiD` (RA SE) | Stata `teffects ra ... atet` | Dube, Girardi, Jorda & Taylor (2025) | ✓ Integrated |
 | `HonestDiD` | `HonestDiD::createSensitivityResults` | Rambachan & Roth (2023) | Planned |
 
 Note: HonestDiD benchmark scripts exist but are not yet integrated into the main runner.

@@ -1,6 +1,6 @@
 .. meta::
-   :description: Validation benchmarks comparing diff-diff against R packages (did, synthdid, fixest). Coefficient accuracy, standard error comparison, and performance metrics.
-   :keywords: difference-in-differences benchmark, DiD validation R, python econometrics accuracy, did package comparison
+   :description: Validation benchmarks comparing diff-diff against R packages (did, synthdid, fixest) and Stata (teffects). Coefficient accuracy, standard error comparison, and performance metrics.
+   :keywords: difference-in-differences benchmark, DiD validation R, DiD validation Stata, python econometrics accuracy, did package comparison
 
 Benchmarks
 ==========
@@ -18,14 +18,15 @@ the tables below runs the same wheel with the backend disabled
 Overview
 --------
 
-diff-diff is validated against the following R packages:
+diff-diff is validated primarily against established R packages, plus Stata
+where no runnable R reference exists:
 
 .. list-table::
    :header-rows: 1
    :widths: 30 30 40
 
    * - diff-diff Estimator
-     - R Package
+     - Reference Package
      - Reference
    * - ``DifferenceInDifferences``
      - ``fixest::feols``
@@ -42,6 +43,9 @@ diff-diff is validated against the following R packages:
    * - ``SyntheticDiD``
      - ``synthdid::synthdid_estimate``
      - Arkhangelsky et al. (2021)
+   * - ``LPDiD`` (regression-adjustment SE)
+     - Stata ``teffects ra ... atet``
+     - Dube, Girardi, Jorda & Taylor (2025); no runnable R analogue
 
 Methodology
 -----------
@@ -51,8 +55,9 @@ Validation Approach
 
 1. **Synthetic Data**: Generate data with known true effects using
    ``generate_did_data()`` from diff_diff.prep
-2. **Identical Inputs**: Both Python and R estimators receive the same CSV data
-3. **JSON Interchange**: R scripts output JSON for comparison
+2. **Identical Inputs**: Both Python and the reference implementation (R, or Stata
+   where no runnable R analogue exists) receive the same data
+3. **JSON Interchange**: reference generators (R / Stata) output JSON for comparison
 4. **Automated Comparison**: Python script validates numerical equivalence
 5. **Multiple Scales**: Test at small (200-400 obs), 1K, 5K, 10K, and 20K unit scales
 6. **Replicated Timing**: multiple fresh-subprocess replications per benchmark
@@ -1004,6 +1009,16 @@ Prerequisites
    .. code-block:: bash
 
       pip install -e ".[dev]"
+
+4. (Optional) Stata, only to regenerate the ``LPDiD`` regression-adjustment SE
+   golden. Uses the **native** ``teffects`` command (no SSC package); the golden
+   is committed, so this is not needed to run the test suite:
+
+   .. code-block:: bash
+
+      # macOS, StataSE 19 (binary not on PATH by default)
+      /Applications/Stata/StataSE.app/Contents/MacOS/stata-se -b do \
+          benchmarks/stata/generate_lpdid_ra_golden.do
 
 Running Benchmarks
 ~~~~~~~~~~~~~~~~~~

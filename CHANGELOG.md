@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **LP-DiD regression-adjustment SE now anchored against Stata `teffects` (no library
+  behavior change).** The RA influence-function cluster SE has no runnable R reference
+  (`alexCardazzi/lpdid` does direct covariate inclusion, not RA), so it was previously
+  pinned against itself + MC-coverage-validated. It is now cross-validated against Stata
+  `teffects ra ... atet vce(cluster)` via a committed golden
+  (`benchmarks/stata/generate_lpdid_ra_golden.do` → `lpdid_ra_stata_golden.json`;
+  `tests/test_lpdid_ra_stata_parity.py`): the library matches `teffects` to ~1e-16 at all
+  7 event-study horizons, confirming the no-finite-sample-factor convention (REGISTRY
+  LPDiD Deviation 2). This is the repo's first Stata parity arm — `teffects` is native
+  (no SSC dependency) and goldens are committed, so CI needs no Stata.
+
 ### Changed
 - **Internal tracking docs reorganized (no library behavior change).** `TODO.md` is now
   the actionable backlog only; blocked / parked work and won't-fix decisions moved to the

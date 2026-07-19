@@ -119,6 +119,7 @@ Single overall ATT over the posttreatment window `h in {0..H}` by using the post
 - Stata: `lpdid` (SSC `s459273`) - the authors' reference implementation.
 - R: `alexCardazzi/lpdid` (third-party, A. Cardazzi & Z. Porreca; covers absorbing AND non-absorbing); authors' own R example scripts in `danielegirardi/lpdid`.
 - Stata RA syntax (footnote 9): `teffects ra (Dhy i.time) (dtreat) if D.treat==1 | Fh.treat==0, atet vce(cluster unit)`.
+- **RA SE parity (this repo):** the library RA influence-function SE is anchored against this footnote-9 `teffects` recipe (with the covariate added to the outcome model) by `benchmarks/stata/generate_lpdid_ra_golden.do` (golden `benchmarks/data/lpdid_ra_stata_golden.json`, test `tests/test_lpdid_ra_stata_parity.py`) — an independent Stata reconstruction of each horizon's clean sample, matching to ~1e-16 at all 7 event-study horizons and confirming the no-finite-sample-factor convention (REGISTRY LPDiD Deviation 2).
 
 **Requirements checklist:**
 - [ ] Long-difference dependent variable with selectable base period (`t-1` default, PMD `k`)

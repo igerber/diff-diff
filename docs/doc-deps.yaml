@@ -657,6 +657,8 @@ sources:
       - path: docs/methodology/REGISTRY.md
         section: "LPDiD"
         type: methodology
+      - path: benchmarks/stata/README.md
+        type: methodology
       - path: docs/api/lpdid.rst
         type: api_reference
       - path: README.md

@@ -1,0 +1,24 @@
+{
+  "meta": {
+    "estimator": "LPDiD regression-adjustment (RA) SE - Stata teffects ra atet",
+    "generator": "benchmarks/stata/generate_lpdid_ra_golden.do",
+    "source_panel": "benchmarks/data/lpdid_test_panel.csv",
+    "point_anchor": "benchmarks/data/lpdid_golden.json ra_cov[h][0]",
+    "stata_edition": "SE",
+    "cmd": "teffects ra (Dy x i.time) (tdiff), atet vce(cluster unit)",
+    "se_convention": "cluster-robust IF at unit, NO finite-sample factor (teffects convention); t(G-1) reference on the library side",
+    "note": "Independent Stata reconstruction of the per-horizon clean sample (ports generate_lpdid_golden.R prep/clean_h). N and G are emitted to power the Python row-count sample-integrity gate.",
+    "stata_version": 19.0,
+    "pre_window": 3,
+    "post_window": 4
+  },
+  "ra_se": {
+    "0": {"att": 2.888871838355342, "se": 0.45516589747218866, "N": 522, "G": 60},
+    "1": {"att": 3.225268910679945, "se": 0.44522904812910252, "N": 461, "G": 60},
+    "2": {"att": 3.5779502216280248, "se": 0.46179396866595729, "N": 401, "G": 60},
+    "3": {"att": 3.973278128236954, "se": 0.39295354484873846, "N": 353, "G": 60},
+    "4": {"att": 4.2651037814454096, "se": 0.39398602601018534, "N": 305, "G": 60},
+    "-2": {"att": 0.1204444745695894, "se": 0.43592937799131937, "N": 461, "G": 60},
+    "-3": {"att": -0.11970460945194859, "se": 0.43296260860283592, "N": 401, "G": 60}
+  }
+}

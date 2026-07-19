@@ -120,3 +120,8 @@ tools/reviewer-eval/runs/
 benchmarks/refresh_2026_07/venvs/
 benchmarks/refresh_2026_07/results/raw/
 benchmarks/refresh_2026_07/results/refresh_results_smoke.json
+
+# Stata batch mode writes <basename>.log to the cwd (repo root) - never committed;
+# the golden JSON it produces IS committed (benchmarks/data/lpdid_ra_stata_golden.json).
+# Root-anchored to the generator's own log so it doesn't hide logs elsewhere.
+/generate_lpdid_ra_golden.log
