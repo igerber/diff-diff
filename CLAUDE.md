@@ -176,6 +176,7 @@ When adding new functionality, the source of truth is:
 | File | Contains |
 |------|----------|
 | `docs/methodology/REGISTRY.md` | Academic foundations, equations, edge cases — **consult before methodology changes** |
+| `docs/v4-design.md` + `docs/v4-deprecations.yaml` | 4.0 program design spec + CI-enforced deprecation ledger — **consult before any 4.0-program PR**; deviations must edit both in the same diff |
 | `docs/doc-deps.yaml` | Source-to-documentation dependency map — **consult when any source file changes** |
 | `CONTRIBUTING.md` | Documentation requirements, test writing guidelines |
 | `.claude/commands/dev-checklists.md` | Checklists for params, methodology, warnings, reviews, bugs (run `/dev-checklists`) |

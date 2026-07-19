@@ -1,0 +1,942 @@
+# v4.0 deprecation ledger - the single source of truth for every API-lifecycle
+# fact in the 4.0 program (3.9 shims -> 4.0 removals -> 5.0 alias retirement).
+#
+# NORMATIVE SCHEMA: docs/v4-design.md section 11 (field meanings, kind and
+# status vocabularies, locator grammar, lifecycle rules). Enforced by
+# tests/test_v4_matrix.py, which asserts every row's `status` against reality
+# at HEAD on every CI run - a PR that changes any surface named here MUST flip
+# the corresponding row in the same diff or CI fails.
+#
+# FORWARD-REFERENCE NOTE (for reviewers): `new` locators on `planned` rows name
+# 3.9/4.0 surface that intentionally does NOT exist at HEAD; the enforcement
+# test asserts their ABSENCE until the owning phase ships.
+#
+# FORMAT CONTRACT (parsed by a purpose-built scanner, no PyYAML): top-level
+# `rows:` list; each row a flat mapping of single-line scalars; `code_refs` as
+# an inline flow list; no anchors, no multi-line strings. Comments allowed.
+#
+# Locator grammar: "diff_diff:Name" (top-level export), "diff_diff:Class[param]"
+# (__init__ param), "diff_diff:Class.method[param]" (method param),
+# "diff_diff:Class.attr" (field/property). Module part must always import.
+
+rows:
+  # ---- Pre-existing obligations (repo sweep 2026-07-18) --------------------
+  - id: M-001
+    kind: param
+    group: obligation-sdid-params
+    old: "diff_diff:SyntheticDiD[lambda_reg]"
+    new: null
+    deprecated_in: "3.0.0"
+    removed_in: "4.0"
+    status: shimmed
+    phase: 5
+    warning: DeprecationWarning
+    test_ref: tests/test_methodology_sdid.py
+    code_refs: [diff_diff/synthetic_did.py]
+    notes: "Ignored since 3.0.0; use zeta_omega. Removal target bumped v3.1 -> v4.0.0 in 3.1.2 (SemVer)."
+  - id: M-002
+    kind: param
+    group: obligation-sdid-params
+    old: "diff_diff:SyntheticDiD[zeta]"
+    new: null
+    deprecated_in: "3.0.0"
+    removed_in: "4.0"
+    status: shimmed
+    phase: 5
+    warning: DeprecationWarning
+    test_ref: tests/test_methodology_sdid.py
+    code_refs: [diff_diff/synthetic_did.py]
+    notes: "Ignored since 3.0.0; use zeta_lambda. Also strip the set_params deprecation branch."
+  - id: M-003
+    kind: field
+    group: obligation-sdid-params
+    old: "diff_diff:SyntheticDiDResults.placebo_effects"
+    new: "diff_diff:SyntheticDiDResults.variance_effects"
+    deprecated_in: "3.5.2"
+    removed_in: "4.0"
+    status: shimmed
+    phase: 5
+    warning: DeprecationWarning
+    test_ref: tests/test_methodology_sdid.py
+    code_refs: [diff_diff/results.py]
+    notes: "Alias property; remove together with the results.py docstring notes that reference it."
+  - id: M-004
+    kind: default-flip
+    group: df-convention-flip
+    old: "diff_diff:DifferenceInDifferences[df_convention]"
+    new: null
+    deprecated_in: "4.0"
+    removed_in: null
+    status: planned
+    phase: 5
+    old_default: "'residual'"
+    new_default: "'cluster'"
+    code_refs: [diff_diff/estimators.py, diff_diff/linalg.py]
+    notes: "Locked #663 direction; moves every clustered p-value/CI. Migration note + flip TestDfConvention expectations."
+  - id: M-005
+    kind: default-flip
+    group: df-convention-flip
+    old: "diff_diff:TwoWayFixedEffects[df_convention]"
+    new: null
+    deprecated_in: "4.0"
+    removed_in: null
+    status: planned
+    phase: 5
+    old_default: "'residual'"
+    new_default: "'cluster'"
+    code_refs: [diff_diff/twfe.py, diff_diff/linalg.py]
+    notes: "MultiPeriodDiD's knob is subsumed by its class removal [M-010]; merged event-study mode inherits this row."
+  - id: M-006
+    kind: default-flip
+    group: df-convention-flip
+    old: "diff_diff:LinearRegression[df_convention]"
+    new: null
+    deprecated_in: "4.0"
+    removed_in: null
+    status: planned
+    phase: 5
+    old_default: "'residual'"
+    new_default: "'cluster'"
+    code_refs: [diff_diff/linalg.py]
+    notes: "Evaluate extending the knob to standalone CR1-t estimators in the same PR (TODO.md row)."
+  - id: M-007
+    kind: warning-retirement
+    group: obligation-warning-retirements
+    old: "diff_diff.estimators"
+    new: null
+    deprecated_in: "4.0"
+    removed_in: null
+    status: planned
+    phase: 5
+    snippet: "default reference_period has changed"
+    code_refs: [diff_diff/estimators.py]
+    notes: "MPD e=-1 transition FutureWarning; dies with the MPD code path at 4.0. Merged TWFE event-study has no legacy default to warn about."
+  - id: M-008
+    kind: env-default
+    group: obligation-fastpath
+    old: "diff_diff.linalg:_resolve_solve_ols_fastpath"
+    new: null
+    deprecated_in: null
+    removed_in: null
+    status: evaluate
+    phase: 5
+    env_var: DIFF_DIFF_SOLVE_OLS_FASTPATH
+    decision_due: "4.0"
+    code_refs: [diff_diff/linalg.py]
+    notes: "DIFF_DIFF_SOLVE_OLS_FASTPATH default-ON is a v4-class change GATED on golden recapture + certification telemetry soak (TODO.md row); record go/no-go at the 4.0 cut either way."
+
+  # ---- The three merges + retiring classes ---------------------------------
+  - id: M-010
+    kind: class
+    group: merge-mpd
+    old: "diff_diff:MultiPeriodDiD"
+    new: "diff_diff:TwoWayFixedEffects.fit[event_study]"
+    introduced_in: "3.9"
+    deprecated_in: "3.9"
+    removed_in: "4.0"
+    status: planned
+    phase: 3
+    warning: FutureWarning
+    code_refs: [diff_diff/estimators.py, diff_diff/twfe.py, diff_diff/__init__.py]
+    notes: "Unit-FE event study default; spec='within'|'pooled' opt-in (pooled = old MPD model, repeated cross-sections). Wild bootstrap in event-study mode = explicit error."
+  - id: M-011
+    kind: class
+    group: merge-mpd
+    old: "diff_diff:MultiPeriodDiDResults"
+    new: null
+    deprecated_in: "3.9"
+    removed_in: "4.0"
+    status: planned
+    phase: 5
+    code_refs: [diff_diff/results.py, diff_diff/__init__.py]
+    notes: "Deprecation rides parent [M-010] (returned only by MPD). Successor = unified event-study surface on the merged TWFE results."
+  - id: M-012
+    kind: class
+    group: merge-mpd
+    old: "diff_diff:PeriodEffect"
+    new: null
+    deprecated_in: "3.9"
+    removed_in: "4.0"
+    status: planned
+    phase: 5
+    code_refs: [diff_diff/results.py, diff_diff/__init__.py]
+    notes: "Per-period container superseded by the unified event-study representation (spec section 5)."
+  - id: M-013
+    kind: class
+    group: merge-ddd
+    old: "diff_diff:StaggeredTripleDifference"
+    new: "diff_diff:TripleDifference.fit[first_treat]"
+    introduced_in: "3.9"
+    deprecated_in: "3.9"
+    removed_in: "4.0"
+    status: planned
+    phase: 3
+    warning: FutureWarning
+    code_refs: [diff_diff/triple_diff.py, diff_diff/staggered_triple_diff.py, diff_diff/__init__.py]
+    notes: "Facade dispatch: 2x2x2 engine vs staggered engine, both internally unchanged (R-parity preserved). Partition param unified as 'partition'. The compact 'notyettreated' control_group spelling rides this class removal - no value shim on the dying class; the unified class uses underscored values from birth."
+  - id: M-014
+    kind: class
+    group: merge-ddd
+    old: "diff_diff:StaggeredTripleDiffResults"
+    new: null
+    deprecated_in: "3.9"
+    removed_in: "4.0"
+    status: planned
+    phase: 5
+    code_refs: [diff_diff/staggered_triple_diff_results.py, diff_diff/__init__.py]
+    notes: "Deprecation rides parent [M-013]. Successor = unified TripleDifference results shape (degenerate single-ATT view for 2x2x2)."
+  - id: M-015
+    kind: class
+    group: merge-qdid
+    old: "diff_diff:QDiD"
+    new: "diff_diff:ChangesInChanges[method]"
+    introduced_in: "3.9"
+    deprecated_in: "3.9"
+    removed_in: "4.0"
+    status: planned
+    phase: 3
+    warning: FutureWarning
+    code_refs: [diff_diff/changes_in_changes.py, diff_diff/__init__.py]
+    notes: "method='cic' (default) | 'qdid'; default encodes Athey-Imbens' recommendation of CiC over QDiD. Already one dispatcher/results class internally."
+  - id: M-016
+    kind: field
+    group: merge-mpd
+    old: "diff_diff:MultiPeriodDiDResults.period_effects"
+    new: null
+    deprecated_in: "4.0"
+    removed_in: "5.0"
+    status: planned
+    phase: 5
+    warning: FutureWarning
+    code_refs: [diff_diff/results.py]
+    notes: "Period-keyed dict becomes a FutureWarning property VIEW over the unified event-study surface on the successor container at 4.0; removed 5.0. Migrate this locator to the successor class when [M-011] flips (cross-row rule, spec section 11)."
+
+  # ---- fit(aggregate=) -> results.aggregate(type=) -------------------------
+  - id: M-020
+    kind: param
+    group: aggregate-postfit
+    old: "diff_diff:CallawaySantAnna.fit[aggregate]"
+    new: "diff_diff:CallawaySantAnnaResults.aggregate"
+    introduced_in: "3.9"
+    deprecated_in: "3.9"
+    removed_in: "4.0"
+    status: planned
+    phase: 2
+    warning: FutureWarning
+    code_refs: [diff_diff/staggered.py]
+    notes: "balance_e moves to aggregate() in the same PR. Vocabulary: simple|event_study|group|calendar."
+  - id: M-021
+    kind: param
+    group: aggregate-postfit
+    old: "diff_diff:ImputationDiD.fit[aggregate]"
+    new: "diff_diff:ImputationDiDResults.aggregate"
+    introduced_in: "3.9"
+    deprecated_in: "3.9"
+    removed_in: "4.0"
+    status: planned
+    phase: 2
+    warning: FutureWarning
+    code_refs: [diff_diff/imputation.py]
+    notes: "balance_e moves too."
+  - id: M-022
+    kind: param
+    group: aggregate-postfit
+    old: "diff_diff:TwoStageDiD.fit[aggregate]"
+    new: "diff_diff:TwoStageDiDResults.aggregate"
+    introduced_in: "3.9"
+    deprecated_in: "3.9"
+    removed_in: "4.0"
+    status: planned
+    phase: 2
+    warning: FutureWarning
+    code_refs: [diff_diff/two_stage.py]
+    notes: "balance_e moves too."
+  - id: M-023
+    kind: param
+    group: aggregate-postfit
+    old: "diff_diff:EfficientDiD.fit[aggregate]"
+    new: "diff_diff:EfficientDiDResults.aggregate"
+    introduced_in: "3.9"
+    deprecated_in: "3.9"
+    removed_in: "4.0"
+    status: planned
+    phase: 2
+    warning: FutureWarning
+    code_refs: [diff_diff/efficient_did.py]
+    notes: "balance_e moves too."
+  - id: M-024
+    kind: param
+    group: aggregate-postfit
+    old: "diff_diff:StackedDiD.fit[aggregate]"
+    new: "diff_diff:StackedDiDResults.aggregate"
+    introduced_in: "3.9"
+    deprecated_in: "3.9"
+    removed_in: "4.0"
+    status: planned
+    phase: 2
+    warning: FutureWarning
+    code_refs: [diff_diff/stacked_did.py]
+    notes: "StackedDiD's 'simple' value already in-vocabulary."
+  - id: M-025
+    kind: param
+    group: aggregate-postfit
+    old: "diff_diff:ContinuousDiD.fit[aggregate]"
+    new: "diff_diff:ContinuousDiDResults.aggregate"
+    introduced_in: "3.9"
+    deprecated_in: "3.9"
+    removed_in: "4.0"
+    status: planned
+    phase: 2
+    warning: FutureWarning
+    code_refs: [diff_diff/continuous_did.py]
+    notes: "The no-underscore 'eventstudy' spelling dies with this param; aggregate() accepts only the unified vocabulary (+ 'dose' as this estimator's extra level)."
+  - id: M-026
+    kind: param
+    group: aggregate-postfit
+    old: "diff_diff:ChaisemartinDHaultfoeuille.fit[aggregate]"
+    new: "diff_diff:ChaisemartinDHaultfoeuilleResults.aggregate"
+    introduced_in: "3.9"
+    deprecated_in: "3.9"
+    removed_in: "4.0"
+    status: planned
+    phase: 2
+    warning: FutureWarning
+    code_refs: [diff_diff/chaisemartin_dhaultfoeuille.py]
+    notes: "dCDH placebo/normalized surfaces stay estimator-native; only the aggregation entry point moves."
+  - id: M-027
+    kind: param
+    group: aggregate-postfit
+    old: "diff_diff:HeterogeneousAdoptionDiD.fit[aggregate]"
+    new: "diff_diff:HeterogeneousAdoptionDiDResults.aggregate"
+    introduced_in: "3.9"
+    deprecated_in: "3.9"
+    removed_in: "4.0"
+    status: planned
+    phase: 2
+    warning: FutureWarning
+    code_refs: [diff_diff/had.py]
+    notes: "HAD levels: overall -> simple, event_study unchanged."
+
+  # ---- Contract renames (params) -------------------------------------------
+  - id: M-030
+    kind: param
+    group: renames-post
+    old: "diff_diff:DifferenceInDifferences.fit[time]"
+    new: "diff_diff:DifferenceInDifferences.fit[post]"
+    introduced_in: "3.9"
+    deprecated_in: "3.9"
+    removed_in: "4.0"
+    status: planned
+    phase: 2
+    warning: FutureWarning
+    code_refs: [diff_diff/estimators.py]
+    notes: "2x2 'time' is a 0/1 post dummy - same name as the calendar column everywhere else with a different meaning (the library's worst overload)."
+  - id: M-031
+    kind: param
+    group: renames-post
+    old: "diff_diff:TripleDifference.fit[time]"
+    new: "diff_diff:TripleDifference.fit[post]"
+    introduced_in: "3.9"
+    deprecated_in: "3.9"
+    removed_in: null
+    status: planned
+    phase: 2
+    warning: FutureWarning
+    code_refs: [diff_diff/triple_diff.py]
+    notes: "Same post-dummy overload as [M-030], but the NAME 'time' persists as the merged class's staggered calendar column, so removed_in is null - the 4.0 semantic enforcement is [M-085] (mirrors the TWFE pair [M-082]/[M-083])."
+  - id: M-032
+    kind: param
+    group: renames-cohort
+    old: "diff_diff:WooldridgeDiD.fit[cohort]"
+    new: "diff_diff:WooldridgeDiD.fit[first_treat]"
+    introduced_in: "3.9"
+    deprecated_in: "3.9"
+    removed_in: "4.0"
+    status: planned
+    phase: 2
+    warning: FutureWarning
+    code_refs: [diff_diff/wooldridge.py]
+    notes: "Only estimator using 'cohort' for the first-treatment column; 12 others use first_treat."
+  - id: M-033
+    kind: param
+    group: renames-dcdh
+    old: "diff_diff:ChaisemartinDHaultfoeuille.fit[group]"
+    new: "diff_diff:ChaisemartinDHaultfoeuille.fit[unit]"
+    introduced_in: "3.9"
+    deprecated_in: "3.9"
+    removed_in: "4.0"
+    status: planned
+    phase: 2
+    warning: FutureWarning
+    code_refs: [diff_diff/chaisemartin_dhaultfoeuille.py]
+    notes: "'group' here means the unit id (R DIDmultiplegt vocabulary) but means the treated-group 0/1 indicator in TripleDifference - name-carries-altered-meaning violation."
+  - id: M-034
+    kind: param
+    group: renames-dcdh
+    old: "diff_diff:ChaisemartinDHaultfoeuille.fit[controls]"
+    new: "diff_diff:ChaisemartinDHaultfoeuille.fit[covariates]"
+    introduced_in: "3.9"
+    deprecated_in: "3.9"
+    removed_in: "4.0"
+    status: planned
+    phase: 2
+    warning: FutureWarning
+    code_refs: [diff_diff/chaisemartin_dhaultfoeuille.py]
+    notes: "Majority spelling is covariates."
+  - id: M-035
+    kind: param
+    group: renames-col-suffix
+    old: "diff_diff:HeterogeneousAdoptionDiD.fit[outcome_col]"
+    new: "diff_diff:HeterogeneousAdoptionDiD.fit[outcome]"
+    introduced_in: "3.9"
+    deprecated_in: "3.9"
+    removed_in: "4.0"
+    status: planned
+    phase: 2
+    warning: FutureWarning
+    code_refs: [diff_diff/had.py]
+    notes: "_col suffix used only by HAD and RDD; 22 other estimators use bare names."
+  - id: M-036
+    kind: param
+    group: renames-col-suffix
+    old: "diff_diff:HeterogeneousAdoptionDiD.fit[dose_col]"
+    new: "diff_diff:HeterogeneousAdoptionDiD.fit[dose]"
+    introduced_in: "3.9"
+    deprecated_in: "3.9"
+    removed_in: "4.0"
+    status: planned
+    phase: 2
+    warning: FutureWarning
+    code_refs: [diff_diff/had.py]
+    notes: "Matches ContinuousDiD's bare 'dose'."
+  - id: M-037
+    kind: param
+    group: renames-col-suffix
+    old: "diff_diff:HeterogeneousAdoptionDiD.fit[time_col]"
+    new: "diff_diff:HeterogeneousAdoptionDiD.fit[time]"
+    introduced_in: "3.9"
+    deprecated_in: "3.9"
+    removed_in: "4.0"
+    status: planned
+    phase: 2
+    warning: FutureWarning
+    code_refs: [diff_diff/had.py]
+    notes: ""
+  - id: M-038
+    kind: param
+    group: renames-col-suffix
+    old: "diff_diff:HeterogeneousAdoptionDiD.fit[unit_col]"
+    new: "diff_diff:HeterogeneousAdoptionDiD.fit[unit]"
+    introduced_in: "3.9"
+    deprecated_in: "3.9"
+    removed_in: "4.0"
+    status: planned
+    phase: 2
+    warning: FutureWarning
+    code_refs: [diff_diff/had.py]
+    notes: ""
+  - id: M-039
+    kind: param
+    group: renames-col-suffix
+    old: "diff_diff:HeterogeneousAdoptionDiD.fit[first_treat_col]"
+    new: "diff_diff:HeterogeneousAdoptionDiD.fit[first_treat]"
+    introduced_in: "3.9"
+    deprecated_in: "3.9"
+    removed_in: "4.0"
+    status: planned
+    phase: 2
+    warning: FutureWarning
+    code_refs: [diff_diff/had.py]
+    notes: ""
+  - id: M-040
+    kind: param
+    group: renames-col-suffix
+    old: "diff_diff:RegressionDiscontinuity.fit[outcome_col]"
+    new: "diff_diff:RegressionDiscontinuity.fit[outcome]"
+    introduced_in: "3.9"
+    deprecated_in: "3.9"
+    removed_in: "4.0"
+    status: planned
+    phase: 2
+    warning: FutureWarning
+    code_refs: [diff_diff/rdd.py]
+    notes: ""
+  - id: M-041
+    kind: param
+    group: renames-col-suffix
+    old: "diff_diff:RegressionDiscontinuity.fit[running_col]"
+    new: "diff_diff:RegressionDiscontinuity.fit[running]"
+    introduced_in: "3.9"
+    deprecated_in: "3.9"
+    removed_in: "4.0"
+    status: planned
+    phase: 2
+    warning: FutureWarning
+    code_refs: [diff_diff/rdd.py]
+    notes: ""
+  - id: M-042
+    kind: param
+    group: renames-col-suffix
+    old: "diff_diff:RegressionDiscontinuity.fit[treatment_col]"
+    new: "diff_diff:RegressionDiscontinuity.fit[treatment]"
+    introduced_in: "3.9"
+    deprecated_in: "3.9"
+    removed_in: "4.0"
+    status: planned
+    phase: 2
+    warning: FutureWarning
+    code_refs: [diff_diff/rdd.py]
+    notes: "0/1 take-up column for fuzzy RD - consistent with 'treatment' as a 0/1 indicator library-wide."
+  - id: M-043
+    kind: param
+    group: renames-control-group
+    old: "diff_diff:StackedDiD[clean_control]"
+    new: "diff_diff:StackedDiD[control_group]"
+    introduced_in: "3.9"
+    deprecated_in: "3.9"
+    removed_in: "4.0"
+    status: planned
+    phase: 2
+    warning: FutureWarning
+    code_refs: [diff_diff/stacked_did.py]
+    notes: "Same concept as control_group elsewhere; underscored value spellings win library-wide (spec section 8)."
+  - id: M-044
+    kind: param
+    group: renames-level
+    old: "diff_diff:WooldridgeDiDResults.to_dataframe[aggregation]"
+    new: "diff_diff:WooldridgeDiDResults.to_dataframe[level]"
+    introduced_in: "3.9"
+    deprecated_in: "3.9"
+    removed_in: "4.0"
+    status: planned
+    phase: 2
+    warning: FutureWarning
+    code_refs: [diff_diff/wooldridge_results.py]
+    notes: "Every other to_dataframe selector is level=. Covers ONLY the to_dataframe param rename; the 'event' value vocabulary across Wooldridge's aggregation surfaces is [M-086], and the summary(aggregation=) surface is [M-087]."
+  - id: M-045
+    kind: param
+    group: renames-robust-drop
+    old: "diff_diff:DifferenceInDifferences[robust]"
+    new: null
+    deprecated_in: "3.9"
+    removed_in: "4.0"
+    status: planned
+    phase: 2
+    warning: FutureWarning
+    code_refs: [diff_diff/estimators.py]
+    notes: "Redundant with vcov_type; inherited by TwoWayFixedEffects (and MultiPeriodDiD until [M-010])."
+  - id: M-046
+    kind: param
+    group: renames-robust-drop
+    old: "diff_diff:TripleDifference[robust]"
+    new: null
+    deprecated_in: "3.9"
+    removed_in: "4.0"
+    status: planned
+    phase: 2
+    warning: FutureWarning
+    code_refs: [diff_diff/triple_diff.py]
+    notes: ""
+  - id: M-047
+    kind: param
+    group: renames-robust-drop
+    old: "diff_diff:HeterogeneousAdoptionDiD[robust]"
+    new: null
+    deprecated_in: "3.9"
+    removed_in: "4.0"
+    status: planned
+    phase: 2
+    warning: FutureWarning
+    code_refs: [diff_diff/had.py]
+    notes: "Only estimator where robust defaults False - a third meaning for the same knob."
+
+  # ---- Results-field storage flips (4.0 native quintet) --------------------
+  # Canonical att/se/t_stat/p_value/conf_int already exist as PROPERTIES on
+  # every class (verified 2026-07-18); these rows track the 4.0 STORAGE flip:
+  # canonical becomes the dataclass field, overall_* becomes the warning
+  # property (removed 5.0). Headline pair asserted; sibling overall_se/
+  # overall_p_value/overall_conf_int/overall_t_stat fields flip in the same PR.
+  - id: M-050
+    kind: field
+    group: field-flip
+    old: "diff_diff:CallawaySantAnnaResults.overall_att"
+    new: "diff_diff:CallawaySantAnnaResults.att"
+    introduced_in: "4.0"
+    deprecated_in: "4.0"
+    removed_in: "5.0"
+    status: planned
+    phase: 5
+    warning: FutureWarning
+    test_ref: null
+    code_refs: [diff_diff/staggered_results.py]
+    notes: "Pickle migration via __setstate__ per spec section 5."
+  - id: M-051
+    kind: field
+    group: field-flip
+    old: "diff_diff:SunAbrahamResults.overall_att"
+    new: "diff_diff:SunAbrahamResults.att"
+    introduced_in: "4.0"
+    deprecated_in: "4.0"
+    removed_in: "5.0"
+    status: planned
+    phase: 5
+    warning: FutureWarning
+    code_refs: [diff_diff/sun_abraham.py]
+    notes: ""
+  - id: M-052
+    kind: field
+    group: field-flip
+    old: "diff_diff:ImputationDiDResults.overall_att"
+    new: "diff_diff:ImputationDiDResults.att"
+    introduced_in: "4.0"
+    deprecated_in: "4.0"
+    removed_in: "5.0"
+    status: planned
+    phase: 5
+    warning: FutureWarning
+    code_refs: [diff_diff/imputation_results.py]
+    notes: ""
+  - id: M-053
+    kind: field
+    group: field-flip
+    old: "diff_diff:TwoStageDiDResults.overall_att"
+    new: "diff_diff:TwoStageDiDResults.att"
+    introduced_in: "4.0"
+    deprecated_in: "4.0"
+    removed_in: "5.0"
+    status: planned
+    phase: 5
+    warning: FutureWarning
+    code_refs: [diff_diff/two_stage_results.py]
+    notes: ""
+  - id: M-054
+    kind: field
+    group: field-flip
+    old: "diff_diff:StackedDiDResults.overall_att"
+    new: "diff_diff:StackedDiDResults.att"
+    introduced_in: "4.0"
+    deprecated_in: "4.0"
+    removed_in: "5.0"
+    status: planned
+    phase: 5
+    warning: FutureWarning
+    code_refs: [diff_diff/stacked_did_results.py]
+    notes: ""
+  - id: M-055
+    kind: field
+    group: field-flip
+    old: "diff_diff:EfficientDiDResults.overall_att"
+    new: "diff_diff:EfficientDiDResults.att"
+    introduced_in: "4.0"
+    deprecated_in: "4.0"
+    removed_in: "5.0"
+    status: planned
+    phase: 5
+    warning: FutureWarning
+    code_refs: [diff_diff/efficient_did_results.py]
+    notes: ""
+  - id: M-056
+    kind: field
+    group: field-flip
+    old: "diff_diff:WooldridgeDiDResults.overall_att"
+    new: "diff_diff:WooldridgeDiDResults.att"
+    introduced_in: "4.0"
+    deprecated_in: "4.0"
+    removed_in: "5.0"
+    status: planned
+    phase: 5
+    warning: FutureWarning
+    code_refs: [diff_diff/wooldridge_results.py]
+    notes: ""
+  - id: M-057
+    kind: field
+    group: field-flip
+    old: "diff_diff:ChaisemartinDHaultfoeuilleResults.overall_att"
+    new: "diff_diff:ChaisemartinDHaultfoeuilleResults.att"
+    introduced_in: "4.0"
+    deprecated_in: "4.0"
+    removed_in: "5.0"
+    status: planned
+    phase: 5
+    warning: FutureWarning
+    code_refs: [diff_diff/chaisemartin_dhaultfoeuille_results.py]
+    notes: ""
+  - id: M-058
+    kind: field
+    group: field-flip
+    old: "diff_diff:ContinuousDiDResults.overall_att"
+    new: "diff_diff:ContinuousDiDResults.att"
+    introduced_in: "4.0"
+    deprecated_in: "4.0"
+    removed_in: "5.0"
+    status: planned
+    phase: 5
+    warning: FutureWarning
+    code_refs: [diff_diff/continuous_did_results.py]
+    notes: "Also flips the deviant overall_att_se/overall_att_p_value/overall_att_conf_int/overall_att_t_stat sibling fields (the trap-catalog outlier)."
+
+  # ---- Alias table ---------------------------------------------------------
+  - id: M-060
+    kind: alias
+    group: alias-table
+    old: "EventStudy"
+    new: null
+    old_target: "diff_diff:MultiPeriodDiD"
+    new_target: null
+    deprecated_in: "3.9"
+    removed_in: "4.0"
+    status: planned
+    phase: 3
+    code_refs: [diff_diff/__init__.py]
+    notes: "DROPPED, not retargeted: 'event study' is a design produced by CS/SA/BJS/LPDiD too, and retargeting to a class whose default is the static ATT would carry altered meaning. Deprecation warning rides parent [M-010] - the alias IS the same class object, so instantiating via EventStudy hits MPD's shim warning; no separate alias warning is enforceable."
+  - id: M-061
+    kind: alias
+    group: alias-table
+    old: "QDiDResults"
+    new: null
+    old_target: "diff_diff:ChangesInChangesResults"
+    new_target: null
+    deprecated_in: "3.9"
+    removed_in: "4.0"
+    status: planned
+    phase: 5
+    code_refs: [diff_diff/__init__.py]
+    notes: "Already a pure export alias of ChangesInChangesResults; dies with QDiD [M-015]."
+  - id: M-064
+    kind: alias
+    group: alias-table
+    old: "SDDD"
+    new: null
+    old_target: "diff_diff:StaggeredTripleDifference"
+    new_target: null
+    deprecated_in: "3.9"
+    removed_in: "4.0"
+    status: planned
+    phase: 3
+    code_refs: [diff_diff/__init__.py]
+    notes: "Dies with its class [M-013]; deprecation warning rides the parent class shim (same object). Migrate the old_target locator when [M-013] flips to removed (cross-row rule)."
+  - id: M-062
+    kind: alias
+    group: alias-table
+    old: "SCM"
+    new: null
+    old_target: null
+    new_target: "diff_diff:SyntheticControl"
+    introduced_in: "3.9"
+    deprecated_in: null
+    removed_in: null
+    status: planned
+    phase: 2
+    code_refs: [diff_diff/__init__.py]
+    notes: "Introduce-only. 'SC' rejected: one transposition from the existing CS alias. TROP/LPDiD are self-aliased acronyms; no rows."
+  - id: M-063
+    kind: alias
+    group: alias-table
+    old: "Spillover"
+    new: null
+    old_target: null
+    new_target: "diff_diff:SpilloverDiD"
+    introduced_in: "3.9"
+    deprecated_in: null
+    removed_in: null
+    status: planned
+    phase: 2
+    code_refs: [diff_diff/__init__.py]
+    notes: "Introduce-only; follows the Stacked=StackedDiD precedent."
+
+  # ---- Module-level function wrappers (class form is canonical) ------------
+  - id: M-070
+    kind: function
+    group: function-wrappers
+    old: "diff_diff:imputation_did"
+    new: null
+    deprecated_in: "3.9"
+    removed_in: "4.0"
+    status: planned
+    phase: 2
+    warning: FutureWarning
+    code_refs: [diff_diff/imputation.py, diff_diff/__init__.py]
+    notes: "Use ImputationDiD. Only 8 of 24 estimators ever had wrappers; the surface is retired rather than completed."
+  - id: M-071
+    kind: function
+    group: function-wrappers
+    old: "diff_diff:two_stage_did"
+    new: null
+    deprecated_in: "3.9"
+    removed_in: "4.0"
+    status: planned
+    phase: 2
+    warning: FutureWarning
+    code_refs: [diff_diff/two_stage.py, diff_diff/__init__.py]
+    notes: "Use TwoStageDiD."
+  - id: M-072
+    kind: function
+    group: function-wrappers
+    old: "diff_diff:stacked_did"
+    new: null
+    deprecated_in: "3.9"
+    removed_in: "4.0"
+    status: planned
+    phase: 2
+    warning: FutureWarning
+    code_refs: [diff_diff/stacked_did.py, diff_diff/__init__.py]
+    notes: "Use StackedDiD."
+  - id: M-073
+    kind: function
+    group: function-wrappers
+    old: "diff_diff:trop"
+    new: null
+    deprecated_in: "3.9"
+    removed_in: "4.0"
+    status: planned
+    phase: 2
+    warning: FutureWarning
+    code_refs: [diff_diff/trop.py, diff_diff/__init__.py]
+    notes: "Use TROP."
+  - id: M-074
+    kind: function
+    group: function-wrappers
+    old: "diff_diff:synthetic_control"
+    new: null
+    deprecated_in: "3.9"
+    removed_in: "4.0"
+    status: planned
+    phase: 2
+    warning: FutureWarning
+    code_refs: [diff_diff/synthetic_control.py, diff_diff/__init__.py]
+    notes: "Use SyntheticControl."
+  - id: M-075
+    kind: function
+    group: function-wrappers
+    old: "diff_diff:triple_difference"
+    new: null
+    deprecated_in: "3.9"
+    removed_in: "4.0"
+    status: planned
+    phase: 2
+    warning: FutureWarning
+    code_refs: [diff_diff/triple_diff.py, diff_diff/__init__.py]
+    notes: "Use TripleDifference."
+  - id: M-076
+    kind: function
+    group: function-wrappers
+    old: "diff_diff:bacon_decompose"
+    new: null
+    deprecated_in: "3.9"
+    removed_in: "4.0"
+    status: planned
+    phase: 2
+    warning: FutureWarning
+    code_refs: [diff_diff/bacon.py, diff_diff/__init__.py]
+    notes: "Use BaconDecomposition. twowayfeweights stays - it is a diagnostic function, not a class duplicate."
+  - id: M-077
+    kind: function
+    group: function-wrappers
+    old: "diff_diff:chaisemartin_dhaultfoeuille"
+    new: null
+    deprecated_in: "3.9"
+    removed_in: "4.0"
+    status: planned
+    phase: 2
+    warning: FutureWarning
+    code_refs: [diff_diff/chaisemartin_dhaultfoeuille.py, diff_diff/__init__.py]
+    notes: "Use ChaisemartinDHaultfoeuille."
+
+  - id: M-086
+    kind: param-value
+    group: renames-level
+    old: "diff_diff:WooldridgeDiDResults.aggregate[type]=event"
+    new: "diff_diff:WooldridgeDiDResults.aggregate[type]=event_study"
+    introduced_in: "3.9"
+    deprecated_in: "3.9"
+    removed_in: "4.0"
+    status: planned
+    phase: 2
+    warning: FutureWarning
+    code_refs: [diff_diff/wooldridge_results.py]
+    notes: "Wooldridge's EXISTING post-fit aggregate() (emfx-style prior art for spec section 6) accepts the drifted 'event' spelling; unifies to 'event_study' across aggregate/summary/to_dataframe value vocabularies. 'gt' stays as a documented estimator extra (group-time table), like ContinuousDiD's 'dose'."
+  - id: M-087
+    kind: param
+    group: renames-level
+    old: "diff_diff:WooldridgeDiDResults.summary[aggregation]"
+    new: null
+    introduced_in: "3.9"
+    deprecated_in: "3.9"
+    removed_in: "4.0"
+    status: planned
+    phase: 2
+    warning: FutureWarning
+    code_refs: [diff_diff/wooldridge_results.py]
+    notes: "summary() unifies to the library-wide summary(alpha=None) signature (spec section 5); aggregation selection lives on aggregate(). The alpha param arrives additively in the same PR."
+
+  # ---- Behavior policies (schema-tracked, spec-governed; no reality probe) -
+  - id: M-080
+    kind: behavior
+    group: policy-auto-cluster
+    old: "diff_diff:TwoWayFixedEffects[cluster]"
+    new: null
+    deprecated_in: "4.0"
+    removed_in: null
+    status: planned
+    phase: 5
+    code_refs: [diff_diff/estimators.py, diff_diff/twfe.py, diff_diff/stacked_did.py]
+    notes: "ONE auto-cluster policy at 4.0: panel estimators (required unit column) default to clustering at unit with cluster_name/n_clusters metadata; cluster=False disables; 2x2 cross-sectional estimators stay HC-robust. Changes some default SEs - migration guide with [M-004..M-006]."
+  - id: M-081
+    kind: behavior
+    group: policy-n-bootstrap
+    old: "diff_diff:DifferenceInDifferences[n_bootstrap]"
+    new: null
+    deprecated_in: null
+    removed_in: null
+    status: planned
+    phase: 2
+    code_refs: [diff_diff/estimators.py, diff_diff/synthetic_did.py, diff_diff/changes_in_changes.py]
+    notes: "Semantic unification only: n_bootstrap=0 = bootstrap off wherever an analytical path exists; per-estimator counts stay tuned (999 light / 200 compute-heavy). No numeric default changes."
+  - id: M-082
+    kind: param
+    group: renames-post
+    old: "diff_diff:TwoWayFixedEffects.fit[time]"
+    new: "diff_diff:TwoWayFixedEffects.fit[post]"
+    introduced_in: "3.9"
+    deprecated_in: "3.9"
+    removed_in: null
+    status: planned
+    phase: 3
+    warning: FutureWarning
+    code_refs: [diff_diff/twfe.py]
+    notes: "Static TWFE's 'time' is a 0/1 post dummy today; static mode migrates to 'post'. The NAME 'time' persists (it becomes the event-study calendar column), so removed_in is null - the 4.0 semantic enforcement is [M-083]."
+  - id: M-083
+    kind: behavior
+    group: merge-mpd
+    old: "diff_diff:TwoWayFixedEffects.fit[time]"
+    new: null
+    deprecated_in: "4.0"
+    removed_in: null
+    status: planned
+    phase: 5
+    code_refs: [diff_diff/twfe.py]
+    notes: "At 4.0, 'time' means calendar ONLY: static mode (event_study=False) passing time= raises a ValueError pointing at post= - never silently reinterpreted as a post dummy. Companion to [M-082]."
+  - id: M-085
+    kind: behavior
+    group: merge-ddd
+    old: "diff_diff:TripleDifference.fit[time]"
+    new: null
+    deprecated_in: "4.0"
+    removed_in: null
+    status: planned
+    phase: 5
+    code_refs: [diff_diff/triple_diff.py]
+    notes: "At 4.0, 'time' means the staggered calendar column ONLY: 2x2x2 mode passing time= raises a ValueError pointing at post= - never silently reinterpreted. Companion to [M-031]; mirrors [M-083]."
+  - id: M-084
+    kind: param
+    group: constructor-hygiene
+    old: "diff_diff:ContinuousDiD[covariates]"
+    new: "diff_diff:ContinuousDiD.fit[covariates]"
+    introduced_in: "3.9"
+    deprecated_in: "3.9"
+    removed_in: "4.0"
+    status: planned
+    phase: 2
+    warning: FutureWarning
+    code_refs: [diff_diff/continuous_did.py]
+    notes: "The one estimator with a design-matrix column in the constructor; moves to fit() per the sklearn split (spec section 7)."

@@ -81,22 +81,36 @@ results = estimator.fit(df, outcome='y', treatment='treated', ...)
 print(results.summary())
 ```
 
-### Results Objects
-All results have:
-- `.att` - Point estimate
-- `.se` - Standard error
-- `.pvalue` - Two-sided p-value
-- `.ci` - Tuple of (lower, upper) confidence interval
-- `.summary()` - Print formatted summary
-- `.to_dict()` - Export to dictionary
-- `.to_dataframe()` - Export to DataFrame
+### Results Objects — CURRENT (3.x)
+The canonical inference quintet is `att` / `se` / `t_stat` / `p_value` /
+`conf_int` (never `.pvalue` / `.ci`). Every results class exposes all five,
+but native STORAGE varies in 3.x (`overall_att` on the staggered family,
+`avg_att` on MultiPeriodDiD, with canonical names as properties). `summary()`
+everywhere; `to_dict()` / `to_dataframe()` on most classes. See
+`.claude/../docs/methodology/REGISTRY.md` per estimator.
 
-### Column Naming
-- `unit` or `unit_id` - Unit identifier
-- `time` or `time_id` - Time period identifier
-- `treated` - Binary treatment indicator (0/1)
-- `post` - Binary post-period indicator (0/1)
-- `cohort` or `treatment_time` - First treatment period for staggered designs
+### Results Objects — 4.0 TARGET (do not write against this pre-4.0)
+Canonical quintet becomes the native fields on every class; `overall_att`
+family becomes FutureWarning properties (removed 5.0); one unified
+event-study representation; aggregation via post-fit
+`results.aggregate(type=)`. Normative spec: `docs/v4-design.md`; per-surface
+lifecycle: `docs/v4-deprecations.yaml` (CI-enforced by
+`tests/test_v4_matrix.py`).
+
+### Column Naming — CURRENT (3.x)
+- `unit` unit id (`unit_col` on HAD; `group` on dCDH — both slated for 4.0)
+- `time` calendar period, EXCEPT DifferenceInDifferences / TripleDifference /
+  static TwoWayFixedEffects, where `time` is the 0/1 post dummy (TWFE warns
+  on >2 unique values; 4.0 renames these to `post`, and TWFE's `time`
+  becomes the event-study calendar column)
+- `treatment` 0/1 treated-group indicator; `first_treat` cohort column
+  (`cohort` on WooldridgeDiD — slated for 4.0)
+- `covariates` covariate list (`controls` on dCDH — slated for 4.0)
+
+### Column Naming — 4.0 TARGET
+`outcome` / `unit` / `time` (calendar) / `post` (0/1) / `treatment` (0/1) /
+`first_treat` / `covariates` / `partition` (DDD), no `_col` suffixes. Rules:
+`docs/v4-design.md` section 8.
 
 ## Session Notes
 

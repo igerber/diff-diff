@@ -95,6 +95,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   2015 Eq 2's ceiling where R 4.0.0 crashes by accident; R's left-side
   bin-edge slot-reflection quirk under empty bins is replicated for parity
   and documented.
+- **Internal: 4.0 API design spec + machine-checked deprecation matrix.** The
+  normative design for the 4.0 program (three estimator merges, post-fit
+  `results.aggregate()`, canonical results quintet, library-wide param/column
+  unification, 3.9-shim-then-4.0-enforce sequencing) lives in
+  `docs/v4-design.md`; every deprecation's lifecycle is a row in
+  `docs/v4-deprecations.yaml`, enforced against reality at HEAD
+  by `tests/test_v4_matrix.py` (new-surface tripwires, removal pins,
+  default-flip and warning-retirement sweeps). Repo-internal documentation +
+  test only - **no public API or numerical behavior change.**
 
 ## [3.8.0] - 2026-07-18
 

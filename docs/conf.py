@@ -56,6 +56,7 @@ exclude_patterns = [
     "performance-scenarios.md",
     "practitioner-guide-evaluation.md",
     "survey-roadmap.md",
+    "v4-design.md",
     "methodology/continuous-did.md",
     "methodology/survey-theory.md",
     # Internal paper-review notes (methodology validation artifacts).

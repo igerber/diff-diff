@@ -209,6 +209,22 @@ where interactions are included for ALL periods (pre and post), not just post-tr
 Pre-treatment coefficients (e < -1) test the parallel trends assumption:
 under H0 of parallel trends, δ_e = 0 for all e < 0.
 
+- **Note:** The 3.x DEFAULT implementation estimates the pooled form of this
+  target - treatment-group main effect + period dummies + interactions, with
+  NO unit fixed effects unless `absorb`/`fixed_effects` is passed
+  (`estimators.py` design build). The unit-FE form above (the
+  `fixest::feols(... | unit + time)` parity target) and the pooled default
+  produce identical point estimates only under balanced panels with no
+  covariates and simultaneous adoption; with unbalanced panels or covariates
+  the two projections differ. The 4.0 program (see `docs/v4-design.md`
+  section 4.1 and `docs/v4-deprecations.yaml` [M-010]) migrates the
+  event-study default to the unit-FE spec on the merged TwoWayFixedEffects,
+  keeping the pooled model reachable via `spec="pooled"` (required for
+  repeated cross-sections and for reproducing 3.x MPD numbers exactly); the
+  Phase 3 PR gates on a balanced-equivalence test, an
+  unbalanced-or-covariate divergence test, and pooled bit-exact parity vs
+  3.x MPD.
+
 Post-treatment coefficients (e ≥ 0) estimate dynamic treatment effects.
 
 Average ATT over post-treatment periods:
