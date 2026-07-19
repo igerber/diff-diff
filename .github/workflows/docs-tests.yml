@@ -8,6 +8,7 @@ on:
       - 'diff_diff/**'
       - 'tests/test_doc_snippets.py'
       - 'tests/test_doc_deps_integrity.py'
+      - 'tests/test_docs_ia.py'
       - 'tests/test_v4_matrix.py'
       # tests/conftest.py is auto-loaded by pytest for the snippet
       # test run and mutates sys.path + MPLBACKEND (conftest.py:14, 18);
@@ -27,6 +28,7 @@ on:
       - 'diff_diff/**'
       - 'tests/test_doc_snippets.py'
       - 'tests/test_doc_deps_integrity.py'
+      - 'tests/test_docs_ia.py'
       - 'tests/test_v4_matrix.py'
       - 'tests/conftest.py'
       - 'pyproject.toml'
@@ -80,6 +82,14 @@ jobs:
         # tests/conftest.py imports diff_diff at collection and the install
         # step does not install diff_diff.
         run: PYTHONPATH=. DIFF_DIFF_BACKEND=python pytest tests/test_doc_deps_integrity.py -v
+
+      - name: Run docs IA structural guards
+        # Pins the #703 information architecture: single 5-section root
+        # toctree, tutorial dual-registration (short-label toctree entry +
+        # landing-page card), homepage estimator-table parity with the API
+        # catalog, and no :no-index:-only classes (dead cross-references).
+        # All four are valid-Sphinx states the -W build cannot catch.
+        run: PYTHONPATH=. DIFF_DIFF_BACKEND=python pytest tests/test_docs_ia.py -v
 
       - name: Run v4 deprecation-matrix enforcement
         # Asserts every docs/v4-deprecations.yaml row's status against reality

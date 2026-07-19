@@ -152,7 +152,11 @@ When adding new functionality, the source of truth is:
 - **`docs/tutorials/*.ipynb`** for hands-on examples. New notebooks are registered in
   `docs/tutorials/index.rst` (toctree entry with a short display label + a card in the
   matching group), NOT in `docs/index.rst` - the root toctree lists only the 5 section
-  landing pages so the navbar stays at 5 links.
+  landing pages so the navbar stays at 5 links. These IA invariants (plus homepage
+  estimator-table parity with the API catalog, and the rule that any class documented
+  with `:no-index:` on a module page keeps a canonical autosummary entry in
+  `docs/api/index.rst`) are CI-enforced by `tests/test_docs_ia.py`; the full list is in
+  CONTRIBUTING.md "Docs IA invariants".
 - **`CHANGELOG.md`** for release notes.
 - **`README.md`** for ONE LINE in the `## Estimators` flat catalog (or `## Diagnostics & Sensitivity` for diagnostic-class features). Do NOT add usage examples, parameter tables, per-estimator sections, or full bibliographies.
 

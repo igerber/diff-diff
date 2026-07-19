@@ -40,6 +40,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   purpose-phrasing, restoring the case as a genuinely clean negative control.
 
 ### Added
+- **Internal: CI-enforced docs IA guards (`tests/test_docs_ia.py`).** Four structural
+  invariants protecting the #703 information architecture, all valid-Sphinx states the
+  `-W` build cannot catch: the root toctree stays exactly the 5 section landing pages
+  (a 6th entry regrows the navbar "More" dropdown); every tutorial notebook is
+  registered in `docs/tutorials/index.rst` with BOTH a short-labeled toctree entry
+  (<= 40 chars) and a landing-page card; the homepage "Supported Estimators" table
+  stays 1:1 with the `api/index.rst` Estimators autosummary; and no class is
+  documented only under `:no-index:` (which renders `:class:` cross-references as
+  dead text - the pre-#703 RDD failure mode). Runs in the docs-tests `doc-snippets`
+  job; conventions documented in CLAUDE.md, CONTRIBUTING.md, and `/docs-check` 5b.
 - **Internal: 4.0 diagnostic-family amendment to the design spec.** `docs/v4-design.md`
   gains section 3.5 formalizing a third object kind - diagnostics: the library's
   existing "Diagnostics & Sensitivity" family (parallel-trends testing, placebo

@@ -81,6 +81,24 @@ If you find yourself adding a usage example, a parameter table, or a multi-parag
 
 9. **`docs/doc-deps.yaml`** - Add source-to-doc mappings for the new module.
 
+### Docs IA invariants (CI-enforced by `tests/test_docs_ia.py`)
+
+The documentation site's information architecture is machine-enforced; a red
+`docs-tests` check means one of these was violated:
+
+1. The root `docs/index.rst` toctree lists ONLY the 5 section landing pages
+   (Getting Started / Practitioner Guide / Tutorials / User Guide / API
+   Reference). New top-level pages join a section landing page, never the root -
+   every root entry becomes a navbar item and past 5 the theme regrows an
+   unusable "More" dropdown.
+2. Every tutorial notebook has BOTH a short-labeled toctree entry (<= 40 chars)
+   and a `grid-item-card`, in the SAME group of `docs/tutorials/index.rst`.
+3. The homepage "Supported Estimators" table stays 1:1 with the
+   `docs/api/index.rst` Estimators autosummary - new estimators need both.
+4. A class documented with `:no-index:` on a module page must keep a canonical
+   autosummary entry in `docs/api/index.rst`, else `:class:` cross-references
+   to it render as dead text.
+
 ### For Bug Fixes or Minor Enhancements
 
 - Update relevant docstrings

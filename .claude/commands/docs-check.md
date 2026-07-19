@@ -202,6 +202,28 @@ For each major feature, verify a tutorial covers it:
 
 Check each tutorial file exists and is non-empty.
 
+### 5b. Docs IA Registration Check (post-#703 information architecture)
+
+The site navigation contract is CI-enforced by `tests/test_docs_ia.py` (docs-tests
+workflow). Run it directly for immediate feedback:
+
+```bash
+PYTHONPATH=. DIFF_DIFF_BACKEND=python pytest tests/test_docs_ia.py -q
+```
+
+What it pins (fix at the source listed, never by widening the test):
+1. `docs/index.rst` has ONE toctree = the 5 section landing pages. New top-level
+   pages join a section landing page (`getting_started` / `practitioners` /
+   `tutorials/index` / `user_guide` / `api/index`), never the root.
+2. Every `docs/tutorials/*.ipynb` is registered in `docs/tutorials/index.rst`
+   twice: a short-labeled toctree entry (`Label <stem>`, <= 40 chars) in its
+   group AND a `grid-item-card` with `:link: <stem>`.
+3. Homepage "Supported Estimators" table rows match the `api/index.rst`
+   Estimators autosummary 1:1 - new estimators need BOTH.
+4. Any `autoclass` documented with `:no-index:` on a module page needs a
+   canonical autosummary entry in `api/index.rst`, else `:class:` xrefs to it
+   render as dead text.
+
 ### 6. Cross-Reference Check
 
 For estimators added to the codebase, verify they have:
