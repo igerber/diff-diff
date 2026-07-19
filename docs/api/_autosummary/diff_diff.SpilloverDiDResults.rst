@@ -33,17 +33,22 @@
       ~SpilloverDiDResults.coefficients
       ~SpilloverDiDResults.conley_lag_cutoff
       ~SpilloverDiDResults.d_bar
+      ~SpilloverDiDResults.df_convention
       ~SpilloverDiDResults.event_study
       ~SpilloverDiDResults.event_study_effects
       ~SpilloverDiDResults.fitted_values
       ~SpilloverDiDResults.horizon_max
+      ~SpilloverDiDResults.inference_df
       ~SpilloverDiDResults.inference_method
       ~SpilloverDiDResults.is_significant
       ~SpilloverDiDResults.is_staggered
       ~SpilloverDiDResults.n_bootstrap
       ~SpilloverDiDResults.n_clusters
       ~SpilloverDiDResults.n_far_away_obs
+      ~SpilloverDiDResults.n_psu
+      ~SpilloverDiDResults.n_strata
       ~SpilloverDiDResults.n_units_ever_in_ring
+      ~SpilloverDiDResults.p_val_type
       ~SpilloverDiDResults.r_squared
       ~SpilloverDiDResults.reference_period
       ~SpilloverDiDResults.residuals

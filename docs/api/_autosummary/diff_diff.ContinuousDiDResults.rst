@@ -31,7 +31,10 @@
       ~ContinuousDiDResults.coef_var
       ~ContinuousDiDResults.conf_int
       ~ContinuousDiDResults.control_group
+      ~ContinuousDiDResults.covariates
       ~ContinuousDiDResults.degree
+      ~ContinuousDiDResults.epv_threshold
+      ~ContinuousDiDResults.estimation_method
       ~ContinuousDiDResults.event_study_effects
       ~ContinuousDiDResults.is_significant
       ~ContinuousDiDResults.n_bootstrap
@@ -41,12 +44,16 @@
       ~ContinuousDiDResults.overall_se
       ~ContinuousDiDResults.overall_t_stat
       ~ContinuousDiDResults.p_value
+      ~ContinuousDiDResults.pscore_fallback
+      ~ContinuousDiDResults.pscore_trim
       ~ContinuousDiDResults.rank_deficient_action
+      ~ContinuousDiDResults.reference_dose
       ~ContinuousDiDResults.se
       ~ContinuousDiDResults.seed
       ~ContinuousDiDResults.significance_stars
       ~ContinuousDiDResults.survey_metadata
       ~ContinuousDiDResults.t_stat
+      ~ContinuousDiDResults.treatment_type
       ~ContinuousDiDResults.dose_response_att
       ~ContinuousDiDResults.dose_response_acrt
       ~ContinuousDiDResults.overall_att

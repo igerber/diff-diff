@@ -30,11 +30,14 @@
       ~DiDResults.coef_var
       ~DiDResults.coefficients
       ~DiDResults.conley_lag_cutoff
+      ~DiDResults.df_convention
       ~DiDResults.fitted_values
+      ~DiDResults.inference_df
       ~DiDResults.inference_method
       ~DiDResults.is_significant
       ~DiDResults.n_bootstrap
       ~DiDResults.n_clusters
+      ~DiDResults.p_val_type
       ~DiDResults.r_squared
       ~DiDResults.residuals
       ~DiDResults.significance_stars

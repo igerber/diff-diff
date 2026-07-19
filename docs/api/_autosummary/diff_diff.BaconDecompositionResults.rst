@@ -26,6 +26,7 @@
    .. autosummary::
 
       ~BaconDecompositionResults.decomposition_error
+      ~BaconDecompositionResults.n_always_treated_remapped
       ~BaconDecompositionResults.n_obs
       ~BaconDecompositionResults.survey_metadata
       ~BaconDecompositionResults.twfe_estimate

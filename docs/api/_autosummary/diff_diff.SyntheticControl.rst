@@ -1,4 +1,4 @@
-diff\_diff.SyntheticControl
+﻿diff\_diff.SyntheticControl
 ===========================
 
 .. currentmodule:: diff_diff
@@ -19,18 +19,3 @@ diff\_diff.SyntheticControl
 
 
 
-   .. rubric:: Attributes
-
-   .. autosummary::
-
-      ~SyntheticControl.v_method
-      ~SyntheticControl.custom_v
-      ~SyntheticControl.optimizer_options
-      ~SyntheticControl.n_starts
-      ~SyntheticControl.inner_max_iter
-      ~SyntheticControl.inner_min_decrease
-      ~SyntheticControl.standardize
-      ~SyntheticControl.alpha
-      ~SyntheticControl.seed
-      ~SyntheticControl.results_
-      ~SyntheticControl.is_fitted_

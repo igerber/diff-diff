@@ -26,6 +26,7 @@
    .. autosummary::
 
       ~TripleDifferenceResults.alpha
+      ~TripleDifferenceResults.cluster_name
       ~TripleDifferenceResults.covariate_balance
       ~TripleDifferenceResults.epv_diagnostics
       ~TripleDifferenceResults.epv_threshold
@@ -39,6 +40,7 @@
       ~TripleDifferenceResults.r_squared
       ~TripleDifferenceResults.significance_stars
       ~TripleDifferenceResults.survey_metadata
+      ~TripleDifferenceResults.vcov_type
       ~TripleDifferenceResults.att
       ~TripleDifferenceResults.se
       ~TripleDifferenceResults.t_stat

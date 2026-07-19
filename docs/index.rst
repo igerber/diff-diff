@@ -20,7 +20,7 @@ It provides sklearn-like estimators with statsmodels-style output for econometri
 Key Features
 ------------
 
-- **13+ Estimators**: Basic DiD, TWFE, Event Study, Synthetic DiD, plus modern staggered estimators (Callaway-Sant'Anna, Sun-Abraham, Imputation, Two-Stage, Stacked DiD), advanced methods (TROP, Continuous DiD, Efficient DiD, Triple Difference), and Bacon Decomposition diagnostics
+- **20+ Estimators**: Basic DiD, TWFE, Event Study, Synthetic DiD/Control, modern staggered estimators (Callaway-Sant'Anna, Sun-Abraham, Imputation, Two-Stage, Stacked, LP-DiD), reversible and heterogeneous-adoption designs (dCDH, HAD), distributional methods (Changes-in-Changes), Regression Discontinuity, and Bacon Decomposition diagnostics
 - **Modern Inference**: Robust standard errors, cluster-robust SEs, wild cluster bootstrap, and multiplier bootstrap
 - **Assumption Testing**: Parallel trends tests, placebo tests, Bacon decomposition, and comprehensive diagnostics
 - **Sensitivity Analysis**: Honest DiD (Rambachan & Roth 2023) for robust inference under parallel trends violations
@@ -116,7 +116,7 @@ public policy evaluation, and social science research.
 Why diff-diff?
 --------------
 
-- **Complete method coverage**: 13+ estimators from basic 2x2 DiD to cutting-edge methods like Efficient DiD (Chen et al. 2025) and TROP (Athey et al. 2025)
+- **Complete method coverage**: 20+ estimators from basic 2x2 DiD to cutting-edge methods like Efficient DiD (Chen et al. 2025), TROP (Athey et al. 2025), and HAD (de Chaisemartin et al. 2026)
 - **Familiar API**: sklearn-like ``fit()`` interface — if you know scikit-learn, you know diff-diff
 - **Modern staggered methods**: Callaway-Sant'Anna, Sun-Abraham, Imputation DiD, Two-Stage DiD, and Stacked DiD handle heterogeneous treatment timing correctly
 - **Robust inference**: Heteroskedasticity-robust, cluster-robust, wild cluster bootstrap, and multiplier bootstrap
@@ -140,7 +140,9 @@ Supported Estimators
    * - :class:`~diff_diff.MultiPeriodDiD`
      - Event study with period-specific treatment effects
    * - :class:`~diff_diff.CallawaySantAnna`
-     - Callaway & Sant'Anna (2021) for staggered adoption
+     - Callaway & Sant'Anna (2021) group-time ATT for staggered adoption
+   * - :class:`~diff_diff.ChaisemartinDHaultfoeuille`
+     - de Chaisemartin & D'Haultfoeuille (2020/2022) for reversible (non-absorbing) treatments
    * - :class:`~diff_diff.SunAbraham`
      - Sun & Abraham (2021) interaction-weighted estimator
    * - :class:`~diff_diff.ImputationDiD`
@@ -151,14 +153,28 @@ Supported Estimators
      - Butts (2021) ring-indicator spillover-aware DiD
    * - :class:`~diff_diff.SyntheticDiD`
      - Synthetic DiD combining DiD and synthetic control
+   * - :class:`~diff_diff.SyntheticControl`
+     - Abadie, Diamond & Hainmueller (2010) classic synthetic control
    * - :class:`~diff_diff.StackedDiD`
      - Wing, Freedman & Hollingsworth (2024) stacked DiD
    * - :class:`~diff_diff.EfficientDiD`
      - Chen, Sant'Anna & Xie (2025) efficient DiD
    * - :class:`~diff_diff.TripleDifference`
      - Triple difference (DDD) estimator
+   * - :class:`~diff_diff.StaggeredTripleDifference`
+     - Ortiz-Villavicencio & Sant'Anna (2025) staggered DDD with group-time ATT
    * - :class:`~diff_diff.ContinuousDiD`
-     - Continuous treatment DiD
+     - Callaway, Goodman-Bacon & Sant'Anna (2024) continuous-treatment dose-response DiD
+   * - :class:`~diff_diff.HeterogeneousAdoptionDiD`
+     - de Chaisemartin, Ciccia, D'Haultfoeuille & Knau (2026) for designs with no untreated units
+   * - :class:`~diff_diff.LPDiD`
+     - Dube, Girardi, Jorda & Taylor (2025) local-projections DiD
+   * - :class:`~diff_diff.WooldridgeDiD`
+     - Wooldridge (2023, 2025) extended TWFE (ETWFE) via saturated OLS or QMLE
+   * - :class:`~diff_diff.ChangesInChanges`
+     - Athey & Imbens (2006) distributional DiD with quantile treatment effects
+   * - :class:`~diff_diff.RegressionDiscontinuity`
+     - Calonico, Cattaneo & Titiunik (2014) sharp/fuzzy RD with robust bias-corrected inference
    * - :class:`~diff_diff.TROP`
      - Triply Robust Panel with factor model adjustment (Athey et al. 2025)
    * - :class:`~diff_diff.BaconDecomposition`

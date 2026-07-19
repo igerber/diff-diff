@@ -43,6 +43,7 @@
       ~EfficientDiDResults.n_bootstrap
       ~EfficientDiDResults.n_clusters
       ~EfficientDiDResults.omega_condition_numbers
+      ~EfficientDiDResults.omega_ridge
       ~EfficientDiDResults.p_value
       ~EfficientDiDResults.pt_assumption
       ~EfficientDiDResults.ratio_clip

@@ -28,14 +28,17 @@
       ~TwoStageDiDResults.anticipation
       ~TwoStageDiDResults.att
       ~TwoStageDiDResults.bootstrap_results
+      ~TwoStageDiDResults.cluster_name
       ~TwoStageDiDResults.coef_var
       ~TwoStageDiDResults.conf_int
       ~TwoStageDiDResults.is_significant
+      ~TwoStageDiDResults.n_clusters
       ~TwoStageDiDResults.p_value
       ~TwoStageDiDResults.se
       ~TwoStageDiDResults.significance_stars
       ~TwoStageDiDResults.survey_metadata
       ~TwoStageDiDResults.t_stat
+      ~TwoStageDiDResults.vcov_type
       ~TwoStageDiDResults.treatment_effects
       ~TwoStageDiDResults.overall_att
       ~TwoStageDiDResults.overall_se
@@ -51,7 +54,4 @@
       ~TwoStageDiDResults.n_untreated_obs
       ~TwoStageDiDResults.n_treated_units
       ~TwoStageDiDResults.n_control_units
-      ~TwoStageDiDResults.vcov_type
-      ~TwoStageDiDResults.cluster_name
-      ~TwoStageDiDResults.n_clusters
 

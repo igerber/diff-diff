@@ -32,7 +32,9 @@
       ~MultiPeriodDiDResults.coefficients
       ~MultiPeriodDiDResults.conf_int
       ~MultiPeriodDiDResults.conley_lag_cutoff
+      ~MultiPeriodDiDResults.df_convention
       ~MultiPeriodDiDResults.fitted_values
+      ~MultiPeriodDiDResults.inference_df
       ~MultiPeriodDiDResults.inference_method
       ~MultiPeriodDiDResults.interaction_indices
       ~MultiPeriodDiDResults.is_significant

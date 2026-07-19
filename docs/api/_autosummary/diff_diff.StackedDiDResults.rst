@@ -26,12 +26,17 @@
       ~StackedDiDResults.alpha
       ~StackedDiDResults.anticipation
       ~StackedDiDResults.att
+      ~StackedDiDResults.balance
+      ~StackedDiDResults.balance_diagnostics
       ~StackedDiDResults.clean_control
+      ~StackedDiDResults.cluster_name
       ~StackedDiDResults.coef_var
       ~StackedDiDResults.conf_int
+      ~StackedDiDResults.covariates
       ~StackedDiDResults.is_significant
       ~StackedDiDResults.kappa_post
       ~StackedDiDResults.kappa_pre
+      ~StackedDiDResults.n_clusters
       ~StackedDiDResults.n_control_units
       ~StackedDiDResults.n_obs
       ~StackedDiDResults.n_stacked_obs
@@ -42,6 +47,7 @@
       ~StackedDiDResults.significance_stars
       ~StackedDiDResults.survey_metadata
       ~StackedDiDResults.t_stat
+      ~StackedDiDResults.vcov_type
       ~StackedDiDResults.weighting
       ~StackedDiDResults.overall_att
       ~StackedDiDResults.overall_se

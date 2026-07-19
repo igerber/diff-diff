@@ -16,6 +16,7 @@
       ~ImputationDiDResults.print_summary
       ~ImputationDiDResults.summary
       ~ImputationDiDResults.to_dataframe
+      ~ImputationDiDResults.to_dict
 
 
 
@@ -28,15 +29,19 @@
       ~ImputationDiDResults.anticipation
       ~ImputationDiDResults.att
       ~ImputationDiDResults.bootstrap_results
+      ~ImputationDiDResults.cluster_name
       ~ImputationDiDResults.coef_var
       ~ImputationDiDResults.conf_int
       ~ImputationDiDResults.is_significant
+      ~ImputationDiDResults.leave_one_out
+      ~ImputationDiDResults.n_clusters
       ~ImputationDiDResults.p_value
       ~ImputationDiDResults.pretrend_results
       ~ImputationDiDResults.se
       ~ImputationDiDResults.significance_stars
       ~ImputationDiDResults.survey_metadata
       ~ImputationDiDResults.t_stat
+      ~ImputationDiDResults.vcov_type
       ~ImputationDiDResults.treatment_effects
       ~ImputationDiDResults.overall_att
       ~ImputationDiDResults.overall_se
