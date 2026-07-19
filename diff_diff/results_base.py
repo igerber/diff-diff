@@ -165,9 +165,11 @@ class EventStudyResults(BaseResults):
         Per-event-time count as float, NaN where the producer records none
         (and on the reference row - no estimation happened there).
     n_kind : str or None
-        Semantic of ``n`` for this producer: ``"groups"`` (cohorts, e.g.
-        CallawaySantAnna), ``"obs"`` (observations), ``"clusters"``, or
-        None when no count is recorded.
+        Semantic of ``n`` for this producer: ``"groups"`` (a group-level
+        count - cohorts for CallawaySantAnna/SunAbraham, eligible switcher
+        groups per horizon for de Chaisemartin-D'Haultfoeuille), ``"obs"``
+        (observations), ``"clusters"``, or None when no count is recorded.
+        Never conflate a group count with observations.
     reference_period : Any or None
         Convenience scalar echo of the marked row's ``event_time`` label when
         there is EXACTLY ONE reference row; None when there are zero or
@@ -853,7 +855,10 @@ def _from_dcdh(results: Any) -> EventStudyResults:
         conf_int_upper=ci_hi,
         is_reference=is_ref,
         n=n,
-        n_kind="obs",
+        # dCDH stores N_l (eligible switcher GROUPS per horizon) under its
+        # legacy "n_obs" key - a group count, NOT observations. Placebo rows
+        # likewise carry group counts (N_pl_l). Label it "groups", never "obs".
+        n_kind="groups",
         time_scale="relative",
         event_time_convention="l1_first_switch",
         cband_lower=cband_lo,

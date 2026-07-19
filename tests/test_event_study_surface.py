@@ -502,6 +502,49 @@ def test_dcdh_convention_and_placebo_merge(surfaces):
     assert any(t >= 1 for t in times)  # post horizons
 
 
+def test_dcdh_n_kind_is_groups_not_obs(surfaces):
+    # dCDH stores N_l (eligible switcher GROUPS) under its legacy "n_obs" key.
+    # The unified surface must label it "groups", never "obs" - a consumer
+    # doing sample-size logic would otherwise misread switcher groups as
+    # observations.
+    native, surface = surfaces["ChaisemartinDHaultfoeuille"]
+    assert surface.n_kind == "groups"
+    df = surface.to_dataframe()
+    # Non-reference n values equal the native N_l (from event_study_effects /
+    # placebo_event_study), not an observation count.
+    native_n = {}
+    for k, row in native.event_study_effects.items():
+        native_n[k] = row.get("n_obs")
+    for k, row in (native.placebo_event_study or {}).items():
+        native_n[k] = row.get("n_obs")
+    for _, r in df[~df["is_reference"]].iterrows():
+        e = r["event_time"]
+        if e in native_n and native_n[e] is not None:
+            assert r["n"] == float(native_n[e])
+
+
+def test_dcdh_l_max_none_count_kind():
+    # Legacy single-horizon path (L_max=None style): the count under "n_obs" is
+    # still a switcher count, so n_kind stays "groups", never "obs".
+    class _FakeDCDHLegacy:
+        alpha = 0.05
+        placebo_event_study = None
+        event_study_effects = {
+            1: {
+                "effect": 1.0,
+                "se": 0.2,
+                "t_stat": 5.0,
+                "p_value": 0.0,
+                "conf_int": (0.6, 1.4),
+                "n_obs": 30,  # N_S switchers, NOT observations
+            }
+        }
+        sup_t_bands = None
+
+    surface = build_event_study_surface(_FakeDCDHLegacy())
+    assert surface.n_kind == "groups"
+
+
 def test_spillover_oversized_horizon_single_reference():
     # Regression for the count-heuristic bug: with horizon_max=4 SpilloverDiD
     # emits BOTH a genuine reference (reference_period, n_obs=0, coef=0) and a
