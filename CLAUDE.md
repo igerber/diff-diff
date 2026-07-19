@@ -193,6 +193,14 @@ When adding new functionality, the source of truth is:
 - CI tests are gated behind the `ready-for-ci` label. The `CI Gate` required status check
   enforces this — PRs cannot merge until the label is added. Tests run automatically once
   the label is present.
+- To see what work is in flight, run `gh pr list --state open` and `git worktree list` — do
+  not rely on a cached list of "active initiatives," which goes stale within hours. Open PRs,
+  their branches, and worktrees are the source of truth.
+- Do not create memories that record work *status* (which PRs merged, what's in progress,
+  what's next) — it is derivable from git/gh above and goes stale immediately. Reserve memory
+  for what git cannot tell you: a durable lesson learned and how to apply it; why an approach
+  was rejected; external state (e.g. a paper submitted, awaiting response); or a decision
+  pending on the user.
 - For non-trivial tasks, use `EnterPlanMode`. Consult `docs/methodology/REGISTRY.md` for methodology changes.
 - When modifying source files in `diff_diff/`, consult `docs/doc-deps.yaml` to identify impacted documentation. Run `/docs-impact` to see the full list.
 - For bug fixes, grep for the pattern across all files before fixing.
