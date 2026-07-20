@@ -182,9 +182,14 @@ _MODEL_FAMILY_PATTERNS = (
     r"gpt[\s._-]?5(?:\.\d+)?(?:-[a-z0-9]+)*",
     r"\b(?:sol|terra|luna)\b",
     r"\b5\.[0-9]\b",
-    # Claude-family tokens (plan-review harness arms run Claude models; a review
-    # or extraction that self-references its model would unblind a grader).
-    r"claude[\s._-]?[a-z0-9.-]*",
+    # Claude-family MODEL tokens only: "claude" followed by a version/family
+    # tail ("claude-fable-5", "Claude 3.5", "claude_sonnet"). A bare "claude"
+    # is deliberately NOT redacted: every plan-review arm runs the claude CLI,
+    # so generic mentions carry no arm signal — and a broader pattern mangles
+    # the very repository paths evidence quotes must preserve (`.claude/hooks/
+    # check-plan-review.py`, `CLAUDE.md`), turning genuine catches into graded
+    # misses. Family words alone still redact via the standalone pattern.
+    r"\bclaude[\s._-]+(?:\d[a-z0-9.-]*|fable|sonnet|opus|haiku)[a-z0-9.-]*",
     r"\b(?:fable|sonnet|opus|haiku)\b",
 )
 

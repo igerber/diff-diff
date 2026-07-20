@@ -25,6 +25,11 @@ from plan_adapters import worktree
 
 NEUTRAL_SEVERITIES = ("blocker", "major", "minor")
 
+# The complete stratum vocabulary (manifest.schema.json enum). An unknown
+# stratum directory would otherwise load, verify, and count toward the
+# pre-registered corpus floor (n_real counts every non-fixture stratum).
+KNOWN_STRATA = ("fixture", "s1_synthetic", "s2_historical", "s3_negative")
+
 
 def _strict_types_violation(d: dict) -> Optional[str]:
     """Enforce the manifest.schema.json type contract on the verdict-shaping
@@ -36,8 +41,14 @@ def _strict_types_violation(d: dict) -> Optional[str]:
     jsonschema dependency)."""
     if not isinstance(d.get("id"), str) or not d["id"].strip():
         return "case 'id' must be a non-empty string"
-    if not isinstance(d.get("stratum"), str):
-        return "case 'stratum' must be a string"
+    if d.get("stratum") not in KNOWN_STRATA:
+        return (
+            f"case 'stratum' must be one of {KNOWN_STRATA}, got {d.get('stratum')!r} "
+            f"— an unknown stratum would silently count toward the corpus floor"
+        )
+    for field in ("title", "notes"):
+        if not isinstance(d.get(field, ""), str):
+            return f"'{field}' must be a string"
     for field in ("expect_no_blockers",):
         if not isinstance(d.get(field, False), bool):
             return f"'{field}' must be a JSON boolean (true/false), got {d.get(field)!r}"
@@ -47,9 +58,21 @@ def _strict_types_violation(d: dict) -> Optional[str]:
     sevs = d.get("allow_severities", [])
     if not isinstance(sevs, list) or not all(isinstance(s, str) for s in sevs):
         return "'allow_severities' must be a list of strings"
+    files = d.get("expected_files", [])
+    if not isinstance(files, list) or not all(isinstance(f, str) for f in files):
+        return "'expected_files' must be a list of strings"
+    fixture = d.get("fixture", {})
+    if not isinstance(fixture, dict):
+        return f"'fixture' must be an object, got {fixture!r}"
+    for field in ("kind", "plan", "base_sha"):
+        if field in fixture and not isinstance(fixture[field], str):
+            return f"fixture.{field} must be a string, got {fixture[field]!r}"
     for field in ("known_fp_topics", "ground_truth"):
         if not isinstance(d.get(field, []), list):
             return f"'{field}' must be a list"
+    for i, topic in enumerate(d.get("known_fp_topics", [])):
+        if not isinstance(topic, dict):
+            return f"known_fp_topics[{i}] must be an object"
     for i, b in enumerate(d.get("ground_truth", [])):
         if not isinstance(b, dict):
             return f"ground_truth[{i}] must be an object"
@@ -64,6 +87,18 @@ def _strict_types_violation(d: dict) -> Optional[str]:
             )
         if not isinstance(b.get("expected_severity", "major"), str):
             return f"ground_truth[{i}] 'expected_severity' must be a string"
+        for field in ("file", "bug_class", "anchor_symbol", "rationale"):
+            if not isinstance(b.get(field, ""), str):
+                return f"ground_truth[{i}] '{field}' must be a string"
+        kw = b.get("class_keywords", [])
+        if not isinstance(kw, list) or not all(isinstance(s, str) for s in kw):
+            return (
+                f"ground_truth[{i}] 'class_keywords' must be a list of strings, "
+                f"got {kw!r} — list() over a string would silently become a "
+                f"character list in grader-visible evidence"
+            )
+        if not isinstance(b.get("provenance", {}), dict):
+            return f"ground_truth[{i}] 'provenance' must be an object"
         lw = b.get("line_window", [0, 0])
         if (
             not isinstance(lw, (list, tuple))

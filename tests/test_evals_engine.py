@@ -225,6 +225,43 @@ def test_sanitize_model_refs_scrubs_names_tiers_and_versions():
     assert " 5.5 " not in f" {out} "
 
 
+def test_sanitize_preserves_claude_paths_and_prose():
+    """Claude redaction is MODEL-shaped only: repository paths (`.claude/...`,
+    `CLAUDE.md`) and generic prose ("the Claude workflow") must survive intact
+    — a broader pattern mangled the very evidence quotes graders score against
+    ground truth, downgrading genuine catches to misses (plan-review CI
+    round-8). Model ids and family words still redact."""
+    from eval_core.compare import sanitize_model_refs
+
+    names = ["claude-fable-5", "claude-sonnet-5"]
+    preserved = (
+        ".claude/hooks/check-plan-review.py",
+        ".claude/commands/revise-plan.md",
+        "CLAUDE.md",
+        "the Claude workflow invokes the claude CLI",
+    )
+    for text in preserved:
+        assert sanitize_model_refs(text, names) == text, text
+    redacted = (
+        "claude-fable-5",
+        "claude-sonnet-5",
+        "Claude 3.5",
+        "claude_opus",
+        "as Sonnet I reviewed this",
+    )
+    for text in redacted:
+        out = sanitize_model_refs(text, names)
+        assert "[model-redacted]" in out, text
+        low = out.lower()
+        assert "fable" not in low and "sonnet" not in low and "opus" not in low
+        assert "3.5" not in low
+    # The two behaviors compose in one evidence quote.
+    quote = "claude-fable-5 misses the hook contract in .claude/hooks/check-plan-review.py"
+    out = sanitize_model_refs(quote, names)
+    assert ".claude/hooks/check-plan-review.py" in out
+    assert "fable" not in out.lower()
+
+
 def test_apply_blinding_strips_identity_and_preserves_originals():
     from eval_core.compare import apply_blinding
 

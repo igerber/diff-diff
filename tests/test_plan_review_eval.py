@@ -1654,3 +1654,117 @@ def test_loader_rejects_other_schema_invalid_types(tmp_path, field, value, match
     )
     with pytest.raises(ValueError, match=match):
         PlanCorpusLoader(str(tmp_path), str(_REPO)).load_cases(None)
+
+
+# --------------------------------------------------------------------------- #
+# CI round-9 regressions
+# --------------------------------------------------------------------------- #
+
+
+def test_external_codex_wrapper_joins_identity():
+    """Dual arms execute .claude/scripts/openai_review.py — an external
+    executable dependency is protocol too (CI round-8)."""
+    run_eval = _run_eval()
+
+    labels = [label for label, _ in run_eval._evaluator_source_files()]
+    assert "external/.claude/scripts/openai_review.py" in labels
+
+
+def test_snapshot_aborts_when_sources_change_during_import(tmp_path, monkeypatch):
+    """The read→import→re-read bracket: if a protocol source changes while the
+    executing modules are being imported, the snapshot aborts — the imported
+    code can no longer be proven identical to the hashed bytes (CI round-8:
+    PlanReviewer was imported after the source snapshot)."""
+    run_eval = _run_eval()
+
+    src = tmp_path / "mod.py"
+    src.write_text("X = 1\n")
+    monkeypatch.setattr(
+        run_eval, "_evaluator_source_files", lambda: [("plan_adapters/mod.py", str(src))]
+    )
+    monkeypatch.setattr(run_eval, "_import_executing_modules", lambda: src.write_text("X = 2\n"))
+    with pytest.raises(SystemExit, match="changed while the snapshot"):
+        run_eval._protocol_snapshot()
+
+
+def test_campaign_subdir_is_write_once_per_protocol(tmp_path, monkeypatch):
+    """A subdirectory registered under one protocol refuses any invocation
+    under a different one — cached outcomes can never be re-attributed to a
+    later protocol by re-running the same subdir after an edit (CI round-8)."""
+    run_eval = _run_eval()
+
+    monkeypatch.setattr(run_eval, "RUNS_DIR", str(tmp_path))
+    recorded = {"decision_rule_sha": "a" * 16}
+    (tmp_path / "camp-manifest.json").write_text(json.dumps({"protocol": recorded}))
+    run_eval._require_subdir_protocol("camp", recorded)  # same protocol: resume OK
+    with pytest.raises(SystemExit, match="DIFFERENT protocol"):
+        run_eval._require_subdir_protocol("camp", {"decision_rule_sha": "b" * 16})
+    # An unregistered subdir is a fresh campaign — no manifest, no constraint.
+    run_eval._require_subdir_protocol("fresh", recorded)
+
+
+def test_campaign_registers_before_observing(tmp_path, monkeypatch):
+    """Registration-first: the manifest (with its protocol identity) reaches
+    disk BEFORE any reviewer call, so a crash mid-matrix leaves a registered
+    campaign with empty run_keys — never an orphaned cache that a later
+    protocol could adopt."""
+    import eval_core.runner as runner_mod
+    from eval_core.models import Case
+
+    run_eval = _run_eval()
+
+    monkeypatch.setattr(run_eval, "RUNS_DIR", str(tmp_path))
+    monkeypatch.setattr(run_eval, "_reviewer", lambda root, snapshot=None: None)
+    monkeypatch.setattr(run_eval, "_read_plan_for_freeze", lambda c: "plan")
+
+    def _crash(*a, **k):
+        raise RuntimeError("reviewer died mid-matrix")
+
+    monkeypatch.setattr(runner_mod, "run_matrix", _crash)
+    case = Case(id="fx", stratum="fixture")
+    with pytest.raises(RuntimeError, match="mid-matrix"):
+        run_eval._run_matrix(
+            [case], ["A"], k=1, subdir="reg", max_parallel=1, enforce_registration=True
+        )
+    manifest = json.loads((tmp_path / "reg-manifest.json").read_text())
+    assert manifest["run_keys"] == []
+    assert manifest["protocol"] == run_eval._protocol_identity()
+
+
+def test_loader_rejects_unknown_stratum(tmp_path):
+    """An unknown stratum directory must never load (it would count toward the
+    pre-registered >=8-case corpus floor while being scored under neither the
+    positive nor the negative contract)."""
+    from plan_adapters.corpus_loader import PlanCorpusLoader
+
+    d = tmp_path / "cases" / "s4_custom" / "rogue"
+    d.mkdir(parents=True)
+    (d / "case.json").write_text(json.dumps({"id": "rogue", "stratum": "s4_custom"}))
+    with pytest.raises(ValueError, match="stratum"):
+        PlanCorpusLoader(str(tmp_path), str(_REPO)).load_cases(None)
+
+
+def test_loader_rejects_string_class_keywords(tmp_path):
+    """list() over a string silently becomes a character list in
+    grader-visible evidence — reject it at load."""
+    from plan_adapters.corpus_loader import PlanCorpusLoader
+
+    d = tmp_path / "cases" / "s1_synthetic" / "kw-case"
+    d.mkdir(parents=True)
+    (d / "case.json").write_text(
+        json.dumps(
+            {
+                "id": "kw-case",
+                "stratum": "s1_synthetic",
+                "ground_truth": [
+                    {
+                        "id": "g1",
+                        "expected_severity": "blocker",
+                        "class_keywords": "safe_inference",
+                    }
+                ],
+            }
+        )
+    )
+    with pytest.raises(ValueError, match="class_keywords"):
+        PlanCorpusLoader(str(tmp_path), str(_REPO)).load_cases(None)

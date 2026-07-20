@@ -188,7 +188,41 @@ def _evaluator_source_files() -> list[tuple[str, str]]:
                     full = os.path.join(dirpath, fn)
                     rel = os.path.relpath(full, root).replace(os.sep, "/")
                     out.append((f"{label}/{rel}", full))
+    # External executable dependency: dual arms run the codex reviewer through
+    # .claude/scripts/openai_review.py (importlib-loaded by plan_reviewer), so
+    # its bytes are protocol too — an edit there changes what arm C/E execute.
+    external = os.path.join(_repo_root(), ".claude", "scripts", "openai_review.py")
+    if not os.path.exists(external):
+        raise SystemExit(f"protocol source missing: {external}")
+    out.append(("external/.claude/scripts/openai_review.py", external))
     return sorted(out)
+
+
+def _read_source_bytes(files: list[tuple[str, str]]) -> list[bytes]:
+    parts = []
+    for label, path in files:
+        with open(path, "rb") as fh:
+            parts.append(label.encode("utf-8") + b"\0" + fh.read() + b"\0")
+    return parts
+
+
+def _import_executing_modules() -> None:
+    """Eagerly import every module the campaign will execute, INSIDE the
+    snapshot's read→import→re-read stability bracket. Python caches imports
+    process-wide, so later stages run the code imported here — which the
+    bracket proves is byte-identical to what the identity hashed (closing the
+    snapshot-then-import A→B→A window)."""
+    import eval_core.compare  # noqa: F401
+    import eval_core.models  # noqa: F401
+    import eval_core.runner  # noqa: F401
+    import eval_core.store  # noqa: F401
+    import verdict  # noqa: F401
+    from plan_adapters import (  # noqa: F401
+        corpus_loader,
+        criteria_source,
+        plan_reviewer,
+        worktree,
+    )
 
 
 def _identity_sha(identity: dict) -> str:
@@ -205,6 +239,27 @@ def _protocol_snapshot() -> dict:
     snapshot, so an A→B→A edit between hashing and loading cannot make the
     campaign execute one protocol while recording another. (Control criteria
     are sha-addressed via `git show` — immutable by construction.)"""
+    # The EVALUATOR code is protocol too: the gates, the bundle renderer, the
+    # extractor, the criteria renderer, the loaders, this orchestrator, and
+    # the external codex wrapper all shape what a verdict means, so EVERY
+    # source joins the recorded identity (any edit -> drift -> NON-GATING
+    # until re-run). The label participates so a rename drifts the identity
+    # even with unchanged bytes. The read→import→re-read bracket proves the
+    # code Python will execute is byte-identical to what was hashed: sources
+    # are read, the executing modules are imported (cached process-wide,
+    # BEFORE any other module use in this snapshot), and the sources are read
+    # AGAIN — any mismatch aborts the snapshot.
+    source_files = _evaluator_source_files()
+    evaluator_parts = _read_source_bytes(source_files)
+    _import_executing_modules()
+    if _read_source_bytes(source_files) != evaluator_parts:
+        raise SystemExit(
+            "protocol sources changed while the snapshot was being taken — "
+            "the imported code cannot be proven identical to the hashed bytes; "
+            "re-run once the tree is quiescent."
+        )
+    from plan_adapters.criteria_source import _CONTROL_PROMPT
+
     cand_dir = os.path.join(HERE, "candidates")
     with open(CONFIG_PATH, "rb") as fh:
         config_bytes = fh.read()
@@ -215,24 +270,12 @@ def _protocol_snapshot() -> dict:
         if name.endswith(".md"):
             with open(os.path.join(cand_dir, name), "rb") as fh:
                 candidates[name] = fh.read()
-    from plan_adapters.criteria_source import _CONTROL_PROMPT
-
     raw = json.loads(config_bytes.decode("utf-8"))
     prompt = candidates.get("extraction_prompt.md", b"")
     extraction = {
         "prompt_sha": _sha16(prompt),
         "model": (raw.get("extraction") or {}).get("model", ""),
     }
-    # The EVALUATOR code is protocol too: the gates, the bundle renderer, the
-    # extractor, the criteria renderer, the loaders, and this orchestrator all
-    # shape what a verdict means, so EVERY source in both trees joins the
-    # recorded identity (any edit -> drift -> NON-GATING until re-run). The
-    # label participates so a rename drifts the identity even with unchanged
-    # bytes.
-    evaluator_parts = []
-    for label, path in _evaluator_source_files():
-        with open(path, "rb") as fh:
-            evaluator_parts.append(label.encode("utf-8") + b"\0" + fh.read() + b"\0")
     identity = {
         "decision_rule_sha": _sha16(rule_bytes),
         "configs_sha": _sha16(config_bytes),
@@ -320,6 +363,23 @@ def cmd_verify_corpus(args: argparse.Namespace) -> int:
 # --------------------------------------------------------------------------- #
 
 
+def _require_subdir_protocol(subdir: str, identity: dict) -> None:
+    """PRE-REGISTRATION IS WRITE-ONCE: a subdirectory IS a campaign, and its
+    protocol identity is fixed by the first registration. An invocation under
+    a DIFFERENT protocol may never touch it — the store's cached outcomes can
+    therefore never be re-attributed to a later protocol (a changed protocol
+    is a NEW campaign in a fresh subdir)."""
+    path = os.path.join(RUNS_DIR, f"{subdir}-manifest.json")
+    if os.path.exists(path):
+        prior = read_json(path)
+        if (prior.get("protocol") or {}) != identity:  # type: ignore[union-attr]
+            raise SystemExit(
+                f"runs/{subdir} is registered under a DIFFERENT protocol identity — "
+                f"a changed protocol is a NEW campaign; use a fresh --subdir (or "
+                f"restore the registered protocol to resume this one)."
+            )
+
+
 def _run_matrix(
     cases,
     config_ids: list[str],
@@ -328,6 +388,7 @@ def _run_matrix(
     max_parallel: int,
     k_overrides=None,
     verified: bool = False,
+    enforce_registration: bool = False,
 ):
     from eval_core.runner import run_matrix
 
@@ -337,6 +398,9 @@ def _run_matrix(
     # detects anything that changed while the matrix ran.
     snapshot = _protocol_snapshot()
     protocol_before = snapshot["identity"]
+    manifest_path = os.path.join(RUNS_DIR, f"{subdir}-manifest.json")
+    if enforce_registration:
+        _require_subdir_protocol(subdir, protocol_before)
     configs = _make_configs(config_ids, raw=snapshot["raw_config"])
     runs_root = os.path.join(RUNS_DIR, subdir)
     store = RunStore(runs_root)
@@ -346,6 +410,29 @@ def _run_matrix(
     # never expose later arms/repeats to different content under one run key.
     for case in cases:
         case.fixture["_plan_text"] = _read_plan_for_freeze(case)
+    registration = {
+        "subdir": subdir,
+        "config_ids": [c.id for c in configs],
+        "case_ids": sorted({c.id for c in cases}),
+        "case_strata": {c.id: c.stratum for c in cases},
+        "k": k,
+        "k_overrides": dict(k_overrides or {}),
+        "treatment_fields": list(_treatment_fields(snapshot["raw_config"])),
+        # Realized after the matrix; empty at registration time.
+        "run_keys": [],
+        # cmd_run verified every selected case before any reviewer call; smoke
+        # runs the (already CI-verified) fixture without the full corpus gate.
+        "corpus_verified": verified,
+        "protocol": protocol_before,
+        "protocol_drift_during_run": False,
+        "corpus_drift_during_run": False,
+    }
+    if enforce_registration:
+        # REGISTER FIRST, OBSERVE SECOND: the protocol identity reaches disk
+        # before any reviewer call, so a crash mid-matrix leaves a registered
+        # campaign (empty run_keys — never gating), not an orphaned cache a
+        # later protocol could silently adopt.
+        write_json(manifest_path, registration)
     results = run_matrix(
         cases,
         configs,
@@ -358,18 +445,8 @@ def _run_matrix(
         k_overrides=k_overrides,
     )
     manifest = {
-        "subdir": subdir,
-        "config_ids": [c.id for c in configs],
-        "case_ids": sorted({c.id for c in cases}),
-        "case_strata": {c.id: c.stratum for c in cases},
-        "k": k,
-        "k_overrides": dict(k_overrides or {}),
-        "treatment_fields": list(_treatment_fields(snapshot["raw_config"])),
+        **registration,
         "run_keys": sorted(rr.run_id for rr in results),
-        # cmd_run verified every selected case before any reviewer call; smoke
-        # runs the (already CI-verified) fixture without the full corpus gate.
-        "corpus_verified": verified,
-        "protocol": protocol_before,
         # Post-run drift checks: True means the protocol files or a corpus plan
         # changed WHILE the matrix ran — verdict treats either as a violation.
         "protocol_drift_during_run": _protocol_identity() != protocol_before,
@@ -377,7 +454,7 @@ def _run_matrix(
             _read_plan_for_freeze(c) != c.fixture.get("_plan_text") for c in cases
         ),
     }
-    write_json(os.path.join(RUNS_DIR, f"{subdir}-manifest.json"), manifest)
+    write_json(manifest_path, manifest)
     n_err = sum(1 for rr in results if not rr.ok)
     print(f"\n{len(results)} runs ({n_err} INFRA_ERROR) -> runs/{subdir}/")
     if n_err:
@@ -448,6 +525,9 @@ def cmd_run(args: argparse.Namespace) -> int:
         max_parallel=args.max_parallel,
         k_overrides=k_overrides,
         verified=True,
+        # Campaign subdirs are write-once per protocol; smoke re-registers its
+        # fixture subdir freely (never gating, never graded).
+        enforce_registration=True,
     )
     return 1 if any(not rr.ok for rr in results) else 0
 
