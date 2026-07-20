@@ -8,6 +8,8 @@ across models) live here, so this is where they get a regression test.
 ``call_codex`` and the git worktree are stubbed.
 """
 
+import functools
+import importlib.util
 import pathlib
 import sys
 
@@ -26,6 +28,23 @@ if _EVAL_ROOT.exists() and str(_EVAL_ROOT) not in sys.path:
 # eval_core (the shared engine) lives directly under tools/.
 if str(_REPO / "tools") not in sys.path:
     sys.path.insert(0, str(_REPO / "tools"))
+
+
+@functools.lru_cache(maxsize=1)
+def _run_eval():
+    """Load THIS harness's CLI by explicit path under a UNIQUE module name.
+
+    A bare ``import run_eval`` is ambiguous once both eval harnesses are on
+    sys.path (plan-review-eval ships its own ``run_eval.py``), and which one
+    wins depends on test-collection insert order — CI's alphabetical
+    single-process run (the Pure Python Fallback leg) loaded the WRONG
+    harness. Mirrors test_plan_review_eval.py's loader."""
+    spec = importlib.util.spec_from_file_location(
+        "reviewer_eval_run_eval", _EVAL_ROOT / "run_eval.py"
+    )
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
 
 
 # --------------------------------------------------------------------------- #
@@ -291,7 +310,7 @@ def test_resume_reruns_when_case_changes(monkeypatch):
 
 
 def test_compare_honors_manifest(tmp_path, monkeypatch):
-    import run_eval
+    run_eval = _run_eval()
     from eval_core.models import RunResult
     from eval_core.store import RunStore, write_json
 
@@ -330,7 +349,7 @@ def test_compare_honors_manifest(tmp_path, monkeypatch):
 
 
 def test_compare_without_manifest_fails_closed_unless_allow_mixed(tmp_path, monkeypatch, capsys):
-    import run_eval
+    run_eval = _run_eval()
     from eval_core.models import RunResult
     from eval_core.store import RunStore
 
@@ -359,7 +378,7 @@ def test_compare_without_manifest_fails_closed_unless_allow_mixed(tmp_path, monk
 def test_compare_fails_closed_on_rubric_drift(tmp_path, monkeypatch):
     """compare points graders at the live pr_review.md, so it must refuse if that
     rubric changed since the run (stored base_prompt_sha != live)."""
-    import run_eval
+    run_eval = _run_eval()
     from adapters import ci_prompt
     from eval_core.models import RunResult
     from eval_core.store import RunStore, write_json
@@ -384,7 +403,7 @@ def test_compare_fails_closed_on_rubric_drift(tmp_path, monkeypatch):
 
 
 def test_compare_renders_from_run_snapshot_not_corpus(tmp_path, monkeypatch):
-    import run_eval
+    run_eval = _run_eval()
     from eval_core.models import RunResult
     from eval_core.store import RunStore, write_json
 
@@ -431,7 +450,7 @@ def test_compare_renders_from_run_snapshot_not_corpus(tmp_path, monkeypatch):
 
 
 def test_run_rejects_unknown_configs(tmp_path, monkeypatch):
-    import run_eval
+    run_eval = _run_eval()
 
     monkeypatch.setattr(run_eval, "RUNS_DIR", str(tmp_path / "runs"))
     # A typo'd config id must fail closed BEFORE any codex call (no reviewer built),
@@ -486,7 +505,7 @@ def test_case_tag_changes_with_scoring_metadata():
 
 def test_run_and_smoke_fail_closed_on_empty_corpus(tmp_path, monkeypatch):
     """run/smoke must NOT report success (or write a manifest) on zero selected cases."""
-    import run_eval
+    run_eval = _run_eval()
 
     monkeypatch.setattr(run_eval, "RUNS_DIR", str(tmp_path / "runs"))
     # A stratum that matches no corpus directory -> zero cases (no codex reached).
@@ -668,7 +687,7 @@ def test_run_fails_closed_on_infra_error(tmp_path, monkeypatch):
     partial run as a valid A/B."""
     import json as _json
 
-    import run_eval
+    run_eval = _run_eval()
 
     monkeypatch.setattr(run_eval, "RUNS_DIR", str(tmp_path / "runs"))
     monkeypatch.setattr(run_eval.CorpusLoader, "verify", lambda self, case: None, raising=True)
@@ -692,7 +711,7 @@ def test_run_fails_closed_on_infra_error(tmp_path, monkeypatch):
 
 
 def test_smoke_cli_default_limits_to_one_case(tmp_path, monkeypatch):
-    import run_eval
+    run_eval = _run_eval()
     from eval_core.models import STRATUM_SYNTHETIC, Case
 
     monkeypatch.setattr(run_eval, "RUNS_DIR", str(tmp_path / "runs"))
@@ -778,7 +797,7 @@ def test_failed_rerun_invalidates_stale_manifest(tmp_path, monkeypatch):
     stale experiment."""
     import json as _json
 
-    import run_eval
+    run_eval = _run_eval()
     from eval_core.models import ReviewOutput
 
     monkeypatch.setattr(run_eval, "RUNS_DIR", str(tmp_path / "runs"))
@@ -835,7 +854,7 @@ def test_run_aborts_on_invalid_case_before_any_codex_call(tmp_path, monkeypatch)
     """smoke/run must fail closed on a CorpusLoader.verify() failure BEFORE any
     Codex call, so a stale/malformed case is never reviewed/graded against stale
     ground truth."""
-    import run_eval
+    run_eval = _run_eval()
     from eval_core.models import STRATUM_SYNTHETIC, Case
 
     monkeypatch.setattr(run_eval, "RUNS_DIR", str(tmp_path / "runs"))
@@ -902,7 +921,7 @@ def test_run_matrix_fails_closed_on_experiment_tag_error(monkeypatch):
 def test_compare_fails_closed_on_missing_artifact(tmp_path, monkeypatch):
     """compare must refuse when a manifest-listed run_id has no loadable artifact,
     rather than silently emitting a partial bundle from the surviving subset."""
-    import run_eval
+    run_eval = _run_eval()
     from eval_core.models import RunResult
     from eval_core.store import RunStore, write_json
 
@@ -1011,7 +1030,7 @@ def test_run_early_abort_writes_failure_marker(tmp_path, monkeypatch):
     treat as 'no manifest -> compare ALL' over the prior run's stale artifacts."""
     import json as _json
 
-    import run_eval
+    run_eval = _run_eval()
     from eval_core.models import STRATUM_SYNTHETIC, Case
     from eval_core.runner import ConfoundMismatch
 
@@ -1186,7 +1205,7 @@ def test_run_matrix_fails_closed_when_pinned_cli_unavailable(monkeypatch):
 def test_run_and_compare_reject_subdir_traversal(tmp_path, monkeypatch):
     """--subdir flows into filesystem paths; a `..` traversal must be rejected so the
     harness can't read/write outside runs/."""
-    import run_eval
+    run_eval = _run_eval()
 
     monkeypatch.setattr(run_eval, "RUNS_DIR", str(tmp_path / "runs"))
     rc_run = run_eval.cmd_run(
@@ -1200,7 +1219,7 @@ def test_run_and_compare_reject_subdir_traversal(tmp_path, monkeypatch):
 def test_resolve_configs_rejects_duplicate_ids():
     """Duplicate --configs ids (A,A) alias both arms onto one config_id; reject them
     rather than collapse the A/B comparison."""
-    import run_eval
+    run_eval = _run_eval()
 
     assert run_eval._resolve_configs("A,A") is None
     assert run_eval._resolve_configs("A,B,A") is None
@@ -1212,7 +1231,7 @@ def test_run_marks_failed_on_corpus_load_error(tmp_path, monkeypatch):
     marker so compare refuses the stale subdir — not leave a prior manifest live."""
     import json as _json
 
-    import run_eval
+    run_eval = _run_eval()
     from eval_core.store import write_json
 
     monkeypatch.setattr(run_eval, "RUNS_DIR", str(tmp_path / "runs"))
@@ -1238,7 +1257,7 @@ def test_run_bad_configs_invalidates_existing_manifest(tmp_path, monkeypatch):
     invalidate a PRIOR successful manifest, so compare doesn't render the stale one."""
     import json as _json
 
-    import run_eval
+    run_eval = _run_eval()
     from eval_core.store import write_json
 
     monkeypatch.setattr(run_eval, "RUNS_DIR", str(tmp_path / "runs"))
@@ -1516,7 +1535,7 @@ def test_compare_separates_case_versions():
 def test_smoke_clears_cache_for_live_run(tmp_path, monkeypatch):
     """smoke is a live plumbing check, so it must clear cached artifacts and actually
     exercise codex rather than resume a stale success."""
-    import run_eval
+    run_eval = _run_eval()
     from eval_core.models import STRATUM_SYNTHETIC, Case
 
     monkeypatch.setattr(run_eval, "RUNS_DIR", str(tmp_path / "runs"))
@@ -1640,7 +1659,7 @@ def test_worktrees_namespaced_per_invocation(monkeypatch):
 def test_resolve_configs_rejects_empty_selectors():
     """Malformed comma selectors must fail closed, not silently drop empty segments and
     run a narrower matrix than intended."""
-    import run_eval
+    run_eval = _run_eval()
 
     for bad in ("A,", ",A", "A,,B", "", ",", "A, ,B"):
         assert run_eval._resolve_configs(bad) is None, f"{bad!r} must fail closed"
@@ -1684,7 +1703,7 @@ def _arm(id_, model="m", effort="xhigh", role=None, **kw):
 def test_make_configs_resolves_four_arms_in_order():
     """The live configs.json defines the 4-arm gpt-5.6 matrix; ids resolve in the
     requested order and unknown ids still fail closed."""
-    import run_eval
+    run_eval = _run_eval()
 
     cfgs = run_eval._make_configs(["A", "B", "C", "D"])
     assert [c.id for c in cfgs] == ["A", "B", "C", "D"]
@@ -1701,7 +1720,7 @@ def test_make_configs_resolves_four_arms_in_order():
 def test_make_configs_fails_closed_on_malformed(tmp_path, monkeypatch):
     """A malformed configs.json must abort, never quietly run a different
     experiment than the file describes."""
-    import run_eval
+    run_eval = _run_eval()
 
     bad_payloads = [
         {},  # no arms at all
@@ -1722,7 +1741,7 @@ def test_make_configs_fails_closed_on_malformed(tmp_path, monkeypatch):
 def test_treatment_fields_validated(tmp_path, monkeypatch):
     """treatment_fields must be a clean subset of the contrastable Config fields;
     absent -> the classic model-only default."""
-    import run_eval
+    run_eval = _run_eval()
 
     assert run_eval._treatment_fields() == ("model", "effort"), "live configs.json declaration"
 
@@ -1905,7 +1924,7 @@ def test_plan_runs_k_overrides():
 
 
 def test_parse_k_per_fail_closed():
-    import run_eval
+    run_eval = _run_eval()
 
     cfgs = run_eval._make_configs(["A", "B", "C", "D"])
     assert run_eval._parse_k_per("", cfgs) == {}, "absent flag -> no overrides"
@@ -1919,7 +1938,7 @@ def test_cmd_run_k_per_end_to_end(tmp_path, monkeypatch):
     record k/k_per in the manifest, and refuse a bad --k-per up front."""
     import json as _json
 
-    import run_eval
+    run_eval = _run_eval()
     from eval_core.models import STRATUM_SYNTHETIC, Case, ReviewOutput
 
     monkeypatch.setattr(run_eval, "RUNS_DIR", str(tmp_path / "runs"))
@@ -1993,7 +2012,7 @@ def test_cmd_run_k_per_end_to_end(tmp_path, monkeypatch):
 def _run_ok_experiment(tmp_path, monkeypatch, subdir="blind"):
     """Drive a real cmd_run (stubbed reviewer) so cmd_compare sees a valid
     manifest; returns the runs dir."""
-    import run_eval
+    run_eval = _run_eval()
     from eval_core.models import STRATUM_SYNTHETIC, Case, ReviewOutput
 
     monkeypatch.setattr(run_eval, "RUNS_DIR", str(tmp_path / "runs"))
@@ -2037,7 +2056,7 @@ def _run_ok_experiment(tmp_path, monkeypatch, subdir="blind"):
 def test_cmd_compare_blinded_writes_sealed_bundle(tmp_path, monkeypatch):
     import json as _json
 
-    import run_eval
+    run_eval = _run_eval()
 
     runs_dir = _run_ok_experiment(tmp_path, monkeypatch)
     rc = run_eval.cmd_compare(_ns(subdir="blind", allow_mixed=False, blinded=True))
@@ -2062,7 +2081,7 @@ def test_cmd_compare_blinded_writes_sealed_bundle(tmp_path, monkeypatch):
 def test_cmd_compare_blinded_mapping_stable_across_rerenders(tmp_path, monkeypatch):
     import json as _json
 
-    import run_eval
+    run_eval = _run_eval()
 
     runs_dir = _run_ok_experiment(tmp_path, monkeypatch, subdir="stable")
     assert run_eval.cmd_compare(_ns(subdir="stable", allow_mixed=False, blinded=True)) == 0
@@ -2075,7 +2094,7 @@ def test_cmd_compare_blinded_mapping_stable_across_rerenders(tmp_path, monkeypat
 def test_cmd_compare_blinded_refusals(tmp_path, monkeypatch):
     """--blinded is manifest-scoped by construction: refuse --allow-mixed and
     refuse when the manifest is missing."""
-    import run_eval
+    run_eval = _run_eval()
 
     runs_dir = _run_ok_experiment(tmp_path, monkeypatch, subdir="refuse")
     assert (
@@ -2111,7 +2130,7 @@ def test_smoke_default_selects_control_arm(tmp_path, monkeypatch):
     arm (local review P2 on the gpt-5.6 swap)."""
     import json as _json
 
-    import run_eval
+    run_eval = _run_eval()
     from eval_core.models import STRATUM_SYNTHETIC, Case
 
     monkeypatch.setattr(run_eval, "RUNS_DIR", str(tmp_path / "runs"))
