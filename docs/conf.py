@@ -110,6 +110,9 @@ html_extra_path = [
     "../diff_diff/guides/llms-full.txt",
     "../diff_diff/guides/llms-practitioner.txt",
     "../diff_diff/guides/llms-autonomous.txt",
+    # Overrides RTD's allow-everything default at the domain root: keeps the
+    # ~60 thin _modules/ source-view pages out of crawlers.
+    "robots.txt",
 ]
 sitemap_url_scheme = "{link}"
 
@@ -129,7 +132,21 @@ html_theme_options = {
             "icon": "fa-brands fa-python",
         },
     ],
-    "navbar_end": ["theme-switcher", "navbar-icon-links"],
+    "navbar_end": ["version-switcher", "theme-switcher", "navbar-icon-links"],
+    # Version dropdown (stable/latest). json_url points at the latest build
+    # so new entries propagate to every published version without rebuilds.
+    # ONE-SELECTOR POLICY: this navbar switcher replaces the RTD flyout
+    # (Settings -> Addons -> Flyout menu is disabled in the RTD dashboard,
+    # decided 2026-07-20) - re-enabling the flyout would put two version
+    # controls with different version lists on every page.
+    # check_switcher=False: the build-time URL probe would fail -W on CI and
+    # on the first RTD build (the URL only exists after this change ships);
+    # the switcher itself is fetched client-side at page load.
+    "switcher": {
+        "json_url": "https://diff-diff.readthedocs.io/en/latest/_static/switcher.json",
+        "version_match": os.environ.get("READTHEDOCS_VERSION", "latest"),
+    },
+    "check_switcher": False,
     "navigation_depth": 3,
     "show_toc_level": 2,
     # Live-filtering search overlay. Safe to enable now that search-result

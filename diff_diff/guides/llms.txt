@@ -31,6 +31,13 @@ Full practitioner guide: call `diff_diff.get_llm_guide("practitioner")`
 
 ## Documentation
 
+The site is organized into 5 sections, each with a landing page:
+[Getting Started](https://diff-diff.readthedocs.io/en/stable/getting_started.html) ·
+[Practitioner Guide](https://diff-diff.readthedocs.io/en/stable/practitioners.html) ·
+[Tutorials](https://diff-diff.readthedocs.io/en/stable/tutorials/index.html) ·
+[User Guide](https://diff-diff.readthedocs.io/en/stable/user_guide.html) ·
+[API Reference](https://diff-diff.readthedocs.io/en/stable/api/index.html)
+
 ### Getting Started
 
 - **Practitioner Guide** (call `diff_diff.get_llm_guide("practitioner")`): 8-step workflow for rigorous DiD analysis (Baker et al. 2025) — **start here**

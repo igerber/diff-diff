@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Docs: navigation and SEO polish.** A stable/latest version switcher in the navbar
+  (`docs/_static/switcher.json`); a custom `robots.txt` that keeps the ~60 thin
+  `_modules/` source-view pages out of crawlers (documentation pages allowed as
+  before); "Tutorial N:" prefixes dropped from 8 notebook H1s so page titles and
+  search-result snippets lead with the topic (page URLs unchanged - only the H1's
+  own fragment id changes, and an H1 anchor resolves to the page top that the bare
+  URL already opens; sidebar labels were already short-form); the 5 section landing
+  pages are now linked from `diff_diff/guides/llms.txt`.
 - **Docs: search-result excerpts fixed and search-as-you-type enabled.** Notebook
   section anchors containing CSS-special characters (digit-leading `#3.-Fit-Event-Study`,
   apostrophes, parentheses, colons) crashed Sphinx's search-excerpt renderer
