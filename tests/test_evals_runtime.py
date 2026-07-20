@@ -23,6 +23,9 @@ pytestmark = pytest.mark.skipif(
 
 if _EVAL_ROOT.exists() and str(_EVAL_ROOT) not in sys.path:
     sys.path.insert(0, str(_EVAL_ROOT))
+# eval_core (the shared engine) lives directly under tools/.
+if str(_REPO / "tools") not in sys.path:
+    sys.path.insert(0, str(_REPO / "tools"))
 
 
 # --------------------------------------------------------------------------- #
@@ -74,7 +77,7 @@ def _make_reviewer(monkeypatch, review_md="## Overall Assessment\n✅ Looks good
 
 
 def _case():
-    from engine.models import STRATUM_HISTORICAL, Case
+    from eval_core.models import STRATUM_HISTORICAL, Case
 
     return Case(id="c1", stratum=STRATUM_HISTORICAL)
 
@@ -85,7 +88,7 @@ def _case():
 
 
 def test_codex_reviewer_review_returns_ok(monkeypatch):
-    from engine.models import Config, ReviewOutput
+    from eval_core.models import Config, ReviewOutput
 
     r = _make_reviewer(monkeypatch)
     out = r.review(_case(), Config(id="B", model="gpt-5.5"), 0)
@@ -97,9 +100,9 @@ def test_codex_reviewer_review_returns_ok(monkeypatch):
 
 def test_run_matrix_produces_ok_runresult(monkeypatch):
     """A successful review must yield an ok RunResult, not an INFRA_ERROR."""
-    from engine.models import Config
-    from engine.runner import run_matrix
-    from engine.store import RunStore
+    from eval_core.models import Config
+    from eval_core.runner import run_matrix
+    from eval_core.store import RunStore
 
     r = _make_reviewer(monkeypatch)
     store = RunStore("/tmp/reviewer-eval-test/runs-ok")
@@ -126,7 +129,7 @@ def test_run_matrix_produces_ok_runresult(monkeypatch):
 
 
 def test_experiment_tag_differs_by_model(monkeypatch):
-    from engine.models import Config
+    from eval_core.models import Config
 
     r = _make_reviewer(monkeypatch)
     tag_a = r.experiment_tag(Config(id="B", model="gpt-5.4"))
@@ -135,8 +138,8 @@ def test_experiment_tag_differs_by_model(monkeypatch):
 
 
 def test_run_key_no_alias_across_models(monkeypatch):
-    from engine.models import Config
-    from engine.store import run_key
+    from eval_core.models import Config
+    from eval_core.store import run_key
 
     r = _make_reviewer(monkeypatch)
     k4 = run_key("c1", "B", 0, r.experiment_tag(Config(id="B", model="gpt-5.4")))
@@ -146,9 +149,9 @@ def test_run_key_no_alias_across_models(monkeypatch):
 
 def test_runresult_carries_run_id_and_prompt_sha(monkeypatch):
     """The run artifact must record its own identity so compare can key on it."""
-    from engine.models import Config
-    from engine.runner import run_matrix
-    from engine.store import RunStore
+    from eval_core.models import Config
+    from eval_core.runner import run_matrix
+    from eval_core.store import RunStore
 
     r = _make_reviewer(monkeypatch)
     store = RunStore("/tmp/reviewer-eval-test/runs-id")
@@ -169,9 +172,9 @@ def test_runresult_carries_run_id_and_prompt_sha(monkeypatch):
 
 def test_resume_reruns_when_model_changes(monkeypatch):
     """Changing the model under the same config id must NOT resume stale runs."""
-    from engine.models import Config
-    from engine.runner import run_matrix
-    from engine.store import RunStore
+    from eval_core.models import Config
+    from eval_core.runner import run_matrix
+    from eval_core.store import RunStore
 
     r = _make_reviewer(monkeypatch, review_md="## A\n✅ first\n")
     store = RunStore("/tmp/reviewer-eval-test/runs-resume")
@@ -214,7 +217,7 @@ def _ns(**kw):
 
 def test_case_tag_changes_with_case_content():
     from adapters.codex_reviewer import CodexReviewer
-    from engine.models import STRATUM_HISTORICAL, Case
+    from eval_core.models import STRATUM_HISTORICAL, Case
 
     r = CodexReviewer(repo_root=str(_REPO), runs_root="/tmp/reviewer-eval-test", prompt_text="X")
     fx = {"kind": "git_range", "base_sha": "aaa"}
@@ -232,7 +235,7 @@ def test_case_tag_changes_with_case_content():
 
 def test_case_tag_reads_patch_bytes_and_fails_loud(tmp_path):
     from adapters.codex_reviewer import CodexReviewer
-    from engine.models import STRATUM_SYNTHETIC, Case
+    from eval_core.models import STRATUM_SYNTHETIC, Case
 
     r = CodexReviewer(repo_root=str(_REPO), runs_root=str(tmp_path / "runs"), prompt_text="X")
     patch = tmp_path / "inject.diff"
@@ -252,9 +255,9 @@ def test_case_tag_reads_patch_bytes_and_fails_loud(tmp_path):
 
 
 def test_resume_reruns_when_case_changes(monkeypatch):
-    from engine.models import STRATUM_HISTORICAL, Case, Config
-    from engine.runner import run_matrix
-    from engine.store import RunStore
+    from eval_core.models import STRATUM_HISTORICAL, Case, Config
+    from eval_core.runner import run_matrix
+    from eval_core.store import RunStore
 
     r = _make_reviewer(monkeypatch)
     store = RunStore("/tmp/reviewer-eval-test/runs-case")
@@ -289,8 +292,8 @@ def test_resume_reruns_when_case_changes(monkeypatch):
 
 def test_compare_honors_manifest(tmp_path, monkeypatch):
     import run_eval
-    from engine.models import RunResult
-    from engine.store import RunStore, write_json
+    from eval_core.models import RunResult
+    from eval_core.store import RunStore, write_json
 
     monkeypatch.setattr(run_eval, "RUNS_DIR", str(tmp_path / "runs"))
     store = RunStore(str(tmp_path / "runs" / "full"))
@@ -328,8 +331,8 @@ def test_compare_honors_manifest(tmp_path, monkeypatch):
 
 def test_compare_without_manifest_fails_closed_unless_allow_mixed(tmp_path, monkeypatch, capsys):
     import run_eval
-    from engine.models import RunResult
-    from engine.store import RunStore
+    from eval_core.models import RunResult
+    from eval_core.store import RunStore
 
     monkeypatch.setattr(run_eval, "RUNS_DIR", str(tmp_path / "runs"))
     store = RunStore(str(tmp_path / "runs" / "full"))
@@ -358,8 +361,8 @@ def test_compare_fails_closed_on_rubric_drift(tmp_path, monkeypatch):
     rubric changed since the run (stored base_prompt_sha != live)."""
     import run_eval
     from adapters import ci_prompt
-    from engine.models import RunResult
-    from engine.store import RunStore, write_json
+    from eval_core.models import RunResult
+    from eval_core.store import RunStore, write_json
 
     monkeypatch.setattr(run_eval, "RUNS_DIR", str(tmp_path / "runs"))
     store = RunStore(str(tmp_path / "runs" / "full"))
@@ -382,8 +385,8 @@ def test_compare_fails_closed_on_rubric_drift(tmp_path, monkeypatch):
 
 def test_compare_renders_from_run_snapshot_not_corpus(tmp_path, monkeypatch):
     import run_eval
-    from engine.models import RunResult
-    from engine.store import RunStore, write_json
+    from eval_core.models import RunResult
+    from eval_core.store import RunStore, write_json
 
     monkeypatch.setattr(run_eval, "RUNS_DIR", str(tmp_path / "runs"))
     store = RunStore(str(tmp_path / "runs" / "full"))
@@ -446,7 +449,7 @@ def test_case_tag_changes_with_scoring_metadata():
     and `compare` graded against a stale snapshot.
     """
     from adapters.codex_reviewer import CodexReviewer
-    from engine.models import STRATUM_HISTORICAL, Case, GroundTruthBug
+    from eval_core.models import STRATUM_HISTORICAL, Case, GroundTruthBug
 
     r = CodexReviewer(repo_root=str(_REPO), runs_root="/tmp/reviewer-eval-test", prompt_text="X")
     fx = {"kind": "git_range", "base_sha": "aaa"}  # identical fixture across all three
@@ -503,7 +506,7 @@ def test_build_prompt_cleans_worktree_on_build_failure(monkeypatch):
     leak a detached worktree."""
     from adapters import ci_prompt, worktree
     from adapters import codex_reviewer as cr
-    from engine.models import STRATUM_SYNTHETIC, Case
+    from eval_core.models import STRATUM_SYNTHETIC, Case
 
     r = cr.CodexReviewer(repo_root=str(_REPO), runs_root="/tmp/reviewer-eval-test", prompt_text="X")
 
@@ -534,9 +537,9 @@ def test_build_prompt_cleans_worktree_on_build_failure(monkeypatch):
 
 
 def test_resume_reruns_when_built_prompt_changes(monkeypatch):
-    from engine.models import STRATUM_HISTORICAL, Case, Config
-    from engine.runner import run_matrix
-    from engine.store import RunStore
+    from eval_core.models import STRATUM_HISTORICAL, Case, Config
+    from eval_core.runner import run_matrix
+    from eval_core.store import RunStore
 
     store = RunStore("/tmp/reviewer-eval-test/runs-promptchange")
     for f in pathlib.Path(store.root).glob("*.json"):
@@ -585,7 +588,7 @@ def _wrapper_v2(model, repo_root, output_path):
 
 
 def test_experiment_tag_differs_when_backend_wrapper_changes(monkeypatch):
-    from engine.models import Config
+    from eval_core.models import Config
 
     r = _make_reviewer(monkeypatch)
     cfg = Config(id="B", model="gpt-5.4")
@@ -603,9 +606,9 @@ def test_resume_reruns_when_backend_wrapper_changes(monkeypatch):
     """A cached run must NOT be resumed once the codex-invocation wrapper changed,
     even when the case/config and the built prompt are byte-identical.
     """
-    from engine.models import STRATUM_HISTORICAL, Case, Config
-    from engine.runner import run_matrix
-    from engine.store import RunStore
+    from eval_core.models import STRATUM_HISTORICAL, Case, Config
+    from eval_core.runner import run_matrix
+    from eval_core.store import RunStore
 
     store = RunStore("/tmp/reviewer-eval-test/runs-backendchange")
     for f in pathlib.Path(store.root).glob("*.json"):
@@ -688,7 +691,7 @@ def test_run_fails_closed_on_infra_error(tmp_path, monkeypatch):
 
 def test_smoke_cli_default_limits_to_one_case(tmp_path, monkeypatch):
     import run_eval
-    from engine.models import STRATUM_SYNTHETIC, Case
+    from eval_core.models import STRATUM_SYNTHETIC, Case
 
     monkeypatch.setattr(run_eval, "RUNS_DIR", str(tmp_path / "runs"))
 
@@ -713,9 +716,9 @@ def test_smoke_cli_default_limits_to_one_case(tmp_path, monkeypatch):
         captured["n"] = len(cases)
         return []
 
-    # cmd_smoke does `from engine.runner import run_matrix` at call time, so patch
+    # cmd_smoke does `from eval_core.runner import run_matrix` at call time, so patch
     # the source name, not run_eval's namespace.
-    monkeypatch.setattr("engine.runner.run_matrix", _capture_run_matrix, raising=True)
+    monkeypatch.setattr("eval_core.runner.run_matrix", _capture_run_matrix, raising=True)
 
     # Bare `smoke --configs A` (argparse default --limit) -> exactly one case.
     monkeypatch.setattr(sys, "argv", ["run_eval.py", "smoke", "--configs", "A"])
@@ -738,9 +741,9 @@ def test_smoke_cli_default_limits_to_one_case(tmp_path, monkeypatch):
 def test_run_matrix_aborts_on_confound_mismatch(monkeypatch):
     """Arms that drift in any held-constant confound (effort/sandbox/action_version)
     must abort up front — the model is the only intended variable."""
-    from engine.models import Config
-    from engine.runner import ConfoundMismatch, run_matrix
-    from engine.store import RunStore
+    from eval_core.models import Config
+    from eval_core.runner import ConfoundMismatch, run_matrix
+    from eval_core.store import RunStore
 
     r = _make_reviewer(monkeypatch)
     store = RunStore("/tmp/reviewer-eval-test/runs-confound")
@@ -760,7 +763,7 @@ def test_run_matrix_aborts_on_confound_mismatch(monkeypatch):
 def test_review_rejects_non_readonly_sandbox(monkeypatch):
     """recorded==executed: _build_codex_cmd hardcodes read-only, so a config asking
     for a different sandbox must fail closed (mirrors the effort guard)."""
-    from engine.models import Config
+    from eval_core.models import Config
 
     r = _make_reviewer(monkeypatch)
     with pytest.raises(NotImplementedError):
@@ -774,7 +777,7 @@ def test_failed_rerun_invalidates_stale_manifest(tmp_path, monkeypatch):
     import json as _json
 
     import run_eval
-    from engine.models import ReviewOutput
+    from eval_core.models import ReviewOutput
 
     monkeypatch.setattr(run_eval, "RUNS_DIR", str(tmp_path / "runs"))
     monkeypatch.setattr(run_eval.CorpusLoader, "verify", lambda self, case: None, raising=True)
@@ -831,7 +834,7 @@ def test_run_aborts_on_invalid_case_before_any_codex_call(tmp_path, monkeypatch)
     Codex call, so a stale/malformed case is never reviewed/graded against stale
     ground truth."""
     import run_eval
-    from engine.models import STRATUM_SYNTHETIC, Case
+    from eval_core.models import STRATUM_SYNTHETIC, Case
 
     monkeypatch.setattr(run_eval, "RUNS_DIR", str(tmp_path / "runs"))
     monkeypatch.setattr(
@@ -852,7 +855,7 @@ def test_run_aborts_on_invalid_case_before_any_codex_call(tmp_path, monkeypatch)
         called["run"] = True
         return []
 
-    monkeypatch.setattr("engine.runner.run_matrix", _no_run, raising=True)
+    monkeypatch.setattr("eval_core.runner.run_matrix", _no_run, raising=True)
     monkeypatch.setattr(
         run_eval,
         "_build_reviewer",
@@ -878,9 +881,9 @@ def test_run_aborts_on_invalid_case_before_any_codex_call(tmp_path, monkeypatch)
 def test_run_matrix_fails_closed_on_experiment_tag_error(monkeypatch):
     """If experiment_tag() can't be computed, run_matrix must abort — never fall back
     to an empty tag that could resume a stale experiment under an unchanged prompt."""
-    from engine.models import Config
-    from engine.runner import run_matrix
-    from engine.store import RunStore
+    from eval_core.models import Config
+    from eval_core.runner import run_matrix
+    from eval_core.store import RunStore
 
     r = _make_reviewer(monkeypatch)
     monkeypatch.setattr(
@@ -898,8 +901,8 @@ def test_compare_fails_closed_on_missing_artifact(tmp_path, monkeypatch):
     """compare must refuse when a manifest-listed run_id has no loadable artifact,
     rather than silently emitting a partial bundle from the surviving subset."""
     import run_eval
-    from engine.models import RunResult
-    from engine.store import RunStore, write_json
+    from eval_core.models import RunResult
+    from eval_core.store import RunStore, write_json
 
     monkeypatch.setattr(run_eval, "RUNS_DIR", str(tmp_path / "runs"))
     store = RunStore(str(tmp_path / "runs" / "full"))
@@ -943,7 +946,7 @@ def test_build_prompt_threads_rerun_state(monkeypatch):
     CodexReviewer threads is_rerun/prev_review into ci_prompt.build_ci_prompt."""
     from adapters import ci_prompt, worktree
     from adapters import codex_reviewer as cr
-    from engine.models import STRATUM_HISTORICAL, Case
+    from eval_core.models import STRATUM_HISTORICAL, Case
 
     r = cr.CodexReviewer(
         repo_root=str(_REPO), runs_root="/tmp/reviewer-eval-test", prompt_text="BASE PROMPT"
@@ -980,8 +983,8 @@ def test_build_prompt_threads_rerun_state(monkeypatch):
 def test_compare_bundle_header_reflects_configs():
     """The grading table is sized to the configs actually present — a single-arm run
     must not be graded against a hardcoded A/B table."""
-    from engine.compare import build_bundle
-    from engine.models import RunResult
+    from eval_core.compare import build_bundle
+    from eval_core.models import RunResult
 
     def _rr(cfg):
         return RunResult(
@@ -1007,8 +1010,8 @@ def test_run_early_abort_writes_failure_marker(tmp_path, monkeypatch):
     import json as _json
 
     import run_eval
-    from engine.models import STRATUM_SYNTHETIC, Case
-    from engine.runner import ConfoundMismatch
+    from eval_core.models import STRATUM_SYNTHETIC, Case
+    from eval_core.runner import ConfoundMismatch
 
     monkeypatch.setattr(run_eval, "RUNS_DIR", str(tmp_path / "runs"))
     monkeypatch.setattr(
@@ -1028,7 +1031,7 @@ def test_run_early_abort_writes_failure_marker(tmp_path, monkeypatch):
     def _boom(*a, **k):
         raise ConfoundMismatch("configs differ")
 
-    monkeypatch.setattr("engine.runner.run_matrix", _boom, raising=True)
+    monkeypatch.setattr("eval_core.runner.run_matrix", _boom, raising=True)
 
     with pytest.raises(ConfoundMismatch):
         run_eval.cmd_run(
@@ -1051,7 +1054,7 @@ def test_run_early_abort_writes_failure_marker(tmp_path, monkeypatch):
 def test_experiment_tag_differs_by_action_version(monkeypatch):
     """action_version is a documented confound — changing it must bust experiment
     identity so a stale run can't be resumed/presented as the new experiment."""
-    from engine.models import Config
+    from eval_core.models import Config
 
     r = _make_reviewer(monkeypatch)
     t1 = r.experiment_tag(Config(id="A", model="gpt-5.4", action_version="v1"))
@@ -1062,7 +1065,7 @@ def test_experiment_tag_differs_by_action_version(monkeypatch):
 def test_review_rejects_non_v1_action_version(monkeypatch):
     """The harness runs `codex exec`, not the GH action, so it only models v1 —
     a non-v1 action_version must fail closed (recorded==executed)."""
-    from engine.models import Config
+    from eval_core.models import Config
 
     r = _make_reviewer(monkeypatch)
     with pytest.raises(NotImplementedError):
@@ -1072,9 +1075,9 @@ def test_review_rejects_non_v1_action_version(monkeypatch):
 def test_run_matrix_enforces_cli_pin_for_single_arm(monkeypatch):
     """A single-arm run must still run under the config's pinned CLI version — the
     pin check is fidelity, not a multi-arm-only concern."""
-    from engine.models import Config
-    from engine.runner import CLIVersionMismatch, run_matrix
-    from engine.store import RunStore
+    from eval_core.models import Config
+    from eval_core.runner import CLIVersionMismatch, run_matrix
+    from eval_core.store import RunStore
 
     r = _make_reviewer(monkeypatch)  # cli_version() reads the live codex (or sentinel)
     cfg = [Config(id="A", model="gpt-5.4", cli_version="codex-cli 0.0.0-nonexistent")]
@@ -1088,7 +1091,7 @@ def test_case_tag_rejects_escaping_patch_path(tmp_path):
     materialization, so the hashing path can't read outside the case directory."""
     from adapters import worktree
     from adapters.codex_reviewer import CodexReviewer
-    from engine.models import STRATUM_SYNTHETIC, Case
+    from eval_core.models import STRATUM_SYNTHETIC, Case
 
     r = CodexReviewer(repo_root=str(_REPO), runs_root="/tmp/reviewer-eval-test", prompt_text="X")
     case = Case(
@@ -1133,8 +1136,8 @@ def test_load_cases_rejects_duplicate_case_id(tmp_path):
 def test_compare_honors_case_allow_severities():
     """A negative-control case's own allow_severities must drive the grading rubric;
     the bundle must not hardcode a P2/P3 allowance that contradicts a stricter case."""
-    from engine.compare import build_bundle
-    from engine.models import RunResult
+    from eval_core.compare import build_bundle
+    from eval_core.models import RunResult
 
     snap = {
         "title": "Strict negative control",
@@ -1164,9 +1167,9 @@ def test_compare_honors_case_allow_severities():
 def test_run_matrix_fails_closed_when_pinned_cli_unavailable(monkeypatch):
     """If a config pins a CLI version but the live version can't be read, abort —
     don't silently run under an unverified CLI (the pin is a recorded confound)."""
-    from engine.models import Config
-    from engine.runner import CLIVersionMismatch, run_matrix
-    from engine.store import RunStore
+    from eval_core.models import Config
+    from eval_core.runner import CLIVersionMismatch, run_matrix
+    from eval_core.store import RunStore
 
     r = _make_reviewer(monkeypatch)
     monkeypatch.setattr(
@@ -1208,7 +1211,7 @@ def test_run_marks_failed_on_corpus_load_error(tmp_path, monkeypatch):
     import json as _json
 
     import run_eval
-    from engine.store import write_json
+    from eval_core.store import write_json
 
     monkeypatch.setattr(run_eval, "RUNS_DIR", str(tmp_path / "runs"))
     manifest_path = tmp_path / "runs" / "full-manifest.json"
@@ -1234,7 +1237,7 @@ def test_run_bad_configs_invalidates_existing_manifest(tmp_path, monkeypatch):
     import json as _json
 
     import run_eval
-    from engine.store import write_json
+    from eval_core.store import write_json
 
     monkeypatch.setattr(run_eval, "RUNS_DIR", str(tmp_path / "runs"))
     manifest_path = tmp_path / "runs" / "full-manifest.json"
@@ -1254,7 +1257,7 @@ def test_verify_expected_file_matching_is_exact():
     duplicate basenames (runner.py, compare.py, ...) must not false-match."""
     from adapters.corpus_loader import _missing_expected
 
-    touched = {"diff_diff/estimators.py", "tools/reviewer-eval/engine/runner.py"}
+    touched = {"diff_diff/estimators.py", "tools/eval_core/runner.py"}
     assert _missing_expected(touched, {"diff_diff/estimators.py"}) == set()  # exact hit
     # same basename, different path -> must be flagged missing (no suffix false-match)
     assert _missing_expected(touched, {"other/pkg/estimators.py"}) == {"other/pkg/estimators.py"}
@@ -1278,8 +1281,8 @@ def test_post_diff_paths_uses_rename_destination_only():
 def test_case_snapshot_preserves_notes_and_rerun():
     """The bundle grades from the snapshot, so it must carry grading context: case
     notes and (for re-review cases) the prior review the reviewer was shown."""
-    from engine.models import STRATUM_HISTORICAL, Case
-    from engine.runner import _case_snapshot
+    from eval_core.models import STRATUM_HISTORICAL, Case
+    from eval_core.runner import _case_snapshot
 
     case = Case(
         id="c",
@@ -1295,8 +1298,8 @@ def test_case_snapshot_preserves_notes_and_rerun():
 def test_compare_renders_grading_context():
     """build_bundle must render case notes and rerun prior-review so a grader can
     apply mitigation notes / re-review scope from the bundle alone."""
-    from engine.compare import build_bundle
-    from engine.models import RunResult
+    from eval_core.compare import build_bundle
+    from eval_core.models import RunResult
 
     snap = {
         "title": "t",
@@ -1344,7 +1347,7 @@ def test_validate_touched_files_negative_control_contract():
     """Negative controls must declare an exact expected_files contract; a clean case
     that silently becomes a code-changing diff must be rejected."""
     from adapters.corpus_loader import _validate_touched_files
-    from engine.models import STRATUM_NEGATIVE, Case
+    from eval_core.models import STRATUM_NEGATIVE, Case
 
     # expect_no_blockers without expected_files -> rejected (no file guard).
     nc = Case(id="nc", stratum=STRATUM_NEGATIVE, expect_no_blockers=True)
@@ -1366,8 +1369,8 @@ def test_validate_touched_files_negative_control_contract():
 def test_compare_renders_must_catch_and_fp_metadata():
     """The bundle must expose must_catch (optional bugs) and known-FP file/severity so
     graders can apply the full corpus contract from comparison.md alone."""
-    from engine.compare import build_bundle
-    from engine.models import RunResult
+    from eval_core.compare import build_bundle
+    from eval_core.models import RunResult
 
     def _bundle(snap):
         return build_bundle(
@@ -1480,8 +1483,8 @@ def test_compare_separates_case_versions():
     """Two versions of the same case_id (distinct snapshots, possible under
     --allow-mixed) must render as SEPARATE sections, not be conflated under one
     heading with the first version's ground truth."""
-    from engine.compare import build_bundle
-    from engine.models import RunResult
+    from eval_core.compare import build_bundle
+    from eval_core.models import RunResult
 
     def _rr(rid, marker):
         return RunResult(
@@ -1512,7 +1515,7 @@ def test_smoke_clears_cache_for_live_run(tmp_path, monkeypatch):
     """smoke is a live plumbing check, so it must clear cached artifacts and actually
     exercise codex rather than resume a stale success."""
     import run_eval
-    from engine.models import STRATUM_SYNTHETIC, Case
+    from eval_core.models import STRATUM_SYNTHETIC, Case
 
     monkeypatch.setattr(run_eval, "RUNS_DIR", str(tmp_path / "runs"))
     smoke_dir = tmp_path / "runs" / "smoke"
@@ -1532,7 +1535,7 @@ def test_smoke_clears_cache_for_live_run(tmp_path, monkeypatch):
             return _pinned_cli_version()
 
     monkeypatch.setattr(run_eval, "_build_reviewer", lambda repo_root: _Rev(), raising=True)
-    monkeypatch.setattr("engine.runner.run_matrix", lambda *a, **k: [], raising=True)
+    monkeypatch.setattr("eval_core.runner.run_matrix", lambda *a, **k: [], raising=True)
     run_eval.cmd_smoke(_ns(configs="A", strata=None, k=1, limit=1, max_parallel=2))
     assert not stale.exists(), "smoke must clear cached artifacts so it runs live"
 
@@ -1605,7 +1608,7 @@ def test_worktrees_namespaced_per_invocation(monkeypatch):
     other's live checkout mid-review and corrupt the A/B."""
     from adapters import ci_prompt, worktree
     from adapters.codex_reviewer import CodexReviewer
-    from engine.models import STRATUM_HISTORICAL, Case
+    from eval_core.models import STRATUM_HISTORICAL, Case
 
     seen = []
 
@@ -1736,9 +1739,9 @@ def test_treatment_fields_validated(tmp_path, monkeypatch):
 def test_run_matrix_allows_declared_effort_treatment(monkeypatch):
     """With effort DECLARED as a treatment, a model-identical effort contrast
     (arm B vs D) must run — while sandbox drift still aborts."""
-    from engine.models import Config
-    from engine.runner import ConfoundMismatch, run_matrix
-    from engine.store import RunStore
+    from eval_core.models import Config
+    from eval_core.runner import ConfoundMismatch, run_matrix
+    from eval_core.store import RunStore
 
     r = _make_reviewer(monkeypatch)
     store = RunStore("/tmp/reviewer-eval-test/runs-effort-treatment")
@@ -1763,9 +1766,9 @@ def test_run_matrix_allows_declared_effort_treatment(monkeypatch):
 
 
 def test_run_matrix_rejects_duplicate_treatment_tuple(monkeypatch):
-    from engine.models import Config
-    from engine.runner import ConfoundMismatch, run_matrix
-    from engine.store import RunStore
+    from eval_core.models import Config
+    from eval_core.runner import ConfoundMismatch, run_matrix
+    from eval_core.store import RunStore
 
     r = _make_reviewer(monkeypatch)
     store = RunStore("/tmp/reviewer-eval-test/runs-dup-treatment")
@@ -1782,9 +1785,9 @@ def test_run_matrix_rejects_duplicate_treatment_tuple(monkeypatch):
 def test_run_matrix_rejects_jointly_confounded_pair(monkeypatch):
     """A,D alone differ in model AND effort with no bridging arm -> a confounded
     2-arm contrast the runner must refuse (the full matrix decomposes fine)."""
-    from engine.models import Config
-    from engine.runner import ConfoundMismatch, run_matrix
-    from engine.store import RunStore
+    from eval_core.models import Config
+    from eval_core.runner import ConfoundMismatch, run_matrix
+    from eval_core.store import RunStore
 
     r = _make_reviewer(monkeypatch)
     store = RunStore("/tmp/reviewer-eval-test/runs-joint-confound")
@@ -1801,9 +1804,9 @@ def test_run_matrix_rejects_jointly_confounded_pair(monkeypatch):
 def test_run_matrix_full_matrix_decomposes(monkeypatch):
     """The 4-arm matrix satisfies the single-field-contrast rule: every arm has a
     one-field neighbor (B-A model, C-B model, D-B effort)."""
-    from engine.models import Config
-    from engine.runner import run_matrix
-    from engine.store import RunStore
+    from eval_core.models import Config
+    from eval_core.runner import run_matrix
+    from eval_core.store import RunStore
 
     r = _make_reviewer(monkeypatch)
     store = RunStore("/tmp/reviewer-eval-test/runs-full-matrix")
@@ -1821,9 +1824,9 @@ def test_run_matrix_full_matrix_decomposes(monkeypatch):
 
 def test_run_matrix_single_arm_exempt_from_treatment_rules(monkeypatch):
     """One arm can't be confounded: a lone max-effort arm (the D smoke) must run."""
-    from engine.models import Config
-    from engine.runner import run_matrix
-    from engine.store import RunStore
+    from eval_core.models import Config
+    from eval_core.runner import run_matrix
+    from eval_core.store import RunStore
 
     r = _make_reviewer(monkeypatch)
     store = RunStore("/tmp/reviewer-eval-test/runs-single-max")
@@ -1841,7 +1844,7 @@ def test_run_matrix_single_arm_exempt_from_treatment_rules(monkeypatch):
 
 def test_experiment_tag_differs_by_effort(monkeypatch):
     """Effort is part of experiment identity: a D run can never alias a B run."""
-    from engine.models import Config
+    from eval_core.models import Config
 
     r = _make_reviewer(monkeypatch)
     tag_b = r.experiment_tag(Config(id="X", model="gpt-5.6-sol", effort="xhigh"))
@@ -1853,7 +1856,7 @@ def test_review_passes_effort_and_timeout_to_call_codex(monkeypatch):
     """review() must execute the DECLARED effort (recorded == executed) and pass
     the harness's per-run timeout ceiling."""
     from adapters.codex_reviewer import CodexReviewer
-    from engine.models import Config
+    from eval_core.models import Config
 
     r = _make_reviewer(monkeypatch)
     captured = {}
@@ -1873,7 +1876,7 @@ def test_review_passes_effort_and_timeout_to_call_codex(monkeypatch):
 def test_review_rejects_unverified_effort(monkeypatch):
     """Levels outside SUPPORTED_EFFORTS fail closed — never silently run a
     different level than recorded."""
-    from engine.models import Config
+    from eval_core.models import Config
 
     r = _make_reviewer(monkeypatch)
     with pytest.raises(NotImplementedError, match="SUPPORTED_EFFORTS|supports"):
@@ -1887,8 +1890,8 @@ def test_review_rejects_unverified_effort(monkeypatch):
 
 
 def test_plan_runs_k_overrides():
-    from engine.models import STRATUM_SYNTHETIC, Case, Config
-    from engine.runner import _plan_runs
+    from eval_core.models import STRATUM_SYNTHETIC, Case, Config
+    from eval_core.runner import _plan_runs
 
     cases = [Case(id="c1", stratum=STRATUM_SYNTHETIC), Case(id="c2", stratum=STRATUM_SYNTHETIC)]
     cfgs = [Config(id=i, model="m") for i in ("A", "B", "C")]
@@ -1915,7 +1918,7 @@ def test_cmd_run_k_per_end_to_end(tmp_path, monkeypatch):
     import json as _json
 
     import run_eval
-    from engine.models import STRATUM_SYNTHETIC, Case, ReviewOutput
+    from eval_core.models import STRATUM_SYNTHETIC, Case, ReviewOutput
 
     monkeypatch.setattr(run_eval, "RUNS_DIR", str(tmp_path / "runs"))
     monkeypatch.setattr(
@@ -1989,7 +1992,7 @@ def _run_ok_experiment(tmp_path, monkeypatch, subdir="blind"):
     """Drive a real cmd_run (stubbed reviewer) so cmd_compare sees a valid
     manifest; returns the runs dir."""
     import run_eval
-    from engine.models import STRATUM_SYNTHETIC, Case, ReviewOutput
+    from eval_core.models import STRATUM_SYNTHETIC, Case, ReviewOutput
 
     monkeypatch.setattr(run_eval, "RUNS_DIR", str(tmp_path / "runs"))
     monkeypatch.setattr(
@@ -2086,9 +2089,9 @@ def test_run_matrix_holds_model_constant_when_not_a_treatment(monkeypatch):
     """An effort-only experiment must hold MODEL constant: arms differing in both
     model and effort under treatment_fields=("effort",) are silently confounded
     and must abort (local review R1 P1)."""
-    from engine.models import Config
-    from engine.runner import ConfoundMismatch, run_matrix
-    from engine.store import RunStore
+    from eval_core.models import Config
+    from eval_core.runner import ConfoundMismatch, run_matrix
+    from eval_core.store import RunStore
 
     r = _make_reviewer(monkeypatch)
     store = RunStore("/tmp/reviewer-eval-test/runs-model-confound")
@@ -2107,7 +2110,7 @@ def test_smoke_default_selects_control_arm(tmp_path, monkeypatch):
     import json as _json
 
     import run_eval
-    from engine.models import STRATUM_SYNTHETIC, Case
+    from eval_core.models import STRATUM_SYNTHETIC, Case
 
     monkeypatch.setattr(run_eval, "RUNS_DIR", str(tmp_path / "runs"))
     monkeypatch.setattr(
@@ -2130,7 +2133,7 @@ def test_smoke_default_selects_control_arm(tmp_path, monkeypatch):
         captured["config_ids"] = [c.id for c in configs]
         return []
 
-    monkeypatch.setattr("engine.runner.run_matrix", _capture_run_matrix, raising=True)
+    monkeypatch.setattr("eval_core.runner.run_matrix", _capture_run_matrix, raising=True)
     rc = run_eval.cmd_smoke(_ns(configs=None, strata=None, k=1, limit=1, max_parallel=2))
     assert rc == 0
 

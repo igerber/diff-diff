@@ -25,6 +25,9 @@ pytestmark = pytest.mark.skipif(
 
 if _EVAL_ROOT.exists() and str(_EVAL_ROOT) not in sys.path:
     sys.path.insert(0, str(_EVAL_ROOT))
+# eval_core (the shared engine) lives directly under tools/.
+if str(_REPO / "tools") not in sys.path:
+    sys.path.insert(0, str(_REPO / "tools"))
 
 
 # --------------------------------------------------------------------------- #

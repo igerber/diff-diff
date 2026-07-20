@@ -21,14 +21,17 @@ the CI invocation faithfully, and compare every arm on the same cases.
 ## Layout
 
 ```
+tools/eval_core/         # shared engine: models, store, runner, compare (+ blinding)
 tools/reviewer-eval/
 ├── run_eval.py          # CLI: verify-corpus · smoke · run · compare
-├── engine/              # generic glue: models, store, runner, compare (+ blinding)
 ├── adapters/            # diff-diff bindings: ci_prompt, codex_reviewer, corpus_loader, worktree
 ├── config/configs.json  # the arms (one role=control) + declared treatment_fields
 ├── DECISION_RULE.md     # pre-registered GO/NO-GO rule + grading rubric
 └── corpus/              # cases/{s1_synthetic, s2_historical, s3_negative, s4_missed} + schema + synonyms
 ```
+
+The engine lives in `tools/eval_core/` (shared across eval harnesses; this tool
+was its first consumer) — generic glue with no diff-diff coupling.
 
 ## Usage
 

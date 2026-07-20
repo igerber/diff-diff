@@ -1,4 +1,4 @@
-"""Load the JSON corpus into engine ``Case`` objects.
+"""Load the JSON corpus into ``eval_core.models.Case`` objects.
 
 Resolves each ground-truth bug's ``bug_class`` to keyword lists via
 ``corpus/bug_class_synonyms.json`` so the rendered comparison bundle carries the
@@ -12,7 +12,7 @@ import json
 import os
 from typing import Optional
 
-from engine.models import Case, GroundTruthBug
+from eval_core.models import Case, GroundTruthBug
 
 from adapters import worktree
 

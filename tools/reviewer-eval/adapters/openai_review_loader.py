@@ -12,7 +12,7 @@ recorded in each run's usage). The carved-back, bundle-first harness does NOT
 score, so it does not use ``parse_review_findings`` / ``estimate_cost`` /
 ``PRICING``; and it deliberately does NOT use ``compile_prompt`` (it inlines
 REGISTRY — the API-backend path; CI does not). This module lives in ``adapters/``
-precisely because it couples to diff-diff internals; the generic engine never
+precisely because it couples to diff-diff internals; the generic eval_core engine never
 imports it.
 """
 

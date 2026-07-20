@@ -8,7 +8,7 @@ and tears the worktree down.
 
 Scoring deliberately does NOT happen here. We store the reviewer's RAW review
 markdown and let an LLM read it side-by-side against the other arms (see
-``engine.compare``). Regex/structured parsing of free-form review prose is brittle
+``eval_core.compare``). Regex/structured parsing of free-form review prose is brittle
 and model-specific (e.g. gpt-5.4 used ``- **P1 — ...**``, gpt-5.5 uses
 ``### Finding 1: P1 — ...``); an LLM reading the raw text is format-agnostic.
 
@@ -30,7 +30,7 @@ import time
 import uuid
 from typing import Optional
 
-from engine.models import Config, ReviewOutput, to_jsonable
+from eval_core.models import Config, ReviewOutput, to_jsonable
 
 from adapters import ci_prompt, worktree
 from adapters.openai_review_loader import load_openai_review
@@ -39,7 +39,7 @@ from adapters.openai_review_loader import load_openai_review
 class CodexReviewer:
     """Runs the codex reviewer for an A/B config against a corpus case.
 
-    Duck-typed to the interface ``engine.runner`` calls: ``review``,
+    Duck-typed to the interface ``eval_core.runner`` calls: ``review``,
     ``cli_version``, and ``experiment_tag``.
     """
 
@@ -83,7 +83,7 @@ class CodexReviewer:
         self._wt_namespace = uuid.uuid4().hex[:12]
         self._cli_version: Optional[str] = None
 
-    # -- reviewer interface (duck-typed by engine.runner) ------------------- #
+    # -- reviewer interface (duck-typed by eval_core.runner) ------------------- #
 
     def cli_version(self) -> str:
         if self._cli_version is None:

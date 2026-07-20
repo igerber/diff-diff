@@ -15,7 +15,7 @@ import json
 import re
 from typing import Iterable
 
-from engine.models import RunResult
+from eval_core.models import RunResult
 
 # Order strata for a stable, sensible read order; unknown strata sort last.
 _STRATUM_ORDER = {

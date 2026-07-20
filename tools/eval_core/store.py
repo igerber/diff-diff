@@ -15,7 +15,7 @@ import json
 import os
 from typing import Optional
 
-from engine.models import RunResult, run_result_from_dict, to_jsonable
+from eval_core.models import RunResult, run_result_from_dict, to_jsonable
 
 
 def run_key(

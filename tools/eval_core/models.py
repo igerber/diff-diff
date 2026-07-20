@@ -5,10 +5,10 @@ arms (``Config``), a corpus case + its ground truth (``Case`` /
 ``GroundTruthBug``), and the persisted output of one review run (``ReviewOutput``
 / ``RunResult``). Scoring is NOT modeled here — both raw reviews are bundled
 side-by-side and read by an LLM into a caught/missed/false-positive table (see
-``engine.compare`` and the README).
+``eval_core.compare`` and the README).
 
 Stratum strings are module-level constants (not Enums) so JSON round-tripping in
-``engine.store`` stays trivial.
+``eval_core.store`` stays trivial.
 """
 
 from __future__ import annotations
@@ -50,7 +50,7 @@ class Config:
     ``model``) may differ between arms; everything else (``sandbox``,
     ``action_version``, ``cli_version``, and ``effort`` when not declared) is a
     confound the experiment pins and the runner asserts identical across arms
-    (see ``engine.runner`` for the single-field-contrast rules).
+    (see ``eval_core.runner`` for the single-field-contrast rules).
     """
 
     id: str  # "A", "B", ...

@@ -29,13 +29,17 @@ import os
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-# Make `engine` and `adapters` importable (the eval dir is the package root).
+TOOLS = os.path.dirname(HERE)
+# Make `adapters` importable (the eval dir is the package root) and `eval_core`
+# (the shared engine, directly under tools/) importable.
 if HERE not in sys.path:
     sys.path.insert(0, HERE)
+if TOOLS not in sys.path:
+    sys.path.insert(0, TOOLS)
 
 from adapters.corpus_loader import CorpusLoader  # noqa: E402
 from adapters.openai_review_loader import find_repo_root  # noqa: E402
-from engine.store import RunStore, read_json, write_json  # noqa: E402
+from eval_core.store import RunStore, read_json, write_json  # noqa: E402
 
 CONFIG_DIR = os.path.join(HERE, "config")
 CORPUS_DIR = os.path.join(HERE, "corpus")
@@ -113,7 +117,7 @@ def _make_configs(which: list) -> list:
     field, or anything but EXACTLY one ``role: control`` arm all raise instead of
     quietly running a different experiment than the file describes.
     """
-    from engine.models import Config
+    from eval_core.models import Config
 
     raw = _load_configs()
     arms = raw.get("arms")
@@ -269,7 +273,7 @@ def _build_reviewer(repo_root: str):
 
 
 def cmd_smoke(args: argparse.Namespace) -> int:
-    from engine.runner import run_matrix
+    from eval_core.runner import run_matrix
 
     repo_root = find_repo_root()
     loader = CorpusLoader(CORPUS_DIR, repo_root)
@@ -319,7 +323,7 @@ def cmd_smoke(args: argparse.Namespace) -> int:
 
 
 def cmd_run(args: argparse.Namespace) -> int:
-    from engine.runner import run_matrix
+    from eval_core.runner import run_matrix
 
     if not _safe_subdir(args.subdir):
         print(
@@ -430,7 +434,7 @@ def cmd_compare(args: argparse.Namespace) -> int:
     import hashlib
 
     from adapters import ci_prompt
-    from engine.compare import build_bundle
+    from eval_core.compare import build_bundle
 
     if not _safe_subdir(args.subdir):
         print(
@@ -547,7 +551,7 @@ def cmd_compare(args: argparse.Namespace) -> int:
     n_cases = len({r.case_id for r in runs})
     print(f"wrote {out_path} ({ok}/{len(runs)} runs ok across {n_cases} cases)")
     if blinded:
-        from engine.compare import apply_blinding, derive_blind_mapping, sanitize_model_refs
+        from eval_core.compare import apply_blinding, derive_blind_mapping, sanitize_model_refs
 
         config_ids = sorted({r.config_id for r in runs})
         model_names = sorted({r.model for r in runs if r.model})

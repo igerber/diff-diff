@@ -6,7 +6,7 @@ codex itself — it calls the injected ``reviewer`` (duck-typed: must provide
 ``review(case, config, repeat) -> ReviewOutput``, ``cli_version() -> str``, and
 ``experiment_tag(config) -> str``). A reviewer exception becomes an INFRA_ERROR
 RunResult (never a missed bug). Completed runs are skipped on resume via the
-content-hash key in ``engine.store``.
+content-hash key in ``eval_core.store``.
 
 The runner ASSERTS the Codex CLI version is identical across arms, and that the
 arms differ ONLY in the declared ``treatment_fields`` (default: model), each in
@@ -20,8 +20,8 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Callable, Optional
 
-from engine.models import INFRA_ERROR, Case, Config, RunResult, to_jsonable
-from engine.store import RunStore, run_key
+from eval_core.models import INFRA_ERROR, Case, Config, RunResult, to_jsonable
+from eval_core.store import RunStore, run_key
 
 # Config fields that are held-constant confounds unless declared as treatments.
 # `model` IS in this list: an effort-only experiment must hold model constant, or

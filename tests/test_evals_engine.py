@@ -11,15 +11,17 @@ import sys
 
 import pytest
 
-_EVAL_ROOT = pathlib.Path(__file__).resolve().parent.parent / "tools" / "reviewer-eval"
+_TOOLS = pathlib.Path(__file__).resolve().parent.parent / "tools"
+_CORE_ROOT = _TOOLS / "eval_core"
 
 pytestmark = pytest.mark.skipif(
-    not _EVAL_ROOT.exists(),
-    reason="reviewer-eval eval harness not present (isolated install)",
+    not _CORE_ROOT.exists(),
+    reason="eval_core engine not present (isolated install)",
 )
 
-if _EVAL_ROOT.exists() and str(_EVAL_ROOT) not in sys.path:
-    sys.path.insert(0, str(_EVAL_ROOT))
+# eval_core (the shared engine) lives directly under tools/.
+if _CORE_ROOT.exists() and str(_TOOLS) not in sys.path:
+    sys.path.insert(0, str(_TOOLS))
 
 
 # --------------------------------------------------------------------------- #
@@ -28,14 +30,14 @@ if _EVAL_ROOT.exists() and str(_EVAL_ROOT) not in sys.path:
 
 
 def test_engine_modules_import():
-    import engine.compare  # noqa: F401
-    import engine.models  # noqa: F401
-    import engine.runner  # noqa: F401
-    import engine.store  # noqa: F401
+    import eval_core.compare  # noqa: F401
+    import eval_core.models  # noqa: F401
+    import eval_core.runner  # noqa: F401
+    import eval_core.store  # noqa: F401
 
 
 def test_models_json_roundtrip():
-    from engine.models import RunResult, run_result_from_dict, to_jsonable
+    from eval_core.models import RunResult, run_result_from_dict, to_jsonable
 
     rr = RunResult(
         case_id="c",
@@ -55,8 +57,8 @@ def test_models_json_roundtrip():
 
 
 def test_store_roundtrip(tmp_path):
-    from engine.models import RunResult
-    from engine.store import RunStore, run_key
+    from eval_core.models import RunResult
+    from eval_core.store import RunStore, run_key
 
     store = RunStore(str(tmp_path / "runs"))
     key = run_key("c", "A", 0, "tag1")
@@ -68,7 +70,7 @@ def test_store_roundtrip(tmp_path):
 
 
 def test_run_key_distinct_by_experiment_tag():
-    from engine.store import run_key
+    from eval_core.store import run_key
 
     # Same case/config/repeat but different experiment identity must not collide.
     assert run_key("c", "A", 0, "tag-gpt54") != run_key("c", "A", 0, "tag-gpt55")
@@ -77,7 +79,7 @@ def test_run_key_distinct_by_experiment_tag():
 
 
 def test_run_key_distinct_by_case_tag():
-    from engine.store import run_key
+    from eval_core.store import run_key
 
     base = ("c", "A", 0, "exp")
     # Same case/config/repeat/experiment but different case identity must NOT collide.
@@ -120,7 +122,7 @@ def _snap(stratum="s1_synthetic", **kw):
 
 
 def _run(case_id, config_id, review, snap, **kw):
-    from engine.models import RunResult
+    from eval_core.models import RunResult
 
     return RunResult(
         case_id=case_id,
@@ -134,7 +136,7 @@ def _run(case_id, config_id, review, snap, **kw):
 
 
 def test_build_bundle_has_ground_truth_and_both_reviews():
-    from engine.compare import build_bundle
+    from eval_core.compare import build_bundle
 
     snap = _snap()
     runs = [
@@ -151,7 +153,7 @@ def test_build_bundle_has_ground_truth_and_both_reviews():
 
 
 def test_build_bundle_marks_negative_control():
-    from engine.compare import build_bundle
+    from eval_core.compare import build_bundle
 
     snap = _snap(stratum="s3_negative", title="", ground_truth=[], expect_no_blockers=True)
     out = build_bundle([_run("cl", "A", "ok", snap, model="gpt-5.4")])
@@ -159,7 +161,7 @@ def test_build_bundle_marks_negative_control():
 
 
 def test_build_bundle_infra_error_surfaced_not_as_review():
-    from engine.compare import build_bundle
+    from eval_core.compare import build_bundle
 
     snap = _snap(ground_truth=[])
     out = build_bundle([_run("c", "A", "", snap, model="gpt-5.4", infra_error="codex timeout")])
@@ -168,7 +170,7 @@ def test_build_bundle_infra_error_surfaced_not_as_review():
 
 def test_build_bundle_fence_survives_embedded_code_fences():
     """A review containing ``` fences must not break the bundle's own fence."""
-    from engine.compare import build_bundle
+    from eval_core.compare import build_bundle
 
     review = "Here is code:\n```python\nx = 1\n```\nthat's the bug."
     out = build_bundle([_run("c", "A", review, _snap(), model="gpt-5.4")])
@@ -178,7 +180,7 @@ def test_build_bundle_fence_survives_embedded_code_fences():
 
 def test_build_bundle_renders_only_cases_with_runs():
     """A subset run renders only its own cases — no empty placeholder sections."""
-    from engine.compare import build_bundle
+    from eval_core.compare import build_bundle
 
     out = build_bundle([_run("only", "A", "R", _snap(title="Only"))])
     assert "## only" in out
@@ -191,7 +193,7 @@ def test_build_bundle_renders_only_cases_with_runs():
 
 
 def test_derive_blind_mapping_deterministic_and_salt_dependent():
-    from engine.compare import derive_blind_mapping
+    from eval_core.compare import derive_blind_mapping
 
     ids = ["A", "B", "C", "D"]
     m1 = derive_blind_mapping(ids, salt="s1")
@@ -207,7 +209,7 @@ def test_derive_blind_mapping_deterministic_and_salt_dependent():
 
 
 def test_sanitize_model_refs_scrubs_names_tiers_and_versions():
-    from engine.compare import sanitize_model_refs
+    from eval_core.compare import sanitize_model_refs
 
     text = (
         "As GPT-5.6-Sol I disagree with gpt-5.5; Sol and Terra differ, "
@@ -224,7 +226,7 @@ def test_sanitize_model_refs_scrubs_names_tiers_and_versions():
 
 
 def test_apply_blinding_strips_identity_and_preserves_originals():
-    from engine.compare import apply_blinding
+    from eval_core.compare import apply_blinding
 
     snap = _snap(notes="gpt-5.5 missed this in PR #600", previous_review="gpt-5.5 said fine")
     rr = _run(
@@ -249,7 +251,7 @@ def test_apply_blinding_strips_identity_and_preserves_originals():
 
 
 def test_blinded_bundle_has_no_identity_leaks():
-    from engine.compare import apply_blinding, build_bundle, derive_blind_mapping
+    from eval_core.compare import apply_blinding, build_bundle, derive_blind_mapping
 
     snap = _snap()
     runs = [
@@ -269,7 +271,7 @@ def test_blinded_bundle_has_no_identity_leaks():
 def test_build_bundle_labels_effort_when_recorded():
     """Unblinded bundles label multi-effort arms (e.g. `@ max`) so graders can
     tell B from D; artifacts without a recorded effort render exactly as before."""
-    from engine.compare import build_bundle
+    from eval_core.compare import build_bundle
 
     snap = _snap()
     with_effort = build_bundle([_run("c", "D", "x", snap, model="gpt-5.6-sol", effort="max")])
@@ -282,7 +284,7 @@ def test_negative_control_render_matches_allow_severities():
     """The FP rule in the rendered bundle must derive from the case's
     allow_severities — a P3-only control must not read as 'P2 acceptable'
     (local review R1 P3)."""
-    from engine.compare import build_bundle
+    from eval_core.compare import build_bundle
 
     snap = _snap(
         stratum="s3_negative",
