@@ -132,6 +132,9 @@ html_theme_options = {
     "navbar_end": ["theme-switcher", "navbar-icon-links"],
     "navigation_depth": 3,
     "show_toc_level": 2,
+    # Live-filtering search overlay. Safe to enable now that search-result
+    # excerpt rendering survives notebook anchors (searchtools-css-escape.js).
+    "search_as_you_type": True,
 }
 
 # -- Options for sphinxext-opengraph -----------------------------------------
@@ -184,6 +187,17 @@ if rtd_version == "latest" or rtd_version_type == "branch":
     )
 
 
-# -- Custom CSS --------------------------------------------------------------
+# -- Custom CSS / JS ---------------------------------------------------------
 def setup(app):
     app.add_css_file("custom.css")
+    # CSS.escape()s section anchors so notebook heading ids containing
+    # ' ( ) : etc. don't crash search-result excerpt rendering. NB: on
+    # search.html this file is emitted BEFORE searchtools.js (custom js
+    # renders with the early script group; searchtools comes from the
+    # search page template), so the wrapper defers to DOMContentLoaded -
+    # see the file's header comment before touching load order.
+    app.add_js_file("searchtools-css-escape.js")
+    # Keeps pre-rename numbered section deep links ("#3.-Fit-Event-Study")
+    # working after the 2026-07 heading-number strip: rewrites the hash to
+    # the renamed fragment when the legacy one no longer exists.
+    app.add_js_file("legacy-fragment-redirect.js")

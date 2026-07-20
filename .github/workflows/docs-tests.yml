@@ -20,6 +20,8 @@ on:
       # (Python version, apt packages, post_install docs deps).
       - '.readthedocs.yaml'
       - '.github/workflows/docs-tests.yml'
+      # Search smoke test: script + pinned jsdom manifest/lockfile.
+      - '.github/scripts/**'
   pull_request:
     branches: [main]
     types: [opened, synchronize, reopened, labeled, unlabeled]
@@ -36,6 +38,8 @@ on:
       # (Python version, apt packages, post_install docs deps).
       - '.readthedocs.yaml'
       - '.github/workflows/docs-tests.yml'
+      # Search smoke test: script + pinned jsdom manifest/lockfile.
+      - '.github/scripts/**'
   schedule:
     # Weekly Sunday 6am UTC - smoke test that snippets still execute
     # against current upstream deps (mirrors notebooks.yml schedule).
@@ -135,6 +139,42 @@ jobs:
         # PR #410 brought make html to 0 warnings; -W keeps it that way by
         # blocking any new warning from sneaking in.
         run: make -C docs html SPHINXOPTS="-W"
+
+      - name: Guard search-anchor invariants in built HTML
+        # Tripwires for the search-excerpt fix (searchtools-css-escape.js):
+        # 1. No digit-leading section ids may reappear in tutorial pages -
+        #    heading numbers were stripped because searchtools.js crashed
+        #    on them before the shim existed, and numberless headings are
+        #    the documented convention.
+        # 2. The CSS.escape shim must be emitted on the built search page.
+        # 3. The shim wraps Search.htmlToText; if a Sphinx upgrade renames
+        #    that hook the shim's feature-guard silently no-ops, so fail
+        #    loudly here and revisit the shim instead.
+        run: |
+          test -d docs/_build/html/tutorials
+          ! grep -rE 'id="[0-9]' docs/_build/html/tutorials/
+          grep -q 'searchtools-css-escape.js' docs/_build/html/search.html
+          grep -q 'htmlToText' docs/_build/html/_static/searchtools.js
+
+      - name: Set up Node for the search smoke test
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          # Current LTS; jsdom's floor is far below this. Pinned so the
+          # smoke test doesn't float with the runner image default.
+          node-version: '24'
+
+      - name: Behavioral smoke test - search excerpts + legacy fragments
+        # Runs the BUILT searchtools.js + shims in jsdom and drives the
+        # exact search-excerpt path (Search.htmlToText) with apostrophe,
+        # parens, colon, and legacy digit anchors, asserting section-scoped
+        # excerpts render without SyntaxError; also asserts the
+        # legacy-fragment redirect rewrites pre-rename numbered hashes.
+        # Catches a Sphinx/theme upgrade changing the hook's signature or
+        # invocation semantics, which the greps above cannot. jsdom is
+        # pinned by the committed .github/scripts/package{,-lock}.json.
+        run: |
+          npm ci --prefix .github/scripts --ignore-scripts
+          node .github/scripts/search_excerpt_smoke.mjs
 
   docs-deps-py39-smoke:
     name: Validate docs deps install on Python 3.9 (floor compat)

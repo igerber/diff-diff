@@ -8,6 +8,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Docs: search-result excerpts fixed and search-as-you-type enabled.** Notebook
+  section anchors containing CSS-special characters (digit-leading `#3.-Fit-Event-Study`,
+  apostrophes, parentheses, colons) crashed Sphinx's search-excerpt renderer
+  (`querySelector` SyntaxError), silently dropping result summaries. A `CSS.escape`
+  shim (`docs/_static/searchtools-css-escape.js`) now makes every anchor a valid
+  selector, numeric prefixes are stripped from 185 tutorial headings across 22
+  notebooks (ordering is conveyed by the grouped tutorials index; prose "Section N"
+  cross-references reworded to heading names, paper-section citations kept verbatim),
+  and the theme's `search_as_you_type` live-filtering overlay is enabled. Page paths
+  are unchanged; the renamed section fragments are kept backward-compatible by a
+  client-side redirect (`docs/_static/legacy-fragment-redirect.js`) that rewrites old
+  `#3.-Fit-Event-Study`-style deep links to their unnumbered targets.
 - **ImputationDiD leave-one-out SE now anchored against Stata `did_imputation, leaveout`
   (no library behavior change).** The Borusyak-Jaravel-Spiess (2024) App. A.9 LOO variance
   (`leave_one_out=True`) has no runnable R reference (R `didimputation` omits LOO), so it

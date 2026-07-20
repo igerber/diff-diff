@@ -83,6 +83,7 @@ target/
 # Local scripts (not part of package)
 scripts/
 !.claude/scripts/
+!.github/scripts/
 
 # Launch directories (local only)
 launch/
@@ -125,3 +126,9 @@ benchmarks/refresh_2026_07/results/refresh_results_smoke.json
 # the golden JSON each generator produces IS committed (benchmarks/data/*.json).
 # Root-anchored to the generators' own logs so it doesn't hide logs elsewhere.
 /generate_*_golden.log
+
+# Node install tree for the docs search-excerpt smoke test. jsdom is pinned
+# by .github/scripts/package.json + package-lock.json (both COMMITTED - do
+# not ignore manifests repo-wide); `npm ci --prefix .github/scripts` puts
+# node_modules next to them.
+node_modules/

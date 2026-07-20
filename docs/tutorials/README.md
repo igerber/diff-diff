@@ -85,7 +85,7 @@ Practitioner walkthrough for marketing analytics teams measuring geo-experiment 
 - Synthetic panel of 80 markets with simulated campaign launch
 - `SyntheticDiD` fit, diagnostics, and inference (placebo + bootstrap)
 - Unit weights and time weights interpretation
-- Stakeholder communication template (Tutorial 17 Section 9 pattern)
+- Stakeholder communication template (Tutorial 17 leadership-communication pattern)
 
 ### 19. dCDH Marketing Pulse Campaigns (`19_dcdh_marketing_pulse.ipynb`)
 Practitioner walkthrough for measuring lift from on/off promotional pulses across markets, where treatment can switch in both directions:
