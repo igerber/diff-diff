@@ -2635,3 +2635,81 @@ class TestZeroWeightGroups:
         assert len(nan_ytilde) >= 1  # main-fit warning still fires
         assert np.isfinite(r.overall_att)
         assert np.isfinite(r.overall_se) and r.overall_se > 0
+
+
+class TestEventStudyVcovPersistence:
+    """M-092 follow-up: the full Gardner-GMM ES VCV + df provenance are
+    persisted on TwoStageDiDResults, gated by inference mode."""
+
+    @staticmethod
+    def _panel(seed=7):
+        rng = np.random.default_rng(seed)
+        rows = []
+        for u in range(90):
+            g = [4, 6, 0][u % 3]
+            for t in range(1, 11):
+                y = 1.0 + 0.1 * t + u * 0.01 + (1.2 if g and t >= g else 0.0) + rng.normal(0, 0.3)
+                rows.append(
+                    {
+                        "unit": u,
+                        "time": t,
+                        "outcome": y,
+                        "first_treat": g if g else np.nan,
+                    }
+                )
+        return pd.DataFrame(rows)
+
+    def test_analytical_fit_persists_vcov_diag_matches_ses(self):
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            res = TwoStageDiD().fit(
+                self._panel(),
+                outcome="outcome",
+                unit="unit",
+                time="time",
+                first_treat="first_treat",
+                aggregate="event_study",
+            )
+        assert res.event_study_vcov is not None
+        assert res.event_study_vcov_index is not None
+        ses = {h: d["se"] for h, d in res.event_study_effects.items()}
+        diag = np.sqrt(np.maximum(np.diag(res.event_study_vcov), 0.0))
+        for i, h in enumerate(res.event_study_vcov_index):
+            np.testing.assert_allclose(diag[i], ses[h], rtol=1e-14)
+        # Non-survey GMM inference is normal-theory: no df provenance.
+        assert res.event_study_df is None
+
+    def test_bootstrap_clears_vcov_and_df(self):
+        # Bootstrap replaces the stored ES se/p/CI with percentile values:
+        # the analytical matrix's diagonal no longer matches the stored SEs
+        # and no df governed the stored inference - both must be None.
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            res = TwoStageDiD(n_bootstrap=20, seed=1).fit(
+                self._panel(),
+                outcome="outcome",
+                unit="unit",
+                time="time",
+                first_treat="first_treat",
+                aggregate="event_study",
+            )
+        assert res.bootstrap_results is not None
+        assert res.event_study_vcov is None
+        assert res.event_study_vcov_index is None
+        assert res.event_study_df is None
+
+    def test_group_only_aggregate_has_no_es_vcov(self):
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            res = TwoStageDiD().fit(
+                self._panel(),
+                outcome="outcome",
+                unit="unit",
+                time="time",
+                first_treat="first_treat",
+                aggregate="group",
+            )
+        assert res.event_study_effects is None
+        assert res.event_study_vcov is None
+        assert res.event_study_vcov_index is None
+        assert res.event_study_df is None

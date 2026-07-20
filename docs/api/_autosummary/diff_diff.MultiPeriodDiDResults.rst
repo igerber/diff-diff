@@ -33,6 +33,7 @@
       ~MultiPeriodDiDResults.conf_int
       ~MultiPeriodDiDResults.conley_lag_cutoff
       ~MultiPeriodDiDResults.df_convention
+      ~MultiPeriodDiDResults.event_study_df
       ~MultiPeriodDiDResults.fitted_values
       ~MultiPeriodDiDResults.inference_df
       ~MultiPeriodDiDResults.inference_method

@@ -71,6 +71,27 @@ class StackedDiDResults(BaseResults):
         Clean control definition used.
     alpha : float
         Significance level used.
+    event_study_vcov : np.ndarray, optional
+        Full event-study variance-covariance matrix: the sub-block of the
+        pooled stacked-regression coefficient covariance over the estimated
+        ``D_sa x event-time`` interaction columns, ordered by
+        ``event_study_vcov_index``. The reported per-event-time SEs are
+        exactly ``sqrt(diag())`` of this matrix in every inference mode
+        (analytical hc1/hc2_bm sandwich, survey replicate refit, and survey
+        TSL all produce the coefficient covariance the SEs are read from).
+        The reference period is synthesized, never a regression column, so
+        it is absent from the index. None when no event study was requested.
+    event_study_vcov_index : list of int, optional
+        Event-time labels ordering ``event_study_vcov``'s rows/columns
+        (the estimated event times, reference excluded).
+    event_study_df : dict, optional
+        Per-event-time inference degrees of freedom PROVENANCE: maps each
+        estimated event time to the df actually passed to
+        ``safe_inference`` for its stored p-value/CI (per-event
+        Bell-McCaffrey Satterthwaite df under ``hc2_bm``; the scalar survey
+        df under survey designs), or NaN when the row used normal theory,
+        the df was undefined, or hc2_bm failed closed. None when no event
+        study was requested.
     """
 
     overall_att: float
@@ -118,6 +139,12 @@ class StackedDiDResults(BaseResults):
     balance: str = "none"
     covariates: Optional[List[str]] = None
     balance_diagnostics: Optional[Dict[Any, Dict[str, Any]]] = field(default=None)
+    # Unified event-study surface support (spec section 5, row M-092): the
+    # full ES VCV sub-block + ordered horizon index + per-event df actually
+    # used. See the class docstring for semantics.
+    event_study_vcov: Optional[np.ndarray] = field(default=None, repr=False)
+    event_study_vcov_index: Optional[List[int]] = field(default=None, repr=False)
+    event_study_df: Optional[Dict[int, float]] = field(default=None, repr=False)
 
     # --- Inference-field aliases (balance/external-adapter compatibility) ---
     @property

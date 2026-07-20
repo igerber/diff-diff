@@ -380,9 +380,42 @@ a library setting.
     unused" case, so no downgrade applies).
 
   Remaining `"diag_fallback"` cases on new fits — bootstrap /
-  replicate-weight CS and SA, plus ImputationDiD / Stacked /
-  EfficientDiD / TwoStageDiD — pass through unchanged because
-  nothing better is available on those result types yet.
+  replicate-weight CS / SA, bootstrap / replicate-weight TwoStageDiD,
+  plus ImputationDiD / EfficientDiD — pass through unchanged because
+  nothing better is available on those result types in those modes.
+  StackedDiD and TwoStageDiD now persist `event_study_vcov` (4.0
+  program row M-092): StackedDiD in EVERY inference mode (its
+  reported event-study SEs are always the persisted matrix's
+  diagonal), TwoStageDiD on the analytical paths only (bootstrap and
+  replicate-weight modes clear it). Where the covariance is present,
+  the PT check takes the joint-Wald path (subject to the hc2_bm
+  policy and rank guard below) and the pretrends-power classification
+  uses the full covariance.
+
+- **Note:** hc2_bm parallel-trends policy (deviation by omission,
+  documented). When the source fit's `vcov_type` is `"hc2_bm"`, the
+  PT check does NOT run the covariance-based joint Wald even when a
+  full event-study covariance is persisted: the generic chi-square /
+  F(k, df_survey) reference ignores the CR2 / Bell-McCaffrey
+  small-sample correction the estimator's own per-row inference
+  applies, and the proper multi-constraint CR2 test (AHT/HTZ,
+  `clubSandwich::Wald_test(test="HTZ")`) is not implemented (tracked
+  in DEFERRED.md). The check instead runs Bonferroni over the
+  BM-adjusted per-row p-values, preserving the small-sample
+  correction. Additionally, the joint-Wald path fail-closes on
+  provenance: if ANY retained pre-period row carries a non-finite
+  p-value (hc2_bm BM-DOF failure, collapsed replicate-survey df), the
+  check returns `method="inconclusive"` rather than computing a Wald
+  statistic through effects whose inference the estimator refused to
+  produce — the covariance-backed twin of the round-33/42 Bonferroni
+  guards. Finally, the joint-Wald solve is rank-guarded: a
+  cluster-sandwich covariance has rank bounded by the cluster-score
+  dimension, so when the number of tested leads approaches the number
+  of clusters the pre-period block is singular and `β′V⁻¹β` is a
+  garbage (possibly negative) quadratic form. The check requires a
+  finite, numerically full-rank, PSD block and a non-negative finite
+  statistic; otherwise it falls back to Bonferroni over the per-row
+  p-values (a documented conservative downgrade, not a defect).
 
 - **Note:** Unit-translation policy. BusinessReport does not
   arithmetically translate log-points to percents or level effects to

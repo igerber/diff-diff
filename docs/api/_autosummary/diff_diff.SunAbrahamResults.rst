@@ -38,6 +38,8 @@
       ~SunAbrahamResults.event_study_vcov_index
       ~SunAbrahamResults.is_significant
       ~SunAbrahamResults.p_value
+      ~SunAbrahamResults.reference_observed
+      ~SunAbrahamResults.reference_period
       ~SunAbrahamResults.se
       ~SunAbrahamResults.significance_stars
       ~SunAbrahamResults.survey_metadata

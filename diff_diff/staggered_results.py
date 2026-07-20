@@ -171,6 +171,16 @@ class CallawaySantAnnaResults(BaseResults):
     # Full event-study VCV matrix (Phase 7d): indexed by event_study_vcov_index
     event_study_vcov: Optional["np.ndarray"] = field(default=None, repr=False)
     event_study_vcov_index: Optional[list] = field(default=None, repr=False)
+    # event_study_df (spec section 5, row M-092): the ONE df actually applied
+    # to every stored event-study p-value/CI (safe_inference_batch in
+    # _aggregate_event_study). Equals G-1 on the bare-cluster-synthesize
+    # path; on explicit-survey fits it is the MINIMUM across per-horizon
+    # effective dfs (conservative by design when replicates were dropped) -
+    # the value shown is what was USED, not a per-horizon claim. None when
+    # the ES rows used normal theory or bootstrap overrode them. Distinct
+    # from `df_inference` below, whose narrow bare-cluster-only contract
+    # (HonestDiD consumer, PR #487) is unchanged.
+    event_study_df: Optional[float] = field(default=None, repr=False)
     bootstrap_results: Optional["CSBootstrapResults"] = field(default=None, repr=False)
     cband_crit_value: Optional[float] = None
     pscore_trim: float = 0.01

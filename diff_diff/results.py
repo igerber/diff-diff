@@ -713,6 +713,15 @@ class MultiPeriodDiDResults(BaseResults):
     # p-value/CI without refitting.
     df_convention: Optional[str] = field(default=None)
     inference_df: Optional[float] = field(default=None)
+    # event_study_df (spec section 5, row M-092): PER-PERIOD df provenance -
+    # maps each estimated period to the df actually passed to that period's
+    # safe_inference (the period's OWN Bell-McCaffrey DOF under hc2_bm, the
+    # shared analytical df otherwise; NaN when inference used normal theory
+    # or an undefined df). Distinct from `inference_df` above, which stores
+    # the POST-AVERAGE contrast df - under hc2_bm the two genuinely differ,
+    # so per-period consumers must read this dict, never broadcast
+    # inference_df.
+    event_study_df: Optional[Dict[Any, float]] = field(default=None, repr=False)
 
     # --- Inference-field aliases (balance/external-adapter compatibility) ---
     @property

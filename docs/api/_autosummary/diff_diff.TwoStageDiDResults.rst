@@ -31,6 +31,9 @@
       ~TwoStageDiDResults.cluster_name
       ~TwoStageDiDResults.coef_var
       ~TwoStageDiDResults.conf_int
+      ~TwoStageDiDResults.event_study_df
+      ~TwoStageDiDResults.event_study_vcov
+      ~TwoStageDiDResults.event_study_vcov_index
       ~TwoStageDiDResults.is_significant
       ~TwoStageDiDResults.n_clusters
       ~TwoStageDiDResults.p_value

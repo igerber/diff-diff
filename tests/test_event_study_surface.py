@@ -1119,3 +1119,361 @@ def _native_event_map(label, native):
                 "ci_hi": ci[1],
             }
     return out
+
+
+# ===========================================================================
+# Per-row df provenance + Stacked/TwoStage vcov persistence (M-092 follow-up)
+# ===========================================================================
+
+
+def test_df_scalar_broadcasts_per_row():
+    surface = _tiny_surface(df=12.0)
+    assert isinstance(surface.df, np.ndarray)
+    assert np.isnan(surface.df[0])  # reference row: no df provenance
+    assert surface.df[1] == 12.0 and surface.df[2] == 12.0
+
+
+def test_df_none_yields_nan_column():
+    surface = _tiny_surface()
+    assert isinstance(surface.df, np.ndarray)
+    assert np.isnan(surface.df).all()
+
+
+def test_df_array_length_validated():
+    with pytest.raises(ValueError, match="'df' has shape"):
+        _tiny_surface(df=np.array([1.0, 2.0]))
+
+
+def test_df_nan_where_p_value_nan():
+    # Row 2: finite se but NaN p (non-estimable inference) - its df must be
+    # stripped, because df is provenance of a STORED p-value.
+    surface = _tiny_surface(
+        p_value=np.array([np.nan, 0.0, np.nan]),
+        df=np.array([5.0, 12.0, 12.0]),
+    )
+    assert np.isnan(surface.df[0])  # reference
+    assert surface.df[1] == 12.0
+    assert np.isnan(surface.df[2])  # NaN-p row never used a df
+
+
+def test_df_round_trips_through_to_dict():
+    import json
+
+    d = _tiny_surface(df=7.0).to_dict()
+    json.dumps(d)  # must not raise
+    assert isinstance(d["df"], list) and len(d["df"]) == 3
+    assert d["df"][1] == 7.0 and np.isnan(d["df"][0])
+
+
+def test_df_column_in_pinned_frame():
+    surface = _tiny_surface(df=9.0)
+    frame = surface.to_dataframe()
+    assert "df" in frame.columns  # via EVENT_STUDY_SCHEMA
+    np.testing.assert_array_equal(frame["df"].to_numpy(), surface.df)
+
+
+@pytest.mark.parametrize("label", ALL_PRODUCERS)
+def test_df_nan_on_reference_and_nan_p_rows(label, surfaces):
+    _, surface = surfaces[label]
+    assert isinstance(surface.df, np.ndarray)
+    assert surface.df.shape == surface.event_time.shape
+    assert np.isnan(surface.df[surface.is_reference]).all()
+    assert np.isnan(surface.df[~np.isfinite(surface.p_value)]).all()
+
+
+def test_stacked_vcov_alignment(surfaces):
+    native, surface = surfaces["StackedDiD"]
+    assert surface.vcov is not None
+    assert surface.vcov_index is not None
+    idx = surface.vcov_index.tolist()
+    assert set(idx).issubset(set(surface.event_time.tolist()))
+    # The reference period is synthesized, never a regression column.
+    assert -1 not in idx
+    assert idx == native.event_study_vcov_index
+    # The marginal ES SEs are literally this matrix's diagonal (pure copy).
+    ses = {h: d["se"] for h, d in native.event_study_effects.items()}
+    diag = np.sqrt(np.maximum(np.diag(surface.vcov), 0.0))
+    np.testing.assert_allclose(diag, [ses[h] for h in idx], rtol=1e-14)
+
+
+def test_two_stage_vcov_alignment(surfaces):
+    native, surface = surfaces["TwoStageDiD"]
+    assert surface.vcov is not None
+    assert surface.vcov_index is not None
+    idx = surface.vcov_index.tolist()
+    assert set(idx).issubset(set(surface.event_time.tolist()))
+    assert -1 not in idx  # ref_period never a Stage-2 column
+    assert idx == native.event_study_vcov_index
+    ses = {h: d["se"] for h, d in native.event_study_effects.items()}
+    diag = np.sqrt(np.maximum(np.diag(surface.vcov), 0.0))
+    for i, h in enumerate(idx):
+        if np.isfinite(ses[h]):
+            np.testing.assert_allclose(diag[i], ses[h], rtol=1e-14)
+        else:
+            assert np.isnan(diag[i])  # rank-guard NaN row == NaN marginal SE
+
+
+def test_two_stage_prop5_horizons_excluded_from_vcov_index():
+    # No never-treated units -> late horizons are Proposition-5 unidentified
+    # (NaN effect, n_obs > 0). They live in the effects dict but were never
+    # Stage-2 columns, so the persisted vcov_index must exclude them.
+    from diff_diff.two_stage import TwoStageDiD
+
+    rng = np.random.default_rng(9)
+    rows = []
+    for u in range(60):
+        g = 3 if u % 2 == 0 else 5
+        for t in range(1, 9):
+            y = 1.0 + 0.1 * t + u * 0.01 + (1.0 if t >= g else 0.0) + rng.normal(0, 0.3)
+            rows.append({"unit": u, "time": t, "outcome": y, "first_treat": g})
+    data = pd.DataFrame(rows)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        res = TwoStageDiD().fit(
+            data,
+            outcome="outcome",
+            unit="unit",
+            time="time",
+            first_treat="first_treat",
+            aggregate="event_study",
+        )
+    prop5 = [
+        h
+        for h, d in res.event_study_effects.items()
+        if d["n_obs"] > 0 and not np.isfinite(d["effect"])
+    ]
+    assert prop5, "fixture must produce Proposition-5 horizons"
+    assert res.event_study_vcov_index is not None
+    assert not set(prop5) & set(res.event_study_vcov_index)
+    surface = build_event_study_surface(res)
+    assert surface.vcov is not None
+    assert set(surface.vcov_index.tolist()).issubset(set(surface.event_time.tolist()))
+
+
+def _stacked_panel(seed=42):
+    rng = np.random.default_rng(seed)
+    rows = []
+    for u in range(60):
+        g = [4, 6, 0][u % 3]
+        for t in range(1, 11):
+            y = 1.0 + 0.1 * t + u * 0.01 + (1.5 if g and t >= g else 0.0) + rng.normal(0, 0.3)
+            rows.append({"unit": u, "time": t, "outcome": y, "first_treat": g})
+    return pd.DataFrame(rows)
+
+
+def test_stacked_hc2_bm_per_row_df():
+    from diff_diff import StackedDiD
+
+    data = _stacked_panel()
+    kwargs = dict(
+        outcome="outcome",
+        unit="unit",
+        time="time",
+        first_treat="first_treat",
+        aggregate="event_study",
+    )
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        bm = StackedDiD(kappa_pre=2, kappa_post=2, vcov_type="hc2_bm").fit(data, **kwargs)
+        hc1 = StackedDiD(kappa_pre=2, kappa_post=2).fit(data, **kwargs)
+
+    # hc2_bm: every finite-p non-reference row carries its own BM df,
+    # bit-equal to the producer's event_study_df provenance dict.
+    s_bm = build_event_study_surface(bm)
+    finite_p = np.isfinite(s_bm.p_value)
+    assert finite_p.any()
+    assert np.isfinite(s_bm.df[finite_p]).all()
+    for et, df_val in zip(s_bm.event_time.tolist(), s_bm.df.tolist()):
+        if et in bm.event_study_df and np.isfinite(bm.event_study_df[et]):
+            assert df_val == bm.event_study_df[et]
+
+    # hc1 non-survey: normal-theory inference -> no df anywhere.
+    s_hc1 = build_event_study_surface(hc1)
+    assert np.isnan(s_hc1.df).all()
+
+
+def test_stacked_survey_df_broadcast():
+    from diff_diff import StackedDiD
+    from diff_diff.survey import SurveyDesign
+
+    data = _stacked_panel()
+    data["w"] = 1.0
+    data["strat"] = data["unit"] % 2
+    data["psu_id"] = data["unit"]
+    design = SurveyDesign(weights="w", weight_type="pweight", strata="strat", psu="psu_id")
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        res = StackedDiD(kappa_pre=2, kappa_post=2).fit(
+            data,
+            outcome="outcome",
+            unit="unit",
+            time="time",
+            first_treat="first_treat",
+            aggregate="event_study",
+            survey_design=design,
+        )
+    assert res.survey_metadata is not None and res.survey_metadata.df_survey is not None
+    surface = build_event_study_surface(res)
+    finite_p = np.isfinite(surface.p_value)
+    assert finite_p.any()
+    vals = set(surface.df[finite_p].tolist())
+    assert vals == {float(max(res.survey_metadata.df_survey, 1))}
+
+
+def test_two_stage_survey_df_threaded():
+    from diff_diff.survey import SurveyDesign
+    from diff_diff.two_stage import TwoStageDiD
+
+    data = _stacked_panel()
+    data["w"] = 1.0
+    data["strat"] = data["unit"] % 2
+    data["psu_id"] = data["unit"]
+    design = SurveyDesign(weights="w", weight_type="pweight", strata="strat", psu="psu_id")
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        res = TwoStageDiD().fit(
+            data,
+            outcome="outcome",
+            unit="unit",
+            time="time",
+            first_treat="first_treat",
+            aggregate="event_study",
+            survey_design=design,
+        )
+    assert res.event_study_df is not None and res.event_study_df > 0
+    surface = build_event_study_surface(res)
+    finite_p = np.isfinite(surface.p_value)
+    assert finite_p.any()
+    assert set(surface.df[finite_p].tolist()) == {float(res.event_study_df)}
+
+
+def _cs_cluster_panel(seed=3):
+    rng = np.random.default_rng(seed)
+    rows = []
+    for u in range(80):
+        g = [4, 6, 0][u % 3]
+        for t in range(1, 9):
+            y = 1 + 0.1 * t + u * 0.01 + (1.0 if g and t >= g else 0.0) + rng.normal(0, 0.3)
+            rows.append({"unit": u, "time": t, "outcome": y, "first_treat": g, "st": u % 8})
+    return pd.DataFrame(rows)
+
+
+def test_cs_bare_cluster_df_fallback():
+    from diff_diff import CallawaySantAnna
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        res = CallawaySantAnna(cluster="st").fit(
+            _cs_cluster_panel(),
+            outcome="outcome",
+            unit="unit",
+            time="time",
+            first_treat="first_treat",
+            aggregate="event_study",
+        )
+    # Bare-cluster synthesize path: the ES rows' safe_inference used G-1,
+    # recorded on BOTH channels (primary event_study_df; df_inference keeps
+    # its narrow HonestDiD contract).
+    assert res.event_study_df == float(res.df_inference) == 7.0
+    surface = build_event_study_surface(res)
+    finite_p = np.isfinite(surface.p_value)
+    assert set(surface.df[finite_p].tolist()) == {7.0}
+
+
+def test_cs_bare_cluster_bootstrap_df_is_nan():
+    from diff_diff import CallawaySantAnna
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        res = CallawaySantAnna(cluster="st", n_bootstrap=20, seed=1).fit(
+            _cs_cluster_panel(),
+            outcome="outcome",
+            unit="unit",
+            time="time",
+            first_treat="first_treat",
+            aggregate="event_study",
+        )
+    # Bootstrap overrode the stored ES p/CIs with percentile values that
+    # never used the analytical df: the surface must show NO df even though
+    # df_inference (the HonestDiD contract field) still carries G-1 on the
+    # container. Bootstrap p-values are finite, so only the gated
+    # df_inference fallback - not the NaN-p mask - prevents the leak.
+    assert res.df_inference == 7
+    assert res.event_study_df is None
+    surface = build_event_study_surface(res)
+    assert np.isfinite(surface.p_value).any()
+    assert np.isnan(surface.df).all()
+
+
+def test_cs_survey_min_df_on_surface():
+    from diff_diff import CallawaySantAnna
+    from diff_diff.survey import SurveyDesign
+
+    data = _cs_cluster_panel()
+    data["w"] = 1.0
+    design = SurveyDesign(weights="w", weight_type="pweight", strata="st", psu="unit")
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        res = CallawaySantAnna().fit(
+            data,
+            outcome="outcome",
+            unit="unit",
+            time="time",
+            first_treat="first_treat",
+            aggregate="event_study",
+            survey_design=design,
+        )
+    # Explicit-survey fits: df_inference stays None (PR #487 narrow
+    # HonestDiD contract - channel separation), while the surface carries
+    # the ONE df every ES row's safe_inference_batch actually applied.
+    assert res.df_inference is None
+    assert res.event_study_df is not None and res.event_study_df > 0
+    surface = build_event_study_surface(res)
+    finite_p = np.isfinite(surface.p_value)
+    assert finite_p.any()
+    assert set(surface.df[finite_p].tolist()) == {float(res.event_study_df)}
+
+
+def test_mpd_hc2_bm_per_period_df():
+    from diff_diff import MultiPeriodDiD
+
+    rng = np.random.default_rng(5)
+    rows = []
+    for u in range(50):
+        tr = u % 2
+        # Unbalanced panel: later periods observed for a shrinking subset,
+        # so the per-period BM Satterthwaite dfs genuinely differ.
+        t_max = 8 - (u % 4)
+        for t in range(1, t_max + 1):
+            y = 1 + 0.1 * t + 0.3 * tr + (0.8 if tr and t >= 5 else 0.0) + rng.normal(0, 0.3)
+            rows.append({"unit": u, "time": t, "outcome": y, "treated": tr})
+    data = pd.DataFrame(rows)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        res = MultiPeriodDiD(vcov_type="hc2_bm", cluster="unit").fit(
+            data, outcome="outcome", treatment="treated", time="time", unit="unit"
+        )
+    finite_vals = [v for v in res.event_study_df.values() if np.isfinite(v)]
+    assert finite_vals
+    # Per-period dfs vary across rows on an unbalanced panel...
+    assert len({round(v, 6) for v in finite_vals}) > 1
+    # ...and are NOT the post-average contrast df broadcast.
+    assert any(v != res.inference_df for v in finite_vals)
+    surface = build_event_study_surface(res)
+    for et, df_val in zip(surface.event_time.tolist(), surface.df.tolist()):
+        if et in res.event_study_df and np.isfinite(res.event_study_df[et]):
+            assert df_val == res.event_study_df[et]
+
+
+def test_lpdid_per_horizon_df(surfaces):
+    native, surface = surfaces["LPDiD"]
+    frame = native.event_study
+    ncl = dict(zip(frame["horizon"].tolist(), frame["n_clusters"].tolist()))
+    for et, df_val in zip(surface.event_time.tolist(), surface.df.tolist()):
+        if et == -1:
+            assert np.isnan(df_val)  # synthetic base row: no provenance
+        elif np.isfinite(df_val):
+            # Non-survey cluster rule: realized per-horizon G - 1.
+            assert df_val == ncl[et] - 1
+    # The native frame schema is UNCHANGED (df lives on event_study_df only).
+    assert "df" not in frame.columns

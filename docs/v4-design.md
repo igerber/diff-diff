@@ -380,7 +380,9 @@ it natively in Phase 3). This document pins the requirements it satisfies:
 per-event-time canonical quintet rows, explicit reference-period marking (via
 an `is_reference` column - no sentinel-value conventions; the
 n_groups==0 / n_obs==0 sentinels are retired at 4.0 [M-093]), the event-study
-vcov exposed uniformly where computed, and `to_dataframe(level="event_study")`
+vcov exposed uniformly where computed, per-row inference-df provenance (the
+df each stored p-value/CI actually used, threaded via the producers'
+`event_study_df` channels), and `to_dataframe(level="event_study")`
 emitting identical column schemas from every estimator.
 
 **Pickle migration.** Renamed-field classes ship `__setstate__` migration

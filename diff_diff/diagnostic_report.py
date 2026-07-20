@@ -1398,24 +1398,72 @@ class DiagnosticReport:
         #   2. ``event_study_vcov_index`` + ``event_study_vcov`` — the
         #      CallawaySantAnnaResults convention, where the event-study
         #      covariance is stored separately from the full regression vcov.
+        # Fail-closed inference guard for the JOINT-WALD path. The Wald
+        # statistic consumes only effects + covariance, so with a persisted
+        # vcov it would silently bypass the estimator's own fail-closed
+        # inference: a StackedDiD hc2_bm row whose Bell-McCaffrey DOF is
+        # unavailable (or a replicate-survey row whose effective df
+        # collapsed) carries a FINITE effect/SE and finite covariance
+        # entries but deliberately-NaN t/p/CI. The retained-row collector
+        # only drops non-finite effect/SE rows, and the nan-p guard below
+        # runs only on the Bonferroni fallback - so without this check a
+        # covariance-backed fit publishes a finite joint p-value for
+        # inference the estimator explicitly refused to compute. Same
+        # contract as the round-33/42 Bonferroni guards, applied BEFORE any
+        # covariance path is selected.
+        _n_nonfinite_p = sum(
+            1 for (_, _, _, p) in pre_coefs if not (isinstance(p, (int, float)) and np.isfinite(p))
+        )
+        if _n_nonfinite_p > 0:
+            return {
+                "status": "ran",
+                "method": "inconclusive",
+                "joint_p_value": None,
+                "test_statistic": None,
+                "df": len(pre_coefs),
+                "n_pre_periods": len(pre_coefs),
+                "n_dropped_undefined": _n_nonfinite_p,
+                "per_period": per_period,
+                "verdict": "inconclusive",
+                "reason": (
+                    f"{_n_nonfinite_p} retained pre-period coefficient(s) "
+                    "have non-finite per-period p-value: the source "
+                    "estimator's inference failed closed (e.g. hc2_bm "
+                    "Bell-McCaffrey DOF unavailable, or collapsed "
+                    "replicate-survey df). A joint Wald over the persisted "
+                    "covariance would silently convert that undefined "
+                    "inference into a finite verdict; the PT test is "
+                    "inconclusive on this fit."
+                ),
+            }
         vcov_for_wald: Optional[Any] = None
         idx_map_for_wald: Optional[Any] = None
         vcov_method_tag = "joint_wald"
-        if vcov is not None and interaction_indices is not None:
-            vcov_for_wald = vcov
-            idx_map_for_wald = interaction_indices
-        else:
-            es_vcov = getattr(r, "event_study_vcov", None)
-            es_vcov_index = getattr(r, "event_study_vcov_index", None)
-            if es_vcov is not None and es_vcov_index is not None:
-                vcov_for_wald = es_vcov
-                # ``event_study_vcov_index`` is an ordered list of relative-time
-                # keys; convert it into a dict mapping key -> position.
-                try:
-                    idx_map_for_wald = {k: i for i, k in enumerate(es_vcov_index)}
-                    vcov_method_tag = "joint_wald_event_study"
-                except TypeError:
-                    idx_map_for_wald = None
+        # hc2_bm-sourced fits skip the covariance-based joint Wald entirely:
+        # the generic chi-square (or F(k, df_survey)) reference ignores the
+        # CR2 / Bell-McCaffrey small-sample correction the estimator's own
+        # per-row inference applies, and the proper multi-constraint CR2
+        # test (AHT/HTZ, clubSandwich::Wald_test(test="HTZ")) is not
+        # implemented (tracked in DEFERRED.md). Bonferroni over the
+        # BM-adjusted per-row p-values keeps the small-sample correction.
+        # See REGISTRY.md StackedDiD / REPORTING.md PT notes.
+        if getattr(r, "vcov_type", None) != "hc2_bm":
+            if vcov is not None and interaction_indices is not None:
+                vcov_for_wald = vcov
+                idx_map_for_wald = interaction_indices
+            else:
+                es_vcov = getattr(r, "event_study_vcov", None)
+                es_vcov_index = getattr(r, "event_study_vcov_index", None)
+                if es_vcov is not None and es_vcov_index is not None:
+                    vcov_for_wald = es_vcov
+                    # ``event_study_vcov_index`` is an ordered list of
+                    # relative-time keys; convert it into a dict mapping
+                    # key -> position.
+                    try:
+                        idx_map_for_wald = {k: i for i, k in enumerate(es_vcov_index)}
+                        vcov_method_tag = "joint_wald_event_study"
+                    except TypeError:
+                        idx_map_for_wald = None
         df_denom: Optional[float] = None
         if vcov_for_wald is not None and idx_map_for_wald is not None and df > 0:
             try:
@@ -1425,7 +1473,33 @@ class DiagnosticReport:
                     beta_map = {k: eff for (k, eff, _, _) in pre_coefs}
                     beta = np.array([beta_map[k] for k in keys_in_vcov], dtype=float)
                     v_sub = np.asarray(vcov_for_wald)[np.ix_(idx, idx)]
-                    stat = float(beta @ np.linalg.solve(v_sub, beta))
+                    # Rank/PSD guard. A cluster-sandwich
+                    # covariance has rank bounded by the cluster-score
+                    # dimension, so a singular pre-period block is a NORMAL
+                    # edge case whenever the number of tested leads
+                    # approaches the number of clusters. Solving through a
+                    # singular / non-PSD block produces a garbage quadratic
+                    # form (observed: stat ~ -1e15 -> chi2 p=1.0 -> a false
+                    # stakeholder-facing "no violation" verdict). Require a
+                    # finite block that is numerically full-rank and PSD
+                    # (matrix_rank's standard tolerance: k * eps * largest
+                    # singular value); otherwise raise into the Bonferroni
+                    # fallback over the (finite, per Guard above) per-row
+                    # p-values. Belt-and-braces: a Wald statistic is a PSD
+                    # quadratic form, so any non-finite or negative result
+                    # is invalid regardless of how it arose.
+                    if not np.isfinite(v_sub).all():
+                        raise ValueError("non-finite covariance block")
+                    v_sym = 0.5 * (v_sub + v_sub.T)
+                    if np.linalg.matrix_rank(v_sym) < df:
+                        raise ValueError("rank-deficient covariance block")
+                    _eigs = np.linalg.eigvalsh(v_sym)
+                    _scale = float(np.max(np.abs(_eigs))) if _eigs.size else 0.0
+                    if _scale <= 0.0 or float(_eigs.min()) < -df * np.finfo(float).eps * _scale:
+                        raise ValueError("covariance block is not positive semi-definite")
+                    stat = float(beta @ np.linalg.solve(v_sym, beta))
+                    if not np.isfinite(stat) or stat < 0.0:
+                        raise ValueError("invalid Wald statistic")
 
                     # Round-27 P1 CI review on PR #318: survey-backed
                     # fits carry a finite ``df_survey`` on
@@ -1698,8 +1772,10 @@ class DiagnosticReport:
           this fallback entirely.
         - ``"diag_fallback"`` — event-study result types with
           ``event_study_vcov is None`` (bootstrap or replicate-weight
-          CS / SA fits, plus ImputationDiD / Stacked / EfficientDiD /
-          TwoStageDiD / etc. which don't yet expose ``event_study_vcov``);
+          CS / SA / TwoStageDiD fits, plus ImputationDiD / EfficientDiD /
+          etc. which don't yet expose ``event_study_vcov``; StackedDiD
+          persists its VCV in every inference mode, so it reaches this
+          fallback only when no event study was requested);
           OR ``MultiPeriodDiDResults`` without ``interaction_indices``
           (genuine diag-only path inside ``pretrends.py:_extract_pre_period_params``,
           no "available but unused" concern, so no downgrade applies).

@@ -993,6 +993,14 @@ class CallawaySantAnnaAggregationMixin:
         non_none_dfs = [d for d in agg_effective_dfs if d is not None]
         if non_none_dfs:
             df_survey_val = min(non_none_dfs)
+        # Stash the ONE df every ES row's inference is about to use (the
+        # conservative min under dropped replicates) as provenance for
+        # CallawaySantAnnaResults.event_study_df. Recorded iff it will
+        # govern a t-reference (finite, > 0; the df=0 replicate sentinel
+        # yields NaN inference, not a t-law). fit() resets this stash
+        # alongside _event_study_vcov.
+        if df_survey_val is not None and np.isfinite(df_survey_val) and df_survey_val > 0:
+            self._event_study_df_used = float(df_survey_val)
         t_stats, p_values, ci_lowers, ci_uppers = safe_inference_batch(
             np.array(agg_effects_list),
             np.array(agg_ses_list),

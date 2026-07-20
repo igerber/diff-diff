@@ -21,7 +21,7 @@ TwoWayFixedEffects event-study mode returns the container natively.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union, cast
 
 import numpy as np
 import pandas as pd
@@ -125,6 +125,7 @@ EVENT_STUDY_SCHEMA: Tuple[str, ...] = (
     "cband_lower",
     "cband_upper",
     "n",
+    "df",
     "is_reference",
 )
 
@@ -188,11 +189,12 @@ class EventStudyResults(BaseResults):
         renumbered.
     vcov : np.ndarray or None
         Full event-study variance-covariance matrix where the RESULT
-        CONTAINER exposes one (today: CallawaySantAnna, SunAbraham,
-        MultiPeriodDiD), ordered by ``vcov_index``. StackedDiD and
-        TwoStageDiD compute a full VCV internally but retain only marginal
-        SEs on their result containers, so their surfaces carry ``vcov=None``
-        until that retention is added (tracked in TODO.md).
+        CONTAINER exposes one (e.g. CallawaySantAnna, SunAbraham,
+        MultiPeriodDiD, StackedDiD, and TwoStageDiD's analytical modes),
+        ordered by ``vcov_index``. None when the producer records no matrix
+        or when the stored SEs are no longer its diagonal (bootstrap and
+        replicate-weight overrides clear it rather than ship an
+        inconsistent matrix).
     vcov_index : np.ndarray or None
         ``event_time`` labels labelling ``vcov``'s rows/columns (explicit
         ordering for HonestDiD / PreTrendsPower consumption).
@@ -206,9 +208,18 @@ class EventStudyResults(BaseResults):
         Significance level of the stored intervals.
     source : str or None
         Producing results-class name (provenance).
-    df : float or None
-        Inference degrees of freedom threaded from the source, where the
-        producer exposes one.
+    df : float, np.ndarray, or None
+        Per-row inference degrees of freedom: ``df[i]`` is the df ACTUALLY
+        passed to ``safe_inference`` for row i's stored p-value/CI, threaded
+        from the producer. Accepts None (no df exposed -> all-NaN column), a
+        scalar (broadcast to every row - e.g. CallawaySantAnna, whose
+        explicit-survey event study applies ONE conservative df, the minimum
+        per-horizon effective df, to all rows), or a length-n array (per-row
+        producers: StackedDiD ``hc2_bm`` per-event Bell-McCaffrey df, LPDiD
+        per-horizon cluster df, MultiPeriodDiD ``hc2_bm`` per-period df).
+        NaN on any row means normal-theory inference, an undefined df,
+        bootstrap-overridden inference, or a producer that records none;
+        reference rows and rows with NaN p-values are always NaN.
     """
 
     event_time: np.ndarray
@@ -231,7 +242,7 @@ class EventStudyResults(BaseResults):
     cband_crit_value: Optional[float] = None
     alpha: float = 0.05
     source: Optional[str] = None
-    df: Optional[float] = None
+    df: Optional[Union[float, np.ndarray]] = None
 
     _ARRAY_FIELDS = (
         "att",
@@ -318,6 +329,28 @@ class EventStudyResults(BaseResults):
                 if arr is not None:
                     arr[self.is_reference] = np.nan
 
+        # df is per-row PROVENANCE: the df actually passed to safe_inference
+        # for that row's stored p-value/CI. Normalize None (no df exposed) to
+        # an all-NaN column and broadcast scalars (single-df producers), then
+        # NaN out rows that carry no safe_inference output - reference rows
+        # and rows whose stored p-value is NaN (non-estimable horizons) never
+        # used a df. Runs AFTER reference-row normalization so p_value is
+        # final; explicit block rather than _ARRAY_FIELDS because df, like
+        # the band columns, is optional.
+        if self.df is None:
+            df_arr = np.full(n_rows, np.nan)
+        elif np.ndim(self.df) == 0:
+            df_arr = np.full(n_rows, float(cast(float, self.df)))
+        else:
+            df_arr = np.array(self.df, dtype=float)
+            if df_arr.shape != (n_rows,):
+                raise ValueError(
+                    f"EventStudyResults field 'df' has shape {df_arr.shape}; "
+                    f"expected ({n_rows},) to align with event_time."
+                )
+        df_arr[~np.isfinite(self.p_value)] = np.nan
+        self.df = df_arr
+
         if (self.vcov is None) != (self.vcov_index is None):
             raise ValueError(
                 "EventStudyResults requires vcov and vcov_index together "
@@ -375,6 +408,9 @@ class EventStudyResults(BaseResults):
                 "cband_lower": self.cband_lower if self.cband_lower is not None else nan_col,
                 "cband_upper": self.cband_upper if self.cband_upper is not None else nan_col,
                 "n": self.n,
+                # __post_init__ guarantees an array; cast narrows the
+                # scalar-accepting field type for mypy.
+                "df": cast(np.ndarray, self.df),
                 "is_reference": self.is_reference,
             },
             columns=list(EVENT_STUDY_SCHEMA),
@@ -416,7 +452,7 @@ class EventStudyResults(BaseResults):
             "cband_crit_value": self.cband_crit_value,
             "alpha": self.alpha,
             "source": self.source,
-            "df": self.df,
+            "df": cast(np.ndarray, self.df).tolist(),
         }
         return out
 
@@ -657,6 +693,23 @@ def _from_relative_dict(results: Any) -> EventStudyResults:
     if vcov is None or vcov_index is None:
         vcov = vcov_index = None
 
+    # Per-row df provenance. Primary channel: `event_study_df` (scalar or
+    # {event_time: df} dict of the values actually passed to safe_inference;
+    # producers clear it when bootstrap overrides the stored inference).
+    # Fallback: CallawaySantAnna's bare-cluster `df_inference` - GATED on no
+    # bootstrap, because bare-cluster fits populate df_inference=G-1 even
+    # when n_bootstrap>0 replaced the stored ES p/CIs with percentile values
+    # that never used that df (and bootstrap p-values are finite, so the
+    # container's NaN-p masking cannot catch it).
+    df_src: Any = getattr(results, "event_study_df", None)
+    if df_src is None and getattr(results, "bootstrap_results", None) is None:
+        df_src = getattr(results, "df_inference", None)
+    df_arg: Optional[Union[float, np.ndarray]]
+    if isinstance(df_src, dict):
+        df_arg = np.array([float(df_src[k]) if k in df_src else np.nan for k in keys])
+    else:
+        df_arg = df_src
+
     return EventStudyResults(
         event_time=event_time,
         att=att,
@@ -677,7 +730,7 @@ def _from_relative_dict(results: Any) -> EventStudyResults:
         cband_crit_value=getattr(results, "cband_crit_value", None),
         alpha=getattr(results, "alpha", 0.05),
         source=type(results).__name__,
-        df=getattr(results, "df_inference", None),
+        df=df_arg,
     )
 
 
@@ -730,6 +783,16 @@ def _from_mpd(results: Any) -> EventStudyResults:
             vcov_sub = np.asarray(full_vcov, dtype=float)[np.ix_(idx, idx)]
             vcov_index_arr = np.asarray(covered)
 
+    # Per-period df: STRICTLY the `event_study_df` channel ({period: df}
+    # actually passed to safe_inference - per-period BM DOF under hc2_bm).
+    # `inference_df` is deliberately NOT a fallback here: it stores the
+    # POST-AVERAGE contrast df, which is the wrong provenance for the
+    # per-period rows under hc2_bm.
+    df_map = getattr(results, "event_study_df", None)
+    df_arg: Optional[np.ndarray] = None
+    if isinstance(df_map, dict):
+        df_arg = np.array([float(df_map[p]) if p in df_map else np.nan for p in all_periods])
+
     return EventStudyResults(
         event_time=np.asarray(all_periods),
         att=att,
@@ -748,6 +811,7 @@ def _from_mpd(results: Any) -> EventStudyResults:
         vcov_index=vcov_index_arr,
         alpha=getattr(results, "alpha", 0.05),
         source=type(results).__name__,
+        df=df_arg,
     )
 
 
@@ -777,6 +841,16 @@ def _from_lpdid(results: Any) -> EventStudyResults:
     n = np.array(frame["n_obs"], dtype=float)
     is_ref = horizons == -1
 
+    # Per-horizon df from the producer's `event_study_df` channel ({horizon:
+    # df actually passed to safe_inference} - cluster df or per-horizon
+    # survey df; NOT re-derivable from the frame, whose n_clusters column
+    # cannot recover the survey n_PSU - n_strata rule or the vcov-None
+    # guard). The synthetic horizon == -1 base row has no entry -> NaN.
+    df_map = getattr(results, "event_study_df", None)
+    df_arg: Optional[np.ndarray] = None
+    if isinstance(df_map, dict):
+        df_arg = np.array([float(df_map.get(int(h), np.nan)) for h in horizons])
+
     return EventStudyResults(
         event_time=horizons,
         att=att,
@@ -792,6 +866,7 @@ def _from_lpdid(results: Any) -> EventStudyResults:
         event_time_convention="e0_first_treated",
         alpha=getattr(results, "alpha", 0.05),
         source=type(results).__name__,
+        df=df_arg,
     )
 
 

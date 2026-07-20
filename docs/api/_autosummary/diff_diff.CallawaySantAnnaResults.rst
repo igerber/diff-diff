@@ -39,6 +39,7 @@
       ~CallawaySantAnnaResults.df_inference
       ~CallawaySantAnnaResults.epv_diagnostics
       ~CallawaySantAnnaResults.epv_threshold
+      ~CallawaySantAnnaResults.event_study_df
       ~CallawaySantAnnaResults.event_study_effects
       ~CallawaySantAnnaResults.event_study_vcov
       ~CallawaySantAnnaResults.event_study_vcov_index

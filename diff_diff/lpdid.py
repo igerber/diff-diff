@@ -588,6 +588,7 @@ class LPDiD:
             "conf_high": np.nan,
             "n_obs": n_obs,
             "n_clusters": np.nan,
+            "df": np.nan,
         }
         if n_obs == 0 or sample["_entry"].nunique() < 2:
             return empty_result
@@ -725,6 +726,9 @@ class LPDiD:
             "conf_high": conf_int[1],
             "n_obs": n_obs,
             "n_clusters": n_clusters,
+            # df provenance for the unified surface: the exact value handed
+            # to safe_inference above (NaN when None -> normal theory).
+            "df": float(df) if df is not None else np.nan,
         }
 
     def _estimate_sample(
@@ -756,6 +760,7 @@ class LPDiD:
             "conf_high": np.nan,
             "n_obs": n_obs,
             "n_clusters": np.nan,
+            "df": np.nan,
         }
 
         if n_obs == 0 or sample["_entry"].nunique() < 2:
@@ -848,6 +853,7 @@ class LPDiD:
                 "conf_high": np.nan,
                 "n_obs": n_obs,
                 "n_clusters": len(pd.unique(cluster_ids)),
+                "df": np.nan,
             }
 
         use_cluster_vcov = len(pd.unique(cluster_ids)) >= 2
@@ -899,6 +905,9 @@ class LPDiD:
             "conf_high": conf_int[1],
             "n_obs": n_obs,
             "n_clusters": n_clusters,
+            # df provenance for the unified surface: the exact value handed
+            # to safe_inference above (NaN when None -> normal theory).
+            "df": float(df) if df is not None else np.nan,
         }
 
     def _estimate_survey_sample(self, sample, design, response, column_names, n_obs, survey_design):
@@ -984,6 +993,10 @@ class LPDiD:
             "conf_high": conf_int[1],
             "n_obs": n_obs,
             "n_clusters": int(resolved.n_psu),
+            # df provenance for the unified surface: recorded iff the value
+            # governed a t-reference (finite, > 0; the df<=0 sentinel and
+            # None both yield non-t inference).
+            "df": (float(df) if df is not None and np.isfinite(df) and df > 0 else np.nan),
         }
 
     def _estimate_horizon(
@@ -1446,8 +1459,10 @@ class LPDiD:
         event_study = None
         pooled = None
 
+        event_study_df: Optional[Dict[int, float]] = None
         if not only_pooled:
             event_rows = []
+            event_study_df = {}
             for horizon in range(-self.pre_window, self.post_window + 1):
                 if horizon == -1:
                     estimate = {
@@ -1472,6 +1487,12 @@ class LPDiD:
                         absorb=absorb,
                         survey_design=survey_design,
                     )
+                # Pop the df provenance BEFORE building the frame row so the
+                # native event_study schema is unchanged; the synthetic
+                # horizon == -1 base row carries no df key and gets no entry.
+                _df_h = estimate.pop("df", None)
+                if _df_h is not None:
+                    event_study_df[horizon] = float(_df_h)
                 event_rows.append(
                     {
                         "horizon": horizon,
@@ -1507,6 +1528,11 @@ class LPDiD:
                 absorb=absorb,
                 survey_design=survey_design,
             )
+            # Discard the pooled windows' df provenance (native pooled frame
+            # schema unchanged; pooled-window df threading is a tracked
+            # follow-up in TODO.md).
+            pre_estimate.pop("df", None)
+            post_estimate.pop("df", None)
             pooled = pd.DataFrame(
                 [
                     {
@@ -1539,6 +1565,7 @@ class LPDiD:
         self.results_ = LPDiDResults(
             event_study=event_study,
             pooled=pooled,
+            event_study_df=event_study_df,
             n_obs=len(data),
             n_treated_units=int(treatment_by_unit.gt(0).sum()),
             n_control_units=int(treatment_by_unit.eq(0).sum()),

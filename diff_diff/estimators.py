@@ -2288,6 +2288,13 @@ class MultiPeriodDiD(DifferenceInDifferences):
         period_effects = {}
         post_effect_values = []
         post_effect_indices = []
+        # Per-period df PROVENANCE for the unified event-study surface
+        # (row M-092): the df actually handed to each period's
+        # safe_inference below. Distinct from `inference_df`, which stores
+        # the POST-AVERAGE contrast df - under hc2_bm the per-period BM
+        # DOFs differ from it, so broadcasting inference_df would
+        # misrepresent the per-period rows.
+        es_df_used: Dict[Any, float] = {}
 
         assert vcov is not None
         for period in non_ref_periods:
@@ -2305,6 +2312,11 @@ class MultiPeriodDiD(DifferenceInDifferences):
             else:
                 period_df = df
             t_stat, p_value, conf_int = safe_inference(effect, se, alpha=self.alpha, df=period_df)
+            es_df_used[period] = (
+                float(period_df)
+                if period_df is not None and np.isfinite(period_df) and period_df > 0
+                else float("nan")
+            )
 
             period_effects[period] = PeriodEffect(
                 period=period,
@@ -2400,6 +2412,7 @@ class MultiPeriodDiD(DifferenceInDifferences):
                 if _avg_df is not None and np.isfinite(_avg_df) and _avg_df > 0
                 else None
             ),
+            event_study_df=es_df_used,
         )
 
         self._coefficients = coefficients

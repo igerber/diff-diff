@@ -805,8 +805,12 @@ class StackedDiD:
 
         # ---- Extract event study effects ----
         event_study_effects: Optional[Dict[int, Dict[str, Any]]] = None
+        es_vcov: Optional[np.ndarray] = None
+        es_vcov_index: Optional[List[int]] = None
+        es_df_used: Optional[Dict[int, float]] = None
         if aggregate == "event_study":
             event_study_effects = {}
+            es_df_used = {}
             # Reference period (e = -1 - anticipation)
             event_study_effects[ref_period] = {
                 "effect": 0.0,
@@ -846,10 +850,20 @@ class StackedDiD:
                     t_stat = float("nan")
                     p_value = float("nan")
                     conf_int = (float("nan"), float("nan"))
+                    # No safe_inference call happened -> no df provenance.
+                    es_df_used[h] = float("nan")
                 else:
                     _df_eff = _bm_df if _bm_df is not None else _survey_df
                     t_stat, p_value, conf_int = safe_inference(
                         effect, se, alpha=self.alpha, df=_df_eff
+                    )
+                    # Record the df actually handed to safe_inference iff it
+                    # governed a t-reference (finite, > 0); None (normal
+                    # theory) and the df<=0 sentinels record NaN.
+                    es_df_used[h] = (
+                        float(_df_eff)
+                        if _df_eff is not None and np.isfinite(_df_eff) and _df_eff > 0
+                        else float("nan")
                     )
                 n_obs_h = int(np.sum((et_vals == h) & (d_vals == 1)))
                 event_study_effects[h] = {
@@ -860,6 +874,17 @@ class StackedDiD:
                     "conf_int": conf_int,
                     "n_obs": n_obs_h,
                 }
+
+            # Persist the event-time sub-block of the pooled-regression VCV
+            # (the reported ES SEs are exactly its diagonal in every
+            # inference mode - analytical sandwich, replicate refit, and
+            # survey TSL all reassign `vcov` before this block). The
+            # reference period is synthesized, never a regression column, so
+            # the index is the ESTIMATED event times only.
+            if event_times:
+                _delta_cols = [interaction_indices[h] for h in event_times]
+                es_vcov = vcov[np.ix_(_delta_cols, _delta_cols)]
+                es_vcov_index = [int(h) for h in event_times]
 
         # ---- Compute overall ATT ----
         # Average of post-treatment delta_h coefficients with delta-method SE
@@ -945,6 +970,9 @@ class StackedDiD:
             balance=self.balance,
             covariates=list(covariates) if balancing else None,
             balance_diagnostics=balance_diagnostics,
+            event_study_vcov=es_vcov,
+            event_study_vcov_index=es_vcov_index,
+            event_study_df=es_df_used,
         )
 
         self.is_fitted_ = True

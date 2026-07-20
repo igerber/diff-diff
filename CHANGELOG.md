@@ -20,6 +20,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   are unchanged; the renamed section fragments are kept backward-compatible by a
   client-side redirect (`docs/_static/legacy-fragment-redirect.js`) that rewrites old
   `#3.-Fit-Event-Study`-style deep links to their unnumbered targets.
+- **Unified event-study surface: full VCV persistence for StackedDiD/TwoStageDiD +
+  per-row `df` provenance (4.0 program Phase 2, ledger row M-092 follow-up).**
+  (a) `StackedDiDResults` and `TwoStageDiDResults` gain `event_study_vcov` /
+  `event_study_vcov_index`: the full event-study covariance both estimators already
+  computed internally (pooled-regression sub-block / Gardner-GMM matrix) is now
+  persisted and threaded onto `EventStudyResults.vcov`, mirroring the existing
+  CallawaySantAnna/SunAbraham fields. StackedDiD persists in every inference mode (its
+  reported ES SEs are always the matrix diagonal); TwoStageDiD persists on the
+  analytical paths and ships `None` under bootstrap (percentile inference, no
+  covariance) and replicate-weight survey designs (mixed-layout replicate VCV - CS
+  precedent). (b) `EventStudyResults.df` is now PER-ROW (float array aligned to
+  `event_time`, NaN where no df governed the stored p-value/CI; scalar inputs
+  broadcast), and joins the pinned `to_dataframe()` schema between `n` and
+  `is_reference` - an unreleased-schema change, made before `aggregate()` exposes the
+  surface publicly. Three producers genuinely need per-row df: StackedDiD `hc2_bm`
+  (per-event Bell-McCaffrey Satterthwaite df), MultiPeriodDiD `hc2_bm` (per-period BM
+  df - its `inference_df` field stores only the post-average contrast df), and LPDiD
+  (per-horizon realized cluster df). (c) New `event_study_df` provenance channels
+  record the df each event-study row's `safe_inference` actually received:
+  `CallawaySantAnnaResults` (scalar; G-1 on bare-cluster fits, the conservative
+  min-across-horizons effective df on explicit-survey fits - `df_inference` and its
+  narrow HonestDiD contract are untouched), `MultiPeriodDiDResults` (per-period dict),
+  `StackedDiDResults` (per-event dict), `TwoStageDiDResults` (scalar survey df),
+  `LPDiDResults` (per-horizon dict). All channels clear under bootstrap overrides.
+  SunAbraham/dCDH df threading is tracked in TODO.md; their surfaces show df=NaN
+  ("unexposed").
 - **ImputationDiD leave-one-out SE now anchored against Stata `did_imputation, leaveout`
   (no library behavior change).** The Borusyak-Jaravel-Spiess (2024) App. A.9 LOO variance
   (`leave_one_out=True`) has no runnable R reference (R `didimputation` omits LOO), so it
@@ -56,6 +82,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   **Estimator equations, weighting, variance, and numerical output are unchanged.**
 
 ### Changed
+- **DiagnosticReport's parallel-trends check upgrades from the Bonferroni fallback to
+  the joint Wald test for StackedDiD and TwoStageDiD event-study fits.** The check's
+  joint-Wald path runs whenever the source fit exposes `event_study_vcov`; now that
+  both estimators persist theirs (see Added), their pre-period tests use the full
+  covariance instead of per-coefficient Bonferroni. All-filtered TwoStageDiD horizons
+  (NaN VCV rows) are excluded from the tested family by the existing undefined-
+  inference collector, so the joint statistic is never computed through NaN entries.
+  Two accompanying guards keep the new path methodology-safe: (1) the joint-Wald
+  path now fail-closes on provenance - if any retained pre-period row carries a
+  non-finite p-value (hc2_bm Bell-McCaffrey DOF failure, collapsed replicate-survey
+  df), the check returns `inconclusive` instead of publishing a finite verdict
+  through inference the estimator refused to produce; (2) `vcov_type="hc2_bm"`
+  source fits skip the generic chi-square joint Wald entirely (it would discard the
+  CR2/BM small-sample correction; the multi-constraint AHT/HTZ CR2 test is tracked
+  in DEFERRED.md) and run Bonferroni over the BM-adjusted per-row p-values. See
+  REPORTING.md "hc2_bm parallel-trends policy".
 - **Diagnostic input validation in the report consumers (4.0 program Phase 2).**
   `BusinessReport`, `practitioner_next_steps`, and `DiagnosticReport` now route
   diagnostics by the new `Diagnostic` marker instead of by result-class name. Passing a

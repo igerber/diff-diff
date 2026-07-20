@@ -32,6 +32,7 @@
       ~LPDiDResults.covariates
       ~LPDiDResults.dylags
       ~LPDiDResults.estimand
+      ~LPDiDResults.event_study_df
       ~LPDiDResults.n_clusters
       ~LPDiDResults.n_psu
       ~LPDiDResults.n_strata

@@ -1823,9 +1823,11 @@ class TwoStageDiD(TwoStageDiDBootstrapMixin):
         # Event study and group aggregation (full-sample, for point estimates)
         event_study_effects = None
         group_effects = None
+        _es_vcov_ts: Optional[np.ndarray] = None
+        _es_vcov_index_ts: Optional[List[int]] = None
 
         if aggregate in ("event_study", "all"):
-            event_study_effects = self._stage2_event_study(
+            event_study_effects, _es_vcov_ts, _es_vcov_index_ts = self._stage2_event_study(
                 df=df,
                 unit=unit,
                 time=time,
@@ -1956,7 +1958,9 @@ class TwoStageDiD(TwoStageDiDBootstrapMixin):
                 results.append(att_r)
 
                 if _sorted_es_periods_ts:
-                    es_r = self._stage2_event_study(
+                    # Replicate refits only need the point effects; the
+                    # per-replicate V is irrelevant to the refit variance.
+                    es_r, _, _ = self._stage2_event_study(
                         df=df_tmp,
                         unit=unit,
                         time=time,
@@ -2172,6 +2176,40 @@ class TwoStageDiD(TwoStageDiDBootstrapMixin):
             _cluster_name_for_results = self.cluster if self.cluster is not None else unit
             _n_clusters_for_results = int(np.unique(df[cluster_var].values).size)
 
+        # Event-study VCV / df persistence, gated by inference mode (spec
+        # section 5, row M-092). Persist the analytical GMM matrix only when
+        # the stored ES SEs are actually its diagonal:
+        # - replicate-weight survey: reported SEs come from _vcov_rep_ts's
+        #   [overall, ES, groups] layout (filtered/Prop-5 horizons absent) -
+        #   ship vcov=None (CS precedent) but thread the final _survey_df
+        #   that every recomputed ES row's safe_inference used;
+        # - bootstrap: percentile p/CIs replaced the analytical inference and
+        #   no bootstrap covariance exists - clear both vcov and df;
+        # - otherwise: persist V + est_horizons; the scalar _survey_df (None
+        #   on non-survey fits -> normal theory -> no df recorded) is the df
+        #   every estimated row's safe_inference received.
+        _es_df_scalar: Optional[float] = (
+            float(_survey_df)
+            if _survey_df is not None and np.isfinite(_survey_df) and _survey_df > 0
+            else None
+        )
+        if _uses_replicate_ts:
+            _es_vcov_final: Optional[np.ndarray] = None
+            _es_vcov_index_final: Optional[List[int]] = None
+            _es_df_final = _es_df_scalar
+        elif bootstrap_results is not None:
+            _es_vcov_final = None
+            _es_vcov_index_final = None
+            _es_df_final = None
+        else:
+            _es_vcov_final = _es_vcov_ts
+            _es_vcov_index_final = _es_vcov_index_ts
+            _es_df_final = _es_df_scalar
+        if event_study_effects is None:
+            _es_vcov_final = None
+            _es_vcov_index_final = None
+            _es_df_final = None
+
         # Construct results
         self.results_ = TwoStageDiDResults(
             treatment_effects=treated_df,
@@ -2196,6 +2234,9 @@ class TwoStageDiD(TwoStageDiDBootstrapMixin):
             vcov_type=self.vcov_type,
             cluster_name=_cluster_name_for_results,
             n_clusters=_n_clusters_for_results,
+            event_study_vcov=_es_vcov_final,
+            event_study_vcov_index=_es_vcov_index_final,
+            event_study_df=_es_df_final,
         )
 
         self.is_fitted_ = True
@@ -2505,8 +2546,19 @@ class TwoStageDiD(TwoStageDiDBootstrapMixin):
         score_pad_mask: Optional[np.ndarray] = None,
         cluster_ids_full: Optional[np.ndarray] = None,
         warn_nan: bool = True,
-    ) -> Dict[int, Dict[str, Any]]:
-        """Event study Stage 2: OLS of y_tilde on relative-time dummies."""
+    ) -> Tuple[Dict[int, Dict[str, Any]], Optional[np.ndarray], Optional[List[int]]]:
+        """Event study Stage 2: OLS of y_tilde on relative-time dummies.
+
+        Returns ``(effects, vcov, vcov_index)``: the per-horizon effects
+        dict, the full GMM variance-covariance matrix over the ESTIMATED
+        horizon coefficients, and the horizon labels ordering its
+        rows/columns. The reference period and Proposition-5 horizons are
+        never regression columns, so they appear in ``effects`` but not in
+        ``vcov_index``; all-filtered horizons (n_obs == 0) ARE columns,
+        with NaN-filled rows/columns from the rank guard. ``(dict, None,
+        None)`` on the degenerate early returns that fit no Stage-2
+        regression.
+        """
         y_tilde = df["_y_tilde"].values.copy()
         nan_mask = self._mask_nan_ytilde(y_tilde, warn=warn_nan)
         rel_times = df["_rel_time"].values
@@ -2541,16 +2593,20 @@ class TwoStageDiD(TwoStageDiDBootstrapMixin):
                     UserWarning,
                     stacklevel=2,
                 )
-                return {
-                    ref_period: {
-                        "effect": 0.0,
-                        "se": 0.0,
-                        "t_stat": np.nan,
-                        "p_value": np.nan,
-                        "conf_int": (0.0, 0.0),
-                        "n_obs": 0,
-                    }
-                }
+                return (
+                    {
+                        ref_period: {
+                            "effect": 0.0,
+                            "se": 0.0,
+                            "t_stat": np.nan,
+                            "p_value": np.nan,
+                            "conf_int": (0.0, 0.0),
+                            "n_obs": 0,
+                        }
+                    },
+                    None,
+                    None,
+                )
             balance_mask = df[first_treat].isin(balanced_cohorts).values
         else:
             balance_mask = np.ones(n, dtype=bool)
@@ -2591,16 +2647,20 @@ class TwoStageDiD(TwoStageDiDBootstrapMixin):
 
         if len(est_horizons) == 0:
             # No horizons to estimate — return just reference period
-            return {
-                ref_period: {
-                    "effect": 0.0,
-                    "se": 0.0,
-                    "t_stat": np.nan,
-                    "p_value": np.nan,
-                    "conf_int": (0.0, 0.0),
-                    "n_obs": 0,
-                }
-            }
+            return (
+                {
+                    ref_period: {
+                        "effect": 0.0,
+                        "se": 0.0,
+                        "t_stat": np.nan,
+                        "p_value": np.nan,
+                        "conf_int": (0.0, 0.0),
+                        "n_obs": 0,
+                    }
+                },
+                None,
+                None,
+            )
 
         # Build Stage 2 design: one column per horizon (no intercept)
         # Never-treated obs get all-zero rows (undefined relative time -> NaN)
@@ -2706,7 +2766,7 @@ class TwoStageDiD(TwoStageDiDBootstrapMixin):
                 stacklevel=2,
             )
 
-        return event_study_effects
+        return event_study_effects, V, [int(h) for h in est_horizons]
 
     def _stage2_group(
         self,

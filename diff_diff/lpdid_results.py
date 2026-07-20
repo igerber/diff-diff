@@ -53,6 +53,16 @@ class LPDiDResults(BaseResults):
     survey_metadata: Optional[Any] = None
     n_strata: Optional[int] = None
     n_psu: Optional[int] = None
+    # event_study_df (spec section 5, row M-092): per-horizon df PROVENANCE -
+    # maps each estimated horizon to the df actually passed to its
+    # safe_inference (realized ``n_clusters - 1`` on the cluster/RA paths,
+    # the per-horizon-sample survey df ``n_PSU - n_strata`` under a survey
+    # design; NaN when the row used normal theory or an undefined df). Not
+    # derivable from the frames: the survey rule needs the per-sample
+    # n_strata and the cluster rule is gated on a successful vcov, neither
+    # of which the native tables record. The synthetic ``horizon == -1``
+    # base row has no entry. None when no event study was fit.
+    event_study_df: Optional[Dict[int, float]] = None
 
     # ------------------------------------------------------------------
     # internal helpers

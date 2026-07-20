@@ -152,6 +152,22 @@ class TwoStageDiDResults(BaseResults):
     vcov_type: str = "hc1"
     cluster_name: Optional[str] = None
     n_clusters: Optional[int] = None
+    # --- Unified event-study surface support (spec section 5, row M-092) ---
+    # event_study_vcov: the full Gardner-GMM covariance over the ESTIMATED
+    # horizon coefficients, ordered by event_study_vcov_index. The reference
+    # period and Proposition-5 horizons are never Stage-2 regression columns,
+    # so they appear in event_study_effects but not here; all-filtered
+    # horizons (n_obs == 0) ARE columns, carrying the rank guard's NaN
+    # rows/columns (consistent with their NaN marginal SEs). Both are None
+    # under bootstrap (percentile inference, no covariance) and under
+    # replicate-weight survey designs (the replicate VCV has a mixed
+    # [overall, ES, groups] layout; not persisted - CS precedent).
+    # event_study_df: the scalar df every estimated ES row's safe_inference
+    # received (the survey df; None on non-survey fits -> normal theory, and
+    # None under bootstrap where the stored inference never used a df).
+    event_study_vcov: Optional[np.ndarray] = field(default=None, repr=False)
+    event_study_vcov_index: Optional[List[int]] = field(default=None, repr=False)
+    event_study_df: Optional[float] = field(default=None, repr=False)
 
     # --- Inference-field aliases (balance/external-adapter compatibility) ---
     @property

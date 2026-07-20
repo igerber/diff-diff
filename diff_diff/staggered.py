@@ -1851,8 +1851,11 @@ class CallawaySantAnna(
         if not (0 < self.pscore_trim < 0.5):
             raise ValueError(f"pscore_trim must be in (0, 0.5), got {self.pscore_trim}")
 
-        # Reset stale state from prior fit (prevents leaking event-study VCV)
+        # Reset stale state from prior fit (prevents leaking event-study VCV
+        # and its df provenance across fits / non-ES aggregates / the ES
+        # empty-result early return)
         self._event_study_vcov = None
+        self._event_study_df_used: Optional[float] = None
 
         # Tracker for _safe_inv lstsq fallbacks across all analytical SE
         # paths (PS Hessian, OR bread, event-study bread, etc.). Emit ONE
@@ -2816,6 +2819,12 @@ class CallawaySantAnna(
         if bootstrap_results is not None and event_study_vcov is not None:
             event_study_vcov = None
             event_study_vcov_index = None
+        # Same clearing rule for the ES df provenance: bootstrap replaces the
+        # stored ES se/p/CI with percentile values that never used the
+        # analytical df, so surfacing it would be false provenance.
+        event_study_df = getattr(self, "_event_study_df_used", None)
+        if bootstrap_results is not None:
+            event_study_df = None
 
         # Resolve canonical cluster_name + n_clusters for Results metadata.
         # Canonical PSU column wins when explicit: if survey_design has
@@ -2881,6 +2890,7 @@ class CallawaySantAnna(
             pscore_trim=self.pscore_trim,
             survey_metadata=survey_metadata,
             event_study_vcov=event_study_vcov,
+            event_study_df=event_study_df,
             event_study_vcov_index=event_study_vcov_index,
             panel=self.panel,
             allow_unbalanced_panel=self.allow_unbalanced_panel,

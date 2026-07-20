@@ -2971,3 +2971,367 @@ class TestSpilloverDiDDiagnosticReportRouting:
 def test_public_api_exports():
     for name in ("DiagnosticReport", "DiagnosticReportResults", "DIAGNOSTIC_REPORT_SCHEMA_VERSION"):
         assert hasattr(dd, name), f"diff_diff must export {name}"
+
+
+# ---------------------------------------------------------------------------
+# ES-VCV consumers: Stacked/TwoStage now expose event_study_vcov (M-092
+# follow-up), upgrading the parallel-trends check from the Bonferroni
+# fallback to the joint-Wald path. Intended behavior change, CHANGELOG'd.
+# ---------------------------------------------------------------------------
+class TestStackedTwoStageJointWaldUpgrade:
+    @staticmethod
+    def _panel(seed=42):
+        rng = np.random.default_rng(seed)
+        rows = []
+        for u in range(60):
+            g = [4, 6, 0][u % 3]
+            for t in range(1, 11):
+                y = 1.0 + 0.1 * t + u * 0.01 + (1.5 if g and t >= g else 0.0) + rng.normal(0, 0.3)
+                rows.append({"unit": u, "time": t, "outcome": y, "first_treat": g})
+        return pd.DataFrame(rows)
+
+    def test_stacked_pt_check_uses_joint_wald(self):
+        from diff_diff import StackedDiD
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            res = StackedDiD(kappa_pre=2, kappa_post=2).fit(
+                self._panel(),
+                outcome="outcome",
+                unit="unit",
+                time="time",
+                first_treat="first_treat",
+                aggregate="event_study",
+            )
+            rep = DiagnosticReport(res).run_all()
+        pt = rep.to_dict()["parallel_trends"]
+        assert pt["method"] == "joint_wald_event_study", (
+            f"StackedDiD persists its full ES VCV; the PT check must take the "
+            f"joint-Wald path, got {pt.get('method')}"
+        )
+        assert np.isfinite(pt["joint_p_value"])
+
+    def test_two_stage_nan_vcov_row_excluded_from_pt_family(self):
+        # Induce REAL Path-B horizons (two_stage.py all-filtered branch):
+        # balance_e=4 drops cohort 7 (unobserved through e=4) AFTER the
+        # horizon grid is built from all rows, so its exclusive deep
+        # pre-horizons (-6, -5) stay estimated Stage-2 columns whose rows
+        # are all balance-filtered -> NaN effect/SE and rank-guard NaN
+        # rows/cols in the persisted VCV. The PT check must EXCLUDE those
+        # horizons from the tested family and run the joint Wald on the
+        # finite pre-period sub-block - never compute a statistic THROUGH
+        # the NaN covariance entries.
+        from diff_diff.two_stage import TwoStageDiD
+
+        rng = np.random.default_rng(9)
+        rows = []
+        for u in range(90):
+            g = [5, 7, 0][u % 3]
+            for t in range(1, 11):
+                y = 1.0 + 0.1 * t + u * 0.01 + (1.0 if g and t >= g else 0.0) + rng.normal(0, 0.3)
+                rows.append(
+                    {
+                        "unit": u,
+                        "time": t,
+                        "outcome": y,
+                        "first_treat": g if g else np.nan,
+                    }
+                )
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            res = TwoStageDiD(pretrends=True).fit(
+                pd.DataFrame(rows),
+                outcome="outcome",
+                unit="unit",
+                time="time",
+                first_treat="first_treat",
+                aggregate="event_study",
+                balance_e=4,
+            )
+        # Path-B precondition: -6 is an estimated column with NaN inference
+        # and a NaN-filled VCV row; finite pre-periods {-4, -3, -2} remain.
+        assert res.event_study_effects[-6]["n_obs"] == 0
+        assert not np.isfinite(res.event_study_effects[-6]["se"])
+        idx = res.event_study_vcov_index
+        assert -6 in idx and -4 in idx
+        pos = idx.index(-6)
+        assert np.isnan(res.event_study_vcov[pos, :]).all()
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            rep = DiagnosticReport(res).run_all()
+        pt = rep.to_dict()["parallel_trends"]
+        assert pt["status"] == "ran"
+        # Joint Wald ran on the FINITE pre-period family only: the Path-B
+        # horizons (NaN se) are excluded by the collector, so the tested
+        # block is finite and the p-value is a real number, never
+        # NaN-contaminated by the excluded rows of the matrix.
+        assert pt["method"] == "joint_wald_event_study"
+        assert np.isfinite(pt["joint_p_value"])
+        tested = {row["period"] for row in pt["per_period"]}
+        assert tested == {-4, -3, -2}
+        assert pt["df"] == 3
+
+    @staticmethod
+    def _hc2bm_fit(monkeypatch=None):
+        from diff_diff import StackedDiD
+
+        rng = np.random.default_rng(42)
+        rows = []
+        for u in range(60):
+            g = [4, 6, 0][u % 3]
+            for t in range(1, 11):
+                y = 1.0 + 0.1 * t + u * 0.01 + (1.5 if g and t >= g else 0.0) + rng.normal(0, 0.3)
+                rows.append({"unit": u, "time": t, "outcome": y, "first_treat": g})
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            return StackedDiD(kappa_pre=2, kappa_post=2, vcov_type="hc2_bm").fit(
+                pd.DataFrame(rows),
+                outcome="outcome",
+                unit="unit",
+                time="time",
+                first_treat="first_treat",
+                aggregate="event_study",
+            )
+
+    def test_stacked_hc2_bm_fail_closed_pt_is_inconclusive(self, monkeypatch):
+        # Provenance-laundering regression: when the BM contrast
+        # DOF is unavailable, StackedDiD fails closed (finite effect/SE,
+        # deliberately-NaN t/p/CI) but the persisted covariance stays
+        # finite. The joint-Wald path consumes only effects + covariance,
+        # so without the provenance guard it would publish a finite joint
+        # p-value for inference the estimator refused to produce.
+        import diff_diff.linalg as _linalg
+
+        def _broken(*args, **kwargs):
+            raise ValueError("forced BM failure")
+
+        monkeypatch.setattr(_linalg, "_compute_cr2_bm_contrast_dof", _broken)
+        res = self._hc2bm_fit()
+        # Fail-closed precondition: finite effect/SE, NaN p, finite vcov.
+        pre = res.event_study_effects[-2]
+        assert np.isfinite(pre["effect"]) and np.isfinite(pre["se"])
+        assert not np.isfinite(pre["p_value"])
+        assert res.event_study_vcov is not None
+        assert np.isfinite(np.diag(res.event_study_vcov)).all()
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            pt = DiagnosticReport(res).run_all().to_dict()["parallel_trends"]
+        assert pt["method"] == "inconclusive"
+        assert pt["verdict"] == "inconclusive"
+        assert pt["joint_p_value"] is None
+        assert pt["n_dropped_undefined"] >= 1
+
+    def test_stacked_hc2_bm_routes_to_bonferroni_not_chi_square_wald(self):
+        # Healthy hc2_bm fit: every pre-row's p-value is BM-adjusted. The
+        # generic chi-square joint Wald would discard that small-sample
+        # correction, so the PT check must use Bonferroni over the
+        # BM-adjusted per-row p-values despite the persisted covariance
+        # (REPORTING.md "hc2_bm parallel-trends policy"; AHT/HTZ tracked in
+        # DEFERRED.md).
+        res = self._hc2bm_fit()
+        assert res.event_study_vcov is not None
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            pt = DiagnosticReport(res).run_all().to_dict()["parallel_trends"]
+        assert pt["method"] == "bonferroni"
+        assert np.isfinite(pt["joint_p_value"])
+
+    def test_vcov_backed_nan_p_rows_force_inconclusive(self):
+        # Construction-level twin of the hc2_bm case for the collapsed
+        # replicate-survey df mode: retained pre-rows with finite
+        # effect/SE, NaN p (safe_inference df<=0 sentinel), and a persisted
+        # finite covariance. The joint-Wald provenance guard must return
+        # inconclusive, never a finite p through the covariance.
+        class _FakeCovBacked:
+            alpha = 0.05
+            vcov_type = "hc1"
+            event_study_effects = {
+                -3: {
+                    "effect": 0.10,
+                    "se": 0.05,
+                    "t_stat": np.nan,
+                    "p_value": np.nan,
+                    "conf_int": (np.nan, np.nan),
+                    "n_obs": 40,
+                },
+                -2: {
+                    "effect": 0.05,
+                    "se": 0.04,
+                    "t_stat": 1.25,
+                    "p_value": 0.21,
+                    "conf_int": (-0.03, 0.13),
+                    "n_obs": 40,
+                },
+                -1: {
+                    "effect": 0.0,
+                    "se": 0.0,
+                    "t_stat": np.nan,
+                    "p_value": np.nan,
+                    "conf_int": (np.nan, np.nan),
+                    "n_obs": 0,
+                },
+                0: {
+                    "effect": 0.9,
+                    "se": 0.1,
+                    "t_stat": 9.0,
+                    "p_value": 0.0,
+                    "conf_int": (0.7, 1.1),
+                    "n_obs": 40,
+                },
+            }
+            event_study_vcov = np.array(
+                [[0.0025, 0.0002, 0.0001], [0.0002, 0.0016, 0.0002], [0.0001, 0.0002, 0.01]]
+            )
+            event_study_vcov_index = [-3, -2, 0]
+
+        from diff_diff.diagnostic_report import DiagnosticReport as _DR
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            pt = _DR(_FakeCovBacked())._pt_event_study()
+        assert pt["method"] == "inconclusive"
+        assert pt["joint_p_value"] is None
+        assert pt["n_dropped_undefined"] == 1
+
+    @staticmethod
+    def _low_cluster_panel():
+        # 12 clusters, one cohort at t=14 with a 12-lead pre window: the
+        # cluster-sandwich covariance has rank bounded by the cluster-score
+        # dimension, so the retained pre-period block is SINGULAR (rank <
+        # n_pre) - the normal low-G/high-lead edge case.
+        rng = np.random.default_rng(3)
+        rows = []
+        for u in range(12):
+            g = 14 if u % 2 == 0 else 0
+            for t in range(1, 18):
+                y = 1.0 + 0.05 * t + u * 0.05 + (1.0 if g and t >= g else 0.0) + rng.normal(0, 0.3)
+                rows.append({"unit": u, "time": t, "outcome": y, "first_treat": g})
+        return pd.DataFrame(rows)
+
+    def test_stacked_singular_vcov_downgrades_to_bonferroni(self):
+        from diff_diff import StackedDiD
+
+        data = self._low_cluster_panel()
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            res = StackedDiD(kappa_pre=12, kappa_post=2).fit(
+                data,
+                outcome="outcome",
+                unit="unit",
+                time="time",
+                first_treat="first_treat",
+                aggregate="event_study",
+            )
+        # Precondition: the retained pre-period block is genuinely singular.
+        V = res.event_study_vcov
+        idx = res.event_study_vcov_index
+        pre_idx = [i for i, h in enumerate(idx) if h < -1]
+        sub = V[np.ix_(pre_idx, pre_idx)]
+        sub = 0.5 * (sub + sub.T)
+        assert np.linalg.matrix_rank(sub) < len(pre_idx)
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            pt = DiagnosticReport(res).run_all().to_dict()["parallel_trends"]
+        # Rank guard: never a Wald statistic through the singular block -
+        # the unguarded quadratic form here is ~ -2.5e14 with chi2 p=1.0.
+        assert pt["method"] == "bonferroni"
+        assert pt["test_statistic"] is None
+        assert np.isfinite(pt["joint_p_value"])
+
+    def test_two_stage_singular_vcov_downgrades_to_bonferroni(self):
+        from diff_diff.two_stage import TwoStageDiD
+
+        data = self._low_cluster_panel()
+        data["first_treat"] = data["first_treat"].replace(0, np.nan)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            res = TwoStageDiD(pretrends=True).fit(
+                data,
+                outcome="outcome",
+                unit="unit",
+                time="time",
+                first_treat="first_treat",
+                aggregate="event_study",
+            )
+        V = res.event_study_vcov
+        idx = res.event_study_vcov_index
+        pre_idx = [i for i, h in enumerate(idx) if h < -1 and np.isfinite(V[i, i])]
+        sub = V[np.ix_(pre_idx, pre_idx)]
+        sub = 0.5 * (sub + sub.T)
+        assert np.linalg.matrix_rank(sub) < len(pre_idx)
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            pt = DiagnosticReport(res).run_all().to_dict()["parallel_trends"]
+        assert pt["method"] == "bonferroni"
+        assert pt["test_statistic"] is None
+        assert np.isfinite(pt["joint_p_value"])
+
+    def test_joint_wald_never_negative_statistic(self):
+        # Belt-and-braces contract: a Wald statistic is a PSD quadratic
+        # form. Feed a singular-but-finite covariance directly through the
+        # event-study path and assert the guard rejects it rather than
+        # reporting a negative statistic as chi-square p=1.0.
+        rng = np.random.default_rng(0)
+        A = rng.normal(size=(3, 2))
+        V = A @ A.T  # PSD, rank 2 < 3
+
+        class _FakeSingular:
+            alpha = 0.05
+            vcov_type = "hc1"
+            event_study_effects = {
+                -4: {
+                    "effect": 0.10,
+                    "se": float(np.sqrt(V[0, 0])),
+                    "t_stat": 1.0,
+                    "p_value": 0.3,
+                    "conf_int": (-0.1, 0.3),
+                    "n_obs": 40,
+                },
+                -3: {
+                    "effect": 0.05,
+                    "se": float(np.sqrt(V[1, 1])),
+                    "t_stat": 0.5,
+                    "p_value": 0.6,
+                    "conf_int": (-0.1, 0.2),
+                    "n_obs": 40,
+                },
+                -2: {
+                    "effect": -0.07,
+                    "se": float(np.sqrt(V[2, 2])),
+                    "t_stat": -0.7,
+                    "p_value": 0.5,
+                    "conf_int": (-0.2, 0.1),
+                    "n_obs": 40,
+                },
+                -1: {
+                    "effect": 0.0,
+                    "se": 0.0,
+                    "t_stat": np.nan,
+                    "p_value": np.nan,
+                    "conf_int": (np.nan, np.nan),
+                    "n_obs": 0,
+                },
+                0: {
+                    "effect": 0.9,
+                    "se": 0.1,
+                    "t_stat": 9.0,
+                    "p_value": 0.0,
+                    "conf_int": (0.7, 1.1),
+                    "n_obs": 40,
+                },
+            }
+            event_study_vcov = V
+            event_study_vcov_index = [-4, -3, -2]
+
+        from diff_diff.diagnostic_report import DiagnosticReport as _DR2
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            pt = _DR2(_FakeSingular())._pt_event_study()
+        assert pt["method"] == "bonferroni"
+        stat = pt["test_statistic"]
+        assert stat is None or stat >= 0.0
