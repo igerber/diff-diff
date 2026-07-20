@@ -263,6 +263,15 @@ def main(argv: "list[str] | None" = None) -> int:
     args = p.parse_args(argv)
     os.makedirs(args.scratch, exist_ok=True)
 
+    # Truncate the run-lists up front. The scratch dir is deterministic and reused, and
+    # an early failure (exit 3/4) returns before the lists are (re)written — so clear
+    # them now, or a prior run's stale lists could drive pytest/nbmake over unrelated
+    # files. They are repopulated only on the success path below.
+    run_tests_path = os.path.join(args.scratch, "run-tests.z")
+    run_notebooks_path = os.path.join(args.scratch, "run-notebooks.z")
+    open(run_tests_path, "w").close()
+    open(run_notebooks_path, "w").close()
+
     try:
         status = _changed_with_status(args.range_spec)
     except GitError as exc:
@@ -338,9 +347,9 @@ def main(argv: "list[str] | None" = None) -> int:
     ordered = sorted(to_run)
 
     notebooks = [n for n in cats["notebooks"] if safe.get(n) != "D"]
-    with open(os.path.join(args.scratch, "run-tests.z"), "w", encoding="utf-8") as fh:
+    with open(run_tests_path, "w", encoding="utf-8") as fh:
         fh.write("\0".join(ordered))
-    with open(os.path.join(args.scratch, "run-notebooks.z"), "w", encoding="utf-8") as fh:
+    with open(run_notebooks_path, "w", encoding="utf-8") as fh:
         fh.write("\0".join(notebooks))
 
     print(f"\nResolved {len(ordered)} test file(s) and {len(notebooks)} notebook(s).")

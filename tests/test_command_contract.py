@@ -86,6 +86,28 @@ def test_submit_pr_has_no_raw_value_interpolation():
     assert not re.search(r'--(branch|base) "\$RAW', text)
 
 
+def test_submit_pr_has_zero_diff_guard():
+    """submit-pr must guard against a clean zero-commits-ahead branch (else it creates
+    and pushes a useless branch, then gh pr create fails on an empty diff). The idempotent
+    reframe removed the blanket 'nothing to submit' exit; the guard must be scoped to
+    'zero commits ahead of base'."""
+    text = _read("submit-pr.md")
+    assert re.search(
+        r'rev-list --count "\$BASE_REMOTE/\$BASE_BRANCH\.\.HEAD"', text
+    ), "submit-pr must compare HEAD to the base to detect a zero-diff branch"
+    assert "Nothing to submit" in text, "submit-pr must still exit on a genuine zero-diff"
+
+
+def test_submit_pr_idempotency_check_compares_base_and_draft():
+    """The existing-PR idempotency check must not treat ANY open PR as success — it must
+    compare baseRefName/isDraft so a PR targeting a different base/draft isn't a silent
+    false match."""
+    text = _read("submit-pr.md")
+    assert (
+        "baseRefName" in text and "isDraft" in text
+    ), "submit-pr's gh pr view idempotency check must compare base and draft state"
+
+
 def test_submit_pr_no_base_range_command_before_validation():
     """The raw --base must not reach a shell before pr_prepare.py validates it. No git
     command performing a base `..` range may appear, in any bash block, before the

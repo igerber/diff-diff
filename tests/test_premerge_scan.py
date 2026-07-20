@@ -315,7 +315,8 @@ def test_parse_name_status_z(mod):
 
 
 def test_git_error_fails_closed(mod, tmp_path, monkeypatch):
-    """A bad range (git error) must exit non-zero, not report 0 findings (CQ-2)."""
+    """A bad range (git error) must exit non-zero, not report 0 findings (CQ-2), and
+    must not leave STALE run-lists in the reused scratch dir (CI review P2)."""
     repo = tmp_path / "r"
     repo.mkdir()
     _init_repo(repo)
@@ -324,5 +325,12 @@ def test_git_error_fails_closed(mod, tmp_path, monkeypatch):
     subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
     subprocess.run(["git", "commit", "-q", "-m", "base"], cwd=repo, check=True)
 
-    rc = mod.main(["--scratch", str(repo / "s"), "--range", "nonexistent-ref..HEAD"])
+    scratch = repo / "s"
+    # Seed a STALE run-list a prior run might have left behind.
+    scratch.mkdir()
+    (scratch / "run-tests.z").write_text("tests/test_unrelated.py")
+
+    rc = mod.main(["--scratch", str(scratch), "--range", "nonexistent-ref..HEAD"])
     assert rc == 4
+    # The stale list must have been truncated at startup, before the git error.
+    assert (scratch / "run-tests.z").read_text() == ""

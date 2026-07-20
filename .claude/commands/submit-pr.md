@@ -165,9 +165,20 @@ already-pushed branch still proceeds to open its PR (step 10), never dead-ends.
      ```
      On option 1, do steps 5, 5b, 6 (create branch if needed, stage, commit). On
      option 2, stop.
-   - **Empty** → normal case (already committed); continue to step 7 (push-if-needed),
-     then step 10 (ensure a PR exists). Do **not** exit here — an already-pushed branch
-     with no PR still needs step 10.
+   - **Empty** → continue to the zero-diff guard below.
+
+2. **Zero-diff guard — is there anything to submit at all?**
+   ```bash
+   git rev-list --count "$BASE_REMOTE/$BASE_BRANCH..HEAD"
+   ```
+   - **0 commits ahead of base** (e.g. a clean `main` that equals `origin/main`):
+     there is genuinely nothing to submit. Check for an existing open PR (step 10's
+     query) — if one exists, report its URL; if not, exit with **"Nothing to submit —
+     no commits ahead of `$BASE_BRANCH`."** Do NOT create or push a branch (that would
+     leave remote clutter, then `gh pr create` would fail on an empty diff).
+   - **> 0 commits ahead** → real work exists. Continue to step 7 (push-if-needed) then
+     step 10 (ensure a PR exists). An already-*pushed* branch with commits and no PR
+     still proceeds — that is the idempotent path.
 
 ### 5. Create the Branch (BEFORE any commits)
 
@@ -372,15 +383,26 @@ Do not add an authorship footer to the PR body.
 
 ### 10. Ensure a PR exists
 
-The terminal state is "an open PR exists for this branch," so **first check whether one
-already does** — this is what makes submit-pr idempotent and safe to re-run:
+The terminal state is "an open PR exists for this branch **that matches what was
+requested**," so **first check whether one already does** — this is what makes
+submit-pr idempotent and safe to re-run. Fetch enough to compare, not just the URL:
 
 ```bash
-gh pr view --json url,state --jq 'select(.state=="OPEN") | .url' 2>/dev/null
+gh pr view --json url,state,baseRefName,isDraft \
+  --jq 'select(.state=="OPEN") | "\(.url)\t\(.baseRefName)\t\(.isDraft)"' 2>/dev/null
 ```
 
-- **A PR is already open** → report its URL; you are done. Do not open a second one.
+- **An open PR exists and its `baseRefName` == `$BASE_BRANCH` and its `isDraft`
+  matches the requested draft state** → report its URL; you are done. Do not open a
+  second one.
+- **An open PR exists but the base or draft state differs from what was requested**
+  → do NOT silently treat it as success. Report the mismatch (e.g. "an open PR for
+  this branch already targets `main`, but you asked for `--base develop`") and let the
+  user decide — retarget, or accept the existing PR.
 - **No open PR** → create it, as below.
+
+(Fork workflows: pass the target repo explicitly to `gh pr view --repo "$TARGET_REPO"`,
+since a bare `gh` resolves to the fork.)
 
 All dynamic values were resolved and safety-checked by the script in step 1 and are
 already loaded into `TITLE_FILE`/`BASE_BRANCH`/`BRANCH_NAME`/`HEAD_REF`/`TARGET_REPO`.
