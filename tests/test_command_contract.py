@@ -199,6 +199,19 @@ def test_commands_invoke_premerge_scan(name):
     ), f"{name} must run pattern checks via premerge_scan.py, not a shell grep"
 
 
+def test_push_pr_update_no_raw_ref_interpolation():
+    """push-pr-update must not paste a git-controlled ref (`<comparison-ref>` /
+    `<default-branch>`) into an executable command — git accepts `$()`/backticks in ref
+    names. Refs are resolved into shell variables and used quoted. Scans bash blocks
+    only, so the prose guard mentioning the placeholder is not matched."""
+    offenders = [
+        (n, ln)
+        for n, ln in _bash_block_lines(_read("push-pr-update.md"))
+        if re.search(r"<(comparison-ref|default-branch)>", ln)
+    ]
+    assert not offenders, f"push-pr-update interpolates a raw ref placeholder: {offenders}"
+
+
 def test_pre_merge_check_has_no_filename_grep():
     """No `grep/pytest/git diff` over a `<changed-…files>` placeholder may remain in
     pre-merge-check — that was the filename-as-argument injection surface. Filenames now

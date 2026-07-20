@@ -44,19 +44,26 @@ Parse `$ARGUMENTS` to extract:
 
 ### 2. Validate Current State
 
-1. **Get repository default branch**:
+> **Refs are data — resolve them into variables, never interpolate `<placeholder>`.**
+> A git ref name can contain `$()` or backticks (git accepts them), so pasting a
+> resolved default branch / comparison ref into a shell command executes it. Resolve
+> them into shell variables via command substitution and use only **quoted** forms
+> (`"$DEFAULT_BRANCH"`, `"$COMPARISON_REF..HEAD"`) everywhere below. Variables do not
+> persist across separate Bash tool calls, so re-run the two-line resolution at the top
+> of any later block that needs them (it is deterministic).
+
+1. **Resolve the default branch into a variable**:
    ```bash
-   gh repo view --json defaultBranchRef --jq '.defaultBranchRef.name'
+   DEFAULT_BRANCH="$(gh repo view --json defaultBranchRef --jq '.defaultBranchRef.name')"
    ```
-   Store as `<default-branch>`.
 
 2. **Check current branch**:
    ```bash
-   git branch --show-current
+   CURRENT="$(git branch --show-current)"
    ```
-   - If current branch equals `<default-branch>`, abort:
+   - If `"$CURRENT"` equals `"$DEFAULT_BRANCH"`, abort:
      ```
-     Error: Cannot push PR update from <default-branch> branch.
+     Error: Cannot push PR update from the default branch.
      Switch to a feature branch or use /submit-pr to create a new PR.
      ```
 
@@ -80,46 +87,49 @@ Parse `$ARGUMENTS` to extract:
        ```bash
        git rev-parse --abbrev-ref @{u} 2>/dev/null
        ```
-     - If NO upstream exists:
-       - Determine comparison ref (handles shallow/single-branch clones):
-         - If `<default-branch>` exists locally (`git rev-parse --verify <default-branch> 2>/dev/null`): use `<default-branch>`
-         - Else if `origin/<default-branch>` exists (`git rev-parse --verify origin/<default-branch> 2>/dev/null`): use `origin/<default-branch>`
-         - Else: fetch it first (`git fetch origin <default-branch> --depth=1 2>/dev/null || true`), then use `origin/<default-branch>`
-         - Store as `<comparison-ref>`
-       - Check if branch has commits ahead: `git rev-list --count <comparison-ref>..HEAD 2>/dev/null || echo "0"`
-       - If ahead count > 0:
-         - **Scan for secrets in commits to push** (see Section 3a below)
-         - Compute `<files-changed-count>`: `git diff --name-only <comparison-ref>..HEAD | wc -l`
-         - Proceed to Section 3a (secret scan), then 3b (methodology checks), then Section 4 (Push to Remote) — will push with `-u` to set upstream
-       - If ahead count = 0: Abort (new branch with nothing to push):
-         ```
-         No changes detected. Working directory is clean and branch has no commits ahead of <default-branch>.
-         Nothing to push.
-         ```
-     - If upstream EXISTS:
-       - Check if branch is ahead: `git rev-list --count @{u}..HEAD`
-       - If ahead count > 0:
-         - **Scan for secrets in commits to push** (see Section 3a below)
-         - Compute `<files-changed-count>`: `git diff --name-only @{u}..HEAD | wc -l`
-         - Proceed to Section 3a (secret scan), then 3b (methodology checks), then Section 4 (Push to Remote) — there are committed changes to push
-       - If ahead count = 0: Abort:
-         ```
-         No changes detected. Working directory is clean and branch is up to date.
-         Nothing to push.
-         ```
+     - **Resolve `COMPARISON_REF` into a variable** — quoted, deterministic, handles
+       shallow/single-branch clones. Prefer the upstream `@{u}`; else the local or
+       `origin/` default branch (fetched shallow if absent):
+       ```bash
+       DEFAULT_BRANCH="$(gh repo view --json defaultBranchRef --jq '.defaultBranchRef.name')"
+       if UP="$(git rev-parse --abbrev-ref @{u} 2>/dev/null)"; then
+         COMPARISON_REF="$UP"
+       elif git rev-parse --verify "$DEFAULT_BRANCH" >/dev/null 2>&1; then
+         COMPARISON_REF="$DEFAULT_BRANCH"
+       elif git rev-parse --verify "origin/$DEFAULT_BRANCH" >/dev/null 2>&1; then
+         COMPARISON_REF="origin/$DEFAULT_BRANCH"
+       else
+         git fetch origin "$DEFAULT_BRANCH" --depth=1 2>/dev/null || true
+         COMPARISON_REF="origin/$DEFAULT_BRANCH"
+       fi
+       AHEAD="$(git rev-list --count "$COMPARISON_REF..HEAD" 2>/dev/null || echo 0)"
+       ```
+     - If `"$AHEAD"` > 0:
+       - **Scan for secrets in commits to push** (Section 3a)
+       - Files changed: `git diff --name-only "$COMPARISON_REF..HEAD" | wc -l`
+       - Proceed to Section 3a (secret scan), 3b (methodology), Section 4 (push with `-u`)
+     - If `"$AHEAD"` == 0: abort — "No changes detected; branch has no commits ahead of
+       the default branch. Nothing to push."
+     - If upstream EXISTS: `AHEAD="$(git rev-list --count "@{u}..HEAD")"`.
+       - `"$AHEAD"` > 0 → scan (3a), `git diff --name-only "@{u}..HEAD" | wc -l`, then
+         3a → 3b → Section 4.
+       - `"$AHEAD"` == 0 → abort — "No changes detected; branch is up to date. Nothing
+         to push."
 
 ### 3a. Secret Scan for Already-Committed Changes (when skipping Section 3)
 
 When the working tree is clean but commits are ahead, scan for secrets in the commits to be pushed before proceeding to Section 4:
 
-1. **Get diff range**: Use `<comparison-ref>..HEAD` (from Section 2.4 — either `@{u}`, `<default-branch>`, or `origin/<default-branch>`)
+1. **Re-resolve `COMPARISON_REF`** at the top of this block (variables do not persist
+   across tool calls) using the same deterministic snippet as Section 2.4, then use it
+   **quoted** — never a raw `<comparison-ref>` placeholder.
 
 2. **Run pattern check** using the canonical patterns from `/pre-merge-check` Section 2.6:
    ```bash
-   secret_files=$(git diff <comparison-ref>..HEAD -G "<content pattern from Section 2.6>" --name-only 2>/dev/null || true)
-   sensitive_files=$(git diff --name-only <comparison-ref>..HEAD | grep -iE "<filename pattern from Section 2.6>" || true)
+   secret_files=$(git diff "$COMPARISON_REF..HEAD" -G "<content pattern from Section 2.6>" --name-only 2>/dev/null || true)
+   sensitive_files=$(git diff --name-only "$COMPARISON_REF..HEAD" | grep -iE "<filename pattern from Section 2.6>" || true)
    ```
-   Read the actual regex values from `/pre-merge-check` Section 2.6 at execution time. Uses `-G` to search diff content but `--name-only` to output only file names.
+   Read the actual regex values from `/pre-merge-check` Section 2.6 at execution time. Uses `-G` to search diff content but `--name-only` to output only file names. (`<content pattern>`/`<filename pattern>` are the fixed literal regexes from Section 2.6, not git-controlled data.)
 
 3. **If patterns detected** (i.e., `secret_files` or `sensitive_files` is non-empty), warn with AskUserQuestion:
    ```
@@ -304,7 +314,7 @@ CI tests require the `ready-for-ci` label, which the user adds (never Claude).
 
 ### Not on a Feature Branch
 ```
-Error: Cannot push PR update from <default-branch> branch.
+Error: Cannot push PR update from the default branch.
 Switch to a feature branch or use /submit-pr to create a new PR.
 ```
 
@@ -316,7 +326,7 @@ Nothing to push.
 
 ### No Changes to Commit or Push (no upstream, no commits ahead)
 ```
-No changes detected. Working directory is clean and branch has no commits ahead of <default-branch>.
+No changes detected. Working directory is clean and branch has no commits ahead of the default branch.
 Nothing to push.
 ```
 
