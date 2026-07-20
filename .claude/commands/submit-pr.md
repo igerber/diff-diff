@@ -145,24 +145,29 @@ Then fetch: `git fetch "$BASE_REMOTE"`.
      ```
    - Use AskUserQuestion to let user choose whether to continue or abort
 
-### 4. Check for Changes
+### 4. Reconcile branch state (idempotent)
 
-1. **Check for uncommitted changes**:
-   ```bash
-   git status --porcelain
-   ```
-   - If output is non-empty, there are staged or unstaged changes → proceed to step 5
+**submit-pr's goal is: this committed branch is pushed and has an open PR.** It is
+idempotent — safe to run whether or not the work is already committed or already
+pushed. The standard flow commits at `/ai-review-local` (which requires a commit) and
+runs `/pre-merge-check` before this, so by here the work is normally *already
+committed*; and a rebase/prep step may already have *pushed* it. The terminal state is
+**"a PR exists,"** not "there was something to push" — so a fully-committed,
+already-pushed branch still proceeds to open its PR (step 10), never dead-ends.
 
-2. **Check for unpushed commits** (if no uncommitted changes):
-   ```bash
-   git rev-list --count "$BASE_REMOTE/$BASE_BRANCH..HEAD"
-   ```
-   - If count > 0, there are unpushed commits → skip to step 7
-   - If count == 0, inform user and exit:
+1. **Uncommitted changes?** `git status --porcelain`
+   - **Non-empty** → these have NOT been through `/ai-review-local`. Warn and
+     AskUserQuestion:
      ```
-     No changes detected. Your working directory is clean and up-to-date with $BASE_REMOTE/$BASE_BRANCH.
-     Nothing to submit.
+     N uncommitted file(s) have not been through /ai-review-local.
+     1. Commit them anyway (goes in UNREVIEWED — bypasses the review step)
+     2. Abort - commit and run /ai-review-local first
      ```
+     On option 1, do steps 5, 5b, 6 (create branch if needed, stage, commit). On
+     option 2, stop.
+   - **Empty** → normal case (already committed); continue to step 7 (push-if-needed),
+     then step 10 (ensure a PR exists). Do **not** exit here — an already-pushed branch
+     with no PR still needs step 10.
 
 ### 5. Create the Branch (BEFORE any commits)
 
@@ -308,9 +313,16 @@ variable.
        Please create a feature branch first or provide --branch <name>.
        ```
 
-3. **Push to push-remote** (always `origin`, even in fork workflows):
+3. **Push to push-remote only if needed** (always `origin`, even in fork workflows).
+   Push when there are unpushed commits or no upstream; it's a **no-op when the branch
+   is already fully pushed** — that is not an error, just continue to step 10:
    ```bash
-   git push -u "$PUSH_REMOTE" "$BRANCH_NAME"
+   if [ -z "$(git rev-parse --abbrev-ref --symbolic-full-name @{u} 2>/dev/null)" ]; then
+     git push -u "$PUSH_REMOTE" "$BRANCH_NAME"          # no upstream yet
+   elif [ "$(git rev-list --count @{u}..HEAD)" -gt 0 ]; then
+     git push "$PUSH_REMOTE" "$BRANCH_NAME"             # unpushed commits
+   fi
+   # else: already fully pushed — nothing to push, proceed to step 10.
    ```
 
 ### 8. Extract Commit Information for PR Body
@@ -358,7 +370,17 @@ Do not add an authorship footer to the PR body.
 - **Validation**: List `test_*.py` files changed, note tutorial updates
 - **Security**: Default "Yes", but warn if `.env`, credentials, or API key patterns detected
 
-### 10. Create Pull Request
+### 10. Ensure a PR exists
+
+The terminal state is "an open PR exists for this branch," so **first check whether one
+already does** — this is what makes submit-pr idempotent and safe to re-run:
+
+```bash
+gh pr view --json url,state --jq 'select(.state=="OPEN") | .url' 2>/dev/null
+```
+
+- **A PR is already open** → report its URL; you are done. Do not open a second one.
+- **No open PR** → create it, as below.
 
 All dynamic values were resolved and safety-checked by the script in step 1 and are
 already loaded into `TITLE_FILE`/`BASE_BRANCH`/`BRANCH_NAME`/`HEAD_REF`/`TARGET_REPO`.
@@ -454,11 +476,10 @@ telling them nothing.
 
 ## Error Handling
 
-### No Changes to Commit
-```
-No changes detected. Your working directory is clean.
-Nothing to submit.
-```
+### Nothing to do (idempotent success)
+A clean, fully-pushed branch that already has an open PR is not an error — report the
+existing PR URL. submit-pr never dead-ends with "nothing to submit" on a committed
+branch: if no PR exists yet it opens one (step 10), even when there is nothing to push.
 
 ### Branch Already Exists
 ```
