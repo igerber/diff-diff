@@ -523,11 +523,13 @@ def test_dcdh_n_kind_is_groups_not_obs(surfaces):
             assert r["n"] == float(native_n[e])
 
 
-def test_dcdh_l_max_none_count_kind():
-    # Legacy single-horizon path (L_max=None style): the count under "n_obs" is
-    # still a switcher count, so n_kind stays "groups", never "obs".
+def test_dcdh_l_max_none_count_kind_is_switcher_cells():
+    # Legacy single-horizon path (L_max=None): the count under "n_obs" is N_S,
+    # the number of switching (g,t) CELLS - one group can contribute several -
+    # so n_kind is "switcher_cells", NOT "groups" and NOT "obs".
     class _FakeDCDHLegacy:
         alpha = 0.05
+        L_max = None
         placebo_event_study = None
         event_study_effects = {
             1: {
@@ -536,13 +538,13 @@ def test_dcdh_l_max_none_count_kind():
                 "t_stat": 5.0,
                 "p_value": 0.0,
                 "conf_int": (0.6, 1.4),
-                "n_obs": 30,  # N_S switchers, NOT observations
+                "n_obs": 30,  # N_S switching cells, NOT observations or groups
             }
         }
         sup_t_bands = None
 
     surface = build_event_study_surface(_FakeDCDHLegacy())
-    assert surface.n_kind == "groups"
+    assert surface.n_kind == "switcher_cells"
 
 
 def test_spillover_oversized_horizon_single_reference():

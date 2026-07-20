@@ -167,9 +167,11 @@ class EventStudyResults(BaseResults):
     n_kind : str or None
         Semantic of ``n`` for this producer: ``"groups"`` (a group-level
         count - cohorts for CallawaySantAnna/SunAbraham, eligible switcher
-        groups per horizon for de Chaisemartin-D'Haultfoeuille), ``"obs"``
-        (observations), ``"clusters"``, or None when no count is recorded.
-        Never conflate a group count with observations.
+        groups per horizon for de Chaisemartin-D'Haultfoeuille with
+        ``L_max >= 1``), ``"switcher_cells"`` (dCDH legacy ``L_max is None``
+        path: switching ``(g, t)`` cells, where one group may contribute
+        several), ``"obs"`` (observations), ``"clusters"``, or None when no
+        count is recorded. Never conflate these units.
     reference_period : Any or None
         Convenience scalar echo of the marked row's ``event_time`` label when
         there is EXACTLY ONE reference row; None when there are zero or
@@ -845,6 +847,15 @@ def _from_dcdh(results: Any) -> EventStudyResults:
     sup_t = getattr(results, "sup_t_bands", None)
     cband_crit = sup_t.get("crit_value") if isinstance(sup_t, dict) else None
 
+    # dCDH stores its count under the legacy "n_obs" key, but the UNIT is
+    # L_max-dependent (never observations): with L_max >= 1 it is N_l, the
+    # number of eligible switcher GROUPS per horizon; with L_max is None it is
+    # N_S, the number of switching (g, t) CELLS (one group can contribute
+    # several). Label each accurately so downstream sample-size logic cannot
+    # conflate them.
+    l_max = getattr(results, "L_max", None)
+    dcdh_n_kind = "groups" if (l_max is not None and l_max >= 1) else "switcher_cells"
+
     return EventStudyResults(
         event_time=np.asarray(keys),
         att=att,
@@ -855,10 +866,7 @@ def _from_dcdh(results: Any) -> EventStudyResults:
         conf_int_upper=ci_hi,
         is_reference=is_ref,
         n=n,
-        # dCDH stores N_l (eligible switcher GROUPS per horizon) under its
-        # legacy "n_obs" key - a group count, NOT observations. Placebo rows
-        # likewise carry group counts (N_pl_l). Label it "groups", never "obs".
-        n_kind="groups",
+        n_kind=dcdh_n_kind,
         time_scale="relative",
         event_time_convention="l1_first_switch",
         cband_lower=cband_lo,
