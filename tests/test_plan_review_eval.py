@@ -1630,7 +1630,14 @@ def test_loader_keeps_genuine_false_must_catch_optional(tmp_path):
                 "id": "optional-case",
                 "stratum": "s1_synthetic",
                 "fixture": _FX,
-                "ground_truth": [{"id": "g1", "expected_severity": "blocker", "must_catch": False}],
+                "ground_truth": [
+                    {
+                        "id": "g1",
+                        "expected_severity": "blocker",
+                        "must_catch": False,
+                        "rationale": "r",
+                    }
+                ],
             }
         )
     )
@@ -1826,6 +1833,7 @@ def test_loader_rejects_string_class_keywords(tmp_path):
                     {
                         "id": "g1",
                         "expected_severity": "blocker",
+                        "rationale": "r",
                         "class_keywords": "safe_inference",
                     }
                 ],
@@ -1865,3 +1873,75 @@ def test_worktree_refuses_unknown_fixture_kind(tmp_path):
 
     with pytest.raises(wt.MaterializeError, match="plan_at_sha"):
         wt.materialize("k1", {"kind": "git_range", "base_sha": "HEAD"}, str(_REPO), str(tmp_path))
+
+
+# --------------------------------------------------------------------------- #
+# CI round-10 regressions
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize("rationale", [None, "", "   "])
+def test_loader_requires_ground_truth_rationale(tmp_path, rationale):
+    """The schema requires ground_truth[].rationale — graders match findings
+    against it, so a defect without one cannot be graded faithfully
+    (CI round-10)."""
+    from plan_adapters.corpus_loader import PlanCorpusLoader
+
+    gt: dict = {"id": "g1", "expected_severity": "blocker"}
+    if rationale is not None:
+        gt["rationale"] = rationale
+    d = tmp_path / "cases" / "s1_synthetic" / "no-rationale"
+    d.mkdir(parents=True)
+    (d / "case.json").write_text(
+        json.dumps(
+            {"id": "no-rationale", "stratum": "s1_synthetic", "fixture": _FX, "ground_truth": [gt]}
+        )
+    )
+    with pytest.raises(ValueError, match="rationale"):
+        PlanCorpusLoader(str(tmp_path), str(_REPO)).load_cases(None)
+
+
+def test_fingerprint_covers_scoring_metadata(tmp_path):
+    """The campaign fingerprint hashes the WHOLE case definition: two cases
+    identical in plan bytes and base_sha but differing in any scoring field
+    (must_catch, allowances, topics, weight...) register as different
+    campaigns (CI round-10: outcome-dependent redefinition produced an
+    identical fingerprint)."""
+    from plan_adapters.corpus_loader import PlanCorpusLoader
+
+    def _load_case(root, must_catch):
+        d = root / "cases" / "s1_synthetic" / "meta-case"
+        d.mkdir(parents=True)
+        (d / "case.json").write_text(
+            json.dumps(
+                {
+                    "id": "meta-case",
+                    "stratum": "s1_synthetic",
+                    "fixture": _FX,
+                    "ground_truth": [
+                        {
+                            "id": "g1",
+                            "expected_severity": "blocker",
+                            "must_catch": must_catch,
+                            "rationale": "r",
+                        }
+                    ],
+                }
+            )
+        )
+        (case,) = PlanCorpusLoader(str(root), str(_REPO)).load_cases(None)
+        return case
+
+    a = _load_case(tmp_path / "a", True)
+    b = _load_case(tmp_path / "b", False)
+    assert a.fixture["_case_sha"] != b.fixture["_case_sha"]
+
+    run_eval = _run_eval()
+
+    class _Cfg:
+        id = "A"
+
+    fp_a = run_eval._campaign_fingerprint([a], [_Cfg()], 2, None)
+    fp_b = run_eval._campaign_fingerprint([b], [_Cfg()], 2, None)
+    assert fp_a != fp_b
+    assert fp_a["cases"]["meta-case"]["case_sha"] == a.fixture["_case_sha"]

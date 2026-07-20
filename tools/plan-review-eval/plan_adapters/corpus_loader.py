@@ -15,6 +15,7 @@ under ``corpus/fixture/`` so CI tests and ``smoke`` always have one case.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from typing import Optional
@@ -97,9 +98,17 @@ def _strict_types_violation(d: dict) -> Optional[str]:
             )
         if not isinstance(b.get("expected_severity", "major"), str):
             return f"ground_truth[{i}] 'expected_severity' must be a string"
-        for field in ("file", "bug_class", "anchor_symbol", "rationale"):
+        for field in ("file", "bug_class", "anchor_symbol"):
             if not isinstance(b.get(field, ""), str):
                 return f"ground_truth[{i}] '{field}' must be a string"
+        # Schema-required (non-empty): graders match findings against the
+        # rationale — a defect without one cannot be graded faithfully.
+        rationale = b.get("rationale")
+        if not isinstance(rationale, str) or not rationale.strip():
+            return (
+                f"ground_truth[{i}] 'rationale' is schema-required and must be a "
+                f"non-empty string, got {rationale!r}"
+            )
         kw = b.get("class_keywords", [])
         if not isinstance(kw, list) or not all(isinstance(s, str) for s in kw):
             return (
@@ -199,7 +208,15 @@ class PlanCorpusLoader:
                     f"stratum mismatch in {case_json}: declared {d.get('stratum')!r} "
                     f"but filed under {stratum}/ — they must match."
                 )
-            cases.append(_case_from_dict(d, case_dir))
+            case = _case_from_dict(d, case_dir)
+            # Canonical content identity of the WHOLE case definition — every
+            # scoring/grading field (ground truth, must_catch, allowances,
+            # known-FP topics, weight, notes) — for the campaign fingerprint:
+            # editing any of it after observation is a NEW campaign.
+            case.fixture["_case_sha"] = hashlib.sha256(
+                json.dumps(d, sort_keys=True).encode("utf-8")
+            ).hexdigest()[:16]
+            cases.append(case)
         # Fail closed on duplicate/reserved ids (primary key for caching,
         # artifacts, and bundle grouping — mirrors the reviewer-eval loader).
         seen: dict[str, str] = {}

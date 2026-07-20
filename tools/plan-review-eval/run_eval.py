@@ -377,10 +377,12 @@ def cmd_verify_corpus(args: argparse.Namespace) -> int:
 
 def _campaign_fingerprint(cases, configs, k: int, k_overrides) -> dict:
     """The registered SAMPLE PLAN: which observations this campaign will make
-    — arms, repeat schedule, and every case's identity AND content (declared
-    base_sha + frozen plan bytes). Fixed with the protocol at registration:
-    an outcome-dependent change to any of it after results exist is a NEW
-    campaign, never a rewrite of this one."""
+    AND how they will be scored — arms, repeat schedule, and every case's
+    identity, content, and complete scoring metadata (declared base_sha,
+    frozen plan bytes, and the canonical hash of the whole case definition:
+    ground truth, must_catch, FP allowances, known-FP topics, weight, notes).
+    Fixed with the protocol at registration: an outcome-dependent change to
+    any of it after results exist is a NEW campaign, never a rewrite."""
     return {
         "config_ids": sorted(c.id for c in configs),
         "k": k,
@@ -389,6 +391,7 @@ def _campaign_fingerprint(cases, configs, k: int, k_overrides) -> dict:
             c.id: {
                 "base_sha": str(c.fixture.get("base_sha", "")),
                 "plan_sha": _sha16(str(c.fixture.get("_plan_text", "")).encode("utf-8")),
+                "case_sha": str(c.fixture.get("_case_sha", "")),
             }
             for c in cases
         },
