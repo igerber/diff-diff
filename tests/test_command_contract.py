@@ -212,6 +212,34 @@ def test_push_pr_update_no_raw_ref_interpolation():
     assert not offenders, f"push-pr-update interpolates a raw ref placeholder: {offenders}"
 
 
+def test_push_pr_update_ref_vars_are_quoted():
+    """It is not enough to reject the raw placeholder — a *bare* `$COMPARISON_REF..HEAD`
+    (unquoted) would still let a `$()`/backtick in the ref's value execute. Assert every
+    `$COMPARISON_REF`/`$DEFAULT_BRANCH` use in a bash block is quoted (preceded by `"` or
+    inside a double-quoted span)."""
+    bare = []
+    for n, ln in _bash_block_lines(_read("push-pr-update.md")):
+        for m in re.finditer(r"\$(?:COMPARISON_REF|DEFAULT_BRANCH)\b", ln):
+            before = ln[: m.start()]
+            quoted = before.rstrip().endswith('"') or (before.count('"') % 2 == 1)
+            if not quoted:
+                bare.append((n, ln.strip()))
+    assert not bare, f"push-pr-update has BARE (unquoted) ref variable use: {bare}"
+
+
+def test_quoted_ref_variable_does_not_execute(tmp_path):
+    """The safety property behind the quoting: a ref *value* holding `$(...)` as data
+    (as it would if git ever returned such a ref name) is inert when used through a
+    quoted expansion — the exact shape the command uses, `git rev-list "$REF..HEAD"`.
+    Single-quote assignment holds the payload as literal data; the quoted use must not
+    re-execute it."""
+    import subprocess
+
+    script = "REF='x$(touch SHOULD_NOT)'; git rev-list --count \"$REF..HEAD\" 2>/dev/null; true"
+    subprocess.run(["bash", "-c", script], cwd=tmp_path, capture_output=True)
+    assert not (tmp_path / "SHOULD_NOT").exists(), "quoted ref-var use executed its payload"
+
+
 def test_pre_merge_check_has_no_filename_grep():
     """No `grep/pytest/git diff` over a `<changed-…files>` placeholder may remain in
     pre-merge-check — that was the filename-as-argument injection surface. Filenames now
