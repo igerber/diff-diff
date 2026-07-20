@@ -1347,6 +1347,52 @@ def test_two_stage_survey_df_threaded():
     assert set(surface.df[finite_p].tolist()) == {float(res.event_study_df)}
 
 
+def test_stacked_replicate_weight_vcov_diag_matches_ses():
+    # Replicate-weight designs REASSIGN the coefficient covariance before
+    # the ES extraction loop (replicate refit), so StackedDiD persists the
+    # replicate VCV sub-block and the reported ES SEs remain exactly its
+    # diagonal - the every-inference-mode guarantee.
+    from diff_diff import StackedDiD
+    from diff_diff.survey import SurveyDesign
+
+    data = _stacked_panel()
+    data["w"] = 1.0
+    units = np.sort(data["unit"].unique())
+    n_rep = 8
+    unit_pos = {u: i for i, u in enumerate(units)}
+    rows = data["unit"].map(unit_pos).to_numpy()
+    per = max(len(units) // n_rep, 1)
+    rep_cols = []
+    for r in range(n_rep):
+        w_r = np.ones(len(units))
+        w_r[r * per : min((r + 1) * per, len(units))] = 0.0
+        nz = w_r > 0
+        w_r[nz] = w_r[nz] * n_rep / (n_rep - 1)
+        data[f"rep_{r}"] = w_r[rows]
+        rep_cols.append(f"rep_{r}")
+    design = SurveyDesign(
+        weights="w", weight_type="pweight", replicate_weights=rep_cols, replicate_method="JK1"
+    )
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        res = StackedDiD(kappa_pre=2, kappa_post=2).fit(
+            data,
+            outcome="outcome",
+            unit="unit",
+            time="time",
+            first_treat="first_treat",
+            aggregate="event_study",
+            survey_design=design,
+        )
+    assert res.event_study_vcov is not None
+    ses = {h: d["se"] for h, d in res.event_study_effects.items()}
+    diag = np.sqrt(np.maximum(np.diag(res.event_study_vcov), 0.0))
+    for i, h in enumerate(res.event_study_vcov_index):
+        np.testing.assert_allclose(diag[i], ses[h], rtol=1e-14)
+    surface = build_event_study_surface(res)
+    assert surface.vcov is not None
+
+
 def _cs_cluster_panel(seed=3):
     rng = np.random.default_rng(seed)
     rows = []

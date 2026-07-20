@@ -389,8 +389,13 @@ a library setting.
   diagonal), TwoStageDiD on the analytical paths only (bootstrap and
   replicate-weight modes clear it). Where the covariance is present,
   the PT check takes the joint-Wald path (subject to the hc2_bm
-  policy and rank guard below) and the pretrends-power classification
-  uses the full covariance.
+  policy and rank guard below). Pretrends POWER is unaffected:
+  `compute_pretrends_power()` supports only MPD / CS / SunAbraham
+  fits, and Stacked/TwoStage remain outside DR's power applicability
+  - their new covariance is consumed by the PT check and by the
+  PRECOMPUTED-power provenance classifier only (a stored power result
+  on a fit that now exposes a full VCV is labelled
+  `"diag_fallback_available_full_vcov_unused"`).
 
 - **Note:** hc2_bm parallel-trends policy (deviation by omission,
   documented). When the source fit's `vcov_type` is `"hc2_bm"`, the

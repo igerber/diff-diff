@@ -2698,6 +2698,36 @@ class TestEventStudyVcovPersistence:
         assert res.event_study_vcov_index is None
         assert res.event_study_df is None
 
+    def test_replicate_weight_survey_clears_vcov_and_threads_final_df(self):
+        # Replicate-weight designs: reported ES SEs come from the replicate
+        # VCV's mixed [overall, ES, groups] layout, so the analytical GMM
+        # matrix must NOT be persisted; the final (possibly
+        # dropped-replicate-tightened) survey df that every recomputed ES
+        # row's safe_inference used IS threaded.
+        data, rep_cols = _add_survey_cols(self._panel(), n_rep=8)
+        design = SurveyDesign(weights="w", replicate_weights=rep_cols, replicate_method="JK1")
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            res = TwoStageDiD().fit(
+                data,
+                outcome="outcome",
+                unit="unit",
+                time="time",
+                first_treat="first_treat",
+                aggregate="event_study",
+                survey_design=design,
+            )
+        assert res.event_study_vcov is None
+        assert res.event_study_vcov_index is None
+        assert res.event_study_df is not None and res.event_study_df > 0
+        assert res.event_study_df == float(res.survey_metadata.df_survey)
+        from diff_diff.results_base import build_event_study_surface
+
+        surface = build_event_study_surface(res)
+        finite_p = np.isfinite(surface.p_value)
+        assert finite_p.any()
+        assert set(surface.df[finite_p].tolist()) == {float(res.event_study_df)}
+
     def test_group_only_aggregate_has_no_es_vcov(self):
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
