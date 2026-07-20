@@ -1,5 +1,5 @@
 .. meta::
-   :description: Validation benchmarks comparing diff-diff against R packages (did, synthdid, fixest) and Stata (teffects). Coefficient accuracy, standard error comparison, and performance metrics.
+   :description: Validation benchmarks comparing diff-diff against R packages (did, synthdid, fixest) and Stata (teffects, did_imputation). Coefficient accuracy, standard error comparison, and performance metrics.
    :keywords: difference-in-differences benchmark, DiD validation R, DiD validation Stata, python econometrics accuracy, did package comparison
 
 Benchmarks
@@ -46,6 +46,9 @@ where no runnable R reference exists:
    * - ``LPDiD`` (regression-adjustment SE)
      - Stata ``teffects ra ... atet``
      - Dube, Girardi, Jorda & Taylor (2025); no runnable R analogue
+   * - ``ImputationDiD`` (leave-one-out SE)
+     - Stata ``did_imputation, leaveout``
+     - Borusyak, Jaravel & Spiess (2024) Supp. App. A.9; no runnable R analogue
 
 Methodology
 -----------
@@ -1010,15 +1013,20 @@ Prerequisites
 
       pip install -e ".[dev]"
 
-4. (Optional) Stata, only to regenerate the ``LPDiD`` regression-adjustment SE
-   golden. Uses the **native** ``teffects`` command (no SSC package); the golden
-   is committed, so this is not needed to run the test suite:
+4. (Optional) Stata, only to regenerate the committed Stata goldens (``LPDiD``
+   regression-adjustment SE, ``ImputationDiD`` leave-one-out SE). The goldens are
+   committed, so this is not needed to run the test suite. The ``LPDiD`` arm uses the
+   **native** ``teffects`` command; the ``ImputationDiD`` arm depends on SSC packages
+   (``did_imputation``/``reghdfe``/``ftools``/``require``) — install them once via
+   ``benchmarks/stata/requirements.do`` (the generators do not auto-install):
 
    .. code-block:: bash
 
       # macOS, StataSE 19 (binary not on PATH by default)
-      /Applications/Stata/StataSE.app/Contents/MacOS/stata-se -b do \
-          benchmarks/stata/generate_lpdid_ra_golden.do
+      STATA=/Applications/Stata/StataSE.app/Contents/MacOS/stata-se
+      $STATA -b do benchmarks/stata/requirements.do            # one-time SSC install
+      $STATA -b do benchmarks/stata/generate_lpdid_ra_golden.do
+      $STATA -b do benchmarks/stata/generate_imputation_loo_golden.do
 
 Running Benchmarks
 ~~~~~~~~~~~~~~~~~~

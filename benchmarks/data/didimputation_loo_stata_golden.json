@@ -1,0 +1,28 @@
+{
+  "meta": {
+    "estimator": "ImputationDiD leave-one-out (BJS 2024 App. A.9) SE - Stata did_imputation leaveout",
+    "generator": "benchmarks/stata/generate_imputation_loo_golden.do",
+    "source_panel": "benchmarks/data/didimputation_test_panel.csv",
+    "point_anchor": "benchmarks/data/didimputation_golden.json (overall.att, event_study.att)",
+    "cmd": "did_imputation y unit time Ei, [horizons(0/5)] leaveout avgeffectsby(Ei t) cluster(unit)",
+    "avgeffectsby": "Ei t (== library aux_partition=cohort_horizon; pinned explicitly)",
+    "se_convention": "A.9 leave-one-out finite-sample variance; unit-clustered; se_nonloo is the non-leaveout cluster SE (== R didimputation).",
+    "ssc_versions": {
+      "did_imputation": "Version: November 22, 2023",
+      "reghdfe": "version 6.13.1 10Jan2026",
+      "ftools": "version 2.50.0 09jan2026",
+      "require": "version 1.3.1 19sep2023"
+    },
+    "stata_edition": "SE",
+    "stata_version": 19.0
+  },
+  "overall": {"att": 2.0456678967434003, "se": 0.021041161682015575, "se_nonloo": 0.020879383566722923, "N": 1440},
+  "event_study": {
+    "0": {"att": 0.99293658500530635, "se": 0.029085929067998187, "se_nonloo": 0.028791608348336495},
+    "1": {"att": 1.5129648623314707, "se": 0.02548745171356798, "se_nonloo": 0.025253856015380709},
+    "2": {"att": 2.006499293218484, "se": 0.030371068022456742, "se_nonloo": 0.030155388323006894},
+    "3": {"att": 2.4998545630646829, "se": 0.029299586939814812, "se_nonloo": 0.029048460851672311},
+    "4": {"att": 2.9648169454740363, "se": 0.043460391002896281, "se_nonloo": 0.043064691747540094},
+    "5": {"att": 3.4673514576204787, "se": 0.043504637171120686, "se_nonloo": 0.043073537575459654}
+  }
+}

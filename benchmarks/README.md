@@ -51,12 +51,18 @@ and CI never needs Stata. Generators live in `stata/` and are run headless:
 
 ```bash
 # macOS, StataSE 19 (binary is not on PATH by default)
-/Applications/Stata/StataSE.app/Contents/MacOS/stata-se -b do \
-    benchmarks/stata/generate_lpdid_ra_golden.do
+STATA=/Applications/Stata/StataSE.app/Contents/MacOS/stata-se
+$STATA -b do benchmarks/stata/requirements.do            # one-time SSC install
+$STATA -b do benchmarks/stata/generate_lpdid_ra_golden.do
+$STATA -b do benchmarks/stata/generate_imputation_loo_golden.do
 ```
 
-Current arm uses only **native** Stata commands (`teffects`) — no SSC packages —
-so `version 19` pins behavior. See `stata/README.md`.
+The `LPDiD` arm uses only **native** Stata commands (`teffects`), pinned by
+`version 19`. The `ImputationDiD` arm depends on SSC packages
+(`did_imputation`/`reghdfe`/`ftools`/`require`), which `version 19` does NOT pin
+(SSC has no version history) — install them once via `requirements.do` (the
+generators do not auto-install) and each golden records `ssc_versions` for drift
+detection. See `stata/README.md`.
 
 ## Directory Structure
 
@@ -72,8 +78,10 @@ benchmarks/
 │   ├── benchmark_honest.R    # HonestDiD
 │   └── benchmark_fixest.R    # Basic DiD / TWFE
 ├── stata/
-│   ├── README.md                       # Stata arm docs
-│   └── generate_lpdid_ra_golden.do     # LPDiD RA SE vs teffects ra
+│   ├── README.md                          # Stata arm docs
+│   ├── requirements.do                    # one-time SSC install (did_imputation etc.)
+│   ├── generate_lpdid_ra_golden.do        # LPDiD RA SE vs teffects ra
+│   └── generate_imputation_loo_golden.do  # ImputationDiD LOO SE vs did_imputation leaveout
 ├── python/
 │   ├── utils.py              # Common utilities
 │   ├── benchmark_callaway.py # CallawaySantAnna
@@ -96,6 +104,7 @@ benchmarks/
 | `SyntheticDiD` | `synthdid::synthdid_estimate` | Arkhangelsky et al. (2021) | ✓ Integrated |
 | `DifferenceInDifferences` | `fixest::feols` | Standard DiD | ✓ Integrated |
 | `LPDiD` (RA SE) | Stata `teffects ra ... atet` | Dube, Girardi, Jorda & Taylor (2025) | ✓ Integrated |
+| `ImputationDiD` (LOO SE) | Stata `did_imputation, leaveout` | Borusyak, Jaravel & Spiess (2024) App. A.9 | ✓ Integrated |
 | `HonestDiD` | `HonestDiD::createSensitivityResults` | Rambachan & Roth (2023) | Planned |
 
 Note: HonestDiD benchmark scripts exist but are not yet integrated into the main runner.

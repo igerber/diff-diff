@@ -8,6 +8,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **ImputationDiD leave-one-out SE now anchored against Stata `did_imputation, leaveout`
+  (no library behavior change).** The Borusyak-Jaravel-Spiess (2024) App. A.9 LOO variance
+  (`leave_one_out=True`) has no runnable R reference (R `didimputation` omits LOO), so it
+  was validated only by an internal psi-identity + hand-calc + MC coverage. It is now
+  cross-validated against the authors' own Stata `did_imputation ..., leaveout` via a
+  committed golden (`benchmarks/stata/generate_imputation_loo_golden.do` →
+  `didimputation_loo_stata_golden.json`; `tests/test_imputation_loo_stata_parity.py`):
+  the library LOO SE matches to ~1e-9 (cross-implementation; the point to ~2e-8, gated at
+  `abs=1e-7`) at the overall ATT and all 6 event-study horizons, with the non-LOO SE
+  confirmed three-way (library = R = Stata).
+  Second Stata parity arm and the first SSC-dependent one — `benchmarks/stata/requirements.do`
+  documents the one-time install; the golden records `ssc_versions` for drift detection.
 - **LP-DiD regression-adjustment SE now anchored against Stata `teffects` (no library
   behavior change).** The RA influence-function cluster SE has no runnable R reference
   (`alexCardazzi/lpdid` does direct covariate inclusion, not RA), so it was previously
