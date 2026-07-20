@@ -108,3 +108,39 @@ content actually goes:
 - Reviewer subprocesses run with read-only built-in tools (`Read,Grep,Glob`)
   in a detached worktree at the case's `base_sha` — the repo as the plan saw
   it, so codebase-correctness findings grade against the right tree.
+
+## Provenance guarantees and limits (documented scope)
+
+What the campaign provenance machinery **guarantees** (accident-grade, per the
+threat model recorded in `DEFERRED.md` — the gate prevents accidents, not a
+hostile local actor with write access):
+
+- The recorded protocol identity covers the decision rule, configs, every
+  candidate artifact, the control spawn prompt, every Python source in this
+  tree and `eval_core/` (walked, never hand-listed), and the external codex
+  wrapper (`.claude/scripts/openai_review.py`).
+- A read→import→re-read stability bracket proves the code Python executes —
+  including the dynamically loaded wrapper, which is handed to the reviewer
+  from inside the bracket — is byte-identical to the hashed sources; any
+  change across the bracket aborts the snapshot.
+- Registration is write-once and precedes observation: a subdirectory IS a
+  campaign, its manifest (protocol identity + full sample-plan fingerprint:
+  arms, k, overrides, case ids, base SHAs, frozen plan bytes) reaches disk
+  before any reviewer call, and an invocation differing in either refuses to
+  touch it. Post-run stages gate at entry against the recorded identity from
+  one in-memory snapshot, re-check with a fresh read at exit, and stamp the
+  protocol sha into extraction metadata and `blinding.json`; the blind
+  mapping is recomputed at verdict, and the bundle id is the hash of the
+  exact grader-visible bytes.
+
+Documented **limits** (out of scope by decision, not oversight):
+
+- Byte-level TOCTOU below the bracket's two reads (e.g. an OS-level file swap
+  landing between them) is detected-and-aborted when observable, but cannot
+  be excluded without executing from an immutable copied tree; the recorded
+  accident threat model does not require that.
+- A local actor who can write to the repo can defeat any self-hosted
+  provenance check (the `DEFERRED.md` decision record).
+- Smoke runs re-register the fixture subdir freely: they are liveness checks,
+  never graded, and the verdict stage independently refuses any manifest
+  containing fixture data.

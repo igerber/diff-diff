@@ -64,9 +64,19 @@ def _strict_types_violation(d: dict) -> Optional[str]:
     fixture = d.get("fixture", {})
     if not isinstance(fixture, dict):
         return f"'fixture' must be an object, got {fixture!r}"
-    for field in ("kind", "plan", "base_sha"):
-        if field in fixture and not isinstance(fixture[field], str):
-            return f"fixture.{field} must be a string, got {fixture[field]!r}"
+    # Schema discriminator (const): the only materialization this harness
+    # implements is a detached checkout at base_sha. Any other kind would be
+    # silently checked out AS plan_at_sha — reviewing the wrong repo state —
+    # while still counting toward the corpus floor.
+    if fixture.get("kind") != "plan_at_sha":
+        return (
+            f"fixture.kind must be the schema constant 'plan_at_sha', "
+            f"got {fixture.get('kind')!r}"
+        )
+    if not isinstance(fixture.get("base_sha"), str) or not fixture["base_sha"].strip():
+        return "fixture.base_sha must be a non-empty string (schema-required)"
+    if "plan" in fixture and not isinstance(fixture["plan"], str):
+        return f"fixture.plan must be a string, got {fixture['plan']!r}"
     for field in ("known_fp_topics", "ground_truth"):
         if not isinstance(d.get(field, []), list):
             return f"'{field}' must be a list"

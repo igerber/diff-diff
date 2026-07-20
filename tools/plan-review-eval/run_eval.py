@@ -206,12 +206,15 @@ def _read_source_bytes(files: list[tuple[str, str]]) -> list[bytes]:
     return parts
 
 
-def _import_executing_modules() -> None:
+def _import_executing_modules():
     """Eagerly import every module the campaign will execute, INSIDE the
     snapshot's read→import→re-read stability bracket. Python caches imports
     process-wide, so later stages run the code imported here — which the
     bracket proves is byte-identical to what the identity hashed (closing the
-    snapshot-then-import A→B→A window)."""
+    snapshot-then-import A→B→A window). Returns the dynamically loaded codex
+    wrapper module, ALSO loaded inside the bracket: the snapshot hands it to
+    PlanReviewer, so dual arms execute those exact bytes (a disk edit after
+    the snapshot can never reach execution)."""
     import eval_core.compare  # noqa: F401
     import eval_core.models  # noqa: F401
     import eval_core.runner  # noqa: F401
@@ -223,6 +226,8 @@ def _import_executing_modules() -> None:
         plan_reviewer,
         worktree,
     )
+
+    return plan_reviewer._load_openai_review(_repo_root())
 
 
 def _identity_sha(identity: dict) -> str:
@@ -251,7 +256,7 @@ def _protocol_snapshot() -> dict:
     # AGAIN — any mismatch aborts the snapshot.
     source_files = _evaluator_source_files()
     evaluator_parts = _read_source_bytes(source_files)
-    _import_executing_modules()
+    openai_review_mod = _import_executing_modules()
     if _read_source_bytes(source_files) != evaluator_parts:
         raise SystemExit(
             "protocol sources changed while the snapshot was being taken — "
@@ -289,6 +294,7 @@ def _protocol_snapshot() -> dict:
         "raw_config": raw,
         "candidate_texts": {n: d.decode("utf-8") for n, d in candidates.items()},
         "control_prompt": _CONTROL_PROMPT,
+        "openai_review_mod": openai_review_mod,
         "identity": identity,
     }
 
@@ -332,7 +338,13 @@ def _reviewer(runs_root: str, snapshot: dict | None = None):
         control_prompt_text=snapshot["control_prompt"] if snapshot else None,
     )
     extraction_model = (raw.get("extraction") or {}).get("model", "")
-    return PlanReviewer(repo, runs_root, artifacts, extraction_model=extraction_model)
+    return PlanReviewer(
+        repo,
+        runs_root,
+        artifacts,
+        extraction_model=extraction_model,
+        openai_mod=(snapshot or {}).get("openai_review_mod"),
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -363,21 +375,50 @@ def cmd_verify_corpus(args: argparse.Namespace) -> int:
 # --------------------------------------------------------------------------- #
 
 
-def _require_subdir_protocol(subdir: str, identity: dict) -> None:
+def _campaign_fingerprint(cases, configs, k: int, k_overrides) -> dict:
+    """The registered SAMPLE PLAN: which observations this campaign will make
+    — arms, repeat schedule, and every case's identity AND content (declared
+    base_sha + frozen plan bytes). Fixed with the protocol at registration:
+    an outcome-dependent change to any of it after results exist is a NEW
+    campaign, never a rewrite of this one."""
+    return {
+        "config_ids": sorted(c.id for c in configs),
+        "k": k,
+        "k_overrides": dict(k_overrides or {}),
+        "cases": {
+            c.id: {
+                "base_sha": str(c.fixture.get("base_sha", "")),
+                "plan_sha": _sha16(str(c.fixture.get("_plan_text", "")).encode("utf-8")),
+            }
+            for c in cases
+        },
+    }
+
+
+def _require_campaign_registration(subdir: str, identity: dict, fingerprint: dict) -> None:
     """PRE-REGISTRATION IS WRITE-ONCE: a subdirectory IS a campaign, and its
-    protocol identity is fixed by the first registration. An invocation under
-    a DIFFERENT protocol may never touch it — the store's cached outcomes can
-    therefore never be re-attributed to a later protocol (a changed protocol
-    is a NEW campaign in a fresh subdir)."""
+    protocol identity AND sample plan are fixed by the first registration. An
+    invocation differing in either may never touch it — the store's cached
+    outcomes can never be re-attributed to a later protocol, and the schedule
+    can never be reshaped after outcomes were observed (a changed protocol or
+    sample plan is a NEW campaign in a fresh subdir)."""
     path = os.path.join(RUNS_DIR, f"{subdir}-manifest.json")
-    if os.path.exists(path):
-        prior = read_json(path)
-        if (prior.get("protocol") or {}) != identity:  # type: ignore[union-attr]
-            raise SystemExit(
-                f"runs/{subdir} is registered under a DIFFERENT protocol identity — "
-                f"a changed protocol is a NEW campaign; use a fresh --subdir (or "
-                f"restore the registered protocol to resume this one)."
-            )
+    if not os.path.exists(path):
+        return
+    prior = read_json(path)
+    if (prior.get("protocol") or {}) != identity:  # type: ignore[union-attr]
+        raise SystemExit(
+            f"runs/{subdir} is registered under a DIFFERENT protocol identity — "
+            f"a changed protocol is a NEW campaign; use a fresh --subdir (or "
+            f"restore the registered protocol to resume this one)."
+        )
+    if (prior.get("campaign_fingerprint") or {}) != fingerprint:  # type: ignore[union-attr]
+        raise SystemExit(
+            f"runs/{subdir} registered a DIFFERENT sample plan (cases, plan "
+            f"bytes, base SHAs, arms, k, or overrides) — the schedule cannot "
+            f"be reshaped after observation; use a fresh --subdir for a "
+            f"changed campaign."
+        )
 
 
 def _run_matrix(
@@ -399,8 +440,6 @@ def _run_matrix(
     snapshot = _protocol_snapshot()
     protocol_before = snapshot["identity"]
     manifest_path = os.path.join(RUNS_DIR, f"{subdir}-manifest.json")
-    if enforce_registration:
-        _require_subdir_protocol(subdir, protocol_before)
     configs = _make_configs(config_ids, raw=snapshot["raw_config"])
     runs_root = os.path.join(RUNS_DIR, subdir)
     store = RunStore(runs_root)
@@ -410,6 +449,9 @@ def _run_matrix(
     # never expose later arms/repeats to different content under one run key.
     for case in cases:
         case.fixture["_plan_text"] = _read_plan_for_freeze(case)
+    fingerprint = _campaign_fingerprint(cases, configs, k, k_overrides)
+    if enforce_registration:
+        _require_campaign_registration(subdir, protocol_before, fingerprint)
     registration = {
         "subdir": subdir,
         "config_ids": [c.id for c in configs],
@@ -424,6 +466,7 @@ def _run_matrix(
         # runs the (already CI-verified) fixture without the full corpus gate.
         "corpus_verified": verified,
         "protocol": protocol_before,
+        "campaign_fingerprint": fingerprint,
         "protocol_drift_during_run": False,
         "corpus_drift_during_run": False,
     }

@@ -87,13 +87,19 @@ class PlanReviewer:
         runs_root: str,
         artifacts: dict[str, ArmArtifacts],
         extraction_model: str = "",
+        openai_mod=None,
     ):
         self.repo_root = repo_root
         self.runs_root = runs_root
         self.worktrees_root = os.path.join(runs_root, ".worktrees")
         self.artifacts = artifacts
         self.extraction_model = extraction_model
-        self._mod = _load_openai_review(repo_root)
+        # Prefer the wrapper module loaded inside the protocol snapshot's
+        # read→import→re-read bracket: dual arms then provably execute the
+        # exact bytes the recorded identity hashed (a disk edit after the
+        # snapshot can never reach execution). The fallback load exists only
+        # for direct/non-campaign construction.
+        self._mod = openai_mod if openai_mod is not None else _load_openai_review(repo_root)
         self._cli_version: Optional[str] = None
         # Fingerprint of the invocation contract: this module's claude/codex
         # call sites plus the production codex wrapper it reuses.

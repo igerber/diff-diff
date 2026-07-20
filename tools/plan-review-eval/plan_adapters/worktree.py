@@ -65,6 +65,13 @@ def materialize(
     (parallel arms share a case_id but need distinct checkouts); it defaults to
     ``case_id`` for sequential callers (verify-corpus).
     """
+    kind = fixture.get("kind", "plan_at_sha")
+    if kind != "plan_at_sha":
+        raise MaterializeError(
+            f"{case_id}: unsupported fixture kind {kind!r} — the only kind this "
+            f"adapter materializes is 'plan_at_sha' (a detached checkout at "
+            f"base_sha); refusing to silently guess a repository state."
+        )
     base = fixture.get("base_sha")
     if not base:
         raise MaterializeError(f"{case_id}: fixture missing base_sha")

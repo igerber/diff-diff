@@ -65,12 +65,19 @@ def test_fixture_case_loads_and_verifies():
     assert loader.verify(case) is None
 
 
+# Minimal schema-valid fixture object for loader tests (the strict validator
+# requires the plan_at_sha discriminator + base_sha on every case).
+_FX = {"kind": "plan_at_sha", "base_sha": "HEAD"}
+
+
 def test_loader_rejects_stratum_mismatch(tmp_path):
     from plan_adapters.corpus_loader import PlanCorpusLoader
 
     d = tmp_path / "cases" / "s1_synthetic" / "bad-case"
     d.mkdir(parents=True)
-    (d / "case.json").write_text(json.dumps({"id": "bad-case", "stratum": "s2_historical"}))
+    (d / "case.json").write_text(
+        json.dumps({"id": "bad-case", "stratum": "s2_historical", "fixture": _FX})
+    )
     with pytest.raises(ValueError, match="stratum mismatch"):
         PlanCorpusLoader(str(tmp_path), str(_REPO)).load_cases(None)
 
@@ -81,7 +88,7 @@ def test_loader_rejects_duplicate_ids(tmp_path):
     for stratum in ("s1_synthetic", "s3_negative"):
         d = tmp_path / "cases" / stratum / "dup"
         d.mkdir(parents=True)
-        (d / "case.json").write_text(json.dumps({"id": "dup", "stratum": stratum}))
+        (d / "case.json").write_text(json.dumps({"id": "dup", "stratum": stratum, "fixture": _FX}))
     with pytest.raises(ValueError, match="duplicate case id"):
         PlanCorpusLoader(str(tmp_path), str(_REPO)).load_cases(None)
 
@@ -1600,6 +1607,7 @@ def test_loader_rejects_schema_invalid_must_catch(tmp_path, bad):
             {
                 "id": "typed-case",
                 "stratum": "s1_synthetic",
+                "fixture": _FX,
                 "ground_truth": [{"id": "g1", "expected_severity": "blocker", "must_catch": bad}],
             }
         )
@@ -1621,6 +1629,7 @@ def test_loader_keeps_genuine_false_must_catch_optional(tmp_path):
             {
                 "id": "optional-case",
                 "stratum": "s1_synthetic",
+                "fixture": _FX,
                 "ground_truth": [{"id": "g1", "expected_severity": "blocker", "must_catch": False}],
             }
         )
@@ -1695,12 +1704,65 @@ def test_campaign_subdir_is_write_once_per_protocol(tmp_path, monkeypatch):
 
     monkeypatch.setattr(run_eval, "RUNS_DIR", str(tmp_path))
     recorded = {"decision_rule_sha": "a" * 16}
-    (tmp_path / "camp-manifest.json").write_text(json.dumps({"protocol": recorded}))
-    run_eval._require_subdir_protocol("camp", recorded)  # same protocol: resume OK
+    fp = {"config_ids": ["A"], "k": 2, "k_overrides": {}, "cases": {}}
+    (tmp_path / "camp-manifest.json").write_text(
+        json.dumps({"protocol": recorded, "campaign_fingerprint": fp})
+    )
+    # Same protocol AND same sample plan: resume OK.
+    run_eval._require_campaign_registration("camp", recorded, fp)
     with pytest.raises(SystemExit, match="DIFFERENT protocol"):
-        run_eval._require_subdir_protocol("camp", {"decision_rule_sha": "b" * 16})
+        run_eval._require_campaign_registration("camp", {"decision_rule_sha": "b" * 16}, fp)
     # An unregistered subdir is a fresh campaign — no manifest, no constraint.
-    run_eval._require_subdir_protocol("fresh", recorded)
+    run_eval._require_campaign_registration("fresh", recorded, fp)
+
+
+def test_campaign_fingerprint_freezes_sample_plan(tmp_path, monkeypatch):
+    """Registration freezes the SAMPLE PLAN too: same protocol but different
+    cases, plan bytes, base SHAs, arms, or repeat schedule refuses — an
+    outcome-dependent corpus/schedule change can never rewrite a campaign
+    whose results exist (CI round-9)."""
+    run_eval = _run_eval()
+
+    monkeypatch.setattr(run_eval, "RUNS_DIR", str(tmp_path))
+    recorded = {"decision_rule_sha": "a" * 16}
+    fp = {
+        "config_ids": ["A", "B"],
+        "k": 2,
+        "k_overrides": {},
+        "cases": {"c1": {"base_sha": "a" * 40, "plan_sha": "s" * 16}},
+    }
+    (tmp_path / "camp-manifest.json").write_text(
+        json.dumps({"protocol": recorded, "campaign_fingerprint": fp})
+    )
+    mutations = (
+        {**fp, "k": 1},
+        {**fp, "config_ids": ["A"]},
+        {**fp, "k_overrides": {"B": 1}},
+        {**fp, "cases": {"c1": {"base_sha": "a" * 40, "plan_sha": "t" * 16}}},  # edited plan
+        {**fp, "cases": {"c1": {"base_sha": "b" * 40, "plan_sha": "s" * 16}}},  # moved base
+        {**fp, "cases": {"c2": {"base_sha": "a" * 40, "plan_sha": "s" * 16}}},  # swapped case
+    )
+    for mutated in mutations:
+        with pytest.raises(SystemExit, match="sample plan"):
+            run_eval._require_campaign_registration("camp", recorded, mutated)
+
+
+def test_reviewer_executes_bracketed_wrapper_module(tmp_path, monkeypatch):
+    """The codex wrapper module handed to PlanReviewer IS the one loaded
+    inside the snapshot's read→import→re-read bracket — after the snapshot,
+    a disk edit to openai_review.py can never reach dual-arm execution
+    (CI round-9: the wrapper was imported after the source snapshot)."""
+    import plan_adapters.criteria_source as cs
+
+    run_eval = _run_eval()
+
+    snap = run_eval._protocol_snapshot()
+    assert snap["openai_review_mod"] is not None
+    # Avoid the pinned-SHA git materialization (shallow CI clones): the wiring
+    # under test is snapshot → _reviewer → PlanReviewer, not criteria sourcing.
+    monkeypatch.setattr(cs, "load_artifacts", lambda *a, **k: {})
+    reviewer = run_eval._reviewer(str(tmp_path), snapshot=snap)
+    assert reviewer._mod is snap["openai_review_mod"]
 
 
 def test_campaign_registers_before_observing(tmp_path, monkeypatch):
@@ -1729,6 +1791,9 @@ def test_campaign_registers_before_observing(tmp_path, monkeypatch):
     manifest = json.loads((tmp_path / "reg-manifest.json").read_text())
     assert manifest["run_keys"] == []
     assert manifest["protocol"] == run_eval._protocol_identity()
+    # The sample plan is registered alongside the protocol (CI round-9).
+    assert manifest["campaign_fingerprint"]["cases"]["fx"]["plan_sha"]
+    assert manifest["campaign_fingerprint"]["config_ids"] == ["A"]
 
 
 def test_loader_rejects_unknown_stratum(tmp_path):
@@ -1756,6 +1821,7 @@ def test_loader_rejects_string_class_keywords(tmp_path):
             {
                 "id": "kw-case",
                 "stratum": "s1_synthetic",
+                "fixture": _FX,
                 "ground_truth": [
                     {
                         "id": "g1",
@@ -1768,3 +1834,34 @@ def test_loader_rejects_string_class_keywords(tmp_path):
     )
     with pytest.raises(ValueError, match="class_keywords"):
         PlanCorpusLoader(str(tmp_path), str(_REPO)).load_cases(None)
+
+
+def test_loader_rejects_unknown_fixture_kind(tmp_path):
+    """The schema's discriminator is a const: any other kind would be silently
+    materialized as a plan_at_sha checkout — reviewing the wrong repository
+    state while counting toward the corpus floor (CI round-9)."""
+    from plan_adapters.corpus_loader import PlanCorpusLoader
+
+    d = tmp_path / "cases" / "s1_synthetic" / "kind-case"
+    d.mkdir(parents=True)
+    (d / "case.json").write_text(
+        json.dumps(
+            {
+                "id": "kind-case",
+                "stratum": "s1_synthetic",
+                "fixture": {"kind": "git_range", "base_sha": "a" * 40},
+                "ground_truth": [{"id": "g1", "expected_severity": "blocker"}],
+            }
+        )
+    )
+    with pytest.raises(ValueError, match="plan_at_sha"):
+        PlanCorpusLoader(str(tmp_path), str(_REPO)).load_cases(None)
+
+
+def test_worktree_refuses_unknown_fixture_kind(tmp_path):
+    """Defense in depth at the adapter: materialize() never guesses a
+    repository state for a kind it does not implement."""
+    from plan_adapters import worktree as wt
+
+    with pytest.raises(wt.MaterializeError, match="plan_at_sha"):
+        wt.materialize("k1", {"kind": "git_range", "base_sha": "HEAD"}, str(_REPO), str(tmp_path))
