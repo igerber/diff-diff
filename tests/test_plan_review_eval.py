@@ -1901,6 +1901,42 @@ def test_loader_requires_ground_truth_rationale(tmp_path, rationale):
         PlanCorpusLoader(str(tmp_path), str(_REPO)).load_cases(None)
 
 
+def test_extraction_prompt_keeps_substantive_questions():
+    """CI round-12: the control engine surfaces implementation-blocking
+    ambiguities under 'Questions for the Author'; a categorical question
+    exclusion in the extraction rules would drop those findings for arm A
+    only — a systematic bias toward the candidate arms (false GO). The
+    prompt must extract substantive questions and exclude only non-defect
+    clarifications, and the committed control-format rehearsal sample must
+    seed exactly that scenario."""
+    import re as _re
+
+    prompt = (_EVAL_ROOT / "candidates" / "extraction_prompt.md").read_text()
+    # The categorical exclusion form is gone...
+    assert ", questions," not in prompt
+    # ...replaced by the substantive-question inclusion rule...
+    assert "PHRASED AS A QUESTION" in prompt
+    assert "missing decision" in prompt
+    # ...and the remaining exclusion is qualified, never bare.
+    bullet = _re.search(r"- Do NOT extract:.*?(?=\n- )", prompt, _re.S)
+    assert bullet is not None
+    assert "non-defect clarification questions" in bullet.group(0)
+
+    # The rehearsal probe artifact: sole seeded-defect mention lives under
+    # the control format's questions section.
+    sample = (
+        _EVAL_ROOT / "corpus" / "fixture" / "fx-mini-plan" / "control_format_review.md"
+    ).read_text()
+    before, sep, after = sample.partition("## Questions for the Author")
+    assert sep, "sample must carry the control questions section"
+    assert "safe_inference_v2" not in before
+    assert "safe_inference_v2" in after
+    # And DECISION_RULE.md registers the probe as a rehearsal requirement.
+    rule = (_EVAL_ROOT / "DECISION_RULE.md").read_text()
+    assert "format-parity extraction probe" in rule
+    assert "control_format_review.md" in rule
+
+
 def test_fingerprint_covers_scoring_metadata(tmp_path):
     """The campaign fingerprint hashes the WHOLE case definition: two cases
     identical in plan bytes and base_sha but differing in any scoring field

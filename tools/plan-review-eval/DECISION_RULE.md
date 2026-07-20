@@ -147,3 +147,13 @@ surfaces; and (2) the dress rehearsal passes: the full pipeline — `run` (k=2)
 → `extract` → `compare --blinded` → two-grader mini pass → `verdict` — end to
 end on the committed fixture case, including the dual arm C (so the merge path
 is exercised before campaign spend).
+
+The rehearsal additionally includes a **format-parity extraction probe**: the
+committed control-format sample review
+(`corpus/fixture/fx-mini-plan/control_format_review.md`), whose ONLY mention
+of the seeded `safe_inference_v2` defect sits under the control engine's
+`## Questions for the Author` section, is fed through the extraction stage,
+and the extraction must retain that defect as a finding (at least `major`).
+An extraction that drops it fails the rehearsal — a format-specific rule that
+discarded control-native question findings would bias every arm contrast
+toward the candidate and manufacture a false GO.

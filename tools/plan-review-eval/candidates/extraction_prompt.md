@@ -23,8 +23,17 @@ Rules:
 - The quote MUST be verbatim from the review and must actually name the
   defect (it is used for a hallucination check downstream).
 - One line per distinct defect; merge duplicate mentions of the same defect.
+- A defect may be PHRASED AS A QUESTION (some review formats raise blocking
+  ambiguities in a questions section). Extract a question as a finding when
+  it identifies a missing decision, a contradiction, an unresolved
+  dependency, or anything that would block or misdirect implementation —
+  severity from its framing (an ambiguity that must be resolved before
+  implementation is at least `major`; `blocker` if the review marks it
+  blocking). Exclude only non-defect clarifications that assert no gap
+  (curiosity, preference, style).
 - Do NOT extract: compliments, summaries, restatements of the plan, process
-  notes, questions, or items the review itself marks as rejected/dismissed.
+  notes, non-defect clarification questions, or items the review itself
+  marks as rejected/dismissed.
 - Do NOT mention or guess the reviewer's identity, model, or format anywhere.
 - Do NOT reproduce merge-stage metadata: agreement tags like `[consensus]` /
   `[single reviewer]`, disagreement notes, or rejected-section markers must
