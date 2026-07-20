@@ -216,9 +216,11 @@ variable.
    SCRATCH="$(git rev-parse --git-path premerge-scan)"; mkdir -p "$SCRATCH"
    python3 .claude/scripts/premerge_scan.py --scratch "$SCRATCH"
    ```
-   It runs the methodology pattern checks (A–D) in pure Python over file content and
-   exits 3 if a changed path carries shell metacharacters. See `/pre-merge-check`
-   Section 2.1 for the shared definition. If it reports findings:
+   It runs the methodology pattern checks (A–D) in pure Python over file content;
+   **exit 3** = a changed path carries shell metacharacters, **exit 4** = a git/read
+   failure (the scan is incomplete — **stop and report**, do not commit on an empty
+   scan). See `/pre-merge-check` Section 2.1 for the shared definition. If it reports
+   findings:
    ```
    Pre-commit pattern check found N potential issues:
    <list warnings with file:line>

@@ -100,12 +100,17 @@ def test_submit_pr_has_zero_diff_guard():
 
 def test_submit_pr_idempotency_check_compares_base_and_draft():
     """The existing-PR idempotency check must not treat ANY open PR as success — it must
-    compare baseRefName/isDraft so a PR targeting a different base/draft isn't a silent
-    false match."""
-    text = _read("submit-pr.md")
-    assert (
-        "baseRefName" in text and "isDraft" in text
-    ), "submit-pr's gh pr view idempotency check must compare base and draft state"
+    compare baseRefName/isDraft. Assert the fields are on the *executable* `gh pr view`
+    command line (its --json argument), not merely somewhere in the prose."""
+    view_lines = [
+        ln
+        for _, ln in _bash_block_lines(_read("submit-pr.md"))
+        if "gh pr view" in ln and "--json" in ln
+    ]
+    assert view_lines, "no executable `gh pr view --json` idempotency query found"
+    assert any(
+        "baseRefName" in ln and "isDraft" in ln for ln in view_lines
+    ), "the gh pr view idempotency query must fetch baseRefName AND isDraft to compare them"
 
 
 def test_submit_pr_no_base_range_command_before_validation():

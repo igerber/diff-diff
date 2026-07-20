@@ -172,6 +172,16 @@ silently ignored in one of the others. The same trace applies when adding a new
 *mode* or code path: follow it through aggregation, bootstrap, and results before
 declaring it done.
 
+### Control/comparison-group composition on new code paths
+
+When you add a new mode or code path (e.g. `base_period="varying"`, a new
+control-selection rule), **verify the control/comparison group is composed correctly
+for that path**, not just the default. In staggered designs especially, confirm the
+"not-yet-treated" comparison group excludes the treatment cohort itself, and that
+parameter interactions (new mode × each aggregation method) select the intended
+group. A silently mis-composed comparison group produces a plausible but wrong effect
+with no error.
+
 ### Protecting arithmetic
 
 Wrap **all** related operations in `np.errstate()`, not just the one that raised.

@@ -172,9 +172,10 @@ Note: Section 3b checks are informational warnings only — no AskUserQuestion p
    SCRATCH="$(git rev-parse --git-path premerge-scan)"; mkdir -p "$SCRATCH"
    python3 .claude/scripts/premerge_scan.py --scratch "$SCRATCH"
    ```
-   Runs the methodology pattern checks (A–D) in pure Python; exits 3 on a
-   metacharacter-bearing path (see `/pre-merge-check` Section 2.1). If it reports
-   findings:
+   Runs the methodology pattern checks (A–D) in pure Python; **exit 3** = a
+   metacharacter-bearing path, **exit 4** = a git/read failure (incomplete scan —
+   **stop and report**, do not push on an empty scan). See `/pre-merge-check`
+   Section 2.1. If it reports findings:
    ```
    Pre-commit pattern check found N potential issues:
    <list warnings with file:line>

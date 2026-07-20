@@ -60,6 +60,9 @@ SCRATCH="$(git rev-parse --git-path premerge-scan)"; mkdir -p "$SCRATCH"
 python3 .claude/scripts/premerge_scan.py --scratch "$SCRATCH"
 ```
 
+- If it **exits 4**, a git or file-read operation failed — the scan is **incomplete**
+  and its run-lists were truncated to empty. **Stop and report the error;** do NOT
+  continue (empty run-lists would silently run no tests and misstate coverage).
 - If it **exits 3**, it found a changed path containing shell metacharacters. It has
   already excluded that path; surface the reported path(s) for manual review — a
   methodology filename with `$()`/backticks is itself a red flag — and do not improvise
