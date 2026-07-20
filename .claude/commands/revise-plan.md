@@ -48,27 +48,61 @@ Verify the plan file exists by reading it. If it doesn't exist, report the error
 
 ### Step 2: Locate and Read Review File
 
-Derive the review file path: extract the plan file's basename, replace the trailing `.md` with `.review.md`, and look in `~/.claude/plans/`. For example, `~/.claude/plans/foo.md` → `~/.claude/plans/foo.review.md`.
+Locate the review via the helper (review filenames carry a canonical-path
+digest — NEVER derive them from the basename): first initialize the scratch
+dir (it need not exist on a fresh worktree):
+```bash
+SCRATCH="$(git rev-parse --git-path plan-review)"
+mkdir -p "$SCRATCH" && echo "$SCRATCH"
+```
+Write the raw plan path to `<scratch>/plan-path.txt` (Write tool), then `python3 .claude/scripts/plan_snapshot.py check --plan-path-file
+"$SCRATCH/plan-path.txt"` — its JSON reports `plan_path`, `review_path`,
+`review_exists`, and `fresh`. Confirm the printed `plan_path` is the plan you
+supplied — the ingress file is shared per-worktree, so a concurrent session
+may have overwritten it between your Write and the check; if it differs,
+re-Write the path and re-run the check before using any of its output.
 
-**If the review file exists**: Read it, proceed to Step 3.
+**If `review_exists` is true**: Read the file at the printed `review_path`,
+proceed to Step 3.
 
-**If the review file does not exist**: Use AskUserQuestion:
+**If `review_exists` is false**: Use AskUserQuestion:
 - "Run a review now (spawns a review agent)" (Recommended)
 - "Skip review and enter plan mode directly"
 
 If "Run a review now" is chosen:
-- Use the Task tool with `subagent_type: "general-purpose"`. Prompt the agent:
+- **First take an immutable snapshot via the tested helper** (the raw plan
+  path is untrusted — it reaches the helper via a file written with the Write
+  tool, never a shell): derive `SCRATCH="$(git rev-parse --git-path
+  plan-review)"` (mkdir -p it), Write the raw plan path to
+  `<scratch>/plan-path.txt`, then run
+  `python3 .claude/scripts/plan_snapshot.py snapshot --plan-path-file
+  "$SCRATCH/plan-path.txt"` — it prints JSON with `state_path`,
+  `snapshot_path`, `meta_path`, `body_path`, `plan_path`, `plan_sha256`,
+  `review_path`. Confirm the printed `plan_path` is the plan you supplied
+  (detects a concurrent ingress overwrite; re-run if not). Non-zero exit:
+  report and stop.
+- Use the Task tool with `subagent_type: "general-purpose"`, pointing the agent
+  at the SNAPSHOT path (never the live plan). Prompt the agent:
   ```
   You are reviewing a Claude Code plan file as an independent reviewer.
 
   1. Read the review criteria from `.claude/commands/review-plan.md` (Steps 2 through 5)
-  2. Read the plan file at: <plan-path>
+  2. Read the plan file at: <snapshot-path> (an immutable snapshot of the plan)
   3. Follow the review instructions: read CLAUDE.md for project context, read referenced files, evaluate across 8 dimensions, present structured feedback
   4. Number each issue sequentially within its severity section (CRITICAL #1, MEDIUM #1, etc.)
   5. Return ONLY the structured review output (from "## Overall Assessment" through "## Summary"). Do NOT include the "## Plan Content" display (Step 4b) — it is for terminal display only and must not be persisted to the review file.
   ```
-- Save the agent's review output (from "## Overall Assessment" through "## Summary") to the review file path with YAML frontmatter (see `.claude/commands/review-plan.md` Step 6 for format). Do not include plan content in the review file.
-- Write the plan path to `~/.claude/plans/.last-reviewed`
+- After the agent returns: Write its review output (from "## Overall
+  Assessment" through "## Summary" — no plan content) to the exact `body_path`
+  printed by snapshot, Write the meta JSON (reviewed_at, assessment, counts,
+  `"flags": []`) to the exact `meta_path`, then run
+  `python3 .claude/scripts/plan_snapshot.py persist --state-file
+  "<state-path>"` (the literal printed path). Exit 3 = the plan changed while
+  being reviewed: NOT persisted — relay the message and re-run. The helper
+  certifies the recorded snapshot digest and sets `plan:`/`plan_sha256:`
+  itself. On any pre-persist failure or cancellation, run
+  `plan_snapshot.py abort --state-file "<state-path>"` so temporary files
+  never accumulate.
 - Proceed to Step 3 with the review content
 
 If "Skip review" is chosen:
@@ -80,21 +114,16 @@ If "Skip review" is chosen:
 - In Step 7, since there are no review issues to address:
   - Skip rule-based revision (no CRITICAL/MEDIUM/LOW to process)
   - Apply user notes as general guidance for the revision
-  - Ensure the plans directory exists: `mkdir -p ~/.claude/plans`
-  - Write a minimal "Skipped" review marker to `~/.claude/plans/<plan-basename>.review.md` (the centralized review path from Change 3) before calling `ExitPlanMode` to satisfy the hook:
-    ```yaml
-    ---
-    plan: <plan-file-path>
-    reviewed_at: <ISO 8601 timestamp>
-    assessment: "Skipped"
-    critical_count: 0
-    medium_count: 0
-    low_count: 0
-    flags: []
-    ---
-    Review skipped by user.
-    ```
-  - Write the plan path to `~/.claude/plans/.last-reviewed` (same as the review-present path in Step 2)
+  - Write a "Skipped" marker via the helper (it snapshots, hashes, and
+    stamps `plan:`/`plan_sha256:` itself): Write the raw plan path to
+    `<scratch>/plan-path.txt`, run `plan_snapshot.py snapshot
+    --plan-path-file ...` (as in Step 2 — confirm the printed `plan_path`
+    is the plan you supplied before using its output), Write
+    `{"reviewed_at": "<ISO 8601>", "assessment": "Skipped",
+    "critical_count": 0, "medium_count": 0, "low_count": 0, "flags": []}` to
+    the printed `meta_path`, Write `Review skipped by user.` to the printed
+    `body_path`, then run `plan_snapshot.py persist --state-file
+    "<state-path>"` before calling `ExitPlanMode` to satisfy the hook.
   - In `## Revision Notes`, record: "Review skipped — revision based on user notes only"
   - All issue counts are zero in the Addressed/Dismissed/Open sections
   - If the review marker write fails, report an error and stop — the hook requires this file on disk.
@@ -120,14 +149,20 @@ Source: <review-file-path>
 
 ### Step 4: Staleness Check
 
-Compare file modification times. The review file is always in `~/.claude/plans/`:
+Compare the plan's content hash against the one recorded in the review file
+via the helper's read-only probe (the raw path flows through file ingress —
+never a shell): Write the raw plan path to `<scratch>/plan-path.txt`
+(`SCRATCH="$(git rev-parse --git-path plan-review)"`), then:
 ```bash
-PLAN_PATH="<plan-path>"
-REVIEW_PATH="$HOME/.claude/plans/$(basename "$PLAN_PATH" .md).review.md"
-[ "$PLAN_PATH" -nt "$REVIEW_PATH" ] && echo "STALE" || echo "FRESH"
+SCRATCH="$(git rev-parse --git-path plan-review)"
+python3 .claude/scripts/plan_snapshot.py check --plan-path-file "$SCRATCH/plan-path.txt"
 ```
+Confirm the printed `plan_path` is the plan you supplied (shared per-worktree
+ingress — a concurrent session may have overwritten it); if it differs,
+re-Write the path and re-run the check.
 
-If the plan is newer than the review, warn:
+If the printed `fresh` is false (hash mismatch, or no `plan_sha256` recorded),
+the review is STALE — it reviewed different plan content. Warn:
 ```
 Warning: The plan file was modified after this review was generated.
 The review may be commenting on an older version of the plan.
@@ -193,10 +228,15 @@ Call `EnterPlanMode` to transition into plan mode. In plan mode:
    - Question #1: <question text — to be resolved during implementation>
    ```
 5. **Write the revised plan** using the Edit or Write tool
-6. **Touch the review file** to update its mtime so the hook's staleness check passes after an intentional revision:
-   ```bash
-   touch ~/.claude/plans/<plan-basename>.review.md
-   ```
+6. **Re-review the revised plan** — never merely re-stamp the old review's hash
+   onto content it did not examine (that would recreate the old `touch` bypass
+   with better cosmetics). Spawn the review agent again (Step 2's "Run a review
+   now" flow) over the REVISED plan; that fresh review writes the new
+   `plan_sha256`. If the user explicitly declines a re-review, write a fresh
+   Skipped marker (Step 2's template, with the new hash) — its
+   `assessment: "Skipped"` accurately records that the revised content was not
+   independently reviewed. The ExitPlanMode hook denies on hash mismatch; there
+   is no mtime/touch bypass.
 7. **Call `ExitPlanMode`** for user approval
 
 ### Step 8: Report

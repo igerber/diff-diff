@@ -212,7 +212,7 @@ class CorpusLoader:
             # path "verify" against the wrong file.
             return _validate_touched_files(case, _post_diff_paths(name_status))
         finally:
-            worktree.cleanup(mat.worktree_dir, self.repo_root)
+            worktree.cleanup(mat.worktree_dir, self.repo_root, worktrees_root)
 
 
 __all__ = ["CorpusLoader"]

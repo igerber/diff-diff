@@ -1,0 +1,110 @@
+# Plan-Review Engine Comparison Harness
+
+Measures proposed changes to the plan-review workflow's ENGINE (criteria,
+reviewer composition, models) against the current production workflow, BEFORE
+they land — the same measure-first discipline `tools/reviewer-eval` applied to
+the CI code reviewer (see its 2026-07 gpt-5.6 campaign). Second consumer of
+the shared `tools/eval_core/` engine.
+
+**Status:** harness only — the campaign has not run. The go/no-go rule is
+pre-registered in `DECISION_RULE.md` and may not be edited once the campaign
+starts. Local-only, never wired to CI.
+
+## Layout
+
+```
+tools/eval_core/           # shared engine: models, store, runner, compare (+ blinding)
+tools/plan-review-eval/
+├── run_eval.py            # CLI: verify-corpus · smoke · run · extract · compare · verdict
+├── verdict.py             # mechanical gate computation (unit-tested; no LLM)
+├── plan_adapters/         # plan bindings: corpus_loader, criteria_source, plan_reviewer, worktree
+├── candidates/            # the engine UNDER TEST (criteria, prompts, merge+verify, extraction)
+├── config/configs.json    # the five arms + control-criteria pin + extraction pin
+├── DECISION_RULE.md       # pre-registered gates + grading protocol + corpus floor
+└── corpus/
+    ├── manifest.schema.json
+    ├── fixture/           # committed fabricated case (CI tests, smoke, dress rehearsal)
+    └── cases/             # REAL cases — gitignored; the user's plans are never committed
+```
+
+## The arms (all k=2)
+
+A control (pinned-SHA `review-plan.md`, single Claude) · B candidate criteria,
+single Claude · C candidate, dual Claude+codex-sol with merge+verify · D probe
+(Sonnet) · E probe (codex-terra). Two gating contrasts: A-vs-B (regression)
+and B-vs-C (is dual worth it). See `DECISION_RULE.md`.
+
+The control arm's criteria come from `git show <pinned-sha>` (pin + rationale
+in `config/configs.json`) — never a committed copy, so the control cannot
+drift and survives the command file's eventual retirement. The candidate
+engine lives in `candidates/` as lab artifacts; the program's step 3 promotes
+the winning configuration into a live skill.
+
+## Usage
+
+```bash
+# 1. Verify the corpus materializes (no reviewer calls; fast)
+python tools/plan-review-eval/run_eval.py verify-corpus
+
+# 2. Smoke: fixture case, one arm, k=1. Bare `smoke` runs the control arm
+#    (proves the pinned git-show path + the claude -p invocation); smoke the
+#    dual arm too before any campaign — it proves the codex + merge path.
+python tools/plan-review-eval/run_eval.py smoke
+python tools/plan-review-eval/run_eval.py smoke --configs C
+
+# 3. Dress rehearsal (campaign-readiness gate; see DECISION_RULE.md):
+python tools/plan-review-eval/run_eval.py run --subdir rehearsal --cases fx-mini-plan --k 2
+python tools/plan-review-eval/run_eval.py extract --subdir rehearsal
+python tools/plan-review-eval/run_eval.py compare --subdir rehearsal --blinded
+#    ... two-grader mini pass over the blinded bundle -> grades.json ...
+python tools/plan-review-eval/run_eval.py verdict --subdir rehearsal --grades grades.json --candidate B
+
+# 4. The campaign (only after the readiness gate passes)
+python tools/plan-review-eval/run_eval.py run --subdir campaign --k 2
+python tools/plan-review-eval/run_eval.py extract --subdir campaign
+python tools/plan-review-eval/run_eval.py compare --subdir campaign --blinded
+python tools/plan-review-eval/run_eval.py verdict --subdir campaign --grades <reconciled>.json --candidate B
+python tools/plan-review-eval/run_eval.py verdict --subdir campaign --grades <reconciled>.json --candidate C --control B
+# (A-vs-B and B-vs-C are the ONLY registered gating contrasts; any other pair —
+#  including the D/E probes — is labeled NON-GATING by verdict.)
+```
+
+## How scoring works
+
+Runs store each arm's raw (or, for dual arms, merged) review verbatim. The
+`extract` stage reduces every review to a uniform, format-neutral findings
+schema (defect claim + location + neutral severity + verbatim evidence quote)
+— this is what closes the report-structure blinding leak: the two engines'
+native formats (CRITICAL/MEDIUM/LOW prose vs P0–P3 lists, dual-arm agreement
+tags) would otherwise reveal exactly the contrast being judged. `compare
+--blinded` bundles the extractions under neutral `M*` labels; two independent
+subagent graders fill the caught/partial/missed + FP tables; disagreements go
+to adversarial reconciliation (raw reviews consultable ONLY on dispute);
+`verdict` applies the pre-registered gates mechanically.
+
+## Data handling
+
+"Never committed" is a GIT statement, not a privacy boundary — know where plan
+content actually goes:
+
+- Reviewer/merge/extraction stages TRANSMIT plan content to model providers
+  (Anthropic via the Claude CLI; OpenAI via codex for dual arms).
+- Raw reviews, merged reports, extractions, and grading bundles are stored
+  under `runs/` (gitignored, local).
+- The codex CLI's `--sandbox read-only` prevents writes but is NOT a read
+  boundary confined to the worktree (see the tracked isolation item in
+  `TODO.md`); the Claude reviewer runs under the default permission model,
+  which denies out-of-workspace reads headlessly.
+- Sanitize a case's plan text before adding it to the corpus if it contains
+  anything you would not paste into a model prompt.
+
+## Fidelity notes (documented divergences)
+
+- The control arm inlines the pinned criteria into its spawn prompt (the
+  production flow had the agent read the live file; the pinned file may not
+  exist in the case worktree).
+- Production dual-mode verification runs in the planning session with
+  conversation context; the harness's merge+verify subprocess has none.
+- Reviewer subprocesses run with read-only built-in tools (`Read,Grep,Glob`)
+  in a detached worktree at the case's `base_sha` — the repo as the plan saw
+  it, so codebase-correctness findings grade against the right tree.

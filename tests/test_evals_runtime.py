@@ -521,7 +521,9 @@ def test_build_prompt_cleans_worktree_on_build_failure(monkeypatch):
     cleaned = []
     monkeypatch.setattr(worktree, "materialize", lambda *a, **k: _Mat(), raising=True)
     monkeypatch.setattr(ci_prompt, "build_ci_prompt", _raise, raising=True)
-    monkeypatch.setattr(worktree, "cleanup", lambda wt, root: cleaned.append(wt), raising=True)
+    monkeypatch.setattr(
+        worktree, "cleanup", lambda wt, root, *a, **k: cleaned.append(wt), raising=True
+    )
 
     case = Case(id="c", stratum=STRATUM_SYNTHETIC, fixture={"_case_dir": "/x"})
     with pytest.raises(NotImplementedError):

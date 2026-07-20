@@ -218,7 +218,7 @@ class CodexReviewer:
             # or a prompt-assembly error). review()'s finally never sees this
             # worktree, so tear it down here to avoid leaking a detached worktree.
             with self._wt_lock:
-                worktree.cleanup(mat.worktree_dir, self.repo_root)
+                worktree.cleanup(mat.worktree_dir, self.repo_root, self.worktrees_root)
             raise
         return prompt, mat.worktree_dir, mat.head_sha
 
@@ -236,7 +236,7 @@ class CodexReviewer:
             return hashlib.sha256(prompt.encode("utf-8")).hexdigest()[:16]
         finally:
             with self._wt_lock:
-                worktree.cleanup(wt_dir, self.repo_root)
+                worktree.cleanup(wt_dir, self.repo_root, self.worktrees_root)
 
     def review(self, case, config: Config, repeat_idx: int) -> ReviewOutput:
         if config.effort not in self.SUPPORTED_EFFORTS:
@@ -274,7 +274,7 @@ class CodexReviewer:
             )
         finally:
             with self._wt_lock:
-                worktree.cleanup(wt_dir, self.repo_root)
+                worktree.cleanup(wt_dir, self.repo_root, self.worktrees_root)
         latency = time.monotonic() - t0
 
         usage = dict(usage or {})

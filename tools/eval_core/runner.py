@@ -26,7 +26,9 @@ from eval_core.store import RunStore, run_key
 # Config fields that are held-constant confounds unless declared as treatments.
 # `model` IS in this list: an effort-only experiment must hold model constant, or
 # the arms are silently confounded — the exact failure the harness exists to stop.
-CONFOUND_FIELDS = ("model", "effort", "sandbox", "action_version")
+# `variant` (criteria/prompt source) and `mode` (reviewer composition) are the
+# generic multi-dimension arm fields; "" everywhere when a harness doesn't use them.
+CONFOUND_FIELDS = ("model", "effort", "sandbox", "action_version", "variant", "mode")
 
 
 class CLIVersionMismatch(RuntimeError):

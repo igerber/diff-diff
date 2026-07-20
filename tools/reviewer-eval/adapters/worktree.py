@@ -130,7 +130,7 @@ def materialize(
     wt = os.path.join(worktrees_root, _worktree_leaf(worktree_key or case_id))
     # Clean any stale worktree from a previous crashed run.
     if os.path.exists(wt):
-        cleanup(wt, repo_root)
+        cleanup(wt, repo_root, worktrees_root)
 
     if kind == "git_range":
         head = fixture.get("head_sha")
@@ -196,32 +196,59 @@ def materialize(
             head = _resolve(wt, "HEAD")
             return Materialized(worktree_dir=wt, base_sha=base, head_sha=head)
         except MaterializeError:
-            cleanup(wt, repo_root)
+            cleanup(wt, repo_root, worktrees_root)
             raise
         except Exception as exc:  # noqa: BLE001 - clean up + rewrap as a case-scoped error
             # Any other post-`worktree add` failure (e.g. a CalledProcessError from a
             # check=True git call) must NOT leak the detached worktree or crash
             # verify-corpus/run with a raw traceback — clean up and surface it as an
             # infra-level MaterializeError (-> INFRA_ERROR RunResult, never a missed bug).
-            cleanup(wt, repo_root)
+            cleanup(wt, repo_root, worktrees_root)
             raise MaterializeError(f"{case_id}: materialization failed: {exc}") from exc
 
     raise MaterializeError(f"{case_id}: unknown fixture kind {kind!r}")
 
 
-def cleanup(worktree_dir: str, repo_root: str) -> None:
-    """Remove a worktree (best-effort; prune dangling admin files)."""
-    _git(repo_root, ["worktree", "remove", "--force", worktree_dir], check=False)
-    _git(repo_root, ["worktree", "prune"], check=False)
-    # If the path SURVIVED (an interrupted/partial run can leave an orphaned dir that
-    # is no longer a registered worktree — `git worktree remove` then fails, and the
-    # next `git worktree add` to the same key would fail too), force-remove it. Guard
-    # on the CANONICAL path (realpath resolves any ``..``/``.``) and require it to be a
-    # STRICT child of a managed ``.worktrees/`` root, so a reserved id can never make
-    # this delete runs/ or the worktrees root itself.
+def cleanup(worktree_dir: str, repo_root: str, worktrees_root: str | None = None) -> None:
+    """Remove a worktree (best-effort; prune dangling admin files).
+
+    If the path SURVIVED (an interrupted/partial run can leave an orphaned dir that
+    is no longer a registered worktree — `git worktree remove` then fails, and the
+    next `git worktree add` to the same key would fail too), force-remove it — with
+    two containment guards, BOTH applied BEFORE any git command (git worktree
+    remove itself follows a symlinked leaf): a leaf that is itself a SYMLINK is unlinked without
+    following it (a leaf pointing at an external ``.worktrees/victim`` must never be
+    recursed into — realpath alone would resolve to the external target, whose
+    parent is conveniently named ``.worktrees``, and delete it); and the recursive
+    delete requires the canonical target to be a STRICT child of the canonical
+    TRUSTED root (``worktrees_root`` when provided; the leaf's parent must at
+    minimum be named ``.worktrees`` otherwise).
+    """
+    # Containment BEFORE any git command: `git worktree remove --force` itself
+    # resolves a symlinked leaf and would remove a REGISTERED external worktree
+    # — so the symlink/containment guards must run first, not after.
+    try:
+        if os.path.islink(worktree_dir):
+            os.unlink(worktree_dir)  # never follow a symlinked leaf
+            _git(repo_root, ["worktree", "prune"], check=False)
+            return
+    except OSError:
+        return
     real = os.path.realpath(worktree_dir)
     parent = os.path.dirname(real)
-    if os.path.isdir(real) and os.path.basename(parent) == ".worktrees" and real != parent:
+    if worktrees_root is not None:
+        root = os.path.realpath(worktrees_root)
+        try:
+            contained = os.path.commonpath([root, real]) == root and real != root
+        except ValueError:  # different drives / mixed abs-rel
+            contained = False
+        if not contained:
+            return
+    elif os.path.basename(parent) != ".worktrees" or real == parent:
+        return
+    _git(repo_root, ["worktree", "remove", "--force", worktree_dir], check=False)
+    _git(repo_root, ["worktree", "prune"], check=False)
+    if os.path.isdir(real):
         shutil.rmtree(real, ignore_errors=True)
 
 

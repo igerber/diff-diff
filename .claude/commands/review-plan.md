@@ -41,22 +41,50 @@ Options:
 
 ## Constraints
 
-- **Read-only for project files**: Do NOT create, edit, or delete any project files (source code, tests, documentation, configuration). The only files this skill writes are the review output (`~/.claude/plans/<plan-stem>.review.md`) and the sentinel (`~/.claude/plans/.last-reviewed`), both in `~/.claude/plans/`.
+- **Read-only for project files**: Do NOT create, edit, or delete any project files (source code, tests, documentation, configuration). The only PERSISTENT output is the review file (the helper-derived `review_path` in `~/.claude/plans/` — its filename carries a canonical-path digest). The workflow also uses invocation-scoped TEMPORARY files, which are allowed: the ingress/scratch files under `$(git rev-parse --git-path plan-review)` (inside `.git/`, never project content) and the helper-managed snapshot/state/meta/body files under `~/.claude/plans/.snapshots/` (the helper deletes them on persist and on abort).
 - **Advisory-only**: Provide feedback and recommendations. Do not implement fixes.
 - **No code changes**: Do not modify any source code, test files, or documentation.
-- Use the Read tool for files and the Glob/Grep tools for searching. Do not use Edit, NotebookEdit, or file-modifying Bash commands on project files. The Write tool and `mkdir -p` may only target `~/.claude/plans/` (for the review output file, sentinel, and output directory).
+- Use the Read tool for files and the Glob/Grep tools for searching. Do not use Edit, NotebookEdit, or file-modifying Bash commands on project files. The Write tool and `mkdir -p` may target only `~/.claude/plans/` and the two temporary locations above.
 - The `gh api` calls used with `--pr` are read-only API requests, consistent with the project-files read-only constraint.
 
 ## Instructions
 
-### Step 1: Read the Plan File
+### Step 1: Take an Immutable Snapshot of the Plan
 
-Read the plan file at the path provided in `$ARGUMENTS`.
+**The review must certify exactly the bytes it examined.** The whole
+snapshot/verify/persist protocol lives in the tested helper
+`.claude/scripts/plan_snapshot.py` (see `tests/test_plan_snapshot.py`) — the
+raw plan path is UNTRUSTED and never touches a shell; it reaches the helper
+via a file written with the Write tool:
 
-If the file does not exist, report the error and stop:
-```
-Error: Plan file not found at <path>
-```
+1. Derive the scratch dir (one Bash call; deterministic, worktree-correct):
+   ```bash
+   SCRATCH="$(git rev-parse --git-path plan-review)"
+   mkdir -p "$SCRATCH" && echo "$SCRATCH"
+   ```
+2. **Write the raw plan path** (exactly as supplied, `~` and all) to
+   `<scratch>/plan-path.txt` with the Write tool — never `echo`/heredoc.
+3. **Run the helper** (re-derive `SCRATCH` in this call):
+   ```bash
+   SCRATCH="$(git rev-parse --git-path plan-review)"
+   python3 .claude/scripts/plan_snapshot.py snapshot --plan-path-file "$SCRATCH/plan-path.txt"
+   ```
+   It normalizes the path as data (`~` expansion, canonical realpath — any
+   absolute path is accepted; the path never touches a shell), reads the plan
+   bytes ONCE,
+   writes an invocation-unique immutable snapshot + state token, and prints
+   JSON: `state_path`, `snapshot_path`, `meta_path`, `body_path`, `plan_path`,
+   `plan_sha256`, `review_path`. Non-zero exit = invalid/unreadable path —
+   report its message and stop. **Confirm the printed `plan_path` is the plan
+   you supplied** (a concurrent session overwriting the ingress file is
+   thereby detected — if it differs, re-run from step 2).
+4. **Read the SNAPSHOT file** (Read tool, the printed `snapshot_path`) — it is
+   the ONLY text this review examines. The state token keys the rest of the
+   protocol; Step 6's persist certifies the RECORDED snapshot digest only
+   after re-verifying the live plan against it. **If the review aborts for any
+   reason before persisting** (error, user cancellation), clean up the
+   invocation: `python3 .claude/scripts/plan_snapshot.py abort --state-file
+   "<state-path>"` — temporary snapshot files must not accumulate.
 
 ### Step 1b: Handle Re-Review (if `--updated`)
 
@@ -69,7 +97,7 @@ After completing the standard 8-dimension review in Step 4, add a **Delta Assess
 - Which previously-raised issues remain unresolved?
 - Are there any new issues introduced by the revisions?
 
-Additionally, check if a prior review file exists at `~/.claude/plans/<plan-basename>.review.md` (derived from the plan's basename, always in `~/.claude/plans/`). If it exists, read it as a supplementary source of prior review context. When conversation context has been compressed between rounds, use the review file's content for delta assessment instead. If both conversation context and the review file are available, prefer whichever source is more detailed.
+Additionally, check for a prior review via the Step 1 snapshot output: its `review_path` is the canonical location (review filenames carry a canonical-path digest — never derive them from the basename). If a file exists there, read it as a supplementary source of prior review context. When conversation context has been compressed between rounds, use the review file's content for delta assessment instead. If both conversation context and the review file are available, prefer whichever source is more detailed.
 
 If no prior review is available from either source (conversation context or review file), still include the Delta Assessment section but fill each subsection with: "Delta assessment unavailable — no prior review found in conversation context or review file. Full fresh review performed."
 
@@ -441,57 +469,40 @@ The `--pr` URL must be the same across the initial review and the `--updated` re
 
 ### Step 6: Save Review to File
 
-After displaying the review in the conversation (Step 5), persist it to a file alongside the plan.
+After displaying the review in the conversation (Step 5), persist it via the
+helper — it re-verifies the live plan against the reviewed snapshot, builds the
+frontmatter (setting `plan:` and `plan_sha256:` itself from the snapshot — the
+caller cannot mis-stamp them), writes atomically, and cleans the snapshot up:
 
-0. **Ensure the plans directory exists**:
+1. **Write the review body** (everything from "## Overall Assessment" through
+   "## Summary", exactly as displayed) to the exact `body_path` printed in
+   Step 1, with the Write tool (invocation-unique — concurrent reviews cannot
+   cross-wire inputs).
+
+2. **Write the meta JSON** to the exact `meta_path` printed in Step 1, with
+   the Write tool:
+   ```json
+   {"reviewed_at": "2026-02-15T14:30:00Z", "assessment": "Significant issues found",
+    "critical_count": 2, "medium_count": 3, "low_count": 1, "flags": ["--updated", "--pr"]}
+   ```
+   (`reviewed_at` from `date -u +%Y-%m-%dT%H:%M:%SZ`; `flags` lists the CLI
+   flags active during this review — `"--updated"`, `"--pr"`, or `[]`.)
+
+3. **Persist via the state token** — substitute the literal `state_path`
+   printed in Step 1 (helper-generated, safe charset):
    ```bash
-   mkdir -p ~/.claude/plans
+   python3 .claude/scripts/plan_snapshot.py persist --state-file "<state-path>"
    ```
+   - **Exit 3** means the plan was modified during the review: the review was
+     NOT persisted (it examined the snapshot, and the live content is now
+     something else). Relay the helper's message and stop — re-run
+     /review-plan against the current plan. Do NOT proceed to the footer.
+   - Any other non-zero exit: report the message and stop (the review file is
+     required by the ExitPlanMode hook; a missing one blocks approval).
+   - On success it prints the review path (canonical — derived from the
+     realpath the hook also uses, so symlink aliases cannot split the key).
 
-1. **Derive the review file path**: Extract the plan file's basename, replace the trailing `.md` with `.review.md`, and place it in `~/.claude/plans/`. For example, `~/.claude/plans/foo.md` → `~/.claude/plans/foo.review.md`. If the plan is at `/repo/.claude/plans/bar.md`, the review still goes to `~/.claude/plans/bar.review.md`.
-
-2. **Get the current timestamp**:
-   ```bash
-   date -u +%Y-%m-%dT%H:%M:%SZ
-   ```
-
-3. **Construct the review file** with YAML frontmatter followed by the review body:
-
-   ```yaml
-   ---
-   plan: ~/.claude/plans/foo.md
-   reviewed_at: "2026-02-15T14:30:00Z"
-   assessment: "Significant issues found"
-   critical_count: 2
-   medium_count: 3
-   low_count: 1
-   flags: ["--updated", "--pr"]
-   ---
-   ```
-
-   The `plan:` value must be the plan file path as resolved in Step 1 — the same path used throughout this skill invocation. The hook expands `~` to `$HOME` before comparison, so `~/...` paths work correctly. The key requirement is that this value, after `~` expansion, exactly matches the plan file path the hook resolves from the sentinel or fallback.
-
-   The `flags` field is a list of CLI flags that were active during this review. Possible values: `"--updated"`, `"--pr"`. Empty list `[]` if no flags were used.
-
-   Followed by the full review content (everything from "## Overall Assessment" through "## Summary", exactly as displayed in the conversation).
-
-4. **Write the review file** using the Write tool. Overwrite any existing file at this path (expected on `--updated` re-reviews).
-
-5. **Write the sentinel file** `~/.claude/plans/.last-reviewed` containing the plan file path (just the path, no YAML):
-   ```
-   ~/.claude/plans/foo.md
-   ```
-   This sentinel is read by the ExitPlanMode hook to identify which plan was most recently reviewed.
-
-6. **Abort on write failure**: If the review file write fails, report a hard error and stop. Do NOT proceed with the "Tip: In the planning window..." footer. The review file is required by the ExitPlanMode hook — a missing file will permanently block plan approval.
-   ```
-   Error: Failed to write review file to <review-file-path>.
-   Ensure ~/.claude/plans/ exists and is writable, then retry.
-   The review content was displayed above — copy it if needed.
-   ```
-   If the sentinel write fails, emit a warning (the sentinel is a convenience, not a hard requirement — the hook falls back to `ls -t`).
-
-7. **Append a footer** to the conversation output:
+4. **Append a footer** to the conversation output:
    ```
    ---
    Review saved to: <review-file-path>
@@ -500,7 +511,7 @@ After displaying the review in the conversation (Step 5), persist it to a file a
 
 ## Notes
 
-- This skill is read-only for project files — it writes two files in `~/.claude/plans/`: the review output (`<plan-basename>.review.md`) and the sentinel (`.last-reviewed`)
+- This skill is read-only for project files — its one persistent output is the review file at the helper-derived `review_path` (canonical basename + canonical-path digest, in `~/.claude/plans/`), whose `plan_sha256` frontmatter is what the ExitPlanMode hook validates against the plan's current content
 - Plan files are typically located in `~/.claude/plans/`
 - The review is displayed in the conversation (primary reading surface) and saved to a `.review.md` file alongside the plan (for persistence and cross-session exchange)
 - On `--updated` re-reviews, the prior `.review.md` file is read for delta context and then overwritten with the new review

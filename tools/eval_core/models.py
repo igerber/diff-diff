@@ -62,6 +62,14 @@ class Config:
     # "record whatever is on PATH but still assert A==B".
     cli_version: Optional[str] = None
     label: str = ""  # human description ("control / current production")
+    # Generic arm dimensions for harnesses whose arms differ in more than model:
+    # ``variant`` names the prompt/criteria source under test (e.g. "control" vs
+    # "candidate"), ``mode`` the reviewer composition (e.g. "single" vs
+    # "dual:<second-model>"). Both default "" so single-dimension harnesses
+    # (reviewer-eval) load unchanged; both are held-constant confounds unless
+    # declared in treatment_fields (see eval_core.runner.CONFOUND_FIELDS).
+    variant: str = ""
+    mode: str = ""
 
 
 @dataclass

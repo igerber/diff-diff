@@ -1,0 +1,35 @@
+{
+  "id": "fx-mini-plan",
+  "stratum": "fixture",
+  "title": "Fabricated mini-plan (committed fixture for CI tests, smoke, and the dress rehearsal)",
+  "fixture": {
+    "kind": "plan_at_sha",
+    "base_sha": "HEAD",
+    "plan": "plan.md"
+  },
+  "ground_truth": [
+    {
+      "id": "fx-nonexistent-symbol",
+      "file": "diff_diff/utils.py",
+      "line_window": [0, 0],
+      "bug_class": "nonexistent-symbol",
+      "expected_severity": "blocker",
+      "must_catch": true,
+      "anchor_symbol": "safe_inference_v2",
+      "class_keywords": ["safe_inference_v2", "does not exist", "no such function", "safe_inference"],
+      "rationale": "The plan proposes extending safe_inference_v2(), which does not exist in diff_diff/utils.py (the real function is safe_inference). A faithful plan review verifies the symbol and flags the false codebase claim."
+    },
+    {
+      "id": "fx-missing-tests",
+      "file": "plan.md",
+      "line_window": [0, 0],
+      "bug_class": "missing-tests",
+      "expected_severity": "major",
+      "must_catch": true,
+      "anchor_symbol": "",
+      "class_keywords": ["no test", "tests are needed", "warning is behavior", "assert the warning", "pytest.warns"],
+      "rationale": "The plan adds a user-visible warning (new behavior) but declares no tests are needed. Project conventions require behavioral assertions for new behavior; a faithful review flags the testing gap."
+    }
+  ],
+  "notes": "Fabricated plan against the live repo at HEAD (no historical SHA, so shallow CI clones can materialize it). Both defects are synthetic and safe to commit: no real user plan content."
+}

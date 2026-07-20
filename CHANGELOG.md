@@ -46,6 +46,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `LPDiDResults` (per-horizon dict). All channels clear under bootstrap overrides.
   SunAbraham/dCDH df threading is tracked in TODO.md; their surfaces show df=NaN
   ("unexposed").
+- **Internal tooling (no library change): workflow-eval program step 1.** The shared
+  eval engine moved to `tools/eval_core/` (reviewer-eval is its first consumer,
+  unchanged behavior), and a new `tools/plan-review-eval/` harness measures proposed
+  plan-review engine changes against the production workflow before they land —
+  five k=2 arms (pinned-SHA control criteria via `git show`, candidate criteria as
+  lab artifacts, dual Claude+codex with merge+verify, cheap-model probes),
+  pre-registered `DECISION_RULE.md`, extraction-based blinded grading, and a
+  mechanical `verdict.py` (real plan corpus stays local-only). The plan-approval
+  hook was rewritten as `.claude/hooks/check-plan-review.py`: a `plan_sha256`
+  content-hash gate replaces the `.last-reviewed` sentinel + mtime design, killing
+  the concurrent-worktree sentinel race and the `touch`-after-revision hack; it
+  fails closed on hook-payload drift (pytest matrix in
+  `tests/test_plan_review_hook.py`).
 - **ImputationDiD leave-one-out SE now anchored against Stata `did_imputation, leaveout`
   (no library behavior change).** The Borusyak-Jaravel-Spiess (2024) App. A.9 LOO variance
   (`leave_one_out=True`) has no runnable R reference (R `didimputation` omits LOO), so it

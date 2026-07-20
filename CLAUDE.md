@@ -226,36 +226,50 @@ When adding new functionality, the source of truth is:
 
 ## Plan Review Before Approval
 
-When writing a new plan file (via EnterPlanMode), update the sentinel:
-```bash
-echo "<plan-file-path>" > ~/.claude/plans/.last-reviewed
-```
+The `check-plan-review.py` hook denies `ExitPlanMode` unless the plan's
+review file (the helper-derived `review_path` — canonical basename + a
+canonical-path digest, in `~/.claude/plans/`) exists with a `plan_sha256`
+frontmatter field matching the SHA-256 of the plan file's CURRENT bytes. There
+is no sentinel and no mtime check: any plan edit invalidates the review until
+it is re-run or deliberately re-stamped.
 
 Before calling `ExitPlanMode`, offer the user an independent plan review via `AskUserQuestion`:
 - "Run review agent for independent feedback" (Recommended)
 - "Present plan for approval as-is"
 
-**If review requested**: Spawn review agent (Task tool, `subagent_type: "general-purpose"`)
-to read `.claude/commands/review-plan.md` and follow Steps 2-5. Display output in conversation.
-Save to `~/.claude/plans/<plan-basename>.review.md` with YAML frontmatter (plan path,
-timestamp, assessment, issue counts). Update sentinel. Collect feedback and revise if needed.
-Touch review file after revision to avoid staleness check failure.
+**If review requested**: FIRST snapshot via the tested helper — Write the raw
+plan path to `<scratch>/plan-path.txt` (`SCRATCH="$(git rev-parse --git-path
+plan-review)"`; the Write tool, never echo/heredoc — the path is untrusted and
+never touches a shell; the helper accepts any absolute path as data), then `python3 .claude/scripts/plan_snapshot.py snapshot --plan-path-file
+"$SCRATCH/plan-path.txt"` (prints `state_path`/`snapshot_path`/`meta_path`/
+`body_path`/`plan_path`/`plan_sha256`/`review_path`; confirm the printed
+`plan_path` is the plan you supplied; non-zero exit → report and stop). Spawn
+the review agent (Task tool, `subagent_type: "general-purpose"`) to read
+`.claude/commands/review-plan.md` and follow Steps 2-5 AGAINST THE SNAPSHOT
+path, never the live plan. Display output in conversation. Then Write the
+review body to the printed `body_path`, the meta JSON
+(reviewed_at/assessment/counts/flags) to the printed `meta_path`, and run
+`plan_snapshot.py persist --state-file "<state-path>"` — it certifies the
+RECORDED snapshot digest only after re-verifying the live plan against it
+(exit 3 = plan changed mid-review: NOT persisted; re-review), stamps
+`plan:`/`plan_sha256:` itself, writes atomically, and cleans up. On any
+pre-persist failure or cancellation, run `plan_snapshot.py abort --state-file
+"<state-path>"` instead. Collect feedback and revise if needed.
+After revising the plan, RE-REVIEW it (spawn the review agent again over the
+revised content — the fresh review writes the new `plan_sha256`); never re-stamp
+the old review's hash onto content it did not examine. If the user declines the
+re-review, write a fresh Skipped marker with the new hash instead — its
+"Skipped" assessment records that honestly. The hook denies on hash mismatch;
+`touch` does nothing.
 
-**If skipped**: Write a minimal review marker to `~/.claude/plans/<plan-basename>.review.md`:
-```yaml
----
-plan: <plan-file-path>
-reviewed_at: <ISO 8601 timestamp>
-assessment: "Skipped"
-critical_count: 0
-medium_count: 0
-low_count: 0
-flags: []
----
-Review skipped by user.
-```
-Update sentinel. The `check-plan-review.sh` hook enforces this workflow.
+**If skipped**: Write a minimal Skipped marker via the same helper flow:
+snapshot as above, then persist with meta
+`{"reviewed_at": "<ISO 8601>", "assessment": "Skipped", "critical_count": 0,
+"medium_count": 0, "low_count": 0, "flags": []}` and body
+`Review skipped by user.` — the helper stamps the hash of the exact current
+plan bytes.
 
 **Rollback**: To remove the plan review workflow, delete this section from CLAUDE.md,
 remove the `PreToolUse` entry from `.claude/settings.json`, and delete
-`.claude/hooks/check-plan-review.sh`.
+`.claude/hooks/check-plan-review.py`, `.claude/scripts/plan_snapshot.py`, and
+`tests/test_plan_review_hook.py` + `tests/test_plan_snapshot.py`.
