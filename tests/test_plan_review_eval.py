@@ -202,19 +202,28 @@ def test_git_show_fails_actionably_on_unknown_path(tmp_path):
         git_show(str(repo), sha, "nope.md")
 
 
-def test_configured_pin_resolves_in_full_clone():
-    """The REAL configs.json pin, guarded for shallow clones (CI is depth-1)."""
-    from plan_adapters.criteria_source import git_show
-
+def _skip_unless_pin_available():
+    """Real-pin guard (golden-file-skip pattern): CI checkouts are depth-1, so
+    the pinned control SHA may be absent — hermetic tmp-repo tests cover the
+    git-show mechanism everywhere; tests touching the REAL pin skip on
+    shallow clones instead of failing."""
     cfg = json.loads((_EVAL_ROOT / "config" / "configs.json").read_text())
-    pin = cfg["control_criteria"]
     probe = subprocess.run(
-        ["git", "cat-file", "-e", f"{pin['sha']}^{{commit}}"],
+        ["git", "cat-file", "-e", f"{cfg['control_criteria']['sha']}^{{commit}}"],
         cwd=_REPO,
         capture_output=True,
     )
     if probe.returncode != 0:
         pytest.skip("pinned control SHA not present (shallow clone)")
+
+
+def test_configured_pin_resolves_in_full_clone():
+    """The REAL configs.json pin, guarded for shallow clones (CI is depth-1)."""
+    from plan_adapters.criteria_source import git_show
+
+    _skip_unless_pin_available()
+    cfg = json.loads((_EVAL_ROOT / "config" / "configs.json").read_text())
+    pin = cfg["control_criteria"]
     text = git_show(str(_REPO), pin["sha"], pin["path"])
     assert "Review Plan" in text and len(text) > 10_000
 
@@ -1427,6 +1436,8 @@ def test_control_prompt_participates_in_protocol_identity():
         snap["identity"]["control_prompt_sha"]
         == _hashlib.sha256(snap["control_prompt"].encode()).hexdigest()[:16]
     )
+    # load_artifacts materializes the control criteria from the REAL pin.
+    _skip_unless_pin_available()
     arts = load_artifacts(
         str(_REPO),
         str(_EVAL_ROOT),
