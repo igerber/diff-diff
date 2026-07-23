@@ -1655,8 +1655,9 @@ class TestMPDTARComparison:
     the same data exported from R. We export R's mpdta dataset to a temp file
     and load it in Python to ensure identical input data.
 
-    Note: Python's load_mpdta() downloads from a different source than R's
-    packaged data, which has different values. These tests use R's data directly.
+    ``load_mpdta()`` now uses a checksum-pinned mirror matching R's packaged data.
+    These tests still export from R directly to preserve an independent
+    cross-language input and result path.
 
     Expected tolerances (based on benchmark analysis):
     - Overall ATT: <1% difference

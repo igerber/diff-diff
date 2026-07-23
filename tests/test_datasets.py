@@ -21,7 +21,10 @@ from diff_diff.datasets import (
     clear_cache,
     list_datasets,
     load_card_krueger,
+    load_castle_doctrine,
     load_dataset,
+    load_divorce_laws,
+    load_mpdta,
     load_prop99,
     load_walmart,
 )
@@ -63,8 +66,11 @@ class TestLoadDataset:
         """load_dataset should load datasets by name."""
         # Use fallback data to avoid network dependency
         with patch("diff_diff.datasets._download_with_cache") as mock:
-            mock.side_effect = RuntimeError("No network")
-            df = load_dataset("card_krueger")
+            from diff_diff.datasets import _DatasetSourceError
+
+            mock.side_effect = _DatasetSourceError("No network")
+            with pytest.warns(UserWarning, match="SYNTHETIC"):
+                df = load_dataset("card_krueger")
             assert isinstance(df, pd.DataFrame)
 
     def test_load_by_name_binary(self):
@@ -125,9 +131,13 @@ class TestCardKrueger:
     def test_load_uses_fallback_on_network_error(self):
         """load_card_krueger should use fallback when network fails."""
         with patch("diff_diff.datasets._download_with_cache") as mock:
-            mock.side_effect = RuntimeError("Network error")
-            df = load_card_krueger()
+            from diff_diff.datasets import _DatasetSourceError
+
+            mock.side_effect = _DatasetSourceError("Network error")
+            with pytest.warns(UserWarning, match="SYNTHETIC"):
+                df = load_card_krueger()
             assert isinstance(df, pd.DataFrame)
+            assert df.attrs["source"] == "synthetic_fallback"
             assert "treated" in df.columns
 
 
@@ -240,6 +250,258 @@ class TestMPDTA:
         # 500 counties * 5 years = 2500 rows
         assert len(df) == 2500
         assert df["countyreal"].nunique() == 500
+
+
+class TestLegacyLoaderProvenance:
+    """Legacy loaders must never silently present synthetic data as canonical."""
+
+    LOADERS = (
+        (
+            load_card_krueger,
+            _construct_card_krueger_data,
+            "_load_card_krueger_source",
+            "card_krueger_public_data",
+        ),
+        (
+            load_castle_doctrine,
+            _construct_castle_doctrine_data,
+            "_load_castle_doctrine_source",
+            "cheng_hoekstra_castle_data",
+        ),
+        (
+            load_divorce_laws,
+            _construct_divorce_laws_data,
+            None,
+            None,
+        ),
+        (
+            load_mpdta,
+            _construct_mpdta_data,
+            "_load_mpdta_source",
+            "callaway_santanna_mpdta",
+        ),
+    )
+
+    @staticmethod
+    def _valid_card_source_frame():
+        n = 410
+        df = pd.DataFrame(
+            {
+                "store_id": np.arange(1, n + 1),
+                "state": ["NJ"] * 331 + ["PA"] * 79,
+                "chain": np.resize(["bk", "kfc", "roys", "wendys"], n),
+                "emp_pre": np.full(n, 20.0),
+                "emp_post": np.full(n, 21.0),
+                "wage_pre": np.full(n, 4.5),
+                "wage_post": np.full(n, 5.0),
+            }
+        )
+        df.loc[:11, "emp_pre"] = np.nan
+        df.loc[12:25, "emp_post"] = np.nan
+        df.loc[:19, "wage_pre"] = np.nan
+        df.loc[20:40, "wage_post"] = np.nan
+        df["treated"] = (df["state"] == "NJ").astype(int)
+        df["emp_change"] = df["emp_post"] - df["emp_pre"]
+        return df
+
+    @staticmethod
+    def _valid_castle_source_frame():
+        import diff_diff.datasets as datasets_mod
+
+        states = [code for code in datasets_mod._CASTLE_STATE_BY_SID.values() if code != "_"]
+        cohorts = dict(zip(states[:5], [2005, 2006, 2007, 2008, 2009]))
+        rows = []
+        for state in states:
+            first_treat = cohorts.get(state, 0)
+            for year in range(2000, 2011):
+                rows.append(
+                    {
+                        "state": state,
+                        "year": year,
+                        "first_treat": first_treat,
+                        "homicide_rate": 5.0,
+                        "population": 1_000_000,
+                        "income": 40_000,
+                        "treated": int(first_treat > 0 and year >= first_treat),
+                        "cohort": first_treat,
+                    }
+                )
+        return pd.DataFrame(rows)
+
+    @pytest.mark.parametrize(("loader", "fallback", "source_loader", "_source"), LOADERS)
+    def test_network_failure_warns_and_marks_synthetic_fallback(
+        self, loader, fallback, source_loader, _source, monkeypatch
+    ):
+        import diff_diff.datasets as datasets_mod
+
+        if source_loader is not None:
+            monkeypatch.setattr(
+                datasets_mod,
+                source_loader,
+                MagicMock(side_effect=datasets_mod._DatasetSourceError("Network error")),
+            )
+        with pytest.warns(UserWarning, match="SYNTHETIC") as caught:
+            result = loader()
+
+        assert len(caught) == 1
+        assert result.attrs["source"] == "synthetic_fallback"
+        assert result.shape == fallback().shape
+
+    @pytest.mark.parametrize(("loader", "fallback", "source_loader", "_source"), LOADERS)
+    def test_malformed_download_warns_and_uses_marked_fallback(
+        self, loader, fallback, source_loader, _source, monkeypatch
+    ):
+        import diff_diff.datasets as datasets_mod
+
+        if source_loader is not None:
+            monkeypatch.setattr(
+                datasets_mod,
+                source_loader,
+                lambda _force_download: pd.DataFrame({"bad": [1]}),
+            )
+        with pytest.warns(UserWarning, match="SYNTHETIC") as caught:
+            result = loader()
+
+        assert len(caught) == 1
+        assert result.attrs["source"] == "synthetic_fallback"
+        assert result.shape == fallback().shape
+
+    @pytest.mark.parametrize(
+        ("loader", "fallback", "source_loader", "source"),
+        [case for case in LOADERS if case[2] is not None],
+    )
+    def test_verified_download_is_marked_with_source(
+        self, loader, fallback, source_loader, source, monkeypatch
+    ):
+        import diff_diff.datasets as datasets_mod
+
+        valid_frame = {
+            load_card_krueger: self._valid_card_source_frame,
+            load_castle_doctrine: self._valid_castle_source_frame,
+            load_mpdta: _construct_mpdta_data,
+        }[loader]()
+        monkeypatch.setattr(
+            datasets_mod,
+            source_loader,
+            lambda _force_download: valid_frame,
+        )
+        result = loader()
+
+        assert result.attrs["source"] == source
+
+    def test_source_specific_dimensions_are_enforced(self):
+        """Synthetic frames cannot pass as Card or Castle canonical data."""
+        from diff_diff.datasets import (
+            _validate_card_krueger_source,
+            _validate_castle_doctrine_source,
+        )
+
+        with pytest.raises(RuntimeError, match="410 stores"):
+            _validate_card_krueger_source(_construct_card_krueger_data())
+        with pytest.raises(RuntimeError, match="50 states and 550 rows"):
+            _validate_castle_doctrine_source(_construct_castle_doctrine_data())
+
+    def test_card_source_transform_uses_fte_and_stable_duplicate_ids(self):
+        """The public flat-file projection follows the published FTE formula."""
+        from diff_diff.datasets import _prepare_card_krueger
+
+        raw = pd.DataFrame(
+            {
+                "sheet": [407, 407],
+                "state": [0, 1],
+                "chain": [2, 4],
+                "empft": [2.0, 5.0],
+                "emppt": [10.0, 8.0],
+                "nmgrs": [1.0, 2.0],
+                "wage_st": [4.75, 5.75],
+                "empft2": [1.0, 8.0],
+                "emppt2": [12.0, 6.0],
+                "nmgrs2": [2.0, 2.0],
+                "wage_st2": [4.25, 5.50],
+            }
+        )
+
+        result = _prepare_card_krueger(raw)
+
+        assert result["store_id"].tolist() == [407, 408]
+        assert result["state"].tolist() == ["PA", "NJ"]
+        assert result["chain"].tolist() == ["kfc", "wendys"]
+        assert result["emp_pre"].tolist() == [8.0, 11.0]
+        assert result["emp_post"].tolist() == [9.0, 13.0]
+
+    def test_castle_source_transform_ignores_fractional_cdl(self):
+        """The public treated field is binary, not fractional-year exposure."""
+        from diff_diff.datasets import _prepare_castle_doctrine
+
+        raw = pd.DataFrame(
+            {
+                "state": ["Alabama", "Alabama"],
+                "sid": [1, 1],
+                "year": [2005, 2006],
+                "effyear": [2006.0, 2006.0],
+                "cdl": [0.0, 0.580822],
+                "homicide": [7.0, 7.5],
+                "population": [4_300_000, 4_350_000],
+                "income": [44_000, 45_000],
+            }
+        )
+
+        result = _prepare_castle_doctrine(raw)
+
+        assert result["state"].tolist() == ["AL", "AL"]
+        assert result["treated"].tolist() == [0, 1]
+        assert result["first_treat"].tolist() == [2006, 2006]
+
+    def test_card_source_rejects_unknown_chain_code(self):
+        from diff_diff.datasets import _DatasetSourceError, _prepare_card_krueger
+
+        raw = pd.DataFrame(
+            {
+                "sheet": [407, 407],
+                "state": [0, 1],
+                "chain": [2, 99],
+                "empft": [2.0, 5.0],
+                "emppt": [10.0, 8.0],
+                "nmgrs": [1.0, 2.0],
+                "wage_st": [4.75, 5.75],
+                "empft2": [1.0, 8.0],
+                "emppt2": [12.0, 6.0],
+                "nmgrs2": [2.0, 2.0],
+                "wage_st2": [4.25, 5.50],
+            }
+        )
+
+        with pytest.raises(_DatasetSourceError, match="unknown chain"):
+            _prepare_card_krueger(raw)
+
+    def test_semantically_invalid_source_values_are_rejected(self):
+        from diff_diff.datasets import (
+            _DatasetSourceError,
+            _validate_card_krueger_source,
+            _validate_castle_doctrine_source,
+            _validate_mpdta,
+        )
+
+        card = self._valid_card_source_frame()
+        card.loc[100, "emp_change"] += 1
+        with pytest.raises(_DatasetSourceError, match="emp_change"):
+            _validate_card_krueger_source(card)
+
+        card = self._valid_card_source_frame()
+        card.loc[100, "emp_pre"] = np.inf
+        card.loc[100, "emp_change"] = card.loc[100, "emp_post"] - np.inf
+        with pytest.raises(_DatasetSourceError, match="emp_pre"):
+            _validate_card_krueger_source(card)
+
+        castle = self._valid_castle_source_frame()
+        castle.loc[0, "homicide_rate"] = -1
+        with pytest.raises(_DatasetSourceError, match="invalid outcome"):
+            _validate_castle_doctrine_source(castle)
+
+        mpdta = _construct_mpdta_data()
+        mpdta["lemp"] = np.nan
+        with pytest.raises(_DatasetSourceError, match="missing required"):
+            _validate_mpdta(mpdta)
 
 
 class TestProp99:
@@ -512,6 +774,123 @@ class TestBinaryDownloadIntegrity:
             )
         assert content == good
         assert (tmp_path / "x.dta").read_bytes() == good
+
+
+class TestCsvDownloadIntegrity:
+    """CSV downloads receive the same trust-on-bytes contract as binary data."""
+
+    def test_checksum_mismatch_raises_without_caching(self, tmp_path, monkeypatch):
+        import diff_diff.datasets as datasets_mod
+
+        monkeypatch.setattr(datasets_mod, "_CACHE_DIR", tmp_path)
+
+        fake_response = MagicMock()
+        fake_response.read.return_value = b"tampered bytes"
+        fake_response.__enter__ = lambda self: self
+        fake_response.__exit__ = lambda self, *a: False
+
+        with patch("diff_diff.datasets.urlopen", return_value=fake_response):
+            with pytest.raises(RuntimeError, match="Checksum mismatch"):
+                datasets_mod._download_with_cache(
+                    "https://example.invalid/x.csv",
+                    "x",
+                    sha256="0" * 64,
+                )
+
+        assert not (tmp_path / "x.csv").exists()
+
+    def test_stale_cache_triggers_verified_redownload(self, tmp_path, monkeypatch):
+        import hashlib
+
+        import diff_diff.datasets as datasets_mod
+
+        monkeypatch.setattr(datasets_mod, "_CACHE_DIR", tmp_path)
+        good = b"a,b\n1,2\n"
+        good_sha = hashlib.sha256(good).hexdigest()
+        (tmp_path / "x.csv").write_bytes(b"stale bytes")
+
+        fake_response = MagicMock()
+        fake_response.read.return_value = good
+        fake_response.__enter__ = lambda self: self
+        fake_response.__exit__ = lambda self, *a: False
+
+        with patch("diff_diff.datasets.urlopen", return_value=fake_response):
+            content = datasets_mod._download_with_cache(
+                "https://example.invalid/x.csv",
+                "x",
+                sha256=good_sha,
+            )
+
+        assert content == good.decode("utf-8")
+        assert (tmp_path / "x.csv").read_bytes() == good
+
+    def test_oversized_response_is_rejected_without_caching(self, tmp_path, monkeypatch):
+        """A source cannot bypass checksum handling with an unbounded response."""
+        import diff_diff.datasets as datasets_mod
+
+        monkeypatch.setattr(datasets_mod, "_CACHE_DIR", tmp_path)
+        monkeypatch.setattr(datasets_mod, "_MAX_DATASET_BYTES", 4)
+        fake_response = MagicMock()
+        fake_response.read.return_value = b"12345"
+        fake_response.__enter__ = lambda self: self
+        fake_response.__exit__ = lambda self, *a: False
+
+        with patch("diff_diff.datasets.urlopen", return_value=fake_response):
+            with pytest.raises(RuntimeError, match="safety limit"):
+                datasets_mod._download_with_cache(
+                    "https://example.invalid/x.csv",
+                    "x",
+                    sha256="0" * 64,
+                )
+
+        assert not (tmp_path / "x.csv").exists()
+
+    def test_oversized_cache_is_not_read(self, tmp_path, monkeypatch):
+        """An oversized local cache cannot bypass the response-size limit."""
+        import diff_diff.datasets as datasets_mod
+
+        monkeypatch.setattr(datasets_mod, "_CACHE_DIR", tmp_path)
+        monkeypatch.setattr(datasets_mod, "_MAX_DATASET_BYTES", 4)
+        (tmp_path / "x.csv").write_bytes(b"12345")
+
+        with patch("diff_diff.datasets.urlopen", side_effect=TimeoutError("offline")):
+            with pytest.raises(datasets_mod._DatasetSourceError, match="Failed to download"):
+                datasets_mod._download_with_cache(
+                    "https://example.invalid/x.csv",
+                    "x",
+                    sha256="0" * 64,
+                )
+
+    def test_failed_atomic_replace_preserves_existing_cache(self, tmp_path, monkeypatch):
+        """An interrupted replacement must not truncate a valid cache entry."""
+        import hashlib
+
+        import diff_diff.datasets as datasets_mod
+
+        monkeypatch.setattr(datasets_mod, "_CACHE_DIR", tmp_path)
+        good = b"a,b\n1,2\n"
+        good_sha = hashlib.sha256(good).hexdigest()
+        cache_path = tmp_path / "x.csv"
+        cache_path.write_bytes(good)
+        fake_response = MagicMock()
+        fake_response.read.return_value = good
+        fake_response.__enter__ = lambda self: self
+        fake_response.__exit__ = lambda self, *a: False
+
+        with (
+            patch("diff_diff.datasets.urlopen", return_value=fake_response),
+            patch("diff_diff.datasets.os.replace", side_effect=OSError("interrupted")),
+        ):
+            with pytest.raises(datasets_mod._DatasetSourceError, match="Failed to cache"):
+                datasets_mod._download_with_cache(
+                    "https://example.invalid/x.csv",
+                    "x",
+                    sha256=good_sha,
+                    force_download=True,
+                )
+
+        assert cache_path.read_bytes() == good
+        assert list(tmp_path.glob(".x.csv.*")) == []
 
 
 class TestClearCache:

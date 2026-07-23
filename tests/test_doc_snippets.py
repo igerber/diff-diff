@@ -345,7 +345,7 @@ def _build_namespace() -> dict:
             "card_krueger": "Card & Krueger (1994) minimum wage dataset",
             "castle_doctrine": "Castle Doctrine laws - staggered adoption",
             "divorce_laws": "Unilateral divorce laws - staggered adoption",
-            "mpdta": "Minimum wage panel data - simulated CS example",
+            "mpdta": "County teen-employment panel - Callaway-Sant'Anna example",
             "prop99": "California Prop 99 smoking panel - single treated unit",
             "walmart": "Walmart entry county panel - staggered adoption",
         }

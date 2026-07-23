@@ -4,15 +4,18 @@ Real-world datasets for Difference-in-Differences analysis.
 This module provides functions to load classic econometrics datasets
 commonly used for teaching and demonstrating DiD methods.
 
-All datasets are downloaded from public sources and cached locally
-for subsequent use.
+Canonical data are downloaded from checksum-pinned public sources and cached
+locally. If a source cannot be verified, the loader warns and returns an
+explicitly provenance-marked synthetic fallback.
 """
 
 import hashlib
+import os
 import warnings
 from io import BytesIO, StringIO
 from pathlib import Path
-from typing import Dict, cast
+from tempfile import NamedTemporaryFile
+from typing import Callable, Dict, Optional, cast
 from urllib.error import HTTPError, URLError
 from urllib.request import urlopen
 
@@ -21,6 +24,42 @@ import pandas as pd
 
 # Cache directory for downloaded datasets
 _CACHE_DIR = Path.home() / ".cache" / "diff_diff" / "datasets"
+_MAX_DATASET_BYTES = 50 * 1024 * 1024
+
+# These commit-pinned mirrors were checked against the dataset authors' package
+# artifacts. Every cached and downloaded byte sequence is verified below.
+_CARD_KRUEGER_SOURCE_URL = (
+    "https://raw.githubusercontent.com/rafiash/CardKrueger-stata-sample/"
+    "07bc929f1d6552db117bd27a7cf0d881d16e9494/public.dat"
+)
+_CARD_KRUEGER_SOURCE_SHA256 = "04bde0cad5540980f32ce099c6dad369e2f05494698071d8a65b3e1cbe9ca53a"
+_CASTLE_DOCTRINE_SOURCE_URL = (
+    "https://raw.githubusercontent.com/scunning1975/mixtape/"
+    "ca4279a87a6f0759f6b6f02841a53bdd68e27d3c/castle.dta"
+)
+_CASTLE_DOCTRINE_SOURCE_SHA256 = "804633c161827b6c0824f86f239046386d1a8266a866f83bf5ddb2aa762a5f29"
+_MPDTA_SOURCE_URL = (
+    "https://raw.githubusercontent.com/d2cml-ai/csdid/"
+    "7ad707385354cb3924b8da94ef7e62a76bf55a4d/data/mpdta.csv"
+)
+_MPDTA_SOURCE_SHA256 = "2283bea1221a152420f98dfa20f633c5d054ea51d881115c8cd702a97bcd3167"
+
+# ``sid`` follows alphabetical state order with 9 reserved for Washington, DC,
+# which is absent from the source panel.
+_CASTLE_STATE_BY_SID = dict(
+    enumerate(
+        """
+        AL AK AZ AR CA CO CT DE _ FL GA HI ID IL IN IA KS KY LA ME MD MA MI MN
+        MS MO MT NE NV NH NJ NM NY NC ND OH OK OR PA RI SC SD TN TX UT VT VA WA
+        WV WI WY
+        """.split(),
+        start=1,
+    )
+)
+
+
+class _DatasetSourceError(RuntimeError):
+    """Expected failure while fetching, parsing, or validating canonical data."""
 
 
 def _get_cache_path(name: str) -> Path:
@@ -32,27 +71,96 @@ def _get_cache_path(name: str) -> Path:
 def _download_with_cache(
     url: str,
     name: str,
+    sha256: str,
     force_download: bool = False,
 ) -> str:
-    """Download a file and cache it locally."""
+    """Download UTF-8 text, verify its checksum, and cache it."""
     cache_path = _get_cache_path(name)
+    content = _download_verified_bytes(url, name, sha256, cache_path, force_download)
+    try:
+        return content.decode("utf-8")
+    except UnicodeDecodeError as e:
+        raise _DatasetSourceError(
+            f"Dataset '{name}' passed its byte checksum but is not valid UTF-8 text."
+        ) from e
 
-    if cache_path.exists() and not force_download:
-        return cache_path.read_text()
+
+def _read_verified_cache(cache_path: Path, sha256: str) -> Optional[bytes]:
+    """Return a bounded, checksum-valid cache entry or None."""
+    try:
+        if not cache_path.exists() or cache_path.stat().st_size > _MAX_DATASET_BYTES:
+            return None
+        content = cache_path.read_bytes()
+    except OSError:
+        return None
+    if hashlib.sha256(content).hexdigest() == sha256:
+        return content
+    return None
+
+
+def _write_cache_atomically(cache_path: Path, content: bytes, name: str) -> None:
+    """Replace a cache entry only after a complete same-directory write."""
+    temp_path: Optional[Path] = None
+    try:
+        with NamedTemporaryFile(
+            mode="wb",
+            dir=cache_path.parent,
+            prefix=f".{cache_path.name}.",
+            delete=False,
+        ) as temp_file:
+            temp_file.write(content)
+            temp_path = Path(temp_file.name)
+        os.replace(temp_path, cache_path)
+    except OSError as e:
+        if temp_path is not None:
+            try:
+                temp_path.unlink()
+            except OSError:
+                pass
+        raise _DatasetSourceError(f"Failed to cache dataset '{name}': {e}") from e
+
+
+def _download_verified_bytes(
+    url: str,
+    name: str,
+    sha256: str,
+    cache_path: Path,
+    force_download: bool = False,
+) -> bytes:
+    """Return checksum-verified bytes from cache or a fresh download."""
+    if not force_download:
+        cached = _read_verified_cache(cache_path, sha256)
+        if cached is not None:
+            return cached
 
     try:
         with urlopen(url, timeout=30) as response:
-            content = response.read().decode("utf-8")
-            cache_path.write_text(content)
-            return content
-    except (HTTPError, URLError) as e:
-        if cache_path.exists():
-            # Use cached version if download fails
-            return cache_path.read_text()
-        raise RuntimeError(
+            content = response.read(_MAX_DATASET_BYTES + 1)
+    except (HTTPError, OSError, TimeoutError, URLError) as e:
+        cached = _read_verified_cache(cache_path, sha256)
+        if cached is not None:
+            return cached
+        raise _DatasetSourceError(
             f"Failed to download dataset '{name}' from {url}: {e}\n"
             "Check your internet connection or try again later."
         ) from e
+
+    if len(content) > _MAX_DATASET_BYTES:
+        raise _DatasetSourceError(
+            f"Dataset '{name}' downloaded from {url} exceeds the "
+            f"{_MAX_DATASET_BYTES}-byte safety limit."
+        )
+
+    if hashlib.sha256(content).hexdigest() != sha256:
+        raise _DatasetSourceError(
+            f"Checksum mismatch for dataset '{name}' downloaded from {url}.\n"
+            "The upstream file differs from the pinned SHA-256. Verify the "
+            "source revision before updating the pinned checksum; otherwise "
+            "treat the download as untrusted."
+        )
+
+    _write_cache_atomically(cache_path, content, name)
+    return content
 
 
 def _get_cache_path_binary(name: str) -> Path:
@@ -69,43 +177,491 @@ def _download_with_cache_binary(
 ) -> bytes:
     """Download a binary file (e.g. Stata .dta), verify its checksum, and cache it.
 
-    The source host serves plain HTTP, so every byte-load (cache or fresh
-    download) is verified against a pinned SHA-256. A stale/corrupt cache
-    triggers one re-download; a checksum mismatch on freshly downloaded
-    bytes raises.
+    Every byte-load (cache or fresh download) is verified against a pinned
+    SHA-256. A stale/corrupt cache triggers one re-download; a checksum
+    mismatch on freshly downloaded bytes raises.
     """
-    cache_path = _get_cache_path_binary(name)
+    return _download_verified_bytes(
+        url,
+        name,
+        sha256,
+        _get_cache_path_binary(name),
+        force_download,
+    )
 
-    if cache_path.exists() and not force_download:
-        content = cache_path.read_bytes()
-        if hashlib.sha256(content).hexdigest() == sha256:
-            return content
-        # Cached copy is stale or corrupt: fall through to re-download
 
+def _load_verified_dataset(
+    *,
+    cache_name: str,
+    source: str,
+    force_download: bool,
+    load_source: Optional[Callable[[bool], pd.DataFrame]],
+    prepare: Callable[[pd.DataFrame], pd.DataFrame],
+    validate_source: Callable[[pd.DataFrame], None],
+    validate_fallback: Callable[[pd.DataFrame], None],
+    fallback: Callable[[], pd.DataFrame],
+) -> pd.DataFrame:
+    """Load and validate canonical data or return a loud synthetic fallback."""
     try:
-        with urlopen(url, timeout=30) as response:
-            content = response.read()
-    except (HTTPError, URLError) as e:
-        if cache_path.exists():
-            content = cache_path.read_bytes()
-            if hashlib.sha256(content).hexdigest() == sha256:
-                # Use cached version if download fails
-                return content
-        raise RuntimeError(
-            f"Failed to download dataset '{name}' from {url}: {e}\n"
-            "Check your internet connection or try again later."
-        ) from e
-
-    if hashlib.sha256(content).hexdigest() != sha256:
-        raise RuntimeError(
-            f"Checksum mismatch for dataset '{name}' downloaded from {url}.\n"
-            "The upstream file differs from the pinned SHA-256. If the lwdid "
-            "Stata package published a new data revision, verify the new file "
-            "and update the pinned checksum; otherwise treat the download as "
-            "untrusted."
+        if load_source is None:
+            raise _DatasetSourceError("no verified canonical source is configured")
+        df = prepare(load_source(force_download))
+        validate_source(df)
+    except _DatasetSourceError as exc:
+        warnings.warn(
+            f"{cache_name} canonical data are unavailable ({exc}); returning a "
+            "SYNTHETIC fallback. Check `df.attrs['source']` before treating "
+            "the result as replication data.",
+            UserWarning,
+            stacklevel=2,
         )
-    cache_path.write_bytes(content)
-    return content
+        df = fallback()
+        validate_fallback(df)
+        df.attrs["source"] = "synthetic_fallback"
+        return df
+
+    df.attrs["source"] = source
+    return df
+
+
+def _load_card_krueger_source(force_download: bool) -> pd.DataFrame:
+    """Load the checksum-pinned Card-Krueger public flat file."""
+    content = _download_with_cache(
+        _CARD_KRUEGER_SOURCE_URL,
+        "card_krueger",
+        _CARD_KRUEGER_SOURCE_SHA256,
+        force_download,
+    )
+    columns = """
+        sheet chain co_owned state southj centralj northj pa1 pa2 shore
+        ncalls empft emppt nmgrs wage_st inctime firstinc bonus pctaff meals
+        open hrsopen psoda pfry pentree nregs nregs11 type2 status2 date2
+        ncalls2 empft2 emppt2 nmgrs2 wage_st2 inctime2 firstin2 special2
+        meals2 open2r hrsopen2 psoda2 pfry2 pentree2 nregs2 nregs112
+    """.split()
+    try:
+        return pd.read_csv(
+            StringIO(content),
+            sep=r"\s+",
+            names=columns,
+            na_values=".",
+        )
+    except (TypeError, ValueError) as e:
+        raise _DatasetSourceError(f"Failed to parse Card-Krueger source data: {e}") from e
+
+
+def _load_castle_doctrine_source(force_download: bool) -> pd.DataFrame:
+    """Load the checksum-pinned Cheng-Hoekstra Stata data."""
+    content = _download_with_cache_binary(
+        _CASTLE_DOCTRINE_SOURCE_URL,
+        "castle_doctrine",
+        _CASTLE_DOCTRINE_SOURCE_SHA256,
+        force_download,
+    )
+    try:
+        return pd.read_stata(BytesIO(content))
+    except (OSError, TypeError, ValueError) as e:
+        raise _DatasetSourceError(f"Failed to parse Castle Doctrine source data: {e}") from e
+
+
+def _load_mpdta_source(force_download: bool) -> pd.DataFrame:
+    """Load the checksum-pinned Callaway-Sant'Anna example data."""
+    content = _download_with_cache(
+        _MPDTA_SOURCE_URL,
+        "mpdta",
+        _MPDTA_SOURCE_SHA256,
+        force_download,
+    )
+    try:
+        return pd.read_csv(StringIO(content))
+    except (TypeError, ValueError) as e:
+        raise _DatasetSourceError(f"Failed to parse mpdta source data: {e}") from e
+
+
+def _require_columns(df: pd.DataFrame, dataset: str, columns: set) -> None:
+    """Reject empty or structurally incomplete downloaded datasets."""
+    if df.empty:
+        raise _DatasetSourceError(f"{dataset} source is empty")
+    missing = columns - set(df.columns)
+    if missing:
+        raise _DatasetSourceError(f"{dataset} source is missing columns: {sorted(missing)}")
+
+
+def _identity_dataset(df: pd.DataFrame) -> pd.DataFrame:
+    """Return an already-normalized dataset unchanged."""
+    return df
+
+
+def _require_complete(df: pd.DataFrame, dataset: str, columns: set) -> None:
+    """Reject missing values in columns whose public contract is complete."""
+    missing = df[list(columns)].isna().sum()
+    missing = missing[missing > 0]
+    if not missing.empty:
+        raise _DatasetSourceError(
+            f"{dataset} source has missing required values: {missing.to_dict()}"
+        )
+
+
+def _require_finite(df: pd.DataFrame, dataset: str, columns: set) -> None:
+    """Reject non-numeric or non-finite values in numeric contract columns."""
+    try:
+        values = df[list(columns)].to_numpy(dtype=float)
+    except (TypeError, ValueError) as e:
+        raise _DatasetSourceError(f"{dataset} source has non-numeric values") from e
+    if not np.isfinite(values).all():
+        raise _DatasetSourceError(f"{dataset} source has non-finite values in {sorted(columns)}")
+
+
+def _validate_panel_keys(df: pd.DataFrame, dataset: str, unit: str) -> None:
+    """Validate the common unit-time and cohort invariants for panel datasets."""
+    if df.duplicated([unit, "year"]).any():
+        raise _DatasetSourceError(f"{dataset} source has duplicate {unit}-year rows")
+    cohort_counts = df.groupby(unit)["first_treat"].nunique(dropna=False)
+    if not (cohort_counts == 1).all():
+        raise _DatasetSourceError(f"{dataset} first_treat is not constant within {unit}")
+    if not (df["cohort"] == df["first_treat"]).all():
+        raise _DatasetSourceError(f"{dataset} cohort does not match first_treat")
+    expected_treated = ((df["first_treat"] > 0) & (df["year"] >= df["first_treat"])).astype(int)
+    if not (df["treated"] == expected_treated).all():
+        raise _DatasetSourceError(f"{dataset} treated indicator is inconsistent with first_treat")
+
+
+def _prepare_card_krueger(df: pd.DataFrame) -> pd.DataFrame:
+    """Normalize a Card-Krueger source frame to the public loader schema."""
+    raw_columns = {
+        "sheet",
+        "state",
+        "chain",
+        "empft",
+        "emppt",
+        "nmgrs",
+        "wage_st",
+        "empft2",
+        "emppt2",
+        "nmgrs2",
+        "wage_st2",
+    }
+    if raw_columns <= set(df.columns):
+        store_id = df["sheet"].copy()
+        _require_complete(df, "card_krueger", {"sheet", "state", "chain"})
+        _require_finite(df, "card_krueger", {"sheet", "state", "chain"})
+        if not set(df["state"].unique()) <= {0, 1}:
+            raise _DatasetSourceError("card_krueger source has unknown state codes")
+        if not set(df["chain"].unique()) <= {1, 2, 3, 4}:
+            raise _DatasetSourceError("card_krueger source has unknown chain codes")
+        for column in (
+            "empft",
+            "emppt",
+            "nmgrs",
+            "wage_st",
+            "empft2",
+            "emppt2",
+            "nmgrs2",
+            "wage_st2",
+        ):
+            converted = pd.to_numeric(df[column], errors="coerce")
+            if converted.notna().sum() != df[column].notna().sum():
+                raise _DatasetSourceError(f"card_krueger source has non-numeric values in {column}")
+            df[column] = converted
+        duplicate_407 = store_id == 407
+        if (
+            duplicate_407.sum() != 2
+            or set(df.loc[duplicate_407, "state"]) != {0, 1}
+            or (store_id == 408).any()
+        ):
+            raise _DatasetSourceError(
+                "card_krueger source does not match the documented duplicate-407 convention"
+            )
+        store_id.loc[duplicate_407 & (df["state"] == 1)] = 408
+        emp_pre = df["empft"] + df["nmgrs"] + 0.5 * df["emppt"]
+        emp_post = df["empft2"] + df["nmgrs2"] + 0.5 * df["emppt2"]
+        return pd.DataFrame(
+            {
+                "store_id": store_id.astype(int),
+                "state": np.where(df["state"] == 1, "NJ", "PA"),
+                "chain": df["chain"].map({1: "bk", 2: "kfc", 3: "roys", 4: "wendys"}),
+                "emp_pre": emp_pre,
+                "emp_post": emp_post,
+                "wage_pre": df["wage_st"],
+                "wage_post": df["wage_st2"],
+                "treated": (df["state"] == 1).astype(int),
+                "emp_change": emp_post - emp_pre,
+            }
+        )
+
+    df = df.rename(columns={"sheet": "store_id"}).copy()
+    if "state" not in df.columns and "nj" in df.columns:
+        df["state"] = np.where(df["nj"] == 1, "NJ", "PA")
+    if "treated" not in df.columns and "state" in df.columns:
+        df["treated"] = (df["state"] == "NJ").astype(int)
+    if "emp_change" not in df.columns and {"emp_post", "emp_pre"} <= set(df.columns):
+        df["emp_change"] = df["emp_post"] - df["emp_pre"]
+    return df
+
+
+def _validate_card_krueger(df: pd.DataFrame) -> None:
+    """Validate the documented Card-Krueger wide-data contract."""
+    _require_columns(
+        df,
+        "card_krueger",
+        {
+            "store_id",
+            "state",
+            "chain",
+            "emp_pre",
+            "emp_post",
+            "wage_pre",
+            "wage_post",
+            "treated",
+            "emp_change",
+        },
+    )
+    _require_complete(df, "card_krueger", {"store_id", "state", "chain", "treated"})
+    _require_finite(df, "card_krueger", {"store_id", "treated"})
+    if df["store_id"].duplicated().any():
+        raise _DatasetSourceError("card_krueger source has duplicate store_id values")
+    if set(df["state"].dropna().unique()) != {"NJ", "PA"}:
+        raise _DatasetSourceError("card_krueger source must contain both NJ and PA only")
+    if set(df["chain"].dropna().unique()) != {"bk", "kfc", "roys", "wendys"}:
+        raise _DatasetSourceError("card_krueger source has unexpected restaurant chains")
+    for column in ("emp_pre", "emp_post", "wage_pre", "wage_post"):
+        values = pd.to_numeric(df[column], errors="coerce")
+        if (
+            values.notna().sum() != df[column].notna().sum()
+            or not np.isfinite(values.dropna()).all()
+            or (values.dropna() < 0).any()
+        ):
+            raise _DatasetSourceError(
+                f"card_krueger source has invalid non-negative values in {column}"
+            )
+    emp_change = pd.to_numeric(df["emp_change"], errors="coerce")
+    if (
+        emp_change.notna().sum() != df["emp_change"].notna().sum()
+        or not np.isfinite(emp_change.dropna()).all()
+    ):
+        raise _DatasetSourceError("card_krueger source has invalid emp_change values")
+    expected_treated = (df["state"] == "NJ").astype(int)
+    if not (df["treated"] == expected_treated).all():
+        raise _DatasetSourceError("card_krueger treated indicator is inconsistent with state")
+    expected_change = df["emp_post"] - df["emp_pre"]
+    if not np.allclose(df["emp_change"], expected_change, equal_nan=True):
+        raise _DatasetSourceError(
+            "card_krueger emp_change is inconsistent with emp_pre and emp_post"
+        )
+
+
+def _validate_card_krueger_source(df: pd.DataFrame) -> None:
+    """Validate source-specific Card-Krueger counts and categories."""
+    _validate_card_krueger(df)
+    if len(df) != 410:
+        raise _DatasetSourceError("card_krueger source must contain 410 stores")
+    if df.groupby("state").size().to_dict() != {"NJ": 331, "PA": 79}:
+        raise _DatasetSourceError("card_krueger source has unexpected state counts")
+    expected_missing = {
+        "emp_pre": 12,
+        "emp_post": 14,
+        "wage_pre": 20,
+        "wage_post": 21,
+        "emp_change": 26,
+    }
+    if df[list(expected_missing)].isna().sum().to_dict() != expected_missing:
+        raise _DatasetSourceError("card_krueger source has unexpected missing-value counts")
+
+
+def _prepare_castle_doctrine(df: pd.DataFrame) -> pd.DataFrame:
+    """Normalize a Castle Doctrine source frame to the public loader schema."""
+    df = df.copy()
+    if "sid" in df.columns:
+        state_codes = df["sid"].map(_CASTLE_STATE_BY_SID)
+        if state_codes.notna().all() and not (state_codes == "_").any():
+            df["state"] = state_codes
+    if "first_treat" not in df.columns and "effyear" in df.columns:
+        try:
+            df["first_treat"] = df["effyear"].fillna(0).astype(int)
+        except (TypeError, ValueError) as e:
+            raise _DatasetSourceError("castle_doctrine source has invalid effyear values") from e
+    if "cohort" not in df.columns and "first_treat" in df.columns:
+        df["cohort"] = df["first_treat"]
+    if {"first_treat", "year"} <= set(df.columns):
+        df["treated"] = ((df["first_treat"] > 0) & (df["year"] >= df["first_treat"])).astype(int)
+    if "homicide_rate" not in df.columns and "homicide" in df.columns:
+        df["homicide_rate"] = df["homicide"]
+    if {
+        "state",
+        "year",
+        "first_treat",
+        "homicide_rate",
+        "population",
+        "income",
+        "treated",
+        "cohort",
+    } <= set(df.columns):
+        return df[
+            [
+                "state",
+                "year",
+                "first_treat",
+                "homicide_rate",
+                "population",
+                "income",
+                "treated",
+                "cohort",
+            ]
+        ].copy()
+    return df
+
+
+def _validate_castle_doctrine(df: pd.DataFrame) -> None:
+    """Validate the documented Castle Doctrine panel contract."""
+    _require_columns(
+        df,
+        "castle_doctrine",
+        {
+            "state",
+            "year",
+            "first_treat",
+            "homicide_rate",
+            "population",
+            "income",
+            "treated",
+            "cohort",
+        },
+    )
+    _require_complete(
+        df,
+        "castle_doctrine",
+        {
+            "state",
+            "year",
+            "first_treat",
+            "homicide_rate",
+            "population",
+            "income",
+            "treated",
+            "cohort",
+        },
+    )
+    _require_finite(
+        df,
+        "castle_doctrine",
+        {"year", "first_treat", "homicide_rate", "population", "income", "treated", "cohort"},
+    )
+    if (
+        (df["homicide_rate"] < 0).any()
+        or (df["population"] <= 0).any()
+        or (df["income"] <= 0).any()
+    ):
+        raise _DatasetSourceError("castle_doctrine source has invalid outcome or covariate values")
+    if not df["state"].astype(str).str.fullmatch(r"[A-Z]{2}").all():
+        raise _DatasetSourceError("castle_doctrine source has invalid state abbreviations")
+    _validate_panel_keys(df, "castle_doctrine", "state")
+
+
+def _validate_castle_doctrine_source(df: pd.DataFrame) -> None:
+    """Validate source-specific Castle Doctrine panel dimensions."""
+    _validate_castle_doctrine(df)
+    if len(df) != 550 or df["state"].nunique() != 50:
+        raise _DatasetSourceError("castle_doctrine source must contain 50 states and 550 rows")
+    if set(df["year"].unique()) != set(range(2000, 2011)):
+        raise _DatasetSourceError("castle_doctrine source has unexpected years")
+    if set(df["first_treat"].unique()) != {0, 2005, 2006, 2007, 2008, 2009}:
+        raise _DatasetSourceError("castle_doctrine source has unexpected treatment cohorts")
+
+
+def _validate_divorce_laws(df: pd.DataFrame) -> None:
+    """Validate the documented divorce-laws panel contract."""
+    _require_columns(
+        df,
+        "divorce_laws",
+        {
+            "state",
+            "year",
+            "first_treat",
+            "divorce_rate",
+            "female_lfp",
+            "suicide_rate",
+            "treated",
+            "cohort",
+        },
+    )
+    _require_complete(
+        df,
+        "divorce_laws",
+        {
+            "state",
+            "year",
+            "first_treat",
+            "divorce_rate",
+            "female_lfp",
+            "suicide_rate",
+            "treated",
+            "cohort",
+        },
+    )
+    _require_finite(
+        df,
+        "divorce_laws",
+        {
+            "year",
+            "first_treat",
+            "divorce_rate",
+            "female_lfp",
+            "suicide_rate",
+            "treated",
+            "cohort",
+        },
+    )
+    if (df["divorce_rate"] < 0).any() or (df["suicide_rate"] < 0).any():
+        raise _DatasetSourceError("divorce_laws source has negative outcome values")
+    if not df["female_lfp"].between(0, 1).all():
+        raise _DatasetSourceError("divorce_laws female_lfp must be between 0 and 1")
+    _validate_panel_keys(df, "divorce_laws", "state")
+
+
+def _prepare_mpdta(df: pd.DataFrame) -> pd.DataFrame:
+    """Normalize an mpdta source frame to the public loader schema."""
+    if "first.treat" in df.columns:
+        df = df.rename(columns={"first.treat": "first_treat"})
+    if "cohort" not in df.columns and "first_treat" in df.columns:
+        df["cohort"] = df["first_treat"]
+    columns = ["countyreal", "year", "lpop", "lemp", "first_treat", "treat", "cohort"]
+    if set(columns) <= set(df.columns):
+        return df[columns].copy()
+    return df
+
+
+def _validate_mpdta(df: pd.DataFrame) -> None:
+    """Validate the canonical R did::mpdta panel structure."""
+    _require_columns(
+        df,
+        "mpdta",
+        {"countyreal", "year", "lpop", "lemp", "first_treat", "treat", "cohort"},
+    )
+    _require_complete(
+        df,
+        "mpdta",
+        {"countyreal", "year", "lpop", "lemp", "first_treat", "treat", "cohort"},
+    )
+    _require_finite(
+        df,
+        "mpdta",
+        {"countyreal", "year", "lpop", "lemp", "first_treat", "treat", "cohort"},
+    )
+    if df.duplicated(["countyreal", "year"]).any():
+        raise _DatasetSourceError("mpdta source has duplicate county-year rows")
+    if len(df) != 2500 or df["countyreal"].nunique() != 500:
+        raise _DatasetSourceError("mpdta source must contain 500 counties and 2500 rows")
+    if set(df["year"].unique()) != {2003, 2004, 2005, 2006, 2007}:
+        raise _DatasetSourceError("mpdta source has unexpected years")
+    if set(df["first_treat"].unique()) != {0, 2004, 2006, 2007}:
+        raise _DatasetSourceError("mpdta source has unexpected treatment cohorts")
+    cohort_counts = df.groupby("countyreal")["first_treat"].nunique(dropna=False)
+    if not (cohort_counts == 1).all():
+        raise _DatasetSourceError("mpdta first_treat is not constant within county")
+    if not (df["cohort"] == df["first_treat"]).all():
+        raise _DatasetSourceError("mpdta cohort does not match first_treat")
+    if not (df["treat"] == (df["first_treat"] > 0).astype(int)).all():
+        raise _DatasetSourceError("mpdta treat indicator is inconsistent with first_treat")
 
 
 def clear_cache() -> None:
@@ -154,6 +710,11 @@ def load_card_krueger(force_download: bool = False) -> pd.DataFrame:
     Original finding: No significant negative effect of minimum wage increase
     on employment (ATT ≈ +2.8 FTE employees).
 
+    The canonical data are checksum-verified and returned with
+    ``df.attrs["source"] == "card_krueger_public_data"``. Any download, parse,
+    or validation failure emits one ``UserWarning`` containing ``SYNTHETIC``
+    and returns ``df.attrs["source"] == "synthetic_fallback"``.
+
     References
     ----------
     Card, D., & Krueger, A. B. (1994). Minimum Wages and Employment: A Case Study
@@ -178,35 +739,16 @@ def load_card_krueger(force_download: bool = False) -> pd.DataFrame:
     >>> did = DifferenceInDifferences()
     >>> results = did.fit(ck_long, outcome='employment', treatment='treated', time='post')
     """
-    # Card-Krueger data hosted at multiple academic sources
-    # Using Princeton data archive mirror
-    url = "https://raw.githubusercontent.com/causaldata/causal_datasets/main/card_krueger/card_krueger.csv"
-
-    try:
-        content = _download_with_cache(url, "card_krueger", force_download)
-        df = pd.read_csv(StringIO(content))
-    except RuntimeError:
-        # Fallback: construct from embedded data
-        df = _construct_card_krueger_data()
-
-    # Standardize column names and add convenience columns
-    df = df.rename(
-        columns={
-            "sheet": "store_id",
-        }
+    return _load_verified_dataset(
+        cache_name="card_krueger",
+        source="card_krueger_public_data",
+        force_download=force_download,
+        load_source=_load_card_krueger_source,
+        prepare=_prepare_card_krueger,
+        validate_source=_validate_card_krueger_source,
+        validate_fallback=_validate_card_krueger,
+        fallback=_construct_card_krueger_data,
     )
-
-    # Ensure proper types
-    if "state" not in df.columns and "nj" in df.columns:
-        df["state"] = np.where(df["nj"] == 1, "NJ", "PA")
-
-    if "treated" not in df.columns:
-        df["treated"] = (df["state"] == "NJ").astype(int)
-
-    if "emp_change" not in df.columns and "emp_post" in df.columns and "emp_pre" in df.columns:
-        df["emp_change"] = df["emp_post"] - df["emp_pre"]
-
-    return df
 
 
 def _construct_card_krueger_data() -> pd.DataFrame:
@@ -309,6 +851,11 @@ def load_castle_doctrine(force_download: bool = False) -> pd.DataFrame:
     in self-defense. States adopted these laws at different times between
     2005 and 2009, creating a staggered treatment design.
 
+    The canonical data are checksum-verified and returned with
+    ``df.attrs["source"] == "cheng_hoekstra_castle_data"``. Any download,
+    parse, or validation failure emits one ``UserWarning`` containing
+    ``SYNTHETIC`` and marks the returned frame as ``"synthetic_fallback"``.
+
     References
     ----------
     Cheng, C., & Hoekstra, M. (2013). Does Strengthening Self-Defense Law Deter
@@ -330,34 +877,16 @@ def load_castle_doctrine(force_download: bool = False) -> pd.DataFrame:
     ...     first_treat="first_treat"
     ... )
     """
-    url = "https://raw.githubusercontent.com/causaldata/causal_datasets/main/castle/castle.csv"
-
-    try:
-        content = _download_with_cache(url, "castle_doctrine", force_download)
-        df = pd.read_csv(StringIO(content))
-    except RuntimeError:
-        # Fallback: construct from documented patterns
-        df = _construct_castle_doctrine_data()
-
-    # Standardize column names
-    rename_map = {
-        "sid": "state_id",
-        "cdl": "treated",
-    }
-    df = df.rename(columns={k: v for k, v in rename_map.items() if k in df.columns})
-
-    # Add convenience columns
-    if "first_treat" not in df.columns and "effyear" in df.columns:
-        df["first_treat"] = df["effyear"].fillna(0).astype(int)
-
-    if "cohort" not in df.columns and "first_treat" in df.columns:
-        df["cohort"] = df["first_treat"]
-
-    # Ensure treated indicator exists
-    if "treated" not in df.columns and "first_treat" in df.columns:
-        df["treated"] = ((df["first_treat"] > 0) & (df["year"] >= df["first_treat"])).astype(int)
-
-    return df
+    return _load_verified_dataset(
+        cache_name="castle_doctrine",
+        source="cheng_hoekstra_castle_data",
+        force_download=force_download,
+        load_source=_load_castle_doctrine_source,
+        prepare=_prepare_castle_doctrine,
+        validate_source=_validate_castle_doctrine_source,
+        validate_fallback=_validate_castle_doctrine,
+        fallback=_construct_castle_doctrine_data,
+    )
 
 
 def _construct_castle_doctrine_data() -> pd.DataFrame:
@@ -477,7 +1006,8 @@ def load_divorce_laws(force_download: bool = False) -> pd.DataFrame:
     Parameters
     ----------
     force_download : bool, default=False
-        If True, re-download the dataset even if cached.
+        Retained for API compatibility. No verified source currently satisfies
+        the loader's composite schema.
 
     Returns
     -------
@@ -497,6 +1027,11 @@ def load_divorce_laws(force_download: bool = False) -> pd.DataFrame:
     Unilateral divorce laws allow one spouse to obtain a divorce without the
     other's consent. States adopted these laws at different times, primarily
     between 1969 and 1985.
+
+    No verified source currently reproduces all documented columns without
+    deriving new variables or changing pre-panel treatment semantics. This
+    loader therefore emits one ``UserWarning`` containing ``SYNTHETIC`` and
+    returns ``df.attrs["source"] == "synthetic_fallback"``.
 
     References
     ----------
@@ -522,39 +1057,16 @@ def load_divorce_laws(force_download: bool = False) -> pd.DataFrame:
     ...     first_treat="first_treat"
     ... )
     """
-    # Try to load from causaldata repository
-    url = "https://raw.githubusercontent.com/causaldata/causal_datasets/main/divorce/divorce.csv"
-
-    try:
-        content = _download_with_cache(url, "divorce_laws", force_download)
-        df = pd.read_csv(StringIO(content))
-    except RuntimeError:
-        # Fallback to constructed data
-        df = _construct_divorce_laws_data()
-
-    # Standardize column names
-    if "stfips" in df.columns:
-        df = df.rename(columns={"stfips": "state_id"})
-
-    if "first_treat" not in df.columns and "unilateral" in df.columns:
-        # Determine first treatment year from the unilateral indicator
-        first_treat = df.groupby("state").apply(
-            lambda x: x.loc[x["unilateral"] == 1, "year"].min() if x["unilateral"].sum() > 0 else 0
-        )
-        df["first_treat"] = df["state"].map(first_treat).fillna(0).astype(int)
-
-    if "cohort" not in df.columns and "first_treat" in df.columns:
-        df["cohort"] = df["first_treat"]
-
-    if "treated" not in df.columns:
-        if "unilateral" in df.columns:
-            df["treated"] = df["unilateral"]
-        elif "first_treat" in df.columns:
-            df["treated"] = ((df["first_treat"] > 0) & (df["year"] >= df["first_treat"])).astype(
-                int
-            )
-
-    return df
+    return _load_verified_dataset(
+        cache_name="divorce_laws",
+        source="stevenson_wolfers_divorce_data",
+        force_download=force_download,
+        load_source=None,
+        prepare=_identity_dataset,
+        validate_source=_validate_divorce_laws,
+        validate_fallback=_validate_divorce_laws,
+        fallback=_construct_divorce_laws_data,
+    )
 
 
 def _construct_divorce_laws_data() -> pd.DataFrame:
@@ -689,9 +1201,9 @@ def load_mpdta(force_download: bool = False) -> pd.DataFrame:
     """
     Load the Minimum Wage Panel Dataset for DiD Analysis (mpdta).
 
-    This is a simulated dataset from the R `did` package that mimics
-    county-level employment data under staggered minimum wage increases.
-    It's designed specifically for teaching the Callaway-Sant'Anna estimator.
+    This example dataset from the R `did` package contains county-level teen
+    employment data under staggered minimum wage increases. It is commonly
+    used to teach the Callaway-Sant'Anna estimator.
 
     Parameters
     ----------
@@ -714,6 +1226,11 @@ def load_mpdta(force_download: bool = False) -> pd.DataFrame:
     This dataset is included in the R `did` package and is commonly used
     in tutorials demonstrating the Callaway-Sant'Anna estimator.
 
+    The canonical data are checksum-verified and returned with
+    ``df.attrs["source"] == "callaway_santanna_mpdta"``. Any download, parse,
+    or validation failure emits one ``UserWarning`` containing ``SYNTHETIC``
+    and marks the returned frame as ``"synthetic_fallback"``.
+
     References
     ----------
     Callaway, B., & Sant'Anna, P. H. (2021). Difference-in-differences with
@@ -734,25 +1251,16 @@ def load_mpdta(force_download: bool = False) -> pd.DataFrame:
     ...     first_treat="first_treat"
     ... )
     """
-    # mpdta is available from the did package documentation
-    url = "https://raw.githubusercontent.com/bcallaway11/did/master/data-raw/mpdta.csv"
-
-    try:
-        content = _download_with_cache(url, "mpdta", force_download)
-        df = pd.read_csv(StringIO(content))
-    except RuntimeError:
-        # Fallback to constructed data matching the R package
-        df = _construct_mpdta_data()
-
-    # Standardize column names
-    if "first.treat" in df.columns:
-        df = df.rename(columns={"first.treat": "first_treat"})
-
-    # Ensure cohort column exists
-    if "cohort" not in df.columns and "first_treat" in df.columns:
-        df["cohort"] = df["first_treat"]
-
-    return df
+    return _load_verified_dataset(
+        cache_name="mpdta",
+        source="callaway_santanna_mpdta",
+        force_download=force_download,
+        load_source=_load_mpdta_source,
+        prepare=_prepare_mpdta,
+        validate_source=_validate_mpdta,
+        validate_fallback=_validate_mpdta,
+        fallback=_construct_mpdta_data,
+    )
 
 
 def _construct_mpdta_data() -> pd.DataFrame:
@@ -1175,7 +1683,7 @@ def list_datasets() -> Dict[str, str]:
         "card_krueger": "Card & Krueger (1994) minimum wage dataset - classic 2x2 DiD",
         "castle_doctrine": "Castle Doctrine laws - staggered adoption across states",
         "divorce_laws": "Unilateral divorce laws - staggered adoption (Stevenson-Wolfers)",
-        "mpdta": "Minimum wage panel data - simulated CS example from R `did` package",
+        "mpdta": "County teen-employment panel - Callaway-Sant'Anna example from R `did`",
         "prop99": "California Prop 99 smoking panel - single treated unit (Lee-Wooldridge format)",
         "walmart": "Walmart entry county panel - staggered adoption (Lee-Wooldridge sample)",
     }

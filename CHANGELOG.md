@@ -394,6 +394,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   event-study surface) and M-093 (4.0 sentinel retirement, phase 5) are added.
   **Estimator equations, weighting, variance, and numerical output are unchanged.**
 
+### Fixed
+- **Legacy dataset loaders no longer silently present synthetic observations as
+  canonical data.** `load_card_krueger()`, `load_castle_doctrine()`, and
+  `load_mpdta()` now use commit-pinned, SHA-256-verified sources with schema and
+  panel-invariant validation; successful frames expose a dataset-specific
+  `df.attrs["source"]`. Download, checksum, parsing, or validation failures emit
+  exactly one `UserWarning` containing `SYNTHETIC` and mark the fallback as
+  `source="synthetic_fallback"`. `load_divorce_laws()` now follows that explicit
+  fallback path because no verified source currently reproduces its composite
+  public schema without additional analytical choices.
+
 ### Changed
 - **dCDH Phase 1 (`L_max=None`) event-study row is now re-synced by the final-df
   refresh.** Under replicate-weight designs the refresh recomputes `overall_*` with the
