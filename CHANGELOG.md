@@ -403,7 +403,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   exactly one `UserWarning` containing `SYNTHETIC` and mark the fallback as
   `source="synthetic_fallback"`. `load_divorce_laws()` now follows that explicit
   fallback path because no verified source currently reproduces its composite
-  public schema without additional analytical choices.
+  public schema without additional analytical choices. Verified fresh downloads
+  are returned even when best-effort cache persistence fails.
 
 ### Changed
 - **dCDH Phase 1 (`L_max=None`) event-study row is now re-synced by the final-df

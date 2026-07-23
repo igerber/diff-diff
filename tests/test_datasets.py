@@ -58,6 +58,11 @@ class TestListDatasets:
             assert isinstance(desc, str)
             assert len(desc) > 0
 
+    def test_divorce_laws_catalogue_marks_synthetic_only(self):
+        """Discovery metadata should not imply divorce_laws is canonical data."""
+        result = list_datasets()
+        assert "synthetic fallback only" in result["divorce_laws"]
+
 
 class TestLoadDataset:
     """Tests for load_dataset function."""
@@ -344,6 +349,7 @@ class TestLegacyLoaderProvenance:
             result = loader()
 
         assert len(caught) == 1
+        assert caught[0].filename.endswith("test_datasets.py")
         assert result.attrs["source"] == "synthetic_fallback"
         assert result.shape == fallback().shape
 
@@ -388,6 +394,31 @@ class TestLegacyLoaderProvenance:
         result = loader()
 
         assert result.attrs["source"] == source
+
+    def test_verified_download_survives_cache_write_failure(self, tmp_path, monkeypatch):
+        """A verified mpdta download should be returned even if caching fails."""
+        import hashlib
+
+        import diff_diff.datasets as datasets_mod
+
+        content = _construct_mpdta_data().to_csv(index=False).encode("utf-8")
+        sha256 = hashlib.sha256(content).hexdigest()
+        fake_response = MagicMock()
+        fake_response.read.return_value = content
+        fake_response.__enter__ = lambda self: self
+        fake_response.__exit__ = lambda self, *a: False
+
+        monkeypatch.setattr(datasets_mod, "_CACHE_DIR", tmp_path)
+        monkeypatch.setattr(datasets_mod, "_MPDTA_SOURCE_SHA256", sha256)
+        with (
+            patch("diff_diff.datasets.urlopen", return_value=fake_response),
+            patch("diff_diff.datasets.os.replace", side_effect=OSError("disk full")),
+        ):
+            result = load_mpdta(force_download=True)
+
+        assert result.attrs["source"] == "callaway_santanna_mpdta"
+        assert result.shape == _construct_mpdta_data().shape
+        assert not (tmp_path / "mpdta.csv").exists()
 
     def test_source_specific_dimensions_are_enforced(self):
         """Synthetic frames cannot pass as Card or Castle canonical data."""
@@ -861,8 +892,8 @@ class TestCsvDownloadIntegrity:
                     sha256="0" * 64,
                 )
 
-    def test_failed_atomic_replace_preserves_existing_cache(self, tmp_path, monkeypatch):
-        """An interrupted replacement must not truncate a valid cache entry."""
+    def test_failed_atomic_replace_returns_verified_download(self, tmp_path, monkeypatch):
+        """An interrupted replacement must not discard verified fresh bytes."""
         import hashlib
 
         import diff_diff.datasets as datasets_mod
@@ -881,14 +912,14 @@ class TestCsvDownloadIntegrity:
             patch("diff_diff.datasets.urlopen", return_value=fake_response),
             patch("diff_diff.datasets.os.replace", side_effect=OSError("interrupted")),
         ):
-            with pytest.raises(datasets_mod._DatasetSourceError, match="Failed to cache"):
-                datasets_mod._download_with_cache(
-                    "https://example.invalid/x.csv",
-                    "x",
-                    sha256=good_sha,
-                    force_download=True,
-                )
+            content = datasets_mod._download_with_cache(
+                "https://example.invalid/x.csv",
+                "x",
+                sha256=good_sha,
+                force_download=True,
+            )
 
+        assert content == good.decode("utf-8")
         assert cache_path.read_bytes() == good
         assert list(tmp_path.glob(".x.csv.*")) == []
 

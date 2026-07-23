@@ -159,7 +159,12 @@ def _download_verified_bytes(
             "treat the download as untrusted."
         )
 
-    _write_cache_atomically(cache_path, content, name)
+    try:
+        _write_cache_atomically(cache_path, content, name)
+    except _DatasetSourceError:
+        # Cache persistence is best-effort after the downloaded bytes have
+        # already passed the pinned SHA-256 check.
+        pass
     return content
 
 
@@ -213,7 +218,7 @@ def _load_verified_dataset(
             "SYNTHETIC fallback. Check `df.attrs['source']` before treating "
             "the result as replication data.",
             UserWarning,
-            stacklevel=2,
+            stacklevel=3,
         )
         df = fallback()
         validate_fallback(df)
@@ -1682,7 +1687,10 @@ def list_datasets() -> Dict[str, str]:
     return {
         "card_krueger": "Card & Krueger (1994) minimum wage dataset - classic 2x2 DiD",
         "castle_doctrine": "Castle Doctrine laws - staggered adoption across states",
-        "divorce_laws": "Unilateral divorce laws - staggered adoption (Stevenson-Wolfers)",
+        "divorce_laws": (
+            "Unilateral divorce laws - synthetic fallback only; no verified "
+            "Stevenson-Wolfers source is configured"
+        ),
         "mpdta": "County teen-employment panel - Callaway-Sant'Anna example from R `did`",
         "prop99": "California Prop 99 smoking panel - single treated unit (Lee-Wooldridge format)",
         "walmart": "Walmart entry county panel - staggered adoption (Lee-Wooldridge sample)",
