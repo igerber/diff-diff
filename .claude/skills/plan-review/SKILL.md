@@ -63,14 +63,34 @@ supplied** (the ingress file is shared per-worktree; a concurrent session may
 have overwritten it — if it differs, re-Write and re-run). Non-zero exit →
 report and stop. Review the SNAPSHOT (`snapshot_path`), never the live plan.
 
-> **Release the snapshot exactly once.** Everything below holds an open
-> snapshot. `plan_snapshot.py persist` (step 7) releases it on the success
-> path. On ANY failure or early stop before that — a render error, a
+**Then create a private per-invocation working directory** for the prompt and
+reviewer files this skill writes. The helper's own artifacts (`snapshot_path`,
+`state_path`, `body_path`, `meta_path`) are already invocation-unique
+(nonce-keyed), so concurrent reviews never collide on them — but the
+intermediate prompt/review files below are NOT helper-managed, so scope them the
+same way:
+
+```bash
+mktemp -d "$SCRATCH/inv.XXXXXXXX"
+```
+
+Note the printed path as `<work_dir>`; every prompt/review file below lives
+inside it. Two concurrent same-worktree reviews get distinct `<work_dir>`s, so
+their prompts and reviewer outputs cannot cross-wire. **Without this** they would
+share fixed `$SCRATCH/reviewer_prompt.txt` / `review_a.md` / `review_b.md` /
+`merge_prompt.txt` names, and one plan's merged report could be persisted under
+another plan's certified hash — silently defeating the gate.
+
+> **Release the snapshot + work dir exactly once.** Everything below holds an
+> open snapshot and a populated `<work_dir>`. On the success path,
+> `plan_snapshot.py persist` (step 7) releases the snapshot and you `rm -rf
+> "<work_dir>"`. On ANY failure or early stop before that — a render error, a
 > reviewer/merge failure, a bad write, or a persist that reports the plan
 > changed — run
 > `python3 .claude/scripts/plan_snapshot.py abort --state-file "<state_path>"`
-> before stopping. Persist and abort each clean up; skipping both litters
-> `$SCRATCH` (it wedges nothing, but leave it clean).
+> **and** `rm -rf "<work_dir>"` before stopping. The `<work_dir>` files hold
+> full plan + review text, so leaving them behind both litters `$SCRATCH` and
+> retains that content.
 
 ### 2. Render the reviewer prompt (tested Python, never free-text)
 
@@ -78,7 +98,7 @@ report and stop. Review the SNAPSHOT (`snapshot_path`), never the live plan.
 python3 "$SKILL/render.py" "$SKILL/reviewer_prompt.md" \
   --token criteria="$SKILL/criteria.md" \
   --token plan="<snapshot_path>" \
-  -o "$SCRATCH/reviewer_prompt.txt"
+  -o "<work_dir>/reviewer_prompt.txt"
 ```
 
 ### 3. Reviewer 1 — Claude @ Opus (blind)
@@ -92,9 +112,9 @@ consumes both. (Single mode runs only this step.)
 Spawn a Task subagent — `subagent_type: "general-purpose"`, **`model: "opus"`**
 (the campaign graded Opus 4.8; pin it, don't inherit the ambient session
 model), read-only intent — whose prompt is the exact contents of
-`$SCRATCH/reviewer_prompt.txt`. It reviews the plan against the CURRENT repo and
-returns the findings list + summary table. Write its output to
-`$SCRATCH/review_a.md`.
+`<work_dir>/reviewer_prompt.txt`. It reviews the plan against the CURRENT repo
+and returns the findings list + summary table. Write its output to
+`<work_dir>/review_a.md`.
 
 ### 4. Reviewer 2 — codex-sol (blind) — DUAL mode only
 
@@ -102,14 +122,24 @@ returns the findings list + summary table. Write its output to
 (deliberate)** path below — the review body is reviewer 1's output with the
 deliberate-single note.
 
+> **codex read surface (documented, accepted).** codex runs `--sandbox
+> read-only`, which blocks writes but does NOT confine READS to the repo
+> (`codex_review.py` prints the sensitive-file notice before invoking). A
+> prompt-injected plan could in principle steer codex to read outside the
+> worktree — the SAME surface `/ai-review-local --backend codex` already
+> documents and accepts. Real OS-level confinement is tracked in `TODO.md`
+> (Codex reviewer isolation). Plans here are authored in the user's own
+> session; treat this as the accepted, pre-existing codex surface, not a
+> plan-review-specific gate.
+
 ```bash
 python3 "$SKILL/codex_review.py" \
-  --prompt-file "$SCRATCH/reviewer_prompt.txt" \
+  --prompt-file "<work_dir>/reviewer_prompt.txt" \
   --repo-root "$(pwd)" \
-  -o "$SCRATCH/review_b.md"
+  -o "<work_dir>/review_b.md"
 ```
 
-- **Exit 0** → codex review is in `$SCRATCH/review_b.md`; go to step 5.
+- **Exit 0** → codex review is in `<work_dir>/review_b.md`; go to step 5.
 - **Non-zero (2 = codex absent, 3 = timeout/error)** → codex is unavailable;
   take the **Loud fallback** below and skip steps 5-6. A hung codex cannot
   wedge the gate — `codex_review.py` caps at 1200s and exits 3.
@@ -120,24 +150,28 @@ python3 "$SKILL/codex_review.py" \
 python3 "$SKILL/render.py" "$SKILL/merge_verify.md" \
   --token criteria="$SKILL/criteria.md" \
   --token plan="<snapshot_path>" \
-  --token review_a="$SCRATCH/review_a.md" \
-  --token review_b="$SCRATCH/review_b.md" \
-  -o "$SCRATCH/merge_prompt.txt"
+  --token review_a="<work_dir>/review_a.md" \
+  --token review_b="<work_dir>/review_b.md" \
+  -o "<work_dir>/merge_prompt.txt"
 ```
 
 Spawn a Task subagent — `subagent_type: "general-purpose"`, **`model: "opus"`**,
-read-only — with the contents of `$SCRATCH/merge_prompt.txt`. It matches
+read-only — with the contents of `<work_dir>/merge_prompt.txt`. It matches
 findings across the two reviews (`[consensus]`/`[single reviewer]` tags),
 **re-verifies every finding against the repo** (nothing trusted blindly), and
 emits the merged report (findings, `## Rejected on verification`,
-`## Disagreements`, summary table). **This merged report is the review body.**
+`## Disagreements`, summary table). **The review body is the provenance marker
+`<!-- plan-review-engine: dual -->` as its first line, then this merged
+report.** (The marker lets the Revise phase read the engine mode
+deterministically instead of inferring it from the body prose.)
 
 ### 6. (dual path complete)
 
 ### Loud fallback (codex unavailable/timeout)
 
-Skip the merge. The review body = the contents of `$SCRATCH/review_a.md` with
-this warning prepended verbatim:
+Skip the merge. The review body = the provenance marker
+`<!-- plan-review-engine: single-fallback -->` (first line), then this warning
+verbatim, then the contents of `<work_dir>/review_a.md`:
 
 ```
 > ⚠ **codex unavailable — SINGLE-Claude fallback.** This is the un-validated
@@ -150,9 +184,10 @@ The review still persists and gates normally.
 ### Single-reviewer mode (deliberate)
 
 The user deliberately chose one reviewer (the gate's **Single** option). Run
-step 3 only. The review body = the contents of `$SCRATCH/review_a.md` with this
-note prepended verbatim (distinct from the codex-unavailable warning — this was
-a choice, not a failure):
+step 3 only. The review body = the provenance marker
+`<!-- plan-review-engine: single -->` (first line), then this note verbatim
+(distinct from the codex-unavailable warning — this was a choice, not a
+failure), then the contents of `<work_dir>/review_a.md`:
 
 ```
 > Single-Opus review (deliberate one-reviewer choice, not the dual engine).
@@ -165,10 +200,23 @@ The review persists and gates normally.
 ### 7. Persist (UNCHANGED helper — stamps the gate contract)
 
 Write the review body — the merged report (dual), or reviewer 1's output with
-its prepended note (single / codex-fallback) — to the printed `body_path` with
-the Write tool. **No YAML frontmatter**: the helper stamps `plan:`/`plan_sha256:`
-itself. Set the meta `assessment`/counts from the report's summary table. Write
-the meta JSON to `meta_path`:
+its prepended note (single / codex-fallback), each led by its
+`<!-- plan-review-engine: … -->` marker — to the printed `body_path` with the
+Write tool. **No YAML frontmatter**: the helper stamps `plan:`/`plan_sha256:`
+itself.
+
+Read the P0–P3 counts from the report's summary table and derive `assessment`
+**by this deterministic rule** (so identical findings always persist the same
+label):
+
+- any **P0 or P1** → `Significant issues found`
+- else any **P2** → `Minor revisions recommended`
+- else (only P3, or no findings) → `Ready to implement`
+
+If the merged report has **no parseable summary table / severity counts**, do
+NOT persist a guessed assessment — `abort` (snapshot-lifecycle note), `rm -rf
+"<work_dir>"`, and report the malformed reviewer output. Otherwise write the
+meta JSON to `meta_path`:
 
 ```json
 {"reviewed_at": "<ISO-8601 UTC>", "assessment": "<Ready to implement | Minor revisions recommended | Significant issues found>", "critical_count": <P0>, "medium_count": <P1+P2>, "low_count": <P3>, "flags": []}
@@ -177,8 +225,9 @@ the meta JSON to `meta_path`:
 Then `python3 .claude/scripts/plan_snapshot.py persist --state-file "<state_path>"`
 (exit 0 = stamped + cleaned up; exit 3 = plan changed mid-review → `abort` and
 re-review; other non-zero → `abort` and report — per the snapshot-lifecycle
-note, any non-persist exit still owes an `abort` to release the snapshot).
-Display the review in the conversation.
+note, any non-persist exit still owes an `abort` to release the snapshot). On
+exit 0, `rm -rf "<work_dir>"` (the intermediate prompt/review files). Display
+the review in the conversation.
 
 ### 8. Surface the verified findings (advisory — do NOT edit the plan here)
 
@@ -201,9 +250,9 @@ never a judgment call silently written into the plan.
 
 Consumes the review artifact and applies revisions, then re-reviews. The
 re-review re-runs the **Review phase in the SAME engine mode the existing review
-used** — dual if the review is a merged dual report, single if it carries the
-deliberate-single note. Never silently upgrade a deliberate-single review to
-dual, and never fall back to a retired single-reviewer path.
+used** — read from the review's `<!-- plan-review-engine: … -->` marker
+(step 2). Never silently upgrade a deliberate-`single` review to dual, and never
+fall back to a retired single-reviewer path.
 
 1. **Locate the review** via the helper (review filenames carry a canonical
    path digest — never derive from the basename): Write the plan path to
@@ -218,9 +267,13 @@ dual, and never fall back to a retired single-reviewer path.
      NOT revise from it: re-run the **Review phase** over the current plan
      first, then revise from that fresh review.
 2. **Display** the plan + review in the conversation. **Parse** issues by
-   severity (CRITICAL/MEDIUM/LOW ↔ P0 / P1+P2 / P3) and checklist gaps, and note
-   the review's **engine mode** — a deliberate-single note ⇒ single, otherwise
-   dual — for the re-review in step 4.
+   severity (CRITICAL/MEDIUM/LOW ↔ P0 / P1+P2 / P3) and checklist gaps, and read
+   the review's **engine mode** from its provenance marker
+   `<!-- plan-review-engine: … -->`: `single` ⇒ deliberate single;
+   `single-fallback` or `dual` ⇒ dual (a fallback re-review retries codex, which
+   is desired). Older reviews without the marker fall back to prose (a
+   deliberate-single note ⇒ single, otherwise dual). Use this for the re-review
+   in step 4.
 3. **Apply revisions** to the plan file (triage rule from step 8).
 4. **Re-review**: the plan bytes changed, so the stamped review is now stale —
    re-run the **Review phase** over the revised plan **in the engine mode noted

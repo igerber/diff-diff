@@ -335,3 +335,60 @@ def test_codex_review_error_returns_3_and_writes_nothing(tmp_path, monkeypatch):
 
     assert rc == 3  # timeout/error is treated identically to absence (fallback)
     assert not out.exists()
+
+
+# --------------------------------------------------------------------------- #
+# Round-2 AI-review lifecycle contracts (SKILL.md is agent-executed prose, so
+# these assert the corrected instructions are present — the code-level parts
+# have behavioral tests above).
+# --------------------------------------------------------------------------- #
+
+
+def test_intermediate_files_are_invocation_scoped():
+    """P0: concurrent same-worktree reviews must not cross-wire. The four
+    intermediate prompt/review files live in a per-invocation `<work_dir>`
+    (mktemp), never fixed `$SCRATCH/<name>` paths, and the dir is cleaned up."""
+    text = (_SKILL / "SKILL.md").read_text()
+    assert 'mktemp -d "$SCRATCH/inv' in text, "must create a per-invocation work dir"
+    for name in ("reviewer_prompt.txt", "review_a.md", "review_b.md", "merge_prompt.txt"):
+        assert f"<work_dir>/{name}" in text, f"{name} must be under <work_dir>"
+        # never a fixed double-quoted $SCRATCH shell path for a working file
+        # (the only fixed $SCRATCH file is the confirmation-guarded plan-path.txt
+        # ingress; the one backtick mention on L80 is the "without this" warning)
+        assert f'"$SCRATCH/{name}"' not in text
+    # cleanup on both success and abort paths
+    assert 'rm -rf "<work_dir>"' in text
+
+
+def test_assessment_is_deterministic():
+    """P2: `assessment` must be derived by a deterministic count->label rule,
+    and malformed reviewer output must abort rather than persist a guess."""
+    norm = " ".join((_SKILL / "SKILL.md").read_text().split())
+    # the three-branch mapping is spelled out (label + its trigger)
+    assert "any **P0 or P1**" in norm and "Significant issues found" in norm
+    assert "else any **P2**" in norm and "Minor revisions recommended" in norm
+    assert "Ready to implement" in norm
+    # malformed report -> abort, not a persisted guess
+    assert "no parseable summary table" in norm
+    assert "do NOT persist" in norm
+
+
+def test_engine_provenance_is_machine_readable():
+    """P2: the persisted body carries a machine-readable engine marker for all
+    three modes, and Revise reads THAT (not fragile prose)."""
+    text = (_SKILL / "SKILL.md").read_text()
+    for mode in ("dual", "single", "single-fallback"):
+        assert f"plan-review-engine: {mode}" in text, f"missing {mode} marker"
+    # Revise reads the marker
+    revise = text.split("## Revise phase", 1)[1]
+    assert "plan-review-engine" in revise
+
+
+def test_codex_read_surface_is_documented():
+    """P0 #1 resolution (parity + tracking): the codex read surface is
+    documented in-skill like /ai-review-local, cross-linking the tracked
+    isolation follow-up rather than gating the feature."""
+    text = (_SKILL / "SKILL.md").read_text()
+    assert "read-only" in text and "read surface" in text.lower()
+    assert "ai-review-local" in text  # names the accepted-parity surface
+    assert "TODO.md" in text  # cross-links the tracked isolation follow-up
