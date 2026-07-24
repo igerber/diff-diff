@@ -1,5 +1,5 @@
 {
-  "_comment": "Plan-review engine arms. treatment_fields declares the experimental treatments (variant = criteria source, mode = reviewer composition, model = the Claude reviewer); every other confound (effort / sandbox / action_version / cli_version) is pinned and asserted identical across arms, and every selected multi-arm subset must decompose into single-field contrasts (see eval_core.runner). All five arms run k=2 (probes D/E included) so reliably/unstably-caught applies everywhere and repeat counts reveal nothing to graders. effort applies to the codex side of dual arms only; it is pinned xhigh on ALL arms so it stays a held-constant confound. cli_version is the composite claude+codex string PlanReviewer.cli_version() reports, pinned 2026-07-20.",
+  "_comment": "Plan-review engine arms. treatment_fields declares the experimental treatments (variant = criteria source, mode = reviewer composition, model = the Claude reviewer); every other confound (effort / sandbox / action_version / cli_version) is pinned and asserted identical across arms, and every selected multi-arm subset must decompose into single-field contrasts (see eval_core.runner). All five arms run k=2 (probes D/E included) so reliably/unstably-caught applies everywhere and repeat counts reveal nothing to graders. effort applies to the codex side of dual arms only; it is pinned xhigh on ALL arms so it stays a held-constant confound. cli_version is the composite claude+codex string PlanReviewer.cli_version() reports, pinned 2026-07-21.",
   "treatment_fields": [
     "variant",
     "mode",
@@ -20,9 +20,9 @@
       "role": "control",
       "variant": "control",
       "mode": "single",
-      "model": "claude-fable-5",
+      "model": "claude-opus-4-8",
       "effort": "xhigh",
-      "cli_version": "2.1.215 (Claude Code) | codex-cli 0.144.5",
+      "cli_version": "2.1.217 (Claude Code) | codex-cli 0.144.5",
       "label": "control: production workflow (pinned review-plan.md criteria, single Claude reviewer)"
     },
     {
@@ -30,9 +30,9 @@
       "role": "primary",
       "variant": "candidate",
       "mode": "single",
-      "model": "claude-fable-5",
+      "model": "claude-opus-4-8",
       "effort": "xhigh",
-      "cli_version": "2.1.215 (Claude Code) | codex-cli 0.144.5",
+      "cli_version": "2.1.217 (Claude Code) | codex-cli 0.144.5",
       "label": "primary candidate: new criteria, single Claude reviewer (regression gate vs A)"
     },
     {
@@ -40,9 +40,9 @@
       "role": "dual-primary",
       "variant": "candidate",
       "mode": "dual:gpt-5.6-sol",
-      "model": "claude-fable-5",
+      "model": "claude-opus-4-8",
       "effort": "xhigh",
-      "cli_version": "2.1.215 (Claude Code) | codex-cli 0.144.5",
+      "cli_version": "2.1.217 (Claude Code) | codex-cli 0.144.5",
       "label": "dual candidate: Claude + codex sol, blind, merged+verified (is dual worth it vs B)"
     },
     {
@@ -52,7 +52,7 @@
       "mode": "single",
       "model": "claude-sonnet-5",
       "effort": "xhigh",
-      "cli_version": "2.1.215 (Claude Code) | codex-cli 0.144.5",
+      "cli_version": "2.1.217 (Claude Code) | codex-cli 0.144.5",
       "label": "probe: cheaper Claude reviewer (non-gating; decision-grade for the default-model choice)"
     },
     {
@@ -60,9 +60,9 @@
       "role": "probe",
       "variant": "candidate",
       "mode": "dual:gpt-5.6-terra",
-      "model": "claude-fable-5",
+      "model": "claude-opus-4-8",
       "effort": "xhigh",
-      "cli_version": "2.1.215 (Claude Code) | codex-cli 0.144.5",
+      "cli_version": "2.1.217 (Claude Code) | codex-cli 0.144.5",
       "label": "probe: cheaper codex in the dual pair (non-gating; decision-grade for the codex-model choice)"
     }
   ]

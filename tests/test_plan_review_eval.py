@@ -1389,6 +1389,8 @@ def test_execution_derives_from_protocol_snapshot(tmp_path, monkeypatch):
     run_eval = _run_eval()
 
     snap = run_eval._protocol_snapshot()
+    original_model = snap["raw_config"]["arms"][0]["model"]
+    assert original_model != "claude-mutated"
     # Mutate the live config AFTER the snapshot (simulating a mid-window edit).
     cfg = _json.loads((_EVAL_ROOT / "config" / "configs.json").read_text())
     cfg["arms"][0]["model"] = "claude-mutated"
@@ -1397,7 +1399,7 @@ def test_execution_derives_from_protocol_snapshot(tmp_path, monkeypatch):
     monkeypatch.setattr(run_eval, "CONFIG_PATH", str(mutated))
     # Execution built from the SNAPSHOT still sees the original model...
     configs = run_eval._make_configs(["A"], raw=snap["raw_config"])
-    assert configs[0].model == "claude-fable-5"
+    assert configs[0].model == original_model
     # ...and the end-of-run identity check detects the drift.
     assert run_eval._protocol_identity() != snap["identity"]
 

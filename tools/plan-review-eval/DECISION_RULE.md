@@ -157,3 +157,20 @@ and the extraction must retain that defect as a finding (at least `major`).
 An extraction that drops it fails the rehearsal — a format-specific rule that
 discarded control-native question findings would bias every arm contrast
 toward the candidate and manufacture a false GO.
+
+## Campaign 1 outcome (2026-07-24) — recommendation now data-backed
+
+The pre-registered dual-vs-single and default-model questions are **decided**;
+full numbers in `verdicts/campaign-1.md`. Dual review (Claude @ Opus 4.8 +
+codex-`gpt-5.6-sol` @ xhigh) reliably caught **7/9** must-catch defects vs
+**1/9** for every single-reviewer arm (control, candidate-single, Sonnet), with
+**0 regressions** in the B→C contrast; codex-**sol** ≫ codex-terra (7/9 vs
+2/9); the criteria rewrite alone was a wash (A vs B: one improvement, one
+regression). Precision: dual hallucination rate **3.4%**, single arms 0%, but
+the dual arm's extra findings were 31 true / 2 false — favorable. **The FP gate
+in this document was NOT applied**: the s3 negatives turned out
+base_sha-contaminated (real-defect-laden, not clean), so the severity-threshold
+FP rule was invalid; precision was re-measured as true-vs-false hallucination
+rate instead. Trivia-flooding on a genuinely-clean plan stays unmeasured
+(tracked follow-up). The engine promoted to `.claude/skills/plan-review/` is
+arm C, criteria as-validated.
