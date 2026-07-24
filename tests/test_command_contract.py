@@ -162,17 +162,15 @@ def test_worktree_new_no_gh_repo_view_alias():
 # A git filename/title with `$()` or backticks executes at such an assignment.
 _PLACEHOLDER_ASSIGN = re.compile(r'^\s*[A-Za-z_][A-Za-z0-9_]*="<[^>]+>"')
 
-# The hardened workflow commands. review-plan.md / revise-plan.md joined when the
-# hash-gate rework replaced their sentinel/mtime shell with hash one-liners that take
-# paths only as quoted literal ARGUMENTS (never `VAR="<placeholder>"` assignments).
+# The hardened workflow commands. (review-plan.md / revise-plan.md retired in the
+# Step-3 skill migration — their plan-review contracts moved to
+# tests/test_plan_review_skill.py, targeting .claude/skills/plan-review/SKILL.md.)
 _HARDENED = [
     "submit-pr.md",
     "push-pr-update.md",
     "pre-merge-check.md",
     "worktree-new.md",
     "worktree-rm.md",
-    "review-plan.md",
-    "revise-plan.md",
 ]
 
 
@@ -246,27 +244,6 @@ def test_quoted_ref_variable_does_not_execute(tmp_path):
 # No prose may interpolate a plan path into a shell command at all any more —
 # every plan-path operation (snapshot/persist/staleness check) flows through
 # plan_snapshot.py via file ingress. The staleness probe included.
-def test_no_prose_shasum_over_plan_paths():
-    for name in ("review-plan.md", "revise-plan.md"):
-        offenders = [
-            (n, ln) for n, ln in _bash_block_lines(_read(name)) if "shasum" in ln and "<plan" in ln
-        ]
-        assert not offenders, f"{name} interpolates a plan path into shasum: {offenders}"
-
-
-def test_revise_plan_staleness_uses_check_subcommand():
-    assert "plan_snapshot.py check" in _read("revise-plan.md")
-
-
-def test_review_plan_constraints_allow_the_protocol_temp_files():
-    """The constraints must not forbid what the workflow requires: the scratch
-    ingress files and the helper-managed snapshot temp files are explicitly
-    allowed, distinguished from the sole persistent output."""
-    text = _read("review-plan.md")
-    assert "TEMPORARY" in text and ".snapshots/" in text
-    assert "plan-review" in text  # the git-path scratch location
-
-
 def test_pre_merge_check_has_no_filename_grep():
     """No `grep/pytest/git diff` over a `<changed-…files>` placeholder may remain in
     pre-merge-check — that was the filename-as-argument injection surface. Filenames now
@@ -290,49 +267,7 @@ def test_no_gnu_only_xargs_a():
     assert not offenders, f"GNU-only `xargs -a` (breaks on macOS): {offenders}"
 
 
-def test_review_lookups_use_helper_review_path():
-    """Review filenames carry a canonical-path digest; prose must consume the
-    helper's review_path (via `check`/snapshot output), never re-derive
-    `<stem>.review.md` from the basename (CI round-3: stale lookups caused
-    false 'review missing' results)."""
-    revise = _read("revise-plan.md")
-    assert "plan_snapshot.py check" in revise
-    assert "replace the trailing `.md` with `.review.md`" not in revise
-    review = _read("review-plan.md")
-    assert "review_path" in review
-    assert "<plan-basename>.review.md" not in review
-
-
-def test_revise_plan_initializes_scratch_before_first_write():
-    """On a fresh worktree the plan-review scratch dir does not exist; the
-    command must mkdir -p it before its first Write (CI round-4)."""
-    text = _read("revise-plan.md")
-    first_write = text.index("plan-path.txt")
-    mkdir = text.index('mkdir -p "$SCRATCH"')
-    assert mkdir < first_write, "mkdir -p must precede the first scratch Write"
-
-
-def test_every_helper_ingress_call_requires_plan_path_confirmation():
-    """The `<scratch>/plan-path.txt` ingress file is shared per-worktree, so a
-    concurrent session can overwrite it between the Write and the helper call
-    (CI round-7). EVERY `plan_snapshot.py check`/`snapshot` invocation — in the
-    commands AND CLAUDE.md — must therefore be followed by an instruction to
-    confirm the helper's echoed `plan_path` against the plan supplied."""
-    surfaces = {
-        "review-plan.md": _read("review-plan.md"),
-        "revise-plan.md": _read("revise-plan.md"),
-        "CLAUDE.md": (_COMMANDS.parent.parent / "CLAUDE.md").read_text(),
-    }
-    invoke = re.compile(r"plan_snapshot\.py (?:check|snapshot)\b")
-    confirm = re.compile(r"[Cc]onfirm the printed\s+`plan_path`")
-    offenders = []
-    for name, text in surfaces.items():
-        for m in invoke.finditer(text):
-            window = text[m.end() : m.end() + 700]
-            if not confirm.search(window):
-                line_no = text.count("\n", 0, m.start()) + 1
-                offenders.append((name, line_no))
-    assert not offenders, (
-        f"plan_snapshot.py check/snapshot call(s) without a nearby plan_path "
-        f"confirmation instruction: {offenders}"
-    )
+# NOTE: the plan-review command contracts (no-prose-shasum, check-subcommand
+# staleness, helper-review-path lookups, scratch-init, per-ingress plan_path
+# confirmation) moved to tests/test_plan_review_skill.py when /review-plan +
+# /revise-plan were retired for the .claude/skills/plan-review/ skill.

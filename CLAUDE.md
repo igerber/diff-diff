@@ -237,39 +237,38 @@ Before calling `ExitPlanMode`, offer the user an independent plan review via `As
 - "Run review agent for independent feedback" (Recommended)
 - "Present plan for approval as-is"
 
-**If review requested**: FIRST snapshot via the tested helper — Write the raw
+**If review requested**: invoke the **`plan-review` skill**
+(`.claude/skills/plan-review/`) on the plan — its Review phase snapshots the
+plan via the tested helper (confirming the printed `plan_path` — the ingress
+file is shared per-worktree), runs the validated **dual engine** (two blind
+reviewers — Claude @ Opus + codex `gpt-5.6-sol` — then a merge/verify pass;
+Campaign 1 caught 7/9 must-catch plan defects vs 1/9 single), writes the merged
+report to the helper-derived `review_path`, and runs `plan_snapshot.py persist`
+(which re-verifies the live plan against the recorded snapshot — exit 3 = plan
+changed mid-review, not persisted, re-review — stamps `plan:`/`plan_sha256:`
+itself, and cleans up). If codex is unavailable the skill degrades LOUDLY to a
+single-Claude review with a prominent warning. Display the review; collect
+feedback and revise via the skill's Revise phase if needed. After revising, the
+skill's re-review re-runs the dual engine and writes the new `plan_sha256`;
+never re-stamp the old review's hash onto content it did not examine. The hook
+denies on hash mismatch; `touch` does nothing.
+
+**If skipped**: Write a minimal Skipped marker via the helper — Write the raw
 plan path to `<scratch>/plan-path.txt` (`SCRATCH="$(git rev-parse --git-path
 plan-review)"`; the Write tool, never echo/heredoc — the path is untrusted and
-never touches a shell; the helper accepts any absolute path as data), then `python3 .claude/scripts/plan_snapshot.py snapshot --plan-path-file
-"$SCRATCH/plan-path.txt"` (prints `state_path`/`snapshot_path`/`meta_path`/
-`body_path`/`plan_path`/`plan_sha256`/`review_path`; confirm the printed
-`plan_path` is the plan you supplied; non-zero exit → report and stop). Spawn
-the review agent (Task tool, `subagent_type: "general-purpose"`) to read
-`.claude/commands/review-plan.md` and follow Steps 2-5 AGAINST THE SNAPSHOT
-path, never the live plan. Display output in conversation. Then Write the
-review body to the printed `body_path`, the meta JSON
-(reviewed_at/assessment/counts/flags) to the printed `meta_path`, and run
-`plan_snapshot.py persist --state-file "<state-path>"` — it certifies the
-RECORDED snapshot digest only after re-verifying the live plan against it
-(exit 3 = plan changed mid-review: NOT persisted; re-review), stamps
-`plan:`/`plan_sha256:` itself, writes atomically, and cleans up. On any
-pre-persist failure or cancellation, run `plan_snapshot.py abort --state-file
-"<state-path>"` instead. Collect feedback and revise if needed.
-After revising the plan, RE-REVIEW it (spawn the review agent again over the
-revised content — the fresh review writes the new `plan_sha256`); never re-stamp
-the old review's hash onto content it did not examine. If the user declines the
-re-review, write a fresh Skipped marker with the new hash instead — its
-"Skipped" assessment records that honestly. The hook denies on hash mismatch;
-`touch` does nothing.
-
-**If skipped**: Write a minimal Skipped marker via the same helper flow:
-snapshot as above, then persist with meta
+never touches a shell), then `python3 .claude/scripts/plan_snapshot.py snapshot
+--plan-path-file "$SCRATCH/plan-path.txt"` (confirm the printed `plan_path` is
+the plan you supplied). Write the Skipped meta
 `{"reviewed_at": "<ISO 8601>", "assessment": "Skipped", "critical_count": 0,
-"medium_count": 0, "low_count": 0, "flags": []}` and body
-`Review skipped by user.` — the helper stamps the hash of the exact current
+"medium_count": 0, "low_count": 0, "flags": []}` to the printed `meta_path` and
+`Review skipped by user.` to `body_path`, then `plan_snapshot.py persist
+--state-file "<state_path>"` — the helper stamps the hash of the exact current
 plan bytes.
 
-**Rollback**: To remove the plan review workflow, delete this section from CLAUDE.md,
-remove the `PreToolUse` entry from `.claude/settings.json`, and delete
-`.claude/hooks/check-plan-review.py`, `.claude/scripts/plan_snapshot.py`, and
-`tests/test_plan_review_hook.py` + `tests/test_plan_snapshot.py`.
+**Rollback**: To remove the plan-review skill, delete
+`.claude/skills/plan-review/`, restore `.claude/commands/review-plan.md` +
+`revise-plan.md` from git history, and revert this section to spawn the single
+review agent. To remove the gate entirely, also drop the `PreToolUse` entry from
+`.claude/settings.json` and delete `.claude/hooks/check-plan-review.py`,
+`.claude/scripts/plan_snapshot.py`, `tests/test_plan_review_hook.py`, and
+`tests/test_plan_snapshot.py`.
