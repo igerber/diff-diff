@@ -233,17 +233,19 @@ def test_snapshot_refuses_shell_unsafe_home(tmp_path):
     """CI round (fail-closed validation gate): the plans dir is HOME-derived and
     every generated path is pasted into the caller's shell as a quoted literal.
     If HOME contains a shell metacharacter those paths would execute under command
-    substitution, so the helper REFUSES to emit them (fails closed)."""
-    unsafe_home = tmp_path / "home$(touch pwned)"  # a `$()` literally in the path
-    plan = unsafe_home / ".claude" / "plans" / "p.md"
-    plan.parent.mkdir(parents=True)
-    plan.write_text("# p\n")
-    pf = _write_file(tmp_path, "plan-path.txt", str(plan))
-    cp = _run("snapshot", "--plan-path-file", str(pf), home=unsafe_home, check=False)
-    assert cp.returncode == 2
-    assert "shell metacharacter" in cp.stderr
-    # nothing executed (the helper never shells out — this guards the CALLER)
-    assert not (tmp_path / "pwned").exists() and not (unsafe_home / "pwned").exists()
+    substitution, so the helper REFUSES to emit them (fails closed). Covers BOTH
+    `$()` and backtick command-substitution forms (CI: don't test only `$()`)."""
+    for i, home_name in enumerate(("home$(touch pwned)", "home`touch pwned`")):
+        unsafe_home = tmp_path / f"h{i}" / home_name
+        plan = unsafe_home / ".claude" / "plans" / "p.md"
+        plan.parent.mkdir(parents=True)
+        plan.write_text("# p\n")
+        pf = _write_file(tmp_path, f"plan-path-{i}.txt", str(plan))
+        cp = _run("snapshot", "--plan-path-file", str(pf), home=unsafe_home, check=False)
+        assert cp.returncode == 2, f"{home_name!r}: expected fail-closed refusal"
+        assert "shell metacharacter" in cp.stderr
+        # nothing executed (the helper never shells out — this guards the CALLER)
+        assert not (unsafe_home / "pwned").exists()
 
 
 def test_persist_rejects_rewritten_snapshot(tmp_path):

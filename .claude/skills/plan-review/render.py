@@ -1,12 +1,12 @@
 """Strict single-pass ``__TOKEN__`` renderer for the plan-review skill.
 
-Ships WITH the skill so production renders the validated prompt templates
+Ships WITH the skill so production renders the campaign-graded prompt templates
 byte-identically to what Campaign 1 graded — decoupled from the eval harness
 under ``tools/``. Mirrors
 ``tools/plan-review-eval/plan_adapters/criteria_source.render``;
 ``tests/test_plan_review_skill.py`` asserts byte-equivalence on the shipped
 templates. Do not free-text-substitute the templates anywhere else — that
-would be a different, un-validated engine.
+would be a different, unmeasured engine.
 """
 
 import re

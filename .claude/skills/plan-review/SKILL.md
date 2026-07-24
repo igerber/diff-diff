@@ -12,8 +12,11 @@ catch **7/9** must-catch plan defects vs **1/9** for any single reviewer. That
 campaign was **NON-GATING** (contaminated negatives + a criteria regression);
 the sensitivity signal is what selects dual, and a clean re-validation is
 tracked — see `tools/plan-review-eval/verdicts/campaign-1.md`. The content-hash
-approval gate (`.claude/hooks/check-plan-review.py`) and snapshot helper
-(`.claude/scripts/plan_snapshot.py`) are engine-agnostic and used UNCHANGED.
+approval gate (`.claude/hooks/check-plan-review.py`) is engine-agnostic and
+unchanged; the snapshot helper's (`.claude/scripts/plan_snapshot.py`)
+hash-certification contract is unchanged, though its lifecycle is extended here
+(it emits a per-invocation work dir, creates transactionally, self-cleans on
+persist failure, and its `abort` is strict).
 
 Bundled in this skill dir (`.claude/skills/plan-review/`):
 - `criteria.md`, `reviewer_prompt.md` — the detection prompts, **byte-identical**
@@ -59,7 +62,7 @@ separate Bash tool calls and the Write tool does NOT expand them**:
 
 ## Review phase
 
-### 1. Snapshot the plan (UNCHANGED helper — fixes the reviewed bytes)
+### 1. Snapshot the plan (helper fixes the reviewed bytes)
 
 First derive, create, and PRINT the scratch dir — the printed value is the
 literal path you give the Write tool (which does not expand shell variables):
@@ -215,7 +218,7 @@ failure), then the contents of `<work_dir>/review_a.md`:
 
 The review persists and gates normally.
 
-### 7. Persist (UNCHANGED helper — stamps the gate contract)
+### 7. Persist (helper stamps the gate contract)
 
 Write the review body — the merged report (dual), or reviewer 1's output with
 its prepended note (single / codex-fallback), each led by its

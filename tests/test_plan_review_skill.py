@@ -1,7 +1,7 @@
 """Contract tests for the shipped `.claude/skills/plan-review/` engine.
 
 Guards that production == the plan-review engine Campaign 1 graded: the bundled
-prompt artifacts are byte-identical to the validated `candidates/` copies, and
+prompt artifacts are byte-identical to the campaign-graded `candidates/` copies, and
 the shipped `render.py` renders them byte-identically to the harness renderer
 (a byte-match of the template FILES is not enough — the RENDERED prompt is what
 reaches a reviewer). The SKILL.md invocation pins (codex model/effort/timeout,
@@ -82,7 +82,7 @@ def test_detection_prompts_byte_match_validated_candidates():
     for name in _DETECTION_ARTIFACTS:
         shipped = (_SKILL / name).read_bytes()
         graded = (_CANDIDATES / name).read_bytes()
-        assert shipped == graded, f"{name} drifted from the campaign-validated candidate"
+        assert shipped == graded, f"{name} drifted from the campaign-graded candidate"
     # extraction_prompt.md is eval-only — must NOT be promoted.
     assert not (_SKILL / "extraction_prompt.md").exists()
 

@@ -1,8 +1,8 @@
 """Run the codex (reviewer 2) half of the plan-review dual engine.
 
 Called by SKILL.md with an already-rendered reviewer prompt. Detects codex,
-invokes `openai_review.call_codex` with the campaign-validated model/effort
-pins (gpt-5.6-sol @ xhigh) under a read-only sandbox, and writes the codex
+invokes `openai_review.call_codex` with the campaign-graded model/effort
+pins (gpt-5.6-sol @ xhigh, arm C as-run) under a read-only sandbox, writes the codex
 review. Before invoking, it runs openai_review's own sensitive-file scan +
 stderr notice (the codex `--cd` read surface is the whole repo — the same
 notice the `/ai-review-local` codex path prints). Exit codes let SKILL.md fall
@@ -21,8 +21,9 @@ import os
 import shutil
 import sys
 
-# Campaign-validated codex pins (Campaign 1: arm C). Do not change without
-# re-validation — tests/test_plan_review_skill.py asserts these.
+# Campaign-graded codex pins (Campaign 1: arm C, as-run — the campaign was
+# exploratory / non-gating). Do not change without re-validation —
+# tests/test_plan_review_skill.py asserts these.
 CODEX_MODEL = "gpt-5.6-sol"
 CODEX_EFFORT = "xhigh"
 # The timeout is NOT the campaign value (the campaign ran unattended at
