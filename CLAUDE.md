@@ -263,20 +263,24 @@ chosen engine and writes the new `plan_sha256`; never re-stamp the old review's
 hash onto content it did not examine. The hook denies on hash mismatch; `touch`
 does nothing.
 
-**If skip**: Write a minimal Skipped marker via the helper. First derive AND
-create the scratch dir in one Bash call — `SCRATCH="$(git rev-parse --git-path
-plan-review)"; mkdir -p "$SCRATCH"` (on a fresh worktree `.git/plan-review` does
-not exist yet, so the Write below would fail without this) — then Write the raw
-plan path to `$SCRATCH/plan-path.txt` with the Write tool (never echo/heredoc —
-the path is untrusted and never touches a shell), then `python3
-.claude/scripts/plan_snapshot.py snapshot --plan-path-file
-"$SCRATCH/plan-path.txt"` (confirm the printed `plan_path` is the plan you
-supplied). Write the Skipped meta
+**If skip**: Write a minimal Skipped marker via the helper. First derive,
+create, and PRINT the scratch dir in one Bash call — `SCRATCH="$(git rev-parse
+--git-path plan-review)"; mkdir -p "$SCRATCH"; echo "$SCRATCH"` (on a fresh
+worktree `.git/plan-review` does not exist yet, so the Write below would fail
+without the `mkdir`; the `echo` gives you the literal path). Then, with the
+Write tool (never echo/heredoc — the path is untrusted and never touches a
+shell), write the raw plan path to the printed `<scratch>/plan-path.txt` (a
+literal, not a `$SCRATCH` token — the Write tool does not expand variables), then
+`python3 .claude/scripts/plan_snapshot.py snapshot --plan-path-file "$(git
+rev-parse --git-path plan-review)/plan-path.txt"` (re-derived inline).
+Confirm the printed `plan_path` is the plan you supplied. Write the Skipped meta
 `{"reviewed_at": "<ISO 8601>", "assessment": "Skipped", "critical_count": 0,
 "medium_count": 0, "low_count": 0, "flags": []}` to the printed `meta_path` and
 `Review skipped by user.` to `body_path`, then `plan_snapshot.py persist
 --state-file "<state_path>"` — the helper stamps the hash of the exact current
-plan bytes.
+plan bytes. On any failure before persist completes (a bad meta/body Write, a
+non-zero persist), run `plan_snapshot.py abort --state-file "<state_path>"` so
+the snapshot is not retained.
 
 **Rollback**: To remove the plan-review skill, delete
 `.claude/skills/plan-review/`, restore `.claude/commands/review-plan.md` +

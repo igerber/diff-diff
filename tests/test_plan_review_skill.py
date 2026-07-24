@@ -159,9 +159,18 @@ def test_reviewer_invocations_are_pinned():
     assert "timeout_s=CODEX_TIMEOUT_S" in codex
 
     skill = (_SKILL / "SKILL.md").read_text()
-    # Claude reviewer + merge subagents pin model=opus (Task tool takes family
-    # aliases; "opus" resolves to the graded Opus 4.8).
-    assert re.search(r'model[=:]\s*["\']opus', skill), "Claude subagents must pin model=opus"
+    # BOTH Claude subagents (reviewer 1 AND merge) select model=opus — assert
+    # each section separately, not just one match anywhere (round-4: a single
+    # global match did not prove both invocations). "opus" is a runtime family
+    # alias (Task takes aliases, not exact IDs), documented as such, not an
+    # immutable pin.
+    reviewer_sec = skill.split("### 3. Reviewer 1", 1)[1].split("### 4.", 1)[0]
+    merge_sec = skill.split("### 5. Merge + verify", 1)[1].split("### 6.", 1)[0]
+    assert re.search(r'model[=:]\s*["\']opus', reviewer_sec), "reviewer 1 must select model=opus"
+    assert re.search(r'model[=:]\s*["\']opus', merge_sec), "merge subagent must select model=opus"
+    # and the alias is documented as a runtime alias, not overclaimed as a pin
+    norm_skill = " ".join(skill.split())
+    assert "runtime alias" in norm_skill and "immutable pin" in norm_skill
     # and SKILL.md drives the codex half through codex_review.py, not free-text
     assert "codex_review.py" in skill
     assert "render.py" in skill
@@ -361,7 +370,9 @@ def test_intermediate_files_are_invocation_scoped():
     intermediate prompt/review files live in a per-invocation `<work_dir>`
     (mktemp), never fixed `$SCRATCH/<name>` paths, and the dir is cleaned up."""
     text = (_SKILL / "SKILL.md").read_text()
-    assert 'mktemp -d "$SCRATCH/inv' in text, "must create a per-invocation work dir"
+    assert (
+        'mktemp -d "$(git rev-parse --git-path plan-review)/inv' in text
+    ), "must create a per-invocation work dir (scratch re-derived inline)"
     for name in ("reviewer_prompt.txt", "review_a.md", "review_b.md", "merge_prompt.txt"):
         assert f"<work_dir>/{name}" in text, f"{name} must be under <work_dir>"
         # never a fixed double-quoted $SCRATCH shell path for a working file
@@ -404,3 +415,46 @@ def test_codex_read_surface_is_documented():
     assert "read-only" in text and "read surface" in text.lower()
     assert "ai-review-local" in text  # names the accepted-parity surface
     assert "TODO.md" in text  # cross-links the tracked isolation follow-up
+
+
+def test_ingress_paths_are_self_contained():
+    """P1 (round-4): ingress must not rely on shell vars persisting across Bash
+    tool calls or the Write tool expanding them. The skill dir is a literal (no
+    `$SKILL`), no Write target is a `$SCRATCH/...` token, the scratch dir is
+    printed for the Write-tool literal, and snapshot/check re-derive it inline."""
+    skill_raw = (_SKILL / "SKILL.md").read_text()
+    skill = " ".join(skill_raw.split())  # normalize: paths can wrap across lines
+    # the $SKILL variable is gone — the skill dir is used literally
+    assert "$SKILL/" not in skill_raw, "$SKILL must be the literal .claude/skills/plan-review/"
+    assert ".claude/skills/plan-review/render.py" in skill
+    # no Write-tool target the tool cannot expand
+    assert "$SCRATCH/plan-path.txt" not in skill_raw, "Write target must be a printed literal"
+    # scratch is printed for the Write literal, and re-derived inline for snapshot/check
+    assert 'echo "$SCRATCH"' in skill
+    assert "$(git rev-parse --git-path plan-review)/plan-path.txt" in skill
+
+    # the CLAUDE.md Skip branch (bypasses the skill) meets the same contract
+    skip_raw = (
+        (_REPO / "CLAUDE.md").read_text().split("**If skip**", 1)[1].split("**Rollback**", 1)[0]
+    )
+    skip = " ".join(skip_raw.split())
+    assert "$SCRATCH/plan-path.txt" not in skip_raw, "Skip Write target must be a printed literal"
+    assert 'echo "$SCRATCH"' in skip
+    assert "$(git rev-parse --git-path plan-review)/plan-path.txt" in skip
+
+
+def test_skip_paths_release_snapshot_on_failure():
+    """P2 (round-4): both Skip paths (SKILL.md revise-Skipped, CLAUDE.md Skip)
+    must `abort` on a pre-persist failure so the snapshot is not retained."""
+    skill_revise = " ".join(
+        (_SKILL / "SKILL.md").read_text().split("## Revise phase", 1)[1].split()
+    )
+    assert "abort" in skill_revise and "before persist completes" in skill_revise
+    skip = " ".join(
+        (_REPO / "CLAUDE.md")
+        .read_text()
+        .split("**If skip**", 1)[1]
+        .split("**Rollback**", 1)[0]
+        .split()
+    )
+    assert "abort" in skip and "not retained" in skip

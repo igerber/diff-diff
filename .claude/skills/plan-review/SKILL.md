@@ -46,8 +46,14 @@ gate's adaptive **Dual / Single / Skip** offer): **dual** (default — reviewer 
 one-reviewer choice — distinct from the codex-unavailable fallback). Skip is
 handled by the gate (a Skipped marker), not this skill.
 
-All bash below assumes `SCRATCH="$(git rev-parse --git-path plan-review)"` with
-`mkdir -p "$SCRATCH"` already run (temp files); `SKILL=.claude/skills/plan-review`.
+Two path conventions below, because **shell variables do NOT persist across
+separate Bash tool calls and the Write tool does NOT expand them**:
+- The skill dir is the literal `.claude/skills/plan-review/`, used verbatim (not
+  via a `$SKILL` variable).
+- The per-worktree scratch dir is `git rev-parse --git-path plan-review`. Every
+  Bash block that needs it **re-derives it inline** (`"$(git rev-parse
+  --git-path plan-review)/…"`); a path handed to the **Write tool** uses the
+  LITERAL value printed in step 1, never a `$SCRATCH` token.
 
 ---
 
@@ -55,11 +61,21 @@ All bash below assumes `SCRATCH="$(git rev-parse --git-path plan-review)"` with
 
 ### 1. Snapshot the plan (UNCHANGED helper — fixes the reviewed bytes)
 
-The raw plan path is untrusted and must never touch a shell: Write it to
-`$SCRATCH/plan-path.txt` with the **Write tool** (never echo/heredoc), then:
+First derive, create, and PRINT the scratch dir — the printed value is the
+literal path you give the Write tool (which does not expand shell variables):
 
 ```bash
-python3 .claude/scripts/plan_snapshot.py snapshot --plan-path-file "$SCRATCH/plan-path.txt"
+SCRATCH="$(git rev-parse --git-path plan-review)"; mkdir -p "$SCRATCH"; echo "$SCRATCH"
+```
+
+The raw plan path is untrusted and must never touch a shell: with the **Write
+tool** (never echo/heredoc), write it to `<scratch>/plan-path.txt` — substitute
+the LITERAL path just printed for `<scratch>` — then snapshot (this Bash block
+re-derives the scratch path inline; the variable above does not carry over):
+
+```bash
+python3 .claude/scripts/plan_snapshot.py snapshot \
+  --plan-path-file "$(git rev-parse --git-path plan-review)/plan-path.txt"
 ```
 
 It prints `state_path`, `snapshot_path`, `body_path`, `meta_path`, `plan_path`,
@@ -76,7 +92,7 @@ intermediate prompt/review files below are NOT helper-managed, so scope them the
 same way:
 
 ```bash
-mktemp -d "$SCRATCH/inv.XXXXXXXX"
+mktemp -d "$(git rev-parse --git-path plan-review)/inv.XXXXXXXX"
 ```
 
 Note the printed path as `<work_dir>`; every prompt/review file below lives
@@ -100,8 +116,8 @@ another plan's certified hash — silently defeating the gate.
 ### 2. Render the reviewer prompt (tested Python, never free-text)
 
 ```bash
-python3 "$SKILL/render.py" "$SKILL/reviewer_prompt.md" \
-  --token criteria="$SKILL/criteria.md" \
+python3 ".claude/skills/plan-review/render.py" ".claude/skills/plan-review/reviewer_prompt.md" \
+  --token criteria=".claude/skills/plan-review/criteria.md" \
   --token plan="<snapshot_path>" \
   -o "<work_dir>/reviewer_prompt.txt"
 ```
@@ -115,8 +131,10 @@ batch and let both run in parallel; the merge (step 5) is the join point that
 consumes both. (Single mode runs only this step.)
 
 Spawn a Task subagent — `subagent_type: "general-purpose"`, **`model: "opus"`**
-(the campaign graded Opus 4.8; pin it, don't inherit the ambient session
-model), read-only intent — whose prompt is the exact contents of
+(the Task tool takes family aliases, not exact IDs, so this is a **runtime
+alias** — it resolves to the current Opus, expected the campaign's 4.8 — NOT an
+immutable pin; it does still keep the reviewer off the ambient session model),
+read-only intent — whose prompt is the exact contents of
 `<work_dir>/reviewer_prompt.txt`. It reviews the plan against the CURRENT repo
 and returns the findings list + summary table. Write its output to
 `<work_dir>/review_a.md`.
@@ -138,7 +156,7 @@ deliberate-single note.
 > plan-review-specific gate.
 
 ```bash
-python3 "$SKILL/codex_review.py" \
+python3 ".claude/skills/plan-review/codex_review.py" \
   --prompt-file "<work_dir>/reviewer_prompt.txt" \
   --repo-root "$(pwd)" \
   -o "<work_dir>/review_b.md"
@@ -152,8 +170,8 @@ python3 "$SKILL/codex_review.py" \
 ### 5. Merge + verify — Claude @ Opus
 
 ```bash
-python3 "$SKILL/render.py" "$SKILL/merge_verify.md" \
-  --token criteria="$SKILL/criteria.md" \
+python3 ".claude/skills/plan-review/render.py" ".claude/skills/plan-review/merge_verify.md" \
+  --token criteria=".claude/skills/plan-review/criteria.md" \
   --token plan="<snapshot_path>" \
   --token review_a="<work_dir>/review_a.md" \
   --token review_b="<work_dir>/review_b.md" \
@@ -262,9 +280,12 @@ used** — read from the review's `<!-- plan-review-engine: … -->` marker
 fall back to a retired single-reviewer path.
 
 1. **Locate the review** via the helper (review filenames carry a canonical
-   path digest — never derive from the basename): Write the plan path to
-   `$SCRATCH/plan-path.txt`, then run
-   `python3 .claude/scripts/plan_snapshot.py check --plan-path-file "$SCRATCH/plan-path.txt"`
+   path digest — never derive from the basename). Derive + print the scratch dir
+   (`SCRATCH="$(git rev-parse --git-path plan-review)"; mkdir -p "$SCRATCH"; echo
+   "$SCRATCH"`), then with the **Write tool** write the plan path to the printed
+   `<scratch>/plan-path.txt` (a literal, not a `$SCRATCH` token — Write does not
+   expand variables), then run (re-deriving the path inline)
+   `python3 .claude/scripts/plan_snapshot.py check --plan-path-file "$(git rev-parse --git-path plan-review)/plan-path.txt"`
    → `plan_path`, `review_path`, `review_exists`, `fresh`. Confirm the printed
    `plan_path` matches (shared ingress).
    - `review_exists` false → run the **Review phase** first (nothing to revise
@@ -289,7 +310,10 @@ fall back to a retired single-reviewer path.
    then persist with meta
    `{"reviewed_at": "<ISO 8601>", "assessment": "Skipped", "critical_count": 0,
    "medium_count": 0, "low_count": 0, "flags": []}` and body `Review skipped by
-   user.` — never re-stamp the old review's hash onto unexamined content.
+   user.` — never re-stamp the old review's hash onto unexamined content. Apply
+   the same snapshot lifecycle as the Review phase: on any failure before
+   persist completes (or any non-zero persist), run `plan_snapshot.py abort
+   --state-file "<state_path>"` so the snapshot is not retained.
 
 ---
 
