@@ -49,15 +49,21 @@ Registered contrasts:
 
 ## Precision — true-vs-false hallucination rate
 
-Every negative-control finding (213) fact-checked against its base_sha:
+Every negative-control finding (213) fact-checked against its base_sha and
+classified **true** / **false** / **unverifiable** (a claim the fact-check could
+neither confirm nor refute against the base — subjective/forward-looking wording
+or a judgment call, counted against neither precision nor recall). Each row
+reconciles as `findings = true + false + unverifiable`; false-rate = false /
+findings:
 
-| Arm | findings | true | false | false-rate |
-|-----|:---:|:---:|:---:|:---:|
-| A | 52 | 36 | 0 | 0.0% |
-| B | 25 | 24 | 0 | 0.0% |
-| **C** | 58 | 44 | **2** | **3.4%** |
-| D | 37 | 37 | 0 | 0.0% |
-| E | 41 | 33 | 2 | 4.9% |
+| Arm | findings | true | false | unverif. | false-rate |
+|-----|:---:|:---:|:---:|:---:|:---:|
+| A | 52 | 36 | 0 | 16 | 0.0% |
+| B | 25 | 24 | 0 | 1 | 0.0% |
+| **C** | 58 | 44 | **2** | 12 | **3.4%** |
+| D | 37 | 37 | 0 | 0 | 0.0% |
+| E | 41 | 33 | 2 | 6 | 4.9% |
+| **Σ** | **213** | **174** | **4** | **35** | **1.9%** |
 
 Overall false rate **1.9%** (4/213). All 4 hallucinations came from the dual
 arms; every single arm was 0%. But the dual arm's 33 findings beyond

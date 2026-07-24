@@ -25,10 +25,15 @@ Bundled in this skill dir (`.claude/skills/plan-review/`):
 ## Modes
 
 - **Review** a plan before approval (the CLAUDE.md "Plan Review Before
-  Approval" gate invokes this): default; `--updated` = fresh re-review of a
-  changed plan (add a `## Delta Assessment` section); `--pr <url>` = also assess
-  PR-comment feedback coverage.
+  Approval" gate invokes this).
 - **Revise** a plan from its existing review.
+
+The retired `/review-plan` carried `--updated` (delta re-review) and `--pr`
+(feedback-coverage) flags. Neither is reimplemented in this initial skill —
+they are a tracked follow-up (TODO.md). Re-reviewing a changed plan is the
+**Revise phase**'s job (it re-runs Review over the new bytes); PR-feedback
+coverage is dimension 9 of `criteria.md`, applied when the reviser hands the
+plan a PR comment to fold in. Do NOT advertise or emulate the old flags here.
 
 The Review phase runs in one of two ENGINE modes, chosen by the caller (the
 gate's adaptive **Dual / Single / Skip** offer): **dual** (default — reviewer 1
@@ -58,6 +63,15 @@ supplied** (the ingress file is shared per-worktree; a concurrent session may
 have overwritten it — if it differs, re-Write and re-run). Non-zero exit →
 report and stop. Review the SNAPSHOT (`snapshot_path`), never the live plan.
 
+> **Release the snapshot exactly once.** Everything below holds an open
+> snapshot. `plan_snapshot.py persist` (step 7) releases it on the success
+> path. On ANY failure or early stop before that — a render error, a
+> reviewer/merge failure, a bad write, or a persist that reports the plan
+> changed — run
+> `python3 .claude/scripts/plan_snapshot.py abort --state-file "<state_path>"`
+> before stopping. Persist and abort each clean up; skipping both litters
+> `$SCRATCH` (it wedges nothing, but leave it clean).
+
 ### 2. Render the reviewer prompt (tested Python, never free-text)
 
 ```bash
@@ -68,6 +82,12 @@ python3 "$SKILL/render.py" "$SKILL/reviewer_prompt.md" \
 ```
 
 ### 3. Reviewer 1 — Claude @ Opus (blind)
+
+**Dual mode: run reviewer 1 and reviewer 2 (step 4) concurrently.** They are
+blind to each other and share no state, so issue the reviewer-1 Task-subagent
+spawn (below) and the reviewer-2 `codex_review.py` call (step 4) in the SAME
+batch and let both run in parallel; the merge (step 5) is the join point that
+consumes both. (Single mode runs only this step.)
 
 Spawn a Task subagent — `subagent_type: "general-purpose"`, **`model: "opus"`**
 (the campaign graded Opus 4.8; pin it, don't inherit the ambient session
@@ -92,7 +112,7 @@ python3 "$SKILL/codex_review.py" \
 - **Exit 0** → codex review is in `$SCRATCH/review_b.md`; go to step 5.
 - **Non-zero (2 = codex absent, 3 = timeout/error)** → codex is unavailable;
   take the **Loud fallback** below and skip steps 5-6. A hung codex cannot
-  wedge the gate — `codex_review.py` caps at 600s and exits 3.
+  wedge the gate — `codex_review.py` caps at 1200s and exits 3.
 
 ### 5. Merge + verify — Claude @ Opus
 
@@ -155,38 +175,58 @@ the meta JSON to `meta_path`:
 ```
 
 Then `python3 .claude/scripts/plan_snapshot.py persist --state-file "<state_path>"`
-(exit 0 = stamped + cleaned up; exit 3 = plan changed mid-review → run `abort
---state-file <state_path>` and re-review; other non-zero → report). Display the
-review in the conversation.
+(exit 0 = stamped + cleaned up; exit 3 = plan changed mid-review → `abort` and
+re-review; other non-zero → `abort` and report — per the snapshot-lifecycle
+note, any non-persist exit still owes an `abort` to release the snapshot).
+Display the review in the conversation.
 
-### 8. Triage the verified findings
+### 8. Surface the verified findings (advisory — do NOT edit the plan here)
 
-Per the standing directive: **apply mechanical fixes directly** (a stale path,
-a missing test, a wrong signature the plan can just adopt); **surface genuine
-trade-offs to the user** with options + a recommendation — never silently
-incorporate a judgment call into the plan.
+The review is now persisted and stamps the CURRENT plan bytes, so the approval
+gate is satisfied for the plan as-is. **Editing the plan now would invalidate
+that stamp and re-deny `ExitPlanMode`** (the hook compares `plan_sha256` to the
+live bytes). So this step only PRESENTS the merged review to the user and
+changes nothing on disk.
+
+Acting on the findings is the **Revise phase** (below): it applies edits and
+re-reviews, which re-stamps the hash. Carry the triage directive there — when
+the user opts to revise, each verified finding is either a **mechanical fix
+applied directly** (a stale path, a missing test, a signature the plan can just
+adopt) or a **genuine trade-off surfaced with options + a recommendation**,
+never a judgment call silently written into the plan.
 
 ---
 
 ## Revise phase
 
-Consumes the review artifact and applies revisions; the re-review it triggers
-runs the **dual engine above**, not any retired single-reviewer path.
+Consumes the review artifact and applies revisions, then re-reviews. The
+re-review re-runs the **Review phase in the SAME engine mode the existing review
+used** — dual if the review is a merged dual report, single if it carries the
+deliberate-single note. Never silently upgrade a deliberate-single review to
+dual, and never fall back to a retired single-reviewer path.
 
 1. **Locate the review** via the helper (review filenames carry a canonical
    path digest — never derive from the basename): Write the plan path to
    `$SCRATCH/plan-path.txt`, then run
    `python3 .claude/scripts/plan_snapshot.py check --plan-path-file "$SCRATCH/plan-path.txt"`
    → `plan_path`, `review_path`, `review_exists`, `fresh`. Confirm the printed
-   `plan_path` matches (shared ingress). If `review_exists` is false, run the
-   **Review phase** first.
+   `plan_path` matches (shared ingress).
+   - `review_exists` false → run the **Review phase** first (nothing to revise
+     from).
+   - `review_exists` true but `fresh` false → the plan bytes already changed
+     since the review was stamped, so the review describes stale content. Do
+     NOT revise from it: re-run the **Review phase** over the current plan
+     first, then revise from that fresh review.
 2. **Display** the plan + review in the conversation. **Parse** issues by
-   severity (CRITICAL/MEDIUM/LOW ↔ P0 / P1+P2 / P3) and checklist gaps.
+   severity (CRITICAL/MEDIUM/LOW ↔ P0 / P1+P2 / P3) and checklist gaps, and note
+   the review's **engine mode** — a deliberate-single note ⇒ single, otherwise
+   dual — for the re-review in step 4.
 3. **Apply revisions** to the plan file (triage rule from step 8).
 4. **Re-review**: the plan bytes changed, so the stamped review is now stale —
-   re-run the **Review phase** over the revised plan (a fresh dual review
-   writes the new `plan_sha256`). If the user declines the re-review, write an
-   honest **Skipped** marker instead: snapshot, then persist with meta
+   re-run the **Review phase** over the revised plan **in the engine mode noted
+   in step 2** (a fresh review writes the new `plan_sha256`). If the user
+   declines the re-review, write an honest **Skipped** marker instead: snapshot,
+   then persist with meta
    `{"reviewed_at": "<ISO 8601>", "assessment": "Skipped", "critical_count": 0,
    "medium_count": 0, "low_count": 0, "flags": []}` and body `Review skipped by
    user.` — never re-stamp the old review's hash onto unexamined content.

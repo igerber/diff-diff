@@ -1,10 +1,12 @@
 """Run the codex (reviewer 2) half of the plan-review dual engine.
 
 Called by SKILL.md with an already-rendered reviewer prompt. Detects codex,
-invokes `openai_review.call_codex` with the campaign-validated pins
-(gpt-5.6-sol @ xhigh, read-only sandbox, 600s ceiling), and writes the codex
-review. Exit codes let SKILL.md fall through to the LOUD single-Claude fallback
-without wedging the gate:
+invokes `openai_review.call_codex` with the campaign-validated model/effort
+pins (gpt-5.6-sol @ xhigh) under a read-only sandbox, and writes the codex
+review. Before invoking, it runs openai_review's own sensitive-file scan +
+stderr notice (the codex `--cd` read surface is the whole repo — the same
+notice the `/ai-review-local` codex path prints). Exit codes let SKILL.md fall
+through to the LOUD single-Claude fallback without wedging the gate:
 
   0  codex review written to --output
   2  codex unavailable (not installed / not logged in)
@@ -23,7 +25,12 @@ import sys
 # re-validation — tests/test_plan_review_skill.py asserts these.
 CODEX_MODEL = "gpt-5.6-sol"
 CODEX_EFFORT = "xhigh"
-CODEX_TIMEOUT_S = 600.0
+# The timeout is NOT the campaign value (the campaign ran unattended at
+# CODEX_TIMEOUT_S=3600). It is an interactive-gate ceiling: high enough to clear
+# the plan-review runtimes observed in the campaign (up to ~430s) with room to
+# spare, low enough to bound the interactive wait. A timeout is treated as codex
+# being unavailable (exit 3 → LOUD single-Claude fallback), so err generous.
+CODEX_TIMEOUT_S = 1200.0
 
 
 def _load_openai_review(repo_root: str):
@@ -57,6 +64,15 @@ def main(argv=None) -> int:
     if not _codex_present(mod):
         print("codex: not installed or not logged in (run `codex login`)", file=sys.stderr)
         return 2
+
+    # codex runs with `--cd <repo-root>` read access to the whole repo. Print
+    # openai_review's own sensitive-file notice before invoking, matching the
+    # `/ai-review-local` codex path (the direct call_codex entry bypasses main()
+    # where that path prints it). Non-blocking, like the CLI: a notice, not a gate.
+    try:
+        mod._print_sensitive_notice(args.repo_root, mod._scan_sensitive_files(args.repo_root))
+    except Exception as exc:  # pragma: no cover - never let the notice block review
+        print(f"codex: sensitive-file scan skipped ({type(exc).__name__}: {exc})", file=sys.stderr)
 
     with open(args.prompt_file, encoding="utf-8") as fh:
         prompt = fh.read()

@@ -37,6 +37,39 @@ def _load_skill_render():
     return mod
 
 
+def _load_codex_review():
+    spec = importlib.util.spec_from_file_location(
+        "plan_review_codex_review", _SKILL / "codex_review.py"
+    )
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+class _FakeOpenAIReview:
+    """Stand-in for the loaded openai_review module, recording the calls
+    codex_review.main makes so the tests assert BEHAVIOR (pins forwarded,
+    sensitive-file notice printed) rather than source text."""
+
+    def __init__(self):
+        self.notice_calls = []
+        self.codex_calls = []
+
+    def _scan_sensitive_files(self, repo_root):
+        return [".env"]
+
+    def _print_sensitive_notice(self, repo_root, found):
+        self.notice_calls.append((repo_root, tuple(found)))
+
+    def call_codex(self, *, prompt, model, repo_root, effort, timeout_s):
+        self.codex_calls.append(
+            dict(
+                prompt=prompt, model=model, repo_root=repo_root, effort=effort, timeout_s=timeout_s
+            )
+        )
+        return ("CODEX REVIEW BODY", {"meta": 1})
+
+
 # The DETECTION-critical prompts (what each reviewer looks for) ship byte-
 # identical to what the campaign graded. merge_verify.md is production-adapted
 # (reviewer naming un-blinded — see test_merge_verify_is_production_adapted);
@@ -120,7 +153,7 @@ def test_reviewer_invocations_are_pinned():
     codex = (_SKILL / "codex_review.py").read_text()
     assert 'CODEX_MODEL = "gpt-5.6-sol"' in codex
     assert 'CODEX_EFFORT = "xhigh"' in codex
-    assert "CODEX_TIMEOUT_S = 600" in codex
+    assert "CODEX_TIMEOUT_S = 1200" in codex
     # and codex_review.py actually passes them to call_codex
     assert "model=CODEX_MODEL" in codex and "effort=CODEX_EFFORT" in codex
     assert "timeout_s=CODEX_TIMEOUT_S" in codex
@@ -222,3 +255,83 @@ def test_gate_offers_three_way_adaptive_recommendation():
         assert opt in section, f"gate offer missing the {opt!r} option"
     assert re.search(r"ADAPTIVEL?Y|adaptiv", section), "recommendation must be adaptive"
     assert "not a fixed default" in section
+
+
+def test_modes_do_not_advertise_descoped_flags():
+    """`--updated`/`--pr` were descoped from the initial skill (they were
+    advertised-but-unimplemented). The Modes section must present them as NOT
+    reimplemented / a tracked follow-up, never as active flags."""
+    text = (_SKILL / "SKILL.md").read_text()
+    modes = text.split("## Modes", 1)[1].split("\n## ", 1)[0]
+    # the old active-flag advertisements are gone
+    assert "Delta Assessment" not in text  # the `--updated` output section
+    assert "= fresh re-review" not in text
+    # they are named only to mark them descoped
+    assert "--updated" in modes and "--pr" in modes
+    assert re.search(r"not reimplemented|descoped|tracked follow-up", modes, re.I)
+
+
+# --------------------------------------------------------------------------- #
+# Behavioral tests for codex_review.py (reviewer 2 half) — exercise main()'s
+# control flow, not source text: pins forwarded to call_codex, the sensitive-
+# file notice fires before the codex call, and the exit-code contract holds.
+# --------------------------------------------------------------------------- #
+
+
+def test_codex_review_forwards_pins_and_prints_sensitive_notice(tmp_path, monkeypatch):
+    cr = _load_codex_review()
+    fake = _FakeOpenAIReview()
+    monkeypatch.setattr(cr, "_load_openai_review", lambda repo_root: fake)
+    monkeypatch.setattr(cr, "_codex_present", lambda mod: True)
+    prompt = tmp_path / "prompt.txt"
+    prompt.write_text("RENDERED PROMPT")
+    out = tmp_path / "review_b.md"
+
+    rc = cr.main(["--prompt-file", str(prompt), "--repo-root", str(tmp_path), "-o", str(out)])
+
+    assert rc == 0
+    assert out.read_text() == "CODEX REVIEW BODY"
+    # S1: the sensitive-file notice ran (with the repo root + scan result)
+    assert fake.notice_calls == [(str(tmp_path), (".env",))]
+    # the campaign pins reach call_codex (a wrong value here would ship a
+    # different, unmeasured engine while the byte-match tests still passed)
+    assert len(fake.codex_calls) == 1
+    call = fake.codex_calls[0]
+    assert call["prompt"] == "RENDERED PROMPT"
+    assert call["model"] == cr.CODEX_MODEL == "gpt-5.6-sol"
+    assert call["effort"] == cr.CODEX_EFFORT == "xhigh"
+    assert call["timeout_s"] == cr.CODEX_TIMEOUT_S == 1200.0
+
+
+def test_codex_review_absent_returns_2_and_writes_nothing(tmp_path, monkeypatch):
+    cr = _load_codex_review()
+    monkeypatch.setattr(cr, "_load_openai_review", lambda repo_root: _FakeOpenAIReview())
+    monkeypatch.setattr(cr, "_codex_present", lambda mod: False)
+    prompt = tmp_path / "prompt.txt"
+    prompt.write_text("x")
+    out = tmp_path / "review_b.md"
+
+    rc = cr.main(["--prompt-file", str(prompt), "--repo-root", str(tmp_path), "-o", str(out)])
+
+    assert rc == 2  # SKILL.md routes this to the LOUD single-Claude fallback
+    assert not out.exists()
+
+
+def test_codex_review_error_returns_3_and_writes_nothing(tmp_path, monkeypatch):
+    cr = _load_codex_review()
+    fake = _FakeOpenAIReview()
+
+    def boom(**_kw):
+        raise RuntimeError("codex exec exploded")
+
+    fake.call_codex = boom  # type: ignore[method-assign]
+    monkeypatch.setattr(cr, "_load_openai_review", lambda repo_root: fake)
+    monkeypatch.setattr(cr, "_codex_present", lambda mod: True)
+    prompt = tmp_path / "prompt.txt"
+    prompt.write_text("x")
+    out = tmp_path / "review_b.md"
+
+    rc = cr.main(["--prompt-file", str(prompt), "--repo-root", str(tmp_path), "-o", str(out)])
+
+    assert rc == 3  # timeout/error is treated identically to absence (fallback)
+    assert not out.exists()
