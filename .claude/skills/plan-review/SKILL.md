@@ -1,26 +1,31 @@
 ---
 name: plan-review
-description: Review a Claude Code plan file with the validated dual engine (Opus reviewer + codex-sol, merge/verify), or revise a plan from its review. Produces the .review.md the ExitPlanMode content-hash gate requires.
+description: Review a Claude Code plan file with the campaign-selected dual engine (Opus reviewer + codex-sol, merge/verify), or revise a plan from its review. Produces the .review.md the ExitPlanMode content-hash gate requires.
 ---
 
 # Plan Review (dual engine)
 
 Owns the plan-review → revise cycle. The review ENGINE is **dual** — two blind
 reviewers (Claude @ Opus 4.8 + codex `gpt-5.6-sol`) then a merge/verify pass —
-the configuration Campaign 1 validated (reliably caught **7/9** must-catch plan
-defects vs **1/9** for any single reviewer; see
-`tools/plan-review-eval/verdicts/campaign-1.md`). The content-hash approval
-gate (`.claude/hooks/check-plan-review.py`) and snapshot helper
+the configuration Campaign 1 selected: its exploratory run had dual reliably
+catch **7/9** must-catch plan defects vs **1/9** for any single reviewer. That
+campaign was **NON-GATING** (contaminated negatives + a criteria regression);
+the sensitivity signal is what selects dual, and a clean re-validation is
+tracked — see `tools/plan-review-eval/verdicts/campaign-1.md`. The content-hash
+approval gate (`.claude/hooks/check-plan-review.py`) and snapshot helper
 (`.claude/scripts/plan_snapshot.py`) are engine-agnostic and used UNCHANGED.
 
 Bundled in this skill dir (`.claude/skills/plan-review/`):
-- `criteria.md`, `reviewer_prompt.md`, `merge_verify.md` — the exact prompts
-  the campaign graded (as-validated; never edit without re-validation).
+- `criteria.md`, `reviewer_prompt.md` — the detection prompts, **byte-identical**
+  to what the campaign graded (never edit without re-validation).
+- `merge_verify.md` — the merge/verify prompt, production-adapted to NAME the two
+  reviewers (un-blinded from the graded copy, which blinded them only for
+  grading); the verify-every-finding logic is unchanged.
 - `render.py` — strict `__TOKEN__` renderer. **Always render prompts with it;
-  never free-text-substitute the templates** (that is a different, un-validated
+  never free-text-substitute the templates** (that is a different, unmeasured
   engine).
-- `codex_review.py` — the codex (reviewer 2) half, with the validated pins and
-  loud-fallback exit codes.
+- `codex_review.py` — the codex (reviewer 2) half, with the campaign
+  model/effort pins and loud-fallback exit codes.
 
 ## Modes
 
@@ -223,11 +228,13 @@ meta JSON to `meta_path`:
 ```
 
 Then `python3 .claude/scripts/plan_snapshot.py persist --state-file "<state_path>"`
-(exit 0 = stamped + cleaned up; exit 3 = plan changed mid-review → `abort` and
-re-review; other non-zero → `abort` and report — per the snapshot-lifecycle
-note, any non-persist exit still owes an `abort` to release the snapshot). On
-exit 0, `rm -rf "<work_dir>"` (the intermediate prompt/review files). Display
-the review in the conversation.
+(exit 0 = stamped + cleaned up; exit 3 = plan changed mid-review → re-review;
+other non-zero → report). On ANY non-zero exit, run `abort` + `rm -rf
+"<work_dir>"` uniformly — `abort` is idempotent, so it is a safe no-op on the
+persist paths that already self-clean the state (exit 3, altered snapshot) and
+still releases the snapshot on those that do not. On exit 0, just `rm -rf
+"<work_dir>"` (the intermediate prompt/review files). Display the review in the
+conversation.
 
 ### 8. Surface the verified findings (advisory — do NOT edit the plan here)
 

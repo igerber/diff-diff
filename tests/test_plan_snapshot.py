@@ -177,6 +177,22 @@ def test_abort_cleans_up_invocation(tmp_path):
     assert not pathlib.Path(out["review_path"]).exists()
 
 
+def test_abort_is_idempotent_after_persist_self_cleaned(tmp_path):
+    """persist self-cleans the state on exit 3 (plan changed) / altered snapshot,
+    so a follow-up abort finds no state — it must succeed as a no-op, not error.
+    Lets the skill abort uniformly on any failure (round-3 review)."""
+    plan = _mk_plan(tmp_path)
+    out = _snapshot(tmp_path, plan)
+    plan.write_text("# plan\n\nEDITED while reviewing\n")
+    exit3 = _persist(tmp_path, out, check=False)
+    assert exit3.returncode == 3
+    assert not pathlib.Path(out["state_path"]).exists(), "persist should have self-cleaned"
+    # the skill's uniform "abort on any non-zero persist" now no-ops cleanly
+    cp = _run("abort", "--state-file", out["state_path"], home=tmp_path)
+    assert cp.returncode == 0
+    assert "aborted" in cp.stdout
+
+
 def test_persist_rejects_rewritten_snapshot(tmp_path):
     """The RECORDED digest is what gets certified: if the snapshot file was
     altered after capture (even to match a changed live plan), persist refuses

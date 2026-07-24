@@ -4,6 +4,20 @@ Committed aggregate result of the first plan-review measurement campaign. The
 real-plan corpus stays local (gitignored); this file records numbers and
 methodology lessons only, per the workflow-eval data-handling rule.
 
+## Status — EXPLORATORY / NON-GATING
+
+This campaign is a strong **directional signal**, not a passed pre-registration.
+Under `DECISION_RULE.md`'s own rules it is **NON-GATING**: the s3 negatives were
+base_sha-contaminated (so the FP gate was invalid and the ≥2-valid-negative
+corpus floor unmet → NON-GATING per that doc's line 135-139); the candidate
+criteria carried a must-catch regression (`trop-silent-drop`) that Primary gate 1
+defines as a NO-GO; and the run used `claude-opus-4-8` where the arms register
+`claude-fable-5`. What survives all of that is the **sensitivity** result (dual
+7/9 vs single 1/9, 0 regressions B→C), which is what selects dual as the
+default. The engine shipped to `.claude/skills/plan-review/` is arm C **as run**
+(candidate criteria + dual); a clean re-validation is a tracked follow-up. See
+the DECISION_RULE.md "Campaign 1 outcome" note.
+
 ## Design
 
 - **Corpus**: 12 cases — 5 `s1_synthetic` (real donor plan + injected defects,
@@ -71,12 +85,16 @@ single-candidate B were **31 true, 2 false** — the extra volume is
 overwhelmingly real. 3 of the 4 false findings were one systematic
 overstatement (mis-citing a CONTRIBUTING.md tutorial requirement as a mandate).
 
-## Decision
+## Recommendation (exploratory — see Status)
 
-Ship **candidate criteria + dual review (Claude @ Opus 4.8 + codex-sol @
-xhigh) + merge/verify**. Dual is a 7× sensitivity gain over any single
-reviewer at a ~3.4% hallucination cost — favorable, since a false finding
-costs a dismissal while a missed defect costs a bad plan.
+On the sensitivity signal, ship **arm C as run: candidate criteria + dual review
+(Claude @ Opus 4.8 + codex-sol @ xhigh) + merge/verify**. Dual is a ~7×
+sensitivity gain over any single reviewer at a ~3.4% hallucination cost —
+favorable, since a false finding costs a dismissal while a missed defect costs a
+bad plan. This is a directional pick from a NON-GATING campaign, not a validated
+verdict: the candidate criteria carry the `trop-silent-drop` regression and the
+FP axis on a genuinely-clean plan is unmeasured (both tracked). A clean
+re-validation is the path to a gating result.
 
 ## Methodology lesson — negative controls
 

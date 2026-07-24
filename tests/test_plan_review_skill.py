@@ -216,6 +216,18 @@ def test_skill_initializes_scratch_before_first_write():
     assert mkdir < first_write, "mkdir -p must precede the first scratch Write"
 
 
+def test_claude_md_skip_branch_initializes_scratch():
+    """The standalone CLAUDE.md Skip branch (bypasses the skill) must also
+    `mkdir -p "$SCRATCH"` before writing plan-path.txt — on a fresh worktree
+    `.git/plan-review` does not exist yet, so the Write would fail (round-3)."""
+    claude = (_REPO / "CLAUDE.md").read_text()
+    skip = claude.split("**If skip**", 1)[1].split("**Rollback**", 1)[0]
+    assert 'mkdir -p "$SCRATCH"' in skip, "Skip branch must create the scratch dir"
+    assert skip.index('mkdir -p "$SCRATCH"') < skip.index(
+        "plan-path.txt"
+    ), "mkdir -p must precede the Skip branch's plan-path.txt Write"
+
+
 def test_ingress_calls_require_plan_path_confirmation():
     """Every `plan_snapshot.py check|snapshot` in SKILL.md AND CLAUDE.md must be
     followed by a plan_path-confirmation instruction (shared per-worktree

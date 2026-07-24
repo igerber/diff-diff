@@ -11,9 +11,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Internal tooling: plan-review engine → dual-reviewer skill (no library
   change).** `/review-plan` + `/revise-plan` are retired for a
   `.claude/skills/plan-review/` skill that runs the **dual** review engine
-  Campaign 1 validated — two blind reviewers (Claude @ Opus 4.8 + codex
-  `gpt-5.6-sol`) then a merge/verify pass — which reliably caught **7/9**
-  must-catch plan defects vs **1/9** for any single reviewer
+  Campaign 1's exploratory run selected — two blind reviewers (Claude @ Opus 4.8
+  + codex `gpt-5.6-sol`) then a merge/verify pass — which reliably caught **7/9**
+  must-catch plan defects vs **1/9** for any single reviewer: a strong
+  sensitivity signal that selects dual as the default. The campaign itself was
+  **NON-GATING** (base_sha-contaminated negative controls + a criteria
+  regression, so its own pre-registered gates did not apply); a clean
+  re-validation is a tracked follow-up
   (`tools/plan-review-eval/verdicts/campaign-1.md`). Codex-unavailable degrades
   loudly to a single-Claude review. The content-hash `ExitPlanMode` gate
   (`check-plan-review.py`) and snapshot helper (`plan_snapshot.py`) are

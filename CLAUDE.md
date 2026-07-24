@@ -236,9 +236,10 @@ it is re-run or deliberately re-stamped.
 Before calling `ExitPlanMode`, ALWAYS offer all three review options via
 `AskUserQuestion`, with the `(Recommended)` tag chosen ADAPTIVELY from the
 plan's complexity and risk (not a fixed default) — set exactly one:
-- **Dual review** — the validated engine (two blind reviewers, Claude @ Opus +
-  codex `gpt-5.6-sol`, then merge/verify; Campaign 1: 7/9 must-catch plan
-  defects vs 1/9 single). Recommend for SUBSTANTIVE / high-risk plans:
+- **Dual review** — the campaign-selected engine (two blind reviewers, Claude @
+  Opus + codex `gpt-5.6-sol`, then merge/verify; Campaign 1 was exploratory /
+  NON-GATING but showed dual catching 7/9 must-catch plan defects vs 1/9
+  single). Recommend for SUBSTANTIVE / high-risk plans:
   estimator, methodology, variance/inference, or `docs/methodology/REGISTRY.md`
   changes; multi-file, architectural, or public-API changes.
 - **Single review** (Opus only, no codex) — recommend for LOCALIZED, mechanical
@@ -262,12 +263,15 @@ chosen engine and writes the new `plan_sha256`; never re-stamp the old review's
 hash onto content it did not examine. The hook denies on hash mismatch; `touch`
 does nothing.
 
-**If skip**: Write a minimal Skipped marker via the helper — Write the raw
-plan path to `<scratch>/plan-path.txt` (`SCRATCH="$(git rev-parse --git-path
-plan-review)"`; the Write tool, never echo/heredoc — the path is untrusted and
-never touches a shell), then `python3 .claude/scripts/plan_snapshot.py snapshot
---plan-path-file "$SCRATCH/plan-path.txt"` (confirm the printed `plan_path` is
-the plan you supplied). Write the Skipped meta
+**If skip**: Write a minimal Skipped marker via the helper. First derive AND
+create the scratch dir in one Bash call — `SCRATCH="$(git rev-parse --git-path
+plan-review)"; mkdir -p "$SCRATCH"` (on a fresh worktree `.git/plan-review` does
+not exist yet, so the Write below would fail without this) — then Write the raw
+plan path to `$SCRATCH/plan-path.txt` with the Write tool (never echo/heredoc —
+the path is untrusted and never touches a shell), then `python3
+.claude/scripts/plan_snapshot.py snapshot --plan-path-file
+"$SCRATCH/plan-path.txt"` (confirm the printed `plan_path` is the plan you
+supplied). Write the Skipped meta
 `{"reviewed_at": "<ISO 8601>", "assessment": "Skipped", "critical_count": 0,
 "medium_count": 0, "low_count": 0, "flags": []}` to the printed `meta_path` and
 `Review skipped by user.` to `body_path`, then `plan_snapshot.py persist

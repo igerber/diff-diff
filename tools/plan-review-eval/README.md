@@ -6,9 +6,13 @@ they land — the same measure-first discipline `tools/reviewer-eval` applied to
 the CI code reviewer (see its 2026-07 gpt-5.6 campaign). Second consumer of
 the shared `tools/eval_core/` engine.
 
-**Status:** harness only — the campaign has not run. The go/no-go rule is
-pre-registered in `DECISION_RULE.md` and may not be edited once the campaign
-starts. Local-only, never wired to CI.
+**Status:** Campaign 1 has run — **exploratory / NON-GATING** (its
+pre-registered gates did not apply: the s3 negative controls were
+base_sha-contaminated and the candidate criteria carried a must-catch
+regression). It selected the dual engine on a strong sensitivity signal (7/9 vs
+1/9); a clean re-validation is tracked. See `verdicts/campaign-1.md`. The
+go/no-go rule is pre-registered in `DECISION_RULE.md` and was not edited once
+the campaign started. Local-only, never wired to CI.
 
 ## Layout
 

@@ -158,19 +158,36 @@ An extraction that drops it fails the rehearsal — a format-specific rule that
 discarded control-native question findings would bias every arm contrast
 toward the candidate and manufacture a false GO.
 
-## Campaign 1 outcome (2026-07-24) — recommendation now data-backed
+## Campaign 1 outcome (2026-07-24) — EXPLORATORY / NON-GATING
 
-The pre-registered dual-vs-single and default-model questions are **decided**;
-full numbers in `verdicts/campaign-1.md`. Dual review (Claude @ Opus 4.8 +
-codex-`gpt-5.6-sol` @ xhigh) reliably caught **7/9** must-catch defects vs
-**1/9** for every single-reviewer arm (control, candidate-single, Sonnet), with
-**0 regressions** in the B→C contrast; codex-**sol** ≫ codex-terra (7/9 vs
-2/9); the criteria rewrite alone was a wash (A vs B: one improvement, one
-regression). Precision: dual hallucination rate **3.4%**, single arms 0%, but
-the dual arm's extra findings were 31 true / 2 false — favorable. **The FP gate
-in this document was NOT applied**: the s3 negatives turned out
-base_sha-contaminated (real-defect-laden, not clean), so the severity-threshold
-FP rule was invalid; precision was re-measured as true-vs-false hallucination
-rate instead. Trivia-flooding on a genuinely-clean plan stays unmeasured
-(tracked follow-up). The engine promoted to `.claude/skills/plan-review/` is
-arm C, criteria as-validated.
+**This campaign is NON-GATING under its own rules** — treat it as a strong
+directional signal, not a passed pre-registration. Three deviations from the
+protocol above:
+
+1. **Corpus floor / FP gate unmet.** All three s3 negatives turned out
+   base_sha-contaminated (real-defect-laden, not clean), so the severity-
+   threshold FP gate (line 64) was invalid and NOT applied; precision was
+   re-measured post hoc as a true-vs-false hallucination rate. With zero valid
+   negatives the corpus floor (≥2, line 133) is unmet, which by line 135-139
+   makes the verdict **NON-GATING**.
+2. **Criteria regression (would be a NO-GO).** Primary gate 1 makes any
+   must-catch defect A reliably catches and B misses an automatic NO-GO;
+   `trop-silent-drop` is exactly that (A caught, B/C missed). The candidate
+   criteria therefore did **not** pass the A-vs-B regression gate — the rewrite
+   was at best a wash (one improvement, one regression), tracked for a criteria
+   re-validation.
+3. **Model deviation.** The arms above register `claude-fable-5`; the campaign
+   was run on `claude-opus-4-8`.
+
+What the campaign **does** show, robustly and independent of the unmet FP gate:
+dual review (Claude @ Opus 4.8 + codex-`gpt-5.6-sol` @ xhigh) reliably caught
+**7/9** must-catch defects vs **1/9** for every single-reviewer arm (control,
+candidate-single, Sonnet), with **0 regressions** in the B→C contrast; codex-
+**sol** ≫ codex-terra (7/9 vs 2/9); dual hallucination rate **3.4%** vs 0%
+single, but the dual arm's extra findings were 31 true / 2 false — favorable.
+That sensitivity signal is what selects **dual** as the default. Full numbers in
+`verdicts/campaign-1.md`. The engine promoted to `.claude/skills/plan-review/`
+is arm C **as run** (candidate criteria + dual), carrying the `trop-silent-drop`
+regression as a tracked follow-up. A clean, pre-registered re-validation
+(uncontaminated negatives, the production-adapted merge prompt + model, an
+explicit criteria-regression rule) is the tracked path to a gating result.
