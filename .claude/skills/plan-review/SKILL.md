@@ -144,9 +144,11 @@ The review persists and gates normally.
 
 ### 7. Persist (UNCHANGED helper — stamps the gate contract)
 
-Write the review body (from `## Overall Assessment` onward; **no YAML
-frontmatter** — the helper stamps `plan:`/`plan_sha256:` itself) to the printed
-`body_path` with the Write tool. Write the meta JSON to `meta_path`:
+Write the review body — the merged report (dual), or reviewer 1's output with
+its prepended note (single / codex-fallback) — to the printed `body_path` with
+the Write tool. **No YAML frontmatter**: the helper stamps `plan:`/`plan_sha256:`
+itself. Set the meta `assessment`/counts from the report's summary table. Write
+the meta JSON to `meta_path`:
 
 ```json
 {"reviewed_at": "<ISO-8601 UTC>", "assessment": "<Ready to implement | Minor revisions recommended | Significant issues found>", "critical_count": <P0>, "medium_count": <P1+P2>, "low_count": <P3>, "flags": []}
