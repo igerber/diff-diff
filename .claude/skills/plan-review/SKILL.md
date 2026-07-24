@@ -30,6 +30,12 @@ Bundled in this skill dir (`.claude/skills/plan-review/`):
   PR-comment feedback coverage.
 - **Revise** a plan from its existing review.
 
+The Review phase runs in one of two ENGINE modes, chosen by the caller (the
+gate's adaptive **Dual / Single / Skip** offer): **dual** (default — reviewer 1
++ codex + merge/verify) or **single** (reviewer 1 alone, a DELIBERATE
+one-reviewer choice — distinct from the codex-unavailable fallback). Skip is
+handled by the gate (a Skipped marker), not this skill.
+
 All bash below assumes `SCRATCH="$(git rev-parse --git-path plan-review)"` with
 `mkdir -p "$SCRATCH"` already run (temp files); `SKILL=.claude/skills/plan-review`.
 
@@ -70,7 +76,11 @@ model), read-only intent — whose prompt is the exact contents of
 returns the findings list + summary table. Write its output to
 `$SCRATCH/review_a.md`.
 
-### 4. Reviewer 2 — codex-sol (blind)
+### 4. Reviewer 2 — codex-sol (blind) — DUAL mode only
+
+**Single mode**: skip steps 4-5 and take the **Single-reviewer mode
+(deliberate)** path below — the review body is reviewer 1's output with the
+deliberate-single note.
 
 ```bash
 python3 "$SKILL/codex_review.py" \
@@ -116,6 +126,21 @@ this warning prepended verbatim:
 ```
 
 The review still persists and gates normally.
+
+### Single-reviewer mode (deliberate)
+
+The user deliberately chose one reviewer (the gate's **Single** option). Run
+step 3 only. The review body = the contents of `$SCRATCH/review_a.md` with this
+note prepended verbatim (distinct from the codex-unavailable warning — this was
+a choice, not a failure):
+
+```
+> Single-Opus review (deliberate one-reviewer choice, not the dual engine).
+> The dual engine caught 7/9 hard plan defects vs 1/9 single in Campaign 1 —
+> re-review in dual mode if this plan turns out higher-risk than expected.
+```
+
+The review persists and gates normally.
 
 ### 7. Persist (UNCHANGED helper — stamps the gate contract)
 

@@ -37,17 +37,36 @@ def _load_skill_render():
     return mod
 
 
-_ARTIFACTS = ("criteria.md", "reviewer_prompt.md", "merge_verify.md")
+# The DETECTION-critical prompts (what each reviewer looks for) ship byte-
+# identical to what the campaign graded. merge_verify.md is production-adapted
+# (reviewer naming un-blinded — see test_merge_verify_is_production_adapted);
+# its verify LOGIC is unchanged, only the output labeling.
+_DETECTION_ARTIFACTS = ("criteria.md", "reviewer_prompt.md")
 
 
-def test_bundled_artifacts_byte_match_validated_candidates():
-    """The shipped prompts must be the exact bytes the campaign graded."""
-    for name in _ARTIFACTS:
+def test_detection_prompts_byte_match_validated_candidates():
+    """The detection-critical prompts must be the exact bytes the campaign graded."""
+    for name in _DETECTION_ARTIFACTS:
         shipped = (_SKILL / name).read_bytes()
         graded = (_CANDIDATES / name).read_bytes()
         assert shipped == graded, f"{name} drifted from the campaign-validated candidate"
     # extraction_prompt.md is eval-only — must NOT be promoted.
     assert not (_SKILL / "extraction_prompt.md").exists()
+
+
+def test_merge_verify_is_production_adapted():
+    """merge_verify NAMES reviewers in the persisted review (pre-campaign
+    'names in file' decision) while keeping the verify-every-finding logic
+    identical to the graded copy — the campaign blinded it only for grading."""
+    shipped = (_SKILL / "merge_verify.md").read_text()
+    graded = (_CANDIDATES / "merge_verify.md").read_text()
+    # verify/detection invariant preserved from the graded copy
+    assert "Verify EVERY finding" in shipped and "Verify EVERY finding" in graded
+    assert "[consensus]" in shipped
+    # named single-reviewer attribution added; the blinding rule removed
+    assert "[single reviewer: claude]" in shipped and "[single reviewer: codex]" in shipped
+    assert "Never name" not in shipped  # blinding rule gone from production
+    assert "Never name" in graded  # the campaign copy WAS blinded ("Never name or ...")
 
 
 def test_render_byte_equivalent_to_harness_on_shipped_templates():
@@ -180,3 +199,26 @@ def test_ingress_calls_require_plan_path_confirmation():
             if not confirm.search(text[m.end() : m.end() + 700]):
                 offenders.append((name, text.count("\n", 0, m.start()) + 1))
     assert not offenders, f"ingress call(s) without plan_path confirmation: {offenders}"
+
+
+def test_skill_supports_deliberate_single_and_dual_modes():
+    """The skill must support a DELIBERATE single-reviewer mode (not only the
+    codex-unavailable fallback) as well as dual."""
+    text = (_SKILL / "SKILL.md").read_text()
+    assert re.search(r"\bdual\b", text, re.I) and re.search(r"\bsingle\b", text, re.I)
+    assert "Single-reviewer mode (deliberate)" in text
+    # the deliberate-single note is distinct from the codex-unavailable warning
+    assert "deliberate one-reviewer choice" in text
+
+
+def test_gate_offers_three_way_adaptive_recommendation():
+    """CLAUDE.md must ALWAYS offer Dual / Single / Skip with the recommendation
+    chosen ADAPTIVELY by plan complexity, not a fixed default (restores the
+    pre-campaign 'Adaptive' decision)."""
+    claude = (_REPO / "CLAUDE.md").read_text()
+    section = claude.split("## Plan Review Before Approval", 1)[1]
+    section = section.split("\n## ", 1)[0]
+    for opt in ("Dual review", "Single review", "Skip"):
+        assert opt in section, f"gate offer missing the {opt!r} option"
+    assert re.search(r"ADAPTIVEL?Y|adaptiv", section), "recommendation must be adaptive"
+    assert "not a fixed default" in section

@@ -233,27 +233,36 @@ frontmatter field matching the SHA-256 of the plan file's CURRENT bytes. There
 is no sentinel and no mtime check: any plan edit invalidates the review until
 it is re-run or deliberately re-stamped.
 
-Before calling `ExitPlanMode`, offer the user an independent plan review via `AskUserQuestion`:
-- "Run review agent for independent feedback" (Recommended)
-- "Present plan for approval as-is"
+Before calling `ExitPlanMode`, ALWAYS offer all three review options via
+`AskUserQuestion`, with the `(Recommended)` tag chosen ADAPTIVELY from the
+plan's complexity and risk (not a fixed default) — set exactly one:
+- **Dual review** — the validated engine (two blind reviewers, Claude @ Opus +
+  codex `gpt-5.6-sol`, then merge/verify; Campaign 1: 7/9 must-catch plan
+  defects vs 1/9 single). Recommend for SUBSTANTIVE / high-risk plans:
+  estimator, methodology, variance/inference, or `docs/methodology/REGISTRY.md`
+  changes; multi-file, architectural, or public-API changes.
+- **Single review** (Opus only, no codex) — recommend for LOCALIZED, mechanical
+  plans (a contained single-file change, test/doc tweaks) where dual's extra
+  cost isn't warranted but a review still adds value.
+- **Skip** — recommend only for TRIVIAL plans (typo, comment, obvious one-liner).
 
-**If review requested**: invoke the **`plan-review` skill**
-(`.claude/skills/plan-review/`) on the plan — its Review phase snapshots the
-plan via the tested helper (confirming the printed `plan_path` — the ingress
-file is shared per-worktree), runs the validated **dual engine** (two blind
-reviewers — Claude @ Opus + codex `gpt-5.6-sol` — then a merge/verify pass;
-Campaign 1 caught 7/9 must-catch plan defects vs 1/9 single), writes the merged
-report to the helper-derived `review_path`, and runs `plan_snapshot.py persist`
+**If dual or single**: invoke the **`plan-review` skill**
+(`.claude/skills/plan-review/`) in the chosen mode. Its Review phase snapshots
+the plan via the tested helper (confirm the printed `plan_path` — the ingress
+file is shared per-worktree), runs the reviewers (dual = Opus reviewer + codex
+`gpt-5.6-sol` + merge/verify; single = the Opus reviewer alone), writes the
+review to the helper-derived `review_path`, and runs `plan_snapshot.py persist`
 (which re-verifies the live plan against the recorded snapshot — exit 3 = plan
 changed mid-review, not persisted, re-review — stamps `plan:`/`plan_sha256:`
-itself, and cleans up). If codex is unavailable the skill degrades LOUDLY to a
-single-Claude review with a prominent warning. Display the review; collect
-feedback and revise via the skill's Revise phase if needed. After revising, the
-skill's re-review re-runs the dual engine and writes the new `plan_sha256`;
-never re-stamp the old review's hash onto content it did not examine. The hook
-denies on hash mismatch; `touch` does nothing.
+itself, and cleans up). In dual mode, if codex is unavailable the skill degrades
+LOUDLY to a single-Claude review with a prominent warning (distinct from a
+deliberate single-review choice). Display the review; collect feedback and
+revise via the skill's Revise phase if needed — its re-review re-runs the SAME
+chosen engine and writes the new `plan_sha256`; never re-stamp the old review's
+hash onto content it did not examine. The hook denies on hash mismatch; `touch`
+does nothing.
 
-**If skipped**: Write a minimal Skipped marker via the helper — Write the raw
+**If skip**: Write a minimal Skipped marker via the helper — Write the raw
 plan path to `<scratch>/plan-path.txt` (`SCRATCH="$(git rev-parse --git-path
 plan-review)"`; the Write tool, never echo/heredoc — the path is untrusted and
 never touches a shell), then `python3 .claude/scripts/plan_snapshot.py snapshot
