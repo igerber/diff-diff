@@ -464,20 +464,18 @@ def test_skip_paths_release_snapshot_on_failure():
     assert "abort" in skip and "not retained" in skip
 
 
-def test_allow_missing_reserved_for_post_persist_abort():
-    """CI round: `--allow-missing` masks a wrong state token, so it belongs ONLY
-    on the post-persist abort (where persist may have self-cleaned). The
-    pre-persist snapshot-lifecycle callout must use PLAIN abort so a mistyped /
-    cross-wired token fails loudly."""
+def test_abort_is_pre_persist_only_and_strict():
+    """CI round: `persist` self-cleans its own failures, so the skill NEVER aborts
+    after persist (that could only hit a wrong/stale token). `--allow-missing` was
+    removed entirely; every abort in the skill is a plain pre-persist cleanup."""
     text = (_SKILL / "SKILL.md").read_text()
+    assert "--allow-missing" not in text, "the --allow-missing escape hatch is gone"
+    # the pre-persist snapshot-lifecycle callout still aborts (plain)
     callout = " ".join(
         text.split("Release the snapshot exactly once", 1)[1].split("### 2.", 1)[0].split()
     )
-    # the callout's actual abort COMMAND is plain (it may mention --allow-missing
-    # in prose only to cross-reference step 7)
     assert 'abort --state-file "<state_path>"' in callout, "pre-persist callout must abort"
-    assert (
-        'abort --state-file "<state_path>" --allow-missing' not in callout
-    ), "pre-persist abort command must be plain (strict)"
-    persist = text.split("### 7. Persist", 1)[1].split("### 8.", 1)[0]
-    assert "--allow-missing" in persist, "post-persist abort passes --allow-missing"
+    # the persist step explicitly says NOT to abort after persist
+    persist = " ".join(text.split("### 7. Persist", 1)[1].split("### 8.", 1)[0].split())
+    assert "Do NOT abort after persist" in persist
+    assert "self-cleans" in persist

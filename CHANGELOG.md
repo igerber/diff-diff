@@ -23,10 +23,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`check-plan-review.py`) is engine-agnostic and unchanged; the snapshot
   helper's (`plan_snapshot.py`) hash-gate and snapshot/persist contract are
   unchanged, and it now also emits and cleans a per-invocation work dir (under
-  its own safe-charset snapshots dir) for the reviewer's intermediate files, so
-  no repo/worktree path is composed into a shell command. `abort` is strict by
-  default (errors on a missing state token) with an explicit `--allow-missing`
-  no-op reserved for post-persist cleanup.
+  its own safe-charset snapshots dir) for the reviewer's intermediate files, and
+  fails closed if the resolved snapshots path itself carries a shell
+  metacharacter — so no path composed into a shell command can execute. `persist`
+  self-cleans the whole invocation on any failure (no post-persist cleanup
+  needed) and `abort` is strict (a missing state token is an error).
 - **Docs: navigation and SEO polish.** A stable/latest version switcher in the navbar
   (`docs/_static/switcher.json`); a custom `robots.txt` that keeps the ~60 thin
   `_modules/` source-view pages out of crawlers (documentation pages allowed as

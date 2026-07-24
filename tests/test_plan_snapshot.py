@@ -201,31 +201,49 @@ def test_abort_cleans_up_invocation(tmp_path):
     assert not pathlib.Path(out["review_path"]).exists()
 
 
-def test_abort_allow_missing_after_persist_self_cleaned(tmp_path):
-    """persist self-cleans the state on exit 3 (plan changed) / altered snapshot.
-    A post-persist `abort --allow-missing` must succeed as a no-op so the skill
-    can clean up uniformly (round-3), WITHOUT masking a wrong token (round-5)."""
+def test_persist_self_cleans_the_whole_invocation_on_failure(tmp_path):
+    """CI round: persist self-cleans the ENTIRE invocation (snapshot + work_dir +
+    sidecars) on a post-load failure — e.g. a malformed meta — so the caller never
+    runs an abort AFTER persist (which could mask a wrong token). Exit 3 (plan
+    changed) is the same story, covered by test_persist_exit3_..."""
     plan = _mk_plan(tmp_path)
     out = _snapshot(tmp_path, plan)
-    plan.write_text("# plan\n\nEDITED while reviewing\n")
-    exit3 = _persist(tmp_path, out, check=False)
-    assert exit3.returncode == 3
-    assert not pathlib.Path(out["state_path"]).exists(), "persist should have self-cleaned"
-    cp = _run("abort", "--state-file", out["state_path"], "--allow-missing", home=tmp_path)
-    assert cp.returncode == 0
-    assert "aborted" in cp.stdout
+    pathlib.Path(out["meta_path"]).write_text("{ not valid json")
+    pathlib.Path(out["body_path"]).write_text("b\n")
+    cp = _run("persist", "--state-file", out["state_path"], home=tmp_path, check=False)
+    assert cp.returncode == 2
+    for key in ("snapshot_path", "state_path", "meta_path", "body_path", "work_dir"):
+        assert not pathlib.Path(out[key]).exists(), f"{key} must be self-cleaned on persist failure"
 
 
-def test_abort_without_flag_fails_on_missing_state(tmp_path):
-    """A nonexistent (mistyped / cross-wired / stale) state token must FAIL by
-    default, so abort never reports success while a real snapshot is left behind
-    (round-5). Only --allow-missing downgrades it to a no-op."""
+def test_abort_fails_on_missing_state(tmp_path):
+    """abort is a PRE-persist cleanup only (persist self-cleans its own failures),
+    so a nonexistent (mistyped / cross-wired / stale) state token must FAIL rather
+    than report success while a real snapshot is left behind (round-5 + CI: the
+    `--allow-missing` escape hatch was removed since it is no longer needed)."""
     snap_dir = tmp_path / ".claude" / "plans" / ".snapshots"
     snap_dir.mkdir(parents=True)
     ghost = str(snap_dir / "deadbeef0000.00000000.state.json")  # well-formed, nonexistent
     cp = _run("abort", "--state-file", ghost, home=tmp_path, check=False)
     assert cp.returncode == 2
     assert "does not exist" in cp.stderr
+
+
+def test_snapshot_refuses_shell_unsafe_home(tmp_path):
+    """CI round (fail-closed validation gate): the plans dir is HOME-derived and
+    every generated path is pasted into the caller's shell as a quoted literal.
+    If HOME contains a shell metacharacter those paths would execute under command
+    substitution, so the helper REFUSES to emit them (fails closed)."""
+    unsafe_home = tmp_path / "home$(touch pwned)"  # a `$()` literally in the path
+    plan = unsafe_home / ".claude" / "plans" / "p.md"
+    plan.parent.mkdir(parents=True)
+    plan.write_text("# p\n")
+    pf = _write_file(tmp_path, "plan-path.txt", str(plan))
+    cp = _run("snapshot", "--plan-path-file", str(pf), home=unsafe_home, check=False)
+    assert cp.returncode == 2
+    assert "shell metacharacter" in cp.stderr
+    # nothing executed (the helper never shells out — this guards the CALLER)
+    assert not (tmp_path / "pwned").exists() and not (unsafe_home / "pwned").exists()
 
 
 def test_persist_rejects_rewritten_snapshot(tmp_path):

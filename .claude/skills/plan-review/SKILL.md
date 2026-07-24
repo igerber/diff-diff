@@ -104,9 +104,9 @@ path is later substituted into a command.
 > `python3 .claude/scripts/plan_snapshot.py abort --state-file "<state_path>"`
 > (plain `abort`: the state still exists, so a wrong/mistyped token fails loudly
 > rather than silently no-op'ing). Abort removes the snapshot and the `work_dir`
-> — there is no separate cleanup to run. A failure OF the persist call itself is
-> handled in step 7 (persist may have self-cleaned, so that one path passes
-> `--allow-missing`).
+> — there is no separate cleanup to run. A failure of the persist call itself
+> needs NO abort: `persist` self-cleans the whole invocation on any failure
+> (step 7).
 
 ### 2. Render the reviewer prompt (tested Python, never free-text)
 
@@ -244,12 +244,12 @@ Then write the meta JSON to `meta_path`:
 
 Then `python3 .claude/scripts/plan_snapshot.py persist --state-file "<state_path>"`
 (exit 0 = stamped + cleaned up, `work_dir` included; exit 3 = plan changed
-mid-review → re-review; other non-zero → report). On ANY non-zero exit, run
-`abort --allow-missing` — persist self-cleans the state on some paths (exit 3,
-altered snapshot), so `--allow-missing` is the ONE place that flag belongs (it
-makes abort a no-op there while still releasing the snapshot + `work_dir` on
-paths that do not). No separate `rm -rf` is needed — persist and abort both
-remove the `work_dir`. Display the review in the conversation.
+mid-review → re-review; other non-zero → report). **Do NOT abort after persist**
+— `persist` self-cleans the entire invocation (snapshot + `work_dir` + sidecars)
+on ANY failure, so post-persist there is nothing left to release, and a
+follow-up abort could only ever hit a wrong/stale token. There is no separate
+`rm -rf` at any point — persist and abort both remove the `work_dir`. Display the
+review in the conversation.
 
 ### 8. Surface the verified findings (advisory — do NOT edit the plan here)
 
@@ -310,8 +310,7 @@ fall back to a retired single-reviewer path.
    user.` — never re-stamp the old review's hash onto unexamined content. Apply
    the same snapshot lifecycle as the Review phase: on a failure BEFORE persist
    (a bad meta/body Write) run plain `plan_snapshot.py abort --state-file
-   "<state_path>"`; on a non-zero PERSIST run it with `--allow-missing` (persist
-   may have self-cleaned). Either way the snapshot + `work_dir` are released.
+   "<state_path>"`; do NOT abort after persist — it self-cleans its own failures.
 
 ---
 
