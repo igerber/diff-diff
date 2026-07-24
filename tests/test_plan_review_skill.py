@@ -407,10 +407,12 @@ def test_engine_provenance_is_machine_readable():
     assert "plan-review-engine" in revise
 
 
-def test_codex_read_surface_is_documented():
-    """P0 #1 resolution (parity + tracking): the codex read surface is
-    documented in-skill like /ai-review-local, cross-linking the tracked
-    isolation follow-up rather than gating the feature."""
+def test_codex_read_surface_is_disclosed():
+    """Verifies the accepted-surface DISCLOSURE, not a filesystem boundary. Per
+    the user's parity+tracking decision the codex read surface is NOT confined
+    (same as /ai-review-local); this asserts the skill discloses it in-line and
+    cross-links the tracked isolation follow-up. It is not a security control —
+    a real boundary would need OS-level isolation (tracked, TODO.md:L55)."""
     text = (_SKILL / "SKILL.md").read_text()
     assert "read-only" in text and "read surface" in text.lower()
     assert "ai-review-local" in text  # names the accepted-parity surface

@@ -108,8 +108,11 @@ another plan's certified hash — silently defeating the gate.
 > "<work_dir>"`. On ANY failure or early stop before that — a render error, a
 > reviewer/merge failure, a bad write, or a persist that reports the plan
 > changed — run
-> `python3 .claude/scripts/plan_snapshot.py abort --state-file "<state_path>"`
-> **and** `rm -rf "<work_dir>"` before stopping. The `<work_dir>` files hold
+> `python3 .claude/scripts/plan_snapshot.py abort --state-file "<state_path>" --allow-missing`
+> **and** `rm -rf "<work_dir>"` before stopping (`--allow-missing` makes abort a
+> no-op if a persist already self-released the state, without masking a wrong
+> token — abort without the flag errors on a nonexistent state). The `<work_dir>`
+> files hold
 > full plan + review text, so leaving them behind both litters `$SCRATCH` and
 > retains that content.
 
@@ -237,9 +240,9 @@ label):
 - else (only P3, or no findings) → `Ready to implement`
 
 If the merged report has **no parseable summary table / severity counts**, do
-NOT persist a guessed assessment — `abort` (snapshot-lifecycle note), `rm -rf
-"<work_dir>"`, and report the malformed reviewer output. Otherwise write the
-meta JSON to `meta_path`:
+NOT persist a guessed assessment — `abort --allow-missing` (snapshot-lifecycle
+note), `rm -rf "<work_dir>"`, and report the malformed reviewer output.
+Otherwise write the meta JSON to `meta_path`:
 
 ```json
 {"reviewed_at": "<ISO-8601 UTC>", "assessment": "<Ready to implement | Minor revisions recommended | Significant issues found>", "critical_count": <P0>, "medium_count": <P1+P2>, "low_count": <P3>, "flags": []}
@@ -247,10 +250,11 @@ meta JSON to `meta_path`:
 
 Then `python3 .claude/scripts/plan_snapshot.py persist --state-file "<state_path>"`
 (exit 0 = stamped + cleaned up; exit 3 = plan changed mid-review → re-review;
-other non-zero → report). On ANY non-zero exit, run `abort` + `rm -rf
-"<work_dir>"` uniformly — `abort` is idempotent, so it is a safe no-op on the
-persist paths that already self-clean the state (exit 3, altered snapshot) and
-still releases the snapshot on those that do not. On exit 0, just `rm -rf
+other non-zero → report). On ANY non-zero exit, run `abort --allow-missing` +
+`rm -rf "<work_dir>"` uniformly — persist self-cleans the state on some paths
+(exit 3, altered snapshot), so `--allow-missing` makes abort a safe no-op there
+while still releasing the snapshot on paths that do not (and, unlike a bare
+`abort`, it never masks a wrong state token). On exit 0, just `rm -rf
 "<work_dir>"` (the intermediate prompt/review files). Display the review in the
 conversation.
 
@@ -313,7 +317,7 @@ fall back to a retired single-reviewer path.
    user.` — never re-stamp the old review's hash onto unexamined content. Apply
    the same snapshot lifecycle as the Review phase: on any failure before
    persist completes (or any non-zero persist), run `plan_snapshot.py abort
-   --state-file "<state_path>"` so the snapshot is not retained.
+   --state-file "<state_path>" --allow-missing` so the snapshot is not retained.
 
 ---
 

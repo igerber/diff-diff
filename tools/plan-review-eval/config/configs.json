@@ -1,5 +1,6 @@
 {
   "_comment": "Plan-review engine arms. treatment_fields declares the experimental treatments (variant = criteria source, mode = reviewer composition, model = the Claude reviewer); every other confound (effort / sandbox / action_version / cli_version) is pinned and asserted identical across arms, and every selected multi-arm subset must decompose into single-field contrasts (see eval_core.runner). All five arms run k=2 (probes D/E included) so reliably/unstably-caught applies everywhere and repeat counts reveal nothing to graders. effort applies to the codex side of dual arms only; it is pinned xhigh on ALL arms so it stays a held-constant confound. cli_version is the composite claude+codex string PlanReviewer.cli_version() reports, pinned 2026-07-21.",
+  "_deviation_note": "AS-RUN config for the EXPLORATORY Campaign 1. Arms A/B/C/E declare claude-opus-4-8, which OVERRIDES the claude-fable-5 registered in DECISION_RULE.md (the immutable pre-registration is unchanged and remains the fable-5 authority). Campaign 1 was therefore NON-GATING on this axis among others (see verdicts/campaign-1.md Status). This file records what was actually run; a gating re-validation would add a fresh versioned config rather than edit these arms.",
   "treatment_fields": [
     "variant",
     "mode",

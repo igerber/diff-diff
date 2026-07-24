@@ -306,13 +306,21 @@ def cmd_abort(args: argparse.Namespace) -> int:
     snap_dir = os.path.realpath(os.path.join(_plans_home(), ".snapshots"))
     if not state_path.endswith(".state.json") or os.path.dirname(state_path) != snap_dir:
         _fail(2, f"state file must be a .state.json inside {snap_dir} (got {state_path})")
-    # Idempotent: persist self-cleans the invocation on its own failure paths
-    # (exit 3 plan-changed, altered-snapshot), so a follow-up abort finds no
-    # state to release — that is success, not a second error. Callers can
-    # therefore abort uniformly on any failure without tracking who cleaned up.
     if not os.path.exists(state_path):
-        print("aborted")
-        return 0
+        # A missing state is a no-op ONLY when the caller explicitly expects it:
+        # persist self-cleans on its own failure paths (exit 3 plan-changed,
+        # altered-snapshot), so a post-persist abort passes --allow-missing.
+        # WITHOUT the flag a nonexistent (mistyped / cross-wired / stale) state
+        # token is an error — otherwise abort would report success while the real
+        # snapshot and sidecars silently remain on disk.
+        if args.allow_missing:
+            print("aborted (state already released)")
+            return 0
+        _fail(
+            2,
+            f"state file {state_path} does not exist — pass --allow-missing only "
+            f"when a prior persist is known to have already released it.",
+        )
     try:
         state = json.loads(_read_value_file(state_path, "state"))
     except ValueError:
@@ -374,6 +382,12 @@ def main() -> int:
     pc.set_defaults(func=cmd_check)
     pa = sub.add_parser("abort")
     pa.add_argument("--state-file", required=True)
+    pa.add_argument(
+        "--allow-missing",
+        action="store_true",
+        help="treat an already-released (nonexistent) state file as success; use "
+        "only after a persist known to self-clean, not to mask a wrong state token",
+    )
     pa.set_defaults(func=cmd_abort)
     args = ap.parse_args()
     return args.func(args)

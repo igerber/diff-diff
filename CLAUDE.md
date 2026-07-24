@@ -279,8 +279,8 @@ Confirm the printed `plan_path` is the plan you supplied. Write the Skipped meta
 `Review skipped by user.` to `body_path`, then `plan_snapshot.py persist
 --state-file "<state_path>"` — the helper stamps the hash of the exact current
 plan bytes. On any failure before persist completes (a bad meta/body Write, a
-non-zero persist), run `plan_snapshot.py abort --state-file "<state_path>"` so
-the snapshot is not retained.
+non-zero persist), run `plan_snapshot.py abort --state-file "<state_path>"
+--allow-missing` so the snapshot is not retained.
 
 **Rollback**: To remove the plan-review skill, delete
 `.claude/skills/plan-review/`, restore `.claude/commands/review-plan.md` +

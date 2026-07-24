@@ -177,20 +177,31 @@ def test_abort_cleans_up_invocation(tmp_path):
     assert not pathlib.Path(out["review_path"]).exists()
 
 
-def test_abort_is_idempotent_after_persist_self_cleaned(tmp_path):
-    """persist self-cleans the state on exit 3 (plan changed) / altered snapshot,
-    so a follow-up abort finds no state — it must succeed as a no-op, not error.
-    Lets the skill abort uniformly on any failure (round-3 review)."""
+def test_abort_allow_missing_after_persist_self_cleaned(tmp_path):
+    """persist self-cleans the state on exit 3 (plan changed) / altered snapshot.
+    A post-persist `abort --allow-missing` must succeed as a no-op so the skill
+    can clean up uniformly (round-3), WITHOUT masking a wrong token (round-5)."""
     plan = _mk_plan(tmp_path)
     out = _snapshot(tmp_path, plan)
     plan.write_text("# plan\n\nEDITED while reviewing\n")
     exit3 = _persist(tmp_path, out, check=False)
     assert exit3.returncode == 3
     assert not pathlib.Path(out["state_path"]).exists(), "persist should have self-cleaned"
-    # the skill's uniform "abort on any non-zero persist" now no-ops cleanly
-    cp = _run("abort", "--state-file", out["state_path"], home=tmp_path)
+    cp = _run("abort", "--state-file", out["state_path"], "--allow-missing", home=tmp_path)
     assert cp.returncode == 0
     assert "aborted" in cp.stdout
+
+
+def test_abort_without_flag_fails_on_missing_state(tmp_path):
+    """A nonexistent (mistyped / cross-wired / stale) state token must FAIL by
+    default, so abort never reports success while a real snapshot is left behind
+    (round-5). Only --allow-missing downgrades it to a no-op."""
+    snap_dir = tmp_path / ".claude" / "plans" / ".snapshots"
+    snap_dir.mkdir(parents=True)
+    ghost = str(snap_dir / "deadbeef0000.00000000.state.json")  # well-formed, nonexistent
+    cp = _run("abort", "--state-file", ghost, home=tmp_path, check=False)
+    assert cp.returncode == 2
+    assert "does not exist" in cp.stderr
 
 
 def test_persist_rejects_rewritten_snapshot(tmp_path):
