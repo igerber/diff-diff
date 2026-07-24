@@ -72,6 +72,7 @@ import argparse
 import hashlib
 import json
 import os
+import shutil
 import sys
 import uuid
 from typing import NoReturn
@@ -180,6 +181,16 @@ def cmd_snapshot(args: argparse.Namespace) -> int:
     snapshot_path = os.path.join(snap_dir, f"{leaf}.md")
     _atomic_write(snapshot_path, plan_bytes)
     state_path = os.path.join(snap_dir, f"{leaf}.state.json")
+    # Per-invocation working dir for the caller's intermediate prompt/review
+    # files, emitted here (same STRICT [a-f0-9.]-leaf, HOME-prefixed snap_dir) so
+    # the caller never derives it from the repo/worktree path — a git-path with
+    # `$()`/backticks would execute when substituted into a shell command. Cleaned
+    # by _cleanup_invocation (persist/abort), like every other invocation file.
+    work_dir = os.path.join(snap_dir, f"{leaf}.work")
+    try:
+        os.makedirs(work_dir, exist_ok=True)
+    except OSError as exc:
+        _fail(4, f"cannot create work dir {work_dir}: {exc}")
     state = {
         "plan_path": plan_path,
         "snapshot_path": snapshot_path,
@@ -195,6 +206,7 @@ def cmd_snapshot(args: argparse.Namespace) -> int:
                 "snapshot_path": snapshot_path,
                 "meta_path": os.path.join(snap_dir, f"{leaf}.meta.json"),
                 "body_path": os.path.join(snap_dir, f"{leaf}.body.md"),
+                "work_dir": work_dir,
                 **state,
             }
         )
@@ -220,6 +232,8 @@ def _cleanup_invocation(state_path: str, state: dict) -> None:
                 os.unlink(path)
             except OSError:
                 pass
+    # the per-invocation work dir and its intermediate prompt/review files
+    shutil.rmtree(f"{stem}.work", ignore_errors=True)
 
 
 def cmd_persist(args: argparse.Namespace) -> int:

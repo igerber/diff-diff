@@ -90,6 +90,30 @@ def test_snapshots_are_invocation_unique(tmp_path):
     assert pathlib.Path(b["snapshot_path"]).exists()
 
 
+def test_snapshot_emits_and_cleans_work_dir(tmp_path):
+    """work_dir is a helper-emitted per-invocation dir UNDER the snapshots dir
+    (safe-charset leaf, NOT built from the repo/worktree path — round-6 path
+    injection fix), created at snapshot and removed by both persist and abort."""
+    plan = _mk_plan(tmp_path)
+    out = _snapshot(tmp_path, plan)
+    work = pathlib.Path(out["work_dir"])
+    assert work.is_dir(), "work_dir must be created"
+    assert work.parent.name == ".snapshots", "work_dir lives under the snapshots dir"
+    assert work.name.endswith(".work")
+    (work / "reviewer_prompt.txt").write_text("intermediate")  # a stray file in it
+    _persist(tmp_path, out)
+    assert not work.exists(), "persist must remove work_dir and its contents"
+
+
+def test_abort_cleans_work_dir(tmp_path):
+    plan = _mk_plan(tmp_path)
+    out = _snapshot(tmp_path, plan)
+    work = pathlib.Path(out["work_dir"])
+    (work / "review_a.md").write_text("y")
+    _run("abort", "--state-file", out["state_path"], home=tmp_path)
+    assert not work.exists(), "abort must remove work_dir"
+
+
 def test_persist_certifies_reviewed_bytes(tmp_path):
     plan = _mk_plan(tmp_path)
     out = _snapshot(tmp_path, plan)
@@ -102,7 +126,7 @@ def test_persist_certifies_reviewed_bytes(tmp_path):
     text = review.read_text()
     assert f"plan_sha256: {out['plan_sha256']}" in text
     assert f"plan: {out['plan_path']}" in text
-    for key in ("snapshot_path", "state_path", "meta_path", "body_path"):
+    for key in ("snapshot_path", "state_path", "meta_path", "body_path", "work_dir"):
         assert not pathlib.Path(out[key]).exists(), f"{key} must be cleaned up"
 
 
@@ -172,7 +196,7 @@ def test_abort_cleans_up_invocation(tmp_path):
     pathlib.Path(out["meta_path"]).write_text("{}")
     pathlib.Path(out["body_path"]).write_text("b\n")
     _run("abort", "--state-file", out["state_path"], home=tmp_path)
-    for key in ("snapshot_path", "state_path", "meta_path", "body_path"):
+    for key in ("snapshot_path", "state_path", "meta_path", "body_path", "work_dir"):
         assert not pathlib.Path(out[key]).exists(), f"{key} survived abort"
     assert not pathlib.Path(out["review_path"]).exists()
 

@@ -366,34 +366,36 @@ def test_codex_review_error_returns_3_and_writes_nothing(tmp_path, monkeypatch):
 
 
 def test_intermediate_files_are_invocation_scoped():
-    """P0: concurrent same-worktree reviews must not cross-wire. The four
-    intermediate prompt/review files live in a per-invocation `<work_dir>`
-    (mktemp), never fixed `$SCRATCH/<name>` paths, and the dir is cleaned up."""
+    """P0/P1: concurrent same-worktree reviews must not cross-wire, AND the work
+    dir must be HELPER-emitted (safe-charset, HOME-prefixed) rather than derived
+    from the repo/worktree path (round-6 path-injection fix). The four
+    intermediates live under `<work_dir>`; there is no mktemp-under-git-path and
+    no manual `rm -rf` (persist/abort clean it)."""
     text = (_SKILL / "SKILL.md").read_text()
-    assert (
-        'mktemp -d "$(git rev-parse --git-path plan-review)/inv' in text
-    ), "must create a per-invocation work dir (scratch re-derived inline)"
+    # work_dir comes from the snapshot helper's printed output, not a repo mktemp
+    assert "`work_dir`" in text, "work_dir must be a helper-emitted field"
+    assert "mktemp" not in text, "work_dir must NOT be built from the repo/worktree path"
     for name in ("reviewer_prompt.txt", "review_a.md", "review_b.md", "merge_prompt.txt"):
         assert f"<work_dir>/{name}" in text, f"{name} must be under <work_dir>"
-        # never a fixed double-quoted $SCRATCH shell path for a working file
-        # (the only fixed $SCRATCH file is the confirmation-guarded plan-path.txt
-        # ingress; the one backtick mention on L80 is the "without this" warning)
         assert f'"$SCRATCH/{name}"' not in text
-    # cleanup on both success and abort paths
-    assert 'rm -rf "<work_dir>"' in text
+    # cleanup is via persist/abort (which remove work_dir), not a shell rm -rf of
+    # a pasted path literal
+    assert 'rm -rf "<work_dir>"' not in text
 
 
 def test_assessment_is_deterministic():
-    """P2: `assessment` must be derived by a deterministic count->label rule,
-    and malformed reviewer output must abort rather than persist a guess."""
+    """P2: `assessment` must be derived by a deterministic count->label rule from
+    the ACTUAL finding lines (not the reviewer's self-reported table, CI round),
+    cross-checked against the table; a mismatch/malformed report must abort."""
     norm = " ".join((_SKILL / "SKILL.md").read_text().split())
     # the three-branch mapping is spelled out (label + its trigger)
     assert "any **P0 or P1**" in norm and "Significant issues found" in norm
     assert "else any **P2**" in norm and "Minor revisions recommended" in norm
     assert "Ready to implement" in norm
-    # malformed report -> abort, not a persisted guess
-    assert "no parseable summary table" in norm
-    assert "do NOT persist" in norm
+    # counts come from the finding lines and are cross-checked against the table
+    assert "count the finding lines" in norm and "cross-check" in norm
+    # a mismatch / malformed report -> abort, not a persisted guess
+    assert "malformed" in norm and "do NOT persist" in norm
 
 
 def test_engine_provenance_is_machine_readable():
@@ -451,7 +453,7 @@ def test_skip_paths_release_snapshot_on_failure():
     skill_revise = " ".join(
         (_SKILL / "SKILL.md").read_text().split("## Revise phase", 1)[1].split()
     )
-    assert "abort" in skill_revise and "before persist completes" in skill_revise
+    assert "abort" in skill_revise and "BEFORE persist" in skill_revise
     skip = " ".join(
         (_REPO / "CLAUDE.md")
         .read_text()
@@ -460,3 +462,22 @@ def test_skip_paths_release_snapshot_on_failure():
         .split()
     )
     assert "abort" in skip and "not retained" in skip
+
+
+def test_allow_missing_reserved_for_post_persist_abort():
+    """CI round: `--allow-missing` masks a wrong state token, so it belongs ONLY
+    on the post-persist abort (where persist may have self-cleaned). The
+    pre-persist snapshot-lifecycle callout must use PLAIN abort so a mistyped /
+    cross-wired token fails loudly."""
+    text = (_SKILL / "SKILL.md").read_text()
+    callout = " ".join(
+        text.split("Release the snapshot exactly once", 1)[1].split("### 2.", 1)[0].split()
+    )
+    # the callout's actual abort COMMAND is plain (it may mention --allow-missing
+    # in prose only to cross-reference step 7)
+    assert 'abort --state-file "<state_path>"' in callout, "pre-persist callout must abort"
+    assert (
+        'abort --state-file "<state_path>" --allow-missing' not in callout
+    ), "pre-persist abort command must be plain (strict)"
+    persist = text.split("### 7. Persist", 1)[1].split("### 8.", 1)[0]
+    assert "--allow-missing" in persist, "post-persist abort passes --allow-missing"

@@ -78,43 +78,35 @@ python3 .claude/scripts/plan_snapshot.py snapshot \
   --plan-path-file "$(git rev-parse --git-path plan-review)/plan-path.txt"
 ```
 
-It prints `state_path`, `snapshot_path`, `body_path`, `meta_path`, `plan_path`,
-`plan_sha256`, `review_path`. **Confirm the printed `plan_path` is the plan you
-supplied** (the ingress file is shared per-worktree; a concurrent session may
-have overwritten it — if it differs, re-Write and re-run). Non-zero exit →
-report and stop. Review the SNAPSHOT (`snapshot_path`), never the live plan.
+It prints `state_path`, `snapshot_path`, `body_path`, `meta_path`, `work_dir`,
+`plan_path`, `plan_sha256`, `review_path`. **Confirm the printed `plan_path` is
+the plan you supplied** (the ingress file is shared per-worktree; a concurrent
+session may have overwritten it). If it differs, the snapshot you just took is of
+the wrong plan — release it before retrying with
+`python3 .claude/scripts/plan_snapshot.py abort --state-file "<state_path>"`,
+then re-Write `plan-path.txt` and re-run (an un-aborted first snapshot is
+orphaned). Non-zero exit → report and stop. Review the SNAPSHOT
+(`snapshot_path`), never the live plan.
 
-**Then create a private per-invocation working directory** for the prompt and
-reviewer files this skill writes. The helper's own artifacts (`snapshot_path`,
-`state_path`, `body_path`, `meta_path`) are already invocation-unique
-(nonce-keyed), so concurrent reviews never collide on them — but the
-intermediate prompt/review files below are NOT helper-managed, so scope them the
-same way:
+`work_dir` is a private per-invocation directory the helper emits (under its own
+snapshots dir, safe-charset leaf, removed together with the snapshot) for the
+prompt/review files this skill writes — every one below lives inside it. Two
+concurrent reviews get distinct `work_dir`s, so their prompts and reviewer
+outputs cannot cross-wire (one plan's merged report can never be persisted under
+another's certified hash). Because it is **helper-derived, not built from the
+repo/worktree path**, no `$()`/backtick in a checkout path can execute when the
+path is later substituted into a command.
 
-```bash
-mktemp -d "$(git rev-parse --git-path plan-review)/inv.XXXXXXXX"
-```
-
-Note the printed path as `<work_dir>`; every prompt/review file below lives
-inside it. Two concurrent same-worktree reviews get distinct `<work_dir>`s, so
-their prompts and reviewer outputs cannot cross-wire. **Without this** they would
-share fixed `$SCRATCH/reviewer_prompt.txt` / `review_a.md` / `review_b.md` /
-`merge_prompt.txt` names, and one plan's merged report could be persisted under
-another plan's certified hash — silently defeating the gate.
-
-> **Release the snapshot + work dir exactly once.** Everything below holds an
-> open snapshot and a populated `<work_dir>`. On the success path,
-> `plan_snapshot.py persist` (step 7) releases the snapshot and you `rm -rf
-> "<work_dir>"`. On ANY failure or early stop before that — a render error, a
-> reviewer/merge failure, a bad write, or a persist that reports the plan
-> changed — run
-> `python3 .claude/scripts/plan_snapshot.py abort --state-file "<state_path>" --allow-missing`
-> **and** `rm -rf "<work_dir>"` before stopping (`--allow-missing` makes abort a
-> no-op if a persist already self-released the state, without masking a wrong
-> token — abort without the flag errors on a nonexistent state). The `<work_dir>`
-> files hold
-> full plan + review text, so leaving them behind both litters `$SCRATCH` and
-> retains that content.
+> **Release the snapshot exactly once.** Everything below holds an open snapshot
+> (its `work_dir` included). `plan_snapshot.py persist` (step 7) releases the
+> snapshot AND the `work_dir` on the success path. On ANY failure or early stop
+> BEFORE persist — a render error, a reviewer/merge failure, a bad write — run
+> `python3 .claude/scripts/plan_snapshot.py abort --state-file "<state_path>"`
+> (plain `abort`: the state still exists, so a wrong/mistyped token fails loudly
+> rather than silently no-op'ing). Abort removes the snapshot and the `work_dir`
+> — there is no separate cleanup to run. A failure OF the persist call itself is
+> handled in step 7 (persist may have self-cleaned, so that one path passes
+> `--allow-missing`).
 
 ### 2. Render the reviewer prompt (tested Python, never free-text)
 
@@ -231,32 +223,33 @@ its prepended note (single / codex-fallback), each led by its
 Write tool. **No YAML frontmatter**: the helper stamps `plan:`/`plan_sha256:`
 itself.
 
-Read the P0–P3 counts from the report's summary table and derive `assessment`
-**by this deterministic rule** (so identical findings always persist the same
-label):
+Derive `assessment` from the ACTUAL verified findings, not the reviewer's
+self-reported table: **count the finding lines by their severity tag**
+(`[P0]`/`[P1]`/`[P2]`/`[P3]`) and cross-check that count against the summary
+table. If they disagree, or there are no findings AND no parseable table, the
+report is malformed — do NOT persist a guessed assessment: `abort` (plain — the
+state still exists; it also removes the `work_dir`) and report the malformed
+output. Otherwise derive the label from the line counts **by this deterministic
+rule** (so identical findings always persist the same label):
 
 - any **P0 or P1** → `Significant issues found`
 - else any **P2** → `Minor revisions recommended`
 - else (only P3, or no findings) → `Ready to implement`
 
-If the merged report has **no parseable summary table / severity counts**, do
-NOT persist a guessed assessment — `abort --allow-missing` (snapshot-lifecycle
-note), `rm -rf "<work_dir>"`, and report the malformed reviewer output.
-Otherwise write the meta JSON to `meta_path`:
+Then write the meta JSON to `meta_path`:
 
 ```json
 {"reviewed_at": "<ISO-8601 UTC>", "assessment": "<Ready to implement | Minor revisions recommended | Significant issues found>", "critical_count": <P0>, "medium_count": <P1+P2>, "low_count": <P3>, "flags": []}
 ```
 
 Then `python3 .claude/scripts/plan_snapshot.py persist --state-file "<state_path>"`
-(exit 0 = stamped + cleaned up; exit 3 = plan changed mid-review → re-review;
-other non-zero → report). On ANY non-zero exit, run `abort --allow-missing` +
-`rm -rf "<work_dir>"` uniformly — persist self-cleans the state on some paths
-(exit 3, altered snapshot), so `--allow-missing` makes abort a safe no-op there
-while still releasing the snapshot on paths that do not (and, unlike a bare
-`abort`, it never masks a wrong state token). On exit 0, just `rm -rf
-"<work_dir>"` (the intermediate prompt/review files). Display the review in the
-conversation.
+(exit 0 = stamped + cleaned up, `work_dir` included; exit 3 = plan changed
+mid-review → re-review; other non-zero → report). On ANY non-zero exit, run
+`abort --allow-missing` — persist self-cleans the state on some paths (exit 3,
+altered snapshot), so `--allow-missing` is the ONE place that flag belongs (it
+makes abort a no-op there while still releasing the snapshot + `work_dir` on
+paths that do not). No separate `rm -rf` is needed — persist and abort both
+remove the `work_dir`. Display the review in the conversation.
 
 ### 8. Surface the verified findings (advisory — do NOT edit the plan here)
 
@@ -315,9 +308,10 @@ fall back to a retired single-reviewer path.
    `{"reviewed_at": "<ISO 8601>", "assessment": "Skipped", "critical_count": 0,
    "medium_count": 0, "low_count": 0, "flags": []}` and body `Review skipped by
    user.` — never re-stamp the old review's hash onto unexamined content. Apply
-   the same snapshot lifecycle as the Review phase: on any failure before
-   persist completes (or any non-zero persist), run `plan_snapshot.py abort
-   --state-file "<state_path>" --allow-missing` so the snapshot is not retained.
+   the same snapshot lifecycle as the Review phase: on a failure BEFORE persist
+   (a bad meta/body Write) run plain `plan_snapshot.py abort --state-file
+   "<state_path>"`; on a non-zero PERSIST run it with `--allow-missing` (persist
+   may have self-cleaned). Either way the snapshot + `work_dir` are released.
 
 ---
 

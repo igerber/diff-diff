@@ -22,8 +22,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   loudly to a single-Claude review. The content-hash `ExitPlanMode` gate
   (`check-plan-review.py`) is engine-agnostic and unchanged; the snapshot
   helper's (`plan_snapshot.py`) hash-gate and snapshot/persist contract are
-  unchanged, with `abort` now idempotent (a no-op once the state is released, so
-  callers can abort uniformly on any failure).
+  unchanged, and it now also emits and cleans a per-invocation work dir (under
+  its own safe-charset snapshots dir) for the reviewer's intermediate files, so
+  no repo/worktree path is composed into a shell command. `abort` is strict by
+  default (errors on a missing state token) with an explicit `--allow-missing`
+  no-op reserved for post-persist cleanup.
 - **Docs: navigation and SEO polish.** A stable/latest version switcher in the navbar
   (`docs/_static/switcher.json`); a custom `robots.txt` that keeps the ~60 thin
   `_modules/` source-view pages out of crawlers (documentation pages allowed as
