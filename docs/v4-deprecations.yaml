@@ -220,11 +220,12 @@ rows:
     introduced_in: "3.9"
     deprecated_in: "3.9"
     removed_in: "4.0"
-    status: planned
-    phase: 2
+    status: shimmed
+    phase: 5
     warning: FutureWarning
-    code_refs: [diff_diff/staggered.py]
-    notes: "balance_e moves to aggregate() in the same PR. Vocabulary: simple|event_study|group|calendar."
+    test_ref: tests/test_aggregate_contract.py
+    code_refs: [diff_diff/staggered.py, diff_diff/staggered_results.py, diff_diff/aggregation.py]
+    notes: "Shimmed in 3.9: fit(aggregate=) warns via a sentinel default (so a plain fit() never warns) and still returns the fully populated legacy surface; results.aggregate(type=) is the successor. balance_e moves alongside it as its own row [M-117] - it was previously tracked only as prose here, which nothing asserted. VOCABULARY: the closed set is library-wide (simple|event_study|group|calendar); CallawaySantAnna's SUPPORTED SUBSET is simple|event_study|group - it has no calendar aggregator (the DEFERRED 'Calendar-time aggregation' row), and aggregate('calendar') raises naming what is supported."
   - id: M-021
     kind: param
     group: aggregate-postfit
@@ -1307,3 +1308,35 @@ rows:
     warning: FutureWarning
     code_refs: [diff_diff/linalg.py]
     notes: "Fourth site of the 'robust' drop - spec section 7 says the flag dies 'everywhere it exists' but [M-045]..[M-047] enumerated only three. LinearRegression is a top-level export with its OWN __init__ (the TWFE/MultiPeriodDiD hits inherit DifferenceInDifferences.__init__ and ride [M-045]). Redundant with vcov_type, same as its siblings."
+
+  # ---- Phase 2b PR 1: the post-fit aggregation surface ---------------------
+  # Ids M-116 and M-118..M-121 are intentionally UNUSED: they were drafted for
+  # the later 2b PRs (HAD rename, the other three balance_e sites, Wooldridge)
+  # and are reserved rather than reassigned, since ids are never reused.
+  - id: M-117
+    kind: param
+    group: aggregate-postfit
+    old: "diff_diff:CallawaySantAnna.fit[balance_e]"
+    new: "diff_diff:CallawaySantAnnaResults.aggregate[balance_e]"
+    introduced_in: "3.9"
+    deprecated_in: "3.9"
+    removed_in: "4.0"
+    status: shimmed
+    phase: 5
+    warning: FutureWarning
+    test_ref: tests/test_aggregate_contract.py
+    code_refs: [diff_diff/staggered.py, diff_diff/staggered_results.py, diff_diff/aggregation.py]
+    notes: "balance_e moves from fit() onto aggregate() with [M-020]. Previously tracked only as the prose 'balance_e moves to aggregate() in the same PR' inside M-020's notes, which no test could assert - the same un-rowed-obligation class the gating-completeness amendment closed. Applies to event-study aggregation ONLY (the shipped code threads it nowhere else), so aggregate(type='simple'|'group', balance_e=...) raises rather than silently ignoring it. The other three balance_e sites (ImputationDiD, TwoStageDiD, EfficientDiD) get their own rows in the PRs that migrate them."
+  - id: M-122
+    kind: behavior
+    group: aggregate-postfit
+    old: "diff_diff:AggregationResult"
+    new: null
+    introduced_in: "3.9"
+    deprecated_in: null
+    removed_in: null
+    status: done
+    phase: 2
+    test_ref: tests/test_aggregate_contract.py
+    code_refs: [diff_diff/aggregation.py, diff_diff/__init__.py]
+    notes: "AggregationResult: the tabular container every non-event-study aggregation returns (aggregate(type='event_study') returns EventStudyResults instead, giving [M-092]'s container its public producer). Pinned 12-column schema with summary/to_dict/to_dataframe. Three schema choices are grounded in what the estimators actually produce: 'target' is PER-ROW so one container can carry two aligned estimands over the same labels; 'n_kind' reuses EventStudyResults' vocabulary rather than inventing units/obs; and 'weight' is NULLABLE because CallawaySantAnna's group aggregation weights (g,t) cells equally within each cohort and forms no cross-cohort mass. introduced_in gates the 3.9 cut ([M-091]/[M-092] pattern); deprecated_in stays null so the early-flip guard does not fire against the PR that ships it."

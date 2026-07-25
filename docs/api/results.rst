@@ -115,3 +115,9 @@ representation.
    :members:
    :undoc-members:
    :show-inheritance:
+
+.. autoclass:: diff_diff.AggregationResult
+   :no-index:
+   :members:
+   :undoc-members:
+   :show-inheritance:

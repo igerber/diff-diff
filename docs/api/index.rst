@@ -85,6 +85,7 @@ Result containers returned by estimators:
    diff_diff.BaseResults
    diff_diff.Diagnostic
    diff_diff.EventStudyResults
+   diff_diff.AggregationResult
 
 Visualization
 -------------

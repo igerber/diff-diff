@@ -412,10 +412,18 @@ section's pattern - plus `summary(aggregation=)` and
 `to_dataframe(aggregation=)` [M-044] [M-086] [M-087].
 
 **Semantics.** `aggregate()` re-aggregates WITHOUT refitting, from influence
-functions / bootstrap draws retained on the results object (CallawaySantAnna
-already stores them; the Phase 2 PR extends retention where missing - memory
-cost documented per estimator). Analytical-vs-bootstrap inference of the
-aggregated estimand follows the fit's inference method. Estimators whose
+functions retained on the results object. **Correction (Phase 2b PR 1):** this
+section previously said "CallawaySantAnna already stores them". It does not -
+`CallawaySantAnnaResults.influence_functions` was declared and never assigned,
+and the fit-time `precomputed` bookkeeping is a local. Retention is therefore
+work in EVERY migrating PR, not just the ones "where missing", and the kit must
+be built during `fit()` because nothing it needs survives the call. Memory cost
+is documented per estimator: for CallawaySantAnna the dominant payload is the
+per-(g,t) influence-function dict at roughly O(n_units x n_gt), not the
+O(n_units) bookkeeping. Analytical-vs-bootstrap inference of the aggregated
+estimand follows the fit's inference method; where bootstrap draws are not
+retained, `aggregate()` on a bootstrapped fit RAISES rather than silently
+returning analytical inference. Estimators whose
 estimand is already a single aggregation (SunAbraham's saturated event study,
 LPDiD's per-horizon design) expose `aggregate()` where meaningful as additive
 surface; their native params (`only_event`/`only_pooled` etc.) are documented

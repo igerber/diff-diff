@@ -1140,7 +1140,8 @@ class PreTrendsPower:
                 if results.event_study_effects is None:
                     raise ValueError(
                         "CallawaySantAnnaResults must have event_study_effects. "
-                        "Re-run with aggregate='event_study'."
+                        "Call results.aggregate('event_study') to compute them "
+                        "post-fit (no refit required)."
                     )
 
                 # Get pre-period effects. Anticipation-aware cutoff per

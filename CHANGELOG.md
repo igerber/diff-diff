@@ -8,6 +8,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Post-fit aggregation: `results.aggregate(type=...)` on CallawaySantAnna
+  (4.0 program Phase 2b, ledger rows M-020 / M-117 / M-122).** Estimate once,
+  aggregate as a post-fit step — the ecosystem norm (`did::aggte`,
+  `etwfe::emfx`, Stata `estat aggregation`). `results.aggregate("event_study")`
+  returns the unified `EventStudyResults` container, finally giving [M-092]'s
+  export a public producer; `"group"` and `"simple"` return the new
+  `AggregationResult`, a tabular container with a pinned 12-column schema and
+  `summary()` / `to_dict()` / `to_dataframe()`. **`fit(aggregate=)` and
+  `fit(balance_e=)` now emit a `FutureWarning`** (removed at 4.0) via a
+  sentinel default, so the warning fires only when the argument is actually
+  passed and never on a plain `fit()`; the deprecated path still returns the
+  fully populated legacy surface. `balance_e` moves onto `aggregate()`, where
+  it applies to event-study aggregation only — passing it with `"simple"` or
+  `"group"` raises rather than being silently ignored, matching where the
+  shipped code actually threads it.
+  **No numerical change:** a 10-scenario golden (every aggregation type, a
+  `balance_e` sweep, repeated cross-sections, a bootstrapped fit,
+  `anticipation=1`) is reproduced at `atol=rtol=1e-14`, and post-fit
+  `aggregate()` matches the fit-time numbers identically.
+  Three schema decisions are grounded in what the estimator produces rather
+  than assumed: `target` is per-row so one container can carry two aligned
+  estimands; `n_kind` reuses `EventStudyResults`' vocabulary (`"cells"` for
+  CS's group level, not "units"); and `weight` is `None` for `"group"`,
+  because that aggregation weights `(g,t)` cells equally *within* each cohort
+  and forms no cross-cohort mass — reporting one would be fabricated.
+  Fail-closed elsewhere too: `aggregate("calendar")` raises (CS has no
+  calendar aggregator; the DEFERRED row stands), a non-`None` `weights`
+  raises, and `aggregate()` on a **bootstrapped** fit raises rather than
+  substituting analytical inference for percentile-bootstrap statistics —
+  bootstrap replay is a tracked follow-up.
+  Internally, the CS event-study aggregator became **pure**: it returned one
+  dict and stashed four more values on `self`, and now returns all five, which
+  is what allows re-aggregation without mutating the result.
+  `StaggeredTripleDifference` inherits the same mixin and is the only reader of
+  the Eq. 4.14 overall, so it moved in the same change. Aggregation reads the
+  retained bookkeeping instead of the fit-time frame, so **no results object
+  retains the source panel**.
 - **Internal: 4.0 gating-completeness amendment to the design spec and ledger.**
   An audit of the public surface against the spec's own contract-rename rules
   found two renames the initial inventory missed and three Phase 2 obligations

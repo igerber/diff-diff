@@ -515,7 +515,8 @@ class EventStudyResults(BaseResults):
 
 #: Per-producer remediation for an absent event-study surface.
 _ABSENT_SURFACE_HINTS: Dict[str, str] = {
-    "CallawaySantAnnaResults": "refit with aggregate='event_study' (or 'all')",
+    # Migrated to the post-fit surface (row M-020): no refit needed.
+    "CallawaySantAnnaResults": "call results.aggregate('event_study')",
     "ImputationDiDResults": "refit with aggregate='event_study' (or 'all')",
     "TwoStageDiDResults": "refit with aggregate='event_study' (or 'all')",
     "StackedDiDResults": "refit with aggregate='event_study'",

@@ -91,7 +91,7 @@ For rigorous DiD analysis, follow these 8 steps. Skipping diagnostic steps produ
 4. **Choose estimator** - staggered adoption -> CS/SA/BJS (NOT plain TWFE); few treated units -> SDiD; factor confounding -> TROP; simple 2x2 -> DiD. Run `BaconDecomposition` to diagnose TWFE bias.
 5. **Estimate** - `estimator.fit(data, ...)`. Always print the cluster count first and choose inference method based on the result (cluster-robust if >= 50 clusters, wild bootstrap if fewer).
 6. **Sensitivity analysis** - `compute_honest_did(results)` for bounds under PT violations (MultiPeriodDiD, CS, or dCDH), `run_all_placebo_tests()` for 2x2 falsification, specification comparisons for staggered designs.
-7. **Heterogeneity** - CS: `aggregate='group'`/`'event_study'`; SA: `results.event_study_effects` / `to_dataframe(level='cohort')`; subgroup re-estimation.
+7. **Heterogeneity** - CS: `results.aggregate('group')`/`'event_study'` (post-fit, no refit); SA: `results.event_study_effects` / `to_dataframe(level='cohort')`; subgroup re-estimation.
 8. **Robustness** - compare 2-3 estimators (CS vs SA vs BJS), report with and without covariates (shows whether conditioning drives identification), present pre-trends and sensitivity bounds.
 
 Full guide: `diff_diff.get_llm_guide("practitioner")`.

@@ -113,10 +113,11 @@ _MD_TOKEN_RE = re.compile(r"\[(M-\d{3})\]")
 # plus the 2 Phase 2a results-contract rows (M-092/M-093) = 77, plus the 3
 # gating-completeness amendment rows (M-094..M-096) = 80, plus the 19-row
 # completeness sweep over public FUNCTIONS and the dCDH results mirror
-# (M-097..M-115) = 99. Ids are never reused and terminal rows are never
+# (M-097..M-115) = 99, plus Phase 2b PR 1's two rows (M-117, M-122) = 101.
+# Ids are never reused and terminal rows are never
 # deleted, so the ledger only grows - raise the floor when rows are added; a
 # lower parse count means scanner/format drift or an illegal row deletion.
-ROW_COUNT_FLOOR = 99
+ROW_COUNT_FLOOR = 101
 
 # Committed snapshot of the shipped id set ("ids are never deleted or reused"
 # contract - a delete-one-add-one edit keeps the count above the floor but trips
@@ -127,7 +128,10 @@ ROW_COUNT_FLOOR = 99
 # existing param rows, plus the wild-bootstrap exposure policy);
 # (97,115) = its completeness sweep over module-level public functions
 # (twowayfeweights, three HAD pretest entry points, trim_weights) plus the
-# dCDH results mirror and the fourth `robust` site.
+# dCDH results mirror and the fourth `robust` site; (117,117)/(122,122) =
+# Phase 2b PR 1 (balance_e onto aggregate(), AggregationResult). M-116 and
+# M-118..M-121 are reserved for the later 2b PRs, not deleted - ids are
+# never reused, so a gap here is intentional.
 _INITIAL_ID_RANGES = [
     (1, 8),
     (10, 16),
@@ -140,6 +144,8 @@ _INITIAL_ID_RANGES = [
     (92, 93),
     (94, 96),
     (97, 115),
+    (117, 117),
+    (122, 122),
 ]
 EXPECTED_INITIAL_IDS = frozenset(
     f"M-{n:03d}" for lo, hi in _INITIAL_ID_RANGES for n in range(lo, hi + 1)
@@ -541,7 +547,7 @@ def test_initial_ids_never_deleted():
     public-function completeness sweep)."""
     missing = sorted(EXPECTED_INITIAL_IDS - set(_ROW_IDS))
     assert not missing, f"ledger rows deleted (ids are permanent): {missing}"
-    assert len(EXPECTED_INITIAL_IDS) == 99
+    assert len(EXPECTED_INITIAL_IDS) == 101
 
 
 def test_version_tuple_pads_to_three_components():

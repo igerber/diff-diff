@@ -692,8 +692,8 @@ def _extract_event_study_params(
                 if results.event_study_effects is None:
                     raise ValueError(
                         "CallawaySantAnnaResults must have event_study_effects for HonestDiD. "
-                        "Re-run CallawaySantAnna.fit() with aggregate='event_study' to compute "
-                        "event study effects."
+                        "Call results.aggregate('event_study') to compute them post-fit "
+                        "(no refit required)."
                     )
 
                 # Warn if not using universal base period (R's HonestDiD requires it)
