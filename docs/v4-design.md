@@ -423,8 +423,37 @@ domain vocabulary, not drift.
   analytical SEs (SyntheticControl, TROP, CiC) document their native variance
   methods instead of growing a dead param.
 - Wild bootstrap is exposed via `inference="wild_bootstrap"` uniformly where
-  supported (today's split between `inference=` and `n_bootstrap>0` idioms is
-  resolved in the Phase 2 plan for the affected estimators).
+  supported [M-096] - "supported" meaning the estimator offers wild CLUSTER
+  bootstrap as an ALTERNATIVE to analytical SEs. That roster is
+  DifferenceInDifferences + TwoWayFixedEffects. (MultiPeriodDiD also carries
+  the param but has no wild-bootstrap path - it warns and falls back to
+  analytical; it is removed at 4.0 [M-010] and section 4.1 replaces that
+  fallback with an explicit raise in the merged event-study mode, so the roster
+  pins estimators that SUPPORT WCR, not those that merely expose the param.)
+
+  **The selector must fail closed** - it does not today. `inference=` is stored
+  without any valid-value check, and DiD routes `wild_bootstrap` WITHOUT
+  `cluster=` silently to analytical (pinned by
+  `tests/test_wild_bootstrap.py::test_did_wild_bootstrap_requires_cluster`), so
+  a typo or a missing prerequisite quietly changes which SE/p-value/CI
+  procedure runs - the no-silent-failures principle applied to inference
+  selection. Phase 2 validates the accepted value set on `__init__` and
+  transactional `set_params`, and handles wild-bootstrap-without-cluster
+  explicitly; silence is not an option.
+
+  The apparent `inference=` vs `n_bootstrap>0` split is NOT drift: an estimator
+  whose bootstrap IS its inference method runs a different procedure -
+  CallawaySantAnna an influence-function multiplier bootstrap, SunAbraham a
+  unit-pairs bootstrap (Rao-Wu rescaled under stratified/PSU survey designs),
+  ChaisemartinDHaultfoeuille a group-level influence-function multiplier
+  bootstrap that upgrades to PSU-level Hall-Mammen wild clustering under survey
+  designs with strictly-coarser PSUs - against DiD/TWFE's residual wild cluster
+  bootstrap with test-inverted CIs and no reference t-distribution. Spelling
+  any of those `"wild_bootstrap"` would make a uniform name carry altered
+  meaning, which rule 8 of section 8 forbids; they keep `n_bootstrap` as
+  documented domain vocabulary on the section 6 precedent. Should one of them
+  later want an `inference=` selector, the value names its own method - that is
+  additive, post-4.0, minor-version work, not part of this program.
 - `n_bootstrap` semantic unification [M-081]: `0` = bootstrap off wherever an
   analytical path exists; bootstrap-only estimators document their positive
   defaults. Counts stay tuned per estimator (999 light / 200 compute-heavy) -
@@ -472,10 +501,43 @@ missed.**
 7. `treatment` names a 0/1 indicator (group membership or take-up), never a
    cohort and never a treatment level; estimators with non-binary
    per-period treatment (dCDH) document theirs as domain vocabulary.
+   Corollary: a column that MAY be non-binary does not get this name even
+   when it is conceptually take-up. Fuzzy RD's observed-take-up column
+   accepts dose values (matching R's `fuzzy=`; the estimand label degrades
+   from complier-LATE to a bare local Wald ratio accordingly), so [M-042]
+   [M-094] target `takeup` - the spelling the RD docstring already uses -
+   rather than `treatment`.
 8. Hybrid-naming principle (locked 2026-07-12): diff-diff names where the
    library owns the concept; domain vocabulary where it is the field's
    language; an R-equivalents mapping table (`yname/tname/idname/gname` ->
    `outcome/time/unit/first_treat`) ships in the docs, not as param aliases.
+9. **A rename carries to every surface that mirrors it.** Renaming a
+   constructor or `fit()` param renames any RESULTS field that echoes it back
+   (and the `summary()` label that prints it), in the SAME diff and on the same
+   shim schedule - a results field is public surface, is emitted by
+   `to_dict()`, and section 5 forbids deprecated names in serialized output
+   from 4.0. Mirrors added by amendment: [M-094] (mirrors [M-042]), [M-095]
+   (mirrors [M-043]), [M-114] (mirrors [M-033]). When adding a rename row,
+   grep the matching `*_results.py` for the old name before assuming the param
+   row is the whole job.
+10. **These rules bind module-level PUBLIC FUNCTIONS, not just classes.** The
+   Phase 1 inventory was derived from the estimator roster, so exported
+   functions went unaudited; the completeness sweep added [M-097] (the
+   RETAINED `twowayfeweights` diagnostic - section 3.3 keeps it past 4.0, so
+   no wrapper removal covers it), [M-098]..[M-112] (the three exported HAD
+   pretest entry points, five `_col` params each), and [M-113]
+   (`trim_weights`). A function that survives 4.0 gets the same shim schedule
+   as a class surface; only surfaces scheduled for REMOVAL
+   ([M-070]..[M-077]) are exempt, because the removal moots the name.
+
+**Domain vocabulary that is NOT a violation** (recorded so the sweep is not
+re-litigated): the staggered family's `group`/`groups` on results containers
+and `GroupTimeEffect.group` name the ATT(g,t) COHORT in Callaway-Sant'Anna's
+own notation - rule 8 protects exactly this, and renaming them to `unit` would
+be actively wrong. `TripleDifference.fit[group]` is the treated-group 0/1
+indicator that rule 3 explicitly reserves the name for. dCDH is the one
+estimator where `group` genuinely means a unit id, which is why [M-033] and
+[M-114] exist and the CS-family fields have no rows.
 
 **Naming-checkpoint outcomes (2026-07-18), with losing candidates:**
 `event_study=` bool (over `effects=` enum, `dynamic=` bool);
@@ -496,11 +558,40 @@ above; anything only one PR cares about stays in that PR's plan.**
 | Phase | Ships in | PRs (each: dedicated shim/removal tests + matrix flips + CHANGELOG naming flipped row ids) |
 |---|---|---|
 | 1 (this PR) | - | Spec + matrix + enforcement test + support edits |
-| 2: contract foundations | 3.9 | (a) results base + unified event-study representation + to_dict completion + the Diagnostic marker base on the diagnostic result roster [M-091] (section 3.5); (b) `aggregate()` + fit(aggregate=) shims [M-020..M-027]; (c) param renames [M-030..M-047] + BaseEstimator mixin + ContinuousDiD covariates move; (d) alias introductions [M-062] [M-063] + wrapper deprecations [M-070..M-077] + n_bootstrap docs [M-081] |
+| 2: contract foundations | 3.9 | (a) results base + unified event-study representation [M-092] + to_dict completion + the Diagnostic marker base on the diagnostic result roster [M-091] (section 3.5); (b) `aggregate()` + fit(aggregate=) shims [M-020..M-027]; (c) param renames [M-030..M-047] [M-084] [M-086..M-089] + their results-field mirrors [M-094] [M-095] (section 8 rule 9) + the public-function completeness sweep [M-097..M-113] (section 8 rule 10) + the dCDH results mirror [M-114] + the fourth `robust` site [M-115] + BaseEstimator mixin + ContinuousDiD covariates move; (d) alias introductions [M-062] [M-063] + wrapper deprecations [M-070..M-077] + the two inference-surface policies: `n_bootstrap` semantic unification [M-081] and the wild-cluster-bootstrap roster guard [M-096] |
 | 3: merges | 3.9 | (a) TWFE event-study mode [M-010] + EventStudy warn [M-060] (gates: section 4.1's equivalence/divergence/pooled-parity test triple); (b) TripleDifference facade [M-013]; (c) CiC method= [M-015] |
 | 4: release + soak | 3.9 cut | Migration guide written (skeleton: section 10); maintainer cuts 3.9; maint/3.8 rule active |
 | 5: enforcement | 4.0 | Removals [M-010..M-016, M-030..M-047 old names, M-060, M-061, M-070..M-077, M-001..M-003]; storage flips [M-050..M-058]; default policies [M-004..M-006, M-080]; warning retirement [M-007]; fastpath go/no-go [M-008]; diagnostic-family docs/roster reorganization [M-090]; docs/llms.txt/README refresh |
 | 6: front door | 4.1 | `event_study(data, outcome, unit, time, first_treat, estimator=...)` comparison entry point over the staggered family (sketch only; specified in its own plan) |
+
+**3.9-cut checklist (un-rowed obligations).** `test_due_rows_are_terminal`
+gates everything that HAS a row; the following Phase 2 obligations are real but
+not expressible as ledger rows, so the 3.9 release PR asserts them by hand:
+
+1. The shared `BaseEstimator` mixin has replaced the hand-rolled
+   `get_params`/`set_params` copies (section 7), with `deep=` uniform and
+   set_params transactional per the locked rule. A pure refactor - no symbol
+   changes - so no row can see it.
+2. The R-equivalents mapping table (section 8 rule 8) ships in the docs.
+3. The migration guide exists (section 10) and its TL;DR table has a row per
+   breaking change, generated against the matrix rather than hand-listed.
+4. `docs/v4-deprecations.yaml` and this document agree on the phase breakdown
+   in the table above - any PR that re-scoped a phase edited both.
+
+Everything else queued for 3.9 is row-gated, by one of two mechanisms. Symbol
+rows that declare a `warning` gate on `deprecated_in` - the shim must have
+shipped ([M-010] [M-013] [M-015], [M-020]..[M-027], [M-030]..[M-047],
+[M-070]..[M-077], [M-082],
+[M-084], [M-086]..[M-089], [M-094] [M-095], [M-097]..[M-115]). Rows with no
+shim to assert gate
+on `introduced_in` instead - the new surface must have shipped: the
+introduce-only aliases [M-062] [M-063] and the `behavior`-kind policies
+[M-081] [M-091] [M-092] [M-096]. That second mechanism is deliberate for
+behavior rows: the early-flip guard keys off `deprecated_in`, so a flip version
+would fail the very PR that implements the obligation (it lands while
+`__version__` is still 3.8.x). Use `introduced_in`, not `deprecated_in`, for
+any future behavior row that must ship in a release the repo has not yet
+bumped to.
 
 **4.0-cut checklist (final item):** the due-row sweep is AUTOMATED -
 `tests/test_v4_matrix.py::test_due_rows_are_terminal` fails any release bump
@@ -616,8 +707,10 @@ forever - a removed symbol resurrecting is a test failure.
   class row (schema-enforced). Top-level `diff_diff:Name` class/function rows
   and alias rows also assert `__all__` membership consistent with their
   status (stale `import *` entries fail). The shipped row ids are a
-  committed snapshot in the enforcement test (77 as of Phase 2a: Phase 1 +
-  the diagnostic-family amendment + the M-092/M-093 results-contract rows;
+  committed snapshot in the enforcement test (99 as of the
+  gating-completeness amendment: Phase 1 + the diagnostic-family amendment +
+  the M-092/M-093 results-contract rows + the M-094..M-096 amendment rows +
+  the M-097..M-115 completeness sweep;
   the snapshot extends by a new id range in the same diff that appends
   rows): ids are never deleted or reused, and the test fails if any
   snapshot id disappears.

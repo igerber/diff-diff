@@ -8,6 +8,81 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Internal: 4.0 gating-completeness amendment to the design spec and ledger.**
+  An audit of the public surface against the spec's own contract-rename rules
+  found two renames the initial inventory missed and three Phase 2 obligations
+  the automated release gate could not see. (a) Two ledger rows added for
+  RESULTS fields that mirror already-tracked params: `M-094`
+  (`RegressionDiscontinuityResults.treatment_col` → `treatment`, mirroring
+  `M-042`) and `M-095` (`StackedDiDResults.clean_control` → `control_group`,
+  mirroring `M-043`). Both are public dataclass fields emitted by `to_dict()`,
+  so renaming the params alone would have left deprecated spellings on the
+  serialized surface that spec section 5 forbids from 4.0; each flips in the
+  same diff as its param sibling. `docs/v4-design.md` section 8 gains rule 9
+  making the mirror obligation normative, so the next rename sweep greps for it
+  rather than rediscovering it. (b) `M-081` (`n_bootstrap` semantic
+  unification) gains `introduced_in: 3.9` and a new `M-096` covers the uniform
+  `inference="wild_bootstrap"` exposure (spec section 7) - both were real Phase
+  2 obligations that no row gated, so a 3.9 cut could have shipped without
+  them. Both use `introduced_in` rather than `deprecated_in` deliberately: for
+  behavior rows the early-flip guard keys off `deprecated_in`, so a flip
+  version would have failed the very PR that implements the obligation (it
+  lands while `__version__` is still 3.8.x) - the `M-091`/`M-092` pattern.
+  `M-096` covers the `inference="wild_bootstrap"` selector contract, which
+  governs wild CLUSTER bootstrap offered as an alternative to analytical SEs -
+  a roster of `DifferenceInDifferences` + `TwoWayFixedEffects`. Two things the
+  audit established. (i) The selector does **not** fail closed today:
+  `inference=` is stored with no valid-value check anywhere, and DiD routes
+  `wild_bootstrap` without `cluster=` silently to analytical (a currently
+  *pinned* behavior), so a typo or a missing prerequisite quietly changes which
+  SE/p-value/CI procedure runs. Phase 2 must validate the accepted value set on
+  `__init__` and transactional `set_params` and handle the missing-cluster case
+  explicitly. (ii) The apparent `inference=` vs `n_bootstrap>0` split is not
+  drift - estimators whose bootstrap *is* their inference method run materially
+  different procedures (CallawaySantAnna an influence-function multiplier
+  bootstrap; SunAbraham a unit-pairs bootstrap, Rao-Wu rescaled on survey
+  paths; dCDH a group-level influence-function multiplier bootstrap upgrading
+  to Hall-Mammen PSU wild clustering under strictly-coarser survey PSUs) versus
+  DiD/TWFE's residual wild cluster bootstrap with test-inverted CIs, so one
+  value spelling for all of them would make a uniform name carry altered
+  meaning. They keep `n_bootstrap` as documented domain vocabulary, and section
+  7 now records the boundary; an `inference=` selector for any of them would
+  name its own method and is additive post-4.0 work.
+  (c) The `BaseEstimator` mixin and the R-equivalents docs table are genuine
+  refactor/docs work that cannot be ledger rows at all, so section 9 gains a
+  3.9-cut checklist alongside the existing 4.0 one. `M-008`'s notes now record
+  that its telemetry soak window *is* the 3.9→4.0 gap. (d) A completeness
+  sweep over surfaces the Phase 1 inventory never audited. That inventory was
+  derived from the estimator roster, so module-level public **functions** were
+  never checked against section 8 at all: `M-097` renames
+  `twowayfeweights(group=)` → `unit=` (section 3.3 **retains** that diagnostic
+  past 4.0, so no wrapper removal covers it), `M-098`..`M-112` rename the five
+  `_col` params on each of the three exported HAD pretest entry points
+  (`joint_pretrends_test`, `joint_homogeneity_test`,
+  `did_had_pretest_workflow`), `M-113` renames `trim_weights(weight_col=)` →
+  `weights=`, `M-114` is the dCDH results mirror (`.groups` → `.units`, whose
+  "groups" really are unit ids), and `M-115` adds the fourth `robust` site
+  (`LinearRegression`, which section 7 said dies "everywhere it exists" while
+  only three rows enumerated it). The same sweep found ~26 hits that are NOT
+  violations and are now documented as such in section 8 so they are not
+  re-litigated: the staggered family's `group`/`groups` name the ATT(g,t)
+  **cohort** in Callaway-Sant'Anna's notation (rule 8 protects it; renaming to
+  `unit` would be wrong), and `TripleDifference.fit[group]` is the
+  treated-group indicator rule 3 explicitly reserves the name for. Section 8
+  gains rule 10 binding the rules to public functions, not just classes.
+  (e) `M-042`/`M-094`'s rename target moves from `treatment` to `takeup`:
+  fuzzy RD's observed-take-up column accepts non-binary dose values (matching
+  R's `fuzzy=`, with the estimand label degrading from complier-LATE to a bare
+  local Wald ratio), while section 8 rule 7 reserves `treatment` for a 0/1
+  indicator and never a treatment level - so the original target would have
+  made a uniform name carry altered meaning. `takeup` is the spelling the RD
+  docstring already uses; no shim had shipped, so the retarget is free. Rule 7
+  gains the corollary that a column which MAY be non-binary does not take the
+  `treatment` name even when it is conceptually take-up.
+  Ledger row count 77 → 99 (enforcement-test floor and id snapshot extended in
+  the same diff); rows gating a 3.9 bump 45 → 68. Docs + ledger + test-count
+  updates only - **no public API or numerical behavior change** (every new row
+  is `planned`; the shims themselves land in Phase 2c).
 - **Internal tooling: plan-review engine → dual-reviewer skill (no library
   change).** `/review-plan` + `/revise-plan` are retired for a
   `.claude/skills/plan-review/` skill that runs the **dual** review engine

@@ -123,7 +123,7 @@ rows:
     env_var: DIFF_DIFF_SOLVE_OLS_FASTPATH
     decision_due: "4.0"
     code_refs: [diff_diff/linalg.py]
-    notes: "DIFF_DIFF_SOLVE_OLS_FASTPATH default-ON is a v4-class change GATED on golden recapture + certification telemetry soak (TODO.md row); record go/no-go at the 4.0 cut either way."
+    notes: "DIFF_DIFF_SOLVE_OLS_FASTPATH default-ON is a v4-class change GATED on golden recapture + certification telemetry soak (TODO.md row); record go/no-go at the 4.0 cut either way. SOAK WINDOW = the 3.9 -> 4.0 gap: opt-in telemetry can only accumulate from a release that advertises the env var, so the 3.9 release notes are the last surface that can start it. A short gap is a legitimate outcome - 'evaluated, kept off' is terminal and needs no soak - but that is a scheduling decision to make deliberately, not to discover at the cut."
 
   # ---- The three merges + retiring classes ---------------------------------
   - id: M-010
@@ -478,7 +478,7 @@ rows:
     kind: param
     group: renames-col-suffix
     old: "diff_diff:RegressionDiscontinuity.fit[treatment_col]"
-    new: "diff_diff:RegressionDiscontinuity.fit[treatment]"
+    new: "diff_diff:RegressionDiscontinuity.fit[takeup]"
     introduced_in: "3.9"
     deprecated_in: "3.9"
     removed_in: "4.0"
@@ -486,7 +486,20 @@ rows:
     phase: 2
     warning: FutureWarning
     code_refs: [diff_diff/rdd.py]
-    notes: "0/1 take-up column for fuzzy RD - consistent with 'treatment' as a 0/1 indicator library-wide."
+    notes: "Observed take-up column for fuzzy RD. Target RETARGETED from 'treatment' to 'takeup' by the gating-completeness amendment: the column accepts NON-BINARY (dose) take-up, matching R's fuzzy= (REGISTRY 'Estimand and estimator (fuzzy RD)'; the estimand label is data-dependent - complier LATE only when values are in {0,1}, otherwise a bare local Wald ratio). Section 8 rule 7 reserves 'treatment' for a 0/1 indicator and never a treatment level, so 'treatment' would have carried altered meaning here. 'takeup' is already the library's own vocabulary for it (the RD docstring example passes treatment_col='takeup'). No shim had shipped, so the retarget costs nothing."
+  - id: M-094
+    kind: field
+    group: renames-col-suffix
+    old: "diff_diff:RegressionDiscontinuityResults.treatment_col"
+    new: "diff_diff:RegressionDiscontinuityResults.takeup"
+    introduced_in: "3.9"
+    deprecated_in: "3.9"
+    removed_in: "4.0"
+    status: planned
+    phase: 2
+    warning: FutureWarning
+    code_refs: [diff_diff/rdd.py]
+    notes: "Results-side mirror of [M-042]: a public dataclass field carrying the fit param's name, emitted by to_dict(). Renaming the param alone would leave the _col spelling on the serialized surface, which spec section 5 forbids from 4.0 (canonical names only). Target is 'takeup', not 'treatment', for the reason recorded on [M-042] (non-binary take-up is accepted, so 'treatment' would violate section 8 rule 7). Flips WITH [M-042] in the same Phase 2c diff."
   - id: M-043
     kind: param
     group: renames-control-group
@@ -500,6 +513,19 @@ rows:
     warning: FutureWarning
     code_refs: [diff_diff/stacked_did.py]
     notes: "Same concept as control_group elsewhere; underscored value spellings win library-wide (spec section 8)."
+  - id: M-095
+    kind: field
+    group: renames-control-group
+    old: "diff_diff:StackedDiDResults.clean_control"
+    new: "diff_diff:StackedDiDResults.control_group"
+    introduced_in: "3.9"
+    deprecated_in: "3.9"
+    removed_in: "4.0"
+    status: planned
+    phase: 2
+    warning: FutureWarning
+    code_refs: [diff_diff/stacked_did_results.py]
+    notes: "Results-side mirror of [M-043]: a public dataclass field carrying the constructor param's name, emitted by to_dict() and rendered by summary() ('Clean control:'). Renaming the param alone would leave the results metadata contradicting the param it reports. The VALUE spellings are already canonical ('not_yet_treated'); only the field name moves. Flips WITH [M-043] in the same Phase 2c diff; the summary() label follows."
   - id: M-044
     kind: param
     group: renames-level
@@ -961,12 +987,25 @@ rows:
     group: policy-n-bootstrap
     old: "diff_diff:DifferenceInDifferences[n_bootstrap]"
     new: null
+    introduced_in: "3.9"
     deprecated_in: null
     removed_in: null
     status: planned
     phase: 2
     code_refs: [diff_diff/estimators.py, diff_diff/synthetic_did.py, diff_diff/changes_in_changes.py]
-    notes: "Semantic unification only: n_bootstrap=0 = bootstrap off wherever an analytical path exists; per-estimator counts stay tuned (999 light / 200 compute-heavy). No numeric default changes."
+    notes: "Semantic unification only: n_bootstrap=0 = bootstrap off wherever an analytical path exists; per-estimator counts stay tuned (999 light / 200 compute-heavy). No numeric default changes. introduced_in gates the 3.9 cut (pattern of [M-091]/[M-092]): the unification is a Phase 2 obligation and must not slip past the bump unflipped. deprecated_in stays null deliberately - a flip version would arm the early-flip guard against the Phase 2 PR, which lands while __version__ is still 3.8.x."
+  - id: M-096
+    kind: behavior
+    group: policy-wild-bootstrap
+    old: "diff_diff:DifferenceInDifferences[inference]"
+    new: null
+    introduced_in: "3.9"
+    deprecated_in: null
+    removed_in: null
+    status: planned
+    phase: 2
+    code_refs: [diff_diff/estimators.py, diff_diff/twfe.py]
+    notes: "Spec section 7 selector contract + roster guard. inference='wild_bootstrap' selects wild CLUSTER bootstrap offered as an ALTERNATIVE to analytical SEs; the SUPPORTING roster is DifferenceInDifferences + TwoWayFixedEffects. NOT a uniformity mandate over every bootstrap - each estimator whose bootstrap IS its inference method runs a materially different procedure and keeps n_bootstrap as documented domain vocabulary (section 6 precedent): CallawaySantAnna = influence-function multiplier bootstrap; SunAbraham = unit-pairs bootstrap (Rao-Wu rescaled under stratified/PSU survey designs); ChaisemartinDHaultfoeuille = group-level influence-function multiplier bootstrap, upgrading to PSU-level Hall-Mammen wild clustering under survey designs with strictly-coarser PSUs. Spelling any of those 'wild_bootstrap' would make a uniform name carry altered meaning (section 8 rule 8). MultiPeriodDiD EXPOSES the param but has no wild-bootstrap path (warns, falls back to analytical); it is removed at 4.0 [M-010] and section 4.1 replaces the fallback with a raise - so the roster pins SUPPORT, not param presence. SCOPE: the selector does not fail closed today - inference= is stored unvalidated (no valid-value check anywhere), and DiD silently routes wild_bootstrap WITHOUT cluster= to analytical (estimators.py, pinned by tests/test_wild_bootstrap.py::test_did_wild_bootstrap_requires_cluster), so a typo or a missing prerequisite silently changes the SE/p/CI procedure - a no-silent-failures violation. Phase 2 must make it fail closed: validate the accepted value set on __init__ AND transactional set_params, and handle wild_bootstrap-without-cluster explicitly (raise or warn - the implementing PR decides, but silence is not an option; flipping the pinned test is expected and its CHANGELOG entry must say so). done requires a test_ref covering: valid/invalid selector values, DiD with and without cluster, TWFE, MultiPeriodDiD's fallback, and the roster itself (a future estimator gaining WCR must adopt the selector or land its own row). Companion to [M-081] (n_bootstrap semantics). introduced_in gates the 3.9 cut for the same reason as [M-081]; behavior-at-done requires test_ref."
   - id: M-082
     kind: param
     group: renames-post
@@ -1015,3 +1054,256 @@ rows:
     warning: FutureWarning
     code_refs: [diff_diff/continuous_did.py]
     notes: "The one estimator with a design-matrix column in the constructor; moves to fit() per the sklearn split (spec section 7)."
+
+  # ---- Completeness sweep (gating-completeness amendment) -------------------
+  # The Phase 1 inventory scanned CLASS surfaces only, so module-level public
+  # FUNCTIONS were never audited against section 8. These rows close that gap.
+  # Domain-vocabulary NON-violations found by the same sweep are documented in
+  # spec section 8 (CS-family ATT(g,t) 'group'/'groups'; TripleDifference's
+  # reserved 'group'), not rowed.
+  - id: M-097
+    kind: param
+    group: renames-dcdh
+    old: "diff_diff:twowayfeweights[group]"
+    new: "diff_diff:twowayfeweights[unit]"
+    introduced_in: "3.9"
+    deprecated_in: "3.9"
+    removed_in: "4.0"
+    status: planned
+    phase: 2
+    warning: FutureWarning
+    code_refs: [diff_diff/chaisemartin_dhaultfoeuille.py]
+    notes: "Companion to [M-033] on the RETAINED diagnostic function (spec section 3.3 keeps twowayfeweights past 4.0 - it is not a class duplicate, so no wrapper removal mitigates this). Same meaning as dCDH's fit[group]: a unit identifier, which section 8 rule 3 reserves 'group' against. Unlike the chaisemartin_dhaultfoeuille() wrapper hit, which dies with [M-077]."
+  - id: M-098
+    kind: param
+    group: renames-col-suffix
+    old: "diff_diff:joint_pretrends_test[outcome_col]"
+    new: "diff_diff:joint_pretrends_test[outcome]"
+    introduced_in: "3.9"
+    deprecated_in: "3.9"
+    removed_in: "4.0"
+    status: planned
+    phase: 2
+    warning: FutureWarning
+    code_refs: [diff_diff/had_pretests.py]
+    notes: "Public retained HAD diagnostic; section 8 rule 5. Mirrors the estimator-side [M-035]. The three exported HAD pretest entry points share one 5-param block ([M-098]..[M-112]) and shim together."
+  - id: M-099
+    kind: param
+    group: renames-col-suffix
+    old: "diff_diff:joint_pretrends_test[dose_col]"
+    new: "diff_diff:joint_pretrends_test[dose]"
+    introduced_in: "3.9"
+    deprecated_in: "3.9"
+    removed_in: "4.0"
+    status: planned
+    phase: 2
+    warning: FutureWarning
+    code_refs: [diff_diff/had_pretests.py]
+    notes: "Mirrors [M-036]; see [M-098]."
+  - id: M-100
+    kind: param
+    group: renames-col-suffix
+    old: "diff_diff:joint_pretrends_test[time_col]"
+    new: "diff_diff:joint_pretrends_test[time]"
+    introduced_in: "3.9"
+    deprecated_in: "3.9"
+    removed_in: "4.0"
+    status: planned
+    phase: 2
+    warning: FutureWarning
+    code_refs: [diff_diff/had_pretests.py]
+    notes: "Mirrors [M-037]; see [M-098]."
+  - id: M-101
+    kind: param
+    group: renames-col-suffix
+    old: "diff_diff:joint_pretrends_test[unit_col]"
+    new: "diff_diff:joint_pretrends_test[unit]"
+    introduced_in: "3.9"
+    deprecated_in: "3.9"
+    removed_in: "4.0"
+    status: planned
+    phase: 2
+    warning: FutureWarning
+    code_refs: [diff_diff/had_pretests.py]
+    notes: "Mirrors [M-038]; see [M-098]."
+  - id: M-102
+    kind: param
+    group: renames-col-suffix
+    old: "diff_diff:joint_pretrends_test[first_treat_col]"
+    new: "diff_diff:joint_pretrends_test[first_treat]"
+    introduced_in: "3.9"
+    deprecated_in: "3.9"
+    removed_in: "4.0"
+    status: planned
+    phase: 2
+    warning: FutureWarning
+    code_refs: [diff_diff/had_pretests.py]
+    notes: "Mirrors [M-039]; see [M-098]."
+  - id: M-103
+    kind: param
+    group: renames-col-suffix
+    old: "diff_diff:joint_homogeneity_test[outcome_col]"
+    new: "diff_diff:joint_homogeneity_test[outcome]"
+    introduced_in: "3.9"
+    deprecated_in: "3.9"
+    removed_in: "4.0"
+    status: planned
+    phase: 2
+    warning: FutureWarning
+    code_refs: [diff_diff/had_pretests.py]
+    notes: "Mirrors [M-035]; see [M-098]."
+  - id: M-104
+    kind: param
+    group: renames-col-suffix
+    old: "diff_diff:joint_homogeneity_test[dose_col]"
+    new: "diff_diff:joint_homogeneity_test[dose]"
+    introduced_in: "3.9"
+    deprecated_in: "3.9"
+    removed_in: "4.0"
+    status: planned
+    phase: 2
+    warning: FutureWarning
+    code_refs: [diff_diff/had_pretests.py]
+    notes: "Mirrors [M-036]; see [M-098]."
+  - id: M-105
+    kind: param
+    group: renames-col-suffix
+    old: "diff_diff:joint_homogeneity_test[time_col]"
+    new: "diff_diff:joint_homogeneity_test[time]"
+    introduced_in: "3.9"
+    deprecated_in: "3.9"
+    removed_in: "4.0"
+    status: planned
+    phase: 2
+    warning: FutureWarning
+    code_refs: [diff_diff/had_pretests.py]
+    notes: "Mirrors [M-037]; see [M-098]."
+  - id: M-106
+    kind: param
+    group: renames-col-suffix
+    old: "diff_diff:joint_homogeneity_test[unit_col]"
+    new: "diff_diff:joint_homogeneity_test[unit]"
+    introduced_in: "3.9"
+    deprecated_in: "3.9"
+    removed_in: "4.0"
+    status: planned
+    phase: 2
+    warning: FutureWarning
+    code_refs: [diff_diff/had_pretests.py]
+    notes: "Mirrors [M-038]; see [M-098]."
+  - id: M-107
+    kind: param
+    group: renames-col-suffix
+    old: "diff_diff:joint_homogeneity_test[first_treat_col]"
+    new: "diff_diff:joint_homogeneity_test[first_treat]"
+    introduced_in: "3.9"
+    deprecated_in: "3.9"
+    removed_in: "4.0"
+    status: planned
+    phase: 2
+    warning: FutureWarning
+    code_refs: [diff_diff/had_pretests.py]
+    notes: "Mirrors [M-039]; see [M-098]."
+  - id: M-108
+    kind: param
+    group: renames-col-suffix
+    old: "diff_diff:did_had_pretest_workflow[outcome_col]"
+    new: "diff_diff:did_had_pretest_workflow[outcome]"
+    introduced_in: "3.9"
+    deprecated_in: "3.9"
+    removed_in: "4.0"
+    status: planned
+    phase: 2
+    warning: FutureWarning
+    code_refs: [diff_diff/had_pretests.py]
+    notes: "Mirrors [M-035]; see [M-098]."
+  - id: M-109
+    kind: param
+    group: renames-col-suffix
+    old: "diff_diff:did_had_pretest_workflow[dose_col]"
+    new: "diff_diff:did_had_pretest_workflow[dose]"
+    introduced_in: "3.9"
+    deprecated_in: "3.9"
+    removed_in: "4.0"
+    status: planned
+    phase: 2
+    warning: FutureWarning
+    code_refs: [diff_diff/had_pretests.py]
+    notes: "Mirrors [M-036]; see [M-098]."
+  - id: M-110
+    kind: param
+    group: renames-col-suffix
+    old: "diff_diff:did_had_pretest_workflow[time_col]"
+    new: "diff_diff:did_had_pretest_workflow[time]"
+    introduced_in: "3.9"
+    deprecated_in: "3.9"
+    removed_in: "4.0"
+    status: planned
+    phase: 2
+    warning: FutureWarning
+    code_refs: [diff_diff/had_pretests.py]
+    notes: "Mirrors [M-037]; see [M-098]."
+  - id: M-111
+    kind: param
+    group: renames-col-suffix
+    old: "diff_diff:did_had_pretest_workflow[unit_col]"
+    new: "diff_diff:did_had_pretest_workflow[unit]"
+    introduced_in: "3.9"
+    deprecated_in: "3.9"
+    removed_in: "4.0"
+    status: planned
+    phase: 2
+    warning: FutureWarning
+    code_refs: [diff_diff/had_pretests.py]
+    notes: "Mirrors [M-038]; see [M-098]."
+  - id: M-112
+    kind: param
+    group: renames-col-suffix
+    old: "diff_diff:did_had_pretest_workflow[first_treat_col]"
+    new: "diff_diff:did_had_pretest_workflow[first_treat]"
+    introduced_in: "3.9"
+    deprecated_in: "3.9"
+    removed_in: "4.0"
+    status: planned
+    phase: 2
+    warning: FutureWarning
+    code_refs: [diff_diff/had_pretests.py]
+    notes: "Mirrors [M-039]; see [M-098]."
+  - id: M-113
+    kind: param
+    group: renames-col-suffix
+    old: "diff_diff:trim_weights[weight_col]"
+    new: "diff_diff:trim_weights[weights]"
+    introduced_in: "3.9"
+    deprecated_in: "3.9"
+    removed_in: "4.0"
+    status: planned
+    phase: 2
+    warning: FutureWarning
+    code_refs: [diff_diff/prep.py]
+    notes: "Public prep helper; section 8 rule 5. Target spelling is 'weights', the established library name for a weight column (5 public class surfaces use it) - NOT bare 'weight'."
+  - id: M-114
+    kind: field
+    group: renames-dcdh
+    old: "diff_diff:ChaisemartinDHaultfoeuilleResults.groups"
+    new: "diff_diff:ChaisemartinDHaultfoeuilleResults.units"
+    introduced_in: "3.9"
+    deprecated_in: "3.9"
+    removed_in: "4.0"
+    status: planned
+    phase: 2
+    warning: FutureWarning
+    code_refs: [diff_diff/chaisemartin_dhaultfoeuille_results.py, diff_diff/chaisemartin_dhaultfoeuille.py]
+    notes: "Results-side mirror of [M-033] under section 8 rule 9. dCDH's 'groups' are UNIT identifiers ('Group identifiers in the post-filter sample'), the same column fit[group] renames to unit - distinct from the CS-family 'groups', which are ATT(g,t) cohorts and stay as domain vocabulary. summary()/repr() labels follow; needs __setstate__ pickle migration per spec section 5. The n_groups_dropped_* counters are NOT renamed by this row (they count dropped units but read as diagnostics; re-audit at 4.0 if the vocabulary drifts)."
+  - id: M-115
+    kind: param
+    group: renames-robust-drop
+    old: "diff_diff:LinearRegression[robust]"
+    new: null
+    deprecated_in: "3.9"
+    removed_in: "4.0"
+    status: planned
+    phase: 2
+    warning: FutureWarning
+    code_refs: [diff_diff/linalg.py]
+    notes: "Fourth site of the 'robust' drop - spec section 7 says the flag dies 'everywhere it exists' but [M-045]..[M-047] enumerated only three. LinearRegression is a top-level export with its OWN __init__ (the TWFE/MultiPeriodDiD hits inherit DifferenceInDifferences.__init__ and ride [M-045]). Redundant with vcov_type, same as its siblings."
