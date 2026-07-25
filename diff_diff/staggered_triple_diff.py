@@ -619,8 +619,9 @@ class StaggeredTripleDifference(
         # Aggregations
         event_study_effects = None
         group_effects = None
+        es_aggregation = None
         if aggregate in ("event_study", "all"):
-            event_study_effects = self._aggregate_event_study(
+            es_aggregation = self._aggregate_event_study(
                 group_time_effects,
                 influence_func_info,
                 treatment_groups,
@@ -630,6 +631,7 @@ class StaggeredTripleDifference(
                 unit,
                 precomputed_agg,
             )
+            event_study_effects = es_aggregation.effects
         if aggregate in ("group", "all"):
             group_effects = self._aggregate_by_group(
                 group_time_effects,
@@ -642,9 +644,10 @@ class StaggeredTripleDifference(
 
         # Paper Eq. (4.14) overall ATT (event-study average): an opt-in summary
         # alongside the default CS-simple ``overall_att``. ``_aggregate_event_study``
-        # stashes it on ``self._event_study_overall``; populated only when the
-        # event-study aggregation ran. Analytical inference here; the bootstrap block
-        # below overrides the SE when ``n_bootstrap > 0`` (mirroring ``overall_se``).
+        # RETURNS it on its aggregation object (it used to stash it on
+        # ``self._event_study_overall``); populated only when the event-study
+        # aggregation ran. Analytical inference here; the bootstrap block below
+        # overrides the SE when ``n_bootstrap > 0`` (mirroring ``overall_se``).
         overall_att_es = None
         overall_se_es = None
         overall_t_stat_es = None
@@ -657,7 +660,7 @@ class StaggeredTripleDifference(
         # analytical-IF failure (the bootstrap path emits its own warning).
         analytical_overall_es_se_nonfinite = False
         if aggregate in ("event_study", "all"):
-            es_overall = getattr(self, "_event_study_overall", None)
+            es_overall = es_aggregation.overall if es_aggregation is not None else None
             if es_overall is not None:
                 overall_att_es = es_overall["att"]
                 overall_se_es = es_overall["se"]

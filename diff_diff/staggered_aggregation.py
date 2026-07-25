@@ -5,6 +5,7 @@ This module provides the mixin class containing methods for aggregating
 group-time average treatment effects into summary measures.
 """
 
+from dataclasses import dataclass, field
 from typing import Any, Dict, List, Literal, Optional, Set, Tuple, Union, overload
 
 import numpy as np
@@ -14,6 +15,41 @@ from diff_diff.utils import safe_inference_batch
 
 # Type alias for pre-computed structures (defined at module scope for runtime access)
 PrecomputedData = Dict[str, Any]
+
+
+@dataclass
+class EventStudyAggregation:
+    """Everything one event-study aggregation produces.
+
+    ``_aggregate_event_study`` previously returned only ``effects`` and stashed
+    the other four values on ``self`` as side channels. Returning them makes
+    the aggregator PURE, which is what lets it run post-fit from a retained kit
+    without mutating the results object it was called from (spec section 6).
+
+    Attributes
+    ----------
+    effects : dict
+        Per-event-time effect records, keyed by event time.
+    overall : dict or None
+        Eq. (4.14) overall ATT (``att`` / ``se`` / ``effective_df``) - the
+        unweighted mean of post-treatment ES(e). Consumed by
+        ``StaggeredTripleDifference`` as ``overall_att_es``; CallawaySantAnna
+        leaves it unread. ``None`` when no post-treatment horizon qualifies.
+    df_used : float or None
+        The ONE df every ES row's inference actually used, recorded iff it
+        governs a t-reference (finite and > 0). Provenance for
+        ``CallawaySantAnnaResults.event_study_df``.
+    vcov : np.ndarray or None
+        Full event-study covariance, when computable.
+    vcov_index : list or None
+        Event times aligned 1:1 with ``vcov``'s columns.
+    """
+
+    effects: Dict[Any, Dict[str, Any]] = field(default_factory=dict)
+    overall: Optional[Dict[str, Any]] = None
+    df_used: Optional[float] = None
+    vcov: Optional[np.ndarray] = None
+    vcov_index: Optional[List[Any]] = None
 
 
 def fixed_cohort_agg_weights(
@@ -815,7 +851,7 @@ class CallawaySantAnnaAggregationMixin:
         df: Optional[pd.DataFrame] = None,
         unit: Optional[str] = None,
         precomputed: Optional["PrecomputedData"] = None,
-    ) -> Dict[int, Dict[str, Any]]:
+    ) -> EventStudyAggregation:
         """
         Aggregate effects by relative time (event study).
 
@@ -969,13 +1005,15 @@ class CallawaySantAnnaAggregationMixin:
             _psi_vectors.append(psi_e)
             _psi_event_times.append(e)
 
-        # Reset the Eq. (4.14) overall before any early return so a reused estimator
-        # instance never reads a stale value from a prior fit.
-        self._event_study_overall = None
+        # The Eq. (4.14) overall starts unset. It used to be reset on ``self``
+        # before any early return so a reused estimator never read a stale value
+        # from a prior fit; returning it removes that hazard by construction.
+        es_overall: Optional[Dict[str, Any]] = None
+        es_df_used: Optional[float] = None
 
         # Batch inference for all relative periods
         if not agg_effects_list:
-            return {}
+            return EventStudyAggregation()
         # Use per-horizon effective df if any replicate aggregation overrode it;
         # otherwise fall back to the original df from the survey design.
         df_survey_val = precomputed.get("df_survey") if precomputed is not None else None
@@ -997,10 +1035,10 @@ class CallawaySantAnnaAggregationMixin:
         # conservative min under dropped replicates) as provenance for
         # CallawaySantAnnaResults.event_study_df. Recorded iff it will
         # govern a t-reference (finite, > 0; the df=0 replicate sentinel
-        # yields NaN inference, not a t-law). fit() resets this stash
-        # alongside _event_study_vcov.
+        # yields NaN inference, not a t-law). Returned on the aggregation
+        # object alongside the VCV rather than stashed on ``self``.
         if df_survey_val is not None and np.isfinite(df_survey_val) and df_survey_val > 0:
-            self._event_study_df_used = float(df_survey_val)
+            es_df_used = float(df_survey_val)
         t_stats, p_values, ci_lowers, ci_uppers = safe_inference_batch(
             np.array(agg_effects_list),
             np.array(agg_ses_list),
@@ -1072,10 +1110,7 @@ class CallawaySantAnnaAggregationMixin:
         # in HonestDiD when some event times are filtered out). Uses the
         # non-empty-psi event times so the index aligns 1:1 with the VCV columns
         # (reference-only and empty-IF horizons never get a column).
-        self._event_study_vcov_index = valid_event_times if event_study_vcov is not None else None
-
-        # Attach VCV to self for CallawaySantAnna to pick up
-        self._event_study_vcov = event_study_vcov
+        event_study_vcov_index = valid_event_times if event_study_vcov is not None else None
 
         # Eq. (4.14) overall ATT: the unweighted mean of the post-treatment
         # event-study effects ES(e). Stashed on self (mirroring _event_study_vcov)
@@ -1109,13 +1144,19 @@ class CallawaySantAnnaAggregationMixin:
                 if len({len(p) for p in psis}) == 1:
                     psi_es = np.column_stack(psis).mean(axis=1)
                     se_es, eff_df_es = self._se_from_psi(psi_es, precomputed)
-            self._event_study_overall = {
+            es_overall = {
                 "att": att_es,
                 "se": float(se_es),
                 "effective_df": eff_df_es,
             }
 
-        return event_study_effects
+        return EventStudyAggregation(
+            effects=event_study_effects,
+            overall=es_overall,
+            df_used=es_df_used,
+            vcov=event_study_vcov,
+            vcov_index=event_study_vcov_index,
+        )
 
     def _aggregate_by_group(
         self,

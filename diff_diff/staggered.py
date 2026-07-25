@@ -1851,11 +1851,12 @@ class CallawaySantAnna(
         if not (0 < self.pscore_trim < 0.5):
             raise ValueError(f"pscore_trim must be in (0, 0.5), got {self.pscore_trim}")
 
-        # Reset stale state from prior fit (prevents leaking event-study VCV
-        # and its df provenance across fits / non-ES aggregates / the ES
-        # empty-result early return)
-        self._event_study_vcov = None
-        self._event_study_df_used: Optional[float] = None
+        # NB: the event-study VCV and its df provenance used to be reset here,
+        # because ``_aggregate_event_study`` stashed them on ``self`` and a
+        # reused estimator could leak them across fits / non-ES aggregates /
+        # the ES empty-result early return. The aggregator now RETURNS them
+        # (``EventStudyAggregation``), so there is no cross-fit state to reset
+        # and the leak is impossible by construction.
 
         # Tracker for _safe_inv lstsq fallbacks across all analytical SE
         # paths (PS Hessian, OR bread, event-study bread, etc.). Emit ONE
@@ -2647,8 +2648,11 @@ class CallawaySantAnna(
         event_study_effects = None
         group_effects = None
 
+        # Aggregation outputs that used to arrive as ``self._event_study_*``
+        # side channels; the aggregator is now pure and returns them.
+        es_aggregation = None
         if aggregate in ["event_study", "all"]:
-            event_study_effects = self._aggregate_event_study(
+            es_aggregation = self._aggregate_event_study(
                 group_time_effects,
                 influence_func_info,
                 treatment_groups,
@@ -2658,6 +2662,7 @@ class CallawaySantAnna(
                 unit,
                 precomputed,
             )
+            event_study_effects = es_aggregation.effects
 
         if aggregate in ["group", "all"]:
             group_effects = self._aggregate_by_group(
@@ -2814,15 +2819,15 @@ class CallawaySantAnna(
         # Retrieve event-study VCV from aggregation mixin (Phase 7d).
         # Clear it when bootstrap overwrites event-study SEs to prevent
         # HonestDiD from mixing analytical VCV with bootstrap SEs.
-        event_study_vcov = getattr(self, "_event_study_vcov", None)
-        event_study_vcov_index = getattr(self, "_event_study_vcov_index", None)
+        event_study_vcov = es_aggregation.vcov if es_aggregation is not None else None
+        event_study_vcov_index = es_aggregation.vcov_index if es_aggregation is not None else None
         if bootstrap_results is not None and event_study_vcov is not None:
             event_study_vcov = None
             event_study_vcov_index = None
         # Same clearing rule for the ES df provenance: bootstrap replaces the
         # stored ES se/p/CI with percentile values that never used the
         # analytical df, so surfacing it would be false provenance.
-        event_study_df = getattr(self, "_event_study_df_used", None)
+        event_study_df = es_aggregation.df_used if es_aggregation is not None else None
         if bootstrap_results is not None:
             event_study_df = None
 

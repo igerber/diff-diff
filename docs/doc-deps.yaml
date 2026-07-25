@@ -1049,6 +1049,16 @@ sources:
         type: methodology
         note: "SyntheticDiDResults hosts validation diagnostics (LOO, weight concentration, in-time placebo, zeta sensitivity)"
 
+  diff_diff/aggregation.py:
+    drift_risk: low
+    docs:
+      - path: docs/api/results.rst
+        type: api_reference
+      - path: docs/v4-design.md
+        section: "6. Aggregation contract"
+        type: design_spec
+        note: "AggregationResult / AggregationKit / AggregationMixin - the post-fit results.aggregate(type=) surface (4.0 program Phase 2; ledger rows M-020..M-027, M-122)"
+
   diff_diff/results_base.py:
     drift_risk: low
     docs:

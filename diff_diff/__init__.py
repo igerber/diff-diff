@@ -30,6 +30,9 @@ from diff_diff._backend import (
 )
 from diff_diff._guides_api import get_llm_guide
 from diff_diff.agent_workflow import agent_workflow
+from diff_diff.aggregation import (
+    AggregationResult,
+)
 from diff_diff.bacon import (
     BaconDecomposition,
     BaconDecompositionResults,
@@ -586,6 +589,7 @@ __all__ = [
     "BaseResults",
     "Diagnostic",
     "EventStudyResults",
+    "AggregationResult",
 ]
 
 # Agent-facing entrypoints surface first in dir(diff_diff). LLM agents
