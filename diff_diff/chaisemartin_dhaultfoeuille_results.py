@@ -576,18 +576,6 @@ class ChaisemartinDHaultfoeuilleResults(BaseResults):
     # Dynamic placebos DID^{pl}_l with negative horizon keys.
     # None in Phase 1; populated as {-1: {...}, -2: {...}} in Phase 2.
     placebo_event_study: Optional[Dict[int, Dict[str, Any]]] = field(default=None, repr=False)
-    # event_study_df (spec section 5, row M-092): the ONE inference df every
-    # stored event-study AND placebo row's ``safe_inference`` actually
-    # received - a single scalar because both surfaces are computed from the
-    # same design df (and, under replicate weights, are re-run together to
-    # the final effective df). None means the rows used normal theory (no
-    # survey design), the df was undefined (the df<=0 replicate sentinel,
-    # which yields NaN inference), or bootstrap overrode the stored p/CIs
-    # with percentile values that never used a df. Note the bootstrap clear
-    # drops the whole channel even when a partial override leaves some rows
-    # analytic - a conservative under-claim, consistent with the other
-    # producers.
-    event_study_df: Optional[float] = field(default=None, repr=False)
 
     # --- TWFE decomposition diagnostic (Theorem 1 of AER 2020) ---
     twfe_weights: Optional[pd.DataFrame] = field(default=None, repr=False)
@@ -676,6 +664,21 @@ class ChaisemartinDHaultfoeuilleResults(BaseResults):
     survey_metadata: Optional[Any] = field(default=None, repr=False)
     bootstrap_results: Optional[DCDHBootstrapResults] = field(default=None, repr=False)
     _estimator_ref: Optional[Any] = field(default=None, repr=False)
+
+    # event_study_df (spec section 5, row M-092): the ONE inference df every
+    # stored event-study AND placebo row's ``safe_inference`` actually
+    # received - a single scalar because both surfaces are computed from the
+    # same design df (and, under replicate weights, are re-run together to
+    # the final effective df). None means the rows used normal theory (no
+    # survey design), the df was undefined (the df<=0 replicate sentinel,
+    # which yields NaN inference), or bootstrap overrode the stored p/CIs
+    # with percentile values that never used a df. Note the bootstrap clear
+    # drops the whole channel even when a partial override leaves some rows
+    # analytic - a conservative under-claim, consistent with the other
+    # producers.
+    # Declared LAST so every pre-existing field keeps its positional index
+    # in the generated __init__ (the constructor signature is public API).
+    event_study_df: Optional[float] = field(default=None, repr=False)
 
     # ------------------------------------------------------------------
     # Repr / properties

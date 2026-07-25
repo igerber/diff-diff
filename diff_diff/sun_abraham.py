@@ -133,21 +133,6 @@ class SunAbrahamResults(BaseResults):
     # in ``event_study_vcov_index``.
     event_study_vcov: Optional["np.ndarray"] = field(default=None, repr=False)
     event_study_vcov_index: Optional[list] = field(default=None, repr=False)
-    # event_study_df (spec section 5, row M-092): per-event-time df
-    # PROVENANCE - maps each estimated relative time to the df its stored
-    # p-value/CI's safe_inference actually received (the per-event
-    # Bell-McCaffrey contrast df under hc2_bm; the survey design df -
-    # post-drop under replicate refits - on survey fits; NaN on plain
-    # analytic fits, which use normal theory, and on rows whose BM DOF was
-    # non-finite, where safe_inference's non-finite-df guard yields all-NaN
-    # inference). None under bootstrap: the stored percentile p/CIs never
-    # used a df (note this clears the WHOLE channel even when a partial
-    # bootstrap override leaves some rows analytic - a conservative
-    # under-claim, consistent with the other producers). Deliberately
-    # narrower clearing than event_study_vcov above: replicate refits KEEP
-    # the df (it genuinely governed the recomputed rows) while the vcov
-    # clears.
-    event_study_df: Optional[Dict[int, float]] = field(default=None, repr=False)
     # Conley spatial-HAC metadata (populated only when vcov_type == "conley").
     # ``conley_lag_cutoff`` carries the within-unit Bartlett max lag; ``cluster_name``
     # records an explicit cluster= column (enables the spatial+cluster product-kernel
@@ -165,6 +150,24 @@ class SunAbrahamResults(BaseResults):
     # externally / legacy-constructed results.
     reference_period: Optional[int] = None
     reference_observed: bool = False
+
+    # event_study_df (spec section 5, row M-092): per-event-time df
+    # PROVENANCE - maps each estimated relative time to the df its stored
+    # p-value/CI's safe_inference actually received (the per-event
+    # Bell-McCaffrey contrast df under hc2_bm; the survey design df -
+    # post-drop under replicate refits - on survey fits; NaN on plain
+    # analytic fits, which use normal theory, and on rows whose BM DOF was
+    # non-finite, where safe_inference's non-finite-df guard yields all-NaN
+    # inference). None under bootstrap: the stored percentile p/CIs never
+    # used a df (note this clears the WHOLE channel even when a partial
+    # bootstrap override leaves some rows analytic - a conservative
+    # under-claim, consistent with the other producers). Deliberately
+    # narrower clearing than event_study_vcov above: replicate refits KEEP
+    # the df (it genuinely governed the recomputed rows) while the vcov
+    # clears.
+    # Declared LAST so every pre-existing field keeps its positional index
+    # in the generated __init__ (the constructor signature is public API).
+    event_study_df: Optional[Dict[int, float]] = field(default=None, repr=False)
 
     # --- Inference-field aliases (balance/external-adapter compatibility) ---
     @property
