@@ -137,16 +137,21 @@ signatures. Lifecycle facts live in the cited rows.
   `unit` [M-033], `controls` -> `covariates` [M-034].
 - `HeterogeneousAdoptionDiD.fit(outcome=, dose=, time=, unit=, first_treat=,
   ...)` - `_col` suffixes dropped [M-035]..[M-039].
-- `RegressionDiscontinuity.fit(outcome=, running=, treatment=, ...)` -
-  [M-040]..[M-042].
+- `RegressionDiscontinuity.fit(outcome=, running=, takeup=, ...)` -
+  [M-040]..[M-042]; `takeup` rather than `treatment` because the column
+  accepts non-binary dose take-up (rule 7's corollary, section 8), with the
+  results-field mirror at [M-094].
 - `StackedDiD(control_group=...)` - `clean_control` renamed [M-043].
 - `WooldridgeDiDResults.to_dataframe(level=...)` - `aggregation` -> `level`
   [M-044]; the `"event"` value spelling unifies across its existing
   `aggregate(type=)` surface [M-086] and `summary(aggregation=)` is retired
   for the uniform `summary(alpha=None)` [M-087].
 - `robust` constructor param dropped everywhere it exists
-  [M-045]..[M-047] - fully redundant with `vcov_type`, and its default even
-  differed across estimators (True/True/False).
+  [M-045]..[M-047] [M-115] - fully redundant with `vcov_type`, and its default
+  even differed across estimators (True/True/False). Four sites, not three:
+  [M-115] adds `LinearRegression`, which owns its `__init__`; the
+  TwoWayFixedEffects / MultiPeriodDiD occurrences inherit
+  `DifferenceInDifferences.__init__` and ride [M-045].
 
 ### 3.5 The diagnostic family
 
@@ -419,7 +424,7 @@ domain vocabulary, not drift.
 ## 7. Inference surface
 
 - `vcov_type` becomes the single SE-type selector wherever analytical SEs
-  exist; the redundant `robust` flag dies [M-045]..[M-047]. Estimators without
+  exist; the redundant `robust` flag dies [M-045]..[M-047] [M-115]. Estimators without
   analytical SEs (SyntheticControl, TROP, CiC) document their native variance
   methods instead of growing a dead param.
 - Wild bootstrap is exposed via `inference="wild_bootstrap"` uniformly where
@@ -437,9 +442,13 @@ domain vocabulary, not drift.
   `tests/test_wild_bootstrap.py::test_did_wild_bootstrap_requires_cluster`), so
   a typo or a missing prerequisite quietly changes which SE/p-value/CI
   procedure runs - the no-silent-failures principle applied to inference
-  selection. Phase 2 validates the accepted value set on `__init__` and
-  transactional `set_params`, and handles wild-bootstrap-without-cluster
-  explicitly; silence is not an option.
+  selection. Fail closed means REFUSE, not warn-and-degrade: Phase 2 pins the
+  accepted set to exactly `{"analytical", "wild_bootstrap"}` on `__init__` and
+  transactional `set_params`, and makes `wild_bootstrap` without `cluster=`
+  raise `ValueError`. REGISTRY specifies WCR as `inference="wild_bootstrap"`
+  *(with `cluster=`)*, so that combination is incoherent rather than merely
+  unsupported - and a warning still leaves a procedure running that the caller
+  did not ask for.
 
   The apparent `inference=` vs `n_bootstrap>0` split is NOT drift: an estimator
   whose bootstrap IS its inference method runs a different procedure -
@@ -530,6 +539,18 @@ missed.**
    as a class surface; only surfaces scheduled for REMOVAL
    ([M-070]..[M-077]) are exempt, because the removal moots the name.
 
+11. **A rename's scope includes every READER of the old name.** A row is not
+   done when the definition site is renamed - it is done when nothing still
+   reads the old name. Internal consumers migrate in the same diff, and the
+   row's `code_refs` name them so the removal PR cannot miss them (see
+   [M-043] / [M-095], whose readers span `power.py`, `practitioner.py`,
+   `_reporting_helpers.py`, `business_report.py` and REPORTING.md). The
+   specific hazard is `getattr(obj, "old_name", <default>)`: after removal it
+   returns the DEFAULT instead of raising, so the consumer silently reports
+   the wrong thing rather than crashing - a wrong-answer regression that no
+   removal pin catches. Grep for the old name across `diff_diff/` and
+   `docs/methodology/` before marking any rename row terminal.
+
 **Domain vocabulary that is NOT a violation** (recorded so the sweep is not
 re-litigated): the staggered family's `group`/`groups` on results containers
 and `GroupTimeEffect.group` name the ATT(g,t) COHORT in Callaway-Sant'Anna's
@@ -561,7 +582,7 @@ above; anything only one PR cares about stays in that PR's plan.**
 | 2: contract foundations | 3.9 | (a) results base + unified event-study representation [M-092] + to_dict completion + the Diagnostic marker base on the diagnostic result roster [M-091] (section 3.5); (b) `aggregate()` + fit(aggregate=) shims [M-020..M-027]; (c) param renames [M-030..M-047] [M-084] [M-086..M-089] + their results-field mirrors [M-094] [M-095] (section 8 rule 9) + the public-function completeness sweep [M-097..M-113] (section 8 rule 10) + the dCDH results mirror [M-114] + the fourth `robust` site [M-115] + BaseEstimator mixin + ContinuousDiD covariates move; (d) alias introductions [M-062] [M-063] + wrapper deprecations [M-070..M-077] + the two inference-surface policies: `n_bootstrap` semantic unification [M-081] and the wild-cluster-bootstrap roster guard [M-096] |
 | 3: merges | 3.9 | (a) TWFE event-study mode [M-010] + EventStudy warn [M-060] (gates: section 4.1's equivalence/divergence/pooled-parity test triple); (b) TripleDifference facade [M-013]; (c) CiC method= [M-015] |
 | 4: release + soak | 3.9 cut | Migration guide written (skeleton: section 10); maintainer cuts 3.9; maint/3.8 rule active |
-| 5: enforcement | 4.0 | Removals [M-010..M-016, M-030..M-047 old names, M-060, M-061, M-070..M-077, M-001..M-003]; storage flips [M-050..M-058]; default policies [M-004..M-006, M-080]; warning retirement [M-007]; fastpath go/no-go [M-008]; diagnostic-family docs/roster reorganization [M-090]; docs/llms.txt/README refresh |
+| 5: enforcement | 4.0 | Removals [M-010..M-016, M-030..M-047 old names, M-060, M-061, M-070..M-077, M-001..M-003] + the amendment's old names [M-094] [M-095] [M-097..M-115] (incl. their consumer migrations and the `clean_control` serialized reporting key); storage flips [M-050..M-058]; default policies [M-004..M-006, M-080]; warning retirement [M-007]; fastpath go/no-go [M-008]; diagnostic-family docs/roster reorganization [M-090]; sentinel retirement [M-093]; docs/llms.txt/README refresh |
 | 6: front door | 4.1 | `event_study(data, outcome, unit, time, first_treat, estimator=...)` comparison entry point over the staggered family (sketch only; specified in its own plan) |
 
 **3.9-cut checklist (un-rowed obligations).** `test_due_rows_are_terminal`

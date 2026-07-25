@@ -13,7 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   found two renames the initial inventory missed and three Phase 2 obligations
   the automated release gate could not see. (a) Two ledger rows added for
   RESULTS fields that mirror already-tracked params: `M-094`
-  (`RegressionDiscontinuityResults.treatment_col` → `treatment`, mirroring
+  (`RegressionDiscontinuityResults.treatment_col` → `takeup`, mirroring
   `M-042`) and `M-095` (`StackedDiDResults.clean_control` → `control_group`,
   mirroring `M-043`). Both are public dataclass fields emitted by `to_dict()`,
   so renaming the params alone would have left deprecated spellings on the
@@ -69,7 +69,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   **cohort** in Callaway-Sant'Anna's notation (rule 8 protects it; renaming to
   `unit` would be wrong), and `TripleDifference.fit[group]` is the
   treated-group indicator rule 3 explicitly reserves the name for. Section 8
-  gains rule 10 binding the rules to public functions, not just classes.
+  gains rule 10 binding the rules to public functions, not just classes, and
+  rule 11 putting every READER of a renamed name in the row's scope — the
+  `getattr(obj, "old_name", default)` pattern degrades silently to the default
+  after removal, so a consumer reports the wrong thing instead of crashing.
+  `M-043`/`M-095` accordingly carry their reporting and power/practitioner
+  consumers (and the `clean_control` serialized reporting key, retired at 4.0
+  by the section 5 canonical-names policy) in `code_refs`.
   (e) `M-042`/`M-094`'s rename target moves from `treatment` to `takeup`:
   fuzzy RD's observed-take-up column accepts non-binary dose values (matching
   R's `fuzzy=`, with the estimand label degrading from complier-LATE to a bare
