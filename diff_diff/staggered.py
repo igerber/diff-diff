@@ -12,6 +12,9 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
+from diff_diff.aggregation import (
+    AggregationKit,
+)
 from diff_diff.linalg import (
     _check_propensity_diagnostics,
     _detect_rank_deficiency,
@@ -49,6 +52,22 @@ __all__ = [
 
 # Type alias for pre-computed structures
 PrecomputedData = Dict[str, Any]
+
+
+class _DeprecatedFitArg:
+    """Sentinel for `fit(aggregate=)` / `fit(balance_e=)` (rows M-020 / M-117).
+
+    A plain ``None`` default cannot distinguish "not passed" from "passed
+    None", so a bare ``None`` default would fire the FutureWarning on EVERY
+    fit. The warning must fire only when the caller actually supplies the
+    argument.
+    """
+
+    def __repr__(self) -> str:  # pragma: no cover - debugging aid
+        return "<not supplied>"
+
+
+_DEPRECATED_FIT_ARG = _DeprecatedFitArg()
 
 
 def _linear_regression(
@@ -1795,8 +1814,8 @@ class CallawaySantAnna(
         time: str,
         first_treat: str,
         covariates: Optional[List[str]] = None,
-        aggregate: Optional[str] = None,
-        balance_e: Optional[int] = None,
+        aggregate: Any = _DEPRECATED_FIT_ARG,
+        balance_e: Any = _DEPRECATED_FIT_ARG,
         survey_design: Optional["SurveyDesign"] = None,
     ) -> CallawaySantAnnaResults:
         """
@@ -1847,6 +1866,34 @@ class CallawaySantAnna(
         ValueError
             If required columns are missing or data validation fails.
         """
+        # ---- fit(aggregate=) / fit(balance_e=) shims (rows M-020 / M-117) ----
+        # Deprecated in 3.9, removed at 4.0: aggregation moves to the post-fit
+        # results.aggregate(type=...). The sentinel default means the warning
+        # fires ONLY when the caller supplies the argument, never on a plain
+        # fit(). Routing is otherwise untouched, so the deprecated path returns
+        # exactly the numbers it always did.
+        _deprecated_passed = [
+            name
+            for name, value in (("aggregate", aggregate), ("balance_e", balance_e))
+            if not isinstance(value, _DeprecatedFitArg)
+        ]
+        if _deprecated_passed:
+            _args = " / ".join(f"{n}=" for n in _deprecated_passed)
+            warnings.warn(
+                f"CallawaySantAnna.fit({_args}) is deprecated and will be removed "
+                "in 4.0. Fit once, then aggregate as a post-fit step: "
+                "results = CallawaySantAnna().fit(...); "
+                "results.aggregate('event_study') / .aggregate('group') / "
+                ".aggregate('simple'). balance_e moves onto aggregate() alongside "
+                "it: results.aggregate('event_study', balance_e=2).",
+                FutureWarning,
+                stacklevel=2,
+            )
+        if isinstance(aggregate, _DeprecatedFitArg):
+            aggregate = None
+        if isinstance(balance_e, _DeprecatedFitArg):
+            balance_e = None
+
         # Validate pscore_trim (may have been changed via set_params)
         if not (0 < self.pscore_trim < 0.5):
             raise ValueError(f"pscore_trim must be in (0, 0.5), got {self.pscore_trim}")
@@ -2907,6 +2954,15 @@ class CallawaySantAnna(
             cluster_name=cluster_name_for_results,
             n_clusters=n_clusters_for_results,
             df_inference=df_inference_for_results,
+        )
+
+        # Attach the post-fit aggregation kit (spec section 6, rows M-020/M-117).
+        # Built HERE because neither `precomputed` nor `influence_func_info`
+        # survives fit() - they are locals - so the kit cannot be reconstructed
+        # later. It deliberately excludes the data matrices: re-aggregation reads
+        # only unit-level bookkeeping, so the source panel is never retained.
+        self.results_._aggregation_kit = _build_aggregation_kit(
+            self, precomputed, influence_func_info, group_time_effects
         )
 
         self.is_fitted_ = True
@@ -5005,3 +5061,60 @@ class CallawaySantAnna(
     def print_summary(self) -> None:
         """Print summary to stdout."""
         print(self.summary())
+
+
+#: `precomputed` keys the aggregation machinery actually reads. Verified by
+#: enumerating every `precomputed[...]` / `.get(...)` access in
+#: `staggered_aggregation.py`. Everything else - notably `outcome_matrix`,
+#: `covariate_matrix`, `obs_outcome`, `obs_covariates` - is DATA and is
+#: deliberately not retained, so a results object never holds the source panel.
+#: `_agg_cache` is excluded too: it is derived memoization, rebuilt on demand.
+_AGGREGATION_BOOKKEEPING_KEYS = (
+    "unit_to_idx",
+    "unit_cohorts",
+    "all_units",
+    "obs_per_unit",
+    "survey_weights",
+    "resolved_survey_unit",
+    "df_survey",
+    "agg_cohort_masses",
+    "agg_total_weight",
+    "is_panel",
+    "canonical_size",
+    "n_units",
+)
+
+
+def _build_aggregation_kit(
+    estimator: "CallawaySantAnna",
+    precomputed: Optional[Dict[str, Any]],
+    influence_func_info: Optional[Dict[str, Any]],
+    group_time_effects: Optional[Dict[Any, Any]],
+) -> Optional["AggregationKit"]:
+    """Distil the fit-time state post-fit re-aggregation needs.
+
+    Returns ``None`` when the fit produced nothing to re-aggregate, in which
+    case ``aggregate()`` reports that rather than failing obscurely.
+    """
+    if not influence_func_info or not group_time_effects:
+        return None
+
+    bookkeeping: Dict[str, Any] = {}
+    if precomputed is not None:
+        for key in _AGGREGATION_BOOKKEEPING_KEYS:
+            if key in precomputed:
+                bookkeeping[key] = precomputed[key]
+
+    return AggregationKit(
+        bookkeeping=bookkeeping,
+        influence=influence_func_info,
+        alpha=estimator.alpha,
+        anticipation=estimator.anticipation,
+        cband=bool(estimator.cband),
+        # Bootstrap replay is not wired in this PR: a bootstrapped fit's
+        # percentile inference cannot be reproduced from analytical state, so
+        # aggregate() fails closed on one rather than silently substituting
+        # analytical numbers. BootstrapReplaySpec (diff_diff/aggregation.py) is
+        # the verified mechanism for the follow-up.
+        bootstrap=None,
+    )

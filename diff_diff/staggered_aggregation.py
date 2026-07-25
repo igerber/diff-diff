@@ -103,8 +103,8 @@ class CallawaySantAnnaAggregationMixin:
         self,
         group_time_effects: Dict,
         influence_func_info: Dict,
-        df: pd.DataFrame,
-        unit: str,
+        df: Optional[pd.DataFrame],
+        unit: Optional[str],
         precomputed: Optional["PrecomputedData"] = None,
     ) -> Tuple[float, float, Optional[int]]:
         """
@@ -407,8 +407,8 @@ class CallawaySantAnnaAggregationMixin:
         effects: np.ndarray,
         groups_for_gt: np.ndarray,
         influence_func_info: Dict,
-        df: pd.DataFrame,
-        unit: str,
+        df: Optional[pd.DataFrame],
+        unit: Optional[str],
         precomputed: Optional["PrecomputedData"] = None,
         global_unit_to_idx: Optional[Dict[Any, int]] = None,
         n_global_units: Optional[int] = None,
@@ -538,7 +538,18 @@ class CallawaySantAnnaAggregationMixin:
             for g in unique_groups:
                 group_sizes[g] = int(np.sum(precomputed_cohorts == g))
             total_weight = float(n_units)
+        elif precomputed is not None:
+            # Panel without survey. ``unit_cohorts`` is the per-unit cohort array
+            # (``df.groupby(unit)[first_treat].first().values``), so counting its
+            # matches is IDENTICAL to the frame lookup below - and it lets
+            # post-fit aggregation run from the retained kit with no frame.
+            precomputed_cohorts = precomputed["unit_cohorts"]
+            for g in unique_groups:
+                group_sizes[g] = int(np.sum(precomputed_cohorts == g))
+            total_weight = float(n_units)
         else:
+            # No precomputed bookkeeping (direct internal callers only): fall
+            # back to the fit-time frame.
             for g in unique_groups:
                 treated_in_g = df[df["first_treat"] == g][unit].nunique()
                 group_sizes[g] = treated_in_g
@@ -606,10 +617,21 @@ class CallawaySantAnnaAggregationMixin:
                         unit_groups_array[idx] = unit_first_treat
         else:
             idx_uid_pairs = list(enumerate(all_units))
-            for idx, uid in idx_uid_pairs:
-                unit_first_treat = df[df[unit] == uid]["first_treat"].iloc[0]
-                if unit_first_treat in unique_groups_set:
-                    unit_groups_array[idx] = unit_first_treat
+            if precomputed is not None and precomputed.get("unit_to_idx") is not None:
+                # Same per-unit cohort lookup as the branch above, from the kit
+                # rather than the frame - keeps post-fit aggregation frame-free.
+                precomputed_cohorts = precomputed["unit_cohorts"]
+                precomputed_unit_to_idx = precomputed["unit_to_idx"]
+                for idx, uid in idx_uid_pairs:
+                    if uid in precomputed_unit_to_idx:
+                        cohort = precomputed_cohorts[precomputed_unit_to_idx[uid]]
+                        if cohort in unique_groups_set:
+                            unit_groups_array[idx] = cohort
+            else:
+                for idx, uid in idx_uid_pairs:
+                    unit_first_treat = df[df[unit] == uid]["first_treat"].iloc[0]
+                    if unit_first_treat in unique_groups_set:
+                        unit_groups_array[idx] = unit_first_treat
 
         # Vectorized WIF computation
         groups_for_gt_array = np.array(groups_for_gt)
@@ -688,8 +710,8 @@ class CallawaySantAnnaAggregationMixin:
         effects: np.ndarray,
         groups_for_gt: np.ndarray,
         influence_func_info: Dict,
-        df: pd.DataFrame,
-        unit: str,
+        df: Optional[pd.DataFrame],
+        unit: Optional[str],
         precomputed: Optional["PrecomputedData"] = None,
         return_psi: Literal[False] = False,
     ) -> Tuple[float, Optional[int]]: ...
@@ -702,8 +724,8 @@ class CallawaySantAnnaAggregationMixin:
         effects: np.ndarray,
         groups_for_gt: np.ndarray,
         influence_func_info: Dict,
-        df: pd.DataFrame,
-        unit: str,
+        df: Optional[pd.DataFrame],
+        unit: Optional[str],
         precomputed: Optional["PrecomputedData"] = None,
         *,
         return_psi: Literal[True],
@@ -716,8 +738,8 @@ class CallawaySantAnnaAggregationMixin:
         effects: np.ndarray,
         groups_for_gt: np.ndarray,
         influence_func_info: Dict,
-        df: pd.DataFrame,
-        unit: str,
+        df: Optional[pd.DataFrame],
+        unit: Optional[str],
         precomputed: Optional["PrecomputedData"] = None,
         return_psi: bool = False,
     ) -> "Union[Tuple[float, Optional[int]], Tuple[float, np.ndarray, Optional[int]]]":
@@ -980,8 +1002,15 @@ class CallawaySantAnnaAggregationMixin:
             # reference cells contribute nothing to the variance but their cohort
             # weight dilutes the real cells, matching R's dynamic aggregation.
             groups_for_gt = np.array([g for (g, t) in gt_pairs])
-            # The wif-SE path requires the fit-time frame (callers pass it).
-            assert df is not None and unit is not None
+            # The wif-SE path needs EITHER the fit-time frame or the precomputed
+            # bookkeeping. Post-fit re-aggregation supplies only the latter (the
+            # frame is deliberately not retained), and every frame dereference
+            # inside now prefers `precomputed`.
+            if precomputed is None and (df is None or unit is None):
+                raise ValueError(
+                    "Event-study aggregation needs either the fit-time frame "
+                    "(df + unit) or precomputed bookkeeping; got neither."
+                )
             agg_se, psi_e, eff_df = self._compute_aggregated_se_with_wif(
                 gt_pairs,
                 weights,
