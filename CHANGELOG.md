@@ -28,6 +28,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   metacharacter — so no path composed into a shell command can execute. `persist`
   self-cleans the whole invocation on any failure (no post-persist cleanup
   needed) and `abort` is strict (a missing state token is an error).
+- **df provenance completed for every event-study producer that exposes one
+  (4.0 program Phase 2, ledger row M-092 follow-up).** `SunAbrahamResults` gains
+  `event_study_df` (a per-relative-time dict: the per-event Bell-McCaffrey contrast df
+  under `hc2_bm`, the survey design df - post-drop under replicate refits - on survey
+  fits, NaN where inference is normal-theory or its BM DOF was non-finite), and
+  `ChaisemartinDHaultfoeuilleResults` gains a scalar `event_study_df` (one value, since
+  its effect and placebo rows are computed from the same design df and refreshed
+  together under replicate weights). Both clear under bootstrap, whose percentile
+  p-values never used a df; SunAbraham's clear is deliberately narrower than its
+  `event_study_vcov` clear, since a replicate refit's rows genuinely used the replicate
+  df. `LPDiDResults` gains `pooled_df` (`{"pre": ..., "post": ...}`), the headline
+  pooled-window analogue of `DiDResults.inference_df`, surfaced in `to_dict()`; the
+  native pooled frame schema is unchanged. With these, `EventStudyResults.df` is
+  populated for every producer whose inference records a df.
 - **Docs: navigation and SEO polish.** A stable/latest version switcher in the navbar
   (`docs/_static/switcher.json`); a custom `robots.txt` that keeps the ~60 thin
   `_modules/` source-view pages out of crawlers (documentation pages allowed as
@@ -123,6 +137,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   **Estimator equations, weighting, variance, and numerical output are unchanged.**
 
 ### Changed
+- **dCDH Phase 1 (`L_max=None`) event-study row is now re-synced by the final-df
+  refresh.** Under replicate-weight designs the refresh recomputes `overall_*` with the
+  final effective df, but the Phase 1 event-study row is a VALUE COPY of that inference
+  taken beforehand, and the refresh's per-horizon loops cover only the Phase 2 surface -
+  so the copy could in principle retain an intermediate df's t/p/CI while
+  `survey_metadata.df_survey` reported the final one. The copy is now mirrored from the
+  refreshed values, making the stored row agree with the overall estimate it duplicates
+  by construction. No output change is reproducible on any configuration exercised in
+  the test suite (the contributing sites agree on their valid-replicate counts, so the
+  intermediate and final df coincide and the mirror is a no-op); this closes the
+  structural hazard rather than a demonstrated defect.
 - **DiagnosticReport's parallel-trends check upgrades from the Bonferroni fallback to
   the joint Wald test for StackedDiD and TwoStageDiD event-study fits.** The check's
   joint-Wald path runs whenever the source fit exposes `event_study_vcov`; now that

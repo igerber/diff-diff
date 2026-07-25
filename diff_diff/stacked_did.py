@@ -840,9 +840,10 @@ class StackedDiD:
                 # failed OR noise-floor NaN guard fired), emit all-NaN inference
                 # rather than fall back to normal-theory CIs/p-values. Mirrors
                 # the fix in LinearRegression.get_inference() from PR #475 R7
-                # (linalg.py:3689-3706). Without this, safe_inference(df=NaN)
-                # would pass df comparison >= 0 (NaN < 0 is False) and emit
-                # finite t_stat with NaN p/CI — silent wrong inference.
+                # (linalg.py:3689-3706). `safe_inference` itself has guarded
+                # non-finite / <= 0 df since PR #620 (utils.py) with the same
+                # all-NaN result; this explicit branch predates that guard and
+                # is kept for explicitness (it also skips the call entirely).
                 _is_hc2bm_path = self.vcov_type == "hc2_bm" and not _uses_replicate_sd
                 _bm_df = _bm_contrast_dof_per_event.get(h)
                 if _is_hc2bm_path and (_bm_df is None or not np.isfinite(_bm_df)):

@@ -214,9 +214,11 @@ class EventStudyResults(BaseResults):
         from the producer. Accepts None (no df exposed -> all-NaN column), a
         scalar (broadcast to every row - e.g. CallawaySantAnna, whose
         explicit-survey event study applies ONE conservative df, the minimum
-        per-horizon effective df, to all rows), or a length-n array (per-row
-        producers: StackedDiD ``hc2_bm`` per-event Bell-McCaffrey df, LPDiD
-        per-horizon cluster df, MultiPeriodDiD ``hc2_bm`` per-period df).
+        per-horizon effective df, to all rows; or de
+        Chaisemartin-D'Haultfoeuille, whose effect and placebo rows share one
+        design df), or a length-n array (per-row producers: StackedDiD and
+        SunAbraham ``hc2_bm`` per-event Bell-McCaffrey df, LPDiD per-horizon
+        cluster df, MultiPeriodDiD ``hc2_bm`` per-period df).
         NaN on any row means normal-theory inference, an undefined df,
         bootstrap-overridden inference, or a producer that records none;
         reference rows and rows with NaN p-values are always NaN.
@@ -949,6 +951,12 @@ def _from_dcdh(results: Any) -> EventStudyResults:
         cband_crit_value=cband_crit,
         alpha=getattr(results, "alpha", 0.05),
         source=type(results).__name__,
+        # ONE scalar df for both merged surfaces: the effect rows and the
+        # placebo rows are computed from the same design df (and, under
+        # replicate weights, refreshed together to the final effective df),
+        # so a scalar is faithful - the container broadcasts it and NaN-masks
+        # the synthesized reference row at 0 plus any NaN-p rows.
+        df=getattr(results, "event_study_df", None),
     )
 
 

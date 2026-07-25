@@ -1460,6 +1460,7 @@ class LPDiD:
         pooled = None
 
         event_study_df: Optional[Dict[int, float]] = None
+        pooled_df: Optional[Dict[str, float]] = None
         if not only_pooled:
             event_rows = []
             event_study_df = {}
@@ -1528,11 +1529,17 @@ class LPDiD:
                 absorb=absorb,
                 survey_design=survey_design,
             )
-            # Discard the pooled windows' df provenance (native pooled frame
-            # schema unchanged; pooled-window df threading is a tracked
-            # follow-up in TODO.md).
-            pre_estimate.pop("df", None)
-            post_estimate.pop("df", None)
+            # Capture the pooled windows' df provenance BEFORE building the
+            # frame so the native pooled schema stays unchanged (it feeds
+            # summary()'s table). Each value is the df that window's
+            # safe_inference actually received; NaN when it used normal
+            # theory or the df was undefined.
+            _pre_df = pre_estimate.pop("df", None)
+            _post_df = post_estimate.pop("df", None)
+            pooled_df = {
+                "pre": float(_pre_df) if _pre_df is not None else float("nan"),
+                "post": float(_post_df) if _post_df is not None else float("nan"),
+            }
             pooled = pd.DataFrame(
                 [
                     {
@@ -1566,6 +1573,7 @@ class LPDiD:
             event_study=event_study,
             pooled=pooled,
             event_study_df=event_study_df,
+            pooled_df=pooled_df,
             n_obs=len(data),
             n_treated_units=int(treatment_by_unit.gt(0).sum()),
             n_control_units=int(treatment_by_unit.eq(0).sum()),

@@ -21,6 +21,13 @@ class LPDiDResults(BaseResults):
     ``control_group="clean"`` the realized control pool at each horizon also
     includes not-yet-treated cohorts, whose per-horizon counts live in the
     ``n_obs`` / ``n_clusters`` columns of the tables.
+
+    ``event_study_df`` and ``pooled_df`` carry inference degrees-of-freedom
+    PROVENANCE - the df each row's ``safe_inference`` actually received -
+    keyed by horizon and by ``"pre"``/``"post"`` window respectively. Both
+    are NaN per entry where that row used normal theory or an undefined df.
+    They are metadata only: the native tables above are unchanged, and
+    ``event_study_df`` is what the unified event-study surface reads.
     """
 
     event_study: Optional[pd.DataFrame]
@@ -63,6 +70,14 @@ class LPDiDResults(BaseResults):
     # of which the native tables record. The synthetic ``horizon == -1``
     # base row has no entry. None when no event study was fit.
     event_study_df: Optional[Dict[int, float]] = None
+    # pooled_df: the same df PROVENANCE for the POOLED windows, keyed
+    # ``"pre"`` / ``"post"`` to match the ``window`` column. The pooled-post
+    # row is the headline ATT, which lives outside the unified event-study
+    # surface, so this is standalone headline provenance (the
+    # ``DiDResults.inference_df`` analogue) rather than a surface input. NaN
+    # per window when that window's inference used normal theory or an
+    # undefined df; None when no pooled windows were fit (``only_event``).
+    pooled_df: Optional[Dict[str, float]] = None
 
     # ------------------------------------------------------------------
     # internal helpers
@@ -164,6 +179,8 @@ class LPDiDResults(BaseResults):
             result["cluster_name"] = self.cluster_name
         if self.n_clusters is not None:
             result["n_clusters"] = self.n_clusters
+        if self.pooled_df is not None:
+            result["pooled_df"] = self.pooled_df
         if self.non_absorbing is not None:
             result["non_absorbing"] = self.non_absorbing
             result["stabilization_window"] = self.stabilization_window

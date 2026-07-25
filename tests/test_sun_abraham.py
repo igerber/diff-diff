@@ -1531,6 +1531,67 @@ class TestSunAbrahamVcovType:
         res_hc1 = SunAbraham(vcov_type="hc1").fit(data, **kwargs)
         assert res.overall_se != res_hc1.overall_se
 
+    def test_hc2_bm_nan_contrast_dof_regression_pin(self, monkeypatch):
+        """NaN BM contrast DOF -> all-NaN row inference + NaN df provenance.
+
+        Regression PIN of existing behavior (no fix in this change):
+        ``safe_inference`` has guarded non-finite / <= 0 df since PR #620, so
+        a noise-floor NaN Bell-McCaffrey DOF already yields NaN t/p/CI rather
+        than a finite t-stat. What is NEW here is the provenance record: the
+        row's ``event_study_df`` entry must be NaN, honestly documenting that
+        no usable df governed its (undefined) stored inference.
+        """
+        import diff_diff.linalg as _linalg
+
+        real_helper = _linalg._compute_cr2_bm_contrast_dof
+
+        def _nan_dofs(*args, **kwargs):
+            out = real_helper(*args, **kwargs)
+            return np.full_like(np.asarray(out, dtype=float), np.nan)
+
+        monkeypatch.setattr(_linalg, "_compute_cr2_bm_contrast_dof", _nan_dofs)
+        data = self._panel()
+        kwargs = dict(outcome="outcome", unit="unit", time="time", first_treat="first_treat")
+        res = SunAbraham(vcov_type="hc2_bm").fit(data, **kwargs)
+
+        assert res.event_study_df is not None
+        nan_df_rows = [e for e, v in res.event_study_df.items() if not np.isfinite(v)]
+        assert nan_df_rows, "monkeypatched NaN DOFs must produce NaN df provenance"
+        for e in nan_df_rows:
+            row = res.event_study_effects[e]
+            # SE stays FINITE here (the NaN comes from the df, not the SE),
+            # so assert the inference triple directly rather than via
+            # assert_nan_inference (which requires a non-finite SE).
+            assert np.isnan(row["t_stat"])
+            assert np.isnan(row["p_value"])
+            assert np.isnan(row["conf_int"][0]) and np.isnan(row["conf_int"][1])
+
+    def test_hc2_bm_contrast_dof_helper_failure_falls_back(self):
+        """Helper-level BM failure warns and falls back to normal theory.
+
+        Distinct from the per-row NaN-DOF case above: when the helper RAISES,
+        SA leaves the ``_compute_iw_effects`` output in place (finite
+        normal-theory inference) after warning, and the df provenance records
+        the baseline (NaN on a non-survey fit) - not a fabricated df.
+        """
+        import diff_diff.linalg as _linalg
+
+        def _boom(*args, **kwargs):
+            raise ValueError("forced BM helper failure")
+
+        data = self._panel()
+        kwargs = dict(outcome="outcome", unit="unit", time="time", first_treat="first_treat")
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(_linalg, "_compute_cr2_bm_contrast_dof", _boom)
+            with pytest.warns(UserWarning):
+                res = SunAbraham(vcov_type="hc2_bm").fit(data, **kwargs)
+
+        finite_p = [e for e, row in res.event_study_effects.items() if np.isfinite(row["p_value"])]
+        assert finite_p, "helper failure must fall back to finite normal-theory inference"
+        assert res.event_study_df is not None
+        for e in finite_p:
+            assert np.isnan(res.event_study_df[e]), "normal theory records NO df"
+
     def test_hc2_bm_explicit_cluster_works(self):
         """Explicit cluster= overrides the auto-cluster default; CR2-BM at named cluster."""
         data = self._panel()

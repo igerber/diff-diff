@@ -43,6 +43,17 @@ class SunAbrahamResults(BaseResults):
     event_study_effects : dict
         Dictionary mapping relative time to effect dictionaries with keys:
         'effect', 'se', 't_stat', 'p_value', 'conf_int', 'n_groups'.
+    event_study_df : dict, optional
+        Per-relative-time inference degrees-of-freedom PROVENANCE: the df
+        each stored event-study row's ``safe_inference`` actually received.
+        Under ``vcov_type="hc2_bm"`` this is that event time's own
+        Bell-McCaffrey contrast DOF; under a survey design it is the design
+        df (post-drop when replicates were dropped by the refit); it is NaN
+        where inference was normal-theory or where a non-finite BM DOF made
+        the row's inference undefined. ``None`` under bootstrap, whose
+        percentile p-values/CIs never used a df - a narrower clearing rule
+        than ``event_study_vcov``, which also clears under replicate refits
+        (whose rows DID use a genuine df).
     overall_att : float
         Overall average treatment effect (weighted average of post-treatment effects).
     overall_se : float
@@ -122,6 +133,21 @@ class SunAbrahamResults(BaseResults):
     # in ``event_study_vcov_index``.
     event_study_vcov: Optional["np.ndarray"] = field(default=None, repr=False)
     event_study_vcov_index: Optional[list] = field(default=None, repr=False)
+    # event_study_df (spec section 5, row M-092): per-event-time df
+    # PROVENANCE - maps each estimated relative time to the df its stored
+    # p-value/CI's safe_inference actually received (the per-event
+    # Bell-McCaffrey contrast df under hc2_bm; the survey design df -
+    # post-drop under replicate refits - on survey fits; NaN on plain
+    # analytic fits, which use normal theory, and on rows whose BM DOF was
+    # non-finite, where safe_inference's non-finite-df guard yields all-NaN
+    # inference). None under bootstrap: the stored percentile p/CIs never
+    # used a df (note this clears the WHOLE channel even when a partial
+    # bootstrap override leaves some rows analytic - a conservative
+    # under-claim, consistent with the other producers). Deliberately
+    # narrower clearing than event_study_vcov above: replicate refits KEEP
+    # the df (it genuinely governed the recomputed rows) while the vcov
+    # clears.
+    event_study_df: Optional[Dict[int, float]] = field(default=None, repr=False)
     # Conley spatial-HAC metadata (populated only when vcov_type == "conley").
     # ``conley_lag_cutoff`` carries the within-unit Bartlett max lag; ``cluster_name``
     # records an explicit cluster= column (enables the spatial+cluster product-kernel
@@ -1073,6 +1099,22 @@ class SunAbraham:
             survey_df=_sa_survey_df,
         )
 
+        # Per-row df PROVENANCE (spec section 5, row M-092): the df each
+        # stored ES row's safe_inference actually received, recorded iff
+        # finite and > 0 else NaN. Baseline = the scalar every
+        # _compute_iw_effects row used (None on plain analytic fits -> NaN;
+        # the TSL design df on survey fits). Overwritten below at the hc2_bm
+        # and replicate-refit override sites, and cleared under bootstrap,
+        # whose stored percentile p/CIs never used a df.
+        es_df_used: Dict[int, float] = {
+            e: (
+                float(_sa_survey_df)
+                if _sa_survey_df is not None and np.isfinite(_sa_survey_df) and _sa_survey_df > 0
+                else float("nan")
+            )
+            for e in event_study_effects
+        }
+
         # Build full event-study VCV via W-matrix aggregation (PR-B 2026-05-17).
         # event_study_effects[e] = Σ_g w_{g,e} * cohort_effects[(g, e)] with
         # w_{g,e} = cohort_weights[e][g]. The full event-study VCV is
@@ -1203,10 +1245,19 @@ class SunAbraham:
             for e, df_e in _es_contrast_dofs.items():
                 eff_e = event_study_effects[e]["effect"]
                 se_e = event_study_effects[e]["se"]
+                # A non-finite BM DOF fails closed INSIDE safe_inference
+                # (its non-finite/<=0 df guard, PR #620): all-NaN t/p/CI.
+                # The provenance record mirrors that - NaN df for a row
+                # whose stored inference is the guard's all-NaN output.
                 t_e, p_e, ci_e = safe_inference(eff_e, se_e, alpha=self.alpha, df=df_e)
                 event_study_effects[e]["t_stat"] = t_e
                 event_study_effects[e]["p_value"] = p_e
                 event_study_effects[e]["conf_int"] = ci_e
+                es_df_used[e] = (
+                    float(df_e)
+                    if df_e is not None and np.isfinite(df_e) and df_e > 0
+                    else float("nan")
+                )
 
         overall_t, overall_p, overall_ci = safe_inference(
             overall_att,
@@ -1258,6 +1309,17 @@ class SunAbraham:
                     event_study_effects[e]["t_stat"] = t_e
                     event_study_effects[e]["p_value"] = p_e
                     event_study_effects[e]["conf_int"] = ci_e
+                    # Rows recomputed here used the POST-DROP replicate df
+                    # (possibly tightened above when replicates were
+                    # dropped) - genuine provenance, kept (unlike the vcov,
+                    # which clears under replicate refits).
+                    es_df_used[e] = (
+                        float(_sa_survey_df)
+                        if _sa_survey_df is not None
+                        and np.isfinite(_sa_survey_df)
+                        and _sa_survey_df > 0
+                        else float("nan")
+                    )
 
             # Cohort-level replicate SEs: second refit for raw (g,e) coefficients
             _keys_ordered = sorted(coef_index_map.keys(), key=lambda k: coef_index_map[k])
@@ -1350,6 +1412,14 @@ class SunAbraham:
         if bootstrap_results is not None or _uses_replicate_sa:
             es_vcov = None
             es_vcov_index = None
+        # df provenance clears on BOOTSTRAP ONLY - a deliberately narrower
+        # predicate than the vcov clear above: under a replicate refit the
+        # recomputed rows genuinely used the (post-drop) replicate df, so
+        # keeping it is faithful provenance; under bootstrap the stored
+        # percentile p/CIs never used any df.
+        es_df_final: Optional[Dict[int, float]] = es_df_used
+        if bootstrap_results is not None:
+            es_df_final = None
 
         # Store results
         self.results_ = SunAbrahamResults(
@@ -1374,6 +1444,7 @@ class SunAbraham:
             survey_metadata=survey_metadata,
             event_study_vcov=es_vcov,
             event_study_vcov_index=es_vcov_index,
+            event_study_df=es_df_final,
             conley_lag_cutoff=(self.conley_lag_cutoff if self.vcov_type == "conley" else None),
             cluster_name=(self.cluster if self.vcov_type == "conley" else None),
             reference_period=self._reference_period,

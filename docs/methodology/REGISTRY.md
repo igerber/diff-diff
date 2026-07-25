@@ -868,6 +868,18 @@ The multiplier bootstrap uses random weights w_i with E[w]=0 and Var(w)=1:
 - **Note:** Multi-switch groups (those with more than one treatment-change period) are dropped before estimation when `drop_larger_lower=True` (the default, matching R `DIDmultiplegtDYN`). For binary treatment, >1 change means a reversal (e.g., 0->1->0). For non-binary, >1 change includes both reversals (0->2->1) and monotone multi-step paths (0->1->2); both are dropped because the per-group `DID_{g,l}` building block attributes the full outcome change from `F_g-1` to `F_g-1+l` to the first treatment change, and a second change would confound that attribution. A single jump of any magnitude (0->3->3->3) has 1 change period and is kept. Each drop emits a warning with the count and example group IDs.
 - Singleton-baseline groups — groups whose `D_{g,1}` value is unique in the post-drop dataset — are excluded from the **variance computation only** (per footnote 15 of the dynamic paper, they have no cohort peer). They are **retained** in the point-estimate sample as period-based stable controls. Each emits a warning. See the singleton-baseline Note below.
 - Never-switching groups (`S_g = 0`) participate in the variance computation when they serve as stable controls under the full influence function. The `n_groups_dropped_never_switching` results field is reported for backwards compatibility but the count no longer represents an actual exclusion.
+- **Note:** Provenance exposure (4.0 program row M-092, no numeric change):
+  `ChaisemartinDHaultfoeuilleResults.event_study_df` records the ONE df every
+  stored event-study AND placebo row's `safe_inference` received. A single
+  scalar is faithful because both surfaces are computed from the same design
+  df: None without a survey design (normal-theory inference), the design df
+  under Taylor linearization, and the final effective df under replicate
+  weights (where the late refresh re-runs every stored row - including, from
+  this change, the Phase 1 `L_max=None` event-study row, which is a value
+  copy of the overall inference - to that single value). Cleared under
+  bootstrap, whose percentile p/CIs never used a df; that clear is required
+  rather than defensive, since Taylor-linearized survey designs DO compose
+  with bootstrap (only replicate weights + bootstrap is rejected).
 - **Balanced-baseline panel required (deviation from R `DIDmultiplegtDYN`).** Every group must have an observation at the **first global period** (the panel's earliest time value); groups missing this baseline raise `ValueError` with the offending group IDs. Groups with **interior period gaps** (missing observations between their first and last observed period) are dropped with a `UserWarning`. **Terminal missingness** (groups observed at the baseline but missing one or more *later* periods) is **retained**: the group contributes from its observed periods only, masked out of the missing transitions by the per-period `present = (N_mat[:, t] > 0) & (N_mat[:, t-1] > 0)` guard. See the ragged-panel deviation Note below.
 - **Period-index semantics.** The estimator operates on **sorted period indices**, not calendar dates. Per-period DIDs use `Y_{g,t} - Y_{g,t-1}` where `t-1` is the *previous observed period in the sorted panel*, not the previous calendar unit. A panel with periods `[2000, 2001, 2003]` (missing year 2002 for ALL groups) is treated as a valid 3-period panel where 2003 is the immediate successor of 2001. The estimator does NOT validate that periods are evenly spaced or that calendar gaps have been imputed. This matches the AER 2020 paper's Theorem 3, which defines transition sets by adjacent sorted periods without assuming calendar regularity, and is consistent with R `DIDmultiplegtDYN`'s behavior. If your data has calendar gaps that should be treated as missing periods rather than adjacent transitions, insert placeholder rows for the missing periods with the group's lagged treatment value and a reasonable imputed outcome (e.g., the group's last observed outcome), so the cell-aggregation step treats the gap as a stable-treatment period rather than a missing one. The validator rejects NaN in outcome and treatment columns, so placeholders must have finite values.
 - Per-period Assumption 11 violations (joiners exist but no stable-untreated controls in some period, or leavers exist but no stable-treated controls) trigger zero-retention behavior with a consolidated warning. See the A11 Note below.
@@ -1486,6 +1498,19 @@ where weights ŵ_{g,e} = n_{g,e} / Σ_g n_{g,e} (sample share of cohort g at eve
   If the linalg helper fails (rank-deficient design, singular bread),
   the aggregated inference falls back to the shared analytical df with
   an explicit `UserWarning`.
+- **Note:** Provenance exposure (4.0 program row M-092, no numeric change):
+  `SunAbrahamResults.event_study_df` records, per relative time, the df each
+  stored event-study row's `safe_inference` actually received - the per-event
+  BM contrast DOF above under `hc2_bm`, the survey design df (post-drop under
+  a replicate refit) on survey fits, and NaN on plain analytic fits (normal
+  theory) as well as on rows whose BM DOF was non-finite, where
+  `safe_inference`'s own non-finite-df guard already yields all-NaN
+  inference. Note the two failure modes differ and are both faithfully
+  recorded: a helper-level failure warns and falls back to the shared
+  analytical df (documented above), while a per-row non-finite DOF fails
+  closed. The channel clears under bootstrap (percentile p/CIs used no df) -
+  deliberately narrower than the `event_study_vcov` clear, which also fires
+  under replicate refits whose rows DID use a genuine df.
 - **Deviation from R (HC1 finite-sample correction):** SA's
   within-transform HC1 SE differs from `fixest::sunab(cluster=~unit)`
   by ~1-2% on typical panel sizes. fixest's correction counts the

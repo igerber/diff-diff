@@ -372,6 +372,15 @@ class ChaisemartinDHaultfoeuilleResults(BaseResults):
         ``1..L_max`` when ``L_max >= 1``. When ``L_max >= 1``, uses the
         per-group ``DID_{g,l}`` path; when ``L_max=None``, uses the
         per-period ``DID_M`` path.
+    event_study_df : float, optional
+        Inference degrees-of-freedom PROVENANCE for the event-study and
+        placebo surfaces: the single df every stored row's
+        ``safe_inference`` received. One scalar suffices because both
+        surfaces are computed from the same design df (and are refreshed
+        together to the final effective df under replicate weights).
+        ``None`` when the rows used normal theory (no survey design), when
+        the df was undefined, or when bootstrap overrode the stored
+        inference with percentile values that never used a df.
     normalized_effects : dict, optional
         Normalized estimator ``DID^n_l``. Populated when ``L_max >= 1``.
     cost_benefit_delta : dict, optional
@@ -567,6 +576,18 @@ class ChaisemartinDHaultfoeuilleResults(BaseResults):
     # Dynamic placebos DID^{pl}_l with negative horizon keys.
     # None in Phase 1; populated as {-1: {...}, -2: {...}} in Phase 2.
     placebo_event_study: Optional[Dict[int, Dict[str, Any]]] = field(default=None, repr=False)
+    # event_study_df (spec section 5, row M-092): the ONE inference df every
+    # stored event-study AND placebo row's ``safe_inference`` actually
+    # received - a single scalar because both surfaces are computed from the
+    # same design df (and, under replicate weights, are re-run together to
+    # the final effective df). None means the rows used normal theory (no
+    # survey design), the df was undefined (the df<=0 replicate sentinel,
+    # which yields NaN inference), or bootstrap overrode the stored p/CIs
+    # with percentile values that never used a df. Note the bootstrap clear
+    # drops the whole channel even when a partial override leaves some rows
+    # analytic - a conservative under-claim, consistent with the other
+    # producers.
+    event_study_df: Optional[float] = field(default=None, repr=False)
 
     # --- TWFE decomposition diagnostic (Theorem 1 of AER 2020) ---
     twfe_weights: Optional[pd.DataFrame] = field(default=None, repr=False)

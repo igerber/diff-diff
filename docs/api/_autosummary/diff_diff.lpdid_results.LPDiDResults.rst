@@ -38,6 +38,7 @@
       ~LPDiDResults.n_strata
       ~LPDiDResults.non_absorbing
       ~LPDiDResults.p_value
+      ~LPDiDResults.pooled_df
       ~LPDiDResults.rank_deficient_action
       ~LPDiDResults.se
       ~LPDiDResults.stabilization_window

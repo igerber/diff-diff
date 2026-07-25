@@ -33,6 +33,7 @@
       ~ChaisemartinDHaultfoeuilleResults.cost_benefit_delta
       ~ChaisemartinDHaultfoeuilleResults.covariate_residuals
       ~ChaisemartinDHaultfoeuilleResults.design2_effects
+      ~ChaisemartinDHaultfoeuilleResults.event_study_df
       ~ChaisemartinDHaultfoeuilleResults.event_study_effects
       ~ChaisemartinDHaultfoeuilleResults.heterogeneity_effects
       ~ChaisemartinDHaultfoeuilleResults.honest_did_results

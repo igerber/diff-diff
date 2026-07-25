@@ -34,6 +34,7 @@
       ~SunAbrahamResults.conf_int
       ~SunAbrahamResults.conley_lag_cutoff
       ~SunAbrahamResults.control_group
+      ~SunAbrahamResults.event_study_df
       ~SunAbrahamResults.event_study_vcov
       ~SunAbrahamResults.event_study_vcov_index
       ~SunAbrahamResults.is_significant

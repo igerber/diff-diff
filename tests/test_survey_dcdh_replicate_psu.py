@@ -1374,3 +1374,75 @@ class TestInvariants:
             for info in res.normalized_effects.values():
                 assert np.isnan(info["t_stat"])
                 assert np.isnan(info["p_value"])
+
+
+class TestPhase1FinalDfSync:
+    """Phase 1 (``L_max=None``) stores the single event-study row as a VALUE
+    COPY of the overall inference, taken BEFORE the final-df refresh. The
+    refresh's per-horizon loops cover only the Phase 2
+    ``multi_horizon_inference`` surface, so the copy needs its own mirror -
+    the same value-copy hazard the placebo mirror in that block documents.
+
+    These pin the INVARIANT (the stored row can never disagree with the
+    refreshed overall it is a copy of) and the df provenance that reports
+    it. They are not a reproduction of a specific drift: in every
+    configuration reachable here the contributing sites agree on n_valid, so
+    the intermediate and final df coincide and the mirror is a no-op.
+    """
+
+    def test_phase1_event_study_row_matches_refreshed_overall(self, base_panel):
+        from scipy import stats as _stats
+
+        R = 12
+        df = _attach_replicate_weights(base_panel, R=R, method="BRR", seed=7)
+        # Rank deficiency: 2 duplicated pairs -> rank = R - 2.
+        df["rep1"] = df["rep0"]
+        df["rep3"] = df["rep2"]
+        sd = _build_replicate_design(R, "BRR")
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore")
+            res = ChaisemartinDHaultfoeuille(seed=1).fit(
+                df,
+                outcome="outcome",
+                group="group",
+                time="period",
+                treatment="treatment",
+                survey_design=sd,
+            )
+        assert res.L_max is None, "fixture must exercise the Phase 1 path"
+        final_df = res.survey_metadata.df_survey
+        assert final_df is not None
+
+        row = res.event_study_effects[1]
+        # The stored copy agrees with the refreshed overall inference...
+        assert row["t_stat"] == res.overall_t_stat
+        assert row["p_value"] == res.overall_p_value
+        # ...and that inference is the FINAL df's, not an intermediate one.
+        t_stat = res.overall_att / res.overall_se
+        expected_p = 2 * _stats.t.sf(abs(t_stat), df=final_df)
+        assert row["p_value"] == pytest.approx(expected_p, rel=1e-6)
+
+    def test_phase1_surface_df_matches_refreshed_survey_df(self, base_panel):
+        from diff_diff.results_base import build_event_study_surface
+
+        R = 12
+        df = _attach_replicate_weights(base_panel, R=R, method="BRR", seed=7)
+        df["rep1"] = df["rep0"]
+        df["rep3"] = df["rep2"]
+        sd = _build_replicate_design(R, "BRR")
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore")
+            res = ChaisemartinDHaultfoeuille(seed=1).fit(
+                df,
+                outcome="outcome",
+                group="group",
+                time="period",
+                treatment="treatment",
+                survey_design=sd,
+            )
+        final_df = res.survey_metadata.df_survey
+        assert res.event_study_df == float(final_df)
+        surface = build_event_study_surface(res)
+        finite_p = np.isfinite(surface.p_value)
+        assert finite_p.any()
+        assert set(surface.df[finite_p].tolist()) == {float(final_df)}

@@ -1523,3 +1523,222 @@ def test_lpdid_per_horizon_df(surfaces):
             assert df_val == ncl[et] - 1
     # The native frame schema is UNCHANGED (df lives on event_study_df only).
     assert "df" not in frame.columns
+
+
+# ===========================================================================
+# df provenance: remaining producers (SunAbraham, dCDH) + LPDiD pooled window
+# ===========================================================================
+
+
+def _sa_df_panel(seed=4):
+    rng = np.random.default_rng(seed)
+    rows = []
+    for u in range(60):
+        g = [4, 6, 0][u % 3]
+        for t in range(1, 9):
+            y = 1.0 + 0.1 * t + u * 0.01 + (1.0 if g and t >= g else 0.0) + rng.normal(0, 0.3)
+            rows.append({"unit": u, "time": t, "outcome": y, "first_treat": g})
+    return pd.DataFrame(rows)
+
+
+def _sa_kwargs():
+    return dict(outcome="outcome", unit="unit", time="time", first_treat="first_treat")
+
+
+def test_sun_abraham_hc2_bm_per_row_df():
+    data = _sa_df_panel()
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        bm = SunAbraham(vcov_type="hc2_bm").fit(data, **_sa_kwargs())
+        plain = SunAbraham().fit(data, **_sa_kwargs())
+
+    # hc2_bm: each finite-p row carries its own BM contrast df, bit-equal to
+    # the producer's provenance dict (pure copies, no recomputation).
+    s_bm = build_event_study_surface(bm)
+    finite_p = np.isfinite(s_bm.p_value)
+    assert finite_p.any()
+    assert np.isfinite(s_bm.df[finite_p]).all()
+    for et, df_val in zip(s_bm.event_time.tolist(), s_bm.df.tolist()):
+        if et in bm.event_study_df and np.isfinite(bm.event_study_df[et]):
+            assert df_val == bm.event_study_df[et]
+
+    # Plain analytic fit: normal-theory inference -> no df anywhere.
+    assert all(np.isnan(v) for v in plain.event_study_df.values())
+    assert np.isnan(build_event_study_surface(plain).df).all()
+
+
+def test_sun_abraham_survey_df_broadcast():
+    from diff_diff.survey import SurveyDesign
+
+    data = _sa_df_panel()
+    data["w"] = 1.0
+    data["strat"] = data["unit"] % 4
+    data["psu_id"] = data["unit"]
+    design = SurveyDesign(weights="w", weight_type="pweight", strata="strat", psu="psu_id")
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        res = SunAbraham().fit(data, survey_design=design, **_sa_kwargs())
+    assert res.survey_metadata is not None and res.survey_metadata.df_survey is not None
+    surface = build_event_study_surface(res)
+    finite_p = np.isfinite(surface.p_value)
+    assert finite_p.any()
+    assert set(surface.df[finite_p].tolist()) == {float(max(res.survey_metadata.df_survey, 1))}
+
+
+def test_sun_abraham_replicate_df_kept_while_vcov_cleared():
+    # The clear predicates deliberately DIFFER: the analytical vcov is
+    # invalidated by the replicate refit, but the recomputed rows genuinely
+    # used the (post-drop) replicate df, so that provenance is kept.
+    from diff_diff.survey import SurveyDesign
+
+    data = _sa_df_panel()
+    data["w"] = 1.0
+    units = np.sort(data["unit"].unique())
+    n_rep = 8
+    unit_pos = {u: i for i, u in enumerate(units)}
+    rows_idx = data["unit"].map(unit_pos).to_numpy()
+    per = max(len(units) // n_rep, 1)
+    rep_cols = []
+    for r in range(n_rep):
+        w_r = np.ones(len(units))
+        w_r[r * per : min((r + 1) * per, len(units))] = 0.0
+        nz = w_r > 0
+        w_r[nz] = w_r[nz] * n_rep / (n_rep - 1)
+        data[f"rep_{r}"] = w_r[rows_idx]
+        rep_cols.append(f"rep_{r}")
+    design = SurveyDesign(
+        weights="w",
+        weight_type="pweight",
+        replicate_weights=rep_cols,
+        replicate_method="JK1",
+    )
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        res = SunAbraham().fit(data, survey_design=design, **_sa_kwargs())
+    assert res.event_study_vcov is None  # existing clear
+    assert res.event_study_df is not None  # provenance KEPT
+    surface = build_event_study_surface(res)
+    finite_p = np.isfinite(surface.p_value)
+    # Unconditional: a regression that NaN-ed every replicate row's
+    # inference must fail here rather than pass vacuously.
+    assert finite_p.any()
+    assert np.isfinite(surface.df[finite_p]).all()
+    # The surfaced values are the producer's record, which is the (post-drop)
+    # design df the replicate refit's safe_inference calls received.
+    expected = float(max(res.survey_metadata.df_survey, 1))
+    assert set(surface.df[finite_p].tolist()) == {expected}
+    for et, df_val in zip(surface.event_time.tolist(), surface.df.tolist()):
+        if et in res.event_study_df and np.isfinite(res.event_study_df[et]):
+            assert df_val == res.event_study_df[et]
+
+
+def test_sun_abraham_bootstrap_clears_df():
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        res = SunAbraham(n_bootstrap=20, seed=1).fit(_sa_df_panel(), **_sa_kwargs())
+    assert res.bootstrap_results is not None
+    assert res.event_study_df is None
+    surface = build_event_study_surface(res)
+    # Bootstrap p-values are FINITE, so only the producer-side clear (not the
+    # container's NaN-p masking) can prevent a false df from surfacing.
+    assert np.isfinite(surface.p_value).any()
+    assert np.isnan(surface.df).all()
+
+
+def _dcdh_df_panel(seed=8):
+    rng = np.random.default_rng(seed)
+    rows = []
+    for u in range(60):
+        g = [4, 6, 0][u % 3]
+        for t in range(1, 9):
+            y = 1.0 + 0.1 * t + u * 0.01 + (1.0 if g and t >= g else 0.0) + rng.normal(0, 0.3)
+            rows.append(
+                {
+                    "unit": u,
+                    "time": t,
+                    "outcome": y,
+                    "treat": 1 if (g and t >= g) else 0,
+                    "w": 1.0,
+                    "strat": u % 4,
+                    "psu_id": u,
+                }
+            )
+    return pd.DataFrame(rows)
+
+
+def _dcdh_kwargs():
+    return dict(outcome="outcome", group="unit", time="time", treatment="treat", L_max=2)
+
+
+def test_dcdh_analytic_df_all_nan():
+    from diff_diff.chaisemartin_dhaultfoeuille import ChaisemartinDHaultfoeuille
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        res = ChaisemartinDHaultfoeuille().fit(_dcdh_df_panel(), **_dcdh_kwargs())
+    assert res.event_study_df is None  # z-inference, no df
+    assert np.isnan(build_event_study_surface(res).df).all()
+
+
+def test_dcdh_survey_df_on_surface_covers_placebos():
+    from diff_diff.chaisemartin_dhaultfoeuille import ChaisemartinDHaultfoeuille
+    from diff_diff.survey import SurveyDesign
+
+    design = SurveyDesign(weights="w", weight_type="pweight", strata="strat", psu="psu_id")
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        res = ChaisemartinDHaultfoeuille().fit(
+            _dcdh_df_panel(), survey_design=design, **_dcdh_kwargs()
+        )
+    assert res.event_study_df == float(res.survey_metadata.df_survey)
+    surface = build_event_study_surface(res)
+    # Placebo rows (negative keys) are merged into the same surface and share
+    # the ONE design df - that is why a scalar is faithful here.
+    assert (surface.event_time < 0).any()
+    finite_p = np.isfinite(surface.p_value)
+    assert finite_p.any()
+    assert set(surface.df[finite_p].tolist()) == {float(res.event_study_df)}
+    assert np.isnan(surface.df[surface.is_reference]).all()
+
+
+def test_dcdh_survey_bootstrap_clears_df():
+    # TSL survey + bootstrap is a LIVE mode (only replicate + bootstrap is
+    # rejected): the df expression evaluates finite while the stored p/CIs
+    # are bootstrap percentiles, so the clear is load-bearing here.
+    from diff_diff.chaisemartin_dhaultfoeuille import ChaisemartinDHaultfoeuille
+    from diff_diff.survey import SurveyDesign
+
+    design = SurveyDesign(weights="w", weight_type="pweight", strata="strat", psu="psu_id")
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        res = ChaisemartinDHaultfoeuille(n_bootstrap=20, seed=1).fit(
+            _dcdh_df_panel(), survey_design=design, **_dcdh_kwargs()
+        )
+    assert res.survey_metadata is not None and res.survey_metadata.df_survey is not None
+    assert res.event_study_df is None
+    assert np.isnan(build_event_study_surface(res).df).all()
+
+
+def test_lpdid_pooled_df_threaded():
+    from diff_diff import LPDiD
+
+    rng = np.random.default_rng(11)
+    rows = []
+    for u in range(40):
+        g = [5, 7, 0][u % 3]
+        for t in range(1, 12):
+            y = 1.0 + 0.05 * t + u * 0.02 + (1.0 if g and t >= g else 0.0) + rng.normal(0, 0.3)
+            rows.append({"unit": u, "time": t, "outcome": y, "treat": 1 if (g and t >= g) else 0})
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        res = LPDiD(pre_window=3, post_window=3).fit(
+            pd.DataFrame(rows), outcome="outcome", unit="unit", time="time", treatment="treat"
+        )
+    assert res.pooled_df is not None and set(res.pooled_df) == {"pre", "post"}
+    ncl = dict(zip(res.pooled["window"].tolist(), res.pooled["n_clusters"].tolist()))
+    for window, df_val in res.pooled_df.items():
+        if np.isfinite(df_val):
+            assert df_val == ncl[window] - 1
+    assert res.to_dict()["pooled_df"] == res.pooled_df
+    # Native pooled frame schema is UNCHANGED.
+    assert "df" not in res.pooled.columns

@@ -4039,8 +4039,11 @@ class ChaisemartinDHaultfoeuille(ChaisemartinDHaultfoeuilleBootstrapMixin):
         # and HonestDiD. Re-run safe_inference with the FINAL
         # effective df so every surface agrees.
         _final_eff_df = _effective_df_survey(resolved_survey, _replicate_n_valid_list)
+        # ONE canonical final inference df, shared by the refresh below and
+        # by the `event_study_df` provenance recorded at construction, so the
+        # two can never drift apart.
+        _final_inf_df = _inference_df(_final_eff_df, resolved_survey)
         if _replicate_n_valid_list:
-            _final_inf_df = _inference_df(_final_eff_df, resolved_survey)
             # Recompute `effective_overall_*` directly — that's what
             # ships in results at line ~2776+. `effective_overall_att/se`
             # may differ from the raw `overall_att/se` under the delta
@@ -4087,6 +4090,22 @@ class ChaisemartinDHaultfoeuille(ChaisemartinDHaultfoeuilleBootstrapMixin):
                     _info_r2["t_stat"] = _t_r2
                     _info_r2["p_value"] = _p_r2
                     _info_r2["conf_int"] = _ci_r2
+            else:
+                # Phase 1 (L_max=None): `event_study_effects[1]` is a VALUE
+                # COPY of the overall inference, built above from the
+                # PRE-refresh `overall_*`; the loop just above covers only
+                # the Phase 2 `multi_horizon_inference` surface. Without
+                # this mirror the stored l=1 row keeps the INTERMEDIATE
+                # df's t/p/CI while `overall_*` and
+                # `survey_metadata.df_survey` report the final (tightened)
+                # df - the same value-copy hazard the placebo mirror below
+                # documents. Re-sync from the refreshed `overall_*` so the
+                # single event-study row agrees with the overall estimate it
+                # is a copy of.
+                if event_study_effects and 1 in event_study_effects:
+                    event_study_effects[1]["t_stat"] = overall_t
+                    event_study_effects[1]["p_value"] = overall_p
+                    event_study_effects[1]["conf_int"] = overall_ci
             if placebo_horizon_inference is not None:
                 for _lag_r2, _info_r2 in list(placebo_horizon_inference.items()):
                     _t_r2, _p_r2, _ci_r2 = safe_inference(
@@ -4181,6 +4200,24 @@ class ChaisemartinDHaultfoeuille(ChaisemartinDHaultfoeuilleBootstrapMixin):
         if survey_metadata is not None:
             survey_metadata.df_survey = _final_eff_df
 
+        # df PROVENANCE (spec section 5, row M-092): the scalar df every
+        # stored event-study / placebo row's safe_inference received.
+        # Reuses `_final_inf_df` - the SAME value the refresh above applied
+        # to every stored row - so provenance and inference cannot drift.
+        # Recorded iff finite and > 0.
+        # Cleared under bootstrap, whose percentile p/CIs never used a df:
+        # required, not defensive, because TSL survey + bootstrap is a live
+        # mode (only REPLICATE + bootstrap is rejected) where this
+        # expression evaluates finite.
+        _es_df_provenance: Optional[float] = None
+        if (
+            bootstrap_results is None
+            and _final_inf_df is not None
+            and np.isfinite(_final_inf_df)
+            and _final_inf_df > 0
+        ):
+            _es_df_provenance = float(_final_inf_df)
+
         results = ChaisemartinDHaultfoeuilleResults(
             overall_att=effective_overall_att,
             overall_se=effective_overall_se,
@@ -4226,6 +4263,7 @@ class ChaisemartinDHaultfoeuille(ChaisemartinDHaultfoeuilleBootstrapMixin):
             event_study_effects=event_study_effects,
             L_max=L_max,
             placebo_event_study=placebo_event_study_dict,
+            event_study_df=_es_df_provenance,
             twfe_weights=twfe_weights_df,
             twfe_fraction_negative=twfe_fraction_negative,
             twfe_sigma_fe=twfe_sigma_fe,
