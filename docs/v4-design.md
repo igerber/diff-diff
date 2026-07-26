@@ -418,9 +418,16 @@ section previously said "CallawaySantAnna already stores them". It does not -
 and the fit-time `precomputed` bookkeeping is a local. Retention is therefore
 work in EVERY migrating PR, not just the ones "where missing", and the kit must
 be built during `fit()` because nothing it needs survives the call. Memory cost
-is documented per estimator: for CallawaySantAnna the dominant payload is the
-per-(g,t) influence-function dict at roughly O(n_units x n_gt), not the
-O(n_units) bookkeeping. Analytical-vs-bootstrap inference of the aggregated
+is documented per estimator, enumerating every retained buffer rather than only
+the largest: for CallawaySantAnna the dominant payload is the per-(g,t)
+influence-function dict at roughly O(n_units x n_gt), on top of the O(n_units)
+bookkeeping; a replicate-weight survey design retains a further
+O(n_units x n_replicates) matrix through the resolved design object; and on
+repeated cross-sections several bookkeeping arrays are observation-length
+rather than unit-length, so the O(n_units) figure is a panel-only bound. Raw
+unit identifiers are NOT retained - the kit needs only position, so it stores
+canonical 0..n-1 codes, keeping a shared results artifact free of names, emails
+or administrative IDs. Analytical-vs-bootstrap inference of the aggregated
 estimand follows the fit's inference method; where bootstrap draws are not
 retained, `aggregate()` on a bootstrapped fit RAISES rather than silently
 returning analytical inference. Estimators whose
