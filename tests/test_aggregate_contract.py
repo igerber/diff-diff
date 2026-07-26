@@ -199,6 +199,48 @@ class TestRetentionKit:
         want = fitted.aggregate("group").to_dataframe()
         assert np.allclose(got["att"].to_numpy(), want["att"].to_numpy(), equal_nan=True)
 
+    def test_no_raw_unit_identifiers_are_retained(self):
+        """Data minimization: results objects are picklable and get shared, so
+        the kit must not become a carrier for unit identifiers - which are
+        routinely names, emails or administrative IDs. The kit needs only
+        POSITION (influence arrays index by ``treated_idx``/``control_idx``),
+        so it stores canonical 0..n-1 codes.
+
+        Searches the whole serialized artifact, not just the kit: a recursive
+        check is what makes this a real guarantee rather than a spot check.
+        """
+        sentinel = "SENTINEL-ID-{}@example.invalid"
+        rng = np.random.default_rng(4)
+        rows = []
+        for i in range(45):
+            g = [0, 3, 4][i % 3]
+            for t in range(1, 7):
+                treated = g != 0 and t >= g
+                rows.append(
+                    {
+                        "unit": sentinel.format(i),
+                        "time": t,
+                        "first_treat": g,
+                        "y": 0.4 * t + (1.5 if treated else 0.0) + rng.normal(0, 0.25),
+                    }
+                )
+        res = CallawaySantAnna().fit(pd.DataFrame(rows), **FIT_KW)
+        assert b"SENTINEL-ID" not in pickle.dumps(res), "raw unit ids reached the artifact"
+        # And the minimization is inert: aggregation still produces numbers.
+        for level in ("simple", "group", "event_study"):
+            assert np.isfinite(np.asarray(res.aggregate(level).att)).any()
+
+    def test_identifier_minimization_is_numerically_inert(self, panel, fitted):
+        """Canonical codes must not perturb any aggregate: compared at
+        atol=rtol=0, since substituting positions for labels should not change
+        a single floating-point operation."""
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", FutureWarning)
+            native = CallawaySantAnna().fit(panel, aggregate="all", **FIT_KW)
+        got = fitted.aggregate("simple")
+        assert got.att[0] == native.overall_att
+        assert got.se[0] == native.overall_se
+
 
 # --------------------------------------------------------------------------- #
 # Fail-closed contract
@@ -395,6 +437,56 @@ class TestInertnessAcrossDesigns:
             native = CallawaySantAnna(anticipation=1).fit(panel, aggregate="all", **FIT_KW)
         _assert_level_matches(post, native, level)
 
+    @pytest.mark.parametrize("level", ["simple", "group", "event_study"])
+    def test_universal_base_period_matches_fit_time(self, panel, level):
+        """REGISTRY gives universal bases their own reference-cell and
+        VCV-index semantics (a zero reference cell per cohort), which the
+        default 'varying' fixture never exercises."""
+        kw = dict(base_period="universal")
+        post = CallawaySantAnna(**kw).fit(panel, **FIT_KW)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", FutureWarning)
+            native = CallawaySantAnna(**kw).fit(panel, aggregate="all", **FIT_KW)
+        _assert_level_matches(post, native, level)
+
+    @pytest.mark.parametrize("level", ["simple", "group", "event_study"])
+    def test_not_yet_treated_with_anticipation_matches_fit_time(self, panel, level):
+        """The not-yet-treated control group interacts with anticipation in
+        picking each (g, t) comparison set - a different code path from the
+        never-treated default."""
+        kw = dict(control_group="not_yet_treated", anticipation=1)
+        post = CallawaySantAnna(**kw).fit(panel, **FIT_KW)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", FutureWarning)
+            native = CallawaySantAnna(**kw).fit(panel, aggregate="all", **FIT_KW)
+        _assert_level_matches(post, native, level)
+
+    @pytest.mark.parametrize("level", ["simple", "group", "event_study"])
+    def test_unbalanced_panel_matches_fit_time(self, panel, level):
+        """allow_unbalanced_panel changes which units survive into the
+        influence vectors, so the retained bookkeeping must agree with what
+        the fit actually used."""
+        thinned = panel.drop(panel.index[::13]).reset_index(drop=True)
+        kw = dict(allow_unbalanced_panel=True)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            post = CallawaySantAnna(**kw).fit(thinned, **FIT_KW)
+            native = CallawaySantAnna(**kw).fit(thinned, aggregate="all", **FIT_KW)
+        _assert_level_matches(post, native, level)
+
+    @pytest.mark.parametrize("level", ["simple", "group", "event_study"])
+    def test_survey_numbers_match_fit_time(self, survey_fit, level):
+        """Survey parity on the ESTIMATES, not just the df metadata."""
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            native = CallawaySantAnna().fit(
+                _survey_panel(),
+                survey_design=_survey_design(),
+                aggregate="all",
+                **FIT_KW,
+            )
+        _assert_level_matches(survey_fit, native, level)
+
 
 def _assert_level_matches(post, native, level):
     """Compare a post-fit aggregation against the fit-time surface at 1e-14."""
@@ -422,12 +514,7 @@ def _assert_level_matches(post, native, level):
     assert compared > 0, f"no {level} rows compared"
 
 
-@pytest.fixture(scope="module")
-def survey_fit():
-    """An EXPLICIT survey design - the branch where ``df_inference`` is
-    intentionally None and ``survey_metadata.df_survey`` is the real carrier."""
-    from diff_diff import SurveyDesign
-
+def _survey_panel():
     rng = np.random.default_rng(3)
     rows = []
     for u in range(80):
@@ -445,13 +532,22 @@ def survey_fit():
                     "y": 0.3 * t + (2.0 if treated else 0.0) + rng.normal(0, 0.5),
                 }
             )
+    return pd.DataFrame(rows)
+
+
+def _survey_design():
+    from diff_diff import SurveyDesign
+
+    return SurveyDesign(weights="w", strata="stratum", psu="psu")
+
+
+@pytest.fixture(scope="module")
+def survey_fit():
+    """An EXPLICIT survey design - the branch where ``df_inference`` is
+    intentionally None and ``survey_metadata.df_survey`` is the real carrier."""
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", UserWarning)
-        return CallawaySantAnna().fit(
-            pd.DataFrame(rows),
-            survey_design=SurveyDesign(weights="w", strata="stratum", psu="psu"),
-            **FIT_KW,
-        )
+        return CallawaySantAnna().fit(_survey_panel(), survey_design=_survey_design(), **FIT_KW)
 
 
 class TestInferenceDfProvenance:
@@ -546,6 +642,16 @@ class TestContainerNormalization:
         got = fitted.aggregate(level)
         assert got.n_kind == expected
         assert got.n_kind in N_KIND_VOCABULARY
+
+    def test_summary_refuses_to_relabel_a_stored_interval(self, fitted):
+        """summary(alpha=) never recomputes, so printing the passed alpha would
+        assert a confidence level the stored interval was not built at. Raises
+        instead, matching EventStudyResults.summary."""
+        got = fitted.aggregate("group")
+        assert f"alpha={got.alpha}" in got.summary()
+        assert f"alpha={got.alpha}" in got.summary(alpha=got.alpha)
+        with pytest.raises(ValueError, match="never recomputes"):
+            got.summary(alpha=0.10)
 
 
 # --------------------------------------------------------------------------- #

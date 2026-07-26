@@ -5112,6 +5112,23 @@ def _build_aggregation_kit(
             if key in precomputed:
                 bookkeeping[key] = precomputed[key]
 
+    # Data minimization: the results object is picklable and users share
+    # result artifacts, so the kit must not turn it into a carrier for raw
+    # unit identifiers (which are routinely names, emails or administrative
+    # IDs). ``all_units`` and ``unit_to_idx`` exist here only to size and
+    # position the influence vectors - the influence arrays index by POSITION
+    # (``treated_idx`` / ``control_idx``), and the fast aggregation path keys
+    # off object identity plus length, never off a label lookup. Substituting
+    # canonical 0..n-1 codes is therefore numerically inert (pinned
+    # bit-identical by TestRetentionKit) while retaining nothing identifying.
+    # ``unit_cohorts`` is kept as-is: those are first-treatment PERIODS, which
+    # are reported as group labels and are not unit identifiers.
+    if "all_units" in bookkeeping and bookkeeping["all_units"] is not None:
+        n_kit_units = len(bookkeeping["all_units"])
+        bookkeeping["all_units"] = np.arange(n_kit_units)
+        if bookkeeping.get("unit_to_idx") is not None:
+            bookkeeping["unit_to_idx"] = {i: i for i in range(n_kit_units)}
+
     return AggregationKit(
         bookkeeping=bookkeeping,
         influence=influence_func_info,

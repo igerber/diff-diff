@@ -315,9 +315,23 @@ class AggregationResult(BaseResults):
         return out
 
     def summary(self, alpha: Optional[float] = None) -> str:
-        """Human-readable table. ``alpha`` is display-only - it does not
-        recompute the stored interval, which was fixed at aggregation time."""
-        a = self.alpha if alpha is None else alpha
+        """Human-readable table.
+
+        Parameters
+        ----------
+        alpha : float, optional
+            Accepted for signature uniformity (spec section 5). The stored
+            interval was computed at aggregation time; passing a value
+            different from the stored ``alpha`` raises rather than silently
+            recomputing or mislabeling it - re-aggregate instead. Mirrors
+            :meth:`~diff_diff.results_base.EventStudyResults.summary`.
+        """
+        if alpha is not None and alpha != self.alpha:
+            raise ValueError(
+                f"This aggregation stores intervals computed at alpha={self.alpha}; "
+                f"re-aggregate to obtain alpha={alpha} intervals "
+                "(summary() never recomputes stored inference)."
+            )
         who = self.estimator or "estimator"
         lines = [
             f"{who} - aggregate(type={self.level!r})",
@@ -338,7 +352,7 @@ class AggregationResult(BaseResults):
                 f"{row['t_stat']:>8.3f} {row['p_value']:>8.4f} {n_disp:>10}"
             )
         lines.append("-" * 64)
-        lines.append(f"Confidence intervals at alpha={a}.")
+        lines.append(f"Confidence intervals at alpha={self.alpha}.")
         if self.weight is None:
             lines.append("Per-row aggregation weights are not defined for this level.")
         return "\n".join(lines)
