@@ -616,6 +616,64 @@ class TestInferenceDfProvenance:
         # The event-study path's equivalent clearing must not have regressed.
         assert res.event_study_df is None
 
+    @pytest.mark.parametrize("survey", [False, True])
+    def test_sddd_bootstrap_clears_group_df_provenance(self, survey):
+        """StaggeredTripleDifference carries its OWN copy of the bootstrap
+        group-replacement loop, so the clearing rule has to hold there too -
+        fixing one twin and testing only the other is how this class of bug
+        survived in the first place.
+
+        Coverage is ASYMMETRIC and deliberately so: only ``survey=True``
+        exercises the clearing (verified by reverting the fix - just that case
+        fails). SDDD's plain-``cluster`` path never resolves a finite analytical
+        df, so ``df_used`` is already None there and nothing needs clearing. The
+        non-survey case is kept as a cheap guard in case that ever changes, not
+        because it currently reproduces the bug. The CallawaySantAnna
+        equivalent above DOES fail in both configurations.
+        """
+        from diff_diff import SurveyDesign
+
+        rng = np.random.default_rng(9)
+        rows = []
+        for u in range(96):
+            g = [0, 3, 4][u % 3]
+            elig = u % 2
+            for t in range(1, 7):
+                treated = g != 0 and t >= g and elig == 1
+                rows.append(
+                    {
+                        "unit": u,
+                        "period": t,
+                        "first_treat": g,
+                        "eligibility": elig,
+                        "psu": u % 16,
+                        "stratum": u % 4,
+                        "w": 1.0 + (u % 3) * 0.1,
+                        "outcome": 0.3 * t + (1.2 if treated else 0.0) + rng.normal(0, 0.2),
+                    }
+                )
+        ctor = {} if survey else {"cluster": "psu"}
+        fit_extra = (
+            {"survey_design": SurveyDesign(weights="w", strata="stratum", psu="psu")}
+            if survey
+            else {}
+        )
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            res = StaggeredTripleDifference(n_bootstrap=40, seed=3, **ctor).fit(
+                pd.DataFrame(rows),
+                "outcome",
+                "unit",
+                "period",
+                "first_treat",
+                "eligibility",
+                aggregate="all",
+                **fit_extra,
+            )
+        assert res.group_effects, "fixture produced no SDDD group rows"
+        for g, eff in res.group_effects.items():
+            assert eff.get("df_used") is None, f"SDDD group {g} kept analytical df on bootstrap"
+
     def test_group_df_is_not_the_event_study_df(self, fitted):
         """``group`` must not borrow ``event_study_df``: on a plain fit that
         field is None, and it is a different aggregation's denominator."""

@@ -225,7 +225,9 @@ cs.fit(
 ```python
 from diff_diff import CallawaySantAnna, plot_event_study
 
-cs = CallawaySantAnna(estimation_method="dr", n_bootstrap=999, seed=42)
+# NOTE: no n_bootstrap here - post-fit aggregate() is ANALYTICAL-ONLY and
+# raises NotImplementedError on a bootstrapped fit (see below).
+cs = CallawaySantAnna(estimation_method="dr")
 results = cs.fit(data, outcome='outcome', unit='unit', time='period',
                  first_treat='first_treat')
 results.print_summary()
@@ -236,14 +238,20 @@ by_cohort   = results.aggregate('group')         # -> AggregationResult
 ```
 
 Fit-time `aggregate=` / `balance_e=` are DEPRECATED since 3.9 (removed in 4.0,
-ledger rows M-020 / M-117) and emit a `FutureWarning`. They remain only as the
-compatibility surface for the consumers that still read the fit-time result -
-`plot_event_study`, `compute_honest_did` and `compute_pretrends_power` do not
-yet accept the post-fit container, so use the fit-time form for those:
+ledger rows M-020 / M-117) and emit a `FutureWarning`. They remain the required
+path in two cases:
+
+1. **Bootstrap inference.** `aggregate()` raises on a bootstrapped fit rather
+   than substituting analytical inference for percentile-bootstrap statistics.
+2. **Downstream consumers.** `plot_event_study`, `compute_honest_did` and
+   `compute_pretrends_power` still read the fit-time surface and do not yet
+   accept the post-fit container.
 
 ```python
-plotted = cs.fit(data, outcome='outcome', unit='unit', time='period',
-                 first_treat='first_treat', aggregate='event_study')
+# Both cases: aggregate at fit time.
+boot = CallawaySantAnna(estimation_method="dr", n_bootstrap=999, seed=42)
+plotted = boot.fit(data, outcome='outcome', unit='unit', time='period',
+                   first_treat='first_treat', aggregate='event_study')
 plot_event_study(plotted)
 ```
 
