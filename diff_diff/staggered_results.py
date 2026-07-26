@@ -313,7 +313,7 @@ class CallawaySantAnnaResults(BaseResults, AggregationMixin):
         agg = _KitAggregator(kit.alpha, kit.anticipation)
 
         if level == "simple":
-            return self._aggregate_simple_result()
+            return self._aggregate_simple_result(kit)
         if level == "group":
             effects = agg._aggregate_by_group(
                 self.group_time_effects,
@@ -348,13 +348,20 @@ class CallawaySantAnnaResults(BaseResults, AggregationMixin):
         )
         return build_event_study_surface(carrier)
 
-    def _aggregate_simple_result(self) -> AggregationResult:
+    def _aggregate_simple_result(self, kit: Any) -> AggregationResult:
         """The overall ATT as a one-row table.
 
         ``_aggregate_simple`` runs unconditionally in ``fit()``, so the numbers
         are already stored - this is a view, not a recomputation, and is
         therefore bit-identical to the fit by construction.
         """
+        # n_treated_units / n_control_units are UNITS on a panel fit but
+        # OBSERVATIONS on a declared repeated cross-section, where fit() counts
+        # rows because there is no unit tracking (staggered.py, the panel/RCS
+        # branch). n_kind must say which - conflating the two is exactly what
+        # the shared vocabulary forbids.
+        is_panel = kit.bookkeeping.get("is_panel", True)
+        n_kind = "units" if is_panel else "obs"
         ci = self.overall_conf_int or (np.nan, np.nan)
         return AggregationResult(
             level="simple",
@@ -374,7 +381,7 @@ class CallawaySantAnnaResults(BaseResults, AggregationMixin):
             # was built on a finite t-reference.
             df=resolve_inference_df(self),
             alpha=self.alpha,
-            n_kind="units",
+            n_kind=n_kind,
             weight=np.array([1.0], dtype=float),
             estimator=type(self).__name__.replace("Results", ""),
         )

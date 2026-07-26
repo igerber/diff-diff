@@ -643,6 +643,21 @@ class TestContainerNormalization:
         assert got.n_kind == expected
         assert got.n_kind in N_KIND_VOCABULARY
 
+    def test_rcs_simple_reports_obs_not_units(self):
+        """On panel=False, fit() counts ROWS (there is no unit tracking), so
+        labelling that total "units" would misdescribe the sample - the exact
+        conflation the shared vocabulary forbids."""
+        data = _rcs()
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            res = CallawaySantAnna(panel=False).fit(data, **FIT_KW)
+        got = res.aggregate("simple")
+        assert got.n_kind == "obs"
+        assert got.n[0] == float(res.n_treated_units + res.n_control_units)
+        # The panel fixture must still say units, or this would be a blanket rename.
+        panel_res = CallawaySantAnna().fit(_panel(), **FIT_KW)
+        assert panel_res.aggregate("simple").n_kind == "units"
+
     def test_shared_vocabulary_is_enforced_on_both_containers(self, fitted):
         """The vocabulary is declared SHARED, so validating it on only one
         container would let an unknown value reach a consumer through the

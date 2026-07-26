@@ -1846,15 +1846,27 @@ class CallawaySantAnna(
         covariates : list, optional
             List of covariate column names for conditional parallel trends.
         aggregate : str, optional
-            How to aggregate group-time effects:
+            DEPRECATED since 3.9, removed in 4.0 (ledger row M-020). Passing
+            it emits a ``FutureWarning``. Aggregate as a post-fit step
+            instead - ``results.aggregate("simple" | "event_study" |
+            "group")`` - which needs no refit and returns a new object,
+            leaving ``results`` unchanged. Accepted values are unchanged:
             - None: Only compute ATT(g,t) (default)
             - "simple": Simple weighted average (overall ATT)
             - "event_study": Aggregate by relative time (event study)
             - "group": Aggregate by treatment cohort
             - "all": Compute all aggregations
+
+            Fit-time aggregation remains ONLY as the temporary compatibility
+            surface for consumers that still read it (``compute_honest_did``,
+            ``compute_pretrends_power`` and ``plot_event_study``, tracked in
+            ``TODO.md``); it is not the recommended path for new code.
         balance_e : int, optional
-            For event study, balance the panel at relative time e.
-            Ensures all groups contribute to each relative period.
+            DEPRECATED since 3.9, removed in 4.0 (ledger row M-117). Passing
+            it emits a ``FutureWarning``; it moves onto the post-fit call as
+            ``results.aggregate("event_study", balance_e=...)``. For event
+            study, balance the panel at relative time e. Ensures all groups
+            contribute to each relative period.
         survey_design : SurveyDesign, optional
             Survey design specification. Supports pweight with strata/PSU/FPC.
             Aggregated SEs (overall, event study, group) use design-based
