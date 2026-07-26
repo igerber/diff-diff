@@ -12,7 +12,7 @@ This module implements ETWFE via a single saturated regression that:
 3. **Uses ASF-based ATT** for nonlinear models: E[f(η₁)] − E[f(η₀)]
 4. **Computes delta-method SEs** for all aggregations (event, group, calendar, simple)
 5. **Supports paper W2025 cohort-share aggregation** via ``aggregate(weights="cohort_share")`` (Eqs. 7.4 + 7.6; default is cell-count matching Stata ``jwdid_estat``)
-6. **Supports paper W2025 Section 8 heterogeneous cohort trends** via ``cohort_trends=True`` (OLS path only; auto-routes to full-dummy mode; requires ``control_group="not_yet_treated"`` — the default — and ``survey_design=None``; the ``never_treated`` and survey paths are fail-closed with ``NotImplementedError`` because the all-(g, t)-cells placebo basis collinearity / unvalidated survey-TSL composition would make the trend specification unidentified or unverified — see Methodology Registry for the full contract)
+6. **Supports paper W2025 Section 8 heterogeneous cohort trends** via ``cohort_trends=True`` (OLS path only; auto-routes to full-dummy mode; requires ``control_group="not_yet_treated"`` — the default — and ``survey_design=None``; the ``never_treated`` and survey paths are fail-closed with ``NotImplementedError`` because the placebo-cell basis remaining collinear with the trend columns through the unit fixed effects / unvalidated survey-TSL composition would make the trend specification unidentified or unverified — see Methodology Registry for the full contract)
 7. **Follows the Stata jwdid specification** for OLS defaults and nonlinear paths (see Methodology Registry for documented SE/aggregation deviations)
 
 **When to use WooldridgeDiD:**
@@ -69,8 +69,18 @@ never-treated cohort's trend (when a never-treated cohort exists) OR
 the last cohort's trend (when no never-treated cohort exists, per
 paper W2025 Section 5.4's all-eventually-treated drop rule). On
 all-treated panels the last cohort is intentionally absent from the
-dict; its slope is the baseline (zero in deviation form). See
-``docs/methodology/REGISTRY.md`` → ``## WooldridgeDiD (ETWFE)`` →
+dict; its slope is the baseline (zero in deviation form).
+
+.. warning::
+
+   The all-eventually-treated branch is currently **unreachable**: the
+   paper's Section 5.4 rule is applied to the trend columns but NOT to
+   the cohort × time cells, so such panels are rank-deficient at
+   fully-treated periods and ``fit()`` raises rather than returning
+   relabeled contrasts. Implementing the cell half restores these fits
+   (tracked in ``TODO.md``).
+
+See ``docs/methodology/REGISTRY.md`` → ``## WooldridgeDiD (ETWFE)`` →
 "Heterogeneous cohort trends" for the full normalization contract.
 
 .. autoclass:: diff_diff.wooldridge_results.WooldridgeDiDResults

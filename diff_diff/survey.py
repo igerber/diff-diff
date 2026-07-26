@@ -24,6 +24,52 @@ import pandas as pd
 from diff_diff.linalg import _factorize_cluster_ids
 
 
+def validate_raw_weights(raw_weights: np.ndarray, weight_type: Optional[str] = None) -> None:
+    """Reject a raw (pre-normalization) weight vector that cannot be used.
+
+    Shared by ``SurveyDesign.resolve`` and by callers that must read the raw
+    weight column BEFORE resolution, so both paths raise the same errors in the
+    same order rather than drifting apart.
+
+    ``WooldridgeDiD`` is such a caller: it decides cohort-time cell SUPPORT from
+    raw weights (a cell whose rows all carry zero weight is absent from the
+    effective regression), and an unsupported reference period EXCLUDES that
+    cohort's rows. An invalid weight sitting only in the excluded rows would
+    therefore never reach ``resolve()`` -- the fit would drop a cohort, report a
+    confident finite estimate, and warn that the cohort "has no pre-treatment
+    period" when in fact its periods were merely poisoned. Validating the raw
+    vector up front closes that path.
+
+    Raises
+    ------
+    ValueError
+        If any weight is NaN, infinite, or negative, or if every weight is zero.
+    """
+    if np.any(np.isnan(raw_weights)):
+        raise ValueError("Weights contain NaN values")
+    if np.any(~np.isfinite(raw_weights)):
+        raise ValueError("Weights contain Inf values")
+    if np.any(raw_weights < 0):
+        raise ValueError("Weights must be non-negative")
+    if np.any(raw_weights == 0) and np.all(raw_weights == 0):
+        raise ValueError(
+            "All weights are zero. At least one observation must " "have a positive weight."
+        )
+    # fweight validation: must be non-negative integers. Lives here, not only in
+    # resolve(), because callers that read raw weights early must enforce EVERY
+    # documented weight-type rule -- a fractional fweight in a cohort that
+    # support-based exclusion later removes would otherwise never be seen.
+    if weight_type == "fweight":
+        pos_mask = raw_weights > 0
+        if np.any(pos_mask):
+            fractional = raw_weights[pos_mask] - np.round(raw_weights[pos_mask])
+            if np.any(np.abs(fractional) > 1e-10):
+                raise ValueError(
+                    "Frequency weights (fweight) must be non-negative integers. "
+                    "Fractional values detected. Use pweight for non-integer weights."
+                )
+
+
 @dataclass
 class SurveyDesign:
     """
@@ -163,28 +209,7 @@ class SurveyDesign:
                 raise ValueError(f"Weight column '{self.weights}' not found in data")
             raw_weights = data[self.weights].values.astype(np.float64)
 
-            # Validate weights
-            if np.any(np.isnan(raw_weights)):
-                raise ValueError("Weights contain NaN values")
-            if np.any(~np.isfinite(raw_weights)):
-                raise ValueError("Weights contain Inf values")
-            if np.any(raw_weights < 0):
-                raise ValueError("Weights must be non-negative")
-            if np.any(raw_weights == 0) and np.all(raw_weights == 0):
-                raise ValueError(
-                    "All weights are zero. At least one observation must " "have a positive weight."
-                )
-
-            # fweight validation: must be non-negative integers
-            if self.weight_type == "fweight":
-                pos_mask = raw_weights > 0
-                if np.any(pos_mask):
-                    fractional = raw_weights[pos_mask] - np.round(raw_weights[pos_mask])
-                    if np.any(np.abs(fractional) > 1e-10):
-                        raise ValueError(
-                            "Frequency weights (fweight) must be non-negative integers. "
-                            "Fractional values detected. Use pweight for non-integer weights."
-                        )
+            validate_raw_weights(raw_weights, self.weight_type)
 
             # Normalize: pweights/aweights to sum=n (mean=1); fweights unchanged
             # Skip normalization for replicate designs — the IF path uses

@@ -224,7 +224,7 @@ class TestDataPrep:
     def test_build_interaction_matrix_columns(self):
         df = _make_panel()
         filtered = _filter_sample(df, "unit", "time", "cohort", "not_yet_treated", anticipation=0)
-        X_int, col_names, gt_keys = _build_interaction_matrix(
+        X_int, col_names, gt_keys, _ = _build_interaction_matrix(
             filtered, cohort="cohort", time="time", anticipation=0
         )
         # Each column should be a valid (g, t) pair with t >= g
@@ -234,7 +234,7 @@ class TestDataPrep:
     def test_build_interaction_matrix_binary(self):
         df = _make_panel()
         filtered = _filter_sample(df, "unit", "time", "cohort", "not_yet_treated", anticipation=0)
-        X_int, col_names, gt_keys = _build_interaction_matrix(
+        X_int, col_names, gt_keys, _ = _build_interaction_matrix(
             filtered, cohort="cohort", time="time", anticipation=0
         )
         # All values should be 0 or 1
@@ -482,11 +482,17 @@ class TestMethodologyCorrectness:
         from diff_diff.datasets import load_mpdta
 
         df = load_mpdta()
-        # never_treated with within-transformation can produce collinear
-        # pre-treatment interactions; use silent to avoid warnings
-        est = WooldridgeDiD(control_group="never_treated", rank_deficient_action="silent")
-        r = est.fit(df, outcome="lemp", unit="countyreal", time="year", cohort="first_treat")
+        # No `rank_deficient_action="silent"` here any more. That workaround was
+        # added because never_treated emitted the reference cell and left QR to
+        # drop something arbitrary (#724); the reference is now omitted by
+        # construction, so a clean fit must produce NO rank warning.
+        est = WooldridgeDiD(control_group="never_treated")
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            r = est.fit(df, outcome="lemp", unit="countyreal", time="year", cohort="first_treat")
         assert np.isfinite(r.overall_att)
+        rank = [w for w in caught if "Rank-deficient" in str(w.message)]
+        assert rank == [], f"unexpected rank deficiency: {[str(w.message)[:100] for w in rank]}"
 
     def test_never_treated_produces_event_effects_with_placebo_leads(self):
         """With never_treated, event aggregation should include negative event
@@ -570,34 +576,6 @@ class TestMethodologyCorrectness:
         for key, cell in results.group_time_effects.items():
             assert cell["se"] >= 0, f"Negative SE at {key}"
             assert np.isfinite(cell["se"]), f"Non-finite SE at {key}"
-
-    def test_ols_etwfe_att_matches_callaway_santanna(self):
-        """OLS ETWFE ATT(g,t) equals CallawaySantAnna ATT(g,t) (Proposition 3.1)."""
-        from diff_diff import CallawaySantAnna
-        from diff_diff.datasets import load_mpdta
-
-        mpdta = load_mpdta()
-
-        etwfe = WooldridgeDiD(method="ols", control_group="not_yet_treated")
-        cs = CallawaySantAnna(control_group="not_yet_treated")
-
-        er = etwfe.fit(mpdta, outcome="lemp", unit="countyreal", time="year", cohort="first_treat")
-        cr = cs.fit(
-            mpdta, outcome="lemp", unit="countyreal", time="year", first_treat="first_treat"
-        )
-
-        matched = 0
-        for key, effect in er.group_time_effects.items():
-            if key in cr.group_time_effects:
-                cs_att = cr.group_time_effects[key]["effect"]
-                np.testing.assert_allclose(
-                    effect["att"],
-                    cs_att,
-                    atol=5e-3,
-                    err_msg=f"ATT mismatch at {key}: ETWFE={effect['att']:.4f}, CS={cs_att:.4f}",
-                )
-                matched += 1
-        assert matched > 0, "No matching (g,t) keys found between ETWFE and CS"
 
 
 class TestExports:
@@ -701,12 +679,28 @@ class TestXgvarCovariates:
 
 class TestAllEventuallyTreated:
     def test_no_never_treated_not_yet_treated_control(self):
-        """All units eventually treated, using not_yet_treated control group.
+        """All units eventually treated: the fit is REFUSED, not approximated.
 
-        With not_yet_treated control, the latest cohort's post-treatment
-        cells are rank-deficient (no controls remain). The estimator drops
-        those columns, so we check that at least the earlier cohort cells
-        produce finite ATT effects and the overall ATT is computed from them.
+        This test previously asserted that the earlier cohorts' cells came back
+        finite once the latest cohort's rank-deficient columns were dropped.
+        They were finite and WRONG. Measured on this DGP (true ATT = 1.5 for
+        every post cell) before the completeness gate::
+
+            ATT(3, 8) = -0.0096      ATT(3, 9) = -0.1038
+            ATT(5, 8) = -0.0214      ATT(5, 9) = -0.2393
+            overall_att = 1.0023     (true 1.5)
+
+        Once QR drops one of the jointly-collinear cells at a period where every
+        unit is treated, the survivors identify contrasts BETWEEN treated
+        cohorts while keeping their ATT(g, t) labels. Asserting finiteness is
+        exactly what let that through (codex R8 P0).
+
+        W2025 Section 5.4 does define the right answer for these panels -- the
+        last cohort serves as the control, so its columns are dropped
+        DELIBERATELY rather than by QR, which leaves the rest identified. The
+        library already does this for the cohort-TREND column but not for the
+        cells, so until that lands the honest behavior is to refuse. Tracked in
+        TODO.md; landing it turns this test back into a fit.
         """
         rng = np.random.default_rng(7)
         rows = []
@@ -725,15 +719,8 @@ class TestAllEventuallyTreated:
                 rows.append({"unit": u, "time": t, "cohort": cohort, "y": y})
         df = pd.DataFrame(rows)
         est = WooldridgeDiD(control_group="not_yet_treated")
-        r = est.fit(df, outcome="y", unit="unit", time="time", cohort="cohort")
-        # At least some cells should have finite ATT
-        finite_cells = [k for k, v in r.group_time_effects.items() if np.isfinite(v["att"])]
-        assert len(finite_cells) > 0
-        # Early cohort (g=3) should have identifiable effects
-        early_finite = [k for k in finite_cells if k[0] == 3]
-        assert len(early_finite) > 0
-        for k in early_finite:
-            assert np.isfinite(r.group_time_effects[k]["att"])
+        with pytest.raises(ValueError, match="not identified and were removed"):
+            est.fit(df, outcome="y", unit="unit", time="time", cohort="cohort")
 
 
 class TestEmptyCells:
@@ -1092,7 +1079,7 @@ class TestUnbalancedOLS:
 
         # Build explicit dummy regression on same sample
         sample = _filter_sample(df, "unit", "time", "cohort", "not_yet_treated", 0)
-        X_int, _, gt_keys = _build_interaction_matrix(
+        X_int, _, gt_keys, _ = _build_interaction_matrix(
             sample,
             cohort="cohort",
             time="time",
@@ -1199,9 +1186,13 @@ class TestNonlinearNeverTreated:
                 rows.append({"unit": u, "time": t, "cohort": g, "y": 0.0})
         df = pd.DataFrame(rows)
 
-        X_ols, _, _ = _build_interaction_matrix(df, "cohort", "time", 0, "never_treated", "ols")
-        X_logit, _, _ = _build_interaction_matrix(df, "cohort", "time", 0, "never_treated", "logit")
-        X_nyt, _, _ = _build_interaction_matrix(df, "cohort", "time", 0, "not_yet_treated", "ols")
+        X_ols, _, _, _ = _build_interaction_matrix(df, "cohort", "time", 0, "never_treated", "ols")
+        X_logit, _, _, _ = _build_interaction_matrix(
+            df, "cohort", "time", 0, "never_treated", "logit"
+        )
+        X_nyt, _, _, _ = _build_interaction_matrix(
+            df, "cohort", "time", 0, "not_yet_treated", "ols"
+        )
         # OLS never_treated > nonlinear never_treated == not_yet_treated
         assert X_ols.shape[1] > X_logit.shape[1]
         assert X_logit.shape[1] == X_nyt.shape[1]
@@ -1247,7 +1238,7 @@ class TestFullCovariateBasis:
 
         # Build explicit-dummy regression with full basis
         sample = _filter_sample(df, "unit", "time", "cohort", "not_yet_treated", 0)
-        X_int, _, gt_keys = _build_interaction_matrix(
+        X_int, _, gt_keys, _ = _build_interaction_matrix(
             sample, "cohort", "time", 0, "not_yet_treated", "ols"
         )
         n_int = X_int.shape[1]
@@ -1598,8 +1589,13 @@ class TestWooldridgeSurvey:
         from diff_diff.survey import SurveyDesign
 
         df = survey_panel.copy()
-        # Zero out weights for one treated cohort so some cells have zero weight
-        df.loc[df["cohort"] == 3, "weight"] = 0.0
+        # Zero out ONE treated cell's weights. Deliberately NOT the whole cohort:
+        # that would leave cohort 3 with no supported reference period, and
+        # exclusion under a survey design is now refused outright (see
+        # test_survey_plus_unidentified_cohort_is_refused). Cohort 3 keeps its
+        # t=1,2 pre-periods, so this still exercises what the test is for --
+        # a zero-weight TREATED CELL inside an otherwise identified design.
+        df.loc[(df["cohort"] == 3) & (df["time"] == 5), "weight"] = 0.0
         sd = SurveyDesign(weights="weight", strata="stratum", psu="unit")
         r = WooldridgeDiD(method="poisson").fit(
             df,
@@ -1612,23 +1608,32 @@ class TestWooldridgeSurvey:
         assert np.isfinite(r.overall_att)
         assert np.isfinite(r.overall_se)
 
-    def test_ols_survey_rank_deficient(self, survey_panel):
-        """Survey OLS handles rank-deficient all-eventually-treated designs."""
+    def test_ols_survey_rank_deficient_now_fails_closed(self, survey_panel):
+        """An all-eventually-treated survey design is REFUSED, not approximated.
+
+        This test previously asserted only that `overall_att` / `overall_se`
+        were finite on a deliberately rank-deficient design. They were finite
+        and WRONG: once rank reduction drops one of the jointly-collinear
+        final-period cells, the survivors identify a contrast between two
+        treated cohorts and keep their ATT(g, t) labels. Measured on an
+        equivalent panel with true effects 1.0 and 3.0, the surviving cell came
+        back as -1.94. Asserting finiteness is what let that through, so the
+        assertion is now the refusal itself (codex R8 P0).
+        """
         from diff_diff.survey import SurveyDesign
 
         # Remove never-treated (cohort=0) to create rank-deficient design
         df = survey_panel[survey_panel["cohort"] > 0].copy()
         sd = SurveyDesign(weights="weight", strata="stratum", psu="unit")
-        r = WooldridgeDiD(control_group="not_yet_treated").fit(
-            df,
-            outcome="y",
-            unit="unit",
-            time="time",
-            cohort="cohort",
-            survey_design=sd,
-        )
-        assert np.isfinite(r.overall_att)
-        assert np.isfinite(r.overall_se)
+        with pytest.raises(ValueError, match="not identified and were removed"):
+            WooldridgeDiD(control_group="not_yet_treated").fit(
+                df,
+                outcome="y",
+                unit="unit",
+                time="time",
+                cohort="cohort",
+                survey_design=sd,
+            )
 
     def test_ols_survey_zero_weight_unit_rejected(self, survey_panel):
         """Zero-weight unit raises ValueError before within_transform."""
@@ -1653,7 +1658,13 @@ class TestWooldridgeSurvey:
         from diff_diff.survey import SurveyDesign
 
         df = survey_panel.copy()
-        df.loc[df["cohort"] == 3, "weight"] = 0.0
+        # Zero out ONE treated cell's weights. Deliberately NOT the whole cohort:
+        # that would leave cohort 3 with no supported reference period, and
+        # exclusion under a survey design is now refused outright (see
+        # test_survey_plus_unidentified_cohort_is_refused). Cohort 3 keeps its
+        # t=1,2 pre-periods, so this still exercises what the test is for --
+        # a zero-weight TREATED CELL inside an otherwise identified design.
+        df.loc[(df["cohort"] == 3) & (df["time"] == 5), "weight"] = 0.0
         sd = SurveyDesign(weights="weight", strata="stratum", psu="unit")
         r = WooldridgeDiD(method="logit").fit(
             df,
@@ -2011,15 +2022,39 @@ class TestWooldridgeVcovType:
         n_units, n_periods = 20, 8
         units = np.repeat(np.arange(n_units), n_periods)
         periods = np.tile(np.arange(1, n_periods + 1), n_units)
-        cohorts = rng.choice([3, 5, 7], size=n_units)
+        # Rank deficiency is induced by a DUPLICATED COVARIATE, not by dropping
+        # treatment cells. The panel keeps a never-treated group so every
+        # ATT(g, t) stays identified: a lost treatment cell now fails closed
+        # (codex R8 P0), and it always meant the survivors were relabeled
+        # contrasts -- which is not what this test is about. The subject here is
+        # the coef_offset / dropped-column indexing in the bootstrap closure,
+        # and a collinear covariate exercises exactly that on a design whose
+        # estimands are sound.
+        cohorts = rng.choice([0, 3, 5, 7], size=n_units)
         cohort_per_obs = cohorts[units]
-        tau = np.where(periods >= cohort_per_obs, 0.5 + 0.2 * (periods - cohort_per_obs), 0.0)
+        treated = (cohort_per_obs > 0) & (periods >= cohort_per_obs)
+        tau = np.where(treated, 0.5 + 0.2 * (periods - cohort_per_obs), 0.0)
         y = 1.0 + 0.1 * periods + tau + 0.1 * rng.normal(size=len(units))
-        df = pd.DataFrame({"unit": units, "time": periods, "cohort": cohort_per_obs, "y": y})
+        xc = rng.normal(size=len(units))
+        df = pd.DataFrame(
+            {
+                "unit": units,
+                "time": periods,
+                "cohort": cohort_per_obs,
+                "y": y,
+                "xc": xc,
+                "xc_dup": xc,  # exactly collinear -> one covariate column dropped
+            }
+        )
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", UserWarning)
             res = WooldridgeDiD(method="ols", vcov_type="hc2_bm", n_bootstrap=50, seed=0).fit(
-                df, outcome="y", unit="unit", time="time", cohort="cohort"
+                df,
+                outcome="y",
+                unit="unit",
+                time="time",
+                cohort="cohort",
+                exovar=["xc", "xc_dup"],
             )
         assert np.isfinite(res.overall_att)
         assert np.isfinite(res.overall_se)
@@ -2232,28 +2267,47 @@ class TestWooldridgeVcovType:
             assert np.isfinite(eff["conf_int"][0])
             assert np.isfinite(eff["conf_int"][1])
 
-    def test_hc2_bm_handles_rank_deficient_all_eventually_treated(self):
-        """All-eventually-treated panel with not_yet_treated control: late
-        cohorts have no valid post-treatment comparison and get dropped by
-        solve_ols's rank-deficiency handling. hc2_bm must compute BM DOF
-        on the REDUCED design (kept-column subspace) — operating on the
-        unreduced full-dummy bread would LinAlgError and fail-close every
-        inference field to NaN (codex R3 P1). Per-cell + aggregate
-        inference on identified cells must remain finite."""
+    def test_hc2_bm_handles_rank_deficient_reduced_design(self):
+        """hc2_bm must compute BM DOF on the REDUCED design (kept-column
+        subspace) — operating on the unreduced full-dummy bread would
+        LinAlgError and fail-close every inference field to NaN (codex R3 P1).
+        Per-cell + aggregate inference on identified cells must remain finite.
+
+        Rank deficiency comes from a DUPLICATED COVARIATE rather than from
+        dropping late-cohort treatment cells. The original all-eventually-treated
+        panel produced finite-but-WRONG ATTs (the survivors were relabeled
+        cohort contrasts) and now fails closed (codex R8 P0); a collinear
+        covariate reaches the same reduced-design code path on a panel whose
+        estimands are sound."""
         rng = np.random.default_rng(42)
         n_units, n_periods = 20, 8
         units = np.repeat(np.arange(n_units), n_periods)
         periods = np.tile(np.arange(1, n_periods + 1), n_units)
-        cohorts = rng.choice([3, 5, 7], size=n_units)
+        cohorts = rng.choice([0, 3, 5, 7], size=n_units)
         cohort_per_obs = cohorts[units]
-        tau = np.where(periods >= cohort_per_obs, 0.5 + 0.2 * (periods - cohort_per_obs), 0.0)
+        treated = (cohort_per_obs > 0) & (periods >= cohort_per_obs)
+        tau = np.where(treated, 0.5 + 0.2 * (periods - cohort_per_obs), 0.0)
         y = 1.0 + 0.1 * periods + tau + 0.1 * rng.normal(size=len(units))
-        df = pd.DataFrame({"unit": units, "time": periods, "cohort": cohort_per_obs, "y": y})
-        # Expect a rank-deficient warning from solve_ols (late-cohort drop).
+        xc = rng.normal(size=len(units))
+        df = pd.DataFrame(
+            {
+                "unit": units,
+                "time": periods,
+                "cohort": cohort_per_obs,
+                "y": y,
+                "xc": xc,
+                "xc_dup": xc,
+            }
+        )
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", UserWarning)
             res = WooldridgeDiD(method="ols", vcov_type="hc2_bm").fit(
-                df, outcome="y", unit="unit", time="time", cohort="cohort"
+                df,
+                outcome="y",
+                unit="unit",
+                time="time",
+                cohort="cohort",
+                exovar=["xc", "xc_dup"],
             )
         # Per-cell inference: all identified cells finite (att + se + p +
         # CI). solve_ols already excluded the dropped cells from
@@ -2525,3 +2579,1138 @@ class TestAbsorbedCovariateSnap:
             )
         assert np.isfinite(res.overall_att)
         assert np.isfinite(res.overall_se)
+
+
+class TestReferencePeriodNormalization:
+    """Issue #724 and the edge cases the reference-period fix introduced.
+
+    The ETWFE design omits the ``g-1`` cell as the reference (Wooldridge 2025,
+    Eq. 6.1/6.4). The library previously emitted it and left generic QR rank
+    detection to drop something arbitrary, which silently removed genuine
+    post-treatment effects. Cross-implementation parity against Stata
+    ``jwdid ... never`` lives in ``tests/test_etwfe_cs_stata_parity.py``; this
+    class covers the edges that have no Stata counterpart.
+    """
+
+    @staticmethod
+    def _panel(cohorts, times, n_per=20, seed=0, drop=None):
+        """Balanced panel unless ``drop`` names ``(cohort, time)`` pairs to omit."""
+        rng = np.random.default_rng(seed)
+        drop = set(drop or ())
+        rows = []
+        uid = 0
+        for g in cohorts:
+            for _ in range(n_per):
+                for t in times:
+                    if (g, t) in drop:
+                        continue
+                    treated = g != 0 and t >= g
+                    rows.append(
+                        {
+                            "unit": uid,
+                            "time": t,
+                            "cohort": g,
+                            "x1": rng.normal(),
+                            "y": 0.3 * t + (1.0 if treated else 0.0) + rng.normal(0, 0.2),
+                        }
+                    )
+                uid += 1
+        return pd.DataFrame(rows)
+
+    def test_gapped_cohort_keeps_every_post_cell(self):
+        """A cohort unobserved at the panel-wide latest pre-period.
+
+        A panel-wide reference rule would omit an all-zero column here, leaving
+        the collinearity intact and reproducing #724. The per-cohort rule uses
+        that cohort's own support instead.
+        """
+        df = self._panel([0, 4], [1, 2, 3, 4, 5], drop={(4, 3)})
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            res = WooldridgeDiD(method="ols", control_group="never_treated").fit(
+                df, outcome="y", unit="unit", time="time", cohort="cohort"
+            )
+        post = {k for k in res.group_time_effects if k[1] >= k[0]}
+        assert post == {(4, 4), (4, 5)}
+        assert [w for w in caught if "Rank-deficient" in str(w.message)] == []
+
+    def test_unobserved_pairs_are_skipped_and_reported(self):
+        """Identically-zero columns are not emitted, and the skip is not silent."""
+        df = self._panel([0, 4], [1, 2, 3, 4, 5], drop={(4, 3)})
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            WooldridgeDiD(method="ols", control_group="never_treated").fit(
+                df, outcome="y", unit="unit", time="time", cohort="cohort"
+            )
+        skipped = [w for w in caught if "no observations" in str(w.message)]
+        assert len(skipped) == 1
+        assert "(4, 3)" in str(skipped[0].message)
+
+    def test_skip_warning_respects_rank_deficient_action_silent(self):
+        """``silent`` is a documented, supported value; the new notice must not
+        become an unsuppressible replacement for the rank warning it removes."""
+        df = self._panel([0, 4], [1, 2, 3, 4, 5], drop={(4, 3)})
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            WooldridgeDiD(
+                method="ols", control_group="never_treated", rank_deficient_action="silent"
+            ).fit(df, outcome="y", unit="unit", time="time", cohort="cohort")
+        assert [w for w in caught if "no observations" in str(w.message)] == []
+
+    def test_cohort_without_a_reference_is_excluded_not_silently_rebaselined(self):
+        """The P0 guard.
+
+        A cohort with no period before ``g - anticipation`` is unidentified.
+        Dropping only its COLUMNS leaves its rows in the omitted baseline, so its
+        treatment effect loads onto the time FE and biases the cohorts that ARE
+        identified. The estimates must therefore match a fit where that cohort
+        was removed by hand -- asserting only the warning would not catch this.
+        """
+        df = self._panel([0, 3, 5], [1, 2, 3, 4, 5, 6])
+        kw = dict(outcome="y", unit="unit", time="time", cohort="cohort")
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            auto = WooldridgeDiD(method="ols", control_group="never_treated", anticipation=2).fit(
+                df, **kw
+            )
+        excluded = [w for w in caught if "unidentified under the ETWFE" in str(w.message)]
+        assert len(excluded) == 1, "the excluded cohort must be named"
+        assert "3" in str(excluded[0].message)
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            manual = WooldridgeDiD(method="ols", control_group="never_treated", anticipation=2).fit(
+                df[df["cohort"] != 3].copy(), **kw
+            )
+
+        shared = set(auto.group_time_effects) & set(manual.group_time_effects)
+        assert shared, "no cells survived to compare"
+        for key in shared:
+            np.testing.assert_allclose(
+                auto.group_time_effects[key]["att"],
+                manual.group_time_effects[key]["att"],
+                rtol=0,
+                atol=1e-12,
+                err_msg=f"ATT{key} differs from an explicit-exclusion fit -- "
+                "the excluded cohort's rows are still in the baseline",
+            )
+
+    def test_excluding_every_comparison_fails_closed(self):
+        """Exclusion can cascade. On an all-treated ``{1, 3}`` panel, removing
+        cohort 1 leaves cohort 3 alone with its cells collinear with the time FE
+        -- which previously produced an all-NaN fit and no error at all.
+        """
+        df = self._panel([1, 3], [1, 2, 3, 4])
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            with pytest.raises(ValueError, match="no comparison observations remain"):
+                WooldridgeDiD(method="ols", control_group="not_yet_treated").fit(
+                    df, outcome="y", unit="unit", time="time", cohort="cohort"
+                )
+
+    def test_no_post_treatment_cell_fails_closed(self):
+        """A cohort observed only BEFORE its own treatment start has no
+        estimable ATT, and the fit must say so rather than return NaN.
+
+        This is the case the old ``X_int.shape[1] == 0`` guard could not see.
+        On ``never_treated`` + OLS, ``include_pre`` also emits placebo
+        (``t < g``) columns, so the design is NON-empty even when not one
+        post-treatment cell survives -- the fit returned placebo coefficients
+        with ``overall_att = NaN``. The first half of this test pins that
+        mechanism (columns exist, no post cell among them) so the guard cannot
+        be weakened back to a column count without failing here.
+        """
+        df = self._panel([0, 4], [1, 2, 3, 4], drop=[(4, 3), (4, 4)])
+
+        X_int, _, gt_keys, _ = _build_interaction_matrix(
+            df, cohort="cohort", time="time", anticipation=0, control_group="never_treated"
+        )
+        assert X_int.shape[1] > 0, "design is empty -- test no longer exercises the guard"
+        assert [(g, t) for g, t in gt_keys if t >= g] == []
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            with pytest.raises(ValueError, match="No estimable post-treatment cells"):
+                WooldridgeDiD(method="ols", control_group="never_treated").fit(
+                    df, outcome="y", unit="unit", time="time", cohort="cohort"
+                )
+
+    def test_not_yet_treated_is_also_fixed(self):
+        """#724 was NOT confined to never_treated: any cohort whose cell block
+        spans its own cohort dummy hits it, which anticipation makes reachable
+        on the default path."""
+        df = self._panel([0, 3, 5], [1, 2, 3, 4, 5, 6])
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            res = WooldridgeDiD(method="ols", control_group="not_yet_treated").fit(
+                df, outcome="y", unit="unit", time="time", cohort="cohort"
+            )
+        assert [w for w in caught if "Rank-deficient" in str(w.message)] == []
+        assert {k for k in res.group_time_effects if k[1] >= k[0]}
+
+    @pytest.mark.parametrize("control_group", ["never_treated", "not_yet_treated"])
+    def test_covariate_path_keeps_every_cell(self, control_group):
+        """The cell x covariate block is built from the interaction columns, so
+        the reference omission propagates into it; nothing may be rank-dropped."""
+        df = self._panel([0, 3, 5], [1, 2, 3, 4, 5, 6])
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            res = WooldridgeDiD(method="ols", control_group=control_group).fit(
+                df, outcome="y", unit="unit", time="time", cohort="cohort", exovar=["x1"]
+            )
+        assert [w for w in caught if "Rank-deficient" in str(w.message)] == []
+        assert {k for k in res.group_time_effects if k[1] >= k[0]}
+
+    @pytest.mark.parametrize("method", ["logit", "poisson"])
+    def test_nonlinear_methods_unaffected(self, method):
+        """The builder runs before method dispatch, so logit/Poisson see the
+        same changes. They restrict to post-treatment cells, so rule 1 is
+        unreachable there -- this pins that they still fit cleanly."""
+        df = self._panel([0, 3, 5], [1, 2, 3, 4, 5, 6])
+        df["y"] = (df["y"] > df["y"].median()).astype(int) if method == "logit" else df["y"].abs()
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            res = WooldridgeDiD(method=method, control_group="never_treated").fit(
+                df, outcome="y", unit="unit", time="time", cohort="cohort"
+            )
+        assert {k for k in res.group_time_effects if k[1] >= k[0]}
+
+    def test_zero_weight_reference_cell_does_not_lose_a_post_cell(self):
+        """Survey weights scale the design by ``sqrt(w)``, so a reference cell
+        whose rows all carry zero ``pweight`` is absent from the EFFECTIVE
+        regression even though its rows are in the frame. Choosing the reference
+        from raw presence therefore omitted nothing, the cohort's block again
+        spanned the absorbed cohort dummy, and QR dropped a real post cell --
+        returning a finite `overall_att` from an incomplete cell set, silently
+        under the supported ``rank_deficient_action="silent"``.
+        """
+        from diff_diff import SurveyDesign
+
+        rng = np.random.default_rng(1)
+        rows = []
+        uid = 0
+        for g in (0, 4):
+            for _ in range(25):
+                for t in range(1, 6):
+                    rows.append(
+                        {
+                            "unit": uid,
+                            "time": t,
+                            "cohort": g,
+                            # cohort 4's natural reference (4, 3) carries no weight
+                            "w": 0.0 if (g == 4 and t == 3) else 1.0,
+                            "y": 0.3 * t + (1.0 if (g and t >= g) else 0.0) + rng.normal(0, 0.2),
+                        }
+                    )
+                uid += 1
+        df = pd.DataFrame(rows)
+
+        for action in ("warn", "silent"):
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always")
+                res = WooldridgeDiD(
+                    method="ols", control_group="never_treated", rank_deficient_action=action
+                ).fit(
+                    df,
+                    outcome="y",
+                    unit="unit",
+                    time="time",
+                    cohort="cohort",
+                    survey_design=SurveyDesign(weights="w"),
+                )
+            post = {k for k in res.group_time_effects if k[1] >= k[0]}
+            assert post == {(4, 4), (4, 5)}, f"{action}: lost a post cell, got {sorted(post)}"
+            assert [w for w in caught if "Rank-deficient" in str(w.message)] == []
+
+    def test_excluded_cohort_leaves_no_stale_derived_state(self):
+        """``groups`` is read by covariate construction, fit dispatch, results
+        metadata and aggregation counts. Left stale after an exclusion it
+        reports a phantom zero-member cohort and emits an all-zero
+        ``D{g}_x_{cov}`` column, which fails outright under
+        ``rank_deficient_action="error"``.
+        """
+        rng = np.random.default_rng(0)
+        rows = []
+        uid = 0
+        for g in (0, 3, 5):
+            for _ in range(20):
+                for t in range(1, 7):
+                    rows.append(
+                        {
+                            "unit": uid,
+                            "time": t,
+                            "cohort": g,
+                            "x1": rng.normal(),
+                            "y": 0.3 * t + (1.0 if (g and t >= g) else 0.0) + rng.normal(0, 0.2),
+                        }
+                    )
+                uid += 1
+        df = pd.DataFrame(rows)
+        kw = dict(outcome="y", unit="unit", time="time", cohort="cohort")
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            res = WooldridgeDiD(method="ols", control_group="never_treated", anticipation=2).fit(
+                df, **kw
+            )
+        assert 3 not in res.groups, "excluded cohort still advertised in results.groups"
+        assert set(res.groups) == {k[0] for k in res.group_time_effects}
+        counts = getattr(res, "_n_g_per_cohort", {})
+        assert 3 not in counts, f"phantom zero-member cohort in {counts}"
+
+        # The strict path must fit rather than trip on an artificial column.
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            strict = WooldridgeDiD(
+                method="ols",
+                control_group="never_treated",
+                anticipation=2,
+                rank_deficient_action="error",
+            ).fit(df, exovar=["x1"], **kw)
+        assert {k for k in strict.group_time_effects if k[1] >= k[0]}
+
+
+class TestOverallAttFailsClosed:
+    """A successful fit reports a finite overall ATT, or raises saying why not.
+
+    Three distinct paths used to return a result object with
+    ``overall_att = overall_se = NaN`` and no error, which reads as a completed
+    estimate. Two of them (rank reduction, the anticipation window) are only
+    visible AFTER the solve, so the build-time cell guard cannot see them --
+    hence the separate last-line-of-defence check. Surfaced by codex R2 (M1);
+    both post-solve cases were verified PRE-EXISTING against the pre-PR base
+    commit before being fixed here (ledger row M-124).
+    """
+
+    @staticmethod
+    def _unbalanced(support, n_per=15, seed=0):
+        """``{cohort: [observed times]}`` -> panel. ``0`` is never-treated."""
+        rng = np.random.default_rng(seed)
+        rows = []
+        uid = 0
+        for g, times in support.items():
+            for _ in range(n_per):
+                for t in times:
+                    rows.append(
+                        {"unit": uid, "time": t, "cohort": g, "y": 0.3 * t + rng.normal(0, 0.2)}
+                    )
+                uid += 1
+        return pd.DataFrame(rows)
+
+    def test_all_post_columns_rank_dropped_fails_closed(self):
+        """One treated cohort, no never-treated group: every post cell equals a
+        time indicator, so QR drops them all and nothing is left to average.
+
+        The upstream ``has_untreated`` guard passes here because it counts this
+        cohort's OWN pre-treatment rows as comparison observations -- which is
+        precisely why the check has to also run after the solve.
+        """
+        df = self._unbalanced({3: [1, 2, 3, 4]})
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            with pytest.raises(ValueError, match="not identified and were removed"):
+                WooldridgeDiD(method="ols", control_group="not_yet_treated").fit(
+                    df, outcome="y", unit="unit", time="time", cohort="cohort"
+                )
+
+    def test_two_cohorts_without_same_period_controls_fail_closed(self):
+        """Cohort COUNT is not a proxy for comparison support.
+
+        Two treated cohorts survive identification here -- so any guard keyed on
+        "fewer than 2 cohorts" passes -- yet neither post cell has a usable
+        same-period comparison and both are dropped as collinear. Regression
+        gate for exactly that substitution.
+        """
+        df = self._unbalanced({3: [1, 2, 3], 5: [3, 4, 5]})
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            with pytest.raises(ValueError, match="not identified and were removed"):
+                WooldridgeDiD(method="ols", control_group="not_yet_treated").fit(
+                    df, outcome="y", unit="unit", time="time", cohort="cohort"
+                )
+
+    def test_only_anticipation_window_cells_fails_closed(self):
+        """Cells inside the anticipation window are ESTIMATED (t >= g - k) but
+        excluded from the overall ATT (t >= g), so a cohort never observed once
+        actually treated yields cells and a NaN headline.
+
+        This is the gap the build-time guard cannot close: its notion of a
+        treatment cell is deliberately the wider one, so the two checks are not
+        redundant. The first half pins that the fit really does produce cells,
+        so the test cannot pass for the trivial reason of an empty design.
+        """
+        df = self._unbalanced({0: [1, 2, 3, 4, 5, 6], 5: [1, 2, 3, 4]})
+
+        _, _, gt_keys, _ = _build_interaction_matrix(
+            df, cohort="cohort", time="time", anticipation=2, control_group="never_treated"
+        )
+        assert [(g, t) for g, t in gt_keys if t >= g - 2] != [], "no treatment cell was emitted"
+        assert [(g, t) for g, t in gt_keys if t >= g] == []
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            with pytest.raises(ValueError, match="No cohort-time cell contributes"):
+                WooldridgeDiD(method="ols", control_group="never_treated", anticipation=2).fit(
+                    df, outcome="y", unit="unit", time="time", cohort="cohort"
+                )
+
+    def test_valid_fit_is_unaffected(self):
+        """The guard must not fire on an ordinary identified design."""
+        df = self._unbalanced({0: [1, 2, 3, 4], 3: [1, 2, 3, 4]})
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            res = WooldridgeDiD(method="ols", control_group="never_treated").fit(
+                df, outcome="y", unit="unit", time="time", cohort="cohort"
+            )
+        assert np.isfinite(res.overall_att)
+        assert np.isfinite(res.overall_se)
+
+
+class TestInvalidWeightsCannotHideBehindExclusion:
+    """Invalid survey weights must be REJECTED, never silently reshape the sample.
+
+    Cell support is decided from RAW weights (a zero-weight cell is absent from
+    the effective regression), and an unsupported reference period excludes the
+    cohort's rows. So an invalid weight confined to those rows used to be
+    consumed by the support logic and then never reach ``SurveyDesign.resolve``:
+    the fit dropped the cohort, returned a confident finite ``overall_att``, and
+    warned that the cohort "has no pre-treatment period" -- when in truth its
+    pre-periods were merely poisoned. Measured before the fix: all three invalid
+    values below produced overall_att = 0.021416714008590323.
+
+    Surfaced by codex R3 (M1); introduced by this PR's weight-aware support, so
+    it is gated here rather than tracked. `validate_raw_weights` is shared with
+    survey.py so both paths raise identically.
+    """
+
+    @staticmethod
+    def _poisoned(bad, cohorts=(0, 3, 4), poisoned_cohort=4, n_per=12, seed=0):
+        """Panel whose bad weights sit ONLY in ``poisoned_cohort``'s pre-periods."""
+        rng = np.random.default_rng(seed)
+        rows = []
+        uid = 0
+        for g in cohorts:
+            for _ in range(n_per):
+                for t in (1, 2, 3, 4):
+                    w = bad if (g == poisoned_cohort and t < poisoned_cohort) else 1.0
+                    rows.append(
+                        {
+                            "unit": uid,
+                            "time": t,
+                            "cohort": g,
+                            "w": w,
+                            "y": float(rng.integers(0, 2)),
+                        }
+                    )
+                uid += 1
+        return pd.DataFrame(rows)
+
+    @pytest.mark.parametrize(
+        "bad,message",
+        [
+            (np.nan, "Weights contain NaN values"),
+            (-1.0, "Weights must be non-negative"),
+            (-np.inf, "Weights contain Inf values"),
+            (np.inf, "Weights contain Inf values"),
+        ],
+    )
+    @pytest.mark.parametrize("control_group", ["never_treated", "not_yet_treated"])
+    @pytest.mark.parametrize("method", ["ols", "logit", "poisson"])
+    def test_invalid_weights_raise_instead_of_excluding_the_cohort(
+        self, bad, message, control_group, method
+    ):
+        from diff_diff.survey import SurveyDesign
+
+        df = self._poisoned(bad)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            with pytest.raises(ValueError, match=message):
+                WooldridgeDiD(method=method, control_group=control_group).fit(
+                    df,
+                    outcome="y",
+                    unit="unit",
+                    time="time",
+                    cohort="cohort",
+                    survey_design=SurveyDesign(weights="w"),
+                )
+
+    def test_rejection_precedes_any_exclusion_warning(self):
+        """The error must arrive INSTEAD of the misleading exclusion warning,
+        not after it -- a user who sees only the warning would conclude their
+        panel lacks pre-periods and 'fix' the wrong thing."""
+        from diff_diff.survey import SurveyDesign
+
+        df = self._poisoned(np.nan)
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            with pytest.raises(ValueError, match="Weights contain NaN values"):
+                WooldridgeDiD(method="ols", control_group="never_treated").fit(
+                    df,
+                    outcome="y",
+                    unit="unit",
+                    time="time",
+                    cohort="cohort",
+                    survey_design=SurveyDesign(weights="w"),
+                )
+        assert [w for w in caught if "no pre-treatment period" in str(w.message)] == []
+
+    def test_valid_weights_still_fit(self):
+        """The guard must not reject a legitimate weighted design."""
+        from diff_diff.survey import SurveyDesign
+
+        df = self._poisoned(1.0)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            res = WooldridgeDiD(method="ols", control_group="never_treated").fit(
+                df,
+                outcome="y",
+                unit="unit",
+                time="time",
+                cohort="cohort",
+                survey_design=SurveyDesign(weights="w"),
+            )
+        assert np.isfinite(res.overall_att)
+        assert set(res.groups) == {3, 4}, "no cohort should be excluded on valid weights"
+
+    def test_zero_weights_still_shape_support_without_excluding(self):
+        """Zero is VALID and keeps its support semantics -- the guard must not
+        over-reject.
+
+        Zeroing the LATEST pre-period moves the reference to the next supported
+        one rather than eliminating it, so the cohort stays identified and the
+        fit proceeds. This is the weight-aware support this PR added, exercised
+        without tripping the survey-exclusion refusal below.
+        """
+        from diff_diff.survey import SurveyDesign
+
+        rng = np.random.default_rng(0)
+        rows = []
+        uid = 0
+        for g in (0, 4):
+            for _ in range(12):
+                for t in (1, 2, 3, 4):
+                    # cohort 4's latest pre-period (t=3) carries zero weight ->
+                    # reference falls back to t=2, cohort remains identified.
+                    w = 0.0 if (g == 4 and t == 3) else 1.0
+                    rows.append(
+                        {
+                            "unit": uid,
+                            "time": t,
+                            "cohort": g,
+                            "w": w,
+                            "y": 0.3 * t + rng.normal(0, 0.2),
+                        }
+                    )
+                uid += 1
+        df = pd.DataFrame(rows)
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            res = WooldridgeDiD(method="ols", control_group="never_treated").fit(
+                df,
+                outcome="y",
+                unit="unit",
+                time="time",
+                cohort="cohort",
+                survey_design=SurveyDesign(weights="w"),
+            )
+        assert np.isfinite(res.overall_att)
+        assert (4, 3) not in res.group_time_effects, "zero-weight cell should be unsupported"
+        assert [w for w in caught if "no pre-treatment period" in str(w.message)] == []
+
+    @pytest.mark.parametrize("method", ["ols", "logit", "poisson"])
+    def test_survey_plus_unidentified_cohort_is_refused(self, method):
+        """Excluding a cohort under a survey design is DOMAIN estimation, and
+        this path does not implement it -- so it is refused, not approximated.
+
+        Deleting the rows also deletes their PSUs/strata from the TSL meat and
+        from ``df_survey = n_PSU - n_strata``. Measured before this refusal on a
+        two-stratum panel: the fit returned a finite SE with ``df_survey = 14``
+        against a full-design 22, i.e. variance from a design the user never
+        specified. Applies to ALL THREE methods -- the earlier zero-weight guard
+        caught only zero-weight units, and every unit here carries POSITIVE
+        weight. Codex R5.
+        """
+        from diff_diff.survey import SurveyDesign
+
+        rng = np.random.default_rng(3)
+        rows = []
+        uid = 0
+        # cohort 4 observed only at t=3,4; with anticipation=1 it needs t < 3.
+        for g, times in ((0, [1, 2, 3, 4]), (3, [1, 2, 3, 4]), (4, [3, 4])):
+            for k in range(8):
+                stratum = f"s{k % 2}"
+                for t in times:
+                    rows.append(
+                        {
+                            "unit": uid,
+                            "time": t,
+                            "cohort": g,
+                            "stratum": stratum,
+                            "psu": f"{stratum}_g{g}_p{k}",
+                            "w": 1.0 + 0.1 * (uid % 3),
+                            "y": float(rng.integers(0, 2)),
+                        }
+                    )
+                uid += 1
+        df = pd.DataFrame(rows)
+        assert (df.groupby("unit")["w"].sum() > 0).all(), "fixture must have no zero-weight unit"
+
+        sd = SurveyDesign(weights="w", strata="stratum", psu="psu")
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            with pytest.raises(NotImplementedError, match="not supported"):
+                WooldridgeDiD(method=method, control_group="never_treated", anticipation=1).fit(
+                    df,
+                    outcome="y",
+                    unit="unit",
+                    time="time",
+                    cohort="cohort",
+                    survey_design=sd,
+                )
+
+    @pytest.mark.parametrize(
+        "field,mutate,message",
+        [
+            (
+                "psu",
+                lambda d: d.assign(psu=np.where(d["cohort"] == 4, None, d["psu"])),
+                "PSU column",
+            ),
+            (
+                "strata",
+                lambda d: d.assign(stratum=np.where(d["cohort"] == 4, None, d["stratum"])),
+                "[Ss]trat",
+            ),
+        ],
+    )
+    def test_invalid_survey_structure_cannot_hide_in_an_excluded_cohort(
+        self, field, mutate, message
+    ):
+        """Structural survey metadata is validated on the PRE-exclusion sample.
+
+        Weight validation alone was not enough: missing strata/PSU values, PSU
+        reuse and invalid FPC were all still checked inside
+        ``SurveyDesign.resolve()``, which ran after the rows were deleted. So
+        invalid metadata confined to the excluded cohort vanished and the fit
+        returned finite inference. Resolving the whole design up front fixes the
+        class, not the instance -- and preserves the SPECIFIC error rather than
+        a generic refusal. Codex R5.
+        """
+        from diff_diff.survey import SurveyDesign
+
+        rng = np.random.default_rng(3)
+        rows = []
+        uid = 0
+        for g, times in ((0, [1, 2, 3, 4]), (3, [1, 2, 3, 4]), (4, [3, 4])):
+            for k in range(8):
+                stratum = f"s{k % 2}"
+                for t in times:
+                    rows.append(
+                        {
+                            "unit": uid,
+                            "time": t,
+                            "cohort": g,
+                            "stratum": stratum,
+                            "psu": f"{stratum}_g{g}_p{k}",
+                            "w": 1.0,
+                            "y": 0.3 * t + rng.normal(0, 0.2),
+                        }
+                    )
+                uid += 1
+        df = mutate(pd.DataFrame(rows))
+
+        sd = SurveyDesign(weights="w", strata="stratum", psu="psu")
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            with pytest.raises(ValueError, match=message):
+                WooldridgeDiD(method="ols", control_group="never_treated", anticipation=1).fit(
+                    df,
+                    outcome="y",
+                    unit="unit",
+                    time="time",
+                    cohort="cohort",
+                    survey_design=sd,
+                )
+
+    @pytest.mark.parametrize("control_group", ["never_treated", "not_yet_treated"])
+    def test_fractional_fweight_is_rejected_before_exclusion(self, control_group):
+        """Every documented weight-TYPE rule must also run before exclusion.
+
+        `fweight` must be a non-negative integer. That check originally lived
+        only in ``SurveyDesign.resolve()``, i.e. AFTER support-based exclusion --
+        so a cohort whose reference periods carry zero weight (excluded) and
+        whose remaining rows carry a fractional fweight slipped through and the
+        fit returned finite estimates on the reduced sample. Codex R4.
+        """
+        from diff_diff.survey import SurveyDesign
+
+        rng = np.random.default_rng(0)
+        rows = []
+        uid = 0
+        for g in (0, 3, 4):
+            for _ in range(12):
+                for t in (1, 2, 3, 4):
+                    # cohort 4: zero-weight pre-periods (kills its reference, so
+                    # exclusion would fire) + a FRACTIONAL fweight after.
+                    w = (0.0 if t < 4 else 0.5) if g == 4 else 2.0
+                    rows.append(
+                        {
+                            "unit": uid,
+                            "time": t,
+                            "cohort": g,
+                            "w": w,
+                            "y": 0.3 * t + rng.normal(0, 0.2),
+                        }
+                    )
+                uid += 1
+        df = pd.DataFrame(rows)
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            with pytest.raises(ValueError, match="must be non-negative integers"):
+                WooldridgeDiD(method="ols", control_group=control_group).fit(
+                    df,
+                    outcome="y",
+                    unit="unit",
+                    time="time",
+                    cohort="cohort",
+                    survey_design=SurveyDesign(weights="w", weight_type="fweight"),
+                )
+        assert [w for w in caught if "no pre-treatment period" in str(w.message)] == []
+
+    def test_zero_weight_units_cannot_be_deleted_by_cohort_exclusion(self):
+        """A zero-weight UNIT must be rejected even when exclusion would remove it.
+
+        The library rejects zero-weight units rather than estimating around them
+        (`test_ols_survey_zero_weight_unit_rejected`); genuine domain estimation
+        is `SurveyDesign.subpopulation`, which this within-transform path does
+        not implement. That guard ran only just before the within-transform, so
+        unidentified-cohort exclusion could delete the offending rows first: a
+        subpopulation-style fit whose zero-weight units made up a whole
+        unidentified cohort silently degraded to naive subsetting and reported a
+        survey df computed from a design missing entire PSUs (measured: 22 ->
+        14, with a misleading "no pre-treatment period" warning) instead of
+        raising. Codex R4.
+        """
+        from diff_diff.survey import SurveyDesign
+
+        rng = np.random.default_rng(7)
+        rows = []
+        uid = 0
+        for g in (0, 3, 4):
+            for k in range(8):
+                stratum = f"s{k % 2}"
+                for t in (1, 2, 3, 4):
+                    rows.append(
+                        {
+                            "unit": uid,
+                            "time": t,
+                            "cohort": g,
+                            "stratum": stratum,
+                            "psu": f"{stratum}_g{g}_p{k}",
+                            "w": 1.0,
+                            "y": 0.3 * t + rng.normal(0, 0.2),
+                        }
+                    )
+                uid += 1
+        df = pd.DataFrame(rows)
+        sd = SurveyDesign(weights="w", strata="stratum", psu="psu")
+        sub_design, sub_data = sd.subpopulation(df, (df["cohort"] != 4).to_numpy())
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            with pytest.raises(ValueError, match="Survey weights sum to zero for unit"):
+                WooldridgeDiD(method="ols", control_group="never_treated").fit(
+                    sub_data,
+                    outcome="y",
+                    unit="unit",
+                    time="time",
+                    cohort="cohort",
+                    survey_design=sub_design,
+                )
+        assert [w for w in caught if "no pre-treatment period" in str(w.message)] == []
+
+
+class TestRankDeficientActionHonoredOnSkippedCells:
+    """`rank_deficient_action` must mean the same thing after the skip rewrite.
+
+    Pre-3.9, an unobserved (g, t) reached the design as an identically-zero
+    column and QR dropped it, so ``"error"`` FAILED CLOSED. This branch skips
+    those cells earlier -- better behavior, but the first version gated only on
+    ``!= "silent"``, collapsing ``"warn"`` and ``"error"`` into a warning and
+    silently downgrading a caller's explicit fail-closed request. Measured on a
+    cohort-4-gapped panel: base RAISED under ``"error"``; the skip returned
+    att=0.009034 with only a warning. Codex R6.
+    """
+
+    @staticmethod
+    def _gapped():
+        rng = np.random.default_rng(0)
+        rows = []
+        uid = 0
+        for g, times in ((0, [1, 2, 3, 4]), (4, [1, 2, 4])):  # cohort 4 unobserved at t=3
+            for _ in range(12):
+                for t in times:
+                    rows.append(
+                        {"unit": uid, "time": t, "cohort": g, "y": 0.3 * t + rng.normal(0, 0.2)}
+                    )
+                uid += 1
+        return pd.DataFrame(rows)
+
+    def test_error_raises_naming_the_skipped_pair(self):
+        with pytest.raises(ValueError, match=r"Skipped 1 cohort-time cell\(s\).*\(4, 3\)"):
+            WooldridgeDiD(
+                method="ols", control_group="never_treated", rank_deficient_action="error"
+            ).fit(self._gapped(), outcome="y", unit="unit", time="time", cohort="cohort")
+
+    def test_warn_still_fits_and_warns(self):
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            res = WooldridgeDiD(
+                method="ols", control_group="never_treated", rank_deficient_action="warn"
+            ).fit(self._gapped(), outcome="y", unit="unit", time="time", cohort="cohort")
+        assert np.isfinite(res.overall_att)
+        assert [w for w in caught if "Skipped 1 cohort-time" in str(w.message)] != []
+
+    def test_silent_fits_without_warning(self):
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            res = WooldridgeDiD(
+                method="ols", control_group="never_treated", rank_deficient_action="silent"
+            ).fit(self._gapped(), outcome="y", unit="unit", time="time", cohort="cohort")
+        assert np.isfinite(res.overall_att)
+        assert [w for w in caught if "Skipped" in str(w.message)] == []
+
+    @staticmethod
+    def _gapped_post():
+        """Cohort 4 unobserved at t=5, a POST-treatment cell.
+
+        ``_gapped()``'s hole is at t=3, which is PRE-treatment for cohort 4 and
+        so is only ever emitted on the ``never_treated`` + OLS path
+        (``include_pre``). The nonlinear paths emit post cells only, so the gate
+        has to be exercised there with a gapped POST cell or the test passes
+        vacuously.
+        """
+        rng = np.random.default_rng(0)
+        rows = []
+        uid = 0
+        for g, times in ((0, [1, 2, 3, 4, 5]), (4, [1, 2, 4])):
+            for _ in range(12):
+                for t in times:
+                    rows.append(
+                        {"unit": uid, "time": t, "cohort": g, "y": 0.3 * t + rng.normal(0, 0.2)}
+                    )
+                uid += 1
+        return pd.DataFrame(rows)
+
+    @pytest.mark.parametrize("method", ["logit", "poisson"])
+    def test_error_is_honored_on_the_nonlinear_paths_too(self, method):
+        """The builder runs before method dispatch, so all three share the gate."""
+        df = self._gapped_post()
+        df["y"] = (df["y"] > df["y"].median()).astype(float)
+        with pytest.raises(ValueError, match=r"Skipped 1 cohort-time cell\(s\).*\(4, 5\)"):
+            WooldridgeDiD(
+                method=method, control_group="never_treated", rank_deficient_action="error"
+            ).fit(df, outcome="y", unit="unit", time="time", cohort="cohort")
+
+
+class TestWithinCohortSupportConnectivity:
+    """Per-period support does not imply identification -- connectivity does.
+
+    A cohort can have positive-weight observations in every period while its
+    UNITS split into groups with disjoint observation windows. Identification
+    runs through the unit fixed effects, so a group whose periods are all
+    treatment cells contributes columns that sum to its own unit indicators:
+    rank-deficient, and QR drops one -- possibly a genuine post-treatment
+    effect, leaving `overall_att` an average over an incomplete cell set. That
+    is issue #724's failure mode reached through unit support instead of the
+    reference period. Codex R7.
+    """
+
+    @staticmethod
+    def _split_support():
+        """Cohort 4: half the units observe {2,4}, the other half {1,5}.
+
+        Aggregate support covers 1,2,4,5 so ref=2 and cells 1,4,5 are emitted,
+        but {1,5} is a closed component: both its periods are cells.
+        """
+        rng = np.random.default_rng(11)
+        rows = []
+        uid = 0
+        for _ in range(15):
+            for t in (1, 2, 3, 4, 5):
+                rows.append(
+                    {"unit": uid, "time": t, "cohort": 0, "y": 0.3 * t + rng.normal(0, 0.2)}
+                )
+            uid += 1
+        for times in ((2, 4), (1, 5)):
+            for _ in range(10):
+                for t in times:
+                    rows.append(
+                        {"unit": uid, "time": t, "cohort": 4, "y": 0.3 * t + 1 + rng.normal(0, 0.2)}
+                    )
+                uid += 1
+        return pd.DataFrame(rows)
+
+    def test_disconnected_component_fails_closed(self):
+        """Measured before the check: `g4_t5` was dropped by QR and the fit
+        returned overall_att=0.0589 from the single surviving post cell."""
+        with pytest.raises(ValueError, match="observed but NOT identified"):
+            WooldridgeDiD(method="ols", control_group="never_treated").fit(
+                self._split_support(), outcome="y", unit="unit", time="time", cohort="cohort"
+            )
+
+    def test_the_builder_names_the_unidentified_cells(self):
+        """The diagnostic must name the closed component's cells (1 and 5), not
+        the connected ones -- otherwise the error cannot guide a fix."""
+        df = self._split_support()
+        _, _, _, diag = _build_interaction_matrix(
+            df,
+            cohort="cohort",
+            time="time",
+            anticipation=0,
+            control_group="never_treated",
+            method="ols",
+            unit="unit",
+        )
+        assert sorted(t for _, t in diag.disconnected) == [1, 5]
+
+    def test_connected_unbalanced_panel_is_not_flagged(self):
+        """Guards against a false positive that would reject legitimate data:
+        an unbalanced cohort whose units still share a period stays connected,
+        so it must fit normally."""
+        rng = np.random.default_rng(5)
+        rows = []
+        uid = 0
+        for _ in range(15):
+            for t in (1, 2, 3, 4, 5):
+                rows.append(
+                    {"unit": uid, "time": t, "cohort": 0, "y": 0.3 * t + rng.normal(0, 0.2)}
+                )
+            uid += 1
+        # Both subsets observe t=2, so the cohort graph is one component.
+        for times in ((2, 3, 4), (1, 2, 5)):
+            for _ in range(10):
+                for t in times:
+                    rows.append(
+                        {"unit": uid, "time": t, "cohort": 4, "y": 0.3 * t + 1 + rng.normal(0, 0.2)}
+                    )
+                uid += 1
+        df = pd.DataFrame(rows)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            res = WooldridgeDiD(method="ols", control_group="never_treated").fit(
+                df, outcome="y", unit="unit", time="time", cohort="cohort"
+            )
+        assert np.isfinite(res.overall_att)
+        assert (4, 5) in res.group_time_effects
+
+    @pytest.mark.parametrize("method", ["logit", "poisson"])
+    def test_nonlinear_paths_are_not_subject_to_the_unit_fe_condition(self, method):
+        """The connectivity condition is collinearity with ABSORBED UNIT FEs.
+
+        Only the OLS path within-transforms unit fixed effects away.
+        logit/Poisson use explicit cohort + time dummies, so nothing absorbs a
+        component's cell block and the design is full rank. Applying the check
+        there rejected valid fits (codex R9). Same split-support panel the OLS
+        test refuses -- here it must estimate.
+        """
+        rng = np.random.default_rng(3)
+        rows = []
+        uid = 0
+        for _ in range(20):
+            for t in (1, 2, 4, 5):
+                rows.append({"unit": uid, "time": t, "cohort": 0, "y": float(rng.integers(0, 2))})
+            uid += 1
+        # cohort 4's pre-period units are DISJOINT from its post-period units,
+        # so its post-only component has every period emitted.
+        for times in ((1, 2), (4, 5)):
+            for _ in range(10):
+                for t in times:
+                    rows.append(
+                        {"unit": uid, "time": t, "cohort": 4, "y": float(rng.integers(0, 2))}
+                    )
+                uid += 1
+        df = pd.DataFrame(rows)
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            res = WooldridgeDiD(method=method, control_group="never_treated").fit(
+                df, outcome="y", unit="unit", time="time", cohort="cohort"
+            )
+        assert {k for k in res.group_time_effects if k[1] >= k[0]} == {(4, 4), (4, 5)}
+        assert np.isfinite(res.overall_att)
+
+    def test_ols_still_refuses_the_same_panel(self):
+        """The OLS half of the contrast: the same data IS unidentified there,
+        so gating on method must not weaken the OLS guard."""
+        rng = np.random.default_rng(3)
+        rows = []
+        uid = 0
+        for _ in range(20):
+            for t in (1, 2, 4, 5):
+                rows.append(
+                    {"unit": uid, "time": t, "cohort": 0, "y": 0.3 * t + rng.normal(0, 0.2)}
+                )
+            uid += 1
+        for times in ((1, 2), (4, 5)):
+            for _ in range(10):
+                for t in times:
+                    rows.append(
+                        {"unit": uid, "time": t, "cohort": 4, "y": 0.3 * t + rng.normal(0, 0.2)}
+                    )
+                uid += 1
+        with pytest.raises(ValueError, match="observed but NOT identified"):
+            WooldridgeDiD(method="ols", control_group="never_treated").fit(
+                pd.DataFrame(rows), outcome="y", unit="unit", time="time", cohort="cohort"
+            )
+
+
+class TestPartialRankLossFailsClosed:
+    """A finite overall ATT does not mean the reported cell set is complete.
+
+    When rank reduction removes SOME treatment columns, the survivors are
+    re-identified as whatever contrast the reduced design supports and keep
+    their `ATT(g, t)` labels. Codex R8 P0.
+    """
+
+    @staticmethod
+    def _no_comparison_final_period():
+        """Never-treated observed through t=4; cohorts 3 and 4 through t=5.
+
+        At t=5 every observed unit is treated, so `g3_t5 + g4_t5` equals the
+        t=5 indicator and the pair is collinear with the time fixed effect.
+        Effects are deliberately far apart (1.0 vs 3.0) so a relabeled
+        contrast is unmistakable.
+        """
+        rng = np.random.default_rng(4)
+        eff = {3: 1.0, 4: 3.0}
+        rows = []
+        uid = 0
+        for _ in range(20):
+            for t in (1, 2, 3, 4):
+                rows.append(
+                    {"unit": uid, "time": t, "cohort": 0, "y": 0.2 * t + rng.normal(0, 0.05)}
+                )
+            uid += 1
+        for g in (3, 4):
+            for _ in range(20):
+                for t in (1, 2, 3, 4, 5):
+                    y = 0.2 * t + (eff[g] if t >= g else 0.0) + rng.normal(0, 0.05)
+                    rows.append({"unit": uid, "time": t, "cohort": g, "y": y})
+                uid += 1
+        return pd.DataFrame(rows)
+
+    @pytest.mark.parametrize(
+        "action,expected",
+        [
+            ("warn", "not identified and were removed"),
+            ("silent", "not identified and were removed"),
+            # "error" fails EARLIER, inside solve_ols, with its own message
+            # naming the dependent column -- also fail-closed, just a different
+            # path. Pinned explicitly so a future refactor cannot quietly move
+            # this mode onto the softer branch.
+            ("error", "rank-deficient"),
+        ],
+    )
+    def test_partial_cell_loss_raises_for_every_rank_deficient_action(self, action, expected):
+        """Including `"silent"`: that setting controls how rank WARNINGS
+        surface, not whether a mislabeled contrast may be returned as an ATT.
+        Measured before the gate under `"silent"`: ATT(3,5) came back as
+        -1.9393 (true +1.0, wrong SIGN) inside overall_att=+0.7703 (true ~1.8),
+        with no warning of any kind.
+        """
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            with pytest.raises(ValueError, match=expected):
+                WooldridgeDiD(
+                    method="ols", control_group="never_treated", rank_deficient_action=action
+                ).fit(
+                    self._no_comparison_final_period(),
+                    outcome="y",
+                    unit="unit",
+                    time="time",
+                    cohort="cohort",
+                )
+
+    def test_the_error_names_the_lost_cell(self):
+        """A user cannot act on 'something was dropped' -- the message has to
+        say which cell, since the fix is to restrict the panel or add controls
+        for that period."""
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            with pytest.raises(ValueError, match=r"\(4, 5\)|\(3, 5\)"):
+                WooldridgeDiD(method="ols", control_group="never_treated").fit(
+                    self._no_comparison_final_period(),
+                    outcome="y",
+                    unit="unit",
+                    time="time",
+                    cohort="cohort",
+                )
+
+    def test_the_same_panel_fits_once_the_bad_period_is_removed(self):
+        """The gate must not be a blanket refusal: dropping the period that has
+        no comparison group leaves a design that estimates correctly."""
+        df = self._no_comparison_final_period()
+        df = df[df["time"] <= 4]
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            res = WooldridgeDiD(method="ols", control_group="never_treated").fit(
+                df, outcome="y", unit="unit", time="time", cohort="cohort"
+            )
+        assert np.isfinite(res.overall_att)
+        # True ATT(3,3)=ATT(3,4)=1.0, ATT(4,4)=3.0 -- recovered, not contrasts.
+        assert res.group_time_effects[(3, 3)]["att"] == pytest.approx(1.0, abs=0.1)
+        assert res.group_time_effects[(4, 4)]["att"] == pytest.approx(3.0, abs=0.1)
+
+
+class TestControlGroupCellSets:
+    """The two control groups are DIFFERENT specifications, not a tuning knob.
+
+    `never_treated` + OLS is Wooldridge (2025) Eq. 6.1/6.4's lead-and-lag
+    design: it emits pre-treatment cells and omits one per cohort as the
+    reference. The default `not_yet_treated` is the lag-only design: post cells
+    only, so it emits no placebo cells and omits no reference. The REGISTRY note
+    and tutorial previously applied the `g-1` reference claim to the default,
+    which does not exhibit it (codex R9).
+    """
+
+    @staticmethod
+    def _panel():
+        rng = np.random.default_rng(2)
+        rows = []
+        uid = 0
+        for g in (0, 3, 5):
+            for _ in range(20):
+                for t in range(1, 7):
+                    rows.append(
+                        {"unit": uid, "time": t, "cohort": g, "y": 0.3 * t + rng.normal(0, 0.2)}
+                    )
+                uid += 1
+        return pd.DataFrame(rows)
+
+    def test_default_emits_no_pre_cells_and_omits_no_reference(self):
+        df = self._panel()
+        _, _, gt, diag = _build_interaction_matrix(
+            df, cohort="cohort", time="time", anticipation=0, control_group="not_yet_treated"
+        )
+        assert [k for k in gt if k[1] < k[0]] == [], "lag-only design must emit no placebo cells"
+        # A reference is still COMPUTED (it gates unidentified-cohort detection)
+        # but it is never in the emitted set, so nothing is omitted from this design.
+        assert set(diag.references) == {3, 5}
+        for g, ref in diag.references.items():
+            assert (g, ref) not in gt
+
+    def test_never_treated_emits_pre_cells_except_the_reference(self):
+        df = self._panel()
+        _, _, gt, diag = _build_interaction_matrix(
+            df, cohort="cohort", time="time", anticipation=0, control_group="never_treated"
+        )
+        assert [k for k in gt if k[1] < k[0]] != [], "lead-and-lag design must emit placebo cells"
+        for g, ref in diag.references.items():
+            assert ref == g - 1, "balanced panel: the reference is g-1"
+            assert (g, ref) not in gt, "the reference cell must be omitted"
+            emitted = {t for (gg, t) in gt if gg == g}
+            expected = set(range(1, 7)) - {ref}
+            assert emitted == expected, f"cohort {g}: expected all periods but {ref}"

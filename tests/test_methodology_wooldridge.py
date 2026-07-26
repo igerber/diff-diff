@@ -570,11 +570,12 @@ class TestW2025Proposition51ImputationPOLSEquivalence:
         Paper Section 4.4 / Procedure 4.1 establishes that POLS / cohort
         imputation is consistent for ATT identification under either
         never-treated controls OR last-cohort-as-control. The library's
-        OLS + never_treated branch includes ALL (g, t) cells as placebos
-        (wooldridge.py:200) which produces a saturated design that can
-        hit rank-deficient column drops on small panels — the specific
-        ATT values from the drop-affected fit aren't a paper-equivalence
-        property. This test locks only the SURFACE invariant: the
+        OLS + never_treated branch includes the (g, t) placebo cells minus
+        each cohort's reference cell (``_build_interaction_matrix``). It
+        formerly emitted the reference too and hit rank-deficient column
+        drops (issue #724); those are now gone, but the specific ATT values
+        still aren't a paper-equivalence property. This test locks only the
+        SURFACE invariant: the
         never_treated path completes + returns a well-formed Results
         object (no exception, finite overall_att, ≥1 finite treated
         cell). Numerical recovery of ATTs is exercised by
@@ -1485,12 +1486,13 @@ class TestW2025Section8HeterogeneousTrends:
     def test_cohort_trends_true_rejects_never_treated_control_group(self) -> None:
         """CI R9 P1 fix: ``cohort_trends=True`` + ``control_group="never_treated"`` raises.
 
-        The OLS + never_treated branch emits ALL (g, t) cells as
-        treatment-cell dummies (paper W2025 Section 4.4 placebo
-        coverage). For each treated cohort g, the trend column
-        ``dg_i · t`` is fully spanned by the per-cohort sum of those
-        cell dummies, so ``dg_i · t`` is unidentified. The library
-        fail-closes the combination with ``NotImplementedError``.
+        The OLS + never_treated branch emits the (g, t) placebo cells
+        (paper W2025 Section 4.4 placebo coverage) minus each cohort's
+        reference cell. The trend column ``dg_i · t`` is STILL spanned —
+        jointly by the emitted cells and the unit fixed effects, which
+        absorb ``1{cohort=g}`` and recover the omitted reference — so
+        ``dg_i · t`` remains unidentified and the library fail-closes the
+        combination with ``NotImplementedError``.
         """
         rng = np.random.default_rng(_BASE_SEED_SECTION8 + 23)
         panel = _make_heterogeneous_trends_panel(rng, n_per_cohort=80, sigma=0.05)
@@ -1747,8 +1749,8 @@ class TestW2025Section8HeterogeneousTrends:
             "leads."
         )
 
-    def test_cohort_trends_true_all_treated_drops_last_cohort_trend(self) -> None:
-        """CI R4 P1 fix: ``cohort_trends=True`` on all-eventually-treated panel drops last-cohort trend.
+    def test_cohort_trends_true_all_treated_panel_is_refused(self) -> None:
+        """``cohort_trends=True`` on an all-eventually-treated panel is REFUSED.
 
         Paper W2025 Section 5.4: when all units are eventually treated
         and the last cohort serves as control, "all variables in
@@ -1774,33 +1776,24 @@ class TestW2025Section8HeterogeneousTrends:
             3,
             4,
         ], f"DGP precondition: treated cohorts should be [3, 4], got {treated_cohorts}"
-        with warnings.catch_warnings():
-            warnings.filterwarnings("ignore", category=UserWarning)
-            res = WooldridgeDiD(method="ols", cohort_trends=True).fit(
+        # The trend-drop path is currently UNREACHABLE through fit(): on an
+        # all-eventually-treated panel the treatment CELLS at fully-treated
+        # periods are jointly collinear with the time FE, and since codex R8 a
+        # lost cell fails closed rather than returning relabeled contrasts. The
+        # last-cohort trend drop below is the same W2025 Section 5.4
+        # normalization applied to the TREND columns only -- applying it to the
+        # cells is what would make these panels estimable again (TODO.md). Until
+        # then this test pins the refusal, so the trend logic is not silently
+        # deleted while it is untestable end-to-end.
+        with pytest.raises(ValueError, match="not identified and were removed"):
+            WooldridgeDiD(method="ols", cohort_trends=True).fit(
                 full_panel,
                 outcome="y",
                 unit="unit",
                 time="time",
                 cohort="cohort",
             )
-        # Last cohort (g=4) dropped per paper Section 5.4 — only g=3 in dict
-        assert set(res.cohort_trend_coefs.keys()) == {3}, (
-            f"cohort_trend_coefs should drop the last cohort (g=4) on "
-            f"all-treated panels; got keys={set(res.cohort_trend_coefs.keys())}"
-        )
-        assert np.isfinite(
-            res.cohort_trend_coefs[3]
-        ), f"cohort_trend_coefs[3]={res.cohort_trend_coefs[3]} should be finite"
-        # Stable ATT output: at least one treated cell estimated cleanly
-        treated_cells_finite = [
-            res.group_time_effects[k]["att"]
-            for k in res.group_time_effects
-            if k[0] > 0 and k[1] >= k[0] and np.isfinite(res.group_time_effects[k]["att"])
-        ]
-        assert len(treated_cells_finite) >= 1, (
-            "all-treated panel + cohort_trends=True should produce at "
-            "least one finite treated-cell ATT"
-        )
+        return
 
     def test_cohort_trends_true_with_never_treated_keeps_all_cohort_trends(self) -> None:
         """CI R4 P1 fix companion: with never-treated baseline, all G cohorts surface.

@@ -18,9 +18,14 @@
 *!   did_imputation    - Borusyak-Jaravel-Spiess (2024) imputation DiD; the only
 *!                       implementation of the App. A.9 leave-one-out variance
 *!                       (consumed by generate_imputation_loo_golden.do)
+*!   drdid, csdid      - Callaway-Sant'Anna reference implementation
+*!   hdfe, jwdid       - Wooldridge ETWFE reference implementation (hdfe is a
+*!                       jwdid dependency; jwdid errors with "You need to install
+*!                       hdfe from SSC" without it)
+*!                       (both consumed by generate_etwfe_cs_golden.do)
 
 version 19
-foreach p in ftools require reghdfe did_imputation {
+foreach p in ftools require reghdfe did_imputation drdid csdid hdfe jwdid {
     capture which `p'
     if _rc {
         di as txt "Installing `p' from SSC ..."

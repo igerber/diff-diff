@@ -185,6 +185,56 @@ grep -E '^r\([0-9]+\);' generate_imputation_loo_golden.log   # must print nothin
 }
 ```
 
+---
+
+# `jwdid` / `csdid` parity for the ETWFE and Callaway-Sant'Anna ATT(g,t)
+
+`benchmarks/stata/generate_etwfe_cs_golden.do` produces
+`benchmarks/data/etwfe_cs_stata_golden.json`, consumed by
+`tests/test_etwfe_cs_stata_parity.py`. It anchors **both** staggered estimators
+on the genuine `mpdta` panel: `WooldridgeDiD` against `jwdid` (Rios-Avila's
+Wooldridge ETWFE) and `CallawaySantAnna` against `csdid`.
+
+## Why this arm
+
+`tests/test_wooldridge.py` asserted that ETWFE ATT(g,t) **equals** CS ATT(g,t)
+within `5e-3`. That is false on real data — at `(g=2007, t=2007)` they differ by
+`0.0171` (`-0.0431` vs `-0.0261`). The assertion only ever passed because
+`load_mpdta()` was silently substituting a synthetic, effect-homogeneous DGP
+when its source URL 404'd (issue #722), and on that DGP the two estimators do
+coincide.
+
+Stata's `jwdid` and `csdid` reproduce the **same** disagreement, which is what
+establishes it as a property of the estimators rather than a bug in either. So
+one self-referential cross-check that validated nothing was replaced by two
+external anchors, with the ETWFE-vs-CS gap recorded rather than asserted away.
+
+## What it measures
+
+- **Point estimates** — both estimators match their reference to `atol=1e-6`
+  (observed ~3e-8, i.e. Stata's log-output rounding) on all 7 post-treatment cells.
+- **CS SEs** — match `csdid` outright (`rtol=1e-5`).
+- **ETWFE SEs** — do **not** match `jwdid`. Every cell is uniformly SMALLER
+  than Stata's, by a factor that shrinks as the cluster count grows: 1.0280 at
+  G=20, 1.0132 at G=40, 1.0010 at G=500. **The mechanism is not identified.**
+  The gap tracks `sqrt(G/(G-1))` but sits consistently ABOVE it, and the CR1
+  factor in `linalg.py` already applies `(G/(G-1)) * ((n-1)/(n-k))` — so a
+  missing cluster term is ruled out. The test pins the observed ratio and its
+  within-fit uniformity rather than loosening a tolerance, so a change in
+  magnitude *or* uniformity fails loudly; it records the gap as MEASURED, not
+  diagnosed. See the REGISTRY `## WooldridgeDiD (ETWFE)` note and the `TODO.md`
+  row.
+
+## Input panel
+
+Reads (does **not** regenerate) `benchmarks/data/mpdta_stata_panel.csv` — the
+upstream `mpdta.csv` at SHA-256 `2283bea1…3167`, the same digest pinned in
+`diff_diff/datasets.py`. The panel is **committed rather than fetched** so this
+arm never depends on network availability; network dependence is precisely the
+failure mode that produced the false assertion. Both the generator and the
+Python test assert the digest, so a swapped panel cannot silently retarget the
+parity.
+
 ## Known constraints
 
 - **Batch mode always exits 0**, even on a hard error (`r(NNN);`). Never trust the

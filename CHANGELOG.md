@@ -7,7 +7,112 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **`WooldridgeDiD` silently dropped genuine post-treatment effects
+  (issue #724).** With `control_group="never_treated"`, the ETWFE design emitted
+  every cohort×time indicator *including* the reference period — which is
+  collinear with the absorbed unit fixed effects — and left generic QR rank
+  detection to remove whichever column it happened to pick. On the real
+  Callaway-Sant'Anna `mpdta` panel that removed `ATT(2004, 2004)` and
+  `ATT(2006, 2007)`, returning **5 of 7** post-treatment cells with only a
+  rank-deficiency warning to explain it.
+  The reference is not a free choice: Wooldridge (2025) Eq. 6.1 excludes
+  `dg_i·f(g-1)_t` "so that `s = g − 1` is the reference period", and Stata
+  `jwdid ... never` omits the same cell. The design now omits
+  `ref(g) = max{t : t < g − anticipation AND cohort g is observed at t}`
+  explicitly — per-cohort, since a panel-wide rule omits an all-zero column
+  whenever a cohort is unobserved there and leaves the collinearity intact.
+  All 7 cells now return with **no rank warning**, matching `jwdid`'s cell set
+  exactly and its ATTs to ~1e-14.
+  Two related cases are handled rather than left to QR: `(g, t)` pairs a cohort
+  never observes are skipped (and named in a warning, gated on
+  `rank_deficient_action`), and a cohort with no pre-treatment period at all is
+  **excluded from the estimation sample** with a warning naming it — dropping
+  only its columns would leave its rows in the omitted baseline, loading its
+  treatment effect onto the time fixed effects and biasing the cohorts that are
+  identified. Where that exclusion removes the last comparison group, `fit()`
+  now raises instead of returning an all-NaN result.
+  The bug was **not** confined to `never_treated`: any cohort whose cell block
+  spans its own cohort dummy hits it, which `anticipation > 0` makes reachable
+  on the default `not_yet_treated` path.
+- **`WooldridgeDiD` no longer returns a NaN overall ATT as a successful fit.**
+  Several designs previously produced a result object with
+  `overall_att = overall_se = NaN` and no error, which reads as a completed
+  estimate: every treatment cell removed by rank reduction, every cell falling
+  inside the anticipation window (`overall_att` averages `t >= g`, while cells
+  from `t >= g − anticipation` are estimated), and post-treatment coefficients
+  all rank-dropped. `fit()` now raises with a cause-specific message. Verified
+  pre-existing rather than introduced by the reference-period work. The
+  invariant covers the **point estimate only** — `overall_se` and inference may
+  still be NaN where the variance alone is unidentifiable (`hc2_bm` without
+  Bell-McCaffrey DOF, `aggregate(weights="cohort_share")`), both fail-closed by
+  design. Note a design with **two** surviving treated cohorts can still be
+  degenerate when neither post cell has a same-period comparison, so cohort
+  count is not a proxy for comparison support.
+- **`rank_deficient_action="error"` is honored for unobserved cohort×time
+  cells.** Those cells are now skipped before the solve rather than left to QR.
+  The first version of that change treated `"error"` and `"warn"` identically,
+  which silently downgraded an explicit fail-closed request to a warning; all
+  three modes now dispatch, and `"error"` raises naming the skipped pairs.
+
+### Changed
+- **`WooldridgeDiD` now raises when rank reduction removes any requested
+  cohort×time cell**, instead of reporting the survivors under their original
+  `ATT(g,t)` labels. Once a cell is dropped, the remaining coefficients
+  identify whatever contrast the reduced design supports — typically a
+  difference between two treated cohorts — so the labels no longer describe the
+  estimand. Measured on an all-eventually-treated panel with a true ATT of 1.5
+  in every post cell: `ATT(3,8) = -0.0096`, `ATT(5,9) = -0.2393`, and
+  `overall_att = 1.0023`, with **no warning** under
+  `rank_deficient_action="silent"`.
+  **This is a capability regression, taken deliberately.** Panels with no
+  never-treated group — where periods in which every unit is treated have no
+  eligible comparison — previously produced those wrong numbers and now fail
+  closed, including under `survey_design=` and `cohort_trends=True`. Wooldridge
+  (2025) Section 5.4 defines the correct treatment (the last cohort serves as
+  the control, its columns dropped deliberately rather than by QR); the library
+  already applies that to the cohort-trend column but not to the cells, and
+  implementing the cell half is tracked to restore these fits.
+- **`WooldridgeDiD` refuses `survey_design=` combined with an unidentified
+  cohort** (`NotImplementedError`, all three methods). Excluding a cohort under
+  a complex survey design is domain estimation, which this path does not
+  implement: deleting the rows also removes their PSUs and strata from the
+  Taylor-linearized variance and from `df_survey = n_PSU − n_strata`, so
+  surviving ATTs would carry variance computed on a design the user never
+  specified (measured on a two-stratum panel: `df_survey` 22 → 14, finite SE, no
+  diagnostic). The correct behavior is zero-padding per REGISTRY *Subpopulation
+  Analysis* / Lumley (2004) §3.4; until that lands the combination is refused
+  rather than approximated. Restrict the frame to identified cohorts yourself,
+  reduce `anticipation`, or fit without `survey_design=`. Tracked in `TODO.md`.
+- **Survey designs are validated before any row is dropped.** The full
+  `SurveyDesign` (weights, `weight_type`, strata, PSU, FPC, nesting) is now
+  resolved against the pre-exclusion sample. Previously validation ran after
+  cohort exclusion, so invalid metadata confined to an excluded cohort — NaN /
+  negative / infinite weights, fractional `fweight`, missing PSU or strata —
+  vanished with those rows and the fit returned finite estimates instead of
+  rejecting the design.
+
 ### Added
+- **Stata parity arm for ETWFE and Callaway-Sant'Anna ATT(g,t) (`jwdid` / `csdid`).**
+  `benchmarks/stata/generate_etwfe_cs_golden.do` anchors both staggered
+  estimators against their canonical Stata implementations on the genuine
+  `mpdta` panel (committed at its pinned SHA-256, so the arm never needs
+  network). Both match their reference to ~3e-8 on every post-treatment cell.
+  This **replaces a test that was validating nothing**: `test_wooldridge.py`
+  asserted ETWFE ATT(g,t) *equals* CS ATT(g,t) within `5e-3`, which is false on
+  real data — at `(2007, 2007)` they differ by `0.0171`. It passed only because
+  `load_mpdta()` was silently substituting a synthetic, effect-homogeneous DGP
+  when its source 404'd (issue #722). Stata's `jwdid` and `csdid` reproduce the
+  same disagreement, establishing it as a property of the estimators rather
+  than a defect in either.
+  The arm also **surfaced a real deviation**: `WooldridgeDiD`'s default `hc1`
+  SEs are uniformly smaller than `jwdid`'s, making them anti-conservative
+  (~0.1% at G=500, ~2.8% at G=20 — the gap grows as clusters shrink).
+  `CallawaySantAnna` shows no such gap. The mechanism is **not yet
+  identified** — it tracks `sqrt(G/(G-1))` but sits above it, and `solve_ols`
+  already applies the full CR1 — so the deviation is recorded and pinned as
+  measured rather than diagnosed; see the REGISTRY `## WooldridgeDiD (ETWFE)`
+  note and the `TODO.md` row.
 - **Post-fit aggregation: `results.aggregate(type=...)` on CallawaySantAnna
   (4.0 program Phase 2b, ledger rows M-020 / M-117 / M-122).** Estimate once,
   aggregate as a post-fit step — the ecosystem norm (`did::aggte`,
