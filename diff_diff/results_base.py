@@ -369,6 +369,15 @@ class EventStudyResults(BaseResults):
                     f"expected ({n_rows},) to align with event_time."
                 )
         df_arr[~np.isfinite(self.p_value)] = np.nan
+        # n_kind is a routing key consumers share with AggregationResult, so an
+        # off-vocabulary value is a contract break, not a free-form label. Both
+        # containers validate it - enforcing on only one would let an unknown
+        # value reach a consumer through the unchecked side.
+        if self.n_kind is not None and self.n_kind not in N_KIND_VOCABULARY:
+            raise ValueError(
+                f"EventStudyResults n_kind {self.n_kind!r} is not in the shared "
+                f"vocabulary {N_KIND_VOCABULARY}."
+            )
         self.df = df_arr
 
         if (self.vcov is None) != (self.vcov_index is None):

@@ -643,6 +643,31 @@ class TestContainerNormalization:
         assert got.n_kind == expected
         assert got.n_kind in N_KIND_VOCABULARY
 
+    def test_shared_vocabulary_is_enforced_on_both_containers(self, fitted):
+        """The vocabulary is declared SHARED, so validating it on only one
+        container would let an unknown value reach a consumer through the
+        unchecked side. Every value a real producer emits must still pass.
+        """
+        from diff_diff.results_base import N_KIND_VOCABULARY
+
+        base = dict(
+            event_time=np.array([-1, 0, 1]),
+            att=np.array([0.0, 1.0, 2.0]),
+            se=np.array([0.1, 0.2, 0.3]),
+            t_stat=np.array([0.0, 5.0, 6.0]),
+            p_value=np.array([1.0, 0.01, 0.01]),
+            conf_int_lower=np.array([-0.2, 0.6, 1.4]),
+            conf_int_upper=np.array([0.2, 1.4, 2.6]),
+            is_reference=np.array([True, False, False]),
+            n=np.array([np.nan, 4.0, 4.0]),
+        )
+        with pytest.raises(ValueError, match="vocabulary"):
+            EventStudyResults(n_kind="widgets", **base)
+        # Every value shipped producers actually emit stays constructible.
+        for kind in ("groups", "switcher_cells", "cells", "units", "obs", None):
+            assert EventStudyResults(n_kind=kind, **base).n_kind == kind
+        assert set(N_KIND_VOCABULARY) >= {"groups", "switcher_cells", "cells", "units", "obs"}
+
     def test_summary_refuses_to_relabel_a_stored_interval(self, fitted):
         """summary(alpha=) never recomputes, so printing the passed alpha would
         assert a confidence level the stored interval was not built at. Raises
