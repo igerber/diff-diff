@@ -227,9 +227,24 @@ from diff_diff import CallawaySantAnna, plot_event_study
 
 cs = CallawaySantAnna(estimation_method="dr", n_bootstrap=999, seed=42)
 results = cs.fit(data, outcome='outcome', unit='unit', time='period',
-                 first_treat='first_treat', aggregate='event_study')
+                 first_treat='first_treat')
 results.print_summary()
-plot_event_study(results)
+
+# Aggregate post-fit - no refit. Returns a NEW object; `results` is unchanged.
+event_study = results.aggregate('event_study')   # -> EventStudyResults
+by_cohort   = results.aggregate('group')         # -> AggregationResult
+```
+
+Fit-time `aggregate=` / `balance_e=` are DEPRECATED since 3.9 (removed in 4.0,
+ledger rows M-020 / M-117) and emit a `FutureWarning`. They remain only as the
+compatibility surface for the consumers that still read the fit-time result -
+`plot_event_study`, `compute_honest_did` and `compute_pretrends_power` do not
+yet accept the post-fit container, so use the fit-time form for those:
+
+```python
+plotted = cs.fit(data, outcome='outcome', unit='unit', time='period',
+                 first_treat='first_treat', aggregate='event_study')
+plot_event_study(plotted)
 ```
 
 ### ChaisemartinDHaultfoeuille
@@ -1518,10 +1533,17 @@ Returned by `CallawaySantAnna.fit()`.
 | `groups` | `list` | Treatment cohorts |
 | `time_periods` | `list` | All time periods |
 | `n_obs` | `int` | Number of observations |
-| `event_study_effects` | `dict[int, dict]` | Event study effects by relative time |
-| `group_effects` | `dict` | Group-level aggregated effects |
+| `event_study_effects` | `dict[int, dict]` | Event study effects by relative time. Populated only by the DEPRECATED fit-time `aggregate=`; `None` after a plain fit - use `aggregate("event_study")` instead |
+| `group_effects` | `dict` | Group-level aggregated effects. Same: populated only by fit-time `aggregate=` |
 
-**Methods:** `summary()`, `print_summary()`, `to_dataframe(level="event_study"|"group_time"|"group")`
+**Methods:** `aggregate(type, weights=None, *, balance_e=None)`, `summary()`, `print_summary()`, `to_dataframe(level="event_study"|"group_time"|"group")`
+
+`aggregate("simple"|"event_study"|"group")` re-aggregates POST-FIT with no
+refit, returning a NEW object and leaving the result unchanged.
+`"event_study"` returns `EventStudyResults`; the others return
+`AggregationResult`. `balance_e=` applies to `"event_study"` only. Raises on
+`"calendar"` (CS has no calendar aggregator) and on a bootstrapped fit, rather
+than substituting analytical inference for percentile-bootstrap statistics.
 
 ### SunAbrahamResults
 

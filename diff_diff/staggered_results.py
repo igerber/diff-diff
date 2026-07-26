@@ -234,6 +234,13 @@ class CallawaySantAnnaResults(BaseResults, AggregationMixin):
     # with the original resolved_survey.df_survey.
     df_inference: Optional[int] = None
 
+    # Post-fit re-aggregation payload (spec section 6, rows M-020/M-117),
+    # attached by fit() because nothing it needs survives the call. Declared
+    # here rather than set dynamically so it is a typed part of the contract.
+    # Excluded from repr and equality: it is internal bookkeeping, not a
+    # reportable result, and its arrays would make `==` raise.
+    _aggregation_kit: Optional[Any] = field(default=None, repr=False, compare=False)
+
     # --- Inference-field aliases (balance/external-adapter compatibility) ---
     @property
     def att(self) -> float:

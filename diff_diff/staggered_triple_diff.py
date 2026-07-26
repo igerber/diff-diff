@@ -817,6 +817,10 @@ class StaggeredTripleDifference(
                             df=df_survey,
                         )
                         group_effects[g_key]["t_stat"] = t_val
+                        # Bootstrap se/p/CI replaced the analytical ones, which
+                        # is what the retained df described - keeping it would
+                        # claim a t-reference that governed nothing.
+                        group_effects[g_key]["df_used"] = None
 
         # Eq. 4.14 overall: an ANALYTICAL non-finite SE under a finite point estimate
         # (a contributing horizon's influence function is non-finite, or the variance is

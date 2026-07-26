@@ -2843,6 +2843,11 @@ class CallawaySantAnna(
                         group_effects[g]["conf_int"] = bootstrap_results.group_effect_cis[g]
                         group_effects[g]["p_value"] = bootstrap_results.group_effect_p_values[g]
                         group_effects[g]["t_stat"] = float(grp_t_stats[idx])
+                        # Same clearing rule the ES df provenance follows below:
+                        # these se/p/CI are now percentile-bootstrap values that
+                        # never used the analytical df, so keeping df_used would
+                        # claim a t-reference that governed nothing.
+                        group_effects[g]["df_used"] = None
 
         # Compute simultaneous confidence band CIs if cband is available
         cband_crit_value = None

@@ -572,6 +572,50 @@ class TestInferenceDfProvenance:
             assert finite.size > 0, f"{level} reported no df at all"
             assert np.all(finite == expected), f"{level} df {finite} != {expected}"
 
+    @pytest.mark.parametrize("survey", [False, True])
+    def test_bootstrap_clears_group_df_provenance(self, survey):
+        """When bootstrap replaces a group row's se/p/CI with percentile values,
+        the retained analytical df described inference that no longer exists.
+        Leaving it finite would claim a t-reference governed percentile-bootstrap
+        numbers - the same false provenance the event-study path already clears.
+        """
+        from diff_diff import SurveyDesign
+
+        rng = np.random.default_rng(7)
+        rows = []
+        for u in range(90):
+            g = [0, 4, 6][u % 3]
+            for t in range(1, 9):
+                treated = g != 0 and t >= g
+                rows.append(
+                    {
+                        "unit": u,
+                        "time": t,
+                        "first_treat": g,
+                        "psu": u % 18,
+                        "stratum": u % 3,
+                        "w": 1.0 + (u % 4) * 0.1,
+                        "y": 0.3 * t + (2.0 if treated else 0.0) + rng.normal(0, 0.5),
+                    }
+                )
+        # cluster= is a CONSTRUCTOR argument; survey_design= is a fit() argument.
+        ctor = {} if survey else {"cluster": "psu"}
+        fit_extra = (
+            {"survey_design": SurveyDesign(weights="w", strata="stratum", psu="psu")}
+            if survey
+            else {}
+        )
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            res = CallawaySantAnna(n_bootstrap=50, seed=1, **ctor).fit(
+                pd.DataFrame(rows), aggregate="all", **fit_extra, **FIT_KW
+            )
+        assert res.group_effects, "fixture produced no group rows"
+        for g, eff in res.group_effects.items():
+            assert eff.get("df_used") is None, f"group {g} kept analytical df on a bootstrap fit"
+        # The event-study path's equivalent clearing must not have regressed.
+        assert res.event_study_df is None
+
     def test_group_df_is_not_the_event_study_df(self, fitted):
         """``group`` must not borrow ``event_study_df``: on a plain fit that
         field is None, and it is a different aggregation's denominator."""

@@ -143,8 +143,12 @@ class CallawaySantAnnaBootstrapMixin:
             effects: np.ndarray,
             groups_for_gt: np.ndarray,
             influence_func_info: Dict,
-            df: "pd.DataFrame",
-            unit: str,
+            # Optional to match the aggregation mixin, whose implementation this
+            # stub shadows: post-fit aggregation runs from the retained kit with
+            # no frame. A narrower stub here makes the two base classes
+            # incompatible wherever both are mixed in.
+            df: Optional["pd.DataFrame"],
+            unit: Optional[str],
             precomputed: Optional["PrecomputedData"] = None,
             global_unit_to_idx: Optional[Dict[Any, int]] = None,
             n_global_units: Optional[int] = None,

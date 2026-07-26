@@ -549,7 +549,14 @@ class CallawaySantAnnaAggregationMixin:
             total_weight = float(n_units)
         else:
             # No precomputed bookkeeping (direct internal callers only): fall
-            # back to the fit-time frame.
+            # back to the fit-time frame. Reaching here without one is the
+            # fail-closed case - post-fit callers always carry the kit, so a
+            # None frame here means neither source is available.
+            if df is None or unit is None:
+                raise ValueError(
+                    "Cohort sizes need either precomputed bookkeeping or the fit-time "
+                    "frame; neither was supplied."
+                )
             for g in unique_groups:
                 treated_in_g = df[df["first_treat"] == g][unit].nunique()
                 group_sizes[g] = treated_in_g
@@ -611,6 +618,11 @@ class CallawaySantAnnaAggregationMixin:
                         if cohort in unique_groups_set:
                             unit_groups_array[idx] = cohort
             else:
+                if df is None or unit is None:
+                    raise ValueError(
+                        "Per-unit cohorts need either precomputed bookkeeping or the "
+                        "fit-time frame; neither was supplied."
+                    )
                 for idx, uid in idx_uid_pairs:
                     unit_first_treat = df[df[unit] == uid]["first_treat"].iloc[0]
                     if unit_first_treat in unique_groups_set:
@@ -628,6 +640,11 @@ class CallawaySantAnnaAggregationMixin:
                         if cohort in unique_groups_set:
                             unit_groups_array[idx] = cohort
             else:
+                if df is None or unit is None:
+                    raise ValueError(
+                        "Per-unit cohorts need either precomputed bookkeeping or the "
+                        "fit-time frame; neither was supplied."
+                    )
                 for idx, uid in idx_uid_pairs:
                     unit_first_treat = df[df[unit] == uid]["first_treat"].iloc[0]
                     if unit_first_treat in unique_groups_set:
