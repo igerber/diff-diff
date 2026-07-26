@@ -345,6 +345,209 @@ class TestFitShim:
         assert fit_time.group_effects is not None
 
 
+def _rcs(seed=17, n_per_cell=6, n_periods=6):
+    """Repeated cross-sections: a DIFFERENT set of units each period, so unit
+    ids must be globally unique rather than recycled across periods."""
+    rng = np.random.default_rng(seed)
+    cohorts = [0, 3, 4, 5]
+    rows = []
+    uid = 0
+    for t in range(1, n_periods + 1):
+        for g in cohorts:
+            for _ in range(n_per_cell):
+                treated = g != 0 and t >= g
+                rows.append(
+                    {
+                        "unit": uid,
+                        "time": t,
+                        "first_treat": g,
+                        "y": 0.4 * t + (1.5 if treated else 0.0) + rng.normal(0, 0.25),
+                    }
+                )
+                uid += 1
+    return pd.DataFrame(rows)
+
+
+class TestInertnessAcrossDesigns:
+    """The inertness gate on designs the balanced-panel fixture does not reach.
+
+    The refactor made the aggregators pure by threading bookkeeping that the
+    panel path and the repeated-cross-section path populate differently (RCS
+    makes several kit keys observation-length rather than unit-length), and
+    ``anticipation`` shifts which ``(g, t)`` cells are eligible - so both need
+    their own round-trip, not just the panel.
+    """
+
+    @pytest.mark.parametrize("level", ["simple", "group", "event_study"])
+    def test_repeated_cross_sections_match_fit_time(self, level):
+        data = _rcs()
+        post = CallawaySantAnna(panel=False).fit(data, **FIT_KW)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", FutureWarning)
+            native = CallawaySantAnna(panel=False).fit(data, aggregate="all", **FIT_KW)
+        _assert_level_matches(post, native, level)
+
+    @pytest.mark.parametrize("level", ["simple", "group", "event_study"])
+    def test_anticipation_matches_fit_time(self, panel, level):
+        post = CallawaySantAnna(anticipation=1).fit(panel, **FIT_KW)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", FutureWarning)
+            native = CallawaySantAnna(anticipation=1).fit(panel, aggregate="all", **FIT_KW)
+        _assert_level_matches(post, native, level)
+
+
+def _assert_level_matches(post, native, level):
+    """Compare a post-fit aggregation against the fit-time surface at 1e-14."""
+    if level == "simple":
+        got = post.aggregate("simple")
+        assert np.allclose(got.att[0], native.overall_att, rtol=1e-14, atol=1e-14)
+        assert np.allclose(got.se[0], native.overall_se, rtol=1e-14, atol=1e-14)
+        return
+
+    frame = post.aggregate(level).to_dataframe()
+    if level == "group":
+        expected, key_col = native.group_effects, "label"
+    else:
+        expected, key_col = native.event_study_effects, "event_time"
+    compared = 0
+    for _, row in frame.iterrows():
+        if level == "event_study" and bool(row["is_reference"]):
+            continue
+        ref = expected[row[key_col]]
+        for col, key in (("att", "effect"), ("se", "se"), ("p_value", "p_value")):
+            assert np.allclose(
+                row[col], ref[key], rtol=1e-14, atol=1e-14, equal_nan=True
+            ), f"{level}[{row[key_col]}].{col} drifted"
+        compared += 1
+    assert compared > 0, f"no {level} rows compared"
+
+
+@pytest.fixture(scope="module")
+def survey_fit():
+    """An EXPLICIT survey design - the branch where ``df_inference`` is
+    intentionally None and ``survey_metadata.df_survey`` is the real carrier."""
+    from diff_diff import SurveyDesign
+
+    rng = np.random.default_rng(3)
+    rows = []
+    for u in range(80):
+        g = [0, 4, 6][u % 3]
+        for t in range(1, 9):
+            treated = g != 0 and t >= g
+            rows.append(
+                {
+                    "unit": u,
+                    "time": t,
+                    "first_treat": g,
+                    "psu": u % 20,
+                    "stratum": u % 4,
+                    "w": 1.0 + (u % 5) * 0.1,
+                    "y": 0.3 * t + (2.0 if treated else 0.0) + rng.normal(0, 0.5),
+                }
+            )
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        return CallawaySantAnna().fit(
+            pd.DataFrame(rows),
+            survey_design=SurveyDesign(weights="w", strata="stratum", psu="psu"),
+            **FIT_KW,
+        )
+
+
+class TestInferenceDfProvenance:
+    """``df`` is per-row PROVENANCE - the df that actually produced the stored
+    p-value/CI - so it must come from the carrier that governed inference.
+
+    Regression: ``simple`` read ``df_inference`` (documented to stay None on
+    explicit ``survey_design=`` fits) and ``group`` read ``event_study_df`` (a
+    DIFFERENT aggregation's df, and None after a plain fit). Both reported
+    ``df=NaN`` - implying normal/undefined inference - while the interval they
+    carried was built on a finite t-reference.
+    """
+
+    def test_explicit_survey_df_reaches_every_level(self, survey_fit):
+        """The canonical carrier is ``survey_metadata.df_survey``; on an
+        explicit survey design ``df_inference`` is intentionally None."""
+        expected = float(survey_fit.survey_metadata.df_survey)
+        assert survey_fit.df_inference is None, "fixture no longer exercises the bug"
+        for level in ("simple", "group", "event_study"):
+            df_col = np.asarray(survey_fit.aggregate(level).df, dtype=float)
+            finite = df_col[np.isfinite(df_col)]
+            assert finite.size > 0, f"{level} reported no df at all"
+            assert np.all(finite == expected), f"{level} df {finite} != {expected}"
+
+    def test_group_df_is_not_the_event_study_df(self, fitted):
+        """``group`` must not borrow ``event_study_df``: on a plain fit that
+        field is None, and it is a different aggregation's denominator."""
+        assert fitted.event_study_df is None
+        grp = fitted.aggregate("group")
+        assert np.asarray(grp.df).shape == np.asarray(grp.att).shape
+
+
+class TestContainerNormalization:
+    """``AggregationResult`` normalizes its own columns; doing so must not
+    reach back into caller-owned memory or mask a shape error."""
+
+    @staticmethod
+    def _kw():
+        return dict(
+            level="group",
+            label=np.array(["a", "b"], dtype=object),
+            target=np.array(["att", "att"], dtype=object),
+            att=np.array([1.0, 2.0]),
+            se=np.array([0.1, 0.2]),
+            t_stat=np.array([10.0, np.nan]),
+            p_value=np.array([0.01, np.nan]),
+            conf_int_lower=np.array([0.8, np.nan]),
+            conf_int_upper=np.array([1.2, np.nan]),
+            n=np.array([5.0, 6.0]),
+        )
+
+    def test_df_input_is_not_mutated(self):
+        """The NaN-out of non-estimable rows wrote THROUGH to the caller's
+        array when df was normalized with ``asarray`` instead of ``array``."""
+        caller = np.array([10.0, 20.0])
+        AggregationResult(df=caller, **self._kw())
+        assert np.array_equal(caller, [10.0, 20.0]), "caller's df array was mutated"
+
+    def test_read_only_df_is_accepted(self):
+        frozen = np.array([10.0, 20.0])
+        frozen.flags.writeable = False
+        got = AggregationResult(df=frozen, **self._kw())
+        assert np.isnan(got.df[1]), "non-estimable row should still be NaN'd"
+
+    def test_zero_dim_label_raises_value_error(self):
+        """Not IndexError: the shape check must precede the shape read."""
+        with pytest.raises(ValueError, match="one-dimensional"):
+            AggregationResult(
+                level="simple",
+                label=np.array("x", dtype=object),
+                target=np.array(["att"], dtype=object),
+                att=np.array([1.0]),
+                se=np.array([0.1]),
+                t_stat=np.array([1.0]),
+                p_value=np.array([0.1]),
+                conf_int_lower=np.array([0.0]),
+                conf_int_upper=np.array([2.0]),
+                n=np.array([5.0]),
+                df=None,
+            )
+
+    def test_off_vocabulary_n_kind_raises(self):
+        """``n_kind`` is a routing key shared with EventStudyResults, so an
+        unknown value is a contract break rather than a free-form label."""
+        with pytest.raises(ValueError, match="vocabulary"):
+            AggregationResult(df=None, n_kind="widgets", **self._kw())
+
+    @pytest.mark.parametrize("level,expected", [("simple", "units"), ("group", "cells")])
+    def test_cs_n_kinds_are_in_the_shared_vocabulary(self, fitted, level, expected):
+        from diff_diff.results_base import N_KIND_VOCABULARY
+
+        got = fitted.aggregate(level)
+        assert got.n_kind == expected
+        assert got.n_kind in N_KIND_VOCABULARY
+
+
 # --------------------------------------------------------------------------- #
 # Cross-estimator regression
 # --------------------------------------------------------------------------- #

@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
-from diff_diff.aggregation import AggregationMixin, AggregationResult
+from diff_diff.aggregation import AggregationMixin, AggregationResult, resolve_inference_df
 from diff_diff.results import _format_survey_block, _get_significance_stars
 from diff_diff.results_base import BaseResults, build_event_study_surface
 from diff_diff.staggered_aggregation import CallawaySantAnnaAggregationMixin
@@ -367,7 +367,12 @@ class CallawaySantAnnaResults(BaseResults, AggregationMixin):
             conf_int_lower=np.array([ci[0]], dtype=float),
             conf_int_upper=np.array([ci[1]], dtype=float),
             n=np.array([float(self.n_treated_units + self.n_control_units)], dtype=float),
-            df=self.df_inference,
+            # NOT ``df_inference``: that field is documented to stay None on
+            # explicit ``survey_design=`` fits, where the df that actually
+            # governed ``overall_p_value`` lives on ``survey_metadata``.
+            # Reading it directly reported df=NaN for survey fits whose CI
+            # was built on a finite t-reference.
+            df=resolve_inference_df(self),
             alpha=self.alpha,
             n_kind="units",
             weight=np.array([1.0], dtype=float),
@@ -399,7 +404,10 @@ class CallawaySantAnnaResults(BaseResults, AggregationMixin):
             conf_int_lower=np.array([c[0] for c in cis], dtype=float),
             conf_int_upper=np.array([c[1] for c in cis], dtype=float),
             n=np.array([float(r.get("n_periods", np.nan)) for r in rows], dtype=float),
-            df=self.event_study_df if self.event_study_df is not None else np.nan,
+            # The df the GROUP aggregation's own inference used, recorded by
+            # ``_aggregate_by_group``. Previously this read ``event_study_df``
+            # - a different aggregation's df, and None after a plain fit.
+            df=rows[0].get("df_used") if rows else None,
             alpha=kit.alpha,
             n_kind="cells",
             weight=None,
@@ -657,7 +665,11 @@ class CallawaySantAnnaResults(BaseResults, AggregationMixin):
 
         elif level == "event_study":
             if self.event_study_effects is None:
-                raise ValueError("Event study effects not computed. Use aggregate='event_study'.")
+                raise ValueError(
+                    "Event study effects not computed. "
+                    "Call results.aggregate('event_study') to compute them post-fit "
+                    "(no refit required)."
+                )
             rows = []
             for rel_t, data in sorted(self.event_study_effects.items()):
                 cband_ci = data.get("cband_conf_int", (np.nan, np.nan))
@@ -678,7 +690,11 @@ class CallawaySantAnnaResults(BaseResults, AggregationMixin):
 
         elif level == "group":
             if self.group_effects is None:
-                raise ValueError("Group effects not computed. Use aggregate='group'.")
+                raise ValueError(
+                    "Group effects not computed. "
+                    "Call results.aggregate('group') to compute them post-fit "
+                    "(no refit required)."
+                )
             rows = []
             for group, data in sorted(self.group_effects.items()):
                 rows.append(

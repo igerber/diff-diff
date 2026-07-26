@@ -1268,6 +1268,17 @@ class CallawaySantAnnaAggregationMixin:
             df=df_survey_val,
         )
 
+        # Provenance: the ONE df every group row's inference just used (the
+        # conservative min under dropped replicates). Recorded per row iff it
+        # will govern a t-reference - finite and > 0; the df=0 replicate
+        # sentinel yields NaN inference, not a t-law. Carried on the effect
+        # dicts so a post-fit ``aggregate("group")`` reports the df that
+        # actually produced the stored p-value/CI rather than re-deriving it
+        # from whichever df field happens to be populated on the results.
+        group_df_used: Optional[float] = None
+        if df_survey_val is not None and np.isfinite(df_survey_val) and df_survey_val > 0:
+            group_df_used = float(df_survey_val)
+
         group_effects = {}
         for idx, (g, agg_effect, agg_se, n_periods, _eff_df) in enumerate(group_data_list):
             group_effects[g] = {
@@ -1277,6 +1288,7 @@ class CallawaySantAnnaAggregationMixin:
                 "p_value": float(p_values[idx]),
                 "conf_int": (float(ci_lowers[idx]), float(ci_uppers[idx])),
                 "n_periods": n_periods,
+                "df_used": group_df_used,
             }
 
         return group_effects

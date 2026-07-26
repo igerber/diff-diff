@@ -30,7 +30,7 @@ from typing import Any, Dict, Optional, Tuple
 import numpy as np
 import pandas as pd
 
-from diff_diff.results_base import BaseResults, _json_safe_label
+from diff_diff.results_base import N_KIND_VOCABULARY, BaseResults, _json_safe_label
 
 __all__ = ["AggregationResult", "AGGREGATION_SCHEMA"]
 
@@ -63,6 +63,38 @@ AGGREGATION_SCHEMA: Tuple[str, ...] = (
     "weight",
     "df",
 )
+
+
+def resolve_inference_df(results: Any) -> Optional[float]:
+    """Return the degrees of freedom that governed ``results``' overall statistic.
+
+    Reads the carriers in the order the library documents on
+    ``CallawaySantAnnaResults.df_inference``: ``survey_metadata.df_survey``
+    first - it holds the actual CS-internal df including any post-resolve
+    tightening for replicate designs - and ``df_inference`` only as the
+    fallback for bare-``cluster=`` fits, where ``survey_metadata`` is
+    intentionally ``None`` to preserve the survey/non-survey contract.
+    Reading ``df_inference`` first would overstate the denominator df on
+    panel survey fits whose df was tightened during aggregation.
+
+    A replicate design whose df is undefined resolves to the sentinel ``0``,
+    which yields NaN inference rather than a t-reference.
+
+    ``AggregationResult.df`` is per-row PROVENANCE - the df actually passed to
+    ``safe_inference`` for that row's stored p-value/CI - so it must come from
+    here rather than from whichever df field happens to be populated.
+    """
+    if getattr(results, "survey_metadata", None) is not None:
+        sm = results.survey_metadata
+        df_survey = getattr(sm, "df_survey", None)
+        if df_survey is None and getattr(sm, "replicate_method", None) is not None:
+            return 0.0  # undefined replicate df -> NaN inference
+        if df_survey is not None:
+            return float(df_survey)
+    df_inference = getattr(results, "df_inference", None)
+    if df_inference is not None:
+        return float(df_inference)
+    return None
 
 
 def _sortable(labels: np.ndarray) -> bool:
@@ -111,10 +143,11 @@ class AggregationResult(BaseResults):
         Per-row count as float, NaN where the producer records none. Its
         SEMANTIC is ``n_kind`` - never assume units.
     n_kind : str or None
-        Semantic of ``n``, from the same vocabulary
-        :class:`~diff_diff.results_base.EventStudyResults` uses
-        (``"groups"`` / ``"cells"`` / ``"obs"`` / ``"clusters"``). ``None``
-        when the producer records no count.
+        Semantic of ``n``, from
+        :data:`~diff_diff.results_base.N_KIND_VOCABULARY` - the SAME closed
+        vocabulary :class:`~diff_diff.results_base.EventStudyResults` draws
+        on, so a consumer can route on ``n_kind`` across both containers.
+        ``None`` when the producer records no count.
     weight : np.ndarray or None
         Normalized aggregation mass per row, summing to 1 within one
         ``(level, target)`` group. ``None`` where no per-row mass exists -
@@ -166,11 +199,14 @@ class AggregationResult(BaseResults):
 
     def __post_init__(self) -> None:
         self.label = np.asarray(self.label, dtype=object)
-        n_rows = self.label.shape[0]
+        # Shape check BEFORE reading shape[0]: a 0-d label has an empty shape
+        # tuple, so indexing it first raises IndexError instead of the
+        # documented ValueError.
         if self.label.ndim != 1:
             raise ValueError(
                 f"AggregationResult label must be one-dimensional; got shape {self.label.shape}."
             )
+        n_rows = self.label.shape[0]
 
         for name in ("att", "se", "t_stat", "p_value", "conf_int_lower", "conf_int_upper", "n"):
             arr = np.asarray(getattr(self, name), dtype=float)
@@ -196,7 +232,10 @@ class AggregationResult(BaseResults):
         elif np.ndim(self.df) == 0:
             df_arr = np.full(n_rows, float(self.df))
         else:
-            df_arr = np.asarray(self.df, dtype=float)
+            # np.array (not asarray) so the NaN-out below cannot write through
+            # to a caller-owned array or fail on a read-only buffer - matching
+            # EventStudyResults' normalization of the same field.
+            df_arr = np.array(self.df, dtype=float)
             if df_arr.shape != (n_rows,):
                 raise ValueError(
                     f"AggregationResult df has shape {df_arr.shape}; expected ({n_rows},) or scalar."
@@ -211,6 +250,14 @@ class AggregationResult(BaseResults):
                     f"AggregationResult weight has shape {w.shape}; expected ({n_rows},) or None."
                 )
             self.weight = w
+
+        # n_kind is a routing key consumers share with EventStudyResults, so
+        # an off-vocabulary value is a contract break, not a free-form label.
+        if self.n_kind is not None and self.n_kind not in N_KIND_VOCABULARY:
+            raise ValueError(
+                f"AggregationResult n_kind {self.n_kind!r} is not in the shared "
+                f"vocabulary {N_KIND_VOCABULARY}."
+            )
 
     # ------------------------------------------------------------------ #
     # Serialization (spec section 5: every main results class has all three)

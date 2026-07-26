@@ -23,21 +23,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it applies to event-study aggregation only — passing it with `"simple"` or
   `"group"` raises rather than being silently ignored, matching where the
   shipped code actually threads it.
-  **No numerical change:** a 10-scenario golden (every aggregation type, a
-  `balance_e` sweep, repeated cross-sections, a bootstrapped fit,
-  `anticipation=1`) is reproduced at `atol=rtol=1e-14`, and post-fit
-  `aggregate()` matches the fit-time numbers identically.
+  **No numerical change:** post-fit `aggregate()` reproduces the fit-time
+  numbers at `atol=rtol=1e-14` for every aggregation type, across a `balance_e`
+  sweep, a balanced panel, repeated cross-sections and `anticipation=1`.
   Three schema decisions are grounded in what the estimator produces rather
   than assumed: `target` is per-row so one container can carry two aligned
-  estimands; `n_kind` reuses `EventStudyResults`' vocabulary (`"cells"` for
-  CS's group level, not "units"); and `weight` is `None` for `"group"`,
+  estimands; `n_kind` draws on a vocabulary now shared with
+  `EventStudyResults` and validated on construction (`"cells"` for CS's group
+  level, `"units"` for the overall); and `weight` is `None` for `"group"`,
   because that aggregation weights `(g,t)` cells equally *within* each cohort
   and forms no cross-cohort mass — reporting one would be fabricated.
   Fail-closed elsewhere too: `aggregate("calendar")` raises (CS has no
   calendar aggregator; the DEFERRED row stands), a non-`None` `weights`
   raises, and `aggregate()` on a **bootstrapped** fit raises rather than
   substituting analytical inference for percentile-bootstrap statistics —
-  bootstrap replay is a tracked follow-up.
+  bootstrap replay is tracked in `TODO.md`.
+  `AggregationResult.df` is per-row provenance: the degrees of freedom that
+  actually produced that row's stored p-value and interval, read from the
+  carrier the fit used (`survey_metadata.df_survey` on explicit survey
+  designs, `df_inference` only as the bare-`cluster=` fallback).
   Internally, the CS event-study aggregator became **pure**: it returned one
   dict and stashed four more values on `self`, and now returns all five, which
   is what allows re-aggregation without mutating the result.

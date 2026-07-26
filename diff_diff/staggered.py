@@ -475,16 +475,23 @@ class CallawaySantAnna(
     >>>
     >>> results.print_summary()
 
-    With event study aggregation:
+    With event study aggregation (post-fit - no refit required):
 
     >>> cs = CallawaySantAnna()
     >>> results = cs.fit(data, outcome='outcome', unit='unit',
-    ...                  time='time', first_treat='first_treat',
-    ...                  aggregate='event_study')
-    >>>
-    >>> # Plot event study
+    ...                  time='time', first_treat='first_treat')
+    >>> event_study = results.aggregate('event_study')
+    >>> event_study.to_dataframe()  # doctest: +SKIP
+
+    Plotting and the sensitivity analyses (``plot_event_study``,
+    ``compute_honest_did``, ``compute_pretrends_power``) still read the
+    fit-time surface, so they take a fit that requested aggregation:
+
     >>> from diff_diff import plot_event_study
-    >>> plot_event_study(results)
+    >>> plotted = cs.fit(data, outcome='outcome', unit='unit',
+    ...                  time='time', first_treat='first_treat',
+    ...                  aggregate='event_study')  # doctest: +SKIP
+    >>> plot_event_study(plotted)  # doctest: +SKIP
 
     With covariate adjustment (conditional parallel trends):
 
