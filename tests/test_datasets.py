@@ -495,6 +495,38 @@ class TestLegacyLoaderProvenance:
             assert result.attrs["source"] == "synthetic_fallback"
             assert result.shape == _construct_mpdta_data().shape
 
+    def test_clear_cache_removes_interrupted_atomic_write_scratch_files(
+        self, tmp_path, monkeypatch
+    ):
+        """``clear_cache()`` must clear the hidden scratch files atomic writes can strand.
+
+        ``_write_cache_atomically`` creates ``.<name>.<ext>.<suffix>`` next to the entry.
+        A hard kill between creation and ``os.replace`` leaves one behind, and it matches
+        neither ``*.csv`` nor ``*.dta``, so it would otherwise survive the one remedy the
+        docs offer and accumulate across runs.
+        """
+        import diff_diff.datasets as datasets_mod
+
+        monkeypatch.setattr(datasets_mod, "_CACHE_DIR", tmp_path)
+        (tmp_path / "mpdta.csv").write_text("cached")
+        (tmp_path / "prop99.dta").write_bytes(b"cached")
+        (tmp_path / ".mpdta.csv.ab12cd34").write_bytes(b"orphaned")
+        (tmp_path / ".prop99.dta.ef56gh78").write_bytes(b"orphaned")
+        keep = tmp_path / "notes.txt"
+        keep.write_text("unrelated file must survive")
+
+        datasets_mod.clear_cache()
+
+        assert sorted(p.name for p in tmp_path.iterdir()) == ["notes.txt"]
+        assert keep.read_text() == "unrelated file must survive"
+
+    def test_clear_cache_tolerates_missing_cache_directory(self, tmp_path, monkeypatch):
+        """The cache directory is only created on write, so clearing must not require it."""
+        import diff_diff.datasets as datasets_mod
+
+        monkeypatch.setattr(datasets_mod, "_CACHE_DIR", tmp_path / "never-created")
+        datasets_mod.clear_cache()  # must not raise
+
     def test_verified_cache_recovers_canonical_data_on_download_failure(
         self, tmp_path, monkeypatch
     ):

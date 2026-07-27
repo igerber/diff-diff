@@ -698,11 +698,19 @@ def _validate_mpdta(df: pd.DataFrame) -> None:
 
 
 def clear_cache() -> None:
-    """Clear the local dataset cache."""
+    """Clear the local dataset cache.
+
+    Also removes any ``.<name>.<ext>.<suffix>`` scratch files left behind by an
+    atomic cache write that was interrupted between creating the temporary file
+    and replacing the cache entry (a hard kill, for instance). Those are hidden
+    and do not match the plain ``*.csv`` / ``*.dta`` patterns, so without this
+    they would accumulate and survive the documented remedy.
+    """
     if _CACHE_DIR.exists():
-        for pattern in ("*.csv", "*.dta"):
+        for pattern in ("*.csv", "*.dta", ".*.csv.*", ".*.dta.*"):
             for f in _CACHE_DIR.glob(pattern):
-                f.unlink()
+                if f.is_file():
+                    f.unlink()
         print(f"Cleared cache at {_CACHE_DIR}")
 
 
