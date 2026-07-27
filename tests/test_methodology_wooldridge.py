@@ -1776,23 +1776,32 @@ class TestW2025Section8HeterogeneousTrends:
             3,
             4,
         ], f"DGP precondition: treated cohorts should be [3, 4], got {treated_cohorts}"
-        # The trend-drop path is currently UNREACHABLE through fit(): on an
-        # all-eventually-treated panel the treatment CELLS at fully-treated
-        # periods are jointly collinear with the time FE, and since codex R8 a
-        # lost cell fails closed rather than returning relabeled contrasts. The
-        # last-cohort trend drop below is the same W2025 Section 5.4
-        # normalization applied to the TREND columns only -- applying it to the
-        # cells is what would make these panels estimable again (TODO.md). Until
-        # then this test pins the refusal, so the trend logic is not silently
-        # deleted while it is untestable end-to-end.
-        with pytest.raises(ValueError, match="not identified and were removed"):
-            WooldridgeDiD(method="ols", cohort_trends=True).fit(
+        # The last-cohort trend drop is the SAME W2025 Section 5.4 normalization
+        # the cell filter now applies, and this is the first test to exercise it
+        # end-to-end. Previously unreachable: the treatment CELLS at fully-treated
+        # periods were jointly collinear with the time FE, so the fit failed
+        # closed before the trend logic mattered. Comparison-support filtering
+        # removes those periods first, leaving cohort 4 (= G_max) as the
+        # reference -- it receives neither a cell nor a trend column.
+        with pytest.warns(UserWarning, match="no eligible comparison group"):
+            res = WooldridgeDiD(method="ols", cohort_trends=True).fit(
                 full_panel,
                 outcome="y",
                 unit="unit",
                 time="time",
                 cohort="cohort",
             )
+
+        # G - 1 = 1 trend coefficient, the last cohort deliberately absent.
+        assert set(res.cohort_trend_coefs) == {3}, (
+            f"expected only cohort 3 to carry a trend slope, got "
+            f"{sorted(res.cohort_trend_coefs)}"
+        )
+        assert 4 not in res.cohort_trend_coefs
+        assert np.isfinite(res.cohort_trend_coefs[3])
+        # Cohort 4 is the reference: no cells, and not advertised as estimated.
+        assert sorted((int(g), int(t)) for g, t in res.group_time_effects) == [(3, 3)]
+        assert set(int(g) for g in res.groups) == {3}
         return
 
     def test_cohort_trends_true_with_never_treated_keeps_all_cohort_trends(self) -> None:

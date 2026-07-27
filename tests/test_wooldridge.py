@@ -679,28 +679,23 @@ class TestXgvarCovariates:
 
 class TestAllEventuallyTreated:
     def test_no_never_treated_not_yet_treated_control(self):
-        """All units eventually treated: the fit is REFUSED, not approximated.
+        """All units eventually treated: the fit SUCCEEDS via W2025 Section 5.4.
 
-        This test previously asserted that the earlier cohorts' cells came back
-        finite once the latest cohort's rank-deficient columns were dropped.
-        They were finite and WRONG. Measured on this DGP (true ATT = 1.5 for
-        every post cell) before the completeness gate::
+        This panel used to be refused. Before the #729 completeness gate it was
+        worse than refused -- it returned finite and WRONG numbers, because once
+        QR dropped one of the jointly-collinear cells at a fully-treated period
+        the survivors identified contrasts BETWEEN treated cohorts while keeping
+        their ATT(g, t) labels. Measured then (true ATT = 1.5 everywhere)::
 
             ATT(3, 8) = -0.0096      ATT(3, 9) = -0.1038
             ATT(5, 8) = -0.0214      ATT(5, 9) = -0.2393
             overall_att = 1.0023     (true 1.5)
 
-        Once QR drops one of the jointly-collinear cells at a period where every
-        unit is treated, the survivors identify contrasts BETWEEN treated
-        cohorts while keeping their ATT(g, t) labels. Asserting finiteness is
-        exactly what let that through (codex R8 P0).
-
-        W2025 Section 5.4 does define the right answer for these panels -- the
-        last cohort serves as the control, so its columns are dropped
-        DELIBERATELY rather than by QR, which leaves the rest identified. The
-        library already does this for the cohort-TREND column but not for the
-        cells, so until that lands the honest behavior is to refuse. Tracked in
-        TODO.md; landing it turns this test back into a fit.
+        Comparison-support filtering now removes those periods BEFORE the solve,
+        which is exactly the paper's rule: with no never-treated group the last
+        cohort serves as the reference and "all dT_i-containing regressors get
+        dropped" (W2025 Eq. 5.13-5.15). Cohort 8 therefore receives no cells,
+        and the retained cells are the absolute tau_gt on t <= G_max - 1.
         """
         rng = np.random.default_rng(7)
         rows = []
@@ -719,8 +714,59 @@ class TestAllEventuallyTreated:
                 rows.append({"unit": u, "time": t, "cohort": cohort, "y": y})
         df = pd.DataFrame(rows)
         est = WooldridgeDiD(control_group="not_yet_treated")
-        with pytest.raises(ValueError, match="not identified and were removed"):
-            est.fit(df, outcome="y", unit="unit", time="time", cohort="cohort")
+        with pytest.warns(UserWarning, match="no eligible comparison group"):
+            res = est.fit(df, outcome="y", unit="unit", time="time", cohort="cohort")
+
+        # Eq. 5.15 on a balanced panel: cells {(g, t) : g <= G_max - 1,
+        # g <= t <= G_max - 1}. G_max = 8, so periods 8 and 9 are dropped and
+        # cohort 8 emits nothing.
+        assert sorted((int(g), int(t)) for g, t in res.group_time_effects) == [
+            (3, 3),
+            (3, 4),
+            (3, 5),
+            (3, 6),
+            (3, 7),
+            (5, 5),
+            (5, 6),
+            (5, 7),
+        ]
+        # The dropped cohort is not advertised as an estimated one.
+        assert set(int(g) for g in res.groups) == {3, 5}
+        assert 8 not in res.groups
+        # Absolute ATTs, not relative: true effect is 1.5 for every post cell.
+        # Scaled by each cell's own SE rather than a fixed band -- per-cell SEs
+        # here are ~0.17-0.21, so a fixed tolerance is either flaky or vacuous.
+        # The pre-fix values this guards against sat ~9 SE away (-0.0096 etc.).
+        assert res.overall_att == pytest.approx(1.5502, abs=1e-3)
+        for key, eff in res.group_time_effects.items():
+            assert (
+                abs(eff["att"] - 1.5) < 3 * eff["se"]
+            ), f"ATT{key} = {eff['att']:.4f} is more than 3 SE from the true 1.5"
+
+    def test_all_treated_names_the_zero_cell_cohort(self):
+        """The user is told which cohort lost its cells, not just that rows went.
+
+        Dropping data silently is the failure mode this whole path exists to
+        avoid: `jwdid` drops the same rows and only reports a smaller N.
+        """
+        rng = np.random.default_rng(7)
+        rows = []
+        for u in range(120):
+            cohort = 3 if u < 60 else 6
+            for t in range(1, 7):
+                rows.append(
+                    {
+                        "unit": u,
+                        "time": t,
+                        "cohort": cohort,
+                        "y": rng.standard_normal() + 1.5 * int(t >= cohort),
+                    }
+                )
+        df = pd.DataFrame(rows)
+        with pytest.warns(UserWarning, match=r"Cohort\(s\) 6 have NO estimated cells"):
+            WooldridgeDiD(control_group="not_yet_treated").fit(
+                df, outcome="y", unit="unit", time="time", cohort="cohort"
+            )
 
 
 class TestEmptyCells:
@@ -1608,24 +1654,28 @@ class TestWooldridgeSurvey:
         assert np.isfinite(r.overall_att)
         assert np.isfinite(r.overall_se)
 
-    def test_ols_survey_rank_deficient_now_fails_closed(self, survey_panel):
-        """An all-eventually-treated survey design is REFUSED, not approximated.
+    def test_ols_survey_all_treated_refuses_period_filtering(self, survey_panel):
+        """Comparison-support filtering under `survey_design=` is REFUSED.
 
-        This test previously asserted only that `overall_att` / `overall_se`
-        were finite on a deliberately rank-deficient design. They were finite
-        and WRONG: once rank reduction drops one of the jointly-collinear
-        final-period cells, the survivors identify a contrast between two
-        treated cohorts and keep their ATT(g, t) labels. Measured on an
-        equivalent panel with true effects 1.0 and 3.0, the surviving cell came
-        back as -1.94. Asserting finiteness is what let that through, so the
-        assertion is now the refusal itself (codex R8 P0).
+        This panel previously returned finite and WRONG numbers (a surviving
+        cell came back as -1.94 against true effects of 1.0 and 3.0), then was
+        made to fail closed with a rank-reduction ValueError. Now the periods
+        that caused it are unsupported and would be FILTERED -- but deleting
+        rows under a complex survey design is naive subsetting: it removes
+        their PSUs and strata from the TSL meat and from
+        `df_survey = n_PSU - n_strata`, so the surviving estimates would carry a
+        variance computed on a design the user never specified.
+
+        The refusal is raised BEFORE any row is removed, and points at explicit
+        frame restriction -- NOT `SurveyDesign.subpopulation()`, whose
+        zero-weight padding `_reject_zero_weight_groups` refuses on this path.
         """
         from diff_diff.survey import SurveyDesign
 
-        # Remove never-treated (cohort=0) to create rank-deficient design
+        # Remove never-treated (cohort=0) so later periods lose all comparisons.
         df = survey_panel[survey_panel["cohort"] > 0].copy()
         sd = SurveyDesign(weights="weight", strata="stratum", psu="unit")
-        with pytest.raises(ValueError, match="not identified and were removed"):
+        with pytest.raises(NotImplementedError, match="no eligible comparison group"):
             WooldridgeDiD(control_group="not_yet_treated").fit(
                 df,
                 outcome="y",
@@ -1634,6 +1684,26 @@ class TestWooldridgeSurvey:
                 cohort="cohort",
                 survey_design=sd,
             )
+
+    def test_survey_refusal_is_conditional_on_rows_actually_dropping(self, survey_panel):
+        """The refusal must NOT fire on survey fits that lose nothing.
+
+        Instrumented over the suite, 59 `fit` calls pass `survey_design=` and
+        exactly one has an unsupported period. An unconditional refusal would
+        break the other 58, so the guard is pinned as conditional here.
+        """
+        from diff_diff.survey import SurveyDesign
+
+        sd = SurveyDesign(weights="weight", strata="stratum", psu="unit")
+        res = WooldridgeDiD(control_group="not_yet_treated").fit(
+            survey_panel,  # retains its never-treated units at every period
+            outcome="y",
+            unit="unit",
+            time="time",
+            cohort="cohort",
+            survey_design=sd,
+        )
+        assert np.isfinite(res.overall_att)
 
     def test_ols_survey_zero_weight_unit_rejected(self, survey_panel):
         """Zero-weight unit raises ValueError before within_transform."""
@@ -2904,11 +2974,17 @@ class TestOverallAttFailsClosed:
         The upstream ``has_untreated`` guard passes here because it counts this
         cohort's OWN pre-treatment rows as comparison observations -- which is
         precisely why the check has to also run after the solve.
+
+        Still fails closed, but now with a DIFFERENT and more accurate message.
+        Periods 3 and 4 have no untreated unit, so support filtering removes
+        them; cohort 3 then has no observation at or after its own treatment
+        start, so there is nothing to estimate. The old rank-reduction path is
+        no longer reached.
         """
         df = self._unbalanced({3: [1, 2, 3, 4]})
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            with pytest.raises(ValueError, match="not identified and were removed"):
+            with pytest.raises(ValueError, match="No estimable post-treatment cells found"):
                 WooldridgeDiD(method="ols", control_group="not_yet_treated").fit(
                     df, outcome="y", unit="unit", time="time", cohort="cohort"
                 )
@@ -3602,52 +3678,69 @@ class TestPartialRankLossFailsClosed:
                 uid += 1
         return pd.DataFrame(rows)
 
-    @pytest.mark.parametrize(
-        "action,expected",
-        [
-            ("warn", "not identified and were removed"),
-            ("silent", "not identified and were removed"),
-            # "error" fails EARLIER, inside solve_ols, with its own message
-            # naming the dependent column -- also fail-closed, just a different
-            # path. Pinned explicitly so a future refactor cannot quietly move
-            # this mode onto the softer branch.
-            ("error", "rank-deficient"),
-        ],
-    )
-    def test_partial_cell_loss_raises_for_every_rank_deficient_action(self, action, expected):
-        """Including `"silent"`: that setting controls how rank WARNINGS
-        surface, not whether a mislabeled contrast may be returned as an ATT.
-        Measured before the gate under `"silent"`: ATT(3,5) came back as
-        -1.9393 (true +1.0, wrong SIGN) inside overall_att=+0.7703 (true ~1.8),
-        with no warning of any kind.
-        """
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            with pytest.raises(ValueError, match=expected):
-                WooldridgeDiD(
-                    method="ols", control_group="never_treated", rank_deficient_action=action
-                ).fit(
-                    self._no_comparison_final_period(),
-                    outcome="y",
-                    unit="unit",
-                    time="time",
-                    cohort="cohort",
-                )
+    @pytest.mark.parametrize("action", ["warn", "silent", "error"])
+    def test_partial_cell_loss_is_now_filtered_for_every_rank_deficient_action(self, action):
+        """The unsupported period is removed BEFORE the solve, in every mode.
 
-    def test_the_error_names_the_lost_cell(self):
-        """A user cannot act on 'something was dropped' -- the message has to
-        say which cell, since the fix is to restrict the panel or add controls
-        for that period."""
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            with pytest.raises(ValueError, match=r"\(4, 5\)|\(3, 5\)"):
-                WooldridgeDiD(method="ols", control_group="never_treated").fit(
-                    self._no_comparison_final_period(),
-                    outcome="y",
-                    unit="unit",
-                    time="time",
-                    cohort="cohort",
-                )
+        This panel used to raise under all three settings, and before the #729
+        gate it was worse: under `"silent"` ATT(3,5) came back as -1.9393 (true
+        +1.0, wrong SIGN) inside overall_att=+0.7703 (true ~1.8), with no
+        warning of any kind.
+
+        `t=5` has no never-treated observations, so comparison-support filtering
+        drops it and the remaining design is exactly the one
+        `test_the_same_panel_fits_once_the_bad_period_is_removed` fits by hand.
+        Parameterized across all three modes because the drop is NOT gated on
+        `rank_deficient_action` -- that setting governs how rank warnings
+        surface, not whether the estimation sample changes.
+        """
+        with pytest.warns(UserWarning, match="no eligible comparison group"):
+            res = WooldridgeDiD(
+                method="ols", control_group="never_treated", rank_deficient_action=action
+            ).fit(
+                self._no_comparison_final_period(),
+                outcome="y",
+                unit="unit",
+                time="time",
+                cohort="cohort",
+            )
+        assert sorted((int(g), int(t)) for g, t in res.group_time_effects) == [
+            (3, 1),
+            (3, 3),
+            (3, 4),
+            (4, 1),
+            (4, 2),
+            (4, 4),
+        ]
+        # The values the pre-gate bug corrupted, now recovered.
+        assert res.group_time_effects[(3, 3)]["att"] == pytest.approx(1.0, abs=0.1)
+        assert res.group_time_effects[(4, 4)]["att"] == pytest.approx(3.0, abs=0.1)
+
+    def test_the_drop_warning_names_the_period_and_row_count(self):
+        """A user cannot act on 'something was dropped' -- the message has to say
+        WHICH period and how much data, since the remedy is theirs to choose
+        (add never-treated units, or restrict the panel deliberately).
+
+        Replaces an earlier test that pinned the lost-CELL error message; that
+        error is no longer reached on this panel because the period is filtered
+        before the solve.
+        """
+        with pytest.warns(UserWarning) as rec:
+            WooldridgeDiD(method="ols", control_group="never_treated").fit(
+                self._no_comparison_final_period(),
+                outcome="y",
+                unit="unit",
+                time="time",
+                cohort="cohort",
+            )
+        msgs = [str(w.message) for w in rec]
+        drop = [m for m in msgs if "no eligible comparison group" in m]
+        assert drop, f"no comparison-support warning emitted; got {msgs}"
+        assert "1 of 5 periods: 5" in drop[0]
+        assert "observations" in drop[0]
+        # Branch 1 (never_treated + OLS): the cause is missing never-treated
+        # rows, NOT "every unit is already treated".
+        assert "no never-treated units are observed" in drop[0]
 
     def test_the_same_panel_fits_once_the_bad_period_is_removed(self):
         """The gate must not be a blanket refusal: dropping the period that has
