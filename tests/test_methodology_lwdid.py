@@ -42,8 +42,11 @@ Data sources:
 - Castle doctrine: ``benchmarks/data/real/castle_lw_subset.csv``, the real
   Cheng & Hoekstra (2013) panel as packaged by Cunningham (2021) and
   distributed with PR #588 (extracted from commit 8c5cccea; columns state,
-  year, effyear, lhomicide, homicide, population). Committed here because
-  the ``load_castle_doctrine`` upstream source is currently unavailable.
+  year, effyear, lhomicide, homicide, population). Originally committed
+  because the ``load_castle_doctrine`` upstream source was dead; that source
+  is now pinned and verified, but this subset stays as the pinned artifact
+  these goldens were captured against. Consolidating onto the loader is a
+  separate decision, not a consequence of the source being reachable again.
 - Walmart event-study goldens:
   ``benchmarks/data/lwdid_walmart_eventstudy_golden.json`` (Tables A4/A5,
   provenance embedded in the file).

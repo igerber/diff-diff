@@ -1123,6 +1123,9 @@ sources:
         type: api_reference
       - path: docs/tutorials/09_real_world_examples.ipynb
         type: tutorial
+      - path: docs/methodology/REGISTRY.md
+        section: "Castle Doctrine treatment coding"
+        type: methodology
 
   diff_diff/practitioner.py:
     drift_risk: low
