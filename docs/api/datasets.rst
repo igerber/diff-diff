@@ -1,12 +1,19 @@
 Datasets
 ========
 
-Built-in real-world datasets from published studies for examples, tutorials, and testing.
+Built-in datasets from published studies for examples, tutorials, and testing.
 
-All datasets are downloaded from public sources on first use and cached locally
-at ``~/.cache/diff_diff/datasets/``. Pass ``force_download=True`` to any loader
-to refresh the cache. If the download fails and a cached copy exists, the cached
-version is used automatically.
+Canonical data are downloaded from commit-pinned public sources and verified against a
+pinned SHA-256 on every download and cache read, then cached locally at
+``~/.cache/diff_diff/datasets/``. Pass ``force_download=True`` to any loader to refresh
+the cache.
+
+Every loader reports its provenance through ``df.attrs["source"]``. If a source cannot be
+downloaded, parsed, or validated, the loader emits one ``UserWarning`` containing
+``SYNTHETIC`` and returns a generated fallback frame marked
+``df.attrs["source"] == "synthetic_fallback"``. Numbers computed on a fallback frame are
+not replications of the published study. ``load_divorce_laws()`` has no verified source
+configured and returns synthetic data on every call.
 
 Dataset Loaders
 ---------------

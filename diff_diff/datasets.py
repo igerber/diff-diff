@@ -27,8 +27,13 @@ import pandas as pd
 _CACHE_DIR = Path.home() / ".cache" / "diff_diff" / "datasets"
 _MAX_DATASET_BYTES = 50 * 1024 * 1024
 
-# These commit-pinned mirrors were checked against the dataset authors' package
-# artifacts. Every cached and downloaded byte sequence is verified below.
+# These commit-pinned mirrors were verified byte-equivalent to their authoritative
+# sources at pinning time: ``public.dat`` is byte-identical to the copy in
+# ``njmin.zip`` from David Card's data archive, and ``mpdta.csv`` matches
+# ``did::mpdta`` (R package 2.5.1) to CSV round-trip precision (max absolute
+# difference 1.07e-14 on ``lemp``). Every cached and downloaded byte sequence is
+# verified against the pinned SHA-256 below, so a later change at any mirror fails
+# closed to the loud synthetic fallback rather than substituting different data.
 _CARD_KRUEGER_SOURCE_URL = (
     "https://raw.githubusercontent.com/rafiash/CardKrueger-stata-sample/"
     "07bc929f1d6552db117bd27a7cf0d881d16e9494/public.dat"
@@ -865,6 +870,8 @@ def load_castle_doctrine(force_download: bool = False) -> pd.DataFrame:
         - income : float - Per capita income
         - treated : int - 1 if law in effect, 0 otherwise
         - treatment_exposure : float - Fraction of the year the law was in effect
+          (canonical data only; synthetic fallback frames set this to a binary
+          0/1 copy of ``treated``)
         - cohort : int - Alias for first_treat
 
     Notes
@@ -877,6 +884,11 @@ def load_castle_doctrine(force_download: bool = False) -> pd.DataFrame:
     ``df.attrs["source"] == "cheng_hoekstra_castle_data"``. Any download,
     parse, or validation failure emits one ``UserWarning`` containing
     ``SYNTHETIC`` and marks the returned frame as ``"synthetic_fallback"``.
+
+    Replicating Cheng-Hoekstra (2013) requires the paper's regressor and outcome:
+    regress ``log(homicide_rate)`` on ``treatment_exposure`` (their ``CDL_it``,
+    the proportion of the year the law was in effect), not the binary ``treated``.
+    See "Castle Doctrine treatment coding" in ``docs/methodology/REGISTRY.md``.
 
     References
     ----------

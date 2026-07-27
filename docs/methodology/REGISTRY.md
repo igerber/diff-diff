@@ -5837,6 +5837,22 @@ estimator-focused:
 
 ---
 
+# Replication Data Conventions
+
+## Castle Doctrine treatment coding (`load_castle_doctrine`)
+
+**Primary source:** Cheng, C., & Hoekstra, M. (2013). Does Strengthening Self-Defense Law Deter Crime or Escalate Violence? Evidence from Expansions to Castle Doctrine. *Journal of Human Resources*, 48(3), 821-854.
+
+**Module:** `diff_diff/datasets.py`
+
+**Scope:** Treatment-variable coding in `load_castle_doctrine()` only - no estimator, variance, or inference behavior. Loader provenance, checksum pinning, and the synthetic-fallback contract are documented in the loader docstrings and `docs/api/datasets.rst`.
+
+- **Note:** The paper's estimating equation is `Outcome_it = b0*CDL_it + b1*X_it + c_i + u_t + e_it`, "where `CDL_it` is the treatment variable that equals the proportion of year `t` in which state `i` has an effective Castle Doctrine law" (p. 830, Sec. III). For partial-year adopters it states: "we set CDL equal to the proportion of the year in which the law was in effect, though estimates are almost identical when we exclude the year of adoption" (fn. 21 reports the excluded-year estimates). That regressor is preserved verbatim as `treatment_exposure` (the source file's `cdl`). Verified in the file: 0 before adoption and for never-adopters, exactly 1.0 after, and a day-count fraction in the adoption year - `cdl * 365` is an exact integer for 17 of the 21 adopting states (59 to 306 days) and exactly 182.5 for the other four.
+- **Note:** The binary `treated` column follows the standard staggered-DiD convention (`year >= first_treat`), so that `treated`, `first_treat`, and `cohort` stay mutually consistent - which `_validate_panel_keys` enforces and which the cohort estimators (`CallawaySantAnna`, `SunAbraham`) require. This convention matches **neither** of the paper's treatments of the adoption year: not the fractional `CDL_it` of the main specification, nor the drop-the-adoption-year robustness check. It also differs from the source file's own binary `post` indicator (0 in the adoption year, 1 thereafter) on exactly 21 of 550 rows. **Replicating Cheng-Hoekstra requires regressing on `treatment_exposure`, not `treated`.** Synthetic fallback frames carry `treatment_exposure` as a binary 0/1 copy of `treated` and therefore cannot support the paper's specification at all.
+- **Note:** The paper's dependent variable is the log of the outcome per 100,000 population (p. 830). `homicide_rate` is the level (the source file's `homicide`, labelled "homicide count per 100,000 state population"), so a replication must take logs. The file's `l_homicide`, which is exactly `log(homicide)`, is not carried into the public schema.
+
+---
+
 # Version History
 
 - **v1.3** (2026-03-26): Added Replicate Weight Variance, DEFF Diagnostics,
