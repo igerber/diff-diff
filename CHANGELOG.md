@@ -90,9 +90,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `G - 1` trend slopes with the last cohort absent as the baseline. Under
   `survey_design=` the combination is refused rather than subsetted, for the
   same reason as the unidentified-cohort refusal below.
-  Not included: the `D_{G_max} × X` covariate normalization, so supplying
-  covariates on such a panel is still rank-deficient — coefficients are
-  unaffected but `rank_deficient_action="error"` raises. Tracked in `TODO.md`.
+  On an **unbalanced** panel a unit observed only at unsupported periods is
+  removed with them, which shrinks the cohort-share weight `N_g` (Eqs. 7.4/7.6)
+  below the cohort actually supplied — measured at a 2x swing in
+  `aggregate(weights="cohort_share")`. The paper defines `N_g` on a balanced
+  panel and does not settle which reading applies, so that aggregation now
+  **fails closed** naming the affected cohorts and unit counts instead of
+  choosing one silently. `weights="cell"` (the default) never reads `N_g`, and
+  balanced panels drop whole periods and no units, so neither is affected.
+  Not included: the `D_{G_max} × X` covariate normalization, so *some* covariate
+  specifications on such a panel remain rank-deficient — `exovar` and `xgvar`,
+  and `xtvar` under `demean_covariates=False`. Default `xtvar` (with
+  `demean_covariates=True`) is **full rank** and fits cleanly even under
+  `rank_deficient_action="error"`. Where the deficiency does bite, coefficients
+  are unaffected but `"error"` raises. Tracked in `TODO.md`.
 - **`WooldridgeDiD` refuses `survey_design=` combined with an unidentified
   cohort** (`NotImplementedError`, all three methods). Excluding a cohort under
   a complex survey design is domain estimation, which this path does not

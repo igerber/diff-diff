@@ -1483,6 +1483,22 @@ class WooldridgeDiD:
         # THIS list: a cohort removed later by exclusion already has its own
         # warning, and naming it here too would double-report it.
         _post_filter_groups = list(groups)
+        # Per-cohort unit counts on the PRE-filter frame. `_n_g_per_cohort` (the
+        # W2025 Eq. 7.4/7.6 cohort-share weight) is read off the FINAL sample,
+        # and period filtering is the first thing in this estimator that can
+        # remove SOME units of a RETAINED cohort -- `_filter_sample` keeps every
+        # row of every treated unit, and unidentified-cohort exclusion removes
+        # whole cohorts. On an unbalanced panel a unit observed only at
+        # unsupported periods vanishes entirely, shrinking N_g and silently
+        # reweighting the aggregate (measured: a cohort supplied with 100 units
+        # of which 90 appear only at a dropped period is counted as 10, moving
+        # aggregate(weights="cohort_share") from 1.8078 to 3.8157). Which N_g
+        # the paper intends is genuinely ambiguous there -- W2025 Section 7
+        # assumes a balanced panel -- so the count is carried to the results
+        # object and `aggregate` fails closed rather than picking one silently.
+        _pre_filter_unit_counts = {
+            g: int(sample.loc[sample[cohort] == g, unit].nunique()) for g in groups
+        }
 
         if _unsupported_periods:
             if survey_design is not None:
@@ -1502,7 +1518,11 @@ class WooldridgeDiD:
                     "the TSL variance and from `df_survey = n_PSU - n_strata`, so "
                     "the surviving estimates would be reported with a variance "
                     "computed on a design you never specified. Restrict the frame "
-                    "to the supported periods explicitly and re-fit."
+                    "to the supported periods explicitly and re-fit -- but first "
+                    "confirm every PSU and stratum survives that restriction. On "
+                    "an unbalanced panel a PSU observed only at these periods "
+                    "disappears with them, which changes the variance in exactly "
+                    "the way this refusal exists to prevent."
                 )
 
             _keep_rows = ~pd.Series(_time_arr, index=sample.index).isin(_unsupported_periods)
@@ -1715,11 +1735,39 @@ class WooldridgeDiD:
                     f"cohort(s) {', '.join(str(g) for g in _fully_dropped)} lost "
                     "every observation to comparison-support filtering"
                 )
+            # The Section 5.4 normalization explains exactly ONE zero-cell
+            # cohort: the LAST one, and only when no never-treated group is
+            # present. Every other zero-cell cohort has a different cause -- a
+            # cohort not treated within the observed periods is the common one
+            # -- and attributing it to a deliberate normalization would tell the
+            # user the wrong thing about their own panel (measured: cohorts
+            # {0, 3, 7} over t=1..5 warns on cohort 7, which is zero-cell only
+            # because t never reaches 7, on a panel that HAS never-treated
+            # units). Explain each cause against the cohorts it actually covers.
+            _ref_cohort = groups[-1] if groups and not bool((sample[cohort] == 0).any()) else None
+            _normalized = [g for g in _zero_cell if g == _ref_cohort]
+            _other_zero = [g for g in _zero_cell if g != _ref_cohort]
+            _why = []
+            if _normalized:
+                _why.append(
+                    f"Cohort {_normalized[0]} is the W2025 Section 5.4 reference: "
+                    "with no never-treated group the last cohort serves as the "
+                    "comparison and receives no cells of its own."
+                )
+            if _other_zero:
+                _why.append(
+                    f"Cohort(s) {', '.join(str(g) for g in _other_zero)} yielded no "
+                    "estimable cell -- typically the cohort is not treated within "
+                    "the observed periods, or each of its cells falls at a period "
+                    "with no eligible comparison group."
+                )
+            if _fully_dropped:
+                _why.append(
+                    "Cohorts that lost every observation were observed only at "
+                    "periods with no eligible comparison group."
+                )
             warnings.warn(
-                "; ".join(_parts)
-                + ". Their ATT(g, t) are not estimated. This is the W2025 Section "
-                "5.4 normalization when no never-treated group exists: the last "
-                "cohort serves as the reference and receives no cells of its own.",
+                "; ".join(_parts) + ". Their ATT(g, t) are not estimated. " + " ".join(_why),
                 UserWarning,
                 stacklevel=2,
             )
@@ -1937,6 +1985,21 @@ class WooldridgeDiD:
                 n_cov_interact=n_cov_interact,
                 survey_design=survey_design,
             )
+
+        # Units a RETAINED, ESTIMATED cohort lost to comparison-support
+        # filtering. Attached here rather than threaded through three fitter
+        # signatures: all three paths converge on this line, and every one of
+        # them builds `_n_g_per_cohort` from the post-filter sample. Empty
+        # whenever nothing was filtered, so the balanced all-eventually-treated
+        # deliverable -- which drops whole PERIODS and no units at all -- is
+        # untouched.
+        results._cohort_units_dropped = {
+            g: _pre_filter_unit_counts[g] - results._n_g_per_cohort[g]
+            for g in results.groups
+            if g in _pre_filter_unit_counts
+            and g in results._n_g_per_cohort
+            and _pre_filter_unit_counts[g] > results._n_g_per_cohort[g]
+        }
 
         self._results = results
         self.is_fitted_ = True

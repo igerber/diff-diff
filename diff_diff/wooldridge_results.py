@@ -160,6 +160,19 @@ class WooldridgeDiDResults(BaseResults):
     weights ``ω̂_{ge}``. Empty dict on fits that pre-date the PR-B
     cohort-share surface (no information loss — ``weights="cell"`` is
     unaffected)."""
+    _cohort_units_dropped: Dict[Any, int] = field(default_factory=dict, repr=False)
+    """Units an ESTIMATED cohort lost to comparison-support filtering, by
+    cohort. Non-empty only on UNBALANCED panels where some unit is observed
+    exclusively at periods that carry no eligible comparison group: whole
+    periods go, and a unit living only in them goes with them. ``N_g`` above
+    is then read off a strictly smaller unit set than the cohort the user
+    supplied, which reweights ``aggregate(weights="cohort_share")``
+    materially (measured: 1.8078 vs 3.8157 with 90 of a cohort's 100 units
+    lost). W2025 Section 7 defines ``N_g`` on a balanced panel and does not
+    say which reading applies here, so ``aggregate`` refuses rather than
+    picking one — mirroring the survey + ``cohort_share`` refusal below.
+    Empty whenever nothing was filtered, which includes every balanced
+    all-eventually-treated fit."""
     _gt_vcov: Optional[np.ndarray] = field(default=None, repr=False)
     """Full vcov of all β_{g,t} coefficients (ordered same as sorted group_time_effects keys)."""
     _gt_keys: List[Tuple[Any, Any]] = field(default_factory=list, repr=False)
@@ -408,6 +421,31 @@ class WooldridgeDiDResults(BaseResults):
                 "(_n_g_per_cohort) populated at fit time; this Results "
                 "object has none. Re-fit with the current WooldridgeDiD "
                 "version, or use weights='cell' (default) on legacy fits."
+            )
+
+        # Comparison-support filtering + cohort_share is refused for the same
+        # reason: ``_n_g_per_cohort`` counts units in the FINAL sample, so when
+        # filtering removed every observation of some units in an estimated
+        # cohort, those weights describe a cohort strictly smaller than the one
+        # supplied. Both readings of N_g are defensible and they disagree
+        # materially, so fail closed rather than return a confident number from
+        # an estimand the paper does not define (W2025 Section 7 assumes a
+        # balanced panel). ``weights="cell"`` never reads N_g and is unaffected.
+        if weights == "cohort_share" and self._cohort_units_dropped:
+            _detail = ", ".join(
+                f"cohort {g}: {n} unit(s)" for g, n in sorted(self._cohort_units_dropped.items())
+            )
+            raise ValueError(
+                "aggregate(weights='cohort_share') is not supported on this fit: "
+                "comparison-support filtering removed every observation of some "
+                f"units belonging to estimated cohort(s) ({_detail}), so the "
+                "per-cohort unit counts N_g (paper W2025 Eqs. 7.4/7.6) no longer "
+                "describe the cohorts you supplied. Whether N_g should count the "
+                "supplied cohort or only the units that survived filtering is "
+                "undefined for unbalanced panels -- the two disagree materially "
+                "-- so this library refuses rather than choosing silently. Use "
+                "weights='cell' (default), or restrict the panel to periods with "
+                "an eligible comparison group so that no unit is dropped."
             )
 
         # Survey + cohort_share composition is not yet supported. Codex R3

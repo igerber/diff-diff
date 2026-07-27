@@ -1749,8 +1749,13 @@ class TestW2025Section8HeterogeneousTrends:
             "leads."
         )
 
-    def test_cohort_trends_true_all_treated_panel_is_refused(self) -> None:
-        """``cohort_trends=True`` on an all-eventually-treated panel is REFUSED.
+    def test_cohort_trends_true_all_treated_panel_estimates(self) -> None:
+        """``cohort_trends=True`` on an all-eventually-treated panel ESTIMATES.
+
+        It used to be refused: the Section 5.4 rule reached the trend columns
+        but not the cohort x time cells, so the design sank at fully-treated
+        periods. Comparison-support filtering supplies the cell half, so the
+        trend-drop path below is now reachable end to end.
 
         Paper W2025 Section 5.4: when all units are eventually treated
         and the last cohort serves as control, "all variables in

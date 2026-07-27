@@ -1379,8 +1379,12 @@ the last cohort becomes the reference (W2025 Section 5.4). The fit warns naming
 the dropped periods, the observation count and the cause, and separately names
 any cohort left with no estimated cells; `results.groups` excludes those
 cohorts. Stata `jwdid` performs the same reduction silently, reporting only a
-smaller `N`. Covariates on such a panel are still rank-deficient
-(`rank_deficient_action="error"` raises); coefficients are unaffected.
+smaller `N`. SOME covariate specifications on such a panel are still
+rank-deficient -- `exovar`, `xgvar`, and `xtvar` with
+`demean_covariates=False` -- because `D_{G_max} x X` is not normalized;
+`rank_deficient_action="error"` raises on those and coefficients are
+unaffected either way. Default `xtvar` (`demean_covariates=True`) is FULL
+RANK and fits cleanly.
 
 **Survey designs refuse row-dropping paths.** `survey_design=` combined with
 either comparison-support period filtering or unidentified-cohort exclusion
