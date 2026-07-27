@@ -751,9 +751,12 @@ def load_card_krueger(force_download: bool = False) -> pd.DataFrame:
     work offline and fail once the canonical source is reachable.
 
     The canonical data are checksum-verified and returned with
-    ``df.attrs["source"] == "card_krueger_public_data"``. Any download, parse,
-    or validation failure emits one ``UserWarning`` containing ``SYNTHETIC``
-    and returns ``df.attrs["source"] == "synthetic_fallback"``.
+    ``df.attrs["source"] == "card_krueger_public_data"``. A download failure
+    falls back to a checksum-valid cache entry when one exists, returning that
+    canonical data silently. Only when neither a verified cache entry nor a
+    verified fresh download is available - or when the source fails to parse or
+    validate - does the loader emit one ``UserWarning`` containing ``SYNTHETIC``
+    and return ``df.attrs["source"] == "synthetic_fallback"``.
 
     References
     ----------
@@ -898,9 +901,12 @@ def load_castle_doctrine(force_download: bool = False) -> pd.DataFrame:
     2005 and 2009, creating a staggered treatment design.
 
     The canonical data are checksum-verified and returned with
-    ``df.attrs["source"] == "cheng_hoekstra_castle_data"``. Any download,
-    parse, or validation failure emits one ``UserWarning`` containing
-    ``SYNTHETIC`` and marks the returned frame as ``"synthetic_fallback"``.
+    ``df.attrs["source"] == "cheng_hoekstra_castle_data"``. A download failure
+    falls back to a checksum-valid cache entry when one exists, returning that
+    canonical data silently. Only when neither a verified cache entry nor a
+    verified fresh download is available - or when the source fails to parse or
+    validate - does the loader emit one ``UserWarning`` containing ``SYNTHETIC``
+    and mark the returned frame as ``"synthetic_fallback"``.
 
     Replicating Cheng-Hoekstra (2013) requires the paper's regressor and outcome:
     regress ``log(homicide_rate)`` on ``treatment_exposure`` (their ``CDL_it``,
@@ -1279,9 +1285,12 @@ def load_mpdta(force_download: bool = False) -> pd.DataFrame:
     in tutorials demonstrating the Callaway-Sant'Anna estimator.
 
     The canonical data are checksum-verified and returned with
-    ``df.attrs["source"] == "callaway_santanna_mpdta"``. Any download, parse,
-    or validation failure emits one ``UserWarning`` containing ``SYNTHETIC``
-    and marks the returned frame as ``"synthetic_fallback"``.
+    ``df.attrs["source"] == "callaway_santanna_mpdta"``. A download failure
+    falls back to a checksum-valid cache entry when one exists, returning that
+    canonical data silently. Only when neither a verified cache entry nor a
+    verified fresh download is available - or when the source fails to parse or
+    validate - does the loader emit one ``UserWarning`` containing ``SYNTHETIC``
+    and mark the returned frame as ``"synthetic_fallback"``.
 
     References
     ----------
