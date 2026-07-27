@@ -495,6 +495,54 @@ class TestLegacyLoaderProvenance:
             assert result.attrs["source"] == "synthetic_fallback"
             assert result.shape == _construct_mpdta_data().shape
 
+    def test_production_mpdta_bytes_load_end_to_end_offline(self, tmp_path, monkeypatch):
+        """Drive the real pinned bytes through the whole loader, with no network.
+
+        Every other canonical test substitutes an already-normalized fabricated frame,
+        so the actual parse of the production file - column naming, ``first.treat``
+        renaming, dtype handling - is only ever exercised by a live download. The
+        canonical bytes are already committed for the benchmarks, and their digest is
+        the pin, so the full path can be covered offline for free.
+
+        Doubles as a guard on the pin itself: re-pinning to a revision that does not
+        match the committed fixture fails here rather than silently at runtime.
+        """
+        import hashlib
+        import warnings
+
+        import diff_diff.datasets as datasets_mod
+
+        fixture = Path(__file__).resolve().parent.parent / "benchmarks/data/real/mpdta.csv"
+        if not fixture.exists():
+            pytest.skip(f"{fixture.name} not committed (partial checkout)")
+
+        payload = fixture.read_bytes()
+        assert (
+            hashlib.sha256(payload).hexdigest() == datasets_mod._MPDTA_SOURCE_SHA256
+        ), "pinned mpdta digest no longer matches the committed canonical fixture"
+
+        monkeypatch.setattr(datasets_mod, "_CACHE_DIR", tmp_path)
+        response = MagicMock()
+        response.__enter__ = lambda self: self
+        response.__exit__ = lambda self, *a: False
+        response.read.return_value = payload
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            with patch("diff_diff.datasets.urlopen", return_value=response):
+                df = load_mpdta(force_download=True)
+
+        assert not caught, "production bytes must load without warning"
+        assert df.attrs["source"] == "callaway_santanna_mpdta"
+        # Anchors from the R `did` package's documented panel.
+        assert df.shape == (2500, 7)
+        assert df["countyreal"].nunique() == 500
+        assert set(df["year"]) == {2003, 2004, 2005, 2006, 2007}
+        assert set(df["first_treat"]) == {0, 2004, 2006, 2007}
+        assert (df["cohort"] == df["first_treat"]).all()
+        assert (df["treat"] == (df["first_treat"] > 0).astype(int)).all()
+        assert df.notna().all().all()
+
     @pytest.mark.parametrize(
         "failure",
         ["transport", "checksum", "oversized"],
