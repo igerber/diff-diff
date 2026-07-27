@@ -83,9 +83,11 @@ Example
 load_divorce_laws
 ~~~~~~~~~~~~~~~~~
 
-Unilateral (no-fault) divorce law reforms. Staggered adoption across U.S.
-states (1968--1988) from Stevenson & Wolfers (2006), with outcomes for divorce
-rate, female labor force participation, and female suicide rate.
+Always-synthetic teaching panel of unilateral (no-fault) divorce law reforms,
+modelled on the staggered adoption studied by Stevenson & Wolfers (2006), with
+outcomes for divorce rate, female labor force participation, and female suicide
+rate. No verified source is configured for this loader, so it warns and returns
+generated data on every call and is not suitable for replication.
 
 .. autofunction:: diff_diff.load_divorce_laws
 
@@ -110,9 +112,9 @@ Example
 load_mpdta
 ~~~~~~~~~~
 
-Minimum wage panel data for training (Callaway & Sant'Anna 2021). Simulated
-county-level employment data with staggered minimum wage increases (2003--2007),
-from the R ``did`` package.
+County teen-employment panel (Callaway & Sant'Anna 2021): the canonical
+2,500-row ``mpdta`` dataset distributed with the R ``did`` package, covering
+staggered minimum wage increases (2003--2007).
 
 .. autofunction:: diff_diff.load_mpdta
 

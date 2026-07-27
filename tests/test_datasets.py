@@ -495,6 +495,40 @@ class TestLegacyLoaderProvenance:
             assert result.attrs["source"] == "synthetic_fallback"
             assert result.shape == _construct_mpdta_data().shape
 
+    def test_failed_cache_write_leaves_no_partial_file(self, tmp_path, monkeypatch):
+        """A write that fails mid-flight must not strand a ``delete=False`` temp file."""
+        import diff_diff.datasets as datasets_mod
+
+        real_ntf = datasets_mod.NamedTemporaryFile
+
+        class FailingWrite:
+            """Create the temp file for real, then fail the write (e.g. ENOSPC)."""
+
+            def __init__(self, *args, **kwargs):
+                self._f = real_ntf(*args, **kwargs)
+
+            def __enter__(self):
+                self._f.__enter__()
+                return self
+
+            def __exit__(self, *args):
+                return self._f.__exit__(*args)
+
+            @property
+            def name(self):
+                return self._f.name
+
+            def write(self, data):
+                raise OSError(28, "No space left on device")
+
+        cache_path = tmp_path / "mpdta.csv"
+        monkeypatch.setattr(datasets_mod, "NamedTemporaryFile", FailingWrite)
+
+        with pytest.raises(datasets_mod._DatasetSourceError, match="Failed to cache"):
+            datasets_mod._write_cache_atomically(cache_path, b"x" * 100, "mpdta")
+
+        assert list(tmp_path.iterdir()) == [], "partial cache file was not cleaned up"
+
     def test_source_specific_dimensions_are_enforced(self):
         """Synthetic frames cannot pass as Card or Castle canonical data."""
         from diff_diff.datasets import (

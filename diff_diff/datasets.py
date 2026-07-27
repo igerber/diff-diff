@@ -114,8 +114,11 @@ def _write_cache_atomically(cache_path: Path, content: bytes, name: str) -> None
             prefix=f".{cache_path.name}.",
             delete=False,
         ) as temp_file:
-            temp_file.write(content)
+            # Bind the path before writing: ``delete=False`` means a failed write
+            # still leaves the file on disk, and the handler below can only clean
+            # up what it knows about.
             temp_path = Path(temp_file.name)
+            temp_file.write(content)
         os.replace(temp_path, cache_path)
     except OSError as e:
         if temp_path is not None:
@@ -1304,9 +1307,11 @@ def load_mpdta(force_download: bool = False) -> pd.DataFrame:
 
 def _construct_mpdta_data() -> pd.DataFrame:
     """
-    Construct mpdta dataset matching the R `did` package.
+    Construct a synthetic stand-in for the mpdta dataset.
 
-    This replicates the simulated dataset used in Callaway-Sant'Anna tutorials.
+    Mirrors the schema and panel dimensions of the R `did` package's ``mpdta``
+    (500 counties, 2003-2007, cohorts 2004/2006/2007) with generated values. It
+    is NOT the canonical data and must not be used for replication.
     """
     np.random.seed(2021)  # Callaway-Sant'Anna publication year, for reproducibility
 
@@ -1705,7 +1710,7 @@ def _construct_walmart_data() -> pd.DataFrame:
 
 def list_datasets() -> Dict[str, str]:
     """
-    List available real-world datasets.
+    List available built-in datasets.
 
     Returns
     -------
