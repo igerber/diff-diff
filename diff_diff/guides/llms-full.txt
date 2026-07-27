@@ -2355,7 +2355,7 @@ data = generate_synthetic_control_data(n_donors=20, n_pre=60, n_post=5,
                                        effect_type="ramp", seed=0)
 ```
 
-## Real-World Datasets
+## Built-in Datasets
 
 ```python
 from diff_diff import load_card_krueger, load_castle_doctrine, load_divorce_laws, load_mpdta

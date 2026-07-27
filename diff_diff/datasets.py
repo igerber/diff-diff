@@ -874,7 +874,7 @@ def load_castle_doctrine(force_download: bool = False) -> pd.DataFrame:
         - first_treat : int - Year of law adoption (0 = never adopted)
         - homicide_rate : float - Homicides per 100,000 population
         - population : int - State population
-        - income : float - Per capita income
+        - income : float - State median income
         - treated : int - 1 if law in effect, 0 otherwise
         - treatment_exposure : float - Fraction of the year the law was in effect
           (canonical data only; synthetic fallback frames set this to a binary
