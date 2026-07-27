@@ -71,14 +71,16 @@ paper W2025 Section 5.4's all-eventually-treated drop rule). On
 all-treated panels the last cohort is intentionally absent from the
 dict; its slope is the baseline (zero in deviation form).
 
-.. warning::
+.. note::
 
-   The all-eventually-treated branch is currently **unreachable**: the
-   paper's Section 5.4 rule is applied to the trend columns but NOT to
-   the cohort × time cells, so such panels are rank-deficient at
-   fully-treated periods and ``fit()`` raises rather than returning
-   relabeled contrasts. Implementing the cell half restores these fits
-   (tracked in ``TODO.md``).
+   All-eventually-treated panels **estimate**. The paper's Section 5.4
+   rule is applied to the cohort × time cells as well as the trend
+   columns: periods where no unit is untreated carry no identified
+   ATT(g, t), so they are removed from the estimation sample before the
+   solve and the last cohort becomes the reference. The reduction is
+   always reported — the number of observations and periods dropped, the
+   reason, and any cohort left without cells. Stata's ``jwdid`` performs
+   the same reduction silently, reporting only a smaller ``N``.
 
 See ``docs/methodology/REGISTRY.md`` → ``## WooldridgeDiD (ETWFE)`` →
 "Heterogeneous cohort trends" for the full normalization contract.

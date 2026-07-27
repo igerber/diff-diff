@@ -531,6 +531,20 @@ When `has_never_treated == False`:
   `StackedDiD` / `WooldridgeDiD` - use the last-treated or untreated-
   until-late units as implicit controls; estimators do not error, but
   consider whether the implicit control structure is what you want.
+- `WooldridgeDiD` specifically: use `control_group="not_yet_treated"`
+  (the default). `control_group="never_treated"` raises when no
+  cohort-0 units exist. On an all-eventually-treated panel the last
+  cohort becomes the reference per W2025 Section 5.4, so periods at
+  which every unit is treated carry no identified ATT(g, t) and are
+  REMOVED from the estimation sample before the solve. The fit emits a
+  `UserWarning` naming the dropped periods, the observation count and
+  the cause, plus a second naming any cohort left with no estimated
+  cells (the last cohort, normally). `results.groups` excludes those
+  cohorts. If your agent surfaces warnings to a user, surface these:
+  the estimate is computed on fewer rows than were supplied. Stata
+  `jwdid` performs the same reduction but reports only a smaller `N`.
+  Supplying covariates on such a panel is still rank-deficient
+  (`rank_deficient_action="error"` raises); coefficients are unaffected.
 
 ### §4.5 Non-absorbing binary treatment (treatment switches back to 0)
 

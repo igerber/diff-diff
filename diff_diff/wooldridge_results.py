@@ -102,11 +102,15 @@ class WooldridgeDiDResults(BaseResults):
     # never-treated cohort exists, per the all-eventually-treated drop
     # rule). On all-treated panels the last cohort is intentionally
     # absent from the dict; its slope is the baseline (zero in deviation
-    # form). The all-treated branch is currently UNREACHABLE: the paper
-    # rule is applied to the trend columns but not to the cohort × time
-    # cells, so those panels raise at fit() (TODO.md). See REGISTRY
-    # ``## WooldridgeDiD (ETWFE)`` → "Heterogeneous cohort trends" Notes
-    # for the exact normalization contract.
+    # form). The all-treated branch is reachable: the same Section 5.4
+    # rule is applied to the cohort × time CELLS by comparison-support
+    # filtering in fit(), so such panels estimate and this dict carries
+    # G-1 entries. Note it is keyed on PRESENT cohorts while
+    # ``results.groups`` is derived from the emitted cells, so a cohort
+    # retained only as the trend baseline appears in neither -- but a
+    # cohort with a trend slope and no cells appears here and not there.
+    # See REGISTRY ``## WooldridgeDiD (ETWFE)`` → "Heterogeneous cohort
+    # trends" Notes for the exact normalization contract.
     cohort_trend_coefs: Dict[Any, float] = field(default_factory=dict, repr=False)
 
     # Flag set by ``_fit_ols`` when ``n_bootstrap > 0`` AND the multiplier

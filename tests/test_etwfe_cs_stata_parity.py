@@ -123,9 +123,7 @@ def test_golden_records_every_reference_implementation():
     assert _stata_csdid_cells(golden), "golden has no csdid cells"
     assert _stata_jwdid_cells(golden, "jwdid"), "golden has no jwdid cells"
     assert _stata_jwdid_cells(golden, "jwdid_never"), "golden has no jwdid_never cells"
-    assert _stata_jwdid_cells(
-        golden, "jwdid_alltreated"
-    ), "golden has no jwdid_alltreated cells"
+    assert _stata_jwdid_cells(golden, "jwdid_alltreated"), "golden has no jwdid_alltreated cells"
     # The all-treated arm's row count is part of its finding, not incidental.
     assert golden["jwdid_alltreated"]["n"] > 0
     assert golden["jwdid_alltreated"]["n_units"] > 0

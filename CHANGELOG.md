@@ -65,14 +65,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   in every post cell: `ATT(3,8) = -0.0096`, `ATT(5,9) = -0.2393`, and
   `overall_att = 1.0023`, with **no warning** under
   `rank_deficient_action="silent"`.
-  **This is a capability regression, taken deliberately.** Panels with no
-  never-treated group — where periods in which every unit is treated have no
-  eligible comparison — previously produced those wrong numbers and now fail
-  closed, including under `survey_design=` and `cohort_trends=True`. Wooldridge
-  (2025) Section 5.4 defines the correct treatment (the last cohort serves as
-  the control, its columns dropped deliberately rather than by QR); the library
-  already applies that to the cohort-trend column but not to the cells, and
-  implementing the cell half is tracked to restore these fits.
+  Panels with no never-treated group — where periods in which every unit is
+  treated have no eligible comparison — previously produced those wrong numbers.
+  They briefly failed closed, and now **estimate correctly** via the
+  comparison-support filter below; the gate remains as the backstop for what
+  that filter cannot see.
+- **`WooldridgeDiD` estimates all-eventually-treated panels again, implementing
+  Wooldridge (2025) Section 5.4 for the cell and cohort-trend families.** With
+  no never-treated group the last cohort serves as the reference, so periods at
+  which no unit is untreated carry no identified `ATT(g, t)` and are removed
+  from the estimation sample before the solve. Measured on a `{3, 5, 8}` panel
+  over `t = 1..9` with a true ATT of 1.5: cells `(3, 3..7)` and `(5, 5..7)`,
+  `overall_att = 1.5502`, cohort 8 correctly receiving none. Anchored to Stata
+  `jwdid` on the `mpdta` panel with never-treated counties dropped — identical
+  cell set, identical `N` (764 of 955), ATTs agreeing to ~1e-15.
+  **Nothing is dropped silently.** Every fit that reduces the sample reports the
+  periods, the observation count and the cause, and separately names any cohort
+  left without cells or stripped of every row; neither warning is gated on
+  `rank_deficient_action`. On the `never_treated` OLS branch a filtered period
+  can legitimately move a cohort's reference, renormalizing that cohort's ATTs
+  — this warns by name rather than passing silently. (Stata `jwdid` performs the
+  same reduction and reports only a smaller `N`.)
+  `cohort_trends=True` works on these panels for the first time, surfacing
+  `G - 1` trend slopes with the last cohort absent as the baseline. Under
+  `survey_design=` the combination is refused rather than subsetted, for the
+  same reason as the unidentified-cohort refusal below.
+  Not included: the `D_{G_max} × X` covariate normalization, so supplying
+  covariates on such a panel is still rank-deficient — coefficients are
+  unaffected but `rank_deficient_action="error"` raises. Tracked in `TODO.md`.
 - **`WooldridgeDiD` refuses `survey_design=` combined with an unidentified
   cohort** (`NotImplementedError`, all three methods). Excluding a cohort under
   a complex survey design is domain estimation, which this path does not

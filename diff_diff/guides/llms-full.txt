@@ -1360,8 +1360,34 @@ WooldridgeDiD(
     conley_metric: str = "haversine",              # "haversine" | "euclidean"
     conley_kernel: str = "bartlett",               # "bartlett" | "uniform"
     conley_lag_cutoff: int | None = None,          # within-unit Bartlett max lag (0 = spatial-only)
+    cohort_trends: bool = False,            # Linear dg_i*t cohort trends (W2025 Sec 8 / Eq 8.1); OLS only.
+                                            # On all-eventually-treated panels the last cohort's trend
+                                            # column is dropped per Sec 5.4, so cohort_trend_coefs
+                                            # carries G-1 entries. Rejected with survey_design= and
+                                            # with control_group="never_treated".
 )
 ```
+
+`fit()` additionally accepts `survey_design=` (a `SurveyDesign`) on all three
+methods; see the Survey Support section.
+
+**All-eventually-treated panels (no never-treated group).** Use
+`control_group="not_yet_treated"` — `"never_treated"` raises when no cohort-0
+units exist. Periods at which every unit is treated carry no identified
+ATT(g, t), so they are REMOVED from the estimation sample before the solve and
+the last cohort becomes the reference (W2025 Section 5.4). The fit warns naming
+the dropped periods, the observation count and the cause, and separately names
+any cohort left with no estimated cells; `results.groups` excludes those
+cohorts. Stata `jwdid` performs the same reduction silently, reporting only a
+smaller `N`. Covariates on such a panel are still rank-deficient
+(`rank_deficient_action="error"` raises); coefficients are unaffected.
+
+**Survey designs refuse row-dropping paths.** `survey_design=` combined with
+either comparison-support period filtering or unidentified-cohort exclusion
+raises `NotImplementedError` rather than deleting rows, because deletion would
+remove their PSUs and strata from the TSL variance. Restrict the frame yourself
+and re-fit. The refusals are conditional: survey fits that drop nothing are
+unaffected.
 
 **Alias:** `ETWFE`
 

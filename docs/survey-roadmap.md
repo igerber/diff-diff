@@ -242,6 +242,13 @@ Logit/Poisson use survey-weighted IRLS + X_tilde linearization for TSL
 vcov. Replicate-weight designs raise `NotImplementedError`; bootstrap +
 survey is rejected.
 
+Two further combinations raise rather than subsetting the frame in place:
+comparison-support filtering (periods with no untreated unit) and
+unidentified-cohort exclusion. Both would delete rows, which under a complex
+design removes their PSUs and strata from the variance — see the Current
+Limitations table. The refusals are conditional: a survey fit that drops
+nothing is unaffected.
+
 ### 10g. Practitioner Guidance ✅
 
 Subsumed by the practitioner decision tree
@@ -268,6 +275,8 @@ the limitation and suggested alternative.
 | ImputationDiD | `pretrend_test()` + replicate weights | Use analytical survey design instead |
 | DiD, TWFE | `inference='wild_bootstrap'` + `survey_design` | Use analytical survey inference (default) |
 | EfficientDiD | `cluster` + `survey_design` | Use `survey_design` with PSU/strata |
+| WooldridgeDiD | Unsupported-period filtering + `survey_design` | Restrict the frame to the supported periods explicitly and re-fit. Deleting rows in-place is naive subsetting: it removes their PSUs and strata from the TSL meat and from `df_survey = n_PSU - n_strata`. For period-only restriction nothing is lost — no PSU or stratum disappears and `df_survey` is unchanged. |
+| WooldridgeDiD | Unidentified-cohort exclusion + `survey_design` | Same reason (ledger `M-123`). Drop the cohort from the frame yourself, or supply a panel where every cohort has a pre-treatment period. |
 | All bootstrap estimators | Bootstrap + replicate weights | These are alternative variance methods; pick one |
 
 **Warning/fallback (no error):** MultiPeriodDiD with `wild_bootstrap` +

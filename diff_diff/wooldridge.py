@@ -148,9 +148,11 @@ def _require_complete_cell_set(
     builder deliberately never emitted (the reference, unobserved pairs) are not
     in ``requested_keys`` and so are not counted as losses.
 
-    The same-period comparison-support diagnostic that would catch this BEFORE
-    the solve, with a better message, is tracked in TODO.md; this is the
-    correctness backstop that must hold regardless.
+    The same-period comparison-support filter now catches the most common cause
+    BEFORE the solve, with a better message: periods where no unit is untreated
+    are removed from the estimation sample and reported. This remains the
+    correctness backstop for what that filter cannot see -- cohorts sharing no
+    comparison period, and covariate collinearity.
     """
     missing = [
         k
@@ -168,11 +170,13 @@ def _require_complete_cell_set(
         "the survivors identify whatever contrast the reduced design supports "
         "(e.g. a difference between two treated cohorts), so reporting them "
         "under their original labels, or averaging them into the overall ATT, "
-        "would be silently wrong. This usually means those periods have no "
-        "eligible comparison group: every unit is already treated, or the "
-        "never-treated units are not observed then. Restrict the panel to "
-        "periods with an available comparison group, or add never-treated "
-        "observations covering them."
+        "would be silently wrong. Periods with no eligible comparison group are "
+        "already removed before the solve, so this points at one of two other "
+        "causes: treated cohorts that share no comparison period with each "
+        "other, or a covariate collinear with the treatment cells. Check your "
+        "covariates first if any were supplied; otherwise restrict the panel to "
+        "cohorts observed over a common window, or add never-treated "
+        "observations."
     )
 
 
@@ -208,10 +212,12 @@ def _require_estimable_overall_att(
     no-silent-NaN convention, ledger row ``M-124``).
 
     NOT every branch is a final answer. Cause (2) discards anticipation-window
-    ATT(g, t) that ARE identified, and cause (3) is a post-hoc stand-in for the
-    same-period comparison-support diagnostic this estimator does not yet
-    compute. Both are STOPGAPS with follow-up rows in ``TODO.md``; only cause
-    (1) and the zero-weight case are terminal.
+    ATT(g, t) that ARE identified, and remains a STOPGAP with a follow-up row in
+    ``TODO.md``. Cause (3) was a post-hoc stand-in for the comparison-support
+    diagnostic, which the estimator now computes BEFORE the solve -- so it is
+    reached only by what that filter cannot see (cohorts sharing no comparison
+    period, covariate collinearity). Cause (1) and the zero-weight case are
+    terminal.
     """
     if np.isfinite(overall.get("att", float("nan"))):
         return
@@ -227,10 +233,11 @@ def _require_estimable_overall_att(
         raise ValueError(
             "No treatment effect is identified: every cohort-time cell was "
             "removed from the design, so the overall ATT is undefined. This "
-            "usually means the treatment cells are collinear with the absorbed "
-            f"fixed effects -- with control_group={control_group!r}, a single "
-            "treated cohort and no never-treated units leaves every post-period "
-            f"cell equal to a time indicator. {hint}"
+            "means the treatment cells are collinear with the absorbed "
+            f"fixed effects even after unsupported periods were removed -- with "
+            f"control_group={control_group!r}, this happens when the surviving "
+            "cohorts share no comparison period, or when a supplied covariate is "
+            f"collinear with the cells. {hint}"
         )
     if not post:
         raise ValueError(
@@ -841,8 +848,21 @@ class WooldridgeDiD:
         switch; suppress via ``warnings.filterwarnings``.
     control_group : {"not_yet_treated", "never_treated"}
         Which units serve as the comparison group.  "not_yet_treated" (jwdid
-        default) uses all untreated observations at each time period;
-        "never_treated" uses only units never treated throughout the sample.
+        default) uses all untreated observations at each time period.
+
+        "never_treated" restricts the comparison pool to never-treated units
+        ON THE OLS PATH ONLY, where every ``(g, t)`` cell except each cohort's
+        reference is emitted, so treated units' pre-treatment rows sit in their
+        own indicators rather than the baseline.  On the **nonlinear** paths
+        (``method="logit"`` / ``"poisson"``) only post-treatment cells are
+        emitted -- including all cells would make each cohort dummy collinear
+        with the sum of its own indicators -- so treated units' pre-treatment
+        rows ARE part of the identifying comparison there, exactly as under
+        ``"not_yet_treated"``.  This asymmetry is pre-existing and structural;
+        see the REGISTRY note.  Note that ``n_control_units`` counts
+        never-treated UNITS on this setting regardless of method, so on the
+        nonlinear paths it under-reports the rows actually doing the
+        comparison (tracked in ``TODO.md``).
     anticipation : int
         Number of periods before treatment onset to include as treatment cells
         (anticipation effects).  0 means no anticipation.
@@ -902,15 +922,17 @@ class WooldridgeDiD:
         only: ``cohort_trends=True`` + ``method ∈ {"logit","poisson"}``
         raises ``NotImplementedError`` at ``__init__``. Auto-routes to
         the full-dummy design regardless of ``vcov_type`` (matching the
-        absorb→fixed_effects auto-route). Each treated cohort must have
-        ≥ 2 observed pre-periods in the analysis sample for ``dg_i · t``
-        to be separately identified from cohort + time FE; ``fit()``
-        raises ``ValueError`` otherwise. On all-eventually-treated
-        panels the last cohort's trend column is dropped per paper
-        Section 5.4 -- but note such panels currently RAISE before that
-        matters, because the corresponding cell-level normalization is
-        not implemented and the design is rank-deficient at
-        fully-treated periods (see REGISTRY, tracked in TODO.md). ``cohort_trends=True`` + ``survey_design`` raises
+        absorb→fixed_effects auto-route). Each cohort that RECEIVES a
+        trend column must have ≥ 2 observed pre-periods in the final
+        analysis sample for ``dg_i · t`` to be separately identified
+        from cohort + time FE; ``fit()`` raises ``ValueError``
+        otherwise. The check runs after comparison-support filtering and
+        unidentified-cohort exclusion, and skips the last cohort on
+        all-eventually-treated panels because that cohort gets no trend
+        column. On such panels the last cohort's trend column is dropped
+        per paper Section 5.4, matching the cell-level normalization
+        applied to the design, so ``cohort_trend_coefs`` carries ``G-1``
+        entries. ``cohort_trends=True`` + ``survey_design`` raises
         ``NotImplementedError`` at ``fit()`` (deferred follow-up).
         ``cohort_trends=True`` + ``control_group="never_treated"``
         also raises ``NotImplementedError`` at ``fit()``. The
@@ -2064,13 +2086,18 @@ class WooldridgeDiD:
                 # "all variables in regression (5.3) involving dT_i get
                 # dropped" when the last cohort serves as control). Drop
                 # the LAST cohort's trend column deterministically — that
-                # cohort then acts as the trend baseline. NOTE: the
-                # matching last-cohort handling for cohort × time CELLS
-                # is NOT implemented in ``_build_interaction_matrix``, so
-                # this branch is currently unreachable end-to-end -- such
-                # panels are rank-deficient at fully-treated periods and
-                # fail the completeness gate. Kept because implementing
-                # the cell half is what restores them (TODO.md).
+                # cohort then acts as the trend baseline. The matching
+                # last-cohort handling for cohort × time CELLS is the
+                # comparison-support filter in ``fit()``, so this branch
+                # is now reachable end-to-end: the fully-treated periods
+                # are removed before the solve rather than sinking the
+                # design, and ``cohort_trend_coefs`` surfaces G-1 entries.
+                #
+                # `groups` here MUST be the PRESENT-cohort list, not the
+                # cells-derived one used for results metadata: the trend
+                # baseline is exactly the zero-cell cohort G_max, so a
+                # cells-derived list would drop the second-to-last
+                # cohort's trend column instead and shift every ATT.
                 has_never_treated = (sample[cohort] == 0).any()
                 trend_groups = groups if has_never_treated else groups[:-1]
                 trend_cols: List[np.ndarray] = []

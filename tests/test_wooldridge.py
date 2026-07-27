@@ -3870,8 +3870,7 @@ class TestComparisonSupportFiltering:
             # the Eq. 5.15 cohort bound. Observations start at t=1, so that is
             # `g - anticipation > 1`. At anticipation=2 this removes cohort 3,
             # leaving exactly {(5,3),(5,4),(5,5)} -- measured.
-            and g - anticipation > 1
-            and g - anticipation <= t <= g_max - 1 - anticipation
+            and g - anticipation > 1 and g - anticipation <= t <= g_max - 1 - anticipation
         }
         assert {(int(g), int(t)) for g, t in res.group_time_effects} == expected
         # cohort G_max is the reference: no cells of its own.
@@ -4076,8 +4075,8 @@ class TestComparisonSupportFiltering:
         df = self._all_treated(n_per=40, seed=13)
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            res = WooldridgeDiD(
-                control_group="not_yet_treated", n_bootstrap=49, seed=42
-            ).fit(df, outcome="y", unit="unit", time="time", cohort="cohort")
+            res = WooldridgeDiD(control_group="not_yet_treated", n_bootstrap=49, seed=42).fit(
+                df, outcome="y", unit="unit", time="time", cohort="cohort"
+            )
         assert np.isfinite(res.overall_att)
         assert np.isfinite(res.overall_se)
