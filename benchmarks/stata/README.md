@@ -214,9 +214,21 @@ external anchors, with the ETWFE-vs-CS gap recorded rather than asserted away.
 - **Point estimates** — both estimators match their reference to `atol=1e-6`
   (observed ~3e-8, i.e. Stata's log-output rounding) on all 7 post-treatment cells.
 - **CS SEs** — match `csdid` outright (`rtol=1e-5`).
+- **All-eventually-treated cell set and row count** (`jwdid_alltreated`) — the
+  same panel with `first_treat == 0` dropped: 191 units, 955 rows. `jwdid`
+  succeeds and estimates on 764 of them, because with no never-treated group the
+  last cohort (2007) becomes the reference and the fully-treated periods carry
+  no identified ATT (W2025 Section 5.4). It reports only the smaller `N`. The
+  library computes the identical cell set
+  (`(2004,2004), (2004,2005), (2004,2006), (2006,2006)`) on the identical row
+  count, with ATTs matching to ~1e-15 — and warns about the reduction rather
+  than passing it over in silence. `n` and `n_units` are serialized because the
+  row count is the finding, not incidental.
 - **ETWFE SEs** — do **not** match `jwdid`. Every cell is uniformly SMALLER
   than Stata's, by a factor that shrinks as the cluster count grows: 1.0280 at
-  G=20, 1.0132 at G=40, 1.0010 at G=500. **The mechanism is not identified.**
+  G=20, 1.0132 at G=40, 1.00264 at G=191, 1.0010 at G=500. Each arm therefore
+  pins its OWN measured ratio; the constant does not transfer between arms.
+  **The mechanism is not identified.**
   The gap tracks `sqrt(G/(G-1))` but sits consistently ABOVE it, and the CR1
   factor in `linalg.py` already applies `(G/(G-1)) * ((n-1)/(n-k))` — so a
   missing cluster term is ruled out. The test pins the observed ratio and its

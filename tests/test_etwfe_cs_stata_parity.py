@@ -77,12 +77,17 @@ def _stata_csdid_cells(golden: dict) -> dict:
 def _stata_jwdid_cells(golden: dict, block: str = "jwdid") -> dict:
     """``2004bn.first_treat#2005.year#c.__tr__`` -> ``(2004, 2005)``.
 
-    ``block`` selects the arm: ``"jwdid"`` (not-yet-treated, the default) or
-    ``"jwdid_never"`` (never-treated controls, the issue #724 anchor). Both use
-    the same coefficient-name shape.
+    ``block`` selects the arm: ``"jwdid"`` (not-yet-treated, the default),
+    ``"jwdid_never"`` (never-treated controls, the issue #724 anchor), or
+    ``"jwdid_alltreated"`` (the W2025 Section 5.4 anchor). All use the same
+    coefficient-name shape; the all-treated block nests its cells under
+    ``"cells"`` because it also records ``n`` / ``n_units``.
     """
+    raw = golden[block]
+    if "cells" in raw:
+        raw = raw["cells"]
     out = {}
-    for key, rec in golden[block].items():
+    for key, rec in raw.items():
         m = re.match(r"(\d+)b?n?\.first_treat#(\d+)b?n?\.year", key)
         if not m:
             continue  # _cons and any non-cell terms
@@ -118,6 +123,15 @@ def test_golden_records_every_reference_implementation():
     assert _stata_csdid_cells(golden), "golden has no csdid cells"
     assert _stata_jwdid_cells(golden, "jwdid"), "golden has no jwdid cells"
     assert _stata_jwdid_cells(golden, "jwdid_never"), "golden has no jwdid_never cells"
+    assert _stata_jwdid_cells(
+        golden, "jwdid_alltreated"
+    ), "golden has no jwdid_alltreated cells"
+    # The all-treated arm's row count is part of its finding, not incidental.
+    assert golden["jwdid_alltreated"]["n"] > 0
+    assert golden["jwdid_alltreated"]["n_units"] > 0
+    # Every arm records the exact command that produced it.
+    for key in ("csdid_cmd", "jwdid_cmd", "jwdid_never_cmd", "jwdid_alltreated_cmd"):
+        assert golden["meta"].get(key), f"golden meta is missing {key}"
     assert golden["meta"]["source_sha256"] == _PANEL_SHA256
 
 
@@ -356,3 +370,84 @@ def test_etwfe_and_cs_genuinely_disagree_on_real_data(fits):
     # Far beyond the 5e-3 the retired test asserted.
     assert gaps[worst_key] > 5e-3
     np.testing.assert_allclose(gaps[worst_key], 0.017052, rtol=1e-3)
+
+
+@pytest.fixture(scope="module")
+def alltreated_fit():
+    """The pinned panel with never-treated counties dropped: 191 units, 955 rows.
+
+    Mirrors the generator's `drop if first_treat == 0` exactly, so the library
+    and Stata see the same frame.
+    """
+    df = _panel()
+    sub = df[df["first_treat"] != 0].copy()
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        return WooldridgeDiD(method="ols", control_group="not_yet_treated").fit(
+            sub, outcome="lemp", unit="countyreal", time="year", cohort="first_treat"
+        )
+
+
+class TestAllEventuallyTreatedVsStataJwdid:
+    """External anchor for W2025 Section 5.4 on a real all-eventually-treated panel.
+
+    Stata `jwdid` succeeds here and silently estimates on a reduced sample: the
+    2007 cohort becomes the reference, the fully-treated periods carry no
+    identified ATT, and jwdid reports only a smaller N. The library computes the
+    same cell set on the same rows -- and says so.
+
+    Uses `control_group="not_yet_treated"`, the only option available: with no
+    cohort-0 rows left, `never_treated` raises.
+    """
+
+    def test_cell_set_matches_jwdid(self, alltreated_fit):
+        """The Section 5.4 cell set is an EXTERNAL result, not our convention."""
+        stata = _stata_jwdid_cells(_golden(), "jwdid_alltreated")
+        assert sorted(stata) == [(2004, 2004), (2004, 2005), (2004, 2006), (2006, 2006)]
+        lib = {(int(g), int(t)) for g, t in alltreated_fit.group_time_effects}
+        assert lib == set(stata)
+        # The last cohort is the reference and receives nothing.
+        assert 2007 not in {g for g, _t in lib}
+
+    def test_att_matches_jwdid(self, alltreated_fit):
+        """Point estimates are the tight gate: agreement is to machine precision."""
+        stata = _stata_jwdid_cells(_golden(), "jwdid_alltreated")
+        for key, rec in stata.items():
+            np.testing.assert_allclose(
+                alltreated_fit.group_time_effects[key]["att"], rec["att"], atol=1e-12
+            )
+
+    def test_estimation_sample_size_matches_jwdid(self, alltreated_fit):
+        """The row count IS the finding -- 764 of 955, i.e. the fully-treated
+        periods are gone from both implementations' estimation samples.
+
+        Pinned because a silent divergence here would mean the two are
+        estimating on different data while agreeing on coefficients by luck.
+        """
+        golden = _golden()["jwdid_alltreated"]
+        assert golden["n_units"] == 191
+        assert golden["n"] == 764
+        assert alltreated_fit.n_obs == golden["n"]
+
+    def test_se_gap_is_a_freshly_measured_ratio_at_this_cluster_count(self, alltreated_fit):
+        """The `hc1` SE gap is cluster-count dependent, so the ratio is measured
+        HERE rather than inherited.
+
+        The sibling arms pin 1.001006 at G=500. This arm has G=191 and shows
+        1.00264201 -- copying the sibling constant would fail on first run. The
+        observed sequence (1.0280@G=20, 1.0132@G=40, 1.00264@G=191,
+        1.0010@G=500) is monotone in G, which constrains any mechanism later
+        proposed for the gap (still open, TODO.md).
+
+        As with the sibling tests, no closed form is asserted -- only the
+        observed factor, and that the library's SE sits BELOW jwdid's.
+        """
+        stata = _stata_jwdid_cells(_golden(), "jwdid_alltreated")
+        ratios = [
+            rec["se"] / alltreated_fit.group_time_effects[key]["se"] for key, rec in stata.items()
+        ]
+        assert len(ratios) == 4, f"expected 4 all-treated cells, got {len(ratios)}"
+        assert max(ratios) - min(ratios) < 1e-5, f"SE ratio is not uniform: {ratios}"
+        mean_ratio = float(np.mean(ratios))
+        assert mean_ratio > 1.0, "library SE should be below jwdid's, not above"
+        np.testing.assert_allclose(mean_ratio, 1.002642, rtol=1e-4)

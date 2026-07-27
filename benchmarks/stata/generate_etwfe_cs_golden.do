@@ -188,6 +188,32 @@ matrix jn_V = e(V)
 local jn_names : colnames jn_b
 
 * ------------------------------------------------------------------------------
+* JWDID on an ALL-EVENTUALLY-TREATED panel: the same pinned data with the
+* never-treated counties dropped. External anchor for W2025 Section 5.4 -- the
+* last cohort (2007) becomes the reference, so jwdid estimates only the earlier
+* cohorts and reports a SMALLER N without comment. The library computes the same
+* cell set, and warns.
+*
+* Plain `jwdid`, NOT `jwdid ... never`: there is no never-treated group left for
+* the latter to use.
+*
+* preserve/restore so the subset cannot reach the schema asserts above or the
+* three arms already estimated, which share this in-memory dataset. e(N) is
+* captured because the row-count claim is the point of this arm and the golden
+* otherwise records only coefficients and SEs.
+* ------------------------------------------------------------------------------
+preserve
+drop if first_treat == 0
+quietly levelsof countyreal, local(_at_units)
+jwdid lemp, ivar(countyreal) tvar(year) gvar(first_treat)
+matrix ja_b = e(b)
+matrix ja_V = e(V)
+local ja_names : colnames ja_b
+local ja_N = e(N)
+local ja_nunits : word count `_at_units'
+restore
+
+* ------------------------------------------------------------------------------
 * Emit the golden.
 * ------------------------------------------------------------------------------
 local sver = c(stata_version)
@@ -210,6 +236,7 @@ file write `fh' `"    "stata_edition": "`sedition'","' _n
 file write `fh' `"    "csdid_cmd": "csdid lemp, ivar(countyreal) time(year) gvar(first_treat) notyet method(reg)","' _n
 file write `fh' `"    "jwdid_cmd": "jwdid lemp, ivar(countyreal) tvar(year) gvar(first_treat)","' _n
 file write `fh' `"    "jwdid_never_cmd": "jwdid lemp, ivar(countyreal) tvar(year) gvar(first_treat) never","' _n
+file write `fh' `"    "jwdid_alltreated_cmd": "drop if first_treat == 0; jwdid lemp, ivar(countyreal) tvar(year) gvar(first_treat)","' _n
 file write `fh' `"    "note": "No covariates, so csdid method is immaterial. ETWFE and CS genuinely DISAGREE at (2007,2007).","' _n
 file write `fh' `"    "stata_version": `sver'"' _n
 file write `fh' "  }," _n
@@ -271,7 +298,32 @@ forvalues i = 1/`k' {
         local sep ","
     }
 }
-file write `fh' _n "  }" _n
+file write `fh' _n "  }," _n
+
+* --- jwdid on the all-eventually-treated subset (W2025 Sec 5.4 anchor) --------
+* Carries "n" because the row-count reduction IS the finding: jwdid drops the
+* fully-treated periods silently and only reports a smaller N.
+file write `fh' `"  "jwdid_alltreated": {"' _n
+file write `fh' `"    "n": `ja_N',"' _n
+file write `fh' `"    "n_units": `ja_nunits',"' _n
+file write `fh' `"    "cells": {"'
+local sep ""
+local k = colsof(ja_b)
+forvalues i = 1/`k' {
+    local nm : word `i' of `ja_names'
+    scalar bval = ja_b[1, `i']
+    scalar seval = sqrt(ja_V[`i', `i'])
+    if !missing(bval) {
+        _jnum bval
+        local a = r(s)
+        _jnum seval
+        local s3 = r(s)
+        file write `fh' "`sep'" _n `"      "`nm'": {"att": `a', "se": `s3'}"'
+        local sep ","
+    }
+}
+file write `fh' _n "    }" _n
+file write `fh' "  }" _n
 file write `fh' "}" _n
 file close `fh'
 

@@ -13,6 +13,7 @@
     "csdid_cmd": "csdid lemp, ivar(countyreal) time(year) gvar(first_treat) notyet method(reg)",
     "jwdid_cmd": "jwdid lemp, ivar(countyreal) tvar(year) gvar(first_treat)",
     "jwdid_never_cmd": "jwdid lemp, ivar(countyreal) tvar(year) gvar(first_treat) never",
+    "jwdid_alltreated_cmd": "drop if first_treat == 0; jwdid lemp, ivar(countyreal) tvar(year) gvar(first_treat)",
     "note": "No covariates, so csdid method is immaterial. ETWFE and CS genuinely DISAGREE at (2007,2007).",
     "stata_version": 19
   },
@@ -66,5 +67,16 @@
     "2007.first_treat#2005.year#c.__tr__": {"att": 0.031087119389688365, "se": 0.017952980500827595},
     "2007.first_treat#2007.year#c.__tr__": {"att": -0.026054410719196439, "se": 0.016725745592717861},
     "_cons": {"att": 5.7736089304641052, "se": 0.0033784078861242291}
+  },
+  "jwdid_alltreated": {
+    "n": 764,
+    "n_units": 191,
+    "cells": {
+      "2004b.first_treat#2004bn.year#c.__tr__": {"att": -0.035399014515583818, "se": 0.023546467824157553},
+      "2004b.first_treat#2005.year#c.__tr__": {"att": -0.092587202900096421, "se": 0.032812547504897691},
+      "2004b.first_treat#2006.year#c.__tr__": {"att": -0.13020984713392353, "se": 0.038510767102853845},
+      "2006.first_treat#2006.year#c.__tr__": {"att": 0.018480380807537715, "se": 0.023079607844173931},
+      "_cons": {"att": 6.0092361449684812, "se": 0.002610873988496222}
+    }
   }
 }
