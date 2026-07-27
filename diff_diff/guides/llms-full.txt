@@ -2372,7 +2372,7 @@ data = load_dataset("card_krueger")
 # Named loaders
 ck = load_card_krueger()          # Card & Krueger (1994) minimum wage
 castle = load_castle_doctrine()    # Castle Doctrine / Stand Your Ground laws
-divorce = load_divorce_laws()      # Unilateral divorce laws (staggered)
+divorce = load_divorce_laws()      # Synthetic-only unilateral divorce-law fallback
 mpdta = load_mpdta()              # County teen-employment panel from R did package
 prop99 = load_prop99()            # California Prop 99 smoking (single treated unit)
 walmart = load_walmart()          # Walmart entry county panel (staggered, 1,277 counties)

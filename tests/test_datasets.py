@@ -5,6 +5,7 @@ These tests verify that the dataset loading functions work correctly,
 including both the download/cache mechanism and the fallback data generation.
 """
 
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import numpy as np
@@ -328,6 +329,7 @@ class TestLegacyLoaderProvenance:
                         "population": 1_000_000,
                         "income": 40_000,
                         "treated": int(first_treat > 0 and year >= first_treat),
+                        "treatment_exposure": float(first_treat > 0 and year >= first_treat),
                         "cohort": first_treat,
                     }
                 )
@@ -420,6 +422,54 @@ class TestLegacyLoaderProvenance:
         assert result.shape == _construct_mpdta_data().shape
         assert not (tmp_path / "mpdta.csv").exists()
 
+    def test_verified_download_survives_unwritable_cache_directory(self, tmp_path, monkeypatch):
+        """A cache-directory failure must not discard verified download bytes."""
+        import hashlib
+
+        import diff_diff.datasets as datasets_mod
+
+        content = _construct_mpdta_data().to_csv(index=False).encode("utf-8")
+        cache_dir = tmp_path / "unwritable-cache"
+        sha256 = hashlib.sha256(content).hexdigest()
+        fake_response = MagicMock()
+        fake_response.read.return_value = content
+        fake_response.__enter__ = lambda self: self
+        fake_response.__exit__ = lambda self, *a: False
+        original_mkdir = Path.mkdir
+
+        def deny_cache_directory(path, *args, **kwargs):
+            if path == cache_dir:
+                raise PermissionError("read-only cache directory")
+            return original_mkdir(path, *args, **kwargs)
+
+        monkeypatch.setattr(datasets_mod, "_CACHE_DIR", cache_dir)
+        monkeypatch.setattr(datasets_mod, "_MPDTA_SOURCE_SHA256", sha256)
+        monkeypatch.setattr(Path, "mkdir", deny_cache_directory)
+        with patch("diff_diff.datasets.urlopen", return_value=fake_response):
+            result = load_mpdta(force_download=True)
+
+        assert result.attrs["source"] == "callaway_santanna_mpdta"
+        assert result.shape == _construct_mpdta_data().shape
+        assert not cache_dir.exists()
+
+    def test_incomplete_download_warns_and_uses_marked_fallback(self, tmp_path, monkeypatch):
+        """Truncated responses must follow the same explicit fallback path."""
+        from http.client import IncompleteRead
+
+        import diff_diff.datasets as datasets_mod
+
+        fake_response = MagicMock()
+        fake_response.read.side_effect = IncompleteRead(b"partial", 100)
+        fake_response.__enter__ = lambda self: self
+        fake_response.__exit__ = lambda self, *a: False
+
+        monkeypatch.setattr(datasets_mod, "_CACHE_DIR", tmp_path)
+        with patch("diff_diff.datasets.urlopen", return_value=fake_response):
+            with pytest.warns(UserWarning, match="SYNTHETIC"):
+                result = load_mpdta(force_download=True)
+
+        assert result.attrs["source"] == "synthetic_fallback"
+
     def test_source_specific_dimensions_are_enforced(self):
         """Synthetic frames cannot pass as Card or Castle canonical data."""
         from diff_diff.datasets import (
@@ -460,8 +510,8 @@ class TestLegacyLoaderProvenance:
         assert result["emp_pre"].tolist() == [8.0, 11.0]
         assert result["emp_post"].tolist() == [9.0, 13.0]
 
-    def test_castle_source_transform_ignores_fractional_cdl(self):
-        """The public treated field is binary, not fractional-year exposure."""
+    def test_castle_source_transform_preserves_fractional_cdl_exposure(self):
+        """The binary treatment flag and fractional source exposure are distinct."""
         from diff_diff.datasets import _prepare_castle_doctrine
 
         raw = pd.DataFrame(
@@ -481,7 +531,29 @@ class TestLegacyLoaderProvenance:
 
         assert result["state"].tolist() == ["AL", "AL"]
         assert result["treated"].tolist() == [0, 1]
+        assert result["treatment_exposure"].tolist() == [0.0, 0.580822]
         assert result["first_treat"].tolist() == [2006, 2006]
+
+    def test_castle_adoption_year_has_binary_treatment_and_partial_exposure(self):
+        """Real-source adoption rows retain their partial first-year exposure."""
+        from diff_diff.datasets import _prepare_castle_doctrine
+
+        raw = pd.DataFrame(
+            {
+                "sid": [1] * 11,
+                "year": list(range(2000, 2011)),
+                "effyear": [2006.0] * 11,
+                "cdl": [0.0] * 6 + [0.580822] + [1.0] * 4,
+                "homicide": [7.0] * 11,
+                "population": [4_300_000] * 11,
+                "income": [44_000] * 11,
+            }
+        )
+        result = _prepare_castle_doctrine(raw)
+        adoption_year = result.loc[result["year"] == 2006].iloc[0]
+
+        assert adoption_year["treated"] == 1
+        assert 0 < adoption_year["treatment_exposure"] < 1
 
     def test_card_source_rejects_unknown_chain_code(self):
         from diff_diff.datasets import _DatasetSourceError, _prepare_card_krueger

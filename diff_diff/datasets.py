@@ -12,6 +12,7 @@ explicitly provenance-marked synthetic fallback.
 import hashlib
 import os
 import warnings
+from http.client import IncompleteRead
 from io import BytesIO, StringIO
 from pathlib import Path
 from tempfile import NamedTemporaryFile
@@ -64,7 +65,6 @@ class _DatasetSourceError(RuntimeError):
 
 def _get_cache_path(name: str) -> Path:
     """Get the cache path for a dataset."""
-    _CACHE_DIR.mkdir(parents=True, exist_ok=True)
     return _CACHE_DIR / f"{name}.csv"
 
 
@@ -102,6 +102,7 @@ def _write_cache_atomically(cache_path: Path, content: bytes, name: str) -> None
     """Replace a cache entry only after a complete same-directory write."""
     temp_path: Optional[Path] = None
     try:
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
         with NamedTemporaryFile(
             mode="wb",
             dir=cache_path.parent,
@@ -136,7 +137,7 @@ def _download_verified_bytes(
     try:
         with urlopen(url, timeout=30) as response:
             content = response.read(_MAX_DATASET_BYTES + 1)
-    except (HTTPError, OSError, TimeoutError, URLError) as e:
+    except (HTTPError, IncompleteRead, OSError, TimeoutError, URLError) as e:
         cached = _read_verified_cache(cache_path, sha256)
         if cached is not None:
             return cached
@@ -170,7 +171,6 @@ def _download_verified_bytes(
 
 def _get_cache_path_binary(name: str) -> Path:
     """Get the cache path for a binary (Stata .dta) dataset."""
-    _CACHE_DIR.mkdir(parents=True, exist_ok=True)
     return _CACHE_DIR / f"{name}.dta"
 
 
@@ -489,6 +489,8 @@ def _prepare_castle_doctrine(df: pd.DataFrame) -> pd.DataFrame:
         df["cohort"] = df["first_treat"]
     if {"first_treat", "year"} <= set(df.columns):
         df["treated"] = ((df["first_treat"] > 0) & (df["year"] >= df["first_treat"])).astype(int)
+    if "treatment_exposure" not in df.columns and "cdl" in df.columns:
+        df["treatment_exposure"] = df["cdl"]
     if "homicide_rate" not in df.columns and "homicide" in df.columns:
         df["homicide_rate"] = df["homicide"]
     if {
@@ -499,6 +501,7 @@ def _prepare_castle_doctrine(df: pd.DataFrame) -> pd.DataFrame:
         "population",
         "income",
         "treated",
+        "treatment_exposure",
         "cohort",
     } <= set(df.columns):
         return df[
@@ -510,6 +513,7 @@ def _prepare_castle_doctrine(df: pd.DataFrame) -> pd.DataFrame:
                 "population",
                 "income",
                 "treated",
+                "treatment_exposure",
                 "cohort",
             ]
         ].copy()
@@ -529,6 +533,7 @@ def _validate_castle_doctrine(df: pd.DataFrame) -> None:
             "population",
             "income",
             "treated",
+            "treatment_exposure",
             "cohort",
         },
     )
@@ -549,7 +554,16 @@ def _validate_castle_doctrine(df: pd.DataFrame) -> None:
     _require_finite(
         df,
         "castle_doctrine",
-        {"year", "first_treat", "homicide_rate", "population", "income", "treated", "cohort"},
+        {
+            "year",
+            "first_treat",
+            "homicide_rate",
+            "population",
+            "income",
+            "treated",
+            "treatment_exposure",
+            "cohort",
+        },
     )
     if (
         (df["homicide_rate"] < 0).any()
@@ -559,6 +573,8 @@ def _validate_castle_doctrine(df: pd.DataFrame) -> None:
         raise _DatasetSourceError("castle_doctrine source has invalid outcome or covariate values")
     if not df["state"].astype(str).str.fullmatch(r"[A-Z]{2}").all():
         raise _DatasetSourceError("castle_doctrine source has invalid state abbreviations")
+    if not df["treatment_exposure"].between(0, 1).all():
+        raise _DatasetSourceError("castle_doctrine treatment_exposure must be between 0 and 1")
     _validate_panel_keys(df, "castle_doctrine", "state")
 
 
@@ -848,6 +864,7 @@ def load_castle_doctrine(force_download: bool = False) -> pd.DataFrame:
         - population : int - State population
         - income : float - Per capita income
         - treated : int - 1 if law in effect, 0 otherwise
+        - treatment_exposure : float - Fraction of the year the law was in effect
         - cohort : int - Alias for first_treat
 
     Notes
@@ -992,6 +1009,7 @@ def _construct_castle_doctrine_data() -> pd.DataFrame:
                         base_income * (1 + 0.02 * (year - 2000)) + np.random.normal(0, 1000), 0
                     ),
                     "treated": int(first_treat > 0 and year >= first_treat),
+                    "treatment_exposure": float(first_treat > 0 and year >= first_treat),
                 }
             )
 
@@ -1002,7 +1020,7 @@ def _construct_castle_doctrine_data() -> pd.DataFrame:
 
 def load_divorce_laws(force_download: bool = False) -> pd.DataFrame:
     """
-    Load unilateral divorce laws dataset.
+    Load the synthetic-only unilateral divorce-laws dataset.
 
     This dataset tracks the staggered adoption of unilateral (no-fault) divorce
     laws across U.S. states. It's a classic example for studying staggered

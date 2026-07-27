@@ -407,6 +407,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   are returned even when best-effort cache persistence fails.
 
 ### Changed
+- **Castle Doctrine now exposes first-year treatment intensity.** The loader
+  retains the source's fractional adoption-year `cdl` value as
+  `treatment_exposure`, while preserving the existing binary `treated` field.
+
 - **dCDH Phase 1 (`L_max=None`) event-study row is now re-synced by the final-df
   refresh.** Under replicate-weight designs the refresh recomputes `overall_*` with the
   final effective df, but the Phase 1 event-study row is a VALUE COPY of that inference
