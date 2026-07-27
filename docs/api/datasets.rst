@@ -3,17 +3,22 @@ Datasets
 
 Built-in datasets from published studies for examples, tutorials, and testing.
 
-Canonical data are downloaded from commit-pinned public sources and verified against a
-pinned SHA-256 on every download and cache read, then cached locally at
+Canonical data are downloaded from public sources and verified against a pinned SHA-256
+on every download and cache read, then cached locally at
 ``~/.cache/diff_diff/datasets/``. Pass ``force_download=True`` to any loader to refresh
-the cache.
+the cache. ``load_card_krueger()``, ``load_castle_doctrine()`` and ``load_mpdta()`` pin an
+immutable upstream commit, so the URL itself cannot change under them;
+``load_prop99()`` and ``load_walmart()`` read a mutable SSC path over plain HTTP, where
+the checksum alone establishes integrity.
 
-Every loader reports its provenance through ``df.attrs["source"]``. If a source cannot be
-downloaded, parsed, or validated, the loader emits one ``UserWarning`` containing
-``SYNTHETIC`` and returns a generated fallback frame marked
-``df.attrs["source"] == "synthetic_fallback"``. Numbers computed on a fallback frame are
-not replications of the published study. ``load_divorce_laws()`` has no verified source
-configured and returns synthetic data on every call.
+Every loader reports its provenance through ``df.attrs["source"]``. When a source cannot
+be obtained, the loader emits one ``UserWarning`` containing ``SYNTHETIC`` and returns a
+generated fallback frame marked ``df.attrs["source"] == "synthetic_fallback"``. For
+``load_card_krueger()``, ``load_castle_doctrine()`` and ``load_mpdta()`` that fallback
+also covers parse and schema-validation failures; ``load_prop99()`` and ``load_walmart()``
+run their validation outside the fallback boundary and raise instead. Numbers computed on
+a fallback frame are not replications of the published study. ``load_divorce_laws()`` has
+no verified source configured and returns synthetic data on every call.
 
 Dataset Loaders
 ---------------

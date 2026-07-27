@@ -12,7 +12,7 @@ explicitly provenance-marked synthetic fallback.
 import hashlib
 import os
 import warnings
-from http.client import IncompleteRead
+from http.client import HTTPException
 from io import BytesIO, StringIO
 from pathlib import Path
 from tempfile import NamedTemporaryFile
@@ -142,7 +142,11 @@ def _download_verified_bytes(
     try:
         with urlopen(url, timeout=30) as response:
             content = response.read(_MAX_DATASET_BYTES + 1)
-    except (HTTPError, IncompleteRead, OSError, TimeoutError, URLError) as e:
+    # ``HTTPException`` is the parent of ``IncompleteRead``, ``BadStatusLine`` and the
+    # rest of the protocol-level errors ``urlopen`` can surface; none of them derive
+    # from ``OSError``, so catching the base class keeps the whole family inside the
+    # documented warn-and-fall-back boundary rather than only the named siblings.
+    except (HTTPError, HTTPException, OSError, TimeoutError, URLError) as e:
         cached = _read_verified_cache(cache_path, sha256)
         if cached is not None:
             return cached

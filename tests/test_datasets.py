@@ -470,6 +470,31 @@ class TestLegacyLoaderProvenance:
 
         assert result.attrs["source"] == "synthetic_fallback"
 
+    def test_protocol_level_http_errors_warn_and_use_marked_fallback(self, tmp_path, monkeypatch):
+        """Every ``HTTPException``, not just ``IncompleteRead``, stays inside the boundary.
+
+        ``BadStatusLine`` and its siblings derive from ``HTTPException`` rather than
+        ``OSError``, so naming individual subclasses in the handler would let the rest
+        escape the documented warn-and-fall-back contract.
+        """
+        from http.client import BadStatusLine, LineTooLong
+
+        import diff_diff.datasets as datasets_mod
+
+        for exc in (BadStatusLine("garbage status"), LineTooLong("header line")):
+            fake_response = MagicMock()
+            fake_response.read.side_effect = exc
+            fake_response.__enter__ = lambda self: self
+            fake_response.__exit__ = lambda self, *a: False
+
+            monkeypatch.setattr(datasets_mod, "_CACHE_DIR", tmp_path / type(exc).__name__)
+            with patch("diff_diff.datasets.urlopen", return_value=fake_response):
+                with pytest.warns(UserWarning, match="SYNTHETIC"):
+                    result = load_mpdta(force_download=True)
+
+            assert result.attrs["source"] == "synthetic_fallback"
+            assert result.shape == _construct_mpdta_data().shape
+
     def test_source_specific_dimensions_are_enforced(self):
         """Synthetic frames cannot pass as Card or Castle canonical data."""
         from diff_diff.datasets import (
