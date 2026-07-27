@@ -181,7 +181,7 @@ jobs:
       # durably even after the fork is deleted or branches removed.
       # The previous workflow used `refs/pull/<N>/merge`, which is
       # garbage-collected on closed PRs — this path replaces that.
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         if: steps.pr.outputs.state != 'open' && steps.pr.outputs.is_fork == 'false'
         with:
           ref: refs/pull/${{ steps.pr.outputs.number }}/head
@@ -192,7 +192,7 @@ jobs:
       # has not yet mirrored a freshly API-created PR's head
       # (see .claude/commands/submit-pr.md:327-345). head_sha is
       # guaranteed to exist on the head repo for an open PR.
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         if: steps.pr.outputs.state == 'open' && steps.pr.outputs.is_fork == 'false'
         with:
           repository: ${{ steps.pr.outputs.head_repo_full_name }}
