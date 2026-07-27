@@ -11,6 +11,7 @@ explicitly provenance-marked synthetic fallback.
 
 import hashlib
 import os
+import sys
 import warnings
 from http.client import HTTPException
 from io import BytesIO, StringIO
@@ -32,8 +33,10 @@ _MAX_DATASET_BYTES = 50 * 1024 * 1024
 # ``njmin.zip`` from David Card's data archive, and ``mpdta.csv`` matches
 # ``did::mpdta`` (R package 2.5.1) to CSV round-trip precision (max absolute
 # difference 1.07e-14 on ``lemp``). Every cached and downloaded byte sequence is
-# verified against the pinned SHA-256 below, so a later change at any mirror fails
-# closed to the loud synthetic fallback rather than substituting different data.
+# verified against the pinned SHA-256 below, so a later change at any mirror can
+# never substitute different data: it falls back to the verified cache entry if one
+# exists (with a warning naming the integrity failure), and to the loud synthetic
+# fallback only when there is no verified copy to fall back to.
 _CARD_KRUEGER_SOURCE_URL = (
     "https://raw.githubusercontent.com/rafiash/CardKrueger-stata-sample/"
     "07bc929f1d6552db117bd27a7cf0d881d16e9494/public.dat"
@@ -66,6 +69,26 @@ _CASTLE_STATE_BY_SID = dict(
 
 class _DatasetSourceError(RuntimeError):
     """Expected failure while fetching, parsing, or validating canonical data."""
+
+
+def _caller_stacklevel() -> int:
+    """``stacklevel`` that attributes a warning to the first frame outside this module.
+
+    The text and binary loaders reach the download helper at different depths (the text
+    path routes through ``_load_verified_dataset`` and a source adapter; the binary path
+    calls it almost directly), so no fixed ``stacklevel`` points at user code for both.
+    """
+    level = 1
+    try:
+        frame = sys._getframe(1)
+    except ValueError:  # pragma: no cover - defensive
+        return 2
+    while frame is not None:
+        if frame.f_globals.get("__name__") != __name__:
+            return level
+        frame = frame.f_back
+        level += 1
+    return 2  # pragma: no cover - defensive
 
 
 def _get_cache_path(name: str) -> Path:
@@ -136,11 +159,24 @@ def _download_verified_bytes(
     cache_path: Path,
     force_download: bool = False,
 ) -> bytes:
-    """Return checksum-verified bytes from cache or a fresh download."""
-    if not force_download:
-        cached = _read_verified_cache(cache_path, sha256)
+    """Return checksum-verified bytes from cache or a fresh download.
+
+    The cache is read up front and retained even under ``force_download``, so that
+    EVERY way a fresh download can fail verification - transport, size limit, or
+    checksum - can still fall back to bytes that already passed the pinned hash.
+    Falling through to the synthetic frame while verified canonical bytes sit on
+    disk would be a downgrade, and on the checksum path it would let a tampered
+    or moved upstream quietly replace real data with generated data.
+    """
+    cached = _read_verified_cache(cache_path, sha256)
+    if cached is not None and not force_download:
+        return cached
+
+    def _recover(message: str, cause: Optional[BaseException] = None) -> bytes:
+        """Prefer verified cached bytes over failing into the synthetic fallback."""
         if cached is not None:
             return cached
+        raise _DatasetSourceError(message) from cause
 
     try:
         with urlopen(url, timeout=30) as response:
@@ -150,21 +186,33 @@ def _download_verified_bytes(
     # from ``OSError``, so catching the base class keeps the whole family inside the
     # documented warn-and-fall-back boundary rather than only the named siblings.
     except (HTTPError, HTTPException, OSError, TimeoutError, URLError) as e:
-        cached = _read_verified_cache(cache_path, sha256)
-        if cached is not None:
-            return cached
-        raise _DatasetSourceError(
+        return _recover(
             f"Failed to download dataset '{name}' from {url}: {e}\n"
-            "Check your internet connection or try again later."
-        ) from e
+            "Check your internet connection or try again later.",
+            e,
+        )
 
     if len(content) > _MAX_DATASET_BYTES:
-        raise _DatasetSourceError(
+        return _recover(
             f"Dataset '{name}' downloaded from {url} exceeds the "
             f"{_MAX_DATASET_BYTES}-byte safety limit."
         )
 
     if hashlib.sha256(content).hexdigest() != sha256:
+        if cached is not None:
+            # Canonical bytes are already on disk, so the user keeps real data - but a
+            # pin mismatch is an integrity event, not a transport hiccup, and must not
+            # pass unnoticed. Deliberately not a SYNTHETIC warning: nothing synthetic
+            # is involved, and callers key their provenance checks on that word.
+            warnings.warn(
+                f"Upstream copy of dataset '{name}' at {url} no longer matches the "
+                "pinned SHA-256. Returning the verified cached copy instead. Verify "
+                "the source revision before updating the pinned checksum; until then "
+                "treat the upstream file as untrusted.",
+                UserWarning,
+                stacklevel=_caller_stacklevel(),
+            )
+            return cached
         raise _DatasetSourceError(
             f"Checksum mismatch for dataset '{name}' downloaded from {url}.\n"
             "The upstream file differs from the pinned SHA-256. Verify the "
@@ -761,9 +809,10 @@ def load_card_krueger(force_download: bool = False) -> pd.DataFrame:
     The canonical data are checksum-verified and returned with
     ``df.attrs["source"] == "card_krueger_public_data"``. A download failure
     falls back to a checksum-valid cache entry when one exists, returning that
-    canonical data silently. Only when neither a verified cache entry nor a
-    verified fresh download is available - or when the source fails to parse or
-    validate - does the loader emit one ``UserWarning`` containing ``SYNTHETIC``
+    canonical data; a pin mismatch additionally warns that the upstream file has
+    changed. Only when neither a verified cache entry nor a verified fresh
+    download is available - or when the source fails to parse or validate - does
+    the loader emit one ``UserWarning`` containing ``SYNTHETIC``
     and return ``df.attrs["source"] == "synthetic_fallback"``.
 
     References
@@ -911,9 +960,10 @@ def load_castle_doctrine(force_download: bool = False) -> pd.DataFrame:
     The canonical data are checksum-verified and returned with
     ``df.attrs["source"] == "cheng_hoekstra_castle_data"``. A download failure
     falls back to a checksum-valid cache entry when one exists, returning that
-    canonical data silently. Only when neither a verified cache entry nor a
-    verified fresh download is available - or when the source fails to parse or
-    validate - does the loader emit one ``UserWarning`` containing ``SYNTHETIC``
+    canonical data; a pin mismatch additionally warns that the upstream file has
+    changed. Only when neither a verified cache entry nor a verified fresh
+    download is available - or when the source fails to parse or validate - does
+    the loader emit one ``UserWarning`` containing ``SYNTHETIC``
     and mark the returned frame as ``"synthetic_fallback"``.
 
     Replicating Cheng-Hoekstra (2013) requires the paper's regressor and outcome:
@@ -1295,9 +1345,10 @@ def load_mpdta(force_download: bool = False) -> pd.DataFrame:
     The canonical data are checksum-verified and returned with
     ``df.attrs["source"] == "callaway_santanna_mpdta"``. A download failure
     falls back to a checksum-valid cache entry when one exists, returning that
-    canonical data silently. Only when neither a verified cache entry nor a
-    verified fresh download is available - or when the source fails to parse or
-    validate - does the loader emit one ``UserWarning`` containing ``SYNTHETIC``
+    canonical data; a pin mismatch additionally warns that the upstream file has
+    changed. Only when neither a verified cache entry nor a verified fresh
+    download is available - or when the source fails to parse or validate - does
+    the loader emit one ``UserWarning`` containing ``SYNTHETIC``
     and mark the returned frame as ``"synthetic_fallback"``.
 
     References

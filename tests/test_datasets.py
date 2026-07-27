@@ -495,6 +495,83 @@ class TestLegacyLoaderProvenance:
             assert result.attrs["source"] == "synthetic_fallback"
             assert result.shape == _construct_mpdta_data().shape
 
+    @pytest.mark.parametrize(
+        "failure",
+        ["transport", "checksum", "oversized"],
+    )
+    def test_verified_cache_survives_every_fresh_download_failure(
+        self, failure, tmp_path, monkeypatch
+    ):
+        """Canonical cached bytes must never be downgraded to the synthetic fallback.
+
+        The transport path already recovered from cache, but the size-limit and
+        checksum paths raised straight through, so a tampered or moved upstream
+        replaced verified real data with generated data for every user holding a
+        valid cache. A checksum mismatch additionally warns, since that is an
+        integrity event rather than a transport hiccup.
+        """
+        import hashlib
+        import warnings
+
+        import diff_diff.datasets as datasets_mod
+
+        monkeypatch.setattr(datasets_mod, "_CACHE_DIR", tmp_path)
+        source = _construct_mpdta_data().rename(columns={"first_treat": "first.treat"})
+        payload = source[["year", "countyreal", "lpop", "lemp", "first.treat", "treat"]].to_csv(
+            index=False
+        )
+        monkeypatch.setattr(
+            datasets_mod, "_MPDTA_SOURCE_SHA256", hashlib.sha256(payload.encode()).hexdigest()
+        )
+        (tmp_path / "mpdta.csv").write_text(payload)
+
+        response = MagicMock()
+        response.__enter__ = lambda self: self
+        response.__exit__ = lambda self, *a: False
+        if failure == "transport":
+            response.read.side_effect = TimeoutError("network down")
+        elif failure == "checksum":
+            response.read.return_value = b"upstream was tampered with"
+        else:
+            response.read.return_value = b"x" * (datasets_mod._MAX_DATASET_BYTES + 1)
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            with patch("diff_diff.datasets.urlopen", return_value=response):
+                result = load_mpdta(force_download=True)
+
+        assert result.attrs["source"] == "callaway_santanna_mpdta"
+        assert not [w for w in caught if "SYNTHETIC" in str(w.message)]
+
+        integrity = [w for w in caught if "no longer matches the pinned" in str(w.message)]
+        if failure == "checksum":
+            assert len(integrity) == 1, "a pin mismatch must not pass unnoticed"
+            assert "diff_diff" not in integrity[0].filename, "warning must blame the caller"
+        else:
+            assert not integrity
+
+    def test_tampered_upstream_without_cache_still_falls_back_to_synthetic(
+        self, tmp_path, monkeypatch
+    ):
+        """With no cache to recover, a pin mismatch must still take the SYNTHETIC path."""
+        import warnings
+
+        import diff_diff.datasets as datasets_mod
+
+        monkeypatch.setattr(datasets_mod, "_CACHE_DIR", tmp_path)
+        response = MagicMock()
+        response.__enter__ = lambda self: self
+        response.__exit__ = lambda self, *a: False
+        response.read.return_value = b"upstream was tampered with"
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            with patch("diff_diff.datasets.urlopen", return_value=response):
+                result = load_mpdta(force_download=True)
+
+        assert result.attrs["source"] == "synthetic_fallback"
+        assert len([w for w in caught if "SYNTHETIC" in str(w.message)]) == 1
+
     def test_clear_cache_removes_interrupted_atomic_write_scratch_files(
         self, tmp_path, monkeypatch
     ):

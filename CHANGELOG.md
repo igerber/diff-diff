@@ -401,9 +401,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   panel-invariant validation; successful frames expose a dataset-specific
   `df.attrs["source"]`. When neither a verified cache entry nor a verified fresh
   download is available, the loader emits exactly one `UserWarning` containing
-  `SYNTHETIC` and marks the frame `source="synthetic_fallback"`. A download that
-  fails while a checksum-valid cache entry exists returns that canonical data
-  silently, including under `force_download=True`. `load_divorce_laws()` now follows that explicit
+  `SYNTHETIC` and marks the frame `source="synthetic_fallback"`. Every way a fresh
+  download can fail verification - transport error, size limit, or checksum
+  mismatch - falls back to a checksum-valid cache entry when one exists, including
+  under `force_download=True`, so a tampered or moved upstream can never downgrade
+  a user holding verified canonical bytes to generated data. A checksum mismatch
+  additionally warns that the upstream no longer matches the pin (a distinct
+  warning that deliberately does not contain `SYNTHETIC`, since no synthetic data
+  is involved). `load_divorce_laws()` now follows that explicit
   fallback path because no verified source currently reproduces its composite
   public schema without additional analytical choices. Verified fresh downloads
   are returned even when best-effort cache persistence fails.

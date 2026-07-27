@@ -11,9 +11,14 @@ immutable upstream commit, so the URL itself cannot change under them;
 ``load_prop99()`` and ``load_walmart()`` read a mutable SSC path over plain HTTP, where
 the checksum alone establishes integrity.
 
-Every loader reports its provenance through ``df.attrs["source"]``. When a source cannot
-be obtained, the loader emits one ``UserWarning`` containing ``SYNTHETIC`` and returns a
-generated fallback frame marked ``df.attrs["source"] == "synthetic_fallback"``. For
+Every loader reports its provenance through ``df.attrs["source"]``. A fresh download that
+fails verification - transport error, size limit, or checksum mismatch - falls back to a
+checksum-valid cache entry when one exists, so canonical data is never downgraded to
+generated data while verified bytes are on disk. A checksum mismatch additionally emits a
+``UserWarning`` naming the integrity failure, since it means the upstream file no longer
+matches the pin. When no verified copy is available at all, the loader emits one
+``UserWarning`` containing ``SYNTHETIC`` and returns a generated fallback frame marked
+``df.attrs["source"] == "synthetic_fallback"``. For
 ``load_card_krueger()``, ``load_castle_doctrine()`` and ``load_mpdta()`` that fallback
 also covers parse and schema-validation failures; ``load_prop99()`` and ``load_walmart()``
 run their validation outside the fallback boundary and raise instead. Numbers computed on
