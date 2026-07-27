@@ -5,8 +5,10 @@ This module provides functions to load classic econometrics datasets
 commonly used for teaching and demonstrating DiD methods.
 
 Canonical data are downloaded from checksum-pinned public sources and cached
-locally. If a source cannot be verified, the loader warns and returns an
-explicitly provenance-marked synthetic fallback.
+locally. A download that fails verification falls back to a checksum-valid
+cache entry when one exists, so verified data on disk is never displaced by
+generated data. Only when no verified copy is available does the loader warn
+and return an explicitly provenance-marked synthetic fallback.
 """
 
 import hashlib
@@ -243,8 +245,10 @@ def _download_with_cache_binary(
     """Download a binary file (e.g. Stata .dta), verify its checksum, and cache it.
 
     Every byte-load (cache or fresh download) is verified against a pinned
-    SHA-256. A stale/corrupt cache triggers one re-download; a checksum
-    mismatch on freshly downloaded bytes raises.
+    SHA-256. A stale or corrupt cache triggers one re-download. A checksum
+    mismatch on freshly downloaded bytes falls back to a verified cache entry
+    when one exists (warning that the upstream no longer matches the pin), and
+    raises only when there is no verified copy to fall back to.
     """
     return _download_verified_bytes(
         url,
