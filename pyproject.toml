@@ -65,7 +65,7 @@ dev = [
     # NOTE: black/mypy require Python >= 3.10 (dev tooling only; the library
     # floor stays 3.9).
     "black==26.5.1",
-    "ruff==0.15.21",
+    "ruff==0.16.0",
     "mypy==2.3.0",
     "maturin>=1.4,<2.0",
     "matplotlib>=3.5",
