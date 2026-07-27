@@ -3807,3 +3807,277 @@ class TestControlGroupCellSets:
             emitted = {t for (gg, t) in gt if gg == g}
             expected = set(range(1, 7)) - {ref}
             assert emitted == expected, f"cohort {g}: expected all periods but {ref}"
+
+
+class TestComparisonSupportFiltering:
+    """Per-period comparison support (W2025 Section 5.4).
+
+    Every panel and every number in this class was measured before the feature
+    was written; the plan that specifies them was revised nine times against
+    executed output, twice because a figure had been paired with the wrong
+    frame. Assertions therefore name the panel they were taken on.
+    """
+
+    @staticmethod
+    def _all_treated(cohorts=(3, 5, 8), periods=9, n_per=70, seed=7, effect=1.5):
+        """All-eventually-treated panel: no cohort 0 anywhere."""
+        rng = np.random.default_rng(seed)
+        rows = []
+        uid = 0
+        for g in cohorts:
+            for _ in range(n_per):
+                for t in range(1, periods + 1):
+                    rows.append(
+                        {
+                            "unit": uid,
+                            "time": t,
+                            "cohort": g,
+                            "y": rng.standard_normal() + effect * int(t >= g),
+                        }
+                    )
+                uid += 1
+        return pd.DataFrame(rows)
+
+    @pytest.mark.parametrize("anticipation,expected_kept", [(0, 7), (1, 6), (2, 5)])
+    def test_eq_5_15_cell_set_on_a_balanced_panel(self, anticipation, expected_kept):
+        """The retained cell set is Eq. 5.15's, intersected with observed times.
+
+        `{(g, t) : g <= G_max - 1, g - anticipation <= t <= G_max - 1 -
+        anticipation}`. The window bound is `t >= g - anticipation` (the builder
+        emits anticipation-window cells), NOT `t >= g` -- an earlier draft of
+        this assertion used `g <= t` and would have failed at anticipation > 0.
+        """
+        df = self._all_treated()
+        g_max = 8
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            res = WooldridgeDiD(control_group="not_yet_treated", anticipation=anticipation).fit(
+                df, outcome="y", unit="unit", time="time", cohort="cohort"
+            )
+
+        kept = sorted({int(t) for (_g, t) in res.group_time_effects})
+        assert max(kept) == g_max - 1 - anticipation
+        assert len(set(range(1, g_max - anticipation))) == expected_kept
+
+        observed = set(range(1, 10))
+        expected = {
+            (g, t)
+            for g in (3, 5, 8)
+            for t in observed
+            if g <= g_max - 1
+            # A cohort with no observed period before `g - anticipation` has no
+            # reference and is excluded as unidentified, even though it meets
+            # the Eq. 5.15 cohort bound. Observations start at t=1, so that is
+            # `g - anticipation > 1`. At anticipation=2 this removes cohort 3,
+            # leaving exactly {(5,3),(5,4),(5,5)} -- measured.
+            and g - anticipation > 1
+            and g - anticipation <= t <= g_max - 1 - anticipation
+        }
+        assert {(int(g), int(t)) for g, t in res.group_time_effects} == expected
+        # cohort G_max is the reference: no cells of its own.
+        assert g_max not in {int(g) for (g, _t) in res.group_time_effects}
+
+    def test_no_op_when_every_period_has_a_comparison(self):
+        """Filtering is a no-op iff every period has an eligible comparison --
+        not merely 'a never-treated group exists'."""
+        rng = np.random.default_rng(21)
+        rows = []
+        for u in range(120):
+            g = 0 if u < 40 else (3 if u < 80 else 5)
+            for t in range(1, 7):
+                rows.append(
+                    {
+                        "unit": u,
+                        "time": t,
+                        "cohort": g,
+                        "y": rng.standard_normal() + 1.0 * int(g > 0 and t >= g),
+                    }
+                )
+        df = pd.DataFrame(rows)
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            res = WooldridgeDiD(control_group="not_yet_treated").fit(
+                df, outcome="y", unit="unit", time="time", cohort="cohort"
+            )
+        assert not [m for m in w if "no eligible comparison group" in str(m.message)]
+        assert res.n_obs == len(df)
+
+    def test_branch_one_reference_move_warns_by_name(self):
+        """`never_treated` + OLS: a reference CAN move, and must say so.
+
+        The ATTs stay correctly labelled and validly identified -- they are just
+        normalized against a different baseline period than an unfiltered fit
+        would use. Silent renormalization is the #724 defect class, so this
+        warns rather than raising.
+        """
+        rng = np.random.default_rng(5)
+        rows = []
+        uid = 0
+        for _ in range(30):  # never-treated, observed t=1..4 only
+            for t in range(1, 5):
+                rows.append(
+                    {"unit": uid, "time": t, "cohort": 0, "y": 0.2 * t + rng.normal(0, 0.05)}
+                )
+            uid += 1
+        for g in (3, 6):
+            for _ in range(30):
+                for t in range(1, 7):
+                    rows.append(
+                        {
+                            "unit": uid,
+                            "time": t,
+                            "cohort": g,
+                            "y": 0.2 * t + (1.0 if t >= g else 0.0) + rng.normal(0, 0.05),
+                        }
+                    )
+                uid += 1
+        df = pd.DataFrame(rows)
+        with pytest.warns(UserWarning, match=r"reference period moved from 5 to 4"):
+            res = WooldridgeDiD(method="ols", control_group="never_treated").fit(
+                df, outcome="y", unit="unit", time="time", cohort="cohort"
+            )
+        assert res.overall_att == pytest.approx(1.0171, abs=5e-3)
+
+    def test_branch_one_no_move_when_never_treated_covers_the_period(self):
+        """Companion to the above, on a frame truncated to t <= 5.
+
+        Stated explicitly as truncated: on the untruncated 6-period frame t=6
+        is still unsupported, so rows WOULD drop and warning (a) would fire
+        correctly -- an earlier draft described this case as 'nothing is
+        filtered', which is false.
+        """
+        rng = np.random.default_rng(5)
+        rows = []
+        uid = 0
+        for _ in range(30):  # never-treated now observed through t=5
+            for t in range(1, 6):
+                rows.append(
+                    {"unit": uid, "time": t, "cohort": 0, "y": 0.2 * t + rng.normal(0, 0.05)}
+                )
+            uid += 1
+        for g in (3, 6):
+            for _ in range(30):
+                for t in range(1, 7):
+                    rows.append(
+                        {
+                            "unit": uid,
+                            "time": t,
+                            "cohort": g,
+                            "y": 0.2 * t + (1.0 if t >= g else 0.0) + rng.normal(0, 0.05),
+                        }
+                    )
+                uid += 1
+        df = pd.DataFrame(rows)
+        df = df[df["time"] <= 5]
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            res = WooldridgeDiD(method="ols", control_group="never_treated").fit(
+                df, outcome="y", unit="unit", time="time", cohort="cohort"
+            )
+        assert not [m for m in w if "reference period moved" in str(m.message)]
+        assert res.overall_att == pytest.approx(0.9951, abs=5e-3)
+
+    def test_branch_two_references_are_invariant(self):
+        """`not_yet_treated`: references provably cannot move, so no warning.
+
+        Reference eligibility (`t < g - anticipation`) IS the predicate's second
+        disjunct evaluated at the cohort's own rows, so any reference period is
+        supported by construction. The estimator asserts this at runtime; a
+        violation would mean silent renormalization.
+        """
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            WooldridgeDiD(control_group="not_yet_treated").fit(
+                self._all_treated(), outcome="y", unit="unit", time="time", cohort="cohort"
+            )
+        assert not [m for m in w if "reference period moved" in str(m.message)]
+
+    def test_warning_a_survives_a_downstream_raise(self):
+        """The drop warning fires at filter time, before anything can raise.
+
+        On this panel `_exclude_unidentified_cohorts` raises after the filter,
+        so a build-time-only warning would never reach the user -- they would
+        see an error about comparison observations with no indication that
+        half their rows had already been removed.
+        """
+        rng = np.random.default_rng(9)
+        rows = []
+        uid = 0
+        for g in (1, 3):
+            for _ in range(20):
+                for t in range(1, 5):
+                    rows.append({"unit": uid, "time": t, "cohort": g, "y": rng.standard_normal()})
+                uid += 1
+        df = pd.DataFrame(rows)
+        with pytest.warns(UserWarning, match="no eligible comparison group"):
+            with pytest.raises(ValueError):
+                WooldridgeDiD(control_group="not_yet_treated").fit(
+                    df, outcome="y", unit="unit", time="time", cohort="cohort"
+                )
+
+    def test_zero_cell_cohort_is_reported_once_not_twice(self):
+        """Warning (b) reads the FINAL cell set.
+
+        On `{3,5,8}` at anticipation=2 the filter drops rows AND cohort 3 is
+        then excluded as unidentified. Cohort 3 already has its own exclusion
+        warning, so reading the first build's cell set would double-report it.
+        """
+        df = self._all_treated()
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            try:
+                WooldridgeDiD(control_group="not_yet_treated", anticipation=2).fit(
+                    df, outcome="y", unit="unit", time="time", cohort="cohort"
+                )
+            except ValueError:
+                pass
+        zero_cell = [m for m in w if "have NO estimated cells" in str(m.message)]
+        for m in zero_cell:
+            assert (
+                "3" not in str(m.message).split("have NO estimated cells")[0].split("Cohort(s)")[-1]
+            ), f"cohort 3 double-reported: {m.message}"
+
+    def test_cells_derived_groups_did_not_leak_into_the_design(self):
+        """`results.groups` is cells-derived; the DESIGN keeps present cohorts.
+
+        This is the regression guard for the most dangerous defect review found:
+        routing the covariate blocks through a cells-derived list would drop
+        `D_{G_max} x X` and silently apply the Section 5.4 covariate
+        normalization this release defers -- measured at 8/8 ATTs moving, max
+        0.0648, on a dropped column with R^2 = 0.5551 against the rest of the
+        design (i.e. real information, not a spanned duplicate).
+
+        Detected here by the presence of the rank deficiency itself: if the
+        list had leaked, `D8_x_x` would be gone and this would fit cleanly.
+        Baseline control matters -- with no covariates the two lists agree
+        exactly, so a covariate-free test proves nothing.
+        """
+        rng = np.random.default_rng(11)
+        df = self._all_treated(n_per=60, seed=11)
+        df["x"] = rng.standard_normal(len(df))
+
+        with pytest.raises(ValueError, match="rank-deficient"):
+            WooldridgeDiD(control_group="not_yet_treated", rank_deficient_action="error").fit(
+                df, outcome="y", unit="unit", time="time", cohort="cohort", exovar=["x"]
+            )
+
+        # xtvar is full rank under the default demeaning and must stay that way.
+        res = WooldridgeDiD(control_group="not_yet_treated").fit(
+            df, outcome="y", unit="unit", time="time", cohort="cohort", xtvar=["x"]
+        )
+        assert np.isfinite(res.overall_att)
+
+    def test_bootstrap_runs_on_a_filtered_fit(self):
+        """Bootstrap consumes the FILTERED sample's residuals and cluster ids.
+
+        Row alignment between the reduced frame and the resampling machinery is
+        exercised here rather than assumed.
+        """
+        df = self._all_treated(n_per=40, seed=13)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            res = WooldridgeDiD(
+                control_group="not_yet_treated", n_bootstrap=49, seed=42
+            ).fit(df, outcome="y", unit="unit", time="time", cohort="cohort")
+        assert np.isfinite(res.overall_att)
+        assert np.isfinite(res.overall_se)
