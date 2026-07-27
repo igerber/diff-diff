@@ -495,6 +495,40 @@ class TestLegacyLoaderProvenance:
             assert result.attrs["source"] == "synthetic_fallback"
             assert result.shape == _construct_mpdta_data().shape
 
+    def test_verified_cache_recovers_canonical_data_on_download_failure(
+        self, tmp_path, monkeypatch
+    ):
+        """A dead network with a checksum-valid cache returns canonical data, silently.
+
+        This is the one failure path that must NOT warn or fall back: the cached bytes
+        already passed the pinned SHA-256, so they are the canonical data. It holds even
+        under ``force_download=True``, which bypasses the cache on the way in but still
+        falls back to it when the download fails.
+        """
+        import hashlib
+        import warnings
+
+        import diff_diff.datasets as datasets_mod
+
+        monkeypatch.setattr(datasets_mod, "_CACHE_DIR", tmp_path)
+
+        source_csv = _construct_mpdta_data().rename(columns={"first_treat": "first.treat"})
+        payload = source_csv[["year", "countyreal", "lpop", "lemp", "first.treat", "treat"]].to_csv(
+            index=False
+        )
+        digest = hashlib.sha256(payload.encode()).hexdigest()
+        monkeypatch.setattr(datasets_mod, "_MPDTA_SOURCE_SHA256", digest)
+        (tmp_path / "mpdta.csv").write_text(payload)
+
+        for force in (False, True):
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always")
+                with patch("diff_diff.datasets.urlopen", side_effect=TimeoutError("network down")):
+                    result = load_mpdta(force_download=force)
+
+            assert result.attrs["source"] == "callaway_santanna_mpdta", f"force={force}"
+            assert not [w for w in caught if "SYNTHETIC" in str(w.message)], f"force={force}"
+
     def test_documented_card_workflow_runs_on_canonical_frame(self):
         """The docstring/API example must survive the canonical data's missing outcomes.
 
