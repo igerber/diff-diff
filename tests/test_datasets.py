@@ -1236,9 +1236,16 @@ class TestCsvDownloadIntegrity:
 class TestClearCache:
     """Tests for cache management."""
 
-    def test_clear_cache_creates_directory(self):
-        """clear_cache should handle non-existent cache gracefully."""
-        # This should not raise even if cache doesn't exist
+    def test_clear_cache_creates_directory(self, tmp_path, monkeypatch):
+        """clear_cache should handle non-existent cache gracefully.
+
+        Pinned to a temporary directory: unpatched, this ran against the real
+        ``~/.cache/diff_diff/datasets`` and deleted the developer's canonical
+        downloads every time the suite ran.
+        """
+        import diff_diff.datasets as datasets_mod
+
+        monkeypatch.setattr(datasets_mod, "_CACHE_DIR", tmp_path / "absent")
         try:
             clear_cache()
         except Exception as e:
