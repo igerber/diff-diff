@@ -743,6 +743,13 @@ def load_card_krueger(force_download: bool = False) -> pd.DataFrame:
     Original finding: No significant negative effect of minimum wage increase
     on employment (ATT ≈ +2.8 FTE employees).
 
+    The canonical survey is incomplete: 12 stores lack ``emp_pre``, 14 lack
+    ``emp_post``, and ``wage_pre``/``wage_post`` are missing for 20 and 21
+    stores. Drop the missing outcome rows before fitting, as the example below
+    does; estimators reject missing outcomes rather than dropping them silently.
+    The synthetic fallback frame is complete, so code that skips this step will
+    work offline and fail once the canonical source is reachable.
+
     The canonical data are checksum-verified and returned with
     ``df.attrs["source"] == "card_krueger_public_data"``. Any download, parse,
     or validation failure emits one ``UserWarning`` containing ``SYNTHETIC``
@@ -767,6 +774,9 @@ def load_card_krueger(force_download: bool = False) -> pd.DataFrame:
     ...     var_name='period', value_name='employment'
     ... )
     >>> ck_long['post'] = (ck_long['period'] == 'emp_post').astype(int)
+    >>>
+    >>> # 26 store-waves have no employment reading in the source survey
+    >>> ck_long = ck_long.dropna(subset=['employment'])
     >>>
     >>> # Estimate DiD
     >>> did = DifferenceInDifferences()

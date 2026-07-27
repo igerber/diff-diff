@@ -495,6 +495,41 @@ class TestLegacyLoaderProvenance:
             assert result.attrs["source"] == "synthetic_fallback"
             assert result.shape == _construct_mpdta_data().shape
 
+    def test_documented_card_workflow_runs_on_canonical_frame(self):
+        """The docstring/API example must survive the canonical data's missing outcomes.
+
+        The real Card-Krueger survey is incomplete (12 missing ``emp_pre``, 14 missing
+        ``emp_post``), while the synthetic fallback is complete. Without the documented
+        ``dropna``, the published workflow estimates fine offline and raises as soon as
+        the canonical source becomes reachable.
+        """
+        from diff_diff import DifferenceInDifferences
+
+        ck = self._valid_card_source_frame()
+        assert ck["emp_pre"].isna().sum() == 12
+        assert ck["emp_post"].isna().sum() == 14
+
+        ck_long = ck.melt(
+            id_vars=["store_id", "state", "treated"],
+            value_vars=["emp_pre", "emp_post"],
+            var_name="period",
+            value_name="employment",
+        )
+        ck_long["post"] = (ck_long["period"] == "emp_post").astype(int)
+
+        # Without the documented dropna the estimator rejects the frame outright.
+        with pytest.raises(ValueError, match="missing values"):
+            DifferenceInDifferences().fit(
+                ck_long, outcome="employment", treatment="treated", time="post"
+            )
+
+        ck_long = ck_long.dropna(subset=["employment"])
+        results = DifferenceInDifferences().fit(
+            ck_long, outcome="employment", treatment="treated", time="post"
+        )
+        assert np.isfinite(results.att)
+        assert np.isfinite(results.se)
+
     def test_failed_cache_write_leaves_no_partial_file(self, tmp_path, monkeypatch):
         """A write that fails mid-flight must not strand a ``delete=False`` temp file."""
         import diff_diff.datasets as datasets_mod

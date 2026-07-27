@@ -50,6 +50,10 @@ Example
    )
    ck_long['post'] = (ck_long['period'] == 'emp_post').astype(int)
 
+   # 26 store-waves have no employment reading in the source survey; estimators
+   # reject missing outcomes rather than dropping them silently
+   ck_long = ck_long.dropna(subset=['employment'])
+
    did = DifferenceInDifferences()
    results = did.fit(ck_long, outcome='employment', treatment='treated', time='post')
 
