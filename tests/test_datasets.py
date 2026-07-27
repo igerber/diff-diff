@@ -565,13 +565,17 @@ class TestLegacyLoaderProvenance:
 
         monkeypatch.setattr(datasets_mod, "_CACHE_DIR", tmp_path)
         source = _construct_mpdta_data().rename(columns={"first_treat": "first.treat"})
-        payload = source[["year", "countyreal", "lpop", "lemp", "first.treat", "treat"]].to_csv(
-            index=False
+        payload = (
+            source[["year", "countyreal", "lpop", "lemp", "first.treat", "treat"]]
+            .to_csv(index=False)
+            .encode()
         )
         monkeypatch.setattr(
-            datasets_mod, "_MPDTA_SOURCE_SHA256", hashlib.sha256(payload.encode()).hexdigest()
+            datasets_mod, "_MPDTA_SOURCE_SHA256", hashlib.sha256(payload).hexdigest()
         )
-        (tmp_path / "mpdta.csv").write_text(payload)
+        # Binary write: text mode would translate newlines on Windows, so the bytes
+        # on disk would not match the digest the loader verifies them against.
+        (tmp_path / "mpdta.csv").write_bytes(payload)
 
         response = MagicMock()
         response.__enter__ = lambda self: self
@@ -670,12 +674,16 @@ class TestLegacyLoaderProvenance:
         monkeypatch.setattr(datasets_mod, "_CACHE_DIR", tmp_path)
 
         source_csv = _construct_mpdta_data().rename(columns={"first_treat": "first.treat"})
-        payload = source_csv[["year", "countyreal", "lpop", "lemp", "first.treat", "treat"]].to_csv(
-            index=False
+        payload = (
+            source_csv[["year", "countyreal", "lpop", "lemp", "first.treat", "treat"]]
+            .to_csv(index=False)
+            .encode()
         )
-        digest = hashlib.sha256(payload.encode()).hexdigest()
+        digest = hashlib.sha256(payload).hexdigest()
         monkeypatch.setattr(datasets_mod, "_MPDTA_SOURCE_SHA256", digest)
-        (tmp_path / "mpdta.csv").write_text(payload)
+        # Binary write: text mode would translate newlines on Windows, so the bytes
+        # on disk would not match the digest the loader verifies them against.
+        (tmp_path / "mpdta.csv").write_bytes(payload)
 
         for force in (False, True):
             with warnings.catch_warnings(record=True) as caught:

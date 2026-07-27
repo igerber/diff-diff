@@ -12,6 +12,7 @@
    .. autosummary::
 
       ~CallawaySantAnnaResults.__init__
+      ~CallawaySantAnnaResults.aggregate
       ~CallawaySantAnnaResults.epv_summary
       ~CallawaySantAnnaResults.print_summary
       ~CallawaySantAnnaResults.summary

@@ -951,8 +951,6 @@ def load_castle_doctrine(force_download: bool = False) -> pd.DataFrame:
         - income : float - State median income
         - treated : int - 1 if law in effect, 0 otherwise
         - treatment_exposure : float - Fraction of the year the law was in effect
-          (canonical data only; synthetic fallback frames set this to a binary
-          0/1 copy of ``treated``)
         - cohort : int - Alias for first_treat
 
     Notes
@@ -969,6 +967,10 @@ def load_castle_doctrine(force_download: bool = False) -> pd.DataFrame:
     download is available - or when the source fails to parse or validate - does
     the loader emit one ``UserWarning`` containing ``SYNTHETIC``
     and mark the returned frame as ``"synthetic_fallback"``.
+
+    ``treatment_exposure`` is fractional only on canonical frames; synthetic
+    fallback frames set it to a binary 0/1 copy of ``treated`` and therefore
+    carry no partial-year information.
 
     Replicating Cheng-Hoekstra (2013) requires the paper's regressor and outcome:
     regress ``log(homicide_rate)`` on ``treatment_exposure`` (their ``CDL_it``,
