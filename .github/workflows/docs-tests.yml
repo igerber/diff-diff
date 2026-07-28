@@ -63,7 +63,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Set up Python
-        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           # 3.14 to mirror Pure Python Fallback (the only existing job
           # that actually ran these tests). notebooks.yml uses 3.11 for
@@ -120,7 +120,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y pandoc
 
       - name: Set up Python
-        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           # Match the RTD build (.readthedocs.yaml:9) so CI catches drift
           # against what users actually see on diff-diff.readthedocs.io.
@@ -190,7 +190,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Set up Python 3.9
-        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           # 3.9 is the project's declared floor (pyproject.toml requires-python
           # >=3.9). The sphinx-build job above runs on 3.11; this job verifies
