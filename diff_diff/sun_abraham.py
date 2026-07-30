@@ -24,6 +24,7 @@ from diff_diff.linalg import LinearRegression
 from diff_diff.results import _format_survey_block, _get_significance_stars
 from diff_diff.results_base import BaseResults
 from diff_diff.utils import (
+    absorbed_fe_rank,
     pre_demean_norms,
     safe_inference,
     snap_absorbed_regressors,
@@ -1653,7 +1654,16 @@ class SunAbraham:
                 cluster_ids = df_demeaned[cluster_var].values
             else:
                 cluster_ids = None
-            df_adj = n_units_fe + n_times_fe - 1
+            # Absorbed df from the PRE-transform frame. This design carries NO
+            # intercept column (coef_offset = 0), so it takes the raw FE rank —
+            # equal to the historical `n_units_fe + n_times_fe - 1` on a
+            # connected panel, smaller when the incidence graph splits.
+            df_adj = absorbed_fe_rank(
+                df,
+                [unit, time],
+                has_intercept_col=False,
+                weights=survey_weights,
+            )
             # Interactions occupy columns 0..n_interactions-1 (no intercept)
             coef_offset = 0
 

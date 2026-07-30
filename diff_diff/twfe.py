@@ -16,6 +16,7 @@ from diff_diff.estimators import DifferenceInDifferences
 from diff_diff.linalg import LinearRegression
 from diff_diff.results import DiDResults
 from diff_diff.utils import (
+    absorbed_fe_rank,
     build_fe_dummy_blocks,
     fe_dummy_names,
     pre_demean_norms,
@@ -414,7 +415,16 @@ class TwoWayFixedEffects(DifferenceInDifferences):
                 for cov in covariates:
                     X_list.append(data_demeaned[f"{cov}_demeaned"].values)
             X = np.column_stack([np.ones(len(y))] + X_list)
-            df_adjustment = n_units + n_times - 2
+            # Absorbed df from the PRE-transform frame. Equals the historical
+            # `n_units + n_times - 2` on a connected panel; smaller when the
+            # unit x time incidence graph splits into components (disconnected
+            # or hierarchical FE), where the old count over-stated rank.
+            df_adjustment = absorbed_fe_rank(
+                data,
+                [unit, time],
+                has_intercept_col=True,
+                weights=survey_weights,
+            )
             # Within-transform path: preserve the historical
             # `{"ATT": att}` user-facing `result.coefficients` contract.
             # Broadening this dict here would silently change the

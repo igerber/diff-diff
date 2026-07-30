@@ -29,6 +29,7 @@ from diff_diff.linalg import (
 from diff_diff.results import DiDResults, MultiPeriodDiDResults, PeriodEffect
 from diff_diff.utils import (
     WildBootstrapResults,
+    absorbed_fe_rank,
     build_fe_dummy_blocks,
     demean_by_groups,
     fe_dummy_names,
@@ -492,10 +493,20 @@ class DifferenceInDifferences:
             vars_to_demean = [outcome, treatment, time, "_treat_time"] + (covariates or [])
             _absorb_regressors = vars_to_demean[1:]  # everything except outcome
             _pre_norms = pre_demean_norms(working_data, _absorb_regressors, weights=survey_weights)
+            # Absorbed df MUST be measured before the in-place demean below
+            # overwrites the group columns with demeaned floats. Equals
+            # demean_by_groups' historical `sum_d (n_d - 1)` on a connected panel;
+            # smaller when the incidence graph splits (disconnected/hierarchical).
+            _absorbed_df = absorbed_fe_rank(
+                working_data,
+                list(absorb),
+                has_intercept_col=True,
+                weights=survey_weights,
+            )
             # Method of alternating projections: for N > 1 absorbed dimensions a
             # single sequential sweep is only exact on balanced (orthogonal-FE)
             # panels; demean_by_groups iterates to the exact (W)LS-FWL residual.
-            working_data, n_fe = demean_by_groups(
+            working_data, _ = demean_by_groups(  # count superseded by absorbed_fe_rank above
                 working_data,
                 vars_to_demean,
                 list(absorb),
@@ -515,7 +526,7 @@ class DifferenceInDifferences:
                 display_names={"_treat_time": f"{treatment}:{time}"},
                 weights=survey_weights,
             )
-            n_absorbed_effects += n_fe
+            n_absorbed_effects += _absorbed_df
             absorbed_vars = list(absorb)
 
         # Extract variables (may be demeaned if absorb was used)
@@ -1751,9 +1762,17 @@ class MultiPeriodDiD(DifferenceInDifferences):
             )
             _absorb_regressors = vars_to_demean[1:]  # everything except outcome
             _pre_norms = pre_demean_norms(working_data, _absorb_regressors, weights=survey_weights)
+            # Absorbed df MUST be measured before the in-place demean below
+            # overwrites the group columns (see the DiD path for the rationale).
+            _absorbed_df = absorbed_fe_rank(
+                working_data,
+                list(absorb),
+                has_intercept_col=True,
+                weights=survey_weights,
+            )
             # Method of alternating projections (exact for unbalanced panels; a
             # single sequential sweep is exact only on balanced orthogonal-FE panels).
-            working_data, n_fe = demean_by_groups(
+            working_data, _ = demean_by_groups(  # count superseded by absorbed_fe_rank above
                 working_data,
                 vars_to_demean,
                 list(absorb),
@@ -1778,7 +1797,7 @@ class MultiPeriodDiD(DifferenceInDifferences):
                 },
                 weights=survey_weights,
             )
-            n_absorbed_effects += n_fe
+            n_absorbed_effects += _absorbed_df
 
         # Extract outcome and treatment (may be demeaned if absorb was used)
         y = working_data[outcome].values.astype(float)

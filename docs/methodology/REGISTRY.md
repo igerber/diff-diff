@@ -73,6 +73,11 @@ where τ is the ATT.
 - Default: HC1 heteroskedasticity-robust
 - Optional: Cluster-robust (specify `cluster` parameter)
 - Optional: Wild cluster bootstrap for small number of clusters
+- With `absorb=`, the absorbed-FE degrees-of-freedom adjustment uses the
+  component-aware rank (`diff_diff.utils.absorbed_fe_rank`) — see the
+  TwoWayFixedEffects section's absorbed-FE degrees-of-freedom note for the
+  shared convention and its fixest `K.exact` anchor. Consumed by the
+  classical/HC1 variance rescale and the reported residual df.
 
 *Edge cases:*
 - Empty cells (e.g., no treated-pre observations) cause rank deficiency, handled per `rank_deficient_action` setting
@@ -279,7 +284,11 @@ where V is the VCV sub-matrix for post-treatment δ_e coefficients.
   variance. Regression: `tests/test_methodology_wls_cr2.py::TestLinearRegressionFENanGuardEndToEnd`.
 - Optional: Wild cluster bootstrap (complex for multi-coefficient testing;
   requires joint bootstrap distribution)
-- Degrees of freedom adjusted for absorbed fixed effects
+- Degrees of freedom adjusted for absorbed fixed effects: component-aware rank
+  via `diff_diff.utils.absorbed_fe_rank` (own `_absorbed_fe_vcov_scale` gate at
+  its fit site — MultiPeriodDiD is a second implementation, not an alias of
+  DifferenceInDifferences) — see the TwoWayFixedEffects section's absorbed-FE
+  degrees-of-freedom note for the shared convention
 
 *Edge cases:*
 - Reference period: omitted from design matrix; coefficient is zero by construction.
@@ -364,12 +373,46 @@ This matches the behavior of R's `fixest::feols()` with absorbed FE.
 
 *Standard errors:*
 - Default: Cluster-robust at unit level (accounts for serial correlation)
-- Degrees of freedom adjusted for absorbed fixed effects: `df_adjustment = n_units + n_times - 2`
+- Degrees of freedom adjusted for absorbed fixed effects: component-aware rank via
+  `diff_diff.utils.absorbed_fe_rank` — equal to the historical
+  `n_units + n_times - 2` on a connected panel, and `sum(levels) - C - 1` in
+  general, where `C` is the number of connected components of the unit x time
+  incidence graph (Abowd-Creecy-Kramarz).
+- **Note:** the pre-2026-07 count `sum_d (levels_d - 1)` over-stated absorbed rank
+  in two supported cases: disconnected panels (the FE are not jointly identified
+  across components, true rank `sum(levels) - C`) and nested/hierarchical
+  dimensions (e.g. `absorb=["state", "state_year"]`, where each parent level is
+  its own component: measured 6 states x 5 years gives true rank 29 vs the old
+  count 34). On those inputs the reported residual df was too small and the
+  non-clustered classical/hc1 SEs too large; connected panels are bit-identical.
+  Levels and connectivity are evaluated over POSITIVE-weight rows only, per the
+  zero-weight-padding inference-invariance guarantee (see "Weight Type Effects on
+  Inference"); the old all-rows `nunique()` count violated that guarantee on
+  weighted fits with inert rows. For 3+ absorbed dimensions the historical
+  `sum(levels - 1)` form is retained (exact for independent connected dims;
+  the general N-way rank is tracked in TODO.md). Full measured inventory:
+  `docs/methodology/variance-conventions.md`.
 - **Note (absorbed-FE variance scale = fixest full-K):** for the *non-clustered* `classical`
   and `hc1` (hetero) variance families, the finite-sample scale (`sse/(n-k)` / `n/(n-k)`) now
   counts the absorbed FE in `k` -- i.e. `K_full = k_visible + df_adjustment` -- matching
   `fixest::feols(vcov="iid"/"hetero")` and the reported t-`df` (`linalg._absorbed_fe_vcov_scale`,
   a single scalar rescale of the `k_visible` vcov, fail-closed when `n - K_full <= 0`).
+  **Note (deviation from R default — irregular FE designs):** with the 2026-07
+  component-aware `absorbed_fe_rank`, `df_adjustment` on disconnected or
+  nested/hierarchical two-way designs is the EXACT dummy-space rank
+  (`sum(levels) - C`), which matches `fixest::feols(..., ssc = ssc(K.exact = TRUE))`
+  at machine precision but deviates from the fixest DEFAULT
+  (`ssc(K.exact = FALSE)`), whose approximate `sum(levels - 1)` count reproduces the
+  library's own pre-2026-07 over-count on exactly those designs. Measured on the
+  committed hierarchical golden (`benchmarks/data/fixest_kexact_golden.json`,
+  6 states x 5 nested state-years, C = 6): fixest default `df.K = 36` / iid SE
+  0.115064780324081 vs `K.exact = TRUE` `df.K = 31` / iid SE 0.111785906348027;
+  the library matches the exact side to <= 1e-12
+  (`tests/test_variance_conventions.py::TestFixestKExactParity`). Exact rank is
+  chosen deliberately: `K.exact` exists in fixest precisely because its default is
+  an approximation, and the approximate count misstates the residual df the
+  reported t-distribution uses. Connected, independent designs are identical under
+  both conventions.
   Previously the within-transform SE used `k_visible`, sitting ~6.5% below fixest even though
   the t-`df` already used `K_full` (an internal inconsistency). Applies to
   `TwoWayFixedEffects(vcov_type="classical")`, `DifferenceInDifferences(absorb=..., vcov_type in {classical,hc1})`,
@@ -405,7 +448,23 @@ This matches the behavior of R's `fixest::feols()` with absorbed FE.
   estimators (CS, SA, imputation-family, etc.) carry their own inference stacks and are out of the
   knob's scope. Locked by
   `tests/test_estimators_vcov_type.py::TestDfConvention` (G−1 tail match, precedence, no-op default). The full-dummy (`fixed_effects=`) idiom carries
-  `df_adjustment == 0` and is unchanged (it already matched fixest).
+  `df_adjustment == 0` and is unchanged — its residual t-df already matched fixest's
+  full-K count because every FE column sits in `k_visible`. **That claim is scoped to
+  the residual df and the non-clustered variance families; it does NOT extend to the
+  clustered CR1 finite-sample factor** — see the deviation note below.
+- **Deviation from R (clustered CR1, full-dummy `fixed_effects=` path):** with
+  `fixed_effects=[unit, time]` and `cluster=unit`, the CR1 factor's `k` counts every
+  FE dummy including the cluster-NESTED unit FE (measured `k = 66` on the audit
+  panel), which fixest's default `ssc(fixef.K = "nested")` drops. The full-dummy
+  clustered SE is therefore CONSERVATIVE relative to fixest — the opposite direction
+  from the `absorb=` path's anti-conservative `k_visible` (measured `k = 2` on the
+  same model). The two documented-equivalent idioms consequently return clustered
+  SEs differing by 10.35% on an identical model with an identical ATT
+  (`sqrt((360−2)/(360−66))`, pinned by
+  `tests/test_variance_conventions.py::test_d1_divergence_is_pinned`), and NEITHER
+  matches the reghdfe/fixest nested convention. Full measured map:
+  `docs/methodology/variance-conventions.md` (defect D1); convergence of both paths
+  on `K_reference` is scheduled as PR B of the 3.9 variance-consolidation program.
 
 *Edge cases:*
 - Singleton units/periods are automatically dropped
@@ -1520,6 +1579,12 @@ where weights ŵ_{g,e} = n_{g,e} / Σ_g n_{g,e} (sample share of cohort g at eve
   aggregation step is otherwise identical. Tracked as a follow-up
   (harmonizing the correction or documenting it as an intentional
   difference).
+- The within-transform residual df subtracts the absorbed unit + time FE via
+  the component-aware rank (`diff_diff.utils.absorbed_fe_rank`, no-intercept
+  form — the saturated design carries no intercept column) — see the
+  TwoWayFixedEffects section's absorbed-FE degrees-of-freedom note for the
+  shared convention. On disconnected panels the absorbed count falls by C-1,
+  raising the per-cell residual df used for cohort-period t-inference.
 - Survey designs (`survey_design=`) + `vcov_type ∈ {"classical","hc2",
   "hc2_bm"}` are rejected at fit-time: the survey-design Taylor Series
   Linearization (or replicate-weight refit) variance overrides the
@@ -1998,7 +2063,7 @@ where `g(·)` is the link inverse (logistic or exp), `η_i` is the individual li
 - **Note:** QMLE sandwich uses `weight_type="aweight"` which applies `(G/(G-1)) * ((n-1)/(n-k))` small-sample adjustment. Stata `jwdid` uses `G/(G-1)` only. The `(n-1)/(n-k)` term is conservative (inflates SEs slightly). For typical ETWFE panels where n >> k, the difference is negligible.
 
 *Variance families (`vcov_type`, OLS path only):*
-- `hc1` (default) — CR1 Liang-Zeger cluster-robust on the within-transformed design. Bit-equal to prior behavior (FWL preserves the score). The natural R anchor is `fixest::feols(y ~ <interactions> | unit + time, cluster=~unit)` or Stata `jwdid` (both within-transform). **Deviation from Stata `jwdid` (measured 2026-07-26, `tests/test_etwfe_cs_stata_parity.py`):** the ATT(g,t) POINT estimates match `jwdid` exactly (~3e-8 on the `mpdta` panel, i.e. Stata's log-output rounding), but every `hc1` SE is SMALLER than `jwdid`'s by a factor that is **uniform across cells** (spread < 1e-6 within a fit) and shrinks as the cluster count grows: 1.0280 at G=20, 1.0132 at G=40, 1.0086 at G=60, 1.0046 at G=110, 1.00264 at G=191, 1.0010 at G=500. **Two ratios are PINNED by CI** (`tests/test_etwfe_cs_stata_parity.py`): G=500 on the full `mpdta` panel, and G=191 on the all-eventually-treated arm — each arm measures its own, because the constant does not transfer between cluster counts. The remaining smaller-G figures were measured ad hoc on subsampled panels during the #724 investigation and no committed artifact reproduces them, so treat them as the shape of the trend rather than as regression-gated constants. Committing that subsample ladder as a golden block is part of the derivation work tracked in `TODO.md` — the ladder is the instrument the derivation needs, not a separate chore. The library is therefore systematically **anti-conservative** relative to the reference - negligibly with many clusters (~0.1% at G=500) and materially in few-cluster designs (~2.8% at G=20). **The mechanism is NOT yet identified.** The gap tracks `sqrt(G/(G-1))` closely but lies consistently ABOVE it (by ~0.2% at G=20 down to ~0.001% at G=500), and `solve_ols` already applies the full CR1 `(G/(G-1)) * ((n-1)/(n-k))` - so a missing `G/(G-1)` is ruled out as the explanation. This is recorded as a measured deviation, not a diagnosed one; deriving the true factor from the within-transform `k` accounting against `hdfe`/`reghdfe`'s is tracked in `TODO.md`, and no correction should be applied until it reproduces `jwdid` exactly rather than approximately. This is distinct from the `lm + clubSandwich` deviation below, whose factor is `k`-based. `CallawaySantAnna` shows no such gap - its SEs match Stata `csdid` outright - which localizes this to the ETWFE path rather than a library-wide convention. **Deviation from R `lm + clubSandwich::vcovCR(type="CR1S")`:** the full-dummy `lm` SE differs by a factor of `sqrt((n - k_within) / (n - k_total))` because clubSandwich's `(n-1)/(n-p)` finite-sample correction counts ALL columns (intercept + treatment + unit dummies + time dummies = `k_total`) while WooldridgeDiD's `solve_ols` on the within-transformed design counts only the treatment-cell columns (`k_within`). On the 240-obs / 51-column R-parity fixture this is ~11%; on typical larger panels (n >> k_total) the gap shrinks to <2%. No public WooldridgeDiD code path exposes the `lm + CR1S` (CR1 cluster-robust on the full-dummy design) finite-sample correction — `vcov_type="hc2_bm"` routes to the CR2 Bell-McCaffrey sandwich on the full-dummy design (different variance estimator entirely), not CR1S. Users who need exact `lm + clubSandwich::vcovCR(type="CR1S")` parity must call `solve_ols` directly on a full-dummy design or fit via R. Same deviation pattern as SunAbraham PR #472 (`fixest::sunab` vs `lm + clubSandwich`).
+- `hc1` (default) — CR1 Liang-Zeger cluster-robust on the within-transformed design. Bit-equal to prior behavior (FWL preserves the score). The natural R anchor is `fixest::feols(y ~ <interactions> | unit + time, cluster=~unit)` or Stata `jwdid` (both within-transform). **Deviation from Stata `jwdid` (measured 2026-07-26, `tests/test_etwfe_cs_stata_parity.py`):** the ATT(g,t) POINT estimates match `jwdid` exactly (~3e-8 on the `mpdta` panel, i.e. Stata's log-output rounding), but every `hc1` SE is SMALLER than `jwdid`'s by a factor that is **uniform across cells** (spread < 1e-6 within a fit) and shrinks as the cluster count grows: 1.0280 at G=20, 1.0132 at G=40, 1.0086 at G=60, 1.0046 at G=110, 1.00264 at G=191, 1.0010 at G=500. **Two ratios are PINNED by CI** (`tests/test_etwfe_cs_stata_parity.py`): G=500 on the full `mpdta` panel, and G=191 on the all-eventually-treated arm — each arm measures its own, because the constant does not transfer between cluster counts. The remaining smaller-G figures were measured ad hoc on subsampled panels during the #724 investigation and no committed artifact reproduces them, so treat them as the shape of the trend rather than as regression-gated constants. Committing that subsample ladder as a golden block is part of the derivation work tracked in `TODO.md` — the ladder is the instrument the derivation needs, not a separate chore. The library is therefore systematically **anti-conservative** relative to the reference - negligibly with many clusters (~0.1% at G=500) and materially in few-cluster designs (~2.8% at G=20). **The mechanism IS now derived (2026-07, `docs/methodology/variance-conventions.md` defect D2):** the clustered CR1 factor's `k` counts only the visible treatment-cell columns, omitting the absorbed FE not nested in the cluster; the closed form `K_reference = explicit columns + (1 if no intercept column) + rank(non-nested FE | nested)` reproduces `jwdid`/reghdfe to ~1e-15 on all three committed arms and retrodicts the ad-hoc G=20/G=40 rungs (predicted 1.028016 vs recorded 1.0280; 1.013210 vs 1.0132). The correction itself is deliberately NOT yet applied — it lands with the rest of the clustered-CR1 convergence (PR B of the 3.9 variance-consolidation program), together with the committed subsample ladder, so every affected surface moves once under one ledger row rather than piecemeal. This is distinct from the `lm + clubSandwich` deviation below, whose factor is `k`-based. `CallawaySantAnna` shows no such gap - its SEs match Stata `csdid` outright - which localizes this to the ETWFE path rather than a library-wide convention. **Deviation from R `lm + clubSandwich::vcovCR(type="CR1S")`:** the full-dummy `lm` SE differs by a factor of `sqrt((n - k_within) / (n - k_total))` because clubSandwich's `(n-1)/(n-p)` finite-sample correction counts ALL columns (intercept + treatment + unit dummies + time dummies = `k_total`) while WooldridgeDiD's `solve_ols` on the within-transformed design counts only the treatment-cell columns (`k_within`). On the 240-obs / 51-column R-parity fixture this is ~11%; on typical larger panels (n >> k_total) the gap shrinks to <2%. No public WooldridgeDiD code path exposes the `lm + CR1S` (CR1 cluster-robust on the full-dummy design) finite-sample correction — `vcov_type="hc2_bm"` routes to the CR2 Bell-McCaffrey sandwich on the full-dummy design (different variance estimator entirely), not CR1S. Users who need exact `lm + clubSandwich::vcovCR(type="CR1S")` parity must call `solve_ols` directly on a full-dummy design or fit via R. Same deviation pattern as SunAbraham PR #472 (`fixest::sunab` vs `lm + clubSandwich`).
 - `hc2_bm` — CR2 Bell-McCaffrey via auto-route to full-dummy design (`[intercept, X_design, unit_dummies, time_dummies]`), then `solve_ols(..., vcov_type="hc2_bm")` through the clubSandwich port (PR #475). FWL does NOT preserve the hat matrix; HC2 leverage + BM DOF require the full-projection design. Per-coefficient SE matches `clubSandwich::vcovCR(lm(...), cluster=~unit, type="CR2")` at atol=1e-10. Per-cell `(g, t)` inference fields use `coef_test()$df_Satt` Bell-McCaffrey DOF (pinned at atol=1e-6 from CI half-width inversion). Aggregated inference (overall ATT + `.aggregate("group" | "calendar" | "event")`) uses contrast-specific BM DOFs from `_compute_cr2_bm_contrast_dof` (matches R `Wald_test(constraints=matrix(w, 1), vcov=vcov_CR2, test="HTZ")$df_denom`); the overall ATT contrast DOF is computed at fit time, the other three aggregations lazily on each `.aggregate(...)` call from BM artifacts (the REDUCED kept-column `X` / `cluster_ids` / bread matrix + the reduced-space coef-index map) stored on the Results object — using the reduced design after rank-deficient drops keeps the bread non-singular and matches the subspace `solve_ols` actually estimated in. Fail-closed across all surfaces: when BM DOF is unavailable (helper raises or returns non-finite), the affected inference fields are NaN — not normal-theory fallback (per `feedback_bm_contrast_dof_fail_closed`).
 - `classical`, `hc2` — supported via auto-route to full-dummy AND auto-drop of the unit auto-cluster (one-way families don't compose with `cluster_ids` per the linalg validator). Set `self.cluster=None` (default) for these; explicit `cluster="state"` + one-way family raises at the linalg validator. SE matches `summary(lm(...))$coefficients` (classical) and `sandwich::vcovHC(type="HC2")` respectively. Per-cell + aggregate p-values/CIs use the residual DOF `n - rank(X)` (matches R `lm()` / `coef_test()` t-distribution under both classical OLS SE and `sandwich::vcovHC` defaults) — not normal-theory, so inference is correct under small samples.
 - `conley` (spatial-HAC, Conley 1999) — supported on the **OLS path** via the within-transform design (or the full-dummy design when `cohort_trends=True`, like the other full-dummy families — see the cohort-trends row below), threading the `conley_*` params through `solve_ols` / `conley.py` (`conley_lag_cutoff=0` = within-period spatial only; `>0` adds within-unit Bartlett serial — the panel-aware path, since `conley_time`/`conley_unit` are always supplied, not pooled cross-sectional). Reuses the already-`conleyreg`-validated machinery (no new variance code). The unit auto-cluster is dropped on the conley path (an explicit `cluster=` enables the spatial+cluster product kernel); `survey_design=` / `weights` / `n_bootstrap>0` are rejected, and `method ∈ {logit, poisson}` + conley remains rejected (the `method != "ols"` guard — a QMLE-on-pseudo-residuals Conley sandwich is a separate derivation). FWL-composability (the within-transform conley SE equals the full-dummy conley SE) is pinned in `tests/test_conley_vcov.py::TestConleyWooldridge::test_fwl_composability_vs_full_dummy`.

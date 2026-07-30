@@ -1519,11 +1519,33 @@ class TestDemeanByGroups:
         np.testing.assert_array_equal(out_groups["y_dm"].values, out_single["y_dm"].values)
         np.testing.assert_array_equal(out_groups["x1_dm"].values, out_single["x1_dm"].values)
 
-    def test_n_effects_is_sum_nunique_minus_one(self):
+    def test_n_effects_is_the_raw_level_count_not_df(self):
+        """The count return is the documented RAW level count, sum(nunique-1).
+
+        It is deliberately NOT the absorbed dummy-space rank: on disconnected
+        or nested dimensions the two differ, and no library caller consumes
+        this value as a df adjustment any more (that is absorbed_fe_rank's
+        job). Pin both the raw contract and the distinction."""
+        from diff_diff.utils import absorbed_fe_rank
+
         df = _unbalanced_2way_panel(seed=2)
         _, n_eff = demean_by_groups(df, ["y"], ["unit", "period"], suffix="_dm")
         expected = (df["unit"].nunique() - 1) + (df["period"].nunique() - 1)
         assert n_eff == expected
+        # Hierarchical dims: the raw count and the component-aware rank split.
+        h = pd.DataFrame(
+            [
+                {"state": s, "state_year": s * 100 + y, "y": float(s + y)}
+                for s in range(6)
+                for y in range(5)
+                for _ in range(2)
+            ]
+        )
+        _, raw = demean_by_groups(h, ["y"], ["state", "state_year"], suffix="_dm")
+        assert raw == (6 - 1) + (30 - 1) == 34  # raw count
+        assert (
+            absorbed_fe_rank(h, ["state", "state_year"], has_intercept_col=True) == 29
+        )  # the df-valid rank
 
     @pytest.mark.parametrize("weighted", [False, True])
     def test_unbalanced_2way_matches_full_dummy_ols(self, weighted):

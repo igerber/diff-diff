@@ -2712,7 +2712,9 @@ def demean_by_group(
     data : pd.DataFrame
         DataFrame with demeaned variables.
     n_effects : int
-        Number of absorbed fixed effects (nunique - 1).
+        Raw level count (``nunique - 1``). **NOT a valid degrees-of-freedom
+        adjustment** on weighted fits — it counts levels carried only by
+        zero-weight rows; for df adjustments use :func:`absorbed_fe_rank`.
 
     Examples
     --------
@@ -2918,6 +2920,115 @@ def _demean_map_rust(
     return demeaned, iters_all
 
 
+def absorbed_fe_rank(
+    data: pd.DataFrame,
+    group_vars: List[str],
+    *,
+    has_intercept_col: bool,
+    weights: Optional[np.ndarray] = None,
+) -> int:
+    """Degrees of freedom absorbed by a set of fixed-effect dimensions.
+
+    Returns the rank of the absorbed FE dummy space, minus one when the caller's
+    design matrix already carries its own intercept column (so the shared
+    constant is not counted twice).
+
+    The rank INCLUDING an implicit intercept is::
+
+        N == 2:  sum(levels) - C     C = connected components of the bipartite
+                                     level graph (Abowd-Creecy-Kramarz)
+        else:    sum(levels) - N + 1
+
+    For a single connected component the two-dimensional form collapses to the
+    historical ``sum_d (n_d - 1) + 1``, so every existing caller is unchanged on
+    a connected panel. It differs — correctly — in two supported cases the old
+    count over-stated:
+
+    - **Disconnected panels** (``C > 1``): the FE are not jointly identified
+      across components, so the dummy space is rank ``sum(levels) - C``.
+    - **Nested / hierarchical dimensions** (e.g. ``["state", "state_year"]``):
+      each parent level forms its own component, so ``C = n_parents`` and the
+      absorbed rank is that of the finer dimension alone.
+
+    ``N >= 3`` keeps the ``sum(levels) - N + 1`` form, which is exact for
+    mutually independent, connected dimensions and over-states rank otherwise
+    (a duplicated third dimension is the simplest counterexample). Computing the
+    general N-way rank is a hypergraph problem and is deliberately not attempted
+    here; see the TODO backlog row.
+
+    Parameters
+    ----------
+    data : DataFrame
+        The frame the design is built from. Must be pre-transform: after an
+        in-place demean the group columns may hold demeaned floats.
+    group_vars : list of str
+        Absorbed FE columns.
+    has_intercept_col : bool
+        True when the caller's ``X`` already contains an intercept column.
+    weights : ndarray, optional
+        Observation weights. Levels and connectivity are evaluated over
+        POSITIVE-weight rows only, per the REGISTRY guarantee that zero-weight
+        padding is inference-invariant on the generic HC1/classical paths.
+
+    Returns
+    -------
+    int
+        Absorbed degrees of freedom for the caller's df adjustment.
+    """
+    if not group_vars:
+        return 0
+
+    frame = data
+    if weights is not None:
+        w = np.asarray(weights, dtype=np.float64)
+        if w.shape[0] != len(data):
+            raise ValueError(f"weights length ({w.shape[0]}) must match data rows ({len(data)})")
+        positive = w > 0
+        if not positive.any():
+            return 0
+        if not positive.all():
+            frame = data.loc[positive]
+
+    codes_list = []
+    for g in group_vars:
+        codes = pd.factorize(frame[g].values, sort=False)[0]
+        if codes.size and codes.min() < 0:
+            # pd.factorize assigns NaN keys code -1; a negative index would
+            # otherwise surface as a cryptic sparse-graph error downstream.
+            raise ValueError(
+                f"Absorbed fixed-effect column '{g}' contains NaN group keys; "
+                "drop or impute those rows before fitting."
+            )
+        codes_list.append(codes)
+    levels = [int(c.max()) + 1 if c.size else 0 for c in codes_list]
+    total_levels = sum(levels)
+    if total_levels == 0:
+        return 0
+
+    n_dims = len(group_vars)
+    if n_dims == 2:
+        from scipy.sparse import coo_matrix
+        from scipy.sparse.csgraph import connected_components
+
+        left, right = codes_list
+        offset = levels[0]
+        adjacency = coo_matrix(
+            (
+                np.ones(left.shape[0], dtype=np.int8),
+                (left, right + offset),
+            ),
+            shape=(total_levels, total_levels),
+        )
+        # Weak connectivity of the directed one-way bipartite graph equals
+        # undirected connectivity, and skips materializing A + A.T (~2.4x).
+        n_components = int(connected_components(adjacency, directed=True, connection="weak")[0])
+        rank = total_levels - n_components
+    else:
+        rank = total_levels - n_dims + 1
+
+    return rank - 1 if has_intercept_col else rank
+
+
 def demean_by_groups(
     data: pd.DataFrame,
     variables: List[str],
@@ -2976,8 +3087,13 @@ def demean_by_groups(
     data : pd.DataFrame
         DataFrame with demeaned variables.
     n_effects : int
-        Number of absorbed fixed effects, ``sum_d (nunique_d - 1)`` over
-        ``group_vars`` (the standard DOF-accounting convention).
+        Raw level count ``sum_d (nunique_d - 1)`` over ``group_vars``.
+        **NOT a valid degrees-of-freedom adjustment**: it over-counts the
+        absorbed dummy-space rank on disconnected or nested/hierarchical
+        dimensions and counts levels carried only by zero-weight rows. No
+        library caller consumes it as df any more — for df adjustments use
+        :func:`absorbed_fe_rank`, which computes the component-aware rank
+        over positive-weight rows.
 
     Raises
     ------

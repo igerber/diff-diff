@@ -8,6 +8,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **Absorbed-FE degrees of freedom over-counted on disconnected and hierarchical
+  panels.** The df adjustment for absorbed fixed effects (`TwoWayFixedEffects`,
+  `SunAbraham`, `DifferenceInDifferences(absorb=)`, `MultiPeriodDiD(absorb=)`)
+  used `sum_d (levels_d − 1)`, which assumes the FE dimensions are mutually
+  independent and the unit×time incidence graph is connected. On disconnected
+  panels, and on nested specs like `absorb=["state", "state_year"]` (measured:
+  6 states × 5 years → true absorbed rank 29, old count 34), it over-stated the
+  absorbed rank, making the reported residual df too small and the non-clustered
+  classical/hc1 SEs too large. The new `diff_diff.utils.absorbed_fe_rank`
+  computes the two-way rank from the connected components of the bipartite level
+  graph; connected panels are bit-identical (`rtol=0, atol=1e-14` across all ten
+  estimator surfaces). Levels and connectivity are now evaluated over
+  positive-weight rows only, restoring the documented zero-weight-padding
+  inference-invariance on weighted fits with inert rows.
+- **New CI-enforced variance-convention audit matrix**
+  (`tests/test_variance_conventions.py` +
+  `docs/methodology/variance-conventions.md`): pins, per estimator surface, the
+  visible `k` reaching the shared clustered CR1 denominator and the tail-df
+  convention passed to inference, with each cell classified as a documented
+  defect (scheduled for the 3.9 variance-consolidation program) or a declared
+  legitimate exception with its reason. This is the map for the follow-up PRs
+  that converge the clustered CR1 `k` on the reghdfe/fixest nested convention
+  and the tail df on `t(G−1)`.
 - **`WooldridgeDiD` silently dropped genuine post-treatment effects
   (issue #724).** With `control_group="never_treated"`, the ETWFE design emitted
   every cohort×time indicator *including* the reference period — which is

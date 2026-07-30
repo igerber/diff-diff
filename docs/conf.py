@@ -61,6 +61,7 @@ exclude_patterns = [
     "v4-design.md",
     "methodology/continuous-did.md",
     "methodology/survey-theory.md",
+    "methodology/variance-conventions.md",
     # Internal paper-review notes (methodology validation artifacts).
     "methodology/papers/*",
     "tutorials/README.md",
