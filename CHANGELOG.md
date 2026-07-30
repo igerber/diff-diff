@@ -56,6 +56,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   three modes now dispatch, and `"error"` raises naming the skipped pairs.
 
 ### Changed
+- **Internal: `ruff` dev-tooling pin bumped `0.15.21` -> `0.16.0`** (Dependabot +
+  manual `lint.yml` sync). 0.16.0 expands ruff's *default* rule selection from
+  59 rules across 2 linter families to **413 across 38** (`B`, `PL*`, `PYI`,
+  `RUF`, `SIM`, `UP`, ...). This repo is insulated because
+  `[tool.ruff.lint] select = ["E", "F", "I", "W"]` is explicit: the resolved set
+  is the same **68 rules** under both pins (17 `E`, 43 `F`, 2 `I`, 6 `W`, per
+  `ruff check --show-settings`), and 0.16.0's three preview-to-stable promotions
+  (`FURB164`, `FURB192`, `ISC004`) fall outside those families.
+  `ruff check diff_diff tests` and `black --check` are clean on both pins.
+  **That explicit `select` is load-bearing** - dropping it to inherit ruff's
+  defaults would now enable ~7x more rules.
 - **`WooldridgeDiD` now raises when rank reduction removes any requested
   cohort×time cell**, instead of reporting the survivors under their original
   `ATT(g,t)` labels. Once a cell is dropped, the remaining coefficients

@@ -19,6 +19,12 @@ mypy diff_diff
   Refresh with `pip install -e ".[dev]"`. The pinned tools require
   Python >= 3.10 (dev tooling only; the library itself still supports
   Python 3.9).
+- `[tool.ruff.lint] select = ["E", "F", "I", "W"]` is deliberately explicit and
+  is **load-bearing**, not a restatement of ruff's defaults. Ruff 0.16.0 expanded
+  its default selection from 59 rules to 413 across 38 linter families; the
+  explicit `select` is what keeps a ruff upgrade from silently enabling hundreds
+  of new rules. Do not drop it to inherit the defaults. Widening the rule set is
+  a deliberate PR of its own.
 - `[tool.ruff.lint.per-file-ignores]` entries are deliberate (trop
   logger-before-imports E402, honest_did math-notation `l` E741, `__init__`
   re-export F401, conftest import ordering E402). Do not "fix" those patterns

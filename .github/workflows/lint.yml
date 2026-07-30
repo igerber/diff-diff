@@ -39,7 +39,7 @@ jobs:
         with:
           python-version: '3.14'
       - name: Install pinned linters (keep in sync with pyproject [dev])
-        run: pip install ruff==0.15.21 black==26.5.1
+        run: pip install ruff==0.16.0 black==26.5.1
       - name: Ruff
         run: ruff check diff_diff tests
       - name: Black
