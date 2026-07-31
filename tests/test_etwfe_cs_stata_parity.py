@@ -426,6 +426,15 @@ class TestAllEventuallyTreatedVsStataJwdid:
 _LADDER_RUNGS = [5, 10, 20, 40, 80, 200, 500]
 
 
+@pytest.fixture(scope="module")
+def ladder():
+    """The golden's ladder block. Module-level: a class-scoped fixture
+    defined as an instance method is deprecated (PytestRemovedIn10Warning),
+    and the @staticmethod form breaks pytest COLLECTION on Python 3.9
+    (staticmethod has no __name__ there) — the library floor's CI leg."""
+    return _golden()["ladder"]
+
+
 def _ladder_subsample(df: pd.DataFrame, n_per_cohort: int) -> pd.DataFrame:
     """The generator's roster rule, verbatim: the first ``n_per_cohort`` units
     per ``first_treat`` cohort by ascending ``countyreal``."""
@@ -451,13 +460,6 @@ class TestSubsampleLadderVsStataJwdid:
     implementations agreeing on WHY the factor is what it is, not just on
     the resulting number.
     """
-
-    @pytest.fixture(scope="class")
-    @staticmethod
-    def ladder():
-        # staticmethod: a class-scoped fixture defined as an instance method
-        # is deprecated (PytestRemovedIn10Warning).
-        return _golden()["ladder"]
 
     def test_rung_set_and_roster_rule_are_pinned(self, ladder):
         """A changed roster rule or panel would move G/n; pin both."""
