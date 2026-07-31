@@ -3,16 +3,19 @@
 This is the CI-enforced inventory behind ``docs/methodology/variance-conventions.md``.
 Each row pins, for one (estimator, fit configuration) cell:
 
-- ``cr1_k``   — the sorted multiset of visible column counts ``k`` reaching the
-  shared clustered CR1 denominator (``linalg._compute_robust_vcov_numpy``), or
-  ``()`` when the surface's contract is that it makes NO shared-CR1 call.
+- ``cr1_k``   — the sorted multiset of K_reference counts reaching the shared
+  clustered CR1 denominator: visible columns + the signed
+  ``cluster_k_adjustment`` (``linalg._compute_robust_vcov_numpy``; 3.9 D1/D2
+  convergence), or ``()`` when the surface's contract is that it makes NO
+  shared-CR1 call.
 - ``tail_df`` — the sorted multiset of ``df`` values passed to
   ``safe_inference`` / ``safe_inference_batch`` (``None`` = normal theory).
 
-The point is visibility, not endorsement: several pinned values are DOCUMENTED
-DEFECTS (anti-conservative k accounting, mixed tail-df conventions) scheduled to
-change in the 3.9 consolidation program. Every row carries ``status`` and, for
-legitimate differences, a ``reason``. When a later PR changes a convention, the
+The point is visibility, not endorsement: the clustered-CR1 ``k`` cells now
+pin the converged K_reference accounting, while the remaining DOCUMENTED
+DEFECT rows are the mixed tail-df conventions scheduled for PR C of the 3.9
+consolidation program. Every row carries ``status`` and, for legitimate
+differences, a ``reason``. When a later PR changes a convention, the
 expected literal changes HERE, in one reviewable table.
 
 Instrumentation notes (each guards against a failure mode that produced wrong

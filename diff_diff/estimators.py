@@ -2272,8 +2272,10 @@ class MultiPeriodDiD(DifferenceInDifferences):
         # by k_visible, but the correct finite-sample count is
         # K_full = k_effective + n_absorbed_effects (matching `df` just above and
         # fixest feols(vcov="iid"/"hetero")). Rescale so the SE's k agrees with
-        # the t-df's. Gated exactly as LinearRegression.fit: clustered SEs keep
-        # k_visible (fixest ssc nested-FE convention), hc2/hc2_bm use
+        # the t-df's. Gated exactly as LinearRegression.fit: clustered CR1
+        # carries the K_reference accounting through `cluster_k_adjustment`
+        # inside the kernel instead (never this rescale — the gates are
+        # mutually exclusive on cluster_ids), hc2/hc2_bm use
         # leverage/Satterthwaite DOF, survey has its own df. When the full-K
         # residual dof is non-positive the helper returns NaN and we void the
         # vcov -> NaN inference (fail-closed, per the non-finite-df contract).

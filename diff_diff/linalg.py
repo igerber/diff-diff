@@ -4926,10 +4926,14 @@ class LinearRegression:
         # K_full = n_params_effective_ + df_adjustment (the t-df below already
         # uses it). Rescale the NON-CLUSTERED iid/hetero vcov so the SE's k
         # agrees with the t-df's and with fixest feols(vcov="iid"/"hetero").
-        # Clustered SEs keep k_visible (fixest ssc nested-FE convention already
-        # matches); hc2/hc2_bm use leverage/Satterthwaite DOF; survey has its
-        # own df; full-dummy fits carry df_adjustment == 0. When the full-K
-        # residual dof is non-positive the helper returns NaN and we void the
+        # Clustered CR1 does NOT take this rescale: its factor carries the
+        # K_reference accounting through `cluster_k_adjustment` inside the
+        # kernel itself (nested-FE drop + non-nested rank; 3.9 convergence),
+        # and the two paths cannot stack — this gate requires
+        # cluster_ids is None while the adjustment requires the opposite.
+        # hc2/hc2_bm use leverage/Satterthwaite DOF; survey has its own df;
+        # full-dummy fits carry df_adjustment == 0. When the full-K residual
+        # dof is non-positive the helper returns NaN and we void the
         # vcov -> NaN inference (fail-closed, per the non-finite-df contract).
         if (
             df_adjustment > 0
