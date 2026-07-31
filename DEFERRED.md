@@ -113,7 +113,7 @@ here carry the remaining implementation work and cross-link their `M-xxx` ids.
 
 | Issue | Location | PR | Priority |
 |-------|----------|----|----------|
-| Clustered-CR1 inference df **default flip to `"cluster"` (G−1) at v4** — the opt-in `df_convention=` knob landed 2026-07 (DiD/TWFE/MPD + LinearRegression; REGISTRY §TwoWayFixedEffects deviation note); the remaining work is the major-version default change (moves every clustered p-value/CI) + migration note + flipping `TestDfConvention`/`test_moderate_t_pins_residual_df_convention` expectations. Also evaluate extending the knob to standalone estimators with CR1-t inference at that time. Lifecycle tracked in docs/v4-deprecations.yaml (M-004..M-006). | `diff_diff/linalg.py::LinearRegression`, `diff_diff/estimators.py`, `diff_diff/twfe.py` | — | Medium |
+| Clustered inference df **default flip to `"cluster"` (G−1) at v4** — the `df_convention=` knob is now the library-wide THREE-VALUE surface (PR C / M-127, 3.9: DiD/TWFE/MPD/LinearRegression + SunAbraham/WooldridgeDiD-OLS/StackedDiD/ImputationDiD-pretrends at default `"residual"`, LPDiD already at `"cluster"`); the remaining work is the major-version default change (moves every clustered p-value/CI) + migration note + flipping `TestDfConvention`/`test_moderate_t_pins_residual_df_convention`/the per-estimator knob suites' expectations. Lifecycle tracked in docs/v4-deprecations.yaml (M-004..M-006 + M-128..M-131). | `diff_diff/linalg.py::LinearRegression`, `diff_diff/estimators.py`, `diff_diff/twfe.py`, `diff_diff/sun_abraham.py`, `diff_diff/wooldridge.py`, `diff_diff/stacked_did.py`, `diff_diff/imputation.py` | — | Medium |
 
 ## Decision record — won't-fix / waived
 

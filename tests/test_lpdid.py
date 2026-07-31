@@ -1978,3 +1978,132 @@ class TestLPDiDSurvey:
         sd = SurveyDesign(weights="_weight", strata="stratum", psu="psu")
         with pytest.raises(ValueError):
             LPDiD(post_window=2).fit(df, survey_design=sd, **_FIT_KW)
+
+
+class TestLPDiDDfConvention:
+    """The three-value df_convention knob on LPDiD (3.9 / M-127).
+
+    LPDiD's DEFAULT is "cluster" — the pre-existing Stata lpdid t(G-1)
+    reference — so the default moves NOTHING (unlike the "residual"-default
+    estimators). "residual"/"normal" are new opt-ins; the degenerate lanes
+    (unclustered refit, RA G<=1, saturated early return) keep literal
+    df=None under every value.
+    """
+
+    @staticmethod
+    def _panel(seed=21):
+        rng = np.random.default_rng(seed)
+        rows = []
+        for u in range(60):
+            entry = 6 if u % 3 == 0 else (8 if u % 3 == 1 else 99)
+            for t in range(1, 13):
+                d = int(entry <= t)
+                rows.append(
+                    dict(
+                        unit=u,
+                        time=t,
+                        treat=d,
+                        outcome=0.2 * u / 60 + 0.1 * t + 0.5 * d + rng.standard_normal() * 0.5,
+                    )
+                )
+        return pd.DataFrame(rows)
+
+    _kw = dict(outcome="outcome", unit="unit", time="time", treatment="treat")
+
+    @staticmethod
+    def _t_p(t_stat, df):
+        from scipy import stats
+
+        return 2 * stats.t.sf(abs(t_stat), df)
+
+    def test_default_cluster_is_todays_g_minus_1(self):
+        res = LPDiD(pre_window=2, post_window=2).fit(self._panel(), **self._kw)
+        assert res.df_convention == "cluster"
+        row = res.event_study.dropna(subset=["p_value"]).iloc[-1]
+        G = row["n_clusters"]
+        assert row["p_value"] == pytest.approx(self._t_p(row["t_stat"], G - 1), rel=1e-12)
+        # provenance carries exactly G-1 per row
+        finite = {v for v in res.event_study_df.values() if np.isfinite(v)}
+        assert finite and all(v > 0 for v in finite)
+
+    def test_residual_optin_moves_off_g_minus_1(self):
+        data = self._panel()
+        r0 = LPDiD(pre_window=2, post_window=2).fit(data, **self._kw)
+        rr = LPDiD(pre_window=2, post_window=2, df_convention="residual").fit(data, **self._kw)
+        row0 = r0.event_study.dropna(subset=["p_value"]).iloc[-1]
+        roww = rr.event_study.dropna(subset=["p_value"]).iloc[-1]
+        assert roww["coefficient"] == row0["coefficient"] and roww["se"] == row0["se"]
+        assert roww["p_value"] != row0["p_value"]
+        # residual df = n_eff - k_kept of the per-horizon design
+        match = [
+            d for d in range(2, 3000) if abs(roww["p_value"] - self._t_p(roww["t_stat"], d)) < 1e-13
+        ]
+        assert len(match) == 1 and match[0] > row0["n_clusters"] - 1
+
+    def test_ra_path_residual_df_is_n_minus_k0_minus_1(self):
+        """The RA (reweight) lane's 'residual' df = n_total - k0_kept - 1 (the
+        pooled M-estimator's parameter count: kept nuisance coefficients plus
+        the ATT). Pinned via the 'df' provenance the row carries."""
+        data = self._panel()
+        rr = LPDiD(pre_window=2, post_window=2, reweight=True, df_convention="residual").fit(
+            data, **self._kw
+        )
+        # RA rows carry a df provenance entry; reconstruct one horizon's df
+        assert rr.pooled_df is not None
+        post_df = rr.pooled_df.get("post")
+        assert post_df is not None and np.isfinite(post_df) and post_df > 0
+        row = rr.pooled.loc[rr.pooled["window"] == "post"].iloc[0]
+        # n_total - k0_kept - 1 < n_obs (sanity: subtracts at least the ATT)
+        assert post_df < row["n_obs"]
+        assert row["p_value"] == pytest.approx(self._t_p(row["t_stat"], post_df), rel=1e-12)
+
+    def test_default_cluster_bit_identical_to_pre_knob_values(self):
+        """Regression lock: the knob default reproduces the historical G-1
+        inference bit-for-bit (LPDiD zero-movement guarantee)."""
+        data = self._panel()
+        res = LPDiD(pre_window=2, post_window=2).fit(data, **self._kw)
+        ev = res.event_study.dropna(subset=["p_value"])
+        for _, row in ev.iterrows():
+            assert row["p_value"] == pytest.approx(
+                self._t_p(row["t_stat"], row["n_clusters"] - 1), rel=1e-12
+            )
+
+    def test_normal_optin_is_z(self):
+        from scipy import stats
+
+        rn = LPDiD(pre_window=2, post_window=2, df_convention="normal").fit(
+            self._panel(), **self._kw
+        )
+        row = rn.event_study.dropna(subset=["p_value"]).iloc[-1]
+        assert row["p_value"] == pytest.approx(2 * stats.norm.sf(abs(row["t_stat"])), rel=1e-14)
+        assert all(np.isnan(v) for v in rn.event_study_df.values())
+
+    def test_survey_df_precedence_over_knob(self):
+        """The survey lane keeps its own df under EVERY knob value: the
+        three fits' event studies are bit-identical (the knob is never
+        consulted on surveyed fits)."""
+        df = _survey_panel()
+        fits = {
+            conv: LPDiD(pre_window=2, post_window=2, df_convention=conv).fit(
+                df, survey_design=_full_design(), **_FIT_KW
+            )
+            for conv in ("cluster", "residual", "normal")
+        }
+        base = fits["cluster"]  # the default
+        for conv in ("residual", "normal"):
+            pd.testing.assert_frame_equal(fits[conv].event_study, base.event_study)
+
+    def test_validation_and_transactional_set_params(self):
+        with pytest.raises(ValueError, match="df_convention"):
+            LPDiD(df_convention="bogus")
+        est = LPDiD()
+        with pytest.raises(ValueError, match="df_convention"):
+            est.set_params(df_convention="bogus", alpha=0.10)
+        assert est.df_convention == "cluster" and est.alpha == 0.05
+        # Valid value + unknown key: the unknown-key rejection must also
+        # leave the estimator fully unchanged (no partial application).
+        before = est.get_params()
+        with pytest.raises(ValueError, match="Unknown parameter"):
+            est.set_params(df_convention="normal", nonexistent_param=1)
+        assert est.get_params() == before
+        assert LPDiD().get_params()["df_convention"] == "cluster"

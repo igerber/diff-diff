@@ -25,9 +25,9 @@ import numpy as np
 import pandas as pd
 
 from diff_diff.balancing import BalanceError, entropy_balance
-from diff_diff.linalg import solve_ols
+from diff_diff.linalg import effective_cluster_count, solve_ols
 from diff_diff.stacked_did_results import StackedDiDResults  # noqa: F401 (re-export)
-from diff_diff.utils import safe_inference
+from diff_diff.utils import resolve_tail_df, safe_inference, validate_df_convention
 
 __all__ = [
     "StackedDiD",
@@ -132,6 +132,21 @@ class StackedDiD:
         raise a ``ValueError``), and does not support ``survey_design=``;
         matching-based balancing and the repeated-treatment extension are out of
         scope. Default ``"none"`` reproduces plain weighted stacked DID.
+    df_convention : {"residual", "cluster", "normal"}, default "residual"
+        Degrees-of-freedom convention for the analytical t/p/CI on the
+        pooled stacked regression's event-study and overall-ATT inference.
+        ``"residual"`` (default) uses the pooled residual df
+        (``n_eff − k_kept``, positive-weight rows) — the 3.9 fix: the
+        non-BM non-survey lane previously used silent normal-theory z;
+        ``"cluster"`` uses ``G − 1`` where G counts positive-weight
+        clusters (``effective_cluster_count`` — may differ from the raw
+        ``results.n_clusters`` when a cluster's composed weight is zero);
+        ``"normal"`` deliberately uses normal-theory z at the fallback
+        level. hc2_bm Bell-McCaffrey contrast DOF and survey/replicate df
+        always take precedence. Note the stacked design's residual df is
+        typically large (control rows replicate across sub-experiments), so
+        the default's numeric movement vs the old z is small — the change
+        is a convention alignment. The default flips to ``"cluster"`` at v4.
 
     Attributes
     ----------
@@ -184,6 +199,7 @@ class StackedDiD:
         rank_deficient_action: str = "warn",
         vcov_type: str = "hc1",
         balance: str = "none",
+        df_convention: str = "residual",
     ):
         if weighting not in ("aggregate", "population", "sample_share"):
             raise ValueError(
@@ -206,6 +222,7 @@ class StackedDiD:
         # Factored into _validate_vcov_type so set_params() can re-validate.
         self._validate_vcov_type(vcov_type)
         self._validate_balance(balance)
+        validate_df_convention(df_convention)
 
         self.kappa_pre = kappa_pre
         self.kappa_post = kappa_post
@@ -217,6 +234,7 @@ class StackedDiD:
         self.rank_deficient_action = rank_deficient_action
         self.vcov_type = vcov_type
         self.balance = balance
+        self.df_convention = df_convention
 
         self.is_fitted_ = False
         self.results_: Optional[StackedDiDResults] = None
@@ -617,6 +635,29 @@ class StackedDiD:
         )
         assert vcov is not None
 
+        # Knob-resolved analytical fallback df (3.9 tail-df consolidation):
+        # the pooled stacked design is fully visible (no absorption), so the
+        # residual df is n_eff − k_kept with n_eff = positive-weight rows
+        # (pweight semantics, mirroring LinearRegression.fit's n_eff). The
+        # ``df_convention="cluster"`` G counts POSITIVE-WEIGHT clusters
+        # (effective_cluster_count) — deliberately not the raw unique count
+        # reported as ``results.n_clusters``; the two diverge only when a
+        # cluster's total composed weight is zero (REGISTRY StackedDiD
+        # note). Survey/replicate df keeps precedence at the consuming
+        # branches below. Previously the non-BM non-survey lane silently
+        # used normal theory (the tail-df defect family).
+        _n_eff_sd = int(np.count_nonzero(np.asarray(composed_weights, dtype=float) > 0))
+        _k_kept_sd = int(np.count_nonzero(~np.isnan(coef)))
+        _analytic_fallback_df = resolve_tail_df(
+            self.df_convention,
+            residual_df=float(_n_eff_sd - _k_kept_sd),
+            n_clusters=(
+                effective_cluster_count(cluster_ids, composed_weights)
+                if self.vcov_type == "hc1"
+                else None
+            ),
+        )
+
         # Bell-McCaffrey Satterthwaite contrast DOF for hc2_bm. Per the
         # registry contract for `vcov_type="hc2_bm"`, the user-facing
         # aggregated inference (event_study_effects[h]['p_value']/['conf_int']
@@ -854,7 +895,15 @@ class StackedDiD:
                     # No safe_inference call happened -> no df provenance.
                     es_df_used[h] = float("nan")
                 else:
-                    _df_eff = _bm_df if _bm_df is not None else _survey_df
+                    # BM DOF > survey/replicate df > the knob-resolved
+                    # analytical fallback (residual t by default; the
+                    # replicate 0-sentinel is not None, so it keeps
+                    # precedence over the fallback).
+                    _df_eff = (
+                        _bm_df
+                        if _bm_df is not None
+                        else (_survey_df if _survey_df is not None else _analytic_fallback_df)
+                    )
                     t_stat, p_value, conf_int = safe_inference(
                         effect, se, alpha=self.alpha, df=_df_eff
                     )
@@ -924,6 +973,7 @@ class StackedDiD:
         # from PR #475 R7). Without this, normal-theory fallback would
         # silently produce wrong p-values/CIs on the overall_* surface.
         _is_hc2bm_path_overall = self.vcov_type == "hc2_bm" and not _uses_replicate_sd
+        _overall_df_used: Optional[float] = None
         if _is_hc2bm_path_overall and (
             _bm_contrast_dof_overall is None or not np.isfinite(_bm_contrast_dof_overall)
         ):
@@ -934,11 +984,17 @@ class StackedDiD:
             _df_overall_eff = (
                 _bm_contrast_dof_overall
                 if _bm_contrast_dof_overall is not None
-                else _survey_df_overall
+                else (
+                    _survey_df_overall if _survey_df_overall is not None else _analytic_fallback_df
+                )
             )
             overall_t, overall_p, overall_ci = safe_inference(
                 overall_att, overall_se, alpha=self.alpha, df=_df_overall_eff
             )
+            # Scalar provenance: the df the overall safe_inference actually
+            # received, recorded iff it governed a t-reference (finite, > 0).
+            if _df_overall_eff is not None and np.isfinite(_df_overall_eff) and _df_overall_eff > 0:
+                _overall_df_used = float(_df_overall_eff)
 
         # ---- Construct results ----
         self.results_ = StackedDiDResults(
@@ -974,6 +1030,8 @@ class StackedDiD:
             event_study_vcov=es_vcov,
             event_study_vcov_index=es_vcov_index,
             event_study_df=es_df_used,
+            df_convention=self.df_convention,
+            inference_df=_overall_df_used,
         )
 
         self.is_fitted_ = True
@@ -1501,6 +1559,7 @@ class StackedDiD:
             "rank_deficient_action": self.rank_deficient_action,
             "vcov_type": self.vcov_type,
             "balance": self.balance,
+            "df_convention": self.df_convention,
         }
 
     def set_params(self, **params: Any) -> "StackedDiD":
@@ -1511,17 +1570,20 @@ class StackedDiD:
         before fit() (avoids a later, less-informative failure in the
         linalg layer).
         """
-        # Validate vcov_type up-front if it's being set, so the same
-        # error surface as __init__ applies.
+        # Reject unknown keys, then validate pending values up-front (same
+        # error surface as __init__), so a rejected call leaves the
+        # estimator unchanged.
+        for key in params:
+            if not hasattr(self, key):
+                raise ValueError(f"Unknown parameter: {key}")
         if "vcov_type" in params:
             self._validate_vcov_type(params["vcov_type"])
         if "balance" in params:
             self._validate_balance(params["balance"])
+        if "df_convention" in params:
+            validate_df_convention(params["df_convention"])
         for key, value in params.items():
-            if hasattr(self, key):
-                setattr(self, key, value)
-            else:
-                raise ValueError(f"Unknown parameter: {key}")
+            setattr(self, key, value)
         return self
 
     def summary(self) -> str:

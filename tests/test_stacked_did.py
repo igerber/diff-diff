@@ -1936,3 +1936,134 @@ class TestStackedDiDCovariateBalance:
         df = _balance_panel(seed=13, const_x=True)
         with pytest.raises(TypeError, match="must be a list"):
             _cb_fit(df, balance="entropy", covariates="x")
+
+
+class TestStackedDfConvention:
+    """The three-value df_convention knob on StackedDiD (3.9 / M-127)."""
+
+    @staticmethod
+    def _panel(seed=9, n_units=60):
+        from diff_diff import generate_staggered_data
+
+        return generate_staggered_data(n_units=n_units, n_periods=10, seed=seed)
+
+    _kw = dict(
+        outcome="outcome",
+        unit="unit",
+        time="period",
+        first_treat="first_treat",
+        aggregate="event_study",
+    )
+
+    @staticmethod
+    def _t_p(t_stat, df):
+        from scipy import stats
+
+        return 2 * stats.t.sf(abs(t_stat), df)
+
+    @staticmethod
+    def _z_p(t_stat):
+        from scipy import stats
+
+        return 2 * stats.norm.sf(abs(t_stat))
+
+    def test_residual_default_is_t_with_pinned_df(self):
+        """The defect fix: hc1 lane moved z -> t(pooled residual df). Assert
+        the RESOLVED df value directly (a p-movement assertion is vacuous on
+        stacked designs: the residual df is large, t ~= z)."""
+        res = StackedDiD(kappa_pre=2, kappa_post=2).fit(self._panel(), **self._kw)
+        dfres = res.inference_df
+        assert dfres is not None and dfres > res.n_clusters
+        assert res.overall_p_value == pytest.approx(self._t_p(res.overall_t_stat, dfres), rel=1e-12)
+        finite = {v for v in res.event_study_df.values() if np.isfinite(v)}
+        assert finite == {dfres}
+
+    def test_small_n_residual_default_moves_off_z(self):
+        """On a SMALL stacked design the z -> t movement is measurable."""
+        res = StackedDiD(kappa_pre=1, kappa_post=1).fit(self._panel(n_units=12), **self._kw)
+        assert np.isfinite(res.overall_p_value)
+        assert res.overall_p_value != self._z_p(res.overall_t_stat)
+
+    def test_cluster_matches_g_minus_1_effective_count(self):
+        data = self._panel()
+        r0 = StackedDiD(kappa_pre=2, kappa_post=2).fit(data, **self._kw)
+        r1 = StackedDiD(kappa_pre=2, kappa_post=2, df_convention="cluster").fit(data, **self._kw)
+        G = r1.n_clusters
+        assert r1.overall_att == r0.overall_att and r1.overall_se == r0.overall_se
+        assert r1.overall_p_value == pytest.approx(self._t_p(r1.overall_t_stat, G - 1), rel=1e-12)
+        assert r1.inference_df == G - 1
+
+    def test_cluster_g_uses_effective_count_not_raw_unique(self):
+        """A cluster whose TOTAL composed weight is zero is excluded from the
+        'cluster' G (effective_cluster_count) even though results.n_clusters
+        keeps the raw unique count. Discriminated by zeroing one unit's rows
+        via a zero survey weight is unsupported here, so instead simulate at
+        the resolver level with the estimator's own ingredients: verify that
+        on an ordinary fit the two counts AGREE (the documented divergence is
+        unreachable without zero-weight clusters) and that the df equals
+        effective-count-minus-1."""
+        from diff_diff.linalg import effective_cluster_count
+
+        data = self._panel()
+        r1 = StackedDiD(kappa_pre=2, kappa_post=2, df_convention="cluster").fit(data, **self._kw)
+        # Reconstruct the effective count from the stacked frame the fit stored
+        stacked = r1.stacked_data
+        cluster_ids = stacked["unit"].values
+        # composed weights are strictly positive on this fixture -> equality
+        g_eff = effective_cluster_count(cluster_ids, None)
+        assert r1.inference_df == g_eff - 1 == r1.n_clusters - 1
+
+    def test_normal_reproduces_pre39_z(self):
+        data = self._panel()
+        r0 = StackedDiD(kappa_pre=2, kappa_post=2).fit(data, **self._kw)
+        rn = StackedDiD(kappa_pre=2, kappa_post=2, df_convention="normal").fit(data, **self._kw)
+        assert rn.overall_att == r0.overall_att and rn.overall_se == r0.overall_se
+        assert rn.overall_p_value == pytest.approx(self._z_p(rn.overall_t_stat), rel=1e-14)
+        assert rn.inference_df is None
+
+    def test_bm_dof_precedence_over_knob(self):
+        data = self._panel()
+        r_res = StackedDiD(kappa_pre=2, kappa_post=2, vcov_type="hc2_bm").fit(data, **self._kw)
+        r_clu = StackedDiD(
+            kappa_pre=2, kappa_post=2, vcov_type="hc2_bm", df_convention="cluster"
+        ).fit(data, **self._kw)
+        assert r_res.overall_p_value == r_clu.overall_p_value
+
+    def test_survey_df_precedence_over_knob(self):
+        """Survey design df wins under EVERY knob value: the three fits are
+        bit-identical on inference and share the finite survey-df provenance
+        (the knob is never consulted on surveyed fits)."""
+        from diff_diff.survey import SurveyDesign
+
+        data = self._panel()
+        data["w"] = 1.0 + (data["unit"] % 5) * 0.2
+        data["stratum"] = data["unit"] % 4
+        design = SurveyDesign(weights="w", strata="stratum", psu="unit", weight_type="pweight")
+        fits = {
+            conv: StackedDiD(kappa_pre=2, kappa_post=2, df_convention=conv).fit(
+                data, survey_design=design, **self._kw
+            )
+            for conv in ("residual", "cluster", "normal")
+        }
+        base = fits["residual"]
+        assert base.inference_df is not None and np.isfinite(base.inference_df)
+        for conv in ("cluster", "normal"):
+            r = fits[conv]
+            assert r.overall_p_value == base.overall_p_value
+            assert r.overall_conf_int == base.overall_conf_int
+            assert r.inference_df == base.inference_df
+
+    def test_validation_and_transactional_set_params(self):
+        with pytest.raises(ValueError, match="df_convention"):
+            StackedDiD(df_convention="bogus")
+        est = StackedDiD()
+        with pytest.raises(ValueError, match="df_convention"):
+            est.set_params(df_convention="bogus", alpha=0.10)
+        assert est.df_convention == "residual" and est.alpha == 0.05
+        # Valid value + unknown key: the unknown-key rejection must also
+        # leave the estimator fully unchanged (no partial application).
+        before = est.get_params()
+        with pytest.raises(ValueError, match="Unknown parameter"):
+            est.set_params(df_convention="normal", nonexistent_param=1)
+        assert est.get_params() == before
+        assert StackedDiD(df_convention="normal").get_params()["df_convention"] == "normal"

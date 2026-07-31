@@ -60,7 +60,7 @@ DifferenceInDifferences(
     bootstrap_weights: str = "rademacher",  # "rademacher", "webb", or "mammen"
     seed: int | None = None,                # Random seed
     rank_deficient_action: str = "warn",    # "warn", "error", or "silent"
-    df_convention: str = "residual",        # Clustered t/p/CI df: "residual" (n-K, default) or "cluster" (Stata/fixest G-1); survey df + hc2_bm BM-DOF keep precedence; default flips at v4
+    df_convention: str = "residual",        # Analytical t/p/CI df: "residual" (n-K, default), "cluster" (Stata/fixest G-1, clustered fits), or "normal" (deliberate z); survey df + hc2_bm BM-DOF keep precedence; default flips at v4
 )
 ```
 
@@ -107,7 +107,7 @@ TwoWayFixedEffects(
     robust: bool = True,
     cluster: str | None = None,   # Auto-clusters at unit level if None
     alpha: float = 0.05,
-    df_convention: str = "residual",  # Clustered t/p/CI df: "residual" (default) or "cluster" (G-1); flips at v4
+    df_convention: str = "residual",  # Analytical t/p/CI df: "residual" (default), "cluster" (G-1), or "normal" (z); flips at v4
 )
 ```
 
@@ -147,7 +147,7 @@ MultiPeriodDiD(
     robust: bool = True,
     cluster: str | None = None,
     alpha: float = 0.05,
-    df_convention: str = "residual",  # Clustered t/p/CI df: "residual" (default) or "cluster" (G-1); flips at v4
+    df_convention: str = "residual",  # Analytical t/p/CI df: "residual" (default), "cluster" (G-1), or "normal" (z); flips at v4
 )
 ```
 
@@ -372,6 +372,7 @@ SunAbraham(
     conley_metric: str = "haversine",             # "haversine" | "euclidean"
     conley_kernel: str = "bartlett",              # "bartlett" | "uniform"
     conley_lag_cutoff: int | None = None,         # within-unit Bartlett max lag (0 = spatial-only)
+    df_convention: str = "residual",              # Analytical t/p/CI df for cells AND aggregates (3.9: aggregates share the cells' df — previously z): "residual" (default), "cluster" (G-1), "normal" (z); survey/BM DOF keep precedence; flips at v4
 )
 ```
 
@@ -419,6 +420,7 @@ ImputationDiD(
     aux_partition: str = "cohort_horizon",        # "cohort_horizon", "cohort", or "horizon"
     pretrends: bool = False,                     # Include pre-treatment horizons in event study
     leave_one_out: bool = False,                 # BJS 2024 App. A.9 leave-one-out finite-sample variance (larger, less-downward-biased SE)
+    df_convention: str = "residual",             # Pretrends lead-regression per-lead t/p/CI only (3.9: leads moved z -> t(residual)): "residual" (default), "cluster" (G-1), "normal" (z); BJS overall/post inference + Wald F knob-independent; flips at v4
 )
 ```
 
@@ -1003,6 +1005,7 @@ StackedDiD(
     rank_deficient_action: str = "warn",
     vcov_type: str = "hc1",                   # {"hc1","hc2_bm"}; classical/hc2 rejected (intrinsically clustered), conley deferred. survey_design=... requires hc1
     balance: str = "none",                    # {"none","entropy"}; "entropy" = CBWSDID covariate balancing (Ustyuzhanin 2026), requires fit(covariates=[...]) + weighting="aggregate", no survey_design
+    df_convention: str = "residual",          # Analytical t/p/CI df (3.9: hc1 lane moved z -> t(pooled residual df)): "residual" (default), "cluster" (G-1, positive-weight clusters), "normal" (z); BM/survey df keep precedence; flips at v4
 )
 ```
 
@@ -1099,6 +1102,7 @@ LPDiD(
     rank_deficient_action: str = "warn",     # "warn", "error", or "silent"
     non_absorbing: str | None = None,        # None=absorbing; "first_entry" (Eq. 12); "effect_stabilization" (Eq. 13)
     stabilization_window: int | None = None, # The paper's L; required when non_absorbing="effect_stabilization"
+    df_convention: str = "cluster",          # DEFAULT "cluster" = the existing Stata lpdid t(G-1) reference (nothing moved in 3.9); "residual" (per-horizon n_eff-k; RA path n_total-k0-1) and "normal" (z) opt in
 )
 ```
 
@@ -1365,6 +1369,7 @@ WooldridgeDiD(
                                             # column is dropped per Sec 5.4, so cohort_trend_coefs
                                             # carries G-1 entries. Rejected with survey_design= and
                                             # with control_group="never_treated".
+    df_convention: str = "residual",        # OLS analytical t/p/CI df (3.9: default-hc1 arms moved z -> t(residual)): "residual" (default), "cluster" (G-1, hc1-clustered only), "normal" (z); survey/BM DOF keep precedence; GLM arms knob-independent (explicit non-default warns); flips at v4
 )
 ```
 
@@ -1602,6 +1607,9 @@ Returned by `SunAbraham.fit()`.
 | `n_control_units` | `int` | Number of never-treated units |
 | `control_group` | `str` | Control group type used |
 | `cohort_effects` | `dict` | Cohort-level effects |
+| `df_convention` | `str | None` | The configured df convention echoed onto the results ("residual" | "cluster" | "normal"; 3.9) |
+| `inference_df` | `float | None` | The df the overall-ATT p/CI actually used (BM contrast df / survey df / knob-resolved fallback; None under bootstrap or "normal") |
+| `event_study_df` | `dict[int, float] | None` | Per-event-time df provenance (finite residual df on plain analytic fits since 3.9; None under bootstrap) |
 
 **Methods:** `summary()`, `print_summary()`, `to_dataframe(level="event_study"|"cohort")`
 
@@ -1755,6 +1763,7 @@ Each event study effect dict contains: `effect`, `se`, `t_stat`, `p_value`, `con
 | `vcov_type` | `str` | Variance estimator family (`"hc1"` for IF-based estimators; permanently narrow on `ImputationDiD` / `CallawaySantAnna` / `TripleDifference` / `EfficientDiD` per IF-vs-sandwich taxonomy) |
 | `cluster_name` | `str | None` | Effective cluster column name (e.g. `"unit"` for default `cluster=None` on `ImputationDiD`; `None` for default on `EfficientDiD` since its per-unit EIF SE is HC1-style not CR1-at-unit); `None` under survey designs (the survey block already names PSU/strata) |
 | `n_clusters` | `int | None` | Number of effective clusters; `None` under survey designs and `None` under EfficientDiD's default unclustered fit |
+| `df_convention` | `str | None` | On the knob-carrying containers (`StackedDiDResults`, `ImputationDiDResults`, `WooldridgeDiDResults`, `LPDiDResults`, `SunAbrahamResults`): the configured df convention (3.9 / M-127); `StackedDiDResults` additionally carries `inference_df` (the overall-ATT df actually used) |
 
 **Methods:** `summary()`, `print_summary()`, `to_dataframe()`, `to_dict()` (flat dict of headline aliases + `vcov_type` + conditional `cluster_name`/`n_clusters`/`n_bootstrap`/`inference_method`)
 

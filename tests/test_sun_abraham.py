@@ -7,6 +7,7 @@ import warnings
 import numpy as np
 import pandas as pd
 import pytest
+from scipy import stats
 
 from diff_diff.sun_abraham import SunAbraham, SunAbrahamResults
 
@@ -1567,12 +1568,13 @@ class TestSunAbrahamVcovType:
             assert np.isnan(row["conf_int"][0]) and np.isnan(row["conf_int"][1])
 
     def test_hc2_bm_contrast_dof_helper_failure_falls_back(self):
-        """Helper-level BM failure warns and falls back to normal theory.
+        """Helper-level BM failure warns and falls back to the resolved df.
 
         Distinct from the per-row NaN-DOF case above: when the helper RAISES,
-        SA leaves the ``_compute_iw_effects`` output in place (finite
-        normal-theory inference) after warning, and the df provenance records
-        the baseline (NaN on a non-survey fit) - not a fabricated df.
+        SA leaves the ``_compute_iw_effects`` output in place after warning.
+        Since 3.9 (M-127) that output carries the df_convention-resolved
+        analytical df - FINITE t(residual df) under the default, recorded as
+        genuine provenance (previously normal theory with NaN provenance).
         """
         import diff_diff.linalg as _linalg
 
@@ -1587,10 +1589,12 @@ class TestSunAbrahamVcovType:
                 res = SunAbraham(vcov_type="hc2_bm").fit(data, **kwargs)
 
         finite_p = [e for e, row in res.event_study_effects.items() if np.isfinite(row["p_value"])]
-        assert finite_p, "helper failure must fall back to finite normal-theory inference"
+        assert finite_p, "helper failure must fall back to finite t(residual) inference"
         assert res.event_study_df is not None
         for e in finite_p:
-            assert np.isnan(res.event_study_df[e]), "normal theory records NO df"
+            assert (
+                np.isfinite(res.event_study_df[e]) and res.event_study_df[e] > 0
+            ), "the fallback df is the knob-resolved residual df - genuine provenance"
 
     def test_hc2_bm_explicit_cluster_works(self):
         """Explicit cluster= overrides the auto-cluster default; CR2-BM at named cluster."""
@@ -2071,3 +2075,136 @@ class TestAbsorbedCovariateSnap:
             )
         # snapped covariate -> dropped -> identical to the no-covariate design
         assert res.att == pytest.approx(base.att, abs=1e-10)
+
+
+class TestSunAbrahamDfConvention:
+    """The three-value df_convention knob on SunAbraham (3.9 / M-127, the D4 fix).
+
+    Modeled on tests/test_estimators_vcov_type.py::TestDfConvention. Cells and
+    aggregates share ONE df source per fit; att/se/t never move across values.
+    """
+
+    @staticmethod
+    def _panel(seed=3):
+        rng = np.random.default_rng(seed)
+        rows = []
+        for u in range(60):
+            ft = [0, 4, 6][u % 3]
+            for t in range(1, 9):
+                eff = 0.7 if (ft and t >= ft) else 0.0
+                rows.append(
+                    dict(
+                        unit=u,
+                        time=t,
+                        first_treat=ft,
+                        outcome=0.3 * u / 60 + 0.1 * t + eff + rng.standard_normal() * 0.6,
+                    )
+                )
+        return pd.DataFrame(rows)
+
+    _kw = dict(outcome="outcome", unit="unit", time="time", first_treat="first_treat")
+
+    def test_residual_default_is_t_not_z(self):
+        """The D4/defect fix: aggregates use t(saturated residual df), not z."""
+        res = SunAbraham().fit(self._panel(), **self._kw)
+        p_z = 2 * stats.norm.sf(abs(res.overall_t_stat))
+        assert res.overall_p_value != p_z
+        dfres = res.inference_df
+        assert dfres is not None and dfres > 0
+        assert res.overall_p_value == pytest.approx(
+            2 * stats.t.sf(abs(res.overall_t_stat), dfres), rel=1e-12
+        )
+        # every ES row shares the same finite residual df (one df source)
+        assert set(res.event_study_df.values()) == {dfres}
+
+    def test_cluster_matches_hand_reconstructed_g_minus_1(self):
+        data = self._panel()
+        r0 = SunAbraham().fit(data, **self._kw)
+        r1 = SunAbraham(df_convention="cluster").fit(data, **self._kw)
+        G = data["unit"].nunique()
+        assert r1.overall_att == r0.overall_att and r1.overall_se == r0.overall_se
+        assert r1.overall_t_stat == r0.overall_t_stat
+        assert r1.overall_p_value == pytest.approx(
+            2 * stats.t.sf(abs(r1.overall_t_stat), G - 1), rel=1e-12
+        )
+        lo, hi = r1.overall_conf_int
+        crit = stats.t.ppf(0.975, G - 1)
+        assert lo == pytest.approx(r1.overall_att - crit * r1.overall_se, rel=1e-12)
+        assert hi == pytest.approx(r1.overall_att + crit * r1.overall_se, rel=1e-12)
+        assert r1.inference_df == G - 1
+        assert set(r1.event_study_df.values()) == {float(G - 1)}
+
+    def test_normal_reproduces_z_on_aggregates(self):
+        """'normal' = deliberate z at the fallback level (the pre-3.9 numbers)."""
+        data = self._panel()
+        r0 = SunAbraham().fit(data, **self._kw)
+        rn = SunAbraham(df_convention="normal").fit(data, **self._kw)
+        assert rn.overall_att == r0.overall_att and rn.overall_se == r0.overall_se
+        assert rn.overall_p_value == pytest.approx(
+            2 * stats.norm.sf(abs(rn.overall_t_stat)), rel=1e-14
+        )
+        assert rn.inference_df is None
+        # provenance: z rows record NaN
+        assert all(np.isnan(v) for v in rn.event_study_df.values())
+
+    def test_bm_dof_precedence_over_knob(self):
+        """hc2_bm BM contrast DOF wins under every knob value."""
+        data = self._panel()
+        r_res = SunAbraham(vcov_type="hc2_bm").fit(data, **self._kw)
+        r_clu = SunAbraham(vcov_type="hc2_bm", df_convention="cluster").fit(data, **self._kw)
+        assert r_res.overall_p_value == r_clu.overall_p_value
+        assert r_res.overall_conf_int == r_clu.overall_conf_int
+
+    def test_survey_df_precedence_over_knob(self):
+        """Survey design df wins under EVERY knob value: the three fits are
+        bit-identical on inference and share the finite survey-df provenance
+        (the knob is never consulted on surveyed fits)."""
+        from diff_diff.survey import SurveyDesign
+
+        data = self._panel()
+        data["w"] = 1.0 + (data["unit"] % 5) * 0.2
+        data["stratum"] = data["unit"] % 4
+        sd = SurveyDesign(weights="w", strata="stratum", psu="unit")
+        fits = {
+            conv: SunAbraham(df_convention=conv).fit(data, survey_design=sd, **self._kw)
+            for conv in ("residual", "cluster", "normal")
+        }
+        base = fits["residual"]
+        assert base.inference_df is not None and np.isfinite(base.inference_df)
+        for conv in ("cluster", "normal"):
+            r = fits[conv]
+            assert r.overall_p_value == base.overall_p_value
+            assert r.overall_conf_int == base.overall_conf_int
+            assert r.inference_df == base.inference_df
+            assert r.event_study_df == base.event_study_df
+
+    def test_bootstrap_clears_inference_df(self):
+        """Percentile bootstrap p/CI never used a df: the scalar clears."""
+        res = SunAbraham(n_bootstrap=20, seed=1).fit(self._panel(), **self._kw)
+        assert res.inference_df is None
+        assert res.event_study_df is None  # existing channel-clearing convention
+
+    def test_validation_and_transactional_set_params(self):
+        with pytest.raises(ValueError, match="df_convention"):
+            SunAbraham(df_convention="bogus")
+        est = SunAbraham()
+        with pytest.raises(ValueError, match="df_convention"):
+            est.set_params(df_convention="bogus", alpha=0.10)
+        assert est.df_convention == "residual" and est.alpha == 0.05
+        # Valid value + unknown key: the unknown-key rejection must also
+        # leave the estimator fully unchanged (no partial application).
+        before = est.get_params()
+        with pytest.raises(ValueError, match="Unknown parameter"):
+            est.set_params(df_convention="normal", nonexistent_param=1)
+        assert est.get_params() == before
+
+    def test_get_params_roundtrip_and_repeat_fit(self):
+        est = SunAbraham(df_convention="cluster")
+        assert est.get_params()["df_convention"] == "cluster"
+        clone = SunAbraham(**est.get_params())
+        data = self._panel()
+        r1 = clone.fit(data, **self._kw)
+        p1, d1 = r1.overall_p_value, r1.inference_df
+        r2 = clone.fit(data, **self._kw)
+        assert r2.overall_p_value == p1 and r2.inference_df == d1
+        assert clone.df_convention == "cluster"

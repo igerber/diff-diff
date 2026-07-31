@@ -11,7 +11,18 @@ regression with cohort × relative-time interactions.
 
 import warnings
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Tuple, Union, overload
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Dict,
+    List,
+    Literal,
+    NamedTuple,
+    Optional,
+    Tuple,
+    Union,
+    overload,
+)
 
 import numpy as np
 import pandas as pd
@@ -27,12 +38,29 @@ from diff_diff.utils import (
     absorbed_fe_cr1_k_increment,
     absorbed_fe_rank,
     pre_demean_norms,
+    resolve_tail_df,
     safe_inference,
     snap_absorbed_regressors,
+    validate_df_convention,
 )
 from diff_diff.utils import (
     within_transform as _within_transform_util,
 )
+
+
+class _SaturatedFitStats(NamedTuple):
+    """Fit-level df ingredients read off the saturated LinearRegression.
+
+    Carried out of ``_fit_saturated_regression`` so the aggregate inference
+    layer can resolve the ``df_convention`` fallback df from the SAME fit the
+    cells used (the D4 fix: one df source per fit). ``df_residual`` is the
+    regression's ``df_`` (n_eff − k_effective − absorbed rank);
+    ``n_clusters`` its effective positive-weight cluster count (None on
+    unclustered fits).
+    """
+
+    df_residual: Optional[float]
+    n_clusters: Optional[int]
 
 
 @dataclass
@@ -157,19 +185,32 @@ class SunAbrahamResults(BaseResults):
     # PROVENANCE - maps each estimated relative time to the df its stored
     # p-value/CI's safe_inference actually received (the per-event
     # Bell-McCaffrey contrast df under hc2_bm; the survey design df -
-    # post-drop under replicate refits - on survey fits; NaN on plain
-    # analytic fits, which use normal theory, and on rows whose BM DOF was
-    # non-finite, where safe_inference's non-finite-df guard yields all-NaN
-    # inference). None under bootstrap: the stored percentile p/CIs never
-    # used a df (note this clears the WHOLE channel even when a partial
-    # bootstrap override leaves some rows analytic - a conservative
-    # under-claim, consistent with the other producers). Deliberately
-    # narrower clearing than event_study_vcov above: replicate refits KEEP
-    # the df (it genuinely governed the recomputed rows) while the vcov
-    # clears.
-    # Declared LAST so every pre-existing field keeps its positional index
-    # in the generated __init__ (the constructor signature is public API).
+    # post-drop under replicate refits - on survey fits; the
+    # df_convention-resolved fallback on plain analytic fits - FINITE
+    # residual df under the 3.9 default, G-1 under "cluster", NaN under
+    # "normal" and on rows whose BM DOF was non-finite, where
+    # safe_inference's non-finite-df guard yields all-NaN inference). None
+    # under bootstrap: the stored percentile p/CIs never used a df (note
+    # this clears the WHOLE channel even when a partial bootstrap override
+    # leaves some rows analytic - a conservative under-claim, consistent
+    # with the other producers). Deliberately narrower clearing than
+    # event_study_vcov above: replicate refits KEEP the df (it genuinely
+    # governed the recomputed rows) while the vcov clears.
+    # This block is appended-only so every pre-existing field keeps its
+    # positional index in the generated __init__ (the constructor signature
+    # is public API); new fields go BELOW.
     event_study_df: Optional[Dict[int, float]] = field(default=None, repr=False)
+
+    df_convention: Optional[str] = None
+    """The estimator's ``df_convention`` configuration echoed onto the
+    results ("residual" | "cluster" | "normal"; added 3.9)."""
+
+    inference_df: Optional[float] = None
+    """The df the stored overall-ATT p-value/CI's ``safe_inference``
+    actually received: the BM contrast df under hc2_bm, the survey design
+    df on survey fits, else the ``df_convention``-resolved analytical
+    fallback (None under "normal" = normal theory). None on bootstrap fits,
+    whose overall p/CI are percentile-based and never used a df."""
 
     # --- Inference-field aliases (balance/external-adapter compatibility) ---
     @property
@@ -353,6 +394,10 @@ class SunAbrahamResults(BaseResults):
             result["cluster_name"] = self.cluster_name
         if self.conley_lag_cutoff is not None:
             result["conley_lag_cutoff"] = self.conley_lag_cutoff
+        if self.df_convention is not None:
+            result["df_convention"] = self.df_convention
+        if self.inference_df is not None:
+            result["inference_df"] = self.inference_df
         return result
 
     def to_dataframe(self, level: str = "event_study") -> pd.DataFrame:
@@ -562,6 +607,18 @@ class SunAbraham:
         ``conley_cutoff_km`` / ``conley_lag_cutoff``); ``survey_design=`` /
         ``weights`` / ``n_bootstrap>0`` are rejected. See the ``vcov_type``
         parameter docs above.
+    df_convention : {"residual", "cluster", "normal"}, default "residual"
+        Degrees-of-freedom convention for analytical t/p/CI, applied to BOTH
+        the per-cohort-cell inference and the aggregated event-study /
+        overall-ATT inference (one df source per fit). ``"residual"``
+        (default) uses the saturated regression's residual df — the 3.9 fix:
+        aggregates previously dropped to normal theory on plain clustered
+        fits; ``"cluster"`` uses the Stata/fixest cluster df ``G − 1``
+        (inert under ``vcov_type="conley"``); ``"normal"`` deliberately uses
+        normal-theory z at the fallback level everywhere (cells included).
+        Survey/replicate df and hc2_bm Bell-McCaffrey contrast DOF always
+        take precedence; bootstrap p/CI (``n_bootstrap>0``) are percentile-
+        based and unaffected. The default flips to ``"cluster"`` at v4.
 
     Attributes
     ----------
@@ -645,12 +702,15 @@ class SunAbraham:
         conley_metric: str = "haversine",
         conley_kernel: str = "bartlett",
         conley_lag_cutoff: Optional[int] = None,
+        df_convention: str = "residual",
     ):
         if control_group not in ["never_treated", "not_yet_treated"]:
             raise ValueError(
                 f"control_group must be 'never_treated' or 'not_yet_treated', "
                 f"got '{control_group}'"
             )
+
+        validate_df_convention(df_convention)
 
         if rank_deficient_action not in ["warn", "error", "silent"]:
             raise ValueError(
@@ -677,6 +737,7 @@ class SunAbraham:
         self.conley_metric = conley_metric
         self.conley_kernel = conley_kernel
         self.conley_lag_cutoff = conley_lag_cutoff
+        self.df_convention = df_convention
         # Track whether the user explicitly opted out of the "hc1" default.
         # The auto-cluster-at-unit default in `fit` is suppressed only when
         # the user explicitly opts into a one-way family — currently
@@ -988,6 +1049,7 @@ class SunAbraham:
             vcov_cohort,
             coef_index_map,
             bm_artifacts,
+            _sa_fit_stats,
         ) = self._fit_saturated_regression(
             df_reg,
             outcome,
@@ -1023,7 +1085,7 @@ class SunAbraham:
                 nz = w_r > 0
                 df_reg_nz = df_reg[nz] if not np.all(nz) else df_reg
                 w_nz = w_r[nz] if not np.all(nz) else w_r
-                ce_r, _, vcov_r, cim_r, _ = self._fit_saturated_regression(
+                ce_r, _, vcov_r, cim_r, _, _ = self._fit_saturated_regression(
                     df_reg_nz,
                     outcome,
                     unit,
@@ -1089,6 +1151,24 @@ class SunAbraham:
         if _uses_replicate_sa and _sa_survey_df is None:
             _sa_survey_df = 0  # rank-deficient replicate → NaN inference
 
+        # Knob-resolved fallback df for aggregated inference (the D4 fix:
+        # aggregates share the cells' df source instead of dropping to
+        # normal theory). Survey/replicate df keeps precedence (including
+        # the fail-closed 0 sentinel above); otherwise resolve from the
+        # SAME saturated fit the cells used. Conley fits pass
+        # n_clusters=None — the combined Conley+cluster product kernel has
+        # no documented G-1 df reference (mirrors get_inference's conley
+        # exclusion), so "cluster" stays inert there.
+        _sa_fallback_df = (
+            float(_sa_survey_df)
+            if _sa_survey_df is not None
+            else resolve_tail_df(
+                self.df_convention,
+                residual_df=_sa_fit_stats.df_residual,
+                n_clusters=(None if self.vcov_type == "conley" else _sa_fit_stats.n_clusters),
+            )
+        )
+
         # Compute interaction-weighted event study effects
         event_study_effects, cohort_weights = self._compute_iw_effects(
             df,
@@ -1101,20 +1181,23 @@ class SunAbraham:
             vcov_cohort,
             coef_index_map,
             survey_weight_col=survey_weight_col,
-            survey_df=_sa_survey_df,
+            fallback_df=_sa_fallback_df,
         )
 
         # Per-row df PROVENANCE (spec section 5, row M-092): the df each
         # stored ES row's safe_inference actually received, recorded iff
-        # finite and > 0 else NaN. Baseline = the scalar every
-        # _compute_iw_effects row used (None on plain analytic fits -> NaN;
-        # the TSL design df on survey fits). Overwritten below at the hc2_bm
-        # and replicate-refit override sites, and cleared under bootstrap,
-        # whose stored percentile p/CIs never used a df.
+        # finite and > 0 else NaN. Baseline = the knob-resolved fallback
+        # every _compute_iw_effects row used (the residual df on plain
+        # analytic fits under the default; G-1 under "cluster"; NaN under
+        # "normal"; the TSL design df on survey fits). Overwritten below at
+        # the hc2_bm and replicate-refit override sites, and cleared under
+        # bootstrap, whose stored percentile p/CIs never used a df.
         es_df_used: Dict[int, float] = {
             e: (
-                float(_sa_survey_df)
-                if _sa_survey_df is not None and np.isfinite(_sa_survey_df) and _sa_survey_df > 0
+                float(_sa_fallback_df)
+                if _sa_fallback_df is not None
+                and np.isfinite(_sa_fallback_df)
+                and _sa_fallback_df > 0
                 else float("nan")
             )
             for e in event_study_effects
@@ -1228,15 +1311,16 @@ class SunAbraham:
                         _overall_att_contrast_dof = float(dof_vec[-1])
                 except (ValueError, np.linalg.LinAlgError) as exc:
                     # Rank-deficient or other linalg issue: fall back to
-                    # the shared analytical df (downgraded to normal
-                    # inference). Emit a UserWarning so the deviation is
+                    # the knob-resolved analytical df (residual t by
+                    # default). Emit a UserWarning so the deviation is
                     # visible.
                     warnings.warn(
                         f"SunAbraham(vcov_type='hc2_bm') aggregated inference "
                         f"could not compute Bell-McCaffrey contrast DOF "
-                        f"({type(exc).__name__}: {exc}). Falling back to "
-                        "shared df; aggregated p-values/CIs may use normal "
-                        "distribution instead of t(BM DOF).",
+                        f"({type(exc).__name__}: {exc}). Falling back to the "
+                        "df_convention-resolved analytical df; aggregated "
+                        "p-values/CIs use t(residual df) under the default "
+                        "instead of t(BM DOF).",
                         UserWarning,
                         stacklevel=2,
                     )
@@ -1245,7 +1329,7 @@ class SunAbraham:
         # Override the per-event-time inference fields with BM-DOF-aware
         # values when available; otherwise leave the `safe_inference`
         # output from `_compute_iw_effects` in place (which used
-        # `df=_sa_survey_df`).
+        # `df=_sa_fallback_df`).
         if _es_contrast_dofs:
             for e, df_e in _es_contrast_dofs.items():
                 eff_e = event_study_effects[e]["effect"]
@@ -1264,15 +1348,14 @@ class SunAbraham:
                     else float("nan")
                 )
 
+        _overall_df_used: Optional[float] = (
+            _overall_att_contrast_dof if _overall_att_contrast_dof is not None else _sa_fallback_df
+        )
         overall_t, overall_p, overall_ci = safe_inference(
             overall_att,
             overall_se,
             alpha=self.alpha,
-            df=(
-                _overall_att_contrast_dof
-                if _overall_att_contrast_dof is not None
-                else _sa_survey_df
-            ),
+            df=_overall_df_used,
         )
 
         # Replicate variance override: refit fully re-aggregated estimates
@@ -1300,6 +1383,7 @@ class SunAbraham:
 
             # Override overall ATT SE
             overall_se = float(np.sqrt(max(_vcov_sa[0, 0], 0.0)))
+            _overall_df_used = _sa_survey_df
             overall_t, overall_p, overall_ci = safe_inference(
                 overall_att, overall_se, alpha=self.alpha, df=_sa_survey_df
             )
@@ -1334,7 +1418,7 @@ class SunAbraham:
                 nz = w_r > 0
                 df_reg_nz = df_reg[nz] if not np.all(nz) else df_reg
                 w_nz = w_r[nz] if not np.all(nz) else w_r
-                ce_r, _, _, _, _ = self._fit_saturated_regression(
+                ce_r, _, _, _, _, _ = self._fit_saturated_regression(
                     df_reg_nz,
                     outcome,
                     unit,
@@ -1425,6 +1509,13 @@ class SunAbraham:
         es_df_final: Optional[Dict[int, float]] = es_df_used
         if bootstrap_results is not None:
             es_df_final = None
+        # Scalar overall-ATT df provenance mirrors the channel-clearing
+        # convention: None under bootstrap (percentile p/CI never used a
+        # df); otherwise the df the overall safe_inference actually
+        # received (BM contrast df / survey df / knob-resolved fallback).
+        _overall_df_final: Optional[float] = None
+        if bootstrap_results is None and _overall_df_used is not None:
+            _overall_df_final = float(_overall_df_used) if np.isfinite(_overall_df_used) else None
 
         # Store results
         self.results_ = SunAbrahamResults(
@@ -1454,6 +1545,8 @@ class SunAbraham:
             cluster_name=(self.cluster if self.vcov_type == "conley" else None),
             reference_period=self._reference_period,
             reference_observed=self._reference_observed,
+            df_convention=self.df_convention,
+            inference_df=_overall_df_final,
         )
 
         self.is_fitted_ = True
@@ -1480,6 +1573,7 @@ class SunAbraham:
         np.ndarray,
         Dict[Tuple[Any, int], int],
         Optional[Tuple[np.ndarray, Optional[np.ndarray], np.ndarray]],
+        _SaturatedFitStats,
     ]:
         """
         Fit saturated TWFE regression with cohort × relative-time interactions.
@@ -1717,6 +1811,10 @@ class SunAbraham:
             conley_time=_cl_time,
             conley_unit=_cl_unit,
             conley_lag_cutoff=self.conley_lag_cutoff,
+            # Cells follow the knob: per-cohort-cell t/p/CI resolve through
+            # get_inference's ladder under the SAME convention the aggregate
+            # layer uses (the D4 fix — one df source per fit).
+            df_convention=self.df_convention,
         ).fit(X, y, df_adjustment=df_adj, cluster_k_adjustment=_cr1_k_adj_sa)
 
         vcov = reg.vcov_
@@ -1746,7 +1844,8 @@ class SunAbraham:
         # aggregated inference layer to compute per-event-time and
         # overall-ATT Satterthwaite DOF on user-facing outputs. Under
         # other vcov_type values aggregated inference falls back to the
-        # shared analytical df (None → normal distribution).
+        # knob-resolved analytical df (residual t by default; G−1 under
+        # df_convention="cluster"; z under "normal").
         if vcov_type == "hc2_bm":
             bread_matrix = X.T @ X
             bm_artifacts: Optional[Tuple[np.ndarray, Optional[np.ndarray], np.ndarray]] = (
@@ -1757,7 +1856,12 @@ class SunAbraham:
         else:
             bm_artifacts = None
 
-        return cohort_effects, cohort_ses, vcov_cohort, coef_index_map, bm_artifacts
+        fit_stats = _SaturatedFitStats(
+            df_residual=reg.df_,
+            n_clusters=reg.n_clusters_,
+        )
+
+        return cohort_effects, cohort_ses, vcov_cohort, coef_index_map, bm_artifacts, fit_stats
 
     def _compute_iw_effects(
         self,
@@ -1771,7 +1875,7 @@ class SunAbraham:
         vcov_cohort: np.ndarray,
         coef_index_map: Dict[Tuple[Any, int], int],
         survey_weight_col: Optional[str] = None,
-        survey_df: Optional[int] = None,
+        fallback_df: Optional[float] = None,
     ) -> Tuple[Dict[int, Dict[str, Any]], Dict[int, Dict[Any, float]]]:
         """
         Compute interaction-weighted event study effects.
@@ -1784,6 +1888,12 @@ class SunAbraham:
         When survey weights are provided, n_{g,e} is the survey-weighted mass
         (sum of weights) rather than raw observation counts, so the estimand
         reflects the survey-weighted cohort composition.
+
+        ``fallback_df`` is the ALREADY-RESOLVED df for the per-row
+        ``safe_inference`` calls (the caller resolves survey df first, then
+        the ``df_convention`` knob via ``resolve_tail_df``; None → normal
+        theory). The bootstrap/replicate refit call sites omit it — their
+        p/CI are overridden downstream.
 
         Returns
         -------
@@ -1843,7 +1953,7 @@ class SunAbraham:
             agg_var = float(weight_vec @ vcov_subset @ weight_vec)
             agg_se = np.sqrt(max(agg_var, 0))
 
-            t_stat, p_val, ci = safe_inference(agg_effect, agg_se, alpha=self.alpha, df=survey_df)
+            t_stat, p_val, ci = safe_inference(agg_effect, agg_se, alpha=self.alpha, df=fallback_df)
 
             event_study_effects[e] = {
                 "effect": agg_effect,
@@ -2087,6 +2197,7 @@ class SunAbraham:
                     vcov_b,
                     coef_map_b,
                     _,
+                    _,
                 ) = self._fit_saturated_regression(
                     df_b,
                     outcome,
@@ -2320,6 +2431,7 @@ class SunAbraham:
                     vcov_b,
                     coef_map_b,
                     _,
+                    _,
                 ) = self._fit_saturated_regression(
                     df_b,
                     outcome,
@@ -2438,15 +2550,20 @@ class SunAbraham:
             "conley_metric": self.conley_metric,
             "conley_kernel": self.conley_kernel,
             "conley_lag_cutoff": self.conley_lag_cutoff,
+            "df_convention": self.df_convention,
         }
 
     def set_params(self, **params) -> "SunAbraham":
         """Set estimator parameters (sklearn-compatible)."""
-        for key, value in params.items():
-            if hasattr(self, key):
-                setattr(self, key, value)
-            else:
+        # Reject unknown keys and validate the pending df_convention BEFORE
+        # any assignment so a rejected call leaves the estimator unchanged.
+        for key in params:
+            if not hasattr(self, key):
                 raise ValueError(f"Unknown parameter: {key}")
+        if "df_convention" in params:
+            validate_df_convention(params["df_convention"])
+        for key, value in params.items():
+            setattr(self, key, value)
         # Refresh the explicit-vcov-type flag if vcov_type changed, so the
         # auto-cluster guard at fit time uses the updated value.
         if "vcov_type" in params:

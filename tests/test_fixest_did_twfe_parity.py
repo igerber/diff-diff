@@ -173,3 +173,55 @@ class TestFixestHeteroskedasticParity:
         exp = golden["twfe_hetero"]["iid"]
         np.testing.assert_allclose(res.att, exp["att"], atol=1e-10, rtol=0)
         np.testing.assert_allclose(res.se, exp["se"], atol=1e-10, rtol=0)
+
+
+@_SKIP
+class TestFixestTailDfParity:
+    """External p-value/CI gates against the stored fixest values (3.9 / M-127).
+
+    The golden has carried fixest's `p_value`/`ci_lower`/`ci_upper`/`t_stat`
+    since it was generated, but nothing asserted them until the tail-df
+    consolidation. Two lanes:
+
+    - iid arms under the DEFAULT `df_convention="residual"`: fixest's iid
+      t-reference is the residual df, so Python matches directly (measured
+      during plan review: Python residual df == fixest implied df on all four
+      arms — did 396, twfe 148, did_hetero 209, twfe_hetero 125; p/CI agree
+      to ~1e-13 relative).
+    - cluster arms under `df_convention="cluster"`: fixest's clustered
+      t-reference is G−1, exactly the knob's value.
+
+    Tolerances are PER-ARM, inheriting the SE-band structure: the hetero
+    arms' 5.2e-11 relative SE residual amplifies ~12x into the p-value at
+    t≈3.5/df=125, so their p/CI pin at rtol=1e-8 (≥20x headroom on the
+    measured ~6.3e-10); the exact-SE arms pin at rtol=1e-9.
+    """
+
+    _P_TOL = {"did": 1e-9, "twfe": 1e-9, "did_hetero": 1e-8, "twfe_hetero": 1e-8}
+
+    def _fit(self, key, golden, **est_kw):
+        df = _build_df(golden[key])
+        cls = TwoWayFixedEffects if key.startswith("twfe") else DifferenceInDifferences
+        return cls(**est_kw).fit(
+            df, outcome="outcome", treatment="treated", time="post", unit="unit"
+        )
+
+    def test_iid_p_and_ci_match_fixest_under_residual_default(self):
+        golden = _load_golden()
+        for key, tol in self._P_TOL.items():
+            res = self._fit(key, golden, vcov_type="classical")
+            exp = golden[key]["iid"]
+            np.testing.assert_allclose(res.t_stat, exp["t_stat"], rtol=tol)
+            np.testing.assert_allclose(res.p_value, exp["p_value"], rtol=tol)
+            np.testing.assert_allclose(res.conf_int[0], exp["ci_lower"], rtol=tol)
+            np.testing.assert_allclose(res.conf_int[1], exp["ci_upper"], rtol=tol)
+
+    def test_cluster_p_and_ci_match_fixest_under_cluster_knob(self):
+        golden = _load_golden()
+        for key, tol in self._P_TOL.items():
+            res = self._fit(key, golden, vcov_type="hc1", cluster="unit", df_convention="cluster")
+            exp = golden[key]["cluster_unit"]
+            np.testing.assert_allclose(res.t_stat, exp["t_stat"], rtol=tol)
+            np.testing.assert_allclose(res.p_value, exp["p_value"], rtol=tol)
+            np.testing.assert_allclose(res.conf_int[0], exp["ci_lower"], rtol=tol)
+            np.testing.assert_allclose(res.conf_int[1], exp["ci_upper"], rtol=tol)

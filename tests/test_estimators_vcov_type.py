@@ -2901,8 +2901,11 @@ class TestDfConvention:
 
     def test_conley_fits_excluded_from_knob(self):
         """vcov_type="conley" + explicit cluster keeps the residual df even
-        with the knob on (no documented G-1 reference for the product
-        kernel) — inference identical with the knob on and off."""
+        with df_convention="cluster" (no documented G-1 reference for the
+        product kernel) — inference identical with "cluster" on and off.
+        PER-VALUE scope (3.9): this exclusion covers "cluster" only;
+        "normal" is deliberately UNGATED under conley (see
+        test_normal_is_z_on_every_fit below)."""
         rng = np.random.default_rng(9)
         data = self._clustered_panel()
         units = data["unit"].unique()
@@ -3093,3 +3096,110 @@ class TestDfConvention:
         r0 = DifferenceInDifferences().fit(data, **kw)
         r1 = DifferenceInDifferences(df_convention="cluster").fit(data, **kw)
         assert (r0.p_value, r0.conf_int) == (r1.p_value, r1.conf_int)
+
+
+class TestDfConventionNormal:
+    """The third knob value "normal" on the ORIGINAL knob surfaces
+    (DiD/TWFE/MPD/LinearRegression), added 3.9 (M-127): deliberate
+    normal-theory z at the fallback level on EVERY fit — clustered,
+    unclustered, AND conley (the ungated-fallback semantic; "cluster"
+    stays conley-excluded, "normal" does not). Survey df and BM DOF keep
+    precedence. On these surfaces "normal" is a NEW deliberate option:
+    the pre-3.9 fallback here was already t(residual).
+    """
+
+    @staticmethod
+    def _panel(seed=11):
+        rng = np.random.default_rng(seed)
+        rows = []
+        for u in range(40):
+            for t in range(6):
+                treated = int(u < 20)
+                post = int(t >= 3)
+                rows.append(
+                    dict(
+                        unit=u,
+                        time=t,
+                        group=treated,
+                        post=post,
+                        y=0.5 * u / 10 + 0.2 * t + 0.8 * treated * post + rng.standard_normal(),
+                    )
+                )
+        return pd.DataFrame(rows)
+
+    _kw = dict(outcome="y", treatment="group", time="post")
+
+    def test_normal_is_z_on_every_fit(self):
+        from scipy import stats
+
+        data = self._panel()
+        # clustered
+        rc = DifferenceInDifferences(cluster="unit", df_convention="normal").fit(data, **self._kw)
+        assert rc.p_value == pytest.approx(2 * stats.norm.sf(abs(rc.t_stat)), rel=1e-14)
+        # unclustered — the ungated-fallback semantic (was t(residual))
+        ru = DifferenceInDifferences(df_convention="normal").fit(data, **self._kw)
+        assert ru.p_value == pytest.approx(2 * stats.norm.sf(abs(ru.t_stat)), rel=1e-14)
+        r_res = DifferenceInDifferences().fit(data, **self._kw)
+        assert ru.p_value != r_res.p_value and ru.se == r_res.se
+        # conley — discriminates against an implementation that leaves
+        # "normal" inert under conley's cluster-exclusion
+        rng = np.random.default_rng(9)
+        units = data["unit"].unique()
+        data = data.assign(
+            lat=data["unit"].map({u: 40 + rng.uniform(-2, 2) for u in units}),
+            lon=data["unit"].map({u: -100 + rng.uniform(-2, 2) for u in units}),
+        )
+        common = dict(
+            vcov_type="conley",
+            conley_coords=("lat", "lon"),
+            conley_cutoff_km=100.0,
+            conley_lag_cutoff=0,
+        )
+        rk = DifferenceInDifferences(**common, df_convention="normal").fit(
+            data, unit="unit", **self._kw
+        )
+        assert rk.p_value == pytest.approx(2 * stats.norm.sf(abs(rk.t_stat)), rel=1e-14)
+        rk_res = DifferenceInDifferences(**common).fit(data, unit="unit", **self._kw)
+        assert rk.p_value != rk_res.p_value
+
+    def test_twfe_and_mpd_normal(self):
+        from scipy import stats
+
+        data = self._panel()
+        rt = TwoWayFixedEffects(cluster="unit", df_convention="normal").fit(
+            data, outcome="y", treatment="group", time="post", unit="unit"
+        )
+        assert rt.p_value == pytest.approx(2 * stats.norm.sf(abs(rt.t_stat)), rel=1e-14)
+        rm = MultiPeriodDiD(cluster="unit", df_convention="normal").fit(
+            data,
+            outcome="y",
+            treatment="group",
+            time="time",
+            post_periods=[3, 4, 5],
+            reference_period=2,
+        )
+        assert rm.inference_df is None
+        assert rm.avg_p_value == pytest.approx(2 * stats.norm.sf(abs(rm.avg_t_stat)), rel=1e-13)
+
+    def test_linear_regression_normal_and_precedence(self):
+        from scipy import stats
+
+        from diff_diff.linalg import LinearRegression
+
+        rng = np.random.default_rng(7)
+        X = rng.standard_normal((100, 2))
+        y = 1 + 2 * X[:, 0] + rng.standard_normal(100)
+        cl = np.repeat(np.arange(10), 10)
+        reg = LinearRegression(cluster_ids=cl, df_convention="normal").fit(X, y)
+        inf = reg.get_inference(1)
+        assert inf.p_value == pytest.approx(2 * stats.norm.sf(abs(inf.t_stat)), rel=1e-14)
+        assert inf.df is None
+        # survey df precedence survives "normal" (fallback-level only)
+        reg.survey_df_ = 7
+        inf2 = reg.get_inference(1)
+        assert inf2.df == 7
+
+    def test_validation_accepts_normal_everywhere(self):
+        for ctor in (DifferenceInDifferences, TwoWayFixedEffects, MultiPeriodDiD):
+            est = ctor(df_convention="normal")
+            assert est.get_params()["df_convention"] == "normal"

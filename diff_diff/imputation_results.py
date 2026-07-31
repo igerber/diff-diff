@@ -154,6 +154,12 @@ class ImputationDiDResults(BaseResults):
     # BJS 2024 Supp. App. A.9 leave-one-out finite-sample variance refinement
     # (opt-in). Recorded here so reported SEs are self-describing.
     leave_one_out: bool = field(default=False)
+    # The estimator's df_convention configuration echoed onto the results
+    # ("residual" | "cluster" | "normal"; added 3.9). It governs only the
+    # pretrends lead regression's per-lead t/p/CI - the BJS overall /
+    # post-treatment inference is knob-independent. Appended LAST (the
+    # generated __init__ positional indexes are public API).
+    df_convention: Optional[str] = None
 
     # --- Inference-field aliases (balance/external-adapter compatibility) ---
     @property
@@ -516,6 +522,8 @@ class ImputationDiDResults(BaseResults):
             result["cluster_name"] = self.cluster_name
         if self.n_clusters is not None:
             result["n_clusters"] = self.n_clusters
+        if self.df_convention is not None:
+            result["df_convention"] = self.df_convention
         if self.bootstrap_results is not None:
             result["n_bootstrap"] = self.bootstrap_results.n_bootstrap
             result["inference_method"] = "bootstrap"

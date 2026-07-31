@@ -460,9 +460,10 @@ This matches the behavior of R's `fixest::feols()` with absorbed FE.
   `benchmarks/data/reghdfe_kref_golden.json`;
   `tests/test_variance_conventions.py::TestFixestCr1NonNestedParity` /
   `TestReghdfeKReferenceParity`), while the crossed-cluster (nothing-nested) arm matches both
-  references at machine precision. This is distinct from the SunAbraham / Wooldridge `hc1`
-  tail-df items below (PR C scope). `hc2`/`hc2_bm` use leverage /
-  Satterthwaite DOF and are unaffected.
+  references at machine precision. This is distinct from the TAIL-df convention, which
+  converged separately in 3.9 (M-127: the three-value `df_convention` knob below — the
+  SE-scale `k` here and the inference df are independent accountings). `hc2`/`hc2_bm`
+  use leverage / Satterthwaite DOF and are unaffected.
 - **Note (deviation from R — clustered CR1 inference df):** under unit clustering, Python's
   CR1 t-statistics/p-values/CIs use the **residual df** from the fitted design
   (`n − K_full`, e.g. 148 on the live-R benchmark panel: n=200, 50 unit FE + time + treatment),
@@ -474,16 +475,26 @@ This matches the behavior of R's `fixest::feols()` with absorbed FE.
   pins; the convention itself is locked at a distinguishable moderate |t|~1.8 by
   `tests/test_methodology_twfe.py::test_moderate_t_pins_residual_df_convention`, where the
   t(148) and t(49) tails differ by ~5%). The SE itself matches fixest under the K_reference
-  convergence above (the historical ~0.25% non-nested-FE band is closed). **Opt-in knob (2026-07):**
-  `df_convention="cluster"` on `DifferenceInDifferences` / `TwoWayFixedEffects` / `MultiPeriodDiD`
-  (and the `LinearRegression` linalg surface) switches clustered analytical t/p/CI to the
-  Stata/fixest `G − 1` convention — fallback-level only (survey df and per-coefficient
-  Bell-McCaffrey DOF keep precedence), point estimates/SEs/t-statistics unchanged, inert on
-  unclustered fits. The default remains `"residual"` and flips at v4 (lifecycle:
-  `docs/v4-deprecations.yaml` M-004..M-006; work row in `DEFERRED.md` → Version-gated (v4);
-  flipping moves every clustered p-value/CI, so it is a major-version change). Standalone
-  estimators (CS, SA, imputation-family, etc.) carry their own inference stacks and are out of the
-  knob's scope. Locked by
+  convergence above (the historical ~0.25% non-nested-FE band is closed). **Three-value knob
+  (2026-07, widened 3.9 / M-127):** `df_convention ∈ {"residual", "cluster", "normal"}` on the
+  library-wide knob roster — `DifferenceInDifferences` / `TwoWayFixedEffects` /
+  `MultiPeriodDiD` / `LinearRegression` plus (since 3.9) `SunAbraham`, `WooldridgeDiD` (OLS
+  arms), `StackedDiD`, `ImputationDiD` (pretrends lead regression), and `LPDiD` (default
+  `"cluster"`, its Stata-anchored convention). `"cluster"` switches clustered analytical
+  t/p/CI to the Stata/fixest `G − 1` convention and is inert on unclustered and conley fits;
+  `"normal"` is deliberate normal-theory z at the fallback level on EVERY fit (clustered,
+  unclustered, and conley alike — on lanes that were already t it is a new deliberate option,
+  not a compatibility path). Fallback-level only under every value: survey/replicate df and
+  per-coefficient Bell-McCaffrey DOF keep precedence, and point estimates/SEs/t-statistics
+  never move. The default remains `"residual"` on every surface except LPDiD and flips at v4
+  (lifecycle: `docs/v4-deprecations.yaml` M-004..M-006 + M-128..M-131; work row in
+  `DEFERRED.md` → Version-gated (v4); flipping moves every clustered p-value/CI, so it is a
+  major-version change). **Out of the knob's scope** (own inference stacks): the IF-based
+  family — `CallawaySantAnna`, `TwoStageDiD`, `ChaisemartinDHaultfoeuille`, `EfficientDiD`,
+  `ContinuousDiD`, `ChangesInChanges`, `SyntheticDiD`, `HeterogeneousAdoptionDiD` — and the
+  OLS-based `TripleDifference` / `TROP` (own `safe_inference` df conventions, outside the
+  variance-conventions audit matrix's shared-CR1 scope), plus `WooldridgeDiD`'s
+  logit/poisson arms (survey df or normal theory, knob-independent). Locked by
   `tests/test_estimators_vcov_type.py::TestDfConvention` (G−1 tail match, precedence, no-op default). The full-dummy (`fixed_effects=`) idiom carries
   `df_adjustment == 0` and is unchanged — its residual t-df already matched fixest's
   full-K count because every FE column sits in `k_visible`. **That claim is scoped to
@@ -1598,21 +1609,25 @@ where weights ŵ_{g,e} = n_{g,e} / Σ_g n_{g,e} (sample share of cohort g at eve
   separately get per-coefficient BM DOF via
   `LinearRegression.get_inference()` inside `_fit_saturated_regression`.
   If the linalg helper fails (rank-deficient design, singular bread),
-  the aggregated inference falls back to the shared analytical df with
-  an explicit `UserWarning`.
-- **Note:** Provenance exposure (4.0 program row M-092, no numeric change):
-  `SunAbrahamResults.event_study_df` records, per relative time, the df each
-  stored event-study row's `safe_inference` actually received - the per-event
-  BM contrast DOF above under `hc2_bm`, the survey design df (post-drop under
-  a replicate refit) on survey fits, and NaN on plain analytic fits (normal
-  theory) as well as on rows whose BM DOF was non-finite, where
+  the aggregated inference falls back to the `df_convention`-resolved
+  analytical df (t(residual) under the default) with an explicit
+  `UserWarning`.
+- **Note:** Provenance exposure (4.0 program row M-092; df values updated by
+  the 3.9 M-127 tail-df fix): `SunAbrahamResults.event_study_df` records,
+  per relative time, the df each stored event-study row's `safe_inference`
+  actually received - the per-event BM contrast DOF above under `hc2_bm`,
+  the survey design df (post-drop under a replicate refit) on survey fits,
+  the `df_convention`-resolved fallback on plain analytic fits (FINITE
+  residual df under the 3.9 default; `G − 1` under `"cluster"`; NaN under
+  `"normal"`), and NaN on rows whose BM DOF was non-finite, where
   `safe_inference`'s own non-finite-df guard already yields all-NaN
   inference. Note the two failure modes differ and are both faithfully
-  recorded: a helper-level failure warns and falls back to the shared
+  recorded: a helper-level failure warns and falls back to the resolved
   analytical df (documented above), while a per-row non-finite DOF fails
   closed. The channel clears under bootstrap (percentile p/CIs used no df) -
   deliberately narrower than the `event_study_vcov` clear, which also fires
-  under replicate refits whose rows DID use a genuine df.
+  under replicate refits whose rows DID use a genuine df. The scalar
+  `inference_df` (added 3.9) mirrors the same rule for the overall ATT.
 - **HC1 finite-sample correction (K_reference convergence, 3.9):** SA's
   clustered CR1 factor counts the absorbed unit + time FE via the
   `cluster_k_adjustment` increment (`K_reference = k_dm + 1 + rank(non-nested
@@ -1661,23 +1676,29 @@ where weights ŵ_{g,e} = n_{g,e} / Σ_g n_{g,e} (sample share of cohort g at eve
   - Bootstrap inference: p_value and CI computed from bootstrap distribution. SE, CI, and p-value are all NaN if the original point estimate is non-finite, SE is non-finite or zero, or if <50% of bootstrap samples are valid
   - Applies to overall ATT, per-effect event study, and aggregated event study
   - **Note**: Defensive enhancement matching CallawaySantAnna behavior; R's `fixest::sunab()` may produce Inf/NaN without warning
-- Inference distribution:
-  - Cohort-level p-values: t-distribution (via `LinearRegression.get_inference()`)
+- Inference distribution (ONE df source per fit since 3.9 / M-127 — the D4
+  fix; previously cells used t(residual) while aggregates dropped to normal
+  theory inside the same fit):
+  - Cohort-level p-values: t-distribution via
+    `LinearRegression.get_inference()`, following the `df_convention` knob
+    (residual df by default; `G − 1` under `"cluster"`; z under `"normal"`).
   - Aggregated event study and overall ATT p-values:
     - Under `vcov_type="hc2_bm"`: t-distribution with CR2 Bell-McCaffrey
       contrast DOF per aggregated effect (see "Phase 1b aggregated BM
       contrast DOF" Note above). Matches `clubSandwich::Wald_test(
       test="HTZ")$df_denom`.
-    - Under `vcov_type ∈ {"classical","hc1","hc2"}` (no replicate-weight
-      survey): normal distribution (via `compute_p_value()`), which is
-      asymptotically equivalent and standard for delta-method-aggregated
-      quantities.
+    - Under `vcov_type ∈ {"classical","hc1","hc2","conley"}` (no survey):
+      the SAME `df_convention`-resolved df as the cells — t(residual df of
+      the saturated regression) by default, t(G − 1) under `"cluster"`
+      (inert under conley), z under `"normal"`.
     - Under replicate-weight survey: t-distribution with replicate-derived
       DOF (`survey_metadata.df_survey`).
-  - **Deviation from R**: R's fixest uses t-distribution at all levels
-    under `vcov_type ∈ {"classical","hc1","hc2"}`; aggregated p-values
-    may differ slightly for small samples on those families. The
-    `hc2_bm` aggregated path matches clubSandwich exactly.
+  - **Deviation from R**: R's fixest uses t-distribution at all levels with
+    the CLUSTER df `G − 1` on clustered fits; the 3.9 default uses the
+    residual df instead (the library-wide `df_convention` deviation
+    documented in the TwoWayFixedEffects section — `df_convention=
+    "cluster"` opts into the fixest convention today, and the default flips
+    at v4). The `hc2_bm` aggregated path matches clubSandwich exactly.
 
 **Reference implementation(s):**
 - R: `fixest::sunab()` (Laurent Bergé's implementation)
@@ -1779,6 +1800,22 @@ where `W_it(h) = 1[K_it = h]` are lead indicators, estimated on `Omega_0` only.
 - When `balance_e` is set, lead indicators are restricted to balanced cohorts; the full Omega_0 sample (including never-treated) is kept for within-transformation
 - Only affects event study aggregation; overall ATT and group aggregation unchanged
 - **Note:** `pretrends=True` with analytical `survey_design` (strata/PSU/FPC) is supported. The lead regression uses survey-weighted demeaning, WLS point estimates, and `compute_survey_vcov()` for design-based VCV. The full survey design is preserved (subpopulation approach): Omega_0 scores are zero-padded back to full-panel length so PSU/strata structure is maintained for variance estimation. The F-test in `pretrend_test()` uses the full-design `df_survey` as denominator df. Replicate-weight survey designs raise `NotImplementedError` with `pretrends=True` because per-replicate lead regression refits are not yet implemented.
+- **Note (pretrends lead-regression tail df, 3.9 / M-127):** the per-lead
+  `gamma_h` t/p/CI previously used silent normal-theory z on plain clustered
+  fits (the tail-df defect family); they now follow the `df_convention`
+  knob — t(residual df `n − k_kept − rank(absorbed [time, unit])` on the
+  Omega_0 lead design) under the default `"residual"`, t(G − 1) under
+  `"cluster"`, z under `"normal"` — with the full-design survey df keeping
+  precedence. This is the ONE ImputationDiD surface on the shared clustered
+  CR1 sandwich; the BJS Theorem-3 overall/post-treatment inference is
+  knob-independent (L3), and the JOINT pretrend Wald F deliberately keeps
+  its cluster-robust `F(q, max(G − 1, 1))` denominator (the standard
+  joint-test convention; it consumes gamma/V_gamma, not the per-lead t's,
+  coheres with `df_convention="cluster"`, and converges with the t's at the
+  v4 flip) — the per-lead-t vs joint-F pairing is a stated convention, not
+  a silent split. A `df_convention` value that never surfaces the per-lead
+  inference (`pretrends=False`, or `aggregate` outside
+  `{"event_study","all"}`) warns at fit time when explicitly non-default.
 
 *Edge cases:*
 - **Unbalanced panels:** FE estimated via iterative alternating projection (Gauss-Seidel), equivalent to OLS with unit+time dummies. Converges in O(max_iter) passes; typically 5-20 iterations for unbalanced panels, 1-2 for balanced. One-pass demeaning is only exact for balanced panels.
@@ -1962,6 +1999,22 @@ Estimated via WLS with Q-weights. The delta_h coefficients identify theta_kappa^
 
 **Note:** This routing inherits the WLS-CR2 methodology choice from the Phase 1a clubSandwich port (PR #475 / REGISTRY Phase 1a `hc2_bm + weights` row); see that row for the full PT2018-§3.3-vs-clubSandwich algebra deviation derivation. No new methodology choice is introduced in this PR. The change is purely surface: switching from the prior bake-Q-into-X pattern (`X_t = X * sqrt(Q)`, `solve_ols(X_t, Y_t, cluster_ids=)`) to `solve_ols(weights=composed_weights, vcov_type=...)` opens the hc2_bm path without modifying the small-sample WLS-CR2 algebra. The HC1 path is preserved bit-equal (up to float64 multiplication ordering at machine precision).
 
+**Note (tail df, 3.9 / M-127):** the `hc1` analytical t/p/CI previously used
+silent normal-theory z on the non-survey lane (the tail-df defect family);
+they now follow the library-wide `df_convention` knob — t(pooled residual df
+`n_eff − k_kept`, positive-weight rows) under the default `"residual"`,
+t(G − 1) under `"cluster"`, z under `"normal"` — with hc2_bm BM contrast DOF
+and survey/replicate df keeping precedence. Two StackedDiD-specific caveats:
+(a) the `"cluster"` G counts POSITIVE-WEIGHT clusters
+(`effective_cluster_count`), while the reported `results.n_clusters` keeps
+the raw unique count — the two diverge only when a cluster's total composed
+weight is zero; (b) the stacked design replicates control units across
+sub-experiments, so the pooled residual df is typically large and the
+default's z → t movement is a convention alignment with near-zero numeric
+effect — the materially moving step on this surface is the v4 flip to
+`G − 1` (M-130). No public per-row df channel changes: `event_study_df`
+records the resolved df per event time as before.
+
 *Edge cases:*
 - All events trimmed: `len(Omega_kappa) == 0` -> ValueError suggesting reduced kappa
 - No clean controls for event a: IC2 check fails -> Trim event, warn user
@@ -2115,6 +2168,24 @@ where `g(·)` is the link inverse (logistic or exp), `η_i` is the individual li
 - `n_bootstrap > 0` + `vcov_type ∈ {"hc2","classical"}` — REJECTED at `fit()` regardless of `self.cluster` setting. The multiplier bootstrap is intrinsically clustered, but one-way vcov_type does not compose with `cluster_ids`: with `cluster=None` the auto-cluster is dropped (bootstrap has no cluster to draw weights at); with `cluster=X` the linalg validator rejects one-way + cluster_ids downstream with a less-informative error. User must drop bootstrap (`n_bootstrap=0`) or pick a cluster-compatible `vcov_type` (`hc1` or `hc2_bm`).
 - **Note:** This routing is a documented synthesis of two existing methodology ingredients: the full-dummy auto-route from the Phase 1b PR 1/8 SunAbraham pattern (PR #472, which itself reused the Phase 1a Gate 1 TWFE lift from PR #469), and the clubSandwich WLS-CR2 algebra from the Phase 1a port (PR #475). The BM contrast DOF threading reuses `_compute_cr2_bm_contrast_dof` from PR #465 (MPD). No new methodology choice is introduced — the change is purely surface: extending the existing pattern from SA-OLS to WooldridgeDiD-OLS.
 - **Note:** Bootstrap is supported only with `vcov_type ∈ {"hc1","hc2_bm"}` (one-way `classical`/`hc2` + bootstrap is rejected at `fit()` per the previous bullet). On the supported paths, the bootstrap clusters at `self.cluster if self.cluster else unit` — i.e., it matches the user's explicit cluster column if set, falling back to unit otherwise (the panel's natural unit of variation). The bootstrap SE overrides the analytical SE for `overall_*` on `n_bootstrap > 0` paths; per-cell `(g, t)` SEs still come from the analytical vcov.
+- **Note (tail df, 3.9 / M-127):** every non-BM OLS arm's per-cell and
+  aggregated t/p/CI now consume ONE `df_convention`-resolved fallback df —
+  the default-`hc1` arms (within-transform AND `hc1`+`cohort_trends`
+  full-dummy) previously used silent normal-theory z (the tail-df defect
+  family), and now use t(residual df): `n − k_kept − rank(absorbed
+  [unit, time])` on the within arm, the historical `n − rank(X)` on the
+  full-dummy arms (`classical`/`hc2` values bit-identical). `"cluster"`
+  gives t(G − 1) on hc1-clustered fits (inert on one-way/conley families);
+  `"normal"` gives z. Survey design df and hc2_bm BM DOF keep precedence;
+  the logit/poisson arms are knob-INDEPENDENT (survey df when present,
+  normal theory otherwise — an explicitly non-default `df_convention`
+  warns at fit time). Post-fit `aggregate()` reproduces fit-time inference
+  on every OLS arm via the stored resolved fallback
+  (`_df_analytic_fallback`, live on bootstrap fits whose per-cell inference
+  stays analytical). No public per-row df channel ships in 3.9 — the
+  unified event-study surface's Wooldridge df column stays NaN (a per-key
+  dict that could also carry the hc2_bm BM contrast dofs is the TODO.md
+  df-provenance follow-up).
 
 *Aggregations (matching `jwdid_estat`):*
 - `simple`: Weighted average across all post-treatment (g, t) cells. Default
@@ -2275,7 +2346,7 @@ Eq. 12 reuses the absorbing clean control and only restricts the treated set (a 
 
 The paper specifies no standard-error formula (Section 1 defers to "standard, well-understood techniques"); the reference Stata `lpdid` uses `vce(cluster unit)`. The entries below document diff-diff's inference and scope choices.
 
-1. **Note:** Standard errors are **cluster-robust at the unit level by default** - `cluster=None` auto-clusters at the unit identifier and the results record `cluster_name`/`n_clusters` - with a `t(G-1)` reference distribution (G = realized clusters in each horizon's clean-control sample). Matches Stata `lpdid` `vce(cluster unit)`; the paper prescribes no SE.
+1. **Note:** Standard errors are **cluster-robust at the unit level by default** - `cluster=None` auto-clusters at the unit identifier and the results record `cluster_name`/`n_clusters` - with a `t(G-1)` reference distribution (G = realized clusters in each horizon's clean-control sample). Matches Stata `lpdid` `vce(cluster unit)`; the paper prescribes no SE. **Since 3.9 (M-127) the reference is the `df_convention` knob's `"cluster"` value — LPDiD's DEFAULT, so nothing moved**: `"residual"` opts into t(per-horizon residual df `n_eff − k_kept`; on the RA path `n_total − k0_kept − 1`, the pooled M-estimator's parameter count — nuisance coefficients plus the ATT — a library convention with no external anchor since Stata `teffects ra` reports z), and `"normal"` into z. The G here stays the RAW unique cluster count (deliberately not `effective_cluster_count`: LPDiD's reweights are strictly positive and there is no user weight column, so the two cannot diverge). **Carve-out to the flat `t(G-1)` claim:** the degenerate lanes — the unclustered-refit fallback when the clustered solve fails, the RA `G<=1` lane, and the saturated-design early return (`n_obs <= k`) — keep the literal `df=None` (normal theory, NaN provenance) under ALL knob values, exactly as before 3.9.
 2. **Note:** The regression-adjustment (RA) covariate path (`reweight=True` with covariates/absorb) reports an **influence-function cluster variance** `sum_c (sum_{i in c} psi_i)^2 / n^2`, in the same family as `ImputationDiD`'s Theorem-3 / BJS variance (see "IF-based variance estimators vs analytical-sandwich estimators" above). Its single Gram inversion is routed through `linalg._rank_guarded_inv` (finite SE on the identified subspace under near-collinearity; NaN at rank 0). Unlike the default/weighted `solve_ols` `hc1`-cluster path - which applies the `(G/(G-1))*((n-1)/(n-K_reference))` finite-sample factor (see the nested-dummy Note below) - the RA IF variance carries **no finite-sample factor**, while both paths share the `t(G-1)` reference. **PR-B2 validated this asymmetry as faithful to the authors' own tooling**, not a defect: the no-factor RA convention matches the canonical Stata `teffects ra ... atet vce(cluster)`, while the default path matches `feols`/`reghdfe`. **Originally inferred from the authors' `lpdid_regression_adjustment.do` degrees-of-freedom comments, this is now MEASURED against a runnable `teffects`:** `benchmarks/stata/generate_lpdid_ra_golden.do` runs `teffects ra (Dy x i.time) (tdiff), atet vce(cluster unit)` on an independently reconstructed clean sample (a Stata port of the `generate_lpdid_golden.R` `prep`/`clean_h` recipe), and the library RA IF SE matches it to **~1e-16 at all 7 event-study horizons** - the SE ratio is a flat 1.0 (no `G/(G-1)`, no `(n-1)/(n-k)`), directly confirming the no-finite-sample-factor convention (golden `benchmarks/data/lpdid_ra_stata_golden.json`; test `tests/test_lpdid_ra_stata_parity.py`, which also gates the Stata clean sample's realized size and cluster count `(e(N), e(N_clust))` against the library's `(n_obs, n_clusters)`). The RA *point* estimate is triple-anchored: Python == R full-interaction (`i.dtreat##(i.time c.x)`) == Stata `teffects`, to ~1e-10..1e-13 (`tests/test_methodology_lpdid.py::test_ra_covariate_point`). Because Stata is node-locked and cannot run in CI (goldens are committed, exactly like the R arm), the CI-runnable guards remain the regression pin (`test_ra_covariate_se_regression_pin` / `RA_SE_PIN`) and the ungated Monte-Carlo coverage study `benchmarks/python/coverage_lpdid_ra.py` (~0.95 empirical coverage of the true effect at cluster counts G in {30, 100, 300}).
 3. **Note:** Direct covariate inclusion (`reweight=False` with covariates/absorb) emits a `UserWarning`: per online Appendix B.2.2 it preserves the non-negative LP-DiD weighting result only under linear and homogeneous covariate effects, so the regression-adjustment path (`reweight=True`) is preferred.
 4. **Deviation from R:** Scope - non-absorbing treatment (Section 4.2) implements the **entry-effect** estimands (`non_absorbing="first_entry"` / `"effect_stabilization"`, PR-C1). **PR-C2 R-parity-validated both modes against an INDEPENDENT `fixest::feols` reconstruction of the paper's Eq. 12 / Eq. 13 clean-sample restrictions** (point and SE match to ~1e-13/~1e-15 for the variance-weighted variants; the `effect_stabilization` reweighted point matches and its SE is pinned as a regression guard - a small weighted-cluster convention difference vs feols; `tests/test_methodology_lpdid.py::TestLPDiDNonAbsorbingParityR`). The recipe's independence was demonstrated when an earlier draft's Eq. 12 control off-by-one diverged from the already-correct library and was corrected against the paper, plus a hand-computed Python micro-check. **`alexCardazzi/lpdid`'s `nonabsorbing_lag` is NOT a faithful Eq. 13** (it clamps `treat_diff[<0]<-0`, so its clean-control window blocks only treatment turn-*ons*; it reuses a forward placebo window; and it NA-excludes pre-panel-treated rows where the library clamps pre-`min_t` to untreated): it diverges ~0.01-0.05 from Eq. 13 even on a monotone no-off-switch panel, so it is **recorded in the golden `meta` as a divergent third-party reference, not a parity gate** (the alexCardazzi-pooled precedent). The library's "no treatment change" (both directions) and backward placebo window are the more paper-faithful choices. `first_entry` (Eq. 12) has no R-package analogue (anchored on the independent feols recipe only). Appendix-C exit-event dynamics and the Stata canonical SE remain deferred follow-ups.
@@ -2283,7 +2354,7 @@ The paper specifies no standard-error formula (Section 1 defers to "standard, we
 6. **Note (pooled estimand):** The pooled pre/post ATT (the headline `results.att` is the pooled-post row) is the **unit-equal-weighted average of each unit-event-time's mean long difference** over the window - `mean_h(y_{i,t+h}) - baseline_{i,t}`, one observation per (unit, event-time), regressed on the treatment-switch indicator with event-time fixed effects on the **fixed-composition** sample (only units observing *every* pooled target, with clean controls required through `max(h)`). This equals the mean of the per-horizon event-study coefficients on a balanced panel. **PR-B2 validated it against the authors' runnable R reference**: the pooled estimand matches the authors' own R pooled recipe (`danielegirardi/lpdid`: a `slider` window-mean minus `y_{t-1}` on the clean-through-window-end sample) to ~1e-13 (`tests/test_methodology_lpdid.py::test_pooled`). A prior version of this note speculated the authors used a horizon-**stacked** pooled regression; the authors' R reference in fact uses this same fixed-composition mean-long-difference, so that speculation was incorrect. Unlike the event-study variants (where `alexCardazzi` is a cross-check gate), pooled is anchored to the authors' recipe **only**: `alexCardazzi`'s pooled uses a **laxer** clean-control window, so it differs and is recorded in the golden `meta` for transparency, not as a parity target.
 7. **Deviation from R:** `no_composition` is intentionally more faithful to the paper's fixed-composition intent (Section 3.6) than the R packages: it fixes the realized sample across *all* post horizons (every post coefficient shares one sample, even on unbalanced panels) and excludes cohorts with `p_g > T-H`, whereas `alexCardazzi/lpdid` uses a looser per-horizon sample and a stricter `treat_date < T-H` cutoff. It therefore has **no exact R-package anchor** and is validated by the pure-Python tests in `tests/test_lpdid.py` (the R-parity golden omits it; `alexCardazzi`'s looser-semantics value is recorded in the golden `meta`).
 8. **Note (survey design):** Complex-survey support (`survey_design=SurveyDesign(...)`, PR-D1) covers the **variance-weighted default path** (`reweight=False`, with or without direct-inclusion covariates): each horizon's long-difference regression is fit by WLS on the survey probability weights, and the SE is the stratified-PSU **Taylor-linearization (Binder 1983 TSL)** sandwich `meat = sum_h (1-f_h)*(n_h/(n_h-1))*sum_j (S_hj - S_h_bar)(S_hj - S_h_bar)'` with `df = n_PSU - n_strata`, reusing the shared `diff_diff/survey.py` helpers (`compute_survey_vcov` / `_compute_stratified_psu_meat`). The design is re-resolved on each realized (post-clean-control) sample so weights/strata/PSU align with the regression rows; with no explicit PSU the unit (LP-DiD's default cluster) is injected as the PSU. Supports pweight + strata + PSU + FPC + lonely-PSU handling. It **rejects** `survey_design` combined with `reweight=True` (the equally-weighted / regression-adjustment IF path has no validated survey reference - the same gap as the RA SE in Deviation #2), replicate-weight designs, and non-pweight (fweight/aweight) types, each a deferred follow-up. The non-survey path is byte-for-byte unchanged (gated on `survey_design is None`). **PR-D2 validated all three survey paths end-to-end against `survey::svyglm`** - per-horizon point/SE/df + pooled for the variance-weighted full design (strata+PSU+FPC), the weights-only unit-injected-PSU design, and the direct-covariate variant (`tests/test_methodology_lpdid.py::TestLPDiDSurveyParityR`; point ~1e-6, SE ~1e-5, df exact via the per-design `n_PSU - n_strata` / `n_PSU - 1` formula). `svyglm` is itself the reference implementation of the Binder TSL sandwich, so it anchors the variance directly (no third-party survey-package gate is needed); the clean-sample construction is independently cross-checked in the generator (the unweighted variance-weighted event study matches `alexCardazzi/lpdid` to <1e-8, and selection is weight-independent). A dedicated survey panel (`benchmarks/data/lpdid_survey_panel.csv`, own seed) keeps the absorbing / non-absorbing goldens byte-identical.
-9. **Note (clustered CR1 k, nested dummy blocks — 3.9 K_reference):** LPDiD's per-horizon design carries two built-in dummy blocks — the `_event_time` (time-FE) dummies added under `include_time_fe=True` and the inline `drop_first` `absorb=` dummies. The authors' reference recipe ABSORBS the time FE (`feols(... | time, vcov = ~unit)`, `benchmarks/R/generate_lpdid_golden.R`), so both blocks follow the nested convention: when a block is nested in the raw `cluster` (e.g. a time-like cluster for `_event_time`, or an absorb dim coarser than the cluster), its rank is SUBTRACTED from the CR1 factor's `k` via a negative `cluster_k_adjustment`, converging on the same `K_reference` accounting as `feols`/`reghdfe`. Non-nested configs are no-ops (unit clustering leaves `_event_time` non-nested → adjustment 0, preserving bit-identical Rust-lane output). The solve's broad `except (ValueError, ZeroDivisionError)` re-solve re-raises `InvalidClusterKAdjustment` so a contract violation can never degrade to a silent `se=NaN` (`tests/test_variance_conventions.py::TestKReferenceConvergence::test_lpdid_never_swallows_the_contract_raise`). The `t(G-1)` tail reference (Note 1) is unchanged.
+9. **Note (clustered CR1 k, nested dummy blocks — 3.9 K_reference):** LPDiD's per-horizon design carries two built-in dummy blocks — the `_event_time` (time-FE) dummies added under `include_time_fe=True` and the inline `drop_first` `absorb=` dummies. The authors' reference recipe ABSORBS the time FE (`feols(... | time, vcov = ~unit)`, `benchmarks/R/generate_lpdid_golden.R`), so both blocks follow the nested convention: when a block is nested in the raw `cluster` (e.g. a time-like cluster for `_event_time`, or an absorb dim coarser than the cluster), its rank is SUBTRACTED from the CR1 factor's `k` via a negative `cluster_k_adjustment`, converging on the same `K_reference` accounting as `feols`/`reghdfe`. Non-nested configs are no-ops (unit clustering leaves `_event_time` non-nested → adjustment 0, preserving bit-identical Rust-lane output). The solve's broad `except (ValueError, ZeroDivisionError)` re-solve re-raises `InvalidClusterKAdjustment` so a contract violation can never degrade to a silent `se=NaN` (`tests/test_variance_conventions.py::TestKReferenceConvergence::test_lpdid_never_swallows_the_contract_raise`). The `t(G-1)` tail reference (Note 1) is unchanged and is, since 3.9, the `df_convention="cluster"` DEFAULT (see Note 1's knob addendum).
 
 ### Implementation Checklist
 

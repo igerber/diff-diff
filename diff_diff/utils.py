@@ -467,6 +467,97 @@ def safe_inference_batch(effects, ses, alpha=0.05, df=None):
     return t_stats, p_values, ci_lowers, ci_uppers
 
 
+_DF_CONVENTIONS = ("residual", "cluster", "normal")
+
+
+def validate_df_convention(value: str) -> None:
+    """Raise ValueError unless ``value`` is a supported df_convention.
+
+    Shared by every estimator constructor and ``set_params`` that carries the
+    ``df_convention`` knob. ``LinearRegression`` keeps its own inline check
+    (``diff_diff.utils`` imports ``diff_diff.linalg`` at module level, so
+    linalg cannot import from here at module scope).
+    """
+    if value not in _DF_CONVENTIONS:
+        raise ValueError(f"df_convention must be one of {_DF_CONVENTIONS}, got {value!r}")
+
+
+def resolve_tail_df(
+    df_convention: str,
+    *,
+    residual_df: Optional[float],
+    n_clusters: Optional[int],
+) -> Optional[float]:
+    """Resolve the fallback-level tail df for analytical t/p/CI inference.
+
+    The single implementation of the ``df_convention`` knob's fallback slot
+    for the standalone estimators (SunAbraham aggregates, WooldridgeDiD OLS,
+    StackedDiD, ImputationDiD pretrends leads, LPDiD). Survey/replicate df
+    and per-coefficient Bell-McCaffrey DOF keep precedence at the CALL SITE
+    under every value — callers consult this helper only when no
+    higher-precedence df applies. ``LinearRegression.get_inference`` and
+    MultiPeriodDiD keep their own equivalent inline ladders.
+
+    Branch table:
+
+    - ``"residual"`` — ``residual_df`` (the fit's ``n_eff - K_full``).
+    - ``"cluster"`` — ``n_clusters - 1`` when ``n_clusters >= 2``. When
+      ``n_clusters`` is not None but ``<= 1`` the cluster df is undefined:
+      warn and return ``0``, the fail-closed sentinel ``safe_inference``
+      turns into all-NaN inference (the ``df = 0`` twin of MultiPeriodDiD's
+      inline ``_df_cluster_knob_invalid`` path; ``LinearRegression.
+      get_inference`` reaches the same observable warn+NaN outcome via an
+      early return). Defense-in-depth only: every in-scope clustered solve
+      raises "Need at least 2 clusters" at the vcov layer before df
+      resolution, and LPDiD's degenerate lanes bypass this helper entirely.
+      When ``n_clusters`` is None (unclustered/conley fit) the value is
+      inert and falls back to ``residual_df``.
+    - ``"normal"`` — ``None`` (deliberate normal-theory z inference at the
+      fallback level, on clustered and unclustered fits alike).
+
+    Whenever the residual fallback is what would be returned, a non-finite
+    or non-positive ``residual_df`` warns and returns ``None`` (normal
+    theory) — mirroring ``get_inference``'s non-positive-df fallback. The
+    reachable case is absorbed-FE accounting driving ``n - k - rank`` to
+    zero or below while the SE is still finite (a plain ``n <= k``
+    saturation NaNs at the vcov layer first and never reaches this guard).
+
+    Never wraps ``safe_inference`` — callers pass the resolved df to their
+    own module-level ``safe_inference`` binding so the variance-conventions
+    audit instrumentation observes it.
+    """
+    validate_df_convention(df_convention)
+
+    def _guarded_residual(df: Optional[float]) -> Optional[float]:
+        if df is None:
+            return None
+        if not (np.isfinite(df) and df > 0):
+            warnings.warn(
+                f"Degrees of freedom is non-positive (df={df}). "
+                "Using normal distribution instead of t-distribution for inference.",
+                UserWarning,
+                stacklevel=3,
+            )
+            return None
+        return float(df)
+
+    if df_convention == "normal":
+        return None
+    if df_convention == "cluster":
+        if n_clusters is None:
+            return _guarded_residual(residual_df)
+        if n_clusters <= 1:
+            warnings.warn(
+                "df_convention='cluster' requires at least 2 effective "
+                f"clusters; got {n_clusters}. Inference fields will be NaN.",
+                UserWarning,
+                stacklevel=3,
+            )
+            return 0.0
+        return float(n_clusters - 1)
+    return _guarded_residual(residual_df)
+
+
 # =============================================================================
 # Wild Cluster Bootstrap
 # =============================================================================

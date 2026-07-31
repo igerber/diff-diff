@@ -40,10 +40,13 @@ from diff_diff.linalg import solve_ols
 from diff_diff.utils import (
     _iterative_fe_solve,
     absorbed_fe_cr1_k_increment,
+    absorbed_fe_rank,
     demean_by_groups,
     pre_demean_norms,
+    resolve_tail_df,
     safe_inference,
     snap_absorbed_regressors,
+    validate_df_convention,
 )
 
 if TYPE_CHECKING:
@@ -222,6 +225,21 @@ class ImputationDiD(ImputationDiDBootstrapMixin):
         but are a library extension beyond the paper's derivation.
         Replicate-weight survey designs raise ``NotImplementedError`` (their
         variance bypasses the influence-function path where the rescale lives).
+    df_convention : {"residual", "cluster", "normal"}, default "residual"
+        Degrees-of-freedom convention for the PRETRENDS lead regression's
+        per-lead t/p/CI — the one ImputationDiD surface running the shared
+        clustered CR1 sandwich (``pretrends=True`` with
+        ``aggregate="event_study"``/``"all"``). ``"residual"`` (default) uses
+        the lead regression's residual df (``n − k_kept − absorbed
+        [time, unit] rank``) — the 3.9 fix: previously silent normal-theory
+        z on plain clustered fits; ``"cluster"`` uses ``G − 1``;
+        ``"normal"`` deliberately uses z. The full-design survey df keeps
+        precedence on survey fits. Everything else — the BJS Theorem-3
+        overall/event-study inference and the joint pretrend Wald F (which
+        keeps its cluster-robust ``F(q, G − 1)`` reference) — is
+        knob-independent; an explicitly non-default value on a
+        configuration that never surfaces the per-lead inference warns at
+        fit time. The default flips to ``"cluster"`` at v4.
 
     Attributes
     ----------
@@ -278,6 +296,7 @@ class ImputationDiD(ImputationDiDBootstrapMixin):
         aux_partition: str = "cohort_horizon",
         pretrends: bool = False,
         leave_one_out: bool = False,
+        df_convention: str = "residual",
     ):
         if rank_deficient_action not in ("warn", "error", "silent"):
             raise ValueError(
@@ -296,6 +315,7 @@ class ImputationDiD(ImputationDiDBootstrapMixin):
             )
         self._validate_vcov_type(vcov_type)
         self._validate_leave_one_out(leave_one_out)
+        validate_df_convention(df_convention)
 
         self.anticipation = anticipation
         self.alpha = alpha
@@ -309,6 +329,7 @@ class ImputationDiD(ImputationDiDBootstrapMixin):
         self.aux_partition = aux_partition
         self.pretrends = pretrends
         self.leave_one_out = leave_one_out
+        self.df_convention = df_convention
 
         self.is_fitted_ = False
         self.results_: Optional[ImputationDiDResults] = None
@@ -397,6 +418,25 @@ class ImputationDiD(ImputationDiDBootstrapMixin):
                 "pretrends=True is not yet compatible with replicate-weight "
                 "survey designs. Analytical survey designs (strata/PSU/FPC) "
                 "are supported. Use pretrends=False with replicate weights."
+            )
+
+        # Inert-config warning (no-silent-failures): the df_convention knob
+        # moves only the pretrends lead regression's per-lead t/p/CI, which
+        # this fit surfaces only when pretrends=True with
+        # aggregate="event_study"/"all". (The post-fit ``pretrend_test()``
+        # reaches the lead helper too, but consumes only gamma/V_gamma — its
+        # joint Wald F denominator is knob-independent.) An explicitly
+        # non-default value on any other configuration is a silent no-op.
+        if self.df_convention != "residual" and not (
+            self.pretrends and aggregate in ("event_study", "all")
+        ):
+            warnings.warn(
+                f"df_convention={self.df_convention!r} affects only the "
+                "pretrends event-study per-lead inference (pretrends=True "
+                "with aggregate='event_study'/'all'); it has no effect on "
+                "this configuration.",
+                UserWarning,
+                stacklevel=2,
             )
 
         # Create working copy
@@ -1089,6 +1129,7 @@ class ImputationDiD(ImputationDiDBootstrapMixin):
             cluster_name=_cluster_name_for_results,
             n_clusters=_n_clusters_for_results,
             leave_one_out=self.leave_one_out,
+            df_convention=self.df_convention,
         )
 
         self.is_fitted_ = True
@@ -2511,8 +2552,38 @@ class ImputationDiD(ImputationDiDBootstrapMixin):
         gamma = coefficients[:n_leads]
         V_gamma = vcov[:n_leads, :n_leads]
 
-        # Use full-design survey df for t-distribution inference
-        _df = survey_df
+        # Resolve the per-lead tail df: the full-design survey df keeps
+        # precedence on survey fits; otherwise resolve through the
+        # df_convention knob (3.9 fix: previously df=None → silent
+        # normal-theory z on plain clustered fits). Residual df = n −
+        # k_kept − absorbed [time, unit] rank (the demeaned lead design
+        # carries no intercept column); the "cluster" G counts
+        # positive-weight clusters on the SAME raw cluster ids the CR1
+        # vcov partitioned on. NOTE this resolution serves BOTH callers —
+        # the fit-time pretrends event-study path and the post-fit public
+        # ``pretrend_test()`` (which consumes only gamma/V_gamma; its
+        # joint Wald F denominator is knob-independent).
+        if _use_survey_vcov:
+            _df = survey_df
+        else:
+            _k_kept_imp = int(np.count_nonzero(np.isfinite(coefficients)))
+            _df_res_imp = float(
+                len(df_0)
+                - _k_kept_imp
+                - absorbed_fe_rank(
+                    df_0,
+                    [time, unit],
+                    has_intercept_col=False,
+                    weights=survey_weights_0,
+                )
+            )
+            from diff_diff.linalg import effective_cluster_count
+
+            _df = resolve_tail_df(
+                self.df_convention,
+                residual_df=_df_res_imp,
+                n_clusters=effective_cluster_count(cluster_ids, survey_weights_0),
+            )
 
         # Build per-horizon effects
         effects = {}
@@ -2692,15 +2763,20 @@ class ImputationDiD(ImputationDiDBootstrapMixin):
             "aux_partition": self.aux_partition,
             "pretrends": self.pretrends,
             "leave_one_out": self.leave_one_out,
+            "df_convention": self.df_convention,
         }
 
     def set_params(self, **params) -> "ImputationDiD":
         """Set estimator parameters (sklearn-compatible)."""
-        for key, value in params.items():
-            if hasattr(self, key):
-                setattr(self, key, value)
-            else:
+        # Reject unknown keys and validate the pending df_convention BEFORE
+        # any assignment so a rejected call leaves the estimator unchanged.
+        for key in params:
+            if not hasattr(self, key):
                 raise ValueError(f"Unknown parameter: {key}")
+        if "df_convention" in params:
+            validate_df_convention(params["df_convention"])
+        for key, value in params.items():
+            setattr(self, key, value)
         return self
 
     @staticmethod

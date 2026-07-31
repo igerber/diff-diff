@@ -238,12 +238,14 @@ ROWS = [
             df, outcome="y", unit="unit", time="time", cohort="first_treat"
         ),
         cr1_k=(15,),
-        tail_df=(None,) * 10,
-        status="defect",
+        tail_df=(286.0,) * 10,
+        status="legitimate",
         reason=(
-            "CR1 k converged on K_reference (D2 fixed: 9 cells + T = 15, "
-            "no intercept col -> +1 term; jwdid arms at ratio 1.0); tail df "
-            "is still normal theory with no df_convention knob (PR C)"
+            "CR1 k = K_reference (D2 fixed: 9 cells + T = 15, no intercept "
+            "col -> +1 term; jwdid arms at ratio 1.0); tail df converged in "
+            "3.9 (M-127): the default-hc1 arms use t(residual df = n - "
+            "k_kept - absorbed rank) via the df_convention knob (was silent "
+            "normal theory); G-1 under 'cluster', z under 'normal'"
         ),
     ),
     dict(
@@ -252,12 +254,14 @@ ROWS = [
             df, outcome="y", unit="unit", time="time", first_treat="first_treat"
         ),
         cr1_k=(21,),
-        tail_df=(280.0,) * 15 + (None,) * 8,
-        status="defect",
+        tail_df=(280.0,) * 23,
+        status="legitimate",
         reason=(
-            "CR1 k converged on K_reference (D2 fixed: 15 cells + 6, no "
-            "intercept col; fixest sunab parity ~5e-15); D4 remains: residual "
-            "df per cohort-period cell but normal theory on aggregates (PR C)"
+            "CR1 k = K_reference (D2 fixed: 15 cells + 6, no intercept col; "
+            "fixest sunab parity ~5e-15); D4 fixed in 3.9 (M-127): cells AND "
+            "aggregates share the saturated fit's residual df under the "
+            "df_convention knob (aggregates previously dropped to normal "
+            "theory inside the same fit)"
         ),
     ),
     dict(
@@ -266,12 +270,14 @@ ROWS = [
             df, outcome="y", unit="unit", time="time", first_treat="first_treat"
         ),
         cr1_k=(6,),
-        tail_df=(None,) * 1,
+        tail_df=(309.0,) * 1,
         status="legitimate",
         reason=(
             "L1: k_total is clubSandwich CR1S by construction (stacked_did.py "
-            "pins vcovCR(type='CR1S') at atol=1e-10); normal-theory tail df is "
-            "an open PR C question"
+            "pins vcovCR(type='CR1S') at atol=1e-10); tail df converged in "
+            "3.9 (M-127): t(pooled residual df n_eff - k_kept) via the "
+            "df_convention knob (was silent normal theory; stacked rows make "
+            "the residual df large, so z -> t is a convention alignment)"
         ),
     ),
     dict(
@@ -282,7 +288,11 @@ ROWS = [
         cr1_k=(4, 4, 5, 5, 5, 6),
         tail_df=(59.0,) * 6,
         status="legitimate",
-        reason="L2: G-1 tail df (Stata/fixest convention) — the convergence target",
+        reason=(
+            "L2: G-1 tail df (Stata/fixest convention) — since 3.9 the "
+            "df_convention='cluster' DEFAULT on LPDiD (bit-identical; the "
+            "one surface already at the v4 target)"
+        ),
     ),
     dict(
         key="mpd_absorb_hc1_cluster_unit",
@@ -376,15 +386,21 @@ ROWS = [
             aggregate="event_study",
         ),
         cr1_k=None,  # contract row: shared CR1 REACHED; exact k is config-detail
-        tail_df=None,
+        # Pinned since 3.9 (M-127): the three lead calls carry the knob-
+        # resolved residual df (157 = n_untreated - k_kept - absorbed rank
+        # on the audit panel); the None entries are the knob-INDEPENDENT
+        # BJS overall/event-study calls (L3) captured by the same spy.
+        tail_df=(157.0,) * 3 + (None,) * 5,
         # The increment IS pinned even though k is not: every clustered-hc1
         # call on this surface must carry the [time, unit] no-intercept
         # increment (1 + 65 - 60 = 6 on the audit panel).
         expected_adjustment=6,
-        status="defect",
+        status="legitimate",
         reason=(
-            "pretrends lead regression: CR1 k converged on K_reference "
-            "(D2 fixed); normal-theory tail df remains (PR C family)"
+            "pretrends lead regression: CR1 k = K_reference (D2 fixed); "
+            "tail df converged in 3.9 (M-127): leads use t(residual df) via "
+            "the df_convention knob (was silent normal theory); the None "
+            "calls are the knob-independent BJS aggregates (L3)"
         ),
     ),
     dict(
@@ -1403,3 +1419,24 @@ class TestKReferenceConvergence:
                 diff_diff.LPDiD(pre_window=2, post_window=2).fit(
                     df, outcome="y", unit="unit", time="time", treatment="treated"
                 )
+
+
+def test_sun_abraham_normal_moves_cells_and_aggregates_together(monkeypatch):
+    """One semantic per fit: under df_convention="normal" the SA CELLS move to
+    z alongside the aggregates (t → z on the cells is a deliberate new option;
+    the cells' t/p/CI never reach public SA output — _fit_saturated_regression
+    consumes only coefficient/se — so the safe_inference spy is the only
+    observable surface for the cell convention)."""
+    df = make_panel()
+    cap = Capture(monkeypatch)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        diff_diff.SunAbraham(df_convention="normal").fit(
+            df, outcome="y", unit="unit", time="time", first_treat="first_treat"
+        )
+    _, tail_df = cap.snapshot()
+    assert len(tail_df) == 23, tail_df
+    assert all(v is None for v in tail_df), (
+        "every safe_inference call — cells included — must be normal-theory "
+        f"under 'normal'; captured {tail_df}"
+    )

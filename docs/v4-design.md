@@ -37,8 +37,10 @@ lands or is explicitly re-scheduled at the 4.0 cut - tracked by the matrix,
 enforced by CI.
 
 **Non-goals.** No numerical behavior changes in any phase except the two
-scheduled default policies ([M-004]..[M-006] df_convention, [M-080]
-auto-cluster) and the documented estimate/SE shift of the MPD merge
+scheduled default policies ([M-004]..[M-006] + [M-128]..[M-131]
+df_convention, [M-080] auto-cluster), the ledgered 3.9 defect fixes of the
+variance-consolidation program ([M-126] K_reference SEs, [M-127] tail-df
+consolidation), and the documented estimate/SE shift of the MPD merge
 (section 4.1). No
 new estimators. No merging across identification strategies: the staggered
 family (CallawaySantAnna, SunAbraham, ImputationDiD, TwoStageDiD, EfficientDiD,
@@ -490,12 +492,16 @@ domain vocabulary, not drift.
   Cross-sectional 2x2 estimators stay HC-robust unless `cluster=` is given.
   StackedDiD's hard-coded `cluster="unit"` default becomes an instance of the
   general policy rather than a special case.
-- **df_convention default flip** [M-004]..[M-006]: `"residual"` ->
-  `"cluster"` (G-1) at 4.0 - the locked #663 direction. Moves every clustered
+- **df_convention default flip** [M-004]..[M-006] + [M-128]..[M-131]:
+  `"residual"` -> `"cluster"` (G-1) at 4.0 - the locked #663 direction.
+  PR C ([M-127], 3.9) resolved the "evaluate extending the knob" item EARLY:
+  the knob is now a THREE-VALUE `{"residual","cluster","normal"}` surface on
+  DiD/MPD/TWFE/LinearRegression plus SunAbraham/WooldridgeDiD-OLS/StackedDiD/
+  ImputationDiD-pretrends (their 4.0 flips are [M-128]..[M-131]) and LPDiD
+  (default already `"cluster"`, no flip row). The flip moves every clustered
   p-value/CI; the flip PR updates `TestDfConvention` /
-  `test_moderate_t_pins_residual_df_convention` expectations, adds the
-  migration-guide entry, and evaluates extending the knob to standalone CR1-t
-  estimators (DEFERRED.md row).
+  `test_moderate_t_pins_residual_df_convention` / the per-estimator knob
+  suites' expectations and adds the migration-guide entry.
 - Constructor hygiene rides Phase 2: ContinuousDiD's `covariates` moves from
   `__init__` to `fit()` [M-084] (the one estimator with a data column in the
   constructor), and the shared `BaseEstimator` mixin replaces the 24
@@ -597,7 +603,7 @@ above; anything only one PR cares about stays in that PR's plan.**
 | 2: contract foundations | 3.9 | (a) results base + unified event-study representation [M-092] + to_dict completion + the Diagnostic marker base on the diagnostic result roster [M-091] (section 3.5); (b) `aggregate()` + fit(aggregate=) shims [M-020..M-027]; (c) param renames [M-030..M-047] [M-084] [M-086..M-089] + their results-field mirrors [M-094] [M-095] (section 8 rule 9) + the public-function completeness sweep [M-097..M-113] (section 8 rule 10) + the dCDH results mirror [M-114] + the fourth `robust` site [M-115] + BaseEstimator mixin + ContinuousDiD covariates move; (d) alias introductions [M-062] [M-063] + wrapper deprecations [M-070..M-077] + the two inference-surface policies: `n_bootstrap` semantic unification [M-081] and the wild-cluster-bootstrap roster guard [M-096] |
 | 3: merges | 3.9 | (a) TWFE event-study mode [M-010] + EventStudy warn [M-060] (gates: section 4.1's equivalence/divergence/pooled-parity test triple); (b) TripleDifference facade [M-013]; (c) CiC method= [M-015] |
 | 4: release + soak | 3.9 cut | Migration guide written (skeleton: section 10); maintainer cuts 3.9; maint/3.8 rule active |
-| 5: enforcement | 4.0 | Removals [M-010..M-016, M-030..M-047 old names, M-060, M-061, M-070..M-077, M-001..M-003] + the amendment's old names [M-094] [M-095] [M-097..M-115] (incl. their consumer migrations and the `clean_control` serialized reporting key); storage flips [M-050..M-058]; default policies [M-004..M-006, M-080]; warning retirement [M-007]; fastpath go/no-go [M-008]; diagnostic-family docs/roster reorganization [M-090]; sentinel retirement [M-093]; docs/llms.txt/README refresh |
+| 5: enforcement | 4.0 | Removals [M-010..M-016, M-030..M-047 old names, M-060, M-061, M-070..M-077, M-001..M-003] + the amendment's old names [M-094] [M-095] [M-097..M-115] (incl. their consumer migrations and the `clean_control` serialized reporting key); storage flips [M-050..M-058]; default policies [M-004..M-006, M-128..M-131, M-080]; warning retirement [M-007]; fastpath go/no-go [M-008]; diagnostic-family docs/roster reorganization [M-090]; sentinel retirement [M-093]; docs/llms.txt/README refresh |
 | 6: front door | 4.1 | `event_study(data, outcome, unit, time, first_treat, estimator=...)` comparison entry point over the staggered family (sketch only; specified in its own plan) |
 
 **3.9-cut checklist (un-rowed obligations).** `test_due_rows_are_terminal`
@@ -743,11 +749,11 @@ forever - a removed symbol resurrecting is a test failure.
   class row (schema-enforced). Top-level `diff_diff:Name` class/function rows
   and alias rows also assert `__all__` membership consistent with their
   status (stale `import *` entries fail). The shipped row ids are a
-  committed snapshot in the enforcement test (105 as of the clustered-CR1
-  K_reference convergence row: Phase 1 + the diagnostic-family amendment +
+  committed snapshot in the enforcement test (110 as of the tail-df
+  consolidation family: Phase 1 + the diagnostic-family amendment +
   the M-092/M-093 results-contract rows + the M-094..M-096 amendment rows +
   the M-097..M-115 completeness sweep + M-117/M-122 + the ETWFE
-  reference-period pair M-123/M-124 + M-125 + M-126;
+  reference-period pair M-123/M-124 + M-125 + M-126 + M-127..M-131;
   the snapshot extends by a new id range in the same diff that appends
   rows): ids are never deleted or reused, and the test fails if any
   snapshot id disappears.

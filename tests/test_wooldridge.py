@@ -4321,3 +4321,204 @@ class TestComparisonSupportFiltering:
             )
         assert np.isfinite(res.overall_att)
         assert np.isfinite(res.overall_se)
+
+
+class TestWooldridgeDfConvention:
+    """The three-value df_convention knob on WooldridgeDiD OLS arms (3.9 / M-127)."""
+
+    @staticmethod
+    def _panel(seed=5):
+        rng = np.random.default_rng(seed)
+        rows = []
+        for u in range(50):
+            coh = [0, 4, 5][u % 3]
+            for t in range(1, 7):
+                eff = 0.6 if (coh and t >= coh) else 0.0
+                rows.append(
+                    dict(
+                        unit=u,
+                        time=t,
+                        cohort=coh,
+                        outcome=0.2 * u / 50 + 0.1 * t + eff + rng.standard_normal() * 0.5,
+                    )
+                )
+        return pd.DataFrame(rows)
+
+    _kw = dict(outcome="outcome", unit="unit", time="time", cohort="cohort")
+
+    @staticmethod
+    def _t_p(t_stat, df):
+        from scipy import stats
+
+        return 2 * stats.t.sf(abs(t_stat), df)
+
+    @staticmethod
+    def _z_p(t_stat):
+        from scipy import stats
+
+        return 2 * stats.norm.sf(abs(t_stat))
+
+    def test_default_hc1_is_t_residual_not_z(self):
+        """The defect fix: the auto-clustered hc1 arm moved z -> t(residual)."""
+        res = WooldridgeDiD().fit(self._panel(), **self._kw)
+        assert res.overall_p_value != self._z_p(res.overall_t_stat)
+        # residual df = n - k_kept - absorbed [unit, time] rank; recover it
+        n = 300
+        match = [
+            d
+            for d in range(2, n)
+            if abs(res.overall_p_value - self._t_p(res.overall_t_stat, d)) < 1e-13
+        ]
+        assert len(match) == 1, match
+        # per-cell inference shares the same df
+        _, eff = next(iter(res.group_time_effects.items()))
+        assert eff["p_value"] == pytest.approx(self._t_p(eff["t_stat"], match[0]), rel=1e-12)
+
+    def test_cluster_matches_g_minus_1(self):
+        data = self._panel()
+        r0 = WooldridgeDiD().fit(data, **self._kw)
+        r1 = WooldridgeDiD(df_convention="cluster").fit(data, **self._kw)
+        G = data["unit"].nunique()
+        assert r1.overall_att == r0.overall_att and r1.overall_se == r0.overall_se
+        assert r1.overall_p_value == pytest.approx(self._t_p(r1.overall_t_stat, G - 1), rel=1e-12)
+
+    def test_normal_reproduces_pre39_z(self):
+        data = self._panel()
+        r0 = WooldridgeDiD().fit(data, **self._kw)
+        rn = WooldridgeDiD(df_convention="normal").fit(data, **self._kw)
+        assert rn.overall_att == r0.overall_att and rn.overall_se == r0.overall_se
+        assert rn.overall_p_value == pytest.approx(self._z_p(rn.overall_t_stat), rel=1e-14)
+
+    def test_classical_and_hc2_bit_identical_under_default(self):
+        """classical/hc2 already used t(n - rank(X)); the ONE resolved
+        fallback must reproduce those values exactly (n - k_kept on the
+        full-dummy design)."""
+        data = self._panel()
+        for vt in ("classical", "hc2"):
+            res = WooldridgeDiD(vcov_type=vt).fit(data, **self._kw)
+            _, eff = next(iter(res.group_time_effects.items()))
+            n = len(data)
+            match = [
+                d
+                for d in range(2, n)
+                if abs(eff["p_value"] - self._t_p(eff["t_stat"], n - d)) < 1e-12
+            ]
+            assert match, f"{vt} cell not on t(n-k)"
+
+    def test_hc1_cohort_trends_uses_full_dummy_residual_df(self):
+        """The easy-to-miss lane: hc1 + cohort_trends routes FULL-DUMMY, so
+        its residual df is n - k_kept (no absorbed-rank subtraction)."""
+        data = self._panel()
+        res = WooldridgeDiD(cohort_trends=True).fit(data, **self._kw)
+        res_within = WooldridgeDiD().fit(data, **self._kw)
+        _, eff = next(iter(res.group_time_effects.items()))
+        n = len(data)
+        # full-dummy residual df: recover as n - k_kept
+        match_fd = [
+            k
+            for k in range(1, 200)
+            if abs(eff["p_value"] - self._t_p(eff["t_stat"], n - k)) < 1e-12
+        ]
+        assert match_fd, "cohort_trends hc1 cell not on t(n - k_kept)"
+        # and the within arm's df differs (it subtracts the absorbed rank on
+        # top of a much smaller visible k)
+        _, effw = next(iter(res_within.group_time_effects.items()))
+        match_w = [
+            d for d in range(2, n) if abs(effw["p_value"] - self._t_p(effw["t_stat"], d)) < 1e-13
+        ]
+        assert match_w and (n - match_fd[0]) != match_w[0]
+
+    def test_postfit_aggregate_reproduces_fit_time_convention(self):
+        """aggregate() consumes the stored resolved fallback on every OLS arm."""
+        res = WooldridgeDiD().fit(self._panel(), **self._kw)
+        n = 300
+        match = [
+            d
+            for d in range(2, n)
+            if abs(res.overall_p_value - self._t_p(res.overall_t_stat, d)) < 1e-13
+        ]
+        agg = res.aggregate("group")
+        ge = next(iter(agg.group_effects.values()))
+        assert ge["p_value"] == pytest.approx(self._t_p(ge["t_stat"], match[0]), rel=1e-12)
+        simple = res.aggregate("simple")
+        assert simple.overall_p_value == pytest.approx(
+            self._t_p(simple.overall_t_stat, match[0]), rel=1e-12
+        )
+
+    def test_bootstrap_aggregate_group_stays_analytical_t(self):
+        """On a bootstrap fit only the overall p/CI are percentile-overridden;
+        post-fit aggregate('group') re-derives ANALYTICAL inference from the
+        stored fallback (the _df_analytic_fallback-stays-live behavior)."""
+        res = WooldridgeDiD(n_bootstrap=20, seed=1).fit(self._panel(), **self._kw)
+        agg = res.aggregate("group")
+        ge = next(iter(agg.group_effects.values()))
+        assert np.isfinite(ge["p_value"])
+        assert ge["p_value"] != self._z_p(ge["t_stat"]), "bootstrap fit reverted aggregates to z"
+
+    def test_glm_warns_on_explicit_nondefault_only(self):
+        data = self._panel()
+        data["bin"] = (data["outcome"] > data["outcome"].median()).astype(int)
+        kw = dict(outcome="bin", unit="unit", time="time", cohort="cohort")
+        with pytest.warns(UserWarning, match="no effect on the logit/poisson"):
+            WooldridgeDiD(method="logit", df_convention="cluster").fit(data, **kw)
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            WooldridgeDiD(method="logit").fit(data, **kw)
+        assert not any("no effect on the logit" in str(w.message) for w in caught)
+
+    def test_pickle_setstate_migrates_df_one_way(self):
+        """A pre-3.9 pickle stores _df_one_way; __setstate__ carries it into
+        _df_analytic_fallback so a legacy result's aggregate() keeps its
+        fit-time classical/hc2 inference."""
+        res = WooldridgeDiD(vcov_type="classical").fit(self._panel(), **self._kw)
+        legacy_df = res._df_analytic_fallback
+        state = dict(res.__dict__)
+        state.pop("_df_analytic_fallback")
+        state.pop("df_convention", None)
+        state["_df_one_way"] = legacy_df
+        revived = WooldridgeDiDResults.__new__(WooldridgeDiDResults)
+        revived.__setstate__(state)
+        assert revived._df_analytic_fallback == legacy_df
+        assert not hasattr(revived, "_df_one_way") or "_df_one_way" not in revived.__dict__
+        assert revived.df_convention == "residual"
+        agg = revived.aggregate("simple")
+        assert np.isfinite(agg.overall_p_value)
+
+    def test_survey_df_precedence_over_knob(self):
+        """Survey design df wins under EVERY knob value: the three fits are
+        bit-identical on overall AND per-cell inference (the knob is never
+        consulted on surveyed fits)."""
+        from diff_diff.survey import SurveyDesign
+
+        data = self._panel()
+        data["w"] = 1.0 + (data["unit"] % 5) * 0.2
+        data["stratum"] = data["unit"] % 4
+        sd = SurveyDesign(weights="w", strata="stratum", psu="unit")
+        fits = {
+            conv: WooldridgeDiD(df_convention=conv).fit(data, survey_design=sd, **self._kw)
+            for conv in ("residual", "cluster", "normal")
+        }
+        base = fits["residual"]
+        # the survey df is finite -> t inference even under "normal"
+        assert base.overall_p_value != self._z_p(base.overall_t_stat)
+        for conv in ("cluster", "normal"):
+            r = fits[conv]
+            assert r.overall_p_value == base.overall_p_value
+            assert r.overall_conf_int == base.overall_conf_int
+            for k, eff in base.group_time_effects.items():
+                assert r.group_time_effects[k]["p_value"] == eff["p_value"]
+
+    def test_validation_and_transactional_set_params(self):
+        with pytest.raises(ValueError, match="df_convention"):
+            WooldridgeDiD(df_convention="bogus")
+        est = WooldridgeDiD()
+        with pytest.raises(ValueError, match="df_convention"):
+            est.set_params(df_convention="bogus", alpha=0.10)
+        assert est.df_convention == "residual" and est.alpha == 0.05
+        # Valid value + unknown key: the unknown-key rejection must also
+        # leave the estimator fully unchanged (no partial application).
+        before = est.get_params()
+        with pytest.raises(ValueError, match="Unknown parameter"):
+            est.set_params(df_convention="normal", nonexistent_param=1)
+        assert est.get_params() == before
+        assert WooldridgeDiD(df_convention="cluster").get_params()["df_convention"] == "cluster"

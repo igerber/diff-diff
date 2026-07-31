@@ -98,7 +98,7 @@ rows:
     old_default: "'residual'"
     new_default: "'cluster'"
     code_refs: [diff_diff/linalg.py]
-    notes: "Evaluate extending the knob to standalone CR1-t estimators in the same PR (DEFERRED.md row)."
+    notes: "The 'evaluate extending the knob to standalone CR1-t estimators' item was resolved EARLY by PR C ([M-127], 3.9): the knob now lives on SunAbraham/WooldridgeDiD/StackedDiD/ImputationDiD (their flips are [M-128]..[M-131]) and LPDiD (already at 'cluster', no flip row)."
   - id: M-007
     kind: warning-retirement
     group: obligation-warning-retirements
@@ -1392,3 +1392,68 @@ rows:
     test_ref: tests/test_aggregate_contract.py
     code_refs: [diff_diff/aggregation.py, diff_diff/__init__.py]
     notes: "AggregationResult: the tabular container every non-event-study aggregation returns (aggregate(type='event_study') returns EventStudyResults instead, giving [M-092]'s container its public producer). Pinned 12-column schema with summary/to_dict/to_dataframe. Three schema choices are grounded in what the estimators actually produce: 'target' is PER-ROW so one container can carry two aligned estimands over the same labels; 'n_kind' reuses EventStudyResults' vocabulary rather than inventing units/obs; and 'weight' is NULLABLE because CallawaySantAnna's group aggregation weights (g,t) cells equally within each cohort and forms no cross-cohort mass. introduced_in gates the 3.9 cut ([M-091]/[M-092] pattern); deprecated_in stays null so the early-flip guard does not fire against the PR that ships it."
+  - id: M-127
+    kind: behavior
+    group: tail-df-consolidation
+    old: "diff_diff.utils:safe_inference"
+    new: null
+    introduced_in: "3.9"
+    deprecated_in: null
+    removed_in: null
+    status: done
+    phase: 2
+    test_ref: tests/test_variance_conventions.py
+    code_refs: [diff_diff/utils.py, diff_diff/linalg.py, diff_diff/estimators.py, diff_diff/twfe.py, diff_diff/results.py, diff_diff/sun_abraham.py, diff_diff/wooldridge.py, diff_diff/wooldridge_results.py, diff_diff/stacked_did.py, diff_diff/stacked_did_results.py, diff_diff/imputation.py, diff_diff/imputation_results.py, diff_diff/lpdid.py, diff_diff/lpdid_results.py, docs/methodology/REGISTRY.md, docs/methodology/variance-conventions.md]
+    notes: "Tail-df consolidation (D4 + the normal-theory tail-df defect family of the 3.9 variance-consolidation program, PR C). df_convention becomes a THREE-VALUE knob {'residual','cluster','normal'} on DiD/MPD/TWFE/LinearRegression (previously two-value; existing values unchanged, M-004..M-006 old_default untouched; 'normal' is deliberate z at the fallback level on EVERY fit, unclustered and conley included) and is EXTENDED to SunAbraham / WooldridgeDiD(OLS arms) / StackedDiD / ImputationDiD(pretrends lead regression) / LPDiD via the new utils.resolve_tail_df fallback resolver (survey/replicate df and hc2_bm Bell-McCaffrey per-coefficient/contrast DOF keep precedence under every value; 'cluster' fails closed warn+NaN at G<=1; unclustered/conley fits are inert for 'cluster'; a non-positive residual df falls back to normal theory with a warning). DEFECT FIX shipped as the new 'residual' default: WooldridgeDiD default-hc1 (within AND the hc1+cohort_trends full-dummy arm), StackedDiD, SunAbraham aggregates (D4: one fit reported residual-t cells and normal-theory aggregates - aggregates now reuse the saturated regression's df_ so cells and aggregates share ONE df source), and ImputationDiD pretrends leads previously passed df=None (silent normal-theory z) on clustered analytical paths; at |t|=2 z understates the t(G-1) p-value by 24.2% at G=20. Under the residual default the numeric movement is z vs t(large residual df) - small but honest; the G-1 convergence with fixest/Stata is the 4.0 flip. 'normal' reproduces the pre-3.9 numbers on the fixed surfaces' affected lanes (on lanes already at t - unclustered DiD-family fits, Wooldridge classical/hc2, SA cells - it is a NEW deliberate z option, not a compatibility path). LPDiD keeps its Stata-anchored t(G-1) as default 'cluster' (bit-identical; already at the 4.0 target, no flip row; degenerate lanes - unclustered refit, RA G<=1, saturated early return - keep literal df=None under all values; RA-path 'residual' = n_total - k0_kept - 1, the pooled M-estimator parameter count, a library convention with no external anchor since Stata teffects ra reports z). Wooldridge logit/poisson arms (survey df or normal theory, knob-independent, explicit-non-default warns) and all IF-based estimators (CallawaySantAnna, TwoStageDiD, dCDH, EfficientDiD, ContinuousDiD, ChangesInChanges, SyntheticDiD, HAD - L3) plus OLS-based TripleDifference/TROP are out of the knob's scope. Wild-cluster-bootstrap p/CIs are test-inversion based and invariant. Provenance: df_convention echoed on the five standalone results containers; SunAbraham/StackedDiD gain inference_df (the overall-ATT df actually used; None under bootstrap); WooldridgeDiDResults._df_one_way renamed _df_analytic_fallback (now the resolved survey-first fallback on ALL OLS arms, live on bootstrap fits so post-fit aggregate() reproduces fit-time inference) with __setstate__ pickle migration. Defaults for the four new residual surfaces flip to 'cluster' at 4.0 (M-128..M-131, same policy as M-004..M-006). introduced_in gates the 3.9 cut; deprecated_in stays null so the early-flip guard does not fire against the PR that ships it."
+  - id: M-128
+    kind: default-flip
+    group: df-convention-flip
+    old: "diff_diff:SunAbraham[df_convention]"
+    new: null
+    deprecated_in: "4.0"
+    removed_in: null
+    status: planned
+    phase: 5
+    old_default: "'residual'"
+    new_default: "'cluster'"
+    code_refs: [diff_diff/sun_abraham.py]
+    notes: "PR C ([M-127]) extended the knob here with default 'residual'; flips with [M-004]..[M-006] at 4.0 (G-1 = the fixest/Stata clustered convention). Moves every clustered p-value/CI on this surface; covered by the same migration note."
+  - id: M-129
+    kind: default-flip
+    group: df-convention-flip
+    old: "diff_diff:WooldridgeDiD[df_convention]"
+    new: null
+    deprecated_in: "4.0"
+    removed_in: null
+    status: planned
+    phase: 5
+    old_default: "'residual'"
+    new_default: "'cluster'"
+    code_refs: [diff_diff/wooldridge.py]
+    notes: "PR C ([M-127]) extended the knob here with default 'residual' (OLS arms only; GLM arms are knob-independent); flips with [M-004]..[M-006] at 4.0. Moves every clustered OLS p-value/CI on this surface; covered by the same migration note."
+  - id: M-130
+    kind: default-flip
+    group: df-convention-flip
+    old: "diff_diff:StackedDiD[df_convention]"
+    new: null
+    deprecated_in: "4.0"
+    removed_in: null
+    status: planned
+    phase: 5
+    old_default: "'residual'"
+    new_default: "'cluster'"
+    code_refs: [diff_diff/stacked_did.py]
+    notes: "PR C ([M-127]) extended the knob here with default 'residual'; flips with [M-004]..[M-006] at 4.0. The stacked residual df is typically large (t ~= z), so the flip to G-1 is the materially moving step on this surface; covered by the same migration note."
+  - id: M-131
+    kind: default-flip
+    group: df-convention-flip
+    old: "diff_diff:ImputationDiD[df_convention]"
+    new: null
+    deprecated_in: "4.0"
+    removed_in: null
+    status: planned
+    phase: 5
+    old_default: "'residual'"
+    new_default: "'cluster'"
+    code_refs: [diff_diff/imputation.py]
+    notes: "PR C ([M-127]) extended the knob here with default 'residual' (pretrends lead regression only; BJS overall inference and the joint pretrend Wald F are knob-independent); flips with [M-004]..[M-006] at 4.0; covered by the same migration note."

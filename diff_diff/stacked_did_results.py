@@ -89,9 +89,20 @@ class StackedDiDResults(BaseResults):
         estimated event time to the df actually passed to
         ``safe_inference`` for its stored p-value/CI (per-event
         Bell-McCaffrey Satterthwaite df under ``hc2_bm``; the scalar survey
-        df under survey designs), or NaN when the row used normal theory,
-        the df was undefined, or hc2_bm failed closed. None when no event
-        study was requested.
+        df under survey designs; the ``df_convention``-resolved analytical
+        fallback otherwise — finite residual df under the 3.9 default,
+        ``G − 1`` under "cluster"), or NaN when the row used normal theory
+        (``df_convention="normal"``), the df was undefined, or hc2_bm
+        failed closed. None when no event study was requested.
+    df_convention : str, optional
+        The estimator's ``df_convention`` configuration echoed onto the
+        results ("residual" | "cluster" | "normal"; added 3.9).
+    inference_df : float, optional
+        The df the stored overall-ATT p-value/CI's ``safe_inference``
+        actually received: the BM contrast df under ``hc2_bm``, the
+        survey/replicate df on survey fits, else the
+        ``df_convention``-resolved analytical fallback. None when the
+        overall inference used normal theory or failed closed.
     """
 
     overall_att: float
@@ -145,6 +156,9 @@ class StackedDiDResults(BaseResults):
     event_study_vcov: Optional[np.ndarray] = field(default=None, repr=False)
     event_study_vcov_index: Optional[List[int]] = field(default=None, repr=False)
     event_study_df: Optional[Dict[int, float]] = field(default=None, repr=False)
+    # Appended LAST (generated __init__ positional indexes are public API).
+    df_convention: Optional[str] = None
+    inference_df: Optional[float] = None
 
     # --- Inference-field aliases (balance/external-adapter compatibility) ---
     @property
@@ -404,6 +418,10 @@ class StackedDiDResults(BaseResults):
             result["cluster_name"] = self.cluster_name
         if self.n_clusters is not None:
             result["n_clusters"] = self.n_clusters
+        if self.df_convention is not None:
+            result["df_convention"] = self.df_convention
+        if self.inference_df is not None:
+            result["inference_df"] = self.inference_df
         return result
 
     def to_dataframe(self, level: str = "event_study") -> pd.DataFrame:

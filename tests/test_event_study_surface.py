@@ -1287,9 +1287,13 @@ def test_stacked_hc2_bm_per_row_df():
         if et in bm.event_study_df and np.isfinite(bm.event_study_df[et]):
             assert df_val == bm.event_study_df[et]
 
-    # hc1 non-survey: normal-theory inference -> no df anywhere.
+    # hc1 non-survey (3.9 / M-127): the df_convention default resolves to
+    # t(pooled residual df), so every finite-p row now carries that df.
     s_hc1 = build_event_study_surface(hc1)
-    assert np.isnan(s_hc1.df).all()
+    finite_hc1 = np.isfinite(s_hc1.p_value)
+    assert np.isfinite(s_hc1.df[finite_hc1]).all()
+    vals = {v for v in s_hc1.df[finite_hc1].tolist()}
+    assert len(vals) == 1 and vals == {hc1.inference_df}
 
 
 def test_stacked_survey_df_broadcast():
@@ -1562,9 +1566,12 @@ def test_sun_abraham_hc2_bm_per_row_df():
         if et in bm.event_study_df and np.isfinite(bm.event_study_df[et]):
             assert df_val == bm.event_study_df[et]
 
-    # Plain analytic fit: normal-theory inference -> no df anywhere.
-    assert all(np.isnan(v) for v in plain.event_study_df.values())
-    assert np.isnan(build_event_study_surface(plain).df).all()
+    # Plain analytic fit (3.9 / M-127, the D4 fix): aggregates share the
+    # saturated fit's residual df, so provenance is FINITE on every row.
+    assert all(np.isfinite(v) and v > 0 for v in plain.event_study_df.values())
+    s_plain = build_event_study_surface(plain)
+    finite_plain = np.isfinite(s_plain.p_value)
+    assert np.isfinite(s_plain.df[finite_plain]).all()
 
 
 def test_sun_abraham_survey_df_broadcast():

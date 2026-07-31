@@ -20,12 +20,21 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 import numpy as np
 import pandas as pd
 
-from diff_diff.linalg import compute_robust_vcov, solve_logit, solve_ols, solve_poisson
+from diff_diff.linalg import (
+    compute_robust_vcov,
+    effective_cluster_count,
+    solve_logit,
+    solve_ols,
+    solve_poisson,
+)
 from diff_diff.utils import (
     absorbed_fe_cr1_k_increment,
+    absorbed_fe_rank,
     pre_demean_norms,
+    resolve_tail_df,
     safe_inference,
     snap_absorbed_regressors,
+    validate_df_convention,
     within_transform,
 )
 from diff_diff.wooldridge_results import WooldridgeDiDResults
@@ -945,6 +954,18 @@ class WooldridgeDiD:
         The Section 8 trend specification is therefore unidentified on this
         branch. Use ``control_group="not_yet_treated"`` (the default) for
         the cohort_trends surface.
+    df_convention : {"residual", "cluster", "normal"}, default "residual"
+        Degrees-of-freedom convention for the OLS analytical t/p/CI (per-cell
+        and aggregated). ``"residual"`` (default) uses the fitted residual df
+        — the 3.9 fix: the default hc1 arms previously used silent
+        normal-theory z; classical/hc2 keep their historical ``n − rank(X)``
+        values bit-for-bit; ``"cluster"`` uses the Stata/fixest cluster df
+        ``G − 1`` on hc1-clustered fits (inert on one-way and conley
+        families); ``"normal"`` deliberately uses normal-theory z at the
+        fallback level. Survey design df and hc2_bm Bell-McCaffrey DOF
+        always take precedence; the logit/poisson arms are knob-independent
+        (survey df or normal theory — an explicitly non-default value warns
+        at fit time). The default flips to ``"cluster"`` at v4.
     """
 
     def __init__(
@@ -966,6 +987,7 @@ class WooldridgeDiD:
         conley_metric: str = "haversine",
         conley_kernel: str = "bartlett",
         conley_lag_cutoff: Optional[int] = None,
+        df_convention: str = "residual",
     ) -> None:
         self._validate_constructor_args(
             method=method,
@@ -974,6 +996,7 @@ class WooldridgeDiD:
             bootstrap_weights=bootstrap_weights,
             vcov_type=vcov_type,
             cohort_trends=cohort_trends,
+            df_convention=df_convention,
         )
 
         self.method = method
@@ -993,6 +1016,7 @@ class WooldridgeDiD:
         self.conley_metric = conley_metric
         self.conley_kernel = conley_kernel
         self.conley_lag_cutoff = conley_lag_cutoff
+        self.df_convention = df_convention
         # Track whether the user explicitly opted out of the "hc1" default.
         # The auto-cluster-at-unit default in `_fit_ols` is suppressed only
         # when the user explicitly opts into a one-way family (``hc2``,
@@ -1013,6 +1037,7 @@ class WooldridgeDiD:
         bootstrap_weights: str,
         vcov_type: str,
         cohort_trends: bool = False,
+        df_convention: str = "residual",
     ) -> None:
         """Shared validation for both ``__init__`` and ``set_params``.
 
@@ -1038,6 +1063,7 @@ class WooldridgeDiD:
                 f"vcov_type must be one of "
                 f"{{'classical','hc1','hc2','hc2_bm','conley'}}; got '{vcov_type}'"
             )
+        validate_df_convention(df_convention)
         if method != "ols" and vcov_type != "hc1":
             raise NotImplementedError(
                 f"WooldridgeDiD(method={method!r}, vcov_type={vcov_type!r}) is "
@@ -1086,6 +1112,7 @@ class WooldridgeDiD:
             "conley_metric": self.conley_metric,
             "conley_kernel": self.conley_kernel,
             "conley_lag_cutoff": self.conley_lag_cutoff,
+            "df_convention": self.df_convention,
         }
 
     def set_params(self, **params: Any) -> "WooldridgeDiD":
@@ -1115,6 +1142,7 @@ class WooldridgeDiD:
             "bootstrap_weights": params.get("bootstrap_weights", self.bootstrap_weights),
             "vcov_type": params.get("vcov_type", self.vcov_type),
             "cohort_trends": params.get("cohort_trends", self.cohort_trends),
+            "df_convention": params.get("df_convention", self.df_convention),
         }
         self._validate_constructor_args(**pending)
 
@@ -1940,6 +1968,20 @@ class WooldridgeDiD:
         else:
             X_design = X_int
 
+        # Inert-config warning (no-silent-failures): the df_convention knob
+        # applies to the OLS analytical arms only. The logit/poisson QMLE
+        # paths use the survey design df when present and normal theory
+        # otherwise, independent of the knob — an explicitly non-default
+        # value would be silently ignored there.
+        if self.method != "ols" and self.df_convention != "residual":
+            warnings.warn(
+                f"df_convention={self.df_convention!r} has no effect on the "
+                "logit/poisson arms — their inference uses the survey design "
+                "df when present and normal theory otherwise.",
+                UserWarning,
+                stacklevel=2,
+            )
+
         if self.method == "ols":
             results = self._fit_ols(
                 sample,
@@ -2396,23 +2438,47 @@ class WooldridgeDiD:
         overall_att_bm_dof: Optional[float] = None
         per_cell_bm_dof: Dict[Tuple, float] = {}
         bm_artifacts: Optional[Tuple[np.ndarray, np.ndarray, np.ndarray, Dict[Tuple, int]]] = None
-        # Residual DOF for one-way ``vcov_type in {"classical","hc2"}`` paths
-        # (full-dummy, no survey). Matches R's ``lm()`` / ``coef_test()`` use
-        # of ``n - rank(X)`` for the t-distribution under both classical OLS
-        # SE and ``sandwich::vcovHC(type="HC2")``. ``None`` on hc1 /
-        # hc2_bm / surveyed paths (those use their own DOF threading or
-        # df_inf). Mirrors R's t-distribution convention so per-cell +
-        # aggregate p-values/CIs are not normal-theory under small samples.
-        df_one_way: Optional[float] = None
-        if (
-            self.vcov_type in ("classical", "hc2")
-            and use_full_dummy
-            and resolved is None
-            and vcov is not None
-        ):
+        # Knob-resolved analytical fallback df for ALL OLS arms (3.9 tail-df
+        # consolidation): ONE variable that every non-BM branch of the 8a/8b
+        # ladders below consumes. Residual df per design shape — full-dummy
+        # arms (classical/hc2/hc2_bm/cohort_trends, incl. hc1+cohort_trends)
+        # use ``n − k_kept``, exactly the historical ``df_one_way`` formula,
+        # so classical/hc2 stay bit-identical under the default; the
+        # within-transform arm (hc1/conley) additionally subtracts the
+        # absorbed [unit, time] rank. Survey df keeps precedence (df_inf);
+        # otherwise resolve through the ``df_convention`` knob — residual t
+        # by default (the 3.9 fix: hc1 arms previously dropped to silent
+        # normal theory), ``G − 1`` under "cluster" (hc1-clustered only;
+        # conley has no documented G−1 reference and passes
+        # ``n_clusters=None``), z under "normal". ``resolve_tail_df``'s
+        # guard returns None on a non-positive residual df, reproducing the
+        # old ``df_one_way = NaN → df_inf`` degenerate lane.
+        df_fallback: Optional[float] = None
+        if resolved is not None:
+            df_fallback = df_inf  # survey design df wins under every knob value
+        elif vcov is not None:
             n_kept = int((~np.isnan(coefs)).sum())
-            df_candidate = X.shape[0] - n_kept
-            df_one_way = float(df_candidate) if df_candidate > 0 else float("nan")
+            if use_full_dummy:
+                df_res = float(X.shape[0] - n_kept)
+            else:
+                df_res = float(
+                    X.shape[0]
+                    - n_kept
+                    - absorbed_fe_rank(
+                        sample,
+                        [unit, time],
+                        has_intercept_col=False,
+                        weights=survey_weights,
+                    )
+                )
+            _g_eff_w = (
+                effective_cluster_count(cluster_ids, survey_weights)
+                if (self.vcov_type == "hc1" and cluster_ids is not None)
+                else None
+            )
+            df_fallback = resolve_tail_df(
+                self.df_convention, residual_df=df_res, n_clusters=_g_eff_w
+            )
         if (
             self.vcov_type == "hc2_bm"
             and use_full_dummy
@@ -2505,12 +2571,13 @@ class WooldridgeDiD:
             bm_artifacts = (X_red, cluster_ids, bread_red, reduced_coef_idx_map)
 
         # 8a. Apply DOF threading (or fail-closed NaN) to ``gt_effects``:
-        # hc2_bm uses per-cell BM Satterthwaite DOF; classical/hc2 (one-way,
-        # no survey) use the residual ``df_one_way = n - rank(X)`` so
-        # p-values/CIs match R ``lm()`` / ``coef_test()`` t-distribution
-        # instead of normal-theory; hc1 / surveyed paths use ``df_inf``
-        # (survey df or None). Per ``feedback_bm_contrast_dof_fail_closed``:
-        # NaN BM DOF emits NaN inference fields (never normal-theory).
+        # hc2_bm uses per-cell BM Satterthwaite DOF; every other OLS arm
+        # consumes the ONE knob-resolved ``df_fallback`` (survey df on
+        # surveyed fits, else the df_convention resolution over the per-shape
+        # residual df — classical/hc2 reproduce the historical df_one_way
+        # values bit-for-bit under the default). Per
+        # ``feedback_bm_contrast_dof_fail_closed``: NaN BM DOF emits NaN
+        # inference fields (never normal-theory).
         for (g, t), eff in gt_effects.items():
             if self.vcov_type == "hc2_bm" and use_full_dummy and resolved is None:
                 cell_dof = per_cell_bm_dof.get((g, t), float("nan"))
@@ -2522,19 +2589,13 @@ class WooldridgeDiD:
                     t_stat = float("nan")
                     p_value = float("nan")
                     conf_int = (float("nan"), float("nan"))
-            elif (
-                self.vcov_type in ("classical", "hc2")
-                and use_full_dummy
-                and resolved is None
-                and df_one_way is not None
-                and np.isfinite(df_one_way)
-            ):
-                t_stat, p_value, conf_int = safe_inference(
-                    eff["att"], eff["se"], alpha=self.alpha, df=df_one_way
-                )
             else:
+                # Every non-BM arm consumes the ONE knob-resolved fallback:
+                # survey df on surveyed fits, else the df_convention-resolved
+                # analytical df (residual t by default; classical/hc2
+                # reproduce the historical df_one_way values bit-for-bit).
                 t_stat, p_value, conf_int = safe_inference(
-                    eff["att"], eff["se"], alpha=self.alpha, df=df_inf
+                    eff["att"], eff["se"], alpha=self.alpha, df=df_fallback
                 )
             eff["t_stat"] = t_stat
             eff["p_value"] = p_value
@@ -2542,9 +2603,8 @@ class WooldridgeDiD:
 
         # 8b. Simple aggregation (always computed). DOF threading mirrors 8a:
         # hc2_bm uses the overall ATT BM contrast DOF (fail-closed NaN if
-        # unavailable); classical/hc2 (one-way, no survey) use the residual
-        # ``df_one_way``; hc1 / surveyed paths use ``df_inf`` (survey df or
-        # None).
+        # unavailable); every other arm uses the knob-resolved ``df_fallback``
+        # (survey df on surveyed fits, else the df_convention resolution).
         if self.vcov_type == "hc2_bm" and use_full_dummy and resolved is None:
             if overall_att_bm_dof is not None and np.isfinite(overall_att_bm_dof):
                 overall = _compute_weighted_agg(
@@ -2574,19 +2634,9 @@ class WooldridgeDiD:
                     "p_value": float("nan"),
                     "conf_int": (float("nan"), float("nan")),
                 }
-        elif (
-            self.vcov_type in ("classical", "hc2")
-            and use_full_dummy
-            and resolved is None
-            and df_one_way is not None
-            and np.isfinite(df_one_way)
-        ):
-            overall = _compute_weighted_agg(
-                gt_effects, gt_weights, gt_keys_ordered, gt_vcov, self.alpha, df=df_one_way
-            )
         else:
             overall = _compute_weighted_agg(
-                gt_effects, gt_weights, gt_keys_ordered, gt_vcov, self.alpha, df=df_inf
+                gt_effects, gt_weights, gt_keys_ordered, gt_vcov, self.alpha, df=df_fallback
             )
 
         # Metadata
@@ -2642,7 +2692,8 @@ class WooldridgeDiD:
             _df_survey=df_inf,
             _bm_per_cell_dof=per_cell_bm_dof,
             _bm_artifacts=bm_artifacts,
-            _df_one_way=df_one_way,
+            _df_analytic_fallback=df_fallback,
+            df_convention=self.df_convention,
             cohort_trend_coefs=cohort_trend_coefs,
             cohort_trends=self.cohort_trends,
         )
@@ -2969,6 +3020,11 @@ class WooldridgeDiD:
             _gt_vcov=gt_vcov,
             _gt_keys=gt_keys_ordered,
             _df_survey=df_inf,
+            # GLM inference is knob-independent (df_inf = survey df or None);
+            # store it as the analytic fallback so post-fit aggregate()
+            # reproduces the fit-time inference on logit/poisson results.
+            _df_analytic_fallback=df_inf,
+            df_convention=self.df_convention,
         )
 
     def _fit_poisson(
@@ -3226,4 +3282,9 @@ class WooldridgeDiD:
             _gt_vcov=gt_vcov,
             _gt_keys=gt_keys_ordered,
             _df_survey=df_inf,
+            # GLM inference is knob-independent (df_inf = survey df or None);
+            # store it as the analytic fallback so post-fit aggregate()
+            # reproduces the fit-time inference on logit/poisson results.
+            _df_analytic_fallback=df_inf,
+            df_convention=self.df_convention,
         )

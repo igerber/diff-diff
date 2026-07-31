@@ -4367,15 +4367,18 @@ class LinearRegression:
         neither is formally PSD-guaranteed in the radial pairwise form
         (Conley 1999's explicit PSD Bartlett formula is the 2-D separable
         product window, Eq 3.14, not the 1-D radial pairwise form).
-    df_convention : {"residual", "cluster"}, default "residual"
-        Degrees-of-freedom convention for ``get_inference`` t/p/CI on
-        clustered fits. ``"residual"`` uses the fitted residual df;
-        ``"cluster"`` uses the Stata/fixest cluster df ``G − 1`` (from
-        ``n_clusters_``). Fallback-level only: survey df and per-coefficient
-        Bell-McCaffrey DOF always take precedence. No effect on
-        coefficients, SEs, unclustered fits, or ``vcov_type="conley"`` (no
-        documented ``G − 1`` reference for the Conley+cluster product
-        kernel). Default flips at v4.
+    df_convention : {"residual", "cluster", "normal"}, default "residual"
+        Degrees-of-freedom convention for ``get_inference`` t/p/CI.
+        ``"residual"`` uses the fitted residual df; ``"cluster"`` uses the
+        Stata/fixest cluster df ``G − 1`` (from ``n_clusters_``) —
+        ``"cluster"`` has no effect on unclustered fits or
+        ``vcov_type="conley"`` (no documented ``G − 1`` reference for the
+        Conley+cluster product kernel); ``"normal"`` deliberately uses
+        normal-theory z inference at the fallback level on every fit,
+        clustered or not. Fallback-level only under every value: survey df
+        and per-coefficient Bell-McCaffrey DOF always take precedence. No
+        effect on coefficients, SEs, or t-statistics. Default flips to
+        ``"cluster"`` at v4.
 
     Attributes
     ----------
@@ -4448,9 +4451,13 @@ class LinearRegression:
         conley_lag_cutoff: Optional[int] = None,
         df_convention: str = "residual",
     ):
-        if df_convention not in ("residual", "cluster"):
+        # Inline validation (not utils.validate_df_convention): diff_diff.utils
+        # imports diff_diff.linalg at module level, so importing back would be
+        # circular. Keep the message shape identical to the shared validator.
+        if df_convention not in ("residual", "cluster", "normal"):
             raise ValueError(
-                f"df_convention must be 'residual' or 'cluster', got {df_convention!r}"
+                "df_convention must be one of ('residual', 'cluster', 'normal'), "
+                f"got {df_convention!r}"
             )
         self.include_intercept = include_intercept
         self.robust = robust
@@ -5221,6 +5228,14 @@ class LinearRegression:
                     alpha=effective_alpha,
                 )
             effective_df = self.n_clusters_ - 1
+        elif self.df_convention == "normal":
+            # Deliberate normal-theory z inference at the fallback level, on
+            # every fit (clustered, unclustered, and conley alike). Survey df
+            # and per-coefficient Bell-McCaffrey DOF above still win — this
+            # branch replaces only the residual fallback. Keep textually
+            # parallel with MultiPeriodDiD's inline ladder (estimators.py,
+            # "normal" branch).
+            effective_df = None
         else:
             effective_df = self.df_
 

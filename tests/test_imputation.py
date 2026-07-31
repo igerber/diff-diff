@@ -3262,3 +3262,142 @@ class TestLSMRFallbackParity:
         z = imp2._lsmr_minnorm_normal_solve(sp2.csc_matrix(np.eye(3)), np.ones(3))
         assert len(calls) == 1  # accepted on the first attempt
         np.testing.assert_array_equal(z, np.full(3, 2.0))
+
+
+class TestImputationDfConvention:
+    """The three-value df_convention knob on ImputationDiD's pretrends lead
+    regression (3.9 / M-127) — the one ImputationDiD surface on the shared
+    clustered CR1 sandwich. BJS overall/post inference and the joint pretrend
+    Wald F are knob-independent.
+    """
+
+    @staticmethod
+    def _panel(seed=13):
+        rng = np.random.default_rng(seed)
+        rows = []
+        for u in range(50):
+            ft = [0, 5, 7][u % 3]
+            for t in range(1, 10):
+                eff = 0.5 if (ft and t >= ft) else 0.0
+                rows.append(
+                    dict(
+                        unit=u,
+                        time=t,
+                        first_treat=ft,
+                        outcome=0.3 * u / 50 + 0.15 * t + eff + rng.standard_normal() * 0.5,
+                    )
+                )
+        return pd.DataFrame(rows)
+
+    _kw = dict(
+        outcome="outcome",
+        unit="unit",
+        time="time",
+        first_treat="first_treat",
+        aggregate="event_study",
+    )
+
+    @staticmethod
+    def _t_p(t_stat, df):
+        from scipy import stats
+
+        return 2 * stats.t.sf(abs(t_stat), df)
+
+    @staticmethod
+    def _z_p(t_stat):
+        from scipy import stats
+
+        return 2 * stats.norm.sf(abs(t_stat))
+
+    def _lead(self, res):
+        h = min(k for k in res.event_study_effects if k < -1)
+        return h, res.event_study_effects[h]
+
+    def test_leads_are_t_residual_not_z(self):
+        res = ImputationDiD(pretrends=True).fit(self._panel(), **self._kw)
+        h, e = self._lead(res)
+        assert e["p_value"] != self._z_p(e["t_stat"])
+        match = [d for d in range(2, 600) if abs(e["p_value"] - self._t_p(e["t_stat"], d)) < 1e-13]
+        assert len(match) == 1
+
+    def test_cluster_matches_g_minus_1_on_leads_only(self):
+        data = self._panel()
+        r0 = ImputationDiD(pretrends=True).fit(data, **self._kw)
+        rc = ImputationDiD(pretrends=True, df_convention="cluster").fit(data, **self._kw)
+        h, e0 = self._lead(r0)
+        ec = rc.event_study_effects[h]
+        G = data["unit"].nunique()
+        assert ec["effect"] == e0["effect"] and ec["se"] == e0["se"]
+        assert ec["p_value"] == pytest.approx(self._t_p(ec["t_stat"], G - 1), rel=1e-12)
+        # post rows are BJS (knob-independent)
+        hp = min(k for k in r0.event_study_effects if k >= 0)
+        assert r0.event_study_effects[hp]["p_value"] == rc.event_study_effects[hp]["p_value"]
+
+    def test_normal_reproduces_pre39_z_on_leads(self):
+        data = self._panel()
+        r0 = ImputationDiD(pretrends=True).fit(data, **self._kw)
+        rn = ImputationDiD(pretrends=True, df_convention="normal").fit(data, **self._kw)
+        h, e0 = self._lead(r0)
+        en = rn.event_study_effects[h]
+        assert en["effect"] == e0["effect"] and en["se"] == e0["se"]
+        assert en["p_value"] == pytest.approx(self._z_p(en["t_stat"]), rel=1e-14)
+
+    def test_pretrend_wald_f_is_knob_independent(self):
+        data = self._panel()
+        pt0 = ImputationDiD(pretrends=True).fit(data, **self._kw).pretrend_test()
+        ptc = (
+            ImputationDiD(pretrends=True, df_convention="cluster")
+            .fit(data, **self._kw)
+            .pretrend_test()
+        )
+        assert pt0["p_value"] == ptc["p_value"]
+        assert pt0["f_stat"] == ptc["f_stat"]
+
+    def test_survey_df_precedence_on_leads(self):
+        """Survey design df wins on the pretrends leads under EVERY knob
+        value (the knob is never consulted on surveyed fits)."""
+        data = self._panel()
+        data["weight"] = 1.0 + (data["unit"] % 5) * 0.2
+        data["stratum"] = data["unit"] % 4
+        data["psu"] = data["unit"]
+        design = SurveyDesign(weights="weight", psu="psu", strata="stratum", weight_type="pweight")
+        fits = {
+            conv: ImputationDiD(pretrends=True, df_convention=conv).fit(
+                data, survey_design=design, **self._kw
+            )
+            for conv in ("residual", "cluster", "normal")
+        }
+        h, e0 = self._lead(fits["residual"])
+        for conv in ("cluster", "normal"):
+            e = fits[conv].event_study_effects[h]
+            assert e["p_value"] == e0["p_value"]
+            assert e["conf_int"] == e0["conf_int"]
+
+    def test_inert_config_warns_on_explicit_nondefault(self):
+        data = self._panel()
+        base = dict(outcome="outcome", unit="unit", time="time", first_treat="first_treat")
+        with pytest.warns(UserWarning, match="affects only the pretrends"):
+            ImputationDiD(df_convention="cluster").fit(data, **base)
+        with pytest.warns(UserWarning, match="affects only the pretrends"):
+            ImputationDiD(pretrends=True, df_convention="cluster").fit(
+                data, aggregate="group", **base
+            )
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            ImputationDiD(pretrends=True, df_convention="cluster").fit(data, **self._kw)
+        assert not any("affects only the pretrends" in str(w.message) for w in caught)
+
+    def test_validation_and_transactional_set_params(self):
+        with pytest.raises(ValueError, match="df_convention"):
+            ImputationDiD(df_convention="bogus")
+        est = ImputationDiD()
+        with pytest.raises(ValueError, match="df_convention"):
+            est.set_params(df_convention="bogus", alpha=0.10)
+        assert est.df_convention == "residual" and est.alpha == 0.05
+        # Valid value + unknown key: the unknown-key rejection must also
+        # leave the estimator fully unchanged (no partial application).
+        before = est.get_params()
+        with pytest.raises(ValueError, match="Unknown parameter"):
+            est.set_params(df_convention="normal", nonexistent_param=1)
+        assert est.get_params() == before
+        assert ImputationDiD(df_convention="normal").get_params()["df_convention"] == "normal"

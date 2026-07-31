@@ -195,16 +195,48 @@ class WooldridgeDiDResults(BaseResults):
     ``group_time_effects`` to its column index in ``X_red``. Storing reduced
     artifacts avoids the singular full-design bread that
     ``_compute_cr2_bm_contrast_dof`` would otherwise reject."""
-    _df_one_way: Optional[float] = field(default=None, repr=False)
-    """Residual DOF (``n - rank(X)``) for one-way ``vcov_type in
-    {"classical","hc2"}`` paths (full-dummy, no survey). ``aggregate()``
-    uses this to thread R's ``lm()`` t-distribution into per-key
-    inference. ``None`` on hc1 / hc2_bm / surveyed paths (which use BM
-    DOF or ``_df_survey`` instead)."""
+    _df_analytic_fallback: Optional[float] = field(default=None, repr=False)
+    """The RESOLVED analytical fallback df the fit's non-BM ``safe_inference``
+    calls actually used (survey design df on surveyed fits; otherwise the
+    ``df_convention``-resolved value — residual df by default, ``G − 1``
+    under "cluster", None under "normal"; ``df_inf`` on GLM fits, whose
+    inference is knob-independent). ``aggregate()`` reads it so post-fit
+    re-aggregation reproduces fit-time inference on every OLS arm — it
+    stays LIVE on bootstrap fits, whose per-cell inference remains
+    analytical (only the overall p/CI are percentile-overridden).
+    Renamed from ``_df_one_way`` in 3.9 (pickle migration in
+    ``__setstate__``); the old field covered classical/hc2 only."""
+    df_convention: Optional[str] = None
+    """The estimator's ``df_convention`` configuration echoed onto the
+    results ("residual" | "cluster" | "normal"; added 3.9). Governs the OLS
+    analytical arms only; GLM inference is knob-independent. Appended LAST
+    (the generated ``__init__`` positional indexes are public API)."""
 
     # ------------------------------------------------------------------ #
     # Public methods                                                      #
     # ------------------------------------------------------------------ #
+
+    def __setstate__(self, state: Dict[str, Any]) -> None:
+        """Restore pickled state, migrating renamed/added stored fields.
+
+        Unpickling bypasses ``__init__``/``__post_init__`` (the
+        ``BaseResults`` pickle-migration contract; SyntheticDiDResults
+        precedent). A pickle written before 3.9 stores ``_df_one_way``
+        (classical/hc2-only residual df) instead of
+        ``_df_analytic_fallback`` — carry the old value over so post-fit
+        ``aggregate()`` on a legacy result reproduces its fit-time
+        classical/hc2 inference (legacy hc1 pickles carried None there,
+        which restores the pre-3.9 normal-theory aggregation for them).
+        ``df_convention`` (added 3.9) defaults to ``"residual"``.
+        """
+        self.__dict__.update(state)
+        # NOTE: check __dict__ membership, not hasattr - dataclass field
+        # defaults live as CLASS attributes, so hasattr is always True.
+        if "_df_analytic_fallback" not in self.__dict__:
+            self.__dict__["_df_analytic_fallback"] = state.get("_df_one_way", None)
+        self.__dict__.pop("_df_one_way", None)
+        if "df_convention" not in self.__dict__:
+            self.__dict__["df_convention"] = "residual"
 
     def aggregate(self, type: str, weights: str = "cell") -> "WooldridgeDiDResults":  # noqa: A002
         """Compute and store one of the four jwdid_estat aggregation types.
@@ -358,11 +390,11 @@ class WooldridgeDiDResults(BaseResults):
             """Build an effect dict using ``df_for_inference`` for the t-distribution.
 
             When ``self.vcov_type == "hc2_bm"``, ``df_for_inference`` should be
-            the BM contrast DOF (NaN → fail-closed). For ``classical`` /
-            ``hc2`` (one-way, no survey) the residual DOF ``self._df_one_way``
-            is used so per-key inference matches R ``lm()`` /
-            ``coef_test()`` t-distribution. For hc1 / surveyed paths,
-            ``self._df_survey`` (None → normal-theory) is used.
+            the BM contrast DOF (NaN → fail-closed). Every other arm uses
+            ``self._df_analytic_fallback`` — the resolved fallback the fit's
+            own ``safe_inference`` calls used (survey df on surveyed fits;
+            the ``df_convention``-resolved analytical df otherwise) — so
+            post-fit aggregation reproduces fit-time inference.
 
             Under ``weights="cohort_share"`` (variable
             ``cohort_share_inference_fail_closed=True``), the inference
@@ -392,17 +424,9 @@ class WooldridgeDiDResults(BaseResults):
                 t_stat, p_value, conf_int = safe_inference(
                     att, se, alpha=self.alpha, df=df_for_inference
                 )
-            elif (
-                self.vcov_type in ("classical", "hc2")
-                and self._df_one_way is not None
-                and np.isfinite(self._df_one_way)
-            ):
-                t_stat, p_value, conf_int = safe_inference(
-                    att, se, alpha=self.alpha, df=self._df_one_way
-                )
             else:
                 t_stat, p_value, conf_int = safe_inference(
-                    att, se, alpha=self.alpha, df=self._df_survey
+                    att, se, alpha=self.alpha, df=self._df_analytic_fallback
                 )
             return {
                 "att": att,
@@ -786,6 +810,8 @@ class WooldridgeDiDResults(BaseResults):
             result["n_clusters"] = self.n_clusters
         if self.conley_lag_cutoff is not None:
             result["conley_lag_cutoff"] = self.conley_lag_cutoff
+        if self.df_convention is not None:
+            result["df_convention"] = self.df_convention
         return result
 
     def to_dataframe(self, aggregation: str = "event") -> pd.DataFrame:

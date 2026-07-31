@@ -78,6 +78,11 @@ class LPDiDResults(BaseResults):
     # per window when that window's inference used normal theory or an
     # undefined df; None when no pooled windows were fit (``only_event``).
     pooled_df: Optional[Dict[str, float]] = None
+    # The estimator's df_convention configuration echoed onto the results
+    # ("residual" | "cluster" | "normal"; LPDiD's default is "cluster" -
+    # the Stata lpdid t(G-1) convention; added 3.9). Appended LAST (the
+    # generated __init__ positional indexes are public API).
+    df_convention: Optional[str] = None
 
     # ------------------------------------------------------------------
     # internal helpers
@@ -189,6 +194,8 @@ class LPDiDResults(BaseResults):
             result["n_psu"] = self.n_psu
             result["weight_type"] = getattr(self.survey_metadata, "weight_type", None)
             result["df_survey"] = getattr(self.survey_metadata, "df_survey", None)
+        if self.df_convention is not None:
+            result["df_convention"] = self.df_convention
         result["inference_method"] = (
             "survey_tsl" if self.vcov_type == "survey_tsl" else "cluster_robust"
         )

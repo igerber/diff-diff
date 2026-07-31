@@ -6,7 +6,13 @@ import pandas as pd
 
 from diff_diff.linalg import InvalidClusterKAdjustment, _rank_guarded_inv, solve_ols
 from diff_diff.lpdid_results import LPDiDResults
-from diff_diff.utils import absorbed_fe_rank, cluster_nested_fe_dims, safe_inference
+from diff_diff.utils import (
+    absorbed_fe_rank,
+    cluster_nested_fe_dims,
+    resolve_tail_df,
+    safe_inference,
+    validate_df_convention,
+)
 
 __all__ = ["LPDiD", "LPDiDResults"]
 
@@ -25,6 +31,7 @@ class LPDiD:
         rank_deficient_action: str = "warn",
         non_absorbing: Optional[str] = None,
         stabilization_window: Optional[int] = None,
+        df_convention: str = "cluster",
     ):
         self.pre_window = pre_window
         self.post_window = post_window
@@ -37,6 +44,7 @@ class LPDiD:
         self.rank_deficient_action = rank_deficient_action
         self.non_absorbing = non_absorbing
         self.stabilization_window = stabilization_window
+        self.df_convention = df_convention
         self._validate_params()
         self.is_fitted_ = False
         self.results_: Optional[LPDiDResults] = None
@@ -85,6 +93,10 @@ class LPDiD:
                 "control_group='never_treated' is not supported with a non-absorbing mode "
                 "(the estimand becomes ambiguous); use control_group='clean' (the default)"
             )
+        # LPDiD's DEFAULT is "cluster" — its t(G-1) reference is the Stata
+        # lpdid convention and already the library-wide 4.0 target, so the
+        # default moves nothing (unlike the "residual"-default estimators).
+        validate_df_convention(self.df_convention)
 
     def _rhs_column_names(self, covariates=None, ylags=0, dylags=0):
         rhs_columns = list(covariates or [])
@@ -683,6 +695,9 @@ class LPDiD:
         # as 0 for prediction/residuals; without this zero-fill the NaN would
         # propagate through every prediction and NaN an otherwise-identified ATT.
         # ("error" still raises inside solve_ols before returning.)
+        # Kept nuisance-parameter count for the "residual" df, captured
+        # BEFORE the zero-fill below erases the dropped-column NaN markers.
+        k0_kept = int(np.count_nonzero(np.isfinite(control_coef)))
         control_coef = np.where(np.isfinite(control_coef), control_coef, 0.0)
 
         treated_design = np.column_stack(
@@ -695,8 +710,11 @@ class LPDiD:
         se = np.nan
         cluster_ids = sample["_cluster"].to_numpy()
         n_clusters = len(pd.unique(cluster_ids))
+        # Hoisted above the branch: the "residual" df resolution below needs
+        # n_total on every lane (including G>=2 with a non-finite effect,
+        # where today's G-1 df is still reported alongside the NaN se).
+        n_total = len(sample)
         if n_clusters >= 2 and np.isfinite(effect):
-            n_total = len(sample)
             n_treated = len(treated)
             q0_inv, _, _ = _rank_guarded_inv(control_design.T @ control_design)
             mu_treated = treated_design.mean(axis=0)
@@ -715,7 +733,25 @@ class LPDiD:
             if np.isfinite(vcov_scalar) and vcov_scalar >= 0:
                 se = float(np.sqrt(vcov_scalar))
 
-        df = n_clusters - 1 if n_clusters > 1 else None
+        # Tail df: the resolver runs whenever n_clusters >= 2 — matching
+        # today's expression `n_clusters - 1 if n_clusters > 1 else None`,
+        # which applies G-1 even when the effect is non-finite — so the
+        # default "cluster" reproduces today's values bit-for-bit. The
+        # G<=1 degenerate lane keeps the literal df=None (normal theory +
+        # NaN provenance) under ALL conventions and never touches the
+        # resolver. "residual" = n_total - k0_kept - 1: the RA contrast is
+        # a pooled M-estimator over all n_total rows estimating the k0
+        # kept nuisance coefficients PLUS the ATT (library convention, no
+        # external anchor - Stata teffects ra reports z; see the REGISTRY
+        # LPDiD note for the derivation).
+        if n_clusters >= 2:
+            df = resolve_tail_df(
+                self.df_convention,
+                residual_df=float(n_total - k0_kept - 1),
+                n_clusters=n_clusters,
+            )
+        else:
+            df = None
         t_stat, p_value, conf_int = safe_inference(effect, se, alpha=self.alpha, df=df)
         return {
             "coefficient": effect,
@@ -918,7 +954,29 @@ class LPDiD:
             se = float(np.sqrt(vcov[1, 1]))
 
         n_clusters = len(pd.unique(cluster_ids))
-        df = n_clusters - 1 if vcov is not None and n_clusters > 1 else None
+        # Tail df: the resolver runs only on the healthy clustered lane —
+        # matching today's expression `n_clusters - 1 if vcov is not None
+        # and n_clusters > 1 else None` — so the default "cluster"
+        # reproduces today's values bit-for-bit (raw-unique G, deliberately
+        # NOT effective_cluster_count: LPDiD's reweights are strictly
+        # positive, so the two cannot diverge — REGISTRY LPDiD note). The
+        # degenerate lanes (vcov is None: the unclustered-refit fallback
+        # above, or G<=1) keep the literal df=None (normal theory + NaN
+        # provenance) under ALL conventions and never touch the resolver.
+        # "residual" = n_eff - k_kept of this per-horizon design.
+        if vcov is not None and n_clusters >= 2:
+            _n_eff_lp = (
+                int(np.count_nonzero(np.asarray(weights, dtype=float) > 0))
+                if weights is not None
+                else int(design.shape[0])
+            )
+            df = resolve_tail_df(
+                self.df_convention,
+                residual_df=float(_n_eff_lp - int(np.count_nonzero(np.isfinite(coef)))),
+                n_clusters=n_clusters,
+            )
+        else:
+            df = None
         t_stat, p_value, conf_int = safe_inference(effect, se, alpha=self.alpha, df=df)
         return {
             "coefficient": effect,
@@ -1598,6 +1656,7 @@ class LPDiD:
             pooled=pooled,
             event_study_df=event_study_df,
             pooled_df=pooled_df,
+            df_convention=self.df_convention,
             n_obs=len(data),
             n_treated_units=int(treatment_by_unit.gt(0).sum()),
             n_control_units=int(treatment_by_unit.eq(0).sum()),
@@ -1647,16 +1706,19 @@ class LPDiD:
             "rank_deficient_action": self.rank_deficient_action,
             "non_absorbing": self.non_absorbing,
             "stabilization_window": self.stabilization_window,
+            "df_convention": self.df_convention,
         }
 
     def set_params(self, **params: Any) -> "LPDiD":
+        # Reject unknown keys before any assignment (the rollback below
+        # only covers validator failures on known keys).
+        for key in params:
+            if not hasattr(self, key):
+                raise ValueError(f"Unknown parameter: {key}")
         previous_values = {}
         for key, value in params.items():
-            if hasattr(self, key):
-                previous_values[key] = getattr(self, key)
-                setattr(self, key, value)
-            else:
-                raise ValueError(f"Unknown parameter: {key}")
+            previous_values[key] = getattr(self, key)
+            setattr(self, key, value)
         try:
             self._validate_params()
         except ValueError:

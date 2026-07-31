@@ -2147,3 +2147,77 @@ class TestBuildFeDummyBlocks:
         df = pd.DataFrame({"a": ["x", "y"], "b": ["u", "v"]})
         with pytest.raises(ValueError, match="prefixes length 1 does not match"):
             build_fe_dummy_blocks(df, ["a", "b"], prefixes=["_fe_a"])
+
+
+class TestResolveTailDf:
+    """Branch table for the shared df_convention fallback resolver (3.9 / M-127).
+
+    The resolver owns ONLY the fallback slot: survey/replicate df and BM
+    per-coefficient DOF keep precedence at the call sites. Covers all three
+    conventions x n_clusters None/1/2+ and the non-positive/non-finite
+    residual_df guard (the reachable case is absorbed-FE accounting driving
+    n - k - rank <= 0 while the SE is still finite).
+    """
+
+    def test_residual_returns_residual_df(self):
+        from diff_diff.utils import resolve_tail_df
+
+        assert resolve_tail_df("residual", residual_df=42, n_clusters=None) == 42.0
+        assert resolve_tail_df("residual", residual_df=42, n_clusters=50) == 42.0
+
+    def test_cluster_returns_g_minus_1(self):
+        from diff_diff.utils import resolve_tail_df
+
+        assert resolve_tail_df("cluster", residual_df=42, n_clusters=50) == 49.0
+        assert resolve_tail_df("cluster", residual_df=42, n_clusters=2) == 1.0
+
+    def test_cluster_inert_when_unclustered(self):
+        """n_clusters=None (unclustered/conley fit) falls back to residual."""
+        from diff_diff.utils import resolve_tail_df
+
+        assert resolve_tail_df("cluster", residual_df=42, n_clusters=None) == 42.0
+
+    def test_cluster_fails_closed_at_one_cluster(self):
+        """G<=1: warn + the 0 sentinel safe_inference turns into all-NaN."""
+        from diff_diff.utils import resolve_tail_df, safe_inference
+
+        with pytest.warns(UserWarning, match="at least 2 effective"):
+            df = resolve_tail_df("cluster", residual_df=42, n_clusters=1)
+        assert df == 0.0
+        t, p, ci = safe_inference(1.0, 0.5, df=df)
+        assert np.isnan(t) and np.isnan(p) and np.isnan(ci[0]) and np.isnan(ci[1])
+
+    def test_normal_returns_none_everywhere(self):
+        from diff_diff.utils import resolve_tail_df
+
+        assert resolve_tail_df("normal", residual_df=42, n_clusters=None) is None
+        assert resolve_tail_df("normal", residual_df=42, n_clusters=50) is None
+
+    def test_nonpositive_residual_df_warns_and_falls_back_to_normal(self):
+        """Mirrors get_inference's non-positive-df fallback: warn + None (z),
+        NOT an all-NaN tuple — preserves the historical df_one_way NaN ->
+        normal-theory degenerate lane bit-for-bit."""
+        from diff_diff.utils import resolve_tail_df
+
+        for bad in (0.0, -3.0, float("nan")):
+            with pytest.warns(UserWarning, match="non-positive"):
+                assert resolve_tail_df("residual", residual_df=bad, n_clusters=None) is None
+        # The guard applies on the "cluster" inert lane too (falls back to
+        # residual, which then guards).
+        with pytest.warns(UserWarning, match="non-positive"):
+            assert resolve_tail_df("cluster", residual_df=-1.0, n_clusters=None) is None
+
+    def test_none_residual_df_passes_through(self):
+        from diff_diff.utils import resolve_tail_df
+
+        assert resolve_tail_df("residual", residual_df=None, n_clusters=None) is None
+
+    def test_invalid_convention_raises(self):
+        from diff_diff.utils import resolve_tail_df, validate_df_convention
+
+        with pytest.raises(ValueError, match="df_convention must be one of"):
+            resolve_tail_df("bogus", residual_df=1, n_clusters=None)
+        with pytest.raises(ValueError, match="'bogus'"):
+            validate_df_convention("bogus")
+        for ok in ("residual", "cluster", "normal"):
+            validate_df_convention(ok)  # no raise

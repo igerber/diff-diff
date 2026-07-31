@@ -41,6 +41,7 @@ from diff_diff.utils import (
     validate_binary,
     validate_covariate_names,
     validate_design_term_names,
+    validate_df_convention,
     wild_bootstrap_se,
 )
 
@@ -136,19 +137,22 @@ class DifferenceInDifferences:
         path — absent ``cluster=``, pure Conley spatial HAC applies.
         ``survey_design=`` + Conley and ``inference='wild_bootstrap'`` +
         Conley both raise ``NotImplementedError``.
-    df_convention : str, default "residual"
-        Degrees-of-freedom convention for t-statistics, p-values, and CIs on
-        clustered analytical fits. ``"residual"`` (default) uses the fitted
-        residual df (``n − K_full``); ``"cluster"`` uses the Stata/fixest
-        cluster df ``G − 1``. Applies only at the fallback level of the df
-        resolution: survey df and per-coefficient Bell-McCaffrey DOF
+    df_convention : {"residual", "cluster", "normal"}, default "residual"
+        Degrees-of-freedom convention for analytical t-statistics, p-values,
+        and CIs. ``"residual"`` (default) uses the fitted residual df
+        (``n − K_full``); ``"cluster"`` uses the Stata/fixest cluster df
+        ``G − 1`` on clustered fits — it has no effect on unclustered fits
+        or on ``vcov_type="conley"`` (the combined Conley+cluster product
+        kernel has no documented ``G − 1`` df reference and keeps the
+        residual df); ``"normal"`` deliberately uses normal-theory z
+        inference at the fallback level on every fit, clustered or not.
+        Applies only at the fallback level of the df resolution under every
+        value: survey df and per-coefficient Bell-McCaffrey DOF
         (``vcov_type="hc2_bm"``) are more refined small-sample corrections
         and always take precedence. Point estimates, SEs, and t-statistics
-        are unaffected — only the reference t-distribution changes. Has no
-        effect on unclustered fits or on ``vcov_type="conley"`` (the combined
-        Conley+cluster product kernel has no documented ``G − 1`` df
-        reference and keeps the residual df). The default flips to ``"cluster"`` at
-        v4 (see the REGISTRY clustered-CR1 inference-df deviation note).
+        are unaffected — only the reference distribution changes. The
+        default flips to ``"cluster"`` at v4 (see the REGISTRY clustered-CR1
+        inference-df deviation note).
 
     Attributes
     ----------
@@ -220,10 +224,7 @@ class DifferenceInDifferences:
         # helper so __init__ and set_params use identical validation logic.
         from diff_diff.linalg import resolve_vcov_type
 
-        if df_convention not in ("residual", "cluster"):
-            raise ValueError(
-                f"df_convention must be 'residual' or 'cluster', got {df_convention!r}"
-            )
+        validate_df_convention(df_convention)
 
         self.robust = robust
         self.cluster = cluster
@@ -1243,10 +1244,7 @@ class DifferenceInDifferences:
         pending_robust = params.get("robust", self.robust)
         pending_vcov_type = params.get("vcov_type", self.vcov_type)
         pending_df_convention = params.get("df_convention", self.df_convention)
-        if pending_df_convention not in ("residual", "cluster"):
-            raise ValueError(
-                "df_convention must be 'residual' or 'cluster', " f"got {pending_df_convention!r}"
-            )
+        validate_df_convention(pending_df_convention)
 
         # First pass: validate that every incoming key is a known attribute
         # so we don't partially apply a batch that ends in "Unknown parameter".
@@ -2266,6 +2264,14 @@ class MultiPeriodDiD(DifferenceInDifferences):
                 df = 0
             else:
                 df = _g_eff_mp - 1
+        elif self.df_convention == "normal":
+            # Deliberate normal-theory z inference at the fallback level, on
+            # every fit (clustered, unclustered, and conley alike). The
+            # survey/replicate overrides below still overwrite df, and the
+            # per-period BM-DOF branch still wins per coefficient on hc2_bm.
+            # Keep textually parallel with LinearRegression.get_inference's
+            # "normal" branch (linalg.py).
+            df = None
 
         # Absorbed-FE variance scale (fixest full-K convention): the within-
         # transform solve_ols above scales the non-clustered classical/hc1 vcov

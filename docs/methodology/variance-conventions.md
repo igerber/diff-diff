@@ -26,16 +26,16 @@ produced wrong figures three separate times while this inventory was drafted).
 | `did_fixed_effects_hc1_cluster_unit` | 7 | 294 | **legitimate** | K_reference (D1 fixed): 66 visible minus the 59 cluster-nested unit dummies -> identical SE to did_absorb (documented deviation from a literal explicit-dummy R comparison, which counts all 66) |
 | `did_plain_hc1_cluster_unit` | 4 | 356 | **legitimate** | no absorbed FE: visible k is the whole design; nothing is omitted |
 | `twfe_hc1_cluster_unit_time_post` | 3 | 298 | **legitimate** | K_reference (D2 fixed): 2 visible + rank(post given unit) = 1; matches fixest cluster arm at rel 0 (committed golden) |
-| `wooldridge_hc1_within` | 15 | None, None, None, None, None, None, None, None, None, None | **defect** | CR1 k converged on K_reference (D2 fixed: 9 cells + T = 15, no intercept col -> +1 term; jwdid arms at ratio 1.0); tail df is still normal theory with no df_convention knob (PR C) |
-| `sun_abraham_hc1` | 21 | 280, 280, 280, 280, 280, 280, 280, 280, 280, 280, 280, 280, 280, 280, 280, None, None, None, None, None, None, None, None | **defect** | CR1 k converged on K_reference (D2 fixed: 15 cells + 6, no intercept col; fixest sunab parity ~5e-15); D4 remains: residual df per cohort-period cell but normal theory on aggregates (PR C) |
-| `stacked_did_hc1` | 6 | None | **legitimate** | L1: k_total is clubSandwich CR1S by construction (stacked_did.py pins vcovCR(type='CR1S') at atol=1e-10); normal-theory tail df is an open PR C question |
-| `lpdid_pre2_post2` | 4, 4, 5, 5, 5, 6 | 59, 59, 59, 59, 59, 59 | **legitimate** | L2: G-1 tail df (Stata/fixest convention) — the convergence target |
+| `wooldridge_hc1_within` | 15 | 286, 286, 286, 286, 286, 286, 286, 286, 286, 286 | **legitimate** | CR1 k = K_reference (D2 fixed: 9 cells + T = 15, no intercept col -> +1 term; jwdid arms at ratio 1.0); tail df converged in 3.9 (M-127): the default-hc1 arms use t(residual df = n - k_kept - absorbed rank) via the df_convention knob (was silent normal theory); G-1 under 'cluster', z under 'normal' |
+| `sun_abraham_hc1` | 21 | 280, 280, 280, 280, 280, 280, 280, 280, 280, 280, 280, 280, 280, 280, 280, 280, 280, 280, 280, 280, 280, 280, 280 | **legitimate** | CR1 k = K_reference (D2 fixed: 15 cells + 6, no intercept col; fixest sunab parity ~5e-15); D4 fixed in 3.9 (M-127): cells AND aggregates share the saturated fit's residual df under the df_convention knob (aggregates previously dropped to normal theory inside the same fit) |
+| `stacked_did_hc1` | 6 | 309 | **legitimate** | L1: k_total is clubSandwich CR1S by construction (stacked_did.py pins vcovCR(type='CR1S') at atol=1e-10); tail df converged in 3.9 (M-127): t(pooled residual df n_eff - k_kept) via the df_convention knob (was silent normal theory; stacked rows make the residual df large, so z -> t is a convention alignment) |
+| `lpdid_pre2_post2` | 4, 4, 5, 5, 5, 6 | 59, 59, 59, 59, 59, 59 | **legitimate** | L2: G-1 tail df (Stata/fixest convention) — since 3.9 the df_convention='cluster' DEFAULT on LPDiD (bit-identical; the one surface already at the v4 target) |
 | `mpd_absorb_hc1_cluster_unit` | 11 | 290, 290, 290, 290, 290, 290 | **legitimate** | K_reference: 6 visible + rank(time given unit) = 5; equals the fixed_effects form's 70 - 59 (MPD absorb/fixed_effects equivalence) |
 | `mpd_fixed_effects_hc1_cluster_unit` | 11 | 290, 290, 290, 290, 290, 290 | **legitimate** | K_reference: 70 visible (incl. built-in period dummies, MPD's time-FE block) minus the 59 cluster-nested unit dummies = 11 — identical to the absorb form |
 | `mpd_plain_hc1_cluster_time` | 7 | 348, 348, 348, 348, 348, 348 | **legitimate** | the NESTED orientation of the built-in period dummies: 12 visible minus their rank 5 under a time cluster (under-subtraction is caught here; the unit-cluster rows catch over-) |
 | `lpdid_absorb_nested_cluster_grp` | 4, 4, 5, 5, 5, 6 | 1, 1, 1, 1, 1, 1 | **legitimate** | LPDiD absorb dummies nested in the cluster subtract their rank (adj -1 per horizon: region == grp here); _event_time stays counted (unit-level cluster does not nest time); G-1 tail df (L2) |
 | `imputation_default` | — | None | **legitimate** | L3: BJS imputation variance, not the shared CR1 sandwich |
-| `imputation_pretrends_event_study` | unpinned | unpinned | **defect** | pretrends lead regression: CR1 k converged on K_reference (D2 fixed); normal-theory tail df remains (PR C family) |
+| `imputation_pretrends_event_study` | unpinned | 157, 157, 157, None, None, None, None, None | **legitimate** | pretrends lead regression: CR1 k = K_reference (D2 fixed); tail df converged in 3.9 (M-127): leads use t(residual df) via the df_convention knob (was silent normal theory); the None calls are the knob-independent BJS aggregates (L3) |
 | `two_stage_default` | — | None | **legitimate** | L3: Gardner two-stage variance, not the shared CR1 sandwich |
 | `callaway_santanna_default` | — | None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None | **legitimate** | L3: influence-function variance anchored to Stata csdid |
 
@@ -46,10 +46,10 @@ vcov_type="hc1"; a clustered call in any other family fails the row, so a
 surface cannot silently switch clustered family behind an unchanged design
 width); — means the surface's *contract* is that it never calls it. tail_df is the multiset
 of df values passed to safe_inference/safe_inference_batch
-(None = normal theory). unpinned marks the one contract row whose test
-asserts the shared CR1 IS reached but deliberately pins no exact values —
-a literal there would be brittle configuration-detail (its expected_adjustment
-IS pinned: +6, the [time, unit] increment on df_0). Captured under the
+(None = normal theory). Since 3.9 (M-127) every previously-unpinned row pins
+its exact tail_df values — the imputation pretrends contract row included
+(its expected_adjustment stays pinned too: +6, the [time, unit] increment
+on df_0). Captured under the
 canonical Python backend; on adjusted clustered surfaces the Rust lanes apply
 the same correction as an exact scalar rescale of the finished vcov
 (vcov * (n-k)/(n-k-adj), <= 1 ulp on top of the default lane's <= 8e-15
@@ -107,18 +107,27 @@ output).
   DEFAULT ``K.exact = FALSE`` reproduces the old naive count, so this is a
   documented deviation from the R default (see the REGISTRY absorbed-FE note
   and ``tests/test_variance_conventions.py::TestFixestKExactParity``).
-- **D4 — SunAbraham reports two tail-df conventions inside one fit** (residual
-  df on per-cell inference, normal theory on aggregates — visible in its row's
-  multiset). Fix: PR C.
+- **D4 — SunAbraham reported two tail-df conventions inside one fit** (residual
+  df on per-cell inference, normal theory on aggregates — the old row multiset
+  was `(280.0,)*15 + (None,)*8`). **Fixed** in 3.9 (PR C / M-127): aggregates
+  resolve through the SAME saturated fit the cells use (`reg.df_` /
+  `reg.n_clusters_` via `utils.resolve_tail_df`), so one fit carries one
+  convention under every `df_convention` value. The same fix closed the wider
+  normal-theory tail-df defect family: Wooldridge default-hc1, StackedDiD, and
+  the ImputationDiD pretrends leads all moved z → t(residual df) under the
+  new default (see the row reasons in the matrix above; `"normal"` reproduces
+  the pre-3.9 numbers).
 
 ## Legitimate differences (declared exceptions)
 
 - **L1 — StackedDiD's k_total**: its design genuinely is a Q-weighted
   full-dummy lm; pinned to clubSandwich::vcovCR(type="CR1S") at
   atol=1e-10. CR1S is a real second convention, correct by construction.
-- **L2 — LPDiD's G-1 tail df**: the Stata/fixest convention, and the only
-  surface where it is the default. It is the convergence target for PR C, not a
-  defect.
+- **L2 — LPDiD's G-1 tail df**: the Stata/fixest convention. Since 3.9 it is
+  the `df_convention="cluster"` DEFAULT on LPDiD (the one surface already at
+  the library-wide v4 target — bit-identical, no numbers moved), with
+  "residual"/"normal" as opt-ins; the degenerate lanes (unclustered refit,
+  RA G<=1, saturated early return) keep literal df=None under every value.
 - **L3 — CallawaySantAnna / TwoStageDiD / ImputationDiD (default)**: different
   variance theory (influence functions / two-stage / BJS imputation), never the
   shared CR1 sandwich. CS is anchored to Stata csdid outright.
@@ -133,16 +142,24 @@ output).
   family applies no CR1 finite-sample factor, so it has no cell on the axis this
   matrix measures.
 
-## Tail-df landscape (PR C's input)
+## Tail-df landscape (converged, 3.9 / M-127)
 
-Three conventions are live: normal theory (Wooldridge, StackedDiD — no
-df_convention knob), residual n - K_full (DiD/MPD/TWFE default;
-df_convention="cluster" opts into G-1), and G-1 (LPDiD, hardcoded).
-At |t| = 2 normal theory understates the t(G-1) p-value by 24.2% at
-G=20, 13.3% at G=40, 1.2% at G=500 — larger than the D2 SE gap was before its
-fix. PR C decisions:
-(1) extending the knob to Wooldridge/SunAbraham/StackedDiD/ImputationDiD needs
-NEW ledger rows (M-004/M-005/M-006 cover only DiD/TWFE/LinearRegression);
-(2) the two-value knob cannot express normal theory, so either a third value
-("normal") keeps 3.9 additive, or a documented default change ships with its
-own ledger rows.
+ONE three-value knob (`df_convention ∈ {"residual", "cluster", "normal"}`)
+now governs the analytical fallback df on every shared-CR1 surface:
+DiD/MPD/TWFE/LinearRegression + SunAbraham/WooldridgeDiD-OLS/StackedDiD/
+ImputationDiD-pretrends (default "residual") and LPDiD (default "cluster",
+its Stata-anchored t(G−1)). Survey/replicate df and hc2_bm Bell-McCaffrey
+DOF keep precedence under every value; "cluster" fails closed warn+NaN at
+G<=1 and is inert on unclustered/conley fits; "normal" is deliberate z at
+the fallback level everywhere. Per-surface residual-df definitions: the
+fit's `n_eff − K_full` (visible kept columns + absorbed rank where the
+design absorbs FE; positive-weight n_eff on weighted lanes; on the LPDiD RA
+path `n_total − k0_kept − 1`, the pooled M-estimator count). The pre-fix
+defect magnitude for the record: at |t| = 2 normal theory understated the
+t(G−1) p-value by 24.2% at G=20, 13.3% at G=40, 1.2% at G=500 — larger
+than the D2 SE gap was before its fix. The remaining program step is the
+v4 default flip "residual" → "cluster" (M-004..M-006 + M-128..M-131, the
+locked #663 direction); the resolver is `diff_diff.utils.resolve_tail_df`,
+and the out-of-scope roster (IF-based estimators, TripleDifference/TROP,
+Wooldridge GLM arms) is enumerated in the REGISTRY TwoWayFixedEffects
+deviation note.
