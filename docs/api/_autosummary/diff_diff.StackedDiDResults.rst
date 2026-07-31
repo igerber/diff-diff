@@ -34,9 +34,11 @@
       ~StackedDiDResults.coef_var
       ~StackedDiDResults.conf_int
       ~StackedDiDResults.covariates
+      ~StackedDiDResults.df_convention
       ~StackedDiDResults.event_study_df
       ~StackedDiDResults.event_study_vcov
       ~StackedDiDResults.event_study_vcov_index
+      ~StackedDiDResults.inference_df
       ~StackedDiDResults.is_significant
       ~StackedDiDResults.kappa_post
       ~StackedDiDResults.kappa_pre

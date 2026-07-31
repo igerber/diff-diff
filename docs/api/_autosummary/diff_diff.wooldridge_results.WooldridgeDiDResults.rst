@@ -34,6 +34,7 @@
       ~WooldridgeDiDResults.conf_int
       ~WooldridgeDiDResults.conley_lag_cutoff
       ~WooldridgeDiDResults.control_group
+      ~WooldridgeDiDResults.df_convention
       ~WooldridgeDiDResults.event_study_effects
       ~WooldridgeDiDResults.group_effects
       ~WooldridgeDiDResults.method

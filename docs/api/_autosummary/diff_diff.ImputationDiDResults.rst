@@ -32,6 +32,7 @@
       ~ImputationDiDResults.cluster_name
       ~ImputationDiDResults.coef_var
       ~ImputationDiDResults.conf_int
+      ~ImputationDiDResults.df_convention
       ~ImputationDiDResults.is_significant
       ~ImputationDiDResults.leave_one_out
       ~ImputationDiDResults.n_clusters

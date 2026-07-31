@@ -30,6 +30,7 @@
       ~LPDiDResults.cluster_name
       ~LPDiDResults.conf_int
       ~LPDiDResults.covariates
+      ~LPDiDResults.df_convention
       ~LPDiDResults.dylags
       ~LPDiDResults.estimand
       ~LPDiDResults.event_study_df
