@@ -23,6 +23,7 @@ from diff_diff._backend import (
     _rust_sc_weight_fw_with_convergence,
     _rust_sdid_unit_weights,
 )
+from diff_diff.linalg import _validate_cluster_k_adjustment_type
 from diff_diff.linalg import compute_robust_vcov as _compute_robust_vcov_linalg
 from diff_diff.linalg import solve_ols as _solve_ols_linalg
 
@@ -709,6 +710,8 @@ def wild_bootstrap_se(
     seed: Optional[int] = None,
     return_distribution: bool = False,
     p_val_type: str = "two-tailed",
+    *,
+    cluster_k_adjustment: int = 0,
 ) -> WildBootstrapResults:
     """
     Compute wild cluster bootstrap standard errors and p-values.
@@ -731,6 +734,15 @@ def wild_bootstrap_se(
     The reported ``se`` is the analytical cluster-robust (CR1) standard error of
     the original estimate — the studentized bootstrap drives the p-value and CI,
     not a re-scaled bootstrap dispersion.
+
+    ``cluster_k_adjustment`` (keyword-only, default 0) applies the signed
+    K_reference count to BOTH the analytical CR1 SE and the bootstrap ``corr``
+    factor (see ``docs/methodology/variance-conventions.md`` D1/D2), keeping
+    ``se``, ``t_stat_original`` (= effect/se) and any returned
+    ``bootstrap_distribution`` on the corrected scale. The constant cancels in
+    the studentized statistic, so p-values are invariant and CI endpoints move
+    only within the test-inversion bisection tolerance (~1e-10) — never assert
+    exact CI equality across adjustment values.
 
     Parameters
     ----------
@@ -811,7 +823,12 @@ def wild_bootstrap_se(
     MacKinnon, J. G., & Webb, M. D. (2018). The wild bootstrap for
     few (treated) clusters. The Econometrics Journal, 21(2), 114-135.
     """
-    # Validate inputs
+    # Validate inputs. The adjustment TYPE is checked at entry — before the
+    # dropped-coefficient / saturation early returns below — so a non-int
+    # cannot be silently absorbed into a degenerate NaN result on those
+    # routes (the value/family contract is enforced by solve_ols itself at
+    # the clustered vcov call).
+    _validate_cluster_k_adjustment_type(cluster_k_adjustment)
     valid_weight_types = ["rademacher", "webb", "mammen"]
     if weight_type not in valid_weight_types:
         raise ValueError(f"weight_type must be one of {valid_weight_types}, got '{weight_type}'")
@@ -878,11 +895,18 @@ def wild_bootstrap_se(
     X_eff = X[:, kept]
     j_eff = int(np.sum(kept[:coefficient_index]))  # position of the coef among kept columns
     k_eff = X_eff.shape[1]
-    if n <= k_eff:  # no residual degrees of freedom -> CR1 undefined
+    # Fail closed on ALL THREE saturation sides, matching the kernel: the
+    # visible n <= k_eff (residuals identically zero), the K_reference side
+    # n <= k_eff + adj, and a negative adjustment exceeding the reduced width
+    # (k_eff + adj <= 0, where the corr factor below would silently DEFLATE).
+    _k_inf_eff = k_eff + cluster_k_adjustment
+    if n <= k_eff or n <= _k_inf_eff or _k_inf_eff <= 0:
         return _degenerate()
 
     # Now the cluster-robust (CR1) vcov is well-defined; it studentizes the test.
-    _, _, vcov_original = _solve_ols_linalg(X, y, cluster_ids=cluster_ids, return_vcov=True)
+    _, _, vcov_original = _solve_ols_linalg(
+        X, y, cluster_ids=cluster_ids, return_vcov=True, cluster_k_adjustment=cluster_k_adjustment
+    )
     if vcov_original is None:
         return _degenerate()
     se_a = float(np.sqrt(vcov_original[coefficient_index, coefficient_index]))
@@ -913,10 +937,11 @@ def wild_bootstrap_se(
     m_y = y - fit_y_red
     m_xj = xj - fit_xj_red
 
-    # CR1 small-sample correction. NOTE: this constant cancels in |t*| vs |t0|
-    # (it scales se* and se_a identically), so it affects only the reported SE,
-    # not the p-value or CI. Kept for fidelity with the analytical CR1 SE.
-    corr = (n_clusters / (n_clusters - 1)) * ((n - 1) / (n - k_eff))
+    # CR1 small-sample correction on the K_reference count (k_eff + adj).
+    # NOTE: this constant cancels in |t*| vs |t0| (it scales se* and se_a
+    # identically), so it affects only the reported SE, not the p-value or
+    # CI. Kept for fidelity with the analytical CR1 SE.
+    corr = (n_clusters / (n_clusters - 1)) * ((n - 1) / (n - _k_inf_eff))
 
     # Cluster membership: indicator matrix C (G, n) for fast per-cluster score sums.
     cluster_pos = {c: i for i, c in enumerate(unique_clusters)}
@@ -2978,16 +3003,37 @@ def absorbed_fe_rank(
     if not group_vars:
         return 0
 
+    codes_list, levels, _ = _factorize_fe_codes(data, group_vars, weights)
+    rank = _fe_rank_from_codes(codes_list, levels)
+    if rank == 0:
+        return 0
+    return rank - 1 if has_intercept_col else rank
+
+
+def _factorize_fe_codes(
+    data: pd.DataFrame,
+    group_vars: List[str],
+    weights: Optional[np.ndarray],
+) -> Tuple[List[np.ndarray], List[int], Optional[np.ndarray]]:
+    """Shared factorization for the absorbed-FE helpers.
+
+    Applies the positive-weight row filter (REGISTRY zero-weight-padding
+    guarantee), validates against NaN group keys, and returns per-dim
+    integer codes with level counts plus the positive-row mask (None when no
+    filtering applied) so callers can align companion arrays (cluster ids).
+    """
     frame = data
+    mask: Optional[np.ndarray] = None
     if weights is not None:
         w = np.asarray(weights, dtype=np.float64)
         if w.shape[0] != len(data):
             raise ValueError(f"weights length ({w.shape[0]}) must match data rows ({len(data)})")
         positive = w > 0
         if not positive.any():
-            return 0
+            return [np.empty(0, dtype=np.intp) for _ in group_vars], [0] * len(group_vars), positive
         if not positive.all():
             frame = data.loc[positive]
+            mask = positive
 
     codes_list = []
     for g in group_vars:
@@ -3001,11 +3047,21 @@ def absorbed_fe_rank(
             )
         codes_list.append(codes)
     levels = [int(c.max()) + 1 if c.size else 0 for c in codes_list]
+    return codes_list, levels, mask
+
+
+def _fe_rank_from_codes(codes_list: List[np.ndarray], levels: List[int]) -> int:
+    """Rank of the FE dummy span INCLUDING the shared constant.
+
+    N == 2: ``sum(levels) - C`` with C the connected components of the
+    bipartite level graph (Abowd-Creecy-Kramarz); N == 1: ``levels``;
+    N >= 3: ``sum(levels) - N + 1`` (the documented approximate form).
+    """
     total_levels = sum(levels)
     if total_levels == 0:
         return 0
 
-    n_dims = len(group_vars)
+    n_dims = len(codes_list)
     if n_dims == 2:
         from scipy.sparse import coo_matrix
         from scipy.sparse.csgraph import connected_components
@@ -3022,11 +3078,128 @@ def absorbed_fe_rank(
         # Weak connectivity of the directed one-way bipartite graph equals
         # undirected connectivity, and skips materializing A + A.T (~2.4x).
         n_components = int(connected_components(adjacency, directed=True, connection="weak")[0])
-        rank = total_levels - n_components
-    else:
-        rank = total_levels - n_dims + 1
+        return total_levels - n_components
+    return total_levels - n_dims + 1
 
-    return rank - 1 if has_intercept_col else rank
+
+def _factorize_cluster_codes(
+    cluster_ids: np.ndarray,
+    n_rows: int,
+    mask: Optional[np.ndarray],
+) -> np.ndarray:
+    """Factorize the cluster array over the same positive-weight rows."""
+    cids = np.asarray(cluster_ids)
+    if cids.shape[0] != n_rows:
+        raise ValueError(f"cluster_ids length ({cids.shape[0]}) must match data rows ({n_rows})")
+    if mask is not None:
+        cids = cids[mask]
+    ccodes = pd.factorize(cids, sort=False)[0]
+    if ccodes.size and ccodes.min() < 0:
+        # "missing values" is the established cluster-validation contract
+        # phrase (tests match on it); keep it in the message.
+        raise ValueError(
+            "cluster_ids contain missing values (NaN keys); drop or impute "
+            "those rows before fitting."
+        )
+    return ccodes
+
+
+def _nested_dims_from_codes(
+    group_vars: List[str],
+    codes_list: List[np.ndarray],
+    levels: List[int],
+    ccodes: np.ndarray,
+) -> List[str]:
+    """Dims whose every level maps to exactly one cluster id (O(n) scatter)."""
+    nested = []
+    for g, codes, n_levels in zip(group_vars, codes_list, levels):
+        if n_levels == 0:
+            continue
+        lo = np.full(n_levels, np.iinfo(np.int64).max, dtype=np.int64)
+        hi = np.full(n_levels, -1, dtype=np.int64)
+        np.minimum.at(lo, codes, ccodes)
+        np.maximum.at(hi, codes, ccodes)
+        present = hi >= 0
+        if np.array_equal(lo[present], hi[present]):
+            nested.append(g)
+    return nested
+
+
+def cluster_nested_fe_dims(
+    data: pd.DataFrame,
+    group_vars: List[str],
+    cluster_ids: np.ndarray,
+    *,
+    weights: Optional[np.ndarray] = None,
+) -> List[str]:
+    """Absorbed FE dims nested in the cluster partition.
+
+    A dim ``g`` is nested iff every level of ``g`` maps to exactly one
+    cluster id — the reghdfe/fixest ``ssc(K.fixef = "nested")`` condition
+    under which the dim's parameters are dropped from the clustered CR1
+    count. Evaluated over POSITIVE-weight rows only, mirroring
+    :func:`absorbed_fe_rank`. A coarser cluster (e.g. unit FE clustered by
+    state) is nested; a finer or crossing cluster is not.
+    """
+    if not group_vars:
+        return []
+    codes_list, levels, mask = _factorize_fe_codes(data, group_vars, weights)
+    if sum(levels) == 0:
+        return []
+    ccodes = _factorize_cluster_codes(cluster_ids, len(data), mask)
+    return _nested_dims_from_codes(group_vars, codes_list, levels, ccodes)
+
+
+def absorbed_fe_cr1_k_increment(
+    data: pd.DataFrame,
+    group_vars: List[str],
+    cluster_ids: np.ndarray,
+    *,
+    has_intercept_col: bool,
+    weights: Optional[np.ndarray] = None,
+) -> int:
+    """The clustered-CR1 ``k`` increment for absorbed fixed effects.
+
+    Implements the K_reference bracket (see ``docs/methodology/
+    variance-conventions.md`` defect D2)::
+
+        increment = (0 if has_intercept_col else 1)
+                  + rank(all absorbed dims, incl. constant)
+                  - max(rank(cluster-nested dims, incl. constant), 1)
+
+    The ``+1`` term is the rank of the ABSORBED constant, so it exists only
+    when an FE set is absorbed; with no absorbed dims — or an EMPTY effective
+    support (all rows zero-weight) — the increment is 0. The ``max(..., 1)``
+    floor is load-bearing for the zero-nested-dim case: with no absorbed dim
+    nested in the cluster the conditioning set is the shared constant alone
+    (rank 1). Verified against Stata reghdfe 3.2.9 (via jwdid, ~1e-15) and
+    R fixest 0.14.2 (~1e-12); see the REGISTRY absorbed-FE notes.
+
+    Both rank terms inherit :func:`absorbed_fe_rank`'s dimensionality
+    contract: exact (component-aware) for one and two dims; for THREE or
+    more dims the documented D3 ``sum(levels) - N + 1`` approximation
+    applies — exact for independent connected dims, an over-count for
+    duplicated/nested triples (REGISTRY absorbed-FE note; TODO.md N-way
+    row), so the increment is approximate on such designs.
+    """
+    if not group_vars:
+        return 0
+    codes_list, levels, mask = _factorize_fe_codes(data, group_vars, weights)
+    if sum(levels) == 0:
+        # Empty effective support: nothing absorbed, increment 0 (guarded so
+        # the max(..., 1) floor cannot drive the formula to -1).
+        return 0
+    ccodes = _factorize_cluster_codes(cluster_ids, len(data), mask)
+    nested_names = _nested_dims_from_codes(group_vars, codes_list, levels, ccodes)
+    full_rank = _fe_rank_from_codes(codes_list, levels)
+    if nested_names:
+        nested_idx = [i for i, g in enumerate(group_vars) if g in nested_names]
+        nested_rank = _fe_rank_from_codes(
+            [codes_list[i] for i in nested_idx], [levels[i] for i in nested_idx]
+        )
+    else:
+        nested_rank = 0
+    return (0 if has_intercept_col else 1) + full_rank - max(nested_rank, 1)
 
 
 def demean_by_groups(

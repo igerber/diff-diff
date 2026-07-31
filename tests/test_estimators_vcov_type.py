@@ -2629,16 +2629,15 @@ class TestAbsorbedFEFullKParity:
         np.testing.assert_allclose(tw.att, fe.att, rtol=1e-9)
         np.testing.assert_allclose(tw.se, fe.se, rtol=1e-9)
 
-    def test_absorb_cluster_not_rescaled(self):
-        """The absorbed-FE full-K rescale must NOT touch clustered SEs.
+    def test_absorb_cluster_converges_on_k_reference(self):
+        """absorb= and fixed_effects= clustered SEs are now IDENTICAL.
 
-        The rescale is gated on ``cluster_ids is None``, so the cluster-absorb
-        SE stays at ``k_visible`` and differs from the full-dummy path here.
-        (Full fixest cluster parity is a *separate*, out-of-scope matter: fixest
-        counts non-nested absorbed FE in the CR1 denominator, so for
-        ``absorb=["unit","time"], cluster="unit"`` the non-nested time FE would
-        need counting -- a documented pre-existing limitation, see REGISTRY;
-        this test only pins that D4 does not rescale the cluster path.)
+        Both lanes land on the same K_reference count (visible columns + the
+        conditional rank of absorbed FE not nested in the cluster; the
+        full-dummy lane subtracts its cluster-nested dummies) — the D1
+        convergence from the 3.9 variance-consolidation program, anchored by
+        the Stata reghdfe (jwdid) and fixest cluster arms. Before the fix
+        this test asserted the two lanes DIFFERED (the pre-fix defect).
         """
         df = _make_absorb_panel()
         ab = DifferenceInDifferences(vcov_type="hc1", cluster="unit").fit(
@@ -2658,10 +2657,8 @@ class TestAbsorbedFEFullKParity:
             covariates=["x"],
         )
         assert np.isfinite(ab.se)
-        assert not np.isclose(ab.se, fe.se, rtol=1e-6), (
-            "cluster-absorb SE must keep k_visible (nested-FE), not be rescaled to "
-            "the full-dummy K_full value"
-        )
+        np.testing.assert_allclose(ab.att, fe.att, rtol=0, atol=1e-10)
+        np.testing.assert_allclose(ab.se, fe.se, rtol=1e-9)
 
     def test_absorb_hc2_bm_not_rescaled(self):
         """hc2_bm auto-routes absorb -> full-dummy and uses Satterthwaite DOF;

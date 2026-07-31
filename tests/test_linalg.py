@@ -3362,3 +3362,305 @@ class TestSolveOLSCholFastPath:
         assert diag["solve_ols_fastpath"] == "chol_numpy"
         np.testing.assert_allclose(c_on, c_off, rtol=0, atol=1e-8)
         np.testing.assert_allclose(np.sqrt(np.diag(v_on)), np.sqrt(np.diag(v_off)), rtol=1e-6)
+
+
+class TestClusterKAdjustmentSeam:
+    """The K_reference seam (variance-conventions.md D1/D2): front-door
+    validation on EVERY route, fail-closed saturation on all three sides,
+    weighted-lane forwarding, and the Rust-lane scalar rescale."""
+
+    @pytest.fixture
+    def clustered_data(self):
+        rng = np.random.default_rng(3)
+        n = 120
+        X = np.column_stack([np.ones(n), rng.normal(size=(n, 2))])
+        y = X @ np.array([1.0, 0.5, -0.2]) + rng.normal(size=n)
+        cl = np.repeat(np.arange(12), 10)
+        return X, y, cl
+
+    # ---- front-door contracts (Verification 1b) --------------------------
+
+    def test_front_door_raises_without_cluster(self, clustered_data):
+        from diff_diff.linalg import InvalidClusterKAdjustment
+
+        X, y, _ = clustered_data
+        for rv in (True, False):
+            with pytest.raises(InvalidClusterKAdjustment, match="cluster_ids is None"):
+                solve_ols(X, y, return_vcov=rv, cluster_k_adjustment=2)
+
+    def test_front_door_raises_on_non_hc1_family(self, clustered_data):
+        from diff_diff.linalg import InvalidClusterKAdjustment
+
+        X, y, cl = clustered_data
+        for rv in (True, False):
+            with pytest.raises(InvalidClusterKAdjustment, match="hc2_bm"):
+                solve_ols(
+                    X, y, cluster_ids=cl, vcov_type="hc2_bm", return_vcov=rv, cluster_k_adjustment=2
+                )
+
+    def test_front_door_requires_int(self, clustered_data):
+        from diff_diff.linalg import InvalidClusterKAdjustment
+
+        X, y, cl = clustered_data
+        with pytest.raises(InvalidClusterKAdjustment, match="must be an int"):
+            solve_ols(X, y, cluster_ids=cl, cluster_k_adjustment=2.5)  # type: ignore[arg-type]
+        with pytest.raises(InvalidClusterKAdjustment, match="must be an int"):
+            solve_ols(X, y, cluster_ids=cl, cluster_k_adjustment=True)  # type: ignore[arg-type]
+        # Non-int ZEROS must fail too: `0.0 == 0` and `False == 0`, so a zero
+        # fast path ahead of the type check would silently accept them.
+        with pytest.raises(InvalidClusterKAdjustment, match="must be an int"):
+            solve_ols(X, y, cluster_ids=cl, cluster_k_adjustment=0.0)  # type: ignore[arg-type]
+        with pytest.raises(InvalidClusterKAdjustment, match="must be an int"):
+            solve_ols(X, y, cluster_ids=cl, cluster_k_adjustment=False)  # type: ignore[arg-type]
+
+    def test_compute_robust_vcov_mirrors_the_contract(self, clustered_data):
+        from diff_diff.linalg import InvalidClusterKAdjustment
+
+        X, y, cl = clustered_data
+        residuals = y - X @ np.linalg.lstsq(X, y, rcond=None)[0]
+        with pytest.raises(InvalidClusterKAdjustment):
+            compute_robust_vcov(X, residuals, cluster_k_adjustment=2)
+        with pytest.raises(InvalidClusterKAdjustment):
+            compute_robust_vcov(X, residuals, cl, vcov_type="hc2_bm", cluster_k_adjustment=2)
+
+    def test_linear_regression_fit_raises_symmetrically(self, clustered_data):
+        from diff_diff.linalg import InvalidClusterKAdjustment
+
+        X, y, _ = clustered_data
+        with pytest.raises(InvalidClusterKAdjustment):
+            LinearRegression(vcov_type="classical", include_intercept=False).fit(
+                X, y, cluster_k_adjustment=2
+            )
+
+    def test_type_contract_is_not_route_dependent(self, clustered_data):
+        """Non-int adjustments are rejected on the SHORT-CIRCUITED routes too:
+        a classical fit (truthiness gate, never reaches solve_ols's front
+        door with the kwarg) and a wild_bootstrap_se call whose degenerate
+        early-returns fire before the clustered solve (both would previously
+        swallow `0.0` / `False` silently)."""
+        from diff_diff.linalg import InvalidClusterKAdjustment
+        from diff_diff.utils import wild_bootstrap_se
+
+        X, y, cl = clustered_data
+        for bad in (0.0, False):
+            with pytest.raises(InvalidClusterKAdjustment, match="must be an int"):
+                LinearRegression(vcov_type="classical", include_intercept=False).fit(
+                    X, y, cluster_k_adjustment=bad  # type: ignore[arg-type]
+                )
+        # a saturated design (n == k) hits the degenerate return before the
+        # clustered solve; the entry type check must fire first
+        n_sat = X.shape[1]
+        with pytest.raises(InvalidClusterKAdjustment, match="must be an int"):
+            wild_bootstrap_se(
+                X[:n_sat],
+                y[:n_sat],
+                np.zeros(n_sat),
+                cl[:n_sat],
+                0,
+                cluster_k_adjustment=1.5,  # type: ignore[arg-type]
+            )
+
+    def test_valid_path_coefficient_only(self, clustered_data):
+        """return_vcov=False + nonzero adjustment succeeds (None passthrough)."""
+        X, y, cl = clustered_data
+        coef, resid, vcov = solve_ols(
+            X, y, cluster_ids=cl, return_vcov=False, cluster_k_adjustment=3
+        )
+        assert vcov is None
+        assert np.all(np.isfinite(coef))
+
+    def test_kwarg_is_keyword_only_and_positional_slots_are_unchanged(self, clustered_data):
+        """Signature contract: cluster_k_adjustment is KEYWORD-ONLY on both
+        public carriers and no pre-existing positional slot moved — a legacy
+        positional call can never bind another argument to it.
+        compute_robust_vcov accepts positionals through return_dof exactly as
+        before; solve_ols takes only (X, y) positionally."""
+        import inspect
+
+        from diff_diff.linalg import compute_robust_vcov
+
+        for fn in (solve_ols, compute_robust_vcov):
+            param = inspect.signature(fn).parameters["cluster_k_adjustment"]
+            assert param.kind is inspect.Parameter.KEYWORD_ONLY
+            assert param.default == 0
+        positional = [
+            n
+            for n, p in inspect.signature(compute_robust_vcov).parameters.items()
+            if p.kind is inspect.Parameter.POSITIONAL_OR_KEYWORD
+        ]
+        assert positional == [
+            "X",
+            "residuals",
+            "cluster_ids",
+            "weights",
+            "weight_type",
+            "vcov_type",
+            "return_dof",
+        ]
+        # and a legacy full-positional call still binds correctly
+        X, y, cl = clustered_data
+        residuals = y - X @ np.linalg.lstsq(X, y, rcond=None)[0]
+        legacy = compute_robust_vcov(X, residuals, cl, None, "pweight", "hc1", False)
+        kw = compute_robust_vcov(X, residuals, cluster_ids=cl, vcov_type="hc1")
+        np.testing.assert_array_equal(legacy, kw)
+
+    # ---- the factor itself ----------------------------------------------
+
+    def test_adjustment_is_the_exact_scalar_factor(self, clustered_data):
+        """vcov(adj) == vcov(0) * (n-k)/(n-k-adj) on every lane, both signs."""
+        X, y, cl = clustered_data
+        n, k = X.shape
+        _, _, v0 = solve_ols(X, y, cluster_ids=cl)
+        for adj in (5, -1):
+            _, _, v = solve_ols(X, y, cluster_ids=cl, cluster_k_adjustment=adj)
+            expect = (n - k) / (n - k - adj)
+            np.testing.assert_allclose(v / v0, expect, rtol=0, atol=1e-12)
+
+    def test_zero_adjustment_bit_identical(self, clustered_data):
+        X, y, cl = clustered_data
+        _, _, v0 = solve_ols(X, y, cluster_ids=cl)
+        _, _, v1 = solve_ols(X, y, cluster_ids=cl, cluster_k_adjustment=0)
+        assert np.array_equal(v0, v1)
+
+    def test_tail_dof_vec_stays_on_visible_k(self, clustered_data):
+        """The adjustment never moves the reported dof (tail df is PR C)."""
+        X, y, cl = clustered_data
+        residuals = y - X @ np.linalg.lstsq(X, y, rcond=None)[0]
+        from diff_diff.linalg import _compute_robust_vcov_numpy
+
+        _, dof0 = _compute_robust_vcov_numpy(X, residuals, cl, return_dof=True)
+        _, dof5 = _compute_robust_vcov_numpy(
+            X, residuals, cl, return_dof=True, cluster_k_adjustment=5
+        )
+        np.testing.assert_array_equal(dof0, dof5)
+
+    # ---- fail-closed saturation, all three sides -------------------------
+
+    def test_fail_closed_visible_saturation_survives_negative_adjustment(self):
+        """n == k_visible -> all-NaN on BOTH backends even when the corrected
+        denominator would be positive (residuals are identically zero; the
+        adjudicated saturation semantics)."""
+        rng = np.random.default_rng(11)
+        n = 6
+        X = np.column_stack([np.eye(3)[np.arange(n) % 3], rng.normal(size=(n, 3))])
+        assert X.shape == (6, 6)
+        y = rng.normal(size=n)
+        cl = np.repeat([0, 1], 3)
+        coef, resid, vcov = solve_ols(
+            X, y, cluster_ids=cl, cluster_k_adjustment=-2, rank_deficient_action="silent"
+        )
+        assert vcov is not None and np.isnan(vcov).all()
+
+    def test_fail_closed_k_inf_sides(self, clustered_data):
+        from diff_diff.linalg import _compute_robust_vcov_numpy
+
+        X, y, cl = clustered_data
+        n, k = X.shape
+        residuals = y - X @ np.linalg.lstsq(X, y, rcond=None)[0]
+        # n - k_inf <= 0
+        v_hi = _compute_robust_vcov_numpy(X, residuals, cl, cluster_k_adjustment=n)
+        assert np.isnan(v_hi).all()
+        # k_inf <= 0
+        v_lo = _compute_robust_vcov_numpy(X, residuals, cl, cluster_k_adjustment=-k)
+        assert np.isnan(v_lo).all()
+
+    def test_fail_closed_k_inf_exact_boundary(self, clustered_data):
+        """Both k_inf guard sides pinned at their EXACT boundary, with the
+        one-step recovery on each: n - k_inf == 0 is NaN while == 1 is
+        finite, and k_inf == 0 is NaN while == 1 is finite. The deep-past-
+        boundary cases above cannot distinguish an off-by-one guard."""
+        from diff_diff.linalg import _compute_robust_vcov_numpy
+
+        X, y, cl = clustered_data
+        n, k = X.shape
+        residuals = y - X @ np.linalg.lstsq(X, y, rcond=None)[0]
+        # saturation side: k_inf == n -> NaN; k_inf == n - 1 -> finite
+        assert np.isnan(
+            _compute_robust_vcov_numpy(X, residuals, cl, cluster_k_adjustment=n - k)
+        ).all()
+        assert np.isfinite(
+            _compute_robust_vcov_numpy(X, residuals, cl, cluster_k_adjustment=n - k - 1)
+        ).all()
+        # deflation side: k_inf == 0 -> NaN; k_inf == 1 -> finite
+        assert np.isnan(_compute_robust_vcov_numpy(X, residuals, cl, cluster_k_adjustment=-k)).all()
+        assert np.isfinite(
+            _compute_robust_vcov_numpy(X, residuals, cl, cluster_k_adjustment=-(k - 1))
+        ).all()
+
+    # ---- weighted external-vcov forwarding sites -------------------------
+
+    def test_weighted_full_rank_forwarding(self, clustered_data):
+        """The weighted external-vcov lane bypasses _solve_ols_numpy; the
+        adjustment must reach its direct kernel call (full-rank site)."""
+        X, y, cl = clustered_data
+        n, k = X.shape
+        w = np.ones(n)
+        w[:10] = 2.0
+        _, _, v0 = solve_ols(X, y, cluster_ids=cl, weights=w)
+        _, _, v5 = solve_ols(X, y, cluster_ids=cl, weights=w, cluster_k_adjustment=5)
+        expect = (n - k) / (n - k - 5)
+        np.testing.assert_allclose(v5 / v0, expect, rtol=0, atol=1e-12)
+
+    def test_weighted_rank_deficient_forwarding(self, clustered_data):
+        """The reduced-design weighted site (collinear column dropped)."""
+        X, y, cl = clustered_data
+        n = X.shape[0]
+        X_bad = np.column_stack([X, X[:, 1] + X[:, 2]])  # collinear 4th col
+        w = np.ones(n)
+        w[:10] = 2.0
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            _, _, v0 = solve_ols(
+                X_bad, y, cluster_ids=cl, weights=w, rank_deficient_action="silent"
+            )
+            _, _, v5 = solve_ols(
+                X_bad,
+                y,
+                cluster_ids=cl,
+                weights=w,
+                rank_deficient_action="silent",
+                cluster_k_adjustment=5,
+            )
+        kept = ~np.isnan(np.diag(v0))
+        k_red = int(kept.sum())
+        expect = (n - k_red) / (n - k_red - 5)
+        np.testing.assert_allclose(
+            v5[np.ix_(kept, kept)] / v0[np.ix_(kept, kept)], expect, rtol=0, atol=1e-12
+        )
+
+    # ---- Rust lanes ------------------------------------------------------
+
+    def test_rust_instability_fallback_forwards_adjustment(self, clustered_data):
+        """The documented Rust-instability numpy re-run must carry the
+        adjustment (the :2199-class forwarding site)."""
+        from unittest.mock import patch
+
+        if not HAS_RUST_BACKEND:
+            pytest.skip("Rust backend not available")
+        X, y, cl = clustered_data
+        n, k = X.shape
+        residuals = y - X @ np.linalg.lstsq(X, y, rcond=None)[0]
+        v0 = compute_robust_vcov(X, residuals, cl)
+
+        def mock_rust_vcov(*args, **kwargs):
+            raise ValueError("Matrix inversion numerically unstable")
+
+        with patch("diff_diff.linalg._rust_compute_robust_vcov", mock_rust_vcov):
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                v5 = compute_robust_vcov(X, residuals, cl, cluster_k_adjustment=5)
+        expect = (n - k) / (n - k - 5)
+        np.testing.assert_allclose(v5 / v0, expect, rtol=0, atol=1e-10)
+
+    def test_rust_and_numpy_agree_on_adjusted_vcov(self, clustered_data, monkeypatch):
+        """Cross-backend parity for the corrected clustered vcov (the scalar
+        rescale on the Rust lane vs the in-kernel factor on numpy)."""
+        if not HAS_RUST_BACKEND:
+            pytest.skip("Rust backend not available")
+        import diff_diff.linalg as lmod
+
+        X, y, cl = clustered_data
+        _, _, v_rust = solve_ols(X, y, cluster_ids=cl, cluster_k_adjustment=5)
+        monkeypatch.setattr(lmod, "HAS_RUST_BACKEND", False)
+        _, _, v_py = solve_ols(X, y, cluster_ids=cl, cluster_k_adjustment=5)
+        np.testing.assert_allclose(v_rust, v_py, rtol=1e-12)

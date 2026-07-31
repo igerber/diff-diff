@@ -4,9 +4,9 @@ from typing import Any, Dict, Iterable, Optional, Union
 import numpy as np
 import pandas as pd
 
-from diff_diff.linalg import _rank_guarded_inv, solve_ols
+from diff_diff.linalg import InvalidClusterKAdjustment, _rank_guarded_inv, solve_ols
 from diff_diff.lpdid_results import LPDiDResults
-from diff_diff.utils import safe_inference
+from diff_diff.utils import absorbed_fe_rank, cluster_nested_fe_dims, safe_inference
 
 __all__ = ["LPDiD", "LPDiDResults"]
 
@@ -859,17 +859,41 @@ class LPDiD:
         use_cluster_vcov = len(pd.unique(cluster_ids)) >= 2
         vcov = None
         if use_cluster_vcov:
+            # Clustered-CR1 K_reference adjustment (variance-conventions.md
+            # D1 family): LPDiD's built-in `_event_time` dummies ARE its time
+            # FE (the authors' reference recipe absorbs time FE), and inline
+            # absorb dummies are user FE — both SUBTRACT their joint rank
+            # when nested in the cluster. The nested test runs on the same
+            # `sample` rows/cluster the solve uses.
+            _lp_fe_dims = []
+            if include_time_fe:
+                _lp_fe_dims.append("_event_time")
+            _lp_fe_dims.extend(absorb_columns)
+            _cr1_k_adj_lp = 0
+            if _lp_fe_dims:
+                _nested_lp = cluster_nested_fe_dims(
+                    sample, _lp_fe_dims, cluster_ids, weights=weights
+                )
+                if _nested_lp:
+                    _cr1_k_adj_lp = -absorbed_fe_rank(
+                        sample, _nested_lp, has_intercept_col=True, weights=weights
+                    )
             try:
                 coef, _, vcov = solve_ols(
                     design,
                     response,
                     cluster_ids=cluster_ids,
+                    cluster_k_adjustment=_cr1_k_adj_lp,
                     return_vcov=True,
                     rank_deficient_action=self.rank_deficient_action,
                     column_names=column_names,
                     weights=weights,
                 )
-            except (ValueError, ZeroDivisionError):
+            except (ValueError, ZeroDivisionError) as _lp_exc:
+                # NEVER swallow a K-adjustment contract violation into a
+                # silent unclustered se=NaN refit (no-silent-failure rule).
+                if isinstance(_lp_exc, InvalidClusterKAdjustment):
+                    raise
                 coef, _, _ = solve_ols(
                     design,
                     response,

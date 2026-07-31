@@ -10,15 +10,21 @@ This document outlines the strategy for improving diff-diff's performance on lar
 `pd.factorize` calls + a sparse weak-connectivity `connected_components` on the
 bipartite level graph; the directed weak-connectivity form skips materializing
 `A + A.T`, ~2.4x over the naive build). Measured on the county-class shape
-(3,100 units x 60 periods, 186k rows): **1.9 ms/call**, ~10 ns/row. Against the
-Rust-served TWFE hc1 fit on that shape (24 ms) the share is **7.7%** — above the
-2% materiality gate set in the consolidation plan, but the denominator is the
-library's fastest fit configuration; on fits with covariates, bootstrap, or the
-pure-Python backend the share falls well under 2%, and the absolute cost is flat
-O(n) with no allocation cliffs. The remaining mitigation — reusing the factorized
-codes `demean_by_groups`/`within_transform` already produce instead of
-re-factorizing — requires threading demeaner internals through four call sites
-and is deliberately deferred (tracked alongside the D3 N-way row in TODO.md);
+(3,100 units x 60 periods, 186k rows): **1.9 ms/call**, ~10 ns/row. The
+K_reference convergence (3.9 PR B) added
+`diff_diff.utils.absorbed_fe_cr1_k_increment` on clustered-hc1 absorbed fits:
+**3.2 ms/call** on the same shape — the shared factorizations plus the
+`np.minimum.at`/`np.maximum.at` nested-dims scatter, a cluster factorize, and
+the second (nested-set) rank composition. Against the Rust-served TWFE hc1 fit
+on that shape (24 ms) the shares are **7.7%** (rank alone, unclustered fits)
+and **~13%** (the increment, clustered fits) — above the 2% materiality gate
+set in the consolidation plan, but the denominator is the library's fastest fit
+configuration; on fits with covariates, bootstrap, or the pure-Python backend
+the share falls well under 2%, and the absolute cost is flat O(n) with no
+allocation cliffs. The remaining mitigation — reusing the factorized codes
+`demean_by_groups`/`within_transform` already produce instead of re-factorizing
+— requires threading demeaner internals through the call sites and is
+deliberately deferred (tracked alongside the D3 N-way row in TODO.md);
 correctness on disconnected/hierarchical panels ships first.
 
 ## Opt-in solve_ols normal-equations Cholesky fast path (v3.7, 2026-07)

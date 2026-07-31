@@ -44,13 +44,16 @@
 *!   - Both commands are run WITHOUT covariates. `csdid`'s method is therefore
 *!     immaterial (reg/ipw/dr coincide absent covariates); `method(reg)` is
 *!     passed only to make the no-covariate path explicit.
-*!   - SEs are emitted alongside the point estimates. The library's ETWFE `hc1`
-*!     SEs are uniformly SMALLER than `jwdid`'s, by a factor that shrinks as the
-*!     cluster count grows. The MECHANISM is not identified: the gap tracks
-*!     sqrt(G/(G-1)) but sits consistently above it, and the CR1 factor at
-*!     linalg.py already applies (G/(G-1))*((n-1)/(n-k)), so a missing cluster
-*!     term is ruled out. The consuming test pins the POINT estimates tightly and
-*!     records the SE ratio as MEASURED, not diagnosed.
+*!   - SEs are emitted alongside the point estimates. The historical uniform SE
+*!     gap vs `jwdid` (1.0280 at G=20 shrinking to 1.0010 at G=500) was defect
+*!     D2 of the 3.9 variance program: the library's clustered CR1 factor used
+*!     only the visible treatment-cell count, omitting the absorbed FE not
+*!     nested in the unit cluster. Under the K_reference convergence
+*!     (docs/methodology/variance-conventions.md) the SEs match reghdfe's at
+*!     machine precision, and the `ladder` block below pins that agreement at
+*!     every cluster count alongside reghdfe's own df accounting
+*!     (df_a / rank / df_r), which the Python side cross-checks against
+*!     absorbed_fe_cr1_k_increment.
 *!   - The `never` arm is the external anchor for issue #724: `jwdid ... never`
 *!     omits the `g-1` reference cell per cohort (W2025 Eq. 6.1/6.4), which the
 *!     library previously left to QR rank detection.
@@ -214,6 +217,54 @@ local ja_nunits : word count `_at_units'
 restore
 
 * ------------------------------------------------------------------------------
+* Subsample LADDER: jwdid on nested rosters spanning G ~ 20..500, the artifact
+* required by the K_reference convergence work (TODO row "Stata subsample
+* ladder"). Roster rule (deterministic, reproduced verbatim by the Python
+* side): the first N units per first_treat cohort by ASCENDING countyreal,
+* N in {5, 10, 20, 40, 80, 200, 500}; cohort sizes are 309/20/40/131, so the
+* rungs land at G = 20/40/80/140/220/391/500. Each rung records reghdfe's own
+* df accounting (df_a and its initial/nested/redundant decomposition, rank,
+* df_r) so the golden pins not just the SEs but the K-accounting that
+* produces them - the Python test cross-checks df_a against
+* absorbed_fe_cr1_k_increment per rung.
+* ------------------------------------------------------------------------------
+local ladder_rungs "5 10 20 40 80 200 500"
+foreach N of local ladder_rungs {
+    preserve
+    keep countyreal first_treat
+    duplicates drop
+    bysort first_treat (countyreal): gen _idx = _n
+    quietly keep if _idx <= `N'
+    keep countyreal
+    tempfile roster`N'
+    quietly save `roster`N''
+    restore, preserve
+    quietly merge m:1 countyreal using `roster`N'', keep(match) nogenerate
+    jwdid lemp, ivar(countyreal) tvar(year) gvar(first_treat)
+    matrix lad_b_`N' = e(b)
+    matrix lad_V_`N' = e(V)
+    local lad_names_`N' : colnames lad_b_`N'
+    local lad_n_`N' = e(N)
+    local lad_G_`N' = e(N_clust)
+    local lad_dfa_`N' = e(df_a)
+    local lad_dfai_`N' = e(df_a_initial)
+    local lad_dfan_`N' = e(df_a_nested)
+    local lad_dfared_`N' = e(df_a_redundant)
+    local lad_rank_`N' = e(rank)
+    local lad_dfr_`N' = e(df_r)
+    restore
+}
+* Pin the roster rule itself: a changed rule or panel would move these.
+assert `lad_G_5' == 20
+assert `lad_G_10' == 40
+assert `lad_G_20' == 80
+assert `lad_G_40' == 140
+assert `lad_G_80' == 220
+assert `lad_G_200' == 391
+assert `lad_G_500' == 500
+assert `lad_n_500' == 2500
+
+* ------------------------------------------------------------------------------
 * Emit the golden.
 * ------------------------------------------------------------------------------
 local sver = c(stata_version)
@@ -321,6 +372,46 @@ forvalues i = 1/`k' {
         file write `fh' "`sep'" _n `"      "`nm'": {"att": `a', "se": `s3'}"'
         local sep ","
     }
+}
+file write `fh' _n "    }" _n
+file write `fh' "  }," _n
+
+* --- subsample ladder (K_reference gate at every cluster count) ---------------
+file write `fh' `"  "ladder": {"' _n
+file write `fh' `"    "roster_rule": "first N units per first_treat cohort by ascending countyreal","' _n
+file write `fh' `"    "jwdid_cmd": "jwdid lemp, ivar(countyreal) tvar(year) gvar(first_treat)","' _n
+file write `fh' `"    "rungs": {"'
+local rsep ""
+foreach N of local ladder_rungs {
+    file write `fh' "`rsep'" _n `"      "`N'": {"' _n
+    file write `fh' `"        "n_per_cohort": `N',"' _n
+    file write `fh' `"        "G": `lad_G_`N'',"' _n
+    file write `fh' `"        "n": `lad_n_`N'',"' _n
+    file write `fh' `"        "df_a": `lad_dfa_`N'',"' _n
+    file write `fh' `"        "df_a_initial": `lad_dfai_`N'',"' _n
+    file write `fh' `"        "df_a_nested": `lad_dfan_`N'',"' _n
+    file write `fh' `"        "df_a_redundant": `lad_dfared_`N'',"' _n
+    file write `fh' `"        "rank": `lad_rank_`N'',"' _n
+    file write `fh' `"        "df_r": `lad_dfr_`N'',"' _n
+    file write `fh' `"        "cells": {"'
+    local csep ""
+    local k = colsof(lad_b_`N')
+    forvalues i = 1/`k' {
+        local nm : word `i' of `lad_names_`N''
+        scalar bval = lad_b_`N'[1, `i']
+        scalar seval = sqrt(lad_V_`N'[`i', `i'])
+        if !missing(bval) {
+            _jnum bval
+            local a = r(s)
+            _jnum seval
+            local s4 = r(s)
+            file write `fh' "`csep'" _n `"          "`nm'": {"att": `a', "se": `s4'}"'
+            local csep ","
+        }
+    }
+    file write `fh' _n "        }" _n
+    file write `fh' "      }"
+    local rsep ","
 }
 file write `fh' _n "    }" _n
 file write `fh' "  }" _n

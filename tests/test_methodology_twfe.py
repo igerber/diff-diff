@@ -469,13 +469,13 @@ class TestRBenchmarkTWFE:
         )
 
     def test_se_matches_r_twfe(self, r_twfe_results, r_benchmark_panel_data):
-        """Cluster-robust SE within the documented fixest-CR1 band.
+        """Cluster-robust SE matches fixest under the K_reference convergence.
 
-        Measured gap is ~2.5e-3 relative — the documented ~0.25%
-        absorbed-FE CR1 DOF-convention deviation (fixest counts non-nested
-        FE in the finite-sample denominator; see SE-audit G2 + the
-        band-pin in tests/test_fixest_did_twfe_parity.py). rtol=0.005
-        pins that we never regress BEYOND the known band."""
+        Measured gap is ~1.4e-15 relative — the historical ~2.5e-3 band was
+        defect D2 (the CR1 factor omitted the non-nested time FE fixest
+        counts), closed in 3.9. Pinned at rtol=1e-9 rather than a
+        machine-epsilon literal because this MAP-demean lane measured up to
+        5.2e-11 on other fixtures (BLAS-order dependent)."""
         data, _ = r_benchmark_panel_data
 
         py_results = self._run_python_twfe(data)
@@ -483,7 +483,7 @@ class TestRBenchmarkTWFE:
         np.testing.assert_allclose(
             py_results.se,
             r_twfe_results["se"],
-            rtol=0.005,
+            rtol=1e-9,
             err_msg=f"SE mismatch: Python={py_results.se:.6f}, R={r_twfe_results['se']:.6f}",
         )
 
@@ -574,14 +574,14 @@ class TestRBenchmarkTWFE:
         ), "p-value matches the cluster-df convention — the documented deviation flipped"
 
     def test_ci_matches_r_twfe(self, r_twfe_results, r_benchmark_panel_data):
-        """CI bounds within the documented-deviation band (measured ~1.9e-3).
+        """CI bounds within the remaining df-convention band (measured ~1.7e-3).
 
-        The bounds inherit BOTH documented deviations through
-        att ± crit*se: the ~0.25% CR1 SE finite-sample-scale band AND the
-        clustered inference-df convention (Python t(residual df=148)
-        critical value vs fixest t(G−1=49); REGISTRY
-        §TwoWayFixedEffects). The ATT itself matches at machine
-        precision."""
+        Post-K_reference the SE side matches fixest at machine precision, so
+        the bounds' residual gap through att ± crit*se is SOLELY the clustered
+        inference-df convention (Python t(residual df=148) critical value vs
+        fixest t(G−1=49); REGISTRY §TwoWayFixedEffects — PR C scope).
+        Tightened 0.005 → 0.003 accordingly (measured 1.7e-3/1.4e-3). The
+        ATT itself matches at machine precision."""
         data, _ = r_benchmark_panel_data
 
         py_results = self._run_python_twfe(data)
@@ -589,13 +589,13 @@ class TestRBenchmarkTWFE:
         np.testing.assert_allclose(
             py_results.conf_int[0],
             r_twfe_results["ci_lower"],
-            rtol=0.005,
+            rtol=0.003,
             err_msg=f"CI lower mismatch: Python={py_results.conf_int[0]:.6f}, R={r_twfe_results['ci_lower']:.6f}",
         )
         np.testing.assert_allclose(
             py_results.conf_int[1],
             r_twfe_results["ci_upper"],
-            rtol=0.005,
+            rtol=0.003,
             err_msg=f"CI upper mismatch: Python={py_results.conf_int[1]:.6f}, R={r_twfe_results['ci_upper']:.6f}",
         )
 
@@ -618,8 +618,9 @@ class TestRBenchmarkTWFE:
     def test_se_matches_r_with_covariate(
         self, r_twfe_results_with_covariate, r_benchmark_panel_data_with_covariate
     ):
-        """SE with covariate within the documented CR1 band (measured
-        ~2.5e-3; see test_se_matches_r_twfe)."""
+        """SE with covariate matches fixest under the K_reference convergence
+        (the historical ~2.5e-3 D2 band is closed; see
+        test_se_matches_r_twfe for the rtol=1e-9 headroom rationale)."""
         data, _ = r_benchmark_panel_data_with_covariate
 
         py_results = self._run_python_twfe(data, covariates=["x1"])
@@ -627,7 +628,7 @@ class TestRBenchmarkTWFE:
         np.testing.assert_allclose(
             py_results.se,
             r_twfe_results_with_covariate["se"],
-            rtol=0.005,
+            rtol=1e-9,
             err_msg=f"SE w/ cov mismatch: Python={py_results.se:.6f}, R={r_twfe_results_with_covariate['se']:.6f}",
         )
 
@@ -892,12 +893,16 @@ class TestTWFEEdgeCases:
         df_adjustment = n_units + n_times - 2
         cluster_ids = data["unit"].values
 
+        # Clustered-CR1 K_reference: the manual reference carries the same
+        # non-nested absorbed rank (time | unit) as the estimator — with the
+        # unit cluster, the unit FE is nested (dropped) and the time FE adds
+        # its conditional rank n_times - 1.
         reg = LinearRegression(
             include_intercept=False,
             robust=True,
             cluster_ids=cluster_ids,
             rank_deficient_action="silent",
-        ).fit(X, y, df_adjustment=df_adjustment)
+        ).fit(X, y, df_adjustment=df_adjustment, cluster_k_adjustment=n_times - 1)
         manual_se = reg.get_inference(1).se
 
         np.testing.assert_allclose(
@@ -1114,13 +1119,16 @@ class TestTWFESEVerification:
             f"HC1 SE ({hc1_se:.6f}) — auto-clustering must be active"
         )
 
-        # Also verify TWFE SE matches a manually computed cluster SE
+        # Also verify TWFE SE matches a manually computed cluster SE. The
+        # manual reference carries the clustered-CR1 K_reference increment:
+        # under the unit cluster the unit FE is nested (dropped) and the
+        # time FE contributes its conditional rank n_times - 1.
         cluster_reg = LinearRegression(
             include_intercept=False,
             robust=True,
             cluster_ids=data["unit"].values,
             rank_deficient_action="silent",
-        ).fit(X, y, df_adjustment=df_adjustment)
+        ).fit(X, y, df_adjustment=df_adjustment, cluster_k_adjustment=n_times - 1)
         manual_cluster_se = cluster_reg.get_inference(1).se
 
         np.testing.assert_allclose(

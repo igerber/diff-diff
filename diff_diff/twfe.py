@@ -16,8 +16,10 @@ from diff_diff.estimators import DifferenceInDifferences
 from diff_diff.linalg import LinearRegression
 from diff_diff.results import DiDResults
 from diff_diff.utils import (
+    absorbed_fe_cr1_k_increment,
     absorbed_fe_rank,
     build_fe_dummy_blocks,
+    cluster_nested_fe_dims,
     fe_dummy_names,
     pre_demean_norms,
     snap_absorbed_regressors,
@@ -529,6 +531,28 @@ class TwoWayFixedEffects(DifferenceInDifferences):
                 survey_cluster_ids if self.inference != "wild_bootstrap" else None
             )
 
+        # Clustered-CR1 K_reference increment for the within-transform design
+        # (variance-conventions.md D2): absorbed unit/time FE not nested in
+        # the cluster add their conditional rank. Gated on the effective-hc1
+        # clustered analytical lane — under wild_bootstrap the constructor
+        # cluster above is None (the WCB wiring carries its own adjustment),
+        # the full-dummy branch has no analytical CR1 (hc2/hc2_bm only), and
+        # survey designs replace the CR1 sandwich wholesale.
+        _cr1_k_adj_twfe = 0
+        if (
+            not use_full_dummy
+            and _fit_vcov_type == "hc1"
+            and _conley_cluster_override is not None
+            and resolved_survey is None
+        ):
+            _cr1_k_adj_twfe = absorbed_fe_cr1_k_increment(
+                data,
+                [unit, time],
+                _conley_cluster_override,
+                has_intercept_col=True,
+                weights=survey_weights,
+            )
+
         if self.rank_deficient_action == "error":
             reg = LinearRegression(
                 include_intercept=False,
@@ -547,7 +571,7 @@ class TwoWayFixedEffects(DifferenceInDifferences):
                 conley_unit=_conley_unit_arr,
                 conley_lag_cutoff=self.conley_lag_cutoff,
                 df_convention=self.df_convention,
-            ).fit(X, y, df_adjustment=df_adjustment)
+            ).fit(X, y, df_adjustment=df_adjustment, cluster_k_adjustment=_cr1_k_adj_twfe)
         else:
             # Suppress generic warning, TWFE provides context-specific messages below
             with warnings.catch_warnings():
@@ -569,7 +593,7 @@ class TwoWayFixedEffects(DifferenceInDifferences):
                     conley_unit=_conley_unit_arr,
                     conley_lag_cutoff=self.conley_lag_cutoff,
                     df_convention=self.df_convention,
-                ).fit(X, y, df_adjustment=df_adjustment)
+                ).fit(X, y, df_adjustment=df_adjustment, cluster_k_adjustment=_cr1_k_adj_twfe)
 
         coefficients = reg.coefficients_
         residuals = reg.residuals_
@@ -693,8 +717,32 @@ class TwoWayFixedEffects(DifferenceInDifferences):
             # test-inversion based; no reference t-distribution, so no
             # effective inference df).
             _inference_df_used = None
+            # K_reference adjustment for the bootstrap's own CR1 factors,
+            # against the RAW cluster ids it partitions on. Within design:
+            # the absorbed increment. Full-dummy design (hc2/hc2_bm + WCB):
+            # the explicit unit/time dummy blocks SUBTRACT their nested rank
+            # (D1 convention) — the analytical hc2 vcov has no CR1 factor,
+            # but the bootstrap computes its own.
+            _wcb_k_adj_twfe = 0
+            if cluster_ids is not None:
+                if use_full_dummy:
+                    _nested_wcb = cluster_nested_fe_dims(
+                        data, [unit, time], cluster_ids, weights=survey_weights
+                    )
+                    if _nested_wcb:
+                        _wcb_k_adj_twfe = -absorbed_fe_rank(
+                            data, _nested_wcb, has_intercept_col=True, weights=survey_weights
+                        )
+                else:
+                    _wcb_k_adj_twfe = absorbed_fe_cr1_k_increment(
+                        data,
+                        [unit, time],
+                        cluster_ids,
+                        has_intercept_col=True,
+                        weights=survey_weights,
+                    )
             se, p_value, conf_int, t_stat, vcov, _ = self._run_wild_bootstrap_inference(
-                X, y, residuals, cluster_ids, att_idx
+                X, y, residuals, cluster_ids, att_idx, cluster_k_adjustment=_wcb_k_adj_twfe
             )
         else:
             # Use analytical inference from LinearRegression

@@ -232,29 +232,23 @@ class TestNeverTreatedVsStataJwdid:
                 err_msg=f"never_treated ATT{key} != Stata jwdid never",
             )
 
-    def test_se_gap_matches_the_not_yet_treated_arm(self, never_fit):
-        """The SE gap is a control-group-INDEPENDENT finite-sample factor.
+    def test_se_matches_jwdid_never_treated_arm(self, never_fit):
+        """SEs now reproduce Stata jwdid (reghdfe) at machine precision.
 
-        The golden stores ``jwdid_never`` SEs, so the path this PR actually
-        changed gets its own SE gate rather than inheriting the not-yet-treated
-        one. Measured here across all 12 never-treated cells (7 post + 5
-        placebo): the ratio is uniform to ~1e-14 -- two orders tighter than the
-        1e-5 the sibling test allows -- and its mean, 1.00100634, is the SAME
-        factor the not-yet-treated arm shows.
-
-        That agreement is the point. Whatever produces the gap does NOT depend
-        on the control group, on the cell being post-treatment vs placebo, or
-        on the cell count (12 here vs 7 there), which constrains any mechanism
-        later proposed for it (tracked in TODO.md). As with the sibling test,
-        no closed form is asserted -- only the observed factor.
+        The historical 1.00100634 SE ratio on this arm was the D2 defect:
+        the clustered CR1 factor's ``k`` omitted the absorbed FE not nested
+        in the unit cluster. Under the K_reference convergence
+        (variance-conventions.md, 3.9 program) all 12 never-treated cells
+        sit at ratio 1.0 with spread ~1e-14 — the same machine-precision
+        agreement the not-yet-treated and all-eventually-treated arms show.
+        Two-sided by design: a strict inequality on a quantity at
+        1.0 ± float noise would be a coin flip.
         """
         stata = _stata_jwdid_cells(_golden(), "jwdid_never")
         ratios = [rec["se"] / never_fit.group_time_effects[key]["se"] for key, rec in stata.items()]
         assert len(ratios) == 12, f"expected 12 never_treated cells, got {len(ratios)}"
-        assert max(ratios) - min(ratios) < 1e-5, f"SE ratio is not uniform: {ratios}"
-        mean_ratio = float(np.mean(ratios))
-        assert mean_ratio > 1.0, "library SE should be below jwdid's, not above"
-        np.testing.assert_allclose(mean_ratio, 1.001006, rtol=1e-4)
+        assert max(ratios) - min(ratios) < 1e-9, f"SE ratio is not uniform: {ratios}"
+        np.testing.assert_allclose(float(np.mean(ratios)), 1.0, rtol=1e-9)
 
 
 class TestETWFEvsStataJwdid:
@@ -275,45 +269,27 @@ class TestETWFEvsStataJwdid:
             compared += 1
         assert compared == 7, f"expected 7 ETWFE cells, compared {compared}"
 
-    def test_se_is_uniformly_below_jwdid(self, fits):
-        """MEASURED deviation, recorded without asserting a mechanism.
+    def test_se_matches_jwdid(self, fits):
+        """SEs reproduce Stata jwdid (reghdfe 3.2.9) at machine precision.
 
-        Every ``hc1`` SE is smaller than ``jwdid``'s by a factor that is
-        UNIFORM across cells (spread < 1e-6 within a fit), so it is a
-        finite-sample convention difference rather than noise or a per-cell
-        bug. The magnitude shrinks as the cluster count grows -- 1.0280 at
-        G=20, 1.0132 at G=40, 1.0010 at G=500 -- so the library is
-        systematically anti-conservative relative to the reference, negligibly
-        with many clusters and materially with few.
-
-        Deliberately NOT asserted: a closed form. The gap tracks
-        ``sqrt(G/(G-1))`` closely but is consistently ABOVE it (by ~0.2% at
-        G=20, ~0.001% at G=500), and ``solve_ols`` already applies
-        ``(G/(G-1)) * ((n-1)/(n-k))`` -- so "the library omits G/(G-1)" is
-        NOT the explanation, and no verified formula has been derived. Pinning
-        a wrong mechanism here would be worse than pinning none: this test
-        locks the OBSERVED gap at this panel's G, and the derivation is tracked
-        in TODO.md. See the REGISTRY WooldridgeDiD note.
-
-        SCOPE: this pins the FULL-PANEL ratio (G=500) only. The smaller-G
-        figures quoted in the REGISTRY note were measured ad hoc on subsampled
-        panels and are not gated here, so a regression in the few-cluster
-        behavior -- where the gap is materially largest -- would not fail CI.
-        Committing that ladder is listed as a required artifact on the
-        derivation row in TODO.md.
+        The historical uniform 1.001006 gap on this G=500 arm was defect D2:
+        the clustered CR1 factor used only the visible treatment-cell count,
+        omitting the absorbed unit/time FE not nested in the unit cluster.
+        The mechanism was derived in closed form —
+        ``K_reference = cells + T`` on this no-intercept within design — and
+        shipped as the 3.9 K_reference convergence
+        (docs/methodology/variance-conventions.md); all 7 cells now sit at
+        ratio 1.0 with spread ~1e-14. Two-sided by design (a strict
+        inequality at 1.0 ± float noise is a coin flip). The subsample
+        LADDER (G≈20..500) gates the few-cluster behavior separately.
         """
         etwfe, _ = fits
         stata = _stata_jwdid_cells(_golden())
 
         ratios = [rec["se"] / etwfe.group_time_effects[key]["se"] for key, rec in stata.items()]
         assert len(ratios) == 7
-        # Uniform across every cell: a finite-sample factor, not noise.
-        assert max(ratios) - min(ratios) < 1e-5, f"SE ratio is not uniform: {ratios}"
-        # Stata is LARGER (we are anti-conservative), by the amount observed on
-        # this G=500 panel. Regenerating against a different panel moves this.
-        mean_ratio = float(np.mean(ratios))
-        assert mean_ratio > 1.0, "library SE should be below jwdid's, not above"
-        np.testing.assert_allclose(mean_ratio, 1.001006, rtol=1e-4)
+        assert max(ratios) - min(ratios) < 1e-9, f"SE ratio is not uniform: {ratios}"
+        np.testing.assert_allclose(float(np.mean(ratios)), 1.0, rtol=1e-9)
 
 
 class TestCallawaySantAnnaVsStataCsdid:
@@ -334,9 +310,10 @@ class TestCallawaySantAnnaVsStataCsdid:
         assert compared == 7, f"expected 7 CS cells, compared {compared}"
 
     def test_se_matches_csdid(self, fits):
-        """Unlike ETWFE, the CS SEs agree outright - which is what makes the
-        ETWFE SE gap a real finding rather than a convention difference the
-        whole library shares."""
+        """CS SEs agree with Stata csdid outright (IF variance, no CR1
+        factor). Historically this contrast is what isolated the ETWFE SE
+        gap as a CR1-k accounting defect rather than a library-wide
+        convention difference; both estimators now match their references."""
         _, cs = fits
         stata = _stata_csdid_cells(_golden())
         for key, rec in stata.items():
@@ -427,25 +404,123 @@ class TestAllEventuallyTreatedVsStataJwdid:
         assert golden["n"] == 764
         assert alltreated_fit.n_obs == golden["n"]
 
-    def test_se_gap_is_a_freshly_measured_ratio_at_this_cluster_count(self, alltreated_fit):
-        """The `hc1` SE gap is cluster-count dependent, so the ratio is measured
-        HERE rather than inherited.
+    def test_se_matches_jwdid_at_this_cluster_count(self, alltreated_fit):
+        """The G=191 arm matches jwdid at machine precision too.
 
-        The sibling arms pin 1.001006 at G=500. This arm has G=191 and shows
-        1.00264201 -- copying the sibling constant would fail on first run. The
-        observed sequence (1.0280@G=20, 1.0132@G=40, 1.00264@G=191,
-        1.0010@G=500) is monotone in G, which constrains any mechanism later
-        proposed for the gap (still open, TODO.md).
-
-        As with the sibling tests, no closed form is asserted -- only the
-        observed factor, and that the library's SE sits BELOW jwdid's.
+        Pre-fix this arm showed the LARGEST pinned gap (1.00264201 at G=191
+        vs 1.001006 at G=500 — the D2 defect is cluster-count dependent),
+        which is exactly why it gets its own gate rather than inheriting the
+        sibling constant. Under the K_reference convergence all 4 cells sit
+        at ratio 1.0 with spread ~1e-15, confirming the fix holds at a
+        materially smaller G than the full panel. Two-sided by design.
         """
         stata = _stata_jwdid_cells(_golden(), "jwdid_alltreated")
         ratios = [
             rec["se"] / alltreated_fit.group_time_effects[key]["se"] for key, rec in stata.items()
         ]
         assert len(ratios) == 4, f"expected 4 all-treated cells, got {len(ratios)}"
-        assert max(ratios) - min(ratios) < 1e-5, f"SE ratio is not uniform: {ratios}"
-        mean_ratio = float(np.mean(ratios))
-        assert mean_ratio > 1.0, "library SE should be below jwdid's, not above"
-        np.testing.assert_allclose(mean_ratio, 1.002642, rtol=1e-4)
+        assert max(ratios) - min(ratios) < 1e-9, f"SE ratio is not uniform: {ratios}"
+        np.testing.assert_allclose(float(np.mean(ratios)), 1.0, rtol=1e-9)
+
+
+_LADDER_RUNGS = [5, 10, 20, 40, 80, 200, 500]
+
+
+def _ladder_subsample(df: pd.DataFrame, n_per_cohort: int) -> pd.DataFrame:
+    """The generator's roster rule, verbatim: the first ``n_per_cohort`` units
+    per ``first_treat`` cohort by ascending ``countyreal``."""
+    units = df.drop_duplicates("countyreal")[["countyreal", "first_treat"]]
+    keep = set(
+        units.sort_values("countyreal").groupby("first_treat").head(n_per_cohort)["countyreal"]
+    )
+    return df[df["countyreal"].isin(keep)].copy()
+
+
+class TestSubsampleLadderVsStataJwdid:
+    """The K_reference gate at every cluster count (the ``ladder`` block).
+
+    The D2 defect was cluster-count dependent — measured SE ratios of 1.0280
+    at G=20, 1.0132 at G=40, 1.00264 at G=191, 1.0010 at G=500 — so a
+    full-panel gate alone could mask a partial fix that only converges at
+    large G. Each rung refits the library on the identical roster and pins
+    the ratio at 1.0 (observed spreads ~1e-15..1e-14 across G=20..500).
+
+    The ladder doubles as the K-ACCOUNTING probe: reghdfe's own df
+    decomposition is recorded per rung, and ``df_a`` must equal the library's
+    ``absorbed_fe_cr1_k_increment`` minus the reported constant — the two
+    implementations agreeing on WHY the factor is what it is, not just on
+    the resulting number.
+    """
+
+    @pytest.fixture(scope="class")
+    @staticmethod
+    def ladder():
+        # staticmethod: a class-scoped fixture defined as an instance method
+        # is deprecated (PytestRemovedIn10Warning).
+        return _golden()["ladder"]
+
+    def test_rung_set_and_roster_rule_are_pinned(self, ladder):
+        """A changed roster rule or panel would move G/n; pin both."""
+        assert sorted(int(k) for k in ladder["rungs"]) == _LADDER_RUNGS
+        expected_G = {5: 20, 10: 40, 20: 80, 40: 140, 80: 220, 200: 391, 500: 500}
+        df = _panel()
+        for n_per_cohort, rung in ((int(k), v) for k, v in ladder["rungs"].items()):
+            sub = _ladder_subsample(df, n_per_cohort)
+            assert rung["G"] == expected_G[n_per_cohort]
+            assert sub["countyreal"].nunique() == rung["G"]
+            assert len(sub) == rung["n"]
+
+    @pytest.mark.parametrize("n_per_cohort", _LADDER_RUNGS)
+    def test_se_and_att_match_jwdid_at_every_cluster_count(self, ladder, n_per_cohort):
+        rung = ladder["rungs"][str(n_per_cohort)]
+        sub = _ladder_subsample(_panel(), n_per_cohort)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            fit = WooldridgeDiD(method="ols", control_group="not_yet_treated").fit(
+                sub, outcome="lemp", unit="countyreal", time="year", cohort="first_treat"
+            )
+        stata = _stata_jwdid_cells({"rung": rung["cells"]}, "rung")
+        assert len(stata) == 7, f"expected 7 cells at G={rung['G']}, got {len(stata)}"
+        for key, rec in stata.items():
+            np.testing.assert_allclose(
+                fit.group_time_effects[key]["att"],
+                rec["att"],
+                rtol=0,
+                atol=1e-9,
+                err_msg=f"ladder G={rung['G']} ATT{key} != Stata jwdid",
+            )
+        ratios = [rec["se"] / fit.group_time_effects[key]["se"] for key, rec in stata.items()]
+        assert max(ratios) - min(ratios) < 1e-9, f"G={rung['G']}: SE ratio is not uniform: {ratios}"
+        np.testing.assert_allclose(float(np.mean(ratios)), 1.0, rtol=1e-9)
+
+    @pytest.mark.parametrize("n_per_cohort", _LADDER_RUNGS)
+    def test_stata_df_accounting_matches_the_library_increment(self, ladder, n_per_cohort):
+        """reghdfe's df_a == absorbed_fe_cr1_k_increment - 1 at every rung.
+
+        reghdfe reports the absorbed constant separately (``_cons`` in e(b),
+        ``report_constant``), so its ``df_a`` covers only the FE ranks beyond
+        it: df_a_initial (all FE levels) minus the cluster-nested unit FE and
+        the shared constant. The library folds that constant into the
+        increment (``has_intercept_col=False`` -> +1), hence the -1. On this
+        panel: increment = 1 + (G + 5 - 1) - G = 5 = T at every G, i.e.
+        K_reference = 7 cells + 5 = 12.
+        """
+        from diff_diff.utils import absorbed_fe_cr1_k_increment
+
+        rung = ladder["rungs"][str(n_per_cohort)]
+        sub = _ladder_subsample(_panel(), n_per_cohort)
+        increment = absorbed_fe_cr1_k_increment(
+            sub,
+            ["countyreal", "year"],
+            sub["countyreal"].to_numpy(),
+            has_intercept_col=False,
+        )
+        assert rung["df_a"] == increment - 1
+        # The decomposition pins WHICH FE were dropped: all G unit FE are
+        # cluster-nested; the redundant count adds the shared constant.
+        assert rung["df_a_nested"] == rung["G"]
+        assert rung["df_a_redundant"] == rung["G"] + 1
+        assert rung["df_a_initial"] == rung["G"] + 5
+        # Visible rank = the 7 treatment cells; cluster df = G-1.
+        assert rung["rank"] == 7
+        assert rung["df_r"] == rung["G"] - 1

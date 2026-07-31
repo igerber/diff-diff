@@ -39,6 +39,7 @@ from diff_diff.imputation_results import (  # noqa: F401 (re-export)
 from diff_diff.linalg import solve_ols
 from diff_diff.utils import (
     _iterative_fe_solve,
+    absorbed_fe_cr1_k_increment,
     demean_by_groups,
     pre_demean_norms,
     safe_inference,
@@ -2414,6 +2415,19 @@ class ImputationDiD(ImputationDiDBootstrapMixin):
         _ols_weights = survey_weights_0
         _ols_weight_type = "pweight" if survey_weights_0 is not None else None
         _use_survey_vcov = resolved_survey_full is not None
+        # Clustered-CR1 K_reference increment (variance-conventions.md D2):
+        # the demeaned lead design carries NO intercept column, so the
+        # absorbed constant contributes the +1 term. Survey fits pass 0
+        # (cluster_ids is None there and the survey vcov replaces CR1).
+        _cr1_k_adj_imp = 0
+        if not _use_survey_vcov:
+            _cr1_k_adj_imp = absorbed_fe_cr1_k_increment(
+                df_0,
+                [time, unit],
+                cluster_ids,
+                has_intercept_col=False,
+                weights=survey_weights_0,
+            )
         try:
             result = solve_ols(
                 X_dm,
@@ -2421,6 +2435,7 @@ class ImputationDiD(ImputationDiDBootstrapMixin):
                 weights=_ols_weights,
                 weight_type=_ols_weight_type,
                 cluster_ids=None if _use_survey_vcov else cluster_ids,
+                cluster_k_adjustment=_cr1_k_adj_imp,
                 return_vcov=True,
                 rank_deficient_action=self.rank_deficient_action,
                 column_names=all_x_cols,

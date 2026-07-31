@@ -8,9 +8,11 @@ Parity targets:
 - classical → R lm() summary at atol=1e-10 (full-dummy)
 - hc2 → R sandwich::vcovHC(type="HC2") at atol=1e-10 (full-dummy)
 - hc2_bm → R clubSandwich::vcovCR(cluster=..., type="CR2") + coef_test$df_Satt at atol=1e-10 (full-dummy)
-- hc1 event-study e=0 → R fixest::sunab + cluster=~unit at atol=5e-3
-  (within-transform; documented HC1 finite-sample-correction deviation,
-  see REGISTRY.md SunAbraham section and DEFERRED.md row tracking the gap)
+- hc1 event-study e=0 → R fixest::sunab + cluster=~unit at rtol=1e-12
+  (within-transform; the historical ~5e-3 finite-sample-correction gap was
+  defect D2 of the 3.9 variance program — the CR1 factor omitted the absorbed
+  unit+time FE — closed by the K_reference convergence; measured residual
+  3.1e-14 relative, pinned with ~30x headroom)
 """
 
 import json
@@ -255,11 +257,8 @@ class TestSunAbrahamRParity:
         r_se = sa_golden["sunab_hc1_event_study_e0_se"]
         if r_se is None or (isinstance(r_se, float) and np.isnan(r_se)):
             pytest.skip("fixest::sunab parity SE missing from golden")
-        # Absolute tolerance pin matching the documented deviation; harmonized
-        # with REGISTRY.md SunAbraham deviation note and DEFERRED.md row.
-        assert abs(sa_se - r_se) < 5e-3, (
-            f"SA hc1 event-study e=0 SE {sa_se:.6f} diverges from fixest::sunab "
-            f"event-study SE {r_se:.6f} by {abs(sa_se - r_se):.2e} > 5e-3. "
-            "Expected ~2e-3 from finite-sample correction (see REGISTRY.md "
-            "deviation note); investigate if larger."
-        )
+        # Machine-precision pin under the 3.9 K_reference convergence
+        # (measured residual 3.1e-14 relative; ~30x headroom). The historical
+        # ~5e-3 band was the D2 finite-sample-correction gap, now closed —
+        # see the REGISTRY.md SunAbraham HC1 note.
+        np.testing.assert_allclose(sa_se, r_se, rtol=1e-12)

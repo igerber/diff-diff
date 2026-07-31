@@ -1886,20 +1886,20 @@ class TestWooldridgeVcovType:
         """HC1 within-transform path must match the frozen baseline at atol=1e-14.
 
         Baseline originally captured on the Phase 1b PR 3/8 branch with
-        ``_make_vcov_panel(seed=202605211230)`` (FWL preserves the CR1
-        cluster-robust score, so the ``vcov_type`` branching kept HC1 bit-equal
-        to the prior hard-coded HC1 behavior). Recaptured under the v3.6.x
-        factorize-once + bincount demeaner, which moved the values by ~1e-15
-        (bincount accumulation vs pandas' compensated grouped mean - see
-        REGISTRY "Absorbed Fixed Effects"); the 1e-14 lock semantics are
-        unchanged.
+        ``_make_vcov_panel(seed=202605211230)``; recaptured under the v3.6.x
+        factorize-once + bincount demeaner (~1e-15 move), and recaptured
+        AGAIN under the 3.9 clustered-CR1 K_reference convergence
+        (variance-conventions.md D2): the CR1 factor now counts the absorbed
+        FE not nested in the unit cluster, matching Stata reghdfe (jwdid) at
+        machine precision on the committed arms. The ATT is unchanged; the SE
+        moved from the pre-fix 0.03149488781317813 by exactly the K change.
         """
         df = _make_vcov_panel()
         res = WooldridgeDiD(method="ols", vcov_type="hc1").fit(
             df, outcome="y", unit="unit", time="time", cohort="cohort"
         )
         assert res.overall_att == pytest.approx(0.9178849934516233, abs=1e-14)
-        assert res.overall_se == pytest.approx(0.03149488781317813, abs=1e-14)
+        assert res.overall_se == pytest.approx(0.031906603167527435, abs=1e-14)
 
     def test_hc2_bm_finite_and_inflates_over_hc1(self):
         df = _make_vcov_panel()

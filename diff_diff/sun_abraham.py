@@ -24,6 +24,7 @@ from diff_diff.linalg import LinearRegression
 from diff_diff.results import _format_survey_block, _get_significance_stars
 from diff_diff.results_base import BaseResults
 from diff_diff.utils import (
+    absorbed_fe_cr1_k_increment,
     absorbed_fe_rank,
     pre_demean_norms,
     safe_inference,
@@ -1567,6 +1568,8 @@ class SunAbraham:
         # within-transform) at atol=1e-8 — fixest is the natural R parity
         # anchor for SA's HC1 default.
         use_full_dummy = vcov_type in ("hc2", "hc2_bm", "classical")
+        # Nonzero only on the clustered-hc1 within-transform branch below.
+        _cr1_k_adj_sa = 0
 
         if use_full_dummy:
             # Full-dummy auto-route: build [intercept, interactions,
@@ -1664,6 +1667,20 @@ class SunAbraham:
                 has_intercept_col=False,
                 weights=survey_weights,
             )
+            # Clustered-CR1 K_reference increment (variance-conventions.md
+            # D2): the saturated design has NO intercept column, so the
+            # absorbed constant contributes the +1 term. Computed against the
+            # SAME cluster array the LinearRegression below uses (SA
+            # auto-clusters at unit by default; explicit cluster= otherwise);
+            # survey designs replace the CR1 sandwich, so they pass 0.
+            if vcov_type == "hc1" and cluster_ids is not None and resolved_survey is None:
+                _cr1_k_adj_sa = absorbed_fe_cr1_k_increment(
+                    df,
+                    [unit, time],
+                    cluster_ids,
+                    has_intercept_col=False,
+                    weights=survey_weights,
+                )
             # Interactions occupy columns 0..n_interactions-1 (no intercept)
             coef_offset = 0
 
@@ -1700,7 +1717,7 @@ class SunAbraham:
             conley_time=_cl_time,
             conley_unit=_cl_unit,
             conley_lag_cutoff=self.conley_lag_cutoff,
-        ).fit(X, y, df_adjustment=df_adj)
+        ).fit(X, y, df_adjustment=df_adj, cluster_k_adjustment=_cr1_k_adj_sa)
 
         vcov = reg.vcov_
 

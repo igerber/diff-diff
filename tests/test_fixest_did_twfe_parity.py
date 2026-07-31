@@ -95,16 +95,18 @@ class TestFixestDiDTWFEParity:
             np.testing.assert_allclose(res.se, exp["se"], atol=1e-10, rtol=0)
 
     def test_twfe_cluster_att_matches_fixest(self):
-        """The TWFE cluster-robust ATT matches fixest exactly; the SE stays
-        band-pinned. The residual gap is the documented fixest-CR1 ssc
-        convention for absorbed FE that are NOT nested in the cluster: with
-        ``absorb=[unit, time]`` and ``cluster=unit``, fixest counts the
-        non-nested time FE in the (n-1)/(n-k) denominator while the
-        within-transform path uses k_visible (measured ~0.25% balanced /
-        ~0.3% unbalanced; tracked in DEFERRED.md under "Needs external reference").
-        The band pins that we never regress BEYOND the known deviation."""
+        """TWFE cluster-robust ATT and SE both match fixest.
+
+        The historical ~0.25% SE band was defect D2 (the within-transform CR1
+        factor used k_visible, omitting the non-nested time FE fixest counts);
+        under the 3.9 K_reference convergence the ``twfe`` arm matches at
+        machine precision (measured 0.0 relative here, 1.9e-16 elsewhere) and
+        is locked exactly. The ``twfe_hetero`` arm carries a measured 5.2e-11
+        relative residual (MAP-demean / BLAS-order dependent), pinned at
+        rtol=1e-9 (~20x headroom) rather than a machine-epsilon literal."""
         golden = _load_golden()
-        for key in ("twfe", "twfe_hetero"):
+        tolerances = {"twfe": dict(atol=1e-10, rtol=0), "twfe_hetero": dict(rtol=1e-9)}
+        for key, tol in tolerances.items():
             assert key in golden, f"required golden block {key!r} missing — regenerate the fixture"
             df = _build_df(golden[key])
             res = TwoWayFixedEffects(vcov_type="hc1", cluster="unit").fit(
@@ -112,7 +114,7 @@ class TestFixestDiDTWFEParity:
             )
             exp = golden[key]["cluster_unit"]
             np.testing.assert_allclose(res.att, exp["att"], atol=1e-10, rtol=0)
-            assert res.se == pytest.approx(exp["se"], rel=0.005)
+            np.testing.assert_allclose(res.se, exp["se"], **tol)
 
 
 @_SKIP

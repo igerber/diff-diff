@@ -22,6 +22,7 @@ import pandas as pd
 
 from diff_diff.linalg import compute_robust_vcov, solve_logit, solve_ols, solve_poisson
 from diff_diff.utils import (
+    absorbed_fe_cr1_k_increment,
     pre_demean_norms,
     safe_inference,
     snap_absorbed_regressors,
@@ -2244,6 +2245,29 @@ class WooldridgeDiD:
         else:
             _cl_coords = _cl_time = _cl_unit = None
 
+        # Clustered-CR1 K_reference increment (variance-conventions.md D2 —
+        # the original jwdid SE-gap finding): the within-transform design has
+        # NO intercept column (coef_offset = 0), so the absorbed constant
+        # contributes the +1 term and the delta is T on the unit-clustered
+        # arms. Nestedness runs against the SAME resolved cluster array
+        # passed below. The cohort_trends full-dummy branch keeps 0 (its
+        # documented L1-convention opt-in), as do survey fits (TSL replaces
+        # CR1) and one-way/conley families.
+        _cr1_k_adj_w = 0
+        if (
+            not use_full_dummy
+            and self.vcov_type == "hc1"
+            and cluster_ids is not None
+            and resolved is None
+        ):
+            _cr1_k_adj_w = absorbed_fe_cr1_k_increment(
+                sample,
+                [unit, time],
+                cluster_ids,
+                has_intercept_col=False,
+                weights=survey_weights,
+            )
+
         coefs, resids, vcov = solve_ols(  # type: ignore[call-overload]  # mypy union-explosion limitation at this many Optional args
             X,
             y,
@@ -2253,6 +2277,7 @@ class WooldridgeDiD:
             column_names=col_names if not use_full_dummy else None,
             weights=survey_weights,
             weight_type=survey_weight_type,
+            cluster_k_adjustment=_cr1_k_adj_w,
             vcov_type=self.vcov_type,
             conley_coords=_cl_coords,
             conley_cutoff_km=self.conley_cutoff_km,

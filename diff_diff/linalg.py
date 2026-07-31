@@ -362,10 +362,12 @@ def _absorbed_fe_vcov_scale(n_eff: float, k_eff: int, df_adjustment: int) -> flo
       (per the non-finite-df fail-closed contract) rather than leaving a
       misleading ``k_visible`` SE in place.
 
-    Callers must gate on non-clustered ``classical``/``hc1``: clustered SEs
-    follow fixest's ``ssc`` nested-FE convention (FE nested in the cluster are
-    not counted, so ``k_visible`` already matches for the nested case) and
-    ``hc2``/``hc2_bm`` use leverage / Satterthwaite DOF -- none must be rescaled.
+    Callers must gate on non-clustered ``classical``/``hc1``: the CLUSTERED
+    CR1 factor has its own K_reference accounting via the
+    ``cluster_k_adjustment`` seam (fixest's ``ssc`` nested-FE convention drops
+    FE nested in the cluster and counts non-nested FE — see
+    ``docs/methodology/variance-conventions.md`` D2), and ``hc2``/``hc2_bm``
+    use leverage / Satterthwaite DOF — neither must be rescaled here.
     """
     denom_visible = n_eff - k_eff
     denom_full = n_eff - k_eff - df_adjustment
@@ -374,6 +376,90 @@ def _absorbed_fe_vcov_scale(n_eff: float, k_eff: int, df_adjustment: int) -> flo
     if denom_full <= 0 or denom_visible <= 0:
         return float("nan")
     return denom_visible / denom_full
+
+
+class InvalidClusterKAdjustment(ValueError):
+    """Raised when ``cluster_k_adjustment`` is passed where it cannot apply.
+
+    A dedicated subclass so broad ``except ValueError`` handlers around
+    clustered solves (e.g. LPDiD's unclustered-fallback wrapper) can re-raise
+    it instead of silently degrading a misuse to NaN inference. Deliberately
+    NOT exported from ``diff_diff.__init__`` (module-private precedent:
+    ``balancing.BalanceError``).
+    """
+
+
+def _validate_cluster_k_adjustment_type(cluster_k_adjustment: int) -> None:
+    """Type half of the K_reference contract, checked BEFORE any zero fast
+    path or truthiness gate: ``0.0 == 0`` and ``False == 0`` are truthy
+    comparisons, so a value-first check would silently accept non-int zeros
+    on short-circuited routes (classical fits, survey fits, degenerate
+    wild-bootstrap returns) and make the contract route-dependent."""
+    if isinstance(cluster_k_adjustment, bool) or not isinstance(
+        cluster_k_adjustment, (int, np.integer)
+    ):
+        raise InvalidClusterKAdjustment(
+            f"cluster_k_adjustment must be an int, got {type(cluster_k_adjustment).__name__}"
+        )
+
+
+def _validate_cluster_k_adjustment(
+    cluster_k_adjustment: int,
+    cluster_ids: Optional[np.ndarray],
+    vcov_type: str,
+) -> None:
+    """Front-door contract for the clustered-CR1 K_reference adjustment.
+
+    A nonzero adjustment is meaningful only on the clustered ``hc1`` lane
+    (the CR1 finite-sample factor). Raises :class:`InvalidClusterKAdjustment`
+    on any other combination so misuse fails loudly on EVERY route —
+    including ``return_vcov=False`` calls and Rust dispatches that never
+    reach the numpy kernel.
+    """
+    _validate_cluster_k_adjustment_type(cluster_k_adjustment)
+    if cluster_k_adjustment == 0:
+        return
+    if cluster_ids is None:
+        raise InvalidClusterKAdjustment(
+            "cluster_k_adjustment is nonzero but cluster_ids is None; the "
+            "K_reference adjustment applies only to the clustered CR1 factor."
+        )
+    if vcov_type != "hc1":
+        raise InvalidClusterKAdjustment(
+            f"cluster_k_adjustment is nonzero but vcov_type is '{vcov_type}'; "
+            "the K_reference adjustment applies only to the clustered hc1 "
+            "(CR1) family."
+        )
+
+
+def _rescale_cr1_k_adjustment(
+    vcov: Optional[np.ndarray],
+    n_eff: float,
+    k: int,
+    cluster_k_adjustment: int,
+) -> Optional[np.ndarray]:
+    """Exact scalar map from a ``k``-denominator clustered CR1 vcov to the
+    ``k + cluster_k_adjustment`` one.
+
+    The CR1 factor ``(G/(G-1)) * ((n-1)/(n-k))`` is a pure scalar on the
+    finished vcov, so the corrected matrix is exactly
+    ``vcov * (n_eff - k) / (n_eff - k - adj)`` — used to correct the Rust
+    lanes without touching the Rust kernels. None-preserving
+    (``return_vcov=False`` puts ``vcov=None`` in the tail slot). Fails closed
+    to all-NaN when the corrected residual dof ``n_eff - k - adj`` or the
+    corrected count ``k + adj`` is non-positive; the VISIBLE-side saturation
+    (``n_eff <= k``) never reaches this helper — the Rust kernels already
+    return all-NaN there, matching the numpy kernel's kept visible-k guard.
+    """
+    if vcov is None:
+        return None
+    if cluster_k_adjustment == 0:
+        return vcov
+    denom_old = n_eff - k
+    denom_new = n_eff - k - cluster_k_adjustment
+    if denom_new <= 0 or (k + cluster_k_adjustment) <= 0:
+        return np.full_like(vcov, np.nan)
+    return vcov * (denom_old / denom_new)
 
 
 def _expand_vcov_with_nan(
@@ -919,6 +1005,7 @@ def solve_ols(
     rank_deficient_action: str = ...,
     column_names: Optional[List[str]] = ...,
     skip_rank_check: bool = ...,
+    cluster_k_adjustment: int = ...,
     weights: Optional[np.ndarray] = ...,
     weight_type: str = ...,
     vcov_type: str = ...,
@@ -945,6 +1032,7 @@ def solve_ols(
     rank_deficient_action: str = ...,
     column_names: Optional[List[str]] = ...,
     skip_rank_check: bool = ...,
+    cluster_k_adjustment: int = ...,
     weights: Optional[np.ndarray] = ...,
     weight_type: str = ...,
     vcov_type: str = ...,
@@ -971,6 +1059,7 @@ def solve_ols(
     rank_deficient_action: str = ...,
     column_names: Optional[List[str]] = ...,
     skip_rank_check: bool = ...,
+    cluster_k_adjustment: int = ...,
     weights: Optional[np.ndarray] = ...,
     weight_type: str = ...,
     vcov_type: str = ...,
@@ -999,6 +1088,7 @@ def solve_ols(
     rank_deficient_action: str = "warn",
     column_names: Optional[List[str]] = None,
     skip_rank_check: bool = False,
+    cluster_k_adjustment: int = 0,
     weights: Optional[np.ndarray] = None,
     weight_type: str = "pweight",
     vcov_type: str = "hc1",
@@ -1051,6 +1141,18 @@ def solve_ols(
         rank-deficient matrices. Use only when you know the design matrix is
         full rank. If the matrix is actually rank-deficient, results may be
         incorrect (minimum-norm solution instead of R-style NA handling).
+    cluster_k_adjustment : int, default 0, keyword-only
+        Signed K_reference adjustment added to the visible column count in
+        the CLUSTERED CR1 finite-sample factor only: absorbed FE not nested
+        in the cluster add their conditional rank; cluster-nested explicit
+        FE dummies subtract theirs (the reghdfe / fixest
+        ``ssc(K.fixef="nested")`` convention; see
+        ``docs/methodology/variance-conventions.md`` defect D2). Validated
+        at this front door on EVERY route — a nonzero value with
+        ``cluster_ids=None`` or ``vcov_type != "hc1"`` raises
+        :class:`InvalidClusterKAdjustment` even on ``return_vcov=False``
+        calls. Never changes coefficients, residuals, or the reported
+        tail df.
     weights : ndarray of shape (n,), optional
         Observation weights for Weighted Least Squares. When provided,
         minimizes sum(w_i * (y_i - X_i @ beta)^2). Weights should be
@@ -1223,6 +1325,11 @@ def solve_ols(
         if cluster_ids is not None or weights is not None:
             _validate_vcov_args(vcov_type, cluster_ids, weights)
 
+    # Front-door K_reference-adjustment validation (same rationale as the
+    # conley guard above): runs BEFORE routing/backend branching so
+    # `return_vcov=False` calls and Rust dispatches cannot bypass it.
+    _validate_cluster_k_adjustment(cluster_k_adjustment, cluster_ids, vcov_type)
+
     # WLS transformation: apply sqrt(w) scaling to X and y
     # This happens BEFORE routing to Rust or NumPy backends — they receive
     # pre-transformed X_w, y_w and solve standard OLS.
@@ -1277,6 +1384,10 @@ def solve_ols(
             )
             if result is not None and diagnostics_out is not None:
                 diagnostics_out["solve_ols_fastpath"] = "chol_rust"
+            if result is not None and cluster_k_adjustment:
+                result = result[:-1] + (
+                    _rescale_cr1_k_adjustment(result[-1], float(n), k, cluster_k_adjustment),
+                )
         if result is None and (
             HAS_RUST_BACKEND
             and _rust_solve_ols is not None
@@ -1303,6 +1414,13 @@ def solve_ols(
                     stacklevel=2,
                 )
                 result = None  # Force Python fallback below
+            # K_reference rescale AFTER the sentinel check: a Rust all-NaN is
+            # the documented rank sentinel (passes through); the rescale's own
+            # fail-closed NaN must not be produced before that check runs.
+            if result is not None and cluster_k_adjustment:
+                result = result[:-1] + (
+                    _rescale_cr1_k_adjustment(result[-1], float(n), k, cluster_k_adjustment),
+                )
         if result is None:
             result = _solve_ols_numpy(
                 X,
@@ -1315,6 +1433,7 @@ def solve_ols(
                 _skip_rank_check=True,
                 _fastpath=fastpath,
                 _diagnostics_out=diagnostics_out,
+                cluster_k_adjustment=cluster_k_adjustment,
                 vcov_type=vcov_type,
                 conley_coords=conley_coords,
                 conley_cutoff_km=conley_cutoff_km,
@@ -1361,6 +1480,10 @@ def solve_ols(
             )
             if result is not None and diagnostics_out is not None:
                 diagnostics_out["solve_ols_fastpath"] = "chol_rust"
+            if result is not None and cluster_k_adjustment:
+                result = result[:-1] + (
+                    _rescale_cr1_k_adjustment(result[-1], float(n), k, cluster_k_adjustment),
+                )
         if result is None and (
             HAS_RUST_BACKEND
             and _rust_solve_ols is not None
@@ -1390,6 +1513,13 @@ def solve_ols(
                         stacklevel=2,
                     )
                     result = None  # Force Python fallback below
+            # K_reference rescale AFTER the non-finite check above — the
+            # rescale's own fail-closed all-NaN would otherwise be misread as
+            # backend instability (spurious warning + pointless numpy re-run).
+            if result is not None and cluster_k_adjustment:
+                result = result[:-1] + (
+                    _rescale_cr1_k_adjustment(result[-1], float(n), k, cluster_k_adjustment),
+                )
 
         if result is None:
             result = _solve_ols_numpy(
@@ -1404,6 +1534,7 @@ def solve_ols(
                 _fastpath=fastpath,
                 _cert_info=cert_out,
                 _diagnostics_out=diagnostics_out,
+                cluster_k_adjustment=cluster_k_adjustment,
                 vcov_type=vcov_type,
                 conley_coords=conley_coords,
                 conley_cutoff_km=conley_cutoff_km,
@@ -1445,6 +1576,7 @@ def solve_ols(
                         cluster_ids,
                         weights=weights,
                         weight_type=weight_type,
+                        cluster_k_adjustment=cluster_k_adjustment,
                         vcov_type=vcov_type,
                         conley_coords=conley_coords,
                         conley_cutoff_km=conley_cutoff_km,
@@ -1464,6 +1596,7 @@ def solve_ols(
                     cluster_ids,
                     weights=weights,
                     weight_type=weight_type,
+                    cluster_k_adjustment=cluster_k_adjustment,
                     vcov_type=vcov_type,
                     conley_coords=conley_coords,
                     conley_cutoff_km=conley_cutoff_km,
@@ -1494,6 +1627,7 @@ def _solve_ols_numpy(
     column_names: Optional[List[str]] = ...,
     _precomputed_rank_info: Optional[Tuple[int, np.ndarray, np.ndarray]] = ...,
     _skip_rank_check: bool = ...,
+    cluster_k_adjustment: int = ...,
     _fastpath: bool = ...,
     _cert_info: Optional[dict] = ...,
     _diagnostics_out: Optional[dict] = ...,
@@ -1520,6 +1654,7 @@ def _solve_ols_numpy(
     column_names: Optional[List[str]] = ...,
     _precomputed_rank_info: Optional[Tuple[int, np.ndarray, np.ndarray]] = ...,
     _skip_rank_check: bool = ...,
+    cluster_k_adjustment: int = ...,
     _fastpath: bool = ...,
     _cert_info: Optional[dict] = ...,
     _diagnostics_out: Optional[dict] = ...,
@@ -1546,6 +1681,7 @@ def _solve_ols_numpy(
     column_names: Optional[List[str]] = ...,
     _precomputed_rank_info: Optional[Tuple[int, np.ndarray, np.ndarray]] = ...,
     _skip_rank_check: bool = ...,
+    cluster_k_adjustment: int = ...,
     _fastpath: bool = ...,
     _cert_info: Optional[dict] = ...,
     _diagnostics_out: Optional[dict] = ...,
@@ -1574,6 +1710,7 @@ def _solve_ols_numpy(
     column_names: Optional[List[str]] = None,
     _precomputed_rank_info: Optional[Tuple[int, np.ndarray, np.ndarray]] = None,
     _skip_rank_check: bool = False,
+    cluster_k_adjustment: int = 0,
     _fastpath: bool = False,
     _cert_info: Optional[dict] = None,
     _diagnostics_out: Optional[dict] = None,
@@ -1716,6 +1853,7 @@ def _solve_ols_numpy(
                 X_reduced,
                 residuals,
                 cluster_ids,
+                cluster_k_adjustment=cluster_k_adjustment,
                 vcov_type=vcov_type,
                 conley_coords=conley_coords,
                 conley_cutoff_km=conley_cutoff_km,
@@ -1757,6 +1895,7 @@ def _solve_ols_numpy(
                 X,
                 residuals,
                 cluster_ids,
+                cluster_k_adjustment=cluster_k_adjustment,
                 vcov_type=vcov_type,
                 conley_coords=conley_coords,
                 conley_cutoff_km=conley_cutoff_km,
@@ -1781,6 +1920,7 @@ def _validate_vcov_args(
     vcov_type: str,
     cluster_ids: Optional[np.ndarray],
     weights: Optional[np.ndarray],
+    cluster_k_adjustment: int = 0,
 ) -> None:
     """Shared validation for ``vcov_type`` / ``cluster_ids`` / ``weights`` combinations.
 
@@ -1813,6 +1953,9 @@ def _validate_vcov_args(
         raise ValueError(
             f"vcov_type must be one of {sorted(_VALID_VCOV_TYPES)}; " f"got {vcov_type!r}"
         )
+    # Mirrored K_reference-adjustment contract for direct compute_robust_vcov
+    # / kernel callers (solve_ols routes enforce it at its own front door).
+    _validate_cluster_k_adjustment(cluster_k_adjustment, cluster_ids, vcov_type)
     if vcov_type in ("classical", "hc2") and cluster_ids is not None:
         msg = {
             "classical": (
@@ -1967,6 +2110,7 @@ def compute_robust_vcov(
     vcov_type: str = "hc1",
     return_dof: bool = False,
     *,
+    cluster_k_adjustment: int = 0,
     conley_coords: Optional[np.ndarray] = None,
     conley_cutoff_km: Optional[float] = None,
     conley_metric: ConleyMetric = "haversine",
@@ -2065,6 +2209,14 @@ def compute_robust_vcov(
         array of per-coefficient degrees of freedom. For ``classical``,
         ``hc1``, ``hc2``: every element is ``n_eff - k``. For ``hc2_bm``
         one-way: Imbens-Kolesar (2016) Satterthwaite DOF per contrast.
+    cluster_k_adjustment : int, default 0, keyword-only
+        Signed K_reference adjustment added to the visible column count in
+        the CLUSTERED CR1 finite-sample factor only (absorbed FE not nested
+        in the cluster add rank; cluster-nested explicit FE dummies
+        subtract; see ``docs/methodology/variance-conventions.md`` D2).
+        Nonzero values require ``cluster_ids`` and ``vcov_type="hc1"``
+        (raises :class:`InvalidClusterKAdjustment` otherwise). Never affects
+        the reported ``dof_vec`` (tail df).
 
     Returns
     -------
@@ -2083,7 +2235,9 @@ def compute_robust_vcov(
 
     For cluster-robust (CR1, Liang-Zeger):
         meat = sum_g (X_g' u_g)(X_g' u_g)'
-        adjustment = (G / (G-1)) * ((n-1) / (n-k))
+        adjustment = (G / (G-1)) * ((n-1) / (n - (k + cluster_k_adjustment)))
+        (k = reduced design rank; the signed adjustment carries the
+        K_reference absorbed-FE accounting, default 0)
 
     For HC2 one-way (weighted per review MEDIUM #3):
         h_ii = w_i * x_i' * (X'WX)^{-1} * x_i  (unweighted: w_i = 1)
@@ -2097,7 +2251,7 @@ def compute_robust_vcov(
 
     The cluster-robust CR1 computation is vectorized using pandas groupby.
     """
-    _validate_vcov_args(vcov_type, cluster_ids, weights)
+    _validate_vcov_args(vcov_type, cluster_ids, weights, cluster_k_adjustment)
 
     # Validate weights before dispatching to backend
     if weights is not None:
@@ -2178,7 +2332,12 @@ def compute_robust_vcov(
             cluster_ids_int = pd.factorize(cluster_ids)[0].astype(np.int64)
 
         try:
-            return _rust_compute_robust_vcov(X, residuals, cluster_ids_int)
+            _rust_vcov = _rust_compute_robust_vcov(X, residuals, cluster_ids_int)
+            if cluster_k_adjustment:
+                _rust_vcov = _rescale_cr1_k_adjustment(
+                    _rust_vcov, float(X.shape[0]), X.shape[1], cluster_k_adjustment
+                )
+            return _rust_vcov
         except ValueError as e:
             # Translate Rust errors to consistent Python error messages or fallback
             error_msg = str(e)
@@ -2204,6 +2363,7 @@ def compute_robust_vcov(
                     weight_type=weight_type,
                     vcov_type=vcov_type,
                     return_dof=return_dof,
+                    cluster_k_adjustment=cluster_k_adjustment,
                     conley_coords=conley_coords,
                     conley_cutoff_km=conley_cutoff_km,
                     conley_metric=conley_metric,
@@ -2223,6 +2383,7 @@ def compute_robust_vcov(
         weight_type=weight_type,
         vcov_type=vcov_type,
         return_dof=return_dof,
+        cluster_k_adjustment=cluster_k_adjustment,
         conley_coords=conley_coords,
         conley_cutoff_km=conley_cutoff_km,
         conley_metric=conley_metric,
@@ -3223,6 +3384,7 @@ def _compute_robust_vcov_numpy(
     vcov_type: str = "hc1",
     return_dof: bool = False,
     *,
+    cluster_k_adjustment: int = 0,
     conley_coords: Optional[np.ndarray] = None,
     conley_cutoff_km: Optional[float] = None,
     conley_metric: ConleyMetric = "haversine",
@@ -3248,7 +3410,7 @@ def _compute_robust_vcov_numpy(
     # directly and previously bypassed the raise, letting unsupported
     # combinations (cluster + classical, cluster + hc2, cluster + weights +
     # hc2_bm) silently produce wrong inference. Reviewer P0 fix.
-    _validate_vcov_args(vcov_type, cluster_ids, weights)
+    _validate_vcov_args(vcov_type, cluster_ids, weights, cluster_k_adjustment)
 
     n, k = X.shape
 
@@ -3499,7 +3661,17 @@ def _compute_robust_vcov_numpy(
     # NaN vcov so downstream inference is degenerate (NaN) rather than raising
     # ZeroDivisionError — consistent with the library's all-or-nothing NaN
     # convention for undefined inference.
-    if n_eff - k <= 0:
+    #
+    # The clustered K_reference count k_inf = k + cluster_k_adjustment adds
+    # two more fail-closed sides (D2 correction): the VISIBLE-k side is KEPT
+    # (saturation is a property of residual dof — at n_eff == k the residuals
+    # are identically zero and the sandwich is 0 under ANY denominator, so a
+    # positive corrected denominator is not a licence to compute), plus
+    # n_eff - k_inf <= 0 and k_inf <= 0 (the latter covers a negative
+    # adjustment exceeding the reduced design width, where the factor would
+    # silently DEFLATE the SE).
+    _k_inf = k + cluster_k_adjustment
+    if n_eff - k <= 0 or (cluster_k_adjustment and (n_eff - _k_inf <= 0 or _k_inf <= 0)):
         nan_vcov = np.full((k, k), np.nan)
         if return_dof:
             return nan_vcov, np.full(k, np.nan, dtype=np.float64)
@@ -3541,8 +3713,13 @@ def _compute_robust_vcov_numpy(
         if n_clusters < 2:
             raise ValueError(f"Need at least 2 clusters for cluster-robust SEs, got {n_clusters}")
 
-        # Small-sample adjustment
-        adjustment = (n_clusters / (n_clusters - 1)) * ((n_eff - 1) / (n_eff - k))
+        # Small-sample adjustment. k_inf = k + cluster_k_adjustment is the
+        # K_reference count: visible columns plus absorbed FE not nested in
+        # the cluster, minus cluster-nested explicit FE dummies (reghdfe /
+        # fixest ssc(K.fixef="nested") convention; see
+        # docs/methodology/variance-conventions.md D2). The reported tail df
+        # (dof_vec below) deliberately stays on the visible k.
+        adjustment = (n_clusters / (n_clusters - 1)) * ((n_eff - 1) / (n_eff - _k_inf))
 
         # Sum scores within each cluster using pandas groupby (vectorized)
         cluster_scores = pd.DataFrame(scores).groupby(cluster_ids).sum().values
@@ -4341,6 +4518,7 @@ class LinearRegression:
         *,
         cluster_ids: Optional[np.ndarray] = None,
         df_adjustment: int = 0,
+        cluster_k_adjustment: int = 0,
     ) -> "LinearRegression":
         """
         Fit OLS regression.
@@ -4357,6 +4535,18 @@ class LinearRegression:
         df_adjustment : int, default 0
             Additional degrees of freedom adjustment (e.g., for absorbed fixed effects).
             The effective df will be n - k - df_adjustment.
+        cluster_k_adjustment : int, default 0
+            Signed K_reference adjustment for the CLUSTERED CR1 finite-sample
+            factor only (absorbed FE not nested in the cluster add rank;
+            cluster-nested explicit FE dummies subtract; see
+            ``docs/methodology/variance-conventions.md`` D2). Unlike the
+            non-negative ``df_adjustment``, this value is signed, never moves
+            the reported residual ``df_``, and is validated fail-loud: a
+            nonzero value on a fit that resolves to classical/unclustered
+            raises ``InvalidClusterKAdjustment``. Under a survey design that
+            computes survey variance the kwarg is INERT by design — the
+            survey vcov replaces the CR1 sandwich wholesale, so estimator
+            callers pass 0 on those lanes.
 
         Returns
         -------
@@ -4482,6 +4672,20 @@ class LinearRegression:
                     _effective_survey_design, effective_cluster_ids
                 )
 
+        # Fail-loud K_reference contract at FIT level, BEFORE the
+        # classical-vs-robust branch (the classical branch below never
+        # reaches solve_ols's front door). The TYPE half is unconditional —
+        # classical and survey fits must reject a non-int too, else the
+        # contract is route-dependent. Survey-vcov fits are the deliberate
+        # VALUE exception: the survey variance replaces the CR1 sandwich
+        # wholesale, so a (well-typed) adjustment is inert by design there
+        # (documented above) and estimator callers pass 0 on those lanes.
+        _validate_cluster_k_adjustment_type(cluster_k_adjustment)
+        if cluster_k_adjustment and not _use_survey_vcov:
+            _validate_cluster_k_adjustment(
+                cluster_k_adjustment, effective_cluster_ids, _fit_vcov_type
+            )
+
         if _fit_vcov_type != "classical" or effective_cluster_ids is not None:
             # Use solve_ols with robust/cluster SEs.
             # When survey vcov will be used, skip standard vcov computation.
@@ -4500,6 +4704,7 @@ class LinearRegression:
                 rank_deficient_action=self.rank_deficient_action,
                 weights=_fit_weights,
                 weight_type=_fit_weight_type,
+                cluster_k_adjustment=(0 if _use_survey_vcov else cluster_k_adjustment),
                 vcov_type=_fit_vcov_type,
                 conley_coords=self.conley_coords,
                 conley_cutoff_km=self.conley_cutoff_km,

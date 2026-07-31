@@ -29,8 +29,10 @@ from diff_diff.linalg import (
 from diff_diff.results import DiDResults, MultiPeriodDiDResults, PeriodEffect
 from diff_diff.utils import (
     WildBootstrapResults,
+    absorbed_fe_cr1_k_increment,
     absorbed_fe_rank,
     build_fe_dummy_blocks,
+    cluster_nested_fe_dims,
     demean_by_groups,
     fe_dummy_names,
     pre_demean_norms,
@@ -503,6 +505,10 @@ class DifferenceInDifferences:
                 has_intercept_col=True,
                 weights=survey_weights,
             )
+            # Stash the raw FE columns: the clustered-CR1 K_reference
+            # increment needs them AFTER the effective cluster resolves,
+            # but the in-place demean below overwrites them with floats.
+            _fe_cols_raw = working_data[list(absorb)].copy()
             # Method of alternating projections: for N > 1 absorbed dimensions a
             # single sequential sweep is only exact on balanced (orthogonal-FE)
             # panels; demean_by_groups iterates to the exact (W)LS-FWL residual.
@@ -656,6 +662,44 @@ class DifferenceInDifferences:
             _conley_time_arr = None
             _conley_unit_arr = None
 
+        # Clustered-CR1 K_reference adjustment (variance-conventions.md D2/D1):
+        # absorbed FE not nested in the cluster ADD their conditional rank;
+        # cluster-nested explicit FE dummies SUBTRACT theirs. Computed only
+        # for the effective-hc1 clustered analytical lane — under
+        # wild_bootstrap the analytical fit is deliberately unclustered
+        # (adjustment travels through the WCB wiring instead), and under a
+        # survey design the survey variance replaces the CR1 sandwich
+        # wholesale (moot by design).
+        _cr1_k_adj = 0
+        if (
+            _fit_vcov_type == "hc1"
+            and self.inference != "wild_bootstrap"
+            and effective_cluster_ids is not None
+            and resolved_survey is None
+        ):
+            if absorbed_vars:
+                _cr1_k_adj = absorbed_fe_cr1_k_increment(
+                    _fe_cols_raw,
+                    list(absorb),
+                    effective_cluster_ids,
+                    has_intercept_col=True,
+                    weights=survey_weights,
+                )
+            elif fixed_effects:
+                _nested_fe = cluster_nested_fe_dims(
+                    working_data,
+                    list(fixed_effects),
+                    effective_cluster_ids,
+                    weights=survey_weights,
+                )
+                if _nested_fe:
+                    _cr1_k_adj = -absorbed_fe_rank(
+                        working_data,
+                        _nested_fe,
+                        has_intercept_col=True,
+                        weights=survey_weights,
+                    )
+
         # Don't forward `robust=self.robust` when the vcov_type has been
         # remapped; `robust=False + vcov_type="hc1"` would otherwise trip
         # the conflict check inside `LinearRegression.__init__`. The
@@ -677,7 +721,7 @@ class DifferenceInDifferences:
             conley_unit=_conley_unit_arr,
             conley_lag_cutoff=self.conley_lag_cutoff,
             df_convention=self.df_convention,
-        ).fit(X, y, df_adjustment=n_absorbed_effects)
+        ).fit(X, y, df_adjustment=n_absorbed_effects, cluster_k_adjustment=_cr1_k_adj)
 
         coefficients = reg.coefficients_
         residuals = reg.residuals_
@@ -762,8 +806,35 @@ class DifferenceInDifferences:
             # test-inversion based; no reference t-distribution, so no
             # effective inference df).
             _inference_df_used = None
+            # K_reference adjustment for the bootstrap's own CR1 factors,
+            # computed against the RAW cluster ids the bootstrap partitions
+            # on (NOT effective_cluster_ids — the analytical-lane gate above
+            # deliberately passed 0 under wild_bootstrap).
+            _wcb_k_adj = 0
+            if absorbed_vars:
+                _wcb_k_adj = absorbed_fe_cr1_k_increment(
+                    _fe_cols_raw,
+                    list(absorb),
+                    cluster_ids,
+                    has_intercept_col=True,
+                    weights=survey_weights,
+                )
+            elif fixed_effects:
+                _nested_wcb = cluster_nested_fe_dims(
+                    working_data,
+                    list(fixed_effects),
+                    cluster_ids,
+                    weights=survey_weights,
+                )
+                if _nested_wcb:
+                    _wcb_k_adj = -absorbed_fe_rank(
+                        working_data,
+                        _nested_wcb,
+                        has_intercept_col=True,
+                        weights=survey_weights,
+                    )
             se, p_value, conf_int, t_stat, vcov, _ = self._run_wild_bootstrap_inference(
-                X, y, residuals, cluster_ids, att_idx
+                X, y, residuals, cluster_ids, att_idx, cluster_k_adjustment=_wcb_k_adj
             )
         else:
             # Use analytical inference from LinearRegression
@@ -869,6 +940,7 @@ class DifferenceInDifferences:
         residuals: np.ndarray,
         cluster_ids: np.ndarray,
         coefficient_index: int,
+        cluster_k_adjustment: int = 0,
     ) -> Tuple[float, float, Tuple[float, float], float, np.ndarray, WildBootstrapResults]:
         """
         Run wild cluster bootstrap inference.
@@ -885,6 +957,12 @@ class DifferenceInDifferences:
             Cluster identifiers for each observation.
         coefficient_index : int
             Index of the coefficient to compute inference for.
+        cluster_k_adjustment : int, default 0
+            Signed K_reference adjustment for the bootstrap's CR1 factors
+            (nestedness computed by the caller against THESE raw cluster
+            ids). Applied to both the analytical SE inside
+            ``wild_bootstrap_se`` and the stored-vcov recompute below, so
+            ``se == sqrt(vcov[j, j])`` stays exact.
 
         Returns
         -------
@@ -903,6 +981,7 @@ class DifferenceInDifferences:
             seed=self.seed,
             return_distribution=False,
             p_val_type=self.p_val_type,
+            cluster_k_adjustment=cluster_k_adjustment,
         )
         self._bootstrap_results = bootstrap_results
 
@@ -927,6 +1006,7 @@ class DifferenceInDifferences:
                 X,
                 y,
                 cluster_ids=cluster_ids,
+                cluster_k_adjustment=cluster_k_adjustment,
                 return_vcov=True,
                 rank_deficient_action="silent",
             )
@@ -1770,6 +1850,10 @@ class MultiPeriodDiD(DifferenceInDifferences):
                 has_intercept_col=True,
                 weights=survey_weights,
             )
+            # Stash the raw FE columns for the clustered-CR1 K_reference
+            # increment (computed after the effective cluster resolves; the
+            # in-place demean below overwrites these with floats).
+            _fe_cols_raw_mp = working_data[list(absorb)].copy()
             # Method of alternating projections (exact for unbalanced panels; a
             # single sequential sweep is exact only on balanced orthogonal-FE panels).
             working_data, _ = demean_by_groups(  # count superseded by absorbed_fe_rank above
@@ -1976,6 +2060,40 @@ class MultiPeriodDiD(DifferenceInDifferences):
             _conley_time_arr = None
             _conley_unit_arr = None
 
+        # Clustered-CR1 K_reference adjustment (variance-conventions.md D1/D2).
+        # Absorb lane: the absorbed increment (non-nested rank + no intercept
+        # term — MPD's X carries an intercept). Non-absorb lanes: the built-in
+        # period dummies ARE MPD's time-FE block (a supplied time FE is
+        # skipped as redundant above), so they and any placed `_mp_fes`
+        # dummies SUBTRACT their joint rank when nested in the cluster —
+        # preserving MPD's absorb/fixed_effects equivalence. Survey lanes
+        # pass 0 (survey vcov replaces CR1 wholesale).
+        _cr1_k_adj_mp = 0
+        if _fit_vcov_type == "hc1" and effective_cluster_ids is not None and not _use_survey_vcov:
+            if absorb:
+                _cr1_k_adj_mp = absorbed_fe_cr1_k_increment(
+                    _fe_cols_raw_mp,
+                    list(absorb),
+                    effective_cluster_ids,
+                    has_intercept_col=True,
+                    weights=survey_weights,
+                )
+            else:
+                _mp_fe_blocks = list(_mp_fes) if fixed_effects else []
+                _nested_mp = cluster_nested_fe_dims(
+                    working_data,
+                    _mp_fe_blocks + [time],
+                    effective_cluster_ids,
+                    weights=survey_weights,
+                )
+                if _nested_mp:
+                    _cr1_k_adj_mp = -absorbed_fe_rank(
+                        working_data,
+                        _nested_mp,
+                        has_intercept_col=True,
+                        weights=survey_weights,
+                    )
+
         # Note: Wild bootstrap for multi-period effects is complex (multiple coefficients)
         # For now, we use analytical inference even if inference="wild_bootstrap"
         coefficients, residuals, fitted, vcov = solve_ols(  # type: ignore[call-overload, misc]  # mypy gives up on the Optional-arg union explosion ("Not all union combinations were tried")
@@ -1988,6 +2106,7 @@ class MultiPeriodDiD(DifferenceInDifferences):
             rank_deficient_action=self.rank_deficient_action,
             weights=survey_weights,
             weight_type=survey_weight_type,
+            cluster_k_adjustment=_cr1_k_adj_mp,
             vcov_type=_fit_vcov_type,
             conley_coords=_conley_coords_arr,
             conley_cutoff_km=self.conley_cutoff_km,

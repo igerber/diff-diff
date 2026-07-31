@@ -743,11 +743,11 @@ forever - a removed symbol resurrecting is a test failure.
   class row (schema-enforced). Top-level `diff_diff:Name` class/function rows
   and alias rows also assert `__all__` membership consistent with their
   status (stale `import *` entries fail). The shipped row ids are a
-  committed snapshot in the enforcement test (104 as of the ETWFE
-  comparison-support row: Phase 1 + the diagnostic-family amendment +
+  committed snapshot in the enforcement test (105 as of the clustered-CR1
+  K_reference convergence row: Phase 1 + the diagnostic-family amendment +
   the M-092/M-093 results-contract rows + the M-094..M-096 amendment rows +
   the M-097..M-115 completeness sweep + M-117/M-122 + the ETWFE
-  reference-period pair M-123/M-124 + M-125;
+  reference-period pair M-123/M-124 + M-125 + M-126;
   the snapshot extends by a new id range in the same diff that appends
   rows): ids are never deleted or reused, and the test fails if any
   snapshot id disappears.

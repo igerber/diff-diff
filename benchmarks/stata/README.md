@@ -224,18 +224,23 @@ external anchors, with the ETWFE-vs-CS gap recorded rather than asserted away.
   count, with ATTs matching to ~1e-15 — and warns about the reduction rather
   than passing it over in silence. `n` and `n_units` are serialized because the
   row count is the finding, not incidental.
-- **ETWFE SEs** — do **not** match `jwdid`. Every cell is uniformly SMALLER
-  than Stata's, by a factor that shrinks as the cluster count grows: 1.0280 at
-  G=20, 1.0132 at G=40, 1.00264 at G=191, 1.0010 at G=500. Each arm therefore
-  pins its OWN measured ratio; the constant does not transfer between arms.
-  **The mechanism is not identified.**
-  The gap tracks `sqrt(G/(G-1))` but sits consistently ABOVE it, and the CR1
-  factor in `linalg.py` already applies `(G/(G-1)) * ((n-1)/(n-k))` — so a
-  missing cluster term is ruled out. The test pins the observed ratio and its
-  within-fit uniformity rather than loosening a tolerance, so a change in
-  magnitude *or* uniformity fails loudly; it records the gap as MEASURED, not
-  diagnosed. See the REGISTRY `## WooldridgeDiD (ETWFE)` note and the `TODO.md`
-  row.
+- **ETWFE SEs** — match `jwdid` (reghdfe) at machine precision under the 3.9
+  `K_reference` convergence. The historical uniform gap (1.0280 at G=20,
+  1.0132 at G=40, 1.00264 at G=191, 1.0010 at G=500) was defect D2: the
+  library's clustered CR1 factor counted only the visible treatment-cell
+  columns, omitting the absorbed FE not nested in the unit cluster
+  (`K_reference = cells + T` on this no-intercept within design). All arms now
+  gate the SE ratio at 1.0 (`rtol=1e-9`; measured spreads ~1e-14..1e-15).
+- **The subsample `ladder` block** — jwdid re-run on deterministic rosters
+  (the first N units per `first.treat` cohort by ascending `countyreal`,
+  N ∈ {5, 10, 20, 40, 80, 200, 500} → G ∈ {20, 40, 80, 140, 220, 391, 500}),
+  each rung storing reghdfe's df accounting (`df_a` + its
+  initial/nested/redundant decomposition, `rank`, `df_r`) alongside per-cell
+  `att`/`se`. This gates the few-cluster behavior (where the historical gap
+  was largest, ~2.8% at G=20) and doubles as the K-accounting probe: the
+  consuming test asserts `df_a == absorbed_fe_cr1_k_increment − 1` at every
+  cluster count. See the REGISTRY `## WooldridgeDiD (ETWFE)` hc1 note and
+  `docs/methodology/variance-conventions.md`.
 
 ## Input panel
 
@@ -246,6 +251,35 @@ arm never depends on network availability; network dependence is precisely the
 failure mode that produced the false assertion. Both the generator and the
 Python test assert the digest, so a swapped panel cannot silently retarget the
 parity.
+
+---
+
+# `reghdfe` anchor for the clustered CR1 `K_reference` on a disconnected panel
+
+`benchmarks/stata/generate_reghdfe_kref_golden.do` produces
+`benchmarks/data/reghdfe_kref_golden.json`, consumed by
+`tests/test_variance_conventions.py::TestReghdfeKReferenceParity`. The DGP is
+**deterministic (no RNG)** — integer formulas the Python test rebuilds verbatim
+— so no data is embedded or shipped: a disconnected two-way panel (units 0-9
+observed in periods 0-4, units 10-19 in periods 5-9; C=2 components, span rank
+`U + T − C = 28`).
+
+Two arms:
+
+- **`cross_cluster`** (cluster crosses both FE dims → nothing nested):
+  reghdfe's pairwise dof method computes the exact span rank (`df_a = 28`,
+  denominator `N − 29`) and the library matches at ~1e-17, agreeing with
+  fixest `ssc(K.fixef="full", K.exact=TRUE)` (see
+  `benchmarks/R/generate_fixest_cr1_nonnested_golden.R`). This is the parity
+  anchor for the exact non-nested RANK term.
+- **`unit_cluster`** (unit FE nested in the cluster): a DOCUMENTATION arm —
+  reghdfe counts the nested-remainder approximately (`df_a = T − 1 = 9`,
+  implied K = 11; its pairwise correction skips pairs containing a
+  nested-dropped dim) where the library uses the exact remainder given the
+  nested span (K = 10). No external reference implements that composition, so
+  the test pins the deviation exactly: `se_reghdfe / se_library ==
+  sqrt((N−10)/(N−11))`. On CONNECTED designs the two coincide — the jwdid
+  subsample ladder above pins machine-precision agreement at every G.
 
 ## Known constraints
 

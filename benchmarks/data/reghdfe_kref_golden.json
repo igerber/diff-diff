@@ -1,0 +1,35 @@
+{
+  "meta": {
+    "generator": "benchmarks/stata/generate_reghdfe_kref_golden.do",
+    "reghdfe_version": "version 6.13.1 10Jan2026",
+    "stata_version": 19,
+    "dgp": "deterministic disconnected two-way panel; see generator header",
+    "note": "cross_cluster = exact-span parity anchor (K=29, matches library + fixest full/K.exact). unit_cluster = documentation arm: reghdfe counts the nested-remainder approximately (implied K=11) where the library uses the exact remainder (K=10); the test pins se ratio == sqrt((N-10)/(N-11)). No external reference implements nested-drop + exact-remainder."
+  },
+  "unit_cluster": {
+    "cmd": "reghdfe out x, absorb(unit time) vce(cluster unit)",
+    "n": 100,
+    "G": 20,
+    "df_a": 9,
+    "df_a_initial": 30,
+    "df_a_nested": 20,
+    "df_a_redundant": 21,
+    "rank": 1,
+    "df_r": 19,
+    "coef": 0.5367231638418074,
+    "se": 0.12545333917294271
+  },
+  "cross_cluster": {
+    "cmd": "reghdfe out x, absorb(unit time) vce(cluster c5)",
+    "n": 100,
+    "G": 5,
+    "df_a": 28,
+    "df_a_initial": 30,
+    "df_a_nested": 0,
+    "df_a_redundant": 2,
+    "rank": 1,
+    "df_r": 4,
+    "coef": 0.5367231638418074,
+    "se": 0.092431570011765093
+  }
+}

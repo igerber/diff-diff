@@ -115,11 +115,12 @@ _MD_TOKEN_RE = re.compile(r"\[(M-\d{3})\]")
 # completeness sweep over public FUNCTIONS and the dCDH results mirror
 # (M-097..M-115) = 99, plus Phase 2b PR 1's two rows (M-117, M-122) = 101,
 # plus the ETWFE reference-period pair (M-123, M-124) = 103, plus the
-# comparison-support row (M-125) = 104.
+# comparison-support row (M-125) = 104, plus the clustered-CR1 K_reference
+# convergence row (M-126) = 105.
 # Ids are never reused and terminal rows are never
 # deleted, so the ledger only grows - raise the floor when rows are added; a
 # lower parse count means scanner/format drift or an illegal row deletion.
-ROW_COUNT_FLOOR = 104
+ROW_COUNT_FLOOR = 105
 
 # Committed snapshot of the shipped id set ("ids are never deleted or reused"
 # contract - a delete-one-add-one edit keeps the count above the floor but trips
@@ -133,7 +134,9 @@ ROW_COUNT_FLOOR = 104
 # dCDH results mirror and the fourth `robust` site; (117,117)/(122,122) =
 # Phase 2b PR 1 (balance_e onto aggregate(), AggregationResult); (123,124) =
 # the ETWFE reference-period fix (unidentified-cohort exclusion, and the
-# fail-closed guard on a design with no estimable post-treatment cell).
+# fail-closed guard on a design with no estimable post-treatment cell);
+# (126,126) = the clustered-CR1 K_reference convergence (D1+D2 of the 3.9
+# variance-consolidation program).
 # M-116 and
 # M-118..M-121 are reserved for the later 2b PRs, not deleted - ids are
 # never reused, so a gap here is intentional.
@@ -152,6 +155,7 @@ _INITIAL_ID_RANGES = [
     (117, 117),
     (122, 124),
     (125, 125),
+    (126, 126),
 ]
 EXPECTED_INITIAL_IDS = frozenset(
     f"M-{n:03d}" for lo, hi in _INITIAL_ID_RANGES for n in range(lo, hi + 1)
@@ -548,12 +552,13 @@ def test_initial_ids_never_deleted():
     """The shipped id set is immutable: ids are never deleted or reused (spec section 11).
 
     ROW_COUNT_FLOOR alone would let a delete-one-add-one edit pass; this snapshot cannot.
-    Extends as rows ship (104 as of the ETWFE comparison-support row: Phase 1 +
-    diagnostic-family + M-092/M-093 + M-094..M-096 + the M-097..M-115
-    public-function completeness sweep + M-117/M-122 + M-123/M-124 + M-125)."""
+    Extends as rows ship (105 as of the clustered-CR1 K_reference convergence row:
+    Phase 1 + diagnostic-family + M-092/M-093 + M-094..M-096 + the M-097..M-115
+    public-function completeness sweep + M-117/M-122 + M-123/M-124 + M-125 +
+    M-126)."""
     missing = sorted(EXPECTED_INITIAL_IDS - set(_ROW_IDS))
     assert not missing, f"ledger rows deleted (ids are permanent): {missing}"
-    assert len(EXPECTED_INITIAL_IDS) == 104
+    assert len(EXPECTED_INITIAL_IDS) == 105
 
 
 def test_version_tuple_pads_to_three_components():

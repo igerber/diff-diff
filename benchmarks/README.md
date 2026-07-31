@@ -55,14 +55,18 @@ STATA=/Applications/Stata/StataSE.app/Contents/MacOS/stata-se
 $STATA -b do benchmarks/stata/requirements.do            # one-time SSC install
 $STATA -b do benchmarks/stata/generate_lpdid_ra_golden.do
 $STATA -b do benchmarks/stata/generate_imputation_loo_golden.do
+$STATA -b do benchmarks/stata/generate_etwfe_cs_golden.do
+$STATA -b do benchmarks/stata/generate_reghdfe_kref_golden.do
 ```
 
 The `LPDiD` arm uses only **native** Stata commands (`teffects`), pinned by
 `version 19`. The `ImputationDiD` arm depends on SSC packages
-(`did_imputation`/`reghdfe`/`ftools`/`require`), which `version 19` does NOT pin
+(`did_imputation`/`reghdfe`/`ftools`/`require`), the ETWFE/CS arm on
+`drdid`/`csdid`/`jwdid`/`hdfe`, and the reghdfe K_reference arm on `reghdfe`;
+`version 19` does NOT pin SSC packages
 (SSC has no version history) — install them once via `requirements.do` (the
-generators do not auto-install) and each golden records `ssc_versions` for drift
-detection. See `stata/README.md`.
+generators do not auto-install) and each golden records version/checksum
+metadata for drift detection. See `stata/README.md`.
 
 ## Directory Structure
 
@@ -81,7 +85,9 @@ benchmarks/
 │   ├── README.md                          # Stata arm docs
 │   ├── requirements.do                    # one-time SSC install (did_imputation etc.)
 │   ├── generate_lpdid_ra_golden.do        # LPDiD RA SE vs teffects ra
-│   └── generate_imputation_loo_golden.do  # ImputationDiD LOO SE vs did_imputation leaveout
+│   ├── generate_imputation_loo_golden.do  # ImputationDiD LOO SE vs did_imputation leaveout
+│   ├── generate_etwfe_cs_golden.do        # ETWFE/CS vs jwdid + csdid (+ subsample ladder)
+│   └── generate_reghdfe_kref_golden.do    # clustered CR1 K_reference vs reghdfe (disconnected panel)
 ├── python/
 │   ├── utils.py              # Common utilities
 │   ├── benchmark_callaway.py # CallawaySantAnna
@@ -105,6 +111,8 @@ benchmarks/
 | `DifferenceInDifferences` | `fixest::feols` | Standard DiD | ✓ Integrated |
 | `LPDiD` (RA SE) | Stata `teffects ra ... atet` | Dube, Girardi, Jorda & Taylor (2025) | ✓ Integrated |
 | `ImputationDiD` (LOO SE) | Stata `did_imputation, leaveout` | Borusyak, Jaravel & Spiess (2024) App. A.9 | ✓ Integrated |
+| `WooldridgeDiD` / `CallawaySantAnna` | Stata `jwdid` / `csdid` (+ G≈20..500 SE ladder) | Wooldridge (2025) / Callaway & Sant'Anna (2021) | ✓ Integrated |
+| Clustered CR1 `K_reference` | Stata `reghdfe` + R `fixest` (disconnected-panel arms) | reghdfe/fixest ssc conventions | ✓ Integrated |
 | `HonestDiD` | `HonestDiD::createSensitivityResults` | Rambachan & Roth (2023) | Planned |
 
 Note: HonestDiD benchmark scripts exist but are not yet integrated into the main runner.

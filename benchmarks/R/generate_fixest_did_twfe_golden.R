@@ -11,12 +11,14 @@
 # classical / iid SE locks (the TWFE one also pins the SE-audit D4 full-K
 # rescale) plus the cluster blocks. Scenarios 3-4 (G2 completion, 2026-07) are
 # heteroskedastic + unbalanced so `hetero` (HC1) is a distinct target: the
-# plain-OLS DiD path locks hetero AND cluster CR1 at machine precision (the
-# CR1 DOF-convention difference vs fixest is absorbed-FE-only); the TWFE
-# cluster SE stays band-pinned for that documented non-nested-FE ssc
-# deviation, and TWFE hetero has no public unclustered Python surface
-# (auto-cluster-at-unit convention), so scenario 4 locks iid on an
-# UNBALANCED panel.
+# plain-OLS DiD path locks hetero AND cluster CR1 at machine precision, and
+# the TWFE cluster SE is likewise locked (exact on the balanced arm, rtol
+# 1e-9 on the hetero arm) — the historical ~0.25% non-nested-FE ssc band
+# was defect D2, closed by the 3.9 K_reference convergence (the within
+# CR1 factor now counts the non-nested time FE exactly as fixest's
+# ssc(K.fixef="nested") does). TWFE hetero has no public unclustered
+# Python surface (auto-cluster-at-unit convention), so scenario 4 locks
+# iid on an UNBALANCED panel.
 #
 # Regenerate:  Rscript benchmarks/R/generate_fixest_did_twfe_golden.R
 # Output:      benchmarks/data/fixest_did_twfe_golden.json

@@ -38,8 +38,10 @@ walk-throughs — those pin Python output against R `lm` + clubSandwich
 
 The ``hc1`` variant is NOT pinned against R in ``TestWooldridgeParityR``
 because the diff-diff within-transform finite-sample correction
-``(n-1)/(n-k_dm)`` differs from ``lm + clubSandwich::vcovCR(type="CR1S")``'s
-``(n-1)/(n-k_total)`` correction; see ``docs/methodology/REGISTRY.md``
+``(n-1)/(n-K_reference)`` (cells + constant + non-nested time-FE rank, 3.9
+K_reference convergence — matches Stata jwdid/reghdfe) differs from
+``lm + clubSandwich::vcovCR(type="CR1S")``'s ``(n-1)/(n-k_total)`` correction
+(all columns, nested unit dummies included); see ``docs/methodology/REGISTRY.md``
 "Variance families" → "Deviation from R" for the algebra. The hc1 path
 is locked instead by
 ``tests/test_wooldridge.py::TestWooldridgeVcovType::test_hc1_se_bit_equal_to_pre_pr_baseline``
@@ -2141,8 +2143,10 @@ class TestW2025LibraryDeviations:
     Section 8 gap closes via Stage C). The 5 substantive deviations
     locked here:
 
-    1. **HC1 finite-sample correction** ``(n-1)/(n-k_dm)`` (within-transform)
-       vs R ``lm + CR1S`` ``(n-1)/(n-k_total)``.
+    1. **HC1 finite-sample correction** ``(n-1)/(n-K_reference)``
+       (within-transform, K_reference = cells + constant + non-nested
+       time-FE rank; matches jwdid/reghdfe) vs R ``lm + CR1S``
+       ``(n-1)/(n-k_total)`` (nested unit dummies included).
     2. **QMLE sandwich `(G/(G-1)) × ((n-1)/(n-k))`** vs Stata ``jwdid``
        ``G/(G-1)`` only (logit/Poisson paths).
     3. **Nonlinear methods via direct QMLE** vs R ``etwfe`` fixest backend.
@@ -2154,13 +2158,14 @@ class TestW2025LibraryDeviations:
     """
 
     def test_hc1_within_transform_se_differs_from_naive_full_design(self) -> None:
-        """Deviation 1: ``vcov_type='hc1'`` uses within-transform ``(n-1)/(n-k_dm)``.
+        """Deviation 1: ``vcov_type='hc1'`` uses within-transform ``(n-1)/(n-K_reference)``.
 
-        The within-transformed design has ``k_dm`` columns (only the
-        treatment-cell + covariate columns); R's ``lm + CR1S`` on the
-        full-dummy design has ``k_total`` columns (including all unit
-        + time dummies). The two SEs differ by the factor
-        ``sqrt((n-k_total) / (n-k_dm))``.
+        The within-transformed design carries ``K_reference`` in the CR1
+        factor (treatment cells + the absorbed constant + the non-nested
+        time-FE rank; 3.9 convergence); R's ``lm + CR1S`` on the full-dummy
+        design counts all ``k_total`` columns (nested unit dummies
+        included). The two SEs differ by the factor
+        ``sqrt((n-k_total) / (n-K_reference))``.
 
         This test verifies the library uses the within-transform factor
         (the documented deviation) by comparing ``vcov_type='hc1'`` SE
@@ -2197,7 +2202,7 @@ class TestW2025LibraryDeviations:
         assert se_hc1 != se_classical, (
             f"hc1 SE = classical SE for (g={sample_key[0]}, t={sample_key[1]}). "
             f"This contradicts REGISTRY Deviation #4 (HC1 uses within-transform "
-            f"(n-1)/(n-k_dm) finite-sample factor)."
+            f"(n-1)/(n-K_reference) finite-sample factor)."
         )
 
     def test_qmle_sandwich_inflates_se_vs_stata_jwdid_reference(self) -> None:
@@ -2248,8 +2253,9 @@ class TestW2025LibraryDeviations:
 
         R ``etwfe`` uses ``fixest`` for nonlinear paths; the library uses
         direct QMLE via ``compute_robust_vcov`` to avoid a statsmodels/
-        fixest dependency. This results in HC1 finite-sample factor
-        ``(n-1)/(n-k_dm)`` rather than fixest's ``(n-1)/(n-k_total)``.
+        fixest dependency. On the OLS path the HC1 finite-sample factor is
+        ``(n-1)/(n-K_reference)`` (3.9); the QMLE paths keep their own
+        documented factor (deviation #2).
 
         Lock by verifying logit + Poisson runs without statsmodels/fixest
         installed — if either dep had crept in, an ``ImportError`` would
