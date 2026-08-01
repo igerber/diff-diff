@@ -20,8 +20,10 @@ restates per-row lifecycle data and instead cites rows as `[M-###]`),
 (program pointer).
 
 All decisions below were locked with the maintainer on 2026-07-18 (six program
-decisions + eight naming-checkpoint decisions). Sections 3-8 are the target
-surface; section 9 maps it onto PRs.
+decisions + eight naming-checkpoint decisions), with dated addenda: 2026-07-19
+(the diagnostic-family decision, section 3.5) and 2026-07-31 (the four
+consolidation-scope decisions appended to the section 8 checkpoint list).
+Sections 3-8 are the target surface; section 9 maps it onto PRs.
 
 ---
 
@@ -97,15 +99,26 @@ Derived from `diff_diff.__all__` at v3.8.0. 24 estimator classes -> 21.
 
 ### 3.2 Final alias table
 
-Existing aliases keep their targets (DiD, TWFE, SDiD, CS, SA, BJS, Gardner,
-DDD, Stacked, Bacon, EDiD, ETWFE, DCDH, CiC, CDiD, HAD, RDD). Changes:
+Kept aliases (14, the literature-standard names): DiD, TWFE, SDiD, CS, SA,
+BJS, DDD, Bacon, EDiD, ETWFE, DCDH, CiC, HAD, RDD (EDiD was initially slated
+for the diet but RETAINED on review evidence - it is the Chen-Sant'Anna-Xie
+paper's own label for its estimator, the same criterion that keeps SDiD). Changes:
 `EventStudy` is dropped, not retargeted [M-060] - "event study" names a design
 that CS/SA/BJS/LPDiD also produce, and retargeting it to a class whose default
 mode is the static ATT would make the name carry altered meaning. `SDDD` dies
-with its class [M-013] [M-064]. `QDiDResults` dies with QDiD [M-061]. New: `SCM` for
-SyntheticControl [M-062] ("SC" rejected - one transposition from CS) and
-`Spillover` for SpilloverDiD [M-063]. TROP and LPDiD are self-aliased acronyms.
-After 4.0: every estimator has exactly one class name and at most one alias.
+with its class [M-013] [M-064]. `QDiDResults` dies with QDiD [M-061].
+**Alias diet (2026-07-31):** `CDiD`, `Stacked` and `Gardner` are
+retired — [M-132]..[M-134] — deprecated 3.9, removed 4.0. Their target classes
+survive, so no parent-class shim can carry the warning; the 3.9 FutureWarning
+rides a module-level `__getattr__` [M-135]. The 3.9 consequence: the three
+names leave module globals (gone from `dir()` and static autocomplete) while
+staying importable and in `__all__`, and `from diff_diff import *` fires their
+FutureWarnings — accepted diet behavior, owned by the phase-2(d) PR. New:
+`SCM` for SyntheticControl [M-062] ("SC" rejected - one transposition from
+CS). The planned `Spillover` alias for SpilloverDiD is CANCELLED [M-063]
+(never shipped). TROP and LPDiD are self-aliased acronyms.
+After 4.0: every estimator has exactly one class name and at most one alias —
+15 aliases total.
 
 ### 3.3 Module-level function wrappers
 
@@ -581,7 +594,8 @@ indicator that rule 3 explicitly reserves the name for. dCDH is the one
 estimator where `group` genuinely means a unit id, which is why [M-033] and
 [M-114] exist and the CS-family fields have no rows.
 
-**Naming-checkpoint outcomes (2026-07-18), with losing candidates:**
+**Naming-checkpoint outcomes (2026-07-18 + 2026-07-31 addendum), with losing
+candidates:**
 `event_study=` bool (over `effects=` enum, `dynamic=` bool);
 `spec="within"|"pooled"` (over `unit_fe=` bool, `model=` string);
 `partition` (over `eligibility`); EventStudy alias dropped (over retarget -
@@ -591,6 +605,17 @@ unified event-study representation with `period_effects` as a 4.0->5.0
 property (over keeping the dict canonical, over hard removal); n_bootstrap
 semantic-only unification (over uniform 999, over uniform 200); panel
 auto-cluster-at-unit (over never-auto-cluster, over status quo).
+2026-07-31 addendum (consolidation scope): staggered-family mega-merge
+rejected (over a `StaggeredDiD(method=)` union class - altered-meaning trap on
+the union-params surface, and literature discoverability); ImputationDiD <->
+TwoStageDiD merge rejected (different inference stacks - BJS conservative IF
+SE vs GMM sandwich - and both independently cited); moderate alias diet
+(section 3.2; over an aggressive diet dropping the author-initials shorthands
+too, over no diet; EDiD was initially slated but retained - review evidence
+showed it is the CSX paper's own estimator label); alias-diet 3.9
+FutureWarning via module `__getattr__`
+[M-135] (over silent removal - the only 4.0 removals that would have shipped
+without a deprecation window).
 
 ## 9. Phase -> PR breakdown
 
@@ -600,11 +625,51 @@ above; anything only one PR cares about stays in that PR's plan.**
 | Phase | Ships in | PRs (each: dedicated shim/removal tests + matrix flips + CHANGELOG naming flipped row ids) |
 |---|---|---|
 | 1 (this PR) | - | Spec + matrix + enforcement test + support edits |
-| 2: contract foundations | 3.9 | (a) results base + unified event-study representation [M-092] + to_dict completion + the Diagnostic marker base on the diagnostic result roster [M-091] (section 3.5); (b) `aggregate()` + fit(aggregate=) shims [M-020..M-027]; (c) param renames [M-030..M-047] [M-084] [M-086..M-089] + their results-field mirrors [M-094] [M-095] (section 8 rule 9) + the public-function completeness sweep [M-097..M-113] (section 8 rule 10) + the dCDH results mirror [M-114] + the fourth `robust` site [M-115] + BaseEstimator mixin + ContinuousDiD covariates move; (d) alias introductions [M-062] [M-063] + wrapper deprecations [M-070..M-077] + the two inference-surface policies: `n_bootstrap` semantic unification [M-081] and the wild-cluster-bootstrap roster guard [M-096] |
-| 3: merges | 3.9 | (a) TWFE event-study mode [M-010] + EventStudy warn [M-060] (gates: section 4.1's equivalence/divergence/pooled-parity test triple); (b) TripleDifference facade [M-013]; (c) CiC method= [M-015] |
+| 2: contract foundations | 3.9 | (a) results base + unified event-study representation [M-092] + to_dict completion + the Diagnostic marker base on the diagnostic result roster [M-091] (section 3.5); (b) `aggregate()` + fit(aggregate=) shims [M-020..M-027] (M-020's shim already shipped); (c) param renames [M-030..M-047] [M-084] [M-086..M-089] + their results-field mirrors [M-094] [M-095] (section 8 rule 9) + the public-function completeness sweep [M-097..M-113] (section 8 rule 10) + the dCDH results mirror [M-114] + the fourth `robust` site [M-115] + BaseEstimator mixin + ContinuousDiD covariates move; (d) alias introduction [M-062] (the Spillover introduction is cancelled [M-063]) + the alias-diet `__getattr__` warning shim [M-135] + wrapper deprecations [M-070..M-077] + the two inference-surface policies: `n_bootstrap` semantic unification [M-081] and the wild-cluster-bootstrap roster guard [M-096]; shipped insertions (all done): the aggregate contract [M-122], the ETWFE reference-period family [M-123] [M-124] [M-125], and the variance-consolidation program [M-126] [M-127] |
+| 3: merges | 3.9 | (a) TWFE event-study mode [M-010] + EventStudy warn [M-060] + the fit `time`->`post` rename [M-082] (gates: section 4.1's equivalence/divergence/pooled-parity test triple); (b) TripleDifference facade [M-013] + the SDDD alias [M-064]; (c) CiC method= [M-015] |
 | 4: release + soak | 3.9 cut | Migration guide written (skeleton: section 10); maintainer cuts 3.9; maint/3.8 rule active |
-| 5: enforcement | 4.0 | Removals [M-010..M-016, M-030..M-047 old names, M-060, M-061, M-070..M-077, M-001..M-003] + the amendment's old names [M-094] [M-095] [M-097..M-115] (incl. their consumer migrations and the `clean_control` serialized reporting key); storage flips [M-050..M-058]; default policies [M-004..M-006, M-128..M-131, M-080]; warning retirement [M-007]; fastpath go/no-go [M-008]; diagnostic-family docs/roster reorganization [M-090]; sentinel retirement [M-093]; docs/llms.txt/README refresh |
+| 5: enforcement | 4.0 | Removals [M-010..M-015, M-020..M-027, M-030, M-032..M-047 old names, M-060, M-061, M-064, M-070..M-077, M-084, M-086..M-089, M-001..M-003, M-117] + the alias diet [M-132]..[M-134] + the amendment's old names [M-094] [M-095] [M-097..M-115] (incl. their consumer migrations and the `clean_control` serialized reporting key); M-031's old `time` name persists as the merged class's calendar column, so it is deliberately absent from the removal roster (its 4.0 enforcement is the M-085 behavior entry below); property window: [M-016] property-flips at 4.0 (removal at 5.0); storage flips [M-050..M-058]; default policies [M-004..M-006, M-128..M-131, M-080]; merged-class behavior enforcements [M-083] [M-085]; warning retirement [M-007]; fastpath go/no-go [M-008]; diagnostic-family docs/roster reorganization [M-090]; sentinel retirement [M-093]; docs/llms.txt/README refresh |
 | 6: front door | 4.1 | `event_study(data, outcome, unit, time, first_treat, estimator=...)` comparison entry point over the staggered family (sketch only; specified in its own plan) |
+
+Citation semantic for the table: a cell may cite a row whose current `phase`
+differs when that phase performs one of the row's lifecycle transitions (the
+phase-5 removal roster cites rows still at their shim phase; the phase-2(b)
+cell keeps M-020, whose shim shipped there). The row's `phase` field tracks
+only the NEXT transition (section 11). Terminal rows (`done`/`removed`) are
+exempt in both directions - citable for the historical record, never required.
+
+**Remaining 3.9 sequence (2026-07-31).** The single canonical statement of the
+remaining PR order; it records order and rationale only and does not
+re-enumerate the cells' M-id lists:
+
+1. Planning consolidation + the section 8 consolidation-scope decisions (the
+   PR that wrote this subsection).
+2. The naming-completeness guard test (TODO.md row: phase-table agreement per
+   the amended spec there + consumer coverage) - lands BEFORE 2(c), so the
+   rename PR works from a mechanically-verified list.
+3. 2(c)-i: the BaseEstimator mixin, front-loaded. Scope is section 7's
+   normative statement verbatim: replace the 24 hand-rolled
+   `get_params`/`set_params` copies library-wide (3.9-cut checklist item 1) -
+   not merely the standalone estimator classes. Rationale: the tail-df PR's
+   review exposed the non-atomic `set_params` pattern and fixed the five
+   estimators in its scope; others remain non-atomic today (verified examples:
+   CallawaySantAnna, TwoStageDiD, TripleDifference, TROP, SpilloverDiD - the
+   mixin PR's first task is the exhaustive inventory of all 24 copies), and
+   the renames should build on the transactional contract.
+4. 2(c)-ii: the rename sweep (the phase-2(c) cell); may split by rename group.
+5. 2(b): post-fit `aggregate()` + `fit(aggregate=)` shims (the (b) cell),
+   claiming reserved ids M-116/M-118..M-121 for any new rows; the
+   `EventStudyResults` downstream-consumability work (TODO.md row: the three
+   consumers currently reject the unified container) lands before or inside
+   this wave so the shims do not steer users into a dead end.
+6. 2(d): wrapper deprecations, the SCM introduction, the alias-diet
+   `__getattr__` shim + dieted-alias surface sweep (reader surfaces are
+   recorded in M-132..M-135's `code_refs`, the ledger-native home - this doc
+   carries no file inventory; the 2(d) PR starts from those `code_refs` and
+   additionally greps each dieted alias repo-wide), `n_bootstrap`, and the
+   wild-cluster-bootstrap roster guard.
+7. Phase 3 merges (a)/(b)/(c) per the phase-3 cell.
+8. Phase 4: migration guide, the 3.9-cut checklist below, cut.
 
 **3.9-cut checklist (un-rowed obligations).** `test_due_rows_are_terminal`
 gates everything that HAS a row; the following Phase 2 obligations are real but
@@ -617,8 +682,9 @@ not expressible as ledger rows, so the 3.9 release PR asserts them by hand:
 2. The R-equivalents mapping table (section 8 rule 8) ships in the docs.
 3. The migration guide exists (section 10) and its TL;DR table has a row per
    breaking change, generated against the matrix rather than hand-listed.
-4. `docs/v4-deprecations.yaml` and this document agree on the phase breakdown
-   in the table above - any PR that re-scoped a phase edited both.
+4. The ledger and this document agree on the phase breakdown in the table
+   above - any PR that re-scoped a phase edited both. Invariant and
+   enforcement spec: the naming-completeness guard row in TODO.md.
 
 Everything else queued for 3.9 is row-gated, by one of two mechanisms. Symbol
 rows that declare a `warning` gate on `deprecated_in` - the shim must have
@@ -627,8 +693,8 @@ shipped ([M-010] [M-013] [M-015], [M-020]..[M-027], [M-030]..[M-047],
 [M-084], [M-086]..[M-089], [M-094] [M-095], [M-097]..[M-115]). Rows with no
 shim to assert gate
 on `introduced_in` instead - the new surface must have shipped: the
-introduce-only aliases [M-062] [M-063] and the `behavior`-kind policies
-[M-081] [M-091] [M-092] [M-096]. That second mechanism is deliberate for
+introduce-only alias [M-062] and the `behavior`-kind policies
+[M-081] [M-091] [M-092] [M-096] [M-135]. That second mechanism is deliberate for
 behavior rows: the early-flip guard keys off `deprecated_in`, so a flip version
 would fail the very PR that implements the obligation (it lands while
 `__version__` is still 3.8.x). Use `introduced_in`, not `deprecated_in`, for
@@ -653,7 +719,8 @@ major"/"flip") to catch anything born outside the matrix.
 5. Results fields (overall_att family -> canonical quintet; property window).
 6. Inference defaults that moved numbers (df_convention, auto-cluster) - with
    how to reproduce 3.x numbers exactly.
-7. Removed functions and aliases (wrappers, EventStudy, SDDD, QDiDResults).
+7. Removed functions and aliases (wrappers, EventStudy, SDDD, QDiDResults,
+   and the alias-diet three: CDiD, Stacked, Gardner).
 8. Codemod section: the mechanical renames as a script/regex table.
 
 ## 11. Matrix mechanics (normative schema for `docs/v4-deprecations.yaml`)
@@ -745,15 +812,19 @@ forever - a removed symbol resurrecting is a test failure.
   (removal pins survive forever); behavior / default-flip / env-default rows
   REQUIRE a `test_ref` at `done` (semantic flips need ledger-linked
   behavioral evidence). Alias rows must NOT declare `warning` - an alias is
-  the same object as its target, so the deprecation warning rides the parent
-  class row (schema-enforced). Top-level `diff_diff:Name` class/function rows
+  the same object as its target, so the warning rides the parent class row
+  when the target is itself deprecated, and a `behavior`-row `__getattr__`
+  mechanism ([M-135]) when the target survives (schema-enforced either way:
+  the alias row itself never declares one). Top-level `diff_diff:Name`
+  class/function rows
   and alias rows also assert `__all__` membership consistent with their
   status (stale `import *` entries fail). The shipped row ids are a
-  committed snapshot in the enforcement test (110 as of the tail-df
-  consolidation family: Phase 1 + the diagnostic-family amendment +
+  committed snapshot in the enforcement test (114 as of the alias-diet
+  family: Phase 1 + the diagnostic-family amendment +
   the M-092/M-093 results-contract rows + the M-094..M-096 amendment rows +
   the M-097..M-115 completeness sweep + M-117/M-122 + the ETWFE
-  reference-period pair M-123/M-124 + M-125 + M-126 + M-127..M-131;
+  reference-period pair M-123/M-124 + M-125 + M-126 + M-127..M-131 +
+  the alias-diet family M-132..M-135;
   the snapshot extends by a new id range in the same diff that appends
   rows): ids are never deleted or reused, and the test fails if any
   snapshot id disappears.

@@ -215,6 +215,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rejecting the design.
 
 ### Added
+- **4.0-program planning consolidation + alias-diet decision** (internal;
+  no runtime change). Three consolidation-scope decisions locked 2026-07-31
+  and recorded in `docs/v4-design.md` §8: no staggered-family mega-merge, no
+  ImputationDiD↔TwoStageDiD merge, and a moderate **alias diet** — `CDiD`,
+  `Stacked` and `Gardner` are deprecated at 3.9 and removed at 4.0
+  (ledger rows M-132..M-134), with the 3.9 `FutureWarning` carried by a
+  module-level `__getattr__` (M-135, ships in phase 2d) because the
+  target classes survive; `EDiD` was initially slated but retained (review
+  evidence: it is the Chen-Sant'Anna-Xie paper's own estimator label); the
+  never-shipped `Spillover` alias introduction is
+  cancelled (M-063 → terminal). Ledger row count 110 → 114. `docs/v4-design.md`
+  §9 is de-staled against the ledger (the phase table gains the shipped
+  M-122..M-127 insertions, the M-064/M-082 phase-3 entries, and a completed
+  phase-5 roster with the M-031/M-016 carve-outs) and gains the canonical
+  "Remaining 3.9 sequence"; the TODO.md naming-guard row's phase-table
+  agreement spec is amended to the enforceable two-direction form; duplicated
+  flip-plan prose in DEFERRED.md and the REGISTRY M-010 note is trimmed to
+  cross-links.
 - **`df_convention` becomes a library-wide three-value knob** ([M-127]).
   `{"residual", "cluster", "normal"}` is now accepted everywhere the knob
   exists, and the knob extends to five standalone estimators: `SunAbraham`,

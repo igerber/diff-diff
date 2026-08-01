@@ -117,11 +117,14 @@ _MD_TOKEN_RE = re.compile(r"\[(M-\d{3})\]")
 # plus the ETWFE reference-period pair (M-123, M-124) = 103, plus the
 # comparison-support row (M-125) = 104, plus the clustered-CR1 K_reference
 # convergence row (M-126) = 105, plus the tail-df consolidation family
-# (M-127 behavior + the four M-128..M-131 default-flips) = 110.
+# (M-127 behavior + the four M-128..M-131 default-flips) = 110, plus the
+# alias-diet family (M-132..M-134 alias deprecations + the M-135 __getattr__
+# warning mechanism; EDiD was initially slated but RETAINED - it is the CSX
+# paper's own estimator label) = 114.
 # Ids are never reused and terminal rows are never
 # deleted, so the ledger only grows - raise the floor when rows are added; a
 # lower parse count means scanner/format drift or an illegal row deletion.
-ROW_COUNT_FLOOR = 110
+ROW_COUNT_FLOOR = 114
 
 # Committed snapshot of the shipped id set ("ids are never deleted or reused"
 # contract - a delete-one-add-one edit keeps the count above the floor but trips
@@ -140,7 +143,11 @@ ROW_COUNT_FLOOR = 110
 # variance-consolidation program); (127,131) = the tail-df consolidation
 # (M-127 behavior row = PR C's D4 + normal-theory defect fix + the
 # three-value knob extension, and M-128..M-131 = the four new standalone
-# df-convention default-flips joining M-004..M-006 at 4.0).
+# df-convention default-flips joining M-004..M-006 at 4.0); (132,135) = the
+# alias diet (M-132..M-134 = the CDiD/Stacked/Gardner alias deprecations,
+# M-135 = the module __getattr__ FutureWarning mechanism that carries their
+# 3.9 warning, since the surviving target classes have no shim; EDiD was
+# initially slated but retained - the CSX paper's own estimator label).
 # M-116 and
 # M-118..M-121 are reserved for the later 2b PRs, not deleted - ids are
 # never reused, so a gap here is intentional.
@@ -161,6 +168,7 @@ _INITIAL_ID_RANGES = [
     (125, 125),
     (126, 126),
     (127, 131),
+    (132, 135),
 ]
 EXPECTED_INITIAL_IDS = frozenset(
     f"M-{n:03d}" for lo, hi in _INITIAL_ID_RANGES for n in range(lo, hi + 1)
@@ -283,7 +291,9 @@ def validate_schema(rows):
         if kind == "alias" and row.get("warning") is not None:
             errors.append(
                 f"{rid}: alias rows must not declare 'warning' - an alias is the same object "
-                "as its target, so the deprecation warning rides the parent class row"
+                "as its target, so the warning rides the parent class row when the target is "
+                "itself deprecated, or a behavior-row __getattr__ mechanism (M-135) when the "
+                "target survives"
             )
         if (
             kind in ("class", "function")
@@ -557,13 +567,13 @@ def test_initial_ids_never_deleted():
     """The shipped id set is immutable: ids are never deleted or reused (spec section 11).
 
     ROW_COUNT_FLOOR alone would let a delete-one-add-one edit pass; this snapshot cannot.
-    Extends as rows ship (110 as of the tail-df consolidation family:
+    Extends as rows ship (114 as of the alias-diet family:
     Phase 1 + diagnostic-family + M-092/M-093 + M-094..M-096 + the M-097..M-115
     public-function completeness sweep + M-117/M-122 + M-123/M-124 + M-125 +
-    M-126 + M-127..M-131)."""
+    M-126 + M-127..M-131 + M-132..M-135)."""
     missing = sorted(EXPECTED_INITIAL_IDS - set(_ROW_IDS))
     assert not missing, f"ledger rows deleted (ids are permanent): {missing}"
-    assert len(EXPECTED_INITIAL_IDS) == 110
+    assert len(EXPECTED_INITIAL_IDS) == 114
 
 
 def test_version_tuple_pads_to_three_components():

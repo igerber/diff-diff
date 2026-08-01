@@ -11,12 +11,14 @@ Each row pins, for one (estimator, fit configuration) cell:
 - ``tail_df`` — the sorted multiset of ``df`` values passed to
   ``safe_inference`` / ``safe_inference_batch`` (``None`` = normal theory).
 
-The point is visibility, not endorsement: the clustered-CR1 ``k`` cells now
-pin the converged K_reference accounting, while the remaining DOCUMENTED
-DEFECT rows are the mixed tail-df conventions scheduled for PR C of the 3.9
-consolidation program. Every row carries ``status`` and, for legitimate
-differences, a ``reason``. When a later PR changes a convention, the
-expected literal changes HERE, in one reviewable table.
+The point is visibility, not endorsement: the clustered-CR1 ``k`` cells pin
+the converged K_reference accounting (M-126), the tail-df cells pin the
+converged three-value ``df_convention`` resolution (M-127), and every row is
+now ``status="legitimate"`` — the 3.9 consolidation program fixed the last
+documented-defect family, so no ``defect`` row remains. Every row carries
+``status`` and, for legitimate differences, a ``reason``. When a later PR
+changes a convention, the expected literal changes HERE, in one reviewable
+table.
 
 Instrumentation notes (each guards against a failure mode that produced wrong
 inventory numbers during planning):
@@ -176,8 +178,10 @@ class Capture:
 # ---------------------------------------------------------------------------
 # The matrix. One entry per (surface, configuration) cell.
 #
-# status:  "defect"      — scheduled to change in the 3.9 consolidation program
-#          "legitimate"  — a declared exception with its reason
+# status:  "legitimate"  — a declared exception with its reason
+#          "defect"      — historical value no current row uses (the 3.9
+#                          consolidation program fixed the last defect family);
+#                          kept in the enum for any future documented defect
 # cr1_k = () means the row's CONTRACT is "no shared clustered-CR1 call".
 # ---------------------------------------------------------------------------
 

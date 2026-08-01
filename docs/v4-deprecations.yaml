@@ -13,7 +13,8 @@
 #
 # FORMAT CONTRACT (parsed by a purpose-built scanner, no PyYAML): top-level
 # `rows:` list; each row a flat mapping of single-line scalars; `code_refs` as
-# an inline flow list; no anchors, no multi-line strings. Comments allowed.
+# an inline flow list; no anchors, no multi-line strings. Line-leading comments
+# only (a trailing `#` after a value is parsed as part of the value).
 #
 # Locator grammar: "diff_diff:Name" (top-level export), "diff_diff:Class[param]"
 # (__init__ param), "diff_diff:Class.method[param]" (method param),
@@ -762,14 +763,14 @@ rows:
     old: "Spillover"
     new: null
     old_target: null
-    new_target: "diff_diff:SpilloverDiD"
-    introduced_in: "3.9"
+    new_target: null
+    introduced_in: null
     deprecated_in: null
     removed_in: null
-    status: planned
+    status: done
     phase: 2
     code_refs: [diff_diff/__init__.py]
-    notes: "Introduce-only; follows the Stacked=StackedDiD precedent."
+    notes: "CANCELLED 2026-07-31 (alias-diet decision): the planned Spillover=SpilloverDiD introduction will never ship; row retained as an anti-resurrection pin (ids are never deleted; done with null new_target asserts the name stays absent)."
 
   # ---- Module-level function wrappers (class form is canonical) ------------
   - id: M-070
@@ -1457,3 +1458,56 @@ rows:
     new_default: "'cluster'"
     code_refs: [diff_diff/imputation.py]
     notes: "PR C ([M-127]) extended the knob here with default 'residual' (pretrends lead regression only; BJS overall inference and the joint pretrend Wald F are knob-independent); flips with [M-004]..[M-006] at 4.0; covered by the same migration note."
+
+  # ---- Alias diet (2026-07-31 consolidation-scope decision) ----------------
+  - id: M-132
+    kind: alias
+    group: alias-table
+    old: "CDiD"
+    new: null
+    old_target: "diff_diff:ContinuousDiD"
+    new_target: null
+    deprecated_in: "3.9"
+    removed_in: "4.0"
+    status: planned
+    phase: 5
+    code_refs: [diff_diff/__init__.py, docs/api/estimators.rst, diff_diff/guides/llms-full.txt, diff_diff/guides/llms-practitioner.txt, tests/test_aliases.py]
+    notes: "Alias diet 2026-07-31: not an established literature name and one edit from CiC/DiD/DCDH. Target class survives, so no parent-class shim can carry the warning - the 3.9 FutureWarning rides the module __getattr__ shim ([M-135]); removal at 4.0. code_refs list the known reader surfaces (section 8 rule 11); the 2d/removal PRs also grep repo-wide."
+  - id: M-133
+    kind: alias
+    group: alias-table
+    old: "Stacked"
+    new: null
+    old_target: "diff_diff:StackedDiD"
+    new_target: null
+    deprecated_in: "3.9"
+    removed_in: "4.0"
+    status: planned
+    phase: 5
+    code_refs: [diff_diff/__init__.py, docs/api/estimators.rst, diff_diff/guides/llms-full.txt, diff_diff/guides/llms-practitioner.txt, tests/test_aliases.py, diff_diff/diagnostic_report.py]
+    notes: "Alias diet 2026-07-31: a vague English adjective saving three characters over StackedDiD, with zero lookup value. Target class survives - the 3.9 FutureWarning rides the module __getattr__ shim ([M-135]); removal at 4.0. code_refs list the known reader surfaces; the 2d/removal PRs also grep repo-wide."
+  - id: M-134
+    kind: alias
+    group: alias-table
+    old: "Gardner"
+    new: null
+    old_target: "diff_diff:TwoStageDiD"
+    new_target: null
+    deprecated_in: "3.9"
+    removed_in: "4.0"
+    status: planned
+    phase: 5
+    code_refs: [diff_diff/__init__.py, docs/api/estimators.rst, diff_diff/guides/llms-full.txt, diff_diff/guides/llms-practitioner.txt, tests/test_aliases.py, diff_diff/diagnostic_report.py]
+    notes: "Alias diet 2026-07-31: author surname as a class name; the ecosystem name for the method is did2s and 'Gardner (2022)' prose citations are unaffected. Target class survives - the 3.9 FutureWarning rides the module __getattr__ shim ([M-135]); removal at 4.0. code_refs list the known reader surfaces; the 2d/removal PRs also grep repo-wide."
+  - id: M-135
+    kind: behavior
+    group: alias-table
+    old: "diff_diff:__getattr__"
+    new: null
+    introduced_in: "3.9"
+    deprecated_in: null
+    removed_in: null
+    status: planned
+    phase: 2
+    code_refs: [diff_diff/__init__.py]
+    notes: "Alias-diet warning mechanism: CDiD/Stacked/Gardner served via a PEP 562 module __getattr__ emitting FutureWarning naming the surviving class. Names stay in __all__ through 3.9 but leave module globals: dir()/vars() shrink symmetrically (test_dir_returns_full_module_namespace unaffected) and star-import fires the three warnings - accepted diet behavior, documented in v4-design section 3.2. Ships in phase 2d; test_due_rows_are_terminal forces it terminal before any 3.9 bump. Removals are [M-132]..[M-134]."

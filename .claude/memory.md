@@ -90,12 +90,8 @@ everywhere; `to_dict()` / `to_dataframe()` on most classes. See
 `.claude/../docs/methodology/REGISTRY.md` per estimator.
 
 ### Results Objects — 4.0 TARGET (do not write against this pre-4.0)
-Canonical quintet becomes the native fields on every class; `overall_att`
-family becomes FutureWarning properties (removed 5.0); one unified
-event-study representation; aggregation via post-fit
-`results.aggregate(type=)`. Normative spec: `docs/v4-design.md`; per-surface
-lifecycle: `docs/v4-deprecations.yaml` (CI-enforced by
-`tests/test_v4_matrix.py`).
+Target contract: `docs/v4-design.md` section 5; per-surface lifecycle:
+`docs/v4-deprecations.yaml` (CI-enforced by `tests/test_v4_matrix.py`).
 
 ### Column Naming — CURRENT (3.x)
 - `unit` unit id (`unit_col` on HAD; `group` on dCDH — both slated for 4.0)
@@ -107,10 +103,8 @@ lifecycle: `docs/v4-deprecations.yaml` (CI-enforced by
   (`cohort` on WooldridgeDiD — slated for 4.0)
 - `covariates` covariate list (`controls` on dCDH — slated for 4.0)
 
-### Column Naming — 4.0 TARGET
-`outcome` / `unit` / `time` (calendar) / `post` (0/1) / `treatment` (0/1) /
-`first_treat` / `covariates` / `partition` (DDD), no `_col` suffixes. Rules:
-`docs/v4-design.md` section 8.
+### Column Naming — 4.0 TARGET (do not write against this pre-4.0)
+Target vocabulary and rules: `docs/v4-design.md` section 8.
 
 ## Session Notes
 
