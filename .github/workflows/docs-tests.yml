@@ -10,6 +10,7 @@ on:
       - 'tests/test_doc_deps_integrity.py'
       - 'tests/test_docs_ia.py'
       - 'tests/test_v4_matrix.py'
+      - 'tests/test_naming_guard.py'
       # tests/conftest.py is auto-loaded by pytest for the snippet
       # test run and mutates sys.path + MPLBACKEND (conftest.py:14, 18);
       # changes there can break snippet exec without touching the test
@@ -32,6 +33,7 @@ on:
       - 'tests/test_doc_deps_integrity.py'
       - 'tests/test_docs_ia.py'
       - 'tests/test_v4_matrix.py'
+      - 'tests/test_naming_guard.py'
       - 'tests/conftest.py'
       - 'pyproject.toml'
       # sphinx-build job mirrors RTD setup; trigger when RTD config drifts
@@ -101,6 +103,14 @@ jobs:
         # ledger/spec-only edits (docs/** paths) cannot bypass enforcement -
         # the main test matrix does not trigger on docs-only diffs.
         run: PYTHONPATH=. DIFF_DIFF_BACKEND=python pytest tests/test_v4_matrix.py -v
+
+      - name: Run naming-completeness guard
+        # The section-8/section-9 naming guard (spec in the module docstring):
+        # public-surface vocabulary sweep, phase-table agreement in both
+        # directions, and rename consumer coverage against code_refs. Runs
+        # here for the same reason as the matrix step - docs-only ledger/spec
+        # edits must not bypass it.
+        run: PYTHONPATH=. DIFF_DIFF_BACKEND=python pytest tests/test_naming_guard.py -v
 
   sphinx-build:
     name: Sphinx HTML build (-W warnings as errors)

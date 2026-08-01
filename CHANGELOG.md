@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Naming-completeness guard test** (`tests/test_naming_guard.py`, internal):
+  mechanical enforcement of the three v4-program naming invariants that were
+  previously prose-only - (1) a public-surface sweep of every
+  `diff_diff.__all__` export's signatures, dataclass fields and property names
+  against the section-8 rename vocabulary (every hit must be a
+  `docs/v4-deprecations.yaml` row, structurally exempt, or allowlisted with a
+  stated reason - first run: 0 unrowed violations, 49 documented carve-outs);
+  (2) phase-table agreement between the ledger and `docs/v4-design.md`
+  section 9 in both directions (bracketed-citation expansion, ship-version
+  predicate, M-008/M-031 as named fixtures); (3) rename consumer coverage per
+  section-8 rule 11, with tiered regex/AST lanes (ambiguous tokens like `time`
+  match at call sites only) over `diff_diff/` source, the packaged
+  `guides/*.txt`, and `docs/methodology/`. The guard's first run completed 26
+  rows' `code_refs` with newly confirmed readers (e.g. `diagnostics.py`'s
+  `fit(time=...)` call sites on [M-030], `diagnostic_report.py`'s bare
+  `bacon_decompose(...)` call on [M-076], the packaged-guide readers of
+  `cohort`/`aggregation`/the wrapper functions), rule 11 gained the
+  token-family `code_refs` union clause, and the `plot_group_effects` cohort
+  selector joined the section-8 domain-vocabulary carve-outs. Wired into the
+  docs-tests workflow so docs-only ledger/spec edits cannot bypass it; the
+  completed TODO guard row is removed (spec now lives in the test module
+  docstring).
+
 ### Fixed
 - **Normal-theory tail inference on clustered analytical paths — the D4 +
   tail-df defect fix of the 3.9 variance-consolidation program** ([M-127]).

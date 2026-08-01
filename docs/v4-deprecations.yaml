@@ -59,7 +59,7 @@ rows:
     phase: 5
     warning: DeprecationWarning
     test_ref: tests/test_methodology_sdid.py
-    code_refs: [diff_diff/results.py]
+    code_refs: [diff_diff/results.py, diff_diff/guides/llms-full.txt]
     notes: "Alias property; remove together with the results.py docstring notes that reference it."
   - id: M-004
     kind: default-flip
@@ -209,7 +209,7 @@ rows:
     status: planned
     phase: 5
     warning: FutureWarning
-    code_refs: [diff_diff/results.py]
+    code_refs: [diff_diff/results.py, diff_diff/honest_did.py, diff_diff/pretrends.py, diff_diff/visualization/_event_study.py, diff_diff/results_base.py, diff_diff/diagnostic_report.py, diff_diff/estimators.py]
     notes: "Period-keyed dict becomes a FutureWarning property VIEW over the unified event-study surface on the successor container at 4.0; removed 5.0. Migrate this locator to the successor class when [M-011] flips (cross-row rule, spec section 11)."
 
   # ---- fit(aggregate=) -> results.aggregate(type=) -------------------------
@@ -225,7 +225,7 @@ rows:
     phase: 5
     warning: FutureWarning
     test_ref: tests/test_aggregate_contract.py
-    code_refs: [diff_diff/staggered.py, diff_diff/staggered_results.py, diff_diff/aggregation.py]
+    code_refs: [diff_diff/staggered.py, diff_diff/staggered_results.py, diff_diff/aggregation.py, diff_diff/practitioner.py, diff_diff/guides/llms-practitioner.txt]
     notes: "Shimmed in 3.9: fit(aggregate=) warns via a sentinel default (so a plain fit() never warns) and still returns the fully populated legacy surface; results.aggregate(type=) is the successor. balance_e moves alongside it as its own row [M-117] - it was previously tracked only as prose here, which nothing asserted. VOCABULARY: the closed set is library-wide (simple|event_study|group|calendar); CallawaySantAnna's SUPPORTED SUBSET is simple|event_study|group - it has no calendar aggregator (the DEFERRED 'Calendar-time aggregation' row), and aggregate('calendar') raises naming what is supported."
   - id: M-021
     kind: param
@@ -331,7 +331,7 @@ rows:
     status: planned
     phase: 2
     warning: FutureWarning
-    code_refs: [diff_diff/estimators.py]
+    code_refs: [diff_diff/estimators.py, diff_diff/diagnostics.py, diff_diff/guides/llms-full.txt, diff_diff/guides/llms-practitioner.txt, docs/methodology/REGISTRY.md, diff_diff/power.py]
     notes: "2x2 'time' is a 0/1 post dummy - same name as the calendar column everywhere else with a different meaning (the library's worst overload)."
   - id: M-031
     kind: param
@@ -357,7 +357,7 @@ rows:
     status: planned
     phase: 2
     warning: FutureWarning
-    code_refs: [diff_diff/wooldridge.py]
+    code_refs: [diff_diff/wooldridge.py, docs/methodology/REGISTRY.md, docs/methodology/papers/wooldridge-2023-review.md, docs/methodology/papers/wooldridge-2025-review.md, diff_diff/guides/llms-full.txt]
     notes: "Only estimator using 'cohort' for the first-treatment column; 12 others use first_treat."
   - id: M-033
     kind: param
@@ -370,7 +370,7 @@ rows:
     status: planned
     phase: 2
     warning: FutureWarning
-    code_refs: [diff_diff/chaisemartin_dhaultfoeuille.py]
+    code_refs: [diff_diff/chaisemartin_dhaultfoeuille.py, diff_diff/guides/llms-full.txt, diff_diff/guides/llms-practitioner.txt]
     notes: "'group' here means the unit id (R DIDmultiplegt vocabulary) but means the treated-group 0/1 indicator in TripleDifference - name-carries-altered-meaning violation."
   - id: M-034
     kind: param
@@ -383,7 +383,7 @@ rows:
     status: planned
     phase: 2
     warning: FutureWarning
-    code_refs: [diff_diff/chaisemartin_dhaultfoeuille.py]
+    code_refs: [diff_diff/chaisemartin_dhaultfoeuille.py, docs/methodology/REGISTRY.md, diff_diff/guides/llms-full.txt]
     notes: "Majority spelling is covariates."
   - id: M-035
     kind: param
@@ -396,7 +396,7 @@ rows:
     status: planned
     phase: 2
     warning: FutureWarning
-    code_refs: [diff_diff/had.py]
+    code_refs: [diff_diff/had.py, diff_diff/practitioner.py, diff_diff/guides/llms-full.txt, docs/methodology/REGISTRY.md, docs/methodology/papers/calonico-cattaneo-farrell-titiunik-2019-review.md]
     notes: "_col suffix used only by HAD and RDD; 22 other estimators use bare names."
   - id: M-036
     kind: param
@@ -409,7 +409,7 @@ rows:
     status: planned
     phase: 2
     warning: FutureWarning
-    code_refs: [diff_diff/had.py]
+    code_refs: [diff_diff/had.py, diff_diff/practitioner.py, diff_diff/guides/llms-full.txt]
     notes: "Matches ContinuousDiD's bare 'dose'."
   - id: M-037
     kind: param
@@ -422,7 +422,7 @@ rows:
     status: planned
     phase: 2
     warning: FutureWarning
-    code_refs: [diff_diff/had.py]
+    code_refs: [diff_diff/had.py, diff_diff/practitioner.py, diff_diff/guides/llms-full.txt]
     notes: ""
   - id: M-038
     kind: param
@@ -435,7 +435,7 @@ rows:
     status: planned
     phase: 2
     warning: FutureWarning
-    code_refs: [diff_diff/had.py]
+    code_refs: [diff_diff/had.py, diff_diff/practitioner.py, diff_diff/guides/llms-full.txt]
     notes: ""
   - id: M-039
     kind: param
@@ -448,7 +448,7 @@ rows:
     status: planned
     phase: 2
     warning: FutureWarning
-    code_refs: [diff_diff/had.py]
+    code_refs: [diff_diff/had.py, diff_diff/practitioner.py, diff_diff/agent_workflow.py, diff_diff/guides/llms-full.txt, diff_diff/guides/llms-autonomous.txt, docs/methodology/REGISTRY.md, docs/methodology/papers/dechaisemartin-2026-review.md]
     notes: ""
   - id: M-040
     kind: param
@@ -474,7 +474,7 @@ rows:
     status: planned
     phase: 2
     warning: FutureWarning
-    code_refs: [diff_diff/rdd.py]
+    code_refs: [diff_diff/rdd.py, diff_diff/guides/llms-full.txt]
     notes: ""
   - id: M-042
     kind: param
@@ -487,7 +487,7 @@ rows:
     status: planned
     phase: 2
     warning: FutureWarning
-    code_refs: [diff_diff/rdd.py]
+    code_refs: [diff_diff/rdd.py, docs/methodology/REGISTRY.md, diff_diff/guides/llms-autonomous.txt, diff_diff/guides/llms-full.txt, diff_diff/guides/llms.txt]
     notes: "Observed take-up column for fuzzy RD. Target RETARGETED from 'treatment' to 'takeup' by the gating-completeness amendment: the column accepts NON-BINARY (dose) take-up, matching R's fuzzy= (REGISTRY 'Estimand and estimator (fuzzy RD)'; the estimand label is data-dependent - complier LATE only when values are in {0,1}, otherwise a bare local Wald ratio). Section 8 rule 7 reserves 'treatment' for a 0/1 indicator and never a treatment level, so 'treatment' would have carried altered meaning here. 'takeup' is already the library's own vocabulary for it (the RD docstring example passes treatment_col='takeup'). No shim had shipped, so the retarget costs nothing."
   - id: M-094
     kind: field
@@ -513,7 +513,7 @@ rows:
     status: planned
     phase: 2
     warning: FutureWarning
-    code_refs: [diff_diff/stacked_did.py, diff_diff/power.py, diff_diff/practitioner.py]
+    code_refs: [diff_diff/stacked_did.py, diff_diff/power.py, diff_diff/practitioner.py, diff_diff/guides/llms-practitioner.txt, docs/methodology/REGISTRY.md]
     notes: "Same concept as control_group elsewhere; underscored value spellings win library-wide (spec section 8). CONSUMER MIGRATION: two sites read the ESTIMATOR attribute via getattr(estimator, 'clean_control', ...) and gate on it - power.py (a 'strict' survey_config rejection and a cross-check against control_group) and practitioner.py (guidance text naming the param). Same getattr-returns-None-after-removal failure mode as [M-095]'s results-side consumers, so both rows migrate their consumers in the shared Phase 2c diff; [M-095] covers results.clean_control readers, this row covers estimator.clean_control readers."
   - id: M-095
     kind: field
@@ -539,7 +539,7 @@ rows:
     status: planned
     phase: 2
     warning: FutureWarning
-    code_refs: [diff_diff/wooldridge_results.py]
+    code_refs: [diff_diff/wooldridge_results.py, docs/methodology/REPORTING.md, diff_diff/guides/llms-autonomous.txt, diff_diff/guides/llms-full.txt]
     notes: "Every other to_dataframe selector is level=. Covers ONLY the to_dataframe param rename; the 'event' value vocabulary across Wooldridge's aggregation surfaces is [M-086], and the summary(aggregation=) surface is [M-087]."
   - id: M-045
     kind: param
@@ -551,7 +551,7 @@ rows:
     status: planned
     phase: 2
     warning: FutureWarning
-    code_refs: [diff_diff/estimators.py]
+    code_refs: [diff_diff/estimators.py, docs/methodology/REGISTRY.md, diff_diff/guides/llms-full.txt, diff_diff/guides/llms-practitioner.txt, diff_diff/synthetic_did.py]
     notes: "Redundant with vcov_type; inherited by TwoWayFixedEffects (and MultiPeriodDiD until [M-010])."
   - id: M-046
     kind: param
@@ -596,7 +596,7 @@ rows:
     phase: 5
     warning: FutureWarning
     test_ref: null
-    code_refs: [diff_diff/staggered_results.py]
+    code_refs: [diff_diff/staggered_results.py, diff_diff/power.py, diff_diff/practitioner.py, diff_diff/efficient_did.py, diff_diff/wooldridge.py, diff_diff/_reporting_helpers.py]
     notes: "Pickle migration via __setstate__ per spec section 5."
   - id: M-051
     kind: field
@@ -783,7 +783,7 @@ rows:
     status: planned
     phase: 2
     warning: FutureWarning
-    code_refs: [diff_diff/imputation.py, diff_diff/__init__.py]
+    code_refs: [diff_diff/imputation.py, diff_diff/__init__.py, diff_diff/guides/llms-full.txt]
     notes: "Use ImputationDiD. Only 8 of 24 estimators ever had wrappers; the surface is retired rather than completed."
   - id: M-071
     kind: function
@@ -795,7 +795,7 @@ rows:
     status: planned
     phase: 2
     warning: FutureWarning
-    code_refs: [diff_diff/two_stage.py, diff_diff/__init__.py]
+    code_refs: [diff_diff/two_stage.py, diff_diff/__init__.py, diff_diff/guides/llms-full.txt]
     notes: "Use TwoStageDiD."
   - id: M-072
     kind: function
@@ -807,7 +807,7 @@ rows:
     status: planned
     phase: 2
     warning: FutureWarning
-    code_refs: [diff_diff/stacked_did.py, diff_diff/__init__.py]
+    code_refs: [diff_diff/stacked_did.py, diff_diff/__init__.py, diff_diff/guides/llms-full.txt]
     notes: "Use StackedDiD."
   - id: M-073
     kind: function
@@ -819,7 +819,7 @@ rows:
     status: planned
     phase: 2
     warning: FutureWarning
-    code_refs: [diff_diff/trop.py, diff_diff/__init__.py]
+    code_refs: [diff_diff/trop.py, diff_diff/__init__.py, diff_diff/guides/llms-full.txt]
     notes: "Use TROP."
   - id: M-074
     kind: function
@@ -831,7 +831,7 @@ rows:
     status: planned
     phase: 2
     warning: FutureWarning
-    code_refs: [diff_diff/synthetic_control.py, diff_diff/__init__.py]
+    code_refs: [diff_diff/synthetic_control.py, diff_diff/__init__.py, diff_diff/practitioner.py, docs/methodology/REGISTRY.md]
     notes: "Use SyntheticControl."
   - id: M-075
     kind: function
@@ -843,7 +843,7 @@ rows:
     status: planned
     phase: 2
     warning: FutureWarning
-    code_refs: [diff_diff/triple_diff.py, diff_diff/__init__.py]
+    code_refs: [diff_diff/triple_diff.py, diff_diff/__init__.py, diff_diff/guides/llms-full.txt]
     notes: "Use TripleDifference."
   - id: M-076
     kind: function
@@ -855,7 +855,7 @@ rows:
     status: planned
     phase: 2
     warning: FutureWarning
-    code_refs: [diff_diff/bacon.py, diff_diff/__init__.py]
+    code_refs: [diff_diff/bacon.py, diff_diff/__init__.py, diff_diff/diagnostic_report.py, docs/methodology/REPORTING.md, docs/methodology/REGISTRY.md, diff_diff/guides/llms-autonomous.txt, diff_diff/guides/llms-full.txt, diff_diff/visualization/_diagnostic.py, diff_diff/twfe.py]
     notes: "Use BaconDecomposition. twowayfeweights stays - it is a diagnostic function, not a class duplicate."
   - id: M-077
     kind: function
@@ -881,7 +881,7 @@ rows:
     status: planned
     phase: 2
     warning: FutureWarning
-    code_refs: [diff_diff/wooldridge_results.py]
+    code_refs: [diff_diff/wooldridge_results.py, docs/methodology/REGISTRY.md, docs/methodology/papers/wooldridge-2025-review.md]
     notes: "Wooldridge's EXISTING post-fit aggregate() (emfx-style prior art for spec section 6) accepts the drifted 'event' spelling; unifies to 'event_study' across aggregate/summary/to_dataframe value vocabularies. 'gt' stays as a documented estimator extra (group-time table), like ContinuousDiD's 'dose'."
   - id: M-087
     kind: param
@@ -1295,7 +1295,7 @@ rows:
     status: planned
     phase: 2
     warning: FutureWarning
-    code_refs: [diff_diff/chaisemartin_dhaultfoeuille_results.py, diff_diff/chaisemartin_dhaultfoeuille.py]
+    code_refs: [diff_diff/chaisemartin_dhaultfoeuille_results.py, diff_diff/chaisemartin_dhaultfoeuille.py, docs/methodology/REGISTRY.md]
     notes: "Results-side mirror of [M-033] under section 8 rule 9. dCDH's 'groups' are UNIT identifiers ('Group identifiers in the post-filter sample'), the same column fit[group] renames to unit - distinct from the CS-family 'groups', which are ATT(g,t) cohorts and stay as domain vocabulary. summary()/repr() labels follow; needs __setstate__ pickle migration per spec section 5. The n_groups_dropped_* counters are NOT renamed by this row (they count dropped units but read as diagnostics; re-audit at 4.0 if the vocabulary drifts)."
   - id: M-115
     kind: param
@@ -1307,7 +1307,7 @@ rows:
     status: planned
     phase: 2
     warning: FutureWarning
-    code_refs: [diff_diff/linalg.py]
+    code_refs: [diff_diff/linalg.py, diff_diff/sun_abraham.py]
     notes: "Fourth site of the 'robust' drop - spec section 7 says the flag dies 'everywhere it exists' but [M-045]..[M-047] enumerated only three. LinearRegression is a top-level export with its OWN __init__ (the TWFE/MultiPeriodDiD hits inherit DifferenceInDifferences.__init__ and ride [M-045]). Redundant with vcov_type, same as its siblings."
 
   # ---- Phase 2b PR 1: the post-fit aggregation surface ---------------------

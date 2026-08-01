@@ -583,7 +583,12 @@ missed.**
    returns the DEFAULT instead of raising, so the consumer silently reports
    the wrong thing rather than crashing - a wrong-answer regression that no
    removal pin catches. Grep for the old name across `diff_diff/` and
-   `docs/methodology/` before marking any rename row terminal.
+   `docs/methodology/` before marking any rename row terminal. For an old
+   name SHARED across rows (the `_col` family spans HAD, RDD and the pretest
+   functions), a reader may be recorded on any row of that token family: the
+   guard (`tests/test_naming_guard.py`) and removal PRs consult the family's
+   `code_refs` UNION, and the pre-terminal repo-wide grep above remains the
+   per-row safety net (decided 2026-08-01 over per-row duplication).
 
 **Domain vocabulary that is NOT a violation** (recorded so the sweep is not
 re-litigated): the staggered family's `group`/`groups` on results containers
@@ -592,7 +597,8 @@ own notation - rule 8 protects exactly this, and renaming them to `unit` would
 be actively wrong. `TripleDifference.fit[group]` is the treated-group 0/1
 indicator that rule 3 explicitly reserves the name for. dCDH is the one
 estimator where `group` genuinely means a unit id, which is why [M-033] and
-[M-114] exist and the CS-family fields have no rows.
+[M-114] exist and the CS-family fields have no rows. `plot_group_effects`'s
+`groups` selector is the same CS-cohort vocabulary on the plotting surface.
 
 **Naming-checkpoint outcomes (2026-07-18 + 2026-07-31 addendum), with losing
 candidates:**
@@ -644,8 +650,9 @@ re-enumerate the cells' M-id lists:
 
 1. Planning consolidation + the section 8 consolidation-scope decisions (the
    PR that wrote this subsection).
-2. The naming-completeness guard test (TODO.md row: phase-table agreement per
-   the amended spec there + consumer coverage) - lands BEFORE 2(c), so the
+2. The naming-completeness guard test (shipped: `tests/test_naming_guard.py`,
+   which carries the amended spec - surface sweep + phase-table agreement +
+   consumer coverage - in its module docstring) - lands BEFORE 2(c), so the
    rename PR works from a mechanically-verified list.
 3. 2(c)-i: the BaseEstimator mixin, front-loaded. Scope is section 7's
    normative statement verbatim: replace the 24 hand-rolled
@@ -684,7 +691,7 @@ not expressible as ledger rows, so the 3.9 release PR asserts them by hand:
    breaking change, generated against the matrix rather than hand-listed.
 4. The ledger and this document agree on the phase breakdown in the table
    above - any PR that re-scoped a phase edited both. Invariant and
-   enforcement spec: the naming-completeness guard row in TODO.md.
+   enforcement spec: `tests/test_naming_guard.py` (module docstring).
 
 Everything else queued for 3.9 is row-gated, by one of two mechanisms. Symbol
 rows that declare a `warning` gate on `deprecated_in` - the shim must have
