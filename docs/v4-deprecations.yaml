@@ -1484,7 +1484,7 @@ rows:
     removed_in: "4.0"
     status: planned
     phase: 5
-    code_refs: [diff_diff/__init__.py, docs/api/estimators.rst, diff_diff/guides/llms-full.txt, diff_diff/guides/llms-practitioner.txt, tests/test_aliases.py, diff_diff/diagnostic_report.py]
+    code_refs: [diff_diff/__init__.py, docs/api/estimators.rst, diff_diff/guides/llms-full.txt, diff_diff/guides/llms-practitioner.txt, diff_diff/guides/llms-autonomous.txt, tests/test_aliases.py, diff_diff/diagnostic_report.py, diff_diff/business_report.py, diff_diff/power.py]
     notes: "Alias diet 2026-07-31: a vague English adjective saving three characters over StackedDiD, with zero lookup value. Target class survives - the 3.9 FutureWarning rides the module __getattr__ shim ([M-135]); removal at 4.0. code_refs list the known reader surfaces; the 2d/removal PRs also grep repo-wide."
   - id: M-134
     kind: alias
@@ -1497,7 +1497,7 @@ rows:
     removed_in: "4.0"
     status: planned
     phase: 5
-    code_refs: [diff_diff/__init__.py, docs/api/estimators.rst, diff_diff/guides/llms-full.txt, diff_diff/guides/llms-practitioner.txt, tests/test_aliases.py, diff_diff/diagnostic_report.py]
+    code_refs: [diff_diff/__init__.py, docs/api/estimators.rst, diff_diff/guides/llms-full.txt, diff_diff/guides/llms-practitioner.txt, diff_diff/guides/llms-autonomous.txt, tests/test_aliases.py, diff_diff/diagnostic_report.py, diff_diff/practitioner.py, diff_diff/business_report.py]
     notes: "Alias diet 2026-07-31: author surname as a class name; the ecosystem name for the method is did2s and 'Gardner (2022)' prose citations are unaffected. Target class survives - the 3.9 FutureWarning rides the module __getattr__ shim ([M-135]); removal at 4.0. code_refs list the known reader surfaces; the 2d/removal PRs also grep repo-wide."
   - id: M-135
     kind: behavior
