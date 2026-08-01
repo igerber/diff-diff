@@ -71,6 +71,7 @@ from typing import Any, Dict, List, Literal, Optional, Tuple, Union, overload
 import numpy as np
 import pandas as pd
 
+from diff_diff._base import BaseEstimator
 from diff_diff.bootstrap_chunking import (
     compute_block_size,
     iter_survey_multiplier_weight_blocks,
@@ -2644,7 +2645,7 @@ def _fit_mass_point_2sls(
 # =============================================================================
 
 
-class HeterogeneousAdoptionDiD:
+class HeterogeneousAdoptionDiD(BaseEstimator):
     """Heterogeneous Adoption Difference-in-Differences estimator.
 
     Implements de Chaisemartin, Ciccia, D'Haultfoeuille, and Knau (2026)
@@ -2908,64 +2909,7 @@ class HeterogeneousAdoptionDiD:
             if int(self.seed) < 0:
                 raise ValueError(f"seed must be nonneg; got {self.seed!r}.")
 
-    def get_params(self, deep: bool = True) -> Dict[str, Any]:
-        """Return the raw constructor parameters (sklearn-compatible).
-
-        Matches the :meth:`sklearn.base.BaseEstimator.get_params`
-        signature. Preserves the user's original inputs - in particular,
-        ``design`` returns ``"auto"`` when the user set it to ``"auto"``
-        (even after fit), so ``sklearn.base.clone(est)`` round-trips
-        exactly.
-
-        Parameters
-        ----------
-        deep : bool, default=True
-            Accepted for sklearn-contract compatibility. This estimator
-            has no nested sub-estimator parameters, so ``deep=False``
-            and ``deep=True`` return the same dict.
-        """
-        del deep  # accepted for compat; this estimator has no nested params
-        return {
-            "design": self.design,
-            "d_lower": self.d_lower,
-            "kernel": self.kernel,
-            "alpha": self.alpha,
-            "vcov_type": self.vcov_type,
-            "robust": self.robust,
-            "cluster": self.cluster,
-            "n_bootstrap": self.n_bootstrap,
-            "seed": self.seed,
-        }
-
-    def set_params(self, **params: Any) -> "HeterogeneousAdoptionDiD":
-        """Set estimator parameters and return self (sklearn-compatible).
-
-        Only keys returned by :meth:`get_params` are accepted. Passing
-        any other attribute name (including method names like ``fit``)
-        raises ``ValueError`` so the estimator cannot be silently
-        corrupted by a mistyped or attacker-supplied key.
-
-        Mutation is ATOMIC: validation runs on a proposed merged
-        parameter dict before any attribute is overwritten. A failing
-        call (invalid key, or an otherwise valid key whose value
-        violates the constructor constraints) leaves ``self`` unchanged
-        and safe to reuse.
-        """
-        valid_keys = set(self.get_params().keys())
-        invalid = [k for k in params if k not in valid_keys]
-        if invalid:
-            raise ValueError(
-                f"Invalid parameter: {invalid[0]!r}. Valid parameters: " f"{sorted(valid_keys)}."
-            )
-        # Dry-run validation by constructing a fresh instance with the
-        # merged state. If the constructor raises, self is not mutated.
-        merged = self.get_params()
-        merged.update(params)
-        type(self)(**merged)  # raises ValueError on invalid combination
-        # All checks passed; apply atomically.
-        for key, value in params.items():
-            setattr(self, key, value)
-        return self
+    # get_params/set_params come from BaseEstimator.
 
     # ------------------------------------------------------------------
     # Main fit entry point

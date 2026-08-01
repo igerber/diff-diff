@@ -1,9 +1,10 @@
 import warnings
-from typing import Any, Dict, Iterable, Optional, Union
+from typing import Dict, Iterable, Optional, Union
 
 import numpy as np
 import pandas as pd
 
+from diff_diff._base import BaseEstimator
 from diff_diff.linalg import InvalidClusterKAdjustment, _rank_guarded_inv, solve_ols
 from diff_diff.lpdid_results import LPDiDResults
 from diff_diff.utils import (
@@ -17,7 +18,7 @@ from diff_diff.utils import (
 __all__ = ["LPDiD", "LPDiDResults"]
 
 
-class LPDiD:
+class LPDiD(BaseEstimator):
     def __init__(
         self,
         pre_window: int = 2,
@@ -1693,36 +1694,4 @@ class LPDiD:
         self.is_fitted_ = True
         return self.results_
 
-    def get_params(self) -> Dict[str, Any]:
-        return {
-            "pre_window": self.pre_window,
-            "post_window": self.post_window,
-            "control_group": self.control_group,
-            "reweight": self.reweight,
-            "no_composition": self.no_composition,
-            "pmd": self.pmd,
-            "alpha": self.alpha,
-            "cluster": self.cluster,
-            "rank_deficient_action": self.rank_deficient_action,
-            "non_absorbing": self.non_absorbing,
-            "stabilization_window": self.stabilization_window,
-            "df_convention": self.df_convention,
-        }
-
-    def set_params(self, **params: Any) -> "LPDiD":
-        # Reject unknown keys before any assignment (the rollback below
-        # only covers validator failures on known keys).
-        for key in params:
-            if not hasattr(self, key):
-                raise ValueError(f"Unknown parameter: {key}")
-        previous_values = {}
-        for key, value in params.items():
-            previous_values[key] = getattr(self, key)
-            setattr(self, key, value)
-        try:
-            self._validate_params()
-        except ValueError:
-            for key, value in previous_values.items():
-                setattr(self, key, value)
-            raise
-        return self
+    # get_params/set_params come from BaseEstimator.

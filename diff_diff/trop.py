@@ -19,7 +19,7 @@ Estimators. *Working Paper*. https://arxiv.org/abs/2508.21536
 
 import logging
 import warnings
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -30,6 +30,7 @@ from diff_diff._backend import (
     HAS_RUST_BACKEND,
     _rust_loocv_grid_search,
 )
+from diff_diff._base import BaseEstimator
 from diff_diff.trop_global import TROPGlobalMixin
 from diff_diff.trop_local import (
     TROPLocalMixin,
@@ -44,7 +45,7 @@ from diff_diff.trop_results import (
 from diff_diff.utils import safe_inference, warn_if_not_converged
 
 
-class TROP(TROPLocalMixin, TROPGlobalMixin):
+class TROP(TROPLocalMixin, TROPGlobalMixin, BaseEstimator):
     """
     Triply Robust Panel (TROP) estimator.
 
@@ -946,33 +947,7 @@ class TROP(TROPLocalMixin, TROPGlobalMixin):
     # sklearn-like API
     # =========================================================================
 
-    def get_params(self) -> Dict[str, Any]:
-        """Get estimator parameters."""
-        return {
-            "method": self.method,
-            "lambda_time_grid": self.lambda_time_grid,
-            "lambda_unit_grid": self.lambda_unit_grid,
-            "lambda_nn_grid": self.lambda_nn_grid,
-            "max_iter": self.max_iter,
-            "tol": self.tol,
-            "alpha": self.alpha,
-            "n_bootstrap": self.n_bootstrap,
-            "seed": self.seed,
-            "non_absorbing": self.non_absorbing,
-        }
-
-    def set_params(self, **params) -> "TROP":
-        """Set estimator parameters."""
-        for key, value in params.items():
-            if key == "method" and value not in ("local", "global"):
-                raise ValueError(f"method must be one of ('local', 'global'), got '{value}'")
-            if key == "non_absorbing" and not isinstance(value, bool):
-                raise ValueError(f"non_absorbing must be a bool, got {type(value).__name__}")
-            if hasattr(self, key):
-                setattr(self, key, value)
-            else:
-                raise ValueError(f"Unknown parameter: {key}")
-        return self
+    # get_params/set_params come from BaseEstimator.
 
 
 def trop(

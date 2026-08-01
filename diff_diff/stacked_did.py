@@ -24,6 +24,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
+from diff_diff._base import BaseEstimator
 from diff_diff.balancing import BalanceError, entropy_balance
 from diff_diff.linalg import effective_cluster_count, solve_ols
 from diff_diff.stacked_did_results import StackedDiDResults  # noqa: F401 (re-export)
@@ -36,7 +37,7 @@ __all__ = [
 ]
 
 
-class StackedDiD:
+class StackedDiD(BaseEstimator):
     """
     Stacked Difference-in-Differences estimator.
 
@@ -1546,45 +1547,7 @@ class StackedDiD:
     # sklearn-compatible interface
     # =========================================================================
 
-    def get_params(self) -> Dict[str, Any]:
-        """Get estimator parameters (sklearn-compatible)."""
-        return {
-            "kappa_pre": self.kappa_pre,
-            "kappa_post": self.kappa_post,
-            "weighting": self.weighting,
-            "clean_control": self.clean_control,
-            "cluster": self.cluster,
-            "alpha": self.alpha,
-            "anticipation": self.anticipation,
-            "rank_deficient_action": self.rank_deficient_action,
-            "vcov_type": self.vcov_type,
-            "balance": self.balance,
-            "df_convention": self.df_convention,
-        }
-
-    def set_params(self, **params: Any) -> "StackedDiD":
-        """Set estimator parameters (sklearn-compatible).
-
-        Re-validates `vcov_type` via the shared `_validate_vcov_type`
-        helper so sklearn-style mutation hits the estimator-level guard
-        before fit() (avoids a later, less-informative failure in the
-        linalg layer).
-        """
-        # Reject unknown keys, then validate pending values up-front (same
-        # error surface as __init__), so a rejected call leaves the
-        # estimator unchanged.
-        for key in params:
-            if not hasattr(self, key):
-                raise ValueError(f"Unknown parameter: {key}")
-        if "vcov_type" in params:
-            self._validate_vcov_type(params["vcov_type"])
-        if "balance" in params:
-            self._validate_balance(params["balance"])
-        if "df_convention" in params:
-            validate_df_convention(params["df_convention"])
-        for key, value in params.items():
-            setattr(self, key, value)
-        return self
+    # get_params/set_params come from BaseEstimator.
 
     def summary(self) -> str:
         """Get summary of estimation results."""

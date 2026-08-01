@@ -517,9 +517,11 @@ domain vocabulary, not drift.
   suites' expectations and adds the migration-guide entry.
 - Constructor hygiene rides Phase 2: ContinuousDiD's `covariates` moves from
   `__init__` to `fit()` [M-084] (the one estimator with a data column in the
-  constructor), and the shared `BaseEstimator` mixin replaces the 24
+  constructor), and the shared `BaseEstimator` mixin replaces the 25
   hand-rolled `get_params`/`set_params` copies (transactional set_params per
-  the locked rule; `deep=` supported uniformly).
+  the locked rule; `deep=` supported uniformly; the implementation measured
+  25 defining classes - `changes_in_changes.py` holds two - correcting this
+  document's earlier count of 24).
 
 ## 8. Contract-rename rules
 
@@ -654,15 +656,15 @@ re-enumerate the cells' M-id lists:
    which carries the amended spec - surface sweep + phase-table agreement +
    consumer coverage - in its module docstring) - lands BEFORE 2(c), so the
    rename PR works from a mechanically-verified list.
-3. 2(c)-i: the BaseEstimator mixin, front-loaded. Scope is section 7's
-   normative statement verbatim: replace the 24 hand-rolled
+3. 2(c)-i: the BaseEstimator mixin, front-loaded (shipped:
+   `diff_diff/_base.py`, with the cross-estimator contract suite
+   `tests/test_base_estimator.py` on a dynamic roster). Scope was section 7's
+   normative statement verbatim: replace the hand-rolled
    `get_params`/`set_params` copies library-wide (3.9-cut checklist item 1) -
-   not merely the standalone estimator classes. Rationale: the tail-df PR's
-   review exposed the non-atomic `set_params` pattern and fixed the five
-   estimators in its scope; others remain non-atomic today (verified examples:
-   CallawaySantAnna, TwoStageDiD, TripleDifference, TROP, SpilloverDiD - the
-   mixin PR's first task is the exhaustive inventory of all 24 copies), and
-   the renames should build on the transactional contract.
+   not merely the standalone estimator classes; the exhaustive inventory
+   found 25 defining classes (not 24). set_params is transactional via probe
+   re-init - `type(self)(**merged)` validates before any mutation - so the
+   renames build on a contract that can never drift from `__init__`.
 4. 2(c)-ii: the rename sweep (the phase-2(c) cell); may split by rename group.
 5. 2(b): post-fit `aggregate()` + `fit(aggregate=)` shims (the (b) cell),
    claiming reserved ids M-116/M-118..M-121 for any new rows; the
@@ -685,7 +687,10 @@ not expressible as ledger rows, so the 3.9 release PR asserts them by hand:
 1. The shared `BaseEstimator` mixin has replaced the hand-rolled
    `get_params`/`set_params` copies (section 7), with `deep=` uniform and
    set_params transactional per the locked rule. A pure refactor - no symbol
-   changes - so no row can see it.
+   changes - so no row can see it. DONE: `diff_diff/_base.py` +
+   `tests/test_base_estimator.py` (25 classes converted; the ten
+   formerly-lazy set_params surfaces now validate eagerly, REGISTRY
+   EfficientDiD note updated in the same diff).
 2. The R-equivalents mapping table (section 8 rule 8) ships in the docs.
 3. The migration guide exists (section 10) and its TL;DR table has a row per
    breaking change, generated against the matrix rather than hand-listed.

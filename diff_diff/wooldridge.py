@@ -20,6 +20,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 import numpy as np
 import pandas as pd
 
+from diff_diff._base import BaseEstimator
 from diff_diff.linalg import (
     compute_robust_vcov,
     effective_cluster_count,
@@ -828,7 +829,7 @@ def _prepare_covariates(
     return np.hstack([p if p.ndim == 2 else p.reshape(-1, 1) for p in parts])
 
 
-class WooldridgeDiD:
+class WooldridgeDiD(BaseEstimator):
     """Extended Two-Way Fixed Effects (ETWFE) DiD estimator.
 
     Implements the Wooldridge (2025) saturated cohort×time regression
@@ -1092,66 +1093,8 @@ class WooldridgeDiD:
             raise RuntimeError("Call fit() before accessing results_")
         return self._results
 
-    def get_params(self) -> Dict[str, Any]:
-        """Return estimator parameters (sklearn-compatible)."""
-        return {
-            "method": self.method,
-            "control_group": self.control_group,
-            "anticipation": self.anticipation,
-            "demean_covariates": self.demean_covariates,
-            "alpha": self.alpha,
-            "cluster": self.cluster,
-            "n_bootstrap": self.n_bootstrap,
-            "bootstrap_weights": self.bootstrap_weights,
-            "seed": self.seed,
-            "rank_deficient_action": self.rank_deficient_action,
-            "vcov_type": self.vcov_type,
-            "cohort_trends": self.cohort_trends,
-            "conley_coords": self.conley_coords,
-            "conley_cutoff_km": self.conley_cutoff_km,
-            "conley_metric": self.conley_metric,
-            "conley_kernel": self.conley_kernel,
-            "conley_lag_cutoff": self.conley_lag_cutoff,
-            "df_convention": self.df_convention,
-        }
-
-    def set_params(self, **params: Any) -> "WooldridgeDiD":
-        """Set estimator parameters (sklearn-compatible). Returns self.
-
-        Atomic: if validation rejects the incoming combination (unknown
-        parameter, invalid value, or the ``method`` × ``vcov_type``
-        interaction guard fires), ``self`` is unchanged so a caller that
-        catches ``ValueError`` / ``NotImplementedError`` can keep using
-        the estimator with its previous configuration. Mirrors the
-        ``DifferenceInDifferences.set_params`` pattern at
-        ``estimators.py:995-1023``.
-        """
-        # First pass: validate all incoming keys are known attributes so
-        # we don't partially apply a batch that ends in "Unknown parameter".
-        for key in params:
-            if not hasattr(self, key):
-                raise ValueError(f"Unknown parameter: {key!r}")
-
-        # Compute pending values by overlaying ``params`` on the current
-        # configuration; validate on those locals (catches invalid sets +
-        # the method × vcov_type interaction) BEFORE mutating ``self``.
-        pending = {
-            "method": params.get("method", self.method),
-            "control_group": params.get("control_group", self.control_group),
-            "anticipation": params.get("anticipation", self.anticipation),
-            "bootstrap_weights": params.get("bootstrap_weights", self.bootstrap_weights),
-            "vcov_type": params.get("vcov_type", self.vcov_type),
-            "cohort_trends": params.get("cohort_trends", self.cohort_trends),
-            "df_convention": params.get("df_convention", self.df_convention),
-        }
-        self._validate_constructor_args(**pending)
-
-        # All validation passed — apply mutations atomically.
-        for key, value in params.items():
-            setattr(self, key, value)
-        # Recompute the explicit-vcov flag after any vcov_type mutation.
-        self._vcov_type_explicit = self.vcov_type != "hc1"
-        return self
+    # get_params/set_params come from BaseEstimator.
+    _DERIVED_CONFIG_ATTRS = ("_vcov_type_explicit",)
 
     def fit(
         self,

@@ -111,6 +111,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
+from diff_diff._base import BaseEstimator
 from diff_diff._rdrobust_port import (
     BWSELECT_OPTIONS,
     _fuzzy_identification_stop,
@@ -488,7 +489,7 @@ class RegressionDiscontinuityResults(BaseResults):
         return pd.DataFrame([self.to_dict()])
 
 
-class RegressionDiscontinuity:
+class RegressionDiscontinuity(BaseEstimator):
     """Regression discontinuity estimator - sharp and fuzzy, with
     optional covariate adjustment (rdrobust 4.0.0 parity).
 
@@ -693,41 +694,7 @@ class RegressionDiscontinuity:
         if not (self._is_real_scalar(self.alpha) and 0 < self.alpha < 1):
             raise ValueError(f"alpha must be in (0, 1); got {self.alpha!r}.")
 
-    def get_params(self, deep: bool = True) -> Dict[str, Any]:
-        """Return raw constructor parameters (sklearn-compatible)."""
-        del deep
-        return {
-            "cutoff": self.cutoff,
-            "p": self.p,
-            "q": self.q,
-            "kernel": self.kernel,
-            "bwselect": self.bwselect,
-            "h": self.h,
-            "b": self.b,
-            "rho": self.rho,
-            "vcov_type": self.vcov_type,
-            "nnmatch": self.nnmatch,
-            "masspoints": self.masspoints,
-            "bwcheck": self.bwcheck,
-            "bwrestrict": self.bwrestrict,
-            "scaleregul": self.scaleregul,
-            "sharpbw": self.sharpbw,
-            "covs_drop": self.covs_drop,
-            "alpha": self.alpha,
-        }
-
-    def set_params(self, **params: Any) -> "RegressionDiscontinuity":
-        """Transactionally update parameters (validate before mutating)."""
-        valid = set(self.get_params().keys())
-        unknown = set(params) - valid
-        if unknown:
-            raise ValueError(f"Unknown parameter(s): {sorted(unknown)}. Valid: {sorted(valid)}.")
-        merged = self.get_params()
-        merged.update(params)
-        type(self)(**merged)  # dry-run: raises before any mutation
-        for key, value in params.items():
-            setattr(self, key, value)
-        return self
+    # get_params/set_params come from BaseEstimator.
 
     # ------------------------------------------------------------------
     # Fitting

@@ -1395,44 +1395,24 @@ class TestTripleDifferenceVcovType:
         with pytest.raises(ValueError, match="invalid"):
             TripleDifference(vcov_type="hc4")
 
-    # -- Surface 5: fit()-time revalidation (set_params can't bypass) ----
+    # -- Surface 5: eager transactional validation (BaseEstimator) ----
 
-    def test_set_params_bad_vcov_caught_at_fit_time(self):
-        """set_params is strict-mirror sklearn (no atomic validation), but
-        fit() re-validates so a bad set_params(vcov_type='hc4') surfaces a
-        clear error at fit-time rather than silently propagating a bad
-        value to Results metadata. Mirrors CS
-        tests/test_staggered.py::test_set_params_bad_vcov_caught_at_fit_time."""
+    def test_set_params_bad_vcov_raises_eagerly(self):
+        """set_params validates via constructor probe (transactional per the
+        locked v4 rule), so a bad vcov_type raises AT set_params with the
+        same message __init__ gives - and the estimator is unchanged."""
         td = TripleDifference()
-        # set_params succeeds (sklearn-style mutate-then-validate-at-use)
-        td.set_params(vcov_type="hc4")
-        assert td.vcov_type == "hc4"
-        # fit() re-validates and raises
-        data = generate_ddd_data(n_per_cell=40, true_att=2.0, seed=37)
         with pytest.raises(ValueError, match="hc4"):
-            td.fit(
-                data,
-                outcome="outcome",
-                group="group",
-                partition="partition",
-                time="time",
-            )
+            td.set_params(vcov_type="hc4")
+        assert td.vcov_type == "hc1"
 
-    def test_set_params_bad_vcov_classical_caught_at_fit_time(self):
-        """Same as above but with an IF-incompatible family (classical).
-        Catches the silent-propagation path on the methodology-rooted
-        rejection branch."""
+    def test_set_params_bad_vcov_classical_raises_eagerly(self):
+        """Same for the IF-incompatible family (classical): the eager probe
+        surfaces the methodology-rooted rejection branch at set_params."""
         td = TripleDifference()
-        td.set_params(vcov_type="classical")
-        data = generate_ddd_data(n_per_cell=40, true_att=2.0, seed=39)
         with pytest.raises(ValueError, match="influence-function"):
-            td.fit(
-                data,
-                outcome="outcome",
-                group="group",
-                partition="partition",
-                time="time",
-            )
+            td.set_params(vcov_type="classical")
+        assert td.vcov_type == "hc1"
 
     # -- Introspection contract -------------------------------------------
 

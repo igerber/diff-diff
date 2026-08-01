@@ -132,6 +132,38 @@ def test_check_c_ignores_assignments_outside_init(mod):
     assert mod.new_params_missing_from_get_params(["real", "other"], text) == []
 
 
+def test_check_c_skips_mixin_classes_without_inbody_get_params(mod):
+    # Post-mixin shape: get_params is inherited (possibly indirectly, e.g.
+    # SyntheticDiD via DifferenceInDifferences), invisible to the file-local
+    # AST scan. A new self.X in such a class must NOT be flagged - the
+    # introspective BaseEstimator.get_params auto-covers new __init__ params
+    # and tests/test_base_estimator.py enforces the signature sync.
+    text = (
+        "from diff_diff._base import BaseEstimator\n"
+        "class E(BaseEstimator):\n"
+        "    def __init__(self):\n"
+        "        self.new_param = 1\n"
+        "class F(SomeOtherBase):\n"  # indirect inheritance: base name is opaque
+        "    def __init__(self):\n"
+        "        self.other_param = 2\n"
+    )
+    assert mod.new_params_missing_from_get_params(["new_param", "other_param"], text) == []
+
+
+def test_check_c_still_flags_handrolled_get_params(mod):
+    # A class that hand-rolls get_params keeps the original contract: a new
+    # __init__ self-assign absent from its own get_params is flagged.
+    text = (
+        "class E:\n"
+        "    def __init__(self):\n"
+        "        self.new_param = 1\n"
+        "        self.kept = 2\n"
+        "    def get_params(self):\n"
+        "        return {'kept': self.kept}\n"
+    )
+    assert mod.new_params_missing_from_get_params(["new_param", "kept"], text) == ["new_param"]
+
+
 def test_load_groups(mod):
     yaml = (
         "groups:\n"

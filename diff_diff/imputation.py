@@ -31,6 +31,7 @@ import pandas as pd
 from scipy import sparse, stats
 from scipy.sparse.linalg import factorized as sparse_factorized
 
+from diff_diff._base import BaseEstimator
 from diff_diff.imputation_bootstrap import ImputationDiDBootstrapMixin, _compute_target_weights
 from diff_diff.imputation_results import (  # noqa: F401 (re-export)
     ImputationBootstrapResults,
@@ -145,7 +146,7 @@ def _lsmr_minnorm_normal_solve(A0tA0_csc, rhs: np.ndarray) -> np.ndarray:
     return z
 
 
-class ImputationDiD(ImputationDiDBootstrapMixin):
+class ImputationDiD(ImputationDiDBootstrapMixin, BaseEstimator):
     """
     Borusyak-Jaravel-Spiess (2024) imputation DiD estimator.
 
@@ -390,9 +391,9 @@ class ImputationDiD(ImputationDiDBootstrapMixin):
         ValueError
             If required columns are missing or data validation fails.
         """
-        # Re-validate vcov_type at fit-time so sklearn-style set_params
-        # mutations (e.g. set_params(vcov_type="classical")) are re-checked
-        # at use rather than silently accepted by the parameter setter.
+        # Re-validate vcov_type at fit-time: set_params validates eagerly
+        # (BaseEstimator probe re-init), so this only catches DIRECT
+        # attribute mutation (est.vcov_type = ...).
         self._validate_vcov_type(self.vcov_type)
         self._validate_leave_one_out(self.leave_one_out)
 
@@ -2748,36 +2749,7 @@ class ImputationDiD(ImputationDiDBootstrapMixin):
     # sklearn-compatible interface
     # =========================================================================
 
-    def get_params(self) -> Dict[str, Any]:
-        """Get estimator parameters (sklearn-compatible)."""
-        return {
-            "anticipation": self.anticipation,
-            "alpha": self.alpha,
-            "cluster": self.cluster,
-            "vcov_type": self.vcov_type,
-            "n_bootstrap": self.n_bootstrap,
-            "bootstrap_weights": self.bootstrap_weights,
-            "seed": self.seed,
-            "rank_deficient_action": self.rank_deficient_action,
-            "horizon_max": self.horizon_max,
-            "aux_partition": self.aux_partition,
-            "pretrends": self.pretrends,
-            "leave_one_out": self.leave_one_out,
-            "df_convention": self.df_convention,
-        }
-
-    def set_params(self, **params) -> "ImputationDiD":
-        """Set estimator parameters (sklearn-compatible)."""
-        # Reject unknown keys and validate the pending df_convention BEFORE
-        # any assignment so a rejected call leaves the estimator unchanged.
-        for key in params:
-            if not hasattr(self, key):
-                raise ValueError(f"Unknown parameter: {key}")
-        if "df_convention" in params:
-            validate_df_convention(params["df_convention"])
-        for key, value in params.items():
-            setattr(self, key, value)
-        return self
+    # get_params/set_params come from BaseEstimator.
 
     @staticmethod
     def _validate_leave_one_out(leave_one_out: Any) -> None:
@@ -2853,9 +2825,9 @@ class ImputationDiD(ImputationDiDBootstrapMixin):
         """Validate ``vcov_type`` membership against ImputationDiD's
         permanently-narrow influence-function variance contract.
 
-        Called from ``__init__`` AND ``fit()`` so sklearn-style
-        ``set_params(vcov_type=...)`` mutations are re-checked at use
-        time rather than silently accepted by the parameter setter.
+        Called from ``__init__`` AND ``fit()``; ``set_params`` validates
+        eagerly via the BaseEstimator probe re-init, so the fit-time
+        re-check only catches direct attribute mutation.
         Mirrors the TripleDifference / CallawaySantAnna pattern (no
         single design matrix on which hat-matrix leverage or Bell-
         McCaffrey Satterthwaite DOF can be defined).

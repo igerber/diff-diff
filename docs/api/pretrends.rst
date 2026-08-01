@@ -32,6 +32,7 @@ Main class for pre-trends power analysis.
    :members:
    :undoc-members:
    :show-inheritance:
+   :inherited-members:
 
    .. rubric:: Methods
 

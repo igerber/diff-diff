@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
+from diff_diff._base import BaseEstimator
 from diff_diff.linalg import (
     _check_propensity_diagnostics,
     _rank_guarded_inv,
@@ -44,6 +45,7 @@ PrecomputedData = Dict[str, Any]
 class StaggeredTripleDifference(
     CallawaySantAnnaBootstrapMixin,
     CallawaySantAnnaAggregationMixin,
+    BaseEstimator,
 ):
     """
     Staggered Triple Difference (DDD) estimator.
@@ -161,35 +163,7 @@ class StaggeredTripleDifference(
         self.is_fitted_ = False
         self.results_: Optional[StaggeredTripleDiffResults] = None
 
-    def get_params(self) -> Dict[str, Any]:
-        """Get estimator parameters (sklearn-compatible)."""
-        return {
-            "estimation_method": self.estimation_method,
-            "control_group": self.control_group,
-            "alpha": self.alpha,
-            "anticipation": self.anticipation,
-            "base_period": self.base_period,
-            "n_bootstrap": self.n_bootstrap,
-            "bootstrap_weights": self.bootstrap_weights,
-            "seed": self.seed,
-            "cband": self.cband,
-            "pscore_trim": self.pscore_trim,
-            "cluster": self.cluster,
-            "rank_deficient_action": self.rank_deficient_action,
-            "epv_threshold": self.epv_threshold,
-            "pscore_fallback": self.pscore_fallback,
-        }
-
-    def set_params(self, **params) -> "StaggeredTripleDifference":
-        """Set estimator parameters (sklearn-compatible)."""
-        valid_params = self.get_params()
-        for key, value in params.items():
-            if key not in valid_params:
-                raise ValueError(f"Unknown parameter: {key}")
-            setattr(self, key, value)
-        if "bootstrap_weights" in params:
-            self.bootstrap_weights = params["bootstrap_weights"]
-        return self
+    # get_params/set_params come from BaseEstimator.
 
     # ------------------------------------------------------------------
     # fit()

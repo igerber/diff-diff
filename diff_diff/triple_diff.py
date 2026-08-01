@@ -34,6 +34,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
+from diff_diff._base import BaseEstimator
 from diff_diff.linalg import _rank_guarded_inv, solve_logit, solve_ols
 from diff_diff.results import _format_survey_block, _get_significance_stars
 from diff_diff.results_base import BaseResults
@@ -377,7 +378,7 @@ class TripleDifferenceResults(BaseResults):
 # =============================================================================
 
 
-class TripleDifference:
+class TripleDifference(BaseEstimator):
     """
     Triple Difference (DDD) estimator.
 
@@ -551,8 +552,9 @@ class TripleDifference:
         # TripleDifference's 3-pairwise-DiD influence-function decomposition
         # doesn't have. See REGISTRY.md "IF-based variance estimators vs
         # analytical-sandwich estimators" for the structural taxonomy.
-        # Factored out so fit() can re-run it after sklearn-style
-        # set_params bypasses __init__ validation.
+        # Factored out so fit() can re-run it: set_params now validates
+        # eagerly via the BaseEstimator probe re-init, but DIRECT attribute
+        # mutation (est.vcov_type = ...) still bypasses validation until fit.
         self._validate_vcov_type(vcov_type)
 
         self.estimation_method = estimation_method
@@ -621,10 +623,10 @@ class TripleDifference:
         NotImplementedError
             If survey_design is used with wild_bootstrap inference.
         """
-        # Re-validate vcov_type at fit-time so sklearn-style set_params
-        # mutations are caught before they propagate to Results metadata.
-        # __init__ already validated the constructor argument; this is the
-        # second layer for the post-construction mutation path.
+        # Re-validate vcov_type at fit-time: __init__ and set_params (via
+        # the BaseEstimator probe re-init) both validate eagerly, so this
+        # second layer only catches DIRECT attribute mutation
+        # (est.vcov_type = ...) before it propagates to Results metadata.
         self._validate_vcov_type(self.vcov_type)
 
         # Reset replicate state from any previous fit
@@ -2059,46 +2061,7 @@ class TripleDifference:
                 "IF-based variance structure; see REGISTRY.md."
             )
 
-    def get_params(self) -> Dict[str, Any]:
-        """
-        Get estimator parameters (sklearn-compatible).
-
-        Returns
-        -------
-        Dict[str, Any]
-            Estimator parameters.
-        """
-        return {
-            "estimation_method": self.estimation_method,
-            "robust": self.robust,
-            "cluster": self.cluster,
-            "vcov_type": self.vcov_type,
-            "alpha": self.alpha,
-            "pscore_trim": self.pscore_trim,
-            "rank_deficient_action": self.rank_deficient_action,
-            "epv_threshold": self.epv_threshold,
-            "pscore_fallback": self.pscore_fallback,
-        }
-
-    def set_params(self, **params) -> "TripleDifference":
-        """
-        Set estimator parameters (sklearn-compatible).
-
-        Parameters
-        ----------
-        **params
-            Estimator parameters.
-
-        Returns
-        -------
-        self
-        """
-        for key, value in params.items():
-            if hasattr(self, key):
-                setattr(self, key, value)
-            else:
-                raise ValueError(f"Unknown parameter: {key}")
-        return self
+    # get_params/set_params come from BaseEstimator.
 
     def summary(self) -> str:
         """

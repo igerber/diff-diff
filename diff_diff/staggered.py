@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
+from diff_diff._base import BaseEstimator
 from diff_diff.aggregation import (
     AggregationKit,
 )
@@ -291,6 +292,7 @@ def _nan_gt_entry(
 class CallawaySantAnna(
     CallawaySantAnnaBootstrapMixin,
     CallawaySantAnnaAggregationMixin,
+    BaseEstimator,
 ):
     """
     Callaway-Sant'Anna (2021) estimator for staggered Difference-in-Differences.
@@ -595,8 +597,9 @@ class CallawaySantAnna(
         # per-(g,t) doubly-robust / IPW / outcome-regression structure
         # doesn't have. See REGISTRY.md "IF-based variance estimators vs
         # analytical-sandwich estimators" for the structural taxonomy.
-        # Factored out so fit() can re-run it after sklearn-style
-        # set_params bypasses __init__ validation.
+        # Factored out so fit() can re-run it: set_params now validates
+        # eagerly via the BaseEstimator probe re-init, but DIRECT attribute
+        # mutation (est.vcov_type = ...) still bypasses validation until fit.
         self._validate_vcov_type(vcov_type)
 
         self.control_group = control_group
@@ -1930,10 +1933,10 @@ class CallawaySantAnna(
         # cell. Sibling of PR #9 finding #17.
         self._safe_inv_tracker: List[float] = []
 
-        # Re-validate vcov_type at fit-time so sklearn-style set_params
-        # mutations are caught before they propagate to Results metadata.
-        # __init__ already validated the constructor argument; this is the
-        # second layer for the post-construction mutation path.
+        # Re-validate vcov_type at fit-time: __init__ and set_params (via
+        # the BaseEstimator probe re-init) both validate eagerly, so this
+        # second layer only catches DIRECT attribute mutation
+        # (est.vcov_type = ...) before it propagates to Results metadata.
         self._validate_vcov_type(self.vcov_type)
 
         # --- allow_unbalanced_panel routing (RC-on-panel = R's allow_unbalanced_panel) ---
@@ -5033,47 +5036,8 @@ class CallawaySantAnna(
                 "structure; see REGISTRY.md."
             )
 
-    def get_params(self) -> Dict[str, Any]:
-        """Get estimator parameters (sklearn-compatible)."""
-        return {
-            "control_group": self.control_group,
-            "anticipation": self.anticipation,
-            "estimation_method": self.estimation_method,
-            "alpha": self.alpha,
-            "cluster": self.cluster,
-            "vcov_type": self.vcov_type,
-            "n_bootstrap": self.n_bootstrap,
-            "bootstrap_weights": self.bootstrap_weights,
-            "seed": self.seed,
-            "rank_deficient_action": self.rank_deficient_action,
-            "base_period": self.base_period,
-            "cband": self.cband,
-            "pscore_trim": self.pscore_trim,
-            "panel": self.panel,
-            "allow_unbalanced_panel": self.allow_unbalanced_panel,
-            "epv_threshold": self.epv_threshold,
-            "pscore_fallback": self.pscore_fallback,
-        }
-
-    def set_params(self, **params) -> "CallawaySantAnna":
-        """Set estimator parameters (sklearn-compatible).
-
-        Mirrors SA pattern at ``sun_abraham.py:2150-2161``: setattr first,
-        then refresh ``_vcov_type_explicit`` if ``vcov_type`` changed.
-        Membership validation of ``vcov_type`` is deferred to next
-        ``fit()`` call (sklearn-style ``set_params`` is documented as
-        mutate-then-validate-at-use). Bad values like
-        ``set_params(vcov_type="hc4")`` surface at the next ``__init__``-
-        style validation call.
-        """
-        for key, value in params.items():
-            if hasattr(self, key):
-                setattr(self, key, value)
-            else:
-                raise ValueError(f"Unknown parameter: {key}")
-        if "vcov_type" in params:
-            self._vcov_type_explicit = self.vcov_type != "hc1"
-        return self
+    # get_params/set_params come from BaseEstimator.
+    _DERIVED_CONFIG_ATTRS = ("_vcov_type_explicit",)
 
     def summary(self) -> str:
         """Get summary of estimation results."""

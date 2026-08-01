@@ -27,6 +27,7 @@ from typing import (
 import numpy as np
 import pandas as pd
 
+from diff_diff._base import BaseEstimator
 from diff_diff.bootstrap_utils import compute_effect_bootstrap_stats
 
 if TYPE_CHECKING:
@@ -504,7 +505,7 @@ class SABootstrapResults:
     bootstrap_distribution: Optional[np.ndarray] = field(default=None, repr=False)
 
 
-class SunAbraham:
+class SunAbraham(BaseEstimator):
     """
     Sun-Abraham (2021) interaction-weighted estimator for staggered DiD.
 
@@ -2534,41 +2535,8 @@ class SunAbraham:
             bootstrap_distribution=bootstrap_overall,
         )
 
-    def get_params(self) -> Dict[str, Any]:
-        """Get estimator parameters (sklearn-compatible)."""
-        return {
-            "control_group": self.control_group,
-            "anticipation": self.anticipation,
-            "alpha": self.alpha,
-            "cluster": self.cluster,
-            "n_bootstrap": self.n_bootstrap,
-            "seed": self.seed,
-            "rank_deficient_action": self.rank_deficient_action,
-            "vcov_type": self.vcov_type,
-            "conley_coords": self.conley_coords,
-            "conley_cutoff_km": self.conley_cutoff_km,
-            "conley_metric": self.conley_metric,
-            "conley_kernel": self.conley_kernel,
-            "conley_lag_cutoff": self.conley_lag_cutoff,
-            "df_convention": self.df_convention,
-        }
-
-    def set_params(self, **params) -> "SunAbraham":
-        """Set estimator parameters (sklearn-compatible)."""
-        # Reject unknown keys and validate the pending df_convention BEFORE
-        # any assignment so a rejected call leaves the estimator unchanged.
-        for key in params:
-            if not hasattr(self, key):
-                raise ValueError(f"Unknown parameter: {key}")
-        if "df_convention" in params:
-            validate_df_convention(params["df_convention"])
-        for key, value in params.items():
-            setattr(self, key, value)
-        # Refresh the explicit-vcov-type flag if vcov_type changed, so the
-        # auto-cluster guard at fit time uses the updated value.
-        if "vcov_type" in params:
-            self._vcov_type_explicit = self.vcov_type != "hc1"
-        return self
+    # get_params/set_params come from BaseEstimator.
+    _DERIVED_CONFIG_ATTRS = ("_vcov_type_explicit",)
 
     def summary(self) -> str:
         """Get summary of estimation results."""

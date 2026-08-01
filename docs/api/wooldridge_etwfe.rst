@@ -48,6 +48,7 @@ Main estimator class for Wooldridge ETWFE.
    :members:
    :undoc-members:
    :show-inheritance:
+   :inherited-members:
 
    .. rubric:: Methods
 

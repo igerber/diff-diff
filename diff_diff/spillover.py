@@ -32,6 +32,7 @@ import numpy as np
 import pandas as pd
 from scipy import sparse
 
+from diff_diff._base import BaseEstimator
 from diff_diff.conley import (
     _CONLEY_EARTH_RADIUS_KM,
     _CONLEY_SPARSE_N_THRESHOLD,
@@ -1645,7 +1646,7 @@ def _build_butts_fe_design_csr(
 # =============================================================================
 
 
-class SpilloverDiD:
+class SpilloverDiD(BaseEstimator):
     """Ring-indicator spillover-aware DiD (Butts 2021).
 
     Standalone estimator implementing two-stage Gardner (2022) methodology
@@ -1774,32 +1775,7 @@ class SpilloverDiD:
         self.is_fitted_ = False
         self.results_: Optional[Any] = None
 
-    def get_params(self) -> Dict[str, Any]:
-        return {
-            "rings": self.rings,
-            "d_bar": self.d_bar,
-            "vcov_type": self.vcov_type,
-            "conley_coords": self.conley_coords,
-            "conley_metric": self.conley_metric,
-            "conley_cutoff_km": self.conley_cutoff_km,
-            "conley_lag_cutoff": self.conley_lag_cutoff,
-            "cluster": self.cluster,
-            "alpha": self.alpha,
-            "anticipation": self.anticipation,
-            "event_study": self.event_study,
-            "horizon_max": self.horizon_max,
-            "rank_deficient_action": self.rank_deficient_action,
-        }
-
-    def set_params(self, **params: Any) -> "SpilloverDiD":
-        valid = set(self.get_params().keys())
-        for key, value in params.items():
-            if key not in valid:
-                raise ValueError(
-                    f"Unknown parameter: {key!r}. Valid parameters: " f"{sorted(valid)}."
-                )
-            setattr(self, key, value)
-        return self
+    # get_params/set_params come from BaseEstimator.
 
     # -------------------------------------------------------------------------
     # Fit-time validators (Step 2)

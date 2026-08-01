@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
+from diff_diff._base import BaseEstimator
 from diff_diff.results import _format_survey_block
 from diff_diff.results_base import Diagnostic
 from diff_diff.utils import pre_demean_norms, snap_absorbed_regressors
@@ -358,7 +359,7 @@ class BaconDecompositionResults(Diagnostic):
         }
 
 
-class BaconDecomposition:
+class BaconDecomposition(BaseEstimator):
     """
     Goodman-Bacon (2021) decomposition of Two-Way Fixed Effects estimator.
 
@@ -1254,19 +1255,7 @@ class BaconDecomposition:
             time_window=time_window,
         )
 
-    def get_params(self) -> Dict[str, Any]:
-        """Get estimator parameters (sklearn-compatible)."""
-        return {"weights": self.weights}
-
-    def set_params(self, **params) -> "BaconDecomposition":
-        """Set estimator parameters (sklearn-compatible)."""
-        if "weights" in params:
-            if params["weights"] not in ("approximate", "exact"):
-                raise ValueError(
-                    f"weights must be 'approximate' or 'exact', " f"got '{params['weights']}'"
-                )
-            self.weights = params["weights"]
-        return self
+    # get_params/set_params come from BaseEstimator.
 
     def summary(self) -> str:
         """Get summary of decomposition results."""

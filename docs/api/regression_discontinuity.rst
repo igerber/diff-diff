@@ -68,6 +68,7 @@ RegressionDiscontinuity
    :members:
    :undoc-members:
    :show-inheritance:
+   :inherited-members:
 
 RegressionDiscontinuityResults
 ------------------------------
@@ -86,6 +87,7 @@ RDPlot
    :members:
    :undoc-members:
    :show-inheritance:
+   :inherited-members:
 
 RDPlotResult
 ------------

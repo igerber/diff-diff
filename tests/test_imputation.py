@@ -2563,33 +2563,22 @@ class TestImputationDiDVcovType:
             for g, se in r_default.bootstrap_results.group_ses.items():
                 assert se == r_explicit.bootstrap_results.group_ses[g]
 
-    # ---- Surface 6: fit()-time revalidation -------------------------------
+    # ---- Surface 6: eager transactional validation (BaseEstimator) --------
 
-    def test_set_params_bad_vcov_caught_at_fit_time_classical(self):
-        data = generate_test_data(seed=11)
+    def test_set_params_bad_vcov_raises_eagerly_classical(self):
+        # set_params validates via constructor probe (transactional per the
+        # locked v4 rule): the bad value raises at set_params and the
+        # estimator is unchanged.
         imp = ImputationDiD()
-        imp.set_params(vcov_type="classical")  # mutate-then-validate-at-use
         with pytest.raises(ValueError, match="influence-function"):
-            imp.fit(
-                data,
-                outcome="outcome",
-                unit="unit",
-                time="time",
-                first_treat="first_treat",
-            )
+            imp.set_params(vcov_type="classical")
+        assert imp.vcov_type == "hc1"
 
-    def test_set_params_bad_vcov_caught_at_fit_time_unknown(self):
-        data = generate_test_data(seed=11)
+    def test_set_params_bad_vcov_raises_eagerly_unknown(self):
         imp = ImputationDiD()
-        imp.set_params(vcov_type="hc4")
         with pytest.raises(ValueError, match="hc4"):
-            imp.fit(
-                data,
-                outcome="outcome",
-                unit="unit",
-                time="time",
-                first_treat="first_treat",
-            )
+            imp.set_params(vcov_type="hc4")
+        assert imp.vcov_type == "hc1"
 
     # ---- Surface 7: bootstrap n_psu/n_clusters<2 NaN propagation ----------
 

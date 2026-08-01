@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
+from diff_diff._base import BaseEstimator
 from diff_diff.bootstrap_utils import (
     compute_effect_bootstrap_stats,
     generate_bootstrap_weights_batch,
@@ -49,7 +50,7 @@ if TYPE_CHECKING:
 __all__ = ["ContinuousDiD", "ContinuousDiDResults", "DoseResponseCurve"]
 
 
-class ContinuousDiD:
+class ContinuousDiD(BaseEstimator):
     """
     Continuous Difference-in-Differences estimator.
 
@@ -232,45 +233,7 @@ class ContinuousDiD:
                 "lowest-dose fit."
             )
 
-    def get_params(self) -> Dict[str, Any]:
-        """Return estimator parameters as a dictionary."""
-        return {
-            "degree": self.degree,
-            "num_knots": self.num_knots,
-            "dvals": self.dvals,
-            "control_group": self.control_group,
-            "anticipation": self.anticipation,
-            "base_period": self.base_period,
-            "alpha": self.alpha,
-            "n_bootstrap": self.n_bootstrap,
-            "bootstrap_weights": self.bootstrap_weights,
-            "seed": self.seed,
-            "rank_deficient_action": self.rank_deficient_action,
-            "covariates": self.covariates,
-            "estimation_method": self.estimation_method,
-            "pscore_trim": self.pscore_trim,
-            "epv_threshold": self.epv_threshold,
-            "pscore_fallback": self.pscore_fallback,
-            "treatment_type": self.treatment_type,
-        }
-
-    def set_params(self, **params) -> "ContinuousDiD":
-        """Set estimator parameters and return self.
-
-        Transactional: the candidate configuration is validated against a clone
-        before any attribute on ``self`` is mutated, so an invalid update leaves
-        the estimator unchanged (no half-applied state).
-        """
-        for key in params:
-            if not hasattr(self, key):
-                raise ValueError(f"Invalid parameter: {key}")
-        # Validate the candidate config on a throwaway before mutating self.
-        candidate = ContinuousDiD(**{**self.get_params(), **params})
-        # candidate.__init__ ran _validate_constrained_params() successfully.
-        del candidate
-        for key, value in params.items():
-            setattr(self, key, value)
-        return self
+    # get_params/set_params come from BaseEstimator.
 
     # ------------------------------------------------------------------
     # Main fit

@@ -235,6 +235,18 @@ class SyntheticDiD(DifferenceInDifferences):
         self.variance_method = variance_method
         self.n_bootstrap = n_bootstrap
         self.seed = seed
+        # Raw-arg storage for the introspected param surface (BaseEstimator).
+        # conley_metric/conley_kernel would otherwise read back the DiD
+        # defaults stored by super().__init__ ("haversine"/"bartlett"),
+        # poisoning every set_params probe against the non-None TypeError
+        # guard above; both are None in any legal construction. The
+        # deprecated lambda_reg/zeta are warn-and-discard: stored normalized
+        # to None so a probe re-init warns exactly once for the call that
+        # passes them and never again on unrelated set_params/clone calls.
+        self.conley_metric = conley_metric
+        self.conley_kernel = conley_kernel
+        self.lambda_reg = None
+        self.zeta = None
 
         self._validate_config()
 
@@ -2724,103 +2736,11 @@ class SyntheticDiD(DifferenceInDifferences):
         variance_nonneg = max(total_variance, 0.0)
         return float(np.sqrt(variance_nonneg)), tau_loo_arr
 
-    def get_params(self) -> Dict[str, Any]:
-        """Get estimator parameters."""
-        return {
-            "zeta_omega": self.zeta_omega,
-            "zeta_lambda": self.zeta_lambda,
-            "alpha": self.alpha,
-            "variance_method": self.variance_method,
-            "n_bootstrap": self.n_bootstrap,
-            "seed": self.seed,
-            # Conley kwargs are inherited from DifferenceInDifferences.__init__
-            # but rejected by SyntheticDiD's __init__ / set_params (Conley uses
-            # the analytical sandwich, SyntheticDiD uses bootstrap variance).
-            # Surface them here as None for sklearn-style API consistency; any
-            # non-None value is rejected by set_params/__init__.
-            "vcov_type": None,
-            "conley_coords": None,
-            "conley_cutoff_km": None,
-            "conley_metric": None,
-            "conley_kernel": None,
-            "conley_lag_cutoff": None,
-        }
-
-    def set_params(self, **params) -> "SyntheticDiD":
-        """Set estimator parameters.
-
-        Applies updates transactionally: if ``_validate_config()`` rejects the
-        post-update state, the instance is rolled back to the pre-call values
-        so a raised ``ValueError`` leaves the object consistent with its
-        pre-call configuration.
-
-        Mirrors ``__init__``'s defensive rejection of ``vcov_type`` /
-        ``conley_*`` non-None values: SyntheticDiD uses bootstrap/jackknife/
-        placebo variance, not the analytical sandwich, so any Conley kwarg
-        would be silently ignored otherwise (forbidden by
-        ``feedback_no_silent_failures``). Tracked in DEFERRED.md for a follow-up
-        that wires Conley to a non-bootstrap variance path.
-        """
-        # Reject Conley kwargs / non-None vcov_type before any mutation —
-        # mirrors __init__'s contract. Empty/None values are permitted so
-        # round-tripping get_params() back through set_params() is a no-op.
-        _conley_keys = (
-            "conley_coords",
-            "conley_cutoff_km",
-            "conley_metric",
-            "conley_kernel",
-            "conley_lag_cutoff",
-        )
-        if params.get("vcov_type") is not None and params["vcov_type"] != "conley":
-            raise TypeError(
-                f"SyntheticDiD does not accept vcov_type={params['vcov_type']!r}. "
-                "SyntheticDiD's variance is bootstrap/jackknife/placebo based; "
-                "configure via variance_method=..."
-            )
-        if params.get("vcov_type") == "conley" or any(
-            k in params and params[k] is not None for k in _conley_keys
-        ):
-            raise TypeError(
-                "SyntheticDiD does not yet support vcov_type='conley' or any "
-                "conley_* kwargs. SyntheticDiD uses bootstrap/jackknife/placebo "
-                "variance (variance_method=...), not the analytical sandwich "
-                "routed through compute_robust_vcov. Tracked in DEFERRED.md as "
-                "a follow-up."
-            )
-        # Deprecated parameter names — emit warning and ignore
-        _deprecated = {"lambda_reg", "zeta"}
-        # Conley kwargs are not stored as instance attributes; surfacing them
-        # in get_params() returns None unconditionally. set_params() with None
-        # values for these keys is a no-op (the rejection above only fires on
-        # non-None values).
-        _silent_conley_passthrough = {"vcov_type", *_conley_keys}
-        # Snapshot original values for transactional rollback on validation failure.
-        _rollback: Dict[str, Any] = {}
-        for key in params:
-            if key in _silent_conley_passthrough:
-                continue
-            if key not in _deprecated and hasattr(self, key):
-                _rollback[key] = getattr(self, key)
-        try:
-            for key, value in params.items():
-                if key in _silent_conley_passthrough:
-                    # No-op: explicitly None passthrough for round-trip
-                    # get_params() -> set_params() consistency.
-                    continue
-                if key in _deprecated:
-                    warnings.warn(
-                        f"{key} is deprecated and ignored. Use zeta_omega/zeta_lambda "
-                        f"instead. Will be removed in v4.0.0.",
-                        DeprecationWarning,
-                        stacklevel=2,
-                    )
-                elif hasattr(self, key):
-                    setattr(self, key, value)
-                else:
-                    raise ValueError(f"Unknown parameter: {key}")
-            self._validate_config()
-        except (ValueError, TypeError):
-            for key, prev in _rollback.items():
-                setattr(self, key, prev)
-            raise
-        return self
+    # get_params/set_params come from BaseEstimator (via
+    # DifferenceInDifferences). The probe re-init reproduces every guard in
+    # __init__: the conley/vcov_type non-None TypeError, the lambda_reg/zeta
+    # DeprecationWarnings (emitted exactly once per call that passes them -
+    # the raw-arg storage in __init__ normalizes both to None, so unrelated
+    # set_params/clone calls stay silent), and _validate_config. The
+    # inherited vcov_type -> _vcov_type_arg alias makes get_params report
+    # the raw (always-None) vcov_type, not the resolved "hc1".

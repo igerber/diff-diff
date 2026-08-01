@@ -4202,31 +4202,15 @@ class TestPscoreTrimParameter:
         cs.set_params(pscore_trim=0.1)
         assert cs.pscore_trim == 0.1
 
-    def test_set_params_invalid_pscore_trim_rejected_at_fit(self):
-        """Invalid pscore_trim via set_params() raises ValueError at fit()."""
-        np.random.seed(42)
-        n_units, n_periods = 50, 6
-        units = np.repeat(np.arange(n_units), n_periods)
-        times = np.tile(np.arange(n_periods), n_units)
-        first_treat = np.zeros(n_units)
-        first_treat[n_units // 2 :] = 3
-        first_treat_expanded = np.repeat(first_treat, n_periods)
-        post = (times >= first_treat_expanded) & (first_treat_expanded > 0)
-        outcomes = 1.0 + 2.0 * post + np.random.randn(len(units)) * 0.5
-        data = pd.DataFrame(
-            {
-                "unit": units,
-                "time": times,
-                "outcome": outcomes,
-                "first_treat": first_treat_expanded.astype(int),
-            }
-        )
-
+    def test_set_params_invalid_pscore_trim_rejected_eagerly(self):
+        """Invalid pscore_trim raises AT set_params (BaseEstimator probe
+        re-init runs constructor validation transactionally); the
+        estimator is unchanged."""
         for bad_val in [0.0, -0.1, 0.5]:
             cs = CallawaySantAnna(estimation_method="ipw")
-            cs.set_params(pscore_trim=bad_val)
             with pytest.raises(ValueError, match="pscore_trim must be in"):
-                cs.fit(data, outcome="outcome", unit="unit", time="time", first_treat="first_treat")
+                cs.set_params(pscore_trim=bad_val)
+            assert cs.pscore_trim == 0.01
 
     def test_default_pscore_trim(self):
         """Default pscore_trim is 0.01."""
@@ -5514,25 +5498,15 @@ class TestCallawaySantAnnaVcovTypeNarrowContract:
         assert "vcov_type" in params
         assert params["vcov_type"] == "hc1"
 
-    def test_set_params_bad_vcov_caught_at_fit_time(self):
-        """set_params is strict-mirror SA (no atomic validation), but
-        fit() re-validates so a bad set_params(vcov_type='hc4')
-        surfaces a clear error at fit-time rather than silently
-        propagating a bad value to Results metadata."""
+    def test_set_params_bad_vcov_raises_eagerly(self):
+        """set_params validates via constructor probe (transactional per
+        the locked v4 rule): a bad vcov_type raises AT set_params with the
+        same message __init__ gives, and the estimator is unchanged. The
+        fit-time re-validation stays in place as belt-and-suspenders."""
         cs = CallawaySantAnna()
-        # set_params succeeds (sklearn-style mutate-then-validate-at-use)
-        cs.set_params(vcov_type="hc4")
-        assert cs.vcov_type == "hc4"
-        # fit() re-validates and raises
-        data = _generate_clustered_staggered_data(seed=37)
         with pytest.raises(ValueError, match="hc4"):
-            cs.fit(
-                data,
-                outcome="outcome",
-                unit="unit",
-                time="time",
-                first_treat="first_treat",
-            )
+            cs.set_params(vcov_type="hc4")
+        assert cs.vcov_type == "hc1"
 
     def test_results_carries_vcov_type(self):
         data = _generate_clustered_staggered_data(seed=41)

@@ -77,6 +77,7 @@ Main changes-in-changes estimator class.
    :members:
    :undoc-members:
    :show-inheritance:
+   :inherited-members:
 
    .. rubric:: Methods
 
@@ -96,6 +97,7 @@ Quantile difference-in-differences comparison estimator.
    :members:
    :undoc-members:
    :show-inheritance:
+   :inherited-members:
 
    .. rubric:: Methods
 

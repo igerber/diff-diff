@@ -83,23 +83,24 @@ pytest tests/test_rust_backend.py -v
    together using `safe_inference()` from `diff_diff.utils`. Never compute individually.
 7. **Estimator inheritance** — understanding this prevents consistency bugs:
    ```
-   DifferenceInDifferences (base class)
-   ├── TwoWayFixedEffects (inherits get_params/set_params)
-   └── MultiPeriodDiD (inherits get_params/set_params)
-
-   Standalone estimators (each has own get_params/set_params):
-   ├── CallawaySantAnna
-   ├── SunAbraham
-   ├── ImputationDiD
-   ├── TwoStageDiD
-   ├── TripleDifference
-   ├── TROP
-   ├── StackedDiD
-   ├── SyntheticDiD
-   └── BaconDecomposition
+   BaseEstimator (diff_diff/_base.py — shared get_params/set_params mixin)
+   ├── DifferenceInDifferences
+   │   ├── TwoWayFixedEffects
+   │   ├── MultiPeriodDiD
+   │   └── SyntheticDiD
+   └── every other estimator class (CallawaySantAnna, SunAbraham,
+       ImputationDiD, TwoStageDiD, TripleDifference, TROP, StackedDiD,
+       BaconDecomposition, ... — 25 classes total)
    ```
-   When adding params to `DifferenceInDifferences.get_params()`, subclasses inherit automatically.
-   Standalone estimators must be updated individually.
+   `get_params` introspects the `__init__` signature and `set_params` is
+   TRANSACTIONAL via probe re-init (`type(self)(**merged)` validates before
+   any mutation) — so a new `__init__` param is automatically in
+   `get_params`/`set_params` for every class, and `set_params` enforces
+   exactly the constructor's validation, eagerly. Per-class accommodations
+   are declarative class attrs (`_PARAM_ATTR_ALIASES`,
+   `_DERIVED_CONFIG_ATTRS`, `_normalize_set_params`); the cross-estimator
+   contract is pinned by `tests/test_base_estimator.py` (dynamic roster —
+   new estimators are automatically enrolled and must mix BaseEstimator in).
 8. **Dependencies**: numpy, pandas, and scipy ONLY. No statsmodels.
 
 ## Documenting Deviations (AI Review Compatibility)

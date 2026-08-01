@@ -111,17 +111,24 @@ def _init_self_assigns(cls: ast.ClassDef) -> "set[str]":
     return names
 
 
-def _get_params_refs(cls: ast.ClassDef) -> "set[str]":
-    refs: "set[str]" = set()
+def _own_get_params(cls: ast.ClassDef) -> "ast.FunctionDef | None":
     for node in cls.body:
         if isinstance(node, ast.FunctionDef) and node.name == "get_params":
-            for sub in ast.walk(node):
-                if isinstance(sub, ast.Attribute):
-                    refs.add(sub.attr)
-                elif isinstance(sub, ast.Name):
-                    refs.add(sub.id)
-                elif isinstance(sub, ast.Constant) and isinstance(sub.value, str):
-                    refs.add(sub.value)
+            return node
+    return None
+
+
+def _get_params_refs(cls: ast.ClassDef) -> "set[str]":
+    refs: "set[str]" = set()
+    node = _own_get_params(cls)
+    if node is not None:
+        for sub in ast.walk(node):
+            if isinstance(sub, ast.Attribute):
+                refs.add(sub.attr)
+            elif isinstance(sub, ast.Name):
+                refs.add(sub.id)
+            elif isinstance(sub, ast.Constant) and isinstance(sub.value, str):
+                refs.add(sub.value)
     return refs
 
 
@@ -130,8 +137,14 @@ def new_params_missing_from_get_params(
 ) -> "list[str]":
     """Check C (AST-based): of the ``added_param_names`` (new ``self.X`` from the diff),
     return those that are assigned in some class ``__init__`` but never referenced in
-    that same class's ``get_params()``. Restricting to ``__init__`` and to the class's
-    own ``get_params`` avoids the old substring heuristic's false negatives."""
+    that same class's OWN in-body ``get_params()``. Classes WITHOUT an in-body
+    ``get_params`` are skipped entirely: post-mixin, estimators inherit an
+    introspective ``get_params`` from ``diff_diff._base.BaseEstimator`` (possibly
+    indirectly, e.g. SyntheticDiD via DifferenceInDifferences - invisible to this
+    file-local AST scan), which derives its keys from the ``__init__`` signature,
+    so a new constructor param is auto-covered and the init-signature<->get_params
+    sync is enforced by ``tests/test_base_estimator.py``. The check remains for
+    any class that still hand-rolls ``get_params``."""
     try:
         tree = ast.parse(file_text)
     except SyntaxError:
@@ -139,6 +152,8 @@ def new_params_missing_from_get_params(
     added = set(added_param_names)
     missing: "set[str]" = set()
     for cls in (n for n in ast.walk(tree) if isinstance(n, ast.ClassDef)):
+        if _own_get_params(cls) is None:
+            continue
         assigned = _init_self_assigns(cls) & added
         if not assigned:
             continue

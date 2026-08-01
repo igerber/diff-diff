@@ -40,6 +40,7 @@ import numpy as np
 import pandas as pd
 from scipy.optimize import minimize
 
+from diff_diff._base import BaseEstimator
 from diff_diff.synthetic_control_results import (
     SyntheticControlResults,
     _SyntheticControlFitSnapshot,
@@ -77,7 +78,7 @@ def _softmax(theta: np.ndarray) -> np.ndarray:
     return e / np.sum(e)
 
 
-class SyntheticControl:
+class SyntheticControl(BaseEstimator):
     """
     Classic Synthetic Control Method estimator (Abadie-Diamond-Hainmueller 2010).
 
@@ -229,44 +230,7 @@ class SyntheticControl:
             if self.v_cv_t0 < 1:
                 raise ValueError(f"v_cv_t0 must be >= 1, got {self.v_cv_t0!r}")
 
-    def get_params(self) -> Dict[str, Any]:
-        """Get estimator parameters."""
-        return {
-            "v_method": self.v_method,
-            "custom_v": self.custom_v,
-            "optimizer_options": self.optimizer_options,
-            "n_starts": self.n_starts,
-            "inner_max_iter": self.inner_max_iter,
-            "inner_min_decrease": self.inner_min_decrease,
-            "standardize": self.standardize,
-            "alpha": self.alpha,
-            "seed": self.seed,
-            "v_cv_t0": self.v_cv_t0,
-        }
-
-    def set_params(self, **params) -> "SyntheticControl":
-        """Set estimator parameters.
-
-        Applies updates transactionally: if ``_validate_config()`` rejects the
-        post-update state, the instance is rolled back to its pre-call values so
-        a raised ``ValueError`` leaves the object consistent.
-        """
-        _rollback: Dict[str, Any] = {}
-        for key in params:
-            if hasattr(self, key):
-                _rollback[key] = getattr(self, key)
-        try:
-            for key, value in params.items():
-                if hasattr(self, key):
-                    setattr(self, key, value)
-                else:
-                    raise ValueError(f"Unknown parameter: {key}")
-            self._validate_config()
-        except (ValueError, TypeError):
-            for key, prev in _rollback.items():
-                setattr(self, key, prev)
-            raise
-        return self
+    # get_params/set_params come from BaseEstimator.
 
     # =========================================================================
     # fit

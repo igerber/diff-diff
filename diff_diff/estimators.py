@@ -19,6 +19,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
+from diff_diff._base import BaseEstimator
 from diff_diff.linalg import (
     LinearRegression,
     _absorbed_fe_vcov_scale,
@@ -46,7 +47,7 @@ from diff_diff.utils import (
 )
 
 
-class DifferenceInDifferences:
+class DifferenceInDifferences(BaseEstimator):
     """
     Difference-in-Differences estimator with sklearn-like interface.
 
@@ -1177,107 +1178,26 @@ class DifferenceInDifferences:
             "training-data predictions."
         )
 
-    def get_params(self) -> Dict[str, Any]:
-        """
-        Get estimator parameters (sklearn-compatible).
+    # get_params/set_params come from BaseEstimator. `vcov_type`'s RAW arg
+    # lives at `_vcov_type_arg` (the resolved value at `vcov_type`), and
+    # get_params must return the raw one: a clone of
+    # `DifferenceInDifferences(robust=False, cluster="unit")` must behave
+    # the same as the original on a clustered fit, which requires the
+    # clone's `__init__` to see `vcov_type=None` (flagging
+    # `_vcov_type_explicit=False`) rather than the alias-resolved
+    # "classical" (which would mark it explicit and skip the CR1 remap).
+    _PARAM_ATTR_ALIASES = {"vcov_type": "_vcov_type_arg"}
+    _DERIVED_CONFIG_ATTRS = ("vcov_type", "_vcov_type_arg", "_vcov_type_explicit")
 
-        Returns the *raw* user input for ``vcov_type`` (``None`` when
-        the value was alias-derived from ``robust``). This preserves
-        the backward-compat remap semantics across clones: a clone of
-        ``DifferenceInDifferences(robust=False, cluster="unit")`` must
-        behave the same as the original on a clustered fit, which
-        requires the clone's ``__init__`` to see ``vcov_type=None`` (so
-        it flags ``_vcov_type_explicit=False``) rather than the
-        alias-resolved ``"classical"`` (which would mark it explicit
-        and skip the CR1 remap).
-
-        Returns
-        -------
-        Dict[str, Any]
-            Estimator parameters suitable for passing to ``__init__``.
-        """
-        return {
-            "robust": self.robust,
-            "cluster": self.cluster,
-            "vcov_type": self._vcov_type_arg,  # raw, possibly None
-            "alpha": self.alpha,
-            "inference": self.inference,
-            "n_bootstrap": self.n_bootstrap,
-            "bootstrap_weights": self.bootstrap_weights,
-            "p_val_type": self.p_val_type,
-            "seed": self.seed,
-            "rank_deficient_action": self.rank_deficient_action,
-            "conley_coords": self.conley_coords,
-            "conley_cutoff_km": self.conley_cutoff_km,
-            "conley_metric": self.conley_metric,
-            "conley_kernel": self.conley_kernel,
-            "conley_lag_cutoff": self.conley_lag_cutoff,
-            "df_convention": self.df_convention,
-        }
-
-    def set_params(self, **params) -> "DifferenceInDifferences":
-        """
-        Set estimator parameters (sklearn-compatible).
-
-        After assignment, the ``robust``/``vcov_type`` pair is re-validated via
-        the same :func:`diff_diff.linalg.resolve_vcov_type` helper used by
-        ``__init__``. Invalid combinations (e.g. ``robust=False`` with
-        ``vcov_type="hc2"``) raise ``ValueError`` instead of leaving the
-        object in an inconsistent state.
-
-        Parameters
-        ----------
-        **params
-            Estimator parameters.
-
-        Returns
-        -------
-        self
-        """
-        from diff_diff.linalg import resolve_vcov_type
-
-        # Validate BEFORE mutating `self`. A failing call must leave the
-        # estimator unchanged so callers that catch `ValueError` can keep
-        # reasoning about the object; half-mutated state from an earlier
-        # partial assignment defeats that guarantee. Compute the resolved
-        # `vcov_type` on local variables, then apply all mutations atomically.
-        pending_robust = params.get("robust", self.robust)
-        pending_vcov_type = params.get("vcov_type", self.vcov_type)
-        pending_df_convention = params.get("df_convention", self.df_convention)
-        validate_df_convention(pending_df_convention)
-
-        # First pass: validate that every incoming key is a known attribute
-        # so we don't partially apply a batch that ends in "Unknown parameter".
-        for key in params:
-            if not hasattr(self, key):
-                raise ValueError(f"Unknown parameter: {key}")
-
-        # Second pass: resolve the robust/vcov_type pair. When the user passes
-        # only `robust=` alongside a previously-set non-aliasing `vcov_type`,
-        # re-derive `vcov_type` from the new `robust` value for internal
-        # consistency (matching the prior behavior, but now on locals).
-        if "vcov_type" in params:
-            resolved_vcov = resolve_vcov_type(pending_robust, pending_vcov_type)
-        elif "robust" in params:
-            resolved_vcov = resolve_vcov_type(pending_robust, None)
-        else:
-            resolved_vcov = self.vcov_type  # no-op if neither changed
-
-        # All validation passed — apply mutations atomically.
-        for key, value in params.items():
-            setattr(self, key, value)
-        self.vcov_type = resolved_vcov
-        # Update the raw-vs-resolved tracking. `vcov_type=` in the call
-        # updates `_vcov_type_arg` to whatever the user passed (including
-        # None); `robust=` alone clears the raw arg since the resolution
-        # re-derives from the alias. The `_vcov_type_explicit` flag is
-        # True iff the raw arg is non-None.
-        if "vcov_type" in params:
-            self._vcov_type_arg = params["vcov_type"]
-        elif "robust" in params:
-            self._vcov_type_arg = None
-        self._vcov_type_explicit = self._vcov_type_arg is not None
-        return self
+    @classmethod
+    def _normalize_set_params(cls, params: Dict[str, Any]) -> Dict[str, Any]:
+        # `robust=` alone re-derives `vcov_type` from the alias: the merged
+        # probe config must carry vcov_type=None so `resolve_vcov_type`
+        # re-runs on the new `robust` value instead of seeing a conflict
+        # with the previously stored raw vcov_type.
+        if "robust" in params and "vcov_type" not in params:
+            params["vcov_type"] = None
+        return params
 
     def _warn_replicate_vcov_ignored(self) -> bool:
         """Warn that an explicit ``vcov_type`` has no effect under a

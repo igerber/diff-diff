@@ -53,6 +53,7 @@ import pandas as pd
 from scipy import stats
 from scipy.optimize import linprog
 
+from diff_diff._base import BaseEstimator
 from diff_diff.bootstrap_utils import warn_bootstrap_failure_rate
 from diff_diff.changes_in_changes_results import ChangesInChangesResults
 from diff_diff.utils import (
@@ -1166,7 +1167,7 @@ def _validate_all_params(params: Dict[str, Any]) -> None:
     _validate_seed(params["seed"])
 
 
-class ChangesInChanges:
+class ChangesInChanges(BaseEstimator):
     """Changes-in-Changes estimator (Athey & Imbens 2006) for the 2x2 design.
 
     Estimates the ATT (eq. 36) and quantile treatment effects on the treated
@@ -1258,31 +1259,7 @@ class ChangesInChanges:
         self.is_fitted_ = False
         self.results_: Optional[ChangesInChangesResults] = None
 
-    def get_params(self, deep: bool = True) -> Dict[str, Any]:
-        """Return constructor hyperparameters (raw values, round-trips ``__init__``).
-
-        ``deep`` is accepted for sklearn compatibility (``sklearn.base.clone``
-        calls ``get_params(deep=False)``) and is ignored - there are no nested
-        estimators.
-        """
-        return {
-            "quantiles": self.quantiles,
-            "n_bootstrap": self.n_bootstrap,
-            "alpha": self.alpha,
-            "panel": self.panel,
-            "seed": self.seed,
-        }
-
-    def set_params(self, **params: Any) -> "ChangesInChanges":
-        """Set hyperparameters transactionally (a failing call mutates nothing)."""
-        valid = set(self.get_params())
-        for key in params:
-            if key not in valid:
-                raise ValueError(f"Unknown parameter: {key}")
-        _validate_all_params({**self.get_params(), **params})
-        for key, value in params.items():
-            setattr(self, key, value)
-        return self
+    # get_params/set_params come from BaseEstimator.
 
     def fit(
         self,
@@ -1326,7 +1303,7 @@ class ChangesInChanges:
         )
 
 
-class QDiD:
+class QDiD(BaseEstimator):
     """Quantile Difference-in-Differences comparison estimator (2x2 design).
 
     Applies DiD quantile-by-quantile: ``qte(tau) = Q(y11, tau) - [Q(y10, tau)
@@ -1387,31 +1364,7 @@ class QDiD:
         self.is_fitted_ = False
         self.results_: Optional[ChangesInChangesResults] = None
 
-    def get_params(self, deep: bool = True) -> Dict[str, Any]:
-        """Return constructor hyperparameters (raw values, round-trips ``__init__``).
-
-        ``deep`` is accepted for sklearn compatibility (``sklearn.base.clone``
-        calls ``get_params(deep=False)``) and is ignored - there are no nested
-        estimators.
-        """
-        return {
-            "quantiles": self.quantiles,
-            "n_bootstrap": self.n_bootstrap,
-            "alpha": self.alpha,
-            "panel": self.panel,
-            "seed": self.seed,
-        }
-
-    def set_params(self, **params: Any) -> "QDiD":
-        """Set hyperparameters transactionally (a failing call mutates nothing)."""
-        valid = set(self.get_params())
-        for key in params:
-            if key not in valid:
-                raise ValueError(f"Unknown parameter: {key}")
-        _validate_all_params({**self.get_params(), **params})
-        for key, value in params.items():
-            setattr(self, key, value)
-        return self
+    # get_params/set_params come from BaseEstimator.
 
     def fit(
         self,

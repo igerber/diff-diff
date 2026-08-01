@@ -31,6 +31,7 @@ Main class for computing honest bounds and confidence intervals.
    :members:
    :undoc-members:
    :show-inheritance:
+   :inherited-members:
 
    .. rubric:: Methods
 

@@ -28,6 +28,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
+from diff_diff._base import BaseEstimator
 from diff_diff.efficient_did_bootstrap import (
     EDiDBootstrapResults,
     EfficientDiDBootstrapMixin,
@@ -209,7 +210,7 @@ def _hausman_quadratic_form(
     return H, effective_rank, p_value, n_negative, True
 
 
-class EfficientDiD(EfficientDiDBootstrapMixin):
+class EfficientDiD(EfficientDiDBootstrapMixin, BaseEstimator):
     """Efficient DiD estimator (Chen, Sant'Anna & Xie 2025).
 
     Without covariates, achieves the semiparametric efficiency bound for
@@ -434,51 +435,7 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
 
     # -- sklearn compatibility ------------------------------------------------
 
-    def get_params(self) -> Dict[str, Any]:
-        """Get estimator parameters (sklearn-compatible)."""
-        return {
-            "pt_assumption": self.pt_assumption,
-            "anticipation": self.anticipation,
-            "alpha": self.alpha,
-            "cluster": self.cluster,
-            "vcov_type": self.vcov_type,
-            "control_group": self.control_group,
-            "n_bootstrap": self.n_bootstrap,
-            "bootstrap_weights": self.bootstrap_weights,
-            "seed": self.seed,
-            "sieve_k_max": self.sieve_k_max,
-            "sieve_criterion": self.sieve_criterion,
-            "ratio_clip": self.ratio_clip,
-            "kernel_bandwidth": self.kernel_bandwidth,
-            "omega_ridge": self.omega_ridge,
-        }
-
-    def set_params(self, **params: Any) -> "EfficientDiD":
-        """Set estimator parameters (sklearn-compatible).
-
-        Atomic: snapshots the original attribute values before applying
-        mutations, validates the new state via ``_validate_params``, and
-        rolls every attribute back to its pre-call value if validation
-        raises. Without this, ``set_params(vcov_type="classical",
-        alpha=0.1)`` would leave ``self.vcov_type`` partially mutated
-        even though the call raised, defeating the eager-validation
-        contract for callers that catch ``ValueError`` and keep using
-        the estimator.
-        """
-        snapshot: Dict[str, Any] = {}
-        for key in params:
-            if not hasattr(self, key):
-                raise ValueError(f"Unknown parameter: {key}")
-            snapshot[key] = getattr(self, key)
-        for key, value in params.items():
-            setattr(self, key, value)
-        try:
-            self._validate_params()
-        except Exception:
-            for key, value in snapshot.items():
-                setattr(self, key, value)
-            raise
-        return self
+    # get_params/set_params come from BaseEstimator.
 
     # -- Main estimation ------------------------------------------------------
 

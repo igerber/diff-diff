@@ -274,7 +274,7 @@ class TestContinuousDiDInit:
 
     def test_set_invalid_param(self):
         est = ContinuousDiD()
-        with pytest.raises(ValueError, match="Invalid parameter"):
+        with pytest.raises(ValueError, match="Unknown parameter"):
             est.set_params(nonexistent_param=42)
 
 

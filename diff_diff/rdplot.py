@@ -36,6 +36,7 @@ import numpy as np
 import pandas as pd
 from scipy import stats
 
+from ._base import BaseEstimator
 from ._rdrobust_port import (
     _covs_gamma,
     _normalize_kernel,
@@ -310,7 +311,7 @@ class RDPlotResult(Diagnostic):
         return ax
 
 
-class RDPlot:
+class RDPlot(BaseEstimator):
     """Data-driven RD plot builder (CCT 2015; rdrobust 4.0.0 ``rdplot()``
     parity).
 
@@ -466,34 +467,7 @@ class RDPlot:
         if not isinstance(self.covs_drop, (bool, np.bool_)):
             raise ValueError(f"covs_drop must be a bool; got {self.covs_drop!r}.")
 
-    def get_params(self) -> Dict[str, Any]:
-        """Get parameters of this plot builder."""
-        return {
-            "cutoff": self.cutoff,
-            "p": self.p,
-            "nbins": self.nbins,
-            "binselect": self.binselect,
-            "scale": self.scale,
-            "kernel": self.kernel,
-            "h": self.h,
-            "support": self.support,
-            "masspoints": self.masspoints,
-            "ci": self.ci,
-            "covs_drop": self.covs_drop,
-        }
-
-    def set_params(self, **params: Any) -> "RDPlot":
-        """Set parameters (transactional: validates the full candidate
-        configuration before mutating this instance)."""
-        current = self.get_params()
-        unknown = set(params) - set(current)
-        if unknown:
-            raise ValueError(f"Invalid parameter(s) for RDPlot: {sorted(unknown)}")
-        candidate = {**current, **params}
-        RDPlot(**candidate)  # full validation on a throwaway instance
-        for key, value in candidate.items():
-            setattr(self, key, value)
-        return self
+    # get_params/set_params come from BaseEstimator.
 
     # ------------------------------------------------------------------
     # Fit

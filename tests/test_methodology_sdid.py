@@ -2083,12 +2083,18 @@ class TestGetSetParams:
         assert params["zeta_omega"] == 1.0
         assert params["zeta_lambda"] == 0.5
 
-    def test_get_params_excludes_old_names(self):
-        """get_params should NOT include lambda_reg or zeta."""
+    def test_get_params_old_names_always_none(self):
+        """get_params mirrors the __init__ signature, so the deprecated
+        lambda_reg/zeta appear - but always as None (warn-and-discard is
+        normalized at construction), keeping cls(**get_params()) silent."""
         sdid = SyntheticDiD()
         params = sdid.get_params()
-        assert "lambda_reg" not in params
-        assert "zeta" not in params
+        assert params["lambda_reg"] is None
+        assert params["zeta"] is None
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            clone = SyntheticDiD(**params)
+        assert clone.get_params() == params
 
     def test_set_params_new_names(self):
         """set_params with new names should work."""

@@ -2350,13 +2350,14 @@ class TestTwoStageDiDVcovType:
             TwoStageDiD(vcov_type=bad)
 
     @pytest.mark.parametrize("bad", ["classical", "hc2", "hc2_bm", "conley"])
-    def test_fit_revalidates_after_set_params(self, bad):
-        data = generate_test_data(n_units=60, seed=4)
+    def test_set_params_rejects_bad_vcov_eagerly(self, bad):
+        # set_params validates via constructor probe (transactional per the
+        # locked v4 rule): the bad value raises at set_params and the
+        # estimator is unchanged.
         est = TwoStageDiD()
-        est.set_params(vcov_type=bad)  # sklearn mutate-then-validate-at-use
-        assert est.vcov_type == bad
         with pytest.raises(ValueError, match=bad):
-            est.fit(data, outcome="outcome", unit="unit", time="time", first_treat="first_treat")
+            est.set_params(vcov_type=bad)
+        assert est.vcov_type == "hc1"
 
     def test_rejection_messages_are_methodology_specific(self):
         with pytest.raises(ValueError, match="GMM"):

@@ -165,13 +165,24 @@ grep -rn "self\.<param>" diff_diff/<module>.py
 
 A new parameter is only complete when it is:
 
-- stored on `self` and returned by `get_params()` (and accepted by `set_params()`)
+- stored on `self` under its own name — `get_params()`/`set_params()` then
+  cover it automatically (the shared `BaseEstimator` mixin introspects the
+  `__init__` signature; a param stored under a DIFFERENT attribute name needs
+  a `_PARAM_ATTR_ALIASES` entry, and constructor-derived state a
+  `_DERIVED_CONFIG_ATTRS` entry — see `diff_diff/_base.py` and the
+  inheritance map in `CLAUDE.md`)
 - applied in **every** aggregation mode — `simple`, `event_study`, and `group`
 - applied in the **bootstrap/inference** paths, not just the analytical one
 - reflected on the result object, so `to_dict()`/`summary()` do not misreport it
-- propagated to the estimators that inherit it (see the inheritance map in
-  `CLAUDE.md` — subclasses of `DifferenceInDifferences` inherit automatically,
-  standalone estimators must each be updated)
+- propagated to the estimators that inherit it: `TwoWayFixedEffects` and
+  `MultiPeriodDiD` define no `__init__` of their own, so they inherit a new
+  `DifferenceInDifferences` constructor parameter automatically;
+  `SyntheticDiD` defines its OWN signature (it forwards only
+  `robust`/`cluster`/`alpha` to `super().__init__`), so a new parent
+  parameter must be explicitly mirrored — or explicitly rejected, like its
+  `vcov_type`/`conley_*` guards — there, and `BaseEstimator` introspects the
+  concrete signature, so an unmirrored parent param simply won't appear in
+  `SyntheticDiD.get_params()`
 
 The recurring bug is a parameter that works in the default aggregation and is
 silently ignored in one of the others. The same trace applies when adding a new

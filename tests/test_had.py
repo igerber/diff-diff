@@ -854,7 +854,7 @@ class TestSklearnCompat:
 
     def test_set_params_invalid_key_raises(self):
         est = HeterogeneousAdoptionDiD()
-        with pytest.raises(ValueError, match="Invalid parameter"):
+        with pytest.raises(ValueError, match="Unknown parameter"):
             est.set_params(not_a_param=True)
 
     def test_set_params_rejects_method_names(self):
@@ -863,7 +863,7 @@ class TestSklearnCompat:
         else they would silently overwrite the method.
         """
         est = HeterogeneousAdoptionDiD()
-        with pytest.raises(ValueError, match="Invalid parameter"):
+        with pytest.raises(ValueError, match="Unknown parameter"):
             est.set_params(fit="not_a_method")
         # sanity: fit is still callable on the class
         assert callable(est.fit)
@@ -871,7 +871,7 @@ class TestSklearnCompat:
     def test_set_params_rejects_private_attrs(self):
         """Internal-looking attribute names must also raise."""
         est = HeterogeneousAdoptionDiD()
-        with pytest.raises(ValueError, match="Invalid parameter"):
+        with pytest.raises(ValueError, match="Unknown parameter"):
             est.set_params(_internal=42)
 
     def test_get_params_accepts_deep_keyword(self):

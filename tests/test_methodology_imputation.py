@@ -751,18 +751,16 @@ class TestB2024AppendixA9LeaveOneOut:
 
     def test_loo_param_validation_and_roundtrip(self):
         """leave_one_out is in get/set_params; a non-bool is rejected (TypeError)
-        in __init__ AND at fit-time (closing the naive-setattr set_params bypass)."""
+        in __init__ AND eagerly at set_params (the BaseEstimator probe re-init
+        runs constructor validation before any mutation)."""
         assert ImputationDiD().get_params()["leave_one_out"] is False
         assert ImputationDiD(leave_one_out=True).get_params()["leave_one_out"] is True
         with pytest.raises(TypeError, match="leave_one_out must be a bool"):
             ImputationDiD(leave_one_out="yes")  # type: ignore[arg-type]
-        # set_params is a naive setattr; the fit-time re-check must catch it
-        rng = np.random.default_rng(_BASE_SEED_EQ8 + 14)
-        panel = _make_staggered_panel(rng, cohorts=[3], n_per_cohort=20, n_periods=5)
         est = ImputationDiD()
-        est.set_params(leave_one_out="yes")  # type: ignore[arg-type]
         with pytest.raises(TypeError, match="leave_one_out must be a bool"):
-            est.fit(panel, **self._COMMON)
+            est.set_params(leave_one_out="yes")  # type: ignore[arg-type]
+        assert est.leave_one_out is False
 
     def test_loo_fit_is_idempotent_on_config(self):
         """Repeated fits with leave_one_out=True give identical SE (no config mutation)."""

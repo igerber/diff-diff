@@ -25,6 +25,7 @@ import numpy as np
 import pandas as pd
 from scipy import optimize
 
+from diff_diff._base import BaseEstimator
 from diff_diff.results import (
     MultiPeriodDiDResults,
 )
@@ -2369,7 +2370,7 @@ def _arp_confidence_set(
 # =============================================================================
 
 
-class HonestDiD:
+class HonestDiD(BaseEstimator):
     """
     Honest DiD sensitivity analysis (Rambachan & Roth 2023).
 
@@ -2445,24 +2446,7 @@ class HonestDiD:
         if not 0 < self.alpha < 1:
             raise ValueError(f"alpha must be between 0 and 1, got alpha={self.alpha}")
 
-    def get_params(self) -> Dict[str, Any]:
-        """Get parameters for this estimator."""
-        return {
-            "method": self.method,
-            "M": self.M,
-            "alpha": self.alpha,
-            "l_vec": self.l_vec,
-        }
-
-    def set_params(self, **params) -> "HonestDiD":
-        """Set parameters for this estimator."""
-        for key, value in params.items():
-            if hasattr(self, key):
-                setattr(self, key, value)
-            else:
-                raise ValueError(f"Invalid parameter: {key}")
-        self._validate_params()
-        return self
+    # get_params/set_params come from BaseEstimator.
 
     def fit(
         self,

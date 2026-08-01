@@ -142,6 +142,7 @@ with group-time ATT identification under heterogeneous treatment timing.
    :members:
    :undoc-members:
    :show-inheritance:
+   :inherited-members:
 
 StaggeredTripleDiffResults
 --------------------------

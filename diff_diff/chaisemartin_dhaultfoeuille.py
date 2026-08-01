@@ -36,6 +36,7 @@ from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 import numpy as np
 import pandas as pd
 
+from diff_diff._base import BaseEstimator
 from diff_diff.chaisemartin_dhaultfoeuille_bootstrap import (
     ChaisemartinDHaultfoeuilleBootstrapMixin,
 )
@@ -355,7 +356,7 @@ def _validate_paths_of_interest(
 # =============================================================================
 
 
-class ChaisemartinDHaultfoeuille(ChaisemartinDHaultfoeuilleBootstrapMixin):
+class ChaisemartinDHaultfoeuille(ChaisemartinDHaultfoeuilleBootstrapMixin, BaseEstimator):
     """
     de Chaisemartin-D'Haultfoeuille (dCDH) estimator.
 
@@ -810,47 +811,7 @@ class ChaisemartinDHaultfoeuille(ChaisemartinDHaultfoeuilleBootstrapMixin):
     # sklearn-style parameter introspection
     # ------------------------------------------------------------------
 
-    def get_params(self) -> Dict[str, Any]:
-        """Return all ``__init__`` parameters as a dictionary."""
-        return {
-            "alpha": self.alpha,
-            "cluster": self.cluster,
-            "n_bootstrap": self.n_bootstrap,
-            "bootstrap_weights": self.bootstrap_weights,
-            "seed": self.seed,
-            "placebo": self.placebo,
-            "twfe_diagnostic": self.twfe_diagnostic,
-            "drop_larger_lower": self.drop_larger_lower,
-            "by_path": self.by_path,
-            "paths_of_interest": self.paths_of_interest,
-            "rank_deficient_action": self.rank_deficient_action,
-        }
-
-    def set_params(self, **params: Any) -> "ChaisemartinDHaultfoeuille":
-        """
-        Set estimator parameters (sklearn-compatible).
-
-        **Transactional**: validation runs after the candidate mutations,
-        and if any rule fails the estimator state is rolled back to its
-        pre-call values before the exception is re-raised. Callers can
-        therefore retry with corrected params on the same instance
-        without repairing inconsistent intermediate state.
-        """
-        # Snapshot current values for the keys we are about to set so
-        # we can roll back on validation failure (transactional semantics).
-        for key in params:
-            if not hasattr(self, key):
-                raise ValueError(f"Unknown parameter: {key}")
-        snapshot = {key: getattr(self, key) for key in params}
-        try:
-            for key, value in params.items():
-                setattr(self, key, value)
-            self._validate_invariants()
-        except Exception:
-            for key, value in snapshot.items():
-                setattr(self, key, value)
-            raise
-        return self
+    # get_params/set_params come from BaseEstimator.
 
     def _validate_invariants(self) -> None:
         """Run the post-mutation validation rules. Mirrors `__init__`."""

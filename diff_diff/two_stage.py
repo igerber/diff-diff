@@ -29,6 +29,7 @@ import pandas as pd
 from scipy import sparse
 from scipy.sparse.linalg import factorized as sparse_factorized
 
+from diff_diff._base import BaseEstimator
 from diff_diff.conley import (
     ConleyMetric,
     _compute_conley_meat,
@@ -1290,7 +1291,7 @@ def _compute_stratified_serial_bartlett_meat(
 # =============================================================================
 
 
-class TwoStageDiD(TwoStageDiDBootstrapMixin):
+class TwoStageDiD(TwoStageDiDBootstrapMixin, BaseEstimator):
     """
     Gardner (2022) two-stage Difference-in-Differences estimator.
 
@@ -1478,9 +1479,9 @@ class TwoStageDiD(TwoStageDiDBootstrapMixin):
         ValueError
             If required columns are missing or data validation fails.
         """
-        # Re-validate vcov_type at fit-time so sklearn-style set_params
-        # mutations (e.g. set_params(vcov_type="classical")) are re-checked
-        # rather than silently accepted by the attribute setter.
+        # Re-validate vcov_type at fit-time: set_params validates eagerly
+        # (BaseEstimator probe re-init), so this only catches DIRECT
+        # attribute mutation (est.vcov_type = ...).
         self._validate_vcov_type(self.vcov_type)
 
         # ---- Data validation ----
@@ -3454,29 +3455,7 @@ class TwoStageDiD(TwoStageDiDBootstrapMixin):
                 f"Accepted: {sorted(_accepted_vcov)}."
             )
 
-    def get_params(self) -> Dict[str, Any]:
-        """Get estimator parameters (sklearn-compatible)."""
-        return {
-            "anticipation": self.anticipation,
-            "alpha": self.alpha,
-            "cluster": self.cluster,
-            "vcov_type": self.vcov_type,
-            "n_bootstrap": self.n_bootstrap,
-            "bootstrap_weights": self.bootstrap_weights,
-            "seed": self.seed,
-            "rank_deficient_action": self.rank_deficient_action,
-            "horizon_max": self.horizon_max,
-            "pretrends": self.pretrends,
-        }
-
-    def set_params(self, **params) -> "TwoStageDiD":
-        """Set estimator parameters (sklearn-compatible)."""
-        for key, value in params.items():
-            if hasattr(self, key):
-                setattr(self, key, value)
-            else:
-                raise ValueError(f"Unknown parameter: {key}")
-        return self
+    # get_params/set_params come from BaseEstimator.
 
     def summary(self) -> str:
         """Get summary of estimation results."""

@@ -75,6 +75,7 @@ Main estimator class for Local Projections Difference-in-Differences.
    :members:
    :undoc-members:
    :show-inheritance:
+   :inherited-members:
 
    .. rubric:: Methods
 

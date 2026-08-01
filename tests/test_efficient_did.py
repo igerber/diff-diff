@@ -3113,10 +3113,9 @@ class TestEfficientDiDVcovType:
     # ---- Surface 6: set_params eager revalidation -------------------------
 
     def test_set_params_bad_vcov_caught_immediately(self):
-        # EfficientDiD's set_params calls _validate_params (which now invokes
-        # _validate_vcov_type), so the check fires NOW (not at fit-time).
-        # This intentionally diverges from ImputationDiD/TripleDifference
-        # (which defer to fit-time per sklearn mutate-then-validate-at-use).
+        # set_params validates eagerly via the BaseEstimator probe re-init -
+        # the uniform contract across all estimators since the 2(c)-i mixin
+        # (ImputationDiD/TripleDifference/CallawaySantAnna flipped with it).
         ed = EfficientDiD()
         with pytest.raises(ValueError, match="influence-function"):
             ed.set_params(vcov_type="classical")

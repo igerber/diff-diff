@@ -33,6 +33,7 @@ import numpy as np
 import pandas as pd
 from scipy import optimize, stats
 
+from diff_diff._base import BaseEstimator
 from diff_diff.results import MultiPeriodDiDResults
 from diff_diff.results_base import Diagnostic
 
@@ -764,7 +765,7 @@ class PreTrendsPowerCurve(Diagnostic):
 # =============================================================================
 
 
-class PreTrendsPower:
+class PreTrendsPower(BaseEstimator):
     """
     Pre-trends power analysis (Roth 2022).
 
@@ -872,26 +873,8 @@ class PreTrendsPower:
         )
         self.pretest_form = pretest_form
 
-    def get_params(self) -> Dict[str, Any]:
-        """Get parameters for this estimator."""
-        return {
-            "alpha": self.alpha,
-            "power": self.target_power,
-            "violation_type": self.violation_type,
-            "violation_weights": self.violation_weights,
-            "pretest_form": self.pretest_form,
-        }
-
-    def set_params(self, **params) -> "PreTrendsPower":
-        """Set parameters for this estimator."""
-        for key, value in params.items():
-            if key == "power":
-                self.target_power = value
-            elif hasattr(self, key):
-                setattr(self, key, value)
-            else:
-                raise ValueError(f"Invalid parameter: {key}")
-        return self
+    # get_params/set_params come from BaseEstimator.
+    _PARAM_ATTR_ALIASES = {"power": "target_power"}
 
     def _get_violation_weights(
         self,

@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Shared `BaseEstimator` mixin** (`diff_diff/_base.py`, v4 program 2(c)-i):
+  the 25 hand-rolled `get_params`/`set_params` pairs (6 divergent
+  implementation shapes) are replaced by one introspective mixin.
+  `get_params` derives its keys from the `__init__` signature and uniformly
+  accepts `deep=` (previously 4/25); `set_params` is TRANSACTIONAL via probe
+  re-init - it validates by constructing `type(self)(**merged)` before any
+  mutation, so it enforces exactly the constructor's validation, eagerly and
+  atomically, on every estimator. Behavior changes, all in the
+  fail-loudly direction: (1) ten estimators whose `set_params` previously
+  accepted constructor-rejected values until `fit()` (CallawaySantAnna,
+  TripleDifference, TwoStageDiD, ImputationDiD, SunAbraham, StackedDiD,
+  StaggeredTripleDifference, SpilloverDiD, TROP, PreTrendsPower) now raise at
+  `set_params`; (2) `BaconDecomposition.set_params` no longer silently
+  ignores unknown keys; (3) unknown-key rejection is uniformly strict
+  (method names / private attributes raise `ValueError: Unknown parameter:
+  ...`) where 17 classes previously accepted any existing attribute name;
+  (4) `HonestDiD` gains rollback (a failed call previously left the instance
+  part-mutated) and `SpilloverDiD` gains batch atomicity; (5)
+  `TROP.set_params(lambda_*_grid=[])` now resolves the empty grid to the
+  constructor's default grid (matching `__init__`; the raw-`[]` state was
+  reachable only through the old setter); (6) list-valued `set_params`
+  updates to `ContinuousDiD.dvals` / `PreTrendsPower.violation_weights` now
+  store the constructor-normalized ndarray; (7) `SyntheticDiD.get_params()`
+  now mirrors its full `__init__` signature - the deprecated
+  `lambda_reg`/`zeta` appear as always-`None` keys and round-trip silently;
+  (8) `get_params` key order follows the `__init__` signature everywhere.
+  Estimator `get_params`/`set_params` signatures are sklearn-compatible
+  library-wide, so `sklearn.base.clone` round-trips (where scikit-learn is
+  installed; it is deliberately not a dependency) - except configured
+  `ChaisemartinDHaultfoeuille` instances, whose pre-existing
+  `paths_of_interest` canonicalization fails clone's parameter-identity
+  check (recorded in DEFERRED.md). The cross-estimator contract is pinned by
+  `tests/test_base_estimator.py` on a dynamically discovered roster; the
+  pre-merge scanner's Check C now covers hand-rolled `get_params` only.
+
 ### Added
 - **Naming-completeness guard test** (`tests/test_naming_guard.py`, internal):
   mechanical enforcement of the three v4-program naming invariants that were
