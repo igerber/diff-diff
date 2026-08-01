@@ -27,8 +27,8 @@ B. PHASE-TABLE AGREEMENT with the section-9 phase table.
    (``M-020's``, ``M-031's``) are NOT citations - M-031, named in the phase-5
    cell's prose while deliberately absent from its roster, is the named
    negative fixture.
-   Accepted limitation: phases 2 and 3 both ship 3.9, so a row cited in the
-   wrong 3.9 phase is undetectable by the version predicate.
+   Accepted limitation: phases 2, 3 and 4 all ship 3.9, so a row cited in
+   the wrong 3.9 phase is undetectable by the version predicate.
 
 C. CONSUMER COVERAGE (section 8 rule 11) - for each enforceable rename row,
    readers of the old name in ``diff_diff/`` source (plus the packaged
