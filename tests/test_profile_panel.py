@@ -739,17 +739,17 @@ def test_guide_api_strings_resolve_against_public_api():
         )
 
     # HeterogeneousAdoptionDiD staggered support is `partial` and
-    # specifically last-cohort-only (Appendix B.2): with first_treat_col
+    # specifically last-cohort-only (Appendix B.2): with first_treat
     # supplied, fit() auto-filters to F_last + never-treated; without
-    # first_treat_col, a multi-cohort panel raises. Guide must surface
+    # first_treat, a multi-cohort panel raises. Guide must surface
     # this explicitly so agents don't route a general staggered panel
     # to HAD expecting a multi-cohort estimand.
     assert "last-cohort-only" in text or "last cohort" in text.lower(), (
         "Guide must name the last-cohort-only restriction on HAD "
         "staggered support (Appendix B.2)"
     )
-    assert "first_treat_col" in text, (
-        "Guide must mention that first_treat_col is required to activate "
+    assert "first_treat" in text, (
+        "Guide must mention that first_treat is required to activate "
         "HAD's staggered last-cohort auto-filter"
     )
     assert "ChaisemartinDHaultfoeuille" in text, (

@@ -825,7 +825,7 @@ class TestHADDispatch:
         {0, t_post} at the front door (had.py:1096-1102). Without the
         recode, a copy-paste of the advertised handoff on a valid
         inf-encoded ContinuousDiD panel raises
-        `ValueError: first_treat_col='first_treat' contains value(s)
+        `ValueError: first_treat='first_treat' contains value(s)
         [inf] outside the allowed set {0, t_post}`.
         """
         output = practitioner_next_steps(mock_continuous_results, verbose=False)
