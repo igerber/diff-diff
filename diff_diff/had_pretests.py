@@ -2460,12 +2460,12 @@ def _validate_multi_period_panel(
     Thin wrapper over :func:`_validate_had_panel_event_study` (had.py) that
     inherits the full contract:
 
-    - ``first_treat_col=None`` combined with a staggered panel → raises
+    - ``first_treat=None`` combined with a staggered panel → raises
       ``ValueError`` (the had.py helper does NOT silently accept; it
       requires an explicit first-treatment column to identify cohorts).
-    - ``first_treat_col`` provided but identifies only one cohort → no
+    - ``first_treat`` provided but identifies only one cohort → no
       auto-filter, proceeds.
-    - ``first_treat_col`` provided with multiple cohorts → auto-filters
+    - ``first_treat`` provided with multiple cohorts → auto-filters
       to last-cohort + never-treated, emits ``UserWarning`` with
       ``filter_info`` summary.
     - Requires ≥ 3 time periods, balanced panel, ordered time dtype, and

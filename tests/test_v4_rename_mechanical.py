@@ -647,6 +647,33 @@ class TestPretestFunctionRenames:
             did_had_pretest_workflow(had_multi_panel, "y", "dose", "t", "u", time_col="t")
 
 
+class TestValidationMessagesRecommendCanonicalNames:
+    """User-facing validation messages must steer callers to the NEW
+    spellings (CI review R1 on PR #742): the staggered fail-closed error
+    and the cohort-mismatch family recommend first_treat=, never the
+    deprecated first_treat_col=."""
+
+    def test_staggered_fail_closed_recommends_first_treat(self, had_multi_panel):
+        from diff_diff import HeterogeneousAdoptionDiD
+
+        rng = np.random.default_rng(11)
+        rows = []
+        for u in range(60):
+            start = 1 if u % 2 == 0 else 2
+            d = max(0.1, rng.normal(1.0, 0.4))
+            for t in (0, 1, 2, 3):
+                dose = d if t >= start else 0.0
+                rows.append((u, t, dose, 0.3 * t + 0.8 * dose + rng.normal(0, 0.2)))
+        staggered = pd.DataFrame(rows, columns=["u", "t", "dose", "y"])
+        with pytest.raises(ValueError) as exc:
+            HeterogeneousAdoptionDiD().fit(
+                staggered, "y", "dose", "t", "u", aggregate="event_study"
+            )
+        message = str(exc.value)
+        assert "Pass first_treat=" in message
+        assert "first_treat_col" not in message
+
+
 class TestFirstTreatOptionalAliasPerSurface:
     """M-039 / M-102 / M-107 / M-112: the OPTIONAL first_treat_col alias,
     pinned per surface (warn + routing parity + both-supplied rejection)."""

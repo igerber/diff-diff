@@ -721,7 +721,7 @@ class ChaisemartinDHaultfoeuille(ChaisemartinDHaultfoeuilleBootstrapMixin, BaseE
     >>> data = generate_reversible_did_data(n_groups=80, n_periods=6, seed=42)
     >>> est = ChaisemartinDHaultfoeuille()
     >>> results = est.fit(
-    ...     data, outcome="outcome", group="group",
+    ...     data, outcome="outcome", unit="group",
     ...     time="period", treatment="treatment",
     ... )
     >>> abs(results.overall_att - 2.0) < 1.0  # close to the true effect

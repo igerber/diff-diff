@@ -1345,7 +1345,7 @@ def _validate_had_panel_event_study(
         )
         if len(cohorts) == 0:
             raise ValueError(
-                f"first_treat_col={first_treat_col!r} has no nonzero "
+                f"first_treat={first_treat_col!r} has no nonzero "
                 f"cohort values (all units appear never-treated). HAD "
                 f"requires at least one treated cohort with "
                 f"first_treat > 0 to identify a WAS effect."
@@ -1374,7 +1374,7 @@ def _validate_had_panel_event_study(
                 raise ValueError(
                     f"Staggered auto-filter to last cohort "
                     f"(F_last={F_last!r}) left 0 units. Verify "
-                    f"first_treat_col={first_treat_col!r} contains the "
+                    f"first_treat={first_treat_col!r} contains the "
                     f"expected cohort labels."
                 )
             filter_info = {
@@ -1385,7 +1385,7 @@ def _validate_had_panel_event_study(
             }
             warnings.warn(
                 f"Staggered-timing panel detected: {len(cohorts)} distinct "
-                f"nonzero cohorts in first_treat_col={first_treat_col!r} "
+                f"nonzero cohorts in first_treat={first_treat_col!r} "
                 f"({cohorts!r}). Auto-filtering to the last cohort "
                 f"(F_last={F_last!r}) plus never-treated units "
                 f"(first_treat=0): {n_kept} units kept, {n_dropped} "
