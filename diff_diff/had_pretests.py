@@ -3832,7 +3832,7 @@ def joint_homogeneity_test(
     base_period : period label
         The reference period (last pre-period in the event-study
         convention). Must not be in ``post_periods``.
-    first_treat_col : str or None
+    first_treat : str or None
         Forwarded to the underlying panel validator.
     alpha, n_bootstrap, seed : as in :func:`stute_test`.
     survey_design : SurveyDesign or None, keyword-only, default None
