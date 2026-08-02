@@ -264,11 +264,11 @@ class WooldridgeDiDResults(BaseResults):
             ``jwdid_estat``. ``"cohort_share"`` uses paper W2025 Eq. 7.4
             ``ω̂_g = N_g / Σ_{g'} N_{g'} M_{g'}`` for ``type="simple"`` and
             Eq. 7.6 ``ω̂_{ge} = N_g / Σ_{g': g'+e ≤ T} N_{g'}`` for
-            ``type="event"``. Both formulas reduce to ``N_g``-proportional
+            ``type="event_study"``. Both formulas reduce to ``N_g``-proportional
             per-cell weights with the appropriate normalization. The two
             schemes coincide on balanced panels with uniform within-cohort
             cell counts (paper Section 7.5). The cohort-share scheme is
-            supported only for ``type="simple"`` and ``type="event"``; the
+            supported only for ``type="simple"`` and ``type="event_study"``; the
             paper provides no explicit cohort-share formula for ``"group"``
             or ``"calendar"`` aggregations and the library raises
             ``ValueError`` to preserve a fail-closed contract.

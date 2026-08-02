@@ -89,6 +89,9 @@ class ContinuousDiD(BaseEstimator):
     rank_deficient_action : str, default="warn"
         Action for rank-deficient B-spline OLS: ``"warn"``, ``"error"``, or ``"silent"``.
     covariates : list of str, optional
+        DEPRECATED constructor home (row M-084; warns with
+        ``FutureWarning``, removed in 4.0) - pass ``covariates=`` to
+        ``fit()`` instead (the sklearn hyperparameter/data split).
         Column names of covariates for **conditional** parallel trends
         (``E[ΔY(0) | D=d, X] = E[ΔY(0) | D=0, X]``). When ``None`` (default) the
         estimator uses unconditional parallel trends. Covariates enter through a

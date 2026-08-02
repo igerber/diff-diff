@@ -407,11 +407,11 @@ class TripleDifference(BaseEstimator):
           model or propensity score model is correctly specified.
         - "reg": Regression adjustment (outcome regression).
         - "ipw": Inverse probability weighting.
-    robust : bool, default=True
-        Whether to use heteroskedasticity-robust standard errors.
-        Note: influence function-based SEs are inherently robust to
-        heteroskedasticity, so this parameter has no effect. Retained
-        for API compatibility.
+    robust : bool, optional
+        DEPRECATED (row M-046; warns with ``FutureWarning``, removed in
+        4.0 - use ``vcov_type=``). Influence-function SEs are inherently
+        robust to heteroskedasticity, so the flag never had an effect
+        here; it was retained only for API compatibility.
     cluster : str, optional
         Column name for cluster-robust standard errors. When provided,
         SEs are computed using the Liang-Zeger cluster-robust variance
@@ -2162,11 +2162,11 @@ def triple_difference(
     estimation_method : str, default="dr"
         Estimation method: "dr" (doubly robust), "reg" (regression),
         or "ipw" (inverse probability weighting).
-    robust : bool, default=True
-        Whether to use heteroskedasticity-robust standard errors.
-        Note: influence function-based SEs are inherently robust to
-        heteroskedasticity, so this parameter has no effect. Retained
-        for API compatibility.
+    robust : bool, optional
+        DEPRECATED (row M-046; warns with ``FutureWarning``, removed in
+        4.0 - use ``vcov_type=``). Influence-function SEs are inherently
+        robust to heteroskedasticity, so the flag never had an effect
+        here; it was retained only for API compatibility.
     cluster : str, optional
         Column name for cluster-robust standard errors.
     vcov_type : str, default="hc1"

@@ -40,8 +40,10 @@ class TwoWayFixedEffects(DifferenceInDifferences):
 
     Parameters
     ----------
-    robust : bool, default=True
-        Whether to use heteroskedasticity-robust standard errors.
+    robust : bool, optional
+        DEPRECATED legacy alias inherited from
+        ``DifferenceInDifferences`` (row M-045; warns with
+        ``FutureWarning``, removed in 4.0 - use ``vcov_type=``).
     cluster : str, optional
         Column name for cluster-robust standard errors.
         If None, automatically clusters at the unit level (the `unit`

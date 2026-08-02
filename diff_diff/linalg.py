@@ -4300,9 +4300,11 @@ class LinearRegression:
     ----------
     include_intercept : bool, default True
         Whether to automatically add an intercept column to the design matrix.
-    robust : bool, default True
-        Whether to use heteroskedasticity-robust (HC1) standard errors.
-        If False and cluster_ids is None, uses classical OLS standard errors.
+    robust : bool, optional
+        DEPRECATED legacy alias (row M-115; warns with ``FutureWarning``,
+        removed in 4.0 - use ``vcov_type=``). ``True`` (the historical
+        default) -> HC1; ``False`` with no ``cluster_ids`` -> classical
+        OLS standard errors.
     cluster_ids : array-like, optional
         Cluster identifiers for cluster-robust standard errors.
         Overrides the `robust` parameter if provided.

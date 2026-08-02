@@ -2722,13 +2722,13 @@ class HeterogeneousAdoptionDiD(BaseEstimator):
         continuous paths (which use the CCT-2014 robust SE from
         Phase 1c); passing a non-default ``vcov_type`` on a continuous
         path emits a ``UserWarning`` per fit call.
-    robust : bool
-        Backward-compat alias used only when ``vcov_type is None``:
-        ``True`` -> ``"hc1"``, ``False`` -> ``"classical"``. Explicit
-        ``vcov_type`` takes precedence (e.g.,
-        ``vcov_type="classical", robust=True`` runs classical). Only
-        the mass-point path consumes these; continuous paths ignore
-        both with a warning.
+    robust : bool, optional
+        DEPRECATED backward-compat alias (row M-047; warns with
+        ``FutureWarning``, removed in 4.0 - use ``vcov_type=``). Used
+        only when ``vcov_type is None``: ``True`` -> ``"hc1"``, ``False``
+        (the historical HAD default) -> ``"classical"``. Explicit
+        ``vcov_type`` takes precedence. Only the mass-point path consumes
+        these; continuous paths ignore both with a warning.
     cluster : str or None
         Column name for cluster-robust SE. On the mass-point path this is
         the 2SLS CR1 sandwich; on the continuous (``continuous_at_zero`` /

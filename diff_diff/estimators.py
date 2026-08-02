@@ -64,11 +64,13 @@ class DifferenceInDifferences(BaseEstimator):
     formula : str, optional
         R-style formula for the model (e.g., "outcome ~ treated * post").
         If provided, overrides column name parameters.
-    robust : bool, default=True
-        Legacy alias for ``vcov_type``. ``robust=True`` maps to
-        ``vcov_type="hc1"``; ``robust=False`` maps to ``vcov_type="classical"``.
-        Explicit ``vcov_type`` overrides ``robust`` unless the pair is
-        contradictory (e.g. ``robust=False, vcov_type="hc2"`` raises).
+    robust : bool, optional
+        DEPRECATED legacy alias for ``vcov_type`` (row M-045; warns with
+        ``FutureWarning``, removed in 4.0 - use ``vcov_type=``).
+        ``robust=True`` maps to ``vcov_type="hc1"``; ``robust=False`` maps
+        to ``vcov_type="classical"``. Explicit ``vcov_type`` overrides
+        ``robust`` unless the pair is contradictory (e.g.
+        ``robust=False, vcov_type="hc2"`` raises).
     cluster : str, optional
         Column name for cluster-robust standard errors. Combined with
         ``vcov_type``: with ``"hc1"`` dispatches to CR1 (Liang-Zeger); with
@@ -1335,11 +1337,13 @@ class MultiPeriodDiD(DifferenceInDifferences):
 
     Parameters
     ----------
-    robust : bool, default=True
-        Legacy alias for ``vcov_type``. ``robust=True`` maps to
-        ``vcov_type="hc1"``; ``robust=False`` maps to ``vcov_type="classical"``.
-        Explicit ``vcov_type`` overrides ``robust`` unless the pair is
-        contradictory (e.g. ``robust=False, vcov_type="hc2"`` raises).
+    robust : bool, optional
+        DEPRECATED legacy alias for ``vcov_type`` (row M-045; warns with
+        ``FutureWarning``, removed in 4.0 - use ``vcov_type=``).
+        ``robust=True`` maps to ``vcov_type="hc1"``; ``robust=False`` maps
+        to ``vcov_type="classical"``. Explicit ``vcov_type`` overrides
+        ``robust`` unless the pair is contradictory (e.g.
+        ``robust=False, vcov_type="hc2"`` raises).
     cluster : str, optional
         Column name for cluster-robust standard errors. With ``vcov_type="hc1"``
         dispatches to CR1 (Liang-Zeger). With ``vcov_type="hc2_bm"`` dispatches
